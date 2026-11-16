@@ -6,7 +6,10 @@
 //! there only for the turns Kerf starts. Claude Code signs in through its own
 //! flow and Kerf never sees the account's credentials; the usage counts
 //! against that account as any other Claude Code session does.
+//! Where no `kerf-mcp` program is found the editor is the server instead,
+//! run again with `--serve-mcp`.
 
+use crate::collab::program_path;
 use kerf_agent::{summarize_targets, summarize_tool_result, AgentEvent, ToolResultSummary};
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -52,14 +55,14 @@ impl ClaudeCodeSession {
             "Claude Code isn't installed. Install it (https://code.claude.com), sign in by \
              running `claude` once in a terminal, then try again.",
         )?;
-        let kerf_mcp = find_kerf_mcp(kerfd).ok_or(
-            "kerf-mcp wasn't found next to kerfd. Build it (cargo build -p kerf-mcp) or set \
-             KERF_MCP_BIN.",
+        let server = find_kerf_mcp(kerfd).ok_or(
+            "Kerf's tools (kerf-mcp) weren't found. Build them (cargo build -p kerf-mcp) or \
+             set KERF_MCP_BIN.",
         )?;
         Ok(Self {
             claude,
             directory: directory.to_path_buf(),
-            mcp_config: mcp_config(&kerf_mcp, directory, kerfd),
+            mcp_config: mcp_config(&server, directory, kerfd),
             model: model.filter(|model| !model.trim().is_empty() && model != "default"),
             session: None,
             aborted: Arc::new(AtomicBool::new(false)),
@@ -203,11 +206,13 @@ fn arguments(mcp_config: &str, model: Option<&str>, session: Option<&str>) -> Ve
     arguments
 }
 
-fn mcp_config(kerf_mcp: &Path, directory: &Path, kerfd: &Path) -> String {
+fn mcp_config(server: &McpProgram, directory: &Path, kerfd: &Path) -> String {
+    let mut args: Vec<String> = server.args.iter().map(|arg| (*arg).to_owned()).collect();
+    args.extend(["--dir".to_owned(), directory.to_string_lossy().into_owned()]);
     json!({"mcpServers": {SERVER: {
         "type": "stdio",
-        "command": kerf_mcp.to_string_lossy(),
-        "args": ["--dir", directory.to_string_lossy()],
+        "command": server.program.to_string_lossy(),
+        "args": args,
         "env": {"KERFD_BIN": kerfd.to_string_lossy()},
     }}})
     .to_string()
@@ -399,24 +404,61 @@ fn find_claude() -> Option<PathBuf> {
     candidates.into_iter().find(|path| path.is_file())
 }
 
-/// `KERF_MCP_BIN`, then beside kerfd, then beside this library's program.
-fn find_kerf_mcp(kerfd: &Path) -> Option<PathBuf> {
-    if let Some(path) = std::env::var_os("KERF_MCP_BIN") {
-        return Some(path.into());
+/// The program that serves Kerf's tools over MCP, and what it is given before `--dir`.
+struct McpProgram {
+    program: PathBuf,
+    args: &'static [&'static str],
+}
+
+/// The editor's argument that has it serve Kerf's tools as `kerf-mcp` does, without a window.
+pub(crate) const SERVE_MCP: &str = "--serve-mcp";
+
+/// `KERF_MCP_BIN`, then `kerf-mcp` beside kerfd, then beside this program, then the editor
+/// itself, which serves the same tools: a `kerf-mcp` that was never built, or that is not
+/// where kerfd is, does not keep Claude Code from them.
+fn find_kerf_mcp(kerfd: &Path) -> Option<McpProgram> {
+    let program = std::env::current_exe().ok();
+    mcp_program(
+        std::env::var_os("KERF_MCP_BIN").map(PathBuf::from),
+        program_path(kerfd, std::env::var_os("PATH").as_deref()).as_deref(),
+        program.as_deref(),
+    )
+}
+
+fn mcp_program(
+    named: Option<PathBuf>,
+    kerfd: Option<&Path>,
+    program: Option<&Path>,
+) -> Option<McpProgram> {
+    if let Some(named) = named.filter(|path| !path.as_os_str().is_empty()) {
+        return Some(McpProgram {
+            program: named,
+            args: &[],
+        });
     }
     let name = if cfg!(windows) {
         "kerf-mcp.exe"
     } else {
         "kerf-mcp"
     };
-    let beside_kerfd = kerfd.parent().map(|dir| dir.join(name));
-    let beside_program = std::env::current_exe()
-        .ok()
-        .and_then(|exe| exe.parent().map(|dir| dir.join(name)));
-    [beside_kerfd, beside_program]
+    let beside = [kerfd, program]
         .into_iter()
         .flatten()
-        .find(|path| path.is_file())
+        .filter_map(|path| Some(path.parent()?.join(name)))
+        .find(|path| path.is_file());
+    if let Some(beside) = beside {
+        return Some(McpProgram {
+            program: beside,
+            args: &[],
+        });
+    }
+    // Only the editor reads the argument: a test's program, or another that loads this
+    // library, is not one to run as a server.
+    let editor = program.filter(|path| path.file_stem().is_some_and(|stem| stem == "kerf-qt"))?;
+    Some(McpProgram {
+        program: editor.to_owned(),
+        args: &[SERVE_MCP],
+    })
 }
 
 #[cfg(test)]
@@ -498,7 +540,10 @@ mod tests {
     #[test]
     fn the_server_is_this_project_and_its_kerfd() {
         let config: Value = serde_json::from_str(&mcp_config(
-            Path::new("/bin/kerf-mcp"),
+            &McpProgram {
+                program: "/bin/kerf-mcp".into(),
+                args: &[],
+            },
             Path::new("/work/film"),
             Path::new("/bin/kerfd"),
         ))
@@ -507,5 +552,56 @@ mod tests {
         assert_eq!(server["command"], "/bin/kerf-mcp");
         assert_eq!(server["args"], json!(["--dir", "/work/film"]));
         assert_eq!(server["env"]["KERFD_BIN"], "/bin/kerfd");
+    }
+
+    #[test]
+    fn the_editor_serves_the_tools_where_kerf_mcp_is_not() {
+        let folder = tempfile::tempdir().unwrap();
+        let name = if cfg!(windows) {
+            "kerf-mcp.exe"
+        } else {
+            "kerf-mcp"
+        };
+        let kerfd = folder.path().join("daemon/kerfd");
+        let editor = folder.path().join("qt/kerf-qt");
+        let found = |named: Option<&str>, program: &Path| {
+            mcp_program(named.map(PathBuf::from), Some(&kerfd), Some(program))
+                .map(|server| (server.program, server.args))
+        };
+
+        // No kerf-mcp anywhere: the editor itself, and no other program.
+        assert_eq!(
+            found(None, &editor),
+            Some((editor.clone(), &[SERVE_MCP][..]))
+        );
+        assert_eq!(
+            found(Some(""), &editor),
+            Some((editor.clone(), &[SERVE_MCP][..]))
+        );
+        assert_eq!(found(None, &folder.path().join("qt/some-test")), None);
+        let config: Value = serde_json::from_str(&mcp_config(
+            &mcp_program(None, None, Some(&editor)).unwrap(),
+            Path::new("/work/film"),
+            Path::new("kerfd"),
+        ))
+        .unwrap();
+        assert_eq!(
+            config["mcpServers"]["kerf"]["args"],
+            json!([SERVE_MCP, "--dir", "/work/film"])
+        );
+
+        // One beside the editor, then one beside kerfd, then the one named.
+        for beside in ["qt", "daemon"] {
+            std::fs::create_dir_all(folder.path().join(beside)).unwrap();
+            std::fs::write(folder.path().join(beside).join(name), "").unwrap();
+            assert_eq!(
+                found(None, &editor),
+                Some((folder.path().join(beside).join(name), &[][..]))
+            );
+        }
+        assert_eq!(
+            found(Some("/named/kerf-mcp"), &editor),
+            Some(("/named/kerf-mcp".into(), &[][..]))
+        );
     }
 }

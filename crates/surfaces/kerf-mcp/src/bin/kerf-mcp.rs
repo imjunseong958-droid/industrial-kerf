@@ -1,6 +1,4 @@
-use kerf_mcp::{KerfMcpRouter, McpServer};
 use std::env;
-use std::io;
 use std::path::{Path, PathBuf};
 
 struct Options {
@@ -31,20 +29,7 @@ fn run() -> Result<(), String> {
         println!("{}", client_config(&executable, &cwd, &options)?);
         return Ok(());
     }
-    let kerfd = discover_kerfd();
-    let router = KerfMcpRouter::new(&options.directory, kerfd.as_deref())?.held();
-    let served = McpServer::new(router.clone())
-        .serve(
-            io::BufReader::new(io::stdin().lock()),
-            io::BufWriter::new(io::stdout().lock()),
-        )
-        .map_err(|error| error.to_string());
-    // The client closed stdin: nobody is left to read a render's job, so
-    // stop the ones still running rather than orphan their ffmpeg.
-    router.finish_renders(true);
-    // The same of a making, whose model's program then takes back what it asked a server for.
-    router.finish_makings(true);
-    served
+    kerf_mcp::serve_stdio(&options.directory, discover_kerfd().as_deref())
 }
 
 fn parse_args(args: &[String], mut directory: PathBuf) -> Result<Option<Options>, String> {

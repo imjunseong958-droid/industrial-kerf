@@ -20,6 +20,8 @@ on `main`; its section here becomes the release's notes on GitHub
 - On a Mac in a virtual machine, Kerf encodes in software, since VideoToolbox
   there can stop answering and leave an export waiting for ever;
   `KERF_ENCODER=hardware` still asks for it.
+- Chat on Claude Code no longer needs a `kerf-mcp` built beside `kerfd`: where
+  there is none, the editor serves Kerf's tools to Claude Code itself.
 
 ## 0.1.2
 
