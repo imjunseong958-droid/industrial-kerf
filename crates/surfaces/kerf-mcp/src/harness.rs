@@ -95,17 +95,12 @@ in the proposal. Where the person's own permissions accept an agent's edits, \
 the answer says `accepted`: it is in the project, one revision undo takes \
 back.
 - `make` asks for a media to be made from its recipe, and answers with what \
-would run. By default the person is asked (`asked`), in the review thread, \
+would run. By default the person is asked (`asked`), in the conversation, \
 and makes it; where they let an agent make on its own it runs (`making`), as \
 a `job` to read, `wait` for, or `cancel`, and the media is the new take once \
 it is made. Then look at the take, and change one thing for the next.
 - `render` renders the sequence, or a range of it, to a file; with \
   `proposal`, what that proposal would make.
-- `note` leaves a comment in the project's review thread, where the people \
-  reviewing the cut read it: at a time or range of the sequence, as a reply \
-  to a comment with `parent`, or about a proposal with `proposal` (say what \
-  changed in a new version there). Use it for what is worth keeping beside \
-  the cut, not to answer the person you are talking with.
 
 Reusable presets are portable .kerfpreset files. `look` with `presets: true` \
 lists project presets: the shared `presets/` library first, then \
@@ -369,7 +364,7 @@ pub(super) fn metadata(name: &str) -> Option<(&'static str, Value, ToolAnnotatio
             json!({
                 "type": "object",
                 "properties": {
-                    "quality": {"type": "string", "enum": ["draft", "full"], "description": "`draft`, the default, is 360 high at 15 frames a second, to check quickly; `full` is the sequence's own size and rate, a delivery, refused while a blocking note is open (a person resolves it in the review)."},
+                    "quality": {"type": "string", "enum": ["draft", "full"], "description": "`draft`, the default, is 360 high at 15 frames a second, to check quickly; `full` is the sequence's own size and rate, a delivery."},
                     "from": {"type": "string", "description": format!("Sequence position. {time} {anchors}")},
                     "to": {"type": "string", "description": "Sequence position."},
                     "sequence": {"type": "string", "description": sequence},

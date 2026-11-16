@@ -166,7 +166,7 @@ pub(super) fn metadata() -> (&'static str, Value, super::ToolAnnotations) {
     (
         "Ask for a media to be made from its recipe (`recipe=` on its line). Returns the plan: each \
          step as it would run and the take it would write. The person's own permissions say what \
-         happens next: by default they are asked (`asked`), in the review thread, and make it \
+         happens next: by default they are asked (`asked`), in the conversation, and make it \
          themselves; where they let an agent make on its own it runs (`making`), as a `job` to read \
          with `job`, `wait` for, or stop with `cancel`, and the media becomes the new take when it \
          is made. Mend what `look`'s `toMake` says would refuse it first.",
