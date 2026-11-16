@@ -646,12 +646,9 @@ bool ToolbarWiring::sendExport(const QString &quality) {
         return false;
     }
     // The master renders to the project's master output (its folder and
-    // file name, kept for the project); the draft is a review copy.
-    const QJsonObject command = master
-        ? deliver::masterCommand(m_window->m_projectDirectory)
-        : QJsonObject{{QStringLiteral("type"), QStringLiteral("export")},
-                      {QStringLiteral("quality"), QStringLiteral("review")},
-                      {QStringLiteral("codec"), QStringLiteral("h264")}};
+    // file name, kept for the project); the draft is a review copy beside it.
+    const QJsonObject command = master ? deliver::masterCommand(m_window->m_projectDirectory)
+                                       : deliver::draftCommand(m_window->m_projectDirectory);
     if (!m_bus->send(command)) return false;
     m_sentQuality = command.value(QStringLiteral("quality")).toString();
     m_window->addActivity(QStringLiteral("export"), QStringLiteral("Export started (%1)").arg(master ? QStringLiteral("Master") : QStringLiteral("Draft")));

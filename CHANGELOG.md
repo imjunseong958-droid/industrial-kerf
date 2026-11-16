@@ -29,6 +29,10 @@ on `main`; its section here becomes the release's notes on GitHub
 - A failed turn's error leaves the bar at the top once the next turn starts;
   a bar no longer covers the Media sheet's tabs and close; an edit Kerf
   refuses says why without its code; and a finished export names its file.
+- Edit ▸ Extract takes a clip's time out of every track, for when Ripple
+  Delete refuses because it would cut a clip on another track.
+- A Draft export goes to `deliveries/` as `<project>_draft`, beside the
+  master, instead of the project's top folder under its job's id.
 
 ## 0.1.2
 

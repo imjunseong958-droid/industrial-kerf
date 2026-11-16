@@ -776,6 +776,12 @@ pub enum EditOp {
     RippleDelete {
         clips: Vec<String>,
     },
+    /// Cut the time the clips cover out of every unlocked track and close
+    /// it: what ripple-delete refuses when it would cut a clip on another
+    /// track.
+    Extract {
+        clips: Vec<String>,
+    },
     /// Property or generator parameter values: a static value, keyframes
     /// as `{"keys": [{"at": frames, "value": v, "interp": "linear"}]}` with
     /// `at` counted from the clip's first frame, or `null` to restore the
@@ -1275,6 +1281,30 @@ fn lower(project: &Project, op: &EditOp) -> Result<Vec<Op>, RuntimeError> {
         EditOp::RippleDelete { clips } => Op::RippleDelete {
             clips: edit_ids(clips)?,
         },
+        EditOp::Extract { clips } => {
+            let mut range: Option<(usize, Time, Time)> = None;
+            for clip in clips {
+                let at = project
+                    .locate(clip)
+                    .ok_or_else(|| invalid(format!("no clip `{clip}`")))?;
+                let found = project.clip_at(at);
+                let (start, end) = (found.start, found.end());
+                range = Some(match range {
+                    None => (at.sequence, start, end),
+                    Some((sequence, _, _)) if sequence != at.sequence => {
+                        return Err(invalid("extract takes clips of one sequence"));
+                    }
+                    Some((sequence, from, to)) => (sequence, from.min(start), to.max(end)),
+                });
+            }
+            let (sequence, from, to) = range.ok_or_else(|| invalid("extract needs a clip"))?;
+            Op::Extract {
+                sequence: project.sequences[sequence].id.clone(),
+                from,
+                to,
+                tracks: None,
+            }
+        }
         EditOp::Set { clip, props, name } => {
             let at = project
                 .locate(clip)
@@ -2220,4 +2250,25 @@ mod tests {
         assert_eq!(settled(&directory), 0);
     }
 
+    /// Extract takes out the time its clips cover, on every unlocked track of
+    /// their sequence.
+    #[test]
+    fn extract_takes_the_time_its_clips_cover() {
+        let project = project();
+        let ops = lowered(&project, json!([{"op": "extract", "clips": ["c1"]}])).unwrap();
+        assert_eq!(
+            ops,
+            [Op::Extract {
+                sequence: kerf_model::Id::new("s1").unwrap(),
+                from: Time::ZERO,
+                to: kerf_model::Rate::FPS_24.time_of(96),
+                tracks: None,
+            }]
+        );
+        assert!(
+            refusal(&project, json!([{"op": "extract", "clips": ["nope"]}]))
+                .contains("no clip `nope`")
+        );
+        assert!(refusal(&project, json!([{"op": "extract", "clips": []}])).contains("needs a clip"));
+    }
 }

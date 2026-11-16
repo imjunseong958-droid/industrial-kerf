@@ -191,6 +191,14 @@ private slots:
         const QJsonObject op = window.m_lastCommand.value("ops").toArray().first().toObject();
         QCOMPARE(op.value("op").toString(), QStringLiteral("split"));
         QCOMPARE(op.value("at").toInt(), 48);
+        // Extract, which a refused Ripple Delete names, is in the Edit menu beside it.
+        QAction *extract = window.m_commands->action(QStringLiteral("clip.extract"));
+        QVERIFY(extract && extract->isEnabled());
+        QCOMPARE(extract->text(), QStringLiteral("Extract"));
+        extract->trigger();
+        const QJsonObject extracted = window.m_lastCommand.value("ops").toArray().first().toObject();
+        QCOMPARE(extracted.value("op").toString(), QStringLiteral("extract"));
+        QCOMPARE(extracted.value("clips").toArray(), QJsonArray{QStringLiteral("c1")});
 
         // Keymaps rebind the same actions; transport tooltips follow.
         const QKeySequence portable = QKeySequence::fromString(QStringLiteral("Ctrl+K"), QKeySequence::PortableText);

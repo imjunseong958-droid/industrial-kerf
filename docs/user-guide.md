@@ -116,8 +116,9 @@ chooses how Kerf thinks, and ▸ Account signs in to Kerf Cloud:
 ## Edit by hand
 
 - **Timeline.** Drag clips to move them and drag their ends to trim. The Edit
-  menu has Split at Playhead, Delete and Ripple Delete; the timeline also has a
-  Razor and a Ripple Edit tool. Edit ▸ Undo
+  menu has Split at Playhead, Delete and Ripple Delete, and Extract, which takes
+  the clip's time out of every track where Ripple Delete would cut a clip on
+  another; the timeline also has a Razor and a Ripple Edit tool. Edit ▸ Undo
   and Redo cover every edit, Kerf's included.
 - **Media into the timeline.** Double-click media in the Media sheet, or choose
   it and use Clip ▸ Insert or Overwrite: the whole of it goes in at the
@@ -227,7 +228,8 @@ left alone, and nothing is changed for you.
   failed row asks Kerf to fix it. A blocking finding becomes a note in the
   conversation, resolved once a later check no longer finds it.
 - **Export** in the toolbar renders a Draft (H.264) or a Master (ProRes 422 HQ
-  with 24-bit sound; ⌘E). A master goes to `deliveries/` in the project.
+  with 24-bit sound; ⌘E). Both go to `deliveries/` in the project, as
+  `<project>_master` and `<project>_draft`; a draft made again is numbered.
 - **Presets.** File ▸ Save Current as Preset… keeps the program as a preset
   others can fill with their own media (File ▸ Import Editing Preset…).
 

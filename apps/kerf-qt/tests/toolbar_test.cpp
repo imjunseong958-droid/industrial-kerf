@@ -672,6 +672,10 @@ private slots:
         QSettings().remove(key);
         QCOMPARE(deliver::masterCommand(project),
                  (QJsonObject{{"type", "export"}, {"quality", "master"}, {"output", "deliveries/"}, {"name", "atlas_master"}}));
+        // A draft goes beside it, named for the project, not for its job in the project's top.
+        QCOMPARE(deliver::draftCommand(project),
+                 (QJsonObject{{"type", "export"}, {"quality", "review"}, {"codec", "h264"}, {"output", "deliveries/"}, {"name", "atlas_draft"}}));
+        QCOMPARE(deliver::draftCommand(QString()), (QJsonObject{{"type", "export"}, {"quality", "review"}, {"codec", "h264"}}));
         QSettings().setValue(key, QStringLiteral(R"({"master":{"folder":"out/","name":"atlas_v2","codec":"hevc"}})"));
         QCOMPARE(deliver::masterCommand(project),
                  (QJsonObject{{"type", "export"}, {"quality", "master"}, {"codec", "hevc"}, {"output", "out/"}, {"name", "atlas_v2"}}));
