@@ -304,8 +304,9 @@ their takes' folder. It asks for the making with `make`
 (`kerf-mcp/src/making.rs`), which answers with the plan. What follows is the
 person's, in their own `~/.kerf/agent.json`, outside any project as the
 models file is (`kerf-mcp/src/permissions.rs`), modelled on a coding agent's
-permission modes: `ask`, the default, leaves the plan in the review thread for
-`kerf make` or Make from Recipe…, which make it and answer the asking;
+permission modes: `ask`, the default, answers with the plan as `ask`, for the
+agent to say in the conversation and the person to make with `kerf make` or
+Make from Recipe…;
 `accept-edits` accepts an agent's edits as they are made; `auto` also runs
 the makings it asks for, up to a number a session, in the agent's own process
 as a job it can wait for and stop as Stop Making stops one, and has the media
@@ -1396,7 +1397,7 @@ In short:
 | Crashes | A report of a panic in the crash folder, and the editor saying so at its next start | Reports are sent nowhere; a process ended from outside leaves none |
 | Settings and projects | Settings carry a version and are brought up to it | A reader of an older project format, with the first change to it |
 | Engine | The GPU path and its parity with the CPU | Showing a frame without reading it back |
-| Delivery | A blocking note holds every delivery back | |
+| Delivery | Deliver, Export and an agent's `render` each make the master | |
 | Kerf Cloud | The editor follows its contract | The service is not deployed |
 | User docs | A user guide, in the Help menu and in each package | |
 

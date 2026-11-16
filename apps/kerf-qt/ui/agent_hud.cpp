@@ -4,7 +4,7 @@
 #include "editor_bus.h"
 #include "editor_common.h"
 #include "icons.h"
-#include "review_model.h"
+#include "proposal_model.h"
 
 #include <QAbstractSpinBox>
 #include <QApplication>
@@ -51,7 +51,7 @@ AgentHud::AgentHud(QWidget *parent, EditorBus *bus) : QWidget(parent), m_bus(bus
     if (m_bus) {
         connect(m_bus, &EditorBus::event, this, &AgentHud::handle);
         connect(m_bus, &EditorBus::snapshotChanged, this, &AgentHud::refresh);
-        connect(m_bus, &EditorBus::reviewChanged, this, &AgentHud::refresh);
+        connect(m_bus, &EditorBus::proposalsChanged, this, &AgentHud::refresh);
     }
     relayout();
 }
@@ -105,9 +105,9 @@ void AgentHud::stop() {
 
 int AgentHud::versionOf(const QString &proposalId) const {
     if (proposalId.isEmpty() || !m_bus) return 0;
-    if (const ReviewModel *review = m_bus->review())
-        if (const ReviewModel::Proposal *proposal = review->proposal(proposalId)) {
-            for (const ReviewModel::Version &version : proposal->versions)
+    if (const ProposalModel *proposals = m_bus->proposals())
+        if (const ProposalModel::Proposal *proposal = proposals->proposal(proposalId)) {
+            for (const ProposalModel::Version &version : proposal->versions)
                 if (version.proposalId == proposalId) return version.version;
             return proposal->version;
         }
@@ -131,10 +131,10 @@ QString AgentHud::title() const {
 QString AgentHud::text() const { return active() ? title() : QString(); }
 
 QList<AgentHud::Run> AgentHud::detailRuns() const {
-    const ReviewModel *review = m_bus ? m_bus->review() : nullptr;
-    const ReviewModel::Proposal *proposal = review && !m_proposal.isEmpty() ? review->proposal(m_proposal) : nullptr;
+    const ProposalModel *proposals = m_bus ? m_bus->proposals() : nullptr;
+    const ProposalModel::Proposal *proposal = proposals && !m_proposal.isEmpty() ? proposals->proposal(m_proposal) : nullptr;
     if (proposal && !proposal->changes.isEmpty()) {
-        const ReviewModel::ClipChange &first = proposal->changes.first();
+        const ProposalModel::ClipChange &first = proposal->changes.first();
         const QString name = first.name.isEmpty() ? first.clip : first.name;
         const qsizetype n = proposal->changes.size();
         const QString count = n == 1 ? QStringLiteral(" · 1 change") : QStringLiteral(" · %1 changes").arg(n);

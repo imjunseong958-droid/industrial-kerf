@@ -1,6 +1,6 @@
 #include "proposal_card.h"
 
-#include "comment_row.h"
+#include "chat_parts.h"
 #include "components.h"
 #include "design_tokens.h"
 #include "icons.h"

@@ -61,8 +61,7 @@ private:
     bool m_focused = false;
 };
 
-// The first word of a name, as an @mention writes it: "Mina Park" → "Mina".
-QString mentionToken(const QString &name) { return name.section(QLatin1Char(' '), 0, 0, QString::SectionSkipEmpty); }
+
 
 } // namespace
 
@@ -148,58 +147,6 @@ void StampButton::paintEvent(QPaintEvent *) {
     const QFontMetricsF metrics(face);
     p.drawText(QPointF(4 + 14 + 4, (height() - metrics.height()) / 2 + metrics.ascent()), text());
     if (hasFocus()) ui::paintFocusRing(p, QRectF(rect()), radius::control);
-}
-
-// ------------------------------------------------------------------ ReplyBar
-
-ReplyBar::ReplyBar(QWidget *parent) : QWidget(parent) {
-    setObjectName(QStringLiteral("replyBar"));
-    setFixedHeight(0);
-    auto *layout = new QHBoxLayout(this);
-    layout->setContentsMargins(16, 0, 12, 0);
-    layout->setSpacing(6);
-    auto *glyph = new QLabel;
-    glyph->setFixedSize(14, 14);
-    glyph->setPixmap(icons::pixmap(QStringLiteral("g-reply"), color(ink3), 14, 2));
-    layout->addWidget(glyph);
-    m_label = new QLabel;
-    m_label->setFont(tokens::font(meta));
-    m_label->setTextFormat(Qt::RichText);
-    QPalette palette = m_label->palette();
-    palette.setColor(QPalette::WindowText, color(ink3));
-    m_label->setPalette(palette);
-    layout->addWidget(m_label, 1);
-    m_close = new ui::IconButton(QStringLiteral("g-close"), ui::IconButton::Size::S20);
-    m_close->setTip(QStringLiteral("Cancel reply"), QStringLiteral("Esc"));
-    connect(m_close, &QAbstractButton::clicked, this, [this] {
-        setTarget({}, {});
-        emit cancelled();
-    });
-    layout->addWidget(m_close);
-    m_grow = new QVariantAnimation(this);
-    m_grow->setEasingCurve(easing());
-    connect(m_grow, &QVariantAnimation::valueChanged, this, [this](const QVariant &value) { setFixedHeight(value.toInt()); });
-}
-
-void ReplyBar::setTarget(const QString &prefix, const QString &name) {
-    m_open = !name.isEmpty();
-    if (m_open)
-        m_label->setText(QStringLiteral("%1 <span style=\"color:%2;\">%3</span>")
-                             .arg(prefix.toHtmlEscaped(), color(ink2).name(QColor::HexRgb), name.toHtmlEscaped()));
-    animateTo(m_open ? 24 : 0);
-}
-
-void ReplyBar::animateTo(int height) {
-    m_grow->stop();
-    const int ms = ui::motionDuration(motion::fade);
-    if (ms <= 0 || !isVisible()) {
-        setFixedHeight(height);
-        return;
-    }
-    m_grow->setDuration(ms);
-    m_grow->setStartValue(this->height());
-    m_grow->setEndValue(height);
-    m_grow->start();
 }
 
 // ------------------------------------------------------------------ FloatingList
@@ -306,14 +253,15 @@ Composer::Composer(QWidget *parent) : QFrame(parent) {
     setStyleSheet(QStringLiteral("QFrame#chatComposer { border: 0; background: transparent; }"));
     setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
     auto *outer = new QVBoxLayout(this);
-    outer->setContentsMargins(16, 8, 12, 8);
+    // 18 either side, as the conversation's text keeps 22 in; 12 over, 16 under.
+    outer->setContentsMargins(18, 12, 18, 16);
     outer->setSpacing(0);
     auto *box = new ComposerBox;
     m_box = box;
     m_box->setObjectName(QStringLiteral("composerBox"));
     auto *boxLayout = new QVBoxLayout(m_box);
-    // pad 8 8 8 12; the stamp's margin-left −4 puts its clock 8 in.
-    boxLayout->setContentsMargins(8, 8, 8, 8);
+    // pad 12 12 10; the stamp's margin-left −4 puts its clock 8 in.
+    boxLayout->setContentsMargins(12, 12, 12, 10);
     boxLayout->setSpacing(0);
     m_input = new QTextEdit;
     m_input->setObjectName(QStringLiteral("chatInput"));
@@ -324,7 +272,7 @@ Composer::Composer(QWidget *parent) : QFrame(parent) {
     m_input->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     m_input->setFont(tokens::font(tokens::reading));
     m_input->document()->setDocumentMargin(0);
-    m_input->setPlaceholderText(QStringLiteral("Ask Kerf, or leave a note"));
+    m_input->setPlaceholderText(QStringLiteral("Ask Kerf to make or change something"));
     m_input->setStyleSheet(QStringLiteral("QTextEdit#chatInput, QTextEdit#chatInput:focus, QTextEdit#chatInput:hover, "
                                           "QTextEdit#chatInput:disabled { background: transparent; border: 0; padding: 0; "
                                           "color: %1; font-size: 14px; }")
@@ -367,16 +315,6 @@ Composer::Composer(QWidget *parent) : QFrame(parent) {
         rowLayout->addWidget(button);
         return button;
     };
-    m_mention = tool(QStringLiteral("g-at"), QStringLiteral("Mention"), QStringLiteral("@"));
-    m_draw = tool(QStringLiteral("g-annot"), QStringLiteral("Draw on frame"), QStringLiteral("D"));
-    m_draw->setCheckable(true);
-    connect(m_mention, &QAbstractButton::clicked, this, &Composer::startMention);
-    connect(m_draw, &QAbstractButton::clicked, this, [this] {
-        // The button shows the state; the click asks for the change.
-        const QSignalBlocker blocker(m_draw);
-        m_draw->setChecked(m_drawState != Draw::None);
-        emit drawClicked();
-    });
     rowLayout->addStretch(1);
     m_send = new SendButton(SendButton::Mode::Send);
     m_stop = new SendButton(SendButton::Mode::Stop);
@@ -407,11 +345,6 @@ Composer::Composer(QWidget *parent) : QFrame(parent) {
         m_suggestions->hide();
         emit suggestionChosen(index);
     });
-    m_mentions = new FloatingList(QString(), this);
-    m_mentions->setObjectName(QStringLiteral("mentionList"));
-    connect(m_mentions, &FloatingList::chosen, this, [this](int index) {
-        if (index >= 0 && index < m_mentionShown.size()) insertMention(m_mentionShown.at(index));
-    });
     connect(qApp, &QApplication::focusChanged, this, [this](QWidget *, QWidget *now) {
         const bool focused = now && (now == m_input || isAncestorOf(now));
         if (focused == m_focused) return;
@@ -425,10 +358,8 @@ Composer::Composer(QWidget *parent) : QFrame(parent) {
 QString Composer::text() const { return m_input->toPlainText(); }
 
 void Composer::setOverlayParent(QWidget *parent) {
-    for (FloatingList *list : {m_suggestions, m_mentions}) {
-        list->setParent(parent);
-        list->hide();
-    }
+    m_suggestions->setParent(parent);
+    m_suggestions->hide();
 }
 
 void Composer::setTimecode(const QString &timecode) { m_stamp->setTimecode(timecode); }
@@ -440,44 +371,6 @@ void Composer::setBusy(bool busy) {
     m_send->setVisible(!busy);
     m_stop->setVisible(busy);
     updatePopovers();
-}
-
-void Composer::setDraw(Draw state, const QJsonArray &strokes) {
-    m_drawState = state;
-    m_drawing = state == Draw::Attached ? strokes : QJsonArray{};
-    m_draw->setChecked(state != Draw::None);
-    switch (state) {
-    case Draw::None: m_draw->setTip(QStringLiteral("Draw on frame"), drawKey()); break;
-    case Draw::Drawing: m_draw->setTip(QStringLiteral("Drawing on the frame · click to cancel"), QStringLiteral("Esc")); break;
-    case Draw::Attached:
-        m_draw->setTip(QStringLiteral("Drawing attached · %1 · click to remove")
-                           .arg(strokes.size() == 1 ? QStringLiteral("1 stroke") : QStringLiteral("%1 strokes").arg(strokes.size())));
-        break;
-    }
-}
-
-void Composer::requestDraw() {
-    if (m_draw->isEnabled()) m_draw->click();
-}
-
-void Composer::setDrawAction(QAction *action) {
-    if (m_drawAction) {
-        removeAction(m_drawAction);
-        m_drawAction->disconnect(this);
-    }
-    m_drawAction = action;
-    if (action) {
-        action->setShortcutContext(Qt::WidgetWithChildrenShortcut);
-        addAction(action);
-        connect(action, &QAction::changed, this, [this] {
-            if (m_drawState == Draw::None) m_draw->setTip(QStringLiteral("Draw on frame"), drawKey());
-        });
-    }
-    if (m_drawState == Draw::None) m_draw->setTip(QStringLiteral("Draw on frame"), drawKey());
-}
-
-QString Composer::drawKey() const {
-    return m_drawAction ? m_drawAction->shortcut().toString(QKeySequence::NativeText) : QStringLiteral("D");
 }
 
 bool Composer::hasFocusWithin() const {
@@ -497,21 +390,6 @@ void Composer::setSuggestions(const QStringList &labels) {
 
 QStringList Composer::suggestions() const { return m_suggestions->items(); }
 
-void Composer::setMentionCandidates(const QStringList &names) {
-    m_candidates = names;
-    updatePopovers();
-}
-
-void Composer::startMention() {
-    QTextCursor cursor = m_input->textCursor();
-    const QString before = cursor.block().text().left(cursor.positionInBlock());
-    if (!before.isEmpty() && !before.endsWith(QLatin1Char(' '))) cursor.insertText(QStringLiteral(" "));
-    cursor.insertText(QStringLiteral("@"));
-    m_input->setTextCursor(cursor);
-    m_input->setFocus(Qt::OtherFocusReason);
-    updatePopovers();
-}
-
 void Composer::fill(const QString &text) {
     m_input->setPlainText(text);
     QTextCursor cursor = m_input->textCursor();
@@ -522,66 +400,24 @@ void Composer::fill(const QString &text) {
 
 void Composer::clear() {
     m_input->clear();
-    setDraw(Draw::None);
     setError({});
-}
-
-QString Composer::mentionPrefix(int *start) const {
-    const QTextCursor cursor = m_input->textCursor();
-    const QString line = cursor.block().text();
-    const int at = cursor.positionInBlock();
-    int index = at - 1;
-    while (index >= 0 && !line.at(index).isSpace() && line.at(index) != QLatin1Char('@')) --index;
-    if (index < 0 || line.at(index) != QLatin1Char('@')) return QString();
-    if (index > 0 && (line.at(index - 1).isLetterOrNumber() || line.at(index - 1) == QLatin1Char('_'))) return QString();
-    if (start) *start = cursor.block().position() + index;
-    const QString prefix = line.mid(index + 1, at - index - 1);
-    return prefix.isNull() ? QStringLiteral("") : prefix;
-}
-
-void Composer::insertMention(const QString &name) {
-    int start = -1;
-    if (mentionPrefix(&start).isNull() || start < 0) return;
-    QTextCursor cursor = m_input->textCursor();
-    cursor.setPosition(start, QTextCursor::KeepAnchor);
-    cursor.insertText(QStringLiteral("@%1 ").arg(mentionToken(name)));
-    m_input->setTextCursor(cursor);
-    m_mentions->hide();
-    m_input->setFocus(Qt::OtherFocusReason);
 }
 
 void Composer::updatePopovers() {
     const bool focused = m_input->hasFocus();
-    const QString prefix = focused ? mentionPrefix() : QString();
-    m_mentionShown.clear();
-    if (!prefix.isNull())
-        for (const QString &name : std::as_const(m_candidates))
-            if (prefix.isEmpty() || name.startsWith(prefix, Qt::CaseInsensitive) ||
-                mentionToken(name).startsWith(prefix, Qt::CaseInsensitive))
-                m_mentionShown << name;
-    const bool mention = !m_mentionShown.isEmpty();
-    if (mention) {
-        const QString before = m_mentions->items().value(m_mentions->current());
-        m_mentions->setItems(m_mentionShown);
-        const int keep = int(m_mentionShown.indexOf(before));
-        m_mentions->setCurrent(keep >= 0 ? keep : 0);
-    }
     const bool empty = m_input->toPlainText().trimmed().isEmpty();
-    const bool suggest = focused && empty && !mention && !m_busy && !m_suggestions->items().isEmpty();
-    m_mentions->setVisible(mention && m_mentions->parentWidget());
+    const bool suggest = focused && empty && !m_busy && !m_suggestions->items().isEmpty();
     m_suggestions->setVisible(suggest && m_suggestions->parentWidget());
     placePopovers();
 }
 
 void Composer::placePopovers() {
-    for (FloatingList *list : {m_suggestions, m_mentions}) {
-        QWidget *host = list->parentWidget();
-        if (!host || !list->isVisible()) continue;
-        const QPoint origin = host == this ? QPoint() : mapTo(host, QPoint());
-        const QMargins margins = contentsMargins();
-        list->placeAbove(origin.x() + margins.left() + 16, origin.x() + width() - margins.right() - 12, origin.y() + 4);
-        list->raise();
-    }
+    QWidget *host = m_suggestions->parentWidget();
+    if (!host || !m_suggestions->isVisible()) return;
+    const QPoint origin = host == this ? QPoint() : mapTo(host, QPoint());
+    const QMargins margins = contentsMargins();
+    m_suggestions->placeAbove(origin.x() + margins.left() + 16, origin.x() + width() - margins.right() - 12, origin.y() + 4);
+    m_suggestions->raise();
 }
 
 void Composer::setRoomy() {
@@ -612,20 +448,6 @@ bool Composer::eventFilter(QObject *watched, QEvent *event) {
     if (watched == m_input && event->type() == QEvent::KeyPress) {
         auto *key = static_cast<QKeyEvent *>(event);
         const bool enter = key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter;
-        if (m_mentions->isVisible()) {
-            if (key->key() == Qt::Key_Down || key->key() == Qt::Key_Up) {
-                m_mentions->moveCurrent(key->key() == Qt::Key_Down ? 1 : -1);
-                return true;
-            }
-            if ((enter && !(key->modifiers() & Qt::ShiftModifier)) || key->key() == Qt::Key_Tab) {
-                insertMention(m_mentions->items().value(std::max(0, m_mentions->current())));
-                return true;
-            }
-            if (key->key() == Qt::Key_Escape) {
-                m_mentions->hide();
-                return true;
-            }
-        }
         if (enter && !(key->modifiers() & Qt::ShiftModifier)) {
             // Return sends; a draft stays while sending is not possible.
             if (!m_busy && m_send->isEnabled()) emit submitRequested();

@@ -164,9 +164,9 @@ the take; the person says how much of that it does without asking them.
   of the project: of a media a waiting proposal adds, `make` says which
   proposal, and that it comes first.
 - `make` asks for a media to be made, and answers with the plan a person would
-  see. By default the person is asked: the plan is left in the review thread,
-  `kerf proposals` lists it, and `kerf make` or Make from Recipe… makes it and
-  answers the asking. Where the person lets an agent make on its own, the
+  see. By default the person is asked: the plan comes back as the answer's
+  `ask`, which the agent says in the conversation, and `kerf make` or Make
+  from Recipe… makes it. Where the person lets an agent make on its own, the
   making runs in the agent's session, as a job it reads, waits for, or stops,
   as Stop Making stops one, and the media becomes the new take once it is made.
   The agent then looks at the take, and changes one thing for the next.

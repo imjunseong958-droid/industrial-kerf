@@ -14,16 +14,10 @@ bool EditorBus::run(const QString &commandId, const QJsonObject &params) {
     return m_runner && !commandId.isEmpty() && m_runner(commandId, params);
 }
 
-void EditorBus::setReview(ReviewModel *review) {
-    if (review == m_review) return;
-    m_review = review;
-    emit reviewChanged();
-}
-
-void EditorBus::setViewAs(const QString &person) {
-    if (person == m_viewAs) return;
-    m_viewAs = person;
-    emit viewAsChanged(person);
+void EditorBus::setProposals(ProposalModel *proposals) {
+    if (proposals == m_proposals) return;
+    m_proposals = proposals;
+    emit proposalsChanged();
 }
 
 void EditorBus::dispatch(const QJsonObject &event) {

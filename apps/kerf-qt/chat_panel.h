@@ -1,64 +1,63 @@
 #pragma once
 
-// The Comments panel (the agent chat), mockup-spec 4: beside the picture,
-// always open, filling its region edge to edge: the header
-// (Comments and a ⋯ menu with search, sort and the All/Open/Proposals filter),
-// the scroll-aware pin bar, the list
-// of threads with their proposal cards, the reply-to bar and the composer.
+// The conversation panel: one conversation with Kerf, as a coding agent's
+// chat reads, top to bottom in the order it was said.
 //
-// Everything it lists is the review model's (ui/review_model.h): comment
-// threads from kerfd's review log and the snapshot's proposals. The agent
-// turn in progress shows as local rows (the reader's request, then Kerf
-// drafting) until the review log records the turn as comments.
+//   header      the conversation's title (double-click renames it) and ⋯:
+//               Rename, Archive, Delete, Agent settings, Model, Activity
+//   list        what was said (ui/chat_messages.h): the person's requests as
+//               bubbles at the right, Kerf's answers flush left with their
+//               work logs and the cards of what they proposed; a new
+//               conversation shows the welcome and what to try
+//   composer    what to ask next, with the playhead's stamp, Send and Stop
 //
-// The panel turns clicks into requests (signals); ReviewWiring and
-// main_window_review.cpp send them to kerfd.
+// What it lists comes from two models: the conversation as kept beside the
+// project (ConversationModel, from the bridge), and the proposals of the
+// snapshot (ProposalModel), whose cards sit under the answer that staged
+// them. The turn in progress shows as live messages (the request, then
+// Kerf at work) until the bridge keeps the turn and sends the conversation
+// again.
+//
+// The panel turns clicks into requests (signals); ChatWiring sends them.
 
 #include "test_friends.h"
-#include "comment_row.h"
+#include "chat_parts.h"
 #include "proposal_card.h"
-#include "review_model.h"
+#include "proposal_model.h"
 #include "stage_motion.h"
+#include "ui/chat_messages.h"
+#include "ui/conversation_model.h"
 
 #include <QAbstractButton>
-#include <QDateTime>
 #include <QHash>
-#include <QImage>
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QList>
 #include <QPointer>
-#include <QSet>
 #include <QWidget>
 
 #include <functional>
 #include <limits>
 
-class QFrame;
-class QHBoxLayout;
+class QAction;
 class QLabel;
 class QLineEdit;
 class QMenu;
 class QPushButton;
 class QScrollArea;
 class QTextEdit;
-class QTimer;
 class QVBoxLayout;
-class QVariantAnimation;
-
-class QAction;
 
 namespace kerf {
 
 class Composer;
+class KerfMessage;
 class ProposalCard;
-class ReplyBar;
+class SuggestionButton;
+class YouMessage;
 
 namespace ui {
-class Chip;
-class Dot;
 class FadeScrollArea;
-class IconButton;
 } // namespace ui
 
 // One change a proposal's script line makes, in words (MainWindow::
@@ -98,37 +97,31 @@ class ChatPanel final : public QWidget {
     KERF_TEST_FRIENDS
 public:
     static constexpr int kHeaderHeight = 40;
-    static constexpr int kPinHeight = 32;
-    static constexpr int kSearchHeight = 32;
-    static constexpr int kSidePadding = 16;
-    static constexpr int kAvatar = CommentRow::kAvatar;
-    // The list's padding: 12 over the first thread, 16 under the last.
-    static constexpr int kListTop = 12;
+    static constexpr int kSidePadding = 22;
+    // The list's padding: 22 over the first message, 16 under the last.
+    static constexpr int kListTop = 22;
     static constexpr int kListBottom = 16;
-    // The pin bar shows while the pinned card's footer is not fully in view
-    // (its bottom 24 over the list's).
-    static constexpr int kPinMargin = 24;
+    // Between one message and the next; between a request and its answer.
+    static constexpr int kGap = 18;
 
     explicit ChatPanel(QWidget *parent = nullptr);
     ~ChatPanel() override;
 
-    // ---- the review --------------------------------------------------------
-    void setReview(ReviewModel *model);
-    ReviewModel *review() const { return m_model.data(); }
-    // The snapshot's timeline and proposal timelines (change rows, versions), and the program's frame rate.
+    // ---- what it shows ----------------------------------------------------
+    void setConversations(ConversationModel *model);
+    ConversationModel *conversations() const { return m_conversations.data(); }
+    void setProposals(ProposalModel *model);
+    ProposalModel *proposals() const { return m_model.data(); }
+    // The snapshot's timeline and proposal timelines (change rows, versions).
     void setSnapshot(const QJsonObject &snapshot);
     // The program as the window shows it (clips named after their media),
     // for the names the cards give clips and tracks.
     void setNamedTimeline(const QJsonObject &timeline);
     void setFps(double fps);
     double fps() const { return m_fps; }
-    void setPlayhead(double seconds);
     void setConnected(bool connected);
     // Words for a script line when a version has no timeline to compare.
     void setScriptDescriber(std::function<ProposalChange(const QString &)> describer) { m_describer = std::move(describer); }
-    // kerf://<project>/rev<N>@TC for a comment at `seconds` (NaN: the revision).
-    void setReviewLink(std::function<QString(double)> link) { m_reviewLink = std::move(link); }
-    QString reviewLink(double seconds) const;
     // Kerf's next steps (agent_next {steps: [{label, request}]}): the
     // welcome's Try asking and the composer's suggestions.
     void setNextSteps(const QJsonArray &steps);
@@ -162,64 +155,56 @@ public:
     void holdWidth(int width);
     int heldWidth() const { return m_heldWidth; }
 
-    // ---- threads -----------------------------------------------------------
-    QList<ThreadWidget *> threadWidgets() const;
-    ThreadWidget *threadWidget(const QString &threadId) const;
-    CommentRow *rowFor(const QString &commentId) const;
+    // ---- the turn in progress ---------------------------------------------
+    // The person's request, shown at once; Kerf at work under it. `at` is the
+    // playhead it was asked at, NaN when it was not stamped.
+    void beginTurn(const QString &text, double at = std::numeric_limits<double>::quiet_NaN());
+    bool turnLive() const { return m_live.active; }
+    // Kerf's answer as it streams, and whole.
+    void appendAnswer(const QString &delta);
+    void setAnswer(const QString &text);
+    // A finished tool call or status: a step of the work log.
+    void addStep(const QString &step);
+    // What Kerf is doing now, beside "Working".
+    void setTurnStatus(const QString &status);
+    void setTurnBusy(bool busy);
+    // The turn ended: answered, failed (with what went wrong) or stopped.
+    // Its messages stay until the bridge sends the conversation with it kept.
+    void finishTurn();
+    void failTurn(const QString &message);
+    void stopTurn();
+    // The live Kerf message; null when there is no turn.
+    KerfMessage *liveMessage() const { return m_live.kerf.data(); }
+
+    // ---- the list ----------------------------------------------------------
+    // Every message, in order (not the welcome).
+    QList<QWidget *> messages() const;
+    QList<YouMessage *> requests() const;
+    QList<KerfMessage *> answers() const;
+    bool isEmpty() const { return messages().isEmpty(); }
+    // Every message's speaker and text, in order, as plain text.
+    QString transcript() const;
     ProposalCard *card(const QString &proposalId) const;
     QList<ProposalCard *> cards() const;
-    // Opens the thread: current, scrolled to the top (12 under the chips),
-    // its replies unfolded, and its root flashed.
-    void openThread(const QString &threadId, bool flash = true);
-    // Scrolls the list so the thread's root sits 12 under the list's top.
-    void scrollToThread(const QString &threadId);
-    // The first-show placement (spec 4.5); runs once.
-    void placeFirst();
-    bool placed() const { return m_placed; }
-
-    // ---- the agent turn in progress -----------------------------------------
-    // The reader's request, as a local row in `threadId` (a reply) or a new
-    // thread. Kerf's rows of the turn follow it. A stamped request (`at`
-    // finite, not a reply) shows its timecode.
-    CommentRow *beginTurn(const QString &text, const QString &threadId,
-                          double at = std::numeric_limits<double>::quiet_NaN());
-    // The turn's Kerf row: drafting while busy, Kerf's answer once done.
-    CommentRow *turnKerfRow(bool create);
-    void setTurnBusy(bool busy);
-    void setTurnStatus(const QString &meta);
-    void stopTurn();
-    // The turn ended (done or failed); the review log takes over its rows
-    // when it records them.
-    void finishTurn();
-    // A note posted with comment_add, shown until the review log has it.
-    CommentRow *addPendingNote(const QString &clientId, const QString &text, const QString &threadId, double at);
-    void failPendingNote(const QString &clientId, const QString &message);
-    // Drops local rows the review log now holds.
-    void reconcileLocal();
-    // The old API: a local row of `kind` in the turn in progress.
-    CommentRow *addComment(CommentRow::Kind kind, const QString &text);
-    // Every row of the list (not the welcome), in order.
-    QList<CommentRow *> rows() const;
-    bool isEmpty() const { return rows().isEmpty(); }
-    // Every row's name and text, in order, as plain text; steps are not included.
-    QString transcript() const;
-    // The view keeps to the latest local row unless the reader scrolled away.
+    // The view keeps to the latest message unless the reader scrolled away.
     bool followsLatest() const { return m_follow; }
-    void refreshTimes();
-
-    // ---- the composer --------------------------------------------------------
-    // Replying to a thread ("Replying to Mina Park"); empty ends it.
-    // Only a review-log thread can be replied to; any other ends it.
-    void setReplyTarget(const QString &threadId);
-    QString replyTarget() const { return m_replyTarget; }
+    // The footage Kerf chooses from, under the latest message; none takes it away.
+    void setFootage(const QList<FootageTile> &tiles);
+    FootageSheet *footage() const { return m_footage; }
+    // The first cut Kerf is making now: its card is in Kerf's live message, at
+    // work, until it is done; then it is the proposal's card, which shows it is
+    // done. Empty when none.
+    void setBuildingProposal(const QString &proposalId);
+    QString buildingProposal() const { return m_building; }
+    ProposalCard *buildingCard() const { return m_buildingCard.data(); }
     // The version `proposalId`'s card shows: the one chosen in its Versions
     // menu, else the proposal itself.
     QString shownVersion(const QString &proposalId) const;
-    // Editing one's own note: the composer holds its text; Post saves it.
-    void setEditing(const QString &commentId);
-    QString editing() const { return m_editing; }
+    // The registry's proposal.accept: every card's Accept tip names its key.
+    void setAcceptAction(QAction *action);
+
+    // ---- the composer ------------------------------------------------------
     void updateComposer(bool busy);
-    // The suggestions the composer offers (labels) and what each asks.
     struct Suggestion {
         QString label;
         QString request;
@@ -227,67 +212,34 @@ public:
     };
     QList<Suggestion> suggestions() const { return m_suggestionList; }
     void updateSuggestions();
-    // The names @ completes: Kerf, the MCP agents seen, the people.
-    QStringList mentionCandidates() const;
+    // ⇧⌘J: the keys in the composer.
+    void focusComposer();
 
-    // ---- parts ---------------------------------------------------------------
+    // ---- parts -------------------------------------------------------------
     QLabel *title() const { return m_title; }
-    QLineEdit *searchField() const { return m_search; }
-    QWidget *searchRow() const { return m_searchRow; }
-    bool filterDotShown() const;
+    QLineEdit *titleEditor() const { return m_titleEdit; }
+    // Renames the conversation in place: the title becomes a field.
+    void startRename();
     ChatIconButton *moreButton() const { return m_more; }
-    QFrame *pinBar() const { return m_pinBar; }
-    QLabel *pinAuthor() const { return m_pinAuthor; }
-    QLabel *pinSummary() const { return m_pinSummary; }
-    QLabel *pinCount() const { return m_pinCount; }
-    ui::IconButton *pinPrevious() const { return m_pinPrev; }
-    ui::IconButton *pinNext() const { return m_pinNext; }
-    // Whether the pin bar is (or is opening to be) shown.
-    bool pinBarWanted() const { return m_pinWanted; }
-    QString pinBarProposal() const;
     QScrollArea *scroll() const;
     ui::FadeScrollArea *list() const { return m_list; }
     QWidget *listContent() const { return m_content; }
-    ReplyBar *replyBar() const { return m_replyBar; }
     Composer *composerWidget() const { return m_composer; }
-    // The footage Kerf chooses from, in the list under the latest row; none takes
-    // it away.
-    void setFootage(const QList<FootageTile> &tiles);
-    // The first cut Kerf is making now: its card is in Kerf's row of the turn, at
-    // work, until it is done; then it is the proposal's card, which shows it is
-    // done. Empty when none.
-    void setBuildingProposal(const QString &proposalId);
-    QString buildingProposal() const { return m_building; }
-    ProposalCard *buildingCard() const { return m_buildingCard.data(); }
-    // What one asks as a bubble and what Kerf says as plain text; the cards small,
-    // their changes folded.
-    void setConversationLook(bool on);
-    FootageSheet *footage() const { return m_footage; }
-    // The registry's proposal.accept: every card's Accept tip names its key.
-    void setAcceptAction(QAction *action);
     QFrame *composer() const;
-    // ⇧⌘J: the keys in the composer.
-    void focusComposer();
     QTextEdit *input() const;
     QPushButton *sendButton() const;
     QPushButton *stopButton() const;
-    CommentRow *welcomeRow() const { return m_welcomeRow; }
-    QWidget *welcome() const;
+    QWidget *welcome() const { return m_welcome; }
     QList<QAbstractButton *> examples() const;
-    // The menus, built as they open (for tests).
-    QMenu *buildSortMenu();
-    QMenu *buildFilterMenu();
+    // The More menu, built as it opens (for tests).
     QMenu *buildMoreMenu();
-    QMenu *buildRowMenu(const QString &commentId);
 
 signals:
     // Esc reached the composer with nothing of its own to stop or cancel.
     void escapeUnused();
-    // "Ask again" on a row: the request to send again, in its thread.
-    void askAgainInThread(const QString &text, const QString &threadId);
+    // Ask again on a failed or stopped answer: the request to send again.
+    void askAgain(const QString &text);
     void seekRequested(double seconds);
-    // The ring or Resolve: resolve (true) or reopen a thread.
-    void resolveRequested(const QString &threadId, bool resolve);
     void acceptRequested(const QString &proposalId);
     void rejectRequested(const QString &proposalId);
     // The Preview checkbox, or an older version chosen while previewing.
@@ -300,36 +252,28 @@ signals:
     void shownVersionChanged(const QString &proposalId, const QString &versionId);
     void postRequested();
     void stopRequested();
-    void drawRequested();
-    void drawCancelRequested();
     // A suggestion that runs (QC).
     void runRequested(const QString &what);
-    // The row menu: "marker", "delete" on a comment.
-    void rowAction(const QString &action, const QString &commentId);
-    // The More menu: "settings", "activity", "viewAs" (a person id, or empty
-    // for oneself), "export" (markers, csv, edl), "model" (a model id).
+    // The open conversation: "rename" (with its new title), "archive", "delete".
+    void conversationAction(const QString &action, const QString &argument);
+    // The More menu: "settings", "activity", "model" (a model id).
     void moreAction(const QString &action, const QString &argument);
-    void currentThreadChosen(const QString &threadId);
-    // The thread of the row under the pointer, or empty when it leaves.
-    void threadHovered(const QString &threadId);
-    // A row pressed: its comment (a reply's own id), for its drawing.
-    void commentSelected(const QString &commentId);
 
 protected:
     void paintEvent(QPaintEvent *) override;
     void resizeEvent(QResizeEvent *) override;
-    void showEvent(QShowEvent *) override;
     bool eventFilter(QObject *watched, QEvent *event) override;
 
 private:
-    struct LocalTurn {
-        QString threadId;
-        QDateTime started;
+    struct LiveTurn {
+        bool active = false;   // Kerf is at work on it
+        bool finished = false; // done, failed or stopped; not yet kept
+        QString conversation;  // where it was asked (empty: a new one)
+        qsizetype base = 0;    // how many messages it held then: the turn's request is kept after them
         QString text;
-        QList<QPointer<CommentRow>> rows;
-        QPointer<CommentRow> kerf;
-        bool done = false;
-        bool youRecorded = false;
+        double at = std::numeric_limits<double>::quiet_NaN();
+        QPointer<YouMessage> you;
+        QPointer<KerfMessage> kerf;
     };
     struct ColourChange {
         QString clip;
@@ -337,7 +281,6 @@ private:
         QString title;
         QString params;
     };
-    ColourChange colourChange(const ReviewModel::Proposal &proposal, const QString &versionId) const;
     struct CardState {
         bool open = false;
         bool openSet = false;
@@ -346,50 +289,43 @@ private:
     };
 
     QWidget *buildHeader();
-    QFrame *buildPinBar();
-    QWidget *buildSearch();
-    void scheduleRebuild();
-    void syncContent();
-    // Lays the list out again from the review. A thread whose widgets would come
-    // out the same as last time keeps them; only what changed is made again.
-    void rebuild();
-    // Everything a thread's widgets are made from, beyond what all of them share.
-    QByteArray threadKey(const ReviewModel::Thread &thread, bool first) const;
-    // A timeline as a number that changes when it does, worked out once.
-    static size_t timelineHash(const QJsonObject &timeline);
-    CommentRow *buildRow(const ReviewModel::Comment &comment, const ReviewModel::Thread &thread, bool root);
-    ProposalCard *buildCard(const ReviewModel::Proposal &proposal, const ReviewModel::Thread &thread);
-    QList<ReviewModel::ClipChange> versionChanges(const ReviewModel::Proposal &proposal, const QString &versionId) const;
-    void connectRow(CommentRow *row);
-    void stashLocalRows();
-    void placeLocalRows(bool &first);
-    void updateCounts();
+    QWidget *buildWelcome();
+    void refillWelcome();
     void updateHeader();
-    void updateCurrent();
-    void updatePinBar();
-    void animatePinBar(bool shown);
+    // Lays the list out again from the conversation. Messages it already shows
+    // (by item id) are kept; only new ones are made.
+    void rebuild();
+    void scheduleRebuild();
+    // The cards again, from the proposals.
+    void refreshCards();
+    void syncContent();
     void scheduleFollow();
-    void setSearchShown(bool shown);
+    void dropLive();
+    KerfMessage *ensureLiveKerf();
+    YouMessage *makeYou(const QString &text, double at);
+    KerfMessage *makeKerf();
+    void insertMessage(QWidget *message);
+    ProposalCard *buildCard(const ProposalModel::Proposal &proposal);
+    // Proposals no answer here staged (an agent over MCP): shown at the end.
+    QStringList strayProposals() const;
+    QList<ProposalModel::ClipChange> versionChanges(const ProposalModel::Proposal &proposal, const QString &versionId) const;
+    ColourChange colourChange(const ProposalModel::Proposal &proposal, const QString &versionId) const;
     QString trackName(const QString &trackId) const;
     QString clipName(const QString &clipId) const;
-    bool repliesOpenByDefault(const ReviewModel::Thread &thread) const;
-    void showRowMenu(CommentRow *row);
-    void refillWelcome();
+    bool onStage(const ProposalModel::Proposal &proposal) const;
+    void commitRename();
 
-    QPointer<ReviewModel> m_model;
+    QPointer<ConversationModel> m_conversations;
+    QPointer<ProposalModel> m_model;
     QPointer<QAction> m_acceptAction;
     QJsonObject m_timeline;
     QJsonObject m_named;
     QJsonObject m_proposalTimelines;
     double m_fps = 25.0;
-    double m_playhead = 0.0;
     bool m_connected = false;
-    bool m_placed = false;
     std::function<ProposalChange(const QString &)> m_describer;
     std::function<CutPicture(const QString &)> m_pictureSource;
     QString m_stageProposal;
-    bool onStage(const ReviewModel::Proposal &proposal) const;
-    std::function<QString(double)> m_reviewLink;
     QJsonArray m_steps;
     QStringList m_models;
     QString m_currentModel;
@@ -399,63 +335,35 @@ private:
     QHash<QString, bool> m_settledHere;
     QHash<QString, QDateTime> m_settledAt;
     QHash<QString, CardState> m_cardState;
-    QHash<QString, bool> m_foldState; // thread id → replies open
-    QSet<QString> m_stepsOpen;
-    QString m_selectedComment;
-    QString m_replyTarget;
-    QString m_editing;
     QList<Suggestion> m_suggestionList;
-    QList<LocalTurn> m_turns;
-    QHash<QString, QPointer<CommentRow>> m_pendingNotes; // client id → row
-    QHash<QString, QString> m_pendingThreads;            // client id → thread id
-    int m_pinIndex = 0;
-    bool m_pinWanted = false;
+    LiveTurn m_live;
     bool m_follow = true;
     bool m_rebuildQueued = false;
+    int m_heldWidth = 0;
 
     QLabel *m_title = nullptr;
-    ui::Dot *m_filterDot = nullptr;
+    QLineEdit *m_titleEdit = nullptr;
     ChatIconButton *m_more = nullptr;
-    QWidget *m_searchRow = nullptr;
-    QLineEdit *m_search = nullptr;
-    QFrame *m_pinBar = nullptr;
-    QLabel *m_pinAuthor = nullptr;
-    QLabel *m_pinSummary = nullptr;
-    QLabel *m_pinCount = nullptr;
-    ui::IconButton *m_pinPrev = nullptr;
-    ui::IconButton *m_pinNext = nullptr;
-    QVariantAnimation *m_pinGrow = nullptr;
     ui::FadeScrollArea *m_list = nullptr;
     QWidget *m_content = nullptr;
     QVBoxLayout *m_listLayout = nullptr;
-    QList<ThreadWidget *> m_threads;
-    QPointer<ThreadWidget> m_welcomeThread;
+    QWidget *m_welcome = nullptr;
+    QLabel *m_welcomeTitle = nullptr;
+    QWidget *m_examples = nullptr;
+    QVBoxLayout *m_examplesLayout = nullptr;
+    QList<SuggestionButton *> m_exampleButtons;
+    // The messages of the kept conversation, by item id, in order.
+    QString m_shownConversation;
+    QList<QPair<QString, QPointer<QWidget>>> m_shown;
+    // Cards of proposals no answer here staged, under the last message.
+    QPointer<KerfMessage> m_strays;
     FootageSheet *m_footage = nullptr;
-    // The threads' widgets as last made, by thread id, with what they were made from,
-    // and what all of them share.
-    QHash<QString, QByteArray> m_threadKeys;
-    QByteArray m_sharedKey;
-    // Threads local rows went into: they are made again, without them, next time.
-    QSet<QString> m_touched;
-    size_t m_timelineHash = 0;
-    size_t m_namedHash = 0;
-    mutable QHash<QString, size_t> m_proposalHashes;
-    int m_heldWidth = 0;
     QString m_building;
     QPointer<ProposalCard> m_buildingCard;
     // The cut Kerf last finished, and when.
     QString m_justBuilt;
     qint64 m_builtAt = -1;
-    bool m_conversationLook = false;
-    QWidget *m_stash = nullptr;
-    CommentRow *m_welcomeRow = nullptr;
-    ReplyBar *m_replyBar = nullptr;
     Composer *m_composer = nullptr;
-    QTimer *m_clock = nullptr;
-    QDateTime m_welcomeSince;
-    QLabel *m_welcomeTime = nullptr;
-
 };
-
 
 } // namespace kerf

@@ -16,7 +16,7 @@
 #include "timeline_widget.h"
 #include "viewer_widget.h"
 #include "ui/stage_shell.h"
-#include "wiring/review_wiring.h"
+#include "wiring/chat_wiring.h"
 
 #include <QAction>
 #include <QImage>
@@ -85,8 +85,8 @@ private slots:
         window.m_lastCommand = {};
         // send(): through sendSimple, so m_lastCommand has it (the tests'
         // bridge is absent, so the send itself reports failure).
-        bus->send(QJsonObject{{"type", "comment_list"}});
-        QCOMPARE(window.m_lastCommand, (QJsonObject{{"type", "comment_list"}}));
+        bus->send(QJsonObject{{"type", "conversations"}, {"action", "list"}});
+        QCOMPARE(window.m_lastCommand, (QJsonObject{{"type", "conversations"}, {"action", "list"}}));
         QVERIFY(!bus->send(QJsonObject{}));
         // run(): an engine command resolves in the window's context.
         bus->run(QStringLiteral("qc.run"));
@@ -164,15 +164,9 @@ private slots:
         QCOMPARE(window.m_viewer->frame(), frame);
         QCOMPARE(bus->programFrame(), window.m_viewer->frame());
         QCOMPARE(frames.first().first().value<QImage>(), frame);
-        // View-as and the review model are the bus's to hold.
-        QSignalSpy viewAs(bus, &EditorBus::viewAsChanged);
-        bus->setViewAs(QStringLiteral("mina@example.com"));
-        bus->setViewAs(QStringLiteral("mina@example.com"));
-        QCOMPARE(viewAs.size(), 1);
-        QCOMPARE(bus->viewAs(), QStringLiteral("mina@example.com"));
-        // The comments region builds the review model and hands it over.
-        QVERIFY(bus->review());
-        QCOMPARE(bus->review(), window.m_reviewWiring->model());
+        // The conversation region builds the proposals model and hands it over.
+        QVERIFY(bus->proposals());
+        QCOMPARE(bus->proposals(), window.m_chatWiring->model());
     }
 
     // The shells hear the engine through the bus: the chip says when a

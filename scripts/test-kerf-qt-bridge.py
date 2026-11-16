@@ -4,7 +4,7 @@ Requires built kerfd/libkerf_qt_bridge and ffmpeg. No external provider is conta
 
 One pass on one project, through the built library as the Qt editor loads it:
 import, edits, effect previews, a mask and its frame, presets, the agent,
-Kerf Cloud, and a reconnect. The review and delivery protocol and the titles
+Kerf Cloud, and a reconnect. The delivery protocol and the titles
 are held by the bridge's own tests (crates/surfaces/kerf-qt-bridge/tests),
 through the same C ABI.
 It binds a localhost port and Unix sockets, which a sandbox may refuse.
@@ -59,7 +59,7 @@ class Provider(http.server.BaseHTTPRequestHandler):
             assert '# Kerf edit script' in system, system[:400]
             # The project document arrives as a message after the system prompt.
             assert any('```kerf' in str(m.get('content')) for m in request['messages'][1:]), request['messages'][1:]
-            assert [tool['function']['name'] for tool in request['tools']] == ['edit', 'look', 'make', 'note', 'render', 'suggest', 'session.read'], request['tools']
+            assert [tool['function']['name'] for tool in request['tools']] == ['edit', 'look', 'make', 'render', 'suggest', 'session.read'], request['tools']
             assert '`suggest`' in system, system[-600:]
             message = {'role': 'assistant', 'content': None, 'tool_calls': [{
                 'id': 'edit-1', 'type': 'function', 'function': {
@@ -353,7 +353,10 @@ def first_pass():
             send({'type': 'accept', 'proposalId': proposal_id, 'revision': proposal_state['revision']})
             accepted = wait(lambda event: event['type'] == 'state' and event['snapshot']['revision'] > proposal_state['revision'])['snapshot']
             assert sorted(marker.get('label') for marker in accepted['timeline']['markers']) == ['Agent reviewed', 'external'], accepted['timeline']['markers']
-            send({'type': 'agent', 'text': 'Keep the previous change.'})
+            # A follow-up names the conversation the first turn started, and
+            # its session still holds that turn.
+            conversation = next(event['id'] for event in reversed(observed[asked:]) if event.get('type') == 'conversation')
+            send({'type': 'agent', 'text': 'Keep the previous change.', 'conversation': conversation})
             wait(lambda event: event['type'] == 'agent_busy' and event['busy'] is False)
             assert len(requests) == 4
             steps = [event['steps'] for event in observed if event.get('type') == 'agent_next']

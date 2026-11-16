@@ -15,7 +15,7 @@
 #include "editor_common.h"
 #include "project_panel.h"
 #include "main_window.h"
-#include "review_model.h"
+#include "proposal_model.h"
 #include "timeline_widget.h"
 #include "toolbar_widgets.h"
 #include "wiring/toolbar_wiring.h"
@@ -88,16 +88,6 @@ QJsonObject checkFixture() {
         row("picture.flash_black", "Flash and black", true, "0 found")};
     return QJsonObject{{"type", "check"}, {"status", "done"}, {"valid", false}, {"findings", QJsonArray{}},
                        {"summary", QJsonObject{{"passed", 6}, {"total", 8}, {"blocking", 2}, {"rows", rows}}}};
-}
-
-QJsonObject comment(const char *id, const char *parent, bool blocking, bool resolved) {
-    return QJsonObject{{"id", id}, {"parent", parent ? QJsonValue(QString::fromLatin1(parent)) : QJsonValue()},
-                       {"author", QJsonObject{{"kind", "person"}, {"name", "Mina Park"}, {"id", "mina@example.com"}}},
-                       {"at", 17.32}, {"duration", QJsonValue()}, {"frame", 433}, {"body", "Caption sits on the lower third"},
-                       {"tags", QJsonArray{}}, {"blocking", blocking}, {"drawing", QJsonArray{}}, {"proposal", QJsonValue()},
-                       {"steps", QJsonArray{}}, {"error", false}, {"resolved", resolved}, {"resolvedBy", QJsonValue()},
-                       {"resolvedRevision", QJsonValue()}, {"qcKey", QJsonValue()}, {"created", "2026-11-04T10:12:00Z"},
-                       {"revision", 22}, {"edited", QJsonValue()}};
 }
 
 // The showcase snapshot named as the mockup's project, with its sequence and
@@ -240,7 +230,7 @@ private slots:
         findAction(menu, QStringLiteral("appMenu.settings"))->trigger();
         QVERIFY(window.m_shell->covered());
         window.m_shell->setCovered(false);
-        // View: the panes, the masks, annotations, safe zones, zoom, keyboard and sync.
+        // View: the panes, the masks, safe zones, zoom, keyboard and sync.
         wiring->buildAppMenu();
         QMenu *view = findAction(menu, QStringLiteral("appMenu.view"))->menu();
         QVERIFY(view);
@@ -249,7 +239,7 @@ private slots:
             if (!action->isSeparator()) names << action->text();
         for (const QAction *tool : std::as_const(window.m_maskTools)) QVERIFY2(names.contains(tool->text()), qPrintable(tool->text()));
         QCOMPARE(window.m_maskTools.size(), 3);
-        for (const char *row : {"Sidebar", "Picture", "Timeline", "Follow Kerf", "Annotations", "Safe Zones", "Viewer zoom", "Keyboard", "Sync"})
+        for (const char *row : {"Sidebar", "Picture", "Timeline", "Follow Kerf", "Safe Zones", "Viewer zoom", "Keyboard", "Sync"})
             QVERIFY2(names.contains(QString::fromLatin1(row)), row);
         // A pane's row is its command: checked as it shows, and it closes it.
         window.revealPanel(true, true);
@@ -374,34 +364,6 @@ private slots:
             {"tracks", QJsonArray{QJsonObject{{"id", "V1"}, {"type", "video"}, {"clips", clips}}}}}}};
     }
 
-    // composer.draw (D) is the composer's Draw, while the composer has the
-    // focus; elsewhere it does nothing.
-    void composerDrawIsTheRegistrysCommand() {
-        QSettings().remove(QStringLiteral("workspace"));
-        MainWindow window{QString(), QString()};
-        window.resize(1600, 1000);
-        window.show();
-        window.activateWindow();
-        QVERIFY(QTest::qWaitForWindowActive(&window));
-        Composer *composer = window.m_chat->composerWidget();
-        QAction *draw = window.m_commands->action(QStringLiteral("composer.draw"));
-        QVERIFY(draw);
-        QCOMPARE(draw->shortcut(), QKeySequence(Qt::Key_D));
-        QCOMPARE(composer->drawAction(), draw);
-        QVERIFY(composer->actions().contains(draw));
-        QCOMPARE(draw->shortcutContext(), Qt::WidgetWithChildrenShortcut);
-        QVERIFY(window.m_commandHandlers.contains(QStringLiteral("composer.draw")));
-        QCOMPARE(ui::tipShortcut(composer->drawButton()), QStringLiteral("D"));
-        QSignalSpy clicked(composer, &Composer::drawClicked);
-        window.m_timeline->setFocus();
-        QVERIFY(!window.m_toolbarWiring->drawInComposer());
-        QCOMPARE(clicked.size(), 0);
-        composer->drawButton()->setFocus(Qt::TabFocusReason);
-        QTRY_VERIFY(composer->hasFocusWithin());
-        draw->trigger();
-        QCOMPARE(clicked.size(), 1);
-    }
-
     // Export is a split button: "Export  Master" exports the chosen quality
     // (export {master, prores_hq} or {review, h264}); the chevron opens the
     // menu: Master and Draft, Render preview, Preflight and Render master.
@@ -485,11 +447,10 @@ private slots:
         QVERIFY(rows.at(0).passed);
         QCOMPARE(rows.at(1).label, QStringLiteral("True peak · −0.4 dBTP"));
         QVERIFY(!rows.at(1).passed);
-        QCOMPARE(rows.at(1).ask, QStringLiteral("@Kerf bring true peak to ≤ −1 dBTP (now −0.4 dBTP)"));
-        QCOMPARE(rows.at(1).commentId, QStringLiteral("c-2718"));
+        QCOMPARE(rows.at(1).ask, QStringLiteral("Bring true peak to ≤ −1 dBTP (now −0.4 dBTP)"));
         QCOMPARE(rows.at(2).code, QStringLiteral("loudness.range"));
         QCOMPARE(rows.at(3).code, QStringLiteral("text.overlap"));
-        QCOMPARE(rows.at(3).ask, QStringLiteral("@Kerf fix the caption overlap (1 at 00:00:17:08)"));
+        QCOMPARE(rows.at(3).ask, QStringLiteral("Fix the caption overlap (1 at 00:00:17:08)"));
         QCOMPARE(ToolbarWiring::preflightHidden(summary), 0);
         // Many failures: the first six, and how many more.
         QJsonArray failing;
@@ -536,15 +497,11 @@ private slots:
         QVERIFY(!findAction(menu, QStringLiteral("preflight.picture.levels")));
         QVERIFY(findAction(menu, QStringLiteral("preflight.text.overlap")));
 
-        // Ask Kerf: the panel at the row's thread, the composer filled.
-        QSignalSpy thread(window.m_bus, &EditorBus::openThread);
+        // Ask Kerf: the composer filled with the request.
         QSignalSpy prefill(window.m_bus, &EditorBus::askPrefill);
         peak->trigger();
-        QCOMPARE(thread.size(), 1);
-        QCOMPARE(thread.at(0).at(0).toString(), QStringLiteral("c-2718"));
         QCOMPARE(prefill.size(), 1);
-        QCOMPARE(prefill.at(0).at(0).toString(), QStringLiteral("@Kerf bring true peak to ≤ −1 dBTP (now −0.4 dBTP)"));
-        QCOMPARE(prefill.at(0).at(1).toString(), QStringLiteral("c-2718"));
+        QCOMPARE(prefill.at(0).at(0).toString(), QStringLiteral("Bring true peak to ≤ −1 dBTP (now −0.4 dBTP)"));
         // A passed row is there to read.
         wiring->buildExportMenu();
         QVERIFY(findAction(menu, QStringLiteral("preflight.loudness.integrated")));
@@ -556,69 +513,9 @@ private slots:
         QVERIFY(findAction(menu, QStringLiteral("preflight.loudness.true_peak")));
     }
 
-    // A master waits while a blocking note is
-    // open, says which and where, and brings up the blocking notes to
-    // resolve; a draft still goes. kerfd's own refusal is shown the same way.
-    void exportWaitsForBlockingNotes() {
-        MainWindow window{QString(), QString()};
-        window.resize(1600, 1000);
-        window.show();
-        QVERIFY(QTest::qWaitForWindowExposed(&window));
-        window.setConnection(QStringLiteral("ready"));
-        ExportButton *button = window.m_exportButton;
-        QAbstractButton *main = nullptr;
-        for (QAbstractButton *child : button->findChildren<QAbstractButton *>())
-            if (child->accessibleName() == QStringLiteral("Export")) main = child;
-        QVERIFY(main);
-        QCOMPARE(button->exportQuality(), QStringLiteral("master"));
-        window.handleEvent(QJsonObject{{"type", "comments"}, {"reviewRevision", 3},
-                                       {"items", QJsonArray{comment("c-1708", nullptr, true, false), comment("c-0903", nullptr, false, false)}}});
-        ReviewModel review;
-        review.setComments(QJsonArray{comment("c-1708", nullptr, true, false), comment("c-0903", nullptr, false, false)});
-        window.m_bus->setReview(&review);
-
-        window.m_lastCommand = {};
-        window.m_errorBanner->hide();
-        main->click();
-        QVERIFY(window.m_lastCommand.isEmpty());
-        QVERIFY(!window.m_errorBanner->isHidden());
-        QCOMPARE(window.m_errorMessage->text(),
-                 QStringLiteral("A blocking note holds the master back: \u201cCaption sits on the lower third\u201d by Mina Park at "
-                                "00:00:17:08. Resolve it in Review, or export a Draft meanwhile."));
-        QCOMPARE(review.tag(), QString::fromLatin1(ReviewModel::kBlockingTag));
-
-        // A draft is a review copy, not a delivery.
-        button->setQuality(QStringLiteral("review"));
-        main->click();
-        QCOMPARE(window.m_lastCommand.value("quality").toString(), QStringLiteral("review"));
-
-        // kerfd refuses a master too (an agent's, or one sent before the notes
-        // came); the editor says so in its words and shows the notes.
-        review.setTag(QString());
-        window.m_errorBanner->hide();
-        const QString refusal = QStringLiteral("a blocking note holds delivery back: \"Mix is hot\" by Mina (comment c-1)");
-        window.handleEvent(QJsonObject{{"type", "error"}, {"code", "BLOCKING_NOTES"}, {"command", "export"}, {"message", refusal}});
-        QCOMPARE(window.m_errorMessage->text(), refusal);
-        QCOMPARE(review.tag(), QString::fromLatin1(ReviewModel::kBlockingTag));
-
-        // Resolved, the master goes.
-        review.setComments(QJsonArray{comment("c-1708", nullptr, true, true)});
-        button->setQuality(QStringLiteral("master"));
-        window.m_lastCommand = {};
-        main->click();
-        QCOMPARE(window.m_lastCommand.value("quality").toString(), QStringLiteral("master"));
-        window.m_bus->setReview(nullptr);
-    }
-
-    // Render master waits while blocking notes are open; the warn row counts
-    // them (the review model's count when there is one). The EDL locators
-    // choice is kept per project.
-    void toolbarRenderMasterIsDisabledWhileBlocking() {
-        QCOMPARE(ToolbarWiring::blockingThreads(QJsonArray{comment("c-1", nullptr, true, false), comment("c-2", nullptr, false, false),
-                                                           comment("c-3", nullptr, false, false), comment("c-3r", "c-3", true, false),
-                                                           comment("c-4", nullptr, true, true)}),
-                 2);
-
+    // Render master sends the master's command, and says why when it cannot.
+    // The EDL locators choice is kept per project.
+    void toolbarRenderMasterSendsTheMaster() {
         MainWindow window{QString(), QString()};
         window.resize(1600, 1000);
         window.show();
@@ -627,29 +524,9 @@ private slots:
         ToolbarWiring *wiring = window.m_toolbarWiring.get();
         QMenu *menu = window.m_exportButton->menu();
         wiring->buildExportMenu();
-        QCOMPARE(findAction(menu, QStringLiteral("preflightBlocking"))->text(), QStringLiteral("No blocking notes open"));
-        QVERIFY(findAction(menu, QStringLiteral("exportRenderMaster"))->isEnabled());
-
-        window.handleEvent(QJsonObject{{"type", "comments"}, {"reviewRevision", 3},
-                                       {"items", QJsonArray{comment("c-1708", nullptr, true, false), comment("c-0903", nullptr, true, false)}}});
-        wiring->buildExportMenu();
-        QAction *blocking = findAction(menu, QStringLiteral("preflightBlocking"));
-        QCOMPARE(blocking->text(), QStringLiteral("2 blocking notes open"));
-        QCOMPARE(ui::menuRole(blocking), ui::MenuRole::Warn);
         QAction *render = findAction(menu, QStringLiteral("exportRenderMaster"));
-        QVERIFY(!render->isEnabled());
-        QCOMPARE(render->toolTip(), QStringLiteral("Resolve blocking notes first"));
-
-        // With a review model on the bus, its count is the one.
-        ReviewModel review;
-        review.setComments(QJsonArray{comment("c-1708", nullptr, true, false), comment("c-0903", nullptr, true, true)});
-        window.m_bus->setReview(&review);
-        QCOMPARE(wiring->blockingCount(), 1);
-        wiring->buildExportMenu();
-        QCOMPARE(findAction(menu, QStringLiteral("preflightBlocking"))->text(), QStringLiteral("1 blocking note open"));
-        review.setComments(QJsonArray{comment("c-1708", nullptr, true, true)});
-        wiring->buildExportMenu();
-        render = findAction(menu, QStringLiteral("exportRenderMaster"));
+        QVERIFY(render->isEnabled());
+        QVERIFY(!findAction(menu, QStringLiteral("preflightBlocking")));
         QVERIFY(render->isEnabled());
         window.m_lastCommand = {};
         render->trigger();
@@ -657,7 +534,6 @@ private slots:
         QCOMPARE(window.m_lastCommand, deliver::masterCommand(window.m_projectDirectory));
         QCOMPARE(window.m_lastCommand.value("quality").toString(), QStringLiteral("master"));
         QVERIFY(!window.m_lastCommand.contains("codec"));
-        window.m_bus->setReview(nullptr);
 
         // Offline, Render master says why.
         window.setConnection(QStringLiteral("disconnected"));

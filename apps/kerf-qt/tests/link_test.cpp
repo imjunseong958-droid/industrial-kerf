@@ -8,7 +8,7 @@
 #include "main_window.h"
 #include "project_launcher.h"
 #include "review_link.h"
-#include "wiring/review_wiring.h"
+#include "wiring/chat_wiring.h"
 #include "ui/editor_bus.h"
 
 #include <QApplication>
@@ -206,7 +206,7 @@ private slots:
         QVERIFY(links::slug(QStringLiteral(" -- ")).isEmpty());
         QVERIFY(links::slug(QString(200, QLatin1Char('a'))).size() <= 63);
 
-        // The comments' link: the folder, not the document's "Harbor Teaser".
+        // A link names the folder, not the document's "Harbor Teaser".
         QString link;
         {
             MainWindow window{atlas, QString()};
@@ -216,8 +216,7 @@ private slots:
             snapshot.insert(QStringLiteral("timeline"), timeline);
             window.applySnapshot(snapshot);
             QCOMPARE(window.m_projectName, QStringLiteral("Harbor Teaser"));
-            link = window.m_reviewWiring->reviewLink(1.0);
-            QCOMPARE(link, links::make(atlas, 22, 1.0, window.m_fps));
+            link = links::make(window.m_projectDirectory, window.m_revision, 1.0, window.m_fps);
             QVERIFY2(link.startsWith(QStringLiteral("kerf://atlas/rev22@")), qPrintable(link));
             window.close();
         }

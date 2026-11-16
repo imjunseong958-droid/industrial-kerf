@@ -15,7 +15,7 @@ mod qc;
 mod secrets;
 mod updates;
 mod queue;
-mod review;
+mod conversations;
 mod tasks;
 #[cfg(test)]
 mod tests_support;
@@ -161,10 +161,12 @@ enum Command {
         /// The clip, range, or playhead the request is about.
         #[serde(default)]
         focus: Option<kerf_agent::Focus>,
-        /// Keep the turn in the review log: the request as the person's
-        /// comment, and Kerf's answer as a reply.
+        /// The conversation the turn goes on in; none starts a new one.
         #[serde(default)]
-        comment: Option<review::TurnComment>,
+        conversation: Option<String>,
+        /// Where the playhead was when it was asked, in seconds.
+        #[serde(default)]
+        at: Option<f64>,
         #[serde(flatten)]
         settings: AgentSettings,
     },
@@ -200,8 +202,6 @@ enum Command {
     },
     /// The render jobs kerfd keeps: `render_queue`.
     RenderQueue,
-    /// The review log as a CSV sheet, EDL locators, or sequence markers.
-    ExportComments(paperwork::CommentsRequest),
     /// The captions as SRT or WebVTT.
     ExportCaptions(paperwork::CaptionsRequest),
     /// The programme measured to EBU R128: `loudness`.
@@ -331,12 +331,9 @@ enum Command {
     /// entry that has a picture, `width` pixels wide. A newer request
     /// supersedes it.
     EffectPreviews(previews::Request),
-    /// The review log's comments: `comments`.
-    CommentList,
-    /// Add a note by the person using the editor: `comments`.
-    CommentAdd(review::AddRequest),
-    /// Resolve, reopen, edit, tag or delete a note: `comments`.
-    CommentSet(review::SetRequest),
+    /// The conversations kept beside the project: list, open, archive,
+    /// rename or delete one (`conversations`, `conversation`).
+    Conversations(conversations::Request),
     /// Kerf's QC pass, its failing findings kept as `qc` comments:
     /// `check`.
     Check {
@@ -431,8 +428,6 @@ struct Shared {
     /// The preview file the media worker plays, so closing the bridge can
     /// remove it even when the process exits before that worker stops.
     shown_preview: Mutex<Option<PathBuf>>,
-    /// The review log revision of the comments last sent to the editor.
-    review_seen: Mutex<Option<u64>>,
     /// A QC check is running.
     check_busy: AtomicBool,
     /// Cancels the QC check running, so closing the bridge stops it.
@@ -449,6 +444,8 @@ struct Shared {
 }
 
 struct Bridge {
+    /// The project folder, where its conversations are kept.
+    directory: PathBuf,
     events_tx: SyncSender<Value>,
     commands: SyncSender<Command>,
     media: SyncSender<Command>,
@@ -465,9 +462,10 @@ struct AgentRequest {
     settings: AgentSettings,
     /// More than none: this many agents make their own version of the request.
     versions: usize,
-    /// The person's own words and where the turn goes in the review log,
-    /// when it is kept there.
-    note: Option<(String, review::TurnComment)>,
+    /// The person's own words, the conversation the turn goes on in (none
+    /// starts one), and the playhead when it was asked: every turn of one
+    /// agent is kept; one of several versions is not.
+    turn: Option<(String, Option<String>, Option<f64>)>,
 }
 
 fn emit(tx: &SyncSender<Value>, value: Value) {
@@ -584,10 +582,8 @@ fn with_proposal_timeline(mut snapshot: Value, state: &StateSnapshot) -> Value {
         }
     }
     snapshot["proposalTimelines"] = Value::Object(timelines);
-    for (field, empty) in [("proposals", json!([])), ("reviewRevision", json!(0))] {
-        if snapshot.get(field).is_none() {
-            snapshot[field] = empty;
-        }
+    if snapshot.get("proposals").is_none() {
+        snapshot["proposals"] = json!([]);
     }
     snapshot
 }
@@ -634,12 +630,8 @@ fn connect_runtime(
     // Rebuild the viewer after a reconnect even when the canonical snapshot
     // did not change while the transport was down.
     *previous = None;
-    let review_revision = state.review_revision;
     publish(state, shared, tx, previous);
     connection_event(tx, "ready", None);
-    // The daemon may be a new one whose review counter starts again.
-    review::reset(shared);
-    let _ = review::follow(&client, review_revision, shared, tx);
     Some(client)
 }
 
@@ -668,12 +660,7 @@ fn runtime_worker(
             Err(RecvTimeoutError::Timeout) => {
                 if let Some(active_client) = client.as_ref() {
                     match active_client.get_state() {
-                        Ok(state) => {
-                            let review_revision = state.review_revision;
-                            publish(state, &shared, &tx, &mut previous);
-                            // Notes MCP agents and merges write show up here.
-                            let _ = review::follow(active_client, review_revision, &shared, &tx);
-                        }
+                        Ok(state) => publish(state, &shared, &tx, &mut previous),
                         Err(error) if error.is_transport() => {
                             let _ = media.try_send(Command::Pause);
                             connection_event(&tx, "disconnected", Some(&error.message));
@@ -708,24 +695,6 @@ fn runtime_worker(
         };
         let operation = key();
         let force_refresh = matches!(&command, Command::Refresh);
-        // Comment commands answer with `comments`, never a state.
-        let command = match command {
-            Command::CommentList | Command::CommentAdd(_) | Command::CommentSet(_) => {
-                let (name, id, result) =
-                    review::command(command, &active_client, &directory, &shared, &tx);
-                match result {
-                    Ok(()) => {}
-                    Err(error) if error.is_transport() => {
-                        let _ = media.try_send(Command::Pause);
-                        connection_event(&tx, "disconnected", Some(&error.message));
-                        client = None;
-                    }
-                    Err(error) => review::refused(&tx, name, id.as_deref(), &error),
-                }
-                continue;
-            }
-            command => command,
-        };
         // Render queue, paperwork files and saved looks answer with their
         // own events, never a state.
         let side = match command {
@@ -740,10 +709,6 @@ fn runtime_worker(
             Command::RenderQueue => {
                 Err(("render_queue", queue::publish(&shared, &active_client, &tx)))
             }
-            Command::ExportComments(request) if request.format != "markers" => Err((
-                "export_comments",
-                paperwork::export_comments(&active_client, &directory, &request, &tx),
-            )),
             Command::ExportCaptions(request) => Err((
                 "export_captions",
                 paperwork::export_captions(&active_client, &directory, &request, &tx),
@@ -842,17 +807,6 @@ fn runtime_worker(
                 active_client.import_projection_request("ui", &operation, state.revision)
             }),
             Command::ProjectionRepair => active_client.repair_projection(),
-            Command::ExportComments(request) => {
-                match paperwork::markers(&active_client, &request, &tx) {
-                    Ok(Some((ops, revision, count))) => {
-                        then = Some(paperwork::markers_done(count));
-                        refusal = Some("markers");
-                        active_client.apply_ops_request("ui", &operation, ops, revision)
-                    }
-                    Ok(None) => continue,
-                    Err(error) => Err(error),
-                }
-            }
             Command::LookApply { clip, path } => {
                 let opened = active_client
                     .get_document(false)
@@ -1020,7 +974,6 @@ fn runtime_worker(
         };
         match result {
             Ok(state) => {
-                let review_revision = state.review_revision;
                 if force_refresh {
                     publish_force(state, &shared, &tx, &mut previous);
                 } else {
@@ -1029,7 +982,6 @@ fn runtime_worker(
                 if let Some(event) = then.take() {
                     emit(&tx, event);
                 }
-                let _ = review::follow(&active_client, review_revision, &shared, &tx);
             }
             Err(error) if error.is_transport() => {
                 let _ = media.try_send(Command::Pause);
@@ -1038,7 +990,6 @@ fn runtime_worker(
             }
             Err(runtime_error) => {
                 match refusal {
-                    Some("markers") => paperwork::markers_failed(&tx, &runtime_error.message),
                     Some(name) => {
                         queue::refused(&tx, name, &runtime_error);
                     }
@@ -2046,31 +1997,18 @@ fn run_version(
             }),
         );
     };
-    let client = match RuntimeClient::new(directory) {
-        Ok(client) => client,
-        Err(err) => {
-            finish("failed", None, Some(&err.message));
-            return;
-        }
-    };
-    let person = review::person(directory);
-    let mut turn = match review::Turn::begin(
-        &client,
-        person,
-        &title,
-        review::TurnComment::default(),
-        shared,
-        tx,
-    ) {
+    // Each version is a conversation of its own.
+    let store = conversations::Store::of(directory);
+    let mut turn = match conversations::Turn::begin(&store, None, &title, None, tx) {
         Ok(turn) => turn,
         Err(err) => {
-            finish("failed", None, Some(&err.message));
+            finish("failed", None, Some(&err));
             return;
         }
     };
     emit(
         tx,
-        json!({"type":"agent_version","key":key,"state":"running","thread":turn.root()}),
+        json!({"type":"agent_version","key":key,"state":"running","conversation":turn.id()}),
     );
     let mut proposal: Option<String> = None;
     let mut stopped = false;
@@ -2116,14 +2054,11 @@ fn run_version(
         Ok::<_, String>(())
     })();
     let outcome = match &result {
-        Ok(()) => review::Outcome::Done(String::new()),
-        Err(err) => review::Outcome::Failed(err.clone()),
+        Ok(()) => conversations::Outcome::Done(String::new()),
+        Err(err) => conversations::Outcome::Failed(err.clone()),
     };
-    if let Err(err) = turn.finish(&client, outcome, proposal.clone(), shared, tx) {
-        error(
-            tx,
-            format!("Kerf's reply was not kept as a note: {}", err.message),
-        );
+    if let Err(err) = turn.finish(&store, outcome, proposal.clone(), tx) {
+        error(tx, format!("Kerf's reply was not kept: {err}"));
     }
     match result {
         Err(err) => finish("failed", proposal.as_deref(), Some(&err)),
@@ -2140,8 +2075,10 @@ fn agent_worker(
     tx: SyncSender<Value>,
     shared: Arc<Shared>,
 ) {
-    // Keep one session for follow-up feedback, rather than forgetting every turn.
-    let mut session: Option<(AgentSettings, Agent)> = None;
+    // Keep one session per conversation for follow-up feedback, rather than
+    // forgetting every turn; another conversation starts its own.
+    let mut session: Option<(AgentSettings, Option<String>, Agent)> = None;
+    let store = conversations::Store::of(&directory);
     while let Ok(request) = rx.recv() {
         if shared.closed.load(Ordering::Relaxed) {
             break;
@@ -2159,47 +2096,44 @@ fn agent_worker(
             let _ = commands.send(Command::Refresh);
             continue;
         }
-        // A turn kept in the review log: the person's comment first, and
-        // the open proposals, to find the one this turn stages.
-        let mut kept = request.note.as_ref().and_then(|(prompt, comment)| {
+        // The turn in its conversation: the person's request first, and the
+        // open proposals, to find the one this turn stages.
+        let mut kept = request.turn.as_ref().and_then(|(prompt, conversation, at)| {
             let client = RuntimeClient::new(&directory).ok()?;
             let before = client
                 .get_state()
-                .map(|state| review::open_proposals(&state))
+                .map(|state| conversations::open_proposals(&state))
                 .unwrap_or_default();
-            match review::Turn::begin(
-                &client,
-                review::person(&directory),
-                prompt,
-                comment.clone(),
-                &shared,
-                &tx,
-            ) {
+            match conversations::Turn::begin(&store, conversation.as_deref(), prompt, *at, &tx) {
                 Ok(turn) => Some((client, turn, before)),
                 Err(err) => {
-                    error(
-                        &tx,
-                        format!("The request was not kept as a note: {}", err.message),
-                    );
+                    error(&tx, format!("The request was not kept: {err}"));
                     None
                 }
             }
         });
+        let conversation = kept.as_ref().map(|(_, turn, _)| turn.id().to_owned());
+        let earlier = kept.as_ref().and_then(|(_, turn, _)| turn.earlier());
         let result = (|| {
-            if session
-                .as_ref()
-                .is_none_or(|(active_settings, _)| active_settings != &request.settings)
-            {
+            let mut text = request.text.clone();
+            if session.as_ref().is_none_or(|(active_settings, active, _)| {
+                active_settings != &request.settings || *active != conversation
+            }) {
                 session = Some((
                     request.settings.clone(),
+                    conversation.clone(),
                     new_agent(&shared, &directory, &binary, &request.settings, &tx)?,
                 ));
+                // A session new to a conversation that has turns hears them first.
+                if let Some(earlier) = &earlier {
+                    text = format!("{earlier}\nNow: {text}");
+                }
             }
-            let current = &mut session.as_mut().ok_or("Agent session unavailable")?.1;
+            let current = &mut session.as_mut().ok_or("Agent session unavailable")?.2;
             if let Ok(mut abort) = shared.abort.lock() {
                 *abort = Some(current.abort_handle());
             }
-            current.run_with_events(&request.text, |event| {
+            current.run_with_events(&text, |event| {
                 if let AgentEvent::ToolCallStarted { name, targets, .. } = &event {
                     if let Some(focus) = focus_event(name, targets) {
                         emit(&tx, focus);
@@ -2261,8 +2195,8 @@ fn agent_worker(
             Ok::<_, String>(())
         })();
         let outcome = match &result {
-            Ok(()) => review::Outcome::Done(String::new()),
-            Err(err) => review::Outcome::Failed(err.clone()),
+            Ok(()) => conversations::Outcome::Done(String::new()),
+            Err(err) => conversations::Outcome::Failed(err.clone()),
         };
         if let Err(err) = result {
             emit(
@@ -2279,11 +2213,11 @@ fn agent_worker(
             let proposal = client
                 .get_state()
                 .ok()
-                .and_then(|state| review::staged_proposal(&before, &state));
-            if let Err(err) = turn.finish(&client, outcome, proposal, &shared, &tx) {
+                .and_then(|state| conversations::staged_proposal(&before, &state));
+            if let Err(err) = turn.finish(&store, outcome, proposal, &tx) {
                 error(
                     &tx,
-                    format!("Kerf's reply was not kept as a note: {}", err.message),
+                    format!("Kerf's reply was not kept: {err}"),
                 );
             }
         }
@@ -2315,6 +2249,7 @@ pub unsafe extern "C" fn kerf_bridge_new(
         return std::ptr::null_mut();
     };
     let directory = PathBuf::from(directory);
+    let project_folder = directory.clone();
     let binary = PathBuf::from(binary);
     // The project's own looks, for its previews; kerfd reports any that do
     // not read.
@@ -2343,7 +2278,6 @@ pub unsafe extern "C" fn kerf_bridge_new(
         preview_turns: Default::default(),
         stale_previews: Mutex::new(Vec::new()),
         shown_preview: Mutex::new(None),
-        review_seen: Mutex::new(None),
         check_busy: AtomicBool::new(false),
         check_cancel: Mutex::new(None),
         makings: Mutex::new(std::collections::BTreeMap::new()),
@@ -2389,6 +2323,7 @@ pub unsafe extern "C" fn kerf_bridge_new(
         thread::spawn(move || cloud_status(&tx, None));
     }
     Box::into_raw(Box::new(Bridge {
+        directory: project_folder,
         events_tx: emit,
         commands,
         media,
@@ -2570,13 +2505,14 @@ pub unsafe extern "C" fn kerf_bridge_send(bridge: *mut c_void, message: *const c
         Command::Agent {
             text,
             focus,
-            comment,
+            conversation,
+            at,
             settings,
         } => {
             if text.trim().is_empty() || bridge.shared.agent_busy.swap(true, Ordering::SeqCst) {
                 return false;
             }
-            let note = comment.map(|comment| (text.clone(), comment));
+            let turn = Some((text.clone(), conversation, at));
             let text = match &focus {
                 Some(focus) => kerf_agent::focused_request(&text, focus),
                 None => text,
@@ -2587,7 +2523,7 @@ pub unsafe extern "C" fn kerf_bridge_send(bridge: *mut c_void, message: *const c
                     text,
                     settings,
                     versions: 0,
-                    note,
+                    turn,
                 })
                 .is_err()
             {
@@ -2614,7 +2550,7 @@ pub unsafe extern "C" fn kerf_bridge_send(bridge: *mut c_void, message: *const c
                     text,
                     settings,
                     versions: count,
-                    note: None,
+                    turn: None,
                 })
                 .is_err()
             {
@@ -2623,6 +2559,14 @@ pub unsafe extern "C" fn kerf_bridge_send(bridge: *mut c_void, message: *const c
             } else {
                 true
             }
+        }
+        Command::Conversations(request) => {
+            conversations::command(
+                &conversations::Store::of(&bridge.directory),
+                request,
+                &bridge.events_tx,
+            );
+            true
         }
         _ => bridge.commands.try_send(command).is_ok(),
     }
@@ -3729,11 +3673,11 @@ mod tests {
         assert!(has_track("p2", "T2") && has_track("p2-v1", "T5") && has_track("p1", "T1"));
         assert_eq!(value["proposals"].as_array().unwrap().len(), 3);
 
-        // A snapshot without proposals or comments still has both fields.
+        // A snapshot without proposals still has the field.
         let empty = snapshot(DOCUMENT, None);
         let value = super::with_proposal_timeline(serde_json::to_value(&empty).unwrap(), &empty);
         assert_eq!(value["proposals"], json!([]));
-        assert_eq!(value["reviewRevision"], json!(0));
+        assert!(value.get("reviewRevision").is_none());
         assert_eq!(value["proposalTimelines"], json!({}));
     }
 

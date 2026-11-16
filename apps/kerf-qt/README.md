@@ -143,13 +143,13 @@ project's name is centred on the window with its state under it
 
 Sources live in the `kerf` namespace. `main_window.cpp` builds the window;
 its members are split by region into `main_window_<region>.cpp` (stage,
-review, agent, timeline, bin, toolbar, status), and each region
+chat, agent, timeline, bin, toolbar, status), and each region
 keeps its state in a wiring class under `ui/wiring/` that talks to the others
 only through `ui/editor_bus.h` (the bridge's events, the snapshot, the
 playhead and cross-region requests). `ui/` holds the shared
 parts: the kit (`components`, `icons`), `stage_shell` (the
-window's content and its geometry), the review model and the comments panel's
-rows and proposal cards, the agent HUD, and
+window's content and its geometry), the proposals and conversation models, the
+conversation's messages (`chat_messages`) and proposal cards, the agent HUD, and
 `review_link` (kerf:// links). `viewer_widget` is the
 picture, `editor_theme`/`editor_style.h` the colour roles and the
 style sheet generated from them, and `project_launcher` the Choose a Project
@@ -243,8 +243,7 @@ and Delete and Shift+Delete delete or ripple-delete it (Kerf keymap). The
 transport is in the timeline's strip (under the picture for a vertical sequence): go to start, previous frame, Play (Space),
 next frame and go to end; the marks (I, O, Clear Marks ⇧⌘X) and Loop (⌘L) are keys and menu items,
 and the ruler shows the marks. A click on the picture plays or
-pauses. Captions, the QC overlap box, safe zones and the comments' drawings
-lie over the picture.
+pauses. Captions, the QC overlap box and safe zones lie over the picture.
 
 ## The layout
 
@@ -320,14 +319,17 @@ and After, and Exit. After plays the proposal's rendered preview, and Before the
 program as it is.
 
 **The sidebar** (`ui/project_sidebar.h`, ⌥⌘S; its choice is kept) leads with New
-conversation, then lists the recent project folders that still exist, the current
-one unfolded to its conversations, the review log's threads, titled by their first
-line. A conversation with a pending proposal says Review, a settled one Done, and
-the folder says Working while Kerf is. Choosing another folder opens it as File ▸
+conversation and a search, then lists the recent project folders that still exist,
+the current one unfolded to its conversations (`.kerf/conversations/`, as the
+bridge lists them) by date: Today, Yesterday, Previous 7 days, Older. Each has a
+dot for what it is doing (working, making, waiting for review, failed) and its
+age; hovering shows Archive and Delete, its menu also renames (F2), and archived
+ones fold under "Archived · N". Delete asks first. The folder says Working while
+Kerf is. Choosing another folder opens it as File ▸
 Open does; the + beside Projects is New Project… and Open Folder…. At its foot is
 the account: the Kerf Cloud account when one is signed in, else what chat runs on.
 It opens the menu to everything the window does not show: Settings…, Account…, the
-User Guide, Media (⌘1), Import… and View (the panes, the mask tools, annotations,
+User Guide, Media (⌘1), Import… and View (the panes, the mask tools,
 safe zones, viewer zoom, the keyboard's choice and the sync's rows), and Sign Out
 when signed in. Every row is a registry command.
 
@@ -369,39 +371,39 @@ HUD stands in the picture's title-safe area while a preview renders.
 **The timeline.** Heads are 140 wide: the target button and the name; lock, hide,
 mute and solo appear on hover over that head, and sync lock is in its context
 menu. Under a wide sequence the default heights fit the lanes: V1 40, V2 28, each
-track above them 20, sound 24. Vertical sequences keep 36 and 32. Comment marks
-and proposal bands stay on the ruler.
+track above them 20, sound 24. Vertical sequences keep 36 and 32. Proposal bands
+stay on the ruler.
 
-**The conversation** is always open; ⇧⌘J puts the keys in its composer, and with
-no timeline open the keys start there. With no picture open its composer has no
-timecode stamp and no Draw on frame. Its header is "Conversation" and a ⋯ menu with search, sort and the All, Open and Proposals
-filter. Rows and proposal cards fill the panel's width at every width.
+**The conversation** is always open, 560 wide beside the picture; ⇧⌘J puts the
+keys in its composer, and with no timeline open the keys start there. With no
+picture open its composer has no timecode stamp. Its header is the
+conversation's title (double-click renames it) and a ⋯ menu with Rename, Archive,
+Delete…, Agent settings…, Model and Activity. Messages and proposal cards fill
+its column at every width.
 
 Settings from before this layout (saved workspaces, the panel's width, device
 previews) load without error and are ignored.
 
-## Comments and review
+## The conversation
 
-The comments panel is the agent chat: every thread is a comment in the
-project's review log (`review/comments.jsonl`, kept by kerfd beside
-`project.kerf`, append-only and merged as a Git union), so a note never makes
-a pending proposal stale and never enters undo. Threads come from people,
-from Kerf (your turn and Kerf's reply are both kept as comments), from agents
-connected over MCP (their `note` tool and their proposals, with versions)
-and from QC (blocking findings of a check, resolved when a later check no
-longer finds them). A blocking note holds a delivery back wherever it is asked
-for: the toolbar's Export with Master chosen, and a
-`full` or `master` render from an agent or the CLI, which kerfd refuses. Export
-then says which note and where, and shows the blocking notes in Review; a Draft
-still exports. Filters (All / Open / Proposals, From, tags, search),
-sort, resolve, drawings on the frame, @mentions and timecodes work as in the
-design; the pinned proposal card previews, accepts or rejects the version it
-shows. Copy link gives a `kerf://<project>/rev<N>@HH:MM:SS:FF` review link. When the review
-changes, the panel keeps each thread whose widgets would come out the same and makes
-only the others again, leaving the kept ones where they are in the list; its wrapped
-text remembers its height at each width (`ui::WrapLabel`). So a comment arriving or a
-proposal changing costs about the same in a long conversation as in a short one
+A conversation reads top to bottom, as a coding agent's chat does: what you
+asked as a bubble at the right (its timecode, when stamped, seeks), and Kerf's
+answer flush left, its Markdown as rich text. While Kerf works, "Working" with
+the time so far and the step it is on, and the last steps under it on a
+hairline; done, it folds to "Worked for 1m 12s · 6 steps" (`ui/chat_messages.h`).
+The bridge keeps each conversation beside the project (`.kerf/conversations/<id>.json`,
+ignored by Git): the request when it is asked, then Kerf's answer with its
+steps, how long it worked, the proposal it staged and whether it failed or was
+stopped, and sends the conversation again (`conversation`) and the list
+(`conversations`). A session new to a conversation hears its earlier turns.
+The editor asks for them with `conversations {action: list | open | archive |
+rename | delete}` (`ui/conversation_model.h`, `ui/wiring/chat_wiring.h`).
+A proposal's card sits under the answer that staged it; one staged elsewhere,
+by an agent over MCP or in another conversation, waits at the end of the open
+one. A new message keeps the messages already shown and makes only its own
 (`whatAConversationCosts` measures it).
+
+Links: `kerf://<project>/rev<N>@HH:MM:SS:FF` opens a project at a time.
 `<project>` is the slug of the project's folder name (lower case, each
 run of anything but letters and digits one `-`: "Atlas Cut" is `atlas-cut`),
 whatever the document calls itself, so a link finds a project that is not
@@ -423,7 +425,7 @@ and dropped frames (`clock.dropped`), solo monitoring, effect and generator
 previews with parameters, the full QC `check` (loudness, true peak, gamut,
 luma, title safe, caption overlap and timing, flash and black), programme
 R128 `loudness`, a render queue with ProRes 422 HQ masters, paperwork
-(comments CSV, markers, CMX3600 EDL with locators, SRT/VTT), media
+(captions as SRT or VTT), media
 information and the media index, and looks saved and applied as
 `.kerflook` files. The editor itself asks for the checks (Sequence ▸ Run QC,
 listed under Preflight in the Export menu) and for renders; no screen of it
@@ -517,11 +519,8 @@ focus, in frames of the sequence.
 
 Kerf's proposal shows on the timeline before anything changes: clips it adds
 or changes are outlined where they would land, and clips it removes are
-struck through. Kerf's turns are threads of the Comments panel (above): your
-request is a comment, Kerf's answer a reply, the steps its tools took fold
-under it behind "2 steps", and while it works its drafting row shows the
-latest step with Stop. A pending proposal is a card in its thread (pinned
-first, the pin bar keeping it in reach while it is scrolled away): its
+struck through. Kerf's turns are the conversation's (above), and Stop ends
+one. A pending proposal is a card under Kerf's answer: its
 changes in words, Preview, Script (the script and the document diff, in
 colour), Reject and Accept (⌘Return; Escape with the timeline focused
 rejects), and Versions once Kerf has revised it. Kerf's next steps become
@@ -580,7 +579,7 @@ ctest --test-dir target/qt --output-on-failure
 ```
 
 The tests cover every region (one class per region: the picture, the stage shell
-and its geometry, comments and the review model, timeline, bin,
+and its geometry, the conversation and the proposals, timeline, bin,
 toolbar, status, the kit, theme, launcher,
 wiring guards, kerf:// links), each fed bridge events shaped as kerfd sends them,
 and `MockupParityTest` checks the whole editor against the design at 1600 × 1000
@@ -588,7 +587,7 @@ in 16:9 and 9:16, with each sheet and a preview.
 With `KERF_SCREENSHOT_DIR` set, it saves each state under the mockup's query state
 (`169.png`, `916-media.png`, `916-preview.png`, …), and the
 region galleries save theirs (`editor-<format>-dark.png`,
-the launcher's pages, the comments panel's states).
+the launcher's pages, the conversation's states).
 The pictures in them are the tests' procedural footage (`test_footage.h`:
 a harbor at dawn, a close-up on a dock and a drone pass over the coast,
 drawn in code with texture and grain), so no media files are needed.

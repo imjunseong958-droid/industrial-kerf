@@ -24,7 +24,7 @@ mod set_scale;
 mod signal;
 mod text_lint;
 
-pub use making::{answer_make_requests, make_requests, MakingEvent, MakingWatcher};
+pub use making::{MakingEvent, MakingWatcher};
 pub use presets::{keep_looks, PRESET_FOLDERS};
 pub use qc::{check, CheckReport, Finding, Rect, Row, RowDef, Severity, Summary};
 pub use qc_full::{check_full, check_full_with, QcLimits, FULL_ROWS};
@@ -382,7 +382,6 @@ impl KerfMcpRouter {
             "look" => self.look(arguments),
             "edit" => self.edit(arguments),
             "render" => self.render(arguments),
-            "note" => self.note(arguments),
             "make" => self.make(arguments),
             _ => Err(McpError::new(
                 "UNKNOWN_TOOL",
@@ -752,13 +751,12 @@ mod tests {
                 "kerf.look",
                 "kerf.edit",
                 "kerf.render",
-                "kerf.note",
                 "kerf.make"
             ]
         );
         assert_eq!(
             router.agent_tools().keys().collect::<Vec<_>>(),
-            ["edit", "look", "make", "note", "render"]
+            ["edit", "look", "make", "render"]
         );
     }
 

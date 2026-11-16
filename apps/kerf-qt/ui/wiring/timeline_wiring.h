@@ -10,19 +10,14 @@
 //     Ask run the registry's commands (tool.*, sequence.snap, marker.add,
 //     timeline.addTrack, ai.ask) and follow their QActions: enabled with
 //     them, the reason when not, and the keymap's shortcut in the tip;
-//   - the review: comment marks on the ruler and every open proposal's band
-//     and veil, from `comments` and the snapshot's proposals (the bus's
-//     ReviewModel when one is set, which also gives the current thread;
-//     else one of its own fed from the same events); a mark clicked opens
-//     its thread; "Ask · N notes" counts the open threads while the panel
-//     is closed;
+//   - every open proposal's band and veil, from the snapshot's proposals;
 //   - QC dots from `check` findings, ghosts from `preview` of a proposal;
 //   - the source patch for the bin's media (sourceTargets()),
 //     again whenever the timeline's targets change;
 //   - solo → `solo {tracks}`, sent again when the engine is ready after a
 //     reconnect; the rubber band → `set {props: {gain}}`.
 
-#include "review_model.h"
+#include "proposal_model.h"
 #include "timeline_widget.h"
 
 #include <QHash>
@@ -56,12 +51,11 @@ public:
     // The transport is in the strip over a wide sequence, and under the
     // picture of a vertical one.
     void setWide(bool wide);
-    // The review the timeline reads: the bus's when set, else its own.
-    ReviewModel *review() const;
+    // The proposals the timeline reads, fed from each snapshot.
+    ProposalModel *proposals() const;
 
-    // The review's marks and open proposals as the timeline draws them.
-    static QList<TimelineWidget::CommentMark> commentMarks(const ReviewModel &review, const QString &current);
-    static QList<TimelineWidget::ProposalBand> proposalBands(const ReviewModel &review);
+    // The open proposals as the timeline draws them.
+    static QList<TimelineWidget::ProposalBand> proposalBands(const ProposalModel &model);
     // The clips a finished check found problems in (its findings' entities).
     static QSet<QString> qcClips(const QJsonObject &check);
     // The proposal a `preview` event plays, or empty when none plays.
@@ -71,14 +65,12 @@ protected:
     bool eventFilter(QObject *watched, QEvent *event) override;
 
 private:
-    void refreshReview();
+    void refreshProposals();
     void bindCommands();
     void followCommands();
     void sendSolo(const QStringList &tracks);
     void showTime(double seconds);
-    void followSharedReview();
     void handleEvent(const QString &type, const QJsonObject &json);
-    QString currentThread() const;
     void triggerCommand(const QString &id);
 
     MainWindow *m_window = nullptr;
@@ -86,9 +78,7 @@ private:
     QPointer<TimelineToolStrip> m_tools;
     PictureTransport *m_pictureTransport = nullptr; // the shell's child
     bool m_wide = true;
-    ReviewModel *m_own = nullptr;
-    QPointer<ReviewModel> m_shared;
-    QList<QMetaObject::Connection> m_sharedConnections;
+    ProposalModel *m_own = nullptr;
     bool m_attached = false;
     bool m_commandsBound = false;
 };

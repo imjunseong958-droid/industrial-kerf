@@ -812,19 +812,13 @@ private slots:
         QVERIFY(near(at(flag.left() + 5, flag.top() + 3), token(tokens::ink2), 6));
     }
 
-    // The marker row: comment dots and ranges from the review (current in
-    // ink, resolved faded), proposal bands over each open proposal's range
-    // with "Proposal · <author>", and a click on a dot opens its thread.
-    void rulerShowsCommentMarksAndProposalBands() {
+    // The marker row: proposal bands over each open proposal's range with
+    // "Proposal · <author>".
+    void rulerShowsProposalBands() {
         TimelineWidget timeline;
         timeline.setProject(mockupTimeline(), 30, 25);
         timeline.setScale(26.8);
         timeline.resize(1024, 340);
-        QList<TimelineWidget::CommentMark> marks;
-        marks.append({QStringLiteral("c-mina"), 6.0, 6.0, false, true, false, false, QStringLiteral("Mina Park")});
-        marks.append({QStringLiteral("c-cursor"), 17.32, 19.8, true, false, true, false, QStringLiteral("Cursor")});
-        marks.append({QStringLiteral("c-done"), 2.0, 2.0, false, true, false, true, QStringLiteral("Tom")});
-        timeline.setCommentMarks(marks);
         TimelineWidget::ProposalBand band;
         band.id = QStringLiteral("proposal-3");
         band.author = QStringLiteral("Claude Code");
@@ -838,21 +832,6 @@ private slots:
         const QImage image = timeline.grab().toImage();
         const qreal ratio = image.devicePixelRatio();
         const auto at = [&](const QPoint &point) { return image.pixelColor(point * ratio); };
-        const QRect mina = timeline.commentMarkBounds(QStringLiteral("c-mina"));
-        QCOMPARE(mina.size(), QSize(10, 10));
-        QCOMPARE(mina.top(), 1);
-        QVERIFY(near(at(mina.center()), token(tokens::ink3), 3));
-        // The current one is ink, an agent's a rounded square with its range's bar.
-        const QRect cursor = timeline.commentMarkBounds(QStringLiteral("c-cursor"));
-        QVERIFY(cursor.width() > 50);
-        QVERIFY(near(at(QPoint(cursor.left() + 5, cursor.top() + 5)), token(tokens::ink), 3));
-        QVERIFY(near(at(QPoint(cursor.left() + 1, cursor.top() + 1)), token(tokens::ink), 30));
-        QVERIFY(near(at(QPoint(cursor.left() + 30, 6)), token(tokens::accent), 3));
-        // A resolved one at 40%.
-        const QRect done = timeline.commentMarkBounds(QStringLiteral("c-done"));
-        QColor faded = token(tokens::ink3);
-        faded.setAlphaF(0.4f);
-        QVERIFY(near(at(done.center()), laidOn(token(tokens::chrome), faded), 3));
         // The band, 12 tall over 8.48–13.2, and the veil on V1 only.
         const QRect bandRect = timeline.proposalBandBounds(QStringLiteral("proposal-3"));
         QCOMPARE(bandRect.top(), 0);
@@ -884,28 +863,18 @@ private slots:
         timeline.repaint();
         QVERIFY(timeline.m_lanesPainted > 0);
         timeline.setProposalBands({band});
-        // Tooltips name the author, and a commenter with the time.
+        // The tooltip names the author.
         QHelpEvent help(QEvent::ToolTip, QPoint(bandRect.center().x() + 40, 3), timeline.mapToGlobal(QPoint(bandRect.center().x() + 40, 3)));
         QApplication::sendEvent(&timeline, &help);
         QCOMPARE(QToolTip::text(), QStringLiteral("Proposal · Claude Code"));
-        QHelpEvent dot(QEvent::ToolTip, mina.center(), timeline.mapToGlobal(mina.center()));
-        QApplication::sendEvent(&timeline, &dot);
-        QCOMPARE(QToolTip::text(), QStringLiteral("Mina Park  ·  00:00:06:00"));
         QToolTip::hideText();
-        QSignalSpy opened(&timeline, &TimelineWidget::commentMarkActivated);
-        QSignalSpy seeks(&timeline, &TimelineWidget::seekRequested);
-        QTest::mouseClick(&timeline, Qt::LeftButton, Qt::NoModifier, mina.center());
-        QCOMPARE(opened.count(), 1);
-        QCOMPARE(opened[0][0].toString(), QStringLiteral("c-mina"));
-        QCOMPARE(seeks.count(), 0);
         if (const QString folder = qEnvironmentVariable("KERF_TIMELINE_GALLERY"); !folder.isEmpty())
             QVERIFY(image.save(QDir(folder).filePath(QStringLiteral("timeline-ruler.png"))));
     }
 
-    // The window feeds the ruler from the engine: comments become marks,
-    // the snapshot's open proposals bands with their author, and a mark
-    // clicked opens its thread on the bus.
-    void rulerMarksComeFromTheReview() {
+    // The window feeds the ruler from the engine: the snapshot's open
+    // proposals become bands with their author.
+    void rulerBandsComeFromTheSnapshot() {
         MainWindow window{QString(), QString()};
         window.setConnection(QStringLiteral("ready"));
         QJsonObject proposed = mockupTimeline();
@@ -932,26 +901,6 @@ private slots:
         QCOMPARE(bands.first().tracks, QStringList{QStringLiteral("V1")});
         QCOMPARE(bands.first().clips, QStringList{QStringLiteral("B003_C011")});
         QVERIFY(std::abs(bands.first().start - 8.48) < 1e-6 && std::abs(bands.first().end - 13.2) < 1e-6);
-        const auto comment = [](const char *id, const char *kind, const char *name, double at, double duration, bool resolved) {
-            return QJsonObject{{"id", id}, {"parent", QJsonValue()}, {"author", QJsonObject{{"kind", kind}, {"name", name}, {"id", name}}},
-                               {"at", at}, {"duration", duration}, {"body", "Note"}, {"resolved", resolved}, {"tags", QJsonArray{}},
-                               {"created", "2026-11-04T10:00:00Z"}, {"revision", 3}};
-        };
-        window.m_bus->dispatch(QJsonObject{{"type", "comments"}, {"reviewRevision", 1}, {"items", QJsonArray{
-            comment("c1", "person", "Mina Park", 6.0, 0.0, false), comment("c2", "mcp", "Cursor", 17.32, 2.48, false),
-            comment("c3", "person", "Tom", 2.0, 0.0, true)}}});
-        const QList<TimelineWidget::CommentMark> marks = window.m_timeline->commentMarks();
-        QCOMPARE(marks.size(), 3);
-        QStringList ids;
-        for (const auto &mark : marks) ids << mark.id;
-        QCOMPARE(ids, (QStringList{"c3", "c1", "c2"}));
-        QVERIFY(marks.at(0).resolved && marks.at(0).circle);
-        QVERIFY(marks.at(2).ranged && !marks.at(2).circle);
-        QSignalSpy opened(window.m_bus, &EditorBus::openThread);
-        emit window.m_timeline->commentMarkActivated(QStringLiteral("c2"));
-        QCOMPARE(opened.count(), 1);
-        QCOMPARE(opened[0][0].toString(), QStringLiteral("c2"));
-        QVERIFY(window.m_timeline->commentMarks().at(2).current);
     }
 
     // ---- lanes -----------------------------------------------------------
@@ -1261,14 +1210,14 @@ private slots:
             x = button->x();
         }
         // At the mockup's x: the tools at 176, Snap at 240, the zoom ending
-        // 12 from the edge of the 960 wide panel; Play in ink, the rest ink2.
+        // 12 from the edge of the 788 wide panel; Play in ink, the rest ink2.
         QCOMPARE(tools->tools()->x(), 176);
         QCOMPARE(tools->snapButton()->x(), 240);
         QCOMPARE(tools->transportButton(Transport::Play)->iconColor(), tokens::color(tokens::ink));
         QCOMPARE(tools->transportButton(Transport::Next)->iconColor(), tokens::color(tokens::ink2));
         auto *zoomOut = tools->findChild<ui::IconButton *>(QStringLiteral("timelineZoomOut"));
         QVERIFY(zoomOut);
-        QCOMPARE(zoomOut->geometry().center().x(), 839);
+        QCOMPARE(zoomOut->geometry().center().x(), 667);
         QVERIFY(tools->zoomOutButton()->x() > tools->snapButton()->x());
         QCOMPARE(tools->zoomInButton()->geometry().right() + 1, tools->width() - 12);
         // The transport runs the registry's playback commands.

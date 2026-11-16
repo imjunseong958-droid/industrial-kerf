@@ -30,6 +30,8 @@ project.kerf.tmp
 .kerf/cache/
 .kerf/runtime/
 .kerf/docs/generated/
+# Conversations with Kerf, kept per machine as an agent's sessions are
+.kerf/conversations/
 # Machine-local settings, which may hold credentials
 .kerf/config.json
 .kerf/mcp.json
@@ -39,15 +41,14 @@ project.kerf.tmp
 .DS_Store
 ";
 
-/// `project.kerf` merges structurally, and the review log by keeping both
-/// sides' lines (it is only appended to); media goes through Git LFS when
+/// `project.kerf` merges structurally; media goes through Git LFS when
 /// it was available when the project was made, and so do the takes a
 /// recipe makes, in the folder beside it, with each take's record and
 /// request left as the text they are.
 pub fn gitattributes(lfs: bool) -> String {
     let mut text = String::from(
         "*.kerf merge=kerf\n*.kerflook text eol=lf\n*.kerfpreset text eol=lf\n\
-         *.kerfrecipe text eol=lf\nreview/*.jsonl merge=union\n",
+         *.kerfrecipe text eol=lf\n",
     );
     if lfs {
         text.push_str(

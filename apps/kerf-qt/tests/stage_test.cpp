@@ -141,25 +141,6 @@ QColor pixelOf(const QImage &image, const QPointF &point) {
     return image.pixelColor(QPoint(int(std::floor(point.x() * ratio)), int(std::floor(point.y() * ratio))));
 }
 
-// The comments the stage's overlays read: a QC thread at 17:08 and Tom's
-// reply with a drawing on it (mockup-spec 4.9 seed, as fixture data only).
-QJsonObject seedComments() {
-    const QJsonArray drawing{QJsonObject{{"tool", "pen"},
-                                         {"points", QJsonArray{QJsonArray{0.30, 0.30}, QJsonArray{0.50, 0.25}, QJsonArray{0.60, 0.45}}},
-                                         {"color", "#ededed"}}};
-    return QJsonObject{
-        {"type", "comments"},
-        {"reviewRevision", 22},
-        {"items", QJsonArray{
-             QJsonObject{{"id", "c-1708"}, {"parent", QJsonValue()}, {"author", QJsonObject{{"kind", "qc"}, {"name", "QC"}, {"role", "captions"}}},
-                         {"at", 17.32}, {"duration", 0.0}, {"body", "Caption overlaps the lower third by 8 px"}, {"tags", QJsonArray{"captions"}},
-                         {"blocking", true}, {"resolved", false}, {"qcKey", "qc:text.overlap:t4"}, {"created", "2026-11-04T10:12:00Z"}, {"revision", 22}},
-             QJsonObject{{"id", "c-1708-r1"}, {"parent", "c-1708"}, {"author", QJsonObject{{"kind", "person"}, {"name", "Tom Lind"}, {"id", "tom@example.com"}}},
-                         {"body", "Here, the flare"}, {"drawing", drawing}, {"resolved", false}, {"created", "2026-11-04T10:13:00Z"}, {"revision", 22}},
-             QJsonObject{{"id", "c-0903"}, {"parent", QJsonValue()}, {"author", QJsonObject{{"kind", "person"}, {"name", "Mina Park"}, {"id", "mina@example.com"}}},
-                         {"at", 9.12}, {"duration", 0.0}, {"body", "The sea reads magenta here"}, {"resolved", false}, {"created", "2026-11-04T10:00:00Z"}, {"revision", 22}}}}};
-}
-
 // A finished check with the caption overlap found at 17:08 (fixture data).
 QJsonObject overlapCheck() {
     return QJsonObject{
@@ -167,7 +148,7 @@ QJsonObject overlapCheck() {
         {"findings", QJsonArray{QJsonObject{{"severity", "warning"}, {"code", "text.overlap"}, {"entity", "t4"},
                                             {"message", "Caption overlaps Atlas Coffee by 8 px from 00:00:17:00 to 00:00:17:20"},
                                             {"at", 17.0}, {"duration", 0.84}, {"rect", QJsonObject{{"x", 0.30}, {"y", 0.78}, {"w", 0.20}, {"h", 0.04}}},
-                                            {"value", 8}, {"limit", 0}, {"unit", "px"}, {"commentId", "c-1708"}}}},
+                                            {"value", 8}, {"limit", 0}, {"unit", "px"}}}},
         {"summary", QJsonObject{{"passed", 7}, {"total", 8}, {"blocking", 1}}}};
 }
 
@@ -191,12 +172,8 @@ private slots:
         window.applySnapshot(shaped(QSize(1920, 1080)));
         CommandRegistry *commands = window.m_commands;
         StageWiring *stage = window.m_stageWiring.get();
-        for (const char *id : {"view.annotations", "viewer.zoom", "playback.loop", "mark.in", "mark.out"})
+        for (const char *id : {"viewer.zoom", "playback.loop", "mark.in", "mark.out"})
             QVERIFY2(commands->action(QString::fromLatin1(id))->isEnabled(), id);
-        const bool annotations = stage->annotations();
-        commands->action(QStringLiteral("view.annotations"))->trigger();
-        QCOMPARE(stage->annotations(), !annotations);
-        commands->action(QStringLiteral("view.annotations"))->trigger();
         window.m_bus->setDuration(30.0);
         window.m_bus->setPlayhead(2.0);
         window.triggerCommand(QStringLiteral("mark.in"));
@@ -408,10 +385,10 @@ private slots:
     }
 
     // The QC overlap box: from the last finished check, the text.overlap
-    // finding whose comment is the current thread, while the playhead is in
-    // it: the finding's rect on the picture (fill rgba(236,93,97,.32), a
-    // neg line), its "8 px" tag and the caption's neg outline.
-    void overlapBoxFollowsTheCurrentQcThread() {
+    // finding the playhead is in: the finding's rect on the picture (fill
+    // rgba(236,93,97,.32), a neg line), its "8 px" tag and the caption's neg
+    // outline.
+    void overlapBoxFollowsThePlayhead() {
         MainWindow window{QString(), QString()};
         window.setConnection(QStringLiteral("ready"));
         window.applySnapshot(shaped(QSize(1920, 1080)));
@@ -420,11 +397,10 @@ private slots:
         QVERIFY(QTest::qWaitForWindowExposed(&window));
         ViewerWidget *viewer = window.m_viewer;
         viewer->setSafeZones(false);
-        window.handleEvent(seedComments());
+        window.handleEvent(QJsonObject{{"type", "clock"}, {"position", 9.0}, {"duration", 18.0}});
         window.handleEvent(overlapCheck());
-        window.handleEvent(QJsonObject{{"type", "clock"}, {"position", 17.32}, {"duration", 18.0}});
         QVERIFY(!viewer->overlapShown());
-        emit window.bus()->currentThreadChanged(QStringLiteral("c-1708"));
+        window.handleEvent(QJsonObject{{"type", "clock"}, {"position", 17.32}, {"duration", 18.0}});
         QVERIFY(viewer->overlapShown());
         QCOMPARE(viewer->overlap(), QRectF(0.30, 0.78, 0.20, 0.04));
         QCOMPARE(viewer->overlapTag(), QStringLiteral("8 px"));
@@ -446,16 +422,7 @@ private slots:
         // With a caption, the tag stands over the caption's right.
         viewer->setCaption(QStringLiteral("We open before the city does"));
         KERF_NEAR(viewer->overlapTagRect().right(), viewer->captionRect().right(), 1e-6, "tag on the caption");
-        // Another thread, or the playhead out of the finding: no box.
-        emit window.bus()->currentThreadChanged(QStringLiteral("c-0903"));
-        QVERIFY(!viewer->overlapShown());
-        // Hovered in the panel, it shows while another thread is current.
-        window.m_stageWiring->hoverThread(QStringLiteral("c-1708"));
-        QVERIFY(viewer->overlapShown());
-        window.m_stageWiring->hoverThread(QString());
-        QVERIFY(!viewer->overlapShown());
-        emit window.bus()->currentThreadChanged(QStringLiteral("c-1708"));
-        QVERIFY(viewer->overlapShown());
+        // The playhead out of the finding: no box.
         window.handleEvent(QJsonObject{{"type", "clock"}, {"position", 9.0}, {"duration", 18.0}});
         QVERIFY(!viewer->overlapShown());
         window.handleEvent(QJsonObject{{"type", "clock"}, {"position", 17.5}, {"duration", 18.0}});
@@ -465,120 +432,6 @@ private slots:
         QVERIFY(viewer->overlapShown());
         window.handleEvent(QJsonObject{{"type", "check"}, {"status", "done"}, {"valid", true}, {"findings", QJsonArray{}}});
         QVERIFY(!viewer->overlapShown());
-        window.close();
-    }
-
-    // The composer's Draw: the stage takes the pointer for strokes on the
-    // frame; Return gives them back on the bus, normalised to the frame;
-    // Esc (or the composer) cancels.
-    void drawingOnTheFrameGoesBackOnTheBus() {
-        MainWindow window{QString(), QString()};
-        window.setConnection(QStringLiteral("ready"));
-        window.applySnapshot(shaped(QSize(1920, 1080)));
-        window.resize(1600, 1000);
-        window.show();
-        QVERIFY(QTest::qWaitForWindowExposed(&window));
-        ViewerWidget *viewer = window.m_viewer;
-        QSignalSpy finished(window.bus(), &EditorBus::drawingFinished);
-        QSignalSpy cancelled(window.bus(), &EditorBus::drawingCancelled);
-        QSignalSpy scrubs(viewer, &ViewerWidget::scrubbed);
-        emit window.bus()->drawingRequested();
-        QVERIFY(viewer->capturingDrawing());
-        const QRectF picture = viewer->pictureRect();
-        const auto at = [&picture](double x, double y) { return QPointF(picture.left() + x * picture.width(), picture.top() + y * picture.height()); };
-        mouse(viewer, QEvent::MouseButtonPress, at(0.25, 0.25));
-        for (int step = 1; step <= 10; ++step) {
-            QMouseEvent move(QEvent::MouseMove, at(0.25 + 0.02 * step, 0.25 + 0.01 * step), viewer->mapToGlobal(at(0.25 + 0.02 * step, 0.25 + 0.01 * step)),
-                             Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
-            QCoreApplication::sendEvent(viewer, &move);
-        }
-        mouse(viewer, QEvent::MouseButtonRelease, at(0.45, 0.35));
-        // The picture neither skims nor plays while it is drawn on.
-        QVERIFY(scrubs.isEmpty());
-        QCOMPARE(viewer->capturedStrokes().size(), 1);
-        key(viewer, Qt::Key_Return);
-        QVERIFY(!viewer->capturingDrawing());
-        QCOMPARE(finished.size(), 1);
-        const QJsonArray strokes = finished.constFirst().at(0).toJsonArray();
-        QCOMPARE(strokes.size(), 1);
-        const QJsonObject stroke = strokes.first().toObject();
-        QCOMPARE(stroke.value("tool").toString(), QStringLiteral("pen"));
-        const QJsonArray points = stroke.value("points").toArray();
-        QVERIFY(points.size() >= 5);
-        QVERIFY(near(points.first(), {0.25, 0.25}));
-        for (const QJsonValue &point : points) {
-            const QJsonArray xy = point.toArray();
-            QVERIFY(xy.at(0).toDouble() >= 0.0 && xy.at(0).toDouble() <= 1.0 && xy.at(1).toDouble() >= 0.0 && xy.at(1).toDouble() <= 1.0);
-        }
-        QVERIFY(cancelled.isEmpty());
-        // Esc cancels; nothing drawn is no drawing.
-        emit window.bus()->drawingRequested();
-        mouse(viewer, QEvent::MouseButtonPress, at(0.5, 0.5));
-        mouse(viewer, QEvent::MouseButtonRelease, at(0.5, 0.5));
-        key(viewer, Qt::Key_Escape);
-        QVERIFY(!viewer->capturingDrawing());
-        QCOMPARE(cancelled.size(), 1);
-        emit window.bus()->drawingRequested();
-        key(viewer, Qt::Key_Return);
-        QCOMPARE(cancelled.size(), 2);
-        QCOMPARE(finished.size(), 1);
-        // The composer's own Cancel ends it once, without an echo.
-        emit window.bus()->drawingRequested();
-        QVERIFY(viewer->capturingDrawing());
-        emit window.bus()->drawingCancelled();
-        QVERIFY(!viewer->capturingDrawing());
-        QCOMPARE(cancelled.size(), 3);
-        window.close();
-    }
-
-    // The current thread's drawings show over the picture while the
-    // playhead is at their comment (a reply at its thread's time), with the
-    // author's 16 pt avatar at the start; view.annotations (⇧A) hides them.
-    void annotationsShowTheCurrentThreadsDrawings() {
-        MainWindow window{QString(), QString()};
-        window.setConnection(QStringLiteral("ready"));
-        window.applySnapshot(shaped(QSize(1920, 1080)));
-        window.resize(1600, 1000);
-        window.show();
-        QVERIFY(QTest::qWaitForWindowExposed(&window));
-        ViewerWidget *viewer = window.m_viewer;
-        viewer->setSafeZones(false);
-        window.handleEvent(seedComments());
-        window.handleEvent(QJsonObject{{"type", "clock"}, {"position", 17.32}, {"duration", 18.0}});
-        QVERIFY(viewer->annotations().isEmpty());
-        emit window.bus()->currentThreadChanged(QStringLiteral("c-1708"));
-        QCOMPARE(viewer->annotations().size(), 1);
-        QCOMPARE(viewer->annotations().first().comment, QStringLiteral("c-1708-r1"));
-        QCOMPARE(viewer->annotations().first().initials, QStringLiteral("TL"));
-        QVERIFY(viewer->annotationsShown());
-        QImage black(QSize(480, 270), QImage::Format_RGB32);
-        black.fill(Qt::black);
-        viewer->setFrame(black, 17.32);
-        const QRectF picture = viewer->pictureRect();
-        const QPointF onStroke(picture.left() + 0.40 * picture.width(), picture.top() + 0.275 * picture.height());
-        QVERIFY2(pixelOf(viewer->grab().toImage(), onStroke).lightness() > 150, qPrintable(pixelOf(viewer->grab().toImage(), onStroke).name()));
-        // The avatar at the stroke's start: the on grey.
-        const QPointF start(picture.left() + 0.30 * picture.width(), picture.top() + 0.30 * picture.height() - 6.5);
-        QVERIFY(nearColor(pixelOf(viewer->grab().toImage(), start).rgb(), tokens::on, 6));
-        // The switch hides them, and is remembered.
-        emit window.m_commands->toggled(QStringLiteral("view.annotations"), false);
-        QVERIFY(!viewer->annotationsShown());
-        QVERIFY(!window.m_commands->action(QStringLiteral("view.annotations"))->isChecked());
-        QVERIFY(pixelOf(viewer->grab().toImage(), onStroke).lightness() < 10);
-        QCOMPARE(QSettings().value(QStringLiteral("viewer/annotations")).toBool(), false);
-        emit window.m_commands->toggled(QStringLiteral("view.annotations"), true);
-        // The reply chosen in the panel shows its drawing with another
-        // thread current, at its thread's time.
-        emit window.bus()->currentThreadChanged(QStringLiteral("c-0903"));
-        QVERIFY(viewer->annotations().isEmpty());
-        window.m_stageWiring->selectComment(QStringLiteral("c-1708-r1"));
-        QCOMPARE(viewer->annotations().size(), 1);
-        window.m_stageWiring->selectComment(QString());
-        QVERIFY(viewer->annotations().isEmpty());
-        emit window.bus()->currentThreadChanged(QStringLiteral("c-1708"));
-        // Away from the comment's time, none.
-        window.handleEvent(QJsonObject{{"type", "clock"}, {"position", 12.0}, {"duration", 18.0}});
-        QVERIFY(viewer->annotations().isEmpty());
         window.close();
     }
 

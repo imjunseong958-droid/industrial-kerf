@@ -564,8 +564,7 @@ pub fn ensure_merge_driver(dir: &Path, driver: &Path) -> Result<()> {
         .ok_or_else(|| {
             CollabError::new("GIT_FAILED", "cannot find the repository's info directory")
         })?;
-    // The review log is only appended to, so both sides' lines are kept.
-    let lines = ["project.kerf merge=kerf", "review/*.jsonl merge=union"];
+    let lines = ["project.kerf merge=kerf"];
     let existing = fs::read_to_string(&attributes).unwrap_or_default();
     let missing: Vec<&str> = lines
         .into_iter()
@@ -1435,19 +1434,19 @@ mod tests {
     }
 
     #[test]
-    fn the_review_log_merges_by_keeping_both_sides() {
+    fn project_kerf_merges_with_kerfs_driver_once() {
         let directory = tempfile::tempdir().unwrap();
         let dir = directory.path();
         plain_git(dir, &["init", "-q", "-b", "main"]);
         ensure_merge_driver(dir, Path::new("/opt/kerf/kerfd")).unwrap();
         ensure_merge_driver(dir, Path::new("/opt/kerf/kerfd")).unwrap();
         assert_eq!(
-            plain_git(dir, &["check-attr", "merge", "--", "review/comments.jsonl"]),
-            "review/comments.jsonl: merge: union"
+            plain_git(dir, &["check-attr", "merge", "--", "project.kerf"]),
+            "project.kerf: merge: kerf"
         );
         let attributes = fs::read_to_string(dir.join(".git/info/attributes")).unwrap();
-        assert_eq!(attributes.matches("review/*.jsonl merge=union").count(), 1);
-        assert!(crate::scaffold::gitattributes(false).contains("review/*.jsonl merge=union\n"));
+        assert_eq!(attributes.matches("project.kerf merge=kerf").count(), 1);
+        assert!(!crate::scaffold::gitattributes(false).contains("review/"));
     }
 
     #[test]

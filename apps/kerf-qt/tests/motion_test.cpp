@@ -7,7 +7,7 @@
 #include "chat_panel.h"
 #include "main_window.h"
 #include "proposal_card.h"
-#include "ui/wiring/review_wiring.h"
+#include "ui/wiring/chat_wiring.h"
 #include "timeline_widget.h"
 #include "ui/components.h"
 #include "ui/stage_motion.h"
@@ -216,6 +216,9 @@ private slots:
         QTest::qWait(400);
         run("work chip", 1500, [&] { window.m_workChip->setVisible(true); });
         window.m_workChip->setVisible(false);
+        run("light round the picture", 1500, [&] { window.m_edgeLight->setHue(activity::Hue::Gpu); });
+        window.m_edgeLight->setHue(activity::Hue::None);
+        QTest::qWait(tokens::motion::edgeFade + 100);
         run("before/after wipe", 1500, [&] { window.m_viewer->setCompareFrame(footageFrame(QSize(960, 540), 3)); });
         window.m_viewer->setCompareFrame(QImage());
         // A first cut at work, as its card in the conversation: the ring, a clip
@@ -276,7 +279,7 @@ private slots:
         window.setConnection(QStringLiteral("ready"));
         QJsonObject snapshot = snapshotOf(QSize(1920, 1080));
         window.applySnapshot(snapshot);
-        window.m_reviewWiring->handleEvent(QStringLiteral("state"), QJsonObject{{"type", "state"}, {"snapshot", snapshot}});
+        window.m_chatWiring->handleEvent(QStringLiteral("state"), QJsonObject{{"type", "state"}, {"snapshot", snapshot}});
         window.resize(1600, 1000);
         window.show();
         QVERIFY(QTest::qWaitForWindowExposed(&window));
@@ -292,29 +295,36 @@ private slots:
             std::sort(took.begin(), took.end());
             return took.at(took.size() / 2);
         };
-        const QJsonObject you{{"kind", "person"}, {"name", "Ana Ruiz"}, {"id", "ana@kerf.test"}};
-        const QJsonObject kerf{{"kind", "kerf"}, {"name", "Kerf"}};
-        const auto record = [](const QString &id, const QString &parent, const QJsonObject &author, int minute, const QString &body) {
-            return QJsonObject{{"id", id}, {"parent", parent.isEmpty() ? QJsonValue() : QJsonValue(parent)}, {"author", author}, {"body", body},
-                               {"tags", QJsonArray{}}, {"blocking", false}, {"resolved", false},
-                               {"created", QStringLiteral("2026-11-14T%1:%2:00Z").arg(8 + minute / 60, 2, 10, QLatin1Char('0')).arg(minute % 60, 2, 10, QLatin1Char('0'))},
-                               {"revision", 22}};
+        // A conversation of `turns` requests and answers, as the bridge sends it.
+        const auto item = [](const QString &id, bool you, int minute, const QString &text) {
+            QJsonObject out{{"id", id}, {"kind", you ? "you" : "kerf"}, {"text", text},
+                            {"at", QStringLiteral("2026-11-14T%1:%2:00Z").arg(8 + minute / 60, 2, 10, QLatin1Char('0')).arg(minute % 60, 2, 10, QLatin1Char('0'))}};
+            if (!you) {
+                out.insert("steps", QJsonArray{"look", "edit trim v1b out -12f", "render preview"});
+                out.insert("seconds", 42.0);
+            }
+            return out;
         };
+        const auto conversation = [](const QJsonArray &items) {
+            return QJsonObject{{"type", "conversation"}, {"id", "c-bench"}, {"title", "Tighten the interview"},
+                               {"created", "2026-11-14T08:00:00Z"}, {"updated", "2026-11-14T08:00:00Z"}, {"items", items}};
+        };
+        window.m_chatWiring->openConversation(QStringLiteral("c-bench"));
         for (const int turns : {10, 50, 150}) {
             QJsonArray items;
             for (int i = 0; i < turns; ++i) {
-                items << record(QStringLiteral("c%1").arg(i), QString(), you, i * 2, QStringLiteral("Tighten the interview at the harbor and let the music breathe, round %1").arg(i));
-                items << record(QStringLiteral("c%1r").arg(i), QStringLiteral("c%1").arg(i), kerf, i * 2 + 1,
-                                QStringLiteral("Trimmed the intro and tightened the second interview; the music now ducks under the voice and the title lands on the beat. Round %1.").arg(i));
+                items << item(QStringLiteral("i%1").arg(i), true, i * 2, QStringLiteral("Tighten the interview at the harbor and let the music breathe, round %1").arg(i));
+                items << item(QStringLiteral("i%1r").arg(i), false, i * 2 + 1,
+                              QStringLiteral("Trimmed the intro and tightened the second interview; the music now ducks under the voice and the title lands on the beat. Round %1.").arg(i));
             }
-            window.m_reviewWiring->handleEvent(QStringLiteral("comments"), QJsonObject{{"type", "comments"}, {"items", items}});
+            window.m_chatWiring->handleEvent(QStringLiteral("conversation"), conversation(items));
             settle();
             const double rebuild = ms([&] { window.m_chat->rebuild(); }, 5);
             QJsonArray more = items;
-            more << record(QStringLiteral("new"), QString(), you, turns * 2 + 1, QStringLiteral("One more note"));
+            more << item(QStringLiteral("new"), true, turns * 2 + 1, QStringLiteral("One more note"));
             const double arrives = ms([&] {
                 static int flip = 0;
-                window.m_reviewWiring->handleEvent(QStringLiteral("comments"), QJsonObject{{"type", "comments"}, {"items", (flip++ % 2) ? items : more}});
+                window.m_chatWiring->handleEvent(QStringLiteral("conversation"), conversation((flip++ % 2) ? items : more));
                 settle();
             }, 6);
             const double takesIn = ms([&] {
@@ -330,12 +340,12 @@ private slots:
                 proposals.replace(0, listed);
                 changed.insert(QStringLiteral("proposals"), proposals);
                 window.applySnapshot(changed);
-                window.m_reviewWiring->handleEvent(QStringLiteral("state"), QJsonObject{{"type", "state"}, {"snapshot", changed}});
+                window.m_chatWiring->handleEvent(QStringLiteral("state"), QJsonObject{{"type", "state"}, {"snapshot", changed}});
                 settle();
             }, 6);
             const double same = ms([&] { window.applySnapshot(snapshot); settle(); }, 6);
-            std::printf("%3d turns: conversation made again %6.1f ms   a comment arrives %6.1f ms   a changed snapshot %6.1f ms   the same snapshot %5.1f ms   rows %d\n",
-                        turns, rebuild, arrives, takesIn, same, int(window.m_chat->rows().size()));
+            std::printf("%3d turns: conversation made again %6.1f ms   a message arrives %6.1f ms   a changed snapshot %6.1f ms   the same snapshot %5.1f ms   messages %d\n",
+                        turns, rebuild, arrives, takesIn, same, int(window.m_chat->messages().size()));
             std::fflush(stdout);
         }
         stage::Panes open = window.m_shell->panes();

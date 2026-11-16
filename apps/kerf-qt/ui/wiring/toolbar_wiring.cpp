@@ -9,7 +9,7 @@
 #include "main_window.h"
 #include "main_window_shared.h"
 #include "master_output.h"
-#include "review_model.h"
+#include "proposal_model.h"
 #include "project_sidebar.h"
 #include "toolbar_widgets.h"
 #include "stage_motion.h"
@@ -237,9 +237,6 @@ void ToolbarWiring::buildToolbar(const QHash<QString, QMenu *> &menus) {
     connect(m_bus, &EditorBus::event, this, &ToolbarWiring::onEvent);
     connect(m_bus, &EditorBus::snapshotChanged, this, &ToolbarWiring::onSnapshot);
     connect(w->m_commands, &CommandRegistry::shortcutsChanged, this, &ToolbarWiring::syncCommands);
-    connect(m_bus, &EditorBus::viewAsChanged, this, &ToolbarWiring::layoutTitle);
-    connect(m_bus, &EditorBus::reviewChanged, this, &ToolbarWiring::followReview);
-    followReview();
     if (QAction *master = w->m_commands->action(QStringLiteral("export.master")))
         connect(master, &QAction::changed, this, &ToolbarWiring::syncCommands);
     syncCommands();
@@ -340,19 +337,9 @@ void ToolbarWiring::installCommands() {
     if (!w->m_commands) return;
     const QStringList formats = formatCommands();
     for (int i = 0; i < formats.size(); ++i) w->m_commandHandlers.insert(formats.at(i), [this, i] { chooseFormat(i); });
-    w->m_commandHandlers.insert(QStringLiteral("composer.draw"), [this] { drawInComposer(); });
-    if (Composer *composer = w->m_chat ? w->m_chat->composerWidget() : nullptr)
-        composer->setDrawAction(w->m_commands->action(QStringLiteral("composer.draw")));
     if (w->m_chat) w->m_chat->setAcceptAction(w->m_commands->action(QStringLiteral("proposal.accept")));
     // The bin's commands, now that the registry is there.
     if (w->m_binWiring) w->m_binWiring->attachCommands();
-}
-
-bool ToolbarWiring::drawInComposer() {
-    Composer *composer = m_window->m_chat ? m_window->m_chat->composerWidget() : nullptr;
-    if (!composer || !composer->hasFocusWithin()) return false;
-    composer->requestDraw();
-    return true;
 }
 
 void ToolbarWiring::chooseFormat(int index) {
@@ -418,8 +405,7 @@ void ToolbarWiring::buildAppMenu() {
     m_viewMenu->addSeparator();
     for (QAction *tool : std::as_const(w->m_maskTools)) m_viewMenu->addAction(tool);
     m_viewMenu->addSeparator();
-    for (const char *id : {"view.annotations", "view.safeZones"})
-        if (QAction *action = w->m_commands->action(QString::fromLatin1(id))) m_viewMenu->addAction(action);
+    if (QAction *action = w->m_commands->action(QStringLiteral("view.safeZones"))) m_viewMenu->addAction(action);
     if (w->m_stageWiring) m_viewMenu->addMenu(w->m_stageWiring->zoomMenu());
     m_viewMenu->addSeparator();
     buildKeymapMenu(m_keymapMenu);
@@ -471,7 +457,6 @@ QString ToolbarWiring::normalSubtitle() const {
     const QDateTime when = QDateTime::fromString(snapshot.value(QStringLiteral("revisionTime")).toString(), Qt::ISODateWithMs);
     const QString ago = editedAgo(when, m_clock());
     QString line = ago.isEmpty() ? revision : QStringLiteral("Edited %1 · %2").arg(ago, revision);
-    if (const QString guest = guestNote(); !guest.isEmpty()) line += QStringLiteral(" · ") + guest;
     return line;
 }
 
@@ -502,12 +487,22 @@ QString ToolbarWiring::runningText() const {
     return {};
 }
 
-QString ToolbarWiring::guestNote() const {
-    const ReviewModel *review = m_bus->review();
-    const bool guest = review ? review->guestMode() : !m_bus->viewAs().isEmpty();
-    if (!guest) return {};
-    const QString name = review ? review->viewAsName() : m_bus->viewAs();
-    return QStringLiteral("Viewing as %1").arg(name.isEmpty() ? m_bus->viewAs() : name);
+QString ToolbarWiring::runningRender(double *fraction) const {
+    const RunningExport *latest = nullptr;
+    for (auto it = m_runningExports.cbegin(); it != m_runningExports.cend(); ++it)
+        if (!it->queued && (!latest || it->started > latest->started)) latest = &it.value();
+    if (latest) {
+        if (fraction) *fraction = latest->fraction;
+        if (latest->label == QStringLiteral("Draft export")) return QStringLiteral("Exporting draft");
+        if (latest->label == QStringLiteral("Master export")) return QStringLiteral("Exporting master");
+        if (latest->label == QStringLiteral("Export")) return QStringLiteral("Exporting");
+        return QStringLiteral("Exporting %1").arg(latest->label);
+    }
+    if (m_previewRunning) {
+        if (fraction) *fraction = m_previewFraction;
+        return QStringLiteral("Rendering preview");
+    }
+    return {};
 }
 
 QString ToolbarWiring::subtitleText() const {
@@ -515,7 +510,7 @@ QString ToolbarWiring::subtitleText() const {
     if (const QString problem = standingProblem(); !problem.isEmpty()) return problem;
     if (const QString running = runningText(); !running.isEmpty()) return running;
     // Nothing to say is said with nothing: when it was edited is the title's tip.
-    return guestNote();
+    return {};
 }
 
 void ToolbarWiring::showMessage(const QString &message, int timeout) {
@@ -589,7 +584,6 @@ QList<ToolbarWiring::PreflightRow> ToolbarWiring::preflightRows(const QJsonObjec
         const QString value = row.value(QStringLiteral("value")).toString();
         shown.label = value.isEmpty() ? name : QStringLiteral("%1 · %2").arg(name, value);
         shown.passed = row.value(QStringLiteral("passed")).toBool(true);
-        shown.commentId = row.value(QStringLiteral("commentId")).toString();
         if (shown.passed) shown.key = row.value(QStringLiteral("limit")).toString();
         else shown.ask = askText(row);
         out << shown;
@@ -609,42 +603,13 @@ QString ToolbarWiring::askText(const QJsonObject &row) {
     const QString value = row.value(QStringLiteral("value")).toString();
     const QString limit = row.value(QStringLiteral("limit")).toString();
     if (!limit.isEmpty())
-        return value.isEmpty() ? QStringLiteral("@Kerf bring %1 to %2").arg(name, limit)
-                               : QStringLiteral("@Kerf bring %1 to %2 (now %3)").arg(name, limit, value);
-    return value.isEmpty() ? QStringLiteral("@Kerf fix the %1").arg(name) : QStringLiteral("@Kerf fix the %1 (%2)").arg(name, value);
-}
-
-QJsonArray ToolbarWiring::blockingRoots(const QJsonArray &comments) {
-    QSet<QString> held;
-    for (const QJsonValue &value : comments) {
-        const QJsonObject comment = value.toObject();
-        const QString parent = comment.value(QStringLiteral("parent")).toString();
-        const bool marked = comment.value(QStringLiteral("blocking")).toBool() ||
-                            comment.value(QStringLiteral("tags")).toArray().contains(QStringLiteral("blocking"));
-        if (marked && !comment.value(QStringLiteral("resolved")).toBool())
-            held.insert(parent.isEmpty() ? comment.value(QStringLiteral("id")).toString() : parent);
-    }
-    QJsonArray roots;
-    for (const QJsonValue &value : comments) {
-        const QJsonObject comment = value.toObject();
-        if (comment.value(QStringLiteral("parent")).toString().isEmpty() && !comment.value(QStringLiteral("resolved")).toBool() &&
-            held.contains(comment.value(QStringLiteral("id")).toString()))
-            roots.append(comment);
-    }
-    return roots;
-}
-
-int ToolbarWiring::blockingCount() const {
-    if (const ReviewModel *review = m_bus->review()) return review->counts().blocking;
-    return blockingThreads(m_bus->lastEvent(QStringLiteral("comments")).value(QStringLiteral("items")).toArray());
+        return value.isEmpty() ? QStringLiteral("Bring %1 to %2").arg(name, limit)
+                               : QStringLiteral("Bring %1 to %2 (now %3)").arg(name, limit, value);
+    return value.isEmpty() ? QStringLiteral("Fix the %1").arg(name) : QStringLiteral("Fix the %1 (%2)").arg(name, value);
 }
 
 bool ToolbarWiring::sendExport(const QString &quality) {
     const bool master = quality == QStringLiteral("master");
-    if (master && blockingCount() > 0) {
-        holdForNotes();
-        return false;
-    }
     // The master renders to the project's master output (its folder and
     // file name, kept for the project); the draft is a review copy beside it.
     const QJsonObject command = master ? deliver::masterCommand(m_window->m_projectDirectory)
@@ -653,30 +618,6 @@ bool ToolbarWiring::sendExport(const QString &quality) {
     m_sentQuality = command.value(QStringLiteral("quality")).toString();
     m_window->addActivity(QStringLiteral("export"), QStringLiteral("Export started (%1)").arg(master ? QStringLiteral("Master") : QStringLiteral("Draft")));
     return true;
-}
-
-void ToolbarWiring::holdForNotes(const QString &refusal) {
-    QString message = refusal;
-    if (message.isEmpty()) {
-        const QJsonArray roots = blockingRoots(m_bus->lastEvent(QStringLiteral("comments")).value(QStringLiteral("items")).toArray());
-        const int count = std::max(blockingCount(), int(roots.size()));
-        message = count == 1 ? QStringLiteral("A blocking note holds the master back")
-                             : QStringLiteral("%1 blocking notes hold the master back").arg(count);
-        if (!roots.isEmpty()) {
-            const QJsonObject first = roots.first().toObject();
-            QString body = first.value(QStringLiteral("body")).toString().simplified();
-            if (body.size() > 80) body = body.left(79).trimmed() + QChar(0x2026);
-            message += QStringLiteral(": \u201c%1\u201d by %2").arg(body, first.value(QStringLiteral("author")).toObject().value(QStringLiteral("name")).toString());
-            if (const QJsonValue at = first.value(QStringLiteral("at")); at.isDouble())
-                message += QStringLiteral(" at %1").arg(timelineTimecode(at.toDouble(), m_bus->timeline().value(QStringLiteral("fps")).toDouble(25.0)));
-            if (count > 1) message += QStringLiteral(" and %1 more").arg(count - 1);
-        }
-        message += QStringLiteral(". Resolve it in Review, or export a Draft meanwhile.");
-    }
-    m_window->showError(message);
-    // The way to resolve it: the blocking notes, in Review.
-    if (ReviewModel *review = m_bus->review()) review->setTag(QString::fromLatin1(ReviewModel::kBlockingTag));
-    m_window->addActivity(QStringLiteral("export"), QStringLiteral("Export held for blocking notes"));
 }
 
 void ToolbarWiring::buildExportMenu() {
@@ -729,11 +670,7 @@ void ToolbarWiring::buildExportMenu() {
             ui::setMenuAccent(item, QStringLiteral("Ask Kerf"));
             item->setToolTip(row.ask);
             const QString text = row.ask;
-            const QString thread = row.commentId;
-            connect(item, &QAction::triggered, this, [this, text, thread] {
-                if (!thread.isEmpty()) emit m_bus->openThread(thread);
-                emit m_bus->askPrefill(text, thread);
-            });
+            connect(item, &QAction::triggered, this, [this, text] { emit m_bus->askPrefill(text); });
         }
     }
     if (const int hidden = preflightHidden(m_checkSummary); hidden > 0) {
@@ -741,38 +678,15 @@ void ToolbarWiring::buildExportMenu() {
         more->setObjectName(QStringLiteral("preflightMore"));
         ui::setMenuDot(more, tokens::color(tokens::neg));
     }
-    // The blocking notes, which hold Render master back.
-    const int blocking = blockingCount();
-    QAction *notes = menu->addAction(blocking == 0 ? QStringLiteral("No blocking notes open")
-                                                   : plural(blocking, QStringLiteral("1 blocking note open"), QStringLiteral("%1 blocking notes open")));
-    notes->setObjectName(QStringLiteral("preflightBlocking"));
-    ui::setMenuDot(notes, tokens::color(blocking > 0 ? tokens::neg : tokens::pos));
-    if (blocking > 0) ui::setMenuRole(notes, ui::MenuRole::Warn);
-    connect(notes, &QAction::triggered, this, [this, blocking] {
-        if (ReviewModel *review = m_bus->review(); review && blocking > 0) review->setTag(QString::fromLatin1(ReviewModel::kBlockingTag));
-    });
     menu->addSeparator();
 
     QAction *master = commands->action(QStringLiteral("export.master"));
     QAction *render = menu->addAction(QStringLiteral("Render master"));
     render->setObjectName(QStringLiteral("exportRenderMaster"));
     const bool available = master && master->isEnabled();
-    render->setEnabled(available && blocking == 0);
-    render->setToolTip(!available ? commands->reason(QStringLiteral("export.master"))
-                       : blocking > 0 ? QStringLiteral("Resolve blocking notes first")
-                                      : QStringLiteral("Render master · ProRes 422 HQ"));
+    render->setEnabled(available);
+    render->setToolTip(available ? QStringLiteral("Render master · ProRes 422 HQ") : commands->reason(QStringLiteral("export.master")));
     connect(render, &QAction::triggered, this, [this] { sendExport(QStringLiteral("master")); });
-}
-
-// ================================================================ the guest's view
-
-void ToolbarWiring::followReview() {
-    ReviewModel *review = m_bus->review();
-    if (m_review == review) return;
-    if (m_review) disconnect(m_review, nullptr, this, nullptr);
-    m_review = review;
-    if (review) connect(review, &ReviewModel::changed, this, &ToolbarWiring::layoutTitle);
-    layoutTitle();
 }
 
 void ToolbarWiring::buildKeymapMenu(QMenu *menu) {

@@ -1,6 +1,6 @@
 #include "main_window.h"
 
-#include "comment_row.h"
+#include "chat_parts.h"
 #include "crash_notice.h"
 #include "review_link.h"
 #include "secret_store.h"
@@ -24,7 +24,7 @@
 #include "editor_bus.h"
 #include "wiring/main_window_shared.h"
 #include "wiring/bin_wiring.h"
-#include "wiring/review_wiring.h"
+#include "wiring/chat_wiring.h"
 #include "wiring/stage_wiring.h"
 #include "wiring/timeline_wiring.h"
 #include "wiring/toolbar_wiring.h"
@@ -113,7 +113,7 @@ MainWindow::MainWindow(const QString &projectDirectory, const QString &kerfdBina
     m_bus = new EditorBus(this);
     m_bus->setSender([this](const QJsonObject &command) { return sendSimple(command); });
     m_bus->setRunner([this](const QString &id, const QJsonObject &params) { return runCommand(id, params); });
-    m_reviewWiring = std::make_unique<ReviewWiring>(this, m_bus);
+    m_chatWiring = std::make_unique<ChatWiring>(this, m_bus);
     m_stageWiring = std::make_unique<StageWiring>(this, m_bus);
     m_toolbarWiring = std::make_unique<ToolbarWiring>(this, m_bus);
     m_timelineWiring = std::make_unique<TimelineWiring>(this, m_bus);
@@ -698,7 +698,7 @@ void MainWindow::buildUi() {
 
     // The regions, each in its own file; the order is the order they need
     // each other in.
-    buildReview();
+    buildChat();
     buildStage();
     buildMaskTools();
     buildTimeline();
@@ -1725,6 +1725,12 @@ void MainWindow::flushSeek() {
 void MainWindow::handleEvent(QJsonObject event) {
     routeEvent(event);
     m_bus->dispatch(event);
+    // What runs shows on the stage once every region has heard of it.
+    static const QSet<QString> activities{QStringLiteral("export"), QStringLiteral("render_queue"), QStringLiteral("preview"),
+                                          QStringLiteral("media_making"), QStringLiteral("media_made"),
+                                          QStringLiteral("media_make_cancelled"), QStringLiteral("error"),
+                                          QStringLiteral("media_status"), QStringLiteral("cast"), QStringLiteral("state")};
+    if (activities.contains(event.value(QStringLiteral("type")).toString())) setStageActivity();
 }
 
 void MainWindow::routeEvent(const QJsonObject &event) {
@@ -1752,15 +1758,14 @@ void MainWindow::routeEvent(const QJsonObject &event) {
         // A making that did not end with a take is no longer under way, and what its
         // steps last said is not left standing as if it were.
         if (event.value(QStringLiteral("command")).toString() == QStringLiteral("media_make") &&
-            m_making.remove(event.value(QStringLiteral("media")).toString()))
+            m_making.remove(event.value(QStringLiteral("media")).toString())) {
+            m_makingState.remove(event.value(QStringLiteral("media")).toString());
             showStatus(QString());
+        }
         // How preset_save refuses a file that exists, after its path.
         static const QString presetExists = QStringLiteral(" already exists; choose another name or replace it");
         if (!m_savingPreset.isEmpty() && message.endsWith(presetExists)) {
             replaceSavedPreset(message.chopped(presetExists.size()));
-        } else if (event.value(QStringLiteral("code")).toString() == QStringLiteral("BLOCKING_NOTES")) {
-            // kerfd held a delivery back: its words, and the notes to resolve.
-            m_toolbarWiring->holdForNotes(message);
         } else {
             showError(message);
             // A failed turn is said in its thread too; the next turn takes it away.
@@ -1775,15 +1780,27 @@ void MainWindow::routeEvent(const QJsonObject &event) {
             runMake(event.value(QStringLiteral("media")).toString(), event.value(QStringLiteral("rolls")).toInt(1));
     } else if (type == QStringLiteral("cast")) {
         // Asked for, the cast shows to be set; saved, it says which shots want making for it.
+        m_wantsMaking.clear();
+        for (const QJsonValue value : event.value(QStringLiteral("toMake")).toArray())
+            m_wantsMaking.insert(value.toObject().value(QStringLiteral("media")).toString(), value.toObject().value(QStringLiteral("why")).toString());
         if (event.value(QStringLiteral("saved")).toBool()) showStatus(castSaved(event), 8000);
         else castDialog(event)->open();
     } else if (type == QStringLiteral("media_making")) {
         // Each line a step says, as it says it: a rendering's share done, a model's
         // program's words. It stays until the next, or until the making ends.
-        m_making.insert(event.value(QStringLiteral("media")).toString(), event.value(QStringLiteral("line")).toString());
-        showStatus(makingStatus(event, mediaName(event.value(QStringLiteral("media")).toString())));
+        const QString media = event.value(QStringLiteral("media")).toString();
+        m_making.insert(media, event.value(QStringLiteral("line")).toString());
+        // Its clock starts as its take does.
+        const int take = event.value(QStringLiteral("take")).toInt();
+        auto state = m_makingState.find(media);
+        if (state == m_makingState.end() || state->take != take)
+            state = m_makingState.insert(media, activity::Making{take, QString(), activity::clock()});
+        state->line = event.value(QStringLiteral("line")).toString();
+        showStatus(makingStatus(event, mediaName(media)));
     } else if (type == QStringLiteral("media_made")) {
         m_making.remove(event.value(QStringLiteral("media")).toString());
+        m_makingState.remove(event.value(QStringLiteral("media")).toString());
+        m_wantsMaking.remove(event.value(QStringLiteral("media")).toString());
         showStatus(QStringLiteral("Made take %2 of %1 from its recipe")
                        .arg(mediaName(event.value(QStringLiteral("media")).toString()))
                        .arg(event.value(QStringLiteral("take")).toInt()),
@@ -1791,6 +1808,7 @@ void MainWindow::routeEvent(const QJsonObject &event) {
     } else if (type == QStringLiteral("media_make_cancelled")) {
         const QString media = event.value(QStringLiteral("media")).toString();
         m_making.remove(media);
+        m_makingState.remove(media);
         showStatus(QStringLiteral("Stopped making %1; it is as it was").arg(media), 6000);
     } else if (type == QStringLiteral("preset_export")) {
         const QString path = event.value(QStringLiteral("path")).toString();
@@ -1905,7 +1923,7 @@ void MainWindow::routeEvent(const QJsonObject &event) {
         updateCloudStatus();
     } else if (type == QStringLiteral("caption")) {
         // (effect_preview answers reach their regions keyed, through the bus:
-        // BinWiring for the browser, ReviewWiring for the colour chip.)
+        // BinWiring for the browser, ChatWiring for the colour chip.)
         m_viewer->setCaption(event.value(QStringLiteral("text")).toString());
     }
     if (type == QStringLiteral("preview")) updateCommandStates();
@@ -1987,7 +2005,7 @@ void MainWindow::applyPendingLink() {
     if (!m_linkPending || !m_connected || m_snapshot.isEmpty()) return;
     m_linkPending = false;
     if (!m_linkTimecode.isEmpty()) {
-        const double seconds = review::parseTimecode(m_linkTimecode, m_fps);
+        const double seconds = chat::parseTimecode(m_linkTimecode, m_fps);
         if (std::isfinite(seconds)) queueSeek(seconds);
     }
     if (m_linkRevision >= 0 && quint64(m_linkRevision) != m_revision)

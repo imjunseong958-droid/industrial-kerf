@@ -17,7 +17,7 @@ use kerf_lang::{
 };
 use kerf_model::{Catalog, Clip, Content, Media, Project, Sequence, Time};
 use kerf_runtime::{
-    CachedFacts, NewComment, PendingProposal, ProposalEntry, ProposalFreshness, RenderJob,
+    CachedFacts, PendingProposal, ProposalEntry, ProposalFreshness, RenderJob,
     RenderRange, RuntimeClient, RuntimeError, StateSnapshot,
 };
 use kerf_skills::Skill;
@@ -36,7 +36,7 @@ static NEXT_KEY: AtomicU64 = AtomicU64::new(1);
 const MAX_INLINE_ARTIFACT_BYTES: usize = 8 * 1024 * 1024;
 
 /// The tools every agent and MCP client uses.
-pub const TOOL_NAMES: &[&str] = &["look", "edit", "render", "note", "make"];
+pub const TOOL_NAMES: &[&str] = &["look", "edit", "render", "make"];
 
 /// As many frames as one tool result carries to a model.
 const MAX_LOOK_FRAMES: usize = kerf_agent::MAX_TOOL_RESULT_IMAGES;
@@ -95,17 +95,12 @@ in the proposal. Where the person's own permissions accept an agent's edits, \
 the answer says `accepted`: it is in the project, one revision undo takes \
 back.
 - `make` asks for a media to be made from its recipe, and answers with what \
-would run. By default the person is asked (`asked`), in the review thread, \
+would run. By default the person is asked (`asked`), in the conversation, \
 and makes it; where they let an agent make on its own it runs (`making`), as \
 a `job` to read, `wait` for, or `cancel`, and the media is the new take once \
 it is made. Then look at the take, and change one thing for the next.
 - `render` renders the sequence, or a range of it, to a file; with \
   `proposal`, what that proposal would make.
-- `note` leaves a comment in the project's review thread, where the people \
-  reviewing the cut read it: at a time or range of the sequence, as a reply \
-  to a comment with `parent`, or about a proposal with `proposal` (say what \
-  changed in a new version there). Use it for what is worth keeping beside \
-  the cut, not to answer the person you are talking with.
 
 Reusable presets are portable .kerfpreset files. `look` with `presets: true` \
 lists project presets: the shared `presets/` library first, then \
@@ -369,7 +364,7 @@ pub(super) fn metadata(name: &str) -> Option<(&'static str, Value, ToolAnnotatio
             json!({
                 "type": "object",
                 "properties": {
-                    "quality": {"type": "string", "enum": ["draft", "full"], "description": "`draft`, the default, is 360 high at 15 frames a second, to check quickly; `full` is the sequence's own size and rate, a delivery, refused while a blocking note is open (a person resolves it in the review)."},
+                    "quality": {"type": "string", "enum": ["draft", "full"], "description": "`draft`, the default, is 360 high at 15 frames a second, to check quickly; `full` is the sequence's own size and rate, a delivery."},
                     "from": {"type": "string", "description": format!("Sequence position. {time} {anchors}")},
                     "to": {"type": "string", "description": "Sequence position."},
                     "sequence": {"type": "string", "description": sequence},
@@ -377,31 +372,6 @@ pub(super) fn metadata(name: &str) -> Option<(&'static str, Value, ToolAnnotatio
                     "job": {"type": "string", "description": "A render job id."},
                     "cancel": {"type": "boolean"}
                 },
-                "additionalProperties": false
-            }),
-            ToolAnnotations {
-                read_only_hint: Some(false),
-                destructive_hint: Some(false),
-                idempotent_hint: Some(false),
-            },
-        ),
-        "note" => (
-            "Leave a note in the project's review thread, where the people reviewing the cut \
-             read it beside the timeline: at `at` (for `duration`) on the program sequence, as \
-             a reply to the comment `parent`, or about the proposal `proposal`. It changes \
-             nothing in the project. Returns the comment as the review log keeps it.",
-            json!({
-                "type": "object",
-                "properties": {
-                    "body": {"type": "string", "minLength": 1, "description": "What the note says."},
-                    "at": {"type": "string", "description": format!("Where on the program sequence (the first). {time} {anchors}")},
-                    "duration": {"type": "string", "description": "How long a range it is about, from `at`: frames (`60f`), seconds (`2.5s`), or a timecode length (`00:00:02:12`)."},
-                    "parent": {"type": "string", "description": "The id of the comment this replies to; a reply to a reply joins its thread."},
-                    "proposal": {"type": "string", "description": "The id of a proposal (any version) the note is about."},
-                    "tags": {"type": "array", "items": {"type": "string"}, "maxItems": 32, "description": "Short topic tags without `#`, such as `captions` or `audio`."},
-                    "blocking": {"type": "boolean", "description": "The cut should not be delivered until this is resolved."}
-                },
-                "required": ["body"],
                 "additionalProperties": false
             }),
             ToolAnnotations {
@@ -677,20 +647,6 @@ struct RenderInput {
     cancel: bool,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct NoteInput {
-    body: String,
-    at: Option<String>,
-    duration: Option<String>,
-    parent: Option<String>,
-    proposal: Option<String>,
-    #[serde(default)]
-    tags: Vec<String>,
-    #[serde(default)]
-    blocking: bool,
-}
-
 pub(crate) fn input<T: serde::de::DeserializeOwned>(arguments: Value) -> Result<T, McpError> {
     let arguments = if arguments.is_null() {
         json!({})
@@ -892,108 +848,6 @@ impl KerfMcpRouter {
         }
     }
 
-    /// Post a note to the review log, by this router's author.
-    pub(super) fn note(&self, arguments: Value) -> Result<Value, McpError> {
-        let input: NoteInput = input(arguments)?;
-        let body = input.body.trim();
-        if body.is_empty() {
-            return Err(McpError::new("INVALID_ARGUMENTS", "a note needs a body"));
-        }
-        if input.duration.is_some() && input.at.is_none() {
-            return Err(McpError::new(
-                "INVALID_ARGUMENTS",
-                "duration is a range from `at`; pass at too",
-            ));
-        }
-        let tags = input
-            .tags
-            .iter()
-            .map(|tag| tag.trim().trim_start_matches('#').trim().to_owned())
-            .filter(|tag| !tag.is_empty())
-            .collect::<Vec<_>>();
-        let mut timecode = None;
-        let (mut at, mut duration) = (None, None);
-        if let Some(text) = &input.at {
-            let (_, project) = self.project_at(None)?;
-            let sequence = program(&project, None)?;
-            let clock = Clock::of_sequence(sequence);
-            let start = program_position(&project, sequence, text)?;
-            if start.is_negative() || start > sequence.duration() {
-                return Err(McpError::new(
-                    "INVALID_ARGUMENTS",
-                    format!(
-                        "at {text} is outside sequence `{}`, which ends at {}",
-                        sequence.id,
-                        clock.print_position(sequence.duration())
-                    ),
-                ));
-            }
-            if let Some(length) = &input.duration {
-                let length = clock
-                    .duration(length)
-                    .map_err(|error| McpError::new("INVALID_ARGUMENTS", error))?;
-                if !length.is_positive() {
-                    return Err(McpError::new(
-                        "INVALID_ARGUMENTS",
-                        "a duration must be longer than 0",
-                    ));
-                }
-                duration = Some(length.min(sequence.duration() - start).seconds());
-            }
-            at = Some(start.seconds());
-            timecode = Some(clock.print_position(clock.rate.round(start)));
-        }
-        let state = self.runtime.get_state()?;
-        if let Some(id) = &input.proposal {
-            let known = state.proposals.iter().any(|entry| {
-                entry.proposal_id == *id
-                    || entry
-                        .versions
-                        .iter()
-                        .any(|version| version.proposal_id == *id)
-            });
-            if !known {
-                return Err(McpError::new(
-                    "UNKNOWN_PROPOSAL",
-                    format!("no proposal {id} in the project"),
-                ));
-            }
-        }
-        // Threads are a comment and its replies: a reply to a reply joins
-        // the thread of the comment it answers.
-        let parent = match &input.parent {
-            None => None,
-            Some(id) => {
-                let log = self.runtime.comments()?;
-                let comment = log
-                    .items
-                    .iter()
-                    .find(|comment| comment.id == *id)
-                    .ok_or_else(|| {
-                        McpError::new("UNKNOWN_COMMENT", format!("no comment {id} in the review"))
-                    })?;
-                Some(comment.parent.clone().unwrap_or_else(|| comment.id.clone()))
-            }
-        };
-        let author = self.author();
-        let actor = if author.kind == "mcp" { "mcp" } else { "agent" };
-        let mut comment = NewComment::new(author, body);
-        comment.parent = parent;
-        comment.at = at;
-        comment.duration = duration;
-        comment.proposal = input.proposal;
-        comment.tags = tags;
-        comment.blocking = input.blocking;
-        let (comment, log) = self.runtime.add_comment(actor, comment)?;
-        let mut result = json!({
-            "comment": comment,
-            "reviewRevision": log.review_revision,
-        });
-        if let Some(timecode) = timecode {
-            result["timecode"] = json!(timecode);
-        }
-        Ok(result)
-    }
 
     /// The current revision and the project, or what the pending
     /// `proposal` would make of it.

@@ -17,6 +17,7 @@
 
 #include "editor_common.h"
 #include "test_friends.h"
+#include "ui/activity.h"
 
 #include <QBoxLayout>
 #include <QHash>
@@ -47,6 +48,10 @@ class QAction;
 class QVariantAnimation;
 class QShortcut;
 
+class QTimer;
+class QShowEvent;
+class QHideEvent;
+
 namespace kerf {
 
 namespace ui {
@@ -76,19 +81,6 @@ class TimelineWidget final : public QWidget {
     Q_OBJECT
     KERF_TEST_FRIENDS
 public:
-    // A root comment's mark on the ruler (ReviewModel::LaneMarker): a dot at
-    // its time, a bar over its range. People's dots are round, agents' and
-    // checks' rounded squares.
-    struct CommentMark {
-        QString id;
-        double at = 0.0;
-        double end = 0.0;
-        bool ranged = false;
-        bool circle = true;
-        bool current = false;
-        bool resolved = false;
-        QString name;
-    };
     // An open proposal: its band over the ruler and its veil over the lanes
     // of the tracks it changes, from `start` to `end`; the clips it changes
     // are outlined in the accent; while it plays as a preview its ghosts
@@ -147,6 +139,18 @@ public:
     // Where Kerf is working, drawn over the lanes with its name; NaN for nowhere.
     void setAgentCursor(double seconds);
     double agentCursor() const { return m_agentCursor; }
+    // What each media is doing, by source id: a clip of one being made has amber
+    // stripes moving over it with how long it has gone ("Making 0:12"), one
+    // queued for making a dashed amber outline and "Queued", one with no file a
+    // dashed outline and "Not made" (a shot its recipe has not made) or
+    // "Offline". Clips of media that has a file keep their pictures.
+    void setMediaActivity(const QHash<QString, activity::MediaActivity> &media);
+    const QHash<QString, activity::MediaActivity> &mediaActivity() const { return m_mediaActivity; }
+    // What clip `clip` shows of its media's state, by its id.
+    activity::MediaActivity clipActivity(const QString &clip) const;
+    QString clipActivityLabel(const QString &clip) const;
+    // Whether the stripes over clips being made draw frames.
+    bool makingTicks() const;
     // Only these clips stand out; the rest dim. Empty: all as they are.
     void setFocusClips(const QSet<QString> &clips);
     QSet<QString> focusClips() const { return m_focusClips; }
@@ -174,10 +178,6 @@ public:
     void setProposal(const QJsonObject &timeline);
     bool hasProposal() const { return !m_proposal.isEmpty() || !m_bands.isEmpty(); }
 
-    // The ruler's comment marks.
-    void setCommentMarks(const QList<CommentMark> &marks);
-    const QList<CommentMark> &commentMarks() const { return m_marks; }
-    QRect commentMarkBounds(const QString &id) const;
     // Every open proposal's band; empty falls back to setProposal's.
     void setProposalBands(const QList<ProposalBand> &bands);
     QList<ProposalBand> proposalBands() const;
@@ -293,8 +293,6 @@ signals:
     // Option-drag across a signal clip: its number drawn by hand, as
     // {keys: [{at: frame of the clip, value, interp}]}.
     void signalDrawn(const QString &clipId, const QJsonValue &value);
-    // A comment's mark on the ruler clicked.
-    void commentMarkActivated(const QString &commentId);
     void toolChanged(TimelineTool tool);
     void snappingChanged(bool snapping);
     // Track heights changed (a preset, a drag, a step, Fit).
@@ -313,6 +311,8 @@ protected:
     void keyPressEvent(QKeyEvent *event) override;
     void wheelEvent(QWheelEvent *event) override;
     void leaveEvent(QEvent *) override;
+    void showEvent(QShowEvent *event) override;
+    void hideEvent(QHideEvent *event) override;
 
 private:
     struct ClipHit {
@@ -411,10 +411,8 @@ private:
     // The ruler's marker row: proposal bands, comment marks, sequence markers.
     void paintMarkerRow(QPainter &p, const QRect &dirty, int top);
     QRectF markerRect(const QJsonObject &marker, int top) const;
-    QRectF commentMarkRect(const CommentMark &mark, int top) const;
     QRectF bandRect(const ProposalBand &band, int top) const;
     // The mark or band under `point` in the ruler, or -1.
-    int commentMarkAt(const QPoint &point) const;
     int bandAt(const QPoint &point) const;
     void paintCorner(QPainter &p, const QPoint &origin) const;
 
@@ -510,7 +508,6 @@ private:
     QString m_previewId;
     QJsonObject m_previewTimeline;
     QHash<QString, QJsonObject> m_previewTracks;
-    QList<CommentMark> m_marks;
     QSet<QString> m_qcClips;
     bool m_wideSequence = false;
     double m_markIn = std::numeric_limits<double>::quiet_NaN();
@@ -554,6 +551,14 @@ private:
     double m_skimmerTime = 0.0;
     double m_agentCursor = std::numeric_limits<double>::quiet_NaN();
     QSet<QString> m_focusClips;
+    QHash<QString, activity::MediaActivity> m_mediaActivity;
+    // Where the clips being made are now, in this widget, drawn again in each of
+    // the stripes' frames.
+    QList<QRectF> makingClipRects() const;
+    void paintMaking(QPainter &p, const QRect &dirty);
+    void paintActivityLabel(QPainter &p, const QRectF &clip, const activity::MediaActivity &activity, qint64 now);
+    void followMakingTicks();
+    QTimer *m_makingTicker = nullptr;
     qreal m_focusLift = 0.0;
     QVariantAnimation *m_focusRise = nullptr;
     double m_hoverFrame = -1.0;

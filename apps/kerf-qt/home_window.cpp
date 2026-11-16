@@ -127,10 +127,8 @@ HomeWindow::HomeWindow(const QString &kerfdBinary, QWidget *parent) : QDialog(pa
     m_composer->setMaximumWidth(kColumn);
     m_composer->setOverlayParent(this);
     m_composer->input()->setPlaceholderText(QStringLiteral("Say what to make from this folder"));
-    // A request here has no playhead to stamp, nobody to mention, nothing to draw on.
+    // A request here has no playhead to stamp.
     m_composer->stamp()->hide();
-    m_composer->mentionButton()->hide();
-    m_composer->drawButton()->hide();
     m_folderChip = new ui::GhostButton;
     m_folderChip->setObjectName(QStringLiteral("homeFolder"));
     m_folderChip->setIconName(QStringLiteral("g-folder"));

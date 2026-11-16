@@ -20,7 +20,7 @@ using namespace tokens;
 
 namespace reel {
 
-QString changeTitle(const ReviewModel::ClipChange &change) {
+QString changeTitle(const ProposalModel::ClipChange &change) {
     const QString name = change.name.isEmpty() ? change.clip : change.name;
     if (change.transition) return QStringLiteral("Transition");
     if (change.added) return QStringLiteral("Add %1").arg(name);
@@ -31,9 +31,9 @@ QString changeTitle(const ReviewModel::ClipChange &change) {
     return QStringLiteral("Change %1").arg(name);
 }
 
-QList<Segment> plan(const QList<ReviewModel::ClipChange> &changes, double beforeDuration, double afterDuration, double handle) {
+QList<Segment> plan(const QList<ProposalModel::ClipChange> &changes, double beforeDuration, double afterDuration, double handle) {
     QList<Segment> raw;
-    for (const ReviewModel::ClipChange &change : changes) {
+    for (const ProposalModel::ClipChange &change : changes) {
         Segment segment;
         // What is gone has no place on the proposal but where it was, and what
         // is new none on the program but where it lands.

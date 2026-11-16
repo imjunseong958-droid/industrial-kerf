@@ -9,7 +9,7 @@
 #include "editor_bus.h"
 #include "components.h"
 #include "project_sidebar.h"
-#include "review_model.h"
+#include "proposal_model.h"
 #include "stage_shell.h"
 #include "timeline_widget.h"
 #include "toolbar_widgets.h"
@@ -19,8 +19,10 @@
 #include "viewer_widget.h"
 #include "media_artwork.h"
 #include "wiring/main_window_shared.h"
-#include "wiring/review_wiring.h"
+#include "wiring/chat_wiring.h"
 #include "wiring/stage_wiring.h"
+#include "wiring/toolbar_wiring.h"
+#include "project_panel.h"
 
 #include <QJsonArray>
 #include <QSet>
@@ -38,9 +40,9 @@ using namespace window_parts;
 void MainWindow::buildAgentViews() {
     ChangeReel::Host host;
     host.preview = [this](const QString &proposal, double start, double duration) {
-        return m_reviewWiring->previewRange(proposal, start, duration);
+        return m_chatWiring->previewRange(proposal, start, duration);
     };
-    host.exitPreview = [this] { m_reviewWiring->preview(QString(), false); };
+    host.exitPreview = [this] { m_chatWiring->preview(QString(), false); };
     host.seek = [this](double seconds, double limit) {
         m_seekLimit = limit;
         queueSeek(seconds);
@@ -61,7 +63,7 @@ void MainWindow::buildAgentViews() {
         if (m_reelWasActive && !active && m_timeline->showsProposedCut()) {
             m_previewedCut.clear();
             m_cutPreview.start();
-            if (const ReviewModel::Proposal *shown = m_reviewWiring->model()->proposal(m_proposalId); shown && !shown->changes.isEmpty())
+            if (const ProposalModel::Proposal *shown = m_chatWiring->model()->proposal(m_proposalId); shown && !shown->changes.isEmpty())
                 coverPicture(posterForClip(shown->changes.constFirst().clip));
         }
         m_reelWasActive = active;
@@ -88,9 +90,14 @@ void MainWindow::buildAgentViews() {
     // The picture floats in the window's room.
     m_viewer->setFloating(true);
     m_timeline->setRoomyLanes(true);
-    m_chat->setConversationLook(true);
     m_workChip = new WorkChip;
     m_viewer->setWorkChip(m_workChip);
+    // The light round the picture while something works, under the chip.
+    m_edgeLight = new activity::EdgeLight;
+    m_viewer->setEdgeLight(m_edgeLight);
+    // A making's clock goes on on the chip: once a second, only while one runs.
+    m_activityClock.setInterval(tokens::motion::clockFrame);
+    connect(&m_activityClock, &QTimer::timeout, this, &MainWindow::setStageActivity);
     // The picture is not rescaled in each frame while the stage moves, and flights
     // wait for the timeline to have reached where they land.
     connect(m_shell, &StageShell::transitionStarted, this, [this] {
@@ -113,7 +120,7 @@ void MainWindow::buildAgentViews() {
         // One renders at a time; the latest follows when it is done.
         if (m_cutRendering) return;
         m_previewedCut = m_proposalId;
-        m_cutRendering = m_reviewWiring->preview(m_proposalId, true);
+        m_cutRendering = m_chatWiring->preview(m_proposalId, true);
         quietenCutPreview();
     });
     connect(m_changeReel, &ChangeReel::changed, this, &MainWindow::followReelCompare);
@@ -166,7 +173,7 @@ QString MainWindow::sourceOfClip(const QString &clip) const {
 QImage MainWindow::posterForClip(const QString &clip) const { return m_artwork->frames.value(sourceOfClip(clip)); }
 
 // A clip goes from its tile to where the proposal puts it, and the picture becomes it.
-void MainWindow::flyChange(const ReviewModel::ClipChange &change, int index) {
+void MainWindow::flyChange(const ProposalModel::ClipChange &change, int index) {
     const QRect lane = m_timeline->laneRect(change.track, change.newStart, change.newEnd);
     if (lane.isEmpty() || !m_timeline->isVisible()) return;
     // A picture goes to a picture's lane; a clip's sound comes along with it.
@@ -210,7 +217,7 @@ void MainWindow::coverPicture(const QImage &image) {
 
 void MainWindow::flushFlights() {
     if (m_shell->isMoving() || m_holdFlights) return;
-    const QList<ReviewModel::ClipChange> pending = m_pendingFlights;
+    const QList<ProposalModel::ClipChange> pending = m_pendingFlights;
     m_pendingFlights.clear();
     for (int index = 0; index < pending.size(); ++index) flyChange(pending.at(index), index);
 }
@@ -343,7 +350,58 @@ void MainWindow::quietenCutPreview() {
     m_stageWiring->hud()->setQuiet(quiet || m_cutRendering || m_changeReel->isActive());
     // The cut it is making is its card in the conversation, at work.
     m_chat->setBuildingProposal(quiet ? m_proposalId : QString());
-    if (m_workChip) m_workChip->setVisible(m_agentBusy && !m_changeReel->isActive() && !m_stageWiring->previewChip()->isVisible());
+    setStageActivity();
+}
+
+QHash<QString, activity::MediaActivity> MainWindow::mediaActivity() const {
+    using State = activity::MediaActivity::State;
+    QHash<QString, activity::MediaActivity> media;
+    // Missing: a shot whose recipe has not made it yet, or a file that is gone.
+    for (const QJsonValue id : m_mediaStatus.value(QStringLiteral("missing")).toArray())
+        media.insert(id.toString(), {mediaRecipe(id.toString()).isEmpty() ? State::Offline : State::NotMade});
+    for (auto it = m_makingState.cbegin(); it != m_makingState.cend(); ++it) {
+        const activity::MakingLine line = activity::parseMakingLine(it->line);
+        activity::MediaActivity making;
+        making.state = line.queued() ? State::Queued : State::Making;
+        making.since = it->since;
+        making.take = it->take;
+        making.ahead = line.ahead;
+        making.percent = line.percent;
+        media.insert(it.key(), making);
+    }
+    return media;
+}
+
+void MainWindow::setStageActivity() {
+    if (!m_edgeLight || !m_workChip) return;
+    activity::Work work;
+    work.agentBusy = m_agentBusy;
+    work.cutting = m_agentBusy && m_timeline->showsProposedCut();
+    const QHash<QString, QString> names = sourceNames(m_project.value(QStringLiteral("sources")).toArray());
+    QStringList making = m_makingState.keys();
+    making.sort();
+    for (const QString &media : std::as_const(making)) work.makings.append({names.value(media, media), m_makingState.value(media)});
+    if (m_toolbarWiring) work.render = m_toolbarWiring->runningRender(&work.fraction);
+    const activity::Stage stage = activity::stageFor(work, activity::clock());
+    // Watching what changed has the picture to itself.
+    const bool watching = m_changeReel && m_changeReel->isActive();
+    m_edgeLight->setHue(watching ? activity::Hue::None : stage.hue);
+    // The chip keeps what it said as it goes.
+    if (!stage.chip.isEmpty()) {
+        m_workChip->setText(stage.chip);
+        m_workChip->setDot(activity::hueColor(stage.hue));
+    }
+    // A preview's own card says what it renders; the preview chip has the place.
+    const bool previewSays = m_stageWiring->hud()->active() && m_stageWiring->hud()->isVisible() && work.makings.isEmpty();
+    m_workChip->setShown(!stage.chip.isEmpty() && !watching && !m_stageWiring->previewChip()->isVisible() && !previewSays);
+    const QHash<QString, activity::MediaActivity> media = mediaActivity();
+    m_timeline->setMediaActivity(media);
+    if (m_projectPanel) {
+        m_projectPanel->setMediaActivity(media);
+        m_projectPanel->setWantsMaking(m_wantsMaking);
+    }
+    if (m_makingState.isEmpty()) m_activityClock.stop();
+    else if (!m_activityClock.isActive()) m_activityClock.start();
 }
 
 void MainWindow::setFollowKerf(bool follow) {
@@ -374,14 +432,14 @@ void MainWindow::followAgentFocus(const QJsonObject &event) {
 }
 
 void MainWindow::followLiveProposal() {
-    ReviewModel *review = m_reviewWiring->model();
+    ProposalModel *review = m_chatWiring->model();
     if (!m_agentBusy || !review) return;
-    const ReviewModel::Proposal *proposal = m_proposalId.isEmpty() ? nullptr : review->proposal(m_proposalId);
+    const ProposalModel::Proposal *proposal = m_proposalId.isEmpty() ? nullptr : review->proposal(m_proposalId);
     if (!proposal) return;
     const QSet<QString> before = m_liveChanges;
     QSet<QString> keys;
-    const ReviewModel::ClipChange *newest = nullptr;
-    for (const ReviewModel::ClipChange &change : proposal->changes) {
+    const ProposalModel::ClipChange *newest = nullptr;
+    for (const ProposalModel::ClipChange &change : proposal->changes) {
         const QString key = QStringLiteral("%1@%2").arg(change.clip).arg(change.newEnd);
         keys.insert(key);
         if (!m_liveChanges.contains(key) && !change.removed && (!newest || change.newStart >= newest->newStart)) newest = &change;
@@ -390,11 +448,11 @@ void MainWindow::followLiveProposal() {
     // What it is doing, in a line.
     if (m_timeline->showsProposedCut() && keys != before) {
         int placed = 0;
-        for (const ReviewModel::ClipChange &change : proposal->changes) placed += !change.removed && !m_timeline->isAudioLane(change.track);
+        for (const ProposalModel::ClipChange &change : proposal->changes) placed += !change.removed && !m_timeline->isAudioLane(change.track);
         m_chat->setTurnStatus(placed == 1 ? QStringLiteral("Cutting · 1 clip") : QStringLiteral("Cutting · %1 clips").arg(placed));
     }
     // The new ones fly to where they land, once the timeline is there.
-    for (const ReviewModel::ClipChange &change : proposal->changes)
+    for (const ProposalModel::ClipChange &change : proposal->changes)
         if (!change.removed && !before.contains(QStringLiteral("%1@%2").arg(change.clip).arg(change.newEnd))) m_pendingFlights << change;
     flushFlights();
     // Where a trim cuts is what it changes.
@@ -412,8 +470,8 @@ void MainWindow::endAgentFollow() {
 }
 
 // The changes with the names the program knows its clips by.
-QList<ReviewModel::ClipChange> MainWindow::namedChanges(QList<ReviewModel::ClipChange> changes) const {
-    for (ReviewModel::ClipChange &change : changes) {
+QList<ProposalModel::ClipChange> MainWindow::namedChanges(QList<ProposalModel::ClipChange> changes) const {
+    for (ProposalModel::ClipChange &change : changes) {
         const QJsonObject clip = clipObject(change.clip);
         if (!clip.isEmpty()) change.name = clipName(clip);
     }
@@ -454,18 +512,18 @@ void MainWindow::followReelCompare() {
 }
 
 void MainWindow::watchChanges(const QString &proposalId) {
-    ReviewModel *review = m_reviewWiring->model();
-    const ReviewModel::Proposal *proposal = review ? review->proposal(proposalId) : nullptr;
+    ProposalModel *review = m_chatWiring->model();
+    const ProposalModel::Proposal *proposal = review ? review->proposal(proposalId) : nullptr;
     if (!proposal) return;
     double after = 0.0;
-    for (const ReviewModel::ClipChange &change : proposal->changes) after = std::max(after, change.removed ? change.oldEnd : change.newEnd);
+    for (const ProposalModel::ClipChange &change : proposal->changes) after = std::max(after, change.removed ? change.oldEnd : change.newEnd);
     const QList<reel::Segment> segments = reel::plan(namedChanges(proposal->changes), m_duration, after);
     if (segments.isEmpty()) {
         showStatus(QStringLiteral("This proposal changes nothing on the timeline"), 4000);
         return;
     }
     QSet<QString> touched;
-    for (const ReviewModel::ClipChange &change : proposal->changes) touched.insert(change.clip);
+    for (const ProposalModel::ClipChange &change : proposal->changes) touched.insert(change.clip);
     m_timeline->setFocusClips(touched);
     m_changeReel->start(proposalId, segments);
 }

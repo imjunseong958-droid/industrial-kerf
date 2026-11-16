@@ -14,8 +14,8 @@ void kerf_bridge_free(void *bridge);
 // claude-code: the installed Claude Code, signed in on its own, with this
 // project's kerf-mcp as its only tools; no key),apiMode,apiKey,baseUrl,
 // model,mcpEnabled,mcpConfigVersion,cloud? (use Kerf Cloud's hosted model),
-// comment?: {at?, duration?, parent?, drawing?} (keep the turn in the
-// review log, below)}, abort, play, pause, seek {position,scrub},
+// conversation? (the one the turn goes on in; none starts one), at? (the
+// playhead it was asked at, s; see Conversations below)}, abort, play, pause, seek {position,scrub},
 // volume {value}, solo {tracks: [trackId]} (hear only those audio tracks,
 // [] hears all; monitoring only, the project never changes, and it holds
 // across edits and a reconnect to kerfd until changed, so sending it again
@@ -59,24 +59,17 @@ void kerf_bridge_free(void *bridge);
 // generators, Kerf's compositor draws the picture. Sound effects, looks
 // and the adjustment generator have no preview. A newer request stops an
 // older one.
-// Review log (review/comments.jsonl, kept by kerfd beside the project,
-// never in the document or undo): comment_list answers comments even when
-// unchanged; comment_add {body, at?, duration?, parent? (the thread's
-// root), tags?, blocking?, drawing?: [{tool: pen|ellipse|rect|arrow,
-// points: [[x, y]] (0..1 of the frame), color?}], proposal?, id? (a
-// client id makes a retried add harmless)} writes a note by the person Git
-// names (author {kind: person, name, id: email}); comment_set {id,
-// resolved?, body?, tags?, blocking?, deleted?} changes one (resolvedBy is
-// that person). A refusal is error {message, code (INVALID_COMMENT,
-// COMMENT_NOT_FOUND, ...), command: comment_add|comment_set|comment_list,
-// id?}. agent with comment records the request as the person's comment
-// (at, duration, drawing; under parent when given) before the agent runs,
-// then Kerf's answer as a reply under the thread's root (author {kind:
-// kerf, name: Kerf}, steps: the finished tool calls and statuses, error:
-// true with the failure's message when the turn failed, proposal: the
-// proposal the turn staged, which is also linked from the root when it
-// names none, so accepting it resolves the thread). The agent's stream
-// events are unchanged.
+// Conversations (.kerf/conversations/<id>.json beside the project, never
+// in the document or undo): conversations {action: list} answers
+// conversations; {action: open, id} answers conversation; {action: archive,
+// id, archived? (true when absent)}, {action: rename, id, title} and
+// {action: delete, id} change one and answer conversation (but delete) and
+// conversations. A refusal is error {message, command: conversation}. An
+// agent turn keeps the request in its conversation before the agent runs,
+// then Kerf's answer (its steps, how long it worked, the proposal it
+// staged, whether it failed or was stopped), sending conversation and
+// conversations each time. A session new to a conversation hears its
+// earlier turns. The agent's stream events are unchanged.
 // QC: check {sequence?} runs Kerf's full QC pass on the project kerfd has
 // (the document checks, plus the sound measured to EBU R128 and every frame
 // measured for gamut, luma levels, flashing and black, on the sequence or
@@ -85,24 +78,16 @@ void kerf_bridge_free(void *bridge);
 // done, sequence?,
 // valid (nothing blocks), findings: [{severity: error|warning|info, code,
 // entity, message, sequence?, at?, duration?, timecode?, rect?: {x, y, w,
-// h} (0..1 of the frame), value?, limit?, unit?, commentId?}], summary:
+// h} (0..1 of the frame), value?, limit?, unit?}], summary:
 // {passed, total, blocking, rows: [{code, name, passed, value, limit?, at?,
-// count, blocking, commentId?}]}} or check {status: failed, message} (also
+// count, blocking}]}} or check {status: failed, message} (also
 // when it is cancelled, which closing the bridge does). With
 // a sequence, findings on other sequences are left out and the rows
-// counted again. Every failing finding (warning or error) of the whole
-// project is kept as a qc comment (author {kind: qc, name: QC, role:
-// captions|loudness|picture|edit|media|render|document}, tags [area],
-// blocking only for errors, qcKey "qc:<code>:<entity>", or
-// "qc:<code>:<entity>@<seconds>" for picture.flashing and picture.black,
-// which are found once per stretch; at most 100 new
-// ones per check), opened again when it comes back, and resolved by QC
-// when a later check no longer finds it; commentId names that comment.
+// counted again.
 // One check runs at a time; another meanwhile is error {command: check}.
 // Proposals: several can wait at once (at most 8, newest first in the
 // snapshot's proposals); accepting one makes the others stale (they then
-// need a revise), and resolves the comments linked to it (resolvedRevision
-// = the revision it made). An earlier version's proposalId accepts that
+// need a revise). An earlier version's proposalId accepts that
 // version.
 // Rendering: preview {proposalId?, start?, duration?} renders the program,
 // or what that pending proposal would make of it, over start..start+duration
@@ -141,28 +126,15 @@ void kerf_bridge_free(void *bridge);
 // 50 finished), which is also sent
 // after every change of status. Closing the bridge stops the job rendering
 // and cancels the queued ones.
-// Paperwork: export_comments {format: csv|edl|markers, includeResolved
-// (default false), path?} and export_captions {format: srt|vtt, path?,
-// sequence? (the program when absent), track? (every enabled subtitle
-// track when absent)}. csv is the review log as a sheet (TC in, TC out,
-// Author, Kind, Body, Status, Tags; timecode of the program sequence); edl
-// is a CMX3600 EDL of the program with a * LOC: line for each sequence
-// marker and each kept comment that has a time (coloured by who wrote it);
-// open comments are kept, resolved ones too with includeResolved. Files go
-// to path (a file, or a folder for the default name; relative to the
-// project), else beside the newest finished master (<master> comments.csv,
-// <master>.edl, <master>.srt|vtt), else in deliveries/ named after the
-// project; they are written whole (through a temporary file) and replace an
-// earlier file of that name. The answer is export {status: completed, kind:
-// paperwork|captions, format, path} or export {status: failed, kind,
-// format, message} with error {message, command: export_comments|
-// export_captions, format}. markers is one edit adding a sequence marker
-// for each kept comment with a time (id note-<comment id>, name "Author:
-// body", note the body, colour red when blocking, else orange for QC, blue
-// for Kerf, purple for MCP agents, yellow for people, as long as the
-// comment's range); exporting again sets those markers rather than adding
-// more. It answers with the state, then export {status: completed, kind:
-// paperwork, format: markers, count}.
+// Captions: export_captions {format: srt|vtt, path?, sequence? (the
+// program when absent), track? (every enabled subtitle track when absent)}.
+// The file goes to path (a file, or a folder for the default name; relative
+// to the project), else beside the newest finished master (<master>.srt|vtt),
+// else in deliveries/ named after the project; it is written whole (through
+// a temporary file) and replaces an earlier file of that name. The answer is
+// export {status: completed, kind: captions, format, path} or export
+// {status: failed, kind, format, message} with error {message, command:
+// export_captions, format}.
 // Analysis: loudness {sequence?} measures the programme (or that sequence)
 // to EBU R128 off the GUI: loudness {status: running, progress, revision,
 // sequence?}, then loudness {status: ready, integrated (LUFS), lra (LU),
@@ -289,23 +261,17 @@ bool kerf_bridge_send(void *bridge, const char *json);
 // program time the reading reaches)} about 20 times a second while
 // playing, and once with every value null when playback stops (a pause
 // or the end of the program),
-// comments {items: [Comment], reviewRevision, comment? (the one a command
-// just wrote)}: the whole review log, sent on connecting, after every
-// change the editor or an agent turn makes, after a collab sync, and
-// whenever the snapshot's reviewRevision moves (notes from MCP agents and
-// Git merges). A Comment is {id, parent (the thread's root or null),
-// author {kind: kerf|mcp|person|qc, name, id?, role?}, at, duration (s on
-// the program sequence, or null), frame, body, tags, blocking, drawing,
-// proposal, steps, error, resolved, resolvedBy (an author or null),
-// resolvedRevision, qcKey, created (RFC 3339), revision, edited};
-// deleted comments are left out,
+// conversations {items: [{id, title, created, updated, archived, count}]}
+// (newest first), conversation {id, title, created, updated, archived,
+// items: [{id, kind: you|kerf, text, at, timecode?, steps?, seconds?,
+// error?, stopped?, proposal?}]},
 // viewer_reset,
 // preview {status: running|ready|live|required|unavailable|failed|stopped|
 // exited, progress?, message?, proposalId? (the proposal a rendered preview
-// shows)}, export (see Render queue and Paperwork above: {status: queued|
+// shows)}, export (see Render queue and Captions above: {status: queued|
 // running|completed|failed|cancelled, jobId, name, path, progress, quality,
-// codec, sequence?} for renders, {status, kind: paperwork|captions, format,
-// path|message, count?} for paperwork), render_queue {jobs}, loudness,
+// codec, sequence?} for renders, {status, kind: captions, format,
+// path|message} for captions), render_queue {jobs}, loudness,
 // media_info, media_index, look_saved, look_applied (see Analysis and
 // Effects presets above),
 // cloud {access: ready|unavailable|signedOut|unreachable|notIncluded|
@@ -322,10 +288,8 @@ bool kerf_bridge_send(void *bridge, const char *json);
 // version replaced, or null), versions: [{version, proposalId, baseRevision,
 // script, source?, documentDiff}] (oldest first, the current one included),
 // staged? (ISO 8601)}], proposalTimelines {proposalId: timeline} (every open
-// proposal, and its earlier versions made on this revision), reviewRevision
-// (changes whenever review/comments.jsonl does, here, from another client
-// such as an MCP agent, or on disk), revisionTime? (ISO 8601 of the current
-// revision)}. timeline.sequences lists every sequence: [{id, name, width,
+// proposal, and its earlier versions made on this revision), revisionTime?
+// (ISO 8601 of the current revision)}. timeline.sequences lists every sequence: [{id, name, width,
 // height, rate, fps, dropFrame, duration}]; timeline.tracks[] carry role
 // (the track's role or its kind's default), roleAssigned and syncLocked;
 // each keyframe carries frame (clip-relative, as edits send it back) beside

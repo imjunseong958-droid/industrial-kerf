@@ -271,7 +271,7 @@ fn presets_share_native_edit_code_and_apply_replacement_media_as_a_proposal() {
 }
 
 #[test]
-fn lists_the_four_tools_and_the_reference() {
+fn lists_the_tools_and_the_reference() {
     let directory = TempDir::new().unwrap();
     let router = router_on(directory.path(), None);
     let names = router
@@ -279,11 +279,11 @@ fn lists_the_four_tools_and_the_reference() {
         .into_iter()
         .map(|tool| tool.name)
         .collect::<Vec<_>>();
-    assert_eq!(names, ["look", "edit", "render", "note", "make"]);
+    assert_eq!(names, ["look", "edit", "render", "make"]);
     let agent = router.agent_tools();
     assert_eq!(
         agent.keys().collect::<Vec<_>>(),
-        ["edit", "look", "make", "note", "render"]
+        ["edit", "look", "make", "render"]
     );
     let server = McpServer::new(router);
     let initialized = server
@@ -666,33 +666,6 @@ fn render_runs_a_range_to_a_file() {
     assert!(Path::new(finished["output"].as_str().unwrap()).is_file());
     let invalid = error(&router, "render", json!({"quality": "best"}));
     assert_eq!(invalid["code"], "INVALID_ARGUMENTS");
-}
-
-#[test]
-fn a_blocking_note_holds_a_full_render_back_and_not_a_draft() {
-    let Some((_directory, router)) = router() else {
-        return;
-    };
-    let note = ok(
-        &router,
-        "note",
-        json!({"body": "The flare hides the logo", "at": "1s", "blocking": true}),
-    );
-    let id = note["comment"]["id"].as_str().unwrap();
-    let refused = error(&router, "render", json!({"quality": "full"}));
-    assert_eq!(refused["code"], "BLOCKING_NOTES", "{refused}");
-    let said = message(&refused);
-    assert!(
-        said.contains("\"The flare hides the logo\"")
-            && said.contains(" at 00:00:01:00")
-            && said.contains(id)
-            && said.contains("resolve it in the review"),
-        "{said}"
-    );
-    // A draft is a check, not a delivery.
-    let draft = ok(&router, "render", json!({"quality": "draft"}));
-    let finished = finish(&router, draft["job"].as_str().unwrap());
-    assert_eq!(finished["status"], "completed", "{finished}");
 }
 
 #[test]
@@ -2199,105 +2172,6 @@ fn an_mcp_clients_proposals_are_by_the_client_and_keep_their_versions() {
             .contains("at=00:00:00:00 dur=00:00:03:00"),
         "{v1}"
     );
-}
-
-#[test]
-fn the_note_tool_writes_a_comment_by_the_client() {
-    let Some((_directory, router)) = router() else {
-        return;
-    };
-    let server = served(&router, "codex-mcp-client");
-    let proposal = call(
-        &server,
-        "edit",
-        json!({"script": "trim c1 out -12f ripple"}),
-    );
-    let proposal_id = proposal["proposal"].as_str().unwrap().to_owned();
-    let before = router.runtime().get_state().unwrap();
-
-    let note = call(
-        &server,
-        "note",
-        json!({"body": "End card holds a beat long, trimmed 12 frames",
-               "at": "00:00:02:15", "duration": "15f", "proposal": proposal_id,
-               "tags": ["#pacing"], "blocking": false}),
-    );
-    let comment = &note["comment"];
-    assert_eq!(comment["author"]["kind"], "mcp", "{note}");
-    assert_eq!(comment["author"]["name"], "Codex");
-    assert_eq!(comment["author"]["id"], "codex-mcp-client");
-    assert_eq!(comment["author"]["role"], "MCP");
-    assert_eq!(comment["at"], 2.5);
-    assert_eq!(comment["duration"], 0.5);
-    assert_eq!(comment["frame"], 75);
-    assert_eq!(comment["proposal"], proposal_id.as_str());
-    assert_eq!(comment["tags"], json!(["pacing"]));
-    assert_eq!(note["timecode"], "00:00:02:15");
-    let root = comment["id"].as_str().unwrap().to_owned();
-
-    // A reply to the reply joins the thread.
-    let reply = call(
-        &server,
-        "note",
-        json!({"body": "Two frames earlier", "parent": root}),
-    );
-    let reply_id = reply["comment"]["id"].as_str().unwrap().to_owned();
-    let again = call(&server, "note", json!({"body": "Done", "parent": reply_id}));
-    assert_eq!(again["comment"]["parent"], root.as_str(), "{again}");
-
-    // The review log keeps all three; the document and the proposal are
-    // as they were, and the bridge sees the log change.
-    let log = router.runtime().comments().unwrap();
-    assert_eq!(log.items.len(), 3);
-    assert!(log.items.iter().all(|item| item.author.name == "Codex"));
-    let after = router.runtime().get_state().unwrap();
-    assert_eq!(after.revision, before.revision);
-    assert_eq!(after.document, before.document);
-    assert!(after.review_revision > before.review_revision);
-    assert_eq!(
-        after
-            .pending_proposal
-            .as_ref()
-            .map(|p| serde_json::to_value(p).unwrap()["freshness"].clone()),
-        before
-            .pending_proposal
-            .as_ref()
-            .map(|p| serde_json::to_value(p).unwrap()["freshness"].clone())
-    );
-
-    // The generated agent docs describe the tool.
-    let docs = router.generate_agent_docs().unwrap();
-    let protocol = std::fs::read_to_string(docs.directory.join("protocol.md")).unwrap();
-    assert!(protocol.contains("### `note`"), "{protocol}");
-    assert!(protocol.contains("## Proposals and notes"));
-
-    // Kerf's own agent notes as Kerf.
-    let kerf = router_on(router.directory(), None);
-    let own = ok(&kerf, "note", json!({"body": "Welcome"}));
-    assert_eq!(own["comment"]["author"]["kind"], "kerf");
-    assert_eq!(own["comment"]["at"], Value::Null);
-
-    for (arguments, code) in [
-        (json!({"body": "  "}), "INVALID_ARGUMENTS"),
-        (json!({"body": "x", "duration": "1s"}), "INVALID_ARGUMENTS"),
-        (json!({"body": "x", "at": "10s"}), "INVALID_ARGUMENTS"),
-        (
-            json!({"body": "x", "at": "1s", "duration": "0f"}),
-            "INVALID_ARGUMENTS",
-        ),
-        (json!({"body": "x", "parent": "c-nope"}), "UNKNOWN_COMMENT"),
-        (
-            json!({"body": "x", "proposal": "proposal-nope"}),
-            "UNKNOWN_PROPOSAL",
-        ),
-        (json!({"body": "x", "colour": "red"}), "INVALID_ARGUMENTS"),
-    ] {
-        assert_eq!(
-            error(&router, "note", arguments.clone())["code"],
-            code,
-            "{arguments}"
-        );
-    }
 }
 
 /// Lossless footage of `surfaces` through `shots`, and a project of one sequence that shows it.
@@ -3997,17 +3871,12 @@ fn a_making_is_asked_for_or_runs_as_the_persons_permissions_say() {
     assert!(asked["steps"][0]
         .as_str()
         .is_some_and(|step| step.starts_with("Kerf renders sequence s1 at 160x90")));
-    let requests = kerf_mcp::make_requests(router.runtime());
-    assert_eq!(requests.len(), 1);
-    assert_eq!(requests[0].0, "m9");
-    assert_eq!(requests[0].1.id, asked["comment"].as_str().unwrap());
+    // What the person is asked comes back for the agent to say.
+    let ask = asked["ask"].as_str().unwrap();
+    assert!(ask.starts_with("Asks to make m9, as take 1"), "{ask}");
     assert!(
-        requests[0]
-            .1
-            .body
-            .contains("the first take\n1. Kerf renders"),
-        "{}",
-        requests[0].1.body
+        ask.contains("the first take\n1. Kerf renders"),
+        "{ask}"
     );
     assert!(!dir.join("shots/open.takes/001.mp4").exists());
 
@@ -4137,9 +4006,6 @@ fn a_making_is_asked_for_or_runs_as_the_persons_permissions_say() {
     );
     assert!(ok(&router, "look", json!({})).get("toMake").is_none());
 
-    // A person's making answers what was asked.
-    kerf_mcp::answer_make_requests(router.runtime(), "m9");
-    assert!(kerf_mcp::make_requests(router.runtime()).is_empty());
     let unknown = error(&router, "make", json!({"job": "make-none"}));
     assert_eq!(unknown["code"], "UNKNOWN_JOB");
 }
@@ -4200,12 +4066,10 @@ fn an_agent_adds_to_the_cast_and_asks_for_several_takes() {
     let asked = ok(&router, "make", json!({"media": "m9", "rolls": 3}));
     assert_eq!(asked["status"], "asked", "{asked}");
     assert_eq!(asked["takes"], json!([1, 2, 3]));
-    let requests = kerf_mcp::make_requests(router.runtime());
+    let ask = asked["ask"].as_str().unwrap();
     assert!(
-        requests[0].1.body.contains("as takes 1 to 3")
-            && requests[0].1.body.contains("`kerf make m9 --rolls 3`"),
-        "{}",
-        requests[0].1.body
+        ask.contains("as takes 1 to 3") && ask.contains("`kerf make m9 --rolls 3`"),
+        "{ask}"
     );
     for rolls in [0, 9] {
         let refused = error(&router, "make", json!({"media": "m9", "rolls": rolls}));

@@ -515,12 +515,7 @@ fn proposals_wait_side_by_side_and_one_previews_in_place_of_the_program() {
     assert!(both["proposalTimelines"][&kerf_id].is_object());
     assert!(both["proposalTimelines"][&agent_id].is_object());
 
-    // A note about Kerf's proposal, then accepting it: the note is
-    // resolved at the revision the proposal made, and the other is stale.
-    editor.send(json!({"type": "comment_add", "body": "Take this one", "proposal": kerf_id}));
-    editor.expect("the note", |event| {
-        event["type"] == "comments" && event["comment"]["proposal"] == kerf_id.as_str()
-    });
+    // Accepting Kerf's proposal makes the other stale.
     editor.send(json!({"type": "accept", "proposalId": kerf_id, "revision": both["revision"]}));
     let accepted = editor.state("the accept", |snapshot| {
         snapshot["revision"].as_u64() > both["revision"].as_u64()
@@ -529,16 +524,6 @@ fn proposals_wait_side_by_side_and_one_previews_in_place_of_the_program() {
     let stale = proposal(&accepted, &agent_id).unwrap();
     assert_eq!(stale["status"], "pending");
     assert_eq!(stale["freshness"], "stale");
-    let resolved = editor.expect("the note resolved", |event| {
-        event["type"] == "comments"
-            && event["items"]
-                .as_array()
-                .is_some_and(|items| items.iter().any(|item| item["resolved"] == true))
-    });
-    assert_eq!(
-        resolved["items"][0]["resolvedRevision"],
-        accepted["revision"]
-    );
 
     // The agent revises its stale proposal: version 2 on the new revision.
     client

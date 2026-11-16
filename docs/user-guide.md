@@ -62,7 +62,8 @@ Import media with File ▸ Import Media… (⌘O).
 
 ## The window
 
-- **Conversation** on the left: you and Kerf, and every comment on the project.
+- **Conversation** on the left: you and Kerf, one conversation at a time, read
+  top to bottom.
 - **Picture** and **timeline** at the right, once there is a cut to show.
   ⌥⌘P and ⌥⌘T open and close them.
 - A first cut Kerf makes shows in the conversation as a card with its picture.
@@ -72,22 +73,26 @@ Import media with File ▸ Import Media… (⌘O).
 - **Media** (⌘1) opens over the conversation: the project's media, with Import.
 - The format picker in the timeline's strip switches the sequence between 16:9
   and 9:16 (⌥1, ⌥2).
-- The **sidebar** (⌥⌘S) has New conversation, your project folders and their
-  conversations, and at its foot your account, which opens Settings and
-  everything else.
+- The **sidebar** (⌥⌘S) has New conversation, a search, your project folders
+  and their conversations by date (Today, Yesterday, Previous 7 days, Older),
+  and at its foot your account, which opens Settings and everything else.
 
 ## Ask Kerf
 
 Ask in the conversation, or about one clip: select it and press ⌘J (Clip ▸ Ask
 Kerf…), Option-double-click it, or right-click ▸ Ask Kerf…. With a clip, choose
 **This clip** (only it changes; clips after it follow) or **Whole sequence**.
-Return sends; Shift+Return adds a line.
+Return sends; Shift+Return adds a line. The clock in the composer stamps the
+request with the playhead; its timecode in your message goes back there.
 
-While Kerf works, its steps fold under its reply, a blue cursor on the timeline
-shows where it is, and **Stop** ends the turn. With **Follow Kerf** on (⌥⌘F, the
-eye in the timeline's strip) the picture follows it.
+While Kerf works, **Working** under your request shows how long and the step it
+is on, light runs round the picture, a blue cursor on the timeline shows where
+it is, and **Stop** ends the turn. Once done it folds to "Worked for 1m 12s · 6
+steps", which opens to every step. With **Follow Kerf** on (⌥⌘F, the eye in the
+timeline's strip) the picture follows it. A turn that failed or was stopped
+says so, with **Ask again**.
 
-Kerf answers with a **proposal**, a card in its thread:
+Kerf answers with a **proposal**, a card under its answer:
 
 - The timeline shows it before anything changes: added or changed clips are
   outlined where they would land, removed ones struck through.
@@ -160,18 +165,21 @@ Kerf comes with no model. To have a recipe ask one, name the program that
 reaches it in `~/.kerf/models.json`; [shots.md](shots.md) has the format and
 what the program is handed.
 
-## Review with others
+## Conversations
 
-Every thread in the conversation is a comment kept beside the project
-(`review/comments.jsonl`), so notes travel with it and never get in the way of an
-edit.
+Every conversation is kept beside the project (`.kerf/conversations/`), with
+what Kerf did in each turn, and Kerf hears the earlier turns when you go on in
+one.
 
-- Add a note at the playhead, draw on the frame, @mention someone, and resolve a
-  thread when it is done. Filter by open threads, proposals, author or tag.
-- **Blocking notes** hold delivery back: the toolbar's Export with
-  Master and an agent's full render both refuse while one is open, and say which
-  note and where. A Draft still exports.
-- **Copy link** gives a `kerf://` link to a version and a timecode. On macOS,
+- **New conversation** starts another; a conversation is titled by its first
+  request, and double-clicking the title renames it.
+- Hover a conversation in the sidebar to **archive** or **delete** it; its menu
+  (right-click) also renames. Archived ones fold under **Archived**, and come
+  back when you write in them. Deleting asks first and cannot be undone.
+- A proposal staged elsewhere, by an agent over MCP or in another conversation,
+  waits at the end of the open one, to accept or reject.
+- A `kerf://` link to a version and a timecode (`kerf://sea/rev22@00:00:17:08`)
+  opens the project at that time. On macOS,
   on Windows with the installer, and on Linux with the `.deb` or once
   `install-desktop-entry.sh` has run, a clicked link opens the project there, in the Kerf you already have open
   if there is one.

@@ -120,12 +120,23 @@ private:
     QVariantAnimation m_pop;
 };
 
-// A chip over the picture: a pulsing dot and what Kerf is doing.
+// A chip over the picture: a pulsing dot and what is being done ("Kerf is
+// looking", "Kerf is cutting", "Making bridge-low · 0:12"), the dot in the
+// light's hue.
 class WorkChip final : public QWidget {
     Q_OBJECT
 public:
     explicit WorkChip(QWidget *parent = nullptr);
     QSize sizeHint() const override;
+    void setText(const QString &text);
+    QString text() const { return m_text; }
+    void setDot(QRgb dot);
+    QRgb dot() const { return m_dot; }
+    // Fades in or out over tokens::motion::edgeFade (simply there or gone under
+    // Reduce Motion); setVisible shows and hides it at once.
+    void setShown(bool shown);
+    // Shown, or on its way.
+    bool isShown() const { return !isHidden() && m_wanted; }
 
 protected:
     void paintEvent(QPaintEvent *event) override;
@@ -135,6 +146,12 @@ protected:
 private:
     QVariantAnimation m_pulse;
     int m_pulseStep = 0;
+    QString m_text = QStringLiteral("Kerf is looking");
+    QRgb m_dot = tokens::activity::kerf;
+    QVariantAnimation m_fade;
+    qreal m_level = 1.0;
+    bool m_wanted = true;
+    bool m_fadeArmed = false;
 };
 
 namespace moves {

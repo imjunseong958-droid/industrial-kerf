@@ -1,5 +1,5 @@
 //! Delivery through the editor's C ABI and a real kerfd: the render queue
-//! with a ProRes master and one that is refused, the paperwork beside it and
+//! with a ProRes master and one that is refused, captions beside it and
 //! captions that fail, programme loudness, what the media say of themselves,
 //! their index, and effects presets.
 //!
@@ -154,15 +154,6 @@ fn media(path: &Path) -> bool {
         .is_ok_and(|status| status.success())
 }
 
-fn markers(snapshot: &Value) -> Vec<Value> {
-    let document = snapshot["document"].as_str().unwrap_or_default();
-    document
-        .lines()
-        .filter(|line| line.trim_start().starts_with("marker "))
-        .map(|line| json!(line.trim()))
-        .collect()
-}
-
 #[test]
 fn a_master_renders_in_the_queue_and_its_paperwork_follows() {
     let project = Project::new("deliver");
@@ -209,15 +200,6 @@ fn a_master_renders_in_the_queue_and_its_paperwork_follows() {
     assert_eq!(index["type"], "media_index", "{index}");
     assert_eq!(index["ranges"].as_array().unwrap().len(), 2, "{index}");
     assert!(index["silences"][0][1].as_f64().unwrap() > 0.3, "{index}");
-
-    // A person's note at 0.5 s.
-    assert!(editor.send(json!({"type": "comment_add", "body": "Hold on the grey", "at": 0.5})));
-    editor.expect("the note", |event| {
-        event["type"] == "comments"
-            && event["items"]
-                .as_array()
-                .is_some_and(|items| items.len() == 1)
-    });
 
     // Three exports queue at once and render oldest first; the second is
     // cancelled before its turn or while it renders.
@@ -290,32 +272,6 @@ fn a_master_renders_in_the_queue_and_its_paperwork_follows() {
 
     // The paperwork goes beside the master.
     let folder = master_file.parent().unwrap().to_path_buf();
-    assert!(
-        editor.send(json!({"type": "export_comments", "format": "csv", "includeResolved": false}))
-    );
-    let csv = editor.expect("the sheet", |event| {
-        event["type"] == "export" && event["kind"] == "paperwork" && event["format"] == "csv"
-    });
-    assert_eq!(csv["status"], "completed", "{csv}");
-    assert_eq!(
-        PathBuf::from(csv["path"].as_str().unwrap()),
-        folder.join("Master comments.csv")
-    );
-    let sheet = fs::read_to_string(folder.join("Master comments.csv")).unwrap();
-    assert!(
-        sheet.contains("00:00:00:12") && sheet.contains("Hold on the grey"),
-        "{sheet}"
-    );
-    assert!(editor.send(json!({"type": "export_comments", "format": "edl"})));
-    let edl = editor.expect("the EDL", |event| {
-        event["type"] == "export" && event["kind"] == "paperwork" && event["format"] == "edl"
-    });
-    assert_eq!(edl["status"], "completed", "{edl}");
-    let text = fs::read_to_string(folder.join("Master.edl")).unwrap();
-    assert!(
-        text.contains("* LOC: 00:00:00:12 YELLOW") && text.contains("Hold on the grey"),
-        "{text}"
-    );
     assert!(editor.send(json!({"type": "export_captions", "format": "srt"})));
     let srt = editor.expect("the captions", |event| {
         event["type"] == "export" && event["kind"] == "captions"
@@ -342,19 +298,6 @@ fn a_master_renders_in_the_queue_and_its_paperwork_follows() {
         event["type"] == "error" && event["command"] == "export"
     });
     assert_eq!(refused["code"], "INVALID_RENDER_OUTPUT", "{refused}");
-
-    // Markers: one edit, and a second export sets the same marker again.
-    for _ in 0..2 {
-        assert!(editor.send(json!({"type": "export_comments", "format": "markers"})));
-        let marked = editor.expect("the markers", |event| {
-            event["type"] == "export" && event["format"] == "markers"
-        });
-        assert_eq!(marked["status"], "completed", "{marked}");
-        assert_eq!(marked["count"], 1);
-    }
-    let snapshot = editor.state("the marker", |snapshot| !markers(snapshot).is_empty());
-    assert_eq!(markers(&snapshot).len(), 1, "{:?}", markers(&snapshot));
-    assert!(markers(&snapshot)[0].as_str().unwrap().contains("note-"));
 
     // Loudness, then the same revision again at once.
     assert!(editor.send(json!({"type": "loudness"})));

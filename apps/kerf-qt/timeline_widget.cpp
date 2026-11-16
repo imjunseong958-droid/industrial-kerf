@@ -4,7 +4,9 @@
 #include "editor_theme.h"
 #include "icons.h"
 #include "media_artwork.h"
-#include "review_model.h"
+#include <QHideEvent>
+#include <QShowEvent>
+#include "proposal_model.h"
 
 #include <QAbstractAnimation>
 #include <QVariantAnimation>
@@ -334,24 +336,7 @@ void TimelineWidget::setSnapping(bool snapping) {
     emit snappingChanged(snapping);
 }
 
-// ---- review data ---------------------------------------------------------
-
-void TimelineWidget::setCommentMarks(const QList<CommentMark> &marks) {
-    const auto same = [](const CommentMark &a, const CommentMark &b) {
-        return a.id == b.id && a.at == b.at && a.end == b.end && a.ranged == b.ranged && a.circle == b.circle &&
-               a.current == b.current && a.resolved == b.resolved && a.name == b.name;
-    };
-    if (marks.size() == m_marks.size() && std::equal(marks.cbegin(), marks.cend(), m_marks.cbegin(), same)) return;
-    m_marks = marks;
-    const QPoint origin = stickyOrigin();
-    update(QRect(origin.x(), origin.y(), width(), kRulerHeight));
-}
-
-QRect TimelineWidget::commentMarkBounds(const QString &id) const {
-    for (const CommentMark &mark : m_marks)
-        if (mark.id == id) return commentMarkRect(mark, stickyOrigin().y()).toAlignedRect();
-    return {};
-}
+// ---- proposals ---------------------------------------------------------
 
 void TimelineWidget::setProposalBands(const QList<ProposalBand> &bands) {
     // The review changes often (a search keystroke, the pin order during
@@ -390,11 +375,11 @@ void TimelineWidget::rebuildBandIndex() {
     m_effectiveBands = m_bands;
     if (m_effectiveBands.isEmpty() && !m_proposal.isEmpty()) {
         // The snapshot's first pending proposal, without the review's author.
-        const QList<ReviewModel::ClipChange> changes = ReviewModel::diffTimelines(m_project, m_proposal);
+        const QList<ProposalModel::ClipChange> changes = ProposalModel::diffTimelines(m_project, m_proposal);
         ProposalBand band;
         band.id = m_proposal.value(QStringLiteral("proposalId")).toString();
         bool ranged = false;
-        for (const ReviewModel::ClipChange &change : changes) {
+        for (const ProposalModel::ClipChange &change : changes) {
             const double start = change.added ? change.newStart : change.removed ? change.oldStart : std::min(change.oldStart, change.newStart);
             const double end = change.added ? change.newEnd : change.removed ? change.oldEnd : std::max(change.oldEnd, change.newEnd);
             band.start = ranged ? std::min(band.start, start) : start;
@@ -814,8 +799,6 @@ bool TimelineWidget::event(QEvent *event) {
         }
     }
     if (inRuler(pos) && !inHeader(pos)) {
-        if (const int mark = commentMarkAt(pos); mark >= 0)
-            return show(m_marks.at(mark).name, timelineTimecode(m_marks.at(mark).at, m_fps), commentMarkRect(m_marks.at(mark), stickyOrigin().y()).toAlignedRect());
         for (const QJsonValue &value : m_project.value(QStringLiteral("markers")).toArray()) {
             const QJsonObject marker = value.toObject();
             const QRectF flag(markerRect(marker, stickyOrigin().y()).topLeft(), QSizeF(10, 10));
@@ -850,6 +833,158 @@ void TimelineWidget::setAgentCursor(double seconds) {
     if (seconds == m_agentCursor) return;
     m_agentCursor = seconds;
     update();
+}
+
+void TimelineWidget::setMediaActivity(const QHash<QString, activity::MediaActivity> &media) {
+    // The lanes hold what holds still: the outlines and the words of all but a
+    // making, whose stripes and clock are drawn over them.
+    const auto still = [](const QHash<QString, activity::MediaActivity> &states) {
+        QHash<QString, int> out;
+        for (auto it = states.cbegin(); it != states.cend(); ++it) out.insert(it.key(), int(it->state));
+        return out;
+    };
+    const bool lanes = still(media) != still(m_mediaActivity);
+    const QList<QRectF> before = makingClipRects();
+    m_mediaActivity = media;
+    if (lanes) {
+        invalidateLanes();
+        update();
+    } else {
+        for (const QRectF &rect : before + makingClipRects()) update(rect.toAlignedRect().adjusted(-1, -1, 1, 1));
+    }
+    followMakingTicks();
+}
+
+activity::MediaActivity TimelineWidget::clipActivity(const QString &clip) const {
+    for (const QJsonValue &track : m_project.value(QStringLiteral("tracks")).toArray())
+        for (const QJsonValue &value : track.toObject().value(QStringLiteral("clips")).toArray()) {
+            const QJsonObject object = value.toObject();
+            if (object.value(QStringLiteral("id")).toString() != clip) continue;
+            const ClipKind kind = clipKind(track.toObject(), object);
+            if (kind == ClipKind::Generator || kind == ClipKind::Caption) return {};
+            return m_mediaActivity.value(object.value(QStringLiteral("sourceId")).toString());
+        }
+    return {};
+}
+
+QString TimelineWidget::clipActivityLabel(const QString &clip) const { return activity::clipLabel(clipActivity(clip), activity::clock()); }
+
+bool TimelineWidget::makingTicks() const { return m_makingTicker && m_makingTicker->isActive(); }
+
+void TimelineWidget::followMakingTicks() {
+    const bool making = isVisible() && std::any_of(m_mediaActivity.cbegin(), m_mediaActivity.cend(), [](const activity::MediaActivity &a) {
+        return a.state == activity::MediaActivity::State::Making;
+    });
+    if (!making) {
+        if (m_makingTicker) m_makingTicker->stop();
+        return;
+    }
+    if (!m_makingTicker) {
+        m_makingTicker = new QTimer(this);
+        // Only the clips being made are drawn again, and only where they show.
+        connect(m_makingTicker, &QTimer::timeout, this, [this] {
+            const QRect view = viewportRect();
+            for (const QRectF &rect : makingClipRects()) {
+                const QRect shown = rect.toAlignedRect().intersected(view);
+                if (!shown.isEmpty()) update(shown);
+            }
+        });
+    }
+    // Under Reduce Motion the stripes hold still and only the clock goes on.
+    m_makingTicker->setInterval(ui::reducedMotion() ? tk::motion::clockFrame : tk::motion::stripeFrame);
+    if (!m_makingTicker->isActive()) m_makingTicker->start();
+}
+
+void TimelineWidget::showEvent(QShowEvent *event) {
+    QWidget::showEvent(event);
+    followMakingTicks();
+}
+
+void TimelineWidget::hideEvent(QHideEvent *event) {
+    QWidget::hideEvent(event);
+    if (m_makingTicker) m_makingTicker->stop();
+}
+
+QList<QRectF> TimelineWidget::makingClipRects() const {
+    QList<QRectF> rects;
+    bool any = false;
+    for (const activity::MediaActivity &a : m_mediaActivity) any = any || a.state == activity::MediaActivity::State::Making;
+    if (!any) return rects;
+    const QJsonObject &shown = m_previewId.isEmpty() || m_showsProposedCut ? m_project : m_previewTimeline;
+    const QJsonArray tracks = shown.value(QStringLiteral("tracks")).toArray();
+    for (int row = 0; row < m_rows.size(); ++row) {
+        const QJsonObject track = tracks.at(m_rows.at(row).track).toObject();
+        for (const QJsonValue &value : track.value(QStringLiteral("clips")).toArray()) {
+            const QJsonObject clip = value.toObject();
+            const auto found = m_mediaActivity.constFind(clip.value(QStringLiteral("sourceId")).toString());
+            if (found == m_mediaActivity.cend() || found->state != activity::MediaActivity::State::Making) continue;
+            const ClipKind kind = clipKind(track, clip);
+            if (kind == ClipKind::Generator || kind == ClipKind::Caption) continue;
+            rects << clipRect(row, clip.value(QStringLiteral("timelineStart")).toDouble(), clip.value(QStringLiteral("duration")).toDouble());
+        }
+    }
+    return rects;
+}
+
+void TimelineWidget::paintActivityLabel(QPainter &p, const QRectF &clip, const activity::MediaActivity &activity, qint64 now) {
+    using State = activity::MediaActivity::State;
+    const QString label = activity::clipLabel(activity, now);
+    if (label.isEmpty() || clip.width() < 24.0) return;
+    // Under the name, in the clip's body; in a clip too low for that, at the
+    // right of its name bar.
+    const QRectF body = clip.adjusted(0, kNameBarHeight, 0, 0);
+    const bool low = body.height() < 14.0;
+    const QFont font = tk::font(activity.state == State::Making ? tk::monoSmall : tk::meta);
+    const QFontMetricsF metrics(font);
+    const qreal width = std::min(clip.width() - 8.0, std::ceil(metrics.horizontalAdvance(label)) + 8.0);
+    if (width < 16.0) return;
+    const QRectF pill = low ? QRectF(clip.right() - 4.0 - width, clip.top() + 1.0, width, kNameBarHeight - 2.0)
+                            : QRectF(clip.left() + 4.0, std::round(body.center().y() - 8.0), width, 16.0);
+    p.save();
+    p.setClipRect(clip, Qt::IntersectClip);
+    p.setRenderHint(QPainter::Antialiasing, true);
+    p.setPen(Qt::NoPen);
+    p.setBrush(C(tk::activity::chip));
+    p.drawRoundedRect(pill, tk::radius::small, tk::radius::small);
+    p.setFont(font);
+    p.setPen(activity.state == State::Offline ? C(tk::neg)
+             : activity.state == State::NotMade ? C(tk::ink2)
+                                                : C(tk::activity::gpu));
+    p.drawText(pill.adjusted(4, 0, -4, 0), Qt::AlignVCenter | Qt::AlignLeft, metrics.elidedText(label, Qt::ElideRight, pill.width() - 8.0));
+    p.restore();
+}
+
+void TimelineWidget::paintMaking(QPainter &p, const QRect &dirty) {
+    if (makingClipRects().isEmpty()) return;
+    const qint64 now = activity::clock();
+    const qreal phase = activity::stripePhase(now);
+    // Over the lanes, under the headers and the ruler, which are drawn after.
+    const QPoint origin = stickyOrigin();
+    const QRect lanes(origin.x() + kTimelineLabelWidth, origin.y() + kRulerHeight, width(), height());
+    const QJsonObject &shown = m_previewId.isEmpty() || m_showsProposedCut ? m_project : m_previewTimeline;
+    const QJsonArray tracks = shown.value(QStringLiteral("tracks")).toArray();
+    p.save();
+    p.setClipRect(lanes, Qt::IntersectClip);
+    for (int row = 0; row < m_rows.size(); ++row) {
+        const QJsonObject track = tracks.at(m_rows.at(row).track).toObject();
+        for (const QJsonValue &value : track.value(QStringLiteral("clips")).toArray()) {
+            const QJsonObject clip = value.toObject();
+            const auto found = m_mediaActivity.constFind(clip.value(QStringLiteral("sourceId")).toString());
+            if (found == m_mediaActivity.cend() || found->state != activity::MediaActivity::State::Making) continue;
+            const ClipKind kind = clipKind(track, clip);
+            if (kind == ClipKind::Generator || kind == ClipKind::Caption) continue;
+            const QRectF rect = clipRect(row, clip.value(QStringLiteral("timelineStart")).toDouble(), clip.value(QStringLiteral("duration")).toDouble());
+            if (!rect.toAlignedRect().intersects(dirty)) continue;
+            p.save();
+            QPainterPath shape;
+            shape.addRoundedRect(rect, kClipRadius, kClipRadius);
+            p.setClipPath(shape, Qt::IntersectClip);
+            activity::paintStripes(p, rect.adjusted(0, kNameBarHeight, 0, 0), phase, C(tk::activity::gpuStripe));
+            p.restore();
+            paintActivityLabel(p, rect, found.value(), now);
+        }
+    }
+    p.restore();
 }
 
 void TimelineWidget::setFocusClips(const QSet<QString> &clips) {
@@ -1006,10 +1141,6 @@ void TimelineWidget::mousePressEvent(QMouseEvent *event) {
     }
     if (inHeader(pos)) return;
     if (inRuler(pos)) {
-        if (const int mark = commentMarkAt(pos); mark >= 0) {
-            emit commentMarkActivated(m_marks.at(mark).id);
-            return;
-        }
         beginScrub(event->position());
         return;
     }
@@ -1857,11 +1988,15 @@ void TimelineWidget::paintClip(QPainter &p, const QRect &visible, int row, const
             if (frame != m_artwork->frames.cend() && !frame->isNull()) poster = &frame.value();
         }
     }
+    using ActivityState = activity::MediaActivity::State;
+    const activity::MediaActivity making = card ? activity::MediaActivity() : m_mediaActivity.value(sourceId);
+    // With no file, a hole in the lane.
+    const bool absent = making.state == ActivityState::NotMade || making.state == ActivityState::Offline;
     QPainterPath shape;
     shape.addRoundedRect(rect, kClipRadius, kClipRadius);
     p.save();
     p.setRenderHint(QPainter::Antialiasing, true);
-    p.fillPath(shape, C(card ? tk::raised : tk::card));
+    p.fillPath(shape, C(card ? tk::raised : absent ? tk::well : tk::card));
     p.setRenderHint(QPainter::Antialiasing, false);
     p.setClipPath(shape, Qt::IntersectClip);
     // The source seconds under the clip's left edge and its right: a leading
@@ -1938,8 +2073,25 @@ void TimelineWidget::paintClip(QPainter &p, const QRect &visible, int row, const
     p.restore();
     if (audio && !card) paintGainBand(p, rect, clip);
     // Its outline: line2; the accent when an open proposal changes it; 1.5 ink when selected.
-    if (selected) ui::paintInsetLine(p, rect, kClipRadius, C(tk::ink), 1.5);
-    else ui::paintInsetLine(p, rect, kClipRadius, C(movedByProposal(id) ? tk::accent : tk::line2), 1.0);
+    // Waiting to be made or with no file, dashed; being made, amber.
+    const bool dashed = absent || making.state == ActivityState::Queued;
+    if (selected) {
+        ui::paintInsetLine(p, rect, kClipRadius, C(tk::ink), 1.5);
+    } else if (dashed) {
+        p.save();
+        p.setRenderHint(QPainter::Antialiasing, true);
+        QPen pen(making.state == ActivityState::Queued ? C(tk::activity::gpu) : C(tk::lineh), 1.0, Qt::CustomDashLine);
+        pen.setDashPattern({3, 3});
+        p.setPen(pen);
+        p.setBrush(Qt::NoBrush);
+        p.drawRoundedRect(rect.adjusted(0.5, 0.5, -0.5, -0.5), kClipRadius - 0.5, kClipRadius - 0.5);
+        p.restore();
+    } else {
+        ui::paintInsetLine(p, rect, kClipRadius,
+                           C(making.state == ActivityState::Making ? tk::activity::gpu : movedByProposal(id) ? tk::accent : tk::line2), 1.0);
+    }
+    // What holds still is said here; a making's clock goes on over the lanes.
+    if (dashed) paintActivityLabel(p, rect, making, 0);
     // The edge under the pointer, or the edge being trimmed.
     int edge = 0;
     if (dragged) edge = m_dragLeading ? -1 : m_dragTrailing ? 1 : 0;
@@ -1993,33 +2145,8 @@ QRectF TimelineWidget::markerRect(const QJsonObject &marker, int top) const {
     return QRectF(x - 5.0, top + 1.0, std::max<qreal>(end - x, 0.0) + 10.0, 10.0);
 }
 
-QRectF TimelineWidget::commentMarkRect(const CommentMark &mark, int top) const {
-    const qreal x = std::round(timeToX(mark.at));
-    const qreal end = mark.ranged ? std::round(timeToX(mark.end)) : x;
-    return QRectF(x - 5.0, top + 1.0, std::max<qreal>(end - x, 0.0) + 10.0, 10.0);
-}
-
 QRectF TimelineWidget::bandRect(const ProposalBand &band, int top) const {
     return QRectF(std::round(timeToX(band.start)), top, std::round((band.end - band.start) * pixelsPerSecond()), kRulerMarkerRow);
-}
-
-int TimelineWidget::commentMarkAt(const QPoint &point) const {
-    const int top = stickyOrigin().y();
-    // The dot first (the nearest), then a range's bar.
-    int best = -1;
-    qreal nearest = 1e9;
-    for (int index = 0; index < m_marks.size(); ++index) {
-        const qreal x = std::round(timeToX(m_marks.at(index).at));
-        const QRectF dot(x - 5.0, top + 1.0, 10.0, 10.0);
-        if (dot.adjusted(-1, -1, 1, 1).contains(point) && std::abs(point.x() - x) < nearest) {
-            nearest = std::abs(point.x() - x);
-            best = index;
-        }
-    }
-    if (best >= 0) return best;
-    for (int index = 0; index < m_marks.size(); ++index)
-        if (m_marks.at(index).ranged && commentMarkRect(m_marks.at(index), top).contains(point)) return index;
-    return -1;
 }
 
 int TimelineWidget::bandAt(const QPoint &point) const {
@@ -2037,25 +2164,6 @@ void TimelineWidget::paintMarkerRow(QPainter &p, const QRect &dirty, int top) {
     }
     p.setRenderHint(QPainter::Antialiasing, true);
     p.setPen(Qt::NoPen);
-    const double pps = pixelsPerSecond();
-    for (const CommentMark &mark : std::as_const(m_marks)) {
-        const qreal x = std::round(timeToX(mark.at));
-        if (mark.ranged) {
-            const QRectF bar(x, top + 5.0, std::round((mark.end - mark.at) * pps), 2.0);
-            if (bar.toAlignedRect().adjusted(-1, -1, 1, 1).intersects(dirty)) {
-                p.setOpacity(mark.resolved ? 0.35 : 1.0);
-                p.setBrush(C(mark.current ? tk::accent : tk::ink3));
-                p.drawRoundedRect(bar, 1.0, 1.0);
-            }
-        }
-        const QRectF dot(x - 5.0, top + 1.0, 10.0, 10.0);
-        if (!dot.toAlignedRect().adjusted(-1, -1, 1, 1).intersects(dirty)) continue;
-        p.setOpacity(mark.resolved ? 0.4 : 1.0);
-        p.setBrush(C(mark.current ? tk::ink : tk::ink3));
-        if (mark.circle) p.drawEllipse(dot);
-        else p.drawRoundedRect(dot, 3.0, 3.0);
-    }
-    p.setOpacity(1.0);
     // Sequence markers: a flag on their frame.
     p.setBrush(C(tk::ink2));
     for (const QJsonValue &value : m_project.value(QStringLiteral("markers")).toArray()) {
@@ -2242,6 +2350,9 @@ void TimelineWidget::paintOverlay(QPainter &p, const QRect &dirty) {
     const bool skimming = m_hasSkimmer && !m_dragging && !m_scrubbing;
     const int laneTop = origin.y() + kRulerHeight;
     const int playX = static_cast<int>(std::floor(timeToX(m_playhead)));
+    p.setRenderHint(QPainter::Antialiasing, false);
+    // Clips being made, under the playhead.
+    paintMaking(p, dirty);
     p.setRenderHint(QPainter::Antialiasing, false);
     // The playhead, over the clips.
     p.fillRect(QRect(playX, laneTop, 1, height() - laneTop), C(tk::playhead));

@@ -4,7 +4,7 @@
 
 use crate::kernel::{self, CachedFacts, Edit, Edited};
 use crate::render::{render_cancel_path, render_name, render_output, Encoding};
-use crate::review::{self, Review};
+use crate::author::timestamp;
 use crate::store::{
     append_journal_record, inspect_projection, load_checkpoint, load_journal,
     preserve_previous_state, projection_digest, projection_matches, seal_journal_record,
@@ -151,8 +151,6 @@ struct Runtime {
     journal_records_since_checkpoint: u64,
     projection_status: ProjectionStatus,
     projection_digest: Option<String>,
-    /// The review log beside the project; never part of its state.
-    review: Review,
 }
 
 pub(crate) fn runtime_actor(
@@ -252,7 +250,6 @@ impl Runtime {
                 journal_records_since_checkpoint: 0,
                 projection_status: ProjectionStatus::Missing,
                 projection_digest: checkpoint.projection_digest,
-                review: Review::open(directory),
             }
         } else {
             let project = load_bootstrap_project(directory)?;
@@ -276,7 +273,6 @@ impl Runtime {
                 journal_records_since_checkpoint: 0,
                 projection_status: ProjectionStatus::Missing,
                 projection_digest: None,
-                review: Review::open(directory),
             }
         };
         bound_receipts(
@@ -377,6 +373,7 @@ impl Runtime {
                 self.project_path.parent().unwrap_or(Path::new("")),
             ),
             revision: state.revision,
+            review_revision: 0,
             can_undo: !state.past.is_empty(),
             can_redo: !state.future.is_empty(),
             pending_proposal: state
@@ -404,7 +401,6 @@ impl Runtime {
                 .iter()
                 .map(|record| proposal_entry(record, state.revision))
                 .collect(),
-            review_revision: self.review.revision(),
             revision_time: state.revision_time.clone(),
         }
     }
@@ -471,7 +467,7 @@ impl Runtime {
         );
         let revised = candidate.revision != self.state.revision;
         if revised && candidate.revision_time == self.state.revision_time {
-            candidate.revision_time = Some(review::timestamp());
+            candidate.revision_time = Some(timestamp());
         }
         let project_changed = candidate.project != self.state.project;
         if project_changed {
@@ -639,7 +635,7 @@ impl Runtime {
         let (mut candidate, change) =
             self.edit_candidate(edit.run(&self.state.project, &self.facts())?);
         candidate.proposals = proposals;
-        candidate.revision_time = Some(review::timestamp());
+        candidate.revision_time = Some(timestamp());
         if let Some(index) = accepted {
             let snapshot = Arc::new(self.snapshot_of(&candidate));
             if let Some(proposal) = candidate.proposals.get_mut(index) {
@@ -811,7 +807,7 @@ impl Runtime {
                 version,
                 supersedes,
                 versions,
-                staged: Some(review::timestamp()),
+                staged: Some(timestamp()),
             }),
         };
         let mut candidate = self.state.clone();
@@ -825,8 +821,7 @@ impl Runtime {
     }
 
     /// Apply a previously staged proposal, or one of its earlier versions,
-    /// as exactly one canonical request. The other open proposals go stale,
-    /// and the comments about this one are resolved.
+    /// as exactly one canonical request. The other open proposals go stale.
     pub fn accept_proposal(
         &mut self,
         proposal_id: &str,
@@ -870,7 +865,7 @@ impl Runtime {
                     receipt: None,
                     meta: Some(proposal_meta(&record)),
                 };
-                let state = self.apply_edit_request(
+                self.apply_edit_request(
                     actor,
                     key,
                     Edit::Script {
@@ -879,23 +874,7 @@ impl Runtime {
                     base_revision,
                     proposals,
                     Some(index),
-                )?;
-                let accepted = self.state.proposals.get(index).is_some_and(|record| {
-                    matches!(&record.lifecycle, PendingProposal::Accepted { proposal_id: id, .. } if id == proposal_id)
-                });
-                if !accepted {
-                    return Ok(state);
-                }
-                let by = (actor == "ui").then(|| self.local_person()).flatten();
-                match self
-                    .review
-                    .resolve_proposal(&proposal_ids(&record), state.revision, by)
-                {
-                    Ok(true) => Ok(self.snapshot()),
-                    // The edit is committed; a review log that cannot be
-                    // written leaves its comments open, never the edit undone.
-                    Ok(false) | Err(_) => Ok(state),
-                }
+                )
             }
             PendingProposal::Accepted {
                 proposal_id: current_id,
@@ -935,14 +914,6 @@ impl Runtime {
     }
 
     /// The person this machine's Git names, who accepts in the editor.
-    fn local_person(&self) -> Option<Author> {
-        let user = kerf_collab::git::user(self.directory())?;
-        Some(Author {
-            id: user.email,
-            ..Author::new("person", user.name)
-        })
-    }
-
     /// Reject a proposal, every version of it, without changing canonical
     /// project state, revision, or undo/redo history.  Rejection is
     /// represented as a terminal receipt so a repeated request is a
@@ -1228,16 +1199,6 @@ impl Runtime {
         } = options;
         let (proposal, sequence) = (proposal.as_deref(), sequence.as_deref());
         let encoding = Encoding::new(&quality, codec.as_deref())?;
-        // A delivery waits for the blocking notes, as Deliver does; a draft
-        // or a review copy does not.
-        if matches!(encoding.quality, "full" | "master") {
-            if let Some(refusal) = review::delivery_held(
-                self.review.comments(),
-                self.state.project.sequences.first(),
-            ) {
-                return Err(refusal);
-            }
-        }
         let name = render_name(name.as_deref())?;
         let proposed = proposal.map(|id| self.proposal_result(id)).transpose()?;
         let project = proposed.as_ref().unwrap_or(&self.state.project);
@@ -1623,7 +1584,6 @@ impl Runtime {
 
     fn execute(&mut self, request: RuntimeRequest) -> Result<RuntimeResponse, RuntimeError> {
         self.refresh_projection_status();
-        self.review.refresh();
         // Looks another process added, as an applied preset's, join the
         // catalog edits are checked with; one that does not read leaves the
         // catalog as it was, and edits that use it say so.
@@ -1673,26 +1633,6 @@ impl Runtime {
                 &author.unwrap_or_else(Author::kerf),
                 revises.as_deref(),
             )?)),
-            RuntimeRequest::ListComments => Ok(RuntimeResponse::Comments {
-                log: self.review.log(),
-                comment: None,
-            }),
-            RuntimeRequest::AddComment { actor, comment } => {
-                let comment =
-                    self.review
-                        .add(&actor, comment, &self.state.project, self.state.revision)?;
-                Ok(RuntimeResponse::Comments {
-                    log: self.review.log(),
-                    comment: Some(comment),
-                })
-            }
-            RuntimeRequest::SetComment { actor, id, patch } => {
-                let comment = self.review.set(&actor, &id, patch, self.state.revision)?;
-                Ok(RuntimeResponse::Comments {
-                    log: self.review.log(),
-                    comment,
-                })
-            }
             RuntimeRequest::GetProposalDocuments { proposal_id } => {
                 let (before, after) = self.proposal_documents(&proposal_id)?;
                 Ok(RuntimeResponse::ProposalDocuments { before, after })

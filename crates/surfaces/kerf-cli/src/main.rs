@@ -827,7 +827,6 @@ fn run_make(directory: &Path, kerfd: Option<&Path>, id: &str, yes: bool, rolls: 
             state.revision
         );
     }
-    kerf_mcp::answer_make_requests(&runtime, id);
     match ended {
         Some(error) => Err(anyhow!(
             "{} of the {rolls} takes were made, and the next was not: {error}",
@@ -1058,13 +1057,6 @@ fn run_proposals(directory: &Path, kerfd: Option<&Path>, id: Option<&str>) -> Re
     }
     for proposal in waiting {
         println!("{}", proposal_line(proposal, state.revision));
-    }
-    // What an agent asked to have made, which only a person runs here.
-    for (media, comment) in kerf_mcp::make_requests(&runtime) {
-        println!(
-            "{media} to make, asked by {} in comment {}: `kerf make {media}` shows its plan",
-            comment.author.name, comment.id
-        );
     }
     Ok(())
 }
