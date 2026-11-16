@@ -360,8 +360,9 @@ a row each, with its words and its pictures. Add Picture… names a picture of
 the project as it is, and copies one from elsewhere into the project's
 `refs` folder. Save writes the file, and says which shots want making for
 the change; the dialog shows which want making already. Saving from the
-editor writes the file anew, so comments written into it by hand are not
-kept. In the bin, a shot's Make from Recipe… says who it shows.
+editor keeps what was written into the file by hand: its comments and empty
+lines stay where they are, a line that is unchanged stays as it was written,
+and a new one follows what the file holds. In the bin, a shot's Make from Recipe… says who it shows.
 
 ## Models
 
