@@ -239,11 +239,71 @@ impl Cast {
         text
     }
 
-    /// Write the cast as the cast file of the project in `directory`, in place of the one
-    /// there. A file's comments are not kept.
+    /// The cast as a file that held `was` says it: what a person wrote there that is not one
+    /// of the cast, its comments and the lines left empty, stays where it is. One the file
+    /// has stays on its line, as it was written where it is unchanged; one it has no more
+    /// leaves its line; and one it had not follows what the file holds.
+    fn text_over(&self, was: &str) -> String {
+        let mut text = String::new();
+        let mut headed = false;
+        let mut kept = Vec::new();
+        for written in was.lines() {
+            let trimmed = written.trim();
+            let keep = if trimmed.is_empty() || trimmed.starts_with('#') {
+                Some(written.to_owned())
+            } else if !headed {
+                if trimmed != HEADER {
+                    // Not a cast file: there is nothing of it to keep.
+                    return self.text();
+                }
+                headed = true;
+                Some(written.to_owned())
+            } else {
+                // A line that does not read is not one of the cast, and is not kept.
+                let had = Self::parse(&format!("{HEADER}\n{trimmed}\n"))
+                    .ok()
+                    .and_then(|one| one.entries.into_iter().next());
+                had.and_then(|(kind, name, had)| {
+                    let entry = self.find(kind, &name)?;
+                    if kept.contains(&(kind, name.clone())) {
+                        return None;
+                    }
+                    let kept_line = if *entry == had {
+                        written.to_owned()
+                    } else {
+                        line(kind, &name, entry)
+                    };
+                    kept.push((kind, name));
+                    Some(kept_line)
+                })
+            };
+            if let Some(keep) = keep {
+                text.push_str(&keep);
+                text.push('\n');
+            }
+        }
+        if !headed {
+            return self.text();
+        }
+        for (kind, name, entry) in &self.entries {
+            if !kept.contains(&(*kind, name.clone())) {
+                text.push_str(&line(*kind, name, entry));
+                text.push('\n');
+            }
+        }
+        text
+    }
+
+    /// Write the cast as the cast file of the project in `directory`. The comments of the
+    /// file there are kept, and so is the order it says its cast in.
     pub fn write(&self, directory: &Path) -> Result<()> {
+        let file = directory.join(FILE);
+        let text = match std::fs::read_to_string(&file) {
+            Ok(was) => self.text_over(&was),
+            Err(_) => self.text(),
+        };
         forget();
-        std::fs::write(directory.join(FILE), self.text())
+        std::fs::write(file, text)
             .map_err(|error| EngineError::msg(format!("cannot write `{FILE}`: {error}")))
     }
 

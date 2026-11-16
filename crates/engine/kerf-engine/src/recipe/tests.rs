@@ -1733,6 +1733,41 @@ fn a_cast_is_written_as_it_reads_and_added_to_without_changing_what_is_there() {
     said.write(directory).unwrap();
     assert_eq!(Cast::read(directory).unwrap(), said);
     assert_eq!(Cast::parse(&said.text()).unwrap(), said);
+    // Written over a file, what a person wrote there that is not the cast stays: its
+    // comments and empty lines where they are, and a line that is unchanged as it was
+    // written. One taken out leaves its line, and a new one follows what the file holds.
+    assert_eq!(
+        std::fs::read_to_string(directory.join("cast.kerfcast")).unwrap(),
+        "kerf-cast 1\n# The keeper.\ncast Ada \"an old keeper, \\\"the last\\\"\" ref=\"refs/ada front.png\"\nstyle film \"35mm\"\n"
+    );
+    std::fs::write(
+        directory.join("cast.kerfcast"),
+        "# A lighthouse.\nkerf-cast 1\n\n# Who.\ncast   Ada \"an old keeper\"\n  # Gone soon.\ncast gull \"a herring gull\"\n\n# How.\nstyle film \"35mm\"\n",
+    )
+    .unwrap();
+    let entry = |words: &str| Entry {
+        words: words.to_owned(),
+        references: Vec::new(),
+    };
+    let set = Cast::of_entries([
+        (Kind::Cast, "Ada".to_owned(), entry("an old keeper")),
+        (Kind::Style, "film".to_owned(), entry("16mm")),
+        (Kind::Cast, "lamp".to_owned(), entry("a lamp room")),
+    ])
+    .unwrap();
+    set.write(directory).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(directory.join("cast.kerfcast")).unwrap(),
+        "# A lighthouse.\nkerf-cast 1\n\n# Who.\ncast   Ada \"an old keeper\"\n  # Gone soon.\n\n# How.\nstyle film \"16mm\"\ncast lamp \"a lamp room\"\n"
+    );
+    assert_eq!(Cast::read(directory).unwrap(), set);
+    // A file that is not a cast file has nothing to keep.
+    std::fs::write(directory.join("cast.kerfcast"), "# Notes.\nnot a cast\n").unwrap();
+    set.write(directory).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(directory.join("cast.kerfcast")).unwrap(),
+        set.text()
+    );
     // One that says nothing, or two of a name, is refused as a file's line is.
     let nothing = Cast::of_entries([(Kind::Cast, "Ada".to_owned(), Entry::default())]);
     assert!(nothing
