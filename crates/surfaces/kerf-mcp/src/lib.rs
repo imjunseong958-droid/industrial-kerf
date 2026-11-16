@@ -395,6 +395,25 @@ impl KerfMcpRouter {
 const DOCUMENT_URI: &str = "kerf://document";
 const REFERENCE_URI: &str = "kerf://reference";
 
+/// Serve the project in `directory` to the MCP client on this process's stdin and stdout,
+/// until it closes stdin. It is what the `kerf-mcp` program does, and what the editor does
+/// when it is run as one.
+pub fn serve_stdio(directory: &Path, kerfd: Option<&Path>) -> Result<(), String> {
+    let router = KerfMcpRouter::new(directory, kerfd)?.held();
+    let served = McpServer::new(router.clone())
+        .serve(
+            std::io::BufReader::new(std::io::stdin().lock()),
+            std::io::BufWriter::new(std::io::stdout().lock()),
+        )
+        .map_err(|error| error.to_string());
+    // The client closed stdin: nobody is left to read a render's job, so
+    // stop the ones still running rather than orphan their ffmpeg.
+    router.finish_renders(true);
+    // The same of a making, whose model's program then takes back what it asked a server for.
+    router.finish_makings(true);
+    served
+}
+
 /// MCP JSON-RPC server over newline-delimited stdin/stdout.
 pub struct McpServer {
     router: KerfMcpRouter,

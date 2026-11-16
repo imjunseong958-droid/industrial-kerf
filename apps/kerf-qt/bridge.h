@@ -392,6 +392,10 @@ char *kerf_update_check(void);
 // and the CLI do, and every crash of its native code too: a bad memory
 // access, or an abort (signals on macOS and Linux; an unhandled-exception
 // filter and SIGABRT on Windows). Call once, before any other thread starts.
+// Kerf's tools over MCP on stdin and stdout, as kerf-mcp serves them, when the
+// arguments (without the program's name) begin with --serve-mcp --dir <project>:
+// returns the status to exit with, or -1 when they do not and the editor starts.
+int kerf_serve_mcp(int count, const char *const *arguments);
 void kerf_crash_install(void);
 // Report `message` now as what ends the editor, as Qt's fatal messages do
 // before Qt aborts; the abort then adds no second report. Nothing is written

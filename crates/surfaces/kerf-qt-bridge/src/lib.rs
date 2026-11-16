@@ -34,7 +34,7 @@ use kerf_playback::{PlaybackConfig, PlaybackEvent, PlaybackFrame, PlaybackSessio
 use kerf_runtime::{RuntimeClient, StateSnapshot};
 use serde::Deserialize;
 use serde_json::{json, Value};
-use std::ffi::{c_char, c_void, CStr, CString};
+use std::ffi::{c_char, c_int, c_void, CStr, CString};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender};
@@ -2678,6 +2678,51 @@ fn about() -> Value {
 #[no_mangle]
 pub extern "C" fn kerf_update_check() -> *mut c_char {
     owned_json(updates::check())
+}
+
+// ---- Kerf's tools, served by the editor ------------------------------------------
+
+/// Serve Kerf's tools over MCP on stdin and stdout, as `kerf-mcp` does, when `arguments` (the
+/// program's, without its name) begin with `--serve-mcp`: Claude Code is given the editor to
+/// run this way where no `kerf-mcp` is found. Returns the status to exit with, or -1 when the
+/// arguments ask for no such thing and the editor should start.
+///
+/// # Safety
+/// `arguments` must point to `count` NUL-terminated strings.
+#[no_mangle]
+pub unsafe extern "C" fn kerf_serve_mcp(count: c_int, arguments: *const *const c_char) -> c_int {
+    let arguments: Vec<String> = (0..usize::try_from(count).unwrap_or(0))
+        .map(|index| {
+            CStr::from_ptr(*arguments.add(index))
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
+    let Some(directory) = served_directory(&arguments) else {
+        return -1;
+    };
+    kerf_engine::sidecar::forward_termination_signals();
+    let kerfd = std::env::var_os("KERFD_BIN").map(PathBuf::from);
+    match directory.and_then(|directory| kerf_mcp::serve_stdio(&directory, kerfd.as_deref())) {
+        Ok(()) => 0,
+        Err(error) => {
+            eprintln!("kerf-qt {}: {error}", claude_code::SERVE_MCP);
+            1
+        }
+    }
+}
+
+/// The project `--serve-mcp --dir <project>` names; `None` when the arguments do not ask the
+/// editor to serve.
+fn served_directory(arguments: &[String]) -> Option<Result<PathBuf, String>> {
+    let (first, rest) = arguments.split_first()?;
+    if first != claude_code::SERVE_MCP {
+        return None;
+    }
+    Some(match rest {
+        [option, directory] if option == "--dir" => Ok(directory.into()),
+        _ => Err("expected --dir <project-directory>".into()),
+    })
 }
 
 // ---- crash reports ---------------------------------------------------------------

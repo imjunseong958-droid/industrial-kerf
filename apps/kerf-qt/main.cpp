@@ -45,6 +45,8 @@ kerf::MainWindow *openEditor(const QString &project, const QString &kerfd, const
 } // namespace
 
 int main(int argc, char **argv) {
+    // Run as Kerf's tools for Claude Code (--serve-mcp): no application, no window.
+    if (const int served = kerf_serve_mcp(argc - 1, argv + 1); served >= 0) return served;
 #ifdef Q_OS_MACOS
     // Before any thread starts, and for every tool the editor and kerfd run.
     qputenv("PATH", kerf::pathWithToolFolders(qEnvironmentVariable("PATH"), QDir::homePath()).toLocal8Bit());
