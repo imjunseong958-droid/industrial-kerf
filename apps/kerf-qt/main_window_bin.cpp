@@ -537,7 +537,7 @@ QString MainWindow::makeQuestion(const QJsonObject &plan) {
     if (!notes.isEmpty()) notes = QStringLiteral("\n\nBefore you run it:%1").arg(notes);
     // The shot goes by its recipe's name, as in the bin, not by its id.
     const QString recipe = plan.value(QStringLiteral("recipe")).toString();
-    const QString media = recipe.isEmpty() ? plan.value(QStringLiteral("media")).toString() : QFileInfo(recipe).completeBaseName();
+    const QString media = recipe.isEmpty() ? plan.value(QStringLiteral("media")).toString() : recipeShotName(recipe);
     // A recipe is commands someone wrote, perhaps someone else: show every step.
     const int rolls = plan.value(QStringLiteral("rolls")).toInt(1);
     if (rolls > 1) {

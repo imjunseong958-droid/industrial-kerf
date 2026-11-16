@@ -110,6 +110,9 @@ QString clipName(const QJsonObject &clip);
 // kerf-collab's media.rs). sourceFileName keeps the extension.
 QString sourceName(const QJsonObject &source);
 QString sourceFileName(const QJsonObject &source);
+// A made shot's name, from its recipe's path: "shots/open@2.kerfrecipe", the recipe's
+// next version, is still "open".
+QString recipeShotName(const QString &recipe);
 // Every source's name by id, told apart where they would read the same:
 // two media named "Beach Day" are "Beach Day.mov" and "Beach Day.wav", and
 // two "Interview.mov" keep their copies' names, hash and all, so the bin,

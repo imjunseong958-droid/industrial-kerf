@@ -190,6 +190,11 @@ private slots:
         // A made shot is its take's file, which every shot numbers alike: it goes by its recipe.
         QCOMPARE(sourceName(QJsonObject{{"path", "shots/boat.takes/001.mp4"}, {"recipe", "shots/boat.kerfrecipe"}}),
                  QStringLiteral("boat"));
+        // Its recipe's next version is the same shot.
+        QCOMPARE(sourceName(QJsonObject{{"path", "shots/boat.takes/002.mp4"}, {"recipe", "shots/boat@2.kerfrecipe"}}),
+                 QStringLiteral("boat"));
+        QCOMPARE(recipeShotName(QStringLiteral("shots/bridge-wide@12.kerfrecipe")), QStringLiteral("bridge-wide"));
+        QCOMPARE(recipeShotName(QStringLiteral("shots/at@home.kerfrecipe")), QStringLiteral("at@home"));
         QCOMPARE(sourceFileName(QJsonObject{{"path", "media/Beach Day-1a2b3c4d.mov"}}), QStringLiteral("Beach Day.mov"));
         QCOMPARE(sourceFileName(QJsonObject{{"path", "media/notes-1a2b3c4d"}}), QStringLiteral("notes"));
         // Media that would read alike is told apart: by extension first,
