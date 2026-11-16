@@ -33,6 +33,9 @@ on `main`; its section here becomes the release's notes on GitHub
   Delete refuses because it would cut a clip on another track.
 - A Draft export goes to `deliveries/` as `<project>_draft`, beside the
   master, instead of the project's top folder under its job's id.
+- `kerf-comfy` passes over an FFmpeg that is there but does not start, as
+  Kerf does, so a Homebrew `ffmpeg-full` an upgrade broke no longer fails
+  every making while a working FFmpeg is on `PATH`.
 
 ## 0.1.2
 
