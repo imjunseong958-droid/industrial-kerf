@@ -1,8 +1,9 @@
 #pragma once
 
 #include "editor_common.h"
-#include "review_model.h"
+#include "proposal_model.h"
 #include "test_friends.h"
+#include "ui/activity.h"
 
 #include <QAction>
 #include <QSet>
@@ -49,13 +50,12 @@ class EditorBus;
 // The regions' wiring (ui/wiring/<region>_wiring.h), each a friend that holds
 // its region's own state.
 class BinWiring;
-class ReviewWiring;
+class ChatWiring;
 class StageWiring;
 class TimelineWiring;
 class ToolbarWiring;
 struct ProposalChange;
 struct CutPicture;
-class CommentRow;
 class CommandRegistry;
 class ExportButton;
 class FormatBank;
@@ -89,7 +89,7 @@ class MainWindow final : public QMainWindow {
     Q_OBJECT
     KERF_TEST_FRIENDS
     friend class BinWiring;
-    friend class ReviewWiring;
+    friend class ChatWiring;
     friend class StageWiring;
     friend class TimelineWiring;
     friend class ToolbarWiring;
@@ -226,7 +226,8 @@ private:
     bool showProgramFrame(const KerfFrame &frame);
     void buildUi();
     // The regions' parts of buildUi, each in its region's file.
-    void buildReview();
+    void buildChat();
+    bool confirmDeleteConversation(const QString &title);
     void buildStage();
     // The picture's mask tools (main_window_stage.cpp).
     void buildMaskTools();
@@ -394,7 +395,7 @@ private:
     QMenu *binMenu(const QString &mediaId);
 
     EditorBus *m_bus = nullptr;
-    std::unique_ptr<ReviewWiring> m_reviewWiring;
+    std::unique_ptr<ChatWiring> m_chatWiring;
     std::unique_ptr<StageWiring> m_stageWiring;
     std::unique_ptr<ToolbarWiring> m_toolbarWiring;
     std::unique_ptr<TimelineWiring> m_timelineWiring;
@@ -409,7 +410,7 @@ private:
     // from it next, then the rest of the conversation's foot.
     bool m_holdFlights = false;
     class WorkChip *m_workChip = nullptr;
-    QList<ReviewModel::ClipChange> m_pendingFlights;
+    QList<ProposalModel::ClipChange> m_pendingFlights;
     ui::IconButton *m_followButton = nullptr;
     bool m_followKerf = true;
     // How far a seek may go past the program: what a proposal makes can be longer.
@@ -470,7 +471,7 @@ private:
     void followAgentFocus(const QJsonObject &event);
     void followLiveProposal();
     void endAgentFollow();
-    QList<ReviewModel::ClipChange> namedChanges(QList<ReviewModel::ClipChange> changes) const;
+    QList<ProposalModel::ClipChange> namedChanges(QList<ProposalModel::ClipChange> changes) const;
     void watchChanges(const QString &proposalId);
     void showSheet();
     void showProposedCut();
@@ -480,7 +481,16 @@ private:
     QString m_reelCompareAt;
     bool m_reelWasActive = false;
     void quietenCutPreview();
-    void flyChange(const ReviewModel::ClipChange &change, int index);
+    // What the editor is doing, shown where it is done: the light round the
+    // picture and its chip, the clips being made, and the Media sheet's tiles.
+    // Called after each event that changes what runs.
+    void setStageActivity();
+    // What each media is doing: being made, queued, not made yet, or offline.
+    QHash<QString, activity::MediaActivity> mediaActivity() const;
+    activity::EdgeLight *m_edgeLight = nullptr;
+    // A making's clock, on the chip, while one runs.
+    QTimer m_activityClock;
+    void flyChange(const ProposalModel::ClipChange &change, int index);
     void flushFlights();
     QRect flightStart(const QString &source = QString());
     QString sourceOfClip(const QString &clip) const;
@@ -549,6 +559,10 @@ private:
     // The media being made from their recipes, each with the line its steps
     // last said: what the bin's menu offers to stop.
     QHash<QString, QString> m_making;
+    // The same makings, with their take and when each began.
+    QHash<QString, activity::Making> m_makingState;
+    // The media a cast event said want making, each with why.
+    QHash<QString, QString> m_wantsMaking;
     AskPrompt *m_askPrompt = nullptr;
     QString m_agentFocusLabel;
     bool m_proposalBlocked = false;
@@ -609,8 +623,6 @@ private:
     ChatPanel *m_chat = nullptr;
     // Kerf's comment for this turn, which streamed text and steps go to, and
     // steps that came before it.
-    QPointer<CommentRow> m_agentRow;
-    QStringList m_pendingReplies;
     QFrame *m_activityPopup = nullptr;
     // Parts of m_chat, by role.
     QScrollArea *m_chatScroll = nullptr;

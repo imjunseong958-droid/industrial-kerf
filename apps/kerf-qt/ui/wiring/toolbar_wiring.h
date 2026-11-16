@@ -19,20 +19,14 @@
 //                       say: a passing message for its timeout
 //                       (MainWindow::showStatus), else offline or an error,
 //                       which stay, else the sync's stage or a render's
-//                       progress (export, render_queue, preview), else whose
-//                       view a guest's is
+//                       progress (export, render_queue, preview)
 //   format ⌥1-2         the registry's sequence.setFormat.169/.916 ->
 //                       sequence.setFormat {width, height} (edit set-sequence)
-//   composer.draw       D while the composer has the focus: its Draw
 //   Export              export {quality: master, codec: prores_hq} or
 //                       {quality: review, codec: h264}; Render preview is
 //                       sequence.renderPreview
 //   preflight           bus lastEvent("check").summary.rows; Ask Kerf is bus
-//                       openThread(commentId) + askPrefill(text, commentId);
-//                       Run QC is qc.run
-//   blocking notes      ReviewModel::counts().blocking (else the comments
-//                       event's open blocking threads); Render master and
-//                       Export's master wait (kerfd refuses them too)
+//                       askPrefill(text); Run QC is qc.run
 
 #include "test_friends.h"
 
@@ -92,11 +86,9 @@ public:
     // "Atlas · 30 s spot v7": the project, then the program sequence's name.
     QString titleText() const;
     // The line beside the title: a passing message, else offline or an error,
-    // else the sync's stage or a render's progress, else a guest's view; empty
-    // when there is nothing to say.
+    // else the sync's stage or a render's progress; empty when there is
+    // nothing to say.
     QString subtitleText() const;
-    // "Viewing as Ana" while a guest's view is on.
-    QString guestNote() const;
     // "Edited 2 min ago · rev 22" (just "rev 22" without a revision time),
     // with "Viewing as Ana" while a guest's view is on: the title's tip.
     QString normalSubtitle() const;
@@ -105,6 +97,10 @@ public:
     QString standingProblem() const;
     // What runs now: "Pulling…", "Draft export · 42%", "Rendering preview · 8%".
     QString runningText() const;
+    // The render under way, for the stage: the export started last that runs,
+    // else the preview ("Exporting master", "Rendering preview"), with its share
+    // done. Empty when none runs; a queued export is not yet a render.
+    QString runningRender(double *fraction = nullptr) const;
     // A passing message; timeout 0 keeps it until the next one.
     void showMessage(const QString &message, int timeout);
     QString message() const { return m_message; }
@@ -135,7 +131,6 @@ public:
         QString label;    // "True peak · −0.4 dBTP"
         QString key;      // the limit, for a passed row
         QString ask;      // the Ask Kerf text, for a failed row
-        QString commentId;
         bool passed = false;
     };
     // The rows the Export menu shows: every failed row (at most `most`) and
@@ -143,23 +138,10 @@ public:
     static QList<PreflightRow> preflightRows(const QJsonObject &summary, int least = 4, int most = 6);
     // The failed rows the menu leaves out.
     static int preflightHidden(const QJsonObject &summary, int most = 6);
-    // "@Kerf bring true peak to ≤ −1 dBTP (now −0.4 dBTP)" for a failed row.
+    // "Bring true peak to ≤ −1 dBTP (now −0.4 dBTP)" for a failed row.
     static QString askText(const QJsonObject &row);
-    // Open threads with an open blocking comment, from a comments event:
-    // their roots, in the order they were made (kerfd's rule, review.rs
-    // blocking_threads).
-    static QJsonArray blockingRoots(const QJsonArray &comments);
-    static int blockingThreads(const QJsonArray &comments) { return int(blockingRoots(comments).size()); }
-    // The blocking notes open now (the review model's count when there is
-    // one, else the last comments event's).
-    int blockingCount() const;
-    // Sends export {quality, codec} for "master" or "review". A master waits
-    // while a blocking note is open: it is not sent, and holdForNotes says
-    // why.
+    // Sends export {quality, codec} for "master" or "review".
     bool sendExport(const QString &quality);
-    // Says which note holds a master back and where, and shows the blocking
-    // notes in Review to resolve; `refusal` is kerfd's, when it refused.
-    void holdForNotes(const QString &refusal = QString());
     // The Export menu, built each time it opens.
     void buildExportMenu();
 
@@ -178,10 +160,8 @@ public:
     // ---- the commands the window carries out for the features (W3)
     // The registry's format commands, in canvasPresets() order.
     static QStringList formatCommands();
-    // Registers sequence.setFormat.* and composer.draw, and the bin's.
+    // Registers sequence.setFormat.*, and the bin's.
     void installCommands();
-    // composer.draw: the composer's Draw when it has the focus.
-    bool drawInComposer();
 
 protected:
     bool eventFilter(QObject *watched, QEvent *event) override;
@@ -189,7 +169,6 @@ protected:
 private:
     void onEvent(const QString &type, const QJsonObject &event);
     void onSnapshot();
-    void followReview();
     void chooseFormat(int index);
     void addCommandItem(QMenu *menu, const QString &id, const QString &label, const char *name);
     QString projectLabel() const;
@@ -236,7 +215,6 @@ private:
     quint64 m_exportsStarted = 0;
     double m_previewFraction = 0;
     bool m_previewRunning = false;
-    QPointer<QObject> m_review;
 };
 
 } // namespace kerf

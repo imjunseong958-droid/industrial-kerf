@@ -18,7 +18,7 @@
 #include "toolbar_widgets.h"
 #include "components.h"
 #include "editor_bus.h"
-#include "review_model.h"
+#include "proposal_model.h"
 #include "wiring/toolbar_wiring.h"
 #include "viewer_widget.h"
 #include "ui/stage_shell.h"
@@ -134,40 +134,40 @@ private slots:
         window.m_cloudRadio->setChecked(true);
         window.m_cloudAccess = QStringLiteral("signedOut");
         window.updateCommandStates();
-        QCOMPARE(window.m_chatInput->placeholderText(), QStringLiteral("Comment, or set up Kerf in Settings to ask"));
+        QCOMPARE(window.m_chatInput->placeholderText(), QStringLiteral("Set up Kerf in Settings to ask"));
         QCOMPARE(window.m_chatInput->toolTip(), QStringLiteral("Sign in to Kerf Cloud in Settings"));
         window.m_cloudAccess = QStringLiteral("ready");
         window.updateCommandStates();
-        QCOMPARE(window.m_chatInput->placeholderText(), QStringLiteral("Ask Kerf, or leave a note"));
+        QCOMPARE(window.m_chatInput->placeholderText(), QStringLiteral("Ask Kerf to make or change something"));
         // Own key, and none set (the environment's counts too).
         window.m_ownKeyRadio->setChecked(true);
         window.m_anthropicKey->setText(QStringLiteral("test-key"));
         window.updateCommandStates();
-        QCOMPARE(window.m_chatInput->placeholderText(), QStringLiteral("Ask Kerf, or leave a note"));
+        QCOMPARE(window.m_chatInput->placeholderText(), QStringLiteral("Ask Kerf to make or change something"));
         window.m_anthropicKey->clear();
         window.updateCommandStates();
         if (qEnvironmentVariableIsEmpty("ANTHROPIC_API_KEY")) {
-            QCOMPARE(window.m_chatInput->placeholderText(), QStringLiteral("Comment, or set up Kerf in Settings to ask"));
+            QCOMPARE(window.m_chatInput->placeholderText(), QStringLiteral("Set up Kerf in Settings to ask"));
             QCOMPARE(window.m_chatInput->toolTip(), QStringLiteral("Add your API key in Settings → Advanced"));
         }
         // Busy is not a setup problem.
         window.m_anthropicKey->setText(QStringLiteral("test-key"));
         window.handleEvent(QJsonObject{{"type", "agent_busy"}, {"busy", true}});
-        QCOMPARE(window.m_chatInput->placeholderText(), QStringLiteral("Ask Kerf, or leave a note"));
+        QCOMPARE(window.m_chatInput->placeholderText(), QStringLiteral("Ask Kerf to make or change something"));
     }
 
     void disconnectedControlsAndRecovery() {
         MainWindow window{QString(), QString()};
-        QCOMPARE(window.m_chatInput->placeholderText(), QStringLiteral("Connect to comment or ask Kerf"));
+        QCOMPARE(window.m_chatInput->placeholderText(), QStringLiteral("Connect to ask Kerf"));
         QVERIFY(!window.m_sendButton->isEnabled());
         window.handleEvent(QJsonObject{{"type", "connection"}, {"status", "disconnected"}, {"message", "Daemon unavailable"}});
-        QCOMPARE(window.m_chatInput->placeholderText(), QStringLiteral("Connect to comment or ask Kerf"));
+        QCOMPARE(window.m_chatInput->placeholderText(), QStringLiteral("Connect to ask Kerf"));
         QVERIFY(window.m_reconnectButton->isEnabled());
         QVERIFY(!window.m_timeline->isEnabled());
         QVERIFY(!window.m_connectionBanner->isHidden());
         QVERIFY(window.m_connectionMessage->text().contains(QStringLiteral("Daemon unavailable")));
         window.handleEvent(QJsonObject{{"type", "agent_busy"}, {"busy", false}});
-        QCOMPARE(window.m_chatInput->placeholderText(), QStringLiteral("Connect to comment or ask Kerf"));
+        QCOMPARE(window.m_chatInput->placeholderText(), QStringLiteral("Connect to ask Kerf"));
         window.handleEvent(QJsonObject{{"type", "connection"}, {"status", "ready"}});
         QVERIFY(window.m_connectionBanner->isHidden());
         QVERIFY(window.m_timeline->isEnabled());
@@ -345,36 +345,6 @@ private slots:
         QTRY_COMPARE(subtitle->text(), QStringLiteral("Render failed"));
         window.m_errorBanner->findChildren<QPushButton *>().first()->click();
         QCOMPARE(subtitle->text(), normal);
-        window.close();
-    }
-
-    void subtitleNamesTheGuest() {
-        MainWindow window{QString(), QString()};
-        window.resize(1600, 1000);
-        window.show();
-        QVERIFY(QTest::qWaitForWindowExposed(&window));
-        window.setConnection(QStringLiteral("ready"));
-        window.applySnapshot(showcaseSnapshot(22, QStringLiteral("clean")));
-        window.m_errorBanner->hide();
-        ToolbarWiring *wiring = window.m_toolbarWiring.get();
-        QVERIFY(!wiring->subtitleText().contains(QStringLiteral("Viewing as")));
-        window.m_bus->setViewAs(QStringLiteral("mina@example.com"));
-        QCOMPARE(wiring->subtitleText(), QStringLiteral("Viewing as mina@example.com"));
-        QVERIFY(wiring->normalSubtitle().endsWith(QStringLiteral(" · Viewing as mina@example.com")));
-        QCOMPARE(window.m_projectSubtitle->text(), wiring->subtitleText());
-
-        ReviewModel review;
-        review.setIdentity(QJsonObject{{"name", "Jun"}, {"email", "jun@example.com"}});
-        review.setComments(QJsonArray{QJsonObject{{"id", "c-1"}, {"parent", QJsonValue()}, {"author", QJsonObject{{"kind", "person"},
-            {"name", "Mina Park"}, {"id", "mina@example.com"}}}, {"at", 1.0}, {"body", "Tighter"}, {"created", "2026-11-04T10:00:00Z"}, {"revision", 1}}});
-        review.setViewAs(QStringLiteral("mina@example.com"));
-        window.m_bus->setReview(&review);
-        QCOMPARE(wiring->subtitleText(), QStringLiteral("Viewing as Mina Park"));
-        review.setViewAs(QString());
-        QVERIFY(!wiring->subtitleText().contains(QStringLiteral("Viewing as")));
-        window.m_bus->setReview(nullptr);
-        window.m_bus->setViewAs(QString());
-        QVERIFY(!wiring->subtitleText().contains(QStringLiteral("Viewing as")));
         window.close();
     }
 

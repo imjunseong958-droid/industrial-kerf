@@ -414,7 +414,7 @@ private slots:
         QCOMPARE(at(QJsonObject{{"in", 0.0}, {"out", 4.0}, {"duration", 2.0}, {"speed", 2.0}, {"reverse", true}}, 1.0), 2.0);
     }
 
-    // Bin thumbs (72 x 38 on black) fit a poster at its own shape, draw a
+    // Bin thumbs (112 x 63 on black) fit a poster at its own shape, draw a
     // sound's waveform on raised, a checkerboard under media with alpha, and
     // the duration in seconds and frames at the sequence's rate.
     void binTilesFitPostersAtTheirShape() {
@@ -434,18 +434,18 @@ private slots:
         const auto tile = [&bin](int row) { return bin.m_list->item(row)->icon().pixmap(ProjectPanel::kThumbnail).toImage(); };
         const QImage tall = tile(0);
         QCOMPARE(tall.size() / tall.devicePixelRatio(), ProjectPanel::kThumbnail);
-        const QPoint centre(36, 14);
+        const QPoint centre(56, 24);
         QCOMPARE(tall.pixelColor(centre * tall.devicePixelRatio()), QColor("#e87342"));
-        // 9:16 in a 38 pt tall thumb is 21 wide: black either side.
-        QCOMPARE(tall.pixelColor(QPoint(centre.x() - 14, centre.y()) * tall.devicePixelRatio()), QColor(Qt::black));
-        QCOMPARE(tall.pixelColor(QPoint(centre.x() + 14, centre.y()) * tall.devicePixelRatio()), QColor(Qt::black));
-        QCOMPARE(tall.pixelColor(QPoint(centre.x() - 8, centre.y()) * tall.devicePixelRatio()), QColor("#e87342"));
+        // 9:16 in a 63 pt tall thumb is 35 wide: black either side.
+        QCOMPARE(tall.pixelColor(QPoint(centre.x() - 22, centre.y()) * tall.devicePixelRatio()), QColor(Qt::black));
+        QCOMPARE(tall.pixelColor(QPoint(centre.x() + 22, centre.y()) * tall.devicePixelRatio()), QColor(Qt::black));
+        QCOMPARE(tall.pixelColor(QPoint(centre.x() - 12, centre.y()) * tall.devicePixelRatio()), QColor("#e87342"));
         // The duration badge at right 4, bottom 4, frames at 25p.
         QCOMPARE(bin.m_list->item(0)->data(Qt::UserRole + 1).toString(), QStringLiteral("9s20f"));
-        const QColor badge = tall.pixelColor(QPoint(66, 31) * tall.devicePixelRatio());
+        const QColor badge = tall.pixelColor(QPoint(104, 52) * tall.devicePixelRatio());
         QVERIFY2(badge.red() < 0x60 || badge == QColor(Qt::white), qPrintable(badge.name()));
         const QImage sound = tile(1);
-        QVERIFY(isWaveInk(sound.pixelColor(QPoint(20, 19) * sound.devicePixelRatio())));
+        QVERIFY(isWaveInk(sound.pixelColor(QPoint(20, 31) * sound.devicePixelRatio())));
         // Sound whose peaks have not come yet: raised, with the audio symbol.
         const QImage hiss = tile(3);
         QCOMPARE(hiss.pixelColor(QPoint(2, 2) * hiss.devicePixelRatio()).rgb(), tokens::raised);
@@ -461,10 +461,10 @@ private slots:
         QCOMPARE(ProjectPanel::badgeText(3725, 24), QStringLiteral("1h02m"));
     }
 
-    // The bin at its 272 (271 inside its seam): a 28 strip, the grid 192 on
-    // the well, 3 columns of 72, 12 apart, padded 8 16; items 56 tall with
-    // rows 8 apart; Roles in the rest.
-    void binGridIsThreeColumnsOf72At272() {
+    // The bin at its 272 (271 inside its seam): a 28 strip, the grid on the
+    // well with what Roles leaves, 2 columns of 112, 12 apart, padded 12 16;
+    // items 101 tall with rows 12 apart; Roles as tall as its rows under it.
+    void binGridIsTwoColumnsOf112At272() {
         ProjectPanel bin(nullptr);
         QJsonArray sources;
         for (int index = 0; index < 12; ++index)
@@ -476,19 +476,28 @@ private slots:
         bin.show();
         QVERIFY(QTest::qWaitForWindowExposed(&bin));
         QCoreApplication::processEvents();
-        QCOMPARE(bin.m_pages->height(), ProjectPanel::kGridHeight);
         QCOMPARE(bin.m_pages->y(), tokens::layout::strip);
+        // Roles has its header (no tracks yet) and the media page the rest.
+        QCOMPARE(bin.m_rolesArea->height(), ProjectPanel::kRoleRow + tokens::space::s4);
+        QCOMPARE(bin.m_pages->height(), bin.height() - tokens::layout::strip - bin.m_rolesArea->height());
+        QVERIFY(bin.m_pages->height() >= ProjectPanel::kGridLeast);
         const auto thumb = [&bin](int row) {
             const QRect cell = bin.m_list->visualItemRect(bin.m_list->item(row));
             return QRect(bin.m_list->viewport()->mapTo(&bin, cell.topLeft()), ProjectPanel::kThumbnail);
         };
         QCOMPARE(thumb(0).topLeft(), QPoint(ProjectPanel::kSidePadding, tokens::layout::strip + ProjectPanel::kTopPadding));
-        QCOMPARE(thumb(1).left(), ProjectPanel::kSidePadding + 72 + 12);
-        QCOMPARE(thumb(2).left(), ProjectPanel::kSidePadding + 2 * (72 + 12));
-        QCOMPARE(thumb(3).left(), ProjectPanel::kSidePadding);
-        QCOMPARE(thumb(3).top() - thumb(0).top(), ProjectPanel::kItemHeight + ProjectPanel::kRowGap);
-        // The third column ends inside the bin, clear of its edge.
-        QVERIFY(thumb(2).right() < bin.width() - 1);
+        QCOMPARE(thumb(1).left(), ProjectPanel::kSidePadding + 112 + 12);
+        QCOMPARE(thumb(2).left(), ProjectPanel::kSidePadding);
+        QCOMPARE(thumb(2).top() - thumb(0).top(), ProjectPanel::kItemHeight + ProjectPanel::kRowGap);
+        // The second column ends inside the bin, clear of its edge.
+        QVERIFY(thumb(1).right() < bin.width() - 1);
+        // Many tracks: Roles keeps to its most and scrolls.
+        QJsonArray tracks;
+        for (int index = 1; index <= 12; ++index)
+            tracks.append(QJsonObject{{"id", QStringLiteral("V%1").arg(index)}, {"type", "video"}, {"role", QStringLiteral("r%1").arg(index)}});
+        bin.setTracks(tracks);
+        QCoreApplication::processEvents();
+        QCOMPARE(bin.m_rolesArea->height(), ProjectPanel::kRolesMost);
         // The list view keeps the same media, 24 pt rows.
         bin.setListView(true);
         QCoreApplication::processEvents();

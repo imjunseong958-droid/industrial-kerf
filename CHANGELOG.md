@@ -46,6 +46,22 @@ on `main`; its section here becomes the release's notes on GitHub
   only nests another. A `generate` line that names `out=`, `seed=` or any
   one-value name twice is refused, where the first was dropped unsaid.
   `kerf shots` counts a mesh clip that reads a set as playing it.
+- The conversation reads as a coding agent's chat does: what you asked as a
+  bubble at the right, Kerf's answer under it, with "Working" and the step it
+  is on while it works, folding to "Worked for 1m 12s · 6 steps" once done.
+  A proposal's card sits under the answer that made it.
+- Conversations are kept beside the project (`.kerf/conversations/`), each
+  with what Kerf did in it; the sidebar lists them by day, with a search, and
+  archives, renames and deletes them. Going on in one, Kerf hears what was
+  said before.
+- Review notes are gone: the comment threads, blocking notes that held an
+  export back, the guest view, drawings on the frame and the `note` tool for
+  agents. Ask Kerf in the conversation instead.
+- While anything runs, light goes round the picture (blue while Kerf works,
+  amber while a render or a model does) and the chip on it says what runs; a
+  clip being made shows moving stripes on the timeline, and the Media sheet's
+  tiles say whether each is made, being made, queued or offline.
+- The conversation is 560 wide beside the picture, as in the design.
 
 ## 0.1.2
 

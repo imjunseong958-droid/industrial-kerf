@@ -31,17 +31,23 @@ repeating their numbers, so changing a value does not make it wrong.
 |---|---|---|---|---|
 | Start window | It opens | Heading, box and ideas rise in turn | `HomeWindow::enter` | `aRiseLeavesTheLayoutAlone` |
 | Sidebar | It opens or closes | It slides in from the window's edge; the toolbar's leading stretch, its top, follows its edge and the title moves with it | `StageShell::transition`, `ToolbarWiring::layoutLeading`, `FlatToolBar::setSidebarEdge` | `toolbarHoldsOnlyTheSidebarTheTitleExportAndThePanel` (the end state) |
+| Sidebar activity | A conversation is Working | Its dot pulses, as the working chip's does (`workPulse`, drawn `workPulseSteps` a pulse); only the dot is drawn again, and it stops while the sidebar is hidden or nothing works | `ProjectSidebar::updatePulse`, `SidebarRow::setPulse` | `theWorkingDotPulsesOnlyWithMotion` |
+| Archived unfolds | Archived · N is pressed | The archived conversations fade in where they are, one after another (`appear`, `unfoldStagger` apart); folding is at once | `ProjectSidebar::setArchivedOpen`, `moves::fadeIn` | `archivedConversationsFoldAwayAtTheEnd` (the end state) |
 | Export arrives | The program gets its first clip | Export fades in where it is, in the toolbar | `ToolbarWiring::followCut` | `toolbarHoldsOnlyTheSidebarTheTitleExportAndThePanel` (the end state) |
 | Account menu | The account at the sidebar's foot is pressed | The menu fades in and rises over the account, which stays held | `ToolbarWiring::popupAppMenu`, `ui::popupMenu` (`Side::Above`) | none |
 | Settings | ⌘, or the account's menu | The page has the room at once; its body comes up into place, and a page chosen fades in over the last | `MainWindow::showSettings`, `StageShell::setCovered` | `theAccountMenuReachesEverythingElse` (the end state) |
 | Hand-over | A request is sent | Start window fades over the editor; its box goes to the composer | `MainWindow::takeOverFrom`, `main.cpp` | none |
 | Footage | Kerf starts with footage and no cut | Named tiles pop in, in the conversation | `MainWindow::showSheet`, `FootageSheet` | `footageTilesKeepTheirPlacesAsTheyGoOn` |
 | Picture arrives | A project opens with clips on its timeline | First tile grows into the picture as the conversation gives way; the timeline comes in out of the room | `MainWindow::followContentWithPanes`, `MainWindow::growStage`, `StageShell::transition`, `StageMotion::followPicture` | `regionsMoveToANewArrangementWhenMotionIsOn`, `aMoveCutShortStillEnds`, `motionLeavesNothingBehind`, `aStandInGoesWithThePicture` |
-| Cut at work | Kerf makes a first cut | Its card is in Kerf's row of the turn: light runs round the picture, which sits a little back and crossfades to each clip as it is placed, with Cutting on it and a line of light under it. Done, the ring lights once and goes out, the picture lightens, Done shows and fades, then the play mark and the length | `ChatPanel::setBuildingProposal`, `CardPicture::setWorking`, `CardPicture::setFinished`, `quietenCutPreview` | `aCutAtWorkIsItsCardInTheTurn` |
+| Cut at work | Kerf makes a first cut | Its card is in Kerf's answer of the turn: light runs round the picture, which sits a little back and crossfades to each clip as it is placed, with Cutting on it and a line of light under it. Done, the ring lights once and goes out, the picture lightens, Done shows and fades, then the play mark and the length | `ChatPanel::setBuildingProposal`, `CardPicture::setWorking`, `CardPicture::setFinished`, `quietenCutPreview` | `aCutAtWorkIsItsCardInTheTurn` |
 | Cut card | A first cut Kerf made is pressed | The picture grows out of the card as the conversation gives way and the timeline comes in; the card says it is on the stage. Closed, the picture goes back into the card. Moving over the card runs through its clips | `CardPicture`, `MainWindow::openCutFromCard`, `MainWindow::growStage`, `MainWindow::cardPictureHome`, `StageShell::setPictureHome` | `aCutKerfMadeOpensFromItsCard` |
 | Cut builds | Each new clip in a proposal, with the stage open | Its tile flies to its lane, ringed; the picture becomes that clip | `MainWindow::flyChange`, `coverPicture` | `flightsWaitForMotionAndEndOnTheirOwn`, `aStandInLetGoEarlyGoesOnFromWhereItIs`, `aStandInHoldingStillDrawsNoFrames` |
 | First cut shows | A proposal on an empty program | Timeline shows it, read-only; the picture takes its format and renders it | `MainWindow::showProposedCut` | `aFirstCutShowsOnTheTimelineUntilItIsTheProgram`, `aProposedCutBringsItsOwnFormat` |
-| Kerf at work | During a turn | Kerf cursor on the timeline; working chip on the picture | `TimelineWidget::setAgentCursor`, `WorkChip`, `quietenCutPreview` | none |
+| Working | During a turn | Under your request, "Working" with a band of light passing over it once in `workShimmer` (drawn 30 a second, only while it shows; still under Reduce Motion, its clock then once a second), the time so far and the step it is on, the last steps on a hairline. Done, it folds to "Worked for …" at once | `WorkLog::start`, `WorkLog::finish` | `theWorkLogSaysWhatKerfDid` |
+| Messages arrive | You send, or the bridge keeps a turn | Your request and Kerf's answer fade in where they are; the list keeps to the latest unless you scrolled away | `ChatPanel::makeYou`, `ChatPanel::makeKerf`, `moves::fadeIn`, `ChatPanel::scheduleFollow` | `aTurnReadsTopToBottom` (the end state) |
+| Kerf at work | During a turn | Kerf cursor on the timeline; working chip on the picture ("Kerf is looking", "Kerf is cutting"), and the blue light round the picture | `TimelineWidget::setAgentCursor`, `WorkChip`, `quietenCutPreview`, `MainWindow::setStageActivity` | `theStageShowsWhatRunsAndLetsItGo` |
+| Stage at work | Kerf works, a render runs, or a model makes a shot | A light runs round just outside the picture's edge, blue for Kerf and amber for the computer, amber winning; the chip at the picture's top left says what runs ("Making bridge-low · 0:12", "Rendering preview 62%"). Both fade in, and fade out when it ends; under Reduce Motion the ring is still | `activity::EdgeLight`, `activity::stageFor`, `WorkChip::setShown`, `MainWindow::setStageActivity` | `theEdgeLightComesAndGoes`, `theStageShowsWhatRunsAndLetsItGo` |
+| Making a shot | A media is being made from its recipe | Amber stripes move across its clips, with how long it has gone; its tile in the Media sheet has them too, and "Making take 2 · 0:41". Queued, a dashed amber outline; with no file, a dashed hole saying "Not made" or "Offline" (still) | `TimelineWidget::setMediaActivity`, `ProjectPanel::setMediaActivity`, `activity::paintStripes` | `clipsShowTheirMediasMaking`, `mediaTilesSayWhatTheyAreDoing` |
 | Watch changes | "Watch what changed" | Stage reaches over the dimmed conversation; before wipes to and fro over after; changed clips lift | `MainWindow::watchChanges`, `followReelCompare`, `ViewerWidget::setCompareFrame`, `TimelineWidget::setFocusClips` | `watchingLeavesARoomOverThePicture`, `theStripSitsOnAnUprightPicture`, `theBeforeStillComesAndGoes`, `theLastDimIsTheOneThatStays`, `focusedClipsRiseOnce` |
 | Going home | Kerf has rendered | The picture shrinks into the folder; the conversation has the room | `MainWindow::goHome` | `theVeilDoesNotOutliveAMoveCutShort` |
 | Manual export | An export you started finishes | A frame flies to the folder; the panel stays | `MainWindow::flyExportHome` | none |
@@ -61,6 +67,8 @@ Look here before writing a new animation.
 | Something to hold a place until the real thing comes | `Flight::stays`, ended by `releaseStaying` |
 | A stand-in for the picture | `Flight::fit`, so it shows footage as the render will |
 | Something to fade in where it is | `moves::fadeIn` |
+| To show that something works, round the picture | `activity::EdgeLight` (`ViewerWidget::setEdgeLight`), with `activity::Hue`; what it says, `WorkChip::setText` |
+| To show that something is being made, over a clip or a tile | `activity::paintStripes` at `activity::stripePhase`, drawn again each `stripeFrame` where it is only |
 | Something to rise into place, in a layout or not | `moves::rise` |
 | A page that takes the room (Settings) | `StageShell::setCover`, shown with `setCovered`; raise its body, not the page (see **What a frame costs**) |
 | Something in the toolbar to keep to the sidebar's edge | `ToolbarWiring::sidebarEdge`, which follows the sidebar while it moves |
@@ -94,7 +102,11 @@ with it. So:
   is shown, in `RGB32` or premultiplied `ARGB32`. Never scale one in `paintEvent` per
   frame; the picture on the move draws what it has (`ViewerWidget::setStageMoving`).
 - **A long animation changes what can be seen, not every tick.** The working chip draws
-  `workPulseSteps` a pulse.
+  `workPulseSteps` a pulse. The light round the picture marks where its head and tail
+  were and are (`EdgeLight::tick`), the whole ring only while it fades; the stripes over
+  what is being made mark those clips and tiles alone, over the timeline's lanes as
+  they are kept (`TimelineWidget::paintMaking`), and stop when nothing is being made or
+  they cannot be seen.
 - **One motion per property.** A new one takes over from the last, from where it has
   got to (`moves::dim`). Two at once fight over each frame.
 - **Every start has its end**, also when cut short: `transitionFinished` always follows
@@ -134,7 +146,7 @@ KERF_MOTION_COSTS=1 QT_SCALE_FACTOR=2 target/qt/kerf-qt-tests -platform offscree
 This reads a frame's paint and the process's CPU, on the offscreen platform, so it
 compares one build with another and leaves out putting the frame on a display.
 `whatAConversationCosts`, run the same way, times the window's own parts as a
-conversation grows: the conversation made again, a comment arriving, a snapshot taken
+conversation grows: the conversation made again, a message arriving, a snapshot taken
 in, and each region drawn whole.
 
 ## Known limits

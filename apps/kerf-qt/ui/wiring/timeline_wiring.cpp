@@ -25,17 +25,15 @@ constexpr const char *kTransportCommands[] = {"playback.goToStart", "playback.pr
 
 TimelineWiring::TimelineWiring(MainWindow *window, EditorBus *bus) : QObject(nullptr), m_window(window), m_bus(bus) {
     setObjectName(QStringLiteral("timelineWiring"));
-    m_own = new ReviewModel(this);
-    m_own->setObjectName(QStringLiteral("timelineReview"));
+    m_own = new ProposalModel(this);
+    m_own->setObjectName(QStringLiteral("timelineProposals"));
 }
 
 TimelineWiring::~TimelineWiring() {
     // The strip is the panel's child, gone with it.
 }
 
-ReviewModel *TimelineWiring::review() const { return m_shared ? m_shared.data() : m_own; }
-
-QString TimelineWiring::currentThread() const { return m_shared ? m_shared->currentThread() : m_own->currentThread(); }
+ProposalModel *TimelineWiring::proposals() const { return m_own; }
 
 void TimelineWiring::attach() {
     if (m_attached || !m_window || !m_window->m_timeline) return;
@@ -87,23 +85,10 @@ void TimelineWiring::attach() {
                                                   {QStringLiteral("clip"), clip},
                                                   {QStringLiteral("props"), QJsonObject{{QStringLiteral("value"), value}}}}});
     });
-    connect(timeline, &TimelineWidget::commentMarkActivated, this, [this](const QString &id) {
-        if (m_shared) m_shared->setCurrentThread(id);
-        m_own->setCurrentThread(id);
-        emit m_bus->openThread(id);
-    });
-
     connect(m_bus, &EditorBus::event, this, &TimelineWiring::handleEvent);
     connect(m_bus, &EditorBus::snapshotChanged, this, [this] { m_own->setSnapshot(m_bus->snapshot()); });
-    connect(m_bus, &EditorBus::identityChanged, this, [this](const QJsonObject &user) { m_own->setIdentity(user); });
-    connect(m_bus, &EditorBus::currentThreadChanged, this, [this](const QString &id) {
-        if (!m_shared) m_own->setCurrentThread(id);
-        refreshReview();
-    });
-    connect(m_bus, &EditorBus::reviewChanged, this, &TimelineWiring::followSharedReview);
-    connect(m_own, &ReviewModel::changed, this, &TimelineWiring::refreshReview);
-    connect(m_own, &ReviewModel::currentChanged, this, &TimelineWiring::refreshReview);
-    followSharedReview();
+    connect(m_own, &ProposalModel::changed, this, &TimelineWiring::refreshProposals);
+    refreshProposals();
 }
 
 void TimelineWiring::setWide(bool wide) {
@@ -124,7 +109,7 @@ void TimelineWiring::bindCommands() {
     // The window makes its registry after its regions (setupActions runs
     // after buildUi), so this binds on the first call that finds it: from
     // attach, the first connection change (setConnection, in the window's
-    // constructor) or the first review refresh.
+    // constructor) or the first proposals refresh.
     if (m_commandsBound || !m_tools || !m_window || !m_window->m_commands) return;
     m_commandsBound = true;
     CommandRegistry *commands = m_window->m_commands;
@@ -180,29 +165,9 @@ bool TimelineWiring::eventFilter(QObject *watched, QEvent *event) {
     return QObject::eventFilter(watched, event);
 }
 
-void TimelineWiring::followSharedReview() {
-    ReviewModel *shared = m_bus->review();
-    if (shared == m_shared) return;
-    for (const QMetaObject::Connection &connection : std::as_const(m_sharedConnections)) disconnect(connection);
-    m_sharedConnections.clear();
-    m_shared = shared;
-    if (shared) {
-        // The panel's model: its current thread, and its counts for Ask.
-        m_sharedConnections << connect(shared, &ReviewModel::currentChanged, this, [this](const QString &id) {
-            m_own->setCurrentThread(id);
-            refreshReview();
-        });
-        m_sharedConnections << connect(shared, &ReviewModel::changed, this, &TimelineWiring::refreshReview);
-        m_own->setCurrentThread(shared->currentThread());
-    }
-    refreshReview();
-}
-
 void TimelineWiring::handleEvent(const QString &type, const QJsonObject &json) {
     TimelineWidget *timeline = m_window->m_timeline;
-    if (type == QStringLiteral("comments") || type == QStringLiteral("collab")) {
-        m_own->applyEvent(type, json);
-    } else if (type == QStringLiteral("check")) {
+    if (type == QStringLiteral("check")) {
         const QString status = json.value(QStringLiteral("status")).toString();
         if (status == QStringLiteral("done")) timeline->setQcClips(qcClips(json));
     } else if (type == QStringLiteral("preview")) {
@@ -230,41 +195,22 @@ QString TimelineWiring::previewedProposal(const QJsonObject &preview, const QStr
     return {};
 }
 
-void TimelineWiring::refreshReview() {
+void TimelineWiring::refreshProposals() {
     if (!m_window || !m_window->m_timeline) return;
-    TimelineWidget *timeline = m_window->m_timeline;
-    timeline->setCommentMarks(commentMarks(*m_own, currentThread()));
-    timeline->setProposalBands(proposalBands(*m_own));
+    m_window->m_timeline->setProposalBands(proposalBands(*proposals()));
     bindCommands();
 }
 
-QList<TimelineWidget::CommentMark> TimelineWiring::commentMarks(const ReviewModel &review, const QString &current) {
-    QList<TimelineWidget::CommentMark> marks;
-    for (const ReviewModel::LaneMarker &marker : review.laneMarkers()) {
-        TimelineWidget::CommentMark mark;
-        mark.id = marker.id;
-        mark.at = marker.at;
-        mark.end = marker.end;
-        mark.ranged = marker.ranged;
-        mark.circle = marker.circle;
-        mark.current = marker.current || (!current.isEmpty() && marker.id == current);
-        mark.resolved = marker.resolved;
-        mark.name = marker.name;
-        marks << mark;
-    }
-    return marks;
-}
-
-QList<TimelineWidget::ProposalBand> TimelineWiring::proposalBands(const ReviewModel &review) {
+QList<TimelineWidget::ProposalBand> TimelineWiring::proposalBands(const ProposalModel &model) {
     QList<TimelineWidget::ProposalBand> bands;
-    for (const ReviewModel::Proposal &proposal : review.proposals()) {
+    for (const ProposalModel::Proposal &proposal : model.proposals()) {
         if (!proposal.isOpen() || !proposal.hasRange) continue;
         TimelineWidget::ProposalBand band;
         band.id = proposal.id;
         band.author = proposal.author.name;
         band.start = proposal.start;
         band.end = proposal.end;
-        for (const ReviewModel::ClipChange &change : proposal.changes) {
+        for (const ProposalModel::ClipChange &change : proposal.changes) {
             if (!change.track.isEmpty() && !band.tracks.contains(change.track)) band.tracks << change.track;
             if (change.transition) continue;
             band.clips << change.clip;

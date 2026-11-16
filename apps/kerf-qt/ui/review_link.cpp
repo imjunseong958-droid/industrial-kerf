@@ -1,6 +1,6 @@
 #include "review_link.h"
 
-#include "comment_row.h"
+#include "chat_parts.h"
 #include "main_window.h"
 #include "project_launcher.h"
 
@@ -69,7 +69,7 @@ QString make(const QString &directory, qint64 revision, double seconds, double f
     const QString project = slug(QFileInfo(QDir::cleanPath(directory)).fileName());
     if (project.isEmpty()) return {};
     QString link = QStringLiteral("kerf://%1/rev%2").arg(project).arg(revision);
-    if (std::isfinite(seconds)) link += QLatin1Char('@') + review::timecode(seconds, fps);
+    if (std::isfinite(seconds)) link += QLatin1Char('@') + chat::timecode(seconds, fps);
     return link;
 }
 
@@ -152,7 +152,7 @@ QString resolve(const QString &project, const QStringList &candidates, QString *
 
 double seconds(const ReviewLink &link, double fps) {
     if (link.timecode.isEmpty()) return std::numeric_limits<double>::quiet_NaN();
-    return review::parseTimecode(link.timecode, fps);
+    return chat::parseTimecode(link.timecode, fps);
 }
 
 Router::Router(Opener open, Windows windows, QObject *parent)

@@ -1,6 +1,6 @@
 #pragma once
 
-// The editor's bus: how the regions of the window (stage, comments,
+// The editor's bus: how the regions of the window (stage, conversation,
 // timeline, bin, toolbar) hear the engine and each
 // other without including each other's headers.
 //
@@ -27,7 +27,7 @@
 
 namespace kerf {
 
-class ReviewModel;
+class ProposalModel;
 
 class EditorBus final : public QObject {
     Q_OBJECT
@@ -66,15 +66,11 @@ public:
     QImage programFrame() const { return m_programFrame; }
     // The latest event of `type` the bridge sent, empty before the first.
     QJsonObject lastEvent(const QString &type) const { return m_lastEvents.value(type); }
-    // The review model (comments and proposals), once one is set.
-    ReviewModel *review() const { return m_review; }
-    void setReview(ReviewModel *review);
+    // The proposals of the snapshot, once the model is set.
+    ProposalModel *proposals() const { return m_proposals; }
+    void setProposals(ProposalModel *proposals);
     // The person at this Mac as collab.status names them: {name, email}.
     QJsonObject identity() const { return m_identity; }
-    // Guest mode: the person (an email or client id) the panel is viewed as,
-    // empty for oneself.
-    QString viewAs() const { return m_viewAs; }
-    void setViewAs(const QString &person);
 
     // ---- fed by MainWindow -------------------------------------------------
     // Every bridge event, after the window handled it: kept as lastEvent and
@@ -97,27 +93,12 @@ signals:
     void playingChanged(bool playing);
     void selectionChanged(const QStringList &clips);
     void programFrameChanged(const QImage &frame);
-    void reviewChanged();
+    void proposalsChanged();
     void identityChanged(const QJsonObject &identity);
-    void viewAsChanged(const QString &person);
 
     // Cross-region requests.
-    // Show the thread `id` in the comments panel (opening it).
-    void openThread(const QString &id);
-    // The composer's Draw: the stage takes the pointer for a drawing on the
-    // frame, then finishes (the strokes, normalised to the picture) or is
-    // cancelled.
-    void drawingRequested();
-    void drawingFinished(const QJsonArray &strokes);
-    void drawingCancelled();
-    // Open the composer with `text`, as a reply to `threadId` when it is set.
-    void askPrefill(const QString &text, const QString &threadId);
-    void currentThreadChanged(const QString &id);
-    // The comments panel's thread under the pointer (empty when none), and
-    // the comment last chosen there: the stage shows their overlap box and
-    // drawing.
-    void threadHovered(const QString &id);
-    void commentSelected(const QString &id);
+    // Open the composer with `text`.
+    void askPrefill(const QString &text);
 
 private:
     Sender m_sender;
@@ -135,9 +116,8 @@ private:
     QHash<QString, QJsonObject> m_lastEvents;
     // Not owned; the window keeps it as long as the bus (a forward
     // declaration only, so no QPointer).
-    ReviewModel *m_review = nullptr;
+    ProposalModel *m_proposals = nullptr;
     QJsonObject m_identity;
-    QString m_viewAs;
 };
 
 } // namespace kerf

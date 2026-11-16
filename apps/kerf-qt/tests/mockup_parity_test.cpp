@@ -19,10 +19,10 @@
 #include "main_window.h"
 #include "test_footage.h"
 #include "ui/editor_bus.h"
-#include "ui/review_model.h"
-#include "ui/wiring/review_wiring.h"
+#include "ui/proposal_model.h"
+#include "ui/wiring/chat_wiring.h"
 #include "ui/agent_hud.h"
-#include "ui/comment_row.h"
+#include "ui/chat_messages.h"
 #include "ui/proposal_card.h"
 #include "ui/wiring/stage_wiring.h"
 #include "ui/wiring/timeline_wiring.h"
@@ -54,71 +54,42 @@ using namespace test;
 
 namespace {
 
-const QString kYou = QStringLiteral("ana@kerf.test");
-
-QJsonObject person(const char *name, const QString &email, const char *role = nullptr) {
-    QJsonObject author{{"kind", "person"}, {"name", name}, {"id", email}};
-    if (role) author.insert("role", role);
-    return author;
-}
-
-QJsonObject note(const char *id, const QJsonValue &parent, const QJsonObject &author, const char *created, const char *body,
-                 std::initializer_list<std::pair<const char *, QJsonValue>> extra = {}) {
-    QJsonObject record{{"id", id},       {"parent", parent}, {"author", author}, {"body", body},     {"tags", QJsonArray{}},
-                       {"blocking", false}, {"resolved", false}, {"created", created}, {"revision", 22}};
-    for (const auto &[key, value] : extra) record.insert(key, value);
-    return record;
-}
-
-// The mockup's seed threads (mockup-spec 4.9), as kerfd's review log folds them.
-QJsonObject seedComments() {
-    const QJsonObject mina = person("Mina Park", QStringLiteral("mina@kerf.test"), "director");
-    const QJsonObject tom = person("Tom Lind", QStringLiteral("tom@kerf.test"), "colourist");
-    const QJsonObject you = person("Ana Ruiz", kYou);
-    const QJsonObject kerf{{"kind", "kerf"}, {"name", "Kerf"}};
-    const QJsonObject qc{{"kind", "qc"}, {"name", "QC"}, {"role", "loudness"}};
-    const QJsonObject claude{{"kind", "mcp"}, {"name", "Claude Code"}, {"id", "claude-code"}, {"role", "MCP · via Kerf"}};
-    const QJsonValue root;
+// A conversation of the mockup's: a request at 00:00:09:03, Kerf's answer
+// with its steps and the proposal it staged (p7), and a follow-up.
+QJsonObject seedConversation() {
+    const auto item = [](const char *id, const char *kind, const char *at, const char *text,
+                         std::initializer_list<std::pair<const char *, QJsonValue>> extra = {}) {
+        QJsonObject out{{"id", id}, {"kind", kind}, {"text", text}, {"at", at}};
+        for (const auto &[key, value] : extra) out.insert(key, value);
+        return out;
+    };
     return QJsonObject{
-        {"type", "comments"},
-        {"reviewRevision", 41},
+        {"type", "conversation"}, {"id", "c-seed"}, {"title", "The sea reads magenta here"},
+        {"created", "2026-11-02T10:00:00Z"}, {"updated", "2026-11-03T10:05:00Z"},
         {"items", QJsonArray{
-             note("c-0300", root, mina, "2026-11-02T09:00:00Z", "Open on the road, not the sky", {{"at", 3.0}, {"frame", 72}}),
-             note("c-0903", root, tom, "2026-11-02T10:00:00Z", "The sea reads magenta here", {{"at", 9.12}, {"frame", 219}, {"tags", QJsonArray{"color"}}}),
-             note("c-0903-r1", "c-0903", kerf, "2026-11-02T10:01:00Z", "Sea back toward cyan"),
-             note("c-1708", root, QJsonObject{{"kind", "kerf"}, {"name", "Kerf"}, {"role", "QC"}}, "2026-11-03T08:00:00Z",
-                  "Caption overlaps the lower-third by 8 px",
-                  {{"at", 17.32}, {"duration", 2.48}, {"frame", 416}, {"tags", QJsonArray{"captions"}}, {"qcKey", "qc:text.overlap:clip-12"}}),
-             note("c-1708-r1", "c-1708", tom, "2026-11-03T08:30:00Z", "Also clips the sun flare, circled",
-                  {{"drawing", QJsonArray{QJsonObject{{"tool", "ellipse"},
-                                                      {"points", QJsonArray{QJsonArray{0.61, 0.22}, QJsonArray{0.74, 0.35}}},
-                                                      {"color", "#ededed"}}}}}),
-             note("c-2614", root, mina, "2026-11-03T09:00:00Z", "Logo lands late, should hit on the snare",
-                  {{"at", 16.56}, {"frame", 397}, {"blocking", true}}),
-             note("c-2614-r1", "c-2614", claude, "2026-11-03T09:05:00Z", "Move logo reveal to the snare"),
-             note("c-2718", root, qc, "2026-11-03T10:00:00Z", "True peak −0.4 dBTP, limit −1.0 dBTP (EBU R128)",
-                  {{"at", 17.72}, {"duration", 0.28}, {"frame", 425}, {"blocking", true}, {"tags", QJsonArray{"audio"}},
-                   {"qcKey", "qc:audio.true_peak"}}),
-             note("c-2718-r1", "c-2718", you, "2026-11-03T10:05:00Z", "@Kerf limit the music bus here"),
+             item("i1", "you", "2026-11-02T10:00:00Z", "The sea reads magenta here", {{"timecode", 9.12}}),
+             item("i2", "kerf", "2026-11-02T10:01:00Z", "Pulled the sea back toward cyan on **B003_C011**, from 00:00:09:03.",
+                  {{"steps", QJsonArray{"look at 00:00:09:03", "edit fx B003_C011 add color.hue", "render preview"}}, {"seconds", 74.0},
+                   {"proposal", "p7"}}),
+             item("i3", "you", "2026-11-03T10:05:00Z", "Limit the music bus at the true-peak spike"),
+             item("i4", "kerf", "2026-11-03T10:06:00Z", "The agent failed.", {{"error", true}, {"seconds", 3.0}}),
          }}};
 }
 
 // The mockup's eight QC rows (mockup-spec 12).
 QJsonObject seedCheck() {
-    const auto row = [](const char *code, const char *name, bool passed, const char *value, const char *thread = nullptr) {
-        QJsonObject out{{"code", code}, {"name", name}, {"passed", passed}, {"value", QString::fromUtf8(value)}};
-        if (thread) out.insert("commentId", thread);
-        return out;
+    const auto row = [](const char *code, const char *name, bool passed, const char *value) {
+        return QJsonObject{{"code", code}, {"name", name}, {"passed", passed}, {"value", QString::fromUtf8(value)}};
     };
     return QJsonObject{{"type", "check"}, {"status", "done"}, {"valid", false}, {"findings", QJsonArray{}},
                        {"summary", QJsonObject{{"passed", 6}, {"total", 8}, {"blocking", 1}, {"rows", QJsonArray{
                            row("loudness.integrated", "Integrated loudness", true, "−23.1 LUFS"),
-                           row("loudness.true_peak", "True peak", false, "−0.4 dBTP", "c-2718"),
+                           row("loudness.true_peak", "True peak", false, "−0.4 dBTP"),
                            row("loudness.range", "Loudness range", true, "6.2 LU"),
                            row("picture.out_of_range", "Gamut Rec.709", true, "legal"),
                            row("picture.luma_levels", "Luma levels", true, "Y′ 64–940"),
                            row("text.safe_area", "Title safe 90%", true, "0 outside"),
-                           row("text.overlap", "Caption overlap", false, "1 at 00:00:17:08", "c-1708"),
+                           row("text.overlap", "Caption overlap", false, "1 at 00:00:17:08"),
                            row("picture.flash_black", "Flash and black", true, "0 · 0")}}}}};
 }
 
@@ -164,8 +135,8 @@ struct Format {
 
 // The layout at 1600 x 1000, in window coordinates (ui/stage_shell.h).
 const Format kFormats[] = {
-    {"169", QSize(1920, 1080), QRect(640, 40, 960, 420), QRect(768, 52, 704, 396), QRect(240, 40, 400, 960), QRect(640, 460, 960, 540)},
-    {"916", QSize(1080, 1920), QRect(640, 40, 960, 614), QRect(954, 52, 332, 590), QRect(240, 40, 400, 960), QRect(640, 654, 960, 346)},
+    {"169", QSize(1920, 1080), QRect(812, 40, 788, 420), QRect(854, 52, 704, 396), QRect(252, 40, 560, 960), QRect(812, 460, 788, 540)},
+    {"916", QSize(1080, 1920), QRect(812, 40, 788, 614), QRect(1040, 52, 332, 590), QRect(252, 40, 560, 960), QRect(812, 654, 788, 346)},
 };
 
 QRect inWindow(QWidget *widget, QWidget *window) { return QRect(widget->mapTo(window, QPoint()), widget->size()); }
@@ -199,7 +170,8 @@ private slots:
             window.setConnection(QStringLiteral("ready"));
             window.handleEvent(QJsonObject{{"type", "collab"}, {"status", sharedStatus()}});
             window.handleEvent(seedState(format.canvas));
-            window.handleEvent(seedComments());
+            window.m_chatWiring->openConversation(QStringLiteral("c-seed"));
+            window.handleEvent(seedConversation());
             window.handleEvent(seedCheck());
             window.handleEvent(seedLoudness());
             window.handleEvent(seedQueue());
@@ -209,8 +181,8 @@ private slots:
             QVERIFY(QTest::qWaitForWindowExposed(&window));
             window.m_errorBanner->hide();
             window.m_viewer->setFrame(testing::footageFrame(testing::Shot::HarborWide, format.canvas / 2), 0.0);
-            QVERIFY(window.m_bus->review());
-            QVERIFY(window.m_bus->review()->counts().open > 0);
+            QVERIFY(window.m_bus->proposals());
+            QCOMPARE(window.m_chat->requests().size(), 2);
             const QString fmt = QString::fromLatin1(format.query);
             const auto save = [&window, &shots, &states](const QString &label) {
                 for (int i = 0; i < 3; ++i) QCoreApplication::processEvents();
@@ -423,20 +395,21 @@ private:
         QCoreApplication::processEvents();
         const int width = chat->scroll()->viewport()->width();
         QCOMPARE(chat->m_content->width(), width);
-        // Every thread and card stands as wide as the list, whatever its width.
-        const QList<CommentRow *> rows = chat->m_content->findChildren<CommentRow *>();
-        QVERIFY(!rows.isEmpty());
-        // (A row keeps the design's 8 to the list's edge at every width.)
         // Within the column it keeps to read in, when it has more room than that.
         const int inset = std::max(0, (chat->width() - tokens::layout::conversationColumn) / 2);
-        for (const CommentRow *row : rows)
-            if (row->isVisibleTo(chat)) QCOMPARE(row->mapTo(chat->m_content, QPoint(row->width(), 0)).x(), width - 8 - inset);
-        const QList<ProposalCard *> cards = chat->m_content->findChildren<ProposalCard *>();
-        for (const ProposalCard *card : cards) {
+        const int right = width - ChatPanel::kSidePadding - inset;
+        const QList<QWidget *> messages = chat->messages();
+        QVERIFY(!messages.isEmpty());
+        for (const QWidget *message : messages) {
+            if (!message->isVisibleTo(chat)) continue;
+            // Every message stands as wide as the column; a request's bubble keeps to its right.
+            QCOMPARE(message->mapTo(chat->m_content, QPoint(message->width(), 0)).x(), right);
+            if (const auto *you = qobject_cast<const YouMessage *>(message))
+                QCOMPARE(you->bubbleRect().right() + 1, you->width());
+        }
+        for (const ProposalCard *card : chat->cards()) {
             if (!card->isVisibleTo(chat)) continue;
-            // Its gutters are its row's own, not a max-width's.
-            const int right = card->mapTo(chat->m_content, QPoint(card->width(), 0)).x();
-            QVERIFY2(right >= width - 16 - inset, qPrintable(QStringLiteral("%1 of %2").arg(right).arg(width)));
+            QCOMPARE(card->mapTo(chat->m_content, QPoint(card->width(), 0)).x(), right);
         }
     }
 };

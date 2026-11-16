@@ -8,7 +8,7 @@
 //
 //   [2 / 5] Trim sea  ·  18 s left     [<] [>]  [Before|After]  [Exit]
 
-#include "review_model.h"
+#include "proposal_model.h"
 #include "test_friends.h"
 
 #include <QJsonObject>
@@ -41,10 +41,10 @@ struct Segment {
 
 // The segments of `changes`, each with `handle` seconds either side, in order,
 // with those that touch merged. The ends keep to each side's duration.
-QList<Segment> plan(const QList<ReviewModel::ClipChange> &changes, double beforeDuration, double afterDuration, double handle = 2.0);
+QList<Segment> plan(const QList<ProposalModel::ClipChange> &changes, double beforeDuration, double afterDuration, double handle = 2.0);
 double total(const QList<Segment> &segments);
 // "Trim sea": what a change does, in words.
-QString changeTitle(const ReviewModel::ClipChange &change);
+QString changeTitle(const ProposalModel::ClipChange &change);
 // A position as a tool wrote it (`01:00:04:12`, `96f`, `4.5s`, or plain
 // seconds), in seconds from the sequence's start. Negative when unreadable.
 double parseTime(const QString &text, double fps, double sequenceStart);

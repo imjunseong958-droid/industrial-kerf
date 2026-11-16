@@ -18,7 +18,7 @@
 #include "ui/change_reel.h"
 #include "ui/stage_motion.h"
 #include "ui/composer.h"
-#include "ui/wiring/review_wiring.h"
+#include "ui/wiring/chat_wiring.h"
 #include "ui/project_sidebar.h"
 #include "ui/stage_shell.h"
 #include "ui/wiring/timeline_wiring.h"
@@ -103,13 +103,13 @@ private slots:
     void wideAtTheDesignSize() {
         const stage::Rects r = stage::rects(QSize(1600, 1000), kWide);
         QVERIFY(r.wide);
-        QCOMPARE(r.sidebar, QRect(0, 40, 240, 960));
-        QCOMPARE(r.conversation, QRect(240, 40, 400, 960));
-        QCOMPARE(r.panel, QRect(640, 40, 960, 960));
-        QCOMPARE(r.slot, QRect(640, 40, 960, 420));
-        QCOMPARE(r.picture, QRect(768, 52, 704, 396));
+        QCOMPARE(r.sidebar, QRect(0, 40, 252, 960));
+        QCOMPARE(r.conversation, QRect(252, 40, 560, 960));
+        QCOMPARE(r.panel, QRect(812, 40, 788, 960));
+        QCOMPARE(r.slot, QRect(812, 40, 788, 420));
+        QCOMPARE(r.picture, QRect(854, 52, 704, 396));
         QVERIFY(r.transport.isEmpty());
-        QCOMPARE(r.timeline, QRect(640, 460, 960, 540));
+        QCOMPARE(r.timeline, QRect(812, 460, 788, 540));
         expectFilled(r, QSize(1600, 1000), "16:9");
     }
 
@@ -118,11 +118,11 @@ private slots:
         for (const double aspect : {kPortrait, kFeed, 1.0}) {
             const stage::Rects r = stage::rects(QSize(1600, 1000), aspect);
             QVERIFY(!r.wide);
-            QCOMPARE(r.conversation, QRect(240, 40, 400, 960));
-            QCOMPARE(r.slot, QRect(640, 40, 960, 614));
+            QCOMPARE(r.conversation, QRect(252, 40, 560, 960));
+            QCOMPARE(r.slot, QRect(812, 40, 788, 614));
             QCOMPARE(r.picture, stage::fitted(stage::paddedSlot(r.slot), aspect));
             QVERIFY(r.transport.isEmpty());
-            QCOMPARE(r.timeline, QRect(640, 654, 960, 346));
+            QCOMPARE(r.timeline, QRect(812, 654, 788, 346));
             expectFilled(r, QSize(1600, 1000), "vertical");
         }
     }
@@ -132,9 +132,9 @@ private slots:
         {
             const stage::Rects r = stage::rects(QSize(1080, 700), kWide);
             QVERIFY(r.sidebar.isEmpty());
-            QCOMPARE(r.conversation, QRect(0, 40, 400, 660));
-            QCOMPARE(r.slot, QRect(400, 40, 680, 289));
-            QCOMPARE(r.timeline, QRect(400, 329, 680, 371));
+            QCOMPARE(r.conversation, QRect(0, 40, 480, 660));
+            QCOMPARE(r.slot, QRect(480, 40, 600, 289));
+            QCOMPARE(r.timeline, QRect(480, 329, 600, 371));
             expectFilled(r, QSize(1080, 700), "least");
         }
         // Narrow: the conversation gives way, to 320 and no further.
@@ -149,9 +149,9 @@ private slots:
         // Large: the picture pillarboxes in black in its slot.
         {
             const stage::Rects r = stage::rects(QSize(2560, 1440), kWide);
-            QCOMPARE(r.conversation.width(), 400);
-            QCOMPARE(r.slot, QRect(640, 40, 1920, 612));
-            QCOMPARE(r.timeline, QRect(640, 652, 1920, 788));
+            QCOMPARE(r.conversation.width(), 560);
+            QCOMPARE(r.slot, QRect(812, 40, 1748, 612));
+            QCOMPARE(r.timeline, QRect(812, 652, 1748, 788));
             QCOMPARE(r.picture, stage::fitted(stage::paddedSlot(r.slot), kWide));
             QCOMPARE(r.picture.height(), 588);
             expectFilled(r, QSize(2560, 1440), "large");
@@ -176,10 +176,10 @@ private slots:
     void verticalAtOtherWindowSizes() {
         {
             const stage::Rects r = stage::rects(QSize(1280, 800), 1.0);
-            QCOMPARE(r.conversation, QRect(240, 40, 400, 760));
-            QCOMPARE(r.slot, QRect(640, 40, 640, 486));
+            QCOMPARE(r.conversation, QRect(252, 40, 428, 760));
+            QCOMPARE(r.slot, QRect(680, 40, 600, 486));
             QCOMPARE(r.picture, stage::fitted(stage::paddedSlot(r.slot), 1.0));
-            QCOMPARE(r.timeline, QRect(640, 526, 640, 274));
+            QCOMPARE(r.timeline, QRect(680, 526, 600, 274));
             expectFilled(r, QSize(1280, 800), "square");
         }
         // Short: the timeline keeps its least.
@@ -292,7 +292,7 @@ private slots:
         window.applySnapshot(snapshotOf(QSize(1080, 1920)));
         // At once: no animation, nothing left to process.
         expectAt(9.0 / 16.0);
-        QCOMPARE(window.m_viewer->videoRect(), QRectF(stage::fitted(stage::paddedSlot(QRect(0, 0, 960, 614)), 9.0 / 16.0)));
+        QCOMPARE(window.m_viewer->videoRect(), QRectF(stage::fitted(stage::paddedSlot(QRect(0, 0, 788, 614)), 9.0 / 16.0)));
         window.applySnapshot(snapshotOf(QSize(1080, 1350)));
         expectAt(4.0 / 5.0);
         window.resize(1280, 800);
@@ -301,7 +301,7 @@ private slots:
         window.applySnapshot(snapshotOf(QSize(1080, 1080)));
         expectAt(1.0);
         // The black is the picture's: letterboxed at this size.
-        QCOMPARE(window.m_viewer->videoRect(), QRectF(stage::fitted(stage::paddedSlot(QRect(0, 0, 640, 486)), 1.0)));
+        QCOMPARE(window.m_viewer->videoRect(), QRectF(stage::fitted(stage::paddedSlot(QRect(0, 0, 600, 486)), 1.0)));
         const QImage shot = window.m_viewer->grab().toImage();
         QCOMPARE(shot.pixelColor(QPoint(10, 4) * shot.devicePixelRatio()).rgb(), qRgb(0, 0, 0));
         window.close();
@@ -328,7 +328,7 @@ private slots:
             QVERIFY(QTest::qWaitForWindowExposed(&window));
             QCOMPARE(window.m_shell->sheet(), StageShell::Sheet::None);
             QVERIFY(window.m_chat->isVisible());
-            QCOMPARE(inWindow(window.m_chat, &window), QRect(240, 40, 400, 960));
+            QCOMPARE(inWindow(window.m_chat, &window), QRect(252, 40, 560, 960));
             window.close();
         }
         settings.remove(QStringLiteral("workspace"));
@@ -478,8 +478,8 @@ private slots:
                                          {"timeline", QJsonObject{{"width", 1920}, {"height", 1080}, {"fps", 24}, {"tracks", QJsonArray{}}}}});
         window.show();
         QVERIFY(QTest::qWaitForWindowExposed(&window));
-        emit window.m_bus->askPrefill(QStringLiteral("@Kerf fix it"), QString());
-        QCOMPARE(window.m_chatInput->toPlainText(), QStringLiteral("@Kerf fix it"));
+        emit window.m_bus->askPrefill(QStringLiteral("Fix it"));
+        QCOMPARE(window.m_chatInput->toPlainText(), QStringLiteral("Fix it"));
         window.triggerCommand(QStringLiteral("window.project"));
         QCOMPARE(window.m_shell->sheet(), StageShell::Sheet::Media);
         window.triggerCommand(QStringLiteral("window.assistant"));
@@ -563,8 +563,8 @@ private slots:
         panes.picture = false;
         panes.timeline = false;
         const stage::Rects r = stage::rects(QSize(1600, 1000), kWide, 40, panes);
-        QCOMPARE(r.sidebar, QRect(0, 40, 240, 960));
-        QCOMPARE(r.conversation, QRect(240, 40, 1360, 960));
+        QCOMPARE(r.sidebar, QRect(0, 40, 252, 960));
+        QCOMPARE(r.conversation, QRect(252, 40, 1348, 960));
         QVERIFY(r.panel.isEmpty());
         QVERIFY(r.slot.isEmpty());
         QVERIFY(r.timeline.isEmpty());
@@ -578,12 +578,12 @@ private slots:
         stage::Panes picture;
         picture.timeline = false;
         const stage::Rects wide = stage::rects(QSize(1600, 1000), kWide, 40, picture);
-        QCOMPARE(wide.slot, QRect(640, 40, 960, 872));
-        QCOMPARE(wide.transport, QRect(640, 912, 960, 88));
+        QCOMPARE(wide.slot, QRect(812, 40, 788, 872));
+        QCOMPARE(wide.transport, QRect(812, 912, 788, 88));
         expectFilled(wide, QSize(1600, 1000), "picture");
         const stage::Rects upright = stage::rects(QSize(1600, 1000), kPortrait, 40, picture);
-        QCOMPARE(upright.slot, QRect(640, 40, 960, 872));
-        QCOMPARE(upright.transport, QRect(640, 912, 960, 88));
+        QCOMPARE(upright.slot, QRect(812, 40, 788, 872));
+        QCOMPARE(upright.transport, QRect(812, 912, 788, 88));
         expectFilled(upright, QSize(1600, 1000), "upright picture");
 
         stage::Panes timeline;
@@ -598,7 +598,7 @@ private slots:
     }
 
     void theSidebarGivesWayInANarrowWindow() {
-        QCOMPARE(stage::rects(QSize(1100, 800), kWide).sidebar.width(), 240);
+        QCOMPARE(stage::rects(QSize(1100, 800), kWide).sidebar.width(), 252);
         QVERIFY(stage::rects(QSize(1099, 800), kWide).sidebar.isEmpty());
     }
 
@@ -620,17 +620,16 @@ private slots:
         QVERIFY(!window.m_shell->panes().panelOpen());
         QVERIFY(!window.m_viewer->isVisible());
         QVERIFY(!window.m_timelinePanel->isVisible());
-        QCOMPARE(inWindow(window.m_chat, &window), QRect(240, 40, 1360, 960));
-        // No picture to stamp or draw on.
+        QCOMPARE(inWindow(window.m_chat, &window), QRect(252, 40, 1348, 960));
+        // No picture to stamp.
         QVERIFY(!window.m_chat->composerWidget()->stamp()->isVisible());
-        QVERIFY(!window.m_chat->composerWidget()->drawButton()->isVisible());
         QVERIFY(!window.m_chat->composerWidget()->stamped());
 
         window.applySnapshot(snapshotOf(QSize(1920, 1080)));
         QCoreApplication::processEvents();
         QVERIFY(window.m_viewer->isVisible());
         QVERIFY(window.m_timelinePanel->isVisible());
-        QCOMPARE(inWindow(window.m_chat, &window), QRect(240, 40, 400, 960));
+        QCOMPARE(inWindow(window.m_chat, &window), QRect(252, 40, 560, 960));
         QVERIFY(window.m_chat->composerWidget()->stamped());
         QVERIFY(window.m_commands->action(QStringLiteral("view.picture"))->isChecked());
 
@@ -646,7 +645,7 @@ private slots:
         window.close();
     }
 
-    // While Kerf makes a first cut, its card is in Kerf's row of the turn, at work,
+    // While Kerf makes a first cut, its card is in Kerf's answer, at work,
     // with nothing to do yet; done, the proposal's card shows that it is done.
     void aCutAtWorkIsItsCardInTheTurn() {
         QSettings().remove(QStringLiteral("layout"));
@@ -657,7 +656,7 @@ private slots:
         QVERIFY(QTest::qWaitForWindowExposed(&window));
         const QJsonObject proposing = proposingAFirstCut();
         window.applySnapshot(proposing);
-        window.m_reviewWiring->handleEvent(QStringLiteral("state"), QJsonObject{{"type", "state"}, {"snapshot", proposing}});
+        window.m_chatWiring->handleEvent(QStringLiteral("state"), QJsonObject{{"type", "state"}, {"snapshot", proposing}});
         fakeArtwork(window.m_artwork);
         emit window.m_artwork->changed();
         window.handleEvent(QJsonObject{{"type", "agent_busy"}, {"busy", true}});
@@ -666,12 +665,12 @@ private slots:
         ProposalCard *building = window.m_chat->buildingCard();
         QVERIFY(building);
         QCOMPARE(window.m_chat->buildingProposal(), QStringLiteral("p7"));
-        QVERIFY(window.m_chat->turnKerfRow(false)->isAncestorOf(building));
+        QVERIFY(window.m_chat->liveMessage()->isAncestorOf(building));
         QVERIFY(building->isVisible() && building->picture()->isVisible());
         QVERIFY(building->picture()->isWorking());
         QVERIFY(building->lineTitle()->isVisible());
         QVERIFY(!building->acceptButton()->isVisible() && !building->rejectButton()->isVisible());
-        // Only the one at work: the proposal's own thread waits for it.
+        // Only the one at work: the proposal waits for it.
         QCOMPARE(window.m_chat->cards().size(), 1);
         // At work the picture is the newest clip placed.
         QCOMPARE(building->picture()->poster().cacheKey(), building->picture()->picture().frames.constLast().poster.cacheKey());
@@ -702,7 +701,7 @@ private slots:
         QVERIFY(QTest::qWaitForWindowExposed(&window));
         const QJsonObject proposing = proposingAFirstCut();
         window.applySnapshot(proposing);
-        window.m_reviewWiring->handleEvent(QStringLiteral("state"), QJsonObject{{"type", "state"}, {"snapshot", proposing}});
+        window.m_chatWiring->handleEvent(QStringLiteral("state"), QJsonObject{{"type", "state"}, {"snapshot", proposing}});
         for (int i = 0; i < 4; ++i) QCoreApplication::processEvents();
         QVERIFY(!window.m_shell->panes().panelOpen());
         ProposalCard *card = window.m_chat->card(QStringLiteral("p7"));
@@ -825,7 +824,9 @@ private slots:
                                  QStringLiteral("t1"));
         QCOMPARE(sidebar.conversationRow(QStringLiteral("t1"))->trailing(), QStringLiteral("Review"));
         QVERIFY(sidebar.conversationRow(QStringLiteral("t1"))->isCurrent());
-        QCOMPARE(sidebar.conversationRow(QStringLiteral("t2"))->trailing(), QStringLiteral("Done"));
+        // Settled says so with its dot; with no time it has nothing at its end.
+        QVERIFY(sidebar.conversationRow(QStringLiteral("t2"))->trailing().isEmpty());
+        QCOMPARE(sidebar.conversationRow(QStringLiteral("t2"))->dotColor(), tokens::color(tokens::activity::settled));
         QSignalSpy chosen(&sidebar, &ProjectSidebar::conversationChosen);
         sidebar.conversationRow(QStringLiteral("t2"))->click();
         QCOMPARE(chosen.value(0).value(0).toString(), QStringLiteral("t2"));
@@ -887,7 +888,7 @@ private slots:
     }
 
     void theReelPlansWhatChangedWithHandles() {
-        ReviewModel::ClipChange trim;
+        ProposalModel::ClipChange trim;
         trim.clip = QStringLiteral("c1");
         trim.name = QStringLiteral("sea");
         trim.trimmed = true;
@@ -895,13 +896,13 @@ private slots:
         trim.oldEnd = 14;
         trim.newStart = 10;
         trim.newEnd = 12;
-        ReviewModel::ClipChange near = trim;
+        ProposalModel::ClipChange near = trim;
         near.name = QStringLiteral("road");
         near.oldStart = 12;
         near.oldEnd = 16;
         near.newStart = 12;
         near.newEnd = 16;
-        ReviewModel::ClipChange added;
+        ProposalModel::ClipChange added;
         added.clip = QStringLiteral("c9");
         added.name = QStringLiteral("cta");
         added.added = true;
@@ -1202,10 +1203,10 @@ private slots:
         panes.reel = true;
         const stage::Rects r = stage::rects(QSize(1600, 1000), kWide, 40, panes);
         // The stage reaches over the conversation, with the strip over the picture.
-        QCOMPARE(r.conversation, QRect(240, 40, 400, 960));
-        QCOMPARE(r.slot, QRect(520, 40, 1080, 608));
-        QCOMPARE(r.reel, QRect(553, 64, 460, 40));
-        QCOMPARE(r.timeline.left(), 520);
+        QCOMPARE(r.conversation, QRect(252, 40, 560, 960));
+        QCOMPARE(r.slot, QRect(692, 40, 908, 511));
+        QCOMPARE(r.reel, QRect(725, 64, 460, 40));
+        QCOMPARE(r.timeline.left(), 692);
     }
 
     void thePictureFollowsKerf() {

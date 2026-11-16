@@ -373,6 +373,7 @@ impl Runtime {
                 self.project_path.parent().unwrap_or(Path::new("")),
             ),
             revision: state.revision,
+            review_revision: 0,
             can_undo: !state.past.is_empty(),
             can_redo: !state.future.is_empty(),
             pending_proposal: state

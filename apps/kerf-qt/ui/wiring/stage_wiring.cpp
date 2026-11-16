@@ -5,7 +5,7 @@
 #include "components.h"
 #include "editor_bus.h"
 #include "main_window.h"
-#include "review_model.h"
+#include "proposal_model.h"
 #include "timeline_widget.h"
 #include "viewer_widget.h"
 
@@ -26,7 +26,6 @@ namespace kerf {
 
 namespace {
 
-const QString kAnnotationsKey = QStringLiteral("viewer/annotations");
 
 // Half a frame either side, so a time on a frame boundary counts as in.
 double frameSlack(double fps) { return 0.5 / std::max(1.0, fps); }
@@ -37,9 +36,7 @@ StageWiring::StageWiring(MainWindow *window, EditorBus *bus) : QObject(nullptr),
     setObjectName(QStringLiteral("stageWiring"));
 }
 
-StageWiring::~StageWiring() {
-    for (const QMetaObject::Connection &connection : std::as_const(m_reviewConnections)) disconnect(connection);
-}
+StageWiring::~StageWiring() = default;
 
 // ---------------------------------------------------------------- PreviewChip
 
@@ -132,7 +129,6 @@ void StageWiring::build() {
     m_hud->setObjectName(QStringLiteral("agentHud"));
     m_chip = new PreviewChip(nullptr, m_bus);
     viewer->setOverlays(m_hud, m_chip);
-    viewer->setAnnotationsShown(QSettings().value(kAnnotationsKey, true).toBool());
 }
 
 void StageWiring::attach() {
@@ -141,11 +137,10 @@ void StageWiring::attach() {
     MainWindow *w = m_window;
     ViewerWidget *viewer = w->m_viewer;
 
-    // The switches: view.annotations, the zoom, the marks and the loop.
+    // The switches: the zoom, the marks and the loop.
     if (w->m_commands) {
         connect(w->m_commands, &CommandRegistry::toggled, this, [this](const QString &id, bool checked) {
-            if (id == QStringLiteral("view.annotations")) setAnnotations(checked);
-            else if (id == QStringLiteral("playback.loop")) setLoop(checked);
+            if (id == QStringLiteral("playback.loop")) setLoop(checked);
         });
         w->m_commandHandlers.insert(QStringLiteral("viewer.zoom"), [this] { showZoomMenu(); });
         w->m_commandHandlers.insert(QStringLiteral("mark.in"), [this] { markIn(); });
@@ -159,58 +154,16 @@ void StageWiring::attach() {
             if (json.value(QStringLiteral("status")).toString() == QStringLiteral("done")) m_lastCheck = json;
             refreshOverlap();
         }
-        else if (type == QStringLiteral("comments")) refreshOverlays();
     });
-    connect(m_bus, &EditorBus::currentThreadChanged, this, [this](const QString &id) {
-        m_current = id;
-        refreshOverlays();
-    });
-    connect(m_bus, &EditorBus::playheadChanged, this, &StageWiring::refreshOverlays);
-    // The panel's hovered thread and chosen comment.
-    connect(m_bus, &EditorBus::threadHovered, this, &StageWiring::hoverThread);
-    connect(m_bus, &EditorBus::commentSelected, this, &StageWiring::selectComment);
-    connect(m_bus, &EditorBus::reviewChanged, this, &StageWiring::watchReview);
+    connect(m_bus, &EditorBus::playheadChanged, this, &StageWiring::refreshOverlap);
     connect(m_bus, &EditorBus::playheadChanged, this, &StageWiring::followPlayhead);
     connect(m_bus, &EditorBus::playingChanged, this, &StageWiring::followPlaying);
-
-    // A drawing on the frame, for the composer.
-    connect(m_bus, &EditorBus::drawingRequested, viewer, &ViewerWidget::beginDrawing);
-    connect(viewer, &ViewerWidget::drawingFinished, this, [this](const QJsonArray &strokes) {
-        if (m_relaying) return;
-        m_relaying = true;
-        emit m_bus->drawingFinished(strokes);
-        m_relaying = false;
-    });
-    connect(viewer, &ViewerWidget::drawingCancelled, this, [this] {
-        if (m_relaying) return;
-        m_relaying = true;
-        emit m_bus->drawingCancelled();
-        m_relaying = false;
-    });
-    // Ended elsewhere (the composer's Cancel): the stage lets go, quietly.
-    const auto letGo = [this] {
-        if (m_relaying) return;
-        m_relaying = true;
-        m_window->m_viewer->cancelDrawingCapture();
-        m_relaying = false;
-    };
-    connect(m_bus, &EditorBus::drawingCancelled, this, letGo);
-    connect(m_bus, &EditorBus::drawingFinished, this, letGo);
 
     if (const QJsonObject check = m_bus->lastEvent(QStringLiteral("check"));
         check.value(QStringLiteral("status")).toString() == QStringLiteral("done"))
         m_lastCheck = check;
-    watchReview();
-    syncSwitches();
+    refreshOverlap();
 }
-
-void StageWiring::setAnnotations(bool shown) {
-    m_window->m_viewer->setAnnotationsShown(shown);
-    QSettings().setValue(kAnnotationsKey, shown);
-    syncSwitches();
-}
-
-bool StageWiring::annotations() const { return m_window->m_viewer->annotationsShown(); }
 
 QString StageWiring::zoomText(double zoom) {
     if (zoom <= 0.0) return QStringLiteral("Fit");
@@ -256,15 +209,6 @@ void StageWiring::showZoomMenu(QWidget *anchor) {
     QMenu *menu = zoomMenu();
     if (anchor) ui::popupMenu(menu, anchor);
     else menu->popup(m_window->mapToGlobal(m_window->rect().center()));
-}
-
-void StageWiring::syncSwitches() {
-    const CommandRegistry *commands = m_window->m_commands;
-    if (!commands) return;
-    if (QAction *action = commands->action(QStringLiteral("view.annotations")); action && action->isChecked() != annotations()) {
-        const QSignalBlocker blocker(action);
-        action->setChecked(annotations());
-    }
 }
 
 // ---- marks and loop ------------------------------------------------------------------
@@ -335,57 +279,17 @@ void StageWiring::followPlaying(bool playing) {
     m_bus->run(QStringLiteral("playback.toggle"));
 }
 
-void StageWiring::watchReview() {
-    for (const QMetaObject::Connection &connection : std::as_const(m_reviewConnections)) disconnect(connection);
-    m_reviewConnections.clear();
-    m_review = m_bus->review();
-    if (m_review && !m_review->currentThread().isEmpty()) m_current = m_review->currentThread();
-    if (m_review) {
-        m_reviewConnections << connect(m_review, &ReviewModel::changed, this, &StageWiring::refreshOverlays);
-        m_reviewConnections << connect(m_review, &ReviewModel::currentChanged, this, [this](const QString &id) {
-            m_current = id;
-            refreshOverlays();
-        });
-    }
-    refreshOverlays();
-}
-
-QString StageWiring::currentThread() const { return m_current; }
-
-void StageWiring::hoverThread(const QString &id) {
-    if (id == m_hovered) return;
-    m_hovered = id;
-    refreshOverlap();
-}
-
-void StageWiring::selectComment(const QString &id) {
-    if (id == m_selected) return;
-    m_selected = id;
-    refreshAnnotations();
-}
-
-void StageWiring::refreshOverlays() {
-    refreshOverlap();
-    refreshAnnotations();
-}
-
 void StageWiring::refreshOverlap() {
     ViewerWidget *viewer = m_window->m_viewer;
-    const QString current = currentThread();
     const double playhead = m_bus->playhead();
     const double slack = frameSlack(m_bus->fps());
     QJsonObject found;
     // The last finished check's findings (one running keeps them).
     const QJsonArray findings = m_lastCheck.value(QStringLiteral("findings")).toArray();
-    // The current thread's, or the hovered one's.
-    const auto followed = [&](const QString &thread) { return !thread.isEmpty() && (thread == current || thread == m_hovered); };
-    if (!current.isEmpty() || !m_hovered.isEmpty())
-        for (const QJsonValue &value : std::as_const(findings)) {
+    // The first whose frames the playhead is on.
+    for (const QJsonValue &value : std::as_const(findings)) {
             const QJsonObject finding = value.toObject();
             if (finding.value(QStringLiteral("code")).toString() != QStringLiteral("text.overlap")) continue;
-            const QString comment = finding.value(QStringLiteral("commentId")).toString();
-            const ReviewModel::Thread *thread = m_review && !comment.isEmpty() ? m_review->threadOf(comment) : nullptr;
-            if (!followed(comment) && !(thread && followed(thread->id))) continue;
             const QJsonObject rect = finding.value(QStringLiteral("rect")).toObject();
             if (rect.value(QStringLiteral("w")).toDouble() <= 0.0 || rect.value(QStringLiteral("h")).toDouble() <= 0.0) continue;
             // The box is about the frames it was found on.
@@ -413,69 +317,6 @@ void StageWiring::refreshOverlap() {
     viewer->setOverlap(QRectF(rect.value(QStringLiteral("x")).toDouble(), rect.value(QStringLiteral("y")).toDouble(),
                               rect.value(QStringLiteral("w")).toDouble(), rect.value(QStringLiteral("h")).toDouble()),
                        tag);
-}
-
-void StageWiring::refreshAnnotations() {
-    ViewerWidget *viewer = m_window->m_viewer;
-    // A thread's comments, root first: the review's, else the bus's last
-    // `comments` as they came.
-    const QJsonArray items = m_bus->lastEvent(QStringLiteral("comments")).value(QStringLiteral("items")).toArray();
-    const auto threadOf = [&](const QString &threadId) {
-        QList<ReviewModel::Comment> comments;
-        if (threadId.isEmpty()) return comments;
-        if (m_review) {
-            if (const ReviewModel::Thread *thread = m_review->thread(threadId)) {
-                comments << thread->root;
-                comments << thread->replies;
-            }
-            return comments;
-        }
-        for (const QJsonValue &value : items) {
-            const ReviewModel::Comment comment = ReviewModel::readComment(value.toObject());
-            if (comment.id == threadId) comments.prepend(comment);
-            else if (comment.parent == threadId) comments << comment;
-        }
-        return comments;
-    };
-    // The thread a comment is in.
-    const auto rootOf = [&](const QString &commentId) -> QString {
-        if (commentId.isEmpty()) return {};
-        if (m_review) {
-            const ReviewModel::Thread *thread = m_review->threadOf(commentId);
-            return thread ? thread->id : QString();
-        }
-        for (const QJsonValue &value : items) {
-            const QJsonObject record = value.toObject();
-            if (record.value(QStringLiteral("id")).toString() != commentId) continue;
-            const QString parent = record.value(QStringLiteral("parent")).toString();
-            return parent.isEmpty() ? commentId : parent;
-        }
-        return {};
-    };
-    const double playhead = m_bus->playhead();
-    const double fps = std::max(1.0, m_bus->fps());
-    QList<ViewerWidget::Annotation> shown;
-    QStringList seen;
-    // Each drawing of `thread` (only `only` when it is set) whose time the
-    // playhead is in; a reply without a time of its own is at its thread's.
-    const auto collect = [&](const QString &thread, const QString &only) {
-        const QList<ReviewModel::Comment> comments = threadOf(thread);
-        const ReviewModel::Comment *root = !comments.isEmpty() && comments.first().id == thread ? &comments.first() : nullptr;
-        for (const ReviewModel::Comment &comment : comments) {
-            if (!comment.hasDrawing() || seen.contains(comment.id) || (!only.isEmpty() && comment.id != only)) continue;
-            const bool own = comment.hasAt();
-            const double at = own ? comment.at : root && root->hasAt() ? root->at : std::nan("");
-            if (std::isnan(at)) continue;
-            const double duration = own ? comment.duration : root ? root->duration : 0.0;
-            const double end = at + std::max(duration, 1.0 / fps);
-            if (playhead < at - frameSlack(fps) || playhead > end) continue;
-            seen << comment.id;
-            shown.append({comment.id, comment.drawing, ReviewModel::initials(comment.author)});
-        }
-    };
-    collect(currentThread(), QString());
-    if (!m_selected.isEmpty()) collect(rootOf(m_selected), m_selected);
-    viewer->setAnnotations(shown);
 }
 
 } // namespace kerf

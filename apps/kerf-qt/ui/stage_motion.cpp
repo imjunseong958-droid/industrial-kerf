@@ -166,37 +166,99 @@ WorkChip::WorkChip(QWidget *parent) : QWidget(parent) {
         m_pulseStep = step;
         update(QRect(9, height() / 2 - 5, 10, 10));
     });
+    m_fade.setDuration(tokens::motion::edgeFade);
+    m_fade.setEasingCurve(tokens::easing());
+    connect(&m_fade, &QVariantAnimation::valueChanged, this, [this](const QVariant &value) {
+        m_level = value.toReal();
+        update();
+    });
+    connect(&m_fade, &QVariantAnimation::finished, this, [this] {
+        if (!m_wanted) hide();
+    });
 }
 
 QSize WorkChip::sizeHint() const {
     const QFontMetrics metrics(tokens::font(tokens::meta));
-    return QSize(metrics.horizontalAdvance(QStringLiteral("Kerf is looking")) + 34, 24);
+    return QSize(metrics.horizontalAdvance(m_text) + 34, 24);
+}
+
+void WorkChip::setText(const QString &text) {
+    if (text == m_text) return;
+    m_text = text;
+    updateGeometry();
+    // It keeps its place: its top left, inside the picture's.
+    resize(sizeHint());
+    update();
+}
+
+void WorkChip::setDot(QRgb dot) {
+    if (dot == m_dot) return;
+    m_dot = dot;
+    update();
+}
+
+void WorkChip::setShown(bool shown) {
+    if (shown == m_wanted && (shown != isHidden())) return;
+    m_wanted = shown;
+    m_fade.stop();
+    const int length = ui::motionDuration(tokens::motion::edgeFade);
+    if (shown && isHidden()) {
+        m_fadeArmed = length > 0;
+        m_level = length > 0 ? 0.0 : 1.0;
+        show();
+        m_fadeArmed = false;
+    }
+    if (isHidden()) return;
+    const qreal target = shown ? 1.0 : 0.0;
+    if (length <= 0 || !isVisible()) {
+        m_level = target;
+        if (!shown) hide();
+        update();
+        return;
+    }
+    m_fade.setStartValue(m_level);
+    m_fade.setEndValue(target);
+    m_fade.start();
 }
 
 void WorkChip::showEvent(QShowEvent *event) {
     QWidget::showEvent(event);
+    // Shown at once, it is all there.
+    if (!m_fadeArmed && m_fade.state() != QAbstractAnimation::Running) {
+        m_level = 1.0;
+        m_wanted = true;
+    }
     if (!ui::reducedMotion()) m_pulse.start();
 }
 
 void WorkChip::hideEvent(QHideEvent *event) {
     QWidget::hideEvent(event);
     m_pulse.stop();
+    // Going out as what it is over was put away: it is gone, not back when that is.
+    const bool goingOut = m_fade.state() == QAbstractAnimation::Running && !m_wanted;
+    m_fade.stop();
+    if (goingOut) QTimer::singleShot(0, this, [this] {
+        if (!m_wanted) hide();
+    });
+    if (isHidden()) m_wanted = false;
 }
 
 void WorkChip::paintEvent(QPaintEvent *) {
+    if (m_level <= 0.0) return;
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing, true);
+    p.setOpacity(m_level);
     p.setPen(Qt::NoPen);
-    p.setBrush(QColor(0, 0, 0, 140));
+    p.setBrush(tokens::color(tokens::activity::chip));
     p.drawRoundedRect(QRectF(rect()), height() / 2.0, height() / 2.0);
     const qreal at = qreal(m_pulseStep) / tokens::motion::workPulseSteps;
-    p.setOpacity(1.0 - 0.65 * (1.0 - std::abs(at * 2.0 - 1.0)));
-    p.setBrush(tokens::color(tokens::accentInk));
+    p.setOpacity(m_level * (1.0 - 0.65 * (1.0 - std::abs(at * 2.0 - 1.0))));
+    p.setBrush(tokens::color(m_dot));
     p.drawEllipse(QPointF(14, height() / 2.0), 3, 3);
-    p.setOpacity(1.0);
+    p.setOpacity(m_level);
     p.setFont(tokens::font(tokens::meta));
     p.setPen(Qt::white);
-    p.drawText(QRect(24, 0, width() - 24, height()), Qt::AlignVCenter | Qt::AlignLeft, QStringLiteral("Kerf is looking"));
+    p.drawText(QRect(24, 0, width() - 24, height()), Qt::AlignVCenter | Qt::AlignLeft, m_text);
 }
 
 StageMotion::StageMotion(QWidget *parent) : QWidget(parent) {

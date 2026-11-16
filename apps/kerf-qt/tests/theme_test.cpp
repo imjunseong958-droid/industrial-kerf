@@ -14,7 +14,7 @@
 #include "main_window.h"
 #include "media_artwork.h"
 #include "proposal_card.h"
-#include "comment_row.h"
+#include "chat_parts.h"
 #include "project_launcher.h"
 #include "project_panel.h"
 #include "test_footage.h"
@@ -840,8 +840,8 @@ private slots:
             QVERIFY(!pinned->diffLines().isEmpty());
             QVERIFY(pinned->diffView()->text().contains(tokens::color(tokens::neg).name()));
             QVERIFY(pinned->diffView()->text().contains(tokens::color(tokens::pos).name()));
-            // Kerf's next steps are the welcome row's suggestions.
-            QVERIFY(!window.m_chat->welcomeRow()->suggestions().isEmpty());
+            // Kerf's next steps are the welcome's suggestions.
+            QVERIFY(!window.m_chat->examples().isEmpty());
             // The banner's buttons, as macOS orders them: Load from Disk last,
             // 8 past the button before it, 8 in from the window's edge.
             QCOMPARE(window.m_loadFromDisk->x() - window.m_keepEditorVersion->geometry().right() - 1, 8);
@@ -893,7 +893,7 @@ private slots:
             return panel.pixelColor(QPoint(window.m_chat->x() + 4, window.m_chat->y() + window.m_chat->height() / 2) * panel.devicePixelRatio()).rgb();
         };
         const auto nameInk = [&window] {
-            QLabel *name = window.m_chat->rows().constFirst()->nameLabel();
+            QLabel *name = window.m_chat->answers().constFirst()->body();
             name->ensurePolished();
             return name->palette().color(QPalette::WindowText).rgb();
         };

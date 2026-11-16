@@ -31,9 +31,6 @@ pub enum Scope {
     Window,
     /// Only while the timeline has focus, so typing elsewhere is unaffected.
     Timeline,
-    /// Only while the comment composer has focus (not its text field,
-    /// which types the key).
-    Composer,
 }
 
 /// The menus, in menu-bar order.
@@ -596,11 +593,6 @@ const fn timeline(mut command: Command) -> Command {
     command
 }
 
-const fn composer(mut command: Command) -> Command {
-    command.scope = Scope::Composer;
-    command
-}
-
 const fn keys(mut command: Command, keys: &'static [&'static str]) -> Command {
     command.keys = keys;
     command
@@ -796,7 +788,7 @@ pub static COMMANDS: &[Command] = &[
         &["Escape"],
     ),
     menu(command("ai.stop", "Stop Kerf", agent_busy), Menu::Clip, 1),
-    // The current thread's proposal, from its card: ⌘↩ and Esc there are
+    // A proposal, from its card in the conversation: ⌘↩ and Esc there are
     // `proposal.accept` and `proposal.reject`'s keys.
     params(
         command("comment.accept", "Accept", can_accept),
@@ -838,11 +830,6 @@ pub static COMMANDS: &[Command] = &[
             r#"{"at": frame, "name": string}"#,
         )),
         &["M"],
-    ),
-    // The comment composer's Draw on Frame button.
-    keys(
-        composer(frontend(command("composer.draw", "Draw on Frame", always))),
-        &["D"],
     ),
     menu(
         command(
@@ -1070,14 +1057,6 @@ pub static COMMANDS: &[Command] = &[
     // The program viewer's switches.
     checkable(keys(
         frontend(menu(
-            command("view.annotations", "Annotations", always),
-            Menu::View,
-            0,
-        )),
-        &["Shift+A"],
-    )),
-    checkable(keys(
-        frontend(menu(
             command("view.safeZones", "Safe Zones", always),
             Menu::View,
             0,
@@ -1241,8 +1220,6 @@ pub static KEYMAPS: &[Keymap] = &[
             ("sequence.renderPreview", &["Meta+R"]),
             ("source.insert", &["W"]),
             ("source.overwrite", &["D"]),
-            // D is Overwrite window-wide here, so drawing has no key.
-            ("composer.draw", &[]),
             ("sequence.snap", &["N"]),
             ("tool.selection", &["A"]),
             ("tool.razor", &["B"]),
@@ -1789,7 +1766,6 @@ mod tests {
         assert_eq!(find("window.project").unwrap().label, "Media");
         let media = find("window.project").unwrap();
         assert!(media.checkable && media.kind == Kind::Frontend);
-        assert_eq!(keys("view.annotations"), ["Shift+A"]);
         assert_eq!(keys("view.safeZones"), ["'"]);
         assert_eq!(keys("viewer.zoom"), ["Shift+Z"]);
         assert_eq!(keys("playback.loop"), ["Ctrl+L"]);
@@ -1800,7 +1776,6 @@ mod tests {
         assert_eq!(premiere.keys(find("export.master").unwrap()), ["Ctrl+M"]);
         assert_eq!(keys("bin.search"), ["Ctrl+F"]);
         assert_eq!(keys("bin.toggleView"), ["Ctrl+Alt+2"]);
-        assert_eq!(keys("composer.draw"), ["D"]);
         assert_eq!(keys("window.assistant"), ["Ctrl+Shift+J"]);
         // The program's marks are the timeline's.
         assert_eq!(find("mark.in").unwrap().scope, Scope::Timeline);
@@ -1814,7 +1789,6 @@ mod tests {
             assert_ne!(states[command.id], COMING, "{}", command.id);
         }
         for id in [
-            "view.annotations",
             "viewer.zoom",
             "playback.loop",
             "mark.in",
@@ -1835,12 +1809,11 @@ mod tests {
         for id in ["playback.loop", "mark.in", "mark.out", "mark.clear"] {
             assert_eq!(offline[id], json!(OFFLINE), "{id}");
         }
-        for id in [
-            "view.annotations",
-            "viewer.zoom",
-        ] {
-            assert!(offline[id].is_null(), "{id}: {}", offline[id]);
-        }
+        assert!(
+            offline["viewer.zoom"].is_null(),
+            "viewer.zoom: {}",
+            offline["viewer.zoom"]
+        );
         // The editor's own commands, carried out in the editor, which says
         // itself when one cannot run.
         for id in [
@@ -1848,7 +1821,6 @@ mod tests {
             "sequence.setFormat.916",
             "bin.search",
             "bin.toggleView",
-            "composer.draw",
         ] {
             let command = find(id).unwrap();
             assert_eq!(command.kind, Kind::Frontend, "{id}");
@@ -1860,7 +1832,6 @@ mod tests {
 
     #[test]
     fn the_formats_the_searches_and_the_panel_buttons_have_their_places() {
-        let kerf = Keymap::find("kerf");
         for (index, (id, label)) in [
             ("sequence.setFormat.169", "Landscape 16:9"),
             ("sequence.setFormat.916", "Vertical 9:16"),
@@ -1899,26 +1870,11 @@ mod tests {
             assert_eq!(find(id).unwrap().menu, Some(menu), "{id}");
             assert_eq!(find(id).unwrap().scope, Scope::Window, "{id}");
         }
-        // The composer's Draw lives in its panel, not in a menu.
-        let draw = find("composer.draw").unwrap();
-        assert_eq!((draw.menu, draw.scope), (None, Scope::Composer));
-        assert_eq!(kerf.keys(draw), ["D"]);
-        assert_eq!(Keymap::find("premiere").keys(draw), ["D"]);
         // Final Cut Pro's D is Overwrite, everywhere in the window.
-        assert!(Keymap::find("fcp").keys(draw).is_empty());
         assert_eq!(
             Keymap::find("fcp").keys(find("source.overwrite").unwrap()),
             ["D"]
         );
-        let catalog = catalog("kerf");
-        let entry = catalog["commands"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|command| command["id"] == "composer.draw")
-            .unwrap();
-        assert_eq!(entry["scope"], "composer");
-        assert_eq!(entry["kind"], "frontend");
     }
 
     #[test]

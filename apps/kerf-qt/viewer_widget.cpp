@@ -1,4 +1,5 @@
 #include "viewer_widget.h"
+#include "ui/activity.h"
 
 #include <QTimer>
 
@@ -219,14 +220,8 @@ void paintSafeZones(QPainter &p, const QRectF &picture) {
     p.restore();
 }
 
-// The overlap box (mockup-spec 3.3) and the strokes of a drawing.
+// The overlap box (mockup-spec 3.3).
 constexpr QRgb kOverlapFill = qRgba(236, 93, 97, tokens::alpha(0.32));
-constexpr QRgb kStrokeUnder = qRgba(0, 0, 0, tokens::alpha(0.4));
-constexpr double kStrokeAlpha = 0.9;
-constexpr int kAvatar = 16;
-
-// Fractions of the frame are kept to four places, as the masks' are.
-double fourPlaces(double value) { return std::round(value * 10000.0) / 10000.0; }
 
 // `text` broken at spaces into lines no wider than `width`, a word wider
 // than that on a line of its own.
@@ -244,13 +239,6 @@ QStringList wrapped(const QString &text, const QFontMetricsF &metrics, double wi
     }
     if (!line.isEmpty()) lines << line;
     return lines;
-}
-
-QColor strokeColor(const QJsonObject &stroke) {
-    QColor color(stroke.value(QStringLiteral("color")).toString());
-    if (!color.isValid()) color = tokens::color(tokens::ink);
-    color.setAlphaF(kStrokeAlpha);
-    return color;
 }
 
 } // namespace
@@ -396,6 +384,15 @@ void ViewerWidget::setWorkChip(QWidget *chip) {
     placeOverlays();
 }
 
+void ViewerWidget::setEdgeLight(QWidget *light) {
+    m_edgeLight = light;
+    if (light) {
+        light->setParent(this);
+        light->show();
+    }
+    placeOverlays();
+}
+
 void ViewerWidget::wipeToNextFrame() {
     if (m_frame.isNull()) return;
     m_wipeFrom = m_frame;
@@ -505,6 +502,18 @@ QRect ViewerWidget::hudRect() const {
 }
 
 void ViewerWidget::placeOverlays() {
+    // The light keeps to the picture's frame, under what is over the picture.
+    if (auto *light = qobject_cast<activity::EdgeLight *>(m_edgeLight.data())) {
+        light->setGeometry(rect());
+        light->setFrame(videoRect(), tokens::layout::pictureRadius);
+        light->lower();
+    }
+    if (m_workChip && !m_chip) {
+        const QRect picture = videoRect().toRect();
+        m_workChip->adjustSize();
+        m_workChip->move(picture.left() + kChipInset, picture.top() + kChipInset);
+        m_workChip->raise();
+    }
     if (m_hud) {
         m_hud->setGeometry(hudRect());
         m_hud->raise();
@@ -525,17 +534,6 @@ void ViewerWidget::placeOverlays() {
 void ViewerWidget::setSafeZones(bool shown) {
     if (shown == m_safeZones) return;
     m_safeZones = shown;
-    update();
-}
-
-void ViewerWidget::setAnnotationsShown(bool shown) {
-    if (shown == m_annotationsShown) return;
-    m_annotationsShown = shown;
-    update();
-}
-
-void ViewerWidget::setAnnotations(const QList<Annotation> &annotations) {
-    m_annotations = annotations;
     update();
 }
 
@@ -587,64 +585,6 @@ void ViewerWidget::setZoom(double zoom) {
     m_zoom = zoom;
     m_scaled = QImage();
     update();
-}
-
-void ViewerWidget::beginDrawing() {
-    cancelDrawing();
-    setMaskTool(MaskTool::None);
-    m_capturing = true;
-    m_strokes.clear();
-    m_stroke.clear();
-    setCursor(Qt::CrossCursor);
-    setFocus(Qt::OtherFocusReason);
-    update();
-}
-
-QJsonArray ViewerWidget::capturedStrokes() const {
-    QJsonArray out;
-    for (const QVector<QPointF> &stroke : m_strokes) {
-        QJsonArray points;
-        for (const QPointF &point : stroke) points.append(QJsonArray{fourPlaces(point.x()), fourPlaces(point.y())});
-        out.append(QJsonObject{{QStringLiteral("tool"), QStringLiteral("pen")},
-                               {QStringLiteral("points"), points},
-                               {QStringLiteral("color"), tokens::color(tokens::ink).name()}});
-    }
-    return out;
-}
-
-void ViewerWidget::finishDrawing() {
-    if (!m_capturing) return;
-    if (m_stroke.size() >= 2) m_strokes.append(m_stroke);
-    const QJsonArray strokes = capturedStrokes();
-    m_capturing = false;
-    m_strokes.clear();
-    m_stroke.clear();
-    unsetCursor();
-    update();
-    // Nothing drawn is no drawing.
-    if (strokes.isEmpty()) emit drawingCancelled();
-    else emit drawingFinished(strokes);
-}
-
-void ViewerWidget::cancelDrawingCapture() {
-    if (!m_capturing) return;
-    m_capturing = false;
-    m_strokes.clear();
-    m_stroke.clear();
-    unsetCursor();
-    update();
-    emit drawingCancelled();
-}
-
-QPointF ViewerWidget::frameFraction(const QPointF &widget) const {
-    const QRectF picture = pictureRect();
-    return QPointF(std::clamp((widget.x() - picture.left()) / std::max(1.0, picture.width()), 0.0, 1.0),
-                   std::clamp((widget.y() - picture.top()) / std::max(1.0, picture.height()), 0.0, 1.0));
-}
-
-QPointF ViewerWidget::fromFrame(const QPointF &fraction) const {
-    const QRectF picture = pictureRect();
-    return QPointF(picture.left() + fraction.x() * picture.width(), picture.top() + fraction.y() * picture.height());
 }
 
 void ViewerWidget::resizeEvent(QResizeEvent *) {
@@ -1010,8 +950,7 @@ bool ViewerWidget::event(QEvent *event) {
     if (event->type() == QEvent::ShortcutOverride) {
         const int key = static_cast<QKeyEvent *>(event)->key();
         const bool drawing = m_drawing || !m_penPoints.isEmpty();
-        const bool capture = m_capturing && (key == Qt::Key_Escape || key == Qt::Key_Return || key == Qt::Key_Enter);
-        const bool takes = capture || (key == Qt::Key_Escape && (drawing || m_maskTool != MaskTool::None)) ||
+        const bool takes = (key == Qt::Key_Escape && (drawing || m_maskTool != MaskTool::None)) ||
                            ((key == Qt::Key_Return || key == Qt::Key_Enter) && m_penPoints.size() >= 2) ||
                            ((key == Qt::Key_Delete || key == Qt::Key_Backspace) &&
                             (drawing || maskIndex(m_selectedMask) >= 0 || m_pathSelected >= 0));
@@ -1024,14 +963,6 @@ bool ViewerWidget::event(QEvent *event) {
 }
 
 void ViewerWidget::keyPressEvent(QKeyEvent *event) {
-    if (m_capturing) {
-        switch (event->key()) {
-        case Qt::Key_Escape: cancelDrawingCapture(); return;
-        case Qt::Key_Return:
-        case Qt::Key_Enter: finishDrawing(); return;
-        default: QWidget::keyPressEvent(event); return;
-        }
-    }
     switch (event->key()) {
     case Qt::Key_Escape:
         if (m_drawing || !m_penPoints.isEmpty()) cancelDrawing();
@@ -1062,14 +993,6 @@ void ViewerWidget::keyPressEvent(QKeyEvent *event) {
 void ViewerWidget::mousePressEvent(QMouseEvent *event) {
     if (event->button() != Qt::LeftButton) return;
     const QPointF position = event->position();
-    if (m_capturing) {
-        // A stroke starts on the picture.
-        if (pictureRect().contains(position)) {
-            m_stroke = {frameFraction(position)};
-            update();
-        }
-        return;
-    }
     if (m_maskTool == MaskTool::None) {
         if (const int point = sampledPointAt(position); point >= 0) {
             setFocus(Qt::MouseFocusReason);
@@ -1153,17 +1076,6 @@ void ViewerWidget::mousePressEvent(QMouseEvent *event) {
 
 void ViewerWidget::mouseMoveEvent(QMouseEvent *event) {
     const QPointF position = event->position();
-    if (m_capturing) {
-        // The stroke follows the pointer, a point each point it moves.
-        if ((event->buttons() & Qt::LeftButton) && !m_stroke.isEmpty()) {
-            const QPointF at = frameFraction(position);
-            if ((fromFrame(at) - fromFrame(m_stroke.constLast())).manhattanLength() >= 1.0) {
-                m_stroke.append(at);
-                update();
-            }
-        }
-        return;
-    }
     // Past the horizon of a plane in depth, what is in hand stays where it last was;
     // a path's point does a little before that, where the document can no longer say it.
     if (m_drawing) {
@@ -1235,16 +1147,6 @@ void ViewerWidget::mouseMoveEvent(QMouseEvent *event) {
 
 void ViewerWidget::mouseReleaseEvent(QMouseEvent *event) {
     if (event->button() != Qt::LeftButton) return;
-    if (m_capturing) {
-        if (!m_stroke.isEmpty()) {
-            // A click leaves a dot: the same point twice.
-            if (m_stroke.size() == 1) m_stroke.append(m_stroke.constFirst());
-            m_strokes.append(m_stroke);
-            m_stroke.clear();
-            update();
-        }
-        return;
-    }
     if (m_drawing) {
         m_drawing = false;
         if (const auto at = picturePoint(event->position())) m_drawEnd = *at;
@@ -1299,7 +1201,7 @@ void ViewerWidget::mouseReleaseEvent(QMouseEvent *event) {
 
 void ViewerWidget::mouseDoubleClickEvent(QMouseEvent *event) {
     const QPointF position = event->position();
-    if (event->button() == Qt::LeftButton && !m_capturing && m_maskTool == MaskTool::None && pathPointAt(position) < 0 && handleAt(position) < 0) {
+    if (event->button() == Qt::LeftButton && m_maskTool == MaskTool::None && pathPointAt(position) < 0 && handleAt(position) < 0) {
         if (const double u = pathCurveAt(position); u >= 0.0) {
             m_pathPoints = motionpath::withPointOn(m_pathPoints, aspect(), u);
             selectPathPoint(int(std::clamp<qsizetype>(qsizetype(std::floor(u)), 0, m_pathPoints.size() - 3)) + 1);
@@ -1488,74 +1390,6 @@ void ViewerWidget::paintOverlap(QPainter &p) {
     p.restore();
 }
 
-void ViewerWidget::paintStrokes(QPainter &p, const QJsonArray &drawing, const QString &initials) {
-    QPointF start;
-    bool hasStart = false;
-    for (const QJsonValue &value : drawing) {
-        const QJsonObject stroke = value.toObject();
-        QVector<QPointF> points;
-        for (const QJsonValue &point : stroke.value(QStringLiteral("points")).toArray()) points.append(fromFrame(pointOf(point)));
-        if (points.isEmpty()) continue;
-        const QString tool = stroke.value(QStringLiteral("tool")).toString();
-        QPainterPath path;
-        if ((tool == QLatin1String("rect") || tool == QLatin1String("ellipse")) && points.size() >= 2) {
-            const QRectF box = QRectF(points.at(0), points.at(1)).normalized();
-            if (tool == QLatin1String("rect")) path.addRect(box);
-            else path.addEllipse(box);
-        } else if (tool == QLatin1String("arrow") && points.size() >= 2) {
-            const QPointF from = points.at(0), to = points.at(1);
-            path.moveTo(from);
-            path.lineTo(to);
-            // A head of 10 at 28 degrees either side.
-            const double angle = std::atan2(to.y() - from.y(), to.x() - from.x());
-            for (const double side : {-0.4887, 0.4887}) {
-                path.moveTo(to);
-                path.lineTo(to - QPointF(std::cos(angle + side), std::sin(angle + side)) * 10.0);
-            }
-        } else {
-            path.moveTo(points.first());
-            for (int index = 1; index < points.size(); ++index) path.lineTo(points.at(index));
-        }
-        p.setBrush(Qt::NoBrush);
-        p.setPen(QPen(tokens::color(kStrokeUnder), 4.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
-        p.drawPath(path);
-        p.setPen(QPen(strokeColor(stroke), 2.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
-        p.drawPath(path);
-        if (!hasStart) {
-            start = points.first();
-            hasStart = true;
-        }
-    }
-    if (!hasStart || initials.isEmpty()) return;
-    // Who drew it, at the start of the first stroke.
-    const QRectF avatar(start - QPointF(kAvatar / 2.0, kAvatar / 2.0), QSizeF(kAvatar, kAvatar));
-    p.setPen(QPen(QColor(Qt::black), 1.0));
-    p.setBrush(tokens::color(tokens::on));
-    p.drawEllipse(avatar.adjusted(-0.5, -0.5, 0.5, 0.5));
-    p.setFont(tokens::font(tokens::metaStrong));
-    p.setPen(tokens::color(tokens::ink));
-    p.drawText(avatar, Qt::AlignCenter, initials);
-}
-
-void ViewerWidget::paintAnnotations(QPainter &p) {
-    p.save();
-    p.setRenderHint(QPainter::Antialiasing);
-    if (m_annotationsShown)
-        for (const Annotation &annotation : std::as_const(m_annotations)) paintStrokes(p, annotation.drawing, annotation.initials);
-    if (m_capturing) {
-        // The drawing in hand, as it will be kept.
-        QJsonArray strokes = capturedStrokes();
-        if (m_stroke.size() >= 1) {
-            QJsonArray points;
-            for (const QPointF &point : m_stroke) points.append(QJsonArray{point.x(), point.y()});
-            if (m_stroke.size() == 1) points.append(points.first());
-            strokes.append(QJsonObject{{QStringLiteral("tool"), QStringLiteral("pen")}, {QStringLiteral("points"), points}});
-        }
-        paintStrokes(p, strokes, QString());
-    }
-    p.restore();
-}
-
 void ViewerWidget::paintEvent(QPaintEvent *event) {
     const EditorTheme &theme = editorTheme();
     QPainter p(this);
@@ -1703,7 +1537,6 @@ void ViewerWidget::paintEvent(QPaintEvent *event) {
     paintCaption(p, m_overlapShown || m_overlapLevel > 0.0);
     paintOverlap(p);
     if (m_safeZones) paintSafeZones(p, picture);
-    paintAnnotations(p);
     p.restore();
     paintMasks(p);
     paintMotionPath(p);

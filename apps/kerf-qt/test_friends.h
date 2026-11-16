@@ -8,6 +8,7 @@
 
 namespace kerf {
 
+class ActivityTest;
 class BinBrowserTest;
 class BusTest;
 class CommentsTest;
@@ -17,7 +18,9 @@ class LauncherTest;
 class LinkTest;
 class MockupParityTest;
 class MotionTest;
-class ReviewModelTest;
+class ChatTest;
+class ProposalModelTest;
+class SidebarTest;
 class StageShellTest;
 class StageTest;
 class StatusTest;
@@ -34,6 +37,7 @@ struct Access;
 } // namespace kerf
 
 #define KERF_TEST_FRIENDS                                                                                              \
+    friend class ::kerf::ActivityTest;                                                                                 \
     friend class ::kerf::BinBrowserTest;                                                                               \
     friend class ::kerf::BusTest;                                                                                      \
     friend class ::kerf::CommentsTest;                                                                                 \
@@ -43,7 +47,9 @@ struct Access;
     friend class ::kerf::LinkTest;                                                                                     \
     friend class ::kerf::MockupParityTest;                                                                             \
     friend class ::kerf::MotionTest;                                                                                    \
-    friend class ::kerf::ReviewModelTest;                                                                              \
+    friend class ::kerf::ChatTest;                                                                                     \
+    friend class ::kerf::ProposalModelTest;                                                                              \
+    friend class ::kerf::SidebarTest;                                                                                  \
     friend class ::kerf::StageShellTest;                                                                                \
     friend class ::kerf::StageTest;                                                                                    \
     friend class ::kerf::StatusTest;                                                                                   \

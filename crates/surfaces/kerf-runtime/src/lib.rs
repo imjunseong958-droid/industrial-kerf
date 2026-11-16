@@ -89,10 +89,19 @@ pub struct StateSnapshot {
     /// the last few settled. `pending_proposal` is the first open one.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub proposals: Vec<ProposalEntry>,
+    /// What a kerfd with review notes wrote here. Nothing sets it now; it is
+    /// kept so that the journal records that carry it, whose checksums cover
+    /// it, still verify.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub review_revision: u64,
     /// When the current revision was made, RFC 3339; absent for a project
     /// last edited by a kerfd that did not record it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub revision_time: Option<String>,
+}
+
+fn is_zero(value: &u64) -> bool {
+    *value == 0
 }
 
 /// One version of a proposal: v1, and each `revise` after it.

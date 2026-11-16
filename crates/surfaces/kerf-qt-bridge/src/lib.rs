@@ -3071,6 +3071,7 @@ mod tests {
             projection_status: "current".into(),
             import_warnings: Vec::new(),
             proposals: Vec::new(),
+            review_revision: 0,
             revision_time: None,
         }
     }

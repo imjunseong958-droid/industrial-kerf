@@ -56,6 +56,23 @@ constexpr QRgb neg = qRgb(0xec, 0x5d, 0x61);                      // fail, block
 constexpr QRgb playhead = qRgb(0xe5, 0x48, 0x4d);                 // playheads
 constexpr QRgb warn = qRgb(0xd6, 0xa3, 0x45);                     // meter -18...-6 dBFS band
 
+// What the editor is doing, in two hues only: Kerf at work (the Kerf cursor's
+// blue) and the computer making pictures (a render, a model making a shot);
+// and what a conversation is doing, as the dot before its title in the sidebar says.
+namespace activity {
+constexpr QRgb kerf = accentInk;                // Kerf looking or cutting: the light round the picture, its chip's dot
+constexpr QRgb gpu = qRgb(0xe0, 0xa4, 0x48);    // rendering or making: the light, a clip's stripes, a tile's
+constexpr QRgb gpuStripe = qRgba(0xe0, 0xa4, 0x48, alpha(0.30)); // the stripes over a clip or a tile being made
+constexpr QRgb chip = qRgba(0, 0, 0, alpha(0.55));               // the chip's ground over the picture
+// A conversation, in the sidebar.
+constexpr QRgb working = accent;   // Kerf is at work in it (the dot pulses)
+constexpr QRgb making = gpu;       // Kerf is making a cut or a render for it: the stage's amber
+constexpr QRgb review = accentInk; // something waits for you to look at it
+constexpr QRgb settled = pos;      // done
+constexpr QRgb failed = neg;       // it stopped on an error
+constexpr QRgb idle = dis;         // nothing going on
+} // namespace activity
+
 // Literal colours drawn on the picture and in the lanes.
 namespace overlay {
 constexpr QRgb lowerThirdBackground = qRgba(12, 12, 12, alpha(0.78));
@@ -208,7 +225,8 @@ constexpr int popStagger = 70;
 constexpr int fanStagger = 110;   // between the version cards
 constexpr int timelineLead = 150; // how long before the stage lands the timeline starts in
 constexpr int cutSettle = 500;    // edits being quiet before a proposed cut renders
-constexpr int workPulse = 1200;   // the working chip's dot, once
+constexpr int workPulse = 1200;   // the working chip's dot, and a working conversation's in the sidebar, once
+constexpr int workShimmer = 1600; // the light once over "Working" while Kerf works
 constexpr int compareSweep = 6800; // the before/after wipe, there and back
 constexpr int cardTurn = 2200;     // the light once round a cut's card while Kerf makes it
 constexpr int cardFrame = 50;      // how often that light is drawn again
@@ -218,9 +236,22 @@ constexpr int cardDone = 2400;     // done: how long it says so
 constexpr int frameStream = 160;   // frames closer than this are playing: drawn as they come
 constexpr int frameSettle = 220;   // after the last of them, the picture is drawn at its best
 constexpr int workPulseSteps = 24; // the dot's redraws in a pulse: it is slow, and need not be drawn every frame
+constexpr int unfoldStagger = 30;  // between the sidebar's archived conversations as they unfold
 constexpr int posterMost = 1280;   // the widest a poster is kept while it moves about
+// What the editor is doing (MOTION_UI.md: Stage at work, Making a shot).
+constexpr int edgeTurn = 3200;     // the light once round the picture while something works
+constexpr int edgeFrame = 50;      // how often that light is drawn again
+constexpr int edgeFade = 420;      // the light and its chip coming and going
+constexpr int stripeCycle = 1600;  // the stripes over a clip or a tile being made, moving one stripe on
+constexpr int stripeFrame = 80;    // how often they are drawn again
+constexpr int clockFrame = 1000;   // a making's clock, and all that moves under Reduce Motion
 // How far things go.
 constexpr int pageRise = 16;          // points Settings' pages come up
+constexpr qreal edgeTail = 0.22;      // the light's tail, a share of the way round
+constexpr qreal edgeWidth = 2.0;      // points the light is wide, outside the picture's edge
+constexpr qreal edgeGap = 1.0;        // and how far out from it
+constexpr qreal edgeRest = 0.28;      // the rest of the ring, under the light, as a share of it
+constexpr qreal stripeSpace = 10.0;   // points from one stripe to the next
 constexpr qreal compareFrom = 0.28;   // the wipe's line, across the picture
 constexpr qreal compareTo = 0.78;
 constexpr qreal chatBehind = 0.28;    // the conversation while the picture is watched
@@ -253,10 +284,10 @@ constexpr int toolbar = 40;     // toolbar height
 constexpr int strip = 28;       // the sheets' strips, the timeline's
 constexpr int bin = 272;        // the Media sheet's width
 // The minimal layout (ui/stage_shell.h).
-constexpr int sidebar = 240;            // the folders and conversations, at the left
+constexpr int sidebar = 252;            // the folders and conversations, at the left
 constexpr int sidebarFoot = 48;         // the account at its foot
 constexpr int sidebarWindowLeast = 1100; // the window's width under which the sidebar gives way
-constexpr int rail = 400;               // the conversation, beside an open panel
+constexpr int rail = 560;               // the conversation, beside an open panel
 constexpr int railLeast = 320;          // its least width
 constexpr int workLeast = 600;          // what it leaves the panel before it gives way
 constexpr int conversationColumn = 720; // the width its text keeps when it has the room to itself

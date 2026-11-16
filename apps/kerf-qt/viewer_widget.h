@@ -30,9 +30,8 @@ namespace kerf {
 
 // The picture region (mockup, minimal pass): the frame, flush, on black bars
 // where the region is not of its shape. Over it the caption, the QC overlap
-// box, safe zones (off by default) and the comments' drawings; it captures a
-// drawing on the frame, and draws the selected picture clip's masks and edits
-// them: a mask tool draws a new one, a handle drag moves a corner or point, a
+// box and safe zones (off by default); it draws the selected picture clip's
+// masks and edits them: a mask tool draws a new one, a handle drag moves a corner or point, a
 // drag inside a mask moves it, and Delete removes the selected one. Every
 // change leaves as a typed operation. The agent HUD sits in title safe, and a
 // proposal's preview chip 12 inside the picture's top left, as children that
@@ -71,6 +70,10 @@ public:
     void setOverlays(QWidget *hud, QWidget *chip);
     // A chip over the picture saying Kerf is at work, in the preview chip's place.
     void setWorkChip(QWidget *chip);
+    // The light round the picture while something works (activity::EdgeLight):
+    // over all of this widget, kept to the picture's frame, under the chips.
+    void setEdgeLight(QWidget *light);
+    QWidget *edgeLight() const { return m_edgeLight; }
     // Over the window's room rather than on black: only the picture is painted.
     void setFloating(bool floating);
     QWidget *hud() const { return m_hud; }
@@ -103,19 +106,6 @@ public:
     // Where the agent HUD's pop shadow reaches (empty while it is hidden).
     QRectF hudShadowRect() const;
 
-    // The comments' drawings over the picture (view.annotations).
-    void setAnnotationsShown(bool shown);
-    bool annotationsShown() const { return m_annotationsShown; }
-    // One comment's drawing to show now: strokes normalised to the frame
-    // ({tool: pen|ellipse|rect|arrow, points: [[x, y], ...], color}) and
-    // the initials on the 16 pt avatar at the first stroke's start.
-    struct Annotation {
-        QString comment;
-        QJsonArray drawing;
-        QString initials;
-    };
-    void setAnnotations(const QList<Annotation> &annotations);
-    QList<Annotation> annotations() const { return m_annotations; }
     // The QC overlap box: `rect` normalised to the frame, `tag` its text
     // ("8 px"); an empty rect hides it (fading over 160 ms).
     void setOverlap(const QRectF &rect, const QString &tag);
@@ -130,15 +120,6 @@ public:
     // 1, 2), one frame pixel a device pixel.
     void setZoom(double zoom);
     double zoom() const { return m_zoom; }
-
-    // A drawing on the frame (the composer's Draw): the pointer draws pen
-    // strokes over the picture; Return finishes (drawingFinished with the
-    // strokes, normalised to the frame), Esc cancels.
-    void beginDrawing();
-    void finishDrawing();
-    void cancelDrawingCapture();
-    bool capturingDrawing() const { return m_capturing; }
-    QJsonArray capturedStrokes() const;
 
     // The masks of picture clip `clip` as its snapshot carries them, and
     // where its picture lands on the canvas (picturePlacement). An empty
@@ -200,8 +181,6 @@ signals:
     void maskToolChanged(MaskTool tool);
     // A click chose a mask, or none.
     void maskSelected(const QString &name);
-    void drawingFinished(const QJsonArray &strokes);
-    void drawingCancelled();
 
 protected:
     bool event(QEvent *event) override;
@@ -242,9 +221,6 @@ private:
     void writePath();
     void removeSelectedPathPoint();
     void paintMotionPath(QPainter &p);
-    // Widget points to fractions of the frame, and back.
-    QPointF frameFraction(const QPointF &widget) const;
-    QPointF fromFrame(const QPointF &fraction) const;
     int maskIndex(const QString &name) const;
     // The selected mask's handle under the pointer, or -1.
     int handleAt(const QPointF &widget) const;
@@ -254,8 +230,6 @@ private:
     void paintMasks(QPainter &p);
     void paintCaption(QPainter &p, bool flagged);
     void paintOverlap(QPainter &p);
-    void paintAnnotations(QPainter &p);
-    void paintStrokes(QPainter &p, const QJsonArray &drawing, const QString &initials);
     // The caption's text box: its lines wrapped (and balanced) on a vertical
     // picture, one line on a wide one, and the box with its padding.
     QRectF captionBox(QString *text) const;
@@ -277,6 +251,7 @@ private:
     qreal m_compareAt = tokens::motion::compareFrom;
     QVariantAnimation *m_compareSweep = nullptr;
     QPointer<QWidget> m_workChip;
+    QPointer<QWidget> m_edgeLight;
     QImage m_wipeFrom;
     bool m_wipeArmed = false;
     qreal m_wipe = -1.0;
@@ -303,19 +278,12 @@ private:
     qreal m_scaledDpr = 1.0;
     QString m_caption;
 
-    bool m_annotationsShown = true;
-    QList<Annotation> m_annotations;
     QRectF m_overlapRect;
     QString m_overlapTag;
     bool m_overlapShown = false;
     double m_overlapLevel = 0.0;
     QVariantAnimation *m_overlapFade = nullptr;
     double m_zoom = 0.0;
-    // The drawing being captured: finished strokes and the one in hand, in
-    // fractions of the frame.
-    bool m_capturing = false;
-    QList<QVector<QPointF>> m_strokes;
-    QVector<QPointF> m_stroke;
 
     QString m_maskClip;
     QJsonArray m_masks;

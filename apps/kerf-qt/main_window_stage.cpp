@@ -3,16 +3,17 @@
 // own state and its bus traffic are StageWiring's.
 
 #include "main_window.h"
+#include "ui/conversation_model.h"
 #include "ask_prompt.h"
 #include "bridge.h"
 #include "chat_panel.h"
 #include "command_registry.h"
-#include "comment_row.h"
+#include "chat_parts.h"
 #include "composer.h"
 #include "project_launcher.h"
 #include "project_panel.h"
 #include "project_sidebar.h"
-#include "review_model.h"
+#include "proposal_model.h"
 #include "stage_shell.h"
 #include "editor_common.h"
 #include "editor_theme.h"
@@ -84,7 +85,7 @@
 #include "wiring/main_window_shared.h"
 #include "editor_bus.h"
 #include "motion_path.h"
-#include "wiring/review_wiring.h"
+#include "wiring/chat_wiring.h"
 #include "stage_motion.h"
 #include "wiring/stage_wiring.h"
 #include "wiring/timeline_wiring.h"
@@ -247,16 +248,18 @@ void MainWindow::buildSidebar() {
     connect(m_sidebar, &ProjectSidebar::projectChosen, this, [this](const QString &path) { openProject(path); });
     connect(m_sidebar, &ProjectSidebar::newProjectRequested, this, &MainWindow::newProject);
     connect(m_sidebar, &ProjectSidebar::openFolderRequested, this, &MainWindow::openProjectFolder);
-    connect(m_sidebar, &ProjectSidebar::conversationChosen, this, [this](const QString &id) { m_chat->openThread(id); });
-    connect(m_sidebar, &ProjectSidebar::newConversationRequested, this, [this] {
-        m_chat->setReplyTarget(QString());
-        if (ReviewModel *review = m_reviewWiring->model()) review->setCurrentThread(QString());
-        m_chat->focusComposer();
-    });
-    if (ReviewModel *review = m_reviewWiring->model()) {
-        connect(review, &ReviewModel::changed, this, &MainWindow::refreshSidebar);
-        connect(review, &ReviewModel::currentChanged, this, &MainWindow::refreshSidebar);
-    }
+    connect(m_sidebar, &ProjectSidebar::conversationChosen, this,
+            [this](const QString &id) { m_chatWiring->openConversation(id); });
+    connect(m_sidebar, &ProjectSidebar::newConversationRequested, this, [this] { m_chatWiring->openConversation(QString()); });
+    // The sidebar asked (and, for Delete, confirmed); it shows the change at once.
+    connect(m_sidebar, &ProjectSidebar::archiveRequested, this,
+            [this](const QString &id, bool archived) { m_chatWiring->archiveConversation(id, archived); });
+    connect(m_sidebar, &ProjectSidebar::renameRequested, this,
+            [this](const QString &id, const QString &title) { m_chatWiring->renameConversation(id, title); });
+    connect(m_sidebar, &ProjectSidebar::deleteRequested, this, [this](const QString &id) { m_chatWiring->deleteConversation(id); });
+    connect(m_chatWiring->conversations(), &ConversationModel::listChanged, this, &MainWindow::refreshSidebar);
+    connect(m_chatWiring->conversations(), &ConversationModel::currentChanged, this, &MainWindow::refreshSidebar);
+    connect(m_chatWiring->model(), &ProposalModel::changed, this, &MainWindow::refreshSidebar);
     // A cut Kerf made opens from its card in the conversation, and goes back into it.
     m_chat->setPictureSource([this](const QString &proposalId) { return cutPicture(proposalId); });
     connect(m_chat, &ChatPanel::pictureRequested, this, &MainWindow::openCutFromCard);
@@ -318,11 +321,8 @@ void MainWindow::applyPanes() {
         if (button) button->setOn(open);
     // The picture has gone from the stage: its card has it again.
     if (!panes.picture && !m_chat->stageProposal().isEmpty()) m_chat->setStageProposal(QString());
-    // A note stamps and draws on the picture.
-    if (Composer *composer = m_chat ? m_chat->composerWidget() : nullptr) {
-        composer->stamp()->setVisible(panes.picture);
-        composer->drawButton()->setVisible(panes.picture);
-    }
+    // A request is stamped with the playhead while there is a picture to play.
+    if (Composer *composer = m_chat ? m_chat->composerWidget() : nullptr) composer->stamp()->setVisible(panes.picture);
 }
 
 void MainWindow::followContentWithPanes() {
@@ -441,23 +441,33 @@ QRect MainWindow::cardPictureHome() const {
 void MainWindow::refreshSidebar() {
     if (!m_sidebar) return;
     m_sidebar->setProjects(ProjectLauncher::recentProjects(), m_projectDirectory);
+    const ConversationModel *model = m_chatWiring->conversations();
+    const QString current = model->currentId();
+    // What waits on the person in the open conversation (a proposal it
+    // staged), or how its last turn ended.
+    bool waiting = false;
+    bool failed = false;
+    for (const ConversationModel::Item &item : model->current().items) {
+        if (const ProposalModel::Proposal *proposal = item.proposal.isEmpty() ? nullptr : m_chatWiring->model()->proposal(item.proposal))
+            waiting = waiting || proposal->isOpen();
+        if (!item.you) failed = item.error;
+    }
+    const bool making = m_agentBusy && !m_making.isEmpty();
     QList<ProjectSidebar::Conversation> conversations;
-    QString current;
-    if (ReviewModel *review = m_reviewWiring->model()) {
-        current = review->currentThread();
-        for (const ReviewModel::Thread &thread : review->allThreads()) {
-            if (thread.origin == ReviewModel::Origin::Welcome) continue;
-            // A proposal joins its conversation when the turn that staged it ends.
-            if (thread.origin == ReviewModel::Origin::Proposal && m_agentBusy) continue;
-            ProjectSidebar::Conversation conversation;
-            conversation.id = thread.id;
-            conversation.title = review::titleLine(thread.root.body);
-            if (conversation.title.isEmpty()) conversation.title = QStringLiteral("Proposal");
-            conversation.state = !thread.openProposal.isEmpty() ? ProjectSidebar::State::Review
-                                 : thread.resolved()            ? ProjectSidebar::State::Settled
-                                                                : ProjectSidebar::State::Idle;
-            conversations << conversation;
-        }
+    for (const ConversationModel::Summary &summary : model->list()) {
+        ProjectSidebar::Conversation conversation;
+        conversation.id = summary.id;
+        conversation.title = summary.title.isEmpty() ? QStringLiteral("Conversation") : summary.title;
+        conversation.archived = summary.archived;
+        conversation.updated = summary.updated;
+        conversation.count = summary.count;
+        const bool here = summary.id == current;
+        conversation.state = here && making      ? ProjectSidebar::State::Making
+                             : here && m_agentBusy ? ProjectSidebar::State::Working
+                             : here && waiting     ? ProjectSidebar::State::Review
+                             : here && failed      ? ProjectSidebar::State::Failed
+                                                   : ProjectSidebar::State::Idle;
+        conversations << conversation;
     }
     m_sidebar->setConversations(conversations, current);
 }

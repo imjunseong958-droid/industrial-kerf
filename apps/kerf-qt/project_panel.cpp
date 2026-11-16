@@ -21,6 +21,9 @@
 #include <QSignalBlocker>
 #include <QStackedWidget>
 #include <QStyledItemDelegate>
+#include <QTimer>
+#include <QToolTip>
+#include <QHelpEvent>
 #include <QVBoxLayout>
 #include <QVariantAnimation>
 
@@ -67,13 +70,14 @@ void paintCheckerboard(QPainter &painter, const QRectF &rect) {
                              ((x + y) / 8) % 2 ? QColor(0x30, 0x30, 0x30) : QColor(0x26, 0x26, 0x26));
 }
 
-// A media's thumb (mockup .bi .th0): 72 x 38 on black. A picture is fitted
+// A media's thumb (mockup .bi .th0): 112 x 63 on black. A picture is fitted
 // at its own shape (black either side when it is narrower), over the
 // checkerboard when it has alpha; sound is its waveform on raised; a picture
-// not decoded yet is black with the film symbol; offline media says so. The
-// duration badge sits at right 4, bottom 4; another status is a dot.
+// not decoded yet is black with the film symbol; offline media says so, and a
+// shot its recipe has not made yet is a dashed hole saying that. The duration
+// badge sits at right 4, bottom 4; another status is a dot.
 QIcon tile(const QImage &frame, const AudioPeaks &peaks, bool audio, bool alpha, const QString &badge,
-           const QString &duration, qreal ratio) {
+           const QString &duration, qreal ratio, bool recipe) {
     QPixmap pixmap(QSize(int(std::ceil(kThumbnail.width() * ratio)), int(std::ceil(kThumbnail.height() * ratio))));
     pixmap.setDevicePixelRatio(ratio);
     pixmap.fill(Qt::transparent);
@@ -84,7 +88,17 @@ QIcon tile(const QImage &frame, const AudioPeaks &peaks, bool audio, bool alpha,
     round.addRoundedRect(box, kThumbRadius, kThumbRadius);
     painter.setClipPath(round);
     const bool offline = badge == kOffline;
-    if (audio && !offline) {
+    if (offline && recipe) {
+        painter.fillRect(box, color(tokens::well));
+        QPen dashed(color(tokens::lineh), 1, Qt::CustomDashLine);
+        dashed.setDashPattern({3, 3});
+        painter.setPen(dashed);
+        painter.setBrush(Qt::NoBrush);
+        painter.drawRoundedRect(box.adjusted(0.5, 0.5, -0.5, -0.5), kThumbRadius - 0.5, kThumbRadius - 0.5);
+        painter.setFont(tokens::font(tokens::meta));
+        painter.setPen(color(tokens::ink2));
+        painter.drawText(box.adjusted(0, 0, 0, -12), Qt::AlignCenter, QStringLiteral("Not made"));
+    } else if (audio && !offline) {
         painter.fillRect(box, color(tokens::raised));
         if (!peaks.isEmpty())
             drawWaveform(painter, box, peaks, 0.0, peaks.duration(), color(tokens::overlay::waveformPeak),
@@ -137,8 +151,18 @@ QIcon tile(const QImage &frame, const AudioPeaks &peaks, bool audio, bool alpha,
 // chosen) and the name under it; or, in the list, a 24 pt row.
 class BinItemDelegate final : public QStyledItemDelegate {
 public:
-    explicit BinItemDelegate(QListWidget *view) : QStyledItemDelegate(view), m_view(view) {}
+    BinItemDelegate(QListWidget *view, const ProjectPanel *panel) : QStyledItemDelegate(view), m_view(view), m_panel(panel) {}
     bool list = false;
+
+    // The item's tip, with what it is doing now, whole.
+    bool helpEvent(QHelpEvent *event, QAbstractItemView *view, const QStyleOptionViewItem &option, const QModelIndex &index) override {
+        if (event->type() != QEvent::ToolTip || !index.isValid()) return QStyledItemDelegate::helpEvent(event, view, option, index);
+        const QString status = m_panel->status(index.data(kMediaRole).toString());
+        QStringList tip{index.data(Qt::ToolTipRole).toString()};
+        if (!status.isEmpty()) tip.insert(1, status);
+        QToolTip::showText(event->globalPos(), tip.join(QLatin1Char('\n')), view, option.rect);
+        return true;
+    }
 
     QSize sizeHint(const QStyleOptionViewItem &, const QModelIndex &) const override {
         // A list row runs the width of the view.
@@ -172,21 +196,55 @@ public:
             painter->restore();
             return;
         }
+        using State = activity::MediaActivity::State;
+        const QString id = index.data(kMediaRole).toString();
+        const activity::MediaActivity doing = m_panel->mediaActivity(id);
         const QRectF thumb(option.rect.left(), option.rect.top(), kThumbnail.width(), kThumbnail.height());
         const QIcon icon = qvariant_cast<QIcon>(index.data(Qt::DecorationRole));
         painter->drawPixmap(thumb.toRect(), icon.pixmap(kThumbnail, painter->device()->devicePixelRatioF()));
-        if (selected) ui::paintInsetLine(*painter, thumb, kThumbRadius, color(tokens::ink), 1.5);
-        else ui::paintInsetLine(*painter, thumb, kThumbRadius, color(tokens::line), 1);
-        painter->setFont(tokens::font(tokens::meta));
+        if (doing.state == State::Making) {
+            // Amber stripes going on over it, under its badge's place.
+            painter->save();
+            QPainterPath round;
+            round.addRoundedRect(thumb, kThumbRadius, kThumbRadius);
+            painter->setClipPath(round, Qt::IntersectClip);
+            activity::paintStripes(*painter, thumb, activity::stripePhase(activity::clock()), color(tokens::activity::gpuStripe));
+            painter->restore();
+        }
+        if (selected) {
+            ui::paintInsetLine(*painter, thumb, kThumbRadius, color(tokens::ink), 1.5);
+        } else if (doing.state == State::Queued) {
+            QPen dashed(color(tokens::activity::gpu), 1, Qt::CustomDashLine);
+            dashed.setDashPattern({3, 3});
+            painter->setPen(dashed);
+            painter->setBrush(Qt::NoBrush);
+            painter->drawRoundedRect(thumb.adjusted(0.5, 0.5, -0.5, -0.5), kThumbRadius - 0.5, kThumbRadius - 0.5);
+        } else {
+            ui::paintInsetLine(*painter, thumb, kThumbRadius, color(doing.state == State::Making ? tokens::activity::gpu : tokens::line), 1);
+        }
+        // Its whole name, cut in the middle only when it cannot fit.
+        painter->setFont(tokens::font(tokens::control));
         painter->setPen(color(selected ? tokens::ink : tokens::ink2));
-        const QRectF nameRect(thumb.left(), thumb.bottom() + ProjectPanel::kNameTop, thumb.width(), tokens::meta.line);
+        const QRectF nameRect(thumb.left(), thumb.bottom() + ProjectPanel::kNameTop, thumb.width(), ProjectPanel::kLine);
         painter->drawText(nameRect, Qt::AlignLeft | Qt::AlignVCenter,
-                          QFontMetrics(painter->font()).elidedText(name, Qt::ElideRight, int(nameRect.width())));
+                          QFontMetrics(painter->font()).elidedText(name, Qt::ElideMiddle, int(nameRect.width())));
+        // What it is doing, under it.
+        const QString status = m_panel->status(id);
+        painter->setFont(tokens::font(tokens::meta));
+        painter->setPen(doing.state == State::Making || doing.state == State::Queued ? color(tokens::activity::gpu)
+                        : status.startsWith(kOffline)                               ? color(tokens::neg)
+                        : status.startsWith(QStringLiteral("Wants")) || status.startsWith(QStringLiteral("Not made"))
+                            ? color(tokens::ink2)
+                                                                                     : color(tokens::ink3));
+        const QRectF statusRect(thumb.left(), nameRect.bottom(), thumb.width(), ProjectPanel::kLine);
+        painter->drawText(statusRect, Qt::AlignLeft | Qt::AlignVCenter,
+                          QFontMetrics(painter->font()).elidedText(status, Qt::ElideRight, int(statusRect.width())));
         painter->restore();
     }
 
 private:
     QListWidget *m_view;
+    const ProjectPanel *m_panel;
 };
 
 // An Index row (20 tall, pad 0 16): a header in meta ink3, or a row's name
@@ -443,7 +501,7 @@ ProjectPanel::ProjectPanel(MediaArtwork *artwork, QWidget *parent) : QWidget(par
     // The media page and the Index page, 192 tall on the well.
     m_pages = new QStackedWidget;
     m_pages->setObjectName(QStringLiteral("binPages"));
-    m_pages->setFixedHeight(kGridHeight);
+    m_pages->setMinimumHeight(kGridLeast);
     m_well = new QWidget;
     m_well->setObjectName(QStringLiteral("binWell"));
     auto *wellLayout = new QVBoxLayout(m_well);
@@ -451,7 +509,7 @@ ProjectPanel::ProjectPanel(MediaArtwork *artwork, QWidget *parent) : QWidget(par
     wellLayout->setSpacing(0);
     m_list = new QListWidget;
     m_list->setObjectName(QStringLiteral("projectBin"));
-    m_list->setItemDelegate(new BinItemDelegate(m_list));
+    m_list->setItemDelegate(new BinItemDelegate(m_list, this));
     m_list->setFrameShape(QFrame::NoFrame);
     m_list->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     m_list->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
@@ -484,7 +542,7 @@ ProjectPanel::ProjectPanel(MediaArtwork *artwork, QWidget *parent) : QWidget(par
     m_indexEmpty->setContentsMargins(kSidePadding, 0, kSidePadding, 0);
     indexLayout->addWidget(m_indexEmpty, 1);
     m_pages->addWidget(indexPage);
-    layout->addWidget(m_pages);
+    layout->addWidget(m_pages, 1);
     connect(m_index, &QListWidget::itemClicked, this, [this](QListWidgetItem *item) {
         if (item->data(kIndexKindRole).toInt() == 1)
             emit seekRequested(item->data(kMediaRole).toString(), item->data(kIndexTimeRole).toDouble());
@@ -522,7 +580,8 @@ ProjectPanel::ProjectPanel(MediaArtwork *artwork, QWidget *parent) : QWidget(par
     roleLayout->addLayout(m_roleRows);
     roleLayout->addStretch(1);
     roles->setWidget(m_roleBox);
-    layout->addWidget(roles, 1);
+    m_rolesArea = roles;
+    layout->addWidget(roles, 0);
 
     connect(m_list, &QListWidget::itemActivated, this, [this](QListWidgetItem *item) {
         emit openRequested(item->data(kMediaRole).toString());
@@ -552,6 +611,7 @@ ProjectPanel::ProjectPanel(MediaArtwork *artwork, QWidget *parent) : QWidget(par
 bool ProjectPanel::event(QEvent *event) {
     // Tiles are drawn at the window's pixel ratio. Qt 6.6 tells a widget when
     // that changes; before it, the change comes with the window's new screen.
+    if (event->type() == QEvent::Show || event->type() == QEvent::Hide) QTimer::singleShot(0, this, &ProjectPanel::followMakingTicks);
 #if QT_VERSION >= QT_VERSION_CHECK(6, 6, 0)
     if (event->type() == QEvent::DevicePixelRatioChange) refreshTiles();
 #else
@@ -663,7 +723,98 @@ QIcon ProjectPanel::tileFor(const QJsonObject &source) const {
     const bool audio = !source.contains(QStringLiteral("width"));
     const bool alpha = pixelFormatHasAlpha(m_info.value(id).value(QStringLiteral("pixFmt")).toString());
     return tile(m_artwork ? m_artwork->frames.value(id) : QImage(), m_artwork ? m_artwork->peaks.value(id) : AudioPeaks(), audio,
-                alpha, m_badges.value(id), badgeText(source.value(QStringLiteral("duration")).toDouble(), m_fps), devicePixelRatioF());
+                alpha, m_badges.value(id), badgeText(source.value(QStringLiteral("duration")).toDouble(), m_fps), devicePixelRatioF(),
+                !source.value(QStringLiteral("recipe")).toString().isEmpty());
+}
+
+void ProjectPanel::setMediaActivity(const QHash<QString, activity::MediaActivity> &media) {
+    const auto same = [](const activity::MediaActivity &a, const activity::MediaActivity &b) {
+        return a.state == b.state && a.since == b.since && a.take == b.take && a.ahead == b.ahead && a.percent == b.percent;
+    };
+    bool changed = media.size() != m_activity.size();
+    for (auto it = media.cbegin(); !changed && it != media.cend(); ++it)
+        changed = !m_activity.contains(it.key()) || !same(m_activity.value(it.key()), it.value());
+    if (!changed) return;
+    m_activity = media;
+    m_list->viewport()->update();
+    followMakingTicks();
+}
+
+void ProjectPanel::setWantsMaking(const QHash<QString, QString> &wants) {
+    if (wants == m_wants) return;
+    m_wants = wants;
+    m_list->viewport()->update();
+}
+
+bool ProjectPanel::makingTicks() const { return m_makingTicker && m_makingTicker->isActive(); }
+
+void ProjectPanel::followMakingTicks() {
+    const bool making = isVisible() && !m_listView && m_tab == Tab::Media &&
+                        std::any_of(m_activity.cbegin(), m_activity.cend(),
+                                    [](const activity::MediaActivity &a) { return a.state == activity::MediaActivity::State::Making; });
+    if (!making) {
+        if (m_makingTicker) m_makingTicker->stop();
+        return;
+    }
+    if (!m_makingTicker) {
+        m_makingTicker = new QTimer(this);
+        // Only the tiles being made are drawn again.
+        connect(m_makingTicker, &QTimer::timeout, this, [this] {
+            for (int row = 0; row < m_list->count(); ++row) {
+                QListWidgetItem *item = m_list->item(row);
+                if (item->isHidden() || m_activity.value(item->data(kMediaRole).toString()).state != activity::MediaActivity::State::Making) continue;
+                m_list->viewport()->update(m_list->visualItemRect(item));
+            }
+        });
+    }
+    // Under Reduce Motion the stripes hold still and only the clock goes on.
+    m_makingTicker->setInterval(ui::reducedMotion() ? tokens::motion::clockFrame : tokens::motion::stripeFrame);
+    if (!m_makingTicker->isActive()) m_makingTicker->start();
+}
+
+QString ProjectPanel::status(const QString &mediaId) const {
+    return statusText(sourceFor(mediaId), m_activity.value(mediaId), m_badges.value(mediaId), m_wants.value(mediaId), m_usedOn.value(mediaId),
+                      activity::clock());
+}
+
+QString ProjectPanel::statusText(const QJsonObject &source, const activity::MediaActivity &doing, const QString &badge,
+                                 const QString &wants, const QStringList &usedOn, qint64 now) {
+    using State = activity::MediaActivity::State;
+    const QString on = usedOn.isEmpty() ? QString() : QStringLiteral("on ") + usedOn.join(QLatin1Char(' '));
+    const auto joined = [&on](QStringList parts) {
+        if (!on.isEmpty()) parts << on;
+        return parts.join(QStringLiteral(" · "));
+    };
+    switch (doing.state) {
+    case State::Making:
+        return doing.take > 0 ? QStringLiteral("Making take %1 · %2").arg(doing.take).arg(activity::elapsedText(now - doing.since))
+                              : QStringLiteral("Making · %1").arg(activity::elapsedText(now - doing.since));
+    case State::Queued:
+        return doing.ahead > 0 ? QStringLiteral("Queued · %1 ahead").arg(doing.ahead) : QStringLiteral("Queued for making");
+    case State::NotMade: return QStringLiteral("Not made yet");
+    case State::Offline: return QStringLiteral("Offline · file missing");
+    case State::Ready: break;
+    }
+    if (badge == kOffline)
+        return source.value(QStringLiteral("recipe")).toString().isEmpty() ? QStringLiteral("Offline · file missing")
+                                                                           : QStringLiteral("Not made yet");
+    if (badge == kNotDownloaded) return joined({kNotDownloaded});
+    if (!wants.isEmpty()) return QStringLiteral("Wants making · %1").arg(wants);
+    if (!source.value(QStringLiteral("recipe")).toString().isEmpty()) {
+        QStringList parts{QStringLiteral("Made"), QStringLiteral("shot")};
+        const QJsonArray takes = source.value(QStringLiteral("takes")).toArray();
+        int chosen = 0;
+        for (const QJsonValue &value : takes)
+            if (value.toObject().value(QStringLiteral("chosen")).toBool()) chosen = value.toObject().value(QStringLiteral("number")).toInt();
+        if (takes.isEmpty()) parts << QStringLiteral("take 1 of 1");
+        else if (chosen > 0) parts << QStringLiteral("take %1 of %2").arg(chosen).arg(takes.size());
+        return joined(parts);
+    }
+    const bool picture = source.contains(QStringLiteral("width"));
+    QStringList parts{picture ? (source.value(QStringLiteral("duration")).toDouble() > 0.0 ? QStringLiteral("Video") : QStringLiteral("Still"))
+                              : QStringLiteral("Sound")};
+    if (badge == kExternal) parts << QStringLiteral("outside the project");
+    return joined(parts);
 }
 
 void ProjectPanel::refreshTiles() {
@@ -748,6 +899,7 @@ void ProjectPanel::setTab(Tab tab) {
     if (tab == m_tab) return;
     m_tab = tab;
     m_pages->setCurrentIndex(tab == Tab::Media ? 0 : 1);
+    followMakingTicks();
     if (tab == Tab::Index) {
         rebuildIndex();
         requestIndex();
@@ -778,6 +930,7 @@ void ProjectPanel::setListView(bool list) {
     m_list->setDragEnabled(false);
     m_list->doItemsLayout();
     updateViewButton();
+    followMakingTicks();
 }
 
 void ProjectPanel::updateViewButton() {
@@ -949,6 +1102,23 @@ bool ProjectPanel::pixelFormatHasAlpha(const QString &pixFmt) {
 
 void ProjectPanel::setTracks(const QJsonArray &tracks) {
     m_tracks = tracks;
+    // Where each media is used, as the tracks' badges say it.
+    QHash<QString, QStringList> usedOn;
+    const QJsonObject program{{QStringLiteral("tracks"), tracks}};
+    for (const QJsonValue &value : tracks) {
+        const QJsonObject track = value.toObject();
+        const QString badge = trackBadge(program, track.value(QStringLiteral("id")).toString()).badge;
+        for (const QJsonValue &clip : track.value(QStringLiteral("clips")).toArray()) {
+            const QString source = clip.toObject().value(QStringLiteral("sourceId")).toString();
+            if (source.isEmpty() || badge.isEmpty()) continue;
+            QStringList &on = usedOn[source];
+            if (!on.contains(badge)) on << badge;
+        }
+    }
+    if (usedOn != m_usedOn) {
+        m_usedOn = usedOn;
+        m_list->viewport()->update();
+    }
     const QList<RoleGroup> groups = roleGroups(tracks);
     const auto same = [](const QList<RoleGroup> &a, const QList<RoleGroup> &b) {
         if (a.size() != b.size()) return false;
@@ -1015,6 +1185,8 @@ void ProjectPanel::rebuildRoles() {
         m_roleRows->addWidget(row);
         m_roleChecks << check;
     }
+    // As tall as its rows, to a point; past it they scroll, and the media have the rest.
+    if (m_rolesArea) m_rolesArea->setFixedHeight(std::min(kRolesMost, kRoleRow * int(m_roles.size() + 1) + tokens::space::s4));
 }
 
 } // namespace kerf

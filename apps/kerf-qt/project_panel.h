@@ -1,17 +1,21 @@
 #pragma once
 
-// The media bin at the left of the bottom band (mockup-spec 6), 272 wide:
+// The Media sheet (mockup-spec 6), 272 wide beside the conversation:
 //
 //   a 28 pt strip   the segmented "Media N" | "Index", Search (⌘F), the
 //                   List/Grid toggle (⌘⌥2) and Import (⌘I)
-//   the media page  a grid on the well, 192 tall: 3 columns of 72 with
-//                   72 x 38 thumbs (the poster, or a sound's waveform),
-//                   duration badges in frames at the sequence's rate, an
-//                   alpha checkerboard for media with alpha; or a list
+//   the media page  a grid on the well, as tall as the sheet leaves it: 2
+//                   columns of 112 with 112 x 63 thumbs (the poster, or a
+//                   sound's waveform), duration badges in frames at the
+//                   sequence's rate, an alpha checkerboard for media with
+//                   alpha; under each its whole name and what it is doing
+//                   ("Made · shot · take 1 of 1 · on V1", "Making take 2 ·
+//                   0:41" over amber stripes moving on its thumb, "Wants
+//                   making · …", "Offline"); or a list
 //   the Index page  for the chosen media, its shots (the cuts as ranges),
 //                   silences and loudest moments from the engine's media
 //                   index
-//   Roles           the rest of the band: one row per role of the program's
+//   Roles           under the page: one row per role of the program's
 //                   tracks (tracks without one under their kind), whose box
 //                   switches all of that role's tracks; Edit roles…
 //
@@ -19,6 +23,7 @@
 // media_info and media_index. Requests go out as signals; BinWiring sends them.
 
 #include "test_friends.h"
+#include "ui/activity.h"
 
 #include <QHash>
 #include <QIcon>
@@ -37,6 +42,7 @@ class QLineEdit;
 class QListWidget;
 class QListWidgetItem;
 class QStackedWidget;
+class QTimer;
 class QVBoxLayout;
 
 class QAction;
@@ -56,20 +62,24 @@ class ProjectPanel final : public QWidget {
     Q_OBJECT
     KERF_TEST_FRIENDS
 public:
-    // The grid (mockup-spec 6): 3 columns of 72 tiles 12 apart, rows 8
-    // apart, padded 8 16 0 on the well, 192 tall. An item is 56 tall: the
-    // 72 x 38 thumb, 2 pt, then its name on a 16 pt line.
-    static constexpr QSize kThumbnail{72, 38};
-    static constexpr int kColumns = 3;
+    // The grid: 2 columns of 112 tiles 12 apart, rows 12 apart, padded 12 16 0
+    // on the well, which has what Roles leaves of the sheet. An item is 101
+    // tall: the 112 x 63 thumb, 6 pt, then its name and what it is doing, each
+    // on a 16 pt line.
+    static constexpr QSize kThumbnail{112, 63};
+    static constexpr int kColumns = 2;
     static constexpr int kColumnGap = 12;
-    static constexpr int kRowGap = 8;
-    static constexpr int kItemHeight = 56;
-    static constexpr int kNameTop = 2;
+    static constexpr int kRowGap = 12;
+    static constexpr int kNameTop = 6;
+    static constexpr int kLine = 16;
+    static constexpr int kItemHeight = 63 + kNameTop + 2 * kLine;
     static constexpr int kSidePadding = 16;
-    static constexpr int kTopPadding = 8;
-    static constexpr int kGridHeight = 192;
-    // The Roles header and rows, 20 tall.
+    static constexpr int kTopPadding = 12;
+    // The page at least: a row of tiles and the start of the next.
+    static constexpr int kGridLeast = 160;
+    // The Roles header and rows, 20 tall; Roles is as tall as they are, to this.
     static constexpr int kRoleRow = 20;
+    static constexpr int kRolesMost = 164;
     // The list view's and the Index's rows.
     static constexpr int kListRow = 24;
     static constexpr int kIndexRow = 20;
@@ -90,6 +100,21 @@ public:
     void setMediaStatus(const QJsonObject &status);
     // Offline, Not downloaded, External, or empty.
     QString badge(const QString &mediaId) const { return m_badges.value(mediaId); }
+    // What each media is doing (MainWindow::mediaActivity), and the shots a
+    // cast event said want making, each with why.
+    void setMediaActivity(const QHash<QString, activity::MediaActivity> &media);
+    void setWantsMaking(const QHash<QString, QString> &wants);
+    activity::MediaActivity mediaActivity(const QString &mediaId) const { return m_activity.value(mediaId); }
+    // The line under a tile's name: what `mediaId` is doing now.
+    QString status(const QString &mediaId) const;
+    // That line for `source`: being made ("Making take 2 · 0:41"), queued, not
+    // made yet or offline, wanting making again (`wants`, why), else what it is,
+    // which take and where it is used ("Made · shot · take 1 of 2 · on V1",
+    // "Video · on V1 V2").
+    static QString statusText(const QJsonObject &source, const activity::MediaActivity &activity, const QString &badge,
+                              const QString &wants, const QStringList &usedOn, qint64 now);
+    // Whether the stripes over a tile being made draw frames.
+    bool makingTicks() const;
     QLineEdit *search() const { return m_search; }
 
     // The program sequence's frame rate: duration badges count its frames.
@@ -165,6 +190,13 @@ private:
     // Redraw every tile, for new artwork or appearance.
     void refreshTiles();
     QIcon tileFor(const QJsonObject &source) const;
+    void followMakingTicks();
+    // The tracks each media's clips are on, as their badges say them ("V1").
+    QHash<QString, QStringList> m_usedOn;
+    QHash<QString, activity::MediaActivity> m_activity;
+    QHash<QString, QString> m_wants;
+    QTimer *m_makingTicker = nullptr;
+    QWidget *m_rolesArea = nullptr;
     // Show only the media whose name holds `text`.
     void applyFilter(const QString &text);
     void rebuildRoles();

@@ -358,3 +358,17 @@ fn state_from_the_one_proposal_slot_still_loads() {
     ));
     assert_eq!(reopened.proposals[0].status, "rejected");
 }
+
+// A kerfd that kept review notes wrote `reviewRevision` into the snapshots of
+// the proposals in its journal, under their checksums: read back and written
+// again, a snapshot keeps it, so those records still verify.
+#[test]
+fn a_snapshot_written_with_review_notes_keeps_its_review_revision() {
+    let project = Project::new("review-revision");
+    let runtime = project.open();
+    let mut written = serde_json::to_value(runtime.snapshot()).unwrap();
+    assert!(written.get("reviewRevision").is_none());
+    written["reviewRevision"] = json!(11);
+    let read: StateSnapshot = serde_json::from_value(written.clone()).unwrap();
+    assert_eq!(serde_json::to_value(&read).unwrap(), written);
+}
