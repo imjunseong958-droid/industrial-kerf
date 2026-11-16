@@ -147,12 +147,27 @@ impl Ask {
             None if value.is_empty() => Err("a file's name is empty".to_owned()),
             None => Ok(Source::File(value.to_owned())),
         };
+        // A name that holds one value, given twice, would keep the last and drop the first
+        // unsaid: `out={lens.txt} out={out}` made no lens. Those that hold a list may repeat.
+        let mut given = std::collections::BTreeSet::new();
         for word in words {
             let (key, value) = word.split_once('=').ok_or_else(|| {
                 format!(
                     "`{word}` is not `<name>=<value>`; a value that holds spaces is quoted, as `prompt=\"a boat leaves\"`"
                 )
             })?;
+            let listed = matches!(key, "ref" | "signal" | "moves" | "cast" | "style")
+                || key.starts_with("guide_");
+            if !listed && !given.insert(key) {
+                return Err(format!(
+                    "`{key}=` is given twice; a line takes one{}",
+                    if key == "out" {
+                        ", the file it makes: a second file of the same model is a `generate` line of its own"
+                    } else {
+                        ""
+                    }
+                ));
+            }
             match key {
                 "model" => ask.model = value.to_owned(),
                 "prompt" => ask.prompt = value.to_owned(),

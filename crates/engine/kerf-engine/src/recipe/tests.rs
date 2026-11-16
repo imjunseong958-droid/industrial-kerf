@@ -1775,3 +1775,97 @@ fn a_cast_is_written_as_it_reads_and_added_to_without_changing_what_is_there() {
         .to_string()
         .contains("`Ada` says nothing"));
 }
+
+/// A pass of a sequence with nothing in depth is black on every frame, and a nested
+/// sequence is one flat clip in it: the plan says so before a model is handed it.
+#[test]
+fn a_pass_of_nothing_in_depth_is_said_to_be_black() {
+    let folder = tempfile::tempdir().unwrap();
+    let directory = folder.path();
+    std::fs::create_dir(directory.join("shots")).unwrap();
+    let some = models(
+        directory,
+        r#"{"shot": {"run": ["a", "{request}"], "takes": {"reads": ["guide"]}}}"#,
+    );
+    let scenes = project(
+        "media m1 path=\"shots/open.mp4\" rate=24 dur=1s video=160x120 recipe=\"shots/open.kerfrecipe\"\n\
+         sequence set rate=24 size=160x120 audio=48000\n\
+         \x20 track V1 video\n\
+         \x20   clip box gen=mesh@1 at=0f dur=24f\n\
+         \x20 track V2 video\n\
+         \x20   clip eye gen=camera@1 at=0f dur=24f\n\
+         sequence flat rate=24 size=160x120 audio=48000\n\
+         \x20 track V1 video\n\
+         \x20   clip sky gen=solid@1 at=0f dur=24f\n\
+         sequence nest rate=24 size=160x120 audio=48000\n\
+         \x20 track V1 video\n\
+         \x20   clip inner seq=set src=0f at=0f dur=24f\n",
+    );
+    let planned = |steps: &str| {
+        std::fs::write(
+            directory.join("shots/open.kerfrecipe"),
+            format!("kerf-recipe 1\n{steps}\ngenerate model=shot guide={{g.mp4}}\n"),
+        )
+        .unwrap();
+        plan(&scenes, directory, "m1", &some).unwrap().notes
+    };
+    // A mesh is in depth whether it says so or not; a picture needs nothing in depth.
+    assert!(planned("render set {g.mp4} pass=depth").is_empty());
+    assert!(planned("render flat {g.mp4}").is_empty());
+    assert_eq!(
+        planned("render flat {g.mp4} pass=depth"),
+        ["the depth of sequence `flat` into `{g.mp4}` is black: none of its clips is in depth (`three_d=true`, or a `gen=mesh` clip)"]
+    );
+    assert_eq!(
+        planned("render nest {g.mp4} pass=normals"),
+        ["the normals of sequence `nest` into `{g.mp4}` is black: none of its clips is in depth, and a nested sequence is drawn flat, as one clip: render `set` itself"]
+    );
+}
+
+/// A name a line takes once, given twice, is refused rather than its first value dropped:
+/// `out={lens.txt} out={out}` wrote no lens. Names that hold a list repeat.
+#[test]
+fn a_name_given_twice_on_a_line_is_refused() {
+    let words = |line: &str| line.split(' ').map(str::to_owned).collect::<Vec<_>>();
+    let twice = Ask::parse(&words("model=set out={lens.txt} out={out}"), &[]).unwrap_err();
+    assert!(
+        twice.starts_with("`out=` is given twice; a line takes one, the file it makes"),
+        "{twice}"
+    );
+    let seed = Ask::parse(&words("model=shot seed=1 seed=2"), &[]).unwrap_err();
+    assert_eq!(seed, "`seed=` is given twice; a line takes one");
+    let more = Ask::parse(&words("model=shot steps=20 steps=30"), &[]).unwrap_err();
+    assert!(more.starts_with("`steps=` is given twice"), "{more}");
+    let listed = Ask::parse(
+        &words("model=shot ref=a.png ref=b.png signal=s moves=m moves=n"),
+        &[],
+    )
+    .unwrap();
+    assert_eq!(listed.references.len(), 2);
+    assert_eq!(listed.moves, ["m", "n"]);
+}
+
+/// A set a model made is shown by the mesh clips that read its file, and those play it.
+#[test]
+fn a_mesh_clip_that_reads_a_set_plays_it() {
+    let folder = tempfile::tempdir().unwrap();
+    let directory = folder.path();
+    std::fs::create_dir(directory.join("shots")).unwrap();
+    std::fs::write(
+        directory.join("shots/set.kerfrecipe"),
+        "kerf-recipe 1\ngenerate model=set\n",
+    )
+    .unwrap();
+    let read = |file: &str| {
+        let project = project(&format!(
+            "media m1 path=\"shots/set.takes/001.glb\" rate=16 dur=1f video=832x480 recipe=\"shots/set.kerfrecipe\"\n\
+             sequence s1 rate=16 size=832x480 audio=48000\n\
+             \x20 track V1 video\n\
+             \x20   clip room gen=mesh@1 at=0f dur=16f\n\
+             \x20     set file=\"{file}\"\n"
+        ));
+        shots(&project, directory)[0].clips
+    };
+    assert_eq!(read("shots/set.takes/001.glb"), 1);
+    assert_eq!(read("models/car.glb"), 0);
+}

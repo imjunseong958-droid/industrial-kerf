@@ -652,6 +652,13 @@ those, and with no `guide=` nothing is asked of the server. Its entry, as
   its longer side), among the depth it also holds, cut short. PyTorch prints
   a tensor whole up to a thousand numbers, which is 83 frames, so the
   workflow reads 81 at most, and a file cut short is refused.
+- **A set can be a media of its own**, whose recipe's last line makes the
+  `.glb` (`media set path="shots/set.glb" … recipe="shots/set.kerfrecipe"`),
+  shown by a `gen=mesh@1` clip whose `file=` is the media's path. Each take
+  is kept as any take is, in `shots/set.takes/`, and the mesh clips that
+  read the media's file read the take; choosing another moves them with it.
+  A line names one `out=`: the lens of the same frame is a `generate` line
+  of its own.
 - **A set comes without its camera.** `set`'s mesh is as the frame's
   camera saw it, the camera at the file's own origin looking along its z
   backward, as a glTF camera does. The file holds no camera and no lens, so
@@ -1054,6 +1061,11 @@ render s2 {ids.mp4} pass=ids size=832x480 rate=16
   a place is another grey when something nearer comes into the frame. It
   is what to try where a scene's own depth comes out flat, a far set with
   one thing near.
+
+A pass of how near things are or which way they face, of a sequence with no
+clip in depth, is black on every frame; a sequence that only nests another
+is such a sequence, the nest being one flat clip. Making it says so before
+the model is asked: render the nested sequence itself.
 
 A pass has no lights, no focus, no adjustment layers, no dips, and no
 captions, and every clip is laid over what is behind it whatever its blend.

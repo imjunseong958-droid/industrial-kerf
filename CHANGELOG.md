@@ -41,6 +41,11 @@ on `main`; its section here becomes the release's notes on GitHub
   media's file read the take; choosing another take moves them with it.
 - When a ComfyUI node fails naming its own inputs (`confidence_threshold`),
   `kerf-comfy` says which name a `generate` line sets them by (`confidence=`).
+- Making a shot says so first when its guide would be black: a depth,
+  relative or normals pass of a sequence with nothing in depth, as one that
+  only nests another. A `generate` line that names `out=`, `seed=` or any
+  one-value name twice is refused, where the first was dropped unsaid.
+  `kerf shots` counts a mesh clip that reads a set as playing it.
 
 ## 0.1.2
 

@@ -51,8 +51,13 @@ pub fn shots(project: &Project, directory: &Path) -> Vec<Shot> {
                     .iter()
                     .flat_map(|sequence| &sequence.tracks)
                     .flat_map(|track| &track.clips)
-                    .filter(|clip| {
-                        matches!(&clip.content, Content::Media { media: played, .. } if *played == media.id)
+                    .filter(|clip| match &clip.content {
+                        Content::Media { media: played, .. } => *played == media.id,
+                        // A mesh clip shows a set a model made by reading its file.
+                        Content::Generator { params, .. } => params.values().any(|param| {
+                            matches!(param, kerf_model::Param::Static(kerf_model::Value::Text(read)) if *read == media.path)
+                        }),
+                        _ => false,
                     })
                     .count(),
                 takes: made.len(),
