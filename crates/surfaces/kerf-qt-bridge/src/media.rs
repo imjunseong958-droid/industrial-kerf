@@ -124,7 +124,6 @@ pub(crate) fn make(
     }
     crate::emit(tx, making(id, plan.take, ""));
     let (shared, commands, tx, id) = (shared.clone(), commands.clone(), tx.clone(), id.to_owned());
-    let client = client.clone();
     thread::spawn(move || {
         // The takes made so far, the last of which the media becomes.
         let mut last_made: Option<kerf_engine::recipe::Made> = None;
@@ -181,8 +180,6 @@ pub(crate) fn make(
                 &tx,
                 json!({"type": "media_made", "media": id, "take": made.take}),
             );
-            // What an agent asked for is made: its asking in the review is answered.
-            kerf_mcp::answer_make_requests(&client, &id);
             let _ = commands.send(Command::MediaReplace {
                 media: id.clone(),
                 path: made.stored,

@@ -48,17 +48,6 @@ fn staged_id(state: &StateSnapshot) -> String {
     state.proposals[0].proposal_id.clone()
 }
 
-fn request(runtime: &mut Runtime, request: Value) -> Result<RuntimeResponse, RuntimeError> {
-    runtime.execute(serde_json::from_value(request).unwrap())
-}
-
-fn comments(response: RuntimeResponse) -> (crate::ReviewLog, Option<crate::Comment>) {
-    match response {
-        RuntimeResponse::Comments { log, comment } => (log, comment),
-        _ => panic!("expected comments"),
-    }
-}
-
 #[test]
 fn two_proposals_wait_together_and_accepting_one_stales_the_other() {
     let project = Project::new("two-proposals");
@@ -289,112 +278,6 @@ fn rejecting_takes_every_version_and_a_ninth_proposal_waits_for_room() {
             .code,
         "PROPOSAL_NOT_FOUND"
     );
-}
-
-#[test]
-fn comments_never_touch_the_project_and_accepting_resolves_its_comments() {
-    let project = Project::new("review");
-    let mut runtime = project.open();
-    let staged = runtime
-        .stage_script_proposal("kerf-review", 0, "marker add at=0f as=reviewed", None)
-        .unwrap();
-    let proposal_id = staged_id(&staged);
-    let before = runtime.snapshot();
-
-    let (log, added) = comments(
-        request(
-            &mut runtime,
-            json!({
-                "operation": "add_comment",
-                "actor": "agent",
-                "comment": {
-                    "author": {"kind": "kerf", "name": "Kerf"},
-                    "body": "Added a marker for review",
-                    "at": 1.0,
-                    "duration": 0.5,
-                    "proposal": proposal_id,
-                    "steps": ["Read the cut"]
-                }
-            }),
-        )
-        .unwrap(),
-    );
-    let added = added.unwrap();
-    assert_eq!(
-        added.frame,
-        Some(30),
-        "1 s on the new project's 30p sequence"
-    );
-    assert_eq!(log.items, vec![added.clone()]);
-    let after = runtime.snapshot();
-    assert_eq!(after.revision, before.revision);
-    assert_eq!(after.document, before.document);
-    assert_eq!(after.can_undo, before.can_undo);
-    assert_eq!(after.proposals[0].freshness, ProposalFreshness::Current);
-    assert!(after.review_revision > before.review_revision);
-
-    let (_, reply) = comments(
-        request(
-            &mut runtime,
-            json!({
-                "operation": "add_comment",
-                "actor": "ui",
-                "comment": {
-                    "author": {"kind": "person", "name": "Mina Park", "id": "mina@example.com"},
-                    "body": "Looks right",
-                    "parent": added.id,
-                }
-            }),
-        )
-        .unwrap(),
-    );
-    let reply = reply.unwrap();
-
-    let accepted = runtime
-        .accept_proposal(&proposal_id, "ui", "accept-review", 0)
-        .unwrap();
-    assert!(accepted.review_revision > after.review_revision);
-    let (log, _) = comments(request(&mut runtime, json!({"operation": "list_comments"})).unwrap());
-    let linked = log.items.iter().find(|item| item.id == added.id).unwrap();
-    assert!(linked.resolved);
-    assert_eq!(linked.resolved_revision, Some(1));
-    assert!(
-        !log.items
-            .iter()
-            .find(|item| item.id == reply.id)
-            .unwrap()
-            .resolved
-    );
-
-    // Reopen through a request; the review counter moves, the project
-    // does not.
-    let (log, reopened) = comments(
-        request(
-            &mut runtime,
-            json!({
-                "operation": "set_comment",
-                "commentId": added.id,
-                "patch": {"resolved": false, "tags": ["markers"]},
-            }),
-        )
-        .unwrap(),
-    );
-    let reopened = reopened.unwrap();
-    assert!(!reopened.resolved);
-    assert_eq!(reopened.tags, ["markers"]);
-    assert_eq!(log.review_revision, runtime.snapshot().review_revision);
-    assert_eq!(runtime.snapshot().revision, 1);
-    assert_eq!(
-        request(
-            &mut runtime,
-            json!({"operation": "set_comment", "commentId": "c-nope", "patch": {"resolved": true}}),
-        )
-        .unwrap_err()
-        .code,
-        "COMMENT_NOT_FOUND"
-    );
-    // The log is a file beside the project, which Git merges by union.
-    assert!(project.0.join(crate::review::COMMENTS_FILE).is_file());
 }
 
 #[test]

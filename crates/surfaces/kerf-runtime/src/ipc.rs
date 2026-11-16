@@ -2,8 +2,8 @@
 //! listens on, the request-scoped client, and the JSONL server.
 
 use crate::{
-    io_error, kernel, unique_id, Author, Comment, CommentPatch, EditOp, NewComment, RenderJob,
-    RenderRange, RequestEnvelope, ReviewLog, RuntimeError, RuntimeHandle, RuntimeRequest,
+    io_error, kernel, unique_id, Author, EditOp, RenderJob,
+    RenderRange, RequestEnvelope, RuntimeError, RuntimeHandle, RuntimeRequest,
     RuntimeResponse, StartRenderOptions, StateSnapshot,
 };
 use serde_json::{json, Value};
@@ -447,42 +447,6 @@ impl RuntimeClient {
             author: Some(author.clone()),
             revises: revises.map(str::to_owned),
         })?)
-    }
-
-    /// The review log's comments.
-    pub fn comments(&self) -> Result<ReviewLog, RuntimeError> {
-        expect_comments(self.request(RuntimeRequest::ListComments)?).map(|(log, _)| log)
-    }
-
-    /// Add a comment as `actor` (`ui`, `agent`, `mcp` or `system`): the
-    /// comment as written, and the log after it.
-    pub fn add_comment(
-        &self,
-        actor: &str,
-        comment: NewComment,
-    ) -> Result<(Comment, ReviewLog), RuntimeError> {
-        let (log, comment) = expect_comments(self.request(RuntimeRequest::AddComment {
-            actor: actor.to_owned(),
-            comment,
-        })?)?;
-        let comment = comment.ok_or_else(|| unexpected_response("comment"))?;
-        Ok((comment, log))
-    }
-
-    /// Change comment `id` as `patch` says: the comment after it (none once
-    /// deleted), and the log.
-    pub fn set_comment(
-        &self,
-        actor: &str,
-        id: &str,
-        patch: CommentPatch,
-    ) -> Result<(Option<Comment>, ReviewLog), RuntimeError> {
-        let (log, comment) = expect_comments(self.request(RuntimeRequest::SetComment {
-            actor: actor.to_owned(),
-            id: id.to_owned(),
-            patch,
-        })?)?;
-        Ok((comment, log))
     }
 
     /// Load a `project.kerf` changed outside kerfd as one revision.
@@ -1140,7 +1104,6 @@ fn request_is_read_only(request: &RuntimeRequest) -> bool {
             | RuntimeRequest::GetProposalDocuments { .. }
             | RuntimeRequest::GetRender { .. }
             | RuntimeRequest::ListRenders
-            | RuntimeRequest::ListComments
     )
 }
 
@@ -1182,16 +1145,11 @@ fn request_has_stable_idempotency_key(request: &RuntimeRequest) -> bool {
         // operation-receipt table. A lost response is therefore ambiguous
         // and must not be replayed automatically.
         RuntimeRequest::StageScriptProposal { .. } => false,
-        // An add with its own id returns the comment it already made, and a
-        // change sets fields to values, so either converges when repeated.
-        RuntimeRequest::AddComment { comment, .. } => comment.id.is_some(),
-        RuntimeRequest::SetComment { .. } => true,
         RuntimeRequest::RejectProposal {
             idempotency_key: Some(idempotency_key),
             ..
         } => !idempotency_key.trim().is_empty(),
         RuntimeRequest::GetState
-        | RuntimeRequest::ListComments
         | RuntimeRequest::GetDocument { .. }
         | RuntimeRequest::GetProposalDocuments { .. }
         | RuntimeRequest::StartRender { .. }
@@ -1252,25 +1210,6 @@ fn decode_response(value: &Value, expected_id: &str) -> Result<RuntimeResponse, 
             before: before.to_owned(),
             after: after.to_owned(),
         });
-    }
-    if let Some(comments) = object.get("comments") {
-        let log = ReviewLog {
-            items: serde_json::from_value(comments.clone())
-                .map_err(|error| RuntimeError::new("RUNTIME_PROTOCOL_ERROR", error.to_string()))?,
-            review_revision: object
-                .get("reviewRevision")
-                .and_then(Value::as_u64)
-                .unwrap_or_default(),
-        };
-        let comment = match object.get("comment") {
-            Some(Value::Null) | None => None,
-            Some(comment) => {
-                Some(serde_json::from_value(comment.clone()).map_err(|error| {
-                    RuntimeError::new("RUNTIME_PROTOCOL_ERROR", error.to_string())
-                })?)
-            }
-        };
-        return Ok(RuntimeResponse::Comments { log, comment });
     }
     if let Some(state) = object.get("state") {
         let state = serde_json::from_value::<StateSnapshot>(state.clone())
@@ -1408,15 +1347,6 @@ fn expect_collab(response: RuntimeResponse) -> Result<(StateSnapshot, Value), Ru
     }
 }
 
-fn expect_comments(
-    response: RuntimeResponse,
-) -> Result<(ReviewLog, Option<Comment>), RuntimeError> {
-    match response {
-        RuntimeResponse::Comments { log, comment } => Ok((log, comment)),
-        _ => Err(unexpected_response("comments")),
-    }
-}
-
 fn expect_job(response: RuntimeResponse) -> Result<RenderJob, RuntimeError> {
     match response {
         RuntimeResponse::RenderJob(job) => Ok(job),
@@ -1488,14 +1418,6 @@ pub fn response_value(id: &str, result: Result<RuntimeResponse, RuntimeError>) -
             "id": id,
             "ok": true,
             "jobs": jobs
-        }),
-        Ok(RuntimeResponse::Comments { log, comment }) => json!({
-            "protocolVersion": RequestEnvelope::PROTOCOL_VERSION,
-            "id": id,
-            "ok": true,
-            "comments": log.items,
-            "reviewRevision": log.review_revision,
-            "comment": comment
         }),
         Ok(RuntimeResponse::Collab { state, report }) => json!({
             "protocolVersion": RequestEnvelope::PROTOCOL_VERSION,

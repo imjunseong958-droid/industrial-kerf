@@ -13,7 +13,6 @@ use super::{KerfMcpRouter, McpError};
 use crate::harness::operation_key;
 use kerf_engine::recipe::{self, model::Models};
 use kerf_engine::{CancellationToken, EngineError};
-use kerf_runtime::{Comment, CommentPatch, NewComment, RuntimeClient};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::VecDeque;
@@ -21,8 +20,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
 
-/// The tag a making's asking has in the review, and how its body starts.
-const MAKE_TAG: &str = "make";
+/// How a making's asking starts.
 const ASKS: &str = "Asks to make ";
 
 /// The lines a job keeps of what its steps say: the latest.
@@ -340,22 +338,19 @@ impl KerfMcpRouter {
                     "\nMake it with `kerf make {media}`, or Make from Recipe… in the editor's bin."
                 ));
             }
-            let author = self.author();
-            let actor = if author.kind == "mcp" { "mcp" } else { "agent" };
-            let mut comment = NewComment::new(author, &body);
-            comment.tags = vec![MAKE_TAG.to_owned()];
-            let (comment, _) = self.runtime.add_comment(actor, comment)?;
+            // What the person is asked, for the agent to say in the conversation.
             answer["status"] = json!("asked");
-            answer["comment"] = json!(comment.id);
+            answer["ask"] = json!(body);
             answer["make"] = json!(if rolls > 1 {
                 format!(
-                    "the person is asked, in the review thread, and makes them with `kerf make \
-                     {media} --rolls {rolls}`; `look` `media` lists the takes once they are made"
+                    "say `ask` to the person, who makes them with `kerf make {media} --rolls \
+                     {rolls}` or Make Several from Recipe; `look` `media` lists the takes once \
+                     they are made"
                 )
             } else {
                 format!(
-                    "the person is asked, in the review thread, and makes it with `kerf make \
-                     {media}` or Make from Recipe…; `look` lists the take once it is made"
+                    "say `ask` to the person, who makes it with `kerf make {media}` or Make from \
+                     Recipe…; `look` lists the take once it is made"
                 )
             });
             if permissions.mode == crate::permissions::Mode::Auto {
@@ -634,37 +629,3 @@ impl KerfMcpRouter {
     }
 }
 
-/// The makings agents have asked for and nobody has made: the open comments of the review that
-/// `make` left, each with the media it is for.
-pub fn make_requests(runtime: &RuntimeClient) -> Vec<(String, Comment)> {
-    let Ok(log) = runtime.comments() else {
-        return Vec::new();
-    };
-    log.items
-        .into_iter()
-        .filter(|comment| !comment.resolved && comment.tags.iter().any(|tag| tag == MAKE_TAG))
-        .filter_map(|comment| {
-            let media = comment
-                .body
-                .strip_prefix(ASKS)?
-                .split_once(',')?
-                .0
-                .to_owned();
-            Some((media, comment))
-        })
-        .collect()
-}
-
-/// Resolve what agents asked to have made of `media`, once a person has made it.
-pub fn answer_make_requests(runtime: &RuntimeClient, media: &str) {
-    for (_, comment) in make_requests(runtime)
-        .into_iter()
-        .filter(|(asked, _)| asked == media)
-    {
-        let patch = CommentPatch {
-            resolved: Some(true),
-            ..Default::default()
-        };
-        let _ = runtime.set_comment("ui", &comment.id, patch);
-    }
-}

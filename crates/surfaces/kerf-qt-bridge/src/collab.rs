@@ -372,8 +372,6 @@ impl Collab {
             &self.tx,
             json!({"type": "collab_sync", "stage": "done", "report": report}),
         );
-        // A merge may have brought other people's notes.
-        let _ = self.runtime.try_send(Command::CommentList);
     }
 
     fn failed(&self, message: &str) {

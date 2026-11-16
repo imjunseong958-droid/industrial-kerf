@@ -19,7 +19,7 @@ mod kernel;
 #[cfg(windows)]
 mod named_pipe;
 mod render;
-pub mod review;
+pub mod author;
 mod runtime;
 mod store;
 mod timeline;
@@ -33,7 +33,7 @@ pub use kernel::{
     TrimSide, RATE_NEEDS_EMPTY,
 };
 pub use render::{render_cancel_path, run_render_job, RENDER_CODECS, RENDER_QUALITIES};
-pub use review::{Author, Comment, CommentPatch, NewComment, ReviewLog, Stroke};
+pub use author::Author;
 pub use timeline::{fx_catalog_all_json, fx_catalog_json, properties_json};
 
 use kerf_model::Project;
@@ -89,17 +89,10 @@ pub struct StateSnapshot {
     /// the last few settled. `pending_proposal` is the first open one.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub proposals: Vec<ProposalEntry>,
-    /// Changes whenever the review log does, here or on disk.
-    #[serde(default, skip_serializing_if = "is_zero")]
-    pub review_revision: u64,
     /// When the current revision was made, RFC 3339; absent for a project
     /// last edited by a kerfd that did not record it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub revision_time: Option<String>,
-}
-
-fn is_zero(value: &u64) -> bool {
-    *value == 0
 }
 
 /// One version of a proposal: v1, and each `revise` after it.
@@ -416,22 +409,6 @@ pub enum RuntimeRequest {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         revises: Option<String>,
     },
-    /// The review log's comments.
-    ListComments,
-    /// Add a comment to the review log. It never changes the project.
-    AddComment {
-        actor: String,
-        comment: NewComment,
-    },
-    /// Resolve, reopen, edit, tag or delete a comment. The comment's id is
-    /// `commentId` on the wire, as `id` names the request.
-    SetComment {
-        #[serde(default = "default_comment_actor")]
-        actor: String,
-        #[serde(rename = "commentId")]
-        id: String,
-        patch: CommentPatch,
-    },
     Undo {
         actor: String,
         #[serde(rename = "idempotencyKey")]
@@ -691,12 +668,6 @@ pub enum RuntimeResponse {
     RenderJob(RenderJob),
     /// The render jobs kept, oldest first.
     RenderJobs(Vec<RenderJob>),
-    /// The review log after a comment request, with the comment it added
-    /// or changed (none once deleted, or for a listing).
-    Comments {
-        log: ReviewLog,
-        comment: Option<Comment>,
-    },
     /// A git operation and the state after it: what was committed, merged,
     /// or switched, as `kerf_collab` reports it.
     Collab {
@@ -766,10 +737,6 @@ pub fn validate_actor(actor: &str) -> Result<(), RuntimeError> {
             "actor must be ui, agent, mcp, or system",
         ))
     }
-}
-
-fn default_comment_actor() -> String {
-    "ui".into()
 }
 
 fn io_error(error: std::io::Error) -> RuntimeError {
