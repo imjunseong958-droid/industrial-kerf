@@ -138,6 +138,8 @@ public:
     const stage::Panes &panes() const { return m_panes; }
     // The geometry as this widget places it, in its own coordinates.
     stage::Rects rects() const;
+    // How tall the bars that show are, laid out barWidth wide.
+    int barsHeight(int barWidth) const;
 
     Sheet sheet() const { return m_sheet; }
     // One at a time; None closes the one open.

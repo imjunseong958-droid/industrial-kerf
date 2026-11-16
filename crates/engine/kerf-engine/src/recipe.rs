@@ -863,12 +863,58 @@ fn plain(number: f64) -> String {
     text.trim_end_matches('0').trim_end_matches('.').to_owned()
 }
 
+/// Whether a pass sees `clip` in depth, as the compositor does: it says
+/// `three_d=true`, or it is a mesh, which is in depth whether it says so or not.
+fn in_depth(clip: &kerf_model::Clip) -> bool {
+    use kerf_model::{Content, Param, Value};
+    matches!(
+        clip.props.get("three_d"),
+        Some(Param::Static(Value::Bool(true)))
+    ) || matches!(&clip.content, Content::Generator { fx, .. } if fx.as_str() == "mesh")
+}
+
 /// What `recipe` asks of its models that they have said they do not take,
 /// each as a line for whoever is about to make it, and what it hands one
 /// that says nothing. A model that has not said what it takes
 /// ([`model::Takes`]) is asked nothing of here.
 fn notes(project: &kerf_model::Project, recipe: &Recipe, models: &Models) -> Vec<String> {
     let mut notes = Vec::new();
+    // A pass of how near things are, or which way they face, of a sequence with nothing in
+    // depth is black on every frame: what a model is then handed tells it nothing.
+    for step in &recipe.steps {
+        let Step::Render {
+            sequence, to, pass, ..
+        } = step
+        else {
+            continue;
+        };
+        if !matches!(pass, Pass::Depth | Pass::Relative | Pass::Normals) {
+            continue;
+        }
+        let Some(drawn) = project.sequence(sequence) else {
+            continue;
+        };
+        let clips = || drawn.tracks.iter().flat_map(|track| &track.clips);
+        if clips().any(in_depth) {
+            continue;
+        }
+        let nested: Vec<&str> = clips()
+            .filter_map(|clip| match &clip.content {
+                kerf_model::Content::Sequence { sequence, .. } => Some(sequence.as_str()),
+                _ => None,
+            })
+            .collect();
+        notes.push(match nested.first() {
+            Some(inner) => format!(
+                "the {} of sequence `{sequence}` into `{{{to}}}` is black: none of its clips is in depth, and a nested sequence is drawn flat, as one clip: render `{inner}` itself",
+                pass.name()
+            ),
+            None => format!(
+                "the {} of sequence `{sequence}` into `{{{to}}}` is black: none of its clips is in depth (`three_d=true`, or a `gen=mesh` clip)",
+                pass.name()
+            ),
+        });
+    }
     for step in &recipe.steps {
         let Step::Generate(ask) = step else {
             continue;

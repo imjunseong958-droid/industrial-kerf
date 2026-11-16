@@ -326,6 +326,10 @@ void MainWindow::replaceMedia(const QString &mediaId, const QString &path) {
         addActivity(QStringLiteral("import"), QStringLiteral("Replacing %1 with %2").arg(mediaId, QFileInfo(file).fileName()));
 }
 
+QString MainWindow::mediaName(const QString &mediaId) const {
+    return sourceNames(m_project.value(QStringLiteral("sources")).toArray()).value(mediaId, mediaId);
+}
+
 QString MainWindow::mediaRecipe(const QString &mediaId) const {
     for (const QJsonValue &value : m_project.value(QStringLiteral("sources")).toArray()) {
         const QJsonObject source = value.toObject();
@@ -531,6 +535,9 @@ QString MainWindow::makeQuestion(const QJsonObject &plan) {
     QString notes;
     for (const QJsonValue note : plan.value(QStringLiteral("notes")).toArray()) notes += QStringLiteral("\n• %1").arg(note.toString());
     if (!notes.isEmpty()) notes = QStringLiteral("\n\nBefore you run it:%1").arg(notes);
+    // The shot goes by its recipe's name, as in the bin, not by its id.
+    const QString recipe = plan.value(QStringLiteral("recipe")).toString();
+    const QString media = recipe.isEmpty() ? plan.value(QStringLiteral("media")).toString() : recipeShotName(recipe);
     // A recipe is commands someone wrote, perhaps someone else: show every step.
     const int rolls = plan.value(QStringLiteral("rolls")).toInt(1);
     if (rolls > 1) {
@@ -538,13 +545,12 @@ QString MainWindow::makeQuestion(const QJsonObject &plan) {
         return QStringLiteral("Making %1 runs this on your computer, %6 times:\n\n%2%5\n\nIt comes from the recipe %3 and writes %6 new takes, %7 to %8, "
                               "the first at %4, each with every seed one on from the last. %1 then is the last of them, and you choose "
                               "among them under Takes. The takes before them are kept.\n\nRun them?")
-            .arg(plan.value(QStringLiteral("media")).toString(), plan.value(QStringLiteral("command")).toString(),
-                 plan.value(QStringLiteral("recipe")).toString(), plan.value(QStringLiteral("file")).toString(), notes)
+            .arg(media, plan.value(QStringLiteral("command")).toString(), recipe,
+                 plan.value(QStringLiteral("file")).toString(), notes)
             .arg(rolls).arg(take).arg(take + rolls - 1);
     }
     return QStringLiteral("Making %1 runs this on your computer:\n\n%2%5\n\nIt comes from the recipe %3 and writes a new take, %4, which %1 then is. The takes before it are kept.\n\nRun it?")
-        .arg(plan.value(QStringLiteral("media")).toString(), plan.value(QStringLiteral("command")).toString(),
-             plan.value(QStringLiteral("recipe")).toString(), plan.value(QStringLiteral("file")).toString(), notes);
+        .arg(media, plan.value(QStringLiteral("command")).toString(), recipe, plan.value(QStringLiteral("file")).toString(), notes);
 }
 
 void MainWindow::runMake(const QString &mediaId, int rolls) {
@@ -559,8 +565,8 @@ void MainWindow::stopMake(const QString &mediaId) {
     execute(QStringLiteral("media.makeCancel"), QJsonObject{{QStringLiteral("media"), mediaId}});
 }
 
-QString MainWindow::makingStatus(const QJsonObject &making) {
-    const QString media = making.value(QStringLiteral("media")).toString();
+QString MainWindow::makingStatus(const QJsonObject &making, const QString &name) {
+    const QString media = name.isEmpty() ? making.value(QStringLiteral("media")).toString() : name;
     const QString line = making.value(QStringLiteral("line")).toString();
     // Before any step has spoken, only that it began; then what the steps say.
     return line.isEmpty() ? QStringLiteral("Making take %2 of %1 from its recipe…").arg(media).arg(making.value(QStringLiteral("take")).toInt())

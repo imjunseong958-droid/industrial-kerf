@@ -210,7 +210,18 @@ QString withoutContentHash(const QString &stem) {
 
 } // namespace
 
+QString recipeShotName(const QString &recipe) {
+    // A recipe's next version is kept beside it as "open@2.kerfrecipe": the shot is still "open".
+    static const QRegularExpression version(QStringLiteral("^(.+)@\\d+$"));
+    const QString stem = QFileInfo(recipe).completeBaseName();
+    const QRegularExpressionMatch match = version.match(stem);
+    return match.hasMatch() ? match.captured(1) : stem;
+}
+
 QString sourceName(const QJsonObject &source) {
+    // A made shot's file is its take ("shots/boat.takes/001.mp4"): it is named for its recipe.
+    const QString recipe = source.value(QStringLiteral("recipe")).toString();
+    if (!recipe.isEmpty()) return recipeShotName(recipe);
     const QString path = source.value(QStringLiteral("path")).toString();
     return path.isEmpty() ? QStringLiteral("Untitled media") : withoutContentHash(QFileInfo(path).completeBaseName());
 }

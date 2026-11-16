@@ -182,6 +182,25 @@ private slots:
         QCOMPARE(window.m_errorMessage->text(), QStringLiteral("Render failed"));
     }
 
+    // A failed turn's error leaves the banner when the next turn starts; another error stays.
+    void theNextTurnClearsAFailedTurnsBanner() {
+        MainWindow window{QString(), QString()};
+        window.handleEvent(QJsonObject{{"type", "error"}, {"command", "agent"}, {"message", "Add an API key"}});
+        QVERIFY(!window.m_errorBanner->isHidden());
+        window.handleEvent(QJsonObject{{"type", "agent_state"}, {"state", "running"}});
+        QVERIFY(window.m_errorBanner->isHidden());
+        window.handleEvent(QJsonObject{{"type", "error"}, {"message", "Render failed"}});
+        window.handleEvent(QJsonObject{{"type", "agent_state"}, {"state", "running"}});
+        QVERIFY(!window.m_errorBanner->isHidden());
+        QCOMPARE(window.m_errorMessage->text(), QStringLiteral("Render failed"));
+        // An engine diagnostic reads without its severity and code.
+        window.handleEvent(QJsonObject{{"type", "error"},
+                                       {"message", "error[ripple.blocked]: closing 00:00:03:06–00:00:06:00 would cut clip `word`"}});
+        QCOMPARE(window.m_errorMessage->text(), QStringLiteral("closing 00:00:03:06–00:00:06:00 would cut clip `word`"));
+        window.showError(QStringLiteral("warning[kerf.parse] 3:7: unknown key"));
+        QCOMPARE(window.m_errorMessage->text(), QStringLiteral("unknown key"));
+    }
+
     // A sync's stage and its outcome reach the subtitle; a failure stays.
     void syncFollowsTheCollabStatus() {
         MainWindow window{QString(), QString()};
@@ -380,7 +399,10 @@ private slots:
         // A master shows too, now the status bar's Deliver exception is gone.
         window.handleEvent(QJsonObject{{"type", "export"}, {"status", "running"}, {"quality", "master"}, {"jobId", "m"}, {"progress", 0.2}});
         QCOMPARE(wiring->runningText(), QStringLiteral("Master export · 20%"));
-        window.handleEvent(QJsonObject{{"type", "export"}, {"status", "completed"}, {"jobId", "m"}});
+        window.handleEvent(QJsonObject{{"type", "export"}, {"status", "completed"}, {"jobId", "m"},
+                                       {"path", "/p/deliveries/Run-master.mov"}});
+        // Which file it made, which nothing else in the window says.
+        QCOMPARE(window.m_projectSubtitle->text(), QStringLiteral("Export completed: Run-master.mov"));
         wiring->showMessage(QString(), 0);
         // Jobs known from the render queue; a running one before a queued one.
         window.handleEvent(QJsonObject{{"type", "render_queue"}, {"jobs", QJsonArray{

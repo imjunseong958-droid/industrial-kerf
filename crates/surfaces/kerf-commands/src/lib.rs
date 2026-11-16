@@ -725,6 +725,16 @@ pub static COMMANDS: &[Command] = &[
         )),
         &["Shift+Delete", "Shift+Backspace"],
     ),
+    // What Ripple Delete refuses when closing the gap would cut a clip on
+    // another track: the clip's time comes out of every track.
+    timeline(params(
+        menu(
+            command("clip.extract", "Extract", has_selection),
+            Menu::Edit,
+            1,
+        ),
+        r#"{"clip": string}"#,
+    )),
     keys(
         timeline(params(
             menu(
@@ -1376,6 +1386,9 @@ pub fn run(id: &str, context: &Context, params: &Value) -> Result<Request, Strin
         "clip.rippleDelete" => edit(EditOp::RippleDelete {
             clips: vec![clip()?],
         }),
+        "clip.extract" => edit(EditOp::Extract {
+            clips: vec![clip()?],
+        }),
         "clip.split" => edit(EditOp::Split {
             clip: clip()?,
             at: params.int("at")?.unwrap_or(context.playhead_frame),
@@ -2019,6 +2032,14 @@ mod tests {
                 clips: vec!["c9".into()]
             }]
         );
+        let extract = ops(run("clip.extract", &context, &json!({"clip": "c9"})).unwrap());
+        assert_eq!(
+            extract,
+            [EditOp::Extract {
+                clips: vec!["c9".into()]
+            }]
+        );
+        assert!(run("clip.extract", &context, &Value::Null).is_err());
         context.connected = false;
         assert_eq!(
             run("clip.delete", &context, &json!({"clip": "c9"})).unwrap_err(),

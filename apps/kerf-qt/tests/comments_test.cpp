@@ -1479,6 +1479,23 @@ private slots:
         QVERIFY(!plain.contains(QChar(0x200B)));
     }
 
+    // Kerf's replies are Markdown: its bold, code and list items read as such, without their marks.
+    void aReplysMarkdownReadsWithoutItsMarks() {
+        const QString html = review::richBody(
+            QStringLiteral("Staged:\n- **Clip:** `boat` sits on V1 at 00:00:06:00\n- 2 * 3 stays"), 24.0);
+        QVERIFY(html.contains(QStringLiteral("<b>Clip:</b>")));
+        QTextDocument document;
+        document.setHtml(html);
+        const QString said = document.toPlainText();
+        QVERIFY2(!said.contains(QStringLiteral("**")) && !said.contains(QLatin1Char('`')), qPrintable(said));
+        QVERIFY2(said.contains(QStringLiteral("• Clip: boat sits on V1 at 00:00:06:00")), qPrintable(said));
+        QVERIFY(said.contains(QStringLiteral("• 2 * 3 stays")));
+        // The timecode is still a link.
+        QVERIFY(html.contains(QStringLiteral("href=\"tc:6\"")));
+        // A thread's title in the sidebar reads the same way.
+        QCOMPARE(review::titleLine(QStringLiteral("`s1` is **silent**: no loudness\nmore")), QStringLiteral("s1 is silent: no loudness"));
+    }
+
     // The accessibility press on "N changes" toggles it without a click: the card has to follow, as
     // it does a click, or the chevron turns and nothing opens.
     void aProposalCardFollowsItsExpanderHoweverItIsToggled() {

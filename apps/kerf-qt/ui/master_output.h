@@ -20,5 +20,9 @@ QString settingsKey(const QString &directory, const QString &key);
 // The export command that renders the project's master: {type: export,
 // quality: master, codec? (left out when it is ProRes 422 HQ), output?, name?}.
 QJsonObject masterCommand(const QString &directory);
+// The export command that renders a draft, an H.264 review copy, beside the master: to
+// deliveries/ as <project>_draft, numbered when one is there already. Without a project,
+// kerfd names it.
+QJsonObject draftCommand(const QString &directory);
 
 } // namespace kerf::deliver

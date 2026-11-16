@@ -65,4 +65,16 @@ QJsonObject masterCommand(const QString &directory) {
     return command;
 }
 
+QJsonObject draftCommand(const QString &directory) {
+    QJsonObject command{{QStringLiteral("type"), QStringLiteral("export")},
+                        {QStringLiteral("quality"), QStringLiteral("review")},
+                        {QStringLiteral("codec"), QStringLiteral("h264")}};
+    const QString project = projectName(directory);
+    if (!project.isEmpty()) {
+        command.insert(QStringLiteral("output"), QStringLiteral("deliveries/"));
+        command.insert(QStringLiteral("name"), QStringLiteral("%1_draft").arg(project));
+    }
+    return command;
+}
+
 } // namespace kerf::deliver

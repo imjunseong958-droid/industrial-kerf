@@ -683,7 +683,24 @@ fn assumed_media(
 /// clips (and transitions) it would break.
 pub(crate) fn replace_media(project: &Project, media: Media) -> Result<Edited, RuntimeError> {
     let (id, path) = (media.id.clone(), media.path.clone());
-    let ops = [Op::ReplaceMedia(media)];
+    // A generator that reads the media's file by its path, as a mesh clip
+    // reads a set a model made, reads the new one with it: a take made
+    // again, or an earlier one chosen, is what the clip then shows.
+    let before = project.media(id.as_str()).map(|media| media.path.clone());
+    let mut ops = vec![Op::ReplaceMedia(media)];
+    if let Some(before) = before.filter(|before| *before != path) {
+        ops.extend(
+            clips_reading_file(project, &before)
+                .into_iter()
+                .map(|(clip, name)| Op::Set {
+                    clip,
+                    changes: vec![ClipChange::Param(
+                        name,
+                        Some(Param::Static(Value::Text(path.clone()))),
+                    )],
+                }),
+        );
+    }
     let (next, _) = apply(project, catalog(), &ops).map_err(|rejected| {
         let reasons: Vec<String> = rejected
             .diagnostics
@@ -699,6 +716,34 @@ pub(crate) fn replace_media(project: &Project, media: Media) -> Result<Edited, R
         script: print_ops(project, catalog(), &ops),
         project: next,
     })
+}
+
+/// Each generator clip, with the name of its file parameter, that reads the
+/// file at `path` (a path as the document writes it).
+fn clips_reading_file(project: &Project, path: &str) -> Vec<(Id, String)> {
+    let mut found = Vec::new();
+    for clip in project
+        .sequences
+        .iter()
+        .flat_map(|sequence| &sequence.tracks)
+        .flat_map(|track| &track.clips)
+    {
+        let Content::Generator { fx, params, .. } = &clip.content else {
+            continue;
+        };
+        let Some(def) = catalog().fx(fx.as_str()) else {
+            continue;
+        };
+        for (name, param) in params {
+            let file = def
+                .find(name)
+                .is_some_and(|param| matches!(param.ty, ParamType::File(_)));
+            if file && matches!(param, Param::Static(Value::Text(read)) if read == path) {
+                found.push((clip.id.clone(), name.clone()));
+            }
+        }
+    }
+    found
 }
 
 /// The first free `V<n>`, `A<n>`, or `S<n>` track id of `sequence`.
@@ -774,6 +819,12 @@ pub enum EditOp {
         clips: Vec<String>,
     },
     RippleDelete {
+        clips: Vec<String>,
+    },
+    /// Cut the time the clips cover out of every unlocked track and close
+    /// it: what ripple-delete refuses when it would cut a clip on another
+    /// track.
+    Extract {
         clips: Vec<String>,
     },
     /// Property or generator parameter values: a static value, keyframes
@@ -1275,6 +1326,30 @@ fn lower(project: &Project, op: &EditOp) -> Result<Vec<Op>, RuntimeError> {
         EditOp::RippleDelete { clips } => Op::RippleDelete {
             clips: edit_ids(clips)?,
         },
+        EditOp::Extract { clips } => {
+            let mut range: Option<(usize, Time, Time)> = None;
+            for clip in clips {
+                let at = project
+                    .locate(clip)
+                    .ok_or_else(|| invalid(format!("no clip `{clip}`")))?;
+                let found = project.clip_at(at);
+                let (start, end) = (found.start, found.end());
+                range = Some(match range {
+                    None => (at.sequence, start, end),
+                    Some((sequence, _, _)) if sequence != at.sequence => {
+                        return Err(invalid("extract takes clips of one sequence"));
+                    }
+                    Some((sequence, from, to)) => (sequence, from.min(start), to.max(end)),
+                });
+            }
+            let (sequence, from, to) = range.ok_or_else(|| invalid("extract needs a clip"))?;
+            Op::Extract {
+                sequence: project.sequences[sequence].id.clone(),
+                from,
+                to,
+                tracks: None,
+            }
+        }
         EditOp::Set { clip, props, name } => {
             let at = project
                 .locate(clip)
@@ -2220,4 +2295,25 @@ mod tests {
         assert_eq!(settled(&directory), 0);
     }
 
+    /// Extract takes out the time its clips cover, on every unlocked track of
+    /// their sequence.
+    #[test]
+    fn extract_takes_the_time_its_clips_cover() {
+        let project = project();
+        let ops = lowered(&project, json!([{"op": "extract", "clips": ["c1"]}])).unwrap();
+        assert_eq!(
+            ops,
+            [Op::Extract {
+                sequence: kerf_model::Id::new("s1").unwrap(),
+                from: Time::ZERO,
+                to: kerf_model::Rate::FPS_24.time_of(96),
+                tracks: None,
+            }]
+        );
+        assert!(
+            refusal(&project, json!([{"op": "extract", "clips": ["nope"]}]))
+                .contains("no clip `nope`")
+        );
+        assert!(refusal(&project, json!([{"op": "extract", "clips": []}])).contains("needs a clip"));
+    }
 }

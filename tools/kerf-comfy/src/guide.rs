@@ -11,6 +11,16 @@
 use std::path::Path;
 use std::process::Command;
 
+/// Whether `program -version` starts and ends well.
+fn runs(program: &str) -> bool {
+    Command::new(program)
+        .arg("-version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
 /// FFmpeg and ffprobe, as Kerf finds them (`kerf-engine/src/ffmpeg.rs`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Tools {
@@ -26,23 +36,39 @@ impl Tools {
         let beside = std::env::current_exe()
             .ok()
             .and_then(|program| Some(program.parent()?.join(format!("ffmpeg{suffix}"))));
-        let ffmpeg = std::env::var("KERF_FFMPEG")
+        let candidates: Vec<String> = std::env::var("KERF_FFMPEG")
             .ok()
             .filter(|named| !named.is_empty())
             .into_iter()
             .chain(beside.map(|file| file.to_string_lossy().into_owned()))
             .chain(["/opt/homebrew/opt/ffmpeg-full/bin/ffmpeg".to_owned()])
-            .find(|candidate| Path::new(candidate).is_file())
-            .unwrap_or_else(|| "ffmpeg".to_owned());
-        let ffprobe = Path::new(&ffmpeg)
-            .parent()
-            .map(|folder| folder.join(format!("ffprobe{suffix}")))
-            .filter(|file| file.is_file())
-            .map_or_else(
-                || "ffprobe".to_owned(),
-                |file| file.to_string_lossy().into_owned(),
-            );
-        Self { ffmpeg, ffprobe }
+            .collect();
+        Self::first_that_runs(&candidates, runs)
+    }
+
+    /// The first of `candidates` whose FFmpeg and the ffprobe beside it both run, as
+    /// the engine asks of them: one that is there but cannot start, such as a Homebrew
+    /// FFmpeg whose libraries an upgrade took away, is passed over. Else `PATH`'s.
+    fn first_that_runs(candidates: &[String], runs: impl Fn(&str) -> bool) -> Self {
+        let suffix = std::env::consts::EXE_SUFFIX;
+        candidates
+            .iter()
+            .filter(|candidate| Path::new(candidate.as_str()).is_file())
+            .find_map(|ffmpeg| {
+                let ffprobe = Path::new(ffmpeg)
+                    .parent()?
+                    .join(format!("ffprobe{suffix}"))
+                    .to_string_lossy()
+                    .into_owned();
+                (runs(ffmpeg) && runs(&ffprobe)).then(|| Self {
+                    ffmpeg: ffmpeg.clone(),
+                    ffprobe,
+                })
+            })
+            .unwrap_or_else(|| Self {
+                ffmpeg: "ffmpeg".to_owned(),
+                ffprobe: "ffprobe".to_owned(),
+            })
     }
 
     /// How long `file` plays, in seconds.
@@ -259,6 +285,47 @@ fn run(command: &mut Command, program: &str) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An FFmpeg that is there but does not start (Homebrew's, after an upgrade
+    /// took a library it loads) is passed over for the next, and then for `PATH`'s.
+    #[test]
+    fn an_ffmpeg_that_does_not_start_is_passed_over() {
+        let folder = std::env::temp_dir().join(format!("kerf-comfy-tools-{}", std::process::id()));
+        let suffix = std::env::consts::EXE_SUFFIX;
+        let (broken, working) = (folder.join("broken"), folder.join("working"));
+        for place in [&broken, &working] {
+            std::fs::create_dir_all(place).unwrap();
+            for tool in ["ffmpeg", "ffprobe"] {
+                std::fs::write(place.join(format!("{tool}{suffix}")), "").unwrap();
+            }
+        }
+        let path = |place: &Path, tool: &str| {
+            place
+                .join(format!("{tool}{suffix}"))
+                .to_string_lossy()
+                .into_owned()
+        };
+        let candidates = [path(&broken, "ffmpeg"), path(&working, "ffmpeg")];
+        let starts = |program: &str| !program.contains("broken");
+        assert_eq!(
+            Tools::first_that_runs(&candidates, starts),
+            Tools {
+                ffmpeg: path(&working, "ffmpeg"),
+                ffprobe: path(&working, "ffprobe"),
+            }
+        );
+        // An ffprobe that does not start takes its FFmpeg with it.
+        let probe_broken =
+            |program: &str| program != path(&working, "ffprobe") && !program.contains("broken");
+        assert_eq!(
+            Tools::first_that_runs(&candidates, probe_broken),
+            Tools {
+                ffmpeg: "ffmpeg".into(),
+                ffprobe: "ffprobe".into(),
+            }
+        );
+        std::fs::remove_dir_all(&folder).unwrap();
+    }
 
     #[test]
     fn a_files_picture_is_read_from_what_ffprobe_says() {

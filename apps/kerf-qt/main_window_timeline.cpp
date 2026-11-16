@@ -543,7 +543,8 @@ void MainWindow::wireTimeline() {
     connect(m_timeline, &TimelineWidget::clipMenuRequested, this, [this](const QString &, const QPoint &at) {
         QMenu menu(this);
         for (const QString &id : {QStringLiteral("ai.ask"), QString(), QStringLiteral("clip.split"), QStringLiteral("clip.delete"),
-                                  QStringLiteral("clip.rippleDelete"), QString(), QStringLiteral("clip.focusRegion")}) {
+                                  QStringLiteral("clip.rippleDelete"), QStringLiteral("clip.extract"), QString(),
+                                  QStringLiteral("clip.focusRegion")}) {
             if (id.isEmpty()) menu.addSeparator();
             else menu.addAction(m_commands->action(id));
         }

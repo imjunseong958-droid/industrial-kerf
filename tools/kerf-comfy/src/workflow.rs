@@ -331,6 +331,27 @@ impl Workflow {
         Value::Object(takes)
     }
 
+    /// The line's names for the inputs of node `node` that `said`, the
+    /// server's word on why it failed, names: `confidence_threshold` is the node's,
+    /// `confidence=` the line's. In the order the node has them.
+    pub fn line_names(&self, node: &str, said: &str) -> Vec<(String, String)> {
+        let Some(inputs) = self
+            .graph
+            .get(node)
+            .and_then(|node| node["inputs"].as_object())
+        else {
+            return Vec::new();
+        };
+        inputs
+            .iter()
+            .filter(|(input, _)| said.contains(input.as_str()))
+            .filter_map(|(input, value)| {
+                let (name, _) = blanks(value.as_str()?).next()?;
+                Some((input.clone(), name.to_owned()))
+            })
+            .collect()
+    }
+
     /// The names of every blank the graph has.
     pub fn blanks(&self) -> BTreeSet<String> {
         let mut names = BTreeSet::new();

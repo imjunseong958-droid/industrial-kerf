@@ -86,6 +86,29 @@ fn extension(file: &Path) -> Option<String> {
 }
 
 /// A seed for a request that names none.
+/// Which of a `generate` line's names set the inputs a failed node's message
+/// names, as " (on the line: confidence_threshold is confidence=, …)", or nothing:
+/// the server names its node's inputs, which no line can set by those names.
+fn on_the_line(workflow: &Workflow, why: &str) -> String {
+    let Some(node) = why
+        .split_once("(node ")
+        .and_then(|(_, rest)| rest.split_once(')'))
+        .map(|(node, _)| node)
+    else {
+        return String::new();
+    };
+    let names: Vec<String> = workflow
+        .line_names(node, why)
+        .into_iter()
+        .map(|(input, name)| format!("{input} is {name}="))
+        .collect();
+    if names.is_empty() {
+        String::new()
+    } else {
+        format!(" (on the generate line, {})", names.join(", "))
+    }
+}
+
 fn any_seed() -> u64 {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -398,7 +421,12 @@ pub fn make(
             }
             Err(error) => return Err(error),
             Ok(State::Made(files)) => break files,
-            Ok(State::Failed(why)) => return Err(format!("the server could not make it: {why}")),
+            Ok(State::Failed(why)) => {
+                return Err(format!(
+                    "the server could not make it: {why}{}",
+                    on_the_line(workflow, &why)
+                ))
+            }
             // Between leaving the queue and being kept, a job is in neither.
             Ok(State::Unknown) if unknown < TRIES => {
                 unknown += 1;

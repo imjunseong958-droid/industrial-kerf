@@ -22,6 +22,30 @@ on `main`; its section here becomes the release's notes on GitHub
   `KERF_ENCODER=hardware` still asks for it.
 - Chat on Claude Code no longer needs a `kerf-mcp` built beside `kerfd`: where
   there is none, the editor serves Kerf's tools to Claude Code itself.
+- Kerf's replies read as text, not Markdown: bold, code and list items show
+  as such, in the thread and in the sidebar's titles.
+- A shot made from a recipe keeps its name in the bin and on the timeline
+  after each take, instead of becoming "001", and making it says its name.
+- A failed turn's error leaves the bar at the top once the next turn starts;
+  a bar no longer covers the Media sheet's tabs and close; an edit Kerf
+  refuses says why without its code; and a finished export names its file.
+- Edit ▸ Extract takes a clip's time out of every track, for when Ripple
+  Delete refuses because it would cut a clip on another track.
+- A Draft export goes to `deliveries/` as `<project>_draft`, beside the
+  master, instead of the project's top folder under its job's id.
+- `kerf-comfy` passes over an FFmpeg that is there but does not start, as
+  Kerf does, so a Homebrew `ffmpeg-full` an upgrade broke no longer fails
+  every making while a working FFmpeg is on `PATH`.
+- A set a model makes, a `.glb`, is kept as its media's take instead of being
+  refused as a file no probe reads, and the `gen=mesh` clips that read the
+  media's file read the take; choosing another take moves them with it.
+- When a ComfyUI node fails naming its own inputs (`confidence_threshold`),
+  `kerf-comfy` says which name a `generate` line sets them by (`confidence=`).
+- Making a shot says so first when its guide would be black: a depth,
+  relative or normals pass of a sequence with nothing in depth, as one that
+  only nests another. A `generate` line that names `out=`, `seed=` or any
+  one-value name twice is refused, where the first was dropped unsaid.
+  `kerf shots` counts a mesh clip that reads a set as playing it.
 
 ## 0.1.2
 

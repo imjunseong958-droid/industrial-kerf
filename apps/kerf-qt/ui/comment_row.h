@@ -63,6 +63,8 @@ double parseTimecode(const QString &text, double fps);
 // The text as rich text: escaped, inline timecodes as tc:<seconds> links
 // (mono 12, accent ink), @mentions in ink 500, line breaks kept.
 QString richBody(const QString &body, double fps);
+// The text's first line, as a title: without the Markdown marks richBody shows it without.
+QString titleLine(const QString &body);
 // The @mentions in `text`, without the @, in order.
 QStringList mentions(const QString &text);
 // Whether the text is for Kerf: it mentions @Kerf, or no one.
