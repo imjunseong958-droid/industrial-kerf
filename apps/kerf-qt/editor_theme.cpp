@@ -12,6 +12,7 @@
 #include <QJsonArray>
 #include <QPointer>
 #include <QScreen>
+#include <QSettings>
 #include <QStyleHints>
 #include <QWidget>
 
@@ -511,6 +512,70 @@ const EditorTheme &editorTheme() {
 void loadBundledFonts() {
     QDirIterator files(QStringLiteral(":/fonts"), {QStringLiteral("*.ttf"), QStringLiteral("*.otf")}, QDir::Files);
     while (files.hasNext()) QFontDatabase::addApplicationFont(files.next());
+}
+
+FaceChoice loadFaceChoice() {
+    const QSettings settings;
+    FaceChoice choice;
+    const QString ui = settings.value(QStringLiteral("appearance/interfaceFace")).toString();
+    if (ui == QLatin1String("pretendard") || ui == QLatin1String("system")) choice.ui = ui;
+    if (settings.value(QStringLiteral("appearance/readingFace")).toString() == QLatin1String("serif")) choice.reading = QStringLiteral("serif");
+    const QString size = settings.value(QStringLiteral("appearance/readingSize")).toString();
+    if (size == QLatin1String("small") || size == QLatin1String("large")) choice.size = size;
+    return choice;
+}
+
+void saveFaceChoice(const FaceChoice &choice) {
+    QSettings settings;
+    settings.setValue(QStringLiteral("appearance/interfaceFace"), choice.ui);
+    settings.setValue(QStringLiteral("appearance/readingFace"), choice.reading);
+    settings.setValue(QStringLiteral("appearance/readingSize"), choice.size);
+}
+
+tokens::Faces facesFor(const FaceChoice &choice) {
+    tokens::Faces faces;
+    const QString inter = QString::fromLatin1(tokens::uiFamily);
+    const QString pretendard = QString::fromLatin1(tokens::hangulFamily);
+    // The system's own face first, with the bundled ones for what it lacks.
+    if (choice.ui == QLatin1String("system"))
+        faces.ui = {QFontDatabase::systemFont(QFontDatabase::GeneralFont).family(), pretendard};
+    else if (choice.ui == QLatin1String("pretendard")) faces.ui = {pretendard, inter};
+    else faces.ui = {inter, pretendard};
+    if (choice.reading == QLatin1String("serif"))
+        faces.prose = {QString::fromLatin1(tokens::serifFamily), QString::fromLatin1(tokens::serifHangulFamily)};
+    faces.proseStep = choice.size == QLatin1String("small") ? -1 : choice.size == QLatin1String("large") ? 2 : 0;
+    return faces;
+}
+
+void setEditorFaces(const FaceChoice &choice) {
+    const tokens::Faces was = tokens::faces();
+    const tokens::Faces now = facesFor(choice);
+    tokens::faces() = now;
+    if (!qApp) return;
+    if (was.ui == now.ui && was.prose == now.prose && was.proseStep == now.proseStep) return;
+    // The application's font first: setting it has every widget resolve its
+    // font again, which would undo what is set on each below.
+    QApplication::setFont(tokens::font(tokens::control));
+    // A widget that set one of the interface's styles holds the families it
+    // was made with: it takes the new ones, keeping its size and weight. What
+    // holds the conversation's face sets it again itself, on changed().
+    const QString system = QFontDatabase::systemFont(QFontDatabase::GeneralFont).family();
+    const QStringList before = was.ui + QStringList{system};
+    const QStringList after = now.ui + QStringList{system};
+    const QWidgetList widgets = QApplication::allWidgets();
+    if (before != after)
+        for (QWidget *widget : widgets) {
+            if (!widget->testAttribute(Qt::WA_SetFont)) continue;
+            QFont font = widget->font();
+            if (font.families() != before) continue;
+            font.setFamilies(after);
+            widget->setFont(font);
+        }
+    for (QWidget *widget : widgets) {
+        widget->updateGeometry();
+        widget->update();
+    }
+    emit EditorAppearance::instance()->changed();
 }
 
 void applyEditorAppearance() {

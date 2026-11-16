@@ -300,6 +300,8 @@ private:
     void updateHeader();
     void updateWelcome();
     void updateContextMeter();
+    // The faces chosen in Settings changed: what is said is set in them again.
+    void refreshFaces();
     // Lays the list out again from the conversation. Messages it already shows
     // (by item id) are kept; only new ones are made.
     void rebuild();

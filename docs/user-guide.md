@@ -70,12 +70,17 @@ Import media with File ▸ Import Media… (⌘O).
   While Kerf works, light runs around the picture as each clip is placed; it
   lights once when the cut is done. Move over the picture to run through its clips; click it to open it
   with the timeline. Closing them puts it back in the card.
-- **Media** (⌘1) opens over the conversation: the project's media, with Import.
+- **Media** (⌘1) opens between the conversation and the picture: the project's
+  media, with Import. The conversation makes room for it.
 - The format picker in the timeline's strip switches the sequence between 16:9
   and 9:16 (⌥1, ⌥2).
-- The **sidebar** (⌥⌘S) has New conversation, a search, your project folders
-  and their conversations by date (Today, Yesterday, Previous 7 days, Older),
-  and at its foot your account, which opens Settings and everything else.
+- **Settings ▸ Appearance** chooses the fonts: the interface's (Inter,
+  Pretendard, or your system's) and the conversation's, which can be a serif
+  and larger or smaller. They change as you choose.
+- The **sidebar** (⌥⌘S) has New conversation, a search, your project folders,
+  each with its own conversations under it, and at its foot your account, which
+  opens Settings and everything else. Drag its edge to make it wider or
+  narrower; a double-click on the edge puts it back.
 
 ## Ask Kerf
 
@@ -84,6 +89,9 @@ Kerf…), Option-double-click it, or right-click ▸ Ask Kerf…. With a clip, c
 **This clip** (only it changes; clips after it follow) or **Whole sequence**.
 Return sends; Shift+Return adds a line. The clock in the composer stamps the
 request with the playhead; its timecode in your message goes back there.
+Beside it the composer names the model that answers, with a menu where there
+is a choice, and a ring fills as the conversation takes up Kerf's context;
+when it is full Kerf puts older steps away and goes on.
 
 While Kerf works, **Working** under your request shows how long and the step it
 is on, light runs round the picture, a blue cursor on the timeline shows where
@@ -103,6 +111,23 @@ Kerf answers with a **proposal**, a card under its answer:
 
 A proposal that has gone stale, because the edit changed under it, cannot be
 accepted: ask Kerf to stage it again.
+
+### How far Kerf goes without asking
+
+The chip at the composer's start chooses, and Shift+Tab in the composer goes
+round the three. Settings ▸ AI connection has the same choice.
+
+- **Ask before edits**: every edit is a proposal you accept or reject, as
+  above. This is how Kerf starts.
+- **Accept edits**: edits go into the sequence as Kerf makes them. Each is one
+  step that Undo (⌘Z) takes back. A shot Kerf wants made is still yours to run.
+- **Auto**: edits go in, and Kerf also makes the shots it asks for: five, then
+  it asks again, unless `~/.kerf/agent.json` gives another number (`makes`).
+  Making a shot can take time and, with a hosted model, money.
+
+The choice is kept for every project. It holds for what you ask in the editor;
+an agent that reaches Kerf over MCP from another program follows
+`~/.kerf/agent.json`.
 
 ### Connecting Kerf
 
@@ -176,6 +201,12 @@ one.
 - Hover a conversation in the sidebar to **archive** or **delete** it; its menu
   (right-click) also renames. Archived ones fold under **Archived**, and come
   back when you write in them. Deleting asks first and cannot be undone.
+- Every folder in the sidebar unfolds to its conversations, the latest first:
+  click its name or its arrow. The first six show, with **Show more** for the
+  rest. A conversation in another folder opens that project on it.
+- Hover a folder for **+**, a new conversation in it, and **⋯**, its menu:
+  Open Project, Show in Finder, Copy Path, and Remove from Sidebar, which only
+  takes it off the list.
 - A proposal staged elsewhere, by an agent over MCP or in another conversation,
   waits at the end of the open one, to accept or reject.
 - A `kerf://` link to a version and a timecode (`kerf://sea/rev22@00:00:17:08`)

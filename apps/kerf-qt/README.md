@@ -258,15 +258,16 @@ composer.
 **The regions** stay flush, with one hairline between them and no cards, radii
 or margins (`ui/stage_shell.h`; `stage::rects()` is the geometry, a pure function
 of the window's size, the picture's aspect and which panes are open). The toolbar
-is 40 points tall. The sidebar is 240 wide and gives way in a window under 1100.
+is 40 points tall. The sidebar is 288 wide until its edge is dragged (232 to 440;
+a double-click on the edge puts it back), and gives way in a window under 1100.
 With the panel closed the conversation has the rest of the window, its text in a
-720 wide column. With it open the conversation is 400 wide, giving way down to 320
+720 wide column. With it open the conversation is 560 wide, giving way down to 320
 only when it would leave the panel under 600. At a 1600 × 1000 window:
 
 | Sequence | Sidebar | Conversation | Picture | Timeline |
 |---|---|---|---|---|
-| Wide (aspect ≥ 1.2) | 240 × 960 at (0, 40) | 400 × 960 at (240, 40) | 960 × 420 at (640, 40) | 960 × 540 at (640, 460) |
-| 9:16 | 240 × 960 at (0, 40) | 400 × 960 at (240, 40) | 960 × 614 at (640, 40) | 960 × 346 at (640, 654) |
+| Wide (aspect ≥ 1.2) | 288 × 960 at (0, 40) | 560 × 960 at (288, 40) | 752 × 420 at (848, 40) | 752 × 540 at (848, 460) |
+| 9:16 | 288 × 960 at (0, 40) | 560 × 960 at (288, 40) | 752 × 614 at (848, 40) | 752 × 346 at (848, 654) |
 
 Under a wide picture the timeline has 56% of the height, at least 260, and
 whatever the picture's aspect does not use; the picture pillarboxes in black in
@@ -318,15 +319,22 @@ another, with a strip over the picture: where you are, previous and next, Before
 and After, and Exit. After plays the proposal's rendered preview, and Before the
 program as it is.
 
-**The sidebar** (`ui/project_sidebar.h`, ⌥⌘S; its choice is kept) leads with New
-conversation and a search, then lists the recent project folders that still exist,
-the current one unfolded to its conversations (`.kerf/conversations/`, as the
-bridge lists them) by date: Today, Yesterday, Previous 7 days, Older. Each has a
-dot for what it is doing (working, making, waiting for review, failed) and its
-age; hovering shows Archive and Delete, its menu also renames (F2), and archived
-ones fold under "Archived · N". Delete asks first. The folder says Working while
-Kerf is. Choosing another folder opens it as File ▸
-Open does; the + beside Projects is New Project… and Open Folder…. At its foot is
+**The sidebar** (`ui/project_sidebar.h`, ⌥⌘S; its choice and its width are kept)
+leads with New conversation and a search, then lists the recent project folders
+that still exist. Each folder unfolds to its own conversations, latest first under
+a guide: the open one's as the bridge lists them (`.kerf/conversations/`), another's
+read from the same folder beside its project. The open folder starts unfolded and
+the others folded; a folder's name or its chevron folds and unfolds it (Left and
+Right from the keys), and that is kept. The first six show, with "Show N more"
+for the rest. Each has a dot for what it is doing (working, making, waiting for
+review, failed) and its age; hovering one of the open folder's shows Archive and
+Delete, its menu also renames (F2), and archived ones fold under "Archived · N".
+Delete asks first. The folder says Working while Kerf is. Another folder's
+conversation opens its project on that conversation. Hovering a folder shows + (a
+new conversation in it) and its menu, which a right-click opens too: New
+Conversation, Open Project, Show in Finder, Copy Path, and Remove from Sidebar,
+which takes it off the list and touches nothing on disk. The + beside Projects is
+New Project… and Open Folder…. At its foot is
 the account: the Kerf Cloud account when one is signed in, else what chat runs on.
 It opens the menu to everything the window does not show: Settings…, Account…, the
 User Guide, Media (⌘1), Import… and View (the panes, the mask tools,
@@ -343,8 +351,14 @@ before its zoom. The undo, redo, split, delete and import commands have their ke
 and native menu items.
 
 **Settings** (⌘,) is a page in the room, over the conversation and the panel, not a
-window: Account, AI connection, General and Advanced named down its side, Back or
-Esc to leave (`StageShell::setCover`).
+window: Account, AI connection, Appearance, General and Advanced named down its
+side, Back or Esc to leave (`StageShell::setCover`). AI connection also has how far
+Kerf goes without asking, the same choice as the composer's chip. Appearance
+chooses the faces text is set in (`editor_theme.h`, `setEditorFaces`): the
+interface's (Inter, with Pretendard for Hangul; Pretendard; or the system's), and
+what is said in the conversation, which may be a serif (Noto Serif, with Nanum
+Myeongjo for Hangul) at one of three sizes. They are compiled in
+(`resources/fonts`), kept under `appearance/`, and put in force at once.
 
 There is no status bar. Beside the title the toolbar says what one would, and only
 when there is something to say: a passing message for its timeout, an offline or
@@ -356,12 +370,12 @@ composer's placeholder, with the reason on its tooltip. The
 connection, error and project.kerf bars that carry an action lie over the top of
 the content while they show.
 
-**The Media sheet.** Media (the bin and roles, 272 wide) is an overlay over the
-conversation, at its panel side, its top and of its height, with a left hairline
-and a close button at the end of its strip. Its command toggles it and Esc
-closes it; asking Kerf (⇧⌘J, Ask Kerf on a row) closes it when it lies over
-the composer. Selecting a clip opens nothing by itself. The sheet never covers
-the timeline.
+**The Media sheet.** Media (the bin and roles, 272 wide) is a column of its own
+between the conversation and the panel, of their height, with a left hairline and
+a close button at the end of its strip. The conversation gives way to it as it
+does to the panel, so it covers neither what is said, nor the composer, nor the
+timeline a drag goes to. Its command toggles it and Esc closes it. Selecting a
+clip opens nothing by itself.
 
 **The picture.** Masks, annotations, captions and overlays lie on the frame at
 its size. While a proposal is being previewed, a chip 12 points inside the
@@ -375,8 +389,14 @@ track above them 20, sound 24. Vertical sequences keep 36 and 32. Proposal bands
 stay on the ruler.
 
 **The conversation** is always open, 560 wide beside the picture; ⇧⌘J puts the
-keys in its composer, and with no timeline open the keys start there. With no
-picture open its composer has no timecode stamp. Its header is the
+keys in its composer, and with no timeline open the keys start there. Under its
+text the composer says what a request goes with (`ui/composer.h`): how far Kerf
+may go without asking (Ask before edits, Accept edits, Auto; its chip opens the
+three, and Shift-Tab in the text goes round them), the model that answers (a menu
+where there is a choice), the playhead's stamp while a picture is open, and a ring
+for how full Kerf's context is once a turn has said (`agent_context`). The mode is
+sent with each request (`permissions`) and kept under `agent/permissions`. Its
+header is the
 conversation's title (double-click renames it) and a ⋯ menu with Rename, Archive,
 Delete…, Agent settings…, Model and Activity. Messages and proposal cards fill
 its column at every width.

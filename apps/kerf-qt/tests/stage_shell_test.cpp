@@ -11,6 +11,7 @@
 #include "main_window.h"
 #include "media_artwork.h"
 #include "proposal_card.h"
+#include "project_launcher.h"
 #include "project_panel.h"
 #include "timeline_widget.h"
 #include "ui/components.h"
@@ -940,6 +941,44 @@ private slots:
         sidebar.projectRow(first.path())->click();
         QCOMPARE(project.value(0).value(0).toString(), QDir::cleanPath(QFileInfo(first.path()).absoluteFilePath()));
         QSettings().remove(QStringLiteral("sidebar/folded"));
+    }
+
+    // What the sidebar asks of the window for a folder that is not the open
+    // one: its conversation opens that project on it, and a folder taken off
+    // the list is forgotten, with nothing on disk touched.
+    void theSidebarsFoldersReachTheWindow() {
+        QTemporaryDir first;
+        QTemporaryDir second;
+        QVERIFY(first.isValid() && second.isValid());
+        const QStringList before = ProjectLauncher::recentProjects();
+        const auto restore = qScopeGuard([before] {
+            ProjectLauncher::clearRecentProjects();
+            for (auto it = before.crbegin(); it != before.crend(); ++it) ProjectLauncher::rememberProject(*it);
+        });
+        ProjectLauncher::clearRecentProjects();
+        ProjectLauncher::rememberProject(first.path());
+        ProjectLauncher::rememberProject(second.path());
+        const QString one = QDir::cleanPath(QFileInfo(first.path()).absoluteFilePath());
+        const QString two = QDir::cleanPath(QFileInfo(second.path()).absoluteFilePath());
+        QCOMPARE(ProjectLauncher::recentProjects(), (QStringList{two, one}));
+
+        MainWindow window{QString(), QString()};
+        QSignalSpy opened(&window, &MainWindow::conversationOpenRequested);
+        emit window.m_sidebar->conversationChosenIn(first.path(), QStringLiteral("c-7"));
+        QCOMPARE(opened.size(), 1);
+        QCOMPARE(opened.first().at(0).toString(), one);
+        QCOMPARE(opened.first().at(1).toString(), QStringLiteral("c-7"));
+        // The window it opens is on that conversation as soon as it is connected.
+        window.openConversation(QStringLiteral("c-7"));
+        QCOMPARE(window.m_chatWiring->conversations()->currentId(), QStringLiteral("c-7"));
+
+        emit window.m_sidebar->projectRemoveRequested(first.path());
+        QCOMPARE(ProjectLauncher::recentProjects(), QStringList{two});
+        QVERIFY(QFileInfo(first.path()).isDir());
+        QVERIFY(!window.m_sidebar->projects().contains(one));
+        // One that is not on the list changes nothing.
+        ProjectLauncher::forgetProject(QStringLiteral("/not/a/project"));
+        QCOMPARE(ProjectLauncher::recentProjects(), QStringList{two});
     }
 
     void aStartingRequestWaitsForTheProject() {

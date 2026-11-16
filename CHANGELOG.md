@@ -62,6 +62,28 @@ on `main`; its section here becomes the release's notes on GitHub
   clip being made shows moving stripes on the timeline, and the Media sheet's
   tiles say whether each is made, being made, queued or offline.
 - The conversation is 560 wide beside the picture, as in the design.
+- The composer says how far Kerf goes without asking: **Ask before edits**
+  (every edit a proposal, as before), **Accept edits** (edits go in as Kerf
+  makes them, each one step for Undo) or **Auto** (edits go in and Kerf makes
+  the shots it asks for). Its chip opens the three, Shift+Tab goes round them,
+  and Settings ▸ AI connection has the same choice. It holds for what you ask
+  in the editor; agents over MCP still follow `~/.kerf/agent.json`.
+- Beside it the composer names the model that answers, with a menu where there
+  is a choice, and a ring shows how full Kerf's context is.
+- The sidebar is wider, and its edge drags. Every folder unfolds to its own
+  conversations, the latest first, with the first six showing; a conversation
+  in another folder opens that project on it. A folder has a menu: New
+  Conversation, Open Project, Show in Finder, Copy Path, Remove from Sidebar.
+- Opening and closing the panel, the sidebar and Media moves them from the
+  window's edge, against the edge of what makes room, in less than half the
+  time. The panel no longer jumps in over the conversation, and what is said
+  goes with its panel instead of jumping to where it will end.
+- Media opens as a column of its own between the conversation and the picture.
+  It used to lie over half of the conversation, the composer included.
+- Settings ▸ Appearance chooses the fonts: Inter, Pretendard or the system's
+  for the interface, and for the conversation the same or a serif (Noto Serif,
+  with Nanum Myeongjo for Korean) in three sizes. Korean under Inter is set in
+  Pretendard instead of whatever the system has. The fonts come with Kerf.
 
 ## 0.1.2
 

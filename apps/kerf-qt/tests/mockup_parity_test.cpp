@@ -10,6 +10,7 @@
 // and <fmt>-preview.png for ?preview=1.
 
 #include "fixtures.h"
+#include "editor_theme.h"
 #include "test_registry.h"
 
 #include "chat_panel.h"
@@ -298,6 +299,67 @@ private slots:
         film(QStringLiteral("media-close"), [&window] { window.triggerCommand(QStringLiteral("window.project")); });
         film(QStringLiteral("sidebar-close"), [&window] { window.triggerCommand(QStringLiteral("view.sidebar")); });
         film(QStringLiteral("sidebar-open"), [&window] { window.triggerCommand(QStringLiteral("view.sidebar")); });
+        window.close();
+    }
+
+    // KERF_SCREENSHOT_DIR=<dir> saves a conversation in each face Settings
+    // offers, in Latin and in Hangul, and Settings' own pages, to look at.
+    void facesForTheGallery() {
+        const QString shots = qEnvironmentVariable("KERF_SCREENSHOT_DIR");
+        if (shots.isEmpty()) QSKIP("KERF_SCREENSHOT_DIR is not set");
+        QVERIFY(QDir().mkpath(shots));
+        const FaceChoice was = loadFaceChoice();
+        const auto restore = qScopeGuard([was] {
+            setEditorFaces(was);
+            QSettings().remove(QStringLiteral("appearance"));
+        });
+        MainWindow window{QString(), QString()};
+        window.m_cloudAccess = QStringLiteral("ready");
+        window.setConnection(QStringLiteral("ready"));
+        window.handleEvent(seedState(QSize(1920, 1080)));
+        window.m_chatWiring->openConversation(QStringLiteral("c-faces"));
+        const auto item = [](const char *id, const char *kind, const QString &text) {
+            return QJsonObject{{"id", id}, {"kind", kind}, {"text", text}, {"at", "2026-11-02T10:00:00Z"}};
+        };
+        QJsonObject answer = item("i2", "kerf",
+                                  QStringLiteral("가장 좋은 테이크 세 개로 **30초 컷**을 만들었어요. 와이드 숏으로 열고, 인터뷰의 쉬는 구간을 줄였습니다.\n\n"
+                                                 "- Opened on the **wide shot** (0:00 to 0:04)\n- Tightened the pauses between takes\n"
+                                                 "- 마지막은 클로즈업으로 끝납니다\n\nWant captions next? `title size=0.22` is the new value."));
+        answer.insert(QStringLiteral("steps"), QJsonArray{QStringLiteral("look · done"), QStringLiteral("edit · done")});
+        answer.insert(QStringLiteral("seconds"), 42.0);
+        window.handleEvent(QJsonObject{
+            {"type", "conversation"}, {"id", "c-faces"}, {"title", QStringLiteral("가장 좋은 테이크로 30초 컷")},
+            {"created", "2026-11-02T10:00:00Z"}, {"updated", "2026-11-03T10:05:00Z"},
+            {"items", QJsonArray{item("i1", "you", QStringLiteral("가장 좋은 테이크로 30초 컷을 만들어 줘. Keep the wide shot at the start.")), answer}}});
+        fakeArtwork(window.m_artwork);
+        window.resize(1600, 1000);
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        window.m_errorBanner->hide();
+        window.setPanelOpen(false);
+        // How full the context is, and a mode that lets edits through.
+        window.m_chat->setContextUse(QStringLiteral("c-faces"), 131'000, 192'000, false);
+        window.m_chat->setPermissionMode(PermissionMode::AcceptEdits);
+        const auto save = [&window, &shots](const QString &name) {
+            for (int i = 0; i < 4; ++i) QCoreApplication::processEvents();
+            return window.grab().save(QDir(shots).filePath(name + QStringLiteral(".png")));
+        };
+        const struct {
+            const char *name;
+            FaceChoice choice;
+        } faces[] = {{"faces-inter", {QStringLiteral("inter"), QStringLiteral("same"), QStringLiteral("default")}},
+                     {"faces-pretendard", {QStringLiteral("pretendard"), QStringLiteral("same"), QStringLiteral("default")}},
+                     {"faces-serif", {QStringLiteral("inter"), QStringLiteral("serif"), QStringLiteral("default")}},
+                     {"faces-serif-large", {QStringLiteral("pretendard"), QStringLiteral("serif"), QStringLiteral("large")}}};
+        for (const auto &face : faces) {
+            setEditorFaces(face.choice);
+            QVERIFY(save(QString::fromLatin1(face.name)));
+        }
+        setEditorFaces(FaceChoice{});
+        for (const char *page : {"account", "ai", "appearance", "general", "advanced"}) {
+            window.showSettings(QString::fromLatin1(page));
+            QVERIFY(save(QStringLiteral("settings-%1").arg(QString::fromLatin1(page))));
+        }
         window.close();
     }
 

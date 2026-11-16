@@ -9,6 +9,8 @@
 #include "chat_panel.h"
 #include "components.h"
 #include "composer.h"
+#include "design_tokens.h"
+#include "editor_theme.h"
 #include "main_window.h"
 #include "project_sidebar.h"
 #include "ui/chat_messages.h"
@@ -18,6 +20,10 @@
 #include "ui/wiring/chat_wiring.h"
 
 #include <QAbstractButton>
+#include <QSettings>
+#include <QScopeGuard>
+#include <QFontDatabase>
+#include <QApplication>
 #include <QCoreApplication>
 #include <QJsonArray>
 #include <QJsonObject>
@@ -396,6 +402,238 @@ private slots:
         QCOMPARE(w.of("conversations").last(),
                  (QJsonObject{{"type", "conversations"}, {"action", "rename"}, {"id", "c-1"}, {"title", "Harbor cut"}}));
         delete menu;
+    }
+
+    // The composer says how far Kerf may go without asking, and each request
+    // goes with it: chosen from the chip's menu, with Shift-Tab, or in
+    // Settings, and kept for the next window.
+    void aRequestGoesWithHowFarKerfMayGo() {
+        QSettings().remove(QStringLiteral("agent/permissions"));
+        const auto forget = qScopeGuard([] { QSettings().remove(QStringLiteral("agent/permissions")); });
+        const auto ask = [](Window &w, const char *text) {
+            w.sent.clear();
+            w.window.m_chatInput->setPlainText(QString::fromLatin1(text));
+            const bool sent = w.window.m_chatWiring->post();
+            // The turn ends: the next can be asked.
+            w.window.handleEvent(QJsonObject{{"type", "agent_busy"}, {"busy", false}});
+            return sent ? w.of("agent").value(0).value("permissions").toString() : QStringLiteral("not sent");
+        };
+        {
+            Window w;
+            Composer *composer = w.chat()->composerWidget();
+            ComposerChip *chip = composer->modeChip();
+            // Until chosen otherwise, every edit is a proposal.
+            QVERIFY(!chip->isHidden());
+            QCOMPARE(w.chat()->permissionMode(), PermissionMode::Ask);
+            QCOMPARE(chip->text(), QStringLiteral("Ask before edits"));
+            QVERIFY(!chip->tone().isValid());
+            QVERIFY(w.chat()->findChild<QLabel *>(QStringLiteral("welcomeText"))->text().contains(QStringLiteral("proposal")));
+            QCOMPARE(ask(w, "Trim the intro"), QStringLiteral("ask"));
+
+            // From the chip's menu: the three, the one in force checked, each with what it lets through.
+            QMenu *menu = composer->buildModeMenu();
+            QAction *asks = menu->findChild<QAction *>(QStringLiteral("composerMode.ask"));
+            QAction *edits = menu->findChild<QAction *>(QStringLiteral("composerMode.accept-edits"));
+            QAction *automatic = menu->findChild<QAction *>(QStringLiteral("composerMode.auto"));
+            QVERIFY(asks && edits && automatic);
+            QVERIFY(asks->isChecked() && !edits->isChecked() && !automatic->isChecked());
+            QCOMPARE(ui::menuKey(edits), QStringLiteral("Edits apply as Kerf makes them"));
+            edits->trigger();
+            delete menu;
+            QCOMPARE(w.chat()->permissionMode(), PermissionMode::AcceptEdits);
+            QCOMPARE(chip->text(), QStringLiteral("Accept edits"));
+            // The more Kerf does on its own, the more the chip says so.
+            QCOMPARE(chip->tone(), tokens::color(tokens::accentInk));
+            QCOMPARE(QSettings().value(QStringLiteral("agent/permissions")).toString(), QStringLiteral("accept-edits"));
+            // The welcome no longer promises a proposal first, and Settings shows the same choice.
+            QVERIFY(w.chat()->findChild<QLabel *>(QStringLiteral("welcomeText"))->text().contains(QStringLiteral("Undo")));
+            QCOMPARE(w.window.m_permissionChoice->currentIndex(), 1);
+            QCOMPARE(ask(w, "Trim the intro"), QStringLiteral("accept-edits"));
+
+            // Shift-Tab in the text goes round the three; Tab still leaves it.
+            QTest::keyClick(w.window.m_chatInput, Qt::Key_Backtab, Qt::ShiftModifier);
+            QCOMPARE(w.chat()->permissionMode(), PermissionMode::Auto);
+            QCOMPARE(chip->text(), QStringLiteral("Auto"));
+            QCOMPARE(chip->tone(), tokens::color(tokens::activity::gpu));
+            QCOMPARE(QSettings().value(QStringLiteral("agent/permissions")).toString(), QStringLiteral("auto"));
+            QCOMPARE(w.window.m_permissionChoice->currentIndex(), 2);
+            QCOMPARE(ask(w, "Make the opener"), QStringLiteral("auto"));
+            QTest::keyClick(w.window.m_chatInput, Qt::Key_Backtab, Qt::ShiftModifier);
+            QCOMPARE(w.chat()->permissionMode(), PermissionMode::Ask);
+
+            // And from Settings, where the choice is spelled out.
+            w.window.m_permissionChoice->setCurrentIndex(1, false);
+            emit w.window.m_permissionChoice->activated(1);
+            QCOMPARE(w.chat()->permissionMode(), PermissionMode::AcceptEdits);
+            QCOMPARE(chip->text(), QStringLiteral("Accept edits"));
+            QVERIFY(w.window.m_permissionHint->text().contains(QStringLiteral("Undo")));
+            QCOMPARE(QSettings().value(QStringLiteral("agent/permissions")).toString(), QStringLiteral("accept-edits"));
+        }
+        // The next window starts as this one was left.
+        {
+            Window next;
+            QCOMPARE(next.chat()->permissionMode(), PermissionMode::AcceptEdits);
+            QCOMPARE(next.window.m_permissionChoice->currentIndex(), 1);
+            QCOMPARE(ask(next, "Trim it"), QStringLiteral("accept-edits"));
+        }
+        // A name the settings hold that is no mode asks.
+        QCOMPARE(permission::named(QStringLiteral("everything")), PermissionMode::Ask);
+        for (const PermissionMode mode : {PermissionMode::Ask, PermissionMode::AcceptEdits, PermissionMode::Auto})
+            QCOMPARE(permission::named(permission::name(mode)), mode);
+    }
+
+    // The composer names the model that answers, and offers the others where
+    // there is a choice; Kerf Cloud picks its own, so its chip only says.
+    void theComposerNamesTheModel() {
+        Window w;
+        Composer *composer = w.chat()->composerWidget();
+        ComposerChip *chip = composer->modelChip();
+        w.chat()->setModels({QStringLiteral("Kerf Cloud")}, QStringLiteral("Kerf Cloud"), false);
+        QVERIFY(!chip->isHidden());
+        QCOMPARE(chip->text(), QStringLiteral("Kerf Cloud"));
+        QVERIFY(!chip->hasChevron());
+        w.chat()->setModels({QStringLiteral("claude-opus-5-5"), QStringLiteral("claude-sonnet-5-5")}, QStringLiteral("claude-opus-5-5"), true);
+        QCOMPARE(chip->text(), QStringLiteral("claude-opus-5-5"));
+        QVERIFY(chip->hasChevron());
+        QMenu *menu = composer->buildModelMenu();
+        QStringList offered;
+        QAction *sonnet = nullptr;
+        for (QAction *action : menu->actions()) {
+            if (!action->isCheckable()) continue;
+            offered << action->text();
+            if (action->text() == QStringLiteral("claude-sonnet-5-5")) sonnet = action;
+            QCOMPARE(action->isChecked(), action->text() == QStringLiteral("claude-opus-5-5"));
+        }
+        QCOMPARE(offered, (QStringList{QStringLiteral("claude-opus-5-5"), QStringLiteral("claude-sonnet-5-5")}));
+        QVERIFY(menu->findChild<QAction *>(QStringLiteral("composerModelSettings")));
+        // Chosen, it is the one the next request names.
+        QVERIFY(sonnet);
+        sonnet->trigger();
+        delete menu;
+        QCOMPARE(w.window.m_agentModel, QStringLiteral("claude-sonnet-5-5"));
+        QCOMPARE(chip->text(), QStringLiteral("claude-sonnet-5-5"));
+        // With no model to name, it says nothing.
+        w.chat()->setModels({}, QString(), false);
+        QVERIFY(chip->isHidden());
+    }
+
+    // How full Kerf's context is shows beside Send, for the conversation the
+    // turn was in: a ring that turns amber, then red, as it fills.
+    void theMeterSaysHowFullTheContextIs() {
+        Window w;
+        ContextMeter *meter = w.chat()->composerWidget()->contextMeter();
+        QVERIFY(meter->isHidden());
+        w.window.m_chatWiring->openConversation(QStringLiteral("c-1"));
+        w.window.handleEvent(conversation("c-1", "Cut the harbor", {item("i1", "you", "Cut it"), item("i2", "kerf", "Done.")}));
+        settle();
+        QVERIFY(meter->isHidden());
+        const auto reading = [&w](qint64 used, qint64 limit, const char *unit, const char *conversation) {
+            w.window.handleEvent(QJsonObject{{"type", "agent_context"}, {"used", used}, {"limit", limit}, {"unit", unit}, {"conversation", conversation}});
+        };
+        reading(96'000, 192'000, "units", "c-1");
+        QVERIFY(!meter->isHidden());
+        QCOMPARE(meter->fraction(), 0.5);
+        QCOMPARE(meter->ringColor(), tokens::color(tokens::ink2));
+        // Kerf's own measure is a share, with what happens as it fills.
+        QVERIFY2(meter->describe().startsWith(QStringLiteral("Context 50% full")), qPrintable(meter->describe()));
+        QVERIFY(!meter->describe().contains(QStringLiteral("tokens")));
+        QCOMPARE(meter->toolTip(), meter->describe());
+        reading(150'000, 192'000, "units", "c-1");
+        QCOMPARE(meter->ringColor(), tokens::color(tokens::warn));
+        reading(180'000, 192'000, "units", "c-1");
+        QCOMPARE(meter->ringColor(), tokens::color(tokens::neg));
+        // A model's window is counted in its tokens.
+        reading(68'000, 200'000, "tokens", "c-1");
+        QCOMPARE(meter->describe(), QStringLiteral("Context 34% full · 68k of 200k tokens"));
+        reading(1'200'000, 1'000'000, "tokens", "c-1");
+        QCOMPARE(meter->fraction(), 1.0);
+
+        // It is that conversation's: another has none to show, and coming back has it again.
+        w.window.m_chatWiring->openConversation(QStringLiteral("c-2"));
+        w.window.handleEvent(conversation("c-2", "Captions", {item("i1", "you", "Caption it")}));
+        settle();
+        QVERIFY(meter->isHidden());
+        w.window.m_chatWiring->openConversation(QStringLiteral("c-1"));
+        settle();
+        QVERIFY(!meter->isHidden());
+        // A reading for another conversation's turn does not show here.
+        reading(10'000, 192'000, "units", "c-9");
+        QVERIFY(meter->isHidden());
+        // With nothing to be full of, nothing shows.
+        reading(0, 0, "units", "c-1");
+        QVERIFY(meter->isHidden());
+    }
+
+    // What is said is set in the faces chosen in Settings: the interface's, or
+    // a serif of its own, at the size chosen; the faces come with the editor.
+    void theConversationIsSetInTheChosenFaces() {
+        const auto restore = qScopeGuard([] {
+            setEditorFaces(FaceChoice{});
+            QSettings().remove(QStringLiteral("appearance"));
+        });
+        // The faces the editor carries are there to choose.
+        for (const char *family : {tokens::uiFamily, tokens::hangulFamily, tokens::serifFamily, tokens::serifHangulFamily})
+            QVERIFY2(QFontDatabase::families().contains(QString::fromLatin1(family)), family);
+        // The design's own, with Pretendard for the Hangul Inter has none of.
+        const tokens::Faces plain = facesFor(FaceChoice{});
+        QCOMPARE(plain.ui, (QStringList{QStringLiteral("Inter"), QStringLiteral("Pretendard")}));
+        QVERIFY(plain.prose.isEmpty());
+        QCOMPARE(plain.proseStep, 0);
+        const FaceChoice chosen{QStringLiteral("pretendard"), QStringLiteral("serif"), QStringLiteral("large")};
+        const tokens::Faces fancy = facesFor(chosen);
+        QCOMPARE(fancy.ui, (QStringList{QStringLiteral("Pretendard"), QStringLiteral("Inter")}));
+        QCOMPARE(fancy.prose, (QStringList{QStringLiteral("Noto Serif"), QStringLiteral("NanumMyeongjo")}));
+        QCOMPARE(fancy.proseStep, 2);
+        QCOMPARE(facesFor(FaceChoice{QStringLiteral("system"), QStringLiteral("same"), QStringLiteral("small")}).proseStep, -1);
+        // Kept and read back; a name that is none of them is the first of its kind.
+        saveFaceChoice(chosen);
+        QCOMPARE(loadFaceChoice(), chosen);
+        QSettings().setValue(QStringLiteral("appearance/interfaceFace"), QStringLiteral("comic"));
+        QSettings().setValue(QStringLiteral("appearance/readingSize"), QStringLiteral("huge"));
+        QCOMPARE(loadFaceChoice(), (FaceChoice{QStringLiteral("inter"), QStringLiteral("serif"), QStringLiteral("default")}));
+        QSettings().remove(QStringLiteral("appearance"));
+
+        Window w;
+        w.window.m_chatWiring->openConversation(QStringLiteral("c-1"));
+        w.window.handleEvent(conversation("c-1", "Cut the harbor", {item("i1", "you", "Cut it"), item("i2", "kerf", "Done, in **one** pass.")}));
+        settle();
+        const auto first = [](const QFont &font) { return font.families().value(0); };
+        QCOMPARE(first(w.chat()->answers().constFirst()->body()->font()), QStringLiteral("Inter"));
+        QCOMPARE(w.chat()->answers().constFirst()->body()->font().pixelSize(), 14);
+        QCOMPARE(first(w.chat()->title()->font()), QStringLiteral("Inter"));
+
+        // Chosen in Settings: put in force at once, and kept.
+        w.window.m_interfaceFace->setCurrentIndex(1, false);
+        w.window.m_readingFace->setCurrentIndex(1, false);
+        w.window.m_readingSize->setCurrentIndex(2, false);
+        emit w.window.m_readingSize->activated(2);
+        settle();
+        QCOMPARE(loadFaceChoice(), chosen);
+        // What is asked and answered, and what is being written, are in the serif, larger.
+        QCOMPARE(w.chat()->answers().size(), 1);
+        QCOMPARE(first(w.chat()->answers().constFirst()->body()->font()), QStringLiteral("Noto Serif"));
+        QCOMPARE(w.chat()->answers().constFirst()->body()->font().pixelSize(), 16);
+        QCOMPARE(first(w.chat()->requests().constFirst()->body()->font()), QStringLiteral("Noto Serif"));
+        QCOMPARE(first(w.window.m_chatInput->font()), QStringLiteral("Noto Serif"));
+        QCOMPARE(w.window.m_chatInput->font().pixelSize(), 16);
+        QCOMPARE(first(w.window.m_readingSample->font()), QStringLiteral("Noto Serif"));
+        // The rest of the editor is in the interface's face, at its own sizes.
+        QCOMPARE(first(w.chat()->title()->font()), QStringLiteral("Pretendard"));
+        QCOMPARE(w.chat()->title()->font().pixelSize(), tokens::title.px);
+        QCOMPARE(first(tokens::font(tokens::control)), QStringLiteral("Pretendard"));
+        QCOMPARE(first(QApplication::font()), QStringLiteral("Pretendard"));
+        QCOMPARE(first(tokens::font(tokens::timecode)), QStringLiteral("JetBrains Mono"));
+
+        // Back to the design's own.
+        w.window.m_interfaceFace->setCurrentIndex(0, false);
+        w.window.m_readingFace->setCurrentIndex(0, false);
+        w.window.m_readingSize->setCurrentIndex(1, false);
+        emit w.window.m_interfaceFace->activated(0);
+        settle();
+        QCOMPARE(first(w.chat()->answers().constFirst()->body()->font()), QStringLiteral("Inter"));
+        QCOMPARE(w.chat()->answers().constFirst()->body()->font().pixelSize(), 14);
+        QCOMPARE(first(w.chat()->title()->font()), QStringLiteral("Inter"));
+        QCOMPARE(first(w.window.m_chatInput->font()), QStringLiteral("Inter"));
     }
 
     // A proposal a turn staged has its card under the answer; one staged

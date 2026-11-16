@@ -3,8 +3,8 @@
 // The window's content. It starts as a conversation: the folders and
 // conversations at the left, the conversation beside them. The picture and the
 // timeline are the panel at the right, opened when there is something to see
-// and closed at will. Everything else opens on demand: the three sheets over
-// the conversation, one at a time.
+// and closed at will. Everything else opens on demand: the Media sheet, as a
+// column between the two.
 //
 // stage::rects() is the geometry, a pure function of the window's size, the
 // picture's aspect and which panes are open; StageShell places its children by
@@ -17,7 +17,7 @@
 //   column 272 wide between the two, and the conversation gives way to it the
 //   same way. At 1600 x 1000, the panel is 752 x 960 at (848, 40):
 //   Wide (aspect >= 1.2):
-//     picture slot 960 x 420 at the top, timeline 960 x 540 under it. The
+//     picture slot 752 x 420 at the top, timeline 752 x 540 under it. The
 //     timeline has 56% of the height, at least 260, and whatever the picture's
 //     aspect leaves; the picture pillarboxes in black in its slot.
 //   One pane alone has the panel: a picture with the transport's block 88 tall

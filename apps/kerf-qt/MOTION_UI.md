@@ -30,7 +30,9 @@ repeating their numbers, so changing a value does not make it wrong.
 | Scene | When | What moves | Code | Test |
 |---|---|---|---|---|
 | Start window | It opens | Heading, box and ideas rise in turn | `HomeWindow::enter` | `aRiseLeavesTheLayoutAlone` |
-| Sidebar | It opens or closes | It slides in from the window's edge; the toolbar's leading stretch, its top, follows its edge and the title moves with it | `StageShell::transition`, `ToolbarWiring::layoutLeading`, `FlatToolBar::setSidebarEdge` | `toolbarHoldsOnlyTheSidebarTheTitleExportAndThePanel` (the end state) |
+| Sidebar | It opens or closes | It slides in from the window's edge over `panel`, the conversation's left edge against its own; the toolbar's leading stretch, its top, follows its edge and the title moves with it. Dragged by its edge, it is where the pointer is, with no motion | `StageShell::transition`, `StageShell::setSidebarWidth`, `ToolbarWiring::layoutLeading`, `FlatToolBar::setSidebarEdge` | `aPaneOpenedByHandIsQuick`, `theSidebarKeepsTheWidthItWasDraggedTo`, `toolbarHoldsOnlyTheSidebarTheTitleExportAndThePanel` (the end state) |
+| Panel | The panel button, ⌥⌘P or ⌥⌘T, or something in the conversation asks to be looked at | The picture and the timeline come in from the window's right edge over `panel`, their left edge against the conversation's right as it narrows, and go out the same way; nothing lies over anything on the way. One of the two alone comes from the edge it belongs to: the timeline up from the foot, the picture down from the top. What is said follows its panel's width, in the middle of it | `MainWindow::setPanelOpen`, `MainWindow::setPaneOpen`, `StageShell::transition`, `ChatPanel::resizeEvent` | `aPanelMovesWithTheConversationsEdge`, `aPaneOpenedByHandIsQuick` |
+| Media column | Media opens or closes (⌘1) | The conversation and the panel part over `panel`, and the column comes out from between them: it goes with the panel's edge and shows only right of the conversation's. Closing, they meet over it | `StageShell::setSheet`, `StageShell::transition` (`clipSheet`) | `theMediaColumnComesOutFromBetween` |
 | Sidebar activity | A conversation is Working | Its dot pulses, as the working chip's does (`workPulse`, drawn `workPulseSteps` a pulse); only the dot is drawn again, and it stops while the sidebar is hidden or nothing works | `ProjectSidebar::updatePulse`, `SidebarRow::setPulse` | `theWorkingDotPulsesOnlyWithMotion` |
 | Archived unfolds | Archived · N is pressed | The archived conversations fade in where they are, one after another (`appear`, `unfoldStagger` apart); folding is at once | `ProjectSidebar::setArchivedOpen`, `moves::fadeIn` | `archivedConversationsFoldAwayAtTheEnd` (the end state) |
 | Export arrives | The program gets its first clip | Export fades in where it is, in the toolbar | `ToolbarWiring::followCut` | `toolbarHoldsOnlyTheSidebarTheTitleExportAndThePanel` (the end state) |
@@ -61,7 +63,7 @@ Look here before writing a new animation.
 
 | You want | Use |
 |---|---|
-| Regions to move to a new arrangement | `StageShell::setPanes`, with an origin for the picture to grow from or return to; `StageShell::setPictureHome` for where it returns to when no origin is given |
+| Regions to move to a new arrangement | `StageShell::setPanes`, with an origin for the picture to grow from or return to; `StageShell::setPictureHome` for where it returns to when no origin is given. Its duration is `stage` for the stage growing, `panel` for a pane opened by hand |
 | The stage to grow out of something, with a stand-in until its frame | `MainWindow::growStage` |
 | Something to travel across regions | `StageMotion::fly` with a `Flight` |
 | Something to hold a place until the real thing comes | `Flight::stays`, ended by `releaseStaying` |
@@ -158,5 +160,8 @@ in, and each region drawn whole.
 - Stand-ins are posters, so they are soft until the render arrives.
 - Screenshots do not show whether motion is smooth, and `whatEachSceneCosts` shows what
   it costs, not how it looks. Only a real window shows that.
-- While the regions move, the conversation's list keeps the width it is going to
-  (`ChatPanel::holdWidth`): its text wraps once, at the start, not in each frame.
+- While the regions move, the conversation's list follows its width, in the same frame
+  (`ChatPanel::resizeEvent`), so its text may wrap again on the way. It keeps to a
+  720 point column, which only narrows while its panel is under that, and a pane
+  opened by hand moves for `panel`, not `stage`. `paneMovesForTheGallery` saves the
+  frames to look at (`KERF_SCREENSHOT_DIR`).

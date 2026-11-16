@@ -490,10 +490,8 @@ Composer::Composer(QWidget *parent) : QFrame(parent) {
     m_input->setFont(tokens::font(tokens::reading));
     m_input->document()->setDocumentMargin(0);
     m_input->setPlaceholderText(QStringLiteral("Ask Kerf to make or change something"));
-    m_input->setStyleSheet(QStringLiteral("QTextEdit#chatInput, QTextEdit#chatInput:focus, QTextEdit#chatInput:hover, "
-                                          "QTextEdit#chatInput:disabled { background: transparent; border: 0; padding: 0; "
-                                          "color: %1; font-size: 14px; }")
-                               .arg(color(ink).name(QColor::HexRgb)));
+    // Its sheet, with the size of the face chosen for reading (refreshFaces).
+    refreshFaces();
     {
         QPalette palette = m_input->palette();
         palette.setColor(QPalette::PlaceholderText, color(ink3));
@@ -718,11 +716,22 @@ void Composer::placePopovers() {
 
 void Composer::setRoomy() {
     m_leastInput = 52;
+    m_roomy = true;
     static_cast<ComposerBox *>(m_box)->setRadius(16);
-    m_input->setStyleSheet(m_input->styleSheet().replace(QStringLiteral("font-size: 14px"), QStringLiteral("font-size: 15px")));
-    QFont font = m_input->font();
-    font.setPixelSize(15);
+    refreshFaces();
+}
+
+void Composer::refreshFaces() {
+    QFont font = tokens::font(tokens::reading);
+    // A point larger where the composer is the whole of the window's work.
+    if (m_roomy) font.setPixelSize(font.pixelSize() + 1);
     m_input->setFont(font);
+    // The app's sheet gives #chatInput a size of its own; this one says the size in use.
+    m_input->setStyleSheet(QStringLiteral("QTextEdit#chatInput, QTextEdit#chatInput:focus, QTextEdit#chatInput:hover, "
+                                          "QTextEdit#chatInput:disabled { background: transparent; border: 0; padding: 0; "
+                                          "color: %1; font-size: %2px; }")
+                               .arg(color(ink).name(QColor::HexRgb))
+                               .arg(font.pixelSize()));
     fitInput();
 }
 

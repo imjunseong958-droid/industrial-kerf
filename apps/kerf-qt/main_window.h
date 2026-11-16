@@ -69,6 +69,7 @@ class StageMotion;
 class StageShell;
 namespace ui {
 class IconButton;
+class SegmentedControl;
 } // namespace ui
 class MediaArtwork;
 class TimelineWidget;
@@ -588,6 +589,14 @@ private:
     // Settings: a page the shell lays over the conversation and the panel. Its
     // body is what comes up into place; its pages are named down its side.
     QWidget *m_preferences = nullptr;
+    // Settings ▸ AI connection: how far Kerf goes without asking; and
+    // Appearance: the faces text is set in.
+    ui::SegmentedControl *m_permissionChoice = nullptr;
+    QLabel *m_permissionHint = nullptr;
+    ui::SegmentedControl *m_interfaceFace = nullptr;
+    ui::SegmentedControl *m_readingFace = nullptr;
+    ui::SegmentedControl *m_readingSize = nullptr;
+    QLabel *m_readingSample = nullptr;
     QWidget *m_settingsBody = nullptr;
     QStackedWidget *m_settingsPages = nullptr;
     QStringList m_settingsIds;

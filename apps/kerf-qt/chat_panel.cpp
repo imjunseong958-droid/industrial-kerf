@@ -4,6 +4,7 @@
 #include "components.h"
 #include "composer.h"
 #include "design_tokens.h"
+#include "editor_theme.h"
 #include "icons.h"
 #include "proposal_card.h"
 #include "stage_motion.h"
@@ -187,6 +188,25 @@ ChatPanel::ChatPanel(QWidget *parent) : QWidget(parent) {
     rebuild();
     updateHeader();
     updateSuggestions();
+    connect(EditorAppearance::instance(), &EditorAppearance::changed, this, &ChatPanel::refreshFaces);
+}
+
+void ChatPanel::refreshFaces() {
+    // Nothing to do while it holds what it was made with.
+    const QFont face = tokens::font(reading);
+    if (m_welcomeText->font() == face) return;
+    m_welcomeText->setFont(face);
+    m_composer->refreshFaces();
+    // The messages are made again, in the face and size chosen now.
+    for (const auto &[itemId, widget] : std::as_const(m_shown))
+        if (widget) widget->deleteLater();
+    m_shown.clear();
+    if (m_strays) {
+        m_strays->deleteLater();
+        m_strays = nullptr;
+    }
+    rebuild();
+    scheduleFollow();
 }
 
 ChatPanel::~ChatPanel() = default;

@@ -116,12 +116,15 @@ struct TypeStyle {
     int line;
     int weight; // CSS weight: 400 regular, 500 medium
     bool mono;
+    // What is said in the conversation: set in the face and size chosen for
+    // reading (faces()), where the rest of the interface keeps its own.
+    bool prose = false;
 };
 
 constexpr TypeStyle body{13, 20, 400, false};          // body, comment text, inputs
 constexpr TypeStyle bodyName{13, 20, 500, false};      // comment names
 constexpr TypeStyle display{34, 44, 500, false};       // the start window's question
-constexpr TypeStyle reading{14, 22, 400, false};       // what is said in the conversation, and the composer
+constexpr TypeStyle reading{14, 22, 400, false, true}; // what is said in the conversation, and the composer
 constexpr TypeStyle title{14, 20, 500, false};         // panel titles: Comments, Source, clip name
 constexpr TypeStyle control{12, 16, 400, false};       // controls, labels, rows, chips
 constexpr TypeStyle controlStrong{12, 16, 500, false}; // buttons, dock names, segment on
@@ -142,18 +145,44 @@ constexpr qreal markerInitialsSpacing = -0.2;
 constexpr char uiFamily[] = "Inter";
 constexpr char monoFamily[] = "JetBrains Mono";
 constexpr char monoFallback[] = "Menlo";
+// The other faces the editor carries, to choose from (Settings, Appearance):
+// Pretendard, which is Inter with Hangul; and a serif pair for reading, Noto
+// Serif for Latin with Nanum Myeongjo for Hangul.
+constexpr char hangulFamily[] = "Pretendard";
+constexpr char serifFamily[] = "Noto Serif";
+constexpr char serifHangulFamily[] = "NanumMyeongjo";
 
-// The QFont for `style`: the bundled face, else the system's UI font or
+// The faces in use. The interface's families, first choice first: a glyph
+// one lacks comes from the next, so Hangul under Inter is Pretendard's, not
+// whatever the system has. What is said in the conversation may have a face
+// and a size of its own (TypeStyle::prose); with no families it has the
+// interface's. editor_theme.h's setEditorFaces() changes them and has every
+// widget take them.
+struct Faces {
+    QStringList ui{QString::fromLatin1(uiFamily), QString::fromLatin1(hangulFamily)};
+    QStringList prose;
+    int proseStep = 0; // points added to the reading size
+};
+inline Faces &faces() {
+    static Faces chosen;
+    return chosen;
+}
+
+// The QFont for `style`: the chosen face, else the system's UI font or
 // Menlo (then the system fixed font), at the style's pixel size and weight,
 // with tabular figures.
 inline QFont font(const TypeStyle &style) {
     QFont font;
-    if (style.mono)
+    const Faces &chosen = faces();
+    if (style.mono) {
         font.setFamilies({QString::fromLatin1(monoFamily), QString::fromLatin1(monoFallback),
                           QFontDatabase::systemFont(QFontDatabase::FixedFont).family()});
-    else
-        font.setFamilies({QString::fromLatin1(uiFamily), QFontDatabase::systemFont(QFontDatabase::GeneralFont).family()});
-    font.setPixelSize(style.px);
+    } else {
+        QStringList families = style.prose && !chosen.prose.isEmpty() ? chosen.prose : chosen.ui;
+        families << QFontDatabase::systemFont(QFontDatabase::GeneralFont).family();
+        font.setFamilies(families);
+    }
+    font.setPixelSize(style.px + (style.prose ? chosen.proseStep : 0));
     font.setWeight(QFont::Weight(style.weight));
     font.setLetterSpacing(QFont::AbsoluteSpacing, 0);
 #if QT_VERSION >= QT_VERSION_CHECK(6, 7, 0)

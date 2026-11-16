@@ -231,6 +231,8 @@ public:
     void setDivider(bool shown) { m_divider = shown; update(); }
     // A larger box for when the composer is the whole of the window's work.
     void setRoomy();
+    // The face and size chosen for reading changed: the text is set in them.
+    void refreshFaces();
 
     // Where the popovers float: the panel. They are placed over the composer.
     void setOverlayParent(QWidget *parent);
@@ -282,6 +284,7 @@ private:
     QHBoxLayout *m_toolRow = nullptr;
     bool m_divider = true;
     int m_leastInput = 22;
+    bool m_roomy = false;
     QTextEdit *m_input = nullptr;
     StampButton *m_stamp = nullptr;
     ComposerChip *m_mode = nullptr;
