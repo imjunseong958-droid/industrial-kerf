@@ -22,6 +22,7 @@
 
 #include "test_friends.h"
 #include "chat_parts.h"
+#include "composer.h"
 #include "proposal_card.h"
 #include "proposal_model.h"
 #include "stage_motion.h"
@@ -50,7 +51,6 @@ class QVBoxLayout;
 
 namespace kerf {
 
-class Composer;
 class KerfMessage;
 class ProposalCard;
 class SuggestionButton;
@@ -132,6 +132,14 @@ public:
     void setModels(const QStringList &models, const QString &current, bool choosable);
     QStringList models() const { return m_models; }
     QString model() const { return m_currentModel; }
+    // How far Kerf goes without asking: the composer's chip, and what the
+    // welcome says an edit comes back as.
+    void setPermissionMode(PermissionMode mode);
+    PermissionMode permissionMode() const;
+    // How full Kerf's context is in `conversation` (empty: the one a turn just
+    // started), as the turn in progress last said. The composer's meter shows
+    // it while that conversation is the open one.
+    void setContextUse(const QString &conversation, qint64 used, qint64 limit, bool tokens);
     // The latest check's summary rows: failing ones become suggestions.
     void setCheckRows(const QJsonArray &rows);
     // The proposal a running preview shows (empty when none).
@@ -150,10 +158,6 @@ public:
     // Lays the list out for the panel's size now, not when its posted requests
     // come: where things will be once a move has settled.
     void layOutNow() { syncContent(); }
-    // While the window moves to a new arrangement: the width the panel will have
-    // when it is there, which the list is laid out at meanwhile; 0 lets it go.
-    void holdWidth(int width);
-    int heldWidth() const { return m_heldWidth; }
 
     // ---- the turn in progress ---------------------------------------------
     // The person's request, shown at once; Kerf at work under it. `at` is the
@@ -258,6 +262,8 @@ signals:
     void conversationAction(const QString &action, const QString &argument);
     // The More menu: "settings", "activity", "model" (a model id).
     void moreAction(const QString &action, const QString &argument);
+    // The composer's chip, or Shift-Tab, chose how far Kerf may go.
+    void permissionModeChosen(kerf::PermissionMode mode);
 
 protected:
     void paintEvent(QPaintEvent *) override;
@@ -292,6 +298,10 @@ private:
     QWidget *buildWelcome();
     void refillWelcome();
     void updateHeader();
+    void updateWelcome();
+    void updateContextMeter();
+    // The faces chosen in Settings changed: what is said is set in them again.
+    void refreshFaces();
     // Lays the list out again from the conversation. Messages it already shows
     // (by item id) are kept; only new ones are made.
     void rebuild();
@@ -339,7 +349,6 @@ private:
     LiveTurn m_live;
     bool m_follow = true;
     bool m_rebuildQueued = false;
-    int m_heldWidth = 0;
 
     QLabel *m_title = nullptr;
     QLineEdit *m_titleEdit = nullptr;
@@ -349,6 +358,14 @@ private:
     QVBoxLayout *m_listLayout = nullptr;
     QWidget *m_welcome = nullptr;
     QLabel *m_welcomeTitle = nullptr;
+    QLabel *m_welcomeText = nullptr;
+    // The latest reading of Kerf's context, and the conversation it is of.
+    struct ContextUse {
+        QString conversation;
+        qint64 used = 0;
+        qint64 limit = 0;
+        bool tokens = false;
+    } m_context;
     QWidget *m_examples = nullptr;
     QVBoxLayout *m_examplesLayout = nullptr;
     QList<SuggestionButton *> m_exampleButtons;

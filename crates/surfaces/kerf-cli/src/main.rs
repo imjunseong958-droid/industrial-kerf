@@ -1572,7 +1572,7 @@ fn run_prompt(session: &mut AgentSession, prompt: &str) -> Result<String> {
             }
         }
         AgentEvent::Aborted => eprintln!("\nagent aborted"),
-        AgentEvent::TurnStarted { .. } | AgentEvent::Done { .. } => {}
+        AgentEvent::TurnStarted { .. } | AgentEvent::Done { .. } | AgentEvent::Context { .. } => {}
     })?;
     if text.is_empty() {
         text = result;

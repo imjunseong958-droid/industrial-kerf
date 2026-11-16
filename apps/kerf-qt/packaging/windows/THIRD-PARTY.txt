@@ -16,7 +16,7 @@ Qt 6 (the Qt*.dll files and the plugin folders)
 Microsoft Visual C++ Runtime (msvcp140*.dll, vcruntime140*.dll, concrt140.dll)
   Redistributable under the Visual Studio licence terms.
 
-Inter and JetBrains Mono (compiled into kerf-qt.exe)
+Inter, JetBrains Mono, Pretendard, Noto Serif and Nanum Myeongjo (compiled into kerf-qt.exe)
   SIL OFL 1.1. See fonts\.
 
 Code from ArtCraft's EffectCraft and FilmCraft, and the fonts of its text engine

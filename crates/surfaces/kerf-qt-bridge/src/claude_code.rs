@@ -11,6 +11,7 @@
 
 use crate::collab::program_path;
 use kerf_agent::{summarize_targets, summarize_tool_result, AgentEvent, ToolResultSummary};
+use kerf_mcp::permissions::{Mode, MODE_VARIABLE};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -26,6 +27,8 @@ const SERVER: &str = "kerf";
 const TOOL_PREFIX: &str = "mcp__kerf__";
 /// The most of Claude Code's error output kept for a failed turn.
 const MAX_STDERR_BYTES: usize = 4 * 1024;
+/// The context window assumed, in tokens, until a turn's result names the model's.
+const DEFAULT_CONTEXT_WINDOW: u64 = 200_000;
 
 /// What Claude Code is told about working in the editor, beyond the
 /// instructions `kerf-mcp` gives every client.
@@ -38,10 +41,15 @@ replies short: say what you changed and where.";
 pub(crate) struct ClaudeCodeSession {
     claude: PathBuf,
     directory: PathBuf,
-    mcp_config: String,
+    server: McpProgram,
+    kerfd: PathBuf,
+    /// What the next turn may do without asking; none is the person's file's say.
+    permissions: Option<Mode>,
     model: Option<String>,
     /// Claude Code's own session, resumed for each follow-up turn.
     session: Option<String>,
+    /// The model's context window in tokens, once a turn's result has said.
+    context_window: u64,
     aborted: Arc<AtomicBool>,
 }
 
@@ -62,9 +70,12 @@ impl ClaudeCodeSession {
         Ok(Self {
             claude,
             directory: directory.to_path_buf(),
-            mcp_config: mcp_config(&server, directory, kerfd),
+            server,
+            kerfd: kerfd.to_path_buf(),
+            permissions: None,
             model: model.filter(|model| !model.trim().is_empty() && model != "default"),
             session: None,
+            context_window: DEFAULT_CONTEXT_WINDOW,
             aborted: Arc::new(AtomicBool::new(false)),
         })
     }
@@ -73,12 +84,18 @@ impl ClaudeCodeSession {
         Arc::clone(&self.aborted)
     }
 
+    /// The mode the turns from here on run in: each starts its own
+    /// `kerf-mcp`, which is told it as it starts.
+    pub(crate) fn set_permissions(&mut self, mode: Option<Mode>) {
+        self.permissions = mode;
+    }
+
     fn command(&self) -> Command {
         let mut command = Command::new(&self.claude);
         command
             .current_dir(&self.directory)
             .args(arguments(
-                &self.mcp_config,
+                &mcp_config(&self.server, &self.directory, &self.kerfd, self.permissions),
                 self.model.as_deref(),
                 self.session.as_deref(),
             ))
@@ -138,7 +155,10 @@ impl ClaudeCodeSession {
                 }
             })
         };
-        let mut stream = Stream::default();
+        let mut stream = Stream {
+            context_window: self.context_window,
+            ..Stream::default()
+        };
         for line in BufReader::new(stdout).lines() {
             let Ok(line) = line else { break };
             let Ok(message) = serde_json::from_str::<Value>(&line) else {
@@ -157,6 +177,7 @@ impl ClaudeCodeSession {
         if let Some(session) = stream.session.take() {
             self.session = Some(session);
         }
+        self.context_window = stream.context_window;
         if self.aborted.load(Ordering::SeqCst) {
             emit(AgentEvent::Aborted);
             return Ok(());
@@ -206,14 +227,24 @@ fn arguments(mcp_config: &str, model: Option<&str>, session: Option<&str>) -> Ve
     arguments
 }
 
-fn mcp_config(server: &McpProgram, directory: &Path, kerfd: &Path) -> String {
+fn mcp_config(
+    server: &McpProgram,
+    directory: &Path,
+    kerfd: &Path,
+    permissions: Option<Mode>,
+) -> String {
     let mut args: Vec<String> = server.args.iter().map(|arg| (*arg).to_owned()).collect();
     args.extend(["--dir".to_owned(), directory.to_string_lossy().into_owned()]);
+    let mut env = json!({"KERFD_BIN": kerfd.to_string_lossy()});
+    // The mode chosen beside the composer, over the person's file's.
+    if let Some(mode) = permissions {
+        env[MODE_VARIABLE] = json!(mode.name());
+    }
     json!({"mcpServers": {SERVER: {
         "type": "stdio",
         "command": server.program.to_string_lossy(),
         "args": args,
-        "env": {"KERFD_BIN": kerfd.to_string_lossy()},
+        "env": env,
     }}})
     .to_string()
 }
@@ -226,9 +257,22 @@ struct Stream {
     tools: HashMap<String, String>,
     done: Option<String>,
     failure: Option<String>,
+    /// The tokens the latest request read, and the window they are out of.
+    context_used: u64,
+    context_window: u64,
 }
 
 impl Stream {
+    /// Says how full the context is, once there is something to say.
+    fn say_context(&self, emit: &mut impl FnMut(AgentEvent)) {
+        if self.context_used > 0 && self.context_window > 0 {
+            emit(AgentEvent::Context {
+                used: self.context_used,
+                limit: self.context_window,
+            });
+        }
+    }
+
     fn read(&mut self, message: &Value, emit: &mut impl FnMut(AgentEvent)) {
         if let Some(session) = message["session_id"].as_str() {
             self.session = Some(session.to_owned());
@@ -265,6 +309,20 @@ impl Stream {
                 }
             }
             Some("assistant") => {
+                // What this request read: its new input and what it took from the cache.
+                let usage = &message["message"]["usage"];
+                let used = [
+                    "input_tokens",
+                    "cache_read_input_tokens",
+                    "cache_creation_input_tokens",
+                ]
+                .iter()
+                .filter_map(|key| usage[*key].as_u64())
+                .sum::<u64>();
+                if used > 0 && used != self.context_used {
+                    self.context_used = used;
+                    self.say_context(emit);
+                }
                 for block in blocks(message) {
                     if block["type"] != "tool_use" {
                         continue;
@@ -296,6 +354,17 @@ impl Stream {
                 }
             }
             Some("result") => {
+                // The window of the model that answered: the largest, when it used helpers.
+                let window = message["modelUsage"]
+                    .as_object()
+                    .into_iter()
+                    .flat_map(|models| models.values())
+                    .filter_map(|model| model["contextWindow"].as_u64())
+                    .max();
+                if let Some(window) = window.filter(|window| *window != self.context_window) {
+                    self.context_window = window;
+                    self.say_context(emit);
+                }
                 let text = message["result"].as_str().unwrap_or_default().to_owned();
                 if message["is_error"].as_bool() == Some(true) || message["subtype"] != "success" {
                     if self.failure.is_none() {
@@ -466,7 +535,10 @@ mod tests {
     use super::*;
 
     fn read(lines: &[Value]) -> (Stream, Vec<String>) {
-        let mut stream = Stream::default();
+        let mut stream = Stream {
+            context_window: DEFAULT_CONTEXT_WINDOW,
+            ..Stream::default()
+        };
         let mut events = Vec::new();
         for line in lines {
             stream.read(line, &mut |event| events.push(format!("{event:?}")));
@@ -546,12 +618,56 @@ mod tests {
             },
             Path::new("/work/film"),
             Path::new("/bin/kerfd"),
+            None,
         ))
         .unwrap();
         let server = &config["mcpServers"]["kerf"];
         assert_eq!(server["command"], "/bin/kerf-mcp");
         assert_eq!(server["args"], json!(["--dir", "/work/film"]));
         assert_eq!(server["env"]["KERFD_BIN"], "/bin/kerfd");
+        // No mode chosen: the person's own file has the say.
+        assert!(server["env"].get(MODE_VARIABLE).is_none());
+    }
+
+    #[test]
+    fn a_chosen_mode_reaches_the_server_it_starts() {
+        let config: Value = serde_json::from_str(&mcp_config(
+            &McpProgram {
+                program: "/bin/kerf-mcp".into(),
+                args: &[],
+            },
+            Path::new("/work/film"),
+            Path::new("/bin/kerfd"),
+            Some(Mode::AcceptEdits),
+        ))
+        .unwrap();
+        assert_eq!(
+            config["mcpServers"]["kerf"]["env"][MODE_VARIABLE],
+            "accept-edits"
+        );
+    }
+
+    #[test]
+    fn a_turn_says_how_full_its_context_is() {
+        let (stream, events) = read(&[
+            json!({"type":"assistant","message":{"content":[],"usage":{
+                "input_tokens":1200,"cache_read_input_tokens":30000,
+                "cache_creation_input_tokens":800,"output_tokens":90}}}),
+            // The same reading again says nothing new.
+            json!({"type":"assistant","message":{"content":[],"usage":{
+                "input_tokens":1200,"cache_read_input_tokens":30000,
+                "cache_creation_input_tokens":800}}}),
+            json!({"type":"result","subtype":"success","is_error":false,"result":"Done.",
+                   "modelUsage":{"claude-opus":{"contextWindow":1_000_000}}}),
+        ]);
+        assert_eq!(
+            events,
+            [
+                "Context { used: 32000, limit: 200000 }",
+                "Context { used: 32000, limit: 1000000 }",
+            ]
+        );
+        assert_eq!(stream.context_window, 1_000_000);
     }
 
     #[test]
@@ -583,6 +699,7 @@ mod tests {
             &mcp_program(None, None, Some(&editor)).unwrap(),
             Path::new("/work/film"),
             Path::new("kerfd"),
+            None,
         ))
         .unwrap();
         assert_eq!(

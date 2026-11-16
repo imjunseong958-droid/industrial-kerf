@@ -17,7 +17,7 @@ Qt 6 (the Qt*.framework bundles in Contents/Frameworks, and Contents/PlugIns)
 The other libraries in Contents/Frameworks
   Each from a Homebrew formula, on its own licence, listed below.
 
-Inter and JetBrains Mono (compiled into kerf-qt)
+Inter, JetBrains Mono, Pretendard, Noto Serif and Nanum Myeongjo (compiled into kerf-qt)
   SIL OFL 1.1. See fonts/.
 
 Code from ArtCraft's EffectCraft and FilmCraft, and the fonts of its text engine

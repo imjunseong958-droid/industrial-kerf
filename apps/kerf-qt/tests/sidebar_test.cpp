@@ -1,7 +1,8 @@
-// The sidebar's conversations: grouped by date, each with a dot for what it is
-// doing and a word or a time at its end; archived ones folded away at the end;
-// a search over their titles; and archive, rename and delete, asked for only
-// as the sidebar says.
+// The sidebar's folders and conversations: each folder unfolds to its own
+// conversations, latest first, each with a dot for what it is doing and a word
+// or a time at its end; the first few show, and archived ones fold away at the
+// end; a search over their titles; archive, rename and delete, asked for only
+// as the sidebar says; and a folder's own menu.
 
 #include "test_registry.h"
 
@@ -12,6 +13,9 @@
 #include <QAction>
 #include <QApplication>
 #include <QDir>
+#include <QSettings>
+#include <QFile>
+#include <QClipboard>
 #include <QEnterEvent>
 #include <QLineEdit>
 #include <QMenu>
@@ -93,9 +97,11 @@ private slots:
     void initTestCase() { QVERIFY(m_folder.isValid()); }
 
     void theSidebarIsItsTokensWidth() {
-        QCOMPARE(tokens::layout::sidebar, 252);
+        QCOMPARE(tokens::layout::sidebar, 288);
+        // A drag of its edge keeps it between its least and its most.
+        QVERIFY(tokens::layout::sidebarLeast < tokens::layout::sidebar && tokens::layout::sidebar < tokens::layout::sidebarMost);
         SidebarRow row(QString(), QStringLiteral("A"));
-        QCOMPARE(row.sizeHint().width(), 252);
+        QCOMPARE(row.sizeHint().width(), 288);
     }
 
     void timesSayHowLongAgo() {
@@ -113,7 +119,7 @@ private slots:
         QVERIFY(ProjectSidebar::relativeTime(QDateTime(), now).isEmpty());
     }
 
-    void conversationsAreGroupedByDateLatestFirst() {
+    void conversationsAreListedLatestFirst() {
         ProjectSidebar sidebar;
         const QDateTime now = noon();
         open(sidebar, {conversation(QStringLiteral("old"), QStringLiteral("Old cut"), State::Idle, QDateTime(QDate(2026, 10, 1), QTime(9, 0))),
@@ -121,34 +127,237 @@ private slots:
                        conversation(QStringLiteral("t2"), QStringLiteral("Just now"), State::Idle, now.addSecs(-4 * 60)),
                        conversation(QStringLiteral("y"), QStringLiteral("Last night"), State::Idle, QDateTime(QDate(2026, 11, 15), QTime(20, 0))),
                        conversation(QStringLiteral("w"), QStringLiteral("This week"), State::Idle, now.addDays(-3))});
-        QCOMPARE(sidebar.sectionLabels(),
-                 (QStringList{QStringLiteral("Today"), QStringLiteral("Yesterday"), QStringLiteral("Previous 7 days"), QStringLiteral("Older")}));
+        // Under their folder, with nothing between them: the time at each row's
+        // end says how long ago.
         QCOMPARE(listed(sidebar), (QStringList{QStringLiteral("Just now"), QStringLiteral("Earlier today"), QStringLiteral("Last night"),
                                                QStringLiteral("This week"), QStringLiteral("Old cut")}));
+        QVERIFY(sidebar.notes().isEmpty());
         QCOMPARE(sidebar.conversationRow(QStringLiteral("t2"))->trailing(), QStringLiteral("4m"));
         QCOMPARE(sidebar.conversationRow(QStringLiteral("t1"))->trailing(), QStringLiteral("3h"));
         QCOMPARE(sidebar.conversationRow(QStringLiteral("y"))->trailing(), QStringLiteral("16h"));
         QCOMPARE(sidebar.conversationRow(QStringLiteral("w"))->trailing(), QStringLiteral("3d"));
         QCOMPARE(sidebar.conversationRow(QStringLiteral("old"))->trailing(), QStringLiteral("Oct 1"));
+        // Each belongs to its folder: its guide runs down them, and their
+        // titles start under its name.
+        SidebarRow *folder = sidebar.projectRow(m_folder.path());
+        QVERIFY(folder->isStrong() && !folder->hasGuide());
+        for (const SidebarRow *row : sidebar.rows())
+            if (row->objectName() == QStringLiteral("sidebarConversation")) {
+                QVERIFY(row->hasGuide());
+                QCOMPARE(row->textLeft(), folder->textLeft());
+            }
+        // The rows stand a row apart, with no gap for the guide to break on.
+        QCOMPARE(sidebar.conversationRow(QStringLiteral("t1"))->y() - sidebar.conversationRow(QStringLiteral("t2"))->y(),
+                 sidebar.conversationRow(QStringLiteral("t2"))->height());
 
-        // Only the groups that have rows are labelled.
-        sidebar.setConversations({conversation(QStringLiteral("t2"), QStringLiteral("Just now"), State::Idle, now.addSecs(-4 * 60)),
-                                  conversation(QStringLiteral("old"), QStringLiteral("Old cut"), State::Idle, now.addDays(-40))},
-                                 {});
-        QCOMPARE(sidebar.sectionLabels(), (QStringList{QStringLiteral("Today"), QStringLiteral("Older")}));
-
-        // Time goes on: the times are read again, and a new day regroups.
+        // Time goes on: the times are read again.
         sidebar.m_fixedNow = now.addSecs(60 * 60);
         sidebar.refreshTimes();
         QCOMPARE(sidebar.conversationRow(QStringLiteral("t2"))->trailing(), QStringLiteral("1h"));
-        sidebar.m_fixedNow = now.addDays(1);
-        sidebar.refreshTimes();
-        QCOMPARE(sidebar.sectionLabels(), (QStringList{QStringLiteral("Yesterday"), QStringLiteral("Older")}));
 
-        // Conversations with no time are listed first, under no label.
-        sidebar.setConversations({conversation(QStringLiteral("a"), QStringLiteral("Untimed"), State::Idle, QDateTime())}, {});
-        QVERIFY(sidebar.sectionLabels().isEmpty());
+        // Conversations with no time are listed first, with none at their end.
+        sidebar.setConversations({conversation(QStringLiteral("b"), QStringLiteral("Timed"), State::Idle, now),
+                                  conversation(QStringLiteral("a"), QStringLiteral("Untimed"), State::Idle, QDateTime())},
+                                 {});
+        QCOMPARE(listed(sidebar), (QStringList{QStringLiteral("Untimed"), QStringLiteral("Timed")}));
         QVERIFY(sidebar.conversationRow(QStringLiteral("a"))->trailing().isEmpty());
+
+        // A folder with none says so, in the rows' place.
+        sidebar.setConversations({}, {});
+        QCOMPARE(sidebar.notes(), QStringList{QStringLiteral("No conversations yet")});
+    }
+
+    // The first few of a folder's conversations show; the rest are a press away.
+    void aLongFolderShowsItsLatestFirst() {
+        ProjectSidebar sidebar;
+        const QDateTime now = noon();
+        QList<ProjectSidebar::Conversation> many;
+        for (int index = 0; index < 9; ++index)
+            many << conversation(QStringLiteral("c%1").arg(index), QStringLiteral("Cut %1").arg(index), State::Idle, now.addSecs(-3600 * index));
+        open(sidebar, many);
+        QCOMPARE(listed(sidebar).size(), ProjectSidebar::kShownAtFirst);
+        QCOMPARE(listed(sidebar).constFirst(), QStringLiteral("Cut 0"));
+        SidebarRow *more = sidebar.moreRow(m_folder.path());
+        QVERIFY(more);
+        QCOMPARE(more->text(), QStringLiteral("Show 3 more"));
+        more->click();
+        QCOMPARE(listed(sidebar).size(), 9);
+        QCOMPARE(sidebar.moreRow(m_folder.path())->text(), QStringLiteral("Show less"));
+        sidebar.moreRow(m_folder.path())->click();
+        QCOMPARE(listed(sidebar).size(), ProjectSidebar::kShownAtFirst);
+
+        // The one that is open is never out of sight, nor what a search finds.
+        sidebar.setConversations(many, QStringLiteral("c8"));
+        QCOMPARE(listed(sidebar).size(), 9);
+        QVERIFY(sidebar.conversationRow(QStringLiteral("c8"))->isCurrent());
+        sidebar.setConversations(many, QString());
+        QCOMPARE(listed(sidebar).size(), ProjectSidebar::kShownAtFirst);
+        sidebar.searchField()->setText(QStringLiteral("Cut"));
+        QCOMPARE(listed(sidebar).size(), 9);
+        QVERIFY(!sidebar.moreRow(m_folder.path()));
+        // Six or fewer need no row for the rest.
+        sidebar.searchField()->clear();
+        sidebar.setConversations(many.first(ProjectSidebar::kShownAtFirst), QString());
+        QVERIFY(!sidebar.moreRow(m_folder.path()));
+    }
+
+    // Every folder unfolds to its own conversations: the open one's from the
+    // bridge, another's from what it keeps beside its project.
+    void eachFolderUnfoldsToItsOwnConversations() {
+        QTemporaryDir other;
+        QVERIFY(other.isValid());
+        QDir kept(other.path());
+        QVERIFY(kept.mkpath(QStringLiteral(".kerf/conversations")));
+        const auto keep = [&kept](const char *id, const char *title, const char *updated, bool archived, const char *file) {
+            QFile out(kept.filePath(QStringLiteral(".kerf/conversations/%1").arg(QString::fromLatin1(file))));
+            if (!out.open(QIODevice::WriteOnly)) return false;
+            out.write(QStringLiteral("{\"id\":\"%1\",\"title\":\"%2\",\"updated\":\"%3\",\"archived\":%4,\"items\":[{},{}]}")
+                          .arg(QString::fromLatin1(id), QString::fromLatin1(title), QString::fromLatin1(updated),
+                               archived ? QStringLiteral("true") : QStringLiteral("false"))
+                          .toUtf8());
+            return true;
+        };
+        QVERIFY(keep("c-1", "Ferry ride", "2026-11-14T08:00:00.000000Z", false, "c-1.json"));
+        QVERIFY(keep("c-2", "Market scene", "2026-11-15T08:00:00Z", false, "c-2.json"));
+        QVERIFY(keep("c-3", "Put away", "2026-11-16T08:00:00Z", true, "c-3.json"));
+        // Neither a conversation nor readable: left out, as the bridge leaves them.
+        QVERIFY(keep("note", "Not one", "2026-11-16T08:00:00Z", false, "note.json"));
+        QFile broken(kept.filePath(QStringLiteral(".kerf/conversations/c-9.json")));
+        QVERIFY(broken.open(QIODevice::WriteOnly));
+        broken.write("{ not json");
+        broken.close();
+
+        const QList<ProjectSidebar::Conversation> read = ProjectSidebar::readConversations(other.path());
+        QCOMPARE(read.size(), 3);
+        QCOMPARE(read.at(0).title, QStringLiteral("Put away"));
+        QCOMPARE(read.at(1).title, QStringLiteral("Market scene"));
+        QCOMPARE(read.at(1).count, 2);
+        QVERIFY(read.at(2).updated.isValid());
+
+        QSettings().remove(QStringLiteral("sidebar/folded"));
+        ProjectSidebar sidebar;
+        sidebar.m_fixedNow = noon();
+        sidebar.resize(tokens::layout::sidebar, 800);
+        sidebar.setProjects({m_folder.path(), other.path()}, m_folder.path());
+        sidebar.setConversations({conversation(QStringLiteral("a"), QStringLiteral("Here"), State::Idle, noon())}, QString());
+        sidebar.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&sidebar));
+        // The open folder shows what is in it; the other is folded until asked.
+        QVERIFY(!sidebar.isFolded(m_folder.path()));
+        QVERIFY(sidebar.isFolded(other.path()));
+        QCOMPARE(listed(sidebar), QStringList{QStringLiteral("Here")});
+        SidebarRow *folder = sidebar.projectRow(other.path());
+        QCOMPARE(folder->chevron(), SidebarRow::Chevron::Folded);
+        QCOMPARE(folder->accessibleDescription(), QStringLiteral("Folded"));
+
+        // Its name, like its chevron, unfolds it: nothing is opened by that.
+        QSignalSpy projectChosen(&sidebar, &ProjectSidebar::projectChosen);
+        QSignalSpy chosenIn(&sidebar, &ProjectSidebar::conversationChosenIn);
+        folder->click();
+        QVERIFY(projectChosen.isEmpty());
+        QVERIFY(!sidebar.isFolded(other.path()));
+        QCOMPARE(sidebar.projectRow(other.path())->chevron(), SidebarRow::Chevron::Unfolded);
+        // Its own, latest first; its archived ones stay out of the way.
+        QCOMPARE(listed(sidebar), (QStringList{QStringLiteral("Here"), QStringLiteral("Market scene"), QStringLiteral("Ferry ride")}));
+        QCOMPARE(sidebar.conversationsOf(other.path()).size(), 3);
+        // What was chosen is kept for the next sidebar.
+        {
+            ProjectSidebar next;
+            next.setProjects({m_folder.path(), other.path()}, m_folder.path());
+            QVERIFY(!next.isFolded(other.path()));
+        }
+
+        // One of them opens its project, on it; it has no archive or delete here.
+        SidebarRow *theirs = nullptr;
+        for (SidebarRow *row : sidebar.rows())
+            if (row->text() == QStringLiteral("Market scene")) theirs = row;
+        QVERIFY(theirs);
+        QVERIFY(theirs->hoverActions().isEmpty());
+        QCOMPARE(theirs->trailing(), QStringLiteral("1d"));
+        theirs->click();
+        QCOMPARE(chosenIn.size(), 1);
+        QCOMPARE(chosenIn.first().at(0).toString(), QDir::cleanPath(other.path()));
+        QCOMPARE(chosenIn.first().at(1).toString(), QStringLiteral("c-2"));
+
+        // A press on the chevron alone folds it again, and Left and Right do from the keys.
+        folder = sidebar.projectRow(other.path());
+        QTest::mouseClick(folder, Qt::LeftButton, Qt::NoModifier, folder->chevronRect().center());
+        QVERIFY(sidebar.isFolded(other.path()));
+        QCOMPARE(listed(sidebar), QStringList{QStringLiteral("Here")});
+        QTest::keyClick(sidebar.projectRow(other.path()), Qt::Key_Right);
+        QVERIFY(!sidebar.isFolded(other.path()));
+        QTest::keyClick(sidebar.projectRow(other.path()), Qt::Key_Left);
+        QVERIFY(sidebar.isFolded(other.path()));
+        // The open folder folds too.
+        sidebar.projectRow(m_folder.path())->click();
+        QVERIFY(sidebar.isFolded(m_folder.path()));
+        QVERIFY(listed(sidebar).isEmpty());
+        sidebar.setFolded(m_folder.path(), false);
+        QSettings().remove(QStringLiteral("sidebar/folded"));
+    }
+
+    // A folder's menu: a conversation in it, the folder in the file manager,
+    // its path, and off the list.
+    void aFolderHasItsOwnMenu() {
+        QTemporaryDir other;
+        QVERIFY(other.isValid());
+        ProjectSidebar sidebar;
+        sidebar.resize(tokens::layout::sidebar, 800);
+        sidebar.setProjects({m_folder.path(), other.path()}, m_folder.path());
+        sidebar.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&sidebar));
+        QSignalSpy newConversation(&sidebar, &ProjectSidebar::newConversationRequested);
+        QSignalSpy chosenIn(&sidebar, &ProjectSidebar::conversationChosenIn);
+        QSignalSpy opened(&sidebar, &ProjectSidebar::projectChosen);
+        QSignalSpy removed(&sidebar, &ProjectSidebar::projectRemoveRequested);
+        QSignalSpy revealed(&sidebar, &ProjectSidebar::projectRevealRequested);
+        const auto action = [](QMenu *menu, const char *name) { return menu->findChild<QAction *>(QString::fromLatin1(name)); };
+
+        // The open folder: it is open already, and stays on the list while it is.
+        QMenu *menu = sidebar.projectMenu(m_folder.path());
+        QVERIFY(menu);
+        QVERIFY(!action(menu, "sidebarProjectOpen")->isVisible());
+        QVERIFY(!action(menu, "sidebarProjectRemove")->isEnabled());
+        action(menu, "sidebarProjectNew")->trigger();
+        QCOMPARE(newConversation.size(), 1);
+        action(menu, "sidebarProjectCopyPath")->trigger();
+        QCOMPARE(QApplication::clipboard()->text(), QDir::toNativeSeparators(QDir::cleanPath(m_folder.path())));
+        action(menu, "sidebarProjectReveal")->trigger();
+        QCOMPARE(revealed.first().first().toString(), QDir::cleanPath(m_folder.path()));
+
+        // Another: it can be opened, with a new conversation or as it is, and taken off.
+        menu = sidebar.projectMenu(other.path());
+        QVERIFY(action(menu, "sidebarProjectOpen")->isVisible());
+        QVERIFY(action(menu, "sidebarProjectRemove")->isEnabled());
+        action(menu, "sidebarProjectNew")->trigger();
+        QCOMPARE(chosenIn.size(), 1);
+        QVERIFY(chosenIn.first().at(1).toString().isEmpty());
+        action(menu, "sidebarProjectOpen")->trigger();
+        QCOMPARE(opened.first().first().toString(), QDir::cleanPath(other.path()));
+        action(menu, "sidebarProjectRemove")->trigger();
+        QCOMPARE(removed.first().first().toString(), QDir::cleanPath(other.path()));
+        QVERIFY(!sidebar.projectMenu(QStringLiteral("/not/listed")));
+
+        // The same from the row: + and its menu show under the pointer.
+        SidebarRow *row = sidebar.projectRow(other.path());
+        QCOMPARE(row->hoverActions().size(), 2);
+        QVERIFY(!row->actionsShown());
+        QEnterEvent enter(QPointF(60, 10), QPointF(60, 10), QPointF(60, 10));
+        QApplication::sendEvent(row, &enter);
+        QVERIFY(row->actionsShown());
+        row->hoverActions().constFirst()->click();
+        QCOMPARE(chosenIn.size(), 2);
+        sidebar.projectRow(m_folder.path())->hoverActions().constFirst()->click();
+        QCOMPARE(newConversation.size(), 2);
+
+        // The start window lists folders alone: a press chooses one, and nothing folds.
+        sidebar.setConversationsShown(false);
+        row = sidebar.projectRow(other.path());
+        QCOMPARE(row->chevron(), SidebarRow::Chevron::None);
+        QVERIFY(row->hoverActions().isEmpty());
+        opened.clear();
+        row->click();
+        QCOMPARE(opened.size(), 1);
     }
 
     void eachStateHasItsDotAndWord() {
@@ -411,7 +620,6 @@ private slots:
         QCOMPARE(search->accessibleName(), QStringLiteral("Search conversations"));
         QTest::keyClicks(search, QStringLiteral("BEACH"));
         QCOMPARE(listed(sidebar), QStringList{QStringLiteral("The Beach cut")});
-        QCOMPARE(sidebar.sectionLabels(), QStringList{QStringLiteral("Today")});
         QCOMPARE(sidebar.archivedRow()->text(), QStringLiteral("Archived · 1"));
         // The folders stay.
         QVERIFY(sidebar.projectRow(m_folder.path()));
@@ -419,7 +627,7 @@ private slots:
         search->setText(QStringLiteral("nothing like it"));
         QVERIFY(listed(sidebar).isEmpty());
         QVERIFY(!sidebar.archivedRow());
-        QCOMPARE(sidebar.m_extras.size(), 1);
+        QCOMPARE(sidebar.notes(), QStringList{QStringLiteral("No conversations match")});
 
         // Esc empties it, and everything is back.
         QTest::keyClick(search, Qt::Key_Escape);

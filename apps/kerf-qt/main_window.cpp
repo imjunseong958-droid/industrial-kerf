@@ -723,9 +723,11 @@ void MainWindow::buildPreferences() {
         "QWidget#settingsPage { background: %1; }"
         "QFrame#settingsCard { background: %2; border: 1px solid %3; border-radius: 12px; }"
         "QLabel#settingsTitle { color: %4; font-size: 20px; font-weight: 500; }"
-        "QLabel#settingsHeading { color: %4; font-size: 13px; font-weight: 500; }")
+        "QLabel#settingsHeading { color: %4; font-size: 13px; font-weight: 500; }"
+        "QLabel#settingsHint { color: %5; font-size: 12px; }")
             .arg(tokens::color(tokens::chrome).name(), tokens::color(tokens::card).name(),
-                 tokens::color(tokens::line).name(QColor::HexArgb), tokens::color(tokens::ink).name()));
+                 tokens::color(tokens::line).name(QColor::HexArgb), tokens::color(tokens::ink).name(),
+                 tokens::color(tokens::ink3).name()));
     auto *pageLayout = new QVBoxLayout(m_preferences);
     pageLayout->setContentsMargins(0, 0, 0, 0);
     pageLayout->setSpacing(0);
@@ -800,8 +802,17 @@ void MainWindow::buildPreferences() {
         label->setObjectName(QStringLiteral("settingsHeading"));
         return label;
     };
+    // A line under a heading that says what the choice under it does.
+    const auto hint = [](const QString &text) {
+        auto *label = new ui::WrapLabel;
+        label->setObjectName(QStringLiteral("settingsHint"));
+        label->setWordWrap(true);
+        label->setText(text);
+        return label;
+    };
     QVBoxLayout *accountPage = addPage(QStringLiteral("account"), QStringLiteral("Account"));
     QVBoxLayout *aiPage = addPage(QStringLiteral("ai"), QStringLiteral("AI connection"));
+    QVBoxLayout *appearancePage = addPage(QStringLiteral("appearance"), QStringLiteral("Appearance"));
     QVBoxLayout *generalPage = addPage(QStringLiteral("general"), QStringLiteral("General"));
     QVBoxLayout *advancedPage = addPage(QStringLiteral("advanced"), QStringLiteral("Advanced"));
     nav->addStretch(1);
@@ -872,7 +883,133 @@ void MainWindow::buildPreferences() {
     m_cloudStatus->setObjectName(QStringLiteral("cloudStatus"));
     m_cloudStatus->setWordWrap(true);
     connectionLayout->addWidget(m_cloudStatus);
+
+    // How far Kerf goes without asking: the same choice as the composer's chip.
+    QVBoxLayout *permissionLayout = card(aiPage);
+    permissionLayout->parentWidget()->setProperty("section", QStringLiteral("permissions"));
+    permissionLayout->addWidget(heading(QStringLiteral("Without asking")));
+    m_permissionChoice = new ui::SegmentedControl;
+    m_permissionChoice->setObjectName(QStringLiteral("settingsPermissions"));
+    m_permissionChoice->setAccessibleName(QStringLiteral("What Kerf does without asking"));
+    m_permissionHint = hint(QString());
+    for (const PermissionMode mode : {PermissionMode::Ask, PermissionMode::AcceptEdits, PermissionMode::Auto}) {
+        const int index = m_permissionChoice->addSegment(permission::label(mode), permission::summary(mode));
+        m_permissionChoice->setSegmentData(index, permission::name(mode));
+    }
+    const auto describePermission = [this](PermissionMode mode) {
+        switch (mode) {
+        case PermissionMode::Ask:
+            m_permissionHint->setText(QStringLiteral("Every edit Kerf makes is a proposal: you watch it, then accept or reject it."));
+            break;
+        case PermissionMode::AcceptEdits:
+            m_permissionHint->setText(QStringLiteral("Edits go into the sequence as Kerf makes them. Each is one step that Undo takes back. "
+                                                     "A shot it wants made is still yours to run."));
+            break;
+        case PermissionMode::Auto:
+            m_permissionHint->setText(QStringLiteral("Edits go in as Kerf makes them, and it makes the shots it asks for: five, then it asks "
+                                                     "again, unless ~/.kerf/agent.json gives another number. Making a shot can take time "
+                                                     "and money."));
+            break;
+        }
+    };
+    {
+        const PermissionMode mode = m_chat->permissionMode();
+        m_permissionChoice->setCurrentIndex(int(mode), false);
+        describePermission(mode);
+    }
+    connect(m_permissionChoice, &ui::SegmentedControl::activated, this, [this, describePermission](int index) {
+        const PermissionMode mode = permission::named(m_permissionChoice->segmentData(index).toString());
+        describePermission(mode);
+        if (mode == m_chat->permissionMode()) return;
+        m_chat->setPermissionMode(mode);
+        QSettings().setValue(QStringLiteral("agent/permissions"), permission::name(mode));
+    });
+    // Chosen at the composer, it shows here too.
+    connect(m_chat, &ChatPanel::permissionModeChosen, this, [this, describePermission](PermissionMode mode) {
+        m_permissionChoice->setCurrentIndex(int(mode), false);
+        describePermission(mode);
+    });
+    {
+        auto *row = new QHBoxLayout;
+        row->setContentsMargins(0, 0, 0, 0);
+        row->addWidget(m_permissionChoice);
+        row->addStretch(1);
+        permissionLayout->addLayout(row);
+    }
+    permissionLayout->addWidget(m_permissionHint);
+    permissionLayout->addWidget(hint(QStringLiteral("Shift-Tab in the composer goes round the three.")));
     aiPage->addStretch(1);
+
+    // Appearance: the faces text is set in. The interface's, and what is said
+    // in the conversation, which may have a face and a size of its own.
+    const FaceChoice faces = loadFaceChoice();
+    const auto choice = [](std::initializer_list<std::pair<const char *, const char *>> options, const QString &current) {
+        auto *control = new ui::SegmentedControl;
+        int at = 0;
+        for (const auto &[id, label] : options) {
+            const int index = control->addSegment(QString::fromLatin1(label));
+            control->setSegmentData(index, QString::fromLatin1(id));
+            if (current == QLatin1String(id)) at = index;
+        }
+        control->setCurrentIndex(at, false);
+        return control;
+    };
+    const auto leading = [](QWidget *widget) {
+        auto *row = new QHBoxLayout;
+        row->setContentsMargins(0, 0, 0, 0);
+        row->addWidget(widget);
+        row->addStretch(1);
+        return row;
+    };
+    QVBoxLayout *interfaceLayout = card(appearancePage);
+    interfaceLayout->addWidget(heading(QStringLiteral("Interface font")));
+    m_interfaceFace = choice({{"inter", "Inter"}, {"pretendard", "Pretendard"}, {"system", "System"}}, faces.ui);
+    m_interfaceFace->setObjectName(QStringLiteral("settingsInterfaceFace"));
+    m_interfaceFace->setAccessibleName(QStringLiteral("Interface font"));
+    interfaceLayout->addLayout(leading(m_interfaceFace));
+    interfaceLayout->addWidget(hint(QStringLiteral("Inter is the design's own face. Pretendard is drawn to go with it and has Hangul; with "
+                                                   "Inter, Korean is set in Pretendard too. System is your computer's.")));
+
+    QVBoxLayout *readingLayout = card(appearancePage);
+    readingLayout->addWidget(heading(QStringLiteral("Conversation font")));
+    m_readingFace = choice({{"same", "Same as interface"}, {"serif", "Serif"}}, faces.reading);
+    m_readingFace->setObjectName(QStringLiteral("settingsReadingFace"));
+    m_readingFace->setAccessibleName(QStringLiteral("Conversation font"));
+    readingLayout->addLayout(leading(m_readingFace));
+    readingLayout->addSpacing(tokens::space::s4);
+    readingLayout->addWidget(heading(QStringLiteral("Text size")));
+    m_readingSize = choice({{"small", "Small"}, {"default", "Default"}, {"large", "Large"}}, faces.size);
+    m_readingSize->setObjectName(QStringLiteral("settingsReadingSize"));
+    m_readingSize->setAccessibleName(QStringLiteral("Conversation text size"));
+    readingLayout->addLayout(leading(m_readingSize));
+    // What a request and an answer will read like.
+    m_readingSample = new ui::WrapLabel;
+    m_readingSample->setObjectName(QStringLiteral("settingsReadingSample"));
+    m_readingSample->setWordWrap(true);
+    m_readingSample->setTextFormat(Qt::PlainText);
+    m_readingSample->setText(QStringLiteral("Make a 30-second cut from the best takes, and open on the wide shot.\n"
+                                            "가장 좋은 테이크로 30초 컷을 만들고, 와이드 숏으로 시작해 줘."));
+    m_readingSample->setFont(tokens::font(tokens::reading));
+    m_readingSample->setStyleSheet(QStringLiteral("QLabel#settingsReadingSample { color: %1; background: %2; border: 1px solid %3; "
+                                                  "border-radius: 8px; padding: 10px 12px; }")
+                                       .arg(tokens::color(tokens::ink).name(), tokens::color(tokens::raised).name(),
+                                            tokens::color(tokens::line).name(QColor::HexArgb)));
+    readingLayout->addSpacing(tokens::space::s4);
+    readingLayout->addWidget(m_readingSample);
+    readingLayout->addWidget(hint(QStringLiteral("Serif is Noto Serif, with Nanum Myeongjo for Hangul. It is what you ask and what Kerf "
+                                                 "answers that change; the rest of the editor keeps the interface font.")));
+    appearancePage->addStretch(1);
+    const auto applyFaces = [this] {
+        FaceChoice chosen;
+        chosen.ui = m_interfaceFace->segmentData(m_interfaceFace->currentIndex()).toString();
+        chosen.reading = m_readingFace->segmentData(m_readingFace->currentIndex()).toString();
+        chosen.size = m_readingSize->segmentData(m_readingSize->currentIndex()).toString();
+        saveFaceChoice(chosen);
+        setEditorFaces(chosen);
+        m_readingSample->setFont(tokens::font(tokens::reading));
+    };
+    for (ui::SegmentedControl *control : {m_interfaceFace, m_readingFace, m_readingSize})
+        connect(control, &ui::SegmentedControl::activated, this, applyFaces);
 
     // General. Whether Kerf asks GitHub once a day for a newer release (update_notice.h).
     QVBoxLayout *updatesLayout = card(generalPage);
@@ -965,10 +1102,20 @@ void MainWindow::buildPreferences() {
     settingsNote->setObjectName(QStringLiteral("muted"));
     settingsNote->setWordWrap(true);
     advancedLayout->addWidget(settingsNote);
+    // A button is as wide as what it says, at the start of its row, not the
+    // whole column across.
+    const auto buttonRow = [](std::initializer_list<QPushButton *> buttons) {
+        auto *row = new QHBoxLayout;
+        row->setContentsMargins(0, 0, 0, 0);
+        row->setSpacing(tokens::space::s8);
+        for (QPushButton *button : buttons) row->addWidget(button);
+        row->addStretch(1);
+        return row;
+    };
     auto *saveSettings = new QPushButton(QStringLiteral("Save agent connection"));
     saveSettings->setObjectName(QStringLiteral("primaryButton"));
     connect(saveSettings, &QPushButton::clicked, this, &MainWindow::saveAgentSettings);
-    advancedLayout->addWidget(saveSettings);
+    advancedLayout->addLayout(buttonRow({saveSettings}));
 
     auto *inboundSection = new QGroupBox(QStringLiteral("Use MCP tools in Kerf chat"));
     inboundSection->setObjectName(QStringLiteral("inboundMcpSection"));
@@ -995,18 +1142,20 @@ void MainWindow::buildPreferences() {
     m_inboundMcpJson->setPlainText(QStringLiteral("{\n  \"mcpServers\": {}\n}\n"));
     m_inboundMcpJson->setPlaceholderText(QStringLiteral("{\"mcpServers\": {\"example\": {\"command\": \"/path/to/server\", \"args\": [], \"env\": {}}}}"));
     inboundLayout->addWidget(m_inboundMcpJson);
+    auto *saveInbound = new QPushButton(QStringLiteral("Save and apply MCP config"));
+    saveInbound->setObjectName(QStringLiteral("saveInboundMcpConfig"));
+    connect(saveInbound, &QPushButton::clicked, this, &MainWindow::saveInboundMcpConfig);
+    QHBoxLayout *inboundButtons = buttonRow({saveInbound});
+    int loadAt = 1;
     for (const auto &source : {qMakePair(QStringLiteral("Load project Cursor config"), QDir(m_projectDirectory).absoluteFilePath(QStringLiteral(".cursor/mcp.json"))),
                                qMakePair(QStringLiteral("Load home Cursor config"), QDir::home().filePath(QStringLiteral(".cursor/mcp.json")))}) {
         auto *load = new QPushButton(source.first);
         load->setObjectName(source.first.contains(QStringLiteral("project")) ? QStringLiteral("loadProjectCursorMcp") : QStringLiteral("loadHomeCursorMcp"));
         load->setToolTip(source.second);
         connect(load, &QPushButton::clicked, this, [this, path = source.second]() { loadInboundMcpConfig(path, true); });
-        inboundLayout->addWidget(load);
+        inboundButtons->insertWidget(loadAt++, load);
     }
-    auto *saveInbound = new QPushButton(QStringLiteral("Save and apply MCP config"));
-    saveInbound->setObjectName(QStringLiteral("saveInboundMcpConfig"));
-    connect(saveInbound, &QPushButton::clicked, this, &MainWindow::saveInboundMcpConfig);
-    inboundLayout->addWidget(saveInbound);
+    inboundLayout->addLayout(inboundButtons);
     m_inboundMcpStatus = new QLabel(QStringLiteral("No project config yet. Add servers here or load a Cursor config, then Save and apply. Existing home Kerf config is used automatically."));
     m_inboundMcpStatus->setObjectName(QStringLiteral("inboundMcpStatus"));
     m_inboundMcpStatus->setWordWrap(true);
@@ -1053,8 +1202,11 @@ void MainWindow::buildPreferences() {
         QApplication::clipboard()->setText(mcpJson->toPlainText());
         mcpCopyStatus->setText(QStringLiteral("MCP config copied"));
     });
-    mcpLayout->addWidget(copyMcp);
-    mcpLayout->addWidget(mcpCopyStatus);
+    {
+        QHBoxLayout *row = buttonRow({copyMcp});
+        row->insertWidget(1, mcpCopyStatus);
+        mcpLayout->addLayout(row);
+    }
     advancedLayout->addWidget(mcpSection);
 
     loadAgentSettings();
@@ -2135,7 +2287,8 @@ void MainWindow::settleFocus() {
 }
 
 void MainWindow::uncoverComposer() {
-    // At wide formats a sheet lies over the composer.
+    // The Media column lies beside the conversation, not over it; were a
+    // sheet ever over the composer, asking would close it.
     const QWidget *composer = m_chat->composer();
     const QRect rect(composer->mapTo(m_shell, QPoint(0, 0)), composer->size());
     const auto covers = [&rect](const QWidget *over) { return over && over->isVisible() && over->geometry().intersects(rect); };

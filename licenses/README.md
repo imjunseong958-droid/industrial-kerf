@@ -50,6 +50,18 @@ embeds them with `include_bytes!`.
 | `NotoSerif-Regular.ttf` | The Noto Project Authors | https://github.com/notofonts/latin-greek-cyrillic | OFL-1.1 (`OFL-NotoSerif.txt`) |
 | `JetBrainsMono-Regular.ttf` | The JetBrains Mono Project Authors | https://github.com/JetBrains/JetBrainsMono | OFL-1.1 (`OFL-JetBrainsMono.txt`) |
 
+`apps/kerf-qt/resources/fonts` holds the faces the editor's own interface is set
+in, unmodified, each with its license beside it (`<Font>-LICENSE.txt`). The editor
+compiles them in, and every package carries the licenses in its `fonts` folder.
+
+| Font | Author | Source | License |
+|---|---|---|---|
+| `Inter-Regular.ttf`, `Inter-Medium.ttf` | The Inter Project Authors | https://github.com/rsms/inter | OFL-1.1 |
+| `JetBrainsMono-Regular.ttf`, `JetBrainsMono-Medium.ttf` | The JetBrains Mono Project Authors | https://github.com/JetBrains/JetBrainsMono | OFL-1.1 |
+| `Pretendard-Regular.ttf`, `Pretendard-Medium.ttf` | Kil Hyung-jin | https://github.com/orioncactus/pretendard (`packages/pretendard/dist/public/static/alternative`) | OFL-1.1 |
+| `NotoSerif-Regular.ttf` | The Noto Project Authors | https://github.com/notofonts/latin-greek-cyrillic | OFL-1.1 |
+| `NanumMyeongjo-Regular.ttf` | NHN Corporation | https://github.com/google/fonts/tree/main/ofl/nanummyeongjo | OFL-1.1 |
+
 ## The photographs in the icon
 
 Kerf's icon (`apps/kerf-qt/resources/icon/industrial-kerf.svg`, and the PNG, `.ico` and

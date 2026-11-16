@@ -77,7 +77,7 @@ It takes about six seconds to show the picture. A blank picture is a failed laun
 With the computer-use tools, the app's bundle identifier is `com.industrial-kerf.editor`. Look at
 every screenshot. Launching proves little.
 
-- **Media:** Window → Media (⌘1). It lies over the conversation. Double-click a clip there to insert
+- **Media:** Window → Media (⌘1). It opens as a column between the conversation and the picture. Double-click a clip there to insert
   it at the playhead; the title bar goes to "Edited just now", and `project.kerf` is rewritten a few
   seconds later, so read it back to check.
 - **A path:** select its clip. The curve and its handles lie on the picture, and the handles drag.

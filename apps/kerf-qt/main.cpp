@@ -38,6 +38,12 @@ kerf::MainWindow *openEditor(const QString &project, const QString &kerfd, const
         openEditor(path, kerfd);
         window->close();
     });
+    // The same, on one of that project's conversations.
+    QObject::connect(window, &kerf::MainWindow::conversationOpenRequested, window,
+                     [window, kerfd](const QString &path, const QString &conversation) {
+                         openEditor(path, kerfd, window->geometry())->openConversation(conversation);
+                         window->close();
+                     });
     window->show();
     return window;
 }
@@ -85,6 +91,8 @@ int main(int argc, char **argv) {
     // The design's faces: Inter for the interface and JetBrains Mono for
     // figures, compiled into the app.
     kerf::loadBundledFonts();
+    // And the ones chosen in Settings, before anything is set in them.
+    kerf::tokens::faces() = kerf::facesFor(kerf::loadFaceChoice());
     app.setFont(kerf::tokens::font(kerf::tokens::body));
     // Fusion with the design's flat metrics and focus outline.
     kerf::useEditorStyle();

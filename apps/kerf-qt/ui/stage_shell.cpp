@@ -7,6 +7,7 @@
 #include <QApplication>
 #include <QEvent>
 #include <QKeyEvent>
+#include <QMouseEvent>
 #include <QLineEdit>
 #include <QPainter>
 #include <QPixmap>
@@ -48,15 +49,19 @@ Rects rects(const QSize &window, double aspect, int toolbar, const Panes &panes)
     const int w = std::max(0, window.width());
     const int h = std::max(0, window.height() - toolbar);
     out.wide = isWide(shape);
-    const int side = panes.sidebar && w >= sidebarWindowLeast ? sidebar : 0;
+    const int side = panes.sidebar && w >= sidebarWindowLeast ? std::clamp(panes.sidebarWidth, sidebarLeast, sidebarMost) : 0;
     out.sidebar = side > 0 ? QRect(0, toolbar, side, h) : QRect();
     const int room = w - side;
+    // The Media sheet is a column of its own, right of the conversation.
+    const int media = panes.media ? std::min(bin, room) : 0;
+    const int space = room - media;
     // With the panel closed the conversation has the room; with it open it
     // gives way only when it would leave the panel under its least, down to 320.
-    const int conversation = panes.panelOpen() ? std::min(room, std::clamp(room - workLeast, railLeast, rail)) : room;
+    const int conversation = panes.panelOpen() ? std::min(space, std::clamp(space - workLeast, railLeast, rail)) : space;
     out.conversation = QRect(side, toolbar, conversation, h);
-    const int rest = room - conversation;
-    const int left = side + conversation;
+    if (media > 0) out.media = QRect(side + conversation, toolbar, media, h);
+    const int rest = space - conversation;
+    const int left = side + conversation + media;
     if (panes.panelOpen()) out.panel = QRect(left, toolbar, rest, h);
     // While watching changes the stage grows over the conversation, which stays
     // where it is, dimmed.
@@ -94,13 +99,6 @@ Rects rects(const QSize &window, double aspect, int toolbar, const Panes &panes)
                                                                        : out.picture.center().x() - strip / 2;
         out.reel = QRect(std::clamp(left, least, std::max(least, most)), out.picture.top() + picturePad, strip, reelBar);
     }
-    // A sheet lies over the conversation alone, at its panel side, so a drag
-    // reaches the timeline.
-    const auto sheet = [&](int width) {
-        const int shown = std::min(width, out.conversation.width());
-        return QRect(out.conversation.right() + 1 - shown, out.conversation.top(), shown, out.conversation.height());
-    };
-    out.media = sheet(bin);
     return out;
 }
 
@@ -262,6 +260,44 @@ private:
     int m_order = 0;
 };
 
+// The sidebar's edge: dragged, it sets how wide the sidebar is. Nothing is
+// drawn until the pointer is over it; then a hairline says what would move.
+class SidebarGrip final : public QWidget {
+public:
+    SidebarGrip(QWidget *parent, std::function<void(int)> drag) : QWidget(parent), m_drag(std::move(drag)) {
+        setObjectName(QStringLiteral("stageSidebarGrip"));
+        setCursor(Qt::SplitHCursor);
+        setAccessibleName(QStringLiteral("Sidebar width"));
+        setToolTip(QStringLiteral("Drag to resize · double-click to reset"));
+    }
+
+protected:
+    void paintEvent(QPaintEvent *) override {
+        if (!underMouse() && !m_dragging) return;
+        QPainter p(this);
+        p.fillRect(QRect(width() / 2, 0, 1, height()), tokens::color(m_dragging ? tokens::accent : tokens::lineh));
+    }
+    void enterEvent(QEnterEvent *) override { update(); }
+    void leaveEvent(QEvent *) override { update(); }
+    void mousePressEvent(QMouseEvent *event) override {
+        if (event->button() != Qt::LeftButton) return;
+        m_dragging = true;
+        update();
+    }
+    void mouseMoveEvent(QMouseEvent *event) override {
+        if (m_dragging && parentWidget()) m_drag(parentWidget()->mapFromGlobal(event->globalPosition().toPoint()).x());
+    }
+    void mouseReleaseEvent(QMouseEvent *) override {
+        m_dragging = false;
+        update();
+    }
+    void mouseDoubleClickEvent(QMouseEvent *) override { m_drag(tokens::layout::sidebar); }
+
+private:
+    std::function<void(int)> m_drag;
+    bool m_dragging = false;
+};
+
 } // namespace
 
 StageShell::StageShell(QWidget *parent) : QWidget(parent) {
@@ -275,6 +311,8 @@ StageShell::StageShell(QWidget *parent) : QWidget(parent) {
     m_seamSheet = seam(this, "stageSeamSheet");
     m_seamSheet->hide();
     m_veil = new Veil(this);
+    m_grip = new SidebarGrip(this, [this](int x) { setSidebarWidth(x); });
+    m_grip->hide();
 }
 
 void StageShell::setRegions(QWidget *picture, QWidget *conversation, QWidget *timeline) {
@@ -356,19 +394,39 @@ QString StageShell::sheetId(Sheet sheet) {
 
 void StageShell::setAspect(double aspect) {
     if (aspect <= 0.0 || aspect == m_aspect) return;
+    const stage::Rects was = rects();
     m_aspect = aspect;
-    transition();
+    transition(was);
 }
 
-void StageShell::setPanes(const stage::Panes &panes, const QRect &pictureOrigin) {
+void StageShell::setPanes(const stage::Panes &panes, const QRect &pictureOrigin, int duration) {
     if (panes == m_panes) return;
     // Back while it was still falling away, the timeline comes out of the room
     // again, unless what opened it says otherwise after this.
     const bool timelineBack = panes.timeline && !m_panes.timeline && static_cast<Veil *>(m_veil)->level() > 0.0;
+    const stage::Rects was = rects();
+    const bool sheetChange = panes.media != m_panes.media;
     m_panes = panes;
-    transition(pictureOrigin);
+    if (sheetChange) m_sheet = panes.media ? Sheet::Media : Sheet::None;
+    transition(was, pictureOrigin, duration);
     if (timelineBack) veilTimeline(0.0);
+    if (sheetChange) {
+        followEscape();
+        emit sheetChanged(m_sheet);
+    }
     emit panesChanged();
+}
+
+void StageShell::setSidebarWidth(int width) {
+    width = std::clamp(width, tokens::layout::sidebarLeast, tokens::layout::sidebarMost);
+    if (width == m_panes.sidebarWidth) return;
+    m_panes.sidebarWidth = width;
+    // Dragged: it is where the pointer is, with nothing to wait for.
+    const bool cutShort = stopMoves();
+    place();
+    if (cutShort) settle();
+    emit pictureMoved(rects().picture);
+    emit sidebarWidthChanged(width);
 }
 
 void StageShell::setMotion(QWidget *motion) {
@@ -387,6 +445,8 @@ void StageShell::releaseStill() {
 
 bool StageShell::stopMoves() {
     releaseStill();
+    for (QWidget *sheet : m_sheets)
+        if (sheet) sheet->clearMask();
     if (!m_moves) return false;
     m_moves->stop();
     m_moves->deleteLater();
@@ -396,13 +456,16 @@ bool StageShell::stopMoves() {
 
 void StageShell::settle() {
     releaseStill();
+    // The Media column is whole again, or gone.
+    for (QWidget *sheet : m_sheets)
+        if (sheet) sheet->clearMask();
     // Gone with what it lay over.
     if (m_timeline && !m_timeline->isVisible()) static_cast<Veil *>(m_veil)->hold(0.0);
     emit transitionFinished();
 }
 
-void StageShell::transition(const QRect &pictureOrigin) {
-    const int duration = ui::motionDuration(tokens::motion::stage);
+void StageShell::transition(const stage::Rects &was, const QRect &pictureOrigin, int length) {
+    const int duration = ui::motionDuration(length);
     const bool cutShort = stopMoves();
     if (duration <= 0 || !isVisible()) {
         place();
@@ -410,15 +473,36 @@ void StageShell::transition(const QRect &pictureOrigin) {
         emit pictureMoved(rects().picture);
         return;
     }
-    QWidget *const regions[] = {m_sidebar, m_picture, m_conversation, m_timeline, m_transport, m_reelBar};
+    QWidget *const sheet = m_sheets[0];
+    QWidget *const regions[] = {m_sidebar, m_picture, m_conversation, m_timeline, m_transport, m_reelBar, sheet};
     QList<QPair<QWidget *, QRect>> before;
     for (QWidget *region : regions)
         if (region) before.append({region, region->isVisible() ? region->geometry() : QRect()});
     place();
+    const stage::Rects now = rects();
     // Where a picture that closes goes back to, now that the regions are where
     // they are going: what it names, else its home.
     QRect back = pictureOrigin;
     if (!back.isValid() && m_pictureHome && m_picture && !m_picture->isVisible()) back = m_pictureHome();
+    // A pane comes in from the edge it belongs to, and goes out by it, its own
+    // edge against the edge of what makes room: the panel from the right as the
+    // conversation narrows, the timeline up from the foot under a picture that
+    // gives it the height, the picture down from the top over a timeline that
+    // was alone. So nothing lies over anything on the way.
+    const bool panelOpens = was.panel.isEmpty() && !now.panel.isEmpty();
+    const bool panelCloses = !was.panel.isEmpty() && now.panel.isEmpty();
+    // The left edge of what lies right of the conversation and the Media column.
+    const int edgeWas = was.panel.isEmpty() ? width() : was.panel.left();
+    const int edgeNow = now.panel.isEmpty() ? width() : now.panel.left();
+    const auto offstage = [&](QWidget *region, const QRect &at) {
+        // The strip over the picture is there or not, where it is.
+        if (region == m_reelBar) return at;
+        if (region == m_sidebar) return at.translated(-at.right() - 1, 0);
+        if (panelOpens || panelCloses) return at.translated(width() - (panelOpens ? edgeNow : edgeWas), 0);
+        if (region == m_picture) return at.translated(0, -at.bottom() - 1);
+        // The timeline, and the transport's block: from the foot.
+        return at.translated(0, height() - at.top());
+    };
     QList<Move> moves;
     for (const auto &[region, from] : std::as_const(before)) {
         const bool shown = region->isVisible();
@@ -427,22 +511,24 @@ void StageShell::transition(const QRect &pictureOrigin) {
         move.widget = region;
         if (from.isNull() && to.isNull()) continue;
         if (from == to) continue;
-        if (from.isNull()) {
+        if (region == sheet) {
+            // The Media column keeps its width and goes with the panel's edge,
+            // seen only right of the conversation's: it comes out from between
+            // the two as they part, and goes back as they close.
+            const int width = (to.isNull() ? from : to).width();
+            const int top = (to.isNull() ? from : to).top();
+            const int tall = (to.isNull() ? from : to).height();
+            move.from = from.isNull() ? QRect(edgeWas - width, top, width, tall) : from;
+            move.to = to.isNull() ? QRect(edgeNow - width, top, width, tall) : to;
+            if (to.isNull()) region->show();
+        } else if (from.isNull()) {
             // It comes from somewhere: the picture from what it grows out of.
-            move.from = region == m_picture && pictureOrigin.isValid() ? pictureOrigin
-                        : region == m_sidebar                          ? to.translated(-to.width(), 0)
-                        : region == m_timeline                         ? to.translated(0, 48)
-                        : region == m_picture                          ? to.translated(48, 0)
-                                                                       : to;
+            move.from = region == m_picture && pictureOrigin.isValid() ? pictureOrigin : offstage(region, to);
             move.to = to;
         } else if (to.isNull()) {
             move.from = from;
             // The picture goes back into what it names, if anything.
-            move.to = region == m_sidebar                          ? from.translated(-from.width(), 0)
-                      : region == m_timeline                       ? from.translated(0, 48)
-                      : region == m_picture && back.isValid()      ? back
-                      : region == m_picture                        ? from.translated(48, 0)
-                                                                   : from;
+            move.to = region == m_picture && back.isValid() ? back : offstage(region, from);
             region->show();
         } else {
             move.from = from;
@@ -456,7 +542,8 @@ void StageShell::transition(const QRect &pictureOrigin) {
         if (cutShort) settle();
         return;
     }
-    for (QWidget *seam : {m_seamSidebar, m_seamUpright, m_seamAcross, m_seamColumn}) seam->hide();
+    for (QWidget *seam : {m_seamSidebar, m_seamUpright, m_seamAcross, m_seamColumn, m_seamSheet}) seam->hide();
+    m_grip->hide();
     // The timeline only travels, in or out or along: shown from a picture of it
     // for the move, rather than drawn again, with all its controls, in each frame.
     for (const Move &move : std::as_const(moves)) {
@@ -471,23 +558,36 @@ void StageShell::transition(const QRect &pictureOrigin) {
         m_timeline->setUpdatesEnabled(false);
         break;
     }
+    // What of the Media column shows: all that is right of the conversation.
+    const auto clipSheet = [this, sheet] {
+        if (!sheet || sheet->isHidden() || !m_conversation) return;
+        const int hidden = std::clamp(m_conversation->geometry().right() + 1 - sheet->x(), 0, sheet->width() - 1);
+        sheet->setMask(QRegion(hidden, 0, sheet->width() - hidden, sheet->height()));
+    };
+    clipSheet();
     m_moves = new QVariantAnimation(this);
     m_moves->setDuration(duration);
     m_moves->setStartValue(0.0);
     m_moves->setEndValue(1.0);
     m_moves->setEasingCurve(tokens::easing());
-    connect(m_moves, &QVariantAnimation::valueChanged, this, [this, moves](const QVariant &value) {
+    connect(m_moves, &QVariantAnimation::valueChanged, this, [this, moves, clipSheet](const QVariant &value) {
         const qreal at = value.toReal();
         for (const Move &move : moves) {
             if (!move.widget) continue;
             const auto mix = [at](int a, int b) { return int(std::lround(a + (b - a) * at)); };
-            move.widget->setGeometry(mix(move.from.left(), move.to.left()), mix(move.from.top(), move.to.top()),
-                                     mix(move.from.width(), move.to.width()), mix(move.from.height(), move.to.height()));
+            // An edge is mixed, not a width, so two regions that share one
+            // keep sharing it in every frame.
+            const int left = mix(move.from.left(), move.to.left());
+            const int top = mix(move.from.top(), move.to.top());
+            const int right = mix(move.from.left() + move.from.width(), move.to.left() + move.to.width());
+            const int bottom = mix(move.from.top() + move.from.height(), move.to.top() + move.to.height());
+            move.widget->setGeometry(left, top, right - left, bottom - top);
             if (move.widget == m_timeline) {
                 m_veil->setGeometry(m_timeline->geometry());
                 if (m_still) m_still->setGeometry(m_timeline->geometry());
             }
         }
+        clipSheet();
         updateRoom();
     });
     connect(m_moves, &QAbstractAnimation::finished, this, [this] {
@@ -510,8 +610,8 @@ int StageShell::barsHeight(int barWidth) const {
 stage::Rects StageShell::rects() const {
     constexpr int toolbar = tokens::layout::toolbar;
     stage::Rects out = stage::rects(QSize(width(), height() + toolbar), m_aspect, toolbar, m_panes);
-    // The bars lie over the content's top. A sheet starts under them, so that its
-    // tabs and its close are not hidden while one shows.
+    // The bars lie over the content's top. The Media column starts under them, so
+    // that its tabs and its close are not hidden while one shows.
     const int bars = std::min(barsHeight(width() - out.sidebar.width()), std::max(0, out.media.height() / 2));
     if (bars > 0 && !out.media.isNull()) out.media.adjust(0, bars, 0, 0);
     for (QRect *rect : {&out.sidebar, &out.panel, &out.reel, &out.slot, &out.picture, &out.transport, &out.conversation, &out.timeline, &out.media})
@@ -521,10 +621,10 @@ stage::Rects StageShell::rects() const {
 
 void StageShell::setSheet(Sheet sheet) {
     if (sheet == m_sheet) return;
-    m_sheet = sheet;
-    place();
-    followEscape();
-    emit sheetChanged(sheet);
+    // The conversation and the panel part for it, and close after it.
+    stage::Panes panes = m_panes;
+    panes.media = sheet == Sheet::Media;
+    setPanes(panes, QRect(), tokens::motion::panel);
 }
 
 void StageShell::toggleSheet(Sheet sheet) { setSheet(m_sheet == sheet ? Sheet::None : sheet); }
@@ -583,6 +683,10 @@ void StageShell::place() {
         region->setVisible(!rect.isEmpty());
     };
     placeRegion(m_sidebar, r.sidebar);
+    // Its edge takes a drag, from just inside it to just outside.
+    const int grip = tokens::layout::sidebarGrip;
+    if (!r.sidebar.isEmpty()) m_grip->setGeometry(r.sidebar.right() + 1 - grip / 2, r.sidebar.top(), grip, r.sidebar.height());
+    m_grip->setVisible(!r.sidebar.isEmpty());
     placeRegion(m_picture, r.slot);
     placeRegion(m_conversation, r.conversation);
     placeRegion(m_timeline, r.timeline);
@@ -610,7 +714,7 @@ void StageShell::place() {
     placeSeam(m_seamAcross, across);
     placeSeam(m_seamColumn, QRect());
 
-    // A sheet, over the regions.
+    // The Media column, between the conversation and the panel.
     const QRect sheetRects[1] = {r.media};
     for (int index = 0; index < 1; ++index) {
         QWidget *sheet = m_sheets[index];
@@ -628,6 +732,7 @@ void StageShell::place() {
         m_seamSheet->setGeometry(sheet.left() - kSeam, sheet.top(), kSeam, sheet.height());
         m_seamSheet->raise();
     }
+    m_grip->raise();
     if (m_motion) {
         m_motion->setGeometry(rect());
         m_motion->raise();

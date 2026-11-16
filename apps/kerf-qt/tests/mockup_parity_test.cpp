@@ -10,6 +10,7 @@
 // and <fmt>-preview.png for ?preview=1.
 
 #include "fixtures.h"
+#include "editor_theme.h"
 #include "test_registry.h"
 
 #include "chat_panel.h"
@@ -47,6 +48,7 @@
 #include <QToolBar>
 
 #include <cmath>
+#include <functional>
 
 namespace kerf {
 
@@ -135,8 +137,8 @@ struct Format {
 
 // The layout at 1600 x 1000, in window coordinates (ui/stage_shell.h).
 const Format kFormats[] = {
-    {"169", QSize(1920, 1080), QRect(812, 40, 788, 420), QRect(854, 52, 704, 396), QRect(252, 40, 560, 960), QRect(812, 460, 788, 540)},
-    {"916", QSize(1080, 1920), QRect(812, 40, 788, 614), QRect(1040, 52, 332, 590), QRect(252, 40, 560, 960), QRect(812, 654, 788, 346)},
+    {"169", QSize(1920, 1080), QRect(848, 40, 752, 420), QRect(872, 52, 704, 396), QRect(288, 40, 560, 960), QRect(848, 460, 752, 540)},
+    {"916", QSize(1080, 1920), QRect(848, 40, 752, 614), QRect(1058, 52, 332, 590), QRect(288, 40, 560, 960), QRect(848, 654, 752, 346)},
 };
 
 QRect inWindow(QWidget *widget, QWidget *window) { return QRect(widget->mapTo(window, QPoint()), widget->size()); }
@@ -207,7 +209,7 @@ private slots:
             }
             QVERIFY(save(fmt));
 
-            // The sheets, each at the window's right edge and the conversation's height.
+            // The sheets, each a column of its own between the conversation and the panel.
             const struct {
                 StageShell::Sheet sheet;
                 const char *name;
@@ -219,13 +221,16 @@ private slots:
                 window.triggerCommand(QString::fromLatin1(sheet.command));
                 QCOMPARE(window.m_shell->sheet(), sheet.sheet);
                 QVERIFY2(sheet.widget->isVisible(), sheet.name);
-                QCOMPARE(inWindow(sheet.widget, &window),
-                         QRect(format.conversation.right() + 1 - sheet.width, format.conversation.top(), sheet.width, format.conversation.height()));
-                // What is under it has not moved.
-                checkBase(window, format);
+                // The conversation and the panel part for it: it lies over neither.
+                const QRect column = inWindow(sheet.widget, &window);
+                QCOMPARE(column.size(), QSize(sheet.width, format.conversation.height()));
+                QCOMPARE(column.left(), inWindow(window.m_chat, &window).right() + 1);
+                QCOMPARE(column.right() + 1, inWindow(window.m_viewer, &window).left());
                 QVERIFY(save(QStringLiteral("%1-%2").arg(fmt, QString::fromLatin1(sheet.name))));
                 window.triggerCommand(QString::fromLatin1(sheet.command));
                 QCOMPARE(window.m_shell->sheet(), StageShell::Sheet::None);
+                // Closed, everything is where it was.
+                checkBase(window, format);
             }
 
             // ?preview=1: the chip, 12 inside the picture's top left.
@@ -252,6 +257,110 @@ private slots:
             window.close();
         }
         QCOMPARE(states, 2 * (1 + 1 + 1));
+    }
+
+    // KERF_SCREENSHOT_DIR=<dir> saves the window as its panes open and close,
+    // frame by frame, to look at: motion can only be judged where it runs.
+    void paneMovesForTheGallery() {
+        const QString shots = qEnvironmentVariable("KERF_SCREENSHOT_DIR");
+        if (shots.isEmpty()) QSKIP("KERF_SCREENSHOT_DIR is not set");
+        QVERIFY(QDir().mkpath(shots));
+        MainWindow window{QString(), QString()};
+        window.m_cloudAccess = QStringLiteral("ready");
+        window.setConnection(QStringLiteral("ready"));
+        window.handleEvent(seedState(QSize(1920, 1080)));
+        window.m_chatWiring->openConversation(QStringLiteral("c-seed"));
+        window.handleEvent(seedConversation());
+        fakeArtwork(window.m_artwork);
+        window.resize(1600, 1000);
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        window.m_errorBanner->hide();
+        window.m_viewer->setFrame(testing::footageFrame(testing::Shot::HarborWide, QSize(960, 540)), 0.0);
+        QCoreApplication::processEvents();
+        ui::setReducedMotionOverride(0);
+        const auto restore = qScopeGuard([] { ui::setReducedMotionOverride(-1); });
+        // Each move, from the frame it starts on to the one it rests on.
+        const auto film = [&window, &shots](const QString &name, const std::function<void()> &start) {
+            start();
+            int frame = 0;
+            int waited = 0;
+            for (const int at : {0, 50, 110, 190, 300}) {
+                QTest::qWait(at - waited);
+                waited = at;
+                window.grab().save(QDir(shots).filePath(QStringLiteral("move-%1-%2.png").arg(name).arg(frame++)));
+            }
+            QTRY_VERIFY_WITH_TIMEOUT(!window.m_shell->isMoving(), 3000);
+            window.grab().save(QDir(shots).filePath(QStringLiteral("move-%1-%2.png").arg(name).arg(frame)));
+        };
+        film(QStringLiteral("panel-close"), [&window] { window.m_panelButton->click(); });
+        film(QStringLiteral("panel-open"), [&window] { window.m_panelButton->click(); });
+        film(QStringLiteral("media-open"), [&window] { window.triggerCommand(QStringLiteral("window.project")); });
+        film(QStringLiteral("media-close"), [&window] { window.triggerCommand(QStringLiteral("window.project")); });
+        film(QStringLiteral("sidebar-close"), [&window] { window.triggerCommand(QStringLiteral("view.sidebar")); });
+        film(QStringLiteral("sidebar-open"), [&window] { window.triggerCommand(QStringLiteral("view.sidebar")); });
+        window.close();
+    }
+
+    // KERF_SCREENSHOT_DIR=<dir> saves a conversation in each face Settings
+    // offers, in Latin and in Hangul, and Settings' own pages, to look at.
+    void facesForTheGallery() {
+        const QString shots = qEnvironmentVariable("KERF_SCREENSHOT_DIR");
+        if (shots.isEmpty()) QSKIP("KERF_SCREENSHOT_DIR is not set");
+        QVERIFY(QDir().mkpath(shots));
+        const FaceChoice was = loadFaceChoice();
+        const auto restore = qScopeGuard([was] {
+            setEditorFaces(was);
+            QSettings().remove(QStringLiteral("appearance"));
+        });
+        MainWindow window{QString(), QString()};
+        window.m_cloudAccess = QStringLiteral("ready");
+        window.setConnection(QStringLiteral("ready"));
+        window.handleEvent(seedState(QSize(1920, 1080)));
+        window.m_chatWiring->openConversation(QStringLiteral("c-faces"));
+        const auto item = [](const char *id, const char *kind, const QString &text) {
+            return QJsonObject{{"id", id}, {"kind", kind}, {"text", text}, {"at", "2026-11-02T10:00:00Z"}};
+        };
+        QJsonObject answer = item("i2", "kerf",
+                                  QStringLiteral("가장 좋은 테이크 세 개로 **30초 컷**을 만들었어요. 와이드 숏으로 열고, 인터뷰의 쉬는 구간을 줄였습니다.\n\n"
+                                                 "- Opened on the **wide shot** (0:00 to 0:04)\n- Tightened the pauses between takes\n"
+                                                 "- 마지막은 클로즈업으로 끝납니다\n\nWant captions next? `title size=0.22` is the new value."));
+        answer.insert(QStringLiteral("steps"), QJsonArray{QStringLiteral("look · done"), QStringLiteral("edit · done")});
+        answer.insert(QStringLiteral("seconds"), 42.0);
+        window.handleEvent(QJsonObject{
+            {"type", "conversation"}, {"id", "c-faces"}, {"title", QStringLiteral("가장 좋은 테이크로 30초 컷")},
+            {"created", "2026-11-02T10:00:00Z"}, {"updated", "2026-11-03T10:05:00Z"},
+            {"items", QJsonArray{item("i1", "you", QStringLiteral("가장 좋은 테이크로 30초 컷을 만들어 줘. Keep the wide shot at the start.")), answer}}});
+        fakeArtwork(window.m_artwork);
+        window.resize(1600, 1000);
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        window.m_errorBanner->hide();
+        window.setPanelOpen(false);
+        // How full the context is, and a mode that lets edits through.
+        window.m_chat->setContextUse(QStringLiteral("c-faces"), 131'000, 192'000, false);
+        window.m_chat->setPermissionMode(PermissionMode::AcceptEdits);
+        const auto save = [&window, &shots](const QString &name) {
+            for (int i = 0; i < 4; ++i) QCoreApplication::processEvents();
+            return window.grab().save(QDir(shots).filePath(name + QStringLiteral(".png")));
+        };
+        const struct {
+            const char *name;
+            FaceChoice choice;
+        } faces[] = {{"faces-inter", {QStringLiteral("inter"), QStringLiteral("same"), QStringLiteral("default")}},
+                     {"faces-pretendard", {QStringLiteral("pretendard"), QStringLiteral("same"), QStringLiteral("default")}},
+                     {"faces-serif", {QStringLiteral("inter"), QStringLiteral("serif"), QStringLiteral("default")}},
+                     {"faces-serif-large", {QStringLiteral("pretendard"), QStringLiteral("serif"), QStringLiteral("large")}}};
+        for (const auto &face : faces) {
+            setEditorFaces(face.choice);
+            QVERIFY(save(QString::fromLatin1(face.name)));
+        }
+        setEditorFaces(FaceChoice{});
+        for (const char *page : {"account", "ai", "appearance", "general", "advanced"}) {
+            window.showSettings(QString::fromLatin1(page));
+            QVERIFY(save(QStringLiteral("settings-%1").arg(QString::fromLatin1(page))));
+        }
+        window.close();
     }
 
     // The timeline at the design's size: its strip, heads, default heights, and a

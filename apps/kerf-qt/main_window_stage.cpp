@@ -241,16 +241,30 @@ void MainWindow::buildSidebar() {
     // panel with the first thing to show.
     stage::Panes panes;
     panes.sidebar = QSettings().value(QStringLiteral("layout/sidebar"), true).toBool();
+    panes.sidebarWidth = QSettings().value(QStringLiteral("layout/sidebarWidth"), tokens::layout::sidebar).toInt();
     panes.picture = false;
     panes.timeline = false;
     m_shell->setPanes(panes);
     connect(m_shell, &StageShell::panesChanged, this, &MainWindow::applyPanes);
+    // Its edge, dragged, is where it stays.
+    connect(m_shell, &StageShell::sidebarWidthChanged, this,
+            [](int width) { QSettings().setValue(QStringLiteral("layout/sidebarWidth"), width); });
     connect(m_sidebar, &ProjectSidebar::projectChosen, this, [this](const QString &path) { openProject(path); });
     connect(m_sidebar, &ProjectSidebar::newProjectRequested, this, &MainWindow::newProject);
     connect(m_sidebar, &ProjectSidebar::openFolderRequested, this, &MainWindow::openProjectFolder);
     connect(m_sidebar, &ProjectSidebar::conversationChosen, this,
             [this](const QString &id) { m_chatWiring->openConversation(id); });
     connect(m_sidebar, &ProjectSidebar::newConversationRequested, this, [this] { m_chatWiring->openConversation(QString()); });
+    // Another folder's conversation opens its project, on that conversation.
+    connect(m_sidebar, &ProjectSidebar::conversationChosenIn, this, [this](const QString &project, const QString &id) {
+        emit conversationOpenRequested(QDir::cleanPath(QFileInfo(project).absoluteFilePath()), id);
+    });
+    connect(m_sidebar, &ProjectSidebar::projectRemoveRequested, this, [this](const QString &path) {
+        ProjectLauncher::forgetProject(path);
+        refreshSidebar();
+    });
+    connect(m_sidebar, &ProjectSidebar::projectRevealRequested, this,
+            [](const QString &path) { QDesktopServices::openUrl(QUrl::fromLocalFile(path)); });
     // The sidebar asked (and, for Delete, confirmed); it shows the change at once.
     connect(m_sidebar, &ProjectSidebar::archiveRequested, this,
             [this](const QString &id, bool archived) { m_chatWiring->archiveConversation(id, archived); });
@@ -289,7 +303,8 @@ void MainWindow::setPaneOpen(const QString &command, bool open) {
         (command == QStringLiteral("view.picture") ? panes.picture : panes.timeline) = open;
         m_panesFollowContent = false;
     }
-    m_shell->setPanes(panes);
+    // Opened or closed by hand: it is there quickly.
+    m_shell->setPanes(panes, QRect(), tokens::motion::panel);
     applyPanes();
 }
 
@@ -298,15 +313,15 @@ void MainWindow::setPanelOpen(bool open) {
     panes.picture = open;
     panes.timeline = open;
     m_panesFollowContent = false;
-    m_shell->setPanes(panes);
+    m_shell->setPanes(panes, QRect(), tokens::motion::panel);
     applyPanes();
 }
 
-void MainWindow::revealPanel(bool picture, bool timeline, const QRect &origin) {
+void MainWindow::revealPanel(bool picture, bool timeline, const QRect &origin, int duration) {
     stage::Panes panes = m_shell->panes();
     panes.picture = panes.picture || picture;
     panes.timeline = panes.timeline || timeline;
-    m_shell->setPanes(panes, origin);
+    m_shell->setPanes(panes, origin, duration);
 }
 
 void MainWindow::applyPanes() {
@@ -353,7 +368,8 @@ void MainWindow::growStage(const QRect &origin, const QImage &poster, bool waitF
         revealPanel(true, true);
         return;
     }
-    revealPanel(true, true, origin);
+    // The picture grows, and what stands in for it flies, over the stage's own time.
+    revealPanel(true, true, origin, tokens::motion::stage);
     if (!poster.isNull()) {
         StageMotion::Flight grow;
         grow.image = poster;

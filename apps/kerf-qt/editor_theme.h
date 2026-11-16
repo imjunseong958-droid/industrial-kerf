@@ -1,5 +1,7 @@
 #pragma once
 
+#include "design_tokens.h"
+
 #include <QColor>
 #include <QJsonObject>
 #include <QObject>
@@ -316,6 +318,34 @@ EditorTheme makeEditorTheme();
 // Register every font compiled in under :/fonts with the application, so
 // tokens::font() finds them on a system that has none installed.
 void loadBundledFonts();
+
+// The faces a person chooses in Settings (Appearance), by the names the
+// settings keep them under (appearance/interfaceFace, readingFace,
+// readingSize):
+//   interface  "inter" (the design's, with Pretendard for Hangul),
+//              "pretendard", or "system" (the computer's own interface face)
+//   reading    what is said in the conversation: "same" as the interface, or
+//              "serif" (Noto Serif, with Nanum Myeongjo for Hangul)
+//   size       "small", "default" or "large": the conversation at 13, 14 or 16
+// A name that is none of them is the first of its kind.
+struct FaceChoice {
+    QString ui = QStringLiteral("inter"); // (`interface` is a macro in Windows' headers)
+    QString reading = QStringLiteral("same");
+    QString size = QStringLiteral("default");
+    bool operator==(const FaceChoice &other) const {
+        return ui == other.ui && reading == other.reading && size == other.size;
+    }
+};
+// The choice the settings keep, and keeping one.
+FaceChoice loadFaceChoice();
+void saveFaceChoice(const FaceChoice &choice);
+// What tokens::font() sets text in for `choice`.
+tokens::Faces facesFor(const FaceChoice &choice);
+// Puts `choice` in force: tokens::faces() holds it, every widget that set a
+// face of the interface takes the new one, the application's font follows,
+// and EditorAppearance::changed() tells what holds text of its own (the
+// conversation) to set it again.
+void setEditorFaces(const FaceChoice &choice);
 
 // The theme in force.
 const EditorTheme &editorTheme();

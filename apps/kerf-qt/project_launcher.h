@@ -51,6 +51,8 @@ public:
     // Recent projects (QSettings `projects/recent`), most recent first.
     static QStringList recentProjects();
     static void rememberProject(const QString &path);
+    // Takes a project off the recent list; nothing on disk is touched.
+    static void forgetProject(const QString &path);
     static void clearRecentProjects();
     static constexpr int kRecentLimit = 12;
 

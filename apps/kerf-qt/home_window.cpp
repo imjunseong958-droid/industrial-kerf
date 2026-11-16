@@ -19,6 +19,7 @@
 #include <QPaintEvent>
 #include <QPainter>
 #include <QPalette>
+#include <QSettings>
 #include <QShowEvent>
 #include <QTextEdit>
 #include <QTimer>
@@ -32,6 +33,8 @@
 #else
 #define KERF_HOME_OWN_TITLE_BAR 0
 #endif
+
+#include <algorithm>
 
 namespace kerf {
 
@@ -90,7 +93,9 @@ HomeWindow::HomeWindow(const QString &kerfdBinary, QWidget *parent) : QDialog(pa
     root->setSpacing(0);
 
     m_sidebar = new ProjectSidebar;
-    m_sidebar->setFixedWidth(layout::sidebar);
+    // As wide as the editor's was left, so its rows are where they will be.
+    m_sidebar->setFixedWidth(std::clamp(QSettings().value(QStringLiteral("layout/sidebarWidth"), layout::sidebar).toInt(),
+                                        layout::sidebarLeast, layout::sidebarMost));
     m_sidebar->setConversationsShown(false);
     // The rows sit where the editor's will, so they do not move at the hand-over.
     m_sidebar->setTopInset(KERF_HOME_OWN_TITLE_BAR ? layout::toolbar + space::s8 : space::s8);
