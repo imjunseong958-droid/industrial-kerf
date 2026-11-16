@@ -1467,16 +1467,24 @@ impl Runtime {
             .media(media)
             .ok_or_else(|| RuntimeError::new("UNKNOWN_MEDIA", format!("no media `{media}`")))?;
         let MediaFile { file, stored } = media_file(self.directory(), path)?;
+        let mesh = is_mesh_file(&file);
         let file = file.to_string_lossy().into_owned();
-        let probe = kerf_engine::probe::info(&file).map_err(|error| {
-            RuntimeError::new(
-                "MEDIA_UNREADABLE",
-                format!("{path} cannot be read as media: {error}"),
-            )
-        })?;
-        // A file without picture keeps the timecode rate the media had.
-        let mut replacement =
-            kernel::media_from_probe(existing.id.clone(), &stored, &probe, existing.rate)?;
+        let mut replacement = if mesh {
+            // A mesh, a set a model made, is no picture to probe: a gen=mesh clip
+            // draws it. The media keeps what its line says and takes the new file.
+            let mut same = existing.clone();
+            same.path.clone_from(&stored);
+            same
+        } else {
+            let probe = kerf_engine::probe::info(&file).map_err(|error| {
+                RuntimeError::new(
+                    "MEDIA_UNREADABLE",
+                    format!("{path} cannot be read as media: {error}"),
+                )
+            })?;
+            // A file without picture keeps the timecode rate the media had.
+            kernel::media_from_probe(existing.id.clone(), &stored, &probe, existing.rate)?
+        };
         // No probe reads a reel or a recipe, so those the media was given stay.
         replacement.reel.clone_from(&existing.reel);
         replacement.recipe.clone_from(&existing.recipe);
@@ -1504,7 +1512,9 @@ impl Runtime {
                 proposals,
             },
         )?;
-        kernel::prepare_media(file, self.directory().to_path_buf());
+        if !mesh {
+            kernel::prepare_media(file, self.directory().to_path_buf());
+        }
         Ok(snapshot)
     }
 
@@ -2577,6 +2587,15 @@ struct MediaFile {
     stored: String,
 }
 
+/// A glTF scene (`.glb`, `.gltf`), as `gen=mesh@1` reads one.
+fn is_mesh_file(file: &Path) -> bool {
+    file.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            extension.eq_ignore_ascii_case("glb") || extension.eq_ignore_ascii_case("gltf")
+        })
+}
+
 /// Find the media file `path` names for the project in `directory`: it
 /// must be a file and not a Git LFS pointer, which stands for media that
 /// was not downloaded.
@@ -3447,6 +3466,58 @@ mod tests {
             .import_media_request("ui", "import-pointer", "media/pointer.mp4", 1)
             .unwrap_err();
         assert_eq!(imported_pointer.code, "MEDIA_NOT_DOWNLOADED");
+        drop(runtime);
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    /// A set a model made is a glTF file, no picture a probe reads: its take
+    /// replaces the media's file all the same, and the mesh clips that read
+    /// the media's file read the take, and an undo puts both back.
+    #[test]
+    fn a_mesh_take_replaces_its_media_and_the_clips_that_read_it() {
+        let directory = media_project("mesh-take");
+        fs::create_dir_all(directory.join("shots/set.takes")).unwrap();
+        fs::write(directory.join("shots/set.takes/001.glb"), "glTF, not read here").unwrap();
+        fs::write(
+            directory.join(PROJECT_FILE),
+            "kerf 1\nproject name=\"Mesh\"\n\
+             media set path=\"shots/set.glb\" rate=16 dur=1f video=832x480 recipe=\"shots/set.kerfrecipe\"\n\
+             sequence s1 rate=16 size=832x480 audio=48000\n\
+             \x20 track V1 video\n\
+             \x20   clip room gen=mesh@1 at=0f dur=32f\n\
+             \x20     set file=\"shots/set.glb\"\n\
+             \x20   clip other gen=mesh@1 at=32f dur=32f\n\
+             \x20     set file=\"models/car.glb\"\n",
+        )
+        .unwrap();
+        let mut runtime = Runtime::open(&directory).unwrap();
+        let before = runtime.snapshot();
+        let made = runtime
+            .replace_media_request("ui", "take", "set", "shots/set.takes/001.glb", before.revision)
+            .unwrap();
+        assert!(
+            made.document.contains("media set path=\"shots/set.takes/001.glb\""),
+            "{}",
+            made.document
+        );
+        assert!(
+            made.document.contains("file=\"shots/set.takes/001.glb\""),
+            "{}",
+            made.document
+        );
+        // A clip that reads another file is left alone, and the media keeps its recipe.
+        assert!(
+            made.document.contains("file=\"models/car.glb\""),
+            "{}",
+            made.document
+        );
+        assert!(
+            made.document.contains("recipe=\"shots/set.kerfrecipe\""),
+            "{}",
+            made.document
+        );
+        let undone = undo(&mut runtime, made.revision).unwrap();
+        assert_eq!(undone.document, before.document);
         drop(runtime);
         let _ = fs::remove_dir_all(directory);
     }

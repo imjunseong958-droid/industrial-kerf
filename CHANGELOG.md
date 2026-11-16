@@ -36,6 +36,11 @@ on `main`; its section here becomes the release's notes on GitHub
 - `kerf-comfy` passes over an FFmpeg that is there but does not start, as
   Kerf does, so a Homebrew `ffmpeg-full` an upgrade broke no longer fails
   every making while a working FFmpeg is on `PATH`.
+- A set a model makes, a `.glb`, is kept as its media's take instead of being
+  refused as a file no probe reads, and the `gen=mesh` clips that read the
+  media's file read the take; choosing another take moves them with it.
+- When a ComfyUI node fails naming its own inputs (`confidence_threshold`),
+  `kerf-comfy` says which name a `generate` line sets them by (`confidence=`).
 
 ## 0.1.2
 

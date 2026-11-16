@@ -685,3 +685,37 @@ fn a_file_made_of_a_guide_has_the_guides_rate_size_and_frames() {
     assert!(refused.contains("`guide=<file>`"), "{refused}");
     assert!(kept.lock().unwrap().is_empty());
 }
+
+/// A node that fails names its own inputs, which no generate line sets by those
+/// names: what the line calls them is said beside.
+#[test]
+fn a_failed_nodes_inputs_are_named_as_the_line_sets_them() {
+    let workflow = Workflow::named("set-views").unwrap();
+    let why = "DA3GeometryToMesh (node 5): DA3GeometryToMesh produced an empty mesh. Try raising \
+               discontinuity_threshold, lowering confidence_threshold, or disabling use_sky_mask.";
+    let mut named = workflow.line_names("5", why);
+    named.sort();
+    assert_eq!(
+        named,
+        [
+            ("confidence_threshold".to_owned(), "confidence".to_owned()),
+            (
+                "discontinuity_threshold".to_owned(),
+                "discontinuity".to_owned()
+            ),
+        ]
+    );
+    let said = on_the_line(&workflow, why);
+    assert!(said.starts_with(" (on the generate line, "), "{said}");
+    assert!(
+        said.contains("confidence_threshold is confidence="),
+        "{said}"
+    );
+    // An input that is no blank, and a node that names none, add nothing.
+    assert!(!said.contains("use_sky_mask"), "{said}");
+    assert_eq!(
+        on_the_line(&workflow, "KSampler (node 12): out of memory"),
+        ""
+    );
+    assert_eq!(on_the_line(&workflow, "it was stopped on the server"), "");
+}
