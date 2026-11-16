@@ -249,6 +249,8 @@ void MainWindow::buildSidebar() {
     // Its edge, dragged, is where it stays.
     connect(m_shell, &StageShell::sidebarWidthChanged, this,
             [](int width) { QSettings().setValue(QStringLiteral("layout/sidebarWidth"), width); });
+    // Its edge pressed, it is put away, as with the toolbar's button.
+    connect(m_shell, &StageShell::sidebarPutAway, this, [this] { setPaneOpen(QStringLiteral("view.sidebar"), false); });
     connect(m_sidebar, &ProjectSidebar::projectChosen, this, [this](const QString &path) { openProject(path); });
     connect(m_sidebar, &ProjectSidebar::newProjectRequested, this, &MainWindow::newProject);
     connect(m_sidebar, &ProjectSidebar::openFolderRequested, this, &MainWindow::openProjectFolder);

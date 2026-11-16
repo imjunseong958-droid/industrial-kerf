@@ -98,8 +98,12 @@ private slots:
 
     void theSidebarIsItsTokensWidth() {
         QCOMPARE(tokens::layout::sidebar, 288);
-        // A drag of its edge keeps it between its least and its most.
-        QVERIFY(tokens::layout::sidebarLeast < tokens::layout::sidebar && tokens::layout::sidebar < tokens::layout::sidebarMost);
+        // A drag of its edge keeps it between its least and what it leaves the
+        // window: wider than t3code's 256, and as wide as a wide window allows.
+        QVERIFY(tokens::layout::sidebarLeast < tokens::layout::sidebar);
+        QCOMPARE(tokens::layout::sidebarMost(1600), 1600 - tokens::layout::sidebarLeaves);
+        QCOMPARE(tokens::layout::sidebarMost(600), tokens::layout::sidebarLeast);
+        QVERIFY(tokens::layout::sidebar < tokens::layout::sidebarMost(tokens::layout::sidebarWindowLeast));
         SidebarRow row(QString(), QStringLiteral("A"));
         QCOMPARE(row.sizeHint().width(), 288);
     }
@@ -127,24 +131,27 @@ private slots:
                        conversation(QStringLiteral("t2"), QStringLiteral("Just now"), State::Idle, now.addSecs(-4 * 60)),
                        conversation(QStringLiteral("y"), QStringLiteral("Last night"), State::Idle, QDateTime(QDate(2026, 11, 15), QTime(20, 0))),
                        conversation(QStringLiteral("w"), QStringLiteral("This week"), State::Idle, now.addDays(-3))});
-        // Under their folder, with nothing between them: the time at each row's
-        // end says how long ago.
+        // Under their folder, with nothing between them: how long ago each
+        // changed is in its tip, so the title has the row.
         QCOMPARE(listed(sidebar), (QStringList{QStringLiteral("Just now"), QStringLiteral("Earlier today"), QStringLiteral("Last night"),
                                                QStringLiteral("This week"), QStringLiteral("Old cut")}));
         QVERIFY(sidebar.notes().isEmpty());
-        QCOMPARE(sidebar.conversationRow(QStringLiteral("t2"))->trailing(), QStringLiteral("4m"));
-        QCOMPARE(sidebar.conversationRow(QStringLiteral("t1"))->trailing(), QStringLiteral("3h"));
-        QCOMPARE(sidebar.conversationRow(QStringLiteral("y"))->trailing(), QStringLiteral("16h"));
-        QCOMPARE(sidebar.conversationRow(QStringLiteral("w"))->trailing(), QStringLiteral("3d"));
-        QCOMPARE(sidebar.conversationRow(QStringLiteral("old"))->trailing(), QStringLiteral("Oct 1"));
+        QCOMPARE(ui::tipName(sidebar.conversationRow(QStringLiteral("t2"))), QStringLiteral("Just now · 4m"));
+        QCOMPARE(ui::tipName(sidebar.conversationRow(QStringLiteral("t1"))), QStringLiteral("Earlier today · 3h"));
+        QCOMPARE(ui::tipName(sidebar.conversationRow(QStringLiteral("y"))), QStringLiteral("Last night · 16h"));
+        QCOMPARE(ui::tipName(sidebar.conversationRow(QStringLiteral("w"))), QStringLiteral("This week · 3d"));
+        QCOMPARE(ui::tipName(sidebar.conversationRow(QStringLiteral("old"))), QStringLiteral("Old cut · Oct 1"));
         // Each belongs to its folder: its guide runs down them, and their
-        // titles start under its name.
+        // titles start under its icon, with no dot before them and nothing
+        // after them at rest.
         SidebarRow *folder = sidebar.projectRow(m_folder.path());
         QVERIFY(folder->isStrong() && !folder->hasGuide());
         for (const SidebarRow *row : sidebar.rows())
             if (row->objectName() == QStringLiteral("sidebarConversation")) {
                 QVERIFY(row->hasGuide());
-                QCOMPARE(row->textLeft(), folder->textLeft());
+                QCOMPARE(row->textLeft(), folder->textLeft() - 16 - tokens::space::s8);
+                QVERIFY(!row->badge().isValid());
+                QCOMPARE(row->textRect().right(), row->width() - 8 - 1);
             }
         // The rows stand a row apart, with no gap for the guide to break on.
         QCOMPARE(sidebar.conversationRow(QStringLiteral("t1"))->y() - sidebar.conversationRow(QStringLiteral("t2"))->y(),
@@ -153,14 +160,14 @@ private slots:
         // Time goes on: the times are read again.
         sidebar.m_fixedNow = now.addSecs(60 * 60);
         sidebar.refreshTimes();
-        QCOMPARE(sidebar.conversationRow(QStringLiteral("t2"))->trailing(), QStringLiteral("1h"));
+        QCOMPARE(ui::tipName(sidebar.conversationRow(QStringLiteral("t2"))), QStringLiteral("Just now · 1h"));
 
-        // Conversations with no time are listed first, with none at their end.
+        // Conversations with no time are listed first, with none in their tip.
         sidebar.setConversations({conversation(QStringLiteral("b"), QStringLiteral("Timed"), State::Idle, now),
                                   conversation(QStringLiteral("a"), QStringLiteral("Untimed"), State::Idle, QDateTime())},
                                  {});
         QCOMPARE(listed(sidebar), (QStringList{QStringLiteral("Untimed"), QStringLiteral("Timed")}));
-        QVERIFY(sidebar.conversationRow(QStringLiteral("a"))->trailing().isEmpty());
+        QCOMPARE(ui::tipName(sidebar.conversationRow(QStringLiteral("a"))), QStringLiteral("Untimed"));
 
         // A folder with none says so, in the rows' place.
         sidebar.setConversations({}, {});
@@ -273,7 +280,7 @@ private slots:
             if (row->text() == QStringLiteral("Market scene")) theirs = row;
         QVERIFY(theirs);
         QVERIFY(theirs->hoverActions().isEmpty());
-        QCOMPARE(theirs->trailing(), QStringLiteral("1d"));
+        QCOMPARE(ui::tipName(theirs), QStringLiteral("Market scene · 1d"));
         theirs->click();
         QCOMPARE(chosenIn.size(), 1);
         QCOMPARE(chosenIn.first().at(0).toString(), QDir::cleanPath(other.path()));
@@ -360,7 +367,9 @@ private slots:
         QCOMPARE(opened.size(), 1);
     }
 
-    void eachStateHasItsDotAndWord() {
+    // Working and making show on the title, as a light over it; done, waiting
+    // for you and failed as a dot at the row's end; nothing going on, nothing.
+    void eachStateShowsOnItsTitleOrItsEnd() {
         ProjectSidebar sidebar;
         const QDateTime then = noon().addSecs(-10 * 60);
         open(sidebar, {conversation(QStringLiteral("working"), QStringLiteral("Working"), State::Working, then),
@@ -371,60 +380,116 @@ private slots:
                        conversation(QStringLiteral("idle"), QStringLiteral("Idle"), State::Idle, then)});
         struct Expect {
             const char *id;
-            QRgb dot;
-            const char *trailing;
-            QRgb trailingColor;
+            bool shimmer;
+            QColor badge;
+            const char *said;
         };
         using namespace tokens;
         const Expect expected[] = {
-            {"working", activity::working, "Working", accentInk}, {"making", activity::making, "Making", activity::making},
-            {"review", activity::review, "Review", accentInk},    {"settled", activity::settled, "10m", ink3},
-            {"failed", activity::failed, "10m", ink3},            {"idle", activity::idle, "10m", ink3},
+            {"working", true, QColor(), "Working, 4 messages"},
+            {"making", true, QColor(), "Making, 4 messages"},
+            {"review", false, color(activity::review), "Review, 4 messages"},
+            {"settled", false, color(activity::settled), "Done, 4 messages"},
+            {"failed", false, color(activity::failed), "Failed, 4 messages"},
+            {"idle", false, QColor(), "4 messages"},
         };
         for (const Expect &e : expected) {
             SidebarRow *row = sidebar.conversationRow(QString::fromLatin1(e.id));
             QVERIFY2(row, e.id);
-            QCOMPARE(row->dotColor(), color(e.dot));
-            QCOMPARE(row->trailing(), QString::fromLatin1(e.trailing));
-            QCOMPARE(row->m_trailingColor, color(e.trailingColor));
-            QCOMPARE(row->isPulsing(), QByteArray(e.id) == "working");
+            QCOMPARE(row->isShimmering(), e.shimmer);
+            QCOMPARE(row->badge(), e.badge);
+            QCOMPARE(row->accessibleDescription(), QString::fromLatin1(e.said));
+            // A dot keeps the title clear of it.
+            QCOMPARE(row->textRect().right() < row->width() - 8 - 7, e.badge.isValid());
         }
-        // The colours are the theme's, and each is its own.
-        QCOMPARE(color(activity::working), color(accent));
-        QCOMPARE(color(activity::settled), color(pos));
+        // The colours are the theme's: blue for what is there to look at, red
+        // for what stopped.
+        QCOMPARE(color(activity::review), color(accentInk));
+        QCOMPARE(color(activity::settled), color(accentInk));
         QCOMPARE(color(activity::failed), color(neg));
-        QCOMPARE(sidebar.conversationRow(QStringLiteral("review"))->accessibleDescription(), QStringLiteral("Review, 4 messages"));
-        QCOMPARE(sidebar.conversationRow(QStringLiteral("failed"))->accessibleDescription(), QStringLiteral("Failed, 4 messages"));
     }
 
-    // The working dot pulses with motion on, and only it is drawn again.
-    void theWorkingDotPulsesOnlyWithMotion() {
+    // What finishes while you look elsewhere keeps a dot until you look at it.
+    void whatFinishesUnseenKeepsADot() {
+        ProjectSidebar sidebar;
+        open(sidebar, {conversation(QStringLiteral("a"), QStringLiteral("Cut"), State::Working, noon()),
+                       conversation(QStringLiteral("b"), QStringLiteral("Other"), State::Idle, noon())},
+             QStringLiteral("a"));
+        // Another window is the active one: it finishes unseen.
+        QWidget elsewhere;
+        elsewhere.resize(200, 100);
+        elsewhere.show();
+        elsewhere.activateWindow();
+        QVERIFY(QTest::qWaitForWindowActive(&elsewhere));
+        QVERIFY(!sidebar.watching());
+        sidebar.setConversations({conversation(QStringLiteral("a"), QStringLiteral("Cut"), State::Idle, noon()),
+                                  conversation(QStringLiteral("b"), QStringLiteral("Other"), State::Idle, noon())},
+                                 QStringLiteral("a"));
+        SidebarRow *row = sidebar.conversationRow(QStringLiteral("a"));
+        QVERIFY(!row->isShimmering());
+        QCOMPARE(row->badge(), tokens::color(tokens::activity::settled));
+        QCOMPARE(row->accessibleDescription(), QStringLiteral("Done, 4 messages"));
+        QVERIFY(!sidebar.conversationRow(QStringLiteral("b"))->badge().isValid());
+        QVERIFY(sidebar.unseen().contains(QStringLiteral("a")));
+        // Looked at, it is seen.
+        sidebar.activateWindow();
+        QVERIFY(QTest::qWaitForWindowActive(&sidebar));
+        QTRY_VERIFY(!sidebar.conversationRow(QStringLiteral("a"))->badge().isValid());
+        QVERIFY(sidebar.unseen().isEmpty());
+        // What finishes while you look at it is seen as it finishes.
+        sidebar.setConversations({conversation(QStringLiteral("a"), QStringLiteral("Cut"), State::Working, noon()),
+                                  conversation(QStringLiteral("b"), QStringLiteral("Other"), State::Idle, noon())},
+                                 QStringLiteral("a"));
+        sidebar.setConversations({conversation(QStringLiteral("a"), QStringLiteral("Cut"), State::Idle, noon()),
+                                  conversation(QStringLiteral("b"), QStringLiteral("Other"), State::Idle, noon())},
+                                 QStringLiteral("a"));
+        QVERIFY(!sidebar.conversationRow(QStringLiteral("a"))->badge().isValid());
+    }
+
+    // The light over a working title runs with motion on, and only the title is
+    // drawn again.
+    void theWorkingTitleShimmersOnlyWithMotion() {
         {
             ProjectSidebar sidebar;
             open(sidebar, {conversation(QStringLiteral("w"), QStringLiteral("Working"), State::Working, noon())});
-            // Tests run with reduced motion: the dot holds still.
-            QCOMPARE(sidebar.m_pulse.state(), QAbstractAnimation::Stopped);
-            QCOMPARE(sidebar.conversationRow(QStringLiteral("w"))->m_pulse, 1.0);
+            // Tests run with reduced motion: the title holds still, in ink.
+            QVERIFY(sidebar.conversationRow(QStringLiteral("w"))->isShimmering());
+            QCOMPARE(sidebar.m_shimmer.state(), QAbstractAnimation::Stopped);
         }
         ui::setReducedMotionOverride(0);
         const auto restore = qScopeGuard([] { ui::setReducedMotionOverride(-1); });
         ProjectSidebar sidebar;
         open(sidebar, {conversation(QStringLiteral("w"), QStringLiteral("Working"), State::Working, noon()),
                        conversation(QStringLiteral("i"), QStringLiteral("Idle"), State::Idle, noon())});
-        QCOMPARE(sidebar.m_pulse.state(), QAbstractAnimation::Running);
-        sidebar.m_pulse.setCurrentTime(tokens::motion::workPulse / 2);
+        QCOMPARE(sidebar.m_shimmer.state(), QAbstractAnimation::Running);
+        sidebar.m_shimmer.setCurrentTime(tokens::motion::titleShimmer / 2);
         SidebarRow *working = sidebar.conversationRow(QStringLiteral("w"));
-        QVERIFY(working->m_pulse < 1.0);
-        QCOMPARE(sidebar.conversationRow(QStringLiteral("i"))->m_pulse, 1.0);
-        QVERIFY(working->dotRect().width() <= 8);
+        QVERIFY(working->m_phase > 0.4 && working->m_phase < 0.6);
+        QCOMPARE(sidebar.conversationRow(QStringLiteral("i"))->m_phase, 0.0);
+        // What is drawn again is the title, not the row.
+        QVERIFY(working->textRect().left() > 0 && working->textRect().right() < working->width() - 1);
         // Nothing working, nothing drawn.
         sidebar.setConversations({conversation(QStringLiteral("w"), QStringLiteral("Working"), State::Settled, noon())}, {});
-        QCOMPARE(sidebar.m_pulse.state(), QAbstractAnimation::Stopped);
+        QCOMPARE(sidebar.m_shimmer.state(), QAbstractAnimation::Stopped);
         // Hidden, it stops too.
         sidebar.setConversations({conversation(QStringLiteral("w"), QStringLiteral("Working"), State::Working, noon())}, {});
-        QCOMPARE(sidebar.m_pulse.state(), QAbstractAnimation::Running);
+        QCOMPARE(sidebar.m_shimmer.state(), QAbstractAnimation::Running);
         sidebar.hide();
-        QCOMPARE(sidebar.m_pulse.state(), QAbstractAnimation::Stopped);
+        QCOMPARE(sidebar.m_shimmer.state(), QAbstractAnimation::Stopped);
+    }
+
+    // A folded folder Kerf works in says so on its name.
+    void aFoldedFolderShimmersWhileKerfWorks() {
+        ProjectSidebar sidebar;
+        open(sidebar, {conversation(QStringLiteral("w"), QStringLiteral("Working"), State::Working, noon())});
+        sidebar.setWorking(true);
+        QVERIFY(!sidebar.projectRow(m_folder.path())->isShimmering());
+        sidebar.setFolded(m_folder.path(), true);
+        QVERIFY(sidebar.projectRow(m_folder.path())->isShimmering());
+        sidebar.setWorking(false);
+        QVERIFY(!sidebar.projectRow(m_folder.path())->isShimmering());
+        // The fold is kept: leave the folder open for the next sidebar.
+        sidebar.setFolded(m_folder.path(), false);
     }
 
     void archivedConversationsFoldAwayAtTheEnd() {
@@ -450,11 +515,11 @@ private slots:
         QSignalSpy chosen(&sidebar, &ProjectSidebar::conversationChosen);
         archived->click();
         QCOMPARE(chosen.value(0).value(0).toString(), QStringLiteral("b"));
-        // And taken out again from its own button.
-        ui::IconButton *unarchive = archived->hoverActions().first();
-        QCOMPARE(unarchive->accessibleName(), QStringLiteral("Unarchive conversation"));
+        // And taken out again from its menu.
+        QAction *unarchive = sidebar.conversationMenu(QStringLiteral("b"))->findChild<QAction *>(QStringLiteral("sidebarArchive"));
+        QCOMPARE(unarchive->text(), QStringLiteral("Unarchive"));
         QSignalSpy archiving(&sidebar, &ProjectSidebar::archiveRequested);
-        unarchive->click();
+        unarchive->trigger();
         QCOMPARE(archiving.size(), 1);
         QCOMPARE(archiving.value(0).value(0).toString(), QStringLiteral("b"));
         QCOMPARE(archiving.value(0).value(1).toBool(), false);
@@ -469,32 +534,32 @@ private slots:
         QVERIFY(!sidebar.archivedRow());
     }
 
-    void hoverShowsArchiveAndDelete() {
+    // Under the pointer, the row's end has its menu, where its dot was.
+    void hoverShowsTheMenu() {
         ProjectSidebar sidebar;
-        open(sidebar, {conversation(QStringLiteral("a"), QStringLiteral("Make a cut"), State::Idle, noon().addSecs(-120))});
+        open(sidebar, {conversation(QStringLiteral("a"), QStringLiteral("Make a cut"), State::Review, noon().addSecs(-120))});
         SidebarRow *row = sidebar.conversationRow(QStringLiteral("a"));
-        QCOMPARE(row->hoverActions().size(), 2);
-        QCOMPARE(row->hoverActions().at(0)->accessibleName(), QStringLiteral("Archive conversation"));
-        QCOMPARE(row->hoverActions().at(1)->accessibleName(), QStringLiteral("Delete conversation"));
+        QCOMPARE(row->hoverActions().size(), 1);
+        QCOMPARE(row->hoverActions().at(0)->accessibleName(), QStringLiteral("More for Make a cut"));
         QVERIFY(!row->actionsShown());
+        const int rest = row->textRect().right();
         QEnterEvent enter(QPointF(20, 10), QPointF(20, 10), QPointF(20, 10));
         QApplication::sendEvent(row, &enter);
         QVERIFY(row->actionsShown());
-        // At the row's end, inside it.
-        const QRect last = row->hoverActions().last()->geometry();
-        QVERIFY(row->rect().contains(last));
-        QVERIFY(last.right() > row->width() - 2 * tokens::space::s8);
+        // At the row's end, inside it, and the title keeps clear of it.
+        const QRect more = row->hoverActions().first()->geometry();
+        QVERIFY(row->rect().contains(more));
+        QVERIFY(more.right() > row->width() - 2 * tokens::space::s8);
+        QVERIFY(row->textRect().right() < more.left());
+        QVERIFY(row->textRect().right() <= rest);
+        // It opens the conversation's menu, over it.
+        row->hoverActions().first()->click();
+        QTRY_VERIFY(sidebar.m_conversationMenu->isVisible());
+        QCOMPARE(sidebar.m_menuFor, QStringLiteral("a"));
+        sidebar.m_conversationMenu->close();
         QEvent leave(QEvent::Leave);
         QApplication::sendEvent(row, &leave);
         QVERIFY(!row->actionsShown());
-
-        QSignalSpy archiving(&sidebar, &ProjectSidebar::archiveRequested);
-        row->hoverActions().first()->click();
-        QCOMPARE(archiving.size(), 1);
-        QCOMPARE(archiving.value(0).value(0).toString(), QStringLiteral("a"));
-        QCOMPARE(archiving.value(0).value(1).toBool(), true);
-        QVERIFY(sidebar.conversations().first().archived);
-        QCOMPARE(sidebar.archivedRow()->text(), QStringLiteral("Archived · 1"));
     }
 
     void deleteAsksFirst() {
@@ -504,13 +569,13 @@ private slots:
         QSignalSpy deleting(&sidebar, &ProjectSidebar::deleteRequested);
         QString asked;
         answerDelete(&sidebar, false, &asked);
-        sidebar.conversationRow(QStringLiteral("a"))->hoverActions().last()->click();
+        sidebar.conversationMenu(QStringLiteral("a"))->findChild<QAction *>(QStringLiteral("sidebarDelete"))->trigger();
         QCOMPARE(asked, QStringLiteral("Delete “Make a cut”? This can't be undone."));
         QCOMPARE(deleting.size(), 0);
         QVERIFY(sidebar.conversationRow(QStringLiteral("a")));
 
         answerDelete(&sidebar, true, &asked);
-        sidebar.conversationRow(QStringLiteral("a"))->hoverActions().last()->click();
+        sidebar.conversationMenu(QStringLiteral("a"))->findChild<QAction *>(QStringLiteral("sidebarDelete"))->trigger();
         QCOMPARE(deleting.size(), 1);
         QCOMPARE(deleting.value(0).value(0).toString(), QStringLiteral("a"));
         QVERIFY(!sidebar.conversationRow(QStringLiteral("a")));

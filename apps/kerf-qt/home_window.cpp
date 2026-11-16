@@ -95,7 +95,7 @@ HomeWindow::HomeWindow(const QString &kerfdBinary, QWidget *parent) : QDialog(pa
     m_sidebar = new ProjectSidebar;
     // As wide as the editor's was left, so its rows are where they will be.
     m_sidebar->setFixedWidth(std::clamp(QSettings().value(QStringLiteral("layout/sidebarWidth"), layout::sidebar).toInt(),
-                                        layout::sidebarLeast, layout::sidebarMost));
+                                        layout::sidebarLeast, layout::sidebarMost(layout::canvasWidth)));
     m_sidebar->setConversationsShown(false);
     // The rows sit where the editor's will, so they do not move at the hand-over.
     m_sidebar->setTopInset(KERF_HOME_OWN_TITLE_BAR ? layout::toolbar + space::s8 : space::s8);

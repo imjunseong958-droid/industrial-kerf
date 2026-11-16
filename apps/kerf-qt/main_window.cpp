@@ -2287,7 +2287,7 @@ void MainWindow::settleFocus() {
 }
 
 void MainWindow::uncoverComposer() {
-    // The Media column lies beside the conversation, not over it; were a
+    // The Media band lies across the panel, not over the conversation; were a
     // sheet ever over the composer, asking would close it.
     const QWidget *composer = m_chat->composer();
     const QRect rect(composer->mapTo(m_shell, QPoint(0, 0)), composer->size());

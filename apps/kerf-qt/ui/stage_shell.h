@@ -3,21 +3,20 @@
 // The window's content. It starts as a conversation: the folders and
 // conversations at the left, the conversation beside them. The picture and the
 // timeline are the panel at the right, opened when there is something to see
-// and closed at will. Everything else opens on demand: the Media sheet, as a
-// column between the two.
+// and closed at will. Everything else opens on demand: the Media band, across
+// the panel between the picture and the timeline.
 //
 // stage::rects() is the geometry, a pure function of the window's size, the
 // picture's aspect and which panes are open; StageShell places its children by
 // it. A format change lays out again at once, with no animation.
 //
-//   The sidebar is 288 wide until its edge is dragged (232 to 440), and gives
-//   way in a window under 1100. With the panel closed the conversation has the
-//   rest. With it open the conversation is 560 wide, giving way down to 320
-//   only when it would leave the panel under 600. The Media sheet, open, is a
-//   column 272 wide between the two, and the conversation gives way to it the
-//   same way. At 1600 x 1000, the panel is 752 x 960 at (848, 40):
+//   The sidebar is 288 wide until its edge is dragged (from 232 to all but 640
+//   of the window), and gives way in a window under 1100. With the panel closed
+//   the conversation has the rest. With it open the conversation is 480 wide,
+//   giving way down to 320 only when it would leave the panel under 600. At
+//   1600 x 1000, the panel is 832 x 960 at (768, 40):
 //   Wide (aspect >= 1.2):
-//     picture slot 752 x 420 at the top, timeline 752 x 540 under it. The
+//     picture slot 832 x 420 at the top, timeline 832 x 540 under it. The
 //     timeline has 56% of the height, at least 260, and whatever the picture's
 //     aspect leaves; the picture pillarboxes in black in its slot.
 //   One pane alone has the panel: a picture with the transport's block 88 tall
@@ -25,15 +24,19 @@
 //   Vertical (aspect < 1.2), the picture is over the timeline too, whose share
 //   is 36% of the height, at least 220; the picture fits inside the slot.
 //   The picture keeps 12 points inside its slot, with rounded corners.
+//   The Media band, open, is 152 tall under the picture: the timeline gives it
+//   its top, and the picture its foot only when the timeline would be left
+//   under 200. Under a picture alone it is over the transport's block; over a
+//   timeline alone, at the panel's top.
 //
 // Regions move to a new arrangement rather than jump to it. A pane that opens
 // comes in from the window's edge it belongs to, its edge against the edge of
 // what makes room for it, so nothing lies over anything on the way: the
 // sidebar from the left, the panel from the right as the conversation narrows,
-// the timeline up from the foot, the Media column out from between the
-// conversation and the panel. The picture alone can come from somewhere else:
-// what it grows out of (setPanes' origin). Under reduced motion, and while
-// hidden, they are simply there.
+// the timeline up from the foot, the Media band down from under the picture as
+// the timeline moves down for it. The picture alone can come from somewhere
+// else: what it grows out of (setPanes' origin). Under reduced motion, and
+// while hidden, they are simply there.
 
 #include "design_tokens.h"
 #include "test_friends.h"
@@ -62,8 +65,9 @@ struct Panes {
     // Watching a proposal's changes: the stage grows over the conversation,
     // with a strip floating over the picture.
     bool reel = false;
-    // The Media sheet: a column of its own between the conversation and the
-    // panel, so it covers neither what is said nor the timeline a drag goes to.
+    // The Media band: across the panel, under the picture and over the
+    // timeline a drag from it goes to. It covers nothing, and takes nothing
+    // from what is said.
     bool media = false;
     // How wide the sidebar is, as its edge was last dragged.
     int sidebarWidth = tokens::layout::sidebar;
@@ -77,7 +81,7 @@ struct Panes {
 // The sidebar, the panel (empty when closed), the picture's slot (`picture` is
 // the frame inside it, in black bars when the slot is not of its shape), the
 // transport's block under the picture (empty when the timeline's strip carries
-// the transport), the conversation and the timeline, and the Media sheet.
+// the transport), the conversation and the timeline, and the Media band.
 // A pane that is closed has an empty rect.
 struct Rects {
     bool wide = true;
@@ -89,7 +93,7 @@ struct Rects {
     QRect transport;
     QRect conversation;
     QRect timeline;
-    QRect media; // the Media sheet's column; empty while it is closed
+    QRect media; // the Media band; empty while it is closed or the panel is
 };
 
 // The part of a slot the picture fits inside.
@@ -136,9 +140,10 @@ public:
     // from, when it opens. `duration` is how long the regions take to get
     // there: the stage's own time, or a pane's when one is opened by hand.
     void setPanes(const stage::Panes &panes, const QRect &pictureOrigin = QRect(), int duration = tokens::motion::stage);
-    // The sidebar's width, as its edge is dragged: at once, with no motion.
+    // The sidebar's width, as its edge is dragged: at once, with no motion,
+    // and kept to what the window leaves it (tokens::layout::sidebarMost).
     void setSidebarWidth(int width);
-    // What takes that drag, over the sidebar's edge.
+    // What takes that drag, and a press, over the sidebar's edge.
     QWidget *sidebarGrip() const { return m_grip; }
     // Where the picture goes back into as it closes with no origin given, asked
     // once the regions have their new places (empty: it slides away).
@@ -174,6 +179,8 @@ public:
 signals:
     // The sidebar's edge was dragged to a new width.
     void sidebarWidthChanged(int width);
+    // Its edge was pressed, not dragged: the window puts the sidebar away.
+    void sidebarPutAway();
     void sheetChanged(StageShell::Sheet sheet);
     void coveredChanged(bool covered);
     void panesChanged();
@@ -230,12 +237,11 @@ private:
     QWidget *m_cover = nullptr;
     bool m_covered = false;
     QList<QWidget *> m_banners;
-    // The hairlines between the regions and at a sheet's left.
+    // The hairlines between the regions.
     QWidget *m_seamSidebar = nullptr;
     QWidget *m_seamUpright = nullptr;
     QWidget *m_seamAcross = nullptr;
     QWidget *m_seamColumn = nullptr;
-    QWidget *m_seamSheet = nullptr;
     double m_aspect = 16.0 / 9.0;
     stage::Panes m_panes;
     std::function<QRect()> m_pictureHome;

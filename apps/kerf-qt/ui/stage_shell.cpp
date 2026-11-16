@@ -49,19 +49,15 @@ Rects rects(const QSize &window, double aspect, int toolbar, const Panes &panes)
     const int w = std::max(0, window.width());
     const int h = std::max(0, window.height() - toolbar);
     out.wide = isWide(shape);
-    const int side = panes.sidebar && w >= sidebarWindowLeast ? std::clamp(panes.sidebarWidth, sidebarLeast, sidebarMost) : 0;
+    const int side = panes.sidebar && w >= sidebarWindowLeast ? std::clamp(panes.sidebarWidth, sidebarLeast, sidebarMost(w)) : 0;
     out.sidebar = side > 0 ? QRect(0, toolbar, side, h) : QRect();
     const int room = w - side;
-    // The Media sheet is a column of its own, right of the conversation.
-    const int media = panes.media ? std::min(bin, room) : 0;
-    const int space = room - media;
     // With the panel closed the conversation has the room; with it open it
     // gives way only when it would leave the panel under its least, down to 320.
-    const int conversation = panes.panelOpen() ? std::min(space, std::clamp(space - workLeast, railLeast, rail)) : space;
+    const int conversation = panes.panelOpen() ? std::min(room, std::clamp(room - workLeast, railLeast, rail)) : room;
     out.conversation = QRect(side, toolbar, conversation, h);
-    if (media > 0) out.media = QRect(side + conversation, toolbar, media, h);
-    const int rest = space - conversation;
-    const int left = side + conversation + media;
+    const int rest = room - conversation;
+    const int left = side + conversation;
     if (panes.panelOpen()) out.panel = QRect(left, toolbar, rest, h);
     // While watching changes the stage grows over the conversation, which stays
     // where it is, dimmed.
@@ -69,6 +65,9 @@ Rects rects(const QSize &window, double aspect, int toolbar, const Panes &panes)
     const int stageLeft = left - reach;
     const int stageWidth = rest + reach;
     if (reach > 0) out.panel = QRect(stageLeft, toolbar, stageWidth, h);
+    // The Media band lies across the panel, under the picture and over the
+    // timeline, so what is dragged from it has only a little way to go.
+    const int band = panes.media && panes.panelOpen() ? std::min(mediaBand, h) : 0;
     if (panes.picture && panes.timeline) {
         // The picture over the timeline, whichever its shape. Under a wide
         // picture the timeline also has what the picture's aspect does not use.
@@ -78,15 +77,23 @@ Rects rects(const QSize &window, double aspect, int toolbar, const Panes &panes)
         const int timeline = std::min(h, std::max(least, int(std::lround(h * share))));
         int slotHeight = h - timeline;
         if (out.wide) slotHeight = std::min(slotHeight, int(std::lround(stageWidth / shape)));
+        // The band takes the timeline's top; the picture gives way only when
+        // that would leave the timeline under its least.
+        if (band > 0) slotHeight = std::max(0, std::min(slotHeight, h - band - mediaBandTimelineLeast));
         out.slot = QRect(stageLeft, toolbar, stageWidth, slotHeight);
-        out.timeline = QRect(stageLeft, toolbar + slotHeight, stageWidth, h - slotHeight);
+        if (band > 0) out.media = QRect(stageLeft, toolbar + slotHeight, stageWidth, band);
+        out.timeline = QRect(stageLeft, toolbar + slotHeight + band, stageWidth, h - slotHeight - band);
     } else if (panes.picture) {
-        // No timeline to carry the transport: the block is under the picture.
+        // No timeline to carry the transport: the block is under the picture,
+        // and the band between the two.
         const int block = std::min(h, pictureTransportLow);
-        out.slot = QRect(stageLeft, toolbar, stageWidth, h - block);
+        const int slotHeight = std::max(0, h - block - band);
+        out.slot = QRect(stageLeft, toolbar, stageWidth, slotHeight);
+        if (band > 0) out.media = QRect(stageLeft, toolbar + slotHeight, stageWidth, std::min(band, h - block));
         out.transport = QRect(stageLeft, toolbar + h - block, stageWidth, block);
     } else if (panes.timeline) {
-        out.timeline = QRect(stageLeft, toolbar, stageWidth, h);
+        if (band > 0) out.media = QRect(stageLeft, toolbar, stageWidth, band);
+        out.timeline = QRect(stageLeft, toolbar + band, stageWidth, h - band);
     }
     out.picture = out.slot.isEmpty() ? out.slot : fitted(paddedSlot(out.slot), shape);
     // The strip floats over the picture's top: at its corner, or centred on an
@@ -260,42 +267,71 @@ private:
     int m_order = 0;
 };
 
-// The sidebar's edge: dragged, it sets how wide the sidebar is. Nothing is
-// drawn until the pointer is over it; then a hairline says what would move.
+// The sidebar's edge: dragged, it sets how wide the sidebar is; pressed, it
+// puts the sidebar away; pressed twice, the width goes back to the first.
+// Nothing is drawn until the pointer is over it; then a line says what would move.
 class SidebarGrip final : public QWidget {
 public:
-    SidebarGrip(QWidget *parent, std::function<void(int)> drag) : QWidget(parent), m_drag(std::move(drag)) {
+    SidebarGrip(QWidget *parent, std::function<void(int)> drag, std::function<void()> press)
+        : QWidget(parent), m_drag(std::move(drag)), m_press(std::move(press)) {
         setObjectName(QStringLiteral("stageSidebarGrip"));
         setCursor(Qt::SplitHCursor);
         setAccessibleName(QStringLiteral("Sidebar width"));
-        setToolTip(QStringLiteral("Drag to resize · double-click to reset"));
+        setToolTip(QStringLiteral("Drag to resize · click to hide · double-click to reset"));
+        // A press waits to see whether a second follows.
+        m_single.setSingleShot(true);
+        QObject::connect(&m_single, &QTimer::timeout, this, [this] { m_press(); });
     }
 
 protected:
     void paintEvent(QPaintEvent *) override {
         if (!underMouse() && !m_dragging) return;
         QPainter p(this);
-        p.fillRect(QRect(width() / 2, 0, 1, height()), tokens::color(m_dragging ? tokens::accent : tokens::lineh));
+        constexpr int line = tokens::layout::sidebarGripLine;
+        p.fillRect(QRect(width() / 2 - line / 2, 0, line, height()), tokens::color(m_dragging ? tokens::accent : tokens::lineh));
     }
     void enterEvent(QEnterEvent *) override { update(); }
     void leaveEvent(QEvent *) override { update(); }
     void mousePressEvent(QMouseEvent *event) override {
         if (event->button() != Qt::LeftButton) return;
         m_dragging = true;
+        m_moved = false;
+        m_from = event->globalPosition().toPoint();
         update();
     }
     void mouseMoveEvent(QMouseEvent *event) override {
-        if (m_dragging && parentWidget()) m_drag(parentWidget()->mapFromGlobal(event->globalPosition().toPoint()).x());
+        if (!m_dragging || !parentWidget()) return;
+        const QPoint at = event->globalPosition().toPoint();
+        if (!m_moved && (at - m_from).manhattanLength() < QApplication::startDragDistance()) return;
+        m_moved = true;
+        m_single.stop();
+        m_drag(parentWidget()->mapFromGlobal(at).x());
     }
-    void mouseReleaseEvent(QMouseEvent *) override {
+    void mouseReleaseEvent(QMouseEvent *event) override {
+        if (event->button() != Qt::LeftButton) return;
+        const bool pressed = m_dragging && !m_moved;
         m_dragging = false;
         update();
+        if (pressed && !m_double) m_single.start(QApplication::doubleClickInterval());
+        m_double = false;
     }
-    void mouseDoubleClickEvent(QMouseEvent *) override { m_drag(tokens::layout::sidebar); }
+    void mouseDoubleClickEvent(QMouseEvent *event) override {
+        if (event->button() != Qt::LeftButton) return;
+        m_single.stop();
+        m_double = true;
+        m_dragging = true;
+        m_moved = false;
+        m_drag(tokens::layout::sidebar);
+    }
 
 private:
     std::function<void(int)> m_drag;
+    std::function<void()> m_press;
+    QTimer m_single;
+    QPoint m_from;
     bool m_dragging = false;
+    bool m_moved = false;
+    bool m_double = false;
 };
 
 } // namespace
@@ -308,10 +344,8 @@ StageShell::StageShell(QWidget *parent) : QWidget(parent) {
     m_seamUpright = seam(this, "stageSeamUpright");
     m_seamAcross = seam(this, "stageSeamAcross");
     m_seamColumn = seam(this, "stageSeamColumn");
-    m_seamSheet = seam(this, "stageSeamSheet");
-    m_seamSheet->hide();
     m_veil = new Veil(this);
-    m_grip = new SidebarGrip(this, [this](int x) { setSidebarWidth(x); });
+    m_grip = new SidebarGrip(this, [this](int x) { setSidebarWidth(x); }, [this] { emit sidebarPutAway(); });
     m_grip->hide();
 }
 
@@ -418,7 +452,7 @@ void StageShell::setPanes(const stage::Panes &panes, const QRect &pictureOrigin,
 }
 
 void StageShell::setSidebarWidth(int width) {
-    width = std::clamp(width, tokens::layout::sidebarLeast, tokens::layout::sidebarMost);
+    width = std::clamp(width, tokens::layout::sidebarLeast, tokens::layout::sidebarMost(this->width()));
     if (width == m_panes.sidebarWidth) return;
     m_panes.sidebarWidth = width;
     // Dragged: it is where the pointer is, with nothing to wait for.
@@ -456,7 +490,7 @@ bool StageShell::stopMoves() {
 
 void StageShell::settle() {
     releaseStill();
-    // The Media column is whole again, or gone.
+    // The Media band is whole again, or gone.
     for (QWidget *sheet : m_sheets)
         if (sheet) sheet->clearMask();
     // Gone with what it lay over.
@@ -491,7 +525,7 @@ void StageShell::transition(const stage::Rects &was, const QRect &pictureOrigin,
     // was alone. So nothing lies over anything on the way.
     const bool panelOpens = was.panel.isEmpty() && !now.panel.isEmpty();
     const bool panelCloses = !was.panel.isEmpty() && now.panel.isEmpty();
-    // The left edge of what lies right of the conversation and the Media column.
+    // The left edge of what lies right of the conversation.
     const int edgeWas = was.panel.isEmpty() ? width() : was.panel.left();
     const int edgeNow = now.panel.isEmpty() ? width() : now.panel.left();
     const auto offstage = [&](QWidget *region, const QRect &at) {
@@ -511,15 +545,13 @@ void StageShell::transition(const stage::Rects &was, const QRect &pictureOrigin,
         move.widget = region;
         if (from.isNull() && to.isNull()) continue;
         if (from == to) continue;
-        if (region == sheet) {
-            // The Media column keeps its width and goes with the panel's edge,
-            // seen only right of the conversation's: it comes out from between
-            // the two as they part, and goes back as they close.
-            const int width = (to.isNull() ? from : to).width();
-            const int top = (to.isNull() ? from : to).top();
-            const int tall = (to.isNull() ? from : to).height();
-            move.from = from.isNull() ? QRect(edgeWas - width, top, width, tall) : from;
-            move.to = to.isNull() ? QRect(edgeNow - width, top, width, tall) : to;
+        if (region == sheet && !panelOpens && !panelCloses) {
+            // The Media band keeps its height and comes out from under what lies
+            // over it, seen only under that: the timeline moves down for it,
+            // and up over it as it goes back.
+            const QRect at = to.isNull() ? from : to;
+            move.from = from.isNull() ? at.translated(0, -at.height()) : from;
+            move.to = to.isNull() ? at.translated(0, -at.height()) : to;
             if (to.isNull()) region->show();
         } else if (from.isNull()) {
             // It comes from somewhere: the picture from what it grows out of.
@@ -542,7 +574,7 @@ void StageShell::transition(const stage::Rects &was, const QRect &pictureOrigin,
         if (cutShort) settle();
         return;
     }
-    for (QWidget *seam : {m_seamSidebar, m_seamUpright, m_seamAcross, m_seamColumn, m_seamSheet}) seam->hide();
+    for (QWidget *seam : {m_seamSidebar, m_seamUpright, m_seamAcross, m_seamColumn}) seam->hide();
     m_grip->hide();
     // The timeline only travels, in or out or along: shown from a picture of it
     // for the move, rather than drawn again, with all its controls, in each frame.
@@ -558,11 +590,14 @@ void StageShell::transition(const stage::Rects &was, const QRect &pictureOrigin,
         m_timeline->setUpdatesEnabled(false);
         break;
     }
-    // What of the Media column shows: all that is right of the conversation.
+    // What of the Media band shows: all that is under the picture, or under the
+    // panel's top with no picture over it.
     const auto clipSheet = [this, sheet] {
-        if (!sheet || sheet->isHidden() || !m_conversation) return;
-        const int hidden = std::clamp(m_conversation->geometry().right() + 1 - sheet->x(), 0, sheet->width() - 1);
-        sheet->setMask(QRegion(hidden, 0, sheet->width() - hidden, sheet->height()));
+        if (!sheet || sheet->isHidden()) return;
+        const int over = m_picture && m_picture->isVisible() ? m_picture->geometry().bottom() + 1 : 0;
+        const int hidden = std::max(0, over - sheet->y());
+        if (hidden >= sheet->height()) sheet->setMask(QRegion(-1, -1, 1, 1));
+        else sheet->setMask(QRegion(0, hidden, sheet->width(), sheet->height() - hidden));
     };
     clipSheet();
     m_moves = new QVariantAnimation(this);
@@ -610,10 +645,10 @@ int StageShell::barsHeight(int barWidth) const {
 stage::Rects StageShell::rects() const {
     constexpr int toolbar = tokens::layout::toolbar;
     stage::Rects out = stage::rects(QSize(width(), height() + toolbar), m_aspect, toolbar, m_panes);
-    // The bars lie over the content's top. The Media column starts under them, so
-    // that its tabs and its close are not hidden while one shows.
+    // The bars lie over the content's top. A Media band there starts under them,
+    // so that its tabs and its close are not hidden while one shows.
     const int bars = std::min(barsHeight(width() - out.sidebar.width()), std::max(0, out.media.height() / 2));
-    if (bars > 0 && !out.media.isNull()) out.media.adjust(0, bars, 0, 0);
+    if (bars > 0 && !out.media.isNull() && out.media.top() == toolbar) out.media.adjust(0, bars, 0, 0);
     for (QRect *rect : {&out.sidebar, &out.panel, &out.reel, &out.slot, &out.picture, &out.transport, &out.conversation, &out.timeline, &out.media})
         if (!rect->isNull()) rect->translate(0, -toolbar);
     return out;
@@ -710,27 +745,23 @@ void StageShell::place() {
     placeSeam(m_seamUpright, QRect());
     QRect across;
     if (!r.transport.isEmpty()) across = QRect(r.transport.left(), r.transport.top(), r.transport.width(), kSeam);
-    else if (!r.slot.isEmpty() && !r.timeline.isEmpty()) across = QRect(r.timeline.left(), r.timeline.top(), r.timeline.width(), kSeam);
+    else if (!r.timeline.isEmpty() && (!r.slot.isEmpty() || !r.media.isEmpty()))
+        across = QRect(r.timeline.left(), r.timeline.top(), r.timeline.width(), kSeam);
     placeSeam(m_seamAcross, across);
     placeSeam(m_seamColumn, QRect());
 
-    // The Media column, between the conversation and the panel.
+    // The Media band, under the picture and over the timeline. It draws its own
+    // line at its top.
     const QRect sheetRects[1] = {r.media};
     for (int index = 0; index < 1; ++index) {
         QWidget *sheet = m_sheets[index];
         if (!sheet) continue;
-        const bool shown = int(m_sheet) == index + 1;
+        const bool shown = int(m_sheet) == index + 1 && !sheetRects[index].isEmpty();
         if (shown) {
             sheet->setGeometry(sheetRects[index]);
             sheet->raise();
         }
         sheet->setVisible(shown);
-    }
-    m_seamSheet->setVisible(m_sheet != Sheet::None);
-    if (m_sheet != Sheet::None) {
-        const QRect sheet = sheetRects[int(m_sheet) - 1];
-        m_seamSheet->setGeometry(sheet.left() - kSeam, sheet.top(), kSeam, sheet.height());
-        m_seamSheet->raise();
     }
     m_grip->raise();
     if (m_motion) {

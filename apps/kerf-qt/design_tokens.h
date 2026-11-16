@@ -29,6 +29,7 @@ constexpr QRgb surroundDim = qRgb(0x05, 0x05, 0x05); // window background
 constexpr QRgb well = qRgb(0x12, 0x12, 0x12);        // bin grid, timeline lanes, scope plots, vectorscope chip
 constexpr QRgb chrome = qRgb(0x17, 0x17, 0x17);      // toolbar, strips, inspector, bands, status, pin bar, diff box
 constexpr QRgb card = qRgb(0x1c, 0x1c, 0x1c);        // comments panel, Source viewer, menus, tooltips, clips
+constexpr QRgb sidebar = qRgb(0x1e, 0x1e, 0x1e);     // the folders and conversations, a step up from the room
 constexpr QRgb raised = qRgb(0x26, 0x26, 0x26);      // hover fill, segmented track, proposal card, composer, meter track
 constexpr QRgb on = qRgb(0x30, 0x30, 0x30);          // selected/on fill, avatars, scrub markers, sliding segment fill
 constexpr QRgb hover2 = qRgb(0x36, 0x36, 0x36);      // hover over a raised surface, flash, selected avatar
@@ -65,12 +66,11 @@ constexpr QRgb gpu = qRgb(0xe0, 0xa4, 0x48);    // rendering or making: the ligh
 constexpr QRgb gpuStripe = qRgba(0xe0, 0xa4, 0x48, alpha(0.30)); // the stripes over a clip or a tile being made
 constexpr QRgb chip = qRgba(0, 0, 0, alpha(0.55));               // the chip's ground over the picture
 // A conversation, in the sidebar.
-constexpr QRgb working = accent;   // Kerf is at work in it (the dot pulses)
-constexpr QRgb making = gpu;       // Kerf is making a cut or a render for it: the stage's amber
-constexpr QRgb review = accentInk; // something waits for you to look at it
-constexpr QRgb settled = pos;      // done
-constexpr QRgb failed = neg;       // it stopped on an error
-constexpr QRgb idle = dis;         // nothing going on
+// Working and making show on its title, as a light passing over it; the rest
+// as a dot at its row's end, until it has been looked at.
+constexpr QRgb review = accentInk;  // something waits for you to look at it
+constexpr QRgb settled = accentInk; // done while you were elsewhere
+constexpr QRgb failed = neg;        // it stopped on an error
 } // namespace activity
 
 // Literal colours drawn on the picture and in the lanes.
@@ -238,7 +238,7 @@ constexpr int fade = 160;    // popovers and fades
 constexpr int segment = 200; // the segmented control's sliding fill
 constexpr int move = 220;    // the kit's larger moves
 constexpr int stage = 850;   // the window's regions moving to a new arrangement
-constexpr int panel = 420;   // a pane opened or closed by hand: the sidebar, the panel, the Media column
+constexpr int panel = 420;   // a pane opened or closed by hand: the sidebar, the panel, the Media band
 // Motion UI: what each scene takes (MOTION_UI.md says which is which).
 constexpr int settle = 420;       // falling back or coming forward: dims, the veil
 constexpr int appear = 320;       // a thing fading in where it is
@@ -255,7 +255,9 @@ constexpr int popStagger = 70;
 constexpr int fanStagger = 110;   // between the version cards
 constexpr int timelineLead = 150; // how long before the stage lands the timeline starts in
 constexpr int cutSettle = 500;    // edits being quiet before a proposed cut renders
-constexpr int workPulse = 1200;   // the working chip's dot, and a working conversation's in the sidebar, once
+constexpr int workPulse = 1200;   // the working chip's dot, once
+constexpr int titleShimmer = 2200; // the light once over a working conversation's title in the sidebar, and the rest after it
+constexpr int titleShimmerSteps = 66; // its redraws in that time: 30 a second, the title alone
 constexpr int workShimmer = 1600; // the light once over "Working" while Kerf works
 constexpr int compareSweep = 6800; // the before/after wipe, there and back
 constexpr int cardTurn = 2200;     // the light once round a cut's card while Kerf makes it
@@ -282,6 +284,7 @@ constexpr qreal edgeWidth = 2.0;      // points the light is wide, outside the p
 constexpr qreal edgeGap = 1.0;        // and how far out from it
 constexpr qreal edgeRest = 0.28;      // the rest of the ring, under the light, as a share of it
 constexpr qreal stripeSpace = 10.0;   // points from one stripe to the next
+constexpr qreal titleCross = 0.7;     // the share of a title's pass the light takes to cross it
 constexpr qreal compareFrom = 0.28;   // the wipe's line, across the picture
 constexpr qreal compareTo = 0.78;
 constexpr qreal chatBehind = 0.28;    // the conversation while the picture is watched
@@ -312,15 +315,20 @@ constexpr int canvasWidth = 1600;
 constexpr int canvasHeight = 1000;
 constexpr int toolbar = 40;     // toolbar height
 constexpr int strip = 28;       // the sheets' strips, the timeline's
-constexpr int bin = 272;        // the Media sheet's width
+constexpr int bin = 272;        // the Media bin's width where it has a column of its own (the theme's sample)
+constexpr int mediaBand = 152;  // the Media band's height, between the picture and the timeline
+constexpr int mediaBandTimelineLeast = 200; // what it leaves the timeline under it before the picture gives way
 // The minimal layout (ui/stage_shell.h).
 constexpr int sidebar = 288;            // the folders and conversations, at the left, until its edge is dragged
-constexpr int sidebarLeast = 232;       // and how narrow and how wide a drag leaves it
-constexpr int sidebarMost = 440;
-constexpr int sidebarGrip = 8;          // what of its edge takes the drag
+constexpr int sidebarLeast = 232;       // how narrow a drag leaves it
+constexpr int sidebarLeaves = 640;      // and what it leaves of the window at least, however wide it is dragged
+constexpr int sidebarGrip = 16;         // what of its edge takes the drag, half either side of it
+constexpr int sidebarGripLine = 2;      // the line it shows under the pointer
+// The widest a drag leaves the sidebar in a window `window` wide.
+constexpr int sidebarMost(int window) { return window - sidebarLeaves > sidebarLeast ? window - sidebarLeaves : sidebarLeast; }
 constexpr int sidebarFoot = 52;         // the account at its foot
 constexpr int sidebarWindowLeast = 1100; // the window's width under which the sidebar gives way
-constexpr int rail = 560;               // the conversation, beside an open panel
+constexpr int rail = 480;               // the conversation, beside an open panel
 constexpr int railLeast = 320;          // its least width
 constexpr int workLeast = 600;          // what it leaves the panel before it gives way
 constexpr int conversationColumn = 720; // the width its text keeps when it has the room to itself

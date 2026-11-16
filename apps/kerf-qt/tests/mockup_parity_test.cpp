@@ -137,8 +137,8 @@ struct Format {
 
 // The layout at 1600 x 1000, in window coordinates (ui/stage_shell.h).
 const Format kFormats[] = {
-    {"169", QSize(1920, 1080), QRect(848, 40, 752, 420), QRect(872, 52, 704, 396), QRect(288, 40, 560, 960), QRect(848, 460, 752, 540)},
-    {"916", QSize(1080, 1920), QRect(848, 40, 752, 614), QRect(1058, 52, 332, 590), QRect(288, 40, 560, 960), QRect(848, 654, 752, 346)},
+    {"169", QSize(1920, 1080), QRect(768, 40, 832, 420), QRect(832, 52, 704, 396), QRect(288, 40, 480, 960), QRect(768, 460, 832, 540)},
+    {"916", QSize(1080, 1920), QRect(768, 40, 832, 614), QRect(1018, 52, 332, 590), QRect(288, 40, 480, 960), QRect(768, 654, 832, 346)},
 };
 
 QRect inWindow(QWidget *widget, QWidget *window) { return QRect(widget->mapTo(window, QPoint()), widget->size()); }
@@ -209,23 +209,25 @@ private slots:
             }
             QVERIFY(save(fmt));
 
-            // The sheets, each a column of its own between the conversation and the panel.
+            // The Media band, across the panel between the picture and the timeline.
             const struct {
                 StageShell::Sheet sheet;
                 const char *name;
                 const char *command;
                 QWidget *widget;
-                int width;
-            } sheets[] = {{StageShell::Sheet::Media, "media", "window.project", window.m_projectPanel, 272}};
+            } sheets[] = {{StageShell::Sheet::Media, "media", "window.project", window.m_projectPanel}};
             for (const auto &sheet : sheets) {
                 window.triggerCommand(QString::fromLatin1(sheet.command));
                 QCOMPARE(window.m_shell->sheet(), sheet.sheet);
                 QVERIFY2(sheet.widget->isVisible(), sheet.name);
-                // The conversation and the panel part for it: it lies over neither.
-                const QRect column = inWindow(sheet.widget, &window);
-                QCOMPARE(column.size(), QSize(sheet.width, format.conversation.height()));
-                QCOMPARE(column.left(), inWindow(window.m_chat, &window).right() + 1);
-                QCOMPARE(column.right() + 1, inWindow(window.m_viewer, &window).left());
+                // The timeline gives it its top: it lies over neither the
+                // picture nor what is said.
+                const QRect band = inWindow(sheet.widget, &window);
+                QCOMPARE(band.size(), QSize(format.timeline.width(), tokens::layout::mediaBand));
+                QCOMPARE(band.left(), format.timeline.left());
+                QCOMPARE(band.top(), inWindow(window.m_viewer, &window).bottom() + 1);
+                QCOMPARE(inWindow(window.m_timelinePanel, &window).top(), band.bottom() + 1);
+                QCOMPARE(inWindow(window.m_chat, &window), format.conversation);
                 QVERIFY(save(QStringLiteral("%1-%2").arg(fmt, QString::fromLatin1(sheet.name))));
                 window.triggerCommand(QString::fromLatin1(sheet.command));
                 QCOMPARE(window.m_shell->sheet(), StageShell::Sheet::None);

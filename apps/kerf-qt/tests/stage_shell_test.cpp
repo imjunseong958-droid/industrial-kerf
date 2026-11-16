@@ -61,8 +61,10 @@ QRect inWindow(QWidget *widget, QWidget *window) { return QRect(widget->mapTo(wi
 // Nothing overlaps, nothing is left over: the regions fill the content.
 void expectFilled(const stage::Rects &r, const QSize &window, const char *what) {
     const QRect content(0, 40, window.width(), window.height() - 40);
-    for (const QRect &region : {r.sidebar, r.slot, r.transport, r.conversation, r.timeline})
+    for (const QRect &region : {r.sidebar, r.slot, r.transport, r.conversation, r.timeline, r.media})
         QVERIFY2(region.isEmpty() || content.contains(region), what);
+    for (const QRect &region : {r.sidebar, r.slot, r.transport, r.conversation, r.timeline})
+        QVERIFY2(!r.media.intersects(region), what);
     QVERIFY2(!r.slot.intersects(r.conversation), what);
     QVERIFY2(!r.slot.intersects(r.timeline), what);
     QVERIFY2(!r.slot.intersects(r.transport), what);
@@ -70,7 +72,8 @@ void expectFilled(const stage::Rects &r, const QSize &window, const char *what) 
     QVERIFY2(!r.transport.intersects(r.timeline), what);
     QVERIFY2(!r.sidebar.intersects(r.conversation), what);
     const int area = r.sidebar.width() * r.sidebar.height() + r.slot.width() * r.slot.height() + r.transport.width() * r.transport.height() +
-                     r.conversation.width() * r.conversation.height() + r.timeline.width() * r.timeline.height();
+                     r.conversation.width() * r.conversation.height() + r.timeline.width() * r.timeline.height() +
+                     r.media.width() * r.media.height();
     QCOMPARE(area, content.width() * content.height());
     QVERIFY2(r.slot.isEmpty() || r.slot.contains(r.picture), what);
 }
@@ -106,13 +109,13 @@ private slots:
         const stage::Rects r = stage::rects(QSize(1600, 1000), kWide);
         QVERIFY(r.wide);
         QCOMPARE(r.sidebar, QRect(0, 40, 288, 960));
-        QCOMPARE(r.conversation, QRect(288, 40, 560, 960));
-        QCOMPARE(r.panel, QRect(848, 40, 752, 960));
-        QCOMPARE(r.slot, QRect(848, 40, 752, 420));
-        QCOMPARE(r.picture, QRect(872, 52, 704, 396));
+        QCOMPARE(r.conversation, QRect(288, 40, 480, 960));
+        QCOMPARE(r.panel, QRect(768, 40, 832, 960));
+        QCOMPARE(r.slot, QRect(768, 40, 832, 420));
+        QCOMPARE(r.picture, QRect(832, 52, 704, 396));
         QVERIFY(r.transport.isEmpty());
         QVERIFY(r.media.isEmpty());
-        QCOMPARE(r.timeline, QRect(848, 460, 752, 540));
+        QCOMPARE(r.timeline, QRect(768, 460, 832, 540));
         expectFilled(r, QSize(1600, 1000), "16:9");
     }
 
@@ -121,11 +124,11 @@ private slots:
         for (const double aspect : {kPortrait, kFeed, 1.0}) {
             const stage::Rects r = stage::rects(QSize(1600, 1000), aspect);
             QVERIFY(!r.wide);
-            QCOMPARE(r.conversation, QRect(288, 40, 560, 960));
-            QCOMPARE(r.slot, QRect(848, 40, 752, 614));
+            QCOMPARE(r.conversation, QRect(288, 40, 480, 960));
+            QCOMPARE(r.slot, QRect(768, 40, 832, 614));
             QCOMPARE(r.picture, stage::fitted(stage::paddedSlot(r.slot), aspect));
             QVERIFY(r.transport.isEmpty());
-            QCOMPARE(r.timeline, QRect(848, 654, 752, 346));
+            QCOMPARE(r.timeline, QRect(768, 654, 832, 346));
             expectFilled(r, QSize(1600, 1000), "vertical");
         }
     }
@@ -152,9 +155,9 @@ private slots:
         // Large: the picture pillarboxes in black in its slot.
         {
             const stage::Rects r = stage::rects(QSize(2560, 1440), kWide);
-            QCOMPARE(r.conversation.width(), 560);
-            QCOMPARE(r.slot, QRect(848, 40, 1712, 612));
-            QCOMPARE(r.timeline, QRect(848, 652, 1712, 788));
+            QCOMPARE(r.conversation.width(), 480);
+            QCOMPARE(r.slot, QRect(768, 40, 1792, 612));
+            QCOMPARE(r.timeline, QRect(768, 652, 1792, 788));
             QCOMPARE(r.picture, stage::fitted(stage::paddedSlot(r.slot), kWide));
             QCOMPARE(r.picture.height(), 588);
             expectFilled(r, QSize(2560, 1440), "large");
@@ -204,39 +207,66 @@ private slots:
             }
     }
 
-    // The Media sheet is a column of its own, between the conversation and the
-    // panel: it covers neither what is said nor the timeline a drag goes to.
-    void theMediaSheetIsAColumnOfItsOwn() {
+    // The Media band lies across the panel, under the picture and over the
+    // timeline a drag from it goes to: it covers nothing, and takes nothing
+    // from what is said.
+    void theMediaBandLiesBetweenThePictureAndTheTimeline() {
         stage::Panes open;
         open.media = true;
-        for (const double aspect : {kWide, kPortrait, kFeed, 1.0}) {
-            QVERIFY(stage::rects(QSize(1600, 1000), aspect).media.isEmpty());
-            const stage::Rects r = stage::rects(QSize(1600, 1000), aspect, 40, open);
-            // The conversation gives way to it, as it does to the panel.
-            QCOMPARE(r.conversation, QRect(288, 40, 440, 960));
-            QCOMPARE(r.media, QRect(728, 40, 272, 960));
-            QCOMPARE(r.panel, QRect(1000, 40, 600, 960));
-            QVERIFY(!r.media.intersects(r.conversation));
-            QVERIFY(!r.media.intersects(r.timeline));
-            QVERIFY(!r.media.intersects(r.slot));
-            QCOMPARE(r.timeline.left(), r.media.right() + 1);
+        QVERIFY(stage::rects(QSize(1600, 1000), kWide).media.isEmpty());
+        {
+            // The timeline gives it its top; the picture keeps its place.
+            const stage::Rects r = stage::rects(QSize(1600, 1000), kWide, 40, open);
+            const stage::Rects closed = stage::rects(QSize(1600, 1000), kWide);
+            QCOMPARE(r.conversation, closed.conversation);
+            QCOMPARE(r.panel, closed.panel);
+            QCOMPARE(r.slot, closed.slot);
+            QCOMPARE(r.media, QRect(768, 460, 832, tokens::layout::mediaBand));
+            QCOMPARE(r.timeline, QRect(768, 612, 832, 388));
+            expectFilled(r, QSize(1600, 1000), "band");
         }
-        // With the panel closed it has the conversation's right side to itself.
-        open.picture = false;
+        {
+            // Under an upright picture the timeline would be left under its
+            // least: the picture gives way the rest.
+            const stage::Rects r = stage::rects(QSize(1600, 1000), kPortrait, 40, open);
+            QCOMPARE(r.slot, QRect(768, 40, 832, 608));
+            QCOMPARE(r.media, QRect(768, 648, 832, 152));
+            QCOMPARE(r.timeline, QRect(768, 800, 832, tokens::layout::mediaBandTimelineLeast));
+            expectFilled(r, QSize(1600, 1000), "band upright");
+        }
+        for (const double aspect : {kWide, kPortrait, kFeed, 1.0}) {
+            const stage::Rects r = stage::rects(QSize(1600, 1000), aspect, 40, open);
+            QCOMPARE(r.media.top(), r.slot.bottom() + 1);
+            QCOMPARE(r.timeline.top(), r.media.bottom() + 1);
+            QCOMPARE(r.media.left(), r.timeline.left());
+            QCOMPARE(r.media.width(), r.timeline.width());
+        }
+        // Under a picture alone, it is over the transport's block.
         open.timeline = false;
-        const stage::Rects alone = stage::rects(QSize(1600, 1000), kWide, 40, open);
-        QCOMPARE(alone.conversation, QRect(288, 40, 1040, 960));
-        QCOMPARE(alone.media, QRect(1328, 40, 272, 960));
-        // A window too narrow for all three still places each, whole.
+        {
+            const stage::Rects r = stage::rects(QSize(1600, 1000), kWide, 40, open);
+            QCOMPARE(r.media, QRect(768, 760, 832, 152));
+            QCOMPARE(r.transport, QRect(768, 912, 832, tokens::layout::pictureTransportLow));
+            expectFilled(r, QSize(1600, 1000), "band over the transport");
+        }
+        // Over a timeline alone, at the panel's top.
+        open.timeline = true;
+        open.picture = false;
+        {
+            const stage::Rects r = stage::rects(QSize(1600, 1000), kWide, 40, open);
+            QCOMPARE(r.media, QRect(768, 40, 832, 152));
+            QCOMPARE(r.timeline, QRect(768, 192, 832, 808));
+            expectFilled(r, QSize(1600, 1000), "band over the timeline");
+        }
+        // With the panel closed there is no band: it belongs to the panel.
+        open.timeline = false;
+        QVERIFY(stage::rects(QSize(1600, 1000), kWide, 40, open).media.isEmpty());
+        // A window too small for it all still places each, whole.
         open.picture = true;
         open.timeline = true;
-        for (const QSize &size : {QSize(800, 900), QSize(400, 300), QSize(200, 100)}) {
-            const stage::Rects narrow = stage::rects(size, kWide, 40, open);
-            QVERIFY(narrow.conversation.width() >= 0 && narrow.panel.width() >= 0);
-            QVERIFY(!narrow.media.intersects(narrow.conversation));
-            QVERIFY(!narrow.media.intersects(narrow.timeline));
-            QCOMPARE(narrow.conversation.width() + narrow.media.width() + narrow.panel.width(), size.width());
-        }
+        for (const QSize &size : {QSize(800, 900), QSize(1600, 400), QSize(400, 300), QSize(200, 100), QSize(1, 41)})
+            for (const double aspect : {kWide, kPortrait})
+                expectFilled(stage::rects(size, aspect, 40, open), size, "band, small");
     }
 
     // The sidebar is as wide as its edge was dragged, within its least and most.
@@ -249,8 +279,11 @@ private slots:
         expectFilled(r, QSize(1600, 1000), "dragged");
         panes.sidebarWidth = 10;
         QCOMPARE(stage::rects(QSize(1600, 1000), kWide, 40, panes).sidebar.width(), tokens::layout::sidebarLeast);
+        // As wide as it likes, but for what it leaves the rest of the window.
         panes.sidebarWidth = 4000;
-        QCOMPARE(stage::rects(QSize(1600, 1000), kWide, 40, panes).sidebar.width(), tokens::layout::sidebarMost);
+        QCOMPARE(stage::rects(QSize(1600, 1000), kWide, 40, panes).sidebar.width(), 1600 - tokens::layout::sidebarLeaves);
+        panes.sidebarWidth = 600;
+        QCOMPARE(stage::rects(QSize(2560, 1440), kWide, 40, panes).sidebar.width(), 600);
 
         QSettings().remove(QStringLiteral("layout"));
         {
@@ -268,10 +301,15 @@ private slots:
             QCOMPARE(grip->geometry().left(), tokens::layout::sidebar - tokens::layout::sidebarGrip / 2);
             QCOMPARE(grip->cursor().shape(), Qt::SplitHCursor);
             QSignalSpy dragged(shell, &StageShell::sidebarWidthChanged);
-            QTest::mousePress(grip, Qt::LeftButton, Qt::NoModifier, QPoint(4, 100));
-            QTest::mouseMove(grip, QPoint(4 + 52, 100));
-            QTest::mouseRelease(grip, Qt::LeftButton, Qt::NoModifier, QPoint(4 + 52, 100));
+            // From the middle of the grip, which is the sidebar's edge.
+            const int middle = tokens::layout::sidebarGrip / 2;
+            QTest::mousePress(grip, Qt::LeftButton, Qt::NoModifier, QPoint(middle, 100));
+            QTest::mouseMove(grip, QPoint(middle + 52, 100));
+            QTest::mouseRelease(grip, Qt::LeftButton, Qt::NoModifier, QPoint(middle + 52, 100));
             QCOMPARE(dragged.size(), 1);
+            // A drag is not a press: the sidebar stays.
+            QTest::qWait(QApplication::doubleClickInterval() + 50);
+            QVERIFY(shell->panes().sidebar);
             const int width = shell->rects().sidebar.width();
             QCOMPARE(width, tokens::layout::sidebar + 52);
             QCOMPARE(window.m_sidebar->width(), width);
@@ -280,6 +318,13 @@ private slots:
             QCOMPARE(window.m_toolbarWiring->sidebarEdge(), width);
             // And it is kept.
             QCOMPARE(QSettings().value(QStringLiteral("layout/sidebarWidth")).toInt(), width);
+            // A press alone on its edge puts it away, as the toolbar's button
+            // does, once no second press has followed it.
+            QTest::mouseClick(grip, Qt::LeftButton, Qt::NoModifier, QPoint(middle, 400));
+            QVERIFY(shell->panes().sidebar);
+            QTRY_VERIFY(!shell->panes().sidebar);
+            QCOMPARE(QSettings().value(QStringLiteral("layout/sidebar")).toBool(), false);
+            window.setPaneOpen(QStringLiteral("view.sidebar"), true);
             window.close();
         }
         {
@@ -291,6 +336,9 @@ private slots:
             QVERIFY(QTest::qWaitForWindowExposed(&next));
             QTest::mouseDClick(next.m_shell->sidebarGrip(), Qt::LeftButton, Qt::NoModifier, QPoint(4, 100));
             QCOMPARE(next.m_shell->rects().sidebar.width(), tokens::layout::sidebar);
+            // And it stays: the press of a double-click does not put it away.
+            QTest::qWait(QApplication::doubleClickInterval() + 50);
+            QVERIFY(next.m_shell->panes().sidebar);
             next.close();
         }
         QSettings().remove(QStringLiteral("layout"));
@@ -373,7 +421,7 @@ private slots:
         window.applySnapshot(snapshotOf(QSize(1080, 1920)));
         // At once: no animation, nothing left to process.
         expectAt(9.0 / 16.0);
-        QCOMPARE(window.m_viewer->videoRect(), QRectF(stage::fitted(stage::paddedSlot(QRect(0, 0, 752, 614)), 9.0 / 16.0)));
+        QCOMPARE(window.m_viewer->videoRect(), QRectF(stage::fitted(stage::paddedSlot(QRect(0, 0, 832, 614)), 9.0 / 16.0)));
         window.applySnapshot(snapshotOf(QSize(1080, 1350)));
         expectAt(4.0 / 5.0);
         window.resize(1280, 800);
@@ -409,7 +457,7 @@ private slots:
             QVERIFY(QTest::qWaitForWindowExposed(&window));
             QCOMPARE(window.m_shell->sheet(), StageShell::Sheet::None);
             QVERIFY(window.m_chat->isVisible());
-            QCOMPARE(inWindow(window.m_chat, &window), QRect(288, 40, 560, 960));
+            QCOMPARE(inWindow(window.m_chat, &window), QRect(288, 40, 480, 960));
             window.close();
         }
         settings.remove(QStringLiteral("workspace"));
@@ -431,44 +479,38 @@ private slots:
             const char *command;
             StageShell::Sheet sheet;
             QWidget *widget;
-            int width;
             const char *close;
-        } sheets[] = {{"window.project", StageShell::Sheet::Media, window.m_projectPanel, 272, "sheetClose.media"}};
+        } sheets[] = {{"window.project", StageShell::Sheet::Media, window.m_projectPanel, "sheetClose.media"}};
         const QRect conversation = inWindow(window.m_chat, &window);
-        // Under the bars that show (this build has no runtime, and says so).
-        int bars = 0;
-        for (const QWidget *bar : {window.m_connectionBanner, window.m_errorBanner, window.m_divergedBanner})
-            if (!bar->isHidden()) bars += bar->height();
+        const QRect timeline = inWindow(window.m_timelinePanel, &window);
         for (const auto &entry : sheets) {
             window.triggerCommand(QString::fromLatin1(entry.command));
             QCOMPARE(shell->sheet(), entry.sheet);
             QVERIFY(entry.widget->isVisible());
-            // A column of its own right of the conversation, which gives way to
-            // it, from under the bars to its foot; the panel starts where it ends.
-            const QRect narrowed = inWindow(window.m_chat, &window);
-            QCOMPARE(narrowed.left(), conversation.left());
-            QVERIFY(narrowed.width() < conversation.width());
-            const QRect sheetRect(narrowed.right() + 1, conversation.top() + bars, entry.width, conversation.height() - bars);
-            QCOMPARE(inWindow(entry.widget, &window), sheetRect);
-            QCOMPARE(inWindow(window.m_viewer, &window).left(), sheetRect.right() + 1);
+            // A band across the panel, under the picture and over the
+            // timeline, which gives it its top; the conversation keeps its width.
+            QCOMPARE(inWindow(window.m_chat, &window), conversation);
+            const QRect band = inWindow(entry.widget, &window);
+            QCOMPARE(band.height(), tokens::layout::mediaBand);
+            QCOMPARE(band.left(), timeline.left());
+            QCOMPARE(band.width(), timeline.width());
+            QCOMPARE(band.top(), inWindow(window.m_viewer, &window).bottom() + 1);
+            const QRect under = inWindow(window.m_timelinePanel, &window);
+            QCOMPARE(under.top(), band.bottom() + 1);
+            QCOMPARE(under.bottom(), timeline.bottom());
             // Nothing that is said is under it.
-            QVERIFY(!sheetRect.intersects(narrowed));
-            QVERIFY(!sheetRect.intersects(inWindow(window.m_chat->composerWidget(), &window)));
+            QVERIFY(!band.intersects(conversation));
             QVERIFY(window.m_commands->action(QString::fromLatin1(entry.command))->isChecked());
-            // Its left hairline.
-            auto *seam = shell->findChild<QWidget *>(QStringLiteral("stageSeamSheet"));
-            QVERIFY(seam && seam->isVisible());
-            QCOMPARE(inWindow(seam, &window), QRect(sheetRect.left() - 1, sheetRect.top(), 1, sheetRect.height()));
             // One at a time.
             int shown = 0;
             for (const auto &other : sheets)
                 if (other.widget->isVisible()) ++shown;
             QCOMPARE(shown, 1);
-            // The same command closes it, and the conversation has its width back.
+            // The same command closes it, and the timeline has its height back.
             window.triggerCommand(QString::fromLatin1(entry.command));
             QCOMPARE(shell->sheet(), StageShell::Sheet::None);
             QVERIFY(!entry.widget->isVisible());
-            QCOMPARE(inWindow(window.m_chat, &window), conversation);
+            QCOMPARE(inWindow(window.m_timelinePanel, &window), timeline);
             QVERIFY(!window.m_commands->action(QString::fromLatin1(entry.command))->isChecked());
             // So does the close button at the end of its strip.
             window.triggerCommand(QString::fromLatin1(entry.command));
@@ -484,8 +526,8 @@ private slots:
         window.close();
     }
 
-    // A bar that shows does not lie over the Media sheet: its tabs and close are under it, where
-    // they can be reached, and the sheet has its height back when the bar goes.
+    // A bar that shows does not lie over the Media band: its tabs and close
+    // stay where they can be reached.
     void aBannerLeavesTheMediaSheetsCloseInReach() {
         MainWindow window{QString(), QString()};
         window.setConnection(QStringLiteral("ready"));
@@ -503,8 +545,9 @@ private slots:
         QCoreApplication::processEvents();
         const QRect banner = inWindow(window.m_errorBanner, &window);
         QVERIFY(banner.height() > 0);
-        QCOMPARE(inWindow(window.m_projectPanel, &window).top(), banner.bottom() + 1);
-        QCOMPARE(inWindow(window.m_projectPanel, &window).bottom(), sheet.bottom());
+        // The band is under the picture, clear of the bars at the top: it stays.
+        QVERIFY(banner.bottom() < sheet.top());
+        QCOMPARE(inWindow(window.m_projectPanel, &window), sheet);
         auto *close = window.m_projectPanel->findChild<QAbstractButton *>(QStringLiteral("sheetClose.media"));
         QVERIFY(close && close->isVisible());
         QVERIFY(!banner.intersects(inWindow(close, &window)));
@@ -671,12 +714,12 @@ private slots:
         stage::Panes picture;
         picture.timeline = false;
         const stage::Rects wide = stage::rects(QSize(1600, 1000), kWide, 40, picture);
-        QCOMPARE(wide.slot, QRect(848, 40, 752, 872));
-        QCOMPARE(wide.transport, QRect(848, 912, 752, 88));
+        QCOMPARE(wide.slot, QRect(768, 40, 832, 872));
+        QCOMPARE(wide.transport, QRect(768, 912, 832, 88));
         expectFilled(wide, QSize(1600, 1000), "picture");
         const stage::Rects upright = stage::rects(QSize(1600, 1000), kPortrait, 40, picture);
-        QCOMPARE(upright.slot, QRect(848, 40, 752, 872));
-        QCOMPARE(upright.transport, QRect(848, 912, 752, 88));
+        QCOMPARE(upright.slot, QRect(768, 40, 832, 872));
+        QCOMPARE(upright.transport, QRect(768, 912, 832, 88));
         expectFilled(upright, QSize(1600, 1000), "upright picture");
 
         stage::Panes timeline;
@@ -722,7 +765,7 @@ private slots:
         QCoreApplication::processEvents();
         QVERIFY(window.m_viewer->isVisible());
         QVERIFY(window.m_timelinePanel->isVisible());
-        QCOMPARE(inWindow(window.m_chat, &window), QRect(288, 40, 560, 960));
+        QCOMPARE(inWindow(window.m_chat, &window), QRect(288, 40, 480, 960));
         QVERIFY(window.m_chat->composerWidget()->stamped());
         QVERIFY(window.m_commands->action(QStringLiteral("view.picture"))->isChecked());
 
@@ -915,11 +958,10 @@ private slots:
         sidebar.setConversations({{QStringLiteral("t1"), QStringLiteral("Make a cut"), ProjectSidebar::State::Review},
                                   {QStringLiteral("t2"), QStringLiteral("An old note"), ProjectSidebar::State::Settled}},
                                  QStringLiteral("t1"));
-        QCOMPARE(sidebar.conversationRow(QStringLiteral("t1"))->trailing(), QStringLiteral("Review"));
+        QCOMPARE(sidebar.conversationRow(QStringLiteral("t1"))->badge(), tokens::color(tokens::activity::review));
         QVERIFY(sidebar.conversationRow(QStringLiteral("t1"))->isCurrent());
-        // Settled says so with its dot; with no time it has nothing at its end.
-        QVERIFY(sidebar.conversationRow(QStringLiteral("t2"))->trailing().isEmpty());
-        QCOMPARE(sidebar.conversationRow(QStringLiteral("t2"))->dotColor(), tokens::color(tokens::activity::settled));
+        // Settled says so with its dot at the end too.
+        QCOMPARE(sidebar.conversationRow(QStringLiteral("t2"))->badge(), tokens::color(tokens::activity::settled));
         QSignalSpy chosen(&sidebar, &ProjectSidebar::conversationChosen);
         sidebar.conversationRow(QStringLiteral("t2"))->click();
         QCOMPARE(chosen.value(0).value(0).toString(), QStringLiteral("t2"));
@@ -931,8 +973,12 @@ private slots:
         sidebar.setFolded(first.path(), true);
         sidebar.projectMenu(first.path())->findChild<QAction *>(QStringLiteral("sidebarProjectOpen"))->trigger();
         QCOMPARE(project.value(0).value(0).toString(), QDir::cleanPath(QFileInfo(first.path()).absoluteFilePath()));
+        // Unfolded, what Kerf works on shows on the conversation; folded, on the folder.
         sidebar.setWorking(true);
-        QCOMPARE(sidebar.projectRow(second.path())->trailing(), QStringLiteral("Working"));
+        QVERIFY(!sidebar.projectRow(second.path())->isShimmering());
+        sidebar.setFolded(second.path(), true);
+        QVERIFY(sidebar.projectRow(second.path())->isShimmering());
+        sidebar.setFolded(second.path(), false);
         // The start window lists folders alone, and a press chooses one.
         sidebar.setConversationsShown(false);
         QVERIFY(!sidebar.newConversationRow());
@@ -1373,9 +1419,10 @@ private slots:
         window.close();
     }
 
-    // The Media sheet is a column of its own: it comes out from between the
-    // conversation and the panel as they part, never over what is said.
-    void theMediaColumnComesOutFromBetween() {
+    // The Media band comes down out from under the picture as the timeline
+    // moves down for it, and goes back up under it: it never lies over the
+    // picture, and the conversation stays as it is.
+    void theMediaBandComesOutFromUnderThePicture() {
         MainWindow window{QString(), QString()};
         window.setConnection(QStringLiteral("ready"));
         window.applySnapshot(snapshotOf(QSize(1920, 1080)));
@@ -1385,17 +1432,23 @@ private slots:
         ui::setReducedMotionOverride(0);
         const auto restore = qScopeGuard([] { ui::setReducedMotionOverride(-1); });
         QWidget *sheet = window.m_projectPanel;
+        const QRect chat = window.m_chat->geometry();
         for (const bool opening : {true, false}) {
             window.triggerCommand(QStringLiteral("window.project"));
             QVERIFY(window.m_shell->isMoving());
             int seen = 0;
             while (window.m_shell->isMoving()) {
                 QVERIFY(sheet->isVisible());
-                // Its right edge is the panel's left, and all of it that shows
-                // is right of the conversation.
-                QCOMPARE(sheet->geometry().right() + 1, window.m_viewer->geometry().left());
+                const QRect picture = window.m_viewer->geometry();
+                // Across the panel, as wide as the picture's region.
+                QCOMPARE(sheet->x(), picture.left());
+                QCOMPARE(sheet->width(), picture.width());
+                // All of it that shows is under the picture, and the timeline
+                // starts where it ends.
                 const QRect shown = sheet->mask().boundingRect().translated(sheet->pos());
-                QVERIFY(shown.left() >= window.m_chat->geometry().right() + 1 || shown.width() <= 1);
+                QVERIFY(shown.top() >= picture.bottom() + 1 || shown.height() <= 1);
+                QCOMPARE(window.m_timelinePanel->geometry().top(), sheet->geometry().bottom() + 1);
+                QCOMPARE(window.m_chat->geometry(), chat);
                 ++seen;
                 QTest::qWait(16);
             }
@@ -1405,8 +1458,8 @@ private slots:
             if (opening) {
                 const stage::Rects r = window.m_shell->rects();
                 QCOMPARE(sheet->geometry(), r.media);
-                QCOMPARE(r.media.left(), r.conversation.right() + 1);
-                QCOMPARE(r.media.right() + 1, r.panel.left());
+                QCOMPARE(r.media.top(), r.slot.bottom() + 1);
+                QCOMPARE(r.timeline.top(), r.media.bottom() + 1);
             }
         }
         window.close();
@@ -1417,10 +1470,10 @@ private slots:
         panes.reel = true;
         const stage::Rects r = stage::rects(QSize(1600, 1000), kWide, 40, panes);
         // The stage reaches over the conversation, with the strip over the picture.
-        QCOMPARE(r.conversation, QRect(288, 40, 560, 960));
-        QCOMPARE(r.slot, QRect(728, 40, 872, 491));
-        QCOMPARE(r.reel, QRect(761, 64, 460, 40));
-        QCOMPARE(r.timeline.left(), 728);
+        QCOMPARE(r.conversation, QRect(288, 40, 480, 960));
+        QCOMPARE(r.slot, QRect(648, 40, 952, 536));
+        QCOMPARE(r.reel, QRect(681, 64, 460, 40));
+        QCOMPARE(r.timeline.left(), 648);
     }
 
     void thePictureFollowsKerf() {

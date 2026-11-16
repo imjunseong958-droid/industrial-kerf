@@ -1,23 +1,23 @@
 #pragma once
 
-// The Media sheet (mockup-spec 6), 272 wide beside the conversation:
+// The Media band, across the panel between the picture and the timeline:
 //
 //   a 28 pt strip   the segmented "Media N" | "Index", Search (⌘F), the
 //                   List/Grid toggle (⌘⌥2) and Import (⌘I)
-//   the media page  a grid on the well, as tall as the sheet leaves it: 2
-//                   columns of 112 with 112 x 63 thumbs (the poster, or a
-//                   sound's waveform), duration badges in frames at the
-//                   sequence's rate, an alpha checkerboard for media with
-//                   alpha; under each its whole name and what it is doing
-//                   ("Made · shot · take 1 of 1 · on V1", "Making take 2 ·
-//                   0:41" over amber stripes moving on its thumb, "Wants
-//                   making · …", "Offline"); or a list
+//   the media page  one row of tiles on the well that goes along as far as
+//                   there are media (a wheel turned down goes along it too):
+//                   112 x 63 thumbs (the poster, or a sound's waveform),
+//                   duration badges in frames at the sequence's rate, an alpha
+//                   checkerboard for media with alpha; under each its whole
+//                   name and what it is doing ("Made · shot · take 1 of 1 · on
+//                   V1", "Making take 2 · 0:41" over amber stripes moving on its
+//                   thumb, "Wants making · …", "Offline"); or a list
 //   the Index page  for the chosen media, its shots (the cuts as ranges),
 //                   silences and loudest moments from the engine's media
 //                   index
-//   Roles           under the page: one row per role of the program's
-//                   tracks (tracks without one under their kind), whose box
-//                   switches all of that role's tracks; Edit roles…
+//   Roles           a column at the band's end: one row per role of the
+//                   program's tracks (tracks without one under their kind),
+//                   whose box switches all of that role's tracks; Edit roles…
 //
 // Every row is engine data: the snapshot's media and tracks, media_status,
 // media_info and media_index. Requests go out as signals; BinWiring sends them.
@@ -62,12 +62,10 @@ class ProjectPanel final : public QWidget {
     Q_OBJECT
     KERF_TEST_FRIENDS
 public:
-    // The grid: 2 columns of 112 tiles 12 apart, rows 12 apart, padded 12 16 0
-    // on the well, which has what Roles leaves of the sheet. An item is 101
-    // tall: the 112 x 63 thumb, 6 pt, then its name and what it is doing, each
-    // on a 16 pt line.
+    // The tiles: 112 wide, 12 apart in one row, padded 12 16 0 on the well,
+    // which has what Roles leaves of the band. An item is 101 tall: the 112 x
+    // 63 thumb, 6 pt, then its name and what it is doing, each on a 16 pt line.
     static constexpr QSize kThumbnail{112, 63};
-    static constexpr int kColumns = 2;
     static constexpr int kColumnGap = 12;
     static constexpr int kRowGap = 12;
     static constexpr int kNameTop = 6;
@@ -75,11 +73,11 @@ public:
     static constexpr int kItemHeight = 63 + kNameTop + 2 * kLine;
     static constexpr int kSidePadding = 16;
     static constexpr int kTopPadding = 12;
-    // The page at least: a row of tiles and the start of the next.
-    static constexpr int kGridLeast = 160;
-    // The Roles header and rows, 20 tall; Roles is as tall as they are, to this.
+    // The page at least: a row of tiles.
+    static constexpr int kGridLeast = kTopPadding + kItemHeight;
+    // The Roles header and rows, 20 tall, in a column this wide.
     static constexpr int kRoleRow = 20;
-    static constexpr int kRolesMost = 164;
+    static constexpr int kRolesWidth = 216;
     // The list view's and the Index's rows.
     static constexpr int kListRow = 24;
     static constexpr int kIndexRow = 20;

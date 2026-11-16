@@ -9,11 +9,11 @@
 //   [search] Search conversations     30 tall
 //   Projects                     [+]  meta in ink3; + is New Project, Open Folder
 //   v [folder] jeju-vlog    [+] [⋯]   the open folder's name in ink, medium;
-//   |   • Make a 60-second cut Review hover: + (a conversation in it) and its menu
-//   |   • Colour the beach take    4m a dot for what it is doing, then the state
-//   |   • Captions for the vlog    1d word or how long ago; hover: [archive] [delete]
-//   |   Show 3 more                   past the first six
-//   |   > Archived · 2                folded; unfolded, its rows are dimmed
+//   |   Make a 60-second cut of th…   hover: + (a conversation in it) and its menu
+//   |   Colour the beach take      ●  titles under the folder's icon, with the room
+//   |   Captions for the vlog         to themselves; a light passes over a title
+//   |   Show 3 more                   Kerf works on, and a dot at the end says it
+//   |   > Archived · 2                is done, waits for you, or failed; hover: [⋯]
 //   > [folder] atlas-launch           folded: pressing its chevron unfolds it,
 //   ...                               pressing its name opens it
 //   (Y) You                       ⌃   the account, 52 tall
@@ -74,24 +74,24 @@ public:
     // folder over it.
     void setGuide(bool guide);
     bool hasGuide() const { return m_guide; }
-    // The word at the row's end, in `color`; empty for none.
-    void setTrailing(const QString &text, const QColor &color);
-    QString trailing() const { return m_trailing; }
     void setCurrent(bool current);
     bool isCurrent() const { return m_current; }
-    // A 6 pt dot before the text, in place of an icon; an invalid colour for
-    // none. A pulsing dot is drawn at the level setPulse() gives it.
-    void setDot(const QColor &color, bool pulsing = false);
-    // An icon drawn small where the dot would be: the archived section's chevron.
+    // A dot at the row's end, in `color`: something there to look at. An
+    // invalid colour for none.
+    void setBadge(const QColor &color);
+    QColor badge() const { return m_badge; }
+    // A light passes over the title while Kerf works on it, at `phase` (0 to 1)
+    // of its pass; still, the title is drawn in ink.
+    void setShimmer(bool shimmer);
+    bool isShimmering() const { return m_shimmer; }
+    void setShimmerPhase(qreal phase);
+    // An icon drawn small before the text, in place of an icon: the archived section's chevron.
     void setDotIcon(const QString &icon);
-    QColor dotColor() const { return m_dot; }
-    bool isPulsing() const { return m_pulsing; }
-    void setPulse(qreal level);
     // Drawn quieter: an archived conversation.
     void setDimmed(bool dimmed);
     bool isDimmed() const { return m_dimmed; }
     // Buttons shown at the row's end while the pointer is over it, in place of
-    // the trailing word. The row takes them as children.
+    // the dot. The row takes them as children.
     void setHoverActions(const QList<ui::IconButton *> &actions);
     QList<ui::IconButton *> hoverActions() const { return m_actions; }
     // Whether the hover actions show now.
@@ -115,14 +115,13 @@ protected:
 
 private:
     void placeActions();
-    QRect dotRect() const;
+    // Where the title is drawn, to the badge or the actions.
+    QRect textRect() const;
 
     QString m_icon;
     QString m_dotIcon;
-    QString m_trailing;
-    QColor m_trailingColor;
-    QColor m_dot;
-    qreal m_pulse = 1.0;
+    QColor m_badge;
+    qreal m_phase = 0.0;
     QList<ui::IconButton *> m_actions;
     int m_indent = 0;
     Chevron m_chevron = Chevron::None;
@@ -130,7 +129,7 @@ private:
     bool m_strong = false;
     bool m_guide = false;
     bool m_current = false;
-    bool m_pulsing = false;
+    bool m_shimmer = false;
     bool m_dimmed = false;
     bool m_editing = false;
 };
@@ -246,6 +245,9 @@ public:
 
     // "now", "4m", "2h", "3d", then a short date: how long before `now` `when` was.
     static QString relativeTime(const QDateTime &when, const QDateTime &now);
+    // Conversations that finished while you were elsewhere: their dot stays
+    // until you look at them.
+    QSet<QString> unseen() const { return m_unseen; }
 
 signals:
     void projectChosen(const QString &path);
@@ -270,6 +272,7 @@ protected:
     void paintEvent(QPaintEvent *event) override;
     void showEvent(QShowEvent *event) override;
     void hideEvent(QHideEvent *event) override;
+    void changeEvent(QEvent *event) override;
     bool eventFilter(QObject *watched, QEvent *event) override;
 
 private:
@@ -284,7 +287,14 @@ private:
     // Another folder's conversations, read again from its files.
     void readOthers();
     void refreshTimes();
-    void updatePulse();
+    void updateShimmer();
+    // The dot at a conversation's end, and the words that say it.
+    QColor badgeOf(const Conversation &conversation) const;
+    QString stateOf(const Conversation &conversation) const;
+    // Whether the window is where you are looking: what finishes then is seen.
+    bool watching() const;
+    // The open conversation, looked at, is seen.
+    void markSeen();
     void finishRename(bool keep);
     QDateTime now() const;
     int indexOf(const QString &id) const;
@@ -324,8 +334,9 @@ private:
     // What else is in the list: the notes that stand in for rows.
     QList<QWidget *> m_extras;
     QStringList m_noteTexts;
-    QVariantAnimation m_pulse;
-    int m_pulseStep = -1;
+    QSet<QString> m_unseen;
+    QVariantAnimation m_shimmer;
+    int m_shimmerStep = -1;
     QTimer m_clock;
     // The title being edited, and over which conversation.
     QPointer<QLineEdit> m_renameField;
