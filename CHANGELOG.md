@@ -22,6 +22,13 @@ on `main`; its section here becomes the release's notes on GitHub
   `KERF_ENCODER=hardware` still asks for it.
 - Chat on Claude Code no longer needs a `kerf-mcp` built beside `kerfd`: where
   there is none, the editor serves Kerf's tools to Claude Code itself.
+- Kerf's replies read as text, not Markdown: bold, code and list items show
+  as such, in the thread and in the sidebar's titles.
+- A shot made from a recipe keeps its name in the bin and on the timeline
+  after each take, instead of becoming "001", and making it says its name.
+- A failed turn's error leaves the bar at the top once the next turn starts;
+  a bar no longer covers the Media sheet's tabs and close; an edit Kerf
+  refuses says why without its code; and a finished export names its file.
 
 ## 0.1.2
 

@@ -7,6 +7,7 @@
 #include "bridge.h"
 #include "chat_panel.h"
 #include "command_registry.h"
+#include "comment_row.h"
 #include "composer.h"
 #include "project_launcher.h"
 #include "project_panel.h"
@@ -450,7 +451,7 @@ void MainWindow::refreshSidebar() {
             if (thread.origin == ReviewModel::Origin::Proposal && m_agentBusy) continue;
             ProjectSidebar::Conversation conversation;
             conversation.id = thread.id;
-            conversation.title = thread.root.body.section(QLatin1Char('\n'), 0, 0).trimmed();
+            conversation.title = review::titleLine(thread.root.body);
             if (conversation.title.isEmpty()) conversation.title = QStringLiteral("Proposal");
             conversation.state = !thread.openProposal.isEmpty() ? ProjectSidebar::State::Review
                                  : thread.resolved()            ? ProjectSidebar::State::Settled

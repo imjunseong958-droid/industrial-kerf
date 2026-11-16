@@ -187,6 +187,9 @@ private slots:
         QCOMPARE(named("media/take-ABCDEF12.mov"), QStringLiteral("take-ABCDEF12"));
         QCOMPARE(named("media/-1a2b3c4d.mov"), QStringLiteral("-1a2b3c4d"));
         QCOMPARE(named(""), QStringLiteral("Untitled media"));
+        // A made shot is its take's file, which every shot numbers alike: it goes by its recipe.
+        QCOMPARE(sourceName(QJsonObject{{"path", "shots/boat.takes/001.mp4"}, {"recipe", "shots/boat.kerfrecipe"}}),
+                 QStringLiteral("boat"));
         QCOMPARE(sourceFileName(QJsonObject{{"path", "media/Beach Day-1a2b3c4d.mov"}}), QStringLiteral("Beach Day.mov"));
         QCOMPARE(sourceFileName(QJsonObject{{"path", "media/notes-1a2b3c4d"}}), QStringLiteral("notes"));
         // Media that would read alike is told apart: by extension first,
@@ -719,7 +722,7 @@ private slots:
                                                                      {"file", "/p/shots/open.takes/002.mp4"}});
         QVERIFY(question.contains(steps));
         QVERIFY(question.contains(QStringLiteral("/p/shots/open.kerfrecipe")) && question.contains(QStringLiteral("/p/shots/open.takes/002.mp4")));
-        QVERIFY(question.contains(QStringLiteral("m4 then is")) && question.contains(QStringLiteral("are kept")));
+        QVERIFY(question.startsWith(QStringLiteral("Making open runs")) && question.contains(QStringLiteral("open then is")) && question.contains(QStringLiteral("are kept")));
         QVERIFY(!question.contains(QStringLiteral("Before you run it")));
         // What its model has said it does not take is shown before the question.
         const QString noted = MainWindow::makeQuestion(QJsonObject{{"media", "m4"}, {"recipe", "/p/shots/open.kerfrecipe"},
@@ -854,7 +857,8 @@ private slots:
         window.handleEvent(QJsonObject{{"type", "media_made"}, {"media", "m4"}, {"take", 2}});
         QVERIFY(!window.m_making.contains(QStringLiteral("m4")));
         window.handleEvent(QJsonObject{{"type", "media_making"}, {"media", "m4"}, {"take", 3}, {"line", "asking the model"}});
-        QCOMPARE(window.m_toolbarWiring->message(), QStringLiteral("Making m4: asking the model"));
+        // In the window the shot goes by its name, as in the bin.
+        QCOMPARE(window.m_toolbarWiring->message(), QStringLiteral("Making open: asking the model"));
         window.handleEvent(QJsonObject{{"type", "error"}, {"message", "cannot make m4: dawn-adapter failed"},
                                        {"command", "media_make"}, {"media", "m4"}});
         QVERIFY(!window.m_making.contains(QStringLiteral("m4")));

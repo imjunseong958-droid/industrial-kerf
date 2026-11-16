@@ -865,6 +865,11 @@ bool MainWindow::handleAgentEvent(const QJsonObject &event) {
     } else if (type == QStringLiteral("agent_state")) {
         const QString state = event.value(QStringLiteral("state")).toString();
         updateChatStatus();
+        // What a failed turn said in the banner is stale once another starts.
+        if (state == QStringLiteral("running") && m_errorFromAgent) {
+            m_errorFromAgent = false;
+            m_errorBanner->hide();
+        }
         if (state == QStringLiteral("failed")) {
             appendConversationNote(QStringLiteral("Agent error"), event.value(QStringLiteral("message")).toString());
             m_chat->finishTurn();

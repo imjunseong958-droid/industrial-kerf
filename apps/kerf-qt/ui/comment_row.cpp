@@ -129,7 +129,37 @@ QString breakingLongWords(const QString &text) {
     return out + text.mid(from).toHtmlEscaped();
 }
 
-QString richBody(const QString &body, double fps) {
+// Kerf writes its replies in Markdown: **bold** and `code` read as such, not as their marks.
+QString withInlineMarks(const QString &text) {
+    static const QRegularExpression mark(QStringLiteral("\\*\\*([^*\\n]+)\\*\\*|`([^`\\n]+)`"));
+    QString out;
+    qsizetype from = 0;
+    for (auto it = mark.globalMatch(text); it.hasNext();) {
+        const QRegularExpressionMatch match = it.next();
+        out += breakingLongWords(text.mid(from, match.capturedStart() - from));
+        if (match.capturedLength(1) > 0)
+            out += QStringLiteral("<b>%1</b>").arg(breakingLongWords(match.captured(1)));
+        else
+            out += QStringLiteral("<span style=\"font-family:'%1','%2'; font-size:12px;\">%3</span>")
+                       .arg(QString::fromLatin1(monoFamily), QString::fromLatin1(monoFallback),
+                            breakingLongWords(match.captured(2)));
+        from = match.capturedEnd();
+    }
+    return out + breakingLongWords(text.mid(from));
+}
+
+QString titleLine(const QString &body) {
+    static const QRegularExpression bullet(QStringLiteral("^\\s*[-*] "));
+    QString line = body.section(QLatin1Char('\n'), 0, 0);
+    line.remove(bullet);
+    return line.remove(QStringLiteral("**")).remove(QLatin1Char('`')).trimmed();
+}
+
+QString richBody(const QString &source, double fps) {
+    // A Markdown list's "- " starts its line with a bullet.
+    static const QRegularExpression bullet(QStringLiteral("^([ \\t]*)[-*] "), QRegularExpression::MultilineOption);
+    QString body = source;
+    body.replace(bullet, QStringLiteral("\\1\u2022 "));
     static const QRegularExpression token(
         QStringLiteral("(\\d{2}:\\d{2}:\\d{2}[:;]\\d{2})|(@[A-Za-z][A-Za-z0-9_.\\-]*)"));
     // The link colour is accent ink at the design's 85% over the card.
@@ -139,7 +169,7 @@ QString richBody(const QString &body, double fps) {
     QRegularExpressionMatchIterator it = token.globalMatch(body);
     while (it.hasNext()) {
         const QRegularExpressionMatch match = it.next();
-        out += breakingLongWords(body.mid(from, match.capturedStart() - from));
+        out += withInlineMarks(body.mid(from, match.capturedStart() - from));
         const QString text = match.captured(0);
         if (!match.captured(1).isEmpty()) {
             const double seconds = parseTimecode(text, fps);
@@ -153,7 +183,7 @@ QString richBody(const QString &body, double fps) {
         }
         from = match.capturedEnd();
     }
-    out += breakingLongWords(body.mid(from));
+    out += withInlineMarks(body.mid(from));
     out.replace(QLatin1Char('\n'), QStringLiteral("<br>"));
     return QStringLiteral("<div style=\"line-height:20px;\">%1</div>").arg(out);
 }

@@ -211,6 +211,9 @@ QString withoutContentHash(const QString &stem) {
 } // namespace
 
 QString sourceName(const QJsonObject &source) {
+    // A made shot's file is its take ("shots/boat.takes/001.mp4"): it is named for its recipe.
+    const QString recipe = source.value(QStringLiteral("recipe")).toString();
+    if (!recipe.isEmpty()) return QFileInfo(recipe).completeBaseName();
     const QString path = source.value(QStringLiteral("path")).toString();
     return path.isEmpty() ? QStringLiteral("Untitled media") : withoutContentHash(QFileInfo(path).completeBaseName());
 }

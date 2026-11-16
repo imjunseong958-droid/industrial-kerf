@@ -354,18 +354,22 @@ private slots:
             const char *close;
         } sheets[] = {{"window.project", StageShell::Sheet::Media, window.m_projectPanel, 272, "sheetClose.media"}};
         const QRect conversation = inWindow(window.m_chat, &window);
+        // Under the bars that show (this build has no runtime, and says so).
+        int bars = 0;
+        for (const QWidget *bar : {window.m_connectionBanner, window.m_errorBanner, window.m_divergedBanner})
+            if (!bar->isHidden()) bars += bar->height();
+        const QRect sheetRect(conversation.right() + 1 - 272, conversation.top() + bars, 272, conversation.height() - bars);
         for (const auto &entry : sheets) {
             window.triggerCommand(QString::fromLatin1(entry.command));
             QCOMPARE(shell->sheet(), entry.sheet);
             QVERIFY(entry.widget->isVisible());
-            // At the conversation's panel side, at its top and of its height.
-            QCOMPARE(inWindow(entry.widget, &window),
-                     QRect(conversation.right() + 1 - entry.width, conversation.top(), entry.width, conversation.height()));
+            // At the conversation's panel side, from under the bars to its foot.
+            QCOMPARE(inWindow(entry.widget, &window), sheetRect);
             QVERIFY(window.m_commands->action(QString::fromLatin1(entry.command))->isChecked());
             // Its left hairline.
             auto *seam = shell->findChild<QWidget *>(QStringLiteral("stageSeamSheet"));
             QVERIFY(seam && seam->isVisible());
-            QCOMPARE(inWindow(seam, &window), QRect(conversation.right() - entry.width, conversation.top(), 1, conversation.height()));
+            QCOMPARE(inWindow(seam, &window), QRect(sheetRect.left() - 1, sheetRect.top(), 1, sheetRect.height()));
             // One at a time.
             int shown = 0;
             for (const auto &other : sheets)
@@ -388,6 +392,41 @@ private slots:
             QCOMPARE(shell->sheet(), StageShell::Sheet::None);
             QVERIFY(!window.m_commands->action(QString::fromLatin1(entry.command))->isChecked());
         }
+        window.m_shell->setSheet(StageShell::Sheet::None);
+        window.close();
+    }
+
+    // A bar that shows does not lie over the Media sheet: its tabs and close are under it, where
+    // they can be reached, and the sheet has its height back when the bar goes.
+    void aBannerLeavesTheMediaSheetsCloseInReach() {
+        MainWindow window{QString(), QString()};
+        window.setConnection(QStringLiteral("ready"));
+        window.applySnapshot(snapshotOf(QSize(1920, 1080)));
+        window.resize(1600, 1000);
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        StageShell *shell = window.m_shell;
+        window.m_errorBanner->hide();
+        window.triggerCommand(QStringLiteral("window.project"));
+        QCoreApplication::processEvents();
+        const QRect sheet = inWindow(window.m_projectPanel, &window);
+        const QRect chat = inWindow(window.m_chat, &window);
+        window.showError(QStringLiteral("Add an API key"));
+        QCoreApplication::processEvents();
+        const QRect banner = inWindow(window.m_errorBanner, &window);
+        QVERIFY(banner.height() > 0);
+        QCOMPARE(inWindow(window.m_projectPanel, &window).top(), banner.bottom() + 1);
+        QCOMPARE(inWindow(window.m_projectPanel, &window).bottom(), sheet.bottom());
+        auto *close = window.m_projectPanel->findChild<QAbstractButton *>(QStringLiteral("sheetClose.media"));
+        QVERIFY(close && close->isVisible());
+        QVERIFY(!banner.intersects(inWindow(close, &window)));
+        // The rest of the arrangement is as it was.
+        QCOMPARE(inWindow(window.m_chat, &window), chat);
+        QCOMPARE(shell->rects().sidebar.top(), 0);
+        window.m_errorBanner->hide();
+        QCoreApplication::processEvents();
+        QCOMPARE(inWindow(window.m_projectPanel, &window), sheet);
+        QCOMPARE(inWindow(window.m_chat, &window), chat);
         window.m_shell->setSheet(StageShell::Sheet::None);
         window.close();
     }

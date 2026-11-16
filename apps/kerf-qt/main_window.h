@@ -355,6 +355,8 @@ private:
     void revealMedia(const QString &mediaId);
     QString mediaPath(const QString &mediaId) const;
     // The recipe `mediaId` names (recipe= on its media line), or empty.
+    // The media as the bin names it.
+    QString mediaName(const QString &mediaId) const;
     QString mediaRecipe(const QString &mediaId) const;
     // The takes a media's recipe has made, as the project lists them: each one's number,
     // its path, and whether it is the one the media is.
@@ -386,7 +388,8 @@ private:
     // Stop the making of `mediaId` that is running: its step is asked to end.
     void stopMake(const QString &mediaId);
     // What the toolbar says of a making under way, from a media_making event.
-    static QString makingStatus(const QJsonObject &making);
+    // What a making's steps say, of the media called name (its id when there is none).
+    static QString makingStatus(const QJsonObject &making, const QString &name = QString());
     // The bin's context menu for `mediaId` (empty for the bin itself).
     QMenu *binMenu(const QString &mediaId);
 
@@ -510,6 +513,8 @@ private:
     QPushButton *m_reconnectButton = nullptr;
     QFrame *m_errorBanner = nullptr;
     QLabel *m_errorMessage = nullptr;
+    // The banner holds a failed agent turn's error, which the next turn clears.
+    bool m_errorFromAgent = false;
     QScrollArea *m_timelineScroll = nullptr;
     CommandRegistry *m_commands = nullptr;
     QHash<QString, std::function<void()>> m_commandHandlers;

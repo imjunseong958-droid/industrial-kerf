@@ -1763,6 +1763,8 @@ void MainWindow::routeEvent(const QJsonObject &event) {
             m_toolbarWiring->holdForNotes(message);
         } else {
             showError(message);
+            // A failed turn is said in its thread too; the next turn takes it away.
+            m_errorFromAgent = event.value(QStringLiteral("command")).toString() == QStringLiteral("agent");
             // A refused mask edit puts the outline back.
             updateViewerMasks();
         }
@@ -1779,11 +1781,11 @@ void MainWindow::routeEvent(const QJsonObject &event) {
         // Each line a step says, as it says it: a rendering's share done, a model's
         // program's words. It stays until the next, or until the making ends.
         m_making.insert(event.value(QStringLiteral("media")).toString(), event.value(QStringLiteral("line")).toString());
-        showStatus(makingStatus(event));
+        showStatus(makingStatus(event, mediaName(event.value(QStringLiteral("media")).toString())));
     } else if (type == QStringLiteral("media_made")) {
         m_making.remove(event.value(QStringLiteral("media")).toString());
         showStatus(QStringLiteral("Made take %2 of %1 from its recipe")
-                       .arg(event.value(QStringLiteral("media")).toString())
+                       .arg(mediaName(event.value(QStringLiteral("media")).toString()))
                        .arg(event.value(QStringLiteral("take")).toInt()),
                    6000);
     } else if (type == QStringLiteral("media_make_cancelled")) {
@@ -1844,7 +1846,13 @@ void MainWindow::routeEvent(const QJsonObject &event) {
         const bool finished = status == QStringLiteral("ready") || status == QStringLiteral("complete") ||
                               status == QStringLiteral("completed") || status == QStringLiteral("failed") ||
                               status == QStringLiteral("cancelled") || status == QStringLiteral("canceled");
-        if (finished) showStatus(QStringLiteral("Export %1").arg(status), 6000);
+        // A finished export says which file it made, which is nowhere else in the window.
+        const QString made = event.value(QStringLiteral("path")).toString();
+        const bool done = status == QStringLiteral("complete") || status == QStringLiteral("completed") || status == QStringLiteral("ready");
+        if (finished)
+            showStatus(done && !made.isEmpty() ? QStringLiteral("Export %1: %2").arg(status, QFileInfo(made).fileName())
+                                               : QStringLiteral("Export %1").arg(status),
+                       6000);
         // What was made goes home to its folder.
         if (status == QStringLiteral("complete") || status == QStringLiteral("completed") || status == QStringLiteral("ready")) flyExportHome();
         if (!event.value(QStringLiteral("path")).toString().isEmpty()) addActivity(QStringLiteral("export"), event.value(QStringLiteral("path")).toString());
@@ -2061,7 +2069,13 @@ void MainWindow::addActivity(const QString &kind, const QString &text) {
 }
 
 void MainWindow::showError(const QString &message) {
-    m_errorMessage->setText(message);
+    m_errorFromAgent = false;
+    // An engine diagnostic opens with its severity and code ("error[ripple.blocked]: "), which
+    // are for tools that read it; a person reads what follows.
+    static const QRegularExpression diagnostic(QStringLiteral("^(?:error|warning)\\[[A-Za-z0-9_.\\-]+\\](?: \\d+:\\d+)?: "));
+    QString readable = message;
+    readable.remove(diagnostic);
+    m_errorMessage->setText(readable);
     m_errorBanner->show();
     // The toolbar's subtitle says so too, until it is dismissed.
     if (!m_errorBanner->isHidden()) layoutProjectTitle();

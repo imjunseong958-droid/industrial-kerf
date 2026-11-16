@@ -1765,7 +1765,7 @@ fn native_agent(
         .filter(|key| !key.trim().is_empty())
         .or_else(|| std::env::var(key_name).ok())
         .filter(|key| !key.trim().is_empty())
-        .ok_or_else(|| format!("Add an API key in Agent Settings or set {key_name}"))?;
+        .ok_or_else(|| format!("Add an API key in Settings ▸ Advanced or set {key_name}"))?;
     let api_mode = match settings.api_mode {
         Some(mode) => mode,
         None => match std::env::var("OPENAI_API_MODE") {
@@ -2269,7 +2269,11 @@ fn agent_worker(
                 &tx,
                 json!({"type":"agent_state","state":"failed","message":err}),
             );
-            error(&tx, err);
+            // Named as the turn's, so the editor clears it when the next turn starts.
+            emit(
+                &tx,
+                json!({"type":"error","command":"agent","message":err}),
+            );
         }
         if let Some((client, turn, before)) = kept {
             let proposal = client

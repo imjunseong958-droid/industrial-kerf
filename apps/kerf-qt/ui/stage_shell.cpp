@@ -500,9 +500,20 @@ void StageShell::transition(const QRect &pictureOrigin) {
     m_moves->start();
 }
 
+int StageShell::barsHeight(int barWidth) const {
+    int bars = 0;
+    for (const QWidget *banner : std::as_const(m_banners))
+        if (!banner->isHidden()) bars += banner->hasHeightForWidth() ? banner->heightForWidth(barWidth) : banner->sizeHint().height();
+    return bars;
+}
+
 stage::Rects StageShell::rects() const {
     constexpr int toolbar = tokens::layout::toolbar;
     stage::Rects out = stage::rects(QSize(width(), height() + toolbar), m_aspect, toolbar, m_panes);
+    // The bars lie over the content's top. A sheet starts under them, so that its
+    // tabs and its close are not hidden while one shows.
+    const int bars = std::min(barsHeight(width() - out.sidebar.width()), std::max(0, out.media.height() / 2));
+    if (bars > 0 && !out.media.isNull()) out.media.adjust(0, bars, 0, 0);
     for (QRect *rect : {&out.sidebar, &out.panel, &out.reel, &out.slot, &out.picture, &out.transport, &out.conversation, &out.timeline, &out.media})
         if (!rect->isNull()) rect->translate(0, -toolbar);
     return out;
