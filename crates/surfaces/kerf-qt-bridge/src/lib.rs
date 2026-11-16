@@ -582,10 +582,8 @@ fn with_proposal_timeline(mut snapshot: Value, state: &StateSnapshot) -> Value {
         }
     }
     snapshot["proposalTimelines"] = Value::Object(timelines);
-    for (field, empty) in [("proposals", json!([]))] {
-        if snapshot.get(field).is_none() {
-            snapshot[field] = empty;
-        }
+    if snapshot.get("proposals").is_none() {
+        snapshot["proposals"] = json!([]);
     }
     snapshot
 }
