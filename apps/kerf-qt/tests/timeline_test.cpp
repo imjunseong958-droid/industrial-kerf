@@ -530,11 +530,12 @@ private slots:
         const auto at = [&](int x, int y) { return image.pixelColor(QPoint(x, y) * ratio); };
         // The heads are chrome, the lanes the well.
         QVERIFY(near(at(4, row.center().y()), token(tokens::chrome)));
-        // A targeted track's id sits on the on fill.
+        // Every track's id is on a chip: raised, and a step more (hover2)
+        // when the track is targeted.
         const QRect target = timeline.headerControlRect(v1, C::Target);
-        QVERIFY(near(at(target.left() + 2, target.top() + 3), token(tokens::on), 3));
+        QVERIFY(near(at(target.left() + 2, target.top() + 3), token(tokens::hover2), 3));
         const QRect untargeted = timeline.headerControlRect(3, C::Target);
-        QVERIFY(near(at(untargeted.left() + 2, untargeted.top() + 3), token(tokens::chrome), 3));
+        QVERIFY(near(at(untargeted.left() + 2, untargeted.top() + 3), token(tokens::raised), 3));
         // line2 parts picture from sound; line parts the rest.
         QVERIFY(near(at(4, row.bottom()), laidOn(token(tokens::chrome), token(tokens::line2))));
         QVERIFY(near(at(4, timeline.trackHeaderRect(3).bottom()), laidOn(token(tokens::chrome), token(tokens::line))));
@@ -910,8 +911,8 @@ private slots:
 
     // Flat, neutral clips (mockup-spec 7.4): card with an inset line2,
     // radius 4, one point in from the lane and a point short of the next;
-    // selected in 1.5 ink; titles and captions on raised; video name bars
-    // on black at 55%; sound on its peak and RMS greys.
+    // selected in 1.5 ink; titles and captions on raised; a picture clip with
+    // no frames to show has no name bar; sound on its peak and RMS greys.
     void timelineClipsAreFlatAndNeutral() {
         MediaArtwork artwork;
         artwork.peaks.insert(QStringLiteral("snd"), fullScalePeaks(10.0));
@@ -950,9 +951,9 @@ private slots:
         QCOMPARE(a.right() + 2, b.left());
         // The pixel between them is the well.
         QVERIFY(near(at(a.right() + 1, a.center().y()), token(tokens::well)));
-        // Card under the name bar's black at 55%, inset line2 at the edge.
+        // Card, with no frames to show and so no name bar; inset line2 at the edge.
         QVERIFY(near(at(a.center().x(), a.bottom() - 6), token(tokens::card)));
-        QVERIFY(near(at(a.center().x() + 30, a.top() + 3), laidOn(token(tokens::card), QColor(0, 0, 0, 140)), 3));
+        QVERIFY(near(at(a.center().x() + 30, a.top() + 3), token(tokens::card), 3));
         const QRect c = timeline.clipBounds(QStringLiteral("A019_C001"));
         QVERIFY(near(at(c.left(), c.center().y()), laidOn(token(tokens::card), token(tokens::line2))));
         // Selected: 1.5 ink inside its edge.
@@ -1000,6 +1001,9 @@ private slots:
         QVERIFY(near(image.pixelColor(QPoint(clip.left() + tile / 2, y) * ratio), QColor("#7a8a9a"), 3));
         QCOMPARE(image.pixelColor(QPoint(clip.left() + tile, y) * ratio).rgb(), qRgb(0, 0, 0));
         QVERIFY(near(image.pixelColor(QPoint(clip.left() + tile + 2, y) * ratio), QColor("#7a8a9a"), 3));
+        // Over frames, its name has the bar: the frame under black at 55%.
+        QVERIFY(near(image.pixelColor(QPoint(clip.left() + tile / 2, clip.top() + 3) * ratio),
+                     laidOn(QColor("#7a8a9a"), QColor(0, 0, 0, 140)), 3));
     }
 
     // The QC dot (--neg) leads the name of a clip a finished check found a

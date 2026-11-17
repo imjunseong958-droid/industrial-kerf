@@ -2069,9 +2069,20 @@ void TimelineWidget::paintClip(QPainter &p, const QRect &visible, int row, const
             paintNameBar(p, QRectF(rect.left(), rect.top() + std::floor((rect.height() - kNameBarHeight) / 2.0), rect.width(), kNameBarHeight),
                          name, clipSecondary(clip, kind), qc, fx, false, C(tk::ink));
     } else if (rect.width() >= kNameBarFrom) {
-        const QRectF bar(rect.left(), rect.top(), rect.width(), std::min(kNameBarHeight, rect.height()));
-        if (!audio) p.fillRect(bar, withAlpha(qRgb(0, 0, 0), 0.55));
-        paintNameBar(p, bar, name, clipSecondary(clip, kind), qc, fx, audio, C(tk::ink));
+        // The dark bar is for a name over a picture, to keep it read: only
+        // over frames. A sound's name sits over its waveform, shadowed. A clip
+        // with nothing yet drawn under its name says it in its middle, as a
+        // title does.
+        const bool overPicture = !card && !audio && (strip || poster);
+        const bool overWaveform = audio && peaks;
+        if (overPicture || overWaveform) {
+            const QRectF bar(rect.left(), rect.top(), rect.width(), std::min(kNameBarHeight, rect.height()));
+            if (overPicture) p.fillRect(bar, withAlpha(qRgb(0, 0, 0), 0.55));
+            paintNameBar(p, bar, name, clipSecondary(clip, kind), qc, fx, overWaveform, C(tk::ink));
+        } else {
+            paintNameBar(p, QRectF(rect.left(), rect.top() + std::floor((rect.height() - kNameBarHeight) / 2.0), rect.width(), kNameBarHeight),
+                         name, clipSecondary(clip, kind), qc, fx, false, C(tk::ink));
+        }
     }
     p.restore();
     if (audio && !card) paintGainBand(p, rect, clip);
@@ -2279,15 +2290,20 @@ void TimelineWidget::paintTrackHeader(QPainter &p, int row, const QJsonObject &t
         if (outline.alpha() > 0) ui::paintInsetLine(p, QRectF(rect), tk::radius::small, outline, 1.0);
     };
     const auto hovered = [&](HeaderControl control) { return m_hoverControl == row * 8 + int(control); };
-    // The target: the track's id, held on when targeted.
+    // The target: the track's id on a chip, a step up from the head, so it
+    // reads as a control whether or not it is held; held (targeted), a step
+    // more, outlined, its id in ink 500. The id's capitals are centred.
     {
         const QRect rect = headerControlRect(row, HeaderControl::Target).translated(left - stickyOrigin().x(), 0);
         const bool targeted = targets.contains(id);
-        if (targeted) box(rect, C(tk::on), withAlpha(qRgb(255, 255, 255), 0.20));
-        else box(rect, hovered(HeaderControl::Target) ? C(tk::raised) : QColor(Qt::transparent), C(tk::line));
-        p.setFont(targeted ? monoSmallStrongFont() : monoSmallFont());
-        p.setPen(C(targeted || hovered(HeaderControl::Target) ? tk::ink : tk::ink3));
-        p.drawText(rect.adjusted(0, 2, 0, 0), Qt::AlignHCenter | Qt::AlignTop, trackRowLabel(row));
+        if (targeted) box(rect, C(tk::hover2), C(tk::line2));
+        else box(rect, C(hovered(HeaderControl::Target) ? tk::on : tk::raised), QColor(Qt::transparent));
+        const QFont &font = targeted ? monoSmallStrongFont() : monoSmallFont();
+        const QString label = trackRowLabel(row);
+        p.setFont(font);
+        p.setPen(C(targeted ? tk::ink : hovered(HeaderControl::Target) ? tk::ink : tk::ink2));
+        const qreal wide = QFontMetricsF(font).horizontalAdvance(label);
+        p.drawText(QPointF(rect.left() + (rect.width() - wide) / 2.0, ui::capBaseline(rect.top(), rect.height(), font)), label);
     }
     // The name, to the head's end; on hover, to the toggles. A muted or hidden
     // track reads dim, so its state shows with the toggles out of sight.
