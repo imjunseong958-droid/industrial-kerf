@@ -12,6 +12,8 @@
 //   a step deleted   recipe_edit {media, was, line, remove: true} -> recipe {…, edited}
 //   a take's recipe restored   recipe_edit {media, was, restore: <take>} -> recipe {…, edited}
 //   a signal drawn   edit {ops: [set <clip> value {keys}]}, as the timeline's own drawing
+//   a clip from footage     shot_picture {clip, of} -> shot_picture {path}, the clip's first frame to point on;
+//                           shot_follow {clip, of, points, outside} -> state, then shot_followed {says}, or error
 //   a signal from a sound   signal_from_sound {clip, of} -> state, the clip's value keyed where the sound's sounds start
 //   a take chosen    media_replace {media, path}, as the bin's Takes
 //   Make, Stop       the registry's media.make and media.makeCancel, as the bin's

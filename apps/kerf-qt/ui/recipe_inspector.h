@@ -25,6 +25,8 @@
 #include "test_friends.h"
 
 #include <QHash>
+#include <QList>
+#include <QPointF>
 #include <QImage>
 #include <QJsonObject>
 #include <QJsonArray>
@@ -70,6 +72,11 @@ public:
     void setTakeReadings(const QHash<int, QJsonObject> &readings, int best, const QString &state);
     // Pictures by their path in the project: a take's, a guide as it was drawn.
     void setPictures(const QHash<QString, QImage> &pictures);
+    // A clip read from footage (docs/shots.md, From footage), `of` being what
+    // for, `moves` or `matte`: the picture to point on once it is drawn, and
+    // what came of following what was pointed at, or why it could not be.
+    void setShotPicture(const QString &clip, const QString &of, const QImage &picture);
+    void setShotFollowed(const QString &clip, const QString &of, const QString &says, bool failed);
     // How tall the card wants to be for what it holds, at most `most`.
     int heightFor(int most) const;
 
@@ -82,6 +89,11 @@ signals:
     void signalDrawn(const QString &clip, const QJsonArray &keys);
     // Have the signal clip `clip` be 1 where the sound clip `of` plays starts a sound.
     void signalFromSound(const QString &clip, const QString &of);
+    // Draw the picture to point on, to read clip `clip` from footage for `of`.
+    void shotPictureRequested(const QString &clip, const QString &of);
+    // Follow what was pointed at: `points` on it and `outside` off it, each
+    // [x, y] from 0 to 1 across the picture and down it.
+    void shotFollowRequested(const QString &clip, const QString &of, const QJsonArray &points, const QJsonArray &outside);
     // Have the shot be take `number`, whose file the document names as `path`.
     void takeChosen(int number, const QString &path);
     // Hold each take to its guide: read where its subject is beside where it was asked for.
@@ -118,6 +130,8 @@ private:
     void buildModel(const graph::Recipe &recipe, const graph::Node &node);
     void buildRender(const graph::Node &node);
     void buildSignal(const graph::Node &node);
+    // Where a clip is read from footage: asking for the picture, pointing on it, and what came of it.
+    void buildPointing(const QString &clip, const QString &of);
     void buildTakes(const graph::Node &node);
     void buildReads(const graph::Recipe &recipe, const graph::Node &node);
     // What a step's card ends with: taking the step out of the recipe.
@@ -154,6 +168,19 @@ private:
     QString m_readState;
     QHash<QString, QImage> m_pictures;
     graph::Workflow m_workflow;
+    // The clip being read from footage, and how far that has got: `drawing`
+    // its picture, `pointing` on it, `following`, or `said`.
+    struct Pointing {
+        QString clip;
+        QString of;
+        QString state;
+        QImage picture;
+        QList<QPointF> on;
+        QList<QPointF> off;
+        QString says;
+        bool failed = false;
+    };
+    Pointing m_pointing;
     // A Part's yes-or-no inputs, by the field's name.
     QHash<QString, QAbstractButton *> m_switches;
 };

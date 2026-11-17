@@ -634,6 +634,20 @@ of its sequence on sound tracks that play media with sound; choosing one sends
 `value` where that sound's onsets fall (`kerf_shots::signals::from_sound`, the
 reading an agent's `look` with `signal` makes) as one edit of the project.
 
+A clip is read from footage on two cards (`RecipeInspector::buildPointing`):
+Follow the picture, on the card of a clip a line names with `moves=`, and Cut
+out of the picture, on the card of a guide with `matte=`. Either sends
+`shot_picture {clip, of}`, `of` being `moves` or `matte`, and the bridge
+answers with `shot_picture {path, width, height}`, the clip's first frame as a
+file, which the card shows as a `PointPicture` (`ui/point_picture.h`). A press
+is a point from 0 to 1 across and down; for `moves` the one press sends
+`shot_follow {clip, of, points: [[x, y]]}`, and for `matte` presses gather,
+those with Alt or the other button as `outside`, until Cut out sends them. The
+bridge follows off its worker (`kerf_shots::tracks`, what an agent's `look`
+with `track` writes its keys with), applies the one edit, and answers
+`shot_followed {says, frames, keyframes, lostAt}`, or `error` with `command`
+`shot_picture` or `shot_follow`, which is said on the card and not as a banner.
+
 Restore take's recipe, in the takes' card, shows for the take the shot is
 when what it was made from has changed and the take kept its recipe (`kept` on
 the take); it sends `recipe_edit {restore: <take>}`, which the bridge answers

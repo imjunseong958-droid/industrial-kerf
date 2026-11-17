@@ -85,6 +85,9 @@ public:
 
     // What each take reads held to its guide, by its number, which holds best
     // (0 for none), and how the reading stands (RecipeInspector::setTakeReadings).
+    // The picture to point on for a clip read from footage, and what came of following (RecipeInspector).
+    void setShotPicture(const QString &clip, const QString &of, const QImage &picture);
+    void setShotFollowed(const QString &clip, const QString &of, const QString &says, bool failed);
     void setTakeReadings(const QHash<int, QJsonObject> &readings, int best, const QString &state);
 
     ui::Button *makeButton() const { return m_make; }
@@ -101,6 +104,9 @@ signals:
     void removed(int line, const QString &key, int nth);
     void signalDrawn(const QString &clip, const QJsonArray &keys);
     void signalFromSound(const QString &clip, const QString &of);
+    // A clip read from footage: the picture to point on asked for, and what was pointed at to follow.
+    void shotPictureRequested(const QString &clip, const QString &of);
+    void shotFollowRequested(const QString &clip, const QString &of, const QJsonArray &points, const QJsonArray &outside);
     void takeChosen(int number, const QString &path);
     // Hold the shot's takes to its guide.
     void takesReadRequested();

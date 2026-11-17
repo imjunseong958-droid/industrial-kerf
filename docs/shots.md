@@ -249,6 +249,8 @@ the take; the person says how much of that it does without asking them.
   | draws an edge to a step, or lets one go | the same, the name its reader gives it (`signal`, `ref`, `guide`, `moves`), with no `value` to let it go |
   | draws a signal's curve | an `edit` script that sets the clip's `value` |
   | sets a signal from a sound of its sequence | `look` with `signal`, and the line it gives in an `edit` |
+  | has a clip follow something in footage, for `moves=` | `look` with `track`: `x`, `y` and `clip`, and the line it gives in an `edit` |
+  | cuts a clip to a thing it shows, for `matte=` | `look` with `track`: `inside`, `outside` and `clip`, and the line it gives in an `edit` |
   | opens a model into its workflow | `look` with `workflow`: every node and input, the blanks and what fills each now |
   | sets a value in the workflow | `edit` with `workflowSet`: a copy in the project, named by the line's `workflow=` |
   | points a link of the workflow at another node | `workflowSet` with `link: [<node>, <output>]` in place of `value` |
@@ -1272,6 +1274,31 @@ model that, a picture to start from (`first=<picture>`), and the prompt:
 is in the picture where the clip starts goes where the clip goes, in 4
 steps, by weights added to the model's for that (`lora=`); the rest
 of the picture stays about where it was, since nothing is said of it.
+### From footage
+
+Where the thing is in footage, the clip is led by it and not placed by hand.
+Put a clip over the footage in its sequence, one that draws nothing of
+moment, and name it with `moves=`. In the shot's graph its card has **Follow
+the picture**: the clip's first frame is drawn, without the clip, and a press
+on it is the point the clip follows for as long as it runs, as keys of its
+`x` and `y` in one edit that undo takes back.
+
+- A point is followed by the detail around it: a corner, a mark, an edge.
+- A thing of one colour has none. Where the point cannot be followed at all,
+  the thing it is on is cut out by colour and edges and followed by its
+  middle, if it covers no more than a fifth of the frame and never goes
+  further in a frame than it is wide and tall together. The card says which
+  was followed.
+- What is lost before the clip ends is keyed as far as it went, and the card
+  says the frame. A thing that goes behind another, or into something of
+  its own colour, is lost there.
+
+An agent does the same with `look`: `track` with `x`, `y` and `clip` follows
+the point for as long as the clip runs when no `from` and `to` are given,
+the clip not drawn, and gives the `set <clip> x=… y=…` line to run with
+`edit`. It follows the point only; for a thing of one colour it cuts the
+thing out with `inside` and reads where the outline goes.
+
 `shot-directed`, which comes with `kerf-comfy`, reads all four directions on
 one line:
 
@@ -1342,7 +1369,16 @@ render s2 {ids.mp4} pass=ids size=832x480 rate=16
 - **`matte=<clip>`**, in place of a pass: that one clip in white on black,
   as much of it as shows, so what stands before it is cut out of it. It is
   the mask a model is handed to make a thing anew in one place
-  (`guide_mask={mask.mp4}`).
+  (`guide_mask={mask.mp4}`). A clip of footage is white all over until it is
+  masked to the thing: in the shot's graph, the card of a guide that is a
+  matte has **Cut out of the picture**, which draws the clip's first frame
+  with nothing else of its sequence over it. Press on the thing in as many
+  places as tell it from the rest, and with Alt held, or the other button,
+  on what is taken for it; **Cut out** masks the clip to it through the
+  whole clip (`mask <clip> add object points=…`, or `set` over the cut
+  before), one edit that undo takes back. It goes by colour and edges. An
+  agent cuts the same with `look` (`track` with `inside`, `outside`, `box`
+  and `clip`), where it can also pick a trained model (`model`).
 - **`pass=normals`**: which way each pixel faces, as a color, in the
   camera's own space: to the right as red, up as green, and toward the
   camera as blue, each from -1 to 1 as black to full, as a normal map has
