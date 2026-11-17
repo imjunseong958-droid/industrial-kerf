@@ -368,7 +368,7 @@ EditorTheme makeEditorTheme() {
     t.clipMusic = clipStyle(token(tk::card), token(tk::card), cardLine, token(tk::ink), wave);
     t.clipGenerator = clipStyle(token(tk::raised), token(tk::raised), raisedLine, token(tk::ink), token(tk::ink2));
     t.clipCaption = clipStyle(token(tk::raised), token(tk::raised), raisedLine, token(tk::ink2), token(tk::ink2));
-    // The playhead is its own red, stroked in the stage's dark.
+    // The playhead is its own violet, stroked in the stage's dark.
     t.playhead = token(tk::playhead);
     t.playheadHalo = token(tk::surround);
     // The skimmed playhead: track2, which reads at 3:1 on the ruler and its

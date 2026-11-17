@@ -65,8 +65,12 @@ constexpr QRgb accentWash = qRgba(0x4a, 0x6a, 0xb0, alpha(0.14)); // defined by 
 constexpr QRgb accentText = qRgb(0xff, 0xff, 0xff);               // text on an accent fill (.btn.p)
 constexpr QRgb pos = qRgb(0x86, 0xa8, 0x7c);                      // sage: pass dots, diff additions, connected
 constexpr QRgb neg = qRgb(0xd8, 0x80, 0x6e);                      // faded brick: fail, blocking, overlap box, diff removals, meter top
-constexpr QRgb playhead = qRgb(0xd0, 0x63, 0x52);                 // playheads: the brick, a step stronger, to be found at once
+constexpr QRgb playhead = qRgb(0xa0, 0x84, 0xd4);                 // playheads: a dusty violet, the one in the window, found at once
 constexpr QRgb warn = qRgb(0xc8, 0xa2, 0x64);                     // ochre: meter -18...-6 dBFS band, what wants a look
+
+// A clip an open proposal changes: sage, as an addition is in a diff. Not
+// Kerf's blue, which says Kerf is at work, nor the violet playhead beside it.
+constexpr QRgb proposed = pos;
 
 // What a small mark says of a check. A check that did not pass wants a look,
 // and its request ("Ask Kerf", "Run QC") fixes it: the same ochre for both,

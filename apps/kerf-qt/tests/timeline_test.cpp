@@ -794,7 +794,7 @@ private slots:
         // 17.32, has faded.
         const auto inked = [&](double seconds) {
             int count = 0;
-            // The label's ink only: the playhead's red head may stand beside a
+            // The label's ink only: the playhead's violet head may stand beside a
             // label. The ink is paper, a little warmer than grey (red at most
             // 24 over blue); the head's red is far past that.
             for (int px = x(seconds) + 4; px < x(seconds) + 40; ++px)
@@ -806,7 +806,7 @@ private slots:
         };
         QVERIFY(inked(4.0) > 10);
         QVERIFY2(inked(16.0) == 0, qPrintable(QString::number(inked(16.0))));
-        // The playhead's head at top 13, in its red with a dark edge.
+        // The playhead's head at top 13, in its violet with a dark edge.
         QVERIFY(near(at(x(17.32), 17), token(tokens::playhead), 6));
         // The sequence marker's flag at 13.2 s, in ink2.
         const QRect flag = timeline.markerBounds(QStringLiteral("act2"));
@@ -847,9 +847,9 @@ private slots:
             if (timeline.trackRowId(row) == QStringLiteral("V1")) v1 = row;
             if (timeline.trackRowId(row) == QStringLiteral("V2")) v2 = row;
         }
-        // The clip it changes is outlined in the accent.
+        // The clip it changes is outlined in sage, as an addition in a diff.
         const QRect changed = timeline.clipBounds(QStringLiteral("B003_C011"));
-        QVERIFY(near(at(QPoint(changed.left(), changed.center().y())), laidOn(token(tokens::card), token(tokens::accent)), 3));
+        QVERIFY(near(at(QPoint(changed.left(), changed.center().y())), laidOn(token(tokens::card), token(tokens::proposed)), 3));
         const int veilX = bandRect.center().x();
         QVERIFY(near(at(QPoint(veilX, timeline.trackHeaderRect(v2).center().y())), token(tokens::well), 1));
         // On V1 the veil shows in the lane's top line, over the clips' inset.

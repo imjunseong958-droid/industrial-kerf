@@ -37,7 +37,7 @@ private slots:
             {card, "#1c1c1c"},     {raised, "#262626"},      {on, "#303030"},     {hover2, "#363636"},
             {ink, "#ece6da"},      {ink2, "#ada79b"},        {ink3, "#878278"},   {dis, "#5c5c5c"},
             {track, "#3a3a3a"},    {track2, "#6a6a6a"},      {accent, "#4a6ab0"}, {accentHover, "#405e9e"},
-            {accentInk, "#a0b4d8"}, {pos, "#86a87c"},        {neg, "#d8806e"},    {playhead, "#d06352"},
+            {accentInk, "#a0b4d8"}, {pos, "#86a87c"},        {neg, "#d8806e"},    {playhead, "#a084d4"},
             {warn, "#c8a264"}};
         for (const auto &[value, hex] : opaque) {
             QCOMPARE(color(value), QColor(QString::fromLatin1(hex)));

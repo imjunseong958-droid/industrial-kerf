@@ -167,10 +167,10 @@ private slots:
         QCOMPARE(t.accent.rgb(), tokens::color(tokens::accent).rgb());
         QCOMPARE(l.accent.rgb(), t.accent.rgb());
         // Kerf's own marks are the accent: focus, the agent's work, its
-        // avatar and the mask handles. The playhead is the design's red.
+        // avatar and the mask handles. The playhead is the design's violet.
         for (const QColor &mark : {t.focusRing, t.assistant, t.chatAvatarKerf, t.maskHandleFill})
             QCOMPARE(mark.rgb(), t.accent.rgb());
-        QCOMPARE(t.playhead.rgb(), QColor("#d06352").rgb());
+        QCOMPARE(t.playhead.rgb(), QColor("#a084d4").rgb());
         // The accent as text is the accent ink.
         QCOMPARE(t.accentText.rgb(), QColor("#a0b4d8").rgb());
         QVERIFY(contrastRatio(l.selectionText, l.selection) >= 4.5);
@@ -372,7 +372,7 @@ private slots:
         for (const QColor &surface : {t.ruler, t.rulerBottom, t.playheadHalo})
             QVERIFY2(contrastRatio(t.playheadIdle, surface) + 0.35 <= contrastRatio(t.playhead, surface),
                      qPrintable(QStringLiteral("%1 and %2 on %3").arg(t.playheadIdle.name(), t.playhead.name(), surface.name())));
-        // The playhead is the design's red, as it is, stroked in the stage's dark.
+        // The playhead is the design's violet, as it is, stroked in the stage's dark.
         QCOMPARE(t.playhead.rgb(), tokens::color(tokens::playhead).rgb());
         QCOMPARE(t.playheadHalo.rgb(), tokens::color(tokens::surround).rgb());
         const LauncherTheme l = launcherTheme();
@@ -430,7 +430,7 @@ private slots:
                 {"#878278", theme.ink3},      {"#5c5c5c", theme.textDisabled},   {"#3a3a3a", theme.track},
                 {"#6a6a6a", theme.track2},    {"#4a6ab0", theme.accent},         {"#405e9e", theme.accentHover},
                 {"#a0b4d8", theme.accentInk}, {"#86a87c", theme.success},        {"#d8806e", theme.error},
-                {"#d06352", theme.playhead},  {"#c8a264", theme.warning},
+                {"#a084d4", theme.playhead},  {"#c8a264", theme.warning},
             };
             for (const auto &[code, color] : ramp)
                 QVERIFY2(color.rgba() == QColor(code).rgba(), qPrintable(QStringLiteral("%1 for %2").arg(color.name(), code)));

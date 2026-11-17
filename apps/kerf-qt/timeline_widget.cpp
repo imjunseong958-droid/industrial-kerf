@@ -2075,7 +2075,7 @@ void TimelineWidget::paintClip(QPainter &p, const QRect &visible, int row, const
     }
     p.restore();
     if (audio && !card) paintGainBand(p, rect, clip);
-    // Its outline: line2; the accent when an open proposal changes it; 1.5 ink when selected.
+    // Its outline: line2; sage when an open proposal changes it; 1.5 ink when selected.
     // Waiting to be made or with no file, dashed; being made, amber.
     const bool dashed = absent || making.state == ActivityState::Queued;
     if (selected) {
@@ -2091,7 +2091,7 @@ void TimelineWidget::paintClip(QPainter &p, const QRect &visible, int row, const
         p.restore();
     } else {
         ui::paintInsetLine(p, rect, kClipRadius,
-                           C(making.state == ActivityState::Making ? tk::activity::gpu : movedByProposal(id) ? tk::accent : tk::line2), 1.0);
+                           C(making.state == ActivityState::Making ? tk::activity::gpu : movedByProposal(id) ? tk::proposed : tk::line2), 1.0);
     }
     // What holds still is said here; a making's clock goes on over the lanes.
     if (dashed) paintActivityLabel(p, rect, making, 0);
