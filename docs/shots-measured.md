@@ -570,3 +570,40 @@ head of each part are the architecture's.
    Choosing a take: Takes, on a media in the bin, lists
    the takes its recipe has made, which a snapshot's sources now carry,
    and has the media be another.
+9. **All four on one line** (2026-11-17), on the same model, Wan 2.1 VACE
+   1.3B: a court blocked in depth, a ball on a path that bounces across it
+   (`moves=ball`), a reference picture of the ball, and a signal that is 1
+   for four frames at each bounce, 65 frames at 832x480 and 16 a second,
+   seed 7. `shot` reads the guide and the reference and says the other two
+   are left out. What reads all four is `shot-directed`: the depth guide
+   and the reference as `shot` hands them, the clip's layout laid over them
+   by a second node of the same kind, and the guide handed as plain grey on
+   the frames where the signal is 1.
+
+   | The workflow | Reads | On the server | The ball in the take |
+   |---|---|---|---|
+   | `shot` | guide, ref | 88 s | the guide's box, as a flat orange slab |
+   | the signal as a mask a frame, as `shot-timed` hands it | all four | 105 s | no court and no ball: the depth guide itself, in grey |
+   | `shot-directed` | all four | 124 s | a round ball where the layout has its box |
+   | `shot-directed`, `moves_strength=1.6` | all four | 122 s | the same, the wall and floor coarser |
+   | `shot-directed`, no `signal=` on the line | guide, ref, moves | 123 s | a round ball where the layout has its box |
+
+   The second row is why `shot-directed` does not hand a signal as a mask:
+   to this model a mask of 0 keeps the guide's own pixels, which for a
+   picture guide is the footage kept and for a depth guide is its depth
+   given back as the take. Laid over more strongly, the layout holds no
+   better, so it is 1. The last row is the stand-in rule on the real
+   server: with no signal the node that lays grey over the guide is left
+   out and the guide is read as it is.
+
+   Not shown by numbers. `look` with `placed` followed the ball on 12 frames
+   of the 51 the guide shows it on in `shot`'s take and on 8 in
+   `shot-directed`'s (`overlap` 0.16 and 0.07): a ball that crosses a third
+   of the frame between bounces is lost by what follows it, so the two
+   takes were told apart by looking at every eighth frame, not by measure.
+   On the frames where the ball dips behind the tipped floor the guide's
+   sequence shows nothing of it, the layout has no box, and the take has no
+   ball: the model was handed nothing there. The reference was a flat
+   stand-in, an orange square, so what the reference adds was not looked
+   at. Still wanting: a subject followed fast enough to measure, and a
+   model that takes the signal as a number.

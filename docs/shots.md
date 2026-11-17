@@ -603,6 +603,19 @@ start from. `kerf-comfy --list` names those that come with it; the others
 | `{signal}`, `{signal2}` … | A signal the line gives, in the order it gives them, as a number for each frame asked for, with commas between: `0,0.25,0.5,1`. A node that reads one the line does not give is left out the same way. |
 | any other, such as `{steps}` | The value the workflow sets, or the same name on the line: `steps=30 strength=0.6`. |
 
+A node left out takes with it what the server says cannot do without it,
+and an input the server lets a node do without loses its link. Where a node
+of your workflow is nothing without an input the server would let it run
+without, a second guide laid over the first in a node of its own, say so
+beside `workflow`, and which node stands in for it:
+
+```json
+"without": { "22": { "wants": ["control_video"], "reads": "9" } }
+```
+
+Node 22 is then left out when its `control_video` is, and what read node 22
+reads node 9, output for output. `shot-directed` is written this way.
+
 What it does with a request:
 
 - It fits the guide to the model. A guide drawn at 1920x1080 and 24 frames a
@@ -1014,7 +1027,14 @@ generate model=into prompt="a red shipping container on the street" guide=../foo
 And
 one reads a signal, `shot-timed`: a shot that follows its guide where the
 signal is 0 and is made anew from the prompt where it is 1, the signal
-reaching the model as a mask a frame. `shot` has no blank for one, so a
+reaching the model as a mask a frame. That is for a guide that is a
+picture: where the signal is 0 the take keeps the guide's own pixels, so a
+depth guide read that way comes back as its depth. For a depth guide there
+is `shot-directed`, which reads a signal beside a guide, a reference and
+where a clip goes: on the frames where the signal is 1 the guide is handed
+over as plain grey, which tells the model nothing, and those frames are made
+from the prompt, the reference and the layout alone
+([Where a thing goes](#where-a-thing-goes)). `shot` has no blank for one, so a
 line that names a signal for it is told that it is left out. A workflow of
 your own takes one at a `{signal}` blank, in a node that takes a list of
 numbers, a frame each, or at `{signal_video}`, as a grey video of the
@@ -1092,6 +1112,23 @@ model that, a picture to start from (`first=<picture>`), and the prompt:
 is in the picture where the clip starts goes where the clip goes, in 4
 steps, by weights added to the model's for that (`lora=`); the rest
 of the picture stays about where it was, since nothing is said of it.
+`shot-directed`, which comes with `kerf-comfy`, reads all four directions on
+one line:
+
+```text
+render court {depth.mp4} pass=depth size=832x480 rate=16
+generate model=video prompt="a basketball bounces on a court" guide={depth.mp4} ref={ball.png} moves=ball signal=bounce
+```
+
+The depth guide and the reference go to the model as `shot` hands them, the
+clip's layout is laid over them in a node of its own (`moves_strength=` is
+how hard it holds, 1 unless the line says), and the signal lets the guide go
+where it is 1. A line that gives only some of the four is served by the same
+workflow: with no `moves` and no `signal` it sends what `shot` sends. The
+layout has a clip's box only on the frames the guide's sequence shows it, so
+a subject hidden there, behind a floor it dips under, is not in the take on
+those frames either.
+
 `moves-shown`, which comes
 with `kerf-comfy` too, has the node that reads points read `{moves}` and draws them over a
 guide (`generate model=<name> guide=<take> moves=<clip>`), with no model.
