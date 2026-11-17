@@ -361,7 +361,7 @@ pub(super) fn metadata(name: &str) -> Option<(&'static str, Value, ToolAnnotatio
                     "recipes": {"type": "object", "additionalProperties": {"type": "string"}, "description": "Recipe files to write, by the path a media line's `recipe=` names, each with its whole text. A file that is there and holds another text is not written over: the text is kept beside it as its next version (`shots/open@2.kerfrecipe`), and the media that name it move to it in this proposal, so that undo goes back. Alone, or with a script that adds the media line."},
                     "recipeSet": {"type": "array", "minItems": 1, "items": {"type": "object", "properties": {"media": {"type": "string"}, "line": {"type": "integer", "minimum": 1}, "key": {"type": "string"}, "nth": {"type": "integer", "minimum": 0}, "value": {"type": "string"}, "add": {"type": "string"}, "remove": {"type": "boolean"}}, "required": ["media"], "additionalProperties": false}, "description": "Words of a media's recipe to set, each the name `key` on line `line` (as `look` `graph` numbers them) to `value`, as it is written after the `=` with no quotes around it: `{media: \"m3\", line: 4, key: \"seed\", value: \"8\"}`. That word alone changes; the recipe's comments, its order and its other lines stay, which writing the whole text with `recipes` does not promise. A name the line does not have is added at its end, so an input is wired in the same way (`key: \"signal\", value: \"bounce\"`, or `key: \"ref\", value: \"{ball.png}\"` for a file a step makes); `nth` picks among several words of one name, from 0; with no `value` the word is taken off the line. What a line cannot take is refused as a making would refuse it. A step is added the same way, `{media, line, add: \"render court {guide2.mp4} pass=depth\"}`, a line of its own after line `line` (0 for the first step), and taken out with `{media, line, remove: true}`, as a person adds one and deletes one in the graph: each is refused where what it leaves does not read as a recipe, a step put after the one that writes the shot's file, or one taken out that a later step reads. Later entries count lines as the earlier ones left them. The result is kept as the recipe's next version, as with `recipes`, and the answer's `recipes` has its `diff`."},
                     "restoreTake": {"type": "object", "properties": {"media": {"type": "string"}, "take": {"type": "integer", "minimum": 1}}, "required": ["media", "take"], "additionalProperties": false, "description": "Go back to the recipe a take was made from: `media`, and the `take`'s number as `look` with `graph` or `media` lists it, where it says `kept`. The recipe is written as that making read it, each seed as that take had it, so a making of it is that take's again where the model gives the same file for the same seed; a workflow file it named comes back with it where the project no longer has it as it was. It is kept as the recipe's next version, or is the version that holds that text already, and the media moves to it in the proposal. What else the take was made from, its sequences and signals, is the project's and is not changed. Used alone: change the recipe in an edit after it."},
-                    "workflowSet": {"type": "array", "minItems": 1, "items": {"type": "object", "properties": {"media": {"type": "string"}, "line": {"type": "integer", "minimum": 1}, "node": {"type": "string"}, "input": {"type": "string"}, "value": {}}, "required": ["media", "line", "node", "input", "value"], "additionalProperties": false}, "description": "Values to set in the workflow the model of a `generate` step is run with, each input `input` of node `node` (as `look` `workflow` lists them) to `value`, a number, a text, or true or false as it was. The workflow as it is is copied into the project beside the recipe with those values changed and the rest as written, and the step's line names the copy with `workflow=`, in the recipe's next version: the answer's `workflows` says where each is kept. A link and an input a blank fills are not set here. Nothing on the model's server changes, and the person's models file is not touched. To go back to the workflow as it comes, take `workflow` off the line with `recipeSet`."},
+                    "workflowSet": {"type": "array", "minItems": 1, "items": {"type": "object", "properties": {"media": {"type": "string"}, "line": {"type": "integer", "minimum": 1}, "node": {"type": "string"}, "input": {"type": "string"}, "value": {}, "link": {"type": "array", "prefixItems": [{"type": "string"}, {"type": "integer", "minimum": 0}], "minItems": 2, "maxItems": 2}}, "required": ["media", "line", "node", "input"], "additionalProperties": false}, "description": "Values to set in the workflow the model of a `generate` step is run with, each input `input` of node `node` (as `look` `workflow` lists them) to `value`, a number, a text, or true or false as it was. The workflow as it is is copied into the project beside the recipe with those values changed and the rest as written, and the step's line names the copy with `workflow=`, in the recipe's next version: the answer's `workflows` says where each is kept. An input that is a `link` is pointed at another node with `link` in place of `value`, `[<node>, <output>]`, the output counted from 0 as the node's `outputs` lists what it gives: `{media, line, node: \"12\", input: \"model\", link: [\"19\", 0]}`. It is refused where the graph would go round, and, once the server has said what each gives, where the output is not what the input takes. Only a link is linked, and an input a blank fills is not set here. Nothing on the model's server changes, and the person's models file is not touched. To go back to the workflow as it comes, take `workflow` off the line with `recipeSet`."},
                     "cast": {"type": "array", "items": {"type": "string"}, "description": "Lines to add to the project's cast file, each `cast <name> \"<who or what it is>\" [ref=<picture> …]` or `style <name> \"<how a shot looks>\"`, for who and what a recipe of this edit shows that `look`'s `cast` and `styles` have not. They are written at once, since adding one asks for no shot again; one the file has is the person's to change, and is refused."}
                 },
                 "anyOf": [{"required": ["script"]}, {"required": ["recipes"]}, {"required": ["recipeSet"]}, {"required": ["workflowSet"]}, {"required": ["restoreTake"]}, {"required": ["cast"]}, {"required": ["preset"]}, {"required": ["savePreset"]}],
@@ -504,7 +504,10 @@ struct WorkflowSetInput {
     line: usize,
     node: String,
     input: String,
+    #[serde(default)]
     value: Value,
+    /// The node and the output of it to read, in place of a value: a link pointed elsewhere.
+    link: Option<(String, u64)>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1509,10 +1512,9 @@ impl KerfMcpRouter {
                     .map_err(|why| invalid(cannot_said(why, Some(&models))))?;
                 let values: Vec<kerf_shots::workflow::Set> = sets
                     .iter()
-                    .map(|set| kerf_shots::workflow::Set {
-                        node: &set.node,
-                        input: &set.input,
-                        value: &set.value,
+                    .map(|set| match &set.link {
+                        Some((from, output)) => kerf_shots::workflow::Set::link(&set.node, &set.input, from, *output),
+                        None => kerf_shots::workflow::Set::value(&set.node, &set.input, &set.value),
                     })
                     .collect();
                 if let Some(taken) = kerf_shots::workflow::taken_before(&models, &read) {
@@ -1529,7 +1531,10 @@ impl KerfMcpRouter {
                     of: read.name,
                     set: sets
                         .iter()
-                        .map(|set| json!({"node": set.node, "input": set.input, "value": set.value}))
+                        .map(|set| match &set.link {
+                            Some(link) => json!({"node": set.node, "input": set.input, "link": link}),
+                            None => json!({"node": set.node, "input": set.input, "value": set.value}),
+                        })
                         .collect(),
                     copy,
                 });
@@ -5057,12 +5062,21 @@ impl WorkflowKept {
             self.copy.stored, self.of, self.line, self.media
         );
         for set in &self.set {
-            lines.push_str(&format!(
-                "#   node {} {} = {}\n",
-                set["node"].as_str().unwrap_or_default(),
-                set["input"].as_str().unwrap_or_default(),
-                set["value"]
-            ));
+            lines.push_str(&match set.get("link") {
+                Some(link) => format!(
+                    "#   node {} {} reads output {} of node {}\n",
+                    set["node"].as_str().unwrap_or_default(),
+                    set["input"].as_str().unwrap_or_default(),
+                    link[1],
+                    link[0].as_str().unwrap_or_default()
+                ),
+                None => format!(
+                    "#   node {} {} = {}\n",
+                    set["node"].as_str().unwrap_or_default(),
+                    set["input"].as_str().unwrap_or_default(),
+                    set["value"]
+                ),
+            });
         }
         lines
     }

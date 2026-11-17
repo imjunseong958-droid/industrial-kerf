@@ -623,6 +623,11 @@ thread of the bridge's and kept by the workflow's kinds of node. A value with
 `choices` is a menu in the node's card; a number with a range is put back,
 unsent, when typed outside it.
 
+In a workflow a node's port is drawn to another node (`graph::portsFor` for
+two Parts: the inputs of the second that are links, and, where the server has
+said, take what the first gives), and the panel sends `workflow_edit {…, link:
+[from, output]}`, the output the first that gives what the input takes.
+
 A signal's card offers From a sound where its node lists `sounds`, the clips
 of its sequence on sound tracks that play media with sound; choosing one sends
 `signal_from_sound {clip, of}`, which the bridge answers by keying the signal's

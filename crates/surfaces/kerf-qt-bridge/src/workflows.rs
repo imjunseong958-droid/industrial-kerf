@@ -36,7 +36,11 @@ pub(crate) struct Edit {
     was: String,
     node: String,
     input: String,
+    /// What to set it to; or, with `link`, the node and the output of it to read.
+    #[serde(default)]
     value: Value,
+    #[serde(default)]
+    link: Option<(String, u64)>,
 }
 
 /// The `workflow` event of the step on `line` of media `id`'s recipe.
@@ -144,10 +148,9 @@ pub(crate) fn edit(
         Ok(project) => project,
         Err(why) => return failed(tx, &edit.media, why),
     };
-    let set = Set {
-        node: &edit.node,
-        input: &edit.input,
-        value: &edit.value,
+    let set = match &edit.link {
+        Some((from, output)) => Set::link(&edit.node, &edit.input, from, *output),
+        None => Set::value(&edit.node, &edit.input, &edit.value),
     };
     if let Err(why) = workflow::set(&project, &shared.directory, &edit.media, edit.line, &edit.was, set, &models) {
         failed(tx, &edit.media, why);

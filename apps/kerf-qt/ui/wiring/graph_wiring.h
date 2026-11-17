@@ -18,6 +18,7 @@
 //   a model's workflow   workflow_get {media, line} -> workflow {media, line, model, name, origin, file?,
 //                        text, nodes, blanks}, for a model its entry runs with kerf-comfy
 //   a value set in it    workflow_edit {media, line, was, node, input, value} -> workflow, then recipe
+//   a link pointed elsewhere   workflow_edit {media, line, was, node, input, link: [from, output]} -> the same
 //                        (the first writes the shot's own copy beside its recipe and names it on the line)
 //   takes held to their guide   takes_read {media} -> take_read {media, take, overlap, clips} for each
 //                        take as it is read, then takes_read {media, best?}; no model is run

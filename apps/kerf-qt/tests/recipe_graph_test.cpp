@@ -1043,6 +1043,69 @@ private slots:
         QCOMPARE(window.m_lastCommand.value("value").toDouble(), 0.8);
     }
 
+    // In a model's workflow an edge is drawn from a node's port to another node,
+    // which then reads it at an input that was a link: one that takes what the
+    // node gives, where the server has said, asked for by name where more would.
+    void aWorkflowsLinkIsPointedAtAnotherNode() {
+        MainWindow window{QString(), QString()};
+        openBounce(window);
+        window.handleEvent(bounceWithRunner());
+        RecipeGraphPanel *panel = panelOf(window);
+        panel->view()->select(QStringLiteral("made:out"));
+        panel->inspector()->findChild<ui::Button *>(QStringLiteral("graphOpenWorkflow"))->click();
+        // The loader gives a model, the prompt a conditioning; the sampler's links say what they take.
+        QJsonObject taken = shotWorkflow();
+        QJsonArray nodes = taken.value("nodes").toArray();
+        const auto with = [&](int index, const QJsonArray &outputs, const QHash<QString, QString> &types) {
+            QJsonObject node = nodes.at(index).toObject();
+            node.insert("outputs", outputs);
+            QJsonArray inputs = node.value("inputs").toArray();
+            for (int at = 0; at < inputs.size(); ++at) {
+                QJsonObject input = inputs.at(at).toObject();
+                const QString type = types.value(input.value("name").toString());
+                if (!type.isEmpty()) input.insert("type", type);
+                inputs.replace(at, input);
+            }
+            node.insert("inputs", inputs);
+            nodes.replace(index, node);
+        };
+        with(0, {"MODEL"}, {});
+        with(1, {"CONDITIONING"}, {{"clip", "CLIP"}});
+        with(2, {"IMAGE"}, {});
+        with(3, {"LATENT"}, {{"model", "MODEL"}, {"positive", "CONDITIONING"}, {"guide", "IMAGE"}});
+        taken.insert("nodes", nodes);
+        taken.insert("taken", true);
+        window.handleEvent(taken);
+        const graph::Recipe &recipe = panel->view()->recipe();
+        const auto node = [&](const char *id) { return *recipe.node(QString::fromLatin1(id)); };
+        // What a node gives goes to the input that takes it, and to none that does not.
+        QCOMPARE(graph::portsFor(recipe, node("part:1"), node("part:8")), QStringList{"model"});
+        QCOMPARE(graph::portsFor(recipe, node("part:4"), node("part:8")), QStringList{"positive"});
+        QVERIFY(graph::portsFor(recipe, node("part:1"), node("part:4")).isEmpty());
+        QVERIFY(graph::portsFor(recipe, node("part:8"), node("part:8")).isEmpty());
+        // A node of the workflow has a port to draw from, and letting go on another links it.
+        QVERIFY(!panel->view()->portAt(panel->view()->portPoint(QStringLiteral("part:4"))).isEmpty());
+        window.m_lastCommand = {};
+        emit panel->view()->wired(QStringLiteral("part:4"), QStringLiteral("part:8"), QPoint());
+        QCOMPARE(window.m_lastCommand,
+                 (QJsonObject{{"type", "workflow_edit"}, {"media", "m4"}, {"line", 6}, {"was", taken.value("text")},
+                              {"node", "8"}, {"input", "positive"}, {"link", QJsonArray{"4", 0}}}));
+        // Before the server has said what each is, every link of the node is offered, by name.
+        window.handleEvent(shotWorkflow());
+        const graph::Recipe &plain = panel->view()->recipe();
+        QCOMPARE(graph::portsFor(plain, *plain.node(QStringLiteral("part:1")), *plain.node(QStringLiteral("part:8"))),
+                 (QStringList{"model", "positive", "guide"}));
+        window.m_lastCommand = {};
+        emit panel->view()->wired(QStringLiteral("part:1"), QStringLiteral("part:8"), QPoint(40, 40));
+        QCOMPARE(window.m_lastCommand, QJsonObject{});
+        auto *menu = panel->findChild<QMenu *>(QStringLiteral("graphLinkMenu"));
+        QVERIFY(menu);
+        menu->findChild<QAction *>(QStringLiteral("graphLink.model"))->trigger();
+        QCOMPARE(window.m_lastCommand.value("link").toArray(), (QJsonArray{"1", 0}));
+        QCOMPARE(window.m_lastCommand.value("input").toString(), QStringLiteral("model"));
+        menu->close();
+    }
+
     // The takes' card holds each take to its guide when asked: where the take
     // has the shot's subject beside where it was asked for, read by the bridge
     // a take at a time with no model, the closest said. The same reading an
@@ -1191,8 +1254,8 @@ private slots:
         // Its legend is of what its rows are, not of what a shot's edges carry.
         QVERIFY(texts.colorOf(QStringLiteral("the recipe fills")).isValid() && texts.colorOf(QStringLiteral("set here")).isValid());
         QVERIFY(!texts.colorOf(QStringLiteral("signal")).isValid());
-        // No edge is drawn by hand in a workflow: its links are its own shape.
-        QCOMPARE(view->portAt(view->portPoint(QStringLiteral("part:1"))), QString());
+        // A node has a port to draw a link from, to point another node's input at it.
+        QCOMPARE(view->portAt(view->portPoint(QStringLiteral("part:1"))), QStringLiteral("part:1"));
 
         // With no node chosen the card says the workflow, where it comes from, and what fills each blank.
         QCOMPARE(inspector->nodeId(), QString());

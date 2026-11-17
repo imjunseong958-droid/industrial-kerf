@@ -229,6 +229,20 @@ QSizeF cardSize(const Node &node) {
 
 QStringList portsFor(const Recipe &recipe, const Node &from, const Node &to) {
     Q_UNUSED(recipe);
+    // In a model's workflow a node's output is read by an input of another that is a link
+    // already: by one that takes what it gives, where the server has said what each is.
+    if (from.kind == Kind::Part || to.kind == Kind::Part) {
+        if (from.kind != to.kind || from.id == to.id) return {};
+        const QJsonArray gives = from.holds.value(QStringLiteral("outputs")).toArray();
+        QStringList inputs;
+        for (const QJsonValue value : to.holds.value(QStringLiteral("inputs")).toArray()) {
+            const QJsonObject input = value.toObject();
+            if (inputKind(input) != InputKind::Link) continue;
+            const QString takes = input.value(QStringLiteral("type")).toString();
+            if (gives.isEmpty() || takes.isEmpty() || gives.contains(takes)) inputs << input.value(QStringLiteral("name")).toString();
+        }
+        return inputs;
+    }
     if (from.id == to.id || !to.isStep()) return {};
     // A step reads what a step before it made, never one after.
     if (from.isStep() && from.line >= to.line) return {};
@@ -693,9 +707,8 @@ void RecipeGraphView::placeControls() {
 
 QString RecipeGraphView::portAt(const QPointF &at) const {
     for (auto node = m_recipe.nodes.crbegin(); node != m_recipe.nodes.crend(); ++node) {
-        // The takes give nothing on: they are where the graph ends. A
-        // workflow's links are its own shape, and are not drawn here.
-        if (node->kind == Kind::Takes || node->kind == Kind::Part) continue;
+        // The takes give nothing on: they are where the graph ends.
+        if (node->kind == Kind::Takes) continue;
         const QPointF port = toView(outPort(node->id));
         if (std::hypot(port.x() - at.x(), port.y() - at.y()) <= kPortReach) return node->id;
     }

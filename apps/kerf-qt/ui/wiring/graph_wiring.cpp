@@ -96,6 +96,18 @@ void GraphWiring::build() {
         showReadings();
     });
 
+    // A link of the workflow pointed at another node: kept in the shot's own copy, as a value is.
+    connect(m_panel, &RecipeGraphPanel::workflowLinked, this, [this](const QString &node, const QString &input, const QString &from, int output) {
+        if (m_media.isEmpty() || !m_panel->showsWorkflow()) return;
+        m_bus->send(QJsonObject{{QStringLiteral("type"), QStringLiteral("workflow_edit")},
+                                {QStringLiteral("media"), m_media},
+                                {QStringLiteral("line"), m_panel->workflow().line},
+                                {QStringLiteral("was"), m_panel->workflow().text},
+                                {QStringLiteral("node"), node},
+                                {QStringLiteral("input"), input},
+                                {QStringLiteral("link"), QJsonArray{from, output}}});
+    });
+
     connect(m_bus, &EditorBus::event, this, &GraphWiring::onEvent);
     connect(m_bus, &EditorBus::snapshotChanged, this, &GraphWiring::onSnapshot);
     connect(w->m_shell, &StageShell::coveredChanged, this, [this](bool covered) {
