@@ -81,6 +81,10 @@ void GraphWiring::build() {
     connect(m_panel, &RecipeGraphPanel::stepRemoveRequested, this, [this](int line) {
         edit(QJsonObject{{QStringLiteral("line"), line}, {QStringLiteral("remove"), true}});
     });
+    // A signal's keys read from a sound of its sequence: an edit of the project, made by the bridge.
+    connect(m_panel, &RecipeGraphPanel::signalFromSound, this, [this](const QString &clip, const QString &of) {
+        m_bus->send(QJsonObject{{QStringLiteral("type"), QStringLiteral("signal_from_sound")}, {QStringLiteral("clip"), clip}, {QStringLiteral("of"), of}});
+    });
     connect(m_panel, &RecipeGraphPanel::takeRestoreRequested, this, [this](int take) { edit(QJsonObject{{QStringLiteral("restore"), take}}); });
     // Each take read beside its guide, off the bridge's worker: asked once, answered a take at a time.
     connect(m_panel, &RecipeGraphPanel::takesReadRequested, this, [this] {

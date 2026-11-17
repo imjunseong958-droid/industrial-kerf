@@ -351,6 +351,30 @@ impl Building<'_> {
                     holds.insert("fps".to_owned(), json!(rate.fps()));
                     holds.insert("values".to_owned(), json!(values));
                     holds.insert("there".to_owned(), json!(true));
+                    // The clips of its sequence that play a sound, whose moments its keys
+                    // can be read from: each once, by its id and the name it shows.
+                    let mut sounds: Vec<Json> = Vec::new();
+                    for heard in sequence.tracks.iter().flat_map(|track| &track.clips) {
+                        let plays = match &heard.content {
+                            Content::Media { media, .. } => project
+                                .media(media.as_str())
+                                .is_some_and(|media| media.audio.is_some()),
+                            _ => false,
+                        };
+                        // A picture and its sound are two clips of one recording: its sound's.
+                        let track_of = sequence
+                            .tracks
+                            .iter()
+                            .find(|track| track.clips.iter().any(|clip| clip.id == heard.id));
+                        let on_sound = track_of.is_some_and(|track| track.kind == kerf_model::TrackKind::Audio);
+                        if plays && on_sound {
+                            sounds.push(json!({
+                                "clip": heard.id.as_str(),
+                                "name": heard.name.clone().unwrap_or_else(|| heard.id.to_string()),
+                            }));
+                        }
+                    }
+                    holds.insert("sounds".to_owned(), json!(sounds));
                     format!(
                         "{} · {frames} frames at {}",
                         sequence.id,
@@ -872,6 +896,35 @@ mod tests {
         render court {depth.mp4} pass=depth size=832x480 rate=16\n\
         generate model=still prompt=\"an orange basketball\" seed=3 out={ball.png}\n\
         generate model=video prompt=\"it bounces\" guide={depth.mp4} ref={ball.png} ref=../refs/court.png moves=ball signal=bounce seconds=4 seed=7 strength=0.8\n";
+
+    #[test]
+    fn a_signal_says_which_clips_of_its_sequence_play_a_sound() {
+        let (folder, mut project) = court(BOUNCE);
+        let listed = |project: &Project| {
+            let graph = graph(project, folder.path(), "shot", &models(folder.path())).unwrap();
+            node(&graph, "signal:bounce").holds["sounds"].clone()
+        };
+        // A court with no sound in it has none to read a signal from.
+        assert_eq!(listed(&project), json!([]));
+        // A thud on a sound track, and a clip of the same recording's picture, which is not one.
+        let with_sound = kerf_lang::parse_document(
+            "kerf 1\nproject name=\"court\"\n\
+             media shot path=\"shots/bounce.mp4\" rate=16 dur=4s video=832x480 recipe=\"shots/bounce.kerfrecipe\"\n\
+             media a1 path=\"thud.mov\" rate=24 dur=4s video=320x180 audio=1ch@48000\n\
+             sequence court rate=24 size=1920x1080 audio=48000\n\
+             \x20 track V1 video\n\
+             \x20   clip seen media=a1 src=0f at=0f dur=96f\n\
+             \x20 track V2 video\n\
+             \x20   clip ball gen=solid@1 at=0f dur=96f\n\
+             \x20 track V3 video\n\
+             \x20   clip bounce gen=signal@1 at=0f dur=96f\n\
+             \x20 track A1 audio\n\
+             \x20   clip thud name=\"Ball on the floor\" media=a1 src=0f at=0f dur=96f\n",
+            kerf_model::Catalog::builtin(),
+        );
+        project = with_sound.expect("a project").project;
+        assert_eq!(listed(&project), json!([{"clip": "thud", "name": "Ball on the floor"}]));
+    }
 
     #[test]
     fn a_longer_shot_is_laid_out_as_its_parts_and_their_join() {

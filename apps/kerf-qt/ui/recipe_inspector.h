@@ -80,6 +80,8 @@ signals:
     void removed(int line, const QString &key, int nth);
     // A signal clip's number, drawn: its keys, by frame of the clip.
     void signalDrawn(const QString &clip, const QJsonArray &keys);
+    // Have the signal clip `clip` be 1 where the sound clip `of` plays starts a sound.
+    void signalFromSound(const QString &clip, const QString &of);
     // Have the shot be take `number`, whose file the document names as `path`.
     void takeChosen(int number, const QString &path);
     // Hold each take to its guide: read where its subject is beside where it was asked for.

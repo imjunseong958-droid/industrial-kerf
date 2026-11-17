@@ -1545,86 +1545,24 @@ impl KerfMcpRouter {
         revision: u64,
         input: &SignalInput,
     ) -> Result<Value, McpError> {
-        let invalid = |message: String| McpError::new("INVALID_ARGUMENTS", message);
-        let located = |id: &str| {
-            project.locate(id).ok_or_else(|| {
-                invalid(format!(
-                    "{}{}",
-                    project.no_clip(id),
+        // The reading a person asks for in the signal's card of a shot's graph.
+        let read = kerf_shots::signals::from_sound(project, &self.dir, &input.of, &input.clip, input.hold)
+            .map_err(|why| {
+                let hint = if why.starts_with("no clip") {
                     self.any_pending("proposal")
-                ))
-            })
-        };
-        let (of_at, clip_at) = (located(&input.of)?, located(&input.clip)?);
-        let (of, clip) = (project.clip_at(of_at), project.clip_at(clip_at));
-        if !matches!(&clip.content, Content::Generator { fx, .. } if fx.as_str() == kerf_model::SIGNAL)
-        {
-            return Err(invalid(format!(
-                "`{}` is not a signal: a signal is a `gen={}@1` clip",
-                input.clip,
-                kerf_model::SIGNAL
-            )));
-        }
-        if of_at.sequence != clip_at.sequence {
-            return Err(invalid(format!(
-                "`{}` and `{}` are in different sequences: a signal's time is its own sequence's",
-                input.of, input.clip
-            )));
-        }
-        let media = match &of.content {
-            Content::Media { media, .. } => project.media(media.as_str()),
-            _ => None,
-        }
-        .ok_or_else(|| {
-            invalid(format!(
-                "`{}` plays no media: `of` is a clip of music or of footage with sound",
-                input.of
-            ))
-        })?;
-        let hold = input.hold.unwrap_or(crate::signal::HOLD);
-        if !(1..=240).contains(&hold) {
-            return Err(invalid(format!(
-                "`hold` is frames, from 1 to 240, not {hold}"
-            )));
-        }
-        let index = kerf_engine::media_index(
-            &resolve_project_source_path(&self.dir, &media.path),
-            &DerivativeCache::new(&self.dir),
-            &kerf_engine::CancellationToken::new(),
-        )
-        .map_err(|error| McpError::new("MEDIA_FAILED", error.to_string()))?;
-        // The onsets the clip plays, where on the sequence it plays them.
-        let heard: Vec<Time> = index
-            .onsets
-            .iter()
-            .filter_map(|seconds| Time::from_seconds(*seconds))
-            .filter_map(|source| of.played_at(source))
-            .filter(|at| of.start <= *at && *at < of.end())
-            .collect();
-        if heard.is_empty() {
-            return Err(invalid(format!(
-                "`{}` plays no sound onsets of `{}`: nothing to place a signal on",
-                input.of, media.id
-            )));
-        }
-        let rate = project.sequences[clip_at.sequence].rate;
-        let (keys, placed) = crate::signal::pulses(&heard, (clip.start, clip.duration), rate, hold);
-        if placed == 0 {
-            return Err(invalid(format!(
-                "none of the {} onsets `{}` plays fall in `{}`: have the signal clip run where the sound does",
-                heard.len(),
-                input.of,
-                input.clip
-            )));
-        }
+                } else {
+                    String::new()
+                };
+                McpError::new("INVALID_ARGUMENTS", format!("{why}{hint}"))
+            })?;
         Ok(json!({
             "revision": revision,
             "clip": input.clip,
             "of": input.of,
-            "hold": hold,
-            "onsets": placed,
-            "outside": heard.len() - placed,
-            "script": format!("set {} {}={keys}", input.clip, kerf_model::SIGNAL_VALUE),
+            "hold": read.hold,
+            "onsets": read.placed,
+            "outside": read.outside,
+            "script": read.script(&input.clip),
         }))
     }
 

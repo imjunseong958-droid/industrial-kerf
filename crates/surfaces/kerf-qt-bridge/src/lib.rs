@@ -339,6 +339,13 @@ enum Command {
     /// the editor read it: one name on one line, or the whole text. `recipe`
     /// then, as it now reads.
     RecipeEdit(recipes::Edit),
+    /// Set a signal clip's keys from the onsets of the sound another clip of
+    /// its sequence plays ([`kerf_shots::signals::from_sound`]): one edit of
+    /// the project, as drawing its curve is.
+    SignalFromSound {
+        clip: String,
+        of: String,
+    },
     /// Hold a media's takes to its guide by where its subjects are: a
     /// `take_read` for each as it is read, then `takes_read`, or `error`.
     TakesRead {
@@ -894,6 +901,12 @@ fn runtime_worker(
                 workflows::edit(&shared, &active_client, &edit, &tx);
                 continue;
             }
+            Command::SignalFromSound { clip, of } => active_client.get_document(false).and_then(|(revision, text)| {
+                let project = kerf_runtime::parse_document(&text)?;
+                let read = kerf_shots::signals::from_sound(&project, &shared.directory, &of, &clip, None)
+                    .map_err(|why| kerf_runtime::RuntimeError::new("SIGNAL_FAILED", why))?;
+                active_client.apply_script_request("ui", &operation, &read.script(&clip), revision)
+            }),
             Command::MediaReplace { media, path } => active_client.get_state().and_then(|state| {
                 active_client.replace_media_request("ui", &operation, &media, &path, state.revision)
             }),

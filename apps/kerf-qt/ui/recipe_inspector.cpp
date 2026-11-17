@@ -249,6 +249,7 @@ QString RecipeInspector::shape(const graph::Recipe &recipe, const Node &node) co
     if (const QJsonObject made = node.holds.value(QStringLiteral("made")).toObject(); !made.isEmpty())
         parts << made.value(QStringLiteral("path")).toString() << QString::number(m_pictures.contains(made.value(QStringLiteral("path")).toString()));
     parts << QString::number(node.holds.value(QStringLiteral("from")).isNull());
+    for (const QJsonValue sound : node.holds.value(QStringLiteral("sounds")).toArray()) parts << sound.toObject().value(QStringLiteral("clip")).toString();
     // What is said as text, not set: another word is another card.
     if (node.kind != Kind::Model && node.kind != Kind::Render && node.kind != Kind::Signal) parts << node.title << node.detail;
     parts << node.holds.value(QStringLiteral("wants")).toString() << node.holds.value(QStringLiteral("about")).toString()
@@ -956,6 +957,29 @@ void RecipeInspector::buildSignal(const Node &node) {
     connect(m_curve, &SignalCurve::drawn, this, [this, clip](const QJsonArray &keys) { emit signalDrawn(clip, keys); });
     m_column->addWidget(m_curve);
     addNote(QStringLiteral("%1. Drag across it to draw it anew; it is the clip's value in the project, and is undone as any edit.").arg(node.detail));
+    // Its moments read from a sound of its sequence: 1 for a few frames from where each sound starts.
+    const QJsonArray sounds = holds.value(QStringLiteral("sounds")).toArray();
+    if (sounds.isEmpty()) return;
+    auto *from = new ui::GhostButton(QStringLiteral("From a sound"));
+    from->setObjectName(QStringLiteral("graphSignalFromSound"));
+    from->setChevron(true);
+    from->setTip(QStringLiteral("Set it to 1 for three frames from each place a sound of its sequence starts, the beats of a track or a ball on a floor, and 0 between"));
+    connect(from, &QAbstractButton::clicked, this, [this, from, sounds, clip] {
+        auto *menu = new QMenu(from);
+        menu->setObjectName(QStringLiteral("graphSoundMenu"));
+        menu->setAttribute(Qt::WA_DeleteOnClose);
+        ui::styleMenu(menu);
+        ui::addMenuHeader(menu, QStringLiteral("Where this sound's sounds start"));
+        for (const QJsonValue value : sounds) {
+            const QJsonObject sound = value.toObject();
+            const QString of = sound.value(QStringLiteral("clip")).toString();
+            QAction *action = menu->addAction(sound.value(QStringLiteral("name")).toString(of));
+            action->setObjectName(QStringLiteral("graphSound.%1").arg(of));
+            connect(action, &QAction::triggered, this, [this, clip, of] { emit signalFromSound(clip, of); });
+        }
+        ui::popupMenu(menu, from);
+    });
+    m_column->addWidget(from, 0, Qt::AlignLeft);
 }
 
 void RecipeInspector::addRemoveStep(const Node &node) {

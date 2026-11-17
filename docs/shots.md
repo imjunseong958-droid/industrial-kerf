@@ -248,6 +248,7 @@ the take; the person says how much of that it does without asking them.
   | adds a step, a guide, a model or a join, and deletes one | `recipeSet` with `add`, the step's line, after `line`; and with `remove` |
   | draws an edge to a step, or lets one go | the same, the name its reader gives it (`signal`, `ref`, `guide`, `moves`), with no `value` to let it go |
   | draws a signal's curve | an `edit` script that sets the clip's `value` |
+  | sets a signal from a sound of its sequence | `look` with `signal`, and the line it gives in an `edit` |
   | opens a model into its workflow | `look` with `workflow`: every node and input, the blanks and what fills each now |
   | sets a value in the workflow | `edit` with `workflowSet`: a copy in the project, named by the line's `workflow=` |
   | goes back to the workflow as it comes | `recipeSet` of `workflow` with no `value` |
@@ -1187,6 +1188,11 @@ sequence be 1 for a few frames from each and 0 between:
 look {"signal": {"of": "a1", "clip": "bounce", "hold": 3}}
   → set bounce value={0f:0:hold 12f:1:hold 15f:0:hold 36f:1:hold 39f:0:hold}
 ```
+
+A person asks for the same in the shot's graph: a signal's card offers
+**From a sound**, the clips of its sequence that play one, and choosing one
+sets the signal's keys from where its sounds start, one edit that undo takes
+back.
 
 `hold` is how many frames each lasts, 3 unless said; onsets nearer each other
 than that run together, and those that fall outside the signal clip are

@@ -11,6 +11,7 @@
 //! - [`workflow`]: the workflow behind a model, every node and input of it,
 //!   and a value in it set in a copy of the shot's own that the step's line
 //!   names with `workflow=`.
+//! - [`signals`]: a signal's keys read from the onsets of a sound.
 //! - [`takes`]: a shot's takes held to its guide by where its subjects are,
 //!   to choose among them by.
 //!
@@ -23,5 +24,6 @@
 //! Nothing here runs a recipe or asks a server.
 
 pub mod graph;
+pub mod signals;
 pub mod takes;
 pub mod workflow;
