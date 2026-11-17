@@ -6,6 +6,11 @@ on `main`; its section here becomes the release's notes on GitHub
 
 ## 0.1.3
 
+- A take keeps the recipe it was made from, its seeds and its workflow with
+  it, and the shot's graph goes back to it: Restore take's recipe, in the
+  takes' card, for the take the shot is when the recipe has changed since.
+  Kerf in the conversation does the same (`edit` with `restoreTake`). Takes
+  made before this keep none.
 - Steps are added and deleted in a shot's graph: Add step puts a guide, a
   model or a join into the recipe as a line that reads as it stands, and its
   card opens to set it; Delete step, in a step's card, takes its line out.

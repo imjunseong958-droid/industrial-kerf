@@ -802,7 +802,7 @@ pub fn graph(project: &Project, directory: &Path, id: &str, models: &Models) -> 
         made.iter()
             .map(|take| {
                 json!({"number": take.number, "path": take.stored, "chosen": take.chosen,
-                    "rolled": take.rolled, "changed": take.changed})
+                    "rolled": take.rolled, "changed": take.changed, "kept": take.kept})
             })
             .collect(),
     );

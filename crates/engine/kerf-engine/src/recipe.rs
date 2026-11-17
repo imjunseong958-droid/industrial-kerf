@@ -1264,6 +1264,13 @@ pub fn make(
         }
         std::fs::rename(&making, place.file(take))?;
         takes::record(&place, take, from, plan.roll)?;
+        // What it was made from, to go back to: not what the take stands on, so one that
+        // cannot be kept is still a take.
+        let _ = takes::keep(&place, take, &plan.text, plan.roll, &|named| {
+            within(&folder, named, "file")
+                .ok()
+                .and_then(|inside| std::fs::read_to_string(directory.join(inside)).ok())
+        });
         Ok(Made {
             take,
             stored: place.stored(take),

@@ -86,6 +86,8 @@ signals:
     void takesReadRequested();
     // Take the step on `line` out of the recipe.
     void stepRemoveRequested(int line);
+    // Go back to the recipe take `number` was made from.
+    void takeRestoreRequested(int number);
     // Open the project's cast, and the person's models, where they are set.
     void castRequested();
     void modelsRequested();

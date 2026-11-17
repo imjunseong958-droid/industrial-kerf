@@ -176,6 +176,7 @@ RecipeGraphPanel::RecipeGraphPanel(QWidget *parent) : QWidget(parent) {
     connect(m_inspector, &RecipeInspector::takeChosen, this, &RecipeGraphPanel::takeChosen);
     connect(m_inspector, &RecipeInspector::takesReadRequested, this, &RecipeGraphPanel::takesReadRequested);
     connect(m_inspector, &RecipeInspector::stepRemoveRequested, this, &RecipeGraphPanel::stepRemoveRequested);
+    connect(m_inspector, &RecipeInspector::takeRestoreRequested, this, &RecipeGraphPanel::takeRestoreRequested);
     m_art = new MediaArtwork(this);
     connect(m_art, &MediaArtwork::changed, this, [this] {
         m_inspector->setPictures(m_art->frames);

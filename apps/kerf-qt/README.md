@@ -616,6 +616,12 @@ says nothing of one.
 a node chosen (`workflow:<line>` opens the workflow of the model on that line of
 the recipe), for a capture (`--screenshot`).
 
+Restore take's recipe, in the takes' card, shows for the take the shot is
+when what it was made from has changed and the take kept its recipe (`kept` on
+the take); it sends `recipe_edit {restore: <take>}`, which the bridge answers
+by writing the recipe as that take was made from it
+(`kerf_shots::takes::restore`).
+
 Add step, in the head, sends the kind of step wanted (`recipe_edit {add:
 guide|model|join}`): the bridge writes the line (`kerf_shots::graph::step`)
 and answers with the graph and the line it added (`added`), whose card the

@@ -107,6 +107,8 @@ signals:
     // take the step on `line` out.
     void stepAddRequested(const QString &kind);
     void stepRemoveRequested(int line);
+    // Go back to the recipe take `number` was made from.
+    void takeRestoreRequested(int number);
     // Make the shot, `rolls` takes of it; and stop the making that runs.
     void makeRequested(int rolls);
     void stopRequested();

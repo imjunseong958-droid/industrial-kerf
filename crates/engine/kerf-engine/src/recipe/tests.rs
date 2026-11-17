@@ -1674,6 +1674,47 @@ generate model=dawn prompt=\"a boat leaves\" seed=7\n",
     assert_eq!(unmade(&project, directory, media), None);
 }
 
+/// A take keeps the recipe it was made from, each seed as that take had it, and the workflow
+/// file its line named: what going back to it writes.
+#[cfg(unix)]
+#[test]
+fn a_take_keeps_the_recipe_and_the_workflow_it_was_made_from() {
+    let folder = tempfile::tempdir().unwrap();
+    let directory = folder.path();
+    std::fs::create_dir_all(directory.join("shots")).unwrap();
+    let text = "kerf-recipe 1\n# The opening.\ngenerate model=dawn prompt=\"a boat leaves\" seed=7 workflow=own.json\n";
+    std::fs::write(directory.join("shots/open.kerfrecipe"), text).unwrap();
+    std::fs::write(directory.join("shots/own.json"), "{\"steps\": 20}").unwrap();
+    let some = models(
+        directory,
+        r#"{"dawn": {"run": ["sh", "-c", "cp \"$1\" \"$(sed -n 's/.*\"out\": \"\\(.*\\)\".*/\\1/p' \"$1\")\"", "dawn", "{request}"]}}"#,
+    );
+    let mut project = shot("shots/open.json");
+    let token = CancellationToken::new();
+    for _ in 0..2 {
+        let roll = next_roll(&project, directory, "m1").unwrap();
+        let planned = plan_rolled(&project, directory, "m1", &some, roll).unwrap();
+        let made = make(&project, directory, &planned, &some, &token, |_| {}).unwrap();
+        project.media[0].path = made.stored;
+    }
+    // The file changes after the takes are made: what they keep is what they were made with.
+    std::fs::write(directory.join("shots/own.json"), "{\"steps\": 30}").unwrap();
+    let media = project.media("m1").unwrap();
+    let all = takes(&project, directory, media).unwrap();
+    assert!(all.iter().all(|take| take.kept));
+    let first = takes::kept(directory, media, 1).unwrap();
+    assert_eq!(first.recipe, text);
+    assert_eq!(first.files, [("own.json".to_owned(), "{\"steps\": 20}".to_owned())]);
+    // The second roll's seed is the one it was asked with, and the comment stays.
+    let second = takes::kept(directory, media, 2).unwrap();
+    assert_eq!(second.recipe, text.replace("seed=7", "seed=8"));
+    assert_eq!(takes::kept(directory, media, 3), None);
+    // A take whose working folder is gone has nothing kept, and says so.
+    std::fs::remove_dir_all(directory.join("shots/open.takes/001.work")).unwrap();
+    assert_eq!(takes::kept(directory, media, 1), None);
+    assert!(!takes(&project, directory, media).unwrap()[0].kept);
+}
+
 #[cfg(unix)]
 #[test]
 fn the_shots_of_a_project_are_read_at_once() {
