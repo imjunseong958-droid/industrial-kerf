@@ -551,7 +551,7 @@ private slots:
                 const QColor middle = plate.pixelColor(QPoint(roomX, toolbar->height() / 2) * ratio);
                 QVERIFY2(nearColor(middle.rgb(), tokens::color(tokens::chrome).rgb()), qPrintable(middle.name()));
                 if (window.m_sidebar->isVisible())
-                    QCOMPARE(plate.pixelColor(QPoint(1, toolbar->height() - 1) * ratio).rgb(), tokens::color(tokens::well).rgb());
+                    QCOMPARE(plate.pixelColor(QPoint(1, toolbar->height() - 1) * ratio).rgb(), tokens::color(tokens::sidebar).rgb());
             }
             // The window is titled with the project, so the Window menu,
             // Mission Control and the Dock name it, and the toolbar shows the same.

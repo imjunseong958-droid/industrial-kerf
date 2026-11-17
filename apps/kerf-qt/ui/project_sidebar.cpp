@@ -46,14 +46,12 @@ constexpr int kPadding = space::s8;
 constexpr int kIcon = 16;
 constexpr int kChevron = 12;
 constexpr int kChevronGap = space::s4;
-constexpr int kDot = 6;
+constexpr int kBadge = 7;
 constexpr int kDotIcon = 12;
 constexpr int kAction = 20;
-// A conversation's dot sits under the middle of its folder's icon, and its
-// title under the folder's name.
-constexpr int kChildIndent = kChevron + kChevronGap + (kIcon - kDot) / 2;
-// What has neither a dot nor an icon starts where the titles do.
-constexpr int kTitleIndent = kChevron + kChevronGap + kIcon + space::s8;
+// A conversation's title starts under its folder's icon, with the rest of the
+// row to itself.
+constexpr int kChildIndent = kChevron + kChevronGap;
 constexpr int kNoteHeight = 28;
 constexpr int kSearchHeight = 30;
 // What the folders' fold is kept under: a map of path to folded.
@@ -138,7 +136,7 @@ protected:
         p.fillRect(QRect(kPadding + kChevron / 2, 0, 1, height()), tokens::color(line));
         p.setFont(tokens::font(control));
         p.setPen(tokens::color(ink3));
-        const int x = kPadding + kTitleIndent;
+        const int x = kPadding + kChildIndent;
         const QRect room(x, 0, width() - x - kPadding, height());
         p.drawText(room, Qt::AlignLeft | Qt::AlignVCenter, QFontMetrics(p.font()).elidedText(m_text, Qt::ElideRight, room.width()));
     }
@@ -147,29 +145,6 @@ private:
     QString m_text;
 };
 
-QString stateWord(ProjectSidebar::State state) {
-    switch (state) {
-    case ProjectSidebar::State::Working: return QStringLiteral("Working");
-    case ProjectSidebar::State::Making: return QStringLiteral("Making");
-    case ProjectSidebar::State::Review: return QStringLiteral("Review");
-    default: return {};
-    }
-}
-
-QRgb stateWordColor(ProjectSidebar::State state) { return state == ProjectSidebar::State::Making ? activity::making : accentInk; }
-
-QRgb dotColorOf(ProjectSidebar::State state) {
-    switch (state) {
-    case ProjectSidebar::State::Working: return activity::working;
-    case ProjectSidebar::State::Making: return activity::making;
-    case ProjectSidebar::State::Review: return activity::review;
-    case ProjectSidebar::State::Settled: return activity::settled;
-    case ProjectSidebar::State::Failed: return activity::failed;
-    case ProjectSidebar::State::Idle: break;
-    }
-    return activity::idle;
-}
-
 // Latest first; those with no time yet come before the rest, in the order
 // they came in.
 bool latestFirst(const ProjectSidebar::Conversation &a, const ProjectSidebar::Conversation &b) {
@@ -177,12 +152,9 @@ bool latestFirst(const ProjectSidebar::Conversation &a, const ProjectSidebar::Co
     return a.updated > b.updated;
 }
 
-// The dot's brightness at a step of its pulse, as the working chip's.
-qreal pulseLevel(int step) {
-    if (step < 0) return 1.0;
-    const qreal at = qreal(step) / motion::workPulseSteps;
-    return 1.0 - 0.65 * (1.0 - std::abs(at * 2.0 - 1.0));
-}
+// How far the light is across the title at `phase` of a pass: it crosses in
+// the first part, and the title rests for the rest.
+qreal shimmerAt(qreal phase) { return std::clamp(phase / motion::titleCross, 0.0, 1.0); }
 
 } // namespace
 
@@ -195,37 +167,35 @@ SidebarRow::SidebarRow(const QString &icon, const QString &text, int indent, QWi
     setAccessibleName(text);
 }
 
-void SidebarRow::setTrailing(const QString &text, const QColor &color) {
-    if (text == m_trailing && color == m_trailingColor) return;
-    m_trailing = text;
-    m_trailingColor = color;
-    update();
-}
-
 void SidebarRow::setCurrent(bool current) {
     if (current == m_current) return;
     m_current = current;
     update();
 }
 
-void SidebarRow::setDot(const QColor &color, bool pulsing) {
-    if (color == m_dot && pulsing == m_pulsing) return;
-    m_dot = color;
-    m_pulsing = pulsing;
-    if (!pulsing) m_pulse = 1.0;
+void SidebarRow::setBadge(const QColor &color) {
+    if (color == m_badge) return;
+    m_badge = color;
     update();
+}
+
+void SidebarRow::setShimmer(bool shimmer) {
+    if (shimmer == m_shimmer) return;
+    m_shimmer = shimmer;
+    m_phase = 0.0;
+    update();
+}
+
+void SidebarRow::setShimmerPhase(qreal phase) {
+    if (!m_shimmer || qFuzzyCompare(phase, m_phase)) return;
+    m_phase = phase;
+    update(textRect());
 }
 
 void SidebarRow::setDotIcon(const QString &icon) {
     if (icon == m_dotIcon) return;
     m_dotIcon = icon;
     update();
-}
-
-void SidebarRow::setPulse(qreal level) {
-    if (qFuzzyCompare(level, m_pulse)) return;
-    m_pulse = level;
-    update(dotRect());
 }
 
 void SidebarRow::setDimmed(bool dimmed) {
@@ -304,14 +274,16 @@ int SidebarRow::textLeft() const {
     int x = kPadding + m_indent;
     if (m_chevron != Chevron::None) x += kChevron + kChevronGap;
     if (!m_icon.isEmpty()) x += kIcon + space::s8;
-    // A dot is in the middle of where an icon would be.
-    else if (m_dot.isValid() || !m_dotIcon.isEmpty()) x += kDot + (kIcon - kDot) / 2 + space::s8;
+    else if (!m_dotIcon.isEmpty()) x += kDotIcon + space::s6;
     return x;
 }
 
-QRect SidebarRow::dotRect() const {
-    const int x = kPadding + m_indent;
-    return QRect(x - 1, height() / 2 - kDot / 2 - 1, kDot + 2, kDot + 2);
+QRect SidebarRow::textRect() const {
+    const int x = textLeft();
+    int right = width() - kPadding;
+    if (actionsShown()) right = m_actions.first()->x() - space::s4;
+    else if (m_badge.isValid()) right -= kBadge + space::s8;
+    return QRect(x, 0, std::max(0, right - x), height());
 }
 
 void SidebarRow::placeActions() {
@@ -366,35 +338,37 @@ void SidebarRow::paintEvent(QPaintEvent *) {
                      QRectF(x0, (height() - kChevron) / 2.0, kChevron, kChevron), tokens::color(lit ? ink2 : ink3), kChevron);
         x0 += kChevron + kChevronGap;
     }
-    if (!m_icon.isEmpty()) {
+    if (!m_icon.isEmpty())
         icons::paint(p, m_icon, QRectF(x0, 0, kIcon, height()), m_strong ? tokens::color(lit ? ink : ink2) : ink_, kIcon);
-    } else if (!m_dotIcon.isEmpty()) {
-        const QPointF centre(x0 + kDot / 2.0, height() / 2.0);
-        icons::paint(p, m_dotIcon, QRectF(centre.x() - kDotIcon / 2.0, centre.y() - kDotIcon / 2.0, kDotIcon, kDotIcon),
-                     ink_, kDotIcon);
-    } else if (m_dot.isValid()) {
-        p.save();
-        p.setOpacity((m_pulsing ? m_pulse : 1.0) * (m_dimmed ? 0.5 : 1.0));
-        p.setBrush(m_dot);
-        p.drawEllipse(QRectF(x0, (height() - kDot) / 2.0, kDot, kDot));
-        p.restore();
-    }
-    const qreal x = textLeft();
-    qreal right = width() - kPadding;
-    if (actionsShown()) {
-        right = m_actions.first()->x() - space::s4;
-    } else if (!m_trailing.isEmpty()) {
-        const int w = ui::snapWidth(meta, m_trailing);
-        p.setFont(tokens::font(meta));
-        p.setPen(m_trailingColor);
-        p.drawText(QRectF(right - w, 0, w + 1, height()), Qt::AlignRight | Qt::AlignVCenter, m_trailing);
-        right -= w + space::s8;
+    else if (!m_dotIcon.isEmpty())
+        icons::paint(p, m_dotIcon, QRectF(x0, (height() - kDotIcon) / 2.0, kDotIcon, kDotIcon), ink_, kDotIcon);
+    // The dot at the end, where the actions go while the pointer is over the row.
+    if (m_badge.isValid() && !actionsShown()) {
+        p.setPen(Qt::NoPen);
+        p.setBrush(m_badge);
+        p.drawEllipse(QRectF(width() - kPadding - kBadge, (height() - kBadge) / 2.0, kBadge, kBadge));
     }
     if (!m_editing) {
+        const QRect room = textRect();
         p.setFont(tokens::font(m_strong ? bodyName : body));
-        p.setPen(ink_);
-        const QString shown = QFontMetrics(p.font()).elidedText(text(), Qt::ElideRight, int(right - x));
-        p.drawText(QRectF(x, 0, right - x, height()), Qt::AlignLeft | Qt::AlignVCenter, shown);
+        const QString shown = QFontMetrics(p.font()).elidedText(text(), Qt::ElideRight, room.width());
+        QPen pen(ink_);
+        if (m_shimmer && !ui::reducedMotion()) {
+            // A band of light passes over the title, from its start to its end
+            // (MOTION_UI.md, Sidebar activity), over the quieter ink it rests in.
+            const qreal wide = std::max(1.0, qreal(QFontMetrics(p.font()).horizontalAdvance(shown)));
+            const qreal band = std::max(24.0, wide * 0.35);
+            const qreal centre = room.left() - band + shimmerAt(m_phase) * (wide + 2 * band);
+            QLinearGradient light(centre - band, 0, centre + band, 0);
+            light.setColorAt(0.0, tokens::color(ink3));
+            light.setColorAt(0.5, tokens::color(ink));
+            light.setColorAt(1.0, tokens::color(ink3));
+            pen = QPen(QBrush(light), 1);
+        } else if (m_shimmer) {
+            pen = QPen(tokens::color(ink));
+        }
+        p.setPen(pen);
+        p.drawText(room, Qt::AlignLeft | Qt::AlignVCenter, shown);
     }
     if (focusVisible()) ui::paintFocusRing(p, r, radius::control);
 }
@@ -593,7 +567,7 @@ ProjectSidebar::ProjectSidebar(QWidget *parent) : QWidget(parent) {
     m_scroll->setWidgetResizable(true);
     m_scroll->setFrameShape(QFrame::NoFrame);
     m_scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    m_scroll->setFadeColor(tokens::color(well));
+    m_scroll->setFadeColor(tokens::color(sidebar));
     m_scroll->setStyleSheet(QStringLiteral("QScrollArea#sidebarScroll { background: transparent; border: 0; }"));
     m_scroll->viewport()->setAutoFillBackground(false);
     auto *content = new QWidget;
@@ -616,19 +590,19 @@ ProjectSidebar::ProjectSidebar(QWidget *parent) : QWidget(parent) {
     m_newConversation->setVisible(false);
     m_search->setVisible(false);
 
-    // A working conversation's dot: only it is drawn again, and only when it
-    // has changed enough to see (MOTION_UI.md, Sidebar activity).
-    m_pulse.setStartValue(0.0);
-    m_pulse.setEndValue(1.0);
-    m_pulse.setDuration(motion::workPulse);
-    m_pulse.setLoopCount(-1);
-    connect(&m_pulse, &QVariantAnimation::valueChanged, this, [this](const QVariant &value) {
-        const int step = qRound(value.toReal() * motion::workPulseSteps);
-        if (step == m_pulseStep) return;
-        m_pulseStep = step;
-        const qreal level = pulseLevel(step);
+    // The light over a working title: only that title is drawn again, 30 times
+    // a second, and only while it can be seen (MOTION_UI.md, Sidebar activity).
+    m_shimmer.setStartValue(0.0);
+    m_shimmer.setEndValue(1.0);
+    m_shimmer.setDuration(motion::titleShimmer);
+    m_shimmer.setLoopCount(-1);
+    connect(&m_shimmer, &QVariantAnimation::valueChanged, this, [this](const QVariant &value) {
+        const int step = qRound(value.toReal() * motion::titleShimmerSteps);
+        if (step == m_shimmerStep) return;
+        m_shimmerStep = step;
+        const qreal phase = qreal(step) / motion::titleShimmerSteps;
         for (SidebarRow *row : std::as_const(m_rows))
-            if (row->isPulsing()) row->setPulse(level);
+            if (row->isShimmering()) row->setShimmerPhase(phase);
     });
     m_clock.setInterval(kClockMs);
     connect(&m_clock, &QTimer::timeout, this, &ProjectSidebar::refreshTimes);
@@ -718,9 +692,19 @@ void ProjectSidebar::setFolded(const QString &path, bool folded) {
 
 void ProjectSidebar::setConversations(const QList<Conversation> &conversations, const QString &currentId) {
     if (conversations == m_conversations && currentId == m_currentConversation) return;
+    // What stopped working while you were not looking at it keeps a dot until
+    // you do.
+    QHash<QString, State> was;
+    for (const Conversation &conversation : std::as_const(m_conversations)) was.insert(conversation.id, conversation.state);
+    for (const Conversation &conversation : conversations) {
+        const State before = was.value(conversation.id, State::Idle);
+        const bool stopped = (before == State::Working || before == State::Making) && conversation.state == State::Idle;
+        if (stopped && !(watching() && conversation.id == currentId)) m_unseen.insert(conversation.id);
+    }
     const bool sameRows = conversations == m_conversations;
     m_conversations = conversations;
     m_currentConversation = currentId;
+    if (watching()) m_unseen.remove(currentId);
     if (sameRows) {
         // Which of a long folder's rows show depends on the one that is open:
         // chosen from past the first few, it comes into sight with the rest.
@@ -729,12 +713,52 @@ void ProjectSidebar::setConversations(const QList<Conversation> &conversations, 
             return;
         }
         for (const Conversation &conversation : std::as_const(m_conversations))
-            if (SidebarRow *row = conversationRow(conversation.id)) row->setCurrent(conversation.id == currentId);
+            if (SidebarRow *row = conversationRow(conversation.id)) {
+                row->setCurrent(conversation.id == currentId);
+                row->setBadge(badgeOf(conversation));
+            }
         // With none chosen, the folder itself is where the work is.
         if (SidebarRow *folder = projectRow(m_current)) folder->setCurrent(!m_conversationsShown || currentId.isEmpty());
         return;
     }
     rebuild();
+}
+
+bool ProjectSidebar::watching() const { return window() && window()->isActiveWindow(); }
+
+void ProjectSidebar::markSeen() {
+    if (!watching() || !m_unseen.remove(m_currentConversation)) return;
+    const int index = indexOf(m_currentConversation);
+    if (SidebarRow *row = conversationRow(m_currentConversation); row && index >= 0) row->setBadge(badgeOf(m_conversations.at(index)));
+}
+
+void ProjectSidebar::changeEvent(QEvent *event) {
+    QWidget::changeEvent(event);
+    if (event->type() == QEvent::ActivationChange) markSeen();
+}
+
+QColor ProjectSidebar::badgeOf(const Conversation &conversation) const {
+    switch (conversation.state) {
+    case State::Review: return tokens::color(activity::review);
+    case State::Failed: return tokens::color(activity::failed);
+    case State::Settled: return tokens::color(activity::settled);
+    case State::Idle: return m_unseen.contains(conversation.id) ? tokens::color(activity::settled) : QColor();
+    case State::Working:
+    case State::Making: break;
+    }
+    return {};
+}
+
+QString ProjectSidebar::stateOf(const Conversation &conversation) const {
+    switch (conversation.state) {
+    case State::Working: return QStringLiteral("Working");
+    case State::Making: return QStringLiteral("Making");
+    case State::Review: return QStringLiteral("Review");
+    case State::Failed: return QStringLiteral("Failed");
+    case State::Settled: return QStringLiteral("Done");
+    case State::Idle: return m_unseen.contains(conversation.id) ? QStringLiteral("Done") : QString();
+    }
+    return {};
 }
 
 void ProjectSidebar::setConversationsShown(bool shown) {
@@ -747,8 +771,9 @@ void ProjectSidebar::setConversationsShown(bool shown) {
 void ProjectSidebar::setWorking(bool working) {
     if (working == m_working) return;
     m_working = working;
-    if (SidebarRow *row = projectRow(m_current))
-        row->setTrailing(working ? QStringLiteral("Working") : QString(), tokens::color(accentInk));
+    // A folded folder shows that Kerf works in it on its name.
+    if (SidebarRow *row = projectRow(m_current)) row->setShimmer(working && (!m_conversationsShown || isFolded(m_current)));
+    updateShimmer();
 }
 
 void ProjectSidebar::setTopInset(int inset) { m_top->setFixedHeight(inset); }
@@ -915,54 +940,43 @@ SidebarRow *ProjectSidebar::makeConversationRow(const Conversation &conversation
     auto *row = new SidebarRow(QString(), conversation.title, kChildIndent);
     row->setObjectName(QStringLiteral("sidebarConversation"));
     row->setGuide(true);
-    ui::setTip(row, conversation.title);
+    row->setDimmed(dimmed);
+    // When it last changed is a hover away.
+    const QString when = relativeTime(conversation.updated, now());
+    ui::setTip(row, when.isEmpty() ? conversation.title : QStringLiteral("%1 · %2").arg(conversation.title, when));
     const bool here = project == m_current;
     if (!here) {
         // Another folder's: it is opened, with its project, and that is all.
         row->setProperty("projectPath", project);
-        row->setDot(tokens::color(activity::idle));
-        row->setDimmed(dimmed);
-        row->setTrailing(relativeTime(conversation.updated, now()), tokens::color(ink3));
         row->setAccessibleDescription(QStringLiteral("In %1").arg(QFileInfo(project).fileName()));
         connect(row, &QAbstractButton::clicked, this, [this, project, id = conversation.id] { emit conversationChosenIn(project, id); });
         return row;
     }
     row->setProperty("conversationId", conversation.id);
     row->setCurrent(conversation.id == m_currentConversation);
-    const bool working = conversation.state == State::Working;
-    row->setDot(tokens::color(dotColorOf(conversation.state)), working);
-    if (working) row->setPulse(pulseLevel(m_pulseStep));
-    row->setDimmed(dimmed);
-    const QString word = stateWord(conversation.state);
-    if (!word.isEmpty()) row->setTrailing(word, tokens::color(stateWordColor(conversation.state)));
-    else row->setTrailing(relativeTime(conversation.updated, now()), tokens::color(ink3));
+    const bool working = conversation.state == State::Working || conversation.state == State::Making;
+    row->setShimmer(working);
+    if (working) row->setShimmerPhase(qreal(std::max(0, m_shimmerStep)) / motion::titleShimmerSteps);
+    row->setBadge(badgeOf(conversation));
     QStringList about;
-    if (!word.isEmpty()) about << word;
-    else if (conversation.state == State::Settled) about << QStringLiteral("Done");
-    else if (conversation.state == State::Failed) about << QStringLiteral("Failed");
+    if (const QString state = stateOf(conversation); !state.isEmpty()) about << state;
     if (conversation.archived) about << QStringLiteral("Archived");
     if (conversation.count > 0)
         about << (conversation.count == 1 ? QStringLiteral("1 message") : QStringLiteral("%1 messages").arg(conversation.count));
     row->setAccessibleDescription(about.join(QStringLiteral(", ")));
 
+    // One way to all it can be asked, as its right-click.
     const QString id = conversation.id;
-    const bool archived = conversation.archived;
-    auto *archiving = new ui::IconButton(archived ? QStringLiteral("g-unarchive") : QStringLiteral("g-archive"),
-                                         ui::IconButton::Size::S20);
-    archiving->setObjectName(QStringLiteral("sidebarArchiveButton"));
-    archiving->setCheckable(false);
-    archiving->setFocusPolicy(Qt::NoFocus);
-    archiving->setAccessibleName(archived ? QStringLiteral("Unarchive conversation") : QStringLiteral("Archive conversation"));
-    archiving->setTip(archived ? QStringLiteral("Unarchive") : QStringLiteral("Archive"));
-    connect(archiving, &QAbstractButton::clicked, this, [this, id, archived] { archive(id, !archived); });
-    auto *remove = new ui::IconButton(QStringLiteral("g-delete"), ui::IconButton::Size::S20);
-    remove->setObjectName(QStringLiteral("sidebarDeleteButton"));
-    remove->setCheckable(false);
-    remove->setFocusPolicy(Qt::NoFocus);
-    remove->setAccessibleName(QStringLiteral("Delete conversation"));
-    remove->setTip(QStringLiteral("Delete"));
-    connect(remove, &QAbstractButton::clicked, this, [this, id] { confirmDelete(id); });
-    row->setHoverActions({archiving, remove});
+    auto *more = new ui::IconButton(QStringLiteral("g-more"), ui::IconButton::Size::S20);
+    more->setObjectName(QStringLiteral("sidebarConversationMenuButton"));
+    more->setCheckable(false);
+    more->setFocusPolicy(Qt::NoFocus);
+    more->setAccessibleName(QStringLiteral("More for %1").arg(conversation.title));
+    more->setTip(QStringLiteral("More"));
+    connect(more, &QAbstractButton::clicked, this, [this, id, more] {
+        if (QMenu *menu = conversationMenu(id)) ui::popupMenu(menu, more);
+    });
+    row->setHoverActions({more});
 
     row->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(row, &QWidget::customContextMenuRequested, this,
@@ -1019,13 +1033,15 @@ SidebarRow *ProjectSidebar::makeProjectRow(const QString &path) {
     // A folder's name is the heading of what is under it.
     row->setStrong(true);
     row->setCurrent(chosen && (!m_conversationsShown || m_currentConversation.isEmpty()));
-    if (chosen && m_working) row->setTrailing(QStringLiteral("Working"), tokens::color(accentInk));
     if (!m_conversationsShown) {
+        row->setShimmer(chosen && m_working);
         // The start window: a folder is chosen to work in.
         connect(row, &QAbstractButton::clicked, this, [this, path] { emit projectChosen(path); });
         return row;
     }
     const bool folded = isFolded(path);
+    // Folded, its name shows that Kerf works in it; unfolded, the conversation's does.
+    row->setShimmer(chosen && m_working && folded);
     row->setChevron(folded ? SidebarRow::Chevron::Folded : SidebarRow::Chevron::Unfolded);
     row->setAccessibleDescription(folded ? QStringLiteral("Folded") : QStringLiteral("Unfolded"));
     // Its name, like its chevron, folds and unfolds it: what is in it opens it.
@@ -1141,7 +1157,7 @@ void ProjectSidebar::rebuild(bool arrivals, bool unfolding) {
             const bool all = shown == live.size();
             if (!all || m_showAll.contains(path)) {
                 auto *more = new SidebarRow(QString(), all ? QStringLiteral("Show less") : QStringLiteral("Show %1 more").arg(live.size() - shown),
-                                            kTitleIndent);
+                                            kChildIndent);
                 more->setObjectName(QStringLiteral("sidebarMore"));
                 more->setGuide(true);
                 more->setDimmed(true);
@@ -1178,7 +1194,7 @@ void ProjectSidebar::rebuild(bool arrivals, bool unfolding) {
         beginRename(renaming);
         if (m_renameField) m_renameField->setText(typed);
     }
-    updatePulse();
+    updateShimmer();
 }
 
 void ProjectSidebar::refreshTimes() {
@@ -1189,49 +1205,49 @@ void ProjectSidebar::refreshTimes() {
         rebuild(false);
         return;
     }
+    // When each last changed, in its tip.
     const QDateTime clock = now();
+    const auto tip = [&clock](SidebarRow *row, const Conversation &conversation) {
+        const QString when = relativeTime(conversation.updated, clock);
+        ui::setTip(row, when.isEmpty() ? conversation.title : QStringLiteral("%1 · %2").arg(conversation.title, when));
+    };
     for (auto it = m_others.cbegin(); it != m_others.cend(); ++it)
         for (const Conversation &conversation : it.value()) {
             const int index = int(m_rowKeys.indexOf(QStringLiteral("conversation:") + it.key() + QLatin1Char('#') + conversation.id));
-            if (index >= 0) m_rows.at(index)->setTrailing(relativeTime(conversation.updated, clock), tokens::color(ink3));
+            if (index >= 0) tip(m_rows.at(index), conversation);
         }
-    for (const Conversation &conversation : std::as_const(m_conversations)) {
-        if (!stateWord(conversation.state).isEmpty()) continue;
-        if (SidebarRow *row = conversationRow(conversation.id))
-            row->setTrailing(relativeTime(conversation.updated, clock), tokens::color(ink3));
-    }
+    for (const Conversation &conversation : std::as_const(m_conversations))
+        if (SidebarRow *row = conversationRow(conversation.id)) tip(row, conversation);
 }
 
-void ProjectSidebar::updatePulse() {
+void ProjectSidebar::updateShimmer() {
     bool any = false;
-    for (const SidebarRow *row : std::as_const(m_rows)) any = any || row->isPulsing();
+    for (const SidebarRow *row : std::as_const(m_rows)) any = any || row->isShimmering();
     const bool run = any && isVisible() && !ui::reducedMotion();
     if (run) {
-        if (m_pulse.state() != QAbstractAnimation::Running) m_pulse.start();
+        if (m_shimmer.state() != QAbstractAnimation::Running) m_shimmer.start();
         return;
     }
-    m_pulse.stop();
-    m_pulseStep = -1;
-    for (SidebarRow *row : std::as_const(m_rows))
-        if (row->isPulsing()) row->setPulse(1.0);
+    m_shimmer.stop();
+    m_shimmerStep = -1;
 }
 
 void ProjectSidebar::showEvent(QShowEvent *event) {
     QWidget::showEvent(event);
     refreshTimes();
     m_clock.start();
-    updatePulse();
+    updateShimmer();
 }
 
 void ProjectSidebar::hideEvent(QHideEvent *event) {
     QWidget::hideEvent(event);
     m_clock.stop();
-    updatePulse();
+    updateShimmer();
 }
 
 void ProjectSidebar::paintEvent(QPaintEvent *event) {
     QPainter p(this);
-    p.fillRect(event->rect(), tokens::color(well));
+    p.fillRect(event->rect(), tokens::color(sidebar));
 }
 
 } // namespace kerf

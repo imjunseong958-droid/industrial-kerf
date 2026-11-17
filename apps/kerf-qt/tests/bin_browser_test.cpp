@@ -461,10 +461,10 @@ private slots:
         QCOMPARE(ProjectPanel::badgeText(3725, 24), QStringLiteral("1h02m"));
     }
 
-    // The bin at its 272 (271 inside its seam): a 28 strip, the grid on the
-    // well with what Roles leaves, 2 columns of 112, 12 apart, padded 12 16;
-    // items 101 tall with rows 12 apart; Roles as tall as its rows under it.
-    void binGridIsTwoColumnsOf112At272() {
+    // The band across the panel: a 28 strip, then the tiles on the well in one
+    // row of 112, 12 apart, padded 12 16, that goes along as far as there are
+    // media; Roles a column at its end, as tall as the band leaves it.
+    void binTilesAreOneRowAcrossTheBand() {
         ProjectPanel bin(nullptr);
         QJsonArray sources;
         for (int index = 0; index < 12; ++index)
@@ -472,32 +472,42 @@ private slots:
                                        {"width", 1920}, {"height", 1080}, {"duration", 4}});
         bin.setSources(sources);
         QCOMPARE(bin.mediaCount(), 12);
-        bin.resize(tokens::layout::bin - 1, 343);
+        bin.resize(832, tokens::layout::mediaBand);
         bin.show();
         QVERIFY(QTest::qWaitForWindowExposed(&bin));
         QCoreApplication::processEvents();
         QCOMPARE(bin.m_pages->y(), tokens::layout::strip);
-        // Roles has its header (no tracks yet) and the media page the rest.
-        QCOMPARE(bin.m_rolesArea->height(), ProjectPanel::kRoleRow + tokens::space::s4);
-        QCOMPARE(bin.m_pages->height(), bin.height() - tokens::layout::strip - bin.m_rolesArea->height());
+        QCOMPARE(bin.m_pages->height(), tokens::layout::mediaBand - tokens::layout::strip);
         QVERIFY(bin.m_pages->height() >= ProjectPanel::kGridLeast);
+        // Roles is a column at the end, beside the page.
+        QCOMPARE(bin.m_rolesArea->width(), ProjectPanel::kRolesWidth);
+        QCOMPARE(bin.m_rolesArea->x(), bin.width() - ProjectPanel::kRolesWidth);
+        QCOMPARE(bin.m_pages->width(), bin.width() - ProjectPanel::kRolesWidth);
         const auto thumb = [&bin](int row) {
             const QRect cell = bin.m_list->visualItemRect(bin.m_list->item(row));
             return QRect(bin.m_list->viewport()->mapTo(&bin, cell.topLeft()), ProjectPanel::kThumbnail);
         };
         QCOMPARE(thumb(0).topLeft(), QPoint(ProjectPanel::kSidePadding, tokens::layout::strip + ProjectPanel::kTopPadding));
         QCOMPARE(thumb(1).left(), ProjectPanel::kSidePadding + 112 + 12);
-        QCOMPARE(thumb(2).left(), ProjectPanel::kSidePadding);
-        QCOMPARE(thumb(2).top() - thumb(0).top(), ProjectPanel::kItemHeight + ProjectPanel::kRowGap);
-        // The second column ends inside the bin, clear of its edge.
-        QVERIFY(thumb(1).right() < bin.width() - 1);
-        // Many tracks: Roles keeps to its most and scrolls.
+        // One row: the third is beside the second, not under the first.
+        QCOMPARE(thumb(2).top(), thumb(0).top());
+        QCOMPARE(thumb(2).left(), ProjectPanel::kSidePadding + 2 * (112 + 12));
+        // The row goes on past the band's end, and a wheel turned down goes along it.
+        QScrollBar *along = bin.m_list->horizontalScrollBar();
+        QVERIFY(along->maximum() > 0);
+        QCOMPARE(along->value(), 0);
+        QWheelEvent down(QPointF(40, 40), bin.m_list->viewport()->mapToGlobal(QPointF(40, 40)), QPoint(), QPoint(0, -120),
+                         Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+        QApplication::sendEvent(bin.m_list->viewport(), &down);
+        QVERIFY(along->value() > 0);
+        // Many tracks: Roles keeps to the band and scrolls.
         QJsonArray tracks;
         for (int index = 1; index <= 12; ++index)
             tracks.append(QJsonObject{{"id", QStringLiteral("V%1").arg(index)}, {"type", "video"}, {"role", QStringLiteral("r%1").arg(index)}});
         bin.setTracks(tracks);
         QCoreApplication::processEvents();
-        QCOMPARE(bin.m_rolesArea->height(), ProjectPanel::kRolesMost);
+        QCOMPARE(bin.m_rolesArea->height(), tokens::layout::mediaBand - tokens::layout::strip);
+        QTRY_VERIFY(static_cast<QScrollArea *>(bin.m_rolesArea)->verticalScrollBar()->maximum() > 0);
         // The list view keeps the same media, 24 pt rows.
         bin.setListView(true);
         QCoreApplication::processEvents();

@@ -216,7 +216,7 @@ void FlatToolBar::setSidebarEdge(int edge) {
 void FlatToolBar::paintEvent(QPaintEvent *event) {
     QPainter p(this);
     p.fillRect(event->rect(), color(chrome));
-    if (m_sidebarEdge > 0) p.fillRect(QRect(0, 0, m_sidebarEdge, height()).intersected(event->rect()), color(well));
+    if (m_sidebarEdge > 0) p.fillRect(QRect(0, 0, m_sidebarEdge, height()).intersected(event->rect()), color(tokens::sidebar));
 }
 
 void FlatToolBar::resizeEvent(QResizeEvent *event) {

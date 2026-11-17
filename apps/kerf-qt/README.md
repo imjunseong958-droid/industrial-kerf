@@ -184,7 +184,7 @@ same span, and Slide (U) moves a clip between its neighbours. With Snap on
 (Sequence → Snap, Shift+S), dragged clips and edges snap to clip edges, the
 playhead, and the start. A drop lands where the drag's preview showed it.
 
-The Media sheet shows the project's media as a bin, and its Index lists a
+The Media band shows the project's media as a bin, and its Index lists a
 media's shots. Double-click an item, or choose it and use Insert (,) or
 Overwrite (.), to place the whole of it at the playhead on the picture and
 sound tracks the timeline's heads target; a picture and its sound are placed
@@ -258,16 +258,17 @@ composer.
 **The regions** stay flush, with one hairline between them and no cards, radii
 or margins (`ui/stage_shell.h`; `stage::rects()` is the geometry, a pure function
 of the window's size, the picture's aspect and which panes are open). The toolbar
-is 40 points tall. The sidebar is 288 wide until its edge is dragged (232 to 440;
-a double-click on the edge puts it back), and gives way in a window under 1100.
-With the panel closed the conversation has the rest of the window, its text in a
-720 wide column. With it open the conversation is 560 wide, giving way down to 320
-only when it would leave the panel under 600. At a 1600 × 1000 window:
+is 40 points tall. The sidebar is 288 wide until its edge is dragged (from 232 to
+all but 640 of the window; a press on the edge puts the sidebar away, and a
+double-click puts the width back), and gives way in a window under 1100. With the
+panel closed the conversation has the rest of the window, its text in a 720 wide
+column. With it open the conversation is 480 wide, giving way down to 320 only
+when it would leave the panel under 600. At a 1600 × 1000 window:
 
 | Sequence | Sidebar | Conversation | Picture | Timeline |
 |---|---|---|---|---|
-| Wide (aspect ≥ 1.2) | 288 × 960 at (0, 40) | 560 × 960 at (288, 40) | 752 × 420 at (848, 40) | 752 × 540 at (848, 460) |
-| 9:16 | 288 × 960 at (0, 40) | 560 × 960 at (288, 40) | 752 × 614 at (848, 40) | 752 × 346 at (848, 654) |
+| Wide (aspect ≥ 1.2) | 288 × 960 at (0, 40) | 480 × 960 at (288, 40) | 832 × 420 at (768, 40) | 832 × 540 at (768, 460) |
+| 9:16 | 288 × 960 at (0, 40) | 480 × 960 at (288, 40) | 832 × 614 at (768, 40) | 832 × 346 at (768, 654) |
 
 Under a wide picture the timeline has 56% of the height, at least 260, and
 whatever the picture's aspect does not use; the picture pillarboxes in black in
@@ -326,10 +327,13 @@ a guide: the open one's as the bridge lists them (`.kerf/conversations/`), anoth
 read from the same folder beside its project. The open folder starts unfolded and
 the others folded; a folder's name or its chevron folds and unfolds it (Left and
 Right from the keys), and that is kept. The first six show, with "Show N more"
-for the rest. Each has a dot for what it is doing (working, making, waiting for
-review, failed) and its age; hovering one of the open folder's shows Archive and
-Delete, its menu also renames (F2), and archived ones fold under "Archived · N".
-Delete asks first. The folder says Working while Kerf is. Another folder's
+for the rest. A title has its row to itself, starting under its folder's icon,
+with its age in its tip: a band of light passes over it while Kerf works or makes
+something for it, and a dot at its end says it is done while you looked
+elsewhere, waits for your review, or failed (until you look at it). Hovering one
+of the open folder's shows ⋯, its menu (Rename… (F2), Archive, Delete…), and
+archived ones fold under "Archived · N". Delete asks first. A folded folder has
+the light on its name while Kerf works in it. Another folder's
 conversation opens its project on that conversation. Hovering a folder shows + (a
 new conversation in it) and its menu, which a right-click opens too: New
 Conversation, Open Project, Show in Finder, Copy Path, and Remove from Sidebar,
@@ -370,12 +374,15 @@ composer's placeholder, with the reason on its tooltip. The
 connection, error and project.kerf bars that carry an action lie over the top of
 the content while they show.
 
-**The Media sheet.** Media (the bin and roles, 272 wide) is a column of its own
-between the conversation and the panel, of their height, with a left hairline and
-a close button at the end of its strip. The conversation gives way to it as it
-does to the panel, so it covers neither what is said, nor the composer, nor the
-timeline a drag goes to. Its command toggles it and Esc closes it. Selecting a
-clip opens nothing by itself.
+**The Media band.** Media (the bin and roles) is a band 152 tall across the
+panel, between the picture and the timeline, with a close button at the end of
+its strip: its tiles are one row that goes along (a wheel turned down goes along
+it too), and Roles is a column at its end. The timeline gives it its top, and the
+picture its foot only when the timeline would be left under 200, so it covers
+neither what is said nor the picture, and what is dragged from it has only a
+little way to go. Its command (⌘1, or the grid in the timeline's strip) toggles
+it, opening the panel if it is closed, and Esc closes it. Selecting a clip opens
+nothing by itself.
 
 **The picture.** Masks, annotations, captions and overlays lie on the frame at
 its size. While a proposal is being previewed, a chip 12 points inside the

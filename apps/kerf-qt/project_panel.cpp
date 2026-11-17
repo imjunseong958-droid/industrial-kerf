@@ -26,6 +26,8 @@
 #include <QHelpEvent>
 #include <QVBoxLayout>
 #include <QVariantAnimation>
+#include <QScrollBar>
+#include <QWheelEvent>
 
 #include <algorithm>
 #include <cmath>
@@ -498,7 +500,7 @@ ProjectPanel::ProjectPanel(MediaArtwork *artwork, QWidget *parent) : QWidget(par
     layout->addWidget(m_searchRow);
     connect(m_search, &QLineEdit::textChanged, this, &ProjectPanel::applyFilter);
 
-    // The media page and the Index page, 192 tall on the well.
+    // The media page and the Index page on the well, beside Roles.
     m_pages = new QStackedWidget;
     m_pages->setObjectName(QStringLiteral("binPages"));
     m_pages->setMinimumHeight(kGridLeast);
@@ -517,6 +519,8 @@ ProjectPanel::ProjectPanel(MediaArtwork *artwork, QWidget *parent) : QWidget(par
     m_list->setContextMenuPolicy(Qt::CustomContextMenu);
     m_list->setStyleSheet(QStringLiteral("QListWidget { background: transparent; border: none; outline: none; }"));
     m_list->viewport()->setAutoFillBackground(false);
+    // In the band the tiles are one row: a wheel turned down goes along it.
+    m_list->viewport()->installEventFilter(this);
     wellLayout->addWidget(m_list);
     m_pages->addWidget(m_well);
     auto *indexPage = new QWidget;
@@ -542,13 +546,16 @@ ProjectPanel::ProjectPanel(MediaArtwork *artwork, QWidget *parent) : QWidget(par
     m_indexEmpty->setContentsMargins(kSidePadding, 0, kSidePadding, 0);
     indexLayout->addWidget(m_indexEmpty, 1);
     m_pages->addWidget(indexPage);
-    layout->addWidget(m_pages, 1);
+    auto *body = new QHBoxLayout;
+    body->setContentsMargins(0, 0, 0, 0);
+    body->setSpacing(0);
+    body->addWidget(m_pages, 1);
     connect(m_index, &QListWidget::itemClicked, this, [this](QListWidgetItem *item) {
         if (item->data(kIndexKindRole).toInt() == 1)
             emit seekRequested(item->data(kMediaRole).toString(), item->data(kIndexTimeRole).toDouble());
     });
 
-    // Roles: the rest of the band, scrolling when there are more than fit.
+    // Roles: a column at the band's end, scrolling when there are more than fit.
     auto *roles = new ui::FadeScrollArea;
     roles->setObjectName(QStringLiteral("binRoles"));
     roles->setFadeColor(color(tokens::chrome));
@@ -581,7 +588,10 @@ ProjectPanel::ProjectPanel(MediaArtwork *artwork, QWidget *parent) : QWidget(par
     roleLayout->addStretch(1);
     roles->setWidget(m_roleBox);
     m_rolesArea = roles;
-    layout->addWidget(roles, 0);
+    roles->setFixedWidth(kRolesWidth);
+    roles->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    body->addWidget(roles, 0);
+    layout->addLayout(body, 1);
 
     connect(m_list, &QListWidget::itemActivated, this, [this](QListWidgetItem *item) {
         emit openRequested(item->data(kMediaRole).toString());
@@ -621,6 +631,16 @@ bool ProjectPanel::event(QEvent *event) {
 }
 
 bool ProjectPanel::eventFilter(QObject *watched, QEvent *event) {
+    // A wheel turned down or up goes along the row of tiles.
+    if (m_list && watched == m_list->viewport() && event->type() == QEvent::Wheel && !m_listView) {
+        auto *wheel = static_cast<QWheelEvent *>(event);
+        if (wheel->angleDelta().x() == 0 && wheel->angleDelta().y() != 0) {
+            QScrollBar *along = m_list->horizontalScrollBar();
+            const int step = wheel->pixelDelta().isNull() ? wheel->angleDelta().y() / 120 * kThumbnail.width() / 2 : wheel->pixelDelta().y();
+            along->setValue(along->value() - step);
+            return true;
+        }
+    }
     // Esc in the search field clears it and puts it away.
     if (watched == m_search && event->type() == QEvent::KeyPress && static_cast<QKeyEvent *>(event)->key() == Qt::Key_Escape) {
         m_search->clear();
@@ -637,13 +657,14 @@ void ProjectPanel::paintEvent(QPaintEvent *) {
     QPainter painter(this);
     painter.fillRect(rect(), color(tokens::chrome));
     const QColor line = color(tokens::line);
-    // The strip's top and bottom lines; the pages on the well; Roles' top line.
+    // The strip's top and bottom lines; the pages on the well; the line at
+    // Roles' left.
     painter.fillRect(QRect(0, 0, width(), 1), line);
     painter.fillRect(QRect(0, tokens::layout::strip - 1, width(), 1), line);
     const QRect pages(m_pages->mapTo(this, QPoint()), m_pages->size());
     painter.fillRect(pages, color(tokens::well));
     if (m_searchRow->isVisible()) painter.fillRect(QRect(0, m_searchRow->geometry().bottom(), width(), 1), line);
-    painter.fillRect(QRect(0, pages.bottom() + 1, width(), 1), line);
+    painter.fillRect(QRect(pages.right() + 1, pages.top(), 1, pages.height()), line);
 }
 
 void ProjectPanel::setSources(const QJsonArray &sources) {
@@ -912,6 +933,9 @@ void ProjectPanel::setListView(bool list) {
     delegate->list = list;
     if (list) {
         m_list->setViewMode(QListView::ListMode);
+        // A list goes down, scrolled by the wheel as lists are.
+        m_list->setFlow(QListView::TopToBottom);
+        m_list->setWrapping(false);
         m_list->setGridSize(QSize());
         m_list->setUniformItemSizes(true);
         m_well->layout()->setContentsMargins(0, tokens::space::s4, 0, 0);
@@ -920,7 +944,7 @@ void ProjectPanel::setListView(bool list) {
         m_list->setMovement(QListView::Static);
         m_list->setResizeMode(QListView::Adjust);
         m_list->setFlow(QListView::LeftToRight);
-        m_list->setWrapping(true);
+        m_list->setWrapping(false);
         m_list->setSpacing(0);
         m_list->setUniformItemSizes(true);
         m_list->setGridSize(QSize(kThumbnail.width() + kColumnGap, kItemHeight + kRowGap));
@@ -1185,8 +1209,6 @@ void ProjectPanel::rebuildRoles() {
         m_roleRows->addWidget(row);
         m_roleChecks << check;
     }
-    // As tall as its rows, to a point; past it they scroll, and the media have the rest.
-    if (m_rolesArea) m_rolesArea->setFixedHeight(std::min(kRolesMost, kRoleRow * int(m_roles.size() + 1) + tokens::space::s4));
 }
 
 } // namespace kerf

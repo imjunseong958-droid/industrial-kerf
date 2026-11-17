@@ -401,7 +401,7 @@ private slots:
         QCOMPARE(bin.status(QStringLiteral("m5")), QStringLiteral("Wants making · Ada's words changed"));
         bin.setWantsMaking({});
 
-        bin.resize(tokens::layout::bin - 1, 520);
+        bin.resize(832, tokens::layout::mediaBand);
         bin.show();
         QVERIFY(QTest::qWaitForWindowExposed(&bin));
         QVERIFY(!bin.makingTicks());
