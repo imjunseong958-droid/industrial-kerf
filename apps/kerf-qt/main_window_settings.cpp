@@ -329,9 +329,9 @@ void MainWindow::buildPreferences() {
     // in the conversation, which may have a face and a size of its own.
     const FaceChoice faces = loadFaceChoice();
     ui::SettingsGroup *faceGroup = appearancePage->addGroup();
-    m_interfaceFace = choice({{"inter", "Inter"}, {"pretendard", "Pretendard"}, {"system", "System"}}, faces.ui);
+    m_interfaceFace = choice({{"inter", "Inter"}, {"pretendard", "Pretendard"}, {"plex", "IBM Plex"}, {"system", "System"}}, faces.ui);
     m_interfaceFace->setObjectName(QStringLiteral("settingsInterfaceFace"));
-    faceGroup->addRow(QStringLiteral("Interface font"), QStringLiteral("With Inter, Korean is set in Pretendard"), m_interfaceFace);
+    faceGroup->addRow(QStringLiteral("Interface font"), QStringLiteral("Inter and IBM Plex bring a Korean face of their own"), m_interfaceFace);
     m_readingFace = choice({{"same", "Same as interface"}, {"serif", "Serif"}}, faces.reading);
     m_readingFace->setObjectName(QStringLiteral("settingsReadingFace"));
     faceGroup->addRow(QStringLiteral("Conversation font"), QStringLiteral("For what you ask and what Kerf answers"), m_readingFace);

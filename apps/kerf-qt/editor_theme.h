@@ -322,7 +322,9 @@ void loadBundledFonts();
 // settings keep them under (appearance/interfaceFace, readingFace,
 // readingSize):
 //   interface  "inter" (the design's, with Pretendard for Hangul),
-//              "pretendard", or "system" (the computer's own interface face)
+//              "pretendard", "plex" (IBM Plex Sans, with IBM Plex Sans KR for
+//              Hangul and IBM Plex Mono for what is set in mono), or "system"
+//              (the computer's own interface face)
 //   reading    what is said in the conversation: "same" as the interface, or
 //              "serif" (Noto Serif, with Nanum Myeongjo for Hangul)
 //   size       "small", "default" or "large": the conversation at 13, 14 or 16

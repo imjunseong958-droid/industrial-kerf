@@ -75,7 +75,7 @@ Import media with File ▸ Import Media… (⌘O).
 - The format picker in the timeline's strip switches the sequence between 16:9
   and 9:16 (⌥1, ⌥2).
 - **Settings ▸ Appearance** chooses the fonts: the interface's (Inter,
-  Pretendard, or your system's) and the conversation's, which can be a serif
+  Pretendard, IBM Plex, or your system's) and the conversation's, which can be a serif
   and larger or smaller. They change as you choose.
 - The **sidebar** (⌥⌘S) has New conversation, a search, your project folders,
   each with its own conversations under it, and at its foot your account, which

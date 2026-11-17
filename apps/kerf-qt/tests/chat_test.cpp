@@ -576,7 +576,8 @@ private slots:
             QSettings().remove(QStringLiteral("appearance"));
         });
         // The faces the editor carries are there to choose.
-        for (const char *family : {tokens::uiFamily, tokens::hangulFamily, tokens::serifFamily, tokens::serifHangulFamily})
+        for (const char *family : {tokens::uiFamily, tokens::hangulFamily, tokens::serifFamily, tokens::serifHangulFamily,
+                                   tokens::plexFamily, tokens::plexHangulFamily, tokens::plexMonoFamily})
             QVERIFY2(QFontDatabase::families().contains(QString::fromLatin1(family)), family);
         // The design's own, with Pretendard for the Hangul Inter has none of.
         const tokens::Faces plain = facesFor(FaceChoice{});
@@ -589,6 +590,19 @@ private slots:
         QCOMPARE(fancy.prose, (QStringList{QStringLiteral("Noto Serif"), QStringLiteral("NanumMyeongjo")}));
         QCOMPARE(fancy.proseStep, 2);
         QCOMPARE(facesFor(FaceChoice{QStringLiteral("system"), QStringLiteral("same"), QStringLiteral("small")}).proseStep, -1);
+        // IBM Plex is one design throughout: its own Hangul, and its own mono
+        // for timecodes, where the others keep the design's.
+        const tokens::Faces plex = facesFor(FaceChoice{QStringLiteral("plex"), QStringLiteral("same"), QStringLiteral("default")});
+        QCOMPARE(plex.ui.first(2), (QStringList{QStringLiteral("IBM Plex Sans"), QStringLiteral("IBM Plex Sans KR")}));
+        QCOMPARE(plex.mono, QStringList{QStringLiteral("IBM Plex Mono")});
+        QVERIFY(plain.mono.isEmpty() && fancy.mono.isEmpty());
+        {
+            setEditorFaces(FaceChoice{QStringLiteral("plex"), QStringLiteral("same"), QStringLiteral("default")});
+            QCOMPARE(tokens::font(tokens::body).families().first(), QStringLiteral("IBM Plex Sans"));
+            QCOMPARE(tokens::font(tokens::timecode).families().first(), QStringLiteral("IBM Plex Mono"));
+            setEditorFaces(FaceChoice{});
+            QCOMPARE(tokens::font(tokens::timecode).families().first(), QStringLiteral("JetBrains Mono"));
+        }
         // Kept and read back; a name that is none of them is the first of its kind.
         saveFaceChoice(chosen);
         QCOMPARE(loadFaceChoice(), chosen);

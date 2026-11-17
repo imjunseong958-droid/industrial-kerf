@@ -518,7 +518,7 @@ FaceChoice loadFaceChoice() {
     const QSettings settings;
     FaceChoice choice;
     const QString ui = settings.value(QStringLiteral("appearance/interfaceFace")).toString();
-    if (ui == QLatin1String("pretendard") || ui == QLatin1String("system")) choice.ui = ui;
+    if (ui == QLatin1String("pretendard") || ui == QLatin1String("plex") || ui == QLatin1String("system")) choice.ui = ui;
     if (settings.value(QStringLiteral("appearance/readingFace")).toString() == QLatin1String("serif")) choice.reading = QStringLiteral("serif");
     const QString size = settings.value(QStringLiteral("appearance/readingSize")).toString();
     if (size == QLatin1String("small") || size == QLatin1String("large")) choice.size = size;
@@ -540,7 +540,11 @@ tokens::Faces facesFor(const FaceChoice &choice) {
     if (choice.ui == QLatin1String("system"))
         faces.ui = {QFontDatabase::systemFont(QFontDatabase::GeneralFont).family(), pretendard};
     else if (choice.ui == QLatin1String("pretendard")) faces.ui = {pretendard, inter};
-    else faces.ui = {inter, pretendard};
+    else if (choice.ui == QLatin1String("plex")) {
+        // One design for Latin, Hangul and the mono.
+        faces.ui = {QString::fromLatin1(tokens::plexFamily), QString::fromLatin1(tokens::plexHangulFamily), pretendard};
+        faces.mono = {QString::fromLatin1(tokens::plexMonoFamily)};
+    } else faces.ui = {inter, pretendard};
     if (choice.reading == QLatin1String("serif"))
         faces.prose = {QString::fromLatin1(tokens::serifFamily), QString::fromLatin1(tokens::serifHangulFamily)};
     faces.proseStep = choice.size == QLatin1String("small") ? -1 : choice.size == QLatin1String("large") ? 2 : 0;
@@ -552,7 +556,7 @@ void setEditorFaces(const FaceChoice &choice) {
     const tokens::Faces now = facesFor(choice);
     tokens::faces() = now;
     if (!qApp) return;
-    if (was.ui == now.ui && was.prose == now.prose && was.proseStep == now.proseStep) return;
+    if (was.ui == now.ui && was.mono == now.mono && was.prose == now.prose && was.proseStep == now.proseStep) return;
     // The application's font first: setting it has every widget resolve its
     // font again, which would undo what is set on each below.
     QApplication::setFont(tokens::font(tokens::control));
@@ -562,13 +566,19 @@ void setEditorFaces(const FaceChoice &choice) {
     const QString system = QFontDatabase::systemFont(QFontDatabase::GeneralFont).family();
     const QStringList before = was.ui + QStringList{system};
     const QStringList after = now.ui + QStringList{system};
+    // And one that set a mono style, the mono's.
+    const QStringList monoTail{QString::fromLatin1(tokens::monoFamily), QString::fromLatin1(tokens::monoFallback),
+                               QFontDatabase::systemFont(QFontDatabase::FixedFont).family()};
+    const QStringList monoBefore = was.mono + monoTail;
+    const QStringList monoAfter = now.mono + monoTail;
     const QWidgetList widgets = QApplication::allWidgets();
-    if (before != after)
+    if (before != after || monoBefore != monoAfter)
         for (QWidget *widget : widgets) {
             if (!widget->testAttribute(Qt::WA_SetFont)) continue;
             QFont font = widget->font();
-            if (font.families() != before) continue;
-            font.setFamilies(after);
+            if (font.families() == before) font.setFamilies(after);
+            else if (font.families() == monoBefore) font.setFamilies(monoAfter);
+            else continue;
             widget->setFont(font);
         }
     for (QWidget *widget : widgets) {

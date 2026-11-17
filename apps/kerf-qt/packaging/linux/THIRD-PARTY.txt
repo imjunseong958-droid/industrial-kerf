@@ -13,7 +13,7 @@ Qt 6 (the libQt6* libraries, Qt's ICU libraries, and plugins/)
   LGPL version 3, dynamically linked. You may replace these files with your own
   build of the same Qt version; bin/qt.conf says where Qt looks for its plugins.
 
-Inter, JetBrains Mono, Pretendard, Noto Serif and Nanum Myeongjo (compiled into bin/kerf-qt)
+Inter, JetBrains Mono, Pretendard, IBM Plex, Noto Serif and Nanum Myeongjo (compiled into bin/kerf-qt)
   SIL OFL 1.1. See fonts/.
 
 Code from ArtCraft's EffectCraft and FilmCraft, and the fonts of its text engine

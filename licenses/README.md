@@ -59,6 +59,7 @@ compiles them in, and every package carries the licenses in its `fonts` folder.
 | `Inter-Regular.ttf`, `Inter-Medium.ttf` | The Inter Project Authors | https://github.com/rsms/inter | OFL-1.1 |
 | `JetBrainsMono-Regular.ttf`, `JetBrainsMono-Medium.ttf` | The JetBrains Mono Project Authors | https://github.com/JetBrains/JetBrainsMono | OFL-1.1 |
 | `Pretendard-Regular.ttf`, `Pretendard-Medium.ttf` | Kil Hyung-jin | https://github.com/orioncactus/pretendard (`packages/pretendard/dist/public/static/alternative`) | OFL-1.1 |
+| `IBMPlexSans-Regular.ttf`, `IBMPlexSans-Medium.ttf`, `IBMPlexSansKR-Regular.ttf`, `IBMPlexSansKR-Medium.ttf`, `IBMPlexMono-Regular.ttf`, `IBMPlexMono-Medium.ttf` | IBM Corp. | https://github.com/IBM/plex (`packages/plex-sans`, `packages/plex-sans-kr` (`ttf/hinted`), `packages/plex-mono`, each under `fonts/complete/ttf`); license in `IBMPlex-LICENSE.txt` | OFL-1.1 |
 | `NotoSerif-Regular.ttf` | The Noto Project Authors | https://github.com/notofonts/latin-greek-cyrillic | OFL-1.1 |
 | `NanumMyeongjo-Regular.ttf` | NHN Corporation | https://github.com/google/fonts/tree/main/ofl/nanummyeongjo | OFL-1.1 |
 

@@ -154,6 +154,11 @@ constexpr char monoFallback[] = "Menlo";
 // Pretendard, which is Inter with Hangul; and a serif pair for reading, Noto
 // Serif for Latin with Nanum Myeongjo for Hangul.
 constexpr char hangulFamily[] = "Pretendard";
+// IBM Plex, one design across Latin, Hangul and the mono: an engineered
+// face with a little of the typewriter in it.
+constexpr char plexFamily[] = "IBM Plex Sans";
+constexpr char plexHangulFamily[] = "IBM Plex Sans KR";
+constexpr char plexMonoFamily[] = "IBM Plex Mono";
 constexpr char serifFamily[] = "Noto Serif";
 constexpr char serifHangulFamily[] = "NanumMyeongjo";
 
@@ -166,6 +171,9 @@ constexpr char serifHangulFamily[] = "NanumMyeongjo";
 struct Faces {
     QStringList ui{QString::fromLatin1(uiFamily), QString::fromLatin1(hangulFamily)};
     QStringList prose;
+    // The mono's families, first choice first; none is the design's own
+    // (JetBrains Mono).
+    QStringList mono;
     int proseStep = 0; // points added to the reading size
 };
 inline Faces &faces() {
@@ -180,8 +188,10 @@ inline QFont font(const TypeStyle &style) {
     QFont font;
     const Faces &chosen = faces();
     if (style.mono) {
-        font.setFamilies({QString::fromLatin1(monoFamily), QString::fromLatin1(monoFallback),
-                          QFontDatabase::systemFont(QFontDatabase::FixedFont).family()});
+        QStringList families = chosen.mono;
+        families << QString::fromLatin1(monoFamily) << QString::fromLatin1(monoFallback)
+                 << QFontDatabase::systemFont(QFontDatabase::FixedFont).family();
+        font.setFamilies(families);
     } else {
         QStringList families = style.prose && !chosen.prose.isEmpty() ? chosen.prose : chosen.ui;
         families << QFontDatabase::systemFont(QFontDatabase::GeneralFont).family();

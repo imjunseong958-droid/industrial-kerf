@@ -365,7 +365,8 @@ Models lists the models a recipe's `generate` can name, read from the
 person's own models file (nothing is run to learn them), and says what runs
 inside Kerf; it names no model of its own. Appearance
 chooses the faces text is set in (`editor_theme.h`, `setEditorFaces`): the
-interface's (Inter, with Pretendard for Hangul; Pretendard; or the system's), and
+interface's (Inter, with Pretendard for Hangul; Pretendard; IBM Plex, with its
+own Hangul and mono; or the system's), and
 what is said in the conversation, which may be a serif (Noto Serif, with Nanum
 Myeongjo for Hangul) at one of three sizes. They are compiled in
 (`resources/fonts`), kept under `appearance/`, and put in force at once.

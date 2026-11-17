@@ -101,7 +101,7 @@ class ChatPanel final : public QWidget {
 public:
     static constexpr int kHeaderHeight = 40;
     // The welcome's column, and how many folders and conversations it offers.
-    static constexpr int kWelcomeColumn = 320;
+    static constexpr int kWelcomeColumn = 384;
     static constexpr int kWelcomeFolders = 4;
     static constexpr int kWelcomeRecent = 3;
     static constexpr int kSidePadding = 22;
