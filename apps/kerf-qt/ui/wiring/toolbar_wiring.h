@@ -180,7 +180,7 @@ private:
     void onEvent(const QString &type, const QJsonObject &event);
     void onSnapshot();
     void chooseFormat(int index);
-    void addCommandItem(QMenu *menu, const QString &id, const QString &label, const char *name);
+    QAction *addCommandItem(QMenu *menu, const QString &id, const QString &label, const char *name);
     QString projectLabel() const;
 
     MainWindow *m_window = nullptr;

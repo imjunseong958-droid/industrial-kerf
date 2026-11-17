@@ -279,12 +279,12 @@ EditorTheme makeEditorTheme() {
 
     // Menus and tooltips (0.5): cards with a line2 inset; the row under the
     // pointer is `raised` with the same ink.
-    t.menu = token(tk::card);
+    t.menu = token(tk::popup);
     t.menuBorder = token(tk::line2);
     t.menuText = token(tk::ink);
-    t.menuSelection = token(tk::raised);
+    t.menuSelection = token(tk::popupHover);
     t.menuSelectionText = token(tk::ink);
-    t.menuSeparator = laid(tk::card, tk::line);
+    t.menuSeparator = laid(tk::popup, tk::line);
     t.tooltip = token(tk::card);
     t.tooltipBorder = token(tk::line2);
     t.tooltipText = token(tk::ink);

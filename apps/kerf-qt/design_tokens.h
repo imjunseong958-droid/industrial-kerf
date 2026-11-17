@@ -33,6 +33,10 @@ constexpr QRgb sidebar = qRgb(0x1e, 0x1e, 0x1e);     // the folders and conversa
 constexpr QRgb raised = qRgb(0x26, 0x26, 0x26);      // hover fill, segmented track, proposal card, composer, meter track
 constexpr QRgb on = qRgb(0x30, 0x30, 0x30);          // selected/on fill, avatars, scrub markers, sliding segment fill
 constexpr QRgb hover2 = qRgb(0x36, 0x36, 0x36);      // hover over a raised surface, flash, selected avatar
+// What opens from a press (menus, popovers, the composer's suggestions) is a
+// step up from what it opens over, and the row under the pointer a step more.
+constexpr QRgb popup = raised;
+constexpr QRgb popupHover = hover2;
 // The inks are paper, not white: the same steps as the mockup's greys, warmed
 // a little, as type on an old page is. The surfaces stay neutral.
 constexpr QRgb ink = qRgb(0xec, 0xe6, 0xda);         // primary text, slider knob
@@ -142,6 +146,8 @@ constexpr TypeStyle monoLarge{13, 20, 500, true};      // timeline corner timeco
 constexpr TypeStyle timecodeLarge{20, 24, 500, true};  // the timecode under a vertical picture
 constexpr TypeStyle caption{15, 20, 400, false};       // caption on the picture
 constexpr TypeStyle badge{11, 12, 400, true};          // bin duration badge
+constexpr TypeStyle menuItem{14, 20, 400, false};      // a menu's or a popover's rows
+constexpr TypeStyle menuQuiet{13, 18, 400, false};     // what a row says at its end (a key, a value), a menu's headers, a popover's notes
 
 // Letter spacing is 0 everywhere but the scrub marker initials.
 constexpr qreal markerInitialsSpacing = -0.2;

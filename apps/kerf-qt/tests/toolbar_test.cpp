@@ -208,8 +208,9 @@ private slots:
         window.close();
     }
 
-    // The menu the account opens: Settings and the account first, then what
-    // the toolbar no longer holds, the registry's commands behind each.
+    // The menu the account opens: whose it is, quietly; Settings and the
+    // account first, then what the toolbar no longer holds, the registry's
+    // commands behind each, each with its icon.
     void theAccountMenuReachesEverythingElse() {
         MainWindow window{QString(), QString()};
         window.setConnection(QStringLiteral("ready"));
@@ -219,9 +220,13 @@ private slots:
         QMenu *menu = wiring->appMenu();
         QStringList rows;
         for (QAction *action : menu->actions()) rows << (action->isSeparator() ? QStringLiteral("|") : action->text());
-        const QStringList expected{QStringLiteral("Settings…"), QStringLiteral("Account…"), QStringLiteral("User Guide"), QStringLiteral("|"),
-                                   QStringLiteral("Media"), QStringLiteral("Import…"), QStringLiteral("View")};
+        const QStringList expected{window.m_sidebar->accountRow()->title(), QStringLiteral("Settings…"), QStringLiteral("Account…"),
+                                   QStringLiteral("User Guide"), QStringLiteral("|"), QStringLiteral("Media"), QStringLiteral("Import…"),
+                                   QStringLiteral("View")};
         QCOMPARE(rows.mid(0, expected.size()), expected);
+        QCOMPARE(ui::menuRole(findAction(menu, QStringLiteral("appMenu.who"))), ui::MenuRole::Header);
+        for (const char *name : {"appMenu.settings", "appMenu.account", "appMenu.guide", "appMenu.media", "appMenu.import", "appMenu.view"})
+            QVERIFY2(!ui::menuIcon(findAction(menu, QString::fromLatin1(name))).isEmpty(), name);
         // Nobody is signed in to Kerf Cloud: there is no way out to offer.
         QVERIFY(!findAction(menu, QStringLiteral("appMenu.signOut")));
         // Keys as the registry has them, never written here.

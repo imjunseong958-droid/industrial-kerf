@@ -106,10 +106,11 @@ private slots:
     // ------------------------------------------------------------- icons
 
     // The table is spec 16 without the device preview's glyphs, the panes',
-    // folders', account's and archive's glyphs, and the two drawn outside the 16 set.
+    // folders', account's and archive's glyphs, the account menu's help and
+    // sign out, and the two drawn outside the 16 set.
     void kitIconTableIsTheDesignsSet() {
         const QStringList names = icons::names();
-        QCOMPARE(names.size(), 83);
+        QCOMPARE(names.size(), 85);
         QCOMPARE(names.first(), QStringLiteral("g-169"));
         for (const char *name : {"g-169", "g-916", "g-settings", "g-chev", "g-kerf", "g-gauge", "g-cdr",
                                  "playhead-head", "checkbox-check"})
@@ -971,8 +972,10 @@ private slots:
         QCOMPARE(triggered.count(), 0);
     }
 
-    // A kit menu has 28 pt items, 9 pt separators, 28 pt headers, a check
-    // column, keys on the right, and paints its own card.
+    // A kit menu has 28 pt items, 9 pt separators, 28 pt headers, labels
+    // after a column of icons where any row has one, what a row says and its
+    // check at its end, and paints its own card: the one every menu and
+    // popover is.
     void kitStyledMenusFollowTheMenuSpec() {
         // The same menu, without an app style sheet and under one that styles
         // QMenu its own way: the kit's metrics and painting win both times.
@@ -1035,6 +1038,7 @@ private:
         laptop->setCheckable(true);
         laptop->setChecked(true);
         ui::setMenuKeyIcon(laptop, QStringLiteral("g-laptop"));
+        ui::setMenuIcon(laptop, QStringLiteral("g-picture"));
         QAction *sep = menu.addSeparator();
         QAction *sync = menu.addAction(QStringLiteral("Sync now"));
         ui::setMenuKey(sync, QStringLiteral("⌘S"));
@@ -1056,9 +1060,9 @@ private:
         const QMargins shadow = ui::shadowMargins();
         const int h = qMax(shadow.left(), shadow.right()), v = qMax(shadow.top(), shadow.bottom());
         QVERIFY(menu.width() - 2 * h >= 220);
-        // The widest row fits: 8 + check 14 + 8 + label + 16 + accent + 8, in 4 of padding.
-        const int peakRow = 8 + 14 + 8 + ui::snapWidth(control, peak->text()) + 16 +
-                            ui::snapWidth(control, QStringLiteral("Ask Kerf")) + 8;
+        // The widest row fits: 8 + dot 14 + 8 + icon 16 + 8 + label + 16 + accent + 8, in 4 of padding.
+        const int peakRow = 8 + 14 + 8 + 16 + 8 + ui::snapWidth(menuItem, peak->text()) + 16 +
+                            ui::snapWidth(menuQuiet, QStringLiteral("Ask Kerf")) + 8;
         QVERIFY(menu.actionGeometry(peak).width() >= peakRow);
         // The card opens 4 below the anchor, left-aligned with it.
         QCOMPARE(menu.pos() + QPoint(h, v), window.mapToGlobal(QPoint(40, 40 + 24 + 4)));
@@ -1066,13 +1070,27 @@ private:
         QCOMPARE(menu.actionGeometry(header).topLeft(), QPoint(h + 4, v + 4));
         const QImage image = menu.grab().toImage();
         const qreal dpr = image.devicePixelRatio();
-        QCOMPARE(image.pixelColor((QPointF(h + 2, v + 40) * dpr).toPoint()), color(card));
+        QCOMPARE(image.pixelColor((QPointF(h + 2, v + 40) * dpr).toPoint()), color(popup));
         QCOMPARE(qAlpha(image.pixel(1, 1)), 0);
+        // The check is at the row's very end, in accent-ink, and not before
+        // the label.
+        const QRect laptopRect = menu.actionGeometry(laptop);
+        const auto accented = [&](const QRect &area) {
+            int count = 0;
+            for (int y = area.top(); y <= area.bottom(); ++y)
+                for (int x = area.left(); x <= area.right(); ++x) {
+                    const QColor seen = image.pixelColor((QPointF(x, y) * dpr).toPoint());
+                    if (seen.blue() > 200 && seen.blue() > seen.red() + 60) ++count;
+                }
+            return count;
+        };
+        QVERIFY(accented(QRect(laptopRect.right() - 8 - 14, laptopRect.top(), 14, laptopRect.height())) > 0);
+        QCOMPARE(accented(QRect(laptopRect.left(), laptopRect.top(), 40, laptopRect.height())), 0);
         menu.setActiveAction(sync);
         const QImage hovered = menu.grab().toImage();
         const QRect syncRect = menu.actionGeometry(sync);
         QCOMPARE(hovered.pixelColor((QPointF(syncRect.left() + 3, syncRect.center().y()) * dpr).toPoint()),
-                 color(raised));
+                 color(popupHover));
         menu.close();
     }
 };

@@ -569,6 +569,47 @@ private slots:
         QVERIFY(meter->isHidden());
     }
 
+    // Pressed, the meter opens its card, set as a menu is: how full, as a
+    // share and a bar, and what that is of. Pressed again, or when there is
+    // nothing to be full of, it closes. KERF_SCREENSHOT_DIR=<dir> saves it
+    // with the composer's menus, to look at beside one another.
+    void theContextMeterOpensItsCard() {
+        Window w;
+        w.window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&w.window));
+        Composer *composer = w.chat()->composerWidget();
+        ContextMeter *meter = composer->contextMeter();
+        w.window.m_chatWiring->openConversation(QStringLiteral("c-1"));
+        w.window.handleEvent(conversation("c-1", "Cut the harbor", {item("i1", "you", "Cut it"), item("i2", "kerf", "Done.")}));
+        settle();
+        w.window.handleEvent(QJsonObject{{"type", "agent_context"}, {"used", 68'000}, {"limit", 200'000}, {"unit", "tokens"}, {"conversation", "c-1"}});
+        QVERIFY(!meter->isHidden());
+        QCOMPARE(meter->note(), QStringLiteral("68k of 200k tokens"));
+        QTest::mouseClick(meter, Qt::LeftButton);
+        QTRY_VERIFY(meter->card() && meter->card()->isVisible());
+        ui::Popover *card = meter->card();
+        // It opens over the meter, which is at the window's foot.
+        QVERIFY(card->cardGeometry().bottom() < meter->mapToGlobal(QPoint(0, 0)).y());
+        const QString shots = qEnvironmentVariable("KERF_SCREENSHOT_DIR");
+        if (!shots.isEmpty()) {
+            card->grab().save(QDir(shots).filePath(QStringLiteral("context-card.png")));
+            for (QMenu *menu : {composer->buildModeMenu(), composer->buildModelMenu()}) {
+                menu->popup(w.window.mapToGlobal(QPoint(200, 200)));
+                QVERIFY(QTest::qWaitForWindowExposed(menu));
+                menu->setActiveAction(menu->actions().value(1));
+                menu->grab().save(QDir(shots).filePath(QStringLiteral("%1.png").arg(menu->objectName())));
+                menu->close();
+            }
+        }
+        // Its reading follows the meter's while it is open.
+        w.window.handleEvent(QJsonObject{{"type", "agent_context"}, {"used", 150'000}, {"limit", 200'000}, {"unit", "tokens"}, {"conversation", "c-1"}});
+        QCOMPARE(meter->note(), QStringLiteral("150k of 200k tokens"));
+        QVERIFY(card->isVisible());
+        // With nothing to be full of, it goes with the meter.
+        w.window.handleEvent(QJsonObject{{"type", "agent_context"}, {"used", 0}, {"limit", 0}, {"unit", "tokens"}, {"conversation", "c-1"}});
+        QTRY_VERIFY(!meter->card());
+    }
+
     // What is said is set in the faces chosen in Settings: the interface's, or
     // a serif of its own, at the size chosen; the faces come with the editor.
     void theConversationIsSetInTheChosenFaces() {

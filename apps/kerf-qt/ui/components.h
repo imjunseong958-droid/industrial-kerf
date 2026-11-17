@@ -668,9 +668,9 @@ private:
 enum class Side { Below, Right, Above };
 QRect popoverPlacement(const QRectF &anchor, QSize size, const QRect &bounds, Side side = Side::Below);
 
-// A card (radius 8, card fill, pop shadow, inset line2, pad 4) that floats
-// over the window as a popup: a click outside or Esc closes it. It opens
-// with the design's 160 ms fade and 4 pt rise.
+// A card that floats over the window as a popup, the same card a kit menu
+// is (radius 12, the popup fill, pop shadow, inset line2, pad 4): a click
+// outside or Esc closes it. It opens with the design's 160 ms fade and 4 pt rise.
 class Popover final : public QWidget {
     Q_OBJECT
 
@@ -703,16 +703,27 @@ private:
 
 // ---------------------------------------------------------------- menus
 
-// Gives `menu` the spec 0.5 menu look, drawn by the kit whatever the app's
-// style sheet says (the menu gets a small style sheet of its own that pins
-// its metrics, and the kit paints it): min width 220, card, radius 8, pop shadow and inset
-// line2, pad 4; items 28 tall, radius 6, pad 0 8, gap 8, UI 12/16 ink, hover
-// raised; a 14 pt check column (the check icon in ink) when any item is
-// checkable or has a dot; the shortcut (or setMenuKey text) right-aligned in
-// mono 11/16 ink3 with 16 before it; headers UI 11/16 ink3 with pad 8 8 4;
-// separators 1 pt line with 4 above and below; disabled items in dis with no
-// hover; warn items in neg; an accent action in UI 12 accent-ink. A press in
-// the shadow halo around the card closes the menu, as a click outside does.
+// Gives `menu` the kit's menu look, drawn by the kit whatever the app's style
+// sheet says (the menu gets a small style sheet of its own that pins its
+// metrics, and the kit paints it). Every menu and popover is set the same way:
+//
+//   ┌────────────────────────────────────┐  a card: radius 12, the popup fill,
+//   │ you@example.com                    │  pop shadow, inset line2, pad 4;
+//   │ ⚙  Settings                    ⌘,  │  at least 220 across
+//   │ ◯  Account                         │
+//   │ ────────────────────────────────── │  a header: 13 ink3, near its rows
+//   │ ◉  View                         ›  │  rows 28 tall, radius 8, inset 8:
+//   │    Picture               ⌘P     ✓  │  an icon 16 in ink2 (a column of
+//   └────────────────────────────────────┘  them when any row has one), the
+//                                           label 14 ink;
+// at the end, what the row says (a key or a value) in 13 ink3, an accent
+// action in 13 accent-ink, then its mark: the chevron of a submenu in ink3,
+// or for a row that can be on, the check in accent-ink while it is (where any
+// row can be on, every row keeps its room, so their ends line up). Separators
+// are a line inset 8, with 4 above and below; the row under the pointer is
+// the popup's hover; disabled rows are dis, warn rows neg; a dot (the
+// preflight rows) stands in a column before the label. A press in the
+// shadow halo around the card closes the menu, as a click outside does.
 void styleMenu(QMenu *menu);
 // Opens a styled menu at popoverPlacement() of `anchor` (with the 160 ms fade).
 void popupMenu(QMenu *menu, QWidget *anchor, Side side = Side::Below);
@@ -727,10 +738,13 @@ enum class MenuRole { Normal, Header, Warn };
 QAction *addMenuHeader(QMenu *menu, const QString &text);
 void setMenuRole(QAction *action, MenuRole role);
 MenuRole menuRole(const QAction *action);
-// The right column's text, instead of the action's shortcut. `uiFont` uses
-// the UI face (.k.ui) instead of mono.
-void setMenuKey(QAction *action, const QString &key, bool uiFont = false);
+// What the row says at its end, instead of the action's shortcut: a value,
+// or a word on what it does.
+void setMenuKey(QAction *action, const QString &key);
 QString menuKey(const QAction *action);
+// One of icons.h's glyphs before the label, in ink2.
+void setMenuIcon(QAction *action, const QString &glyph);
+QString menuIcon(const QAction *action);
 // An icon (ink3, 14 pt) in the right column.
 void setMenuKeyIcon(QAction *action, const QString &icon);
 // A 6 pt dot in the check column (the preflight rows).
