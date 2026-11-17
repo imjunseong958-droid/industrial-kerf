@@ -109,8 +109,11 @@ on `main`; its section here becomes the release's notes on GitHub
 - The interface is set in IBM Plex: IBM Plex Sans, with IBM Plex Sans KR for
   Korean and IBM Plex Mono for timecodes. It comes with Kerf; Inter,
   Pretendard and your system's face are still in Settings ▸ Appearance.
-- The toolbar's two buttons, the sidebar's and the panel's, are plain icons,
-  and on a Mac the window buttons stay in the middle of the toolbar's height.
+- The toolbar is one line: the window buttons on a Mac, the sidebar's and the
+  panel's buttons, which are plain icons, the title and Export all sit on its
+  middle, the first and the last the same distance from the window's edges.
+  The line the sidebar ends on holds still while the panel opens and closes,
+  and on a Mac no ⋯ comes and goes in the toolbar with the sidebar.
   The models Kerf offers are named with a capital (Default, Opus).
 - Text is the colour of paper, not white: the same greys, warmed a little.
   The sidebar, the toolbar's title, the composer's chips and Settings are set

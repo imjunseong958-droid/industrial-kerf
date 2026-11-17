@@ -121,7 +121,7 @@ public:
     // for one that starts at `firstControl`: the window buttons'.
     static int leadingRoom(int firstControl);
     // The room kept after the leading controls, which end at `controlsEnd`,
-    // so that the title starts 12 past a sidebar that ends at `sidebarEdge`
+    // so that the title starts 16 past a sidebar that ends at `sidebarEdge`
     // (0: none shows, and the title follows the controls).
     static int titleGap(int controlsEnd, int sidebarEdge);
     // Where the window buttons let the first control start (MainWindow::fitTitleBar).

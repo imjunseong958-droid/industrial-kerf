@@ -97,9 +97,9 @@ void ToolbarWiring::buildToolbar(const QHash<QString, QMenu *> &menus) {
     m_content = new QWidget;
     m_content->setObjectName(QStringLiteral("toolbarRow"));
     auto *row = new QHBoxLayout(m_content);
-    // The last control ends as far from the window's right edge as the window
-    // buttons start from its left.
-    row->setContentsMargins(kLeadingPad, 0, kWindowButtonsLeft, 0);
+    // The last control's middle is as far from the window's right edge as the
+    // first window button's is from its left (main_window_shared.h).
+    row->setContentsMargins(kLeadingPad, 0, kToolbarTrailing, 0);
     row->setSpacing(4);
     // The room before the first control: the window buttons' on macOS, and the
     // sidebar's while it shows, whose top this stretch of the bar is.
@@ -290,8 +290,8 @@ int ToolbarWiring::leadingRoom(int firstControl) {
 }
 
 int ToolbarWiring::titleGap(int controlsEnd, int sidebarEdge) {
-    // The title starts 12 past the sidebar's edge: 8 after this gap's end.
-    return sidebarEdge > 0 ? std::max(0, sidebarEdge + 4 - controlsEnd) : 0;
+    // The title starts kToolbarEdge past the sidebar's edge: 8 after this gap's end.
+    return sidebarEdge > 0 ? std::max(0, sidebarEdge + kToolbarEdge - 8 - controlsEnd) : 0;
 }
 
 void ToolbarWiring::layoutLeading() {
