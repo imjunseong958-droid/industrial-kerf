@@ -6,6 +6,12 @@ on `main`; its section here becomes the release's notes on GitHub
 
 ## 0.1.3
 
+- A shot's takes are chosen among in its graph by looking and by number: each
+  take shows its picture, a guide shows as it was drawn for the take, and
+  Hold to guide says how much of where each take has the shot's subject and
+  where its line asked for it (`moves=<clip>`) is the same, with the closest
+  said. No model is run. Kerf in the conversation reads the same numbers
+  (`look` with `takes`).
 - `kerf-comfy` comes with `shot-directed`: a shot that follows a depth guide
   (`guide=`), looks like a reference (`ref=`), has its subject go where a clip
   goes (`moves=<clip>`) and lets the guide go where a signal is 1

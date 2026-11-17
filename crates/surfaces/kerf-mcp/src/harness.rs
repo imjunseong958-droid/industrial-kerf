@@ -75,7 +75,7 @@ With `mesh`, what a mesh clip's glTF file holds, its animations and cameras, and
 With `follows`, how a take's depth read back holds beside the guide a sequence draws, clip by clip; with `placed`, where the take has one clip's subject, which `follows` does not say; with `held`, both at once and one number for the take. \
 With `signal`, the keys of a signal clip from the onsets of a sound on the timeline, so that what a model is told happens on its beats. \
 With `shows` and `at`, what shows of each clip on those frames, read from the frame and not from the document: where each is, what hides it, and what has left the frame. Read it of a scene in depth before a making is asked for. \
-With `graph`, a media its recipe makes as the graph the person sees of it in the editor: its steps and what each reads, wired, with what would refuse its making; and with `workflow`, the workflow a step's model is run with, every node and input of it. What they can see and set there you can: read the graph before you change a shot, and say what you changed by its nodes. \
+With `graph`, a media its recipe makes as the graph the person sees of it in the editor: its steps and what each reads, wired, with what would refuse its making; and with `workflow`, the workflow a step's model is run with, every node and input of it. With `takes`, each take of a shot held to its guide by where its subject is, to choose among them by. What they can see and set there you can: read the graph before you change a shot, and say what you changed by its nodes. \
 With `proposal` it shows what a pending proposal would make: its document, \
 what it would have made (`toMake`), its frames, and what it says.
 - `edit` runs one script. It becomes a proposal for the user, returned with \
@@ -313,6 +313,7 @@ pub(super) fn metadata(name: &str) -> Option<(&'static str, Value, ToolAnnotatio
                     "placed": {"type": "object", "description": "Where a take has one clip's subject beside where its guide has it, read from the take's own picture with no model: `take`, the media whose picture is the take, and `clip`, a clip the guide `sequence` draws, the first unless given. The guide's ids pass gives the box around the clip on each frame, as `shows` does; in the take the subject is found on the frame the guide shows most of it on (`from`), in that box with room around it, and followed to both ends. `off` is how far the middles of the two boxes are apart, in frame heights, as a mean over the `frames` it was followed on, of the `shown` the guide has it on; `across` and `down` the same with their direction, above 0 where the take has it to the right, or lower; `size`, how large the take drew it beside the guide, above 1 larger; `worst`, the frame it is furthest off on; `overlap`, how much of the two boxes is in both, of what is in either, as a mean over every frame the guide shows it on with a frame it was not followed on as none, which is the one number to choose between takes by: 1 where the take has the subject where and as large as asked on every frame, 0 where it has none; `read`, the first and last frame it was followed on. Read it beside `follows`, which says how a take's depth holds and not where the subject is. Used alone, or with `sequence`.", "properties": {"take": {"type": "string"}, "clip": {"type": "string"}}, "required": ["take", "clip"]},
                     "follows": {"type": "string", "description": "A media whose picture is a take's depth, as a model read it back (`generate model=depth guide={take.mp4}`): how it holds beside the guide `sequence` draws, the first unless given, the media's frames being the sequence's from its start. Each pixel has a place in its frame's order of near and far, from 0 to 1, in the guide's depth pass and in the take. `clips` is each clip the guide has in depth, by the pixels the ids pass gives it: `off`, how far apart those places are over its pixels, as a mean over the `frames` it shows on; `farther`, the same with its direction, above 0 where the take has those pixels farther, as it does where the subject is not there and what was behind it is; `worst`, the frame it is most off on, from 0; `shows`, its share of the frame. `off` at the top is the same over every pixel, and `order` the rank correlation of the whole frame, which a take with its subject elsewhere still has near 1 where most of the frame is ground. Read a subject's `off` beside the frame's and the floor's. Used alone, or with `sequence`."},
                     "graph": {"type": "string", "description": "A media a recipe makes, as the graph the editor shows of it: `text`, the recipe; `nodes`, each step (`kind` `guide` or `model`, with its `line` of the text and what it holds: a model's `prompt`, `seed`, knobs) and each thing of the project a step reads (a sequence, a file, a signal, the way a clip goes, one of the cast), ending in its `takes`; `edges`, each reading, `from` a node `to` the step that reads it under the name `port`, the `nth` word of that name on the line; `cannot`, what would refuse its making; `notes`; a model's `runner`, the program's workflow it is run with, where it has one to read; and `takes`, each making with the line (`use`) that has the media be it. `change` says how each is changed. Used alone, or with `proposal`."},
+                    "takes": {"type": "string", "description": "A media a recipe makes: each of its `takes` held to its guide by where its subjects are, the clips its `generate` line names with `moves=`, with no model run. For each take, `overlap`, from 0 to 1, how much of where it has the subject and where the guide asked for it is the same over every frame the guide shows it on, and under `clips` the same for each subject with `off`, how far its middle is from where it was asked for in frame heights, `size`, how large beside what was asked, and `frames` of `shown`, how many of the frames the guide shows it on it was followed on: read `overlap` beside that, since a subject followed on few frames says little. `best` is the take that holds best, of more than one. The person sees the same numbers beside each take in the editor's graph. Used alone, or with `proposal`."},
                     "workflow": {"type": "object", "description": "The workflow the model of one `generate` step is run with, for a model whose graph node has a `runner`: `media` and the step's `line`. `nodes` is every node of it in the file's order, each with its `class` and `inputs`: a `link` to another node's output, or a `value`, which with `blanks` is filled by the recipe's line. `blanks` says of each what fills it (`by`, `says`), its `default`, and what the line gives now (`given`). `origin` is `bundled` or `file` for a workflow as it comes, and `own` with its `file` for the shot's own copy. Used alone, or with `proposal`.", "properties": {"media": {"type": "string"}, "line": {"type": "integer", "minimum": 1}}, "required": ["media", "line"]},
                     "signal": {"type": "object", "description": "A signal's keys from a sound: `of` is a clip that plays a media with sound, music or what was recorded, and `clip` a `gen=signal@1` clip of the same sequence. It returns `script`, a `set <clip> value={…}` line to run with `edit`, which has the signal at 1 for `hold` frames (3 unless given) from each sound onset of `of` that falls in the signal clip and 0 between, onsets nearer than that running together; `onsets`, how many it placed, and `outside`, how many of the sound's fall outside the clip. Hold for as long as two of the model's frames last. Used alone.", "properties": {"of": {"type": "string"}, "clip": {"type": "string"}, "hold": {"type": "integer", "minimum": 1}}, "required": ["of", "clip"]},
                     "shows": {"type": "boolean", "description": "With `at`, program positions: what shows of each clip that draws there, in `frames`, each with `clips` from the lowest track up. `box` is where the clip would be with nothing before it, [left, top, right, bottom] in shares of the frame, absent when none of it is in the frame; `area` the share of the frame that is; `shows` the share of the frame it has as the frame is drawn; `hidden` the share of it other clips hide, and `by` which, each with its share, the most first; `edges` the edges of the frame it reaches, where it may go on past them; `opacity` where it is not wholly opaque, and such a clip is read as not showing. `empty` is the share of the frame no clip has. A nested sequence is one clip. A floor in `by` of what stands on it, a subject with no `box`, and a subject at an edge are what to mend. Read on a small frame, to about a hundredth of it. Not with `media`."},
@@ -447,6 +448,8 @@ struct LookInput {
     graph: Option<String>,
     /// A `generate` step of a media's recipe, to read the workflow its model is run with.
     workflow: Option<StepInput>,
+    /// A media a recipe makes, to hold each of its takes to its guide.
+    takes: Option<String>,
 }
 
 /// One `generate` step: the media whose recipe it is in, and its line.
@@ -1357,6 +1360,28 @@ impl KerfMcpRouter {
              Taking `workflow` off the line (`recipeSet` with no `value`) goes back to the workflow as it comes."
         );
         Ok(shown)
+    }
+
+    /// `look` with `takes`: each take of a shot held to its guide by where its subjects are,
+    /// the reading the editor's graph shows beside each take (`kerf_shots::takes`).
+    fn shot_takes(&self, project: &Project, media: &str) -> Result<Value, McpError> {
+        let invalid = |why: String| self.no_shot(media, why);
+        let guide = kerf_shots::takes::guide(project, &self.dir, media).map_err(invalid)?;
+        let takes = kerf_shots::takes::takes(project, &self.dir, media).map_err(invalid)?;
+        let mut resolved = project.clone();
+        kerf_runtime::resolve_media_paths(&mut resolved, &self.dir);
+        let readings: Vec<Value> = takes
+            .iter()
+            .map(|take| kerf_shots::takes::read(&resolved, &self.dir, media, take, &guide))
+            .collect();
+        let mut result = kerf_shots::takes::summary(&guide, &readings);
+        result["media"] = json!(media);
+        result["takes"] = json!(readings);
+        result["choose"] = json!(
+            "have the media be a take with its `use` line, which `look` with `media` or `graph` gives; \
+             how a take's depth holds is `look` with `held`, once a model has read the depth back"
+        );
+        Ok(result)
     }
 
     /// The recipes an edit's `recipeSet` and `workflowSet` make, by the path each media names,
@@ -2307,21 +2332,26 @@ impl KerfMcpRouter {
             let (revision, project) = self.project_at(input.proposal.as_deref())?;
             return self.take_placed(&project, input.sequence.as_deref(), revision, placed);
         }
-        if input.graph.is_some() || input.workflow.is_some() {
-            if input.graph.is_some() && input.workflow.is_some()
+        if input.graph.is_some() || input.workflow.is_some() || input.takes.is_some() {
+            if [input.graph.is_some(), input.workflow.is_some(), input.takes.is_some()]
+                .into_iter()
+                .filter(|given| *given)
+                .count()
+                > 1
                 || input.media.is_some()
                 || !input.at.is_empty()
                 || input.sequence.is_some()
             {
                 return Err(McpError::new(
                     "INVALID_ARGUMENTS",
-                    "`graph` names a media and `workflow` a step of one: each is used alone, or with `proposal`",
+                    "`graph` and `takes` name a media and `workflow` a step of one: each is used alone, or with `proposal`",
                 ));
             }
             let (revision, project) = self.project_at(input.proposal.as_deref())?;
-            let mut result = match (&input.graph, &input.workflow) {
-                (Some(media), _) => self.shot_graph(&project, media)?,
-                (_, Some(step)) => self.shot_workflow(&project, step)?,
+            let mut result = match (&input.graph, &input.workflow, &input.takes) {
+                (Some(media), ..) => self.shot_graph(&project, media)?,
+                (_, Some(step), _) => self.shot_workflow(&project, step)?,
+                (.., Some(media)) => self.shot_takes(&project, media)?,
                 _ => unreachable!("one of them is given"),
             };
             result["revision"] = json!(revision);

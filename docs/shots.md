@@ -200,6 +200,8 @@ the take; the person says how much of that it does without asking them.
   | sets a value in the workflow | `edit` with `workflowSet`: a copy in the project, named by the line's `workflow=` |
   | goes back to the workflow as it comes | `recipeSet` of `workflow` with no `value` |
   | Make, Make again, Several, Stop | `make`, with `rolls`, and its `job` with `cancel` |
+  | sees each take's picture and the guide as it was drawn | `look` with `media` and `sheet`, of the take and of the guide's file |
+  | holds the takes to their guide | `look` with `takes`: each take's `overlap`, and the `best` |
   | chooses a take | the take's `use` line, in an `edit` |
 
   Where they differ is where a change is written. A person's is written in
@@ -310,6 +312,28 @@ not has the line that has the media be it, as `use`:
 `media replace m3 path="shots/open.takes/001.mp4" rate=16 dur=65f video=832x480 recipe="shots/open.kerfrecipe"`.
 The line is whole, since a take need not be as long as the one before it, and
 a path alone is refused.
+
+### Choosing among them
+
+Looking is the first way: in the shot's graph ([As a graph](#as-a-graph)) the
+takes' card shows each take's picture, and a guide's card shows the guide as
+it was drawn for the take that shows, what the model was handed.
+
+Where the recipe's line says where a clip goes (`moves=<clip>`), a take can
+be held to that too. **Hold to guide**, in the takes' card, reads each take
+beside its guide with no model: the subject is looked for in the take's own
+picture where the guide's sequence has the clip, and followed. Each take then
+says how much of where it has the subject and where it was asked for is the
+same, from 0 to 1 (`0.62 of its guide`), with the closest said, and, on
+hovering it, on how many of the frames the guide shows the clip on it was
+followed. A subject followed on few frames says little: one that crosses a
+third of the frame between two frames is lost, and reads low whatever the
+take did. A take is a few seconds to read. A shot whose line names no clip
+has nothing to hold a take to, and the card says so.
+
+An agent reads the same numbers with `look` and `takes`, and for a take that
+is the media, with its depth read back by a model, `held` adds how its depth
+holds ([Guides](#guides)).
 
 In a shared project the takes travel with it: a project made with Git LFS
 stores `*.takes/` there, with each take's record and request left as text.

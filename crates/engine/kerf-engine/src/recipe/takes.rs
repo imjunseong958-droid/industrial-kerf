@@ -526,6 +526,19 @@ pub struct Take {
     pub rolled: u32,
 }
 
+/// The file a step of `media`'s recipe made as `{name}` on the way to take `take`, a guide
+/// it drew or a picture a model made for a later step, as a document would name it: there
+/// while the take's working folder is. `None` where it is not.
+pub fn step_file(directory: &Path, media: &Media, take: u32, name: &str) -> Option<String> {
+    let place = Place::of(directory, media.recipe.as_deref()?, &media.path).ok()?;
+    let inside = within(Path::new(""), name, "file").ok()?;
+    place
+        .working(take)
+        .join(&inside)
+        .is_file()
+        .then(|| stored(&place.takes.join(format!("{take:03}.work")).join(&inside)))
+}
+
 /// The takes of `media`, in the order they were made. A media that names
 /// no recipe has none.
 pub fn takes(project: &Project, directory: &Path, media: &Media) -> Result<Vec<Take>> {

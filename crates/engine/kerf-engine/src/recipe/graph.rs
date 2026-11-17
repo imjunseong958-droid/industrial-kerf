@@ -735,6 +735,21 @@ pub fn graph(project: &Project, directory: &Path, id: &str, models: &Models) -> 
     let made = super::takes::takes(project, directory, media).unwrap_or_default();
     let chosen = made.iter().find(|take| take.chosen).map(|take| take.number);
     let wants = super::unmade(project, directory, media).map(|unmade| unmade.reason());
+    // What each step made on the way to the take the shot is, or to the last where it is
+    // none: a guide as it was drawn, to look at beside the take.
+    if let Some(shown) = chosen.or(made.last().map(|take| take.number)) {
+        for node in &mut building.nodes {
+            let file = node
+                .holds
+                .get("makes")
+                .and_then(Json::as_str)
+                .filter(|makes| *makes != super::OUT)
+                .and_then(|makes| super::takes::step_file(directory, media, shown, makes));
+            if let Some(file) = file {
+                node.holds.insert("made".to_owned(), json!({"take": shown, "path": file}));
+            }
+        }
+    }
     let mut holds = Map::new();
     holds.insert("media".to_owned(), json!(id));
     holds.insert(
@@ -812,6 +827,32 @@ mod tests {
         render court {depth.mp4} pass=depth size=832x480 rate=16\n\
         generate model=still prompt=\"an orange basketball\" seed=3 out={ball.png}\n\
         generate model=video prompt=\"it bounces\" guide={depth.mp4} ref={ball.png} ref=../refs/court.png moves=ball signal=bounce seconds=4 seed=7 strength=0.8\n";
+
+    #[test]
+    fn a_step_says_what_it_made_on_the_way_to_the_take_that_shows() {
+        let (folder, project) = court(BOUNCE);
+        let dir = folder.path();
+        let made = |graph: &Graph, id: &str| node(graph, id).holds.get("made").cloned();
+        // No take yet: nothing was drawn.
+        let none = graph(&project, dir, "shot", &models(dir)).unwrap();
+        assert_eq!(made(&none, "made:depth.mp4"), None);
+        // Two takes, the guide of each kept in its working folder; the shot is none of them,
+        // so the last shows.
+        for take in ["001", "002"] {
+            let work = dir.join(format!("shots/bounce.takes/{take}.work"));
+            std::fs::create_dir_all(&work).unwrap();
+            std::fs::write(work.join("depth.mp4"), "a guide").unwrap();
+            std::fs::write(dir.join(format!("shots/bounce.takes/{take}.mp4")), "a take").unwrap();
+        }
+        let shown = graph(&project, dir, "shot", &models(dir)).unwrap();
+        assert_eq!(
+            made(&shown, "made:depth.mp4"),
+            Some(json!({"take": 2, "path": "shots/bounce.takes/002.work/depth.mp4"}))
+        );
+        // A step whose file is not there says nothing, and the shot's own file is its takes.
+        assert_eq!(made(&shown, "made:ball.png"), None);
+        assert_eq!(made(&shown, "made:out"), None);
+    }
 
     fn models(folder: &Path) -> Models {
         let file = folder.join("models.json");

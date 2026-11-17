@@ -814,6 +814,93 @@ private slots:
         QVERIFY(inspector->findChild<QLabel *>(QStringLiteral("graphCannot"))->text().contains(QStringLiteral("no model `video` is set up")));
     }
 
+    // The takes' card holds each take to its guide when asked: where the take
+    // has the shot's subject beside where it was asked for, read by the bridge
+    // a take at a time with no model, the closest said. The same reading an
+    // agent's `look` makes with `takes`.
+    void takesAreHeldToTheirGuideInTheirCard() {
+        MainWindow window{QString(), QString()};
+        openBounce(window, 3);
+        RecipeGraphPanel *panel = panelOf(window);
+        RecipeInspector *inspector = panel->inspector();
+        panel->view()->select(QStringLiteral("takes"));
+        const auto hold = [&] { return inspector->findChild<ui::Button *>(QStringLiteral("graphHoldTakes")); };
+        const auto says = [&] { return inspector->findChild<QLabel *>(QStringLiteral("graphHoldSays")); };
+        const auto row = [&](int number) { return inspector->findChild<QAbstractButton *>(QStringLiteral("graphTake%1").arg(number)); };
+        QVERIFY(hold() && hold()->isEnabled() && !says());
+        QCOMPARE(hold()->text(), QStringLiteral("Hold to guide"));
+        QCOMPARE(row(1)->accessibleDescription(), QStringLiteral("the recipe changed since"));
+        hold()->click();
+        QCOMPARE(window.m_lastCommand, (QJsonObject{{"type", "takes_read"}, {"media", "m4"}}));
+        // While it is read nothing more is asked, and each take says its number as it comes.
+        QVERIFY(!hold()->isEnabled());
+        QCOMPARE(hold()->text(), QStringLiteral("Reading…"));
+        QVERIFY(says()->text().contains(QStringLiteral("following the subject")));
+        const auto read = [](int take, double overlap, int frames) {
+            return QJsonObject{{"type", "take_read"}, {"media", "m4"}, {"take", take}, {"overlap", overlap},
+                               {"clips", QJsonArray{QJsonObject{{"clip", "ball"}, {"overlap", overlap}, {"off", 0.04}, {"size", 1.1},
+                                                                {"frames", frames}, {"shown", 51}}}}};
+        };
+        window.handleEvent(read(1, 0.21, 12));
+        QCOMPARE(row(1)->accessibleDescription(), QStringLiteral("0.21 of its guide · the recipe changed since"));
+        QCOMPARE(row(2)->accessibleDescription(), QStringLiteral("roll 1"));
+        // Another shot's reading is not this one's.
+        QJsonObject other = read(2, 0.9, 51);
+        other.insert("media", "m9");
+        window.handleEvent(other);
+        QCOMPARE(row(2)->accessibleDescription(), QStringLiteral("roll 1"));
+        window.handleEvent(read(2, 0.62, 48));
+        window.handleEvent(QJsonObject{{"type", "take_read"}, {"media", "m4"}, {"take", 3}, {"overlap", 0.0},
+                                       {"clips", QJsonArray{QJsonObject{{"clip", "ball"}, {"overlap", 0.0},
+                                                                        {"note", "`003.mp4` has nothing to follow where the guide has `ball`"}}}}});
+        window.handleEvent(QJsonObject{{"type", "takes_read"}, {"media", "m4"}, {"best", 2}, {"takes", 3}, {"sequence", "court"},
+                                       {"clips", QJsonArray{"ball"}}});
+        QCOMPARE(row(2)->accessibleDescription(), QStringLiteral("0.62 of its guide, the closest · roll 1"));
+        QCOMPARE(row(3)->accessibleDescription(), QStringLiteral("0.00 of its guide · roll 2"));
+        QVERIFY(ui::tipName(row(2)).contains(QStringLiteral("ball: 0.62 of where it was asked for, followed on 48 of the 51 frames")));
+        QVERIFY(ui::tipName(row(3)).contains(QStringLiteral("has nothing to follow")));
+        QVERIFY(hold()->isEnabled());
+        QCOMPARE(hold()->text(), QStringLiteral("Hold to guide again"));
+        QVERIFY(says()->text().startsWith(QStringLiteral("1 is a take that has the subject where")));
+        // The take that holds best is still chosen by a press, as any take.
+        row(2)->click();
+        QCOMPARE(window.m_lastCommand, (QJsonObject{{"type", "media_replace"}, {"media", "m4"}, {"path", "shots/bounce.takes/002.mp4"}}));
+        // The graph read again keeps what was read.
+        window.handleEvent(bounceRecipe(3));
+        QCOMPARE(row(2)->accessibleDescription(), QStringLiteral("0.62 of its guide, the closest · roll 1"));
+
+        // A shot that says where nothing goes has nothing to hold a take to: said in the card, with no banner.
+        hold()->click();
+        window.m_errorBanner->hide();
+        window.handleEvent(QJsonObject{{"type", "error"}, {"command", "takes_read"}, {"media", "m4"},
+                                       {"message", "the recipe's model is not told where anything goes (`moves=<clip>`)"}});
+        QVERIFY(says()->text().contains(QStringLiteral("moves=<clip>")));
+        QVERIFY(hold()->isEnabled());
+        QVERIFY(!window.m_errorBanner->isVisible());
+
+        // A take's picture leads its row, and a guide shows as it was drawn for the take that shows.
+        QImage picture(160, 90, QImage::Format_RGB32);
+        picture.fill(Qt::darkGreen);
+        const int plain = row(1)->height();
+        inspector->setPictures({{QStringLiteral("shots/bounce.takes/001.mp4"), picture},
+                                {QStringLiteral("shots/bounce.takes/003.work/depth.mp4"), picture}});
+        inspector->setNode(panel->view()->recipe(), QStringLiteral("takes"));
+        QVERIFY(row(1)->height() > plain);
+        QCOMPARE(row(2)->height(), plain);
+        QJsonObject drawn = bounceRecipe(3);
+        QJsonArray nodes = drawn.value("nodes").toArray();
+        QJsonObject guide = nodes.at(1).toObject();
+        guide.insert("made", QJsonObject{{"take", 3}, {"path", "shots/bounce.takes/003.work/depth.mp4"}});
+        nodes.replace(1, guide);
+        drawn.insert("nodes", nodes);
+        window.handleEvent(drawn);
+        inspector->setPictures({{QStringLiteral("shots/bounce.takes/003.work/depth.mp4"), picture}});
+        panel->view()->select(QStringLiteral("made:depth.mp4"));
+        auto *shown = inspector->findChild<QLabel *>(QStringLiteral("graphGuidePicture"));
+        QVERIFY(shown && !shown->pixmap().isNull());
+        QCOMPARE(shown->accessibleName(), QStringLiteral("The guide as drawn for take 3"));
+    }
+
     // A model its entry runs with kerf-comfy opens into the ComfyUI workflow it
     // is run with: every node a card, every input a row, the blanks the recipe
     // fills marked; the head's arrow goes back to the shot's graph.

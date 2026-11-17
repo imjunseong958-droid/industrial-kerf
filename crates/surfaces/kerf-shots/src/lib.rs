@@ -11,6 +11,8 @@
 //! - [`workflow`]: the workflow behind a model, every node and input of it,
 //!   and a value in it set in a copy of the shot's own that the step's line
 //!   names with `workflow=`.
+//! - [`takes`]: a shot's takes held to its guide by where its subjects are,
+//!   to choose among them by.
 //!
 //! The two differ only in where a change is written. A person's is written
 //! in place, as a text editor writes it. An agent's is never written over
@@ -21,4 +23,5 @@
 //! Nothing here runs a recipe or asks a server.
 
 pub mod graph;
+pub mod takes;
 pub mod workflow;

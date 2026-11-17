@@ -9,8 +9,10 @@
 //   a guide      the sequence it draws, what of it (the picture, or a pass),
 //                at what size and rate
 //   a signal     its number over its clip, to draw anew by dragging across it
-//   the takes    each take there is, the one the shot is ticked, and why the
-//                shot wants making where it does
+//   the takes    each take there is with its picture, the one the shot is
+//                ticked, why the shot wants making where it does, and, once
+//                asked for, how each holds beside its guide
+//   a guide      also its picture as it was drawn for the take that shows
 //   the rest     what it is: a sequence, a picture, the way a clip goes, one
 //                of the cast
 //
@@ -23,6 +25,8 @@
 #include "test_friends.h"
 
 #include <QHash>
+#include <QImage>
+#include <QJsonObject>
 #include <QJsonArray>
 #include <QString>
 #include <QWidget>
@@ -59,6 +63,13 @@ public:
     void setWorkflow(const graph::Workflow &workflow);
     // While the shot is being made its takes are not to be chosen among.
     void setMaking(bool making);
+    // What each take reads held to its guide, by its number (the bridge's
+    // `take_read`), which of them holds best (0 for none), and how the reading
+    // stands: empty where none was asked for, `reading`, `read`, or why it
+    // could not be made.
+    void setTakeReadings(const QHash<int, QJsonObject> &readings, int best, const QString &state);
+    // Pictures by their path in the project: a take's, a guide as it was drawn.
+    void setPictures(const QHash<QString, QImage> &pictures);
     // How tall the card wants to be for what it holds, at most `most`.
     int heightFor(int most) const;
 
@@ -71,6 +82,8 @@ signals:
     void signalDrawn(const QString &clip, const QJsonArray &keys);
     // Have the shot be take `number`, whose file the document names as `path`.
     void takeChosen(int number, const QString &path);
+    // Hold each take to its guide: read where its subject is beside where it was asked for.
+    void takesReadRequested();
     // Open the project's cast, and the person's models, where they are set.
     void castRequested();
     void modelsRequested();
@@ -128,6 +141,10 @@ private:
     QPlainTextEdit *m_prompt = nullptr;
     SignalCurve *m_curve = nullptr;
     QList<QWidget *> m_takeRows;
+    QHash<int, QJsonObject> m_readings;
+    int m_best = 0;
+    QString m_readState;
+    QHash<QString, QImage> m_pictures;
     graph::Workflow m_workflow;
     // A Part's yes-or-no inputs, by the field's name.
     QHash<QString, QAbstractButton *> m_switches;

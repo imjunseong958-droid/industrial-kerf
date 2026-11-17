@@ -111,6 +111,13 @@ fn an_agent_reads_a_shots_graph_and_sets_what_a_person_sets_there() {
     assert!(graph["change"].as_str().unwrap().contains("recipeSet"));
     assert!(graph["takes"]["made"].as_array().is_some_and(Vec::is_empty), "{graph}");
 
+    // Its takes held to its guide, as the graph's takes card holds them: the clip the line
+    // says goes somewhere, in the sequence that has it. None is made yet.
+    let held = ok(&router, "look", json!({"takes": "shot"}));
+    assert_eq!((held["sequence"].as_str(), held["clips"][0].as_str()), (Some("court"), Some("ball")));
+    assert_eq!(held["takes"], json!([]));
+    assert_eq!(held["best"], Value::Null);
+
     // One word of one line: kept as the next version, comments and every other line as they
     // were, and the recipe before left as it is.
     let seeded = ok(
@@ -230,7 +237,17 @@ fn an_agent_reads_a_shots_graph_and_sets_what_a_person_sets_there() {
     assert!(said.contains("which the recipe fills"), "{said}");
     let said = refused(&router, "look", json!({"workflow": {"media": "shot", "line": line - 1}}));
     assert!(said.contains("model `still` is not run by kerf-comfy"), "{said}");
+    // A shot that says where nothing goes has nothing to hold its takes to.
+    std::fs::write(dir.join("shots/still.kerfrecipe"), "kerf-recipe 1\ngenerate model=still prompt=\"a ball\"\n").unwrap();
+    let alone = ok(
+        &router,
+        "edit",
+        json!({"revise": back["proposal"], "script": "media add m7 path=\"shots/still.png\" rate=24 dur=1f video=512x512 recipe=\"shots/still.kerfrecipe\""}),
+    );
+    let said = refused(&router, "look", json!({"takes": "m7", "proposal": alone["proposal"]}));
+    assert!(said.contains("moves=<clip>"), "{said}");
     let said = refused(&router, "look", json!({"graph": "nothing"}));
     assert!(said.contains("no media `nothing`"), "{said}");
-    assert_eq!(files(), before);
+    // Only the recipe written here for that last shot is new.
+    assert_eq!(files(), before + 1);
 }
