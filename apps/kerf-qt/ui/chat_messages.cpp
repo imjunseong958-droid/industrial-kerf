@@ -1,4 +1,5 @@
 #include "chat_messages.h"
+#include "make_card.h"
 
 #include "chat_parts.h"
 #include "components.h"
@@ -205,7 +206,30 @@ void WorkLog::addStep(const QString &step) {
     update();
 }
 
+void WorkLog::setStep(const QString &id, const QString &step, bool failed) {
+    const QString line = step.simplified();
+    if (line.isEmpty()) return;
+    if (id.isEmpty()) {
+        addStep(line);
+        return;
+    }
+    if (failed && !m_failedIds.contains(id)) m_failedIds << id;
+    while (m_stepIds.size() < m_steps.size()) m_stepIds << QString();
+    const qsizetype at = m_stepIds.indexOf(id);
+    if (at >= 0) {
+        m_steps[at] = line;
+    } else {
+        m_steps << line;
+        m_stepIds << id;
+    }
+    updateToggle();
+    updateGeometry();
+    update();
+}
+
 void WorkLog::setSteps(const QStringList &steps) {
+    m_stepIds.clear();
+    m_failedIds.clear();
     m_steps.clear();
     for (const QString &step : steps)
         if (!step.simplified().isEmpty()) m_steps << step.simplified();
@@ -332,6 +356,8 @@ void WorkLog::paintEvent(QPaintEvent *) {
     // The steps, on a hairline: a dot each, ink2 (the latest ink while live).
     const QStringList steps = shownSteps();
     if (steps.isEmpty()) return;
+    // The rows shown are the last of m_steps.
+    const qsizetype first = m_steps.size() - steps.size();
     const QFont font = tokens::font(control);
     const QFontMetricsF metrics(font);
     p.setFont(font);
@@ -344,7 +370,9 @@ void WorkLog::paintEvent(QPaintEvent *) {
         p.setPen(Qt::NoPen);
         p.setBrush(color(latest ? ink2 : track2));
         p.drawEllipse(QPointF(rule, y + kRow / 2.0), 2.5, 2.5);
-        p.setPen(color(latest ? ink : ink2));
+        const qsizetype row = first + index;
+        const bool failed = row < m_stepIds.size() && !m_stepIds.at(row).isEmpty() && m_failedIds.contains(m_stepIds.at(row));
+        p.setPen(color(failed ? neg : latest ? ink : ink2));
         const qreal x = space::s16;
         p.drawText(QPointF(x, y + (kRow - metrics.height()) / 2 + metrics.ascent()),
                    metrics.elidedText(steps.at(index), Qt::ElideRight, width() - x));
@@ -392,6 +420,15 @@ KerfMessage::KerfMessage(double fps, QWidget *parent) : QWidget(parent), m_fps(f
     m_cardLayout->setSpacing(space::s8);
     m_cardBox->hide();
     m_layout->addWidget(m_cardBox);
+
+    // The makings it asked for, kept apart from the proposal cards, which
+    // are made again as proposals change.
+    m_askBox = new QWidget;
+    m_askLayout = new QVBoxLayout(m_askBox);
+    m_askLayout->setContentsMargins(0, space::s4, 0, 0);
+    m_askLayout->setSpacing(space::s8);
+    m_askBox->hide();
+    m_layout->addWidget(m_askBox);
 
     m_askAgain = new ChatExpander;
     m_askAgain->setObjectName(QStringLiteral("askAgain"));
@@ -451,6 +488,23 @@ void KerfMessage::setOutcome(Outcome outcome, const QString &askAgain) {
 void KerfMessage::addCard(QWidget *card) {
     m_cardLayout->addWidget(card);
     m_cardBox->show();
+}
+
+void KerfMessage::addAsk(MakeCard *card) {
+    for (MakeCard *shown : asks())
+        if (shown->ask().key() == card->ask().key()) {
+            card->deleteLater();
+            return;
+        }
+    m_askLayout->addWidget(card);
+    m_askBox->show();
+}
+
+QList<MakeCard *> KerfMessage::asks() const {
+    QList<MakeCard *> out;
+    for (int index = 0; index < m_askLayout->count(); ++index)
+        if (auto *card = qobject_cast<MakeCard *>(m_askLayout->itemAt(index)->widget())) out << card;
+    return out;
 }
 
 QList<QWidget *> KerfMessage::cards() const {

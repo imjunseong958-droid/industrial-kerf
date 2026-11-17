@@ -16,6 +16,8 @@ mod secrets;
 mod updates;
 mod queue;
 mod conversations;
+mod sessions;
+mod steps;
 mod tasks;
 #[cfg(test)]
 mod tests_support;
@@ -99,9 +101,6 @@ impl Agent {
         }
     }
 
-    /// What the next turn may do without asking: the mode the person chose
-    /// in the editor, or their own file's with none. The session goes on, so
-    /// a change of mode keeps what the agent knows of the conversation.
     /// What its context is counted in: the model's tokens on Claude Code,
     /// which says how many a request read, or Kerf's own measure of its
     /// input allowance.
@@ -112,6 +111,9 @@ impl Agent {
         }
     }
 
+    /// What the next turn may do without asking: the mode the person chose
+    /// in the editor, or their own file's with none. The session goes on, so
+    /// a change of mode keeps what the agent knows of the conversation.
     fn set_permissions(&mut self, mode: Option<Mode>) {
         match self {
             Self::Native(_, router) => router.set_permissions(mode.map(chosen_permissions)),
@@ -2103,7 +2105,7 @@ fn run_version(
         Ok(()) => conversations::Outcome::Done(String::new()),
         Err(err) => conversations::Outcome::Failed(err.clone()),
     };
-    if let Err(err) = turn.finish(&store, outcome, proposal.clone(), tx) {
+    if let Err(err) = turn.finish(&store, outcome, proposal.clone(), None, tx) {
         error(tx, format!("Kerf's reply was not kept: {err}"));
     }
     match result {
@@ -2121,9 +2123,11 @@ fn agent_worker(
     tx: SyncSender<Value>,
     shared: Arc<Shared>,
 ) {
-    // Keep one session per conversation for follow-up feedback, rather than
-    // forgetting every turn; another conversation starts its own.
-    let mut session: Option<(AgentSettings, Option<String>, Agent)> = None;
+    // A session for each conversation, kept beside it as each turn ends, so
+    // going back to one goes on with what its agent knew (sessions.rs).
+    let mut sessions = sessions::Sessions::of(&directory);
+    // A turn whose request could not be kept still has a session of its own.
+    let mut loose: Option<(AgentSettings, Agent)> = None;
     let store = conversations::Store::of(&directory);
     while let Ok(request) = rx.recv() {
         if shared.closed.load(Ordering::Relaxed) {
@@ -2160,100 +2164,76 @@ fn agent_worker(
         });
         let conversation = kept.as_ref().map(|(_, turn, _)| turn.id().to_owned());
         let earlier = kept.as_ref().and_then(|(_, turn, _)| turn.earlier());
-        let result = (|| {
-            let mut text = request.text.clone();
-            if session.as_ref().is_none_or(|(active_settings, active, _)| {
-                active_settings != &request.settings || *active != conversation
-            }) {
-                session = Some((
-                    request.settings.clone(),
-                    conversation.clone(),
-                    new_agent(&shared, &directory, &binary, &request.settings, &tx)?,
-                ));
-                // A session new to a conversation that has turns hears them first.
-                if let Some(earlier) = &earlier {
-                    text = format!("{earlier}\nNow: {text}");
+        let mut turn_events = TurnEvents {
+            tx: &tx,
+            commands: &commands,
+            conversation: conversation.clone(),
+            turn: kept.as_mut().map(|(_, turn, _)| turn),
+            running: std::collections::HashMap::new(),
+            heard: false,
+        };
+        let open = || new_agent(&shared, &directory, &binary, &request.settings, &tx);
+        let mut result = (|| {
+            let (current, opened) = match &conversation {
+                Some(id) => sessions.get(id, &request.settings, open)?,
+                None => {
+                    let fresh = loose
+                        .as_ref()
+                        .is_none_or(|(settings, _)| settings != &request.settings);
+                    if fresh {
+                        loose = Some((request.settings.clone(), open()?));
+                    }
+                    let (_, agent) = loose.as_mut().ok_or("Agent session unavailable")?;
+                    let opened = if fresh {
+                        sessions::Opened::New
+                    } else {
+                        sessions::Opened::Continued
+                    };
+                    (agent, opened)
                 }
-            }
-            let current = &mut session.as_mut().ok_or("Agent session unavailable")?.2;
-            current.set_permissions(request.permissions);
-            if let Ok(mut abort) = shared.abort.lock() {
-                *abort = Some(current.abort_handle());
-            }
-            let unit = current.context_unit();
-            current.run_with_events(&text, |event| {
-                // How full Kerf's context is, for the composer's meter.
-                if let AgentEvent::Context { used, limit } = &event {
-                    emit(
-                        &tx,
-                        json!({
-                            "type": "agent_context", "used": used, "limit": limit,
-                            "unit": unit, "conversation": conversation,
-                        }),
-                    );
-                    return;
+            };
+            run_turn(
+                current,
+                opened,
+                &request,
+                earlier.as_deref(),
+                &shared,
+                &mut turn_events,
+            )
+            .map_err(|err| {
+                if opened == sessions::Opened::Restored {
+                    format!("{RESTORED_FAILED}{err}")
+                } else {
+                    err
                 }
-                if let AgentEvent::ToolCallStarted { name, targets, .. } = &event {
-                    if let Some(focus) = focus_event(name, targets) {
-                        emit(&tx, focus);
-                    }
-                }
-                if let AgentEvent::ToolCallFinished { summary, .. } = &event {
-                    if summary.status.as_deref() == Some("awaiting_review") {
-                        emit(&tx, json!({"type":"agent_state","state":"awaiting_review"}));
-                    }
-                    // The proposal shows on the timeline as it grows.
-                    if staged_proposal(summary) {
-                        let _ = commands.try_send(Command::Refresh);
-                    }
-                }
-                // The reply keeps finished tool calls and statuses as
-                // its steps, not the planning line every turn opens.
-                let step = matches!(
-                    event,
-                    AgentEvent::ToolCallFinished { .. } | AgentEvent::Aborted
-                );
-                let (kind, text) = match event {
-                    AgentEvent::TextDelta(text) => ("delta", text),
-                    AgentEvent::ToolCallStarted { name, targets, .. } => {
-                        ("tool", format!("{name} · {}", targets.clips.join(", ")))
-                    }
-                    AgentEvent::ToolCallFinished {
-                        name, ok, summary, ..
-                    } => (
-                        "tool",
-                        format!(
-                            "{name} · {}{}",
-                            if ok { "done" } else { "failed" },
-                            summary
-                                .status
-                                .map(|status| format!(" · {status}"))
-                                .unwrap_or_default(),
-                        ),
-                    ),
-                    AgentEvent::TurnStarted { .. } => ("status", "Planning next step…".into()),
-                    AgentEvent::Done { text } => ("done", text),
-                    AgentEvent::Aborted => {
-                        emit(&tx, json!({"type":"agent_state","state":"aborted"}));
-                        ("status", "Stopped".into())
-                    }
-                    AgentEvent::Context { .. } => return,
-                };
-                if let Some((_, turn, _)) = kept.as_mut() {
-                    if step {
-                        turn.step(&text);
-                    }
-                    match kind {
-                        "done" => turn.done(&text),
-                        "status" if text == "Stopped" => turn.stopped(),
-                        _ => {}
-                    }
-                }
-                emit(&tx, json!({"type":"agent","kind":kind,"text":text}));
-            })?;
-            emit(&tx, json!({"type":"agent_state","state":"completed"}));
-            Ok::<_, String>(())
+            })
         })();
+        // A kept session that no longer goes on (Claude Code forgot it, or its
+        // transcript would not run): the conversation starts its agent afresh,
+        // hearing what was said, once, if nothing of the turn was heard yet.
+        if let (Err(err), Some(id)) = (&result, &conversation) {
+            if err.starts_with(RESTORED_FAILED) && !turn_events.heard {
+                sessions.forget(id);
+                result = sessions
+                    .get(id, &request.settings, open)
+                    .and_then(|(current, opened)| {
+                        run_turn(
+                            current,
+                            opened,
+                            &request,
+                            earlier.as_deref(),
+                            &shared,
+                            &mut turn_events,
+                        )
+                    });
+            }
+        }
+        let result = result.map_err(|err| {
+            err.strip_prefix(RESTORED_FAILED)
+                .map(str::to_owned)
+                .unwrap_or(err)
+        });
+        drop(turn_events);
         let outcome = match &result {
             Ok(()) => conversations::Outcome::Done(String::new()),
             Err(err) => conversations::Outcome::Failed(err.clone()),
@@ -2269,16 +2249,15 @@ fn agent_worker(
                 json!({"type":"error","command":"agent","message":err}),
             );
         }
+        // What the session knows, kept for the next launch.
+        let claude_session = conversation.as_deref().and_then(|id| sessions.kept(id));
         if let Some((client, turn, before)) = kept {
             let proposal = client
                 .get_state()
                 .ok()
                 .and_then(|state| conversations::staged_proposal(&before, &state));
-            if let Err(err) = turn.finish(&store, outcome, proposal, &tx) {
-                error(
-                    &tx,
-                    format!("Kerf's reply was not kept: {err}"),
-                );
+            if let Err(err) = turn.finish(&store, outcome, proposal, claude_session, &tx) {
+                error(&tx, format!("Kerf's reply was not kept: {err}"));
             }
         }
         if let Ok(mut abort) = shared.abort.lock() {
@@ -2288,6 +2267,149 @@ fn agent_worker(
         emit(&tx, json!({"type":"agent_busy","busy":false}));
         let _ = commands.send(Command::Refresh);
     }
+}
+
+/// How a turn on a session gone on from what was kept fails, so that it is
+/// tried once more on a fresh one.
+const RESTORED_FAILED: &str = "\u{0}restored: ";
+
+/// What a turn's events go to: the editor, the conversation that keeps the
+/// turn, and the tool calls under way, by id.
+struct TurnEvents<'a> {
+    tx: &'a SyncSender<Value>,
+    commands: &'a SyncSender<Command>,
+    conversation: Option<String>,
+    turn: Option<&'a mut conversations::Turn>,
+    running: std::collections::HashMap<String, kerf_agent::AgentTargetSummary>,
+    /// Whether anything of the turn has been heard yet.
+    heard: bool,
+}
+
+impl TurnEvents<'_> {
+    fn hear(&mut self, event: AgentEvent, unit: &str) {
+        let tx = self.tx;
+        if !matches!(event, AgentEvent::Context { .. }) {
+            self.heard = true;
+        }
+        match event {
+            // How full Kerf's context is, for the composer's meter.
+            AgentEvent::Context { used, limit } => emit(
+                tx,
+                json!({
+                    "type": "agent_context", "used": used, "limit": limit,
+                    "unit": unit, "conversation": self.conversation,
+                }),
+            ),
+            AgentEvent::TextDelta(text) => {
+                emit(tx, json!({"type":"agent","kind":"delta","text":text}));
+            }
+            AgentEvent::TurnStarted { .. } => emit(
+                tx,
+                json!({"type":"agent","kind":"status","text":"Planning next step…"}),
+            ),
+            // A tool call is one row of the work log: said as it starts, and
+            // again in its place once it ends.
+            AgentEvent::ToolCallStarted { id, name, targets } => {
+                if let Some(focus) = focus_event(&name, &targets) {
+                    emit(tx, focus);
+                }
+                let text = steps::running(&name, &targets);
+                self.running.insert(id.clone(), targets);
+                emit(
+                    tx,
+                    json!({"type":"agent","kind":"tool","id":id,"state":"running","text":text}),
+                );
+            }
+            AgentEvent::ToolCallFinished {
+                id,
+                name,
+                ok,
+                summary,
+            } => {
+                if summary.status.as_deref() == Some("awaiting_review") {
+                    emit(tx, json!({"type":"agent_state","state":"awaiting_review"}));
+                }
+                // The proposal shows on the timeline as it grows.
+                if staged_proposal(&summary) {
+                    let _ = self.commands.try_send(Command::Refresh);
+                }
+                let targets = self.running.remove(&id).unwrap_or_default();
+                let text = steps::finished(&name, &targets, ok, &summary);
+                // The cut itself was rendered: what Kerf was asked to make is made.
+                let rendered = ok && steps::tool_name(&name) == "render" && summary.deliverable;
+                emit(
+                    tx,
+                    json!({
+                        "type": "agent", "kind": "tool", "id": id,
+                        "state": if ok { "done" } else { "failed" },
+                        "text": text, "rendered": rendered,
+                    }),
+                );
+                if let Some(turn) = self.turn.as_deref_mut() {
+                    turn.step(&text);
+                }
+                // A making the person is asked to run: a card with Make.
+                if let (Some("asked"), Some(media), Some(ask)) =
+                    (summary.status.as_deref(), &summary.media, &summary.ask)
+                {
+                    let ask = conversations::Ask {
+                        media: media.clone(),
+                        rolls: summary.rolls.filter(|rolls| *rolls > 1),
+                        take: summary.take,
+                        text: ask.clone(),
+                    };
+                    emit(
+                        tx,
+                        json!({
+                            "type": "agent_ask", "media": ask.media, "rolls": ask.rolls,
+                            "take": ask.take, "text": ask.text,
+                            "conversation": self.conversation,
+                        }),
+                    );
+                    if let Some(turn) = self.turn.as_deref_mut() {
+                        turn.ask(ask);
+                    }
+                }
+            }
+            AgentEvent::Done { text } => {
+                if let Some(turn) = self.turn.as_deref_mut() {
+                    turn.done(&text);
+                }
+                emit(tx, json!({"type":"agent","kind":"done","text":text}));
+            }
+            AgentEvent::Aborted => {
+                if let Some(turn) = self.turn.as_deref_mut() {
+                    turn.stopped();
+                }
+                emit(tx, json!({"type":"agent_state","state":"aborted"}));
+                emit(tx, json!({"type":"agent","kind":"status","text":"Stopped"}));
+            }
+        }
+    }
+}
+
+/// One turn on `agent`. A session that has nothing of the conversation hears
+/// what was said in it first.
+fn run_turn(
+    agent: &mut Agent,
+    opened: sessions::Opened,
+    request: &AgentRequest,
+    earlier: Option<&str>,
+    shared: &Shared,
+    events: &mut TurnEvents<'_>,
+) -> Result<(), String> {
+    let text = match (opened, earlier) {
+        (sessions::Opened::New, Some(earlier)) => format!("{earlier}\nNow: {}", request.text),
+        _ => request.text.clone(),
+    };
+    agent.set_permissions(request.permissions);
+    if let Ok(mut abort) = shared.abort.lock() {
+        *abort = Some(agent.abort_handle());
+    }
+    let unit = agent.context_unit();
+    agent.run_with_events(&text, |event| events.hear(event, unit))?;
+    emit(events.tx, json!({"type":"agent_state","state":"completed"}));
+    Ok(())
 }
 
 /// Start workers without waiting for project I/O.

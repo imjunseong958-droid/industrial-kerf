@@ -585,6 +585,57 @@ void ChatPanel::addStep(const QString &step) {
     scheduleFollow();
 }
 
+void ChatPanel::setStep(const QString &id, const QString &step, bool failed) {
+    if (!m_live.active) return;
+    ensureLiveKerf()->work()->setStep(id, step, failed);
+    scheduleFollow();
+}
+
+void ChatPanel::addAsk(const MakeCard::Ask &ask) {
+    if (!m_live.active && !m_live.finished) return;
+    ensureLiveKerf()->addAsk(makeAskCard(ask));
+    scheduleFollow();
+}
+
+MakeCard *ChatPanel::makeAskCard(const MakeCard::Ask &ask) {
+    auto *card = new MakeCard(ask);
+    connect(card, &MakeCard::makeRequested, this, [this](const QString &media, int rolls) {
+        m_makings.insert(media, Making{MakeCard::State::Making, QString(), 0});
+        emit makeRequested(media, rolls);
+    });
+    connect(card, &MakeCard::stopRequested, this, &ChatPanel::stopMakingRequested);
+    connect(card, &MakeCard::lookRequested, this, &ChatPanel::lookAtTakeRequested);
+    connect(card, &MakeCard::declined, this, [this](const QString &key) { m_declined.insert(key); });
+    syncAskCard(card);
+    return card;
+}
+
+void ChatPanel::syncAskCard(MakeCard *card) const {
+    const MakeCard::Ask &ask = card->ask();
+    const MediaFacts facts = m_mediaFacts ? m_mediaFacts(ask.media, ask.take) : MediaFacts{};
+    card->setMediaName(facts.name);
+    card->setCanMake(m_connected);
+    if (facts.made) {
+        card->setState(MakeCard::State::Made, QString(), ask.take + std::max(1, ask.rolls) - 1);
+    } else if (const auto making = m_makings.constFind(ask.media); making != m_makings.cend()) {
+        card->setState(making->state, making->detail, making->take);
+    } else if (m_declined.contains(ask.key())) {
+        card->setState(MakeCard::State::Declined);
+    }
+}
+
+void ChatPanel::setMakingState(const QString &media, MakeCard::State state, const QString &detail, int take) {
+    m_makings.insert(media, Making{state, detail, take});
+    for (MakeCard *card : makeCards())
+        if (card->ask().media == media) card->setState(state, detail, take);
+}
+
+QList<MakeCard *> ChatPanel::makeCards() const {
+    QList<MakeCard *> out;
+    for (KerfMessage *kerf : answers()) out << kerf->asks();
+    return out;
+}
+
 void ChatPanel::setTurnStatus(const QString &status) {
     if (!m_live.active || !m_live.kerf) return;
     m_live.kerf->work()->setStatus(status);
@@ -711,6 +762,7 @@ void ChatPanel::rebuild() {
                                             : KerfMessage::Outcome::Answer,
                              request);
             kerf->setProposal(item.proposal);
+            for (const MakeCard::Ask &ask : item.asks) kerf->addAsk(makeAskCard(ask));
             widget = kerf;
         }
         m_shown.append({item.id, widget});
@@ -731,6 +783,7 @@ void ChatPanel::rebuild() {
         if (m_live.kerf) m_live.kerf->hide();
     }
     refreshCards();
+    for (MakeCard *card : makeCards()) syncAskCard(card);
     if (m_strays && !m_strays->cards().isEmpty()) insertMessage(m_strays);
     else if (m_strays) m_strays->hide();
     if (m_footage && !m_footage->isHidden()) m_listLayout->addWidget(m_footage);

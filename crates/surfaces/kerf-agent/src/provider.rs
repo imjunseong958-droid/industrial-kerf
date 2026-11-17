@@ -71,6 +71,74 @@ pub trait LlmProvider: Send + Sync {
     fn name(&self) -> ProviderName;
     fn default_model(&self) -> &'static str;
     fn stream(&self, request: &ProviderRequest) -> Result<Vec<ProviderChunk>, ProviderError>;
+
+    /// As [`LlmProvider::stream`], telling `on_text` each piece of the reply's
+    /// text as it arrives, so a person reads it while the model writes. Once
+    /// `stop` says so the rest of the reply is not read. One that cannot
+    /// stream tells the whole text once the reply is in.
+    fn stream_live(
+        &self,
+        request: &ProviderRequest,
+        on_text: &mut dyn FnMut(&str),
+        stop: &dyn Fn() -> bool,
+    ) -> Result<Vec<ProviderChunk>, ProviderError> {
+        let _ = stop;
+        let chunks = self.stream(request)?;
+        for chunk in &chunks {
+            if let ProviderChunk::TextDelta { text } = chunk {
+                on_text(text);
+            }
+        }
+        Ok(chunks)
+    }
+}
+
+/// The text a streamed event of any of the three APIs adds to the reply:
+/// Anthropic's `text_delta`, Chat Completions' `delta.content`, and
+/// Responses' `response.output_text.delta`.
+fn live_text(event: &Value) -> Option<&str> {
+    let text = match event.get("type").and_then(Value::as_str) {
+        Some("content_block_delta") => {
+            let delta = event.get("delta")?;
+            (delta.get("type").and_then(Value::as_str) == Some("text_delta"))
+                .then(|| delta.get("text").and_then(Value::as_str))
+                .flatten()
+        }
+        Some("response.output_text.delta") => event.get("delta").and_then(Value::as_str),
+        _ => event
+            .get("choices")
+            .and_then(Value::as_array)
+            .and_then(|choices| choices.first())
+            .and_then(|choice| choice.get("delta"))
+            .and_then(|delta| delta.get("content"))
+            .and_then(Value::as_str),
+    };
+    text.filter(|text| !text.is_empty())
+}
+
+/// Run one exchange, telling `on_text` its text as each event brings it, or
+/// all of it at the end where no event did (a reply that came whole).
+fn relay_live(
+    exchange: impl FnOnce(&mut dyn FnMut(&Value) -> bool) -> Result<Vec<ProviderChunk>, ProviderError>,
+    on_text: &mut dyn FnMut(&str),
+    stop: &dyn Fn() -> bool,
+) -> Result<Vec<ProviderChunk>, ProviderError> {
+    let mut live = false;
+    let chunks = exchange(&mut |event| {
+        if let Some(text) = live_text(event) {
+            live = true;
+            on_text(text);
+        }
+        !stop()
+    })?;
+    if !live {
+        for chunk in &chunks {
+            if let ProviderChunk::TextDelta { text } = chunk {
+                on_text(text);
+            }
+        }
+    }
+    Ok(chunks)
 }
 
 /// Injectable JSON HTTP boundary. Tests can replace it without a network.
@@ -92,6 +160,25 @@ pub trait JsonHttpClient: Send + Sync {
         body: &Value,
     ) -> Result<Vec<Value>, ProviderError> {
         self.post_json(url, headers, body).map(|value| vec![value])
+    }
+
+    /// As [`JsonHttpClient::post_stream`], handing `on_event` each event as
+    /// it is read; once it answers `false` the rest is not read. The default
+    /// reads them all first.
+    fn post_stream_each(
+        &self,
+        url: &str,
+        headers: &[(String, String)],
+        body: &Value,
+        on_event: &mut dyn FnMut(&Value) -> bool,
+    ) -> Result<Vec<Value>, ProviderError> {
+        let events = self.post_stream(url, headers, body)?;
+        for event in &events {
+            if !on_event(event) {
+                break;
+            }
+        }
+        Ok(events)
     }
 }
 
@@ -137,18 +224,69 @@ impl JsonHttpClient for UreqHttpClient {
         headers: &[(String, String)],
         body: &Value,
     ) -> Result<Vec<Value>, ProviderError> {
-        let body = self.send(url, headers, body)?;
-        parse_stream_events(&body)
+        self.post_stream_each(url, headers, body, &mut |_| true)
     }
-}
 
-impl UreqHttpClient {
-    fn send(
+    fn post_stream_each(
         &self,
         url: &str,
         headers: &[(String, String)],
         body: &Value,
-    ) -> Result<String, ProviderError> {
+        on_event: &mut dyn FnMut(&Value) -> bool,
+    ) -> Result<Vec<Value>, ProviderError> {
+        let mut response = self.request(url, headers, body)?;
+        let reader = std::io::BufReader::new(response.body_mut().as_reader());
+        let mut events = Vec::new();
+        // A server that answered whole, not as events.
+        let mut whole = String::new();
+        for line in std::io::BufRead::lines(reader) {
+            let line = line.map_err(|error| {
+                ProviderError::new(
+                    "PROVIDER_HTTP_ERROR",
+                    format!("provider response read failed: {error}"),
+                )
+            })?;
+            let Some(data) = line.trim().strip_prefix("data:").map(str::trim) else {
+                if events.is_empty() {
+                    whole.push_str(&line);
+                    whole.push('\n');
+                }
+                continue;
+            };
+            if data.is_empty() || data == "[DONE]" {
+                continue;
+            }
+            let event: Value = serde_json::from_str(data).map_err(|error| {
+                ProviderError::new(
+                    "PROVIDER_PROTOCOL_ERROR",
+                    format!("provider returned invalid stream JSON: {error}"),
+                )
+            })?;
+            let more = on_event(&event);
+            events.push(event);
+            if !more {
+                // Dropping the response closes the connection: the model
+                // stops writing what no one will read.
+                return Ok(events);
+            }
+        }
+        if events.is_empty() {
+            events = parse_stream_events(&whole)?;
+            for event in &events {
+                on_event(event);
+            }
+        }
+        Ok(events)
+    }
+}
+
+impl UreqHttpClient {
+    fn request(
+        &self,
+        url: &str,
+        headers: &[(String, String)],
+        body: &Value,
+    ) -> Result<ureq::http::Response<ureq::Body>, ProviderError> {
         let config = ureq::Agent::config_builder()
             .timeout_global(Some(self.timeout))
             .build();
@@ -157,12 +295,21 @@ impl UreqHttpClient {
         for (name, value) in headers {
             request = request.header(name, value);
         }
-        let mut response = request.send_json(body).map_err(|error| {
+        request.send_json(body).map_err(|error| {
             ProviderError::new(
                 "PROVIDER_HTTP_ERROR",
                 format!("provider request failed: {error}"),
             )
-        })?;
+        })
+    }
+
+    fn send(
+        &self,
+        url: &str,
+        headers: &[(String, String)],
+        body: &Value,
+    ) -> Result<String, ProviderError> {
+        let mut response = self.request(url, headers, body)?;
         response.body_mut().read_to_string().map_err(|error| {
             ProviderError::new(
                 "PROVIDER_HTTP_ERROR",
@@ -280,6 +427,25 @@ impl LlmProvider for AnthropicProvider {
     }
 
     fn stream(&self, request: &ProviderRequest) -> Result<Vec<ProviderChunk>, ProviderError> {
+        self.exchange(request, &mut |_| true)
+    }
+
+    fn stream_live(
+        &self,
+        request: &ProviderRequest,
+        on_text: &mut dyn FnMut(&str),
+        stop: &dyn Fn() -> bool,
+    ) -> Result<Vec<ProviderChunk>, ProviderError> {
+        relay_live(|on_event| self.exchange(request, on_event), on_text, stop)
+    }
+}
+
+impl AnthropicProvider {
+    fn exchange(
+        &self,
+        request: &ProviderRequest,
+        on_event: &mut dyn FnMut(&Value) -> bool,
+    ) -> Result<Vec<ProviderChunk>, ProviderError> {
         let mut headers = vec![
             ("anthropic-version".into(), "2023-06-01".into()),
             ("content-type".into(), "application/json".into()),
@@ -308,9 +474,12 @@ impl LlmProvider for AnthropicProvider {
             };
             body["output_config"] = json!({"effort": effort});
         }
-        let events =
-            self.client
-                .post_stream(&format!("{}/messages", self.base_url), &headers, &body)?;
+        let events = self.client.post_stream_each(
+            &format!("{}/messages", self.base_url),
+            &headers,
+            &body,
+            on_event,
+        )?;
         if events.len() != 1 || events[0].get("content").is_none() {
             return Ok(anthropic_stream_chunks(&events));
         }
@@ -506,6 +675,25 @@ impl LlmProvider for OpenAiProvider {
     }
 
     fn stream(&self, request: &ProviderRequest) -> Result<Vec<ProviderChunk>, ProviderError> {
+        self.exchange(request, &mut |_| true)
+    }
+
+    fn stream_live(
+        &self,
+        request: &ProviderRequest,
+        on_text: &mut dyn FnMut(&str),
+        stop: &dyn Fn() -> bool,
+    ) -> Result<Vec<ProviderChunk>, ProviderError> {
+        relay_live(|on_event| self.exchange(request, on_event), on_text, stop)
+    }
+}
+
+impl OpenAiProvider {
+    fn exchange(
+        &self,
+        request: &ProviderRequest,
+        on_event: &mut dyn FnMut(&Value) -> bool,
+    ) -> Result<Vec<ProviderChunk>, ProviderError> {
         let mut headers = vec![("content-type".into(), "application/json".into())];
         if let Some(key) = &self.api_key {
             headers.push(("authorization".into(), format!("Bearer {key}")));
@@ -519,10 +707,11 @@ impl LlmProvider for OpenAiProvider {
             "tool_choice": "auto",
             "stream": true,
         });
-        let events = self.client.post_stream(
+        let events = self.client.post_stream_each(
             &format!("{}/chat/completions", self.base_url),
             &headers,
             &body,
+            on_event,
         )?;
         if events.len() != 1
             || events[0]
@@ -683,6 +872,25 @@ impl LlmProvider for OpenAiResponsesProvider {
     }
 
     fn stream(&self, request: &ProviderRequest) -> Result<Vec<ProviderChunk>, ProviderError> {
+        self.exchange(request, &mut |_| true)
+    }
+
+    fn stream_live(
+        &self,
+        request: &ProviderRequest,
+        on_text: &mut dyn FnMut(&str),
+        stop: &dyn Fn() -> bool,
+    ) -> Result<Vec<ProviderChunk>, ProviderError> {
+        relay_live(|on_event| self.exchange(request, on_event), on_text, stop)
+    }
+}
+
+impl OpenAiResponsesProvider {
+    fn exchange(
+        &self,
+        request: &ProviderRequest,
+        on_event: &mut dyn FnMut(&Value) -> bool,
+    ) -> Result<Vec<ProviderChunk>, ProviderError> {
         let mut headers = vec![("content-type".into(), "application/json".into())];
         if let Some(key) = &self.api_key {
             headers.push(("authorization".into(), format!("Bearer {key}")));
@@ -698,9 +906,12 @@ impl LlmProvider for OpenAiResponsesProvider {
         if let Some(effort) = self.reasoning_effort {
             body["reasoning"] = json!({"effort": effort.name()});
         }
-        let events =
-            self.client
-                .post_stream(&format!("{}/responses", self.base_url), &headers, &body)?;
+        let events = self.client.post_stream_each(
+            &format!("{}/responses", self.base_url),
+            &headers,
+            &body,
+            on_event,
+        )?;
         if events.len() != 1 || events[0].get("output").is_none() {
             return Ok(openai_responses_stream_chunks(&events));
         }

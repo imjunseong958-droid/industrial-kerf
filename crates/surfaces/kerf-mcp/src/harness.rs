@@ -4117,6 +4117,9 @@ impl KerfMcpRouter {
                 (to - from).seconds(),
             )?);
         }
+        // The cut itself, whole and at full quality: what the person will
+        // keep, not a check of a range, a draft, or a proposal.
+        let deliverable = !draft && range.is_none() && input.proposal.is_none();
         let (job, output) = self.render_start(
             draft,
             range,
@@ -4129,6 +4132,7 @@ impl KerfMcpRouter {
             "output": output,
             "sequence": sequence.id.to_string(),
             "revision": self.runtime.get_state()?.revision,
+            "deliverable": deliverable,
         });
         if let Some(id) = input.proposal {
             result["proposal"] = json!(id);

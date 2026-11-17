@@ -51,7 +51,7 @@ repeating their numbers, so changing a value does not make it wrong.
 | Stage at work | Kerf works, a render runs, or a model makes a shot | A light runs round just outside the picture's edge, blue for Kerf and amber for the computer, amber winning; the chip at the picture's top left says what runs ("Making bridge-low · 0:12", "Rendering preview 62%"). Both fade in, and fade out when it ends; under Reduce Motion the ring is still | `activity::EdgeLight`, `activity::stageFor`, `WorkChip::setShown`, `MainWindow::setStageActivity` | `theEdgeLightComesAndGoes`, `theStageShowsWhatRunsAndLetsItGo` |
 | Making a shot | A media is being made from its recipe | Amber stripes move across its clips, with how long it has gone; its tile in the Media sheet has them too, and "Making take 2 · 0:41". Queued, a dashed amber outline; with no file, a dashed hole saying "Not made" or "Offline" (still) | `TimelineWidget::setMediaActivity`, `ProjectPanel::setMediaActivity`, `activity::paintStripes` | `clipsShowTheirMediasMaking`, `mediaTilesSayWhatTheyAreDoing` |
 | Watch changes | "Watch what changed" | Stage reaches over the dimmed conversation; before wipes to and fro over after; changed clips lift | `MainWindow::watchChanges`, `followReelCompare`, `ViewerWidget::setCompareFrame`, `TimelineWidget::setFocusClips` | `watchingLeavesARoomOverThePicture`, `theStripSitsOnAnUprightPicture`, `theBeforeStillComesAndGoes`, `theLastDimIsTheOneThatStays`, `focusedClipsRiseOnce` |
-| Going home | Kerf has rendered | The picture shrinks into the folder; the conversation has the room | `MainWindow::goHome` | `theVeilDoesNotOutliveAMoveCutShort` |
+| Going home | Kerf rendered the cut itself (whole, full quality, not a range, draft or proposal) | The picture shrinks into the folder; the conversation has the room | `MainWindow::goHome` | `theVeilDoesNotOutliveAMoveCutShort` |
 | Manual export | An export you started finishes | A frame flies to the folder; the panel stays | `MainWindow::flyExportHome` | none |
 
 "none" means it has only been checked in a real window. Motion can only be judged
@@ -156,7 +156,7 @@ in, and each region drawn whole.
 - `QGraphicsOpacityEffect` does not dim `TimelineWidget`; use the veil.
 - The before side of the wipe is a still, as two streams cannot play at once. A cut
   that is all new has nothing to compare, so it has no wipe.
-- `Going home` follows the turn that called `render`, not that render finishing.
+- `Going home` follows the turn that rendered the cut itself, not that render finishing.
 - Stand-ins are posters, so they are soft until the render arrives.
 - Screenshots do not show whether motion is smooth, and `whatEachSceneCosts` shows what
   it costs, not how it looks. Only a real window shows that.

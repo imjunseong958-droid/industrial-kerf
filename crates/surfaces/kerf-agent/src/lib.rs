@@ -487,26 +487,37 @@ impl AgentSession {
         })
     }
 
-    fn stream_bounded(&mut self) -> Result<Vec<ProviderChunk>, AgentError> {
+    /// One request to the model, its text told to `on_text` as it arrives.
+    fn stream_bounded(
+        &mut self,
+        on_text: &mut dyn FnMut(&str),
+    ) -> Result<Vec<ProviderChunk>, AgentError> {
         let budget = self.context_budget.clone();
         let request = self.provider_request(&budget)?;
+        let aborted = self.aborted.clone();
+        let stop = move || aborted.load(Ordering::SeqCst);
         // No tools have run for a refused request. Retry once; never restart
-        // an edit or replay a mutating tool call.
-        match self.llm.stream(&request) {
+        // an edit or replay a mutating tool call. A refusal comes before any
+        // of the reply, so nothing has been told twice.
+        match self.llm.stream_live(&request, on_text, &stop) {
             Ok(chunks) => Ok(chunks),
             Err(error) if is_context_limit(&error) => {
                 let mut smaller = budget;
                 smaller.max_input_units /= 2;
                 self.context_budget = smaller.clone();
                 let request = self.provider_request(&smaller)?;
-                self.llm.stream(&request).map_err(AgentError::Provider)
+                self.llm
+                    .stream_live(&request, on_text, &stop)
+                    .map_err(AgentError::Provider)
             }
             Err(error) if is_thinking_mismatch(&error) => {
                 // Earlier thinking no longer matches the conversation it was
                 // made in; leave it out from here on.
                 self.view.thinking_from = self.messages.len();
                 let request = self.provider_request(&budget)?;
-                self.llm.stream(&request).map_err(AgentError::Provider)
+                self.llm
+                    .stream_live(&request, on_text, &stop)
+                    .map_err(AgentError::Provider)
             }
             Err(error) => Err(AgentError::Provider(error)),
         }
@@ -534,27 +545,36 @@ impl AgentSession {
                 });
                 return Ok(final_text);
             }
-            let chunks = self.stream_bounded()?;
+            let chunks = self.stream_bounded(&mut |text| {
+                emit(AgentEvent::TextDelta(bounded_text(
+                    text,
+                    MAX_AGENT_EVENT_TEXT_BYTES,
+                )))
+            })?;
             let (used, limit) = self.context_use;
             emit(AgentEvent::Context {
                 used: used as u64,
                 limit: limit as u64,
             });
+            if self.is_aborted() {
+                // Stopped while the model wrote: what it was writing is not
+                // kept, and none of the tools it was asking for runs.
+                emit(AgentEvent::Aborted);
+                emit(AgentEvent::Done {
+                    text: bounded_text(&final_text, MAX_AGENT_EVENT_TEXT_BYTES),
+                });
+                return Ok(final_text);
+            }
             let mut stop_reason = "end_turn".to_owned();
             let mut content = Vec::new();
             for chunk in chunks {
-                match chunk {
-                    ProviderChunk::TextDelta { text } => emit(AgentEvent::TextDelta(bounded_text(
-                        &text,
-                        MAX_AGENT_EVENT_TEXT_BYTES,
-                    ))),
-                    ProviderChunk::MessageEnd {
-                        stop_reason: reason,
-                        content: blocks,
-                    } => {
-                        stop_reason = reason;
-                        content = blocks;
-                    }
+                if let ProviderChunk::MessageEnd {
+                    stop_reason: reason,
+                    content: blocks,
+                } = chunk
+                {
+                    stop_reason = reason;
+                    content = blocks;
                 }
             }
             let calls = content
@@ -675,14 +695,87 @@ impl AgentSession {
     }
 
     pub fn load(path: &Path, options: AgentSessionOptions) -> Result<Self, AgentError> {
-        let bytes = fs::read(path).map_err(|error| AgentError::Serialization(error.to_string()))?;
         let mut session = Self::new(options);
-        session.messages = serde_json::from_slice(&bytes)
-            .map_err(|error| AgentError::Serialization(error.to_string()))?;
-        // Thinking from the earlier session was made for a view of it this
-        // session does not reproduce.
-        session.view.thinking_from = session.messages.len();
+        session.restore(path)?;
         Ok(session)
+    }
+
+    /// Keep the conversation so far at `path`, to [`AgentSession::restore`]
+    /// in a later session: written whole and then renamed over the one
+    /// before, so a reader never finds half of it. Pictures older than the
+    /// last few messages give way to a line saying so, which keeps the file
+    /// small; what the model said of them stays.
+    pub fn keep(&self, path: &Path) -> Result<(), AgentError> {
+        let error = |error: std::io::Error| AgentError::Serialization(error.to_string());
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).map_err(error)?;
+        }
+        let recent = self.messages.len().saturating_sub(KEPT_PICTURE_MESSAGES);
+        let messages: Vec<Value> = self
+            .messages
+            .iter()
+            .enumerate()
+            .map(|(index, message)| {
+                if index >= recent {
+                    message.clone()
+                } else {
+                    without_pictures(message)
+                }
+            })
+            .collect();
+        let json = serde_json::to_vec(&messages)
+            .map_err(|error| AgentError::Serialization(error.to_string()))?;
+        let partial = path.with_extension("partial");
+        fs::write(&partial, json).map_err(error)?;
+        fs::rename(&partial, path).map_err(error)
+    }
+
+    /// Go on from a conversation kept with [`AgentSession::keep`] (or
+    /// [`AgentSession::save`]), in place of this session's own.
+    pub fn restore(&mut self, path: &Path) -> Result<(), AgentError> {
+        let bytes = fs::read(path).map_err(|error| AgentError::Serialization(error.to_string()))?;
+        let messages: Vec<Value> = serde_json::from_slice(&bytes)
+            .map_err(|error| AgentError::Serialization(error.to_string()))?;
+        if messages.iter().any(|message| !message.is_object()) {
+            return Err(AgentError::Serialization(
+                "a kept conversation holds something other than messages".into(),
+            ));
+        }
+        self.messages = messages;
+        // Thinking from the earlier session was made for a view of it this
+        // session does not reproduce, and the project is read afresh.
+        self.view = context::View {
+            thinking_from: self.messages.len(),
+            ..context::View::default()
+        };
+        self.snapshot = None;
+        Ok(())
+    }
+
+    /// How many messages the conversation holds.
+    pub fn message_count(&self) -> usize {
+        self.messages.len()
+    }
+}
+
+/// The last messages whose pictures [`AgentSession::keep`] keeps.
+const KEPT_PICTURE_MESSAGES: usize = 8;
+
+/// `message` with each picture in it, at any depth, as a line saying one
+/// was there.
+fn without_pictures(message: &Value) -> Value {
+    match message {
+        Value::Object(object) if object.get("type").and_then(Value::as_str) == Some("image") => {
+            json!({"type": "text", "text": "[a picture shown here is not kept]"})
+        }
+        Value::Object(object) => Value::Object(
+            object
+                .iter()
+                .map(|(key, value)| (key.clone(), without_pictures(value)))
+                .collect(),
+        ),
+        Value::Array(values) => Value::Array(values.iter().map(without_pictures).collect()),
+        other => other.clone(),
     }
 }
 
@@ -1055,6 +1148,177 @@ mod tests {
         let chunks = anthropic.stream(&provider_request()).unwrap();
         assert!(matches!(&chunks[0], ProviderChunk::TextDelta { text } if text == "done"));
         assert_eq!(anthropic_client.bodies.lock().unwrap()[0]["stream"], true);
+    }
+
+    /// A server that writes its reply's events one at a time, each only once
+    /// the one before has been read and told.
+    #[test]
+    fn a_reply_is_told_while_the_model_writes_it() {
+        use std::io::{BufRead, BufReader, Write};
+        use std::net::TcpListener;
+        use std::sync::mpsc;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let (told, heard) = mpsc::channel::<()>();
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut length = 0;
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                    length = value.trim().parse().unwrap();
+                }
+                if line == "\r\n" {
+                    break;
+                }
+            }
+            let mut body = vec![0; length];
+            std::io::Read::read_exact(&mut reader, &mut body).unwrap();
+            let mut stream = stream;
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n"
+            )
+            .unwrap();
+            let events = [
+                json!({"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}),
+                json!({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Trimming "}}),
+                json!({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"the intro."}}),
+                json!({"type":"message_delta","delta":{"stop_reason":"end_turn"}}),
+            ];
+            for (index, event) in events.iter().enumerate() {
+                write!(stream, "event: x\ndata: {event}\n\n").unwrap();
+                stream.flush().unwrap();
+                // The second piece is written only once the first was told.
+                if index == 1 {
+                    heard
+                        .recv_timeout(std::time::Duration::from_secs(10))
+                        .expect("the first piece was told before the reply ended");
+                }
+            }
+        });
+        let provider = AnthropicProvider::with_client(
+            Arc::new(UreqHttpClient::default()),
+            Some("test-key".into()),
+            Some(format!("http://{address}/v1")),
+        );
+        let mut pieces = Vec::new();
+        let chunks = provider
+            .stream_live(
+                &provider_request(),
+                &mut |text| {
+                    pieces.push(text.to_owned());
+                    let _ = told.send(());
+                },
+                &|| false,
+            )
+            .unwrap();
+        server.join().unwrap();
+        assert_eq!(pieces, ["Trimming ", "the intro."]);
+        let ProviderChunk::MessageEnd { content, .. } = chunks.last().unwrap() else {
+            panic!("expected message end");
+        };
+        assert_eq!(content[0]["text"], "Trimming the intro.");
+    }
+
+    #[test]
+    fn a_reply_that_came_whole_is_told_once_and_stop_reads_no_further() {
+        let client = Arc::new(FakeStreamingClient {
+            events: vec![json!({
+                "content":[{"type":"text","text":"All of it."}],
+                "stop_reason":"end_turn"
+            })],
+            bodies: Mutex::new(Vec::new()),
+        });
+        let provider = AnthropicProvider::with_client(client, None, None);
+        let mut pieces = Vec::new();
+        provider
+            .stream_live(
+                &provider_request(),
+                &mut |text| pieces.push(text.to_owned()),
+                &|| false,
+            )
+            .unwrap();
+        assert_eq!(pieces, ["All of it."]);
+
+        let client = Arc::new(FakeStreamingClient {
+            events: vec![
+                json!({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"One"}}),
+                json!({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Two"}}),
+            ],
+            bodies: Mutex::new(Vec::new()),
+        });
+        let provider = AnthropicProvider::with_client(client, None, None);
+        let mut pieces = Vec::new();
+        let mut read = 0;
+        let stopped = std::cell::Cell::new(false);
+        provider
+            .stream_live(
+                &provider_request(),
+                &mut |text| {
+                    read += 1;
+                    pieces.push(text.to_owned());
+                    stopped.set(true);
+                },
+                &|| stopped.get(),
+            )
+            .unwrap();
+        assert_eq!(pieces, ["One"]);
+        assert_eq!(read, 1);
+    }
+
+    #[test]
+    fn a_kept_conversation_goes_on_without_its_old_pictures() {
+        let folder = std::env::temp_dir().join(format!(
+            "kerf-agent-keep-{}-{:?}",
+            std::process::id(),
+            std::time::SystemTime::now()
+        ));
+        let path = folder.join("sessions").join("c-1.json");
+        let mut session = AgentSession::from_provider(
+            Box::new(FakeProvider { chunks: Vec::new() }),
+            None,
+            None,
+            Vec::new(),
+            ToolMap::new(),
+            4,
+            OpenAiApiMode::Chat,
+            None,
+        );
+        let picture = json!({"type":"image","source":{"type":"base64","media_type":"image/png","data":"AAAA"}});
+        session.messages.push(json!({"role":"user","content":[
+            {"type":"tool_result","tool_use_id":"t1","content":[picture.clone(), {"type":"text","text":"frame 1"}]}
+        ]}));
+        for index in 0..KEPT_PICTURE_MESSAGES {
+            session.messages.push(json!({"role":"user","content":[picture.clone(), {"type":"text","text": index.to_string()}]}));
+        }
+        session.keep(&path).unwrap();
+        assert!(!path.with_extension("partial").exists());
+
+        let mut again = AgentSession::from_provider(
+            Box::new(FakeProvider { chunks: Vec::new() }),
+            None,
+            None,
+            Vec::new(),
+            ToolMap::new(),
+            4,
+            OpenAiApiMode::Chat,
+            None,
+        );
+        again.restore(&path).unwrap();
+        assert_eq!(again.message_count(), KEPT_PICTURE_MESSAGES + 1);
+        let first = &again.messages[0]["content"][0]["content"];
+        assert_eq!(first[0]["type"], "text");
+        assert_eq!(first[1]["text"], "frame 1");
+        assert_eq!(again.messages[1]["content"][0]["type"], "image");
+        // What is not a conversation is refused, and the session is as it was.
+        std::fs::write(&path, "[1, 2]").unwrap();
+        assert!(again.restore(&path).is_err());
+        assert_eq!(again.message_count(), KEPT_PICTURE_MESSAGES + 1);
+        let _ = std::fs::remove_dir_all(&folder);
     }
 
     #[test]

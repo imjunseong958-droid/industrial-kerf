@@ -84,6 +84,16 @@ impl ClaudeCodeSession {
         Arc::clone(&self.aborted)
     }
 
+    /// Go on in Claude Code's session `id`, kept from an earlier launch.
+    pub(crate) fn resume(&mut self, id: String) {
+        self.session = Some(id).filter(|id| !id.trim().is_empty());
+    }
+
+    /// Claude Code's own session, once a turn has named it.
+    pub(crate) fn session(&self) -> Option<&str> {
+        self.session.as_deref()
+    }
+
     /// The mode the turns from here on run in: each starts its own
     /// `kerf-mcp`, which is told it as it starts.
     pub(crate) fn set_permissions(&mut self, mode: Option<Mode>) {

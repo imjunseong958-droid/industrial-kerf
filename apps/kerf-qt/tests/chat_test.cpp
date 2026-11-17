@@ -17,6 +17,7 @@
 #include "ui/chat_parts.h"
 #include "ui/conversation_model.h"
 #include "ui/editor_bus.h"
+#include "ui/make_card.h"
 #include "ui/wiring/chat_wiring.h"
 
 #include <QAbstractButton>
@@ -680,6 +681,117 @@ private slots:
         emit card->acceptRequested(QStringLiteral("p-kerf"));
         QCOMPARE(w.of("accept").size(), 1);
         QCOMPARE(w.of("accept").first().value("proposalId").toString(), QStringLiteral("p-kerf"));
+    }
+
+    // A tool call is one row of the work log: said as it starts and put in its
+    // place once it ends, as a coding agent's log reads; a failed one in neg.
+    void aToolCallIsOneRowOfTheLog() {
+        Window w;
+        ChatPanel *chat = w.chat();
+        chat->composerWidget()->fill(QStringLiteral("Tighten the intro"));
+        QVERIFY(w.window.m_chatWiring->post());
+        w.window.handleEvent(QJsonObject{{"type", "agent_busy"}, {"busy", true}});
+        const auto tool = [&](const char *id, const char *state, const char *text, bool rendered = false) {
+            w.window.handleEvent(QJsonObject{{"type", "agent"}, {"kind", "tool"}, {"id", id}, {"state", state}, {"text", text}, {"rendered", rendered}});
+        };
+        tool("t1", "running", "Looking at c1, c2");
+        tool("t2", "running", "Editing c1");
+        settle();
+        KerfMessage *live = chat->liveMessage();
+        QVERIFY(live);
+        QCOMPARE(live->work()->steps(), (QStringList{QStringLiteral("Looking at c1, c2"), QStringLiteral("Editing c1")}));
+        tool("t1", "done", "Looked at c1, c2");
+        tool("t2", "failed", "The edit failed · line 2: no clip c9");
+        settle();
+        QCOMPARE(live->work()->steps(),
+                 (QStringList{QStringLiteral("Looked at c1, c2"), QStringLiteral("The edit failed · line 2: no clip c9")}));
+        QCOMPARE(live->work()->m_failedIds, QStringList{QStringLiteral("t2")});
+        // A render of a range or a proposal is a check: the picture stays.
+        tool("t3", "done", "Rendering check.mp4");
+        QVERIFY(!w.window.m_turnRendered);
+        // The cut itself, rendered: what was asked to be made is made.
+        tool("t4", "done", "Rendering cut.mp4", true);
+        QVERIFY(w.window.m_turnRendered);
+    }
+
+    // Kerf asks before a recipe's making runs, in the conversation: a card
+    // with the plan, Make and Not now. Make runs it as the bin does; the card
+    // follows the making to its take, and Look at it asks Kerf about it.
+    void kerfAsksToMakeInTheConversation() {
+        Window w;
+        ChatPanel *chat = w.chat();
+        w.window.applySnapshot(QJsonObject{{"revision", 3}, {"duration", 4}, {"timeline", QJsonObject{
+            {"fps", 24}, {"tracks", QJsonArray{}}, {"sources", QJsonArray{
+                QJsonObject{{"id", "m4"}, {"path", "shots/open.mp4"}, {"recipe", "shots/open.kerfrecipe"}}}}}}});
+        chat->composerWidget()->fill(QStringLiteral("Film the opening shot"));
+        QVERIFY(w.window.m_chatWiring->post());
+        w.window.handleEvent(QJsonObject{{"type", "agent_busy"}, {"busy", true}});
+        const QString plan = QStringLiteral("Asks to make m4, as take 2, from shots/open.kerfrecipe:\n1. render s2 {guide.mp4} size=832x480\n"
+                                            "2. generate model=wan prompt=\"a boat at dawn\" guide={guide.mp4}\n"
+                                            "Make it with `kerf make m4`, or Make from Recipe… in the editor's bin.");
+        w.window.handleEvent(QJsonObject{{"type", "agent_ask"}, {"media", "m4"}, {"take", 2}, {"text", plan}});
+        // The same making asked twice is one card.
+        w.window.handleEvent(QJsonObject{{"type", "agent_ask"}, {"media", "m4"}, {"take", 2}, {"text", plan}});
+        settle();
+        QCOMPARE(chat->makeCards().size(), 1);
+        MakeCard *card = chat->makeCards().first();
+        QCOMPARE(card->state(), MakeCard::State::Asked);
+        QVERIFY(card->planLabel()->text().contains(QStringLiteral("render s2 {guide.mp4}")));
+        QVERIFY(!card->planLabel()->text().contains(QStringLiteral("Make it with")));
+        QVERIFY(card->makeButton()->isVisibleTo(card) && card->notNowButton()->isVisibleTo(card));
+
+        // Make: the bin's making, confirmed, nothing asked again.
+        w.sent.clear();
+        QVERIFY(card->makeButton()->isEnabled());
+        card->makeButton()->click();
+        // Sent to the bridge as the bin's Make from Recipe… is.
+        const QJsonObject made = w.window.m_lastCommand;
+        QCOMPARE(made.value("type").toString(), QStringLiteral("media_make"));
+        QCOMPARE(made.value("media").toString(), QStringLiteral("m4"));
+        QVERIFY(made.value("confirmed").toBool());
+        QCOMPARE(card->state(), MakeCard::State::Making);
+        QVERIFY(card->stopButton()->isVisibleTo(card));
+        w.window.handleEvent(QJsonObject{{"type", "media_making"}, {"media", "m4"}, {"take", 2}, {"line", "generate: 40%"}});
+        QCOMPARE(card->statusLabel()->text(), QStringLiteral("generate: 40%"));
+        card->stopButton()->click();
+        QCOMPARE(w.window.m_lastCommand.value("type").toString(), QStringLiteral("media_make_cancel"));
+        w.window.handleEvent(QJsonObject{{"type", "media_made"}, {"media", "m4"}, {"take", 2}});
+        QCOMPARE(card->state(), MakeCard::State::Made);
+        QVERIFY(card->lookButton()->isVisibleTo(card));
+
+        // The turn ends and is kept with its ask: the kept card is made already.
+        w.window.handleEvent(QJsonObject{{"type", "agent"}, {"kind", "done"}, {"text", "Say Make to film it."}});
+        w.window.handleEvent(QJsonObject{{"type", "agent_busy"}, {"busy", false}});
+        QJsonObject ask{{"media", "m4"}, {"take", 2}, {"text", plan}};
+        w.window.handleEvent(conversation("c-5", "Film the opening shot",
+                                          {item("i1", "you", "Film the opening shot"),
+                                           item("i2", "kerf", "Say Make to film it.", {{"asks", QJsonArray{ask}}})}));
+        settle();
+        QCOMPARE(chat->makeCards().size(), 1);
+        MakeCard *kept = chat->makeCards().first();
+        QCOMPARE(kept->state(), MakeCard::State::Made);
+        // Look at it: Kerf is asked about the take.
+        w.sent.clear();
+        kept->lookButton()->click();
+        QCOMPARE(w.of("agent").size(), 1);
+        QVERIFY(w.of("agent").first().value("text").toString().startsWith(QStringLiteral("Take 2 of m4 is made.")));
+    }
+
+    // Not now: the card says it was not made and offers Make again; a making
+    // that fails says why.
+    void aMakingCanWaitOrFail() {
+        MakeCard card(MakingAsk{QStringLiteral("m7"), 3, 1, QStringLiteral("Asks to make m7")});
+        QCOMPARE(card.makeButton()->text(), QStringLiteral("Make 3"));
+        QSignalSpy declined(&card, &MakeCard::declined);
+        card.notNowButton()->click();
+        QCOMPARE(declined.count(), 1);
+        QCOMPARE(card.state(), MakeCard::State::Declined);
+        QVERIFY(card.makeButton()->isVisibleTo(&card) && !card.notNowButton()->isVisibleTo(&card));
+        card.setState(MakeCard::State::Failed, QStringLiteral("the model's server did not answer"));
+        QCOMPARE(card.statusLabel()->text(), QStringLiteral("the model's server did not answer"));
+        card.setState(MakeCard::State::Made, QString(), 3);
+        card.setState(MakeCard::State::Making);
+        QCOMPARE(card.state(), MakeCard::State::Made);
     }
 };
 
