@@ -745,6 +745,15 @@ reads node 9, output for output. `shot-directed` is written this way.
 
 What it does with a request:
 
+- It says how far along the job is. Asked after over HTTP, a server says only
+  that a job waits, runs, or is done, so each line is how long it has run
+  (`running, 45 s`). Which step of how many a sampler is on, ComfyUI says
+  over a websocket and nowhere else: `kerf-comfy` listens there too, at the
+  server's own address (`/ws`), with the key it sends its other requests, and
+  where that opens the line says it (`running, step 7 of 20, 45 s`), in the
+  editor's toolbar, the graph's head and an agent's job alike. Where it does
+  not open, behind a proxy that passes no upgrade, the making goes on as
+  before with what it has. `COMFY_PROGRESS=off` does not try.
 - It fits the guide to the model. A guide drawn at 1920x1080 and 24 frames a
   second goes up at the model's 832x480 and 16, filling the picture with what
   is over cut off evenly, and is kept as `guide.comfy.mp4` beside the request.
@@ -820,8 +829,9 @@ with `edit` (`workflowSet`), by the same rule ([An agent's part](#an-agents-part
 Its copy is always a new file, so that the recipe before, and every take made
 with it, still has the workflow it names.
 
-ComfyUI is another program. Kerf reads workflow files and asks a server over
-HTTP when a shot is made; it loads none of ComfyUI's code and changes none of
+ComfyUI is another program. Kerf reads workflow files, and `kerf-comfy` asks
+a server over HTTP when a shot is made, and listens at its websocket for how
+far along the job is; it loads none of ComfyUI's code and changes none of
 its files.
 
 ### A picture read back

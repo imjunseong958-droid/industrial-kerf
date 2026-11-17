@@ -170,6 +170,7 @@ fn patience() -> Patience {
     Patience {
         most: Duration::from_secs(30),
         pause: Duration::from_millis(5),
+            listen: false,
     }
 }
 
@@ -434,6 +435,7 @@ fn a_job_waited_for_too_long_is_taken_back() {
         &Patience {
             most: Duration::from_millis(60),
             pause: Duration::from_millis(5),
+            listen: false,
         },
         &AtomicBool::new(false),
         &mut |line| said.push(line.to_owned()),
@@ -494,6 +496,7 @@ fn a_job_is_taken_back_when_the_program_is_asked_to_end() {
         &Patience {
             most: Duration::from_secs(600),
             pause: Duration::from_secs(60),
+            listen: false,
         },
         &stop,
         &mut |line| said.push(line.to_owned()),

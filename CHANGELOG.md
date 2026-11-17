@@ -6,6 +6,9 @@ on `main`; its section here becomes the release's notes on GitHub
 
 ## 0.1.3
 
+- While a model on a ComfyUI server makes a shot, the line says which step
+  of how many it is on (`running, step 7 of 20`), where the server's
+  websocket can be reached; elsewhere it says how long it has run, as before.
 - A signal is set from a sound in a shot's graph: From a sound, in a
   signal's card, lists the clips of its sequence that play one and keys the
   signal to 1 where that sound's sounds start, as Kerf in the conversation
