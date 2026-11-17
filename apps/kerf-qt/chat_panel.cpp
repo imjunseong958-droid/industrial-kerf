@@ -1002,7 +1002,7 @@ ProposalCard *ChatPanel::buildCard(const ProposalModel::Proposal &proposal) {
     QString shown = state.shown;
     if (!shown.isEmpty() && !proposal.hasVersion(shown)) shown.clear();
     const QString versionId = shown.isEmpty() ? proposal.id : shown;
-    card->setPinned(pinned, false);
+    card->setPinned(pinned);
     card->setTitle(proposal.summary);
     // A cut Kerf made shows its picture; pressing it opens the stage.
     if (m_pictureSource && proposal.isOpen()) {

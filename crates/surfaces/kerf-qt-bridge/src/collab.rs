@@ -823,7 +823,7 @@ mod tests {
         assert_eq!(status["ahead"], 1);
         assert_eq!(status["live"], false);
         assert_eq!(status["busy"], false);
-        // Who "You" is, and the commit a review link names.
+        // Who "You" is, and the commit a project link names.
         assert_eq!(
             status["user"],
             json!({"name": "Test", "email": "test@example.com"})

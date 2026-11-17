@@ -1531,7 +1531,7 @@ void ViewerWidget::paintEvent(QPaintEvent *event) {
         p.restore();
     }
     // Over the picture, inside its rect: the caption, the QC overlap box,
-    // safe zones and the comments' drawings; the masks' outlines on top.
+    // safe zones; the masks' outlines on top.
     p.save();
     keepInside();
     paintCaption(p, m_overlapShown || m_overlapLevel > 0.0);

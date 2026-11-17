@@ -1,7 +1,7 @@
 #pragma once
 
 // The editor's design tokens: every colour, type style, radius, spacing,
-// control height, motion and layout size the review-thread design uses, and
+// control height, motion and layout size the editor's design uses, and
 // nothing else. Values are the mockup's (research/qt-port/mockup-spec.md
 // sections 0.1-0.4), where one mockup pixel is one device-independent point.
 // The editor is dark only, so each token has one value.
@@ -28,7 +28,7 @@ constexpr QRgb surround = qRgb(0x0e, 0x0e, 0x0e);    // around the region picker
 constexpr QRgb surroundDim = qRgb(0x05, 0x05, 0x05); // window background
 constexpr QRgb well = qRgb(0x12, 0x12, 0x12);        // bin grid, timeline lanes, scope plots, vectorscope chip
 constexpr QRgb chrome = qRgb(0x17, 0x17, 0x17);      // toolbar, strips, inspector, bands, status, pin bar, diff box
-constexpr QRgb card = qRgb(0x1c, 0x1c, 0x1c);        // comments panel, Source viewer, menus, tooltips, clips
+constexpr QRgb card = qRgb(0x1c, 0x1c, 0x1c);        // Source viewer, menus, tooltips, clips
 constexpr QRgb sidebar = qRgb(0x1e, 0x1e, 0x1e);     // the folders and conversations, a step up from the room
 constexpr QRgb raised = qRgb(0x26, 0x26, 0x26);      // hover fill, segmented track, proposal card, composer, meter track
 constexpr QRgb on = qRgb(0x30, 0x30, 0x30);          // selected/on fill, avatars, scrub markers, sliding segment fill
@@ -121,11 +121,11 @@ struct TypeStyle {
     bool prose = false;
 };
 
-constexpr TypeStyle body{13, 20, 400, false};          // body, comment text, inputs
-constexpr TypeStyle bodyName{13, 20, 500, false};      // comment names
+constexpr TypeStyle body{13, 20, 400, false};          // body, inputs
+constexpr TypeStyle bodyName{13, 20, 500, false};      // names in rows
 constexpr TypeStyle display{34, 44, 500, false};       // the start window's question
 constexpr TypeStyle reading{14, 22, 400, false, true}; // what is said in the conversation, and the composer
-constexpr TypeStyle title{14, 20, 500, false};         // panel titles: Comments, Source, clip name
+constexpr TypeStyle title{14, 20, 500, false};         // panel titles: the conversation, Source, clip name
 constexpr TypeStyle control{12, 16, 400, false};       // controls, labels, rows, chips
 constexpr TypeStyle controlStrong{12, 16, 500, false}; // buttons, dock names, segment on
 constexpr TypeStyle meta{11, 16, 400, false};          // meta, roles, small labels, subtitle
@@ -199,7 +199,7 @@ constexpr qreal small = 4;   // small chips, clips, thumbs, keyframe button, seg
 constexpr qreal marker = 5;  // agent scrub marker
 constexpr qreal control = 6; // buttons, icon buttons, menu items, chips
 constexpr qreal card = 8;    // cards, menus, composer, proposal card, HUD
-constexpr qreal panel = 12;  // comments panel, Source viewer
+constexpr qreal panel = 12;  // Source viewer, cards
 } // namespace radius
 
 // Spacing is on a 4 grid; these are the steps the design uses.

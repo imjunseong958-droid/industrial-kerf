@@ -25,7 +25,7 @@ constexpr int kTimelineLabelWidth = 140;
 // playhead's 9 pt head shows whole at the start.
 constexpr int kTimelineOrigin = kTimelineLabelWidth + 8;
 constexpr int kTimelineTail = 8;
-// The ruler, 32 tall: a 12 pt row of comment marks, proposal bands and
+// The ruler, 32 tall: a 12 pt row of proposal bands and
 // sequence markers over the ticks and their labels.
 constexpr int kRulerHeight = 32;
 constexpr int kRulerMarkerRow = 12;

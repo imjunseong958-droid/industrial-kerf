@@ -771,33 +771,31 @@ pub static COMMANDS: &[Command] = &[
         frontend(menu(command("ai.ask", "Ask Kerf…", can_ask), Menu::Clip, 1)),
         &["Ctrl+J"],
     ),
+    // The open proposal, or the one `proposal` names (its card in the
+    // conversation): ⌘↩ and Esc.
     keys(
-        menu(
-            command("proposal.accept", "Accept Proposal", can_accept),
-            Menu::Clip,
-            1,
+        params(
+            menu(
+                command("proposal.accept", "Accept Proposal", can_accept),
+                Menu::Clip,
+                1,
+            ),
+            r#"{"proposal"?: string}"#,
         ),
         &["Ctrl+Return"],
     ),
     keys(
-        timeline(menu(
-            command("proposal.reject", "Reject Proposal", has_proposal),
-            Menu::Clip,
-            1,
+        timeline(params(
+            menu(
+                command("proposal.reject", "Reject Proposal", has_proposal),
+                Menu::Clip,
+                1,
+            ),
+            r#"{"proposal"?: string}"#,
         )),
         &["Escape"],
     ),
     menu(command("ai.stop", "Stop Kerf", agent_busy), Menu::Clip, 1),
-    // A proposal, from its card in the conversation: ⌘↩ and Esc there are
-    // `proposal.accept` and `proposal.reject`'s keys.
-    params(
-        command("comment.accept", "Accept", can_accept),
-        r#"{"proposal": string}"#,
-    ),
-    params(
-        command("comment.reject", "Reject", has_proposal),
-        r#"{"proposal": string}"#,
-    ),
     keys(
         params(
             menu(
@@ -1434,12 +1432,12 @@ pub fn run(id: &str, context: &Context, params: &Value) -> Result<Request, Strin
         "qc.run" => Request::Check {
             sequence: params.trimmed("sequence"),
         },
-        "proposal.accept" | "proposal.reject" | "comment.accept" | "comment.reject" => {
+        "proposal.accept" | "proposal.reject" => {
             let proposal_id = match params.string("proposal") {
                 Some(id) => id,
                 None => context.proposal.clone().unwrap_or_default().id,
             };
-            if id == "proposal.accept" || id == "comment.accept" {
+            if id == "proposal.accept" {
                 Request::Accept {
                     proposal_id,
                     revision,
@@ -1902,16 +1900,16 @@ mod tests {
         });
         assert_eq!(
             serde_json::to_value(
-                run("comment.accept", &reviewing, &json!({"proposal": "p2"})).unwrap()
+                run("proposal.accept", &reviewing, &json!({"proposal": "p2"})).unwrap()
             )
             .unwrap(),
             json!({"type": "accept", "proposalId": "p2", "revision": 7})
         );
         assert_eq!(
-            serde_json::to_value(run("comment.reject", &reviewing, &Value::Null).unwrap()).unwrap(),
+            serde_json::to_value(run("proposal.reject", &reviewing, &Value::Null).unwrap()).unwrap(),
             json!({"type": "reject", "proposalId": "p1", "revision": 7})
         );
-        assert!(run("comment.accept", &context, &Value::Null).is_err());
+        assert!(run("comment.accept", &reviewing, &Value::Null).is_err());
         assert!(run("view.sidebar", &context, &Value::Null).is_err());
     }
 

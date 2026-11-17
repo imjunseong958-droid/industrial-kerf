@@ -377,8 +377,8 @@ enum Command {
     /// The conversations kept beside the project: list, open, archive,
     /// rename or delete one (`conversations`, `conversation`).
     Conversations(conversations::Request),
-    /// Kerf's QC pass, its failing findings kept as `qc` comments:
-    /// `check`.
+    /// Kerf's QC pass over a sequence: `check`, whose failing rows the
+    /// conversation offers as things to ask Kerf.
     Check {
         #[serde(default)]
         sequence: Option<String>,

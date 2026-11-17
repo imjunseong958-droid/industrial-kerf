@@ -2,7 +2,7 @@
 
 #include "chat_parts.h"
 #include "crash_notice.h"
-#include "review_link.h"
+#include "project_link.h"
 #include "secret_store.h"
 #include "stage_motion.h"
 #include "ask_prompt.h"
@@ -1888,7 +1888,7 @@ void MainWindow::handleEvent(QJsonObject event) {
 void MainWindow::routeEvent(const QJsonObject &event) {
     const QString type = event.value(QStringLiteral("type")).toString();
     if (handleAgentEvent(event)) {
-        // Kerf's turn, in the comments panel (main_window_review.cpp).
+        // Kerf's turn, in the conversation (main_window_chat.cpp).
     } else if (type == QStringLiteral("connection")) {
         setConnection(event.value(QStringLiteral("status")).toString(), event.value(QStringLiteral("message")).toString());
     } else if (type == QStringLiteral("state")) {
@@ -2161,7 +2161,7 @@ void MainWindow::applyPendingLink() {
         if (std::isfinite(seconds)) queueSeek(seconds);
     }
     if (m_linkRevision >= 0 && quint64(m_linkRevision) != m_revision)
-        addActivity(QStringLiteral("link"), QStringLiteral("The review link is for rev %1; the project is at rev %2").arg(m_linkRevision).arg(m_revision));
+        addActivity(QStringLiteral("link"), QStringLiteral("The project link is for rev %1; the project is at rev %2").arg(m_linkRevision).arg(m_revision));
 }
 
 QString MainWindow::selectedTrackType() const {

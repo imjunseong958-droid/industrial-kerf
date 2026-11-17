@@ -61,7 +61,7 @@ ClipKind trackKind(const QJsonObject &track);
 struct EditorTheme {
     // The design's tokens themselves (design_tokens.h 0.2), so the style
     // sheet and painted widgets can name the ramp directly.
-    QColor card;        // Comments panel, Source viewer, menus, tooltips, clips.
+    QColor card;        // Source viewer, menus, tooltips, clips.
     QColor on;          // Selected or on fill, avatars, the sliding segment.
     QColor hover2;      // Hover over a `raised` surface.
     QColor ink;         // Primary text, slider knob.
@@ -212,8 +212,7 @@ struct EditorTheme {
     QColor messageAgent;
     QColor messageUserRole; // "You" over the user's messages, 4.5:1 on `messageUser`.
 
-    // The chat panel laid out beside the picture, as a video site's comments
-    // sit beside its player: a page lighter than the stage, rows with an
+    // The chat panel laid out beside the picture: a page lighter than the stage, rows with an
     // avatar disc, tonal chips, and an underlined composer.
     QColor chatSurface;
     QColor chatText;

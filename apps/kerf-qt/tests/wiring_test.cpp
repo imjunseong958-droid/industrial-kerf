@@ -354,7 +354,7 @@ private slots:
         QTRY_VERIFY(window.m_chatInput->hasFocus() || QApplication::focusWidget() == window.m_chatInput);
         window.close();
         // The card's Accept and Reject go out as the proposal's.
-        window.bus()->run(QStringLiteral("comment.reject"), QJsonObject{{"proposal", "p4"}});
+        window.bus()->run(QStringLiteral("proposal.reject"), QJsonObject{{"proposal", "p4"}});
         QCOMPARE(window.m_lastCommand, (QJsonObject{{"type", "reject"}, {"proposalId", "p4"}, {"revision", 3}}));
     }
 

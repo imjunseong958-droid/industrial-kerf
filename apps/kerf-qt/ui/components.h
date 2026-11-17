@@ -1,6 +1,6 @@
 #pragma once
 
-// The shared flat components of the review-thread design (mockup-spec 0.5).
+// The shared flat components of the editor's design (mockup-spec 0.5).
 // Every one paints itself from design_tokens.h and the icon set, with no
 // style sheet, so the app's QSS cannot change how it looks:
 //

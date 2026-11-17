@@ -26,7 +26,7 @@ On Windows, `scripts/package-kerf-windows.ps1` makes a zip that runs on its own:
 the editor, `kerfd`, `kerf`, `kerf-mcp`, and the Qt, FFmpeg and C++ runtime libraries
 beside them. The script's help says what it needs. It makes the same folder an
 installer too, with Inno Setup (`packaging/windows/kerf.iss`): for the current user
-alone, with no administrator, a Start menu entry, `kerf://` registered so review links
+alone, with no administrator, a Start menu entry, `kerf://` registered so project links
 open the editor, and an uninstaller. Neither is signed. `scripts/check-kerf-windows-installer.ps1`
 installs it, runs the installed copy, follows a `kerf://` link as Explorer would, and
 uninstalls it; the zip alone does not open links.
@@ -150,7 +150,7 @@ playhead and cross-region requests). `ui/` holds the shared
 parts: the kit (`components`, `icons`), `stage_shell` (the
 window's content and its geometry), the proposals and conversation models, the
 conversation's messages (`chat_messages`) and proposal cards, the agent HUD, and
-`review_link` (kerf:// links). `viewer_widget` is the
+`project_link` (kerf:// links). `viewer_widget` is the
 picture, `editor_theme`/`editor_style.h` the colour roles and the
 style sheet generated from them, and `project_launcher` the Choose a Project
 window. `main.cpp` holds only `main()`; the tests under `tests/` (one class
@@ -367,8 +367,7 @@ Myeongjo for Hangul) at one of three sizes. They are compiled in
 There is no status bar. Beside the title the toolbar says what one would, and only
 when there is something to say: a passing message for its timeout, an offline or
 error state until it clears, a running sync's stage or a render's progress ("Draft
-export · 42%"), and "Viewing as Mina" while a guest's view is on. "Edited 2 min ago
-· rev 22" is the title's tooltip. An
+export · 42%"). "Edited 2 min ago · rev 22" is the title's tooltip. An
 agent that cannot take requests (no key, Kerf Cloud signed out) says so in the
 composer's placeholder, with the reason on its tooltip. The
 connection, error and project.kerf bars that carry an action lie over the top of

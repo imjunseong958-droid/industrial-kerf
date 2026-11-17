@@ -41,7 +41,7 @@ public:
     // A bridge command, as MainWindow::sendSimple sends it; false when it was
     // not sent (offline, no bridge).
     bool send(const QJsonObject &command);
-    // A registry command by id (`qc.run`, `comment.accept`), with parameters
+    // A registry command by id (`qc.run`, `proposal.accept`), with parameters
     // that take the place of the context; false when it did not run.
     bool run(const QString &commandId, const QJsonObject &params = {});
     // Set by MainWindow; a bus without them sends nothing.

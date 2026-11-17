@@ -5,7 +5,7 @@
 #
 # A folder registers nothing of itself; a .deb does. It puts the desktop entry
 # (apps/kerf-qt/packaging/linux/industrial-kerf.desktop) in /usr/share/applications, so Kerf
-# is among the applications and opens kerf:// review links, its icon in the hicolor theme,
+# is among the applications and opens kerf:// project links, its icon in the hicolor theme,
 # and kerf-qt, kerf, kerfd and kerf-mcp on PATH, as links into /opt/industrial-kerf/bin:
 # each finds the rest beside the file it really is. ffmpeg and ffprobe stay off PATH, where
 # the distribution's own may be.
@@ -51,7 +51,7 @@ rm -rf "$tree$prefix/install-desktop-entry.sh" "$tree$prefix/icons" "$tree$prefi
 cat > "$tree$prefix/README.txt" <<EOF
 Industrial Kerf $version for Linux, as its .deb installs it.
 
-It is among your applications, opens kerf:// review links, and has kerf-qt, kerf, kerfd
+It is among your applications, opens kerf:// project links, and has kerf-qt, kerf, kerfd
 and kerf-mcp on PATH. This folder carries its own Qt and FFmpeg; what it takes from the
 system (system-libraries.txt) the package's Depends name.
 
@@ -142,7 +142,7 @@ Description: Video editor, with an agent editing beside you
  This package carries its own Qt and a GPL build of FFmpeg, in
  $prefix, and takes the C library, X11, OpenGL, fontconfig,
  D-Bus, GLib and ALSA from the system. It adds Kerf to the applications, opens
- kerf:// review links in it, and puts kerf-qt, kerf, kerfd and kerf-mcp on
+ kerf:// project links in it, and puts kerf-qt, kerf, kerfd and kerf-mcp on
  PATH.
 EOF
 (cd "$tree" && find . -type f ! -path './DEBIAN/*' -printf '%P\0' | LC_ALL=C sort -z | xargs -0 md5sum > DEBIAN/md5sums)

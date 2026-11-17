@@ -1,7 +1,6 @@
-// The whole editor against the approved minimal mockup (03-review-thread.html)
-// at its 1600 x 1000 canvas: in 16:9 and 9:16, the base
-// state and the Media sheet, fed the seed (comments,
-// proposals, a check, loudness and a render queue) as kerfd sends it, through
+// The whole editor against the approved minimal mockup at its 1600 x 1000
+// canvas: in 16:9 and 9:16, the base state and the Media sheet, fed the seed
+// (proposals, a check, loudness and a render queue) as kerfd sends it, through
 // handleEvent. Each state's rects are checked against the brief's table, with no
 // gaps, cards, radii or margins around the three regions.
 //
@@ -122,7 +121,6 @@ QJsonObject seedState(const QSize &canvas) {
     timeline.insert(QStringLiteral("width"), canvas.width());
     timeline.insert(QStringLiteral("height"), canvas.height());
     snapshot.insert(QStringLiteral("timeline"), timeline);
-    snapshot.insert(QStringLiteral("reviewRevision"), 41);
     return QJsonObject{{"type", "state"}, {"snapshot", snapshot}};
 }
 

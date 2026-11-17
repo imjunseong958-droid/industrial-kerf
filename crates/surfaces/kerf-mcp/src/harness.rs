@@ -1,12 +1,12 @@
-//! The agent harness on the kernel: `look`, `edit`, `render`, and `note`.
+//! The agent harness on the kernel: `look`, `edit`, `render`, and `make`.
 //!
 //! An agent works from two pieces of context: the annotated `.kerf` document
 //! and the language reference. It looks at media and frames, changes the
-//! project with one edit script, renders, and leaves notes for the people
-//! reviewing. Each edit becomes a proposal for the user, returned with its
-//! document diff, the check findings, and a before/after preview of the
-//! range it changed. Proposals and notes are by the router's author: Kerf,
-//! or the MCP client that made them.
+//! project with one edit script, renders, and asks for media to be made
+//! from their recipes. Each edit becomes a proposal for the user, returned
+//! with its document diff, the check findings, and a before/after preview of
+//! the range it changed. Proposals are by the router's author: Kerf, or the
+//! MCP client that made them.
 
 use super::{engine_error, KerfMcpRouter, McpError, ToolAnnotations};
 use base64::Engine;

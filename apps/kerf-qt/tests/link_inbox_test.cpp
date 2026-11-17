@@ -59,7 +59,7 @@ private slots:
 
     void withNoEditorOpenTheLinkIsNotTaken() {
         QVERIFY(!links::handOff(uniqueName(), {QStringLiteral("kerf://my-film/rev3")}, 500));
-        // Nor is anything that is not a review link, so there is nothing to send.
+        // Nor is anything that is not a project link, so there is nothing to send.
         links::Inbox inbox;
         const QString name = uniqueName();
         QVERIFY(inbox.listen(name));
@@ -68,8 +68,8 @@ private slots:
     }
 
     // What another process writes to the inbox is followed only if it is a
-    // review link.
-    void onlyReviewLinksAreFollowed() {
+    // project link.
+    void onlyProjectLinksAreFollowed() {
         links::Inbox inbox;
         const QString name = uniqueName();
         QVERIFY(inbox.listen(name));

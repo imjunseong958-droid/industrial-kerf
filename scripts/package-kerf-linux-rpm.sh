@@ -49,7 +49,7 @@ rm -rf "$tree$prefix/install-desktop-entry.sh" "$tree$prefix/icons" "$tree$prefi
 cat > "$tree$prefix/README.txt" <<README
 Industrial Kerf $version for Linux, as its .rpm installs it.
 
-It is among your applications, opens kerf:// review links, and has kerf-qt, kerf, kerfd
+It is among your applications, opens kerf:// project links, and has kerf-qt, kerf, kerfd
 and kerf-mcp on PATH. This folder carries its own Qt and FFmpeg; what it takes from the
 system (system-libraries.txt) the package's Requires name.
 
@@ -120,7 +120,7 @@ share it through Git.
 This package carries its own Qt and a GPL build of FFmpeg, in
 $prefix, and takes the C library, X11, OpenGL, fontconfig,
 D-Bus, GLib and ALSA from the system. It adds Kerf to the applications, opens
-kerf:// review links in it, and puts kerf-qt, kerf, kerfd and kerf-mcp on
+kerf:// project links in it, and puts kerf-qt, kerf, kerfd and kerf-mcp on
 PATH.
 
 %install

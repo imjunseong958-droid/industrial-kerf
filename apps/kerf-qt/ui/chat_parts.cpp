@@ -151,8 +151,7 @@ QString richBody(const QString &source, double fps) {
     static const QRegularExpression bullet(QStringLiteral("^([ \\t]*)[-*] "), QRegularExpression::MultilineOption);
     QString body = source;
     body.replace(bullet, QStringLiteral("\\1\u2022 "));
-    static const QRegularExpression token(
-        QStringLiteral("(\\d{2}:\\d{2}:\\d{2}[:;]\\d{2})|(@[A-Za-z][A-Za-z0-9_.\\-]*)"));
+    static const QRegularExpression token(QStringLiteral("(\\d{2}:\\d{2}:\\d{2}[:;]\\d{2})"));
     // The link colour is accent ink at the design's 85% over the card.
     const QString link = ui::mix(color(card), color(accentInk), 0.85).name(QColor::HexRgb);
     QString out;
@@ -162,36 +161,16 @@ QString richBody(const QString &source, double fps) {
         const QRegularExpressionMatch match = it.next();
         out += withInlineMarks(body.mid(from, match.capturedStart() - from));
         const QString text = match.captured(0);
-        if (!match.captured(1).isEmpty()) {
-            const double seconds = parseTimecode(text, fps);
-            out += QStringLiteral("<a href=\"tc:%1\" style=\"color:%2; text-decoration:none; font-family:'%3','%4'; "
-                                  "font-size:12px;\">%5</a>")
-                       .arg(QString::number(seconds, 'g', 12), link, QString::fromLatin1(monoFamily),
-                            QString::fromLatin1(monoFallback), text.toHtmlEscaped());
-        } else {
-            out += QStringLiteral("<span style=\"color:%1; font-weight:500;\">%2</span>")
-                       .arg(colorName(ink), text.toHtmlEscaped());
-        }
+        const double seconds = parseTimecode(text, fps);
+        out += QStringLiteral("<a href=\"tc:%1\" style=\"color:%2; text-decoration:none; font-family:'%3','%4'; "
+                              "font-size:12px;\">%5</a>")
+                   .arg(QString::number(seconds, 'g', 12), link, QString::fromLatin1(monoFamily),
+                        QString::fromLatin1(monoFallback), text.toHtmlEscaped());
         from = match.capturedEnd();
     }
     out += withInlineMarks(body.mid(from));
     out.replace(QLatin1Char('\n'), QStringLiteral("<br>"));
     return QStringLiteral("<div style=\"line-height:20px;\">%1</div>").arg(out);
-}
-
-QStringList mentions(const QString &text) {
-    static const QRegularExpression pattern(QStringLiteral("(?:^|[^A-Za-z0-9_])@([A-Za-z][A-Za-z0-9_.\\-]*)"));
-    QStringList out;
-    QRegularExpressionMatchIterator it = pattern.globalMatch(text);
-    while (it.hasNext()) out << it.next().captured(1);
-    return out;
-}
-
-bool addressesKerf(const QString &text) {
-    const QStringList names = mentions(text);
-    if (names.isEmpty()) return true;
-    return std::any_of(names.begin(), names.end(),
-                       [](const QString &name) { return name.compare(QLatin1String("Kerf"), Qt::CaseInsensitive) == 0; });
 }
 
 } // namespace chat
@@ -373,8 +352,5 @@ void DraftSkeleton::paintEvent(QPaintEvent *) {
     p.drawRoundedRect(QRectF(0, 0, width() * 0.88, 8), radius::small, radius::small);
     p.drawRoundedRect(QRectF(0, 16, width() * 0.56, 8), radius::small, radius::small);
 }
-
-// ------------------------------------------------------------------ CommentRow
-
 
 } // namespace kerf

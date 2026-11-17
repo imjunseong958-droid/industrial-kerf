@@ -977,7 +977,7 @@ void ProjectPanel::setCommandActions(QAction *search, QAction *toggleView) {
                                m_searchAction ? m_searchAction->shortcut().toString(QKeySequence::NativeText) : QString());
         updateViewButton();
     };
-    // Search while the bin has the focus (the comments panel has its own
+    // Search while the bin has the focus (the conversation has its own
     // ⌘F); the view while the bin is on screen.
     if (search) {
         search->setShortcutContext(Qt::WidgetWithChildrenShortcut);

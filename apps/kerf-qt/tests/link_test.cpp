@@ -1,4 +1,4 @@
-// Tests for kerf:// review links: reading them, finding their project, the
+// Tests for kerf:// project links: reading them, finding their project, the
 // router that raises or opens an editor (QFileOpenEvent and arguments), and
 // the editor's seek once it is connected.
 
@@ -7,7 +7,7 @@
 
 #include "main_window.h"
 #include "project_launcher.h"
-#include "review_link.h"
+#include "project_link.h"
 #include "wiring/chat_wiring.h"
 #include "ui/editor_bus.h"
 
@@ -56,16 +56,16 @@ private slots:
     void init() { ProjectLauncher::clearRecentProjects(); }
     void cleanup() { ProjectLauncher::clearRecentProjects(); }
 
-    // kerf://<project>/rev<N>[@TC][?branch&head&remote], as the comments
-    // panel's Copy link writes them.
+    // kerf://<project>/rev<N>[@TC][?branch&head&remote], as links::make
+    // writes them.
     void linksReadAsTheEditorWritesThem() {
         using links::parse;
-        QVERIFY(links::isReviewLink(QStringLiteral("kerf://atlas/rev22")));
-        QVERIFY(links::isReviewLink(QStringLiteral("  KERF://atlas")));
-        QVERIFY(!links::isReviewLink(QStringLiteral("https://atlas/rev22")));
-        QVERIFY(!links::isReviewLink(QStringLiteral("/Users/ana/atlas")));
+        QVERIFY(links::isProjectLink(QStringLiteral("kerf://atlas/rev22")));
+        QVERIFY(links::isProjectLink(QStringLiteral("  KERF://atlas")));
+        QVERIFY(!links::isProjectLink(QStringLiteral("https://atlas/rev22")));
+        QVERIFY(!links::isProjectLink(QStringLiteral("/Users/ana/atlas")));
 
-        links::ReviewLink link = parse(QStringLiteral("kerf://atlas/rev22@00:00:26:14"));
+        links::ProjectLink link = parse(QStringLiteral("kerf://atlas/rev22@00:00:26:14"));
         QVERIFY2(link.valid, qPrintable(link.error));
         QCOMPARE(link.project, QStringLiteral("atlas"));
         QCOMPARE(link.revision, 22);
@@ -92,7 +92,7 @@ private slots:
 
         // What is not a link says why.
         for (const char *bad : {"kerf://", "kerf:///rev2", "kerf://atlas/revision", "kerf://atlas/rev2@26:14", "http://atlas/rev2"}) {
-            const links::ReviewLink refused = parse(QString::fromLatin1(bad));
+            const links::ProjectLink refused = parse(QString::fromLatin1(bad));
             QVERIFY2(!refused.valid, bad);
             QVERIFY2(!refused.error.isEmpty(), bad);
         }
@@ -286,7 +286,7 @@ private slots:
         window.applySnapshot(program(30.0, 22));
         QVERIFY(!window.linkPending());
         QVERIFY(std::abs(window.bus()->playhead() - 3.0) < 1e-6);
-        QVERIFY2(window.m_activityLog.join(QLatin1Char('\n')).contains(QStringLiteral("The review link is for rev 20; the project is at rev 22")),
+        QVERIFY2(window.m_activityLog.join(QLatin1Char('\n')).contains(QStringLiteral("The project link is for rev 20; the project is at rev 22")),
                  qPrintable(window.m_activityLog.join(QLatin1Char('\n'))));
     }
 

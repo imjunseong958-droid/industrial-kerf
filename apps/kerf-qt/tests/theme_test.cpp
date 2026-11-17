@@ -308,8 +308,8 @@ private slots:
                 {"chat's text on its surface", t.chatText, t.chatSurface, 4.5},
                 {"chat's error tag", t.errorText, t.chatSurface, 4.5},
                 {"chat's header buttons' symbols on their wash", t.chatText, laidOn(t.chatSurface, t.chatChipHover), 3.0},
-                {"a comment's action under the pointer", t.chatText, laidOn(t.chatSurface, t.chatChip), 4.5},
-                {"a comment's quiet action", t.chatSecondary, t.chatSurface, 4.5},
+                {"an answer's action under the pointer", t.chatText, laidOn(t.chatSurface, t.chatChip), 4.5},
+                {"an answer's quiet action", t.chatSecondary, t.chatSurface, 4.5},
                 {"chip's label under the pointer", t.chatChipText, laidOn(t.chatSurface, t.chatChipHover), 4.5},
                 {"chip's label on the timeline's bar", t.chatChipText, laidOn(t.chrome, t.chatChip), 4.5},
                 {"Send and Accept's label on the accent", t.onAccent, t.accent, 4.5},
@@ -879,8 +879,8 @@ private slots:
         QCOMPARE(changed.count(), 0);
 
         // An open window keeps the one theme when the old scheme API is
-        // called: no change is signalled, and its docks, the conversation's
-        // panel and the comments it shows draw the same.
+        // called: no change is signalled, and its docks and the conversation
+        // draw the same.
         MainWindow window{QString(), QString()};
         window.setConnection(QStringLiteral("ready"));
         window.resize(1440, 900);
@@ -1031,7 +1031,7 @@ private slots:
         auto *choice = new QComboBox;
         choice->addItems({QStringLiteral("Master"), QStringLiteral("Draft")});
         auto *seconds = new StepperSpinBox;
-        auto *box = new QCheckBox(QStringLiteral("Include comments as EDL locators"));
+        auto *box = new QCheckBox(QStringLiteral("Include markers as EDL locators"));
         auto *slider = new QSlider(Qt::Horizontal);
         auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
         auto *list = new QListWidget;

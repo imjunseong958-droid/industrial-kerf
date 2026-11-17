@@ -27,7 +27,7 @@ QString inboxName(QSettings &settings);
 bool handOff(const QString &name, const QStringList &links, int timeoutMs = 2000);
 
 // Listens at `name` for links handed over and emits each one that is a
-// kerf:// review link; anything else is dropped.
+// kerf:// project link; anything else is dropped.
 class Inbox final : public QObject {
     Q_OBJECT
 public:

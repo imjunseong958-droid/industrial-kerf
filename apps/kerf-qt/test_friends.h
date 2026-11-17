@@ -11,7 +11,6 @@ namespace kerf {
 class ActivityTest;
 class BinBrowserTest;
 class BusTest;
-class CommentsTest;
 class MotionPathTest;
 class KitTest;
 class LauncherTest;
@@ -40,7 +39,6 @@ struct Access;
     friend class ::kerf::ActivityTest;                                                                                 \
     friend class ::kerf::BinBrowserTest;                                                                               \
     friend class ::kerf::BusTest;                                                                                      \
-    friend class ::kerf::CommentsTest;                                                                                 \
     friend class ::kerf::MotionPathTest;                                                                               \
     friend class ::kerf::KitTest;                                                                                      \
     friend class ::kerf::LauncherTest;                                                                                 \

@@ -322,7 +322,7 @@ EditorTheme makeEditorTheme() {
     t.assistantText = token(tk::accentInk);
     t.assistantHover = token(tk::hover2);
 
-    // The comments panel (4): a card; chips and pills on `raised`.
+    // The conversation panel: chrome; chips and pills on `raised`.
     t.chatSurface = token(tk::chrome);
     t.chatText = token(tk::ink);
     t.chatSecondary = token(tk::ink2);

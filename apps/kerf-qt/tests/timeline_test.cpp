@@ -1,6 +1,6 @@
 // Tests for the timeline (mockup-spec 7): the bar's tools, zoom and track
 // heights; the heads' patch, target, toggles, solo and sync-lock; the ruler's
-// ticks, comment marks, proposal bands and markers; flat clips, filmstrips,
+// ticks, proposal bands and markers; flat clips, filmstrips,
 // waveforms and the rubber band; QC dots, veils and preview ghosts; and the
 // performance contracts (lanes cached, painted by rows in view, scrolled by
 // moving what is on screen).

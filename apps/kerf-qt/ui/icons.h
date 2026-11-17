@@ -2,7 +2,7 @@
 
 // The editor's icon set, drawn in code (plan decision 4: no QtSvg).
 //
-// Every icon of the review-thread design (mockup-spec 16) is kept as its SVG
+// Every icon of the editor's design (mockup-spec 16) is kept as its SVG
 // markup, copied verbatim, in a table keyed by name: g-169 ... g-cdr, plus
 // "playhead-head" and "checkbox-check". The retired g-isl and g-punch and the
 // device preview's glyphs are left out. A small SVG
