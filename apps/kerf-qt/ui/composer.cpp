@@ -234,7 +234,8 @@ void ComposerChip::paintEvent(QPaintEvent *) {
     const qreal room = std::min<qreal>(m_widest, width() - x - kChipPad - (m_chevron ? 14 : 0));
     p.setFont(face);
     p.setPen(ink_);
-    p.drawText(QRectF(x, 0, room + 1, height()), Qt::AlignLeft | Qt::AlignVCenter, metrics.elidedText(text(), Qt::ElideMiddle, room + 1));
+    // Its capitals on the icons' middle, as everything along the foot.
+    p.drawText(QPointF(x, ui::capBaseline(0, height(), face)), metrics.elidedText(text(), Qt::ElideMiddle, room + 1));
     if (m_chevron)
         icons::paint(p, QStringLiteral("g-chev"), QRectF(width() - kChipPad - 12, (height() - 12) / 2.0, 12, 12),
                      color(lit ? ink2 : ink3), 12);

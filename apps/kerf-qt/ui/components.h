@@ -612,6 +612,32 @@ private:
 // trackpad and keys). A 12 pt fade covers the top only when a child of the
 // content is cut by the top edge, and a 32 pt fade the bottom while there is
 // more below (the mockup's #list.ft / .fb masks), in the colour behind it.
+// One line of words, from its left edge, whose capitals are centred in its
+// height as an icon's ink is in its box: a plain label centres its line box,
+// which has more room over the capitals than under the baseline, so its words
+// sit a little under the icons beside them. Or set on another's baseline, for
+// a smaller line beside a larger one. Drawn at fractions of a point, so on a
+// 2x screen it is exact.
+// The baseline that centres `font`'s capitals in a box `top` to `top + height`:
+// where one line of words beside icons is drawn, so the words' capitals and
+// the icons' ink share a middle (a line box centred instead sits a little low).
+qreal capBaseline(qreal top, qreal height, const QFont &font);
+
+class CapLabel final : public QLabel {
+public:
+    explicit CapLabel(QWidget *parent = nullptr);
+    // The baseline, from its top, it is set on; below 0, its capitals are centred.
+    void setBaseline(qreal baseline);
+    // The baseline it is drawn on, from its top.
+    qreal baseline() const;
+
+protected:
+    void paintEvent(QPaintEvent *event) override;
+
+private:
+    qreal m_baseline = -1;
+};
+
 // A label whose text wraps, that remembers how tall it is at the widths it has
 // been asked about. A plain QLabel lays its text out again each time a layout
 // asks, and a list asks every row whenever anything in it changes.

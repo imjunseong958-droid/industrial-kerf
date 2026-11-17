@@ -222,9 +222,11 @@ void ToolbarWiring::buildToolbar(const QHash<QString, QMenu *> &menus) {
         }
     installCommands();
 
-    w->m_projectTitle = new QLabel(m_titleBox);
+    // The title's capitals are centred on the bar's line, as the icons' ink
+    // is; the smaller line after it sits on its baseline.
+    w->m_projectTitle = new ui::CapLabel(m_titleBox);
     w->m_projectTitle->setObjectName(QStringLiteral("projectTitle"));
-    w->m_projectSubtitle = new QLabel(m_titleBox);
+    w->m_projectSubtitle = new ui::CapLabel(m_titleBox);
     w->m_projectSubtitle->setObjectName(QStringLiteral("projectSubtitle"));
     // Its own sheet, so the app's QLabel rules leave its type alone:
     // UI 500 13/16 ink, then UI 11/16 ink3 on the same line.
@@ -639,7 +641,8 @@ void ToolbarWiring::layoutTitle() {
         if (editing) editor->setGeometry(-7, (m_titleBox->height() - 24) / 2, std::min(room, std::max(width + 80, 240)), 24);
     }
     // The smaller line sits on the title's baseline.
-    subtitle->setGeometry(width + chevron + gap, top + 1, subRoom, line);
+    subtitle->setGeometry(width + chevron + gap, top, subRoom, line);
+    static_cast<ui::CapLabel *>(subtitle)->setBaseline(static_cast<ui::CapLabel *>(title)->baseline());
     subtitle->setVisible(!sub.isEmpty() && !editing);
 }
 

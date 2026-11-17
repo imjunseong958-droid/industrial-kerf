@@ -363,7 +363,10 @@ constexpr int sidebarMost(int window) { return window - sidebarLeaves > sidebarL
 // What runs along the window's foot (the sidebar's account and Settings, the
 // row under the composer) is centred on one line, this far over the bottom
 // edge, as what runs along its top is centred in the toolbar; and set alike:
-// controls 28 tall, icons 16, words in UI 14.
+// controls 28 tall, icons 16, words in UI 14. On both lines the words'
+// capitals, not their line boxes, are centred where the icons' ink is
+// (ui::capBaseline, ui::CapLabel); a smaller line beside a larger one sits on
+// its baseline.
 constexpr int footLine = 26;
 constexpr int footControl = 28;
 constexpr int footIcon = 16;

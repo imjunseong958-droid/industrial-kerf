@@ -1508,6 +1508,30 @@ void ThinProgress::paintEvent(QPaintEvent *) {
 
 // ================================================================ WrapLabel
 
+qreal capBaseline(qreal top, qreal height, const QFont &font) {
+    return top + height / 2.0 + QFontMetricsF(font).capHeight() / 2.0;
+}
+
+CapLabel::CapLabel(QWidget *parent) : QLabel(parent) {}
+
+void CapLabel::setBaseline(qreal baseline) {
+    if (qFuzzyCompare(baseline + 2, m_baseline + 2)) return;
+    m_baseline = baseline;
+    update();
+}
+
+qreal CapLabel::baseline() const {
+    return m_baseline >= 0 ? m_baseline : capBaseline(0, height(), font());
+}
+
+void CapLabel::paintEvent(QPaintEvent *) {
+    QPainter p(this);
+    p.setRenderHint(QPainter::TextAntialiasing, true);
+    p.setFont(font());
+    p.setPen(palette().color(foregroundRole()));
+    p.drawText(QPointF(contentsRect().left(), baseline()), text());
+}
+
 WrapLabel::WrapLabel(QWidget *parent) : QLabel(parent) { setWordWrap(true); }
 
 int WrapLabel::heightForWidth(int width) const {
