@@ -1,6 +1,6 @@
 {
   "kerf-comfy": 1,
-  "about": "A shot directed by all four at once: it follows a depth guide (guide=, drawn with pass=depth), looks like a reference picture (ref=), has its subject go where a clip of the guide's sequence goes (moves=<clip>, its box on each frame laid over the guide as a layout), and lets the guide go on the frames where a signal is 1 (signal=<clip>), which are then made from the prompt, the reference and the layout alone. Any of the four can be left off the line. moves_strength is how hard the layout holds beside the guide's strength.",
+  "about": "A shot directed by all four at once: it follows a depth guide (guide=, drawn with pass=depth), looks like a reference picture (ref=), has its subject go where a clip of the guide's sequence goes (moves=<clip>, its box on each frame laid over the guide as a layout), and lets the guide go on the frames where a signal is 1 (signal=<clip>), which are then made from the prompt, the reference and the layout alone. With a first frame beside the guide (first=), it starts as that picture and goes on from it: a part of a longer shot starts as the last frame of the part before. Any of them can be left off the line. moves_strength is how hard the layout holds beside the guide's strength.",
   "fps": 16,
   "frames": {
     "most": 81,
@@ -37,6 +37,19 @@
         "control_video"
       ],
       "reads": "9"
+    },
+    "33": {
+      "wants": [
+        "image1",
+        "image2"
+      ],
+      "reads": "24"
+    },
+    "38": {
+      "given": [
+        "first",
+        "guide"
+      ]
     }
   },
   "workflow": {
@@ -122,11 +135,15 @@
         "batch_size": 1,
         "strength": "{strength}",
         "control_video": [
-          "24",
+          "33",
           0
         ],
         "reference_image": [
           "8",
+          0
+        ],
+        "control_masks": [
+          "38",
           0
         ]
       }
@@ -326,6 +343,101 @@
           "8",
           0
         ]
+      }
+    },
+    "30": {
+      "class_type": "LoadImage",
+      "inputs": {
+        "image": "{first}"
+      }
+    },
+    "31": {
+      "class_type": "ImageScale",
+      "inputs": {
+        "image": [
+          "30",
+          0
+        ],
+        "upscale_method": "lanczos",
+        "width": "{width}",
+        "height": "{height}",
+        "crop": "center"
+      }
+    },
+    "32": {
+      "class_type": "ImageFromBatch",
+      "inputs": {
+        "image": [
+          "24",
+          0
+        ],
+        "batch_index": 1,
+        "length": "{frames}"
+      }
+    },
+    "33": {
+      "class_type": "ImageBatch",
+      "inputs": {
+        "image1": [
+          "31",
+          0
+        ],
+        "image2": [
+          "32",
+          0
+        ]
+      }
+    },
+    "34": {
+      "class_type": "EmptyImage",
+      "inputs": {
+        "width": "{width}",
+        "height": "{height}",
+        "batch_size": 1,
+        "color": 0
+      }
+    },
+    "35": {
+      "class_type": "EmptyImage",
+      "inputs": {
+        "width": "{width}",
+        "height": "{height}",
+        "batch_size": "{frames}",
+        "color": 16777215
+      }
+    },
+    "36": {
+      "class_type": "ImageFromBatch",
+      "inputs": {
+        "image": [
+          "35",
+          0
+        ],
+        "batch_index": 1,
+        "length": "{frames}"
+      }
+    },
+    "37": {
+      "class_type": "ImageBatch",
+      "inputs": {
+        "image1": [
+          "34",
+          0
+        ],
+        "image2": [
+          "36",
+          0
+        ]
+      }
+    },
+    "38": {
+      "class_type": "ImageToMask",
+      "inputs": {
+        "image": [
+          "37",
+          0
+        ],
+        "channel": "red"
       }
     }
   }

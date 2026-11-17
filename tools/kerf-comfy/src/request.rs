@@ -38,6 +38,10 @@ pub struct Request {
     pub references: Vec<PathBuf>,
     #[serde(default)]
     pub seconds: Option<f64>,
+    /// Where the shot starts in its sequences' time, in seconds: a part of a
+    /// longer shot. Its signals and where its clips go are read from there.
+    #[serde(default)]
+    pub from: Option<f64>,
     #[serde(default)]
     pub size: Option<(u32, u32)>,
     #[serde(default)]
@@ -303,7 +307,20 @@ impl Request {
 
     /// Read a request's text.
     pub fn parse(text: &str) -> Result<Self, String> {
-        let request: Self = serde_json::from_str(text).map_err(|error| error.to_string())?;
+        let mut request: Self = serde_json::from_str(text).map_err(|error| error.to_string())?;
+        // A part of a longer shot: what its sequences say before it starts is not its own.
+        if let Some(from) = request.from.filter(|from| from.is_finite() && *from > 0.0) {
+            let skipped = |rate: f64, frames: usize| ((from * rate).round().max(0.0) as usize).min(frames);
+            for signal in &mut request.signals {
+                // One past its end is what it ended on, so its last value is kept.
+                let skip = skipped(signal.rate, signal.values.len().saturating_sub(1));
+                signal.values.drain(..skip);
+            }
+            for moves in &mut request.moves {
+                let skip = skipped(moves.rate, moves.places.len().saturating_sub(1));
+                moves.places.drain(..skip);
+            }
+        }
         if request.version != REQUEST_VERSION {
             return Err(format!(
                 "it is `kerf-request` {}, and this program reads {REQUEST_VERSION}",
@@ -515,6 +532,25 @@ mod tests {
         assert_eq!(said[1][0], serde_json::json!({"x": 86.0, "y": 36.0}));
         assert_eq!(said[4][0], serde_json::json!({"x": 114.0, "y": 64.0}));
         assert!(names_what_is_handed(MOVES));
+    }
+
+    #[test]
+    fn a_part_of_a_longer_shot_reads_its_signals_and_moves_from_where_it_starts() {
+        let part = Request::parse(
+            r#"{"kerf-request": 1, "out": "o.mp4", "from": 0.5,
+                "signals": [{"name": "beat", "rate": 4.0, "values": [0.0, 0.1, 0.2, 0.3, 0.4]}],
+                "moves": [{"name": "ball", "rate": 8.0, "places": [null, null, null, null, [0.5, 0.5, 0.1, 0.1], null]}]}"#,
+        )
+        .unwrap();
+        assert_eq!(part.signals[0].values, [0.2, 0.3, 0.4]);
+        assert_eq!(part.moves[0].places, [Some([0.5, 0.5, 0.1, 0.1]), None]);
+        // One that starts past the end keeps what it ended on.
+        let past = Request::parse(
+            r#"{"kerf-request": 1, "out": "o.mp4", "from": 60,
+                "signals": [{"name": "beat", "rate": 4.0, "values": [0.0, 1.0]}]}"#,
+        )
+        .unwrap();
+        assert_eq!(past.signals[0].values, [1.0]);
     }
 
     #[test]

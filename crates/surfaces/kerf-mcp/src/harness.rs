@@ -97,6 +97,10 @@ one name on one line, which keeps its comments and every other line: a prompt, a
 a knob, and what a step reads, since wiring a node in or letting one go is a word on its \
 reader's line. `workflowSet` sets a value in the workflow a model is run with, in a copy \
 the shot keeps. Both are kept as the recipe's next version, never over the one before. \
+A shot longer than its model makes at once (`models` says its `seconds`) is written in parts: \
+`render <sequence> {b.mp4} from=<seconds> seconds=<seconds>` draws a part of the guide, \
+`generate … guide={b.mp4} first={a.mp4} from=<seconds> out={b.mp4}` goes on from the last frame \
+of the part before, and `join {a.mp4} {b.mp4} {out} lap=1` sets them end to end. \
 Where the person's own permissions accept an agent's edits, \
 the answer says `accepted`: it is in the project, one revision undo takes \
 back.

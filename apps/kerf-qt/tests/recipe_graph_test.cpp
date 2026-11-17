@@ -412,7 +412,7 @@ private slots:
         // a picture in motion as a guide; and never a step that comes after.
         QCOMPARE(graph::portsFor(recipe, node("signal:bounce"), node("made:ball.png")), QStringList{"signal"});
         QCOMPARE(graph::portsFor(recipe, node("made:ball.png"), node("made:out")), (QStringList{"first", "last", "ref"}));
-        QCOMPARE(graph::portsFor(recipe, node("made:depth.mp4"), node("made:out")), (QStringList{"guide", "ref"}));
+        QCOMPARE(graph::portsFor(recipe, node("made:depth.mp4"), node("made:out")), (QStringList{"guide", "ref", "first"}));
         QCOMPARE(graph::portsFor(recipe, node("sequence:court"), node("made:depth.mp4")), QStringList{"sequence"});
         QVERIFY(graph::portsFor(recipe, node("made:out"), node("made:ball.png")).isEmpty());
         QVERIFY(graph::portsFor(recipe, node("sequence:court"), node("made:out")).isEmpty());
@@ -812,6 +812,60 @@ private slots:
         QCOMPARE(panel->statusLabel()->text(), QStringLiteral("Cannot be made as things stand"));
         panel->view()->select(QString());
         QVERIFY(inspector->findChild<QLabel *>(QStringLiteral("graphCannot"))->text().contains(QStringLiteral("no model `video` is set up")));
+    }
+
+    // A shot longer than a model makes at once is its parts and their join: the
+    // join is a card of its own, a guide says which part of its sequence it
+    // draws, and each is set in its card as any word of the recipe.
+    void aLongerShotShowsItsPartsAndTheirJoin() {
+        MainWindow window{QString(), QString()};
+        openBounce(window);
+        QJsonObject recipe = bounceRecipe();
+        QJsonArray nodes = recipe.value("nodes").toArray();
+        QJsonObject guide = nodes.at(1).toObject();
+        guide.insert("from", "5");
+        guide.insert("seconds", "5.0625");
+        nodes.replace(1, guide);
+        QJsonObject part = nodes.at(5).toObject();
+        part.insert("id", "made:b.mp4");
+        part.insert("makes", "b.mp4");
+        part.insert("from", 5.0);
+        nodes.replace(5, part);
+        nodes.insert(6, QJsonObject{{"id", "made:out"}, {"kind", "join"}, {"title", "Join"},
+                                    {"detail", "2 parts, each going on from the last frame of the one before"}, {"gives", "video"},
+                                    {"line", 8}, {"makes", "out"}, {"parts", QJsonArray{"a.mp4", "b.mp4"}}, {"lap", 1}});
+        recipe.insert("nodes", nodes);
+        QJsonArray edges;
+        for (const QJsonValue value : recipe.value("edges").toArray()) {
+            QJsonObject edge = value.toObject();
+            if (edge.value("to").toString() == QLatin1String("made:out")) edge.insert("to", "made:b.mp4");
+            if (edge.value("from").toString() == QLatin1String("made:out")) continue;
+            edges.append(edge);
+        }
+        edges.append(QJsonObject{{"from", "made:b.mp4"}, {"to", "made:out"}, {"port", "part"}, {"nth", 1}, {"gives", "video"}});
+        edges.append(QJsonObject{{"from", "made:out"}, {"to", "takes"}, {"port", "take"}, {"nth", 0}, {"gives", "video"}});
+        recipe.insert("edges", edges);
+        window.handleEvent(recipe);
+        RecipeGraphPanel *panel = panelOf(window);
+        QCOMPARE(panel->view()->recipe().node(QStringLiteral("made:out"))->kind, graph::Kind::Join);
+
+        // The join: how many frames each part shares with the one before it, and what it reads.
+        panel->view()->select(QStringLiteral("made:out"));
+        QCOMPARE(field(window, QStringLiteral("lap"))->text(), QStringLiteral("1"));
+        typeInto(field(window, QStringLiteral("lap")), QStringLiteral("2"));
+        QCOMPARE(window.m_lastCommand.value("type").toString(), QStringLiteral("recipe_edit"));
+        QCOMPARE(window.m_lastCommand.value("line").toInt(), 8);
+        QCOMPARE(window.m_lastCommand.value("key").toString(), QStringLiteral("lap"));
+        QCOMPARE(window.m_lastCommand.value("value").toString(), QStringLiteral("2"));
+        // A guide's part of its sequence, and where a part of the shot starts in its time.
+        panel->view()->select(QStringLiteral("made:depth.mp4"));
+        QCOMPARE(field(window, QStringLiteral("from"))->text(), QStringLiteral("5"));
+        QCOMPARE(field(window, QStringLiteral("seconds"))->text(), QStringLiteral("5.0625"));
+        typeInto(field(window, QStringLiteral("from")), QStringLiteral("10"));
+        QCOMPARE(window.m_lastCommand.value("line").toInt(), 3);
+        QCOMPARE(window.m_lastCommand.value("key").toString(), QStringLiteral("from"));
+        panel->view()->select(QStringLiteral("made:b.mp4"));
+        QCOMPARE(field(window, QStringLiteral("from"))->text(), QStringLiteral("5"));
     }
 
     // The takes' card holds each take to its guide when asked: where the take

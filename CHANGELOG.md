@@ -6,6 +6,13 @@ on `main`; its section here becomes the release's notes on GitHub
 
 ## 0.1.3
 
+- A shot longer than a model makes at once is made in parts and joined: a
+  recipe's `render` draws a part of a sequence (`from=`, `seconds=`), a
+  `generate` goes on from the last frame of the part before
+  (`first={a.mp4}`, with `from=` for its signals and moves), and `join` sets
+  the parts end to end. The plan says how when a recipe asks for too long a
+  shot, the graph shows the join as a card of its own, and `shot-directed`
+  reads the first frame.
 - A shot's takes are chosen among in its graph by looking and by number: each
   take shows its picture, a guide shows as it was drawn for the take, and
   Hold to guide says how much of where each take has the shot's subject and

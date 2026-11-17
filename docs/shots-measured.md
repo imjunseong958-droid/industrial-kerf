@@ -607,3 +607,25 @@ head of each part are the architecture's.
    stand-in, an orange square, so what the reference adds was not looked
    at. Still wanting: a subject followed fast enough to measure, and a
    model that takes the signal as a number.
+10. **A shot longer than the model makes at once** (2026-11-17), the same
+   model and court, the ball crossing it for ten seconds on a path that
+   stays above the floor. Two parts of 81 frames, the second's guide drawn
+   from 5 s of the sequence and its first frame the first part's last
+   (`first={a.mp4}`, kept by a mask of 0 on that one frame of the guide),
+   set end to end with the shared frame left out (`join … lap=1`): 161
+   frames at 832x480 and 16 a second, 165 s and 151 s on the server.
+
+   Looked at on every twentieth frame and on the ten frames around the
+   seam: one court and one ball all through, the ball where the layout has
+   it on both sides of the seam, with no jump in where it is. What does
+   change at the seam is tone. The mean brightness of a frame, of 255:
+
+   | Frames | 76 to 80, the first part's last | 81 | 82 to 86 | 120 | 160 |
+   |---|---|---|---|---|---|
+   | Mean | 104.0 to 104.3 | 94.6 | 93.5 to 91.8 | 89.6 | 90.1 |
+
+   The second part is 10 of 255 darker from its second frame and stays
+   there. It was handed one picture and its own guide; nothing tells it how
+   bright the part before went on to be. Not tried: a tone matched across
+   the join, a part led in by more than one frame of the one before, three
+   parts or more, a signal across a seam.

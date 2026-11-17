@@ -56,7 +56,7 @@ namespace graph {
 // What goes along an edge, and what a node gives.
 enum class Gives { Video, Image, Signal, Path, Words, File };
 // What a node is. A Part is a node of a model's own workflow (see Workflow).
-enum class Kind { Sequence, Render, Model, Run, File, Signal, Moves, Cast, Style, Takes, Part };
+enum class Kind { Sequence, Render, Model, Run, Join, File, Signal, Moves, Cast, Style, Takes, Part };
 
 struct Node {
     // What it is told apart by: a step by the file it makes (`made:guide.mp4`),
@@ -163,7 +163,7 @@ QSizeF cardSize(const Node &node);
 bool isMissing(const Node &node);
 // The names under which `to` could read what `from` gives, in the order to
 // offer them: a signal as `signal`, the way a clip goes as `moves`, a picture
-// in motion as a `guide` or a `ref`, a still as `first`, `last` or `ref`, a
+// in motion as a `guide`, a `ref`, or the `first` frame a shot goes on from (its last), a still as `first`, `last` or `ref`, a
 // sequence as what a guide is drawn from. None where it cannot: what is not
 // a step reads nothing, and a step reads only what a step before it made.
 QStringList portsFor(const Recipe &recipe, const Node &from, const Node &to);

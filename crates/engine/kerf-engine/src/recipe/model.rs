@@ -101,6 +101,9 @@ pub struct Ask {
     /// Pictures of who and what is in it, and of how it should look.
     pub references: Vec<Source>,
     pub seconds: Option<f64>,
+    /// Where the shot starts in its sequences' time, in seconds, where it is not their
+    /// start: a part of a longer shot. A signal and where a clip goes are read from there.
+    pub from: Option<f64>,
     pub size: Option<(u32, u32)>,
     pub seed: Option<u64>,
     /// Numbers over time that say when what the prompt asks for happens:
@@ -140,6 +143,7 @@ impl Ask {
             last: None,
             references: Vec::new(),
             seconds: None,
+            from: None,
             size: None,
             seed: None,
             signals: Vec::new(),
@@ -192,6 +196,17 @@ impl Ask {
                 "last" => ask.last = Some(source(value)?),
                 WORKFLOW => ask.workflow = Some(source(value)?),
                 "ref" => ask.references.push(source(value)?),
+                "from" => {
+                    ask.from = Some(
+                        value
+                            .parse()
+                            .ok()
+                            .filter(|from: &f64| from.is_finite() && *from >= 0.0)
+                            .ok_or_else(|| {
+                                format!("`from={value}` is not a number of seconds from the sequence's start, such as 5")
+                            })?,
+                    );
+                }
                 "seconds" => {
                     ask.seconds = Some(
                         value
@@ -298,6 +313,9 @@ impl Ask {
         if let Some(seconds) = self.seconds {
             parts.push(format!("{seconds} s"));
         }
+        if let Some(from) = self.from {
+            parts.push(format!("from {from} s"));
+        }
         if let Some((width, height)) = self.size {
             parts.push(format!("{width}x{height}"));
         }
@@ -339,7 +357,7 @@ impl Ask {
             ))
         };
         let optional = |source: &Option<Source>| source.as_ref().map(place).transpose();
-        Ok(json!({
+        let mut asked = json!({
             "kerf-request": REQUEST_VERSION,
             "model": self.model,
             "prompt": self.prompt,
@@ -360,7 +378,12 @@ impl Ask {
             WORKFLOW: optional(&self.workflow)?,
             "more": self.more,
             "out": made(&self.out).to_string_lossy(),
-        }))
+        });
+        // Said only of a part of a longer shot: a request for a whole one reads as it did.
+        if let Some(from) = self.from {
+            asked["from"] = json!(from);
+        }
+        Ok(asked)
     }
 }
 
