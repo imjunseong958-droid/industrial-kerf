@@ -18,9 +18,12 @@ class QComboBox;
 
 namespace kerf {
 
-// The timeline's geometry (the minimal mockup). The track heads' column, 140
-// wide: target and name, with the lock, eye or mute and solo toggles on hover.
-constexpr int kTimelineLabelWidth = 140;
+// The timeline's geometry (the minimal mockup). The track heads' column, 56
+// wide: each track's kind on a chip, 16 in, as the strip's first control. Its
+// name and its lock, eye or mute and solo toggles are in the head opened
+// under the pointer, kTimelineHeadOpen wide over the start of its lane.
+constexpr int kTimelineLabelWidth = 56;
+constexpr int kTimelineHeadOpen = 200;
 // Time zero sits 8 into the lanes (the mockup's x = 8 + t * px/s), so the
 // playhead's 9 pt head shows whole at the start.
 constexpr int kTimelineOrigin = kTimelineLabelWidth + 8;

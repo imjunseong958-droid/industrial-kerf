@@ -198,9 +198,14 @@ as linked clips, and Insert ripples the rest of the sequence.
 Tracks follow the classic edit-suite order: picture tracks stack upward from
 V1, because a later picture track plays over the ones below it, and sound
 tracks run downward from A1. The ruler and track headers stay pinned while the
-timeline scrolls. Each header has two toggles after the track number: the
-eye turns a picture track's output on and off (M mutes a sound track), and
-the padlock locks the track against edits. While a clip
+timeline scrolls. A header is the track's kind on a chip (picture, captions or
+sound; its number, V1 or A1, is in the chip's tip), in a narrow column, so the
+clips, which carry their own names, have the width. Under the pointer the
+header opens over the start of its lane, with the track's name and its
+toggles: the eye turns a picture track's output on and off (M mutes a sound
+track, S solos it), and the padlock locks the track against edits. The
+playhead's timecode and the rate are in the strip over the timeline, after
+the transport. While a clip
 moves or trims, a readout shows the new edge timecode and its offset.
 
 Tracks start dense, for edits with many layers: under a wide picture V1 is
