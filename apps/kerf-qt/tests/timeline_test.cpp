@@ -514,7 +514,8 @@ private slots:
         const int v1 = 4;
         const QRect row = timeline.trackHeaderRect(v1);
         QCOMPARE(row.width(), 140);
-        QCOMPARE(timeline.headerControlRect(v1, C::Target), QRect(12, row.top() + 14, 24, 20));
+        // 16 in: the line the strip over the heads and the toolbar start on.
+        QCOMPARE(timeline.headerControlRect(v1, C::Target), QRect(16, row.top() + 14, 24, 20));
         // Lock and the eye against the padding on picture; lock, mute and solo on sound.
         QCOMPARE(timeline.headerControlRect(v1, C::Lock), QRect(92, row.top() + 14, 20, 20));
         QCOMPARE(timeline.headerControlRect(v1, C::Output), QRect(114, row.top() + 14, 20, 20));
