@@ -190,7 +190,8 @@ public:
     // What it shows is a proposal's cut, the program having none: it can be
     // looked through, not changed.
     void setShowsProposedCut(bool shows) { m_showsProposedCut = shows; }
-    // Tracks start tall, for a timeline that has the room for them.
+    // Tracks start at one roomy height (kRoomyTrackHeight), picture and sound
+    // alike, for a timeline that has the room for them.
     void setRoomyLanes(bool roomy) { m_roomyLanes = roomy; relayout(); }
     bool showsProposedCut() const { return m_showsProposedCut; }
     bool isAudioLane(const QString &track) const;

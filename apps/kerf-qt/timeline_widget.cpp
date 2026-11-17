@@ -520,8 +520,8 @@ void TimelineWidget::stepAllTrackHeightsKeeping(int steps, int row) {
 
 int TimelineWidget::defaultTrackHeight(bool audio, int number) const {
     if (m_allHeight > 0) return m_allHeight;
-    // The picture lane large enough to see what is on it.
-    if (m_roomyLanes) return audio ? 28 : number == 1 ? 64 : 40;
+    // With room, one height for every track: none larger than another.
+    if (m_roomyLanes) return kRoomyTrackHeight;
     if (m_wideSequence) return audio ? kWideAudioHeight : number == 1 ? kWideV1Height : number == 2 ? kWideV2Height : kWideVideoHeight;
     return audio ? kTrackHeight : kVideoTrackHeight;
 }

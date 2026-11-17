@@ -37,6 +37,10 @@ constexpr int kVideoTrackHeight = 28;
 constexpr int kTrackHeight = 24;
 constexpr int kSmallTrackHeight = 20;
 constexpr int kLargeTrackHeight = 48;
+// In the editor's own window, where the panel has the room: every track one
+// height, picture and sound alike, so no lane is larger than another for
+// what it is. Its name bar and what is on it both read at 40.
+constexpr int kRoomyTrackHeight = 40;
 // The add-track row under the last track, shown under the pointer.
 constexpr int kAddLaneHeight = 32;
 constexpr int kWideV1Height = 28;

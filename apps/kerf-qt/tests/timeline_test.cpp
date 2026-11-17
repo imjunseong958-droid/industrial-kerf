@@ -1512,6 +1512,22 @@ private slots:
         QCOMPARE(trackHeights(timeline), QList<int>(4, each));
     }
 
+    // With room (the editor's own window), every track starts at one height,
+    // picture and sound, V1 and the rest: no lane is larger for what it is.
+    void roomyLanesAreAllOneHeight() {
+        TimelineWidget timeline;
+        timeline.resize(900, 600);
+        timeline.setRoomyLanes(true);
+        QJsonArray tracks;
+        for (const char *id : {"V3", "V2", "V1"}) tracks << QJsonObject{{"id", id}, {"type", "video"}, {"clips", QJsonArray{}}};
+        for (const char *id : {"A1", "A2"}) tracks << QJsonObject{{"id", id}, {"type", "audio"}, {"clips", QJsonArray{}}};
+        timeline.setProject(QJsonObject{{"tracks", tracks}}, 8, 24);
+        timeline.show();
+        QCOMPARE(timeline.trackRowCount(), 5);
+        for (int row = 0; row < timeline.trackRowCount(); ++row)
+            QCOMPARE(timeline.trackHeaderRect(row).height(), kRoomyTrackHeight);
+    }
+
     void timelineTrackHeightsFollowTheHeaderEdge() {
         TimelineWidget timeline;
         timeline.resize(700, 400);
