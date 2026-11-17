@@ -10,13 +10,13 @@
 // picture's aspect and which panes are open; StageShell places its children by
 // it. A format change lays out again at once, with no animation.
 //
-//   The sidebar is 288 wide until its edge is dragged (from 232 to all but 640
+//   The sidebar is 320 wide until its edge is dragged (from 232 to all but 640
 //   of the window), and gives way in a window under 1100. With the panel closed
 //   the conversation has the rest. With it open the conversation is 480 wide,
 //   giving way down to 320 only when it would leave the panel under 600. At
-//   1600 x 1000, the panel is 832 x 960 at (768, 40):
+//   1600 x 1000, the panel is 800 x 960 at (800, 40):
 //   Wide (aspect >= 1.2):
-//     picture slot 832 x 420 at the top, timeline 832 x 540 under it. The
+//     picture slot 800 x 420 at the top, timeline 800 x 540 under it. The
 //     timeline has 56% of the height, at least 260, and whatever the picture's
 //     aspect leaves; the picture pillarboxes in black in its slot.
 //   One pane alone has the panel: a picture with the transport's block 88 tall

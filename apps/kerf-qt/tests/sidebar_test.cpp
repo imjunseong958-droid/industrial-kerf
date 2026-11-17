@@ -97,15 +97,15 @@ private slots:
     void initTestCase() { QVERIFY(m_folder.isValid()); }
 
     void theSidebarIsItsTokensWidth() {
-        QCOMPARE(tokens::layout::sidebar, 288);
+        QCOMPARE(tokens::layout::sidebar, 320);
         // A drag of its edge keeps it between its least and what it leaves the
-        // window: wider than t3code's 256, and as wide as a wide window allows.
+        // window, as wide as a wide window allows.
         QVERIFY(tokens::layout::sidebarLeast < tokens::layout::sidebar);
         QCOMPARE(tokens::layout::sidebarMost(1600), 1600 - tokens::layout::sidebarLeaves);
         QCOMPARE(tokens::layout::sidebarMost(600), tokens::layout::sidebarLeast);
         QVERIFY(tokens::layout::sidebar < tokens::layout::sidebarMost(tokens::layout::sidebarWindowLeast));
         SidebarRow row(QString(), QStringLiteral("A"));
-        QCOMPARE(row.sizeHint().width(), 288);
+        QCOMPARE(row.sizeHint().width(), tokens::layout::sidebar);
     }
 
     void timesSayHowLongAgo() {
