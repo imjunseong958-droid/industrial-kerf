@@ -652,7 +652,7 @@ private slots:
         ToolbarWiring *wiring = window.m_toolbarWiring.get();
         QCOMPARE(toolbar->height(), 40);
         QCOMPARE(wiring->m_content->geometry(), toolbar->rect());
-        QList<QWidget *> controls{window.m_sidebarButton, window.m_exportButton, window.m_panelButton};
+        QList<QWidget *> controls{window.m_sidebarButton, window.m_panelButton, window.m_exportButton};
         const auto frame = [toolbar](QWidget *w) { return QRect(w->mapTo(toolbar, QPoint()), w->size()); };
         for (int size : {1366, 1080}) {
             window.resize(size, 768);
@@ -665,10 +665,9 @@ private slots:
                 QCOMPARE(frame(control).center().y(), toolbar->height() / 2 - 1);
                 if (i > 0) QVERIFY2(frame(controls.at(i - 1)).right() < frame(control).left(), qPrintable(control->objectName()));
             }
-            // The panel's button's middle is 16 from the window's right, as
-            // the first window button's is from its left.
-            QCOMPARE(frame(window.m_panelButton).left(), toolbar->width() - 16 - 14);
-            QCOMPARE(frame(window.m_panelButton).right() + 1, toolbar->width() - 16 + 14);
+            // Export ends the row, 9 from the window's right as the first
+            // window button starts 9 from its left.
+            QCOMPARE(frame(window.m_exportButton).right() + 1, toolbar->width() - 9);
             // In a window too narrow for the sidebar, the bar has its menu.
             QCOMPARE(wiring->appMenuButton()->isVisible(), size < tokens::layout::sidebarWindowLeast);
             // The title keeps between the groups; the project's long name is
@@ -683,7 +682,16 @@ private slots:
         // The trailing group's spacing.
         window.resize(1600, 1000);
         QCoreApplication::processEvents();
-        QCOMPARE(frame(window.m_panelButton).left() - frame(window.m_exportButton).right() - 1, 8);
+        QCOMPARE(frame(window.m_exportButton).left() - frame(window.m_panelButton).right() - 1, 8);
+        // With no cut there is no Export: the panel's button ends the row, its
+        // middle 16 from the window's right as the first window button's is
+        // from its left.
+        window.m_exportButton->hide();
+        wiring->layoutTrailing();
+        QCoreApplication::processEvents();
+        QCOMPARE(frame(window.m_panelButton).left(), toolbar->width() - 16 - 14);
+        window.m_exportButton->show();
+        wiring->layoutTrailing();
         // No » extension: nothing is folded away.
         if (auto *more = toolbar->findChild<QToolButton *>(QStringLiteral("qt_toolbar_ext_button"))) QVERIFY(!more->isVisible());
         // The window buttons' room, past which the commands start.

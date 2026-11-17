@@ -129,6 +129,8 @@ public:
     // Where the sidebar ends under the bar now, also while it moves; 0 for none.
     int sidebarEdge() const;
     void layoutLeading();
+    // The room after the last control: Export's, or the panel's button's.
+    void layoutTrailing();
 
     // ---- Export, there once the program has a clip
     bool hasCut() const;
@@ -191,6 +193,8 @@ private:
     QWidget *m_titleBox = nullptr;
     // The rest of the sidebar's top, between its button and the title.
     QWidget *m_sidebarGap = nullptr;
+    // What stands between the panel's button and Export, while Export shows.
+    QWidget *m_exportGap = nullptr;
     // After the conversation's name: opens what can be done with it.
     ui::IconButton *m_titleMenu = nullptr;
     int m_firstControl = kLeadingPad;

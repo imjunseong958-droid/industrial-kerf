@@ -359,7 +359,7 @@ private slots:
         ui::IconButton *play = strip->transportButton(TimelineToolStrip::Transport::Play);
         QVERIFY(strip->isAncestorOf(play));
         QCoreApplication::processEvents();
-        QCOMPARE(strip->tools()->x(), 176);
+        QCOMPARE(strip->tools()->x(), 168);
 
         // A vertical sequence keeps the strip too.
         window.applySnapshot(snapshotOf(QSize(1080, 1920)));
@@ -387,7 +387,7 @@ private slots:
         QVERIFY(play->isVisible());
         QVERIFY(!block->isVisible());
         QCoreApplication::processEvents();
-        QCOMPARE(strip->tools()->x(), 176);
+        QCOMPARE(strip->tools()->x(), 168);
         window.close();
     }
 

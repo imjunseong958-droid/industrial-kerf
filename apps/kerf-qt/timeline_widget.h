@@ -710,6 +710,10 @@ private:
     ui::SegmentedControl *m_tools = nullptr;
     ui::IconButton *m_snap = nullptr;
     static constexpr int kTransportGap = 28; // from the transport to the tools
+    // What the strip keeps clear at each end: its first and last controls are
+    // 24 across, so their middles are 16 from its edges, as the toolbar's are
+    // from the window's.
+    static constexpr int kStripEdge = 16 - 24 / 2;
     QBoxLayout *m_extras = nullptr;
     QWidget *m_transportGroup = nullptr;
     ui::IconButton *m_transport[kTransports] = {};

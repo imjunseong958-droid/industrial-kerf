@@ -2721,7 +2721,9 @@ TimelineToolStrip::TimelineToolStrip(TimelineWidget *timeline, QWidget *parent) 
     setObjectName(QStringLiteral("timelineTools"));
     setFixedHeight(tk::layout::strip);
     auto *layout = new QHBoxLayout(this);
-    layout->setContentsMargins(12, 0, 12, 0);
+    // As the toolbar over it: the first and the last control's middles are 16
+    // from the strip's edges (24 across, so 4 in).
+    layout->setContentsMargins(kStripEdge, 0, kStripEdge, 0);
     layout->setSpacing(0);
     const auto iconButton = [this](const char *object, const char *icon, const QString &name) {
         auto *button = new ui::IconButton(QString::fromLatin1(icon), ui::IconButton::Size::S24, this);

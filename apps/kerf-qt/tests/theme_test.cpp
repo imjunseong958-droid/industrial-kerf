@@ -569,11 +569,12 @@ private slots:
             QCOMPARE(inBar(title).left(), window.m_sidebar->geometry().right() + 1 + 16);
             QVERIFY(exportButton->isVisible());
             QVERIFY(inBar(title).right() < inBar(exportButton).left());
-            // The trailing group: Export, 8, the panel's button, its middle 16
-            // from the window's right edge, both 28 tall.
-            QCOMPARE(inBar(window.m_panelButton).left() - inBar(exportButton).right() - 1, 8);
+            // The trailing group: the panel's button, 8, Export, which ends 9
+            // from the window's right edge as the first window button starts
+            // 9 from its left; both 28 tall.
+            QCOMPARE(inBar(exportButton).left() - inBar(window.m_panelButton).right() - 1, 8);
             QCOMPARE(exportButton->height(), window.m_panelButton->height());
-            QCOMPARE(toolbar->width() - inBar(window.m_panelButton).right() - 1, 2);
+            QCOMPARE(toolbar->width() - inBar(exportButton).right() - 1, 9);
             // The format is in the timeline's strip, with the Media sheet's
             // button and Follow Kerf.
             QVERIFY(window.m_timelineWiring->tools()->isAncestorOf(window.m_formatBank));

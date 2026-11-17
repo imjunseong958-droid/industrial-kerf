@@ -166,14 +166,8 @@ void ToolbarWiring::buildToolbar(const QHash<QString, QMenu *> &menus) {
     m_titleBox->installEventFilter(w);
     row->addWidget(m_titleBox, 1);
 
-    // The trailing group: Export once there is a cut, then the panel.
-    w->m_exportButton = new ExportButton;
-    connect(w->m_exportButton, &ExportButton::exportRequested, this, &ToolbarWiring::sendExport);
-    connect(w->m_exportButton, &ExportButton::menuAboutToShow, this, &ToolbarWiring::buildExportMenu);
-    connect(w->m_exportButton, &ExportButton::qualityChanged, this, &ToolbarWiring::syncCommands);
-    w->m_exportButton->hide();
-    row->addWidget(w->m_exportButton);
-    row->addSpacing(8 - row->spacing());
+    // The trailing group: the panel's button, then Export once there is a cut,
+    // which ends the row as a button with words does.
     w->m_panelButton = new ui::IconButton(QStringLiteral("g-panel"), ui::IconButton::Size::S28);
     w->m_panelButton->setObjectName(QStringLiteral("panePanel"));
     w->m_panelButton->setAccessibleName(QStringLiteral("Picture and timeline"));
@@ -183,6 +177,17 @@ void ToolbarWiring::buildToolbar(const QHash<QString, QMenu *> &menus) {
     w->m_panelButton->setFocusPolicy(Qt::TabFocus);
     connect(w->m_panelButton, &QAbstractButton::clicked, w, [w] { w->setPanelOpen(!w->m_shell->panes().panelOpen()); });
     row->addWidget(w->m_panelButton);
+    // 8 between the two, which goes with Export when there is none.
+    m_exportGap = new QWidget;
+    m_exportGap->setFixedWidth(8 - 2 * row->spacing());
+    m_exportGap->hide();
+    row->addWidget(m_exportGap);
+    w->m_exportButton = new ExportButton;
+    connect(w->m_exportButton, &ExportButton::exportRequested, this, &ToolbarWiring::sendExport);
+    connect(w->m_exportButton, &ExportButton::menuAboutToShow, this, &ToolbarWiring::buildExportMenu);
+    connect(w->m_exportButton, &ExportButton::qualityChanged, this, &ToolbarWiring::syncCommands);
+    w->m_exportButton->hide();
+    row->addWidget(w->m_exportButton);
     toolbar->setContent(m_content);
 
     // What belongs to the cut sits with it, in the timeline's strip: the Media
@@ -275,6 +280,7 @@ void ToolbarWiring::buildToolbar(const QHash<QString, QMenu *> &menus) {
         connect(master, &QAction::changed, this, &ToolbarWiring::syncCommands);
     syncCommands();
     layoutLeading();
+    layoutTrailing();
     followCut();
 }
 
@@ -339,7 +345,20 @@ void ToolbarWiring::followCut() {
     button->setVisible(shown);
     // It arrives with the cut, where it is.
     if (shown) moves::fadeIn(button);
+    layoutTrailing();
     layoutTitle();
+}
+
+void ToolbarWiring::layoutTrailing() {
+    // The row ends as it starts. With Export, its edge is as far from the
+    // window's right as the first window button's is from its left; with the
+    // panel's button last, its middle is where that button's middle is.
+    const ExportButton *button = m_window->m_exportButton;
+    const bool shown = button && !button->isHidden();
+    if (m_exportGap) m_exportGap->setVisible(shown);
+    QMargins margins = m_content->layout()->contentsMargins();
+    margins.setRight(shown ? kWindowButtonsLeft : kToolbarTrailing);
+    m_content->layout()->setContentsMargins(margins);
 }
 
 void ToolbarWiring::popupAppMenu(QWidget *anchor) {

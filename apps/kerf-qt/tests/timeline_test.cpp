@@ -1211,17 +1211,20 @@ private slots:
             QCOMPARE(button->size(), QSize(24, 24));
             x = button->x();
         }
-        // At the mockup's x: the tools at 176, Snap at 240, the zoom ending
-        // 12 from the edge of the 872 wide panel; Play in ink, the rest ink2.
-        QCOMPARE(tools->tools()->x(), 176);
-        QCOMPARE(tools->snapButton()->x(), 240);
+        // The first and last controls' middles are 16 from the strip's edges,
+        // as the toolbar's are from the window's: the tools at 168, Snap at
+        // 232, the zoom ending 4 from the edge of the 872 wide panel; Play in
+        // ink, the rest ink2.
+        QCOMPARE(tools->transportButton(Transport::Start)->mapTo(tools, QPoint(0, 0)).x() + 12, 16);
+        QCOMPARE(tools->tools()->x(), 168);
+        QCOMPARE(tools->snapButton()->x(), 232);
         QCOMPARE(tools->transportButton(Transport::Play)->iconColor(), tokens::color(tokens::ink));
         QCOMPARE(tools->transportButton(Transport::Next)->iconColor(), tokens::color(tokens::ink2));
         auto *zoomOut = tools->findChild<ui::IconButton *>(QStringLiteral("timelineZoomOut"));
         QVERIFY(zoomOut);
-        QCOMPARE(zoomOut->geometry().center().x(), 751);
+        QCOMPARE(zoomOut->geometry().center().x(), 759);
         QVERIFY(tools->zoomOutButton()->x() > tools->snapButton()->x());
-        QCOMPARE(tools->zoomInButton()->geometry().right() + 1, tools->width() - 12);
+        QCOMPARE(tools->zoomInButton()->geometry().right() + 1, tools->width() - 4);
         // The transport runs the registry's playback commands.
         window.m_duration = 30.0;
         window.m_bus->setDuration(30.0);
