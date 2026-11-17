@@ -616,6 +616,15 @@ says nothing of one.
 a node chosen (`workflow:<line>` opens the workflow of the model on that line of
 the recipe), for a capture (`--screenshot`).
 
+What the graph shows and sets, an agent's tools read and set through the same
+crate (`kerf-shots`: `look` with `graph` and `workflow`, `edit` with
+`recipeSet` and `workflowSet`; [An agent's part](../../docs/shots.md#an-agents-part)).
+An agent's change is a revision of the project, in which the media names the
+recipe's next version: the open graph asks for the recipe again on any
+revision (`GraphWiring::onSnapshot`), so it shows the shot as the agent left
+it, with the node chosen still chosen and the cards where they were put, a
+version being the same shot (`anAgentsChangeShowsInTheGraphThatIsOpen`).
+
 ## Masks
 
 The Rectangle, Ellipse, and Pen mask tools sit in the Program panel's title

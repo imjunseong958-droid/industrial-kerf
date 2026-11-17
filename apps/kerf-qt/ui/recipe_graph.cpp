@@ -456,7 +456,9 @@ void RecipeGraphView::setRecipe(const graph::Recipe &recipe) {
     for (const Node &node : m_recipe.nodes) before << node.id;
     QStringList now;
     for (const Node &node : recipe.nodes) now << node.id;
-    const bool another = m_recipe.media != recipe.media || m_recipe.recipe != recipe.recipe || m_recipe.parts != recipe.parts;
+    // A recipe's next version (`bounce@2.kerfrecipe`, as an agent's edit leaves it) is the same
+    // shot, by its name: the view stays where the person has it.
+    const bool another = m_recipe.media != recipe.media || m_recipe.name != recipe.name || m_recipe.parts != recipe.parts;
     m_recipe = recipe;
     m_places = graph::arranged(m_recipe);
     for (auto placed = m_placed.constBegin(); placed != m_placed.constEnd(); ++placed)

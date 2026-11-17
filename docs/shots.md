@@ -187,6 +187,28 @@ the take; the person says how much of that it does without asking them.
   so undo has them made from the one before; a text a version holds already
   is that version's. Every version of a recipe keeps its takes in one folder,
   `shots/open.takes/`.
+- What a person sees and sets in a shot's graph ([As a graph](#as-a-graph)),
+  an agent reads and sets, through the same reading (`kerf-shots`):
+
+  | In the graph, a person | An agent |
+  |---|---|
+  | opens a shot as its graph | `look` with `graph`: the nodes, the edges, `cannot`, `notes`, each model's `runner`, the takes |
+  | sets a prompt, a seed, a knob | `edit` with `recipeSet`: one name on one line, comments and order kept |
+  | draws an edge to a step, or lets one go | the same, the name its reader gives it (`signal`, `ref`, `guide`, `moves`), with no `value` to let it go |
+  | draws a signal's curve | an `edit` script that sets the clip's `value` |
+  | opens a model into its workflow | `look` with `workflow`: every node and input, the blanks and what fills each now |
+  | sets a value in the workflow | `edit` with `workflowSet`: a copy in the project, named by the line's `workflow=` |
+  | goes back to the workflow as it comes | `recipeSet` of `workflow` with no `value` |
+  | Make, Make again, Several, Stop | `make`, with `rolls`, and its `job` with `cancel` |
+  | chooses a take | the take's `use` line, in an `edit` |
+
+  Where they differ is where a change is written. A person's is written in
+  place. An agent's writes over nothing: the recipe with its word changed is
+  the next version (`shots/bounce@2.kerfrecipe`), a workflow with a value set
+  is a new copy (`bounce.video-2.comfy.json` where one is there), and the
+  proposal moves the media to them and says, as comments, what was set. Once
+  it is accepted the editor's open graph shows the shot as it now is, the
+  cards where they were put.
 - `look` lists what wants making under `toMake`, as an `edit` that names a
   recipe answers it, with what would refuse it (`cannot`) and the notes a
   person would be shown (`notes`), so a recipe is mended before anyone runs it.
@@ -642,6 +664,11 @@ changed and every other byte as it was, and adds `workflow=` to the line; the
 next is a change to that file. A blank is set on the recipe's line, and a link
 is the graph's own shape: to rewire a workflow, edit its file, or export one
 from ComfyUI for its API and put the blanks in.
+
+An agent reads the same workflow with `look` (`workflow`) and sets a value
+with `edit` (`workflowSet`), by the same rule ([An agent's part](#an-agents-part)).
+Its copy is always a new file, so that the recipe before, and every take made
+with it, still has the workflow it names.
 
 ComfyUI is another program. Kerf reads workflow files and asks a server over
 HTTP when a shot is made; it loads none of ComfyUI's code and changes none of

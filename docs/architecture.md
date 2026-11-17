@@ -206,7 +206,7 @@ otherwise. Nothing else has to be kept in step with it.
 | 2 | `vfx` | Following what moves in a picture and cutting it out; keys and mattes are in `effects` for now | `kerf-track`, `kerf-segment` |
 | 2 | `motion` | Motion graphics drawn from numbers | `kerf-motion` |
 | 3 | `engine` | Sequences into frames and files | `kerf-core`, `kerf-compose`, `kerf-playback`, `kerf-engine` |
-| 4 | `surfaces` | What people and agents touch | `kerf-runtime`, `kerf-agent`, `kerf-mcp`, `kerf-skills`, `kerf-commands`, `kerf-cli`, `kerf-qt-bridge`, `kerf-cloud`, `kerf-fetcher`, `kerf-workflow` |
+| 4 | `surfaces` | What people and agents touch | `kerf-runtime`, `kerf-agent`, `kerf-mcp`, `kerf-skills`, `kerf-commands`, `kerf-cli`, `kerf-qt-bridge`, `kerf-cloud`, `kerf-fetcher`, `kerf-workflow`, `kerf-shots` |
 
 The areas in layer 2 may not depend on each other. What two of them need moves
 down to `render` or `foundation`. Only `engine` and `surfaces` see them all.
@@ -331,7 +331,12 @@ One model's program is in the repository, and the engine knows nothing of it:
 `tools/kerf-comfy`, for a model on a ComfyUI server
 ([shots.md](shots.md#a-model-on-a-comfyui-server)). The file it runs, a
 workflow, is read by `kerf-workflow` in `surfaces`, so that the editor's
-graph shows and sets one as the program reads it, without running it. With
+graph shows and sets one as the program reads it, without running it. A
+shot's graph and the workflow behind its model are read, and changed, by
+`kerf-shots`, which the editor's bridge and an agent's tools both go through
+(`look` with `graph` and `workflow`, `edit` with `recipeSet` and
+`workflowSet`): what a person does in the graph an agent can do, and by one
+rule. With
 `kerf-comfy` a recipe was made from end to end on 2026-11-11: a guide of Kerf's own clips in depth (a solid
 boat leaving, a sea and a pier tipped flat, a sun, a camera pushing in and
 turning), 96 frames at 1920x1080, then `generate` with Wan 2.1 VACE 1.3B, which
