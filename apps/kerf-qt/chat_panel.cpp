@@ -216,6 +216,7 @@ void ChatPanel::focusComposer() { input()->setFocus(Qt::ShortcutFocusReason); }
 
 QWidget *ChatPanel::buildHeader() {
     auto *header = new QWidget;
+    m_header = header;
     header->setObjectName(QStringLiteral("chatHeader"));
     header->setFixedHeight(kHeaderHeight);
     auto *row = new QHBoxLayout(header);
@@ -365,7 +366,18 @@ void ChatPanel::updateHeader() {
     if (title.isEmpty()) title = QStringLiteral("New conversation");
     m_title->setText(QFontMetricsF(m_title->font()).elidedText(title, Qt::ElideRight, std::max(40, m_title->width())));
     m_title->setToolTip(title);
+    const bool changed = title != titleText();
     m_title->setProperty("fullTitle", title);
+    if (changed) emit titleChanged();
+}
+
+QString ChatPanel::titleText() const { return m_title->property("fullTitle").toString(); }
+
+void ChatPanel::setHeaderShown(bool shown) {
+    if (shown == m_headerShown) return;
+    m_headerShown = shown;
+    m_header->setVisible(shown);
+    update();
 }
 
 void ChatPanel::startRename() {
@@ -375,6 +387,7 @@ void ChatPanel::startRename() {
     m_titleEdit->show();
     m_titleEdit->selectAll();
     m_titleEdit->setFocus(Qt::OtherFocusReason);
+    emit titleChanged();
 }
 
 void ChatPanel::commitRename() {
@@ -382,12 +395,15 @@ void ChatPanel::commitRename() {
     const QString title = m_titleEdit->text().simplified();
     m_titleEdit->hide();
     m_title->show();
-    if (!m_conversations || m_conversations->currentId().isEmpty()) return;
-    if (title.isEmpty() || title == m_conversations->current().summary.title) return;
-    // Shown at once; the bridge's next list has the last word.
-    m_title->setText(QFontMetricsF(m_title->font()).elidedText(title, Qt::ElideRight, std::max(40, m_title->width())));
-    m_title->setProperty("fullTitle", title);
-    emit conversationAction(QStringLiteral("rename"), title);
+    const bool renamed = m_conversations && !m_conversations->currentId().isEmpty() && !title.isEmpty() &&
+                         title != m_conversations->current().summary.title;
+    if (renamed) {
+        // Shown at once; the bridge's next list has the last word.
+        m_title->setText(QFontMetricsF(m_title->font()).elidedText(title, Qt::ElideRight, std::max(40, m_title->width())));
+        m_title->setProperty("fullTitle", title);
+    }
+    emit titleChanged();
+    if (renamed) emit conversationAction(QStringLiteral("rename"), title);
 }
 
 // ---- inputs ------------------------------------------------------------------------
@@ -1306,7 +1322,8 @@ void ChatPanel::paintEvent(QPaintEvent *) {
         p.setBrush(color(tokens::chrome));
         p.drawRect(area);
     }
-    // The header's hairline.
+    // The header's hairline, while the panel has a header of its own.
+    if (!m_headerShown) return;
     p.setBrush(color(tokens::line));
     p.drawRect(QRectF(0, kHeaderHeight - tokens::layout::seam, width(), tokens::layout::seam));
 }
@@ -1337,6 +1354,7 @@ bool ChatPanel::eventFilter(QObject *watched, QEvent *event) {
         if (static_cast<QKeyEvent *>(event)->key() == Qt::Key_Escape) {
             m_titleEdit->hide();
             m_title->show();
+            emit titleChanged();
             return true;
         }
     }

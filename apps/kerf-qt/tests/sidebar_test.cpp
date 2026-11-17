@@ -97,7 +97,7 @@ private slots:
     void initTestCase() { QVERIFY(m_folder.isValid()); }
 
     void theSidebarIsItsTokensWidth() {
-        QCOMPARE(tokens::layout::sidebar, 320);
+        QCOMPARE(tokens::layout::sidebar, 280);
         // A drag of its edge keeps it between its least and what it leaves the
         // window, as wide as a wide window allows.
         QVERIFY(tokens::layout::sidebarLeast < tokens::layout::sidebar);
@@ -146,7 +146,8 @@ private slots:
         // titles flush with it, with no dot before them and nothing after them
         // at rest.
         SidebarRow *folder = sidebar.projectRow(m_folder.path());
-        QVERIFY(folder->isHeading() && !folder->isStrong() && !folder->hasGuide());
+        // The open folder's name is a step brighter than the others'.
+        QVERIFY(folder->isHeading() && folder->isStrong() && !folder->hasGuide());
         QVERIFY(folder->chevronRect().left() > folder->textLeft());
         for (const SidebarRow *row : sidebar.rows())
             if (row->objectName() == QStringLiteral("sidebarConversation")) {
@@ -199,8 +200,14 @@ private slots:
         sidebar.setConversations(many, QStringLiteral("c8"));
         QCOMPARE(listed(sidebar).size(), 9);
         QVERIFY(sidebar.conversationRow(QStringLiteral("c8"))->isCurrent());
+        // With none chosen, no row is filled: New is an icon and a word, and
+        // the folder's name is not a choice among conversations.
         sidebar.setConversations(many, QString());
         QCOMPARE(listed(sidebar).size(), ProjectSidebar::kShownAtFirst);
+        QVERIFY(!sidebar.newConversationRow()->isCurrent());
+        QCOMPARE(sidebar.newConversationRow()->text(), QStringLiteral("New"));
+        QCOMPARE(sidebar.newConversationRow()->accessibleName(), QStringLiteral("New conversation"));
+        QVERIFY(!sidebar.projectRow(m_folder.path())->isCurrent());
         sidebar.searchField()->setText(QStringLiteral("Cut"));
         QCOMPARE(listed(sidebar).size(), 9);
         QVERIFY(!sidebar.moreRow(m_folder.path()));
@@ -282,7 +289,9 @@ private slots:
             if (row->text() == QStringLiteral("Market scene")) theirs = row;
         QVERIFY(theirs);
         QVERIFY(theirs->hoverActions().isEmpty());
-        QCOMPARE(ui::tipName(theirs), QStringLiteral("Market scene · 1d"));
+        // How long ago, wherever the clock is: it was written in UTC, and noon is local.
+        QCOMPARE(ui::tipName(theirs), QStringLiteral("Market scene · %1")
+                                          .arg(ProjectSidebar::relativeTime(QDateTime::fromString(QStringLiteral("2026-11-15T08:00:00Z"), Qt::ISODate), noon())));
         theirs->click();
         QCOMPARE(chosenIn.size(), 1);
         QCOMPARE(chosenIn.first().at(0).toString(), QDir::cleanPath(other.path()));
@@ -685,9 +694,29 @@ private slots:
         QLineEdit *search = sidebar.searchField();
         // Search is a row under New conversation; pressed, the field takes its place.
         QVERIFY(!search->isVisible() && sidebar.searchRow()->isVisible());
+        sidebar.resize(tokens::layout::sidebar, 600);
+        sidebar.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&sidebar));
+        const QRect rowWas = sidebar.searchRow()->geometry();
         sidebar.searchRow()->click();
         QVERIFY(search->isVisible() && !sidebar.searchRow()->isVisible());
         QCOMPARE(search->accessibleName(), QStringLiteral("Search conversations"));
+        // The field is the row, typed into: where it was and as tall, so
+        // nothing under it moves, and with nothing round it, neither a fill
+        // nor an outline: the sidebar shows through to its edges.
+        QCoreApplication::processEvents();
+        QCOMPARE(search->geometry(), rowWas);
+        QCOMPARE(search->placeholderText(), QStringLiteral("Search"));
+        // The editor rings a field being typed in; this one asks for none.
+        QVERIFY(search->property("ringsOwnFields").toBool());
+        {
+            const QImage shown = sidebar.grab().toImage();
+            const QColor ground = tokens::color(tokens::sidebar);
+            const QRect at = search->geometry();
+            for (const QPoint &point : {at.topLeft() + QPoint(1, 1), at.bottomRight() - QPoint(1, 1), QPoint(at.right() - 2, at.center().y()),
+                                        QPoint(at.center().x(), at.top()), QPoint(at.center().x(), at.bottom())})
+                QCOMPARE(shown.pixelColor(point).rgb(), ground.rgb());
+        }
         QTest::keyClicks(search, QStringLiteral("BEACH"));
         QCOMPARE(listed(sidebar), QStringList{QStringLiteral("The Beach cut")});
         QCOMPARE(sidebar.archivedRow()->text(), QStringLiteral("Archived · 1"));

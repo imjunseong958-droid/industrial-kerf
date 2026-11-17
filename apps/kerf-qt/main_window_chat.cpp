@@ -725,9 +725,14 @@ void MainWindow::appendConversation(const QString &speaker, const QString &text)
 }
 
 void MainWindow::showActivity() {
-    QWidget *more = m_chat->moreButton();
     m_activityPopup->adjustSize();
-    m_activityPopup->move(more->mapToGlobal(QPoint(more->width() - m_activityPopup->width(), more->height() + 4)));
+    // Under what opened it: the panel's More, or the toolbar's title.
+    if (QWidget *title = m_chat->headerShown() || !m_projectTitle ? nullptr : m_projectTitle) {
+        m_activityPopup->move(title->mapToGlobal(QPoint(0, title->height() + 8)));
+    } else {
+        QWidget *more = m_chat->moreButton();
+        m_activityPopup->move(more->mapToGlobal(QPoint(more->width() - m_activityPopup->width(), more->height() + 4)));
+    }
     m_activityPopup->show();
 }
 

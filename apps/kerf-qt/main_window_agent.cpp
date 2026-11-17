@@ -24,6 +24,9 @@
 #include "wiring/toolbar_wiring.h"
 #include "project_panel.h"
 
+#include <QFileInfo>
+#include <QDir>
+#include <QSaveFile>
 #include <QJsonArray>
 #include <QSet>
 #include <QSettings>
@@ -132,6 +135,27 @@ void MainWindow::buildAgentViews() {
     connect(m_artwork, &MediaArtwork::changed, this, [this] {
         if (m_sheetWanted && m_agentBusy) showSheet();
     });
+    connect(m_artwork, &MediaArtwork::changed, this, &MainWindow::keepProjectPoster);
+}
+
+void MainWindow::keepProjectPoster() {
+    // The sidebar shows a project by a small picture of it: its first source's
+    // poster, kept in the project's cache the first time one comes.
+    if (m_posterKept || m_projectDirectory.isEmpty() || !m_sidebar) return;
+    QImage poster;
+    for (const QJsonValue &source : m_project.value(QStringLiteral("sources")).toArray()) {
+        poster = m_artwork->frames.value(source.toObject().value(QStringLiteral("id")).toString());
+        if (!poster.isNull()) break;
+    }
+    if (poster.isNull()) return;
+    m_posterKept = true;
+    const QFileInfo file(ProjectSidebar::posterPath(m_projectDirectory));
+    if (!QDir().mkpath(file.absolutePath())) return;
+    constexpr int kPosterWidth = 160;
+    QSaveFile out(file.absoluteFilePath());
+    if (!out.open(QIODevice::WriteOnly)) return;
+    if (!poster.scaledToWidth(std::min(kPosterWidth, poster.width()), Qt::SmoothTransformation).save(&out, "JPG", 85)) return;
+    if (out.commit()) m_sidebar->refreshPosters();
 }
 
 QRect MainWindow::toShell(const QWidget *widget, const QRect &rect) const {

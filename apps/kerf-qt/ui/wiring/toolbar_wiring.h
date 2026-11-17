@@ -85,6 +85,11 @@ public:
     // ---- the title, centred on the window
     // "Atlas · 30 s spot v7": the project, then the program sequence's name.
     QString titleText() const;
+    // What the toolbar's title says: the conversation's name, the window's
+    // being the project's (titleText).
+    QString shownTitle() const;
+    // The chevron after it, which opens the conversation's menu.
+    ui::IconButton *titleMenuButton() const { return m_titleMenu; }
     // The line beside the title: a passing message, else offline or an error,
     // else the sync's stage or a render's progress; empty when there is
     // nothing to say.
@@ -180,6 +185,8 @@ private:
     // Toolbar.
     QWidget *m_content = nullptr;
     QWidget *m_titleBox = nullptr;
+    // After the conversation's name: opens what can be done with it.
+    ui::IconButton *m_titleMenu = nullptr;
     int m_firstControl = kLeadingPad;
     ui::IconButton *m_appButton = nullptr;
     QMenu *m_appMenu = nullptr;

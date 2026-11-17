@@ -3,6 +3,7 @@
 // one top to bottom (chat_panel.h, ui/chat_messages.h), and the wiring that
 // sends what is asked (agent, conversations) and feeds the sidebar.
 
+#include "settings_kit.h"
 #include "fixtures.h"
 #include "test_registry.h"
 
@@ -469,7 +470,7 @@ private slots:
             emit w.window.m_permissionChoice->activated(1);
             QCOMPARE(w.chat()->permissionMode(), PermissionMode::AcceptEdits);
             QCOMPARE(chip->text(), QStringLiteral("Accept edits"));
-            QVERIFY(w.window.m_permissionHint->text().contains(QStringLiteral("Undo")));
+            QVERIFY(w.window.m_permissionRow->description().contains(QStringLiteral("Undo")));
             QCOMPARE(QSettings().value(QStringLiteral("agent/permissions")).toString(), QStringLiteral("accept-edits"));
         }
         // The next window starts as this one was left.
@@ -806,12 +807,20 @@ private slots:
             settings.remove(QStringLiteral("agent/anthropic/model"));
         });
         Window w;
-        w.window.m_cloudRadio->setChecked(true);
+        w.window.chooseAgentConnection(QStringLiteral("cloud"));
         QVERIFY(w.window.m_ownKeySettings->isHidden());
-        w.window.m_ownKeyRadio->setChecked(true);
+        w.window.chooseAgentConnection(QStringLiteral("own"));
         QVERIFY(!w.window.m_ownKeySettings->isHidden());
+        // One protocol is in use, and only its fields show.
+        auto *anthropicRows = w.window.m_ownKeySettings->findChild<QWidget *>(QStringLiteral("providerRows.anthropic"));
+        auto *openaiRows = w.window.m_ownKeySettings->findChild<QWidget *>(QStringLiteral("providerRows.openai"));
+        QVERIFY(anthropicRows && openaiRows);
+        w.window.chooseAgentProtocol(QStringLiteral("openai"));
+        QCOMPARE(w.window.activeProviderId(), QStringLiteral("openai"));
+        QVERIFY(anthropicRows->isHidden() && !openaiRows->isHidden());
         // No model typed: the service's own default, and none sent.
-        w.window.m_anthropicActiveRadio->setChecked(true);
+        w.window.chooseAgentProtocol(QStringLiteral("anthropic"));
+        QVERIFY(!anthropicRows->isHidden() && openaiRows->isHidden());
         w.window.m_anthropicModel->clear();
         w.window.updateAgentModelChoices();
         QCOMPARE(w.window.m_agentModels, QStringList{QStringLiteral("default")});

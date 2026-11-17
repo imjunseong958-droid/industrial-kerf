@@ -135,8 +135,8 @@ struct Format {
 
 // The layout at 1600 x 1000, in window coordinates (ui/stage_shell.h).
 const Format kFormats[] = {
-    {"169", QSize(1920, 1080), QRect(768, 40, 832, 420), QRect(832, 52, 704, 396), QRect(320, 40, 448, 960), QRect(768, 460, 832, 540)},
-    {"916", QSize(1080, 1920), QRect(768, 40, 832, 614), QRect(1018, 52, 332, 590), QRect(320, 40, 448, 960), QRect(768, 654, 832, 346)},
+    {"169", QSize(1920, 1080), QRect(728, 40, 872, 420), QRect(812, 52, 704, 396), QRect(280, 40, 448, 960), QRect(728, 460, 872, 540)},
+    {"916", QSize(1080, 1920), QRect(728, 40, 872, 614), QRect(998, 52, 332, 590), QRect(280, 40, 448, 960), QRect(728, 654, 872, 346)},
 };
 
 QRect inWindow(QWidget *widget, QWidget *window) { return QRect(widget->mapTo(window, QPoint()), widget->size()); }
@@ -196,11 +196,14 @@ private slots:
             checkBase(window, format);
             checkNothingElseShows(window);
             // One painted hairline between the picture and the timeline, and
-            // none beside the sidebar: its own colour sets it off.
+            // one where the sidebar ends, inside the conversation's left edge.
             {
                 const QImage shot = window.grab().toImage();
                 const int chrome = tokens::color(tokens::chrome).red();
-                QVERIFY(shot.pixelColor(format.conversation.left(), format.conversation.top() + 100).red() <= chrome);
+                QVERIFY(shot.pixelColor(format.conversation.left(), format.conversation.top() + 100).red() > chrome);
+                QVERIFY(shot.pixelColor(format.conversation.left() + 2, format.conversation.top() + 100).red() <= chrome);
+                // It runs up through the toolbar, to the window's top.
+                QVERIFY(shot.pixelColor(format.conversation.left(), 20).red() > chrome);
                 // Over the timeline under a wide picture, at its left beside a vertical one.
                 const QPoint timelineSeam = format.timeline.top() > 40 ? format.timeline.topLeft() + QPoint(100, 0) : format.timeline.topLeft() + QPoint(0, 100);
                 QVERIFY(shot.pixelColor(timelineSeam).red() > chrome);
@@ -363,7 +366,7 @@ private slots:
         // A key of one's own, its fields under its choice; and a models file
         // that names one model.
         const auto connection = qScopeGuard([] { QSettings().remove(QStringLiteral("agent/connection")); });
-        window.m_ownKeyRadio->setChecked(true);
+        window.chooseAgentConnection(QStringLiteral("own"));
         window.showSettings(QStringLiteral("ai"));
         QVERIFY(save(QStringLiteral("settings-ai-own-key")));
         window.handleEvent(QJsonObject{

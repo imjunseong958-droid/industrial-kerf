@@ -319,7 +319,7 @@ constexpr int bin = 272;        // the Media bin's width where it has a column o
 constexpr int mediaBand = 152;  // the Media band's height, between the picture and the timeline
 constexpr int mediaBandTimelineLeast = 200; // what it leaves the timeline under it before the picture gives way
 // The minimal layout (ui/stage_shell.h).
-constexpr int sidebar = 320;            // the folders and conversations, at the left, until its edge is dragged
+constexpr int sidebar = 280;            // the folders and conversations, at the left, until its edge is dragged
 constexpr int sidebarLeast = 232;       // how narrow a drag leaves it
 constexpr int sidebarLeaves = 640;      // and what it leaves of the window at least, however wide it is dragged
 constexpr int sidebarGrip = 16;         // what of its edge takes the drag, half either side of it

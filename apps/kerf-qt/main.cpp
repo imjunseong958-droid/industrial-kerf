@@ -9,12 +9,14 @@
 #include "main_window.h"
 #include "project_launcher.h"
 #include "project_link.h"
+#include "secret_store.h"
 #include "settings_migration.h"
 #include "update_notice.h"
 
 #include <QApplication>
 #include <QDir>
 #include <QEventLoop>
+#include <QJsonObject>
 #include <QPixmap>
 #include <QPointer>
 #include <QRect>
@@ -59,11 +61,13 @@ int main(int argc, char **argv) {
 #endif
     // A smoke run may keep its settings in a folder of its own (INI files),
     // so a capture neither reads nor changes the user's: set before the
-    // first QSettings is made.
+    // first QSettings is made. Its keys stay in that folder too, as where no
+    // keychain can be reached, so it never asks for the user's.
     for (int i = 1; i + 1 < argc; ++i)
         if (QString::fromUtf8(argv[i]) == QStringLiteral("--settings-dir")) {
             QSettings::setDefaultFormat(QSettings::IniFormat);
             QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, QString::fromUtf8(argv[i + 1]));
+            kerf::secrets::call() = [](const QJsonObject &) { return QJsonObject{}; };
         }
     // A panic in the editor's own Rust leaves a report, as kerfd's and the CLI's
     // do, and so does a crash in its C++ or Qt, and a fatal message from Qt

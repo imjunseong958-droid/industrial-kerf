@@ -1,6 +1,7 @@
 // Tests for the editor theme: the dark graphite ramp, type scale, contrast,
 // focus outlines and the flat style sheet.
 
+#include "settings_kit.h"
 #include "fixtures.h"
 #include "ui/components.h"
 #include "design_tokens.h"
@@ -555,9 +556,10 @@ private slots:
                     QCOMPARE(plate.pixelColor(QPoint(1, toolbar->height() - 1) * ratio).rgb(), tokens::color(tokens::sidebar).rgb());
             }
             // The window is titled with the project, so the Window menu,
-            // Mission Control and the Dock name it, and the toolbar shows the same.
+            // Mission Control and the Dock name it; the toolbar names the
+            // conversation in it.
             QCOMPARE(window.windowTitle(), QStringLiteral("Harbor Teaser"));
-            QCOMPARE(window.m_projectTitle->text(), window.windowTitle());
+            QCOMPARE(window.m_projectTitle->text(), window.m_chat->titleText());
             // The title is UI 13, at the leading end after the sidebar's
             // button, clear of the trailing group.
             QLabel *title = window.m_projectTitle;
@@ -743,6 +745,15 @@ private slots:
             // Outside it, the work is there, dimmed.
             QVERIFY(qGray(settings.pixelColor(QPoint(4, 4)).rgb()) < qGray(tokens::color(tokens::chrome).rgb()) + 1);
             QVERIFY(!window.m_preferences->findChild<QDialogButtonBox *>());
+            // Its pages are rows under the page's name, with nothing boxed and
+            // one kind of each control: the kit's, not the platform's.
+            QVERIFY(!window.m_preferences->findChild<QGroupBox *>());
+            QVERIFY(!window.m_preferences->findChild<QRadioButton *>());
+            QVERIFY(!window.m_preferences->findChild<QCheckBox *>());
+            QVERIFY(!window.m_preferences->findChild<QPushButton *>());
+            QVERIFY(!window.m_preferences->findChild<QComboBox *>());
+            QVERIFY(!window.m_preferences->findChild<QFrame *>(QStringLiteral("settingsCard")));
+            QCOMPARE(window.m_preferences->findChildren<ui::SettingsPage *>().size(), window.m_settingsIds.size());
             save(settings, QStringLiteral("settings-%1").arg(name));
             // Its pages are named down its side; each name shows its page.
             QCOMPARE(window.m_settingsIds, (QStringList{QStringLiteral("account"), QStringLiteral("ai"), QStringLiteral("models"),

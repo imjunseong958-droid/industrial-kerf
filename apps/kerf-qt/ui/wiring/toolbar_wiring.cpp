@@ -222,6 +222,27 @@ void ToolbarWiring::buildToolbar(const QHash<QString, QMenu *> &menus) {
         label->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
         label->installEventFilter(w);
     }
+    // The title is the conversation's name, with a chevron after it for what
+    // can be done with the conversation: the panel has no strip of its own.
+    if (w->m_chat) {
+        w->m_chat->setHeaderShown(false);
+        m_titleMenu = new ui::IconButton(QStringLiteral("g-chev"), ui::IconButton::Size::S20, m_titleBox);
+        m_titleMenu->setObjectName(QStringLiteral("toolbarTitleMenu"));
+        m_titleMenu->setCheckable(false);
+        m_titleMenu->setFocusPolicy(Qt::TabFocus);
+        m_titleMenu->setAccessibleName(QStringLiteral("Conversation"));
+        m_titleMenu->setTip(QStringLiteral("Rename, archive, more"));
+        connect(m_titleMenu, &QAbstractButton::clicked, this, [this] {
+            ui::popupMenu(m_window->m_chat->buildMoreMenu(), m_window->m_projectTitle);
+        });
+        // Renamed where it is named: the field takes the title's place.
+        QLineEdit *editor = w->m_chat->titleEditor();
+        const bool editing = !editor->isHidden();
+        editor->setParent(m_titleBox);
+        editor->setVisible(editing);
+        connect(w->m_chat, &ChatPanel::titleChanged, this, &ToolbarWiring::layoutTitle);
+    }
+
     // "Edited 2 min ago", in the title's tip, moves on by itself.
     m_titleTimer = new QTimer(this);
     m_titleTimer->setInterval(30'000);
@@ -450,6 +471,11 @@ QString ToolbarWiring::titleText() const {
     return project.isEmpty() ? sequence : QStringLiteral("%1 · %2").arg(project, sequence);
 }
 
+QString ToolbarWiring::shownTitle() const {
+    const ChatPanel *chat = m_window->m_chat;
+    return chat && !chat->headerShown() ? chat->titleText() : titleText();
+}
+
 QString ToolbarWiring::normalSubtitle() const {
     const QJsonObject snapshot = m_bus->snapshot();
     if (snapshot.isEmpty()) return QString();
@@ -527,21 +553,27 @@ void ToolbarWiring::layoutTitle() {
     if (!title || !subtitle || !m_titleBox) return;
     title->ensurePolished();
     subtitle->ensurePolished();
-    const QString full = titleText();
+    const QString full = shownTitle();
     const QString sub = subtitleText();
+    // The chevron after a conversation's name, and its room.
+    QLineEdit *editor = m_titleMenu ? w->m_chat->titleEditor() : nullptr;
+    const bool editing = editor && !editor->isHidden();
+    const int chevron = m_titleMenu ? m_titleMenu->width() + 2 : 0;
     const QFontMetrics metrics(title->font());
     const QFontMetrics subMetrics(subtitle->font());
     // One line: the title, then what is going on, in what the row leaves them.
     // The title gives way first only when there is nothing else to say.
-    const int room = std::max(0, m_titleBox->width() - kTitleClearance);
+    const int room = std::max(0, m_titleBox->width() - kTitleClearance - chevron);
     const int subWidth = sub.isEmpty() ? 0 : std::min(subMetrics.horizontalAdvance(sub) + 2, room * 3 / 5);
     const int gap = sub.isEmpty() ? 0 : 12;
     const int width = std::min(metrics.horizontalAdvance(full) + 2, std::max(0, room - subWidth - gap));
     const QString shown = metrics.horizontalAdvance(full) + 2 > width ? metrics.elidedText(full, Qt::ElideRight, width) : full;
     title->setText(shown);
     // The whole of a shortened title; else when it was edited and at which
-    // revision, for whoever asks.
-    ui::setTip(title, shown == full ? normalSubtitle() : full);
+    // revision, for whoever asks, after the project a conversation is in.
+    QString about = normalSubtitle();
+    if (m_titleMenu) about = about.isEmpty() ? titleText() : QStringLiteral("%1 · %2").arg(titleText(), about);
+    ui::setTip(title, shown == full ? about : full);
     const int subRoom = std::max(0, room - width - gap);
     subtitle->setText(subMetrics.elidedText(sub, Qt::ElideRight, subRoom));
     // The whole of a long message, and an offline or error state in its colour.
@@ -552,9 +584,16 @@ void ToolbarWiring::layoutTitle() {
                                 .arg(tokens::color(problem ? tokens::neg : tokens::ink3).name()));
     const int top = (m_titleBox->height() - 16) / 2;
     title->setGeometry(0, top, width, 16);
+    title->setVisible(!editing);
+    if (m_titleMenu) {
+        m_titleMenu->move(width + 2, (m_titleBox->height() - m_titleMenu->height()) / 2);
+        m_titleMenu->setVisible(!editing);
+        // The field it is renamed in lies where the name was, with room to type.
+        if (editing) editor->setGeometry(-7, (m_titleBox->height() - 24) / 2, std::min(room, std::max(width + 80, 240)), 24);
+    }
     // The smaller line sits on the title's baseline.
-    subtitle->setGeometry(width + gap, top + 1, subRoom, 16);
-    subtitle->setVisible(!sub.isEmpty());
+    subtitle->setGeometry(width + chevron + gap, top + 1, subRoom, 16);
+    subtitle->setVisible(!sub.isEmpty() && !editing);
 }
 
 bool ToolbarWiring::eventFilter(QObject *watched, QEvent *event) {

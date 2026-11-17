@@ -241,6 +241,12 @@ public:
     // ---- parts -------------------------------------------------------------
     QLabel *title() const { return m_title; }
     QLineEdit *titleEditor() const { return m_titleEdit; }
+    // The conversation's name, in full ("New conversation" before it has one).
+    QString titleText() const;
+    // The name and More may be the window's toolbar's to show: then the panel
+    // has no strip of its own, and what is said starts at its top.
+    void setHeaderShown(bool shown);
+    bool headerShown() const { return m_headerShown; }
     // Renames the conversation in place: the title becomes a field.
     void startRename();
     ChatIconButton *moreButton() const { return m_more; }
@@ -258,6 +264,8 @@ public:
     QMenu *buildMoreMenu();
 
 signals:
+    // The conversation's name changed, or is being edited, or no longer is.
+    void titleChanged();
     // Esc reached the composer with nothing of its own to stop or cancel.
     void escapeUnused();
     // Ask again on a failed or stopped answer: the request to send again.
@@ -391,6 +399,8 @@ private:
 
     QLabel *m_title = nullptr;
     QLineEdit *m_titleEdit = nullptr;
+    QWidget *m_header = nullptr;
+    bool m_headerShown = true;
     ChatIconButton *m_more = nullptr;
     ui::FadeScrollArea *m_list = nullptr;
     QWidget *m_content = nullptr;

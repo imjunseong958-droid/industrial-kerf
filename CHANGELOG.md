@@ -84,6 +84,17 @@ on `main`; its section here becomes the release's notes on GitHub
   for the interface, and for the conversation the same or a serif (Noto Serif,
   with Nanum Myeongjo for Korean) in three sizes. Korean under Inter is set in
   Pretendard instead of whatever the system has. The fonts come with Kerf.
+- Settings' pages are rows, not boxes: each setting's name with a short line
+  under it and its control at the row's end, a hairline between rows. A key of
+  your own shows one protocol's fields at a time and keeps what you type as
+  you leave a field; update notices and MCP tools are switches.
+- The sidebar is narrower and quieter. New and Search are an icon and a word
+  with nothing round them, and Search is typed into where it is. A folder has
+  its glyph, or a small picture of the project once it has been opened, and
+  its conversations start under its name. A line marks where the sidebar ends.
+- The toolbar is titled with the conversation, and the chevron after its name
+  renames, archives or deletes it; the conversation no longer has a strip of
+  its own under the toolbar. The window is still titled with the project.
 
 ## 0.1.2
 

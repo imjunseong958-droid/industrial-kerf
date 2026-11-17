@@ -3,6 +3,7 @@
 // button; and for what moved out of it: the menu the account opens and the
 // format segments in the timeline's strip.
 
+#include "settings_kit.h"
 #include "fixtures.h"
 #include "test_registry.h"
 
@@ -264,9 +265,9 @@ private slots:
     void theSidebarsFootNamesTheAccount() {
         MainWindow window{QString(), QString()};
         SidebarAccount *account = window.m_sidebar->accountRow();
-        window.m_claudeCodeRadio->setChecked(true);
+        window.chooseAgentConnection(QStringLiteral("claude-code"));
         QCOMPARE(account->title(), QStringLiteral("Claude Code"));
-        window.m_cloudRadio->setChecked(true);
+        window.chooseAgentConnection(QStringLiteral("cloud"));
         QCOMPARE(account->title(), QStringLiteral("Kerf Cloud"));
         QCOMPARE(account->subtitle(), QStringLiteral("Not signed in"));
         QVERIFY(!window.cloudSignedIn());
@@ -275,7 +276,7 @@ private slots:
         QVERIFY(window.cloudSignedIn());
         QCOMPARE(account->title(), QStringLiteral("mina@example.com"));
         QCOMPARE(account->subtitle(), QStringLiteral("Kerf Cloud · Pro plan"));
-        QCOMPARE(window.m_accountStatus->text().section(QStringLiteral("  ·  "), 0, 0), QStringLiteral("Signed in as mina@example.com"));
+        QCOMPARE(window.m_accountRow->description().section(QStringLiteral("  ·  "), 0, 0), QStringLiteral("Signed in as mina@example.com"));
         // Signed in, the menu offers the way out.
         window.m_toolbarWiring->buildAppMenu();
         QVERIFY(findAction(window.m_toolbarWiring->appMenu(), QStringLiteral("appMenu.signOut")));
@@ -584,8 +585,17 @@ private slots:
             QCoreApplication::processEvents();
             QLabel *title = window.m_projectTitle;
             QLabel *subtitle = window.m_projectSubtitle;
-            QCOMPARE(title->text(), QStringLiteral("Atlas · 30 s spot v7"));
-            QCOMPARE(ui::tipName(title), QStringLiteral("Edited 2 min ago · rev 22"));
+            // The bar is titled with the conversation, as the window is with
+            // the project; the project, and when it was edited, are its tip.
+            QCOMPARE(title->text(), QStringLiteral("New conversation"));
+            QCOMPARE(ui::tipName(title), QStringLiteral("Atlas · 30 s spot v7 · Edited 2 min ago · rev 22"));
+            // Its chevron follows it, and opens what can be done with the
+            // conversation; the panel has no strip of its own for that.
+            ui::IconButton *chevron = wiring->titleMenuButton();
+            QVERIFY(chevron && chevron->isVisible());
+            QCOMPARE(inBar(chevron).left(), inBar(title).right() + 1 + 2);
+            QVERIFY(!window.m_chat->headerShown());
+            QVERIFY(!window.m_chat->findChild<QWidget *>(QStringLiteral("chatHeader"))->isVisible());
             QVERIFY(!subtitle->isVisible());
             // After the sidebar's button, centred in the bar's height.
             QCOMPARE(inBar(title).left() - inBar(window.m_sidebarButton).right() - 1, 8);
@@ -598,7 +608,7 @@ private slots:
             window.showStatus(QStringLiteral("Saved preset looks/dusk.preset"), 0);
             QVERIFY(subtitle->isVisible());
             QCOMPARE(subtitle->text(), QStringLiteral("Saved preset looks/dusk.preset"));
-            QCOMPARE(inBar(subtitle).left() - inBar(title).right() - 1, 12);
+            QCOMPARE(inBar(subtitle).left() - inBar(chevron).right() - 1, 12);
             QVERIFY(inBar(subtitle).right() < inBar(window.m_exportButton).left());
             window.showStatus(QString(), 0);
         }
@@ -651,12 +661,11 @@ private slots:
             QCOMPARE(frame(window.m_panelButton).right() + 1, toolbar->width() - 12);
             // In a window too narrow for the sidebar, the bar has its menu.
             QCOMPARE(wiring->appMenuButton()->isVisible(), size < tokens::layout::sidebarWindowLeast);
-            // The title keeps between the groups, shortened when it must be.
+            // The title keeps between the groups; the project's long name is
+            // the window's and the title's tip, not the bar's to shorten.
             QLabel *title = window.m_projectTitle;
-            QVERIFY(!title->text().isEmpty());
-            QVERIFY2(title->text() != fullTitle, qPrintable(title->text()));
-            QVERIFY(title->text().endsWith(QChar(0x2026)));
-            QCOMPARE(ui::tipName(title), fullTitle);
+            QCOMPARE(title->text(), QStringLiteral("New conversation"));
+            QVERIFY(ui::tipName(title).startsWith(fullTitle));
             QVERIFY(QFontMetrics(title->font()).horizontalAdvance(title->text()) <= title->width());
             QVERIFY(frame(title).left() > frame(window.m_sidebarButton).right());
             QVERIFY(frame(title).right() < frame(window.m_exportButton).left());
