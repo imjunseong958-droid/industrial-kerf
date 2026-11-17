@@ -328,7 +328,7 @@ constexpr int sidebarGripLine = 2;      // the line it shows under the pointer
 constexpr int sidebarMost(int window) { return window - sidebarLeaves > sidebarLeast ? window - sidebarLeaves : sidebarLeast; }
 constexpr int sidebarFoot = 52;         // the account at its foot
 constexpr int sidebarWindowLeast = 1100; // the window's width under which the sidebar gives way
-constexpr int rail = 480;               // the conversation, beside an open panel
+constexpr int rail = 448;               // the conversation, beside an open panel
 constexpr int railLeast = 320;          // its least width
 constexpr int workLeast = 600;          // what it leaves the panel before it gives way
 constexpr int conversationColumn = 720; // the width its text keeps when it has the room to itself

@@ -109,13 +109,13 @@ private slots:
         const stage::Rects r = stage::rects(QSize(1600, 1000), kWide);
         QVERIFY(r.wide);
         QCOMPARE(r.sidebar, QRect(0, 40, 320, 960));
-        QCOMPARE(r.conversation, QRect(320, 40, 480, 960));
-        QCOMPARE(r.panel, QRect(800, 40, 800, 960));
-        QCOMPARE(r.slot, QRect(800, 40, 800, 420));
-        QCOMPARE(r.picture, QRect(848, 52, 704, 396));
+        QCOMPARE(r.conversation, QRect(320, 40, 448, 960));
+        QCOMPARE(r.panel, QRect(768, 40, 832, 960));
+        QCOMPARE(r.slot, QRect(768, 40, 832, 420));
+        QCOMPARE(r.picture, QRect(832, 52, 704, 396));
         QVERIFY(r.transport.isEmpty());
         QVERIFY(r.media.isEmpty());
-        QCOMPARE(r.timeline, QRect(800, 460, 800, 540));
+        QCOMPARE(r.timeline, QRect(768, 460, 832, 540));
         expectFilled(r, QSize(1600, 1000), "16:9");
     }
 
@@ -124,11 +124,11 @@ private slots:
         for (const double aspect : {kPortrait, kFeed, 1.0}) {
             const stage::Rects r = stage::rects(QSize(1600, 1000), aspect);
             QVERIFY(!r.wide);
-            QCOMPARE(r.conversation, QRect(320, 40, 480, 960));
-            QCOMPARE(r.slot, QRect(800, 40, 800, 614));
+            QCOMPARE(r.conversation, QRect(320, 40, 448, 960));
+            QCOMPARE(r.slot, QRect(768, 40, 832, 614));
             QCOMPARE(r.picture, stage::fitted(stage::paddedSlot(r.slot), aspect));
             QVERIFY(r.transport.isEmpty());
-            QCOMPARE(r.timeline, QRect(800, 654, 800, 346));
+            QCOMPARE(r.timeline, QRect(768, 654, 832, 346));
             expectFilled(r, QSize(1600, 1000), "vertical");
         }
     }
@@ -138,9 +138,9 @@ private slots:
         {
             const stage::Rects r = stage::rects(QSize(1080, 700), kWide);
             QVERIFY(r.sidebar.isEmpty());
-            QCOMPARE(r.conversation, QRect(0, 40, 480, 660));
-            QCOMPARE(r.slot, QRect(480, 40, 600, 289));
-            QCOMPARE(r.timeline, QRect(480, 329, 600, 371));
+            QCOMPARE(r.conversation, QRect(0, 40, 448, 660));
+            QCOMPARE(r.slot, QRect(448, 40, 632, 289));
+            QCOMPARE(r.timeline, QRect(448, 329, 632, 371));
             expectFilled(r, QSize(1080, 700), "least");
         }
         // Narrow: the conversation gives way, to 320 and no further.
@@ -155,9 +155,9 @@ private slots:
         // Large: the picture pillarboxes in black in its slot.
         {
             const stage::Rects r = stage::rects(QSize(2560, 1440), kWide);
-            QCOMPARE(r.conversation.width(), 480);
-            QCOMPARE(r.slot, QRect(800, 40, 1760, 612));
-            QCOMPARE(r.timeline, QRect(800, 652, 1760, 788));
+            QCOMPARE(r.conversation.width(), 448);
+            QCOMPARE(r.slot, QRect(768, 40, 1792, 612));
+            QCOMPARE(r.timeline, QRect(768, 652, 1792, 788));
             QCOMPARE(r.picture, stage::fitted(stage::paddedSlot(r.slot), kWide));
             QCOMPARE(r.picture.height(), 588);
             expectFilled(r, QSize(2560, 1440), "large");
@@ -221,17 +221,17 @@ private slots:
             QCOMPARE(r.conversation, closed.conversation);
             QCOMPARE(r.panel, closed.panel);
             QCOMPARE(r.slot, closed.slot);
-            QCOMPARE(r.media, QRect(800, 460, 800, tokens::layout::mediaBand));
-            QCOMPARE(r.timeline, QRect(800, 612, 800, 388));
+            QCOMPARE(r.media, QRect(768, 460, 832, tokens::layout::mediaBand));
+            QCOMPARE(r.timeline, QRect(768, 612, 832, 388));
             expectFilled(r, QSize(1600, 1000), "band");
         }
         {
             // Under an upright picture the timeline would be left under its
             // least: the picture gives way the rest.
             const stage::Rects r = stage::rects(QSize(1600, 1000), kPortrait, 40, open);
-            QCOMPARE(r.slot, QRect(800, 40, 800, 608));
-            QCOMPARE(r.media, QRect(800, 648, 800, 152));
-            QCOMPARE(r.timeline, QRect(800, 800, 800, tokens::layout::mediaBandTimelineLeast));
+            QCOMPARE(r.slot, QRect(768, 40, 832, 608));
+            QCOMPARE(r.media, QRect(768, 648, 832, 152));
+            QCOMPARE(r.timeline, QRect(768, 800, 832, tokens::layout::mediaBandTimelineLeast));
             expectFilled(r, QSize(1600, 1000), "band upright");
         }
         for (const double aspect : {kWide, kPortrait, kFeed, 1.0}) {
@@ -245,8 +245,8 @@ private slots:
         open.timeline = false;
         {
             const stage::Rects r = stage::rects(QSize(1600, 1000), kWide, 40, open);
-            QCOMPARE(r.media, QRect(800, 760, 800, 152));
-            QCOMPARE(r.transport, QRect(800, 912, 800, tokens::layout::pictureTransportLow));
+            QCOMPARE(r.media, QRect(768, 760, 832, 152));
+            QCOMPARE(r.transport, QRect(768, 912, 832, tokens::layout::pictureTransportLow));
             expectFilled(r, QSize(1600, 1000), "band over the transport");
         }
         // Over a timeline alone, at the panel's top.
@@ -254,8 +254,8 @@ private slots:
         open.picture = false;
         {
             const stage::Rects r = stage::rects(QSize(1600, 1000), kWide, 40, open);
-            QCOMPARE(r.media, QRect(800, 40, 800, 152));
-            QCOMPARE(r.timeline, QRect(800, 192, 800, 808));
+            QCOMPARE(r.media, QRect(768, 40, 832, 152));
+            QCOMPARE(r.timeline, QRect(768, 192, 832, 808));
             expectFilled(r, QSize(1600, 1000), "band over the timeline");
         }
         // With the panel closed there is no band: it belongs to the panel.
@@ -421,7 +421,7 @@ private slots:
         window.applySnapshot(snapshotOf(QSize(1080, 1920)));
         // At once: no animation, nothing left to process.
         expectAt(9.0 / 16.0);
-        QCOMPARE(window.m_viewer->videoRect(), QRectF(stage::fitted(stage::paddedSlot(QRect(0, 0, 800, 614)), 9.0 / 16.0)));
+        QCOMPARE(window.m_viewer->videoRect(), QRectF(stage::fitted(stage::paddedSlot(QRect(0, 0, 832, 614)), 9.0 / 16.0)));
         window.applySnapshot(snapshotOf(QSize(1080, 1350)));
         expectAt(4.0 / 5.0);
         window.resize(1280, 800);
@@ -457,7 +457,7 @@ private slots:
             QVERIFY(QTest::qWaitForWindowExposed(&window));
             QCOMPARE(window.m_shell->sheet(), StageShell::Sheet::None);
             QVERIFY(window.m_chat->isVisible());
-            QCOMPARE(inWindow(window.m_chat, &window), QRect(320, 40, 480, 960));
+            QCOMPARE(inWindow(window.m_chat, &window), QRect(320, 40, 448, 960));
             window.close();
         }
         settings.remove(QStringLiteral("workspace"));
@@ -714,12 +714,12 @@ private slots:
         stage::Panes picture;
         picture.timeline = false;
         const stage::Rects wide = stage::rects(QSize(1600, 1000), kWide, 40, picture);
-        QCOMPARE(wide.slot, QRect(800, 40, 800, 872));
-        QCOMPARE(wide.transport, QRect(800, 912, 800, 88));
+        QCOMPARE(wide.slot, QRect(768, 40, 832, 872));
+        QCOMPARE(wide.transport, QRect(768, 912, 832, 88));
         expectFilled(wide, QSize(1600, 1000), "picture");
         const stage::Rects upright = stage::rects(QSize(1600, 1000), kPortrait, 40, picture);
-        QCOMPARE(upright.slot, QRect(800, 40, 800, 872));
-        QCOMPARE(upright.transport, QRect(800, 912, 800, 88));
+        QCOMPARE(upright.slot, QRect(768, 40, 832, 872));
+        QCOMPARE(upright.transport, QRect(768, 912, 832, 88));
         expectFilled(upright, QSize(1600, 1000), "upright picture");
 
         stage::Panes timeline;
@@ -765,7 +765,7 @@ private slots:
         QCoreApplication::processEvents();
         QVERIFY(window.m_viewer->isVisible());
         QVERIFY(window.m_timelinePanel->isVisible());
-        QCOMPARE(inWindow(window.m_chat, &window), QRect(320, 40, 480, 960));
+        QCOMPARE(inWindow(window.m_chat, &window), QRect(320, 40, 448, 960));
         QVERIFY(window.m_chat->composerWidget()->stamped());
         QVERIFY(window.m_commands->action(QStringLiteral("view.picture"))->isChecked());
 
@@ -1470,10 +1470,10 @@ private slots:
         panes.reel = true;
         const stage::Rects r = stage::rects(QSize(1600, 1000), kWide, 40, panes);
         // The stage reaches over the conversation, with the strip over the picture.
-        QCOMPARE(r.conversation, QRect(320, 40, 480, 960));
-        QCOMPARE(r.slot, QRect(680, 40, 920, 518));
-        QCOMPARE(r.reel, QRect(713, 64, 460, 40));
-        QCOMPARE(r.timeline.left(), 680);
+        QCOMPARE(r.conversation, QRect(320, 40, 448, 960));
+        QCOMPARE(r.slot, QRect(648, 40, 952, 536));
+        QCOMPARE(r.reel, QRect(681, 64, 460, 40));
+        QCOMPARE(r.timeline.left(), 648);
     }
 
     void thePictureFollowsKerf() {
