@@ -102,7 +102,7 @@ void MainWindow::setConnection(const QString &status, const QString &message) {
     if (m_toolbarWiring) {
         // The toolbar's subtitle says so while it lasts.
         m_toolbarWiring->m_connection = m_connected ? QStringLiteral("ready")
-            : status == QStringLiteral("connecting") ? QStringLiteral("connecting") : QStringLiteral("disconnected");
+            : status == QStringLiteral("connecting") || status == QStringLiteral("none") ? status : QStringLiteral("disconnected");
         layoutProjectTitle();
     }
     if (!m_connected) {

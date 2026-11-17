@@ -7,7 +7,7 @@
     With nothing on PATH but Windows' own folders, and no Qt plugin path from the
     environment, has kerfd import a clip the package's ffmpeg made, and runs ffmpeg -version,
     ffprobe -version, kerf --version and kerfd --endpoint from the package, and opens
-    the editor's start window and takes a picture of it.
+    the editor with no project and takes a picture of it.
 
     A machine that builds or tests Kerf has Visual Studio's C++ runtime in System32,
     so a package missing one of those libraries still runs there. While the editor
@@ -122,7 +122,7 @@ try {
         throw "kerfd.exe did not probe the clip with the package's ffprobe (it is 320x240, 25 fps, 2 s): $answers"
     }
 
-    # The editor, opening its start window and taking a picture of it.
+    # The editor, opening with no project and taking a picture of it.
     $shot = Join-Path $scratch 'start.png'
     $editor = Start-Process -FilePath (Join-Path $Package 'kerf-qt.exe') -PassThru -ArgumentList @(
         '--settings-dir', "`"$(Join-Path $scratch 'settings')`"",

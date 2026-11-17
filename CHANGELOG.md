@@ -121,6 +121,9 @@ on `main`; its section here becomes the release's notes on GitHub
   and one size. The timeline's timecode and track names start where its
   strip of tools does.
   The models Kerf offers are named with a capital (Default, Opus).
+- Kerf opens on the project you last worked on. The start window, with its
+  one question, is gone: a new conversation already lists your folders, with
+  Open Folder and New Project, and that is what the first run shows.
 - Text is the colour of paper, not white: the same greys, warmed a little.
   The sidebar, the toolbar's title, the composer's chips and Settings are set
   a size larger, and what you type sits in the middle of the composer's box.

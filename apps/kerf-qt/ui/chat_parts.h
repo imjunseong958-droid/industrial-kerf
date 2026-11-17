@@ -72,9 +72,9 @@ private:
     QVariantAnimation *m_rotate = nullptr;
 };
 
-// A request to try, set as the rows of the card over it are: 34 tall,
-// radius 6, an 18 pt g-cdr in ink3 12 in, the words UI 15/20 ink (timecodes
-// in mono ink2); a raised wash under the pointer.
+// A request to try, quieter than the rows of the card over it: 32 tall,
+// radius 6, the words UI 14/20 ink2 starting 12 in, with no mark before them
+// (timecodes in mono ink2); ink and a raised wash under the pointer.
 class SuggestionButton final : public QAbstractButton {
     Q_OBJECT
 public:

@@ -131,6 +131,13 @@ MainWindow::MainWindow(const QString &projectDirectory, const QString &kerfdBina
     connect(&m_exactSeekTimer, &QTimer::timeout, this, &MainWindow::settlePointerSeek);
     setConnection(QStringLiteral("connecting"));
 #ifndef KERF_QT_TESTING
+    if (m_projectDirectory.isEmpty()) {
+        // No folder yet (Kerf was started with no project to go back to):
+        // there is nothing to connect to, and nothing wrong to say. The new
+        // conversation offers the folders, and opening one opens its editor.
+        setConnection(QStringLiteral("none"));
+        return;
+    }
     m_bridge = kerf_bridge_new(m_projectDirectory.toUtf8().constData(), m_kerfdBinary.toUtf8().constData());
     if (!m_bridge) {
         setConnection(QStringLiteral("disconnected"), QStringLiteral("Could not start the runtime connection."));
@@ -923,15 +930,17 @@ void MainWindow::openProjectFolder() {
     const QString start = m_projectDirectory.isEmpty() ? QDir::homePath() : QFileInfo(m_projectDirectory).absolutePath();
     const QString path = QFileDialog::getExistingDirectory(this, QStringLiteral("Open Project"), start);
     if (path.isEmpty()) return;
-    if (!QFileInfo::exists(QDir(path).filePath(QStringLiteral("project.kerf"))) &&
+    // A folder of footage: a project starts in it, with its media brought in.
+    const bool starts = !QFileInfo::exists(QDir(path).filePath(QStringLiteral("project.kerf")));
+    if (starts &&
         QMessageBox::question(this, QStringLiteral("Open Project"),
                               QStringLiteral("“%1” has no project.kerf. Start a new project in it?").arg(QFileInfo(path).fileName())) !=
             QMessageBox::Yes)
         return;
-    openProject(path);
+    openProject(path, starts);
 }
 
-void MainWindow::openProject(const QString &path) {
+void MainWindow::openProject(const QString &path, bool starts) {
     if (path.isEmpty()) return;
     const QString clean = QDir::cleanPath(QFileInfo(path).absoluteFilePath());
     if (!m_projectDirectory.isEmpty() && clean == QDir::cleanPath(QFileInfo(m_projectDirectory).absoluteFilePath())) {
@@ -939,7 +948,7 @@ void MainWindow::openProject(const QString &path) {
         activateWindow();
         return;
     }
-    emit projectOpenRequested(clean);
+    emit projectOpenRequested(clean, starts);
 }
 
 void MainWindow::buildRecentMenu(QMenu *menu) {

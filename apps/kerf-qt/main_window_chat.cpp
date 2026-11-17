@@ -27,6 +27,7 @@
 #include "wiring/main_window_shared.h"
 #include "ui/conversation_model.h"
 #include "wiring/chat_wiring.h"
+#include "wiring/toolbar_wiring.h"
 
 #include <QApplication>
 #include <QClipboard>
@@ -559,7 +560,11 @@ void MainWindow::updateComposerHint() {
     // reason for ai.ask says why and what to do.
     QString placeholder = QStringLiteral("Ask Kerf to make or change something");
     QString tip = QStringLiteral("Return sends · Shift-Return starts a new line");
-    if (!m_connected) {
+    if (m_toolbarWiring && m_toolbarWiring->m_connection == QStringLiteral("none")) {
+        // No folder is open: that comes first, and the folders are offered above.
+        placeholder = QStringLiteral("Open a folder to ask Kerf");
+        tip = QStringLiteral("Open a folder or start a project first");
+    } else if (!m_connected) {
         placeholder = QStringLiteral("Connect to ask Kerf");
         tip = QStringLiteral("Connect to start editing");
     } else if (const QString reason = m_commands ? m_commands->reason(QStringLiteral("ai.ask")) : QString();

@@ -116,16 +116,14 @@ public:
     // What to do once the project is connected: bring the folder's media in
     // (a folder that was no project yet), then send Kerf the request.
     void startWith(const QString &request, bool importFolder);
-    // Takes the place of a start window that looked like `look`, its request box
-    // flying from `box` to the conversation's.
-    void takeOverFrom(const QPixmap &look, const QRect &box);
     // Opens a conversation kept beside this project, once it is connected.
     void openConversation(const QString &id);
 
 signals:
     // File ▸ New Project, Open Project, and Open Recent: open `path` in a
     // window of its own and close this one.
-    void projectOpenRequested(const QString &path);
+    // `starts`: the folder was no project yet, so its media comes in with it.
+    void projectOpenRequested(const QString &path, bool starts = false);
     // The sidebar, on another folder's conversation: open `path` as above, on
     // that conversation (a new one when `conversation` is empty).
     void conversationOpenRequested(const QString &path, const QString &conversation);
@@ -358,7 +356,7 @@ private:
     // Projects: the launcher, a folder, or a recent one.
     void newProject();
     void openProjectFolder();
-    void openProject(const QString &path);
+    void openProject(const QString &path, bool starts = false);
     void buildRecentMenu(QMenu *menu);
 
     // Collaboration over Git. The bridge runs every Git operation; the

@@ -217,6 +217,7 @@ private:
     QString m_checkStatus;      // "", running, done, failed
     double m_checkProgress = 0;
     QString m_checkMessage;
+    // "connecting", "ready", "disconnected", or "none" where no folder is open.
     QString m_connection = QStringLiteral("connecting");
     QHash<QString, QString> m_jobQuality; // render_queue jobId -> quality
     QString m_sentQuality;                // what the toolbar last exported

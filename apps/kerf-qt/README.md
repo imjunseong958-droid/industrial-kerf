@@ -114,10 +114,10 @@ Run workflow checks any tag by hand.
 
 The positional arguments may also be supplied as `KERF_PROJECT_DIR` and
 `KERFD_BIN`; without either, the editor runs the `kerfd` beside itself (the
-installed app carries one), else the one on the `PATH`. Without a project, Kerf opens the start window instead
-(`KERFD_BIN=/path/to/kerfd target/qt/kerf-qt`). For a quick visual smoke
-run, add `--screenshot /tmp/kerf.png --quit-after-ms 900`; without a project
-it captures the start window. `--window-size 1600x1000` sizes the window, and `--settings-dir DIR`
+installed app carries one), else the one on the `PATH`. Without a project, Kerf opens the one last worked on
+(`KERFD_BIN=/path/to/kerfd target/qt/kerf-qt`), or with none to go back to, an
+editor with no folder. For a quick visual smoke
+run, add `--screenshot /tmp/kerf.png --quit-after-ms 900`. `--window-size 1600x1000` sizes the window, and `--settings-dir DIR`
 keeps the run's settings in DIR (INI files) instead of the user's.
 
 The editor and the launcher are dark only, and fill the screen edge to edge
@@ -247,13 +247,14 @@ pauses. Captions, the QC overlap box and safe zones lie over the picture.
 
 ## The layout
 
-**The start window.** With no project, Kerf asks one question beside the recent
-folders. Sending a request opens the chosen folder's editor with the request on
-its way to Kerf. A folder with no `project.kerf` becomes a project, with the media
-at its top level in its media and the timeline left empty. Open without asking opens the folder as it
-is, and New Project… is the Choose a Project window, for templates, presets and
-clones. A request Kerf cannot take yet (no connection set up) waits in the
-composer.
+**Starting.** There is no start window: started without a project, Kerf opens
+the latest recent project that is still on disk (`ProjectLauncher::lastProject`),
+as a coding agent's app opens on what was being worked on. With none, it opens
+an editor with no folder, which starts no `kerfd`; its new conversation offers
+the folders, Open Folder… and New Project… (the Choose a Project window, for
+templates, presets and clones). A folder with no `project.kerf` opened there
+becomes a project, with the media at its top level in its media and the
+timeline left empty.
 
 **The regions** stay flush, with one hairline between them and no cards, radii
 or margins (`ui/stage_shell.h`; `stage::rects()` is the geometry, a pure function
@@ -469,7 +470,7 @@ output (folder, name, codec) is kept per project, keyed by its absolute path.
 ## Projects
 
 A project is a folder: `project.kerf`, a `media/` folder, and a `presets/`
-library. Started without one, Kerf opens the start window (above). Its New
+library. Started without one, Kerf opens the last (above). A new conversation's New
 Project… and File → New Project… open the launcher, like an edit suite's
 Choose a Project window, in the editor's dark graphite and blue accent.
 New Project offers Empty

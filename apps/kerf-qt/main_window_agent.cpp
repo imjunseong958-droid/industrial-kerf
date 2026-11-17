@@ -272,37 +272,6 @@ void MainWindow::flyExportHome() {
     m_motion->fly(home);
 }
 
-void MainWindow::takeOverFrom(const QPixmap &look, const QRect &box) {
-    if (ui::reducedMotion()) return;
-    // The window it follows, laid over this one and fading; the request box
-    // goes on to where this one's is.
-    moves::fadeIn(m_chat, tokens::motion::hover, tokens::motion::settle);
-    QTimer::singleShot(0, this, [this, look, box] {
-        const QPoint shift = m_shell->mapTo(this, QPoint());
-        const QRect window = rect().translated(-shift);
-        StageMotion::Flight room;
-        room.image = look.toImage();
-        room.from = window;
-        room.to = window;
-        room.toOpacity = 0.0;
-        room.duration = tokens::motion::handOver;
-        room.lively = false;
-        room.radius = 0;
-        m_motion->fly(room);
-        const qreal ratio = look.devicePixelRatio();
-        const QRect pixels(QPointF(box.topLeft()).toPoint() * ratio, box.size() * ratio);
-        StageMotion::Flight request;
-        request.image = look.copy(pixels).toImage();
-        request.from = box.translated(-shift);
-        request.to = toShell(m_chat->composerWidget()->box(), m_chat->composerWidget()->box()->rect());
-        request.toOpacity = 0.0;
-        request.duration = tokens::motion::stage;
-        request.lively = false;
-        request.radius = tokens::radius::panel;
-        m_motion->fly(request);
-    });
-}
-
 // With no cut yet there is nothing for a proposal to change on the timeline, so
 // the timeline and the picture show the one Kerf is proposing, as it grows.
 void MainWindow::showProposedCut() {

@@ -1224,6 +1224,12 @@ QStringList ProjectLauncher::recentProjects() {
     return recent.mid(0, kRecentLimit);
 }
 
+QString ProjectLauncher::lastProject() {
+    for (const QString &path : recentProjects())
+        if (QFileInfo::exists(QDir(path).filePath(QStringLiteral("project.kerf")))) return path;
+    return {};
+}
+
 void ProjectLauncher::rememberProject(const QString &path) {
     if (path.isEmpty()) return;
     const QString clean = QDir::cleanPath(QFileInfo(path).absoluteFilePath());

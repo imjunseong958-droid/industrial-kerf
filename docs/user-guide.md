@@ -48,10 +48,11 @@ is out and offers its page; Settings (⌘,) ▸ General turns that off.
 A project is a folder: `project.kerf` (the edit, as text), `media/`, and
 `presets/`.
 
-- **From the start window.** Opened without a project, Kerf shows your recent
-  folders and one question. Pick a folder, say what to make ("a 30-second cut of
-  the best moments"), and send. A folder with no `project.kerf` becomes a project,
-  with the media in it imported. **Open without asking** opens the folder as it is.
+- **Open Kerf.** It opens on the project you last worked on. A new conversation
+  lists your recent folders, with **Open Folder…** and **New Project…** under
+  them; the first time, with no project to go back to, that is what you see.
+  A folder with no `project.kerf` becomes a project, with the media in it
+  imported.
 - **New Project…** (File ▸ New Project…, ⌘N) offers Empty 16:9 and Vertical 9:16,
   a name, a location, a frame rate, and whether to share it with Git or GitHub.
   **From Preset** fills a shared preset's slots with your files. **Clone from
