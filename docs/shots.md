@@ -660,6 +660,26 @@ takes a file too, and `crates/surfaces/kerf-workflow/workflows/shot.json` is the
 start from. `kerf-comfy --list` names those that come with it; the others
 [read a picture back](#a-picture-read-back).
 
+`still` comes with it too, for a picture and not a shot: one frame of the
+model that makes the shots, from the prompt, or of who or what a reference
+shows (`ref=`), saved as a picture. It is what a recipe's first `generate`
+asks for when a later one wants a picture to look like or to start from:
+
+```text
+generate model=still prompt="an orange basketball, studio light" seed=3 out={ball.png}
+generate model=video prompt="a basketball bounces on a court" guide={depth.mp4} ref={ball.png}
+```
+
+```json
+"still": { "run": ["/path/to/kerf-comfy", "--workflow", "still", "{request}"] }
+```
+
+A workflow whose `frames.most` is 1 is a still: it names no `fps`, what it
+`takes` says `"still": true` in place of a rate and a length, and its graph
+ends in a node that saves a picture. Being one frame of a model made for
+motion, it is at that model's size, 832x480 here, and takes seconds where a
+shot takes minutes.
+
 | Blank | What fills it |
 |---|---|
 | `{prompt}`, `{seed}` | What the line asks. With no `seed=`, one is picked and said. |
