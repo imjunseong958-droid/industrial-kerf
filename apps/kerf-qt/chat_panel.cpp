@@ -1,3 +1,4 @@
+#include "project_sidebar.h"
 #include "chat_panel.h"
 
 #include "change_reel.h"
@@ -10,6 +11,8 @@
 #include "stage_motion.h"
 #include "ui/chat_messages.h"
 
+#include <QFileInfo>
+#include <QDir>
 #include <QCoreApplication>
 #include <QDataStream>
 #include <QFontMetricsF>
@@ -178,7 +181,6 @@ ChatPanel::ChatPanel(QWidget *parent) : QWidget(parent) {
     // What a request goes with: the mode, the model and how full the context is.
     m_composer->setAgentControls(true);
     connect(m_composer, &Composer::permissionModeChosen, this, [this](PermissionMode mode) {
-        updateWelcome();
         emit permissionModeChosen(mode);
     });
     connect(m_composer, &Composer::modelChosen, this, [this](const QString &model) { emit moreAction(QStringLiteral("model"), model); });
@@ -195,8 +197,8 @@ ChatPanel::ChatPanel(QWidget *parent) : QWidget(parent) {
 void ChatPanel::refreshFaces() {
     // Nothing to do while it holds what it was made with.
     const QFont face = tokens::font(reading);
-    if (m_welcomeText->font() == face) return;
-    m_welcomeText->setFont(face);
+    if (m_face == face) return;
+    m_face = face;
     m_composer->refreshFaces();
     // The messages are made again, in the face and size chosen now.
     for (const auto &[itemId, widget] : std::as_const(m_shown))
@@ -251,46 +253,99 @@ QWidget *ChatPanel::buildHeader() {
 }
 
 QWidget *ChatPanel::buildWelcome() {
+    // A conversation not yet begun offers where to work and what was last
+    // worked on: the folders, the open one ticked, with the ways to another;
+    // then the latest conversations here, or things to ask where there are none.
     auto *welcome = new QWidget(m_content);
     welcome->setObjectName(QStringLiteral("chatWelcome"));
     auto *layout = new QVBoxLayout(welcome);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(0);
     layout->addStretch(2);
-    m_welcomeTitle = makeLabel(tokens::title, ink);
-    m_welcomeTitle->setObjectName(QStringLiteral("welcomeTitle"));
-    m_welcomeTitle->setText(QStringLiteral("What should Kerf make?"));
-    layout->addWidget(m_welcomeTitle);
-    layout->addSpacing(space::s4);
-    auto *body = new ui::WrapLabel;
-    body->setObjectName(QStringLiteral("welcomeText"));
-    body->setFont(tokens::font(reading));
-    body->setWordWrap(true);
-    m_welcomeText = body;
-    updateWelcome();
-    QPalette palette = body->palette();
-    palette.setColor(QPalette::WindowText, color(ink2));
-    body->setPalette(palette);
-    layout->addWidget(body);
-    layout->addSpacing(space::s16);
-    QLabel *eyebrow = makeLabel(meta, ink3);
-    eyebrow->setText(QStringLiteral("Try asking"));
-    layout->addWidget(eyebrow);
-    layout->addSpacing(space::s4);
-    m_examples = new QWidget;
-    m_examplesLayout = new QVBoxLayout(m_examples);
-    // The suggestions' wash reaches 8 past their words on the left.
-    m_examplesLayout->setContentsMargins(space::s8, 0, 0, 0);
-    m_examplesLayout->setSpacing(0);
-    layout->addWidget(m_examples);
+    auto *column = new QWidget;
+    column->setFixedWidth(kWelcomeColumn);
+    auto *stack = new QVBoxLayout(column);
+    stack->setContentsMargins(0, 0, 0, 0);
+    stack->setSpacing(space::s12);
+    const auto card = [stack](const char *name) {
+        auto *frame = new QFrame;
+        frame->setObjectName(QString::fromLatin1(name));
+        frame->setStyleSheet(QStringLiteral("QFrame#%1 { background: %2; border: 1px solid %3; border-radius: %4px; }")
+                                 .arg(QString::fromLatin1(name), color(tokens::card).name(), color(line).name(QColor::HexArgb))
+                                 .arg(int(radius::panel)));
+        auto *rows = new QVBoxLayout(frame);
+        rows->setContentsMargins(space::s4, space::s4, space::s4, space::s4);
+        rows->setSpacing(0);
+        stack->addWidget(frame);
+        return rows;
+    };
+    m_folderRows = card("welcomeFolders");
+    m_examplesLayout = card("welcomeRecent");
+    m_examples = m_examplesLayout->parentWidget();
+    layout->addWidget(column, 0, Qt::AlignHCenter);
     layout->addStretch(3);
     refillWelcome();
     return welcome;
 }
 
 void ChatPanel::refillWelcome() {
-    for (SuggestionButton *button : std::as_const(m_exampleButtons)) button->deleteLater();
+    const auto clear = [](QLayout *rows) {
+        while (QLayoutItem *item = rows->takeAt(0)) {
+            // Out of the card at once, and gone once whatever pressed it is done.
+            if (QWidget *widget = item->widget()) {
+                widget->hide();
+                widget->setParent(nullptr);
+                widget->deleteLater();
+            }
+            delete item;
+        }
+    };
+    // The folders, the open one ticked; under a hairline, the ways to another.
+    clear(m_folderRows);
+    for (const QString &path : std::as_const(m_folders).first(std::min<qsizetype>(m_folders.size(), kWelcomeFolders))) {
+        auto *row = new SidebarRow(QStringLiteral("g-folder"), QFileInfo(path).fileName());
+        row->setObjectName(QStringLiteral("welcomeFolder"));
+        row->setProperty("folder", path);
+        row->setTicked(path == m_folder);
+        ui::setTip(row, QDir::toNativeSeparators(path));
+        connect(row, &QAbstractButton::clicked, this, [this, path] { emit folderChosen(path); });
+        m_folderRows->addWidget(row);
+    }
+    if (!m_folders.isEmpty()) {
+        auto *rule = new QWidget;
+        rule->setFixedHeight(tokens::layout::seam + 2 * space::s4);
+        rule->setStyleSheet(QStringLiteral("background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 transparent, stop:0.44 transparent, "
+                                           "stop:0.45 %1, stop:0.55 %1, stop:0.56 transparent, stop:1 transparent);")
+                                .arg(color(line).name(QColor::HexArgb)));
+        m_folderRows->addWidget(rule);
+    }
+    auto *open = new SidebarRow(QString(), QStringLiteral("Open Folder…"));
+    open->setObjectName(QStringLiteral("welcomeOpenFolder"));
+    connect(open, &QAbstractButton::clicked, this, &ChatPanel::openFolderRequested);
+    m_folderRows->addWidget(open);
+    auto *fresh = new SidebarRow(QString(), QStringLiteral("New Project…"));
+    fresh->setObjectName(QStringLiteral("welcomeNewProject"));
+    connect(fresh, &QAbstractButton::clicked, this, &ChatPanel::newProjectRequested);
+    m_folderRows->addWidget(fresh);
+
+    // The latest conversations here; with none yet, things to ask.
+    clear(m_examplesLayout);
     m_exampleButtons.clear();
+    QList<ConversationModel::Summary> recent;
+    if (m_conversations)
+        for (const ConversationModel::Summary &summary : m_conversations->list())
+            if (!summary.archived && summary.id != m_conversations->currentId()) recent << summary;
+    std::stable_sort(recent.begin(), recent.end(),
+                     [](const ConversationModel::Summary &a, const ConversationModel::Summary &b) { return a.updated > b.updated; });
+    for (const ConversationModel::Summary &summary : std::as_const(recent).first(std::min<qsizetype>(recent.size(), kWelcomeRecent))) {
+        const QString title = summary.title.isEmpty() ? QStringLiteral("Conversation") : summary.title;
+        auto *row = new SidebarRow(QString(), title);
+        row->setObjectName(QStringLiteral("welcomeConversation"));
+        ui::setTip(row, title);
+        connect(row, &QAbstractButton::clicked, this, [this, id = summary.id] { emit conversationRequested(id); });
+        m_examplesLayout->addWidget(row);
+    }
+    if (!recent.isEmpty()) return;
     QList<QPair<QString, QString>> offered;
     for (const QJsonValue &value : std::as_const(m_steps)) {
         const QJsonObject step = value.toObject();
@@ -310,28 +365,15 @@ void ChatPanel::refillWelcome() {
     }
 }
 
-void ChatPanel::updateWelcome() {
-    if (!m_welcomeText) return;
-    // What an edit comes back as, in the mode the composer is in.
-    QString text = QStringLiteral("Ask for a cut or a change. ");
-    switch (m_composer->permissionMode()) {
-    case PermissionMode::Ask:
-        text += QStringLiteral("Each edit comes back as a proposal you can watch before it touches the sequence.");
-        break;
-    case PermissionMode::AcceptEdits:
-        text += QStringLiteral("Edits go into the sequence as Kerf makes them; Undo takes any of them back.");
-        break;
-    case PermissionMode::Auto:
-        text += QStringLiteral("Edits go into the sequence as Kerf makes them, and it makes the shots it asks for; Undo takes an "
-                               "edit back.");
-        break;
-    }
-    m_welcomeText->setText(text);
+void ChatPanel::setFolders(const QStringList &folders, const QString &current) {
+    if (folders == m_folders && current == m_folder) return;
+    m_folders = folders;
+    m_folder = current;
+    refillWelcome();
 }
 
 void ChatPanel::setPermissionMode(PermissionMode mode) {
     m_composer->setPermissionMode(mode);
-    updateWelcome();
 }
 
 PermissionMode ChatPanel::permissionMode() const { return m_composer->permissionMode(); }
@@ -419,7 +461,10 @@ void ChatPanel::setConversations(ConversationModel *model) {
             updateContextMeter();
             scheduleFollow();
         });
-        connect(model, &ConversationModel::listChanged, this, &ChatPanel::updateHeader);
+        connect(model, &ConversationModel::listChanged, this, [this] {
+            updateHeader();
+            refillWelcome();
+        });
     }
     updateHeader();
     rebuild();

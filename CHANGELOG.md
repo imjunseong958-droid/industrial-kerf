@@ -88,16 +88,20 @@ on `main`; its section here becomes the release's notes on GitHub
   under it and its control at the row's end, a hairline between rows. A key of
   your own shows one protocol's fields at a time and keeps what you type as
   you leave a field; update notices and MCP tools are switches.
-- The sidebar is narrower and quieter. New and Search are an icon and a word
-  with nothing round them, and Search is typed into where it is. A folder has
-  its glyph, and its conversations start under its name. A line marks where
-  the sidebar ends.
+- The sidebar is narrower, quieter and set a size larger. New and Search are
+  an icon and a word with nothing round them, and Search is typed into where
+  it is. Under them is the open folder's name over its conversations, and
+  nothing else: pressing the name opens the other folders. A line marks where
+  the sidebar ends, and its button keeps beside the window buttons.
 - The toolbar is titled with the conversation, and the chevron after its name
   renames, archives or deletes it; the conversation no longer has a strip of
   its own under the toolbar. The window is still titled with the project.
-- The composer's box holds only what you ask and Send. Under it are the
-  project's folder, which opens the other folders, Open Folder and New
-  Project, the playhead's stamp, the model and the mode.
+- A new conversation offers the folders, the open one ticked, with Open Folder
+  and New Project, and under them the latest conversations, or things to ask
+  where there are none yet.
+- The composer's box holds only what you ask and Send, with no line over it.
+  Under it are the project's folder, which opens the other folders, the
+  playhead's stamp, the model and the mode.
 - Settings opens a little above the middle of the window, and the toolbar
   dims with the rest of the window behind it. On a Mac the project file's
   icon no longer shows beside the window buttons.

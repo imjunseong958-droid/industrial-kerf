@@ -30,6 +30,7 @@
 #include "ui/conversation_model.h"
 #include "ui/make_card.h"
 
+#include <QFont>
 #include <QAbstractButton>
 #include <QHash>
 #include <QJsonArray>
@@ -99,6 +100,10 @@ class ChatPanel final : public QWidget {
     KERF_TEST_FRIENDS
 public:
     static constexpr int kHeaderHeight = 40;
+    // The welcome's column, and how many folders and conversations it offers.
+    static constexpr int kWelcomeColumn = 320;
+    static constexpr int kWelcomeFolders = 4;
+    static constexpr int kWelcomeRecent = 3;
     static constexpr int kSidePadding = 22;
     // The list's padding: 22 over the first message, 16 under the last.
     static constexpr int kListTop = 22;
@@ -259,6 +264,8 @@ public:
     QPushButton *sendButton() const;
     QPushButton *stopButton() const;
     QWidget *welcome() const { return m_welcome; }
+    // The folders a conversation not yet begun offers, the open one ticked.
+    void setFolders(const QStringList &folders, const QString &current);
     QList<QAbstractButton *> examples() const;
     // The More menu, built as it opens (for tests).
     QMenu *buildMoreMenu();
@@ -266,6 +273,12 @@ public:
 signals:
     // The conversation's name changed, or is being edited, or no longer is.
     void titleChanged();
+    // From the welcome: another folder, a folder not listed, a new project,
+    // or one of the latest conversations.
+    void folderChosen(const QString &path);
+    void openFolderRequested();
+    void newProjectRequested();
+    void conversationRequested(const QString &id);
     // Esc reached the composer with nothing of its own to stop or cancel.
     void escapeUnused();
     // Ask again on a failed or stopped answer: the request to send again.
@@ -332,7 +345,6 @@ private:
     QWidget *buildWelcome();
     void refillWelcome();
     void updateHeader();
-    void updateWelcome();
     void updateContextMeter();
     // The faces chosen in Settings changed: what is said is set in them again.
     void refreshFaces();
@@ -406,8 +418,12 @@ private:
     QWidget *m_content = nullptr;
     QVBoxLayout *m_listLayout = nullptr;
     QWidget *m_welcome = nullptr;
-    QLabel *m_welcomeTitle = nullptr;
-    QLabel *m_welcomeText = nullptr;
+    // The welcome's cards: the folders, and the latest conversations or things to ask.
+    QVBoxLayout *m_folderRows = nullptr;
+    QStringList m_folders;
+    QString m_folder;
+    // The face its messages were last made in.
+    QFont m_face;
     // The latest reading of Kerf's context, and the conversation it is of.
     struct ContextUse {
         QString conversation;

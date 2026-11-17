@@ -157,7 +157,11 @@ private slots:
         QCOMPARE(static_cast<FlatToolBar *>(toolbar)->sidebarEdge(), tokens::layout::sidebar);
         QVERIFY(!wiring->appMenuButton()->isVisible());
         const auto inBar = [toolbar](const QWidget *item) { return QRect(item->mapTo(toolbar, QPoint(0, 0)), item->size()); };
-        QCOMPARE(inBar(window.m_sidebarButton).left(), tokens::layout::sidebar + 12);
+        // The sidebar's button is beside the window buttons, over the sidebar,
+        // and the title starts 12 past the sidebar's edge.
+        QCOMPARE(inBar(window.m_sidebarButton).left(), wiring->m_firstControl);
+        QVERIFY(inBar(window.m_sidebarButton).right() < tokens::layout::sidebar);
+        QCOMPARE(inBar(window.m_projectTitle).left(), tokens::layout::sidebar + 12);
         // With it away, the bar's ⋯ button opens the same menu. The sidebar's
         // choice is kept, so it is put back whatever happens below.
         const auto restore = qScopeGuard([] { QSettings().remove(QStringLiteral("layout")); });
@@ -171,10 +175,13 @@ private slots:
         QCOMPARE(inBar(window.m_sidebarButton).left(), wiring->m_firstControl);
         QVERIFY(wiring->m_firstControl >= ToolbarWiring::firstControlX(0, true));
         window.m_sidebarButton->click();
-        // The room before the first control: the window buttons', or the sidebar's.
-        QCOMPARE(ToolbarWiring::leadingRoom(16, 0), 0);
-        QCOMPARE(ToolbarWiring::leadingRoom(84, 0), 64);
-        QCOMPARE(ToolbarWiring::leadingRoom(84, 240), 232);
+        // The room before the first control is the window buttons'; the room
+        // after the controls is what is left of the sidebar's top.
+        QCOMPARE(ToolbarWiring::leadingRoom(16), 0);
+        QCOMPARE(ToolbarWiring::leadingRoom(84), 64);
+        QCOMPARE(ToolbarWiring::titleGap(116, 0), 0);
+        QCOMPARE(ToolbarWiring::titleGap(116, 280), 168);
+        QCOMPARE(ToolbarWiring::titleGap(116, 100), 0);
         for (const char *gone : {"toolbar.file.import", "toolbar.edit.undo", "toolbar.edit.redo", "toolbar.clip.split", "toolbar.clip.delete",
                                  "workspaceSegments", "sequenceButton", "settingsButton", "applicationMenuButton", "windowViewerMenu",
                                  "panePicture", "paneTimeline"})
@@ -598,7 +605,7 @@ private slots:
             QVERIFY(!window.m_chat->findChild<QWidget *>(QStringLiteral("chatHeader"))->isVisible());
             QVERIFY(!subtitle->isVisible());
             // After the sidebar's button, centred in the bar's height.
-            QCOMPARE(inBar(title).left() - inBar(window.m_sidebarButton).right() - 1, 8);
+            QCOMPARE(inBar(title).left(), wiring->sidebarEdge() + 12);
             QCOMPARE(inBar(title).center().y(), window.m_toolbar->height() / 2 - 1);
             // UI 500 13 ink, then UI 11 ink3.
             QCOMPARE(title->palette().color(QPalette::WindowText), tokens::color(tokens::ink));

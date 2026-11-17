@@ -566,7 +566,7 @@ private slots:
             QCOMPARE(title->font().pixelSize(), 13);
             ExportButton *exportButton = window.m_exportButton;
             const auto inBar = [toolbar](const QWidget *item) { return QRect(item->mapTo(toolbar, QPoint(0, 0)), item->size()); };
-            QCOMPARE(inBar(title).left() - inBar(window.m_sidebarButton).right() - 1, 8);
+            QCOMPARE(inBar(title).left(), window.m_sidebar->geometry().right() + 1 + 12);
             QVERIFY(exportButton->isVisible());
             QVERIFY(inBar(title).right() < inBar(exportButton).left());
             // The trailing group: Export, 8, the panel's button, 12 in from

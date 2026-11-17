@@ -53,8 +53,6 @@ constexpr int kAction = 20;
 // A conversation's title starts under its folder's icon, with the rest of the
 // row to itself.
 constexpr int kNoteHeight = 28;
-// What is in a folder starts under its name, past its icon.
-constexpr int kNested = kIcon + space::s8;
 // Between one unfolded folder's rows and the next folder's name.
 constexpr int kGroupGap = space::s8;
 // What the folders' fold is kept under: a map of path to folded.
@@ -125,7 +123,7 @@ protected:
 
 void styleField(QLineEdit *field, const QString &name, int height, QRgb fill, int left = space::s6) {
     field->setObjectName(name);
-    field->setFont(tokens::font(body));
+    field->setFont(tokens::font(side));
     field->setStyleSheet(fieldStyle(name, height, fill, left));
     field->setFixedHeight(height);
     field->setAttribute(Qt::WA_MacShowFocusRect, false);
@@ -151,10 +149,9 @@ public:
 protected:
     void paintEvent(QPaintEvent *) override {
         QPainter p(this);
-        p.setFont(tokens::font(control));
+        p.setFont(tokens::font(body));
         p.setPen(tokens::color(ink3));
-        // Under its folder's name, as the folder's conversations are.
-        const int x = kPadding + kNested;
+        const int x = kPadding;
         const QRect room(x, 0, width() - x - kPadding, height());
         p.drawText(room, Qt::AlignLeft | Qt::AlignVCenter, QFontMetrics(p.font()).elidedText(m_text, Qt::ElideRight, room.width()));
     }
@@ -232,12 +229,18 @@ QRect SidebarRow::chevronRect() const {
     if (m_chevron == Chevron::None) return {};
     if (m_heading) {
         // After the name, with room around it to take a press.
-        const QFontMetrics metrics(tokens::font(m_strong ? bodyName : body));
+        const QFontMetrics metrics(tokens::font(body));
         const int name = std::min(metrics.horizontalAdvance(text()), std::max(0, textRect().width() - kChevron - kChevronGap));
         return QRect(textLeft() + name, 0, kChevronGap * 2 + kChevron, height());
     }
     // The press it takes reaches the row's edge and its full height.
     return QRect(0, 0, kPadding + m_indent + kChevron + kChevronGap, height());
+}
+
+void SidebarRow::setTicked(bool ticked) {
+    if (ticked == m_ticked) return;
+    m_ticked = ticked;
+    update();
 }
 
 void SidebarRow::setStrong(bool strong) {
@@ -312,6 +315,7 @@ QRect SidebarRow::textRect() const {
     const int x = textLeft();
     int right = width() - kPadding;
     if (actionsShown()) right = m_actions.first()->x() - space::s4;
+    else if (m_ticked) right -= kIcon + space::s8;
     else if (m_badge.isValid()) right -= kBadge + space::s8;
     return QRect(x, 0, std::max(0, right - x), height());
 }
@@ -362,14 +366,12 @@ void SidebarRow::paintEvent(QPaintEvent *) {
 
     const bool lit = m_current || isHovered();
     if (m_heading) {
-        // A folder over its conversations: its glyph, its name, and the
-        // chevron after it. The open folder's name is in ink, medium.
-        const QColor name = tokens::color(m_strong || lit ? ink : ink2);
-        if (!m_icon.isEmpty())
-            icons::paint(p, m_icon, QRectF(kPadding + m_indent, 0, kIcon, height()), tokens::color(m_strong || lit ? ink2 : ink3), kIcon);
+        // A folder's name over its conversations: quiet and a size smaller
+        // than they are, the chevron after it.
+        const QColor name = tokens::color(lit ? ink2 : ink3);
         if (!m_editing) {
             const QRect room = textRect();
-            p.setFont(tokens::font(m_strong ? bodyName : body));
+            p.setFont(tokens::font(body));
             const QFontMetrics metrics(p.font());
             const QString shown = metrics.elidedText(text(), Qt::ElideRight, std::max(0, room.width() - kChevron - kChevronGap));
             QPen pen(name);
@@ -405,6 +407,8 @@ void SidebarRow::paintEvent(QPaintEvent *) {
         icons::paint(p, m_icon, QRectF(x0, 0, kIcon, height()), m_strong ? tokens::color(lit ? ink : ink2) : ink_, kIcon);
     else if (!m_dotIcon.isEmpty())
         icons::paint(p, m_dotIcon, QRectF(x0, (height() - kDotIcon) / 2.0, kDotIcon, kDotIcon), ink_, kDotIcon);
+    // What is chosen among its like is ticked at the row's end.
+    if (m_ticked) icons::paint(p, QStringLiteral("g-check"), QRectF(width() - kPadding - kIcon, 0, kIcon, height()), tokens::color(ink2), kIcon);
     // The dot at the end, where the actions go while the pointer is over the row.
     if (m_badge.isValid() && !actionsShown()) {
         p.setPen(Qt::NoPen);
@@ -413,7 +417,7 @@ void SidebarRow::paintEvent(QPaintEvent *) {
     }
     if (!m_editing) {
         const QRect room = textRect();
-        p.setFont(tokens::font(m_strong ? bodyName : body));
+        p.setFont(tokens::font(m_strong ? sideName : side));
         const QString shown = QFontMetrics(p.font()).elidedText(text(), Qt::ElideRight, room.width());
         QPen pen(ink_);
         if (m_shimmer && !ui::reducedMotion()) {
@@ -481,8 +485,8 @@ void SidebarAccount::paintEvent(QPaintEvent *) {
     // "Name · what it is on ⌄" on one line, as a coding agent's foot reads.
     const qreal x = avatar.right() + space::s8;
     const qreal room = width() - kPadding - x - kChevron - kChevronGap;
-    const QFont nameFont = tokens::font(controlStrong);
-    const QFont restFont = tokens::font(control);
+    const QFont nameFont = tokens::font(bodyName);
+    const QFont restFont = tokens::font(body);
     const QFontMetrics nameMetrics(nameFont);
     const QFontMetrics restMetrics(restFont);
     const QString name = nameMetrics.elidedText(m_title, Qt::ElideRight, int(room * (m_subtitle.isEmpty() ? 1.0 : 0.6)));
@@ -532,7 +536,7 @@ ProjectSidebar::ProjectSidebar(QWidget *parent) : QWidget(parent) {
     // place while it is open: Esc empties it, and empty, closes it.
     auto *search = new EscapeField;
     search->setObjectName(QStringLiteral("sidebarSearch"));
-    search->setFont(tokens::font(body));
+    search->setFont(tokens::font(side));
     search->setStyleSheet(searchStyle(search->objectName()));
     search->setFixedHeight(kRowHeight);
     search->setAttribute(Qt::WA_MacShowFocusRect, false);
@@ -568,6 +572,7 @@ ProjectSidebar::ProjectSidebar(QWidget *parent) : QWidget(parent) {
 
     // Projects, and at its end the one way to another: a new one, or a folder.
     auto *head = new QWidget;
+    m_head = head;
     head->setObjectName(QStringLiteral("sidebarHead"));
     auto *headRow = new QHBoxLayout(head);
     headRow->setContentsMargins(space::s16, space::s12, space::s8, space::s4);
@@ -778,6 +783,7 @@ QList<ProjectSidebar::Conversation> ProjectSidebar::conversationsOf(const QStrin
 
 bool ProjectSidebar::isFolded(const QString &path) const {
     const QString clean = cleanPath(path);
+    if (m_switching) return false;
     // The open folder shows what is in it until it is folded by hand.
     return m_folded.value(clean, clean != m_current);
 }
@@ -880,6 +886,16 @@ void ProjectSidebar::setWorking(bool working) {
 }
 
 void ProjectSidebar::setTopInset(int inset) { m_top->setFixedHeight(inset); }
+
+void ProjectSidebar::setSwitching(bool switching) {
+    if (switching == m_switching) return;
+    m_switching = switching;
+    // The folders are not listed to add to: the way to another is the name,
+    // which stands off from Search as the Projects line did.
+    m_head->setVisible(!switching);
+    m_list->setContentsMargins(space::s8, switching ? space::s12 : 0, space::s8, space::s12);
+    rebuild(false);
+}
 
 void ProjectSidebar::setArchivedOpen(bool open) {
     if (open == m_archivedOpen) return;
@@ -1040,8 +1056,8 @@ void ProjectSidebar::finishRename(bool keep) {
 }
 
 SidebarRow *ProjectSidebar::makeConversationRow(const Conversation &conversation, bool dimmed, const QString &project) {
-    // Under its folder's name, past the folder's icon.
-    auto *row = new SidebarRow(QString(), conversation.title, kNested);
+    // Flush under its folder's name.
+    auto *row = new SidebarRow(QString(), conversation.title);
     row->setObjectName(QStringLiteral("sidebarConversation"));
     row->setDimmed(dimmed);
     // When it last changed is a hover away.
@@ -1142,22 +1158,31 @@ bool ProjectSidebar::eventFilter(QObject *watched, QEvent *event) {
 }
 
 SidebarRow *ProjectSidebar::makeProjectRow(const QString &path) {
-    // A folder: the folder's glyph and its name. With its conversations under
-    // it, its chevron follows its name.
-    auto *row = new SidebarRow(QStringLiteral("g-folder"), QFileInfo(path).fileName());
+    // With its conversations under it, a folder's name heads them; the start
+    // window lists folders alone, each with its glyph.
+    auto *row = new SidebarRow(m_conversationsShown ? QString() : QStringLiteral("g-folder"), QFileInfo(path).fileName());
     row->setObjectName(QStringLiteral("sidebarProject"));
     row->setProperty("projectPath", path);
     ui::setTip(row, path);
     const bool chosen = path == m_current;
     row->setHeading(m_conversationsShown);
     // The start window's folders are chosen among; the editor's head their
-    // conversations, and the open one's name is a step brighter.
+    // conversations.
     row->setCurrent(chosen && !m_conversationsShown);
-    row->setStrong(!m_conversationsShown || chosen);
+    row->setStrong(!m_conversationsShown);
     if (!m_conversationsShown) {
         row->setShimmer(chosen && m_working);
         // The start window: a folder is chosen to work in.
         connect(row, &QAbstractButton::clicked, this, [this, path] { emit projectChosen(path); });
+        return row;
+    }
+    if (m_switching) {
+        // The one folder shown, the open one: its name asks for another.
+        row->setChevron(SidebarRow::Chevron::Unfolded);
+        row->setAccessibleDescription(QStringLiteral("Opens the other folders"));
+        const auto ask = [this, row] { emit switchRequested(row); };
+        connect(row, &SidebarRow::chevronPressed, this, ask);
+        connect(row, &QAbstractButton::clicked, this, ask);
         return row;
     }
     const bool folded = isFolded(path);
@@ -1290,7 +1315,7 @@ void ProjectSidebar::rebuild(bool arrivals, bool unfolding) {
         if (live.size() > kShownAtFirst && m_query.isEmpty()) {
             const bool all = shown == live.size();
             if (!all || m_showAll.contains(path)) {
-                auto *more = new SidebarRow(QString(), all ? QStringLiteral("Show less") : QStringLiteral("Show %1 more").arg(live.size() - shown), kNested);
+                auto *more = new SidebarRow(QString(), all ? QStringLiteral("Show less") : QStringLiteral("Show %1 more").arg(live.size() - shown));
                 more->setObjectName(QStringLiteral("sidebarMore"));
                 more->setDimmed(true);
                 connect(more, &QAbstractButton::clicked, this, [this, path, all] {
@@ -1305,8 +1330,7 @@ void ProjectSidebar::rebuild(bool arrivals, bool unfolding) {
 
         // The archived ones, out of the way at the end, folded until asked for.
         const QString count = QStringLiteral("Archived · %1").arg(archived.size());
-        // Its chevron in the icons' column, its words under the folder's name.
-        auto *fold = new SidebarRow(QString(), count, kNested - kDotIcon - space::s6);
+        auto *fold = new SidebarRow(QString(), count);
         fold->setObjectName(QStringLiteral("sidebarArchived"));
         fold->setDotIcon(m_archivedOpen ? QStringLiteral("g-chev") : QStringLiteral("g-chevr"));
         fold->setAccessibleDescription(m_archivedOpen ? QStringLiteral("Unfolded") : QStringLiteral("Folded"));

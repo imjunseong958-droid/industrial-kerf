@@ -433,7 +433,6 @@ private slots:
             QCOMPARE(w.chat()->permissionMode(), PermissionMode::Ask);
             QCOMPARE(chip->text(), QStringLiteral("Ask before edits"));
             QVERIFY(!chip->tone().isValid());
-            QVERIFY(w.chat()->findChild<QLabel *>(QStringLiteral("welcomeText"))->text().contains(QStringLiteral("proposal")));
             QCOMPARE(ask(w, "Trim the intro"), QStringLiteral("ask"));
 
             // From the chip's menu: the three, the one in force checked, each with what it lets through.
@@ -451,8 +450,7 @@ private slots:
             // The more Kerf does on its own, the more the chip says so.
             QCOMPARE(chip->tone(), tokens::color(tokens::accentInk));
             QCOMPARE(QSettings().value(QStringLiteral("agent/permissions")).toString(), QStringLiteral("accept-edits"));
-            // The welcome no longer promises a proposal first, and Settings shows the same choice.
-            QVERIFY(w.chat()->findChild<QLabel *>(QStringLiteral("welcomeText"))->text().contains(QStringLiteral("Undo")));
+            // Settings shows the same choice.
             QCOMPARE(w.window.m_permissionChoice->currentIndex(), 1);
             QCOMPARE(ask(w, "Trim the intro"), QStringLiteral("accept-edits"));
 
@@ -841,6 +839,53 @@ private slots:
         QVERIFY(here && here->isChecked());
         QCOMPARE(here->text(), QFileInfo(folder.path()).fileName());
         delete menu;
+    }
+
+    // A conversation not yet begun offers where to work and what was last
+    // worked on: the folders, the open one ticked, and the ways to another;
+    // then the latest conversations, or things to ask where there are none.
+    void aNewConversationOffersFoldersAndTheLatest() {
+        Window w;
+        ChatPanel *chat = w.chat();
+        // What it asks for is watched here, not carried out: the window would
+        // open a folder chooser and another project.
+        QObject::disconnect(chat, &ChatPanel::folderChosen, &w.window, nullptr);
+        QObject::disconnect(chat, &ChatPanel::openFolderRequested, &w.window, nullptr);
+        QObject::disconnect(chat, &ChatPanel::newProjectRequested, &w.window, nullptr);
+        QObject::disconnect(chat, &ChatPanel::conversationRequested, &w.window, nullptr);
+        QSignalSpy folderChosen(chat, &ChatPanel::folderChosen);
+        QSignalSpy openFolder(chat, &ChatPanel::openFolderRequested);
+        QSignalSpy newProject(chat, &ChatPanel::newProjectRequested);
+        chat->setFolders({QStringLiteral("/films/jeju-vlog"), QStringLiteral("/films/atlas-launch")}, QStringLiteral("/films/jeju-vlog"));
+        const QList<SidebarRow *> folders = chat->welcome()->findChildren<SidebarRow *>(QStringLiteral("welcomeFolder"));
+        QCOMPARE(folders.size(), 2);
+        QCOMPARE(folders.at(0)->text(), QStringLiteral("jeju-vlog"));
+        QVERIFY(folders.at(0)->isTicked() && !folders.at(1)->isTicked());
+        folders.at(1)->click();
+        QCOMPARE(folderChosen.size(), 1);
+        QCOMPARE(folderChosen.first().first().toString(), QStringLiteral("/films/atlas-launch"));
+        chat->welcome()->findChild<SidebarRow *>(QStringLiteral("welcomeOpenFolder"))->click();
+        chat->welcome()->findChild<SidebarRow *>(QStringLiteral("welcomeNewProject"))->click();
+        QCOMPARE(openFolder.size(), 1);
+        QCOMPARE(newProject.size(), 1);
+        // With no conversation yet, things to ask.
+        QVERIFY(!chat->examples().isEmpty());
+        QVERIFY(chat->welcome()->findChildren<SidebarRow *>(QStringLiteral("welcomeConversation")).isEmpty());
+        // With some, the latest three, newest first; pressed, one is asked for.
+        QJsonArray list;
+        for (int i = 1; i <= 4; ++i)
+            list << QJsonObject{{"id", QStringLiteral("c-%1").arg(i)}, {"title", QStringLiteral("Cut %1").arg(i)},
+                                {"updated", QStringLiteral("2026-11-0%1T10:00:00Z").arg(i)}, {"count", 2}};
+        list << QJsonObject{{"id", "c-9"}, {"title", "Put away"}, {"updated", "2026-11-09T10:00:00Z"}, {"archived", true}, {"count", 2}};
+        w.window.handleEvent(QJsonObject{{"type", "conversations"}, {"items", list}});
+        const QList<SidebarRow *> latest = chat->welcome()->findChildren<SidebarRow *>(QStringLiteral("welcomeConversation"));
+        QCOMPARE(latest.size(), ChatPanel::kWelcomeRecent);
+        QCOMPARE(latest.first()->text(), QStringLiteral("Cut 4"));
+        QVERIFY(chat->examples().isEmpty());
+        QSignalSpy asked(chat, &ChatPanel::conversationRequested);
+        latest.first()->click();
+        QCOMPARE(asked.size(), 1);
+        QCOMPARE(asked.first().first().toString(), QStringLiteral("c-4"));
     }
 
     // Settings keep the chat model and the models that make shots apart: a key

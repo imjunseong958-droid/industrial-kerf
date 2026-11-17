@@ -144,10 +144,17 @@ void ToolbarWiring::buildToolbar(const QHash<QString, QMenu *> &menus) {
         }
         w->menuBar()->hide();
     }
+    // The sidebar's button keeps beside the window buttons, over the sidebar;
+    // this is the rest of the sidebar's top, so the title starts past its edge.
+    m_sidebarGap = new QWidget;
+    m_sidebarGap->setObjectName(QStringLiteral("toolbarSidebarGap"));
+    m_sidebarGap->setFixedWidth(0);
+    m_sidebarGap->hide();
+    row->addWidget(m_sidebarGap);
     row->addSpacing(8 - row->spacing());
 
-    // The project and what is going on in it, at the leading end: the room the
-    // row has left is theirs.
+    // The conversation and what is going on in it, at the leading end: the
+    // room the row has left is theirs.
     m_titleBox = new QWidget;
     m_titleBox->setObjectName(QStringLiteral("toolbarTitle"));
     m_titleBox->installEventFilter(this);
@@ -271,23 +278,37 @@ int ToolbarWiring::sidebarEdge() const {
     return std::max(0, sidebar->geometry().right() + 1);
 }
 
-int ToolbarWiring::leadingRoom(int firstControl, int sidebarEdge) {
-    // The first control starts 12 past the sidebar's edge, or where the window
-    // buttons leave it, whichever is further in.
-    return std::max({0, firstControl - kLeadingPad - 4, sidebarEdge > 0 ? sidebarEdge + 12 - kLeadingPad - 4 : 0});
+int ToolbarWiring::leadingRoom(int firstControl) {
+    // The first control starts where the window buttons leave it.
+    return std::max(0, firstControl - kLeadingPad - 4);
+}
+
+int ToolbarWiring::titleGap(int controlsEnd, int sidebarEdge) {
+    // The title starts 12 past the sidebar's edge: 8 after this gap's end.
+    return sidebarEdge > 0 ? std::max(0, sidebarEdge + 4 - controlsEnd) : 0;
 }
 
 void ToolbarWiring::layoutLeading() {
     MainWindow *w = m_window;
     if (!w->m_windowButtons || !w->m_toolbar) return;
     const int edge = sidebarEdge();
-    const int room = leadingRoom(m_firstControl, edge);
+    const int room = leadingRoom(m_firstControl);
     // With no room to keep, the row's gap after it goes too.
     w->m_windowButtons->setVisible(room > 0);
     w->m_windowButtons->setFixedWidth(room);
     static_cast<FlatToolBar *>(w->m_toolbar)->setSidebarEdge(edge);
     // With the sidebar away its foot is too: the menu is here instead.
     if (m_appButton) m_appButton->setVisible(edge == 0);
+    // The sidebar's button is beside the window buttons whether the sidebar
+    // shows or not; what is left of the sidebar's top is kept clear, and the
+    // title starts past its edge.
+    if (m_sidebarGap && w->m_sidebarButton) {
+        constexpr int spacing = 4;
+        const int controlsEnd = kLeadingPad + (room > 0 ? room + spacing : 0) + w->m_sidebarButton->sizeHint().width() + spacing;
+        const int gap = titleGap(controlsEnd, edge);
+        m_sidebarGap->setVisible(gap > 0);
+        m_sidebarGap->setFixedWidth(gap);
+    }
 }
 
 void ToolbarWiring::setFirstControl(int x) {

@@ -5,21 +5,22 @@
 // folders, each one unfolding to its own conversations, latest first; the
 // account at its foot, which opens the way to Settings and everything else.
 //
-//   [+] New                           rows 32 apart, radius 6, UI 13/20: an icon
+//   [+] New                           rows 32 apart, radius 6, UI 14/20: an icon
 //   [search] Search                   and a word, with no fill but under the
 //                                     pointer. Search, pressed, is typed into
 //                                     where it is, with nothing round it
-//   Projects                     [+]  meta in ink3; + is New Project, Open Folder
-//   [folder] jeju-vlog v    [+] [⋯]   a folder: the folder glyph and its name, the
-//       Make a 60-second cut of…      open folder's in ink, medium. Hover: + (a
-//       Colour the beach take      ●  conversation in it) and its menu. Its
-//       Captions for the vlog         conversations start under its name. A light
-//       Show 3 more                   passes over a title Kerf works on, and a dot
-//     > Archived · 2                  at the end says it is done, waits for you, or
+//   jeju-vlog v                  [⋯]  the open folder's name, UI 13/20 in ink3:
+//   Make a 60-second cut of the…      pressed, it opens the other folders (the
+//   Colour the beach take          ●  editor shows this one alone). Its
+//   Captions for the vlog             conversations are flush under it. A light
+//   Show 3 more                       passes over a title Kerf works on, and a dot
+//   > Archived · 2                    at the end says it is done, waits for you, or
 //                                     failed; hover: [⋯]
-//   [folder] atlas-launch >           folded: pressing it unfolds it
-//   ...                               8 between a folder's rows and the next folder
 //   (Y) You · Kerf Cloud v      [⚙]   the account, 52 tall, and Settings
+//
+// Given several folders and not told to switch (a sidebar on its own), each
+// folder's name heads its own conversations and folds; the start window lists
+// folders alone, under a Projects line with a + for another.
 //
 // Nothing here is invented: the folders are the recent projects that still
 // exist, the open folder's conversations and their times are what the bridge
@@ -69,6 +70,9 @@ public:
     Chevron chevron() const { return m_chevron; }
     // Where the chevron takes a press; empty with none.
     QRect chevronRect() const;
+    // A tick at the row's end: the one chosen among its like.
+    void setTicked(bool ticked);
+    bool isTicked() const { return m_ticked; }
     // The text in medium, and in ink at rest.
     void setStrong(bool strong);
     bool isStrong() const { return m_strong; }
@@ -133,6 +137,7 @@ private:
     Chevron m_chevron = Chevron::None;
     bool m_onChevron = false;
     bool m_strong = false;
+    bool m_ticked = false;
     bool m_heading = false;
     bool m_guide = false;
     bool m_current = false;
@@ -214,6 +219,11 @@ public:
     void setWorking(bool working);
     // Room over the first row, for the window buttons of a window with no toolbar.
     void setTopInset(int inset);
+    // The editor's way: only the open folder is given, its name heads its
+    // conversations and, pressed, asks for another folder (switchRequested);
+    // there is no Projects line, and nothing folds.
+    void setSwitching(bool switching);
+    bool isSwitching() const { return m_switching; }
 
     QList<SidebarRow *> rows() const { return m_rows; }
     SidebarRow *projectRow(const QString &path) const;
@@ -274,6 +284,9 @@ signals:
     void projectRevealRequested(const QString &path);
     void newProjectRequested();
     void openFolderRequested();
+    // The open folder's name was pressed (setSwitching): the window opens the
+    // folders over `anchor`.
+    void switchRequested(QWidget *anchor);
     // The account was pressed: the window opens its menu over it.
     void accountRequested();
     // The gear beside it.
@@ -319,6 +332,8 @@ private:
     QList<Conversation> m_conversations;
     QString m_currentConversation;
     bool m_conversationsShown = true;
+    bool m_switching = false;
+    QWidget *m_head = nullptr;
     bool m_working = false;
     bool m_archivedOpen = false;
     // Folded or not, as chosen (and kept); a folder not here has its default.

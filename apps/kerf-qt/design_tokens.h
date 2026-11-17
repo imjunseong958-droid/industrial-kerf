@@ -123,6 +123,8 @@ struct TypeStyle {
 
 constexpr TypeStyle body{13, 20, 400, false};          // body, inputs
 constexpr TypeStyle bodyName{13, 20, 500, false};      // names in rows
+constexpr TypeStyle side{14, 20, 400, false};          // the sidebar's rows, and lists set like them
+constexpr TypeStyle sideName{14, 20, 500, false};      // the chosen one among them
 constexpr TypeStyle display{34, 44, 500, false};       // the start window's question
 constexpr TypeStyle reading{14, 22, 400, false, true}; // what is said in the conversation, and the composer
 constexpr TypeStyle title{14, 20, 500, false};         // panel titles: the conversation, Source, clip name

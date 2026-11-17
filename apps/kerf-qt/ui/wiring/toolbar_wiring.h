@@ -117,9 +117,13 @@ public:
     // Where the first control starts: 16 in, past the macOS window buttons
     // (52 + 16 reserved), or 16 without them.
     static int firstControlX(int windowButtonsRight, bool fullScreen);
-    // The width of the room before the first control, for one that starts at
-    // `firstControl` and a sidebar that ends at `sidebarEdge` (0: none shows).
-    static int leadingRoom(int firstControl, int sidebarEdge);
+    // The width of the room before the first control (the sidebar's button),
+    // for one that starts at `firstControl`: the window buttons'.
+    static int leadingRoom(int firstControl);
+    // The room kept after the leading controls, which end at `controlsEnd`,
+    // so that the title starts 12 past a sidebar that ends at `sidebarEdge`
+    // (0: none shows, and the title follows the controls).
+    static int titleGap(int controlsEnd, int sidebarEdge);
     // Where the window buttons let the first control start (MainWindow::fitTitleBar).
     void setFirstControl(int x);
     // Where the sidebar ends under the bar now, also while it moves; 0 for none.
@@ -185,6 +189,8 @@ private:
     // Toolbar.
     QWidget *m_content = nullptr;
     QWidget *m_titleBox = nullptr;
+    // The rest of the sidebar's top, between its button and the title.
+    QWidget *m_sidebarGap = nullptr;
     // After the conversation's name: opens what can be done with it.
     ui::IconButton *m_titleMenu = nullptr;
     int m_firstControl = kLeadingPad;

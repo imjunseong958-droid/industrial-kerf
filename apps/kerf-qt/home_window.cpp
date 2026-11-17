@@ -129,7 +129,6 @@ HomeWindow::HomeWindow(const QString &kerfdBinary, QWidget *parent) : QDialog(pa
 
     m_composer = new Composer;
     m_composer->setObjectName(QStringLiteral("homeComposer"));
-    m_composer->setDivider(false);
     m_composer->setRoomy();
     m_composer->setMaximumWidth(kColumn);
     m_composer->setOverlayParent(this);

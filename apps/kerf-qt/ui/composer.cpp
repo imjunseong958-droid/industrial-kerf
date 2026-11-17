@@ -777,12 +777,6 @@ void Composer::fitInput() {
     m_input->setVerticalScrollBarPolicy(m_input->document()->size().height() > 100 ? Qt::ScrollBarAsNeeded : Qt::ScrollBarAlwaysOff);
 }
 
-void Composer::paintEvent(QPaintEvent *) {
-    if (!m_divider) return;
-    QPainter p(this);
-    p.fillRect(QRect(0, 0, width(), 1), color(line));
-}
-
 bool Composer::eventFilter(QObject *watched, QEvent *event) {
     if (watched == m_input && event->type() == QEvent::KeyPress) {
         auto *key = static_cast<QKeyEvent *>(event);

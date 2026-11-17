@@ -146,8 +146,7 @@ private slots:
         // titles flush with it, with no dot before them and nothing after them
         // at rest.
         SidebarRow *folder = sidebar.projectRow(m_folder.path());
-        // The open folder's name is a step brighter than the others'.
-        QVERIFY(folder->isHeading() && folder->isStrong() && !folder->hasGuide());
+        QVERIFY(folder->isHeading() && !folder->isStrong() && !folder->hasGuide());
         QVERIFY(folder->chevronRect().left() > folder->textLeft());
         for (const SidebarRow *row : sidebar.rows())
             if (row->objectName() == QStringLiteral("sidebarConversation")) {
@@ -742,6 +741,35 @@ private slots:
     }
 
     // KERF_SCREENSHOT_DIR=<dir> saves the sidebar with one of everything, to look at.
+    // The editor's sidebar is the open folder alone: its name over its
+    // conversations, with no Projects line; pressed, the name asks for the
+    // other folders instead of folding.
+    void theEditorShowsTheOpenFolderAlone() {
+        ProjectSidebar sidebar;
+        const QDateTime now = noon();
+        open(sidebar, {conversation(QStringLiteral("a"), QStringLiteral("The Beach cut"), State::Idle, now)});
+        QWidget *head = sidebar.findChild<QWidget *>(QStringLiteral("sidebarHead"));
+        QVERIFY(head && head->isVisible());
+        sidebar.setSwitching(true);
+        QVERIFY(!head->isVisible());
+        SidebarRow *folder = sidebar.projectRow(m_folder.path());
+        QVERIFY(folder && folder->isHeading());
+        QCOMPARE(folder->chevron(), SidebarRow::Chevron::Unfolded);
+        QVERIFY(folder->hoverActions().isEmpty());
+        QSignalSpy asked(&sidebar, &ProjectSidebar::switchRequested);
+        QSignalSpy chosen(&sidebar, &ProjectSidebar::projectChosen);
+        folder->click();
+        QCOMPARE(asked.size(), 1);
+        QCOMPARE(asked.first().first().value<QWidget *>(), folder);
+        QVERIFY(chosen.isEmpty());
+        // Nothing folds: its conversations stay under it.
+        QVERIFY(!sidebar.isFolded(m_folder.path()));
+        QCOMPARE(listed(sidebar), QStringList{QStringLiteral("The Beach cut")});
+        // Its rows are set a size larger than the folder's name.
+        QCOMPARE(tokens::side.px, 14);
+        QVERIFY(tokens::side.px > tokens::body.px);
+    }
+
     void aPictureOfItWhenAsked() {
         const QString shots = qEnvironmentVariable("KERF_SCREENSHOT_DIR");
         if (shots.isEmpty()) QSKIP("KERF_SCREENSHOT_DIR is not set");

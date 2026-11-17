@@ -237,7 +237,16 @@ void MainWindow::setupPictureCommands() {
 void MainWindow::buildSidebar() {
     m_sidebar = new ProjectSidebar;
     m_shell->setSidebar(m_sidebar);
+    m_sidebar->setSwitching(true);
+    connect(m_sidebar, &ProjectSidebar::switchRequested, this, [this](QWidget *anchor) { ui::popupMenu(buildFolderMenu(), anchor); });
     buildComposerFolder();
+    // A new conversation offers the folders and the latest conversations.
+    connect(m_chat, &ChatPanel::folderChosen, this, [this](const QString &path) {
+        if (path != m_sidebar->current()) openProject(path);
+    });
+    connect(m_chat, &ChatPanel::openFolderRequested, this, &MainWindow::openProjectFolder);
+    connect(m_chat, &ChatPanel::newProjectRequested, this, &MainWindow::newProject);
+    connect(m_chat, &ChatPanel::conversationRequested, this, [this](const QString &id) { m_chatWiring->openConversation(id); });
     // A project starts as a conversation; followContentWithPanes opens the
     // panel with the first thing to show.
     stage::Panes panes;
@@ -458,6 +467,18 @@ QRect MainWindow::cardPictureHome() const {
     return toShell(list, list->rect()).contains(home) ? home : QRect();
 }
 
+QStringList MainWindow::recentFolders() const {
+    // The open folder first, then the recent ones that are still there.
+    QStringList folders;
+    const QString open = m_sidebar ? m_sidebar->current() : QString();
+    if (!open.isEmpty()) folders << open;
+    for (const QString &path : ProjectLauncher::recentProjects()) {
+        const QString clean = QDir::cleanPath(QFileInfo(path).absoluteFilePath());
+        if (!folders.contains(clean) && QFileInfo(clean).isDir()) folders << clean;
+    }
+    return folders;
+}
+
 void MainWindow::buildComposerFolder() {
     // Where a request goes: the open project, at the composer's foot; pressed,
     // the other folders, and the ways to one not listed.
@@ -477,7 +498,7 @@ QMenu *MainWindow::buildFolderMenu() {
     menu->setAttribute(Qt::WA_DeleteOnClose);
     ui::styleMenu(menu);
     const QString open = m_sidebar ? m_sidebar->current() : QString();
-    for (const QString &path : m_sidebar ? m_sidebar->projects() : QStringList()) {
+    for (const QString &path : recentFolders()) {
         QAction *action = menu->addAction(QFileInfo(path).fileName());
         action->setCheckable(true);
         action->setChecked(path == open);
@@ -498,7 +519,10 @@ QMenu *MainWindow::buildFolderMenu() {
 
 void MainWindow::refreshSidebar() {
     if (!m_sidebar) return;
-    m_sidebar->setProjects(ProjectLauncher::recentProjects(), m_projectDirectory);
+    // The sidebar is the open folder's conversations; the other folders are a
+    // press away, on its name, under the composer and in a new conversation.
+    m_sidebar->setProjects(m_projectDirectory.isEmpty() ? QStringList() : QStringList{m_projectDirectory}, m_projectDirectory);
+    m_chat->setFolders(recentFolders(), m_sidebar->current());
     if (m_composerFolder) {
         const QString name = QFileInfo(m_sidebar->current()).fileName();
         m_composerFolder->setText(name);

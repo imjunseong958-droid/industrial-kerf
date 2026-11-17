@@ -221,6 +221,8 @@ private slots:
     // other folders, Open Folder and New Project.
     void buildComposerFolder();
     QMenu *buildFolderMenu();
+    // The folders to offer: the open one, then the recent ones still there.
+    QStringList recentFolders() const;
     void loadAgentSettings();
     void saveAgentSettings();
     // What the conversation runs on, as if chosen in Settings: cloud, own or
