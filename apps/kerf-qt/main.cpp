@@ -8,7 +8,7 @@
 #include "link_inbox.h"
 #include "main_window.h"
 #include "project_launcher.h"
-#include "review_link.h"
+#include "project_link.h"
 #include "settings_migration.h"
 #include "update_notice.h"
 
@@ -125,7 +125,7 @@ int main(int argc, char **argv) {
             // WxH, e.g. 1600x1000 (the design's canvas).
             const QStringList parts = QString::fromUtf8(argv[++i]).split(QLatin1Char('x'));
             if (parts.size() == 2) windowSize = QSize(parts.at(0).toInt(), parts.at(1).toInt());
-        } else if (kerf::links::isReviewLink(argument)) {
+        } else if (kerf::links::isProjectLink(argument)) {
             // kerf://<project>/rev<N>[@TC], from a shell (macOS hands a
             // clicked link over as a QFileOpenEvent instead).
             links << argument;
@@ -166,7 +166,7 @@ int main(int argc, char **argv) {
     // A newer Kerf on GitHub, asked off the GUI thread at most once a day.
     if (!smoke && !renderPreview) kerf::startUpdateCheck(nullptr);
 
-    // kerf:// review links raise (or open) their project's editor and seek.
+    // kerf:// project links raise (or open) their project's editor and seek.
     QPointer<QDialog> choosing;
     kerf::links::Router router(
         [&kerfd, &choosing](const QString &directory) -> kerf::MainWindow * {

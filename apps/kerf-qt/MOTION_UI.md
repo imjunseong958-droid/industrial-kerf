@@ -37,7 +37,7 @@ repeating their numbers, so changing a value does not make it wrong.
 | Archived unfolds | Archived · N is pressed | The archived conversations fade in where they are, one after another (`appear`, `unfoldStagger` apart); folding is at once | `ProjectSidebar::setArchivedOpen`, `moves::fadeIn` | `archivedConversationsFoldAwayAtTheEnd` (the end state) |
 | Export arrives | The program gets its first clip | Export fades in where it is, in the toolbar | `ToolbarWiring::followCut` | `toolbarHoldsOnlyTheSidebarTheTitleExportAndThePanel` (the end state) |
 | Account menu | The account at the sidebar's foot is pressed | The menu fades in and rises over the account, which stays held | `ToolbarWiring::popupAppMenu`, `ui::popupMenu` (`Side::Above`) | none |
-| Settings | ⌘, or the account's menu | The page has the room at once; its body comes up into place, and a page chosen fades in over the last | `MainWindow::showSettings`, `StageShell::setCovered` | `theAccountMenuReachesEverythingElse` (the end state) |
+| Settings | ⌘, the sidebar's gear, or the account's menu | Over the window, as everything one goes into: the window dims at once and the panel is in its middle; its body comes up into place, and a page chosen fades in over the last. Esc, its close or a press on the dim gives the window back | `MainWindow::showSettings`, `StageShell::setCovered` | `theAccountMenuReachesEverythingElse` (the end state) |
 | Hand-over | A request is sent | Start window fades over the editor; its box goes to the composer | `MainWindow::takeOverFrom`, `main.cpp` | none |
 | Footage | Kerf starts with footage and no cut | Named tiles pop in, in the conversation | `MainWindow::showSheet`, `FootageSheet` | `footageTilesKeepTheirPlacesAsTheyGoOn` |
 | Picture arrives | A project opens with clips on its timeline | First tile grows into the picture as the conversation gives way; the timeline comes in out of the room | `MainWindow::followContentWithPanes`, `MainWindow::growStage`, `StageShell::transition`, `StageMotion::followPicture` | `regionsMoveToANewArrangementWhenMotionIsOn`, `aMoveCutShortStillEnds`, `motionLeavesNothingBehind`, `aStandInGoesWithThePicture` |
@@ -51,7 +51,7 @@ repeating their numbers, so changing a value does not make it wrong.
 | Stage at work | Kerf works, a render runs, or a model makes a shot | A light runs round just outside the picture's edge, blue for Kerf and amber for the computer, amber winning; the chip at the picture's top left says what runs ("Making bridge-low · 0:12", "Rendering preview 62%"). Both fade in, and fade out when it ends; under Reduce Motion the ring is still | `activity::EdgeLight`, `activity::stageFor`, `WorkChip::setShown`, `MainWindow::setStageActivity` | `theEdgeLightComesAndGoes`, `theStageShowsWhatRunsAndLetsItGo` |
 | Making a shot | A media is being made from its recipe | Amber stripes move across its clips, with how long it has gone; its tile in the Media sheet has them too, and "Making take 2 · 0:41". Queued, a dashed amber outline; with no file, a dashed hole saying "Not made" or "Offline" (still) | `TimelineWidget::setMediaActivity`, `ProjectPanel::setMediaActivity`, `activity::paintStripes` | `clipsShowTheirMediasMaking`, `mediaTilesSayWhatTheyAreDoing` |
 | Watch changes | "Watch what changed" | Stage reaches over the dimmed conversation; before wipes to and fro over after; changed clips lift | `MainWindow::watchChanges`, `followReelCompare`, `ViewerWidget::setCompareFrame`, `TimelineWidget::setFocusClips` | `watchingLeavesARoomOverThePicture`, `theStripSitsOnAnUprightPicture`, `theBeforeStillComesAndGoes`, `theLastDimIsTheOneThatStays`, `focusedClipsRiseOnce` |
-| Going home | Kerf has rendered | The picture shrinks into the folder; the conversation has the room | `MainWindow::goHome` | `theVeilDoesNotOutliveAMoveCutShort` |
+| Going home | Kerf rendered the cut itself (whole, full quality, not a range, draft or proposal) | The picture shrinks into the folder; the conversation has the room | `MainWindow::goHome` | `theVeilDoesNotOutliveAMoveCutShort` |
 | Manual export | An export you started finishes | A frame flies to the folder; the panel stays | `MainWindow::flyExportHome` | none |
 
 "none" means it has only been checked in a real window. Motion can only be judged
@@ -72,7 +72,7 @@ Look here before writing a new animation.
 | To show that something works, round the picture | `activity::EdgeLight` (`ViewerWidget::setEdgeLight`), with `activity::Hue`; what it says, `WorkChip::setText` |
 | To show that something is being made, over a clip or a tile | `activity::paintStripes` at `activity::stripePhase`, drawn again each `stripeFrame` where it is only |
 | Something to rise into place, in a layout or not | `moves::rise` |
-| A page that takes the room (Settings) | `StageShell::setCover`, shown with `setCovered`; raise its body, not the page (see **What a frame costs**) |
+| What one goes into (Settings) | A `ModalScrim` (ui/modal_scrim.h) given to `StageShell::setCover`, shown with `setCovered`, over the whole window; raise its body, not the scrim (see **What a frame costs**) |
 | Something in the toolbar to keep to the sidebar's edge | `ToolbarWiring::sidebarEdge`, which follows the sidebar while it moves |
 | A region to fall back | `moves::dim` |
 | The timeline to fall back or come in | `StageShell::veilTimeline` (`moves::dim` does not work on it) |
@@ -156,7 +156,7 @@ in, and each region drawn whole.
 - `QGraphicsOpacityEffect` does not dim `TimelineWidget`; use the veil.
 - The before side of the wipe is a still, as two streams cannot play at once. A cut
   that is all new has nothing to compare, so it has no wipe.
-- `Going home` follows the turn that called `render`, not that render finishing.
+- `Going home` follows the turn that rendered the cut itself, not that render finishing.
 - Stand-ins are posters, so they are soft until the render arrives.
 - Screenshots do not show whether motion is smooth, and `whatEachSceneCosts` shows what
   it costs, not how it looks. Only a real window shows that.

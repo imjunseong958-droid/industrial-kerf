@@ -28,6 +28,7 @@
 #include "stage_motion.h"
 #include "ui/chat_messages.h"
 #include "ui/conversation_model.h"
+#include "ui/make_card.h"
 
 #include <QAbstractButton>
 #include <QHash>
@@ -35,6 +36,7 @@
 #include <QJsonObject>
 #include <QList>
 #include <QPointer>
+#include <QSet>
 #include <QWidget>
 
 #include <functional>
@@ -167,8 +169,13 @@ public:
     // Kerf's answer as it streams, and whole.
     void appendAnswer(const QString &delta);
     void setAnswer(const QString &text);
-    // A finished tool call or status: a step of the work log.
+    // A status line: a step of the work log.
     void addStep(const QString &step);
+    // A tool call: its row of the work log, by id, put in place once it ends.
+    void setStep(const QString &id, const QString &step, bool failed = false);
+    // A making Kerf asked the person to run: a card with Make under the
+    // live answer.
+    void addAsk(const MakeCard::Ask &ask);
     // What Kerf is doing now, beside "Working".
     void setTurnStatus(const QString &status);
     void setTurnBusy(bool busy);
@@ -179,6 +186,18 @@ public:
     void stopTurn();
     // The live Kerf message; null when there is no turn.
     KerfMessage *liveMessage() const { return m_live.kerf.data(); }
+
+    // ---- makings ------------------------------------------------------------
+    // What the cards say of a media: its name, and whether `take` is made.
+    struct MediaFacts {
+        QString name;
+        bool made = false;
+    };
+    void setMediaFacts(std::function<MediaFacts(const QString &media, int take)> facts) { m_mediaFacts = std::move(facts); }
+    // How a making of `media` goes (media_making, media_made, …), for its cards.
+    void setMakingState(const QString &media, MakeCard::State state, const QString &detail = {}, int take = 0);
+    // Every Make card, kept and live, in order.
+    QList<MakeCard *> makeCards() const;
 
     // ---- the list ----------------------------------------------------------
     // Every message, in order (not the welcome).
@@ -256,6 +275,8 @@ signals:
     void shownVersionChanged(const QString &proposalId, const QString &versionId);
     void postRequested();
     void stopRequested();
+    // Return while Kerf works: what is written goes once the turn ends.
+    void queueRequested();
     // A suggestion that runs (QC).
     void runRequested(const QString &what);
     // The open conversation: "rename" (with its new title), "archive", "delete".
@@ -264,6 +285,11 @@ signals:
     void moreAction(const QString &action, const QString &argument);
     // The composer's chip, or Shift-Tab, chose how far Kerf may go.
     void permissionModeChosen(kerf::PermissionMode mode);
+    // A Make card: make it (`rolls` takes), stop its making, or ask Kerf to
+    // look at the take it made.
+    void makeRequested(const QString &media, int rolls);
+    void stopMakingRequested(const QString &media);
+    void lookAtTakeRequested(const QString &media, int take);
 
 protected:
     void paintEvent(QPaintEvent *) override;
@@ -314,6 +340,9 @@ private:
     KerfMessage *ensureLiveKerf();
     YouMessage *makeYou(const QString &text, double at);
     KerfMessage *makeKerf();
+    MakeCard *makeAskCard(const MakeCard::Ask &ask);
+    // A card as what is known of its making says.
+    void syncAskCard(MakeCard *card) const;
     void insertMessage(QWidget *message);
     ProposalCard *buildCard(const ProposalModel::Proposal &proposal);
     // Proposals no answer here staged (an agent over MCP): shown at the end.
@@ -335,6 +364,16 @@ private:
     bool m_connected = false;
     std::function<ProposalChange(const QString &)> m_describer;
     std::function<CutPicture(const QString &)> m_pictureSource;
+    std::function<MediaFacts(const QString &, int)> m_mediaFacts;
+    // How each media's making goes, as the bridge last said.
+    struct Making {
+        MakeCard::State state = MakeCard::State::Asked;
+        QString detail;
+        int take = 0;
+    };
+    QHash<QString, Making> m_makings;
+    // Cards the person said Not now to (by Ask::key), this launch.
+    QSet<QString> m_declined;
     QString m_stageProposal;
     QJsonArray m_steps;
     QStringList m_models;

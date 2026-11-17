@@ -1,5 +1,5 @@
-//! Several proposals at once, their versions and authors, the review log
-//! beside them, and the formats older kerfds left on disk.
+//! Several proposals at once, their versions and authors, and the formats
+//! older kerfds left on disk.
 
 use super::*;
 use serde_json::{json, Value};

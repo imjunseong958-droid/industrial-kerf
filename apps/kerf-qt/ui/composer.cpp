@@ -7,6 +7,7 @@
 #include <QAbstractTextDocumentLayout>
 #include <QAction>
 #include <QApplication>
+#include <QFontMetrics>
 #include <QFontMetricsF>
 #include <QHBoxLayout>
 #include <QKeyEvent>
@@ -473,6 +474,32 @@ Composer::Composer(QWidget *parent) : QFrame(parent) {
     // 18 either side, as the conversation's text keeps 22 in; 12 over, 16 under.
     outer->setContentsMargins(18, 12, 18, 16);
     outer->setSpacing(0);
+    // What waits for Kerf to finish: "Next: …" and Cancel, over the box.
+    m_queuedRow = new QWidget;
+    m_queuedRow->setObjectName(QStringLiteral("composerQueued"));
+    {
+        auto *row = new QHBoxLayout(m_queuedRow);
+        row->setContentsMargins(4, 0, 0, 6);
+        row->setSpacing(8);
+        m_queuedLabel = new QLabel;
+        m_queuedLabel->setFont(tokens::font(meta));
+        QPalette palette = m_queuedLabel->palette();
+        palette.setColor(QPalette::WindowText, color(ink2));
+        m_queuedLabel->setPalette(palette);
+        m_queuedLabel->setTextFormat(Qt::PlainText);
+        row->addWidget(m_queuedLabel, 1);
+        auto *cancel = new ui::GhostButton(QStringLiteral("Cancel"));
+        cancel->setObjectName(QStringLiteral("composerQueuedCancel"));
+        cancel->setMeta(true);
+        connect(cancel, &QAbstractButton::clicked, this, [this] {
+            setQueued(QString());
+            emit queuedCancelled();
+        });
+        m_queuedCancel = cancel;
+        row->addWidget(cancel);
+    }
+    m_queuedRow->hide();
+    outer->addWidget(m_queuedRow);
     auto *box = new ComposerBox;
     m_box = box;
     m_box->setObjectName(QStringLiteral("composerBox"));
@@ -677,6 +704,17 @@ void Composer::setError(const QString &message) {
     m_error->setVisible(!message.isEmpty());
 }
 
+void Composer::setQueued(const QString &text) {
+    m_queuedText = text.trimmed();
+    const QString line = m_queuedText.simplified();
+    m_queuedLabel->setText(QStringLiteral("Next: %1").arg(line));
+    m_queuedLabel->setToolTip(m_queuedText);
+    // One line, cut where it runs out of room.
+    m_queuedLabel->setText(QFontMetrics(m_queuedLabel->font()).elidedText(m_queuedLabel->text(), Qt::ElideRight, std::max(80, width() - 120)));
+    m_queuedRow->setVisible(!m_queuedText.isEmpty());
+    updateGeometry();
+}
+
 void Composer::setSuggestions(const QStringList &labels) {
     m_suggestions->setItems(labels);
     updatePopovers();
@@ -754,8 +792,10 @@ bool Composer::eventFilter(QObject *watched, QEvent *event) {
         auto *key = static_cast<QKeyEvent *>(event);
         const bool enter = key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter;
         if (enter && !(key->modifiers() & Qt::ShiftModifier)) {
-            // Return sends; a draft stays while sending is not possible.
+            // Return sends; while Kerf works it waits for the turn to end; a
+            // draft stays while neither is possible.
             if (!m_busy && m_send->isEnabled()) emit submitRequested();
+            else if (m_busy && !text().isEmpty()) emit queueRequested();
             return true;
         }
         if (key->key() == Qt::Key_Escape) {

@@ -23,12 +23,12 @@ Download the latest release from
 [GitHub](https://github.com/imjunseong958-droid/industrial-kerf/releases). For
 Windows, run the installer (`…-windows-x64-setup.exe`): it installs Kerf for you
 alone, with no administrator, adds it to the Start menu, and opens `kerf://`
-review links in it; Settings ▸ Apps uninstalls it. Or unpack the zip anywhere and
+project links in it; Settings ▸ Apps uninstalls it. Or unpack the zip anywhere and
 run `kerf-qt.exe`, which does not open links. For a Mac with Apple silicon, unpack
 the zip and move Industrial Kerf to Applications. For Debian 13, Ubuntu 24.04 and what
 comes from them, `sudo apt install ./Industrial-Kerf-…-linux-x64.deb` in the folder you
 downloaded it to installs Kerf with what it needs from the system, adds it to your
-applications, opens `kerf://` review links in it, and puts `kerf`, `kerfd` and `kerf-mcp`
+applications, opens `kerf://` project links in it, and puts `kerf`, `kerfd` and `kerf-mcp`
 on your `PATH`; `sudo apt remove industrial-kerf` takes it away. For Fedora,
 `sudo dnf install ./Industrial-Kerf-…-linux-x64.rpm` does the same, and
 `sudo dnf remove industrial-kerf` takes it away. On any other Linux
@@ -36,7 +36,7 @@ on your `PATH`; `sudo apt remove industrial-kerf` takes it away. For Fedora,
 unpack the `.tar.xz` anywhere and run `bin/kerf-qt`; it carries what it needs
 beyond what every desktop has, which `system-libraries.txt` beside it lists. Run
 `./install-desktop-entry.sh` in the folder once to have Kerf among your applications and
-open `kerf://` review links in it, for you alone; run it again after moving the folder,
+open `kerf://` project links in it, for you alone; run it again after moving the folder,
 and `--remove` takes it away. Releases are not
 signed yet, so the first run asks: on Windows, More info ▸ Run anyway; on a Mac,
 right-click the app ▸ Open. Help ▸ About
@@ -264,8 +264,8 @@ left alone, and nothing is changed for you.
 - **Sequence ▸ Run QC** runs the checks a delivery needs: loudness, true peak,
   gamut, title safe, caption overlap and timing, flash, and black. What it finds
   is listed under Preflight in the toolbar's Export menu, where Ask Kerf on a
-  failed row asks Kerf to fix it. A blocking finding becomes a note in the
-  conversation, resolved once a later check no longer finds it.
+  failed row asks Kerf to fix it; the conversation offers each failed row as
+  something to ask.
 - **Export** in the toolbar renders a Draft (H.264) or a Master (ProRes 422 HQ
   with 24-bit sound; ⌘E). Both go to `deliveries/` in the project, as
   `<project>_master` and `<project>_draft`; a draft made again is numbered.

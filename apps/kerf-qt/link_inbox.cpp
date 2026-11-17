@@ -1,6 +1,6 @@
 #include "link_inbox.h"
 
-#include "review_link.h"
+#include "project_link.h"
 
 #include <QDir>
 #include <QLocalServer>
@@ -65,7 +65,7 @@ bool handOff(const QString &name, const QStringList &links, int timeoutMs) {
     QByteArray message;
     for (const QString &link : links) {
         const QString line = link.trimmed();
-        if (isReviewLink(line) && !line.contains(QLatin1Char('\n')) && !line.contains(QLatin1Char('\r')))
+        if (isProjectLink(line) && !line.contains(QLatin1Char('\n')) && !line.contains(QLatin1Char('\r')))
             message += line.toUtf8() + '\n';
     }
     if (name.isEmpty() || message.isEmpty()) return false;
@@ -121,7 +121,7 @@ void Inbox::accept() {
             QStringList links;
             for (const QByteArray &line : received->left(end).split('\n')) {
                 const QString link = QString::fromUtf8(line).trimmed();
-                if (isReviewLink(link)) links << link;
+                if (isProjectLink(link)) links << link;
             }
             received->clear();
             // Answered first, so the process that handed them over is not left

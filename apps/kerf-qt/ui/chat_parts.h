@@ -31,21 +31,17 @@ QString ageTip(qint64 revision, const QDateTime &created);
 // The seconds of "HH:MM:SS:FF" (or ;FF) at `fps`; NaN when it is not one.
 double parseTimecode(const QString &text, double fps);
 // The text as rich text: escaped, inline timecodes as tc:<seconds> links
-// (mono 12, accent ink), @mentions in ink 500, line breaks kept.
+// (mono 12, accent ink), line breaks kept.
 QString richBody(const QString &body, double fps);
 // The text escaped as rich text, a word too long for any line (a file's
 // name, a link) free to break anywhere: a QLabel breaks only at spaces.
 QString breakingLongWords(const QString &text);
 // The text's first line, as a title: without the Markdown marks richBody shows it without.
 QString titleLine(const QString &body);
-// The @mentions in `text`, without the @, in order.
-QStringList mentions(const QString &text);
-// Whether the text is for Kerf: it mentions @Kerf, or no one.
-bool addressesKerf(const QString &text);
 
 } // namespace chat
 
-// .lk: a fold link ("2 replies", "3 steps", "2 changes"), UI 12/16 (11/16
+// .lk: a fold link ("3 steps", "2 changes"), UI 12/16 (11/16
 // in the tags row) ink2, hover ink, with a 14 pt chevron that turns 180°
 // in 160 ms when open. Checkable: checked is open.
 class ChatExpander final : public QAbstractButton {

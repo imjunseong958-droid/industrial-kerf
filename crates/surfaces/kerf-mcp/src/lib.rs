@@ -1,10 +1,10 @@
 //! MCP stdio transport and project-scoped capability router.
 //!
 //! Every mutation goes through kerfd. The MCP process is a stateless adapter
-//! for the kernel harness (`look`, `edit`, `render`, `note`; see `harness`):
-//! it reads the current document for each request, stages every edit as a
-//! proposal for the user, and posts notes to the project's review log. Both
-//! carry the client's name, as `initialize` gave it, as their author.
+//! for the kernel harness (`look`, `edit`, `render`, `make`; see `harness`):
+//! it reads the current document for each request and stages every edit as a
+//! proposal for the user, which carries the client's name, as `initialize`
+//! gave it, as its author.
 
 mod brand;
 mod camera_file;
@@ -111,7 +111,6 @@ impl From<RuntimeError> for McpError {
         // The refusals an agent acts on keep their own code.
         let code = match error.code.as_str() {
             "REVISION_CONFLICT" => "REVISION_CONFLICT",
-            "BLOCKING_NOTES" => "BLOCKING_NOTES",
             _ => "RUNTIME_ERROR",
         };
         Self::new(code, error.message).with_details(json!({

@@ -1,7 +1,6 @@
 //! Who staged a proposal, and the clock its records are stamped with.
 //!
-//! These outlived the review log they were first written for: a proposal
-//! still says who made it, and a revision when it was made.
+//! A proposal says who made it, and a revision when it was made.
 
 use crate::RuntimeError;
 use serde::{Deserialize, Serialize};

@@ -12,6 +12,7 @@
 #include "editor_common.h"
 #include "editor_style.h"
 #include "main_window.h"
+#include "modal_scrim.h"
 #include "media_artwork.h"
 #include "proposal_card.h"
 #include "chat_parts.h"
@@ -308,8 +309,8 @@ private slots:
                 {"chat's text on its surface", t.chatText, t.chatSurface, 4.5},
                 {"chat's error tag", t.errorText, t.chatSurface, 4.5},
                 {"chat's header buttons' symbols on their wash", t.chatText, laidOn(t.chatSurface, t.chatChipHover), 3.0},
-                {"a comment's action under the pointer", t.chatText, laidOn(t.chatSurface, t.chatChip), 4.5},
-                {"a comment's quiet action", t.chatSecondary, t.chatSurface, 4.5},
+                {"an answer's action under the pointer", t.chatText, laidOn(t.chatSurface, t.chatChip), 4.5},
+                {"an answer's quiet action", t.chatSecondary, t.chatSurface, 4.5},
                 {"chip's label under the pointer", t.chatChipText, laidOn(t.chatSurface, t.chatChipHover), 4.5},
                 {"chip's label on the timeline's bar", t.chatChipText, laidOn(t.chrome, t.chatChip), 4.5},
                 {"Send and Accept's label on the accent", t.onAccent, t.accent, 4.5},
@@ -725,32 +726,36 @@ private slots:
             }
 
             // Settings.
-            // A page in the room, not a window over it: all of the content
-            // right of the sidebar, in the room's colour.
+            // Over the window, as everything one goes into is: the whole
+            // window dimmed, and the panel in its middle, in the room's colour.
             window.showSettings();
             QVERIFY(window.m_preferences->isVisible());
             QCOMPARE(window.m_preferences->window(), &window);
             QCoreApplication::processEvents();
-            // Under a bar that shows (this build has no runtime, and says so).
-            int bars = 0;
-            for (const QWidget *bar : {window.m_connectionBanner, window.m_errorBanner, window.m_divergedBanner})
-                if (!bar->isHidden()) bars += bar->height();
-            QCOMPARE(window.m_preferences->geometry(),
-                     QRect(window.m_shell->rects().sidebar.width(), bars,
-                           window.m_shell->width() - window.m_shell->rects().sidebar.width(), window.m_shell->height() - bars));
+            QCOMPARE(window.m_preferences->geometry(), window.m_shell->rect());
+            auto *scrim = qobject_cast<ModalScrim *>(window.m_preferences);
+            QVERIFY(scrim && scrim->panel());
+            const QRect panelRect = scrim->panel()->geometry();
+            QVERIFY(panelRect.width() < window.m_shell->width() && panelRect.height() < window.m_shell->height());
+            QCOMPARE(panelRect.center().x(), window.m_shell->rect().center().x());
             const QImage settings = window.m_preferences->grab().toImage();
-            QCOMPARE(settings.pixelColor(QPoint(4, settings.height() - 4)).rgb(), tokens::color(tokens::chrome).rgb());
+            QCOMPARE(settings.pixelColor(panelRect.bottomLeft() + QPoint(20, -8)).rgb(), tokens::color(tokens::chrome).rgb());
+            // Outside it, the work is there, dimmed.
+            QVERIFY(qGray(settings.pixelColor(QPoint(4, 4)).rgb()) < qGray(tokens::color(tokens::chrome).rgb()) + 1);
             QVERIFY(!window.m_preferences->findChild<QDialogButtonBox *>());
             save(settings, QStringLiteral("settings-%1").arg(name));
             // Its pages are named down its side; each name shows its page.
-            QCOMPARE(window.m_settingsIds, (QStringList{QStringLiteral("account"), QStringLiteral("ai"), QStringLiteral("appearance"),
-                                                        QStringLiteral("general"), QStringLiteral("advanced")}));
+            QCOMPARE(window.m_settingsIds, (QStringList{QStringLiteral("account"), QStringLiteral("ai"), QStringLiteral("models"),
+                                                        QStringLiteral("appearance"), QStringLiteral("general"), QStringLiteral("advanced")}));
             QVERIFY(!window.m_advancedSettings->isVisible());
             window.m_preferences->findChild<SidebarRow *>(QStringLiteral("settingsNav.advanced"))->click();
             QVERIFY(window.m_advancedSettings->isVisible());
-            QVERIFY(window.m_settingsNav.at(4)->isCurrent());
-            // Back, or Esc, gives the room back.
-            window.m_preferences->findChild<ui::GhostButton *>(QStringLiteral("settingsBack"))->click();
+            QVERIFY(window.m_settingsNav.at(5)->isCurrent());
+            // Its close, a press on the dim, or Esc gives the window back.
+            window.m_preferences->findChild<ui::IconButton *>(QStringLiteral("settingsClose"))->click();
+            QVERIFY(!window.m_preferences->isVisible());
+            window.showSettings();
+            QTest::mouseClick(window.m_preferences, Qt::LeftButton, Qt::NoModifier, QPoint(4, 4));
             QVERIFY(!window.m_preferences->isVisible());
 
             // A representative dialog: the preset's media bindings.
@@ -879,8 +884,8 @@ private slots:
         QCOMPARE(changed.count(), 0);
 
         // An open window keeps the one theme when the old scheme API is
-        // called: no change is signalled, and its docks, the conversation's
-        // panel and the comments it shows draw the same.
+        // called: no change is signalled, and its docks and the conversation
+        // draw the same.
         MainWindow window{QString(), QString()};
         window.setConnection(QStringLiteral("ready"));
         window.resize(1440, 900);
@@ -1031,7 +1036,7 @@ private slots:
         auto *choice = new QComboBox;
         choice->addItems({QStringLiteral("Master"), QStringLiteral("Draft")});
         auto *seconds = new StepperSpinBox;
-        auto *box = new QCheckBox(QStringLiteral("Include comments as EDL locators"));
+        auto *box = new QCheckBox(QStringLiteral("Include markers as EDL locators"));
         auto *slider = new QSlider(Qt::Horizontal);
         auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
         auto *list = new QListWidget;

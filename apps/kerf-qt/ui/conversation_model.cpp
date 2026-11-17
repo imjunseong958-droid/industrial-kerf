@@ -43,6 +43,8 @@ ConversationModel::Item ConversationModel::readItem(const QJsonObject &object) {
     item.error = object.value(QStringLiteral("error")).toBool();
     item.stopped = object.value(QStringLiteral("stopped")).toBool();
     item.proposal = object.value(QStringLiteral("proposal")).toString();
+    for (const QJsonValue &value : object.value(QStringLiteral("asks")).toArray())
+        if (const MakingAsk ask = MakingAsk::read(value.toObject()); ask.isValid()) item.asks << ask;
     return item;
 }
 

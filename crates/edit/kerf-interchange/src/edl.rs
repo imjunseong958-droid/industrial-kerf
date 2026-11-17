@@ -28,7 +28,7 @@ use std::fmt::{self, Write as _};
 use std::path::Path;
 
 /// A note at a time on the sequence (an offset from its first frame), as a
-/// `* LOC:` line: a marker or a review comment.
+/// `* LOC:` line: a marker of the sequence.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Locator {
     pub at: Time,

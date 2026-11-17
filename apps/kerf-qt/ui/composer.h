@@ -7,7 +7,7 @@
 //
 //   ┌──────────────────────────────────────────────────────────────────────┐
 //   │ Ask Kerf to make or change something                                 │  input, UI 14/22
-//   │ [lock Ask before edits v] [claude-opus-5-5 v] [clock 00:00:17:08]  ◔ [send] │  row 28, gap 4
+//   │ [lock Ask before edits v] [model v] [clock 00:00:17:08]       ◔ [send] │  row 28, gap 4
 //   └──────────────────────────────────────────────────────────────────────┘
 //
 // The composer only collects what is written and chosen; ChatWiring sends it
@@ -248,6 +248,12 @@ public:
     bool hasFocusWithin() const;
     // A refused post, shown under the box in neg; empty clears it.
     void setError(const QString &message);
+    // The request that goes once Kerf is done (Return while it works), over
+    // the box with Cancel; empty: none waits.
+    void setQueued(const QString &text);
+    QString queued() const { return m_queuedText; }
+    QWidget *queuedRow() const { return m_queuedRow; }
+    QAbstractButton *queuedCancel() const { return m_queuedCancel; }
     // The popover's requests, shown while the input is focused and empty.
     void setSuggestions(const QStringList &labels);
     QStringList suggestions() const;
@@ -260,6 +266,9 @@ public:
 signals:
     void submitRequested();
     void stopRequested();
+    // Return while Kerf works: what is written waits for its turn to end.
+    void queueRequested();
+    void queuedCancelled();
     // Chosen here, from the chip's menu or with Shift-Tab.
     void permissionModeChosen(kerf::PermissionMode mode);
     void modelChosen(const QString &model);
@@ -298,6 +307,10 @@ private:
     SendButton *m_send = nullptr;
     SendButton *m_stop = nullptr;
     QLabel *m_error = nullptr;
+    QWidget *m_queuedRow = nullptr;
+    QLabel *m_queuedLabel = nullptr;
+    QAbstractButton *m_queuedCancel = nullptr;
+    QString m_queuedText;
     FloatingList *m_suggestions = nullptr;
     bool m_busy = false;
     bool m_focused = false;

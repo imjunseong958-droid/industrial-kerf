@@ -1,12 +1,12 @@
-//! The agent harness on the kernel: `look`, `edit`, `render`, and `note`.
+//! The agent harness on the kernel: `look`, `edit`, `render`, and `make`.
 //!
 //! An agent works from two pieces of context: the annotated `.kerf` document
 //! and the language reference. It looks at media and frames, changes the
-//! project with one edit script, renders, and leaves notes for the people
-//! reviewing. Each edit becomes a proposal for the user, returned with its
-//! document diff, the check findings, and a before/after preview of the
-//! range it changed. Proposals and notes are by the router's author: Kerf,
-//! or the MCP client that made them.
+//! project with one edit script, renders, and asks for media to be made
+//! from their recipes. Each edit becomes a proposal for the user, returned
+//! with its document diff, the check findings, and a before/after preview of
+//! the range it changed. Proposals are by the router's author: Kerf, or the
+//! MCP client that made them.
 
 use super::{engine_error, KerfMcpRouter, McpError, ToolAnnotations};
 use base64::Engine;
@@ -4117,6 +4117,9 @@ impl KerfMcpRouter {
                 (to - from).seconds(),
             )?);
         }
+        // The cut itself, whole and at full quality: what the person will
+        // keep, not a check of a range, a draft, or a proposal.
+        let deliverable = !draft && range.is_none() && input.proposal.is_none();
         let (job, output) = self.render_start(
             draft,
             range,
@@ -4129,6 +4132,7 @@ impl KerfMcpRouter {
             "output": output,
             "sequence": sequence.id.to_string(),
             "revision": self.runtime.get_state()?.revision,
+            "deliverable": deliverable,
         });
         if let Some(id) = input.proposal {
             result["proposal"] = json!(id);
@@ -4381,7 +4385,10 @@ fn find_properties(words: &str) -> Vec<Value> {
 /// The models set up, as `look` lists them: each by the name a `generate` line gives it,
 /// with what the person's models file says it takes. `size` is written as a line writes it,
 /// and `guide` is the `render` line that draws a guide for it, with no more than it reads.
-fn models_listed(models: &kerf_engine::recipe::model::Models) -> Vec<Value> {
+/// The models a recipe's `generate` can name, as `look` lists them: each
+/// with what its owner's file says it takes, and the `render` line that draws
+/// a guide for it where it follows one.
+pub fn models_listed(models: &kerf_engine::recipe::model::Models) -> Vec<Value> {
     models
         .names()
         .map(|name| {

@@ -1,4 +1,4 @@
-#include "review_link.h"
+#include "project_link.h"
 
 #include "chat_parts.h"
 #include "main_window.h"
@@ -16,7 +16,7 @@
 
 namespace kerf::links {
 
-bool isReviewLink(const QString &text) {
+bool isProjectLink(const QString &text) {
     return text.trimmed().startsWith(QStringLiteral("kerf://"), Qt::CaseInsensitive);
 }
 
@@ -83,11 +83,11 @@ QString fromUrl(const QUrl &url) {
     return text;
 }
 
-ReviewLink parse(const QString &text) {
-    ReviewLink link;
+ProjectLink parse(const QString &text) {
+    ProjectLink link;
     const QString trimmed = text.trimmed();
-    if (!isReviewLink(trimmed)) {
-        link.error = QStringLiteral("“%1” is not a kerf:// review link.").arg(trimmed);
+    if (!isProjectLink(trimmed)) {
+        link.error = QStringLiteral("“%1” is not a kerf:// project link.").arg(trimmed);
         return link;
     }
     // kerf://<project>/rev<N>[@TC][?query]. Read by hand: QUrl would take
@@ -150,7 +150,7 @@ QString resolve(const QString &project, const QStringList &candidates, QString *
     return {};
 }
 
-double seconds(const ReviewLink &link, double fps) {
+double seconds(const ProjectLink &link, double fps) {
     if (link.timecode.isEmpty()) return std::numeric_limits<double>::quiet_NaN();
     return chat::parseTimecode(link.timecode, fps);
 }
@@ -169,7 +169,7 @@ void Router::refuse(const QString &link, const QString &reason) {
 }
 
 MainWindow *Router::follow(const QString &text) {
-    const ReviewLink link = parse(text);
+    const ProjectLink link = parse(text);
     if (!link.valid) {
         refuse(text, link.error);
         return nullptr;
@@ -227,14 +227,14 @@ bool Router::eventFilter(QObject *watched, QEvent *event) {
             if (text.isEmpty()) {
                 const QString source = open->url().errorString();
                 refuse(source.isEmpty() ? QStringLiteral("kerf://") : source,
-                       QStringLiteral("This review link could not be read. Copy it again from Kerf: a link names the "
+                       QStringLiteral("This project link could not be read. Copy it again from Kerf: a link names the "
                                       "project’s folder in lower case, with dashes for spaces."));
             } else {
                 follow(text);
             }
             return true;
         }
-        if (isReviewLink(open->file())) {
+        if (isProjectLink(open->file())) {
             follow(open->file());
             return true;
         }

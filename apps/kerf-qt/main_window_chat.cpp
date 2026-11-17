@@ -168,6 +168,8 @@ void ChatWiring::attach(ChatPanel *panel) {
 
     // What the panel asks for.
     connect(panel, &ChatPanel::postRequested, this, &ChatWiring::post);
+    connect(panel, &ChatPanel::queueRequested, this, &ChatWiring::queue);
+    connect(panel->composerWidget(), &Composer::queuedCancelled, this, [this] { m_queued.clear(); });
     connect(panel, &ChatPanel::seekRequested, w, &MainWindow::queueSeek);
     connect(panel, &ChatPanel::acceptRequested, this, &ChatWiring::accept);
     connect(panel, &ChatPanel::rejectRequested, this, &ChatWiring::reject);
@@ -216,6 +218,23 @@ void ChatWiring::attach(ChatPanel *panel) {
         }
     });
 
+    // Make cards: the bin's making, and Kerf asked to look at what it made.
+    panel->setMediaFacts([w](const QString &media, int take) {
+        ChatPanel::MediaFacts facts{w->mediaName(media), false};
+        for (const QJsonValue &value : w->mediaTakes(media))
+            if (take > 0 && value.toObject().value(QStringLiteral("number")).toInt() >= take) facts.made = true;
+        return facts;
+    });
+    connect(panel, &ChatPanel::makeRequested, w, [w](const QString &media, int rolls) { w->runMake(media, rolls); });
+    connect(panel, &ChatPanel::stopMakingRequested, w, [w](const QString &media) { w->stopMake(media); });
+    connect(panel, &ChatPanel::lookAtTakeRequested, this, [this, w](const QString &media, int take) {
+        if (w->m_agentBusy || !w->m_connected) return;
+        sendTurn(QStringLiteral("Take %1 of %2 is made. Look at it and tell me how it came out against what I asked for.")
+                     .arg(take)
+                     .arg(media),
+                 w->m_lastFocus, w->m_lastFocusLabel);
+    });
+
     panel->setFps(m_bus->fps());
 }
 
@@ -235,6 +254,38 @@ bool ChatWiring::post() {
     composer->clear();
     w->updateChatControls();
     return true;
+}
+
+bool ChatWiring::queue() {
+    MainWindow *w = m_window;
+    if (!m_panel || !w->m_agentBusy) return false;
+    Composer *composer = m_panel->composerWidget();
+    const QString text = composer->text().trimmed();
+    if (text.isEmpty()) return false;
+    // A second one joins the first, as one request.
+    m_queued = m_queued.isEmpty() ? text : m_queued + QStringLiteral("\n\n") + text;
+    m_queuedAt = composer->stamped() ? w->m_playhead : std::numeric_limits<double>::quiet_NaN();
+    composer->clear();
+    composer->setQueued(m_queued);
+    return true;
+}
+
+void ChatWiring::sendQueued(bool ended) {
+    MainWindow *w = m_window;
+    if (m_queued.isEmpty() || !m_panel) return;
+    const QString text = std::exchange(m_queued, QString());
+    const double at = m_queuedAt;
+    m_panel->composerWidget()->setQueued(QString());
+    if (!ended || !w->m_connected) {
+        // Stopped or failed: back in the composer, to send or change.
+        if (m_panel->composerWidget()->text().isEmpty()) m_panel->composerWidget()->fill(text);
+        return;
+    }
+    const QJsonObject focus{{QStringLiteral("scope"), QStringLiteral("sequence")},
+                            {QStringLiteral("fromFrame"), w->frameAt(w->m_playhead)},
+                            {QStringLiteral("toFrame"), w->frameAt(w->m_playhead)}};
+    if (!sendTurn(text, focus, QStringLiteral("Sequence at %1").arg(timelineTimecode(w->m_playhead, w->m_fps)), at))
+        m_panel->composerWidget()->fill(text);
 }
 
 bool ChatWiring::sendTurn(const QString &text, const QJsonObject &focus, const QString &focusLabel, double at) {
@@ -360,6 +411,17 @@ void ChatWiring::syncPinnedProposal() {
 }
 
 void ChatWiring::handleEvent(const QString &type, const QJsonObject &event) {
+    if (type == QLatin1String("agent_state")) {
+        const QString state = event.value(QStringLiteral("state")).toString();
+        if (state == QLatin1String("running")) m_turnTroubled = false;
+        else if (state == QLatin1String("failed") || state == QLatin1String("aborted")) m_turnTroubled = true;
+        return;
+    }
+    if (type == QLatin1String("agent_busy")) {
+        // The turn is over: what waited for it goes now.
+        if (!event.value(QStringLiteral("busy")).toBool()) sendQueued(!m_turnTroubled);
+        return;
+    }
     if (type == QLatin1String("state")) {
         m_model->applyEvent(type, event);
         if (m_panel) {
@@ -378,6 +440,16 @@ void ChatWiring::handleEvent(const QString &type, const QJsonObject &event) {
         sendConversations(QJsonObject{{QStringLiteral("action"), QStringLiteral("list")}});
         if (const QString id = m_conversations->currentId(); !id.isEmpty())
             sendConversations(QJsonObject{{QStringLiteral("action"), QStringLiteral("open")}, {QStringLiteral("id"), id}});
+    } else if (type == QLatin1String("media_making")) {
+        if (m_panel)
+            m_panel->setMakingState(event.value(QStringLiteral("media")).toString(), MakeCard::State::Making,
+                                    event.value(QStringLiteral("line")).toString(), event.value(QStringLiteral("take")).toInt());
+    } else if (type == QLatin1String("media_made")) {
+        if (m_panel)
+            m_panel->setMakingState(event.value(QStringLiteral("media")).toString(), MakeCard::State::Made, QString(),
+                                    event.value(QStringLiteral("take")).toInt());
+    } else if (type == QLatin1String("media_make_cancelled")) {
+        if (m_panel) m_panel->setMakingState(event.value(QStringLiteral("media")).toString(), MakeCard::State::Stopped);
     } else if (type == QLatin1String("check")) {
         if (event.value(QStringLiteral("status")).toString() == QLatin1String("done") && m_panel)
             m_panel->setCheckRows(event.value(QStringLiteral("summary")).toObject().value(QStringLiteral("rows")).toArray());
@@ -389,6 +461,11 @@ void ChatWiring::handleEvent(const QString &type, const QJsonObject &event) {
         else if (event.contains(QStringLiteral("proposalId")))
             m_panel->setPreviewProposal(event.value(QStringLiteral("proposalId")).toString());
     } else if (type == QLatin1String("error")) {
+        if (m_panel && event.value(QStringLiteral("command")).toString() == QLatin1String("media_make")) {
+            m_panel->setMakingState(event.value(QStringLiteral("media")).toString(), MakeCard::State::Failed,
+                                    event.value(QStringLiteral("message")).toString());
+            return;
+        }
         if (!m_panel || event.value(QStringLiteral("command")).toString() != QLatin1String("conversation")) return;
         m_window->showStatus(QStringLiteral("Couldn't change the conversation · %1")
                                  .arg(event.value(QStringLiteral("message")).toString()),
@@ -686,9 +763,14 @@ bool MainWindow::handleAgentEvent(const QJsonObject &event) {
             m_agentText.clear();
             m_chat->finishTurn();
         } else if (kind == QStringLiteral("tool")) {
-            appendConversationNote(QStringLiteral("Tool"), text);
-            addActivity(QStringLiteral("tool"), text.left(120));
-            if (text.startsWith(QStringLiteral("render"), Qt::CaseInsensitive)) m_turnRendered = true;
+            // One row of the work log a call: said as it starts, again once it ends.
+            const QString state = event.value(QStringLiteral("state")).toString();
+            m_chat->setStep(event.value(QStringLiteral("id")).toString(), text, state == QLatin1String("failed"));
+            m_activityDetail = text.simplified();
+            updateChatStatus();
+            if (state != QLatin1String("running")) addActivity(QStringLiteral("tool"), text.left(120));
+            // The cut itself was rendered (not a check of a range or a proposal).
+            if (event.value(QStringLiteral("rendered")).toBool()) m_turnRendered = true;
         } else if (kind == QStringLiteral("status")) {
             m_activityDetail = text.simplified();
             updateChatStatus();
@@ -732,6 +814,9 @@ bool MainWindow::handleAgentEvent(const QJsonObject &event) {
         m_chat->setContextUse(event.value(QStringLiteral("conversation")).toString(), event.value(QStringLiteral("used")).toInteger(),
                               event.value(QStringLiteral("limit")).toInteger(),
                               event.value(QStringLiteral("unit")).toString() == QLatin1String("tokens"));
+    } else if (type == QStringLiteral("agent_ask")) {
+        // A making for the person to say yes to: a card with Make.
+        if (const MakingAsk ask = MakingAsk::read(event); ask.isValid()) m_chat->addAsk(ask);
     } else if (type == QStringLiteral("agent_next")) {
         showNextSteps(event.value(QStringLiteral("steps")).toArray());
     } else if (type == QStringLiteral("agent_focus")) {

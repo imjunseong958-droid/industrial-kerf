@@ -1,9 +1,9 @@
 #pragma once
 
-// A proposal card of the Comments panel (mockup-spec 4.7): a pending change
-// from the state snapshot's proposals, under the comment that carries it.
+// A proposal card in the conversation: a pending change from the state
+// snapshot's proposals, under the answer that staged it.
 //
-//   [pin 12] Pinned proposal · blocking first        (the first open proposal)
+//   [pin 12] Pinned proposal                          (the first open proposal)
 //   Move logo reveal to the snare                     (UI 500 13/20; click opens)
 //   [2 changes ⌄]                             [v2 ⌄]  (versions menu)
 //   Logo_reveal · V4        → 00:00:26:12      +17f   (open: the changes)
@@ -16,8 +16,7 @@
 // With a picture the card keeps to its title, beside Reject and Accept under
 // the picture, and its versions when it has more than one.
 //
-// Settled, it collapses to one line: "Accepted in rev 23 · You · now". In
-// guest mode the buttons give way to "Waiting for the editor".
+// Settled, it collapses to one line: "Accepted in rev 23 · You · now".
 
 #include "test_friends.h"
 
@@ -172,7 +171,7 @@ public:
     QString proposalId() const { return m_id; }
     QString shownId() const { return m_shown.isEmpty() ? m_id : m_shown; }
 
-    void setPinned(bool pinned, bool blocking);
+    void setPinned(bool pinned);
     bool isPinned() const { return m_pinned; }
     void setTitle(const QString &title);
     void setChanges(const QList<Change> &changes);
@@ -192,13 +191,11 @@ public:
     ui::Button *watchButton() const { return m_watch; }
     void setPreview(bool on);
     bool previewOn() const;
-    // Accept is primary for the pinned or blocking proposal, else secondary.
+    // Accept is primary for the pinned proposal, else secondary.
     void setPrimary(bool primary);
     void setAcceptTip(const QString &tip);
     // The key Accept's tip names: proposal.accept's, ⌘↩ until told otherwise.
     void setAcceptKey(const QString &key);
-    // Guest mode: the buttons give way to "Waiting for the editor".
-    void setGuest(bool guest);
     // Accept refused (stale, offline): disabled with the reason as its tip.
     void setAcceptBlocked(const QString &reason);
     void setActionsEnabled(bool enabled);
@@ -235,7 +232,6 @@ public:
     ui::GhostButton *scriptButton() const { return m_script; }
     ui::Button *acceptButton() const { return m_accept; }
     ui::Button *rejectButton() const { return m_reject; }
-    QLabel *waitChip() const { return m_wait; }
     QLabel *settledLabel() const { return m_settledLabel; }
     // The versions menu's labels, checked first (for tests and menus).
     void showVersionMenu();
@@ -265,7 +261,6 @@ private:
     bool m_pinned = false;
     bool m_open = false;
     bool m_settled = false;
-    bool m_guest = false;
     QList<VersionItem> m_versions;
     Colour m_colour;
     QStringList m_diffLines;
@@ -292,7 +287,6 @@ private:
     bool m_hasWatch = false;
     ui::CheckBox *m_preview = nullptr;
     ui::GhostButton *m_script = nullptr;
-    QLabel *m_wait = nullptr;
     ui::Button *m_reject = nullptr;
     ui::Button *m_accept = nullptr;
     QString m_acceptTip = QStringLiteral("Accept");

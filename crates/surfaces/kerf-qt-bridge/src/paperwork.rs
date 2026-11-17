@@ -80,10 +80,7 @@ pub(crate) fn captions(
 /// The file name paperwork of `format` takes after `base` (the master's
 /// file stem, or the project's name).
 fn file_name(base: &str, format: &str) -> String {
-    match format {
-        "csv" => format!("{base} comments.csv"),
-        other => format!("{base}.{other}"),
-    }
+    format!("{base}.{format}")
 }
 
 /// The newest finished master whose file is still there.
@@ -279,10 +276,6 @@ mod tests {
         let root = directory.path();
         let master = root.join("deliveries/atlas_v7/Atlas master.mov");
         assert_eq!(
-            target(root, None, Some(&master), "Atlas", "csv").unwrap(),
-            root.join("deliveries/atlas_v7/Atlas master comments.csv")
-        );
-        assert_eq!(
             target(root, None, Some(&master), "Atlas", "edl").unwrap(),
             root.join("deliveries/atlas_v7/Atlas master.edl")
         );
@@ -295,8 +288,8 @@ mod tests {
             root.join("out/Atlas.vtt")
         );
         assert_eq!(
-            target(root, Some("notes.csv"), Some(&master), "Atlas", "csv").unwrap(),
-            root.join("notes.csv")
+            target(root, Some("cut.edl"), Some(&master), "Atlas", "edl").unwrap(),
+            root.join("cut.edl")
         );
         let job = |status: &str, quality: &str, path: &Path| RenderJob {
             job_id: "render-1".into(),

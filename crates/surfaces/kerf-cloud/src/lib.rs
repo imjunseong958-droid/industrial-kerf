@@ -7,7 +7,7 @@
 //! contract (`docs/cloud.md`): where the service is, the signed-in session,
 //! the account, and what the account allows. Until a service URL is
 //! configured, Kerf Cloud reports itself unavailable and people use their own
-//! API key (Settings → Advanced).
+//! API key (Settings → Chat).
 
 use serde::{Deserialize, Serialize};
 use std::ffi::OsString;
@@ -133,7 +133,7 @@ impl Access {
         match self {
             Self::Ready => None,
             Self::Unavailable => {
-                Some("Kerf Cloud isn't available yet. Add your own API key in Settings → Advanced.")
+                Some("Kerf Cloud isn't available yet. Add your own API key in Settings → Chat.")
             }
             Self::SignedOut => Some("Sign in to Kerf Cloud in Settings"),
             Self::Unreachable => Some("Kerf Cloud can't be reached right now"),
@@ -278,7 +278,7 @@ mod tests {
         assert!(Access::Unavailable
             .reason()
             .unwrap()
-            .contains("Settings → Advanced"));
+            .contains("Settings → Chat"));
     }
 
     #[test]

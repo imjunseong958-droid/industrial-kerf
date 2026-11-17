@@ -12,6 +12,7 @@
 #include <QFileInfo>
 #include <QFontMetrics>
 #include <QHBoxLayout>
+#include <QTimer>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -51,7 +52,6 @@ constexpr int kDotIcon = 12;
 constexpr int kAction = 20;
 // A conversation's title starts under its folder's icon, with the rest of the
 // row to itself.
-constexpr int kChildIndent = kChevron + kChevronGap;
 constexpr int kNoteHeight = 28;
 constexpr int kSearchHeight = 30;
 // What the folders' fold is kept under: a map of path to folded.
@@ -132,11 +132,9 @@ public:
 protected:
     void paintEvent(QPaintEvent *) override {
         QPainter p(this);
-        // Its folder's guide goes on down it.
-        p.fillRect(QRect(kPadding + kChevron / 2, 0, 1, height()), tokens::color(line));
         p.setFont(tokens::font(control));
         p.setPen(tokens::color(ink3));
-        const int x = kPadding + kChildIndent;
+        const int x = kPadding;
         const QRect room(x, 0, width() - x - kPadding, height());
         p.drawText(room, Qt::AlignLeft | Qt::AlignVCenter, QFontMetrics(p.font()).elidedText(m_text, Qt::ElideRight, room.width()));
     }
@@ -212,6 +210,12 @@ void SidebarRow::setChevron(Chevron chevron) {
 
 QRect SidebarRow::chevronRect() const {
     if (m_chevron == Chevron::None) return {};
+    if (m_heading) {
+        // After the name, with room around it to take a press.
+        const QFontMetrics metrics(tokens::font(control));
+        const int name = std::min(metrics.horizontalAdvance(text()), std::max(0, textRect().width() - kChevron - kChevronGap));
+        return QRect(textLeft() + name, 0, kChevronGap * 2 + kChevron, height());
+    }
     // The press it takes reaches the row's edge and its full height.
     return QRect(0, 0, kPadding + m_indent + kChevron + kChevronGap, height());
 }
@@ -219,6 +223,12 @@ QRect SidebarRow::chevronRect() const {
 void SidebarRow::setStrong(bool strong) {
     if (strong == m_strong) return;
     m_strong = strong;
+    update();
+}
+
+void SidebarRow::setHeading(bool heading) {
+    if (heading == m_heading) return;
+    m_heading = heading;
     update();
 }
 
@@ -272,7 +282,7 @@ void SidebarRow::setEditing(bool editing) {
 
 int SidebarRow::textLeft() const {
     int x = kPadding + m_indent;
-    if (m_chevron != Chevron::None) x += kChevron + kChevronGap;
+    if (m_chevron != Chevron::None && !m_heading) x += kChevron + kChevronGap;
     if (!m_icon.isEmpty()) x += kIcon + space::s8;
     else if (!m_dotIcon.isEmpty()) x += kDotIcon + space::s6;
     return x;
@@ -325,12 +335,41 @@ void SidebarRow::paintEvent(QPaintEvent *) {
     // pointer stands over it.
     if (m_guide) p.fillRect(QRect(kPadding + kChevron / 2, 0, 1, height()), tokens::color(line));
     QColor fill = tokens::color(m_current ? on : raised);
-    if (!m_current) fill.setAlphaF(float(hoverProgress()));
+    if (!m_current) fill.setAlphaF(float(hoverProgress() * (m_heading ? 0.5 : 1.0)));
     p.setPen(Qt::NoPen);
     p.setBrush(fill);
     p.drawRoundedRect(r, radius::control, radius::control);
 
     const bool lit = m_current || isHovered();
+    if (m_heading) {
+        // A group's heading: its name small and quiet, the chevron after it.
+        if (!m_editing) {
+            const QRect room = textRect();
+            p.setFont(tokens::font(control));
+            const QFontMetrics metrics(p.font());
+            const QString shown = metrics.elidedText(text(), Qt::ElideRight, std::max(0, room.width() - kChevron - kChevronGap));
+            QPen pen(tokens::color(lit ? ink2 : ink3));
+            if (m_shimmer && !ui::reducedMotion()) {
+                const qreal wide = std::max(1.0, qreal(metrics.horizontalAdvance(shown)));
+                const qreal band = std::max(24.0, wide * 0.35);
+                const qreal centre = room.left() - band + shimmerAt(m_phase) * (wide + 2 * band);
+                QLinearGradient light(centre - band, 0, centre + band, 0);
+                light.setColorAt(0.0, tokens::color(ink3));
+                light.setColorAt(0.5, tokens::color(ink));
+                light.setColorAt(1.0, tokens::color(ink3));
+                pen = QPen(QBrush(light), 1);
+            }
+            p.setPen(pen);
+            p.drawText(room, Qt::AlignLeft | Qt::AlignVCenter, shown);
+            if (m_chevron != Chevron::None) {
+                const qreal x = room.left() + metrics.horizontalAdvance(shown) + kChevronGap;
+                icons::paint(p, m_chevron == Chevron::Folded ? QStringLiteral("g-chevr") : QStringLiteral("g-chev"),
+                             QRectF(x, (height() - kChevron) / 2.0, kChevron, kChevron), tokens::color(lit ? ink2 : ink3), kChevron);
+            }
+        }
+        if (focusVisible()) ui::paintFocusRing(p, r, radius::control);
+        return;
+    }
     const QColor ink_ = tokens::color(m_dimmed ? (lit ? ink2 : ink3) : (lit || m_strong ? ink : ink2));
     qreal x0 = kPadding + m_indent;
     if (m_chevron != Chevron::None) {
@@ -415,22 +454,28 @@ void SidebarAccount::paintEvent(QPaintEvent *) {
     p.setPen(tokens::color(ink));
     p.drawText(avatar, Qt::AlignCenter, m_title.left(1).toUpper());
 
-    const qreal right = width() - kPadding - kIcon;
-    icons::paint(p, QStringLiteral("g-updown"), QRectF(right, 0, kIcon, height()), tokens::color(ink3), kIcon);
-    const qreal x = avatar.right() + space::s8 + space::s2;
-    const qreal room = right - space::s8 - x;
-    const bool two = !m_subtitle.isEmpty();
-    const qreal top = two ? (height() - 2 * meta.line) / 2.0 : (height() - body.line) / 2.0;
-    p.setFont(tokens::font(two ? controlStrong : bodyName));
+    // "Name · what it is on ⌄" on one line, as a coding agent's foot reads.
+    const qreal x = avatar.right() + space::s8;
+    const qreal room = width() - kPadding - x - kChevron - kChevronGap;
+    const QFont nameFont = tokens::font(controlStrong);
+    const QFont restFont = tokens::font(control);
+    const QFontMetrics nameMetrics(nameFont);
+    const QFontMetrics restMetrics(restFont);
+    const QString name = nameMetrics.elidedText(m_title, Qt::ElideRight, int(room * (m_subtitle.isEmpty() ? 1.0 : 0.6)));
+    const qreal nameWide = nameMetrics.horizontalAdvance(name);
+    p.setFont(nameFont);
     p.setPen(tokens::color(ink));
-    p.drawText(QRectF(x, top, room, two ? meta.line : body.line), Qt::AlignLeft | Qt::AlignVCenter,
-               QFontMetrics(p.font()).elidedText(m_title, Qt::ElideRight, int(room)));
-    if (two) {
-        p.setFont(tokens::font(meta));
+    p.drawText(QRectF(x, 0, nameWide + 1, height()), Qt::AlignLeft | Qt::AlignVCenter, name);
+    qreal end = x + nameWide;
+    if (!m_subtitle.isEmpty()) {
+        const QString rest = restMetrics.elidedText(QStringLiteral(" · %1").arg(m_subtitle), Qt::ElideRight, int(room - nameWide));
+        p.setFont(restFont);
         p.setPen(tokens::color(ink3));
-        p.drawText(QRectF(x, top + meta.line, room, meta.line), Qt::AlignLeft | Qt::AlignVCenter,
-                   QFontMetrics(p.font()).elidedText(m_subtitle, Qt::ElideRight, int(room)));
+        p.drawText(QRectF(end, 0, room - nameWide, height()), Qt::AlignLeft | Qt::AlignVCenter, rest);
+        end += restMetrics.horizontalAdvance(rest);
     }
+    icons::paint(p, m_open ? QStringLiteral("g-chevr") : QStringLiteral("g-chev"),
+                 QRectF(end + kChevronGap, (height() - kChevron) / 2.0, kChevron, kChevron), tokens::color(ink3), kChevron);
     if (focusVisible()) ui::paintFocusRing(p, r, radius::card);
 }
 
@@ -452,17 +497,29 @@ ProjectSidebar::ProjectSidebar(QWidget *parent) : QWidget(parent) {
     m_newConversation->setObjectName(QStringLiteral("sidebarNewConversation"));
     connect(m_newConversation, &QAbstractButton::clicked, this, &ProjectSidebar::newConversationRequested);
     actions->addWidget(m_newConversation);
+    m_searchRow = new SidebarRow(QStringLiteral("g-search"), QStringLiteral("Search"));
+    m_searchRow->setObjectName(QStringLiteral("sidebarSearchRow"));
+    m_searchRow->setAccessibleName(QStringLiteral("Search conversations"));
+    connect(m_searchRow, &QAbstractButton::clicked, this, &ProjectSidebar::openSearch);
+    actions->addWidget(m_searchRow);
 
-    // The search over the chosen folder's conversations; Esc empties it.
+    // The search over the chosen folder's conversations, in the Search row's
+    // place while it is open: Esc empties it, and empty, closes it.
     auto *search = new EscapeField;
     styleField(search, QStringLiteral("sidebarSearch"), kSearchHeight, chrome, space::s8 + 14 + space::s6);
     search->leadingIcon = QStringLiteral("g-search");
     search->setPlaceholderText(QStringLiteral("Search conversations"));
     search->setAccessibleName(QStringLiteral("Search conversations"));
-    search->onEscape = [search] {
-        if (search->text().isEmpty()) search->clearFocus();
-        else search->clear();
+    search->onEscape = [this, search] {
+        if (!search->text().isEmpty()) {
+            search->clear();
+            return;
+        }
+        search->clearFocus();
+        search->hide();
+        m_searchRow->setVisible(m_newConversation->isVisible());
     };
+    search->installEventFilter(this);
     connect(search, &QLineEdit::textChanged, this, [this](const QString &text) {
         const QString query = text.trimmed();
         if (query == m_query) return;
@@ -582,12 +639,24 @@ ProjectSidebar::ProjectSidebar(QWidget *parent) : QWidget(parent) {
 
     auto *foot = new QVBoxLayout;
     foot->setContentsMargins(space::s8, 0, space::s8, space::s8);
+    auto *footRow = new QHBoxLayout;
+    footRow->setContentsMargins(0, 0, 0, 0);
+    footRow->setSpacing(space::s4);
     m_account = new SidebarAccount;
     connect(m_account, &QAbstractButton::clicked, this, &ProjectSidebar::accountRequested);
     m_account->hide();
-    foot->addWidget(m_account);
+    footRow->addWidget(m_account, 1);
+    m_settings = new ui::IconButton(QStringLiteral("g-settings"), ui::IconButton::Size::S28);
+    m_settings->setObjectName(QStringLiteral("sidebarSettings"));
+    m_settings->setCheckable(false);
+    m_settings->setAccessibleName(QStringLiteral("Settings"));
+    m_settings->setTip(QStringLiteral("Settings"), ui::keyText(QKeySequence(Qt::CTRL | Qt::Key_Comma)));
+    connect(m_settings, &QAbstractButton::clicked, this, &ProjectSidebar::settingsRequested);
+    footRow->addWidget(m_settings, 0, Qt::AlignVCenter);
+    foot->addLayout(footRow);
     m_outer->addLayout(foot);
     m_newConversation->setVisible(false);
+    m_searchRow->setVisible(false);
     m_search->setVisible(false);
 
     // The light over a working title: only that title is drawn again, 30 times
@@ -937,9 +1006,9 @@ void ProjectSidebar::finishRename(bool keep) {
 }
 
 SidebarRow *ProjectSidebar::makeConversationRow(const Conversation &conversation, bool dimmed, const QString &project) {
-    auto *row = new SidebarRow(QString(), conversation.title, kChildIndent);
+    // Flush under its folder's heading, as a coding agent lists threads.
+    auto *row = new SidebarRow(QString(), conversation.title);
     row->setObjectName(QStringLiteral("sidebarConversation"));
-    row->setGuide(true);
     row->setDimmed(dimmed);
     // When it last changed is a hover away.
     const QString when = relativeTime(conversation.updated, now());
@@ -986,7 +1055,21 @@ SidebarRow *ProjectSidebar::makeConversationRow(const Conversation &conversation
     return row;
 }
 
+void ProjectSidebar::openSearch() {
+    m_searchRow->hide();
+    m_search->show();
+    m_search->setFocus(Qt::OtherFocusReason);
+}
+
 bool ProjectSidebar::eventFilter(QObject *watched, QEvent *event) {
+    // The field, left empty, gives way to the Search row again.
+    if (watched == m_search && event->type() == QEvent::FocusOut && m_search->text().trimmed().isEmpty()) {
+        QTimer::singleShot(0, this, [this] {
+            if (m_search->hasFocus() || !m_search->text().trimmed().isEmpty()) return;
+            m_search->hide();
+            m_searchRow->setVisible(m_newConversation->isVisible());
+        });
+    }
     if (event->type() == QEvent::KeyPress) {
         auto *row = qobject_cast<SidebarRow *>(watched);
         // On a folder: Right unfolds it, Left folds it, the menu key opens its menu.
@@ -1025,13 +1108,15 @@ bool ProjectSidebar::eventFilter(QObject *watched, QEvent *event) {
 }
 
 SidebarRow *ProjectSidebar::makeProjectRow(const QString &path) {
-    auto *row = new SidebarRow(QStringLiteral("g-folder"), QFileInfo(path).fileName());
+    // With its conversations under it, a folder's name heads them; the start
+    // window lists folders alone, each with its icon.
+    auto *row = new SidebarRow(m_conversationsShown ? QString() : QStringLiteral("g-folder"), QFileInfo(path).fileName());
     row->setObjectName(QStringLiteral("sidebarProject"));
     row->setProperty("projectPath", path);
     ui::setTip(row, path);
     const bool chosen = path == m_current;
-    // A folder's name is the heading of what is under it.
-    row->setStrong(true);
+    row->setHeading(m_conversationsShown);
+    row->setStrong(!m_conversationsShown);
     row->setCurrent(chosen && (!m_conversationsShown || m_currentConversation.isEmpty()));
     if (!m_conversationsShown) {
         row->setShimmer(chosen && m_working);
@@ -1109,7 +1194,10 @@ void ProjectSidebar::rebuild(bool arrivals, bool unfolding) {
     m_noteTexts.clear();
     const bool unfolded = m_conversationsShown && !m_current.isEmpty();
     m_newConversation->setVisible(unfolded);
-    m_search->setVisible(unfolded);
+    // Search is a row until it is opened; a query keeps the field open.
+    const bool searching = unfolded && (!m_query.isEmpty() || !m_search->isHidden());
+    m_search->setVisible(searching);
+    m_searchRow->setVisible(unfolded && !searching);
     int at = 0;
     const auto add = [this, before, first, arrivals, &at](SidebarRow *row, const QString &key) {
         m_list->insertWidget(at++, row);
@@ -1156,10 +1244,8 @@ void ProjectSidebar::rebuild(bool arrivals, bool unfolding) {
         if (live.size() > kShownAtFirst && m_query.isEmpty()) {
             const bool all = shown == live.size();
             if (!all || m_showAll.contains(path)) {
-                auto *more = new SidebarRow(QString(), all ? QStringLiteral("Show less") : QStringLiteral("Show %1 more").arg(live.size() - shown),
-                                            kChildIndent);
+                auto *more = new SidebarRow(QString(), all ? QStringLiteral("Show less") : QStringLiteral("Show %1 more").arg(live.size() - shown));
                 more->setObjectName(QStringLiteral("sidebarMore"));
-                more->setGuide(true);
                 more->setDimmed(true);
                 connect(more, &QAbstractButton::clicked, this, [this, path, all] {
                     if (all) m_showAll.remove(path);
@@ -1173,9 +1259,8 @@ void ProjectSidebar::rebuild(bool arrivals, bool unfolding) {
 
         // The archived ones, out of the way at the end, folded until asked for.
         const QString count = QStringLiteral("Archived · %1").arg(archived.size());
-        auto *fold = new SidebarRow(QString(), count, kChildIndent);
+        auto *fold = new SidebarRow(QString(), count);
         fold->setObjectName(QStringLiteral("sidebarArchived"));
-        fold->setGuide(true);
         fold->setDotIcon(m_archivedOpen ? QStringLiteral("g-chev") : QStringLiteral("g-chevr"));
         fold->setAccessibleDescription(m_archivedOpen ? QStringLiteral("Unfolded") : QStringLiteral("Folded"));
         fold->setDimmed(true);

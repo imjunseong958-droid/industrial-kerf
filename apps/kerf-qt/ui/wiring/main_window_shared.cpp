@@ -30,7 +30,7 @@ QIcon toolbarIcon(const QString &glyph) {
         QPainterPath path;
         if (glyph == QStringLiteral("bubble")) {
             // SF Symbols' bubble.left: a rounded speech bubble, its tail at
-            // the lower left, as the comments button beside a Short.
+            // the lower left.
             path.moveTo(6.5, 3.5); path.lineTo(13.5, 3.5);
             path.quadTo(17, 3.5, 17, 7); path.lineTo(17, 10);
             path.quadTo(17, 13.5, 13.5, 13.5); path.lineTo(9.5, 13.5);

@@ -272,7 +272,7 @@ private slots:
     }
 
     // What the window's own parts cost as a conversation grows: the conversation
-    // made again, a snapshot taken in, one comment arriving, and the timeline drawn.
+    // made again, a snapshot taken in, one answer arriving, and the timeline drawn.
     void whatAConversationCosts() {
         if (qEnvironmentVariableIsEmpty("KERF_MOTION_COSTS")) QSKIP("A measurement, run on request");
         MainWindow window{QString(), QString()};

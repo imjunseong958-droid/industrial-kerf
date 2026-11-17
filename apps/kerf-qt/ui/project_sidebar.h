@@ -67,9 +67,14 @@ public:
     Chevron chevron() const { return m_chevron; }
     // Where the chevron takes a press; empty with none.
     QRect chevronRect() const;
-    // The text in medium, and in ink at rest: a folder's name.
+    // The text in medium, and in ink at rest.
     void setStrong(bool strong);
     bool isStrong() const { return m_strong; }
+    // A group's heading: a folder's name, small and quiet, its chevron after
+    // the name, with no fill of its own at rest (as a coding agent's sidebar
+    // heads each project's threads).
+    void setHeading(bool heading);
+    bool isHeading() const { return m_heading; }
     // A hairline down the row, under its folder's chevron: it belongs to the
     // folder over it.
     void setGuide(bool guide);
@@ -127,6 +132,7 @@ private:
     Chevron m_chevron = Chevron::None;
     bool m_onChevron = false;
     bool m_strong = false;
+    bool m_heading = false;
     bool m_guide = false;
     bool m_current = false;
     bool m_shimmer = false;
@@ -213,8 +219,12 @@ public:
     SidebarRow *conversationRow(const QString &id) const;
     // New conversation, while a folder's conversations show.
     SidebarRow *newConversationRow() const;
-    // The search over the chosen folder's conversations.
+    // Search, under New conversation: pressed, it gives way to the field.
+    SidebarRow *searchRow() const { return m_searchRow; }
+    // The search over the chosen folder's conversations, while it is open.
     QLineEdit *searchField() const { return m_search; }
+    // Opens the field in the Search row's place, the keys in it.
+    void openSearch();
     // The row that folds and unfolds the archived conversations; null when there are none.
     SidebarRow *archivedRow() const;
     bool archivedOpen() const { return m_archivedOpen; }
@@ -234,6 +244,8 @@ public:
     QMenu *conversationMenu(const QString &id);
     // The account at the foot; hidden until it is given something to say.
     SidebarAccount *accountRow() const { return m_account; }
+    // Settings, the gear beside the account.
+    ui::IconButton *settingsButton() const { return m_settings; }
     void setAccount(const QString &title, const QString &subtitle);
 
     // Asks to archive (or unarchive) a conversation.
@@ -263,6 +275,8 @@ signals:
     void openFolderRequested();
     // The account was pressed: the window opens its menu over it.
     void accountRequested();
+    // The gear beside it.
+    void settingsRequested();
     void archiveRequested(const QString &id, bool archived);
     // Only once the deletion has been confirmed.
     void deleteRequested(const QString &id);
@@ -321,7 +335,9 @@ private:
     QLabel *m_heading = nullptr;
     ui::FadeScrollArea *m_scroll = nullptr;
     SidebarRow *m_newConversation = nullptr;
+    SidebarRow *m_searchRow = nullptr;
     QLineEdit *m_search = nullptr;
+    ui::IconButton *m_settings = nullptr;
     ui::IconButton *m_add = nullptr;
     QMenu *m_addMenu = nullptr;
     QMenu *m_conversationMenu = nullptr;

@@ -113,8 +113,7 @@ fn run(
 }
 
 /// The `done` event: the report for `sequence` (findings on other
-/// sequences left out, and the summary counted again), each failing
-/// finding and summary row with the comment that holds it.
+/// sequences left out, and the summary counted again).
 pub(crate) fn done(report: &CheckReport, sequence: Option<&str>) -> Value {
     let shown = match sequence {
         Some(id) => {

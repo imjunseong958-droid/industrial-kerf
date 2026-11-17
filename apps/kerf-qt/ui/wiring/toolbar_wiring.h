@@ -89,8 +89,8 @@ public:
     // else the sync's stage or a render's progress; empty when there is
     // nothing to say.
     QString subtitleText() const;
-    // "Edited 2 min ago · rev 22" (just "rev 22" without a revision time),
-    // with "Viewing as Ana" while a guest's view is on: the title's tip.
+    // "Edited 2 min ago · rev 22" (just "rev 22" without a revision time):
+    // the title's tip.
     QString normalSubtitle() const;
     // What stays until it clears: "Offline", "Connecting…", the error shown,
     // a failed sync; empty when all is well.

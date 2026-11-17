@@ -1,13 +1,12 @@
 #pragma once
 
-// kerf:// review links (plan §6 gap 19).
+// kerf:// project links: a project, a revision and a moment of it.
 //
 //   kerf://<project>/rev<N>[@HH:MM:SS:FF][?branch=…&head=…&remote=…]
 //
 // <project> is the slug of the project's folder name (links::slug): lower
 // case, every run of anything but letters and digits as one '-', so it is
-// a valid URL host. links::make builds every link the editor writes (the
-// comments' Copy link). Following one opens or raises the
+// a valid URL host. links::make builds one. Following one opens or raises the
 // project's editor and seeks to the timecode; a project this Mac does not
 // know (no open window, not among the launcher's recent projects) is an
 // error the user is shown, never a guess.
@@ -33,7 +32,7 @@ class MainWindow;
 
 namespace links {
 
-struct ReviewLink {
+struct ProjectLink {
     bool valid = false;
     // Why it is not valid, in words for the user.
     QString error;
@@ -49,9 +48,9 @@ struct ReviewLink {
 };
 
 // Whether `text` is a kerf:// URL at all.
-bool isReviewLink(const QString &text);
+bool isProjectLink(const QString &text);
 // Reads a link. A link without @TC is valid (it opens at the playhead).
-ReviewLink parse(const QString &text);
+ProjectLink parse(const QString &text);
 // The slug a project name or folder makes: "Atlas Cut" -> "atlas-cut",
 // "Café Cut" -> "café-cut" (NFC, as QUrl keeps a host). Empty when the
 // name has no letter or digit.
@@ -68,7 +67,7 @@ QString fromUrl(const QUrl &url);
 // `project`'s; empty when none is, or when two are (ambiguous).
 QString resolve(const QString &project, const QStringList &candidates, QString *error = nullptr);
 // The seconds of the link's timecode at `fps`; NaN without one.
-double seconds(const ReviewLink &link, double fps);
+double seconds(const ProjectLink &link, double fps);
 
 // Follows links for the application: QFileOpenEvent with a kerf:// URL,
 // and links passed on the command line (follow()). `open` opens an editor

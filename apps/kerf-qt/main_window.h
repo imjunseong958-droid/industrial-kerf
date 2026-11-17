@@ -82,7 +82,7 @@ namespace kerf {
 
 // The editor's window. Its content is a StageShell (ui/stage_shell.h): the
 // picture, the conversation and the timeline, the rest on demand. Its member
-// functions are split by region into main_window_<region>.cpp (review, stage,
+// functions are split by region into main_window_<region>.cpp (chat, stage,
 // toolbar, status, timeline, bin), each region's own state in
 // its wiring class; the regions talk through the EditorBus (ui/editor_bus.h) it
 // owns.
@@ -101,7 +101,7 @@ public:
     EditorBus *bus() const { return m_bus; }
     // The project folder this editor has open (absolute; empty for none).
     QString projectDirectory() const { return m_projectDirectory; }
-    // The slugs a kerf:// review link may name this project by: its
+    // The slugs a kerf:// project link may name this project by: its
     // folder's and its document's name (links::slug).
     QStringList projectSlugs() const;
     // A kerf:// link followed to this project: once it is connected and its
@@ -200,6 +200,8 @@ private slots:
     void updateAccountRow();
     // Settings, at `page` ("account", "ai", "general", "advanced"; empty: where it was).
     void showSettings(const QString &page = QString());
+    // The Models page from a models event {file, exists, models, error?}.
+    void applyModels(const QJsonObject &event);
     bool sendCloud(const QJsonObject &command);
     // What the registry needs to know about the agent's connection.
     QString aiAccess() const;
@@ -294,8 +296,9 @@ private:
     // it on to the regions.
     void handleEvent(QJsonObject event);
     void routeEvent(const QJsonObject &event);
-    // The agent's events (agent, agent_busy, agent_state, agent_next); false
-    // for any other (main_window_review.cpp).
+    // The agent's events (agent, agent_busy, agent_state, agent_context,
+    // agent_ask, agent_next, agent_focus); false for any other
+    // (main_window_chat.cpp).
     bool handleAgentEvent(const QJsonObject &event);
     void applySnapshot(const QJsonObject &snapshot);
     QString selectedTrackType() const;
@@ -319,11 +322,11 @@ private:
     // A proposal is the script the agent wants to run and the diff of the
     // document it would produce.
     void updateProposal(const QJsonValue &value);
-    // A proposal's script line as the change its pinned comment lists.
+    // A proposal's script line as the change its card lists.
     ProposalChange describeScriptLine(const QString &line) const;
     void appendConversation(const QString &speaker, const QString &text);
     void appendConversationNote(const QString &kind, const QString &text);
-    // The quiet status line after the latest comment.
+    // Kerf at work: the latest status line in its drafting row.
     void updateChatStatus();
     // The activity log, from the conversation's ⋯ menu.
     void showActivity();
@@ -580,6 +583,15 @@ private:
     QPushButton *m_cloudSignIn = nullptr;
     QPushButton *m_cloudSignOut = nullptr;
     QWidget *m_advancedSettings = nullptr;
+    // A key of one's own: the connection's fields, under its choice on the
+    // Chat page, shown while it is the one chosen.
+    QWidget *m_ownKeySettings = nullptr;
+    // The Models page: the person's models file and the models it names.
+    QLabel *m_modelsList = nullptr;
+    QLabel *m_modelsFile = nullptr;
+    QPushButton *m_modelsOpen = nullptr;
+    // What the bridge last said of the models file (a models event).
+    QJsonObject m_models;
     // Where Kerf Cloud stands, on the Account page.
     QLabel *m_accountStatus = nullptr;
     // The last account report from the bridge.
@@ -635,8 +647,7 @@ private:
     TimelineWidget *m_timeline = nullptr;
     // The conversation, always open.
     ChatPanel *m_chat = nullptr;
-    // Kerf's comment for this turn, which streamed text and steps go to, and
-    // steps that came before it.
+    // The activity log, from the conversation's ⋯ menu.
     QFrame *m_activityPopup = nullptr;
     // Parts of m_chat, by role.
     QScrollArea *m_chatScroll = nullptr;

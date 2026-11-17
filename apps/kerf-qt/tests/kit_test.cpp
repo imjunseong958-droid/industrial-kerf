@@ -108,12 +108,13 @@ private slots:
     // folders', account's and archive's glyphs, and the two drawn outside the 16 set.
     void kitIconTableIsTheDesignsSet() {
         const QStringList names = icons::names();
-        QCOMPARE(names.size(), 84);
+        QCOMPARE(names.size(), 83);
         QCOMPARE(names.first(), QStringLiteral("g-169"));
-        for (const char *name : {"g-169", "g-916", "g-comments", "g-settings", "g-chev", "g-kerf", "g-gauge", "g-cdr",
+        for (const char *name : {"g-169", "g-916", "g-settings", "g-chev", "g-kerf", "g-gauge", "g-cdr",
                                  "playhead-head", "checkbox-check"})
             QVERIFY2(icons::has(QString::fromLatin1(name)), name);
         QVERIFY(!icons::has(QStringLiteral("g-isl")));
+        QVERIFY(!icons::has(QStringLiteral("g-comments")));
         QVERIFY(!icons::has(QStringLiteral("g-punch")));
         QVERIFY(!icons::has(QStringLiteral("g-phone")));
         QVERIFY(!icons::has(QStringLiteral("rail-chevron")));
@@ -155,7 +156,7 @@ private slots:
     }
 
     // Arcs convert from endpoint to centre form: the gauge's half circle, the
-    // comment bubble's corner, radii scaled up to the chord, compact flags and
+    // rounded corner, radii scaled up to the chord, compact flags and
     // a rotated ellipse all pass through the points SVG puts them through.
     void kitArcParsingMatchesKnownPoints() {
         QString error;
@@ -169,7 +170,7 @@ private slots:
             QVERIFY(std::abs(std::hypot(p.x() - 8, p.y() - 11) - 5.5) < 0.01);
             QVERIFY(p.y() <= 11 + 1e-9);
         }
-        // g-comments' corner: a quarter circle about (3.5, 3.5).
+        // A rounded corner: a quarter circle about (3.5, 3.5).
         const QPainterPath corner = icons::svg::parsePathData(u"M2.5 3.5a1 1 0 0 1 1-1", &error);
         const qreal d = std::sqrt(0.5);
         QVERIFY2(near(corner.pointAtPercent(0.5), QPointF(3.5 - d, 3.5 - d), 0.005),
@@ -661,7 +662,7 @@ private slots:
         auto *button = new ui::IconButton(QStringLiteral("g-import"), ui::IconButton::Size::S28, &window);
         button->move(100, 6);
         button->setEnabled(false);
-        button->setTip(QStringLiteral("Resolve 2 blocking notes to render"));
+        button->setTip(QStringLiteral("Connect to render"));
         window.show();
         QVERIFY(QTest::qWaitForWindowExposed(&window));
         QVERIFY(!button->isEnabled());
@@ -674,7 +675,7 @@ private slots:
         manager->tick();
         QVERIFY(manager->isShowing());
         QCOMPARE(manager->target(), button);
-        QCOMPARE(manager->shownName(), QStringLiteral("Resolve 2 blocking notes to render"));
+        QCOMPARE(manager->shownName(), QStringLiteral("Connect to render"));
         // Qt's tooltip event is taken on a disabled control too.
         QHelpEvent help(QEvent::ToolTip, QPoint(2, 2), button->mapToGlobal(QPoint(2, 2)));
         QToolTip::hideText();
@@ -695,7 +696,7 @@ private slots:
         auto *panel = new QWidget(&window);
         panel->setGeometry(100, 100, 300, 120);
         panel->setAttribute(Qt::WA_Hover);
-        ui::setTip(panel, QStringLiteral("Comments · 3 open"));
+        ui::setTip(panel, QStringLiteral("Media · 3 offline"));
         auto *child = new ui::IconButton(QStringLiteral("g-undo"), ui::IconButton::Size::S24, panel);
         child->move(10, 10);
         child->setTip(QStringLiteral("Undo"), QStringLiteral("⌘Z"));
@@ -710,7 +711,7 @@ private slots:
         enter(panel);
         now += 400;
         manager->tick();
-        QCOMPARE(manager->shownName(), QStringLiteral("Comments · 3 open"));
+        QCOMPARE(manager->shownName(), QStringLiteral("Media · 3 offline"));
         enter(child);
         QCOMPARE(manager->shownName(), QStringLiteral("Undo"));
         // A bare QEvent::Enter (no point, as some code sends it) is the
@@ -732,14 +733,14 @@ private slots:
         leave(child);
         QVERIFY(manager->isShowing());
         QCOMPARE(manager->target(), panel);
-        QCOMPARE(manager->shownName(), QStringLiteral("Comments · 3 open"));
+        QCOMPARE(manager->shownName(), QStringLiteral("Media · 3 offline"));
 
         // A move on the parent at the child's place is the child's (the
         // move reaches the parent too, but the child is under the pointer).
         hoverMove(panel, child->geometry().center());
         QCOMPARE(manager->shownName(), QStringLiteral("Undo"));
         hoverMove(panel, onPanel);
-        QCOMPARE(manager->shownName(), QStringLiteral("Comments · 3 open"));
+        QCOMPARE(manager->shownName(), QStringLiteral("Media · 3 offline"));
 
         // A press hides the tip; the next move, with the button up, brings
         // it back (instantly, within 300 ms of the hide).
@@ -975,7 +976,7 @@ private:
         QAction *peak = menu.addAction(QStringLiteral("True peak −0.4 dBTP"));
         ui::setMenuDot(peak, color(neg));
         ui::setMenuAccent(peak, QStringLiteral("Ask Kerf"));
-        QAction *blocking = menu.addAction(QStringLiteral("2 blocking notes open"));
+        QAction *blocking = menu.addAction(QStringLiteral("2 clips offline"));
         ui::setMenuRole(blocking, ui::MenuRole::Warn);
         QCOMPARE(ui::menuRole(header), ui::MenuRole::Header);
         QCOMPARE(ui::menuRole(blocking), ui::MenuRole::Warn);

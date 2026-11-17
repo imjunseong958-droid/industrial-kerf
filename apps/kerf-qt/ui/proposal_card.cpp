@@ -78,35 +78,6 @@ protected:
     }
 };
 
-// The "Waiting for the editor" chip: 24 tall, radius 6, on, 11 ink2.
-class WaitChip final : public QLabel {
-public:
-    WaitChip() {
-        setText(QStringLiteral("Waiting for the editor"));
-        setFont(tokens::font(meta));
-        setContentsMargins(8, 0, 8, 0);
-        setFixedHeight(24);
-        setFixedWidth(ui::snapWidth(QFontMetricsF(tokens::font(meta)), text()) + 16);
-        QPalette palette = this->palette();
-        palette.setColor(QPalette::WindowText, color(ink2));
-        setPalette(palette);
-    }
-
-protected:
-    void paintEvent(QPaintEvent *) override {
-        QPainter p(this);
-        p.setRenderHint(QPainter::Antialiasing);
-        p.setPen(Qt::NoPen);
-        p.setBrush(color(on));
-        p.drawRoundedRect(QRectF(rect()), radius::control, radius::control);
-        const QFont face = tokens::font(meta);
-        const QFontMetricsF metrics(face);
-        p.setFont(face);
-        p.setPen(color(ink2));
-        p.drawText(QPointF(8, (height() - metrics.height()) / 2 + metrics.ascent()), text());
-    }
-};
-
 // A change row (.chg): 24 tall, name UI 12 ink (elided), target mono 12
 // ink2, shift mono 11 ink3 right-aligned in 40, gap 12.
 class ChangeRow final : public QWidget {
@@ -806,9 +777,6 @@ ProposalCard::ProposalCard(const QString &proposalId, QWidget *parent) : QFrame(
     });
     footer->addWidget(m_script);
     footer->addStretch(1);
-    m_wait = new WaitChip;
-    m_wait->hide();
-    footer->addWidget(m_wait);
     m_reject = new ui::Button(QStringLiteral("Reject"), ui::Button::Kind::Secondary);
     m_reject->setTip(QStringLiteral("Reject"), QStringLiteral("Esc"));
     connect(m_reject, &QAbstractButton::clicked, this, [this] { emit rejectRequested(shownId()); });
@@ -829,9 +797,8 @@ ProposalCard::ProposalCard(const QString &proposalId, QWidget *parent) : QFrame(
     updateParts();
 }
 
-void ProposalCard::setPinned(bool pinned, bool blocking) {
+void ProposalCard::setPinned(bool pinned) {
     m_pinned = pinned;
-    m_pinText->setText(blocking ? QStringLiteral("Pinned proposal · blocking first") : QStringLiteral("Pinned proposal"));
     updateParts();
 }
 
@@ -965,11 +932,6 @@ void ProposalCard::setAcceptKey(const QString &key) {
     if (!m_acceptBlocked) m_accept->setTip(m_acceptTip, m_acceptKey);
 }
 
-void ProposalCard::setGuest(bool guest) {
-    m_guest = guest;
-    updateParts();
-}
-
 void ProposalCard::setAcceptBlocked(const QString &reason) {
     m_accept->setEnabled(reason.isEmpty());
     m_acceptBlocked = !reason.isEmpty();
@@ -1037,9 +999,8 @@ void ProposalCard::updateParts() {
     m_script->setVisible(!pictured);
     m_settledLabel->setVisible(m_settled);
     // Nothing to do with a cut until Kerf has made it.
-    m_reject->setVisible(!m_guest && !m_building);
-    m_accept->setVisible(!m_guest && !m_building);
-    m_wait->setVisible(m_guest && !m_building);
+    m_reject->setVisible(!m_building);
+    m_accept->setVisible(!m_building);
     updateGeometry();
     update();
 }

@@ -1,5 +1,5 @@
 ; Industrial Kerf for Windows as an installer: for the current user alone, with no
-; administrator, a Start menu entry, kerf:// review links opening the editor, and an
+; administrator, a Start menu entry, kerf:// project links opening the editor, and an
 ; uninstaller (Settings > Apps, or unins000.exe). Not signed. The Start menu entry, the
 ; links and Settings > Apps show the icon kerf-qt.exe carries; the installer has it too.
 ;
@@ -67,8 +67,8 @@ Name: "{autoprograms}\Industrial Kerf"; Filename: "{app}\kerf-qt.exe"; WorkingDi
 #ifndef WithoutLinks
 [Registry]
 ; kerf://<project>/rev<N>[@TC] opens the editor with the link as its argument
-; (apps/kerf-qt/ui/review_link.h). HKA is HKCU in a per-user install.
-Root: HKA; Subkey: "Software\Classes\kerf"; ValueType: string; ValueName: ""; ValueData: "URL:Industrial Kerf review link"; Flags: uninsdeletekey
+; (apps/kerf-qt/ui/project_link.h). HKA is HKCU in a per-user install.
+Root: HKA; Subkey: "Software\Classes\kerf"; ValueType: string; ValueName: ""; ValueData: "URL:Industrial Kerf link"; Flags: uninsdeletekey
 Root: HKA; Subkey: "Software\Classes\kerf"; ValueType: string; ValueName: "URL Protocol"; ValueData: ""
 Root: HKA; Subkey: "Software\Classes\kerf\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: """{app}\kerf-qt.exe"",0"
 Root: HKA; Subkey: "Software\Classes\kerf\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\kerf-qt.exe"" ""%1"""

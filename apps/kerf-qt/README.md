@@ -26,7 +26,7 @@ On Windows, `scripts/package-kerf-windows.ps1` makes a zip that runs on its own:
 the editor, `kerfd`, `kerf`, `kerf-mcp`, and the Qt, FFmpeg and C++ runtime libraries
 beside them. The script's help says what it needs. It makes the same folder an
 installer too, with Inno Setup (`packaging/windows/kerf.iss`): for the current user
-alone, with no administrator, a Start menu entry, `kerf://` registered so review links
+alone, with no administrator, a Start menu entry, `kerf://` registered so project links
 open the editor, and an uninstaller. Neither is signed. `scripts/check-kerf-windows-installer.ps1`
 installs it, runs the installed copy, follows a `kerf://` link as Explorer would, and
 uninstalls it; the zip alone does not open links.
@@ -150,7 +150,7 @@ playhead and cross-region requests). `ui/` holds the shared
 parts: the kit (`components`, `icons`), `stage_shell` (the
 window's content and its geometry), the proposals and conversation models, the
 conversation's messages (`chat_messages`) and proposal cards, the agent HUD, and
-`review_link` (kerf:// links). `viewer_widget` is the
+`project_link` (kerf:// links). `viewer_widget` is the
 picture, `editor_theme`/`editor_style.h` the colour roles and the
 style sheet generated from them, and `project_launcher` the Choose a Project
 window. `main.cpp` holds only `main()`; the tests under `tests/` (one class
@@ -354,10 +354,16 @@ sheet's button, Follow Kerf and the two format icons are in the timeline's strip
 before its zoom. The undo, redo, split, delete and import commands have their keys
 and native menu items.
 
-**Settings** (⌘,) is a page in the room, over the conversation and the panel, not a
-window: Account, AI connection, Appearance, General and Advanced named down its
-side, Back or Esc to leave (`StageShell::setCover`). AI connection also has how far
-Kerf goes without asking, the same choice as the composer's chip. Appearance
+**Settings** (⌘, or the sidebar's gear) opens over the window, as everything one
+goes into does: a panel in the middle of the dimmed window (`ui/modal_scrim.h`,
+`StageShell::setCover`), Account, Chat, Models, Appearance, General and MCP
+named down its side with their glyphs; Esc, its close or a press on the dim
+gives the window back. Chat is the model the
+conversation runs on, a key of one's own with its fields under that choice,
+and how far Kerf goes without asking, the same choice as the composer's chip.
+Models lists the models a recipe's `generate` can name, read from the
+person's own models file (nothing is run to learn them), and says what runs
+inside Kerf; it names no model of its own. Appearance
 chooses the faces text is set in (`editor_theme.h`, `setEditorFaces`): the
 interface's (Inter, with Pretendard for Hangul; Pretendard; or the system's), and
 what is said in the conversation, which may be a serif (Noto Serif, with Nanum
@@ -367,8 +373,7 @@ Myeongjo for Hangul) at one of three sizes. They are compiled in
 There is no status bar. Beside the title the toolbar says what one would, and only
 when there is something to say: a passing message for its timeout, an offline or
 error state until it clears, a running sync's stage or a render's progress ("Draft
-export · 42%"), and "Viewing as Mina" while a guest's view is on. "Edited 2 min ago
-· rev 22" is the title's tooltip. An
+export · 42%"). "Edited 2 min ago · rev 22" is the title's tooltip. An
 agent that cannot take requests (no key, Kerf Cloud signed out) says so in the
 composer's placeholder, with the reason on its tooltip. The
 connection, error and project.kerf bars that carry an action lie over the top of
@@ -584,11 +589,12 @@ is already saved; see
 [docs/cloud.md](../../docs/cloud.md)), or My own API key. Kerf Cloud shows the
 account, plan, and requests left, with Sign in (a token, for now) and Sign
 out; Ask Kerf stays unavailable, with the reason, until the account can make
-requests. Advanced
-holds two protocol slots for your own key: Anthropic Messages and OpenAI-compatible. Each slot
-has an API key, Base URL, and model. The OpenAI-compatible slot also has Chat
-Completions vs Responses. Gemini and other compatible hosts use that slot and
-its Base URL. Chat sends the active Settings connection plus the model combo.
+requests. My own API key
+holds two protocol slots: Anthropic Messages and OpenAI-compatible. Each slot
+has an API key, Base URL, and model (empty for the service's default). The
+OpenAI-compatible slot also has Chat Completions vs Responses; other services
+that speak that API use it with their own Base URL. Chat sends the active
+connection and its model.
 Environment variables remain available as fallbacks.
 
 Settings separates the two MCP directions. “Use MCP tools in Kerf chat” makes

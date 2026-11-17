@@ -3,14 +3,14 @@
 // The timeline (the minimal mockup): its 28 pt strip (transport, tools, snap,
 // zoom), 140 pt track heads with the target and name, and lock, eye or mute and
 // solo on hover (sync lock in the head's context menu); a 32 pt ruler with
-// comment marks, proposal bands, sequence markers and the program's marks over
+// proposal bands, sequence markers and the program's marks over
 // its ticks; and flat clips on the well: filmstrips, waveforms with the volume
 // rubber band, titles and captions, proposal veils and, while a proposal plays
 // as a preview, ghosts where its clips were.
 //
 // Everything drawn is the snapshot's (clips, tracks, markers, gain keys) or
-// what the window feeds it from the engine: comment marks and proposal
-// bands from the review (TimelineWiring), QC findings from `check`. Solo is
+// what the window feeds it from the engine: proposal bands (TimelineWiring),
+// QC findings from `check`. Solo is
 // monitoring only and lasts the session. The targets show where a source edit lands (the first
 // unlocked track of each kind, as MainWindow::sourceTargets() picks); they
 // are read-only until source edits follow them (setTargetsEditable).
@@ -408,7 +408,7 @@ private:
     // `within`.
     static QJsonArray signalKeys(const QMap<int, double> &drawn, double within = 0.02);
     void paintRuler(QPainter &p, const QRect &dirty, int top);
-    // The ruler's marker row: proposal bands, comment marks, sequence markers.
+    // The ruler's marker row: proposal bands and sequence markers.
     void paintMarkerRow(QPainter &p, const QRect &dirty, int top);
     QRectF markerRect(const QJsonObject &marker, int top) const;
     QRectF bandRect(const ProposalBand &band, int top) const;

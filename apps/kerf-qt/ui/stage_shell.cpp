@@ -779,10 +779,10 @@ void StageShell::place() {
         banner->raise();
         top += height;
     }
-    // The page that has the room: all of it but the sidebar, under the bars.
+    // What one goes into, over all of the window: its scrim dims the rest.
     if (m_cover) {
         if (m_covered) {
-            m_cover->setGeometry(barLeft, top, barWidth, std::max(0, height() - top));
+            m_cover->setGeometry(rect());
             m_cover->raise();
         }
         m_cover->setVisible(m_covered);

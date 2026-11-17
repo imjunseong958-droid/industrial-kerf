@@ -34,7 +34,18 @@ pub struct ToolResultSummary {
     pub proposal: Option<String>,
     pub error: Option<String>,
     pub truncated: bool,
+    /// The media a `make` named, and, where the person is asked to make it,
+    /// how many takes, the first of them, and the plan they are asked about.
+    pub media: Option<String>,
+    pub rolls: Option<u32>,
+    pub take: Option<u32>,
+    pub ask: Option<String>,
+    /// A `render` of the cut itself: whole, at full quality, not a proposal.
+    pub deliverable: bool,
 }
+
+/// The longest plan a person is asked to make, in bytes.
+const MAX_ASK_BYTES: usize = 4 * 1024;
 
 #[derive(Clone, Copy)]
 enum TargetKind {
@@ -206,6 +217,23 @@ fn collect_result_fields(value: &Value, summary: &mut ToolResultSummary, nodes: 
                             summary.truncated = true;
                         }
                     }
+                    "media" if summary.media.is_none() => {
+                        summary.media = value
+                            .as_str()
+                            .map(|value| bounded_text(value, MAX_AGENT_SUMMARY_TEXT_BYTES))
+                    }
+                    "rolls" if summary.rolls.is_none() => {
+                        summary.rolls = value.as_u64().and_then(|value| u32::try_from(value).ok())
+                    }
+                    "take" if summary.take.is_none() => {
+                        summary.take = value.as_u64().and_then(|value| u32::try_from(value).ok())
+                    }
+                    "ask" if summary.ask.is_none() => {
+                        summary.ask = value
+                            .as_str()
+                            .map(|value| bounded_text(value, MAX_ASK_BYTES))
+                    }
+                    "deliverable" => summary.deliverable |= value.as_bool() == Some(true),
                     "count" if summary.count.is_none() => {
                         summary.count = value.as_u64().and_then(|value| usize::try_from(value).ok())
                     }
@@ -279,6 +307,24 @@ mod where_it_works_tests {
         assert!(summarize_targets(&json!({"media": "m1", "at": ["4.5s"]}))
             .times
             .is_empty());
+    }
+
+    #[test]
+    fn an_asked_making_carries_what_the_person_is_asked() {
+        let summary = summarize_tool_result(&json!({
+            "media": "m4", "take": 3, "rolls": 2, "status": "asked",
+            "ask": "Asks to make m4, as takes 3 to 4", "steps": ["render s2 {guide.mp4}"]
+        }));
+        assert_eq!(summary.media.as_deref(), Some("m4"));
+        assert_eq!((summary.take, summary.rolls), (Some(3), Some(2)));
+        assert_eq!(
+            summary.ask.as_deref(),
+            Some("Asks to make m4, as takes 3 to 4")
+        );
+        assert!(!summary.deliverable);
+        assert!(
+            summarize_tool_result(&json!({"output": "out.mp4", "deliverable": true})).deliverable
+        );
     }
 
     #[test]

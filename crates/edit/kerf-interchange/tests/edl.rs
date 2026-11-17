@@ -51,7 +51,7 @@ fn a_program_matches_the_golden_edl() {
     let project = project(EDIT);
     let sequence = &project.sequences[0];
     let mut locators = marker_locators(sequence);
-    // A review comment, as the bridge hands it over, with a line break.
+    // A note at a time, with a line break.
     locators.push(Locator::from((
         f(Rate::FPS_23_976, 24 * 11),
         "yellow",

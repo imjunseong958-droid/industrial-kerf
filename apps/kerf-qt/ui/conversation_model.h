@@ -13,6 +13,8 @@
 // with none open (expectNew()), the first conversation the bridge reports
 // next: the one that request started.
 
+#include "making_ask.h"
+
 #include <QDateTime>
 #include <QJsonObject>
 #include <QList>
@@ -39,6 +41,7 @@ public:
         bool error = false;
         bool stopped = false;
         QString proposal; // the proposal the turn staged
+        QList<MakingAsk> asks; // the makings Kerf asked the person to run
         bool hasTimecode() const { return timecode == timecode; }
     };
     struct Summary {

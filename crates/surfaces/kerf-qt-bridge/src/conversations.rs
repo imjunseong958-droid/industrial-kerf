@@ -39,6 +39,11 @@ pub(crate) struct Conversation {
     pub archived: bool,
     #[serde(default)]
     pub items: Vec<Item>,
+    /// Claude Code's own session for this conversation, which a later turn
+    /// resumes; Kerf's own agent keeps its transcript beside it instead
+    /// (`sessions.rs`). Never sent to the editor.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claude_session: Option<String>,
 }
 
 /// One line of a conversation: the person's request (`you`) or Kerf's answer
@@ -66,7 +71,29 @@ pub(crate) struct Item {
     /// The proposal the turn staged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub proposal: Option<String>,
+    /// The makings Kerf asked the person to run, each a card with Make.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub asks: Vec<Ask>,
 }
+
+/// A making an agent asked for and the person has to say yes to: the media,
+/// how many takes (one unless said), the first of them, and the plan as the
+/// person is asked about it.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct Ask {
+    pub media: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rolls: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub take: Option<u32>,
+    pub text: String,
+}
+
+/// The most of the earlier conversation a new session hears, in bytes.
+const MOST_EARLIER_BYTES: usize = 24 * 1024;
+/// The most makings one turn asks for that it keeps.
+const MOST_ASKS: usize = 16;
 
 /// The conversations of one project folder.
 pub(crate) struct Store {
@@ -133,6 +160,7 @@ impl Store {
             updated: now,
             archived: false,
             items: Vec::new(),
+            claude_session: None,
         }
     }
 
@@ -162,6 +190,10 @@ impl Store {
         let file = self
             .file(id)
             .ok_or_else(|| format!("`{id}` is not a conversation id"))?;
+        // What its agent's session kept goes with it.
+        if let Some(project) = self.folder.parent().and_then(Path::parent) {
+            crate::sessions::remove(project, id);
+        }
         match fs::remove_file(&file) {
             Ok(()) => Ok(()),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -172,7 +204,7 @@ impl Store {
 
 /// Ids this store makes and reads: `c-` and letters, digits, `-` or `_`, so an
 /// id never names a path outside the folder.
-fn valid_id(id: &str) -> bool {
+pub(crate) fn valid_id(id: &str) -> bool {
     id.len() <= 80
         && id.starts_with("c-")
         && id.chars().all(|character| {
@@ -226,6 +258,9 @@ pub(crate) fn emit_list(store: &Store, tx: &SyncSender<Value>) {
 /// One conversation whole: `conversation {id, title, …, items}`.
 pub(crate) fn emit_one(conversation: &Conversation, tx: &SyncSender<Value>) {
     let mut event = serde_json::to_value(conversation).unwrap_or_else(|_| json!({}));
+    if let Some(event) = event.as_object_mut() {
+        event.remove("claudeSession");
+    }
     event["type"] = json!("conversation");
     emit(tx, event);
 }
@@ -318,6 +353,7 @@ pub(crate) struct Turn {
     conversation: Conversation,
     started: Instant,
     steps: Vec<String>,
+    asks: Vec<Ask>,
     answer: Option<String>,
     stopped: bool,
 }
@@ -354,6 +390,7 @@ impl Turn {
             conversation,
             started: Instant::now(),
             steps: Vec::new(),
+            asks: Vec::new(),
             answer: None,
             stopped: false,
         })
@@ -364,23 +401,42 @@ impl Turn {
         &self.conversation.id
     }
 
-    /// Everything asked and answered before this turn, as text for an agent
-    /// that starts again on a conversation it has not seen.
+    /// What was asked and answered before this turn, as text for an agent
+    /// that starts again on a conversation it has nothing kept of: the
+    /// latest turns, as many as fit, with what Kerf did in each and the
+    /// proposal it made.
     pub(crate) fn earlier(&self) -> Option<String> {
         let before = &self.conversation.items[..self.conversation.items.len().saturating_sub(1)];
         if before.is_empty() {
             return None;
         }
-        let mut text = String::from("Earlier in this conversation:\n");
-        for item in before {
-            let who = if item.kind == "you" {
-                "The person"
+        let mut lines = Vec::new();
+        let mut size = 0;
+        for item in before.iter().rev() {
+            let line = if item.kind == "you" {
+                format!("The person: {}", item.text.trim())
             } else {
-                "You (Kerf)"
+                let mut line = String::from("You (Kerf)");
+                if !item.steps.is_empty() {
+                    line.push_str(&format!(" [{}]", item.steps.join("; ")));
+                }
+                if let Some(proposal) = &item.proposal {
+                    line.push_str(&format!(" [proposal {proposal}]"));
+                }
+                format!("{line}: {}", item.text.trim())
             };
-            text.push_str(&format!("{who}: {}\n", item.text.trim()));
+            if size + line.len() > MOST_EARLIER_BYTES {
+                lines.push("(earlier turns are left out)".to_owned());
+                break;
+            }
+            size += line.len() + 1;
+            lines.push(line);
         }
-        Some(text)
+        lines.reverse();
+        Some(format!(
+            "Earlier in this conversation:\n{}\n",
+            lines.join("\n")
+        ))
     }
 
     /// One line of what the agent did: a finished tool call or a status.
@@ -399,6 +455,13 @@ impl Turn {
         self.steps.push(line[..end].to_owned());
     }
 
+    /// A making the agent asked the person to run.
+    pub(crate) fn ask(&mut self, ask: Ask) {
+        if self.asks.len() < MOST_ASKS && !self.asks.contains(&ask) {
+            self.asks.push(ask);
+        }
+    }
+
     /// The agent's answer, as its `done` event gave it.
     pub(crate) fn done(&mut self, text: &str) {
         self.answer = Some(text.to_owned());
@@ -415,6 +478,7 @@ impl Turn {
         store: &Store,
         outcome: Outcome,
         proposal: Option<String>,
+        claude_session: Option<String>,
         tx: &SyncSender<Value>,
     ) -> Result<(), String> {
         let (text, failed) = match outcome {
@@ -444,8 +508,12 @@ impl Turn {
             error: failed,
             stopped: self.stopped,
             proposal,
+            asks: std::mem::take(&mut self.asks),
             ..Item::default()
         });
+        if claude_session.is_some() {
+            self.conversation.claude_session = claude_session;
+        }
         self.conversation.updated = now;
         store.save(&self.conversation)?;
         emit_one(&self.conversation, tx);
@@ -511,6 +579,7 @@ mod tests {
             &store,
             Outcome::Done(String::new()),
             Some("p-1".into()),
+            None,
             &tx,
         )
         .unwrap();
@@ -534,7 +603,7 @@ mod tests {
         let second = Turn::begin(&store, Some(&id), "Now make it yellow", None, &tx).unwrap();
         assert!(second.earlier().unwrap().contains("Welcome"));
         second
-            .finish(&store, Outcome::Failed("no key".into()), None, &tx)
+            .finish(&store, Outcome::Failed("no key".into()), None, None, &tx)
             .unwrap();
         let kept = store.load(&id).unwrap();
         assert_eq!(kept.items.len(), 4);
@@ -624,5 +693,104 @@ mod tests {
                 archived: false
             }
         );
+    }
+
+    #[test]
+    fn a_turn_keeps_its_asks_and_its_claude_session_without_sending_it() {
+        let folder = tempfile::tempdir().unwrap();
+        let store = Store::of(folder.path());
+        let (tx, rx) = mpsc::sync_channel(64);
+        let mut turn = Turn::begin(&store, None, "Make the opening shot", None, &tx).unwrap();
+        let id = turn.id().to_owned();
+        let ask = Ask {
+            media: "m4".into(),
+            rolls: None,
+            take: Some(2),
+            text: "Asks to make m4, as take 2".into(),
+        };
+        turn.ask(ask.clone());
+        turn.ask(ask.clone());
+        turn.step("Asked to make m4");
+        turn.finish(
+            &store,
+            Outcome::Done("Say yes to make it.".into()),
+            None,
+            Some("claude-session-1".into()),
+            &tx,
+        )
+        .unwrap();
+        let kept = store.load(&id).unwrap();
+        assert_eq!(kept.items[1].asks, [ask]);
+        assert_eq!(kept.claude_session.as_deref(), Some("claude-session-1"));
+        let sent = events(&rx);
+        let shown = sent
+            .iter()
+            .rev()
+            .find(|event| event["type"] == "conversation")
+            .unwrap();
+        assert!(shown.get("claudeSession").is_none());
+        assert_eq!(shown["items"][1]["asks"][0]["media"], "m4");
+        // A turn that names no session leaves the kept one.
+        let next = Turn::begin(&store, Some(&id), "Again", None, &tx).unwrap();
+        next.finish(&store, Outcome::Done("Ok".into()), None, None, &tx)
+            .unwrap();
+        assert_eq!(
+            store.load(&id).unwrap().claude_session.as_deref(),
+            Some("claude-session-1")
+        );
+
+        // Deleting the conversation deletes what its agent kept.
+        let transcript = crate::sessions::transcripts(folder.path()).join(format!("{id}.json"));
+        fs::create_dir_all(transcript.parent().unwrap()).unwrap();
+        fs::write(&transcript, "[]").unwrap();
+        store.delete(&id).unwrap();
+        assert!(!transcript.exists());
+        // And the transcripts' folder is not taken for a conversation.
+        assert!(store.list().is_empty());
+    }
+
+    #[test]
+    fn a_new_session_hears_the_latest_turns_with_what_kerf_did() {
+        let folder = tempfile::tempdir().unwrap();
+        let store = Store::of(folder.path());
+        let (tx, _rx) = mpsc::sync_channel(4096);
+        let mut turn = Turn::begin(&store, None, "Tighten the intro", None, &tx).unwrap();
+        let id = turn.id().to_owned();
+        turn.step("Proposed a change to c1");
+        turn.finish(
+            &store,
+            Outcome::Done("Trimmed it.".into()),
+            Some("p-3".into()),
+            None,
+            &tx,
+        )
+        .unwrap();
+        let next = Turn::begin(&store, Some(&id), "More", None, &tx).unwrap();
+        let earlier = next.earlier().unwrap();
+        assert!(
+            earlier.contains("You (Kerf) [Proposed a change to c1] [proposal p-3]: Trimmed it.")
+        );
+        assert!(!earlier.contains("More"));
+        next.finish(&store, Outcome::Done("Done.".into()), None, None, &tx)
+            .unwrap();
+
+        // A long conversation: only the latest turns, as many as fit.
+        let long = "word ".repeat(2000);
+        for _ in 0..12 {
+            Turn::begin(&store, Some(&id), &long, None, &tx)
+                .unwrap()
+                .finish(&store, Outcome::Done("Ok.".into()), None, None, &tx)
+                .unwrap();
+        }
+        let last = Turn::begin(&store, Some(&id), "And now?", None, &tx).unwrap();
+        let earlier = last.earlier().unwrap();
+        assert!(
+            earlier.len() <= MOST_EARLIER_BYTES + 200,
+            "{}",
+            earlier.len()
+        );
+        assert!(earlier.contains("(earlier turns are left out)"));
+        assert!(!earlier.contains("Tighten the intro"));
+        assert!(earlier.trim_end().ends_with("You (Kerf): Ok."));
     }
 }

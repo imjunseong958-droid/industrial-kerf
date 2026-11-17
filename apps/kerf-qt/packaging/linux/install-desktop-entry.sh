@@ -1,6 +1,6 @@
 #!/bin/sh
 # Adds Industrial Kerf to the desktop's applications and makes it the program that opens
-# kerf:// review links, for this user alone and with no administrator: it writes
+# kerf:// project links, for this user alone and with no administrator: it writes
 # $XDG_DATA_HOME/applications/industrial-kerf.desktop, which runs this folder's bin/kerf-qt,
 # names it the default for x-scheme-handler/kerf in $XDG_CONFIG_HOME/mimeapps.list, as
 # xdg-mime would, and copies this folder's icons/ to

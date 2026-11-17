@@ -980,8 +980,8 @@ private slots:
         QCOMPARE(search->shortcut(), QKeySequence(Qt::CTRL | Qt::Key_F));
         QCOMPARE(view->shortcut(), QKeySequence(Qt::CTRL | Qt::ALT | Qt::Key_2));
         QVERIFY(bin->actions().contains(search) && bin->actions().contains(view));
-        // The bin's ⌘F is the bin's while it has the focus (the comments
-        // panel keeps its own ⌘F).
+        // The bin's ⌘F is the bin's while it has the focus (the conversation
+        // keeps its own ⌘F).
         QCOMPARE(search->shortcutContext(), Qt::WidgetWithChildrenShortcut);
         // The strip's tips name the keymap's keys.
         QCOMPARE(ui::tipShortcut(bin->m_searchButton), search->shortcut().toString(QKeySequence::NativeText));

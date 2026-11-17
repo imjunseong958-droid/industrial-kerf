@@ -33,6 +33,7 @@ namespace kerf {
 
 class ChatExpander;
 class DraftDots;
+class MakeCard;
 
 // "0:42", "12:05": the time a turn has worked so far.
 QString workClock(double seconds);
@@ -94,6 +95,9 @@ public:
     void setStatus(const QString &status);
     QString status() const { return m_status; }
     void addStep(const QString &step);
+    // A tool call's row, by its id: added as it starts, and its line put in
+    // the same place once it ends. A failed one is said in neg.
+    void setStep(const QString &id, const QString &step, bool failed = false);
     void setSteps(const QStringList &steps);
     QStringList steps() const { return m_steps; }
     // Done, after `seconds`: folded to its headline.
@@ -126,6 +130,9 @@ private:
     bool m_open = false;
     QString m_status;
     QStringList m_steps;
+    // The tool call each row is, where it is one (parallel to m_steps).
+    QStringList m_stepIds;
+    QStringList m_failedIds;
     double m_seconds = 0;
     QElapsedTimer m_elapsed;
     qreal m_shimmer = 0;
@@ -154,10 +161,15 @@ public:
     Outcome outcome() const { return m_outcome; }
     // Ask again, for a failed or stopped turn; null otherwise.
     ChatExpander *askAgainButton() const { return m_askAgain; }
+    // Copy, under a finished answer.
+    ChatExpander *copyButton() const { return m_copy; }
     // A card of what it proposed, under what it said. The message takes it.
     void addCard(QWidget *card);
     QList<QWidget *> cards() const;
     void clearCards();
+    // The makings it asked the person to run, each a card under what it said.
+    void addAsk(MakeCard *card);
+    QList<MakeCard *> asks() const;
     // The proposal its turn staged, if any.
     void setProposal(const QString &proposalId) { m_proposal = proposalId; }
     QString proposal() const { return m_proposal; }
@@ -181,7 +193,10 @@ private:
     DraftDots *m_dots = nullptr;
     QWidget *m_cardBox = nullptr;
     QVBoxLayout *m_cardLayout = nullptr;
+    QWidget *m_askBox = nullptr;
+    QVBoxLayout *m_askLayout = nullptr;
     ChatExpander *m_askAgain = nullptr;
+    ChatExpander *m_copy = nullptr;
 };
 
 } // namespace kerf

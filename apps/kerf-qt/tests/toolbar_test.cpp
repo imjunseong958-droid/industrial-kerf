@@ -69,22 +69,20 @@ QStringList menuTexts(QMenu *menu) {
 
 // A finished check, as the bridge sends it: the first rows of FULL_ROWS.
 QJsonObject checkFixture() {
-    const auto row = [](const char *code, const char *name, bool passed, const char *value, const char *limit = nullptr,
-                        const char *comment = nullptr) {
+    const auto row = [](const char *code, const char *name, bool passed, const char *value, const char *limit = nullptr) {
         QJsonObject out{{"code", code}, {"name", name}, {"passed", passed}, {"value", value}, {"count", passed ? 0 : 1},
                         {"blocking", passed ? 0 : 1}};
         if (limit) out.insert("limit", limit);
-        if (comment) out.insert("commentId", comment);
         return out;
     };
     const QJsonArray rows{
         row("loudness.integrated", "Integrated loudness", true, "−23.1 LUFS", "R128"),
-        row("loudness.true_peak", "True peak", false, "−0.4 dBTP", "≤ −1 dBTP", "c-2718"),
+        row("loudness.true_peak", "True peak", false, "−0.4 dBTP", "≤ −1 dBTP"),
         row("loudness.range", "Loudness range", true, "6.2 LU"),
         row("picture.gamut", "Gamut Rec.709", true, "legal"),
         row("picture.levels", "Luma levels", true, "0 outside"),
         row("text.safe_area", "Title safe 90%", true, "0 outside"),
-        row("text.overlap", "Caption overlap", false, "1 at 00:00:17:08", nullptr, "c-1708"),
+        row("text.overlap", "Caption overlap", false, "1 at 00:00:17:08"),
         row("picture.flash_black", "Flash and black", true, "0 found")};
     return QJsonObject{{"type", "check"}, {"status", "done"}, {"valid", false}, {"findings", QJsonArray{}},
                        {"summary", QJsonObject{{"passed", 6}, {"total", 8}, {"blocking", 2}, {"rows", rows}}}};
@@ -435,7 +433,7 @@ private slots:
 
     // The preflight rows come from the last check: failed rows always, and
     // passed rows in the check's order until there are four. A failed row
-    // asks Kerf (the comments panel at its thread, the composer filled);
+    // asks Kerf (the conversation, the composer filled);
     // Run QC when nothing was checked; the running check's progress.
     void toolbarPreflightRowsComeFromTheCheck() {
         // The selection, without a window.
