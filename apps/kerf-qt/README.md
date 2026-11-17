@@ -591,7 +591,7 @@ the stripes of what is being made.
 A model whose entry in the person's models file runs `kerf-comfy` has a workflow
 behind it, and its node opens into it: Open workflow in its card, or a
 double-click on it (`workflow_get {media, line}` answers `workflow`, read by
-`kerf_comfy::detail` from the workflow that comes with the program, the file
+`kerf_workflow::detail` from the workflow that comes with the program, the file
 the entry names, or the shot's own copy). The same canvas then shows the
 ComfyUI graph: a card for each node with a row for each input, a link coming in
 at its row, a blank the recipe fills (`{prompt}`, `{steps}`) marked in the

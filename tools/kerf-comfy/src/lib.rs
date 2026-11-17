@@ -20,11 +20,13 @@
 //! (SIGTERM, or a terminal's Ctrl-C), it takes its job back from the server
 //! before it does, so nothing goes on being made that nobody will fetch.
 
-pub mod detail;
 pub mod guide;
 pub mod request;
 pub mod server;
-pub mod workflow;
+
+// A workflow's file, and how an editor shows one, are read by more than this
+// program (`crates/surfaces/kerf-workflow`): they are named here as they were.
+pub use kerf_workflow::{detail, workflow};
 
 use guide::{Shape, Tools};
 use request::{names_what_is_handed, signal_named, Request};

@@ -5,7 +5,7 @@
 //! Setting one changes nothing on a ComfyUI server and nothing of
 //! `kerf-comfy`. The workflow as it comes is copied into the project, beside
 //! the recipe, with that value changed and the rest as it was written
-//! ([`kerf_comfy::detail`]), and the step's line is given `workflow=<file>`,
+//! ([`kerf_workflow::detail`]), and the step's line is given `workflow=<file>`,
 //! which has the model's program run the copy for this shot
 //! (`docs/shots.md`). The copy is a file of the project: it travels with it,
 //! a take is held to it, and taking the word off the line goes back to the
@@ -144,7 +144,7 @@ fn read(
                 .map_err(|error| format!("cannot read the workflow {named}: {error}"))?,
         ),
         None => {
-            let (_, text) = kerf_comfy::workflow::BUNDLED
+            let (_, text) = kerf_workflow::workflow::BUNDLED
                 .iter()
                 .find(|(bundled, _)| *bundled == named)
                 .ok_or_else(|| {
@@ -213,7 +213,7 @@ fn given(ask: &Ask, name: &str) -> Option<String> {
 
 /// The `workflow` event of one step: its workflow as an editor shows it.
 fn event(id: &str, line: usize, read: &Read) -> Result<Value, String> {
-    let mut event = kerf_comfy::detail::described(&read.text)?;
+    let mut event = kerf_workflow::detail::described(&read.text)?;
     // Beside what fills each blank, what the line gives for it now.
     if let Some(blanks) = event["blanks"].as_object_mut() {
         for (name, blank) in blanks {
@@ -272,7 +272,7 @@ fn change(project: &Project, directory: &Path, edit: &Edit, models: &Models) -> 
     if read.text != edit.was {
         return Err("the workflow was changed by another program since it was read; it is left as that left it".to_owned());
     }
-    let now = kerf_comfy::detail::set_input(&read.text, &edit.node, &edit.input, &edit.value)?;
+    let now = kerf_workflow::detail::set_input(&read.text, &edit.node, &edit.input, &edit.value)?;
     if let Origin::Own(_, file) = &read.origin {
         return write(file, &now);
     }

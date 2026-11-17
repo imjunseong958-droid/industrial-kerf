@@ -565,7 +565,7 @@ A workflow is a ComfyUI graph, as ComfyUI exports it for its API, with blanks
 in it, and what the model it runs makes: its rate, how many frames, how
 large. `shot` comes with the program, for a model that follows a guide
 video, a reference picture (`ref=`), both, or the prompt alone. `--workflow`
-takes a file too, and `tools/kerf-comfy/workflows/shot.json` is the one to
+takes a file too, and `crates/surfaces/kerf-workflow/workflows/shot.json` is the one to
 start from. `kerf-comfy --list` names those that come with it; the others
 [read a picture back](#a-picture-read-back).
 

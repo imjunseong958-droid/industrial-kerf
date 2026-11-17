@@ -18,14 +18,14 @@
 //! [`described`] says that, with the nodes and their inputs in the order
 //! the file has them. [`set_input`] changes one value in the file's text
 //! and nothing else of it: the copy a person keeps of a workflow that comes
-//! with this program then differs from it in what they changed, and the
+//! with kerf-comfy then differs from it in what they changed, and the
 //! rest reads as it was written. A link and a blank are not set here: a
 //! link is the graph's shape, and a blank is the recipe's to fill.
 //!
 //! Nothing here asks a server. ComfyUI is another program, asked over HTTP
-//! when a shot is made ([`crate::server`]); this reads a file.
+//! by kerf-comfy when a shot is made; this reads a file.
 
-use crate::request::{guide_named, names_a_file, names_a_signal, MOVES, MOVES_BOX, MOVES_VIDEO};
+use crate::names::{guide_named, names_a_file, names_a_signal, MOVES, MOVES_BOX, MOVES_VIDEO};
 use crate::workflow::Workflow;
 use serde_json::{json, Map, Value};
 use std::ops::Range;

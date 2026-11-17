@@ -138,7 +138,7 @@ QJsonObject bounceState(int revision = 2) {
 }
 
 // The workflow the video model of that shot is run with, as the bridge says it
-// (`workflow`, from kerf_comfy::detail::described): a small ComfyUI graph with
+// (`workflow`, from kerf_workflow::detail::described): a small ComfyUI graph with
 // links, blanks the recipe fills, and values of its own. `own` is the shot's
 // own copy of it, a file of the project its line names.
 QJsonObject shotWorkflow(bool own = false, const QString &sampler = QStringLiteral("uni_pc")) {

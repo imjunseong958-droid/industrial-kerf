@@ -1725,6 +1725,7 @@ name = "kerf-comfy"
 version = "0.1.3"
 dependencies = [
  "hex",
+ "kerf-workflow",
  "serde",
  "serde_json",
  "sha2",
@@ -1975,7 +1976,6 @@ dependencies = [
  "kerf-cloud",
  "kerf-collab",
  "kerf-color",
- "kerf-comfy",
  "kerf-commands",
  "kerf-compose",
  "kerf-core",
@@ -1986,6 +1986,7 @@ dependencies = [
  "kerf-model",
  "kerf-playback",
  "kerf-runtime",
+ "kerf-workflow",
  "keyring",
  "serde",
  "serde_json",
@@ -2075,6 +2076,14 @@ dependencies = [
  "kerf-raster",
  "kerf-segment",
  "rayon",
+]
+
+[[package]]
+name = "kerf-workflow"
+version = "0.1.3"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
