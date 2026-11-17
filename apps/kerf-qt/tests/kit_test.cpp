@@ -1073,19 +1073,23 @@ private:
         QCOMPARE(image.pixelColor((QPointF(h + 2, v + 40) * dpr).toPoint()), color(popup));
         QCOMPARE(qAlpha(image.pixel(1, 1)), 0);
         // The check is at the row's very end, in accent-ink, and not before
-        // the label.
+        // the label (in the row's inset and icon column, which end 8 + 16 in:
+        // past them, text drawn with coloured subpixel edges is no check).
         const QRect laptopRect = menu.actionGeometry(laptop);
         const auto accented = [&](const QRect &area) {
+            const QColor mark = color(accentInk);
             int count = 0;
             for (int y = area.top(); y <= area.bottom(); ++y)
                 for (int x = area.left(); x <= area.right(); ++x) {
                     const QColor seen = image.pixelColor((QPointF(x, y) * dpr).toPoint());
-                    if (seen.blue() > 170 && seen.blue() > seen.red() + 40) ++count;
+                    if (std::abs(seen.red() - mark.red()) < 40 && std::abs(seen.green() - mark.green()) < 40 &&
+                        std::abs(seen.blue() - mark.blue()) < 40)
+                        ++count;
                 }
             return count;
         };
         QVERIFY(accented(QRect(laptopRect.right() - 8 - 14, laptopRect.top(), 14, laptopRect.height())) > 0);
-        QCOMPARE(accented(QRect(laptopRect.left(), laptopRect.top(), 40, laptopRect.height())), 0);
+        QCOMPARE(accented(QRect(laptopRect.left(), laptopRect.top(), 8 + 16, laptopRect.height())), 0);
         // A status dot is a row's end mark too, where the check would be, so
         // no label is pushed in for it.
         const QRect peakRect = menu.actionGeometry(peak);
