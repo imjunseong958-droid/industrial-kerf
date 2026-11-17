@@ -14,6 +14,7 @@
 #include "editor_theme.h"
 #include "main_window.h"
 #include "project_sidebar.h"
+#include "toolbar_widgets.h"
 #include "ui/chat_messages.h"
 #include "ui/chat_parts.h"
 #include "ui/conversation_model.h"
@@ -873,15 +874,26 @@ private slots:
         QVERIFY(composer->stamped() && stamp->isHidden());
         composer->setStampOffered(false);
 
-        // With no project there is no folder to name. With one, its chip is
-        // first in the row, and opens the folders and the ways to another.
+        // Nothing goes away for want of a project: with no folder open its
+        // chip says so, and so does the sidebar, where the folder's name would
+        // be, under New and Search; Export stays in the toolbar. With a
+        // folder, the chip is first in the row and names it, and opens the
+        // folders and the ways to another.
         auto *chip = w.window.findChild<ui::GhostButton *>(QStringLiteral("composerFolder"));
-        QVERIFY(chip && chip->isHidden());
+        QVERIFY(chip && chip->isVisible());
+        QCOMPARE(chip->text(), QStringLiteral("No folder"));
+        QVERIFY(w.window.m_sidebar->newConversationRow() && w.window.m_sidebar->newConversationRow()->isVisible());
+        auto *noFolder = w.window.m_sidebar->findChild<SidebarRow *>(QStringLiteral("sidebarNoFolder"));
+        QVERIFY(noFolder && noFolder->isVisible());
+        QVERIFY(w.window.m_exportButton->isVisible());
         w.window.m_projectDirectory = folder.path();
         w.window.refreshSidebar();
         QCoreApplication::processEvents();
         QVERIFY(chip->isVisible());
         QCOMPARE(chip->text(), QFileInfo(folder.path()).fileName());
+        // The row that stood for no folder is gone with the rest of the old rows.
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        QVERIFY(!w.window.m_sidebar->findChild<SidebarRow *>(QStringLiteral("sidebarNoFolder")));
         // Its icon (8 in) starts where the text over it does.
         QCOMPARE(inComposer(chip).left() + 8, inComposer(composer->input()).left());
         QVERIFY(inComposer(chip).top() >= inComposer(box).bottom());

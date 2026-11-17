@@ -743,7 +743,7 @@ ProjectSidebar::ProjectSidebar(QWidget *parent) : QWidget(parent) {
 }
 
 SidebarRow *ProjectSidebar::newConversationRow() const {
-    return m_conversationsShown && !m_current.isEmpty() ? m_newConversation : nullptr;
+    return m_conversationsShown && (m_switching || !m_current.isEmpty()) ? m_newConversation : nullptr;
 }
 
 void ProjectSidebar::setAccount(const QString &title, const QString &subtitle) {
@@ -1277,7 +1277,9 @@ void ProjectSidebar::rebuild(bool arrivals, bool unfolding) {
     m_rowKeys.clear();
     m_extras.clear();
     m_noteTexts.clear();
-    const bool unfolded = m_conversationsShown && !m_current.isEmpty();
+    // The editor's sidebar keeps its rows with no folder open too: New and
+    // Search, and where the folder's name goes, the way to one.
+    const bool unfolded = m_conversationsShown && (m_switching || !m_current.isEmpty());
     m_newConversation->setVisible(unfolded);
     // Search is a row until it is opened; a query keeps the field open.
     const bool searching = unfolded && (!m_query.isEmpty() || !m_search->isHidden());
@@ -1297,6 +1299,19 @@ void ProjectSidebar::rebuild(bool arrivals, bool unfolding) {
         m_extras << line;
         m_noteTexts << text;
     };
+    if (m_conversationsShown && m_switching && m_projects.isEmpty()) {
+        // No folder is open: its name's place says so, and opens the folders.
+        auto *row = new SidebarRow(QString(), QStringLiteral("No folder"));
+        row->setObjectName(QStringLiteral("sidebarNoFolder"));
+        row->setHeading(true);
+        row->setChevron(SidebarRow::Chevron::Unfolded);
+        row->setAccessibleDescription(QStringLiteral("Opens the folders"));
+        const auto ask = [this, row] { emit switchRequested(row); };
+        connect(row, &SidebarRow::chevronPressed, this, ask);
+        connect(row, &QAbstractButton::clicked, this, ask);
+        add(row, QStringLiteral("project:"));
+        note(QStringLiteral("Open a folder to start"));
+    }
     bool afterRows = false;
     for (const QString &path : std::as_const(m_projects)) {
         // A folder's name stands off from the rows of the one over it.

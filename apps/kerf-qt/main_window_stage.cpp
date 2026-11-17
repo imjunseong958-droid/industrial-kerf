@@ -492,7 +492,6 @@ void MainWindow::buildComposerFolder() {
     m_composerFolder->setAccessibleName(QStringLiteral("Project folder"));
     m_chat->composerWidget()->toolRow()->insertWidget(0, m_composerFolder);
     connect(m_composerFolder, &QAbstractButton::clicked, this, [this] { ui::popupMenu(buildFolderMenu(), m_composerFolder, ui::Side::Above); });
-    m_composerFolder->hide();
 }
 
 QMenu *MainWindow::buildFolderMenu() {
@@ -527,11 +526,12 @@ void MainWindow::refreshSidebar() {
     m_sidebar->setProjects(m_projectDirectory.isEmpty() ? QStringList() : QStringList{m_projectDirectory}, m_projectDirectory);
     m_chat->setFolders(recentFolders(), m_sidebar->current());
     if (m_composerFolder) {
+        // With no folder open it stays, and says so: it is the way to one.
         const QString name = QFileInfo(m_sidebar->current()).fileName();
-        m_composerFolder->setText(name);
+        m_composerFolder->setText(name.isEmpty() ? QStringLiteral("No folder") : name);
         m_composerFolder->setFixedSize(m_composerFolder->sizeHint());
-        ui::setTip(m_composerFolder, QDir::toNativeSeparators(m_sidebar->current()));
-        m_composerFolder->setVisible(!name.isEmpty());
+        ui::setTip(m_composerFolder, name.isEmpty() ? QStringLiteral("Open a folder") : QDir::toNativeSeparators(m_sidebar->current()));
+        m_composerFolder->show();
     }
     const ConversationModel *model = m_chatWiring->conversations();
     const QString current = model->currentId();

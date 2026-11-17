@@ -177,16 +177,16 @@ void ToolbarWiring::buildToolbar(const QHash<QString, QMenu *> &menus) {
     w->m_panelButton->setFocusPolicy(Qt::TabFocus);
     connect(w->m_panelButton, &QAbstractButton::clicked, w, [w] { w->setPanelOpen(!w->m_shell->panes().panelOpen()); });
     row->addWidget(w->m_panelButton);
-    // 8 between the two, which goes with Export when there is none.
+    // 8 between the two.
     m_exportGap = new QWidget;
     m_exportGap->setFixedWidth(8 - 2 * row->spacing());
-    m_exportGap->hide();
     row->addWidget(m_exportGap);
     w->m_exportButton = new ExportButton;
     connect(w->m_exportButton, &ExportButton::exportRequested, this, &ToolbarWiring::sendExport);
     connect(w->m_exportButton, &ExportButton::menuAboutToShow, this, &ToolbarWiring::buildExportMenu);
     connect(w->m_exportButton, &ExportButton::qualityChanged, this, &ToolbarWiring::syncCommands);
-    w->m_exportButton->hide();
+    // Always there, so the toolbar ends the same way in every project; with
+    // nothing to export it is off, and says why (syncCommands).
     row->addWidget(w->m_exportButton);
     toolbar->setContent(m_content);
 
@@ -281,7 +281,6 @@ void ToolbarWiring::buildToolbar(const QHash<QString, QMenu *> &menus) {
     syncCommands();
     layoutLeading();
     layoutTrailing();
-    followCut();
 }
 
 int ToolbarWiring::sidebarEdge() const {
@@ -335,18 +334,6 @@ bool ToolbarWiring::hasCut() const {
     for (const QJsonValue &track : m_bus->timeline().value(QStringLiteral("tracks")).toArray())
         if (!track.toObject().value(QStringLiteral("clips")).toArray().isEmpty()) return true;
     return false;
-}
-
-void ToolbarWiring::followCut() {
-    ExportButton *button = m_window->m_exportButton;
-    if (!button) return;
-    const bool shown = hasCut();
-    if (shown == !button->isHidden()) return;
-    button->setVisible(shown);
-    // It arrives with the cut, where it is.
-    if (shown) moves::fadeIn(button);
-    layoutTrailing();
-    layoutTitle();
 }
 
 void ToolbarWiring::layoutTrailing() {
@@ -887,7 +874,6 @@ void ToolbarWiring::trackExport(const QString &job, const QString &quality, cons
 void ToolbarWiring::onSnapshot() {
     // The window is named as the toolbar names it, once the sequence is known.
     m_window->setWindowTitle(titleText());
-    followCut();
     layoutTitle();
 }
 

@@ -348,7 +348,7 @@ when signed in. Every row is a registry command.
 
 What is left of the toolbar is the top of the room, in its colour, with no line
 under it: the traffic lights' room and the sidebar's top, the sidebar's button, the
-title, Export once the program has a clip, and one button for the panel (the
+title, Export (always there; off until the program has a clip), and one button for the panel (the
 picture and the timeline together; ⌥⌘P and ⌥⌘T still take each alone). While the
 sidebar is away, a ⋯ button beside its button opens the account's menu. The Media
 sheet's button, Follow Kerf and the two format icons are in the timeline's strip,

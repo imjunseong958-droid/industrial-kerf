@@ -143,8 +143,9 @@ private slots:
         // The sidebar's button at one end, the panel's at the other, 28 each.
         QCOMPARE(window.m_sidebarButton->size(), QSize(28, 28));
         QCOMPARE(window.m_panelButton->size(), QSize(28, 28));
-        // Export is there only once the program has a clip.
-        QVERIFY(!window.m_exportButton->isVisible());
+        // Export is always there, so the bar ends the same way in every
+        // project; before the program has a clip it is only off.
+        QVERIFY(window.m_exportButton->isVisible());
         QVERIFY(!wiring->hasCut());
         window.setConnection(QStringLiteral("ready"));
         window.applySnapshot(titledSnapshot(QStringLiteral("2026-11-04T10:10:00Z")));

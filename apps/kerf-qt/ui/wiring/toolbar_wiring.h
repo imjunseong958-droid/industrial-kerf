@@ -132,9 +132,8 @@ public:
     // The room after the last control: Export's, or the panel's button's.
     void layoutTrailing();
 
-    // ---- Export, there once the program has a clip
+    // ---- whether the program has a clip (Export is off without one)
     bool hasCut() const;
-    void followCut();
 
     // ---- export and preflight
     struct PreflightRow {
