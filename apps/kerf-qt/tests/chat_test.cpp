@@ -816,8 +816,9 @@ private slots:
     }
 
     // The composer's box holds what is asked and Send, and nothing else: the
-    // folder a request is for, the playhead's stamp, the model and the mode
-    // stand under it, outside.
+    // folder a request is for, the model and the mode stand under it, outside,
+    // on the window's foot line; the playhead's stamp only while the time is
+    // not sent.
     void theComposersToolsStandUnderItsBox() {
         QTemporaryDir folder;
         QVERIFY(folder.isValid());
@@ -828,16 +829,49 @@ private slots:
         QWidget *box = composer->box();
         QVERIFY(box->isAncestorOf(composer->input()) && box->isAncestorOf(composer->sendButton()));
         const auto inComposer = [composer](const QWidget *part) { return QRect(part->mapTo(composer, QPoint()), part->size()); };
-        for (QWidget *tool : {static_cast<QWidget *>(composer->modeChip()), static_cast<QWidget *>(composer->modelChip()),
-                              static_cast<QWidget *>(composer->stamp())}) {
+        // Centred this far over the composer's foot, which is the window's.
+        const auto overFoot = [&](const QWidget *part) { return composer->height() - inComposer(part).top() - part->height() / 2; };
+        for (QWidget *tool : {static_cast<QWidget *>(composer->modeChip()), static_cast<QWidget *>(composer->modelChip())}) {
             QVERIFY(!box->isAncestorOf(tool));
             QVERIFY(inComposer(tool).top() >= inComposer(box).bottom());
+            QCOMPARE(tool->height(), tokens::layout::footControl);
+            QCOMPARE(overFoot(tool), tokens::layout::footLine);
         }
         // Send keeps to the box's end, in the middle of a one-line box.
         QVERIFY(inComposer(composer->sendButton()).right() < inComposer(box).right());
         QVERIFY(std::abs(inComposer(composer->sendButton()).center().y() - inComposer(box).center().y()) <= 1);
-        // The mode ends the row under the box; the model is before it.
-        QCOMPARE(inComposer(composer->modeChip()).right(), inComposer(box).right() - 4);
+        // The mode ends the row under the box, its chevron (6 in) where Send
+        // ends; the model is before it.
+        QCOMPARE(inComposer(composer->modeChip()).right() - 6, inComposer(composer->sendButton()).right());
+        QVERIFY(inComposer(composer->modelChip()).right() < inComposer(composer->modeChip()).left());
+
+        // A request goes with the playhead's time while there is a picture,
+        // and nothing says so. Taken off in the conversation's menu, the
+        // stamp says it is off, under the box; pressed, the time is back.
+        StampButton *stamp = composer->stamp();
+        // With no picture there is no time to send, and no way offered to stop it.
+        composer->setStampOffered(false);
+        QVERIFY(!composer->stamped() && stamp->isHidden());
+        {
+            QMenu *none = w.chat()->buildMoreMenu();
+            QVERIFY(!none->findChild<QAction *>(QStringLiteral("chatStamp")));
+            delete none;
+        }
+        composer->setStampOffered(true);
+        QVERIFY(composer->stamped() && stamp->isHidden());
+        QMenu *more = w.chat()->buildMoreMenu();
+        QAction *send = more->findChild<QAction *>(QStringLiteral("chatStamp"));
+        QVERIFY(send && send->isChecked());
+        send->trigger();
+        delete more;
+        QCoreApplication::processEvents();
+        QVERIFY(!composer->stamped() && stamp->isVisible());
+        QVERIFY(!box->isAncestorOf(stamp));
+        QVERIFY(inComposer(stamp).top() >= inComposer(box).bottom());
+        QCOMPARE(overFoot(stamp), tokens::layout::footLine);
+        stamp->click();
+        QVERIFY(composer->stamped() && stamp->isHidden());
+        composer->setStampOffered(false);
 
         // With no project there is no folder to name. With one, its chip is
         // first in the row, and opens the folders and the ways to another.
@@ -848,8 +882,10 @@ private slots:
         QCoreApplication::processEvents();
         QVERIFY(chip->isVisible());
         QCOMPARE(chip->text(), QFileInfo(folder.path()).fileName());
-        QCOMPARE(inComposer(chip).left(), inComposer(box).left() + 4);
+        // Its icon (8 in) starts where the text over it does.
+        QCOMPARE(inComposer(chip).left() + 8, inComposer(composer->input()).left());
         QVERIFY(inComposer(chip).top() >= inComposer(box).bottom());
+        QCOMPARE(overFoot(chip), tokens::layout::footLine);
         QMenu *menu = w.window.buildFolderMenu();
         QVERIFY(menu->findChild<QAction *>(QStringLiteral("composerFolderOpen")));
         QVERIFY(menu->findChild<QAction *>(QStringLiteral("composerFolderNew")));

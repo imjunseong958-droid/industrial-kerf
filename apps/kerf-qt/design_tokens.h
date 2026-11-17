@@ -342,7 +342,14 @@ constexpr int sidebarGrip = 16;         // what of its edge takes the drag, half
 constexpr int sidebarGripLine = 2;      // the line it shows under the pointer
 // The widest a drag leaves the sidebar in a window `window` wide.
 constexpr int sidebarMost(int window) { return window - sidebarLeaves > sidebarLeast ? window - sidebarLeaves : sidebarLeast; }
-constexpr int sidebarFoot = 52;         // the account at its foot
+// What runs along the window's foot (the sidebar's account and Settings, the
+// row under the composer) is centred on one line, this far over the bottom
+// edge, as what runs along its top is centred in the toolbar; and set alike:
+// controls 28 tall, icons 16, words in UI 14.
+constexpr int footLine = 26;
+constexpr int footControl = 28;
+constexpr int footIcon = 16;
+constexpr int sidebarFoot = 36;         // the account at its foot
 constexpr int sidebarWindowLeast = 1100; // the window's width under which the sidebar gives way
 constexpr int rail = 448;               // the conversation, beside an open panel
 constexpr int railLeast = 320;          // its least width

@@ -101,7 +101,9 @@ on `main`; its section here becomes the release's notes on GitHub
   where there are none yet.
 - The composer's box holds only what you ask and Send, with no line over it.
   Under it are the project's folder, which opens the other folders, the
-  playhead's stamp, the model and the mode.
+  model and the mode. A request still goes with the playhead's time, without
+  a clock saying so; untick Send playhead time in the conversation's menu and
+  a struck clock says it is off, and puts it back when pressed.
 - Settings opens a little above the middle of the window, and the toolbar
   dims with the rest of the window behind it. On a Mac the project file's
   icon no longer shows beside the window buttons, which sit in the middle of
@@ -114,6 +116,10 @@ on `main`; its section here becomes the release's notes on GitHub
   middle, the first and the last the same distance from the window's edges.
   The line the sidebar ends on holds still while the panel opens and closes,
   and on a Mac no ⋯ comes and goes in the toolbar with the sidebar.
+  The window's foot is one line too: the account and Settings in the
+  sidebar, and the folder, model and mode under the composer, at one height
+  and one size. The timeline's timecode and track names start where its
+  strip of tools does.
   The models Kerf offers are named with a capital (Default, Opus).
 - Text is the colour of paper, not white: the same greys, warmed a little.
   The sidebar, the toolbar's title, the composer's chips and Settings are set

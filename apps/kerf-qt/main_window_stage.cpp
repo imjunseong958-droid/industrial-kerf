@@ -350,7 +350,7 @@ void MainWindow::applyPanes() {
     // The picture has gone from the stage: its card has it again.
     if (!panes.picture && !m_chat->stageProposal().isEmpty()) m_chat->setStageProposal(QString());
     // A request is stamped with the playhead while there is a picture to play.
-    if (Composer *composer = m_chat ? m_chat->composerWidget() : nullptr) composer->stamp()->setVisible(panes.picture);
+    if (Composer *composer = m_chat ? m_chat->composerWidget() : nullptr) composer->setStampOffered(panes.picture);
 }
 
 void MainWindow::followContentWithPanes() {
@@ -486,7 +486,9 @@ void MainWindow::buildComposerFolder() {
     m_composerFolder->setObjectName(QStringLiteral("composerFolder"));
     m_composerFolder->setIconName(QStringLiteral("g-folder"));
     m_composerFolder->setChevron(true);
-    m_composerFolder->setTypeStyle(tokens::body);
+    // Set as the chips it stands with, on the window's foot line.
+    m_composerFolder->setTypeStyle(tokens::sideNote);
+    m_composerFolder->setControlHeight(tokens::layout::footControl);
     m_composerFolder->setAccessibleName(QStringLiteral("Project folder"));
     m_chat->composerWidget()->toolRow()->insertWidget(0, m_composerFolder);
     connect(m_composerFolder, &QAbstractButton::clicked, this, [this] { ui::popupMenu(buildFolderMenu(), m_composerFolder, ui::Side::Above); });

@@ -8,12 +8,14 @@
 //   ┌──────────────────────────────────────────────────────────────────────┐
 //   │ Ask Kerf to make or change something                        ◔ [send] │  input, UI 14/22
 //   └──────────────────────────────────────────────────────────────────────┘
-//    [folder name v] [clock 00:00:17:08]         [model v] [lock Ask before edits v]
+//    [folder name v]                             [model v] [lock Ask before edits v]
 //
 // The box holds only what is asked and Send. Under it, outside, are the
 // quieter things: the folder the request is for (its owner puts that chip
-// first in toolRow()) and the playhead's stamp at the start, the model and
-// the mode at the end.
+// first in toolRow()) at the start, under where the text starts; the model
+// and the mode at the end, under Send. The playhead's stamp joins the folder
+// only while the time is not sent. The row is centred on the window's foot
+// line, with the sidebar's account.
 //
 // The composer only collects what is written and chosen; ChatWiring sends it
 // as an agent turn (main_window_chat.cpp).
@@ -67,9 +69,10 @@ PermissionMode next(PermissionMode mode);
 // named it, since that is an identifier.
 QString modelLabel(const QString &model);
 
-// A chip in the composer's row (24 tall, radius 6, pad 0 6): a 14 pt icon, a
-// word in UI 12/16, and the chevron of something that opens. Ink2 at rest, or
-// its tone; hover2 under the pointer.
+// A chip in the composer's row (28 tall, radius 6, pad 0 6): a 16 pt icon, a
+// word in UI 14/20, and the chevron of something that opens: the sizes of the
+// window's foot (tokens::layout::footLine). Ink2 at rest, or its tone; hover2
+// under the pointer.
 class ComposerChip final : public ui::KitButton {
     Q_OBJECT
 public:
@@ -151,9 +154,11 @@ private:
     Mode m_mode;
 };
 
-// The stamp (.stamp): 24 tall, radius 6, pad 0 6 0 4, a 14 pt clock and the
-// live playhead TC in mono 11 ink2; hover hover2. Clicked, it detaches:
-// ink3 and struck through, and the note is posted without a time.
+// The stamp (.stamp): a request goes with the playhead's time, and that needs
+// no saying, so this shows only once the time is taken off (the conversation's
+// menu, "Send playhead time"): 28 tall, radius 6, pad 0 6, a 16 pt clock and
+// the live playhead TC in mono 12, ink3 and struck through; hover hover2.
+// Clicked, the time goes with the request again and the stamp is gone.
 class StampButton final : public QAbstractButton {
     Q_OBJECT
 public:
@@ -247,8 +252,11 @@ public:
     // The live playhead TC on the stamp.
     void setTimecode(const QString &timecode);
     // Attached and offered: with no picture open there is no time to stamp.
-    bool stamped() const { return m_stamp->isAttached() && !m_stamp->isHidden(); }
+    bool stamped() const { return m_stampOffered && m_stamp->isAttached(); }
     void setStamped(bool stamped);
+    // Whether there is a time to send: a picture is open.
+    void setStampOffered(bool offered);
+    bool stampOffered() const { return m_stampOffered; }
     // Kerf drafting: Send gives way to Stop.
     void setBusy(bool busy);
     bool isBusy() const { return m_busy; }
@@ -294,6 +302,7 @@ protected:
 
 private:
     void fitInput();
+    void syncStamp();
     void placePopovers();
 
     QWidget *m_box = nullptr;
@@ -303,6 +312,7 @@ private:
     bool m_roomy = false;
     QTextEdit *m_input = nullptr;
     StampButton *m_stamp = nullptr;
+    bool m_stampOffered = true;
     ComposerChip *m_mode = nullptr;
     ComposerChip *m_model = nullptr;
     ContextMeter *m_context = nullptr;

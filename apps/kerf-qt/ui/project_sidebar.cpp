@@ -495,11 +495,11 @@ void SidebarAccount::paintEvent(QPaintEvent *) {
     p.drawRoundedRect(r, radius::card, radius::card);
 
     // The disc, with the name's first letter.
-    constexpr qreal disc = 28;
+    constexpr qreal disc = 24;
     const QRectF avatar(kPadding, (height() - disc) / 2.0, disc, disc);
     p.setBrush(tokens::color(on));
     p.drawEllipse(avatar);
-    p.setFont(tokens::font(metaStrong));
+    p.setFont(tokens::font(controlStrong));
     p.setPen(tokens::color(ink));
     p.drawText(avatar, Qt::AlignCenter, m_title.left(1).toUpper());
 
@@ -701,7 +701,9 @@ ProjectSidebar::ProjectSidebar(QWidget *parent) : QWidget(parent) {
     m_outer->addWidget(m_scroll, 1);
 
     auto *foot = new QVBoxLayout;
-    foot->setContentsMargins(space::s8, 0, space::s8, space::s8);
+    // The account and Settings are centred on the foot's line, as the row
+    // under the composer beside them.
+    foot->setContentsMargins(space::s8, 0, space::s8, layout::footLine - layout::sidebarFoot / 2);
     auto *footRow = new QHBoxLayout;
     footRow->setContentsMargins(0, 0, 0, 0);
     footRow->setSpacing(space::s4);

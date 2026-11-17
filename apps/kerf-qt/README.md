@@ -406,7 +406,8 @@ keys in its composer, and with no timeline open the keys start there. Under its
 text the composer says what a request goes with (`ui/composer.h`): how far Kerf
 may go without asking (Ask before edits, Accept edits, Auto; its chip opens the
 three, and Shift-Tab in the text goes round them), the model that answers (a menu
-where there is a choice), the playhead's stamp while a picture is open, and a ring
+where there is a choice), the playhead's stamp only while its time is not sent (a request goes with it while a
+picture is open; the conversation's menu takes it off), and a ring
 for how full Kerf's context is once a turn has said (`agent_context`). The mode is
 sent with each request (`permissions`) and kept under `agent/permissions`. Its
 header is the

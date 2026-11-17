@@ -1350,6 +1350,15 @@ QMenu *ChatPanel::buildMoreMenu() {
             connect(action, &QAction::triggered, this, [this, model] { emit moreAction(QStringLiteral("model"), model); });
         }
     }
+    // A request goes with the playhead's time while a picture is open; here
+    // it is taken off, and the composer then says so (its stamp).
+    if (m_composer->stampOffered()) {
+        QAction *stamp = menu->addAction(QStringLiteral("Send playhead time"));
+        stamp->setObjectName(QStringLiteral("chatStamp"));
+        stamp->setCheckable(true);
+        stamp->setChecked(m_composer->stamped());
+        connect(stamp, &QAction::triggered, m_composer, &Composer::setStamped);
+    }
     connect(menu->addAction(QStringLiteral("Activity")), &QAction::triggered, this,
             [this] { emit moreAction(QStringLiteral("activity"), QString()); });
     return menu;

@@ -154,6 +154,16 @@ private slots:
         // way to it is away; its leading stretch is the sidebar's top.
         QVERIFY(window.m_sidebar->isVisible());
         QVERIFY(window.m_sidebar->accountRow()->isVisible());
+        // What runs along the window's foot is on one line: the account and
+        // Settings in the sidebar, and the row under the composer.
+        {
+            const auto overFoot = [&window](const QWidget *part) {
+                return window.height() - part->mapTo(&window, QPoint(0, 0)).y() - part->height() / 2;
+            };
+            QCOMPARE(overFoot(window.m_sidebar->accountRow()), tokens::layout::footLine);
+            QCOMPARE(overFoot(window.m_sidebar->settingsButton()), tokens::layout::footLine);
+            QCOMPARE(overFoot(window.m_chat->composerWidget()->modeChip()), tokens::layout::footLine);
+        }
         QCOMPARE(wiring->sidebarEdge(), tokens::layout::sidebar);
         QCOMPARE(static_cast<FlatToolBar *>(toolbar)->sidebarEdge(), tokens::layout::sidebar);
         QVERIFY(!wiring->appMenuButton()->isVisible());

@@ -87,8 +87,11 @@ Import media with File ▸ Import Media… (⌘O).
 Ask in the conversation, or about one clip: select it and press ⌘J (Clip ▸ Ask
 Kerf…), Option-double-click it, or right-click ▸ Ask Kerf…. With a clip, choose
 **This clip** (only it changes; clips after it follow) or **Whole sequence**.
-Return sends; Shift+Return adds a line. The clock in the composer stamps the
-request with the playhead; its timecode in your message goes back there.
+Return sends; Shift+Return adds a line. A request goes with the playhead's
+time while a picture is open; its timecode in your message goes back there. To
+send one without it, untick **Send playhead time** in the conversation's menu
+(its name in the toolbar); a struck clock under the composer says it is off,
+and pressing it puts the time back.
 Beside it the composer names the model that answers, with a menu where there
 is a choice, and a ring fills as the conversation takes up Kerf's context;
 when it is full Kerf puts older steps away and goes on.
