@@ -155,7 +155,8 @@ constexpr char monoFallback[] = "Menlo";
 // Serif for Latin with Nanum Myeongjo for Hangul.
 constexpr char hangulFamily[] = "Pretendard";
 // IBM Plex, one design across Latin, Hangul and the mono: an engineered
-// face with a little of the typewriter in it.
+// face with a little of the typewriter in it. It is the face Kerf starts in;
+// Inter, the mockup's, is one to choose.
 constexpr char plexFamily[] = "IBM Plex Sans";
 constexpr char plexHangulFamily[] = "IBM Plex Sans KR";
 constexpr char plexMonoFamily[] = "IBM Plex Mono";
@@ -169,11 +170,11 @@ constexpr char serifHangulFamily[] = "NanumMyeongjo";
 // interface's. editor_theme.h's setEditorFaces() changes them and has every
 // widget take them.
 struct Faces {
-    QStringList ui{QString::fromLatin1(uiFamily), QString::fromLatin1(hangulFamily)};
+    QStringList ui{QString::fromLatin1(plexFamily), QString::fromLatin1(plexHangulFamily), QString::fromLatin1(hangulFamily)};
     QStringList prose;
-    // The mono's families, first choice first; none is the design's own
-    // (JetBrains Mono).
-    QStringList mono;
+    // The mono's families, first choice first, before JetBrains Mono, which
+    // the faces that have no mono of their own are set with.
+    QStringList mono{QString::fromLatin1(plexMonoFamily)};
     int proseStep = 0; // points added to the reading size
 };
 inline Faces &faces() {

@@ -51,7 +51,7 @@ constexpr int kChevron = 12;
 constexpr int kChevronGap = space::s4;
 // After a name, the chevron sits on the middle of its lowercase, a little
 // under the line's own middle.
-constexpr qreal kChevronDrop = 1.5;
+constexpr qreal kChevronDrop = 2.5;
 constexpr int kBadge = 7;
 constexpr int kDotIcon = 12;
 constexpr int kAction = 20;
@@ -951,7 +951,7 @@ QDateTime ProjectSidebar::now() const { return m_fixedNow.isValid() ? m_fixedNow
 QString ProjectSidebar::relativeTime(const QDateTime &when, const QDateTime &now) {
     if (!when.isValid() || !now.isValid()) return {};
     const qint64 seconds = std::max<qint64>(0, when.secsTo(now));
-    if (seconds < 60) return QStringLiteral("now");
+    if (seconds < 60) return QStringLiteral("Now");
     if (seconds < 60 * 60) return QStringLiteral("%1m").arg(seconds / 60);
     if (seconds < 24 * 60 * 60) return QStringLiteral("%1h").arg(seconds / (60 * 60));
     if (seconds < 7 * 24 * 60 * 60) return QStringLiteral("%1d").arg(seconds / (24 * 60 * 60));

@@ -68,6 +68,12 @@ private:
 
 } // namespace
 
+QString modelLabel(const QString &model) {
+    static const QStringList aliases{QStringLiteral("default"), QStringLiteral("opus"), QStringLiteral("sonnet"), QStringLiteral("haiku")};
+    if (!aliases.contains(model)) return model;
+    return model.left(1).toUpper() + model.mid(1);
+}
+
 // ------------------------------------------------------------------ permission
 
 namespace permission {
@@ -656,10 +662,11 @@ void Composer::setModels(const QStringList &models, const QString &current, bool
     m_models = models;
     m_currentModel = current;
     m_modelsChoosable = choosable && models.size() > 1;
-    m_model->setLabel(current);
+    m_model->setLabel(modelLabel(current));
     m_model->setChevron(m_modelsChoosable);
     m_model->setVisible(m_agentControls && !current.isEmpty());
-    ui::setTip(m_model, m_modelsChoosable ? QStringLiteral("Model · %1").arg(current) : QStringLiteral("Answers come from %1").arg(current));
+    ui::setTip(m_model, m_modelsChoosable ? QStringLiteral("Model · %1").arg(modelLabel(current))
+                                          : QStringLiteral("Answers come from %1").arg(modelLabel(current)));
 }
 
 QMenu *Composer::buildModelMenu() {
@@ -669,7 +676,7 @@ QMenu *Composer::buildModelMenu() {
     ui::styleMenu(menu);
     ui::addMenuHeader(menu, QStringLiteral("Model"));
     for (const QString &model : std::as_const(m_models)) {
-        QAction *action = menu->addAction(model);
+        QAction *action = menu->addAction(modelLabel(model));
         action->setCheckable(true);
         action->setChecked(model == m_currentModel);
         connect(action, &QAction::triggered, this, [this, model] { emit modelChosen(model); });

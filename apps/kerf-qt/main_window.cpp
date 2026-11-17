@@ -386,7 +386,7 @@ void MainWindow::updateAccountRow() {
     } else if (usesCloud()) {
         m_sidebar->setAccount(QStringLiteral("Kerf Cloud"), QStringLiteral("Not signed in"));
     } else {
-        m_sidebar->setAccount(QStringLiteral("My own API key"), m_agentModel.isEmpty() ? QStringLiteral("Set up in Settings") : m_agentModel);
+        m_sidebar->setAccount(QStringLiteral("My own API key"), m_agentModel.isEmpty() ? QStringLiteral("Set up in Settings") : modelLabel(m_agentModel));
     }
 }
 

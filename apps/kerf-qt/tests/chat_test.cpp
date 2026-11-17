@@ -579,10 +579,16 @@ private slots:
         for (const char *family : {tokens::uiFamily, tokens::hangulFamily, tokens::serifFamily, tokens::serifHangulFamily,
                                    tokens::plexFamily, tokens::plexHangulFamily, tokens::plexMonoFamily})
             QVERIFY2(QFontDatabase::families().contains(QString::fromLatin1(family)), family);
-        // The design's own, with Pretendard for the Hangul Inter has none of.
+        // What a new user starts in: IBM Plex, one design throughout, with its
+        // own Hangul and its own mono for timecodes.
         const tokens::Faces plain = facesFor(FaceChoice{});
-        QCOMPARE(plain.ui, (QStringList{QStringLiteral("Inter"), QStringLiteral("Pretendard")}));
+        QCOMPARE(plain.ui.first(2), (QStringList{QStringLiteral("IBM Plex Sans"), QStringLiteral("IBM Plex Sans KR")}));
+        QCOMPARE(plain.mono, QStringList{QStringLiteral("IBM Plex Mono")});
         QVERIFY(plain.prose.isEmpty());
+        // Inter, with Pretendard for the Hangul it has none of, and the design's mono.
+        const tokens::Faces inter = facesFor(FaceChoice{QStringLiteral("inter"), QStringLiteral("same"), QStringLiteral("default")});
+        QCOMPARE(inter.ui, (QStringList{QStringLiteral("Inter"), QStringLiteral("Pretendard")}));
+        QVERIFY(inter.mono.isEmpty());
         QCOMPARE(plain.proseStep, 0);
         const FaceChoice chosen{QStringLiteral("pretendard"), QStringLiteral("serif"), QStringLiteral("large")};
         const tokens::Faces fancy = facesFor(chosen);
@@ -590,25 +596,22 @@ private slots:
         QCOMPARE(fancy.prose, (QStringList{QStringLiteral("Noto Serif"), QStringLiteral("NanumMyeongjo")}));
         QCOMPARE(fancy.proseStep, 2);
         QCOMPARE(facesFor(FaceChoice{QStringLiteral("system"), QStringLiteral("same"), QStringLiteral("small")}).proseStep, -1);
-        // IBM Plex is one design throughout: its own Hangul, and its own mono
-        // for timecodes, where the others keep the design's.
-        const tokens::Faces plex = facesFor(FaceChoice{QStringLiteral("plex"), QStringLiteral("same"), QStringLiteral("default")});
-        QCOMPARE(plex.ui.first(2), (QStringList{QStringLiteral("IBM Plex Sans"), QStringLiteral("IBM Plex Sans KR")}));
-        QCOMPARE(plex.mono, QStringList{QStringLiteral("IBM Plex Mono")});
-        QVERIFY(plain.mono.isEmpty() && fancy.mono.isEmpty());
+        // The others keep the design's mono; choosing one puts both in force.
+        QVERIFY(fancy.mono.isEmpty());
         {
-            setEditorFaces(FaceChoice{QStringLiteral("plex"), QStringLiteral("same"), QStringLiteral("default")});
+            setEditorFaces(FaceChoice{QStringLiteral("inter"), QStringLiteral("same"), QStringLiteral("default")});
+            QCOMPARE(tokens::font(tokens::body).families().first(), QStringLiteral("Inter"));
+            QCOMPARE(tokens::font(tokens::timecode).families().first(), QStringLiteral("JetBrains Mono"));
+            setEditorFaces(FaceChoice{});
             QCOMPARE(tokens::font(tokens::body).families().first(), QStringLiteral("IBM Plex Sans"));
             QCOMPARE(tokens::font(tokens::timecode).families().first(), QStringLiteral("IBM Plex Mono"));
-            setEditorFaces(FaceChoice{});
-            QCOMPARE(tokens::font(tokens::timecode).families().first(), QStringLiteral("JetBrains Mono"));
         }
         // Kept and read back; a name that is none of them is the first of its kind.
         saveFaceChoice(chosen);
         QCOMPARE(loadFaceChoice(), chosen);
         QSettings().setValue(QStringLiteral("appearance/interfaceFace"), QStringLiteral("comic"));
         QSettings().setValue(QStringLiteral("appearance/readingSize"), QStringLiteral("huge"));
-        QCOMPARE(loadFaceChoice(), (FaceChoice{QStringLiteral("inter"), QStringLiteral("serif"), QStringLiteral("default")}));
+        QCOMPARE(loadFaceChoice(), (FaceChoice{QStringLiteral("plex"), QStringLiteral("serif"), QStringLiteral("default")}));
         QSettings().remove(QStringLiteral("appearance"));
 
         Window w;
@@ -616,12 +619,12 @@ private slots:
         w.window.handleEvent(conversation("c-1", "Cut the harbor", {item("i1", "you", "Cut it"), item("i2", "kerf", "Done, in **one** pass.")}));
         settle();
         const auto first = [](const QFont &font) { return font.families().value(0); };
-        QCOMPARE(first(w.chat()->answers().constFirst()->body()->font()), QStringLiteral("Inter"));
+        QCOMPARE(first(w.chat()->answers().constFirst()->body()->font()), QStringLiteral("IBM Plex Sans"));
         QCOMPARE(w.chat()->answers().constFirst()->body()->font().pixelSize(), 14);
-        QCOMPARE(first(w.chat()->title()->font()), QStringLiteral("Inter"));
+        QCOMPARE(first(w.chat()->title()->font()), QStringLiteral("IBM Plex Sans"));
 
-        // Chosen in Settings: put in force at once, and kept.
-        w.window.m_interfaceFace->setCurrentIndex(1, false);
+        // Chosen in Settings (IBM Plex, Inter, Pretendard, System): put in force at once, and kept.
+        w.window.m_interfaceFace->setCurrentIndex(2, false);
         w.window.m_readingFace->setCurrentIndex(1, false);
         w.window.m_readingSize->setCurrentIndex(2, false);
         emit w.window.m_readingSize->activated(2);
@@ -642,16 +645,17 @@ private slots:
         QCOMPARE(first(QApplication::font()), QStringLiteral("Pretendard"));
         QCOMPARE(first(tokens::font(tokens::timecode)), QStringLiteral("JetBrains Mono"));
 
-        // Back to the design's own.
+        // Back to what it starts in.
         w.window.m_interfaceFace->setCurrentIndex(0, false);
         w.window.m_readingFace->setCurrentIndex(0, false);
         w.window.m_readingSize->setCurrentIndex(1, false);
         emit w.window.m_interfaceFace->activated(0);
         settle();
-        QCOMPARE(first(w.chat()->answers().constFirst()->body()->font()), QStringLiteral("Inter"));
+        QCOMPARE(first(w.chat()->answers().constFirst()->body()->font()), QStringLiteral("IBM Plex Sans"));
         QCOMPARE(w.chat()->answers().constFirst()->body()->font().pixelSize(), 14);
-        QCOMPARE(first(w.chat()->title()->font()), QStringLiteral("Inter"));
-        QCOMPARE(first(w.window.m_chatInput->font()), QStringLiteral("Inter"));
+        QCOMPARE(first(w.chat()->title()->font()), QStringLiteral("IBM Plex Sans"));
+        QCOMPARE(first(w.window.m_chatInput->font()), QStringLiteral("IBM Plex Sans"));
+        QCOMPARE(first(tokens::font(tokens::timecode)), QStringLiteral("IBM Plex Mono"));
     }
 
     // A proposal a turn staged has its card under the answer; one staged

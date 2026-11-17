@@ -1096,7 +1096,7 @@ QWidget *ProjectLauncher::buildDetails() {
     sharing->addSpacing(4);
     m_remote = new QLineEdit;
     m_remote->setObjectName(QStringLiteral("launcherRemote"));
-    m_remote->setPlaceholderText(QStringLiteral("or push to a remote: git@github.com:you/film.git"));
+    m_remote->setPlaceholderText(QStringLiteral("Or push to a remote: git@github.com:you/film.git"));
     sharing->addWidget(m_remote);
     m_gitHint = new QLabel(QStringLiteral("Looking for Git and the GitHub CLI…"));
     m_gitHint->setObjectName(QStringLiteral("launcherHint"));

@@ -134,10 +134,11 @@ public:
         update();
     }
     QString qualityName() const { return m_quality; }
-    // pad 0 10, "Export" (UI 500) gap 6 the quality (UI 400).
+    // pad 0 10, "Export" (UI 500 13) gap 6 the quality (UI 400 13): a size
+    // under the title it shares the toolbar with.
     int naturalWidth() const {
-        return space::s8 + 2 + ui::snapWidth(controlStrong, QStringLiteral("Export")) + space::s6 +
-               std::max(ui::snapWidth(control, QStringLiteral("Master")), ui::snapWidth(control, QStringLiteral("Draft"))) +
+        return space::s8 + 2 + ui::snapWidth(bodyName, QStringLiteral("Export")) + space::s6 +
+               std::max(ui::snapWidth(body, QStringLiteral("Master")), ui::snapWidth(body, QStringLiteral("Draft"))) +
                space::s8 + 2;
     }
 
@@ -162,10 +163,10 @@ protected:
         if (m_arrow) {
             icons::paint(p, QStringLiteral("g-chev"), r, isEnabled() ? ui::mix(color(ink2), color(ink), hoverProgress()) : color(dis), 16);
         } else {
-            const QFont strong = tokens::font(controlStrong);
-            const QFont regular = tokens::font(control);
-            const int exportWidth = ui::snapWidth(controlStrong, QStringLiteral("Export"));
-            const int total = exportWidth + space::s6 + ui::snapWidth(control, m_quality);
+            const QFont strong = tokens::font(bodyName);
+            const QFont regular = tokens::font(body);
+            const int exportWidth = ui::snapWidth(bodyName, QStringLiteral("Export"));
+            const int total = exportWidth + space::s6 + ui::snapWidth(body, m_quality);
             qreal x = std::round((r.width() - total) / 2.0);
             p.setFont(strong);
             p.setPen(isEnabled() ? color(ink) : color(dis));

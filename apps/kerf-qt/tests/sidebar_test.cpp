@@ -110,10 +110,10 @@ private slots:
 
     void timesSayHowLongAgo() {
         const QDateTime now = noon();
-        QCOMPARE(ProjectSidebar::relativeTime(now, now), QStringLiteral("now"));
-        QCOMPARE(ProjectSidebar::relativeTime(now.addSecs(-59), now), QStringLiteral("now"));
+        QCOMPARE(ProjectSidebar::relativeTime(now, now), QStringLiteral("Now"));
+        QCOMPARE(ProjectSidebar::relativeTime(now.addSecs(-59), now), QStringLiteral("Now"));
         // A clock a little ahead is still now.
-        QCOMPARE(ProjectSidebar::relativeTime(now.addSecs(30), now), QStringLiteral("now"));
+        QCOMPARE(ProjectSidebar::relativeTime(now.addSecs(30), now), QStringLiteral("Now"));
         QCOMPARE(ProjectSidebar::relativeTime(now.addSecs(-4 * 60), now), QStringLiteral("4m"));
         QCOMPARE(ProjectSidebar::relativeTime(now.addSecs(-2 * 3600 - 50), now), QStringLiteral("2h"));
         QCOMPARE(ProjectSidebar::relativeTime(now.addDays(-3), now), QStringLiteral("3d"));

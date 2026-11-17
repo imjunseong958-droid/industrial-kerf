@@ -4,12 +4,107 @@
 #include <QWidget>
 
 #import <AppKit/AppKit.h>
+#import <objc/runtime.h>
 
 #include <cmath>
+
+// Keeps a window's buttons where the window wants them. The system puts them
+// back where it has them whenever it lays the title bar out again (a resize,
+// a new title, the window becoming key), so their frames are watched and put
+// right each time they move.
+@interface KerfWindowButtonKeeper : NSObject
+@property(nonatomic, assign) NSWindow *window;
+@property(nonatomic) CGFloat left;
+@property(nonatomic) CGFloat centerY;
+- (instancetype)initWithWindow:(NSWindow *)window;
+- (void)place;
+@end
+
+@implementation KerfWindowButtonKeeper {
+    CGFloat _step;
+    BOOL _placing;
+    BOOL _scheduled;
+}
+
+- (NSArray<NSButton *> *)buttons {
+    NSMutableArray<NSButton *> *out = [NSMutableArray array];
+    for (NSNumber *kind in @[@(NSWindowCloseButton), @(NSWindowMiniaturizeButton), @(NSWindowZoomButton)]) {
+        NSButton *button = [self.window standardWindowButton:(NSWindowButton)kind.integerValue];
+        if (button) [out addObject:button];
+    }
+    return out;
+}
+
+- (instancetype)initWithWindow:(NSWindow *)window {
+    if ((self = [super init])) {
+        _window = window;
+        NSArray<NSButton *> *buttons = [self buttons];
+        // As far apart as the system has them.
+        _step = buttons.count > 1 ? NSMinX(buttons[1].frame) - NSMinX(buttons[0].frame) : 20;
+        for (NSButton *button in buttons) {
+            button.postsFrameChangedNotifications = YES;
+            [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(moved:) name:NSViewFrameDidChangeNotification object:button];
+        }
+        [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(closing:) name:NSWindowWillCloseNotification object:window];
+    }
+    return self;
+}
+
+- (void)dealloc {
+    [NSNotificationCenter.defaultCenter removeObserver:self];
+#if !__has_feature(objc_arc)
+    [super dealloc];
+#endif
+}
+
+- (void)closing:(NSNotification *)notification {
+    [NSNotificationCenter.defaultCenter removeObserver:self];
+    _window = nil;
+}
+
+- (void)moved:(NSNotification *)notification {
+    // Not in the middle of the system's own layout, which goes on to move the
+    // others: once it is done, and once for however many it moved.
+    if (_placing || _scheduled) return;
+    _scheduled = YES;
+#if !__has_feature(objc_arc)
+    [self retain];
+#endif
+    dispatch_async(dispatch_get_main_queue(), ^{
+        self->_scheduled = NO;
+        [self place];
+#if !__has_feature(objc_arc)
+        [self release];
+#endif
+    });
+}
+
+- (void)place {
+    NSWindow *window = self.window;
+    // In full screen the buttons are the system's, in its own bar.
+    if (!window || _placing || (window.styleMask & NSWindowStyleMaskFullScreen)) return;
+    _placing = YES;
+    CGFloat x = self.left;
+    for (NSButton *button in [self buttons]) {
+        NSView *bar = button.superview;
+        if (bar) {
+            const CGFloat height = NSHeight(button.frame);
+            const CGFloat y = bar.isFlipped ? self.centerY - height / 2 : NSHeight(bar.frame) - self.centerY - height / 2;
+            const NSPoint origin = NSMakePoint(x, y);
+            if (!NSEqualPoints(button.frame.origin, origin)) [button setFrameOrigin:origin];
+        }
+        x += _step;
+    }
+    _placing = NO;
+}
+
+@end
 
 namespace kerf {
 
 namespace {
+
+const char kKeeperKey = 0;
 
 NSWindow *nativeWindow(QWidget *window) {
     if (QGuiApplication::platformName() != QLatin1String("cocoa")) return nil;
@@ -30,22 +125,18 @@ void hideNativeWindowTitle(QWidget *window) {
 
 void placeWindowButtons(QWidget *window, int left, int centerY) {
     NSWindow *native = nativeWindow(window);
-    if (!native || (native.styleMask & NSWindowStyleMaskFullScreen)) return;
-    NSButton *close = [native standardWindowButton:NSWindowCloseButton];
-    NSButton *minimize = [native standardWindowButton:NSWindowMiniaturizeButton];
-    NSButton *zoom = [native standardWindowButton:NSWindowZoomButton];
-    NSView *bar = close.superview;
-    if (!close || !minimize || !zoom || !bar) return;
-    // As far apart as the system has them; only where the row starts and how
-    // far down it sits are the window's own.
-    const CGFloat step = NSMinX(minimize.frame) - NSMinX(close.frame);
-    CGFloat x = left;
-    for (NSButton *button in @[close, minimize, zoom]) {
-        const CGFloat height = NSHeight(button.frame);
-        const CGFloat y = bar.isFlipped ? centerY - height / 2 : NSHeight(bar.frame) - centerY - height / 2;
-        [button setFrameOrigin:NSMakePoint(x, y)];
-        x += step;
+    if (!native) return;
+    KerfWindowButtonKeeper *keeper = objc_getAssociatedObject(native, &kKeeperKey);
+    if (!keeper) {
+        keeper = [[KerfWindowButtonKeeper alloc] initWithWindow:native];
+        objc_setAssociatedObject(native, &kKeeperKey, keeper, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+#if !__has_feature(objc_arc)
+        [keeper release];
+#endif
     }
+    keeper.left = left;
+    keeper.centerY = centerY;
+    [keeper place];
 }
 
 int windowButtonsWidth(QWidget *window) {

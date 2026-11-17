@@ -266,7 +266,7 @@ public:
     // Edits a conversation's title over its row: Enter keeps it, Esc does not.
     void beginRename(const QString &id);
 
-    // "now", "4m", "2h", "3d", then a short date: how long before `now` `when` was.
+    // "Now", "4m", "2h", "3d", then a short date: how long before `now` `when` was.
     static QString relativeTime(const QDateTime &when, const QDateTime &now);
     // Conversations that finished while you were elsewhere: their dot stays
     // until you look at them.

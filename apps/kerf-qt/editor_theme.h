@@ -321,16 +321,16 @@ void loadBundledFonts();
 // The faces a person chooses in Settings (Appearance), by the names the
 // settings keep them under (appearance/interfaceFace, readingFace,
 // readingSize):
-//   interface  "inter" (the design's, with Pretendard for Hangul),
-//              "pretendard", "plex" (IBM Plex Sans, with IBM Plex Sans KR for
-//              Hangul and IBM Plex Mono for what is set in mono), or "system"
-//              (the computer's own interface face)
+//   interface  "plex" (IBM Plex Sans, with IBM Plex Sans KR for Hangul and
+//              IBM Plex Mono for what is set in mono), "inter" (with
+//              Pretendard for Hangul), "pretendard", or "system" (the
+//              computer's own interface face)
 //   reading    what is said in the conversation: "same" as the interface, or
 //              "serif" (Noto Serif, with Nanum Myeongjo for Hangul)
 //   size       "small", "default" or "large": the conversation at 13, 14 or 16
 // A name that is none of them is the first of its kind.
 struct FaceChoice {
-    QString ui = QStringLiteral("inter"); // (`interface` is a macro in Windows' headers)
+    QString ui = QStringLiteral("plex"); // (`interface` is a macro in Windows' headers)
     QString reading = QStringLiteral("same");
     QString size = QStringLiteral("default");
     bool operator==(const FaceChoice &other) const {

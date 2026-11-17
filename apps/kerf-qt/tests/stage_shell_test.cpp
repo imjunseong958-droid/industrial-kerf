@@ -913,7 +913,7 @@ private slots:
         window.show();
         QVERIFY(QTest::qWaitForWindowExposed(&window));
         // One button stands for the panel: on while either pane shows.
-        QVERIFY(window.m_panelButton->isOn());
+        QVERIFY(window.m_shell->panes().panelOpen());
         QAction *timelinePane = window.m_commands->action(QStringLiteral("view.timeline"));
         QVERIFY(timelinePane && timelinePane->isChecked());
         ui::IconButton *play = window.m_timelineWiring->tools()->transportButton(TimelineToolStrip::Transport::Play);
@@ -923,7 +923,7 @@ private slots:
         timelinePane->trigger();
         QVERIFY(!timelinePane->isChecked());
         QVERIFY(!window.m_shell->panes().timeline);
-        QVERIFY(window.m_panelButton->isOn());
+        QVERIFY(window.m_shell->panes().panelOpen());
         QVERIFY(block->isVisible());
         QVERIFY(block->isAncestorOf(play));
         timelinePane->trigger();
@@ -931,7 +931,7 @@ private slots:
         // The button closes both panes, and opens both again.
         window.m_panelButton->click();
         QVERIFY(!window.m_shell->panes().panelOpen());
-        QVERIFY(!window.m_panelButton->isOn());
+        QVERIFY(!window.m_shell->panes().panelOpen());
         window.m_panelButton->click();
         QVERIFY(window.m_shell->panes().picture && window.m_shell->panes().timeline);
         // The sidebar's choice is remembered.

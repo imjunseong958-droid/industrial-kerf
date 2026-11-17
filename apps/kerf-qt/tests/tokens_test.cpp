@@ -95,20 +95,21 @@ private slots:
     void fontFollowsItsStyle() {
         using namespace tokens;
         const QFont ui = font(title);
-        QCOMPARE(ui.families().value(0), QStringLiteral("Inter"));
+        QCOMPARE(ui.families().value(0), QStringLiteral("IBM Plex Sans"));
         QCOMPARE(ui.pixelSize(), 14);
         QCOMPARE(ui.weight(), QFont::Medium);
         QCOMPARE(ui.letterSpacing(), 0.0);
         const QFont mono = font(timecode);
-        QCOMPARE(mono.families().value(0), QStringLiteral("JetBrains Mono"));
-        QCOMPARE(mono.families().value(1), QStringLiteral("Menlo"));
+        QCOMPARE(mono.families().value(0), QStringLiteral("IBM Plex Mono"));
+        QCOMPARE(mono.families().value(1), QStringLiteral("JetBrains Mono"));
+        QCOMPARE(mono.families().value(2), QStringLiteral("Menlo"));
         QCOMPARE(mono.pixelSize(), 12);
         QCOMPARE(mono.weight(), QFont::Normal);
 #if QT_VERSION >= QT_VERSION_CHECK(6, 7, 0)
         // Figures are tabular everywhere, so timecodes and counts hold still.
         QCOMPARE(ui.featureValue(QFont::Tag("tnum")), 1u);
         QCOMPARE(mono.featureValue(QFont::Tag("tnum")), 1u);
-        // Inter keeps its default two-storey a, as the mockup shows it.
+        // No stylistic alternates are asked for: each face as it is drawn.
         QVERIFY(!ui.isFeatureSet(QFont::Tag("cv11")));
 #endif
     }
@@ -127,16 +128,16 @@ private slots:
             QVERIFY2(id >= 0, file);
             QVERIFY2(QFontDatabase::applicationFontFamilies(id).contains(QString::fromLatin1(family)), file);
         }
-        for (const char *family : {uiFamily, monoFamily}) {
+        for (const char *family : {uiFamily, monoFamily, plexFamily, plexHangulFamily, plexMonoFamily}) {
             const QStringList styles = QFontDatabase::styles(QString::fromLatin1(family));
             QVERIFY2(styles.contains(QStringLiteral("Regular")), family);
             QVERIFY2(styles.contains(QStringLiteral("Medium")), family);
         }
         // A style's font resolves to the bundled face at its weight.
-        QCOMPARE(QFontInfo(font(body)).family(), QString::fromLatin1(uiFamily));
-        QCOMPARE(QFontInfo(font(title)).family(), QString::fromLatin1(uiFamily));
+        QCOMPARE(QFontInfo(font(body)).family(), QString::fromLatin1(plexFamily));
+        QCOMPARE(QFontInfo(font(title)).family(), QString::fromLatin1(plexFamily));
         QCOMPARE(QFontInfo(font(title)).styleName(), QStringLiteral("Medium"));
-        QCOMPARE(QFontInfo(font(timecode)).family(), QString::fromLatin1(monoFamily));
+        QCOMPARE(QFontInfo(font(timecode)).family(), QString::fromLatin1(plexMonoFamily));
         QCOMPARE(QFontInfo(font(timecode)).styleName(), QStringLiteral("Regular"));
         QVERIFY(QFontInfo(font(timecode)).fixedPitch());
         // Each face's licence is there to ship beside it.

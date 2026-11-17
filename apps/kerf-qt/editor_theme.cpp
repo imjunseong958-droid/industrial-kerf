@@ -518,7 +518,7 @@ FaceChoice loadFaceChoice() {
     const QSettings settings;
     FaceChoice choice;
     const QString ui = settings.value(QStringLiteral("appearance/interfaceFace")).toString();
-    if (ui == QLatin1String("pretendard") || ui == QLatin1String("plex") || ui == QLatin1String("system")) choice.ui = ui;
+    if (ui == QLatin1String("inter") || ui == QLatin1String("pretendard") || ui == QLatin1String("system")) choice.ui = ui;
     if (settings.value(QStringLiteral("appearance/readingFace")).toString() == QLatin1String("serif")) choice.reading = QStringLiteral("serif");
     const QString size = settings.value(QStringLiteral("appearance/readingSize")).toString();
     if (size == QLatin1String("small") || size == QLatin1String("large")) choice.size = size;
@@ -534,17 +534,16 @@ void saveFaceChoice(const FaceChoice &choice) {
 
 tokens::Faces facesFor(const FaceChoice &choice) {
     tokens::Faces faces;
+    // Only IBM Plex has a mono of its own; the rest are set with the design's.
+    if (choice.ui != QLatin1String("plex")) faces.mono.clear();
     const QString inter = QString::fromLatin1(tokens::uiFamily);
     const QString pretendard = QString::fromLatin1(tokens::hangulFamily);
     // The system's own face first, with the bundled ones for what it lacks.
     if (choice.ui == QLatin1String("system"))
         faces.ui = {QFontDatabase::systemFont(QFontDatabase::GeneralFont).family(), pretendard};
     else if (choice.ui == QLatin1String("pretendard")) faces.ui = {pretendard, inter};
-    else if (choice.ui == QLatin1String("plex")) {
-        // One design for Latin, Hangul and the mono.
-        faces.ui = {QString::fromLatin1(tokens::plexFamily), QString::fromLatin1(tokens::plexHangulFamily), pretendard};
-        faces.mono = {QString::fromLatin1(tokens::plexMonoFamily)};
-    } else faces.ui = {inter, pretendard};
+    else if (choice.ui == QLatin1String("inter")) faces.ui = {inter, pretendard};
+    // Else IBM Plex, as a new Faces is: one design for Latin, Hangul and the mono.
     if (choice.reading == QLatin1String("serif"))
         faces.prose = {QString::fromLatin1(tokens::serifFamily), QString::fromLatin1(tokens::serifHangulFamily)};
     faces.proseStep = choice.size == QLatin1String("small") ? -1 : choice.size == QLatin1String("large") ? 2 : 0;

@@ -99,7 +99,9 @@ void ToolbarWiring::buildToolbar(const QHash<QString, QMenu *> &menus) {
     m_content = new QWidget;
     m_content->setObjectName(QStringLiteral("toolbarRow"));
     auto *row = new QHBoxLayout(m_content);
-    row->setContentsMargins(kLeadingPad, 0, 12, 0);
+    // The last control ends as far from the window's right edge as the window
+    // buttons start from its left.
+    row->setContentsMargins(kLeadingPad, 0, kWindowButtonsLeft, 0);
     row->setSpacing(4);
     // The room before the first control: the window buttons' on macOS, and the
     // sidebar's while it shows, whose top this stretch of the bar is.
@@ -120,6 +122,10 @@ void ToolbarWiring::buildToolbar(const QHash<QString, QMenu *> &menus) {
         return button;
     };
     w->m_sidebarButton = paneButton(QStringLiteral("g-sidebar"), "paneSidebar", QStringLiteral("Sidebar"), QStringLiteral("view.sidebar"));
+    // An icon beside the window buttons, with no fill of its own but under
+    // the pointer: whether the sidebar shows is plain from the sidebar.
+    w->m_sidebarButton->setCheckable(false);
+    w->m_sidebarButton->setIconPx(kToolbarIcon);
     row->addWidget(w->m_sidebarButton);
     // Everything else is at the sidebar's foot, under the account. With the
     // sidebar away, the same menu opens from here.
@@ -173,7 +179,9 @@ void ToolbarWiring::buildToolbar(const QHash<QString, QMenu *> &menus) {
     w->m_panelButton = new ui::IconButton(QStringLiteral("g-panel"), ui::IconButton::Size::S28);
     w->m_panelButton->setObjectName(QStringLiteral("panePanel"));
     w->m_panelButton->setAccessibleName(QStringLiteral("Picture and timeline"));
-    w->m_panelButton->setCheckable(true);
+    // The same at the other end: an icon, as large as the sidebar's.
+    w->m_panelButton->setCheckable(false);
+    w->m_panelButton->setIconPx(kToolbarIcon);
     w->m_panelButton->setFocusPolicy(Qt::TabFocus);
     connect(w->m_panelButton, &QAbstractButton::clicked, w, [w] { w->setPanelOpen(!w->m_shell->panes().panelOpen()); });
     row->addWidget(w->m_panelButton);

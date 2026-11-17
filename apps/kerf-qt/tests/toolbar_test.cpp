@@ -664,8 +664,8 @@ private slots:
                 QCOMPARE(frame(control).center().y(), toolbar->height() / 2 - 1);
                 if (i > 0) QVERIFY2(frame(controls.at(i - 1)).right() < frame(control).left(), qPrintable(control->objectName()));
             }
-            // The panel's button ends 12 in from the window's right.
-            QCOMPARE(frame(window.m_panelButton).right() + 1, toolbar->width() - 12);
+            // The panel's button ends 9 in from the window's right, as the window buttons start 9 in from its left.
+            QCOMPARE(frame(window.m_panelButton).right() + 1, toolbar->width() - 9);
             // In a window too narrow for the sidebar, the bar has its menu.
             QCOMPARE(wiring->appMenuButton()->isVisible(), size < tokens::layout::sidebarWindowLeast);
             // The title keeps between the groups; the project's long name is

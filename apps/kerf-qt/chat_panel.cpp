@@ -1338,13 +1338,13 @@ QMenu *ChatPanel::buildMoreMenu() {
     connect(remove, &QAction::triggered, this, [this] { emit conversationAction(QStringLiteral("delete"), QString()); });
     menu->addSeparator();
     QAction *settings = menu->addAction(QStringLiteral("Agent settings…"));
-    ui::setMenuKey(settings, m_currentModel);
+    ui::setMenuKey(settings, modelLabel(m_currentModel));
     connect(settings, &QAction::triggered, this, [this] { emit moreAction(QStringLiteral("settings"), QString()); });
     if (m_models.size() > 1 && m_modelsChoosable) {
         QMenu *models = menu->addMenu(QStringLiteral("Model"));
         ui::styleMenu(models);
         for (const QString &model : std::as_const(m_models)) {
-            QAction *action = models->addAction(model);
+            QAction *action = models->addAction(modelLabel(model));
             action->setCheckable(true);
             action->setChecked(model == m_currentModel);
             connect(action, &QAction::triggered, this, [this, model] { emit moreAction(QStringLiteral("model"), model); });

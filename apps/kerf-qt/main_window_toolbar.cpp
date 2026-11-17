@@ -59,8 +59,8 @@ void MainWindow::fitTitleBar() {
     // are no buttons beside it.
     const QWindow *handle = windowHandle();
     m_toolbar->setFixedHeight(std::max(kToolbarHeight, handle ? handle->safeAreaMargins().top() : 0));
-    // The window buttons start on the sidebar's column of icons, in the
-    // middle of the toolbar's height, where its own controls are.
+    // The window buttons sit in the middle of the toolbar's height, on the
+    // line its own controls and its title are on.
     placeWindowButtons(this, kWindowButtonsLeft, m_toolbar->height() / 2);
     m_toolbarWiring->setFirstControl(ToolbarWiring::firstControlX(windowButtonsWidth(this), isFullScreen()));
 #endif

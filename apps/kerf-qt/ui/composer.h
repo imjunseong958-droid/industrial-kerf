@@ -62,6 +62,11 @@ QString summary(PermissionMode mode);
 PermissionMode next(PermissionMode mode);
 } // namespace permission
 
+// A model's name as it is shown: the aliases Kerf itself offers (default,
+// opus, sonnet, haiku) with a capital; a model named by the person as they
+// named it, since that is an identifier.
+QString modelLabel(const QString &model);
+
 // A chip in the composer's row (24 tall, radius 6, pad 0 6): a 14 pt icon, a
 // word in UI 12/16, and the chevron of something that opens. Ink2 at rest, or
 // its tone; hover2 under the pointer.

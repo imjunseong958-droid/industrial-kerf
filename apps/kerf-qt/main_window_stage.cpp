@@ -342,9 +342,9 @@ void MainWindow::applyPanes() {
     if (m_timelineWiring) m_timelineWiring->setWide(m_shell->rects().transport.isEmpty());
     syncPanelCommands();
     const stage::Panes &panes = m_shell->panes();
-    for (const auto &[button, open] : {std::pair<ui::IconButton *, bool>{m_sidebarButton, panes.sidebar},
-                                       {m_panelButton, panes.panelOpen()},
-                                       {m_mediaButton, m_shell->sheet() == StageShell::Sheet::Media},
+    // The toolbar's two are plain icons, on or off: what they open says so
+    // itself, at the window's sides. The strip's two show which is on.
+    for (const auto &[button, open] : {std::pair<ui::IconButton *, bool>{m_mediaButton, m_shell->sheet() == StageShell::Sheet::Media},
                                        {m_followButton, m_followKerf}})
         if (button) button->setOn(open);
     // The picture has gone from the stage: its card has it again.

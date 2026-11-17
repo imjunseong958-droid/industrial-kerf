@@ -251,7 +251,7 @@ void HomeWindow::resizeEvent(QResizeEvent *event) {
     QDialog::resizeEvent(event);
 #if KERF_HOME_OWN_TITLE_BAR
     // The system lays the window buttons out again with the window.
-    if (testAttribute(Qt::WA_WState_Created)) placeWindowButtons(this, 20, layout::toolbar / 2);
+    if (testAttribute(Qt::WA_WState_Created)) placeWindowButtons(this, 9, layout::toolbar / 2);
 #endif
 }
 
@@ -260,7 +260,7 @@ void HomeWindow::showEvent(QShowEvent *event) {
 #if KERF_HOME_OWN_TITLE_BAR
     hideNativeWindowTitle(this);
     // Where the editor has them, so they do not move at the hand-over.
-    placeWindowButtons(this, 20, layout::toolbar / 2);
+    placeWindowButtons(this, 9, layout::toolbar / 2);
 #endif
     m_composer->input()->setFocus();
     // Once it is laid out.
