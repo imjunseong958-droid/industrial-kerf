@@ -487,13 +487,11 @@ private slots:
     }
 
     // A timeline at the mockup's scale (26.8 pt/s) and track heights.
+    // The design's scale, and every track one height, as the editor's own
+    // window starts them (kRoomyTrackHeight).
     static void mockupHeights(TimelineWidget &timeline) {
         timeline.setScale(26.8);
-        const QHash<QString, int> heights{{"V5", 24}, {"V4", 24}, {"V3", 24}, {"V2", 36}, {"V1", 48}};
-        for (int row = 0; row < timeline.trackRowCount(); ++row) {
-            const QString id = timeline.trackRowId(row);
-            timeline.setTrackHeight(row, heights.value(id, 32));
-        }
+        timeline.setRoomyLanes(true);
     }
 
     // ---- heads -----------------------------------------------------------
@@ -511,7 +509,7 @@ private slots:
         timeline.resize(1024, 340);
         timeline.show();
         QVERIFY(QTest::qWaitForWindowExposed(&timeline));
-        QCOMPARE(trackHeights(timeline), (QList<int>{24, 24, 24, 36, 48, 32, 32, 32, 32}));
+        QCOMPARE(trackHeights(timeline), QList<int>(9, kRoomyTrackHeight));
         QStringList labels;
         for (int row = 0; row < timeline.trackRowCount(); ++row) labels << timeline.trackRowLabel(row);
         QCOMPARE(labels, (QStringList{"V5", "V4", "V3", "V2", "V1", "A1", "A2", "A3", "A4"}));
@@ -520,16 +518,16 @@ private slots:
         const QRect row = timeline.trackHeaderRect(v1);
         QCOMPARE(row.width(), 56);
         // 16 in: the line the strip over the heads and the toolbar start on.
-        QCOMPARE(timeline.headerControlRect(v1, C::Target), QRect(16, row.top() + 14, 24, 20));
+        QCOMPARE(timeline.headerControlRect(v1, C::Target), QRect(16, row.top() + 10, 24, 20));
         // In the open head, lock and the eye against its end on picture; lock,
         // mute and solo on sound.
-        QCOMPARE(timeline.headerControlRect(v1, C::Lock), QRect(152, row.top() + 14, 20, 20));
-        QCOMPARE(timeline.headerControlRect(v1, C::Output), QRect(174, row.top() + 14, 20, 20));
+        QCOMPARE(timeline.headerControlRect(v1, C::Lock), QRect(152, row.top() + 10, 20, 20));
+        QCOMPARE(timeline.headerControlRect(v1, C::Output), QRect(174, row.top() + 10, 20, 20));
         QVERIFY(timeline.headerControlRect(v1, C::Solo).isEmpty());
         const QRect a1 = timeline.trackHeaderRect(5);
-        QCOMPARE(timeline.headerControlRect(5, C::Lock), QRect(130, a1.top() + 6, 20, 20));
-        QCOMPARE(timeline.headerControlRect(5, C::Output), QRect(152, a1.top() + 6, 20, 20));
-        QCOMPARE(timeline.headerControlRect(5, C::Solo), QRect(174, a1.top() + 6, 20, 20));
+        QCOMPARE(timeline.headerControlRect(5, C::Lock), QRect(130, a1.top() + 10, 20, 20));
+        QCOMPARE(timeline.headerControlRect(5, C::Output), QRect(152, a1.top() + 10, 20, 20));
+        QCOMPARE(timeline.headerControlRect(5, C::Solo), QRect(174, a1.top() + 10, 20, 20));
         QCOMPARE(timeline.targetTracks(), (QStringList{"V1", "A1"}));
         const QImage image = timeline.grab().toImage();
         const qreal ratio = image.devicePixelRatio();
