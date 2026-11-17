@@ -319,7 +319,7 @@ constexpr int bin = 272;        // the Media bin's width where it has a column o
 constexpr int mediaBand = 152;  // the Media band's height, between the picture and the timeline
 constexpr int mediaBandTimelineLeast = 200; // what it leaves the timeline under it before the picture gives way
 // The minimal layout (ui/stage_shell.h).
-constexpr int sidebar = 288;            // the folders and conversations, at the left, until its edge is dragged
+constexpr int sidebar = 320;            // the folders and conversations, at the left, until its edge is dragged
 constexpr int sidebarLeast = 232;       // how narrow a drag leaves it
 constexpr int sidebarLeaves = 640;      // and what it leaves of the window at least, however wide it is dragged
 constexpr int sidebarGrip = 16;         // what of its edge takes the drag, half either side of it
@@ -328,7 +328,7 @@ constexpr int sidebarGripLine = 2;      // the line it shows under the pointer
 constexpr int sidebarMost(int window) { return window - sidebarLeaves > sidebarLeast ? window - sidebarLeaves : sidebarLeast; }
 constexpr int sidebarFoot = 52;         // the account at its foot
 constexpr int sidebarWindowLeast = 1100; // the window's width under which the sidebar gives way
-constexpr int rail = 480;               // the conversation, beside an open panel
+constexpr int rail = 448;               // the conversation, beside an open panel
 constexpr int railLeast = 320;          // its least width
 constexpr int workLeast = 600;          // what it leaves the panel before it gives way
 constexpr int conversationColumn = 720; // the width its text keeps when it has the room to itself

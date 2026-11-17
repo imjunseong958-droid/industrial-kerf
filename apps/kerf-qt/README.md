@@ -258,17 +258,17 @@ composer.
 **The regions** stay flush, with one hairline between them and no cards, radii
 or margins (`ui/stage_shell.h`; `stage::rects()` is the geometry, a pure function
 of the window's size, the picture's aspect and which panes are open). The toolbar
-is 40 points tall. The sidebar is 288 wide until its edge is dragged (from 232 to
+is 40 points tall. The sidebar is 320 wide until its edge is dragged (from 232 to
 all but 640 of the window; a press on the edge puts the sidebar away, and a
 double-click puts the width back), and gives way in a window under 1100. With the
 panel closed the conversation has the rest of the window, its text in a 720 wide
-column. With it open the conversation is 480 wide, giving way down to 320 only
+column. With it open the conversation is 448 wide, giving way down to 320 only
 when it would leave the panel under 600. At a 1600 × 1000 window:
 
 | Sequence | Sidebar | Conversation | Picture | Timeline |
 |---|---|---|---|---|
-| Wide (aspect ≥ 1.2) | 288 × 960 at (0, 40) | 480 × 960 at (288, 40) | 832 × 420 at (768, 40) | 832 × 540 at (768, 460) |
-| 9:16 | 288 × 960 at (0, 40) | 480 × 960 at (288, 40) | 832 × 614 at (768, 40) | 832 × 346 at (768, 654) |
+| Wide (aspect ≥ 1.2) | 320 × 960 at (0, 40) | 448 × 960 at (320, 40) | 832 × 420 at (768, 40) | 832 × 540 at (768, 460) |
+| 9:16 | 320 × 960 at (0, 40) | 448 × 960 at (320, 40) | 832 × 614 at (768, 40) | 832 × 346 at (768, 654) |
 
 Under a wide picture the timeline has 56% of the height, at least 260, and
 whatever the picture's aspect does not use; the picture pillarboxes in black in
