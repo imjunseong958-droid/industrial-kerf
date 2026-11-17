@@ -16,12 +16,12 @@
 @property(nonatomic, assign) NSWindow *window;
 @property(nonatomic) CGFloat left;
 @property(nonatomic) CGFloat centerY;
+@property(nonatomic) CGFloat step;
 - (instancetype)initWithWindow:(NSWindow *)window;
 - (void)place;
 @end
 
 @implementation KerfWindowButtonKeeper {
-    CGFloat _step;
     BOOL _placing;
     BOOL _scheduled;
 }
@@ -38,10 +38,7 @@
 - (instancetype)initWithWindow:(NSWindow *)window {
     if ((self = [super init])) {
         _window = window;
-        NSArray<NSButton *> *buttons = [self buttons];
-        // As far apart as the system has them.
-        _step = buttons.count > 1 ? NSMinX(buttons[1].frame) - NSMinX(buttons[0].frame) : 20;
-        for (NSButton *button in buttons) {
+        for (NSButton *button in [self buttons]) {
             button.postsFrameChangedNotifications = YES;
             [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(moved:) name:NSViewFrameDidChangeNotification object:button];
         }
@@ -88,12 +85,14 @@
     for (NSButton *button in [self buttons]) {
         NSView *bar = button.superview;
         if (bar) {
+            // By its middle, whatever size the system draws it at.
+            const CGFloat width = NSWidth(button.frame);
             const CGFloat height = NSHeight(button.frame);
             const CGFloat y = bar.isFlipped ? self.centerY - height / 2 : NSHeight(bar.frame) - self.centerY - height / 2;
-            const NSPoint origin = NSMakePoint(x, y);
+            const NSPoint origin = NSMakePoint(x + (14 - width) / 2, y);
             if (!NSEqualPoints(button.frame.origin, origin)) [button setFrameOrigin:origin];
         }
-        x += _step;
+        x += self.step;
     }
     _placing = NO;
 }
@@ -123,7 +122,7 @@ void hideNativeWindowTitle(QWidget *window) {
     [native standardWindowButton:NSWindowDocumentIconButton].hidden = YES;
 }
 
-void placeWindowButtons(QWidget *window, int left, int centerY) {
+void placeWindowButtons(QWidget *window, int left, int centerY, int step) {
     NSWindow *native = nativeWindow(window);
     if (!native) return;
     KerfWindowButtonKeeper *keeper = objc_getAssociatedObject(native, &kKeeperKey);
@@ -136,6 +135,7 @@ void placeWindowButtons(QWidget *window, int left, int centerY) {
     }
     keeper.left = left;
     keeper.centerY = centerY;
+    keeper.step = step;
     [keeper place];
 }
 

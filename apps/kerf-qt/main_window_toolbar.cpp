@@ -61,8 +61,8 @@ void MainWindow::fitTitleBar() {
     m_toolbar->setFixedHeight(std::max(kToolbarHeight, handle ? handle->safeAreaMargins().top() : 0));
     // The window buttons sit in the middle of the toolbar's height, on the
     // line its own controls and its title are on.
-    placeWindowButtons(this, kWindowButtonsLeft, m_toolbar->height() / 2);
-    m_toolbarWiring->setFirstControl(ToolbarWiring::firstControlX(windowButtonsWidth(this), isFullScreen()));
+    placeWindowButtons(this, kWindowButtonsLeft, m_toolbar->height() / 2, kWindowButtonStep);
+    m_toolbarWiring->setFirstControl(ToolbarWiring::firstControlX(isFullScreen()));
 #endif
 }
 

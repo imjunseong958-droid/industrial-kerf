@@ -298,6 +298,7 @@ signals:
 
 protected:
     void paintEvent(QPaintEvent *event) override;
+    void resizeEvent(QResizeEvent *event) override;
     void showEvent(QShowEvent *event) override;
     void hideEvent(QHideEvent *event) override;
     void changeEvent(QEvent *event) override;
@@ -334,6 +335,8 @@ private:
     bool m_conversationsShown = true;
     bool m_switching = false;
     QWidget *m_head = nullptr;
+    // The hairline it ends on, in its last column.
+    QWidget *m_edge = nullptr;
     bool m_working = false;
     bool m_archivedOpen = false;
     // Folded or not, as chosen (and kept); a folder not here has its default.

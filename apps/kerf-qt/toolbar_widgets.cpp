@@ -210,7 +210,7 @@ void FlatToolBar::setSidebarEdge(int edge) {
     edge = std::clamp(edge, 0, width());
     if (edge == m_sidebarEdge) return;
     // Only the stretch the edge crossed.
-    update(QRect(std::min(edge, m_sidebarEdge), 0, std::abs(edge - m_sidebarEdge) + tokens::layout::seam, height()));
+    update(QRect(std::min(edge, m_sidebarEdge) - tokens::layout::seam, 0, std::abs(edge - m_sidebarEdge) + 2 * tokens::layout::seam, height()));
     m_sidebarEdge = edge;
 }
 
@@ -219,8 +219,9 @@ void FlatToolBar::paintEvent(QPaintEvent *event) {
     p.fillRect(event->rect(), color(chrome));
     if (m_sidebarEdge <= 0) return;
     p.fillRect(QRect(0, 0, m_sidebarEdge, height()).intersected(event->rect()), color(tokens::sidebar));
-    // The line the sidebar ends on, carried up through the toolbar.
-    p.fillRect(QRect(m_sidebarEdge, 0, tokens::layout::seam, height()).intersected(event->rect()), color(tokens::line));
+    // The line the sidebar ends on, carried up through the toolbar: in the
+    // sidebar's last column, as the sidebar draws it.
+    p.fillRect(QRect(m_sidebarEdge - tokens::layout::seam, 0, tokens::layout::seam, height()).intersected(event->rect()), color(tokens::line));
 }
 
 void FlatToolBar::resizeEvent(QResizeEvent *event) {

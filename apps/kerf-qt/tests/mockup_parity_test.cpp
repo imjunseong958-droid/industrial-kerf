@@ -196,14 +196,15 @@ private slots:
             checkBase(window, format);
             checkNothingElseShows(window);
             // One painted hairline between the picture and the timeline, and
-            // one where the sidebar ends, inside the conversation's left edge.
+            // one where the sidebar ends, in the sidebar's own last column.
             {
                 const QImage shot = window.grab().toImage();
                 const int chrome = tokens::color(tokens::chrome).red();
-                QVERIFY(shot.pixelColor(format.conversation.left(), format.conversation.top() + 100).red() > chrome);
-                QVERIFY(shot.pixelColor(format.conversation.left() + 2, format.conversation.top() + 100).red() <= chrome);
+                const int edge = format.conversation.left() - 1;
+                QVERIFY(shot.pixelColor(edge, format.conversation.top() + 100).red() > tokens::color(tokens::sidebar).red());
+                QVERIFY(shot.pixelColor(edge + 2, format.conversation.top() + 100).red() <= chrome);
                 // It runs up through the toolbar, to the window's top.
-                QVERIFY(shot.pixelColor(format.conversation.left(), 20).red() > chrome);
+                QVERIFY(shot.pixelColor(edge, 20).red() > tokens::color(tokens::sidebar).red());
                 // Over the timeline under a wide picture, at its left beside a vertical one.
                 const QPoint timelineSeam = format.timeline.top() > 40 ? format.timeline.topLeft() + QPoint(100, 0) : format.timeline.topLeft() + QPoint(0, 100);
                 QVERIFY(shot.pixelColor(timelineSeam).red() > chrome);

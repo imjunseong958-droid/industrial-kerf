@@ -3,6 +3,7 @@
 // button; and for what moved out of it: the menu the account opens and the
 // format segments in the timeline's strip.
 
+#include "ui/wiring/main_window_shared.h"
 #include "settings_kit.h"
 #include "fixtures.h"
 #include "test_registry.h"
@@ -173,7 +174,7 @@ private slots:
         // The first control starts where the window buttons leave it: 16 in
         // without them, past them on macOS.
         QCOMPARE(inBar(window.m_sidebarButton).left(), wiring->m_firstControl);
-        QVERIFY(wiring->m_firstControl >= ToolbarWiring::firstControlX(0, true));
+        QVERIFY(wiring->m_firstControl >= ToolbarWiring::firstControlX(true));
         window.m_sidebarButton->click();
         // The room before the first control is the window buttons'; the room
         // after the controls is what is left of the sidebar's top.
@@ -684,9 +685,15 @@ private slots:
         // No » extension: nothing is folded away.
         if (auto *more = toolbar->findChild<QToolButton *>(QStringLiteral("qt_toolbar_ext_button"))) QVERIFY(!more->isVisible());
         // The window buttons' room, past which the commands start.
-        QCOMPARE(ToolbarWiring::firstControlX(0, false), 84);
-        QCOMPARE(ToolbarWiring::firstControlX(70, false), 86);
-        QCOMPARE(ToolbarWiring::firstControlX(70, true), 16);
+        // The leading row is numbers, not measurements: the window buttons'
+        // middles at 16, 39 and 62, and the first control's 28 after the last,
+        // at 90, so it starts at 76; in full screen, with no buttons, at 16.
+        using namespace window_parts;
+        QCOMPARE(kWindowButtonsLeft + kWindowButton / 2, 16);
+        QCOMPARE(kWindowButtonsLeft + 2 * kWindowButtonStep + kWindowButton / 2, 62);
+        QCOMPARE(ToolbarWiring::firstControlX(false) + kToolbarControl / 2, 62 + kToolbarStep);
+        QCOMPARE(ToolbarWiring::firstControlX(false), 76);
+        QCOMPARE(ToolbarWiring::firstControlX(true), 16);
         // The toolbar is the room's colour to its foot, with no line under it.
         const QImage image = toolbar->grab().toImage();
         const qreal ratio = image.devicePixelRatio();

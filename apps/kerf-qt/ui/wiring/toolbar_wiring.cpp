@@ -78,12 +78,10 @@ void ToolbarWiring::setClock(std::function<QDateTime()> clock) {
 
 // ================================================================ toolbar
 
-int ToolbarWiring::firstControlX(int windowButtonsRight, bool fullScreen) {
-    constexpr int pad = 16;
-    if (fullScreen) return pad;
-    // The mockup reserves the three 12 pt lights, 8 apart, and 16 after them.
-    constexpr int reserved = pad + 52 + 16;
-    return windowButtonsRight > 0 ? std::max(reserved, windowButtonsRight + 16) : reserved;
+int ToolbarWiring::firstControlX(bool fullScreen) {
+    // In full screen there are no window buttons beside it. Else its middle is
+    // one step of the toolbar's controls after the last window button's.
+    return fullScreen ? kLeadingPad : kFirstControlAfterWindowButtons;
 }
 
 void ToolbarWiring::buildToolbar(const QHash<QString, QMenu *> &menus) {
@@ -305,8 +303,10 @@ void ToolbarWiring::layoutLeading() {
     w->m_windowButtons->setVisible(room > 0);
     w->m_windowButtons->setFixedWidth(room);
     static_cast<FlatToolBar *>(w->m_toolbar)->setSidebarEdge(edge);
-    // With the sidebar away its foot is too: the menu is here instead.
-    if (m_appButton) m_appButton->setVisible(edge == 0);
+    // With the sidebar away its foot is too: the menu is here instead, where
+    // the window has no menu bar of the system's to hold the same things. On
+    // macOS it has, and nothing comes and goes in the toolbar with the sidebar.
+    if (m_appButton) m_appButton->setVisible(edge == 0 && !w->menuBar()->isNativeMenuBar());
     // The sidebar's button is beside the window buttons whether the sidebar
     // shows or not; what is left of the sidebar's top is kept clear, and the
     // title starts past its edge.

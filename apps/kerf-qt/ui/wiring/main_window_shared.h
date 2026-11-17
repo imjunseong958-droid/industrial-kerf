@@ -31,10 +31,20 @@ inline constexpr int kWindowButtonsSpace = 72;
 #endif
 // The toolbar's height (mockup-spec 0.1).
 inline constexpr int kToolbarHeight = tokens::layout::toolbar;
-// Where the macOS window buttons start: where the system has them across,
-// 9 in, so the first one's middle is 16 from the window's edge. Only how far
-// down they sit is the window's own: the middle of its toolbar.
+// The toolbar's leading row on macOS, as numbers, so that nothing in it is
+// placed by eye: the three window buttons, 14 across, start 9 in and stand 23
+// apart, middle to middle (16, 39, 62); the toolbar's own controls are 28
+// across and follow 28 apart, middle to middle, the first of them 28 after
+// the last window button's middle (90). All of them sit on the middle of the
+// toolbar's height.
 inline constexpr int kWindowButtonsLeft = 9;
+inline constexpr int kWindowButton = 14;
+inline constexpr int kWindowButtonStep = 23;
+inline constexpr int kToolbarControl = 28;
+inline constexpr int kToolbarStep = 28;
+// Where the first control starts, after the window buttons.
+inline constexpr int kFirstControlAfterWindowButtons =
+    kWindowButtonsLeft + 2 * kWindowButtonStep + kWindowButton / 2 + kToolbarStep - kToolbarControl / 2;
 // The toolbar's own icons, at its two ends: as large as the sidebar's.
 inline constexpr int kToolbarIcon = 18;
 // The toolbar's symbols, in points; toolbarIcon() draws them at this size.

@@ -114,9 +114,9 @@ public:
     void setClock(std::function<QDateTime()> clock);
 
     // ---- the window buttons' room, and the sidebar's
-    // Where the first control starts: 16 in, past the macOS window buttons
-    // (52 + 16 reserved), or 16 without them.
-    static int firstControlX(int windowButtonsRight, bool fullScreen);
+    // Where the first control starts beside the macOS window buttons
+    // (main_window_shared.h has the numbers), or 16 in with none, in full screen.
+    static int firstControlX(bool fullScreen);
     // The width of the room before the first control (the sidebar's button),
     // for one that starts at `firstControl`: the window buttons'.
     static int leadingRoom(int firstControl);

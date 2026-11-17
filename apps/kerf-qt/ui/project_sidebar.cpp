@@ -165,6 +165,22 @@ private:
     QString m_text;
 };
 
+// The hairline at the sidebar's end.
+class SidebarEdge final : public QWidget {
+public:
+    explicit SidebarEdge(QWidget *parent) : QWidget(parent) {
+        setObjectName(QStringLiteral("sidebarEdge"));
+        setAttribute(Qt::WA_TransparentForMouseEvents);
+    }
+
+protected:
+    void paintEvent(QPaintEvent *event) override {
+        QPainter p(this);
+        p.fillRect(event->rect(), tokens::color(sidebar));
+        p.fillRect(event->rect(), tokens::color(line));
+    }
+};
+
 // Latest first; those with no time yet come before the rest, in the order
 // they came in.
 bool latestFirst(const ProjectSidebar::Conversation &a, const ProjectSidebar::Conversation &b) {
@@ -1412,6 +1428,18 @@ void ProjectSidebar::hideEvent(QHideEvent *event) {
 void ProjectSidebar::paintEvent(QPaintEvent *event) {
     QPainter p(this);
     p.fillRect(event->rect(), tokens::color(sidebar));
+}
+
+void ProjectSidebar::resizeEvent(QResizeEvent *event) {
+    QWidget::resizeEvent(event);
+    // The line the sidebar ends on: its own last column, over everything in
+    // it, so it is wherever the sidebar is, also while the window's regions move.
+    if (!m_edge) {
+        m_edge = new SidebarEdge(this);
+        m_edge->show();
+    }
+    m_edge->setGeometry(width() - tokens::layout::seam, 0, tokens::layout::seam, height());
+    m_edge->raise();
 }
 
 } // namespace kerf
