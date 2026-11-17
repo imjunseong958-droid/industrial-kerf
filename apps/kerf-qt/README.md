@@ -124,9 +124,13 @@ keeps the run's settings in DIR (INI files) instead of the user's.
 The editor and the launcher are dark only, and fill the screen edge to edge
 as Final Cut Pro does. There is one graphite ramp (#050505 behind everything,
 #0e0e0e around the region picker, #121212 wells, #171717 panels,
-#1c1c1c cards and menus, #262626 raised controls, #303030 chosen ones) with
-ink #ededed / #a1a1a1 / #8a8a8a, and one blue accent (#3366e6) for Kerf, focus,
-proposals and the default action; the playhead is its own red. Colours, type
+#1c1c1c cards, #262626 raised controls, menus and popovers, #303030 chosen
+ones) with warm paper inks #ece6da / #ada79b / #878278. The colours that say
+something are faded, printed rather than lit: one dusty blue accent (#4a6ab0)
+for Kerf, focus, proposals and the default action; sage for what passed, ochre
+for what wants a look and the request to fix it, a faded brick for what
+failed; the playhead is a stronger brick of its own. Only the computer's amber,
+which says something runs, stays bright. Colours, type
 (Inter and JetBrains Mono at 400 and 500, with tabular figures), radii,
 spacing, control heights and motion (120/160/200/220 ms) come only from
 `design_tokens.h` and the kit in `ui/components.h` and `ui/icons.h` (icons

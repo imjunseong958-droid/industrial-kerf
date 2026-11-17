@@ -33,16 +33,6 @@ constexpr QRgb sidebar = qRgb(0x1e, 0x1e, 0x1e);     // the folders and conversa
 constexpr QRgb raised = qRgb(0x26, 0x26, 0x26);      // hover fill, segmented track, proposal card, composer, meter track
 constexpr QRgb on = qRgb(0x30, 0x30, 0x30);          // selected/on fill, avatars, scrub markers, sliding segment fill
 constexpr QRgb hover2 = qRgb(0x36, 0x36, 0x36);      // hover over a raised surface, flash, selected avatar
-// What a small mark says of a check, faded to sit with the warm inks rather
-// than shout over them. Not the computer's amber (activity::gpu), which says
-// something runs: the request's ochre is quieter and says something wants a
-// look, and is the colour of what to ask to fix it ("Ask Kerf", "Run QC").
-namespace status {
-constexpr QRgb passed = qRgb(0x86, 0xa8, 0x7c);  // sage: the check passed
-constexpr QRgb request = qRgb(0xc8, 0xa2, 0x64); // ochre: it wants a look, and the request to fix it
-constexpr QRgb failed = qRgb(0xd8, 0x80, 0x6e);  // faded brick: what could not be done, what cannot be undone
-} // namespace status
-
 // What opens from a press (menus, popovers, the composer's suggestions) is a
 // step up from what it opens over, and the row under the pointer a step more.
 constexpr QRgb popup = raised;
@@ -63,15 +53,29 @@ constexpr QRgb line = qRgba(255, 255, 255, alpha(0.08));  // hairlines
 constexpr QRgb line2 = qRgba(255, 255, 255, alpha(0.14)); // control outlines
 constexpr QRgb lineh = qRgba(255, 255, 255, alpha(0.22)); // hover outline
 
-constexpr QRgb accent = qRgb(0x33, 0x66, 0xe6);                   // primary button, focus ring, selected range, pinned stripe
-constexpr QRgb accentHover = qRgb(0x2b, 0x5a, 0xd6);              // primary hover
-constexpr QRgb accentInk = qRgb(0x8f, 0xb0, 0xff);                // timecode links, accepted text
-constexpr QRgb accentWash = qRgba(0x33, 0x66, 0xe6, alpha(0.14)); // defined by the design, unused in the mockup
+// The colours that say something are faded, as the inks are warmed: printed
+// rather than lit, so they sit with the paper inks instead of shouting over
+// them. Each keeps its contrast: white on the accent 5.3:1, the accent's ring
+// on the chrome 3:1, the rest over 6:1 on the chrome. Only the computer's
+// amber (activity::gpu) stays bright, as the one thing meant to catch the eye.
+constexpr QRgb accent = qRgb(0x4a, 0x6a, 0xb0);                   // primary button, focus ring, selected range, pinned stripe
+constexpr QRgb accentHover = qRgb(0x40, 0x5e, 0x9e);              // primary hover
+constexpr QRgb accentInk = qRgb(0xa0, 0xb4, 0xd8);                // timecode links, accepted text
+constexpr QRgb accentWash = qRgba(0x4a, 0x6a, 0xb0, alpha(0.14)); // defined by the design, unused in the mockup
 constexpr QRgb accentText = qRgb(0xff, 0xff, 0xff);               // text on an accent fill (.btn.p)
-constexpr QRgb pos = qRgb(0x4c, 0xc3, 0x8a);                      // pass dots, diff additions, connected
-constexpr QRgb neg = qRgb(0xec, 0x5d, 0x61);                      // fail, blocking, overlap box, diff removals, meter top
-constexpr QRgb playhead = qRgb(0xe5, 0x48, 0x4d);                 // playheads
-constexpr QRgb warn = qRgb(0xd6, 0xa3, 0x45);                     // meter -18...-6 dBFS band
+constexpr QRgb pos = qRgb(0x86, 0xa8, 0x7c);                      // sage: pass dots, diff additions, connected
+constexpr QRgb neg = qRgb(0xd8, 0x80, 0x6e);                      // faded brick: fail, blocking, overlap box, diff removals, meter top
+constexpr QRgb playhead = qRgb(0xd0, 0x63, 0x52);                 // playheads: the brick, a step stronger, to be found at once
+constexpr QRgb warn = qRgb(0xc8, 0xa2, 0x64);                     // ochre: meter -18...-6 dBFS band, what wants a look
+
+// What a small mark says of a check. A check that did not pass wants a look,
+// and its request ("Ask Kerf", "Run QC") fixes it: the same ochre for both,
+// quieter than the computer's amber, which says only that something runs.
+namespace status {
+constexpr QRgb passed = pos;  // the check passed
+constexpr QRgb request = warn; // it wants a look, and the request to fix it
+constexpr QRgb failed = neg;  // what could not be done, what cannot be undone
+} // namespace status
 
 // What the editor is doing, in two hues only: Kerf at work (the Kerf cursor's
 // blue) and the computer making pictures (a render, a model making a shot);

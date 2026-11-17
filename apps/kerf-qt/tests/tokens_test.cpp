@@ -36,9 +36,9 @@ private slots:
             {surround, "#0e0e0e"}, {surroundDim, "#050505"}, {well, "#121212"},   {chrome, "#171717"},
             {card, "#1c1c1c"},     {raised, "#262626"},      {on, "#303030"},     {hover2, "#363636"},
             {ink, "#ece6da"},      {ink2, "#ada79b"},        {ink3, "#878278"},   {dis, "#5c5c5c"},
-            {track, "#3a3a3a"},    {track2, "#6a6a6a"},      {accent, "#3366e6"}, {accentHover, "#2b5ad6"},
-            {accentInk, "#8fb0ff"}, {pos, "#4cc38a"},        {neg, "#ec5d61"},    {playhead, "#e5484d"},
-            {warn, "#d6a345"}};
+            {track, "#3a3a3a"},    {track2, "#6a6a6a"},      {accent, "#4a6ab0"}, {accentHover, "#405e9e"},
+            {accentInk, "#a0b4d8"}, {pos, "#86a87c"},        {neg, "#d8806e"},    {playhead, "#d06352"},
+            {warn, "#c8a264"}};
         for (const auto &[value, hex] : opaque) {
             QCOMPARE(color(value), QColor(QString::fromLatin1(hex)));
             QCOMPARE(qAlpha(value), 255);
@@ -67,7 +67,7 @@ private slots:
             QCOMPARE(qRgb(qRed(value), qGreen(value), qBlue(value)), qRgb(255, 255, 255));
             QCOMPARE(qAlpha(value), alpha);
         }
-        QCOMPARE(color(accentWash), QColor(0x33, 0x66, 0xe6, 36));
+        QCOMPARE(color(accentWash), QColor(0x4a, 0x6a, 0xb0, 36));
         QCOMPARE(qAlpha(pop.color), 115);
         QCOMPARE(pop.dy, 8.0);
         QCOMPARE(pop.blur, 24.0);

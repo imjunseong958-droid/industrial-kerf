@@ -1080,7 +1080,7 @@ private:
             for (int y = area.top(); y <= area.bottom(); ++y)
                 for (int x = area.left(); x <= area.right(); ++x) {
                     const QColor seen = image.pixelColor((QPointF(x, y) * dpr).toPoint());
-                    if (seen.blue() > 200 && seen.blue() > seen.red() + 60) ++count;
+                    if (seen.blue() > 170 && seen.blue() > seen.red() + 40) ++count;
                 }
             return count;
         };

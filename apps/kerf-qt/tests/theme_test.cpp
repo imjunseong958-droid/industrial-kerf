@@ -163,16 +163,16 @@ private slots:
         const auto restore = qScopeGuard([] { QApplication::setPalette(editorPalette(editorTheme())); });
         const EditorTheme t = makeEditorTheme();
         const LauncherTheme l = launcherTheme();
-        QCOMPARE(t.accent.rgb(), QColor("#3366e6").rgb());
+        QCOMPARE(t.accent.rgb(), QColor("#4a6ab0").rgb());
         QCOMPARE(t.accent.rgb(), tokens::color(tokens::accent).rgb());
         QCOMPARE(l.accent.rgb(), t.accent.rgb());
         // Kerf's own marks are the accent: focus, the agent's work, its
         // avatar and the mask handles. The playhead is the design's red.
         for (const QColor &mark : {t.focusRing, t.assistant, t.chatAvatarKerf, t.maskHandleFill})
             QCOMPARE(mark.rgb(), t.accent.rgb());
-        QCOMPARE(t.playhead.rgb(), QColor("#e5484d").rgb());
+        QCOMPARE(t.playhead.rgb(), QColor("#d06352").rgb());
         // The accent as text is the accent ink.
-        QCOMPARE(t.accentText.rgb(), QColor("#8fb0ff").rgb());
+        QCOMPARE(t.accentText.rgb(), QColor("#a0b4d8").rgb());
         QVERIFY(contrastRatio(l.selectionText, l.selection) >= 4.5);
         // Fewer boxes: the caption on the picture has no line round it; a
         // rail button is clear at rest and the on fill when on (.ib.on), its
@@ -192,9 +192,9 @@ private slots:
         red.setColor(QPalette::Accent, QColor("#ff2d55"));
         QGuiApplication::setPalette(red);
         applyEditorAppearance();
-        QCOMPARE(editorTheme().accent.rgb(), QColor("#3366e6").rgb());
+        QCOMPARE(editorTheme().accent.rgb(), QColor("#4a6ab0").rgb());
         ProjectLauncher launcher;
-        QCOMPARE(launcher.theme().accent.rgb(), QColor("#3366e6").rgb());
+        QCOMPARE(launcher.theme().accent.rgb(), QColor("#4a6ab0").rgb());
         // A focused list's chosen row is Kerf's accent.
         QCOMPARE(editorPalette(editorTheme()).color(QPalette::Active, QPalette::Highlight).rgb(), t.accent.rgb());
 #endif
@@ -428,9 +428,9 @@ private slots:
                 {"#262626", theme.field},     {"#303030", theme.on},             {"#262626", theme.toolSelected},
                 {"#363636", theme.hover2},    {"#ece6da", theme.text},           {"#ada79b", theme.textSecondary},
                 {"#878278", theme.ink3},      {"#5c5c5c", theme.textDisabled},   {"#3a3a3a", theme.track},
-                {"#6a6a6a", theme.track2},    {"#3366e6", theme.accent},         {"#2b5ad6", theme.accentHover},
-                {"#8fb0ff", theme.accentInk}, {"#4cc38a", theme.success},        {"#ec5d61", theme.error},
-                {"#e5484d", theme.playhead},  {"#d6a345", theme.warning},
+                {"#6a6a6a", theme.track2},    {"#4a6ab0", theme.accent},         {"#405e9e", theme.accentHover},
+                {"#a0b4d8", theme.accentInk}, {"#86a87c", theme.success},        {"#d8806e", theme.error},
+                {"#d06352", theme.playhead},  {"#c8a264", theme.warning},
             };
             for (const auto &[code, color] : ramp)
                 QVERIFY2(color.rgba() == QColor(code).rgba(), qPrintable(QStringLiteral("%1 for %2").arg(color.name(), code)));

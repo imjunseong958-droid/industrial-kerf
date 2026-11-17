@@ -121,7 +121,7 @@ constexpr Source kSources[] = {
     {"g-archive", 16, 16, true, R"svg(<rect x="2.5" y="3" width="11" height="3" rx="1"/><path d="M3.5 6v6a1 1 0 0 0 1 1h7a1 1 0 0 0 1-1V6M6.5 8.5h3"/>)svg"},
     {"g-unarchive", 16, 16, true, R"svg(<rect x="2.5" y="3" width="11" height="3" rx="1"/><path d="M3.5 6v6a1 1 0 0 0 1 1h7a1 1 0 0 0 1-1V6M8 11.5V8.25M6.5 9.75 8 8.25l1.5 1.5"/>)svg"},
     // Drawn outside the 16-unit set.
-    {"playhead-head", 9, 12, false, R"svg(<path d="M.5 .5h8v7L4.5 11.5.5 7.5z" fill="#e5484d" stroke="#0e0e0e" stroke-width="1"/>)svg"},
+    {"playhead-head", 9, 12, false, R"svg(<path d="M.5 .5h8v7L4.5 11.5.5 7.5z" fill="#d06352" stroke="#0e0e0e" stroke-width="1"/>)svg"},
     {"checkbox-check", 16, 16, true, R"svg(<path d="M3.5 8.5 6.5 11.5 12.5 4.5" stroke="#ada79b" stroke-width="1.75"/>)svg"},
 };
 // clang-format on
