@@ -200,7 +200,10 @@ int main(int argc, char **argv) {
             if (kerf::MainWindow *window = router.follow(link)) shown = window;
         links.clear();
     }
-    if (!shown && project.isEmpty()) project = kerf::ProjectLauncher::lastProject();
+    // A run that captures or quits on its own opens no project it was not
+    // given: its picture is the same on every machine, and nothing of the
+    // user's is opened.
+    if (!shown && project.isEmpty() && !smoke) project = kerf::ProjectLauncher::lastProject();
     if (!shown) {
         QPointer<kerf::MainWindow> window = openEditor(project.isEmpty() ? QString() : QDir(project).absolutePath(), kerfd);
         if (windowSize.isValid() && !windowSize.isEmpty()) window->resize(windowSize);

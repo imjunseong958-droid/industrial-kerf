@@ -57,6 +57,7 @@ class ToolbarWiring;
 struct ProposalChange;
 struct CutPicture;
 class CommandRegistry;
+class ComposerChip;
 class ExportButton;
 class FormatBank;
 class ProjectPanel;
@@ -676,7 +677,7 @@ private:
     ui::SegmentedControl *m_protocolChoice = nullptr;
     // A key or a URL was typed and is not yet kept.
     bool m_agentFieldsEdited = false;
-    ui::GhostButton *m_composerFolder = nullptr;
+    ComposerChip *m_composerFolder = nullptr;
     // The model each chat request names (the More menu's Model, else the
     // active connection's), and the ones offered.
     QString m_agentModel;

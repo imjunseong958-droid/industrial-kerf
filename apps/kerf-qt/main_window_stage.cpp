@@ -482,13 +482,10 @@ QStringList MainWindow::recentFolders() const {
 void MainWindow::buildComposerFolder() {
     // Where a request goes: the open project, at the composer's foot; pressed,
     // the other folders, and the ways to one not listed.
-    m_composerFolder = new ui::GhostButton;
+    // One of the composer's chips, as the model and the mode beside it.
+    m_composerFolder = new ComposerChip;
     m_composerFolder->setObjectName(QStringLiteral("composerFolder"));
     m_composerFolder->setIconName(QStringLiteral("g-folder"));
-    m_composerFolder->setChevron(true);
-    // Set as the chips it stands with, on the window's foot line.
-    m_composerFolder->setTypeStyle(tokens::sideNote);
-    m_composerFolder->setControlHeight(tokens::layout::footControl);
     m_composerFolder->setAccessibleName(QStringLiteral("Project folder"));
     m_chat->composerWidget()->toolRow()->insertWidget(0, m_composerFolder);
     connect(m_composerFolder, &QAbstractButton::clicked, this, [this] { ui::popupMenu(buildFolderMenu(), m_composerFolder, ui::Side::Above); });
@@ -528,8 +525,7 @@ void MainWindow::refreshSidebar() {
     if (m_composerFolder) {
         // With no folder open it stays, and says so: it is the way to one.
         const QString name = QFileInfo(m_sidebar->current()).fileName();
-        m_composerFolder->setText(name.isEmpty() ? QStringLiteral("No folder") : name);
-        m_composerFolder->setFixedSize(m_composerFolder->sizeHint());
+        m_composerFolder->setLabel(name.isEmpty() ? QStringLiteral("No folder") : name);
         ui::setTip(m_composerFolder, name.isEmpty() ? QStringLiteral("Open a folder") : QDir::toNativeSeparators(m_sidebar->current()));
         m_composerFolder->show();
     }

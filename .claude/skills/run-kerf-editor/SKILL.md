@@ -102,7 +102,8 @@ QT_QPA_PLATFORM=offscreen KERFD_BIN=$PWD/target/debug/kerfd target/qt/kerf-qt "$
 pkill -f "debug/kerfd"
 ```
 
-Without a project it captures the start window. This shows the layout, the conversation, the
+Without a project it captures the editor with no folder open (a capture never opens the last
+project, which a run with no flags does). This shows the layout, the conversation, the
 timeline and a CPU-drawn picture. It cannot be clicked: for a state that needs a click, use a test's
 gallery (`KERF_SCREENSHOT_DIR`), and say that no pointer was tried.
 

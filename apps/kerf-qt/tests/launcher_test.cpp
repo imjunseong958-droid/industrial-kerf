@@ -281,6 +281,15 @@ private slots:
         openOld->trigger();
         QCOMPARE(opened.count(), 1);
         QCOMPARE(opened.first().first().toString(), old);
+        // A project that is one already brings nothing in with it.
+        QVERIFY(!opened.first().at(1).toBool());
+        // A folder that was no project yet opens with its media brought in.
+        QTemporaryDir footage;
+        QVERIFY(footage.isValid());
+        window.openProject(footage.path(), true);
+        QCOMPARE(opened.count(), 2);
+        QCOMPARE(opened.last().first().toString(), QDir::cleanPath(QFileInfo(footage.path()).absoluteFilePath()));
+        QVERIFY(opened.last().at(1).toBool());
 
         ProjectLauncher::clearRecentProjects();
         QSettings().remove(QStringLiteral("launcher"));

@@ -417,7 +417,8 @@ void SidebarRow::paintEvent(QPaintEvent *) {
         if (focusVisible()) ui::paintFocusRing(p, r, radius::control);
         return;
     }
-    const QColor ink_ = tokens::color(m_dimmed ? (lit ? ink2 : ink3) : (lit || m_strong ? ink : ink2));
+    // Off (New and Search with no folder open), it stays in its place, in the ink of what cannot be pressed.
+    const QColor ink_ = tokens::color(!isEnabled() ? dis : m_dimmed ? (lit ? ink2 : ink3) : (lit || m_strong ? ink : ink2));
     qreal x0 = kPadding + m_indent;
     if (m_chevron != Chevron::None) {
         icons::paint(p, m_chevron == Chevron::Folded ? QStringLiteral("g-chevr") : QStringLiteral("g-chev"),
@@ -1281,6 +1282,12 @@ void ProjectSidebar::rebuild(bool arrivals, bool unfolding) {
     // Search, and where the folder's name goes, the way to one.
     const bool unfolded = m_conversationsShown && (m_switching || !m_current.isEmpty());
     m_newConversation->setVisible(unfolded);
+    // They stay with no folder open, but off: there is no conversation to
+    // start or to find until there is a folder.
+    for (SidebarRow *row : {m_newConversation, m_searchRow}) {
+        row->setEnabled(!m_current.isEmpty());
+        ui::setTip(row, m_current.isEmpty() ? QStringLiteral("Open a folder first") : QString());
+    }
     // Search is a row until it is opened; a query keeps the field open.
     const bool searching = unfolded && (!m_query.isEmpty() || !m_search->isHidden());
     m_search->setVisible(searching);

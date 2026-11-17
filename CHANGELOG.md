@@ -124,8 +124,8 @@ on `main`; its section here becomes the release's notes on GitHub
 - Kerf opens on the project you last worked on. The start window, with its
   one question, is gone: a new conversation already lists your folders, with
   Open Folder and New Project, and that is what the first run shows.
-  Nothing goes away for want of a project: the sidebar keeps New and Search
-  and says No folder where its name would be, the composer's folder chip says
+  Nothing goes away for want of a project: the sidebar keeps New and Search,
+  off, and says No folder where its name would be, the composer's folder chip says
   the same, and Export stays in the toolbar, off until there is a cut.
 - Text is the colour of paper, not white: the same greys, warmed a little.
   The sidebar, the toolbar's title, the composer's chips and Settings are set

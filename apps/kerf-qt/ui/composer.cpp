@@ -36,12 +36,10 @@ using namespace tokens;
 namespace {
 
 // The box's text starts 16 in and Send ends 8 in; the row under it starts and
-// ends on the same two lines, by its chips' own padding (a chip's 6, the
-// folder button's 8).
+// ends on the same two lines, by its chips' own padding of 6.
 constexpr int kBoxLeft = 16;
 constexpr int kBoxRight = 8;
 constexpr int kChipPad = 6;
-constexpr int kFolderPad = 8;
 
 // The composer's box (.cbox): radius 8, raised, an inset line2 that turns
 // accent while the input has focus; pad 8 8 8 12.
@@ -572,7 +570,7 @@ Composer::Composer(QWidget *parent) : QFrame(parent) {
     m_toolRow = rowLayout;
     // The first chip's icon starts where the text over it does, and the
     // last one's chevron ends where Send does.
-    rowLayout->setContentsMargins(kBoxLeft - kFolderPad, 6, kBoxRight - kChipPad, 0);
+    rowLayout->setContentsMargins(kBoxLeft - kChipPad, 6, kBoxRight - kChipPad, 0);
     rowLayout->setSpacing(4);
     m_stamp = new StampButton;
     m_stamp->setTimecode(QStringLiteral("00:00:00:00"));

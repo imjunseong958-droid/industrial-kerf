@@ -934,7 +934,7 @@ void MainWindow::openProjectFolder() {
     const bool starts = !QFileInfo::exists(QDir(path).filePath(QStringLiteral("project.kerf")));
     if (starts &&
         QMessageBox::question(this, QStringLiteral("Open Project"),
-                              QStringLiteral("“%1” has no project.kerf. Start a new project in it?").arg(QFileInfo(path).fileName())) !=
+                              QStringLiteral("“%1” is not a project yet. Start one here, with its media?").arg(QFileInfo(path).fileName())) !=
             QMessageBox::Yes)
         return;
     openProject(path, starts);

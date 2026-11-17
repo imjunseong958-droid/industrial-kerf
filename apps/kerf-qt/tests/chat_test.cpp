@@ -879,10 +879,12 @@ private slots:
         // be, under New and Search; Export stays in the toolbar. With a
         // folder, the chip is first in the row and names it, and opens the
         // folders and the ways to another.
-        auto *chip = w.window.findChild<ui::GhostButton *>(QStringLiteral("composerFolder"));
+        auto *chip = w.window.findChild<ComposerChip *>(QStringLiteral("composerFolder"));
         QVERIFY(chip && chip->isVisible());
         QCOMPARE(chip->text(), QStringLiteral("No folder"));
-        QVERIFY(w.window.m_sidebar->newConversationRow() && w.window.m_sidebar->newConversationRow()->isVisible());
+        // New and Search stay, off: there is nothing to start or find yet.
+        SidebarRow *fresh = w.window.m_sidebar->newConversationRow();
+        QVERIFY(fresh && fresh->isVisible() && !fresh->isEnabled());
         auto *noFolder = w.window.m_sidebar->findChild<SidebarRow *>(QStringLiteral("sidebarNoFolder"));
         QVERIFY(noFolder && noFolder->isVisible());
         QVERIFY(w.window.m_exportButton->isVisible());
@@ -894,8 +896,11 @@ private slots:
         // The row that stood for no folder is gone with the rest of the old rows.
         QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
         QVERIFY(!w.window.m_sidebar->findChild<SidebarRow *>(QStringLiteral("sidebarNoFolder")));
-        // Its icon (8 in) starts where the text over it does.
-        QCOMPARE(inComposer(chip).left() + 8, inComposer(composer->input()).left());
+        QVERIFY(fresh->isEnabled());
+        // A chip as the model's and the mode's: its icon (6 in) starts where
+        // the text over it does.
+        QCOMPARE(chip->height(), composer->modeChip()->height());
+        QCOMPARE(inComposer(chip).left() + 6, inComposer(composer->input()).left());
         QVERIFY(inComposer(chip).top() >= inComposer(box).bottom());
         QCOMPARE(overFoot(chip), tokens::layout::footLine);
         QMenu *menu = w.window.buildFolderMenu();

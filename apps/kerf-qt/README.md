@@ -117,7 +117,8 @@ The positional arguments may also be supplied as `KERF_PROJECT_DIR` and
 installed app carries one), else the one on the `PATH`. Without a project, Kerf opens the one last worked on
 (`KERFD_BIN=/path/to/kerfd target/qt/kerf-qt`), or with none to go back to, an
 editor with no folder. For a quick visual smoke
-run, add `--screenshot /tmp/kerf.png --quit-after-ms 900`. `--window-size 1600x1000` sizes the window, and `--settings-dir DIR`
+run, add `--screenshot /tmp/kerf.png --quit-after-ms 900`; such a run opens only the
+project it is given, never the last one. `--window-size 1600x1000` sizes the window, and `--settings-dir DIR`
 keeps the run's settings in DIR (INI files) instead of the user's.
 
 The editor and the launcher are dark only, and fill the screen edge to edge
