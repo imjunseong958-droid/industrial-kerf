@@ -793,11 +793,13 @@ private slots:
         // 17.32, has faded.
         const auto inked = [&](double seconds) {
             int count = 0;
-            // Grey ink only: the playhead's red head may stand beside a label.
+            // The label's ink only: the playhead's red head may stand beside a
+            // label. The ink is paper, a little warmer than grey (red at most
+            // 24 over blue); the head's red is far past that.
             for (int px = x(seconds) + 4; px < x(seconds) + 40; ++px)
                 for (int py = 13; py < 29; ++py) {
                     const QColor pixel = at(px, py);
-                    count += pixel.lightness() > 90 && std::abs(pixel.red() - pixel.blue()) < 12 ? 1 : 0;
+                    count += pixel.lightness() > 90 && std::abs(pixel.red() - pixel.blue()) < 40 ? 1 : 0;
                 }
             return count;
         };

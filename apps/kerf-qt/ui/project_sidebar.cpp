@@ -49,6 +49,9 @@ constexpr int kPadding = space::s12;
 constexpr int kIcon = 18;
 constexpr int kChevron = 12;
 constexpr int kChevronGap = space::s4;
+// After a name, the chevron sits on the middle of its lowercase, a little
+// under the line's own middle.
+constexpr qreal kChevronDrop = 1.5;
 constexpr int kBadge = 7;
 constexpr int kDotIcon = 12;
 constexpr int kAction = 20;
@@ -392,7 +395,7 @@ void SidebarRow::paintEvent(QPaintEvent *) {
             if (m_chevron != Chevron::None) {
                 const qreal x = room.left() + metrics.horizontalAdvance(shown) + kChevronGap;
                 icons::paint(p, m_chevron == Chevron::Folded ? QStringLiteral("g-chevr") : QStringLiteral("g-chev"),
-                             QRectF(x, (height() - kChevron) / 2.0, kChevron, kChevron), tokens::color(ink3), kChevron);
+                             QRectF(x, (height() - kChevron) / 2.0 + kChevronDrop, kChevron, kChevron), tokens::color(ink3), kChevron);
             }
         }
         if (focusVisible()) ui::paintFocusRing(p, r, radius::control);

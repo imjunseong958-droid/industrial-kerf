@@ -252,20 +252,31 @@ void ChatExpander::paintEvent(QPaintEvent *) {
 
 // ------------------------------------------------------------------ SuggestionButton
 
+namespace {
+// As the rows of the card over it are (the sidebar's): 34 tall, an 18 pt icon
+// 12 in, the words 8 after it.
+constexpr int kSuggestionHeight = 34;
+constexpr int kSuggestionPad = 12;
+constexpr int kSuggestionIcon = 18;
+} // namespace
+
 SuggestionButton::SuggestionButton(const QString &text, QWidget *parent) : QAbstractButton(parent), m_request(text) {
     setText(text);
-    setFont(tokens::font(control));
-    setFixedHeight(28);
+    setFont(tokens::font(side));
+    setFixedHeight(kSuggestionHeight);
     setCursor(Qt::PointingHandCursor);
     setFocusPolicy(Qt::TabFocus);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
 }
 
 QSize SuggestionButton::sizeHint() const {
-    return QSize(8 + 14 + 8 + ui::snapWidth(QFontMetricsF(font()), text()) + 8, 28);
+    return QSize(kSuggestionPad + kSuggestionIcon + 8 + ui::snapWidth(QFontMetricsF(font()), text()) + kSuggestionPad, kSuggestionHeight);
 }
 
-QRect SuggestionButton::textRect() const { return QRect(8 + 14 + 8, 0, width() - 8 - 14 - 8 - 8, height()); }
+QRect SuggestionButton::textRect() const {
+    const int left = kSuggestionPad + kSuggestionIcon + 8;
+    return QRect(left, 0, width() - left - kSuggestionPad, height());
+}
 
 void SuggestionButton::paintEvent(QPaintEvent *) {
     QPainter p(this);
@@ -275,7 +286,7 @@ void SuggestionButton::paintEvent(QPaintEvent *) {
         p.setBrush(color(raised));
         p.drawRoundedRect(QRectF(rect()), radius::control, radius::control);
     }
-    icons::paint(p, QStringLiteral("g-cdr"), QRectF(8, (height() - 14) / 2.0, 14, 14), color(ink3), 14);
+    icons::paint(p, QStringLiteral("g-cdr"), QRectF(kSuggestionPad, 0, kSuggestionIcon, height()), color(ink3), kSuggestionIcon);
     // Timecodes in the words read in mono ink2, as the welcome writes them.
     static const QRegularExpression tc(QStringLiteral("\\d{2}:\\d{2}:\\d{2}[:;]\\d{2}"));
     const QRect area = textRect();
