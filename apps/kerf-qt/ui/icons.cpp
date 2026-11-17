@@ -98,6 +98,7 @@ constexpr Source kSources[] = {
     {"g-video", 16, 16, true, R"svg(<rect x="2" y="3" width="12" height="10" rx="1.5"/><path d="M5 3v10M11 3v10M2 8h3M11 8h3"/>)svg"},
     {"g-audio", 16, 16, true, R"svg(<path d="M2.5 7v2M5 5v6M8 3v10M11 5.5v5M13.5 7v2"/>)svg"},
     {"g-info", 16, 16, true, R"svg(<circle cx="8" cy="8" r="5.75"/><path d="M8 7.25V11M8 5h.01"/>)svg"},
+    {"g-captions", 16, 16, true, R"svg(<rect x="2" y="3.5" width="12" height="9" rx="1.5"/><path d="M4.5 8.5h3M9 8.5h2.5M4.5 10.5h7"/>)svg"},
     {"g-help", 16, 16, true, R"svg(<circle cx="8" cy="8" r="5.75"/><path d="M6.25 6.4a1.85 1.85 0 0 1 3.6.6c0 1.25-1.85 1.6-1.85 2.75M8 11.5h.01"/>)svg"},
     {"g-signout", 16, 16, true, R"svg(<path d="M6.5 13.5h-3a1 1 0 0 1-1-1v-9a1 1 0 0 1 1-1h3"/><path d="M10.5 5l3 3-3 3M13.5 8h-7"/>)svg"},
     {"g-kf", 16, 16, true, R"svg(<path d="M8 3.5 12.5 8 8 12.5 3.5 8z"/>)svg"},

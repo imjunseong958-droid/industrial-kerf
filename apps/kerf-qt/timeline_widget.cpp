@@ -788,12 +788,16 @@ bool TimelineWidget::event(QEvent *event) {
         const QRect area = headerControlRect(row, control);
         switch (control) {
         case HeaderControl::Target:
+        {
+            // Which track, by its number, before what the control does.
+            const QString which = trackRowLabel(row) + QStringLiteral(" · ");
             if (m_targetsEditable)
-                return show(targetTracks().contains(track.value(QStringLiteral("id")).toString()) ? tr("Targeted") : tr("Target track"), {}, area);
-            return show(targetTracks().contains(track.value(QStringLiteral("id")).toString())
-                            ? tr("Targeted: source edits land here (the first unlocked %1 track)").arg(m_rows.at(row).audio ? tr("sound") : tr("picture"))
-                            : tr("Source edits land on the first unlocked %1 track").arg(m_rows.at(row).audio ? tr("sound") : tr("picture")),
+                return show(which + (targetTracks().contains(track.value(QStringLiteral("id")).toString()) ? tr("Targeted") : tr("Target track")), {}, area);
+            return show(which + (targetTracks().contains(track.value(QStringLiteral("id")).toString())
+                                     ? tr("Targeted: source edits land here (the first unlocked %1 track)").arg(m_rows.at(row).audio ? tr("sound") : tr("picture"))
+                                     : tr("Source edits land on the first unlocked %1 track").arg(m_rows.at(row).audio ? tr("sound") : tr("picture"))),
                         {}, area);
+        }
         case HeaderControl::Lock: return show(trackFlag(track, QStringLiteral("locked")) ? tr("Unlock track") : tr("Lock track"), {}, area);
         case HeaderControl::Output:
             if (m_rows.at(row).audio) return show(trackFlag(track, QStringLiteral("muted")) ? tr("Unmute") : tr("Mute"), {}, area);
@@ -2290,20 +2294,19 @@ void TimelineWidget::paintTrackHeader(QPainter &p, int row, const QJsonObject &t
         if (outline.alpha() > 0) ui::paintInsetLine(p, QRectF(rect), tk::radius::small, outline, 1.0);
     };
     const auto hovered = [&](HeaderControl control) { return m_hoverControl == row * 8 + int(control); };
-    // The target: the track's id on a chip, a step up from the head, so it
-    // reads as a control whether or not it is held; held (targeted), a step
-    // more, outlined, its id in ink 500. The id's capitals are centred.
+    // The target: what kind of track it is (picture, captions, sound) on a
+    // chip, a step up from the head, so it reads as a control whether or not
+    // it is held; held (targeted), a step more, outlined, in ink. Its name
+    // says which track; its number (V1, A1) is in the tip, for who wants it.
     {
         const QRect rect = headerControlRect(row, HeaderControl::Target).translated(left - stickyOrigin().x(), 0);
         const bool targeted = targets.contains(id);
         if (targeted) box(rect, C(tk::hover2), C(tk::line2));
         else box(rect, C(hovered(HeaderControl::Target) ? tk::on : tk::raised), QColor(Qt::transparent));
-        const QFont &font = targeted ? monoSmallStrongFont() : monoSmallFont();
-        const QString label = trackRowLabel(row);
-        p.setFont(font);
-        p.setPen(C(targeted ? tk::ink : hovered(HeaderControl::Target) ? tk::ink : tk::ink2));
-        const qreal wide = QFontMetricsF(font).horizontalAdvance(label);
-        p.drawText(QPointF(rect.left() + (rect.width() - wide) / 2.0, ui::capBaseline(rect.top(), rect.height(), font)), label);
+        const QString glyph = layout.audio ? QStringLiteral("g-audio") : isCaptionTrack(track) ? QStringLiteral("g-captions") : QStringLiteral("g-video");
+        constexpr qreal mark = 14;
+        icons::paint(p, glyph, QRectF(rect.left() + (rect.width() - mark) / 2.0, rect.top() + (rect.height() - mark) / 2.0, mark, mark),
+                     C(targeted || hovered(HeaderControl::Target) ? tk::ink : tk::ink2), mark);
     }
     // The name, to the head's end; on hover, to the toggles. A muted or hidden
     // track reads dim, so its state shows with the toggles out of sight.

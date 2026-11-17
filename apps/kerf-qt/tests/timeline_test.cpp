@@ -579,7 +579,7 @@ private slots:
         const QPoint targetTip = timeline.headerControlRect(v1, C::Target).center();
         QHelpEvent help(QEvent::ToolTip, targetTip, timeline.mapToGlobal(targetTip));
         QApplication::sendEvent(&timeline, &help);
-        QCOMPARE(QToolTip::text(), QStringLiteral("Targeted: source edits land here (the first unlocked picture track)"));
+        QCOMPARE(QToolTip::text(), QStringLiteral("V1 · Targeted: source edits land here (the first unlocked picture track)"));
         QToolTip::hideText();
         // The lock's tip names no shortcut: none locks a track.
         const QPoint lockTip = timeline.headerControlRect(v1, C::Lock).center();
