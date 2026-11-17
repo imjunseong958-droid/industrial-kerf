@@ -616,6 +616,13 @@ says nothing of one.
 a node chosen (`workflow:<line>` opens the workflow of the model on that line of
 the recipe), for a capture (`--screenshot`).
 
+Add step, in the head, sends the kind of step wanted (`recipe_edit {add:
+guide|model|join}`): the bridge writes the line (`kerf_shots::graph::step`)
+and answers with the graph and the line it added (`added`), whose card the
+wiring opens. Delete step, at the foot of a step's card, sends its line
+(`recipe_edit {line, remove: true}`). Both are changes to the recipe's text,
+refused as a making would refuse what they leave.
+
 A `join` step, which sets the parts of a shot longer than a model makes at
 once end to end, is a card of its own (`Kind::Join`), with its `lap`; a
 guide's card has `From` and `Seconds`, the part of its sequence it draws, and

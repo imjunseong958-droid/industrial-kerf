@@ -89,6 +89,7 @@ public:
 
     ui::Button *makeButton() const { return m_make; }
     ui::GhostButton *severalButton() const { return m_several; }
+    ui::GhostButton *addButton() const { return m_add; }
     ui::Button *stopButton() const { return m_stop; }
     QLabel *statusLabel() const { return m_status; }
 
@@ -102,6 +103,10 @@ signals:
     void takeChosen(int number, const QString &path);
     // Hold the shot's takes to its guide.
     void takesReadRequested();
+    // Add a step to the recipe, by its kind (`guide`, `model`, `join`); and
+    // take the step on `line` out.
+    void stepAddRequested(const QString &kind);
+    void stepRemoveRequested(int line);
     // Make the shot, `rolls` takes of it; and stop the making that runs.
     void makeRequested(int rolls);
     void stopRequested();
@@ -143,6 +148,7 @@ private:
     QLabel *m_path = nullptr;
     QLabel *m_status = nullptr;
     ui::GhostButton *m_several = nullptr;
+    ui::GhostButton *m_add = nullptr;
     ui::Button *m_make = nullptr;
     ui::Button *m_stop = nullptr;
     ui::IconButton *m_close = nullptr;

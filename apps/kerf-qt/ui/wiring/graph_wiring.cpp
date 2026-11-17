@@ -76,6 +76,11 @@ void GraphWiring::build() {
                                 {QStringLiteral("value"), value}});
     });
 
+    // A step added by its kind, or taken out by its line: a change to the recipe's text as any other.
+    connect(m_panel, &RecipeGraphPanel::stepAddRequested, this, [this](const QString &kind) { edit(QJsonObject{{QStringLiteral("add"), kind}}); });
+    connect(m_panel, &RecipeGraphPanel::stepRemoveRequested, this, [this](int line) {
+        edit(QJsonObject{{QStringLiteral("line"), line}, {QStringLiteral("remove"), true}});
+    });
     // Each take read beside its guide, off the bridge's worker: asked once, answered a take at a time.
     connect(m_panel, &RecipeGraphPanel::takesReadRequested, this, [this] {
         if (m_media.isEmpty() || m_readState == QLatin1String("reading") || !m_window->m_connected) return;
@@ -189,6 +194,11 @@ void GraphWiring::onEvent(const QString &type, const QJsonObject &event) {
     if (type == QLatin1String("recipe")) {
         if (event.value(QStringLiteral("media")).toString() != m_media) return;
         m_panel->setRecipe(graph::Recipe::read(event));
+        // A step just added is the one to set next: its card opens.
+        if (const int added = event.value(QStringLiteral("added")).toInt(); added > 0) {
+            for (const graph::Node &node : m_panel->recipe().nodes)
+                if (node.line == added) m_panel->view()->select(node.id);
+        }
         if (const QString node = std::exchange(m_pendingNode, QString()); !node.isEmpty()) {
             // `workflow:<line>` starts on the workflow of the model on that line.
             static const QString workflow = QStringLiteral("workflow:");

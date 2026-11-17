@@ -175,7 +175,13 @@ and one a line cannot take is refused as a making would refuse it. A signal's
 curve is its clip's `value` in the project, one edit that undo takes back. An
 edge drawn from a node's port to a step that could read it adds the word to that
 step's line, `signal=bounce` or `ref={ball.png}`, and one is let go under the
-step's Reads. Make,
+step's Reads. **Add step**, in the graph's head, adds a line to the recipe: a
+guide drawn from a sequence, a model asked for a file, or a join of the parts
+the steps make. It is written to read as it stands, by a name no step has yet
+(`render court {guide2.mp4} pass=depth`), before the step that writes the
+shot's file, and its card opens to set it and wire it. **Delete step**, at the
+foot of a step's card, takes its line out; a step whose file a later one
+reads, and the last, are refused until that is changed. Make,
 Make again, Several and Stop are in the graph's head and do what the bin's do:
 what would run is shown first, and each making is a new take, chosen among in the
 takes' node. A model run with `kerf-comfy` opens further, into the ComfyUI
@@ -239,6 +245,7 @@ the take; the person says how much of that it does without asking them.
   |---|---|
   | opens a shot as its graph | `look` with `graph`: the nodes, the edges, `cannot`, `notes`, each model's `runner`, the takes |
   | sets a prompt, a seed, a knob | `edit` with `recipeSet`: one name on one line, comments and order kept |
+  | adds a step, a guide, a model or a join, and deletes one | `recipeSet` with `add`, the step's line, after `line`; and with `remove` |
   | draws an edge to a step, or lets one go | the same, the name its reader gives it (`signal`, `ref`, `guide`, `moves`), with no `value` to let it go |
   | draws a signal's curve | an `edit` script that sets the clip's `value` |
   | opens a model into its workflow | `look` with `workflow`: every node and input, the blanks and what fills each now |
