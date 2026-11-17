@@ -12,7 +12,7 @@
 # /opt/industrial-kerf: the folder as installed, with nothing on PATH. After that, what a
 # .deb adds to the folder: kerf, kerfd, kerf-mcp and kerf-qt on PATH, each working through
 # its link (kerfd imports a clip, which it probes right only if it finds the ffprobe beside
-# the file it really is, and the editor opens its start window); the desktop entry in
+# the file it really is, and the editor opens with no project); the desktop entry in
 # /usr/share/applications, running the installed editor with the link; Kerf's icon in the
 # system's hicolor theme at each size; GLib taking Kerf for kerf:// links for a user who
 # has set nothing, and a link followed through it starting the installed editor. Last,

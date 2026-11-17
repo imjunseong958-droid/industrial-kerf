@@ -76,11 +76,14 @@ const QFont &cornerFont() {
     return font;
 }
 
-// A track head's controls: pad 0 6 0 8; the target at 8 (24 wide), the name 8
+// A track head's controls: the target 16 in (24 wide), on the line the strip's
+// first control and the corner's timecode start on (kHeadInset); the name 8
 // after that, and on hover the row of 20 pt toggles (gap 2) against the right
 // padding, over the name's end. Every control is 20 tall, centred in its row.
 constexpr int kControlSize = 20;
-constexpr int kTargetX = 12;
+// Where the heads' column starts: 16 in, as the strip over it and the toolbar.
+constexpr int kHeadInset = 16;
+constexpr int kTargetX = kHeadInset;
 constexpr int kNameX = kTargetX + 24 + 8;
 constexpr int kTogglesX = kTimelineLabelWidth - 6 - (3 * kControlSize + 2 * 2);
 constexpr int kToggleStep = kControlSize + 2;
@@ -2338,10 +2341,10 @@ void TimelineWidget::paintCorner(QPainter &p, const QPoint &origin) const {
     const int width = QFontMetrics(font).horizontalAdvance(time);
     p.setFont(font);
     p.setPen(C(skimming ? tk::ink2 : tk::ink));
-    p.drawText(QRect(corner.left() + 12, corner.top() + 6, width + 2, 20), Qt::AlignLeft | Qt::AlignVCenter, time);
+    p.drawText(QRect(corner.left() + kHeadInset, corner.top() + 6, width + 2, 20), Qt::AlignLeft | Qt::AlignVCenter, time);
     p.setFont(metaFont());
     p.setPen(C(tk::ink3));
-    p.drawText(QRect(corner.left() + 12 + width + 8, corner.top() + 8, 60, 16), Qt::AlignLeft | Qt::AlignVCenter,
+    p.drawText(QRect(corner.left() + kHeadInset + width + 8, corner.top() + 8, 60, 16), Qt::AlignLeft | Qt::AlignVCenter,
                QString::number(m_fps, 'g', 5) + QLatin1Char('p'));
 }
 
@@ -2721,7 +2724,9 @@ TimelineToolStrip::TimelineToolStrip(TimelineWidget *timeline, QWidget *parent) 
     setObjectName(QStringLiteral("timelineTools"));
     setFixedHeight(tk::layout::strip);
     auto *layout = new QHBoxLayout(this);
-    layout->setContentsMargins(12, 0, 12, 0);
+    // As the toolbar over it: the first and the last control's middles are 16
+    // from the strip's edges (24 across, so 4 in).
+    layout->setContentsMargins(kStripEdge, 0, kStripEdge, 0);
     layout->setSpacing(0);
     const auto iconButton = [this](const char *object, const char *icon, const QString &name) {
         auto *button = new ui::IconButton(QString::fromLatin1(icon), ui::IconButton::Size::S24, this);

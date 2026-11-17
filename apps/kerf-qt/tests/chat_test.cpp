@@ -3,6 +3,7 @@
 // one top to bottom (chat_panel.h, ui/chat_messages.h), and the wiring that
 // sends what is asked (agent, conversations) and feeds the sidebar.
 
+#include "settings_kit.h"
 #include "fixtures.h"
 #include "test_registry.h"
 
@@ -13,6 +14,7 @@
 #include "editor_theme.h"
 #include "main_window.h"
 #include "project_sidebar.h"
+#include "toolbar_widgets.h"
 #include "ui/chat_messages.h"
 #include "ui/chat_parts.h"
 #include "ui/conversation_model.h"
@@ -20,6 +22,8 @@
 #include "ui/make_card.h"
 #include "ui/wiring/chat_wiring.h"
 
+#include <QFileInfo>
+#include <QTemporaryDir>
 #include <QAbstractButton>
 #include <QSettings>
 #include <QScopeGuard>
@@ -430,7 +434,6 @@ private slots:
             QCOMPARE(w.chat()->permissionMode(), PermissionMode::Ask);
             QCOMPARE(chip->text(), QStringLiteral("Ask before edits"));
             QVERIFY(!chip->tone().isValid());
-            QVERIFY(w.chat()->findChild<QLabel *>(QStringLiteral("welcomeText"))->text().contains(QStringLiteral("proposal")));
             QCOMPARE(ask(w, "Trim the intro"), QStringLiteral("ask"));
 
             // From the chip's menu: the three, the one in force checked, each with what it lets through.
@@ -448,8 +451,7 @@ private slots:
             // The more Kerf does on its own, the more the chip says so.
             QCOMPARE(chip->tone(), tokens::color(tokens::accentInk));
             QCOMPARE(QSettings().value(QStringLiteral("agent/permissions")).toString(), QStringLiteral("accept-edits"));
-            // The welcome no longer promises a proposal first, and Settings shows the same choice.
-            QVERIFY(w.chat()->findChild<QLabel *>(QStringLiteral("welcomeText"))->text().contains(QStringLiteral("Undo")));
+            // Settings shows the same choice.
             QCOMPARE(w.window.m_permissionChoice->currentIndex(), 1);
             QCOMPARE(ask(w, "Trim the intro"), QStringLiteral("accept-edits"));
 
@@ -469,7 +471,7 @@ private slots:
             emit w.window.m_permissionChoice->activated(1);
             QCOMPARE(w.chat()->permissionMode(), PermissionMode::AcceptEdits);
             QCOMPARE(chip->text(), QStringLiteral("Accept edits"));
-            QVERIFY(w.window.m_permissionHint->text().contains(QStringLiteral("Undo")));
+            QVERIFY(w.window.m_permissionRow->description().contains(QStringLiteral("Undo")));
             QCOMPARE(QSettings().value(QStringLiteral("agent/permissions")).toString(), QStringLiteral("accept-edits"));
         }
         // The next window starts as this one was left.
@@ -575,12 +577,19 @@ private slots:
             QSettings().remove(QStringLiteral("appearance"));
         });
         // The faces the editor carries are there to choose.
-        for (const char *family : {tokens::uiFamily, tokens::hangulFamily, tokens::serifFamily, tokens::serifHangulFamily})
+        for (const char *family : {tokens::uiFamily, tokens::hangulFamily, tokens::serifFamily, tokens::serifHangulFamily,
+                                   tokens::plexFamily, tokens::plexHangulFamily, tokens::plexMonoFamily})
             QVERIFY2(QFontDatabase::families().contains(QString::fromLatin1(family)), family);
-        // The design's own, with Pretendard for the Hangul Inter has none of.
+        // What a new user starts in: IBM Plex, one design throughout, with its
+        // own Hangul and its own mono for timecodes.
         const tokens::Faces plain = facesFor(FaceChoice{});
-        QCOMPARE(plain.ui, (QStringList{QStringLiteral("Inter"), QStringLiteral("Pretendard")}));
+        QCOMPARE(plain.ui.first(2), (QStringList{QStringLiteral("IBM Plex Sans"), QStringLiteral("IBM Plex Sans KR")}));
+        QCOMPARE(plain.mono, QStringList{QStringLiteral("IBM Plex Mono")});
         QVERIFY(plain.prose.isEmpty());
+        // Inter, with Pretendard for the Hangul it has none of, and the design's mono.
+        const tokens::Faces inter = facesFor(FaceChoice{QStringLiteral("inter"), QStringLiteral("same"), QStringLiteral("default")});
+        QCOMPARE(inter.ui, (QStringList{QStringLiteral("Inter"), QStringLiteral("Pretendard")}));
+        QVERIFY(inter.mono.isEmpty());
         QCOMPARE(plain.proseStep, 0);
         const FaceChoice chosen{QStringLiteral("pretendard"), QStringLiteral("serif"), QStringLiteral("large")};
         const tokens::Faces fancy = facesFor(chosen);
@@ -588,12 +597,22 @@ private slots:
         QCOMPARE(fancy.prose, (QStringList{QStringLiteral("Noto Serif"), QStringLiteral("NanumMyeongjo")}));
         QCOMPARE(fancy.proseStep, 2);
         QCOMPARE(facesFor(FaceChoice{QStringLiteral("system"), QStringLiteral("same"), QStringLiteral("small")}).proseStep, -1);
+        // The others keep the design's mono; choosing one puts both in force.
+        QVERIFY(fancy.mono.isEmpty());
+        {
+            setEditorFaces(FaceChoice{QStringLiteral("inter"), QStringLiteral("same"), QStringLiteral("default")});
+            QCOMPARE(tokens::font(tokens::body).families().first(), QStringLiteral("Inter"));
+            QCOMPARE(tokens::font(tokens::timecode).families().first(), QStringLiteral("JetBrains Mono"));
+            setEditorFaces(FaceChoice{});
+            QCOMPARE(tokens::font(tokens::body).families().first(), QStringLiteral("IBM Plex Sans"));
+            QCOMPARE(tokens::font(tokens::timecode).families().first(), QStringLiteral("IBM Plex Mono"));
+        }
         // Kept and read back; a name that is none of them is the first of its kind.
         saveFaceChoice(chosen);
         QCOMPARE(loadFaceChoice(), chosen);
         QSettings().setValue(QStringLiteral("appearance/interfaceFace"), QStringLiteral("comic"));
         QSettings().setValue(QStringLiteral("appearance/readingSize"), QStringLiteral("huge"));
-        QCOMPARE(loadFaceChoice(), (FaceChoice{QStringLiteral("inter"), QStringLiteral("serif"), QStringLiteral("default")}));
+        QCOMPARE(loadFaceChoice(), (FaceChoice{QStringLiteral("plex"), QStringLiteral("serif"), QStringLiteral("default")}));
         QSettings().remove(QStringLiteral("appearance"));
 
         Window w;
@@ -601,12 +620,12 @@ private slots:
         w.window.handleEvent(conversation("c-1", "Cut the harbor", {item("i1", "you", "Cut it"), item("i2", "kerf", "Done, in **one** pass.")}));
         settle();
         const auto first = [](const QFont &font) { return font.families().value(0); };
-        QCOMPARE(first(w.chat()->answers().constFirst()->body()->font()), QStringLiteral("Inter"));
+        QCOMPARE(first(w.chat()->answers().constFirst()->body()->font()), QStringLiteral("IBM Plex Sans"));
         QCOMPARE(w.chat()->answers().constFirst()->body()->font().pixelSize(), 14);
-        QCOMPARE(first(w.chat()->title()->font()), QStringLiteral("Inter"));
+        QCOMPARE(first(w.chat()->title()->font()), QStringLiteral("IBM Plex Sans"));
 
-        // Chosen in Settings: put in force at once, and kept.
-        w.window.m_interfaceFace->setCurrentIndex(1, false);
+        // Chosen in Settings (IBM Plex, Inter, Pretendard, System): put in force at once, and kept.
+        w.window.m_interfaceFace->setCurrentIndex(2, false);
         w.window.m_readingFace->setCurrentIndex(1, false);
         w.window.m_readingSize->setCurrentIndex(2, false);
         emit w.window.m_readingSize->activated(2);
@@ -627,16 +646,17 @@ private slots:
         QCOMPARE(first(QApplication::font()), QStringLiteral("Pretendard"));
         QCOMPARE(first(tokens::font(tokens::timecode)), QStringLiteral("JetBrains Mono"));
 
-        // Back to the design's own.
+        // Back to what it starts in.
         w.window.m_interfaceFace->setCurrentIndex(0, false);
         w.window.m_readingFace->setCurrentIndex(0, false);
         w.window.m_readingSize->setCurrentIndex(1, false);
         emit w.window.m_interfaceFace->activated(0);
         settle();
-        QCOMPARE(first(w.chat()->answers().constFirst()->body()->font()), QStringLiteral("Inter"));
+        QCOMPARE(first(w.chat()->answers().constFirst()->body()->font()), QStringLiteral("IBM Plex Sans"));
         QCOMPARE(w.chat()->answers().constFirst()->body()->font().pixelSize(), 14);
-        QCOMPARE(first(w.chat()->title()->font()), QStringLiteral("Inter"));
-        QCOMPARE(first(w.window.m_chatInput->font()), QStringLiteral("Inter"));
+        QCOMPARE(first(w.chat()->title()->font()), QStringLiteral("IBM Plex Sans"));
+        QCOMPARE(first(w.window.m_chatInput->font()), QStringLiteral("IBM Plex Sans"));
+        QCOMPARE(first(tokens::font(tokens::timecode)), QStringLiteral("IBM Plex Mono"));
     }
 
     // A proposal a turn staged has its card under the answer; one staged
@@ -796,6 +816,149 @@ private slots:
         QCOMPARE(card.state(), MakeCard::State::Made);
     }
 
+    // The composer's box holds what is asked and Send, and nothing else: the
+    // folder a request is for, the model and the mode stand under it, outside,
+    // on the window's foot line; the playhead's stamp only while the time is
+    // not sent.
+    void theComposersToolsStandUnderItsBox() {
+        QTemporaryDir folder;
+        QVERIFY(folder.isValid());
+        Window w;
+        w.window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&w.window));
+        Composer *composer = w.chat()->composerWidget();
+        QWidget *box = composer->box();
+        QVERIFY(box->isAncestorOf(composer->input()) && box->isAncestorOf(composer->sendButton()));
+        const auto inComposer = [composer](const QWidget *part) { return QRect(part->mapTo(composer, QPoint()), part->size()); };
+        // Centred this far over the composer's foot, which is the window's.
+        const auto overFoot = [&](const QWidget *part) { return composer->height() - inComposer(part).top() - part->height() / 2; };
+        for (QWidget *tool : {static_cast<QWidget *>(composer->modeChip()), static_cast<QWidget *>(composer->modelChip())}) {
+            QVERIFY(!box->isAncestorOf(tool));
+            QVERIFY(inComposer(tool).top() >= inComposer(box).bottom());
+            QCOMPARE(tool->height(), tokens::layout::footControl);
+            QCOMPARE(overFoot(tool), tokens::layout::footLine);
+        }
+        // Send keeps to the box's end, in the middle of a one-line box.
+        QVERIFY(inComposer(composer->sendButton()).right() < inComposer(box).right());
+        QVERIFY(std::abs(inComposer(composer->sendButton()).center().y() - inComposer(box).center().y()) <= 1);
+        // The mode ends the row under the box, its chevron (6 in) where Send
+        // ends; the model is before it.
+        QCOMPARE(inComposer(composer->modeChip()).right() - 6, inComposer(composer->sendButton()).right());
+        QVERIFY(inComposer(composer->modelChip()).right() < inComposer(composer->modeChip()).left());
+
+        // A request goes with the playhead's time while there is a picture,
+        // and nothing says so. Taken off in the conversation's menu, the
+        // stamp says it is off, under the box; pressed, the time is back.
+        StampButton *stamp = composer->stamp();
+        // With no picture there is no time to send, and no way offered to stop it.
+        composer->setStampOffered(false);
+        QVERIFY(!composer->stamped() && stamp->isHidden());
+        {
+            QMenu *none = w.chat()->buildMoreMenu();
+            QVERIFY(!none->findChild<QAction *>(QStringLiteral("chatStamp")));
+            delete none;
+        }
+        composer->setStampOffered(true);
+        QVERIFY(composer->stamped() && stamp->isHidden());
+        QMenu *more = w.chat()->buildMoreMenu();
+        QAction *send = more->findChild<QAction *>(QStringLiteral("chatStamp"));
+        QVERIFY(send && send->isChecked());
+        send->trigger();
+        delete more;
+        QCoreApplication::processEvents();
+        QVERIFY(!composer->stamped() && stamp->isVisible());
+        QVERIFY(!box->isAncestorOf(stamp));
+        QVERIFY(inComposer(stamp).top() >= inComposer(box).bottom());
+        QCOMPARE(overFoot(stamp), tokens::layout::footLine);
+        stamp->click();
+        QVERIFY(composer->stamped() && stamp->isHidden());
+        composer->setStampOffered(false);
+
+        // Nothing goes away for want of a project: with no folder open its
+        // chip says so, and so does the sidebar, where the folder's name would
+        // be, under New and Search; Export stays in the toolbar. With a
+        // folder, the chip is first in the row and names it, and opens the
+        // folders and the ways to another.
+        auto *chip = w.window.findChild<ComposerChip *>(QStringLiteral("composerFolder"));
+        QVERIFY(chip && chip->isVisible());
+        QCOMPARE(chip->text(), QStringLiteral("No folder"));
+        // New and Search stay, off: there is nothing to start or find yet.
+        SidebarRow *fresh = w.window.m_sidebar->newConversationRow();
+        QVERIFY(fresh && fresh->isVisible() && !fresh->isEnabled());
+        auto *noFolder = w.window.m_sidebar->findChild<SidebarRow *>(QStringLiteral("sidebarNoFolder"));
+        QVERIFY(noFolder && noFolder->isVisible());
+        QVERIFY(w.window.m_exportButton->isVisible());
+        w.window.m_projectDirectory = folder.path();
+        w.window.refreshSidebar();
+        QCoreApplication::processEvents();
+        QVERIFY(chip->isVisible());
+        QCOMPARE(chip->text(), QFileInfo(folder.path()).fileName());
+        // The row that stood for no folder is gone with the rest of the old rows.
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        QVERIFY(!w.window.m_sidebar->findChild<SidebarRow *>(QStringLiteral("sidebarNoFolder")));
+        QVERIFY(fresh->isEnabled());
+        // A chip as the model's and the mode's: its icon (6 in) starts where
+        // the text over it does.
+        QCOMPARE(chip->height(), composer->modeChip()->height());
+        QCOMPARE(inComposer(chip).left() + 6, inComposer(composer->input()).left());
+        QVERIFY(inComposer(chip).top() >= inComposer(box).bottom());
+        QCOMPARE(overFoot(chip), tokens::layout::footLine);
+        QMenu *menu = w.window.buildFolderMenu();
+        QVERIFY(menu->findChild<QAction *>(QStringLiteral("composerFolderOpen")));
+        QVERIFY(menu->findChild<QAction *>(QStringLiteral("composerFolderNew")));
+        QAction *here = menu->actions().value(0);
+        QVERIFY(here && here->isChecked());
+        QCOMPARE(here->text(), QFileInfo(folder.path()).fileName());
+        delete menu;
+    }
+
+    // A conversation not yet begun offers where to work and what was last
+    // worked on: the folders, the open one ticked, and the ways to another;
+    // then the latest conversations, or things to ask where there are none.
+    void aNewConversationOffersFoldersAndTheLatest() {
+        Window w;
+        ChatPanel *chat = w.chat();
+        // What it asks for is watched here, not carried out: the window would
+        // open a folder chooser and another project.
+        QObject::disconnect(chat, &ChatPanel::folderChosen, &w.window, nullptr);
+        QObject::disconnect(chat, &ChatPanel::openFolderRequested, &w.window, nullptr);
+        QObject::disconnect(chat, &ChatPanel::newProjectRequested, &w.window, nullptr);
+        QObject::disconnect(chat, &ChatPanel::conversationRequested, &w.window, nullptr);
+        QSignalSpy folderChosen(chat, &ChatPanel::folderChosen);
+        QSignalSpy openFolder(chat, &ChatPanel::openFolderRequested);
+        QSignalSpy newProject(chat, &ChatPanel::newProjectRequested);
+        chat->setFolders({QStringLiteral("/films/jeju-vlog"), QStringLiteral("/films/atlas-launch")}, QStringLiteral("/films/jeju-vlog"));
+        const QList<SidebarRow *> folders = chat->welcome()->findChildren<SidebarRow *>(QStringLiteral("welcomeFolder"));
+        QCOMPARE(folders.size(), 2);
+        QCOMPARE(folders.at(0)->text(), QStringLiteral("jeju-vlog"));
+        QVERIFY(folders.at(0)->isTicked() && !folders.at(1)->isTicked());
+        folders.at(1)->click();
+        QCOMPARE(folderChosen.size(), 1);
+        QCOMPARE(folderChosen.first().first().toString(), QStringLiteral("/films/atlas-launch"));
+        chat->welcome()->findChild<SidebarRow *>(QStringLiteral("welcomeOpenFolder"))->click();
+        chat->welcome()->findChild<SidebarRow *>(QStringLiteral("welcomeNewProject"))->click();
+        QCOMPARE(openFolder.size(), 1);
+        QCOMPARE(newProject.size(), 1);
+        // With no conversation yet, things to ask.
+        QVERIFY(!chat->examples().isEmpty());
+        QVERIFY(chat->welcome()->findChildren<SidebarRow *>(QStringLiteral("welcomeConversation")).isEmpty());
+        // With some, the latest three, newest first; pressed, one is asked for.
+        QJsonArray list;
+        for (int i = 1; i <= 4; ++i)
+            list << QJsonObject{{"id", QStringLiteral("c-%1").arg(i)}, {"title", QStringLiteral("Cut %1").arg(i)},
+                                {"updated", QStringLiteral("2026-11-0%1T10:00:00Z").arg(i)}, {"count", 2}};
+        list << QJsonObject{{"id", "c-9"}, {"title", "Put away"}, {"updated", "2026-11-09T10:00:00Z"}, {"archived", true}, {"count", 2}};
+        w.window.handleEvent(QJsonObject{{"type", "conversations"}, {"items", list}});
+        const QList<SidebarRow *> latest = chat->welcome()->findChildren<SidebarRow *>(QStringLiteral("welcomeConversation"));
+        QCOMPARE(latest.size(), ChatPanel::kWelcomeRecent);
+        QCOMPARE(latest.first()->text(), QStringLiteral("Cut 4"));
+        QVERIFY(chat->examples().isEmpty());
+        QSignalSpy asked(chat, &ChatPanel::conversationRequested);
+        latest.first()->click();
+        QCOMPARE(asked.size(), 1);
+        QCOMPARE(asked.first().first().toString(), QStringLiteral("c-4"));
+    }
+
     // Settings keep the chat model and the models that make shots apart: a key
     // of one's own shows its fields under its choice, with no model named for
     // it; the Models page lists what the person's own file names.
@@ -806,12 +969,20 @@ private slots:
             settings.remove(QStringLiteral("agent/anthropic/model"));
         });
         Window w;
-        w.window.m_cloudRadio->setChecked(true);
+        w.window.chooseAgentConnection(QStringLiteral("cloud"));
         QVERIFY(w.window.m_ownKeySettings->isHidden());
-        w.window.m_ownKeyRadio->setChecked(true);
+        w.window.chooseAgentConnection(QStringLiteral("own"));
         QVERIFY(!w.window.m_ownKeySettings->isHidden());
+        // One protocol is in use, and only its fields show.
+        auto *anthropicRows = w.window.m_ownKeySettings->findChild<QWidget *>(QStringLiteral("providerRows.anthropic"));
+        auto *openaiRows = w.window.m_ownKeySettings->findChild<QWidget *>(QStringLiteral("providerRows.openai"));
+        QVERIFY(anthropicRows && openaiRows);
+        w.window.chooseAgentProtocol(QStringLiteral("openai"));
+        QCOMPARE(w.window.activeProviderId(), QStringLiteral("openai"));
+        QVERIFY(anthropicRows->isHidden() && !openaiRows->isHidden());
         // No model typed: the service's own default, and none sent.
-        w.window.m_anthropicActiveRadio->setChecked(true);
+        w.window.chooseAgentProtocol(QStringLiteral("anthropic"));
+        QVERIFY(!anthropicRows->isHidden() && openaiRows->isHidden());
         w.window.m_anthropicModel->clear();
         w.window.updateAgentModelChoices();
         QCOMPARE(w.window.m_agentModels, QStringList{QStringLiteral("default")});

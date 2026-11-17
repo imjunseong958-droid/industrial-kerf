@@ -48,10 +48,11 @@ is out and offers its page; Settings (⌘,) ▸ General turns that off.
 A project is a folder: `project.kerf` (the edit, as text), `media/`, and
 `presets/`.
 
-- **From the start window.** Opened without a project, Kerf shows your recent
-  folders and one question. Pick a folder, say what to make ("a 30-second cut of
-  the best moments"), and send. A folder with no `project.kerf` becomes a project,
-  with the media in it imported. **Open without asking** opens the folder as it is.
+- **Open Kerf.** It opens on the project you last worked on. A new conversation
+  lists your recent folders, with **Open Folder…** and **New Project…** under
+  them; the first time, with no project to go back to, that is what you see.
+  A folder with no `project.kerf` becomes a project, with the media in it
+  imported.
 - **New Project…** (File ▸ New Project…, ⌘N) offers Empty 16:9 and Vertical 9:16,
   a name, a location, a frame rate, and whether to share it with Git or GitHub.
   **From Preset** fills a shared preset's slots with your files. **Clone from
@@ -75,7 +76,7 @@ Import media with File ▸ Import Media… (⌘O).
 - The format picker in the timeline's strip switches the sequence between 16:9
   and 9:16 (⌥1, ⌥2).
 - **Settings ▸ Appearance** chooses the fonts: the interface's (Inter,
-  Pretendard, or your system's) and the conversation's, which can be a serif
+  Pretendard, IBM Plex, or your system's) and the conversation's, which can be a serif
   and larger or smaller. They change as you choose.
 - The **sidebar** (⌥⌘S) has New conversation, a search, your project folders,
   each with its own conversations under it, and at its foot your account, which
@@ -87,8 +88,11 @@ Import media with File ▸ Import Media… (⌘O).
 Ask in the conversation, or about one clip: select it and press ⌘J (Clip ▸ Ask
 Kerf…), Option-double-click it, or right-click ▸ Ask Kerf…. With a clip, choose
 **This clip** (only it changes; clips after it follow) or **Whole sequence**.
-Return sends; Shift+Return adds a line. The clock in the composer stamps the
-request with the playhead; its timecode in your message goes back there.
+Return sends; Shift+Return adds a line. A request goes with the playhead's
+time while a picture is open; its timecode in your message goes back there. To
+send one without it, untick **Send playhead time** in the conversation's menu
+(its name in the toolbar); a struck clock under the composer says it is off,
+and pressing it puts the time back.
 Beside it the composer names the model that answers, with a menu where there
 is a choice, and a ring fills as the conversation takes up Kerf's context;
 when it is full Kerf puts older steps away and goes on.

@@ -59,7 +59,10 @@ void MainWindow::fitTitleBar() {
     // are no buttons beside it.
     const QWindow *handle = windowHandle();
     m_toolbar->setFixedHeight(std::max(kToolbarHeight, handle ? handle->safeAreaMargins().top() : 0));
-    m_toolbarWiring->setFirstControl(ToolbarWiring::firstControlX(windowButtonsWidth(this), isFullScreen()));
+    // The window buttons sit in the middle of the toolbar's height, on the
+    // line its own controls and its title are on.
+    placeWindowButtons(this, kWindowButtonsLeft, m_toolbar->height() / 2, kWindowButtonStep);
+    m_toolbarWiring->setFirstControl(ToolbarWiring::firstControlX(isFullScreen()));
 #endif
 }
 
@@ -75,7 +78,12 @@ void MainWindow::setProjectTitle(const QString &name) {
     // The Window menu, Mission Control and the Dock list the project and
     // its sequence, as the toolbar does.
     setWindowTitle(m_toolbarWiring ? m_toolbarWiring->titleText() : name);
-    if (!m_projectDirectory.isEmpty()) setWindowFilePath(QDir(m_projectDirectory).absoluteFilePath(QStringLiteral("project.kerf")));
+    if (m_projectDirectory.isEmpty()) return;
+    setWindowFilePath(QDir(m_projectDirectory).absoluteFilePath(QStringLiteral("project.kerf")));
+#if KERF_EDITOR_OWN_TITLE_BAR
+    // Its file's icon comes back into the title bar with the file's path.
+    if (testAttribute(Qt::WA_WState_Created)) hideNativeWindowTitle(this);
+#endif
 }
 
 // The toolbar, once the registry's actions and menus exist.

@@ -4,6 +4,7 @@
 #include "components.h"
 #include "design_tokens.h"
 #include "icons.h"
+#include "settings_kit.h"
 #include "test_registry.h"
 
 #include <QAction>
@@ -284,7 +285,7 @@ private slots:
             QVERIFY(solidEdge.contains(QPointF(x, 4 - 0.65)));
         }
         QVERIFY2(covered > 0 && notches > 0, qPrintable(QStringLiteral("%1/%2").arg(covered).arg(notches)));
-        // The checkbox check is #a8a8a8 whatever colour is asked for.
+        // The checkbox check is ink2 whatever colour is asked for.
         QCOMPARE(iconPixel(QStringLiteral("checkbox-check"), Qt::red, QPointF(6.5, 11.4), 16), ink2);
     }
 
@@ -485,6 +486,70 @@ private slots:
         QCOMPARE(ui::motionDuration(motion::segment), 0);
         ui::setReducedMotionOverride(0);
         QCOMPARE(ui::motionDuration(motion::segment), 200);
+    }
+
+    // A switch is on or off at once; its knob slides to the other end over the
+    // segment's time when motion is on, and is there at once when it is off.
+    void kitSwitchSlidesOnlyWithMotion() {
+        ui::setReducedMotionOverride(0);
+        ui::Switch toggle;
+        QCOMPARE(toggle.sizeHint(), QSize(32, 18));
+        QVERIFY(toggle.isCheckable() && !toggle.isChecked());
+        QCOMPARE(toggle.position(), 0.0);
+        // Set before it shows, it is simply there.
+        toggle.setChecked(true);
+        QCOMPARE(toggle.position(), 1.0);
+        toggle.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&toggle));
+        QSignalSpy toggled(&toggle, &QAbstractButton::toggled);
+        toggle.click();
+        QCOMPARE(toggled.size(), 1);
+        QVERIFY(!toggle.isChecked());
+        QVERIFY(toggle.position() > 0.0);
+        QTRY_COMPARE_WITH_TIMEOUT(toggle.position(), 0.0, 1000);
+        // Off, its track is the neutral one; on, the accent.
+        QCOMPARE(toggle.grab().toImage().pixelColor(24, 9).rgb(), color(track).rgb());
+        ui::setReducedMotionOverride(1);
+        toggle.click();
+        QCOMPARE(toggle.position(), 1.0);
+        QCOMPARE(toggle.grab().toImage().pixelColor(8, 9).rgb(), color(accent).rgb());
+        ui::setReducedMotionOverride(0);
+    }
+
+    // A settings page is its name and rows under it: each row's control at its
+    // end, a hairline over every row but a group's first, and no box.
+    void kitSettingsPagesAreRows() {
+        ui::SettingsPage page(QStringLiteral("General"));
+        QCOMPARE(page.title(), QStringLiteral("General"));
+        ui::SettingsGroup *group = page.addGroup();
+        auto *toggle = new ui::Switch;
+        ui::SettingsRow *first = group->addRow(QStringLiteral("Update notices"), QStringLiteral("Once a day"), toggle);
+        ui::SettingsRow *second = group->addRow(QStringLiteral("Plain"));
+        QVERIFY(!first->hasLineAbove() && second->hasLineAbove());
+        // Rows that come and go together follow the group's own.
+        ui::SettingsGroup *more = group->addRows();
+        QVERIFY(more->addRow(QStringLiteral("Key"))->hasLineAbove());
+        // The control is named by its row, for those who do not see it.
+        QCOMPARE(toggle->accessibleName(), QStringLiteral("Update notices"));
+        QCOMPARE(toggle->accessibleDescription(), QStringLiteral("Once a day"));
+        page.resize(640, 400);
+        page.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&page));
+        // What a row says takes room only when it says something.
+        QVERIFY(first->descriptionLabel()->isVisible() && !second->descriptionLabel()->isVisible());
+        second->setDescription(QStringLiteral("Now it says something"));
+        QVERIFY(second->descriptionLabel()->isVisible());
+        // Its control sits at the row's end, in the middle of its height.
+        const QPoint at = toggle->mapTo(first, QPoint(0, 0));
+        QCOMPARE(at.x() + toggle->width(), first->width());
+        QVERIFY(std::abs(at.y() + toggle->height() / 2 - first->height() / 2) <= 1);
+        // Something wide goes under the text, across the row.
+        auto *wide = new QWidget;
+        wide->setFixedHeight(40);
+        second->addBelow(wide);
+        QCoreApplication::processEvents();
+        QCOMPARE(wide->width(), second->width());
+        QVERIFY(wide->mapTo(second, QPoint(0, 0)).y() > second->descriptionLabel()->mapTo(second, QPoint(0, 0)).y());
     }
 
     // Buttons, ghost buttons, chips, check boxes, badges and avatars keep the

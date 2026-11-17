@@ -4,18 +4,17 @@
 #include "design_tokens.h"
 #include "editor_common.h"
 #include "editor_theme.h"
-#include "home_window.h"
 #include "link_inbox.h"
 #include "main_window.h"
 #include "project_launcher.h"
 #include "project_link.h"
+#include "secret_store.h"
 #include "settings_migration.h"
 #include "update_notice.h"
 
 #include <QApplication>
 #include <QDir>
-#include <QEventLoop>
-#include <QPixmap>
+#include <QJsonObject>
 #include <QPointer>
 #include <QRect>
 #include <QSettings>
@@ -29,13 +28,16 @@ namespace {
 // closed; opening another project from it opens a new window first, so the
 // application keeps running.
 kerf::MainWindow *openEditor(const QString &project, const QString &kerfd, const QRect &geometry = QRect()) {
+    // `project` may be empty: an editor with no folder yet, which offers them.
     kerf::ProjectLauncher::rememberProject(project);
     auto *window = new kerf::MainWindow(project, kerfd);
     window->setAttribute(Qt::WA_DeleteOnClose);
     // In the place of the window it follows.
     if (geometry.isValid()) window->setGeometry(geometry);
-    QObject::connect(window, &kerf::MainWindow::projectOpenRequested, window, [window, kerfd](const QString &path) {
-        openEditor(path, kerfd);
+    QObject::connect(window, &kerf::MainWindow::projectOpenRequested, window, [window, kerfd](const QString &path, bool starts) {
+        kerf::MainWindow *next = openEditor(path, kerfd, window->geometry());
+        // A folder that was no project yet: its media comes in with it.
+        if (starts) next->startWith(QString(), true);
         window->close();
     });
     // The same, on one of that project's conversations.
@@ -59,11 +61,13 @@ int main(int argc, char **argv) {
 #endif
     // A smoke run may keep its settings in a folder of its own (INI files),
     // so a capture neither reads nor changes the user's: set before the
-    // first QSettings is made.
+    // first QSettings is made. Its keys stay in that folder too, as where no
+    // keychain can be reached, so it never asks for the user's.
     for (int i = 1; i + 1 < argc; ++i)
         if (QString::fromUtf8(argv[i]) == QStringLiteral("--settings-dir")) {
             QSettings::setDefaultFormat(QSettings::IniFormat);
             QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, QString::fromUtf8(argv[i + 1]));
+            kerf::secrets::call() = [](const QJsonObject &) { return QJsonObject{}; };
         }
     // A panic in the editor's own Rust leaves a report, as kerfd's and the CLI's
     // do, and so does a crash in its C++ or Qt, and a fatal message from Qt
@@ -167,13 +171,8 @@ int main(int argc, char **argv) {
     if (!smoke && !renderPreview) kerf::startUpdateCheck(nullptr);
 
     // kerf:// project links raise (or open) their project's editor and seek.
-    QPointer<QDialog> choosing;
     kerf::links::Router router(
-        [&kerfd, &choosing](const QString &directory) -> kerf::MainWindow * {
-            // A link followed while the launcher waits stands for its choice.
-            if (choosing) choosing->reject();
-            return openEditor(directory, kerfd);
-        },
+        [&kerfd](const QString &directory) -> kerf::MainWindow * { return openEditor(directory, kerfd); },
         [] {
             QList<kerf::MainWindow *> windows;
             for (QWidget *widget : QApplication::topLevelWidgets())
@@ -190,72 +189,26 @@ int main(int argc, char **argv) {
         inbox.listen(inboxName);
     }
 #endif
-    const auto anyEditor = [] {
-        for (QWidget *widget : QApplication::topLevelWidgets())
-            if (qobject_cast<kerf::MainWindow *>(widget) && !widget->isHidden()) return true;
-        return false;
-    };
-
-    // Without a project, start from the folders and a question. A smoke run
-    // shows that window and captures it instead of waiting for a choice.
+    // Without a project, Kerf opens on what was being worked on, as a coding
+    // agent's app does: the latest project that is still there. With none to
+    // go back to, the editor opens on a new conversation, which offers the
+    // folders, Open Folder and New Project.
     QPointer<QWidget> shown;
-    QString startRequest;
-    bool startImport = false;
-    QRect startGeometry;
-    QPixmap startLook;
-    QRect startBox;
-    QPointer<kerf::HomeWindow> chooser;
-    if (project.isEmpty() && smoke) {
-        auto *home = new kerf::HomeWindow(kerfd);
-        home->setAttribute(Qt::WA_DeleteOnClose);
-        if (windowSize.isValid() && !windowSize.isEmpty()) home->resize(windowSize);
-        home->show();
-        shown = home;
-    } else if (project.isEmpty() && !links.isEmpty()) {
+    if (project.isEmpty() && !links.isEmpty()) {
         // Opened for a link: its project is the one to show.
         for (const QString &link : std::as_const(links))
             if (kerf::MainWindow *window = router.follow(link)) shown = window;
         links.clear();
     }
-    if (!shown && project.isEmpty()) {
-        chooser = new kerf::HomeWindow(kerfd);
-        choosing = chooser.data();
-        // Closing the window is not the last window closing.
-        app.setQuitOnLastWindowClosed(false);
-        QEventLoop waiting;
-        QObject::connect(chooser, &kerf::HomeWindow::chosen, &waiting, &QEventLoop::quit);
-        QObject::connect(chooser, &QDialog::finished, &waiting, &QEventLoop::quit);
-        chooser->show();
-        waiting.exec();
-        app.setQuitOnLastWindowClosed(true);
-        const bool chosen = chooser->result() == QDialog::Accepted;
-        if (chosen) {
-            project = chooser->chosenPath();
-            startRequest = chooser->request();
-            startImport = chooser->startsProject();
-            startGeometry = chooser->geometry();
-            startLook = chooser->lastLook();
-            startBox = chooser->composerRect();
-        } else {
-            chooser->deleteLater();
-            if (!anyEditor()) return 0;
-        }
-    }
-    if (!shown && !project.isEmpty()) {
-        QPointer<kerf::MainWindow> window = openEditor(QDir(project).absolutePath(), kerfd, startGeometry);
-        if (!startRequest.isEmpty() || startImport) window->startWith(startRequest, startImport);
-        if (!startLook.isNull()) window->takeOverFrom(startLook, startBox);
+    // A run that captures or quits on its own opens no project it was not
+    // given: its picture is the same on every machine, and nothing of the
+    // user's is opened.
+    if (!shown && project.isEmpty() && !smoke) project = kerf::ProjectLauncher::lastProject();
+    if (!shown) {
+        QPointer<kerf::MainWindow> window = openEditor(project.isEmpty() ? QString() : QDir(project).absolutePath(), kerfd);
         if (windowSize.isValid() && !windowSize.isEmpty()) window->resize(windowSize);
         shown = window.data();
-        // The editor is over it by now; nothing shows through at the hand-over.
-        if (chooser) {
-            QTimer::singleShot(200, chooser.data(), [chooser] {
-                if (!chooser) return;
-                chooser->hide();
-                chooser->deleteLater();
-            });
-        }
-        if (renderPreview) {
+        if (renderPreview && !project.isEmpty()) {
             QTimer::singleShot(1500, window.data(), [window] {
                 QMetaObject::invokeMethod(window.data(), "renderPreview", Qt::DirectConnection);
             });

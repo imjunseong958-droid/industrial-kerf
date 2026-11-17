@@ -3,6 +3,7 @@
 #include "modal_scrim.h"
 #include "design_tokens.h"
 
+#include <QEvent>
 #include <QMouseEvent>
 #include <QPainter>
 
@@ -14,8 +15,36 @@ namespace {
 
 // The room kept between the panel and the window's edges.
 constexpr int kMargin = 48;
+// Of the height the panel leaves, how much lies over it: less than half, so
+// it sits a little above the middle.
+constexpr double kAbove = 0.25;
+// The dim over the work.
+constexpr QColor kDim(0, 0, 0, 140);
 
 } // namespace
+
+ModalDim::ModalDim(QWidget *over) : QWidget(over) {
+    setObjectName(QStringLiteral("modalDim"));
+    setAttribute(Qt::WA_NoSystemBackground);
+    setGeometry(over->rect());
+    over->installEventFilter(this);
+    hide();
+}
+
+void ModalDim::paintEvent(QPaintEvent *) {
+    QPainter p(this);
+    p.fillRect(rect(), kDim);
+}
+
+void ModalDim::mousePressEvent(QMouseEvent *event) {
+    event->accept();
+    emit dismissed();
+}
+
+bool ModalDim::eventFilter(QObject *watched, QEvent *event) {
+    if (watched == parent() && event->type() == QEvent::Resize) setGeometry(parentWidget()->rect());
+    return QWidget::eventFilter(watched, event);
+}
 
 ModalScrim::ModalScrim(QWidget *parent) : QWidget(parent) {
     setObjectName(QStringLiteral("modalScrim"));
@@ -38,13 +67,13 @@ void ModalScrim::setPanelSize(const QSize &size) {
 QRect ModalScrim::panelRect() const {
     const int width = std::max(0, std::min(m_most.width(), this->width() - 2 * kMargin));
     const int height = std::max(0, std::min(m_most.height(), this->height() - 2 * kMargin));
-    return QRect((this->width() - width) / 2, (this->height() - height) / 2, width, height);
+    return QRect((this->width() - width) / 2, int((this->height() - height) * kAbove), width, height);
 }
 
 void ModalScrim::paintEvent(QPaintEvent *) {
     QPainter p(this);
     // The work under it, dimmed: still there, not in the way.
-    p.fillRect(rect(), QColor(0, 0, 0, 140));
+    p.fillRect(rect(), kDim);
     if (!m_panel) return;
     // A soft shadow round the panel lifts it off the dim.
     p.setRenderHint(QPainter::Antialiasing, true);

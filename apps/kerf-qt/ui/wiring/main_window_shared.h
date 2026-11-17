@@ -31,6 +31,31 @@ inline constexpr int kWindowButtonsSpace = 72;
 #endif
 // The toolbar's height (mockup-spec 0.1).
 inline constexpr int kToolbarHeight = tokens::layout::toolbar;
+// The toolbar is one line with one set of numbers, at both ends and in the
+// middle, so that nothing in it is placed by eye:
+//   - everything sits on the middle of its height;
+//   - the first thing's middle is 16 from the window's left edge and the last
+//     thing's 16 from its right: the first window button on macOS (14 across,
+//     so it starts 9 in) and the panel's button;
+//   - the window buttons stand 23 apart, middle to middle (16, 39, 62);
+//   - the toolbar's own controls are 28 across and stand 28 apart, middle to
+//     middle, the first of them 28 after the last window button's (90);
+//   - the title starts 16 past the sidebar's edge, as the row starts 16 past
+//     the window's.
+inline constexpr int kToolbarEdge = 16;
+inline constexpr int kWindowButton = 14;
+inline constexpr int kWindowButtonsLeft = kToolbarEdge - kWindowButton / 2;
+inline constexpr int kWindowButtonStep = 23;
+inline constexpr int kToolbarControl = 28;
+inline constexpr int kToolbarStep = 28;
+// Where the first control starts, after the window buttons.
+inline constexpr int kFirstControlAfterWindowButtons =
+    kWindowButtonsLeft + 2 * kWindowButtonStep + kWindowButton / 2 + kToolbarStep - kToolbarControl / 2;
+// What the row keeps clear at its right end, so the last control's middle is
+// kToolbarEdge from the window's edge.
+inline constexpr int kToolbarTrailing = kToolbarEdge - kToolbarControl / 2;
+// The toolbar's own icons, at its two ends: as large as the sidebar's.
+inline constexpr int kToolbarIcon = 18;
 // The toolbar's symbols, in points; toolbarIcon() draws them at this size.
 inline constexpr int kToolbarIconSize = 15;
 // The style sheet's QToolBar spacing, between every pair of its items,

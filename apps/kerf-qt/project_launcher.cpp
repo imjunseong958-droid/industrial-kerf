@@ -1096,7 +1096,7 @@ QWidget *ProjectLauncher::buildDetails() {
     sharing->addSpacing(4);
     m_remote = new QLineEdit;
     m_remote->setObjectName(QStringLiteral("launcherRemote"));
-    m_remote->setPlaceholderText(QStringLiteral("or push to a remote: git@github.com:you/film.git"));
+    m_remote->setPlaceholderText(QStringLiteral("Or push to a remote: git@github.com:you/film.git"));
     sharing->addWidget(m_remote);
     m_gitHint = new QLabel(QStringLiteral("Looking for Git and the GitHub CLI…"));
     m_gitHint->setObjectName(QStringLiteral("launcherHint"));
@@ -1222,6 +1222,12 @@ QStringList ProjectLauncher::recentProjects() {
     for (const QString &path : QSettings().value(kRecentKey).toStringList())
         if (!path.isEmpty() && !recent.contains(path)) recent.append(path);
     return recent.mid(0, kRecentLimit);
+}
+
+QString ProjectLauncher::lastProject() {
+    for (const QString &path : recentProjects())
+        if (QFileInfo::exists(QDir(path).filePath(QStringLiteral("project.kerf")))) return path;
+    return {};
 }
 
 void ProjectLauncher::rememberProject(const QString &path) {

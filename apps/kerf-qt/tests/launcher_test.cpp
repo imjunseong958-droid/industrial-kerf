@@ -10,7 +10,6 @@
 #include "editor_style.h"
 #include "main_window.h"
 #include "media_artwork.h"
-#include "home_window.h"
 #include "project_launcher.h"
 #include "ui/composer.h"
 #include "ui/project_sidebar.h"
@@ -282,6 +281,15 @@ private slots:
         openOld->trigger();
         QCOMPARE(opened.count(), 1);
         QCOMPARE(opened.first().first().toString(), old);
+        // A project that is one already brings nothing in with it.
+        QVERIFY(!opened.first().at(1).toBool());
+        // A folder that was no project yet opens with its media brought in.
+        QTemporaryDir footage;
+        QVERIFY(footage.isValid());
+        window.openProject(footage.path(), true);
+        QCOMPARE(opened.count(), 2);
+        QCOMPARE(opened.last().first().toString(), QDir::cleanPath(QFileInfo(footage.path()).absoluteFilePath()));
+        QVERIFY(opened.last().at(1).toBool());
 
         ProjectLauncher::clearRecentProjects();
         QSettings().remove(QStringLiteral("launcher"));
@@ -509,38 +517,10 @@ private slots:
         }
     }
 
-    // The start window: the folders, one question, and a request on its way.
-    void theStartWindowSendsARequestToAFolder() {
+    // Started without a project, Kerf opens on the latest one still there.
+    void kerfOpensOnTheLatestProjectStillThere() {
         ProjectLauncher::clearRecentProjects();
-        QTemporaryDir folder;
-        QVERIFY(folder.isValid());
-        HomeWindow home;
-        QVERIFY(home.chosenPath().isEmpty());
-        QVERIFY(!home.m_composer->sendButton()->isEnabled());
-        QVERIFY(home.m_openOnly->isHidden());
-        QVERIFY(home.m_composer->stamp()->isHidden());
-        // The suggestions fill the composer; there is no folder yet, so sending asks for one.
-        home.m_ideas.first()->click();
-        QCOMPARE(home.m_composer->text(), HomeWindow::suggestions().first());
-        QVERIFY(home.m_composer->sendButton()->isEnabled());
-        int asked = 0;
-        home.m_pickFolder = [&asked] {
-            ++asked;
-            return QString();
-        };
-        home.send();
-        QCOMPARE(asked, 1);
-        QCOMPARE(home.result(), int(QDialog::Rejected));
-        home.m_pickFolder = [&folder] { return folder.path(); };
-        home.send();
-        QCOMPARE(home.result(), int(QDialog::Accepted));
-        QCOMPARE(home.chosenPath(), QDir::cleanPath(QFileInfo(folder.path()).absoluteFilePath()));
-        QCOMPARE(home.request(), HomeWindow::suggestions().first());
-        QVERIFY(home.startsProject());
-    }
-
-    void theStartWindowListsRecentFoldersAndOpensOne() {
-        ProjectLauncher::clearRecentProjects();
+        QVERIFY(ProjectLauncher::lastProject().isEmpty());
         QTemporaryDir older;
         QTemporaryDir newer;
         QVERIFY(older.isValid() && newer.isValid());
@@ -548,22 +528,9 @@ private slots:
         QVERIFY(project.open(QIODevice::WriteOnly));
         project.close();
         ProjectLauncher::rememberProject(older.path());
+        // A folder with no project in it (it was moved, or never started) is passed over.
         ProjectLauncher::rememberProject(newer.path());
-        {
-            HomeWindow home;
-            // The most recent is chosen; a row chooses another.
-            QCOMPARE(home.chosenPath(), QDir::cleanPath(QFileInfo(newer.path()).absoluteFilePath()));
-            QCOMPARE(home.m_sidebar->projects().size(), 2);
-            QVERIFY(!home.m_openOnly->isHidden());
-            home.m_sidebar->projectRow(older.path())->click();
-            QCOMPARE(home.chosenPath(), QDir::cleanPath(QFileInfo(older.path()).absoluteFilePath()));
-            QVERIFY(home.m_folderChip->text() == QFileInfo(older.path()).fileName());
-            // Opening without asking: no request, and it is a project already.
-            home.m_openOnly->click();
-            QCOMPARE(home.result(), int(QDialog::Accepted));
-            QVERIFY(home.request().isEmpty());
-            QVERIFY(!home.startsProject());
-        }
+        QCOMPARE(ProjectLauncher::lastProject(), QDir::cleanPath(QFileInfo(older.path()).absoluteFilePath()));
         ProjectLauncher::clearRecentProjects();
     }
 };

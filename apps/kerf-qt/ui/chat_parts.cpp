@@ -252,20 +252,30 @@ void ChatExpander::paintEvent(QPaintEvent *) {
 
 // ------------------------------------------------------------------ SuggestionButton
 
+namespace {
+// Quieter than the rows of the card over it (the sidebar's, 34 tall in UI
+// 15): 32 tall, the words a size smaller, starting 12 in where a row with no
+// icon starts its own.
+constexpr int kSuggestionHeight = 32;
+constexpr int kSuggestionPad = 12;
+} // namespace
+
 SuggestionButton::SuggestionButton(const QString &text, QWidget *parent) : QAbstractButton(parent), m_request(text) {
     setText(text);
-    setFont(tokens::font(control));
-    setFixedHeight(28);
+    setFont(tokens::font(sideNote));
+    setFixedHeight(kSuggestionHeight);
     setCursor(Qt::PointingHandCursor);
     setFocusPolicy(Qt::TabFocus);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
 }
 
 QSize SuggestionButton::sizeHint() const {
-    return QSize(8 + 14 + 8 + ui::snapWidth(QFontMetricsF(font()), text()) + 8, 28);
+    return QSize(kSuggestionPad + ui::snapWidth(QFontMetricsF(font()), text()) + kSuggestionPad, kSuggestionHeight);
 }
 
-QRect SuggestionButton::textRect() const { return QRect(8 + 14 + 8, 0, width() - 8 - 14 - 8 - 8, height()); }
+QRect SuggestionButton::textRect() const {
+    return QRect(kSuggestionPad, 0, width() - 2 * kSuggestionPad, height());
+}
 
 void SuggestionButton::paintEvent(QPaintEvent *) {
     QPainter p(this);
@@ -275,13 +285,14 @@ void SuggestionButton::paintEvent(QPaintEvent *) {
         p.setBrush(color(raised));
         p.drawRoundedRect(QRectF(rect()), radius::control, radius::control);
     }
-    icons::paint(p, QStringLiteral("g-cdr"), QRectF(8, (height() - 14) / 2.0, 14, 14), color(ink3), 14);
     // Timecodes in the words read in mono ink2, as the welcome writes them.
     static const QRegularExpression tc(QStringLiteral("\\d{2}:\\d{2}:\\d{2}[:;]\\d{2}"));
     const QRect area = textRect();
     const QFont uiFont = font();
     const QFont mono = tokens::font(timecode);
     const QFontMetricsF uiMetrics(uiFont);
+    // Ink2 at rest and ink under the pointer, as the rows over it.
+    const QColor words_ = color(underMouse() || isDown() ? ink : ink2);
     qreal x = area.left();
     const qreal baseline = (height() - uiMetrics.height()) / 2 + uiMetrics.ascent();
     const QString words = text();
@@ -298,11 +309,11 @@ void SuggestionButton::paintEvent(QPaintEvent *) {
     QRegularExpressionMatchIterator it = tc.globalMatch(words);
     while (it.hasNext()) {
         const QRegularExpressionMatch match = it.next();
-        draw(words.mid(from, match.capturedStart() - from), uiFont, color(ink));
+        draw(words.mid(from, match.capturedStart() - from), uiFont, words_);
         draw(match.captured(0), mono, color(ink2));
         from = match.capturedEnd();
     }
-    draw(words.mid(from), uiFont, color(ink));
+    draw(words.mid(from), uiFont, words_);
     if (hasFocus()) ui::paintFocusRing(p, QRectF(rect()), radius::control);
 }
 

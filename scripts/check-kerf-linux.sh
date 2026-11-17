@@ -7,7 +7,7 @@
 # found there by the loader with no LD_LIBRARY_PATH (ldd). Then, with nothing on PATH and
 # no library or Qt plugin path, it runs ffmpeg -version, ffprobe -version, kerf --version
 # and kerfd --endpoint, has kerfd import a clip the package's ffmpeg made (which kerfd
-# probes right only with the package's ffprobe), and opens the editor's start window on a
+# probes right only with the package's ffprobe), and opens the editor with no project on a
 # virtual X server and takes a picture of it. Each runs with LD_DEBUG=libs, so the loader
 # names every library it loads: none of what the package carries, Qt's plugins, Qt, ICU or
 # FFmpeg may come from anywhere else. What the system's own libraries load in turn (Mesa's

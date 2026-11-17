@@ -72,9 +72,9 @@ private:
     QVariantAnimation *m_rotate = nullptr;
 };
 
-// .sug: a request to try, 28 tall, radius 6: a 14 pt g-cdr in ink3, the
-// words UI 12/16 ink (timecodes in mono ink2); a raised wash under the
-// pointer. The wash reaches 8 past the words on the left (margin 0 −8).
+// A request to try, quieter than the rows of the card over it: 32 tall,
+// radius 6, the words UI 14/20 ink2 starting 12 in, with no mark before them
+// (timecodes in mono ink2); ink and a raised wash under the pointer.
 class SuggestionButton final : public QAbstractButton {
     Q_OBJECT
 public:
@@ -83,7 +83,7 @@ public:
     QString request() const { return m_request; }
     void setRequest(const QString &request) { m_request = request; }
     QSize sizeHint() const override;
-    QSize minimumSizeHint() const override { return QSize(80, 28); }
+    QSize minimumSizeHint() const override { return QSize(80, sizeHint().height()); }
     // Where its words go.
     QRect textRect() const;
 

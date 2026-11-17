@@ -134,10 +134,11 @@ public:
         update();
     }
     QString qualityName() const { return m_quality; }
-    // pad 0 10, "Export" (UI 500) gap 6 the quality (UI 400).
+    // pad 0 10, "Export" (UI 500 14) gap 6 the quality (UI 400 14): the type
+    // of the title it shares the toolbar with.
     int naturalWidth() const {
-        return space::s8 + 2 + ui::snapWidth(controlStrong, QStringLiteral("Export")) + space::s6 +
-               std::max(ui::snapWidth(control, QStringLiteral("Master")), ui::snapWidth(control, QStringLiteral("Draft"))) +
+        return space::s8 + 2 + ui::snapWidth(tokens::title, QStringLiteral("Export")) + space::s6 +
+               std::max(ui::snapWidth(sideNote, QStringLiteral("Master")), ui::snapWidth(sideNote, QStringLiteral("Draft"))) +
                space::s8 + 2;
     }
 
@@ -162,10 +163,10 @@ protected:
         if (m_arrow) {
             icons::paint(p, QStringLiteral("g-chev"), r, isEnabled() ? ui::mix(color(ink2), color(ink), hoverProgress()) : color(dis), 16);
         } else {
-            const QFont strong = tokens::font(controlStrong);
-            const QFont regular = tokens::font(control);
-            const int exportWidth = ui::snapWidth(controlStrong, QStringLiteral("Export"));
-            const int total = exportWidth + space::s6 + ui::snapWidth(control, m_quality);
+            const QFont strong = tokens::font(tokens::title);
+            const QFont regular = tokens::font(sideNote);
+            const int exportWidth = ui::snapWidth(tokens::title, QStringLiteral("Export"));
+            const int total = exportWidth + space::s6 + ui::snapWidth(sideNote, m_quality);
             qreal x = std::round((r.width() - total) / 2.0);
             p.setFont(strong);
             p.setPen(isEnabled() ? color(ink) : color(dis));
@@ -209,14 +210,18 @@ void FlatToolBar::setSidebarEdge(int edge) {
     edge = std::clamp(edge, 0, width());
     if (edge == m_sidebarEdge) return;
     // Only the stretch the edge crossed.
-    update(QRect(std::min(edge, m_sidebarEdge), 0, std::abs(edge - m_sidebarEdge), height()));
+    update(QRect(std::min(edge, m_sidebarEdge) - tokens::layout::seam, 0, std::abs(edge - m_sidebarEdge) + 2 * tokens::layout::seam, height()));
     m_sidebarEdge = edge;
 }
 
 void FlatToolBar::paintEvent(QPaintEvent *event) {
     QPainter p(this);
     p.fillRect(event->rect(), color(chrome));
-    if (m_sidebarEdge > 0) p.fillRect(QRect(0, 0, m_sidebarEdge, height()).intersected(event->rect()), color(tokens::sidebar));
+    if (m_sidebarEdge <= 0) return;
+    p.fillRect(QRect(0, 0, m_sidebarEdge, height()).intersected(event->rect()), color(tokens::sidebar));
+    // The line the sidebar ends on, carried up through the toolbar: in the
+    // sidebar's last column, as the sidebar draws it.
+    p.fillRect(QRect(m_sidebarEdge - tokens::layout::seam, 0, tokens::layout::seam, height()).intersected(event->rect()), color(tokens::line));
 }
 
 void FlatToolBar::resizeEvent(QResizeEvent *event) {

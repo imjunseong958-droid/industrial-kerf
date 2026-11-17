@@ -97,7 +97,7 @@ private slots:
     void initTestCase() { QVERIFY(m_folder.isValid()); }
 
     void theSidebarIsItsTokensWidth() {
-        QCOMPARE(tokens::layout::sidebar, 320);
+        QCOMPARE(tokens::layout::sidebar, 280);
         // A drag of its edge keeps it between its least and what it leaves the
         // window, as wide as a wide window allows.
         QVERIFY(tokens::layout::sidebarLeast < tokens::layout::sidebar);
@@ -110,10 +110,10 @@ private slots:
 
     void timesSayHowLongAgo() {
         const QDateTime now = noon();
-        QCOMPARE(ProjectSidebar::relativeTime(now, now), QStringLiteral("now"));
-        QCOMPARE(ProjectSidebar::relativeTime(now.addSecs(-59), now), QStringLiteral("now"));
+        QCOMPARE(ProjectSidebar::relativeTime(now, now), QStringLiteral("Now"));
+        QCOMPARE(ProjectSidebar::relativeTime(now.addSecs(-59), now), QStringLiteral("Now"));
         // A clock a little ahead is still now.
-        QCOMPARE(ProjectSidebar::relativeTime(now.addSecs(30), now), QStringLiteral("now"));
+        QCOMPARE(ProjectSidebar::relativeTime(now.addSecs(30), now), QStringLiteral("Now"));
         QCOMPARE(ProjectSidebar::relativeTime(now.addSecs(-4 * 60), now), QStringLiteral("4m"));
         QCOMPARE(ProjectSidebar::relativeTime(now.addSecs(-2 * 3600 - 50), now), QStringLiteral("2h"));
         QCOMPARE(ProjectSidebar::relativeTime(now.addDays(-3), now), QStringLiteral("3d"));
@@ -153,7 +153,7 @@ private slots:
                 QVERIFY(!row->hasGuide() && !row->isHeading());
                 QCOMPARE(row->textLeft(), folder->textLeft());
                 QVERIFY(!row->badge().isValid());
-                QCOMPARE(row->textRect().right(), row->width() - 8 - 1);
+                QCOMPARE(row->textRect().right(), row->width() - 12 - 1);
             }
         // The rows stand a row apart, with no gap for the guide to break on.
         QCOMPARE(sidebar.conversationRow(QStringLiteral("t1"))->y() - sidebar.conversationRow(QStringLiteral("t2"))->y(),
@@ -199,8 +199,14 @@ private slots:
         sidebar.setConversations(many, QStringLiteral("c8"));
         QCOMPARE(listed(sidebar).size(), 9);
         QVERIFY(sidebar.conversationRow(QStringLiteral("c8"))->isCurrent());
+        // With none chosen, no row is filled: New is an icon and a word, and
+        // the folder's name is not a choice among conversations.
         sidebar.setConversations(many, QString());
         QCOMPARE(listed(sidebar).size(), ProjectSidebar::kShownAtFirst);
+        QVERIFY(!sidebar.newConversationRow()->isCurrent());
+        QCOMPARE(sidebar.newConversationRow()->text(), QStringLiteral("New"));
+        QCOMPARE(sidebar.newConversationRow()->accessibleName(), QStringLiteral("New conversation"));
+        QVERIFY(!sidebar.projectRow(m_folder.path())->isCurrent());
         sidebar.searchField()->setText(QStringLiteral("Cut"));
         QCOMPARE(listed(sidebar).size(), 9);
         QVERIFY(!sidebar.moreRow(m_folder.path()));
@@ -282,7 +288,9 @@ private slots:
             if (row->text() == QStringLiteral("Market scene")) theirs = row;
         QVERIFY(theirs);
         QVERIFY(theirs->hoverActions().isEmpty());
-        QCOMPARE(ui::tipName(theirs), QStringLiteral("Market scene · 1d"));
+        // How long ago, wherever the clock is: it was written in UTC, and noon is local.
+        QCOMPARE(ui::tipName(theirs), QStringLiteral("Market scene · %1")
+                                          .arg(ProjectSidebar::relativeTime(QDateTime::fromString(QStringLiteral("2026-11-15T08:00:00Z"), Qt::ISODate), noon())));
         theirs->click();
         QCOMPARE(chosenIn.size(), 1);
         QCOMPARE(chosenIn.first().at(0).toString(), QDir::cleanPath(other.path()));
@@ -685,9 +693,29 @@ private slots:
         QLineEdit *search = sidebar.searchField();
         // Search is a row under New conversation; pressed, the field takes its place.
         QVERIFY(!search->isVisible() && sidebar.searchRow()->isVisible());
+        sidebar.resize(tokens::layout::sidebar, 600);
+        sidebar.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&sidebar));
+        const QRect rowWas = sidebar.searchRow()->geometry();
         sidebar.searchRow()->click();
         QVERIFY(search->isVisible() && !sidebar.searchRow()->isVisible());
         QCOMPARE(search->accessibleName(), QStringLiteral("Search conversations"));
+        // The field is the row, typed into: where it was and as tall, so
+        // nothing under it moves, and with nothing round it, neither a fill
+        // nor an outline: the sidebar shows through to its edges.
+        QCoreApplication::processEvents();
+        QCOMPARE(search->geometry(), rowWas);
+        QCOMPARE(search->placeholderText(), QStringLiteral("Search"));
+        // The editor rings a field being typed in; this one asks for none.
+        QVERIFY(search->property("ringsOwnFields").toBool());
+        {
+            const QImage shown = sidebar.grab().toImage();
+            const QColor ground = tokens::color(tokens::sidebar);
+            const QRect at = search->geometry();
+            for (const QPoint &point : {at.topLeft() + QPoint(1, 1), at.bottomRight() - QPoint(1, 1), QPoint(at.right() - 2, at.center().y()),
+                                        QPoint(at.center().x(), at.top()), QPoint(at.center().x(), at.bottom())})
+                QCOMPARE(shown.pixelColor(point).rgb(), ground.rgb());
+        }
         QTest::keyClicks(search, QStringLiteral("BEACH"));
         QCOMPARE(listed(sidebar), QStringList{QStringLiteral("The Beach cut")});
         QCOMPARE(sidebar.archivedRow()->text(), QStringLiteral("Archived · 1"));
@@ -713,6 +741,35 @@ private slots:
     }
 
     // KERF_SCREENSHOT_DIR=<dir> saves the sidebar with one of everything, to look at.
+    // The editor's sidebar is the open folder alone: its name over its
+    // conversations, with no Projects line; pressed, the name asks for the
+    // other folders instead of folding.
+    void theEditorShowsTheOpenFolderAlone() {
+        ProjectSidebar sidebar;
+        const QDateTime now = noon();
+        open(sidebar, {conversation(QStringLiteral("a"), QStringLiteral("The Beach cut"), State::Idle, now)});
+        QWidget *head = sidebar.findChild<QWidget *>(QStringLiteral("sidebarHead"));
+        QVERIFY(head && head->isVisible());
+        sidebar.setSwitching(true);
+        QVERIFY(!head->isVisible());
+        SidebarRow *folder = sidebar.projectRow(m_folder.path());
+        QVERIFY(folder && folder->isHeading());
+        QCOMPARE(folder->chevron(), SidebarRow::Chevron::Unfolded);
+        QVERIFY(folder->hoverActions().isEmpty());
+        QSignalSpy asked(&sidebar, &ProjectSidebar::switchRequested);
+        QSignalSpy chosen(&sidebar, &ProjectSidebar::projectChosen);
+        folder->click();
+        QCOMPARE(asked.size(), 1);
+        QCOMPARE(asked.first().first().value<QWidget *>(), folder);
+        QVERIFY(chosen.isEmpty());
+        // Nothing folds: its conversations stay under it.
+        QVERIFY(!sidebar.isFolded(m_folder.path()));
+        QCOMPARE(listed(sidebar), QStringList{QStringLiteral("The Beach cut")});
+        // Its rows are set a size larger than the folder's name.
+        QCOMPARE(tokens::side.px, 15);
+        QVERIFY(tokens::side.px > tokens::body.px);
+    }
+
     void aPictureOfItWhenAsked() {
         const QString shots = qEnvironmentVariable("KERF_SCREENSHOT_DIR");
         if (shots.isEmpty()) QSKIP("KERF_SCREENSHOT_DIR is not set");

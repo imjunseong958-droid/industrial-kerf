@@ -739,7 +739,8 @@ void StageShell::place() {
         seam->setVisible(!rect.isEmpty());
         seam->raise();
     };
-    // No line beside the sidebar either: its own colour sets it off.
+    // The sidebar draws the line it ends on itself, in its own last column,
+    // so the line goes where it goes and is never put away while regions move.
     placeSeam(m_seamSidebar, QRect());
     // No line between the conversation and the stage: they share the room.
     placeSeam(m_seamUpright, QRect());

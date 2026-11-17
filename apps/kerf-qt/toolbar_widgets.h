@@ -170,7 +170,7 @@ private:
 // ---------------------------------------------------------------- ExportButton
 
 // The Export split button (mockup-spec 1): 28 tall, radius 6, an inset 1 pt
-// line2 outline. The main part reads "Export" (UI 500 12 ink) and the
+// line2 outline. The main part reads "Export" (UI 500 14 ink) and the
 // quality (" Master", ink3 400), pad 0 10, gap 6, hover raised; it exports
 // that quality. The 24 pt chevron part, set off by an inset line, opens the
 // menu. The menu's first rows are Master (ProRes 422 HQ) and Draft (H.264

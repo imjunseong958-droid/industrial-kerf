@@ -84,6 +84,52 @@ on `main`; its section here becomes the release's notes on GitHub
   for the interface, and for the conversation the same or a serif (Noto Serif,
   with Nanum Myeongjo for Korean) in three sizes. Korean under Inter is set in
   Pretendard instead of whatever the system has. The fonts come with Kerf.
+- Settings' pages are rows, not boxes: each setting's name with a short line
+  under it and its control at the row's end, a hairline between rows. A key of
+  your own shows one protocol's fields at a time and keeps what you type as
+  you leave a field; update notices and MCP tools are switches.
+- The sidebar is narrower, quieter and set a size larger. New and Search are
+  an icon and a word with nothing round them, and Search is typed into where
+  it is. Under them is the open folder's name over its conversations, and
+  nothing else: pressing the name opens the other folders. A line marks where
+  the sidebar ends, and its button keeps beside the window buttons.
+- The toolbar is titled with the conversation, and the chevron after its name
+  renames, archives or deletes it; the conversation no longer has a strip of
+  its own under the toolbar. The window is still titled with the project.
+- A new conversation offers the folders, the open one ticked, with Open Folder
+  and New Project, and under them the latest conversations, or things to ask
+  where there are none yet.
+- The composer's box holds only what you ask and Send, with no line over it.
+  Under it are the project's folder, which opens the other folders, the
+  model and the mode. A request still goes with the playhead's time, without
+  a clock saying so; untick Send playhead time in the conversation's menu and
+  a struck clock says it is off, and puts it back when pressed.
+- Settings opens a little above the middle of the window, and the toolbar
+  dims with the rest of the window behind it. On a Mac the project file's
+  icon no longer shows beside the window buttons, which sit in the middle of
+  the toolbar's height, on the sidebar's column of icons.
+- The interface is set in IBM Plex: IBM Plex Sans, with IBM Plex Sans KR for
+  Korean and IBM Plex Mono for timecodes. It comes with Kerf; Inter,
+  Pretendard and your system's face are still in Settings ▸ Appearance.
+- The toolbar is one line: the window buttons on a Mac, the sidebar's and the
+  panel's buttons, which are plain icons, the title and Export all sit on its
+  middle, the first and the last the same distance from the window's edges.
+  The line the sidebar ends on holds still while the panel opens and closes,
+  and on a Mac no ⋯ comes and goes in the toolbar with the sidebar.
+  The window's foot is one line too: the account and Settings in the
+  sidebar, and the folder, model and mode under the composer, at one height
+  and one size. The timeline's timecode and track names start where its
+  strip of tools does.
+  The models Kerf offers are named with a capital (Default, Opus).
+- Kerf opens on the project you last worked on. The start window, with its
+  one question, is gone: a new conversation already lists your folders, with
+  Open Folder and New Project, and that is what the first run shows.
+  Nothing goes away for want of a project: the sidebar keeps New and Search,
+  off, and says No folder where its name would be, the composer's folder chip says
+  the same, and Export stays in the toolbar, off until there is a cut.
+- Text is the colour of paper, not white: the same greys, warmed a little.
+  The sidebar, the toolbar's title, the composer's chips and Settings are set
+  a size larger, and what you type sits in the middle of the composer's box.
 
 ## 0.1.2
 

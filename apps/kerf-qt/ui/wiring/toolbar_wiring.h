@@ -85,6 +85,11 @@ public:
     // ---- the title, centred on the window
     // "Atlas · 30 s spot v7": the project, then the program sequence's name.
     QString titleText() const;
+    // What the toolbar's title says: the conversation's name, the window's
+    // being the project's (titleText).
+    QString shownTitle() const;
+    // The chevron after it, which opens the conversation's menu.
+    ui::IconButton *titleMenuButton() const { return m_titleMenu; }
     // The line beside the title: a passing message, else offline or an error,
     // else the sync's stage or a render's progress; empty when there is
     // nothing to say.
@@ -109,21 +114,26 @@ public:
     void setClock(std::function<QDateTime()> clock);
 
     // ---- the window buttons' room, and the sidebar's
-    // Where the first control starts: 16 in, past the macOS window buttons
-    // (52 + 16 reserved), or 16 without them.
-    static int firstControlX(int windowButtonsRight, bool fullScreen);
-    // The width of the room before the first control, for one that starts at
-    // `firstControl` and a sidebar that ends at `sidebarEdge` (0: none shows).
-    static int leadingRoom(int firstControl, int sidebarEdge);
+    // Where the first control starts beside the macOS window buttons
+    // (main_window_shared.h has the numbers), or 16 in with none, in full screen.
+    static int firstControlX(bool fullScreen);
+    // The width of the room before the first control (the sidebar's button),
+    // for one that starts at `firstControl`: the window buttons'.
+    static int leadingRoom(int firstControl);
+    // The room kept after the leading controls, which end at `controlsEnd`,
+    // so that the title starts 16 past a sidebar that ends at `sidebarEdge`
+    // (0: none shows, and the title follows the controls).
+    static int titleGap(int controlsEnd, int sidebarEdge);
     // Where the window buttons let the first control start (MainWindow::fitTitleBar).
     void setFirstControl(int x);
     // Where the sidebar ends under the bar now, also while it moves; 0 for none.
     int sidebarEdge() const;
     void layoutLeading();
+    // The room after the last control: Export's, or the panel's button's.
+    void layoutTrailing();
 
-    // ---- Export, there once the program has a clip
+    // ---- whether the program has a clip (Export is off without one)
     bool hasCut() const;
-    void followCut();
 
     // ---- export and preflight
     struct PreflightRow {
@@ -180,6 +190,12 @@ private:
     // Toolbar.
     QWidget *m_content = nullptr;
     QWidget *m_titleBox = nullptr;
+    // The rest of the sidebar's top, between its button and the title.
+    QWidget *m_sidebarGap = nullptr;
+    // What stands between the panel's button and Export, while Export shows.
+    QWidget *m_exportGap = nullptr;
+    // After the conversation's name: opens what can be done with it.
+    ui::IconButton *m_titleMenu = nullptr;
     int m_firstControl = kLeadingPad;
     ui::IconButton *m_appButton = nullptr;
     QMenu *m_appMenu = nullptr;
@@ -200,6 +216,7 @@ private:
     QString m_checkStatus;      // "", running, done, failed
     double m_checkProgress = 0;
     QString m_checkMessage;
+    // "connecting", "ready", "disconnected", or "none" where no folder is open.
     QString m_connection = QStringLiteral("connecting");
     QHash<QString, QString> m_jobQuality; // render_queue jobId -> quality
     QString m_sentQuality;                // what the toolbar last exported

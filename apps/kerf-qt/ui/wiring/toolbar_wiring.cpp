@@ -78,12 +78,10 @@ void ToolbarWiring::setClock(std::function<QDateTime()> clock) {
 
 // ================================================================ toolbar
 
-int ToolbarWiring::firstControlX(int windowButtonsRight, bool fullScreen) {
-    constexpr int pad = 16;
-    if (fullScreen) return pad;
-    // The mockup reserves the three 12 pt lights, 8 apart, and 16 after them.
-    constexpr int reserved = pad + 52 + 16;
-    return windowButtonsRight > 0 ? std::max(reserved, windowButtonsRight + 16) : reserved;
+int ToolbarWiring::firstControlX(bool fullScreen) {
+    // In full screen there are no window buttons beside it. Else its middle is
+    // one step of the toolbar's controls after the last window button's.
+    return fullScreen ? kLeadingPad : kFirstControlAfterWindowButtons;
 }
 
 void ToolbarWiring::buildToolbar(const QHash<QString, QMenu *> &menus) {
@@ -99,7 +97,9 @@ void ToolbarWiring::buildToolbar(const QHash<QString, QMenu *> &menus) {
     m_content = new QWidget;
     m_content->setObjectName(QStringLiteral("toolbarRow"));
     auto *row = new QHBoxLayout(m_content);
-    row->setContentsMargins(kLeadingPad, 0, 12, 0);
+    // The last control's middle is as far from the window's right edge as the
+    // first window button's is from its left (main_window_shared.h).
+    row->setContentsMargins(kLeadingPad, 0, kToolbarTrailing, 0);
     row->setSpacing(4);
     // The room before the first control: the window buttons' on macOS, and the
     // sidebar's while it shows, whose top this stretch of the bar is.
@@ -120,6 +120,10 @@ void ToolbarWiring::buildToolbar(const QHash<QString, QMenu *> &menus) {
         return button;
     };
     w->m_sidebarButton = paneButton(QStringLiteral("g-sidebar"), "paneSidebar", QStringLiteral("Sidebar"), QStringLiteral("view.sidebar"));
+    // An icon beside the window buttons, with no fill of its own but under
+    // the pointer: whether the sidebar shows is plain from the sidebar.
+    w->m_sidebarButton->setCheckable(false);
+    w->m_sidebarButton->setIconPx(kToolbarIcon);
     row->addWidget(w->m_sidebarButton);
     // Everything else is at the sidebar's foot, under the account. With the
     // sidebar away, the same menu opens from here.
@@ -144,10 +148,17 @@ void ToolbarWiring::buildToolbar(const QHash<QString, QMenu *> &menus) {
         }
         w->menuBar()->hide();
     }
+    // The sidebar's button keeps beside the window buttons, over the sidebar;
+    // this is the rest of the sidebar's top, so the title starts past its edge.
+    m_sidebarGap = new QWidget;
+    m_sidebarGap->setObjectName(QStringLiteral("toolbarSidebarGap"));
+    m_sidebarGap->setFixedWidth(0);
+    m_sidebarGap->hide();
+    row->addWidget(m_sidebarGap);
     row->addSpacing(8 - row->spacing());
 
-    // The project and what is going on in it, at the leading end: the room the
-    // row has left is theirs.
+    // The conversation and what is going on in it, at the leading end: the
+    // room the row has left is theirs.
     m_titleBox = new QWidget;
     m_titleBox->setObjectName(QStringLiteral("toolbarTitle"));
     m_titleBox->installEventFilter(this);
@@ -155,21 +166,28 @@ void ToolbarWiring::buildToolbar(const QHash<QString, QMenu *> &menus) {
     m_titleBox->installEventFilter(w);
     row->addWidget(m_titleBox, 1);
 
-    // The trailing group: Export once there is a cut, then the panel.
+    // The trailing group: the panel's button, then Export once there is a cut,
+    // which ends the row as a button with words does.
+    w->m_panelButton = new ui::IconButton(QStringLiteral("g-panel"), ui::IconButton::Size::S28);
+    w->m_panelButton->setObjectName(QStringLiteral("panePanel"));
+    w->m_panelButton->setAccessibleName(QStringLiteral("Picture and timeline"));
+    // The same at the other end: an icon, as large as the sidebar's.
+    w->m_panelButton->setCheckable(false);
+    w->m_panelButton->setIconPx(kToolbarIcon);
+    w->m_panelButton->setFocusPolicy(Qt::TabFocus);
+    connect(w->m_panelButton, &QAbstractButton::clicked, w, [w] { w->setPanelOpen(!w->m_shell->panes().panelOpen()); });
+    row->addWidget(w->m_panelButton);
+    // 8 between the two.
+    m_exportGap = new QWidget;
+    m_exportGap->setFixedWidth(8 - 2 * row->spacing());
+    row->addWidget(m_exportGap);
     w->m_exportButton = new ExportButton;
     connect(w->m_exportButton, &ExportButton::exportRequested, this, &ToolbarWiring::sendExport);
     connect(w->m_exportButton, &ExportButton::menuAboutToShow, this, &ToolbarWiring::buildExportMenu);
     connect(w->m_exportButton, &ExportButton::qualityChanged, this, &ToolbarWiring::syncCommands);
-    w->m_exportButton->hide();
+    // Always there, so the toolbar ends the same way in every project; with
+    // nothing to export it is off, and says why (syncCommands).
     row->addWidget(w->m_exportButton);
-    row->addSpacing(8 - row->spacing());
-    w->m_panelButton = new ui::IconButton(QStringLiteral("g-panel"), ui::IconButton::Size::S28);
-    w->m_panelButton->setObjectName(QStringLiteral("panePanel"));
-    w->m_panelButton->setAccessibleName(QStringLiteral("Picture and timeline"));
-    w->m_panelButton->setCheckable(true);
-    w->m_panelButton->setFocusPolicy(Qt::TabFocus);
-    connect(w->m_panelButton, &QAbstractButton::clicked, w, [w] { w->setPanelOpen(!w->m_shell->panes().panelOpen()); });
-    row->addWidget(w->m_panelButton);
     toolbar->setContent(m_content);
 
     // What belongs to the cut sits with it, in the timeline's strip: the Media
@@ -210,18 +228,39 @@ void ToolbarWiring::buildToolbar(const QHash<QString, QMenu *> &menus) {
     w->m_projectSubtitle->setObjectName(QStringLiteral("projectSubtitle"));
     // Its own sheet, so the app's QLabel rules leave its type alone:
     // UI 500 13/16 ink, then UI 11/16 ink3 on the same line.
-    w->m_projectTitle->setStyleSheet(QStringLiteral("QLabel { color: %1; font-size: 13px; font-weight: 500; padding: 0px; "
+    w->m_projectTitle->setStyleSheet(QStringLiteral("QLabel { color: %1; font-size: 14px; font-weight: 500; padding: 0px; "
                                                     "background: transparent; }")
                                          .arg(tokens::color(tokens::ink).name()));
-    w->m_projectSubtitle->setStyleSheet(QStringLiteral("QLabel { color: %1; font-size: 11px; font-weight: 400; padding: 0px; "
+    w->m_projectSubtitle->setStyleSheet(QStringLiteral("QLabel { color: %1; font-size: 12px; font-weight: 400; padding: 0px; "
                                                        "background: transparent; }")
                                             .arg(tokens::color(tokens::ink3).name()));
     for (QLabel *label : {w->m_projectTitle, w->m_projectSubtitle}) {
-        label->setFont(tokens::font(tokens::TypeStyle{label == w->m_projectTitle ? 13 : 11, 16,
+        label->setFont(tokens::font(tokens::TypeStyle{label == w->m_projectTitle ? 14 : 12, 20,
                                                       label == w->m_projectTitle ? 500 : 400, false}));
         label->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
         label->installEventFilter(w);
     }
+    // The title is the conversation's name, with a chevron after it for what
+    // can be done with the conversation: the panel has no strip of its own.
+    if (w->m_chat) {
+        w->m_chat->setHeaderShown(false);
+        m_titleMenu = new ui::IconButton(QStringLiteral("g-chev"), ui::IconButton::Size::S20, m_titleBox);
+        m_titleMenu->setObjectName(QStringLiteral("toolbarTitleMenu"));
+        m_titleMenu->setCheckable(false);
+        m_titleMenu->setFocusPolicy(Qt::TabFocus);
+        m_titleMenu->setAccessibleName(QStringLiteral("Conversation"));
+        m_titleMenu->setTip(QStringLiteral("Rename, archive, more"));
+        connect(m_titleMenu, &QAbstractButton::clicked, this, [this] {
+            ui::popupMenu(m_window->m_chat->buildMoreMenu(), m_window->m_projectTitle);
+        });
+        // Renamed where it is named: the field takes the title's place.
+        QLineEdit *editor = w->m_chat->titleEditor();
+        const bool editing = !editor->isHidden();
+        editor->setParent(m_titleBox);
+        editor->setVisible(editing);
+        connect(w->m_chat, &ChatPanel::titleChanged, this, &ToolbarWiring::layoutTitle);
+    }
+
     // "Edited 2 min ago", in the title's tip, moves on by itself.
     m_titleTimer = new QTimer(this);
     m_titleTimer->setInterval(30'000);
@@ -241,7 +280,7 @@ void ToolbarWiring::buildToolbar(const QHash<QString, QMenu *> &menus) {
         connect(master, &QAction::changed, this, &ToolbarWiring::syncCommands);
     syncCommands();
     layoutLeading();
-    followCut();
+    layoutTrailing();
 }
 
 int ToolbarWiring::sidebarEdge() const {
@@ -250,23 +289,39 @@ int ToolbarWiring::sidebarEdge() const {
     return std::max(0, sidebar->geometry().right() + 1);
 }
 
-int ToolbarWiring::leadingRoom(int firstControl, int sidebarEdge) {
-    // The first control starts 12 past the sidebar's edge, or where the window
-    // buttons leave it, whichever is further in.
-    return std::max({0, firstControl - kLeadingPad - 4, sidebarEdge > 0 ? sidebarEdge + 12 - kLeadingPad - 4 : 0});
+int ToolbarWiring::leadingRoom(int firstControl) {
+    // The first control starts where the window buttons leave it.
+    return std::max(0, firstControl - kLeadingPad - 4);
+}
+
+int ToolbarWiring::titleGap(int controlsEnd, int sidebarEdge) {
+    // The title starts kToolbarEdge past the sidebar's edge: 8 after this gap's end.
+    return sidebarEdge > 0 ? std::max(0, sidebarEdge + kToolbarEdge - 8 - controlsEnd) : 0;
 }
 
 void ToolbarWiring::layoutLeading() {
     MainWindow *w = m_window;
     if (!w->m_windowButtons || !w->m_toolbar) return;
     const int edge = sidebarEdge();
-    const int room = leadingRoom(m_firstControl, edge);
+    const int room = leadingRoom(m_firstControl);
     // With no room to keep, the row's gap after it goes too.
     w->m_windowButtons->setVisible(room > 0);
     w->m_windowButtons->setFixedWidth(room);
     static_cast<FlatToolBar *>(w->m_toolbar)->setSidebarEdge(edge);
-    // With the sidebar away its foot is too: the menu is here instead.
-    if (m_appButton) m_appButton->setVisible(edge == 0);
+    // With the sidebar away its foot is too: the menu is here instead, where
+    // the window has no menu bar of the system's to hold the same things. On
+    // macOS it has, and nothing comes and goes in the toolbar with the sidebar.
+    if (m_appButton) m_appButton->setVisible(edge == 0 && !w->menuBar()->isNativeMenuBar());
+    // The sidebar's button is beside the window buttons whether the sidebar
+    // shows or not; what is left of the sidebar's top is kept clear, and the
+    // title starts past its edge.
+    if (m_sidebarGap && w->m_sidebarButton) {
+        constexpr int spacing = 4;
+        const int controlsEnd = kLeadingPad + (room > 0 ? room + spacing : 0) + w->m_sidebarButton->sizeHint().width() + spacing;
+        const int gap = titleGap(controlsEnd, edge);
+        m_sidebarGap->setVisible(gap > 0);
+        m_sidebarGap->setFixedWidth(gap);
+    }
 }
 
 void ToolbarWiring::setFirstControl(int x) {
@@ -281,15 +336,16 @@ bool ToolbarWiring::hasCut() const {
     return false;
 }
 
-void ToolbarWiring::followCut() {
-    ExportButton *button = m_window->m_exportButton;
-    if (!button) return;
-    const bool shown = hasCut();
-    if (shown == !button->isHidden()) return;
-    button->setVisible(shown);
-    // It arrives with the cut, where it is.
-    if (shown) moves::fadeIn(button);
-    layoutTitle();
+void ToolbarWiring::layoutTrailing() {
+    // The row ends as it starts. With Export, its edge is as far from the
+    // window's right as the first window button's is from its left; with the
+    // panel's button last, its middle is where that button's middle is.
+    const ExportButton *button = m_window->m_exportButton;
+    const bool shown = button && !button->isHidden();
+    if (m_exportGap) m_exportGap->setVisible(shown);
+    QMargins margins = m_content->layout()->contentsMargins();
+    margins.setRight(shown ? kWindowButtonsLeft : kToolbarTrailing);
+    m_content->layout()->setContentsMargins(margins);
 }
 
 void ToolbarWiring::popupAppMenu(QWidget *anchor) {
@@ -450,6 +506,11 @@ QString ToolbarWiring::titleText() const {
     return project.isEmpty() ? sequence : QStringLiteral("%1 · %2").arg(project, sequence);
 }
 
+QString ToolbarWiring::shownTitle() const {
+    const ChatPanel *chat = m_window->m_chat;
+    return chat && !chat->headerShown() ? chat->titleText() : titleText();
+}
+
 QString ToolbarWiring::normalSubtitle() const {
     const QJsonObject snapshot = m_bus->snapshot();
     if (snapshot.isEmpty()) return QString();
@@ -527,34 +588,48 @@ void ToolbarWiring::layoutTitle() {
     if (!title || !subtitle || !m_titleBox) return;
     title->ensurePolished();
     subtitle->ensurePolished();
-    const QString full = titleText();
+    const QString full = shownTitle();
     const QString sub = subtitleText();
+    // The chevron after a conversation's name, and its room.
+    QLineEdit *editor = m_titleMenu ? w->m_chat->titleEditor() : nullptr;
+    const bool editing = editor && !editor->isHidden();
+    const int chevron = m_titleMenu ? m_titleMenu->width() + 2 : 0;
     const QFontMetrics metrics(title->font());
     const QFontMetrics subMetrics(subtitle->font());
     // One line: the title, then what is going on, in what the row leaves them.
     // The title gives way first only when there is nothing else to say.
-    const int room = std::max(0, m_titleBox->width() - kTitleClearance);
+    const int room = std::max(0, m_titleBox->width() - kTitleClearance - chevron);
     const int subWidth = sub.isEmpty() ? 0 : std::min(subMetrics.horizontalAdvance(sub) + 2, room * 3 / 5);
     const int gap = sub.isEmpty() ? 0 : 12;
     const int width = std::min(metrics.horizontalAdvance(full) + 2, std::max(0, room - subWidth - gap));
     const QString shown = metrics.horizontalAdvance(full) + 2 > width ? metrics.elidedText(full, Qt::ElideRight, width) : full;
     title->setText(shown);
     // The whole of a shortened title; else when it was edited and at which
-    // revision, for whoever asks.
-    ui::setTip(title, shown == full ? normalSubtitle() : full);
+    // revision, for whoever asks, after the project a conversation is in.
+    QString about = normalSubtitle();
+    if (m_titleMenu) about = about.isEmpty() ? titleText() : QStringLiteral("%1 · %2").arg(titleText(), about);
+    ui::setTip(title, shown == full ? about : full);
     const int subRoom = std::max(0, room - width - gap);
     subtitle->setText(subMetrics.elidedText(sub, Qt::ElideRight, subRoom));
     // The whole of a long message, and an offline or error state in its colour.
     ui::setTip(subtitle, subtitle->text() == sub ? QString() : sub);
     const bool problem = m_message.isEmpty() && !standingProblem().isEmpty();
     subtitle->setProperty("problem", problem);
-    subtitle->setStyleSheet(QStringLiteral("QLabel { color: %1; font-size: 11px; font-weight: 400; padding: 0px; background: transparent; }")
+    subtitle->setStyleSheet(QStringLiteral("QLabel { color: %1; font-size: 12px; font-weight: 400; padding: 0px; background: transparent; }")
                                 .arg(tokens::color(problem ? tokens::neg : tokens::ink3).name()));
-    const int top = (m_titleBox->height() - 16) / 2;
-    title->setGeometry(0, top, width, 16);
+    constexpr int line = 20;
+    const int top = (m_titleBox->height() - line) / 2;
+    title->setGeometry(0, top, width, line);
+    title->setVisible(!editing);
+    if (m_titleMenu) {
+        m_titleMenu->move(width + 2, (m_titleBox->height() - m_titleMenu->height()) / 2);
+        m_titleMenu->setVisible(!editing);
+        // The field it is renamed in lies where the name was, with room to type.
+        if (editing) editor->setGeometry(-7, (m_titleBox->height() - 24) / 2, std::min(room, std::max(width + 80, 240)), 24);
+    }
     // The smaller line sits on the title's baseline.
-    subtitle->setGeometry(width + gap, top + 1, subRoom, 16);
-    subtitle->setVisible(!sub.isEmpty());
+    subtitle->setGeometry(width + chevron + gap, top + 1, subRoom, line);
+    subtitle->setVisible(!sub.isEmpty() && !editing);
 }
 
 bool ToolbarWiring::eventFilter(QObject *watched, QEvent *event) {
@@ -799,7 +874,6 @@ void ToolbarWiring::trackExport(const QString &job, const QString &quality, cons
 void ToolbarWiring::onSnapshot() {
     // The window is named as the toolbar names it, once the sequence is known.
     m_window->setWindowTitle(titleText());
-    followCut();
     layoutTitle();
 }
 

@@ -111,8 +111,8 @@ constexpr Source kSources[] = {
     {"g-folder", 16, 16, true, R"svg(<path d="M2.5 4.5a1 1 0 0 1 1-1h3l1.5 1.5h4.500a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1z"/>)svg"},
     {"g-plus", 16, 16, true, R"svg(<path d="M8 3.5v9M3.5 8h9"/>)svg"},
     {"g-updown", 16, 16, true, R"svg(<path d="M5 6.5 8 3.500l3 3M5 9.500l3 3 3-3"/>)svg"},
-    {"g-panel", 16, 16, true, R"svg(<rect x="2.5" y="3" width="11" height="10" rx="1.5"/><path d="M9.5 3v10"/>)svg"},
-    {"g-sidebar", 16, 16, true, R"svg(<rect x="2.5" y="3" width="11" height="10" rx="1.5"/><path d="M6.5 3v10"/>)svg"},
+    {"g-panel", 16, 16, true, R"svg(<rect x="1" y="2.5" width="14" height="11" rx="2"/><path d="M10.5 2.5v11"/>)svg"},
+    {"g-sidebar", 16, 16, true, R"svg(<rect x="1" y="2.5" width="14" height="11" rx="2"/><path d="M5.5 2.5v11"/>)svg"},
     {"g-picture", 16, 16, true, R"svg(<rect x="2.5" y="3" width="11" height="7" rx="1.5"/><path d="M2.5 12.750h11"/>)svg"},
     {"g-timeline", 16, 16, true, R"svg(<rect x="2.5" y="3.500" width="7" height="3.500" rx="1"/><rect x="6.5" y="9" width="7" height="3.500" rx="1"/>)svg"},
     // The sidebar's conversations: put away in the archive, and taken out again.
@@ -120,7 +120,7 @@ constexpr Source kSources[] = {
     {"g-unarchive", 16, 16, true, R"svg(<rect x="2.5" y="3" width="11" height="3" rx="1"/><path d="M3.5 6v6a1 1 0 0 0 1 1h7a1 1 0 0 0 1-1V6M8 11.5V8.25M6.5 9.75 8 8.25l1.5 1.5"/>)svg"},
     // Drawn outside the 16-unit set.
     {"playhead-head", 9, 12, false, R"svg(<path d="M.5 .5h8v7L4.5 11.5.5 7.5z" fill="#e5484d" stroke="#0e0e0e" stroke-width="1"/>)svg"},
-    {"checkbox-check", 16, 16, true, R"svg(<path d="M3.5 8.5 6.5 11.5 12.5 4.5" stroke="#a8a8a8" stroke-width="1.75"/>)svg"},
+    {"checkbox-check", 16, 16, true, R"svg(<path d="M3.5 8.5 6.5 11.5 12.5 4.5" stroke="#ada79b" stroke-width="1.75"/>)svg"},
 };
 // clang-format on
 

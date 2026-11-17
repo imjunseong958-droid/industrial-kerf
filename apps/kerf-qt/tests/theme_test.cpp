@@ -1,6 +1,7 @@
 // Tests for the editor theme: the dark graphite ramp, type scale, contrast,
 // focus outlines and the flat style sheet.
 
+#include "settings_kit.h"
 #include "fixtures.h"
 #include "ui/components.h"
 #include "design_tokens.h"
@@ -425,8 +426,8 @@ private slots:
                 {"#1c1c1c", theme.card},      {"#171717", theme.chatSurface},    {"#1c1c1c", theme.menu},
                 {"#1c1c1c", theme.tooltip},   {"#1c1c1c", theme.dialog},         {"#262626", theme.raised},
                 {"#262626", theme.field},     {"#303030", theme.on},             {"#262626", theme.toolSelected},
-                {"#363636", theme.hover2},    {"#ededed", theme.text},           {"#a8a8a8", theme.textSecondary},
-                {"#828282", theme.ink3},      {"#5c5c5c", theme.textDisabled},   {"#3a3a3a", theme.track},
+                {"#363636", theme.hover2},    {"#ece6da", theme.text},           {"#ada79b", theme.textSecondary},
+                {"#878278", theme.ink3},      {"#5c5c5c", theme.textDisabled},   {"#3a3a3a", theme.track},
                 {"#6a6a6a", theme.track2},    {"#3366e6", theme.accent},         {"#2b5ad6", theme.accentHover},
                 {"#8fb0ff", theme.accentInk}, {"#4cc38a", theme.success},        {"#ec5d61", theme.error},
                 {"#e5484d", theme.playhead},  {"#d6a345", theme.warning},
@@ -555,23 +556,25 @@ private slots:
                     QCOMPARE(plate.pixelColor(QPoint(1, toolbar->height() - 1) * ratio).rgb(), tokens::color(tokens::sidebar).rgb());
             }
             // The window is titled with the project, so the Window menu,
-            // Mission Control and the Dock name it, and the toolbar shows the same.
+            // Mission Control and the Dock name it; the toolbar names the
+            // conversation in it.
             QCOMPARE(window.windowTitle(), QStringLiteral("Harbor Teaser"));
-            QCOMPARE(window.m_projectTitle->text(), window.windowTitle());
-            // The title is UI 13, at the leading end after the sidebar's
+            QCOMPARE(window.m_projectTitle->text(), window.m_chat->titleText());
+            // The title is UI 14, at the leading end after the sidebar's
             // button, clear of the trailing group.
             QLabel *title = window.m_projectTitle;
-            QCOMPARE(title->font().pixelSize(), 13);
+            QCOMPARE(title->font().pixelSize(), 14);
             ExportButton *exportButton = window.m_exportButton;
             const auto inBar = [toolbar](const QWidget *item) { return QRect(item->mapTo(toolbar, QPoint(0, 0)), item->size()); };
-            QCOMPARE(inBar(title).left() - inBar(window.m_sidebarButton).right() - 1, 8);
+            QCOMPARE(inBar(title).left(), window.m_sidebar->geometry().right() + 1 + 16);
             QVERIFY(exportButton->isVisible());
             QVERIFY(inBar(title).right() < inBar(exportButton).left());
-            // The trailing group: Export, 8, the panel's button, 12 in from
-            // the window's right edge, both 28 tall.
-            QCOMPARE(inBar(window.m_panelButton).left() - inBar(exportButton).right() - 1, 8);
+            // The trailing group: the panel's button, 8, Export, which ends 9
+            // from the window's right edge as the first window button starts
+            // 9 from its left; both 28 tall.
+            QCOMPARE(inBar(exportButton).left() - inBar(window.m_panelButton).right() - 1, 8);
             QCOMPARE(exportButton->height(), window.m_panelButton->height());
-            QCOMPARE(toolbar->width() - inBar(window.m_panelButton).right() - 1, 12);
+            QCOMPARE(toolbar->width() - inBar(exportButton).right() - 1, 9);
             // The format is in the timeline's strip, with the Media sheet's
             // button and Follow Kerf.
             QVERIFY(window.m_timelineWiring->tools()->isAncestorOf(window.m_formatBank));
@@ -738,11 +741,27 @@ private slots:
             const QRect panelRect = scrim->panel()->geometry();
             QVERIFY(panelRect.width() < window.m_shell->width() && panelRect.height() < window.m_shell->height());
             QCOMPARE(panelRect.center().x(), window.m_shell->rect().center().x());
+            // A little above the middle, with room under it.
+            QVERIFY(panelRect.center().y() < window.m_shell->rect().center().y());
+            QVERIFY(panelRect.top() > 0 && panelRect.bottom() < window.m_shell->height() - panelRect.top());
+            // The toolbar, which is not the shell's, is dimmed with the rest.
+            auto *toolbarDim = window.m_toolbar->findChild<ModalDim *>();
+            QVERIFY(toolbarDim && toolbarDim->isVisible());
+            QCOMPARE(toolbarDim->geometry(), window.m_toolbar->rect());
             const QImage settings = window.m_preferences->grab().toImage();
             QCOMPARE(settings.pixelColor(panelRect.bottomLeft() + QPoint(20, -8)).rgb(), tokens::color(tokens::chrome).rgb());
             // Outside it, the work is there, dimmed.
             QVERIFY(qGray(settings.pixelColor(QPoint(4, 4)).rgb()) < qGray(tokens::color(tokens::chrome).rgb()) + 1);
             QVERIFY(!window.m_preferences->findChild<QDialogButtonBox *>());
+            // Its pages are rows under the page's name, with nothing boxed and
+            // one kind of each control: the kit's, not the platform's.
+            QVERIFY(!window.m_preferences->findChild<QGroupBox *>());
+            QVERIFY(!window.m_preferences->findChild<QRadioButton *>());
+            QVERIFY(!window.m_preferences->findChild<QCheckBox *>());
+            QVERIFY(!window.m_preferences->findChild<QPushButton *>());
+            QVERIFY(!window.m_preferences->findChild<QComboBox *>());
+            QVERIFY(!window.m_preferences->findChild<QFrame *>(QStringLiteral("settingsCard")));
+            QCOMPARE(window.m_preferences->findChildren<ui::SettingsPage *>().size(), window.m_settingsIds.size());
             save(settings, QStringLiteral("settings-%1").arg(name));
             // Its pages are named down its side; each name shows its page.
             QCOMPARE(window.m_settingsIds, (QStringList{QStringLiteral("account"), QStringLiteral("ai"), QStringLiteral("models"),
@@ -754,6 +773,7 @@ private slots:
             // Its close, a press on the dim, or Esc gives the window back.
             window.m_preferences->findChild<ui::IconButton *>(QStringLiteral("settingsClose"))->click();
             QVERIFY(!window.m_preferences->isVisible());
+            QVERIFY(!toolbarDim->isVisible());
             window.showSettings();
             QTest::mouseClick(window.m_preferences, Qt::LeftButton, Qt::NoModifier, QPoint(4, 4));
             QVERIFY(!window.m_preferences->isVisible());

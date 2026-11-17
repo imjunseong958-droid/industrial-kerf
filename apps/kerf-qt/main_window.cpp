@@ -5,6 +5,7 @@
 #include "crash_notice.h"
 #include "project_link.h"
 #include "secret_store.h"
+#include "settings_kit.h"
 #include "stage_motion.h"
 #include "ask_prompt.h"
 #include "bridge.h"
@@ -130,6 +131,13 @@ MainWindow::MainWindow(const QString &projectDirectory, const QString &kerfdBina
     connect(&m_exactSeekTimer, &QTimer::timeout, this, &MainWindow::settlePointerSeek);
     setConnection(QStringLiteral("connecting"));
 #ifndef KERF_QT_TESTING
+    if (m_projectDirectory.isEmpty()) {
+        // No folder yet (Kerf was started with no project to go back to):
+        // there is nothing to connect to, and nothing wrong to say. The new
+        // conversation offers the folders, and opening one opens its editor.
+        setConnection(QStringLiteral("none"));
+        return;
+    }
     m_bridge = kerf_bridge_new(m_projectDirectory.toUtf8().constData(), m_kerfdBinary.toUtf8().constData());
     if (!m_bridge) {
         setConnection(QStringLiteral("disconnected"), QStringLiteral("Could not start the runtime connection."));
@@ -364,13 +372,9 @@ qint64 MainWindow::clipFrames(const QJsonObject &clip, const QString &key) {
     return static_cast<qint64>(clip.value(key).toDouble());
 }
 
-bool MainWindow::usesCloud() const {
-    return m_cloudRadio && m_cloudRadio->isChecked();
-}
+bool MainWindow::usesCloud() const { return chosenIn(m_connectionChoice) == QStringLiteral("cloud"); }
 
-bool MainWindow::usesClaudeCode() const {
-    return m_claudeCodeRadio && m_claudeCodeRadio->isChecked();
-}
+bool MainWindow::usesClaudeCode() const { return chosenIn(m_connectionChoice) == QStringLiteral("claude-code"); }
 
 bool MainWindow::cloudSignedIn() const {
     return !m_cloudAccount.value(QStringLiteral("email")).toString().isEmpty() && m_cloudAccess != QStringLiteral("signedOut") &&
@@ -389,7 +393,7 @@ void MainWindow::updateAccountRow() {
     } else if (usesCloud()) {
         m_sidebar->setAccount(QStringLiteral("Kerf Cloud"), QStringLiteral("Not signed in"));
     } else {
-        m_sidebar->setAccount(QStringLiteral("My own API key"), m_agentModel.isEmpty() ? QStringLiteral("Set up in Settings") : m_agentModel);
+        m_sidebar->setAccount(QStringLiteral("My own API key"), m_agentModel.isEmpty() ? QStringLiteral("Set up in Settings") : modelLabel(m_agentModel));
     }
 }
 
@@ -413,13 +417,13 @@ QString MainWindow::aiAccess() const {
 }
 
 void MainWindow::updateCloudStatus() {
-    if (!m_cloudStatus) return;
+    if (!m_chatModelRow) return;
     // The account's own page says where Kerf Cloud stands, whatever chat runs on.
     const QString email = m_cloudAccount.value(QStringLiteral("email")).toString();
     const bool signedIn = !email.isEmpty() && m_cloudAccess != QStringLiteral("signedOut");
     QString text;
     if (m_cloudAccess == QStringLiteral("unavailable") || m_cloudAccess.isEmpty()) {
-        text = QStringLiteral("Kerf Cloud isn't available yet. Until it is, choose My own API key and add your key there.");
+        text = QStringLiteral("Not available yet. Chat can run on your own API key or Claude Code");
     } else if (!signedIn) {
         text = m_cloudAccess == QStringLiteral("unreachable") ? QStringLiteral("Kerf Cloud can't be reached right now.")
                                                                : QStringLiteral("Signed out. Paste your Kerf Cloud token to sign in.");
@@ -431,23 +435,22 @@ void MainWindow::updateCloudStatus() {
         if (m_cloudAccess == QStringLiteral("outOfCredits")) text += QStringLiteral("\nYou've used this period's requests.");
     }
     if (!m_cloudMessage.isEmpty()) text += QStringLiteral("\n") + m_cloudMessage;
-    m_accountStatus->setText(text);
+    m_accountRow->setDescription(text);
     const bool available = !m_cloudAccess.isEmpty() && m_cloudAccess != QStringLiteral("unavailable");
     m_cloudToken->setVisible(available && !signedIn);
     m_cloudSignIn->setVisible(available && !signedIn);
     m_cloudSignOut->setVisible(available && signedIn);
     // Under the choice of connection: what the chosen one needs.
-    m_cloudStatus->setText(usesClaudeCode()
-        ? QStringLiteral("Chat runs your installed Claude Code with only this project's Kerf tools, on the Claude plan it is signed in to. Sign in once by running claude in a terminal.")
+    m_chatModelRow->setDescription(usesClaudeCode()
+        ? QStringLiteral("Your installed Claude Code, on your Claude plan. Sign in once by running claude in a terminal")
         : usesCloud() ? text
-                      : QStringLiteral("Chat uses your own key, with the model under it (empty for the service's default)."));
+                      : QStringLiteral("Your own key and model"));
     updateAccountRow();
     updateCommandStates();
 }
 
 QString MainWindow::activeProviderId() const {
-    return m_openaiActiveRadio && m_openaiActiveRadio->isChecked() ? QStringLiteral("openai")
-                                                                   : QStringLiteral("anthropic");
+    return chosenIn(m_protocolChoice) == QStringLiteral("openai") ? QStringLiteral("openai") : QStringLiteral("anthropic");
 }
 
 QJsonObject MainWindow::agentSettingsPayload() const {
@@ -468,7 +471,7 @@ QJsonObject MainWindow::agentSettingsPayload() const {
     const QLineEdit *key = openai ? m_openaiKey : m_anthropicKey;
     const QLineEdit *baseUrl = openai ? m_openaiBaseUrl : m_anthropicBaseUrl;
     return QJsonObject{{QStringLiteral("provider"), activeProviderId()},
-                       {QStringLiteral("apiMode"), m_openaiMode->currentData().toString()},
+                       {QStringLiteral("apiMode"), chosenIn(m_openaiMode)},
                        {QStringLiteral("apiKey"), key ? key->text().trimmed() : QString()},
                        {QStringLiteral("baseUrl"), baseUrl ? baseUrl->text().trimmed() : QString()},
                        // "default": the service's own, which kerf-agent picks.
@@ -557,26 +560,22 @@ void MainWindow::loadAgentSettings() {
                                              qEnvironmentVariable("KERF_PROVIDER", envOpenaiKey.isEmpty() ? QStringLiteral("anthropic") : QStringLiteral("openai")))
                                  .toString()
                                  .toLower();
-    if (provider == QStringLiteral("openai"))
-        m_openaiActiveRadio->setChecked(true);
-    else
-        m_anthropicActiveRadio->setChecked(true);
+    chooseAgentProtocol(provider == QStringLiteral("openai") ? QStringLiteral("openai") : QStringLiteral("anthropic"));
     // Kerf Cloud unless a key of one's own is already set up, so existing
     // setups keep working; an explicit choice wins.
     const bool hasOwnKey = !m_anthropicKey->text().trimmed().isEmpty() || !m_openaiKey->text().trimmed().isEmpty();
     const QString connection = settings.value(QStringLiteral("agent/connection"), hasOwnKey ? QStringLiteral("own") : QStringLiteral("cloud")).toString();
-    (connection == QStringLiteral("claude-code") ? m_claudeCodeRadio
-     : connection == QStringLiteral("own")       ? m_ownKeyRadio
-                                                 : m_cloudRadio)->setChecked(true);
+    chooseAgentConnection(connection == QStringLiteral("claude-code") || connection == QStringLiteral("own") ? connection
+                                                                                                           : QStringLiteral("cloud"));
     updateCloudStatus();
     const QString mode = settings.value(QStringLiteral("agent/openai/apiMode"), qEnvironmentVariable("OPENAI_API_MODE", QStringLiteral("chat"))).toString().toLower();
-    const int modeIndex = m_openaiMode->findData(mode == QStringLiteral("responses") ? QStringLiteral("responses") : QStringLiteral("chat"));
-    m_openaiMode->setCurrentIndex(std::max(0, modeIndex));
+    chooseIn(m_openaiMode, mode == QStringLiteral("responses") ? QStringLiteral("responses") : QStringLiteral("chat"));
     updateAgentModelChoices();
 }
 
 void MainWindow::saveAgentSettings() {
     if (!m_anthropicKey || !m_openaiKey) return;
+    m_agentFieldsEdited = false;
     QSettings settings;
     secrets::saveKey(settings, QStringLiteral("agent/anthropic/apiKey"), m_anthropicKey->text());
     settings.setValue(QStringLiteral("agent/anthropic/baseUrl"), m_anthropicBaseUrl->text().trimmed());
@@ -584,7 +583,7 @@ void MainWindow::saveAgentSettings() {
     secrets::saveKey(settings, QStringLiteral("agent/openai/apiKey"), m_openaiKey->text());
     settings.setValue(QStringLiteral("agent/openai/baseUrl"), m_openaiBaseUrl->text().trimmed());
     settings.setValue(QStringLiteral("agent/openai/model"), m_openaiModel->text().trimmed());
-    settings.setValue(QStringLiteral("agent/openai/apiMode"), m_openaiMode->currentData().toString());
+    settings.setValue(QStringLiteral("agent/openai/apiMode"), chosenIn(m_openaiMode));
     settings.setValue(QStringLiteral("agent/activeProvider"), activeProviderId());
     settings.sync();
     updateAgentModelChoices();
@@ -710,603 +709,6 @@ void MainWindow::buildUi() {
     wireTimeline();
     updateProposal(QJsonValue());
     updateViewerMasks();
-}
-
-void MainWindow::buildPreferences() {
-    // Settings opens over the window, as everything one goes into does: a
-    // panel in the middle of the dimmed work, its pages named down its side.
-    // Esc, its close, or a press on the dim gives the window back as it was.
-    auto *scrim = new ModalScrim;
-    scrim->setObjectName(QStringLiteral("settingsScrim"));
-    scrim->setAccessibleName(QStringLiteral("Settings"));
-    connect(scrim, &ModalScrim::dismissed, this, [this] { m_shell->setCovered(false); });
-    m_preferences = scrim;
-    auto *panel = new QWidget;
-    panel->setObjectName(QStringLiteral("settingsPage"));
-    panel->setAccessibleName(QStringLiteral("Settings"));
-    panel->setAttribute(Qt::WA_StyledBackground);
-    panel->setStyleSheet(QStringLiteral(
-        "QWidget#settingsPage { background: %1; border: 1px solid %6; border-radius: 12px; }"
-        "QWidget#settingsNavColumn { background: transparent; border: 0; border-right: 1px solid %3; }"
-        "QFrame#settingsRule { background: %3; border: 0; }"
-        "QFrame#settingsCard { background: %2; border: 1px solid %3; border-radius: 12px; }"
-        "QLabel#settingsTitle { color: %4; font-size: 14px; font-weight: 500; }"
-        "QLabel#settingsHeading { color: %4; font-size: 13px; font-weight: 500; }"
-        "QLabel#settingsHint { color: %5; font-size: 12px; }")
-            .arg(tokens::color(tokens::chrome).name(), tokens::color(tokens::card).name(),
-                 tokens::color(tokens::line).name(QColor::HexArgb), tokens::color(tokens::ink).name(),
-                 tokens::color(tokens::ink3).name(), tokens::color(tokens::line2).name(QColor::HexArgb)));
-    scrim->setPanel(panel);
-    auto *pageLayout = new QVBoxLayout(panel);
-    pageLayout->setContentsMargins(0, 0, 0, 0);
-    pageLayout->setSpacing(0);
-    // Its title, and the way out.
-    auto *topRow = new QHBoxLayout;
-    topRow->setContentsMargins(tokens::space::s16, tokens::space::s12, tokens::space::s12, tokens::space::s12);
-    auto *settingsTitle = new QLabel(QStringLiteral("Settings"));
-    settingsTitle->setObjectName(QStringLiteral("settingsTitle"));
-    topRow->addWidget(settingsTitle);
-    topRow->addStretch(1);
-    auto *close = new ui::IconButton(QStringLiteral("g-close"), ui::IconButton::Size::S28);
-    close->setObjectName(QStringLiteral("settingsClose"));
-    close->setCheckable(false);
-    close->setAccessibleName(QStringLiteral("Close Settings"));
-    close->setTip(QStringLiteral("Close"), QStringLiteral("Esc"));
-    connect(close, &QAbstractButton::clicked, this, [this] { m_shell->setCovered(false); });
-    topRow->addWidget(close);
-    pageLayout->addLayout(topRow);
-    auto *rule = new QFrame;
-    rule->setObjectName(QStringLiteral("settingsRule"));
-    rule->setFixedHeight(1);
-    pageLayout->addWidget(rule);
-
-    m_settingsBody = new QWidget;
-    m_settingsBody->setObjectName(QStringLiteral("settingsBody"));
-    auto *body = new QHBoxLayout(m_settingsBody);
-    body->setContentsMargins(0, 0, 0, 0);
-    body->setSpacing(0);
-    // The pages, named down the side, each with its glyph.
-    auto *navColumn = new QWidget;
-    navColumn->setObjectName(QStringLiteral("settingsNavColumn"));
-    navColumn->setAttribute(Qt::WA_StyledBackground);
-    navColumn->setFixedWidth(210);
-    auto *nav = new QVBoxLayout(navColumn);
-    nav->setContentsMargins(tokens::space::s8, tokens::space::s12, tokens::space::s8, tokens::space::s12);
-    nav->setSpacing(tokens::space::s2);
-    m_settingsPages = new QStackedWidget;
-    m_settingsPages->setObjectName(QStringLiteral("settingsPages"));
-    // A page: its name in the side's list, and a column that scrolls when it
-    // is taller than the room.
-    static const QHash<QString, QString> glyphs{
-        {QStringLiteral("account"), QStringLiteral("g-user")},   {QStringLiteral("ai"), QStringLiteral("g-ask")},
-        {QStringLiteral("models"), QStringLiteral("g-fx")},      {QStringLiteral("appearance"), QStringLiteral("g-eye")},
-        {QStringLiteral("general"), QStringLiteral("g-settings")}, {QStringLiteral("advanced"), QStringLiteral("g-branch")}};
-    const auto addPage = [this, nav](const QString &id, const QString &name) {
-        auto *row = new SidebarRow(glyphs.value(id), name);
-        row->setObjectName(QStringLiteral("settingsNav.%1").arg(id));
-        nav->addWidget(row);
-        auto *scroll = new QScrollArea;
-        scroll->setObjectName(QStringLiteral("settingsScroll.%1").arg(id));
-        scroll->setWidgetResizable(true);
-        scroll->setFrameShape(QFrame::NoFrame);
-        scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-        scroll->setStyleSheet(QStringLiteral("QScrollArea { background: transparent; border: 0; }"));
-        scroll->viewport()->setAutoFillBackground(false);
-        auto *content = new QWidget;
-        content->setAttribute(Qt::WA_TranslucentBackground);
-        auto *column = new QVBoxLayout(content);
-        column->setContentsMargins(tokens::space::s16 + tokens::space::s8, tokens::space::s16, tokens::space::s16 + tokens::space::s8,
-                                   tokens::space::s16 + tokens::space::s8);
-        column->setSpacing(tokens::space::s12);
-        scroll->setWidget(content);
-        const int index = m_settingsPages->addWidget(scroll);
-        m_settingsIds << id;
-        m_settingsNav << row;
-        connect(row, &QAbstractButton::clicked, this, [this, id] { showSettings(id); });
-        row->setCurrent(index == 0);
-        return column;
-    };
-    // A card: what belongs together, on one raised surface.
-    const auto card = [](QVBoxLayout *column) {
-        auto *frame = new QFrame;
-        frame->setObjectName(QStringLiteral("settingsCard"));
-        auto *layout = new QVBoxLayout(frame);
-        layout->setContentsMargins(tokens::space::s16, tokens::space::s12, tokens::space::s16, tokens::space::s12);
-        layout->setSpacing(tokens::space::s8);
-        column->addWidget(frame);
-        return layout;
-    };
-    const auto heading = [](const QString &text) {
-        auto *label = new QLabel(text);
-        label->setObjectName(QStringLiteral("settingsHeading"));
-        return label;
-    };
-    // A line under a heading that says what the choice under it does.
-    const auto hint = [](const QString &text) {
-        auto *label = new ui::WrapLabel;
-        label->setObjectName(QStringLiteral("settingsHint"));
-        label->setWordWrap(true);
-        label->setText(text);
-        return label;
-    };
-    QVBoxLayout *accountPage = addPage(QStringLiteral("account"), QStringLiteral("Account"));
-    QVBoxLayout *aiPage = addPage(QStringLiteral("ai"), QStringLiteral("Chat"));
-    QVBoxLayout *modelsPage = addPage(QStringLiteral("models"), QStringLiteral("Models"));
-    QVBoxLayout *appearancePage = addPage(QStringLiteral("appearance"), QStringLiteral("Appearance"));
-    QVBoxLayout *generalPage = addPage(QStringLiteral("general"), QStringLiteral("General"));
-    QVBoxLayout *advancedPage = addPage(QStringLiteral("advanced"), QStringLiteral("MCP"));
-    nav->addStretch(1);
-    body->addWidget(navColumn);
-    body->addWidget(m_settingsPages, 1);
-    pageLayout->addWidget(m_settingsBody, 1);
-
-    // Account: who is signed in to Kerf Cloud, and the way in or out.
-    QVBoxLayout *cloudLayout = card(accountPage);
-    cloudLayout->addWidget(heading(QStringLiteral("Kerf Cloud")));
-    m_accountStatus = new QLabel;
-    m_accountStatus->setObjectName(QStringLiteral("accountStatus"));
-    m_accountStatus->setWordWrap(true);
-    cloudLayout->addWidget(m_accountStatus);
-    m_cloudToken = new QLineEdit;
-    m_cloudToken->setObjectName(QStringLiteral("cloudToken"));
-    m_cloudToken->setEchoMode(QLineEdit::Password);
-    m_cloudToken->setPlaceholderText(QStringLiteral("Kerf Cloud sign-in token"));
-    cloudLayout->addWidget(m_cloudToken);
-    auto *cloudButtons = new QHBoxLayout;
-    m_cloudSignIn = new QPushButton(QStringLiteral("Sign in"));
-    m_cloudSignIn->setObjectName(QStringLiteral("primaryButton"));
-    connect(m_cloudSignIn, &QPushButton::clicked, this, [this] {
-        const QString token = m_cloudToken->text().trimmed();
-        if (token.isEmpty()) return;
-        if (sendCloud(QJsonObject{{QStringLiteral("type"), QStringLiteral("cloud_sign_in")}, {QStringLiteral("token"), token}}))
-            m_cloudToken->clear();
-    });
-    m_cloudSignOut = new QPushButton(QStringLiteral("Sign out"));
-    connect(m_cloudSignOut, &QPushButton::clicked, this, [this] {
-        sendCloud(QJsonObject{{QStringLiteral("type"), QStringLiteral("cloud_sign_out")}});
-    });
-    auto *plans = new QPushButton(QStringLiteral("Plans"));
-    plans->setObjectName(QStringLiteral("cloudPlans"));
-    plans->setEnabled(false);
-    plans->setToolTip(QStringLiteral("Plans are coming soon"));
-    cloudButtons->addWidget(m_cloudSignIn);
-    cloudButtons->addWidget(m_cloudSignOut);
-    cloudButtons->addStretch(1);
-    cloudButtons->addWidget(plans);
-    cloudLayout->addLayout(cloudButtons);
-    accountPage->addStretch(1);
-
-    // Chat: the model the conversation runs on. Kerf Cloud, the hosted model,
-    // comes first; a key of one's own shows its fields under its choice.
-    // The models that make shots are the Models page's, and MCP its own.
-    QVBoxLayout *connectionLayout = card(aiPage);
-    connectionLayout->parentWidget()->setProperty("section", QStringLiteral("aiConnection"));
-    connectionLayout->addWidget(heading(QStringLiteral("Chat model")));
-    connectionLayout->addWidget(hint(QStringLiteral("What you talk to in the conversation, and what edits for you. The models that make "
-                                                    "shots are on the Models page.")));
-    auto *connectionGroup = connectionLayout->parentWidget();
-    m_cloudRadio = new QRadioButton(QStringLiteral("Kerf Cloud"));
-    m_cloudRadio->setObjectName(QStringLiteral("agentConnectionCloud"));
-    m_ownKeyRadio = new QRadioButton(QStringLiteral("My own API key"));
-    m_ownKeyRadio->setObjectName(QStringLiteral("agentConnectionOwnKey"));
-    m_claudeCodeRadio = new QRadioButton(QStringLiteral("Claude Code (signed in to your Claude account)"));
-    m_claudeCodeRadio->setObjectName(QStringLiteral("agentConnectionClaudeCode"));
-    m_claudeCodeRadio->setToolTip(QStringLiteral("Runs your installed Claude Code with only this project's Kerf tools. It uses your Claude plan; Kerf never sees its sign-in. Sign in once by running claude in a terminal."));
-    auto *connectionChoice = new QButtonGroup(connectionGroup);
-    connectionChoice->addButton(m_cloudRadio);
-    connectionChoice->addButton(m_ownKeyRadio);
-    connectionChoice->addButton(m_claudeCodeRadio);
-    connectionLayout->addWidget(m_cloudRadio);
-    connectionLayout->addWidget(m_ownKeyRadio);
-    connectionLayout->addWidget(m_claudeCodeRadio);
-    m_cloudStatus = new QLabel;
-    m_cloudStatus->setObjectName(QStringLiteral("cloudStatus"));
-    m_cloudStatus->setWordWrap(true);
-    connectionLayout->addWidget(m_cloudStatus);
-
-    // How far Kerf goes without asking: the same choice as the composer's chip.
-    QVBoxLayout *permissionLayout = card(aiPage);
-    permissionLayout->parentWidget()->setProperty("section", QStringLiteral("permissions"));
-    permissionLayout->addWidget(heading(QStringLiteral("Without asking")));
-    m_permissionChoice = new ui::SegmentedControl;
-    m_permissionChoice->setObjectName(QStringLiteral("settingsPermissions"));
-    m_permissionChoice->setAccessibleName(QStringLiteral("What Kerf does without asking"));
-    m_permissionHint = hint(QString());
-    for (const PermissionMode mode : {PermissionMode::Ask, PermissionMode::AcceptEdits, PermissionMode::Auto}) {
-        const int index = m_permissionChoice->addSegment(permission::label(mode), permission::summary(mode));
-        m_permissionChoice->setSegmentData(index, permission::name(mode));
-    }
-    const auto describePermission = [this](PermissionMode mode) {
-        switch (mode) {
-        case PermissionMode::Ask:
-            m_permissionHint->setText(QStringLiteral("Every edit Kerf makes is a proposal: you watch it, then accept or reject it."));
-            break;
-        case PermissionMode::AcceptEdits:
-            m_permissionHint->setText(QStringLiteral("Edits go into the sequence as Kerf makes them. Each is one step that Undo takes back. "
-                                                     "A shot it wants made is still yours to run."));
-            break;
-        case PermissionMode::Auto:
-            m_permissionHint->setText(QStringLiteral("Edits go in as Kerf makes them, and it makes the shots it asks for: five, then it asks "
-                                                     "again, unless ~/.kerf/agent.json gives another number. Making a shot can take time "
-                                                     "and money."));
-            break;
-        }
-    };
-    {
-        const PermissionMode mode = m_chat->permissionMode();
-        m_permissionChoice->setCurrentIndex(int(mode), false);
-        describePermission(mode);
-    }
-    connect(m_permissionChoice, &ui::SegmentedControl::activated, this, [this, describePermission](int index) {
-        const PermissionMode mode = permission::named(m_permissionChoice->segmentData(index).toString());
-        describePermission(mode);
-        if (mode == m_chat->permissionMode()) return;
-        m_chat->setPermissionMode(mode);
-        QSettings().setValue(QStringLiteral("agent/permissions"), permission::name(mode));
-    });
-    // Chosen at the composer, it shows here too.
-    connect(m_chat, &ChatPanel::permissionModeChosen, this, [this, describePermission](PermissionMode mode) {
-        m_permissionChoice->setCurrentIndex(int(mode), false);
-        describePermission(mode);
-    });
-    {
-        auto *row = new QHBoxLayout;
-        row->setContentsMargins(0, 0, 0, 0);
-        row->addWidget(m_permissionChoice);
-        row->addStretch(1);
-        permissionLayout->addLayout(row);
-    }
-    permissionLayout->addWidget(m_permissionHint);
-    permissionLayout->addWidget(hint(QStringLiteral("Shift-Tab in the composer goes round the three.")));
-    aiPage->addStretch(1);
-
-    // Appearance: the faces text is set in. The interface's, and what is said
-    // in the conversation, which may have a face and a size of its own.
-    const FaceChoice faces = loadFaceChoice();
-    const auto choice = [](std::initializer_list<std::pair<const char *, const char *>> options, const QString &current) {
-        auto *control = new ui::SegmentedControl;
-        int at = 0;
-        for (const auto &[id, label] : options) {
-            const int index = control->addSegment(QString::fromLatin1(label));
-            control->setSegmentData(index, QString::fromLatin1(id));
-            if (current == QLatin1String(id)) at = index;
-        }
-        control->setCurrentIndex(at, false);
-        return control;
-    };
-    const auto leading = [](QWidget *widget) {
-        auto *row = new QHBoxLayout;
-        row->setContentsMargins(0, 0, 0, 0);
-        row->addWidget(widget);
-        row->addStretch(1);
-        return row;
-    };
-    QVBoxLayout *interfaceLayout = card(appearancePage);
-    interfaceLayout->addWidget(heading(QStringLiteral("Interface font")));
-    m_interfaceFace = choice({{"inter", "Inter"}, {"pretendard", "Pretendard"}, {"system", "System"}}, faces.ui);
-    m_interfaceFace->setObjectName(QStringLiteral("settingsInterfaceFace"));
-    m_interfaceFace->setAccessibleName(QStringLiteral("Interface font"));
-    interfaceLayout->addLayout(leading(m_interfaceFace));
-    interfaceLayout->addWidget(hint(QStringLiteral("Inter is the design's own face. Pretendard is drawn to go with it and has Hangul; with "
-                                                   "Inter, Korean is set in Pretendard too. System is your computer's.")));
-
-    QVBoxLayout *readingLayout = card(appearancePage);
-    readingLayout->addWidget(heading(QStringLiteral("Conversation font")));
-    m_readingFace = choice({{"same", "Same as interface"}, {"serif", "Serif"}}, faces.reading);
-    m_readingFace->setObjectName(QStringLiteral("settingsReadingFace"));
-    m_readingFace->setAccessibleName(QStringLiteral("Conversation font"));
-    readingLayout->addLayout(leading(m_readingFace));
-    readingLayout->addSpacing(tokens::space::s4);
-    readingLayout->addWidget(heading(QStringLiteral("Text size")));
-    m_readingSize = choice({{"small", "Small"}, {"default", "Default"}, {"large", "Large"}}, faces.size);
-    m_readingSize->setObjectName(QStringLiteral("settingsReadingSize"));
-    m_readingSize->setAccessibleName(QStringLiteral("Conversation text size"));
-    readingLayout->addLayout(leading(m_readingSize));
-    // What a request and an answer will read like.
-    m_readingSample = new ui::WrapLabel;
-    m_readingSample->setObjectName(QStringLiteral("settingsReadingSample"));
-    m_readingSample->setWordWrap(true);
-    m_readingSample->setTextFormat(Qt::PlainText);
-    m_readingSample->setText(QStringLiteral("Make a 30-second cut from the best takes, and open on the wide shot.\n"
-                                            "가장 좋은 테이크로 30초 컷을 만들고, 와이드 숏으로 시작해 줘."));
-    m_readingSample->setFont(tokens::font(tokens::reading));
-    m_readingSample->setStyleSheet(QStringLiteral("QLabel#settingsReadingSample { color: %1; background: %2; border: 1px solid %3; "
-                                                  "border-radius: 8px; padding: 10px 12px; }")
-                                       .arg(tokens::color(tokens::ink).name(), tokens::color(tokens::raised).name(),
-                                            tokens::color(tokens::line).name(QColor::HexArgb)));
-    readingLayout->addSpacing(tokens::space::s4);
-    readingLayout->addWidget(m_readingSample);
-    readingLayout->addWidget(hint(QStringLiteral("Serif is Noto Serif, with Nanum Myeongjo for Hangul. It is what you ask and what Kerf "
-                                                 "answers that change; the rest of the editor keeps the interface font.")));
-    appearancePage->addStretch(1);
-    const auto applyFaces = [this] {
-        FaceChoice chosen;
-        chosen.ui = m_interfaceFace->segmentData(m_interfaceFace->currentIndex()).toString();
-        chosen.reading = m_readingFace->segmentData(m_readingFace->currentIndex()).toString();
-        chosen.size = m_readingSize->segmentData(m_readingSize->currentIndex()).toString();
-        saveFaceChoice(chosen);
-        setEditorFaces(chosen);
-        m_readingSample->setFont(tokens::font(tokens::reading));
-    };
-    for (ui::SegmentedControl *control : {m_interfaceFace, m_readingFace, m_readingSize})
-        connect(control, &ui::SegmentedControl::activated, this, applyFaces);
-
-    // General. Whether Kerf asks GitHub once a day for a newer release (update_notice.h).
-    QVBoxLayout *updatesLayout = card(generalPage);
-    updatesLayout->addWidget(heading(QStringLiteral("Updates")));
-    auto *checkForUpdates = new QCheckBox(QStringLiteral("Tell me when a newer Kerf is released"));
-    checkForUpdates->setObjectName(QStringLiteral("checkForUpdates"));
-    checkForUpdates->setToolTip(QStringLiteral("Once a day, Kerf asks GitHub for its releases. It never downloads or installs anything itself."));
-    checkForUpdates->setChecked(QSettings().value(QStringLiteral("updates/check"), true).toBool());
-    connect(checkForUpdates, &QCheckBox::toggled, this, [](bool on) { QSettings().setValue(QStringLiteral("updates/check"), on); });
-    updatesLayout->addWidget(checkForUpdates);
-    generalPage->addStretch(1);
-    const auto onConnectionChanged = [this](bool checked) {
-        if (!checked) return;
-        QSettings().setValue(QStringLiteral("agent/connection"), m_cloudRadio->isChecked()        ? QStringLiteral("cloud")
-                                                                 : m_claudeCodeRadio->isChecked() ? QStringLiteral("claude-code")
-                                                                                                  : QStringLiteral("own"));
-        updateAgentModelChoices();
-        updateCloudStatus();
-    };
-    connect(m_cloudRadio, &QRadioButton::toggled, this, onConnectionChanged);
-    connect(m_ownKeyRadio, &QRadioButton::toggled, this, onConnectionChanged);
-    connect(m_claudeCodeRadio, &QRadioButton::toggled, this, onConnectionChanged);
-
-    // MCP, in both directions.
-    m_advancedSettings = new QWidget;
-    m_advancedSettings->setObjectName(QStringLiteral("advancedSettings"));
-    auto *advancedLayout = new QVBoxLayout(m_advancedSettings);
-    advancedLayout->setContentsMargins(0, 0, 0, 0);
-    advancedLayout->setSpacing(10);
-    advancedPage->addWidget(m_advancedSettings);
-    advancedPage->addStretch(1);
-
-    // A key of one's own: under its choice on the Chat page.
-    m_ownKeySettings = new QWidget;
-    m_ownKeySettings->setObjectName(QStringLiteral("ownKeySettings"));
-    auto *ownKeyLayout = new QVBoxLayout(m_ownKeySettings);
-    ownKeyLayout->setContentsMargins(tokens::space::s16 + tokens::space::s4, tokens::space::s4, 0, tokens::space::s4);
-    ownKeyLayout->setSpacing(10);
-    connectionLayout->insertWidget(connectionLayout->indexOf(m_ownKeyRadio) + 1, m_ownKeySettings);
-    auto *settingsIntro = new QLabel(QStringLiteral("Two protocol slots, one of them in use. A service that speaks the OpenAI API uses the OpenAI-compatible slot with its own base URL."));
-    settingsIntro->setObjectName(QStringLiteral("chatHint"));
-    settingsIntro->setWordWrap(true);
-    ownKeyLayout->addWidget(settingsIntro);
-    auto *activeConnection = new QGroupBox(QStringLiteral("Active connection"));
-    auto *activeLayout = new QVBoxLayout(activeConnection);
-    activeLayout->setContentsMargins(10, 10, 10, 10);
-    activeLayout->setSpacing(6);
-    m_anthropicActiveRadio = new QRadioButton(QStringLiteral("Anthropic Messages"));
-    m_anthropicActiveRadio->setObjectName(QStringLiteral("agentActiveAnthropic"));
-    m_openaiActiveRadio = new QRadioButton(QStringLiteral("OpenAI-compatible"));
-    m_openaiActiveRadio->setObjectName(QStringLiteral("agentActiveOpenai"));
-    activeLayout->addWidget(m_anthropicActiveRadio);
-    activeLayout->addWidget(m_openaiActiveRadio);
-    ownKeyLayout->addWidget(activeConnection);
-
-    auto *anthropicGroup = new QGroupBox(QStringLiteral("Anthropic Messages"));
-    anthropicGroup->setObjectName(QStringLiteral("providerBox"));
-    auto *anthropicForm = new QFormLayout(anthropicGroup);
-    anthropicForm->setContentsMargins(10, 10, 10, 10);
-    anthropicForm->setSpacing(7);
-    m_anthropicKey = new QLineEdit;
-    m_anthropicKey->setEchoMode(QLineEdit::Password);
-    m_anthropicKey->setPlaceholderText(QStringLiteral("sk-ant-…"));
-    m_anthropicKey->setClearButtonEnabled(true);
-    m_anthropicBaseUrl = new QLineEdit(QStringLiteral("https://api.anthropic.com/v1"));
-    m_anthropicBaseUrl->setPlaceholderText(QStringLiteral("https://…/v1"));
-    m_anthropicModel = new QLineEdit;
-    m_anthropicModel->setPlaceholderText(QStringLiteral("The service's default"));
-    anthropicForm->addRow(QStringLiteral("API key"), m_anthropicKey);
-    anthropicForm->addRow(QStringLiteral("Base URL"), m_anthropicBaseUrl);
-    anthropicForm->addRow(QStringLiteral("Model"), m_anthropicModel);
-    ownKeyLayout->addWidget(anthropicGroup);
-
-    auto *openaiGroup = new QGroupBox(QStringLiteral("OpenAI-compatible"));
-    openaiGroup->setObjectName(QStringLiteral("providerBox"));
-    auto *openaiForm = new QFormLayout(openaiGroup);
-    openaiForm->setContentsMargins(10, 10, 10, 10);
-    openaiForm->setSpacing(7);
-    m_openaiKey = new QLineEdit;
-    m_openaiKey->setEchoMode(QLineEdit::Password);
-    m_openaiKey->setPlaceholderText(QStringLiteral("sk-…"));
-    m_openaiKey->setClearButtonEnabled(true);
-    m_openaiBaseUrl = new QLineEdit(QStringLiteral("https://api.openai.com/v1"));
-    m_openaiBaseUrl->setPlaceholderText(QStringLiteral("https://…/v1"));
-    auto *openaiBaseUrlHint = new QLabel(QStringLiteral("Must serve /chat/completions or /responses: a service's OpenAI-compatible root, not its own API's."));
-    openaiBaseUrlHint->setObjectName(QStringLiteral("muted"));
-    openaiBaseUrlHint->setWordWrap(true);
-    m_openaiModel = new QLineEdit;
-    m_openaiModel->setPlaceholderText(QStringLiteral("The service's default"));
-    m_openaiMode = new QComboBox;
-    m_openaiMode->addItem(QStringLiteral("Chat Completions"), QStringLiteral("chat"));
-    m_openaiMode->addItem(QStringLiteral("Responses"), QStringLiteral("responses"));
-    openaiForm->addRow(QStringLiteral("API key"), m_openaiKey);
-    openaiForm->addRow(QStringLiteral("Base URL"), m_openaiBaseUrl);
-    openaiForm->addRow(QString(), openaiBaseUrlHint);
-    openaiForm->addRow(QStringLiteral("Model"), m_openaiModel);
-    openaiForm->addRow(QStringLiteral("API shape"), m_openaiMode);
-    ownKeyLayout->addWidget(openaiGroup);
-    auto *settingsNote = new QLabel(QStringLiteral("Credentials stay outside project files and are never included in chat activity."));
-    settingsNote->setObjectName(QStringLiteral("muted"));
-    settingsNote->setWordWrap(true);
-    ownKeyLayout->addWidget(settingsNote);
-    // A button is as wide as what it says, at the start of its row, not the
-    // whole column across.
-    const auto buttonRow = [](std::initializer_list<QPushButton *> buttons) {
-        auto *row = new QHBoxLayout;
-        row->setContentsMargins(0, 0, 0, 0);
-        row->setSpacing(tokens::space::s8);
-        for (QPushButton *button : buttons) row->addWidget(button);
-        row->addStretch(1);
-        return row;
-    };
-    auto *saveSettings = new QPushButton(QStringLiteral("Save agent connection"));
-    saveSettings->setObjectName(QStringLiteral("primaryButton"));
-    connect(saveSettings, &QPushButton::clicked, this, &MainWindow::saveAgentSettings);
-    ownKeyLayout->addLayout(buttonRow({saveSettings}));
-
-    auto *inboundSection = new QGroupBox(QStringLiteral("Use MCP tools in Kerf chat"));
-    inboundSection->setObjectName(QStringLiteral("inboundMcpSection"));
-    auto *inboundLayout = new QVBoxLayout(inboundSection);
-    m_mcpEnabled = new QCheckBox(QStringLiteral("Enable external MCP tools"));
-    m_mcpEnabled->setObjectName(QStringLiteral("inboundMcpEnabled"));
-    const bool environmentMcpEnabled = qEnvironmentVariable("KERF_ENABLE_MCP") == QStringLiteral("1");
-    m_mcpEnabled->setChecked(QSettings().value(QStringLiteral("agent/mcpEnabled"), environmentMcpEnabled).toBool());
-    inboundLayout->addWidget(m_mcpEnabled);
-    auto *inboundIntro = new QLabel(QStringLiteral("Kerf chat calls external MCP servers directly; Cursor is not needed. Your AI provider above still powers the chat. Kerf starts local commands using stdio; URL-only remote servers are not supported. KERF_ENABLE_MCP=1 also enables tools even if this box is unchecked."));
-    inboundIntro->setWordWrap(true);
-    inboundIntro->setObjectName(QStringLiteral("chatHint"));
-    inboundLayout->addWidget(inboundIntro);
-    const QString inboundPath = QDir(m_projectDirectory).absoluteFilePath(QStringLiteral(".kerf/mcp.json"));
-    auto *inboundPathLabel = new QLabel(QStringLiteral("Project config: %1\nAlso reads ~/.kerf/mcp.json; project entries override matching server names. Use command, optional args, env, and tools (an allowlist). Commands must be installed locally; env values are literal strings. This file may contain server credentials.").arg(inboundPath));
-    inboundPathLabel->setWordWrap(true);
-    inboundPathLabel->setObjectName(QStringLiteral("muted"));
-    inboundLayout->addWidget(inboundPathLabel);
-    m_inboundMcpJson = new QTextEdit;
-    m_inboundMcpJson->setObjectName(QStringLiteral("inboundMcpConfigJson"));
-    m_inboundMcpJson->setAcceptRichText(false);
-    m_inboundMcpJson->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
-    m_inboundMcpJson->setMinimumHeight(160);
-    m_inboundMcpJson->setPlainText(QStringLiteral("{\n  \"mcpServers\": {}\n}\n"));
-    m_inboundMcpJson->setPlaceholderText(QStringLiteral("{\"mcpServers\": {\"example\": {\"command\": \"/path/to/server\", \"args\": [], \"env\": {}}}}"));
-    inboundLayout->addWidget(m_inboundMcpJson);
-    auto *saveInbound = new QPushButton(QStringLiteral("Save and apply MCP config"));
-    saveInbound->setObjectName(QStringLiteral("saveInboundMcpConfig"));
-    connect(saveInbound, &QPushButton::clicked, this, &MainWindow::saveInboundMcpConfig);
-    QHBoxLayout *inboundButtons = buttonRow({saveInbound});
-    int loadAt = 1;
-    for (const auto &source : {qMakePair(QStringLiteral("Load project Cursor config"), QDir(m_projectDirectory).absoluteFilePath(QStringLiteral(".cursor/mcp.json"))),
-                               qMakePair(QStringLiteral("Load home Cursor config"), QDir::home().filePath(QStringLiteral(".cursor/mcp.json")))}) {
-        auto *load = new QPushButton(source.first);
-        load->setObjectName(source.first.contains(QStringLiteral("project")) ? QStringLiteral("loadProjectCursorMcp") : QStringLiteral("loadHomeCursorMcp"));
-        load->setToolTip(source.second);
-        connect(load, &QPushButton::clicked, this, [this, path = source.second]() { loadInboundMcpConfig(path, true); });
-        inboundButtons->insertWidget(loadAt++, load);
-    }
-    inboundLayout->addLayout(inboundButtons);
-    m_inboundMcpStatus = new QLabel(QStringLiteral("No project config yet. Add servers here or load a Cursor config, then Save and apply. Existing home Kerf config is used automatically."));
-    m_inboundMcpStatus->setObjectName(QStringLiteral("inboundMcpStatus"));
-    m_inboundMcpStatus->setWordWrap(true);
-    inboundLayout->addWidget(m_inboundMcpStatus);
-    if (QFileInfo::exists(inboundPath)) loadInboundMcpConfig(inboundPath, false);
-    connect(m_mcpEnabled, &QCheckBox::toggled, this, [this](bool enabled) {
-        QSettings settings;
-        settings.setValue(QStringLiteral("agent/mcpEnabled"), enabled);
-        settings.sync();
-        m_inboundMcpStatus->setText(QStringLiteral("MCP preference saved. Applies on the next chat request. KERF_ENABLE_MCP=1 also enables tools."));
-    });
-    advancedLayout->addWidget(inboundSection);
-
-    auto *mcpSection = new QGroupBox(QStringLiteral("Use Kerf from Cursor / Claude"));
-    mcpSection->setObjectName(QStringLiteral("mcpSection"));
-    auto *mcpLayout = new QVBoxLayout(mcpSection);
-    auto *mcpIntro = new QLabel(QStringLiteral("This is the opposite direction: Cursor, Claude, or Codex calls Kerf through kerf-mcp to work on this project. It does not enable external tools in Kerf chat. Kerf provider API keys are not required. Copy this config into your external client's MCP settings."));
-    mcpIntro->setWordWrap(true);
-    mcpIntro->setObjectName(QStringLiteral("chatHint"));
-    mcpLayout->addWidget(mcpIntro);
-    const QString projectPath = QDir(m_projectDirectory).absolutePath();
-    auto *mcpProject = new QLineEdit(projectPath);
-    mcpProject->setReadOnly(true);
-    mcpProject->setObjectName(QStringLiteral("mcpProjectPath"));
-    auto *mcpProjectForm = new QFormLayout;
-    mcpProjectForm->addRow(QStringLiteral("Project"), mcpProject);
-    mcpLayout->addLayout(mcpProjectForm);
-    const QJsonObject config{{QStringLiteral("mcpServers"), QJsonObject{
-        {QStringLiteral("kerf"), QJsonObject{
-            {QStringLiteral("command"), mcpExecutable(projectPath)},
-            {QStringLiteral("args"), QJsonArray{QStringLiteral("--dir"), projectPath}}
-        }}}}};
-    auto *mcpJson = new QTextEdit;
-    mcpJson->setObjectName(QStringLiteral("mcpConfigJson"));
-    mcpJson->setReadOnly(true);
-    mcpJson->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
-    mcpJson->setPlainText(QString::fromUtf8(QJsonDocument(config).toJson(QJsonDocument::Indented)));
-    mcpLayout->addWidget(mcpJson);
-    auto *copyMcp = new QPushButton(QStringLiteral("Copy MCP config"));
-    copyMcp->setObjectName(QStringLiteral("copyMcpConfig"));
-    auto *mcpCopyStatus = new QLabel;
-    mcpCopyStatus->setObjectName(QStringLiteral("muted"));
-    connect(copyMcp, &QPushButton::clicked, this, [mcpJson, mcpCopyStatus]() {
-        QApplication::clipboard()->setText(mcpJson->toPlainText());
-        mcpCopyStatus->setText(QStringLiteral("MCP config copied"));
-    });
-    {
-        QHBoxLayout *row = buttonRow({copyMcp});
-        row->insertWidget(1, mcpCopyStatus);
-        mcpLayout->addLayout(row);
-    }
-    advancedLayout->addWidget(mcpSection);
-
-    loadAgentSettings();
-    m_ownKeySettings->setVisible(m_ownKeyRadio->isChecked());
-    connect(m_ownKeyRadio, &QRadioButton::toggled, m_ownKeySettings, &QWidget::setVisible);
-
-    // Models: the models that make shots, which are the person's own, and
-    // those that run inside Kerf. Kerf runs none of the first to learn of
-    // them: the file says what each takes.
-    QVBoxLayout *makingLayout = card(modelsPage);
-    makingLayout->parentWidget()->setProperty("section", QStringLiteral("makingModels"));
-    makingLayout->addWidget(heading(QStringLiteral("Models that make shots")));
-    makingLayout->addWidget(hint(QStringLiteral("A recipe's generate line names one of these: a video or image model. They are "
-                                                "yours, in your own models file, outside any project, and the chat model is not one "
-                                                "of them. Kerf draws the guide a model follows (render … {guide.mp4}) and hands it "
-                                                "over with the prompt; each making asks you first unless Without asking is Auto.")));
-    m_modelsList = new QLabel;
-    m_modelsList->setObjectName(QStringLiteral("settingsModels"));
-    m_modelsList->setWordWrap(true);
-    m_modelsList->setTextFormat(Qt::RichText);
-    m_modelsList->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    makingLayout->addWidget(m_modelsList);
-    m_modelsFile = new QLabel;
-    m_modelsFile->setObjectName(QStringLiteral("muted"));
-    m_modelsFile->setWordWrap(true);
-    m_modelsFile->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    makingLayout->addWidget(m_modelsFile);
-    m_modelsOpen = new QPushButton(QStringLiteral("Open models file"));
-    m_modelsOpen->setObjectName(QStringLiteral("settingsModelsOpen"));
-    connect(m_modelsOpen, &QPushButton::clicked, this, [this] {
-        const QFileInfo file(m_models.value(QStringLiteral("file")).toString());
-        if (file.filePath().isEmpty()) return;
-        // Not there yet: its folder, to put it in.
-        QDir().mkpath(file.absolutePath());
-        QDesktopServices::openUrl(QUrl::fromLocalFile(file.exists() ? file.absoluteFilePath() : file.absolutePath()));
-    });
-    auto *modelsReload = new QPushButton(QStringLiteral("Read again"));
-    modelsReload->setObjectName(QStringLiteral("settingsModelsReload"));
-    connect(modelsReload, &QPushButton::clicked, this, [this] {
-        if (m_bridge) sendSimple(QJsonObject{{QStringLiteral("type"), QStringLiteral("models")}});
-    });
-    makingLayout->addLayout(buttonRow({m_modelsOpen, modelsReload}));
-    makingLayout->addWidget(hint(QStringLiteral("Models have no one way of being asked, so each entry names a program that asks its "
-                                                "model (run, with {request}: Kerf writes the request, the program sends it and writes "
-                                                "the file) and, under takes, the size, rate, longest shot and the files it reads "
-                                                "(guide, first, last, ref).")));
-
-    QVBoxLayout *builtInLayout = card(modelsPage);
-    builtInLayout->parentWidget()->setProperty("section", QStringLiteral("builtInModels"));
-    builtInLayout->addWidget(heading(QStringLiteral("Built into Kerf")));
-    builtInLayout->addWidget(hint(QStringLiteral("Scene cuts, speech and sound onsets, following a point or a subject, and cutting a "
-                                                 "subject out (segmentation) run inside Kerf, on this computer. They need no setup and "
-                                                 "send nothing anywhere.")));
-    modelsPage->addStretch(1);
-    applyModels(QJsonObject{});
-
-    const auto onActiveConnectionChanged = [this](bool checked) {
-        if (!checked) return;
-        updateAgentModelChoices();
-        saveAgentSettings();
-    };
-    connect(m_anthropicActiveRadio, &QRadioButton::toggled, this, onActiveConnectionChanged);
-    connect(m_openaiActiveRadio, &QRadioButton::toggled, this, onActiveConnectionChanged);
-    connect(m_anthropicKey, &QLineEdit::editingFinished, this, &MainWindow::saveAgentSettings);
-    connect(m_anthropicBaseUrl, &QLineEdit::editingFinished, this, &MainWindow::saveAgentSettings);
-    connect(m_anthropicModel, &QLineEdit::editingFinished, this, &MainWindow::saveAgentSettings);
-    connect(m_openaiKey, &QLineEdit::editingFinished, this, &MainWindow::saveAgentSettings);
-    connect(m_openaiBaseUrl, &QLineEdit::editingFinished, this, &MainWindow::saveAgentSettings);
-    connect(m_openaiModel, &QLineEdit::editingFinished, this, &MainWindow::saveAgentSettings);
-    connect(m_openaiMode, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &MainWindow::saveAgentSettings);
 }
 
 void MainWindow::buildShell() {
@@ -1501,6 +903,12 @@ void MainWindow::showEvent(QShowEvent *event) {
 #endif
 }
 
+void MainWindow::resizeEvent(QResizeEvent *event) {
+    QMainWindow::resizeEvent(event);
+    // The system lays the window buttons out again with the window.
+    fitTitleBar();
+}
+
 void MainWindow::changeEvent(QEvent *event) {
     QMainWindow::changeEvent(event);
     if (event->type() == QEvent::WindowStateChange) fitTitleBar();
@@ -1522,15 +930,17 @@ void MainWindow::openProjectFolder() {
     const QString start = m_projectDirectory.isEmpty() ? QDir::homePath() : QFileInfo(m_projectDirectory).absolutePath();
     const QString path = QFileDialog::getExistingDirectory(this, QStringLiteral("Open Project"), start);
     if (path.isEmpty()) return;
-    if (!QFileInfo::exists(QDir(path).filePath(QStringLiteral("project.kerf"))) &&
+    // A folder of footage: a project starts in it, with its media brought in.
+    const bool starts = !QFileInfo::exists(QDir(path).filePath(QStringLiteral("project.kerf")));
+    if (starts &&
         QMessageBox::question(this, QStringLiteral("Open Project"),
-                              QStringLiteral("“%1” has no project.kerf. Start a new project in it?").arg(QFileInfo(path).fileName())) !=
+                              QStringLiteral("“%1” is not a project yet. Start one here, with its media?").arg(QFileInfo(path).fileName())) !=
             QMessageBox::Yes)
         return;
-    openProject(path);
+    openProject(path, starts);
 }
 
-void MainWindow::openProject(const QString &path) {
+void MainWindow::openProject(const QString &path, bool starts) {
     if (path.isEmpty()) return;
     const QString clean = QDir::cleanPath(QFileInfo(path).absoluteFilePath());
     if (!m_projectDirectory.isEmpty() && clean == QDir::cleanPath(QFileInfo(m_projectDirectory).absoluteFilePath())) {
@@ -1538,7 +948,7 @@ void MainWindow::openProject(const QString &path) {
         activateWindow();
         return;
     }
-    emit projectOpenRequested(clean);
+    emit projectOpenRequested(clean, starts);
 }
 
 void MainWindow::buildRecentMenu(QMenu *menu) {
@@ -1881,7 +1291,7 @@ QJsonObject MainWindow::commandContext() const {
                         {QStringLiteral("audioTracks"), audioTracks},
                         {QStringLiteral("sourceTargets"), QJsonArray::fromStringList(sourceTargets())},
                         {QStringLiteral("agentBusy"), m_agentBusy},
-                        {QStringLiteral("aiAccess"), m_cloudRadio ? aiAccess() : QStringLiteral("ready")}};
+                        {QStringLiteral("aiAccess"), m_connectionChoice ? aiAccess() : QStringLiteral("ready")}};
     const QJsonValue projection = m_snapshot.value(QStringLiteral("projectionStatus"));
     if (projection.isString()) context.insert(QStringLiteral("projectionStatus"), projection);
     if (!m_collabStatus.isEmpty()) context.insert(QStringLiteral("collab"), collabContext());
@@ -2342,17 +1752,18 @@ void MainWindow::applyModels(const QJsonObject &event) {
         text = QStringLiteral("<span style=\"color:%1\">The models file does not read: %2</span>")
                    .arg(tokens::color(tokens::neg).name(), error.toHtmlEscaped());
     } else if (rows.isEmpty()) {
-        text = event.isEmpty() ? QStringLiteral("Reading your models file…")
-               : exists        ? QStringLiteral("Your models file names no model yet.")
-                               : QStringLiteral("No model is set up: there is no models file yet. A recipe's generate line has "
-                                                "nothing to name until there is.");
+        text = event.isEmpty() ? QStringLiteral("Reading…")
+               : exists        ? QStringLiteral("Your models file names no model yet")
+                               : QStringLiteral("No model is set up: there is no models file yet");
     } else {
         text = rows.join(QStringLiteral("<br><br>"));
     }
     m_modelsList->setText(text);
     m_modelsFile->setText(file.isEmpty() ? QString() : QStringLiteral("%1%2").arg(file, exists ? QString() : QStringLiteral(" (not there yet)")));
+    m_modelsFile->setVisible(!file.isEmpty());
     m_modelsOpen->setText(exists ? QStringLiteral("Open models file") : QStringLiteral("Open its folder"));
     m_modelsOpen->setEnabled(!file.isEmpty());
+    m_modelsOpen->updateGeometry();
 }
 
 void MainWindow::applyAppearance() {

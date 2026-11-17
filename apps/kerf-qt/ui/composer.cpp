@@ -35,6 +35,12 @@ using namespace tokens;
 
 namespace {
 
+// The box's text starts 16 in and Send ends 8 in; the row under it starts and
+// ends on the same two lines, by its chips' own padding of 6.
+constexpr int kBoxLeft = 16;
+constexpr int kBoxRight = 8;
+constexpr int kChipPad = 6;
+
 // The composer's box (.cbox): radius 8, raised, an inset line2 that turns
 // accent while the input has focus; pad 8 8 8 12.
 class ComposerBox final : public QWidget {
@@ -67,6 +73,12 @@ private:
 
 
 } // namespace
+
+QString modelLabel(const QString &model) {
+    static const QStringList aliases{QStringLiteral("default"), QStringLiteral("opus"), QStringLiteral("sonnet"), QStringLiteral("haiku")};
+    if (!aliases.contains(model)) return model;
+    return model.left(1).toUpper() + model.mid(1);
+}
 
 // ------------------------------------------------------------------ permission
 
@@ -149,7 +161,7 @@ QString shortCount(qint64 count) {
 // ------------------------------------------------------------------ ComposerChip
 
 ComposerChip::ComposerChip(QWidget *parent) : ui::KitButton(parent) {
-    setFixedHeight(24);
+    setFixedHeight(layout::footControl);
     setCursor(Qt::PointingHandCursor);
     setFocusPolicy(Qt::TabFocus);
     setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
@@ -191,11 +203,11 @@ void ComposerChip::setWidestLabel(int width) {
 }
 
 QSize ComposerChip::sizeHint() const {
-    int width = 6;
-    if (!m_icon.isEmpty()) width += 14 + 4;
-    width += std::min(m_widest, ui::snapWidth(control, text()));
+    int width = kChipPad;
+    if (!m_icon.isEmpty()) width += layout::footIcon + 4;
+    width += std::min(m_widest, ui::snapWidth(sideNote, text()));
     if (m_chevron) width += 2 + 12;
-    return QSize(width + 6, 24);
+    return QSize(width + kChipPad, layout::footControl);
 }
 
 void ComposerChip::paintEvent(QPaintEvent *) {
@@ -211,19 +223,20 @@ void ComposerChip::paintEvent(QPaintEvent *) {
     }
     const bool lit = isEnabled() && m_chevron && isHovered();
     const QColor ink_ = !isEnabled() ? color(dis) : m_tone.isValid() ? m_tone : color(lit ? ink : ink2);
-    qreal x = 6;
+    qreal x = kChipPad;
     if (!m_icon.isEmpty()) {
-        icons::paint(p, m_icon, QRectF(x, (height() - 14) / 2.0, 14, 14), ink_, 14);
-        x += 14 + 4;
+        const qreal icon = layout::footIcon;
+        icons::paint(p, m_icon, QRectF(x, (height() - icon) / 2.0, icon, icon), ink_, icon);
+        x += icon + 4;
     }
-    const QFont face = tokens::font(control);
+    const QFont face = tokens::font(sideNote);
     const QFontMetricsF metrics(face);
-    const qreal room = std::min<qreal>(m_widest, width() - x - 6 - (m_chevron ? 14 : 0));
+    const qreal room = std::min<qreal>(m_widest, width() - x - kChipPad - (m_chevron ? 14 : 0));
     p.setFont(face);
     p.setPen(ink_);
     p.drawText(QRectF(x, 0, room + 1, height()), Qt::AlignLeft | Qt::AlignVCenter, metrics.elidedText(text(), Qt::ElideMiddle, room + 1));
     if (m_chevron)
-        icons::paint(p, QStringLiteral("g-chev"), QRectF(width() - 6 - 12, (height() - 12) / 2.0, 12, 12),
+        icons::paint(p, QStringLiteral("g-chev"), QRectF(width() - kChipPad - 12, (height() - 12) / 2.0, 12, 12),
                      color(lit ? ink2 : ink3), 12);
     if (focusVisible()) ui::paintFocusRing(p, r, radius::control);
 }
@@ -328,15 +341,14 @@ void SendButton::paintEvent(QPaintEvent *) {
 StampButton::StampButton(QWidget *parent) : QAbstractButton(parent) {
     setObjectName(QStringLiteral("composerStamp"));
     setCheckable(true);
-    setFont(tokens::font(monoSmall));
-    setFixedHeight(24);
+    setFont(tokens::font(timecode));
+    setFixedHeight(layout::footControl);
     setCursor(Qt::PointingHandCursor);
     setFocusPolicy(Qt::TabFocus);
-    ui::setTip(this, QStringLiteral("Stamp timecode · click to detach"));
-    connect(this, &QAbstractButton::toggled, this, [this](bool detached) {
-        ui::setTip(this, detached ? QStringLiteral("Stamp timecode · click to attach") : QStringLiteral("Stamp timecode · click to detach"));
-        update();
-    });
+    setAccessibleName(QStringLiteral("Playhead time"));
+    // Seen only while the time is off.
+    ui::setTip(this, QStringLiteral("Time not sent · click to send"));
+    connect(this, &QAbstractButton::toggled, this, qOverload<>(&QWidget::update));
 }
 
 void StampButton::setTimecode(const QString &timecode) {
@@ -346,7 +358,9 @@ void StampButton::setTimecode(const QString &timecode) {
     update();
 }
 
-QSize StampButton::sizeHint() const { return QSize(4 + 14 + 4 + ui::snapWidth(QFontMetricsF(font()), text()) + 6, 24); }
+QSize StampButton::sizeHint() const {
+    return QSize(kChipPad + layout::footIcon + 4 + ui::snapWidth(QFontMetricsF(font()), text()) + kChipPad, layout::footControl);
+}
 
 void StampButton::paintEvent(QPaintEvent *) {
     QPainter p(this);
@@ -357,13 +371,14 @@ void StampButton::paintEvent(QPaintEvent *) {
         p.drawRoundedRect(QRectF(rect()), radius::control, radius::control);
     }
     const QColor ink = isChecked() ? color(ink3) : color(ink2);
-    icons::paint(p, QStringLiteral("g-clock"), QRectF(4, 5, 14, 14), ink, 14);
+    const qreal icon = layout::footIcon;
+    icons::paint(p, QStringLiteral("g-clock"), QRectF(kChipPad, (height() - icon) / 2.0, icon, icon), ink, icon);
     QFont face = font();
     face.setStrikeOut(isChecked());
     p.setFont(face);
     p.setPen(ink);
     const QFontMetricsF metrics(face);
-    p.drawText(QPointF(4 + 14 + 4, (height() - metrics.height()) / 2 + metrics.ascent()), text());
+    p.drawText(QPointF(kChipPad + icon + 4, (height() - metrics.height()) / 2 + metrics.ascent()), text());
     if (hasFocus()) ui::paintFocusRing(p, QRectF(rect()), radius::control);
 }
 
@@ -471,8 +486,9 @@ Composer::Composer(QWidget *parent) : QFrame(parent) {
     setStyleSheet(QStringLiteral("QFrame#chatComposer { border: 0; background: transparent; }"));
     setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
     auto *outer = new QVBoxLayout(this);
-    // 18 either side, as the conversation's text keeps 22 in; 12 over, 16 under.
-    outer->setContentsMargins(18, 12, 18, 16);
+    // 18 either side, as the conversation's text keeps 22 in; 12 over, and
+    // under what puts the row of chips on the window's foot line.
+    outer->setContentsMargins(18, 12, 18, layout::footLine - layout::footControl / 2);
     outer->setSpacing(0);
     // What waits for Kerf to finish: "Next: …" and Cancel, over the box.
     m_queuedRow = new QWidget;
@@ -503,10 +519,11 @@ Composer::Composer(QWidget *parent) : QFrame(parent) {
     auto *box = new ComposerBox;
     m_box = box;
     m_box->setObjectName(QStringLiteral("composerBox"));
-    auto *boxLayout = new QVBoxLayout(m_box);
-    // pad 12 12 10; the stamp's margin-left −4 puts its clock 8 in.
-    boxLayout->setContentsMargins(12, 12, 12, 10);
-    boxLayout->setSpacing(0);
+    // One row: what to ask, then how full Kerf's context is and Send, which
+    // keep to the foot as the text grows. Nothing else is in the box.
+    auto *boxLayout = new QHBoxLayout(m_box);
+    boxLayout->setContentsMargins(kBoxLeft, 10, kBoxRight, 10);
+    boxLayout->setSpacing(8);
     m_input = new QTextEdit;
     m_input->setObjectName(QStringLiteral("chatInput"));
     m_input->setAcceptRichText(false);
@@ -525,33 +542,42 @@ Composer::Composer(QWidget *parent) : QFrame(parent) {
         palette.setColor(QPalette::Text, color(ink));
         m_input->setPalette(palette);
     }
-    m_input->setFixedHeight(22);
+    fitInput();
     m_input->installEventFilter(this);
     connect(m_input->document(), &QTextDocument::contentsChanged, this, [this] {
         fitInput();
         updatePopovers();
     });
     connect(m_input, &QTextEdit::cursorPositionChanged, this, &Composer::updatePopovers);
-    {
-        auto *line = new QWidget;
-        auto *lineLayout = new QHBoxLayout(line);
-        lineLayout->setContentsMargins(4, 0, 0, 0);
-        lineLayout->setSpacing(0);
-        lineLayout->addWidget(m_input);
-        boxLayout->addWidget(line);
-    }
+    boxLayout->addWidget(m_input, 1, Qt::AlignVCenter);
+    m_context = new ContextMeter;
+    boxLayout->addWidget(m_context, 0, Qt::AlignBottom);
+    m_send = new SendButton(SendButton::Mode::Send);
+    m_stop = new SendButton(SendButton::Mode::Stop);
+    m_stop->hide();
+    connect(m_send, &QAbstractButton::clicked, this, &Composer::submitRequested);
+    connect(m_stop, &QAbstractButton::clicked, this, &Composer::stopRequested);
+    boxLayout->addWidget(m_send, 0, Qt::AlignBottom);
+    boxLayout->addWidget(m_stop, 0, Qt::AlignBottom);
+    outer->addWidget(m_box);
 
+    // Under the box, what the request goes with: where (the owner's folder
+    // chip, first) and when at the start, who answers and how far Kerf may go
+    // at the end.
     auto *row = new QWidget;
-    row->setFixedHeight(28);
+    row->setObjectName(QStringLiteral("composerTools"));
     auto *rowLayout = new QHBoxLayout(row);
     m_toolRow = rowLayout;
-    rowLayout->setContentsMargins(0, 0, 0, 0);
+    // The first chip's icon starts where the text over it does, and the
+    // last one's chevron ends where Send does.
+    rowLayout->setContentsMargins(kBoxLeft - kChipPad, 6, kBoxRight - kChipPad, 0);
     rowLayout->setSpacing(4);
-    // What the request goes with: how far Kerf may go, and who answers.
-    m_mode = new ComposerChip;
-    m_mode->setObjectName(QStringLiteral("composerMode"));
-    connect(m_mode, &QAbstractButton::clicked, this, [this] { ui::popupMenu(buildModeMenu(), m_mode, ui::Side::Above); });
-    rowLayout->addWidget(m_mode);
+    m_stamp = new StampButton;
+    m_stamp->setTimecode(QStringLiteral("00:00:00:00"));
+    connect(m_stamp, &QAbstractButton::toggled, this, &Composer::syncStamp);
+    rowLayout->addWidget(m_stamp);
+    syncStamp();
+    rowLayout->addStretch(1);
     m_model = new ComposerChip;
     m_model->setObjectName(QStringLiteral("composerModel"));
     m_model->setAccessibleName(QStringLiteral("Model"));
@@ -559,23 +585,13 @@ Composer::Composer(QWidget *parent) : QFrame(parent) {
         if (m_model->hasChevron()) ui::popupMenu(buildModelMenu(), m_model, ui::Side::Above);
     });
     rowLayout->addWidget(m_model);
+    m_mode = new ComposerChip;
+    m_mode->setObjectName(QStringLiteral("composerMode"));
+    connect(m_mode, &QAbstractButton::clicked, this, [this] { ui::popupMenu(buildModeMenu(), m_mode, ui::Side::Above); });
+    rowLayout->addWidget(m_mode);
     m_mode->hide();
     m_model->hide();
-    m_stamp = new StampButton;
-    m_stamp->setTimecode(QStringLiteral("00:00:00:00"));
-    rowLayout->addWidget(m_stamp);
-    rowLayout->addStretch(1);
-    m_context = new ContextMeter;
-    rowLayout->addWidget(m_context);
-    m_send = new SendButton(SendButton::Mode::Send);
-    m_stop = new SendButton(SendButton::Mode::Stop);
-    m_stop->hide();
-    connect(m_send, &QAbstractButton::clicked, this, &Composer::submitRequested);
-    connect(m_stop, &QAbstractButton::clicked, this, &Composer::stopRequested);
-    rowLayout->addWidget(m_send);
-    rowLayout->addWidget(m_stop);
-    boxLayout->addWidget(row);
-    outer->addWidget(m_box);
+    outer->addWidget(row);
 
     m_error = new QLabel;
     m_error->setObjectName(QStringLiteral("composerError"));
@@ -660,10 +676,11 @@ void Composer::setModels(const QStringList &models, const QString &current, bool
     m_models = models;
     m_currentModel = current;
     m_modelsChoosable = choosable && models.size() > 1;
-    m_model->setLabel(current);
+    m_model->setLabel(modelLabel(current));
     m_model->setChevron(m_modelsChoosable);
     m_model->setVisible(m_agentControls && !current.isEmpty());
-    ui::setTip(m_model, m_modelsChoosable ? QStringLiteral("Model · %1").arg(current) : QStringLiteral("Answers come from %1").arg(current));
+    ui::setTip(m_model, m_modelsChoosable ? QStringLiteral("Model · %1").arg(modelLabel(current))
+                                          : QStringLiteral("Answers come from %1").arg(modelLabel(current)));
 }
 
 QMenu *Composer::buildModelMenu() {
@@ -673,7 +690,7 @@ QMenu *Composer::buildModelMenu() {
     ui::styleMenu(menu);
     ui::addMenuHeader(menu, QStringLiteral("Model"));
     for (const QString &model : std::as_const(m_models)) {
-        QAction *action = menu->addAction(model);
+        QAction *action = menu->addAction(modelLabel(model));
         action->setCheckable(true);
         action->setChecked(model == m_currentModel);
         connect(action, &QAction::triggered, this, [this, model] { emit modelChosen(model); });
@@ -686,6 +703,14 @@ QMenu *Composer::buildModelMenu() {
 }
 
 void Composer::setStamped(bool stamped) { m_stamp->setChecked(!stamped); }
+
+void Composer::setStampOffered(bool offered) {
+    m_stampOffered = offered;
+    syncStamp();
+}
+
+// The stamp is there to say the time is off, and to put it back.
+void Composer::syncStamp() { m_stamp->setVisible(m_stampOffered && !m_stamp->isAttached()); }
 
 void Composer::setBusy(bool busy) {
     m_busy = busy;
@@ -776,15 +801,11 @@ void Composer::refreshFaces() {
 
 void Composer::fitInput() {
     m_input->document()->setTextWidth(m_input->viewport()->width());
+    // As tall as its lines and no taller, so one line sits in the middle of
+    // the box, not at the top of room kept for more.
     const int lines = std::clamp(int(std::ceil(m_input->document()->size().height())), m_leastInput, 110);
     if (m_input->height() != lines) m_input->setFixedHeight(lines);
     m_input->setVerticalScrollBarPolicy(m_input->document()->size().height() > 100 ? Qt::ScrollBarAsNeeded : Qt::ScrollBarAlwaysOff);
-}
-
-void Composer::paintEvent(QPaintEvent *) {
-    if (!m_divider) return;
-    QPainter p(this);
-    p.fillRect(QRect(0, 0, width(), 1), color(line));
 }
 
 bool Composer::eventFilter(QObject *watched, QEvent *event) {

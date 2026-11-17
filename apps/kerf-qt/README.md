@@ -114,10 +114,11 @@ Run workflow checks any tag by hand.
 
 The positional arguments may also be supplied as `KERF_PROJECT_DIR` and
 `KERFD_BIN`; without either, the editor runs the `kerfd` beside itself (the
-installed app carries one), else the one on the `PATH`. Without a project, Kerf opens the start window instead
-(`KERFD_BIN=/path/to/kerfd target/qt/kerf-qt`). For a quick visual smoke
-run, add `--screenshot /tmp/kerf.png --quit-after-ms 900`; without a project
-it captures the start window. `--window-size 1600x1000` sizes the window, and `--settings-dir DIR`
+installed app carries one), else the one on the `PATH`. Without a project, Kerf opens the one last worked on
+(`KERFD_BIN=/path/to/kerfd target/qt/kerf-qt`), or with none to go back to, an
+editor with no folder. For a quick visual smoke
+run, add `--screenshot /tmp/kerf.png --quit-after-ms 900`; such a run opens only the
+project it is given, never the last one. `--window-size 1600x1000` sizes the window, and `--settings-dir DIR`
 keeps the run's settings in DIR (INI files) instead of the user's.
 
 The editor and the launcher are dark only, and fill the screen edge to edge
@@ -247,13 +248,14 @@ pauses. Captions, the QC overlap box and safe zones lie over the picture.
 
 ## The layout
 
-**The start window.** With no project, Kerf asks one question beside the recent
-folders. Sending a request opens the chosen folder's editor with the request on
-its way to Kerf. A folder with no `project.kerf` becomes a project, with the media
-at its top level in its media and the timeline left empty. Open without asking opens the folder as it
-is, and New Project… is the Choose a Project window, for templates, presets and
-clones. A request Kerf cannot take yet (no connection set up) waits in the
-composer.
+**Starting.** There is no start window: started without a project, Kerf opens
+the latest recent project that is still on disk (`ProjectLauncher::lastProject`),
+as a coding agent's app opens on what was being worked on. With none, it opens
+an editor with no folder, which starts no `kerfd`; its new conversation offers
+the folders, Open Folder… and New Project… (the Choose a Project window, for
+templates, presets and clones). A folder with no `project.kerf` opened there
+becomes a project, with the media at its top level in its media and the
+timeline left empty.
 
 **The regions** stay flush, with one hairline between them and no cards, radii
 or margins (`ui/stage_shell.h`; `stage::rects()` is the geometry, a pure function
@@ -347,7 +349,7 @@ when signed in. Every row is a registry command.
 
 What is left of the toolbar is the top of the room, in its colour, with no line
 under it: the traffic lights' room and the sidebar's top, the sidebar's button, the
-title, Export once the program has a clip, and one button for the panel (the
+title, Export (always there; off until the program has a clip), and one button for the panel (the
 picture and the timeline together; ⌥⌘P and ⌥⌘T still take each alone). While the
 sidebar is away, a ⋯ button beside its button opens the account's menu. The Media
 sheet's button, Follow Kerf and the two format icons are in the timeline's strip,
@@ -365,7 +367,8 @@ Models lists the models a recipe's `generate` can name, read from the
 person's own models file (nothing is run to learn them), and says what runs
 inside Kerf; it names no model of its own. Appearance
 chooses the faces text is set in (`editor_theme.h`, `setEditorFaces`): the
-interface's (Inter, with Pretendard for Hangul; Pretendard; or the system's), and
+interface's (Inter, with Pretendard for Hangul; Pretendard; IBM Plex, with its
+own Hangul and mono; or the system's), and
 what is said in the conversation, which may be a serif (Noto Serif, with Nanum
 Myeongjo for Hangul) at one of three sizes. They are compiled in
 (`resources/fonts`), kept under `appearance/`, and put in force at once.
@@ -405,7 +408,8 @@ keys in its composer, and with no timeline open the keys start there. Under its
 text the composer says what a request goes with (`ui/composer.h`): how far Kerf
 may go without asking (Ask before edits, Accept edits, Auto; its chip opens the
 three, and Shift-Tab in the text goes round them), the model that answers (a menu
-where there is a choice), the playhead's stamp while a picture is open, and a ring
+where there is a choice), the playhead's stamp only while its time is not sent (a request goes with it while a
+picture is open; the conversation's menu takes it off), and a ring
 for how full Kerf's context is once a turn has said (`agent_context`). The mode is
 sent with each request (`permissions`) and kept under `agent/permissions`. Its
 header is the
@@ -467,7 +471,7 @@ output (folder, name, codec) is kept per project, keyed by its absolute path.
 ## Projects
 
 A project is a folder: `project.kerf`, a `media/` folder, and a `presets/`
-library. Started without one, Kerf opens the start window (above). Its New
+library. Started without one, Kerf opens the last (above). A new conversation's New
 Project… and File → New Project… open the launcher, like an edit suite's
 Choose a Project window, in the editor's dark graphite and blue accent.
 New Project offers Empty

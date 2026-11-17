@@ -57,6 +57,7 @@ class ToolbarWiring;
 struct ProposalChange;
 struct CutPicture;
 class CommandRegistry;
+class ComposerChip;
 class ExportButton;
 class FormatBank;
 class ProjectPanel;
@@ -68,8 +69,12 @@ class SidebarRow;
 class StageMotion;
 class StageShell;
 namespace ui {
+class Button;
+class GhostButton;
 class IconButton;
 class SegmentedControl;
+class SettingsRow;
+class Switch;
 } // namespace ui
 class MediaArtwork;
 class TimelineWidget;
@@ -112,16 +117,14 @@ public:
     // What to do once the project is connected: bring the folder's media in
     // (a folder that was no project yet), then send Kerf the request.
     void startWith(const QString &request, bool importFolder);
-    // Takes the place of a start window that looked like `look`, its request box
-    // flying from `box` to the conversation's.
-    void takeOverFrom(const QPixmap &look, const QRect &box);
     // Opens a conversation kept beside this project, once it is connected.
     void openConversation(const QString &id);
 
 signals:
     // File ▸ New Project, Open Project, and Open Recent: open `path` in a
     // window of its own and close this one.
-    void projectOpenRequested(const QString &path);
+    // `starts`: the folder was no project yet, so its media comes in with it.
+    void projectOpenRequested(const QString &path, bool starts = false);
     // The sidebar, on another folder's conversation: open `path` as above, on
     // that conversation (a new one when `conversation` is empty).
     void conversationOpenRequested(const QString &path, const QString &conversation);
@@ -191,7 +194,7 @@ private slots:
     // Kerf's next steps as buttons in the AI bar and over the composer;
     // pressing one asks for it with the focus of the last request.
     void showNextSteps(const QJsonArray &steps);
-    // Kerf Cloud, the hosted model, or a key of one's own (Advanced).
+    // Kerf Cloud, the hosted model, a key of one's own, or Claude Code (Settings ▸ Chat).
     bool usesCloud() const;
     bool usesClaudeCode() const;
     // Signed in to Kerf Cloud, whichever connection chat uses.
@@ -213,8 +216,21 @@ private slots:
     void loadInboundMcpConfig(const QString &path, bool imported);
     void saveInboundMcpConfig();
     void updateAgentModelChoices();
+    // The open project's chip under the composer, and the menu it opens: the
+    // other folders, Open Folder and New Project.
+    void buildComposerFolder();
+    QMenu *buildFolderMenu();
+    // The folders to offer: the open one, then the recent ones still there.
+    QStringList recentFolders() const;
     void loadAgentSettings();
     void saveAgentSettings();
+    // What the conversation runs on, as if chosen in Settings: cloud, own or
+    // claude-code; and a key of one's own's protocol, anthropic or openai.
+    void chooseAgentConnection(const QString &id);
+    void chooseAgentProtocol(const QString &id);
+    // A segmented choice's current segment, by the name it is kept under.
+    static QString chosenIn(const ui::SegmentedControl *control);
+    static void chooseIn(ui::SegmentedControl *control, const QString &id);
     // Help > About Kerf: the version, license and where the source and releases are.
     void showAbout();
     // A timeline with its clips named after their media, where they have no name.
@@ -225,6 +241,7 @@ protected:
     void closeEvent(QCloseEvent *event) override;
     void showEvent(QShowEvent *event) override;
     void changeEvent(QEvent *event) override;
+    void resizeEvent(QResizeEvent *event) override;
     void keyPressEvent(QKeyEvent *event) override;
 
 private:
@@ -340,7 +357,7 @@ private:
     // Projects: the launcher, a folder, or a recent one.
     void newProject();
     void openProjectFolder();
-    void openProject(const QString &path);
+    void openProject(const QString &path, bool starts = false);
     void buildRecentMenu(QMenu *menu);
 
     // Collaboration over Git. The bridge runs every Git operation; the
@@ -575,13 +592,14 @@ private:
     AskPrompt *m_askPrompt = nullptr;
     QString m_agentFocusLabel;
     bool m_proposalBlocked = false;
-    QRadioButton *m_cloudRadio = nullptr;
-    QRadioButton *m_ownKeyRadio = nullptr;
-    QRadioButton *m_claudeCodeRadio = nullptr;
-    QLabel *m_cloudStatus = nullptr;
+    // Settings ▸ Chat: what the conversation runs on (cloud, own, claude-code),
+    // and under it, in its row, what the chosen one needs.
+    ui::SegmentedControl *m_connectionChoice = nullptr;
+    ui::SettingsRow *m_chatModelRow = nullptr;
     QLineEdit *m_cloudToken = nullptr;
-    QPushButton *m_cloudSignIn = nullptr;
-    QPushButton *m_cloudSignOut = nullptr;
+    ui::Button *m_cloudSignIn = nullptr;
+    ui::Button *m_cloudSignOut = nullptr;
+    // Settings ▸ MCP: the tools Kerf's chat may call.
     QWidget *m_advancedSettings = nullptr;
     // A key of one's own: the connection's fields, under its choice on the
     // Chat page, shown while it is the one chosen.
@@ -589,11 +607,11 @@ private:
     // The Models page: the person's models file and the models it names.
     QLabel *m_modelsList = nullptr;
     QLabel *m_modelsFile = nullptr;
-    QPushButton *m_modelsOpen = nullptr;
+    ui::Button *m_modelsOpen = nullptr;
     // What the bridge last said of the models file (a models event).
     QJsonObject m_models;
     // Where Kerf Cloud stands, on the Account page.
-    QLabel *m_accountStatus = nullptr;
+    ui::SettingsRow *m_accountRow = nullptr;
     // The last account report from the bridge.
     QString m_cloudAccess;
     QJsonObject m_cloudAccount;
@@ -601,10 +619,10 @@ private:
     // Settings: a page the shell lays over the conversation and the panel. Its
     // body is what comes up into place; its pages are named down its side.
     QWidget *m_preferences = nullptr;
-    // Settings ▸ AI connection: how far Kerf goes without asking; and
+    // Settings ▸ Chat: how far Kerf goes without asking; and
     // Appearance: the faces text is set in.
     ui::SegmentedControl *m_permissionChoice = nullptr;
-    QLabel *m_permissionHint = nullptr;
+    ui::SettingsRow *m_permissionRow = nullptr;
     ui::SegmentedControl *m_interfaceFace = nullptr;
     ui::SegmentedControl *m_readingFace = nullptr;
     ui::SegmentedControl *m_readingSize = nullptr;
@@ -655,8 +673,11 @@ private:
     QString m_activityDetail;
     QFrame *m_chatComposer = nullptr;
     QTextEdit *m_chatInput = nullptr;
-    QRadioButton *m_anthropicActiveRadio = nullptr;
-    QRadioButton *m_openaiActiveRadio = nullptr;
+    // A key of one's own: the protocol in use (anthropic, openai).
+    ui::SegmentedControl *m_protocolChoice = nullptr;
+    // A key or a URL was typed and is not yet kept.
+    bool m_agentFieldsEdited = false;
+    ComposerChip *m_composerFolder = nullptr;
     // The model each chat request names (the More menu's Model, else the
     // active connection's), and the ones offered.
     QString m_agentModel;
@@ -667,8 +688,8 @@ private:
     QLineEdit *m_openaiKey = nullptr;
     QLineEdit *m_openaiBaseUrl = nullptr;
     QLineEdit *m_openaiModel = nullptr;
-    QComboBox *m_openaiMode = nullptr;
-    QCheckBox *m_mcpEnabled = nullptr;
+    ui::SegmentedControl *m_openaiMode = nullptr;
+    ui::Switch *m_mcpEnabled = nullptr;
     QTextEdit *m_inboundMcpJson = nullptr;
     QLabel *m_inboundMcpStatus = nullptr;
     quint64 m_mcpConfigVersion = 0;

@@ -33,9 +33,11 @@ constexpr QRgb sidebar = qRgb(0x1e, 0x1e, 0x1e);     // the folders and conversa
 constexpr QRgb raised = qRgb(0x26, 0x26, 0x26);      // hover fill, segmented track, proposal card, composer, meter track
 constexpr QRgb on = qRgb(0x30, 0x30, 0x30);          // selected/on fill, avatars, scrub markers, sliding segment fill
 constexpr QRgb hover2 = qRgb(0x36, 0x36, 0x36);      // hover over a raised surface, flash, selected avatar
-constexpr QRgb ink = qRgb(0xed, 0xed, 0xed);         // primary text, slider knob
-constexpr QRgb ink2 = qRgb(0xa8, 0xa8, 0xa8);        // secondary text, icon default
-constexpr QRgb ink3 = qRgb(0x82, 0x82, 0x82);        // tertiary text, meta
+// The inks are paper, not white: the same steps as the mockup's greys, warmed
+// a little, as type on an old page is. The surfaces stay neutral.
+constexpr QRgb ink = qRgb(0xec, 0xe6, 0xda);         // primary text, slider knob
+constexpr QRgb ink2 = qRgb(0xad, 0xa7, 0x9b);        // secondary text, icon default
+constexpr QRgb ink3 = qRgb(0x87, 0x82, 0x78);        // tertiary text, meta
 constexpr QRgb dis = qRgb(0x5c, 0x5c, 0x5c);         // disabled
 constexpr QRgb track = qRgb(0x3a, 0x3a, 0x3a);       // slider/progress track, minor ruler ticks, scope graticule
 constexpr QRgb track2 = qRgb(0x6a, 0x6a, 0x6a);      // slider fill, major ticks, played bar
@@ -123,6 +125,9 @@ struct TypeStyle {
 
 constexpr TypeStyle body{13, 20, 400, false};          // body, inputs
 constexpr TypeStyle bodyName{13, 20, 500, false};      // names in rows
+constexpr TypeStyle side{15, 20, 400, false};          // the sidebar's rows, and lists set like them
+constexpr TypeStyle sideName{15, 20, 500, false};      // the chosen one among them
+constexpr TypeStyle sideNote{14, 20, 400, false};      // what is said beside them: a folder's name, the account, an empty list
 constexpr TypeStyle display{34, 44, 500, false};       // the start window's question
 constexpr TypeStyle reading{14, 22, 400, false, true}; // what is said in the conversation, and the composer
 constexpr TypeStyle title{14, 20, 500, false};         // panel titles: the conversation, Source, clip name
@@ -149,6 +154,12 @@ constexpr char monoFallback[] = "Menlo";
 // Pretendard, which is Inter with Hangul; and a serif pair for reading, Noto
 // Serif for Latin with Nanum Myeongjo for Hangul.
 constexpr char hangulFamily[] = "Pretendard";
+// IBM Plex, one design across Latin, Hangul and the mono: an engineered
+// face with a little of the typewriter in it. It is the face Kerf starts in;
+// Inter, the mockup's, is one to choose.
+constexpr char plexFamily[] = "IBM Plex Sans";
+constexpr char plexHangulFamily[] = "IBM Plex Sans KR";
+constexpr char plexMonoFamily[] = "IBM Plex Mono";
 constexpr char serifFamily[] = "Noto Serif";
 constexpr char serifHangulFamily[] = "NanumMyeongjo";
 
@@ -159,8 +170,11 @@ constexpr char serifHangulFamily[] = "NanumMyeongjo";
 // interface's. editor_theme.h's setEditorFaces() changes them and has every
 // widget take them.
 struct Faces {
-    QStringList ui{QString::fromLatin1(uiFamily), QString::fromLatin1(hangulFamily)};
+    QStringList ui{QString::fromLatin1(plexFamily), QString::fromLatin1(plexHangulFamily), QString::fromLatin1(hangulFamily)};
     QStringList prose;
+    // The mono's families, first choice first, before JetBrains Mono, which
+    // the faces that have no mono of their own are set with.
+    QStringList mono{QString::fromLatin1(plexMonoFamily)};
     int proseStep = 0; // points added to the reading size
 };
 inline Faces &faces() {
@@ -175,8 +189,10 @@ inline QFont font(const TypeStyle &style) {
     QFont font;
     const Faces &chosen = faces();
     if (style.mono) {
-        font.setFamilies({QString::fromLatin1(monoFamily), QString::fromLatin1(monoFallback),
-                          QFontDatabase::systemFont(QFontDatabase::FixedFont).family()});
+        QStringList families = chosen.mono;
+        families << QString::fromLatin1(monoFamily) << QString::fromLatin1(monoFallback)
+                 << QFontDatabase::systemFont(QFontDatabase::FixedFont).family();
+        font.setFamilies(families);
     } else {
         QStringList families = style.prose && !chosen.prose.isEmpty() ? chosen.prose : chosen.ui;
         families << QFontDatabase::systemFont(QFontDatabase::GeneralFont).family();
@@ -243,13 +259,11 @@ constexpr int panel = 420;   // a pane opened or closed by hand: the sidebar, th
 constexpr int settle = 420;       // falling back or coming forward: dims, the veil
 constexpr int appear = 320;       // a thing fading in where it is
 constexpr int rise = 620;         // a thing moving up into place
-constexpr int riseStagger = 90;   // between the start window's parts
 constexpr int flight = 720;       // a tile going to where it lands
 constexpr int flightLand = 240;   // its fade once landed, over what it became
 constexpr int flightStagger = 160;
 constexpr int standInRelease = 260; // what stood in for the picture, fading
 constexpr int page = 520;         // Settings' pages coming up into the room
-constexpr int handOver = 460;     // the start window fading over the editor
 constexpr int pop = 460;          // a footage tile appearing
 constexpr int popStagger = 70;
 constexpr int fanStagger = 110;   // between the version cards
@@ -319,14 +333,21 @@ constexpr int bin = 272;        // the Media bin's width where it has a column o
 constexpr int mediaBand = 152;  // the Media band's height, between the picture and the timeline
 constexpr int mediaBandTimelineLeast = 200; // what it leaves the timeline under it before the picture gives way
 // The minimal layout (ui/stage_shell.h).
-constexpr int sidebar = 320;            // the folders and conversations, at the left, until its edge is dragged
+constexpr int sidebar = 280;            // the folders and conversations, at the left, until its edge is dragged
 constexpr int sidebarLeast = 232;       // how narrow a drag leaves it
 constexpr int sidebarLeaves = 640;      // and what it leaves of the window at least, however wide it is dragged
 constexpr int sidebarGrip = 16;         // what of its edge takes the drag, half either side of it
 constexpr int sidebarGripLine = 2;      // the line it shows under the pointer
 // The widest a drag leaves the sidebar in a window `window` wide.
 constexpr int sidebarMost(int window) { return window - sidebarLeaves > sidebarLeast ? window - sidebarLeaves : sidebarLeast; }
-constexpr int sidebarFoot = 52;         // the account at its foot
+// What runs along the window's foot (the sidebar's account and Settings, the
+// row under the composer) is centred on one line, this far over the bottom
+// edge, as what runs along its top is centred in the toolbar; and set alike:
+// controls 28 tall, icons 16, words in UI 14.
+constexpr int footLine = 26;
+constexpr int footControl = 28;
+constexpr int footIcon = 16;
+constexpr int sidebarFoot = 36;         // the account at its foot
 constexpr int sidebarWindowLeast = 1100; // the window's width under which the sidebar gives way
 constexpr int rail = 448;               // the conversation, beside an open panel
 constexpr int railLeast = 320;          // its least width

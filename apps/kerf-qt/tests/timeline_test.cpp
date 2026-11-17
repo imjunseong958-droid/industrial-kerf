@@ -514,7 +514,8 @@ private slots:
         const int v1 = 4;
         const QRect row = timeline.trackHeaderRect(v1);
         QCOMPARE(row.width(), 140);
-        QCOMPARE(timeline.headerControlRect(v1, C::Target), QRect(12, row.top() + 14, 24, 20));
+        // 16 in: the line the strip over the heads and the toolbar start on.
+        QCOMPARE(timeline.headerControlRect(v1, C::Target), QRect(16, row.top() + 14, 24, 20));
         // Lock and the eye against the padding on picture; lock, mute and solo on sound.
         QCOMPARE(timeline.headerControlRect(v1, C::Lock), QRect(92, row.top() + 14, 20, 20));
         QCOMPARE(timeline.headerControlRect(v1, C::Output), QRect(114, row.top() + 14, 20, 20));
@@ -793,11 +794,13 @@ private slots:
         // 17.32, has faded.
         const auto inked = [&](double seconds) {
             int count = 0;
-            // Grey ink only: the playhead's red head may stand beside a label.
+            // The label's ink only: the playhead's red head may stand beside a
+            // label. The ink is paper, a little warmer than grey (red at most
+            // 24 over blue); the head's red is far past that.
             for (int px = x(seconds) + 4; px < x(seconds) + 40; ++px)
                 for (int py = 13; py < 29; ++py) {
                     const QColor pixel = at(px, py);
-                    count += pixel.lightness() > 90 && std::abs(pixel.red() - pixel.blue()) < 12 ? 1 : 0;
+                    count += pixel.lightness() > 90 && std::abs(pixel.red() - pixel.blue()) < 40 ? 1 : 0;
                 }
             return count;
         };
@@ -1209,17 +1212,20 @@ private slots:
             QCOMPARE(button->size(), QSize(24, 24));
             x = button->x();
         }
-        // At the mockup's x: the tools at 176, Snap at 240, the zoom ending
-        // 12 from the edge of the 832 wide panel; Play in ink, the rest ink2.
-        QCOMPARE(tools->tools()->x(), 176);
-        QCOMPARE(tools->snapButton()->x(), 240);
+        // The first and last controls' middles are 16 from the strip's edges,
+        // as the toolbar's are from the window's: the tools at 168, Snap at
+        // 232, the zoom ending 4 from the edge of the 872 wide panel; Play in
+        // ink, the rest ink2.
+        QCOMPARE(tools->transportButton(Transport::Start)->mapTo(tools, QPoint(0, 0)).x() + 12, 16);
+        QCOMPARE(tools->tools()->x(), 168);
+        QCOMPARE(tools->snapButton()->x(), 232);
         QCOMPARE(tools->transportButton(Transport::Play)->iconColor(), tokens::color(tokens::ink));
         QCOMPARE(tools->transportButton(Transport::Next)->iconColor(), tokens::color(tokens::ink2));
         auto *zoomOut = tools->findChild<ui::IconButton *>(QStringLiteral("timelineZoomOut"));
         QVERIFY(zoomOut);
-        QCOMPARE(zoomOut->geometry().center().x(), 711);
+        QCOMPARE(zoomOut->geometry().center().x(), 759);
         QVERIFY(tools->zoomOutButton()->x() > tools->snapButton()->x());
-        QCOMPARE(tools->zoomInButton()->geometry().right() + 1, tools->width() - 12);
+        QCOMPARE(tools->zoomInButton()->geometry().right() + 1, tools->width() - 4);
         // The transport runs the registry's playback commands.
         window.m_duration = 30.0;
         window.m_bus->setDuration(30.0);

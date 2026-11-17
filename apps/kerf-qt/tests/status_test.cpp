@@ -131,7 +131,7 @@ private slots:
         const auto forget = qScopeGuard([] { QSettings().remove(QStringLiteral("agent/connection")); });
         MainWindow window{QString(), QString()};
         window.setConnection(QStringLiteral("ready"));
-        window.m_cloudRadio->setChecked(true);
+        window.chooseAgentConnection(QStringLiteral("cloud"));
         window.m_cloudAccess = QStringLiteral("signedOut");
         window.updateCommandStates();
         QCOMPARE(window.m_chatInput->placeholderText(), QStringLiteral("Set up Kerf in Settings to ask"));
@@ -140,7 +140,7 @@ private slots:
         window.updateCommandStates();
         QCOMPARE(window.m_chatInput->placeholderText(), QStringLiteral("Ask Kerf to make or change something"));
         // Own key, and none set (the environment's counts too).
-        window.m_ownKeyRadio->setChecked(true);
+        window.chooseAgentConnection(QStringLiteral("own"));
         window.m_anthropicKey->setText(QStringLiteral("test-key"));
         window.updateCommandStates();
         QCOMPARE(window.m_chatInput->placeholderText(), QStringLiteral("Ask Kerf to make or change something"));

@@ -5,19 +5,22 @@
 // folders, each one unfolding to its own conversations, latest first; the
 // account at its foot, which opens the way to Settings and everything else.
 //
-//   [+] New conversation              rows 32 apart, radius 6, UI 13/20
-//   [search] Search conversations     30 tall
-//   Projects                     [+]  meta in ink3; + is New Project, Open Folder
-//   v [folder] jeju-vlog    [+] [⋯]   the open folder's name in ink, medium;
-//   |   Make a 60-second cut of th…   hover: + (a conversation in it) and its menu
-//   |   Colour the beach take      ●  titles under the folder's icon, with the room
-//   |   Captions for the vlog         to themselves; a light passes over a title
-//   |   Show 3 more                   Kerf works on, and a dot at the end says it
-//   |   > Archived · 2                is done, waits for you, or failed; hover: [⋯]
-//   > [folder] atlas-launch           folded: pressing its chevron unfolds it,
-//   ...                               pressing its name opens it
-//   (Y) You                       ⌃   the account, 52 tall
-//       Kerf Cloud
+//   [+] New                           rows 32 apart, radius 6, UI 14/20: an icon
+//   [search] Search                   and a word, with no fill but under the
+//                                     pointer. Search, pressed, is typed into
+//                                     where it is, with nothing round it
+//   jeju-vlog v                  [⋯]  the open folder's name, UI 13/20 in ink3:
+//   Make a 60-second cut of the…      pressed, it opens the other folders (the
+//   Colour the beach take          ●  editor shows this one alone). Its
+//   Captions for the vlog             conversations are flush under it. A light
+//   Show 3 more                       passes over a title Kerf works on, and a dot
+//   > Archived · 2                    at the end says it is done, waits for you, or
+//                                     failed; hover: [⋯]
+//   (Y) You · Kerf Cloud v      [⚙]   the account, 52 tall, and Settings
+//
+// Given several folders and not told to switch (a sidebar on its own), each
+// folder's name heads its own conversations and folds; the start window lists
+// folders alone, under a Projects line with a + for another.
 //
 // Nothing here is invented: the folders are the recent projects that still
 // exist, the open folder's conversations and their times are what the bridge
@@ -67,12 +70,14 @@ public:
     Chevron chevron() const { return m_chevron; }
     // Where the chevron takes a press; empty with none.
     QRect chevronRect() const;
+    // A tick at the row's end: the one chosen among its like.
+    void setTicked(bool ticked);
+    bool isTicked() const { return m_ticked; }
     // The text in medium, and in ink at rest.
     void setStrong(bool strong);
     bool isStrong() const { return m_strong; }
-    // A group's heading: a folder's name, small and quiet, its chevron after
-    // the name, with no fill of its own at rest (as a coding agent's sidebar
-    // heads each project's threads).
+    // A folder over its conversations: its chevron after its name, not
+    // before its icon, and pressed anywhere it folds or unfolds.
     void setHeading(bool heading);
     bool isHeading() const { return m_heading; }
     // A hairline down the row, under its folder's chevron: it belongs to the
@@ -132,6 +137,7 @@ private:
     Chevron m_chevron = Chevron::None;
     bool m_onChevron = false;
     bool m_strong = false;
+    bool m_ticked = false;
     bool m_heading = false;
     bool m_guide = false;
     bool m_current = false;
@@ -213,6 +219,11 @@ public:
     void setWorking(bool working);
     // Room over the first row, for the window buttons of a window with no toolbar.
     void setTopInset(int inset);
+    // The editor's way: only the open folder is given, its name heads its
+    // conversations and, pressed, asks for another folder (switchRequested);
+    // there is no Projects line, and nothing folds.
+    void setSwitching(bool switching);
+    bool isSwitching() const { return m_switching; }
 
     QList<SidebarRow *> rows() const { return m_rows; }
     SidebarRow *projectRow(const QString &path) const;
@@ -255,7 +266,7 @@ public:
     // Edits a conversation's title over its row: Enter keeps it, Esc does not.
     void beginRename(const QString &id);
 
-    // "now", "4m", "2h", "3d", then a short date: how long before `now` `when` was.
+    // "Now", "4m", "2h", "3d", then a short date: how long before `now` `when` was.
     static QString relativeTime(const QDateTime &when, const QDateTime &now);
     // Conversations that finished while you were elsewhere: their dot stays
     // until you look at them.
@@ -273,6 +284,9 @@ signals:
     void projectRevealRequested(const QString &path);
     void newProjectRequested();
     void openFolderRequested();
+    // The open folder's name was pressed (setSwitching): the window opens the
+    // folders over `anchor`.
+    void switchRequested(QWidget *anchor);
     // The account was pressed: the window opens its menu over it.
     void accountRequested();
     // The gear beside it.
@@ -284,6 +298,7 @@ signals:
 
 protected:
     void paintEvent(QPaintEvent *event) override;
+    void resizeEvent(QResizeEvent *event) override;
     void showEvent(QShowEvent *event) override;
     void hideEvent(QHideEvent *event) override;
     void changeEvent(QEvent *event) override;
@@ -318,6 +333,10 @@ private:
     QList<Conversation> m_conversations;
     QString m_currentConversation;
     bool m_conversationsShown = true;
+    bool m_switching = false;
+    QWidget *m_head = nullptr;
+    // The hairline it ends on, in its last column.
+    QWidget *m_edge = nullptr;
     bool m_working = false;
     bool m_archivedOpen = false;
     // Folded or not, as chosen (and kept); a folder not here has its default.

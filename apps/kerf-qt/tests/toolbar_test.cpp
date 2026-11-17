@@ -3,6 +3,8 @@
 // button; and for what moved out of it: the menu the account opens and the
 // format segments in the timeline's strip.
 
+#include "ui/wiring/main_window_shared.h"
+#include "settings_kit.h"
 #include "fixtures.h"
 #include "test_registry.h"
 
@@ -141,8 +143,9 @@ private slots:
         // The sidebar's button at one end, the panel's at the other, 28 each.
         QCOMPARE(window.m_sidebarButton->size(), QSize(28, 28));
         QCOMPARE(window.m_panelButton->size(), QSize(28, 28));
-        // Export is there only once the program has a clip.
-        QVERIFY(!window.m_exportButton->isVisible());
+        // Export is always there, so the bar ends the same way in every
+        // project; before the program has a clip it is only off.
+        QVERIFY(window.m_exportButton->isVisible());
         QVERIFY(!wiring->hasCut());
         window.setConnection(QStringLiteral("ready"));
         window.applySnapshot(titledSnapshot(QStringLiteral("2026-11-04T10:10:00Z")));
@@ -152,11 +155,25 @@ private slots:
         // way to it is away; its leading stretch is the sidebar's top.
         QVERIFY(window.m_sidebar->isVisible());
         QVERIFY(window.m_sidebar->accountRow()->isVisible());
+        // What runs along the window's foot is on one line: the account and
+        // Settings in the sidebar, and the row under the composer.
+        {
+            const auto overFoot = [&window](const QWidget *part) {
+                return window.height() - part->mapTo(&window, QPoint(0, 0)).y() - part->height() / 2;
+            };
+            QCOMPARE(overFoot(window.m_sidebar->accountRow()), tokens::layout::footLine);
+            QCOMPARE(overFoot(window.m_sidebar->settingsButton()), tokens::layout::footLine);
+            QCOMPARE(overFoot(window.m_chat->composerWidget()->modeChip()), tokens::layout::footLine);
+        }
         QCOMPARE(wiring->sidebarEdge(), tokens::layout::sidebar);
         QCOMPARE(static_cast<FlatToolBar *>(toolbar)->sidebarEdge(), tokens::layout::sidebar);
         QVERIFY(!wiring->appMenuButton()->isVisible());
         const auto inBar = [toolbar](const QWidget *item) { return QRect(item->mapTo(toolbar, QPoint(0, 0)), item->size()); };
-        QCOMPARE(inBar(window.m_sidebarButton).left(), tokens::layout::sidebar + 12);
+        // The sidebar's button is beside the window buttons, over the sidebar,
+        // and the title starts 16 past the sidebar's edge.
+        QCOMPARE(inBar(window.m_sidebarButton).left(), wiring->m_firstControl);
+        QVERIFY(inBar(window.m_sidebarButton).right() < tokens::layout::sidebar);
+        QCOMPARE(inBar(window.m_projectTitle).left(), tokens::layout::sidebar + 16);
         // With it away, the bar's ⋯ button opens the same menu. The sidebar's
         // choice is kept, so it is put back whatever happens below.
         const auto restore = qScopeGuard([] { QSettings().remove(QStringLiteral("layout")); });
@@ -168,12 +185,15 @@ private slots:
         // The first control starts where the window buttons leave it: 16 in
         // without them, past them on macOS.
         QCOMPARE(inBar(window.m_sidebarButton).left(), wiring->m_firstControl);
-        QVERIFY(wiring->m_firstControl >= ToolbarWiring::firstControlX(0, true));
+        QVERIFY(wiring->m_firstControl >= ToolbarWiring::firstControlX(true));
         window.m_sidebarButton->click();
-        // The room before the first control: the window buttons', or the sidebar's.
-        QCOMPARE(ToolbarWiring::leadingRoom(16, 0), 0);
-        QCOMPARE(ToolbarWiring::leadingRoom(84, 0), 64);
-        QCOMPARE(ToolbarWiring::leadingRoom(84, 240), 232);
+        // The room before the first control is the window buttons'; the room
+        // after the controls is what is left of the sidebar's top.
+        QCOMPARE(ToolbarWiring::leadingRoom(16), 0);
+        QCOMPARE(ToolbarWiring::leadingRoom(84), 64);
+        QCOMPARE(ToolbarWiring::titleGap(116, 0), 0);
+        QCOMPARE(ToolbarWiring::titleGap(116, 280), 172);
+        QCOMPARE(ToolbarWiring::titleGap(116, 100), 0);
         for (const char *gone : {"toolbar.file.import", "toolbar.edit.undo", "toolbar.edit.redo", "toolbar.clip.split", "toolbar.clip.delete",
                                  "workspaceSegments", "sequenceButton", "settingsButton", "applicationMenuButton", "windowViewerMenu",
                                  "panePicture", "paneTimeline"})
@@ -264,9 +284,9 @@ private slots:
     void theSidebarsFootNamesTheAccount() {
         MainWindow window{QString(), QString()};
         SidebarAccount *account = window.m_sidebar->accountRow();
-        window.m_claudeCodeRadio->setChecked(true);
+        window.chooseAgentConnection(QStringLiteral("claude-code"));
         QCOMPARE(account->title(), QStringLiteral("Claude Code"));
-        window.m_cloudRadio->setChecked(true);
+        window.chooseAgentConnection(QStringLiteral("cloud"));
         QCOMPARE(account->title(), QStringLiteral("Kerf Cloud"));
         QCOMPARE(account->subtitle(), QStringLiteral("Not signed in"));
         QVERIFY(!window.cloudSignedIn());
@@ -275,7 +295,7 @@ private slots:
         QVERIFY(window.cloudSignedIn());
         QCOMPARE(account->title(), QStringLiteral("mina@example.com"));
         QCOMPARE(account->subtitle(), QStringLiteral("Kerf Cloud · Pro plan"));
-        QCOMPARE(window.m_accountStatus->text().section(QStringLiteral("  ·  "), 0, 0), QStringLiteral("Signed in as mina@example.com"));
+        QCOMPARE(window.m_accountRow->description().section(QStringLiteral("  ·  "), 0, 0), QStringLiteral("Signed in as mina@example.com"));
         // Signed in, the menu offers the way out.
         window.m_toolbarWiring->buildAppMenu();
         QVERIFY(findAction(window.m_toolbarWiring->appMenu(), QStringLiteral("appMenu.signOut")));
@@ -584,11 +604,20 @@ private slots:
             QCoreApplication::processEvents();
             QLabel *title = window.m_projectTitle;
             QLabel *subtitle = window.m_projectSubtitle;
-            QCOMPARE(title->text(), QStringLiteral("Atlas · 30 s spot v7"));
-            QCOMPARE(ui::tipName(title), QStringLiteral("Edited 2 min ago · rev 22"));
+            // The bar is titled with the conversation, as the window is with
+            // the project; the project, and when it was edited, are its tip.
+            QCOMPARE(title->text(), QStringLiteral("New conversation"));
+            QCOMPARE(ui::tipName(title), QStringLiteral("Atlas · 30 s spot v7 · Edited 2 min ago · rev 22"));
+            // Its chevron follows it, and opens what can be done with the
+            // conversation; the panel has no strip of its own for that.
+            ui::IconButton *chevron = wiring->titleMenuButton();
+            QVERIFY(chevron && chevron->isVisible());
+            QCOMPARE(inBar(chevron).left(), inBar(title).right() + 1 + 2);
+            QVERIFY(!window.m_chat->headerShown());
+            QVERIFY(!window.m_chat->findChild<QWidget *>(QStringLiteral("chatHeader"))->isVisible());
             QVERIFY(!subtitle->isVisible());
             // After the sidebar's button, centred in the bar's height.
-            QCOMPARE(inBar(title).left() - inBar(window.m_sidebarButton).right() - 1, 8);
+            QCOMPARE(inBar(title).left(), wiring->sidebarEdge() + 16);
             QCOMPARE(inBar(title).center().y(), window.m_toolbar->height() / 2 - 1);
             // UI 500 13 ink, then UI 11 ink3.
             QCOMPARE(title->palette().color(QPalette::WindowText), tokens::color(tokens::ink));
@@ -598,7 +627,7 @@ private slots:
             window.showStatus(QStringLiteral("Saved preset looks/dusk.preset"), 0);
             QVERIFY(subtitle->isVisible());
             QCOMPARE(subtitle->text(), QStringLiteral("Saved preset looks/dusk.preset"));
-            QCOMPARE(inBar(subtitle).left() - inBar(title).right() - 1, 12);
+            QCOMPARE(inBar(subtitle).left() - inBar(chevron).right() - 1, 12);
             QVERIFY(inBar(subtitle).right() < inBar(window.m_exportButton).left());
             window.showStatus(QString(), 0);
         }
@@ -634,7 +663,7 @@ private slots:
         ToolbarWiring *wiring = window.m_toolbarWiring.get();
         QCOMPARE(toolbar->height(), 40);
         QCOMPARE(wiring->m_content->geometry(), toolbar->rect());
-        QList<QWidget *> controls{window.m_sidebarButton, window.m_exportButton, window.m_panelButton};
+        QList<QWidget *> controls{window.m_sidebarButton, window.m_panelButton, window.m_exportButton};
         const auto frame = [toolbar](QWidget *w) { return QRect(w->mapTo(toolbar, QPoint()), w->size()); };
         for (int size : {1366, 1080}) {
             window.resize(size, 768);
@@ -647,16 +676,16 @@ private slots:
                 QCOMPARE(frame(control).center().y(), toolbar->height() / 2 - 1);
                 if (i > 0) QVERIFY2(frame(controls.at(i - 1)).right() < frame(control).left(), qPrintable(control->objectName()));
             }
-            // The panel's button ends 12 in from the window's right.
-            QCOMPARE(frame(window.m_panelButton).right() + 1, toolbar->width() - 12);
+            // Export ends the row, 9 from the window's right as the first
+            // window button starts 9 from its left.
+            QCOMPARE(frame(window.m_exportButton).right() + 1, toolbar->width() - 9);
             // In a window too narrow for the sidebar, the bar has its menu.
             QCOMPARE(wiring->appMenuButton()->isVisible(), size < tokens::layout::sidebarWindowLeast);
-            // The title keeps between the groups, shortened when it must be.
+            // The title keeps between the groups; the project's long name is
+            // the window's and the title's tip, not the bar's to shorten.
             QLabel *title = window.m_projectTitle;
-            QVERIFY(!title->text().isEmpty());
-            QVERIFY2(title->text() != fullTitle, qPrintable(title->text()));
-            QVERIFY(title->text().endsWith(QChar(0x2026)));
-            QCOMPARE(ui::tipName(title), fullTitle);
+            QCOMPARE(title->text(), QStringLiteral("New conversation"));
+            QVERIFY(ui::tipName(title).startsWith(fullTitle));
             QVERIFY(QFontMetrics(title->font()).horizontalAdvance(title->text()) <= title->width());
             QVERIFY(frame(title).left() > frame(window.m_sidebarButton).right());
             QVERIFY(frame(title).right() < frame(window.m_exportButton).left());
@@ -664,13 +693,28 @@ private slots:
         // The trailing group's spacing.
         window.resize(1600, 1000);
         QCoreApplication::processEvents();
-        QCOMPARE(frame(window.m_panelButton).left() - frame(window.m_exportButton).right() - 1, 8);
+        QCOMPARE(frame(window.m_exportButton).left() - frame(window.m_panelButton).right() - 1, 8);
+        // With no cut there is no Export: the panel's button ends the row, its
+        // middle 16 from the window's right as the first window button's is
+        // from its left.
+        window.m_exportButton->hide();
+        wiring->layoutTrailing();
+        QCoreApplication::processEvents();
+        QCOMPARE(frame(window.m_panelButton).left(), toolbar->width() - 16 - 14);
+        window.m_exportButton->show();
+        wiring->layoutTrailing();
         // No » extension: nothing is folded away.
         if (auto *more = toolbar->findChild<QToolButton *>(QStringLiteral("qt_toolbar_ext_button"))) QVERIFY(!more->isVisible());
         // The window buttons' room, past which the commands start.
-        QCOMPARE(ToolbarWiring::firstControlX(0, false), 84);
-        QCOMPARE(ToolbarWiring::firstControlX(70, false), 86);
-        QCOMPARE(ToolbarWiring::firstControlX(70, true), 16);
+        // The leading row is numbers, not measurements: the window buttons'
+        // middles at 16, 39 and 62, and the first control's 28 after the last,
+        // at 90, so it starts at 76; in full screen, with no buttons, at 16.
+        using namespace window_parts;
+        QCOMPARE(kWindowButtonsLeft + kWindowButton / 2, 16);
+        QCOMPARE(kWindowButtonsLeft + 2 * kWindowButtonStep + kWindowButton / 2, 62);
+        QCOMPARE(ToolbarWiring::firstControlX(false) + kToolbarControl / 2, 62 + kToolbarStep);
+        QCOMPARE(ToolbarWiring::firstControlX(false), 76);
+        QCOMPARE(ToolbarWiring::firstControlX(true), 16);
         // The toolbar is the room's colour to its foot, with no line under it.
         const QImage image = toolbar->grab().toImage();
         const qreal ratio = image.devicePixelRatio();
