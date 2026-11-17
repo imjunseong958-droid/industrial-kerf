@@ -153,7 +153,7 @@ private slots:
                 QVERIFY(!row->hasGuide() && !row->isHeading());
                 QCOMPARE(row->textLeft(), folder->textLeft());
                 QVERIFY(!row->badge().isValid());
-                QCOMPARE(row->textRect().right(), row->width() - 8 - 1);
+                QCOMPARE(row->textRect().right(), row->width() - 12 - 1);
             }
         // The rows stand a row apart, with no gap for the guide to break on.
         QCOMPARE(sidebar.conversationRow(QStringLiteral("t1"))->y() - sidebar.conversationRow(QStringLiteral("t2"))->y(),
@@ -766,7 +766,7 @@ private slots:
         QVERIFY(!sidebar.isFolded(m_folder.path()));
         QCOMPARE(listed(sidebar), QStringList{QStringLiteral("The Beach cut")});
         // Its rows are set a size larger than the folder's name.
-        QCOMPARE(tokens::side.px, 14);
+        QCOMPARE(tokens::side.px, 15);
         QVERIFY(tokens::side.px > tokens::body.px);
     }
 

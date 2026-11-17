@@ -426,8 +426,8 @@ private slots:
                 {"#1c1c1c", theme.card},      {"#171717", theme.chatSurface},    {"#1c1c1c", theme.menu},
                 {"#1c1c1c", theme.tooltip},   {"#1c1c1c", theme.dialog},         {"#262626", theme.raised},
                 {"#262626", theme.field},     {"#303030", theme.on},             {"#262626", theme.toolSelected},
-                {"#363636", theme.hover2},    {"#ededed", theme.text},           {"#a8a8a8", theme.textSecondary},
-                {"#828282", theme.ink3},      {"#5c5c5c", theme.textDisabled},   {"#3a3a3a", theme.track},
+                {"#363636", theme.hover2},    {"#ece6da", theme.text},           {"#ada79b", theme.textSecondary},
+                {"#878278", theme.ink3},      {"#5c5c5c", theme.textDisabled},   {"#3a3a3a", theme.track},
                 {"#6a6a6a", theme.track2},    {"#3366e6", theme.accent},         {"#2b5ad6", theme.accentHover},
                 {"#8fb0ff", theme.accentInk}, {"#4cc38a", theme.success},        {"#ec5d61", theme.error},
                 {"#e5484d", theme.playhead},  {"#d6a345", theme.warning},
@@ -560,10 +560,10 @@ private slots:
             // conversation in it.
             QCOMPARE(window.windowTitle(), QStringLiteral("Harbor Teaser"));
             QCOMPARE(window.m_projectTitle->text(), window.m_chat->titleText());
-            // The title is UI 13, at the leading end after the sidebar's
+            // The title is UI 14, at the leading end after the sidebar's
             // button, clear of the trailing group.
             QLabel *title = window.m_projectTitle;
-            QCOMPARE(title->font().pixelSize(), 13);
+            QCOMPARE(title->font().pixelSize(), 14);
             ExportButton *exportButton = window.m_exportButton;
             const auto inBar = [toolbar](const QWidget *item) { return QRect(item->mapTo(toolbar, QPoint(0, 0)), item->size()); };
             QCOMPARE(inBar(title).left(), window.m_sidebar->geometry().right() + 1 + 12);

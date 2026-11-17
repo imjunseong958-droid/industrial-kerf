@@ -193,7 +193,7 @@ void ComposerChip::setWidestLabel(int width) {
 QSize ComposerChip::sizeHint() const {
     int width = 6;
     if (!m_icon.isEmpty()) width += 14 + 4;
-    width += std::min(m_widest, ui::snapWidth(control, text()));
+    width += std::min(m_widest, ui::snapWidth(body, text()));
     if (m_chevron) width += 2 + 12;
     return QSize(width + 6, 24);
 }
@@ -216,7 +216,7 @@ void ComposerChip::paintEvent(QPaintEvent *) {
         icons::paint(p, m_icon, QRectF(x, (height() - 14) / 2.0, 14, 14), ink_, 14);
         x += 14 + 4;
     }
-    const QFont face = tokens::font(control);
+    const QFont face = tokens::font(body);
     const QFontMetricsF metrics(face);
     const qreal room = std::min<qreal>(m_widest, width() - x - 6 - (m_chevron ? 14 : 0));
     p.setFont(face);
@@ -526,7 +526,7 @@ Composer::Composer(QWidget *parent) : QFrame(parent) {
         palette.setColor(QPalette::Text, color(ink));
         m_input->setPalette(palette);
     }
-    m_input->setFixedHeight(22);
+    fitInput();
     m_input->installEventFilter(this);
     connect(m_input->document(), &QTextDocument::contentsChanged, this, [this] {
         fitInput();
@@ -772,6 +772,8 @@ void Composer::refreshFaces() {
 
 void Composer::fitInput() {
     m_input->document()->setTextWidth(m_input->viewport()->width());
+    // As tall as its lines and no taller, so one line sits in the middle of
+    // the box, not at the top of room kept for more.
     const int lines = std::clamp(int(std::ceil(m_input->document()->size().height())), m_leastInput, 110);
     if (m_input->height() != lines) m_input->setFixedHeight(lines);
     m_input->setVerticalScrollBarPolicy(m_input->document()->size().height() > 100 ? Qt::ScrollBarAsNeeded : Qt::ScrollBarAlwaysOff);

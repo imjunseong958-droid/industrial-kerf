@@ -33,9 +33,11 @@ constexpr QRgb sidebar = qRgb(0x1e, 0x1e, 0x1e);     // the folders and conversa
 constexpr QRgb raised = qRgb(0x26, 0x26, 0x26);      // hover fill, segmented track, proposal card, composer, meter track
 constexpr QRgb on = qRgb(0x30, 0x30, 0x30);          // selected/on fill, avatars, scrub markers, sliding segment fill
 constexpr QRgb hover2 = qRgb(0x36, 0x36, 0x36);      // hover over a raised surface, flash, selected avatar
-constexpr QRgb ink = qRgb(0xed, 0xed, 0xed);         // primary text, slider knob
-constexpr QRgb ink2 = qRgb(0xa8, 0xa8, 0xa8);        // secondary text, icon default
-constexpr QRgb ink3 = qRgb(0x82, 0x82, 0x82);        // tertiary text, meta
+// The inks are paper, not white: the same steps as the mockup's greys, warmed
+// a little, as type on an old page is. The surfaces stay neutral.
+constexpr QRgb ink = qRgb(0xec, 0xe6, 0xda);         // primary text, slider knob
+constexpr QRgb ink2 = qRgb(0xad, 0xa7, 0x9b);        // secondary text, icon default
+constexpr QRgb ink3 = qRgb(0x87, 0x82, 0x78);        // tertiary text, meta
 constexpr QRgb dis = qRgb(0x5c, 0x5c, 0x5c);         // disabled
 constexpr QRgb track = qRgb(0x3a, 0x3a, 0x3a);       // slider/progress track, minor ruler ticks, scope graticule
 constexpr QRgb track2 = qRgb(0x6a, 0x6a, 0x6a);      // slider fill, major ticks, played bar
@@ -123,8 +125,9 @@ struct TypeStyle {
 
 constexpr TypeStyle body{13, 20, 400, false};          // body, inputs
 constexpr TypeStyle bodyName{13, 20, 500, false};      // names in rows
-constexpr TypeStyle side{14, 20, 400, false};          // the sidebar's rows, and lists set like them
-constexpr TypeStyle sideName{14, 20, 500, false};      // the chosen one among them
+constexpr TypeStyle side{15, 20, 400, false};          // the sidebar's rows, and lists set like them
+constexpr TypeStyle sideName{15, 20, 500, false};      // the chosen one among them
+constexpr TypeStyle sideNote{14, 20, 400, false};      // what is said beside them: a folder's name, the account, an empty list
 constexpr TypeStyle display{34, 44, 500, false};       // the start window's question
 constexpr TypeStyle reading{14, 22, 400, false, true}; // what is said in the conversation, and the composer
 constexpr TypeStyle title{14, 20, 500, false};         // panel titles: the conversation, Source, clip name

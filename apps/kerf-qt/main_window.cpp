@@ -896,6 +896,12 @@ void MainWindow::showEvent(QShowEvent *event) {
 #endif
 }
 
+void MainWindow::resizeEvent(QResizeEvent *event) {
+    QMainWindow::resizeEvent(event);
+    // The system lays the window buttons out again with the window.
+    fitTitleBar();
+}
+
 void MainWindow::changeEvent(QEvent *event) {
     QMainWindow::changeEvent(event);
     if (event->type() == QEvent::WindowStateChange) fitTitleBar();

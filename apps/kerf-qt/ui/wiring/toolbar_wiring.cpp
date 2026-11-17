@@ -217,14 +217,14 @@ void ToolbarWiring::buildToolbar(const QHash<QString, QMenu *> &menus) {
     w->m_projectSubtitle->setObjectName(QStringLiteral("projectSubtitle"));
     // Its own sheet, so the app's QLabel rules leave its type alone:
     // UI 500 13/16 ink, then UI 11/16 ink3 on the same line.
-    w->m_projectTitle->setStyleSheet(QStringLiteral("QLabel { color: %1; font-size: 13px; font-weight: 500; padding: 0px; "
+    w->m_projectTitle->setStyleSheet(QStringLiteral("QLabel { color: %1; font-size: 14px; font-weight: 500; padding: 0px; "
                                                     "background: transparent; }")
                                          .arg(tokens::color(tokens::ink).name()));
-    w->m_projectSubtitle->setStyleSheet(QStringLiteral("QLabel { color: %1; font-size: 11px; font-weight: 400; padding: 0px; "
+    w->m_projectSubtitle->setStyleSheet(QStringLiteral("QLabel { color: %1; font-size: 12px; font-weight: 400; padding: 0px; "
                                                        "background: transparent; }")
                                             .arg(tokens::color(tokens::ink3).name()));
     for (QLabel *label : {w->m_projectTitle, w->m_projectSubtitle}) {
-        label->setFont(tokens::font(tokens::TypeStyle{label == w->m_projectTitle ? 13 : 11, 16,
+        label->setFont(tokens::font(tokens::TypeStyle{label == w->m_projectTitle ? 14 : 12, 20,
                                                       label == w->m_projectTitle ? 500 : 400, false}));
         label->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
         label->installEventFilter(w);
@@ -601,10 +601,11 @@ void ToolbarWiring::layoutTitle() {
     ui::setTip(subtitle, subtitle->text() == sub ? QString() : sub);
     const bool problem = m_message.isEmpty() && !standingProblem().isEmpty();
     subtitle->setProperty("problem", problem);
-    subtitle->setStyleSheet(QStringLiteral("QLabel { color: %1; font-size: 11px; font-weight: 400; padding: 0px; background: transparent; }")
+    subtitle->setStyleSheet(QStringLiteral("QLabel { color: %1; font-size: 12px; font-weight: 400; padding: 0px; background: transparent; }")
                                 .arg(tokens::color(problem ? tokens::neg : tokens::ink3).name()));
-    const int top = (m_titleBox->height() - 16) / 2;
-    title->setGeometry(0, top, width, 16);
+    constexpr int line = 20;
+    const int top = (m_titleBox->height() - line) / 2;
+    title->setGeometry(0, top, width, line);
     title->setVisible(!editing);
     if (m_titleMenu) {
         m_titleMenu->move(width + 2, (m_titleBox->height() - m_titleMenu->height()) / 2);
@@ -613,7 +614,7 @@ void ToolbarWiring::layoutTitle() {
         if (editing) editor->setGeometry(-7, (m_titleBox->height() - 24) / 2, std::min(room, std::max(width + 80, 240)), 24);
     }
     // The smaller line sits on the title's baseline.
-    subtitle->setGeometry(width + chevron + gap, top + 1, subRoom, 16);
+    subtitle->setGeometry(width + chevron + gap, top + 1, subRoom, line);
     subtitle->setVisible(!sub.isEmpty() && !editing);
 }
 

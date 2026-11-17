@@ -140,7 +140,7 @@ void MainWindow::buildPreferences() {
     panel->setStyleSheet(QStringLiteral("QWidget#settingsPage { background: %1; border: 1px solid %4; border-radius: 12px; }"
                                         "QWidget#settingsNavColumn { background: transparent; border: 0; border-right: 1px solid %2; }"
                                         "QFrame#settingsRule { background: %2; border: 0; }"
-                                        "QLabel#settingsTitle { color: %3; font-size: 14px; font-weight: 500; }")
+                                        "QLabel#settingsTitle { color: %3; font-size: 15px; font-weight: 500; }")
                              .arg(tokens::color(tokens::chrome).name(), tokens::color(tokens::line).name(QColor::HexArgb),
                                   tokens::color(tokens::ink).name(), tokens::color(tokens::line2).name(QColor::HexArgb)));
     scrim->setPanel(panel);
@@ -487,7 +487,7 @@ void MainWindow::buildPreferences() {
     m_modelsList->setWordWrap(true);
     m_modelsList->setTextFormat(Qt::RichText);
     m_modelsList->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    m_modelsList->setStyleSheet(QStringLiteral("QLabel#settingsModels { color: %1; font-size: 13px; }").arg(tokens::color(tokens::ink).name()));
+    m_modelsList->setStyleSheet(QStringLiteral("QLabel#settingsModels { color: %1; font-size: 14px; }").arg(tokens::color(tokens::ink).name()));
     shotModels->addBelow(m_modelsList);
     m_modelsFile = note();
     m_modelsFile->setObjectName(QStringLiteral("settingsModelsFile"));

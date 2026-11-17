@@ -35,7 +35,7 @@ private slots:
         const std::initializer_list<std::pair<QRgb, const char *>> opaque{
             {surround, "#0e0e0e"}, {surroundDim, "#050505"}, {well, "#121212"},   {chrome, "#171717"},
             {card, "#1c1c1c"},     {raised, "#262626"},      {on, "#303030"},     {hover2, "#363636"},
-            {ink, "#ededed"},      {ink2, "#a8a8a8"},        {ink3, "#828282"},   {dis, "#5c5c5c"},
+            {ink, "#ece6da"},      {ink2, "#ada79b"},        {ink3, "#878278"},   {dis, "#5c5c5c"},
             {track, "#3a3a3a"},    {track2, "#6a6a6a"},      {accent, "#3366e6"}, {accentHover, "#2b5ad6"},
             {accentInk, "#8fb0ff"}, {pos, "#4cc38a"},        {neg, "#ec5d61"},    {playhead, "#e5484d"},
             {warn, "#d6a345"}};
@@ -43,10 +43,16 @@ private slots:
             QCOMPARE(color(value), QColor(QString::fromLatin1(hex)));
             QCOMPARE(qAlpha(value), 255);
         }
-        // The ramp is neutral grey: no step leans warm or cool.
-        for (const QRgb grey : {surround, surroundDim, well, chrome, card, raised, on, hover2, ink, ink2, ink3, dis, track, track2}) {
+        // The surfaces are neutral grey: no step leans warm or cool.
+        for (const QRgb grey : {surround, surroundDim, well, chrome, card, raised, on, hover2, dis, track, track2}) {
             QCOMPARE(qRed(grey), qGreen(grey));
             QCOMPARE(qGreen(grey), qBlue(grey));
+        }
+        // The inks are paper: warmed a little, each channel a step under the
+        // last, and never by so much that type beside a picture reads as colour.
+        for (const QRgb paper : {ink, ink2, ink3}) {
+            QVERIFY(qRed(paper) > qGreen(paper) && qGreen(paper) > qBlue(paper));
+            QVERIFY(qRed(paper) - qGreen(paper) <= 12 && qGreen(paper) - qBlue(paper) <= 12);
         }
         // Surfaces step up in lightness from the dimmed stage to the hover.
         const QRgb surfaces[] = {surroundDim, surround, well, chrome, card, raised, on, hover2};

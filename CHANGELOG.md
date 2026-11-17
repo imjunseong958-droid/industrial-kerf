@@ -104,7 +104,11 @@ on `main`; its section here becomes the release's notes on GitHub
   playhead's stamp, the model and the mode.
 - Settings opens a little above the middle of the window, and the toolbar
   dims with the rest of the window behind it. On a Mac the project file's
-  icon no longer shows beside the window buttons.
+  icon no longer shows beside the window buttons, which sit in the middle of
+  the toolbar's height, on the sidebar's column of icons.
+- Text is the colour of paper, not white: the same greys, warmed a little.
+  The sidebar, the toolbar's title, the composer's chips and Settings are set
+  a size larger, and what you type sits in the middle of the composer's box.
 
 ## 0.1.2
 

@@ -486,6 +486,7 @@ void MainWindow::buildComposerFolder() {
     m_composerFolder->setObjectName(QStringLiteral("composerFolder"));
     m_composerFolder->setIconName(QStringLiteral("g-folder"));
     m_composerFolder->setChevron(true);
+    m_composerFolder->setTypeStyle(tokens::body);
     m_composerFolder->setAccessibleName(QStringLiteral("Project folder"));
     m_chat->composerWidget()->toolRow()->insertWidget(0, m_composerFolder);
     connect(m_composerFolder, &QAbstractButton::clicked, this, [this] { ui::popupMenu(buildFolderMenu(), m_composerFolder, ui::Side::Above); });

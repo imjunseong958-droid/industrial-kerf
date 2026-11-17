@@ -404,7 +404,7 @@ private:
 // ---------------------------------------------------------------- CheckBox
 
 // .cbx: 14 x 14, radius 4, inset 1 pt white 16%. On: the on fill and the
-// check path (#a8a8a8, 1.75, drawn at 14 pt). An optional label (UI 12/16
+// check path (ink2, 1.75, drawn at 14 pt). An optional label (UI 12/16
 // ink) follows 8 pt after it.
 class CheckBox final : public KitButton {
     Q_OBJECT

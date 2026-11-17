@@ -139,6 +139,7 @@ HomeWindow::HomeWindow(const QString &kerfdBinary, QWidget *parent) : QDialog(pa
     m_folderChip->setObjectName(QStringLiteral("homeFolder"));
     m_folderChip->setIconName(QStringLiteral("g-folder"));
     m_folderChip->setChevron(true);
+    m_folderChip->setTypeStyle(tokens::body);
     connect(m_folderChip, &QAbstractButton::clicked, this, &HomeWindow::showFolderMenu);
     m_composer->toolRow()->insertWidget(0, m_folderChip);
     connect(m_composer, &Composer::submitRequested, this, &HomeWindow::send);
@@ -246,10 +247,20 @@ void HomeWindow::finish(const QString &request) {
     emit chosen();
 }
 
+void HomeWindow::resizeEvent(QResizeEvent *event) {
+    QDialog::resizeEvent(event);
+#if KERF_HOME_OWN_TITLE_BAR
+    // The system lays the window buttons out again with the window.
+    if (testAttribute(Qt::WA_WState_Created)) placeWindowButtons(this, 20, layout::toolbar / 2);
+#endif
+}
+
 void HomeWindow::showEvent(QShowEvent *event) {
     QDialog::showEvent(event);
 #if KERF_HOME_OWN_TITLE_BAR
     hideNativeWindowTitle(this);
+    // Where the editor has them, so they do not move at the hand-over.
+    placeWindowButtons(this, 20, layout::toolbar / 2);
 #endif
     m_composer->input()->setFocus();
     // Once it is laid out.

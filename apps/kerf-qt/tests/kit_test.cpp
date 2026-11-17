@@ -285,7 +285,7 @@ private slots:
             QVERIFY(solidEdge.contains(QPointF(x, 4 - 0.65)));
         }
         QVERIFY2(covered > 0 && notches > 0, qPrintable(QStringLiteral("%1/%2").arg(covered).arg(notches)));
-        // The checkbox check is #a8a8a8 whatever colour is asked for.
+        // The checkbox check is ink2 whatever colour is asked for.
         QCOMPARE(iconPixel(QStringLiteral("checkbox-check"), Qt::red, QPointF(6.5, 11.4), 16), ink2);
     }
 

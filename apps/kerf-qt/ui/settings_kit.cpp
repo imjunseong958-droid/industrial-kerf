@@ -199,11 +199,11 @@ SettingsPage::SettingsPage(const QString &title, QWidget *parent) : QScrollArea(
     setWidget(content);
     setAccessibleName(title);
     setStyleSheet(QStringLiteral("QScrollArea { background: transparent; border: 0; }"
-                                 "QLabel#settingsPageTitle { color: %1; font-size: 16px; font-weight: 500; }"
-                                 "QLabel#settingsSection { color: %2; font-size: 12px; }"
-                                 "QLabel#settingsRowLabel { color: %1; font-size: 13px; }"
-                                 "QLabel#settingsRowHint { color: %2; font-size: 12px; }"
-                                 "QLabel[quiet=\"true\"] { color: %2; font-size: 12px; }")
+                                 "QLabel#settingsPageTitle { color: %1; font-size: 18px; font-weight: 500; }"
+                                 "QLabel#settingsSection { color: %2; font-size: 13px; }"
+                                 "QLabel#settingsRowLabel { color: %1; font-size: 14px; }"
+                                 "QLabel#settingsRowHint { color: %2; font-size: 13px; }"
+                                 "QLabel[quiet=\"true\"] { color: %2; font-size: 13px; }")
                       .arg(rgba(ink), rgba(ink3)));
 }
 

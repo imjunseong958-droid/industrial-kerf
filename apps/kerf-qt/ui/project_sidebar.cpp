@@ -41,10 +41,12 @@ namespace {
 
 // From one row's top to the next; its fill keeps a point clear above and below,
 // so rows stand apart with nothing between them for a guide to break on.
-constexpr int kRowHeight = 32;
+constexpr int kRowHeight = 34;
 constexpr int kRowInset = 1;
-constexpr int kPadding = space::s8;
-constexpr int kIcon = 16;
+// A row's words and icons start 12 in from its fill, 20 from the sidebar's
+// edge: the column the window buttons start on too.
+constexpr int kPadding = space::s12;
+constexpr int kIcon = 18;
 constexpr int kChevron = 12;
 constexpr int kChevronGap = space::s4;
 constexpr int kBadge = 7;
@@ -149,7 +151,7 @@ public:
 protected:
     void paintEvent(QPaintEvent *) override {
         QPainter p(this);
-        p.setFont(tokens::font(body));
+        p.setFont(tokens::font(sideNote));
         p.setPen(tokens::color(ink3));
         const int x = kPadding;
         const QRect room(x, 0, width() - x - kPadding, height());
@@ -229,7 +231,7 @@ QRect SidebarRow::chevronRect() const {
     if (m_chevron == Chevron::None) return {};
     if (m_heading) {
         // After the name, with room around it to take a press.
-        const QFontMetrics metrics(tokens::font(body));
+        const QFontMetrics metrics(tokens::font(sideNote));
         const int name = std::min(metrics.horizontalAdvance(text()), std::max(0, textRect().width() - kChevron - kChevronGap));
         return QRect(textLeft() + name, 0, kChevronGap * 2 + kChevron, height());
     }
@@ -371,7 +373,7 @@ void SidebarRow::paintEvent(QPaintEvent *) {
         const QColor name = tokens::color(lit ? ink2 : ink3);
         if (!m_editing) {
             const QRect room = textRect();
-            p.setFont(tokens::font(body));
+            p.setFont(tokens::font(sideNote));
             const QFontMetrics metrics(p.font());
             const QString shown = metrics.elidedText(text(), Qt::ElideRight, std::max(0, room.width() - kChevron - kChevronGap));
             QPen pen(name);
@@ -485,11 +487,12 @@ void SidebarAccount::paintEvent(QPaintEvent *) {
     // "Name · what it is on ⌄" on one line, as a coding agent's foot reads.
     const qreal x = avatar.right() + space::s8;
     const qreal room = width() - kPadding - x - kChevron - kChevronGap;
-    const QFont nameFont = tokens::font(bodyName);
-    const QFont restFont = tokens::font(body);
+    const QFont nameFont = tokens::font(tokens::title);
+    const QFont restFont = tokens::font(sideNote);
     const QFontMetrics nameMetrics(nameFont);
     const QFontMetrics restMetrics(restFont);
-    const QString name = nameMetrics.elidedText(m_title, Qt::ElideRight, int(room * (m_subtitle.isEmpty() ? 1.0 : 0.6)));
+    // The name has the room it needs; what it is on takes what is left.
+    const QString name = nameMetrics.elidedText(m_title, Qt::ElideRight, int(room));
     const qreal nameWide = nameMetrics.horizontalAdvance(name);
     p.setFont(nameFont);
     p.setPen(tokens::color(ink));
@@ -575,7 +578,7 @@ ProjectSidebar::ProjectSidebar(QWidget *parent) : QWidget(parent) {
     m_head = head;
     head->setObjectName(QStringLiteral("sidebarHead"));
     auto *headRow = new QHBoxLayout(head);
-    headRow->setContentsMargins(space::s16, space::s12, space::s8, space::s4);
+    headRow->setContentsMargins(space::s8 + kPadding, space::s12, space::s8, space::s4);
     headRow->setSpacing(space::s4);
     m_heading = new QLabel(QStringLiteral("Projects"));
     m_heading->setObjectName(QStringLiteral("sidebarHeading"));

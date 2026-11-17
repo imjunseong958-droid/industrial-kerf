@@ -293,7 +293,8 @@ private:
 
     QWidget *m_box = nullptr;
     QHBoxLayout *m_toolRow = nullptr;
-    int m_leastInput = 22;
+    // The least the text's field is tall: a line's own height unless roomy.
+    int m_leastInput = 0;
     bool m_roomy = false;
     QTextEdit *m_input = nullptr;
     StampButton *m_stamp = nullptr;

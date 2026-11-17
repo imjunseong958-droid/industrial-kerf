@@ -28,6 +28,26 @@ void hideNativeWindowTitle(QWidget *window) {
     [native standardWindowButton:NSWindowDocumentIconButton].hidden = YES;
 }
 
+void placeWindowButtons(QWidget *window, int left, int centerY) {
+    NSWindow *native = nativeWindow(window);
+    if (!native || (native.styleMask & NSWindowStyleMaskFullScreen)) return;
+    NSButton *close = [native standardWindowButton:NSWindowCloseButton];
+    NSButton *minimize = [native standardWindowButton:NSWindowMiniaturizeButton];
+    NSButton *zoom = [native standardWindowButton:NSWindowZoomButton];
+    NSView *bar = close.superview;
+    if (!close || !minimize || !zoom || !bar) return;
+    // As far apart as the system has them; only where the row starts and how
+    // far down it sits are the window's own.
+    const CGFloat step = NSMinX(minimize.frame) - NSMinX(close.frame);
+    CGFloat x = left;
+    for (NSButton *button in @[close, minimize, zoom]) {
+        const CGFloat height = NSHeight(button.frame);
+        const CGFloat y = bar.isFlipped ? centerY - height / 2 : NSHeight(bar.frame) - centerY - height / 2;
+        [button setFrameOrigin:NSMakePoint(x, y)];
+        x += step;
+    }
+}
+
 int windowButtonsWidth(QWidget *window) {
     NSWindow *native = nativeWindow(window);
     NSButton *zoom = native ? [native standardWindowButton:NSWindowZoomButton] : nil;

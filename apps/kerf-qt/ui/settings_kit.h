@@ -5,11 +5,11 @@
 // the row's end. Rows that belong together stand one under another with a
 // hairline between them, and nothing is boxed.
 //
-//   Appearance                               the page's name, UI 16/24 medium
+//   Appearance                               the page's name, UI 18 medium
 //
 //   Interface font           [Inter|Pretendard|System]    a row: 12 above and
-//   Pretendard adds Hangul…                               below, name 13/20 ink,
-//   ─────────────────────────────────────────────────     what it does 12/16 ink3
+//   Pretendard adds Hangul…                               below, name 14 ink,
+//   ─────────────────────────────────────────────────     what it does 13 ink3
 //   Conversation font              [Same as interface|Serif]
 //
 // A row may carry something wide under its text (a field of JSON, a list),
