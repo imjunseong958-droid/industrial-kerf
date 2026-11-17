@@ -223,6 +223,10 @@ QString RecipeInspector::shape(const graph::Recipe &recipe, const Node &node) co
         const QJsonObject input = value.toObject();
         parts << QStringLiteral("%1:%2").arg(input.value(QStringLiteral("name")).toString()).arg(int(graph::inputKind(input)));
         if (graph::inputKind(input) != graph::InputKind::Value) parts << graph::valueText(input.value(QStringLiteral("value")));
+        // What the server takes there, once asked: a choice is a menu and shows what is chosen.
+        if (const QJsonArray choices = input.value(QStringLiteral("choices")).toArray(); !choices.isEmpty())
+            parts << QString::number(choices.size()) << graph::valueText(input.value(QStringLiteral("value")));
+        parts << graph::valueText(input.value(QStringLiteral("min"))) << graph::valueText(input.value(QStringLiteral("max")));
         for (const QJsonValue blank : input.value(QStringLiteral("blanks")).toArray()) parts << blankSays(blank.toString());
     }
     parts << node.holds.value(QStringLiteral("runner")).toObject().value(QStringLiteral("workflow")).toString()
@@ -773,13 +777,48 @@ void RecipeInspector::buildPart(const graph::Recipe &recipe, const Node &node) {
                 addRow(name, said(graph::valueText(held), timecode, ink2), kInputLabelWidth);
                 break;
             }
+            // One of the values the server takes there: chosen from them, not typed.
+            if (const QJsonArray choices = input.value(QStringLiteral("choices")).toArray(); !choices.isEmpty()) {
+                auto *choose = new ui::GhostButton(graph::valueText(held));
+                choose->setObjectName(QStringLiteral("graphChoice.%1").arg(name));
+                choose->setAccessibleName(name);
+                choose->setChevron(true);
+                connect(choose, &QAbstractButton::clicked, this, [this, choose, choices, held, id, name] {
+                    auto *menu = new QMenu(choose);
+                    menu->setObjectName(QStringLiteral("graphChoiceMenu"));
+                    menu->setAttribute(Qt::WA_DeleteOnClose);
+                    ui::styleMenu(menu);
+                    for (const QJsonValue choice : choices) {
+                        QAction *action = menu->addAction(graph::valueText(choice));
+                        action->setCheckable(true);
+                        action->setChecked(choice == held);
+                        connect(action, &QAction::triggered, this, [this, id, name, choice, held] {
+                            if (choice != held) emit partEdited(id, name, choice);
+                        });
+                    }
+                    ui::popupMenu(menu, choose);
+                });
+                auto *holder = new QWidget;
+                auto *row = new QHBoxLayout(holder);
+                row->setContentsMargins(0, 0, 0, 0);
+                row->addWidget(choose, 0, Qt::AlignLeft);
+                row->addStretch(1);
+                addRow(name, holder, kInputLabelWidth);
+                break;
+            }
             auto *edit = new QLineEdit(m_values.value(field));
             edit->setProperty(kShown, m_values.value(field));
             edit->setObjectName(QStringLiteral("graphField.%1").arg(field));
             edit->setAccessibleName(name);
             edit->setFont(tokens::font(timecode));
             const bool number = held.isDouble();
-            connect(edit, &QLineEdit::editingFinished, this, [this, edit, id, name, number] {
+            // The least and the most the server takes there, where it has said.
+            const QJsonValue least = input.value(QStringLiteral("min"));
+            const QJsonValue most = input.value(QStringLiteral("max"));
+            if (number && (least.isDouble() || most.isDouble()))
+                edit->setToolTip(QStringLiteral("%1 to %2").arg(least.isDouble() ? graph::valueText(least) : QStringLiteral("any"),
+                                                                 most.isDouble() ? graph::valueText(most) : QStringLiteral("any")));
+            connect(edit, &QLineEdit::editingFinished, this, [this, edit, id, name, number, least, most] {
                 const QString now = edit->text().trimmed();
                 const QString was = edit->property(kShown).toString();
                 edit->setModified(false);
@@ -792,7 +831,8 @@ void RecipeInspector::buildPart(const graph::Recipe &recipe, const Node &node) {
                 // A number stays a number: what does not read as one is put back.
                 bool reads = false;
                 const double value = now.toDouble(&reads);
-                if (!reads) {
+                // Nor is one the server does not take there sent to be refused.
+                if (!reads || (least.isDouble() && value < least.toDouble()) || (most.isDouble() && value > most.toDouble())) {
                     edit->setText(was);
                     return;
                 }

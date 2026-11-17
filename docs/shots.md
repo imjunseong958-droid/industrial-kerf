@@ -804,6 +804,16 @@ next is a change to that file. A blank is set on the recipe's line, and a link
 is the graph's own shape: to rewire a workflow, edit its file, or export one
 from ComfyUI for its API and put the blanks in.
 
+Once the workflow shows, what each value's input takes is asked of the server
+the model is run on, by the model's own program (`kerf-comfy --workflow … --inputs`,
+which asks the server what each kind of node takes): a sampler's name, a
+loader's weights, become a menu of the names that server has, and a number
+says the least and the most it takes and is not sent outside them. Asking
+takes some seconds and the workflow is shown and set meanwhile; with no
+server named or none answering it stays as it was, a value typed as text, and
+is held to nothing until a making. A value the server does not take is
+refused when it is set, with what it does take.
+
 An agent reads the same workflow with `look` (`workflow`) and sets a value
 with `edit` (`workflowSet`), by the same rule ([An agent's part](#an-agents-part)).
 Its copy is always a new file, so that the recipe before, and every take made

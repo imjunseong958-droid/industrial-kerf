@@ -451,6 +451,14 @@ impl Workflow {
         names
     }
 
+    /// The kinds of node its graph has, each once.
+    pub fn classes(&self) -> BTreeSet<String> {
+        self.graph
+            .values()
+            .filter_map(|node| node["class_type"].as_str().map(str::to_owned))
+            .collect()
+    }
+
     /// The graph to send, with `values` in its blanks. A node with a blank
     /// for a file or a signal that `values` has not got is left out, and so is each
     /// node that `required`, or the workflow's own `without`, says cannot do

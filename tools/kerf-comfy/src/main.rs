@@ -30,7 +30,7 @@ use kerf_comfy::server::{Address, Server};
 use kerf_comfy::workflow::{Workflow, BUNDLED};
 use kerf_comfy::{make, Patience};
 
-const USAGE: &str = "usage: kerf-comfy --workflow NAME|FILE REQUEST.json, kerf-comfy --workflow NAME|FILE --describe, or kerf-comfy --list";
+const USAGE: &str = "usage: kerf-comfy --workflow NAME|FILE REQUEST.json, kerf-comfy --workflow NAME|FILE --describe, kerf-comfy --workflow NAME|FILE --inputs, or kerf-comfy --list";
 
 /// A model's entry in a person's models file for the workflow `named`: how
 /// this program is run for it, and what its model takes. A workflow in a
@@ -95,6 +95,7 @@ fn main() -> ExitCode {
 fn run(args: Vec<String>) -> Result<(), String> {
     let mut workflow = None;
     let mut describe = false;
+    let mut inputs = false;
     let mut requests = Vec::new();
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
@@ -109,6 +110,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
                 return Ok(());
             }
             "--describe" => describe = true,
+            "--inputs" => inputs = true,
             "--help" | "-h" => {
                 println!("{USAGE}");
                 return Ok(());
@@ -126,6 +128,24 @@ fn run(args: Vec<String>) -> Result<(), String> {
             serde_json::to_string_pretty(&entry).map_err(|error| error.to_string())?
         );
         say("kerf-comfy: that is a model's entry; put it under the model's name in ~/.kerf/models.json");
+        return Ok(());
+    }
+    if inputs {
+        // What each kind of node the workflow has takes at each input, as the server it
+        // would be run on says: for whoever shows the workflow to offer and to hold to.
+        let (true, Some(named)) = (requests.is_empty(), workflow) else {
+            return Err(USAGE.to_owned());
+        };
+        let workflow = Workflow::named(&named)?;
+        let server = Server::new(Address::load()?);
+        let mut taken = serde_json::Map::new();
+        for class in workflow.classes() {
+            taken.insert(class.clone(), server.inputs(&class)?);
+        }
+        println!(
+            "{}",
+            serde_json::to_string(&serde_json::Value::Object(taken)).map_err(|error| error.to_string())?
+        );
         return Ok(());
     }
     let ([request], Some(workflow)) = (requests.as_slice(), workflow) else {

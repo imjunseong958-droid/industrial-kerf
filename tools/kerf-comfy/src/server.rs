@@ -120,6 +120,35 @@ pub enum State {
     Unknown,
 }
 
+/// What a node's inputs take, from the `input` the server says of its kind: `required`
+/// and `optional`, each input a kind and what is said of it.
+pub fn taken(input: &serde_json::Map<String, Value>) -> serde_json::Map<String, Value> {
+    let mut taken = serde_json::Map::new();
+    for group in ["required", "optional"] {
+        for (name, said) in input.get(group).and_then(Value::as_object).into_iter().flatten() {
+            let (kind, more) = (&said[0], &said[1]);
+            // A list of values to choose among, as a list or as a COMBO with its options.
+            let choices = kind
+                .as_array()
+                .or_else(|| (kind == "COMBO").then(|| more["options"].as_array()).flatten());
+            if let Some(choices) = choices {
+                taken.insert(name.clone(), serde_json::json!({"choices": choices}));
+            } else if kind == "INT" || kind == "FLOAT" {
+                let mut range = serde_json::Map::new();
+                for bound in ["min", "max", "step"] {
+                    if let Some(value) = more.get(bound).filter(|value| value.is_number()) {
+                        range.insert(bound.to_owned(), value.clone());
+                    }
+                }
+                if !range.is_empty() {
+                    taken.insert(name.clone(), Value::Object(range));
+                }
+            }
+        }
+    }
+    taken
+}
+
 /// A server and the agent that talks to it.
 pub struct Server {
     agent: ureq::Agent,
@@ -240,6 +269,22 @@ impl Server {
             .as_object()
             .ok_or_else(|| format!("the server has no node `{class}`, which the workflow uses"))?;
         Ok(required.keys().cloned().collect())
+    }
+
+    /// What each input of a node of kind `class` takes, as the server says it: the values
+    /// to choose among (`choices`), or for a number the least and the most it takes and
+    /// the step between (`min`, `max`, `step`). An input the server says neither of, a
+    /// link among them, is left out.
+    pub fn inputs(&self, class: &str) -> Result<Value, String> {
+        let what = format!("ask what a {class} node takes");
+        let said = Self::json(
+            &what,
+            self.get(&what, &format!("/object_info/{}", encoded(class)))?,
+        )?;
+        let node = said[class]["input"]
+            .as_object()
+            .ok_or_else(|| format!("the server has no node `{class}`, which the workflow uses"))?;
+        Ok(Value::Object(taken(node)))
     }
 
     /// Queue `graph`, and say what the server calls the job.
@@ -443,6 +488,32 @@ fn encoded(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn what_a_nodes_inputs_take_is_read_from_what_the_server_says_of_its_kind() {
+        let said = json!({
+            "required": {
+                "model": ["MODEL", {}],
+                "sampler_name": [["euler", "uni_pc"], {}],
+                "scheduler": ["COMBO", {"options": ["simple", "karras"]}],
+                "steps": ["INT", {"default": 20, "min": 1, "max": 10000}],
+                "denoise": ["FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01}],
+                "text": ["STRING", {"multiline": true}]
+            },
+            "optional": {"strength": ["FLOAT", {"min": 0.0, "max": 1000.0}]}
+        });
+        let taken = Value::Object(taken(said.as_object().unwrap()));
+        assert_eq!(
+            taken,
+            json!({
+                "sampler_name": {"choices": ["euler", "uni_pc"]},
+                "scheduler": {"choices": ["simple", "karras"]},
+                "steps": {"min": 1, "max": 10000},
+                "denoise": {"min": 0.0, "max": 1.0, "step": 0.01},
+                "strength": {"min": 0.0, "max": 1000.0}
+            })
+        );
+    }
 
     #[test]
     fn a_variable_names_the_server_before_the_file_does() {

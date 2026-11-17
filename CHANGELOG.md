@@ -6,6 +6,10 @@ on `main`; its section here becomes the release's notes on GitHub
 
 ## 0.1.3
 
+- In a model's workflow, an input says what the ComfyUI server takes there:
+  a sampler or a model file is chosen from the names that server has, and a
+  number is held to its least and most. `kerf-comfy --workflow NAME --inputs`
+  prints it, and Kerf in the conversation reads it with the workflow.
 - A take keeps the recipe it was made from, its seeds and its workflow with
   it, and the shot's graph goes back to it: Restore take's recipe, in the
   takes' card, for the take the shot is when the recipe has changed since.
