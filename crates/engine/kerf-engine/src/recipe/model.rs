@@ -24,6 +24,7 @@
 //!   "size": [1920, 1080],
 //!   "seed": 7,
 //!   "signals": [{ "name": "swell", "rate": 24.0, "values": [0.0, 0.25, 0.5] }],
+//!   "workflow": null,
 //!   "more": { "strength": "0.6" },
 //!   "out": "/project/shots/open.takes/.making-003.mp4"
 //! }
@@ -113,6 +114,13 @@ pub struct Ask {
     /// references, once the recipe is read for a making.
     pub cast: Vec<String>,
     pub styles: Vec<String>,
+    /// A graph of the model's own to run in place of the one its program
+    /// would: a file of the project, for a model whose program takes one. A
+    /// ComfyUI workflow kept beside the recipe is the case (`kerf-comfy`). A
+    /// program that takes none has no use for it, and nothing says so: what
+    /// a program reads of a request is its own, and a models file written
+    /// before this was a word has no way to have said it.
+    pub workflow: Option<Source>,
     /// Anything else the line says, which only that model reads.
     pub more: BTreeMap<String, String>,
     /// The file it writes: `out`, or the name of one a later step reads.
@@ -138,6 +146,7 @@ impl Ask {
             moves: Vec::new(),
             cast: Vec::new(),
             styles: Vec::new(),
+            workflow: None,
             more: BTreeMap::new(),
             out: "out".to_owned(),
         };
@@ -181,6 +190,7 @@ impl Ask {
                 }
                 "first" => ask.first = Some(source(value)?),
                 "last" => ask.last = Some(source(value)?),
+                WORKFLOW => ask.workflow = Some(source(value)?),
                 "ref" => ask.references.push(source(value)?),
                 "seconds" => {
                     ask.seconds = Some(
@@ -262,6 +272,7 @@ impl Ask {
             .chain(&self.first)
             .chain(&self.last)
             .chain(&self.references)
+            .chain(&self.workflow)
     }
 
     /// What it asks, as a person reads it.
@@ -292,6 +303,9 @@ impl Ask {
         }
         if let Some(seed) = self.seed {
             parts.push(format!("seed {seed}"));
+        }
+        if let Some(workflow) = &self.workflow {
+            parts.push(format!("{WORKFLOW} {}", workflow.shown()));
         }
         parts.extend(self.signals.iter().map(|signal| format!("signal {signal}")));
         parts.extend(self.moves.iter().map(|clip| format!("moves {clip}")));
@@ -343,6 +357,7 @@ impl Ask {
             "seed": self.seed,
             "signals": signals.iter().map(Signal::asked).collect::<Vec<_>>(),
             "moves": moves.iter().map(Moves::asked).collect::<Vec<_>>(),
+            WORKFLOW: optional(&self.workflow)?,
             "more": self.more,
             "out": made(&self.out).to_string_lossy(),
         }))
@@ -366,6 +381,9 @@ pub const SIGNAL: &str = "signal";
 
 /// The name a `generate` line hands a model a clip's way across the frame by.
 pub const MOVES: &str = "moves";
+
+/// The name a `generate` line hands a model a graph of its own to run by.
+pub const WORKFLOW: &str = "workflow";
 
 /// What a model takes, as the person's models file says it under `takes`.
 /// Each part is there only where the file says it.

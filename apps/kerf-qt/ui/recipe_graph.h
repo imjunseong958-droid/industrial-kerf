@@ -55,8 +55,8 @@ namespace graph {
 
 // What goes along an edge, and what a node gives.
 enum class Gives { Video, Image, Signal, Path, Words, File };
-// What a node is.
-enum class Kind { Sequence, Render, Model, Run, File, Signal, Moves, Cast, Style, Takes };
+// What a node is. A Part is a node of a model's own workflow (see Workflow).
+enum class Kind { Sequence, Render, Model, Run, File, Signal, Moves, Cast, Style, Takes, Part };
 
 struct Node {
     // What it is told apart by: a step by the file it makes (`made:guide.mp4`),
@@ -102,6 +102,8 @@ struct Recipe {
     QStringList notes;
     // Whether the bridge has said it: until then it is the shot's name alone.
     bool said = true;
+    // Whether it is a model's workflow, its nodes Parts, and not a shot's recipe.
+    bool parts = false;
 
     bool isValid() const { return !media.isEmpty(); }
     const Node *node(const QString &id) const;
@@ -109,6 +111,44 @@ struct Recipe {
     QList<Edge> into(const QString &id) const;
     static Recipe read(const QJsonObject &event);
 };
+
+// The workflow behind a model, as a `workflow` event says it: the ComfyUI
+// graph a model's program (kerf-comfy) runs for one `generate` step, every
+// node of it and every input of each. An input is a link to another node, a
+// blank the recipe fills (`{prompt}`, `{steps}`), or a value the workflow
+// itself sets, which is the person's to change here.
+//
+// It is drawn on the same canvas as the shot's graph: `graph` holds its nodes
+// as Parts, each with its inputs as rows, and its links as edges.
+struct Workflow {
+    QString media;
+    // The `generate` line it is of, the model that line asks, and the
+    // workflow that model's entry runs, as it names it.
+    int line = 0;
+    QString model;
+    QString name;
+    // Where it comes from: `bundled` with the program, a `file` the person's
+    // models entry names, or the shot's `own`, a file of the project (`file`,
+    // from the project's folder) that its line names.
+    QString origin;
+    QString file;
+    QString about;
+    // Its text, which a change is made to.
+    QString text;
+    // What fills each blank, by the blank's name: {by, says, default?, given?}.
+    QJsonObject blanks;
+    Recipe graph;
+
+    bool isValid() const { return !media.isEmpty() && line > 0; }
+    bool isOwn() const { return origin == QLatin1String("own"); }
+    static Workflow read(const QJsonObject &event);
+};
+
+// What a Part's input is: a link, a blank, or a value.
+enum class InputKind { Link, Blank, Value };
+InputKind inputKind(const QJsonObject &input);
+// A value as a row and a field show it.
+QString valueText(const QJsonValue &value);
 
 // The colour of what goes along an edge, and its name as a tag and the
 // legend say it.
@@ -166,7 +206,7 @@ public:
     // How much of the canvas's right is under something else (the inspector):
     // the cards are fitted into what is left.
     void setCovered(int right);
-    // The whole graph in view, no larger than life.
+    // The whole graph in view, no larger than life, however small that is.
     void fit();
     void zoomBy(qreal factor, const QPointF &about);
     qreal zoom() const { return m_zoom; }
@@ -218,12 +258,17 @@ private:
     QPointF inPort(const graph::Edge &edge) const;
     QPainterPath scenePath(const graph::Edge &edge) const;
     void paintCard(QPainter &painter, const graph::Node &node) const;
+    // A workflow's node: its name, and a row for each of its inputs.
+    void paintPart(QPainter &painter, const graph::Node &node) const;
     void paintLegend(QPainter &painter) const;
     // Kept placements, read and written.
     void loadPlaced();
     void savePlaced() const;
     void followMaking();
     void placeControls();
+    // Where the view goes by itself: the whole graph where that can be read,
+    // else where it starts at a size that can.
+    void settle();
 
     graph::Recipe m_recipe;
     // Where each card is: as arranged, then as moved by hand.
@@ -238,6 +283,8 @@ private:
     qreal m_footRadius = 0;
     // Fitted, until the view is panned or zoomed by hand: a resize fits again.
     bool m_fitted = true;
+    // Fit was asked for: all of the graph, however small.
+    bool m_fitWhole = false;
     // A press, and what it turned into.
     enum class Drag { None, Pan, Card, Wire };
     Drag m_drag = Drag::None;

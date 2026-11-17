@@ -43,6 +43,11 @@ pub struct Request {
     /// Where clips of the guide go, frame by frame.
     #[serde(default)]
     pub moves: Vec<Moves>,
+    /// A workflow of the project to run in place of the one this program was
+    /// started with: the line's `workflow=`, a file a person keeps beside
+    /// their recipe.
+    #[serde(default)]
+    pub workflow: Option<PathBuf>,
     /// Anything else the `generate` line said, as it was written.
     #[serde(default)]
     pub more: BTreeMap<String, String>,

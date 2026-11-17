@@ -137,6 +137,55 @@ QJsonObject bounceState(int revision = 2) {
                                {"markers", QJsonArray{}}}}}}};
 }
 
+// The workflow the video model of that shot is run with, as the bridge says it
+// (`workflow`, from kerf_comfy::detail::described): a small ComfyUI graph with
+// links, blanks the recipe fills, and values of its own. `own` is the shot's
+// own copy of it, a file of the project its line names.
+QJsonObject shotWorkflow(bool own = false, const QString &sampler = QStringLiteral("uni_pc")) {
+    const auto link = [](const char *name, const char *to) { return QJsonObject{{"name", name}, {"link", QJsonArray{to, 0}}}; };
+    const auto blank = [](const char *name, const char *value, QJsonArray blanks) {
+        return QJsonObject{{"name", name}, {"value", value}, {"blanks", blanks}};
+    };
+    const auto value = [](const char *name, const QJsonValue &held) { return QJsonObject{{"name", name}, {"value", held}}; };
+    const QString text = QStringLiteral("{\"kerf-comfy\": 1, \"workflow\": {\"8\": {\"inputs\": {\"sampler_name\": \"%1\"}}}}").arg(sampler);
+    return QJsonObject{
+        {"type", "workflow"}, {"media", "m4"}, {"line", 6}, {"model", "video"}, {"name", "shot"},
+        {"origin", own ? "own" : "bundled"}, {"file", own ? QJsonValue("shots/bounce.video.comfy.json") : QJsonValue()},
+        {"about", "A shot that follows a guide video, a reference picture, both, or the prompt alone."},
+        {"fps", 16.0}, {"frames", QJsonObject{{"most", 81}, {"step", 4}}}, {"size", QJsonArray{832, 480}}, {"text", text},
+        {"nodes", QJsonArray{
+            QJsonObject{{"id", "1"}, {"class", "UNETLoader"},
+                        {"inputs", QJsonArray{blank("unet_name", "{unet}", {"unet"}), value("weight_dtype", "default")}}},
+            QJsonObject{{"id", "4"}, {"class", "CLIPTextEncode"}, {"title", "Prompt"},
+                        {"inputs", QJsonArray{link("clip", "1"), blank("text", "{prompt}", {"prompt"})}}},
+            QJsonObject{{"id", "6"}, {"class", "LoadVideo"}, {"inputs", QJsonArray{blank("file", "{guide}", {"guide"})}}},
+            QJsonObject{{"id", "8"}, {"class", "KSampler"},
+                        {"inputs", QJsonArray{link("model", "1"), link("positive", "4"), link("guide", "6"), blank("seed", "{seed}", {"seed"}),
+                                              blank("steps", "{steps}", {"steps"}), value("cfg", 6.0), value("sampler_name", sampler),
+                                              value("denoise", 1), value("tiled", false)}}},
+            QJsonObject{{"id", "9"}, {"class", "SaveVideo"}, {"inputs", QJsonArray{link("video", "8"), value("filename_prefix", "kerf")}}}}},
+        {"blanks", QJsonObject{
+            {"unet", QJsonObject{{"by", "set"}, {"says", "wan2.1_vace_1.3B_fp16.safetensors unless the line says unet="},
+                                 {"default", "wan2.1_vace_1.3B_fp16.safetensors"}, {"given", QJsonValue()}}},
+            {"prompt", QJsonObject{{"by", "line"}, {"says", "the line's prompt, with the cast and styles it names"},
+                                   {"given", "a basketball bounces on a court"}}},
+            {"guide", QJsonObject{{"by", "file"}, {"says", "the file the line gives as guide="}, {"given", "{depth.mp4}"}}},
+            {"seed", QJsonObject{{"by", "line"}, {"says", "the line's seed, or one picked where it gives none"}, {"given", "7"}}},
+            {"steps", QJsonObject{{"by", "set"}, {"says", "20 unless the line says steps="}, {"default", 20}, {"given", QJsonValue()}}}}}};
+}
+
+// The shot's recipe with its video model run by kerf-comfy, as the bridge marks it.
+QJsonObject bounceWithRunner(const QString &workflow = QString()) {
+    QJsonObject recipe = bounceRecipe();
+    QJsonArray nodes = recipe.value("nodes").toArray();
+    QJsonObject video = nodes.at(5).toObject();
+    video.insert("runner", QJsonObject{{"kind", "comfy"}, {"workflow", "shot"}});
+    video.insert("workflow", workflow.isEmpty() ? QJsonValue() : QJsonValue(workflow));
+    nodes.replace(5, video);
+    recipe.insert("nodes", nodes);
+    return recipe;
+}
+
 // The middle of an edge, where it is clear of both cards.
 QPointF middleOf(const QPainterPath &path) { return path.pointAtPercent(0.5); }
 
@@ -704,6 +753,176 @@ private slots:
         QVERIFY(inspector->findChild<QLabel *>(QStringLiteral("graphCannot"))->text().contains(QStringLiteral("no model `video` is set up")));
     }
 
+    // A model its entry runs with kerf-comfy opens into the ComfyUI workflow it
+    // is run with: every node a card, every input a row, the blanks the recipe
+    // fills marked; the head's arrow goes back to the shot's graph.
+    void aModelRunByKerfComfyOpensIntoItsWorkflow() {
+        MainWindow window{QString(), QString()};
+        openBounce(window);
+        RecipeGraphPanel *panel = panelOf(window);
+        RecipeGraphView *view = panel->view();
+        RecipeInspector *inspector = panel->inspector();
+        // A model any other program runs has no workflow to open, and says nothing of one.
+        view->select(QStringLiteral("made:out"));
+        QVERIFY(!inspector->findChild<ui::Button *>(QStringLiteral("graphOpenWorkflow")));
+        emit view->nodeActivated(QStringLiteral("made:out"));
+        QVERIFY(window.m_lastCommand.value("type").toString() != QStringLiteral("workflow_get"));
+        QVERIFY(!panel->findChild<ui::IconButton *>(QStringLiteral("graphBack"))->isVisible());
+
+        window.handleEvent(bounceWithRunner());
+        auto *open = inspector->findChild<ui::Button *>(QStringLiteral("graphOpenWorkflow"));
+        QVERIFY(open);
+        QCOMPARE(inspector->findChild<QLabel *>(QStringLiteral("graphWorkflowSays"))->text(), QStringLiteral("shot, as it comes with kerf-comfy."));
+        open->click();
+        QCOMPARE(window.m_lastCommand, (QJsonObject{{"type", "workflow_get"}, {"media", "m4"}, {"line", 6}}));
+        // Until the bridge says it, the shot's graph stays.
+        QVERIFY(!panel->showsWorkflow());
+        // Another step's workflow, or another shot's, is not the one asked for.
+        QJsonObject other = shotWorkflow();
+        other.insert("line", 5);
+        window.handleEvent(other);
+        QVERIFY(!panel->showsWorkflow());
+
+        window.handleEvent(shotWorkflow());
+        QVERIFY(panel->showsWorkflow());
+        QVERIFY(panel->findChild<ui::IconButton *>(QStringLiteral("graphBack"))->isVisible());
+        QCOMPARE(panel->findChild<QLabel *>(QStringLiteral("graphTitle"))->text(), QStringLiteral("bounce"));
+        QCOMPARE(panel->findChild<QLabel *>(QStringLiteral("graphPath"))->text(), QStringLiteral("video · shot"));
+        // Every node is a card, and every link an edge to the row of the input it is.
+        const graph::Recipe &shown = view->recipe();
+        QVERIFY(shown.parts);
+        QCOMPARE(shown.nodes.size(), 5);
+        QCOMPARE(shown.edges.size(), 5);
+        QCOMPARE(shown.node(QStringLiteral("part:4"))->title, QStringLiteral("Prompt"));
+        QCOMPARE(shown.node(QStringLiteral("part:8"))->title, QStringLiteral("KSampler"));
+        const QRectF sampler = view->cardRect(QStringLiteral("part:8"));
+        QVERIFY(sampler.height() > view->cardRect(QStringLiteral("part:6")).height());
+        for (int index = 0; index < shown.edges.size(); ++index) {
+            const QPainterPath path = view->edgePath(index);
+            const QRectF to = view->cardRect(shown.edges.at(index).to);
+            const QPointF end = path.pointAtPercent(1.0);
+            QVERIFY(std::abs(end.x() - to.left()) < 1.0 && end.y() > to.top() + 20 && end.y() < to.bottom());
+        }
+        // Every input is shown on its node's card: a blank in the accent's ink, a value plain.
+        TextRecorder texts;
+        view->render(&texts);
+        for (const char *said : {"KSampler", "Prompt", "SaveVideo", "sampler_name", "uni_pc", "positive", "filename_prefix", "#8"})
+            QVERIFY2(texts.colorOf(QString::fromLatin1(said)).isValid(), said);
+        for (const char *blank : {"{prompt}", "{seed}", "{steps}", "{guide}", "{unet}"})
+            QCOMPARE(texts.colorOf(QString::fromLatin1(blank)), tokens::color(tokens::accentInk));
+        QCOMPARE(texts.colorOf(QStringLiteral("uni_pc")), tokens::color(tokens::ink2));
+        // Its legend is of what its rows are, not of what a shot's edges carry.
+        QVERIFY(texts.colorOf(QStringLiteral("the recipe fills")).isValid() && texts.colorOf(QStringLiteral("set here")).isValid());
+        QVERIFY(!texts.colorOf(QStringLiteral("signal")).isValid());
+        // No edge is drawn by hand in a workflow: its links are its own shape.
+        QCOMPARE(view->portAt(view->portPoint(QStringLiteral("part:1"))), QString());
+
+        // With no node chosen the card says the workflow, where it comes from, and what fills each blank.
+        QCOMPARE(inspector->nodeId(), QString());
+        QCOMPARE(inspector->findChild<QLabel *>(QStringLiteral("graphInspectorTitle"))->text(), QStringLiteral("shot"));
+        QVERIFY(inspector->findChild<QLabel *>(QStringLiteral("graphWorkflowOrigin"))->text().startsWith(QStringLiteral("As it comes with kerf-comfy.")));
+        QStringList blanks;
+        for (const QLabel *label : inspector->findChildren<QLabel *>())
+            if (label->property("graphBlank").isValid()) blanks << label->text();
+        QVERIFY(blanks.contains(QStringLiteral("The line's prompt, with the cast and styles it names. Now: a basketball bounces on a court")));
+        QVERIFY(blanks.contains(QStringLiteral("20 unless the line says steps=")));
+        // The shot is made from here as from its graph.
+        QVERIFY(panel->makeButton()->isVisible());
+
+        // Closed and opened again, the shot's own graph is what opens.
+        window.m_shell->dismiss();
+        window.showGraph(QStringLiteral("m4"));
+        QVERIFY(!panel->showsWorkflow());
+        emit panel->workflowRequested(6);
+        window.handleEvent(shotWorkflow());
+        QVERIFY(panel->showsWorkflow());
+
+        // The arrow goes back to the shot's graph, on the model it was the workflow of.
+        panel->findChild<ui::IconButton *>(QStringLiteral("graphBack"))->click();
+        QVERIFY(!panel->showsWorkflow());
+        QVERIFY(!view->recipe().parts);
+        QCOMPARE(view->selected(), QStringLiteral("made:out"));
+        QCOMPARE(panel->findChild<QLabel *>(QStringLiteral("graphPath"))->text(), QStringLiteral("shots/bounce.kerfrecipe"));
+        // A double-click on the model goes in as well.
+        window.m_lastCommand = {};
+        mouse(view, QEvent::MouseButtonDblClick, view->cardRect(QStringLiteral("made:out")).center());
+        QCOMPARE(window.m_lastCommand, (QJsonObject{{"type", "workflow_get"}, {"media", "m4"}, {"line", 6}}));
+    }
+
+    // In a workflow, a blank is the recipe's and a link the graph's shape; any
+    // other value is set in its node's card, and is kept in the shot's own
+    // copy of the workflow, which its line then names.
+    void aWorkflowsValuesAreSetInTheShotsOwnCopy() {
+        MainWindow window{QString(), QString()};
+        openBounce(window);
+        window.handleEvent(bounceWithRunner());
+        RecipeGraphPanel *panel = panelOf(window);
+        RecipeInspector *inspector = panel->inspector();
+        emit panel->workflowRequested(6);
+        window.handleEvent(shotWorkflow());
+        QVERIFY(panel->showsWorkflow());
+        const QString was = shotWorkflow().value("text").toString();
+        panel->view()->select(QStringLiteral("part:8"));
+        QCOMPARE(inspector->findChild<QLabel *>(QStringLiteral("graphInspectorTitle"))->text(), QStringLiteral("KSampler"));
+        const auto sent = [&](const QString &input, const QJsonValue &value) {
+            return QJsonObject{{"type", "workflow_edit"}, {"media", "m4"}, {"line", 6}, {"was", was}, {"node", "8"}, {"input", input}, {"value", value}};
+        };
+        // A blank is marked and is not a field: it is set on the recipe's line.
+        QVERIFY(!field(window, QStringLiteral("input.steps")) && !field(window, QStringLiteral("input.seed")));
+        auto *steps = inspector->findChild<QLabel *>(QStringLiteral("graphBlank.steps"));
+        QVERIFY(steps);
+        QCOMPARE(steps->text(), QStringLiteral("{steps}"));
+        QCOMPARE(steps->palette().color(QPalette::WindowText), tokens::color(tokens::accentInk));
+        // A link is the graph's shape: said, not set.
+        QVERIFY(!field(window, QStringLiteral("input.model")));
+        // A text the workflow sets, set to another.
+        QLineEdit *sampler = field(window, QStringLiteral("input.sampler_name"));
+        QVERIFY(sampler);
+        QCOMPARE(sampler->text(), QStringLiteral("uni_pc"));
+        typeInto(sampler, QStringLiteral("euler"));
+        QCOMPARE(window.m_lastCommand, sent(QStringLiteral("sampler_name"), QStringLiteral("euler")));
+        // A number stays a number, and what is no number is put back unsent.
+        QLineEdit *cfg = field(window, QStringLiteral("input.cfg"));
+        QCOMPARE(cfg->text(), QStringLiteral("6"));
+        typeInto(cfg, QStringLiteral("4.5"));
+        QCOMPARE(window.m_lastCommand, sent(QStringLiteral("cfg"), 4.5));
+        window.m_lastCommand = {};
+        typeInto(cfg, QStringLiteral("high"));
+        QCOMPARE(window.m_lastCommand, QJsonObject{});
+        QCOMPARE(cfg->text(), QStringLiteral("4.5"));
+        // A yes or no is a switch.
+        auto *tiled = inspector->findChild<QAbstractButton *>(QStringLiteral("graphField.input.tiled"));
+        QVERIFY(tiled && tiled->isCheckable() && !tiled->isChecked());
+        tiled->click();
+        QCOMPARE(window.m_lastCommand, sent(QStringLiteral("tiled"), true));
+
+        // The bridge answers with the shot's own copy, and the recipe whose line now names it.
+        window.handleEvent(shotWorkflow(true, QStringLiteral("euler")));
+        window.handleEvent(bounceWithRunner(QStringLiteral("bounce.video.comfy.json")));
+        QVERIFY(panel->showsWorkflow());
+        QCOMPARE(field(window, QStringLiteral("input.sampler_name")), sampler);
+        QCOMPARE(sampler->text(), QStringLiteral("euler"));
+        QCOMPARE(panel->findChild<QLabel *>(QStringLiteral("graphPath"))->text(), QStringLiteral("video · shots/bounce.video.comfy.json"));
+        // The next change is to the copy as it now reads.
+        typeInto(sampler, QStringLiteral("dpmpp_2m"));
+        QCOMPARE(window.m_lastCommand.value("was").toString(), shotWorkflow(true, QStringLiteral("euler")).value("text").toString());
+        // The workflow's own card says it is the shot's copy, and goes back to the one that comes.
+        panel->view()->select(QString());
+        QVERIFY(inspector->findChild<QLabel *>(QStringLiteral("graphWorkflowOrigin"))->text().contains(QStringLiteral("shots/bounce.video.comfy.json")));
+        inspector->findChild<ui::GhostButton *>(QStringLiteral("graphWorkflowDrop"))->click();
+        QCOMPARE(window.m_lastCommand, (QJsonObject{{"type", "recipe_edit"}, {"media", "m4"}, {"was", QString::fromLatin1(kBounce)}, {"line", 6},
+                                                    {"key", "workflow"}, {"nth", 0}}));
+        // The line changed under the workflow that shows: it is read again.
+        QJsonObject edited = bounceWithRunner();
+        edited.insert("edited", true);
+        window.handleEvent(edited);
+        QCOMPARE(window.m_lastCommand, (QJsonObject{{"type", "workflow_get"}, {"media", "m4"}, {"line", 6}}));
+        // Back in the shot's graph, the model says which workflow it is run with.
+        window.handleEvent(bounceWithRunner(QStringLiteral("bounce.video.comfy.json")));
+        panel->findChild<ui::IconButton *>(QStringLiteral("graphBack"))->click();
+        QCOMPARE(inspector->findChild<QLabel *>(QStringLiteral("graphWorkflowSays"))->text(), QStringLiteral("bounce.video.comfy.json, this shot's own copy."));
+    }
+
     // KERF_SCREENSHOT_DIR=<dir> saves the graph over the editor, and with each
     // kind of node chosen, to look at.
     void theGraphForTheGallery() {
@@ -721,6 +940,17 @@ private slots:
         window.handleEvent(QJsonObject{{"type", "media_making"}, {"media", "m4"}, {"take", 3}, {"line", "running, 12 s"}});
         QVERIFY(save(window, QStringLiteral("graph-bounce-making")));
         QVERIFY(save(*panel, QStringLiteral("graph-bounce-panel")));
+        window.handleEvent(QJsonObject{{"type", "media_make_cancelled"}, {"media", "m4"}});
+        // A model's workflow: as it comes, and with a node chosen in the shot's own copy.
+        window.handleEvent(bounceWithRunner());
+        emit panel->workflowRequested(6);
+        window.handleEvent(shotWorkflow());
+        window.m_errorBanner->hide();
+        window.showStatus(QString());
+        QVERIFY(save(window, QStringLiteral("graph-workflow")));
+        window.handleEvent(shotWorkflow(true, QStringLiteral("euler")));
+        panel->view()->select(QStringLiteral("part:8"));
+        QVERIFY(save(window, QStringLiteral("graph-workflow-node")));
     }
 };
 

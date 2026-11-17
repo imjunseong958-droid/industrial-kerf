@@ -588,8 +588,33 @@ timeline's own drawing of it is. The head makes the shot as the bin does: Make
 to four takes with each seed one on, Stop ends a making, and its takes card wears
 the stripes of what is being made.
 
+A model whose entry in the person's models file runs `kerf-comfy` has a workflow
+behind it, and its node opens into it: Open workflow in its card, or a
+double-click on it (`workflow_get {media, line}` answers `workflow`, read by
+`kerf_comfy::detail` from the workflow that comes with the program, the file
+the entry names, or the shot's own copy). The same canvas then shows the
+ComfyUI graph: a card for each node with a row for each input, a link coming in
+at its row, a blank the recipe fills (`{prompt}`, `{steps}`) marked in the
+accent's ink, a value the workflow sets itself plain; the legend says the three.
+The node's card sets any value that is neither a link nor a blank: a text, a
+number (which stays one), a yes or no. With no node chosen it says where the
+workflow comes from and what fills each blank, with what the line gives for it
+now. The head's arrow goes back to the shot's graph.
+
+A value set there is kept in the shot's own copy of the workflow
+(`workflow_edit {media, line, was, node, input, value}`): the first copies the
+workflow as it comes into the project beside the recipe
+(`<shot>.<model>.comfy.json`) with that value changed and nothing else, and adds
+`workflow=<file>` to the step's line; the next changes that file. The model's
+entry is untouched, so other shots are made as before, and Use it as it comes
+takes the word off the line. ComfyUI is never linked or changed: the editor
+reads workflow files, and `kerf-comfy` asks the server over HTTP when the shot
+is made. A model any other program runs has no workflow to open, and its node
+says nothing of one.
+
 `--graph <media>` starts a run on that shot's graph, and `--graph-node <id>` with
-a node chosen, for a capture (`--screenshot`).
+a node chosen (`workflow:<line>` opens the workflow of the model on that line of
+the recipe), for a capture (`--screenshot`).
 
 ## Masks
 

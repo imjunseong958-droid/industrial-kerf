@@ -6,6 +6,12 @@ on `main`; its section here becomes the release's notes on GitHub
 
 ## 0.1.3
 
+- A model that runs on a ComfyUI server opens, in its shot's graph, into the
+  workflow it is run with: every node and every input, the blanks the recipe
+  fills marked, and any other value to set. A value set is kept in a copy of
+  the workflow in the project, beside the recipe, which that shot's line then
+  names (`workflow=`) and `kerf-comfy` runs for it; nothing on the server and
+  no other shot changes, and a take is held to the copy.
 - A shot made from a recipe opens as a graph of how it is made: Open Graph on
   the media, or a double-click on its clip. Its steps and what they read are
   cards wired by what goes along each edge, a picture in motion, a still, the

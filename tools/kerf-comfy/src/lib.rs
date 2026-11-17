@@ -20,6 +20,7 @@
 //! (SIGTERM, or a terminal's Ctrl-C), it takes its job back from the server
 //! before it does, so nothing goes on being made that nobody will fetch.
 
+pub mod detail;
 pub mod guide;
 pub mod request;
 pub mod server;

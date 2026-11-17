@@ -464,6 +464,13 @@ impl Building<'_> {
             json!(ask.size.map(|(width, height)| format!("{width}x{height}"))),
         );
         holds.insert("makes".to_owned(), json!(ask.out));
+        holds.insert(
+            super::model::WORKFLOW.to_owned(),
+            json!(ask.workflow.as_ref().map(|workflow| match workflow {
+                Source::File(file) => file.clone(),
+                Source::Made(name) => format!("{{{name}}}"),
+            })),
+        );
         // What the line sets for this model alone, then what the model has said it
         // takes and the line leaves as it comes.
         let mut knobs: Vec<Json> = ask
@@ -519,6 +526,10 @@ impl Building<'_> {
         for (nth, reference) in ask.references.iter().enumerate() {
             let (from, gives) = self.source(reference);
             self.edge(from, &id, "ref", nth, gives);
+        }
+        if let Some(workflow) = &ask.workflow {
+            let (from, gives) = self.source(workflow);
+            self.edge(from, &id, super::model::WORKFLOW, 0, gives);
         }
         for (nth, clip) in ask.moves.iter().enumerate() {
             let from = self.moves(clip);
@@ -933,6 +944,20 @@ mod tests {
         );
         assert_eq!(node(&graph, "made:rough.mp4").title, "vork");
         assert_eq!(node(&graph, "file:scene.json").detail, "not there");
+    }
+
+    #[test]
+    fn a_workflow_a_line_names_is_a_file_the_model_reads() {
+        let (folder, project) = court(&BOUNCE.replace("strength=0.8", "strength=0.8 workflow=bounce.video.comfy.json"));
+        std::fs::write(folder.path().join("shots/bounce.video.comfy.json"), "{}").unwrap();
+        let graph = graph(&project, folder.path(), "shot", &models(folder.path())).unwrap();
+        assert!(edges(&graph).contains(&"file:bounce.video.comfy.json -> made:out workflow File".to_owned()));
+        let file = node(&graph, "file:bounce.video.comfy.json");
+        assert_eq!((file.detail.as_str(), &file.holds["inProject"]), ("shots", &json!("shots/bounce.video.comfy.json")));
+        assert_eq!(node(&graph, "made:out").holds["workflow"], "bounce.video.comfy.json");
+        // A line that names none says so.
+        assert_eq!(node(&graph, "made:ball.png").holds["workflow"], Json::Null);
+        assert_eq!(graph.cannot, None);
     }
 
     #[test]

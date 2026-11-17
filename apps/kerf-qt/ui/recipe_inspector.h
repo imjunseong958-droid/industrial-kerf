@@ -27,6 +27,7 @@
 #include <QString>
 #include <QWidget>
 
+class QAbstractButton;
 class QLabel;
 class QLineEdit;
 class QPlainTextEdit;
@@ -52,6 +53,10 @@ public:
     // knowing before it is.
     void setNode(const graph::Recipe &recipe, const QString &id);
     QString nodeId() const { return m_id; }
+    // The workflow being shown, where the canvas shows a model's and not the
+    // shot's graph: its nodes are then Parts, and with none chosen the card
+    // says the workflow itself and what fills each of its blanks.
+    void setWorkflow(const graph::Workflow &workflow);
     // While the shot is being made its takes are not to be chosen among.
     void setMaking(bool making);
     // How tall the card wants to be for what it holds, at most `most`.
@@ -69,6 +74,12 @@ signals:
     // Open the project's cast, and the person's models, where they are set.
     void castRequested();
     void modelsRequested();
+    // Open the workflow the model on line `line` is run with.
+    void workflowRequested(int line);
+    // Set input `input` of the workflow's node `node` (its id there) to `value`.
+    void partEdited(const QString &node, const QString &input, const QJsonValue &value);
+    // Go back to the workflow as it comes: the line's `workflow=` is taken off.
+    void workflowDropped(int line);
     // What it holds changed, and with it perhaps how tall it wants to be.
     void contentChanged();
 
@@ -90,8 +101,12 @@ private:
     void buildSignal(const graph::Node &node);
     void buildTakes(const graph::Node &node);
     void buildReads(const graph::Recipe &recipe, const graph::Node &node);
+    void buildPart(const graph::Recipe &recipe, const graph::Node &node);
+    void rebuildWorkflow();
+    // What fills a blank, and what the line gives for it now, in a line.
+    QString blankSays(const QString &name) const;
     // A row: a name, and what sets it.
-    void addRow(const QString &label, QWidget *control);
+    void addRow(const QString &label, QWidget *control, int labelWidth = 0);
     void addSection(const QString &title);
     QLabel *addNote(const QString &text, QRgb ink = tokens::ink3);
     // A one-line field that sets `key` on the node's line when it is left
@@ -113,6 +128,9 @@ private:
     QPlainTextEdit *m_prompt = nullptr;
     SignalCurve *m_curve = nullptr;
     QList<QWidget *> m_takeRows;
+    graph::Workflow m_workflow;
+    // A Part's yes-or-no inputs, by the field's name.
+    QHash<QString, QAbstractButton *> m_switches;
 };
 
 } // namespace kerf

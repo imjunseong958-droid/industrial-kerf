@@ -13,6 +13,11 @@
 //! `kerf-comfy --workflow NAME|FILE --describe` prints that entry for a
 //! workflow, with what its model takes beside how it is run, and asks no
 //! server.
+//!
+//! A request that names a workflow of its own project (`workflow=` on the
+//! `generate` line, a file kept beside the recipe) is made with that file in
+//! place of the one named here, so a person changes how a model is run for
+//! one shot and nothing on the server, or in this program, changes.
 
 use std::path::Path;
 use std::process::ExitCode;
@@ -129,7 +134,18 @@ fn run(args: Vec<String>) -> Result<(), String> {
     let stop = asked_to_stop();
     let file = Path::new(request);
     let request = Request::read(file)?;
-    let workflow = Workflow::named(&workflow)?;
+    // A line that names a workflow of its project is made with that one: the
+    // one this program was started with is what a line that names none gets.
+    let workflow = match &request.workflow {
+        Some(own) => {
+            say(&format!(
+                "kerf-comfy: with the recipe's own workflow, {}",
+                own.display()
+            ));
+            Workflow::named(&own.to_string_lossy())?
+        }
+        None => Workflow::named(&workflow)?,
+    };
     let server = Server::new(Address::load()?);
     // The request is in the take's working folder, beside what its steps made.
     let work = file

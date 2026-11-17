@@ -56,6 +56,25 @@ void GraphWiring::build() {
     connect(m_panel, &RecipeGraphPanel::stopRequested, this, [this, w] { w->stopMake(m_media); });
     connect(m_panel, &RecipeGraphPanel::castRequested, this, [w] { w->showCast(); });
     connect(m_panel, &RecipeGraphPanel::modelsRequested, this, [w] { w->showSettings(QStringLiteral("models")); });
+    // A model's workflow: asked for, shown when the bridge says it, and left by the head's arrow.
+    connect(m_panel, &RecipeGraphPanel::workflowRequested, this, [this](int line) {
+        m_workflowLine = line;
+        requestWorkflow();
+    });
+    connect(m_panel, &RecipeGraphPanel::workflowClosed, this, [this] {
+        m_workflowLine = 0;
+        m_panel->closeWorkflow();
+    });
+    connect(m_panel, &RecipeGraphPanel::workflowEdited, this, [this](const QString &node, const QString &input, const QJsonValue &value) {
+        if (m_media.isEmpty() || !m_panel->showsWorkflow()) return;
+        m_bus->send(QJsonObject{{QStringLiteral("type"), QStringLiteral("workflow_edit")},
+                                {QStringLiteral("media"), m_media},
+                                {QStringLiteral("line"), m_panel->workflow().line},
+                                {QStringLiteral("was"), m_panel->workflow().text},
+                                {QStringLiteral("node"), node},
+                                {QStringLiteral("input"), input},
+                                {QStringLiteral("value"), value}});
+    });
 
     connect(m_bus, &EditorBus::event, this, &GraphWiring::onEvent);
     connect(m_bus, &EditorBus::snapshotChanged, this, &GraphWiring::onSnapshot);
@@ -76,17 +95,23 @@ void GraphWiring::open(const QString &media) {
     const bool wasOpen = isOpen();
     m_media = media;
     m_panel->setProjectDirectory(w->m_projectDirectory);
+    // Opened anew, it is the shot's graph: a workflow gone into before is gone into again from there.
+    if (!wasOpen || m_panel->recipe().media != media) {
+        m_workflowLine = 0;
+        m_panel->closeWorkflow();
+    }
     // Each shot keeps its own arrangement, whichever version of its recipe it is made from.
-    m_panel->view()->setPlacementKey(
-        QStringLiteral("%1\n%2/%3").arg(w->m_projectDirectory, QFileInfo(recipe).path(), recipeShotName(recipe)));
+    m_panel->setPlacementKey(QStringLiteral("%1\n%2/%3").arg(w->m_projectDirectory, QFileInfo(recipe).path(), recipeShotName(recipe)));
     // Until the bridge has said the graph, the shot's name over an empty canvas.
     graph::Recipe waiting;
     waiting.media = media;
     waiting.recipe = recipe;
     waiting.name = recipeShotName(recipe);
     waiting.said = false;
-    if (m_panel->recipe().media != media) m_panel->setRecipe(waiting);
-    m_panel->view()->select(QString());
+    if (m_panel->recipe().media != media) {
+        m_panel->setRecipe(waiting);
+        m_panel->view()->select(QString());
+    }
     followMaking();
     request();
     if (wasOpen) return;
@@ -115,6 +140,13 @@ void GraphWiring::request() {
              !m_bus->send(QJsonObject{{QStringLiteral("type"), QStringLiteral("recipe_get")}, {QStringLiteral("media"), m_media}});
 }
 
+void GraphWiring::requestWorkflow() {
+    if (m_media.isEmpty() || m_workflowLine <= 0) return;
+    m_bus->send(QJsonObject{{QStringLiteral("type"), QStringLiteral("workflow_get")},
+                            {QStringLiteral("media"), m_media},
+                            {QStringLiteral("line"), m_workflowLine}});
+}
+
 void GraphWiring::edit(QJsonObject change) {
     if (m_media.isEmpty()) return;
     change.insert(QStringLiteral("type"), QStringLiteral("recipe_edit"));
@@ -138,8 +170,26 @@ void GraphWiring::onEvent(const QString &type, const QJsonObject &event) {
     if (type == QLatin1String("recipe")) {
         if (event.value(QStringLiteral("media")).toString() != m_media) return;
         m_panel->setRecipe(graph::Recipe::read(event));
-        if (!m_pendingNode.isEmpty()) m_panel->view()->select(std::exchange(m_pendingNode, QString()));
+        if (const QString node = std::exchange(m_pendingNode, QString()); !node.isEmpty()) {
+            // `workflow:<line>` starts on the workflow of the model on that line.
+            static const QString workflow = QStringLiteral("workflow:");
+            if (node.startsWith(workflow)) {
+                m_workflowLine = node.mid(workflow.size()).toInt();
+                requestWorkflow();
+            } else {
+                m_panel->view()->select(node);
+            }
+        }
         followMaking();
+        // The line a workflow is of was changed (its workflow= taken off, a knob
+        // set): what fills its blanks, and which file it is, are read again.
+        if (m_panel->showsWorkflow() && event.value(QStringLiteral("edited")).toBool()) requestWorkflow();
+        return;
+    }
+    if (type == QLatin1String("workflow")) {
+        // The one asked for, of this shot: shown in place of the shot's graph.
+        if (event.value(QStringLiteral("media")).toString() == m_media && event.value(QStringLiteral("line")).toInt() == m_workflowLine)
+            m_panel->setWorkflow(graph::Workflow::read(event));
         return;
     }
     if (!isOpen()) return;
@@ -170,6 +220,7 @@ void GraphWiring::onSnapshot() {
     // The project changed: a signal's keys, a clip's way, a take chosen.
     if (!isOpen() || (m_bus->revision() == m_asked && !m_owed)) return;
     request();
+    if (m_panel->showsWorkflow()) requestWorkflow();
     followMaking();
 }
 

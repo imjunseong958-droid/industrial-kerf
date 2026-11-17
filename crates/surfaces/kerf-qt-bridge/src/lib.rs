@@ -14,6 +14,7 @@ mod previews;
 mod qc;
 mod secrets;
 mod updates;
+mod workflows;
 mod queue;
 mod recipes;
 mod conversations;
@@ -337,6 +338,15 @@ enum Command {
     /// the editor read it: one name on one line, or the whole text. `recipe`
     /// then, as it now reads.
     RecipeEdit(recipes::Edit),
+    /// The workflow a `generate` step's model is run with, where its program
+    /// is kerf-comfy: `workflow`, every node and input of it.
+    WorkflowGet {
+        media: String,
+        line: usize,
+    },
+    /// Set a value of that workflow, in the shot's own copy of it beside its
+    /// recipe: `workflow`, then `recipe`.
+    WorkflowEdit(workflows::Edit),
     /// The person's models a recipe's `generate` can name, from their own
     /// models file: `models {file, exists, models, error?}`.
     Models,
@@ -864,6 +874,14 @@ fn runtime_worker(
             }
             Command::RecipeEdit(edit) => {
                 recipes::edit(&shared, &active_client, &edit, &tx);
+                continue;
+            }
+            Command::WorkflowGet { media, line } => {
+                workflows::get(&shared, &active_client, &media, line, &tx);
+                continue;
+            }
+            Command::WorkflowEdit(edit) => {
+                workflows::edit(&shared, &active_client, &edit, &tx);
                 continue;
             }
             Command::MediaReplace { media, path } => active_client.get_state().and_then(|state| {

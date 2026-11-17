@@ -47,6 +47,14 @@ RecipeGraphPanel::RecipeGraphPanel(QWidget *parent) : QWidget(parent) {
     auto *row = new QHBoxLayout(head);
     row->setContentsMargins(space::s16, 0, space::s12, 0);
     row->setSpacing(space::s8);
+    // Back from a model's workflow to the shot's graph; there only while one shows.
+    m_back = new ui::IconButton(QStringLiteral("g-chevl"), ui::IconButton::Size::S28);
+    m_back->setObjectName(QStringLiteral("graphBack"));
+    m_back->setCheckable(false);
+    m_back->setAccessibleName(QStringLiteral("Back to the shot's graph"));
+    m_back->setTip(QStringLiteral("Back to the shot's graph"));
+    connect(m_back, &QAbstractButton::clicked, this, &RecipeGraphPanel::workflowClosed);
+    row->addWidget(m_back, 0, Qt::AlignVCenter);
     auto *glyph = new QLabel;
     glyph->setPixmap(icons::pixmap(QStringLiteral("g-graph"), color(ink2), 16, devicePixelRatioF()));
     glyph->setFixedSize(16, 16);
@@ -126,6 +134,15 @@ RecipeGraphPanel::RecipeGraphPanel(QWidget *parent) : QWidget(parent) {
         placeInspector();
     });
     connect(m_view, &RecipeGraphView::wired, this, &RecipeGraphPanel::wire);
+    // A double-click goes into a model that has a workflow behind it.
+    connect(m_view, &RecipeGraphView::nodeActivated, this, [this](const QString &id) {
+        const graph::Node *node = m_view->recipe().node(id);
+        if (node && node->kind == Kind::Model && node->holds.value(QStringLiteral("runner")).toObject().value(QStringLiteral("kind")).toString() == QLatin1String("comfy"))
+            emit workflowRequested(node->line);
+    });
+    connect(m_inspector, &RecipeInspector::workflowRequested, this, &RecipeGraphPanel::workflowRequested);
+    connect(m_inspector, &RecipeInspector::partEdited, this, &RecipeGraphPanel::workflowEdited);
+    connect(m_inspector, &RecipeInspector::workflowDropped, this, [this](int line) { emit removed(line, QStringLiteral("workflow"), 0); });
     connect(m_inspector, &RecipeInspector::contentChanged, this, &RecipeGraphPanel::placeInspector);
     connect(m_inspector, &RecipeInspector::edited, this, &RecipeGraphPanel::edited);
     connect(m_inspector, &RecipeInspector::removed, this, &RecipeGraphPanel::removed);
@@ -138,10 +155,45 @@ RecipeGraphPanel::RecipeGraphPanel(QWidget *parent) : QWidget(parent) {
 
 void RecipeGraphPanel::setProjectDirectory(const QString &directory) { m_inspector->setProjectDirectory(directory); }
 
-const graph::Recipe &RecipeGraphPanel::recipe() const { return m_view->recipe(); }
+void RecipeGraphPanel::setPlacementKey(const QString &key) {
+    m_placementKey = key;
+    // A workflow's cards are another arrangement than the shot's.
+    m_view->setPlacementKey(showsWorkflow() && !key.isEmpty() ? QStringLiteral("%1\nworkflow %2").arg(key, m_workflow.name) : key);
+}
 
 void RecipeGraphPanel::setRecipe(const graph::Recipe &recipe) {
-    m_view->setRecipe(recipe);
+    // Another shot's graph is another thing to look at: its workflow goes with the one before.
+    if (recipe.media != m_shot.media) m_workflow = {};
+    m_shot = recipe;
+    if (!showsWorkflow()) {
+        m_view->setRecipe(m_shot);
+        m_inspector->setNode(m_view->recipe(), m_view->selected());
+        placeInspector();
+    }
+    refreshHead();
+}
+
+void RecipeGraphPanel::setWorkflow(const graph::Workflow &workflow) {
+    const bool another = !showsWorkflow() || m_workflow.line != workflow.line || m_workflow.name != workflow.name;
+    m_workflow = workflow;
+    setPlacementKey(m_placementKey);
+    m_inspector->setWorkflow(m_workflow);
+    m_view->setRecipe(m_workflow.graph);
+    if (another) m_view->select(QString());
+    m_inspector->setNode(m_view->recipe(), m_view->selected());
+    placeInspector();
+    refreshHead();
+}
+
+void RecipeGraphPanel::closeWorkflow() {
+    if (!showsWorkflow()) return;
+    const int line = m_workflow.line;
+    m_workflow = {};
+    setPlacementKey(m_placementKey);
+    m_view->setRecipe(m_shot);
+    // Back on the model it was the workflow of.
+    for (const graph::Node &node : std::as_const(m_shot.nodes))
+        if (node.kind == Kind::Model && node.line == line) m_view->select(node.id);
     m_inspector->setNode(m_view->recipe(), m_view->selected());
     placeInspector();
     refreshHead();
@@ -163,9 +215,12 @@ void RecipeGraphPanel::setCanMake(bool can, const QString &why) {
 }
 
 void RecipeGraphPanel::refreshHead() {
-    const graph::Recipe &recipe = m_view->recipe();
+    const graph::Recipe &recipe = m_shot;
+    m_back->setVisible(showsWorkflow());
     m_title->setText(recipe.name);
-    m_path->setText(recipe.recipe);
+    // The shot's recipe; or, in a model's workflow, the model and the workflow it is run with.
+    m_path->setText(showsWorkflow() ? QStringLiteral("%1 · %2").arg(m_workflow.model, m_workflow.isOwn() ? m_workflow.file : m_workflow.name)
+                                    : recipe.recipe);
     const graph::Node *takes = recipe.node(QStringLiteral("takes"));
     const bool has = takes && !takes->holds.value(QStringLiteral("takes")).toArray().isEmpty();
     const QString wants = takes ? takes->holds.value(QStringLiteral("wants")).toString() : QString();

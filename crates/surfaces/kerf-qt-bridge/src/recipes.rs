@@ -48,7 +48,7 @@ fn models() -> (Models, Option<String>) {
 }
 
 /// The `recipe` event of media `id`: its recipe as a graph.
-fn event(
+pub(crate) fn event(
     project: &Project,
     directory: &Path,
     id: &str,
@@ -59,6 +59,17 @@ fn event(
         kerf_engine::recipe::graph(project, directory, id, models).map_err(|error| error.to_string())?;
     let mut event = serde_json::to_value(&graph).map_err(|error| error.to_string())?;
     event["type"] = json!("recipe");
+    // A model its entry runs with kerf-comfy has a workflow an editor can open: which one
+    // is the person's own models file's to say.
+    for node in event["nodes"].as_array_mut().into_iter().flatten() {
+        let workflow = node["model"]
+            .as_str()
+            .and_then(|model| models.command(model).ok())
+            .and_then(crate::workflows::runs);
+        if let Some(workflow) = workflow {
+            node["runner"] = json!({"kind": "comfy", "workflow": workflow});
+        }
+    }
     if let Some(error) = models_error {
         event["modelsError"] = json!(error);
     }

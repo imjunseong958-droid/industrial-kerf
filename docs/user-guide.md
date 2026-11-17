@@ -180,7 +180,11 @@ the guide drawn from your sequence, the models, and what they are handed, wired
 together, ending in the shot's takes. Choose a node to set its prompt, its seed
 or a knob, or to draw a signal's curve, and drag from a node's port to a model
 to hand it over; what you change is written into the recipe, and Make again
-makes a new take from it.
+makes a new take from it. A model that runs on a ComfyUI server opens further:
+double-click it to see the workflow it is run with, node by node, and set any
+value in it. Kerf keeps your change in a copy of the workflow in the project,
+for that shot alone; nothing on the server changes
+([shots.md](shots.md#a-workflow-of-the-shots-own)).
 
 Each making is kept as a take, and the newest is the one in your cut. `kerf
 takes <media>` lists them and `kerf takes <media> --use 1` goes back to one,
