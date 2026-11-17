@@ -33,6 +33,16 @@ constexpr QRgb sidebar = qRgb(0x1e, 0x1e, 0x1e);     // the folders and conversa
 constexpr QRgb raised = qRgb(0x26, 0x26, 0x26);      // hover fill, segmented track, proposal card, composer, meter track
 constexpr QRgb on = qRgb(0x30, 0x30, 0x30);          // selected/on fill, avatars, scrub markers, sliding segment fill
 constexpr QRgb hover2 = qRgb(0x36, 0x36, 0x36);      // hover over a raised surface, flash, selected avatar
+// What a small mark says of a check, faded to sit with the warm inks rather
+// than shout over them. Not the computer's amber (activity::gpu), which says
+// something runs: the request's ochre is quieter and says something wants a
+// look, and is the colour of what to ask to fix it ("Ask Kerf", "Run QC").
+namespace status {
+constexpr QRgb passed = qRgb(0x86, 0xa8, 0x7c);  // sage: the check passed
+constexpr QRgb request = qRgb(0xc8, 0xa2, 0x64); // ochre: it wants a look, and the request to fix it
+constexpr QRgb failed = qRgb(0xd8, 0x80, 0x6e);  // faded brick: what could not be done, what cannot be undone
+} // namespace status
+
 // What opens from a press (menus, popovers, the composer's suggestions) is a
 // step up from what it opens over, and the row under the pointer a step more.
 constexpr QRgb popup = raised;
@@ -55,7 +65,7 @@ constexpr QRgb lineh = qRgba(255, 255, 255, alpha(0.22)); // hover outline
 
 constexpr QRgb accent = qRgb(0x33, 0x66, 0xe6);                   // primary button, focus ring, selected range, pinned stripe
 constexpr QRgb accentHover = qRgb(0x2b, 0x5a, 0xd6);              // primary hover
-constexpr QRgb accentInk = qRgb(0x8f, 0xb0, 0xff);                // timecode links, accepted text, "Ask Kerf" action
+constexpr QRgb accentInk = qRgb(0x8f, 0xb0, 0xff);                // timecode links, accepted text
 constexpr QRgb accentWash = qRgba(0x33, 0x66, 0xe6, alpha(0.14)); // defined by the design, unused in the mockup
 constexpr QRgb accentText = qRgb(0xff, 0xff, 0xff);               // text on an accent fill (.btn.p)
 constexpr QRgb pos = qRgb(0x4c, 0xc3, 0x8a);                      // pass dots, diff additions, connected

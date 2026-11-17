@@ -507,7 +507,7 @@ private slots:
         QCOMPARE(findAction(menu, QStringLiteral("preflightRunning"))->text(), QStringLiteral("Checking… 42%"));
         QVERIFY(!findAction(menu, QStringLiteral("preflightRunning"))->isEnabled());
 
-        // Done: the rows, dotted green and red.
+        // Done: the rows, dotted sage and ochre.
         window.handleEvent(checkFixture());
         wiring->buildExportMenu();
         QVERIFY(!findAction(menu, QStringLiteral("preflightRun")));
@@ -515,8 +515,9 @@ private slots:
         QAction *peak = findAction(menu, QStringLiteral("preflight.loudness.true_peak"));
         QVERIFY(integrated && peak);
         QCOMPARE(integrated->text(), QStringLiteral("Integrated loudness · −23.1 LUFS"));
-        QCOMPARE(integrated->property("kerfMenuDot").value<QColor>(), tokens::color(tokens::pos));
-        QCOMPARE(peak->property("kerfMenuDot").value<QColor>(), tokens::color(tokens::neg));
+        // Passed is sage; one to fix is the request's ochre, as its Ask Kerf is.
+        QCOMPARE(integrated->property("kerfMenuDot").value<QColor>(), tokens::color(tokens::status::passed));
+        QCOMPARE(peak->property("kerfMenuDot").value<QColor>(), tokens::color(tokens::status::request));
         QVERIFY(!findAction(menu, QStringLiteral("preflight.picture.levels")));
         QVERIFY(findAction(menu, QStringLiteral("preflight.text.overlap")));
 

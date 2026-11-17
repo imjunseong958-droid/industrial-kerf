@@ -716,14 +716,14 @@ private:
 //   │    Picture               ⌘P     ✓  │  an icon 16 in ink2 (a column of
 //   └────────────────────────────────────┘  them when any row has one), the
 //                                           label 14 ink;
-// at the end, what the row says (a key or a value) in 13 ink3, an accent
-// action in 13 accent-ink, then its mark: the chevron of a submenu in ink3,
+// at the end, what the row says (a key or a value) in 13 ink3, a request
+// ("Ask Kerf") in 13 status::request, then its mark: the chevron of a submenu in ink3,
 // for a row that can be on, the check in accent-ink while it is, or a status
 // dot (the preflight rows). Where any row can be on or has a dot, every row
 // keeps that room, so their ends line up and every label starts at the
 // row's start. Separators are a line inset 8, with 4 above and below; the
 // row under the pointer is the popup's hover; disabled rows are dis, warn
-// rows neg. A press in the shadow halo around the card closes the menu, as a
+// rows status::failed. A press in the shadow halo around the card closes the menu, as a
 // click outside does.
 void styleMenu(QMenu *menu);
 // Opens a styled menu at popoverPlacement() of `anchor` (with the 160 ms fade).
@@ -750,7 +750,8 @@ QString menuIcon(const QAction *action);
 void setMenuKeyIcon(QAction *action, const QString &icon);
 // A 6 pt status dot at the row's end, where a check would be (the preflight rows).
 void setMenuDot(QAction *action, const QColor &color);
-// Accent text in the right column (.ak), such as "Ask Kerf".
+// A request in the right column, in status::request: what to do about the
+// row, such as "Ask Kerf" or "Run QC".
 void setMenuAccent(QAction *action, const QString &text);
 
 } // namespace kerf::ui

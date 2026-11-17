@@ -1920,7 +1920,7 @@ void paintMenu(QMenu *menu) {
             p.setBrush(color(popupHover));
             p.drawRoundedRect(g, kMenuRowRadius, kMenuRowRadius);
         }
-        const QColor text = !enabled ? color(dis) : menuRole(a) == MenuRole::Warn ? color(neg) : color(ink);
+        const QColor text = !enabled ? color(dis) : menuRole(a) == MenuRole::Warn ? color(status::failed) : color(ink);
         qreal x = g.left() + kMenuInset;
         if (icons) {
             const QRectF box(x, g.top() + (g.height() - kMenuIconSize) / 2, kMenuIconSize, kMenuIconSize);
@@ -1953,7 +1953,7 @@ void paintMenu(QMenu *menu) {
         const QString accentText = a->property(kMenuAccent).toString();
         if (!accentText.isEmpty()) {
             const int w = snapWidth(menuQuiet, accentText);
-            p.setPen(enabled ? color(accentInk) : color(dis));
+            p.setPen(enabled ? color(status::request) : color(dis));
             p.drawText(QRectF(right - w, g.top(), w + 1, g.height()), Qt::AlignLeft | Qt::AlignVCenter, accentText);
             right -= w + space::s8;
         }

@@ -749,7 +749,9 @@ void ToolbarWiring::buildExportMenu() {
     for (const PreflightRow &row : preflightRows(m_checkSummary)) {
         QAction *item = menu->addAction(row.label);
         item->setObjectName(QStringLiteral("preflight.%1").arg(row.code));
-        ui::setMenuDot(item, tokens::color(row.passed ? tokens::pos : tokens::neg));
+        // A check that did not pass wants a look, and its request fixes it:
+        // the same ochre for both. Red is for what could not be done.
+        ui::setMenuDot(item, tokens::color(row.passed ? tokens::status::passed : tokens::status::request));
         if (row.passed) {
             if (!row.key.isEmpty()) ui::setMenuKey(item, row.key);
         } else {
@@ -762,7 +764,7 @@ void ToolbarWiring::buildExportMenu() {
     if (const int hidden = preflightHidden(m_checkSummary); hidden > 0) {
         QAction *more = menu->addAction(plural(hidden, QStringLiteral("1 more check failed"), QStringLiteral("%1 more checks failed")));
         more->setObjectName(QStringLiteral("preflightMore"));
-        ui::setMenuDot(more, tokens::color(tokens::neg));
+        ui::setMenuDot(more, tokens::color(tokens::status::request));
     }
     menu->addSeparator();
 
