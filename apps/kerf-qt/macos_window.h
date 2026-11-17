@@ -4,9 +4,10 @@ class QWidget;
 
 namespace kerf {
 
-// Hides the title macOS draws in a window's title bar, for a window that
-// draws its own under a transparent one (Qt::ExpandedClientAreaHint with
-// Qt::NoTitleBarBackgroundHint). Does nothing off the cocoa platform.
+// Hides the title macOS draws in a window's title bar, and its file's icon
+// beside it, for a window that draws its own under a transparent one
+// (Qt::ExpandedClientAreaHint with Qt::NoTitleBarBackgroundHint). Does
+// nothing off the cocoa platform.
 void hideNativeWindowTitle(QWidget *window);
 
 // How far the window buttons reach from the window's leading edge, in

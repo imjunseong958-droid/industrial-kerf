@@ -237,6 +237,7 @@ void MainWindow::setupPictureCommands() {
 void MainWindow::buildSidebar() {
     m_sidebar = new ProjectSidebar;
     m_shell->setSidebar(m_sidebar);
+    buildComposerFolder();
     // A project starts as a conversation; followContentWithPanes opens the
     // panel with the first thing to show.
     stage::Panes panes;
@@ -457,9 +458,54 @@ QRect MainWindow::cardPictureHome() const {
     return toShell(list, list->rect()).contains(home) ? home : QRect();
 }
 
+void MainWindow::buildComposerFolder() {
+    // Where a request goes: the open project, at the composer's foot; pressed,
+    // the other folders, and the ways to one not listed.
+    m_composerFolder = new ui::GhostButton;
+    m_composerFolder->setObjectName(QStringLiteral("composerFolder"));
+    m_composerFolder->setIconName(QStringLiteral("g-folder"));
+    m_composerFolder->setChevron(true);
+    m_composerFolder->setAccessibleName(QStringLiteral("Project folder"));
+    m_chat->composerWidget()->toolRow()->insertWidget(0, m_composerFolder);
+    connect(m_composerFolder, &QAbstractButton::clicked, this, [this] { ui::popupMenu(buildFolderMenu(), m_composerFolder, ui::Side::Above); });
+    m_composerFolder->hide();
+}
+
+QMenu *MainWindow::buildFolderMenu() {
+    auto *menu = new QMenu(this);
+    menu->setObjectName(QStringLiteral("composerFolderMenu"));
+    menu->setAttribute(Qt::WA_DeleteOnClose);
+    ui::styleMenu(menu);
+    const QString open = m_sidebar ? m_sidebar->current() : QString();
+    for (const QString &path : m_sidebar ? m_sidebar->projects() : QStringList()) {
+        QAction *action = menu->addAction(QFileInfo(path).fileName());
+        action->setCheckable(true);
+        action->setChecked(path == open);
+        action->setToolTip(QDir::toNativeSeparators(path));
+        connect(action, &QAction::triggered, this, [this, path, open] {
+            if (path != open) openProject(path);
+        });
+    }
+    if (!menu->isEmpty()) menu->addSeparator();
+    QAction *folder = menu->addAction(QStringLiteral("Open Folder…"));
+    folder->setObjectName(QStringLiteral("composerFolderOpen"));
+    connect(folder, &QAction::triggered, this, &MainWindow::openProjectFolder);
+    QAction *fresh = menu->addAction(QStringLiteral("New Project…"));
+    fresh->setObjectName(QStringLiteral("composerFolderNew"));
+    connect(fresh, &QAction::triggered, this, &MainWindow::newProject);
+    return menu;
+}
+
 void MainWindow::refreshSidebar() {
     if (!m_sidebar) return;
     m_sidebar->setProjects(ProjectLauncher::recentProjects(), m_projectDirectory);
+    if (m_composerFolder) {
+        const QString name = QFileInfo(m_sidebar->current()).fileName();
+        m_composerFolder->setText(name);
+        m_composerFolder->setFixedSize(m_composerFolder->sizeHint());
+        ui::setTip(m_composerFolder, QDir::toNativeSeparators(m_sidebar->current()));
+        m_composerFolder->setVisible(!name.isEmpty());
+    }
     const ConversationModel *model = m_chatWiring->conversations();
     const QString current = model->currentId();
     // What waits on the person in the open conversation (a proposal it

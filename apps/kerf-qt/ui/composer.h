@@ -6,9 +6,14 @@
 // works); the suggestions popover over it while it is focused and empty.
 //
 //   ┌──────────────────────────────────────────────────────────────────────┐
-//   │ Ask Kerf to make or change something                                 │  input, UI 14/22
-//   │ [lock Ask before edits v] [model v] [clock 00:00:17:08]       ◔ [send] │  row 28, gap 4
+//   │ Ask Kerf to make or change something                        ◔ [send] │  input, UI 14/22
 //   └──────────────────────────────────────────────────────────────────────┘
+//    [folder name v] [clock 00:00:17:08]         [model v] [lock Ask before edits v]
+//
+// The box holds only what is asked and Send. Under it, outside, are the
+// quieter things: the folder the request is for (its owner puts that chip
+// first in toolRow()) and the playhead's stamp at the start, the model and
+// the mode at the end.
 //
 // The composer only collects what is written and chosen; ChatWiring sends it
 // as an agent turn (main_window_chat.cpp).
@@ -225,7 +230,7 @@ public:
     QWidget *box() const { return m_box; }
     QLabel *errorLabel() const { return m_error; }
     FloatingList *suggestionsPopover() const { return m_suggestions; }
-    // The row under the text, for a control that belongs beside its tools.
+    // The row under the box, for a control that belongs beside its tools.
     QHBoxLayout *toolRow() const { return m_toolRow; }
     // The hairline over the composer, where it closes a list.
     void setDivider(bool shown) { m_divider = shown; update(); }

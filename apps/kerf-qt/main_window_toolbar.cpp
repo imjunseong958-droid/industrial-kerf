@@ -75,7 +75,12 @@ void MainWindow::setProjectTitle(const QString &name) {
     // The Window menu, Mission Control and the Dock list the project and
     // its sequence, as the toolbar does.
     setWindowTitle(m_toolbarWiring ? m_toolbarWiring->titleText() : name);
-    if (!m_projectDirectory.isEmpty()) setWindowFilePath(QDir(m_projectDirectory).absoluteFilePath(QStringLiteral("project.kerf")));
+    if (m_projectDirectory.isEmpty()) return;
+    setWindowFilePath(QDir(m_projectDirectory).absoluteFilePath(QStringLiteral("project.kerf")));
+#if KERF_EDITOR_OWN_TITLE_BAR
+    // Its file's icon comes back into the title bar with the file's path.
+    if (testAttribute(Qt::WA_WState_Created)) hideNativeWindowTitle(this);
+#endif
 }
 
 // The toolbar, once the registry's actions and menus exist.

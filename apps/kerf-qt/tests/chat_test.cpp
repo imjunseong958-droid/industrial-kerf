@@ -21,6 +21,8 @@
 #include "ui/make_card.h"
 #include "ui/wiring/chat_wiring.h"
 
+#include <QFileInfo>
+#include <QTemporaryDir>
 #include <QAbstractButton>
 #include <QSettings>
 #include <QScopeGuard>
@@ -795,6 +797,50 @@ private slots:
         card.setState(MakeCard::State::Made, QString(), 3);
         card.setState(MakeCard::State::Making);
         QCOMPARE(card.state(), MakeCard::State::Made);
+    }
+
+    // The composer's box holds what is asked and Send, and nothing else: the
+    // folder a request is for, the playhead's stamp, the model and the mode
+    // stand under it, outside.
+    void theComposersToolsStandUnderItsBox() {
+        QTemporaryDir folder;
+        QVERIFY(folder.isValid());
+        Window w;
+        w.window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&w.window));
+        Composer *composer = w.chat()->composerWidget();
+        QWidget *box = composer->box();
+        QVERIFY(box->isAncestorOf(composer->input()) && box->isAncestorOf(composer->sendButton()));
+        const auto inComposer = [composer](const QWidget *part) { return QRect(part->mapTo(composer, QPoint()), part->size()); };
+        for (QWidget *tool : {static_cast<QWidget *>(composer->modeChip()), static_cast<QWidget *>(composer->modelChip()),
+                              static_cast<QWidget *>(composer->stamp())}) {
+            QVERIFY(!box->isAncestorOf(tool));
+            QVERIFY(inComposer(tool).top() >= inComposer(box).bottom());
+        }
+        // Send keeps to the box's end, in the middle of a one-line box.
+        QVERIFY(inComposer(composer->sendButton()).right() < inComposer(box).right());
+        QVERIFY(std::abs(inComposer(composer->sendButton()).center().y() - inComposer(box).center().y()) <= 1);
+        // The mode ends the row under the box; the model is before it.
+        QCOMPARE(inComposer(composer->modeChip()).right(), inComposer(box).right() - 4);
+
+        // With no project there is no folder to name. With one, its chip is
+        // first in the row, and opens the folders and the ways to another.
+        auto *chip = w.window.findChild<ui::GhostButton *>(QStringLiteral("composerFolder"));
+        QVERIFY(chip && chip->isHidden());
+        w.window.m_projectDirectory = folder.path();
+        w.window.refreshSidebar();
+        QCoreApplication::processEvents();
+        QVERIFY(chip->isVisible());
+        QCOMPARE(chip->text(), QFileInfo(folder.path()).fileName());
+        QCOMPARE(inComposer(chip).left(), inComposer(box).left() + 4);
+        QVERIFY(inComposer(chip).top() >= inComposer(box).bottom());
+        QMenu *menu = w.window.buildFolderMenu();
+        QVERIFY(menu->findChild<QAction *>(QStringLiteral("composerFolderOpen")));
+        QVERIFY(menu->findChild<QAction *>(QStringLiteral("composerFolderNew")));
+        QAction *here = menu->actions().value(0);
+        QVERIFY(here && here->isChecked());
+        QCOMPARE(here->text(), QFileInfo(folder.path()).fileName());
+        delete menu;
     }
 
     // Settings keep the chat model and the models that make shots apart: a key

@@ -69,6 +69,7 @@ class StageMotion;
 class StageShell;
 namespace ui {
 class Button;
+class GhostButton;
 class IconButton;
 class SegmentedControl;
 class SettingsRow;
@@ -216,8 +217,10 @@ private slots:
     void loadInboundMcpConfig(const QString &path, bool imported);
     void saveInboundMcpConfig();
     void updateAgentModelChoices();
-    // Keeps a small picture of the project in its cache, for the sidebar.
-    void keepProjectPoster();
+    // The open project's chip under the composer, and the menu it opens: the
+    // other folders, Open Folder and New Project.
+    void buildComposerFolder();
+    QMenu *buildFolderMenu();
     void loadAgentSettings();
     void saveAgentSettings();
     // What the conversation runs on, as if chosen in Settings: cloud, own or
@@ -672,8 +675,7 @@ private:
     ui::SegmentedControl *m_protocolChoice = nullptr;
     // A key or a URL was typed and is not yet kept.
     bool m_agentFieldsEdited = false;
-    // The project's picture for the sidebar was written, this time it is open.
-    bool m_posterKept = false;
+    ui::GhostButton *m_composerFolder = nullptr;
     // The model each chat request names (the More menu's Model, else the
     // active connection's), and the ones offered.
     QString m_agentModel;

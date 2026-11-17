@@ -24,7 +24,6 @@
 #include <QMessageBox>
 #include <QPaintEvent>
 #include <QPainter>
-#include <QPainterPath>
 #include <QPalette>
 #include <QPushButton>
 #include <QSettings>
@@ -54,12 +53,8 @@ constexpr int kAction = 20;
 // A conversation's title starts under its folder's icon, with the rest of the
 // row to itself.
 constexpr int kNoteHeight = 28;
-// A folder's picture, in its icon's place and as large.
-constexpr int kThumb = kIcon;
 // What is in a folder starts under its name, past its icon.
 constexpr int kNested = kIcon + space::s8;
-// Where a project keeps a small picture of itself, once it has had one.
-const QString kPosterFile = QStringLiteral(".kerf/cache/poster.jpg");
 // Between one unfolded folder's rows and the next folder's name.
 constexpr int kGroupGap = space::s8;
 // What the folders' fold is kept under: a map of path to folded.
@@ -367,10 +362,11 @@ void SidebarRow::paintEvent(QPaintEvent *) {
 
     const bool lit = m_current || isHovered();
     if (m_heading) {
-        // A folder over its conversations: its picture or its glyph, its name,
-        // and the chevron after it. The open folder's name is in ink, medium.
+        // A folder over its conversations: its glyph, its name, and the
+        // chevron after it. The open folder's name is in ink, medium.
         const QColor name = tokens::color(m_strong || lit ? ink : ink2);
-        paintLead(p, kPadding + m_indent, m_strong || lit ? tokens::color(ink2) : tokens::color(ink3));
+        if (!m_icon.isEmpty())
+            icons::paint(p, m_icon, QRectF(kPadding + m_indent, 0, kIcon, height()), tokens::color(m_strong || lit ? ink2 : ink3), kIcon);
         if (!m_editing) {
             const QRect room = textRect();
             p.setFont(tokens::font(m_strong ? bodyName : body));
@@ -405,8 +401,8 @@ void SidebarRow::paintEvent(QPaintEvent *) {
                      QRectF(x0, (height() - kChevron) / 2.0, kChevron, kChevron), tokens::color(lit ? ink2 : ink3), kChevron);
         x0 += kChevron + kChevronGap;
     }
-    if (!m_icon.isEmpty() || !m_thumb.isNull())
-        paintLead(p, x0, m_strong ? tokens::color(lit ? ink : ink2) : ink_);
+    if (!m_icon.isEmpty())
+        icons::paint(p, m_icon, QRectF(x0, 0, kIcon, height()), m_strong ? tokens::color(lit ? ink : ink2) : ink_, kIcon);
     else if (!m_dotIcon.isEmpty())
         icons::paint(p, m_dotIcon, QRectF(x0, (height() - kDotIcon) / 2.0, kDotIcon, kDotIcon), ink_, kDotIcon);
     // The dot at the end, where the actions go while the pointer is over the row.
@@ -438,34 +434,6 @@ void SidebarRow::paintEvent(QPaintEvent *) {
         p.drawText(room, Qt::AlignLeft | Qt::AlignVCenter, shown);
     }
     if (focusVisible()) ui::paintFocusRing(p, r, radius::control);
-}
-
-void SidebarRow::setThumb(const QPixmap &thumb) {
-    m_thumb = thumb;
-    update();
-}
-
-void SidebarRow::paintLead(QPainter &p, qreal x, const QColor &color) const {
-    if (m_thumb.isNull()) {
-        if (!m_icon.isEmpty()) icons::paint(p, m_icon, QRectF(x, 0, kIcon, height()), color, kIcon);
-        return;
-    }
-    // The picture, in the icon's column, its corners rounded and a hairline
-    // round it so a dark frame still has an edge.
-    const QRectF box(x + (kIcon - kThumb) / 2.0, (height() - kThumb) / 2.0, kThumb, kThumb);
-    QPainterPath corners;
-    corners.addRoundedRect(box, radius::small, radius::small);
-    p.save();
-    p.setClipPath(corners);
-    p.setRenderHint(QPainter::SmoothPixmapTransform, true);
-    // Filled, cut at its sides or its top and foot as its shape wants.
-    const QSizeF size = m_thumb.deviceIndependentSize();
-    const qreal scale = std::max(box.width() / size.width(), box.height() / size.height());
-    const QSizeF drawn = size * scale;
-    p.drawPixmap(QRectF(box.center().x() - drawn.width() / 2.0, box.center().y() - drawn.height() / 2.0, drawn.width(), drawn.height()),
-                 m_thumb, QRectF(QPointF(0, 0), QSizeF(m_thumb.size())));
-    p.restore();
-    ui::paintInsetLine(p, box, radius::small, tokens::color(line2));
 }
 
 SidebarAccount::SidebarAccount(QWidget *parent) : ui::KitButton(parent) {
@@ -1174,12 +1142,11 @@ bool ProjectSidebar::eventFilter(QObject *watched, QEvent *event) {
 }
 
 SidebarRow *ProjectSidebar::makeProjectRow(const QString &path) {
-    // A folder: its picture once it has one, else the folder's glyph, and its
-    // name. With its conversations under it, its chevron follows its name.
+    // A folder: the folder's glyph and its name. With its conversations under
+    // it, its chevron follows its name.
     auto *row = new SidebarRow(QStringLiteral("g-folder"), QFileInfo(path).fileName());
     row->setObjectName(QStringLiteral("sidebarProject"));
     row->setProperty("projectPath", path);
-    row->setThumb(posterOf(path));
     ui::setTip(row, path);
     const bool chosen = path == m_current;
     row->setHeading(m_conversationsShown);
@@ -1362,22 +1329,7 @@ void ProjectSidebar::rebuild(bool arrivals, bool unfolding) {
     updateShimmer();
 }
 
-QPixmap ProjectSidebar::posterOf(const QString &path) const {
-    const QFileInfo file(QDir(path).filePath(kPosterFile));
-    if (!file.isFile()) return {};
-    const auto kept = m_posters.constFind(path);
-    if (kept != m_posters.constEnd() && kept->first == file.lastModified()) return kept->second;
-    QPixmap picture(file.absoluteFilePath());
-    m_posters.insert(path, {file.lastModified(), picture});
-    return picture;
-}
 
-QString ProjectSidebar::posterPath(const QString &project) { return QDir(project).filePath(kPosterFile); }
-
-void ProjectSidebar::refreshPosters() {
-    for (SidebarRow *row : std::as_const(m_rows))
-        if (row->objectName() == QStringLiteral("sidebarProject")) row->setThumb(posterOf(row->property("projectPath").toString()));
-}
 
 void ProjectSidebar::refreshTimes() {
     // What the other folders keep may have changed under them: read again.

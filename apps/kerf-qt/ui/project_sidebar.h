@@ -10,14 +10,14 @@
 //                                     pointer. Search, pressed, is typed into
 //                                     where it is, with nothing round it
 //   Projects                     [+]  meta in ink3; + is New Project, Open Folder
-//   [▣] jeju-vlog v         [+] [⋯]   a folder: its own picture once it has one,
-//       Make a 60-second cut of…      else the folder glyph; the open folder's name
-//       Colour the beach take      ●  in ink, medium. Hover: + (a conversation in
-//       Captions for the vlog         it) and its menu. Its conversations start
-//       Show 3 more                   under its name. A light passes over a title
-//     > Archived · 2                  Kerf works on, and a dot at the end says it
-//                                     is done, waits for you, or failed; hover: [⋯]
-//   [▣] atlas-launch >                folded: pressing it unfolds it
+//   [folder] jeju-vlog v    [+] [⋯]   a folder: the folder glyph and its name, the
+//       Make a 60-second cut of…      open folder's in ink, medium. Hover: + (a
+//       Colour the beach take      ●  conversation in it) and its menu. Its
+//       Captions for the vlog         conversations start under its name. A light
+//       Show 3 more                   passes over a title Kerf works on, and a dot
+//     > Archived · 2                  at the end says it is done, waits for you, or
+//                                     failed; hover: [⋯]
+//   [folder] atlas-launch >           folded: pressing it unfolds it
 //   ...                               8 between a folder's rows and the next folder
 //   (Y) You · Kerf Cloud v      [⚙]   the account, 52 tall, and Settings
 //
@@ -36,8 +36,6 @@
 #include <QDateTime>
 #include <QHash>
 #include <QList>
-#include <QPair>
-#include <QPixmap>
 #include <QPointer>
 #include <QSet>
 #include <QString>
@@ -47,7 +45,6 @@
 #include <QWidget>
 
 class QLabel;
-class QPainter;
 class QLineEdit;
 class QMenu;
 class QVBoxLayout;
@@ -79,10 +76,6 @@ public:
     // before its icon, and pressed anywhere it folds or unfolds.
     void setHeading(bool heading);
     bool isHeading() const { return m_heading; }
-    // A picture in the icon's place and as large, its corners rounded: a
-    // folder's own. Null for the icon again.
-    void setThumb(const QPixmap &thumb);
-    bool hasThumb() const { return !m_thumb.isNull(); }
     // A hairline down the row, under its folder's chevron: it belongs to the
     // folder over it.
     void setGuide(bool guide);
@@ -130,12 +123,9 @@ private:
     void placeActions();
     // Where the title is drawn, to the badge or the actions.
     QRect textRect() const;
-    // The row's picture, or else its icon in `color`, from `x`.
-    void paintLead(QPainter &p, qreal x, const QColor &color) const;
 
     QString m_icon;
     QString m_dotIcon;
-    QPixmap m_thumb;
     QColor m_badge;
     qreal m_phase = 0.0;
     QList<ui::IconButton *> m_actions;
@@ -253,10 +243,6 @@ public:
     // A conversation's menu (Rename…, Archive or Unarchive, Delete…), made
     // ready for `id`; a right-click or the menu key opens it over its row.
     QMenu *conversationMenu(const QString &id);
-    // Where a project keeps a small picture of itself (.kerf/cache/poster.jpg),
-    // for the window that has it open to write; and a look at them again.
-    static QString posterPath(const QString &project);
-    void refreshPosters();
     // The account at the foot; hidden until it is given something to say.
     SidebarAccount *accountRow() const { return m_account; }
     // Settings, the gear beside the account.
@@ -324,8 +310,6 @@ private:
     bool watching() const;
     // The open conversation, looked at, is seen.
     void markSeen();
-    // A folder's picture, as it keeps it; null when it has none.
-    QPixmap posterOf(const QString &path) const;
     void finishRename(bool keep);
     QDateTime now() const;
     int indexOf(const QString &id) const;
@@ -343,8 +327,6 @@ private:
     QSet<QString> m_showAll;
     // What the folders other than the open one keep, as last read.
     QHash<QString, QList<Conversation>> m_others;
-    // Each folder's picture, with when its file was written.
-    mutable QHash<QString, QPair<QDateTime, QPixmap>> m_posters;
     QString m_query;
     // Stands in for the clock in tests; null follows it.
     QDateTime m_fixedNow;

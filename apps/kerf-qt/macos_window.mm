@@ -20,7 +20,12 @@ NSWindow *nativeWindow(QWidget *window) {
 } // namespace
 
 void hideNativeWindowTitle(QWidget *window) {
-    if (NSWindow *native = nativeWindow(window)) native.titleVisibility = NSWindowTitleHidden;
+    NSWindow *native = nativeWindow(window);
+    if (!native) return;
+    native.titleVisibility = NSWindowTitleHidden;
+    // A window with a file of its own gets that file's icon in the title bar,
+    // title or no title: beside the window buttons, over what the window draws.
+    [native standardWindowButton:NSWindowDocumentIconButton].hidden = YES;
 }
 
 int windowButtonsWidth(QWidget *window) {

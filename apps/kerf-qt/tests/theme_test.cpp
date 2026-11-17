@@ -740,6 +740,13 @@ private slots:
             const QRect panelRect = scrim->panel()->geometry();
             QVERIFY(panelRect.width() < window.m_shell->width() && panelRect.height() < window.m_shell->height());
             QCOMPARE(panelRect.center().x(), window.m_shell->rect().center().x());
+            // A little above the middle, with room under it.
+            QVERIFY(panelRect.center().y() < window.m_shell->rect().center().y());
+            QVERIFY(panelRect.top() > 0 && panelRect.bottom() < window.m_shell->height() - panelRect.top());
+            // The toolbar, which is not the shell's, is dimmed with the rest.
+            auto *toolbarDim = window.m_toolbar->findChild<ModalDim *>();
+            QVERIFY(toolbarDim && toolbarDim->isVisible());
+            QCOMPARE(toolbarDim->geometry(), window.m_toolbar->rect());
             const QImage settings = window.m_preferences->grab().toImage();
             QCOMPARE(settings.pixelColor(panelRect.bottomLeft() + QPoint(20, -8)).rgb(), tokens::color(tokens::chrome).rgb());
             // Outside it, the work is there, dimmed.
@@ -765,6 +772,7 @@ private slots:
             // Its close, a press on the dim, or Esc gives the window back.
             window.m_preferences->findChild<ui::IconButton *>(QStringLiteral("settingsClose"))->click();
             QVERIFY(!window.m_preferences->isVisible());
+            QVERIFY(!toolbarDim->isVisible());
             window.showSettings();
             QTest::mouseClick(window.m_preferences, Qt::LeftButton, Qt::NoModifier, QPoint(4, 4));
             QVERIFY(!window.m_preferences->isVisible());

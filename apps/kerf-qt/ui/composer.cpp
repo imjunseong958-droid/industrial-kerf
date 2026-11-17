@@ -471,8 +471,8 @@ Composer::Composer(QWidget *parent) : QFrame(parent) {
     setStyleSheet(QStringLiteral("QFrame#chatComposer { border: 0; background: transparent; }"));
     setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
     auto *outer = new QVBoxLayout(this);
-    // 18 either side, as the conversation's text keeps 22 in; 12 over, 16 under.
-    outer->setContentsMargins(18, 12, 18, 16);
+    // 18 either side, as the conversation's text keeps 22 in; 12 over and under.
+    outer->setContentsMargins(18, 12, 18, 12);
     outer->setSpacing(0);
     // What waits for Kerf to finish: "Next: …" and Cancel, over the box.
     m_queuedRow = new QWidget;
@@ -503,10 +503,11 @@ Composer::Composer(QWidget *parent) : QFrame(parent) {
     auto *box = new ComposerBox;
     m_box = box;
     m_box->setObjectName(QStringLiteral("composerBox"));
-    auto *boxLayout = new QVBoxLayout(m_box);
-    // pad 12 12 10; the stamp's margin-left −4 puts its clock 8 in.
-    boxLayout->setContentsMargins(12, 12, 12, 10);
-    boxLayout->setSpacing(0);
+    // One row: what to ask, then how full Kerf's context is and Send, which
+    // keep to the foot as the text grows. Nothing else is in the box.
+    auto *boxLayout = new QHBoxLayout(m_box);
+    boxLayout->setContentsMargins(16, 10, 8, 10);
+    boxLayout->setSpacing(8);
     m_input = new QTextEdit;
     m_input->setObjectName(QStringLiteral("chatInput"));
     m_input->setAcceptRichText(false);
@@ -532,26 +533,31 @@ Composer::Composer(QWidget *parent) : QFrame(parent) {
         updatePopovers();
     });
     connect(m_input, &QTextEdit::cursorPositionChanged, this, &Composer::updatePopovers);
-    {
-        auto *line = new QWidget;
-        auto *lineLayout = new QHBoxLayout(line);
-        lineLayout->setContentsMargins(4, 0, 0, 0);
-        lineLayout->setSpacing(0);
-        lineLayout->addWidget(m_input);
-        boxLayout->addWidget(line);
-    }
+    boxLayout->addWidget(m_input, 1, Qt::AlignVCenter);
+    m_context = new ContextMeter;
+    boxLayout->addWidget(m_context, 0, Qt::AlignBottom);
+    m_send = new SendButton(SendButton::Mode::Send);
+    m_stop = new SendButton(SendButton::Mode::Stop);
+    m_stop->hide();
+    connect(m_send, &QAbstractButton::clicked, this, &Composer::submitRequested);
+    connect(m_stop, &QAbstractButton::clicked, this, &Composer::stopRequested);
+    boxLayout->addWidget(m_send, 0, Qt::AlignBottom);
+    boxLayout->addWidget(m_stop, 0, Qt::AlignBottom);
+    outer->addWidget(m_box);
 
+    // Under the box, what the request goes with: where (the owner's folder
+    // chip, first) and when at the start, who answers and how far Kerf may go
+    // at the end.
     auto *row = new QWidget;
-    row->setFixedHeight(28);
+    row->setObjectName(QStringLiteral("composerTools"));
     auto *rowLayout = new QHBoxLayout(row);
     m_toolRow = rowLayout;
-    rowLayout->setContentsMargins(0, 0, 0, 0);
+    rowLayout->setContentsMargins(4, 6, 4, 0);
     rowLayout->setSpacing(4);
-    // What the request goes with: how far Kerf may go, and who answers.
-    m_mode = new ComposerChip;
-    m_mode->setObjectName(QStringLiteral("composerMode"));
-    connect(m_mode, &QAbstractButton::clicked, this, [this] { ui::popupMenu(buildModeMenu(), m_mode, ui::Side::Above); });
-    rowLayout->addWidget(m_mode);
+    m_stamp = new StampButton;
+    m_stamp->setTimecode(QStringLiteral("00:00:00:00"));
+    rowLayout->addWidget(m_stamp);
+    rowLayout->addStretch(1);
     m_model = new ComposerChip;
     m_model->setObjectName(QStringLiteral("composerModel"));
     m_model->setAccessibleName(QStringLiteral("Model"));
@@ -559,23 +565,13 @@ Composer::Composer(QWidget *parent) : QFrame(parent) {
         if (m_model->hasChevron()) ui::popupMenu(buildModelMenu(), m_model, ui::Side::Above);
     });
     rowLayout->addWidget(m_model);
+    m_mode = new ComposerChip;
+    m_mode->setObjectName(QStringLiteral("composerMode"));
+    connect(m_mode, &QAbstractButton::clicked, this, [this] { ui::popupMenu(buildModeMenu(), m_mode, ui::Side::Above); });
+    rowLayout->addWidget(m_mode);
     m_mode->hide();
     m_model->hide();
-    m_stamp = new StampButton;
-    m_stamp->setTimecode(QStringLiteral("00:00:00:00"));
-    rowLayout->addWidget(m_stamp);
-    rowLayout->addStretch(1);
-    m_context = new ContextMeter;
-    rowLayout->addWidget(m_context);
-    m_send = new SendButton(SendButton::Mode::Send);
-    m_stop = new SendButton(SendButton::Mode::Stop);
-    m_stop->hide();
-    connect(m_send, &QAbstractButton::clicked, this, &Composer::submitRequested);
-    connect(m_stop, &QAbstractButton::clicked, this, &Composer::stopRequested);
-    rowLayout->addWidget(m_send);
-    rowLayout->addWidget(m_stop);
-    boxLayout->addWidget(row);
-    outer->addWidget(m_box);
+    outer->addWidget(row);
 
     m_error = new QLabel;
     m_error->setObjectName(QStringLiteral("composerError"));

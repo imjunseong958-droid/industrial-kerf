@@ -29,6 +29,7 @@
 #include <QStackedWidget>
 #include <QTextEdit>
 #include <QTimer>
+#include <QToolBar>
 #include <QUrl>
 #include <QVBoxLayout>
 
@@ -518,6 +519,17 @@ void MainWindow::buildPreferences() {
     }
     connect(m_shell, &StageShell::coveredChanged, this, [this](bool covered) {
         if (!covered && m_agentFieldsEdited) saveAgentSettings();
+        // The toolbar is not the shell's to cover: it dims with the rest, so
+        // the window is one room behind the panel, not a lit strip over a dim one.
+        if (!m_toolbar) return;
+        auto *dim = m_toolbar->findChild<ModalDim *>(QStringLiteral("modalDim"), Qt::FindDirectChildrenOnly);
+        if (!dim && covered) {
+            dim = new ModalDim(m_toolbar);
+            connect(dim, &ModalDim::dismissed, this, [this] { m_shell->setCovered(false); });
+        }
+        if (!dim) return;
+        dim->setVisible(covered);
+        if (covered) dim->raise();
     });
 }
 
