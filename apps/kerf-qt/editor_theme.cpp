@@ -279,12 +279,12 @@ EditorTheme makeEditorTheme() {
 
     // Menus and tooltips (0.5): cards with a line2 inset; the row under the
     // pointer is `raised` with the same ink.
-    t.menu = token(tk::card);
+    t.menu = token(tk::popup);
     t.menuBorder = token(tk::line2);
     t.menuText = token(tk::ink);
-    t.menuSelection = token(tk::raised);
+    t.menuSelection = token(tk::popupHover);
     t.menuSelectionText = token(tk::ink);
-    t.menuSeparator = laid(tk::card, tk::line);
+    t.menuSeparator = laid(tk::popup, tk::line);
     t.tooltip = token(tk::card);
     t.tooltipBorder = token(tk::line2);
     t.tooltipText = token(tk::ink);
@@ -368,7 +368,7 @@ EditorTheme makeEditorTheme() {
     t.clipMusic = clipStyle(token(tk::card), token(tk::card), cardLine, token(tk::ink), wave);
     t.clipGenerator = clipStyle(token(tk::raised), token(tk::raised), raisedLine, token(tk::ink), token(tk::ink2));
     t.clipCaption = clipStyle(token(tk::raised), token(tk::raised), raisedLine, token(tk::ink2), token(tk::ink2));
-    // The playhead is its own red, stroked in the stage's dark.
+    // The playhead is its own violet, stroked in the stage's dark.
     t.playhead = token(tk::playhead);
     t.playheadHalo = token(tk::surround);
     // The skimmed playhead: track2, which reads at 3:1 on the ruler and its

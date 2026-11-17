@@ -85,7 +85,7 @@ constexpr int kControlSize = 20;
 constexpr int kHeadInset = 16;
 constexpr int kTargetX = kHeadInset;
 constexpr int kNameX = kTargetX + 24 + 8;
-constexpr int kTogglesX = kTimelineLabelWidth - 6 - (3 * kControlSize + 2 * 2);
+constexpr int kTogglesX = kTimelineHeadOpen - 6 - (3 * kControlSize + 2 * 2);
 constexpr int kToggleStep = kControlSize + 2;
 // A clip's name bar, and the narrowest clip that shows one.
 constexpr qreal kNameBarHeight = 16.0;
@@ -520,8 +520,8 @@ void TimelineWidget::stepAllTrackHeightsKeeping(int steps, int row) {
 
 int TimelineWidget::defaultTrackHeight(bool audio, int number) const {
     if (m_allHeight > 0) return m_allHeight;
-    // The picture lane large enough to see what is on it.
-    if (m_roomyLanes) return audio ? 28 : number == 1 ? 64 : 40;
+    // With room, one height for every track: none larger than another.
+    if (m_roomyLanes) return kRoomyTrackHeight;
     if (m_wideSequence) return audio ? kWideAudioHeight : number == 1 ? kWideV1Height : number == 2 ? kWideV2Height : kWideVideoHeight;
     return audio ? kTrackHeight : kVideoTrackHeight;
 }
@@ -660,6 +660,23 @@ QRect TimelineWidget::viewportRect() const {
     return QRect(-pos(), parentWidget()->size()).intersected(rect());
 }
 
+bool TimelineWidget::inHeader(const QPoint &point) const {
+    // The head under the pointer is open over its lane's start, and takes
+    // what is pressed there as the column does.
+    const int reach = m_hoverRow >= 0 && rowAt(point.y()) == m_hoverRow ? kTimelineHeadOpen : kTimelineLabelWidth;
+    return point.x() < stickyOrigin().x() + reach;
+}
+
+QRect TimelineWidget::headsReach() const {
+    QRect reach = headerColumnRect();
+    reach.setWidth(kTimelineHeadOpen);
+    return reach;
+}
+
+double TimelineWidget::shownTime() const { return showsSkimmer() ? m_skimmerTime : m_playhead; }
+
+bool TimelineWidget::showsSkimmer() const { return m_hasSkimmer && !m_dragging && !m_scrubbing; }
+
 QRect TimelineWidget::headerColumnRect() const {
     const QPoint origin = stickyOrigin();
     return QRect(origin.x(), origin.y() + kRulerHeight, kTimelineLabelWidth, std::max(0, height() - origin.y() - kRulerHeight));
@@ -781,6 +798,7 @@ bool TimelineWidget::event(QEvent *event) {
         return show(tr("Drag to resize %1. Option-drag resizes every %2 track; Option-scroll over the headers resizes every track.")
                         .arg(trackRowLabel(grip), m_rows.at(grip).audio ? tr("sound") : tr("picture")),
                     {}, {});
+    if (m_addLaneVisible && addLaneButtonRect().contains(pos)) return show(tr("Add track"), {}, addLaneButtonRect());
     int row = -1;
     HeaderControl control{};
     if (controlAt(pos, &row, &control)) {
@@ -788,12 +806,16 @@ bool TimelineWidget::event(QEvent *event) {
         const QRect area = headerControlRect(row, control);
         switch (control) {
         case HeaderControl::Target:
+        {
+            // Which track, by its number, before what the control does.
+            const QString which = trackRowLabel(row) + QStringLiteral(" · ");
             if (m_targetsEditable)
-                return show(targetTracks().contains(track.value(QStringLiteral("id")).toString()) ? tr("Targeted") : tr("Target track"), {}, area);
-            return show(targetTracks().contains(track.value(QStringLiteral("id")).toString())
-                            ? tr("Targeted: source edits land here (the first unlocked %1 track)").arg(m_rows.at(row).audio ? tr("sound") : tr("picture"))
-                            : tr("Source edits land on the first unlocked %1 track").arg(m_rows.at(row).audio ? tr("sound") : tr("picture")),
+                return show(which + (targetTracks().contains(track.value(QStringLiteral("id")).toString()) ? tr("Targeted") : tr("Target track")), {}, area);
+            return show(which + (targetTracks().contains(track.value(QStringLiteral("id")).toString())
+                                     ? tr("Targeted: source edits land here (the first unlocked %1 track)").arg(m_rows.at(row).audio ? tr("sound") : tr("picture"))
+                                     : tr("Source edits land on the first unlocked %1 track").arg(m_rows.at(row).audio ? tr("sound") : tr("picture"))),
                         {}, area);
+        }
         case HeaderControl::Lock: return show(trackFlag(track, QStringLiteral("locked")) ? tr("Unlock track") : tr("Lock track"), {}, area);
         case HeaderControl::Output:
             if (m_rows.at(row).audio) return show(trackFlag(track, QStringLiteral("muted")) ? tr("Unmute") : tr("Mute"), {}, area);
@@ -1103,8 +1125,10 @@ void TimelineWidget::moveEvent(QMoveEvent *event) {
         update(QRect(left, now.y(), wide, kRulerHeight));
     }
     if (before.x() != now.x()) {
-        update(QRect(before.x(), top, kTimelineLabelWidth, tall));
-        update(QRect(now.x(), top, kTimelineLabelWidth, tall));
+        // The heads' column, and the head open over its lane if one is.
+        const int heads = m_hoverRow >= 0 ? kTimelineHeadOpen : kTimelineLabelWidth;
+        update(QRect(before.x(), top, heads, tall));
+        update(QRect(now.x(), top, heads, tall));
     }
 }
 
@@ -1332,7 +1356,7 @@ void TimelineWidget::mouseMoveEvent(QMouseEvent *event) {
         if (hoverRow != m_hoverRow || hoverControl != m_hoverControl) {
             m_hoverRow = hoverRow;
             m_hoverControl = hoverControl;
-            update(headerColumnRect());
+            update(headsReach());
         }
         if (grip >= 0) {
             if (m_addLaneVisible) {
@@ -1560,7 +1584,7 @@ void TimelineWidget::leaveEvent(QEvent *) {
     if (m_hoverControl >= 0 || m_hoverRow >= 0) {
         m_hoverControl = -1;
         m_hoverRow = -1;
-        update(headerColumnRect());
+        update(headsReach());
     }
     m_addLaneVisible = false;
     m_hoverFrame = -1.0;
@@ -2069,13 +2093,24 @@ void TimelineWidget::paintClip(QPainter &p, const QRect &visible, int row, const
             paintNameBar(p, QRectF(rect.left(), rect.top() + std::floor((rect.height() - kNameBarHeight) / 2.0), rect.width(), kNameBarHeight),
                          name, clipSecondary(clip, kind), qc, fx, false, C(tk::ink));
     } else if (rect.width() >= kNameBarFrom) {
-        const QRectF bar(rect.left(), rect.top(), rect.width(), std::min(kNameBarHeight, rect.height()));
-        if (!audio) p.fillRect(bar, withAlpha(qRgb(0, 0, 0), 0.55));
-        paintNameBar(p, bar, name, clipSecondary(clip, kind), qc, fx, audio, C(tk::ink));
+        // The dark bar is for a name over a picture, to keep it read: only
+        // over frames. A sound's name sits over its waveform, shadowed. A clip
+        // with nothing yet drawn under its name says it in its middle, as a
+        // title does.
+        const bool overPicture = !card && !audio && (strip || poster);
+        const bool overWaveform = audio && peaks;
+        if (overPicture || overWaveform) {
+            const QRectF bar(rect.left(), rect.top(), rect.width(), std::min(kNameBarHeight, rect.height()));
+            if (overPicture) p.fillRect(bar, withAlpha(qRgb(0, 0, 0), 0.55));
+            paintNameBar(p, bar, name, clipSecondary(clip, kind), qc, fx, overWaveform, C(tk::ink));
+        } else {
+            paintNameBar(p, QRectF(rect.left(), rect.top() + std::floor((rect.height() - kNameBarHeight) / 2.0), rect.width(), kNameBarHeight),
+                         name, clipSecondary(clip, kind), qc, fx, false, C(tk::ink));
+        }
     }
     p.restore();
     if (audio && !card) paintGainBand(p, rect, clip);
-    // Its outline: line2; the accent when an open proposal changes it; 1.5 ink when selected.
+    // Its outline: line2; sage when an open proposal changes it; 1.5 ink when selected.
     // Waiting to be made or with no file, dashed; being made, amber.
     const bool dashed = absent || making.state == ActivityState::Queued;
     if (selected) {
@@ -2091,7 +2126,7 @@ void TimelineWidget::paintClip(QPainter &p, const QRect &visible, int row, const
         p.restore();
     } else {
         ui::paintInsetLine(p, rect, kClipRadius,
-                           C(making.state == ActivityState::Making ? tk::activity::gpu : movedByProposal(id) ? tk::accent : tk::line2), 1.0);
+                           C(making.state == ActivityState::Making ? tk::activity::gpu : movedByProposal(id) ? tk::proposed : tk::line2), 1.0);
     }
     // What holds still is said here; a making's clock goes on over the lanes.
     if (dashed) paintActivityLabel(p, rect, making, 0);
@@ -2240,36 +2275,37 @@ void TimelineWidget::paintHeaders(QPainter &p, const QRect &dirty) {
     p.fillRect(column, C(tk::chrome));
     const auto [first, last] = rowsBetween(std::max(column.top(), dirty.top()), std::min(column.bottom(), dirty.bottom()));
     const QStringList targets = targetTracks();
-    for (int row = first; row < last; ++row) paintTrackHeader(p, row, tracks.at(m_rows.at(row).track).toObject(), column.left(), targets);
+    for (int row = first; row < last; ++row) paintTrackHeader(p, row, tracks.at(m_rows.at(row).track).toObject(), column.left(), targets, false);
     const int grip = m_resizeRow >= 0 ? m_resizeRow : m_hoverGrip;
     if (grip >= 0 && grip < m_rows.size()) p.fillRect(column.left(), m_rows.at(grip).bottom() - 2, column.width() - 1, 2, C(tk::track2));
     if (m_addLaneVisible) {
+        // Add track: its icon on a chip, as the kinds over it are.
         const QRect button = addLaneButtonRect();
         p.setRenderHint(QPainter::Antialiasing, true);
         QPainterPath path;
-        path.addRoundedRect(QRectF(button), tk::radius::control, tk::radius::control);
+        path.addRoundedRect(QRectF(button), tk::radius::small, tk::radius::small);
         p.fillPath(path, C(tk::raised));
-        const qreal dpr = p.device()->devicePixelRatioF();
-        const QString label = tr("Add track");
-        const QFont font = tk::font(tk::control);
-        const int textWidth = QFontMetrics(font).horizontalAdvance(label);
-        const int left = button.left() + (button.width() - 16 - 4 - textWidth) / 2;
-        p.drawPixmap(QPointF(left, button.top() + 4), iconPixmap(QStringLiteral("g-addtrack"), C(tk::ink), 16, dpr));
-        p.setFont(font);
-        p.setPen(C(tk::ink));
-        p.drawText(QRect(left + 20, button.top(), textWidth + 2, button.height()), Qt::AlignLeft | Qt::AlignVCenter, label);
+        constexpr qreal mark = 14;
+        icons::paint(p, QStringLiteral("g-addtrack"),
+                     QRectF(button.left() + (button.width() - mark) / 2.0, button.top() + (button.height() - mark) / 2.0, mark, mark), C(tk::ink), mark);
     }
     // The column's right line.
     p.fillRect(column.left() + kTimelineLabelWidth - 1, column.top(), 1, column.height(), C(tk::line));
     p.restore();
 }
 
-void TimelineWidget::paintTrackHeader(QPainter &p, int row, const QJsonObject &track, int left, const QStringList &targets) {
+void TimelineWidget::paintTrackHeader(QPainter &p, int row, const QJsonObject &track, int left, const QStringList &targets, bool open) {
     const TrackRow &layout = m_rows.at(row);
     const QString id = track.value(QStringLiteral("id")).toString();
     const qreal dpr = p.device()->devicePixelRatioF();
+    const int wide = open ? kTimelineHeadOpen : kTimelineLabelWidth;
+    // Open over its lane: the column's chrome to its end, and a line2 edge.
+    if (open) {
+        p.fillRect(QRect(left, layout.top, wide, layout.height), C(tk::chrome));
+        p.fillRect(QRect(left + wide - 1, layout.top, 1, layout.height), C(tk::line2));
+    }
     // Its bottom line: line2 under the last picture track.
-    p.fillRect(QRect(left, layout.bottom() - 1, kTimelineLabelWidth, 1), C(row == lastPictureRow() ? tk::line2 : tk::line));
+    p.fillRect(QRect(left, layout.bottom() - 1, wide, 1), C(row == lastPictureRow() ? tk::line2 : tk::line));
     p.save();
     p.setRenderHint(QPainter::Antialiasing, true);
     const auto box = [&](const QRect &rect, const QColor &fill, const QColor &outline) {
@@ -2279,25 +2315,35 @@ void TimelineWidget::paintTrackHeader(QPainter &p, int row, const QJsonObject &t
         if (outline.alpha() > 0) ui::paintInsetLine(p, QRectF(rect), tk::radius::small, outline, 1.0);
     };
     const auto hovered = [&](HeaderControl control) { return m_hoverControl == row * 8 + int(control); };
-    // The target: the track's id, held on when targeted.
+    const bool enabled = trackFlag(track, QStringLiteral("enabled"));
+    const bool heard = enabled && !(layout.audio && trackFlag(track, QStringLiteral("muted")));
+    // The target: what kind of track it is (picture, captions, sound) on a
+    // chip, a step up from the head, so it reads as a control whether or not
+    // it is held; held (targeted), a step more, outlined, in ink. A muted or
+    // hidden track's kind reads dim, so its state shows with its head closed.
+    // Its name is in the head opened under the pointer; its number (V1, A1)
+    // in the chip's tip.
     {
         const QRect rect = headerControlRect(row, HeaderControl::Target).translated(left - stickyOrigin().x(), 0);
         const bool targeted = targets.contains(id);
-        if (targeted) box(rect, C(tk::on), withAlpha(qRgb(255, 255, 255), 0.20));
-        else box(rect, hovered(HeaderControl::Target) ? C(tk::raised) : QColor(Qt::transparent), C(tk::line));
-        p.setFont(targeted ? monoSmallStrongFont() : monoSmallFont());
-        p.setPen(C(targeted || hovered(HeaderControl::Target) ? tk::ink : tk::ink3));
-        p.drawText(rect.adjusted(0, 2, 0, 0), Qt::AlignHCenter | Qt::AlignTop, trackRowLabel(row));
+        if (targeted) box(rect, C(tk::hover2), C(tk::line2));
+        else box(rect, C(hovered(HeaderControl::Target) ? tk::on : tk::raised), QColor(Qt::transparent));
+        const QString glyph = layout.audio ? QStringLiteral("g-audio") : isCaptionTrack(track) ? QStringLiteral("g-captions") : QStringLiteral("g-video");
+        constexpr qreal mark = 14;
+        const bool lit = targeted || hovered(HeaderControl::Target);
+        icons::paint(p, glyph, QRectF(rect.left() + (rect.width() - mark) / 2.0, rect.top() + (rect.height() - mark) / 2.0, mark, mark),
+                     C(!heard ? tk::ink3 : lit ? tk::ink : tk::ink2), mark);
     }
-    // The name, to the head's end; on hover, to the toggles. A muted or hidden
-    // track reads dim, so its state shows with the toggles out of sight.
-    const bool hoverRow = row == m_hoverRow;
+    if (!open) {
+        p.restore();
+        return;
+    }
+    // Open: its name, to the toggles.
     QString name = track.value(QStringLiteral("name")).toString().trimmed();
     if (name.isEmpty()) name = isCaptionTrack(track) ? tr("Captions") : (layout.audio ? tr("Audio %1") : tr("Video %1")).arg(layout.number);
-    const bool enabled = trackFlag(track, QStringLiteral("enabled"));
-    p.setPen(C(enabled && !(layout.audio && trackFlag(track, QStringLiteral("muted"))) ? tk::ink : tk::ink3));
+    p.setPen(C(heard ? tk::ink : tk::ink3));
     const int nameLeft = left + kNameX;
-    const int nameRight = hoverRow ? left + (layout.audio ? kTogglesX : kTogglesX + kToggleStep) : left + kTimelineLabelWidth - 6;
+    const int nameRight = left + (layout.audio ? kTogglesX : kTogglesX + kToggleStep);
     drawName(p, QRectF(nameLeft, layout.top, nameRight - nameLeft, layout.height - 1), trackNameFont(), name);
     // The toggles: 20 pt, ink3; raised and ink under the pointer; on and ink when on.
     const auto toggle = [&](HeaderControl control, bool on, const QString &icon, const QString &text) {
@@ -2314,16 +2360,14 @@ void TimelineWidget::paintTrackHeader(QPainter &p, int row, const QJsonObject &t
             p.drawText(rect, Qt::AlignCenter, text);
         }
     };
-    if (hoverRow) {
-        const bool locked = trackFlag(track, QStringLiteral("locked"));
-        if (layout.audio) {
-            toggle(HeaderControl::Lock, locked, locked ? QStringLiteral("g-lock") : QStringLiteral("g-unlock"), {});
-            toggle(HeaderControl::Output, trackFlag(track, QStringLiteral("muted")), {}, QStringLiteral("M"));
-            toggle(HeaderControl::Solo, m_solo.contains(id), {}, QStringLiteral("S"));
-        } else {
-            toggle(HeaderControl::Lock, locked, locked ? QStringLiteral("g-lock") : QStringLiteral("g-unlock"), {});
-            toggle(HeaderControl::Output, !enabled, enabled ? QStringLiteral("g-eye") : QStringLiteral("g-eyeoff"), {});
-        }
+    const bool locked = trackFlag(track, QStringLiteral("locked"));
+    if (layout.audio) {
+        toggle(HeaderControl::Lock, locked, locked ? QStringLiteral("g-lock") : QStringLiteral("g-unlock"), {});
+        toggle(HeaderControl::Output, trackFlag(track, QStringLiteral("muted")), {}, QStringLiteral("M"));
+        toggle(HeaderControl::Solo, m_solo.contains(id), {}, QStringLiteral("S"));
+    } else {
+        toggle(HeaderControl::Lock, locked, locked ? QStringLiteral("g-lock") : QStringLiteral("g-unlock"), {});
+        toggle(HeaderControl::Output, !enabled, enabled ? QStringLiteral("g-eye") : QStringLiteral("g-eyeoff"), {});
     }
     p.restore();
 }
@@ -2334,18 +2378,7 @@ void TimelineWidget::paintCorner(QPainter &p, const QPoint &origin) const {
     p.fillRect(corner, C(tk::chrome));
     p.fillRect(QRect(corner.left(), corner.bottom(), kTimelineLabelWidth, 1), C(tk::line));
     p.fillRect(QRect(corner.right(), corner.top(), 1, kRulerHeight), C(tk::line));
-    // The playhead's time (the skimmer's while skimming, in ink2), and the rate.
-    const bool skimming = m_hasSkimmer && !m_dragging && !m_scrubbing;
-    const QString time = timelineTimecode(skimming ? m_skimmerTime : m_playhead, m_fps);
-    const QFont &font = cornerFont();
-    const int width = QFontMetrics(font).horizontalAdvance(time);
-    p.setFont(font);
-    p.setPen(C(skimming ? tk::ink2 : tk::ink));
-    p.drawText(QRect(corner.left() + kHeadInset, corner.top() + 6, width + 2, 20), Qt::AlignLeft | Qt::AlignVCenter, time);
-    p.setFont(metaFont());
-    p.setPen(C(tk::ink3));
-    p.drawText(QRect(corner.left() + kHeadInset + width + 8, corner.top() + 8, 60, 16), Qt::AlignLeft | Qt::AlignVCenter,
-               QString::number(m_fps, 'g', 5) + QLatin1Char('p'));
+    // The playhead's time is the strip's (TimelineTimecode), over the heads.
 }
 
 void TimelineWidget::paintOverlay(QPainter &p, const QRect &dirty) {
@@ -2426,6 +2459,17 @@ void TimelineWidget::paintOverlay(QPainter &p, const QRect &dirty) {
     paintHeaders(p, dirty);
     paintCorner(p, origin);
     if (m_dragging && m_dragMoved) paintDragReadout(p);
+    // The head under the pointer, open over its lane's start, over all else.
+    if (m_hoverRow >= 0 && m_hoverRow < m_rows.size()) {
+        const QRect open(origin.x(), m_rows.at(m_hoverRow).top, kTimelineHeadOpen, m_rows.at(m_hoverRow).height);
+        if (open.intersects(dirty)) {
+            const QJsonArray tracks = m_project.value(QStringLiteral("tracks")).toArray();
+            p.save();
+            p.setClipRect(open.intersected(QRect(origin.x(), origin.y() + kRulerHeight, kTimelineHeadOpen, height())), Qt::IntersectClip);
+            paintTrackHeader(p, m_hoverRow, tracks.at(m_rows.at(m_hoverRow).track).toObject(), origin.x(), targetTracks(), true);
+            p.restore();
+        }
+    }
 }
 
 void TimelineWidget::paintDragReadout(QPainter &p) {
@@ -2454,8 +2498,8 @@ void TimelineWidget::paintDragReadout(QPainter &p) {
 
 void TimelineWidget::repaintAt(qreal x) {
     update(pointerBand(x));
-    const QPoint origin = stickyOrigin();
-    update(QRect(origin.x(), origin.y(), kTimelineLabelWidth, kRulerHeight));
+    // The time the strip shows follows the playhead and the skimmer.
+    emit shownTimeChanged();
 }
 
 bool TimelineWidget::laneCacheFits(const QRect &view) const {
@@ -2650,7 +2694,7 @@ void TimelineWidget::updateSkimmer(const QPointF &point) {
 }
 
 QRect TimelineWidget::addLaneButtonRect() const {
-    return QRect(stickyOrigin().x() + (kTimelineLabelWidth - 104) / 2, tracksBottom() + (kAddLaneHeight - 24) / 2, 104, 24);
+    return QRect(stickyOrigin().x() + kTargetX, tracksBottom() + (kAddLaneHeight - kControlSize) / 2, 24, kControlSize);
 }
 
 QRect TimelineWidget::addLaneHitRect() const { return QRect(stickyOrigin().x(), tracksBottom(), kTimelineLabelWidth, kAddLaneHeight); }
@@ -2720,6 +2764,44 @@ int TimelineToolStrip::toolIndex(TimelineTool tool) {
 
 TimelineTool TimelineToolStrip::toolAt(int index) { return kTools[std::clamp(index, 0, int(std::size(kTools)) - 1)].tool; }
 
+TimelineTimecode::TimelineTimecode(TimelineWidget *timeline, QWidget *parent) : QWidget(parent), m_timeline(timeline) {
+    setObjectName(QStringLiteral("timelineTimecode"));
+    setAttribute(Qt::WA_TransparentForMouseEvents);
+    connect(timeline, &TimelineWidget::shownTimeChanged, this, qOverload<>(&QWidget::update));
+}
+
+QString TimelineTimecode::time() const { return timelineTimecode(m_timeline->shownTime(), m_timeline->fps()); }
+
+QString TimelineTimecode::rate() const { return QString::number(m_timeline->fps(), 'g', 5) + QLatin1Char('p'); }
+
+namespace {
+// The time at its widest, and the rate after it.
+int timecodeWidth() { return QFontMetrics(cornerFont()).horizontalAdvance(QStringLiteral("00:00:00:00")) + 1; }
+int rateWidth() { return 8 + QFontMetrics(metaFont()).horizontalAdvance(QStringLiteral("29.97p")); }
+} // namespace
+
+QSize TimelineTimecode::sizeHint() const {
+    // As wide as the longest it says, so it never moves what follows it.
+    return {timecodeWidth() + rateWidth(), tk::layout::strip};
+}
+
+QSize TimelineTimecode::minimumSizeHint() const { return {timecodeWidth(), tk::layout::strip}; }
+
+void TimelineTimecode::paintEvent(QPaintEvent *) {
+    QPainter p(this);
+    p.setRenderHint(QPainter::TextAntialiasing, true);
+    // On one baseline, the time's capitals on the strip's middle.
+    const qreal baseline = ui::capBaseline(0, height(), cornerFont());
+    const QString shown = time();
+    p.setFont(cornerFont());
+    p.setPen(C(m_timeline->showsSkimmer() ? tk::ink2 : tk::ink));
+    p.drawText(QPointF(0, baseline), shown);
+    if (width() < timecodeWidth() + rateWidth()) return;
+    p.setFont(metaFont());
+    p.setPen(C(tk::ink3));
+    p.drawText(QPointF(QFontMetricsF(cornerFont()).horizontalAdvance(shown) + 8, baseline), rate());
+}
+
 TimelineToolStrip::TimelineToolStrip(TimelineWidget *timeline, QWidget *parent) : QWidget(parent), m_timeline(timeline) {
     setObjectName(QStringLiteral("timelineTools"));
     setFixedHeight(tk::layout::strip);
@@ -2752,6 +2834,10 @@ TimelineToolStrip::TimelineToolStrip(TimelineWidget *timeline, QWidget *parent) 
         transport->addWidget(m_transport[index], 0, Qt::AlignVCenter);
     }
     layout->addWidget(m_transportGroup, 0, Qt::AlignVCenter);
+    // The playhead's time, after the transport and kTransportGap before the tools.
+    m_time = new TimelineTimecode(timeline, this);
+    layout->addWidget(m_time, 0, Qt::AlignVCenter);
+    layout->addSpacing(kTransportGap);
     m_tools = new ui::SegmentedControl(this);
     m_tools->setObjectName(QStringLiteral("timelineToolSegments"));
     for (const ToolInfo &info : kTools)

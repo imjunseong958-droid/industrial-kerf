@@ -1,4 +1,5 @@
 #include "editor_common.h"
+#include "components.h"
 #include "design_tokens.h"
 #include "editor_theme.h"
 #include "motion_path.h"
@@ -633,17 +634,13 @@ protected:
                 // points, and its ring follows (unless the field says otherwise).
                 if (!watched->property("bezelRadius").isValid()) watched->setProperty("bezelRadius", 3);
             } else if (auto *menu = qobject_cast<QMenu *>(watched)) {
-                roundCorners(menu);
-                markColumns(menu);
+                // Every menu is the kit's, whoever made it: a clip's, the
+                // menu bar's, a field's own. One look for what opens from a press.
+                ui::styleMenu(menu);
             } else if (watched->inherits("QTipLabel")) {
                 // The style sheet rounds a tooltip's card by 6pt.
                 roundCorners(static_cast<QWidget *>(watched));
             }
-            break;
-        case QEvent::ActionAdded:
-        case QEvent::ActionChanged:
-        case QEvent::ActionRemoved:
-            if (auto *menu = qobject_cast<QMenu *>(watched)) markColumns(menu);
             break;
         case QEvent::FocusIn: {
             auto *widget = qobject_cast<QWidget *>(watched);
@@ -693,28 +690,6 @@ private:
         popup->setWindowFlag(Qt::FramelessWindowHint);
 #endif
         popup->setAttribute(Qt::WA_TranslucentBackground);
-    }
-
-    // Whether `menu` shows checks, and whether any of its commands has a
-    // symbol: Qt sets the rows' text past both, though menus show no
-    // symbols. The style sheet then indents those rows less, so text starts
-    // 22px in whatever a menu holds, as in macOS.
-    static void markColumns(QMenu *menu) {
-        bool checks = false;
-        bool icons = false;
-        for (const QAction *action : menu->actions()) {
-            if (!action->isVisible() || action->isSeparator()) continue;
-            checks = checks || action->isCheckable();
-            icons = icons || !action->icon().isNull();
-        }
-        if (menu->property("checkColumn").toBool() == checks && menu->property("iconColumn").toBool() == icons) return;
-        menu->setProperty("checkColumn", checks);
-        menu->setProperty("iconColumn", icons);
-        // The style sheet reads the properties as it polishes.
-        if (menu->testAttribute(Qt::WA_WState_Polished)) {
-            menu->style()->unpolish(menu);
-            menu->style()->polish(menu);
-        }
     }
 
     // The field `widget` types into, which is ringed while it has focus: a

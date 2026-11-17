@@ -394,7 +394,7 @@ private slots:
             TimelineToolStrip *strip = window.m_timelineWiring->tools();
             QCOMPARE(strip->height(), 28);
             QCOMPARE(inWindow(strip, &window), QRect(format.timeline.topLeft(), QSize(format.timeline.width(), 28)));
-            QCOMPARE(window.m_timeline->trackHeaderRect(0).width(), 140);
+            QCOMPARE(window.m_timeline->trackHeaderRect(0).width(), kTimelineLabelWidth);
             QVERIFY(window.m_timeline->isFitToWidth());
             QCOMPARE(window.m_timeline->wideSequence(), format.canvas.width() > format.canvas.height());
             QCOMPARE(window.m_timelineScroll->viewport()->height(), format.timeline.height() - 28);

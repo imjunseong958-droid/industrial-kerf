@@ -133,12 +133,12 @@ impl Access {
         match self {
             Self::Ready => None,
             Self::Unavailable => {
-                Some("Kerf Cloud isn't available yet. Add your own API key in Settings → Chat.")
+                Some("Kerf's hosted model isn't available yet. Add your own API key in Settings → Chat.")
             }
-            Self::SignedOut => Some("Sign in to Kerf Cloud in Settings"),
-            Self::Unreachable => Some("Kerf Cloud can't be reached right now"),
-            Self::NotIncluded => Some("Your plan doesn't include Kerf Cloud requests"),
-            Self::OutOfCredits => Some("You've used this period's Kerf Cloud requests"),
+            Self::SignedOut => Some("Sign in to your Kerf account in Settings"),
+            Self::Unreachable => Some("Kerf can't be reached right now"),
+            Self::NotIncluded => Some("Your plan doesn't include requests to Kerf"),
+            Self::OutOfCredits => Some("You've used this period's requests to Kerf"),
         }
     }
 }
@@ -165,10 +165,10 @@ impl fmt::Display for CloudError {
             Self::Unavailable => f.write_str(Access::Unavailable.reason().unwrap_or_default()),
             Self::SignedOut => f.write_str(Access::SignedOut.reason().unwrap_or_default()),
             Self::Unauthorized => {
-                f.write_str("Kerf Cloud did not accept this sign-in; sign in again")
+                f.write_str("Kerf did not accept this sign-in; sign in again")
             }
-            Self::Service(message) => write!(f, "Kerf Cloud: {message}"),
-            Self::Io(message) => write!(f, "Could not save the Kerf Cloud session: {message}"),
+            Self::Service(message) => write!(f, "Kerf: {message}"),
+            Self::Io(message) => write!(f, "Could not save the Kerf sign-in: {message}"),
         }
     }
 }

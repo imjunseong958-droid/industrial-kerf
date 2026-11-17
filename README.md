@@ -299,9 +299,9 @@ cargo build -p kerf-qt-bridge -p kerf-runtime --lib --bin kerfd
 python3 scripts/test-kerf-qt-bridge.py
 ```
 
-## Kerf Cloud and optional embedded-agent providers
+## Kerf's hosted model and optional embedded-agent providers
 
-The editor is free. Kerf Cloud, the hosted model, is the paid tier: Settings →
+The editor is free. Kerf's hosted model is the paid tier: Settings →
 AI signs in to it, and the service meters requests and enforces plans. It is
 not deployed yet; [docs/cloud.md](docs/cloud.md) is the contract the editor
 follows, and `KERF_CLOUD_URL` points the editor at a service. Until then, use

@@ -208,8 +208,9 @@ private slots:
         window.close();
     }
 
-    // The menu the account opens: Settings and the account first, then what
-    // the toolbar no longer holds, the registry's commands behind each.
+    // The menu the account opens: whose it is, quietly; Settings and the
+    // account first, then what the toolbar no longer holds, the registry's
+    // commands behind each, each with its icon.
     void theAccountMenuReachesEverythingElse() {
         MainWindow window{QString(), QString()};
         window.setConnection(QStringLiteral("ready"));
@@ -219,10 +220,14 @@ private slots:
         QMenu *menu = wiring->appMenu();
         QStringList rows;
         for (QAction *action : menu->actions()) rows << (action->isSeparator() ? QStringLiteral("|") : action->text());
-        const QStringList expected{QStringLiteral("Settings…"), QStringLiteral("Account…"), QStringLiteral("User Guide"), QStringLiteral("|"),
-                                   QStringLiteral("Media"), QStringLiteral("Import…"), QStringLiteral("View")};
+        const QStringList expected{window.m_sidebar->accountRow()->title(), QStringLiteral("Settings…"), QStringLiteral("Account…"),
+                                   QStringLiteral("User Guide"), QStringLiteral("|"), QStringLiteral("Media"), QStringLiteral("Import…"),
+                                   QStringLiteral("View")};
         QCOMPARE(rows.mid(0, expected.size()), expected);
-        // Nobody is signed in to Kerf Cloud: there is no way out to offer.
+        QCOMPARE(ui::menuRole(findAction(menu, QStringLiteral("appMenu.who"))), ui::MenuRole::Header);
+        for (const char *name : {"appMenu.settings", "appMenu.account", "appMenu.guide", "appMenu.media", "appMenu.import", "appMenu.view"})
+            QVERIFY2(!ui::menuIcon(findAction(menu, QString::fromLatin1(name))).isEmpty(), name);
+        // Nobody is signed in to Kerf: there is no way out to offer.
         QVERIFY(!findAction(menu, QStringLiteral("appMenu.signOut")));
         // Keys as the registry has them, never written here.
         const auto keyOf = [&window](const char *id) { return window.m_commands->action(QString::fromLatin1(id))->shortcut().toString(QKeySequence::NativeText); };
@@ -279,22 +284,22 @@ private slots:
         QVERIFY(sync->actions().contains(window.m_commands->action(QStringLiteral("collab.publish"))));
     }
 
-    // The account at the sidebar's foot says who is here: the Kerf Cloud
-    // account when one is signed in, else what chat runs on.
+    // The account at the sidebar's foot says who is here: the Kerf account
+    // when one is signed in, with its plan, else what chat runs on.
     void theSidebarsFootNamesTheAccount() {
         MainWindow window{QString(), QString()};
         SidebarAccount *account = window.m_sidebar->accountRow();
         window.chooseAgentConnection(QStringLiteral("claude-code"));
         QCOMPARE(account->title(), QStringLiteral("Claude Code"));
         window.chooseAgentConnection(QStringLiteral("cloud"));
-        QCOMPARE(account->title(), QStringLiteral("Kerf Cloud"));
+        QCOMPARE(account->title(), QStringLiteral("Kerf"));
         QCOMPARE(account->subtitle(), QStringLiteral("Not signed in"));
         QVERIFY(!window.cloudSignedIn());
         window.handleEvent(QJsonObject{{"type", "cloud"}, {"access", "ok"},
                                        {"account", QJsonObject{{"email", "mina@example.com"}, {"plan", "Pro"}}}});
         QVERIFY(window.cloudSignedIn());
         QCOMPARE(account->title(), QStringLiteral("mina@example.com"));
-        QCOMPARE(account->subtitle(), QStringLiteral("Kerf Cloud · Pro plan"));
+        QCOMPARE(account->subtitle(), QStringLiteral("Pro plan"));
         QCOMPARE(window.m_accountRow->description().section(QStringLiteral("  ·  "), 0, 0), QStringLiteral("Signed in as mina@example.com"));
         // Signed in, the menu offers the way out.
         window.m_toolbarWiring->buildAppMenu();
@@ -502,7 +507,7 @@ private slots:
         QCOMPARE(findAction(menu, QStringLiteral("preflightRunning"))->text(), QStringLiteral("Checking… 42%"));
         QVERIFY(!findAction(menu, QStringLiteral("preflightRunning"))->isEnabled());
 
-        // Done: the rows, dotted green and red.
+        // Done: the rows, dotted sage and ochre.
         window.handleEvent(checkFixture());
         wiring->buildExportMenu();
         QVERIFY(!findAction(menu, QStringLiteral("preflightRun")));
@@ -510,8 +515,9 @@ private slots:
         QAction *peak = findAction(menu, QStringLiteral("preflight.loudness.true_peak"));
         QVERIFY(integrated && peak);
         QCOMPARE(integrated->text(), QStringLiteral("Integrated loudness · −23.1 LUFS"));
-        QCOMPARE(integrated->property("kerfMenuDot").value<QColor>(), tokens::color(tokens::pos));
-        QCOMPARE(peak->property("kerfMenuDot").value<QColor>(), tokens::color(tokens::neg));
+        // Passed is sage; one to fix is the request's ochre, as its Ask Kerf is.
+        QCOMPARE(integrated->property("kerfMenuDot").value<QColor>(), tokens::color(tokens::status::passed));
+        QCOMPARE(peak->property("kerfMenuDot").value<QColor>(), tokens::color(tokens::status::request));
         QVERIFY(!findAction(menu, QStringLiteral("preflight.picture.levels")));
         QVERIFY(findAction(menu, QStringLiteral("preflight.text.overlap")));
 
@@ -641,6 +647,115 @@ private slots:
     // At 1366 × 768 (and the window's least size) every control shows, 28
     // tall and centred in the 40 pt bar, the groups never overlap, and the
     // title gives way between them.
+    // What runs along the top and along the foot is on one line, as it is
+    // seen, not only as it is laid out: drawn at 2x, every icon's ink and
+    // every word's capitals are centred on the toolbar's middle, the smaller
+    // line of words sits on the title's baseline, and along the foot the
+    // account, Settings and the composer's row share one centre. So with the
+    // panel open or closed, and the sidebar open or closed.
+    void whatRunsAlongTheTopAndFootIsOnOneLine() {
+        // The sidebar is closed here by hand, which the next window would remember.
+        const auto remembered = qScopeGuard([] { QSettings().remove(QStringLiteral("layout/sidebar")); });
+        MainWindow window{QString(), QString()};
+        window.resize(1600, 1000);
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        // Words with no descenders, so their ink ends on their baselines.
+        window.setConnection(QStringLiteral("disconnected"));
+        QCoreApplication::processEvents();
+        QCOMPARE(window.m_projectSubtitle->text(), QStringLiteral("Offline"));
+        constexpr qreal ratio = 2;
+        const auto drawn = [&window] {
+            QCoreApplication::processEvents();
+            QImage image(window.size() * ratio, QImage::Format_ARGB32_Premultiplied);
+            image.setDevicePixelRatio(ratio);
+            image.fill(Qt::black);
+            window.render(&image);
+            return image;
+        };
+        // Where `part`'s ink is, in the window's points: the first and last
+        // rows (at 2x) with anything lighter than what it is drawn on.
+        struct Ink {
+            qreal top = 0, bottom = 0;
+            qreal centre() const { return (top + bottom) / 2; }
+        };
+        // `from` and `wide`, in points, keep to a stretch of it: its first word.
+        const auto inkOf = [&window](const QImage &image, const QWidget *part, int from = 0, int wide = -1) {
+            const QRect area(part->mapTo(&window, QPoint(0, 0)) * ratio, part->size() * ratio);
+            const QRect in(area.left() + int(from * ratio), area.top(), wide < 0 ? area.width() - int(from * ratio) : int(wide * ratio),
+                           area.height());
+            const int ground = qGray(image.pixel(in.left(), in.top()));
+            int first = -1, last = -1;
+            for (int y = in.top(); y <= in.bottom(); ++y)
+                for (int x = in.left(); x <= in.right(); ++x)
+                    if (qGray(image.pixel(x, y)) > ground + 40) {
+                        if (first < 0) first = y;
+                        last = y;
+                        break;
+                    }
+            return Ink{first / ratio, (last + 1) / ratio};
+        };
+        const auto report = [](const char *name, const Ink &ink, qreal line) {
+            qInfo().noquote() << QStringLiteral("%1 %2..%3 centre %4 (%5 off)")
+                                     .arg(QString::fromLatin1(name), -22).arg(ink.top).arg(ink.bottom).arg(ink.centre()).arg(ink.centre() - line);
+        };
+        for (const bool sidebar : {true, false})
+            for (const bool panel : {true, false}) {
+                qInfo() << "sidebar" << sidebar << "panel" << panel;
+                window.setPaneOpen(QStringLiteral("view.sidebar"), sidebar);
+                window.setPanelOpen(panel);
+                const QImage image = drawn();
+                if (const QString shots = qEnvironmentVariable("KERF_SCREENSHOT_DIR"); !shots.isEmpty())
+                    image.save(QDir(shots).filePath(QStringLiteral("one-line-sidebar-%1-panel-%2.png")
+                                                        .arg(sidebar ? QStringLiteral("open") : QStringLiteral("closed"),
+                                                             panel ? QStringLiteral("open") : QStringLiteral("closed"))));
+                // The top: the toolbar's middle.
+                const qreal line = window.m_toolbar->mapTo(&window, QPoint(0, 0)).y() + window.m_toolbar->height() / 2.0;
+                const Ink title = inkOf(image, window.m_projectTitle);
+                const Ink status = inkOf(image, window.m_projectSubtitle);
+                report("title", title, line);
+                report("status", status, line);
+                for (const auto &[name, part] : {std::pair<const char *, QWidget *>{"sidebar button", window.m_sidebarButton},
+                                                 {"panel button", window.m_panelButton}}) {
+                    if (part->isVisible()) report(name, inkOf(image, part), line);
+                }
+                QVERIFY2(std::abs(title.centre() - line) <= 0.25, qPrintable(QString::number(title.centre() - line)));
+                // One baseline for both, in the window; their ink ends within a
+                // pixel of it (the larger letters' curves dip a little further).
+                const auto baselineIn = [&window](const QLabel *label) {
+                    return label->mapTo(&window, QPoint(0, 0)).y() + static_cast<const ui::CapLabel *>(label)->baseline();
+                };
+                QCOMPARE(baselineIn(window.m_projectSubtitle), baselineIn(window.m_projectTitle));
+                QVERIFY2(std::abs(status.bottom - title.bottom) <= 0.5, qPrintable(QString::number(status.bottom - title.bottom)));
+                if (window.m_sidebarButton->isVisible())
+                    QVERIFY(std::abs(inkOf(image, window.m_sidebarButton).centre() - line) <= 0.25);
+                QVERIFY(std::abs(inkOf(image, window.m_panelButton).centre() - line) <= 0.25);
+                // The foot: the first word of each thing on it ("Ask ", "No f",
+                // "Kerf": a capital, a tall letter, a round one) on one line,
+                // and Settings' gear on the same middle as the chips' icons.
+                Composer *composer = window.m_chat->composerWidget();
+                constexpr int chipWords = 6 + 16 + 4, accountWords = 12 + 24 + 8, firstWord = 24;
+                const Ink mode = inkOf(image, composer->modeChip(), chipWords, firstWord);
+                const qreal foot = mode.centre();
+                report("mode chip", mode, foot);
+                const Ink folder = inkOf(image, window.m_composerFolder, chipWords, firstWord);
+                report("folder chip", folder, foot);
+                QVERIFY2(std::abs(folder.centre() - foot) <= 0.25, qPrintable(QString::number(folder.centre() - foot)));
+                // Its words' capitals on its icon's middle, as in the toolbar.
+                const Ink modeIcon = inkOf(image, composer->modeChip(), 6, 16);
+                report("mode icon", modeIcon, foot);
+                QVERIFY2(std::abs(modeIcon.centre() - foot) <= 0.25, qPrintable(QString::number(modeIcon.centre() - foot)));
+                if (sidebar) {
+                    const Ink account = inkOf(image, window.m_sidebar->accountRow(), accountWords, firstWord);
+                    report("account", account, foot);
+                    QVERIFY2(std::abs(account.centre() - foot) <= 0.25, qPrintable(QString::number(account.centre() - foot)));
+                    const Ink gear = inkOf(image, window.m_sidebar->settingsButton());
+                    report("settings gear", gear, modeIcon.centre());
+                    QVERIFY2(std::abs(gear.centre() - modeIcon.centre()) <= 0.25, qPrintable(QString::number(gear.centre() - modeIcon.centre())));
+                }
+            }
+    }
+
     void toolbarFitsASmallWindow() {
         MainWindow window{QString(), QString()};
         // A long project and sequence name, as the engine names them (the

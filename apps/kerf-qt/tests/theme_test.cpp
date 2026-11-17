@@ -163,16 +163,16 @@ private slots:
         const auto restore = qScopeGuard([] { QApplication::setPalette(editorPalette(editorTheme())); });
         const EditorTheme t = makeEditorTheme();
         const LauncherTheme l = launcherTheme();
-        QCOMPARE(t.accent.rgb(), QColor("#3366e6").rgb());
+        QCOMPARE(t.accent.rgb(), QColor("#4a6ab0").rgb());
         QCOMPARE(t.accent.rgb(), tokens::color(tokens::accent).rgb());
         QCOMPARE(l.accent.rgb(), t.accent.rgb());
         // Kerf's own marks are the accent: focus, the agent's work, its
-        // avatar and the mask handles. The playhead is the design's red.
+        // avatar and the mask handles. The playhead is the design's violet.
         for (const QColor &mark : {t.focusRing, t.assistant, t.chatAvatarKerf, t.maskHandleFill})
             QCOMPARE(mark.rgb(), t.accent.rgb());
-        QCOMPARE(t.playhead.rgb(), QColor("#e5484d").rgb());
+        QCOMPARE(t.playhead.rgb(), QColor("#a084d4").rgb());
         // The accent as text is the accent ink.
-        QCOMPARE(t.accentText.rgb(), QColor("#8fb0ff").rgb());
+        QCOMPARE(t.accentText.rgb(), QColor("#a0b4d8").rgb());
         QVERIFY(contrastRatio(l.selectionText, l.selection) >= 4.5);
         // Fewer boxes: the caption on the picture has no line round it; a
         // rail button is clear at rest and the on fill when on (.ib.on), its
@@ -192,9 +192,9 @@ private slots:
         red.setColor(QPalette::Accent, QColor("#ff2d55"));
         QGuiApplication::setPalette(red);
         applyEditorAppearance();
-        QCOMPARE(editorTheme().accent.rgb(), QColor("#3366e6").rgb());
+        QCOMPARE(editorTheme().accent.rgb(), QColor("#4a6ab0").rgb());
         ProjectLauncher launcher;
-        QCOMPARE(launcher.theme().accent.rgb(), QColor("#3366e6").rgb());
+        QCOMPARE(launcher.theme().accent.rgb(), QColor("#4a6ab0").rgb());
         // A focused list's chosen row is Kerf's accent.
         QCOMPARE(editorPalette(editorTheme()).color(QPalette::Active, QPalette::Highlight).rgb(), t.accent.rgb());
 #endif
@@ -372,7 +372,7 @@ private slots:
         for (const QColor &surface : {t.ruler, t.rulerBottom, t.playheadHalo})
             QVERIFY2(contrastRatio(t.playheadIdle, surface) + 0.35 <= contrastRatio(t.playhead, surface),
                      qPrintable(QStringLiteral("%1 and %2 on %3").arg(t.playheadIdle.name(), t.playhead.name(), surface.name())));
-        // The playhead is the design's red, as it is, stroked in the stage's dark.
+        // The playhead is the design's violet, as it is, stroked in the stage's dark.
         QCOMPARE(t.playhead.rgb(), tokens::color(tokens::playhead).rgb());
         QCOMPARE(t.playheadHalo.rgb(), tokens::color(tokens::surround).rgb());
         const LauncherTheme l = launcherTheme();
@@ -423,14 +423,14 @@ private slots:
             const std::pair<const char *, QColor> ramp[] = {
                 {"#050505", theme.window},    {"#0e0e0e", theme.viewerSurround}, {"#121212", theme.well},
                 {"#171717", theme.chrome},    {"#171717", theme.panel},
-                {"#1c1c1c", theme.card},      {"#171717", theme.chatSurface},    {"#1c1c1c", theme.menu},
+                {"#1c1c1c", theme.card},      {"#171717", theme.chatSurface},    {"#262626", theme.menu},
                 {"#1c1c1c", theme.tooltip},   {"#1c1c1c", theme.dialog},         {"#262626", theme.raised},
                 {"#262626", theme.field},     {"#303030", theme.on},             {"#262626", theme.toolSelected},
                 {"#363636", theme.hover2},    {"#ece6da", theme.text},           {"#ada79b", theme.textSecondary},
                 {"#878278", theme.ink3},      {"#5c5c5c", theme.textDisabled},   {"#3a3a3a", theme.track},
-                {"#6a6a6a", theme.track2},    {"#3366e6", theme.accent},         {"#2b5ad6", theme.accentHover},
-                {"#8fb0ff", theme.accentInk}, {"#4cc38a", theme.success},        {"#ec5d61", theme.error},
-                {"#e5484d", theme.playhead},  {"#d6a345", theme.warning},
+                {"#6a6a6a", theme.track2},    {"#4a6ab0", theme.accent},         {"#405e9e", theme.accentHover},
+                {"#a0b4d8", theme.accentInk}, {"#86a87c", theme.success},        {"#d8806e", theme.error},
+                {"#a084d4", theme.playhead},  {"#c8a264", theme.warning},
             };
             for (const auto &[code, color] : ramp)
                 QVERIFY2(color.rgba() == QColor(code).rgba(), qPrintable(QStringLiteral("%1 for %2").arg(color.name(), code)));
@@ -617,23 +617,20 @@ private slots:
                          qPrintable(QString::number(cardTop)));
             }
             exportMenu->hide();
-            // So does a clip's context menu: rounded and clipped to its
-            // corners, the row under the pointer a rounded `raised` fill,
-            // every row 28pt.
+            // So does a clip's context menu, made by no one but the timeline:
+            // every menu is the kit's. Rounded and clipped to its corners,
+            // the row under the pointer a rounded popup-hover fill, every row 28pt.
             {
                 QImage shape;
                 QRect row;
                 QList<QRect> others;
                 bool translucent = false;
-                bool symbols = false;
-                bool iconColumn = false;
                 // Captured while it is open, and closed whatever happens.
                 QTimer::singleShot(0, &window, [&] {
                     auto *menu = qobject_cast<QMenu *>(QApplication::activePopupWidget());
                     if (!menu) return;
                     const auto close = qScopeGuard([menu] { menu->close(); });
                     for (QAction *action : menu->actions()) {
-                        symbols = symbols || !action->icon().isNull();
                         if (!action->isEnabled() || action->isSeparator()) continue;
                         if (row.isValid()) {
                             others << menu->actionGeometry(action);
@@ -643,7 +640,6 @@ private slots:
                         row = menu->actionGeometry(action);
                     }
                     translucent = menu->testAttribute(Qt::WA_TranslucentBackground);
-                    iconColumn = menu->property("iconColumn").toBool();
                     shape = menu->grab().toImage();
                 });
                 QTimer::singleShot(2000, &window, [] {
@@ -659,21 +655,18 @@ private slots:
                 QCOMPARE(row.height(), 28);
                 QCOMPARE(amberPixels(shape), 0);
                 // Menus show no symbols, as macOS's, though Split and Delete
-                // have them for the toolbar: each row's first 20px are its
-                // fill, the highlighted row's too, and its text starts 22px
-                // in, as in a menu of commands without symbols.
+                // may have them for the toolbar: each row's first 7px are its
+                // fill, the highlighted row's too, and its text starts 8px in,
+                // with no column kept for symbols.
                 QVERIFY(QCoreApplication::testAttribute(Qt::AA_DontShowIconsInMenus));
-                // (The registry's actions carry no symbols now; any that
-                // did would keep the icon column, shown empty.)
-                QVERIFY(!symbols || iconColumn);
                 others.prepend(row);
                 for (const QRect &item : std::as_const(others)) {
                     const QColor fill = item == row ? theme.menuSelection : theme.menu;
                     for (int y = item.center().y() - 4; y <= item.center().y() + 4; ++y)
-                        for (int x = item.left() + 1; x <= item.left() + 20; ++x)
+                        for (int x = item.left() + 1; x <= item.left() + 7; ++x)
                             QCOMPARE(shape.pixelColor(QPoint(x, y) * ratio).rgb(), fill.rgb());
                     if (item != row)
-                        QVERIFY(highestContrast(shape, QRect(QPoint(item.left() + 21, item.top()) * ratio, QSize(5, item.height()) * ratio),
+                        QVERIFY(highestContrast(shape, QRect(QPoint(item.left() + 8, item.top()) * ratio, QSize(5, item.height()) * ratio),
                                                 fill) >= 3.0);
                 }
                 // Nor do the menu bar's menus, native on macOS.
@@ -681,8 +674,8 @@ private slots:
                     if (QMenu *menu = menuAction->menu())
                         for (QAction *action : menu->actions()) QVERIFY2(!action->isIconVisibleInMenu(), qPrintable(action->text()));
             }
-            // A menu with checks (Collaborate's Live Sync) pads its rows by
-            // less, so its text starts where a menu's without checks does.
+            // A menu with checks (Collaborate's Live Sync) starts its text
+            // where a menu's without checks does, and checks at the row's end.
             {
                 QMenu *panels = nullptr;
                 for (QAction *action : window.menuBar()->actions())
@@ -695,14 +688,13 @@ private slots:
                 }
                 panels->popup(window.mapToGlobal(QPoint(400, 300)));
                 QVERIFY(QTest::qWaitForWindowExposed(panels));
-                QVERIFY(panels->property("checkColumn").toBool());
                 const QImage shape = panels->grab().toImage();
                 save(shape, QStringLiteral("menu-checks-%1").arg(name));
                 const qreal ratio = shape.devicePixelRatio();
                 QCOMPARE(shape.pixelColor(0, 0).alpha(), 0);
                 QCOMPARE(amberPixels(shape), 0);
-                // Its checks are the pop-ups' thin check, 7px into the row,
-                // not Fusion's tick at the row's start.
+                // Its checks are the kit's thin check at the row's end, before
+                // its last 8px, not Fusion's tick at the row's start.
                 QAction *checked = nullptr;
                 QAction *submenu = nullptr;
                 for (QAction *action : panels->actions()) {
@@ -714,18 +706,18 @@ private slots:
                 for (int y = check.center().y() - 4; y <= check.center().y() + 4; ++y)
                     for (int x = check.left(); x <= check.left() + 4; ++x)
                         QCOMPARE(shape.pixelColor(QPoint(x, y) * ratio).rgb(), theme.menu.rgb());
-                QVERIFY(highestContrast(shape, QRect(QPoint(check.left() + 6, check.center().y() - 5) * ratio, QSize(11, 11) * ratio),
+                QVERIFY(highestContrast(shape, QRect(QPoint(check.right() - 20, check.center().y() - 5) * ratio, QSize(12, 11) * ratio),
                                         theme.menu) >= 3.0);
                 // A submenu's chevron is thin and open, not Fusion's filled
-                // triangle: inside its mouth is the row's fill.
+                // triangle, where the check would be: inside its mouth is the
+                // row's fill.
                 const QRect arrow = panels->actionGeometry(submenu);
                 for (int y = arrow.center().y() - 1; y <= arrow.center().y() + 1; ++y)
-                    for (int x = arrow.right() - 13; x <= arrow.right() - 12; ++x)
+                    for (int x = arrow.right() - 18; x <= arrow.right() - 17; ++x)
                         QCOMPARE(shape.pixelColor(QPoint(x, y) * ratio).rgb(), theme.menu.rgb());
-                QVERIFY(highestContrast(shape, QRect(QPoint(arrow.right() - 14, arrow.center().y() - 5) * ratio, QSize(7, 11) * ratio),
+                QVERIFY(highestContrast(shape, QRect(QPoint(arrow.right() - 17, arrow.center().y() - 5) * ratio, QSize(7, 11) * ratio),
                                         theme.menu) >= 3.0);
                 panels->close();
-                QVERIFY(!window.binMenu(QString())->property("checkColumn").toBool());
             }
 
             // Settings.
@@ -1032,7 +1024,7 @@ private slots:
             // buttons the same `raised`), with no chevron cell of its own.
             auto *typed = new QComboBox;
             typed->setEditable(true);
-            typed->addItem(QStringLiteral("Kerf Cloud"));
+            typed->addItem(QStringLiteral("Kerf"));
             layout->addWidget(typed);
             typed->show();
             QCoreApplication::processEvents();

@@ -57,7 +57,7 @@ ClipKind trackKind(const QJsonObject &track);
 // colours), or one laid on the surface it is drawn on, or a guard's step
 // from one where a role must read at a ratio. The project launcher draws
 // from the same ramp. The blue accent marks Kerf, focus, proposals and the
-// default action; the playhead is its own red.
+// default action; the playhead is its own violet.
 struct EditorTheme {
     // The design's tokens themselves (design_tokens.h 0.2), so the style
     // sheet and painted widgets can name the ramp directly.

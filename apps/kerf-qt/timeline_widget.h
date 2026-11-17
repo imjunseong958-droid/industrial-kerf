@@ -111,6 +111,10 @@ public:
     QStringList selectedClips() const { return m_selectedClips; }
     void setPlayhead(double time);
     double playhead() const { return m_playhead; }
+    // The time the strip's timecode shows: the skimmer's while skimming, else
+    // the playhead's; and whether it is the skimmer's.
+    double shownTime() const;
+    bool showsSkimmer() const;
     void showSkimmer(double time);
     double skimmerTime() const { return m_skimmerTime; }
     void setZoom(double zoom);
@@ -190,7 +194,8 @@ public:
     // What it shows is a proposal's cut, the program having none: it can be
     // looked through, not changed.
     void setShowsProposedCut(bool shows) { m_showsProposedCut = shows; }
-    // Tracks start tall, for a timeline that has the room for them.
+    // Tracks start at one roomy height (kRoomyTrackHeight), picture and sound
+    // alike, for a timeline that has the room for them.
     void setRoomyLanes(bool roomy) { m_roomyLanes = roomy; relayout(); }
     bool showsProposedCut() const { return m_showsProposedCut; }
     bool isAudioLane(const QString &track) const;
@@ -297,6 +302,8 @@ signals:
     void snappingChanged(bool snapping);
     // Track heights changed (a preset, a drag, a step, Fit).
     void heightsChanged();
+    // The playhead or the skimmer moved: what the strip's timecode shows.
+    void shownTimeChanged();
 
 protected:
     bool event(QEvent *event) override;
@@ -382,7 +389,10 @@ private:
     // moved by the scroll offset; the ruler and headers are pinned to it.
     QRect viewportRect() const;
     QPoint stickyOrigin() const { return viewportRect().topLeft(); }
-    bool inHeader(const QPoint &point) const { return point.x() < stickyOrigin().x() + kTimelineLabelWidth; }
+    // In the heads' column, or in the head opened over its lane under the pointer.
+    bool inHeader(const QPoint &point) const;
+    // The heads' column with the room an opened head takes, to repaint.
+    QRect headsReach() const;
     bool inRuler(const QPoint &point) const { return point.y() < stickyOrigin().y() + kRulerHeight; }
     QRect headerColumnRect() const;
     int resizeRowAt(const QPoint &point) const;
@@ -390,7 +400,9 @@ private:
     void paintLanes(QPainter &p, const QRect &visible);
     void paintLane(QPainter &p, const QRect &visible, int row, const QJsonObject &track);
     void paintHeaders(QPainter &p, const QRect &dirty);
-    void paintTrackHeader(QPainter &p, int row, const QJsonObject &track, int left, const QStringList &targets);
+    // A track's head: its kind on a chip; open (under the pointer, kTimelineHeadOpen
+    // wide over its lane), its name and toggles too.
+    void paintTrackHeader(QPainter &p, int row, const QJsonObject &track, int left, const QStringList &targets, bool open);
     void paintClip(QPainter &p, const QRect &visible, int row, const QJsonObject &clip, const QJsonObject &track, bool audio,
                    bool proposed);
     // The clip being dragged, at its preview position over its neighbours.
@@ -646,6 +658,28 @@ private:
 // timeline, owned by this strip), and it follows the timeline's own changes.
 // The fit's place on it is the fit: a zoomed view comes back to the whole
 // sequence there, and a long sequence's fit is its low end.
+// The playhead's time over the timeline, in the strip after the transport
+// (the heads' column under it holds only each track's kind): mono 500 13/20
+// in ink, the skimmer's in ink2 while skimming, and the rate after it in ink3.
+class TimelineTimecode final : public QWidget {
+    Q_OBJECT
+public:
+    explicit TimelineTimecode(TimelineWidget *timeline, QWidget *parent = nullptr);
+    // What it shows: "00:00:17:08" and the rate, "24p".
+    QString time() const;
+    QString rate() const;
+    // As wide as the time and the rate; at least the time, and the rate only
+    // where the strip leaves room for it.
+    QSize sizeHint() const override;
+    QSize minimumSizeHint() const override;
+
+protected:
+    void paintEvent(QPaintEvent *event) override;
+
+private:
+    TimelineWidget *m_timeline;
+};
+
 class TimelineToolStrip final : public QWidget {
     Q_OBJECT
     KERF_TEST_FRIENDS
@@ -658,6 +692,7 @@ public:
     ~TimelineToolStrip() override;
     ui::SegmentedControl *tools() const { return m_tools; }
     ui::IconButton *snapButton() const { return m_snap; }
+    TimelineTimecode *timecode() const { return m_time; }
     // What the window adds between the tools and the zoom (the Media sheet's
     // button, Follow Kerf, the format), 12 from the zoom.
     QBoxLayout *extras() const { return m_extras; }
@@ -716,6 +751,7 @@ private:
     static constexpr int kStripEdge = 16 - 24 / 2;
     QBoxLayout *m_extras = nullptr;
     QWidget *m_transportGroup = nullptr;
+    TimelineTimecode *m_time = nullptr;
     ui::IconButton *m_transport[kTransports] = {};
     bool m_playing = false;
     QList<QPointer<QShortcut>> m_shortcuts;

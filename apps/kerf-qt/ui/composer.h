@@ -103,7 +103,12 @@ private:
 // How full Kerf's context is: a ring, 16 across, filled round from the top as
 // the conversation takes more of what a request can hold. Ink2, then the
 // warning's amber past three quarters and red past nine tenths. Hidden until
-// a turn has said how full it is.
+// a turn has said how full it is. Pressed, it opens its card, a popover set as
+// a menu is:
+//
+//   Context                         34%     UI 14 ink; the share 13 ink3
+//   ████████████────────────────────────    a 4 pt bar in the ring's colour
+//   68k of 200k tokens                      what it is of, 13 ink3
 class ContextMeter final : public QWidget {
     Q_OBJECT
 public:
@@ -120,15 +125,23 @@ public:
     QColor ringColor() const;
     // "Context 34% full", and what that is of.
     QString describe() const;
+    // What that is of: "68k of 200k tokens", or what Kerf does as it fills.
+    QString note() const;
+    // Its card, while it is open.
+    ui::Popover *card() const { return m_card; }
+    void openCard();
     QSize sizeHint() const override { return QSize(24, 24); }
 
 protected:
     void paintEvent(QPaintEvent *event) override;
+    void mousePressEvent(QMouseEvent *event) override;
+    void hideEvent(QHideEvent *event) override;
 
 private:
     qint64 m_used = 0;
     qint64 m_limit = 0;
     bool m_tokens = false;
+    QPointer<ui::Popover> m_card;
 };
 
 // Send (.send): 24 x 24, radius 6. Idle (nothing to send): on and ink3;

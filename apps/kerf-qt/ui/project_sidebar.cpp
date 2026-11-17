@@ -514,15 +514,18 @@ void SidebarAccount::paintEvent(QPaintEvent *) {
     // The name has the room it needs; what it is on takes what is left.
     const QString name = nameMetrics.elidedText(m_title, Qt::ElideRight, int(room));
     const qreal nameWide = nameMetrics.horizontalAdvance(name);
+    // Both on one baseline, the name's capitals on the disc's middle, as
+    // everything along the foot.
+    const qreal baseline = ui::capBaseline(0, height(), nameFont);
     p.setFont(nameFont);
     p.setPen(tokens::color(ink));
-    p.drawText(QRectF(x, 0, nameWide + 1, height()), Qt::AlignLeft | Qt::AlignVCenter, name);
+    p.drawText(QPointF(x, baseline), name);
     qreal end = x + nameWide;
     if (!m_subtitle.isEmpty()) {
         const QString rest = restMetrics.elidedText(QStringLiteral(" · %1").arg(m_subtitle), Qt::ElideRight, int(room - nameWide));
         p.setFont(restFont);
         p.setPen(tokens::color(ink3));
-        p.drawText(QRectF(end, 0, room - nameWide, height()), Qt::AlignLeft | Qt::AlignVCenter, rest);
+        p.drawText(QPointF(end, baseline), rest);
         end += restMetrics.horizontalAdvance(rest);
     }
     icons::paint(p, m_open ? QStringLiteral("g-chevr") : QStringLiteral("g-chev"),

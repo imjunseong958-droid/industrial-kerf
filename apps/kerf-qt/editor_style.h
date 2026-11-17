@@ -250,8 +250,6 @@ QMenu::item {
    past the 4px above, in one whose commands have symbols; such menus pad
    their rows by less (useEditorStyle marks them), so text starts 22px in
    either way. A check sits where a pop-up's rows draw theirs. */
-QMenu[iconColumn="true"]::item { padding-left: 18px; }
-QMenu[checkColumn="true"]::item { padding-left: 4px; }
 QMenu::indicator { width: 18px; height: 14px; }
 QMenu::indicator:checked { image: @menuCheck; }
 QMenu::indicator:checked:selected { image: @menuCheckSelected; }

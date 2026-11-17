@@ -124,9 +124,14 @@ keeps the run's settings in DIR (INI files) instead of the user's.
 The editor and the launcher are dark only, and fill the screen edge to edge
 as Final Cut Pro does. There is one graphite ramp (#050505 behind everything,
 #0e0e0e around the region picker, #121212 wells, #171717 panels,
-#1c1c1c cards and menus, #262626 raised controls, #303030 chosen ones) with
-ink #ededed / #a1a1a1 / #8a8a8a, and one blue accent (#3366e6) for Kerf, focus,
-proposals and the default action; the playhead is its own red. Colours, type
+#1c1c1c cards, #262626 raised controls, menus and popovers, #303030 chosen
+ones) with warm paper inks #ece6da / #ada79b / #878278. The colours that say
+something are faded, printed rather than lit: one dusty blue accent (#4a6ab0)
+for Kerf, focus, proposals and the default action; sage for what passed, ochre
+for what wants a look and the request to fix it, a faded brick for what
+failed; the playhead is a dusty violet of its own, and a clip an open proposal
+changes is outlined in sage. Only the computer's amber,
+which says something runs, stays bright. Colours, type
 (Inter and JetBrains Mono at 400 and 500, with tabular figures), radii,
 spacing, control heights and motion (120/160/200/220 ms) come only from
 `design_tokens.h` and the kit in `ui/components.h` and `ui/icons.h` (icons
@@ -193,9 +198,14 @@ as linked clips, and Insert ripples the rest of the sequence.
 Tracks follow the classic edit-suite order: picture tracks stack upward from
 V1, because a later picture track plays over the ones below it, and sound
 tracks run downward from A1. The ruler and track headers stay pinned while the
-timeline scrolls. Each header has two toggles after the track number: the
-eye turns a picture track's output on and off (M mutes a sound track), and
-the padlock locks the track against edits. While a clip
+timeline scrolls. A header is the track's kind on a chip (picture, captions or
+sound; its number, V1 or A1, is in the chip's tip), in a narrow column, so the
+clips, which carry their own names, have the width. Under the pointer the
+header opens over the start of its lane, with the track's name and its
+toggles: the eye turns a picture track's output on and off (M mutes a sound
+track, S solos it), and the padlock locks the track against edits. The
+playhead's timecode and the rate are in the strip over the timeline, after
+the transport. While a clip
 moves or trims, a readout shows the new edge timecode and its offset.
 
 Tracks start dense, for edits with many layers: under a wide picture V1 is
@@ -341,7 +351,7 @@ new conversation in it) and its menu, which a right-click opens too: New
 Conversation, Open Project, Show in Finder, Copy Path, and Remove from Sidebar,
 which takes it off the list and touches nothing on disk. The + beside Projects is
 New Project… and Open Folder…. At its foot is
-the account: the Kerf Cloud account when one is signed in, else what chat runs on.
+the account: the Kerf account when one is signed in, else what chat runs on.
 It opens the menu to everything the window does not show: Settings…, Account…, the
 User Guide, Media (⌘1), Import… and View (the panes, the mask tools,
 safe zones, viewer zoom, the keyboard's choice and the sync's rows), and Sign Out
@@ -377,7 +387,7 @@ There is no status bar. Beside the title the toolbar says what one would, and on
 when there is something to say: a passing message for its timeout, an offline or
 error state until it clears, a running sync's stage or a render's progress ("Draft
 export · 42%"). "Edited 2 min ago · rev 22" is the title's tooltip. An
-agent that cannot take requests (no key, Kerf Cloud signed out) says so in the
+agent that cannot take requests (no key, signed out of Kerf) says so in the
 composer's placeholder, with the reason on its tooltip. The
 connection, error and project.kerf bars that carry an action lie over the top of
 the content while they show.
@@ -588,9 +598,9 @@ or split them into smaller changes.
 
 Agent settings are in Settings (Edit → Settings…, ⌘, ; on macOS in the
 application menu), also reachable from the chat's ⋯ menu. Settings → AI
-chooses Kerf Cloud, the hosted model (the default unless a key of your own
+chooses Kerf, the hosted model (the default unless a key of your own
 is already saved; see
-[docs/cloud.md](../../docs/cloud.md)), or My own API key. Kerf Cloud shows the
+[docs/cloud.md](../../docs/cloud.md)), or My own API key. Kerf shows the
 account, plan, and requests left, with Sign in (a token, for now) and Sign
 out; Ask Kerf stays unavailable, with the reason, until the account can make
 requests. My own API key

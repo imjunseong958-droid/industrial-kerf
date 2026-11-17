@@ -234,7 +234,8 @@ void ComposerChip::paintEvent(QPaintEvent *) {
     const qreal room = std::min<qreal>(m_widest, width() - x - kChipPad - (m_chevron ? 14 : 0));
     p.setFont(face);
     p.setPen(ink_);
-    p.drawText(QRectF(x, 0, room + 1, height()), Qt::AlignLeft | Qt::AlignVCenter, metrics.elidedText(text(), Qt::ElideMiddle, room + 1));
+    // Its capitals on the icons' middle, as everything along the foot.
+    p.drawText(QPointF(x, ui::capBaseline(0, height(), face)), metrics.elidedText(text(), Qt::ElideMiddle, room + 1));
     if (m_chevron)
         icons::paint(p, QStringLiteral("g-chev"), QRectF(width() - kChipPad - 12, (height() - 12) / 2.0, 12, 12),
                      color(lit ? ink2 : ink3), 12);
@@ -243,11 +244,95 @@ void ComposerChip::paintEvent(QPaintEvent *) {
 
 // ------------------------------------------------------------------ ContextMeter
 
+namespace {
+
+// The meter's card: how full, as a bar, and what that is of.
+class ContextCard final : public QWidget {
+public:
+    explicit ContextCard(const ContextMeter *meter) : m_meter(meter) {
+        setObjectName(QStringLiteral("composerContextCard"));
+        setFixedWidth(kWidth);
+    }
+    QSize sizeHint() const override { return {kWidth, height(kWidth)}; }
+    bool hasHeightForWidth() const override { return true; }
+    int heightForWidth(int width) const override { return height(width); }
+
+protected:
+    void paintEvent(QPaintEvent *) override {
+        QPainter p(this);
+        p.setRenderHint(QPainter::Antialiasing);
+        const qreal inner = width() - 2 * kPad;
+        // The line: what it is, and how much of it is taken.
+        const QString share = QStringLiteral("%1%").arg(int(std::lround(m_meter->fraction() * 100.0)));
+        const QRectF line(kPad, kPad, inner, menuItem.line);
+        p.setFont(tokens::font(menuItem));
+        p.setPen(color(ink));
+        p.drawText(line, Qt::AlignLeft | Qt::AlignVCenter, QStringLiteral("Context"));
+        p.setFont(tokens::font(menuQuiet));
+        p.setPen(color(ink3));
+        p.drawText(line, Qt::AlignRight | Qt::AlignVCenter, share);
+        // The bar, the least of it still showing.
+        const QRectF bar(kPad, line.bottom() + space::s8, inner, kBar);
+        p.setPen(Qt::NoPen);
+        p.setBrush(color(track));
+        p.drawRoundedRect(bar, kBar / 2.0, kBar / 2.0);
+        p.setBrush(m_meter->ringColor());
+        p.drawRoundedRect(QRectF(bar.topLeft(), QSizeF(std::max<qreal>(kBar, bar.width() * m_meter->fraction()), kBar)), kBar / 2.0, kBar / 2.0);
+        // What it is of.
+        p.setPen(color(ink3));
+        p.drawText(QRectF(kPad, bar.bottom() + space::s8, inner, noteHeight(inner)), Qt::AlignLeft | Qt::AlignTop | Qt::TextWordWrap,
+                   m_meter->note());
+    }
+
+private:
+    static constexpr int kWidth = 260;
+    static constexpr int kPad = space::s12;
+    static constexpr int kBar = 4;
+
+    int noteHeight(qreal inner) const {
+        const QFontMetrics metrics(tokens::font(menuQuiet));
+        return metrics.boundingRect(QRect(0, 0, int(inner), 1000), Qt::TextWordWrap, m_meter->note()).height();
+    }
+    int height(int width) const {
+        return kPad + menuItem.line + space::s8 + kBar + space::s8 + noteHeight(width - 2 * kPad) + kPad;
+    }
+
+    const ContextMeter *m_meter;
+};
+
+} // namespace
+
 ContextMeter::ContextMeter(QWidget *parent) : QWidget(parent) {
     setObjectName(QStringLiteral("composerContext"));
     setFixedSize(24, 24);
     setAccessibleName(QStringLiteral("Context"));
+    setCursor(Qt::PointingHandCursor);
     hide();
+}
+
+void ContextMeter::openCard() {
+    if (m_limit <= 0) return;
+    if (m_card) {
+        m_card->close();
+        return;
+    }
+    auto *card = new ui::Popover(window());
+    card->setObjectName(QStringLiteral("composerContextPopover"));
+    card->setAttribute(Qt::WA_DeleteOnClose);
+    card->setContent(new ContextCard(this));
+    m_card = card;
+    card->openAt(this, ui::Side::Above);
+}
+
+void ContextMeter::mousePressEvent(QMouseEvent *event) {
+    if (event->button() != Qt::LeftButton) return QWidget::mousePressEvent(event);
+    openCard();
+}
+
+void ContextMeter::hideEvent(QHideEvent *event) {
+    // Its card goes with it: with nothing to show, nothing to say of it.
+    if (m_card) m_card->close();
+    QWidget::hideEvent(event);
 }
 
 void ContextMeter::setUse(qint64 used, qint64 limit, bool tokens) {
@@ -261,6 +346,10 @@ void ContextMeter::setUse(qint64 used, qint64 limit, bool tokens) {
     setToolTip(said);
     setAccessibleDescription(said);
     update();
+    if (m_card) {
+        if (m_limit <= 0) m_card->close();
+        else if (m_card->content()) m_card->content()->update();
+    }
 }
 
 qreal ContextMeter::fraction() const { return m_limit > 0 ? std::clamp(qreal(m_used) / qreal(m_limit), 0.0, 1.0) : 0.0; }
@@ -273,10 +362,15 @@ QColor ContextMeter::ringColor() const {
 QString ContextMeter::describe() const {
     if (m_limit <= 0) return {};
     const int percent = int(std::lround(fraction() * 100.0));
+    return QStringLiteral("Context %1% full · %2").arg(percent).arg(note());
+}
+
+QString ContextMeter::note() const {
+    if (m_limit <= 0) return {};
     // Kerf's own agent keeps what fits and puts older steps away; a model's
     // window, counted in its tokens, says how much of it is taken.
-    return m_tokens ? QStringLiteral("Context %1% full · %2 of %3 tokens").arg(percent).arg(shortCount(m_used), shortCount(m_limit))
-                    : QStringLiteral("Context %1% full · Kerf puts older steps away as it fills").arg(percent);
+    return m_tokens ? QStringLiteral("%1 of %2 tokens").arg(shortCount(m_used), shortCount(m_limit))
+                    : QStringLiteral("Kerf puts older steps away as it fills");
 }
 
 void ContextMeter::paintEvent(QPaintEvent *) {
@@ -432,25 +526,26 @@ void FloatingList::paintEvent(QPaintEvent *) {
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing);
     const QRectF card(cardRect());
-    ui::paintShadow(p, card, radius::card);
+    // A kit menu's card and rows (ui::styleMenu).
+    ui::paintShadow(p, card, radius::panel);
     p.setPen(Qt::NoPen);
-    p.setBrush(color(tokens::card));
-    p.drawRoundedRect(card, radius::card, radius::card);
-    ui::paintInsetLine(p, card, radius::card, color(line2));
-    const QFont face = tokens::font(control);
+    p.setBrush(color(popup));
+    p.drawRoundedRect(card, radius::panel, radius::panel);
+    ui::paintInsetLine(p, card, radius::panel, color(line2));
+    const QFont face = tokens::font(menuItem);
     const QFontMetricsF metrics(face);
     p.setFont(face);
     for (int index = 0; index < m_items.size(); ++index) {
         const QRectF item(itemRect(index));
         if (index == m_hover || index == m_current) {
             p.setPen(Qt::NoPen);
-            p.setBrush(color(raised));
-            p.drawRoundedRect(item, radius::control, radius::control);
+            p.setBrush(color(popupHover));
+            p.drawRoundedRect(item, radius::panel - 4, radius::panel - 4);
         }
         qreal x = item.left() + 8;
         if (!m_icon.isEmpty()) {
-            icons::paint(p, m_icon, QRectF(x, item.top() + 7, 14, 14), color(ink3), 14);
-            x += 14 + 8;
+            icons::paint(p, m_icon, QRectF(x, item.top() + 6, 16, 16), color(ink2), 16);
+            x += 16 + 8;
         }
         p.setPen(color(ink));
         const QString shown = metrics.elidedText(m_items.at(index), Qt::ElideRight, item.right() - 8 - x);
@@ -655,14 +750,13 @@ QMenu *Composer::buildModeMenu() {
     menu->setObjectName(QStringLiteral("composerModeMenu"));
     menu->setAttribute(Qt::WA_DeleteOnClose);
     ui::styleMenu(menu);
-    ui::setMenuMinimumCardWidth(menu, 340);
     ui::addMenuHeader(menu, QStringLiteral("What Kerf does without asking"));
     for (const PermissionMode mode : {PermissionMode::Ask, PermissionMode::AcceptEdits, PermissionMode::Auto}) {
         QAction *action = menu->addAction(permission::label(mode));
         action->setObjectName(QStringLiteral("composerMode.%1").arg(permission::name(mode)));
         action->setCheckable(true);
         action->setChecked(mode == m_permission);
-        ui::setMenuKey(action, permission::summary(mode), true);
+        ui::setMenuKey(action, permission::summary(mode));
         connect(action, &QAction::triggered, this, [this, mode] {
             if (mode == m_permission) return;
             setPermissionMode(mode);
@@ -688,7 +782,6 @@ QMenu *Composer::buildModelMenu() {
     menu->setObjectName(QStringLiteral("composerModelMenu"));
     menu->setAttribute(Qt::WA_DeleteOnClose);
     ui::styleMenu(menu);
-    ui::addMenuHeader(menu, QStringLiteral("Model"));
     for (const QString &model : std::as_const(m_models)) {
         QAction *action = menu->addAction(modelLabel(model));
         action->setCheckable(true);

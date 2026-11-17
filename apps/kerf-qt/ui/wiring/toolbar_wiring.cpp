@@ -222,9 +222,11 @@ void ToolbarWiring::buildToolbar(const QHash<QString, QMenu *> &menus) {
         }
     installCommands();
 
-    w->m_projectTitle = new QLabel(m_titleBox);
+    // The title's capitals are centred on the bar's line, as the icons' ink
+    // is; the smaller line after it sits on its baseline.
+    w->m_projectTitle = new ui::CapLabel(m_titleBox);
     w->m_projectTitle->setObjectName(QStringLiteral("projectTitle"));
-    w->m_projectSubtitle = new QLabel(m_titleBox);
+    w->m_projectSubtitle = new ui::CapLabel(m_titleBox);
     w->m_projectSubtitle->setObjectName(QStringLiteral("projectSubtitle"));
     // Its own sheet, so the app's QLabel rules leave its type alone:
     // UI 500 13/16 ink, then UI 11/16 ink3 on the same line.
@@ -407,7 +409,7 @@ void ToolbarWiring::chooseFormat(int index) {
 
 // ================================================================ the account's menu
 
-void ToolbarWiring::addCommandItem(QMenu *menu, const QString &id, const QString &label, const char *name) {
+QAction *ToolbarWiring::addCommandItem(QMenu *menu, const QString &id, const QString &label, const char *name) {
     // The mockup's words for the registry's command: its state, its key.
     CommandRegistry *commands = m_window->m_commands;
     QAction *command = commands->action(id);
@@ -415,7 +417,7 @@ void ToolbarWiring::addCommandItem(QMenu *menu, const QString &id, const QString
     item->setObjectName(QString::fromLatin1(name));
     if (!command) {
         item->setEnabled(false);
-        return;
+        return item;
     }
     item->setEnabled(command->isEnabled());
     item->setToolTip(commands->reason(id));
@@ -423,6 +425,7 @@ void ToolbarWiring::addCommandItem(QMenu *menu, const QString &id, const QString
     item->setChecked(command->isChecked());
     ui::setMenuKey(item, nativeKeys(command));
     connect(item, &QAction::triggered, this, [this, id] { m_window->triggerCommand(id); });
+    return item;
 }
 
 void ToolbarWiring::buildAppMenu() {
@@ -430,15 +433,23 @@ void ToolbarWiring::buildAppMenu() {
     QMenu *menu = m_appMenu;
     menu->clear();
     menu->setToolTipsVisible(true);
+    // Whose it is, quietly over the rest, as the sidebar's account says it.
+    if (SidebarAccount *who = w->m_sidebar ? w->m_sidebar->accountRow() : nullptr; who && !who->title().isEmpty())
+        ui::addMenuHeader(menu, who->title())->setObjectName(QStringLiteral("appMenu.who"));
     // What the account opens: Settings and the account first, then the help.
-    addCommandItem(menu, QStringLiteral("app.preferences"), QStringLiteral("Settings…"), "appMenu.settings");
+    ui::setMenuIcon(addCommandItem(menu, QStringLiteral("app.preferences"), QStringLiteral("Settings…"), "appMenu.settings"),
+                    QStringLiteral("g-settings"));
     QAction *account = menu->addAction(QStringLiteral("Account…"));
     account->setObjectName(QStringLiteral("appMenu.account"));
+    ui::setMenuIcon(account, QStringLiteral("g-user"));
     connect(account, &QAction::triggered, this, [this] { m_window->showSettings(QStringLiteral("account")); });
-    addCommandItem(menu, QStringLiteral("help.guide"), QStringLiteral("User Guide"), "appMenu.guide");
+    ui::setMenuIcon(addCommandItem(menu, QStringLiteral("help.guide"), QStringLiteral("User Guide"), "appMenu.guide"),
+                    QStringLiteral("g-help"));
     menu->addSeparator();
-    addCommandItem(menu, QStringLiteral("window.project"), QStringLiteral("Media"), "appMenu.media");
-    addCommandItem(menu, QStringLiteral("file.import"), QStringLiteral("Import…"), "appMenu.import");
+    ui::setMenuIcon(addCommandItem(menu, QStringLiteral("window.project"), QStringLiteral("Media"), "appMenu.media"),
+                    QStringLiteral("g-grid"));
+    ui::setMenuIcon(addCommandItem(menu, QStringLiteral("file.import"), QStringLiteral("Import…"), "appMenu.import"),
+                    QStringLiteral("g-import"));
 
     // The panes, the picture's switches, the format, the keyboard's choice and
     // the sync.
@@ -470,6 +481,7 @@ void ToolbarWiring::buildAppMenu() {
     m_viewMenu->addMenu(m_syncMenu);
     QAction *view = menu->addMenu(m_viewMenu);
     view->setObjectName(QStringLiteral("appMenu.view"));
+    ui::setMenuIcon(view, QStringLiteral("g-eye"));
 
     // Without a native menu bar, the application's menus stay reachable here.
     if (!w->menuBar()->isNativeMenuBar()) {
@@ -482,6 +494,7 @@ void ToolbarWiring::buildAppMenu() {
         menu->addSeparator();
         QAction *signOut = menu->addAction(QStringLiteral("Sign Out"));
         signOut->setObjectName(QStringLiteral("appMenu.signOut"));
+        ui::setMenuIcon(signOut, QStringLiteral("g-signout"));
         connect(signOut, &QAction::triggered, this, [this] {
             m_window->sendCloud(QJsonObject{{QStringLiteral("type"), QStringLiteral("cloud_sign_out")}});
         });
@@ -628,7 +641,8 @@ void ToolbarWiring::layoutTitle() {
         if (editing) editor->setGeometry(-7, (m_titleBox->height() - 24) / 2, std::min(room, std::max(width + 80, 240)), 24);
     }
     // The smaller line sits on the title's baseline.
-    subtitle->setGeometry(width + chevron + gap, top + 1, subRoom, line);
+    subtitle->setGeometry(width + chevron + gap, top, subRoom, line);
+    static_cast<ui::CapLabel *>(subtitle)->setBaseline(static_cast<ui::CapLabel *>(title)->baseline());
     subtitle->setVisible(!sub.isEmpty() && !editing);
 }
 
@@ -738,9 +752,11 @@ void ToolbarWiring::buildExportMenu() {
     for (const PreflightRow &row : preflightRows(m_checkSummary)) {
         QAction *item = menu->addAction(row.label);
         item->setObjectName(QStringLiteral("preflight.%1").arg(row.code));
-        ui::setMenuDot(item, tokens::color(row.passed ? tokens::pos : tokens::neg));
+        // A check that did not pass wants a look, and its request fixes it:
+        // the same ochre for both. Red is for what could not be done.
+        ui::setMenuDot(item, tokens::color(row.passed ? tokens::status::passed : tokens::status::request));
         if (row.passed) {
-            if (!row.key.isEmpty()) ui::setMenuKey(item, row.key, true);
+            if (!row.key.isEmpty()) ui::setMenuKey(item, row.key);
         } else {
             ui::setMenuAccent(item, QStringLiteral("Ask Kerf"));
             item->setToolTip(row.ask);
@@ -751,7 +767,7 @@ void ToolbarWiring::buildExportMenu() {
     if (const int hidden = preflightHidden(m_checkSummary); hidden > 0) {
         QAction *more = menu->addAction(plural(hidden, QStringLiteral("1 more check failed"), QStringLiteral("%1 more checks failed")));
         more->setObjectName(QStringLiteral("preflightMore"));
-        ui::setMenuDot(more, tokens::color(tokens::neg));
+        ui::setMenuDot(more, tokens::color(tokens::status::request));
     }
     menu->addSeparator();
 

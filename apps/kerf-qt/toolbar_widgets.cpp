@@ -446,8 +446,8 @@ ExportButton::ExportButton(QWidget *parent) : QWidget(parent) {
     m_draft = new QAction(QStringLiteral("Draft"), this);
     m_draft->setObjectName(QStringLiteral("exportDraft"));
     m_draft->setData(QStringLiteral("preview"));
-    ui::setMenuKey(m_master, QStringLiteral("ProRes 422 HQ"), true);
-    ui::setMenuKey(m_draft, QStringLiteral("H.264 review"), true);
+    ui::setMenuKey(m_master, QStringLiteral("ProRes 422 HQ"));
+    ui::setMenuKey(m_draft, QStringLiteral("H.264 review"));
     for (QAction *quality : {m_master, m_draft}) {
         quality->setCheckable(true);
         m_qualities->addAction(quality);

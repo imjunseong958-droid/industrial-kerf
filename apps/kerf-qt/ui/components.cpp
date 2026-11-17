@@ -1508,6 +1508,30 @@ void ThinProgress::paintEvent(QPaintEvent *) {
 
 // ================================================================ WrapLabel
 
+qreal capBaseline(qreal top, qreal height, const QFont &font) {
+    return top + height / 2.0 + QFontMetricsF(font).capHeight() / 2.0;
+}
+
+CapLabel::CapLabel(QWidget *parent) : QLabel(parent) {}
+
+void CapLabel::setBaseline(qreal baseline) {
+    if (qFuzzyCompare(baseline + 2, m_baseline + 2)) return;
+    m_baseline = baseline;
+    update();
+}
+
+qreal CapLabel::baseline() const {
+    return m_baseline >= 0 ? m_baseline : capBaseline(0, height(), font());
+}
+
+void CapLabel::paintEvent(QPaintEvent *) {
+    QPainter p(this);
+    p.setRenderHint(QPainter::TextAntialiasing, true);
+    p.setFont(font());
+    p.setPen(palette().color(foregroundRole()));
+    p.drawText(QPointF(contentsRect().left(), baseline()), text());
+}
+
 WrapLabel::WrapLabel(QWidget *parent) : QLabel(parent) { setWordWrap(true); }
 
 int WrapLabel::heightForWidth(int width) const {
@@ -1734,11 +1758,11 @@ void Popover::paintEvent(QPaintEvent *) {
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing, true);
     const QRectF card = QRectF(rect()).marginsRemoved(QMarginsF(shadowMargins()));
-    paintShadow(p, card, radius::card);
+    paintShadow(p, card, radius::panel);
     p.setPen(Qt::NoPen);
-    p.setBrush(color(tokens::card));
-    p.drawRoundedRect(card, radius::card, radius::card);
-    paintInsetLine(p, card, radius::card, color(line2));
+    p.setBrush(color(popup));
+    p.drawRoundedRect(card, radius::panel, radius::panel);
+    paintInsetLine(p, card, radius::panel, color(line2));
 }
 
 void Popover::keyPressEvent(QKeyEvent *event) {
@@ -1770,21 +1794,39 @@ namespace {
 
 const char kMenuRole[] = "kerfMenuRole";
 const char kMenuKey[] = "kerfMenuKey";
-const char kMenuKeyUi[] = "kerfMenuKeyUi";
 const char kMenuKeyIcon[] = "kerfMenuKeyIcon";
+const char kMenuIcon[] = "kerfMenuIcon";
 const char kMenuDot[] = "kerfMenuDot";
 const char kMenuAccent[] = "kerfMenuAccent";
 const char kMenuStyled[] = "kerfMenuStyled";
+
+// A menu's measures. The card's padding, a row's inset from it, a leading
+// icon, and the marks at a row's end (a check, a submenu's chevron).
+constexpr int kMenuPad = 4;
+constexpr int kMenuInset = space::s8;
+constexpr int kMenuIconSize = 16;
+constexpr int kMenuMark = 14;
+// The rows' corners, inside the card's: the card's less its padding.
+constexpr qreal kMenuRowRadius = radius::panel - kMenuPad;
 
 // The card sits inside the menu window, leaving room for the shadow; QMenu's
 // margins are symmetric, so each side takes the larger of the two.
 int menuShadowH() { return qMax(shadowMargins().left(), shadowMargins().right()); }
 int menuShadowV() { return qMax(shadowMargins().top(), shadowMargins().bottom()); }
 
-bool menuHasCheckColumn(const QMenu *menu) {
+template <typename Test> bool menuHas(const QMenu *menu, Test test) {
     for (const QAction *a : menu->actions())
-        if (a->isVisible() && !a->isSeparator() && (a->isCheckable() || a->property(kMenuDot).isValid())) return true;
+        if (a->isVisible() && !a->isSeparator() && menuRole(a) != MenuRole::Header && test(a)) return true;
     return false;
+}
+
+// An action's own icon, where menus show them (the kit's glyphs always show).
+bool shownIcon(const QAction *a) { return !a->icon().isNull() && a->isIconVisibleInMenu(); }
+
+// A column of icons before the labels, when any row has one: the rest keep
+// the room, so the labels start together.
+bool menuHasIconColumn(const QMenu *menu) {
+    return menuHas(menu, [](const QAction *a) { return shownIcon(a) || !a->property(kMenuIcon).toString().isEmpty(); });
 }
 
 QString keyText(const QAction *a) {
@@ -1802,29 +1844,39 @@ QString labelText(const QAction *a) {
     return text;
 }
 
-// The width of everything right of the label: 16 of padding, then the key,
-// a key icon, the accent text or a submenu arrow.
-int rightColumnWidth(const QAction *a) {
+// The mark at a row's very end: a check for what can be on (shown while it
+// is), a status dot (the preflight rows), or the chevron of a submenu.
+bool hasEndMark(const QAction *a) { return a->isCheckable() || a->property(kMenuDot).isValid() || a->menu(); }
+
+// Where any row can be on or has a dot, every row keeps that room at its
+// end, so what the rows say there ends on one line, and the labels all
+// start at the row's start.
+bool menuHasEndColumn(const QMenu *menu) {
+    return menuHas(menu, [](const QAction *a) { return a->isCheckable() || a->property(kMenuDot).isValid(); });
+}
+
+// The width of everything right of the label: 16 of air, then the key or
+// value, a key icon, the accent text, and the end mark (or its room, in a
+// menu where a row can be on or has a dot).
+int rightColumnWidth(const QAction *a, bool checks) {
     int w = 0;
     const QString key = keyText(a);
-    if (!key.isEmpty()) w += snapWidth(a->property(kMenuKeyUi).toBool() ? meta : monoSmall, key);
-    if (!a->property(kMenuKeyIcon).toString().isEmpty()) w += (w ? space::s4 : 0) + 14;
+    if (!key.isEmpty()) w += snapWidth(menuQuiet, key);
+    if (!a->property(kMenuKeyIcon).toString().isEmpty()) w += (w ? space::s4 : 0) + kMenuMark;
     const QString accentText = a->property(kMenuAccent).toString();
-    if (!accentText.isEmpty()) w += (w ? space::s8 : 0) + snapWidth(control, accentText);
-    if (a->menu()) w += (w ? space::s4 : 0) + 14;
+    if (!accentText.isEmpty()) w += (w ? space::s8 : 0) + snapWidth(menuQuiet, accentText);
+    if (hasEndMark(a) || (checks && w)) w += (w ? space::s8 : 0) + kMenuMark;
     return w ? space::s16 + w : 0;
 }
 
-// The width a kit menu needs for `a`'s row, inside the card's 4 pt padding.
-int menuItemWidth(const QAction *a, bool checks) {
+// Where a row's label starts, from its left edge.
+int labelInset(bool icons) { return kMenuInset + (icons ? kMenuIconSize + space::s8 : 0); }
+
+// The width a kit menu needs for `a`'s row, inside the card's padding.
+int menuItemWidth(const QAction *a, bool icons, bool checks) {
     if (!a->isVisible() || a->isSeparator()) return 0;
-    if (menuRole(a) == MenuRole::Header) return space::s8 + snapWidth(meta, a->text()) + space::s8;
-    int w = space::s8;
-    if (checks) w += 14 + space::s8;
-    if (!a->icon().isNull()) w += 16 + space::s8;
-    w += snapWidth(control, labelText(a));
-    w += rightColumnWidth(a);
-    return w + space::s8;
+    if (menuRole(a) == MenuRole::Header) return kMenuInset + snapWidth(menuQuiet, a->text()) + kMenuInset;
+    return labelInset(icons) + snapWidth(menuItem, labelText(a)) + rightColumnWidth(a, checks) + kMenuInset;
 }
 
 // The kit menu's metrics as a style sheet of its own. A widget's own sheet
@@ -1832,7 +1884,7 @@ int menuItemWidth(const QAction *a, bool checks) {
 // 28 tall, separators 9, and the window keeps room for the shadow around the
 // card (the paint filter below draws everything).
 QString menuSheet() {
-    const int h = menuShadowH() + 4, v = menuShadowV() + 4;
+    const int h = menuShadowH() + kMenuPad, v = menuShadowV() + kMenuPad;
     return QStringLiteral(
                "QMenu { background: transparent; border: none; margin: 0px; padding: %1px %2px; }"
                "QMenu::item, QMenu::item:selected, QMenu::item:disabled, QMenu::item:checked,"
@@ -1847,10 +1899,10 @@ QString menuSheet() {
 
 // Widens the menu to its widest row (and the design's 220 minimum card).
 void fitMenuWidth(QMenu *menu) {
-    const bool checks = menuHasCheckColumn(menu);
+    const bool icons = menuHasIconColumn(menu), checks = menuHasEndColumn(menu);
     int widest = 0;
-    for (const QAction *a : menu->actions()) widest = qMax(widest, menuItemWidth(a, checks));
-    const int card = qMax(menuMinimumCardWidth(menu), 4 + widest + 4);
+    for (const QAction *a : menu->actions()) widest = qMax(widest, menuItemWidth(a, icons, checks));
+    const int card = qMax(menuMinimumCardWidth(menu), kMenuPad + widest + kMenuPad);
     menu->setMinimumWidth(card + 2 * menuShadowH());
 }
 
@@ -1863,80 +1915,80 @@ void paintMenu(QMenu *menu) {
     QPainter p(menu);
     p.setRenderHint(QPainter::Antialiasing, true);
     const QRectF card = menuCard(menu);
-    paintShadow(p, card, radius::card);
+    paintShadow(p, card, radius::panel);
     p.setPen(Qt::NoPen);
-    p.setBrush(color(tokens::card));
-    p.drawRoundedRect(card, radius::card, radius::card);
-    paintInsetLine(p, card, radius::card, color(line2));
+    p.setBrush(color(popup));
+    p.drawRoundedRect(card, radius::panel, radius::panel);
+    paintInsetLine(p, card, radius::panel, color(line2));
 
-    const bool checks = menuHasCheckColumn(menu);
+    const bool icons = menuHasIconColumn(menu), checks = menuHasEndColumn(menu);
     for (QAction *a : menu->actions()) {
         if (!a->isVisible()) continue;
         const QRectF g = menu->actionGeometry(a);
         if (g.isEmpty()) continue;
         if (a->isSeparator()) {
-            p.fillRect(QRectF(g.left(), g.top() + 4, g.width(), 1), color(line));
+            p.fillRect(QRectF(g.left() + kMenuInset, g.top() + 4, g.width() - 2 * kMenuInset, 1), color(line));
             continue;
         }
         if (menuRole(a) == MenuRole::Header) {
-            p.setFont(tokens::font(meta));
+            // Quiet, and nearer the rows it heads than the ones over it.
+            p.setFont(tokens::font(menuQuiet));
             p.setPen(color(ink3));
-            p.drawText(QRectF(g.left() + 8, g.top() + 8, g.width() - 16, 16), Qt::AlignLeft | Qt::AlignVCenter,
-                       a->text());
+            p.drawText(QRectF(g.left() + kMenuInset, g.top(), g.width() - 2 * kMenuInset, g.height() - space::s2),
+                       Qt::AlignLeft | Qt::AlignBottom | Qt::TextHideMnemonic, a->text());
             continue;
         }
         const bool enabled = a->isEnabled();
         if (enabled && a == menu->activeAction()) {
             p.setPen(Qt::NoPen);
-            p.setBrush(color(raised));
-            p.drawRoundedRect(g, radius::control, radius::control);
+            p.setBrush(color(popupHover));
+            p.drawRoundedRect(g, kMenuRowRadius, kMenuRowRadius);
         }
-        const QColor text = !enabled ? color(dis) : menuRole(a) == MenuRole::Warn ? color(neg) : color(ink);
-        qreal x = g.left() + 8;
-        if (checks) {
-            const QRectF column(x, g.top() + (g.height() - 14) / 2, 14, 14);
-            if (const QVariant dot = a->property(kMenuDot); dot.isValid()) {
+        const QColor text = !enabled ? color(dis) : menuRole(a) == MenuRole::Warn ? color(status::failed) : color(ink);
+        qreal x = g.left() + kMenuInset;
+        if (icons) {
+            const QRectF box(x, g.top() + (g.height() - kMenuIconSize) / 2, kMenuIconSize, kMenuIconSize);
+            if (const QString glyph = a->property(kMenuIcon).toString(); !glyph.isEmpty())
+                icons::paint(p, glyph, box, enabled ? color(ink2) : color(dis), kMenuIconSize);
+            else if (shownIcon(a))
+                a->icon().paint(&p, box.toRect(), Qt::AlignCenter, enabled ? QIcon::Normal : QIcon::Disabled);
+            x += kMenuIconSize + space::s8;
+        }
+        p.setFont(tokens::font(menuItem));
+        p.setPen(text);
+        p.drawText(QRectF(x, g.top(), g.right() - kMenuInset - x, g.height()), Qt::AlignLeft | Qt::AlignVCenter | Qt::TextHideMnemonic,
+                   labelText(a));
+        // The right column, from the right edge in: the end mark, then what
+        // the row says at its end.
+        qreal right = g.right() + 1 - kMenuInset;
+        if (hasEndMark(a) || checks) {
+            const QRectF mark(right - kMenuMark, g.top(), kMenuMark, g.height());
+            if (a->menu()) {
+                icons::paint(p, QStringLiteral("g-chevr"), mark, color(ink3), kMenuMark);
+            } else if (const QVariant dot = a->property(kMenuDot); dot.isValid()) {
                 p.setPen(Qt::NoPen);
                 p.setBrush(dot.value<QColor>());
-                p.drawEllipse(QRectF(column.center() - QPointF(3, 3), QSizeF(6, 6)));
-            } else if (a->isCheckable() && a->isChecked()) {
-                icons::paint(p, QStringLiteral("g-check"), column, enabled ? color(ink) : color(dis), 14);
-            }
-            x += 14 + space::s8;
+                p.drawEllipse(QRectF(mark.center() - QPointF(3, 3), QSizeF(6, 6)));
+            } else if (a->isCheckable() && a->isChecked())
+                icons::paint(p, QStringLiteral("g-check"), mark, enabled ? color(accentInk) : color(dis), kMenuMark);
+            right -= kMenuMark + space::s8;
         }
-        if (!a->icon().isNull()) {
-            a->icon().paint(&p, QRectF(x, g.top() + 6, 16, 16).toRect(), Qt::AlignCenter,
-                            enabled ? QIcon::Normal : QIcon::Disabled);
-            x += 16 + space::s8;
-        }
-        p.setFont(tokens::font(control));
-        p.setPen(text);
-        p.drawText(QRectF(x, g.top(), g.right() - 8 - x, g.height()), Qt::AlignLeft | Qt::AlignVCenter | Qt::TextHideMnemonic,
-                   labelText(a));
-        // The right column, from the right edge in.
-        qreal right = g.right() - 8;
-        if (a->menu()) {
-            icons::paint(p, QStringLiteral("g-chevr"), QRectF(right - 14, g.top(), 14, g.height()), color(ink3), 14);
-            right -= 14 + space::s4;
-        }
+        p.setFont(tokens::font(menuQuiet));
         const QString accentText = a->property(kMenuAccent).toString();
         if (!accentText.isEmpty()) {
-            const int w = snapWidth(control, accentText);
-            p.setFont(tokens::font(control));
-            p.setPen(enabled ? color(accentInk) : color(dis));
+            const int w = snapWidth(menuQuiet, accentText);
+            p.setPen(enabled ? color(status::request) : color(dis));
             p.drawText(QRectF(right - w, g.top(), w + 1, g.height()), Qt::AlignLeft | Qt::AlignVCenter, accentText);
             right -= w + space::s8;
         }
         const QString icon = a->property(kMenuKeyIcon).toString();
         if (!icon.isEmpty()) {
-            icons::paint(p, icon, QRectF(right - 14, g.top(), 14, g.height()), color(ink3), 14);
-            right -= 14 + space::s4;
+            icons::paint(p, icon, QRectF(right - kMenuMark, g.top(), kMenuMark, g.height()), color(ink3), kMenuMark);
+            right -= kMenuMark + space::s4;
         }
         const QString key = keyText(a);
         if (!key.isEmpty()) {
-            const TypeStyle &style = a->property(kMenuKeyUi).toBool() ? meta : monoSmall;
-            const int w = snapWidth(style, key);
-            p.setFont(tokens::font(style));
+            const int w = snapWidth(menuQuiet, key);
             p.setPen(enabled ? color(ink3) : color(dis));
             p.drawText(QRectF(right - w, g.top(), w + 1, g.height()), Qt::AlignLeft | Qt::AlignVCenter, key);
         }
@@ -2039,13 +2091,17 @@ MenuRole menuRole(const QAction *action) {
     return action ? MenuRole(action->property(kMenuRole).toInt()) : MenuRole::Normal;
 }
 
-void setMenuKey(QAction *action, const QString &key, bool uiFont) {
-    if (!action) return;
-    action->setProperty(kMenuKey, key);
-    action->setProperty(kMenuKeyUi, uiFont);
+void setMenuKey(QAction *action, const QString &key) {
+    if (action) action->setProperty(kMenuKey, key);
 }
 
 QString menuKey(const QAction *action) { return action ? action->property(kMenuKey).toString() : QString(); }
+
+void setMenuIcon(QAction *action, const QString &glyph) {
+    if (action) action->setProperty(kMenuIcon, glyph);
+}
+
+QString menuIcon(const QAction *action) { return action ? action->property(kMenuIcon).toString() : QString(); }
 
 void setMenuKeyIcon(QAction *action, const QString &icon) {
     if (action) action->setProperty(kMenuKeyIcon, icon);

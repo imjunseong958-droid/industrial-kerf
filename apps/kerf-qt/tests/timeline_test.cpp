@@ -328,7 +328,8 @@ private slots:
         QTest::mouseRelease(&timeline, Qt::LeftButton, Qt::NoModifier, QPoint(x(4.5) - (x(4.0) - x(2.0)) + 3, y));
         QCOMPARE(moves.count(), 1);
         QCOMPARE(moves[0][1].toDouble(), 2.0);
-        // Header toggles: picture output, then lock.
+        // Header toggles: picture output, then lock, in its head opened under the pointer.
+        QTest::mouseMove(&timeline, QPoint(30, timeline.trackHeaderRect(0).center().y()));
         QTest::mouseClick(&timeline, Qt::LeftButton, Qt::NoModifier, timeline.headerToggleRect(0, 0).center());
         QTest::mouseClick(&timeline, Qt::LeftButton, Qt::NoModifier, timeline.headerToggleRect(0, 1).center());
         QCOMPARE(toggles.count(), 2);
@@ -486,19 +487,21 @@ private slots:
     }
 
     // A timeline at the mockup's scale (26.8 pt/s) and track heights.
+    // The design's scale, and every track one height, as the editor's own
+    // window starts them (kRoomyTrackHeight).
     static void mockupHeights(TimelineWidget &timeline) {
         timeline.setScale(26.8);
-        const QHash<QString, int> heights{{"V5", 24}, {"V4", 24}, {"V3", 24}, {"V2", 36}, {"V1", 48}};
-        for (int row = 0; row < timeline.trackRowCount(); ++row) {
-            const QString id = timeline.trackRowId(row);
-            timeline.setTrackHeight(row, heights.value(id, 32));
-        }
+        timeline.setRoomyLanes(true);
     }
 
     // ---- heads -----------------------------------------------------------
 
+    // A head is its track's kind on a chip, in a 56 wide column; under the
+    // pointer it opens to 200 over its lane's start, with the track's name
+    // and its toggles against its end.
     void timelineHeadsCarryTargetNameAndToggles() {
-        QCOMPARE(kTimelineLabelWidth, 140);
+        QCOMPARE(kTimelineLabelWidth, 56);
+        QCOMPARE(kTimelineHeadOpen, 200);
         QCOMPARE(kRulerHeight, 32);
         TimelineWidget timeline;
         timeline.setProject(mockupTimeline(), 30, 25);
@@ -506,43 +509,48 @@ private slots:
         timeline.resize(1024, 340);
         timeline.show();
         QVERIFY(QTest::qWaitForWindowExposed(&timeline));
-        QCOMPARE(trackHeights(timeline), (QList<int>{24, 24, 24, 36, 48, 32, 32, 32, 32}));
+        QCOMPARE(trackHeights(timeline), QList<int>(9, kRoomyTrackHeight));
         QStringList labels;
         for (int row = 0; row < timeline.trackRowCount(); ++row) labels << timeline.trackRowLabel(row);
         QCOMPARE(labels, (QStringList{"V5", "V4", "V3", "V2", "V1", "A1", "A2", "A3", "A4"}));
         using C = TimelineWidget::HeaderControl;
         const int v1 = 4;
         const QRect row = timeline.trackHeaderRect(v1);
-        QCOMPARE(row.width(), 140);
+        QCOMPARE(row.width(), 56);
         // 16 in: the line the strip over the heads and the toolbar start on.
-        QCOMPARE(timeline.headerControlRect(v1, C::Target), QRect(16, row.top() + 14, 24, 20));
-        // Lock and the eye against the padding on picture; lock, mute and solo on sound.
-        QCOMPARE(timeline.headerControlRect(v1, C::Lock), QRect(92, row.top() + 14, 20, 20));
-        QCOMPARE(timeline.headerControlRect(v1, C::Output), QRect(114, row.top() + 14, 20, 20));
+        QCOMPARE(timeline.headerControlRect(v1, C::Target), QRect(16, row.top() + 10, 24, 20));
+        // In the open head, lock and the eye against its end on picture; lock,
+        // mute and solo on sound.
+        QCOMPARE(timeline.headerControlRect(v1, C::Lock), QRect(152, row.top() + 10, 20, 20));
+        QCOMPARE(timeline.headerControlRect(v1, C::Output), QRect(174, row.top() + 10, 20, 20));
         QVERIFY(timeline.headerControlRect(v1, C::Solo).isEmpty());
         const QRect a1 = timeline.trackHeaderRect(5);
-        QCOMPARE(timeline.headerControlRect(5, C::Lock), QRect(70, a1.top() + 6, 20, 20));
-        QCOMPARE(timeline.headerControlRect(5, C::Output), QRect(92, a1.top() + 6, 20, 20));
-        QCOMPARE(timeline.headerControlRect(5, C::Solo), QRect(114, a1.top() + 6, 20, 20));
+        QCOMPARE(timeline.headerControlRect(5, C::Lock), QRect(130, a1.top() + 10, 20, 20));
+        QCOMPARE(timeline.headerControlRect(5, C::Output), QRect(152, a1.top() + 10, 20, 20));
+        QCOMPARE(timeline.headerControlRect(5, C::Solo), QRect(174, a1.top() + 10, 20, 20));
         QCOMPARE(timeline.targetTracks(), (QStringList{"V1", "A1"}));
         const QImage image = timeline.grab().toImage();
         const qreal ratio = image.devicePixelRatio();
         const auto at = [&](int x, int y) { return image.pixelColor(QPoint(x, y) * ratio); };
         // The heads are chrome, the lanes the well.
         QVERIFY(near(at(4, row.center().y()), token(tokens::chrome)));
-        // A targeted track's id sits on the on fill.
+        // Every track's id is on a chip: raised, and a step more (hover2)
+        // when the track is targeted.
         const QRect target = timeline.headerControlRect(v1, C::Target);
-        QVERIFY(near(at(target.left() + 2, target.top() + 3), token(tokens::on), 3));
+        QVERIFY(near(at(target.left() + 2, target.top() + 3), token(tokens::hover2), 3));
         const QRect untargeted = timeline.headerControlRect(3, C::Target);
-        QVERIFY(near(at(untargeted.left() + 2, untargeted.top() + 3), token(tokens::chrome), 3));
+        QVERIFY(near(at(untargeted.left() + 2, untargeted.top() + 3), token(tokens::raised), 3));
         // line2 parts picture from sound; line parts the rest.
         QVERIFY(near(at(4, row.bottom()), laidOn(token(tokens::chrome), token(tokens::line2))));
         QVERIFY(near(at(4, timeline.trackHeaderRect(3).bottom()), laidOn(token(tokens::chrome), token(tokens::line))));
         QVERIFY(near(at(kTimelineOrigin + 300, row.bottom()), laidOn(token(tokens::well), token(tokens::line2))));
         // The heads' right line.
         QVERIFY(near(at(kTimelineLabelWidth - 1, row.center().y()), laidOn(token(tokens::chrome), token(tokens::line))));
-        // The toggles appear on hover over that head, and only there.
+        // The head opens under the pointer, and only that one: its edge, line2
+        // on the chrome at its end, shows then.
         const QRect eye = timeline.headerControlRect(v1, C::Output);
+        const QColor openEdge = laidOn(token(tokens::chrome), token(tokens::line2));
+        QVERIFY(!near(at(kTimelineHeadOpen - 1, row.center().y()), openEdge));
         const auto inkIn = [&ratio](const QImage &shot, const QRect &rect) {
             int differ = 0;
             const QColor first = shot.pixelColor(rect.topLeft() * ratio);
@@ -551,9 +559,9 @@ private slots:
                     if (shot.pixelColor(QPoint(x, y) * ratio) != first) ++differ;
             return differ;
         };
-        QVERIFY(inkIn(image, eye) < 40); // at most a name's tail
         QTest::mouseMove(&timeline, QPoint(30, row.center().y()));
         const QImage hovered = timeline.grab().toImage();
+        QVERIFY(near(hovered.pixelColor(QPoint(kTimelineHeadOpen - 1, row.center().y()) * ratio), openEdge));
         QVERIFY(inkIn(hovered, eye) >= 8);
         QVERIFY(hovered != image);
         // A click on one needs no second look: it is where the pointer is.
@@ -563,7 +571,8 @@ private slots:
         QCOMPARE(toggles[0][0].toString(), QStringLiteral("V1"));
         QCOMPARE(toggles[0][1].toString(), QStringLiteral("enabled"));
         QCOMPARE(toggles[0][2].toBool(), false);
-        // M on sound sets `muted`.
+        // M on sound sets `muted`, its head opened on the way to it.
+        QTest::mouseMove(&timeline, QPoint(30, a1.center().y()));
         QTest::mouseClick(&timeline, Qt::LeftButton, Qt::NoModifier, timeline.headerControlRect(5, C::Output).center());
         QCOMPARE(toggles.constLast()[1].toString(), QStringLiteral("muted"));
         QCOMPARE(toggles.constLast()[2].toBool(), true);
@@ -578,9 +587,10 @@ private slots:
         const QPoint targetTip = timeline.headerControlRect(v1, C::Target).center();
         QHelpEvent help(QEvent::ToolTip, targetTip, timeline.mapToGlobal(targetTip));
         QApplication::sendEvent(&timeline, &help);
-        QCOMPARE(QToolTip::text(), QStringLiteral("Targeted: source edits land here (the first unlocked picture track)"));
+        QCOMPARE(QToolTip::text(), QStringLiteral("V1 · Targeted: source edits land here (the first unlocked picture track)"));
         QToolTip::hideText();
         // The lock's tip names no shortcut: none locks a track.
+        QTest::mouseMove(&timeline, QPoint(30, row.center().y()));
         const QPoint lockTip = timeline.headerControlRect(v1, C::Lock).center();
         QHelpEvent lockHelp(QEvent::ToolTip, lockTip, timeline.mapToGlobal(lockTip));
         QApplication::sendEvent(&timeline, &lockHelp);
@@ -633,6 +643,8 @@ private slots:
             if (timeline->trackRowId(row) == QStringLiteral("A2")) a2 = row;
         QVERIFY(a2 >= 0);
         const QRect solo = timeline->headerControlRect(a2, TimelineWidget::HeaderControl::Solo);
+        // Its head opens under the pointer, on the way to S.
+        mouse(timeline, QEvent::MouseMove, QPointF(30, timeline->trackHeaderRect(a2).center().y()));
         mouse(timeline, QEvent::MouseButtonPress, solo.center());
         mouse(timeline, QEvent::MouseButtonRelease, solo.center());
         QCOMPARE(window.m_lastCommand.value("type").toString(), QStringLiteral("solo"));
@@ -641,6 +653,7 @@ private slots:
         // A snapshot keeps it; a track that goes takes its solo with it.
         window.applySnapshot(QJsonObject{{"revision", 2}, {"duration", 30}, {"timeline", mockupTimeline()}});
         QCOMPARE(timeline->soloTracks(), QStringList{QStringLiteral("A2")});
+        mouse(timeline, QEvent::MouseMove, QPointF(30, timeline->trackHeaderRect(a2).center().y()));
         mouse(timeline, QEvent::MouseButtonPress, solo.center());
         mouse(timeline, QEvent::MouseButtonRelease, solo.center());
         QCOMPARE(window.m_lastCommand.value("tracks").toArray(), QJsonArray{});
@@ -671,7 +684,7 @@ private slots:
         int a1 = -1;
         for (int row = 0; row < timeline->trackRowCount(); ++row)
             if (timeline->trackRowId(row) == QStringLiteral("A1")) a1 = row;
-        const QPoint head(80, timeline->trackHeaderRect(a1).center().y());
+        const QPoint head(30, timeline->trackHeaderRect(a1).center().y());
         const auto chooseSync = [timeline, head] {
             QAction *sync = nullptr;
             QTimer::singleShot(0, timeline, [&sync] {
@@ -794,7 +807,7 @@ private slots:
         // 17.32, has faded.
         const auto inked = [&](double seconds) {
             int count = 0;
-            // The label's ink only: the playhead's red head may stand beside a
+            // The label's ink only: the playhead's violet head may stand beside a
             // label. The ink is paper, a little warmer than grey (red at most
             // 24 over blue); the head's red is far past that.
             for (int px = x(seconds) + 4; px < x(seconds) + 40; ++px)
@@ -806,7 +819,7 @@ private slots:
         };
         QVERIFY(inked(4.0) > 10);
         QVERIFY2(inked(16.0) == 0, qPrintable(QString::number(inked(16.0))));
-        // The playhead's head at top 13, in its red with a dark edge.
+        // The playhead's head at top 13, in its violet with a dark edge.
         QVERIFY(near(at(x(17.32), 17), token(tokens::playhead), 6));
         // The sequence marker's flag at 13.2 s, in ink2.
         const QRect flag = timeline.markerBounds(QStringLiteral("act2"));
@@ -847,9 +860,9 @@ private slots:
             if (timeline.trackRowId(row) == QStringLiteral("V1")) v1 = row;
             if (timeline.trackRowId(row) == QStringLiteral("V2")) v2 = row;
         }
-        // The clip it changes is outlined in the accent.
+        // The clip it changes is outlined in sage, as an addition in a diff.
         const QRect changed = timeline.clipBounds(QStringLiteral("B003_C011"));
-        QVERIFY(near(at(QPoint(changed.left(), changed.center().y())), laidOn(token(tokens::card), token(tokens::accent)), 3));
+        QVERIFY(near(at(QPoint(changed.left(), changed.center().y())), laidOn(token(tokens::card), token(tokens::proposed)), 3));
         const int veilX = bandRect.center().x();
         QVERIFY(near(at(QPoint(veilX, timeline.trackHeaderRect(v2).center().y())), token(tokens::well), 1));
         // On V1 the veil shows in the lane's top line, over the clips' inset.
@@ -910,8 +923,8 @@ private slots:
 
     // Flat, neutral clips (mockup-spec 7.4): card with an inset line2,
     // radius 4, one point in from the lane and a point short of the next;
-    // selected in 1.5 ink; titles and captions on raised; video name bars
-    // on black at 55%; sound on its peak and RMS greys.
+    // selected in 1.5 ink; titles and captions on raised; a picture clip with
+    // no frames to show has no name bar; sound on its peak and RMS greys.
     void timelineClipsAreFlatAndNeutral() {
         MediaArtwork artwork;
         artwork.peaks.insert(QStringLiteral("snd"), fullScalePeaks(10.0));
@@ -950,9 +963,9 @@ private slots:
         QCOMPARE(a.right() + 2, b.left());
         // The pixel between them is the well.
         QVERIFY(near(at(a.right() + 1, a.center().y()), token(tokens::well)));
-        // Card under the name bar's black at 55%, inset line2 at the edge.
+        // Card, with no frames to show and so no name bar; inset line2 at the edge.
         QVERIFY(near(at(a.center().x(), a.bottom() - 6), token(tokens::card)));
-        QVERIFY(near(at(a.center().x() + 30, a.top() + 3), laidOn(token(tokens::card), QColor(0, 0, 0, 140)), 3));
+        QVERIFY(near(at(a.center().x() + 30, a.top() + 3), token(tokens::card), 3));
         const QRect c = timeline.clipBounds(QStringLiteral("A019_C001"));
         QVERIFY(near(at(c.left(), c.center().y()), laidOn(token(tokens::card), token(tokens::line2))));
         // Selected: 1.5 ink inside its edge.
@@ -1000,6 +1013,9 @@ private slots:
         QVERIFY(near(image.pixelColor(QPoint(clip.left() + tile / 2, y) * ratio), QColor("#7a8a9a"), 3));
         QCOMPARE(image.pixelColor(QPoint(clip.left() + tile, y) * ratio).rgb(), qRgb(0, 0, 0));
         QVERIFY(near(image.pixelColor(QPoint(clip.left() + tile + 2, y) * ratio), QColor("#7a8a9a"), 3));
+        // Over frames, its name has the bar: the frame under black at 55%.
+        QVERIFY(near(image.pixelColor(QPoint(clip.left() + tile / 2, clip.top() + 3) * ratio),
+                     laidOn(QColor("#7a8a9a"), QColor(0, 0, 0, 140)), 3));
     }
 
     // The QC dot (--neg) leads the name of a clip a finished check found a
@@ -1168,16 +1184,31 @@ private slots:
     }
 
     // The corner: the playhead's timecode in mono 500 13/20 ink and the rate.
-    void cornerShowsTheTimecodeAndRate() {
+    // The playhead's time is the strip's, after the transport: the heads'
+    // column under it holds only each track's kind.
+    void theStripShowsTheTimecodeAndRate() {
         TimelineWidget timeline;
         timeline.setProject(mockupTimeline(), 30, 25);
         timeline.setPlayhead(17.32);
-        timeline.resize(800, 240);
+        TimelineToolStrip strip(&timeline);
+        strip.resize(800, tokens::layout::strip);
+        TimelineTimecode *timecode = strip.timecode();
+        QVERIFY(timecode);
+        QCOMPARE(timecode->time(), QStringLiteral("00:00:17:08"));
+        QCOMPARE(timecode->rate(), QStringLiteral("25p"));
         TextRecorder recorder;
-        timeline.render(&recorder);
+        timecode->render(&recorder);
         QCOMPARE(recorder.colorOf(QStringLiteral("00:00:17:08")), token(tokens::ink));
         QCOMPARE(recorder.colorOf(QStringLiteral("25p")), token(tokens::ink3));
         QCOMPARE(QFontInfo(tokens::font(tokens::monoLarge)).pixelSize(), 13);
+        // It follows the playhead.
+        timeline.setPlayhead(2.0);
+        QCOMPARE(timecode->time(), QStringLiteral("00:00:02:00"));
+        // And the corner over the heads says nothing.
+        timeline.resize(800, 240);
+        TextRecorder corner;
+        timeline.render(&corner);
+        QCOMPARE(corner.colorOf(QStringLiteral("00:00:02:00")), QColor());
     }
 
     // ---- bar -------------------------------------------------------------
@@ -1213,12 +1244,13 @@ private slots:
             x = button->x();
         }
         // The first and last controls' middles are 16 from the strip's edges,
-        // as the toolbar's are from the window's: the tools at 168, Snap at
-        // 232, the zoom ending 4 from the edge of the 872 wide panel; Play in
-        // ink, the rest ink2.
+        // as the toolbar's are from the window's: the timecode 28 after the
+        // transport, the tools 28 after it, Snap 64 after them, the zoom
+        // ending 4 from the edge of the 872 wide panel; Play in ink, the rest ink2.
         QCOMPARE(tools->transportButton(Transport::Start)->mapTo(tools, QPoint(0, 0)).x() + 12, 16);
-        QCOMPARE(tools->tools()->x(), 168);
-        QCOMPARE(tools->snapButton()->x(), 232);
+        QCOMPARE(tools->timecode()->x(), 168);
+        QCOMPARE(tools->tools()->x(), 168 + tools->timecode()->width() + 28);
+        QCOMPARE(tools->snapButton()->x(), tools->tools()->x() + 64);
         QCOMPARE(tools->transportButton(Transport::Play)->iconColor(), tokens::color(tokens::ink));
         QCOMPARE(tools->transportButton(Transport::Next)->iconColor(), tokens::color(tokens::ink2));
         auto *zoomOut = tools->findChild<ui::IconButton *>(QStringLiteral("timelineZoomOut"));
@@ -1512,6 +1544,22 @@ private slots:
         QCOMPARE(trackHeights(timeline), QList<int>(4, each));
     }
 
+    // With room (the editor's own window), every track starts at one height,
+    // picture and sound, V1 and the rest: no lane is larger for what it is.
+    void roomyLanesAreAllOneHeight() {
+        TimelineWidget timeline;
+        timeline.resize(900, 600);
+        timeline.setRoomyLanes(true);
+        QJsonArray tracks;
+        for (const char *id : {"V3", "V2", "V1"}) tracks << QJsonObject{{"id", id}, {"type", "video"}, {"clips", QJsonArray{}}};
+        for (const char *id : {"A1", "A2"}) tracks << QJsonObject{{"id", id}, {"type", "audio"}, {"clips", QJsonArray{}}};
+        timeline.setProject(QJsonObject{{"tracks", tracks}}, 8, 24);
+        timeline.show();
+        QCOMPARE(timeline.trackRowCount(), 5);
+        for (int row = 0; row < timeline.trackRowCount(); ++row)
+            QCOMPARE(timeline.trackHeaderRect(row).height(), kRoomyTrackHeight);
+    }
+
     void timelineTrackHeightsFollowTheHeaderEdge() {
         TimelineWidget timeline;
         timeline.resize(700, 400);
@@ -1522,15 +1570,15 @@ private slots:
         QCOMPARE(timeline.trackHeaderRect(0).height(), kVideoTrackHeight);
         QCOMPARE(timeline.trackHeaderRect(1).height(), kTrackHeight);
         int edge = timeline.trackHeaderRect(0).bottom() + 1;
-        QTest::mousePress(&timeline, Qt::LeftButton, Qt::NoModifier, QPoint(100, edge));
-        QTest::mouseMove(&timeline, QPoint(100, edge + 30));
-        QTest::mouseRelease(&timeline, Qt::LeftButton, Qt::NoModifier, QPoint(100, edge + 30));
+        QTest::mousePress(&timeline, Qt::LeftButton, Qt::NoModifier, QPoint(30, edge));
+        QTest::mouseMove(&timeline, QPoint(30, edge + 30));
+        QTest::mouseRelease(&timeline, Qt::LeftButton, Qt::NoModifier, QPoint(30, edge + 30));
         QCOMPARE(timeline.trackHeaderRect(0).height(), kVideoTrackHeight + 30);
         QCOMPARE(timeline.trackHeaderRect(1).top(), kRulerHeight + kVideoTrackHeight + 30);
         edge = timeline.trackHeaderRect(1).bottom() + 1;
-        QTest::mousePress(&timeline, Qt::LeftButton, Qt::NoModifier, QPoint(100, edge));
-        QTest::mouseMove(&timeline, QPoint(100, 0));
-        QTest::mouseRelease(&timeline, Qt::LeftButton, Qt::NoModifier, QPoint(100, 0));
+        QTest::mousePress(&timeline, Qt::LeftButton, Qt::NoModifier, QPoint(30, edge));
+        QTest::mouseMove(&timeline, QPoint(30, 0));
+        QTest::mouseRelease(&timeline, Qt::LeftButton, Qt::NoModifier, QPoint(30, 0));
         QCOMPARE(timeline.trackHeaderRect(1).height(), kMinTrackHeight);
         // Heights belong to the track, so a new snapshot keeps them.
         timeline.setProject(project, 8, 24);
@@ -1585,34 +1633,34 @@ private slots:
             return event.isAccepted();
         };
         const auto inView = [timeline, &scroll](const QPoint &point) { return timeline->mapFrom(scroll.viewport(), point); };
-        QVERIFY(wheel(inView(QPoint(100, 200)), 120, Qt::AltModifier));
+        QVERIFY(wheel(inView(QPoint(30, 200)), 120, Qt::AltModifier));
         QCOMPARE(trackHeights(*timeline), heights(32, 28));
         // A trackpad's small deltas add up to a notch.
-        for (int part = 0; part < 3; ++part) wheel(inView(QPoint(100, 200)), -40, Qt::AltModifier);
+        for (int part = 0; part < 3; ++part) wheel(inView(QPoint(30, 200)), -40, Qt::AltModifier);
         QCOMPARE(trackHeights(*timeline), heights(28, 24));
         // Without Option, or over the lanes, the wheel is the scroll area's.
-        QVERIFY(!wheel(inView(QPoint(100, 200)), 120, Qt::NoModifier));
+        QVERIFY(!wheel(inView(QPoint(30, 200)), 120, Qt::NoModifier));
         QVERIFY(!wheel(inView(QPoint(500, 200)), 120, Qt::AltModifier));
         QCOMPARE(trackHeights(*timeline), heights(28, 24));
         // The momentum after a flick steps nothing, and a new gesture starts
         // its notch afresh.
-        QVERIFY(wheel(inView(QPoint(100, 200)), 80, Qt::AltModifier, Qt::ScrollBegin));
-        QVERIFY(wheel(inView(QPoint(100, 200)), 80, Qt::AltModifier, Qt::ScrollUpdate));
+        QVERIFY(wheel(inView(QPoint(30, 200)), 80, Qt::AltModifier, Qt::ScrollBegin));
+        QVERIFY(wheel(inView(QPoint(30, 200)), 80, Qt::AltModifier, Qt::ScrollUpdate));
         QCOMPARE(trackHeights(*timeline), heights(32, 28));
-        for (int event = 0; event < 6; ++event) QVERIFY(wheel(inView(QPoint(100, 200)), 120, Qt::AltModifier, Qt::ScrollMomentum));
+        for (int event = 0; event < 6; ++event) QVERIFY(wheel(inView(QPoint(30, 200)), 120, Qt::AltModifier, Qt::ScrollMomentum));
         QCOMPARE(trackHeights(*timeline), heights(32, 28));
-        wheel(inView(QPoint(100, 200)), -80, Qt::AltModifier, Qt::ScrollUpdate);
-        wheel(inView(QPoint(100, 200)), 0, Qt::AltModifier, Qt::ScrollEnd);
-        wheel(inView(QPoint(100, 200)), 0, Qt::AltModifier, Qt::ScrollBegin);
-        wheel(inView(QPoint(100, 200)), -80, Qt::AltModifier, Qt::ScrollUpdate);
+        wheel(inView(QPoint(30, 200)), -80, Qt::AltModifier, Qt::ScrollUpdate);
+        wheel(inView(QPoint(30, 200)), 0, Qt::AltModifier, Qt::ScrollEnd);
+        wheel(inView(QPoint(30, 200)), 0, Qt::AltModifier, Qt::ScrollBegin);
+        wheel(inView(QPoint(30, 200)), -80, Qt::AltModifier, Qt::ScrollUpdate);
         QCOMPARE(trackHeights(*timeline), heights(32, 28));
-        wheel(inView(QPoint(100, 200)), -40, Qt::AltModifier, Qt::ScrollUpdate);
+        wheel(inView(QPoint(30, 200)), -40, Qt::AltModifier, Qt::ScrollUpdate);
         QCOMPARE(trackHeights(*timeline), heights(28, 24));
 
         // The track under the pointer stays where it is in the view.
         scroll.verticalScrollBar()->setValue(300);
         QCoreApplication::processEvents();
-        const QPoint over = inView(QPoint(100, 250));
+        const QPoint over = inView(QPoint(30, 250));
         const int row = timeline->trackRowAt(over.y());
         QVERIFY(row > 5);
         const auto top = [timeline](int at) { return timeline->trackHeaderRect(at).top() + timeline->pos().y(); };
@@ -1642,20 +1690,20 @@ private slots:
         timeline.setProject(project, 8, 24);
         timeline.show();
         const int pictureEdge = timeline.trackHeaderRect(2).bottom() + 1;
-        QTest::mousePress(&timeline, Qt::LeftButton, Qt::AltModifier, QPoint(100, pictureEdge));
-        QTest::mouseMove(&timeline, QPoint(100, pictureEdge + 100 - kVideoTrackHeight));
-        QTest::mouseRelease(&timeline, Qt::LeftButton, Qt::AltModifier, QPoint(100, pictureEdge + 100 - kVideoTrackHeight));
+        QTest::mousePress(&timeline, Qt::LeftButton, Qt::AltModifier, QPoint(30, pictureEdge));
+        QTest::mouseMove(&timeline, QPoint(30, pictureEdge + 100 - kVideoTrackHeight));
+        QTest::mouseRelease(&timeline, Qt::LeftButton, Qt::AltModifier, QPoint(30, pictureEdge + 100 - kVideoTrackHeight));
         QCOMPARE(trackHeights(timeline), (QList<int>{100, 100, 100, 24, 24}));
         const int heroEdge = timeline.trackHeaderRect(0).bottom() + 1;
-        QTest::mousePress(&timeline, Qt::LeftButton, Qt::NoModifier, QPoint(100, heroEdge));
-        QTest::mouseMove(&timeline, QPoint(100, heroEdge + 20));
-        QTest::mouseRelease(&timeline, Qt::LeftButton, Qt::NoModifier, QPoint(100, heroEdge + 20));
+        QTest::mousePress(&timeline, Qt::LeftButton, Qt::NoModifier, QPoint(30, heroEdge));
+        QTest::mouseMove(&timeline, QPoint(30, heroEdge + 20));
+        QTest::mouseRelease(&timeline, Qt::LeftButton, Qt::NoModifier, QPoint(30, heroEdge + 20));
         QCOMPARE(trackHeights(timeline), (QList<int>{120, 100, 100, 24, 24}));
         timeline.stepAllTrackHeights(1);
         QCOMPARE(trackHeights(timeline), (QList<int>{128, 104, 104, 28, 28}));
         timeline.stepAllTrackHeights(-1);
         QCOMPARE(trackHeights(timeline), (QList<int>{104, 86, 86, 24, 24}));
-        QWheelEvent wheel(QPointF(100, timeline.trackHeaderRect(3).center().y()), timeline.mapToGlobal(QPointF(100, 0)), QPoint(),
+        QWheelEvent wheel(QPointF(30, timeline.trackHeaderRect(3).center().y()), timeline.mapToGlobal(QPointF(100, 0)), QPoint(),
                           QPoint(0, 120), Qt::NoButton, Qt::AltModifier, Qt::NoScrollPhase, false);
         QApplication::sendEvent(&timeline, &wheel);
         QCOMPARE(trackHeights(timeline), (QList<int>{128, 104, 104, 28, 28}));
@@ -1682,16 +1730,18 @@ private slots:
         QSignalSpy toggles(&timeline, &TimelineWidget::trackToggleRequested);
         const int edge = timeline.trackHeaderRect(1).bottom() + 1;
         for (const int dy : {-2, 0, 2}) {
-            QTest::mouseMove(&timeline, QPoint(60, edge + dy));
+            QTest::mouseMove(&timeline, QPoint(46, edge + dy));
             QCOMPARE(timeline.cursor().shape(), Qt::SplitVCursor);
         }
-        QHelpEvent help(QEvent::ToolTip, QPoint(60, edge), timeline.mapToGlobal(QPoint(60, edge)));
+        QHelpEvent help(QEvent::ToolTip, QPoint(46, edge), timeline.mapToGlobal(QPoint(46, edge)));
         QApplication::sendEvent(&timeline, &help);
         QVERIFY2(QToolTip::text().contains(QStringLiteral("Option-drag")), qPrintable(QToolTip::text()));
         QToolTip::hideText();
 
         const QRect lock = timeline.headerToggleRect(2, 1);
         QVERIFY(lock.top() >= edge && lock.top() - edge <= 3);
+        // Its head opened under the pointer, on the way to the lock.
+        QTest::mouseMove(&timeline, QPoint(46, timeline.trackHeaderRect(2).center().y()));
         QTest::mouseMove(&timeline, lock.center());
         QVERIFY(timeline.cursor().shape() != Qt::SplitVCursor);
         for (const QPoint &at : {lock.center(), QPoint(lock.center().x(), lock.top())}) {
@@ -1701,19 +1751,21 @@ private slots:
         QCOMPARE(toggles.count(), 2);
         QCOMPARE(trackHeights(timeline), QList<int>(5, kSmallTrackHeight));
 
-        QTest::mousePress(&timeline, Qt::LeftButton, Qt::NoModifier, QPoint(60, edge - 1));
-        QTest::mouseMove(&timeline, QPoint(60, edge + 19));
-        QTest::mouseRelease(&timeline, Qt::LeftButton, Qt::NoModifier, QPoint(60, edge + 19));
+        // At S the kind's chip fills its row and keeps its clicks: the line
+        // is taken either side of it, here past its end.
+        QTest::mousePress(&timeline, Qt::LeftButton, Qt::NoModifier, QPoint(46, edge - 1));
+        QTest::mouseMove(&timeline, QPoint(46, edge + 19));
+        QTest::mouseRelease(&timeline, Qt::LeftButton, Qt::NoModifier, QPoint(46, edge + 19));
         QCOMPARE(trackHeights(timeline), (QList<int>{20, 40, 20, 20, 20}));
         const int soundEdge = timeline.trackHeaderRect(3).bottom() + 1;
-        QTest::mousePress(&timeline, Qt::LeftButton, Qt::AltModifier, QPoint(60, soundEdge));
-        QTest::mouseMove(&timeline, QPoint(60, soundEdge + 12));
-        QTest::mouseRelease(&timeline, Qt::LeftButton, Qt::AltModifier, QPoint(60, soundEdge + 12));
+        QTest::mousePress(&timeline, Qt::LeftButton, Qt::AltModifier, QPoint(46, soundEdge));
+        QTest::mouseMove(&timeline, QPoint(46, soundEdge + 12));
+        QTest::mouseRelease(&timeline, Qt::LeftButton, Qt::AltModifier, QPoint(46, soundEdge + 12));
         QCOMPARE(trackHeights(timeline), (QList<int>{20, 40, 20, 32, 32}));
         const int pictureEdge = timeline.trackHeaderRect(0).bottom() + 1;
-        QTest::mousePress(&timeline, Qt::LeftButton, Qt::AltModifier, QPoint(60, pictureEdge));
-        QTest::mouseMove(&timeline, QPoint(60, pictureEdge + 6));
-        QTest::mouseRelease(&timeline, Qt::LeftButton, Qt::AltModifier, QPoint(60, pictureEdge + 6));
+        QTest::mousePress(&timeline, Qt::LeftButton, Qt::AltModifier, QPoint(46, pictureEdge));
+        QTest::mouseMove(&timeline, QPoint(46, pictureEdge + 6));
+        QTest::mouseRelease(&timeline, Qt::LeftButton, Qt::AltModifier, QPoint(46, pictureEdge + 6));
         QCOMPARE(trackHeights(timeline), (QList<int>{26, 26, 26, 32, 32}));
         QCOMPARE(toggles.count(), 2);
     }
@@ -1736,9 +1788,9 @@ private slots:
             timeline.show();
             timeline.setAllTrackHeights(26);
             const int edge = timeline.trackHeaderRect(0).bottom() + 1;
-            QTest::mousePress(&timeline, Qt::LeftButton, Qt::NoModifier, QPoint(100, edge));
-            QTest::mouseMove(&timeline, QPoint(100, edge + 24));
-            QTest::mouseRelease(&timeline, Qt::LeftButton, Qt::NoModifier, QPoint(100, edge + 24));
+            QTest::mousePress(&timeline, Qt::LeftButton, Qt::NoModifier, QPoint(30, edge));
+            QTest::mouseMove(&timeline, QPoint(30, edge + 24));
+            QTest::mouseRelease(&timeline, Qt::LeftButton, Qt::NoModifier, QPoint(30, edge + 24));
             QCOMPARE(trackHeights(timeline), (QList<int>{50, 26}));
         }
         {
@@ -1851,9 +1903,9 @@ private slots:
                 near(view.pixelColor(QPoint(kTimelineLabelWidth + 51, kRulerHeight - 1) * ratio), laidOn(token(tokens::chrome), token(tokens::line))));
 
         QSignalSpy seeks(timeline, &TimelineWidget::seekRequested);
-        QTest::mouseClick(timeline, Qt::LeftButton, Qt::NoModifier, timeline->mapFrom(scroll.viewport(), QPoint(80, 60)));
+        QTest::mouseClick(timeline, Qt::LeftButton, Qt::NoModifier, timeline->mapFrom(scroll.viewport(), QPoint(30, 60)));
         QCOMPARE(seeks.count(), 0);
-        QTest::mouseMove(timeline, timeline->mapFrom(scroll.viewport(), QPoint(80, 60)));
+        QTest::mouseMove(timeline, timeline->mapFrom(scroll.viewport(), QPoint(30, 60)));
         QVERIFY(timeline->skimLabel().isEmpty());
         QTest::mouseClick(timeline, Qt::LeftButton, Qt::NoModifier, timeline->mapFrom(scroll.viewport(), QPoint(kTimelineOrigin + 72, 20)));
         QVERIFY(!seeks.isEmpty());
