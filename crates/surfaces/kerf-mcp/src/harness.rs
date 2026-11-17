@@ -4385,7 +4385,10 @@ fn find_properties(words: &str) -> Vec<Value> {
 /// The models set up, as `look` lists them: each by the name a `generate` line gives it,
 /// with what the person's models file says it takes. `size` is written as a line writes it,
 /// and `guide` is the `render` line that draws a guide for it, with no more than it reads.
-fn models_listed(models: &kerf_engine::recipe::model::Models) -> Vec<Value> {
+/// The models a recipe's `generate` can name, as `look` lists them: each
+/// with what its owner's file says it takes, and the `render` line that draws
+/// a guide for it where it follows one.
+pub fn models_listed(models: &kerf_engine::recipe::model::Models) -> Vec<Value> {
     models
         .names()
         .map(|name| {

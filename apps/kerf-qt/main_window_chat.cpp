@@ -168,6 +168,8 @@ void ChatWiring::attach(ChatPanel *panel) {
 
     // What the panel asks for.
     connect(panel, &ChatPanel::postRequested, this, &ChatWiring::post);
+    connect(panel, &ChatPanel::queueRequested, this, &ChatWiring::queue);
+    connect(panel->composerWidget(), &Composer::queuedCancelled, this, [this] { m_queued.clear(); });
     connect(panel, &ChatPanel::seekRequested, w, &MainWindow::queueSeek);
     connect(panel, &ChatPanel::acceptRequested, this, &ChatWiring::accept);
     connect(panel, &ChatPanel::rejectRequested, this, &ChatWiring::reject);
@@ -252,6 +254,38 @@ bool ChatWiring::post() {
     composer->clear();
     w->updateChatControls();
     return true;
+}
+
+bool ChatWiring::queue() {
+    MainWindow *w = m_window;
+    if (!m_panel || !w->m_agentBusy) return false;
+    Composer *composer = m_panel->composerWidget();
+    const QString text = composer->text().trimmed();
+    if (text.isEmpty()) return false;
+    // A second one joins the first, as one request.
+    m_queued = m_queued.isEmpty() ? text : m_queued + QStringLiteral("\n\n") + text;
+    m_queuedAt = composer->stamped() ? w->m_playhead : std::numeric_limits<double>::quiet_NaN();
+    composer->clear();
+    composer->setQueued(m_queued);
+    return true;
+}
+
+void ChatWiring::sendQueued(bool ended) {
+    MainWindow *w = m_window;
+    if (m_queued.isEmpty() || !m_panel) return;
+    const QString text = std::exchange(m_queued, QString());
+    const double at = m_queuedAt;
+    m_panel->composerWidget()->setQueued(QString());
+    if (!ended || !w->m_connected) {
+        // Stopped or failed: back in the composer, to send or change.
+        if (m_panel->composerWidget()->text().isEmpty()) m_panel->composerWidget()->fill(text);
+        return;
+    }
+    const QJsonObject focus{{QStringLiteral("scope"), QStringLiteral("sequence")},
+                            {QStringLiteral("fromFrame"), w->frameAt(w->m_playhead)},
+                            {QStringLiteral("toFrame"), w->frameAt(w->m_playhead)}};
+    if (!sendTurn(text, focus, QStringLiteral("Sequence at %1").arg(timelineTimecode(w->m_playhead, w->m_fps)), at))
+        m_panel->composerWidget()->fill(text);
 }
 
 bool ChatWiring::sendTurn(const QString &text, const QJsonObject &focus, const QString &focusLabel, double at) {
@@ -377,6 +411,17 @@ void ChatWiring::syncPinnedProposal() {
 }
 
 void ChatWiring::handleEvent(const QString &type, const QJsonObject &event) {
+    if (type == QLatin1String("agent_state")) {
+        const QString state = event.value(QStringLiteral("state")).toString();
+        if (state == QLatin1String("running")) m_turnTroubled = false;
+        else if (state == QLatin1String("failed") || state == QLatin1String("aborted")) m_turnTroubled = true;
+        return;
+    }
+    if (type == QLatin1String("agent_busy")) {
+        // The turn is over: what waited for it goes now.
+        if (!event.value(QStringLiteral("busy")).toBool()) sendQueued(!m_turnTroubled);
+        return;
+    }
     if (type == QLatin1String("state")) {
         m_model->applyEvent(type, event);
         if (m_panel) {

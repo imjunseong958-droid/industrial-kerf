@@ -743,12 +743,12 @@ private slots:
             QVERIFY(!window.m_preferences->findChild<QDialogButtonBox *>());
             save(settings, QStringLiteral("settings-%1").arg(name));
             // Its pages are named down its side; each name shows its page.
-            QCOMPARE(window.m_settingsIds, (QStringList{QStringLiteral("account"), QStringLiteral("ai"), QStringLiteral("appearance"),
-                                                        QStringLiteral("general"), QStringLiteral("advanced")}));
+            QCOMPARE(window.m_settingsIds, (QStringList{QStringLiteral("account"), QStringLiteral("ai"), QStringLiteral("models"),
+                                                        QStringLiteral("appearance"), QStringLiteral("general"), QStringLiteral("advanced")}));
             QVERIFY(!window.m_advancedSettings->isVisible());
             window.m_preferences->findChild<SidebarRow *>(QStringLiteral("settingsNav.advanced"))->click();
             QVERIFY(window.m_advancedSettings->isVisible());
-            QVERIFY(window.m_settingsNav.at(4)->isCurrent());
+            QVERIFY(window.m_settingsNav.at(5)->isCurrent());
             // Back, or Esc, gives the room back.
             window.m_preferences->findChild<ui::GhostButton *>(QStringLiteral("settingsBack"))->click();
             QVERIFY(!window.m_preferences->isVisible());

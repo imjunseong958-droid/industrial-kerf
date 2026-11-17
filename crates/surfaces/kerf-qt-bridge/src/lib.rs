@@ -327,6 +327,9 @@ enum Command {
     MediaMakeCancel {
         media: String,
     },
+    /// The person's models a recipe's `generate` can name, from their own
+    /// models file: `models {file, exists, models, error?}`.
+    Models,
     /// Load a `project.kerf` changed outside Kerf as one revision.
     ProjectionImport,
     /// Write the editor's project over a `project.kerf` changed outside Kerf.
@@ -1761,7 +1764,7 @@ fn native_agent(
         .filter(|key| !key.trim().is_empty())
         .or_else(|| std::env::var(key_name).ok())
         .filter(|key| !key.trim().is_empty())
-        .ok_or_else(|| format!("Add an API key in Settings ▸ Advanced or set {key_name}"))?;
+        .ok_or_else(|| format!("Add an API key in Settings ▸ Chat or set {key_name}"))?;
     let api_mode = match settings.api_mode {
         Some(mode) => mode,
         None => match std::env::var("OPENAI_API_MODE") {
@@ -1869,6 +1872,32 @@ fn native_agent(
         ..Default::default()
     });
     Ok((session, router))
+}
+
+/// The models event: where the person's models file is, whether it is
+/// there, and each model it names as `look` lists them. Nothing is run.
+fn models_event() -> Value {
+    use kerf_engine::recipe::model::Models;
+    let file = Models::default_file();
+    models_value(Models::read(&file), &file)
+}
+
+fn models_value(
+    read: kerf_engine::error::Result<kerf_engine::recipe::model::Models>,
+    file: &Path,
+) -> Value {
+    let mut event = json!({
+        "type": "models",
+        "file": file.display().to_string(),
+        "exists": file.is_file(),
+        "models": [],
+    });
+    match read {
+        Ok(models) => event["models"] = json!(kerf_mcp::harness::models_listed(&models)),
+        // A file that does not read: said, and what to mend.
+        Err(error) => event["error"] = json!(error.to_string()),
+    }
+    event
 }
 
 /// The most next steps the editor shows at once.
@@ -2626,6 +2655,10 @@ pub unsafe extern "C" fn kerf_bridge_send(bridge: *mut c_void, message: *const c
             media::cancel_make(&bridge.shared, &media, &bridge.events_tx);
             true
         }
+        Command::Models => {
+            emit(&bridge.events_tx, models_event());
+            true
+        }
         Command::Loudness { sequence } => {
             analysis::loudness(bridge.shared.clone(), bridge.events_tx.clone(), sequence);
             true
@@ -3183,6 +3216,32 @@ mod tests {
     use std::sync::mpsc;
     use std::sync::Arc;
     use std::time::Duration;
+
+    #[test]
+    fn the_models_file_is_listed_for_settings() {
+        use kerf_engine::recipe::model::Models;
+        let folder = tempfile::tempdir().unwrap();
+        let file = folder.path().join("models.json");
+        let missing = super::models_value(Models::read(&file), &file);
+        assert_eq!(missing["exists"], false);
+        assert_eq!(missing["models"], json!([]));
+        std::fs::write(
+            &file,
+            r#"{"wan": {"run": ["kerf-comfy", "{request}"],
+                "takes": {"size": [832, 480], "rate": 16, "seconds": 5, "reads": ["guide", "ref"]}}}"#,
+        )
+        .unwrap();
+        let listed = super::models_value(Models::read(&file), &file);
+        assert_eq!(listed["exists"], true);
+        assert_eq!(listed["models"][0]["name"], "wan");
+        assert_eq!(listed["models"][0]["size"], "832x480");
+        assert!(listed["models"][0]["guide"]
+            .as_str()
+            .unwrap()
+            .starts_with("render <sequence> {guide.mp4} size=832x480"));
+        std::fs::write(&file, "{ not json").unwrap();
+        assert!(super::models_value(Models::read(&file), &file)["error"].is_string());
+    }
 
     #[test]
     fn the_editor_has_the_workspaces_version() {

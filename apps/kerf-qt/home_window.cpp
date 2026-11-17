@@ -93,6 +93,8 @@ HomeWindow::HomeWindow(const QString &kerfdBinary, QWidget *parent) : QDialog(pa
     root->setSpacing(0);
 
     m_sidebar = new ProjectSidebar;
+    // The start window has no Settings of its own: the editor's are where they are.
+    m_sidebar->settingsButton()->hide();
     // As wide as the editor's was left, so its rows are where they will be.
     m_sidebar->setFixedWidth(std::clamp(QSettings().value(QStringLiteral("layout/sidebarWidth"), layout::sidebar).toInt(),
                                         layout::sidebarLeast, layout::sidebarMost(layout::canvasWidth)));

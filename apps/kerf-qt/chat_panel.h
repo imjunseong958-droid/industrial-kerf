@@ -275,6 +275,8 @@ signals:
     void shownVersionChanged(const QString &proposalId, const QString &versionId);
     void postRequested();
     void stopRequested();
+    // Return while Kerf works: what is written goes once the turn ends.
+    void queueRequested();
     // A suggestion that runs (QC).
     void runRequested(const QString &what);
     // The open conversation: "rename" (with its new title), "archive", "delete".

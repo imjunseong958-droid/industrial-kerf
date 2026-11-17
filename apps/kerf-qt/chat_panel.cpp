@@ -163,6 +163,7 @@ ChatPanel::ChatPanel(QWidget *parent) : QWidget(parent) {
     m_composer = new Composer;
     m_composer->setOverlayParent(this);
     connect(m_composer, &Composer::submitRequested, this, &ChatPanel::postRequested);
+    connect(m_composer, &Composer::queueRequested, this, &ChatPanel::queueRequested);
     connect(m_composer, &Composer::stopRequested, this, &ChatPanel::stopRequested);
     connect(m_composer, &Composer::suggestionChosen, this, [this](int index) {
         if (index < 0 || index >= m_suggestionList.size()) return;

@@ -418,7 +418,7 @@ fn can_ask(context: &Context) -> Result<(), &'static str> {
     }
     match context.ai_access.as_deref() {
         None | Some("ready") => Ok(()),
-        Some("noKey") => Err("Add your API key in Settings → Advanced"),
+        Some("noKey") => Err("Add your API key in Settings → Chat"),
         Some(state) => {
             let access = serde_json::from_value::<kerf_cloud::Access>(Value::from(state))
                 .unwrap_or(kerf_cloud::Access::Unavailable);
@@ -2176,7 +2176,7 @@ mod tests {
         context.ai_access = Some("noKey".into());
         assert_eq!(
             states(&context)["ai.ask"],
-            "Add your API key in Settings → Advanced"
+            "Add your API key in Settings → Chat"
         );
         context.ai_access = Some("ready".into());
         assert_eq!(states(&context)["ai.ask"], Value::Null);

@@ -10,7 +10,7 @@ so the service can be built to it.
 The editor reads the service URL from `KERF_CLOUD_URL`, else from `url` in
 `~/.kerf/cloud.json` (on Windows, `%USERPROFILE%\.kerf\cloud.json`). Without
 either, Kerf Cloud reports itself unavailable and the editor points people to
-their own API key (Settings → Advanced).
+their own API key (Settings → Chat).
 
 The account token is kept in the system's keychain, as API keys are: the macOS
 Keychain, Windows Credential Manager, or the Secret Service on Linux, under the

@@ -25,6 +25,8 @@
 #include <QScopeGuard>
 #include <QFontDatabase>
 #include <QApplication>
+#include <QClipboard>
+#include <QGuiApplication>
 #include <QCoreApplication>
 #include <QJsonArray>
 #include <QJsonObject>
@@ -792,6 +794,100 @@ private slots:
         card.setState(MakeCard::State::Made, QString(), 3);
         card.setState(MakeCard::State::Making);
         QCOMPARE(card.state(), MakeCard::State::Made);
+    }
+
+    // Settings keep the chat model and the models that make shots apart: a key
+    // of one's own shows its fields under its choice, with no model named for
+    // it; the Models page lists what the person's own file names.
+    void settingsKeepTheChatModelAndTheModelsApart() {
+        const auto forget = qScopeGuard([] {
+            QSettings settings;
+            settings.remove(QStringLiteral("agent/connection"));
+            settings.remove(QStringLiteral("agent/anthropic/model"));
+        });
+        Window w;
+        w.window.m_cloudRadio->setChecked(true);
+        QVERIFY(w.window.m_ownKeySettings->isHidden());
+        w.window.m_ownKeyRadio->setChecked(true);
+        QVERIFY(!w.window.m_ownKeySettings->isHidden());
+        // No model typed: the service's own default, and none sent.
+        w.window.m_anthropicActiveRadio->setChecked(true);
+        w.window.m_anthropicModel->clear();
+        w.window.updateAgentModelChoices();
+        QCOMPARE(w.window.m_agentModels, QStringList{QStringLiteral("default")});
+        QVERIFY(w.window.agentSettingsPayload().value("model").toString().isEmpty());
+        w.window.m_anthropicModel->setText(QStringLiteral("my-model"));
+        w.window.updateAgentModelChoices();
+        QCOMPARE(w.window.agentSettingsPayload().value("model").toString(), QStringLiteral("my-model"));
+
+        w.window.handleEvent(QJsonObject{{"type", "models"}, {"file", "/home/me/.kerf/models.json"}, {"exists", false}, {"models", QJsonArray{}}});
+        QVERIFY(w.window.m_modelsList->text().startsWith(QStringLiteral("No model is set up")));
+        QCOMPARE(w.window.m_modelsOpen->text(), QStringLiteral("Open its folder"));
+        w.window.handleEvent(QJsonObject{
+            {"type", "models"}, {"file", "/home/me/.kerf/models.json"}, {"exists", true},
+            {"models", QJsonArray{QJsonObject{{"name", "shot-model"}, {"size", "832x480"}, {"rate", 16}, {"seconds", 5},
+                                              {"reads", QJsonArray{"guide", "ref"}},
+                                              {"guide", "render <sequence> {guide.mp4} size=832x480 rate=16"}}}}});
+        const QString listed = w.window.m_modelsList->text();
+        QVERIFY(listed.contains(QStringLiteral("<b>shot-model</b> · 832x480 · 16 fps · up to 5 s · reads guide, ref")));
+        QVERIFY(listed.contains(QStringLiteral("render &lt;sequence&gt; {guide.mp4} size=832x480 rate=16")));
+        QCOMPARE(w.window.m_modelsOpen->text(), QStringLiteral("Open models file"));
+        w.window.handleEvent(QJsonObject{{"type", "models"}, {"file", "/x/models.json"}, {"exists", true}, {"models", QJsonArray{}},
+                                         {"error", "line 1: expected value"}});
+        QVERIFY(w.window.m_modelsList->text().contains(QStringLiteral("does not read: line 1: expected value")));
+    }
+
+    // Return while Kerf works: the request waits over the composer, with
+    // Cancel, and goes once the turn ends well; a stopped turn hands it back
+    // to the composer. A finished answer has Copy.
+    void aRequestWaitsForTheTurnAndAnAnswerCopies() {
+        Window w;
+        ChatPanel *chat = w.chat();
+        Composer *composer = chat->composerWidget();
+        composer->fill(QStringLiteral("Tighten the intro"));
+        QVERIFY(w.window.m_chatWiring->post());
+        w.window.handleEvent(QJsonObject{{"type", "agent_busy"}, {"busy", true}});
+        w.window.handleEvent(QJsonObject{{"type", "agent_state"}, {"state", "running"}});
+        composer->fill(QStringLiteral("Then add a title"));
+        QTest::keyClick(composer->input(), Qt::Key_Return);
+        QCOMPARE(composer->queued(), QStringLiteral("Then add a title"));
+        QVERIFY(composer->text().isEmpty());
+        QVERIFY(!composer->queuedRow()->isHidden());
+        QCOMPARE(w.of("agent").size(), 1);
+        // The turn ends well: it goes, in the same conversation.
+        w.window.handleEvent(QJsonObject{{"type", "agent"}, {"kind", "done"}, {"text", "Tightened it."}});
+        w.window.handleEvent(QJsonObject{{"type", "agent_state"}, {"state", "completed"}});
+        w.window.handleEvent(QJsonObject{{"type", "agent_busy"}, {"busy", false}});
+        QCOMPARE(w.of("agent").size(), 2);
+        QCOMPARE(w.of("agent").last().value("text").toString(), QStringLiteral("Then add a title"));
+        QVERIFY(composer->queued().isEmpty() && composer->queuedRow()->isHidden());
+
+        // Stopped: what waited is back in the composer, not sent.
+        w.window.handleEvent(QJsonObject{{"type", "agent_busy"}, {"busy", true}});
+        w.window.handleEvent(QJsonObject{{"type", "agent_state"}, {"state", "running"}});
+        composer->fill(QStringLiteral("And a lower third"));
+        QTest::keyClick(composer->input(), Qt::Key_Return);
+        w.window.handleEvent(QJsonObject{{"type", "agent_state"}, {"state", "aborted"}});
+        w.window.handleEvent(QJsonObject{{"type", "agent_busy"}, {"busy", false}});
+        QCOMPARE(w.of("agent").size(), 2);
+        QCOMPARE(composer->text(), QStringLiteral("And a lower third"));
+        // Cancel takes it away.
+        w.window.handleEvent(QJsonObject{{"type", "agent_busy"}, {"busy", true}});
+        QTest::keyClick(composer->input(), Qt::Key_Return);
+        QVERIFY(!composer->queued().isEmpty());
+        composer->queuedCancel()->click();
+        w.window.handleEvent(QJsonObject{{"type", "agent_busy"}, {"busy", false}});
+        QCOMPARE(w.of("agent").size(), 2);
+
+        // A kept answer copies its text as written.
+        w.window.handleEvent(conversation("c-7", "Tighten", {item("i1", "you", "Tighten the intro"), item("i2", "kerf", "Tightened **it**.")}));
+        w.conversations()->choose(QStringLiteral("c-7"));
+        w.window.handleEvent(conversation("c-7", "Tighten", {item("i1", "you", "Tighten the intro"), item("i2", "kerf", "Tightened **it**.")}));
+        settle();
+        KerfMessage *answer = chat->answers().constLast();
+        QVERIFY(!answer->copyButton()->isHidden());
+        answer->copyButton()->click();
+        QCOMPARE(QGuiApplication::clipboard()->text(), QStringLiteral("Tightened **it**."));
     }
 };
 

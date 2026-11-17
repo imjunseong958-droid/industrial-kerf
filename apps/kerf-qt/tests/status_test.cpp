@@ -148,7 +148,7 @@ private slots:
         window.updateCommandStates();
         if (qEnvironmentVariableIsEmpty("ANTHROPIC_API_KEY")) {
             QCOMPARE(window.m_chatInput->placeholderText(), QStringLiteral("Set up Kerf in Settings to ask"));
-            QCOMPARE(window.m_chatInput->toolTip(), QStringLiteral("Add your API key in Settings → Advanced"));
+            QCOMPARE(window.m_chatInput->toolTip(), QStringLiteral("Add your API key in Settings → Chat"));
         }
         // Busy is not a setup problem.
         window.m_anthropicKey->setText(QStringLiteral("test-key"));

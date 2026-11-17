@@ -257,6 +257,7 @@ void MainWindow::buildSidebar() {
     connect(m_sidebar, &ProjectSidebar::conversationChosen, this,
             [this](const QString &id) { m_chatWiring->openConversation(id); });
     connect(m_sidebar, &ProjectSidebar::newConversationRequested, this, [this] { m_chatWiring->openConversation(QString()); });
+    connect(m_sidebar, &ProjectSidebar::settingsRequested, this, [this] { showSettings(); });
     // Another folder's conversation opens its project, on that conversation.
     connect(m_sidebar, &ProjectSidebar::conversationChosenIn, this, [this](const QString &project, const QString &id) {
         emit conversationOpenRequested(QDir::cleanPath(QFileInfo(project).absoluteFilePath()), id);

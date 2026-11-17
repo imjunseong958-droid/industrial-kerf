@@ -161,6 +161,8 @@ public:
     Outcome outcome() const { return m_outcome; }
     // Ask again, for a failed or stopped turn; null otherwise.
     ChatExpander *askAgainButton() const { return m_askAgain; }
+    // Copy, under a finished answer.
+    ChatExpander *copyButton() const { return m_copy; }
     // A card of what it proposed, under what it said. The message takes it.
     void addCard(QWidget *card);
     QList<QWidget *> cards() const;
@@ -194,6 +196,7 @@ private:
     QWidget *m_askBox = nullptr;
     QVBoxLayout *m_askLayout = nullptr;
     ChatExpander *m_askAgain = nullptr;
+    ChatExpander *m_copy = nullptr;
 };
 
 } // namespace kerf

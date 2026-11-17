@@ -6,6 +6,8 @@
 #include "design_tokens.h"
 
 #include <QAbstractButton>
+#include <QClipboard>
+#include <QGuiApplication>
 #include <QFontMetricsF>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -436,7 +438,26 @@ KerfMessage::KerfMessage(double fps, QWidget *parent) : QWidget(parent), m_fps(f
     m_askAgain->setChevron(false);
     m_askAgain->hide();
     connect(m_askAgain, &QAbstractButton::clicked, this, [this] { emit askAgain(m_request); });
-    m_layout->addWidget(m_askAgain, 0, Qt::AlignLeft);
+    // Under a finished answer: Copy, its text as written (Markdown and all),
+    // and Ask again where it failed or was stopped.
+    m_copy = new ChatExpander;
+    m_copy->setObjectName(QStringLiteral("copyAnswer"));
+    m_copy->setText(QStringLiteral("Copy"));
+    m_copy->setChevron(false);
+    m_copy->setCheckable(false);
+    m_copy->hide();
+    connect(m_copy, &QAbstractButton::clicked, this, [this] {
+        QGuiApplication::clipboard()->setText(m_text.trimmed());
+        m_copy->setText(QStringLiteral("Copied"));
+        QTimer::singleShot(1500, m_copy, [copy = m_copy] { copy->setText(QStringLiteral("Copy")); });
+    });
+    auto *actions = new QHBoxLayout;
+    actions->setContentsMargins(0, 0, 0, 0);
+    actions->setSpacing(space::s12);
+    actions->addWidget(m_copy);
+    actions->addWidget(m_askAgain);
+    actions->addStretch(1);
+    m_layout->addLayout(actions);
 }
 
 void KerfMessage::setText(const QString &text) {
@@ -456,7 +477,11 @@ void KerfMessage::updateBody() {
     if (has) m_dots->hide();
 }
 
-void KerfMessage::setDrafting(bool drafting) { m_dots->setVisible(drafting && m_text.trimmed().isEmpty()); }
+void KerfMessage::setDrafting(bool drafting) {
+    m_dots->setVisible(drafting && m_text.trimmed().isEmpty());
+    // Copy once there is a whole answer to copy.
+    m_copy->setVisible(!drafting && !m_work->isLive() && !m_text.trimmed().isEmpty());
+}
 
 bool KerfMessage::isDrafting() const { return !m_dots->isHidden(); }
 
@@ -483,6 +508,7 @@ void KerfMessage::setOutcome(Outcome outcome, const QString &askAgain) {
         break;
     }
     m_askAgain->setVisible(outcome != Outcome::Answer && !askAgain.trimmed().isEmpty());
+    m_copy->setVisible(!m_work->isLive() && !m_text.trimmed().isEmpty());
 }
 
 void KerfMessage::addCard(QWidget *card) {

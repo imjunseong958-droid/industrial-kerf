@@ -356,10 +356,23 @@ private slots:
             QVERIFY(save(QString::fromLatin1(face.name)));
         }
         setEditorFaces(FaceChoice{});
-        for (const char *page : {"account", "ai", "appearance", "general", "advanced"}) {
+        for (const char *page : {"account", "ai", "models", "appearance", "general", "advanced"}) {
             window.showSettings(QString::fromLatin1(page));
             QVERIFY(save(QStringLiteral("settings-%1").arg(QString::fromLatin1(page))));
         }
+        // A key of one's own, its fields under its choice; and a models file
+        // that names one model.
+        const auto connection = qScopeGuard([] { QSettings().remove(QStringLiteral("agent/connection")); });
+        window.m_ownKeyRadio->setChecked(true);
+        window.showSettings(QStringLiteral("ai"));
+        QVERIFY(save(QStringLiteral("settings-ai-own-key")));
+        window.handleEvent(QJsonObject{
+            {"type", "models"}, {"file", QDir::home().filePath(QStringLiteral(".kerf/models.json"))}, {"exists", true},
+            {"models", QJsonArray{QJsonObject{{"name", "shot-model"}, {"size", "832x480"}, {"rate", 16}, {"seconds", 5},
+                                              {"reads", QJsonArray{"guide", "ref"}},
+                                              {"guide", "render <sequence> {guide.mp4} size=832x480 rate=16"}}}}});
+        window.showSettings(QStringLiteral("models"));
+        QVERIFY(save(QStringLiteral("settings-models-listed")));
         window.close();
     }
 

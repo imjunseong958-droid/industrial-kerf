@@ -141,15 +141,17 @@ private slots:
         QCOMPARE(ui::tipName(sidebar.conversationRow(QStringLiteral("y"))), QStringLiteral("Last night · 16h"));
         QCOMPARE(ui::tipName(sidebar.conversationRow(QStringLiteral("w"))), QStringLiteral("This week · 3d"));
         QCOMPARE(ui::tipName(sidebar.conversationRow(QStringLiteral("old"))), QStringLiteral("Old cut · Oct 1"));
-        // Each belongs to its folder: its guide runs down them, and their
-        // titles start under its icon, with no dot before them and nothing
-        // after them at rest.
+        // Each is under its folder's heading, as a coding agent lists threads:
+        // the folder's name small and quiet with its chevron after it, and the
+        // titles flush with it, with no dot before them and nothing after them
+        // at rest.
         SidebarRow *folder = sidebar.projectRow(m_folder.path());
-        QVERIFY(folder->isStrong() && !folder->hasGuide());
+        QVERIFY(folder->isHeading() && !folder->isStrong() && !folder->hasGuide());
+        QVERIFY(folder->chevronRect().left() > folder->textLeft());
         for (const SidebarRow *row : sidebar.rows())
             if (row->objectName() == QStringLiteral("sidebarConversation")) {
-                QVERIFY(row->hasGuide());
-                QCOMPARE(row->textLeft(), folder->textLeft() - 16 - tokens::space::s8);
+                QVERIFY(!row->hasGuide() && !row->isHeading());
+                QCOMPARE(row->textLeft(), folder->textLeft());
                 QVERIFY(!row->badge().isValid());
                 QCOMPARE(row->textRect().right(), row->width() - 8 - 1);
             }
@@ -681,7 +683,10 @@ private slots:
                        conversation(QStringLiteral("b"), QStringLiteral("Captions"), State::Idle, now.addDays(-2)),
                        conversation(QStringLiteral("c"), QStringLiteral("beach at dusk"), State::Idle, now.addDays(-20), true)});
         QLineEdit *search = sidebar.searchField();
-        QVERIFY(search->isVisible());
+        // Search is a row under New conversation; pressed, the field takes its place.
+        QVERIFY(!search->isVisible() && sidebar.searchRow()->isVisible());
+        sidebar.searchRow()->click();
+        QVERIFY(search->isVisible() && !sidebar.searchRow()->isVisible());
         QCOMPARE(search->accessibleName(), QStringLiteral("Search conversations"));
         QTest::keyClicks(search, QStringLiteral("BEACH"));
         QCOMPARE(listed(sidebar), QStringList{QStringLiteral("The Beach cut")});
@@ -694,10 +699,12 @@ private slots:
         QVERIFY(!sidebar.archivedRow());
         QCOMPARE(sidebar.notes(), QStringList{QStringLiteral("No conversations match")});
 
-        // Esc empties it, and everything is back.
+        // Esc empties it, and everything is back; Esc again closes it.
         QTest::keyClick(search, Qt::Key_Escape);
         QVERIFY(search->text().isEmpty());
         QCOMPARE(listed(sidebar), (QStringList{QStringLiteral("The Beach cut"), QStringLiteral("Captions")}));
+        QTest::keyClick(search, Qt::Key_Escape);
+        QVERIFY(!search->isVisible() && sidebar.searchRow()->isVisible());
         QCOMPARE(sidebar.archivedRow()->text(), QStringLiteral("Archived · 1"));
 
         // The start window lists folders alone: no search there.

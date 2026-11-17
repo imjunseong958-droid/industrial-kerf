@@ -482,7 +482,13 @@ impl Models {
     /// The person's models: the file `KERF_MODELS` names, or
     /// `~/.kerf/models.json`. No file is no models.
     pub fn load() -> Result<Self> {
-        let file = std::env::var_os("KERF_MODELS")
+        Self::read(&Self::default_file())
+    }
+
+    /// Where [`Models::load`] reads: the file `KERF_MODELS` names, or
+    /// `~/.kerf/models.json`.
+    pub fn default_file() -> PathBuf {
+        std::env::var_os("KERF_MODELS")
             .filter(|path| !path.is_empty())
             .map(PathBuf::from)
             .or_else(|| {
@@ -492,8 +498,7 @@ impl Models {
                     .filter(|home| !home.is_empty())
                     .map(|home| PathBuf::from(home).join(".kerf").join("models.json"))
             })
-            .unwrap_or_else(|| PathBuf::from("models.json"));
-        Self::read(&file)
+            .unwrap_or_else(|| PathBuf::from("models.json"))
     }
 
     /// The models `file` names. What is wrong in it is said with the model.

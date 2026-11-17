@@ -48,6 +48,11 @@ public:
 
     // What the composer holds, sent to Kerf in the open conversation.
     bool post();
+    // What the composer holds while Kerf works: it waits, and goes when the
+    // turn ends well; a turn stopped or failed puts it back in the composer
+    // to send or change.
+    bool queue();
+    void sendQueued(bool ended);
     // An agent request in the open conversation (a new one when none is
     // open), asked at `at` (NaN: not stamped).
     bool sendTurn(const QString &text, const QJsonObject &focus, const QString &focusLabel,
@@ -78,6 +83,11 @@ private:
     ProposalModel *m_model = nullptr;
     ConversationModel *m_conversations = nullptr;
     QPointer<ChatPanel> m_panel;
+    // The request waiting for the turn to end, and the playhead it was asked at.
+    QString m_queued;
+    double m_queuedAt = std::numeric_limits<double>::quiet_NaN();
+    // The turn in progress failed or was stopped.
+    bool m_turnTroubled = false;
 };
 
 } // namespace kerf

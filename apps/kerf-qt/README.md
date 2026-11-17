@@ -355,9 +355,13 @@ before its zoom. The undo, redo, split, delete and import commands have their ke
 and native menu items.
 
 **Settings** (⌘,) is a page in the room, over the conversation and the panel, not a
-window: Account, AI connection, Appearance, General and Advanced named down its
-side, Back or Esc to leave (`StageShell::setCover`). AI connection also has how far
-Kerf goes without asking, the same choice as the composer's chip. Appearance
+window: Account, Chat, Models, Appearance, General and MCP named down its
+side, Back or Esc to leave (`StageShell::setCover`). Chat is the model the
+conversation runs on, a key of one's own with its fields under that choice,
+and how far Kerf goes without asking, the same choice as the composer's chip.
+Models lists the models a recipe's `generate` can name, read from the
+person's own models file (nothing is run to learn them), and says what runs
+inside Kerf; it names no model of its own. Appearance
 chooses the faces text is set in (`editor_theme.h`, `setEditorFaces`): the
 interface's (Inter, with Pretendard for Hangul; Pretendard; or the system's), and
 what is said in the conversation, which may be a serif (Noto Serif, with Nanum
@@ -583,11 +587,12 @@ is already saved; see
 [docs/cloud.md](../../docs/cloud.md)), or My own API key. Kerf Cloud shows the
 account, plan, and requests left, with Sign in (a token, for now) and Sign
 out; Ask Kerf stays unavailable, with the reason, until the account can make
-requests. Advanced
-holds two protocol slots for your own key: Anthropic Messages and OpenAI-compatible. Each slot
-has an API key, Base URL, and model. The OpenAI-compatible slot also has Chat
-Completions vs Responses. Gemini and other compatible hosts use that slot and
-its Base URL. Chat sends the active Settings connection plus the model combo.
+requests. My own API key
+holds two protocol slots: Anthropic Messages and OpenAI-compatible. Each slot
+has an API key, Base URL, and model (empty for the service's default). The
+OpenAI-compatible slot also has Chat Completions vs Responses; other services
+that speak that API use it with their own Base URL. Chat sends the active
+connection and its model.
 Environment variables remain available as fallbacks.
 
 Settings separates the two MCP directions. “Use MCP tools in Kerf chat” makes

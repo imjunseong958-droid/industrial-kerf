@@ -200,6 +200,8 @@ private slots:
     void updateAccountRow();
     // Settings, at `page` ("account", "ai", "general", "advanced"; empty: where it was).
     void showSettings(const QString &page = QString());
+    // The Models page from a models event {file, exists, models, error?}.
+    void applyModels(const QJsonObject &event);
     bool sendCloud(const QJsonObject &command);
     // What the registry needs to know about the agent's connection.
     QString aiAccess() const;
@@ -581,6 +583,15 @@ private:
     QPushButton *m_cloudSignIn = nullptr;
     QPushButton *m_cloudSignOut = nullptr;
     QWidget *m_advancedSettings = nullptr;
+    // A key of one's own: the connection's fields, under its choice on the
+    // Chat page, shown while it is the one chosen.
+    QWidget *m_ownKeySettings = nullptr;
+    // The Models page: the person's models file and the models it names.
+    QLabel *m_modelsList = nullptr;
+    QLabel *m_modelsFile = nullptr;
+    QPushButton *m_modelsOpen = nullptr;
+    // What the bridge last said of the models file (a models event).
+    QJsonObject m_models;
     // Where Kerf Cloud stands, on the Account page.
     QLabel *m_accountStatus = nullptr;
     // The last account report from the bridge.
