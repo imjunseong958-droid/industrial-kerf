@@ -6,6 +6,13 @@ on `main`; its section here becomes the release's notes on GitHub
 
 ## 0.1.3
 
+- Kerf in the conversation can do in a shot's graph what you can: read the
+  graph and the workflow behind a model, set one word of a recipe's line,
+  wire an input in or let it go, and set a value of the workflow. Its change
+  is kept as the recipe's next version and a new copy of the workflow, never
+  over yours, and the open graph shows it once it is accepted, where you had
+  it. (`look` with `graph` and `workflow`, `edit` with `recipeSet` and
+  `workflowSet`, for an MCP client too.)
 - A model that runs on a ComfyUI server opens, in its shot's graph, into the
   workflow it is run with: every node and every input, the blanks the recipe
   fills marked, and any other value to set. A value set is kept in a copy of
