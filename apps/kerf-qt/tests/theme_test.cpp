@@ -12,6 +12,7 @@
 #include "editor_common.h"
 #include "editor_style.h"
 #include "main_window.h"
+#include "modal_scrim.h"
 #include "media_artwork.h"
 #include "proposal_card.h"
 #include "chat_parts.h"
@@ -725,21 +726,22 @@ private slots:
             }
 
             // Settings.
-            // A page in the room, not a window over it: all of the content
-            // right of the sidebar, in the room's colour.
+            // Over the window, as everything one goes into is: the whole
+            // window dimmed, and the panel in its middle, in the room's colour.
             window.showSettings();
             QVERIFY(window.m_preferences->isVisible());
             QCOMPARE(window.m_preferences->window(), &window);
             QCoreApplication::processEvents();
-            // Under a bar that shows (this build has no runtime, and says so).
-            int bars = 0;
-            for (const QWidget *bar : {window.m_connectionBanner, window.m_errorBanner, window.m_divergedBanner})
-                if (!bar->isHidden()) bars += bar->height();
-            QCOMPARE(window.m_preferences->geometry(),
-                     QRect(window.m_shell->rects().sidebar.width(), bars,
-                           window.m_shell->width() - window.m_shell->rects().sidebar.width(), window.m_shell->height() - bars));
+            QCOMPARE(window.m_preferences->geometry(), window.m_shell->rect());
+            auto *scrim = qobject_cast<ModalScrim *>(window.m_preferences);
+            QVERIFY(scrim && scrim->panel());
+            const QRect panelRect = scrim->panel()->geometry();
+            QVERIFY(panelRect.width() < window.m_shell->width() && panelRect.height() < window.m_shell->height());
+            QCOMPARE(panelRect.center().x(), window.m_shell->rect().center().x());
             const QImage settings = window.m_preferences->grab().toImage();
-            QCOMPARE(settings.pixelColor(QPoint(4, settings.height() - 4)).rgb(), tokens::color(tokens::chrome).rgb());
+            QCOMPARE(settings.pixelColor(panelRect.bottomLeft() + QPoint(20, -8)).rgb(), tokens::color(tokens::chrome).rgb());
+            // Outside it, the work is there, dimmed.
+            QVERIFY(qGray(settings.pixelColor(QPoint(4, 4)).rgb()) < qGray(tokens::color(tokens::chrome).rgb()) + 1);
             QVERIFY(!window.m_preferences->findChild<QDialogButtonBox *>());
             save(settings, QStringLiteral("settings-%1").arg(name));
             // Its pages are named down its side; each name shows its page.
@@ -749,8 +751,11 @@ private slots:
             window.m_preferences->findChild<SidebarRow *>(QStringLiteral("settingsNav.advanced"))->click();
             QVERIFY(window.m_advancedSettings->isVisible());
             QVERIFY(window.m_settingsNav.at(5)->isCurrent());
-            // Back, or Esc, gives the room back.
-            window.m_preferences->findChild<ui::GhostButton *>(QStringLiteral("settingsBack"))->click();
+            // Its close, a press on the dim, or Esc gives the window back.
+            window.m_preferences->findChild<ui::IconButton *>(QStringLiteral("settingsClose"))->click();
+            QVERIFY(!window.m_preferences->isVisible());
+            window.showSettings();
+            QTest::mouseClick(window.m_preferences, Qt::LeftButton, Qt::NoModifier, QPoint(4, 4));
             QVERIFY(!window.m_preferences->isVisible());
 
             // A representative dialog: the preset's media bindings.

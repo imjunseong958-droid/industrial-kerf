@@ -354,9 +354,11 @@ sheet's button, Follow Kerf and the two format icons are in the timeline's strip
 before its zoom. The undo, redo, split, delete and import commands have their keys
 and native menu items.
 
-**Settings** (⌘,) is a page in the room, over the conversation and the panel, not a
-window: Account, Chat, Models, Appearance, General and MCP named down its
-side, Back or Esc to leave (`StageShell::setCover`). Chat is the model the
+**Settings** (⌘, or the sidebar's gear) opens over the window, as everything one
+goes into does: a panel in the middle of the dimmed window (`ui/modal_scrim.h`,
+`StageShell::setCover`), Account, Chat, Models, Appearance, General and MCP
+named down its side with their glyphs; Esc, its close or a press on the dim
+gives the window back. Chat is the model the
 conversation runs on, a key of one's own with its fields under that choice,
 and how far Kerf goes without asking, the same choice as the composer's chip.
 Models lists the models a recipe's `generate` can name, read from the

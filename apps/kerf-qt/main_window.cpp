@@ -1,4 +1,5 @@
 #include "main_window.h"
+#include "modal_scrim.h"
 
 #include "chat_parts.h"
 #include "crash_notice.h"
@@ -34,6 +35,7 @@
 
 #include <QAbstractTextDocumentLayout>
 #include <QActionGroup>
+#include <QHash>
 #include <QApplication>
 #include <QButtonGroup>
 #include <QClipboard>
@@ -711,59 +713,77 @@ void MainWindow::buildUi() {
 }
 
 void MainWindow::buildPreferences() {
-    // Settings is a page in the room, over the conversation and the panel, not
-    // a window over the window: Back at its top, its pages named down its
-    // side, one of them showing.
-    m_preferences = new QWidget;
-    m_preferences->setObjectName(QStringLiteral("settingsPage"));
-    m_preferences->setAccessibleName(QStringLiteral("Settings"));
-    m_preferences->setAttribute(Qt::WA_StyledBackground);
-    m_preferences->setStyleSheet(QStringLiteral(
-        "QWidget#settingsPage { background: %1; }"
+    // Settings opens over the window, as everything one goes into does: a
+    // panel in the middle of the dimmed work, its pages named down its side.
+    // Esc, its close, or a press on the dim gives the window back as it was.
+    auto *scrim = new ModalScrim;
+    scrim->setObjectName(QStringLiteral("settingsScrim"));
+    scrim->setAccessibleName(QStringLiteral("Settings"));
+    connect(scrim, &ModalScrim::dismissed, this, [this] { m_shell->setCovered(false); });
+    m_preferences = scrim;
+    auto *panel = new QWidget;
+    panel->setObjectName(QStringLiteral("settingsPage"));
+    panel->setAccessibleName(QStringLiteral("Settings"));
+    panel->setAttribute(Qt::WA_StyledBackground);
+    panel->setStyleSheet(QStringLiteral(
+        "QWidget#settingsPage { background: %1; border: 1px solid %6; border-radius: 12px; }"
+        "QWidget#settingsNavColumn { background: transparent; border: 0; border-right: 1px solid %3; }"
+        "QFrame#settingsRule { background: %3; border: 0; }"
         "QFrame#settingsCard { background: %2; border: 1px solid %3; border-radius: 12px; }"
-        "QLabel#settingsTitle { color: %4; font-size: 20px; font-weight: 500; }"
+        "QLabel#settingsTitle { color: %4; font-size: 14px; font-weight: 500; }"
         "QLabel#settingsHeading { color: %4; font-size: 13px; font-weight: 500; }"
         "QLabel#settingsHint { color: %5; font-size: 12px; }")
             .arg(tokens::color(tokens::chrome).name(), tokens::color(tokens::card).name(),
                  tokens::color(tokens::line).name(QColor::HexArgb), tokens::color(tokens::ink).name(),
-                 tokens::color(tokens::ink3).name()));
-    auto *pageLayout = new QVBoxLayout(m_preferences);
+                 tokens::color(tokens::ink3).name(), tokens::color(tokens::line2).name(QColor::HexArgb)));
+    scrim->setPanel(panel);
+    auto *pageLayout = new QVBoxLayout(panel);
     pageLayout->setContentsMargins(0, 0, 0, 0);
     pageLayout->setSpacing(0);
+    // Its title, and the way out.
     auto *topRow = new QHBoxLayout;
-    topRow->setContentsMargins(tokens::space::s12, tokens::space::s8, tokens::space::s12, 0);
-    auto *back = new ui::GhostButton(QStringLiteral("Back"));
-    back->setObjectName(QStringLiteral("settingsBack"));
-    back->setIconName(QStringLiteral("g-chevl"));
-    back->setControlHeight(tokens::height::h28);
-    back->setAccessibleName(QStringLiteral("Back to the conversation"));
-    ui::setTip(back, QStringLiteral("Back"), QStringLiteral("Esc"));
-    connect(back, &QAbstractButton::clicked, this, [this] { m_shell->setCovered(false); });
-    topRow->addWidget(back);
+    topRow->setContentsMargins(tokens::space::s16, tokens::space::s12, tokens::space::s12, tokens::space::s12);
+    auto *settingsTitle = new QLabel(QStringLiteral("Settings"));
+    settingsTitle->setObjectName(QStringLiteral("settingsTitle"));
+    topRow->addWidget(settingsTitle);
     topRow->addStretch(1);
+    auto *close = new ui::IconButton(QStringLiteral("g-close"), ui::IconButton::Size::S28);
+    close->setObjectName(QStringLiteral("settingsClose"));
+    close->setCheckable(false);
+    close->setAccessibleName(QStringLiteral("Close Settings"));
+    close->setTip(QStringLiteral("Close"), QStringLiteral("Esc"));
+    connect(close, &QAbstractButton::clicked, this, [this] { m_shell->setCovered(false); });
+    topRow->addWidget(close);
     pageLayout->addLayout(topRow);
+    auto *rule = new QFrame;
+    rule->setObjectName(QStringLiteral("settingsRule"));
+    rule->setFixedHeight(1);
+    pageLayout->addWidget(rule);
 
     m_settingsBody = new QWidget;
     m_settingsBody->setObjectName(QStringLiteral("settingsBody"));
     auto *body = new QHBoxLayout(m_settingsBody);
-    body->setContentsMargins(tokens::space::s16 + tokens::space::s8, tokens::space::s16 + tokens::space::s8, tokens::space::s16 + tokens::space::s8, 0);
-    body->setSpacing(40);
-    body->addStretch(1);
-    auto *nav = new QVBoxLayout;
-    nav->setContentsMargins(0, 0, 0, 0);
+    body->setContentsMargins(0, 0, 0, 0);
+    body->setSpacing(0);
+    // The pages, named down the side, each with its glyph.
+    auto *navColumn = new QWidget;
+    navColumn->setObjectName(QStringLiteral("settingsNavColumn"));
+    navColumn->setAttribute(Qt::WA_StyledBackground);
+    navColumn->setFixedWidth(210);
+    auto *nav = new QVBoxLayout(navColumn);
+    nav->setContentsMargins(tokens::space::s8, tokens::space::s12, tokens::space::s8, tokens::space::s12);
     nav->setSpacing(tokens::space::s2);
-    auto *settingsTitle = new QLabel(QStringLiteral("Settings"));
-    settingsTitle->setObjectName(QStringLiteral("settingsTitle"));
-    settingsTitle->setContentsMargins(tokens::space::s8, 0, 0, tokens::space::s12);
-    nav->addWidget(settingsTitle);
     m_settingsPages = new QStackedWidget;
     m_settingsPages->setObjectName(QStringLiteral("settingsPages"));
     // A page: its name in the side's list, and a column that scrolls when it
     // is taller than the room.
+    static const QHash<QString, QString> glyphs{
+        {QStringLiteral("account"), QStringLiteral("g-user")},   {QStringLiteral("ai"), QStringLiteral("g-ask")},
+        {QStringLiteral("models"), QStringLiteral("g-fx")},      {QStringLiteral("appearance"), QStringLiteral("g-eye")},
+        {QStringLiteral("general"), QStringLiteral("g-settings")}, {QStringLiteral("advanced"), QStringLiteral("g-branch")}};
     const auto addPage = [this, nav](const QString &id, const QString &name) {
-        auto *row = new SidebarRow(QString(), name);
+        auto *row = new SidebarRow(glyphs.value(id), name);
         row->setObjectName(QStringLiteral("settingsNav.%1").arg(id));
-        row->setFixedWidth(180);
         nav->addWidget(row);
         auto *scroll = new QScrollArea;
         scroll->setObjectName(QStringLiteral("settingsScroll.%1").arg(id));
@@ -775,8 +795,8 @@ void MainWindow::buildPreferences() {
         auto *content = new QWidget;
         content->setAttribute(Qt::WA_TranslucentBackground);
         auto *column = new QVBoxLayout(content);
-        // Level with the first name in the list.
-        column->setContentsMargins(0, 40, tokens::space::s4, tokens::space::s16 + tokens::space::s8);
+        column->setContentsMargins(tokens::space::s16 + tokens::space::s8, tokens::space::s16, tokens::space::s16 + tokens::space::s8,
+                                   tokens::space::s16 + tokens::space::s8);
         column->setSpacing(tokens::space::s12);
         scroll->setWidget(content);
         const int index = m_settingsPages->addWidget(scroll);
@@ -816,11 +836,8 @@ void MainWindow::buildPreferences() {
     QVBoxLayout *generalPage = addPage(QStringLiteral("general"), QStringLiteral("General"));
     QVBoxLayout *advancedPage = addPage(QStringLiteral("advanced"), QStringLiteral("MCP"));
     nav->addStretch(1);
-    body->addLayout(nav);
-    m_settingsPages->setMinimumWidth(360);
-    m_settingsPages->setMaximumWidth(560);
-    body->addWidget(m_settingsPages, 100);
-    body->addStretch(1);
+    body->addWidget(navColumn);
+    body->addWidget(m_settingsPages, 1);
     pageLayout->addWidget(m_settingsBody, 1);
 
     // Account: who is signed in to Kerf Cloud, and the way in or out.

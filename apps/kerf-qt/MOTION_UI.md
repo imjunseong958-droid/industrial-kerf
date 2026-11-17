@@ -37,7 +37,7 @@ repeating their numbers, so changing a value does not make it wrong.
 | Archived unfolds | Archived · N is pressed | The archived conversations fade in where they are, one after another (`appear`, `unfoldStagger` apart); folding is at once | `ProjectSidebar::setArchivedOpen`, `moves::fadeIn` | `archivedConversationsFoldAwayAtTheEnd` (the end state) |
 | Export arrives | The program gets its first clip | Export fades in where it is, in the toolbar | `ToolbarWiring::followCut` | `toolbarHoldsOnlyTheSidebarTheTitleExportAndThePanel` (the end state) |
 | Account menu | The account at the sidebar's foot is pressed | The menu fades in and rises over the account, which stays held | `ToolbarWiring::popupAppMenu`, `ui::popupMenu` (`Side::Above`) | none |
-| Settings | ⌘, or the account's menu | The page has the room at once; its body comes up into place, and a page chosen fades in over the last | `MainWindow::showSettings`, `StageShell::setCovered` | `theAccountMenuReachesEverythingElse` (the end state) |
+| Settings | ⌘, the sidebar's gear, or the account's menu | Over the window, as everything one goes into: the window dims at once and the panel is in its middle; its body comes up into place, and a page chosen fades in over the last. Esc, its close or a press on the dim gives the window back | `MainWindow::showSettings`, `StageShell::setCovered` | `theAccountMenuReachesEverythingElse` (the end state) |
 | Hand-over | A request is sent | Start window fades over the editor; its box goes to the composer | `MainWindow::takeOverFrom`, `main.cpp` | none |
 | Footage | Kerf starts with footage and no cut | Named tiles pop in, in the conversation | `MainWindow::showSheet`, `FootageSheet` | `footageTilesKeepTheirPlacesAsTheyGoOn` |
 | Picture arrives | A project opens with clips on its timeline | First tile grows into the picture as the conversation gives way; the timeline comes in out of the room | `MainWindow::followContentWithPanes`, `MainWindow::growStage`, `StageShell::transition`, `StageMotion::followPicture` | `regionsMoveToANewArrangementWhenMotionIsOn`, `aMoveCutShortStillEnds`, `motionLeavesNothingBehind`, `aStandInGoesWithThePicture` |
@@ -72,7 +72,7 @@ Look here before writing a new animation.
 | To show that something works, round the picture | `activity::EdgeLight` (`ViewerWidget::setEdgeLight`), with `activity::Hue`; what it says, `WorkChip::setText` |
 | To show that something is being made, over a clip or a tile | `activity::paintStripes` at `activity::stripePhase`, drawn again each `stripeFrame` where it is only |
 | Something to rise into place, in a layout or not | `moves::rise` |
-| A page that takes the room (Settings) | `StageShell::setCover`, shown with `setCovered`; raise its body, not the page (see **What a frame costs**) |
+| What one goes into (Settings) | A `ModalScrim` (ui/modal_scrim.h) given to `StageShell::setCover`, shown with `setCovered`, over the whole window; raise its body, not the scrim (see **What a frame costs**) |
 | Something in the toolbar to keep to the sidebar's edge | `ToolbarWiring::sidebarEdge`, which follows the sidebar while it moves |
 | A region to fall back | `moves::dim` |
 | The timeline to fall back or come in | `StageShell::veilTimeline` (`moves::dim` does not work on it) |
