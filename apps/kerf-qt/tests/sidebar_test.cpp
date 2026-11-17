@@ -783,7 +783,7 @@ private slots:
                        conversation(QStringLiteral("f"), QStringLiteral("First rough cut"), State::Idle, now.addDays(-40)),
                        conversation(QStringLiteral("g"), QStringLiteral("Old title ideas"), State::Idle, now.addDays(-50), true)},
                  QStringLiteral("b"));
-        sidebar.setAccount(QStringLiteral("You"), QStringLiteral("Kerf Cloud"));
+        sidebar.setAccount(QStringLiteral("You"), QStringLiteral("Pro plan"));
         sidebar.setArchivedOpen(true);
         QEnterEvent enter(QPointF(20, 10), QPointF(20, 10), QPointF(20, 10));
         QApplication::sendEvent(sidebar.conversationRow(QStringLiteral("d")), &enter);

@@ -718,12 +718,13 @@ private:
 //                                           label 14 ink;
 // at the end, what the row says (a key or a value) in 13 ink3, an accent
 // action in 13 accent-ink, then its mark: the chevron of a submenu in ink3,
-// or for a row that can be on, the check in accent-ink while it is (where any
-// row can be on, every row keeps its room, so their ends line up). Separators
-// are a line inset 8, with 4 above and below; the row under the pointer is
-// the popup's hover; disabled rows are dis, warn rows neg; a dot (the
-// preflight rows) stands in a column before the label. A press in the
-// shadow halo around the card closes the menu, as a click outside does.
+// for a row that can be on, the check in accent-ink while it is, or a status
+// dot (the preflight rows). Where any row can be on or has a dot, every row
+// keeps that room, so their ends line up and every label starts at the
+// row's start. Separators are a line inset 8, with 4 above and below; the
+// row under the pointer is the popup's hover; disabled rows are dis, warn
+// rows neg. A press in the shadow halo around the card closes the menu, as a
+// click outside does.
 void styleMenu(QMenu *menu);
 // Opens a styled menu at popoverPlacement() of `anchor` (with the 160 ms fade).
 void popupMenu(QMenu *menu, QWidget *anchor, Side side = Side::Below);
@@ -747,7 +748,7 @@ void setMenuIcon(QAction *action, const QString &glyph);
 QString menuIcon(const QAction *action);
 // An icon (ink3, 14 pt) in the right column.
 void setMenuKeyIcon(QAction *action, const QString &icon);
-// A 6 pt dot in the check column (the preflight rows).
+// A 6 pt status dot at the row's end, where a check would be (the preflight rows).
 void setMenuDot(QAction *action, const QColor &color);
 // Accent text in the right column (.ak), such as "Ask Kerf".
 void setMenuAccent(QAction *action, const QString &text);

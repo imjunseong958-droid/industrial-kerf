@@ -1024,7 +1024,7 @@ private slots:
             // buttons the same `raised`), with no chevron cell of its own.
             auto *typed = new QComboBox;
             typed->setEditable(true);
-            typed->addItem(QStringLiteral("Kerf Cloud"));
+            typed->addItem(QStringLiteral("Kerf"));
             layout->addWidget(typed);
             typed->show();
             QCoreApplication::processEvents();

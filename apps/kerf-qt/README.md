@@ -341,7 +341,7 @@ new conversation in it) and its menu, which a right-click opens too: New
 Conversation, Open Project, Show in Finder, Copy Path, and Remove from Sidebar,
 which takes it off the list and touches nothing on disk. The + beside Projects is
 New Project… and Open Folder…. At its foot is
-the account: the Kerf Cloud account when one is signed in, else what chat runs on.
+the account: the Kerf account when one is signed in, else what chat runs on.
 It opens the menu to everything the window does not show: Settings…, Account…, the
 User Guide, Media (⌘1), Import… and View (the panes, the mask tools,
 safe zones, viewer zoom, the keyboard's choice and the sync's rows), and Sign Out
@@ -377,7 +377,7 @@ There is no status bar. Beside the title the toolbar says what one would, and on
 when there is something to say: a passing message for its timeout, an offline or
 error state until it clears, a running sync's stage or a render's progress ("Draft
 export · 42%"). "Edited 2 min ago · rev 22" is the title's tooltip. An
-agent that cannot take requests (no key, Kerf Cloud signed out) says so in the
+agent that cannot take requests (no key, signed out of Kerf) says so in the
 composer's placeholder, with the reason on its tooltip. The
 connection, error and project.kerf bars that carry an action lie over the top of
 the content while they show.
@@ -588,9 +588,9 @@ or split them into smaller changes.
 
 Agent settings are in Settings (Edit → Settings…, ⌘, ; on macOS in the
 application menu), also reachable from the chat's ⋯ menu. Settings → AI
-chooses Kerf Cloud, the hosted model (the default unless a key of your own
+chooses Kerf, the hosted model (the default unless a key of your own
 is already saved; see
-[docs/cloud.md](../../docs/cloud.md)), or My own API key. Kerf Cloud shows the
+[docs/cloud.md](../../docs/cloud.md)), or My own API key. Kerf shows the
 account, plan, and requests left, with Sign in (a token, for now) and Sign
 out; Ask Kerf stays unavailable, with the reason, until the account can make
 requests. My own API key

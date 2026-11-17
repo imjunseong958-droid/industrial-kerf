@@ -227,7 +227,7 @@ private slots:
         QCOMPARE(ui::menuRole(findAction(menu, QStringLiteral("appMenu.who"))), ui::MenuRole::Header);
         for (const char *name : {"appMenu.settings", "appMenu.account", "appMenu.guide", "appMenu.media", "appMenu.import", "appMenu.view"})
             QVERIFY2(!ui::menuIcon(findAction(menu, QString::fromLatin1(name))).isEmpty(), name);
-        // Nobody is signed in to Kerf Cloud: there is no way out to offer.
+        // Nobody is signed in to Kerf: there is no way out to offer.
         QVERIFY(!findAction(menu, QStringLiteral("appMenu.signOut")));
         // Keys as the registry has them, never written here.
         const auto keyOf = [&window](const char *id) { return window.m_commands->action(QString::fromLatin1(id))->shortcut().toString(QKeySequence::NativeText); };
@@ -284,22 +284,22 @@ private slots:
         QVERIFY(sync->actions().contains(window.m_commands->action(QStringLiteral("collab.publish"))));
     }
 
-    // The account at the sidebar's foot says who is here: the Kerf Cloud
-    // account when one is signed in, else what chat runs on.
+    // The account at the sidebar's foot says who is here: the Kerf account
+    // when one is signed in, with its plan, else what chat runs on.
     void theSidebarsFootNamesTheAccount() {
         MainWindow window{QString(), QString()};
         SidebarAccount *account = window.m_sidebar->accountRow();
         window.chooseAgentConnection(QStringLiteral("claude-code"));
         QCOMPARE(account->title(), QStringLiteral("Claude Code"));
         window.chooseAgentConnection(QStringLiteral("cloud"));
-        QCOMPARE(account->title(), QStringLiteral("Kerf Cloud"));
+        QCOMPARE(account->title(), QStringLiteral("Kerf"));
         QCOMPARE(account->subtitle(), QStringLiteral("Not signed in"));
         QVERIFY(!window.cloudSignedIn());
         window.handleEvent(QJsonObject{{"type", "cloud"}, {"access", "ok"},
                                        {"account", QJsonObject{{"email", "mina@example.com"}, {"plan", "Pro"}}}});
         QVERIFY(window.cloudSignedIn());
         QCOMPARE(account->title(), QStringLiteral("mina@example.com"));
-        QCOMPARE(account->subtitle(), QStringLiteral("Kerf Cloud · Pro plan"));
+        QCOMPARE(account->subtitle(), QStringLiteral("Pro plan"));
         QCOMPARE(window.m_accountRow->description().section(QStringLiteral("  ·  "), 0, 0), QStringLiteral("Signed in as mina@example.com"));
         // Signed in, the menu offers the way out.
         window.m_toolbarWiring->buildAppMenu();

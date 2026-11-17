@@ -387,11 +387,11 @@ void MainWindow::updateAccountRow() {
     const QString email = m_cloudAccount.value(QStringLiteral("email")).toString();
     if (cloudSignedIn()) {
         const QString plan = m_cloudAccount.value(QStringLiteral("plan")).toString();
-        m_sidebar->setAccount(email, plan.isEmpty() ? QStringLiteral("Kerf Cloud") : QStringLiteral("Kerf Cloud · %1 plan").arg(plan));
+        m_sidebar->setAccount(email, plan.isEmpty() ? QStringLiteral("Kerf account") : QStringLiteral("%1 plan").arg(plan));
     } else if (usesClaudeCode()) {
         m_sidebar->setAccount(QStringLiteral("Claude Code"), QStringLiteral("Your Claude plan"));
     } else if (usesCloud()) {
-        m_sidebar->setAccount(QStringLiteral("Kerf Cloud"), QStringLiteral("Not signed in"));
+        m_sidebar->setAccount(QStringLiteral("Kerf"), QStringLiteral("Not signed in"));
     } else {
         m_sidebar->setAccount(QStringLiteral("My own API key"), m_agentModel.isEmpty() ? QStringLiteral("Set up in Settings") : modelLabel(m_agentModel));
     }
@@ -425,13 +425,13 @@ void MainWindow::updateCloudStatus() {
     if (m_cloudAccess == QStringLiteral("unavailable") || m_cloudAccess.isEmpty()) {
         text = QStringLiteral("Not available yet. Chat can run on your own API key or Claude Code");
     } else if (!signedIn) {
-        text = m_cloudAccess == QStringLiteral("unreachable") ? QStringLiteral("Kerf Cloud can't be reached right now.")
-                                                               : QStringLiteral("Signed out. Paste your Kerf Cloud token to sign in.");
+        text = m_cloudAccess == QStringLiteral("unreachable") ? QStringLiteral("Kerf can't be reached right now.")
+                                                               : QStringLiteral("Signed out. Paste your Kerf sign-in token to sign in.");
     } else {
         const QJsonValue credits = m_cloudAccount.value(QStringLiteral("credits"));
         text = QStringLiteral("Signed in as %1  ·  %2 plan%3").arg(email, m_cloudAccount.value(QStringLiteral("plan")).toString(),
             credits.isDouble() ? QStringLiteral("  ·  %1 requests left").arg(credits.toInteger()) : QString());
-        if (m_cloudAccess == QStringLiteral("notIncluded")) text += QStringLiteral("\nThis plan doesn't include Kerf Cloud requests.");
+        if (m_cloudAccess == QStringLiteral("notIncluded")) text += QStringLiteral("\nThis plan doesn't include requests to Kerf.");
         if (m_cloudAccess == QStringLiteral("outOfCredits")) text += QStringLiteral("\nYou've used this period's requests.");
     }
     if (!m_cloudMessage.isEmpty()) text += QStringLiteral("\n") + m_cloudMessage;
@@ -521,7 +521,7 @@ void MainWindow::saveInboundMcpConfig() {
 }
 
 void MainWindow::updateAgentModelChoices() {
-    static const QString cloudModel = QStringLiteral("Kerf Cloud");
+    static const QString cloudModel = QStringLiteral("Kerf");
     if (usesCloud()) {
         // The service picks the model: nothing to choose.
         m_agentModels = {cloudModel};

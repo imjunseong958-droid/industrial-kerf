@@ -136,9 +136,9 @@ an agent that reaches Kerf over MCP from another program follows
 ### Connecting Kerf
 
 Settings (⌘, ; or the account at the sidebar's foot ▸ Settings…) ▸ AI connection
-chooses how Kerf thinks, and ▸ Account signs in to Kerf Cloud:
+chooses how Kerf thinks, and ▸ Account signs in to your Kerf account:
 
-- **Kerf Cloud**, the hosted model: sign in, and the account, plan and requests
+- **Kerf**, the hosted model: sign in, and the account, plan and requests
   left show there. The sign-in is kept in your system's keychain, as keys are.
 - **My own API key**: an Anthropic or OpenAI-compatible key, base URL, and model.
   Keys are kept in your system's keychain (macOS Keychain, Windows Credential

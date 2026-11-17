@@ -2171,7 +2171,7 @@ mod tests {
         context.ai_access = Some("signedOut".into());
         assert_eq!(
             states(&context)["ai.ask"],
-            "Sign in to Kerf Cloud in Settings"
+            "Sign in to your Kerf account in Settings"
         );
         context.ai_access = Some("noKey".into());
         assert_eq!(

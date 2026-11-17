@@ -488,14 +488,14 @@ private slots:
     }
 
     // The composer names the model that answers, and offers the others where
-    // there is a choice; Kerf Cloud picks its own, so its chip only says.
+    // there is a choice; Kerf's hosted model is its own, so its chip only says.
     void theComposerNamesTheModel() {
         Window w;
         Composer *composer = w.chat()->composerWidget();
         ComposerChip *chip = composer->modelChip();
-        w.chat()->setModels({QStringLiteral("Kerf Cloud")}, QStringLiteral("Kerf Cloud"), false);
+        w.chat()->setModels({QStringLiteral("Kerf")}, QStringLiteral("Kerf"), false);
         QVERIFY(!chip->isHidden());
-        QCOMPARE(chip->text(), QStringLiteral("Kerf Cloud"));
+        QCOMPARE(chip->text(), QStringLiteral("Kerf"));
         QVERIFY(!chip->hasChevron());
         w.chat()->setModels({QStringLiteral("claude-opus-5-5"), QStringLiteral("claude-sonnet-5-5")}, QStringLiteral("claude-opus-5-5"), true);
         QCOMPARE(chip->text(), QStringLiteral("claude-opus-5-5"));

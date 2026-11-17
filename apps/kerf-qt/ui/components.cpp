@@ -1796,11 +1796,6 @@ template <typename Test> bool menuHas(const QMenu *menu, Test test) {
     return false;
 }
 
-// A column of dots before the labels (the preflight rows).
-bool menuHasDotColumn(const QMenu *menu) {
-    return menuHas(menu, [](const QAction *a) { return a->property(kMenuDot).isValid(); });
-}
-
 // An action's own icon, where menus show them (the kit's glyphs always show).
 bool shownIcon(const QAction *a) { return !a->icon().isNull() && a->isIconVisibleInMenu(); }
 
@@ -1826,18 +1821,19 @@ QString labelText(const QAction *a) {
 }
 
 // The mark at a row's very end: a check for what can be on (shown while it
-// is), or the chevron of a submenu.
-bool hasEndMark(const QAction *a) { return a->isCheckable() || a->menu(); }
+// is), a status dot (the preflight rows), or the chevron of a submenu.
+bool hasEndMark(const QAction *a) { return a->isCheckable() || a->property(kMenuDot).isValid() || a->menu(); }
 
-// Where any row can be on, every row keeps the check's room at its end, so
-// what the rows say there ends on one line, checked or not.
-bool menuHasCheckColumn(const QMenu *menu) {
-    return menuHas(menu, [](const QAction *a) { return a->isCheckable(); });
+// Where any row can be on or has a dot, every row keeps that room at its
+// end, so what the rows say there ends on one line, and the labels all
+// start at the row's start.
+bool menuHasEndColumn(const QMenu *menu) {
+    return menuHas(menu, [](const QAction *a) { return a->isCheckable() || a->property(kMenuDot).isValid(); });
 }
 
 // The width of everything right of the label: 16 of air, then the key or
 // value, a key icon, the accent text, and the end mark (or its room, in a
-// menu where a row can be on).
+// menu where a row can be on or has a dot).
 int rightColumnWidth(const QAction *a, bool checks) {
     int w = 0;
     const QString key = keyText(a);
@@ -1850,18 +1846,13 @@ int rightColumnWidth(const QAction *a, bool checks) {
 }
 
 // Where a row's label starts, from its left edge.
-int labelInset(bool dots, bool icons) {
-    int x = kMenuInset;
-    if (dots) x += kMenuMark + space::s8;
-    if (icons) x += kMenuIconSize + space::s8;
-    return x;
-}
+int labelInset(bool icons) { return kMenuInset + (icons ? kMenuIconSize + space::s8 : 0); }
 
 // The width a kit menu needs for `a`'s row, inside the card's padding.
-int menuItemWidth(const QAction *a, bool dots, bool icons, bool checks) {
+int menuItemWidth(const QAction *a, bool icons, bool checks) {
     if (!a->isVisible() || a->isSeparator()) return 0;
     if (menuRole(a) == MenuRole::Header) return kMenuInset + snapWidth(menuQuiet, a->text()) + kMenuInset;
-    return labelInset(dots, icons) + snapWidth(menuItem, labelText(a)) + rightColumnWidth(a, checks) + kMenuInset;
+    return labelInset(icons) + snapWidth(menuItem, labelText(a)) + rightColumnWidth(a, checks) + kMenuInset;
 }
 
 // The kit menu's metrics as a style sheet of its own. A widget's own sheet
@@ -1884,9 +1875,9 @@ QString menuSheet() {
 
 // Widens the menu to its widest row (and the design's 220 minimum card).
 void fitMenuWidth(QMenu *menu) {
-    const bool dots = menuHasDotColumn(menu), icons = menuHasIconColumn(menu), checks = menuHasCheckColumn(menu);
+    const bool icons = menuHasIconColumn(menu), checks = menuHasEndColumn(menu);
     int widest = 0;
-    for (const QAction *a : menu->actions()) widest = qMax(widest, menuItemWidth(a, dots, icons, checks));
+    for (const QAction *a : menu->actions()) widest = qMax(widest, menuItemWidth(a, icons, checks));
     const int card = qMax(menuMinimumCardWidth(menu), kMenuPad + widest + kMenuPad);
     menu->setMinimumWidth(card + 2 * menuShadowH());
 }
@@ -1906,7 +1897,7 @@ void paintMenu(QMenu *menu) {
     p.drawRoundedRect(card, radius::panel, radius::panel);
     paintInsetLine(p, card, radius::panel, color(line2));
 
-    const bool dots = menuHasDotColumn(menu), icons = menuHasIconColumn(menu), checks = menuHasCheckColumn(menu);
+    const bool icons = menuHasIconColumn(menu), checks = menuHasEndColumn(menu);
     for (QAction *a : menu->actions()) {
         if (!a->isVisible()) continue;
         const QRectF g = menu->actionGeometry(a);
@@ -1931,15 +1922,6 @@ void paintMenu(QMenu *menu) {
         }
         const QColor text = !enabled ? color(dis) : menuRole(a) == MenuRole::Warn ? color(neg) : color(ink);
         qreal x = g.left() + kMenuInset;
-        if (dots) {
-            if (const QVariant dot = a->property(kMenuDot); dot.isValid()) {
-                const QPointF middle(x + kMenuMark / 2.0, g.center().y());
-                p.setPen(Qt::NoPen);
-                p.setBrush(dot.value<QColor>());
-                p.drawEllipse(QRectF(middle - QPointF(3, 3), QSizeF(6, 6)));
-            }
-            x += kMenuMark + space::s8;
-        }
         if (icons) {
             const QRectF box(x, g.top() + (g.height() - kMenuIconSize) / 2, kMenuIconSize, kMenuIconSize);
             if (const QString glyph = a->property(kMenuIcon).toString(); !glyph.isEmpty())
@@ -1957,9 +1939,13 @@ void paintMenu(QMenu *menu) {
         qreal right = g.right() + 1 - kMenuInset;
         if (hasEndMark(a) || checks) {
             const QRectF mark(right - kMenuMark, g.top(), kMenuMark, g.height());
-            if (a->menu())
+            if (a->menu()) {
                 icons::paint(p, QStringLiteral("g-chevr"), mark, color(ink3), kMenuMark);
-            else if (a->isCheckable() && a->isChecked())
+            } else if (const QVariant dot = a->property(kMenuDot); dot.isValid()) {
+                p.setPen(Qt::NoPen);
+                p.setBrush(dot.value<QColor>());
+                p.drawEllipse(QRectF(mark.center() - QPointF(3, 3), QSizeF(6, 6)));
+            } else if (a->isCheckable() && a->isChecked())
                 icons::paint(p, QStringLiteral("g-check"), mark, enabled ? color(accentInk) : color(dis), kMenuMark);
             right -= kMenuMark + space::s8;
         }

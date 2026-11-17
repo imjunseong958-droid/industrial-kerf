@@ -135,7 +135,7 @@ private slots:
         window.m_cloudAccess = QStringLiteral("signedOut");
         window.updateCommandStates();
         QCOMPARE(window.m_chatInput->placeholderText(), QStringLiteral("Set up Kerf in Settings to ask"));
-        QCOMPARE(window.m_chatInput->toolTip(), QStringLiteral("Sign in to Kerf Cloud in Settings"));
+        QCOMPARE(window.m_chatInput->toolTip(), QStringLiteral("Sign in to your Kerf account in Settings"));
         window.m_cloudAccess = QStringLiteral("ready");
         window.updateCommandStates();
         QCOMPARE(window.m_chatInput->placeholderText(), QStringLiteral("Ask Kerf to make or change something"));

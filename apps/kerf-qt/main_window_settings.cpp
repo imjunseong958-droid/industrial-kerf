@@ -210,11 +210,11 @@ void MainWindow::buildPreferences() {
     body->addWidget(m_settingsPages, 1);
     pageLayout->addWidget(m_settingsBody, 1);
 
-    // Account: who is signed in to Kerf Cloud, and the way in or out.
+    // Account: who is signed in to Kerf, and the way in or out.
     m_cloudToken = field(QStringLiteral("Sign-in token"), true);
     m_cloudToken->setObjectName(QStringLiteral("cloudToken"));
     m_cloudToken->setFixedWidth(220);
-    m_cloudToken->setAccessibleName(QStringLiteral("Kerf Cloud sign-in token"));
+    m_cloudToken->setAccessibleName(QStringLiteral("Kerf sign-in token"));
     m_cloudSignIn = new ui::Button(QStringLiteral("Sign in"), ui::Button::Kind::Primary);
     m_cloudSignIn->setObjectName(QStringLiteral("cloudSignIn"));
     const auto signIn = [this] {
@@ -229,15 +229,15 @@ void MainWindow::buildPreferences() {
     m_cloudSignOut->setObjectName(QStringLiteral("cloudSignOut"));
     connect(m_cloudSignOut, &QAbstractButton::clicked, this,
             [this] { sendCloud(QJsonObject{{QStringLiteral("type"), QStringLiteral("cloud_sign_out")}}); });
-    m_accountRow = accountPage->addGroup()->addRow(QStringLiteral("Kerf Cloud"), QString(),
+    m_accountRow = accountPage->addGroup()->addRow(QStringLiteral("Kerf account"), QString(),
                                                    together({m_cloudToken, m_cloudSignIn, m_cloudSignOut}));
     m_accountRow->setObjectName(QStringLiteral("accountStatus"));
 
-    // Chat: what the conversation runs on. Kerf Cloud, the hosted model, comes
+    // Chat: what the conversation runs on. Kerf, the hosted model, comes
     // first; a key of one's own shows its fields under the choice. The models
     // that make shots are the Models page's, and MCP its own.
     ui::SettingsGroup *chatGroup = chatPage->addGroup();
-    m_connectionChoice = choice({{"cloud", "Kerf Cloud"}, {"own", "My API key"}, {"claude-code", "Claude Code"}});
+    m_connectionChoice = choice({{"cloud", "Kerf"}, {"own", "My API key"}, {"claude-code", "Claude Code"}});
     m_connectionChoice->setObjectName(QStringLiteral("agentConnection"));
     // None until the settings are read, so that reading them chooses one.
     m_connectionChoice->setCurrentIndex(-1, false);

@@ -1060,9 +1060,9 @@ private:
         const QMargins shadow = ui::shadowMargins();
         const int h = qMax(shadow.left(), shadow.right()), v = qMax(shadow.top(), shadow.bottom());
         QVERIFY(menu.width() - 2 * h >= 220);
-        // The widest row fits: 8 + dot 14 + 8 + icon 16 + 8 + label + 16 + accent + 8, in 4 of padding.
-        const int peakRow = 8 + 14 + 8 + 16 + 8 + ui::snapWidth(menuItem, peak->text()) + 16 +
-                            ui::snapWidth(menuQuiet, QStringLiteral("Ask Kerf")) + 8;
+        // The widest row fits: 8 + icon 16 + 8 + label + 16 + accent + 8 + dot 14 + 8, in 4 of padding.
+        const int peakRow = 8 + 16 + 8 + ui::snapWidth(menuItem, peak->text()) + 16 +
+                            ui::snapWidth(menuQuiet, QStringLiteral("Ask Kerf")) + 8 + 14 + 8;
         QVERIFY(menu.actionGeometry(peak).width() >= peakRow);
         // The card opens 4 below the anchor, left-aligned with it.
         QCOMPARE(menu.pos() + QPoint(h, v), window.mapToGlobal(QPoint(40, 40 + 24 + 4)));
@@ -1086,6 +1086,11 @@ private:
         };
         QVERIFY(accented(QRect(laptopRect.right() - 8 - 14, laptopRect.top(), 14, laptopRect.height())) > 0);
         QCOMPARE(accented(QRect(laptopRect.left(), laptopRect.top(), 40, laptopRect.height())), 0);
+        // A status dot is a row's end mark too, where the check would be, so
+        // no label is pushed in for it.
+        const QRect peakRect = menu.actionGeometry(peak);
+        QCOMPARE(image.pixelColor((QPointF(peakRect.right() - 8 - 7, peakRect.center().y()) * dpr).toPoint()), color(neg));
+        QCOMPARE(image.pixelColor((QPointF(peakRect.left() + 8 + 7, peakRect.center().y()) * dpr).toPoint()), color(popup));
         menu.setActiveAction(sync);
         const QImage hovered = menu.grab().toImage();
         const QRect syncRect = menu.actionGeometry(sync);

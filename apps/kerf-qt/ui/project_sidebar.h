@@ -16,7 +16,7 @@
 //   Show 3 more                       passes over a title Kerf works on, and a dot
 //   > Archived · 2                    at the end says it is done, waits for you, or
 //                                     failed; hover: [⋯]
-//   (Y) You · Kerf Cloud v      [⚙]   the account, 52 tall, and Settings
+//   (Y) You · Pro plan v        [⚙]   the account, 52 tall, and Settings
 //
 // Given several folders and not told to switch (a sidebar on its own), each
 // folder's name heads its own conversations and folds; the start window lists
