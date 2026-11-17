@@ -7,6 +7,7 @@
 #include <QHideEvent>
 #include <QShowEvent>
 #include "proposal_model.h"
+#include "signal_curve.h"
 
 #include <QAbstractAnimation>
 #include <QVariantAnimation>
@@ -1265,34 +1266,7 @@ void TimelineWidget::drawSignalTo(const QPointF &position) {
 }
 
 QJsonArray TimelineWidget::signalKeys(const QMap<int, double> &drawn, double within) {
-    QJsonArray keys;
-    if (drawn.isEmpty()) return keys;
-    const QList<int> frames = drawn.keys();
-    const auto key = [&](int frame) {
-        return QJsonObject{{QStringLiteral("at"), frame},
-                           {QStringLiteral("value"), std::round(drawn.value(frame) * 1000.0) / 1000.0},
-                           {QStringLiteral("interp"), QStringLiteral("linear")}};
-    };
-    // Kept from the first frame on: a frame is a key when the line from the last key to
-    // the next frame would pass some frame between by more than `within`.
-    int kept = 0;
-    keys.append(key(frames.at(0)));
-    for (int next = 2; next < frames.size(); ++next) {
-        const double a = drawn.value(frames.at(kept));
-        const double b = drawn.value(frames.at(next));
-        const double span = frames.at(next) - frames.at(kept);
-        bool misses = false;
-        for (int between = kept + 1; between < next && !misses; ++between) {
-            const double on = a + (b - a) * (frames.at(between) - frames.at(kept)) / span;
-            misses = std::abs(on - drawn.value(frames.at(between))) > within;
-        }
-        if (misses) {
-            kept = next - 1;
-            keys.append(key(frames.at(kept)));
-        }
-    }
-    if (frames.size() > 1) keys.append(key(frames.last()));
-    return keys;
+    return signalcurve::keys(drawn, within);
 }
 
 void TimelineWidget::mouseMoveEvent(QMouseEvent *event) {
@@ -1932,17 +1906,7 @@ void TimelineWidget::paintNameBar(QPainter &p, const QRectF &bar, const QString 
 }
 
 QPolygonF TimelineWidget::signalCurve(const QJsonArray &values, const QRectF &rect) {
-    QPolygonF curve;
-    if (values.isEmpty() || rect.width() <= 0.0 || rect.height() <= 0.0) return curve;
-    const int last = int(values.size()) - 1;
-    for (int index = 0; index <= last; ++index) {
-        const double along = last == 0 ? 0.0 : double(index) / double(last);
-        const double value = std::clamp(values.at(index).toDouble(), 0.0, 1.0);
-        curve << QPointF(rect.left() + along * rect.width(), rect.bottom() - value * rect.height());
-    }
-    // One value is a level across the whole clip.
-    if (last == 0) curve << QPointF(rect.right(), curve.first().y());
-    return curve;
+    return signalcurve::curve(values, rect);
 }
 
 void TimelineWidget::paintGainBand(QPainter &p, const QRectF &rect, const QJsonObject &clip) {

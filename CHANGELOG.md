@@ -6,6 +6,15 @@ on `main`; its section here becomes the release's notes on GitHub
 
 ## 0.1.3
 
+- A shot made from a recipe opens as a graph of how it is made: Open Graph on
+  the media, or a double-click on its clip. Its steps and what they read are
+  cards wired by what goes along each edge, a picture in motion, a still, the
+  way a thing goes or a number over time, ending in the shot's takes. Choosing
+  a card sets what it holds: a model's prompt, seed and knobs, a guide's pass
+  and size, a signal's curve drawn by hand; an edge drawn from a card's port to
+  a model hands it over. A change is written into the recipe where it stands,
+  comments and order kept, and Make again makes a new take from it; Several,
+  Stop and choosing a take are there too.
 - A first cut Kerf makes lands in the conversation as a card with its picture:
   the first clip's poster, its length and a play mark, and moving over it runs
   through its clips. While Kerf is still cutting, the card is already there,

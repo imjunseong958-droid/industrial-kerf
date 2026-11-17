@@ -19,6 +19,7 @@ class MockupParityTest;
 class MotionTest;
 class ChatTest;
 class ProposalModelTest;
+class RecipeGraphTest;
 class SidebarTest;
 class StageShellTest;
 class StageTest;
@@ -47,6 +48,7 @@ struct Access;
     friend class ::kerf::MotionTest;                                                                                    \
     friend class ::kerf::ChatTest;                                                                                     \
     friend class ::kerf::ProposalModelTest;                                                                              \
+    friend class ::kerf::RecipeGraphTest;                                                                              \
     friend class ::kerf::SidebarTest;                                                                                  \
     friend class ::kerf::StageShellTest;                                                                                \
     friend class ::kerf::StageTest;                                                                                    \

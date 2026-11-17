@@ -27,6 +27,7 @@
 #include "wiring/main_window_shared.h"
 #include "wiring/bin_wiring.h"
 #include "wiring/chat_wiring.h"
+#include "wiring/graph_wiring.h"
 #include "wiring/stage_wiring.h"
 #include "wiring/timeline_wiring.h"
 #include "wiring/toolbar_wiring.h"
@@ -121,6 +122,7 @@ MainWindow::MainWindow(const QString &projectDirectory, const QString &kerfdBina
     m_toolbarWiring = std::make_unique<ToolbarWiring>(this, m_bus);
     m_timelineWiring = std::make_unique<TimelineWiring>(this, m_bus);
     m_binWiring = std::make_unique<BinWiring>(this, m_bus);
+    m_graphWiring = std::make_unique<GraphWiring>(this, m_bus);
     buildUi();
     setupActions();
     updateCloudStatus();
@@ -705,6 +707,8 @@ void MainWindow::buildUi() {
     buildBin();
     buildPreferences();
     buildShell();
+    // A shot's graph, which opens over the window as Settings does.
+    m_graphWiring->build();
     setCentralWidget(m_shell);
     wireTimeline();
     updateProposal(QJsonValue());
@@ -1702,6 +1706,8 @@ QSizeF MainWindow::pictureSizeOf(const QJsonObject &clip, const QString &trackTy
 }
 
 void MainWindow::showSettings(const QString &page) {
+    // Settings takes the window from whatever else was over it (a shot's graph).
+    m_shell->setCover(m_preferences);
     const int index = int(m_settingsIds.indexOf(page));
     if (index >= 0) {
         m_settingsPages->setCurrentIndex(index);

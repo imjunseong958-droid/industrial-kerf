@@ -51,6 +51,7 @@ class EditorBus;
 // its region's own state.
 class BinWiring;
 class ChatWiring;
+class GraphWiring;
 class StageWiring;
 class TimelineWiring;
 class ToolbarWiring;
@@ -96,6 +97,7 @@ class MainWindow final : public QMainWindow {
     KERF_TEST_FRIENDS
     friend class BinWiring;
     friend class ChatWiring;
+    friend class GraphWiring;
     friend class StageWiring;
     friend class TimelineWiring;
     friend class ToolbarWiring;
@@ -119,6 +121,9 @@ public:
     void startWith(const QString &request, bool importFolder);
     // Opens a conversation kept beside this project, once it is connected.
     void openConversation(const QString &id);
+    // Opens the graph of how `media` is made, once the project has said that
+    // media, with `node` chosen in it: what `--graph` starts on.
+    void openGraph(const QString &media, const QString &node = QString());
 
 signals:
     // File ▸ New Project, Open Project, and Open Recent: open `path` in a
@@ -419,6 +424,11 @@ private:
     static QString makingStatus(const QJsonObject &making, const QString &name = QString());
     // The bin's context menu for `mediaId` (empty for the bin itself).
     QMenu *binMenu(const QString &mediaId);
+    // How a shot is made, as a graph of its recipe, over the window
+    // (ui/recipe_graph_panel.h): for a media that names a recipe.
+    void showGraph(const QString &mediaId);
+    // The media a clip of the program plays; empty for one that plays none.
+    QString clipMedia(const QString &clipId) const;
 
     EditorBus *m_bus = nullptr;
     std::unique_ptr<ChatWiring> m_chatWiring;
@@ -426,6 +436,7 @@ private:
     std::unique_ptr<ToolbarWiring> m_toolbarWiring;
     std::unique_ptr<TimelineWiring> m_timelineWiring;
     std::unique_ptr<BinWiring> m_binWiring;
+    std::unique_ptr<GraphWiring> m_graphWiring;
     // The regions' containers: the shell and the timeline's panel.
     StageShell *m_shell = nullptr;
     ProjectSidebar *m_sidebar = nullptr;

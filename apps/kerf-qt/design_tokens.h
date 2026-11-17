@@ -97,6 +97,23 @@ constexpr QRgb settled = accentInk; // done while you were elsewhere
 constexpr QRgb failed = neg;        // it stopped on an error
 } // namespace activity
 
+// A shot's graph (ui/recipe_graph.h): what goes along an edge, each in one of
+// the faded colours the editor has already, and no new one. A picture in
+// motion is the accent's ink, a dusty blue as light as the others here; a
+// still the sage, the way a thing goes the playhead's violet, a number over
+// time the ochre. Words and any other file are quiet, in ink3.
+namespace nodes {
+constexpr QRgb canvas = well;        // the room the cards are laid out in
+constexpr QRgb dots = qRgba(255, 255, 255, alpha(0.07)); // its grid, a dot a step
+constexpr QRgb node = card;          // a card
+constexpr QRgb video = accentInk;
+constexpr QRgb image = pos;
+constexpr QRgb path = playhead;
+constexpr QRgb signal = warn;
+constexpr QRgb words = ink3;
+constexpr QRgb file = ink3;
+} // namespace nodes
+
 // Literal colours drawn on the picture and in the lanes.
 namespace overlay {
 constexpr QRgb lowerThirdBackground = qRgba(12, 12, 12, alpha(0.78));
@@ -394,6 +411,18 @@ constexpr int pictureColumnLeast = 240; // a vertical picture's column, at least
 constexpr int timelineUprightLeast = 220; // and under a vertical one
 constexpr double timelineUprightShare = 0.36; // and its share of the height there
 constexpr int seam = 1;                // every seam is a 1 pt line
+// A shot's graph (ui/recipe_graph.h).
+constexpr int graphCardWidth = 208;     // a node's card
+constexpr int graphCardHeight = 56;     // its title and the line under it
+constexpr int graphCardCurve = 36;      // what a signal's curve or a path adds to it
+constexpr int graphColumnGap = 112;      // between one column of cards and the next, for the edges to turn in
+constexpr int graphRowGap = 20;         // between a card and the one under it
+constexpr int graphGrid = 24;           // the canvas's dots
+constexpr int graphInspector = 312;     // the card that says and sets what the chosen node holds
+constexpr int graphPad = 12;            // what floats over the canvas keeps this far from its edges
+constexpr int graphPanelWidth = 1480;   // the panel it opens in, over the window, at most
+constexpr int graphPanelHeight = 900;
+constexpr int graphBar = 48;            // the panel's head: the shot, what it wants, Make
 } // namespace layout
 
 } // namespace kerf::tokens

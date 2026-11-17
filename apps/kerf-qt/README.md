@@ -118,7 +118,8 @@ installed app carries one), else the one on the `PATH`. Without a project, Kerf 
 (`KERFD_BIN=/path/to/kerfd target/qt/kerf-qt`), or with none to go back to, an
 editor with no folder. For a quick visual smoke
 run, add `--screenshot /tmp/kerf.png --quit-after-ms 900`; such a run opens only the
-project it is given, never the last one. `--window-size 1600x1000` sizes the window, and `--settings-dir DIR`
+project it is given, never the last one. `--graph <media>` opens that shot's graph
+for it ([A shot's graph](#a-shots-graph)). `--window-size 1600x1000` sizes the window, and `--settings-dir DIR`
 keeps the run's settings in DIR (INI files) instead of the user's.
 
 The editor and the launcher are dark only, and fill the screen edge to edge
@@ -528,6 +529,67 @@ file behind the media for everyone; its clips keep their timing), Reveal in
 Finder, or Consolidate Media. Bin items show Offline when the file is
 missing, Not downloaded for a Git LFS file a sync has not fetched, and
 External when it lives outside the project folder.
+
+## A shot's graph
+
+A shot a recipe makes ([docs/shots.md](../../docs/shots.md)) opens as a graph of
+how it is made: Open Graph on the media in the bin or on its clip's menu, or a
+double-click on its clip. It opens over the window, as Settings does
+(`ui/recipe_graph_panel.h`), and Esc, its close or a press on the dim gives the
+window back.
+
+The graph is the recipe, read by the engine and laid out (`recipe_get` answers
+`recipe`, from `kerf_engine::recipe::graph`): a card for each step, a `render`
+that draws a guide from a sequence or a `generate` that asks a model, and for
+each thing of the project a step reads, a sequence, a picture, a signal clip,
+the way a clip goes (`moves=`), one of the cast; and an edge for each reading,
+ending in the shot's takes. A card has an icon and its name, a quiet line under
+it, and a tag that says what it gives; a signal's card draws its curve and a
+moving clip's its path. Edges are in the colour of what goes along them
+(`tokens::nodes`: a picture in motion the accent's ink, a still sage, the way a
+thing goes the playhead's violet, a number over time ochre), named in the
+legend at the canvas's foot. What a model has said it has no use for goes to it
+dashed.
+
+The canvas is free-form (`ui/recipe_graph.h`): a card stays where it is dragged,
+kept per shot in the editor's settings on this computer and never in the recipe;
+a drag on the canvas moves it, two fingers pan, a wheel or a pinch zooms about
+the pointer, and Fit (F, or a double-click on the canvas) takes the whole graph
+in. Until a card is moved they stand in columns by how far each is from what it
+reads. The arrows go from card to card.
+
+Nodes are wired by hand. A press on a node's port, where its edges leave it,
+draws an edge from it; let go over a step that could read it, the step's line
+gets the word that does: a signal as `signal=`, the way a clip goes as `moves=`,
+a sequence as what a guide draws, a file a step made as `{name}` under `guide=`,
+`first=`, `last=` or `ref=`, asked for in a menu where more than one name would
+read it, with what the model has said it has no use for marked. A step reads
+only what a step before it made, so an edge cannot be drawn backwards. An edge
+is let go in the node's card, under Reads.
+
+The card at the canvas's right says and sets what the chosen node holds
+(`ui/recipe_inspector.h`): a model's prompt, its seed (and another at a press),
+how long and how large, each knob its line sets or its model has said it takes,
+`name=value` for any other, and what it reads, each let go at a press; a guide's
+sequence, what of it is drawn, its size and rate; a signal's curve, drawn anew by
+dragging across it; the takes, the one the shot is ticked, another chosen at a
+press. With no node chosen it says the shot: why it cannot be made where it
+cannot, and what a making would note first.
+
+A change to a step is one word of one line of the recipe (`recipe_edit {media,
+was, line, key, nth, value?}`): the engine sets that word where it stands
+(`kerf_engine::recipe::text`), so comments, order, spacing and line endings stay,
+reads the result as a recipe before writing it, and refuses a file another
+program changed since the graph was read. It is the person's own edit, written in
+place as a text editor would; an agent's recipe is still kept as a version. A
+signal's curve is the clip's `value` in the project, one undoable edit, as the
+timeline's own drawing of it is. The head makes the shot as the bin does: Make
+(Make again once it has a take) shows what would run and asks, Several makes two
+to four takes with each seed one on, Stop ends a making, and its takes card wears
+the stripes of what is being made.
+
+`--graph <media>` starts a run on that shot's graph, and `--graph-node <id>` with
+a node chosen, for a capture (`--screenshot`).
 
 ## Masks
 

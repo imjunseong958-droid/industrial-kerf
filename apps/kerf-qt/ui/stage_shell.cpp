@@ -388,6 +388,10 @@ void StageShell::setSheets(QWidget *media) {
 }
 
 void StageShell::setCover(QWidget *cover) {
+    if (cover == m_cover) return;
+    // What covered until now gives the window back before another takes it.
+    setCovered(false);
+    if (m_cover) m_cover->hide();
     m_cover = cover;
     if (cover) {
         cover->setParent(this);
