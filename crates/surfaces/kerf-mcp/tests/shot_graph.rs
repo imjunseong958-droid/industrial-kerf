@@ -23,6 +23,10 @@ generate model=video prompt=\"a basketball bounces on a court\" guide={depth.mp4
 const PROJECT: &str = "kerf 1
 project name=\"Court\"
 media shot path=\"shots/bounce.mp4\" rate=16 dur=4s video=832x480 recipe=\"shots/bounce.kerfrecipe\"
+media card path=\"shots/card.mp4\" rate=24 dur=4f video=96x54 recipe=\"shots/card.kerfrecipe\"
+sequence tiny rate=24 size=96x54
+  track V1 video
+    clip slate gen=solid@1 at=0f dur=4f
 sequence main rate=24 size=1920x1080 audio=48000
   track V1 video
     clip play media=shot src=0f at=0f dur=96f
@@ -277,4 +281,39 @@ fn an_agent_reads_a_shots_graph_and_sets_what_a_person_sets_there() {
     assert!(said.contains("no media `nothing`"), "{said}");
     // Only the recipe written here for that last shot is new.
     assert_eq!(files(), before + 1);
+
+    // A take keeps the recipe it was made from, and an agent goes back to it: the version
+    // that holds that text, with the media moved to it.
+    let first = "kerf-recipe 1\n# A slate.\nrender tiny {out} size=96x54\n";
+    std::fs::write(dir.join("shots/card.kerfrecipe"), first).unwrap();
+    let (_, document) = router.runtime().get_document(false).unwrap();
+    let project = kerf_runtime::parse_document(&document).unwrap();
+    let none = kerf_engine::recipe::model::Models::default();
+    let planned = kerf_engine::recipe::plan(&project, dir, "card", &none).unwrap();
+    kerf_engine::recipe::make(&project, dir, &planned, &none, &kerf_engine::CancellationToken::new(), |_| {}).unwrap();
+    let larger = ok(
+        &router,
+        "edit",
+        json!({"revise": alone["proposal"], "recipeSet": [{"media": "card", "line": 3, "key": "size", "value": "160x90"}]}),
+    );
+    assert_eq!(larger["recipes"][0]["keptAs"], "shots/card@2.kerfrecipe", "{larger}");
+    let revision = router.runtime().get_state().unwrap().revision;
+    router
+        .runtime()
+        .accept_proposal(larger["proposal"].as_str().unwrap(), "ui", "accept-larger", revision)
+        .unwrap();
+    let listed = ok(&router, "look", json!({"graph": "card"}));
+    assert_eq!(listed["recipe"], "shots/card@2.kerfrecipe");
+    assert_eq!(listed["takes"]["made"][0]["kept"], true, "{listed}");
+    let back = ok(&router, "edit", json!({"restoreTake": {"media": "card", "take": 1}}));
+    assert_eq!(
+        back["recipes"][0],
+        json!({"recipe": "shots/card@2.kerfrecipe", "keptAs": "shots/card.kerfrecipe", "written": false,
+               "diff": back["recipes"][0]["diff"]}),
+        "{back}"
+    );
+    assert!(back["script"].as_str().unwrap().contains("recipe=\"shots/card.kerfrecipe\""), "{back}");
+    assert_eq!(read(&dir.join("shots/card.kerfrecipe")), first);
+    let said = refused(&router, "edit", json!({"revise": back["proposal"], "restoreTake": {"media": "card", "take": 5}}));
+    assert!(said.contains("take 5 keeps nothing of the recipe"), "{said}");
 }

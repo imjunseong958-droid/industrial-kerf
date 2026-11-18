@@ -1985,6 +1985,7 @@ mod tests {
             chosen,
             changed: changed.iter().map(|what| (*what).to_owned()).collect(),
             recipe: None,
+            kept: false,
         };
         assert_eq!(
             take_line(&take(true, &[])),

@@ -255,6 +255,7 @@ the take; the person says how much of that it does without asking them.
   | sees each take's picture and the guide as it was drawn | `look` with `media` and `sheet`, of the take and of the guide's file |
   | holds the takes to their guide | `look` with `takes`: each take's `overlap`, and the `best` |
   | chooses a take | the take's `use` line, in an `edit` |
+  | restores the recipe a take was made from | `edit` with `restoreTake` |
 
   Where they differ is where a change is written. A person's is written in
   place. An agent's writes over nothing: the recipe with its word changed is
@@ -311,7 +312,8 @@ one before it. Takes are kept in a folder beside the recipe:
 shots/open.kerfrecipe
 shots/open.takes/001.mp4         the first take
 shots/open.takes/001.take.json   what it was made from
-shots/open.takes/001.work/       the guide its steps drew, the request its model read
+shots/open.takes/001.work/       the guide its steps drew, the request its model read,
+                                 and the recipe it was made from
 shots/open.takes/002.mp4
 ```
 
@@ -382,6 +384,34 @@ followed. A subject followed on few frames says little: one that crosses a
 third of the frame between two frames is lost, and reads low whatever the
 take did. A take is a few seconds to read. A shot whose line names no clip
 has nothing to hold a take to, and the card says so.
+
+### Going back to a take
+
+A take keeps the recipe it was made from in its working folder
+(`made-from.kerfrecipe`): the text as that making read it, comments and all,
+with each seed as that take had it, so the third of three rolls keeps
+`seed=9`; and the workflow file its line named, as it then was. A recipe
+goes on changing after a take is made, and the take you choose a week later
+was made from one that is no longer written anywhere else.
+
+In the shot's graph, the takes' card offers it for the take the shot is,
+where its recipe has changed since: **Restore take 3's recipe** writes the
+recipe back as that take was made from it. Its workflow comes back with it:
+where the project still has that file as it was, nothing is written; where
+the file now holds something else it is left alone, and the take's own is
+written beside it (`bounce.take3.video.comfy.json`) and named on the line.
+A making of the restored recipe is that take again where the model gives the
+same file for the same seed. `kerf takes` and the bin's Takes still choose
+which take the media is; this is the other half, the settings.
+
+What a take was made from beside its recipe is the project's own: the
+sequence its guide was drawn from, its signals, the cast. Those come back by
+undoing in the project, and the takes' card says which of them changed
+since. A take made before takes kept their recipe has none to restore.
+
+An agent goes back the same way with `edit` and `restoreTake`. Its recipe
+is then the version that holds that text, or the next one, never written
+over the one there.
 
 An agent reads the same numbers with `look` and `takes`, and for a take that
 is the media, with its depth read back by a model, `held` adds how its depth

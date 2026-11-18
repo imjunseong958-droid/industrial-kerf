@@ -102,6 +102,111 @@ pub fn takes(project: &Project, directory: &Path, id: &str) -> Result<Vec<Take>,
     kerf_engine::recipe::takes(project, directory, media).map_err(|error| error.to_string())
 }
 
+/// What going back to a take would write: the recipe as that take was made from it, and
+/// each workflow file it named that is no longer there as it was. Nothing is written.
+#[derive(Clone, Debug)]
+pub struct Restored {
+    /// The recipe's path as the document names it, and its text as the take had it.
+    pub recipe: String,
+    pub text: String,
+    /// Files to write beside the recipe: where each goes, its path from the project's
+    /// folder, and what it holds.
+    pub files: Vec<(std::path::PathBuf, String, String)>,
+}
+
+/// The recipe of media `id` as its take `take` was made from it: its text as that making
+/// read it, each seed as that take had it, so a making of it is that take's again where
+/// the model gives the same file for the same seed.
+///
+/// A workflow file the take's lines named comes back with it. Where the project still has
+/// it as it was, nothing is written; where it is gone it is written under its name; where
+/// the file there now holds something else it is left alone, the take's own is written
+/// beside it (`bounce.take3.video.comfy.json`), and the line names that.
+///
+/// What a take was made from beside its recipe, the sequences its guides were drawn from
+/// and its signals, is the project's, and comes back by undoing in the project, not here.
+pub fn restored(project: &Project, directory: &Path, id: &str, take: u32) -> Result<Restored, String> {
+    use kerf_engine::recipe::text::{self, Change};
+    let media = project
+        .media(id)
+        .ok_or_else(|| format!("no media `{id}` in this project"))?;
+    let (recipe, _) = crate::graph::recipe(project, directory, id)?;
+    let kept = kerf_engine::recipe::takes::kept(directory, media, take).ok_or_else(|| {
+        format!("take {take} keeps nothing of the recipe it was made from: a take made before takes kept theirs, or one whose working folder is gone, has only what it is")
+    })?;
+    let mut now = kept.recipe.clone();
+    let mut files = Vec::new();
+    for (named, held) in &kept.files {
+        let (file, stored) =
+            kerf_engine::recipe::beside(project, directory, id, named).map_err(|error| error.to_string())?;
+        match std::fs::read_to_string(&file) {
+            Ok(there) if there == *held => {}
+            Err(_) => files.push((file, stored, held.clone())),
+            Ok(_) => {
+                // The file there now is another's: the take's own goes beside it.
+                let (stem, extension) = named
+                    .split_once('.')
+                    .map_or((named.as_str(), String::new()), |(stem, rest)| (stem, format!(".{rest}")));
+                let (own, file, stored) = (1..)
+                    .map(|number| match number {
+                        1 => format!("{stem}.take{take}{extension}"),
+                        more => format!("{stem}.take{take}-{more}{extension}"),
+                    })
+                    .find_map(|own| {
+                        let (file, stored) = kerf_engine::recipe::beside(project, directory, id, &own).ok()?;
+                        let free = match std::fs::read_to_string(&file) {
+                            Ok(there) => there == *held,
+                            Err(_) => true,
+                        };
+                        free.then_some((own, file, stored))
+                    })
+                    .ok_or("no name is free for the take's workflow")?;
+                if !file.is_file() {
+                    files.push((file, stored, held.clone()));
+                }
+                // Each line that named it names the take's own.
+                let steps = Recipe::parse(&now).map_err(|error| error.to_string())?.steps;
+                for (line, step) in text::step_lines(&now.clone()).into_iter().zip(steps) {
+                    let names_it = matches!(
+                        &step,
+                        Step::Generate(ask) if ask.workflow == Some(kerf_engine::recipe::model::Source::File(named.clone()))
+                    );
+                    if names_it {
+                        now = text::changed(
+                            &now,
+                            line,
+                            Change::Set { key: kerf_engine::recipe::model::WORKFLOW, nth: 0, value: &own },
+                        )
+                        .map_err(|error| error.to_string())?;
+                    }
+                }
+            }
+        }
+    }
+    Ok(Restored {
+        recipe,
+        text: now,
+        files,
+    })
+}
+
+/// A person going back to a take: the recipe written in place as that take was made from
+/// it, with the workflow files it named ([`restored`]). `was` is the recipe as they read
+/// it: one changed since is left alone. A recipe that is that take's already is said so.
+pub fn restore(project: &Project, directory: &Path, id: &str, take: u32, was: &str) -> Result<(), String> {
+    let restored = restored(project, directory, id, take)?;
+    if restored.text == was && restored.files.is_empty() {
+        return Err(format!("the recipe is as take {take} was made from it already"));
+    }
+    for (file, _, held) in &restored.files {
+        crate::workflow::write(file, held)?;
+    }
+    if restored.text == was {
+        return Ok(());
+    }
+    kerf_engine::recipe::text::write(project, directory, id, was, &restored.text).map_err(|error| error.to_string())
+}
+
 /// What the readings say together: the sequence and the clips they are of,
 /// and which take holds its guide best, where more than one was read.
 pub fn summary(guide: &Guide, readings: &[Value]) -> Value {
@@ -159,5 +264,57 @@ mod tests {
         assert_eq!(summary(&held, &[reading(1, 0.2)])["best"], Value::Null);
         assert_eq!(summary(&held, &[reading(1, 0.0), reading(2, 0.0)])["best"], Value::Null);
         assert!(takes(&project, dir, "m1").unwrap().is_empty());
+    }
+
+    /// A person goes back to a take: the recipe as it was made from, and its workflow beside
+    /// the one that is there now.
+    #[cfg(unix)]
+    #[test]
+    fn a_takes_recipe_comes_back_with_the_workflow_it_named() {
+        use kerf_engine::recipe::model::Models;
+        let folder = tempfile::tempdir().unwrap();
+        let dir = folder.path();
+        std::fs::create_dir_all(dir.join("shots")).unwrap();
+        let was = "kerf-recipe 1\n# The opening.\ngenerate model=dawn prompt=\"a boat leaves\" seed=7 workflow=own.comfy.json\n";
+        let recipe = dir.join("shots/open.kerfrecipe");
+        std::fs::write(&recipe, was).unwrap();
+        std::fs::write(dir.join("shots/own.comfy.json"), "{\"steps\": 20}").unwrap();
+        let file = dir.join("models.json");
+        std::fs::write(
+            &file,
+            r#"{"dawn": {"run": ["sh", "-c", "cp \"$1\" \"$(sed -n 's/.*\"out\": \"\\(.*\\)\".*/\\1/p' \"$1\")\"", "dawn", "{request}"]}}"#,
+        )
+        .unwrap();
+        let models = Models::read(&file).unwrap();
+        let project = kerf_runtime::parse_document(
+            "kerf 1\nproject name=\"Shots\"\nmedia m1 path=\"shots/open.json\" rate=24 dur=24f video=320x180 recipe=\"shots/open.kerfrecipe\"\nsequence s1 rate=24 size=320x180\n",
+        )
+        .unwrap();
+        let planned = kerf_engine::recipe::plan(&project, dir, "m1", &models).unwrap();
+        kerf_engine::recipe::make(&project, dir, &planned, &models, &kerf_engine::CancellationToken::new(), |_| {}).unwrap();
+
+        // Made from the recipe as it is: nothing to go back to.
+        let same = restore(&project, dir, "m1", 1, was).unwrap_err();
+        assert!(same.contains("as take 1 was made from it already"), "{same}");
+        // The person changes the seed and the workflow in place.
+        let now = was.replace("seed=7", "seed=9");
+        std::fs::write(&recipe, &now).unwrap();
+        std::fs::write(dir.join("shots/own.comfy.json"), "{\"steps\": 30}").unwrap();
+        let back = restored(&project, dir, "m1", 1).unwrap();
+        assert_eq!(back.recipe, "shots/open.kerfrecipe");
+        assert_eq!(back.text, was.replace("workflow=own.comfy.json", "workflow=own.take1.comfy.json"));
+        assert_eq!(back.files.len(), 1);
+        assert_eq!((back.files[0].1.as_str(), back.files[0].2.as_str()), ("shots/own.take1.comfy.json", "{\"steps\": 20}"));
+        // Nothing is written until it is asked for, and a recipe changed since it was read is left.
+        assert!(!dir.join("shots/own.take1.comfy.json").exists());
+        assert!(restore(&project, dir, "m1", 1, was).unwrap_err().contains("changed by another program"));
+        restore(&project, dir, "m1", 1, &now).unwrap();
+        assert_eq!(std::fs::read_to_string(&recipe).unwrap(), back.text);
+        assert_eq!(std::fs::read_to_string(dir.join("shots/own.take1.comfy.json")).unwrap(), "{\"steps\": 20}");
+        assert_eq!(std::fs::read_to_string(dir.join("shots/own.comfy.json")).unwrap(), "{\"steps\": 30}");
+        // Asked again, it is that take's already.
+        assert!(restore(&project, dir, "m1", 1, &back.text).unwrap_err().contains("already"));
+        // A take that kept nothing says so.
+        assert!(restored(&project, dir, "m1", 4).unwrap_err().contains("keeps nothing of the recipe"));
     }
 }

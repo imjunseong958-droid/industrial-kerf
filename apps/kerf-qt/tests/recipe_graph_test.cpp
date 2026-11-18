@@ -72,7 +72,7 @@ QJsonObject bounceRecipe(int takes = 2, const QString &text = QString::fromLatin
     QJsonArray made;
     for (int number = 1; number <= takes; ++number)
         made.append(QJsonObject{{"number", number}, {"path", QStringLiteral("shots/bounce.takes/%1.mp4").arg(number, 3, 10, QLatin1Char('0'))},
-                                {"chosen", number == takes}, {"rolled", number - 1},
+                                {"chosen", number == takes}, {"rolled", number - 1}, {"kept", number > 1 || takes == 1},
                                 {"changed", number == 1 ? QJsonArray{"the recipe"} : QJsonArray{}}});
     const QJsonArray nodes{
         QJsonObject{{"id", "sequence:court"}, {"kind", "sequence"}, {"title", "The court"}, {"detail", "1920×1080 · 24 fps · 4 s"},
@@ -812,6 +812,45 @@ private slots:
         QCOMPARE(panel->statusLabel()->text(), QStringLiteral("Cannot be made as things stand"));
         panel->view()->select(QString());
         QVERIFY(inspector->findChild<QLabel *>(QStringLiteral("graphCannot"))->text().contains(QStringLiteral("no model `video` is set up")));
+    }
+
+    // The take the shot is, made from a recipe that has changed since, has its
+    // recipe to go back to where the take kept it: the recipe written as that
+    // making read it, seeds and workflow with it.
+    void aTakesRecipeIsRestoredFromItsCard() {
+        MainWindow window{QString(), QString()};
+        openBounce(window, 3);
+        RecipeGraphPanel *panel = panelOf(window);
+        RecipeInspector *inspector = panel->inspector();
+        panel->view()->select(QStringLiteral("takes"));
+        const auto restore = [&] { return inspector->findChild<ui::Button *>(QStringLiteral("graphRestoreTake")); };
+        // The shot is take 3, made from the recipe as it is: nothing to go back to.
+        QVERIFY(!restore());
+        // The recipe changed since: back to take 3's.
+        QJsonObject changed = bounceRecipe(3);
+        QJsonArray nodes = changed.value("nodes").toArray();
+        QJsonObject takes = nodes.last().toObject();
+        QJsonArray made = takes.value("takes").toArray();
+        QJsonObject third = made.at(2).toObject();
+        third.insert("changed", QJsonArray{"the recipe"});
+        made.replace(2, third);
+        takes.insert("takes", made);
+        nodes.replace(nodes.size() - 1, takes);
+        changed.insert("nodes", nodes);
+        window.handleEvent(changed);
+        QVERIFY(restore());
+        QCOMPARE(restore()->text(), QStringLiteral("Restore take 3's recipe"));
+        restore()->click();
+        QCOMPARE(window.m_lastCommand,
+                 (QJsonObject{{"type", "recipe_edit"}, {"media", "m4"}, {"was", QString::fromLatin1(kBounce)}, {"restore", 3}}));
+        // A take that kept nothing of its recipe, made before takes did, has none to restore.
+        third.insert("kept", false);
+        made.replace(2, third);
+        takes.insert("takes", made);
+        nodes.replace(nodes.size() - 1, takes);
+        changed.insert("nodes", nodes);
+        window.handleEvent(changed);
+        QVERIFY(!restore());
     }
 
     // A step is added from the head, by its kind, and deleted from its card:

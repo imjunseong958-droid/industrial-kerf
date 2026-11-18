@@ -360,10 +360,11 @@ pub(super) fn metadata(name: &str) -> Option<(&'static str, Value, ToolAnnotatio
                     "revise": {"type": "string", "description": "The id of a pending proposal this one replaces; the script runs on the project."},
                     "recipes": {"type": "object", "additionalProperties": {"type": "string"}, "description": "Recipe files to write, by the path a media line's `recipe=` names, each with its whole text. A file that is there and holds another text is not written over: the text is kept beside it as its next version (`shots/open@2.kerfrecipe`), and the media that name it move to it in this proposal, so that undo goes back. Alone, or with a script that adds the media line."},
                     "recipeSet": {"type": "array", "minItems": 1, "items": {"type": "object", "properties": {"media": {"type": "string"}, "line": {"type": "integer", "minimum": 1}, "key": {"type": "string"}, "nth": {"type": "integer", "minimum": 0}, "value": {"type": "string"}, "add": {"type": "string"}, "remove": {"type": "boolean"}}, "required": ["media"], "additionalProperties": false}, "description": "Words of a media's recipe to set, each the name `key` on line `line` (as `look` `graph` numbers them) to `value`, as it is written after the `=` with no quotes around it: `{media: \"m3\", line: 4, key: \"seed\", value: \"8\"}`. That word alone changes; the recipe's comments, its order and its other lines stay, which writing the whole text with `recipes` does not promise. A name the line does not have is added at its end, so an input is wired in the same way (`key: \"signal\", value: \"bounce\"`, or `key: \"ref\", value: \"{ball.png}\"` for a file a step makes); `nth` picks among several words of one name, from 0; with no `value` the word is taken off the line. What a line cannot take is refused as a making would refuse it. A step is added the same way, `{media, line, add: \"render court {guide2.mp4} pass=depth\"}`, a line of its own after line `line` (0 for the first step), and taken out with `{media, line, remove: true}`, as a person adds one and deletes one in the graph: each is refused where what it leaves does not read as a recipe, a step put after the one that writes the shot's file, or one taken out that a later step reads. Later entries count lines as the earlier ones left them. The result is kept as the recipe's next version, as with `recipes`, and the answer's `recipes` has its `diff`."},
+                    "restoreTake": {"type": "object", "properties": {"media": {"type": "string"}, "take": {"type": "integer", "minimum": 1}}, "required": ["media", "take"], "additionalProperties": false, "description": "Go back to the recipe a take was made from: `media`, and the `take`'s number as `look` with `graph` or `media` lists it, where it says `kept`. The recipe is written as that making read it, each seed as that take had it, so a making of it is that take's again where the model gives the same file for the same seed; a workflow file it named comes back with it where the project no longer has it as it was. It is kept as the recipe's next version, or is the version that holds that text already, and the media moves to it in the proposal. What else the take was made from, its sequences and signals, is the project's and is not changed. Used alone: change the recipe in an edit after it."},
                     "workflowSet": {"type": "array", "minItems": 1, "items": {"type": "object", "properties": {"media": {"type": "string"}, "line": {"type": "integer", "minimum": 1}, "node": {"type": "string"}, "input": {"type": "string"}, "value": {}}, "required": ["media", "line", "node", "input", "value"], "additionalProperties": false}, "description": "Values to set in the workflow the model of a `generate` step is run with, each input `input` of node `node` (as `look` `workflow` lists them) to `value`, a number, a text, or true or false as it was. The workflow as it is is copied into the project beside the recipe with those values changed and the rest as written, and the step's line names the copy with `workflow=`, in the recipe's next version: the answer's `workflows` says where each is kept. A link and an input a blank fills are not set here. Nothing on the model's server changes, and the person's models file is not touched. To go back to the workflow as it comes, take `workflow` off the line with `recipeSet`."},
                     "cast": {"type": "array", "items": {"type": "string"}, "description": "Lines to add to the project's cast file, each `cast <name> \"<who or what it is>\" [ref=<picture> …]` or `style <name> \"<how a shot looks>\"`, for who and what a recipe of this edit shows that `look`'s `cast` and `styles` have not. They are written at once, since adding one asks for no shot again; one the file has is the person's to change, and is refused."}
                 },
-                "anyOf": [{"required": ["script"]}, {"required": ["recipes"]}, {"required": ["recipeSet"]}, {"required": ["workflowSet"]}, {"required": ["cast"]}, {"required": ["preset"]}, {"required": ["savePreset"]}],
+                "anyOf": [{"required": ["script"]}, {"required": ["recipes"]}, {"required": ["recipeSet"]}, {"required": ["workflowSet"]}, {"required": ["restoreTake"]}, {"required": ["cast"]}, {"required": ["preset"]}, {"required": ["savePreset"]}],
                 "additionalProperties": false
             }),
             ToolAnnotations {
@@ -485,6 +486,14 @@ struct RecipeSetInput {
     nth: usize,
     /// What to set it to; taken off the line where there is none.
     value: Option<String>,
+}
+
+/// A take of a media, to go back to the recipe it was made from.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RestoreInput {
+    media: String,
+    take: u32,
 }
 
 /// One value of the workflow behind a `generate` step to set.
@@ -694,6 +703,9 @@ struct EditInput {
     /// Values to set in the workflow a model is run with, kept in a copy of the shot's own.
     #[serde(default, rename = "workflowSet")]
     workflow_set: Vec<WorkflowSetInput>,
+    /// A take whose recipe a media goes back to.
+    #[serde(rename = "restoreTake")]
+    restore_take: Option<RestoreInput>,
     /// Lines the edit adds to the project's cast file, each a cast or a style the file has
     /// not.
     #[serde(default)]
@@ -1079,6 +1091,9 @@ impl KerfMcpRouter {
                         "path": take.stored,
                         "chosen": take.chosen,
                     });
+                    if take.kept {
+                        entry["kept"] = json!(true);
+                    }
                     if !take.changed.is_empty() {
                         entry["changedSince"] = json!(take.changed);
                     }
@@ -1407,6 +1422,34 @@ impl KerfMcpRouter {
     ) -> Result<(BTreeMap<String, String>, Vec<WorkflowKept>), McpError> {
         let invalid = |why: String| McpError::new("INVALID_RECIPE", why);
         let mut texts: BTreeMap<String, String> = BTreeMap::new();
+        let mut kept: Vec<WorkflowKept> = Vec::new();
+        // A take gone back to: the recipe it was made from, as the next version where it
+        // is not one there is, with the workflow it named.
+        if let Some(restore) = &input.restore_take {
+            let restored = kerf_shots::takes::restored(project, &self.dir, &restore.media, restore.take)
+                .map_err(|why| invalid(format!("{why}{}", self.in_pending(&restore.media, "extend"))))?;
+            if input.recipes.contains_key(&restored.recipe) || !input.recipe_set.is_empty() || !input.workflow_set.is_empty() {
+                return Err(McpError::new(
+                    "INVALID_ARGUMENTS",
+                    "`restoreTake` writes the whole recipe as the take had it: change it in an edit after this one",
+                ));
+            }
+            for (file, stored, text) in restored.files {
+                kept.push(WorkflowKept {
+                    media: restore.media.clone(),
+                    line: 0,
+                    of: format!("take {}", restore.take),
+                    set: Vec::new(),
+                    copy: kerf_shots::workflow::Copy {
+                        file,
+                        stored,
+                        text,
+                        recipe: restored.text.clone(),
+                    },
+                });
+            }
+            texts.insert(restored.recipe, restored.text);
+        }
         // The recipe media `id` names, as this edit has it so far.
         let recipe_of = |texts: &mut BTreeMap<String, String>, id: &str| {
             let (path, text) = kerf_shots::graph::recipe(project, &self.dir, id)
@@ -1447,7 +1490,6 @@ impl KerfMcpRouter {
                 None => steps.push((&set.media, set.line, vec![set])),
             }
         }
-        let mut kept: Vec<WorkflowKept> = Vec::new();
         if !steps.is_empty() {
             let models = kerf_engine::recipe::model::Models::load()
                 .map_err(|error| invalid(format!("the person's models file does not read: {error}")))?;
@@ -3894,6 +3936,7 @@ impl KerfMcpRouter {
                 || !input.recipes.is_empty()
                 || !input.recipe_set.is_empty()
                 || !input.workflow_set.is_empty()
+                || input.restore_take.is_some()
                 || !input.cast.is_empty(),
             input.preset.is_some(),
             input.save_preset.is_some(),
@@ -5051,6 +5094,13 @@ impl WorkflowKept {
 
     /// What a proposal's script says of it, as comments, for the person reviewing it.
     fn lines(&self) -> String {
+        // One that comes back with a take's recipe is as that take had it.
+        if self.line == 0 {
+            return format!(
+                "# writes the workflow {}, as {} of {} was made with it\n",
+                self.copy.stored, self.of, self.media
+            );
+        }
         let mut lines = format!(
             "# writes the workflow {}, a copy of `{}` for line {} of {}'s recipe, with:\n",
             self.copy.stored, self.of, self.line, self.media

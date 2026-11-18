@@ -81,6 +81,7 @@ void GraphWiring::build() {
     connect(m_panel, &RecipeGraphPanel::stepRemoveRequested, this, [this](int line) {
         edit(QJsonObject{{QStringLiteral("line"), line}, {QStringLiteral("remove"), true}});
     });
+    connect(m_panel, &RecipeGraphPanel::takeRestoreRequested, this, [this](int take) { edit(QJsonObject{{QStringLiteral("restore"), take}}); });
     // Each take read beside its guide, off the bridge's worker: asked once, answered a take at a time.
     connect(m_panel, &RecipeGraphPanel::takesReadRequested, this, [this] {
         if (m_media.isEmpty() || m_readState == QLatin1String("reading") || !m_window->m_connected) return;

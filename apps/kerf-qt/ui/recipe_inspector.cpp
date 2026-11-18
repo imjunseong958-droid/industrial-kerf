@@ -231,6 +231,7 @@ QString RecipeInspector::shape(const graph::Recipe &recipe, const Node &node) co
         const QJsonObject take = value.toObject();
         parts << QStringLiteral("%1%2%3").arg(take.value(QStringLiteral("number")).toInt()).arg(take.value(QStringLiteral("chosen")).toBool() ? '*' : ' ')
                      .arg(take.value(QStringLiteral("changed")).toArray().size());
+        parts << QString::number(take.value(QStringLiteral("kept")).toBool());
     }
     // What a take reads beside its guide, and the pictures there are to show.
     if (node.kind == Kind::Takes) {
@@ -971,6 +972,21 @@ void RecipeInspector::buildTakes(const Node &node) {
         connect(row, &QAbstractButton::clicked, this, [this, number, path] { emit takeChosen(number, path); });
         m_takeRows << row;
         m_column->addWidget(row);
+    }
+    // The take the shot is, made from a recipe that has changed since: back to that one.
+    for (const QJsonValue value : takes) {
+        const QJsonObject take = value.toObject();
+        if (!take.value(QStringLiteral("chosen")).toBool() || !take.value(QStringLiteral("kept")).toBool() ||
+            take.value(QStringLiteral("changed")).toArray().isEmpty())
+            continue;
+        const int number = take.value(QStringLiteral("number")).toInt();
+        auto *restore = new ui::Button(QStringLiteral("Restore take %1's recipe").arg(number), ui::Button::Kind::Secondary);
+        restore->setObjectName(QStringLiteral("graphRestoreTake"));
+        restore->setEnabled(!m_making);
+        restore->setTip(QStringLiteral("Write the recipe back as take %1 was made from it: its words, its seeds, and the workflow it named. "
+                                       "The sequences and signals it was made from are the project's, and come back by undoing there").arg(number));
+        connect(restore, &QAbstractButton::clicked, this, [this, number] { emit takeRestoreRequested(number); });
+        m_column->addWidget(restore, 0, Qt::AlignLeft);
     }
     // Held to the guide: where each take has the shot's subject beside where it was asked for.
     const bool reading = m_readState == QLatin1String("reading");

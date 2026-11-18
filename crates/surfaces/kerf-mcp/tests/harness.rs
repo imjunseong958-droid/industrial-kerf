@@ -2692,8 +2692,8 @@ fn a_medias_takes_are_listed_and_what_changed_since_is_named() {
     assert_eq!(
         looked["takes"]["made"],
         json!([
-            {"take": 1, "path": first.stored, "chosen": true},
-            {"take": 2, "path": second.stored, "chosen": false, "use": line},
+            {"take": 1, "path": first.stored, "chosen": true, "kept": true},
+            {"take": 2, "path": second.stored, "chosen": false, "kept": true, "use": line},
         ])
     );
     assert!(

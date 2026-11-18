@@ -43,6 +43,9 @@ pub(crate) struct Edit {
     /// Take the step on `line` out.
     #[serde(default)]
     remove: bool,
+    /// Go back to the recipe this take was made from ([`kerf_shots::takes::restore`]).
+    #[serde(default)]
+    restore: Option<u32>,
 }
 
 /// The person's models, and why their file does not read where it does not:
@@ -72,6 +75,9 @@ pub(crate) fn event(
 
 /// Make `edit` to its media's recipe, in its file: the line a step was added on, where one was.
 fn change(project: &Project, directory: &Path, edit: &Edit, models: &Models) -> Result<Option<usize>, String> {
+    if let Some(take) = edit.restore {
+        return kerf_shots::takes::restore(project, directory, &edit.media, take, &edit.was).map(|()| None);
+    }
     let now = match &edit.text {
         Some(text) => text.clone(),
         None if edit.remove => kerf_shots::graph::removed(&edit.was, edit.line)?,
@@ -193,6 +199,7 @@ mod tests {
             value: value.map(str::to_owned),
             add: None,
             remove: false,
+            restore: None,
         }
     }
 
