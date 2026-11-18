@@ -122,14 +122,18 @@ Reusable presets are portable .kerfpreset files. `look` with `presets: true` \
 lists project presets: the shared `presets/` library first, then \
 `.kerf/presets` and the project folder. With `preset: \"file.kerfpreset\"` it shows the pattern, \
 text slots, and each media slot with the clips that use it and the imported \
-media that fit it (`fits`, with the latest `from` frame as `latestFrame`). \
+media that fit it (`fits`, with the latest `from` frame as `latestFrame`), and \
+the media the preset makes from steps (`made`), which take no binding. \
 `edit` with `savePreset: \"file.kerfpreset\"` \
 saves the accepted sequence (optional `sequence` and `name`), without changing \
 the project. To reuse one, `edit` with `preset`, `bindings` mapping each slot \
 to {media: \"imported-media-id\", from: \"0f\"}, and optional `texts` mapping \
 template clip ids to new text. This replaces the chosen sequence (the first \
 by default) as a normal proposal. Every slot must be bound; its minimum \
-duration includes transition handles. Inspect the preset before binding it.
+duration includes transition handles. A made media becomes a new media of the \
+project, its steps reading the media bound to the slots they name, and the \
+sequences its steps draw come with it; `ids` says what each became, and \
+`make` makes it. Inspect the preset before binding it.
 
 A script's `captions` line needs a transcript of the clip's media made \
 earlier with `look`; the proposal's script shows the caption lines it became.
@@ -313,7 +317,7 @@ pub(super) fn metadata(name: &str) -> Option<(&'static str, Value, ToolAnnotatio
                     "width": {"type": "integer", "minimum": 64, "maximum": 1920, "description": "Frame width in pixels (default 960; 320 for each frame of a sheet)."},
                     "sequence": {"type": "string", "description": sequence},
                     "proposal": {"type": "string", "description": proposal},
-                    "preset": {"type": "string", "description": "Inspect a .kerfpreset file: pattern, text slots, and media slots with the imported media that fit each. Use alone."},
+                    "preset": {"type": "string", "description": "Inspect a .kerfpreset file: pattern, text slots, media slots with the imported media that fit each, and the media the preset makes from steps (`made`, which take no binding). Use alone."},
                     "presets": {"type": "boolean", "description": "List .kerfpreset files in the project's shared presets/ library, then .kerf/presets and the project root. Use alone with true."},
                     "effect": {"type": "string", "description": "An effect, transition, generator, or clip property: every parameter of it, where the reference keeps a few of a generator that has many. Raster effects are listed by id only. Use alone."},
                     "file": {"type": "string", "description": "A file in the project's folder: what it holds, and in `add` the `media add` line that puts it in the document. Or a folder of it, such as `media` (`.` for the project's own): each footage file there the same way, in `files`, and in `script` the lines for those not in the document, to run as one edit. With no arguments `look` gives in `unplaced` the footage in the project's folder and in `media` not yet in the document. Use alone."},

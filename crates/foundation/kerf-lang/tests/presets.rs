@@ -569,8 +569,240 @@ fn the_presets_in_the_docs_read() {
         .filter_map(|block| block.split("```").next())
         .filter(|block| block.starts_with("kerf 1"))
         .collect();
-    assert_eq!(examples.len(), 2);
+    assert_eq!(examples.len(), 4);
     for example in examples {
         preset::parse(example, Catalog::builtin()).unwrap_or_else(|e| panic!("{e}\n{example}"));
     }
+}
+
+/// `fixtures/shots/walk`, its layers playing frames 8 to 48 of the footage.
+fn walk() -> Project {
+    parse(
+        &include_str!("../../../../fixtures/shots/walk/project.kerf")
+            .replace("src=0f at=0f dur=81f", "src=8f at=0f dur=40f"),
+    )
+}
+
+/// `fixtures/shots/car`, its program playing the shot of the depth of `s2`,
+/// whose model is handed where the car's body goes.
+fn car() -> Project {
+    parse(
+        &include_str!("../../../../fixtures/shots/car/project.kerf")
+            .replace(
+                "sequence s1 rate=24 size=1664x960\n  track V1 video\n",
+                "sequence s1 rate=16 size=832x480\n  track V1 video\n    clip shot media=depth src=0f at=0f dur=65f\n",
+            )
+            .replace("seconds=4 seed=7\nmedia ids", "seconds=4 seed=7 moves=body\nmedia ids"),
+    )
+}
+
+fn export_of(project: &Project, sequence: &str) -> Result<String, String> {
+    preset::export(project, Catalog::builtin(), &Id::new(sequence).unwrap(), "Pattern")
+}
+
+/// A project with other footage, of another rate and size, than the walk's.
+fn elsewhere() -> Project {
+    parse(
+        r#"kerf 1
+project name="Elsewhere"
+media run path="footage/run.mp4" rate=24 dur=100f video=640x360
+sequence main rate=24 size=640x360
+  track V1 video
+    clip old media=run src=0f at=0f dur=1s
+"#,
+    )
+}
+
+fn media_of<'a>(project: &'a Project, clip: &str) -> (&'a str, Time) {
+    let clip = project
+        .sequences
+        .iter()
+        .flat_map(|s| &s.tracks)
+        .flat_map(|t| &t.clips)
+        .find(|c| c.id == clip)
+        .unwrap_or_else(|| panic!("no clip {clip}"));
+    match &clip.content {
+        Content::Media {
+            media, source_in, ..
+        } => (media.as_str(), *source_in),
+        _ => panic!("{clip:?} plays no media"),
+    }
+}
+
+#[test]
+fn a_moved_layer_travels_with_the_matte_and_plate_it_is_made_of() {
+    let document = export_of(&walk(), "s2").unwrap();
+    // The footage is one slot for every cut of it, and the matte and the plate are made
+    // of it: their steps read the slot, and they are as long as it is.
+    assert!(!document.contains("footage/walk.mp4"), "{document}");
+    assert_eq!(document.matches("path=\"slot:").count(), 1, "{document}");
+    for line in [
+        "media slot1 path=\"slot:slot1\" rate=16 dur=00:00:02:08 video=832x480\n",
+        "media man path=\"made:man.mp4\" rate=16 dur=00:00:02:08 video=832x480\n  generate model=matte prompt=\"man\" guide=slot:slot1\n",
+        "media gone path=\"made:gone.mp4\" rate=16 dur=00:00:02:08 video=832x480\n  generate model=matte prompt=\"man\" guide=slot:slot1 out={man.mp4}\n  generate model=plate prompt=\"an empty dirt path below a dry grassy hillside, bushes and trees, daylight\" guide=slot:slot1 guide_mask={man.mp4} seed=7 reach=72\n",
+        "clip moves media=man src=00:00:00:00",
+        "clip plate media=gone src=00:00:00:00",
+    ] {
+        assert!(document.contains(line), "{line}\n{document}");
+    }
+    // `moved` draws `s2`, but nothing of `s2` plays it.
+    assert!(!document.contains("moved") && !document.contains("sequence s1"), "{document}");
+    let read = preset::parse(&document, Catalog::builtin()).unwrap();
+    let slots: Vec<_> = preset::slots(&read.pattern).map(|m| m.id.as_str()).collect();
+    let made: Vec<_> = preset::made(&read.pattern).map(|m| m.id.as_str()).collect();
+    assert_eq!((slots, made), (vec!["slot1"], vec!["man", "gone"]));
+    let man = read.pattern.media("man").unwrap();
+    assert_eq!(preset::footage_of(man).unwrap().as_str(), "slot1");
+
+    // Applied where other footage fills the slot, from its fifth frame.
+    let project = elsewhere();
+    let bound = BTreeMap::from([(
+        "slot1".to_owned(),
+        preset::Binding {
+            media: Id::new("run").unwrap(),
+            from: Time::from_seconds(4.0 / 24.0).unwrap(),
+            beats: Vec::new(),
+        },
+    )]);
+    let (script, ids) = preset::instantiate_with_ids(
+        &project,
+        Catalog::builtin(),
+        &document,
+        &Id::new("main").unwrap(),
+        &bound,
+        &BTreeMap::new(),
+    )
+    .unwrap();
+    assert_eq!(ids["slot1"], "run");
+    let (man, gone) = (&ids["man"], &ids["gone"]);
+    // Each is a new media of the project, of the footage bound, frame for frame: its
+    // rate, its length and its size.
+    let added = format!("media add {man} path=\"shots/{man}.mp4\" rate=24 dur=00:00:04:04 video=640x360\n");
+    assert!(script.contains(&added), "{script}");
+    let step = format!("step {gone} add generate model=plate prompt=\"an empty dirt path below a dry grassy hillside, bushes and trees, daylight\" guide=footage/run.mp4 guide_mask={{man.mp4}} seed=7 reach=72");
+    assert!(script.contains(&step), "{script}");
+    assert!(script.find(&added) < script.find(&step), "{script}");
+    let applied = apply_script(&project, Catalog::builtin(), &script).unwrap().project;
+    let made = applied.media(man).unwrap();
+    assert_eq!(made.path, format!("shots/{man}.mp4"));
+    assert_eq!(
+        kerf_lang::print_step(&made.steps[0]),
+        "generate model=matte prompt=\"man\" guide=footage/run.mp4"
+    );
+    // The layers are as in the pattern, each frame of the matte over its own frame of
+    // the footage: every clip plays from where the binding starts.
+    let from = Time::from_seconds(4.0 / 24.0).unwrap();
+    assert_eq!(media_of(&applied, &ids["mover"]), ("run", from));
+    assert_eq!(media_of(&applied, &ids["moves"]), (man.as_str(), from));
+    assert_eq!(media_of(&applied, &ids["plate"]), (gone.as_str(), from));
+    let target = applied.sequence("main").unwrap();
+    assert_eq!(target.tracks.len(), 3);
+    assert!(!target.tracks[2].enabled);
+    assert_eq!(target.tracks[1].clips[0].effects[0].fx.as_str(), "key.trackmatte");
+
+    // A made media takes no binding.
+    let mut wrong = bound.clone();
+    wrong.insert("man".into(), bound["slot1"].clone());
+    let refused = preset::instantiate(
+        &project,
+        Catalog::builtin(),
+        &document,
+        &Id::new("main").unwrap(),
+        &wrong,
+        &BTreeMap::new(),
+    )
+    .unwrap_err();
+    assert!(refused.contains("takes no binding"), "{refused}");
+}
+
+#[test]
+fn a_blocked_scene_travels_with_the_shot_its_guide_is_drawn_from() {
+    let document = export_of(&car(), "s1").unwrap();
+    // `s2` is drawn by a step, not nested: it travels all the same. `s3` does not.
+    assert!(document.contains("\nsequence s2 "), "{document}");
+    assert!(!document.contains("sequence s3"), "{document}");
+    assert!(document.contains(
+        "media depth path=\"made:depth.mp4\" rate=16 dur=00:00:04:01 video=832x480\n  render s2 {guide.mp4} pass=depth size=832x480 rate=16\n"
+    ), "{document}");
+    let read = preset::parse(&document, Catalog::builtin()).unwrap();
+    assert_eq!(preset::slots(&read.pattern).count(), 0);
+    assert!(preset::footage_of(read.pattern.media("depth").unwrap()).is_none());
+
+    let project = destination();
+    let (script, ids) = preset::instantiate_with_ids(
+        &project,
+        Catalog::builtin(),
+        &document,
+        &Id::new("target").unwrap(),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+    )
+    .unwrap();
+    let (depth, scene, body) = (&ids["depth"], &ids["s2"], &ids["body"]);
+    assert_ne!(scene, "s2");
+    let applied = apply_script(&project, Catalog::builtin(), &script).unwrap().project;
+    // The shot keeps the pattern's line, and its steps draw the scene that came with it
+    // and hand the model where its body goes.
+    let made = applied.media(depth).unwrap();
+    assert_eq!((made.rate.to_string().as_str(), made.duration), ("16", Time::from_seconds(65.0 / 16.0).unwrap()));
+    assert_eq!(made.path, format!("shots/{depth}.mp4"));
+    assert_eq!(
+        made.steps.iter().map(kerf_lang::print_step).collect::<Vec<_>>(),
+        [
+            format!("render {scene} {{guide.mp4}} pass=depth size=832x480 rate=16"),
+            format!("generate model=shot prompt=\"a red sports car drives along a wet city street at dusk, cinematic, photorealistic\" guide={{guide.mp4}} moves={body} seconds=4 seed=7"),
+        ]
+    );
+    assert_eq!(applied.sequence(scene).unwrap().tracks.len(), 5);
+    assert!(applied.sequence("s2").is_none());
+    assert_eq!(media_of(&applied, &ids["shot"]).0, depth.as_str());
+    // The steps are written once the scene is there.
+    assert!(script.find(&format!("sequence add {scene}")) < script.find(&format!("step {depth} add render")), "{script}");
+}
+
+#[test]
+fn what_a_preset_cannot_make_is_refused() {
+    // A recipe file does not travel.
+    let recipe = parse(
+        &include_str!("../../../../fixtures/shots/car/project.kerf")
+            .replace(
+                "sequence s1 rate=24 size=1664x960\n  track V1 video\n",
+                "sequence s1 rate=24 size=1664x960\n  track V1 video\n    clip shot media=open src=0f at=0f dur=1s\n",
+            )
+            .replace(
+                "media color ",
+                "media open path=\"shots/open.mp4\" rate=24 dur=2s video=832x480 recipe=\"shots/open.kerfrecipe\"\nmedia color ",
+            ),
+    );
+    let refused = export_of(&recipe, "s1").unwrap_err();
+    assert!(refused.contains("recipe file `shots/open.kerfrecipe`") && refused.contains("carry its steps into the document"), "{refused}");
+
+    let walk = export_of(&walk(), "s2").unwrap();
+    let car = export_of(&car(), "s1").unwrap();
+    let wrong = |document: String, says: &str| {
+        let error = preset::parse(&document, Catalog::builtin()).unwrap_err();
+        assert!(error.contains(says), "{says}: {error}\n{document}");
+    };
+    wrong(
+        walk.replace("media man ", "media spare path=\"made:spare.mp4\" rate=16 dur=1s video=832x480\n  generate model=matte prompt=\"tree\"\nmedia man "),
+        "unused made media `spare`",
+    );
+    wrong(walk.replacen("guide=slot:slot1", "guide=slot:slot9", 1), "slot `slot:slot9`");
+    wrong(walk.replace("made:man.mp4", "made:woman.mp4"), "has the path `made:man`");
+    wrong(
+        walk.replace("media slot1 path=\"slot:slot1\" rate=16 dur=00:00:02:08 video=832x480\n", "media slot1 path=\"slot:slot1\" rate=16 dur=00:00:02:08 video=832x480\n  generate model=matte prompt=\"man\"\n"),
+        "slot `slot1` has steps under it",
+    );
+    wrong(car.replace("render s2", "render s9"), "sequence `s9`");
+    wrong(car.replace("moves=body", "moves=wheel"), "clip `wheel`");
+    wrong(
+        format!("{car}sequence spare rate=16 size=832x480\n  track V1 video\n"),
+        "outside its pattern",
+    );
+    // Steps are held to their order.
+    assert!(preset::parse(&car.replace("guide={guide.mp4}", "guide={nothing.mp4}"), Catalog::builtin()).is_err());
+    // A slot a step reads and no clip plays is used.
+    let plate_only = walk
+        .replace("    clip mover media=slot1 src=00:00:00:00 at=00:00:00:00 dur=00:00:02:08\n      set x=0.25 scale=1.5\n      fx key.trackmatte@1 matte=V3 composite=matte-luma\n", "");
+    preset::parse(&plate_only, Catalog::builtin()).unwrap();
 }
