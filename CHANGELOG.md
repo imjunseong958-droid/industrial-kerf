@@ -4,77 +4,8 @@ What changed in each release of Industrial Kerf. A release is a `v<version>` tag
 on `main`; its section here becomes the release's notes on GitHub
 (`.github/workflows/package.yml`), so write it for someone using Kerf.
 
-## 0.1.3
+## 0.1.4
 
-- A clip is read from footage in a shot's graph. Follow the picture, on the
-  card of a clip a recipe hands a model the way of (`moves=`), draws the
-  clip's first frame: press on something and the clip follows it for as long
-  as it runs. Cut out of the picture, on the card of a guide that is a matte
-  (`matte=`), masks its clip to the thing pressed on, as it moves and changes
-  shape. Kerf in the conversation follows a clip's whole length with `track`
-  when no range is given, and no longer follows the clip itself.
-- A link of a model's workflow is pointed at another node in the shot's
-  graph: draw an edge from a node's port to the node that should read it. It
-  is kept in the shot's own copy, held to what the ComfyUI server says each
-  node gives and takes, and refused where the graph would go round. Kerf in
-  the conversation does the same (`workflowSet` with `link`).
-- While a model on a ComfyUI server makes a shot, the line says which step
-  of how many it is on (`running, step 7 of 20`), where the server's
-  websocket can be reached; elsewhere it says how long it has run, as before.
-- A signal is set from a sound in a shot's graph: From a sound, in a
-  signal's card, lists the clips of its sequence that play one and keys the
-  signal to 1 where that sound's sounds start, as Kerf in the conversation
-  already could.
-- In a model's workflow, an input says what the ComfyUI server takes there:
-  a sampler or a model file is chosen from the names that server has, and a
-  number is held to its least and most. `kerf-comfy --workflow NAME --inputs`
-  prints it, and Kerf in the conversation reads it with the workflow.
-- A take keeps the recipe it was made from, its seeds and its workflow with
-  it, and the shot's graph goes back to it: Restore take's recipe, in the
-  takes' card, for the take the shot is when the recipe has changed since.
-  Kerf in the conversation does the same (`edit` with `restoreTake`). Takes
-  made before this keep none.
-- Steps are added and deleted in a shot's graph: Add step puts a guide, a
-  model or a join into the recipe as a line that reads as it stands, and its
-  card opens to set it; Delete step, in a step's card, takes its line out.
-  Kerf in the conversation does the same (`edit` with `recipeSet`, `add` and
-  `remove`).
-- `kerf-comfy` comes with `still`: one picture from the prompt, or of what a
-  reference shows, made by the model that makes the shots, for a later step's
-  `ref=` or `first=`. A workflow of your own that makes one frame is a still
-  the same way.
-- A shot longer than a model makes at once is made in parts and joined: a
-  recipe's `render` draws a part of a sequence (`from=`, `seconds=`), a
-  `generate` goes on from the last frame of the part before
-  (`first={a.mp4}`, with `from=` for its signals and moves), and `join` sets
-  the parts end to end. The plan says how when a recipe asks for too long a
-  shot, the graph shows the join as a card of its own, and `shot-directed`
-  reads the first frame.
-- A shot's takes are chosen among in its graph by looking and by number: each
-  take shows its picture, a guide shows as it was drawn for the take, and
-  Hold to guide says how much of where each take has the shot's subject and
-  where its line asked for it (`moves=<clip>`) is the same, with the closest
-  said. No model is run. Kerf in the conversation reads the same numbers
-  (`look` with `takes`).
-- `kerf-comfy` comes with `shot-directed`: a shot that follows a depth guide
-  (`guide=`), looks like a reference (`ref=`), has its subject go where a clip
-  goes (`moves=<clip>`) and lets the guide go where a signal is 1
-  (`signal=<clip>`), all on one `generate` line, or any of them. A workflow of
-  your own can lay one thing over another the same way: `without` says which
-  node goes when an input of it is not given, and which stands in for it.
-- Kerf in the conversation can do in a shot's graph what you can: read the
-  graph and the workflow behind a model, set one word of a recipe's line,
-  wire an input in or let it go, and set a value of the workflow. Its change
-  is kept as the recipe's next version and a new copy of the workflow, never
-  over yours, and the open graph shows it once it is accepted, where you had
-  it. (`look` with `graph` and `workflow`, `edit` with `recipeSet` and
-  `workflowSet`, for an MCP client too.)
-- A model that runs on a ComfyUI server opens, in its shot's graph, into the
-  workflow it is run with: every node and every input, the blanks the recipe
-  fills marked, and any other value to set. A value set is kept in a copy of
-  the workflow in the project, beside the recipe, which that shot's line then
-  names (`workflow=`) and `kerf-comfy` runs for it; nothing on the server and
-  no other shot changes, and a take is held to the copy.
 - A shot made from a recipe opens as a graph of how it is made: Open Graph on
   the media, or a double-click on its clip. Its steps and what they read are
   cards wired by what goes along each edge, a picture in motion, a still, the
@@ -84,20 +15,102 @@ on `main`; its section here becomes the release's notes on GitHub
   a model hands it over. A change is written into the recipe where it stands,
   comments and order kept, and Make again makes a new take from it; Several,
   Stop and choosing a take are there too.
-- A first cut Kerf makes lands in the conversation as a card with its picture:
-  the first clip's poster, its length and a play mark, and moving over it runs
-  through its clips. While Kerf is still cutting, the card is already there,
-  with light running round its picture as each clip is placed. Pressing it
-  grows the picture out of the card onto the stage and brings the timeline in;
-  closing the panel puts it back. Its title sits beside Reject and Accept.
-- The editor draws less while panels open and close and while the picture
-  plays: the timeline moves as a picture of itself, the conversation is laid
-  out once, unchanged threads are kept rather than made again, and nothing is
-  drawn under what covers it. A long conversation no longer makes each new
-  comment slower.
-- On a Mac in a virtual machine, Kerf encodes in software, since VideoToolbox
-  there can stop answering and leave an export waiting for ever;
-  `KERF_ENCODER=hardware` still asks for it.
+- A model that runs on a ComfyUI server opens, in its shot's graph, into the
+  workflow it is run with: every node and every input, the blanks the recipe
+  fills marked, and any other value to set. A value set is kept in a copy of
+  the workflow in the project, beside the recipe, which that shot's line then
+  names (`workflow=`) and `kerf-comfy` runs for it; nothing on the server and
+  no other shot changes, and a take is held to the copy.
+- Kerf in the conversation can do in a shot's graph what you can: read the
+  graph and the workflow behind a model, set one word of a recipe's line,
+  wire an input in or let it go, and set a value of the workflow. Its change
+  is kept as the recipe's next version and a new copy of the workflow, never
+  over yours, and the open graph shows it once it is accepted, where you had
+  it. (`look` with `graph` and `workflow`, `edit` with `recipeSet` and
+  `workflowSet`, for an MCP client too.)
+- `kerf-comfy` comes with `shot-directed`: a shot that follows a depth guide
+  (`guide=`), looks like a reference (`ref=`), has its subject go where a clip
+  goes (`moves=<clip>`) and lets the guide go where a signal is 1
+  (`signal=<clip>`), all on one `generate` line, or any of them. A workflow of
+  your own can lay one thing over another the same way: `without` says which
+  node goes when an input of it is not given, and which stands in for it.
+- A shot's takes are chosen among in its graph by looking and by number: each
+  take shows its picture, a guide shows as it was drawn for the take, and
+  Hold to guide says how much of where each take has the shot's subject and
+  where its line asked for it (`moves=<clip>`) is the same, with the closest
+  said. No model is run. Kerf in the conversation reads the same numbers
+  (`look` with `takes`).
+- A shot longer than a model makes at once is made in parts and joined: a
+  recipe's `render` draws a part of a sequence (`from=`, `seconds=`), a
+  `generate` goes on from the last frame of the part before
+  (`first={a.mp4}`, with `from=` for its signals and moves), and `join` sets
+  the parts end to end. The plan says how when a recipe asks for too long a
+  shot, the graph shows the join as a card of its own, and `shot-directed`
+  reads the first frame.
+- `kerf-comfy` comes with `still`: one picture from the prompt, or of what a
+  reference shows, made by the model that makes the shots, for a later step's
+  `ref=` or `first=`. A workflow of your own that makes one frame is a still
+  the same way.
+- Steps are added and deleted in a shot's graph: Add step puts a guide, a
+  model or a join into the recipe as a line that reads as it stands, and its
+  card opens to set it; Delete step, in a step's card, takes its line out.
+  Kerf in the conversation does the same (`edit` with `recipeSet`, `add` and
+  `remove`).
+- A take keeps the recipe it was made from, its seeds and its workflow with
+  it, and the shot's graph goes back to it: Restore take's recipe, in the
+  takes' card, for the take the shot is when the recipe has changed since.
+  Kerf in the conversation does the same (`edit` with `restoreTake`). Takes
+  made before this keep none.
+- In a model's workflow, an input says what the ComfyUI server takes there:
+  a sampler or a model file is chosen from the names that server has, and a
+  number is held to its least and most. `kerf-comfy --workflow NAME --inputs`
+  prints it, and Kerf in the conversation reads it with the workflow.
+- A signal is set from a sound in a shot's graph: From a sound, in a
+  signal's card, lists the clips of its sequence that play one and keys the
+  signal to 1 where that sound's sounds start, as Kerf in the conversation
+  already could.
+- While a model on a ComfyUI server makes a shot, the line says which step
+  of how many it is on (`running, step 7 of 20`), where the server's
+  websocket can be reached; elsewhere it says how long it has run, as before.
+- A link of a model's workflow is pointed at another node in the shot's
+  graph: draw an edge from a node's port to the node that should read it. It
+  is kept in the shot's own copy, held to what the ComfyUI server says each
+  node gives and takes, and refused where the graph would go round. Kerf in
+  the conversation does the same (`workflowSet` with `link`).
+- A clip is read from footage in a shot's graph. Follow the picture, on the
+  card of a clip a recipe hands a model the way of (`moves=`), draws the
+  clip's first frame: press on something and the clip follows it for as long
+  as it runs. Cut out of the picture, on the card of a guide that is a matte
+  (`matte=`), masks its clip to the thing pressed on, as it moves and changes
+  shape. Kerf in the conversation follows a clip's whole length with `track`
+  when no range is given, and no longer follows the clip itself.
+- A project says its cast and styles once, in `cast.kerfcast`: who and what
+  the shots show and how they look, in words and pictures. A `generate` line
+  names them (`cast=`, `style=`), and changing one asks again only for the
+  shots it is in. The bin's menu has Cast and Styles… to set them; Kerf in the
+  conversation adds to the file with `edit`, and the file's comments are kept
+  either way.
+- Several takes of a shot are made at once: Make Several from Recipe makes
+  two, three or four, each with its seeds one on from the last, as do
+  `kerf make --rolls N` and Kerf in the conversation (`make` with `rolls`).
+  `kerf shots` lists every shot a recipe makes, with its take, its cast, and
+  whether it wants making and why.
+- `brand.kerfbrand` says a project's colours, fonts, tone and the words it
+  says and avoids. Kerf reads it, and the check says, as information, when a
+  title is set in a font or colour the brand has not, or a title or caption
+  says a word it avoids.
+- A cut in speech is placed and checked by the recording's own sound, not by
+  a fixed level and a transcript's loose word times. `snap=pause` finds
+  shorter pauses and leaves more air after a word; the check says when a cut
+  falls in sound no transcript word accounts for, and names long pauses and
+  words said twice that the cut still plays (`look` with `cuts` gives the
+  numbers). Media indexed by an older Kerf is looked at again first.
+- Exporting again after an edit draws and encodes only what the edit
+  touched: a render keeps its picture in stretches of about four seconds and
+  its sound in pieces. Five minutes of 1080p that took over two minutes to
+  export takes under ten seconds again after one clip changes.
+  `KERF_SECTION_CACHE` moves what is kept or turns it `off`, and
+  `KERF_SECTION_CACHE_GB` sets its size, 10 by default.
 - Chat on Claude Code no longer needs a `kerf-mcp` built beside `kerfd`: where
   there is none, the editor serves Kerf's tools to Claude Code itself.
 - Kerf's replies read as text, not Markdown: bold, code and list items show
@@ -208,6 +221,28 @@ on `main`; its section here becomes the release's notes on GitHub
 - Text is the colour of paper, not white: the same greys, warmed a little.
   The sidebar, the toolbar's title, the composer's chips and Settings are set
   a size larger, and what you type sits in the middle of the composer's box.
+- Menus, popovers and the context card share one look, and the colours that
+  say something are faded: ochre for a check to fix, sage for one passed and
+  for what a proposal changes, and a violet playhead. Every track in the
+  timeline is one height and its head says what kind of track it is; the
+  hosted model is called Kerf.
+
+## 0.1.3
+
+- A first cut Kerf makes lands in the conversation as a card with its picture:
+  the first clip's poster, its length and a play mark, and moving over it runs
+  through its clips. While Kerf is still cutting, the card is already there,
+  with light running round its picture as each clip is placed. Pressing it
+  grows the picture out of the card onto the stage and brings the timeline in;
+  closing the panel puts it back. Its title sits beside Reject and Accept.
+- The editor draws less while panels open and close and while the picture
+  plays: the timeline moves as a picture of itself, the conversation is laid
+  out once, unchanged threads are kept rather than made again, and nothing is
+  drawn under what covers it. A long conversation no longer makes each new
+  comment slower.
+- On a Mac in a virtual machine, Kerf encodes in software, since VideoToolbox
+  there can stop answering and leave an export waiting for ever;
+  `KERF_ENCODER=hardware` still asks for it.
 
 ## 0.1.2
 
