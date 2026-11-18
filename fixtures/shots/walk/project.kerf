@@ -1,0 +1,19 @@
+kerf 1
+project name="A walk in layers"
+media walk path="footage/walk.mp4" rate=16 dur=81f video=832x480
+media man path="shots/man.mp4" rate=16 dur=81f video=832x480 recipe="shots/man.kerfrecipe"
+media shown path="shots/shown.mp4" rate=16 dur=81f video=832x480 recipe="shots/shown.kerfrecipe"
+media shirt path="shots/shirt.mp4" rate=16 dur=81f video=832x480 recipe="shots/shirt.kerfrecipe"
+media gone path="shots/gone.mp4" rate=16 dur=81f video=832x480 recipe="shots/gone.kerfrecipe"
+media layers path="shots/layers.mp4" rate=16 dur=81f video=832x480 recipe="shots/layers.kerfrecipe"
+sequence s1 rate=16 size=832x480
+  track V1 video
+    clip back media=walk src=0f at=0f dur=81f
+  track V2 video
+    clip words gen=title@1 at=0f dur=81f
+      set text="WALK" size=0.4 color=#ffffff y=0.1
+  track V3 video
+    clip front media=walk src=0f at=0f dur=81f
+      fx key.trackmatte@1 matte=V4 composite=matte-luma
+  track V4 video enabled=false
+    clip cut media=man src=0f at=0f dur=81f

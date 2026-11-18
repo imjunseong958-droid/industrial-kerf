@@ -1,6 +1,6 @@
 {
   "kerf-comfy": 1,
-  "about": "A guide's frames together as views of one scene: where the camera was on each frame, as a .txt (out={cameras.txt}), or the depth it then agrees on across the frames, as a video (out={depth.mp4}). At most 81 frames.",
+  "about": "A guide's frames together as views of one scene: where the camera was on each frame, as a .txt (out={cameras.txt}). The depth of the same reading is depth's. At most 81 frames.",
   "of": "guide",
   "frames": { "most": 81, "step": 1 },
   "size": [1920, 1080],
@@ -8,7 +8,6 @@
   "set": {
     "model": "depth_anything_3_base.safetensors",
     "resolution": 504,
-    "normalization": "v2_style",
     "anchor": "saddle_balanced",
     "pose": "cam_dec"
   },
@@ -27,20 +26,6 @@
         "mode.ref_view_strategy": "{anchor}",
         "mode.pose_method": "{pose}"
       }
-    },
-    "5": {
-      "class_type": "DA3Render",
-      "inputs": {
-        "da3_geometry": ["4", 0],
-        "output": "depth",
-        "output.normalization": "{normalization}",
-        "output.apply_sky_clip": false
-      }
-    },
-    "6": { "class_type": "CreateVideo", "inputs": { "images": ["5", 0], "fps": "{fps}" } },
-    "7": {
-      "class_type": "SaveVideo",
-      "inputs": { "video": ["6", 0], "filename_prefix": "video/kerf", "format": "auto", "format.codec": "auto" }
     },
     "8": { "class_type": "PreviewAny", "inputs": { "source": ["4", 0] } },
     "9": { "class_type": "SaveText", "inputs": { "text": ["8", 0], "filename_prefix": "kerf-cameras", "format": "txt" } }

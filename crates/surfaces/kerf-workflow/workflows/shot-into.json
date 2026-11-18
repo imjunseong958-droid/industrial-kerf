@@ -1,6 +1,6 @@
 {
   "kerf-comfy": 1,
-  "about": "A shot that keeps its guide where a second guide, guide_mask, is black and makes it anew from the prompt where that is white: a thing put into footage, or a part of a picture made again. The guide is the footage as it is, and the mask the thing in white on black, as render with matte=<clip> draws it.",
+  "about": "A shot that keeps its guide where a second guide, guide_mask, is black and makes it anew from the prompt where that is white: a thing put into footage, a part of a picture made again, a thing taken out. The guide is the footage as it is, and the mask the thing in white on black, as render with matte=<clip> draws it of a clip and as matte finds it in footage. Where the mask is black the take is the guide's own pixels, the model's picture being laid over the guide through the mask and nowhere else. grow=<pixels> makes anew that much around the mask as well, room for what is put there and for the edge of what was; feather=<pixels> is how softly the two meet.",
   "fps": 16,
   "frames": {
     "most": 81,
@@ -22,7 +22,14 @@
     "scheduler": "simple",
     "unet": "wan2.1_vace_1.3B_fp16.safetensors",
     "vae": "wan_2.1_vae.safetensors",
-    "text_encoder": "umt5_xxl_fp16.safetensors"
+    "text_encoder": "umt5_xxl_fp16.safetensors",
+    "grow": 12,
+    "feather": 9
+  },
+  "without": {
+    "29": {
+      "reads": "14"
+    }
   },
   "workflow": {
     "1": {
@@ -105,7 +112,7 @@
           0
         ],
         "control_masks": [
-          "19",
+          "25",
           0
         ]
       }
@@ -190,7 +197,7 @@
       "class_type": "CreateVideo",
       "inputs": {
         "images": [
-          "14",
+          "29",
           0
         ],
         "fps": "{fps}"
@@ -257,7 +264,68 @@
         "y": 0,
         "resize_source": false,
         "mask": [
+          "25",
+          0
+        ]
+      }
+    },
+    "25": {
+      "class_type": "GrowMask",
+      "inputs": {
+        "mask": [
           "19",
+          0
+        ],
+        "expand": "{grow}",
+        "tapered_corners": true
+      }
+    },
+    "26": {
+      "class_type": "MaskToImage",
+      "inputs": {
+        "mask": [
+          "25",
+          0
+        ]
+      }
+    },
+    "27": {
+      "class_type": "ImageBlur",
+      "inputs": {
+        "image": [
+          "26",
+          0
+        ],
+        "blur_radius": "{feather}",
+        "sigma": 4.0
+      }
+    },
+    "28": {
+      "class_type": "ImageToMask",
+      "inputs": {
+        "image": [
+          "27",
+          0
+        ],
+        "channel": "red"
+      }
+    },
+    "29": {
+      "class_type": "ImageCompositeMasked",
+      "inputs": {
+        "destination": [
+          "7",
+          0
+        ],
+        "source": [
+          "14",
+          0
+        ],
+        "x": 0,
+        "y": 0,
+        "resize_source": false,
+        "mask": [
+          "28",
           0
         ]
       }

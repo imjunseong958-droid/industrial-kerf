@@ -1,0 +1,32 @@
+{
+  "kerf-comfy": 1,
+  "about": "What matte finds of a guide, to look at before a matte is made: each thing the prompt names in a color of its own over the guide, with its number on it, which is the number which= keeps it by, and under that how sure of it the model is, of 100. It takes what matte takes, but which=.",
+  "of": "guide",
+  "frames": { "most": 480, "step": 1 },
+  "size": [1920, 1080],
+  "multiple": 2,
+  "set": {
+    "model": "sam3.1_multiplex_fp16.safetensors",
+    "threshold": 0.5,
+    "objects": 4,
+    "every": 1,
+    "refine": 2,
+    "inside": "",
+    "outside": "",
+    "opacity": 0.5
+  },
+  "without": { "4": { "given": ["prompt"] }, "13": { "wants": ["positive_coords"] }, "14": { "wants": ["initial_mask"], "reads": "5" } },
+  "workflow": {
+    "1": { "class_type": "LoadVideo", "inputs": { "file": "{guide}" } },
+    "2": { "class_type": "GetVideoComponents", "inputs": { "video": ["1", 0] } },
+    "3": { "class_type": "CheckpointLoaderSimple", "inputs": { "ckpt_name": "{model}" } },
+    "4": { "class_type": "CLIPTextEncode", "inputs": { "clip": ["3", 1], "text": "{prompt}" } },
+    "10": { "class_type": "ImageFromBatch", "inputs": { "image": ["2", 0], "batch_index": 0, "length": 1 } },
+    "11": { "class_type": "PrimitiveStringMultiline", "inputs": { "value": "{inside}" } },
+    "12": { "class_type": "PrimitiveStringMultiline", "inputs": { "value": "{outside}" } },
+    "13": { "class_type": "SAM3_Detect", "inputs": { "model": ["3", 0], "image": ["10", 0], "positive_coords": ["11", 0], "negative_coords": ["12", 0], "threshold": "{threshold}", "refine_iterations": "{refine}", "individual_masks": true } },
+    "5": { "class_type": "SAM3_VideoTrack", "inputs": { "images": ["2", 0], "model": ["3", 0], "conditioning": ["4", 0], "detection_threshold": "{threshold}", "max_objects": "{objects}", "detect_interval": "{every}" } },
+    "14": { "class_type": "SAM3_VideoTrack", "inputs": { "images": ["2", 0], "model": ["3", 0], "initial_mask": ["13", 0], "detection_threshold": "{threshold}", "max_objects": "{objects}", "detect_interval": "{every}" } },
+    "20": { "class_type": "SAM3_TrackPreview", "inputs": { "track_data": ["14", 0], "images": ["2", 0], "opacity": "{opacity}", "fps": "{fps}" } }
+  }
+}

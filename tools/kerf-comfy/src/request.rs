@@ -3,8 +3,8 @@
 
 // The names a request hands things under are the workflow's to know too, and are kept with it.
 pub use kerf_workflow::names::{
-    guide_named, names_a_file, names_a_signal, names_what_is_handed, reference, signal_named, signal_video_named,
-    MOVES, MOVES_BOX, MOVES_VIDEO,
+    guide_named, names_a_file, names_a_signal, names_points, names_what_is_handed, reference, signal_named,
+    signal_video_named, INSIDE, MOVES, MOVES_BOX, MOVES_VIDEO, OUTSIDE,
 };
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -137,6 +137,35 @@ impl Moves {
 /// from.
 pub fn tracks(moves: &[Moves], frames: u32, fps: f64, size: (u32, u32)) -> String {
     tracks_at(&[[0.0, 0.0]], moves, frames, fps, size)
+}
+
+/// What a workflow's `{inside}` or `{outside}` blank is filled with: the points a line gives
+/// under `name` (`inside="0.3,0.6 0.3,0.7"`, each across and down the frame from 0 to 1) as a
+/// list of `{"x": …, "y": …}` in whole pixels of a picture `width` by `height`, as text a
+/// node reads coordinates from.
+pub fn points(name: &str, given: &str, (width, height): (u32, u32)) -> Result<String, String> {
+    let wrong = || {
+        format!(
+            "`{name}={given}` is not points: each is across and down the frame from 0 to 1, a comma between the two and a space between points, as `{name}=\"0.3,0.6 0.3,0.7\"`"
+        )
+    };
+    let share = |text: &str| {
+        text.trim()
+            .parse::<f64>()
+            .ok()
+            .filter(|share| (0.0..=1.0).contains(share))
+    };
+    let points = given
+        .split_whitespace()
+        .map(|point| {
+            let (across, down) = point.split_once(',')?;
+            let pixel = |share: f64, side: u32| (share * f64::from(side)).round().min(f64::from(side) - 1.0) as u32;
+            Some(serde_json::json!({"x": pixel(share(across)?, width), "y": pixel(share(down)?, height)}))
+        })
+        .collect::<Option<Vec<_>>>()
+        .filter(|points| !points.is_empty())
+        .ok_or_else(wrong)?;
+    Ok(serde_json::Value::from(points).to_string())
 }
 
 /// Where in a clip's box the tracks of a `{moves_box}` are: its middle, and four points

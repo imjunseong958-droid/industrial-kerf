@@ -233,11 +233,24 @@ pub fn make(
     let mut values: Values = workflow.set.clone();
     let mut unread = Vec::new();
     for (name, text) in &request.more {
-        if ASKED.contains(&name.as_str()) || names_what_is_handed(name) || !blanks.contains(name) {
+        // Points are the line's own to give, where the workflow has a blank for them.
+        let points = request::names_points(name) && blanks.contains(name);
+        if !points
+            && (ASKED.contains(&name.as_str()) || names_what_is_handed(name) || !blanks.contains(name))
+        {
             unread.push(format!("`{name}`"));
         } else {
             values.insert(name.clone(), value_of(name, text, workflow.set.get(name))?);
         }
+    }
+    // Points on a thing of the guide's first frame, and off it, as the pixels a node reads
+    // them in. With none given, the nodes that read them are left out.
+    for name in [request::INSIDE, request::OUTSIDE] {
+        let given = match values.remove(name) {
+            Some(serde_json::Value::String(given)) if !given.trim().is_empty() => given,
+            _ => continue,
+        };
+        values.insert(name.to_owned(), json!(request::points(name, &given, (width, height))?));
     }
     let seed = request.seed.unwrap_or_else(any_seed);
     values.extend([

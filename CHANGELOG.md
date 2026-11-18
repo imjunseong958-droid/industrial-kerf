@@ -4,6 +4,42 @@ What changed in each release of Industrial Kerf. A release is a `v<version>` tag
 on `main`; its section here becomes the release's notes on GitHub
 (`.github/workflows/package.yml`), so write it for someone using Kerf.
 
+## Unreleased
+
+- `kerf-comfy` comes with `matte`, for a ComfyUI server that has SAM 3.1: a
+  thing in footage found by its name and followed, as a matte, white on
+  black on every frame (`generate model=matte guide=<footage> prompt="man"`).
+  `objects=` is how many things are followed, `matte-shown` draws each with
+  its number over the footage, `which=` keeps some of them by number, and
+  `inside="x,y x,y"` names a thing by points on it in the first frame in
+  place of words. A matte is the mask `shot-into` reads, and media the
+  document cuts footage by (`key.trackmatte`), so a title stands behind a
+  man who walks in front of it.
+- `shot-into` changes the part of the footage its mask is white on and
+  nothing else: what the model made is laid back over the footage through
+  the mask, where before the whole frame was the model's and what it kept
+  came back worse. `grow=` makes anew that much around the mask as well, and
+  `feather=` is how softly the two meet. With the mask grown well past a
+  thing and the thing named under `negative=`, the thing is taken out.
+- There is one `depth`, and it holds still: the frames are read together,
+  so a place that does not move in the picture keeps its grey from frame to
+  frame, three times as well as before and in about a third of the time.
+  `depth-whole` is gone, and `cameras` writes a camera's path and no video:
+  a recipe that asked `cameras` for a video asks `depth`. `depth` no longer
+  takes `refine_steps=` or `output=`; a sky has a distance in it, and what
+  is sky is a matte's to say (`prompt="sky"`). Print a model's entry again
+  (`kerf-comfy --workflow depth --describe`).
+- Kerf no longer runs MobileSAM: `look` with `track` takes no `model`, and
+  nothing is fetched to `~/.kerf/models`. Its cut by colour and edges is as
+  it was. A model's matte is `matte`, above, which held a man before a
+  hillside and a pickup among cars where the cut with MobileSAM behind it
+  held neither.
+- A workflow of your own reads points a line gives at `{inside}` and
+  `{outside}`, leaves a node out when the line has no words (`"given":
+  ["prompt"]` under `without`), and may end in a node that saves a preview
+  and nothing else: `kerf-comfy` fetches that where nothing was saved to
+  keep.
+
 ## 0.1.4
 
 - A shot made from a recipe opens as a graph of how it is made: Open Graph on

@@ -1,0 +1,5 @@
+kerf-recipe 1
+# The man taken out: the mask grown past telling what it was the shape of, what is behind
+# him as the prompt, and what he is as what is not wanted.
+generate model=matte guide=../footage/walk.mp4 prompt="man" out={man.mp4}
+generate model=into guide=../footage/walk.mp4 guide_mask={man.mp4} prompt="a dry grassy hillside above a pale dirt path, bushes and trees, daylight" negative="person, man, people, figure, walking, body, legs, clothes, blurry, low quality, text, watermark" grow=64 feather=21 seed=11

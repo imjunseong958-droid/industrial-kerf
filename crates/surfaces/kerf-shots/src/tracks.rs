@@ -269,7 +269,6 @@ pub fn moves(project: &Project, clip: &str, point: [f64; 2]) -> Result<Read, Str
                 inside: vec![point],
                 ..Hints::default()
             },
-            None,
             seen.read(),
         );
         // A floor or a wall is cut out as readily as a ball, and its middle is no place of
@@ -355,7 +354,7 @@ pub fn matte(
         outside: outside.to_vec(),
         bbox: None,
     };
-    let followed = kerf_track::follow_object(seen.count, &hints, None, seen.read());
+    let followed = kerf_track::follow_object(seen.count, &hints, seen.read());
     if followed.outlines.is_empty() {
         return Err(format!(
             "nothing was cut out at those points on the first frame of `{clip}`: point at the thing itself, and off it at what is taken for it"

@@ -295,7 +295,7 @@ pub(super) fn metadata(name: &str) -> Option<(&'static str, Value, ToolAnnotatio
                     "transcript": {"type": "boolean", "description": "What is said, by local transcription, up to 15 minutes per call: of `media`, or else of the sequence as it plays. `unheard`, when it is there, lists stretches that sound like speech and have no words: the transcriber may have missed something, so listen there."},
                     "words": {"type": "boolean", "description": "With `transcript`: time every word, for cutting on speech. Choose a short range; it is long."},
                     "sync": {"type": "array", "items": {"type": "string"}, "description": "Media ids of recordings of the same thing to line up by their sound, as for a multicam. Returns how far each falls after the first, `offset` in seconds, with `confidence`, and a `script` that builds a sequence with a camera on each track. Then a clip of that sequence (`seq=multicam`) with `angle=V2` shows one camera, and splitting it cuts between them. Check `confidence`: low means they may have nothing in common."},
-                    "track": {"type": "object", "description": "Follow a point of the program's picture over `from`–`to`: `x` and `y` where it is at `from`, 0 to 1 across the frame, on something with detail, such as a corner rather than a flat area. Returns where it went, and with `clip` a line setting that clip's x and y to follow it: run it with `edit`, and parent what should stick to it to that clip, a `gen=null@1` for instance. `lostAt` says where the point was lost, if it was. Or give `corners` instead of `x` and `y`, four [x, y] at `from` going upper left, upper right, lower right, lower left, around a flat surface with detail on it, such as a screen or a sign, to follow how it moves and turns: it returns those corners over time, `outline`, the keyframes a moving mask takes (`mask c add k1 points=...`), and with `clip` a corner pin line that fits that clip, one filling the frame, onto the surface. Or to cut out an object that changes shape, a person for instance, give `inside`, [x, y] points on it at `from`, with `outside`, points off it, and `box`, [left, top, right, bottom] around it, as needed: it returns its outline over time, as few corners as shape it and the same ones in every keyframe: `outline` as above, or with `clip` a mask line for that clip instead, `script`, which holds it (`mask c add object points=...`). A third number on each corner says where the edge measures soft, such as out of focus or moving fast. `model` picks what helps find it: `classical`, the default, goes by colour and edges with nothing to install; `mobilesam` does better where colours are alike, and names the file to fetch when it is missing. With `clip` and no `from` and `to` it is followed for as long as that clip runs, and a clip that follows a point is not drawn while the point is followed: this is how a clip a `generate` line names with `moves=` is led by footage, and how the clip a `render` line names with `matte=` is cut to what it shows, as a person does on the picture in a shot's graph. Or give `camera: true` to solve where the camera went over the range, one shot of a camera that moves through a still scene, to pin clips in depth to moving footage: it returns a `script` of `gen=camera@1` keyframes (on `clip`, or on a new camera without one), `fit` (`error` and `worst`, how far what was followed lands from where the solve puts it in the sequence's pixels; under a pixel holds, and past two a clip slides; `agreeing`, the share of it that fits), `fov`, and `points`, places in the world to set a clip's `x`, `y`, and `z` to with `three_d=true`, each with where it shows (`at`, on `frame`) and the frame it was last seen on (`lastFrame`), so that it stays on that spot. Hide what is not in the footage first. `solved: false` with a `reason` says when a shot cannot be solved, such as a camera that only turns; `lostAt` says where a cut or lost frame ended it. `lensKnown: false` means the camera never turned, so any lens fits and `fov` is the default: give `fov`, down the frame in degrees, if you know it. A zoom reads as a move along the camera's way, with a higher `error`. Use with `from`, `to`, and optionally `sequence` or `proposal`.", "properties": {"x": {"type": "number"}, "y": {"type": "number"}, "corners": {"type": "array", "items": {"type": "array", "items": {"type": "number"}}}, "inside": {"type": "array", "items": {"type": "array", "items": {"type": "number"}}}, "outside": {"type": "array", "items": {"type": "array", "items": {"type": "number"}}}, "box": {"type": "array", "items": {"type": "number"}}, "model": {"type": "string"}, "camera": {"type": "boolean"}, "fov": {"type": "number"}, "clip": {"type": "string"}}},
+                    "track": {"type": "object", "description": "Follow a point of the program's picture over `from`–`to`: `x` and `y` where it is at `from`, 0 to 1 across the frame, on something with detail, such as a corner rather than a flat area. Returns where it went, and with `clip` a line setting that clip's x and y to follow it: run it with `edit`, and parent what should stick to it to that clip, a `gen=null@1` for instance. `lostAt` says where the point was lost, if it was. Or give `corners` instead of `x` and `y`, four [x, y] at `from` going upper left, upper right, lower right, lower left, around a flat surface with detail on it, such as a screen or a sign, to follow how it moves and turns: it returns those corners over time, `outline`, the keyframes a moving mask takes (`mask c add k1 points=...`), and with `clip` a corner pin line that fits that clip, one filling the frame, onto the surface. Or to cut out an object that changes shape, a person for instance, give `inside`, [x, y] points on it at `from`, with `outside`, points off it, and `box`, [left, top, right, bottom] around it, as needed: it returns its outline over time, as few corners as shape it and the same ones in every keyframe: `outline` as above, or with `clip` a mask line for that clip instead, `script`, which holds it (`mask c add object points=...`). A third number on each corner says where the edge measures soft, such as out of focus or moving fast. It goes by colour and edges, with nothing to install; where a model that finds a thing by its name is set up (`models`, one whose `about` says it makes a matte), a recipe's `generate model=<it> guide=<footage> prompt=<the thing>` makes the matte as a file instead, and holds a thing among others like it. With `clip` and no `from` and `to` it is followed for as long as that clip runs, and a clip that follows a point is not drawn while the point is followed: this is how a clip a `generate` line names with `moves=` is led by footage, and how the clip a `render` line names with `matte=` is cut to what it shows, as a person does on the picture in a shot's graph. Or give `camera: true` to solve where the camera went over the range, one shot of a camera that moves through a still scene, to pin clips in depth to moving footage: it returns a `script` of `gen=camera@1` keyframes (on `clip`, or on a new camera without one), `fit` (`error` and `worst`, how far what was followed lands from where the solve puts it in the sequence's pixels; under a pixel holds, and past two a clip slides; `agreeing`, the share of it that fits), `fov`, and `points`, places in the world to set a clip's `x`, `y`, and `z` to with `three_d=true`, each with where it shows (`at`, on `frame`) and the frame it was last seen on (`lastFrame`), so that it stays on that spot. Hide what is not in the footage first. `solved: false` with a `reason` says when a shot cannot be solved, such as a camera that only turns; `lostAt` says where a cut or lost frame ended it. `lensKnown: false` means the camera never turned, so any lens fits and `fov` is the default: give `fov`, down the frame in degrees, if you know it. A zoom reads as a move along the camera's way, with a higher `error`. Use with `from`, `to`, and optionally `sequence` or `proposal`.", "properties": {"x": {"type": "number"}, "y": {"type": "number"}, "corners": {"type": "array", "items": {"type": "array", "items": {"type": "number"}}}, "inside": {"type": "array", "items": {"type": "array", "items": {"type": "number"}}}, "outside": {"type": "array", "items": {"type": "array", "items": {"type": "number"}}}, "box": {"type": "array", "items": {"type": "number"}}, "camera": {"type": "boolean"}, "fov": {"type": "number"}, "clip": {"type": "string"}}},
                     "facts": {"type": "boolean", "description": "With `media`: its fact sheet beside its index, the first time slowly: what the camera does in each shot (`camera`, such as `pan right` or `handheld`; `pan`, `tilt`, and `zoom` in shares of the frame a second, `roll` in degrees a second, and `agreeing`, how much of the picture follows that), how loud it is (`loudness`, in LUFS and dBTP), and in `notMeasured` what it does not say and why: faces, the subject, and on-screen text."},
                     "loudness": {"type": "boolean", "description": "How loud the sequence is as it plays, by R128, measured from its whole mix: `integrated` in LUFS beside the `target`, `range` in LU, `truePeak` in dBTP beside its `limit`, and the loudest three seconds (`shortTermMax`) and 400 ms (`momentaryMax`) with where each ends. A silent sequence has `integrated: null`. Measured once for a revision; a media's own loudness is in its `facts`. Use with `sequence` or `proposal` only."},
                     "cuts": {"type": "boolean", "description": "How the cuts of the sequence's sound sit in the sound, measured from each media's own levels a hundredth of a second at a time and from its transcripts, so an edit is checked without listening: `summary` counts every cut as `quiet` (in a pause), `low` (through a breath or a decay), or `sound` (through sound at the level of speech), with `inWords` (inside a word a transcript heard), `tight` (quiet, but within 0.05 s of the sound the clip plays), `faded` (under a transition, not judged), `notMeasured`, and `air`, the `least` and `median` quiet a cut leaves beside what its clip plays, in seconds. `cuts` lists each that is not clean: its `clip` and which `end`, `at` on the sequence and `source` on the `media`, the level `before` and `after` it in dBFS, and the `word`. `media` gives the level each media speaks at and pauses under. With a transcript of what plays, `pauses` are the waits of 0.75 s or more still played between words, longest first, and `repeats` the words and phrases said twice in a row, with `cutTo` where a cut sits in one. A trim or split with `snap=pause` moves a cut into the nearest pause. Use with `sequence` or `proposal` only."},
@@ -609,60 +609,6 @@ fn font_description(wanted: &str) -> Value {
     json!({"font": family, "found": true, "faces": faces})
 }
 
-/// A trained model by its id, loaded once. Its weights are never bundled: they are read from
-/// `KERF_MOBILESAM` or the models folder in the user's home, and checked against the registry.
-fn trained_model(id: &str) -> Result<std::sync::Arc<dyn kerf_segment::MaskModel>, McpError> {
-    use std::collections::HashMap;
-    use std::sync::{Arc, Mutex};
-    type Loaded = HashMap<String, Arc<dyn kerf_segment::MaskModel>>;
-    static LOADED: Mutex<Option<Loaded>> = Mutex::new(None);
-    let invalid = |message: String| McpError::new("INVALID_ARGUMENTS", message);
-    let info = kerf_segment::info(id).ok_or_else(|| {
-        invalid(format!(
-            "no model `{id}`; there is `{}` and {}",
-            kerf_segment::CLASSICAL,
-            kerf_segment::MODELS
-                .iter()
-                .map(|model| format!("`{}`", model.id))
-                .collect::<Vec<_>>()
-                .join(", ")
-        ))
-    })?;
-    let mut loaded = LOADED
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let loaded = loaded.get_or_insert_with(HashMap::new);
-    if let Some(model) = loaded.get(id) {
-        return Ok(model.clone());
-    }
-    let path = std::env::var_os("KERF_MOBILESAM")
-        .filter(|_| id == "mobilesam")
-        .map(std::path::PathBuf::from)
-        .or_else(|| {
-            std::env::var_os("HOME").map(|home| {
-                std::path::Path::new(&home)
-                    .join(".kerf/models")
-                    .join(info.file_name)
-            })
-        })
-        .ok_or_else(|| invalid(format!("nowhere to find `{}`", info.file_name)))?;
-    let bytes = std::fs::read(&path).map_err(|_| {
-        invalid(format!(
-            "`{id}` is not installed: its weights ({}, {} MB, {}, by {}) go at {}, from {}",
-            info.file_name,
-            info.size / 1_000_000,
-            info.licence,
-            info.authors,
-            path.display(),
-            info.url
-        ))
-    })?;
-    let kerf_segment::Loaded::Mask(model) =
-        kerf_segment::load(id, &bytes).map_err(|error| McpError::new("RENDER_FAILED", error))?;
-    loaded.insert(id.to_owned(), model.clone());
-    Ok(model)
-}
-
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct TrackInput {
@@ -675,7 +621,6 @@ struct TrackInput {
     outside: Vec<[f64; 2]>,
     #[serde(rename = "box")]
     bbox: Option<[f64; 4]>,
-    model: Option<String>,
     #[serde(default)]
     camera: bool,
     fov: Option<f64>,
@@ -3290,10 +3235,10 @@ impl KerfMcpRouter {
                 ));
             }
         }
-        if !object && (!track.outside.is_empty() || track.model.is_some()) {
+        if !object && !track.outside.is_empty() {
             return Err(McpError::new(
                 "INVALID_ARGUMENTS",
-                "`outside` and `model` go with `inside` or `box`",
+                "`outside` goes with `inside` or `box`",
             ));
         }
         let within = |value: &f64| (0.0..=1.0).contains(value);
@@ -3381,17 +3326,12 @@ impl KerfMcpRouter {
             return Ok(result);
         }
         if object {
-            let model = match track.model.as_deref() {
-                None | Some(kerf_segment::CLASSICAL) => None,
-                Some(id) => Some(trained_model(id)?),
-            };
             let hints = kerf_track::Hints {
                 inside: track.inside.clone(),
                 outside: track.outside.clone(),
                 bbox: track.bbox,
             };
-            let followed =
-                kerf_track::follow_object(count as usize + 1, &hints, model.as_deref(), read);
+            let followed = kerf_track::follow_object(count as usize + 1, &hints, read);
             let pixels = picture_width(project, target).unwrap_or(f64::from(sequence.width));
             let cut = kerf_shots::tracks::outline(&followed, first - origin, drawn_width, pixels);
             let (followed, kept, outline) = (cut.followed, cut.kept, cut.points);

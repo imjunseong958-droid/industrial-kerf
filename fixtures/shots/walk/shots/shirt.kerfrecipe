@@ -1,0 +1,4 @@
+kerf-recipe 1
+# His shirt made again, and nothing else of the picture.
+generate model=matte guide=../footage/walk.mp4 prompt="t-shirt" objects=1 out={shirt.mp4}
+generate model=into guide=../footage/walk.mp4 guide_mask={shirt.mp4} prompt="a man wearing a bright red hawaiian shirt with yellow flowers" grow=4 feather=5 seed=7

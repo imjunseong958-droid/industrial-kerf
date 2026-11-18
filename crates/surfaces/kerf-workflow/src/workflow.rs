@@ -40,9 +40,10 @@
 //! Node 22 is left out when its `control_video` is, and what read node 22
 //! then reads node 9, output for output. `"given": ["first"]` leaves a node
 //! out when the request hands over no `first`, for one that reads nothing of
-//! it and is still only of use beside it. So a workflow can lay one thing
-//! over another, each in a node of its own, and still serve a shot that
-//! gives only some of them.
+//! it and is still only of use beside it; `"given": ["prompt"]` leaves one
+//! out when the line has no words, for a node that would take none as words
+//! all the same. So a workflow can lay one thing over another, each in a
+//! node of its own, and still serve a shot that gives only some of them.
 //!
 //! A workflow whose `frames.most` is 1 makes a still: it needs no `fps`,
 //! and what it makes is a picture, saved by a node that saves one.
@@ -68,8 +69,11 @@ use std::path::Path;
 /// The version of workflow file this program reads.
 const WORKFLOW_VERSION: u32 = 1;
 
+/// The blank a line's words fill, which a node can be nothing without.
+const PROMPT: &str = "prompt";
+
 /// The workflows that come with kerf-comfy, by name.
-pub const BUNDLED: [(&str, &str); 14] = [
+pub const BUNDLED: [(&str, &str); 15] = [
     ("shot", include_str!("../workflows/shot.json")),
     ("shot-timed", include_str!("../workflows/shot-timed.json")),
     ("shot-into", include_str!("../workflows/shot-into.json")),
@@ -79,7 +83,6 @@ pub const BUNDLED: [(&str, &str); 14] = [
     ("still", include_str!("../workflows/still.json")),
     ("depth", include_str!("../workflows/depth.json")),
     ("set", include_str!("../workflows/set.json")),
-    ("depth-whole", include_str!("../workflows/depth-whole.json")),
     (
         "cameras",
         include_str!("../workflows/cameras.json"),
@@ -87,6 +90,8 @@ pub const BUNDLED: [(&str, &str); 14] = [
     ("set-views", include_str!("../workflows/set-views.json")),
     ("set-splats", include_str!("../workflows/set-splats.json")),
     ("moves-shown", include_str!("../workflows/moves-shown.json")),
+    ("matte", include_str!("../workflows/matte.json")),
+    ("matte-shown", include_str!("../workflows/matte-shown.json")),
 ];
 
 /// What fills a workflow's blanks, by name.
@@ -146,7 +151,8 @@ pub struct Without {
     wants: Vec<String>,
     /// What a request hands over that it is nothing without, by the blank's
     /// name (`first`, `guide`), though none of its own inputs reads it: with
-    /// one of them not given, it is left out.
+    /// one of them not given, it is left out. `prompt` is the line's words,
+    /// not given where it has none.
     #[serde(default)]
     given: Vec<String>,
     /// The node that what read it reads in its place, output for output.
@@ -223,7 +229,7 @@ impl Workflow {
                 }
             }
             for name in &without.given {
-                if !names_what_is_handed(name) {
+                if !names_what_is_handed(name) && name != PROMPT {
                     return Err(format!(
                         "`without` says node {id} wants `{name}` given, which is not something a request hands over"
                     ));
@@ -478,11 +484,13 @@ impl Workflow {
             })
             .map(|(id, _)| id.clone())
             .collect();
-        // And each the workflow says is nothing without something the request has not got.
+        // And each the workflow says is nothing without something the request has not got:
+        // a file it does not hand over, or words it has none of.
+        let given = |name: &String| values.get(name).is_some_and(|value| value.as_str() != Some(""));
         gone.extend(
             self.without
                 .iter()
-                .filter(|(_, without)| without.given.iter().any(|name| !values.contains_key(name)))
+                .filter(|(_, without)| !without.given.iter().all(given))
                 .map(|(id, _)| id.clone()),
         );
         // What a kind of node cannot do without, asked once for each kind.
@@ -784,9 +792,10 @@ mod tests {
         for name in [
             "depth",
             "set",
-            "depth-whole",
             "cameras",
             "set-views",
+            "matte",
+            "matte-shown",
         ] {
             let workflow = Workflow::named(name).unwrap();
             assert!(
@@ -812,8 +821,9 @@ mod tests {
         // One that draws where clips go over its guide reads both.
         let shown = Workflow::named("moves-shown").unwrap();
         assert_eq!(shown.takes()["reads"], json!(["guide", "moves"]));
-        // A camera's path is found only with the model's weights as 32-bit floats.
-        for name in ["cameras", "set-views"] {
+        // A camera's path is found only with the model's weights as 32-bit floats, and so is
+        // the depth the frames agree on when they are read together.
+        for name in ["cameras", "set-views", "depth"] {
             let multiview = Workflow::named(name).unwrap();
             assert!(multiview
                 .graph
@@ -821,12 +831,123 @@ mod tests {
                 .any(|node| node["class_type"] == "LoadDA3Model"
                     && node["inputs"]["weight_dtype"] == "fp32"));
         }
-        // Depth is refined once unless a line says otherwise: three times, as the model
-        // comes, takes over twice as long for a grey's difference.
+        // There is one depth, of the frames read together, and one file of each reading: a
+        // camera's path is a text, and its depth is depth's.
         let depth = Workflow::named("depth").unwrap();
-        assert_eq!(depth.takes()["more"]["refine_steps"], json!(1));
+        assert!(depth.graph.values().any(|node| node["inputs"]["mode"] == "multiview"));
+        assert!(depth.classes().contains("SaveVideo") && !depth.classes().contains("SaveText"));
+        let cameras = Workflow::named("cameras").unwrap();
+        assert!(cameras.classes().contains("SaveText") && !cameras.classes().contains("SaveVideo"));
+        assert!(Workflow::named("depth-whole").is_err());
         let missing = Workflow::named("no-such").unwrap_err();
         assert!(missing.contains("shot"), "{missing}");
+    }
+
+    /// What the server says of the kinds of node the workflows that find a thing in footage,
+    /// and the one that makes a part of it anew, link.
+    fn finding(class: &str) -> Result<BTreeSet<String>, String> {
+        let names: &[&str] = match class {
+            "GetVideoComponents" => &["video"],
+            "ImageFromBatch" => &["image", "batch_index", "length"],
+            "SAM3_Detect" => &["model", "image", "threshold", "refine_iterations", "individual_masks"],
+            "SAM3_VideoTrack" => &["images", "model", "detection_threshold", "max_objects", "detect_interval"],
+            "SAM3_TrackToMask" => &["track_data", "object_indices"],
+            "SAM3_TrackPreview" => &["track_data", "opacity", "fps"],
+            "ImageToMask" => &["image", "channel"],
+            "GrowMask" => &["mask", "expand", "tapered_corners"],
+            "MaskToImage" => &["mask"],
+            "ImageBlur" => &["image", "blur_radius", "sigma"],
+            "ImageCompositeMasked" => &["destination", "source", "x", "y", "resize_source"],
+            "CreateVideo" => &["images", "fps"],
+            "SaveVideo" => &["video", "filename_prefix", "format"],
+            "WanVaceToVideo" => &["positive", "negative", "vae", "width", "height", "length", "batch_size", "strength"],
+            other => return Err(format!("nothing links {other} to a node left out")),
+        };
+        Ok(names.iter().map(|name| (*name).to_owned()).collect())
+    }
+
+    #[test]
+    fn a_matte_is_found_by_the_lines_words_or_by_points_and_never_by_neither() {
+        for name in ["matte", "matte-shown"] {
+            let matte = Workflow::named(name).unwrap();
+            // The node that makes of what was followed what the workflow saves.
+            let last = if name == "matte" { "6" } else { "20" };
+            let sent = |given: &[(&str, &str)]| {
+                let mut filled = values(&[("guide", "g.mp4")]);
+                filled.extend(matte.set.clone());
+                // As `kerf-comfy` hands them: points a line does not give are not there.
+                filled.remove("inside");
+                filled.remove("outside");
+                filled.extend(given.iter().map(|(name, value)| ((*name).to_owned(), json!(value))));
+                matte.graph(&filled, &mut finding).unwrap()
+            };
+            // Words alone: nothing reads points, and what is followed is what the words find.
+            let words = sent(&[("prompt", "black pickup truck")]);
+            for gone in ["11", "12", "13", "14"] {
+                assert!(words.get(gone).is_none(), "{name}: node {gone}");
+            }
+            assert_eq!(words["5"]["inputs"]["conditioning"], json!(["4", 0]));
+            assert_eq!(words[last]["inputs"]["track_data"], json!(["5", 0]));
+            // Points alone: the thing they are on in the first frame is followed, and no words
+            // are read, an empty text being words to the model all the same.
+            let points = sent(&[("prompt", ""), ("inside", "[{\"x\":458,\"y\":384}]")]);
+            assert!(points.get("4").is_none() && points.get("12").is_none(), "{name}");
+            assert_eq!(points["13"]["inputs"]["positive_coords"], json!(["11", 0]));
+            assert!(points["13"]["inputs"].get("negative_coords").is_none());
+            assert_eq!(points["14"]["inputs"]["initial_mask"], json!(["13", 0]));
+            assert_eq!(points[last]["inputs"]["track_data"], json!(["14", 0]));
+            // Both: the points say which thing, so the words are not asked as well.
+            let both = sent(&[("prompt", "truck"), ("inside", "[]"), ("outside", "[]")]);
+            assert_eq!(both["13"]["inputs"]["negative_coords"], json!(["12", 0]));
+            assert_eq!(both[last]["inputs"]["track_data"], json!(["14", 0]));
+            assert!(both["14"]["inputs"].get("conditioning").is_none());
+            // Neither: the node that follows is sent with nothing to find, and the server refuses it.
+            let neither = sent(&[("prompt", "")]);
+            assert!(neither.get("4").is_none() && neither.get("13").is_none());
+            assert!(neither["5"]["inputs"].get("conditioning").is_none());
+            assert_eq!(neither[last]["inputs"]["track_data"], json!(["5", 0]));
+            // A line sets how many things, and of a matte which of them.
+            let more = &matte.takes()["more"];
+            assert_eq!((&more["objects"], &more["inside"]), (&json!(4), &json!("")));
+            assert_eq!(more.get("which").is_some(), name == "matte");
+        }
+        // What is shown is saved by the node that draws it, which is all the workflow saves.
+        let shown = Workflow::named("matte-shown").unwrap();
+        assert!(!shown.classes().contains("SaveVideo") && shown.classes().contains("SAM3_TrackPreview"));
+    }
+
+    #[test]
+    fn what_is_made_anew_in_a_part_is_laid_back_over_the_guide_through_the_mask() {
+        let into = Workflow::named("shot-into").unwrap();
+        assert_eq!(into.takes()["reads"], json!(["guide", "guide_mask"]));
+        assert_eq!((&into.takes()["more"]["grow"], &into.takes()["more"]["feather"]), (&json!(12), &json!(9)));
+        let sent = |files: &[(&str, &str)]| {
+            let mut given = values(files);
+            given.extend(into.set.clone());
+            into.graph(&given, &mut finding).unwrap()
+        };
+        // A guide and its mask: the model is told the mask grown, and its picture is laid over
+        // the guide's own through that mask, softened.
+        let whole = sent(&[("guide", "g.mp4"), ("guide_mask", "m.mp4")]);
+        assert_eq!(whole.as_object().unwrap().len(), into.graph.len());
+        assert_eq!(whole["25"]["inputs"]["expand"], json!(12));
+        assert_eq!(whole["9"]["inputs"]["control_masks"], json!(["25", 0]));
+        assert_eq!(whole["29"]["inputs"]["destination"], json!(["7", 0]));
+        assert_eq!(whole["29"]["inputs"]["source"], json!(["14", 0]));
+        assert_eq!(whole["29"]["inputs"]["mask"], json!(["28", 0]));
+        assert_eq!(whole["15"]["inputs"]["images"], json!(["29", 0]));
+        // No mask: nothing is kept, and the model's picture is the take.
+        let unmasked = sent(&[("guide", "g.mp4")]);
+        for gone in ["17", "18", "19", "25", "26", "27", "28"] {
+            assert!(unmasked.get(gone).is_none(), "node {gone}");
+        }
+        assert!(unmasked["29"]["inputs"].get("mask").is_none());
+        assert!(unmasked["9"]["inputs"].get("control_masks").is_none());
+        // No guide: there is nothing to lay it over, and what is saved is the model's own.
+        let unguided = sent(&[]);
+        assert!(unguided.get("29").is_none() && unguided.get("21").is_none());
+        assert_eq!(unguided["15"]["inputs"]["images"], json!(["14", 0]));
+        assert!(unguided["9"]["inputs"].get("control_video").is_none());
     }
 
     #[test]
@@ -1063,10 +1184,36 @@ mod tests {
             (r#""without": {"22": {"wants": ["strength"]}},"#, "wants `strength`, which is not an input of it linked to a node"),
             (r#""without": {"22": {"reads": "22"}},"#, "has node 22 stand in for node 22"),
             (r#""without": {"22": {"reads": "31"}},"#, "has node 31 stand in for node 22"),
+            (r#""without": {"22": {"given": ["steps"]}},"#, "wants `steps` given, which is not something a request hands over"),
         ] {
             let refused = laid(without).unwrap_err();
             assert!(refused.contains(why), "{refused}");
         }
+    }
+
+    #[test]
+    fn a_node_that_is_nothing_without_words_goes_when_the_line_has_none() {
+        let worded = Workflow::parse(
+            r#"{
+                "kerf-comfy": 1, "of": "guide", "frames": {"most": 81, "step": 1}, "size": [832, 480],
+                "without": {"1": {"given": ["prompt"]}},
+                "workflow": {
+                    "1": {"class_type": "Words", "inputs": {"text": "{prompt}"}},
+                    "2": {"class_type": "Finder", "inputs": {"words": ["1", 0], "count": 4}}
+                }
+            }"#,
+        )
+        .unwrap();
+        let mut needs = |_: &str| Ok(BTreeSet::from(["count".to_owned()]));
+        let mut sent = |prompt: &str| {
+            let values: Values = [("prompt".to_owned(), json!(prompt))].into();
+            worded.graph(&values, &mut needs).unwrap()
+        };
+        assert_eq!(sent("a ball")["2"]["inputs"]["words"], json!(["1", 0]));
+        // No words: an empty text would still be words to the node that reads them.
+        let silent = sent("");
+        assert!(silent.get("1").is_none());
+        assert_eq!(silent["2"]["inputs"], json!({"count": 4}));
     }
 
     #[test]

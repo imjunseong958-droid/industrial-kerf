@@ -729,6 +729,7 @@ shot takes minutes.
 | `{guide}`, `{first}`, `{last}`, `{ref}`, `{ref2}` … | The file, as the server names it once sent up. A node that reads one the line does not give is left out, with whatever cannot do without it. |
 | `{moves}` | Where the clips the line names with `moves=` go, as text a node reads coordinates from: a list of tracks, one a clip, each a list of `{"x": …, "y": …}` a frame asked for, in pixels of the size asked for, the sequence filling that size as its guide does. On a frame a clip does not show on it is where it last showed. |
 | `{moves_box}` | The same, five tracks a clip: its box's middle and four points toward its corners, so how large it is on each frame is said too. |
+| `{inside}`, `{outside}` | Points on a thing of the guide's first frame, and points off it, as the line gives them (`inside="0.3,0.6 0.3,0.7"`, each across and down the frame from 0 to 1): as text a node reads coordinates from, a list of `{"x": …, "y": …}` in pixels of the size asked for. A node that reads points the line does not give is left out. |
 | `{signal_video}`, `{signal2_video}` … | The same signal as a picture in motion: a grey video of the size and frames asked for, each frame as light all over as the signal is then, sent up as a file is. For a node that reads a mask a frame, which a list of numbers does not reach. |
 | `{signal}`, `{signal2}` … | A signal the line gives, in the order it gives them, as a number for each frame asked for, with commas between: `0,0.25,0.5,1`. A node that reads one the line does not give is left out the same way. |
 | any other, such as `{steps}` | The value the workflow sets, or the same name on the line: `steps=30 strength=0.6`. |
@@ -745,6 +746,10 @@ beside `workflow`, and which node stands in for it:
 
 Node 22 is then left out when its `control_video` is, and what read node 22
 reads node 9, output for output. `shot-directed` is written this way.
+`"given": ["first"]` leaves a node out when the line hands over no `first`,
+though no input of the node reads it, and `"given": ["prompt"]` when the
+line has no words, for a node that would take an empty text as words all
+the same: `matte` is found by words or by points, and is written so.
 
 What it does with a request:
 
@@ -770,7 +775,9 @@ What it does with a request:
   is not what the line said, and when the guide is shorter than the shot.
 - It queues the graph, kept as `workflow.comfy.json` beside the request, says
   where the job is while it waits, and writes what the server saved as the
-  take. A job waited for past half an hour (`COMFY_TIMEOUT`, in seconds) is
+  take. Where nothing of the kind asked for was saved to keep, what a node
+  saved to show, a preview among the server's temporary files, is the take:
+  `matte-shown` ends in such a node. A job waited for past half an hour (`COMFY_TIMEOUT`, in seconds) is
   taken back from the server.
 - It takes its job back when the making is stopped, in Kerf or with Ctrl-C:
   out of the server's queue if it waits there, and interrupted if it is the
@@ -850,16 +857,17 @@ A model can go the other way from a shot: from a picture in motion to what
 the picture is of, how near each pixel is, the shape of what it shows, where
 the camera was. To Kerf it is a model like any other, whose file is not a
 shot: `generate model=<reader> guide=<footage>`, with `out={depth.mp4}`
-where a later step reads what it makes. Five such workflows come with
-`kerf-comfy`, for the models ComfyUI has nodes for:
+where a later step reads what it makes. Six such workflows come with
+`kerf-comfy`, for the models ComfyUI has nodes for, one for each thing read:
 
 | Workflow | What it makes of its guide | As |
 |---|---|---|
-| `depth` | How near each pixel is, nearer whiter, black where there is no surface (a sky). Each frame is stretched to its own nearest and farthest. `output=normal_opengl` gives which way each pixel faces, and `output=mask` what is a surface. | a video |
-| `set` | One frame rebuilt as a mesh with the frame as its colors, for a `gen=mesh@1` clip. `frame=<n>` picks the frame, from 0; `decimation=1` keeps every pixel as a corner, where 2, as it comes, keeps every other. With `out={lens.txt}` it writes the lens that frame was seen through, degrees down the picture, in place of the mesh. | a `.glb`, or a `.txt` |
-| `depth-whole` | How near each pixel is, a picture at a time, by another model: it gives a sky a distance, where `depth` gives it none. | a video |
-| `cameras` | The frames together as views of one scene: where the camera was on each (`out={cameras.txt}`), or the depth it then agrees on across them (`out={depth.mp4}`). At most 81 frames. | a `.txt`, or a video |
-| `set-views` | The frames together as views of one scene, and one of them rebuilt as a mesh with the frame as its colors: a set in the units of the camera path found of the same frames. `frame=<n>` picks the frame; `confidence=0` keeps every pixel, where 0.1, as it comes, keeps what the model is surest of, the near ground of a street. At most 81 frames. | a `.glb` |
+| `depth` | How near each pixel is, nearer whiter. The frames are read together as views of one scene, so a place that holds still in the picture holds its grey from frame to frame. A sky is given a distance, the farthest. At most 240 frames. | a video |
+| `cameras` | The same reading of the frames, as where the camera was on each (`out={cameras.txt}`). At most 81 frames. | a `.txt` |
+| `set-views` | The same reading, and one of the frames rebuilt as a mesh with the frame as its colors: a set in the units of the camera path found of the same frames. `frame=<n>` picks the frame; `confidence=0` keeps every pixel, where 0.1, as it comes, keeps what the model is surest of, the near ground of a street. At most 81 frames. | a `.glb` |
+| `set` | One frame alone rebuilt as a mesh with the frame as its colors, for a `gen=mesh@1` clip, by another model. `frame=<n>` picks the frame, from 0; `decimation=1` keeps every pixel as a corner, where 2, as it comes, keeps every other. With `out={lens.txt}` it writes the lens that frame was seen through, degrees down the picture, in place of the mesh. | a `.glb`, or a `.txt` |
+| `matte` | The thing the prompt names, in white on black, on every frame: found where it comes into the picture and followed ([A thing in footage, by its name](#a-thing-in-footage-by-its-name)). | a video |
+| `matte-shown` | What `matte` finds, each thing in a color of its own over the guide with its number on it. | a video |
 
 One more reads a file that is not a picture. `set-splats` takes a scene
 kept as splats (`ref=<scene.ply>`, or `.spz`, `.splat`, `.ksplat`) and makes
@@ -899,18 +907,28 @@ those, and with no `guide=` nothing is asked of the server. Its entry, as
 `--describe` prints it, has no `size` and no `rate`, so `look` offers no
 `render` line for it: a guide is not drawn for it, it is given one.
 
-- **Which file is fetched goes by the name asked for.** `cameras`
-  saves a video and a text, and `out={cameras.txt}` takes the text.
-- **`depth` refines once**, where its model comes refining three times.
-  Three took over twice the time on the server it was measured on (67 s
-  for 29 s, 65 frames of a take), for a depth a grey of 255 from this
-  one's, at the mean; `refine_steps=3` asks for it. A set of one frame
-  takes 6 s either way, so `set` is left as its model comes.
-- **A camera's path is found only with the model's weights as 32-bit
-  floats**, which `cameras` sets where it loads them
-  (`weight_dtype=fp32`): as it comes, or as `bf16`, the job fails on a
-  dtype. `pose=ray_pose` finds the path from the model's rays in place of
-  its camera decoder, three times as slowly.
+- **Which file is fetched goes by the name asked for.** `set` saves a
+  mesh and a text, and `out={lens.txt}` takes the text.
+- **There is one `depth`, of the frames read together.** There were three
+  ways to a depth, by two models: each frame alone by the model `set`
+  runs, each frame alone by the model `cameras` runs (`depth-whole`), and
+  the frames together by that one. Held beside each other on footage
+  ([the record](shots-measured.md), 12), read together it was the stillest
+  by three times and the quickest, 13 s for 81 frames where a frame at a
+  time took 37; a frame at a time by the same model was the least still
+  of the three. So `depth` is that reading, `depth-whole` is gone, and
+  `cameras` writes the path alone. A sky has a distance in it, the
+  farthest, where the depth it replaced had none; what is sky is a matte's
+  to say (`generate model=matte prompt="sky"`). Which way each pixel
+  faces, which the old `depth` gave with `output=normal_opengl`, no
+  workflow that comes with `kerf-comfy` gives now: nothing in Kerf read
+  it.
+- **A camera's path, and the depth of the same reading, are found only
+  with the model's weights as 32-bit floats**, which `cameras`,
+  `set-views` and `depth` set where they load them (`weight_dtype=fp32`):
+  as it comes, or as `bf16`, the job fails on a dtype. `pose=ray_pose`
+  finds the path from the model's rays in place of its camera decoder,
+  three times as slowly.
 - **The cameras are what ComfyUI prints of the model's answer**, there
   being no node that writes them: a text holding `'extrinsics': tensor(…)`,
   three rows of four numbers a frame, the way from the world to the camera
@@ -1116,6 +1134,102 @@ the take did.
 What they took, and how a take read back holds beside its guide, is in
 [shots-measured.md](shots-measured.md) (3 and 4).
 
+### A thing in footage, by its name
+
+Footage shows things the document has no clip for: the man who walks
+through it, a car, a shirt. A model that finds a thing by its name and
+follows it through the frames makes a matte of it: `matte`, which comes
+with `kerf-comfy`, writes the thing in white on black on every frame of its
+guide, which is the file `render` with `matte=<clip>` draws of a clip.
+
+```json
+{
+  "matte": { "run": ["/path/to/kerf-comfy", "--workflow", "matte", "{request}"] },
+  "into": { "run": ["/path/to/kerf-comfy", "--workflow", "shot-into", "{request}"] }
+}
+```
+
+```text
+generate model=matte guide=../footage/walk.mp4 prompt="man" out={man.mp4}
+```
+
+- **The prompt is what to find**, in a word or a few: `man`, `black pickup
+  truck`, `t-shirt`, `sky`. A comma parts things of more than one kind
+  (`car, bus`). Each is found where it comes into the picture, so a truck
+  that drives in a second after the first frame is in the matte from then,
+  and is followed until it leaves; where the picture shows nothing of the
+  kind the matte is black.
+- **`objects=<n>`** is how many things are followed at most, 4 as it comes.
+  `black pickup truck` with `objects=1` is that one truck on a road full of
+  cars; `car` with `objects=16` is every car there is room for.
+- **`matte-shown` says which is which.** It takes the same line and makes
+  the guide with each thing found in a color of its own and its number on
+  it, to look at first. `which=4` on the `matte` line then keeps that one,
+  and `which=0,2` two of them.
+- **Points say what words cannot.** `inside="0.55,0.80 0.45,0.82"` names a
+  thing by points on it in the guide's first frame, each across and down
+  the frame from 0 to 1, with `outside=` for points off it. The thing they
+  are on is followed, and that thing alone: with points the prompt is not
+  read. What is pointed at has to be in the first frame.
+- A line with neither words nor points has nothing to find, and the server
+  refuses it.
+- It is of its guide frame for frame, as every reader is: the guide's own
+  size, rate, and frames, up to 480 of them. 81 frames of 832x480 took
+  13 s, and 240 of 960x540, 47 s.
+
+What a matte is for, each a line or a clip:
+
+**A part made anew.** `shot-into` keeps its guide where `guide_mask` is
+black and makes it anew from the prompt where that is white
+([Signals](#signals)). A matte of footage is the mask of what to change in
+it, and nothing else of the picture changes:
+
+```text
+generate model=matte guide=../footage/walk.mp4 prompt="t-shirt" objects=1 out={shirt.mp4}
+generate model=into guide=../footage/walk.mp4 guide_mask={shirt.mp4} prompt="a man wearing a bright red hawaiian shirt with yellow flowers" grow=4
+```
+
+`grow=<pixels>` makes anew that much around the mask as well, 12 as it
+comes: little for what keeps its shape, a shirt, and more where what is put
+there is another shape than what was, an astronaut where a man walked.
+`feather=<pixels>` is how softly the two meet. Outside the mask the take is
+the footage's own pixels.
+
+**A thing taken out.** The same two lines, with a prompt that says what is
+behind the thing (`prompt="an empty dirt path below a dry hillside"`), the
+thing's own words under `negative=`, and `grow=` well past its edge. It
+asks more of a model than putting a thing in:
+[the record](shots-measured.md) (12) has what the small one on hand made
+of it.
+
+**Layers.** A matte is media, so the document cuts footage by it as it
+cuts by any matte: the footage on one track, the same footage over it shown
+through the matte (`key.trackmatte`), and the matte on a track that is
+turned off. What is put on a track between the two stands behind the
+thing, a title a man walks in front of:
+
+```text
+  track V1 video
+    clip back media=walk src=0f at=0f dur=81f
+  track V2 video
+    clip words gen=title@1 at=0f dur=81f
+      set text="WALK"
+  track V3 video
+    clip front media=walk src=0f at=0f dur=81f
+      fx key.trackmatte@1 matte=V4 composite=matte-luma
+  track V4 video enabled=false
+    clip cut media=man src=0f at=0f dur=81f
+```
+
+The matte's media is made by a recipe of one line (`generate model=matte
+guide=../footage/walk.mp4 prompt="man"`), so it is a take as any other is,
+and wants making again when its footage or its prompt changes.
+
+Kerf's own cut ([Passes](#passes), `matte=<clip>`) goes by colour and
+edges and needs nothing set up. It holds a thing that stands apart from
+what is behind it; a matte by a model holds a thing among others like it,
+and one the camera moves past.
+
 ## Signals
 
 A guide says where things are, and a prompt what they are. Neither says
@@ -1180,6 +1294,15 @@ holds it, its camera, and the set that hides it:
 render s2 {mask.mp4} matte=crate size=832x480 rate=16
 generate model=into prompt="a red shipping container on the street" guide=../footage/shot.mp4 guide_mask={mask.mp4}
 ```
+
+Where the mask is black the take is the guide's own pixels: what the model
+made is laid back over the guide through the mask, and nowhere else, so
+what was not asked for is not made again by a model that would only make
+it worse. `grow=<pixels>` makes anew that much around the mask as well, 12
+as it comes, and `feather=<pixels>` is how softly the two meet. The mask of
+a thing that is in the footage already, to make it another thing or take
+it out, is a matte a model finds
+([A thing in footage, by its name](#a-thing-in-footage-by-its-name)).
 
 And
 one reads a signal, `shot-timed`: a shot that follows its guide where the
@@ -1378,7 +1501,10 @@ render s2 {ids.mp4} pass=ids size=832x480 rate=16
   whole clip (`mask <clip> add object points=…`, or `set` over the cut
   before), one edit that undo takes back. It goes by colour and edges. An
   agent cuts the same with `look` (`track` with `inside`, `outside`, `box`
-  and `clip`), where it can also pick a trained model (`model`).
+  and `clip`). Where a model that finds a thing by its name is set up, the
+  mask of a thing in footage is a line and needs no clip:
+  `generate model=matte guide=<footage> prompt="<the thing>"`
+  ([A thing in footage, by its name](#a-thing-in-footage-by-its-name)).
 - **`pass=normals`**: which way each pixel faces, as a color, in the
   camera's own space: to the right as red, up as green, and toward the
   camera as blue, each from -1 to 1 as black to full, as a normal map has

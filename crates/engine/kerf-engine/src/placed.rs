@@ -199,7 +199,7 @@ impl Placing {
                 (0..=from).rev().collect(),
             ];
             for frames in ways {
-                let followed = kerf_track::follow_object(frames.len(), &hints, None, |index| {
+                let followed = kerf_track::follow_object(frames.len(), &hints, |index| {
                     Some((width, height, pictures[*frames.get(index)?].clone()))
                 });
                 for (frame, outline) in frames.into_iter().zip(followed.outlines) {

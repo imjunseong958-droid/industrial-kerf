@@ -1,7 +1,6 @@
 //! Following an object on synthetic sequences: a textured disk over a textured background.
 
 use super::*;
-use kerf_segment::ModelInfo;
 
 const W: usize = 200;
 const H: usize = 150;
@@ -42,7 +41,7 @@ fn inside_disk(frame: usize, x: f64, y: f64) -> bool {
 }
 
 /// Frame `frame`: the disk, its texture moving with it, over a still background. With `camouflaged`,
-/// the disk has the background's colours, so nothing but a model could tell them apart.
+/// the disk has the background's colours, so nothing in the picture tells them apart.
 fn scene(frame: usize, camouflaged: bool) -> (usize, usize, Vec<u8>) {
     let c = center(frame);
     let mut rgba = Vec::with_capacity(W * H * 4);
@@ -108,7 +107,7 @@ fn hints_on_the_disk() -> Hints {
 
 #[test]
 fn an_object_is_cut_out_from_one_point() {
-    let followed = follow_object(1, &hints_on_the_disk(), None, |n| Some(scene(n, false)));
+    let followed = follow_object(1, &hints_on_the_disk(), |n| Some(scene(n, false)));
     assert_eq!(followed.lost_at, None);
     let score = overlap(&followed.outlines[0], 0);
     assert!(score > 0.93, "{score}");
@@ -126,7 +125,7 @@ fn a_box_is_enough_and_nothing_leaves_it() {
         ]),
         ..Hints::default()
     };
-    let followed = follow_object(1, &hints, None, |n| Some(scene(n, false)));
+    let followed = follow_object(1, &hints, |n| Some(scene(n, false)));
     assert!(overlap(&followed.outlines[0], 0) > 0.9);
     let right = (c[0] + R + 6.0) / W as f64;
     assert!(followed.outlines[0].iter().all(|p| p[0] <= right + 0.01));
@@ -135,7 +134,7 @@ fn a_box_is_enough_and_nothing_leaves_it() {
 #[test]
 fn an_object_is_followed_with_corners_that_move_one_for_one() {
     let frames = 24;
-    let followed = follow_object(frames, &hints_on_the_disk(), None, |n| {
+    let followed = follow_object(frames, &hints_on_the_disk(), |n| {
         Some(scene(n, false))
     });
     assert_eq!(followed.lost_at, None, "{:?}", followed.areas);
@@ -158,116 +157,9 @@ fn an_object_is_followed_with_corners_that_move_one_for_one() {
     assert!(simplified_outlines(&followed.outlines, 0.0).len() <= frames);
 }
 
-/// Stands in for a trained model: it knows the disk's place, which colours cannot say, and counts
-/// being asked.
-struct Knowing {
-    frame: std::sync::atomic::AtomicUsize,
-}
-
-const STAND_IN: ModelInfo = ModelInfo {
-    id: "stand-in",
-    task: kerf_segment::Task::Mask,
-    name: "Stand-in",
-    description: "",
-    authors: "",
-    licence: "MIT",
-    licence_url: "",
-    homepage: "",
-    url: "",
-    file_name: "",
-    size: 0,
-    sha256: "",
-};
-
-impl MaskModel for Knowing {
-    fn info(&self) -> &'static ModelInfo {
-        &STAND_IN
-    }
-
-    fn segment(
-        &self,
-        _: &[[f32; 3]],
-        w: usize,
-        h: usize,
-        prompt: &Prompt,
-    ) -> kerf_segment::Result<Vec<f32>> {
-        assert!(prompt.points.iter().any(|(_, on)| *on), "{prompt:?}");
-        let frame = self
-            .frame
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        Ok((0..w * h)
-            .map(|i| {
-                let on = inside_disk(frame, (i % w) as f64 + 0.5, (i / w) as f64 + 0.5);
-                f32::from(u8::from(on))
-            })
-            .collect())
-    }
-}
-
-#[test]
-fn a_model_plugged_in_finds_what_colour_alone_cannot() {
-    let c = center(0);
-    let hints = Hints {
-        inside: vec![[c[0] / W as f64, c[1] / H as f64]],
-        outside: vec![[0.95, 0.95]],
-        ..Hints::default()
-    };
-    // Without it, the disk cannot be told from what is around it.
-    let alone = follow_object(1, &hints, None, |n| Some(scene(n, true)));
-    let without = alone
-        .outlines
-        .first()
-        .map_or(0.0, |outline| overlap(outline, 0));
-    let model = Knowing {
-        frame: std::sync::atomic::AtomicUsize::new(0),
-    };
-    let with = follow_object(4, &hints, Some(&model), |n| Some(scene(n, true)));
-    assert_eq!(with.lost_at, None, "{:?}", with.areas);
-    let found = overlap(&with.outlines[3], 3);
-    eprintln!("camouflaged: {without:.3} alone, {found:.3} with a model");
-    assert!(found > 0.9, "{found}");
-    assert!(without < 0.8, "{without}");
-    assert_eq!(model.frame.load(std::sync::atomic::Ordering::Relaxed), 4);
-}
-
-#[test]
-fn a_model_that_disagrees_with_the_flow_is_left_out() {
-    struct Wrong;
-    impl MaskModel for Wrong {
-        fn info(&self) -> &'static ModelInfo {
-            &STAND_IN
-        }
-        fn segment(
-            &self,
-            _: &[[f32; 3]],
-            w: usize,
-            h: usize,
-            prompt: &Prompt,
-        ) -> kerf_segment::Result<Vec<f32>> {
-            // Right when first asked, and then the wrong end of the picture.
-            Ok((0..w * h)
-                .map(|i| {
-                    let (x, y) = ((i % w) as f64 + 0.5, (i / w) as f64 + 0.5);
-                    let on = if prompt.mask.is_none() {
-                        inside_disk(0, x, y)
-                    } else {
-                        x > 170.0 && y > 120.0
-                    };
-                    f32::from(u8::from(on))
-                })
-                .collect())
-        }
-    }
-    let followed = follow_object(6, &hints_on_the_disk(), Some(&Wrong), |n| {
-        Some(scene(n, false))
-    });
-    assert_eq!(followed.lost_at, None, "{:?}", followed.areas);
-    assert!(overlap(&followed.outlines[5], 5) > 0.9);
-}
-
 #[test]
 fn a_frame_that_loses_the_object_stops_it() {
-    let followed = follow_object(6, &hints_on_the_disk(), None, |n| {
+    let followed = follow_object(6, &hints_on_the_disk(), |n| {
         if n < 3 {
             Some(scene(n, false))
         } else {
@@ -281,7 +173,7 @@ fn a_frame_that_loses_the_object_stops_it() {
 
 #[test]
 fn nothing_to_go_on_finds_nothing() {
-    let followed = follow_object(3, &Hints::default(), None, |n| Some(scene(n, false)));
+    let followed = follow_object(3, &Hints::default(), |n| Some(scene(n, false)));
     assert_eq!(followed.lost_at, Some(0));
     assert!(followed.outlines.is_empty());
 }
@@ -411,7 +303,7 @@ fn an_edge_softer_on_one_side_is_measured_and_beats_one_feather() {
             1.0 / (1.0 + ((dx.hypot(dy) - R) * 4.4 / wide).exp())
         }
     };
-    let followed = follow_object(frames, &hints_on_the_disk(), None, |n| {
+    let followed = follow_object(frames, &hints_on_the_disk(), |n| {
         Some(soft_scene(size, alpha_at(n)))
     });
     assert_eq!(followed.lost_at, None, "{:?}", followed.areas);
@@ -464,7 +356,7 @@ fn motion_blur_is_measured_the_way_the_subject_moves_and_beats_one_feather() {
         inside: vec![[start[0] / size.0 as f64, start[1] / size.1 as f64]],
         ..Hints::default()
     };
-    let followed = follow_object(frames, &hints, None, |n| {
+    let followed = follow_object(frames, &hints, |n| {
         Some(soft_scene(size, alpha_at(n)))
     });
     assert_eq!(followed.lost_at, None, "{:?}", followed.areas);
@@ -507,7 +399,7 @@ fn motion_blur_is_measured_the_way_the_subject_moves_and_beats_one_feather() {
 #[test]
 fn a_hard_edge_stays_hard() {
     let frames = 6;
-    let followed = follow_object(frames, &hints_on_the_disk(), None, |n| {
+    let followed = follow_object(frames, &hints_on_the_disk(), |n| {
         Some(scene(n, false))
     });
     let widest = followed
@@ -696,7 +588,7 @@ fn fast_overlap(
         inside: vec![[start[0] / w, start[1] / h]],
         ..Hints::default()
     };
-    let followed = follow_object(frames, &hints, None, |frame| {
+    let followed = follow_object(frames, &hints, |frame| {
         Some(fast_scene(size, radius, speed, frame, alike))
     });
     let (mut sum, mut worst) = (0.0, 1.0f64);
@@ -750,7 +642,7 @@ fn its_corners_go_with_a_fast_subject_one_for_one() {
         inside: vec![[start[0] / 640.0, start[1] / 360.0]],
         ..Hints::default()
     };
-    let followed = follow_object(6, &hints, None, |frame| {
+    let followed = follow_object(6, &hints, |frame| {
         Some(fast_scene(size, 60.0, speed, frame, false))
     });
     assert_eq!(followed.outlines.len(), 6);
@@ -975,7 +867,7 @@ impl Hard {
             ..Hints::default()
         };
         let traced = || {
-            trace(frames, &hints, None, |frame| {
+            trace(frames, &hints, |frame| {
                 Some((size.0, size.1, self.scene(size, frame).0))
             })
         };
@@ -1033,7 +925,7 @@ impl Hard {
             inside: vec![[start[0] / w, start[1] / h]],
             ..Hints::default()
         };
-        let followed = follow_object(frames, &hints, None, |frame| {
+        let followed = follow_object(frames, &hints, |frame| {
             Some((size.0, size.1, self.scene(size, frame).0))
         });
         let (mut sum, mut worst) = (0.0, 1.0f64);
@@ -1383,7 +1275,7 @@ fn what_has_no_long_shutter_stays_as_it_was() {
             inside: vec![[start[0] / w, start[1] / h]],
             ..Hints::default()
         };
-        let traced = trace(8, &hints, None, |frame| {
+        let traced = trace(8, &hints, |frame| {
             Some((size.0, size.1, shape.scene(size, frame).0))
         });
         assert_eq!(
@@ -1410,7 +1302,7 @@ fn a_subject_out_of_focus_and_moving_has_no_shutter() {
         inside: vec![[start[0] / size.0 as f64, start[1] / size.1 as f64]],
         ..Hints::default()
     };
-    let traced = trace(frames, &hints, None, |n| {
+    let traced = trace(frames, &hints, |n| {
         Some(soft_scene(size, alpha_at(n)))
     });
     assert_eq!(traced.followed.lost_at, None);
@@ -1573,7 +1465,7 @@ fn a_step(
         ..Hints::default()
     };
     let first = picture(0);
-    let (matte, fg, bg) = first_matte(&first, &hints, None).expect("a matte");
+    let (matte, fg, bg) = first_matte(&first, &hints).expect("a matte");
     (first, picture(1), matte, fg, bg)
 }
 
@@ -1601,8 +1493,8 @@ fn a_slow_subject_is_cut_as_it_was_with_or_without_the_search() {
         for by_band in [0.25, 0.5, 1.0] {
             let (first, next, matte, fg, bg) = a_step((640, 360), 60.0, 16.0 * by_band, alike);
             let colors = (&fg, &bg);
-            let without = next_matte(&first, &matte, &next, colors, None, false);
-            let with = next_matte(&first, &matte, &next, colors, None, true);
+            let without = next_matte(&first, &matte, &next, colors, false);
+            let with = next_matte(&first, &matte, &next, colors, true);
             assert_eq!(without.1, [0, 0], "{by_band} bands, {alike}");
             assert_eq!(without, with, "{by_band} bands, {alike}");
         }
@@ -1739,7 +1631,7 @@ fn real_footage_roto_under_a_shutter() {
         Some((w, h, f.iter().flat_map(|p| [p[0], p[1], p[2], 1.0].map(|v| (v * 255.0).round() as u8)).collect()))
     };
     let begun = std::time::Instant::now();
-    let traced = trace(n, &hints, None, rgba);
+    let traced = trace(n, &hints, rgba);
     let took = begun.elapsed().as_secs_f64() / n as f64;
     let why = shutter::fit_or_why(&traced.raw, &traced.across, traced.shortest_blur());
     let found = why.as_ref().ok().copied();
@@ -1770,7 +1662,7 @@ fn real_footage_roto_under_a_shutter() {
     let plain = of(&traced.by_the_measure());
     let with = found
         .or(let_in.as_ref().ok().copied())
-        .map(|shutter| (shutter.open, of(&trace(n, &hints, None, rgba).under_a_shutter(shutter))));
+        .map(|shutter| (shutter.open, of(&trace(n, &hints, rgba).under_a_shutter(shutter))));
     println!(
         "roto on a real shutter, {w}x{h}, from frame {first}: the box's front goes {speed:.1} px a frame, its blur says the shutter was open {open:.2} of a frame ({} edges); \
          {took:.3} s a frame; by the measure overlap {:.3}, worst {:.3}, area {:.2} of the truth's over {} frames; shutter found {:?}; let in, open and drawn {:?}",
@@ -1839,7 +1731,7 @@ fn corners_cut((w, h): (usize, usize), frames: usize, step: [f64; 2], turn: f64)
         inside: vec![[(left(0)[0] + size[0] / 2.0) / w as f64, (left(0)[1] + size[1] / 2.0) / h as f64]],
         ..Hints::default()
     };
-    let followed = follow_object(frames, &hints, None, |n| Some(box_scene((w, h), left(n), size, turn)));
+    let followed = follow_object(frames, &hints, |n| Some(box_scene((w, h), left(n), size, turn)));
     assert_eq!(followed.lost_at, None);
     assert_eq!(followed.outlines.len(), frames);
     let mut worst = 0.0f64;
@@ -2000,7 +1892,7 @@ fn a_frame_is_cut_as_it_was_before_less_of_it_was_worked_out() {
         };
         let (w, h) = size;
         let mut previous = picture(0);
-        let (mut matte, fg, bg) = first_matte(&previous, &hints, None).unwrap();
+        let (mut matte, fg, bg) = first_matte(&previous, &hints).unwrap();
         for frame in 1..6 {
             let next = picture(frame);
             let flow = block_flow(&next.image, &previous.image, 8, 4);
@@ -2032,7 +1924,7 @@ fn a_frame_is_cut_as_it_was_before_less_of_it_was_worked_out() {
             clean(&mut boxed, &seeds, &vec![false; w * h], w, h);
             clean_all(&mut every, &seeds, &vec![false; w * h], w, h);
             assert_eq!(boxed, every, "the cleaning at {speed} px a frame, frame {frame}");
-            let (labels, _) = next_matte(&previous, &matte, &next, (&fg, &bg), None, false);
+            let (labels, _) = next_matte(&previous, &matte, &next, (&fg, &bg), false);
             if moved_by(&previous, &matte, &next) == [0, 0] {
                 assert_eq!(labels, every, "the matte at {speed} px a frame, frame {frame}");
             }
@@ -2066,11 +1958,11 @@ fn measure_a_frame() {
         ..Hints::default()
     };
     let started = std::time::Instant::now();
-    let one = follow_object(1, &hints, None, |n| Some(scene(n)));
+    let one = follow_object(1, &hints, |n| Some(scene(n)));
     let first = started.elapsed().as_secs_f64() * 1000.0;
     assert_eq!(one.lost_at, None);
     let started = std::time::Instant::now();
-    let followed = follow_object(frames, &hints, None, |n| Some(scene(n)));
+    let followed = follow_object(frames, &hints, |n| Some(scene(n)));
     let all = started.elapsed().as_secs_f64() * 1000.0;
     assert_eq!(followed.lost_at, None);
     eprintln!(
@@ -2087,7 +1979,7 @@ fn measure_a_frame() {
         Picture::of(w, h, &rgba)
     };
     let (previous, next) = (picture(0), picture(1));
-    let (matte, fg, bg) = first_matte(&previous, &hints, None).unwrap();
+    let (matte, fg, bg) = first_matte(&previous, &hints).unwrap();
     let time = |name: &str, run: &mut dyn FnMut()| {
         let started = std::time::Instant::now();
         for _ in 0..5 {
@@ -2139,9 +2031,9 @@ fn measure_a_frame() {
         std::hint::black_box(labels);
     });
     time("the whole next matte", &mut || {
-        std::hint::black_box(next_matte(&previous, &matte, &next, (&fg, &bg), None, false));
+        std::hint::black_box(next_matte(&previous, &matte, &next, (&fg, &bg), false));
     });
-    let (cut, _) = next_matte(&previous, &matte, &next, (&fg, &bg), None, false);
+    let (cut, _) = next_matte(&previous, &matte, &next, (&fg, &bg), false);
     let edge = edge_of(&cut, w, h);
     time("edge", &mut || {
         std::hint::black_box(edge_of(&cut, w, h));

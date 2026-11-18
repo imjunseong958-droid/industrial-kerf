@@ -22,7 +22,6 @@ members = [
     # motion
     "crates/motion/kerf-motion",
     # vfx
-    "crates/vfx/kerf-segment",
     "crates/vfx/kerf-track",
     # image
     "crates/image/kerf-image",
