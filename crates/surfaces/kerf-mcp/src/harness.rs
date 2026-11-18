@@ -70,6 +70,7 @@ frames of the sequence; with `transcript` and no media, what the sequence \
 says. `sequence` picks one other than the first. \
 With `file`, the `media add` line for a file in the project's folder, or for each file of a folder of it with a `script` of them all, and with no arguments `unplaced` lists those not yet in the document, and `toMake` the media whose steps, the lines under it that say how Kerf or a model makes it, have yet to be run, or read something that has changed since its take was made, which it names: make it with `make`. With `media`, a media its steps make lists its `takes`, each making kept, with the line (`use`) that in an edit has the media be that take; a `toMake` entry's `cannot` is what would refuse its making, to mend before `make`, and its `notes` what its model has said it does not take, and what `stands` finds floating, sunk, or going through another in the sequence a `render` step of it draws, on the first, middle, and last frame it draws; an edit that writes steps answers with `toMake` too; with no arguments, `cast` and `styles` list who and what the project's shots show and how they look, each by the name a `generate` line gives as `cast=` or `style=` and with the words and pictures a model is then handed, `brand` the project's colors, fonts, tone, and the words it says and avoids, which a title and a caption keep to, and `models` lists the models a `generate` step can name, each with what its owner says it takes: the picture it makes (`size`), its `rate`, the most `seconds` of one shot, the files it `reads` (of `guide`, `first`, `last`, `ref`), the other names a step can set with what they are when it does not (`more`), and, for one that follows a guide, `guide`, the `render` step that draws a guide at its size and rate. Write that step and a sequence of the model's shape, no longer than its `seconds`. A model with a name alone has not said, and none listed means none is set up: both are the person's to set, in their own models file. \
 With `cuts`, how each cut of the sequence's sound sits in the sound, by its media's own levels: in a pause, or through a word or a sound, and the pauses and repeated words the sequence still plays; look after cutting speech, and trim with `snap=pause` what it finds. \
+With `eye`, where the eye is either side of each cut of the sequence's picture, between two shots whose guides the document has: where the subject of the shot that ends is on the frame and where the next one's is, how far that jumps, how much larger or smaller it is, and whether it turns back, read from the guides before anything is made and from the takes once they are. Read it of a shot with another before or after it. \
 With `cost` and `at`, who draws each frame, what sends it to the CPU, and what it costs. \
 With `mesh`, what a mesh clip's glTF file holds, its animations and cameras, and a camera of it, or one a model found and wrote to a file, as a camera clip's keyframes. \
 With `follows`, how a take's depth read back holds beside the guide a sequence draws, clip by clip; with `placed`, where the take has one clip's subject, which `follows` does not say; with `held`, both at once and one number for the take. \
@@ -310,10 +311,11 @@ pub(super) fn metadata(name: &str) -> Option<(&'static str, Value, ToolAnnotatio
                     "facts": {"type": "boolean", "description": "With `media`: its fact sheet beside its index, the first time slowly: what the camera does in each shot (`camera`, such as `pan right` or `handheld`; `pan`, `tilt`, and `zoom` in shares of the frame a second, `roll` in degrees a second, and `agreeing`, how much of the picture follows that), how loud it is (`loudness`, in LUFS and dBTP), and in `notMeasured` what it does not say and why: faces, the subject, and on-screen text."},
                     "loudness": {"type": "boolean", "description": "How loud the sequence is as it plays, by R128, measured from its whole mix: `integrated` in LUFS beside the `target`, `range` in LU, `truePeak` in dBTP beside its `limit`, and the loudest three seconds (`shortTermMax`) and 400 ms (`momentaryMax`) with where each ends. A silent sequence has `integrated: null`. Measured once for a revision; a media's own loudness is in its `facts`. Use with `sequence` or `proposal` only."},
                     "cuts": {"type": "boolean", "description": "How the cuts of the sequence's sound sit in the sound, measured from each media's own levels a hundredth of a second at a time and from its transcripts, so an edit is checked without listening: `summary` counts every cut as `quiet` (in a pause), `low` (through a breath or a decay), or `sound` (through sound at the level of speech), with `inWords` (inside a word a transcript heard), `tight` (quiet, but within 0.05 s of the sound the clip plays), `faded` (under a transition, not judged), `notMeasured`, and `air`, the `least` and `median` quiet a cut leaves beside what its clip plays, in seconds. `cuts` lists each that is not clean: its `clip` and which `end`, `at` on the sequence and `source` on the `media`, the level `before` and `after` it in dBFS, and the `word`. `media` gives the level each media speaks at and pauses under. With a transcript of what plays, `pauses` are the waits of 0.75 s or more still played between words, longest first, and `repeats` the words and phrases said twice in a row, with `cutTo` where a cut sits in one. A trim or split with `snap=pause` moves a cut into the nearest pause. Use with `sequence` or `proposal` only."},
+                    "eye": {"type": ["boolean", "object"], "description": "Where the eye is either side of each cut of the sequence's picture, a cut being where one clip of a video track ends on the frame the next starts: `true`, or an object with `subjects`. Under `eye`, `summary` counts the `cuts`, those `read`, of them `held` (the subject jumps less than 0.1 of the frame's height, about what an eye sees sharply without moving) and `jumps`, `reversed`, `takes` (read in the takes too), and `notMeasured`; `cuts` lists each as it plays: `at`, the frame the second clip starts on, and the clips `from` and `to`. A cut is read where both clips play a shot whose steps draw its guide (`render <sequence> …`). `on` is what the eye is on in each: the clip of the guide's sequence its `generate` step names with `moves=`, the first of them, or the one `subjects` gives for that media, as {\"subjects\": {\"<media>\": \"<clip of its guide>\"}}. `guide` is read from the two guides' ids passes, as `shows` reads a clip, with nothing made: `out` and `in`, the subject's box on the last frame before the cut and on the first after it, [left, top, right, bottom] in shares of the program's frame, the clip being where the program has it, trimmed, retimed, scaled, turned, moved, cropped, or parented, and a guide of another rate, size, or shape than its take read at the moment and the place the take has of it; `jump`, how far the middle of the second is from the middle of the first, in frame heights; `across` and `down`, the same with their direction, above 0 to the right, and lower; `size`, how large the second is beside the first, above 1 larger; `going`, which way each goes across the frame over a quarter of a second before the cut and after it, `left`, `right`, or `still` (under 0.1 of a frame height a second), absent where a clip is a frame long or its guide does not show the subject that far off; and `reversed: true` where one goes left and the other right. `take` is the same boxes and numbers where both shots have a file: the subject found in the take's own picture on the frame at the cut, where the guide has it with room around it, as `placed` finds it, and in the guide's own picture the same way, the take's box being the guide's moved by how far apart those are. Where `guide` jumps and that is not meant, change a guide, which costs no making; where `guide` holds and `take` does not, the model did not keep its guide: make it again, or choose another take. `notMeasured` says why a cut was not read, in place of both readings: footage with no guide, a shot whose subject nothing names, a clip in depth, a mask, an effect that may move its picture (a grade, a blur, and grain are read through), a crop that cuts the subject, a subject its guide does not show there; under `take`, why the takes were not. `transition` names the transition across a cut, which is not read: the boxes are the two clips' at the cut. `under` lists the clips of tracks above that draw there and may hide it. A cut costs four small frames of its guides, about a tenth of a second, and half a second where the takes are read, so it is asked for and no part of a check; `from` and `to` choose the cuts of a range, and at most 64 are read (`unread`, how many more there are). What is said is what is so, not that it is wrong, and fails no check: a hard cut jumps on purpose. Use with `sequence`, `proposal`, `from`, or `to` only.", "properties": {"subjects": {"type": "object", "additionalProperties": {"type": "string"}}}, "additionalProperties": false},
                     "contrast": {"type": "boolean", "description": "Read each title and caption of the sequence over `from`–`to` (all of it by default) against what is behind it, from rendered frames, and return `contrast`, findings for those too faint to read or that do not show, with `read` and `of`, how many of them it read. Slower than a check, so it is not part of one; the editor's full QC has it as a row."},
                     "scopes": {"type": "boolean", "description": "With `at`: instead of frames, what scopes read at those program positions, as numbers, in each of `readings` under `scopes`: `luma`, `red`, `green`, and `blue` (`min`, `mean`, `max`, in percent); `clipped` (the share of samples at `black` and at `white`, each as [red, green, blue]); `zones` (the share of samples in `shadows`, under 25% luma, `midtones`, and `highlights`, over 75%); `histogram` (the share in each of 16 even bands of luma, darkest first); `chroma` (`castHueDeg` and `castMagnitude`, the mean color as an angle on the vectorscope and how far out in percent, a cast when it is far from 0; `saturation`, the mean of how far out each sample is; `onSkinLine`, the share of colored samples near the skin tone line); `peaks` (the densest colors, each `hueDeg`, `magnitude`, `share`). Angles are a vectorscope's, from +Cb: magenta 50, red 103, skin 123, yellow 175, green 230, cyan 283, blue 355. Grade by these: compare shots with each other and the result with where it should land; with `proposal`, each reading also has `before`, what the project reads there, so one call compares the two. Read from 8-bit frames, or in an HDR sequence from its PQ or HLG signal in BT.2020, with `hdr` saying what that comes to: `peakNits`, `meanNits`, `overWhite` and `outsideBt709` as shares of the samples, and `referenceWhite`, where SDR white falls on the signal in percent."},
                     "sheet": {"type": "integer", "minimum": 2, "maximum": MAX_SHEET_FRAMES, "description": "A contact sheet of this many frames spread evenly over `from`–`to` (all of it by default) as one image, four to a row, each with its time in its corner (`frames` lists them in order): of `media`, or else of the sequence. Scan with a sheet, then look `at` the moments that matter."},
-                    "from": {"type": "string", "description": format!("The start of the range for `transcript`, `sheet`, or a media's onsets. Positions of `media`, or else of the sequence. {time} {anchors}")},
+                    "from": {"type": "string", "description": format!("The start of the range for `transcript`, `sheet`, `contrast`, `eye`, or a media's onsets. Positions of `media`, or else of the sequence. {time} {anchors}")},
                     "to": {"type": "string", "description": "The end of that range."},
                     "width": {"type": "integer", "minimum": 64, "maximum": 1920, "description": "Frame width in pixels (default 960; 320 for each frame of a sheet)."},
                     "sequence": {"type": "string", "description": sequence},
@@ -438,6 +440,9 @@ struct LookInput {
     loudness: bool,
     #[serde(default)]
     cuts: bool,
+    /// `true`, or what the eye is on in a shot whose steps do not say: where it is either
+    /// side of each cut.
+    eye: Option<Value>,
     track: Option<TrackInput>,
     #[serde(default)]
     sync: Vec<String>,
@@ -468,6 +473,33 @@ struct LookInput {
     workflow: Option<StepInput>,
     /// A media a recipe makes, to hold each of its takes to its guide.
     takes: Option<String>,
+}
+
+/// What `eye` is given: nothing where it is not asked for, and else what the eye is on in
+/// each shot it names, a clip of the shot's guide by the shot's media.
+fn eye_subjects(given: Option<&Value>) -> Result<Option<BTreeMap<String, String>>, McpError> {
+    let wrong = || {
+        McpError::new(
+            "INVALID_ARGUMENTS",
+            "`eye` is `true`, or names what the eye is on in a shot whose steps do not, as {\"subjects\": {\"<media>\": \"<clip of its guide>\"}}",
+        )
+    };
+    match given {
+        None | Some(Value::Bool(false)) => Ok(None),
+        Some(Value::Bool(true)) => Ok(Some(BTreeMap::new())),
+        Some(Value::Object(with)) => {
+            if with.keys().any(|name| name != "subjects") {
+                return Err(wrong());
+            }
+            match with.get("subjects") {
+                None => Ok(Some(BTreeMap::new())),
+                Some(subjects) => serde_json::from_value(subjects.clone())
+                    .map(Some)
+                    .map_err(|_| wrong()),
+            }
+        }
+        Some(_) => Err(wrong()),
+    }
 }
 
 /// One `generate` step: the media whose recipe it is in, and its line.
@@ -2237,8 +2269,58 @@ impl KerfMcpRouter {
         Ok(crate::stands::said(&standing))
     }
 
+    /// Where the eye is either side of each cut of the sequence's picture: `subjects` says
+    /// what it is on in a shot, by the shot's media, where its steps do not.
+    fn cuts_seen(
+        &self,
+        project: &Project,
+        revision: u64,
+        input: &LookInput,
+        subjects: &BTreeMap<String, String>,
+    ) -> Result<Value, McpError> {
+        let sequence = program(project, input.sequence.as_deref())?;
+        if let Some(media) = subjects.keys().find(|media| project.media(media).is_none()) {
+            return Err(McpError::new(
+                "INVALID_ARGUMENTS",
+                format!(
+                    "`subjects` names the media `{media}`, which the project does not have: each is a shot's media, with the clip of its guide the eye is on{}",
+                    self.in_pending(media, "proposal")
+                ),
+            ));
+        }
+        let range = if input.from.is_some() || input.to.is_some() {
+            let at = |text: &Option<String>, otherwise: Time| match text {
+                Some(text) => program_position(project, sequence, text),
+                None => Ok(otherwise),
+            };
+            Some((at(&input.from, Time::ZERO)?, at(&input.to, sequence.duration())?))
+        } else {
+            None
+        };
+        let mut resolved = project.clone();
+        kerf_runtime::resolve_media_paths(&mut resolved, &self.dir);
+        let seen = kerf_engine::eye::eye(
+            &resolved,
+            Some(sequence.id.as_str()),
+            range,
+            subjects,
+            &mut kerf_engine::eye::file_picture,
+        )
+        .map_err(|error| McpError::new("RENDER_FAILED", error.to_string()))?;
+        Ok(json!({
+            "sequence": sequence.id.to_string(),
+            "revision": revision,
+            "eye": crate::eye::said(&seen, &Clock::of_sequence(sequence)),
+        }))
+    }
+
     pub(super) fn look(&self, arguments: Value) -> Result<Value, McpError> {
         let preset_only = arguments.as_object().is_some_and(|o| o.len() == 1);
+        let beside_eye = arguments.as_object().is_some_and(|given| {
+            given
+                .keys()
+                .all(|name| matches!(name.as_str(), "eye" | "sequence" | "proposal" | "from" | "to"))
+        });
         let only_area_beside = arguments.as_object().is_some_and(|o| o.len() == 2);
         let input: LookInput = input(arguments)?;
         let area = match input.area.as_deref() {
@@ -2330,6 +2412,16 @@ impl KerfMcpRouter {
                 "INVALID_ARGUMENTS",
                 "`sequence` chooses program frames or what a sequence says; not with `media`",
             ));
+        }
+        if let Some(subjects) = eye_subjects(input.eye.as_ref())? {
+            if !beside_eye {
+                return Err(McpError::new(
+                    "INVALID_ARGUMENTS",
+                    "`eye` is of the cuts of a sequence's picture, and is used alone, or with `sequence`, `proposal`, `from`, or `to`",
+                ));
+            }
+            let (revision, project) = self.project_at(input.proposal.as_deref())?;
+            return self.cuts_seen(&project, revision, &input, &subjects);
         }
         if input.cost {
             if input.media.is_some() {
@@ -2475,7 +2567,7 @@ impl KerfMcpRouter {
         if !ranged && (input.from.is_some() || input.to.is_some()) {
             return Err(McpError::new(
                 "INVALID_ARGUMENTS",
-                "from and to choose a range for `transcript`, `sheet`, `contrast`, or a media's onsets",
+                "from and to choose a range for `transcript`, `sheet`, `contrast`, `eye`, or a media's onsets",
             ));
         }
         if let Some(count) = input.sheet {

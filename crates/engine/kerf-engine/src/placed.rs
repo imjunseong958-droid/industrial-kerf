@@ -74,7 +74,64 @@ pub struct Placed {
 }
 
 /// A box in pixels, left, top, right, bottom, the last two past its last pixel.
-type Box = [f64; 4];
+pub(crate) type Box = [f64; 4];
+
+/// The box around the pixels of `ids`, an ids pass's frame `width` wide, that are of the
+/// clip `color` is the color of, and how many they are: none where it shows nowhere.
+pub(crate) fn box_of(ids: &[u8], width: usize, color: [u8; 3]) -> Option<(Box, usize)> {
+    let (mut left, mut top, mut right, mut bottom) = (usize::MAX, usize::MAX, 0, 0);
+    let mut pixels = 0;
+    for (index, pixel) in ids.as_chunks::<4>().0.iter().enumerate() {
+        if color
+            .iter()
+            .zip(pixel)
+            .all(|(own, drawn)| own.abs_diff(*drawn) <= NEAR)
+        {
+            let (x, y) = (index % width, index / width);
+            (left, top) = (left.min(x), top.min(y));
+            (right, bottom) = (right.max(x + 1), bottom.max(y + 1));
+            pixels += 1;
+        }
+    }
+    (pixels > 0).then_some((
+        [left as f64, top as f64, right as f64, bottom as f64],
+        pixels,
+    ))
+}
+
+/// Where a subject is looked for in a picture `wide` by `tall`, the guide having it in
+/// `seed`: on the box's middle, within the box and [`ROOM`] around it.
+pub(crate) fn looked_for(seed: &Box, (wide, tall): (f64, f64)) -> kerf_track::Hints {
+    let (across, down) = ((seed[2] - seed[0]) * ROOM, (seed[3] - seed[1]) * ROOM);
+    kerf_track::Hints {
+        inside: vec![[
+            (seed[0] + seed[2]) / 2.0 / wide,
+            (seed[1] + seed[3]) / 2.0 / tall,
+        ]],
+        outside: Vec::new(),
+        bbox: Some([
+            ((seed[0] - across) / wide).max(0.0),
+            ((seed[1] - down) / tall).max(0.0),
+            ((seed[2] + across) / wide).min(1.0),
+            ((seed[3] + down) / tall).min(1.0),
+        ]),
+    }
+}
+
+/// The box around `outline`, corners in shares of a picture `wide` by `tall`: none where
+/// it goes round nothing.
+pub(crate) fn around(outline: &[[f64; 2]], (wide, tall): (f64, f64)) -> Option<Box> {
+    let mut around = [f64::MAX, f64::MAX, f64::MIN, f64::MIN];
+    for [x, y] in outline {
+        around = [
+            around[0].min(x * wide),
+            around[1].min(y * tall),
+            around[2].max(x * wide),
+            around[3].max(y * tall),
+        ];
+    }
+    (around[2] > around[0] && around[3] > around[1]).then_some(around)
+}
 
 /// A clip's subject being looked for in a take, frame by frame.
 pub struct Placing {
@@ -141,26 +198,8 @@ impl Placing {
         if take.len() != ids.rgba.len() || self.take.len() >= MOST_FRAMES {
             return;
         }
-        let (width, height) = (ids.width as usize, ids.height as usize);
-        let (mut left, mut top, mut right, mut bottom) = (width, height, 0, 0);
-        let mut pixels = 0;
-        for (index, pixel) in ids.rgba.as_chunks::<4>().0.iter().enumerate() {
-            if self
-                .color
-                .iter()
-                .zip(pixel)
-                .all(|(own, drawn)| own.abs_diff(*drawn) <= NEAR)
-            {
-                let (x, y) = (index % width, index / width);
-                (left, top) = (left.min(x), top.min(y));
-                (right, bottom) = (right.max(x + 1), bottom.max(y + 1));
-                pixels += 1;
-            }
-        }
-        self.guide.push((pixels > 0).then_some((
-            [left as f64, top as f64, right as f64, bottom as f64],
-            pixels,
-        )));
+        self.guide
+            .push(box_of(&ids.rgba, ids.width as usize, self.color));
         self.drawn.push(self.picture.frame(at, self.scale).rgba);
         self.take.push(take.to_vec());
     }
@@ -176,20 +215,7 @@ impl Placing {
             .filter_map(|(frame, shown)| Some((frame, (*shown)?)))
             .max_by_key(|(_, (_, pixels))| *pixels)?;
         let (wide, tall) = (width as f64, height as f64);
-        let (across, down) = ((seed[2] - seed[0]) * ROOM, (seed[3] - seed[1]) * ROOM);
-        let hints = kerf_track::Hints {
-            inside: vec![[
-                (seed[0] + seed[2]) / 2.0 / wide,
-                (seed[1] + seed[3]) / 2.0 / tall,
-            ]],
-            outside: Vec::new(),
-            bbox: Some([
-                ((seed[0] - across) / wide).max(0.0),
-                ((seed[1] - down) / tall).max(0.0),
-                ((seed[2] + across) / wide).min(1.0),
-                ((seed[3] + down) / tall).min(1.0),
-            ]),
-        };
+        let hints = looked_for(&seed, (wide, tall));
         // From the frame it is largest on to the last, and from it back to the first, in one
         // picture and then the other.
         let follow = |pictures: &[Vec<u8>]| {
@@ -203,16 +229,7 @@ impl Placing {
                     Some((width, height, pictures[*frames.get(index)?].clone()))
                 });
                 for (frame, outline) in frames.into_iter().zip(followed.outlines) {
-                    let mut around = [f64::MAX, f64::MAX, f64::MIN, f64::MIN];
-                    for [x, y] in &outline {
-                        around = [
-                            around[0].min(x * wide),
-                            around[1].min(y * tall),
-                            around[2].max(x * wide),
-                            around[3].max(y * tall),
-                        ];
-                    }
-                    if around[2] > around[0] && around[3] > around[1] {
+                    if let Some(around) = around(&outline, (wide, tall)) {
                         found[frame] = Some(around);
                     }
                 }

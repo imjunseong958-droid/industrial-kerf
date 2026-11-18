@@ -365,6 +365,12 @@ the agent's to judge: nothing is written for it first.
   `look` with a proposal lists what that proposal would have made. A making is
   of the project: of a media a waiting proposal adds, `make` says which
   proposal, and that it comes first.
+- A shot that plays beside another is read against it: `look` with `eye`
+  says where each shot's subject is on the program's frame either side of
+  their cut, how far that jumps, and whether it turns back, by the two
+  guides before a making and by the takes after it
+  ([architecture.md](architecture.md), Edit). A shot is made by itself, and
+  this is what holds it to the one before.
 - `make` makes a media, right after the edit that wrote its steps, and
   answers with the plan a person would see. Where the person lets an agent
   make on its own, the making runs in the agent's session, as a job it reads,

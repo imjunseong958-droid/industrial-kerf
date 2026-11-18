@@ -6,6 +6,21 @@ on `main`; its section here becomes the release's notes on GitHub
 
 ## Unreleased
 
+- An agent's `look` with `eye` says where the eye is either side of each
+  cut between two shots: where the subject of the shot that ends is on the
+  frame and where the next one's is, how far that jumps, how much larger or
+  smaller it is, and whether it turns back. A model makes each shot by
+  itself, so nothing held one to the next but a person looking. It is read
+  from the two shots' guides, which the document has, before either is
+  made, and from the takes once they are, side by side: where the guides
+  jump the guide is mended, and where they hold and the takes do not the
+  shot is rolled again. A clip is read where the program has it, trimmed,
+  retimed, scaled, turned, moved, or cropped, and a guide at another rate,
+  size, or shape than its take reads the same. What it cannot place is said
+  with why: a clip in depth, a mask, an effect that may move the picture,
+  footage with no guide. It is what is so and fails no check, a hard cut
+  jumping on purpose
+  ([docs/architecture.md](docs/architecture.md#edit)).
 - An agent's `look` with `stands` says what each thing in a scene in depth
   stands on, which no frame shows: a crate a hundredth of the frame over
   the road, a car's far wheels in it, a box through a wall. It is measured

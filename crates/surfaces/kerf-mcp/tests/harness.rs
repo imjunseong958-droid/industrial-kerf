@@ -3310,6 +3310,135 @@ fn look_says_what_stands_on_what_and_its_line_sets_a_clip_down() {
     assert!(outside.contains("outside sequence"), "{outside}");
 }
 
+/// Two seconds of a red box 64 by 36 on a dark ground 320 by 180, its left edge at `left`: a
+/// take of a guide that has a box a fifth of the frame each way.
+fn take_with_a_box(file: &Path, left: u32) {
+    let status = Command::new("ffmpeg")
+        .args(["-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i"])
+        .arg(format!(
+            "color=c=0x203850:size=320x180:rate=24:duration=2,drawbox=x={left}:y=72:w=64:h=36:color=0xff2010:t=fill"
+        ))
+        .args(["-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p"])
+        .arg(file)
+        .status()
+        .expect("ffmpeg");
+    assert!(status.success());
+}
+
+/// `look` says where the eye is either side of a cut between two shots: by their guides
+/// before either is made, and by their takes once their files are there.
+#[test]
+fn look_says_where_the_eye_is_either_side_of_a_cut() {
+    if !ffmpeg_available() {
+        return;
+    }
+    // Two shots, each with a guide that has a box in the frame's middle, cut together.
+    let shot = |id: &str, guide: &str, subject: &str| {
+        format!(
+            "media {id} path=\"shots/{id}.mp4\" rate=24 dur=48f video=320x180\n  render {guide} {{guide.mp4}}\n  generate model=shot prompt=\"a red box\" guide={{guide.mp4}} moves={subject}\n"
+        )
+    };
+    let guide = |id: &str, subject: &str| {
+        format!(
+            "sequence {id} rate=24 size=320x180\n  track V1 video\n    clip ground_{id} gen=solid@1 at=0f dur=48f\n      set color=#203850\n  track V2 video\n    clip {subject} gen=solid@1 at=0f dur=48f\n      set color=#ff2010 scale=0.2\n"
+        )
+    };
+    let directory = TempDir::new().unwrap();
+    std::fs::create_dir(directory.path().join("shots")).unwrap();
+    std::fs::write(
+        directory.path().join("project.kerf"),
+        format!(
+            "kerf 1\nproject name=\"Harness\"\n{}{}sequence s1 rate=24 size=320x180\n  track V1 video\n    clip c1 media=m1 at=0f dur=48f\n    clip c2 media=m2 at=48f dur=48f\n{}{}",
+            shot("m1", "g1", "box1"),
+            shot("m2", "g2", "box2"),
+            guide("g1", "box1"),
+            guide("g2", "box2"),
+        ),
+    )
+    .unwrap();
+    let kerfd = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../target/debug/kerfd");
+    let router = router_on(directory.path(), Some(&kerfd));
+    let read = |arguments: Value| ok(&router, "look", arguments);
+    let near = |value: &Value, wanted: &[f64], by: f64| {
+        let given: Vec<f64> = value.as_array().unwrap().iter().map(|n| n.as_f64().unwrap()).collect();
+        given.len() == wanted.len() && given.iter().zip(wanted).all(|(a, b)| (a - b).abs() <= by)
+    };
+
+    // Nothing is made: the guides say the box is in one place either side, and no take is read.
+    let said = read(json!({"eye": true}));
+    assert_eq!(said["sequence"], "s1", "{said}");
+    let eye = &said["eye"];
+    assert_eq!(
+        eye["summary"],
+        json!({"cuts": 1, "read": 1, "held": 1, "jumps": 0, "reversed": 0, "takes": 0, "notMeasured": 0}),
+        "{eye}"
+    );
+    let cut = &eye["cuts"][0];
+    assert_eq!(
+        (&cut["at"], &cut["from"], &cut["to"], &cut["on"]),
+        (&json!("00:00:02:00"), &json!("c1"), &json!("c2"), &json!(["box1", "box2"])),
+        "{cut}"
+    );
+    assert_eq!(
+        cut["guide"],
+        json!({"out": [0.4, 0.4, 0.6, 0.6], "in": [0.4, 0.4, 0.6, 0.6], "jump": 0.0, "across": 0.0, "down": 0.0, "size": 1.0, "going": ["still", "still"]}),
+        "{cut}"
+    );
+    assert!(cut.get("take").is_none() && cut.get("notMeasured").is_none(), "{cut}");
+
+    // The shots are made. The first take has the box where its guide does, and the second
+    // has it a tenth of the frame's width to the right: the guides hold, and the takes jump.
+    take_with_a_box(&directory.path().join("shots/m1.mp4"), 128);
+    take_with_a_box(&directory.path().join("shots/m2.mp4"), 160);
+    let made = read(json!({"eye": {}}));
+    assert_eq!(made["eye"]["summary"]["takes"], 1, "{made}");
+    let cut = &made["eye"]["cuts"][0];
+    assert_eq!(cut["guide"]["jump"], 0.0, "{cut}");
+    let take = &cut["take"];
+    assert!(near(&take["out"], &[0.4, 0.4, 0.6, 0.6], 0.02), "{take}");
+    assert!(near(&take["in"], &[0.5, 0.4, 0.7, 0.6], 0.02), "{take}");
+    let across = take["across"].as_f64().unwrap();
+    assert!((across - 0.1 * 16.0 / 9.0).abs() < 0.03 && take["jump"].as_f64().unwrap() > 0.1, "{take}");
+
+    // A proposal that moves the second guide's box to where its take has it reads as its
+    // take does, before it is accepted.
+    let proposal = ok(&router, "edit", json!({"script": "use g2\nset box2 x=0.1"}));
+    let id = proposal["proposal"].as_str().unwrap();
+    let moved = read(json!({"eye": true, "proposal": id}));
+    let cut = &moved["eye"]["cuts"][0];
+    assert!(near(&cut["guide"]["in"], &[0.5, 0.4, 0.7, 0.6], 0.005), "{cut}");
+    assert!(near(&cut["take"]["in"], &[0.5, 0.4, 0.7, 0.6], 0.02), "{cut}");
+    assert_eq!(moved["eye"]["summary"]["jumps"], 1, "{moved}");
+
+    // What the eye is on can be named, and a clip the shot's guide is not drawn from says so.
+    let named = read(json!({"eye": {"subjects": {"m2": "ground_g2"}}}));
+    assert_eq!(named["eye"]["cuts"][0]["on"], json!(["box1", "ground_g2"]), "{named}");
+    let elsewhere = read(json!({"eye": {"subjects": {"m2": "box1"}}}));
+    assert_eq!(
+        elsewhere["eye"]["cuts"][0]["notMeasured"],
+        "`box1` is a clip of `g1`, which no `render` step of `m2` draws",
+        "{elsewhere}"
+    );
+    assert_eq!(elsewhere["eye"]["summary"]["notMeasured"], 1, "{elsewhere}");
+    // Within a range, the cuts that start in it.
+    let before = read(json!({"eye": true, "from": "0f", "to": "1s"}));
+    assert_eq!(before["eye"]["summary"]["cuts"], 0, "{before}");
+    let around = read(json!({"eye": true, "from": "1s"}));
+    assert_eq!(around["eye"]["summary"]["cuts"], 1, "{around}");
+    // Where it is not asked for sensibly, it says how.
+    let on_media = message(&error(&router, "look", json!({"eye": true, "media": "m1"})));
+    assert!(on_media.contains("used alone"), "{on_media}");
+    let with_shows = message(&error(&router, "look", json!({"eye": true, "shows": true, "at": ["0f"]})));
+    assert!(with_shows.contains("`eye`") && with_shows.contains("used alone"), "{with_shows}");
+    let no_media = message(&error(&router, "look", json!({"eye": {"subjects": {"m9": "box1"}}})));
+    assert!(no_media.contains("`m9`"), "{no_media}");
+    let misnamed = message(&error(&router, "look", json!({"eye": {"clips": ["box1"]}})));
+    assert!(misnamed.contains("`eye` is `true`"), "{misnamed}");
+    // Not asked for, it is not read.
+    let unasked = read(json!({"eye": false, "sequence": "s1"}));
+    assert!(unasked.get("eye").is_none(), "{unasked}");
+}
+
 /// A glTF file of one triangle 2 across and 1 up, with a camera 5 before it that goes 2 to the
 /// right in a second, and another that holds still and has no perspective.
 fn set_with_a_camera(folder: &std::path::Path) {
