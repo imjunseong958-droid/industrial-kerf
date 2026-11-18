@@ -6,6 +6,11 @@ on `main`; its section here becomes the release's notes on GitHub
 
 ## 0.1.3
 
+- A link of a model's workflow is pointed at another node in the shot's
+  graph: draw an edge from a node's port to the node that should read it. It
+  is kept in the shot's own copy, held to what the ComfyUI server says each
+  node gives and takes, and refused where the graph would go round. Kerf in
+  the conversation does the same (`workflowSet` with `link`).
 - While a model on a ComfyUI server makes a shot, the line says which step
   of how many it is on (`running, step 7 of 20`), where the server's
   websocket can be reached; elsewhere it says how long it has run, as before.

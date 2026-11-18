@@ -343,6 +343,10 @@ fn asked_inputs(program: &str, named: &str) -> Result<Value, String> {
 pub fn with_taken(shown: &mut Value, taken: &Value) {
     for node in shown["nodes"].as_array_mut().into_iter().flatten() {
         let class = node["class"].as_str().unwrap_or_default().to_owned();
+        // What it gives at each output, for a link drawn from it.
+        if let Some(outputs) = taken[&class].get(OUTPUTS) {
+            node["outputs"] = outputs.clone();
+        }
         for input in node["inputs"].as_array_mut().into_iter().flatten() {
             let name = input["name"].as_str().unwrap_or_default().to_owned();
             if let Some(takes) = taken[&class][&name].as_object() {
@@ -369,6 +373,35 @@ pub fn check(read: &Read, sets: &[Set], taken: &Value) -> Result<(), String> {
             .and_then(|node| node["class"].as_str())
             .unwrap_or_default();
         let takes = &taken[class][set.input];
+        if let Some((from, output)) = set.link {
+            // A link carries what its input takes: a model to a model, pictures to pictures.
+            let from_class = described["nodes"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .find(|node| node["id"] == from)
+                .and_then(|node| node["class"].as_str())
+                .unwrap_or_default();
+            let gives = &taken[from_class][OUTPUTS];
+            if let (Some(wanted), Some(outputs)) = (takes["type"].as_str(), gives.as_array()) {
+                match outputs.get(output as usize).and_then(Value::as_str) {
+                    Some(given) if given == wanted || wanted == "*" || given == "*" => {}
+                    Some(given) => {
+                        return Err(format!(
+                            "`{}` of node {} takes a {wanted}, and output {output} of node {from}, a {from_class}, is a {given}",
+                            set.input, set.node
+                        ))
+                    }
+                    None => {
+                        return Err(format!(
+                            "node {from}, a {from_class}, has {} outputs, and none is its output {output}",
+                            outputs.len()
+                        ))
+                    }
+                }
+            }
+            continue;
+        }
         if let Some(choices) = takes["choices"].as_array() {
             if !choices.contains(set.value) {
                 let listed: Vec<String> = choices.iter().take(12).map(|choice| match choice {
@@ -402,13 +435,30 @@ pub fn check(read: &Read, sets: &[Set], taken: &Value) -> Result<(), String> {
     Ok(())
 }
 
-/// One value of a workflow to set: input `input` of node `node`.
+/// One input of a workflow to set, input `input` of node `node`: to a value, or, with
+/// `link`, to read output `link.1` of node `link.0` in place of the node it read.
 #[derive(Clone, Copy, Debug)]
 pub struct Set<'a> {
     pub node: &'a str,
     pub input: &'a str,
     pub value: &'a Value,
+    pub link: Option<(&'a str, u64)>,
 }
+
+impl<'a> Set<'a> {
+    /// Input `input` of node `node` set to `value`.
+    pub fn value(node: &'a str, input: &'a str, value: &'a Value) -> Self {
+        Self { node, input, value, link: None }
+    }
+
+    /// Input `input` of node `node` linked to output `output` of node `from`.
+    pub fn link(node: &'a str, input: &'a str, from: &'a str, output: u64) -> Self {
+        Self { node, input, value: &Value::Null, link: Some((from, output)) }
+    }
+}
+
+/// What a kind of node gives is said under, in what [`taken`] returns.
+const OUTPUTS: &str = "$outputs";
 
 /// A copy of a workflow to keep for a shot, and the recipe that names it.
 /// Nothing of it is written yet.
@@ -425,8 +475,9 @@ pub struct Copy {
 
 /// `read`'s workflow with each of `sets` made, in turn.
 pub fn with(read: &Read, sets: &[Set]) -> Result<String, String> {
-    sets.iter().try_fold(read.text.clone(), |text, set| {
-        kerf_workflow::detail::set_input(&text, set.node, set.input, set.value)
+    sets.iter().try_fold(read.text.clone(), |text, set| match set.link {
+        Some((from, output)) => kerf_workflow::detail::set_link(&text, set.node, set.input, from, output),
+        None => kerf_workflow::detail::set_input(&text, set.node, set.input, set.value),
     })
 }
 
@@ -576,7 +627,7 @@ mod tests {
         // Set, the workflow is copied into the project beside the recipe, with that value
         // alone changed, and the line is told to run it.
         let change = |was: &str, input: &str, value: Value| {
-            set(&project, dir, "m1", 4, was, Set { node: &node, input, value: &value }, &models)
+            set(&project, dir, "m1", 4, was, Set::value(&node, input, &value), &models)
         };
         let bundled = shown["text"].as_str().unwrap().to_owned();
         change(&bundled, &input, json!("fp8_e4m3fn")).unwrap();
@@ -659,13 +710,36 @@ mod tests {
                 .to_owned()
         };
         let (loader, sampler) = (node("UNETLoader"), node("KSampler"));
-        let held = |node: &str, input: &str, value: Value| check(&read, &[Set { node, input, value: &value }], &taken);
+        let held = |node: &str, input: &str, value: Value| check(&read, &[Set::value(node, input, &value)], &taken);
         held(&loader, "weight_dtype", json!("fp8_e4m3fn")).unwrap();
         let other = held(&loader, "weight_dtype", json!("fp64")).unwrap_err();
         assert!(other.contains("takes one of default, fp8_e4m3fn, not \"fp64\""), "{other}");
         held(&sampler, "denoise", json!(0.5)).unwrap();
         let over = held(&sampler, "denoise", json!(1.5)).unwrap_err();
         assert!(over.contains("takes a number from 0.0 to 1.0, not 1.5"), "{over}");
+        // A link is held to what its input takes, where the server has said what each gives.
+        let types = json!({
+            "KSampler": {"model": {"type": "MODEL"}},
+            "UNETLoader": {"$outputs": ["MODEL"]},
+            "VAELoader": {"$outputs": ["VAE"]},
+        });
+        let vae = node("VAELoader");
+        check(&read, &[Set::link(&sampler, "model", &loader, 0)], &types).unwrap();
+        let wrong = check(&read, &[Set::link(&sampler, "model", &vae, 0)], &types).unwrap_err();
+        assert!(wrong.contains("takes a MODEL") && wrong.contains("a VAELoader, is a VAE"), "{wrong}");
+        let none = check(&read, &[Set::link(&sampler, "model", &loader, 3)], &types).unwrap_err();
+        assert!(none.contains("has 1 outputs"), "{none}");
+        // Linked in the text: the sampler reads the loader where it read what sat between.
+        let linked = with(&read, &[Set::link(&sampler, "model", &loader, 0)]).unwrap();
+        let again = kerf_workflow::detail::described(&linked).unwrap();
+        let reads = again["nodes"].as_array().unwrap().iter().find(|node| node["id"] == sampler.as_str()).unwrap()["inputs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|input| input["name"] == "model")
+            .unwrap()["link"]
+            .clone();
+        assert_eq!(reads, json!([loader, 0]));
         // What the server said nothing of is let through, and a program that is not there says why.
         held(&sampler, "sampler_name", json!("anything")).unwrap();
         assert_eq!(taken_before(&models, &read), None);
@@ -696,7 +770,7 @@ mod tests {
             .and_then(|node| node["id"].as_str())
             .expect("a loader");
         let value = json!("fp16");
-        let now = with(&read, &[Set { node: loader, input: "weight_dtype", value: &value }]).unwrap();
+        let now = with(&read, &[Set::value(loader, "weight_dtype", &value)]).unwrap();
         assert!(now.contains("\"weight_dtype\": \"fp16\""));
         let copy = copied(&project, dir, "m1", 4, &read, &now, &[dir.join("shots/bounce.video.comfy.json")]).unwrap();
         assert_eq!(copy.stored, "shots/bounce.video-2.comfy.json");

@@ -120,6 +120,12 @@ pub enum State {
     Unknown,
 }
 
+/// What a kind of node gives is said under, among what its inputs take: no input has the name.
+pub const OUTPUTS: &str = "$outputs";
+
+/// The kinds of input that are a value written on the node, and not what another node hands it.
+const PLAIN: [&str; 5] = ["INT", "FLOAT", "STRING", "BOOLEAN", "COMBO"];
+
 /// What a node's inputs take, from the `input` the server says of its kind: `required`
 /// and `optional`, each input a kind and what is said of it.
 pub fn taken(input: &serde_json::Map<String, Value>) -> serde_json::Map<String, Value> {
@@ -133,6 +139,9 @@ pub fn taken(input: &serde_json::Map<String, Value>) -> serde_json::Map<String, 
                 .or_else(|| (kind == "COMBO").then(|| more["options"].as_array()).flatten());
             if let Some(choices) = choices {
                 taken.insert(name.clone(), serde_json::json!({"choices": choices}));
+            } else if let Some(linked) = kind.as_str().filter(|kind| !PLAIN.contains(kind)) {
+                // What another node hands it: a model, a latent, pictures.
+                taken.insert(name.clone(), serde_json::json!({"type": linked}));
             } else if kind == "INT" || kind == "FLOAT" {
                 let mut range = serde_json::Map::new();
                 for bound in ["min", "max", "step"] {
@@ -304,7 +313,12 @@ impl Server {
         let node = said[class]["input"]
             .as_object()
             .ok_or_else(|| format!("the server has no node `{class}`, which the workflow uses"))?;
-        Ok(Value::Object(taken(node)))
+        let mut taken = taken(node);
+        // What a node of the kind gives at each output, by its place: what a link to it reads.
+        if let Some(outputs) = said[class]["output"].as_array() {
+            taken.insert(OUTPUTS.to_owned(), Value::Array(outputs.clone()));
+        }
+        Ok(Value::Object(taken))
     }
 
     /// Queue `graph`, and say what the server calls the job.
@@ -529,6 +543,7 @@ mod tests {
                 "sampler_name": {"choices": ["euler", "uni_pc"]},
                 "scheduler": {"choices": ["simple", "karras"]},
                 "steps": {"min": 1, "max": 10000},
+                "model": {"type": "MODEL"},
                 "denoise": {"min": 0.0, "max": 1.0, "step": 0.01},
                 "strength": {"min": 0.0, "max": 1000.0}
             })

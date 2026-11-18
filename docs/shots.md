@@ -251,6 +251,7 @@ the take; the person says how much of that it does without asking them.
   | sets a signal from a sound of its sequence | `look` with `signal`, and the line it gives in an `edit` |
   | opens a model into its workflow | `look` with `workflow`: every node and input, the blanks and what fills each now |
   | sets a value in the workflow | `edit` with `workflowSet`: a copy in the project, named by the line's `workflow=` |
+  | points a link of the workflow at another node | `workflowSet` with `link: [<node>, <output>]` in place of `value` |
   | goes back to the workflow as it comes | `recipeSet` of `workflow` with no `value` |
   | Make, Make again, Several, Stop | `make`, with `rolls`, and its `job` with `cancel` |
   | sees each take's picture and the guide as it was drawn | `look` with `media` and `sheet`, of the take and of the guide's file |
@@ -810,9 +811,16 @@ fills it and what the line gives for it now), or a value the workflow itself
 sets, which is yours to set there. The first value set copies the workflow as
 it comes into the project as `<shot>.<model>.comfy.json`, with that value
 changed and every other byte as it was, and adds `workflow=` to the line; the
-next is a change to that file. A blank is set on the recipe's line, and a link
-is the graph's own shape: to rewire a workflow, edit its file, or export one
-from ComfyUI for its API and put the blanks in.
+next is a change to that file. A blank is set on the recipe's line. A link is
+pointed at another node by drawing an edge from that node's port to the node
+that should read it: where it has more than one link, which input is asked,
+and once the server has said what each node gives and each input takes, only
+those that take it are offered and a link that carries the wrong thing is
+refused (`model of node 12 takes a MODEL, and output 0 of node 3, a VAELoader,
+is a VAE`). A link that would have the graph go round is refused too. It is
+kept in the shot's copy as a value is. Only an input that is a link is linked
+again, and nodes are not added or taken out here: for that, edit the file, or
+export one from ComfyUI for its API and put the blanks in.
 
 Once the workflow shows, what each value's input takes is asked of the server
 the model is run on, by the model's own program (`kerf-comfy --workflow … --inputs`,

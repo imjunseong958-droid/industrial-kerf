@@ -344,6 +344,45 @@ void RecipeGraphPanel::wire(const QString &fromId, const QString &toId, const QP
     const graph::Node *to = recipe.node(toId);
     if (!from || !to) return;
     const QStringList ports = graph::portsFor(recipe, *from, *to);
+    if (from->kind == Kind::Part) {
+        // A link of the workflow pointed at another node: which input reads it, and which of
+        // its outputs, the first that gives what the input takes.
+        if (ports.isEmpty()) return;
+        const QString node = to->holds.value(QStringLiteral("id")).toString();
+        const QString source = from->holds.value(QStringLiteral("id")).toString();
+        const QJsonArray gives = from->holds.value(QStringLiteral("outputs")).toArray();
+        const QJsonArray inputs = to->holds.value(QStringLiteral("inputs")).toArray();
+        const auto link = [this, node, source, gives, inputs](const QString &input) {
+            int output = 0;
+            for (const QJsonValue value : inputs) {
+                if (value.toObject().value(QStringLiteral("name")).toString() != input) continue;
+                const QString takes = value.toObject().value(QStringLiteral("type")).toString();
+                for (int index = 0; index < gives.size(); ++index) {
+                    if (gives.at(index).toString() == takes) {
+                        output = index;
+                        break;
+                    }
+                }
+            }
+            emit workflowLinked(node, input, source, output);
+        };
+        if (ports.size() == 1) {
+            link(ports.first());
+            return;
+        }
+        auto *menu = new QMenu(this);
+        menu->setObjectName(QStringLiteral("graphLinkMenu"));
+        menu->setAttribute(Qt::WA_DeleteOnClose);
+        ui::styleMenu(menu);
+        ui::addMenuHeader(menu, QStringLiteral("%1 reads %2 at").arg(to->title, from->title));
+        for (const QString &port : ports) {
+            QAction *action = menu->addAction(port);
+            action->setObjectName(QStringLiteral("graphLink.%1").arg(port));
+            connect(action, &QAction::triggered, this, [link, port] { link(port); });
+        }
+        menu->popup(at);
+        return;
+    }
     const QString value = graph::valueOf(*from);
     if (ports.isEmpty() || value.isEmpty()) return;
     if (ports.size() == 1) {

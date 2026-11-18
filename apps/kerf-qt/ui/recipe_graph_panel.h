@@ -121,6 +121,8 @@ signals:
     void workflowClosed();
     // Set a value of the workflow that shows: input `input` of its node `node`.
     void workflowEdited(const QString &node, const QString &input, const QJsonValue &value);
+    // Have input `input` of the workflow's node `node` read output `output` of its node `from`.
+    void workflowLinked(const QString &node, const QString &input, const QString &from, int output);
 
 protected:
     void paintEvent(QPaintEvent *event) override;

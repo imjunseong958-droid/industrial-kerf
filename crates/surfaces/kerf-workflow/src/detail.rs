@@ -423,6 +423,66 @@ pub fn set_input(text: &str, node: &str, input: &str, value: &Value) -> Result<S
     Ok(now)
 }
 
+/// `text` with input `input` of node `node` read from output `output` of node `from`, in
+/// place of the node it was linked to, and nothing else of it changed. Only an input that
+/// is a link is linked again: a value and a blank are set, not wired. A node is not linked
+/// to itself or to one that reads it, however far on, since a graph that goes round has no
+/// order to run in. What kind of thing an output gives is the server's to say, and is held
+/// by whoever asks it; here the graph only has to stay a graph.
+pub fn set_link(text: &str, node: &str, input: &str, from: &str, output: u64) -> Result<String, String> {
+    let nodes = nodes(text)?;
+    let find = |id: &str| nodes.iter().find(|found| found.id == id);
+    let found = find(node).ok_or_else(|| format!("the workflow has no node `{node}`"))?;
+    let named = found.inputs.iter().find(|found| found.name == input).ok_or_else(|| {
+        format!(
+            "node {node}, a {}, has no input `{input}`; it has {}",
+            found.class,
+            found.inputs.iter().map(|input| input.name.as_str()).collect::<Vec<_>>().join(", ")
+        )
+    })?;
+    if link(&named.value).is_none() {
+        return Err(format!(
+            "`{input}` of node {node} is not a link to another node: a value is set, and a blank is the recipe's to fill"
+        ));
+    }
+    if find(from).is_none() {
+        return Err(format!("the workflow has no node `{from}` to read from"));
+    }
+    // Whether `at` reads `node`, itself or through what it reads.
+    fn reads(nodes: &[Node], at: &str, node: &str, seen: &mut Vec<String>) -> bool {
+        if at == node {
+            return true;
+        }
+        if seen.iter().any(|seen| seen == at) {
+            return false;
+        }
+        seen.push(at.to_owned());
+        nodes
+            .iter()
+            .find(|found| found.id == at)
+            .is_some_and(|found| {
+                found
+                    .inputs
+                    .iter()
+                    .filter_map(|input| link(&input.value))
+                    .any(|(to, _)| reads(nodes, to, node, seen))
+            })
+    }
+    if reads(&nodes, from, node, &mut Vec::new()) {
+        return Err(if from == node {
+            format!("node {node} cannot read its own output")
+        } else {
+            format!("node {from} reads node {node}, so node {node} cannot read it back: the graph would go round")
+        });
+    }
+    let mut now = String::with_capacity(text.len() + 8);
+    now.push_str(&text[..named.at.start]);
+    now.push_str(&json!([from, output]).to_string());
+    now.push_str(&text[named.at.end..]);
+    Workflow::parse(&now)?;
+    Ok(now)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -445,6 +505,32 @@ mod tests {
   }
 }
 "#;
+
+    #[test]
+    fn a_link_is_pointed_at_another_node_and_the_graph_stays_one() {
+        let text = r#"{"kerf-comfy": 1, "fps": 16, "frames": {"most": 81, "step": 4}, "size": [832, 480],
+  "workflow": {
+    "1": {"class_type": "UNETLoader", "inputs": {"unet_name": "a.safetensors"}},
+    "2": {"class_type": "LoraLoaderModelOnly", "inputs": {"model": ["1", 0], "lora_name": "b.safetensors"}},
+    "3": {"class_type": "KSampler", "inputs": {"model": [
+        "1",
+        0
+      ], "seed": "{seed}", "steps": 20}}
+  }
+}"#;
+        // The sampler reads the lora's model in place of the loader's: that link alone changes.
+        let now = set_link(text, "3", "model", "2", 0).unwrap();
+        assert_eq!(now, text.replace("[\n        \"1\",\n        0\n      ]", "[\"2\",0]"));
+        assert_eq!(described(&now).unwrap()["nodes"][2]["inputs"][0]["link"], json!(["2", 0]));
+        // What would have the graph go round, a node that is not there, and what is no link.
+        let chained = set_link(&now, "2", "model", "3", 0).unwrap_err();
+        assert!(chained.contains("the graph would go round"), "{chained}");
+        assert!(set_link(text, "3", "model", "3", 0).unwrap_err().contains("cannot read its own output"));
+        assert!(set_link(text, "3", "model", "9", 0).unwrap_err().contains("no node `9` to read from"));
+        assert!(set_link(text, "3", "steps", "1", 0).unwrap_err().contains("is not a link"));
+        assert!(set_link(text, "3", "seed", "1", 0).unwrap_err().contains("is not a link"));
+        assert!(set_link(text, "3", "latent", "1", 0).unwrap_err().contains("has no input `latent`"));
+    }
 
     #[test]
     fn a_workflow_is_said_node_by_node_in_the_files_order() {
