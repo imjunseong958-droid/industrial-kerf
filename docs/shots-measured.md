@@ -941,3 +941,36 @@ head of each part are the architecture's.
    that fills much of the frame, footage larger than 960x540, and what the
    model's own affected region, the level of its mask this workflow does
    not write, does for a shadow in place of `reach`.
+14. **A part of footage by an agent's tools alone** (2026-11-18). A
+   playbook, `footage-parts`, now says of 12 and 13 what an agent cannot
+   see for itself: which model fits what is asked, what to look at after
+   each making, and what a take asks for next. It was held to the tools,
+   not yet to an agent: an MCP client worked through it by hand on the
+   walk, from a project of the footage on one track, with `kerf-mcp`'s
+   four tools and no other, `permissions: auto`, and the same server.
+   **Kerf's own chat agent was not run**, there being no key for one, so
+   whether a model follows the playbook unaided is still to see. Asked for
+   the man further right and larger:
+
+   | Step | Took | What it showed |
+   |---|---|---|
+   | `man`, his matte, `objects=1` | 15 s | white on him alone, on each frame of the sheet |
+   | The layers, the footage under them, `x=0.2 scale=1.4` | no making | the man twice: once where he walked, once where he was put |
+   | `gone`, the matte and the plate, `reach=64` | 218 s, 197 of them the plate | the path whole and no shadow, on each frame of the sheet |
+   | The plate on the low track | no making | the man once; at the last frames his feet below the frame, the layer having grown from the frame's middle |
+   | `y=-0.12` on his clip and his matte's | no making | on his feet on the path throughout |
+   | `shown`, `man, tree` | 19 s | four things in four colors; their numbers too small to read in a sheet, and plain on one frame |
+   | A matte of frames 20 to 60 alone, its guide a sequence of that part (`render s2 {part.mp4}`) | 14 s | 41 frames, the man where the footage has him on each |
+   | `shirt`, his shirt's matte and `shot-into`, `grow=4` | 171 s | a red flowered shirt, the rest the footage's own |
+
+   What was found is in the playbook or a model's own words. **`reads`
+   does not tell the two that read a mask apart**: both list `guide_mask`,
+   and `shot-into` still said of itself that it takes a thing out, which
+   12 measured it not to do; its `about` now says so, and names `plate`.
+   **A plate laid on its track before it is made** is a finding
+   (`missing_media`) and an edit with no preview, so it is made first and
+   laid then. **A layer made larger grows from the frame's middle**, and
+   what is set to mend that is set on the matte's clip too. **The numbers
+   `matte-shown` draws** are read on a frame, not on a sheet. **A part
+   further into a file** is a sequence of that part drawn as the guide,
+   and what is made of it starts where the part does.

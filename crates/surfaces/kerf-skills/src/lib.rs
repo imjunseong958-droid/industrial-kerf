@@ -25,6 +25,7 @@ pub fn bundled_skills() -> Vec<Skill> {
         include_str!("../../../../skills/meme/SKILL.md"),
         include_str!("../../../../skills/stream-gameplay/SKILL.md"),
         include_str!("../../../../skills/model-shot/SKILL.md"),
+        include_str!("../../../../skills/footage-parts/SKILL.md"),
     ]
     .into_iter()
     .map(|content| {
@@ -240,6 +241,21 @@ mod tests {
         assert!(shot.body.contains("Stack the scene with `overwrite`"));
         assert!(shot.body.contains("once with `make`"));
         assert!(shot.body.len() < 6 * 1024, "{}", shot.body.len());
+        // What nothing else says of a part of footage: which model takes a thing out, that
+        // a layer moved wants a plate under it, and what a thing's shadow asks of the plate.
+        let parts = find_skill(&skills, "footage-parts").unwrap();
+        let said = parts.body.split_whitespace().collect::<Vec<_>>().join(" ");
+        for rule in [
+            "Do not take a thing out with the one that makes anew",
+            "A layer that is moved, resized, or left out",
+            "make a plate",
+            "on the matte's clip whatever is set on the thing's clip",
+            "A matte does not cover a thing's shadow",
+            "`reach=`",
+        ] {
+            assert!(said.contains(rule), "{rule}");
+        }
+        assert!(parts.body.len() < 6 * 1024, "{}", parts.body.len());
         assert_eq!(
             find_skill(&skills, "shorts").unwrap().dir,
             PathBuf::from("<bundled>")

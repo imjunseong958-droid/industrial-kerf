@@ -1,6 +1,6 @@
 {
   "kerf-comfy": 1,
-  "about": "A shot that keeps its guide where a second guide, guide_mask, is black and makes it anew from the prompt where that is white: a thing put into footage, a part of a picture made again, a thing taken out. The guide is the footage as it is, and the mask the thing in white on black, as render with matte=<clip> draws it of a clip and as matte finds it in footage. Where the mask is black the take is the guide's own pixels, the model's picture being laid over the guide through the mask and nowhere else. grow=<pixels> makes anew that much around the mask as well, room for what is put there and for the edge of what was; feather=<pixels> is how softly the two meet.",
+  "about": "A shot that keeps its guide where a second guide, guide_mask, is black and makes it anew from the prompt where that is white: a thing put into footage, a part of a picture made again. It does not take a thing out: a mask in the shape of a man is filled with a man, whatever the prompt, and plate is the workflow for that. The guide is the footage as it is, and the mask the thing in white on black, as render with matte=<clip> draws it of a clip and as matte finds it in footage. Where the mask is black the take is the guide's own pixels, the model's picture being laid over the guide through the mask and nowhere else. grow=<pixels> makes anew that much around the mask as well, room for what is put there and for the edge of what was; feather=<pixels> is how softly the two meet.",
   "fps": 16,
   "frames": {
     "most": 81,
