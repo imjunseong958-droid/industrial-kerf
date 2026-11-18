@@ -3412,7 +3412,7 @@ mod tests {
             directory.join(PROJECT_FILE),
             "kerf 1\nproject name=\"Mesh\"\n\
              media set path=\"shots/set.glb\" rate=16 dur=1f video=832x480\n\
-             \x20 generate model=room prompt=\"a room\" out={out}\n\
+             \x20 generate model=room prompt=\"a room\"\n\
              sequence s1 rate=16 size=832x480 audio=48000\n\
              \x20 track V1 video\n\
              \x20   clip room gen=mesh@1 at=0f dur=32f\n\
