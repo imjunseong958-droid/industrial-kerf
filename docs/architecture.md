@@ -206,7 +206,7 @@ otherwise. Nothing else has to be kept in step with it.
 | 2 | `vfx` | Following what moves in a picture and cutting it out; keys and mattes are in `effects` for now | `kerf-track`, `kerf-segment` |
 | 2 | `motion` | Motion graphics drawn from numbers | `kerf-motion` |
 | 3 | `engine` | Sequences into frames and files | `kerf-core`, `kerf-compose`, `kerf-playback`, `kerf-engine` |
-| 4 | `surfaces` | What people and agents touch | `kerf-runtime`, `kerf-agent`, `kerf-mcp`, `kerf-skills`, `kerf-commands`, `kerf-cli`, `kerf-qt-bridge`, `kerf-cloud`, `kerf-fetcher` |
+| 4 | `surfaces` | What people and agents touch | `kerf-runtime`, `kerf-agent`, `kerf-mcp`, `kerf-skills`, `kerf-commands`, `kerf-cli`, `kerf-qt-bridge`, `kerf-cloud`, `kerf-fetcher`, `kerf-workflow` |
 
 The areas in layer 2 may not depend on each other. What two of them need moves
 down to `render` or `foundation`. Only `engine` and `surfaces` see them all.
@@ -329,8 +329,10 @@ model](#what-directs-a-model).
 
 One model's program is in the repository, and the engine knows nothing of it:
 `tools/kerf-comfy`, for a model on a ComfyUI server
-([shots.md](shots.md#a-model-on-a-comfyui-server)). With it a recipe was made
-from end to end on 2026-11-11: a guide of Kerf's own clips in depth (a solid
+([shots.md](shots.md#a-model-on-a-comfyui-server)). The file it runs, a
+workflow, is read by `kerf-workflow` in `surfaces`, so that the editor's
+graph shows and sets one as the program reads it, without running it. With
+`kerf-comfy` a recipe was made from end to end on 2026-11-11: a guide of Kerf's own clips in depth (a solid
 boat leaving, a sea and a pier tipped flat, a sun, a camera pushing in and
 turning), 96 frames at 1920x1080, then `generate` with Wan 2.1 VACE 1.3B, which
 gave 65 frames at 832x480 and 16 a second. On four cores with no GPU the guide

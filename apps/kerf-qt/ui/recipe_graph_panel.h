@@ -19,6 +19,15 @@
 // one on from the last, and Stop while one runs. Making asks first, as the
 // bin's Make from Recipe… does, since a recipe is commands someone wrote.
 //
+// A model its entry runs with kerf-comfy opens further, into the workflow it
+// is run with (Open workflow in its card, or a double-click on it): the same
+// canvas then shows the ComfyUI graph, a card a node and a row an input, with
+// the blanks the recipe fills marked and every other value to set in the
+// node's card. The head's arrow goes back to the shot's graph. A value set
+// there is kept in a copy of the workflow in the project, beside the recipe,
+// which the step's line then names; ComfyUI itself is another program, asked
+// over HTTP when the shot is made, and nothing of it is changed.
+//
 // It keeps nothing of the recipe. What is set is said as a signal; the window
 // writes it and hands back the graph as it now is (ui/wiring/graph_wiring.h).
 
@@ -26,6 +35,7 @@
 #include "test_friends.h"
 
 #include <QJsonArray>
+#include <QJsonValue>
 #include <QString>
 #include <QWidget>
 
@@ -52,8 +62,17 @@ public:
     QWidget *body() const { return m_body; }
 
     void setProjectDirectory(const QString &directory);
+    // What the cards' places are kept under, for this shot.
+    void setPlacementKey(const QString &key);
+    // The shot's graph. While a workflow shows, it is kept for when that closes.
     void setRecipe(const graph::Recipe &recipe);
-    const graph::Recipe &recipe() const;
+    const graph::Recipe &recipe() const { return m_shot; }
+    // The workflow behind one of the shot's models, shown in place of the
+    // shot's graph until it is closed.
+    void setWorkflow(const graph::Workflow &workflow);
+    void closeWorkflow();
+    bool showsWorkflow() const { return m_workflow.isValid(); }
+    const graph::Workflow &workflow() const { return m_workflow; }
     // A making of the shot under way: the take it is making, since when (on
     // activity::clock()), and what its steps last said.
     void setMaking(bool making, int take = 0, qint64 since = 0, const QString &line = {});
@@ -79,6 +98,12 @@ signals:
     void stopRequested();
     void castRequested();
     void modelsRequested();
+    // Open the workflow the model on `line` is run with; and, from one that
+    // shows, go back to the shot's graph.
+    void workflowRequested(int line);
+    void workflowClosed();
+    // Set a value of the workflow that shows: input `input` of its node `node`.
+    void workflowEdited(const QString &node, const QString &input, const QJsonValue &value);
 
 protected:
     void paintEvent(QPaintEvent *event) override;
@@ -96,6 +121,10 @@ private:
     RecipeGraphView *m_view = nullptr;
     RecipeInspector *m_inspector = nullptr;
     QWidget *m_body = nullptr;
+    graph::Recipe m_shot;
+    graph::Workflow m_workflow;
+    QString m_placementKey;
+    ui::IconButton *m_back = nullptr;
     QLabel *m_title = nullptr;
     QLabel *m_path = nullptr;
     QLabel *m_status = nullptr;

@@ -25,6 +25,11 @@ kerf-collab = { path = "../../edit/kerf-collab" }
 kerf-commands = { path = "../../surfaces/kerf-commands" }
 kerf-mcp = { path = "../../surfaces/kerf-mcp" }
 kerf-engine = { path = "../../engine/kerf-engine" }
+# How a workflow reads, for a shot's graph to show one a model's entry runs
+# with kerf-comfy: the file's format and the workflows that come with it.
+# ComfyUI itself is another program, never linked: it is asked over HTTP by
+# kerf-comfy when a shot is made.
+kerf-workflow = { path = "../../surfaces/kerf-workflow" }
 kerf-fx = { path = "../../effects/kerf-fx" }
 base64 = "0.23"
 serde = { version = "1", features = ["derive"] }

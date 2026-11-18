@@ -11,6 +11,10 @@
 //   a signal drawn   edit {ops: [set <clip> value {keys}]}, as the timeline's own drawing
 //   a take chosen    media_replace {media, path}, as the bin's Takes
 //   Make, Stop       the registry's media.make and media.makeCancel, as the bin's
+//   a model's workflow   workflow_get {media, line} -> workflow {media, line, model, name, origin, file?,
+//                        text, nodes, blanks}, for a model its entry runs with kerf-comfy
+//   a value set in it    workflow_edit {media, line, was, node, input, value} -> workflow, then recipe
+//                        (the first writes the shot's own copy beside its recipe and names it on the line)
 //
 // The graph is read again whenever what it shows may have changed: the
 // project (a signal's keys, a clip moved, a take made or chosen), the cast, a
@@ -45,7 +49,8 @@ public:
     // for it; a media that names no recipe opens nothing.
     void open(const QString &media);
     // The same once the project has said that media, with `node` chosen once
-    // its graph is said: for a run that starts on a graph (`--graph`).
+    // its graph is said, or with `workflow:<line>` the workflow of the model on
+    // that line opened: for a run that starts on a graph (`--graph`).
     void openWhenReady(const QString &media, const QString &node = {});
     void close();
     bool isOpen() const;
@@ -59,6 +64,8 @@ private:
     void request();
     // A change to the recipe's text, where the text is still what was read.
     void edit(QJsonObject change);
+    // Asks the bridge for the workflow that shows, or is to show, again.
+    void requestWorkflow();
     void followMaking();
 
     MainWindow *m_window = nullptr;
@@ -74,6 +81,8 @@ private:
     // The graph was wanted while nothing could be asked (not yet connected):
     // it is asked for as soon as something can.
     bool m_owed = false;
+    // The `generate` line whose workflow shows, or was asked for; 0 for none.
+    int m_workflowLine = 0;
 };
 
 } // namespace kerf

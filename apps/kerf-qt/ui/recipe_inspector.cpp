@@ -3,6 +3,7 @@
 #include "recipe_inspector.h"
 #include "components.h"
 #include "icons.h"
+#include "settings_kit.h"
 #include "signal_curve.h"
 
 #include <QAction>
@@ -20,6 +21,7 @@
 #include <QPlainTextEdit>
 #include <QRandomGenerator>
 #include <QScrollBar>
+#include <QSignalBlocker>
 #include <QVBoxLayout>
 
 #include <algorithm>
@@ -36,9 +38,11 @@ namespace {
 
 // What a field last showed of the recipe, kept on the field itself.
 constexpr char kShown[] = "graphShown";
-// The card's own padding, and how wide a row's name is.
+// The card's own padding, and how wide a row's name is: a recipe's are short
+// words, a ComfyUI node's inputs longer ones (`filename_prefix`).
 constexpr int kPad = 14;
 constexpr int kLabelWidth = 78;
+constexpr int kInputLabelWidth = 118;
 
 QLabel *text(const QString &said, const TypeStyle &style, QRgb ink, bool wrap = false) {
     QLabel *label = wrap ? new ui::WrapLabel : new QLabel;
@@ -192,6 +196,15 @@ QString RecipeInspector::shape(const graph::Recipe &recipe, const Node &node) co
     QStringList parts{node.id, QString::number(int(node.kind)), QString::number(node.line), QString::number(graph::isMissing(node))};
     for (const QJsonValue value : node.holds.value(QStringLiteral("knobs")).toArray()) parts << value.toObject().value(QStringLiteral("name")).toString();
     for (const Edge &edge : recipe.into(node.id)) parts << QStringLiteral("%1[%2]<%3").arg(edge.port).arg(edge.nth).arg(edge.from);
+    // A workflow's node: which inputs it has and what each is, and of a blank what the line gives.
+    for (const QJsonValue value : node.holds.value(QStringLiteral("inputs")).toArray()) {
+        const QJsonObject input = value.toObject();
+        parts << QStringLiteral("%1:%2").arg(input.value(QStringLiteral("name")).toString()).arg(int(graph::inputKind(input)));
+        if (graph::inputKind(input) != graph::InputKind::Value) parts << graph::valueText(input.value(QStringLiteral("value")));
+        for (const QJsonValue blank : input.value(QStringLiteral("blanks")).toArray()) parts << blankSays(blank.toString());
+    }
+    parts << node.holds.value(QStringLiteral("runner")).toObject().value(QStringLiteral("workflow")).toString()
+          << node.holds.value(QStringLiteral("workflow")).toString();
     for (const QJsonValue value : node.holds.value(QStringLiteral("takes")).toArray()) {
         const QJsonObject take = value.toObject();
         parts << QStringLiteral("%1%2%3").arg(take.value(QStringLiteral("number")).toInt()).arg(take.value(QStringLiteral("chosen")).toBool() ? '*' : ' ')
@@ -216,6 +229,12 @@ QHash<QString, QString> RecipeInspector::values(const Node &node) const {
             const QJsonObject knob = value.toObject();
             shown.insert(QStringLiteral("knob.") + knob.value(QStringLiteral("name")).toString(), knob.value(QStringLiteral("value")).toString());
         }
+    } else if (node.kind == Kind::Part) {
+        for (const QJsonValue value : holds.value(QStringLiteral("inputs")).toArray()) {
+            const QJsonObject input = value.toObject();
+            if (graph::inputKind(input) == graph::InputKind::Value)
+                shown.insert(QStringLiteral("input.") + input.value(QStringLiteral("name")).toString(), graph::valueText(input.value(QStringLiteral("value"))));
+        }
     } else if (node.kind == Kind::Render) {
         shown.insert(QStringLiteral("sequence"), holds.value(QStringLiteral("sequence")).toString());
         shown.insert(QStringLiteral("size"), holds.value(QStringLiteral("size")).toString());
@@ -227,6 +246,19 @@ QHash<QString, QString> RecipeInspector::values(const Node &node) const {
 
 void RecipeInspector::setNode(const graph::Recipe &recipe, const QString &id) {
     const Node *node = recipe.node(id);
+    if (!node && recipe.parts) {
+        // No node of a workflow chosen: the workflow itself, and what fills its blanks.
+        QStringList said{QStringLiteral("workflow"), m_workflow.name, m_workflow.origin, m_workflow.file, m_workflow.about};
+        for (auto blank = m_workflow.blanks.constBegin(); blank != m_workflow.blanks.constEnd(); ++blank) said << blank.key() << blankSays(blank.key());
+        const QString now = said.join(QLatin1Char('\x1f'));
+        m_id.clear();
+        m_line = 0;
+        if (now == m_shape && m_content) return;
+        m_shape = now;
+        rebuildWorkflow();
+        emit contentChanged();
+        return;
+    }
     if (!node) {
         // No node chosen: the shot itself, and what is worth knowing before it is made.
         const QString now = QStringList{QStringLiteral("shot"), QString::number(recipe.said), recipe.media, recipe.name, recipe.recipe, recipe.error, recipe.cannot,
@@ -253,6 +285,7 @@ void RecipeInspector::setNode(const graph::Recipe &recipe, const QString &id) {
 
 void RecipeInspector::startContent() {
     m_fields.clear();
+    m_switches.clear();
     m_prompt = nullptr;
     m_curve = nullptr;
     m_takeRows.clear();
@@ -290,6 +323,22 @@ void RecipeInspector::rebuildShot(const graph::Recipe &recipe) {
     m_content->show();
 }
 
+void RecipeInspector::setWorkflow(const graph::Workflow &workflow) { m_workflow = workflow; }
+
+QString RecipeInspector::blankSays(const QString &name) const {
+    const QJsonObject blank = m_workflow.blanks.value(name).toObject();
+    QString says = blank.value(QStringLiteral("says")).toString();
+    if (says.isEmpty()) return {};
+    says[0] = says.at(0).toUpper();
+    const QJsonValue given = blank.value(QStringLiteral("given"));
+    const QString by = blank.value(QStringLiteral("by")).toString();
+    // What the line gives for it now; a file or a signal it gives none of leaves the node out.
+    if (given.isString()) return QStringLiteral("%1. Now: %2").arg(says, given.toString());
+    if (by == QLatin1String("file") || by == QLatin1String("signal") || by == QLatin1String("moves"))
+        return QStringLiteral("%1. The line gives none, so the node is left out").arg(says);
+    return says;
+}
+
 void RecipeInspector::setMaking(bool making) {
     if (making == m_making) return;
     m_making = making;
@@ -315,14 +364,21 @@ void RecipeInspector::refresh(const Node &node) {
     }
     if (m_curve && node.kind == Kind::Signal)
         m_curve->setSignal(node.holds.value(QStringLiteral("values")).toArray(), node.holds.value(QStringLiteral("frames")).toInt(1));
+    for (auto toggle = m_switches.constBegin(); toggle != m_switches.constEnd(); ++toggle) {
+        const QSignalBlocker quiet(toggle.value());
+        toggle.value()->setChecked(now.value(toggle.key()) == QLatin1String("true"));
+    }
 }
 
-void RecipeInspector::addRow(const QString &label, QWidget *control) {
+void RecipeInspector::addRow(const QString &label, QWidget *control, int labelWidth) {
     auto *row = new QHBoxLayout;
     row->setContentsMargins(0, 0, 0, 0);
     row->setSpacing(space::s8);
     QLabel *name = text(label, tokens::control, ink2);
-    name->setFixedWidth(kLabelWidth);
+    name->setFixedWidth(labelWidth > 0 ? labelWidth : kLabelWidth);
+    // A name longer than its room is cut, and whole in its tip.
+    name->setText(QFontMetricsF(name->font()).elidedText(label, Qt::ElideRight, name->width()));
+    if (name->text() != label) name->setToolTip(label);
     row->addWidget(name, 0, Qt::AlignVCenter);
     row->addWidget(control, 1);
     m_column->addLayout(row);
@@ -381,10 +437,14 @@ void RecipeInspector::rebuild(const graph::Recipe &recipe, const Node &node) {
     QLabel *title = text(node.title, tokens::title, ink);
     title->setObjectName(QStringLiteral("graphInspectorTitle"));
     head->addWidget(title, 1, Qt::AlignVCenter);
-    head->addWidget(text(graph::nameOf(node.gives), monoSmall, ink3), 0, Qt::AlignVCenter);
+    head->addWidget(text(node.kind == Kind::Part ? QStringLiteral("#%1").arg(node.holds.value(QStringLiteral("id")).toString())
+                                                 : graph::nameOf(node.gives),
+                         monoSmall, ink3),
+                    0, Qt::AlignVCenter);
     m_column->addLayout(head);
 
     switch (node.kind) {
+    case Kind::Part: buildPart(recipe, node); break;
     case Kind::Model: buildModel(recipe, node); break;
     case Kind::Render: buildRender(node); break;
     case Kind::Signal: buildSignal(node); break;
@@ -546,7 +606,144 @@ void RecipeInspector::buildModel(const graph::Recipe &recipe, const Node &node) 
         if (!value.isEmpty()) emit edited(line, name, 0, value);
     });
     addRow(QStringLiteral("Add"), more);
+    // A model its entry runs with kerf-comfy has a workflow behind it: the
+    // ComfyUI graph that is run, which opens to be seen and set.
+    if (const QJsonObject runner = holds.value(QStringLiteral("runner")).toObject(); runner.value(QStringLiteral("kind")).toString() == QLatin1String("comfy")) {
+        addSection(QStringLiteral("Workflow"));
+        const QString own = holds.value(QStringLiteral("workflow")).toString();
+        addNote(own.isEmpty() ? QStringLiteral("%1, as it comes with kerf-comfy.").arg(runner.value(QStringLiteral("workflow")).toString())
+                              : QStringLiteral("%1, this shot's own copy.").arg(own),
+                ink2)
+            ->setObjectName(QStringLiteral("graphWorkflowSays"));
+        auto *open = new ui::Button(QStringLiteral("Open workflow"), ui::Button::Kind::Secondary);
+        open->setObjectName(QStringLiteral("graphOpenWorkflow"));
+        open->setTip(QStringLiteral("Every node and input of the ComfyUI graph this model is run with"));
+        connect(open, &QAbstractButton::clicked, this, [this, line = m_line] { emit workflowRequested(line); });
+        m_column->addWidget(open, 0, Qt::AlignLeft);
+    }
     buildReads(recipe, node);
+}
+
+void RecipeInspector::rebuildWorkflow() {
+    startContent();
+    QLabel *title = text(m_workflow.name, tokens::title, ink);
+    title->setObjectName(QStringLiteral("graphInspectorTitle"));
+    m_column->addWidget(title);
+    addNote(QStringLiteral("The ComfyUI workflow model %1 is run with.").arg(m_workflow.model));
+    if (!m_workflow.about.isEmpty()) addNote(m_workflow.about, ink2);
+    // Where it comes from, and what setting a value in it does.
+    QLabel *origin = nullptr;
+    if (m_workflow.isOwn()) {
+        origin = addNote(QStringLiteral("This shot's own copy, %1, which its line names. It is what this shot is made with; nothing on the "
+                                        "ComfyUI server is changed.").arg(m_workflow.file), ink2);
+        auto *drop = new ui::GhostButton(QStringLiteral("Use it as it comes"));
+        drop->setObjectName(QStringLiteral("graphWorkflowDrop"));
+        drop->setTip(QStringLiteral("Take workflow= off the line; the copy stays in the project"));
+        connect(drop, &QAbstractButton::clicked, this, [this, line = m_workflow.line] { emit workflowDropped(line); });
+        m_column->addWidget(drop, 0, Qt::AlignLeft);
+    } else {
+        origin = addNote(QStringLiteral("As it comes%1. Set a value in it and this shot keeps a copy with that change, beside its recipe, which its "
+                                        "line then runs. Nothing on the ComfyUI server, and nothing of kerf-comfy, is changed.")
+                             .arg(m_workflow.origin == QLatin1String("file") ? QStringLiteral(", from the file your models entry names")
+                                                                             : QStringLiteral(" with kerf-comfy")),
+                         ink2);
+    }
+    origin->setObjectName(QStringLiteral("graphWorkflowOrigin"));
+    if (!m_workflow.blanks.isEmpty()) {
+        addSection(QStringLiteral("Blanks the recipe fills"));
+        for (auto blank = m_workflow.blanks.constBegin(); blank != m_workflow.blanks.constEnd(); ++blank) {
+            QLabel *name = text(QStringLiteral("{%1}").arg(blank.key()), timecode, accentInk);
+            m_column->addWidget(name);
+            addNote(blankSays(blank.key()))->setProperty("graphBlank", blank.key());
+        }
+    }
+    addNote(QStringLiteral("Choose a node to see its inputs. A blank is set on the recipe's line; any other value is set here."));
+    m_column->addStretch(1);
+    m_scroll->setWidget(m_content);
+    m_content->show();
+}
+
+void RecipeInspector::buildPart(const graph::Recipe &recipe, const Node &node) {
+    if (!node.detail.isEmpty()) addNote(node.detail)->setFont(tokens::font(monoSmall));
+    const QString id = node.holds.value(QStringLiteral("id")).toString();
+    const auto said = [](const QString &what, const TypeStyle &style, QRgb ink) { return text(what, style, ink, true); };
+    for (const QJsonValue value : node.holds.value(QStringLiteral("inputs")).toArray()) {
+        const QJsonObject input = value.toObject();
+        const QString name = input.value(QStringLiteral("name")).toString();
+        switch (graph::inputKind(input)) {
+        case graph::InputKind::Link: {
+            // Where it comes from: the graph's own shape, said and not set.
+            const QJsonArray link = input.value(QStringLiteral("link")).toArray();
+            const Node *from = recipe.node(QStringLiteral("part:%1").arg(link.at(0).toString()));
+            addRow(name, said(QStringLiteral("← %1 #%2").arg(from ? from->title : QStringLiteral("a node"), link.at(0).toString()), tokens::control, ink3), kInputLabelWidth);
+            break;
+        }
+        case graph::InputKind::Blank: {
+            // The recipe's to fill: marked, with what fills it and what the line gives now.
+            QLabel *blank = said(graph::valueText(input.value(QStringLiteral("value"))), timecode, accentInk);
+            blank->setObjectName(QStringLiteral("graphBlank.%1").arg(name));
+            addRow(name, blank, kInputLabelWidth);
+            QStringList says;
+            for (const QJsonValue filled : input.value(QStringLiteral("blanks")).toArray()) says << blankSays(filled.toString());
+            says.removeAll(QString());
+            if (!says.isEmpty()) addNote(says.join(QLatin1Char('\n')));
+            break;
+        }
+        case graph::InputKind::Value: {
+            const QJsonValue held = input.value(QStringLiteral("value"));
+            const QString field = QStringLiteral("input.") + name;
+            if (held.isBool()) {
+                auto *toggle = new ui::Switch;
+                toggle->setObjectName(QStringLiteral("graphField.%1").arg(field));
+                toggle->setAccessibleName(name);
+                toggle->setChecked(held.toBool());
+                connect(toggle, &QAbstractButton::toggled, this, [this, id, name](bool on) { emit partEdited(id, name, on); });
+                m_switches.insert(field, toggle);
+                auto *holder = new QWidget;
+                auto *row = new QHBoxLayout(holder);
+                row->setContentsMargins(0, 0, 0, 0);
+                row->addWidget(toggle, 0, Qt::AlignLeft);
+                row->addStretch(1);
+                addRow(name, holder, kInputLabelWidth);
+                break;
+            }
+            if (!held.isString() && !held.isDouble()) {
+                // A list or an object the workflow sets whole: shown, and the file's to change.
+                addRow(name, said(graph::valueText(held), timecode, ink2), kInputLabelWidth);
+                break;
+            }
+            auto *edit = new QLineEdit(m_values.value(field));
+            edit->setProperty(kShown, m_values.value(field));
+            edit->setObjectName(QStringLiteral("graphField.%1").arg(field));
+            edit->setAccessibleName(name);
+            edit->setFont(tokens::font(timecode));
+            const bool number = held.isDouble();
+            connect(edit, &QLineEdit::editingFinished, this, [this, edit, id, name, number] {
+                const QString now = edit->text().trimmed();
+                const QString was = edit->property(kShown).toString();
+                edit->setModified(false);
+                if (now == was) return;
+                if (!number) {
+                    edit->setProperty(kShown, now);
+                    emit partEdited(id, name, now);
+                    return;
+                }
+                // A number stays a number: what does not read as one is put back.
+                bool reads = false;
+                const double value = now.toDouble(&reads);
+                if (!reads) {
+                    edit->setText(was);
+                    return;
+                }
+                edit->setProperty(kShown, now);
+                emit partEdited(id, name, value);
+            });
+            m_fields.insert(field, edit);
+            addRow(name, edit, kInputLabelWidth);
+            break;
+        }
+        }
+    }
 }
 
 void RecipeInspector::buildReads(const graph::Recipe &recipe, const Node &node) {

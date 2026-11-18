@@ -61,6 +61,7 @@ but a file's name stand for themselves.
 | `moves=` | Where a thing goes: a clip of the project, by its id, handed over as its place on every frame. As many as wanted. See [Where a thing goes](#where-a-thing-goes). |
 | `seconds=`, `size=WxH` | How long and how large. |
 | `seed=` | A whole number, for a model that gives the same file for the same seed. |
+| `workflow=` | A graph of the model's own to run in place of the one its program would: a file of the project, for a model whose program takes one. See [A workflow of the shot's own](#a-workflow-of-the-shots-own). |
 | `out={name}` | Writes a file for a later step in place of the shot's own, so one model's picture can be the next one's `first=`. |
 
 Anything else on the line, such as `strength=0.6`, goes to the model as it is
@@ -132,7 +133,8 @@ step's line, `signal=bounce` or `ref={ball.png}`, and one is let go under the
 step's Reads. Make,
 Make again, Several and Stop are in the graph's head and do what the bin's do:
 what would run is shown first, and each making is a new take, chosen among in the
-takes' node.
+takes' node. A model run with `kerf-comfy` opens further, into the ComfyUI
+workflow it is run with ([A workflow of the shot's own](#a-workflow-of-the-shots-own)).
 
 This is a person's own change, written in place as a text editor writes it: the
 takes made before say the recipe changed since, and the next making is of the
@@ -420,6 +422,7 @@ program with `{request}` as the file's path:
   "size": null,
   "seed": 7,
   "signals": [],
+  "workflow": null,
   "more": { "strength": "0.6" },
   "out": "/project/shots/open.takes/.making-003.mp4"
 }
@@ -562,7 +565,7 @@ A workflow is a ComfyUI graph, as ComfyUI exports it for its API, with blanks
 in it, and what the model it runs makes: its rate, how many frames, how
 large. `shot` comes with the program, for a model that follows a guide
 video, a reference picture (`ref=`), both, or the prompt alone. `--workflow`
-takes a file too, and `tools/kerf-comfy/workflows/shot.json` is the one to
+takes a file too, and `crates/surfaces/kerf-workflow/workflows/shot.json` is the one to
 start from. `kerf-comfy --list` names those that come with it; the others
 [read a picture back](#a-picture-read-back).
 
@@ -604,6 +607,45 @@ says that one is running and for how long, not how far along it is; on
 Windows a making that is stopped ends the program outright, so its job stays
 on the server; and what it sends up and what the server saves stay on the
 server.
+
+### A workflow of the shot's own
+
+A workflow that comes with `kerf-comfy` is one way of running its model.
+Changing how a shot's model is run, its sampler, how a loader reads its
+weights, a node's own number that no blank reaches, does not mean changing
+`kerf-comfy` or anything on the ComfyUI server. The shot keeps a copy of the
+workflow in the project, beside its recipe, and its line names it:
+
+```text
+generate model=video prompt="a basketball bounces on a court" guide={depth.mp4} seed=7 workflow=bounce.video.comfy.json
+```
+
+`workflow=` is a file of the project, named from the recipe's folder as any
+file a line names. The request holds where it is (`"workflow"`), and
+`kerf-comfy` runs it in place of the workflow its entry names, saying so
+(`with the recipe's own workflow, …`); the model's entry in your models file
+is as it was, so every other shot is made as before. Being a file the recipe
+reads, it travels with the project, a recipe that names one that is not there
+cannot run, and a take is held to it: change the copy and the shot wants
+making, naming the file. Take the word off the line and the shot is made with
+the workflow as it comes again. A model whose program takes no workflow has
+no use for the word.
+
+In the editor the copy is made for you. In a shot's graph
+([As a graph](#as-a-graph)), a model your entry runs with `kerf-comfy` opens
+into its workflow: every node of the ComfyUI graph and every input of each. An
+input is a link to another node, a blank the recipe fills (marked, with what
+fills it and what the line gives for it now), or a value the workflow itself
+sets, which is yours to set there. The first value set copies the workflow as
+it comes into the project as `<shot>.<model>.comfy.json`, with that value
+changed and every other byte as it was, and adds `workflow=` to the line; the
+next is a change to that file. A blank is set on the recipe's line, and a link
+is the graph's own shape: to rewire a workflow, edit its file, or export one
+from ComfyUI for its API and put the blanks in.
+
+ComfyUI is another program. Kerf reads workflow files and asks a server over
+HTTP when a shot is made; it loads none of ComfyUI's code and changes none of
+its files.
 
 ### A picture read back
 

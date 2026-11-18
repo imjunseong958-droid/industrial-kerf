@@ -41,7 +41,7 @@
 //! ask for. `{no_picture}` is a small black picture on the server, for a
 //! node that loads a file and will not run without pictures beside it.
 
-use crate::request::{names_a_file, names_a_signal, names_what_is_handed};
+use crate::names::{guide_named, names_a_file, names_a_signal, names_what_is_handed, MOVES, MOVES_BOX, MOVES_VIDEO};
 use serde::Deserialize;
 use serde_json::{Map, Value};
 use std::collections::{BTreeMap, BTreeSet};
@@ -50,7 +50,7 @@ use std::path::Path;
 /// The version of workflow file this program reads.
 const WORKFLOW_VERSION: u32 = 1;
 
-/// The workflows that come with this program, by name.
+/// The workflows that come with kerf-comfy, by name.
 pub const BUNDLED: [(&str, &str); 12] = [
     ("shot", include_str!("../workflows/shot.json")),
     ("shot-timed", include_str!("../workflows/shot-timed.json")),
@@ -118,7 +118,7 @@ fn one() -> u32 {
 }
 
 impl Workflow {
-    /// The workflow `name` names: a file, or one that comes with this program.
+    /// The workflow `name` names: a file, or one that comes with kerf-comfy.
     pub fn named(name: &str) -> Result<Self, String> {
         if Path::new(name).is_file() {
             let text = std::fs::read_to_string(name)
@@ -243,8 +243,8 @@ impl Workflow {
                 );
             }
             let mut reads = vec![of];
-            if blanks.contains(crate::request::MOVES) {
-                reads.push(crate::request::MOVES);
+            if blanks.contains(MOVES) {
+                reads.push(MOVES);
             }
             takes.insert("reads".to_owned(), Value::from(reads));
             let more: Map<String, Value> = self
@@ -267,7 +267,7 @@ impl Workflow {
         reads.extend(
             blanks
                 .iter()
-                .filter(|name| crate::request::guide_named(name).is_some())
+                .filter(|name| guide_named(name).is_some())
                 .map(String::as_str),
         );
         let references = blanks
@@ -281,11 +281,11 @@ impl Workflow {
         if signals > 0 {
             reads.push("signal");
         }
-        if blanks.contains(crate::request::MOVES)
-            || blanks.contains(crate::request::MOVES_VIDEO)
-            || blanks.contains(crate::request::MOVES_BOX)
+        if blanks.contains(MOVES)
+            || blanks.contains(MOVES_VIDEO)
+            || blanks.contains(MOVES_BOX)
         {
-            reads.push(crate::request::MOVES);
+            reads.push(MOVES);
         }
         let more: Map<String, Value> = self
             .set

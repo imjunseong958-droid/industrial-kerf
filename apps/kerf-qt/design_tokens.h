@@ -423,6 +423,10 @@ constexpr int graphPad = 12;            // what floats over the canvas keeps thi
 constexpr int graphPanelWidth = 1480;   // the panel it opens in, over the window, at most
 constexpr int graphPanelHeight = 900;
 constexpr int graphBar = 48;            // the panel's head: the shot, what it wants, Make
+constexpr int graphPartWidth = 232;     // a node of a model's workflow: its name over a row an input
+constexpr int graphPartGap = 64;        // between its columns: its rows name what comes in, so the edges need less room
+constexpr int graphPartHead = 28;       // its name's row
+constexpr int graphPartRow = 20;        // a row of it, an input
 } // namespace layout
 
 } // namespace kerf::tokens

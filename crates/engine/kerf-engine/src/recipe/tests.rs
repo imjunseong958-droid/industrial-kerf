@@ -389,6 +389,7 @@ fn a_request_says_where_every_file_is() {
             "seed": 7,
             "signals": [],
             "moves": [],
+            "workflow": null,
             "more": {"strength": "0.6"},
             "out": "/project/shots/open.takes/001.work/out",
         })
@@ -1065,6 +1066,64 @@ fn a_model_is_handed_its_request_and_writes_the_take() {
         .to_string();
     assert!(unset.contains("no model `dawn` is set up"), "{unset}");
     assert!(!directory.join("shots/open.takes/002.work").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_line_hands_a_model_a_workflow_of_the_project_and_a_take_is_held_to_it() {
+    let folder = tempfile::tempdir().unwrap();
+    let directory = folder.path();
+    std::fs::create_dir_all(directory.join("shots")).unwrap();
+    std::fs::write(
+        directory.join("shots/open.kerfrecipe"),
+        "kerf-recipe 1
+generate model=dawn prompt=\"a boat leaves\" workflow=open.dawn.comfy.json seed=7\n",
+    )
+    .unwrap();
+    // A model that answers with what it was asked. What it has said it reads says nothing
+    // of a workflow, and nothing is noted of one: whether its program takes one is its own.
+    let some = models(
+        directory,
+        r#"{"dawn": {"run": ["sh", "-c", "cp \"$1\" \"$(sed -n 's/.*\"out\": \"\\(.*\\)\".*/\\1/p' \"$1\")\"", "dawn", "{request}"],
+                     "takes": {"reads": ["guide"]}}}"#,
+    );
+    let project = shot("shots/open.json");
+    // It is a file the recipe reads: not there, the recipe cannot run, and says which.
+    let missing = plan(&project, directory, "m1", &some).unwrap_err().to_string();
+    assert!(
+        missing.contains("the recipe needs `shots/open.dawn.comfy.json`, which is not there"),
+        "{missing}"
+    );
+    std::fs::write(directory.join("shots/open.dawn.comfy.json"), "{\"steps\": 20}").unwrap();
+    let planned = plan(&project, directory, "m1", &some).unwrap();
+    assert!(planned.notes.is_empty(), "{:?}", planned.notes);
+    assert!(planned.command.contains("workflow open.dawn.comfy.json"), "{}", planned.command);
+    let token = CancellationToken::new();
+    let made = make(&project, directory, &planned, &some, &token, |_| {}).unwrap();
+    let request: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(directory.join(&made.stored)).unwrap()).unwrap();
+    assert_eq!(
+        request["workflow"],
+        directory
+            .join("shots/open.dawn.comfy.json")
+            .to_string_lossy()
+            .into_owned()
+    );
+    // The take is held to it: changed, the shot wants making, and says for what.
+    let project = shot(&made.stored);
+    let wants = |project: &Project| unmade(project, directory, project.media("m1").unwrap());
+    assert_eq!(wants(&project), None);
+    std::fs::write(directory.join("shots/open.dawn.comfy.json"), "{\"steps\": 30}").unwrap();
+    assert_eq!(
+        wants(&project),
+        Some(Unmade::Stale(vec!["shots/open.dawn.comfy.json".to_owned()]))
+    );
+    // A line with none asks with none.
+    let ask = Ask::parse(&["model=dawn".to_owned()], &[]).unwrap();
+    let request = ask
+        .request(&|_| unreachable!(), &|name| Path::new("/work").join(name), &[], &[])
+        .unwrap();
+    assert_eq!(request["workflow"], serde_json::Value::Null);
 }
 
 #[cfg(unix)]

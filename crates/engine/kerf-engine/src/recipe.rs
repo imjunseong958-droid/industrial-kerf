@@ -27,6 +27,8 @@
 //!   (`prompt=`), what guides it (`guide=`, `first=`, `last=`, `ref=`), when
 //!   it happens (`signal=`, a signal clip of the project: [`signal`]), and
 //!   for how long and at what size (`seconds=`, `size=`), with a `seed=`.
+//!   `workflow=` hands a model whose program takes one a graph of its own to
+//!   run, a file of the project ([`model`]).
 //!   `cast=` and `style=` name who and what it shows and how it looks, as
 //!   the project says them once for every recipe ([`cast`]).
 //!
@@ -637,6 +639,33 @@ pub(crate) fn versioned(recipe: &Path) -> (String, u32) {
         }
         _ => (stem, 1),
     }
+}
+
+/// The name the versions of the recipe `recipe` names share, which is the
+/// shot's: `open` of `shots/open@2.kerfrecipe`.
+pub fn shot_name(recipe: &str) -> String {
+    versioned(Path::new(recipe)).0
+}
+
+/// Where the file `file` is, named as the recipe of media `id` names its
+/// files, from its own folder: its place on this machine, and its path from
+/// the project's folder as a document would write it. A path that leaves
+/// the project is refused, and so is a media that names no recipe.
+pub fn beside(
+    project: &kerf_model::Project,
+    directory: &Path,
+    id: &str,
+    file: &str,
+) -> Result<(PathBuf, String)> {
+    let media = project
+        .media(id)
+        .ok_or_else(|| EngineError::msg(format!("no media `{id}` in this project")))?;
+    let name = media
+        .recipe
+        .as_deref()
+        .ok_or_else(|| EngineError::msg(format!("media `{id}` names no recipe")))?;
+    let inside = within(&folder_of(name), file, "file the recipe names")?;
+    Ok((directory.join(&inside), stored(&inside)))
 }
 
 /// What a recipe's file ends with.

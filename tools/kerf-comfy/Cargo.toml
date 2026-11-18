@@ -12,6 +12,8 @@ path = "src/main.rs"
 
 [dependencies]
 hex = "0.4"
+# The workflow's file: its blanks, what it makes, and those that come with this program.
+kerf-workflow = { path = "../../crates/surfaces/kerf-workflow" }
 serde = { workspace = true }
 serde_json = "1"
 sha2 = "0.10"

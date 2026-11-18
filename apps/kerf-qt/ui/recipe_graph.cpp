@@ -9,6 +9,7 @@
 #include <QCryptographicHash>
 #include <QFontMetricsF>
 #include <QJsonArray>
+#include <QJsonDocument>
 #include <QKeyEvent>
 #include <QMouseEvent>
 #include <QNativeGestureEvent>
@@ -104,6 +105,67 @@ Recipe Recipe::read(const QJsonObject &event) {
     return recipe;
 }
 
+InputKind inputKind(const QJsonObject &input) {
+    if (input.contains(QStringLiteral("link"))) return InputKind::Link;
+    return input.value(QStringLiteral("blanks")).toArray().isEmpty() ? InputKind::Value : InputKind::Blank;
+}
+
+QString valueText(const QJsonValue &value) {
+    if (value.isString()) return value.toString();
+    if (value.isBool()) return value.toBool() ? QStringLiteral("true") : QStringLiteral("false");
+    if (value.isDouble()) return QString::number(value.toDouble(), 'g', 12);
+    if (value.isNull() || value.isUndefined()) return {};
+    return QString::fromUtf8(QJsonDocument(value.isArray() ? QJsonDocument(value.toArray()) : QJsonDocument(value.toObject())).toJson(QJsonDocument::Compact));
+}
+
+Workflow Workflow::read(const QJsonObject &event) {
+    Workflow workflow;
+    workflow.media = event.value(QStringLiteral("media")).toString();
+    workflow.line = event.value(QStringLiteral("line")).toInt();
+    workflow.model = event.value(QStringLiteral("model")).toString();
+    workflow.name = event.value(QStringLiteral("name")).toString();
+    workflow.origin = event.value(QStringLiteral("origin")).toString();
+    workflow.file = event.value(QStringLiteral("file")).toString();
+    workflow.about = event.value(QStringLiteral("about")).toString();
+    workflow.text = event.value(QStringLiteral("text")).toString();
+    workflow.blanks = event.value(QStringLiteral("blanks")).toObject();
+    Recipe &graph = workflow.graph;
+    graph.media = workflow.media;
+    graph.name = workflow.model;
+    graph.recipe = workflow.isOwn() ? workflow.file : workflow.name;
+    graph.text = workflow.text;
+    graph.parts = true;
+    const auto idOf = [](const QString &id) { return QStringLiteral("part:%1").arg(id); };
+    for (const QJsonValue value : event.value(QStringLiteral("nodes")).toArray()) {
+        const QJsonObject object = value.toObject();
+        Node node;
+        const QString id = object.value(QStringLiteral("id")).toString();
+        node.id = idOf(id);
+        node.kind = Kind::Part;
+        // By what ComfyUI's own editor calls it where its export says, else by its kind.
+        const QString kind = object.value(QStringLiteral("class")).toString();
+        node.title = object.value(QStringLiteral("title")).toString(kind);
+        node.detail = node.title == kind ? QString() : kind;
+        node.gives = Gives::File;
+        node.holds = object;
+        if (!id.isEmpty()) graph.nodes << node;
+    }
+    for (const Node &node : std::as_const(graph.nodes)) {
+        for (const QJsonValue value : node.holds.value(QStringLiteral("inputs")).toArray()) {
+            const QJsonObject input = value.toObject();
+            const QJsonArray link = input.value(QStringLiteral("link")).toArray();
+            if (link.isEmpty()) continue;
+            Edge edge;
+            edge.from = idOf(link.at(0).toString());
+            edge.to = node.id;
+            edge.port = input.value(QStringLiteral("name")).toString();
+            edge.gives = Gives::File;
+            if (graph.node(edge.from)) graph.edges << edge;
+        }
+    }
+    return workflow;
+}
+
 QColor colorOf(Gives gives) {
     switch (gives) {
     case Gives::Video: return color(tokens::nodes::video);
@@ -141,6 +203,7 @@ QString glyphOf(const Node &node) {
     case Kind::Cast: return QStringLiteral("g-user");
     case Kind::Style: return QStringLiteral("g-fx");
     case Kind::Takes: return QStringLiteral("g-video");
+    case Kind::Part: return QStringLiteral("g-fx");
     }
     return QStringLiteral("g-file");
 }
@@ -151,6 +214,10 @@ bool isMissing(const Node &node) {
 }
 
 QSizeF cardSize(const Node &node) {
+    // A workflow's node is its name and a row for each of its inputs.
+    if (node.kind == Kind::Part)
+        return QSizeF(layout::graphPartWidth,
+                      layout::graphPartHead + layout::graphPartRow * node.holds.value(QStringLiteral("inputs")).toArray().size() + 8);
     qreal height = layout::graphCardHeight;
     // A model says a third thing: its seed and what else its line sets.
     if (node.kind == Kind::Model) height += 18;
@@ -221,6 +288,8 @@ namespace {
 
 // A card's height once it has room for each thing it reads to come in apart.
 qreal heightFor(const Recipe &recipe, const Node &node) {
+    // A workflow's node has a row for each input already.
+    if (node.kind == Kind::Part) return cardSize(node).height();
     return std::max(cardSize(node).height(), 16.0 + 24.0 * recipe.into(node.id).size());
 }
 
@@ -286,7 +355,8 @@ QHash<QString, QPointF> arranged(const Recipe &recipe) {
         for (int index = 0; index < here.size(); ++index) {
             const Node *node = here.at(index);
             row.insert(node->id, index);
-            places.insert(node->id, QPointF(at * (layout::graphCardWidth + layout::graphColumnGap), std::round(y)));
+            const qreal pitch = cardSize(*node).width() + (node->kind == Kind::Part ? layout::graphPartGap : layout::graphColumnGap);
+            places.insert(node->id, QPointF(at * pitch, std::round(y)));
             y += heightFor(recipe, *node) + layout::graphRowGap;
         }
     }
@@ -304,6 +374,10 @@ namespace {
 
 constexpr qreal kZoomLeast = 0.35;
 constexpr qreal kZoomMost = 2.0;
+// The smallest a graph is shown at by itself: smaller than this its words are
+// not read, so a graph too wide for the canvas starts at its left at this
+// size, to be moved along, and Fit takes all of it in.
+constexpr qreal kZoomRead = 0.7;
 // A press that moves less than this is a click.
 constexpr qreal kDragFrom = 3.0;
 // How near the pointer has to be to a port to be on it, in points on the screen.
@@ -311,6 +385,12 @@ constexpr qreal kPortReach = 9.0;
 // The legend: a line of each kind and its name, in a card at the canvas's foot.
 constexpr int kLegendHeight = 28;
 constexpr int kLegendSample = 16;
+// A workflow's legend: what its rows are.
+const QString kLegendLink = QStringLiteral("link");
+const QString kLegendBlank = QStringLiteral("{blank}");
+const QString kLegendBlankSays = QStringLiteral("the recipe fills");
+const QString kLegendValue = QStringLiteral("value");
+const QString kLegendValueSays = QStringLiteral("set here");
 
 QString settingsKey(const QString &key) {
     return QStringLiteral("graph/placed/%1")
@@ -376,7 +456,7 @@ void RecipeGraphView::setRecipe(const graph::Recipe &recipe) {
     for (const Node &node : m_recipe.nodes) before << node.id;
     QStringList now;
     for (const Node &node : recipe.nodes) now << node.id;
-    const bool another = m_recipe.media != recipe.media || m_recipe.recipe != recipe.recipe;
+    const bool another = m_recipe.media != recipe.media || m_recipe.recipe != recipe.recipe || m_recipe.parts != recipe.parts;
     m_recipe = recipe;
     m_places = graph::arranged(m_recipe);
     for (auto placed = m_placed.constBegin(); placed != m_placed.constEnd(); ++placed)
@@ -388,9 +468,12 @@ void RecipeGraphView::setRecipe(const graph::Recipe &recipe) {
     m_hovered.clear();
     setAccessibleName(m_recipe.name.isEmpty() ? QStringLiteral("Graph") : QStringLiteral("Graph of %1").arg(m_recipe.name));
     placeControls();
-    // Another shot, or other nodes, is another picture to take in whole.
-    if (another) m_fitted = true;
-    if (m_fitted && (another || before != now)) fit();
+    // Another shot, or other nodes, is another picture to take in.
+    if (another) {
+        m_fitted = true;
+        m_fitWhole = false;
+    }
+    if (m_fitted && (another || before != now)) settle();
     update();
 }
 
@@ -447,7 +530,7 @@ void RecipeGraphView::followMaking() {
 void RecipeGraphView::showEvent(QShowEvent *event) {
     QWidget::showEvent(event);
     followMaking();
-    if (m_fitted) fit();
+    if (m_fitted) settle();
 }
 
 void RecipeGraphView::hideEvent(QHideEvent *event) {
@@ -463,11 +546,16 @@ void RecipeGraphView::setFootRadius(qreal radius) {
 void RecipeGraphView::setCovered(int right) {
     if (right == m_covered) return;
     m_covered = right;
-    if (m_fitted) fit();
+    if (m_fitted) settle();
     update();
 }
 
 void RecipeGraphView::fit() {
+    m_fitWhole = true;
+    settle();
+}
+
+void RecipeGraphView::settle() {
     m_fitted = true;
     QRectF all;
     for (const Node &node : m_recipe.nodes) all |= sceneRect(node.id);
@@ -482,6 +570,14 @@ void RecipeGraphView::fit() {
     const qreal zoom = std::min({1.0, room.width() / all.width(), room.height() / all.height()});
     m_zoom = std::clamp(zoom, kZoomLeast, kZoomMost);
     m_offset = room.center() - all.center() * m_zoom;
+    if (!m_fitWhole && m_zoom < kZoomRead) {
+        // Too wide or too tall to be read whole: where it starts, at a size that is.
+        m_zoom = kZoomRead;
+        const bool wide = all.width() * m_zoom > room.width();
+        const bool tall = all.height() * m_zoom > room.height();
+        m_offset = QPointF(wide ? room.left() - all.left() * m_zoom : room.center().x() - all.center().x() * m_zoom,
+                           tall ? room.top() - all.top() * m_zoom : room.center().y() - all.center().y() * m_zoom);
+    }
     update();
 }
 
@@ -499,7 +595,7 @@ void RecipeGraphView::zoomBy(qreal factor, const QPointF &about) {
 QRectF RecipeGraphView::sceneRect(const QString &id) const {
     const Node *node = m_recipe.node(id);
     if (!node || !m_places.contains(id)) return {};
-    return QRectF(m_places.value(id), QSizeF(layout::graphCardWidth, graph::heightFor(m_recipe, *node)));
+    return QRectF(m_places.value(id), QSizeF(graph::cardSize(*node).width(), graph::heightFor(m_recipe, *node)));
 }
 
 QRectF RecipeGraphView::cardRect(const QString &id) const {
@@ -509,11 +605,22 @@ QRectF RecipeGraphView::cardRect(const QString &id) const {
 
 QPointF RecipeGraphView::outPort(const QString &id) const {
     const QRectF card = sceneRect(id);
+    // A workflow's node gives from beside its name, over its rows.
+    if (const Node *node = m_recipe.node(id); node && node->kind == Kind::Part)
+        return QPointF(card.right(), card.top() + layout::graphPartHead / 2.0 + 2);
     return QPointF(card.right(), card.center().y());
 }
 
 QPointF RecipeGraphView::inPort(const Edge &edge) const {
     const QRectF card = sceneRect(edge.to);
+    if (const Node *to = m_recipe.node(edge.to); to && to->kind == Kind::Part) {
+        // At the row of the input it is.
+        const QJsonArray inputs = to->holds.value(QStringLiteral("inputs")).toArray();
+        int row = 0;
+        for (int at = 0; at < inputs.size(); ++at)
+            if (inputs.at(at).toObject().value(QStringLiteral("name")).toString() == edge.port) row = at;
+        return QPointF(card.left(), card.top() + layout::graphPartHead + layout::graphPartRow * (row + 0.5));
+    }
     const QList<Edge> into = m_recipe.into(edge.to);
     int index = 0;
     for (int at = 0; at < into.size(); ++at)
@@ -550,6 +657,14 @@ QList<Gives> RecipeGraphView::legend() const {
 QRectF RecipeGraphView::legendRect() const {
     const QFontMetricsF metrics(tokens::font(meta));
     qreal width = 12;
+    if (m_recipe.parts) {
+        // A link, a blank and a value, as a workflow's rows show them.
+        const QFontMetricsF mono(tokens::font(monoSmall));
+        width += kLegendSample + 6 + metrics.horizontalAdvance(kLegendLink) + 14;
+        width += mono.horizontalAdvance(kLegendBlank) + 10 + 6 + metrics.horizontalAdvance(kLegendBlankSays) + 14;
+        width += mono.horizontalAdvance(kLegendValue) + 6 + metrics.horizontalAdvance(kLegendValueSays) + 14;
+        return QRectF(layout::graphPad, height() - layout::graphPad - kLegendHeight, std::ceil(width - 2), kLegendHeight);
+    }
     for (const Gives gives : legend()) width += kLegendSample + 6 + metrics.horizontalAdvance(graph::nameOf(gives)) + 14;
     return QRectF(layout::graphPad, height() - layout::graphPad - kLegendHeight, std::ceil(width - 2), kLegendHeight);
 }
@@ -573,8 +688,9 @@ void RecipeGraphView::placeControls() {
 
 QString RecipeGraphView::portAt(const QPointF &at) const {
     for (auto node = m_recipe.nodes.crbegin(); node != m_recipe.nodes.crend(); ++node) {
-        // The takes give nothing on: they are where the graph ends.
-        if (node->kind == Kind::Takes) continue;
+        // The takes give nothing on: they are where the graph ends. A
+        // workflow's links are its own shape, and are not drawn here.
+        if (node->kind == Kind::Takes || node->kind == Kind::Part) continue;
         const QPointF port = toView(outPort(node->id));
         if (std::hypot(port.x() - at.x(), port.y() - at.y()) <= kPortReach) return node->id;
     }
@@ -587,7 +703,72 @@ QString RecipeGraphView::nodeAt(const QPointF &at) const {
     return {};
 }
 
+void RecipeGraphView::paintPart(QPainter &p, const Node &node) const {
+    const QRectF card = sceneRect(node.id);
+    const qreal radius = radius::card;
+    const bool selected = node.id == m_selected;
+    p.setPen(Qt::NoPen);
+    p.setBrush(color(tokens::nodes::node));
+    p.drawRoundedRect(card, radius, radius);
+    ui::paintInsetLine(p, card, radius, color(node.id == m_hovered && !selected ? lineh : line2));
+    if (selected) ui::paintFocusRing(p, card, radius);
+    // Its name, and its number in the graph at the end.
+    const QFont tagFont = tokens::font(monoSmall);
+    const QString number = QStringLiteral("#%1").arg(node.holds.value(QStringLiteral("id")).toString());
+    const qreal numberWidth = std::ceil(QFontMetricsF(tagFont).horizontalAdvance(number));
+    p.setFont(tagFont);
+    p.setPen(color(ink3));
+    p.drawText(QRectF(card.right() - 10 - numberWidth, card.top() + 4, numberWidth, layout::graphPartHead - 4), Qt::AlignRight | Qt::AlignVCenter, number);
+    const QFont titleFont = tokens::font(controlStrong);
+    const qreal titleWidth = card.width() - 20 - numberWidth - 8;
+    p.setFont(titleFont);
+    p.setPen(color(ink));
+    p.drawText(QRectF(card.left() + 10, card.top() + 4, titleWidth, layout::graphPartHead - 4), Qt::AlignLeft | Qt::AlignVCenter,
+               QFontMetricsF(titleFont).elidedText(node.title, Qt::ElideRight, titleWidth));
+    p.fillRect(QRectF(card.left() + 1, card.top() + layout::graphPartHead, card.width() - 2, 1), color(line));
+    // A row an input: its name, and what it is. A link's comes in at the row;
+    // a blank is the recipe's, in the accent's ink on a wash of it; a value is
+    // the workflow's own, plain.
+    const QFont nameFont = tokens::font(meta);
+    const QFont valueFont = tokens::font(monoSmall);
+    const QFontMetricsF nameMetrics(nameFont);
+    const QFontMetricsF valueMetrics(valueFont);
+    const QJsonArray inputs = node.holds.value(QStringLiteral("inputs")).toArray();
+    for (int at = 0; at < inputs.size(); ++at) {
+        const QJsonObject input = inputs.at(at).toObject();
+        const QRectF row(card.left() + 10, card.top() + layout::graphPartHead + 2 + layout::graphPartRow * at, card.width() - 20, layout::graphPartRow);
+        const QString name = input.value(QStringLiteral("name")).toString();
+        const graph::InputKind kind = graph::inputKind(input);
+        p.setFont(nameFont);
+        p.setPen(color(kind == graph::InputKind::Link ? ink2 : ink3));
+        const qreal nameWidth = std::min(row.width() * 0.5, std::ceil(nameMetrics.horizontalAdvance(name)));
+        p.drawText(QRectF(row.left(), row.top(), nameWidth, row.height()), Qt::AlignLeft | Qt::AlignVCenter,
+                   nameMetrics.elidedText(name, Qt::ElideRight, nameWidth));
+        if (kind == graph::InputKind::Link) continue;
+        const qreal room = row.width() - nameWidth - 10;
+        const QString said = valueMetrics.elidedText(graph::valueText(input.value(QStringLiteral("value"))), Qt::ElideRight,
+                                                     kind == graph::InputKind::Blank ? room - 10 : room);
+        const qreal width = std::ceil(valueMetrics.horizontalAdvance(said));
+        p.setFont(valueFont);
+        if (kind == graph::InputKind::Blank) {
+            const QRectF pill(row.right() - width - 10, row.top() + 2, width + 10, row.height() - 4);
+            p.setPen(Qt::NoPen);
+            p.setBrush(color(accentWash));
+            p.drawRoundedRect(pill, 4, 4);
+            p.setPen(color(accentInk));
+            p.drawText(pill, Qt::AlignCenter, said);
+        } else {
+            p.setPen(color(tokens::ink2));
+            p.drawText(QRectF(row.right() - width, row.top(), width, row.height()), Qt::AlignRight | Qt::AlignVCenter, said);
+        }
+    }
+}
+
 void RecipeGraphView::paintCard(QPainter &p, const Node &node) const {
+    if (node.kind == Kind::Part) {
+        paintPart(p, node);
+        return;
+    }
     const QRectF card = sceneRect(node.id);
     const qreal radius = radius::panel;
     const QColor type = graph::colorOf(node.gives);
@@ -728,6 +909,38 @@ void RecipeGraphView::paintLegend(QPainter &p) const {
     const QFontMetricsF metrics(font);
     p.setFont(font);
     qreal x = card.left() + 10;
+    if (m_recipe.parts) {
+        const QFont mono = tokens::font(monoSmall);
+        const QFontMetricsF monoMetrics(mono);
+        const auto says = [&](const QString &text) {
+            p.setFont(font);
+            p.setPen(color(ink2));
+            const qreal width = metrics.horizontalAdvance(text);
+            p.drawText(QRectF(x, card.top(), width + 2, card.height()), Qt::AlignLeft | Qt::AlignVCenter, text);
+            x += width + 14;
+        };
+        p.setPen(QPen(graph::colorOf(Gives::File), 1.5, Qt::SolidLine, Qt::RoundCap));
+        p.drawLine(QPointF(x, card.center().y()), QPointF(x + kLegendSample, card.center().y()));
+        x += kLegendSample + 6;
+        says(kLegendLink);
+        const qreal blank = monoMetrics.horizontalAdvance(kLegendBlank) + 10;
+        const QRectF pill(x, card.center().y() - 8, blank, 16);
+        p.setPen(Qt::NoPen);
+        p.setBrush(color(accentWash));
+        p.drawRoundedRect(pill, 4, 4);
+        p.setFont(mono);
+        p.setPen(color(accentInk));
+        p.drawText(pill, Qt::AlignCenter, kLegendBlank);
+        x += blank + 6;
+        says(kLegendBlankSays);
+        p.setFont(mono);
+        p.setPen(color(ink2));
+        const qreal value = monoMetrics.horizontalAdvance(kLegendValue);
+        p.drawText(QRectF(x, card.top(), value + 2, card.height()), Qt::AlignLeft | Qt::AlignVCenter, kLegendValue);
+        x += value + 6;
+        says(kLegendValueSays);
+        return;
+    }
     for (const Gives gives : legend()) {
         const QString name = graph::nameOf(gives);
         p.setPen(QPen(graph::colorOf(gives), 1.5, Qt::SolidLine, Qt::RoundCap));
@@ -857,7 +1070,7 @@ void RecipeGraphView::paintEvent(QPaintEvent *) {
 void RecipeGraphView::resizeEvent(QResizeEvent *event) {
     QWidget::resizeEvent(event);
     placeControls();
-    if (m_fitted) fit();
+    if (m_fitted) settle();
 }
 
 void RecipeGraphView::mousePressEvent(QMouseEvent *event) {
