@@ -1484,6 +1484,7 @@ fn rendered_preview(
             }),
             reel: None,
             recipe: None,
+            steps: Vec::new(),
         }],
         sequences: vec![Sequence {
             id: id("program")?,

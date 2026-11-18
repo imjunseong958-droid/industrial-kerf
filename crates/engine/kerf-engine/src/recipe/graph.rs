@@ -23,7 +23,7 @@
 
 use super::model::{Ask, Models, Source};
 use super::signal::Signal;
-use super::{folder_of, inside_project, stored, text::step_lines, versioned, within, Recipe, Step};
+use super::{stored, text::step_lines, within, Home, Recipe, Step};
 use crate::error::{EngineError, Result};
 use kerf_compose::Pass;
 use kerf_model::{Content, Param, Project, Value};
@@ -129,10 +129,15 @@ pub struct Edge {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Graph {
     /// The media made, its recipe as the document names it, and the shot's name.
+    /// Steps the document holds under the media have no recipe to name: `recipe`
+    /// is then empty, and `document` says so.
     pub media: String,
     pub recipe: String,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub document: bool,
     pub name: String,
-    /// The recipe's text, as its file holds it.
+    /// The steps' text: as the recipe's file holds it, or written out from the
+    /// document, a step a line after the first.
     pub text: String,
     pub nodes: Vec<Node>,
     pub edges: Vec<Edge>,
@@ -600,17 +605,15 @@ pub fn graph(project: &Project, directory: &Path, id: &str, models: &Models) -> 
     let media = project
         .media(id)
         .ok_or_else(|| EngineError::msg(format!("no media `{id}` in this project")))?;
-    let name = media.recipe.as_deref().ok_or_else(|| {
-        EngineError::msg(format!("media `{id}` names no recipe, so there is no graph of how it is made"))
-    })?;
-    let file = inside_project(directory, name, "recipe")?;
-    let text = std::fs::read_to_string(&file).map_err(|error| {
-        EngineError::msg(format!("cannot read the recipe {}: {error}", file.display()))
-    })?;
+    let (home, text) = super::written(project, directory, id)?;
     let mut graph = Graph {
         media: id.to_owned(),
-        recipe: name.to_owned(),
-        name: versioned(Path::new(name)).0,
+        recipe: match &home {
+            Home::File(name) => name.clone(),
+            Home::Document => String::new(),
+        },
+        document: home == Home::Document,
+        name: home.shot(id),
         text,
         nodes: Vec::new(),
         edges: Vec::new(),
@@ -621,11 +624,11 @@ pub fn graph(project: &Project, directory: &Path, id: &str, models: &Models) -> 
     let recipe = match Recipe::parse(&graph.text) {
         Ok(recipe) => recipe,
         Err(error) => {
-            graph.error = Some(error.to_string());
+            graph.error = Some(super::in_document(&home, error).to_string());
             return Ok(graph);
         }
     };
-    let folder = folder_of(name);
+    let folder = home.folder();
     let cast = super::cast::Cast::read(directory).ok();
     let mut building = Building {
         project,

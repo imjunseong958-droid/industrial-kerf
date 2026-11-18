@@ -647,6 +647,7 @@ pub(crate) fn media_from_probe(
         audio,
         reel: None,
         recipe: None,
+        steps: Vec::new(),
     })
 }
 

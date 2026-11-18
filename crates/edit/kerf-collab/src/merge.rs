@@ -512,11 +512,13 @@ fn merge_list<K: Ord + Clone, T: Clone + PartialEq>(
 
 /// The file merges as one unit, path and what it holds together: a relink
 /// on one side and a replacement on the other must not make one record of
-/// both. The reel and the recipe are labels, and each merges on its own.
+/// both. The reel and the recipe are labels, and each merges on its own, as do the
+/// steps that say how the file is made.
 fn merge_media(base: &Media, ours: &Media, theirs: &Media, clashes: &mut Vec<String>) -> Media {
     let file = |media: &Media| Media {
         reel: None,
         recipe: None,
+        steps: Vec::new(),
         ..media.clone()
     };
     Media {
@@ -528,6 +530,8 @@ fn merge_media(base: &Media, ours: &Media, theirs: &Media, clashes: &mut Vec<Str
             &theirs.recipe,
             clashes,
         ),
+        // How it is made is its steps together: a step changed on each side is one clash.
+        steps: pick("steps", &base.steps, &ours.steps, &theirs.steps, clashes),
         ..pick("file", &file(base), &file(ours), &file(theirs), clashes)
     }
 }
@@ -1521,6 +1525,7 @@ fn media_changes(before: &Media, after: &Media) -> Vec<String> {
     differs(&mut fields, "audio", &before.audio, &after.audio);
     differs(&mut fields, "reel", &before.reel, &after.reel);
     differs(&mut fields, "recipe", &before.recipe, &after.recipe);
+    differs(&mut fields, "steps", &before.steps, &after.steps);
     fields
 }
 

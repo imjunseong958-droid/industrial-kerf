@@ -20,6 +20,10 @@ rendered video or translate another editor's template format.
    shows the preset's editing code.
 6. Choose **Create proposal**, review the timeline, and accept the proposal.
 
+A preset does not carry how a media was made yet: the steps under a media
+of the project ([shots.md](shots.md#steps-in-the-document)) stay with the
+project, and a slot is filled with media the receiving project has.
+
 Export does not change the project. Applying replaces the program sequence;
 the existing project stays intact until acceptance, apart from the looks the
 preset brings (see below), and acceptance can be undone. Locked destination tracks must be unlocked first. A sequence that is

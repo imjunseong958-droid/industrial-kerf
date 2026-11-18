@@ -1,11 +1,25 @@
 kerf 1
 project name="The car on a road"
-media color path="shots/color.mp4" rate=16 dur=65f video=832x480 recipe="shots/color.kerfrecipe"
-media depth path="shots/depth.mp4" rate=16 dur=65f video=832x480 recipe="shots/depth.kerfrecipe"
-media ids path="shots/ids.mp4" rate=16 dur=65f video=832x480 recipe="shots/ids.kerfrecipe"
-media orbit path="shots/orbit.mp4" rate=16 dur=65f video=832x480 recipe="shots/orbit.kerfrecipe"
-media readback path="shots/readback.mp4" rate=16 dur=65f video=832x480 recipe="shots/readback.kerfrecipe"
-media views path="shots/views.mp4" rate=16 dur=65f video=832x480 recipe="shots/views.kerfrecipe"
+media color path="shots/color.mp4" rate=16 dur=65f video=832x480
+  render s2 {guide.mp4} size=832x480 rate=16
+  generate model=shot prompt="a red sports car drives along a wet city street at dusk, cinematic, photorealistic" guide={guide.mp4} seconds=4 seed=7
+media depth path="shots/depth.mp4" rate=16 dur=65f video=832x480
+  render s2 {guide.mp4} pass=depth size=832x480 rate=16
+  generate model=shot prompt="a red sports car drives along a wet city street at dusk, cinematic, photorealistic" guide={guide.mp4} seconds=4 seed=7
+media ids path="shots/ids.mp4" rate=16 dur=65f video=832x480
+  render s2 {guide.mp4} pass=ids size=832x480 rate=16
+  generate model=shot prompt="a red sports car drives along a wet city street at dusk, cinematic, photorealistic" guide={guide.mp4} seconds=4 seed=7
+media orbit path="shots/orbit.mp4" rate=16 dur=65f video=832x480
+  render s3 {guide.mp4} pass=depth size=832x480 rate=16
+  generate model=shot prompt="the camera circles around a red sports car parked on a wet city street at dusk, cinematic, photorealistic" guide={guide.mp4} seconds=4 seed=7
+media readback path="shots/readback.mp4" rate=16 dur=65f video=832x480
+  render s2 {guide.mp4} pass=depth size=832x480 rate=16
+  generate model=shot prompt="a red sports car drives along a wet city street at dusk, cinematic, photorealistic" guide={guide.mp4} seconds=4 seed=7 out={take.mp4}
+  generate model=depth guide={take.mp4}
+media views path="shots/views.mp4" rate=16 dur=65f video=832x480
+  render s3 {guide.mp4} size=832x480 rate=16
+  generate model=cameras guide={guide.mp4} out={cameras.txt}
+  generate model=depth guide={guide.mp4}
 sequence s1 rate=24 size=1664x960
   track V1 video
 sequence s2 rate=24 size=1664x960

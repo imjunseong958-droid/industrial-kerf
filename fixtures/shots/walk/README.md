@@ -23,14 +23,25 @@ kerf make man --yes
 kerf make layers --yes
 ```
 
-Each media's recipe makes one thing of the footage:
+How each media is made is in `project.kerf` itself, as the steps under its
+line, each making one thing of the footage. A file is named from the
+project's folder, and a later step reads what an earlier one made by its name
+in braces:
+
+```text
+media gone path="shots/gone.mp4" rate=16 dur=81f video=832x480
+  generate model=matte prompt="man" guide=footage/walk.mp4 out={man.mp4}
+  generate model=plate prompt="an empty dirt path below a dry grassy hillside, bushes and trees, daylight" guide=footage/walk.mp4 guide_mask={man.mp4} seed=7 reach=72
+```
 
 - `man`: the man as a matte, white on black, by his name.
 - `shown`: what `man, tree` finds, each thing in a color of its own with
   its number on it, which is the number `which=` keeps it by.
 - `shirt`: his shirt's matte, and the footage with that part made anew.
 - `gone`: the man taken out, and his shadow with him: the path and the
-  hillside that were behind him, by the model made for that.
+  hillside that were behind him, by the model made for that. `reach` takes
+  his shadow with him, which the model takes out and his matte does not
+  cover.
 - `layers`: sequence `s1` as Kerf draws it, and no model: the footage, a
   title over it, and the footage again over that, shown through the man's
   matte (`key.trackmatte`, the matte on a track that is turned off). The

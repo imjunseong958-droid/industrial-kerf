@@ -106,8 +106,9 @@ pub fn takes(project: &Project, directory: &Path, id: &str) -> Result<Vec<Take>,
 /// each workflow file it named that is no longer there as it was. Nothing is written.
 #[derive(Clone, Debug)]
 pub struct Restored {
-    /// The recipe's path as the document names it, and its text as the take had it.
-    pub recipe: String,
+    /// Where the media's steps are written, a recipe by the path the document names it
+    /// by or the document itself, and their text as the take had it.
+    pub home: kerf_engine::recipe::Home,
     pub text: String,
     /// Files to write beside the recipe: where each goes, its path from the project's
     /// folder, and what it holds.
@@ -130,7 +131,7 @@ pub fn restored(project: &Project, directory: &Path, id: &str, take: u32) -> Res
     let media = project
         .media(id)
         .ok_or_else(|| format!("no media `{id}` in this project"))?;
-    let (recipe, _) = crate::graph::recipe(project, directory, id)?;
+    let (home, _) = crate::graph::recipe(project, directory, id)?;
     let kept = kerf_engine::recipe::takes::kept(directory, media, take).ok_or_else(|| {
         format!("take {take} keeps nothing of the recipe it was made from: a take made before takes kept theirs, or one whose working folder is gone, has only what it is")
     })?;
@@ -184,7 +185,7 @@ pub fn restored(project: &Project, directory: &Path, id: &str, take: u32) -> Res
         }
     }
     Ok(Restored {
-        recipe,
+        home,
         text: now,
         files,
     })
@@ -301,7 +302,7 @@ mod tests {
         std::fs::write(&recipe, &now).unwrap();
         std::fs::write(dir.join("shots/own.comfy.json"), "{\"steps\": 30}").unwrap();
         let back = restored(&project, dir, "m1", 1).unwrap();
-        assert_eq!(back.recipe, "shots/open.kerfrecipe");
+        assert_eq!(back.home, kerf_engine::recipe::Home::File("shots/open.kerfrecipe".to_owned()));
         assert_eq!(back.text, was.replace("workflow=own.comfy.json", "workflow=own.take1.comfy.json"));
         assert_eq!(back.files.len(), 1);
         assert_eq!((back.files[0].1.as_str(), back.files[0].2.as_str()), ("shots/own.take1.comfy.json", "{\"steps\": 20}"));

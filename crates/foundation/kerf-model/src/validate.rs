@@ -177,6 +177,19 @@ impl Validator<'_> {
                     format!("media `{}` uses drop-frame at {}", media.id, media.rate),
                 );
             }
+            if let Err(why) = crate::making::check(&media.steps) {
+                self.error("step.order", &media.id, format!("media `{}`: {why}", media.id));
+            }
+            if let (Some(recipe), false) = (&media.recipe, media.steps.is_empty()) {
+                self.error(
+                    "step.recipe",
+                    &media.id,
+                    format!(
+                        "media `{}` has steps under its line and names a recipe file, `{recipe}`: how it is made is written in one of the two",
+                        media.id
+                    ),
+                );
+            }
             if media.video.is_none() && media.audio.is_none() {
                 self.error(
                     "media.streams",

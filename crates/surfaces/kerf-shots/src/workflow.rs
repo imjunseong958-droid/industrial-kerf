@@ -496,28 +496,39 @@ pub fn copied(
     let media = project
         .media(id)
         .ok_or_else(|| format!("no media `{id}` in this project"))?;
-    let recipe = media
-        .recipe
-        .as_deref()
-        .ok_or_else(|| format!("media `{id}` names no recipe"))?;
-    let shot = kerf_engine::recipe::shot_name(recipe);
-    // Beside the recipe: in its folder, by a name no file there has.
-    let beside = |name: &str| {
-        kerf_engine::recipe::beside(project, directory, id, name).map_err(|error| error.to_string())
+    let wrong = |error: kerf_engine::EngineError| error.to_string();
+    let home = kerf_engine::recipe::Home::of(media)
+        .ok_or_else(|| format!("media `{id}` has no steps that make it"))?;
+    let shot = home.shot(id);
+    // Beside the shot: in its recipe's folder, or the one its takes' folder is in, by a
+    // name no file there has.
+    let folder = kerf_engine::recipe::shot_folder(directory, media)
+        .map_err(wrong)?
+        .unwrap_or_default();
+    let name = copy_name(&directory.join(&folder), &shot, &read.ask.model, taken);
+    let stored = folder
+        .join(&name)
+        .components()
+        .map(|part| part.as_os_str().to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("/");
+    let file = directory.join(&stored);
+    // The line names it as its steps name files: from a recipe's own folder, which is
+    // this one, or for steps the document holds from the project's.
+    let named = match home {
+        kerf_engine::recipe::Home::File(_) => name.as_str(),
+        kerf_engine::recipe::Home::Document => stored.as_str(),
     };
-    let (folder, _) = beside(".")?;
-    let name = copy_name(&folder, &shot, &read.ask.model, taken);
-    let (file, stored) = beside(&name)?;
     let recipe = text::changed(
         &read.recipe,
         line,
         Change::Set {
             key: kerf_engine::recipe::model::WORKFLOW,
             nth: 0,
-            value: &name,
+            value: named,
         },
     )
-    .map_err(|error| error.to_string())?;
+    .map_err(wrong)?;
     Ok(Copy {
         file,
         stored,

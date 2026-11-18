@@ -6,6 +6,29 @@ on `main`; its section here becomes the release's notes on GitHub
 
 ## Unreleased
 
+- How a media is made is written in the document, under the media, and no
+  longer in a recipe file beside the project. A media that Kerf or a model
+  makes has its steps under its line (`render <sequence> {guide.mp4} …`,
+  `generate model=… prompt="…" …`, `join …`), an edit script writes and
+  changes them (`step <media> add <step>`, `step <media> set <n> seed=8`,
+  `step <media> remove <n>`), and undo takes a step back as it does any
+  edit. An agent that judges a request needs a model writes the steps with
+  its edit and calls `make`, with no file to write first; how much it runs
+  without asking is still yours to say in `~/.kerf/agent.json`. A take
+  keeps the steps it was made from, each making is still a new take, and a
+  media says it wants making when its steps, the footage they read, or the
+  sequence its guide is drawn from has changed. A file a step names is
+  named from the project's folder (`guide=footage/walk.mp4`), a guide's
+  mesh files are found from its clips with no `needs` line, and takes are
+  kept in a folder named for the media's file (`shots/open.takes/`), the
+  one a recipe of that name used. `kerf make`, `kerf takes` and `kerf
+  shots` read such media as they read a recipe's. Not yet: the editor's
+  graph and bin (Open Graph, Make from Recipe, Takes) still work on recipe
+  files only, and a preset does not carry steps. A project with
+  `.kerfrecipe` files opens and makes as before; a step that runs a program
+  (`run`) stays a recipe file's alone, since a document names no program.
+  Both shot fixtures (`fixtures/shots/car`, `fixtures/shots/walk`) are
+  written this way now.
 - `kerf-comfy` comes with `matte`, for a ComfyUI server that has SAM 3.1: a
   thing in footage found by its name and followed, as a matte, white on
   black on every frame (`generate model=matte guide=<footage> prompt="man"`).

@@ -15,15 +15,16 @@ description: Change a part of filmed footage with the models set up, cutting a t
 - What is asked is seldom one making: a thing moved is its matte, a plate
   behind it, and the layers. Go from each to the next by what it shows,
   without being told to, and say at the end what was made and why.
-- A recipe is a line a step, a later line reading what an earlier one made:
-  the matte first, `generate model=<matte> guide=../footage/walk.mp4
-  prompt="man" out={man.mp4}`, then the line that reads it,
-  `guide_mask={man.mp4}`, so a recipe makes the matte it reads, by the words
-  of the one looked at. The guide is the footage's own file, named from the
-  recipe's folder: nothing is drawn for it. A matte the document cuts by is
-  a media of its own, its recipe that one line with no `out=`. A matte and
-  a plate are of their guide frame for frame: their media's line takes the
-  footage's `rate`, `dur`, and `video=`.
+- What a model makes is a media with its steps under it, written by the
+  edit that adds it, with no file to write first: `media add gone
+  path="shots/gone.mp4" …`, then the matte, `step gone add generate
+  model=<matte> guide=footage/walk.mp4 prompt="man" out={man.mp4}`, then
+  the step that reads it, `guide_mask={man.mp4}`, so a media makes the
+  matte it reads, by the words of the one looked at. The guide is the
+  footage's own file, named from the project's folder: nothing is drawn for
+  it. A matte the document cuts by is a media of its own, its one step with
+  no `out=`. A matte and a plate are of their guide frame for frame: their
+  media's line takes the footage's `rate`, `dur`, and `video=`.
 - A model reads its guide from the first frame, as many as its `frames`
   says at `most`. For a part further into a file, or of a longer one, put
   that part alone on a sequence of the footage's size and rate and draw it
@@ -32,7 +33,8 @@ description: Change a part of filmed footage with the models set up, cutting a t
 - A matte's prompt is what to find, in a word or a few: `man`, `black
   pickup truck`, with `objects=1` for one thing. Among several of a kind,
   make the numbered picture first, read the numbers on a frame of it (`at`:
-  a sheet is too small), and keep one by `which=`. Where words find the
+  a sheet is too small), keep one by `which=`, and take the picture's media
+  out again (`media remove`): it was made to be read. Where words find the
   wrong thing or none, give points on it in the first frame, `inside="x,y
   x,y"`, each across and down from 0 to 1.
 - Look at a matte before anything reads it (`media` with `sheet`): white on
@@ -69,8 +71,10 @@ description: Change a part of filmed footage with the models set up, cutting a t
   What was made anew not what was asked: plainer words, more `grow`, or
   another `seed`. The thing twice in the sequence: the low track wants the
   plate. Outside the mask a take is the footage's own: do not judge it there.
-- A making costs minutes. Mend what `toMake`'s `cannot` says, ask once with
-  `make`, with `why`; let through, `wait` for the job, look at the take,
-  and change one thing for the next. Asked of the person instead, say which
-  making comes first and what the next waits on. Stop and say what is left
-  when the makings allowed run out, or when two takes running are no better.
+- A making costs minutes. Mend what `toMake`'s `cannot` says, then call
+  `make` once the edit that wrote the steps is accepted, with `why`; let
+  through, `wait` for the job, look at the take, and change one thing for
+  the next (`step <media> set <n> reach=96`). Asked of the person instead,
+  say which making comes first and what the next waits on. Stop and say
+  what is left when the makings allowed run out, or when two takes running
+  are no better.

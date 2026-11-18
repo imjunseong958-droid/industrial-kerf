@@ -1,6 +1,7 @@
 //! A media's recipe as a graph, with what runs each of its models.
 
 use kerf_engine::recipe::model::Models;
+use kerf_engine::recipe::Home;
 use kerf_engine::recipe::text::{self, Change};
 use kerf_model::Project;
 use serde_json::{json, Value};
@@ -153,25 +154,18 @@ pub fn step(
     }
 }
 
-/// The recipe media `id` names: the path the document names it by, and its text.
-pub fn recipe(project: &Project, directory: &Path, id: &str) -> Result<(String, String), String> {
-    let media = project
-        .media(id)
-        .ok_or_else(|| format!("no media `{id}` in this project"))?;
-    let name = media
-        .recipe
-        .as_deref()
-        .ok_or_else(|| format!("media `{id}` names no recipe"))?;
-    // The recipe's own file, named from its own folder.
-    let own = Path::new(name)
-        .file_name()
-        .map(|own| own.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    let (file, _) =
-        kerf_engine::recipe::beside(project, directory, id, &own).map_err(|error| error.to_string())?;
-    let text = std::fs::read_to_string(&file)
-        .map_err(|error| format!("cannot read the recipe {}: {error}", file.display()))?;
-    Ok((name.to_owned(), text))
+/// The steps that make media `id`: where they are written, a recipe the media's line
+/// names or the document itself, and their text as a recipe's file holds it
+/// ([`kerf_engine::recipe::written`]).
+pub fn recipe(project: &Project, directory: &Path, id: &str) -> Result<(Home, String), String> {
+    kerf_engine::recipe::written(project, directory, id).map_err(|error| error.to_string())
+}
+
+/// The step lines a script gets to have media `id`, whose steps the document holds,
+/// made by `now` in place of `was` ([`kerf_engine::recipe::step_lines`]): what a change
+/// made to their text comes to as the edit that makes it.
+pub fn step_lines(id: &str, was: &str, now: &str) -> Result<Vec<String>, String> {
+    kerf_engine::recipe::step_lines(id, was, now).map_err(|error| error.to_string())
 }
 
 /// The line of `now`, from 1, that `was` has not got: where a step was added.

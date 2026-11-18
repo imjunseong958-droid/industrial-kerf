@@ -16,6 +16,15 @@
 //!
 //! Positions are timecode; durations count frames as `HH:MM:SS:FF`. Printing
 //! is deterministic and omits defaults, so a document diff is an edit diff.
+//!
+//! A media that Kerf or a model makes has the steps that make it under its
+//! line ([`crate::making`]):
+//!
+//! ```text
+//! media m3 path="shots/open.mp4" rate=16 dur=65f video=832x480
+//!   render s2 {guide.mp4} pass=depth size=832x480 rate=16
+//!   generate model=shot prompt="a boat leaves the harbour" guide={guide.mp4} seed=7
+//! ```
 
 use crate::lex::{lex, Arg, Atom, Line};
 use crate::text::{
@@ -185,22 +194,53 @@ impl Parser<'_> {
         let mut clip: Option<usize> = None;
         let mut bus: Option<usize> = None;
         let mut sequence_count = 0;
+        // The media whose steps the lines under it are, and the files those so far make.
+        let mut media: Option<usize> = None;
+        let mut media_count = 0;
+        let mut made: Vec<String> = Vec::new();
         for line in &lines[1..] {
             let result = match (line.depth, keyword(line)) {
                 (0, "sequence") => {
                     sequence = Some(sequence_count);
                     sequence_count += 1;
+                    media = None;
                     track = None;
                     clip = None;
                     bus = None;
                     Ok(())
                 }
-                (0, _) => {
+                (0, "media") => {
                     sequence = None;
+                    media = Some(media_count);
+                    media_count += 1;
+                    made.clear();
                     Ok(())
                 }
+                (0, _) => {
+                    sequence = None;
+                    media = None;
+                    Ok(())
+                }
+                (1, word) if media.is_some() => {
+                    if crate::making::starts(word) {
+                        crate::making::read(line, 0, &made).map(|step| {
+                            made.push(step.makes().to_owned());
+                            self.project.media[media.expect("checked")].steps.push(step);
+                        })
+                    } else {
+                        Err(line.error(
+                            1,
+                            format!(
+                                "under a media come the steps that make its file, `render`, `generate`, or `join`, not `{word}`"
+                            ),
+                        ))
+                    }
+                }
                 (1, word) => match sequence {
-                    None => Err(line.error(1, "indented lines belong under a sequence")),
+                    None => Err(line.error(
+                        1,
+                        "indented lines belong under a sequence, or under a media as the steps that make it",
+                    )),
                     Some(s) => {
                         clip = None;
                         match word {
@@ -732,6 +772,7 @@ pub(crate) fn media_fields(fields: &mut Fields<'_>, id: Id) -> Result<Media, Dia
         audio,
         reel,
         recipe,
+        steps: Vec::new(),
     })
 }
 
@@ -1075,6 +1116,9 @@ pub fn print_document(project: &Project, catalog: &Catalog, options: PrintOption
         for media in &project.media {
             out.push_str(&media_line(media));
             out.push('\n');
+            for step in &media.steps {
+                writeln!(out, "  {}", crate::making::print_step(step)).unwrap();
+            }
         }
     }
     for sequence in &project.sequences {

@@ -66,6 +66,7 @@ fn scene() -> Project {
         }),
         reel: None,
         recipe: None,
+        steps: Vec::new(),
     });
     project.media.push(Media {
         id: id("m2"),
@@ -81,6 +82,7 @@ fn scene() -> Project {
         }),
         reel: None,
         recipe: None,
+        steps: Vec::new(),
     });
     project.sequences.push(Sequence {
         buses: Vec::new(),
@@ -1009,6 +1011,7 @@ fn camera_take(frames: i64, video: bool, audio: bool) -> Media {
         }),
         reel: None,
         recipe: None,
+        steps: Vec::new(),
     }
 }
 
@@ -1055,6 +1058,7 @@ fn replacing_media_keeps_its_id_and_every_clip_s_timing() {
         }),
         reel: Some("B002".into()),
         recipe: None,
+        steps: Vec::new(),
     };
     let (project, report) = apply(
         &scene,

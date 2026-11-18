@@ -368,8 +368,8 @@ fn a_request_says_where_every_file_is() {
     ]
     .map(str::to_owned);
     let ask = Ask::parse(&words, &made).unwrap();
-    let request = ask
-        .request(
+    let request = model::request(
+            &ask,
             &|file| {
                 within(Path::new("shots"), file, "file")
                     .map(|inside| Path::new("/project").join(inside))
@@ -469,8 +469,8 @@ fn a_line_hands_a_model_its_signals() {
     assert_eq!(ask.signals, ["swell"]);
     assert_eq!(ask.shown(), "prompt \"a wave\", seed 7, signal swell");
     let signals = [Signal::read(&project, "swell").unwrap()];
-    let request = ask
-        .request(
+    let request = model::request(
+            &ask,
             &|_| unreachable!(),
             &|name| Path::new("/work").join(name),
             &signals,
@@ -534,8 +534,8 @@ fn a_line_hands_a_model_more_than_one_guide_each_by_its_name() {
     );
     // Each is a file the take is held to, and is in the request under its name.
     assert_eq!(ask.sources().count(), 3);
-    let request = ask
-        .request(
+    let request = model::request(
+            &ask,
             &|file| Ok(Path::new("/project/shots").join(file)),
             &|name| Path::new("/work").join(name),
             &[],
@@ -572,8 +572,8 @@ fn a_line_hands_a_model_where_a_clip_goes() {
     assert!((x - 0.75).abs() < 0.01, "{:?}", ball.places[11]);
     assert_eq!(ball.places[12], None);
     assert!(!ball.still());
-    let request = ask
-        .request(
+    let request = model::request(
+            &ask,
             &|_| unreachable!(),
             &|name| Path::new("/work").join(name),
             &[],
@@ -606,7 +606,7 @@ fn a_take_is_held_to_the_sequence_a_clip_moves_in() {
     let from = takes::from(
         &with_a_mover(),
         folder.path(),
-        Path::new("shots"),
+        &Home::File("shots/open.kerfrecipe".to_owned()),
         "kerf-recipe 1\n",
         &recipe,
     )
@@ -704,7 +704,7 @@ fn a_take_is_held_to_its_signal_and_not_to_the_signals_sequence() {
         takes::from(
             project,
             folder.path(),
-            Path::new("shots"),
+            &Home::File("shots/open.kerfrecipe".to_owned()),
             "kerf-recipe 1\n",
             &recipe,
         )
@@ -762,7 +762,7 @@ fn a_plan_is_only_of_what_can_run_inside_the_project() {
     );
     let none = Models::default();
     let made = plan(&project, directory, "m1", &none).unwrap();
-    assert_eq!(made.recipe, directory.join("shots/open.kerfrecipe"));
+    assert_eq!(made.recipe, Some(directory.join("shots/open.kerfrecipe")));
     assert_eq!(made.take, 1);
     assert_eq!(made.file, directory.join("shots/open.takes/001.mp4"));
     assert_eq!(made.stored, "shots/open.takes/001.mp4");
@@ -779,7 +779,7 @@ fn a_plan_is_only_of_what_can_run_inside_the_project() {
             .to_string()
     };
     assert!(wrong("m0").contains("no media `m0`"));
-    assert!(wrong("m2").contains("names no recipe"));
+    assert!(wrong("m2").contains("has no steps that make it"));
     assert!(wrong("m3").contains("recipe `../elsewhere/run.kerfrecipe` is not inside"));
     assert!(wrong("m5").contains("cannot read the recipe"));
     assert!(wrong("m6").contains("`../../far.json` is not inside the project"));
@@ -1126,9 +1126,9 @@ generate model=dawn prompt=\"a boat leaves\" workflow=open.dawn.comfy.json seed=
     );
     // A line with none asks with none.
     let ask = Ask::parse(&["model=dawn".to_owned()], &[]).unwrap();
-    let request = ask
-        .request(&|_| unreachable!(), &|name| Path::new("/work").join(name), &[], &[])
-        .unwrap();
+    let request =
+        model::request(&ask, &|_| unreachable!(), &|name| Path::new("/work").join(name), &[], &[])
+            .unwrap();
     assert_eq!(request["workflow"], serde_json::Value::Null);
 }
 
@@ -1336,7 +1336,7 @@ fn a_rendered_sequence_is_what_it_draws_and_nothing_else_of_the_project() {
         takes::from(
             &project(lines),
             directory,
-            Path::new("shots"),
+            &Home::File("shots/open.kerfrecipe".to_owned()),
             "kerf-recipe 1\n",
             &recipe,
         )
@@ -2004,7 +2004,7 @@ fn a_longer_shot_is_parts_set_end_to_end() {
     assert_eq!(recipe.makes(), ["a.mp4", "b.mp4", "d1.mp4", "d2.mp4"]);
     // The request of a part says where it starts; of a whole shot it says nothing of it.
     let place = |name: &str| PathBuf::from(format!("/takes/{name}"));
-    let asked = second.request(&|file| Ok(PathBuf::from(file)), &place, &[], &[]).unwrap();
+    let asked = model::request(second, &|file| Ok(PathBuf::from(file)), &place, &[], &[]).unwrap();
     assert_eq!(asked["from"], 5.0);
     assert_eq!(asked["first"], "/takes/a.mp4");
 
@@ -2064,4 +2064,270 @@ fn parts_are_joined_without_the_frames_they_share() {
     assert!(in_motion(&a) && !in_motion(&still));
     assert!(still_command(&a, &still, true).status().unwrap().success());
     assert!(still.is_file());
+}
+
+/// A model that answers with what it was asked: it copies its request to where the request
+/// says the file goes.
+#[cfg(unix)]
+const ECHO: &str = r#"["sh", "-c", "cp \"$1\" \"$(sed -n 's/.*\"out\": \"\\(.*\\)\".*/\\1/p' \"$1\")\"", "echo", "{request}"]"#;
+
+/// A part of footage whose steps the document holds: the matte a model makes of it, and
+/// the plate a second model makes with that matte.
+#[cfg(unix)]
+fn gone() -> Project {
+    project(
+        "media walk path=\"footage/walk.json\" rate=16 dur=81f video=832x480\n\
+         media gone path=\"shots/gone.json\" rate=16 dur=81f video=832x480\n\
+         \x20 generate model=matte guide=footage/walk.json prompt=\"man\" out={man.json}\n\
+         \x20 generate model=plate guide=footage/walk.json guide_mask={man.json} prompt=\"an empty dirt path\" reach=72 seed=7\n\
+         sequence s1 rate=16 size=832x480\n",
+    )
+}
+
+/// Steps the document holds under a media are planned and made as a recipe's are: with no
+/// file beside the project to say them, each file named from the project's folder, and a
+/// later step handed what an earlier one made.
+#[cfg(unix)]
+#[test]
+fn steps_the_document_holds_make_a_take_and_a_later_one_reads_an_earlier() {
+    let folder = tempfile::tempdir().unwrap();
+    let directory = folder.path();
+    std::fs::create_dir_all(directory.join("footage")).unwrap();
+    std::fs::write(directory.join("footage/walk.json"), "a man walks").unwrap();
+    let some = models(directory, &format!(r#"{{"matte": {{"run": {ECHO}}}, "plate": {{"run": {ECHO}}}}}"#));
+    let mut project = gone();
+    let media = |project: &Project| project.media("gone").unwrap().clone();
+    assert_eq!(Home::of(&media(&project)), Some(Home::Document));
+    assert_eq!(Home::of(project.media("walk").unwrap()), None);
+    // Nothing is made yet, and nothing but the document says how it will be.
+    assert_eq!(unmade(&project, directory, &media(&project)), Some(Unmade::Missing));
+    let planned = plan(&project, directory, "gone", &some).unwrap();
+    assert_eq!((planned.home.clone(), planned.recipe.clone()), (Home::Document, None));
+    assert_eq!(planned.steps.len(), 2);
+    assert_eq!(planned.file, directory.join("shots/gone.takes/001.json"));
+    let token = CancellationToken::new();
+    let made = make(&project, directory, &planned, &some, &token, |_| {}).unwrap();
+    assert_eq!(made.stored, "shots/gone.takes/001.json");
+    assert!(!directory.join("shots/gone.kerfrecipe").exists());
+    let path = |name: &str| directory.join(name).to_string_lossy().into_owned();
+    let read = |name: &str| -> serde_json::Value {
+        serde_json::from_slice(&std::fs::read(directory.join(name)).unwrap()).unwrap()
+    };
+    // The plate's model was handed the footage, named from the project's folder, and the
+    // matte the step before it made.
+    let plate = read(&made.stored);
+    assert_eq!(plate["model"], "plate");
+    assert_eq!(plate["guide"], path("footage/walk.json"));
+    assert_eq!(plate["guides"]["mask"], path("shots/gone.takes/001.work/man.json"));
+    assert_eq!(plate["more"]["reach"], "72");
+    let matte = read("shots/gone.takes/001.work/man.json");
+    assert_eq!((&matte["model"], &matte["prompt"]), (&"matte".into(), &"man".into()));
+
+    // The media is the take, and is held to what it was made from: its steps, and the
+    // footage they read.
+    project.media[1].path = made.stored;
+    assert_eq!(unmade(&project, directory, &media(&project)), None);
+    let all = takes(&project, directory, &media(&project)).unwrap();
+    assert_eq!(all.len(), 1);
+    assert!(all[0].chosen && all[0].current && all[0].kept && all[0].changed.is_empty());
+    // What the take keeps of how it was made is the steps as the document had them.
+    let kept = takes::kept(directory, &media(&project), 1).unwrap();
+    assert_eq!(kept.recipe, steps_text(&media(&project).steps));
+    assert!(kept.recipe.ends_with(
+        "generate model=plate prompt=\"an empty dirt path\" guide=footage/walk.json guide_mask={man.json} seed=7 reach=72\n"
+    ), "{}", kept.recipe);
+
+    // Another making of the same steps is another roll, with its seed one on.
+    assert_eq!(next_roll(&project, directory, "gone").unwrap(), 1);
+    let rolled = plan_rolled(&project, directory, "gone", &some, 1).unwrap();
+    assert_eq!(rolled.take, 2);
+    assert!(rolled.steps[1].contains("seed 8"), "{}", rolled.steps[1]);
+
+    // An edit that changes a step asks for the media again, and says it is its steps.
+    let edited = kerf_lang::apply_script(
+        &project,
+        kerf_model::Catalog::builtin(),
+        "step gone set 2 reach=96",
+    )
+    .unwrap()
+    .project;
+    assert_eq!(
+        unmade(&edited, directory, &media(&edited)),
+        Some(Unmade::Stale(vec!["its steps".to_owned()]))
+    );
+    let all = takes(&edited, directory, &media(&edited)).unwrap();
+    assert!(!all[0].current);
+    assert_eq!(all[0].changed, ["its steps"]);
+    assert_eq!(next_roll(&edited, directory, "gone").unwrap(), 0);
+    // Undone, it is made again: the document as it was is what the take was made from.
+    assert_eq!(unmade(&project, directory, &media(&project)), None);
+    // And so does the footage changing under it.
+    std::fs::write(directory.join("footage/walk.json"), "another man walks").unwrap();
+    assert_eq!(
+        unmade(&project, directory, &media(&project)),
+        Some(Unmade::Stale(vec!["footage/walk.json".to_owned()]))
+    );
+}
+
+/// What would refuse a making of steps the document holds is said of them, not of a recipe.
+#[cfg(unix)]
+#[test]
+fn what_steps_in_the_document_cannot_do_is_said_of_them() {
+    let folder = tempfile::tempdir().unwrap();
+    let directory = folder.path();
+    let some = models(directory, &format!(r#"{{"matte": {{"run": {ECHO}}}, "plate": {{"run": {ECHO}}}}}"#));
+    let wrong = |project: &Project, id: &str| plan(project, directory, id, &some).unwrap_err().to_string();
+    // The footage is not there.
+    let missing = wrong(&gone(), "gone");
+    assert_eq!(missing, "the steps need `footage/walk.json`, which is not there");
+    // Steps that stop short of the media's file.
+    let short = project(
+        "media depth path=\"shots/depth.mp4\" rate=16 dur=65f video=832x480\n\
+         \x20 render s2 {guide.mp4} pass=depth\n\
+         sequence s1 rate=16 size=832x480\n",
+    );
+    let why = wrong(&short, "depth");
+    assert!(why.contains("the last of its steps names no `{out}`"), "{why}");
+    assert_eq!(
+        unmade(&short, directory, short.media("depth").unwrap()).map(|unmade| unmade.reason()),
+        Some(format!("its steps cannot run: {why}"))
+    );
+    // A sequence the project has not.
+    let unknown = project(
+        "media depth path=\"shots/depth.mp4\" rate=16 dur=65f video=832x480\n\
+         \x20 render s2 {out} pass=depth\n\
+         sequence s1 rate=16 size=832x480\n",
+    );
+    assert_eq!(
+        wrong(&unknown, "depth"),
+        "the steps render sequence `s2`, which this project has not"
+    );
+    // Footage, which nothing makes.
+    assert!(wrong(&gone(), "walk").contains("has no steps that make it"));
+}
+
+/// Where the takes of a media whose steps the document holds are kept goes by the file
+/// its line names, and is the same folder once the media is one of them.
+#[test]
+fn the_takes_of_steps_in_the_document_are_kept_by_the_medias_file() {
+    let directory = Path::new("/project");
+    let stored = |media: &str| takes::Place::of_media(directory, media).unwrap().stored(2);
+    assert_eq!(stored("shots/depth.mp4"), "shots/depth.takes/002.mp4");
+    assert_eq!(stored("shots/depth.takes/001.mp4"), "shots/depth.takes/002.mp4");
+    assert_eq!(stored("shots/depth.takes/014.mp4"), "shots/depth.takes/002.mp4");
+    assert_eq!(stored("set.glb"), "set.takes/002.glb");
+    // The folder a recipe of the same name keeps its takes in: a shot carried from a
+    // recipe into the document keeps them.
+    assert_eq!(
+        takes::Place::of(directory, "shots/depth@2.kerfrecipe", "shots/depth.mp4").unwrap().stored(2),
+        stored("shots/depth.mp4")
+    );
+    // A file that only looks like a take's is the media's own.
+    assert_eq!(stored("shots/b.takes/cut.mp4"), "shots/b.takes/cut.takes/002.mp4");
+    assert!(takes::Place::of_media(directory, "../outside.mp4").is_err());
+}
+
+/// A sequence a step draws reads the files its mesh clips name, and nothing of the
+/// document says when one changes: a take of steps the document holds is held to them.
+#[test]
+fn a_take_of_steps_in_the_document_is_held_to_the_meshes_its_guide_draws() {
+    let folder = tempfile::tempdir().unwrap();
+    let directory = folder.path();
+    std::fs::create_dir_all(directory.join("models")).unwrap();
+    std::fs::write(directory.join("models/car.glb"), "a car").unwrap();
+    let project = project(
+        "media depth path=\"shots/depth.mp4\" rate=16 dur=65f video=832x480\n\
+         \x20 render s2 {out} pass=depth\n\
+         sequence s1 rate=16 size=832x480\n\
+         sequence s2 rate=16 size=832x480\n\
+         \x20 track V1 video\n\
+         \x20   clip car gen=mesh@1 at=0f dur=16f\n\
+         \x20     set file=\"models/car.glb\"\n",
+    );
+    let media = project.media("depth").unwrap();
+    let recipe = Recipe::of_steps(&media.steps);
+    let from = |home: &Home| {
+        takes::from(&project, directory, home, &steps_text(&media.steps), &recipe).unwrap()
+    };
+    let held = from(&Home::Document);
+    assert!(held.contains_key("steps") && held.contains_key("sequence s2"), "{held:?}");
+    let before = held["file models/car.glb"].clone();
+    std::fs::write(directory.join("models/car.glb"), "another car").unwrap();
+    assert_ne!(from(&Home::Document)["file models/car.glb"], before);
+    // A recipe says so itself (`needs`), and is held to what it says.
+    let filed = from(&Home::File("shots/depth.kerfrecipe".to_owned()));
+    assert!(filed.contains_key("recipe") && !filed.contains_key("file models/car.glb"), "{filed:?}");
+    // What the document's steps come to, read as a recipe's text is, is those steps.
+    assert_eq!(Recipe::parse(&steps_text(&media.steps)).unwrap(), recipe);
+}
+
+/// A change made to the text of steps the document holds comes to the lines of an edit
+/// that makes it, and a text the document has no place for is refused.
+#[test]
+fn a_change_to_the_text_of_steps_is_the_edit_that_makes_it() {
+    let was = "kerf-recipe 1\nrender s2 {guide.mp4} pass=depth\ngenerate model=shot prompt=\"a car\" guide={guide.mp4} seed=7\n";
+    // One name set on one step is that step set, written whole.
+    let seeded = text::changed(was, 3, text::Change::Set { key: "seed", nth: 0, value: "8" }).unwrap();
+    assert_eq!(
+        step_lines("depth", was, &seeded).unwrap(),
+        ["step depth set 2 generate model=shot prompt=\"a car\" guide={guide.mp4} seed=8"]
+    );
+    assert!(step_lines("depth", was, was).unwrap().is_empty());
+    // A step added is every step written again, last first out so that none reads a
+    // file whose step is gone.
+    let added = text::added(was, 2, "generate model=still prompt=\"a red car\" out={car.png}").unwrap();
+    assert_eq!(
+        step_lines("depth", was, &added).unwrap(),
+        [
+            "step depth remove 2",
+            "step depth remove 1",
+            "step depth add render s2 {guide.mp4} pass=depth",
+            "step depth add generate model=still prompt=\"a red car\" out={car.png}",
+            "step depth add generate model=shot prompt=\"a car\" guide={guide.mp4} seed=7",
+        ]
+    );
+    // And the lines make it: the document then holds what the text said.
+    let project = project(
+        "media depth path=\"shots/depth.mp4\" rate=16 dur=65f video=832x480\n\
+         \x20 render s2 {guide.mp4} pass=depth\n\
+         \x20 generate model=shot prompt=\"a car\" guide={guide.mp4} seed=7\n\
+         sequence s1 rate=16 size=832x480\n",
+    );
+    assert_eq!(steps_text(&project.media[0].steps), was);
+    let edited = kerf_lang::apply_script(
+        &project,
+        kerf_model::Catalog::builtin(),
+        &step_lines("depth", was, &added).unwrap().join("\n"),
+    )
+    .unwrap()
+    .project;
+    assert_eq!(steps_text(&edited.media[0].steps), added);
+    // A program to run is a recipe file's alone.
+    let ran = document_steps("kerf-recipe 1\nrun vork render --out {out}\n").unwrap_err().to_string();
+    assert!(ran.contains("`run` is a recipe file's alone"), "{ran}");
+}
+
+/// What the document writes of a step, the engine reads as the same step, whatever its
+/// words hold: the two read a line by rules of their own, and agree on what is written.
+#[test]
+fn a_step_the_document_writes_is_the_step_a_making_reads() {
+    let document = project(
+        "media m3 path=\"shots/open.mp4\" rate=16 dur=65f video=832x480\n\
+         \x20 generate model=dawn prompt=\"a \\\"wet\\\" street, C:\\\\reel\" ref=\"refs/a b.png\" ref=\"refs/a\u{a0}c.png\" tint=#ff0000 knob=\"x=1\" out={first.png}\n\
+         \x20 generate model=dawn prompt=\"\" first={first.png} empty=\"\"\n\
+         sequence s1 rate=16 size=832x480\n",
+    );
+    let steps = &document.media[0].steps;
+    let read = Recipe::parse(&steps_text(steps)).unwrap();
+    assert_eq!(read, Recipe::of_steps(steps));
+    let Step::Generate(ask) = &read.steps[0] else {
+        panic!("a model's step");
+    };
+    assert_eq!(ask.prompt, "a \"wet\" street, C:\\reel");
+    assert_eq!(
+        ask.references,
+        [Source::File("refs/a b.png".to_owned()), Source::File("refs/a\u{a0}c.png".to_owned())]
+    );
+    assert_eq!(ask.more["knob"], "x=1");
+    assert_eq!(document_steps(&steps_text(steps)).unwrap(), *steps);
 }

@@ -82,7 +82,7 @@ track add <id> video|audio|subtitle [before=<track>|after=<track>] [name="…"] 
 bus add <id> [to=<bus>] [name="…"] [gain=…] [pan=…]  ·  bus set <id> …  ·  bus remove <id>
 bus fx <id> add <effect> [<param>=<value> …]  ·  bus fx <id> set|remove <n|effect>  ·  track set <id> bus=<id>
 track set <id> [name=…] [enabled=…] [locked=…] [muted=…]  ·  track remove <id>
-media add <id> path="…" rate=<fps> dur=<dur> [tc=<tc>] [video=WxH [alpha=true]] [audio=<n>ch@<hz>] [reel="…"] [recipe="…"]
+media add <id> path="…" rate=<fps> dur=<dur> [tc=<tc>] [video=WxH [alpha=true]] [audio=<n>ch@<hz>] [reel="…"]
 media replace <id> <same as media add>
     swap the file behind an id; clips keep their timing and must still fit
 media relink <id> path="…"  ·  media remove <id>
@@ -96,17 +96,21 @@ its picture, by its index; within half a second unless given.
 The effect `shape.outline@1` adds an outline to a `gen=shape` clip, in order, by `mode` (add, subtract,
 intersect, difference), with the shape's own numbers and `x`, `y`, `rotation`.
 
-A media a renderer or a model makes names its recipe (`recipe="shots/open.kerfrecipe"`), a text file you
-may write: `kerf-recipe 1`, then a line each of `needs <file> …`, `run <program> <arguments>`,
-`render <sequence> {name} [size=WxH] [rate=<fps>] [pass=ids|depth|relative|normals] [matte=<clip>]` (Kerf draws a sequence as a guide, without sound: give
-a model's size and rate, and the picture fills that size, the excess cut off evenly; `pass=ids` draws each clip in one
-flat color of its own, `pass=depth` how near each pixel is, for a model that follows one), and `generate model=<name> prompt="…"
-[guide=|guide_<name>=|first=|last=|ref=<file>] [signal=<clip>] [moves=<clip>] [cast=<name>] [style=<name>] [seconds=<n>] [size=WxH] [seed=<n>]`. `cast=`/`style=` name
-one of `look`'s `cast`/`styles`: its words follow the prompt, its pictures the `ref=`s. A guide says where,
-the prompt what, and a signal when: a `gen=signal@1` clip, from the shot's first frame, whose `value={0f:0 12f:1}`
-(0 to 1) the model is handed frame by frame, for the models whose `reads` has `signal`; `moves=` hands one a clip's box on each frame, for those with `moves`. `{out}` is the media's file, which the
-last step writes; another `{name}` is a file one step makes and a later one reads. A person runs it. Each
-making is a take: `look` with `media` lists them, each with the `media replace` line that chooses it.
+A media Kerf or a model makes has the steps that make it under its line, written by `step` lines after its `media add`: `render <sequence> {name}
+[size=WxH] [rate=<fps>] [pass=ids|depth|relative|normals] [matte=<clip>]` (Kerf draws a sequence as a guide, without sound, at a model's
+size and rate; `pass=depth` is how near each pixel is, `pass=ids` each clip in a flat color), `generate model=<name> prompt="…" [guide=|guide_<name>=|first=|last=|ref=<file>]
+[signal=<clip>] [moves=<clip>] [cast=<name>] [style=<name>] [seconds=<n>] [size=WxH] [seed=<n>] [out={name}]`, or `join {part} … {name}`. `cast=`/`style=` name
+one of `look`'s `cast`/`styles`. A guide says where, the prompt what, and a signal when: a `gen=signal@1` clip whose `value={0f:0 12f:1}`
+the model is handed frame by frame; `moves=` hands it a clip's box on each frame. `{out}` is the media's file, which the last step
+writes; another `{name}` one step makes and a later one reads. A file is named from the project's folder. No step names a program.
+
+```
+step <media> add [<n>] <step>  ·  step <media> remove <n>
+step <media> set <n> <step>  ·  step <media> set <n> <name>=<value> …
+    names of step <n>: seed=8; one given twice (ref=) takes each; <name>="" takes it off
+```
+
+`make` runs them. Each making is a take: `look` with `media` lists them, each with the `media replace` line that chooses it.
 
 Masks combine in order by `mode` (add, subtract, intersect, lighten,
 darken, difference); `mode=none` cuts nothing and leaves a path that

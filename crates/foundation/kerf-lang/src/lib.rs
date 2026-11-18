@@ -9,6 +9,7 @@ mod diff;
 mod doc;
 mod facts;
 mod lex;
+mod making;
 pub mod preset;
 mod reference;
 mod script;
@@ -22,6 +23,7 @@ pub use captions::{
 pub use diff::diff_text;
 pub use doc::{parse_document, print_document, Document, PrintOptions, VERSION};
 pub use facts::{Breaks, Facts, NoFacts, Place, Snap, Speech};
+pub use making::print_step;
 pub use reference::{fx_reference, property_reference, reference};
 pub use script::{
     apply_script, apply_script_with, print_op, print_ops, sequence_position, Applied,

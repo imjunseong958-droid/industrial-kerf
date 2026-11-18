@@ -105,12 +105,7 @@ fn forget() {
 }
 
 /// Whether `name` can name a cast or a style: letters, digits, `-` and `_`.
-pub(crate) fn names_one(name: &str) -> bool {
-    !name.is_empty()
-        && name
-            .chars()
-            .all(|character| character.is_alphanumeric() || "-_".contains(character))
-}
+pub(crate) use kerf_model::making::names_cast as names_one;
 
 impl Cast {
     /// Read a cast file's text. What is wrong is said with its line.
@@ -482,14 +477,13 @@ fn told(ask: &Ask, cast: &Cast, directory: &Path, folder: &Path) -> Result<Ask> 
     Ok(asked)
 }
 
-/// The cast and the styles the recipe named `recipe` in the project in `directory` names, each
-/// once, in the order its lines give them: none where it names none or does not read. The
-/// names are the recipe's own, so one the cast file has not is among them.
-pub fn named_by(directory: &Path, recipe: &str) -> (Vec<String>, Vec<String>) {
+/// The cast and the styles the steps that make `media`, of the project in `directory`,
+/// name, each once, in the order the steps give them: none where they name none or do
+/// not read. The names are the steps' own, so one the cast file has not is among them.
+pub fn named_by(directory: &Path, media: &kerf_model::Media) -> (Vec<String>, Vec<String>) {
     let (mut cast, mut styles) = (Vec::new(), Vec::new());
-    let read = within(Path::new(""), recipe, "recipe")
-        .ok()
-        .and_then(|inside| std::fs::read_to_string(directory.join(inside)).ok())
+    let read = super::Home::of(media)
+        .and_then(|home| home.text(directory, media).ok())
         .and_then(|text| Recipe::parse(&text).ok());
     for ask in read.iter().flat_map(Recipe::asks) {
         for (names, of) in [(&mut cast, &ask.cast), (&mut styles, &ask.styles)] {

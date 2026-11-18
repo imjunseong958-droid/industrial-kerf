@@ -1,22 +1,128 @@
 # Shots another program makes
 
-> Status: recipes with several steps, takes, what a take was made from, and
-> the place a model plugs into are in. No model comes with Kerf, and none is
-> set up until a person names one in their own `~/.kerf/models.json`; see
-> [Models](#models).
+> Status: steps, takes, what a take was made from, and the place a model
+> plugs into are in. The steps that make a shot are the document's own code,
+> under the media they make ([Steps in the document](#steps-in-the-document)):
+> an agent writes them with its edit and makes them with `make`, and `kerf
+> make` runs them. Recipe files, where the steps were written before, are
+> still read, and are the one place a step that runs a program (`run`) can
+> be; the editor's graph and bin still work on those alone, and this page
+> below that section still says "recipe" where the same holds of steps. No
+> model comes with Kerf, and none is set up until a person names one in
+> their own `~/.kerf/models.json`; see [Models](#models).
 
 Kerf draws what has to be exact: cuts, titles, color, sound, and the layers
 between them. It does not try to draw what a renderer or a video model draws
 better. Such a shot is made outside Kerf and comes in as media, and the
-project keeps how it was made beside it, so it can be made again:
+project keeps how it was made, so it can be made again:
 
-- A **recipe** is a text file with the steps that make the shot's file.
+- The **steps** that make the shot's file are written under its media's
+  line in the document, in the order they run.
 - Each making is a **take**. Takes are kept, and the document says which one
   the media is.
 - A take records what it was made from, so Kerf can say when a shot wants
   making again and for what, and never asks for one that only moved.
 
+## Steps in the document
+
+```text
+media m3 path="shots/open.mp4" rate=16 dur=65f video=832x480
+  render s2 {guide.mp4} pass=depth size=832x480 rate=16
+  generate model=dawn prompt="a fishing boat leaves the harbour at dawn, fog" guide={guide.mp4} first=refs/boat.png seconds=4 seed=7
+```
+
+The lines under a media say how its file is made: which sequence its guide
+is drawn from, as which pass, at what size and rate; which model is asked,
+with what words, what files and which seed. They are `render`, `generate`
+and `join`, with the words [Recipes](#recipes) gives each, and they run in
+order when the media is made. So the scene (`s2`), the shot made of it and
+how it is made are one document: read together, edited together, proposed,
+reviewed, undone and merged together. Both kinds of making are written this
+way, a shot from a guide as above and a part of footage
+([A thing in footage, by its name](#a-thing-in-footage-by-its-name)):
+
+```text
+media gone path="shots/gone.mp4" rate=16 dur=81f video=832x480
+  generate model=matte prompt="man" guide=footage/walk.mp4 out={man.mp4}
+  generate model=plate prompt="an empty dirt path below a dry grassy hillside" guide=footage/walk.mp4 guide_mask={man.mp4} seed=7 reach=72
+```
+
+- **An edit writes them.** A script adds the media and then its steps, and
+  changes one later, a name at a time or whole:
+
+  ```text
+  media add gone path="shots/gone.mp4" rate=16 dur=81f video=832x480
+  step gone add generate model=matte guide=footage/walk.mp4 prompt="man" out={man.mp4}
+  step gone add generate model=plate guide=footage/walk.mp4 guide_mask={man.mp4} prompt="an empty dirt path" reach=72 seed=7
+  step gone set 2 seed=8 reach=96
+  step gone add 1 render s1 {part.mp4} seconds=2
+  step gone remove 1
+  ```
+
+  `add` writes the last step, or the one that becomes step `<n>`. `set`
+  gives names of a step their values: one a step gives more than once
+  (`ref=`, `signal=`, `moves=`, `cast=`, `style=`) takes every value the
+  line gives it in place of those it had, and one given nothing
+  (`seed=""`) is taken off; or it writes the step whole, starting with
+  `render`, `generate` or `join`. A step that cannot be is refused where it
+  is written, with why, and the script changes nothing: a word a step does
+  not take, a `{name}` no step before it makes, a step after the one that
+  writes the media's file, a step taken out that a later one reads.
+- **A file is named from the project's folder**, as a media's path is:
+  `guide=footage/walk.mp4`, `first=refs/boat.png`.
+- **`{out}` is the media's file**, which the last step writes, and any
+  other `{name}` a file a step makes for a later one. Steps that stop short
+  of `{out}` are kept as they are written, a line at a time, and a making
+  says what is missing.
+- **They are written one way.** The document prints each step with its
+  words in one order and what goes without saying left out, so a diff of
+  the document is the change that was made, and a take is held to its steps
+  and not to how they were typed. A step has no comment of its own: what a
+  shot is for is said where a document says anything, in its names and in
+  the edit that wrote it.
+- **Choosing a take leaves them alone.** `media replace` swaps the file a
+  media is, and its steps stay under it; they change only by `step` lines.
+- **Takes are kept by the media's file.** A media first written as
+  `shots/open.mp4` keeps its takes in `shots/open.takes/`, and is
+  `shots/open.takes/002.mp4` once it is one of them. It is the folder a
+  recipe named `shots/open.kerfrecipe` kept them in.
+- **A take is held to its steps**, and says `its steps` changed where a
+  recipe's take says `the recipe`. A sequence a step draws is held to as
+  [What asks for a shot again](#what-asks-for-a-shot-again) says, and the
+  files its mesh clips read (`file="models/car.glb"`) with it: found from
+  the clips, with no `needs` line to write.
+- **No step names a program.** Kerf draws a guide itself, and a model is a
+  program the person names in their own models file ([Models](#models)),
+  outside any project. So a document, and anything made from one, says what
+  is made and never what runs: an agent that may make on its own
+  ([An agent's part](#an-agents-part)) runs only Kerf and the programs its
+  person named. A recipe's `run <program>` has no place here for that
+  reason. A renderer outside Kerf reaches a document's steps as a model
+  does, by a name the person gives its program in their models file; until
+  one is set up so, a shot that needs `run` stays in a recipe file, which
+  is still read.
+
+`kerf make`, `kerf takes` and `kerf shots` read a media made this way as
+they read a recipe's. The editor's graph and its bin (Open Graph, Make from
+Recipe…, Takes) are still of recipe files, and a preset does not carry steps
+yet.
+
+**A recipe carried into the document** is its `render`, `generate` and
+`join` lines written under the media, each file named from the project's
+folder in place of the recipe's (`../footage/walk.mp4` in `shots/` is
+`footage/walk.mp4`), and `recipe=` taken off the media's line. Its takes
+stay where they are, the folder being the same. The take the media is was
+recorded against the recipe's text, so it says that the recipe and its
+steps changed until the shot is made again; nothing carries a recipe over
+for you yet, and one that is not carried is made as it always was.
+
 ## Recipes
+
+Before the document held them, a shot's steps were written in a text file
+beside the project, and a project that has such files reads as it did. What
+a `render`, a `generate` and a `join` line say here is what a step in the
+document says, with one difference: a recipe names a file from its own
+folder (`../refs/boat.png`), and a step in the document from the project's.
 
 A media line names its recipe:
 
@@ -122,11 +228,12 @@ that too, from the same clips (`moves=`).
 
 ## Making a shot
 
-A person makes a shot: `kerf make m3`, or Make from Recipe… on the media in
-the editor's bin. Both show every step as it would run and the take it would
-write, and ask first; `kerf make m3 --yes` does not ask. An agent asks for one
-with `make`, and its asking runs a recipe only where the person has let agents
-make on their own ([An agent's part](#an-agents-part)). Opening a project and
+A person makes a shot: `kerf make m3`, or, for one a recipe makes, Make from
+Recipe… on the media in the editor's bin. Both show every step as it would run
+and the take it would write, and ask first; `kerf make m3 --yes` does not ask.
+An agent makes one with `make`, which runs only where the person has let
+agents make on their own, and else asks them
+([An agent's part](#an-agents-part)). Opening a project and
 drawing it never run one. A recipe that could not run is refused before
 anything does, with why: a model that is not set up, a sequence the project
 has not, a file it needs that is not there.
@@ -226,61 +333,64 @@ kerf shots               # every media a recipe makes: its take, its cast, wheth
 
 ### An agent's part
 
-An agent writes the scene and the recipe, asks for the making, and looks at
-the take; the person says how much of that it does without asking them.
+An agent writes the scene and the steps that make a shot of it, makes it, and
+looks at the take; the person says how much of that it does without asking
+them. Which model fits what was asked, and what comes after each take, are
+the agent's to judge: nothing is written for it first.
 
-- `edit` takes recipe files with its script (`recipes`, by the path a media
-  line's `recipe=` names, each with its text), and they are part of its
-  proposal: its script shows each recipe as comments, for the person to read
-  before they say yes. A recipe is never written over. A text that is not the
-  one there is kept beside it as its next version, `shots/open@2.kerfrecipe`,
-  and the proposal moves the media that name it there with `media replace`,
-  so undo has them made from the one before; a text a version holds already
-  is that version's. Every version of a recipe keeps its takes in one folder,
-  `shots/open.takes/`.
+- The steps are lines of its `edit` script (`step <media> add …`,
+  [Steps in the document](#steps-in-the-document)), in the proposal with the
+  rest of the edit, for the person to read before they say yes; undo takes
+  them back. There is no recipe file, and so no version of one to keep: the
+  document's own history is what a media was made from before.
 - What a person sees and sets in a shot's graph ([As a graph](#as-a-graph)),
   an agent reads and sets, through the same reading (`kerf-shots`):
 
   | In the graph, a person | An agent |
   |---|---|
-  | opens a shot as its graph | `look` with `graph`: the nodes, the edges, `cannot`, `notes`, each model's `runner`, the takes |
-  | sets a prompt, a seed, a knob | `edit` with `recipeSet`: one name on one line, comments and order kept |
-  | adds a step, a guide, a model or a join, and deletes one | `recipeSet` with `add`, the step's line, after `line`; and with `remove` |
-  | draws an edge to a step, or lets one go | the same, the name its reader gives it (`signal`, `ref`, `guide`, `moves`), with no `value` to let it go |
+  | opens a shot as its graph | `look` with `graph`: the nodes, the edges, `cannot`, `notes`, each model's `runner`, the takes; a node's `line` is its step's number |
+  | sets a prompt, a seed, a knob | a script line, `step <media> set <n> seed=8` |
+  | adds a step, a guide, a model or a join, and deletes one | `step <media> add [<n>] <step>` and `step <media> remove <n>` |
+  | draws an edge to a step, or lets one go | the same `set`, the name its reader gives it (`signal=`, `ref=`, `guide=`, `moves=`), and `<name>=""` to let it go |
   | draws a signal's curve | an `edit` script that sets the clip's `value` |
   | sets a signal from a sound of its sequence | `look` with `signal`, and the line it gives in an `edit` |
   | has a clip follow something in footage, for `moves=` | `look` with `track`: `x`, `y` and `clip`, and the line it gives in an `edit` |
   | cuts a clip to a thing it shows, for `matte=` | `look` with `track`: `inside`, `outside` and `clip`, and the line it gives in an `edit` |
   | opens a model into its workflow | `look` with `workflow`: every node and input, the blanks and what fills each now |
-  | sets a value in the workflow | `edit` with `workflowSet`: a copy in the project, named by the line's `workflow=` |
+  | sets a value in the workflow | `edit` with `workflowSet`: a copy in the project, which the step names with `workflow=` |
   | points a link of the workflow at another node | `workflowSet` with `link: [<node>, <output>]` in place of `value` |
-  | goes back to the workflow as it comes | `recipeSet` of `workflow` with no `value` |
+  | goes back to the workflow as it comes | `step <media> set <n> workflow=""` |
   | Make, Make again, Several, Stop | `make`, with `rolls`, and its `job` with `cancel` |
   | sees each take's picture and the guide as it was drawn | `look` with `media` and `sheet`, of the take and of the guide's file |
   | holds the takes to their guide | `look` with `takes`: each take's `overlap`, and the `best` |
   | chooses a take | the take's `use` line, in an `edit` |
-  | restores the recipe a take was made from | `edit` with `restoreTake` |
+  | goes back to the steps a take was made from | `edit` with `restoreTake`, which sets them by `step` lines; `look` with `media` lists them as the take's `steps` |
 
-  Where they differ is where a change is written. A person's is written in
-  place. An agent's writes over nothing: the recipe with its word changed is
-  the next version (`shots/bounce@2.kerfrecipe`), a workflow with a value set
-  is a new copy (`bounce.video-2.comfy.json` where one is there), and the
-  proposal moves the media to them and says, as comments, what was set. Once
-  it is accepted the editor's open graph shows the shot as it now is, the
-  cards where they were put.
-- `look` lists what wants making under `toMake`, as an `edit` that names a
-  recipe answers it, with what would refuse it (`cannot`) and the notes a
+  A workflow with a value set is a new copy beside the shot's takes
+  (`shots/bounce.video.comfy.json`, and `bounce.video-2.comfy.json` where
+  one is there), so every take made before still has the file it names.
+- What was made only to be looked at, the numbered picture of
+  `matte-shown` or a trial, the agent takes out of the document once it has
+  read it (`media remove <id>`). Its takes stay on disk.
+- A media that still names a recipe file is changed as before: `edit` takes
+  recipe files with its script (`recipes`), sets single words of one with
+  `recipeSet`, and each text that is not the one there is kept beside it as
+  its next version, `shots/open@2.kerfrecipe`, which the proposal moves the
+  media to with `media replace`, never written over the one before.
+- `look` lists what wants making under `toMake`, as an `edit` that writes
+  steps answers it, with what would refuse it (`cannot`) and the notes a
   person would be shown (`notes`), so a recipe is mended before anyone runs it.
   `look` with a proposal lists what that proposal would have made. A making is
   of the project: of a media a waiting proposal adds, `make` says which
   proposal, and that it comes first.
-- `make` asks for a media to be made, and answers with the plan a person would
-  see. By default the person is asked: the plan comes back as the answer's
-  `ask`, which the agent says in the conversation, and `kerf make` or Make
-  from Recipe… makes it. Where the person lets an agent make on its own, the
-  making runs in the agent's session, as a job it reads, waits for, or stops,
-  as Stop Making stops one, and the media becomes the new take once it is made.
-  The agent then looks at the take, and changes one thing for the next.
+- `make` makes a media, right after the edit that wrote its steps, and
+  answers with the plan a person would see. Where the person lets an agent
+  make on its own, the making runs in the agent's session, as a job it reads,
+  waits for, or stops, as Stop Making stops one, and the media becomes the
+  new take once it is made. By default the person is asked instead: the plan
+  comes back as the answer's `ask`, which the agent says in the conversation,
+  and `kerf make` makes it. The agent then looks at the take, and changes one
+  thing for the next.
 - What an agent is told of this beforehand is two of the playbooks that are
   whole in every conversation's instructions (`skills/`; `kerf --skills`
   lists them). `model-shot` is for a shot a model films from a guide.
@@ -297,7 +407,8 @@ the take; the person says how much of that it does without asking them.
 
 What an agent may do without asking is the person's to say, in their own
 `~/.kerf/agent.json` (`KERF_AGENT` names another file), outside any project,
-so that a project cannot let an agent run its recipes:
+so that a project cannot let an agent run what it says. That the steps are
+the document's now changes none of it:
 
 ```json
 { "permissions": "auto", "makes": 5 }

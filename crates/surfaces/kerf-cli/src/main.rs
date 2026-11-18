@@ -127,7 +127,7 @@ enum Command {
         #[arg(short = 'm', long)]
         message: Option<String>,
     },
-    /// Make a take of a media by running its recipe (`recipe=` on its media line).
+    /// Make a take of a media by running the steps under its line in the document, or the recipe its line names (`recipe=`).
     Make {
         /// The media's id, as its line in the document names it.
         media: String,
@@ -139,7 +139,7 @@ enum Command {
         #[arg(long, value_name = "N", default_value_t = 1, value_parser = clap::value_parser!(u32).range(1..=16))]
         rolls: u32,
     },
-    /// List the takes a media's recipe has made, or have the media be another of them.
+    /// List the takes a media's steps have made, or have the media be another of them.
     Takes {
         /// The media's id, as its line in the document names it.
         media: String,
@@ -147,7 +147,7 @@ enum Command {
         #[arg(long = "use", value_name = "TAKE")]
         choose: Option<u32>,
     },
-    /// List every media a recipe makes: its take, its cast, and whether it wants making.
+    /// List every media its steps make: its take, its cast, and whether it wants making.
     Shots,
     /// Take `project.kerf` as it is on disk, changed by hand or by another program, as the project.
     Load {
@@ -736,7 +736,11 @@ fn run_make(directory: &Path, kerfd: Option<&Path>, id: &str, yes: bool, rolls: 
             .map_err(|error| anyhow!(error))
     };
     let plan = planned(0)?;
-    println!("recipe  {}", plan.recipe.display());
+    match &plan.recipe {
+        Some(recipe) => println!("recipe  {}", recipe.display()),
+        // Its steps are the document's own, under the media's line.
+        None => println!("steps   under `{id}` in the document"),
+    }
     for (number, step) in plan.steps.iter().enumerate() {
         println!("step {}  {step}", number + 1);
     }
@@ -1985,6 +1989,7 @@ mod tests {
             chosen,
             changed: changed.iter().map(|what| (*what).to_owned()).collect(),
             recipe: None,
+            current: true,
             kept: false,
         };
         assert_eq!(

@@ -330,10 +330,16 @@ pub fn write(
     let media = project
         .media(id)
         .ok_or_else(|| EngineError::msg(format!("no media `{id}` in this project")))?;
-    let name = media
-        .recipe
-        .as_deref()
-        .ok_or_else(|| EngineError::msg(format!("media `{id}` names no recipe")))?;
+    let name = match super::Home::of(media) {
+        Some(super::Home::File(name)) => name,
+        Some(super::Home::Document) => {
+            return Err(EngineError::msg(format!(
+                "media `{id}` is made by the steps under its line in the document, which an edit changes: `step {id} set <n> <name>=<value>`"
+            )))
+        }
+        None => return Err(EngineError::msg(format!("media `{id}` names no recipe"))),
+    };
+    let name = name.as_str();
     let file = super::inside_project(directory, name, "recipe")?;
     let there = std::fs::read_to_string(&file).map_err(|error| {
         EngineError::msg(format!("cannot read the recipe {}: {error}", file.display()))

@@ -100,7 +100,8 @@ pub(crate) fn make(
             json!({
                 "type": "media_make_plan",
                 "media": id,
-                "recipe": plan.recipe.to_string_lossy(),
+                // Empty for steps the document holds, which have no file of their own.
+                "recipe": plan.recipe.as_ref().map(|recipe| recipe.to_string_lossy()).unwrap_or_default(),
                 "command": plan.command,
                 "steps": plan.steps,
                 "notes": plan.notes,

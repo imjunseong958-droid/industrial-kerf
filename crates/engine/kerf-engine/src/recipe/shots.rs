@@ -12,7 +12,8 @@ use std::path::Path;
 /// One media a recipe makes, as things stand.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Shot {
-    /// The media's id and the recipe its line names.
+    /// The media's id, and where its steps are written: the recipe its line names, or
+    /// `the document` for steps under the line itself.
     pub media: String,
     pub recipe: String,
     /// How long the media is, in seconds.
@@ -35,14 +36,17 @@ pub fn shots(project: &Project, directory: &Path) -> Vec<Shot> {
         .media
         .iter()
         .filter_map(|media| {
-            let recipe = media.recipe.clone()?;
-            // The recipe is read, and what it reads hashed, once for both questions.
+            let recipe = match super::Home::of(media)? {
+                super::Home::File(name) => name,
+                super::Home::Document => "the document".to_owned(),
+            };
+            // The steps are read, and what they read hashed, once for both questions.
             let standing = Standing::of(project, directory, media);
             let made = standing
                 .as_ref()
                 .and_then(|standing| standing.takes().ok())
                 .unwrap_or_default();
-            let (cast, styles) = super::cast::named_by(directory, &recipe);
+            let (cast, styles) = super::cast::named_by(directory, media);
             Some(Shot {
                 media: media.id.to_string(),
                 seconds: media.duration.seconds(),

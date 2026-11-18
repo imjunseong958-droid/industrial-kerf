@@ -405,10 +405,14 @@ pub fn check(project: &Project, dir: &Path) -> CheckReport {
                 Severity::Error,
                 "missing_media",
                 Some(media.id.as_str()),
-                // One a recipe makes is not lost: it has yet to be made.
-                match &media.recipe {
-                    Some(recipe) => format!(
+                // One its steps make is not lost: it has yet to be made.
+                match kerf_engine::recipe::Home::of(media) {
+                    Some(kerf_engine::recipe::Home::File(recipe)) => format!(
                         "media `{}` is not made yet: a person makes it from its recipe, `{recipe}`, with `kerf make {}`",
+                        media.id, media.id
+                    ),
+                    Some(kerf_engine::recipe::Home::Document) => format!(
+                        "media `{}` is not made yet: `make` makes it from the steps under its line (`kerf make {}` where the person is asked)",
                         media.id, media.id
                     ),
                     // As the document writes it: where the project folder

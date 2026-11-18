@@ -1,13 +1,13 @@
 ---
 name: model-shot
-description: Block a shot in Kerf and have a video model film it, from a guide sequence and a recipe to a making a person approves and the takes it leaves.
+description: Block a shot in Kerf and have a video model film it, from a guide sequence and the steps that draw and film it to the takes a making leaves.
 ---
 
 # A shot a model films
 
 - Start from the model. `look` lists `models` with what each takes: make the
   guide a sequence of its own, in the model's shape (`size`) and no longer
-  than its `seconds`, and write the `render` line `look` gives as `guide`, so
+  than its `seconds`, and write the `render` step `look` gives as `guide`, so
   the guide is drawn at the model's size and rate and not the sequence's.
 - Which kind of guide a model follows is the model's, and its `about`
   says: the picture, for a model that covers a render, or a pass of it,
@@ -29,12 +29,11 @@ description: Block a shot in Kerf and have a video model film it, from a guide s
   heights, and a `color`. It is in depth as it is, with its middle at `x`,
   `y`, `z`, and has every side, so a camera can go round it; a body and a
   cabin are two of them. Give it a light, or it is one flat color. With
-  `file="car.glb"` it is a glTF model, `height` tall, a color a part; name
-  the file on the recipe's `needs` line, so that replacing it asks for the
-  shot again. A part the file gives a picture or corner colors is drawn in
-  them, and lights do not change it. `animation="Walk"` plays one of the
-  file's animations, by name or number, looping from the clip's start;
-  `seconds={0f:0 48f:1}` retimes it.
+  `file="car.glb"` it is a glTF model, `height` tall, a color a part;
+  replacing the file asks for the shot again. A part the file gives a
+  picture or corner colors is drawn in them, and lights do not change it.
+  `animation="Walk"` plays one of the file's animations, by name or number,
+  looping from the clip's start; `seconds={0f:0 48f:1}` retimes it.
 - A set rebuilt from a shot is seen through the shot's camera: `look`
   with `mesh: {"clip": "set", "camera": "shot"}` returns the lines that
   add a camera of the file, or with `from` one a model wrote.
@@ -58,37 +57,38 @@ description: Block a shot in Kerf and have a video model film it, from a guide s
   building, and the model's `reads` has `signal`, say when with a signal: a
   `gen=signal@1` clip on a track of its own in the guide's sequence, from
   `at=0f` for the shot's length, with `value` keyed 0 to 1, and
-  `signal=<clip>` on the `generate` line. The prompt says what the number is
+  `signal=<clip>` on the `generate` step. The prompt says what the number is
   of. Where the moments are a sound's, music's beats or what was recorded,
   `look` with `signal` writes the keys from the clip that plays it. Hold a
   peak for two of the model's frames, or it arrives lower. A
   model that does not read one is said to have no use for it in `notes`:
-  leave it off the line.
-- Read the guide before writing the recipe, at its first, middle, and last
+  leave it off the step.
+- Read the guide before writing the steps, at its first, middle, and last
   frame: `look` with `shows` and `at` says of each clip where it is (`box`),
   what hides it (`hidden`, `by`), and which edges of the frame it reaches.
   Mend a subject with a floor in its `by`, one with no `box`, which has left
   the frame, and one at an edge it should not be at. Then look at the frames
   themselves: nothing crossing by accident, the move plain.
-- The recipe is the `render` line and a `generate` line: the prompt,
-  `guide={guide.mp4}`, `seconds`, and a `seed`, so that a take can be made
-  again. Write it with the edit, in `recipes`, beside the script that adds
-  the media line; the media's line names the file the shot will be, with the
-  model's rate and size, and a making replaces them with what was made. A
-  picture is fit inside the frame before its `scale`, so a shot of another
-  shape leaves edges: the check says the `scale` that fills it.
+- The shot is a media with two steps under it: `step <id> add render
+  <sequence> {guide.mp4} …`, then `step <id> add generate model=…
+  prompt="…" guide={guide.mp4}` with `seconds` and a `seed`, so that a
+  take can be made again. The media's line names the file the shot
+  will be, with the model's rate and size, and a making replaces them with
+  what was made. A picture is fit inside the frame before its `scale`, so a
+  shot of another shape leaves edges: the check says the `scale` that fills
+  it.
 - `look` lists the project's `cast` and `styles`: name them,
   `cast=Ada style=film`, and have the prompt say what they do, not how
   they look. One it lacks is added with `edit`'s `cast`.
-- Mend what `toMake`'s `cannot` and `notes` say, then ask for the making
-  once with `make`, with `why`. Asked, the person makes it; let through, it
-  runs as a job you `wait` for. A making costs minutes and money: never ask
-  for one to see the guide, which `look` shows.
+- Mend what `toMake`'s `cannot` and `notes` say, then make it once with `make`,
+  with `why`, after the edit is accepted. Let through, it runs as a job you
+  `wait` for; asked, the person makes it. A making costs minutes and money:
+  never make one to see the guide, which `look` shows.
 - After a making, look at the take (`media` with `sheet`), not at the guide,
   and say what the model kept and what it lost. Change one thing for the
   next take: the guide for layout and motion, the prompt for the look, the
-  seed for another roll of the same. Any change to the guide, one too small
-  to see among them, brings other scenery with it: judge a take against the
-  one before for place, path, and size, and keep a take that is wanted by
-  leaving its guide as it is. A take that was better is chosen again with
-  its `use` line.
+  seed for another roll of the same (`step <id> set 2 seed=8`). Any change
+  to the guide, one too small to see among them, brings other scenery with
+  it: judge a take against the one before for place, path, and size, and
+  keep a take that is wanted by leaving its guide as it is. A take that was
+  better is chosen again with its `use` line.

@@ -125,6 +125,10 @@ pub fn export(
                     slot.path = format!("slot:{}", slot.id);
                     slot.start = Time::ZERO;
                     slot.reel = None;
+                    // A slot is filled with media the project it is applied to has: how
+                    // this one's was made does not travel with it yet.
+                    slot.recipe = None;
+                    slot.steps.clear();
                     slot.video = None;
                     slot.audio = None;
                     ranges.push((slot, low, high));
@@ -350,6 +354,12 @@ pub fn parse(document: &str, catalog: &Catalog) -> Result<Preset, String> {
         {
             return Err(format!(
                 "media `{}` must be a portable slot with zero timecode",
+                media.id
+            ));
+        }
+        if !media.steps.is_empty() {
+            return Err(format!(
+                "slot `{}` has steps under it: a preset does not carry how a media is made yet",
                 media.id
             ));
         }

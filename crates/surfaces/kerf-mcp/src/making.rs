@@ -1,4 +1,5 @@
-//! `make`: an agent asks for a media to be made from its recipe.
+//! `make`: an agent asks for a media to be made from its steps, which the document holds
+//! under the media's line or a recipe's file the line names.
 //!
 //! What it gets depends on the person's own permissions
 //! ([`crate::permissions`]). Asking, the default, it is shown what the
@@ -164,17 +165,19 @@ struct MakeInput {
 
 pub(super) fn metadata() -> (&'static str, Value, super::ToolAnnotations) {
     (
-        "Ask for a media to be made from its recipe (`recipe=` on its line). Returns the plan: each \
-         step as it would run and the take it would write. The person's own permissions say what \
-         happens next: by default they are asked (`asked`), in the conversation, and make it \
-         themselves; where they let an agent make on its own it runs (`making`), as a `job` to read \
-         with `job`, `wait` for, or stop with `cancel`, and the media becomes the new take when it \
-         is made. Mend what `look`'s `toMake` says would refuse it first.",
+        "Make a media from the steps under its line in the document (or, for one that still names \
+         a recipe file, from that). Returns the plan: each step as it would run and the take it \
+         would write. The person's own permissions say what happens next: where they let an agent \
+         make on its own it runs (`making`), as a `job` to read with `job`, `wait` for, or stop \
+         with `cancel`, and the media becomes the new take when it is made; else they are asked \
+         (`asked`), in the conversation, and make it themselves. Call it right after the edit \
+         that wrote the steps, once that is accepted. Mend what `look`'s `toMake` says would \
+         refuse it first.",
         json!({
             "type": "object",
             "properties": {
                 "media": {"type": "string", "description": "The media to make."},
-                "rolls": {"type": "integer", "minimum": 1, "maximum": 8, "description": "With `media`: make this many takes, one after another, each with the recipe's seeds one on from the last, to choose among. Each is a making the person pays for and their limit counts: ask for more than one only when they asked for takes to choose from."},
+                "rolls": {"type": "integer", "minimum": 1, "maximum": 8, "description": "With `media`: make this many takes, one after another, each with its steps' seeds one on from the last, to choose among. Each is a making the person pays for and their limit counts: ask for more than one only when they asked for takes to choose from."},
                 "why": {"type": "string", "description": "What this making is for, said to the person with the plan: what changed since the last take, and what to look for."},
                 "job": {"type": "string", "description": "A making this session started: what it has said, and how it ended."},
                 "wait": {"type": "boolean", "description": "Answer once the making has ended, up to twenty minutes, rather than at once."},
@@ -312,14 +315,19 @@ impl KerfMcpRouter {
             } else {
                 format!("take {}", plan.take)
             };
-            let mut body = format!(
-                "{ASKS}{media}, as {takes}, from {}:",
-                std::path::absolute(&self.dir)
+            // Where its steps are written: a recipe's file, from the project's folder, or
+            // the document itself.
+            let from = match &plan.recipe {
+                Some(recipe) => std::path::absolute(&self.dir)
                     .ok()
-                    .and_then(|dir| plan.recipe.strip_prefix(dir).ok())
-                    .unwrap_or(&plan.recipe)
+                    .and_then(|dir| recipe.strip_prefix(dir).ok())
+                    .unwrap_or(recipe)
                     .display()
-            );
+                    .to_string(),
+                None => "the steps under its line in the document".to_owned(),
+            };
+            let in_document = plan.recipe.is_none();
+            let mut body = format!("{ASKS}{media}, as {takes}, from {from}:");
             if let Some(why) = why.map(str::trim).filter(|why| !why.is_empty()) {
                 body = format!("{body}\n{why}");
             }
@@ -329,29 +337,41 @@ impl KerfMcpRouter {
             for note in &plan.notes {
                 body.push_str(&format!("\nNote: {note}"));
             }
-            if rolls > 1 {
-                body.push_str(&format!(
+            // The editor's bin offers its makings for a recipe's file; steps the document
+            // holds are made from a terminal until it shows them too.
+            body.push_str(&match (rolls > 1, in_document) {
+                (true, false) => format!(
                     "\nEach take after the first runs the same steps with every seed one on from the last.\nMake them with `kerf make {media} --rolls {rolls}`, or Make Several from Recipe in the editor's bin."
-                ));
-            } else {
-                body.push_str(&format!(
+                ),
+                (true, true) => format!(
+                    "\nEach take after the first runs the same steps with every seed one on from the last.\nMake them with `kerf make {media} --rolls {rolls}`."
+                ),
+                (false, false) => format!(
                     "\nMake it with `kerf make {media}`, or Make from Recipe… in the editor's bin."
-                ));
-            }
+                ),
+                (false, true) => format!("\nMake it with `kerf make {media}`."),
+            });
             // What the person is asked, for the agent to say in the conversation.
             answer["status"] = json!("asked");
             answer["ask"] = json!(body);
-            answer["make"] = json!(if rolls > 1 {
-                format!(
+            answer["make"] = json!(match (rolls > 1, in_document) {
+                (true, false) => format!(
                     "say `ask` to the person, who makes them with `kerf make {media} --rolls \
                      {rolls}` or Make Several from Recipe; `look` `media` lists the takes once \
                      they are made"
-                )
-            } else {
-                format!(
+                ),
+                (true, true) => format!(
+                    "say `ask` to the person, who makes them with `kerf make {media} --rolls \
+                     {rolls}`; `look` `media` lists the takes once they are made"
+                ),
+                (false, false) => format!(
                     "say `ask` to the person, who makes it with `kerf make {media}` or Make from \
                      Recipe…; `look` lists the take once it is made"
-                )
+                ),
+                (false, true) => format!(
+                    "say `ask` to the person, who makes it with `kerf make {media}`; `look` lists \
+                     the take once it is made"
+                ),
             });
             if permissions.mode == crate::permissions::Mode::Auto {
                 answer["why"] = json!(format!(
