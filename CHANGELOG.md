@@ -6,6 +6,13 @@ on `main`; its section here becomes the release's notes on GitHub
 
 ## 0.1.3
 
+- A clip is read from footage in a shot's graph. Follow the picture, on the
+  card of a clip a recipe hands a model the way of (`moves=`), draws the
+  clip's first frame: press on something and the clip follows it for as long
+  as it runs. Cut out of the picture, on the card of a guide that is a matte
+  (`matte=`), masks its clip to the thing pressed on, as it moves and changes
+  shape. Kerf in the conversation follows a clip's whole length with `track`
+  when no range is given, and no longer follows the clip itself.
 - A link of a model's workflow is pointed at another node in the shot's
   graph: draw an edge from a node's port to the node that should read it. It
   is kept in the shot's own copy, held to what the ComfyUI server says each

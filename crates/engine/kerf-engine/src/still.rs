@@ -2,8 +2,8 @@
 
 use crate::error::{EngineError, Result};
 use crate::ffmpeg::resolve_ffmpeg_bin;
-pub use kerf_compose::Frame;
-use kerf_compose::{ComposeOptions, Compositor};
+use kerf_compose::ComposeOptions;
+pub use kerf_compose::{Compositor, Frame};
 use kerf_model::{Catalog, Project, Time};
 use std::io::Write;
 use std::path::Path;

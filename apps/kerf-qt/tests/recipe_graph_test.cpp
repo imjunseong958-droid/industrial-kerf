@@ -16,6 +16,7 @@
 #include "timeline_widget.h"
 #include "ui/components.h"
 #include "ui/modal_scrim.h"
+#include "ui/point_picture.h"
 #include "ui/recipe_graph.h"
 #include "ui/recipe_graph_panel.h"
 #include "ui/recipe_inspector.h"
@@ -841,6 +842,98 @@ private slots:
         thud->trigger();
         QCOMPARE(window.m_lastCommand, (QJsonObject{{"type", "signal_from_sound"}, {"clip", "bounce"}, {"of", "thud"}}));
         menu->close();
+    }
+
+    // A clip is read from footage on its card: the clip's first frame is drawn
+    // to point on, and what is pointed at is followed by the bridge. A clip
+    // that goes somewhere follows one point; a matte is cut to the points on a
+    // thing, and not to those off it.
+    void aClipIsReadFromFootageByPointingOnItsFirstFrame() {
+        MainWindow window{QString(), QString()};
+        openBounce(window);
+        RecipeGraphPanel *panel = panelOf(window);
+        RecipeInspector *inspector = panel->inspector();
+        QTemporaryDir folder;
+        const QString file = folder.filePath(QStringLiteral("first.png"));
+        QImage first(160, 90, QImage::Format_RGB32);
+        first.fill(Qt::darkGray);
+        QVERIFY(first.save(file));
+        const auto press = [&](Qt::MouseButton button, Qt::KeyboardModifiers held, QPointF share) {
+            auto *picture = inspector->findChild<PointPicture *>(QStringLiteral("graphPointPicture"));
+            if (!picture) return false;
+            picture->resize(160, 90);
+            QTest::mouseClick(picture, button, held, QPoint(int(share.x() * 160), int(share.y() * 90)));
+            return true;
+        };
+
+        // Where the ball goes: one press is the point, and is followed at once.
+        panel->view()->select(QStringLiteral("moves:ball"));
+        auto *ask = inspector->findChild<ui::GhostButton *>(QStringLiteral("graphFollowPicture"));
+        QVERIFY(ask);
+        ask->click();
+        QCOMPARE(window.m_lastCommand, (QJsonObject{{"type", "shot_picture"}, {"clip", "ball"}, {"of", "moves"}}));
+        QVERIFY(!inspector->findChild<ui::GhostButton *>(QStringLiteral("graphFollowPicture")));
+        QVERIFY(!inspector->findChild<PointPicture *>(QStringLiteral("graphPointPicture")));
+        // Another clip's picture is not this card's.
+        window.handleEvent(QJsonObject{{"type", "shot_picture"}, {"clip", "wall"}, {"of", "moves"}, {"path", file}});
+        QVERIFY(!inspector->findChild<PointPicture *>(QStringLiteral("graphPointPicture")));
+        window.handleEvent(QJsonObject{{"type", "shot_picture"}, {"clip", "ball"}, {"of", "moves"}, {"path", file}});
+        QVERIFY(press(Qt::LeftButton, {}, {0.25, 0.4}));
+        QCOMPARE(window.m_lastCommand.value("type").toString(), QStringLiteral("shot_follow"));
+        QCOMPARE(window.m_lastCommand.value("clip").toString(), QStringLiteral("ball"));
+        QCOMPARE(window.m_lastCommand.value("points").toArray().size(), 1);
+        const QJsonArray point = window.m_lastCommand.value("points").toArray().first().toArray();
+        QVERIFY(qAbs(point.at(0).toDouble() - 0.25) < 0.02 && qAbs(point.at(1).toDouble() - 0.4) < 0.02);
+        // While it is followed the picture takes no other point.
+        auto *picture = inspector->findChild<PointPicture *>(QStringLiteral("graphPointPicture"));
+        QVERIFY(picture && !picture->isEnabled());
+        // What cannot be followed is said on the card, with no banner over the editor, and the picture stays to point again.
+        window.handleEvent(QJsonObject{{"type", "error"}, {"command", "shot_follow"}, {"clip", "ball"}, {"of", "moves"},
+                                       {"message", "nothing to follow at 0.250, 0.400 on the first frame of `ball`"}});
+        auto *says = inspector->findChild<QLabel *>(QStringLiteral("graphFollowSays"));
+        QVERIFY(says && says->text().startsWith(QStringLiteral("nothing to follow")));
+        picture = inspector->findChild<PointPicture *>(QStringLiteral("graphPointPicture"));
+        QVERIFY(picture && picture->isEnabled() && picture->on().isEmpty());
+        QVERIFY(press(Qt::LeftButton, {}, {0.5, 0.5}));
+        window.handleEvent(QJsonObject{{"type", "shot_followed"}, {"clip", "ball"}, {"of", "moves"}, {"says", "followed through 96 frames, 12 of them keyframes"}});
+        says = inspector->findChild<QLabel *>(QStringLiteral("graphFollowSays"));
+        QVERIFY(says && says->text() == QStringLiteral("followed through 96 frames, 12 of them keyframes"));
+        QVERIFY(inspector->findChild<ui::GhostButton *>(QStringLiteral("graphFollowPicture")));
+        QVERIFY(!inspector->findChild<PointPicture *>(QStringLiteral("graphPointPicture")));
+
+        // A guide that is no matte has no clip to cut; one that is, cuts its clip.
+        panel->view()->select(QStringLiteral("made:depth.mp4"));
+        QVERIFY(!inspector->findChild<ui::GhostButton *>(QStringLiteral("graphCutPicture")));
+        QJsonObject recipe = bounceRecipe();
+        QJsonArray nodes = recipe.value("nodes").toArray();
+        QJsonObject guide = nodes.at(1).toObject();
+        guide.insert("matte", "plate");
+        guide.insert("pass", "picture");
+        nodes.replace(1, guide);
+        recipe.insert("nodes", nodes);
+        window.handleEvent(recipe);
+        auto *cutFrom = inspector->findChild<ui::GhostButton *>(QStringLiteral("graphCutPicture"));
+        QVERIFY(cutFrom);
+        cutFrom->click();
+        QCOMPARE(window.m_lastCommand, (QJsonObject{{"type", "shot_picture"}, {"clip", "plate"}, {"of", "matte"}}));
+        window.handleEvent(QJsonObject{{"type", "shot_picture"}, {"clip", "plate"}, {"of", "matte"}, {"path", file}});
+        auto *cut = inspector->findChild<ui::GhostButton *>(QStringLiteral("graphCutOut"));
+        QVERIFY(cut && !cut->isEnabled());
+        // A point off the thing alone is nothing to cut.
+        QVERIFY(press(Qt::LeftButton, Qt::AltModifier, {0.8, 0.8}));
+        QVERIFY(!cut->isEnabled());
+        QVERIFY(press(Qt::LeftButton, {}, {0.2, 0.3}));
+        QVERIFY(press(Qt::LeftButton, {}, {0.3, 0.3}));
+        QVERIFY(press(Qt::RightButton, {}, {0.9, 0.2}));
+        QVERIFY(cut->isEnabled());
+        cut->click();
+        QCOMPARE(window.m_lastCommand.value("type").toString(), QStringLiteral("shot_follow"));
+        QCOMPARE(window.m_lastCommand.value("of").toString(), QStringLiteral("matte"));
+        QCOMPARE(window.m_lastCommand.value("clip").toString(), QStringLiteral("plate"));
+        QCOMPARE(window.m_lastCommand.value("points").toArray().size(), 2);
+        QCOMPARE(window.m_lastCommand.value("outside").toArray().size(), 2);
+        window.handleEvent(QJsonObject{{"type", "shot_followed"}, {"clip", "plate"}, {"of", "matte"}, {"says", "followed through 64 frames, 30 of them keyframes"}});
+        QVERIFY(inspector->findChild<QLabel *>(QStringLiteral("graphFollowSays")));
     }
 
     // The take the shot is, made from a recipe that has changed since, has its

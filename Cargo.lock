@@ -2106,6 +2106,7 @@ dependencies = [
  "kerf-engine",
  "kerf-model",
  "kerf-runtime",
+ "kerf-track",
  "kerf-workflow",
  "serde_json",
  "tempfile",

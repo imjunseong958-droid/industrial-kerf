@@ -174,6 +174,21 @@ RecipeGraphPanel::RecipeGraphPanel(QWidget *parent) : QWidget(parent) {
     connect(m_inspector, &RecipeInspector::removed, this, &RecipeGraphPanel::removed);
     connect(m_inspector, &RecipeInspector::signalDrawn, this, &RecipeGraphPanel::signalDrawn);
     connect(m_inspector, &RecipeInspector::signalFromSound, this, &RecipeGraphPanel::signalFromSound);
+    // What the card shows of reading a clip from footage changes as it is asked for.
+    const auto again = [this] {
+        if (showsWorkflow()) return;
+        m_inspector->setNode(m_view->recipe(), m_view->selected());
+        placeInspector();
+    };
+    connect(m_inspector, &RecipeInspector::shotPictureRequested, this, [this, again](const QString &clip, const QString &of) {
+        emit shotPictureRequested(clip, of);
+        again();
+    });
+    connect(m_inspector, &RecipeInspector::shotFollowRequested, this,
+            [this, again](const QString &clip, const QString &of, const QJsonArray &points, const QJsonArray &outside) {
+                emit shotFollowRequested(clip, of, points, outside);
+                again();
+            });
     connect(m_inspector, &RecipeInspector::takeChosen, this, &RecipeGraphPanel::takeChosen);
     connect(m_inspector, &RecipeInspector::takesReadRequested, this, &RecipeGraphPanel::takesReadRequested);
     connect(m_inspector, &RecipeInspector::stepRemoveRequested, this, &RecipeGraphPanel::stepRemoveRequested);
@@ -209,6 +224,22 @@ void RecipeGraphPanel::requestPictures() {
     }
     m_art->request(sources, m_directory);
     m_inspector->setPictures(m_art->frames);
+}
+
+void RecipeGraphPanel::setShotPicture(const QString &clip, const QString &of, const QImage &picture) {
+    m_inspector->setShotPicture(clip, of, picture);
+    if (!showsWorkflow()) {
+        m_inspector->setNode(m_view->recipe(), m_view->selected());
+        placeInspector();
+    }
+}
+
+void RecipeGraphPanel::setShotFollowed(const QString &clip, const QString &of, const QString &says, bool failed) {
+    m_inspector->setShotFollowed(clip, of, says, failed);
+    if (!showsWorkflow()) {
+        m_inspector->setNode(m_view->recipe(), m_view->selected());
+        placeInspector();
+    }
 }
 
 void RecipeGraphPanel::setTakeReadings(const QHash<int, QJsonObject> &readings, int best, const QString &state) {

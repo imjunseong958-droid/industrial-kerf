@@ -15,6 +15,7 @@ mod qc;
 mod secrets;
 mod updates;
 mod takes;
+mod tracks;
 mod workflows;
 mod queue;
 mod recipes;
@@ -346,6 +347,17 @@ enum Command {
         clip: String,
         of: String,
     },
+    /// Draw the picture a person points on to read a clip from footage
+    /// ([`kerf_shots::tracks`]): its sequence on the clip's first frame, as a
+    /// `shot_picture` naming the file.
+    ShotPicture {
+        clip: String,
+        of: tracks::Of,
+    },
+    /// Have a clip follow the point pointed at (`moves`), or cut out of it
+    /// what the points are on (`matte`): one edit of the project, then
+    /// `shot_followed`, or `error`.
+    ShotFollow(tracks::Follow),
     /// Hold a media's takes to its guide by where its subjects are: a
     /// `take_read` for each as it is read, then `takes_read`, or `error`.
     TakesRead {
@@ -891,6 +903,14 @@ fn runtime_worker(
             }
             Command::WorkflowGet { media, line } => {
                 workflows::get(&shared, &active_client, &media, line, &tx);
+                continue;
+            }
+            Command::ShotPicture { clip, of } => {
+                tracks::picture(&shared, &active_client, clip, of, &tx);
+                continue;
+            }
+            Command::ShotFollow(asked) => {
+                tracks::follow(&shared, &active_client, asked, &tx);
                 continue;
             }
             Command::TakesRead { media } => {

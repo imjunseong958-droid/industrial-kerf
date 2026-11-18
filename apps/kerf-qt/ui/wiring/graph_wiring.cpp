@@ -12,6 +12,7 @@
 #include "ui/components.h"
 
 #include <QFileInfo>
+#include <QImage>
 #include <QJsonArray>
 
 #include <utility>
@@ -85,6 +86,19 @@ void GraphWiring::build() {
     connect(m_panel, &RecipeGraphPanel::signalFromSound, this, [this](const QString &clip, const QString &of) {
         m_bus->send(QJsonObject{{QStringLiteral("type"), QStringLiteral("signal_from_sound")}, {QStringLiteral("clip"), clip}, {QStringLiteral("of"), of}});
     });
+    // A clip read from footage: its first frame drawn to point on, then what was pointed at followed
+    // through the clip, off the bridge's worker, and set as one edit of the project.
+    connect(m_panel, &RecipeGraphPanel::shotPictureRequested, this, [this](const QString &clip, const QString &of) {
+        m_bus->send(QJsonObject{{QStringLiteral("type"), QStringLiteral("shot_picture")}, {QStringLiteral("clip"), clip}, {QStringLiteral("of"), of}});
+    });
+    connect(m_panel, &RecipeGraphPanel::shotFollowRequested, this,
+            [this](const QString &clip, const QString &of, const QJsonArray &points, const QJsonArray &outside) {
+                m_bus->send(QJsonObject{{QStringLiteral("type"), QStringLiteral("shot_follow")},
+                                        {QStringLiteral("clip"), clip},
+                                        {QStringLiteral("of"), of},
+                                        {QStringLiteral("points"), points},
+                                        {QStringLiteral("outside"), outside}});
+            });
     connect(m_panel, &RecipeGraphPanel::takeRestoreRequested, this, [this](int take) { edit(QJsonObject{{QStringLiteral("restore"), take}}); });
     // Each take read beside its guide, off the bridge's worker: asked once, answered a take at a time.
     connect(m_panel, &RecipeGraphPanel::takesReadRequested, this, [this] {
@@ -236,6 +250,21 @@ void GraphWiring::onEvent(const QString &type, const QJsonObject &event) {
         // The one asked for, of this shot: shown in place of the shot's graph.
         if (event.value(QStringLiteral("media")).toString() == m_media && event.value(QStringLiteral("line")).toInt() == m_workflowLine)
             m_panel->setWorkflow(graph::Workflow::read(event));
+        return;
+    }
+    // A clip read from footage, whichever shot's graph asked: the card that asked knows its clip.
+    const QString clip = event.value(QStringLiteral("clip")).toString();
+    const QString of = event.value(QStringLiteral("of")).toString();
+    if (type == QLatin1String("shot_picture")) {
+        m_panel->setShotPicture(clip, of, QImage(event.value(QStringLiteral("path")).toString()));
+        return;
+    }
+    if (type == QLatin1String("shot_followed")) {
+        m_panel->setShotFollowed(clip, of, event.value(QStringLiteral("says")).toString(), false);
+        return;
+    }
+    if (type == QLatin1String("error") && event.value(QStringLiteral("command")).toString().startsWith(QLatin1String("shot_"))) {
+        m_panel->setShotFollowed(clip, of, event.value(QStringLiteral("message")).toString(), true);
         return;
     }
     const bool ofThis = event.value(QStringLiteral("media")).toString() == m_media;

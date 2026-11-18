@@ -1417,6 +1417,8 @@ void MainWindow::routeEvent(const QJsonObject &event) {
             replaceSavedPreset(message.chopped(presetExists.size()));
         } else if (event.value(QStringLiteral("command")).toString() == QStringLiteral("takes_read")) {
             // Said in the takes' card of the shot's graph, where the reading was asked for.
+        } else if (event.value(QStringLiteral("command")).toString().startsWith(QLatin1String("shot_"))) {
+            // Said on the card of the shot's graph that asked for a clip to be read from footage.
         } else {
             showError(message);
             // A failed turn is said in its thread too; the next turn takes it away.

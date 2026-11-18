@@ -3,6 +3,7 @@
 #include "recipe_inspector.h"
 #include "components.h"
 #include "icons.h"
+#include "point_picture.h"
 #include "settings_kit.h"
 #include "signal_curve.h"
 
@@ -249,6 +250,10 @@ QString RecipeInspector::shape(const graph::Recipe &recipe, const Node &node) co
     if (const QJsonObject made = node.holds.value(QStringLiteral("made")).toObject(); !made.isEmpty())
         parts << made.value(QStringLiteral("path")).toString() << QString::number(m_pictures.contains(made.value(QStringLiteral("path")).toString()));
     parts << QString::number(node.holds.value(QStringLiteral("from")).isNull());
+    // How far reading its clip from footage has got.
+    if (node.kind == Kind::Moves || node.kind == Kind::Render)
+        parts << node.holds.value(QStringLiteral("matte")).toString() << QString::number(node.holds.value(QStringLiteral("there")).toBool())
+              << m_pointing.clip << m_pointing.of << m_pointing.state << m_pointing.says << QString::number(m_pointing.picture.cacheKey());
     for (const QJsonValue sound : node.holds.value(QStringLiteral("sounds")).toArray()) parts << sound.toObject().value(QStringLiteral("clip")).toString();
     // What is said as text, not set: another word is another card.
     if (node.kind != Kind::Model && node.kind != Kind::Render && node.kind != Kind::Signal) parts << node.title << node.detail;
@@ -399,6 +404,24 @@ void RecipeInspector::setTakeReadings(const QHash<int, QJsonObject> &readings, i
 
 void RecipeInspector::setPictures(const QHash<QString, QImage> &pictures) { m_pictures = pictures; }
 
+void RecipeInspector::setShotPicture(const QString &clip, const QString &of, const QImage &picture) {
+    // The one asked for last, and still waited for.
+    if (m_pointing.clip != clip || m_pointing.of != of || m_pointing.state != QLatin1String("drawing")) return;
+    m_pointing.picture = picture;
+    m_pointing.state = QStringLiteral("pointing");
+}
+
+void RecipeInspector::setShotFollowed(const QString &clip, const QString &of, const QString &says, bool failed) {
+    if (m_pointing.clip != clip || m_pointing.of != of) return;
+    // A picture that could not be drawn leaves nothing to point on; a thing that could not
+    // be followed leaves the picture, to point again.
+    m_pointing.state = failed && !m_pointing.picture.isNull() ? QStringLiteral("pointing") : QStringLiteral("said");
+    m_pointing.says = says;
+    m_pointing.failed = failed;
+    m_pointing.on.clear();
+    m_pointing.off.clear();
+}
+
 void RecipeInspector::refresh(const Node &node) {
     const QHash<QString, QString> now = values(node);
     for (auto field = m_fields.constBegin(); field != m_fields.constEnd(); ++field) {
@@ -510,6 +533,7 @@ void RecipeInspector::rebuild(const graph::Recipe &recipe, const Node &node) {
                           .arg(node.holds.value(QStringLiteral("sequence")).toString())
                     : node.detail,
                 node.holds.value(QStringLiteral("there")).toBool() ? ink2 : status::failed);
+        if (node.holds.value(QStringLiteral("there")).toBool()) buildPointing(node.holds.value(QStringLiteral("clip")).toString(), QStringLiteral("moves"));
         break;
     case Kind::Sequence:
         addNote(node.detail, graph::isMissing(node) ? status::failed : ink2);
@@ -929,6 +953,8 @@ void RecipeInspector::buildRender(const Node &node) {
     // The part of the sequence it draws, in seconds: a shot longer than a model makes at once is drawn a part at a time.
     addField(QStringLiteral("from"), QStringLiteral("From"), QStringLiteral("from"), QStringLiteral("its start"));
     addField(QStringLiteral("seconds"), QStringLiteral("Seconds"), QStringLiteral("seconds"), QStringLiteral("to its end"));
+    // A matte is one clip in white on black: of footage, as much of it as a mask cuts out.
+    if (const QString matte = holds.value(QStringLiteral("matte")).toString(); !matte.isEmpty()) buildPointing(matte, QStringLiteral("matte"));
     // The guide as it was drawn for the take that shows: what the model was handed, to look at beside the take.
     const QJsonObject made = holds.value(QStringLiteral("made")).toObject();
     if (const QImage drawn = m_pictures.value(made.value(QStringLiteral("path")).toString()); !drawn.isNull()) {
@@ -980,6 +1006,77 @@ void RecipeInspector::buildSignal(const Node &node) {
         ui::popupMenu(menu, from);
     });
     m_column->addWidget(from, 0, Qt::AlignLeft);
+}
+
+void RecipeInspector::buildPointing(const QString &clip, const QString &of) {
+    const bool moves = of == QLatin1String("moves");
+    const bool mine = m_pointing.clip == clip && m_pointing.of == of;
+    const QString state = mine ? m_pointing.state : QString();
+    addSection(QStringLiteral("From footage"));
+    if (mine && !m_pointing.says.isEmpty()) {
+        QLabel *says = addNote(m_pointing.says, m_pointing.failed ? status::failed : ink2);
+        says->setObjectName(QStringLiteral("graphFollowSays"));
+    }
+    if (state == QLatin1String("pointing") || state == QLatin1String("following")) {
+        const bool following = state == QLatin1String("following");
+        auto *picture = new PointPicture(!moves);
+        picture->setObjectName(QStringLiteral("graphPointPicture"));
+        picture->setAccessibleName(moves ? QStringLiteral("The clip's first frame: press on what it should follow")
+                                         : QStringLiteral("The clip's first frame: press on what to cut out"));
+        picture->setPicture(m_pointing.picture);
+        picture->setPoints(m_pointing.on, m_pointing.off);
+        picture->setEnabled(!following);
+        m_column->addWidget(picture);
+        const auto follow = [this, clip, of] {
+            if (m_pointing.on.isEmpty()) return;
+            m_pointing.state = QStringLiteral("following");
+            m_pointing.says.clear();
+            m_pointing.failed = false;
+            emit shotFollowRequested(clip, of, PointPicture::said(m_pointing.on), PointPicture::said(m_pointing.off));
+        };
+        if (following) {
+            addNote(moves ? QStringLiteral("Following it through the clip…") : QStringLiteral("Cutting it out through the clip…"))
+                ->setObjectName(QStringLiteral("graphFollowing"));
+        } else if (moves) {
+            addNote(QStringLiteral("Press on what the clip should follow: a corner or a mark, or a thing that stands out from what is behind it. "
+                                   "The clip itself is not in this picture."));
+            connect(picture, &PointPicture::pointed, this, [this, picture, follow] {
+                m_pointing.on = picture->on();
+                follow();
+            });
+        } else {
+            addNote(QStringLiteral("Press on what to cut out, in as many places as tell it from the rest; hold Alt, or use the other button, on "
+                                   "what is taken for it and is not it."));
+            auto *cut = new ui::GhostButton(QStringLiteral("Cut out"));
+            cut->setObjectName(QStringLiteral("graphCutOut"));
+            cut->setTip(QStringLiteral("Mask the clip to what the points are on, through the whole clip: its matte is then that thing in white"));
+            cut->setEnabled(!m_pointing.on.isEmpty());
+            connect(picture, &PointPicture::pointed, this, [this, picture, cut] {
+                m_pointing.on = picture->on();
+                m_pointing.off = picture->off();
+                cut->setEnabled(!m_pointing.on.isEmpty());
+            });
+            connect(cut, &QAbstractButton::clicked, this, follow);
+            m_column->addWidget(cut, 0, Qt::AlignLeft);
+        }
+        return;
+    }
+    if (state == QLatin1String("drawing")) {
+        addNote(QStringLiteral("Drawing the clip's first frame…"))->setObjectName(QStringLiteral("graphFollowing"));
+        return;
+    }
+    auto *ask = new ui::GhostButton(moves ? QStringLiteral("Follow the picture") : QStringLiteral("Cut out of the picture"));
+    ask->setObjectName(moves ? QStringLiteral("graphFollowPicture") : QStringLiteral("graphCutPicture"));
+    ask->setTip(moves ? QStringLiteral("Point at something in the footage under this clip, and have the clip follow it for as long as it runs: its x and y, keyed")
+                      : QStringLiteral("Point at a thing this clip shows, and mask the clip to it as it moves and changes shape: the matte is then that thing"));
+    connect(ask, &QAbstractButton::clicked, this, [this, clip, of] {
+        m_pointing = Pointing{};
+        m_pointing.clip = clip;
+        m_pointing.of = of;
+        m_pointing.state = QStringLiteral("drawing");
+        emit shotPictureRequested(clip, of);
+    });
+    m_column->addWidget(ask, 0, Qt::AlignLeft);
 }
 
 void RecipeInspector::addRemoveStep(const Node &node) {

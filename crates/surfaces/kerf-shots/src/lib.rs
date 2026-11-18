@@ -14,6 +14,8 @@
 //! - [`signals`]: a signal's keys read from the onsets of a sound.
 //! - [`takes`]: a shot's takes held to its guide by where its subjects are,
 //!   to choose among them by.
+//! - [`tracks`]: where a thing goes and the matte of a thing, read from
+//!   footage: a clip that follows a point, and a mask that holds to an object.
 //!
 //! The two differ only in where a change is written. A person's is written
 //! in place, as a text editor writes it. An agent's is never written over
@@ -26,4 +28,5 @@
 pub mod graph;
 pub mod signals;
 pub mod takes;
+pub mod tracks;
 pub mod workflow;
