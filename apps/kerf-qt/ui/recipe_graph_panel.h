@@ -100,6 +100,7 @@ signals:
     void edited(int line, const QString &key, int nth, const QString &value);
     void removed(int line, const QString &key, int nth);
     void signalDrawn(const QString &clip, const QJsonArray &keys);
+    void signalFromSound(const QString &clip, const QString &of);
     void takeChosen(int number, const QString &path);
     // Hold the shot's takes to its guide.
     void takesReadRequested();

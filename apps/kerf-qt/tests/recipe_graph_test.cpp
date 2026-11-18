@@ -814,6 +814,35 @@ private slots:
         QVERIFY(inspector->findChild<QLabel *>(QStringLiteral("graphCannot"))->text().contains(QStringLiteral("no model `video` is set up")));
     }
 
+    // A signal's moments are read from a sound of its sequence: the card offers
+    // the clips there that play one, and the bridge sets the signal's keys.
+    void aSignalIsSetFromASoundOfItsSequence() {
+        MainWindow window{QString(), QString()};
+        openBounce(window);
+        RecipeGraphPanel *panel = panelOf(window);
+        panel->view()->select(QStringLiteral("signal:bounce"));
+        // A sequence with no sound in it offers none.
+        QVERIFY(!panel->inspector()->findChild<ui::GhostButton *>(QStringLiteral("graphSignalFromSound")));
+        QJsonObject recipe = bounceRecipe();
+        QJsonArray nodes = recipe.value("nodes").toArray();
+        QJsonObject signal = nodes.at(4).toObject();
+        signal.insert("sounds", QJsonArray{QJsonObject{{"clip", "thud"}, {"name", "Ball on the floor"}}, QJsonObject{{"clip", "crowd"}, {"name", "crowd"}}});
+        nodes.replace(4, signal);
+        recipe.insert("nodes", nodes);
+        window.handleEvent(recipe);
+        auto *from = panel->inspector()->findChild<ui::GhostButton *>(QStringLiteral("graphSignalFromSound"));
+        QVERIFY(from);
+        from->click();
+        auto *menu = from->findChild<QMenu *>(QStringLiteral("graphSoundMenu"));
+        QVERIFY(menu);
+        QAction *thud = menu->findChild<QAction *>(QStringLiteral("graphSound.thud"));
+        QVERIFY(thud);
+        QCOMPARE(thud->text(), QStringLiteral("Ball on the floor"));
+        thud->trigger();
+        QCOMPARE(window.m_lastCommand, (QJsonObject{{"type", "signal_from_sound"}, {"clip", "bounce"}, {"of", "thud"}}));
+        menu->close();
+    }
+
     // The take the shot is, made from a recipe that has changed since, has its
     // recipe to go back to where the take kept it: the recipe written as that
     // making read it, seeds and workflow with it.

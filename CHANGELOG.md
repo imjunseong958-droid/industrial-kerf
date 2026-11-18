@@ -6,6 +6,10 @@ on `main`; its section here becomes the release's notes on GitHub
 
 ## 0.1.3
 
+- A signal is set from a sound in a shot's graph: From a sound, in a
+  signal's card, lists the clips of its sequence that play one and keys the
+  signal to 1 where that sound's sounds start, as Kerf in the conversation
+  already could.
 - In a model's workflow, an input says what the ComfyUI server takes there:
   a sampler or a model file is chosen from the names that server has, and a
   number is held to its least and most. `kerf-comfy --workflow NAME --inputs`

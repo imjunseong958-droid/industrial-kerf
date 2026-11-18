@@ -623,6 +623,12 @@ thread of the bridge's and kept by the workflow's kinds of node. A value with
 `choices` is a menu in the node's card; a number with a range is put back,
 unsent, when typed outside it.
 
+A signal's card offers From a sound where its node lists `sounds`, the clips
+of its sequence on sound tracks that play media with sound; choosing one sends
+`signal_from_sound {clip, of}`, which the bridge answers by keying the signal's
+`value` where that sound's onsets fall (`kerf_shots::signals::from_sound`, the
+reading an agent's `look` with `signal` makes) as one edit of the project.
+
 Restore take's recipe, in the takes' card, shows for the take the shot is
 when what it was made from has changed and the take kept its recipe (`kept` on
 the take); it sends `recipe_edit {restore: <take>}`, which the bridge answers

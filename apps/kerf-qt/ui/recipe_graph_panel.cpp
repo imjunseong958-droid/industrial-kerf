@@ -173,6 +173,7 @@ RecipeGraphPanel::RecipeGraphPanel(QWidget *parent) : QWidget(parent) {
     connect(m_inspector, &RecipeInspector::edited, this, &RecipeGraphPanel::edited);
     connect(m_inspector, &RecipeInspector::removed, this, &RecipeGraphPanel::removed);
     connect(m_inspector, &RecipeInspector::signalDrawn, this, &RecipeGraphPanel::signalDrawn);
+    connect(m_inspector, &RecipeInspector::signalFromSound, this, &RecipeGraphPanel::signalFromSound);
     connect(m_inspector, &RecipeInspector::takeChosen, this, &RecipeGraphPanel::takeChosen);
     connect(m_inspector, &RecipeInspector::takesReadRequested, this, &RecipeGraphPanel::takesReadRequested);
     connect(m_inspector, &RecipeInspector::stepRemoveRequested, this, &RecipeGraphPanel::stepRemoveRequested);
