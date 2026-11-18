@@ -1,9 +1,9 @@
 #pragma once
 
-// A making Kerf asked for, in the conversation: what the recipe would run
+// A making Kerf asked for, in the conversation: what a shot's steps would run
 // (a guide rendered from the project, then a model's program) and the take
 // it would write, with Make and Not now, as a coding agent asks before it
-// runs a command. Make runs it as the bin's Make from Recipe… does; from then
+// runs a command. Make runs it as the bin's Make… does; from then
 // on the card follows the making: what its steps say, Stop, and once its take
 // is made, Look at it, which asks Kerf to look at the take.
 //

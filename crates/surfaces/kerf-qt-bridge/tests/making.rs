@@ -26,33 +26,58 @@ fn kerfd() -> PathBuf {
     path
 }
 
-/// A project folder whose media `m1` is made by `recipe`, removed at the end.
+/// The models these tests make with, each a program handed the file it writes: one that
+/// says two things, the second twice, and one that waits, as a model's program waits on
+/// its server, and takes its job back when it is asked to end. Written once for this run
+/// of the tests, and the only models file read.
+fn models() -> &'static Path {
+    static FILE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    FILE.get_or_init(|| {
+        let file = std::env::temp_dir().join(format!("kq-models-{}.json", std::process::id()));
+        let models = json!({
+            "talk": {"run": [
+                "sh", "-c",
+                "echo blocking >&2; echo asking the model >&2; echo asking the model >&2; printf said > \"$1\"",
+                "talk", "{out}",
+            ]},
+            "wait": {"run": [
+                "sh", "-c",
+                "trap 'echo took the job back >&2; exit 1' TERM; echo waiting >&2; while :; do sleep 0.05; done",
+                "wait", "{out}",
+            ]},
+        });
+        fs::write(&file, models.to_string()).unwrap();
+        file
+    })
+}
+
+/// A project folder whose media `m1` is made by `steps`, the steps under its line,
+/// removed at the end.
 struct Project(PathBuf);
 
 impl Project {
-    fn new(tag: &str, recipe: &str) -> Self {
-        // No models a person has set up are read.
-        std::env::set_var("KERF_MODELS", "/no-such-kerf-models.json");
+    fn new(tag: &str, steps: &[&str]) -> Self {
+        // No models a person has set up are read: only these tests' own.
+        std::env::set_var("KERF_MODELS", models());
         let stamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
         let directory = std::env::temp_dir().join(format!("kq-{tag}-{:x}", stamp % 0xffff_ffff));
         fs::create_dir_all(directory.join("shots")).unwrap();
-        fs::write(
-            directory.join("shots/open.kerfrecipe"),
-            format!("kerf-recipe 1\n{recipe}\n"),
-        )
-        .unwrap();
+        let steps: String = steps.iter().map(|step| format!("  {step}\n")).collect();
         fs::write(
             directory.join("project.kerf"),
-            "kerf 1\nproject name=\"Making\"\n\
-             media m1 path=\"shots/open.mp4\" rate=24 dur=12f video=64x64 recipe=\"shots/open.kerfrecipe\"\n\
-             sequence s1 rate=24 size=64x64 audio=48000\n\
-             \x20 track V1 video\n\
-             sequence s2 rate=24 size=64x64 audio=48000\n\
-             \x20 track V1 video\n\
-             \x20   clip g1 gen=solid@1 at=0f dur=12f\n",
+            format!(
+                "kerf 1\nproject name=\"Making\"\n\
+                 media m1 path=\"shots/open.mp4\" rate=24 dur=12f video=64x64\n\
+                 {steps}\
+                 sequence s1 rate=24 size=64x64 audio=48000\n\
+                 \x20 track V1 video\n\
+                 sequence s2 rate=24 size=64x64 audio=48000\n\
+                 \x20 track V1 video\n\
+                 \x20   clip g1 gen=solid@1 at=0f dur=12f\n",
+            ),
         )
         .unwrap();
         Self(directory)
@@ -147,7 +172,7 @@ fn a_making_says_what_its_steps_say_as_they_say_it() {
     // A step that says two things, the second twice, and one that has Kerf draw the take.
     let project = Project::new(
         "making",
-        "run sh -c \"echo blocking >&2; echo asking the model >&2; echo asking the model >&2\"\nrender s2 {out}",
+        &["generate model=talk prompt=\"a word\" out={said.txt}", "render s2 {out}"],
     );
     let mut editor = Editor::open(&project.0);
 
@@ -199,10 +224,7 @@ fn a_making_says_what_its_steps_say_as_they_say_it() {
 fn a_making_that_is_cancelled_asks_its_step_to_end_and_leaves_no_take() {
     // A step that waits, as a model's program waits on its server, and takes its job back
     // when it is asked to end.
-    let project = Project::new(
-        "cancel",
-        r#"run sh -c "trap 'echo took the job back >&2; exit 1' TERM; echo waiting >&2; while :; do sleep 0.05; done" step {out}"#,
-    );
+    let project = Project::new("cancel", &["generate model=wait prompt=\"a word\""]);
     let mut editor = Editor::open(&project.0);
     editor.send(json!({"type": "media_make", "media": "m1", "confirmed": true}));
     editor.making("waiting");
@@ -255,7 +277,7 @@ fn a_making_that_is_cancelled_asks_its_step_to_end_and_leaves_no_take() {
 
 #[test]
 fn several_takes_are_made_one_after_another_and_the_cast_is_read_and_set() {
-    let project = Project::new("rolls", "render s2 {out}");
+    let project = Project::new("rolls", &["render s2 {out}"]);
     let mut editor = Editor::open(&project.0);
 
     // The plan says how many it is for, and nothing runs.
@@ -326,4 +348,69 @@ fn several_takes_are_made_one_after_another_and_the_cast_is_read_and_set() {
     assert!(fs::read_to_string(project.0.join("cast.kerfcast"))
         .unwrap()
         .contains("cast Ada"));
+}
+
+#[test]
+fn a_recipe_file_is_carried_into_the_document_once_a_person_says_yes() {
+    let project = Project::new("carry", &[]);
+    let file = project.0.join("project.kerf");
+    let text = fs::read_to_string(&file).unwrap().replace(
+        "video=64x64\n",
+        "video=64x64 recipe=\"shots/open.kerfrecipe\"\n",
+    );
+    fs::write(&file, text).unwrap();
+    fs::write(
+        project.0.join("shots/open.kerfrecipe"),
+        "kerf-recipe 1\nrender s2 {out}\n",
+    )
+    .unwrap();
+    let mut editor = Editor::open(&project.0);
+
+    // Nothing is made from the recipe file: how to carry its steps is said.
+    editor.send(json!({"type": "media_make", "media": "m1"}));
+    let refused = editor.expect("an error", |event| event["type"] == "error");
+    assert!(
+        refused["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("`kerf carry m1`")),
+        "{refused}"
+    );
+
+    // Asked for plainly, what would be written is shown and nothing is.
+    editor.send(json!({"type": "media_carry", "media": "m1"}));
+    let plan = editor.expect("the plan", |event| event["type"] == "media_carry_plan");
+    assert_eq!(
+        (&plan["media"], &plan["recipe"]),
+        (&json!("m1"), &json!("shots/open.kerfrecipe"))
+    );
+    assert_eq!(plan["script"].as_array().unwrap().last().unwrap(), "step m1 add render s2 {out}");
+    assert!(fs::read_to_string(&file).unwrap().contains("recipe="));
+
+    // Confirmed, the steps are under the media's line, one edit, and the file is left.
+    editor.send(json!({"type": "media_carry", "media": "m1", "confirmed": true}));
+    let carried = editor.expect("the carry", |event| event["type"] == "media_carried");
+    assert_eq!(
+        carried,
+        json!({"type": "media_carried", "media": "m1", "recipe": "shots/open.kerfrecipe", "held": 0})
+    );
+    editor.expect("the steps in the document", |event| {
+        event["type"] == "state"
+            && event["snapshot"]["document"].as_str().is_some_and(|document| {
+                document.contains("\n  render s2 {out}\n") && !document.contains("recipe=")
+            })
+    });
+    assert!(project.0.join("shots/open.kerfrecipe").is_file());
+
+    // Carried, there is nothing to carry again: that is said, naming the media.
+    editor.send(json!({"type": "media_carry", "media": "m1"}));
+    let again = editor.expect("an error", |event| {
+        event["type"] == "error" && event["command"] == "media_carry"
+    });
+    assert_eq!(again["media"], "m1");
+    assert!(
+        again["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("has its steps under its line")),
+        "{again}"
+    );
 }

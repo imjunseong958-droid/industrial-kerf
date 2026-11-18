@@ -24,6 +24,7 @@ use crate::doc::{
 };
 use crate::facts::{Facts, NoFacts, Place, Snap};
 use crate::lex::{lex, Arg, Atom, Line};
+use crate::making::print_step;
 use crate::text::{
     parse_fx_ref, parse_param, parse_speed, print_fx_ref, print_speed, quote, Clock, Fields,
 };
@@ -100,7 +101,7 @@ pub fn apply_script_with(
     })
 }
 
-const COMMANDS: &str = "use, media, sequence, track, bus, insert, overwrite, delete, ripple-delete, lift, extract, trim, roll, slip, slide, split, blade, move, set, speed, mask, fx, transition, marker, captions, link, unlink";
+const COMMANDS: &str = "use, media, step, sequence, track, bus, insert, overwrite, delete, ripple-delete, lift, extract, trim, roll, slip, slide, split, blade, move, set, speed, mask, fx, transition, marker, captions, link, unlink";
 
 struct Script<'c> {
     project: Project,
@@ -275,6 +276,12 @@ impl std::ops::Deref for Positions<'_> {
 
 impl Script<'_> {
     fn parse(&mut self, line: &Line) -> Parsed {
+        // A step's words are a making's own, a name given as often as it needs: they are
+        // not read as a command's fields are.
+        if matches!(line.args.first(), Some(Arg { key: None, value: Atom::Word(word), .. }) if word == "step")
+        {
+            return self.step(line);
+        }
         let spoken = self.spoken(line)?;
         let line = spoken.as_ref().unwrap_or(line);
         let mut fields = Fields::new(line)?;
@@ -497,6 +504,109 @@ impl Script<'_> {
             }
         };
         fields.finish(3)?;
+        Ok(vec![op])
+    }
+
+    /// `step <media> add [<n>] <step>`, `step <media> set <n> <step, or name=value …>`,
+    /// `step <media> remove <n>`: the steps that say how a media's file is made
+    /// ([`crate::making`]), counted from 1.
+    fn step(&mut self, line: &Line) -> Parsed {
+        const SHAPE: &str = "`step <media> add [<n>] <step>`, `step <media> set <n> <step, or name=value …>`, or `step <media> remove <n>`, a step being `render`, `generate`, or `join` and what follows it";
+        let word = |index: usize| match line.args.get(index) {
+            Some(Arg {
+                key: None,
+                value: Atom::Word(word),
+                ..
+            }) => Some(word.as_str()),
+            _ => None,
+        };
+        let column = |index: usize| line.args.get(index).map_or(1, |arg| arg.column);
+        let id = word(1)
+            .and_then(|word| Id::new(word).ok())
+            .ok_or_else(|| line.error(column(1), format!("expected a media id: {SHAPE}")))?;
+        let media = self
+            .project
+            .media(id.as_str())
+            .ok_or_else(|| line.missing(column(1), format!("no media `{id}`")))?;
+        let steps = &media.steps;
+        // The files the steps before the one at `index` make, which that one may read.
+        let made = |index: usize| -> Vec<String> {
+            steps
+                .iter()
+                .take(index)
+                .map(|step| step.makes().to_owned())
+                .collect()
+        };
+        let number = |index: usize| {
+            word(index)
+                .and_then(|word| word.parse::<usize>().ok())
+                .filter(|number| *number >= 1)
+        };
+        // A step that is there, by its number.
+        let there = |index: usize| {
+            let number = number(index).ok_or_else(|| {
+                line.error(
+                    column(index),
+                    format!("expected a step's number, from 1: {SHAPE}"),
+                )
+            })?;
+            if number > steps.len() {
+                return Err(line.error(
+                    column(index),
+                    format!(
+                        "media `{id}` has {} and no step {number}",
+                        match steps.len() {
+                            0 => "no steps".to_owned(),
+                            1 => "1 step".to_owned(),
+                            more => format!("{more} steps"),
+                        }
+                    ),
+                ));
+            }
+            Ok(number - 1)
+        };
+        let op = match word(2) {
+            Some("add") => {
+                let (index, from) = match number(3) {
+                    Some(number) => (Some(number - 1), 4),
+                    None => (None, 3),
+                };
+                let at = index.unwrap_or(steps.len()).min(steps.len());
+                Op::AddStep {
+                    step: crate::making::read(line, from, &made(at))?,
+                    media: id,
+                    index,
+                }
+            }
+            Some("set") => {
+                let index = there(3)?;
+                let made = made(index);
+                let step = match crate::making::names(line, 4)? {
+                    None => crate::making::read(line, 4, &made)?,
+                    Some(names) if names.is_empty() => {
+                        return Err(line.error(
+                            column(3),
+                            format!("say what step {} is to be: names to set, as `seed=8`, or the step whole", index + 1),
+                        ))
+                    }
+                    Some(names) => crate::making::with_names(&steps[index], &names, &made)
+                        .map_err(|why| line.error(column(4), why))?,
+                };
+                Op::SetStep {
+                    media: id,
+                    index,
+                    step,
+                }
+            }
+            Some("remove") => {
+                let index = there(3)?;
+                if let Some(extra) = line.args.get(4) {
+                    return Err(line.error(extra.column, "unexpected argument"));
+                }
+                Op::RemoveStep { media: id, index }
+            }
+            _ => return Err(line.error(column(2), format!("expected add, set, or remove: {SHAPE}"))),
+        };
         Ok(vec![op])
     }
 
@@ -1901,10 +2011,25 @@ fn op_line(project: &Project, catalog: &Catalog, op: &Op) -> String {
         text
     };
     match op {
-        Op::AddMedia(media) => media_line(media).replacen("media ", "media add ", 1),
+        Op::AddMedia(media) => {
+            // A media that comes with its steps is its line and a line for each of them.
+            let mut text = media_line(media).replacen("media ", "media add ", 1);
+            for step in &media.steps {
+                write!(text, "\nstep {} add {}", media.id, print_step(step)).unwrap();
+            }
+            text
+        }
         Op::RelinkMedia { media, path } => format!("media relink {media} path={}", quote(path)),
         Op::ReplaceMedia(media) => media_line(media).replacen("media ", "media replace ", 1),
         Op::RemoveMedia { media } => format!("media remove {media}"),
+        Op::AddStep { media, index, step } => match index {
+            Some(index) => format!("step {media} add {} {}", index + 1, print_step(step)),
+            None => format!("step {media} add {}", print_step(step)),
+        },
+        Op::SetStep { media, index, step } => {
+            format!("step {media} set {} {}", index + 1, print_step(step))
+        }
+        Op::RemoveStep { media, index } => format!("step {media} remove {}", index + 1),
         Op::AddSequence(sequence) => {
             sequence_line(sequence).replacen("sequence ", "sequence add ", 1)
         }

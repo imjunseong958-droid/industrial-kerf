@@ -81,10 +81,10 @@ My Film/
 ```
 
 `.gitattributes` routes `project.kerf` through Kerf's merge (`*.kerf
-merge=kerf`), keeps looks, presets, and recipes as text with Unix line
+merge=kerf`), keeps looks and presets as text with Unix line
 endings, and, when Git LFS was installed as the project was made, stores
 `media/` with Git LFS (`media/** filter=lfs diff=lfs merge=lfs -text`), and
-the takes a recipe makes the same way (`**/*.takes/**`), with each take's
+the takes of a shot the same way (`**/*.takes/**`), with each take's
 record and request left as text ([shots.md](shots.md#takes)). A project made
 before takes has neither line; add them to its `.gitattributes` by hand.
 

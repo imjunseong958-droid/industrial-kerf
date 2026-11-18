@@ -136,40 +136,49 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
   A clip cut in two goes on as it was: its second half reads `t` that much on
   (`rotation=((t+2)*90)`). Sound takes none, nor does a title's text, and a
   look that animates a property cannot go on a clip whose property is one.
-- `recipe="shots/open.kerfrecipe"` on a media line names the text file its file
-  is made from, where another program makes it: the scene a renderer draws, or
-  what a model is asked for and with which seed. It merges apart from the file,
-  as `reel=` does. A recipe is steps, and the last writes the file, `{out}`:
+- A media that Kerf or a model makes has the steps that make its file under
+  its line, indented as a clip is under its track:
 
   ```
-  kerf-recipe 1
-  # The opening shot: blocked in a renderer, then filmed by a model.
-  needs open.scene.json
-  run vork render open.scene.json --frame-end 95 --out {guide.mp4}
-  generate model=dawn prompt="a boat leaves the harbour at dawn" guide={guide.mp4} seed=7
+  media m3 path="shots/open.mp4" rate=16 dur=65f video=832x480
+    render s2 {guide.mp4} pass=depth size=832x480 rate=16
+    generate model=dawn prompt="a boat leaves the harbour at dawn" guide={guide.mp4} seed=7
   ```
 
-  `needs` names the files it reads; `run` is a program and its arguments,
-  quoted where they hold spaces, run as it is named and never through a shell;
-  `render <sequence> {name} [size=WxH] [rate=<fps>] [pass=ids|depth|relative|normals] [matte=<clip>]` has Kerf
-  draw a sequence of the project, with no sound, at its own size and rate or
-  at the ones named, as a guide for a model is, and its picture or, with
-  `pass=`, which clip each pixel is of or how near it is; and
-  `generate` asks a model the person has set up, with `signal=<clip>` handing
-  it a `gen=signal@1` clip's number over time. `kerf make m3` shows the
-  steps, asks, runs them in the recipe's folder, and has the media be the new
-  take, with the document taking its path, length and streams; `--yes` does
-  not ask. Each making is a take, kept beside the ones before it
-  (`shots/open.takes/002.mp4`), and the media line says which one it is, so
-  `media replace m3 path="shots/open.takes/001.mp4" …` with the rest of its
-  line chooses another; `look` with `media` gives the line whole. A run
-  that fails or writes nothing leaves no take and the media as it was. A media
-  wants making again when what its take was made from has changed (the recipe,
-  a file it reads, a sequence it renders, a signal it hands a model), and says
-  which; no other edit asks for it. The recipe and everything it names have to be inside the project.
-  Only a person asking runs a recipe, with `kerf make` or Make from Recipe… in
-  the editor's bin, which shows every step first: opening, drawing, and an
-  agent's tools never do. See [shots.md](shots.md).
+  `render <sequence> {name} [size=WxH] [rate=<fps>] [pass=ids|depth|relative|normals] [matte=<clip>] [from=<seconds>] [seconds=<seconds>]`
+  has Kerf draw a sequence of the project, with no sound, at its own size and
+  rate or at the ones named, as a guide for a model is, and its picture or,
+  with `pass=`, which clip each pixel is of or how near it is. `generate
+  model=<name> prompt="…" …` asks a model the person has set up, with
+  `signal=<clip>` handing it a `gen=signal@1` clip's number over time, and
+  `join {part} {part} … {name} [lap=<frames>]` sets files earlier steps made
+  end to end. `{out}` stands for the media's file, which the last step
+  writes, and any other `{name}` for a file one step makes and a later one
+  reads. A file of the project is named from the project's folder, as the
+  media's own path is. No step names a program to run: Kerf draws, and a
+  model is a program the person names in a file of their own.
+
+  The steps run in order when the media is made: `kerf make m3`, or an
+  agent's `make`, shows them, and the media becomes the new take, with the
+  document taking its path, length and streams. Each making is a take, kept
+  beside the ones before it (`shots/open.takes/002.mp4`), and the media line
+  says which one it is, so `media replace m3
+  path="shots/open.takes/001.mp4" …` with the rest of its line chooses
+  another, the steps staying as they are; `look` with `media` gives the line
+  whole. A making that fails or writes nothing leaves no take and the media
+  as it was. A media wants making again when what its take was made from has
+  changed (its steps, a file they read, a sequence they draw, a signal they
+  hand a model), and says which; no other edit asks for it. Opening and
+  drawing a project never run a step. A document prints each step one way,
+  its words in one order, so a step has no comment of its own. See
+  [shots.md](shots.md#steps).
+- `recipe="shots/open.kerfrecipe"` on a media line is read, so that a
+  project made before the document held steps opens: it names the text file
+  its steps were written in then. Nothing is made from that file. `kerf
+  carry <media>`, or an agent's `edit` with `carry`, writes its steps under
+  the media and takes the word off the line, and a media has its steps under
+  its line or names a recipe, not both. See
+  [shots.md](shots.md#carrying-a-recipe-into-the-document).
 - `retired=` on the `project` line lists ids of deleted items. Ids are never
   reused, so an edit cannot claim one and generated ids skip them.
 - One line is one thing; two-space indentation nests tracks in sequences,
@@ -317,7 +326,7 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
   (`set c2 parent=n1`, and `parent=""` to let go). Deleting a parent lets its children go; a
   child of a clip that is split stays with its first part.
 - `gen=signal@1` draws nothing and holds a number for a model: `set swell value={0f:0 48f:1:ease}`,
-  from 0 to 1. A recipe's `generate … signal=swell` hands the model what it comes to on each frame
+  from 0 to 1. A `generate … signal=swell` step hands the model what it comes to on each frame
   of its sequence, to say when what the prompt asks for happens, and how much; where the clip is
   not, or is turned off, it is 0. Changing it asks for the shot again. See [shots.md](shots.md#signals).
   `generate … guide_depth={depth.mp4}` hands a model a second guide by what it is of.
@@ -405,11 +414,20 @@ transition add from=c1 to=c9 fx=dissolve dur=12f
   transcript.
 - `media replace m1 path="media/take2.mov" rate=24 dur=00:04:30:00
   video=3840x2160 audio=2ch@48000` swaps the file behind a media id and
-  takes the same fields as `media add` (`tc=`, `alpha=`, `reel=`, and `recipe=` too).
+  takes the same fields as `media add` (`tc=`, `alpha=`, `reel=`), and leaves the steps under the media as they are.
+  The steps under a media that say how it is made stay as they are.
   Every clip that uses it keeps its timing; a file one no longer fits (too
   short for its source range or a transition's handles, or without the
   picture or sound its track needs) is refused, naming the clips.
   `media relink` changes only the path, for the same file moved.
+- `step m3 add render s2 {guide.mp4} pass=depth` writes a step of how media
+  `m3` is made, the last of them, and `step m3 add 1 …` the one that becomes
+  step 1. `step m3 set 2 seed=8 prompt="…"` gives names of step 2 their
+  values, a name the step gives more than once (`ref=`, `signal=`) taking
+  every value given, and `seed=""` taking it off; `step m3 set 2 generate
+  model=… …` writes the step whole; `step m3 remove 1` takes one out. A step
+  that reads a `{name}` no step before it makes, or follows the one that
+  writes `{out}`, is refused.
 - With several sequences, `use s2` selects the one later lines act on.
 - `captions c3 on=S1 [words=<n>]` captions what clip `c3` says, timed to its
   speech, from transcripts of its media made earlier; without a transcript

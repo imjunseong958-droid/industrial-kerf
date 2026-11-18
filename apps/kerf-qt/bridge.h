@@ -187,21 +187,24 @@ void kerf_bridge_free(void *bridge);
 // a media id (every clip that uses it keeps its timing; a file too short or
 // without the streams the clips need is refused, naming them), copying it
 // into media/ the same way. media_make {media, confirmed?} makes a take of
-// a media that names a recipe (recipe= on its media line; a source says its
-// recipe). Without confirmed it runs nothing and answers media_make_plan
-// {media, recipe, command, steps, notes, take, file}: the recipe's file, its
-// steps as they would be run (command holds them a line each), what its
-// model has said it does not take (notes, none when the recipe asks only
-// what it takes), and the number and file of the take they would write, for
-// a person to read. A recipe that
-// could not run, such as one asking a model that is not set up, is an error
-// {message} instead. With rolls: N (2 to 16) it is N takes, one after
-// another, each with the recipe's seeds one on from the last: the plan says
-// rolls and the first take, each take answers a media_making of its own as it
-// begins, and media_made names the last, which the media then is; a take
-// that fails leaves the ones before it, the media being the last made.
+// a media from the steps the document holds under its media line (a source
+// says steps, how many; the editor offers it as Make… and Make Several).
+// Without confirmed it runs nothing and answers media_make_plan
+// {media, recipe, command, steps, notes, take, file}: recipe is the empty
+// string (no file says how a media is made), steps are as they would be
+// run (command holds them a line each), notes what its model has said it
+// does not take (none when the steps ask only what it takes), and the
+// number and file of the take they would write, for a person to read.
+// Steps that could not run, such as ones asking a model that is not set up,
+// are an error {message} instead; so is a media whose steps are still in the
+// recipe file it names, with how to carry them (media_carry). With rolls: N
+// (2 to 16) it is N takes, one after another, each with the steps' seeds one
+// on from the last: the plan says rolls and the first take, each take
+// answers a media_making of its own as it begins, and media_made names the
+// last, which the media then is; a take that fails leaves the ones before
+// it, the media being the last made.
 // With confirmed: true, which only a person's yes to that
-// plan may send, it runs the recipe off the GUI thread, answers media_made
+// plan may send, it runs the steps off the GUI thread, answers media_made
 // {media, take} and then the state of the replace that has the media be
 // that take, or error {message, command: "media_make", media} with the media
 // as it was. While it runs it answers media_making {media, take, line}: first
@@ -212,6 +215,22 @@ void kerf_bridge_free(void *bridge);
 // has not within a few seconds; it answers media_make_cancelled {media},
 // with no take and the media as it was. Closing the bridge stops every
 // making the same way.
+// media_carry {media, confirmed?} carries the steps of a media that names a
+// recipe file (recipe= on its media line and no steps under it; a source says
+// recipe and no steps, and the editor offers Carry Steps into the Document…)
+// into the document. Without confirmed it writes nothing and answers
+// media_carry_plan {media, recipe, script, notes}: the recipe file as the
+// document names it, the lines of the edit (the media's line without
+// recipe=, then a step line for each step, its files named from the
+// project's folder), and what does not come with them, a line each. With
+// confirmed: true, which only a person's yes to that plan may send, kerfd
+// applies the lines as one edit of the person's own, which undo takes back
+// (the state follows), the takes made from the recipe are held to the steps
+// it became, and it answers media_carried {media, recipe, held}: how many
+// takes are held to the steps now. The recipe file is left where it is. A
+// media that cannot be carried (a recipe with a run line, a media whose
+// steps are in the document already) is error {message, command:
+// "media_carry", media}, with the document as it was.
 // A making another program runs on the project, `kerf make` or an agent's
 // own kerf-mcp, answers the same media_making, media_made,
 // media_make_cancelled and error as it goes, though nothing asked the bridge

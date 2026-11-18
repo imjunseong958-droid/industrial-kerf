@@ -540,10 +540,11 @@ void MainWindow::wireTimeline() {
         selectClip(id);
         triggerCommand(QStringLiteral("ai.ask"));
     });
-    // A double-click goes into a clip: one that plays a shot made from a
-    // recipe opens how it is made.
+    // A double-click goes into a clip: one that plays a shot made from its
+    // steps opens how it is made, and one whose steps are still in a recipe
+    // file offers to carry them into the document.
     connect(m_timeline, &TimelineWidget::clipActivated, this, [this](const QString &id) {
-        if (const QString media = clipMedia(id); !mediaRecipe(media).isEmpty()) showGraph(media);
+        if (const QString media = clipMedia(id); mediaIsMade(media)) showGraph(media);
     });
     connect(m_timeline, &TimelineWidget::clipMenuRequested, this, [this](const QString &clip, const QPoint &at) {
         QMenu menu(this);
@@ -554,7 +555,14 @@ void MainWindow::wireTimeline() {
             else menu.addAction(m_commands->action(id));
         }
         if (canStartMotionPath(selectedClipObject())) menu.addAction(m_commands->action(QStringLiteral("clip.startPath")));
-        if (const QString media = clipMedia(clip); !mediaRecipe(media).isEmpty()) {
+        if (const QString media = clipMedia(clip); mediaIsUncarried(media)) {
+            menu.addSeparator();
+            QAction *carry = menu.addAction(QStringLiteral("Carry Steps into the Document…"));
+            carry->setObjectName(QStringLiteral("clipCarry"));
+            carry->setToolTip(QStringLiteral("Write the steps of %1 under %2's line in the document; what would be written is shown first")
+                                  .arg(mediaRecipe(media), media));
+            connect(carry, &QAction::triggered, this, [this, media] { carryMedia(media); });
+        } else if (mediaIsMade(media)) {
             menu.addSeparator();
             QAction *graph = menu.addAction(QStringLiteral("Open Graph"));
             graph->setObjectName(QStringLiteral("clipGraph"));

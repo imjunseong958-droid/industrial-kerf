@@ -4,7 +4,7 @@
 // everything one goes into does:
 //
 //   ┌──────────────────────────────────────────────────────────────────────┐
-//   │ ⌥ bounce  shots/bounce.kerfrecipe     Wants making…  Several ▾ [Make] ✕│  the head
+//   │ ⌥ bounce  steps in the document       Wants making…  Several ▾ [Make] ✕│  the head
 //   ├──────────────────────────────────────────────────────────────────────┤
 //   │                                                        ┌───────────┐ │
 //   │   court ──▶ Depth guide ──┐                            │ video     │ │
@@ -17,19 +17,20 @@
 // The head says which shot it is and how it stands, and makes it: Make, or
 // Make again once it has a take, Several for two to four takes with each seed
 // one on from the last, and Stop while one runs. Making asks first, as the
-// bin's Make from Recipe… does, since a recipe is commands someone wrote.
+// bin's Make… does, since a shot's steps are commands someone wrote.
 //
 // A model its entry runs with kerf-comfy opens further, into the workflow it
 // is run with (Open workflow in its card, or a double-click on it): the same
 // canvas then shows the ComfyUI graph, a card a node and a row an input, with
-// the blanks the recipe fills marked and every other value to set in the
+// the blanks the steps fill marked and every other value to set in the
 // node's card. The head's arrow goes back to the shot's graph. A value set
-// there is kept in a copy of the workflow in the project, beside the recipe,
-// which the step's line then names; ComfyUI itself is another program, asked
+// there is kept in a copy of the workflow in the project, which the step's
+// line then names; ComfyUI itself is another program, asked
 // over HTTP when the shot is made, and nothing of it is changed.
 //
-// It keeps nothing of the recipe. What is set is said as a signal; the window
-// writes it and hands back the graph as it now is (ui/wiring/graph_wiring.h).
+// It keeps nothing of the steps. What is set is said as a signal; the window
+// has it written as step lines, one edit undo takes back, and hands back the
+// graph as it now is (ui/wiring/graph_wiring.h).
 
 #include "recipe_graph.h"
 #include "test_friends.h"

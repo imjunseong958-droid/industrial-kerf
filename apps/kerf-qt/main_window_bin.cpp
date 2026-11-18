@@ -194,11 +194,46 @@ void MainWindow::showPresetBindings(const QString &path, const QJsonObject &pres
         rowLayout->addWidget(choice, 0, 0);
         rowLayout->addWidget(from, 0, 1);
         rowLayout->addWidget(usedBy, 1, 0, 1, 2);
+        // The media the preset makes of this slot's footage: what is chosen
+        // here decides what they are made of.
+        if (const QString readBy = presetReadByLine(presetSlotReadBy(preset, slot)); !readBy.isEmpty()) {
+            auto *madeOf = new QLabel(readBy);
+            madeOf->setObjectName(QStringLiteral("muted"));
+            madeOf->setProperty("presetReadBy", id);
+            madeOf->setWordWrap(true);
+            rowLayout->addWidget(madeOf, 2, 0, 1, 2);
+        }
         rowLayout->setColumnStretch(0, 1);
         rowLayout->setColumnStretch(1, 0);
         form->addRow(QStringLiteral("%1 · %2 s").arg(id).arg(slot.value(QStringLiteral("seconds")).toDouble(), 0, 'f', 3), row);
         media.insert(id, choice);
         starts.insert(id, from);
+    }
+    // The media the preset makes: shown, never bound. Applying adds them to
+    // the project with their steps; Make… in the bin makes them.
+    const QJsonArray made = preset.value(QStringLiteral("made")).toArray();
+    if (!made.isEmpty()) {
+        auto *makes = new QWidget;
+        makes->setObjectName(QStringLiteral("presetMade"));
+        auto *makesLayout = new QVBoxLayout(makes);
+        makesLayout->setContentsMargins(0, 0, 0, 0);
+        makesLayout->setSpacing(4);
+        for (const QJsonValue &value : made) {
+            const QJsonObject entry = value.toObject();
+            const QString id = entry.value(QStringLiteral("id")).toString();
+            auto *line = new QLabel(QStringLiteral("%1, %2").arg(id, presetMadeKind(entry)));
+            line->setObjectName(QStringLiteral("presetMade_%1").arg(id));
+            line->setWordWrap(true);
+            QStringList steps;
+            for (const QJsonValue &step : entry.value(QStringLiteral("steps")).toArray()) steps << step.toString();
+            line->setToolTip(steps.join(QLatin1Char('\n')));
+            makesLayout->addWidget(line);
+        }
+        auto *note = new QLabel(QStringLiteral("Made after applying, with Make… in the bin. They need no file."));
+        note->setObjectName(QStringLiteral("muted"));
+        note->setWordWrap(true);
+        makesLayout->addWidget(note);
+        form->addRow(QStringLiteral("Makes"), makes);
     }
     // Text slots by number, as the launcher shows them; their clip ids are
     // the document's names, in the tooltip.
@@ -331,13 +366,21 @@ QString MainWindow::mediaName(const QString &mediaId) const {
     return sourceNames(m_project.value(QStringLiteral("sources")).toArray()).value(mediaId, mediaId);
 }
 
-QString MainWindow::mediaRecipe(const QString &mediaId) const {
-    for (const QJsonValue &value : m_project.value(QStringLiteral("sources")).toArray()) {
-        const QJsonObject source = value.toObject();
-        if (source.value(QStringLiteral("id")).toString() == mediaId) return source.value(QStringLiteral("recipe")).toString();
-    }
+QJsonObject MainWindow::mediaSource(const QString &mediaId) const {
+    for (const QJsonValue &value : m_project.value(QStringLiteral("sources")).toArray())
+        if (value.toObject().value(QStringLiteral("id")).toString() == mediaId) return value.toObject();
     return {};
 }
+
+QString MainWindow::mediaRecipe(const QString &mediaId) const {
+    return mediaSource(mediaId).value(QStringLiteral("recipe")).toString();
+}
+
+bool MainWindow::mediaIsMade(const QString &mediaId) const { return sourceIsMade(mediaSource(mediaId)); }
+
+bool MainWindow::mediaIsUncarried(const QString &mediaId) const { return sourceIsUncarried(mediaSource(mediaId)); }
+
+QString MainWindow::mediaMadeFrom(const QString &mediaId) const { return sourceMadeFrom(mediaSource(mediaId)); }
 
 QJsonArray MainWindow::mediaTakes(const QString &mediaId) const {
     for (const QJsonValue &value : m_project.value(QStringLiteral("sources")).toArray()) {
@@ -368,6 +411,41 @@ void MainWindow::makeMedia(const QString &mediaId, int rolls) {
     QJsonObject params{{QStringLiteral("media"), mediaId}};
     if (rolls > 1) params.insert(QStringLiteral("rolls"), rolls);
     execute(QStringLiteral("media.make"), params);
+}
+
+void MainWindow::carryMedia(const QString &mediaId) {
+    if (!sendSimple(QJsonObject{{QStringLiteral("type"), QStringLiteral("media_carry")}, {QStringLiteral("media"), mediaId},
+                                {QStringLiteral("confirmed"), false}}))
+        showStatus(QStringLiteral("Kerf is not connected"), 4000);
+}
+
+QString MainWindow::carryQuestion(const QJsonObject &plan) {
+    const QString media = plan.value(QStringLiteral("media")).toString();
+    const QString recipe = plan.value(QStringLiteral("recipe")).toString();
+    // Every line is shown: they are what the document will say of how the shot is made.
+    QStringList lines;
+    for (const QJsonValue line : plan.value(QStringLiteral("script")).toArray()) lines << line.toString();
+    QString notes;
+    for (const QJsonValue note : plan.value(QStringLiteral("notes")).toArray()) notes += QStringLiteral("\n• %1").arg(note.toString());
+    if (!notes.isEmpty()) notes = QStringLiteral("\n\nWhat does not come with them:%1").arg(notes);
+    return QStringLiteral("The steps of %1 are in the recipe file %2, and a media is made from the steps under its line. "
+                          "Carrying them writes this into the document, as one edit undo takes back:\n\n%3%4\n\n"
+                          "Its takes are kept, %2 is left where it is, and nothing names it then.\n\nCarry them?")
+        .arg(media, recipe, lines.join(QLatin1Char('\n')), notes);
+}
+
+void MainWindow::runCarry(const QString &mediaId) {
+    if (sendSimple(QJsonObject{{QStringLiteral("type"), QStringLiteral("media_carry")}, {QStringLiteral("media"), mediaId},
+                               {QStringLiteral("confirmed"), true}}))
+        addActivity(QStringLiteral("import"), QStringLiteral("Carrying the steps of %1 into the document").arg(mediaId));
+}
+
+QString MainWindow::carriedStatus(const QJsonObject &carried) {
+    const int held = carried.value(QStringLiteral("held")).toInt();
+    return QStringLiteral("Carried the steps of %1 into the document; %2 held to them, and %3 is left where it is")
+        .arg(carried.value(QStringLiteral("media")).toString(),
+             held == 1 ? QStringLiteral("1 of its takes is") : QStringLiteral("%1 of its takes are").arg(held),
+             carried.value(QStringLiteral("recipe")).toString());
 }
 
 void MainWindow::showCast() {
@@ -536,30 +614,30 @@ QString MainWindow::makeQuestion(const QJsonObject &plan) {
     QString notes;
     for (const QJsonValue note : plan.value(QStringLiteral("notes")).toArray()) notes += QStringLiteral("\n• %1").arg(note.toString());
     if (!notes.isEmpty()) notes = QStringLiteral("\n\nBefore you run it:%1").arg(notes);
-    // The shot goes by its recipe's name, as in the bin, not by its id.
-    const QString recipe = plan.value(QStringLiteral("recipe")).toString();
-    const QString media = recipe.isEmpty() ? plan.value(QStringLiteral("media")).toString() : recipeShotName(recipe);
-    // A recipe is commands someone wrote, perhaps someone else: show every step.
+    // A shot made by its steps goes by its id, as its graph names it.
+    const QString media = plan.value(QStringLiteral("media")).toString();
+    const QString from = QStringLiteral("its steps in the document");
+    // Steps are commands someone wrote, perhaps someone else: show every one.
     const int rolls = plan.value(QStringLiteral("rolls")).toInt(1);
     if (rolls > 1) {
         const int take = plan.value(QStringLiteral("take")).toInt();
-        return QStringLiteral("Making %1 runs this on your computer, %6 times:\n\n%2%5\n\nIt comes from the recipe %3 and writes %6 new takes, %7 to %8, "
+        return QStringLiteral("Making %1 runs this on your computer, %6 times:\n\n%2%5\n\nIt comes from %3 and writes %6 new takes, %7 to %8, "
                               "the first at %4, each with every seed one on from the last. %1 then is the last of them, and you choose "
                               "among them under Takes. The takes before them are kept.\n\nRun them?")
-            .arg(media, plan.value(QStringLiteral("command")).toString(), recipe,
+            .arg(media, plan.value(QStringLiteral("command")).toString(), from,
                  plan.value(QStringLiteral("file")).toString(), notes)
             .arg(rolls).arg(take).arg(take + rolls - 1);
     }
-    return QStringLiteral("Making %1 runs this on your computer:\n\n%2%5\n\nIt comes from the recipe %3 and writes a new take, %4, which %1 then is. The takes before it are kept.\n\nRun it?")
-        .arg(media, plan.value(QStringLiteral("command")).toString(), recipe, plan.value(QStringLiteral("file")).toString(), notes);
+    return QStringLiteral("Making %1 runs this on your computer:\n\n%2%5\n\nIt comes from %3 and writes a new take, %4, which %1 then is. The takes before it are kept.\n\nRun it?")
+        .arg(media, plan.value(QStringLiteral("command")).toString(), from, plan.value(QStringLiteral("file")).toString(), notes);
 }
 
 void MainWindow::runMake(const QString &mediaId, int rolls) {
     QJsonObject params{{QStringLiteral("media"), mediaId}, {QStringLiteral("confirmed"), true}};
     if (rolls > 1) params.insert(QStringLiteral("rolls"), rolls);
     if (execute(QStringLiteral("media.make"), params))
-        addActivity(QStringLiteral("import"), rolls > 1 ? QStringLiteral("Making %3 takes of %1 from %2").arg(mediaId, mediaRecipe(mediaId)).arg(rolls)
-                                                        : QStringLiteral("Making %1 from %2").arg(mediaId, mediaRecipe(mediaId)));
+        addActivity(QStringLiteral("import"), rolls > 1 ? QStringLiteral("Making %3 takes of %1 from %2").arg(mediaId, mediaMadeFrom(mediaId)).arg(rolls)
+                                                        : QStringLiteral("Making %1 from %2").arg(mediaId, mediaMadeFrom(mediaId)));
 }
 
 void MainWindow::stopMake(const QString &mediaId) {
@@ -570,13 +648,15 @@ QString MainWindow::makingStatus(const QJsonObject &making, const QString &name)
     const QString media = name.isEmpty() ? making.value(QStringLiteral("media")).toString() : name;
     const QString line = making.value(QStringLiteral("line")).toString();
     // Before any step has spoken, only that it began; then what the steps say.
-    return line.isEmpty() ? QStringLiteral("Making take %2 of %1 from its recipe…").arg(media).arg(making.value(QStringLiteral("take")).toInt())
+    return line.isEmpty() ? QStringLiteral("Making take %2 of %1 from its steps…")
+                                .arg(media)
+                                .arg(making.value(QStringLiteral("take")).toInt())
                           : QStringLiteral("Making %1: %2").arg(media, line);
 }
 
 void MainWindow::showGraph(const QString &mediaId) {
-    if (mediaRecipe(mediaId).isEmpty()) {
-        showStatus(QStringLiteral("%1 is not made from a recipe, so there is no graph of how it is made").arg(mediaName(mediaId)), 4000);
+    if (!mediaIsMade(mediaId)) {
+        showStatus(QStringLiteral("%1 is not made from steps, so there is no graph of how it is made").arg(mediaName(mediaId)), 4000);
         return;
     }
     m_graphWiring->open(mediaId);
@@ -645,11 +725,24 @@ QMenu *MainWindow::binMenu(const QString &mediaId) {
         replace->setToolTip(replace->isEnabled() ? QStringLiteral("Swap the file behind %1 for everyone; its clips keep their timing").arg(mediaId)
                                                  : m_commands->reason(QStringLiteral("media.replace")));
         connect(replace, &QAction::triggered, this, [this, mediaId] { replaceMedia(mediaId); });
-        if (const QString recipe = mediaRecipe(mediaId); !recipe.isEmpty()) {
-            // How it is made, to see and to set: its recipe's steps and what they read, wired.
+        // Made by the steps written under its line in the document; one whose steps are
+        // still in the recipe file it names is carried there first, and only then made.
+        const bool made = sourceStepsInDocument(mediaSource(mediaId));
+        if (mediaIsUncarried(mediaId)) {
+            QAction *carry = menu->addAction(QStringLiteral("Carry Steps into the Document…"));
+            carry->setObjectName(QStringLiteral("binCarry"));
+            carry->setEnabled(m_connected);
+            carry->setToolTip(m_connected ? QStringLiteral("Write the steps of %2 under %1's line in the document, as one edit undo takes back; "
+                                                           "what would be written is shown first, its takes are kept, and %2 is left where it is")
+                                                .arg(mediaId, mediaRecipe(mediaId))
+                                          : QStringLiteral("Kerf is not connected"));
+            connect(carry, &QAction::triggered, this, [this, mediaId] { carryMedia(mediaId); });
+        }
+        if (made) {
+            // How it is made, to see and to set: its steps and what they read, wired.
             QAction *graph = menu->addAction(QStringLiteral("Open Graph"));
             graph->setObjectName(QStringLiteral("binGraph"));
-            graph->setToolTip(QStringLiteral("See how %1 is made and set it: the steps of %2 and what they read, as a graph").arg(mediaId, recipe));
+            graph->setToolTip(QStringLiteral("See how %1 is made and set it: its steps in the document and what they read, as a graph").arg(mediaId));
             connect(graph, &QAction::triggered, this, [this, mediaId] { showGraph(mediaId); });
         }
         if (m_making.contains(mediaId)) {
@@ -660,25 +753,27 @@ QMenu *MainWindow::binMenu(const QString &mediaId) {
             stop->setToolTip(stop->isEnabled() ? QStringLiteral("Stop making %1: its step is asked to end, no take is kept, and %1 stays as it is").arg(mediaId)
                                                : m_commands->reason(QStringLiteral("media.makeCancel")));
             connect(stop, &QAction::triggered, this, [this, mediaId] { stopMake(mediaId); });
-        } else if (const QString recipe = mediaRecipe(mediaId); !recipe.isEmpty()) {
-            QAction *make = menu->addAction(QStringLiteral("Make from Recipe…"));
+        } else if (made) {
+            QAction *make = menu->addAction(QStringLiteral("Make…"));
             make->setObjectName(QStringLiteral("binMake"));
             make->setEnabled(m_commands->isEnabled(QStringLiteral("media.make")));
-            // Who and what it shows, where its recipe names any of the project's cast.
+            // Who and what it shows, where its steps name any of the project's cast.
             const QStringList shows = mediaShows(mediaId);
             const QString showing = shows.isEmpty() ? QString() : QStringLiteral("; it shows %1").arg(shows.join(QStringLiteral(", ")));
-            make->setToolTip(make->isEnabled() ? QStringLiteral("Make %1's file again by running %2; the command is shown first%3").arg(mediaId, recipe, showing)
+            make->setToolTip(make->isEnabled() ? QStringLiteral("Make %1's file again by running %2; the command is shown first%3").arg(mediaId, mediaMadeFrom(mediaId), showing)
                                                : m_commands->reason(QStringLiteral("media.make")));
             connect(make, &QAction::triggered, this, [this, mediaId] { makeMedia(mediaId); });
             // Several takes of the same shot to choose among, each with its seeds one on.
-            auto *several = new QMenu(QStringLiteral("Make Several from Recipe"), menu);
+            auto *several = new QMenu(QStringLiteral("Make Several"), menu);
             several->setObjectName(QStringLiteral("binMakeSeveral"));
             several->setToolTipsVisible(true);
             several->setEnabled(make->isEnabled());
             for (const int rolls : {2, 3, 4}) {
                 QAction *roll = several->addAction(QStringLiteral("%1 Takes…").arg(rolls));
                 roll->setObjectName(QStringLiteral("binMake%1").arg(rolls));
-                roll->setToolTip(QStringLiteral("Make %1 takes of %2, each with every seed of its recipe one on from the last; the command is shown first").arg(rolls).arg(mediaId));
+                roll->setToolTip(QStringLiteral("Make %1 takes of %2, each with every seed of its steps one on from the last; the command is shown first")
+                                     .arg(rolls)
+                                     .arg(mediaId));
                 connect(roll, &QAction::triggered, this, [this, mediaId, rolls] { makeMedia(mediaId, rolls); });
             }
             menu->addMenu(several);

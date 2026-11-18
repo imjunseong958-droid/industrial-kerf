@@ -24,8 +24,9 @@ this way, and each has its own owner:
 | When things happen, and everything exact: cuts, sync, titles and logos, color, sound, delivery | Kerf's compositor | Deterministic, and playing in real time |
 
 What joins them is the fourth thing, and it is Kerf's alone: the document
-knows how each shot was made. A shot's recipe says what guided it, what was
-asked, and of which model; each making is a take, and the take says what it
+knows how each shot was made. A shot's steps, lines under its media, say what
+guided it, what was asked, and of which model; each making is a take, and the
+take says what it
 was made from ([shots.md](shots.md)). No model has that and no renderer does,
 and a text document with proposals and Git merging holds it naturally.
 
@@ -36,7 +37,7 @@ already has:
 |---|---|---|
 | Where things are, and how the camera moves | A guide | Clips in depth, a camera, and lights, in a sequence |
 | When something happens, and how much | A signal | A number with keyframes, on a clip that draws nothing ([shots.md](shots.md#signals)) |
-| What it all looks like | A prompt and references | Words and files, in the recipe |
+| What it all looks like | A prompt and references | Words and files, in the shot's steps |
 
 So it is one document, with one space and one time, and not one engine. The
 camera a shot's footage was solved to, the camera its guide is drawn from,
@@ -58,7 +59,7 @@ Five rules follow, and the rest of this document should be read by them:
   What directs a model). What it leaves out is what a model draws over it: materials, light
   that bounces, hair, water. A character that comes rigged and moving in its
   file is played as the file has it; what is simulated, a cloth or a thing
-  that breaks, is a renderer's, reached by a recipe's `run`. This rule said until
+  that breaks, is a renderer's, reached as a model is, by the name the person's models file gives it. This rule said until
   2026-11-13 that Kerf builds no mesh renderer; the fifth rule is why it
   changed.
 - **The speed that counts is from an intent to an accepted shot.** That is
@@ -182,7 +183,7 @@ What was in doubt and stayed, each for one of the reasons above:
 So 89 effects are left, and 29 looks and grades. It was done as the first
 cut was: a document that names one of these is refused with what to use
 instead (`retired.tsv`), which for a look is the prompt and references of
-the shot's recipe. With the effects went their kernels (five of
+the shot's steps. With the effects went their kernels (five of
 `vfx/kernels.wgsl` and three kinds of `FxOp`), about 2,300 lines in
 `kerf-fx`.
 
@@ -247,29 +248,45 @@ with no code.
 ### Media another program makes
 
 A renderer or a model outside Kerf is not an effect or a generator: it makes a
-file, and the file is media. The media line names its recipe (`recipe=`), a
-text file with the steps that make the file, and `kerf make` runs them
-(`kerf-engine/src/recipe.rs`) as supervised sidecars, as FFmpeg is run. So a
-new renderer needs no code here: a recipe that runs it.
+file, and the file is media. The steps that make the file are the document's
+own code, lines under the media's line (`kerf_model::making`, held typed on
+`Media.steps` and to their order by `validate`), written and changed by the
+`step` lines of an edit as anything of the document is, and `kerf make` runs
+them (`kerf-engine/src/recipe.rs`) as supervised sidecars, as FFmpeg is run.
+So how a shot is made is proposed, reviewed, undone, merged, and carried by a
+preset with the scene it is made of.
 
-A recipe's steps are `run`, a program; `render`, a sequence of the project
-drawn by the compositor, which is how Kerf's own clips in depth are a guide,
-at the sequence's size and rate or at the ones the step names, with no sound;
-and `generate`, a model asked for the file. `generate` says what is wanted in
-words any model takes (a prompt, a guide, first and last frames, references,
-signals, length, size, seed), and Kerf writes that as a request, a JSON file, for the
-program the person's own `~/.kerf/models.json` names for that model
-(`recipe/model.rs`). Kerf knows no model by name and ships none: with none set
-up, a recipe that asks one is refused with how one is set up. A model with a
-different way of being asked needs a different program, and nothing here.
+The steps are `render`, a sequence of the project drawn by the compositor,
+which is how Kerf's own clips in depth are a guide, at the sequence's size
+and rate or at the ones the step names, with no sound; `generate`, a model
+asked for the file; and `join`, parts set end to end. `generate` says what is
+wanted in words any model takes (a prompt, a guide, first and last frames,
+references, signals, length, size, seed), and Kerf writes that as a request,
+a JSON file, for the program the person's own `~/.kerf/models.json` names for
+that model (`recipe/model.rs`). Kerf knows no model by name and ships none:
+with none set up, a step that asks one is refused with how one is set up. A
+model with a different way of being asked needs a different program, and
+nothing here. No step names a program. A renderer, or any program not written
+for Kerf, is named in the same file and handed its arguments in place of a
+request (`command_for`), so a new renderer needs no code here, and what runs
+on a person's machine is only ever what that person named, outside any
+project: a document, a preset, or an agent's edit says which and with what,
+and cannot say what.
 
-What a recipe makes is kept as media, not as a cache, since a model does not
-give the same shot twice. Each making is a take, in a folder beside the recipe
-(`recipe/takes.rs`), and the media's line names the one it is, so choosing a
-take is an edit: undone, proposed, and merged as any other. A take records a
-hash of what it was made from, the recipe, the files it reads, the
-sequences it renders (the sequence, what it nests, and the media lines it
-plays, printed as a document and hashed), and the signals it hands a model
+Until 2026-11 the steps were in a text file beside the project, a recipe
+(`recipe=` on the media's line), which could also run a program of its own
+choosing (`run`). A project that has such files opens, and nothing is made
+from one: `recipe::carry` reads a recipe once and gives the edit that writes
+its steps under the media, and `takes::mark_carried` has the takes it made
+held to those steps, so none is asked for again for being carried.
+
+What steps make is kept as media, not as a cache, since a model does not
+give the same shot twice. Each making is a take, in a folder named for the
+media's file (`recipe/takes.rs`), and the media's line names the one it is, so
+choosing a take is an edit: undone, proposed, and merged as any other. A take
+records a hash of what it was made from, its steps, the files they read, the
+sequences they render (the sequence, what it nests, and the media lines it
+plays, printed as a document and hashed), and the signals they hand a model
 (the numbers alone, `recipe/signal.rs`), and a media wants making when one
 of those has changed, and says which. Nothing else about the project is in
 the record: an edit that trims, moves, grades, or titles a made shot is free,
@@ -290,23 +307,20 @@ ends it outright.
 
 An agent closes the loop itself, as far as the person lets it. `look` tells
 it which media want making (`toMake`: a file that is not there, or something
-its take was made from changed, by name, or a recipe that cannot run, with
+its take was made from changed, by name, or steps that cannot run, with
 why), a media's takes, and the models set up. What would refuse a making is
 read as a person's plan is, with nothing run, and said with the media
-(`cannot`), and so is what the recipe asks that its model has said it does not
-take (`notes`, which a person sees as the plan's notes). It writes the recipe
-with its edit (`recipes`), as part of the proposal: the script carries the
-recipe as comments for the person to read, and a recipe is never written
-over: another text is kept as the next version beside it
-(`open@2.kerfrecipe`, `recipe::version`), and the proposal moves the
-media to it, so undo has it made from the one before, and the versions share
-their takes' folder. It asks for the making with `make`
+(`cannot`), and so is what a step asks that its model has said it does not
+take (`notes`, which a person sees as the plan's notes). It writes the steps
+with its edit, `step` lines of the script, as part of the proposal for the
+person to read, and undo takes them back: the document's own history is what
+a media was made from before. It asks for the making with `make`
 (`kerf-mcp/src/making.rs`), which answers with the plan. What follows is the
 person's, in their own `~/.kerf/agent.json`, outside any project as the
 models file is (`kerf-mcp/src/permissions.rs`), modelled on a coding agent's
 permission modes: `ask`, the default, answers with the plan as `ask`, for the
 agent to say in the conversation and the person to make with `kerf make` or
-Make from Recipe…;
+the bin's Make…;
 `accept-edits` accepts an agent's edits as they are made; `auto` also runs
 the makings it asks for, up to a number a session, in the agent's own process
 as a job it can wait for and stop as Stop Making stops one, and has the media
@@ -334,10 +348,10 @@ workflow, is read by `kerf-workflow` in `surfaces`, so that the editor's
 graph shows and sets one as the program reads it, without running it. A
 shot's graph and the workflow behind its model are read, and changed, by
 `kerf-shots`, which the editor's bridge and an agent's tools both go through
-(`look` with `graph` and `workflow`, `edit` with `recipeSet` and
+(`look` with `graph` and `workflow`, `edit` with `step` lines and
 `workflowSet`): what a person does in the graph an agent can do, and by one
 rule. With
-`kerf-comfy` a recipe was made from end to end on 2026-11-11: a guide of Kerf's own clips in depth (a solid
+`kerf-comfy` a shot was made from end to end on 2026-11-11: a guide of Kerf's own clips in depth (a solid
 boat leaving, a sea and a pier tipped flat, a sun, a camera pushing in and
 turning), 96 frames at 1920x1080, then `generate` with Wan 2.1 VACE 1.3B, which
 gave 65 frames at 832x480 and 16 a second. On four cores with no GPU the guide
@@ -382,9 +396,9 @@ model that answers with its guide. Where it stopped, and what was done:
 - *It stacked the scene with `insert`*, which opens time, and got nine clips
   one after another. The reference says so of `insert`; nothing said that a
   scene is stacked. The `model-shot` skill does.
-- *Its recipe's mistakes showed only when a person ran it*: a file a step
+- *Its steps' mistakes showed only when a person ran them*: a file a step
   makes named without its braces, a sequence the project has not, a model
-  that is not set up. `look` and the `edit` that names the recipe now say
+  that is not set up. `look` and the `edit` that writes the steps now say
   what would refuse the making, and what the model does not take.
 - *The line it was told chooses a take was refused*, a path alone not being
   a media line. Each take now carries its whole line.
@@ -597,7 +611,7 @@ What is built for it, in this order, each measured before the next:
    picture is still the CPU's. It has been handed to a model: the crate of
    Next 3 is one, in the guide of every take there.
 5. **A making that streams**, last. Models that answer in under a second
-   are reported, on data-center cards and at small sizes for now. A recipe makes
+   are reported, on data-center cards and at small sizes for now. A making writes
    files in steps, and a draft that is not kept wants a way of its own: the
    guide drawn on the GPU and handed on as it is drawn, with a take still
    the only thing the document names.
@@ -625,7 +639,7 @@ tests, so by the fifth rule how its takes look decides nothing of the
 design.
 
 - *The way works.* A pass drawn from the document reached a model as its
-  guide through a recipe, and came back as a take, each time it was asked.
+  guide through a shot's steps, and came back as a take, each time it was asked.
 - *Which kind of guide a model follows is the model's.* This one made more
   of depth than of the picture, and nothing of ids. A model that covers a
   render is handed the picture. So it is said with the model, in what its
@@ -641,8 +655,8 @@ This is one scene, two seeds and a small model, as before.
 #### Next
 
 What comes after these, in the order it would be built, by the five rules
-at the top. The scene the measurements above were made on is kept, with its
-recipes, in `fixtures/shots/car`.
+at the top. The scene the measurements above were made on is kept, with the
+steps that make each shot of it, in `fixtures/shots/car`.
 
 1. **The second cut**, which is done: 15 effects and four looks went (What
    is looked at again). What is left is what the rest is built beside.
@@ -661,8 +675,8 @@ recipes, in `fixtures/shots/car`.
    enough to say whether the passes and `shows` hold for a mesh: they are
    in, and the passes and `shows` hold (`kerf-compose/tests/mesh.rs`,
    `kerf-engine/tests/shows.rs`). A glTF file is read into the same
-   triangles, a color a part. A recipe counts such a file among what a shot
-   was made from only where its `needs` line names it. The tests write their
+   triangles, a color a part. Such a file is among what a shot was made from
+   wherever a mesh clip of a sequence its steps draw names it. The tests write their
    own files; eight of Khronos's sample models were read and looked at by
    hand as well (2026-11-13: Duck, BoxTextured, BoxVertexColors,
    CesiumMilkTruck from Blender's exporter, CesiumMan, Fox, BoxAnimated,
@@ -672,7 +686,7 @@ recipes, in `fixtures/shots/car`.
    Where the shapes come from is not Kerf's to build. ComfyUI's 3D (What
    others do) is fine in what it holds, not in how it draws: models that
    make a mesh from a picture or from words, texture it, rig it, and
-   animate it. A recipe reaches them as it reaches any model, with a step
+   animate it. A shot's steps reach them as they reach any model, with a step
    whose file is a mesh, `generate model=<maker> ref=car.png out={car.glb}`,
    and the clip is of that file. So a guide is as fine as its meshes are,
    and Kerf's drawing of them stays plain. Two things follow for what is
@@ -685,11 +699,11 @@ recipes, in `fixtures/shots/car`.
    those.
 3. **Footage into the scene, and a picture read back**, which is in but
    for a whole set ([the record](shots-measured.md)). A filmed shot is made into a
-   scene by models a recipe reaches: its set as a mesh clip with the shot
+   scene by models its steps reach: its set as a mesh clip with the shot
    as its colors, its camera as a `gen=camera@1` clip `look` with `mesh`
    writes from a path or a lens (`from`), and what is added stands among
    the set's surfaces by the pixel. The other way, a take's depth is a
-   file a recipe makes, to hold beside its guide's pass. Seven workflows
+   file a step makes, to hold beside its guide's pass. Seven workflows
    of `kerf-comfy` read a picture back or make a set
    ([shots.md](shots.md#a-picture-read-back)). Run on two filmed shots,
    one whose camera travels 2.5 units down a street. What it came to:
@@ -763,7 +777,7 @@ recipes, in `fixtures/shots/car`.
 8. **In the editor**, both in: a signal's curve is drawn in its clip in
    the timeline, and drawn by hand there, Option-drag across the clip
    writing its `value` as the fewest keys that say the line, and Takes, on a media in
-   the bin, has the media be another of its recipe's takes.
+   the bin, has the media be another of its takes.
 
 Every effect the compositor runs on the CPU comes through that one interface,
 whichever crate it is in and wherever its code came from: `kerf-fx` lists the
@@ -1313,7 +1327,7 @@ model that finds a thing by its name and follows it, SAM 3.1 on a ComfyUI server
 ([the record](shots-measured.md), 12), the cut with MobileSAM behind it took a hillside with the man
 walking before it and a stack of tires with the pickup before them, as the cut alone did, in 111 s for
 81 frames where the server took 13. So it went, by the second rule: such a model is another program's,
-reached by a recipe's line (`generate model=matte guide=<footage> prompt="<the thing>"`,
+reached by a step (`generate model=matte guide=<footage> prompt="<the thing>"`,
 [shots.md](shots.md#a-thing-in-footage-by-its-name)), and its matte is a file the document cuts by as
 by any other. The cut stays for what needs nothing set up.
 
@@ -1456,7 +1470,7 @@ x64, and Linux x86-64 as new as Ubuntu 24.04.
   model that gives its picture, mask, normals and camera, and an orbit. What
   is fine there is the assets and the models that make them. The drawing is
   a plain one, since a model covers it. Kerf takes the assets, as files a
-  recipe makes, and builds none of the models (What directs a model, Next
+  step makes, and builds none of the models (What directs a model, Next
   2).
 - **[Scarlet](https://github.com/Forward-Future/scarlet)** (MIT, reviewed at `9f966e9`) is an
   editor for dialogue that agents cut: TypeScript over FFmpeg filter graphs, with nothing to take
@@ -1481,13 +1495,13 @@ x64, and Linux x86-64 as new as Ubuntu 24.04.
 - **[vork](https://github.com/voyager-so/vork)** (reviewed at `3389022`, 0.5.0) is a headless 3D
   renderer for agents: scene JSON in, a picture, a movie, or control passes (depth, normals, object
   ids, motion, the camera) out, in Rust and Slang on wgpu, with no timeline and no editor. It is
-  what Kerf does not build, a guide renderer with real geometry, and a recipe's `run` reaches it
+  what Kerf does not build, a guide renderer with real geometry, and a step reaches it by the name a person's models file gives it
   ([shots.md](shots.md#guides)). **Its license (vork Preview License) lets anyone use it, and
   forbids distributing a modified version, selling it, and offering it as a hosted service that
   renders what others submit, so none of its code comes here, Kerf does not bundle it, and Kerf
   Cloud could not run it without its makers' leave;** it covers that version only, and it draws
-  only on Apple silicon and NVIDIA cards with ray tracing. So Kerf names no renderer: a recipe
-  runs whichever is installed. Four of its decisions bear on Kerf's own engine:
+  only on Apple silicon and NVIDIA cards with ray tracing. So Kerf names no renderer: a person
+  names whichever is installed, and a step asks it. Four of its decisions bear on Kerf's own engine:
   - *A scene and how well it is drawn are apart* (`std/previs`, `draft`, `final`, `path`). Kerf's
     version of that is a shot's guide and its making: the same recipe, with a model as the last
     and dearest way of drawing it.

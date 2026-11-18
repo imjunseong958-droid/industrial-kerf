@@ -105,12 +105,7 @@ fn forget() {
 }
 
 /// Whether `name` can name a cast or a style: letters, digits, `-` and `_`.
-pub(crate) fn names_one(name: &str) -> bool {
-    !name.is_empty()
-        && name
-            .chars()
-            .all(|character| character.is_alphanumeric() || "-_".contains(character))
-}
+pub(crate) use kerf_model::making::names_cast as names_one;
 
 impl Cast {
     /// Read a cast file's text. What is wrong is said with its line.
@@ -368,6 +363,15 @@ impl Cast {
 
     /// The one of `kind` named `name`, or an error that says which there are
     /// and the line that adds it.
+    /// What a take's record keeps of the one `word` names of the kind `word` says, `cast`
+    /// or `style`, as it stands: none where the file has it not.
+    pub(crate) fn held(&self, word: &str, name: &str) -> Option<String> {
+        let kind = [Kind::Cast, Kind::Style]
+            .into_iter()
+            .find(|kind| kind.word() == word)?;
+        self.find(kind, name).map(Entry::hash)
+    }
+
     fn named(&self, kind: Kind, name: &str) -> Result<&Entry> {
         self.find(kind, name)
             .ok_or_else(|| {
@@ -381,15 +385,15 @@ impl Cast {
                 let have: Vec<&str> = self.of(kind).map(|(name, _)| name).collect();
                 EngineError::msg(if !self.there {
                     format!(
-                        "the recipe names `{word}={name}`, and the project has no `{FILE}`: a file in the project's folder that starts with `{HEADER}` and has the line {line}"
+                        "a step names `{word}={name}`, and the project has no `{FILE}`: a file in the project's folder that starts with `{HEADER}` and has the line {line}"
                     )
                 } else if have.is_empty() {
                     format!(
-                        "the recipe names `{word}={name}`, and `{FILE}` has no {word}: add the line {line}"
+                        "a step names `{word}={name}`, and `{FILE}` has no {word}: add the line {line}"
                     )
                 } else {
                     format!(
-                        "the recipe names `{word}={name}`, which `{FILE}` has not; it has {}. Name one of those, or add the line {line}",
+                        "a step names `{word}={name}`, which `{FILE}` has not; it has {}. Name one of those, or add the line {line}",
                         have.join(", ")
                     )
                 })
@@ -441,11 +445,11 @@ fn sentences(prompt: &str, more: impl IntoIterator<Item = String>) -> String {
 }
 
 /// `ask` as its model is asked: its prompt with the words of each cast and
-/// style it names after it, and their pictures after its own. `folder` is
-/// the recipe's, from the project's, since a recipe names a file from there.
-fn told(ask: &Ask, cast: &Cast, directory: &Path, folder: &Path) -> Result<Ask> {
+/// style it names after it, and their pictures after its own, each named from
+/// the project's folder as a step names a file.
+fn told(ask: &Ask, cast: &Cast, directory: &Path) -> Result<Ask> {
     let mut asked = ask.clone();
-    let up = "../".repeat(folder.components().count());
+    let folder = Path::new("");
     let mut more = Vec::new();
     for (kind, names) in [(Kind::Cast, &ask.cast), (Kind::Style, &ask.styles)] {
         for name in names {
@@ -464,7 +468,7 @@ fn told(ask: &Ask, cast: &Cast, directory: &Path, folder: &Path) -> Result<Ask> 
                         kind.word()
                     )));
                 }
-                let source = Source::File(format!("{up}{reference}"));
+                let source = Source::File(reference.clone());
                 let same = |given: &Source| {
                     let inside = |source: &Source| match source {
                         Source::File(file) => within(folder, file, "picture").ok(),
@@ -482,15 +486,12 @@ fn told(ask: &Ask, cast: &Cast, directory: &Path, folder: &Path) -> Result<Ask> 
     Ok(asked)
 }
 
-/// The cast and the styles the recipe named `recipe` in the project in `directory` names, each
-/// once, in the order its lines give them: none where it names none or does not read. The
-/// names are the recipe's own, so one the cast file has not is among them.
-pub fn named_by(directory: &Path, recipe: &str) -> (Vec<String>, Vec<String>) {
+/// The cast and the styles the steps that make `media`, of the project in `directory`,
+/// name, each once, in the order the steps give them: none where they name none or do
+/// not read. The names are the steps' own, so one the cast file has not is among them.
+pub fn named_by(media: &kerf_model::Media) -> (Vec<String>, Vec<String>) {
     let (mut cast, mut styles) = (Vec::new(), Vec::new());
-    let read = within(Path::new(""), recipe, "recipe")
-        .ok()
-        .and_then(|inside| std::fs::read_to_string(directory.join(inside)).ok())
-        .and_then(|text| Recipe::parse(&text).ok());
+    let read = (!media.steps.is_empty()).then(|| Recipe::of_steps(&media.steps));
     for ask in read.iter().flat_map(Recipe::asks) {
         for (names, of) in [(&mut cast, &ask.cast), (&mut styles, &ask.styles)] {
             for name in of {
@@ -529,11 +530,10 @@ impl Recipe {
         })
     }
 
-    /// The recipe as its models are asked: each `generate` step with what
-    /// it names of the cast of the project in `directory` written out. A
-    /// recipe that names none is as it was, and no file is read for it.
-    /// `folder` is the recipe's own, from the project's.
-    pub(crate) fn told(self, directory: &Path, folder: &Path) -> Result<Self> {
+    /// The steps as their models are asked: each `generate` step with what
+    /// it names of the cast of the project in `directory` written out. Steps
+    /// that name none are as they were, and no file is read for them.
+    pub(crate) fn told(self, directory: &Path) -> Result<Self> {
         if !self.names_cast() {
             return Ok(self);
         }
@@ -542,13 +542,13 @@ impl Recipe {
             .steps
             .into_iter()
             .map(|step| match step {
-                Step::Generate(ask) => Ok(Step::Generate(Box::new(told(
-                    &ask, &cast, directory, folder,
-                )?))),
+                Step::Generate(ask) => {
+                    Ok(Step::Generate(Box::new(told(&ask, &cast, directory)?)))
+                }
                 other => Ok(other),
             })
             .collect::<Result<Vec<_>>>()?;
-        Ok(Self { steps, ..self })
+        Ok(Self { steps })
     }
 
     /// What a take of this recipe is held to of the cast of the project in

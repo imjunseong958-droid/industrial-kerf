@@ -10,6 +10,7 @@
 use crate::catalog::{Catalog, Domain, FxKind};
 use crate::diag::Diagnostic;
 use crate::id::{Id, IdGen};
+use crate::making::Step;
 use crate::model::{
     Align, Clip, ClipAt, Content, Effect, Marker, MarkerColor, Mask, MaskMode, MaskShape, Media,
     Params, Project, Sequence, Track, TrackKind, Transition,
@@ -141,10 +142,29 @@ pub enum Op {
     /// its path, rate, timecode, duration, streams, reel, and recipe. Clips keep
     /// their timing; the edit is refused, naming them, when a clip no longer
     /// fits (its source range, a stream its track needs, transition
-    /// handles).
+    /// handles). The steps that say how the media is made stay as they are:
+    /// they change by their own operations.
     ReplaceMedia(Media),
     RemoveMedia {
         media: Id,
+    },
+    /// Write a step of how a media's file is made ([`crate::making`]): the
+    /// last of its steps, or the one that becomes step `index`, from 0.
+    AddStep {
+        media: Id,
+        index: Option<usize>,
+        step: Step,
+    },
+    /// Have step `index` of a media's making, from 0, be `step`.
+    SetStep {
+        media: Id,
+        index: usize,
+        step: Step,
+    },
+    /// Take step `index`, from 0, out of a media's making.
+    RemoveStep {
+        media: Id,
+        index: usize,
     },
     /// Add an empty sequence; tracks follow with `AddTrack`.
     AddSequence(Sequence),
@@ -464,6 +484,20 @@ fn fail(code: &'static str, message: impl Into<String>) -> Diagnostic {
     Diagnostic::error(code, message)
 }
 
+/// So many steps, as an error says it.
+fn counted(steps: usize) -> String {
+    match steps {
+        0 => "no steps".to_owned(),
+        1 => "1 step".to_owned(),
+        more => format!("{more} steps"),
+    }
+}
+
+/// That a media has no step `index`, counted from 0, as an error says it.
+fn no_step(steps: usize, index: usize) -> String {
+    format!("it has {} and no step {}", counted(steps), index + 1)
+}
+
 struct Editor<'a> {
     project: Project,
     catalog: &'a Catalog,
@@ -490,10 +524,49 @@ impl Editor<'_> {
                 let found = self.project.media.iter_mut().find(|m| m.id == media.id);
                 let found =
                     found.ok_or_else(|| fail("ref.missing", format!("no media `{}`", media.id)))?;
-                *found = media.clone();
+                // Which file it is changes; how it is made does not.
+                let steps = std::mem::take(&mut found.steps);
+                if media.recipe.is_some() && !steps.is_empty() {
+                    found.steps = steps;
+                    return Err(fail(
+                        "step.recipe",
+                        format!(
+                            "media `{}` is made by the steps under its line, so it names no recipe file: leave `recipe=` out",
+                            media.id
+                        ),
+                    ));
+                }
+                *found = Media {
+                    steps,
+                    ..media.clone()
+                };
                 Ok(())
             }
             Op::RemoveMedia { media } => self.remove_media(media),
+            Op::AddStep { media, index, step } => self.steps(media, |steps| {
+                let at = index.unwrap_or(steps.len());
+                if at > steps.len() {
+                    return Err(format!(
+                        "it has {}, so a step added is step {} at most",
+                        counted(steps.len()),
+                        steps.len() + 1
+                    ));
+                }
+                steps.insert(at, step.clone());
+                Ok(())
+            }),
+            Op::SetStep { media, index, step } => self.steps(media, |steps| {
+                let have = steps.len();
+                *steps.get_mut(*index).ok_or_else(|| no_step(have, *index))? = step.clone();
+                Ok(())
+            }),
+            Op::RemoveStep { media, index } => self.steps(media, |steps| {
+                if *index >= steps.len() {
+                    return Err(no_step(steps.len(), *index));
+                }
+                steps.remove(*index);
+                Ok(())
+            }),
             Op::AddSequence(sequence) => {
                 if !sequence.tracks.is_empty() || !sequence.markers.is_empty() {
                     return Err(fail(
@@ -2245,6 +2318,35 @@ impl Editor<'_> {
             let at = self.find(id);
             self.project.clip_at_mut(at).link = Some(group.clone());
         }
+        Ok(())
+    }
+
+    /// Change the steps of media `media` with `change`, and hold what it leaves to
+    /// their order ([`crate::making::check`]).
+    fn steps(
+        &mut self,
+        media: &Id,
+        change: impl FnOnce(&mut Vec<Step>) -> Result<(), String>,
+    ) -> Outcome {
+        let found = self
+            .project
+            .media
+            .iter_mut()
+            .find(|m| m.id == *media)
+            .ok_or_else(|| fail("ref.missing", format!("no media `{media}`")))?;
+        if let Some(recipe) = &found.recipe {
+            return Err(fail(
+                "step.recipe",
+                format!(
+                    "media `{media}` names a recipe file, `{recipe}`, which holds its steps: `kerf carry {media}`, or an agent's `edit` with `carry`, writes them here; to write others in their place, take `recipe=` off its line with `media replace` first"
+                ),
+            ));
+        }
+        let mut steps = found.steps.clone();
+        change(&mut steps)
+            .and_then(|()| crate::making::check(&steps))
+            .map_err(|why| fail("step.order", format!("media `{media}`: {why}")))?;
+        found.steps = steps;
         Ok(())
     }
 

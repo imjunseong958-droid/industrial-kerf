@@ -54,7 +54,7 @@ pub(crate) fn copy_then(
     });
 }
 
-/// Make a take of media `id` from its recipe. Unconfirmed, say what would
+/// Make a take of media `id` from its steps. Unconfirmed, say what would
 /// run (`media_make_plan`) and run nothing. Confirmed, run it on its own
 /// thread, saying each line its steps say as `media_making`, and then hand
 /// the runtime worker the replace that has the media be the new take, the
@@ -100,7 +100,8 @@ pub(crate) fn make(
             json!({
                 "type": "media_make_plan",
                 "media": id,
-                "recipe": plan.recipe.to_string_lossy(),
+                // No file says how a media is made: its steps are the document's own.
+                "recipe": "",
                 "command": plan.command,
                 "steps": plan.steps,
                 "notes": plan.notes,
@@ -690,30 +691,40 @@ mod tests {
         assert!(shared.makings.lock().unwrap().is_empty());
     }
 
-    /// A recipe that says two lines, waits for `go` to be there, and writes its take; and the
-    /// project that has media `m1` made by it.
-    fn slow_recipe(directory: &Path) -> kerf_model::Project {
-        fs::create_dir_all(directory.join("shots")).unwrap();
+    /// A program the person names for a model that says two lines, waits for `go` to be
+    /// there, and writes its take; and the project that has media `m1` made by a step that
+    /// asks it.
+    fn slow_shot(directory: &Path) -> (kerf_model::Project, kerf_engine::recipe::model::Models) {
+        let file = directory.join("models.json");
         fs::write(
-            directory.join("shots/open.kerfrecipe"),
-            "kerf-recipe 1\nrun sh -c \"echo warming up >&2; while [ ! -e go ]; do sleep 0.05; done; echo writing >&2; printf take > {out}\"\n",
+            &file,
+            json!({"slow": {"run": [
+                "sh",
+                "-c",
+                "echo warming up >&2; while [ ! -e go ]; do sleep 0.05; done; echo writing >&2; printf take > \"$1\"",
+                "slow",
+                "{out}",
+            ]}})
+            .to_string(),
         )
         .unwrap();
-        kerf_runtime::parse_document(
-            "kerf 1\nproject name=\"Makings\"\nmedia m1 path=\"shots/open.mp4\" rate=30 dur=00:00:04:00 video=320x180 recipe=\"shots/open.kerfrecipe\"\nsequence s1 rate=30 size=320x180\n",
+        let project = kerf_runtime::parse_document(
+            "kerf 1\nproject name=\"Makings\"\nmedia m1 path=\"shots/open.mp4\" rate=30 dur=00:00:04:00 video=320x180\n  generate model=slow prompt=\"a boat leaves\"\nsequence s1 rate=30 size=320x180\n",
         )
-        .unwrap()
+        .unwrap();
+        (project, kerf_engine::recipe::model::Models::read(&file).unwrap())
     }
 
     /// Make `m1` of `project` as another program would: on a thread, by the engine alone.
     fn made_elsewhere(
         directory: &Path,
         project: &kerf_model::Project,
+        models: &kerf_engine::recipe::model::Models,
         stop: &kerf_engine::CancellationToken,
     ) -> std::thread::JoinHandle<Result<kerf_engine::recipe::Made, kerf_engine::EngineError>> {
-        let models = kerf_engine::recipe::model::Models::default();
-        let plan = kerf_engine::recipe::plan(project, directory, "m1", &models).unwrap();
-        let (directory, project, stop) = (directory.to_owned(), project.clone(), stop.clone());
+        let plan = kerf_engine::recipe::plan(project, directory, "m1", models).unwrap();
+        let (directory, project, models, stop) =
+            (directory.to_owned(), project.clone(), models.clone(), stop.clone());
         std::thread::spawn(move || {
             kerf_engine::recipe::make(&project, &directory, &plan, &models, &stop, |_| {})
         })
@@ -724,7 +735,7 @@ mod tests {
     fn a_making_another_program_runs_shows_and_stops_as_the_editors_own_does() {
         let directory = tempfile::tempdir().unwrap();
         let dir = directory.path();
-        let project = slow_recipe(dir);
+        let (project, models) = slow_shot(dir);
         let shared = Arc::new(shared(dir));
         let (tx, events) = mpsc::sync_channel(64);
         // This test is the editor, and the making is by another program: any but this one.
@@ -741,7 +752,7 @@ mod tests {
         assert!(events.try_recv().is_err(), "nothing is being made");
 
         let stop = kerf_engine::CancellationToken::new();
-        let making = made_elsewhere(dir, &project, &stop);
+        let making = made_elsewhere(dir, &project, &models, &stop);
         let began = until("the making", &|event| event["type"] == "media_making");
         assert_eq!((began["media"].as_str(), began["take"].as_u64()), (Some("m1"), Some(1)));
         // The look that first sees the making may already find its first line said.
@@ -751,7 +762,7 @@ mod tests {
         // Shown once: looking again says nothing new.
         look();
         assert!(events.try_recv().is_err());
-        fs::write(dir.join("shots/go"), b"").unwrap();
+        fs::write(dir.join("go"), b"").unwrap();
         let made = until("the take", &|event| event["type"] == "media_made");
         assert_eq!(made, json!({"type": "media_made", "media": "m1", "take": 1}));
         assert_eq!(making.join().unwrap().unwrap().take, 1);
@@ -760,8 +771,8 @@ mod tests {
         assert!(events.try_recv().is_err(), "it ended once");
 
         // The next one is stopped from the editor's bin: the word reaches the other program.
-        fs::remove_file(dir.join("shots/go")).unwrap();
-        let making = made_elsewhere(dir, &project, &stop);
+        fs::remove_file(dir.join("go")).unwrap();
+        let making = made_elsewhere(dir, &project, &models, &stop);
         let began = until("the second making", &|event| event["type"] == "media_making");
         assert_eq!(began["take"], 2);
         cancel_make(&shared, "m1", &tx);
@@ -775,8 +786,8 @@ mod tests {
         assert_eq!(events.try_recv().unwrap()["type"], "error");
 
         // The editor's own makings are not shown twice: it is told of those as they go.
-        let making = made_elsewhere(dir, &project, &stop);
-        fs::write(dir.join("shots/go"), b"").unwrap();
+        let making = made_elsewhere(dir, &project, &models, &stop);
+        fs::write(dir.join("go"), b"").unwrap();
         let _ = making.join();
         follow_others_makings(&shared, std::process::id(), &tx);
         assert!(events.try_recv().is_err());
@@ -869,6 +880,16 @@ mod tests {
                 ..
             }
         ));
+        // Steps are carried into the document only when the command says a person agreed.
+        assert!(matches!(
+            read(json!({"type": "media_carry", "media": "m2"})).unwrap(),
+            Command::MediaCarry { ref media, confirmed: false } if media == "m2"
+        ));
+        assert!(matches!(
+            read(json!({"type": "media_carry", "media": "m2", "confirmed": true})).unwrap(),
+            Command::MediaCarry { confirmed: true, .. }
+        ));
+        assert!(read(json!({"type": "media_carry"})).is_err());
         // A making that is running is stopped by the media it makes.
         let Command::MediaMakeCancel { media } =
             read(json!({"type": "media_make_cancel", "media": "m2"})).unwrap()

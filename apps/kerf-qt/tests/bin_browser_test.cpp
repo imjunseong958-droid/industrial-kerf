@@ -174,6 +174,102 @@ private slots:
         QCOMPARE(request.value("texts").toObject().value("title1").toString(), QStringLiteral("New title"));
     }
 
+    // What a preset makes is shown beside its slots, read-only: nothing asks
+    // for its media, and Create Proposal waits for the slots alone.
+    void presetDialogShowsWhatThePresetMakes() {
+        QTemporaryDir project;
+        QVERIFY(project.isValid());
+        MainWindow window{project.path(), QString()};
+        const QString path = QDir(project.path()).filePath(QStringLiteral("moved.kerfpreset"));
+        window.setConnection(QStringLiteral("ready"));
+        window.applySnapshot(QJsonObject{{"revision", 3}, {"duration", 4}, {"timeline", QJsonObject{
+            {"fps", 16}, {"sources", QJsonArray{
+                QJsonObject{{"id", "other"}, {"path", "other.mp4"}, {"width", 832}, {"duration", 6}, {"fps", 16}}}},
+            {"tracks", QJsonArray{}}}}});
+        const QJsonArray made{
+            QJsonObject{{"id", "man"}, {"path", "made:man.mp4"}, {"of", "slot1"}, {"clips", QJsonArray{}},
+                {"steps", QJsonArray{"generate model=matte prompt=\"man\" guide=slot:slot1"}}},
+            QJsonObject{{"id", "gone"}, {"path", "made:gone.mp4"}, {"of", "slot1"}, {"clips", QJsonArray{}},
+                {"steps", QJsonArray{"generate model=matte prompt=\"man\" guide=slot:slot1 out={man.mp4}",
+                                     "generate model=plate prompt=\"an empty dirt path\" guide=slot:slot1 guide_mask={man.mp4} seed=7 reach=72"}}}};
+        const auto slot = [](bool readBy) {
+            QJsonObject slot{{"id", "slot1"}, {"seconds", 5}, {"video", true}, {"audio", false},
+                {"clips", QJsonArray{QJsonObject{{"id", "mover"}, {"sequence", "s2"}, {"track", "V2"}, {"at", "00:00:00:00"}}}},
+                {"fits", QJsonArray{QJsonObject{{"media", "other"}, {"latestFrame", 15}}}}};
+            if (readBy) slot.insert("readBy", QJsonArray{"man", "gone"});
+            return slot;
+        };
+        // With readBy as kerfd gives it, and without, where it is read from the steps.
+        for (const bool readBy : {true, false}) {
+            QTimer::singleShot(0, &window, [&window] {
+                auto *dialog = window.findChild<QDialog *>(QStringLiteral("presetBindingsDialog"));
+                QVERIFY(dialog);
+                QTimer::singleShot(2000, dialog, &QDialog::reject);
+                auto *man = dialog->findChild<QLabel *>(QStringLiteral("presetMade_man"));
+                auto *gone = dialog->findChild<QLabel *>(QStringLiteral("presetMade_gone"));
+                QVERIFY(man && gone);
+                QCOMPARE(man->text(), QStringLiteral("man, a matte of slot1"));
+                QCOMPARE(gone->text(), QStringLiteral("gone, a plate of slot1"));
+                QCOMPARE(man->toolTip(), QStringLiteral("generate model=matte prompt=\"man\" guide=slot:slot1"));
+                QVERIFY(gone->toolTip().contains(QStringLiteral("\ngenerate model=plate")));
+                QStringList muted;
+                for (auto *label : dialog->findChildren<QLabel *>(QStringLiteral("muted"))) muted << label->text();
+                QVERIFY(muted.contains(QStringLiteral("man and gone are made of this")));
+                QVERIFY(muted.contains(QStringLiteral("Made after applying, with Make… in the bin. They need no file.")));
+                // Only the slot is bound.
+                QCOMPARE(dialog->findChildren<QComboBox *>().size(), 1);
+                QVERIFY(!dialog->findChild<QComboBox *>(QStringLiteral("presetMedia_man")));
+                QVERIFY(!dialog->findChild<QComboBox *>(QStringLiteral("presetMedia_gone")));
+                auto *choice = dialog->findChild<QComboBox *>(QStringLiteral("presetMedia_slot1"));
+                auto *buttons = dialog->findChild<QDialogButtonBox *>();
+                QVERIFY(choice && buttons);
+                QVERIFY(!buttons->button(QDialogButtonBox::Ok)->isEnabled());
+                choice->setCurrentIndex(1);
+                QVERIFY(buttons->button(QDialogButtonBox::Ok)->isEnabled());
+                buttons->button(QDialogButtonBox::Ok)->click();
+            });
+            window.m_lastCommand = QJsonObject{};
+            window.showPresetBindings(path, QJsonObject{{"name", "Moved"}, {"document", "kerf 1\n"}, {"sequence", "s2"},
+                {"slots", QJsonArray{slot(readBy)}}, {"made", made}, {"textSlots", QJsonObject{}}});
+            const QJsonObject request = window.m_lastCommand;
+            QCOMPARE(request.value("type").toString(), QStringLiteral("preset_apply"));
+            QCOMPARE(request.value("bindings").toObject().keys(), QStringList{"slot1"});
+        }
+
+        // A preset that only makes: nothing to choose, so it can be applied at once.
+        QTimer::singleShot(0, &window, [&window] {
+            auto *dialog = window.findChild<QDialog *>(QStringLiteral("presetBindingsDialog"));
+            QVERIFY(dialog);
+            QTimer::singleShot(2000, dialog, &QDialog::reject);
+            auto *depth = dialog->findChild<QLabel *>(QStringLiteral("presetMade_depth"));
+            QVERIFY(depth);
+            QCOMPARE(depth->text(), QStringLiteral("depth, a shot from a guide sequence"));
+            QVERIFY(dialog->findChildren<QComboBox *>().isEmpty());
+            auto *buttons = dialog->findChild<QDialogButtonBox *>();
+            QVERIFY(buttons && buttons->button(QDialogButtonBox::Ok)->isEnabled());
+            buttons->button(QDialogButtonBox::Ok)->click();
+        });
+        window.m_lastCommand = QJsonObject{};
+        window.showPresetBindings(path, QJsonObject{{"name", "Car"}, {"document", "kerf 1\n"}, {"sequence", "s1"},
+            {"slots", QJsonArray{}}, {"textSlots", QJsonObject{}},
+            {"made", QJsonArray{QJsonObject{{"id", "depth"}, {"path", "made:depth.mp4"}, {"of", QJsonValue::Null},
+                {"steps", QJsonArray{"render s2 {guide.mp4} pass=depth size=832x480 rate=16",
+                                     "generate model=shot prompt=\"a red sports car\" guide={guide.mp4} moves=body seconds=4 seed=7"}}}}}});
+        QCOMPARE(window.m_lastCommand.value("bindings").toObject(), QJsonObject{});
+
+        // Without made, nothing about making is said.
+        QTimer::singleShot(0, &window, [&window] {
+            auto *dialog = window.findChild<QDialog *>(QStringLiteral("presetBindingsDialog"));
+            QVERIFY(dialog);
+            QTimer::singleShot(2000, dialog, &QDialog::reject);
+            QVERIFY(!dialog->findChild<QWidget *>(QStringLiteral("presetMade")));
+            for (auto *label : dialog->findChildren<QLabel *>()) QVERIFY(!label->text().contains(QStringLiteral("made")));
+            dialog->reject();
+        });
+        window.showPresetBindings(path, QJsonObject{{"name", "Plain"}, {"document", "kerf 1\n"}, {"sequence", "s2"},
+            {"slots", QJsonArray{slot(false)}}, {"textSlots", QJsonObject{}}});
+    }
+
     // Media is named as it was imported: the content hash media.rs gives the
     // copy, and the extension, stay out of the bin, timeline and Inspector.
     void mediaIsNamedWithoutItsContentHash() {
@@ -193,6 +289,19 @@ private slots:
         // Its recipe's next version is the same shot.
         QCOMPARE(sourceName(QJsonObject{{"path", "shots/boat.takes/002.mp4"}, {"recipe", "shots/boat@2.kerfrecipe"}}),
                  QStringLiteral("boat"));
+        // One made by steps written under its line in the document has no recipe to go by:
+        // it goes by its id, as its graph names it, and not by its take's number.
+        QCOMPARE(sourceName(QJsonObject{{"id", "depth"}, {"path", "shots/depth.takes/001.mp4"}, {"steps", 2}}), QStringLiteral("depth"));
+        QCOMPARE(sourceName(QJsonObject{{"id", "depth"}, {"path", "shots/depth.takes/001.mp4"}, {"steps", 0}}), QStringLiteral("001"));
+        QVERIFY(sourceIsMade(QJsonObject{{"steps", 2}}) && sourceStepsInDocument(QJsonObject{{"steps", 2}}));
+        QVERIFY(sourceIsMade(QJsonObject{{"recipe", "shots/boat.kerfrecipe"}}) && !sourceStepsInDocument(QJsonObject{{"recipe", "shots/boat.kerfrecipe"}}));
+        // One whose steps are still in the recipe file it names is carried before it is made.
+        QVERIFY(sourceIsUncarried(QJsonObject{{"recipe", "shots/boat.kerfrecipe"}}));
+        QVERIFY(!sourceIsUncarried(QJsonObject{{"steps", 2}}) && !sourceIsUncarried(QJsonObject{{"path", "media/a.mov"}}));
+        QVERIFY(!sourceIsMade(QJsonObject{{"path", "media/a.mov"}}) && !sourceIsMade(QJsonObject{{"steps", 0}}));
+        QCOMPARE(sourceMadeFrom(QJsonObject{{"steps", 2}}), QStringLiteral("its steps in the document"));
+        QCOMPARE(sourceMadeFrom(QJsonObject{{"recipe", "shots/boat.kerfrecipe"}}), QString());
+        QCOMPARE(sourceMadeFrom(QJsonObject{{"path", "media/a.mov"}}), QString());
         QCOMPARE(recipeShotName(QStringLiteral("shots/bridge-wide@12.kerfrecipe")), QStringLiteral("bridge-wide"));
         QCOMPARE(recipeShotName(QStringLiteral("shots/at@home.kerfrecipe")), QStringLiteral("at@home"));
         QCOMPARE(sourceFileName(QJsonObject{{"path", "media/Beach Day-1a2b3c4d.mov"}}), QStringLiteral("Beach Day.mov"));
@@ -662,6 +771,181 @@ private slots:
         QCOMPARE(ops, (QStringList{R"({"op":"set-track","role":"","track":"A4"})", R"({"op":"set-track","role":"effects","track":"A2"})"}));
     }
 
+    // A media whose steps the document holds, written under its line with no recipe
+    // file, is offered and shown as one a recipe makes: its graph, Make… and Make
+    // Several, its takes, and Not made where its file is not there yet.
+    // A media whose steps are still in the recipe file it names is not made or graphed
+    // from it: the bin offers to carry its steps into the document, shows what would be
+    // written and asks, and only then sends the carry. Its takes are still offered.
+    void aMediaWhoseStepsAreInARecipeFileIsOfferedTheCarry() {
+        QTemporaryDir project;
+        MainWindow window{project.path(), QString()};
+        window.setConnection(QStringLiteral("ready"));
+        const auto clip = [](const char *id, const char *media) {
+            return QJsonObject{{"id", id}, {"kind", "media"}, {"sourceId", media}, {"timelineStart", 0}, {"duration", 4},
+                               {"startFrame", 0}, {"durationFrames", 96}, {"enabled", true}};
+        };
+        const auto state = [&clip](int revision, const QJsonObject &open) {
+            return QJsonObject{{"revision", revision}, {"duration", 4}, {"timeline", QJsonObject{
+                {"fps", 24}, {"sources", QJsonArray{open}},
+                {"tracks", QJsonArray{QJsonObject{{"id", "V1"}, {"type", "video"}, {"enabled", true},
+                                                  {"clips", QJsonArray{clip("shot", "open")}}}}}}}};
+        };
+        const QJsonArray takes{QJsonObject{{"number", 1}, {"path", "shots/open.takes/001.mp4"}, {"chosen", true}}};
+        window.applySnapshot(state(2, QJsonObject{{"id", "open"}, {"path", "shots/open.takes/001.mp4"}, {"width", 320}, {"duration", 4},
+                                                   {"recipe", "shots/open.kerfrecipe"}, {"takes", takes}}));
+        QVERIFY(window.mediaIsUncarried(QStringLiteral("open")) && window.mediaIsMade(QStringLiteral("open")));
+
+        QMenu *menu = window.binMenu(QStringLiteral("open"));
+        QStringList labels;
+        for (const QAction *action : menu->actions())
+            if (!action->isSeparator()) labels << action->text();
+        QCOMPARE(labels, (QStringList{"Insert", "Overwrite", "Replace Media…", "Carry Steps into the Document…", "Takes",
+                                       "Reveal in Finder", "Import Media…", "Consolidate Media", "Cast and Styles…"}));
+        QVERIFY(!menu->findChild<QAction *>(QStringLiteral("binGraph")) && !menu->findChild<QAction *>(QStringLiteral("binMake")) &&
+                !menu->findChild<QMenu *>(QStringLiteral("binMakeSeveral")));
+        QAction *carry = menu->findChild<QAction *>(QStringLiteral("binCarry"));
+        QVERIFY(carry && carry->isEnabled());
+        QCOMPARE(carry->toolTip(), QStringLiteral("Write the steps of shots/open.kerfrecipe under open's line in the document, as one edit undo "
+                                                  "takes back; what would be written is shown first, its takes are kept, and "
+                                                  "shots/open.kerfrecipe is left where it is"));
+        // Asked for plainly: what would be written comes back, and nothing is.
+        carry->trigger();
+        QCOMPARE(window.m_lastCommand, (QJsonObject{{"type", "media_carry"}, {"media", "open"}, {"confirmed", false}}));
+        delete menu;
+        // Anything that would open its graph offers the carry instead: a double-click on its clip.
+        window.m_lastCommand = {};
+        emit window.m_timeline->clipActivated(QStringLiteral("shot"));
+        QCOMPARE(window.m_lastCommand, (QJsonObject{{"type", "media_carry"}, {"media", "open"}, {"confirmed", false}}));
+        window.m_lastCommand = {};
+        window.showGraph(QStringLiteral("open"));
+        QCOMPARE(window.m_lastCommand, (QJsonObject{{"type", "media_carry"}, {"media", "open"}, {"confirmed", false}}));
+
+        // The plan shows the recipe file, every line and every note, and asks.
+        const QJsonObject plan{{"type", "media_carry_plan"}, {"media", "open"}, {"recipe", "shots/open.kerfrecipe"},
+                               {"script", QJsonArray{"media replace open path=\"shots/open.takes/001.mp4\" rate=24 dur=96f video=320x180",
+                                                     "step open add render s1 {out} size=320x180"}},
+                               {"notes", QJsonArray{"`needs open.json` is dropped: a step names the files it reads"}}};
+        const QString question = MainWindow::carryQuestion(plan);
+        QCOMPARE(question, QStringLiteral("The steps of open are in the recipe file shots/open.kerfrecipe, and a media is made from the steps under "
+                                          "its line. Carrying them writes this into the document, as one edit undo takes back:\n\n"
+                                          "media replace open path=\"shots/open.takes/001.mp4\" rate=24 dur=96f video=320x180\n"
+                                          "step open add render s1 {out} size=320x180\n\n"
+                                          "What does not come with them:\n• `needs open.json` is dropped: a step names the files it reads\n\n"
+                                          "Its takes are kept, shots/open.kerfrecipe is left where it is, and nothing names it then.\n\nCarry them?"));
+        // No: nothing more is sent.
+        window.m_lastCommand = {};
+        answerQuestion(&window, QDialogButtonBox::No, question);
+        window.handleEvent(plan);
+        QCOMPARE(window.m_lastCommand, QJsonObject{});
+        // Yes: the carry, confirmed.
+        answerQuestion(&window, QDialogButtonBox::Yes, question);
+        window.handleEvent(plan);
+        QCOMPARE(window.m_lastCommand, (QJsonObject{{"type", "media_carry"}, {"media", "open"}, {"confirmed", true}}));
+        window.handleEvent(QJsonObject{{"type", "media_carried"}, {"media", "open"}, {"recipe", "shots/open.kerfrecipe"}, {"held", 1}});
+        QCOMPARE(window.m_toolbarWiring->message(),
+                 QStringLiteral("Carried the steps of open into the document; 1 of its takes is held to them, and shots/open.kerfrecipe is left where it is"));
+        QCOMPARE(MainWindow::carriedStatus(QJsonObject{{"media", "m2"}, {"recipe", "shots/b.kerfrecipe"}, {"held", 0}}),
+                 QStringLiteral("Carried the steps of m2 into the document; 0 of its takes are held to them, and shots/b.kerfrecipe is left where it is"));
+
+        // Carried, its steps are the document's: Make… and its graph, and no carry.
+        window.applySnapshot(state(3, QJsonObject{{"id", "open"}, {"path", "shots/open.takes/001.mp4"}, {"width", 320}, {"duration", 4},
+                                                   {"steps", 1}, {"takes", takes}}));
+        QVERIFY(!window.mediaIsUncarried(QStringLiteral("open")));
+        menu = window.binMenu(QStringLiteral("open"));
+        QVERIFY(!menu->findChild<QAction *>(QStringLiteral("binCarry")));
+        QVERIFY(menu->findChild<QAction *>(QStringLiteral("binGraph")) && menu->findChild<QAction *>(QStringLiteral("binMake")));
+        QCOMPARE(menu->findChild<QAction *>(QStringLiteral("binMake"))->text(), QStringLiteral("Make…"));
+        delete menu;
+    }
+
+    void aMediaMadeByStepsInTheDocumentIsOfferedAsARecipesIs() {
+        QTemporaryDir project;
+        MainWindow window{project.path(), QString()};
+        window.setConnection(QStringLiteral("ready"));
+        window.applySnapshot(QJsonObject{{"revision", 2}, {"duration", 4}, {"timeline", QJsonObject{
+            {"fps", 24}, {"tracks", QJsonArray{}}, {"sources", QJsonArray{
+                QJsonObject{{"id", "m1"}, {"path", "media/a.mov"}, {"width", 320}, {"duration", 4}},
+                QJsonObject{{"id", "depth"}, {"path", "shots/depth.takes/002.mp4"}, {"width", 832}, {"duration", 4}, {"steps", 2},
+                            {"shows", QJsonArray{"Ada"}},
+                            {"takes", QJsonArray{QJsonObject{{"number", 1}, {"path", "shots/depth.takes/001.mp4"}, {"chosen", false}},
+                                                 QJsonObject{{"number", 2}, {"path", "shots/depth.takes/002.mp4"}, {"chosen", true}}}}},
+                QJsonObject{{"id", "fresh"}, {"path", "shots/fresh.mp4"}, {"width", 832}, {"duration", 4}, {"steps", 1}}}}}}});
+        window.handleEvent(QJsonObject{{"type", "media_status"}, {"missing", QJsonArray{"m1", "fresh"}}});
+        // Named by its id, not by its take's number.
+        QCOMPARE(window.mediaName(QStringLiteral("depth")), QStringLiteral("depth"));
+        QCOMPARE(window.mediaRecipe(QStringLiteral("depth")), QString());
+        QVERIFY(window.mediaIsMade(QStringLiteral("depth")) && !window.mediaIsMade(QStringLiteral("m1")));
+        QCOMPARE(window.mediaMadeFrom(QStringLiteral("depth")), QStringLiteral("its steps in the document"));
+        // Its file not there yet is a shot to make, and footage whose file is gone is offline.
+        ProjectPanel *bin = window.m_projectPanel;
+        QCOMPARE(bin->status(QStringLiteral("fresh")), QStringLiteral("Not made yet"));
+        QCOMPARE(bin->status(QStringLiteral("m1")), QStringLiteral("Offline · file missing"));
+        QCOMPARE(bin->status(QStringLiteral("depth")), QStringLiteral("Made · shot · take 2 of 2"));
+        using State = activity::MediaActivity::State;
+        QCOMPARE(window.mediaActivity().value(QStringLiteral("fresh")).state, State::NotMade);
+        QCOMPARE(window.mediaActivity().value(QStringLiteral("m1")).state, State::Offline);
+
+        QMenu *menu = window.binMenu(QStringLiteral("depth"));
+        QStringList labels;
+        for (const QAction *action : menu->actions())
+            if (!action->isSeparator()) labels << action->text();
+        QCOMPARE(labels, (QStringList{"Insert", "Overwrite", "Replace Media…", "Open Graph", "Make…", "Make Several", "Takes",
+                                       "Reveal in Finder", "Import Media…", "Consolidate Media", "Cast and Styles…"}));
+        QAction *graph = menu->findChild<QAction *>(QStringLiteral("binGraph"));
+        QVERIFY(graph);
+        QCOMPARE(graph->toolTip(), QStringLiteral("See how depth is made and set it: its steps in the document and what they read, as a graph"));
+        QAction *make = menu->findChild<QAction *>(QStringLiteral("binMake"));
+        QVERIFY(make && make->isEnabled());
+        QCOMPARE(make->toolTip(), QStringLiteral("Make depth's file again by running its steps in the document; the command is shown first; it shows Ada"));
+        make->trigger();
+        QCOMPARE(window.m_lastCommand, (QJsonObject{{"type", "media_make"}, {"media", "depth"}, {"confirmed", false}}));
+        QMenu *several = menu->findChild<QMenu *>(QStringLiteral("binMakeSeveral"));
+        QVERIFY(several && several->isEnabled());
+        QAction *two = several->findChild<QAction *>(QStringLiteral("binMake2"));
+        QVERIFY(two);
+        QVERIFY(two->toolTip().contains(QStringLiteral("each with every seed of its steps one on")));
+        two->trigger();
+        QCOMPARE(window.m_lastCommand, (QJsonObject{{"type", "media_make"}, {"media", "depth"}, {"confirmed", false}, {"rolls", 2}}));
+        QMenu *takes = menu->findChild<QMenu *>(QStringLiteral("binTakes"));
+        QVERIFY(takes);
+        QAction *first = takes->findChild<QAction *>(QStringLiteral("binTake1"));
+        QVERIFY(first && first->isEnabled());
+        first->trigger();
+        QCOMPARE(window.m_lastCommand, (QJsonObject{{"type", "media_replace"}, {"media", "depth"}, {"path", "shots/depth.takes/001.mp4"}}));
+        delete menu;
+        // Footage beside it is offered none of that.
+        menu = window.binMenu(QStringLiteral("m1"));
+        QVERIFY(!menu->findChild<QAction *>(QStringLiteral("binGraph")) && !menu->findChild<QAction *>(QStringLiteral("binMake")));
+        delete menu;
+
+        // The plan comes with no recipe: the question names the shot by its id and says
+        // where its steps are.
+        const QString steps = QStringLiteral("vork render s2 --out /p/shots/depth.takes/003.work/guide.mp4\n"
+                                             "kerf-comfy /p/shots/depth.takes/003.work/request.json asks model `shot`");
+        const QString question = MainWindow::makeQuestion(QJsonObject{{"media", "depth"}, {"recipe", ""}, {"command", steps}, {"take", 3},
+                                                                     {"file", "/p/shots/depth.takes/003.mp4"}});
+        QCOMPARE(question, QStringLiteral("Making depth runs this on your computer:\n\n%1\n\nIt comes from its steps in the document and writes a new "
+                                          "take, /p/shots/depth.takes/003.mp4, which depth then is. The takes before it are kept.\n\nRun it?")
+                               .arg(steps));
+        const QString rolled = MainWindow::makeQuestion(QJsonObject{{"media", "depth"}, {"recipe", ""}, {"command", steps}, {"take", 3},
+                                                                   {"rolls", 2}, {"file", "/p/shots/depth.takes/003.mp4"}});
+        QVERIFY(rolled.startsWith(QStringLiteral("Making depth runs this on your computer, 2 times")));
+        QVERIFY(rolled.contains(QStringLiteral("It comes from its steps in the document and writes 2 new takes, 3 to 4")));
+        QVERIFY(!question.contains(QStringLiteral("recipe")) && !rolled.contains(QStringLiteral("recipe")));
+        // What the making says, and what it said once it is made.
+        QCOMPARE(MainWindow::makingStatus(QJsonObject{{"media", "depth"}, {"take", 3}, {"line", ""}}, QStringLiteral("depth")),
+                 QStringLiteral("Making take 3 of depth from its steps…"));
+        window.runMake(QStringLiteral("depth"));
+        QCOMPARE(window.m_lastCommand, (QJsonObject{{"type", "media_make"}, {"media", "depth"}, {"confirmed", true}}));
+        window.handleEvent(QJsonObject{{"type", "media_making"}, {"media", "depth"}, {"take", 3}, {"line", ""}});
+        menu = window.binMenu(QStringLiteral("depth"));
+        QVERIFY(menu->findChild<QAction *>(QStringLiteral("binMakeStop")) && !menu->findChild<QAction *>(QStringLiteral("binMake")));
+        delete menu;
+        window.handleEvent(QJsonObject{{"type", "media_made"}, {"media", "depth"}, {"take", 3}});
+        QVERIFY(!window.m_making.contains(QStringLiteral("depth")));
+    }
+
     void projectBinShowsMediaStatusAndReplacesMedia() {
         QTemporaryDir project;
         QVERIFY(QDir(project.path()).mkpath(QStringLiteral("media")));
@@ -676,9 +960,9 @@ private slots:
                 QJsonObject{{"id", "m1"}, {"path", "media/a.mov"}, {"width", 320}, {"duration", 4}},
                 QJsonObject{{"id", "m2"}, {"path", "/Volumes/Shoot/b.mov"}, {"width", 320}, {"duration", 4}},
                 QJsonObject{{"id", "m3"}, {"path", "media/c.mov"}, {"width", 320}, {"duration", 4}},
-                QJsonObject{{"id", "m4"}, {"path", "shots/open.mp4"}, {"width", 320}, {"duration", 4}, {"recipe", "shots/open.kerfrecipe"},
+                QJsonObject{{"id", "m4"}, {"path", "shots/open.mp4"}, {"width", 320}, {"duration", 4}, {"steps", 2},
                             {"shows", QJsonArray{"Ada", "film"}}},
-                QJsonObject{{"id", "m5"}, {"path", "shots/boat.takes/002.mp4"}, {"width", 320}, {"duration", 4}, {"recipe", "shots/boat.kerfrecipe"},
+                QJsonObject{{"id", "m5"}, {"path", "shots/boat.takes/002.mp4"}, {"width", 320}, {"duration", 4}, {"steps", 1},
                             {"takes", QJsonArray{QJsonObject{{"number", 1}, {"path", "shots/boat.takes/001.mp4"}, {"chosen", false}},
                                                  QJsonObject{{"number", 2}, {"path", "shots/boat.takes/002.mp4"}, {"chosen", true}}}}}}}}}});
         window.handleEvent(QJsonObject{{"type", "media_status"}, {"missing", QJsonArray{"m3"}},
@@ -706,30 +990,30 @@ private slots:
         QVERIFY(!menu->findChild<QAction *>(QStringLiteral("binReveal"))->isEnabled());
         delete menu;
 
-        // Only a media that names a recipe can be made, and asking shows the command before
-        // anything runs.
+        // Only a media whose steps the document holds can be made, and asking shows the
+        // command before anything runs.
         menu = window.binMenu(QStringLiteral("m1"));
         QVERIFY(!menu->findChild<QAction *>(QStringLiteral("binMake")));
         delete menu;
-        QCOMPARE(window.mediaRecipe(QStringLiteral("m4")), QStringLiteral("shots/open.kerfrecipe"));
+        QCOMPARE(window.mediaRecipe(QStringLiteral("m4")), QString());
         menu = window.binMenu(QStringLiteral("m4"));
         QAction *make = menu->findChild<QAction *>(QStringLiteral("binMake"));
         QVERIFY(make && make->isEnabled());
-        QVERIFY(make->toolTip().contains(QStringLiteral("shots/open.kerfrecipe")));
-        // Who and what its recipe shows is said with it.
+        QVERIFY(make->toolTip().contains(QStringLiteral("its steps in the document")));
+        // Who and what its steps show is said with it.
         QCOMPARE(window.mediaShows(QStringLiteral("m4")), (QStringList{"Ada", "film"}));
         QVERIFY(make->toolTip().endsWith(QStringLiteral("; it shows Ada, film")));
         // Several takes of it are asked for by how many, and shown before anything runs too.
         QMenu *several = menu->findChild<QMenu *>(QStringLiteral("binMakeSeveral"));
         QVERIFY(several && several->isEnabled());
-        QCOMPARE(several->title(), QStringLiteral("Make Several from Recipe"));
+        QCOMPARE(several->title(), QStringLiteral("Make Several"));
         QCOMPARE(several->actions().size(), 3);
         QAction *three = several->findChild<QAction *>(QStringLiteral("binMake3"));
         QVERIFY(three);
         QCOMPARE(three->text(), QStringLiteral("3 Takes…"));
         three->trigger();
         QCOMPARE(window.m_lastCommand, (QJsonObject{{"type", "media_make"}, {"media", "m4"}, {"confirmed", false}, {"rolls", 3}}));
-        const QString rolled = MainWindow::makeQuestion(QJsonObject{{"media", "m4"}, {"recipe", "/p/shots/open.kerfrecipe"},
+        const QString rolled = MainWindow::makeQuestion(QJsonObject{{"media", "m4"}, {"recipe", ""},
                                                                    {"command", "dawn-adapter"}, {"take", 2}, {"rolls", 3},
                                                                    {"file", "/p/shots/open.takes/002.mp4"}});
         QVERIFY(rolled.contains(QStringLiteral("3 times")) && rolled.contains(QStringLiteral("writes 3 new takes, 2 to 4")));
@@ -741,15 +1025,15 @@ private slots:
         // Every step shows, and the take it writes, which leaves the ones before it.
         const QString steps = QStringLiteral("vork render open.json --out /p/shots/open.takes/002.work/guide.mp4\n"
                                              "dawn-adapter /p/shots/open.takes/002.work/request.json asks model `dawn` for prompt \"a boat\"");
-        const QString question = MainWindow::makeQuestion(QJsonObject{{"media", "m4"}, {"recipe", "/p/shots/open.kerfrecipe"},
+        const QString question = MainWindow::makeQuestion(QJsonObject{{"media", "m4"}, {"recipe", ""},
                                                                      {"command", steps}, {"take", 2},
                                                                      {"file", "/p/shots/open.takes/002.mp4"}});
         QVERIFY(question.contains(steps));
-        QVERIFY(question.contains(QStringLiteral("/p/shots/open.kerfrecipe")) && question.contains(QStringLiteral("/p/shots/open.takes/002.mp4")));
-        QVERIFY(question.startsWith(QStringLiteral("Making open runs")) && question.contains(QStringLiteral("open then is")) && question.contains(QStringLiteral("are kept")));
+        QVERIFY(question.contains(QStringLiteral("its steps in the document")) && question.contains(QStringLiteral("/p/shots/open.takes/002.mp4")));
+        QVERIFY(question.startsWith(QStringLiteral("Making m4 runs")) && question.contains(QStringLiteral("m4 then is")) && question.contains(QStringLiteral("are kept")));
         QVERIFY(!question.contains(QStringLiteral("Before you run it")));
         // What its model has said it does not take is shown before the question.
-        const QString noted = MainWindow::makeQuestion(QJsonObject{{"media", "m4"}, {"recipe", "/p/shots/open.kerfrecipe"},
+        const QString noted = MainWindow::makeQuestion(QJsonObject{{"media", "m4"}, {"recipe", ""},
                                                                   {"command", steps}, {"take", 2}, {"file", "/p/shots/open.takes/002.mp4"},
                                                                   {"notes", QJsonArray{"`seconds=9` is more than model `dawn` makes at once, 5 s"}}});
         QVERIFY(noted.contains(QStringLiteral("Before you run it:\n• `seconds=9` is more than model `dawn` makes at once, 5 s\n\nIt comes from")));
@@ -853,7 +1137,7 @@ private slots:
         // While it is made, what its steps say shows, and the menu stops it in place of
         // starting another.
         QCOMPARE(MainWindow::makingStatus(QJsonObject{{"media", "m4"}, {"take", 2}, {"line", ""}}),
-                 QStringLiteral("Making take 2 of m4 from its recipe…"));
+                 QStringLiteral("Making take 2 of m4 from its steps…"));
         QCOMPARE(MainWindow::makingStatus(QJsonObject{{"media", "m4"}, {"take", 2}, {"line", "rendering s2: 40%"}}),
                  QStringLiteral("Making m4: rendering s2: 40%"));
         window.handleEvent(QJsonObject{{"type", "media_making"}, {"media", "m4"}, {"take", 2}, {"line", ""}});
@@ -882,7 +1166,7 @@ private slots:
         QVERIFY(!window.m_making.contains(QStringLiteral("m4")));
         window.handleEvent(QJsonObject{{"type", "media_making"}, {"media", "m4"}, {"take", 3}, {"line", "asking the model"}});
         // In the window the shot goes by its name, as in the bin.
-        QCOMPARE(window.m_toolbarWiring->message(), QStringLiteral("Making open: asking the model"));
+        QCOMPARE(window.m_toolbarWiring->message(), QStringLiteral("Making m4: asking the model"));
         window.handleEvent(QJsonObject{{"type", "error"}, {"message", "cannot make m4: dawn-adapter failed"},
                                        {"command", "media_make"}, {"media", "m4"}});
         QVERIFY(!window.m_making.contains(QStringLiteral("m4")));

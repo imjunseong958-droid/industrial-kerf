@@ -1,7 +1,7 @@
 //! What a person does in the editor's graph of a shot, done by an agent with
-//! `look` and `edit`, against a real kerfd: the graph read, a word of the
-//! recipe set, an input wired in and let go, and a value set in the workflow
-//! its model is run with.
+//! `look` and `edit`, against a real kerfd: the graph read, a word of a step
+//! set, an input wired in and let go, a step added and one taken out, and a
+//! value set in the workflow its model is run with.
 //!
 //! In a file of its own: it names a models file of its own in `KERF_MODELS`,
 //! which the other tests' process must not see.
@@ -10,20 +10,20 @@ use kerf_mcp::KerfMcpRouter;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 
-const RECIPE: &str = "kerf-recipe 1
-# A basketball bouncing on a court.
-# The court is blocked in Kerf and handed over as depth.
-render court {depth.mp4} pass=depth size=832x480 rate=16
-
-# The ball, made once and handed on as a reference.
+/// The steps of the shot, as the graph's `text` lists them.
+const STEPS: &str = "render court {depth.mp4} pass=depth size=832x480 rate=16
 generate model=still prompt=\"an orange basketball, studio light\" seed=3 out={ball.png}
-generate model=video prompt=\"a basketball bounces on a court\" guide={depth.mp4} ref={ball.png} moves=ball signal=bounce seconds=4 seed=7 strength=0.8
+generate model=video prompt=\"a basketball bounces on a court\" guide={depth.mp4} ref={ball.png} signal=bounce moves=ball seconds=4 seed=7 strength=0.8
 ";
 
 const PROJECT: &str = "kerf 1
 project name=\"Court\"
-media shot path=\"shots/bounce.mp4\" rate=16 dur=4s video=832x480 recipe=\"shots/bounce.kerfrecipe\"
-media card path=\"shots/card.mp4\" rate=24 dur=4f video=96x54 recipe=\"shots/card.kerfrecipe\"
+media shot path=\"shots/bounce.mp4\" rate=16 dur=4s video=832x480
+  render court {depth.mp4} pass=depth size=832x480 rate=16
+  generate model=still prompt=\"an orange basketball, studio light\" seed=3 out={ball.png}
+  generate model=video prompt=\"a basketball bounces on a court\" guide={depth.mp4} ref={ball.png} signal=bounce moves=ball seconds=4 seed=7 strength=0.8
+media card path=\"shots/card.mp4\" rate=24 dur=4f video=96x54
+  render tiny {out} size=96x54
 sequence tiny rate=24 size=96x54
   track V1 video
     clip slate gen=solid@1 at=0f dur=4f
@@ -80,13 +80,31 @@ fn wired(graph: &Value, from: &str, to: &str, port: &str) -> bool {
         .any(|edge| edge["from"] == from && edge["to"] == to && edge["port"] == port)
 }
 
+/// The steps under media `id` in the document `of` gives, a line each.
+fn steps_in(document: &str, id: &str) -> Vec<String> {
+    document
+        .lines()
+        .skip_while(|line| !line.starts_with(&format!("media {id} ")))
+        .skip(1)
+        .take_while(|line| line.starts_with("  "))
+        .map(|line| line.trim().to_owned())
+        .collect()
+}
+
+/// The document as proposal `proposal` would have it.
+fn proposed(router: &KerfMcpRouter, proposal: &Value) -> String {
+    ok(router, "look", json!({"proposal": proposal}))["document"]
+        .as_str()
+        .unwrap()
+        .to_owned()
+}
+
 #[test]
 fn an_agent_reads_a_shots_graph_and_sets_what_a_person_sets_there() {
     let folder = tempfile::tempdir().unwrap();
     let dir = folder.path();
     std::fs::create_dir(dir.join("shots")).unwrap();
     std::fs::write(dir.join("project.kerf"), PROJECT).unwrap();
-    std::fs::write(dir.join("shots/bounce.kerfrecipe"), RECIPE).unwrap();
     // The person's own models: one run with kerf-comfy, which has a workflow to read, and one not.
     let models = dir.join("models.json");
     std::fs::write(
@@ -100,40 +118,43 @@ fn an_agent_reads_a_shots_graph_and_sets_what_a_person_sets_there() {
     let router = KerfMcpRouter::new(dir, Some(&kerfd)).unwrap();
     router.set_permissions(Some(kerf_mcp::permissions::Permissions::default()));
 
-    // The graph, as the editor shows it: the steps, what they read, and what runs the model.
+    // The graph, as the editor shows it: the steps, what they read, and what runs the model,
+    // each node by its step's number.
     let graph = ok(&router, "look", json!({"graph": "shot"}));
-    assert_eq!(graph["text"], RECIPE);
-    assert_eq!((graph["media"].as_str(), graph["name"].as_str()), (Some("shot"), Some("bounce")));
+    assert_eq!(graph["text"], STEPS);
+    assert!(graph.get("recipe").is_none() && graph.get("document").is_none(), "{graph}");
+    assert_eq!((graph["media"].as_str(), graph["name"].as_str()), (Some("shot"), Some("shot")));
     let video = node(&graph, |node| node["model"] == "video");
     let (line, made) = (video["line"].as_u64().unwrap(), video["id"].as_str().unwrap().to_owned());
-    assert_eq!(line, 8);
+    assert_eq!(line, 3);
+    assert_eq!(node(&graph, |node| node["id"] == "made:depth.mp4")["line"], 1);
     assert_eq!(video["runner"], json!({"kind": "comfy", "workflow": "shot"}));
     assert!(node(&graph, |node| node["model"] == "still").get("runner").is_none());
     assert!(wired(&graph, "signal:bounce", &made, "signal"), "{graph}");
     assert!(wired(&graph, "moves:ball", &made, "moves"), "{graph}");
     assert!(wired(&graph, "sequence:court", "made:depth.mp4", "sequence"), "{graph}");
-    assert!(graph["change"].as_str().unwrap().contains("recipeSet"));
+    assert!(graph["change"].as_str().unwrap().contains("step shot set <n>"), "{graph}");
     assert!(graph["takes"]["made"].as_array().is_some_and(Vec::is_empty), "{graph}");
 
-    // Its takes held to its guide, as the graph's takes card holds them: the clip the line
+    // Its takes held to its guide, as the graph's takes card holds them: the clip the step
     // says goes somewhere, in the sequence that has it. None is made yet.
     let held = ok(&router, "look", json!({"takes": "shot"}));
     assert_eq!((held["sequence"].as_str(), held["clips"][0].as_str()), (Some("court"), Some("ball")));
     assert_eq!(held["takes"], json!([]));
     assert_eq!(held["best"], Value::Null);
 
-    // One word of one line: kept as the next version, comments and every other line as they
-    // were, and the recipe before left as it is.
-    let seeded = ok(
-        &router,
-        "edit",
-        json!({"recipeSet": [{"media": "shot", "line": line, "key": "seed", "value": "8"}]}),
-    );
+    // One word of one step, by a line of the script: every other word and step as it was,
+    // and no file written.
+    let files = || std::fs::read_dir(dir.join("shots")).unwrap().count();
+    let before = files();
+    let seeded = ok(&router, "edit", json!({"script": format!("step shot set {line} seed=8")}));
     assert_eq!(seeded["status"], "awaiting_review", "{seeded}");
-    assert_eq!(seeded["recipes"][0]["keptAs"], "shots/bounce@2.kerfrecipe", "{seeded}");
-    assert_eq!(read(&dir.join("shots/bounce@2.kerfrecipe")), RECIPE.replace("seed=7", "seed=8"));
-    assert_eq!(read(&dir.join("shots/bounce.kerfrecipe")), RECIPE);
-    assert!(seeded["recipes"][0]["diff"].as_str().unwrap().contains("seed=8"), "{seeded}");
+    assert!(seeded.get("recipes").is_none(), "{seeded}");
+    assert_eq!(
+        steps_in(&proposed(&router, &seeded["proposal"]), "shot")[2],
+        STEPS.lines().nth(2).unwrap().replace("seed=7", "seed=8")
+    );
+    assert_eq!(files(), before);
 
     // On top of it: one input let go, another wired in, and a value of the model's workflow.
     let workflow = ok(&router, "look", json!({"workflow": {"media": "shot", "line": line}}));
@@ -151,49 +172,44 @@ fn an_agent_reads_a_shots_graph_and_sets_what_a_person_sets_there() {
         "edit",
         json!({
             "extend": seeded["proposal"],
-            "recipeSet": [
-                {"media": "shot", "line": line, "key": "signal"},
-                {"media": "shot", "line": line, "key": "signal", "value": "hit"},
-            ],
+            "script": format!("step shot set {line} signal=\"\"\nstep shot set {line} signal=hit"),
             "workflowSet": [{"media": "shot", "line": line, "node": loader, "input": "weight_dtype", "value": "fp8_e4m3fn"}],
         }),
     );
-    assert_eq!(wired_again["recipes"][0]["keptAs"], "shots/bounce@3.kerfrecipe", "{wired_again}");
     assert_eq!(
         wired_again["workflows"][0],
-        json!({"media": "shot", "line": line, "of": "shot", "keptAs": "shots/bounce.video.comfy.json",
+        json!({"media": "shot", "line": line, "of": "shot", "keptAs": "shots/shot.video.comfy.json",
                "set": [{"node": loader, "input": "weight_dtype", "value": "fp8_e4m3fn"}]})
     );
-    let third = read(&dir.join("shots/bounce@3.kerfrecipe"));
     assert_eq!(
-        third,
-        RECIPE.replace(
-            "moves=ball signal=bounce seconds=4 seed=7 strength=0.8",
-            "moves=ball seconds=4 seed=8 strength=0.8 signal=hit workflow=bounce.video.comfy.json"
+        steps_in(&proposed(&router, &wired_again["proposal"]), "shot")[2],
+        STEPS.lines().nth(2).unwrap().replace(
+            "signal=bounce moves=ball seconds=4 seed=7 strength=0.8",
+            "signal=hit moves=ball seconds=4 seed=8 workflow=shots/shot.video.comfy.json strength=0.8"
         )
     );
-    assert!(read(&dir.join("shots/bounce.video.comfy.json")).contains("\"weight_dtype\": \"fp8_e4m3fn\""));
+    assert!(read(&dir.join("shots/shot.video.comfy.json")).contains("\"weight_dtype\": \"fp8_e4m3fn\""));
     // The person reviewing it reads what was set, in the proposal's script.
     let state = router.runtime().get_state().unwrap();
     let script = &state.proposals[0].source;
     assert!(
         script.contains(&format!(
-            "# writes the workflow shots/bounce.video.comfy.json, a copy of `shot` for line {line} of shot's recipe, with:\n#   node {loader} weight_dtype = \"fp8_e4m3fn\"\n"
+            "# writes the workflow shots/shot.video.comfy.json, a copy of `shot` for step {line} of shot, with:\n#   node {loader} weight_dtype = \"fp8_e4m3fn\"\n"
         )),
         "{script}"
     );
 
     // What the proposal would make of the graph, and of the workflow.
-    let proposed = ok(&router, "look", json!({"graph": "shot", "proposal": wired_again["proposal"]}));
-    assert!(!wired(&proposed, "signal:bounce", &made, "signal"), "{proposed}");
-    assert!(wired(&proposed, "signal:hit", &made, "signal"), "{proposed}");
-    assert_eq!(node(&proposed, |node| node["model"] == "video")["workflow"], "bounce.video.comfy.json");
+    let shown = ok(&router, "look", json!({"graph": "shot", "proposal": wired_again["proposal"]}));
+    assert!(!wired(&shown, "signal:bounce", &made, "signal"), "{shown}");
+    assert!(wired(&shown, "signal:hit", &made, "signal"), "{shown}");
+    assert_eq!(node(&shown, |node| node["model"] == "video")["workflow"], "shots/shot.video.comfy.json");
     let own = ok(
         &router,
         "look",
         json!({"workflow": {"media": "shot", "line": line}, "proposal": wired_again["proposal"]}),
     );
-    assert_eq!((own["origin"].as_str(), own["file"].as_str()), (Some("own"), Some("shots/bounce.video.comfy.json")));
+    assert_eq!((own["origin"].as_str(), own["file"].as_str()), (Some("own"), Some("shots/shot.video.comfy.json")));
     assert_eq!(own["blanks"]["seed"]["given"], "8");
     // The project itself is as it was until the person says yes.
     let project = ok(&router, "look", json!({"graph": "shot"}));
@@ -205,59 +221,54 @@ fn an_agent_reads_a_shots_graph_and_sets_what_a_person_sets_there() {
         .accept_proposal(wired_again["proposal"].as_str().unwrap(), "ui", "accept-wired", revision)
         .unwrap();
 
-    // A value set again is another copy: the one a recipe before names is not written over.
-    let first_copy = read(&dir.join("shots/bounce.video.comfy.json"));
+    // A value set again is another copy: the one the steps before name is not written over.
+    let first_copy = read(&dir.join("shots/shot.video.comfy.json"));
     let again = ok(
         &router,
         "edit",
         json!({"workflowSet": [{"media": "shot", "line": line, "node": loader, "input": "weight_dtype", "value": "default"}]}),
     );
-    assert_eq!(again["workflows"][0]["keptAs"], "shots/bounce.video-2.comfy.json", "{again}");
-    assert_eq!(again["recipes"][0]["keptAs"], "shots/bounce@4.kerfrecipe");
-    assert_eq!(read(&dir.join("shots/bounce.video.comfy.json")), first_copy);
-    // Back to the workflow as it comes: the word taken off the line.
+    assert_eq!(again["workflows"][0]["keptAs"], "shots/shot.video-2.comfy.json", "{again}");
+    assert!(again["script"].as_str().unwrap().contains("workflow=shots/shot.video-2.comfy.json"), "{again}");
+    assert_eq!(read(&dir.join("shots/shot.video.comfy.json")), first_copy);
+    // Back to the workflow as it comes: the word taken off the step.
     let back = ok(
         &router,
         "edit",
-        json!({"revise": again["proposal"], "recipeSet": [{"media": "shot", "line": line, "key": "workflow"}]}),
+        json!({"revise": again["proposal"], "script": format!("step shot set {line} workflow=\"\"")}),
     );
-    let kept = back["recipes"][0]["keptAs"].as_str().unwrap();
-    assert!(!read(&dir.join(kept)).contains("workflow="), "{back}");
+    assert!(!steps_in(&proposed(&router, &back["proposal"]), "shot")[2].contains("workflow="), "{back}");
 
-    // A step added and one taken out, as a person does in the graph: lines of their own, the
-    // comments and the rest as they were. Later entries count lines as the earlier ones left them.
+    // A step added and one taken out, as a person does in the graph. Later lines count steps
+    // as the earlier ones left them.
     let stepped = ok(
         &router,
         "edit",
-        json!({"revise": back["proposal"], "recipeSet": [
-            {"media": "shot", "line": 4, "add": "render court {ids.mp4} pass=ids size=832x480 rate=16"},
-            {"media": "shot", "line": line + 1, "key": "guide_ids", "value": "{ids.mp4}"},
-        ]}),
+        json!({"revise": back["proposal"], "script": format!(
+            "step shot add 2 render court {{ids.mp4}} pass=ids size=832x480 rate=16\nstep shot set {} guide_ids={{ids.mp4}}",
+            line + 1
+        )}),
     );
-    let kept = read(&dir.join(stepped["recipes"][0]["keptAs"].as_str().unwrap()));
-    assert!(kept.contains("pass=depth size=832x480 rate=16\nrender court {ids.mp4} pass=ids size=832x480 rate=16\n\n# The ball"), "{kept}");
-    assert!(kept.contains("guide_ids={ids.mp4}"), "{kept}");
+    let now = steps_in(&proposed(&router, &stepped["proposal"]), "shot");
+    assert_eq!(now[1], "render court {ids.mp4} pass=ids size=832x480 rate=16", "{now:?}");
+    assert!(now[3].contains("guide_ids={ids.mp4}"), "{now:?}");
     let shown = ok(&router, "look", json!({"graph": "shot", "proposal": stepped["proposal"]}));
     assert!(wired(&shown, "made:ids.mp4", &made, "guide_ids"), "{shown}");
-    let said = refused(
-        &router,
-        "edit",
-        json!({"revise": stepped["proposal"], "recipeSet": [{"media": "shot", "line": 4, "remove": true}]}),
-    );
-    assert!(said.contains("without line 4 the recipe does not read"), "{said}");
+    assert_eq!(node(&shown, |node| node["model"] == "video")["line"], line + 1);
+    let said = refused(&router, "edit", json!({"extend": stepped["proposal"], "script": "step shot remove 1"}));
+    assert!(said.contains("{depth.mp4}"), "{said}");
     let back = ok(
         &router,
         "edit",
-        json!({"revise": stepped["proposal"], "recipeSet": [{"media": "shot", "line": line, "key": "workflow"}]}),
+        json!({"revise": stepped["proposal"], "script": format!("step shot set {line} workflow=\"\"")}),
     );
 
-    // What a line or a workflow cannot take is refused, with why, and nothing is kept of it.
-    let files = || std::fs::read_dir(dir.join("shots")).unwrap().count();
+    // What a step or a workflow cannot take is refused, with why, and nothing is kept of it.
     let before = files();
     let said = refused(
         &router,
         "edit",
-        json!({"revise": back["proposal"], "recipeSet": [{"media": "shot", "line": line, "key": "seed", "value": "soon"}]}),
+        json!({"revise": back["proposal"], "script": format!("step shot set {line} seed=soon")}),
     );
     assert!(said.contains("`seed=soon` is not a whole number"), "{said}");
     let said = refused(
@@ -265,27 +276,23 @@ fn an_agent_reads_a_shots_graph_and_sets_what_a_person_sets_there() {
         "edit",
         json!({"revise": back["proposal"], "workflowSet": [{"media": "shot", "line": line, "node": loader, "input": "unet_name", "value": "other"}]}),
     );
-    assert!(said.contains("which the recipe fills"), "{said}");
+    assert!(said.contains("which the step fills"), "{said}");
     let said = refused(&router, "look", json!({"workflow": {"media": "shot", "line": line - 1}}));
     assert!(said.contains("model `still` is not run by kerf-comfy"), "{said}");
     // A shot that says where nothing goes has nothing to hold its takes to.
-    std::fs::write(dir.join("shots/still.kerfrecipe"), "kerf-recipe 1\ngenerate model=still prompt=\"a ball\"\n").unwrap();
     let alone = ok(
         &router,
         "edit",
-        json!({"revise": back["proposal"], "script": "media add m7 path=\"shots/still.png\" rate=24 dur=1f video=512x512 recipe=\"shots/still.kerfrecipe\""}),
+        json!({"revise": back["proposal"], "script": "media add m7 path=\"shots/still.png\" rate=24 dur=1f video=512x512\nstep m7 add generate model=still prompt=\"a ball\""}),
     );
     let said = refused(&router, "look", json!({"takes": "m7", "proposal": alone["proposal"]}));
     assert!(said.contains("moves=<clip>"), "{said}");
     let said = refused(&router, "look", json!({"graph": "nothing"}));
     assert!(said.contains("no media `nothing`"), "{said}");
-    // Only the recipe written here for that last shot is new.
-    assert_eq!(files(), before + 1);
+    assert_eq!(files(), before);
 
-    // A take keeps the recipe it was made from, and an agent goes back to it: the version
-    // that holds that text, with the media moved to it.
-    let first = "kerf-recipe 1\n# A slate.\nrender tiny {out} size=96x54\n";
-    std::fs::write(dir.join("shots/card.kerfrecipe"), first).unwrap();
+    // A take keeps the steps it was made from, and an agent goes back to them: lines of the
+    // edit that write them under the media again.
     let (_, document) = router.runtime().get_document(false).unwrap();
     let project = kerf_runtime::parse_document(&document).unwrap();
     let none = kerf_engine::recipe::model::Models::default();
@@ -294,26 +301,21 @@ fn an_agent_reads_a_shots_graph_and_sets_what_a_person_sets_there() {
     let larger = ok(
         &router,
         "edit",
-        json!({"revise": alone["proposal"], "recipeSet": [{"media": "card", "line": 3, "key": "size", "value": "160x90"}]}),
+        json!({"revise": alone["proposal"], "script": "step card set 1 size=160x90"}),
     );
-    assert_eq!(larger["recipes"][0]["keptAs"], "shots/card@2.kerfrecipe", "{larger}");
     let revision = router.runtime().get_state().unwrap().revision;
     router
         .runtime()
         .accept_proposal(larger["proposal"].as_str().unwrap(), "ui", "accept-larger", revision)
         .unwrap();
     let listed = ok(&router, "look", json!({"graph": "card"}));
-    assert_eq!(listed["recipe"], "shots/card@2.kerfrecipe");
+    assert!(listed.get("recipe").is_none(), "{listed}");
+    assert_eq!(listed["text"], "render tiny {out} size=160x90\n");
     assert_eq!(listed["takes"]["made"][0]["kept"], true, "{listed}");
     let back = ok(&router, "edit", json!({"restoreTake": {"media": "card", "take": 1}}));
-    assert_eq!(
-        back["recipes"][0],
-        json!({"recipe": "shots/card@2.kerfrecipe", "keptAs": "shots/card.kerfrecipe", "written": false,
-               "diff": back["recipes"][0]["diff"]}),
-        "{back}"
-    );
-    assert!(back["script"].as_str().unwrap().contains("recipe=\"shots/card.kerfrecipe\""), "{back}");
-    assert_eq!(read(&dir.join("shots/card.kerfrecipe")), first);
+    assert!(back.get("recipes").is_none(), "{back}");
+    assert!(back["script"].as_str().unwrap().contains("step card set 1 render tiny {out} size=96x54"), "{back}");
+    assert_eq!(steps_in(&proposed(&router, &back["proposal"]), "card"), ["render tiny {out} size=96x54"]);
     let said = refused(&router, "edit", json!({"revise": back["proposal"], "restoreTake": {"media": "card", "take": 5}}));
-    assert!(said.contains("take 5 keeps nothing of the recipe"), "{said}");
+    assert!(said.contains("take 5 keeps nothing of"), "{said}");
 }

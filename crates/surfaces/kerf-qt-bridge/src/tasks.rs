@@ -140,15 +140,13 @@ pub(crate) fn inspect_preset(request: &Value) -> Value {
             Err(error) => json!({"path": file, "fits": [], "error": error}),
         })
         .collect();
-    json!({"name": preset.pattern.name, "slots": slots, "texts": texts, "files": files})
+    json!({"name": preset.pattern.name, "slots": slots, "texts": texts, "files": files,
+        "made": presets::made(&preset)})
 }
 
 /// The slots of `preset` that `media` has the streams and length to fill.
 pub(crate) fn fits(preset: &Preset, media: &Media) -> Vec<String> {
-    preset
-        .pattern
-        .media
-        .iter()
+    preset::slots(&preset.pattern)
         .filter(|slot| preset::latest_start(slot, media).is_some())
         .map(|slot| slot.id.to_string())
         .collect()
@@ -221,6 +219,7 @@ pub(crate) fn probed_media(path: &Path, info: &ProbeInfo) -> Result<Media, Strin
         audio,
         reel: None,
         recipe: None,
+        steps: Vec::new(),
     })
 }
 
@@ -363,17 +362,19 @@ fn create(request: CreateRequest, progress: &dyn Fn(&str)) -> Result<Value, Stri
 /// the streams it needs, from where it starts.
 fn prepare(request: &PresetRequest) -> Result<Prepared, String> {
     let (document, preset) = presets::read(&request.path)?;
-    if let Some(unknown) = request
-        .bindings
-        .keys()
-        .find(|slot| preset.pattern.media(slot).is_none())
-    {
-        return Err(format!("the preset has no slot `{unknown}`"));
+    for slot in request.bindings.keys() {
+        match preset.pattern.media(slot) {
+            None => return Err(format!("the preset has no slot `{slot}`")),
+            Some(media) if preset::is_made(media) => {
+                return Err(preset::made_takes_no_binding(slot))
+            }
+            Some(_) => {}
+        }
     }
     let mut files: Vec<PathBuf> = Vec::new();
     let mut probed: Vec<Media> = Vec::new();
     let mut bindings = BTreeMap::new();
-    for slot in &preset.pattern.media {
+    for slot in preset::slots(&preset.pattern) {
         let binding = request
             .bindings
             .get(slot.id.as_str())

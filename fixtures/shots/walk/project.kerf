@@ -1,12 +1,20 @@
 kerf 1
 project name="A walk in layers"
 media walk path="footage/walk.mp4" rate=16 dur=81f video=832x480
-media man path="shots/man.mp4" rate=16 dur=81f video=832x480 recipe="shots/man.kerfrecipe"
-media shown path="shots/shown.mp4" rate=16 dur=81f video=832x480 recipe="shots/shown.kerfrecipe"
-media shirt path="shots/shirt.mp4" rate=16 dur=81f video=832x480 recipe="shots/shirt.kerfrecipe"
-media gone path="shots/gone.mp4" rate=16 dur=81f video=832x480 recipe="shots/gone.kerfrecipe"
-media layers path="shots/layers.mp4" rate=16 dur=81f video=832x480 recipe="shots/layers.kerfrecipe"
-media moved path="shots/moved.mp4" rate=16 dur=81f video=832x480 recipe="shots/moved.kerfrecipe"
+media man path="shots/man.mp4" rate=16 dur=81f video=832x480
+  generate model=matte prompt="man" guide=footage/walk.mp4
+media shown path="shots/shown.mp4" rate=16 dur=81f video=832x480
+  generate model=shown prompt="man, tree" guide=footage/walk.mp4
+media shirt path="shots/shirt.mp4" rate=16 dur=81f video=832x480
+  generate model=matte prompt="t-shirt" guide=footage/walk.mp4 objects=1 out={shirt.mp4}
+  generate model=into prompt="a man wearing a bright red hawaiian shirt with yellow flowers" guide=footage/walk.mp4 guide_mask={shirt.mp4} seed=7 feather=5 grow=4
+media gone path="shots/gone.mp4" rate=16 dur=81f video=832x480
+  generate model=matte prompt="man" guide=footage/walk.mp4 out={man.mp4}
+  generate model=plate prompt="an empty dirt path below a dry grassy hillside, bushes and trees, daylight" guide=footage/walk.mp4 guide_mask={man.mp4} seed=7 reach=72
+media layers path="shots/layers.mp4" rate=16 dur=81f video=832x480
+  render s1 {out}
+media moved path="shots/moved.mp4" rate=16 dur=81f video=832x480
+  render s2 {out}
 sequence s1 rate=16 size=832x480
   track V1 video
     clip back media=walk src=0f at=0f dur=81f

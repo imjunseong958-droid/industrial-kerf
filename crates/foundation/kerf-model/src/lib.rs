@@ -10,6 +10,7 @@ pub mod expr;
 mod features;
 pub mod id;
 pub mod look;
+pub mod making;
 pub mod model;
 pub mod ops;
 mod path;
@@ -29,6 +30,7 @@ pub use model::{
     TRACK_ROLES,
 };
 pub use kerf_color::ColorSpace;
+pub use making::Pass;
 pub use path::{parse_moves, parse_path_points, parse_points, MotionPath, PathPoint};
 pub use ops::{
     apply, BusChange, BusFx, ClipChange, Edge, MarkerChange, NewClip, Op, Rejected, Report, SequenceChange,

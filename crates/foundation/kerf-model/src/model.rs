@@ -46,6 +46,10 @@ pub struct Media {
     /// path as the media's own is, and a label as the reel is: Kerf reads
     /// nothing from it.
     pub recipe: Option<String>,
+    /// How its file is made, where Kerf or a model makes it: the steps written
+    /// under its line, in the order they run ([`crate::making`]). A media
+    /// that is footage has none.
+    pub steps: Vec<crate::making::Step>,
 }
 
 impl Media {
@@ -1193,6 +1197,7 @@ mod tests {
             audio: None,
             reel: None,
             recipe: None,
+            steps: Vec::new(),
         });
         project.sequences.push(Sequence {
             buses: Vec::new(),

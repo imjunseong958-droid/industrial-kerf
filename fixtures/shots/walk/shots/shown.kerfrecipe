@@ -1,3 +1,0 @@
-kerf-recipe 1
-# What a matte's prompt finds, each thing in a color of its own with its number on it.
-generate model=shown guide=../footage/walk.mp4 prompt="man, tree"

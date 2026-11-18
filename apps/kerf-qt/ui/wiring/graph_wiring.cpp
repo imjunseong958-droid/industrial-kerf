@@ -136,8 +136,14 @@ bool GraphWiring::isOpen() const {
 
 void GraphWiring::open(const QString &media) {
     MainWindow *w = m_window;
+    if (!w->mediaIsMade(media) || !m_scrim) return;
+    // Steps still in a recipe file are not graphed: carrying them into the document is offered.
+    if (w->mediaIsUncarried(media)) {
+        w->carryMedia(media);
+        return;
+    }
+    // A media made before steps were the document's own may still name a recipe file.
     const QString recipe = w->mediaRecipe(media);
-    if (recipe.isEmpty() || !m_scrim) return;
     const bool wasOpen = isOpen();
     m_media = media;
     m_panel->setProjectDirectory(w->m_projectDirectory);
@@ -153,13 +159,16 @@ void GraphWiring::open(const QString &media) {
         m_readState.clear();
         showReadings();
     }
-    // Each shot keeps its own arrangement, whichever version of its recipe it is made from.
-    m_panel->setPlacementKey(QStringLiteral("%1\n%2/%3").arg(w->m_projectDirectory, QFileInfo(recipe).path(), recipeShotName(recipe)));
+    // Each shot keeps its own arrangement, whichever version of its recipe it is made from;
+    // one made by steps in the document keeps it by its id, which its steps go with.
+    m_panel->setPlacementKey(recipe.isEmpty() ? QStringLiteral("%1\nmedia %2").arg(w->m_projectDirectory, media)
+                                              : QStringLiteral("%1\n%2/%3").arg(w->m_projectDirectory, QFileInfo(recipe).path(), recipeShotName(recipe)));
     // Until the bridge has said the graph, the shot's name over an empty canvas.
     graph::Recipe waiting;
     waiting.media = media;
     waiting.recipe = recipe;
-    waiting.name = recipeShotName(recipe);
+    waiting.document = recipe.isEmpty();
+    waiting.name = recipe.isEmpty() ? media : recipeShotName(recipe);
     waiting.said = false;
     if (m_panel->recipe().media != media) {
         m_panel->setRecipe(waiting);
@@ -305,7 +314,7 @@ void GraphWiring::onEvent(const QString &type, const QJsonObject &event) {
 }
 
 void GraphWiring::onSnapshot() {
-    if (!m_pendingMedia.isEmpty() && !m_window->mediaRecipe(m_pendingMedia).isEmpty()) {
+    if (!m_pendingMedia.isEmpty() && m_window->mediaIsMade(m_pendingMedia)) {
         open(std::exchange(m_pendingMedia, QString()));
         return;
     }

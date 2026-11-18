@@ -1,4 +1,4 @@
-//! What Kerf asks of a model: the request a recipe's `generate` writes
+//! What Kerf asks of a model: the request a `generate` step writes
 //! (`docs/shots.md`, `kerf-engine/src/recipe/model.rs`).
 
 // The names a request hands things under are the workflow's to know too, and are kept with it.
@@ -53,8 +53,8 @@ pub struct Request {
     #[serde(default)]
     pub moves: Vec<Moves>,
     /// A workflow of the project to run in place of the one this program was
-    /// started with: the line's `workflow=`, a file a person keeps beside
-    /// their recipe.
+    /// started with: the step's `workflow=`, a file a person keeps beside
+    /// the shot's takes.
     #[serde(default)]
     pub workflow: Option<PathBuf>,
     /// Anything else the `generate` line said, as it was written.

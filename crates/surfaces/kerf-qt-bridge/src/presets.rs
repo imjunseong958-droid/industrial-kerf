@@ -115,7 +115,8 @@ fn entry(directory: &Path, relative: &Path) -> Value {
     let mut entry = match read(&directory.join(relative)) {
         Ok((_, preset)) => {
             let (slots, texts) = summary(&preset);
-            json!({"path": path, "name": preset.pattern.name, "slots": slots, "texts": texts})
+            json!({"path": path, "name": preset.pattern.name, "slots": slots, "texts": texts,
+                "made": made(&preset)})
         }
         Err(message) => {
             let name = relative
@@ -157,12 +158,11 @@ pub(crate) fn read(path: &Path) -> Result<(String, Preset), String> {
 }
 
 /// A preset's media slots (`{id, seconds, video, audio, clips}`, where
-/// `clips` counts the pattern's clips that use it) and its text slots.
+/// `clips` counts the pattern's clips that use it) and its text slots. The
+/// media it makes from steps are not slots: nothing binds them.
 pub(crate) fn summary(preset: &Preset) -> (Value, Value) {
     let pattern = &preset.pattern;
-    let slots: Vec<Value> = pattern
-        .media
-        .iter()
+    let slots: Vec<Value> = preset::slots(pattern)
         .map(|slot| {
             json!({"id": slot.id.as_str(), "seconds": slot.duration.seconds(),
                 "video": slot.video.is_some(), "audio": slot.audio.is_some(),
@@ -174,6 +174,21 @@ pub(crate) fn summary(preset: &Preset) -> (Value, Value) {
         .map(|(clip, text)| (clip, Value::String(text)))
         .collect();
     (Value::Array(slots), Value::Object(texts))
+}
+
+/// The media a preset makes from the steps under their lines, which applying
+/// it adds to the project: `{id, of, steps, clips}`, `of` the slot it is of
+/// frame for frame where it is one's, and `steps` as the document writes them.
+pub(crate) fn made(preset: &Preset) -> Value {
+    let pattern = &preset.pattern;
+    preset::made(pattern)
+        .map(|media| {
+            let steps: Vec<String> = media.steps.iter().map(kerf_lang::print_step).collect();
+            json!({"id": media.id.as_str(),
+                "of": preset::footage_of(media).map(|slot| slot.to_string()),
+                "steps": steps, "clips": clips_using(pattern, &media.id)})
+        })
+        .collect()
 }
 
 fn clips_using(pattern: &Project, slot: &Id) -> usize {
@@ -376,6 +391,32 @@ mod tests {
         assert_eq!(broken["name"], "broken");
         assert!(broken["error"].is_string(), "{broken}");
         assert_eq!(event["looks"], json!([]));
+    }
+
+    #[test]
+    fn the_media_a_preset_makes_are_listed_apart_from_its_slots() {
+        let walk = kerf_runtime::parse_document(include_str!(
+            "../../../../fixtures/shots/walk/project.kerf"
+        ))
+        .unwrap();
+        let document =
+            preset::export(&walk, Catalog::builtin(), &Id::new("s2").unwrap(), "Moved").unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        save(directory.path(), "Moved", &document, false).unwrap();
+        let event = library(directory.path());
+        let entry = &event["presets"][0];
+        assert!(entry.get("error").is_none(), "{entry}");
+        // One slot, the footage both makings read; nothing asks for a binding of either.
+        assert_eq!(entry["slots"].as_array().unwrap().len(), 1, "{entry}");
+        assert_eq!(entry["slots"][0]["id"], "slot1");
+        let made = entry["made"].as_array().unwrap();
+        assert_eq!(made.len(), 2, "{entry}");
+        assert_eq!(made[0]["id"], "man");
+        assert_eq!(made[0]["of"], "slot1");
+        assert_eq!(made[0]["steps"], json!(["generate model=matte prompt=\"man\" guide=slot:slot1"]));
+        let (_, read) = read(&directory.path().join("presets/Moved.kerfpreset")).unwrap();
+        let footage = read.pattern.media("slot1").unwrap().clone();
+        assert_eq!(crate::tasks::fits(&read, &footage), ["slot1"]);
     }
 
     #[test]

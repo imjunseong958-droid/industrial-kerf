@@ -38,6 +38,13 @@
 //! file at `out` is written. A project cannot name a model's program: that
 //! file is the person's, outside any project.
 //!
+//! A program that was not written for Kerf, a renderer or a script, is named
+//! the same way and handed its arguments in place of a request
+//! ([`command_for`]): `{"previs": {"run": ["vork", "render", "{ref}",
+//! "--out", "{out}"]}}`, asked by `generate model=previs
+//! ref=scenes/open.scene.json out={guide.mp4}`. So what runs is always a
+//! program the person named, and a document only says which and with what.
+//!
 //! Beside `run`, a model's entry can say what the model takes ([`Takes`]):
 //! the picture it makes, its rate, the longest shot, the files it reads.
 //! Kerf asks no program for it, so whoever writes a recipe, an agent
@@ -58,355 +65,174 @@ use std::path::{Path, PathBuf};
 /// What stands for the request's file in a model's command.
 pub const REQUEST: &str = "{request}";
 
+/// What stands for where the file goes in the command of a program that is handed its
+/// arguments and no request: a renderer, or any program that was not written for Kerf.
+pub const OUT: &str = "{out}";
+
 /// The request's file, among what a take's steps made.
 pub const REQUEST_FILE: &str = "request.json";
 
 /// The version a request says it is.
 const REQUEST_VERSION: u32 = 1;
 
-/// A file a model is handed.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Source {
-    /// A file of the project, as the recipe names it: from its own folder.
-    File(String),
-    /// A file a step before made, by the name it has in braces.
-    Made(String),
-}
+pub use kerf_model::making::{names_a_guide, Ask, Source, FILES, MOVES, SIGNAL, WORKFLOW};
 
-impl Source {
-    fn shown(&self) -> String {
-        match self {
-            Self::File(file) => file.clone(),
-            Self::Made(name) => format!("{{{name}}}"),
-        }
-    }
-}
-
-/// What a `generate` line asks of a model.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Ask {
-    /// The model, by the name the person's models file gives it.
-    pub model: String,
-    /// What the file should show, in words.
-    pub prompt: String,
-    /// A picture in motion to follow: a blocking, a rough render, a take.
-    pub guide: Option<Source>,
-    /// More pictures in motion to follow, each by what it is of: a model that reads a
-    /// picture and its depth, or depth and which clip each pixel is of, is handed each
-    /// under its name (`guide_depth=`, `guide_ids=`).
-    pub guides: Vec<(String, Source)>,
-    /// The first and the last frame.
-    pub first: Option<Source>,
-    pub last: Option<Source>,
-    /// Pictures of who and what is in it, and of how it should look.
-    pub references: Vec<Source>,
-    pub seconds: Option<f64>,
-    /// Where the shot starts in its sequences' time, in seconds, where it is not their
-    /// start: a part of a longer shot. A signal and where a clip goes are read from there.
-    pub from: Option<f64>,
-    pub size: Option<(u32, u32)>,
-    pub seed: Option<u64>,
-    /// Numbers over time that say when what the prompt asks for happens:
-    /// signal clips of the project, by their ids.
-    pub signals: Vec<String>,
-    /// What goes where: clips of the project, by their ids, each handed over as its place
-    /// on every frame.
-    pub moves: Vec<String>,
-    /// Who and what it shows, and how it looks: the project's cast and styles, by their
-    /// names ([`super::cast`]). Each one's words follow the prompt and its pictures the
-    /// references, once the recipe is read for a making.
-    pub cast: Vec<String>,
-    pub styles: Vec<String>,
-    /// A graph of the model's own to run in place of the one its program
-    /// would: a file of the project, for a model whose program takes one. A
-    /// ComfyUI workflow kept beside the recipe is the case (`kerf-comfy`). A
-    /// program that takes none has no use for it, and nothing says so: what
-    /// a program reads of a request is its own, and a models file written
-    /// before this was a word has no way to have said it.
-    pub workflow: Option<Source>,
-    /// Anything else the line says, which only that model reads.
-    pub more: BTreeMap<String, String>,
-    /// The file it writes: `out`, or the name of one a later step reads.
-    pub out: String,
-}
-
-impl Ask {
-    /// Read the words after `generate`. `made` holds the files the steps
-    /// before it make.
-    pub(crate) fn parse(words: &[String], made: &[String]) -> std::result::Result<Self, String> {
-        let mut ask = Self {
-            model: String::new(),
-            prompt: String::new(),
-            guide: None,
-            guides: Vec::new(),
-            first: None,
-            last: None,
-            references: Vec::new(),
-            seconds: None,
-            from: None,
-            size: None,
-            seed: None,
-            signals: Vec::new(),
-            moves: Vec::new(),
-            cast: Vec::new(),
-            styles: Vec::new(),
-            workflow: None,
-            more: BTreeMap::new(),
-            out: "out".to_owned(),
-        };
-        let source = |value: &str| match super::whole(value) {
-            Some(name) if made.contains(&name) => Ok(Source::Made(name)),
-            Some(name) => Err(format!("no step before this one makes `{{{name}}}`")),
-            None if value.is_empty() => Err("a file's name is empty".to_owned()),
-            None => Ok(Source::File(value.to_owned())),
-        };
-        // A name that holds one value, given twice, would keep the last and drop the first
-        // unsaid: `out={lens.txt} out={out}` made no lens. Those that hold a list may repeat.
-        let mut given = std::collections::BTreeSet::new();
-        for word in words {
-            let (key, value) = word.split_once('=').ok_or_else(|| {
-                format!(
-                    "`{word}` is not `<name>=<value>`; a value that holds spaces is quoted, as `prompt=\"a boat leaves\"`"
-                )
-            })?;
-            let listed = matches!(key, "ref" | "signal" | "moves" | "cast" | "style")
-                || key.starts_with("guide_");
-            if !listed && !given.insert(key) {
-                return Err(format!(
-                    "`{key}=` is given twice; a line takes one{}",
-                    if key == "out" {
-                        ", the file it makes: a second file of the same model is a `generate` line of its own"
-                    } else {
-                        ""
-                    }
-                ));
+/// The request a model's program reads of what `ask` asks, with every file where it is:
+/// `file` says where one of the project is, and `made` where one a step
+/// made is, the one this writes among them. `signals` and `moves` are the ones it
+/// names, read from the project.
+pub(crate) fn request(
+    ask: &Ask,
+    file: &dyn Fn(&str) -> Result<PathBuf>,
+    made: &dyn Fn(&str) -> PathBuf,
+    signals: &[Signal],
+    moves: &[Moves],
+) -> Result<Value> {
+    let place = |source: &Source| -> Result<Value> {
+        Ok(Value::String(
+            match source {
+                Source::File(named) => file(named)?,
+                Source::Made(name) => made(name),
             }
-            match key {
-                "model" => ask.model = value.to_owned(),
-                "prompt" => ask.prompt = value.to_owned(),
-                "guide" => ask.guide = Some(source(value)?),
-                named if named.strip_prefix("guide_").is_some_and(names_a_guide) => {
-                    let name = named["guide_".len()..].to_owned();
-                    if ask.guides.iter().any(|(given, _)| *given == name) {
-                        return Err(format!("`{named}=` is given twice"));
-                    }
-                    ask.guides.push((name, source(value)?));
-                }
-                "first" => ask.first = Some(source(value)?),
-                "last" => ask.last = Some(source(value)?),
-                WORKFLOW => ask.workflow = Some(source(value)?),
-                "ref" => ask.references.push(source(value)?),
-                "from" => {
-                    ask.from = Some(
-                        value
-                            .parse()
-                            .ok()
-                            .filter(|from: &f64| from.is_finite() && *from >= 0.0)
-                            .ok_or_else(|| {
-                                format!("`from={value}` is not a number of seconds from the sequence's start, such as 5")
-                            })?,
-                    );
-                }
-                "seconds" => {
-                    ask.seconds = Some(
-                        value
-                            .parse()
-                            .ok()
-                            .filter(|seconds: &f64| seconds.is_finite() && *seconds > 0.0)
-                            .ok_or_else(|| {
-                                format!("`seconds={value}` is not a length in seconds")
-                            })?,
-                    );
-                }
-                "size" => {
-                    ask.size = Some(super::size_of(value).ok_or_else(|| {
-                        format!("`size={value}` is not a size such as 1920x1080")
-                    })?);
-                }
-                "seed" => {
-                    ask.seed = Some(
-                        value
-                            .parse()
-                            .map_err(|_| format!("`seed={value}` is not a whole number"))?,
-                    );
-                }
-                "signal" if value.is_empty() => {
-                    return Err(
-                        "`signal=` names a signal clip of the project, such as `signal=swell`"
-                            .to_owned(),
-                    )
-                }
-                "signal" => ask.signals.push(value.to_owned()),
-                "moves" if value.is_empty() => {
-                    return Err(
-                        "`moves=` names a clip of the project whose way across the frame a model is handed, such as `moves=car`"
-                            .to_owned(),
-                    )
-                }
-                "moves" => ask.moves.push(value.to_owned()),
-                "cast" | "style" => {
-                    if !super::cast::names_one(value) {
-                        return Err(format!(
-                            "`{key}=` names one of the project's `{}` by its name there, such as `{key}={}`",
-                            super::cast::FILE,
-                            if key == "cast" { "Ada" } else { "film" }
-                        ));
-                    }
-                    let named = if key == "cast" {
-                        &mut ask.cast
-                    } else {
-                        &mut ask.styles
-                    };
-                    if named.iter().any(|given| given == value) {
-                        return Err(format!("`{word}` is given twice"));
-                    }
-                    named.push(value.to_owned());
-                }
-                "out" => {
-                    ask.out = super::whole(value).ok_or_else(|| {
-                        format!("`out={value}` names the file it makes in braces, such as `{{first.png}}`")
-                    })?;
-                }
-                "" => return Err(format!("`{word}` has no name before its `=`")),
-                other => {
-                    ask.more.insert(other.to_owned(), value.to_owned());
-                }
-            }
-        }
-        if ask.model.is_empty() {
-            return Err("`generate` names its model: `model=<name>`".to_owned());
-        }
-        Ok(ask)
-    }
-
-    /// Every file it hands the model.
-    pub fn sources(&self) -> impl Iterator<Item = &Source> {
-        self.guide
+            .to_string_lossy()
+            .into_owned(),
+        ))
+    };
+    let optional = |source: &Option<Source>| source.as_ref().map(place).transpose();
+    let mut asked = json!({
+        "kerf-request": REQUEST_VERSION,
+        "model": ask.model,
+        "prompt": ask.prompt,
+        "guide": optional(&ask.guide)?,
+        "guides": ask
+            .guides
             .iter()
-            .chain(self.guides.iter().map(|(_, source)| source))
-            .chain(&self.first)
-            .chain(&self.last)
-            .chain(&self.references)
-            .chain(&self.workflow)
+            .map(|(name, source)| Ok((name.clone(), place(source)?)))
+            .collect::<Result<serde_json::Map<String, Value>>>()?,
+        "first": optional(&ask.first)?,
+        "last": optional(&ask.last)?,
+        "references": ask.references.iter().map(place).collect::<Result<Vec<_>>>()?,
+        "seconds": ask.seconds,
+        "size": ask.size.map(|(width, height)| [width, height]),
+        "seed": ask.seed,
+        "signals": signals.iter().map(Signal::asked).collect::<Vec<_>>(),
+        "moves": moves.iter().map(Moves::asked).collect::<Vec<_>>(),
+        WORKFLOW: optional(&ask.workflow)?,
+        "more": ask.more,
+        "out": made(&ask.out).to_string_lossy(),
+    });
+    // Said only of a part of a longer shot: a request for a whole one reads as it did.
+    if let Some(from) = ask.from {
+        asked["from"] = json!(from);
     }
+    Ok(asked)
+}
 
-    /// What it asks, as a person reads it.
-    pub fn shown(&self) -> String {
-        let mut parts = vec![format!("prompt \"{}\"", self.prompt)];
-        let mut named =
-            |name: &str, source: &Source| parts.push(format!("{name} {}", source.shown()));
-        if let Some(guide) = &self.guide {
-            named("guide", guide);
-        }
-        for (name, guide) in &self.guides {
-            named(&format!("guide_{name}"), guide);
-        }
-        if let Some(first) = &self.first {
-            named("first", first);
-        }
-        if let Some(last) = &self.last {
-            named("last", last);
-        }
-        for reference in &self.references {
-            named("ref", reference);
-        }
-        if let Some(seconds) = self.seconds {
-            parts.push(format!("{seconds} s"));
-        }
-        if let Some(from) = self.from {
-            parts.push(format!("from {from} s"));
-        }
-        if let Some((width, height)) = self.size {
-            parts.push(format!("{width}x{height}"));
-        }
-        if let Some(seed) = self.seed {
-            parts.push(format!("seed {seed}"));
-        }
-        if let Some(workflow) = &self.workflow {
-            parts.push(format!("{WORKFLOW} {}", workflow.shown()));
-        }
-        parts.extend(self.signals.iter().map(|signal| format!("signal {signal}")));
-        parts.extend(self.moves.iter().map(|clip| format!("moves {clip}")));
-        parts.extend(
-            self.more
-                .iter()
-                .map(|(name, value)| format!("{name} {value}")),
-        );
-        parts.join(", ")
-    }
-
-    /// The request a model's program reads, with every file where it is:
-    /// `file` says where one of the project is, and `made` where one a step
-    /// made is, the one this writes among them. `signals` and `moves` are the ones it
-    /// names, read from the project.
-    pub(crate) fn request(
-        &self,
-        file: &dyn Fn(&str) -> Result<PathBuf>,
-        made: &dyn Fn(&str) -> PathBuf,
-        signals: &[Signal],
-        moves: &[Moves],
-    ) -> Result<Value> {
-        let place = |source: &Source| -> Result<Value> {
-            Ok(Value::String(
-                match source {
-                    Source::File(named) => file(named)?,
-                    Source::Made(name) => made(name),
+/// The command that asks a model: `words`, as the person's models file gives its `run`,
+/// with each blank filled from `asked`, the request a step comes to, whose file is
+/// `request`.
+///
+/// A program written for Kerf reads the request, and its command names it (`{request}`).
+/// One that was not, a renderer, a script, is handed what it needs as its arguments, by
+/// the names a step gives them: `{out}`, where its file goes; `{prompt}`; the files,
+/// `{guide}`, `{first}`, `{last}` and `{ref}` (`{ref2}` for the second); `{seconds}`,
+/// `{seed}`, `{size}`, `{width}` and `{height}`; and any other name the step sets
+/// (`profile=std/previs` fills `{profile}`), or the value the entry's `takes` gives it
+/// under `more` where the step does not. A blank with nothing to fill it is refused, with
+/// the word that fills it.
+///
+/// The program and the shape of its command are the person's own, and a project only
+/// fills the blanks: an argument that is a blank alone is refused where what fills it
+/// would read as an option (`-…`), so a step cannot hand the program a switch its
+/// owner did not write.
+pub(crate) fn command_for(
+    model: &str,
+    words: &[String],
+    request: &Path,
+    asked: &Value,
+    takes: Option<&Takes>,
+) -> Result<Vec<String>> {
+    let text = |value: &Value| match value {
+        Value::String(text) => Some(text.clone()),
+        Value::Number(number) => Some(match number.as_f64() {
+            Some(whole) if whole.fract() == 0.0 && whole.abs() < 1e15 => format!("{whole:.0}"),
+            _ => number.to_string(),
+        }),
+        Value::Bool(flag) => Some(flag.to_string()),
+        _ => None,
+    };
+    let filled = |name: &str| -> Option<String> {
+        let size = |at: usize| asked["size"].get(at).and_then(Value::as_u64);
+        match name {
+            "request" => Some(request.to_string_lossy().into_owned()),
+            "out" | "prompt" | "guide" | "first" | "last" | "seconds" | "seed" => text(&asked[name]),
+            "size" => Some(format!("{}x{}", size(0)?, size(1)?)),
+            "width" => size(0).map(|side| side.to_string()),
+            "height" => size(1).map(|side| side.to_string()),
+            other => {
+                // `ref` is the first picture, `ref2` the second.
+                if let Some(count) = other.strip_prefix("ref") {
+                    let at = match count {
+                        "" => Some(0),
+                        number => number.parse::<usize>().ok().filter(|at| *at >= 2).map(|at| at - 1),
+                    };
+                    if let Some(at) = at {
+                        return asked["references"].get(at).and_then(text);
+                    }
                 }
-                .to_string_lossy()
-                .into_owned(),
-            ))
-        };
-        let optional = |source: &Option<Source>| source.as_ref().map(place).transpose();
-        let mut asked = json!({
-            "kerf-request": REQUEST_VERSION,
-            "model": self.model,
-            "prompt": self.prompt,
-            "guide": optional(&self.guide)?,
-            "guides": self
-                .guides
-                .iter()
-                .map(|(name, source)| Ok((name.clone(), place(source)?)))
-                .collect::<Result<serde_json::Map<String, Value>>>()?,
-            "first": optional(&self.first)?,
-            "last": optional(&self.last)?,
-            "references": self.references.iter().map(place).collect::<Result<Vec<_>>>()?,
-            "seconds": self.seconds,
-            "size": self.size.map(|(width, height)| [width, height]),
-            "seed": self.seed,
-            "signals": signals.iter().map(Signal::asked).collect::<Vec<_>>(),
-            "moves": moves.iter().map(Moves::asked).collect::<Vec<_>>(),
-            WORKFLOW: optional(&self.workflow)?,
-            "more": self.more,
-            "out": made(&self.out).to_string_lossy(),
-        });
-        // Said only of a part of a longer shot: a request for a whole one reads as it did.
-        if let Some(from) = self.from {
-            asked["from"] = json!(from);
+                if let Some(guide) = other.strip_prefix("guide_") {
+                    return asked["guides"].get(guide).and_then(text);
+                }
+                asked["more"]
+                    .get(other)
+                    .and_then(text)
+                    .or_else(|| takes.and_then(|takes| takes.more.get(other)).and_then(text))
+            }
         }
-        Ok(asked)
-    }
+    };
+    words
+        .iter()
+        .map(|word| {
+            let mut out = String::new();
+            let mut rest = word.as_str();
+            while let Some(open) = rest.find('{') {
+                out.push_str(&rest[..open]);
+                let after = &rest[open + 1..];
+                let named = after
+                    .split_once('}')
+                    .filter(|(name, _)| kerf_model::making::file_name(name));
+                match named {
+                    Some((name, tail)) => {
+                        let value = filled(name).ok_or_else(|| {
+                            EngineError::msg(format!(
+                                "model `{model}`'s program is handed `{{{name}}}`, and the step gives none: add `{}` to its step",
+                                match name {
+                                    "out" => "out={<name>}".to_owned(),
+                                    "width" | "height" => "size=<W>x<H>".to_owned(),
+                                    numbered if numbered.starts_with("ref") => "ref=<file>".to_owned(),
+                                    other => format!("{other}=<value>"),
+                                }
+                            ))
+                        })?;
+                        if word.len() == name.len() + 2 && value.starts_with('-') {
+                            return Err(EngineError::msg(format!(
+                                "`{name}={value}` would read as an option of model `{model}`'s program, which its owner did not write: a value does not start with `-`"
+                            )));
+                        }
+                        out.push_str(&value);
+                        rest = tail;
+                    }
+                    None => {
+                        out.push('{');
+                        rest = after;
+                    }
+                }
+            }
+            out.push_str(rest);
+            Ok(out)
+        })
+        .collect()
 }
-
-/// The files a `generate` line hands a model, by the names it gives them.
-pub const FILES: [&str; 4] = ["guide", "first", "last", "ref"];
-
-/// Whether `name` is what a guide beside the first is named by, after `guide_`: lowercase
-/// letters and digits, as a workflow's blank is.
-pub fn names_a_guide(name: &str) -> bool {
-    !name.is_empty()
-        && name
-            .chars()
-            .all(|letter| letter.is_ascii_lowercase() || letter.is_ascii_digit())
-}
-
-/// The name a `generate` line hands a model a signal by.
-pub const SIGNAL: &str = "signal";
-
-/// The name a `generate` line hands a model a clip's way across the frame by.
-pub const MOVES: &str = "moves";
-
-/// The name a `generate` line hands a model a graph of its own to run by.
-pub const WORKFLOW: &str = "workflow";
 
 /// What a model takes, as the person's models file says it under `takes`.
 /// Each part is there only where the file says it.
@@ -575,9 +401,9 @@ impl Models {
                         "model `{name}` has no `run`, a program and its arguments as a list"
                     ))
                 })?;
-            if !command.iter().any(|word| word.contains(REQUEST)) {
+            if !command.iter().any(|word| word.contains(REQUEST) || word.contains(OUT)) {
                 return Err(wrong(format!(
-                    "model `{name}`'s `run` names no `{REQUEST}`, so its program is never told what is asked"
+                    "model `{name}`'s `run` names neither `{REQUEST}` nor `{OUT}`, so its program is never told what is asked or where its file goes"
                 )));
             }
             if let Some(said) = model.get("takes") {

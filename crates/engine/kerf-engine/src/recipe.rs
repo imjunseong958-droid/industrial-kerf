@@ -1,21 +1,17 @@
-//! A recipe: the text file that says how what is outside Kerf, a renderer
-//! or a model, makes a media's file, and the making of it. A media line
-//! names its recipe (`recipe="shots/open.kerfrecipe"`); `kerf make` runs it.
+//! How a media's file is made, where Kerf or a model makes it, and the making
+//! of it.
+//!
+//! The steps are the document's own, under the media's line, where an edit
+//! writes them ([`kerf_model::making`]):
 //!
 //! ```text
-//! kerf-recipe 1
-//! # The opening shot: blocked in a renderer, then filmed by a model.
-//! needs open.scene.json
-//! run vork render open.scene.json --profile std/previs --out {guide.mp4}
-//! generate model=dawn prompt="a boat leaves the harbour at dawn" guide={guide.mp4} first=refs/boat.png seed=7
+//! media m3 path="shots/open.mp4" rate=16 dur=65f video=832x480
+//!   render s2 {guide.mp4} pass=depth size=832x480 rate=16
+//!   generate model=dawn prompt="a boat leaves the harbour at dawn" guide={guide.mp4} seed=7
 //! ```
 //!
-//! A recipe is steps, run in order, and the last one writes the media's
-//! file:
+//! They run in order, and the last one writes the media's file:
 //!
-//! - `run` is a program and its arguments, quoted where they hold spaces.
-//!   It runs in the recipe's folder, as a supervised sidecar and never
-//!   through a shell, so nothing in an argument is expanded or run.
 //! - `render <sequence> {name}` has Kerf draw a sequence of the project,
 //!   which is how a guide blocked with Kerf's own clips, cameras, and lights
 //!   reaches a model. `size=WxH` and `rate=<fps>` draw it at a model's own
@@ -30,18 +26,30 @@
 //!   `workflow=` hands a model whose program takes one a graph of its own to
 //!   run, a file of the project ([`model`]).
 //!   `cast=` and `style=` name who and what it shows and how it looks, as
-//!   the project says them once for every recipe ([`cast`]).
+//!   the project says them once for every shot ([`cast`]).
+//! - `join` sets files earlier steps made end to end.
 //!
 //! `{out}` stands for the media's file, and `{name}` for a file a step
-//! makes on the way and a later one reads. `needs` names the files a recipe
-//! reads, so that a change to one is seen ([`takes`]).
+//! makes on the way and a later one reads. A file of the project is named
+//! from the project's folder.
 //!
-//! Each making is a take, kept beside the ones before it; the document
-//! says which one the media is. A recipe that is written again is kept the
-//! same way ([`version`]): beside the one before it, as `open@2.kerfrecipe`,
-//! with the takes of both in one folder. A recipe is a command someone wrote. Kerf
-//! runs one only when a person asks for that media to be made, never on
-//! opening or drawing a project.
+//! No step names a program. Kerf draws, and a model, or a renderer that is
+//! handed its arguments, is a program the person names in a file of their
+//! own ([`model`]). Kerf runs steps only when a media is asked to be made,
+//! never on opening or drawing a project.
+//!
+//! Each making is a take, kept beside the ones before it; the document says
+//! which one the media is ([`takes`]).
+//!
+//! Before the document held them, steps were written in a recipe, a text
+//! file the media's line named (`recipe="shots/open.kerfrecipe"`). Nothing
+//! is made from one now. [`carry`] reads one, once, to write its steps
+//! under the media; a recipe that runs a program of its own choosing
+//! (`run`) has no steps to carry, a document naming none.
+//!
+//! Where steps are handed about as text, to an editor that shows them or
+//! kept with a take, it is as the lines the document writes after one that
+//! says what they are ([`steps_text`]).
 
 pub mod cast;
 pub mod graph;
@@ -57,8 +65,8 @@ use crate::error::{EngineError, Result};
 use crate::render::{render_program_with_cancellation, RenderOptions};
 use crate::sidecar::{self, CancellationToken};
 use kerf_compose::Pass;
-use kerf_model::Rate;
-use model::{Ask, Models, Source};
+use kerf_model::Media;
+use model::{Models, Source};
 use moves::Moves;
 use signal::Signal;
 use std::path::{Component, Path, PathBuf};
@@ -73,159 +81,302 @@ pub use told::{ask_to_stop, told, Going, Told};
 const HEADER: &str = "kerf-recipe 1";
 
 /// What stands for the media's file, in an argument.
-const OUT: &str = "out";
+const OUT: &str = kerf_model::making::OUT;
 
-/// One thing a recipe does on the way to the media's file.
-#[derive(Clone, Debug, PartialEq)]
-pub enum Step {
-    /// A program and its arguments.
-    Run {
-        program: String,
-        arguments: Vec<String>,
-    },
-    /// A sequence of the project, drawn by Kerf into the file `to` names,
-    /// with no sound: at the sequence's size and rate, or at the ones named,
-    /// and its picture, or the pass of it named.
-    Render {
-        sequence: String,
-        to: String,
-        size: Option<(u32, u32)>,
-        rate: Option<Rate>,
-        pass: Pass,
-        /// A clip of the sequence drawn alone, white on black, in place of a pass.
-        matte: Option<String>,
-        /// The part of the sequence drawn, in seconds from its start and for
-        /// how long: the whole of it where neither is said. A shot longer
-        /// than a model makes at once is drawn a part at a time.
-        from: Option<f64>,
-        seconds: Option<f64>,
-    },
-    /// A model asked for a file.
-    Generate(Box<Ask>),
-    /// Pictures in motion steps before it made, set end to end into the
-    /// file `to` names: the parts of a shot longer than a model makes at
-    /// once. Each part after the first loses its first `lap` frames, the
-    /// ones it has of the part before it where it went on from that one's
-    /// last frame.
-    Join {
-        parts: Vec<String>,
-        to: String,
-        lap: u32,
-    },
+/// The recipe file `media` names and has not been carried from: its steps are there, and
+/// nothing is made from them until they are the document's ([`carry`]).
+pub fn uncarried(media: &Media) -> Option<&str> {
+    media.recipe.as_deref().filter(|_| media.steps.is_empty())
 }
 
-/// A recipe as its file says it.
+/// Where the takes of `media` are kept: in the folder named for its file, or, for one
+/// whose steps are still in a recipe's file, in the one named for the recipe, where the
+/// makings of that file put them. `None` for footage, which nothing makes.
+pub(crate) fn place_of(directory: &Path, media: &Media) -> Option<Result<takes::Place>> {
+    if !media.steps.is_empty() {
+        Some(takes::Place::of_media(directory, &media.path))
+    } else {
+        uncarried(media).map(|recipe| takes::Place::of(directory, recipe, &media.path))
+    }
+}
+
+/// The folder of the project the shot that is `media` keeps files of its own in, a copy
+/// of a model's workflow among them, from the project's folder: the one its takes'
+/// folder is in.
+pub fn shot_folder(directory: &Path, media: &Media) -> Result<PathBuf> {
+    Ok(takes::Place::of_media(directory, &media.path)?.beside())
+}
+
+/// Steps as text: a line that says what the text is, then each step as the document
+/// writes it. It is how steps are handed to what shows them and kept with a take, and
+/// [`Recipe::parse`] of it is the steps again. A step's line is its number and one.
+pub fn steps_text(steps: &[Step]) -> String {
+    let mut text = format!("{HEADER}\n");
+    for step in steps {
+        text.push_str(&kerf_lang::print_step(step));
+        text.push('\n');
+    }
+    text
+}
+
+/// The steps a recipe's text says, as the document holds them under a media. A text
+/// with a line the document has no place for is refused: a `run`, which names a program
+/// to run, and a `needs`, which says what one reads.
+pub fn document_steps(text: &str) -> Result<Vec<kerf_model::making::Step>> {
+    let (steps, needs) = steps_of_text(text, None)?;
+    match needs.first() {
+        Some(file) => Err(EngineError::msg(format!(
+            "`needs {file}` is not a step: the steps a document holds are `render`, `generate`, and `join`, and what a sequence they draw reads is found from its clips"
+        ))),
+        None => Ok(steps),
+    }
+}
+
+/// The steps a recipe's text says, as the document holds them, and the files its `needs`
+/// lines name. With `folder`, the recipe's own from the project's, each file a step names
+/// is named from the project's folder as a document names it: `../refs/boat.png` in
+/// `shots` is `refs/boat.png`. A `run` is refused: a document names no program.
+fn steps_of_text(
+    text: &str,
+    folder: Option<&Path>,
+) -> Result<(Vec<kerf_model::making::Step>, Vec<String>)> {
+    use kerf_model::making::Step as Written;
+    let mut lines = text
+        .lines()
+        .enumerate()
+        .map(|(index, line)| (index + 1, line.trim()))
+        .filter(|(_, line)| !line.is_empty() && !line.starts_with('#'));
+    if !matches!(lines.next(), Some((_, HEADER))) {
+        return Err(EngineError::msg(format!("steps as text start with the line `{HEADER}`")));
+    }
+    let from_project = |file: &str| -> Result<String> {
+        match folder {
+            Some(folder) => within(folder, file, "file the recipe names").map(|inside| stored(&inside)),
+            None => Ok(file.to_owned()),
+        }
+    };
+    let mut steps: Vec<Written> = Vec::new();
+    let mut needs = Vec::new();
+    for (number, line) in lines {
+        let wrong = |what: String| EngineError::msg(format!("line {number}: {what}"));
+        let words = words(line).map_err(wrong)?;
+        match words.first().map(String::as_str) {
+            Some("run") => {
+                return Err(wrong(format!(
+                    "`run {program}` runs a program, and a document names none: the steps it holds are `render`, `generate`, and `join`. Name the program in your models file, with `{{out}}` where its file goes ({{\"{program}\": {{\"run\": [\"{program}\", …, \"{{out}}\"]}}}}), and write this line of the recipe as `generate model={program} … out={{<name>}}`: it is carried then",
+                    program = words.get(1).map_or("", String::as_str)
+                )))
+            }
+            Some("needs") => {
+                for file in &words[1..] {
+                    needs.push(from_project(file)?);
+                }
+                continue;
+            }
+            _ => {}
+        }
+        let made: Vec<String> = steps.iter().map(|step| step.makes().to_owned()).collect();
+        let mut step = Written::parse(&words, &made).map_err(wrong)?;
+        if let Written::Generate(ask) = &mut step {
+            let sources = ask
+                .guide
+                .iter_mut()
+                .chain(ask.guides.iter_mut().map(|(_, source)| source))
+                .chain(&mut ask.first)
+                .chain(&mut ask.last)
+                .chain(&mut ask.references)
+                .chain(&mut ask.workflow);
+            for source in sources {
+                if let Source::File(file) = source {
+                    *file = from_project(file)?;
+                }
+            }
+        }
+        steps.push(step);
+    }
+    kerf_model::making::check(&steps).map_err(EngineError::msg)?;
+    Ok((steps, needs))
+}
+
+/// What carrying a media's recipe into the document comes to: the edit that writes its
+/// steps under its line, and what is worth knowing of it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Carry {
+    /// The recipe the media named, as the document named it.
+    pub recipe: String,
+    /// The lines of the edit: the media's line without `recipe=`, and a `step` line for
+    /// each step, its files named from the project's folder.
+    pub script: Vec<String>,
+    /// What does not come with it, each as a line for whoever carries it.
+    pub notes: Vec<String>,
+}
+
+/// Carry the recipe media `id` of `project` names into the document: its `render`,
+/// `generate` and `join` lines as steps under the media, each file named from the project's
+/// folder in place of the recipe's, and `recipe=` taken off the media's line. Nothing is
+/// changed here: what comes back is the edit that does it. The recipe's file is left where
+/// it is, and so are its takes, whose folder is the same. A recipe with a `run` is refused:
+/// a document names no program, and it goes on being made from its file.
+///
+/// Once the edit is in the project, [`takes::mark_carried`] has the takes made from the
+/// recipe held to the steps it became, so that none is asked for again for being carried.
+pub fn carry(project: &kerf_model::Project, directory: &Path, id: &str) -> Result<Carry> {
+    let media = project
+        .media(id)
+        .ok_or_else(|| EngineError::msg(format!("no media `{id}` in this project")))?;
+    if !media.steps.is_empty() {
+        return Err(EngineError::msg(format!(
+            "media `{id}` has its steps under its line in the document already"
+        )));
+    }
+    let name = uncarried(media).ok_or_else(|| not_made(id))?.to_owned();
+    let file = inside_project(directory, &name, "recipe")?;
+    let text = std::fs::read_to_string(&file).map_err(|error| {
+        EngineError::msg(format!("cannot read the recipe {}: {error}", file.display()))
+    })?;
+    let (steps, needs) = steps_of_text(&text, Some(&folder_of(&name)))
+        .map_err(|error| EngineError::msg(format!("{name}: {error}")))?;
+    if !steps.iter().any(|step| step.makes() == OUT) {
+        return Err(EngineError::msg(format!(
+            "{name}: the recipe's last step names no `{{{OUT}}}`, so nothing says where its file goes"
+        )));
+    }
+    let mut notes = Vec::new();
+    // What the recipe said it reads beside what its steps name: a mesh a sequence it draws
+    // reads is found from the clip; anything else is no longer watched.
+    let recipe = Recipe::of_steps(&steps);
+    let meshes: Vec<String> = recipe
+        .sequences()
+        .flat_map(|sequence| takes::mesh_files(project, sequence))
+        .collect();
+    for file in needs.iter().filter(|file| !meshes.contains(file)) {
+        notes.push(format!(
+            "`{file}`, which the recipe said it reads (`needs`), is no longer watched: no step of the document reads it, so changing it does not ask for `{id}` again"
+        ));
+    }
+    // The takes a recipe made are in a folder named for the recipe, and those of steps in
+    // the document in one named for the media's file: the same, for a shot named as its
+    // recipe is.
+    let (was, now) = (
+        takes::Place::of(directory, &name, &media.path)?.stored(1),
+        takes::Place::of_media(directory, &media.path)?.stored(1),
+    );
+    if was != now {
+        notes.push(format!(
+            "the takes made so far are kept as `{was}` and those made from now on as `{now}`: the media's file is not named as its recipe is. Have the media be one of its takes first (`kerf takes {id} --use <n>`) and they stay together"
+        ));
+    }
+    let mut line = Media {
+        recipe: None,
+        ..media.clone()
+    };
+    line.steps.clear();
+    let mut script = vec![kerf_lang::print_op(
+        project,
+        kerf_model::Catalog::builtin(),
+        &kerf_model::Op::ReplaceMedia(line),
+    )];
+    script.extend(
+        steps
+            .iter()
+            .map(|step| format!("step {id} add {}", kerf_lang::print_step(step))),
+    );
+    Ok(Carry {
+        recipe: name,
+        script,
+        notes,
+    })
+}
+
+/// The step lines a script gets to have media `id`, whose steps the document holds, made
+/// by `now` in place of `was`, each a recipe's text of them ([`steps_text`]): what a change
+/// made to the text, a name set or a step added, comes to as the edit that makes it. One
+/// step that differs is that step set; anything else is every step written again.
+pub fn step_lines(id: &str, was: &str, now: &str) -> Result<Vec<String>> {
+    let (was, now) = (document_steps(was)?, document_steps(now)?);
+    let differing: Vec<usize> = (0..was.len().max(now.len()))
+        .filter(|index| was.get(*index) != now.get(*index))
+        .collect();
+    Ok(match differing.as_slice() {
+        [] => Vec::new(),
+        [one] if was.len() == now.len() => vec![format!(
+            "step {id} set {} {}",
+            one + 1,
+            kerf_lang::print_step(&now[*one])
+        )],
+        _ => (1..=was.len())
+            .rev()
+            .map(|number| format!("step {id} remove {number}"))
+            .chain(
+                now.iter()
+                    .map(|step| format!("step {id} add {}", kerf_lang::print_step(step))),
+            )
+            .collect(),
+    })
+}
+
+/// The steps that make media `id` of `project`, as text ([`steps_text`]). A media nothing
+/// makes is refused, with how one is made; so is one whose steps are still in a recipe's
+/// file, with how they are carried.
+pub fn written(project: &kerf_model::Project, id: &str) -> Result<String> {
+    let media = project
+        .media(id)
+        .ok_or_else(|| EngineError::msg(format!("no media `{id}` in this project")))?;
+    if media.steps.is_empty() {
+        return Err(match uncarried(media) {
+            Some(recipe) => not_carried(id, recipe),
+            None => not_made(id),
+        });
+    }
+    Ok(steps_text(&media.steps))
+}
+
+/// That nothing says how media `id` is made, and how that is said.
+fn not_made(id: &str) -> EngineError {
+    EngineError::msg(format!(
+        "media `{id}` has no steps that make it: write them under it with an edit, `step {id} add render <sequence> {{guide.mp4}}` and `step {id} add generate model=<name> prompt=\"…\" guide={{guide.mp4}}`"
+    ))
+}
+
+/// That media `id` still has its steps in the recipe file `recipe`, and how they come
+/// into the document, where a making reads them.
+pub fn not_carried(id: &str, recipe: &str) -> EngineError {
+    EngineError::msg(format!(
+        "the steps of media `{id}` are in the recipe file `{recipe}`, and a media is made from the steps under its line: `kerf carry {id}`, or an agent's `edit` with `carry: [\"{id}\"]`, writes them there"
+    ))
+}
+
+pub use kerf_model::making::Step;
+
+/// The steps that make a media, read for a making.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Recipe {
-    /// The files it reads, as it names them: from its own folder.
-    pub needs: Vec<String>,
     pub steps: Vec<Step>,
 }
 
 impl Recipe {
-    /// Read a recipe's text. What is wrong is said with its line.
+    /// Read steps from their text ([`steps_text`]). What is wrong is said with its line,
+    /// and steps that do not end in the media's file are refused: nothing would say
+    /// where it goes.
     pub fn parse(text: &str) -> Result<Self> {
-        let mut lines = text
-            .lines()
-            .enumerate()
-            .map(|(index, line)| (index + 1, line.trim()))
-            .filter(|(_, line)| !line.is_empty() && !line.starts_with('#'));
-        match lines.next() {
-            Some((_, HEADER)) => {}
-            _ => return Err(EngineError::msg(format!("a recipe starts with `{HEADER}`"))),
-        }
-        let mut recipe = Self {
-            needs: Vec::new(),
-            steps: Vec::new(),
-        };
-        // The files steps have made so far, which later steps may read.
-        let mut made: Vec<String> = Vec::new();
-        for (number, line) in lines {
-            let wrong =
-                |what: String| EngineError::msg(format!("line {number} of the recipe: {what}"));
-            let mut words = words(line).map_err(wrong)?;
-            let verb = words.remove(0);
-            if verb != "needs" && recipe.writes_out() {
-                return Err(wrong(format!(
-                    "the step before it writes `{{{OUT}}}`, the media's file, so it is the last"
-                )));
-            }
-            match verb.as_str() {
-                "needs" if !words.is_empty() => recipe.needs.extend(words),
-                "run" if !words.is_empty() => {
-                    let program = words.remove(0);
-                    made.extend(words.iter().flat_map(|word| stands_for(word)));
-                    recipe.steps.push(Step::Run {
-                        program,
-                        arguments: words,
-                    });
-                }
-                "render" if words.len() >= 2 => {
-                    let to = whole(&words[1]).ok_or_else(|| {
-                        wrong(format!(
-                            "`render <sequence> {{name}}` names the file it makes, such as `{{guide.mp4}}`, not `{}`",
-                            words[1]
-                        ))
-                    })?;
-                    let (size, rate, pass, matte, from, seconds) =
-                        drawn_at(&words[2..]).map_err(wrong)?;
-                    made.push(to.clone());
-                    recipe.steps.push(Step::Render {
-                        sequence: words.swap_remove(0),
-                        to,
-                        size,
-                        rate,
-                        pass,
-                        matte,
-                        from,
-                        seconds,
-                    });
-                }
-                "join" if !words.is_empty() => {
-                    let (parts, to, lap) = joined(&words, &made).map_err(wrong)?;
-                    made.push(to.clone());
-                    recipe.steps.push(Step::Join { parts, to, lap });
-                }
-                "generate" if !words.is_empty() => {
-                    let ask = Ask::parse(&words, &made).map_err(wrong)?;
-                    made.push(ask.out.clone());
-                    recipe.steps.push(Step::Generate(Box::new(ask)));
-                }
-                "needs" | "run" | "render" | "generate" | "join" => {
-                    return Err(wrong(format!(
-                        "`{verb}` is `needs <file> …`, `run <program> <arguments>`, `render <sequence> {{name}} [size=WxH] [rate=<fps>] [pass=ids|depth|relative|normals] [from=<seconds>] [seconds=<seconds>]`, `generate model=<name> prompt=\"…\" …`, or `join {{part}} {{part}} … {{name}} [lap=<frames>]`"
-                    )))
-                }
-                other => {
-                    return Err(wrong(format!(
-                        "`{other}` is not a recipe's word; it has `needs`, `run`, `render`, `generate`, and `join`"
-                    )))
-                }
-            }
-        }
-        if recipe.steps.is_empty() {
+        let steps = document_steps(text)?;
+        if steps.is_empty() {
             return Err(EngineError::msg(
-                "the recipe has no step: a `run`, a `render`, a `generate`, or a `join` line",
+                "it has no step: a `render`, a `generate`, or a `join` line",
             ));
         }
-        if !recipe.writes_out() {
+        if steps.last().is_some_and(|step| step.makes() != OUT) {
             return Err(EngineError::msg(format!(
-                "the recipe's last step names no `{{{OUT}}}`, so nothing says where its file goes"
+                "the last of its steps names no `{{{OUT}}}`, so nothing says where its file goes"
             )));
         }
-        Ok(recipe)
+        Ok(Self { steps })
     }
 
-    /// Whether the last step so far writes the media's file.
-    fn writes_out(&self) -> bool {
-        match self.steps.last() {
-            Some(Step::Run { arguments, .. }) => arguments
-                .iter()
-                .any(|argument| stands_for(argument).any(|name| name == OUT)),
-            Some(Step::Render { to, .. }) => to == OUT,
-            Some(Step::Generate(ask)) => ask.out == OUT,
-            Some(Step::Join { to, .. }) => to == OUT,
-            None => false,
+    /// The steps a document holds under a media.
+    pub fn of_steps(steps: &[Step]) -> Self {
+        Self {
+            steps: steps.to_vec(),
         }
     }
 
@@ -281,10 +432,10 @@ impl Recipe {
         })
     }
 
-    /// Every file it reads, as it names them: what `needs` lists and what
-    /// a model is handed that no step made.
+    /// Every file of the project it reads, as it names them: what a model is handed
+    /// that no step made.
     pub fn reads(&self) -> Vec<&str> {
-        let mut files: Vec<&str> = self.needs.iter().map(String::as_str).collect();
+        let mut files: Vec<&str> = Vec::new();
         for step in &self.steps {
             if let Step::Generate(ask) = step {
                 files.extend(ask.sources().filter_map(|source| match source {
@@ -304,14 +455,7 @@ impl Recipe {
         let mut made: Vec<String> = self
             .steps
             .iter()
-            .flat_map(|step| match step {
-                Step::Run { arguments, .. } => arguments
-                    .iter()
-                    .flat_map(|argument| stands_for(argument))
-                    .collect(),
-                Step::Render { to, .. } | Step::Join { to, .. } => vec![to.clone()],
-                Step::Generate(ask) => vec![ask.out.clone()],
-            })
+            .map(|step| step.makes().to_owned())
             .filter(|name| name != OUT)
             .collect();
         made.sort_unstable();
@@ -319,7 +463,7 @@ impl Recipe {
         made
     }
 
-    /// The recipe as roll `roll` of it is asked: each seed a `generate` line gives, that
+    /// The steps as roll `roll` of them is asked: each seed a `generate` step gives, that
     /// many on. A model that gives the same file for the same seed gives another for
     /// another roll, with nothing else of the shot changed.
     fn rolled(mut self, roll: u32) -> Self {
@@ -331,8 +475,8 @@ impl Recipe {
         self
     }
 
-    /// The recipe with no comments and no spare space, which is what a
-    /// take is held to: a comment changed is not the recipe changed.
+    /// Steps' text with no comments and no spare space, which is what a take is held
+    /// to: how it was typed is not the steps.
     pub fn essence(text: &str) -> String {
         text.lines()
             .map(str::trim)
@@ -340,153 +484,6 @@ impl Recipe {
             .collect::<Vec<_>>()
             .join("\n")
     }
-}
-
-/// A picture's width and height, in pixels.
-type Size = (u32, u32);
-
-/// A size as a line writes it, `1920x1080`: two whole numbers, neither 0.
-pub(crate) fn size_of(value: &str) -> Option<Size> {
-    let (width, height) = value.split_once('x')?;
-    Some((width.parse().ok()?, height.parse().ok()?))
-        .filter(|(width, height): &Size| *width > 0 && *height > 0)
-}
-
-/// What the words after `render <sequence> {name}` name: the size, the rate, the pass, and
-/// the clip a matte is of.
-type Drawn = (Option<Size>, Option<Rate>, Pass, Option<String>, Option<f64>, Option<f64>);
-
-/// A number of seconds a line gives as `name=value`: `least` or more.
-fn seconds_of(name: &str, value: &str, least: f64) -> std::result::Result<f64, String> {
-    value
-        .parse()
-        .ok()
-        .filter(|seconds: &f64| seconds.is_finite() && *seconds >= least && (least == 0.0 || *seconds > 0.0))
-        .ok_or_else(|| format!("`{name}={value}` is not a number of seconds, such as 5 or 5.0625"))
-}
-
-/// What the words after `join` name: the parts, the file they make, and how many frames
-/// each part after the first has of the one before it.
-fn joined(words: &[String], made: &[String]) -> std::result::Result<(Vec<String>, String, u32), String> {
-    let mut names = Vec::new();
-    let mut lap = 0;
-    for word in words {
-        match (whole(word), word.split_once('=')) {
-            (Some(name), _) => names.push(name),
-            (None, Some(("lap", value))) => {
-                lap = value.parse().map_err(|_| {
-                    format!("`lap={value}` is not a whole number of frames, such as 1")
-                })?;
-            }
-            _ => {
-                return Err(format!(
-                    "`{word}` is not something `join` takes: it is `join {{part}} {{part}} … {{name}} [lap=<frames>]`, each part a file a step before made"
-                ))
-            }
-        }
-    }
-    let to = names.pop().filter(|_| names.len() >= 2).ok_or_else(|| {
-        "`join` sets two or more parts end to end into the file it names last: `join {a.mp4} {b.mp4} {out}`".to_owned()
-    })?;
-    for part in &names {
-        if !made.contains(part) {
-            return Err(format!("no step before this one makes `{{{part}}}`"));
-        }
-    }
-    if names.contains(&to) {
-        return Err(format!("`join` writes `{{{to}}}`, which is one of its parts"));
-    }
-    Ok((names, to, lap))
-}
-
-fn drawn_at(words: &[String]) -> std::result::Result<Drawn, String> {
-    let (mut size, mut rate, mut pass, mut matte) = (None, None, Pass::Picture, None);
-    let (mut from, mut seconds) = (None, None);
-    for word in words {
-        match word.split_once('=') {
-            Some(("size", value)) => {
-                let (width, height) = size_of(value)
-                    .ok_or_else(|| format!("`size={value}` is not a size such as 832x480"))?;
-                if width % 2 == 1 || height % 2 == 1 {
-                    return Err(format!(
-                        "`size={value}` has an odd side, which the file cannot have; `size={}x{}` has none",
-                        width + width % 2,
-                        height + height % 2
-                    ));
-                }
-                size = Some((width, height));
-            }
-            Some(("rate", value)) => {
-                rate = Some(Rate::parse(value).map_err(|_| {
-                    format!("`rate={value}` is not a rate in frames a second, such as 16 or 23.976")
-                })?);
-            }
-            Some(("pass", value)) => {
-                pass = Pass::parse(value).ok_or_else(|| {
-                    format!(
-                        "`pass={value}` is not a pass Kerf draws: `ids`, which clip each pixel is of, `depth`, how near it is, `relative`, the same stretched to each frame's own nearest and farthest, or `normals`, which way it faces"
-                    )
-                })?;
-            }
-            Some(("matte", value)) if !value.is_empty() => matte = Some(value.to_owned()),
-            Some(("from", value)) => from = Some(seconds_of("from", value, 0.0)?),
-            Some(("seconds", value)) => seconds = Some(seconds_of("seconds", value, f64::MIN_POSITIVE)?),
-            _ => {
-                return Err(format!(
-                    "`{word}` is not something `render` takes; after the file it makes come `size=WxH`, `rate=<fps>`, `pass=ids|depth|relative|normals`, `matte=<clip>`, and the part of the sequence, `from=<seconds>` and `seconds=<seconds>`"
-                ))
-            }
-        }
-    }
-    if matte.is_some() && pass != Pass::Picture {
-        return Err("`matte=` is one clip in white on black, in place of a pass: give one of the two".to_owned());
-    }
-    Ok((size, rate, pass, matte, from, seconds))
-}
-
-/// The names in braces an argument holds: `out` and `guide.mp4` of
-/// `--out={out}` and `{guide.mp4}`. Braces around anything but a file's
-/// name, such as a line of JSON, stand for themselves.
-fn stands_for(argument: &str) -> impl Iterator<Item = String> + '_ {
-    argument.split('{').skip(1).filter_map(|rest| {
-        let name = rest.split_once('}')?.0;
-        file_name(name).then(|| name.to_owned())
-    })
-}
-
-/// The name an argument that is nothing but `{name}` holds.
-pub(crate) fn whole(argument: &str) -> Option<String> {
-    let name = argument.strip_prefix('{')?.strip_suffix('}')?;
-    file_name(name).then(|| name.to_owned())
-}
-
-/// Whether `name` can be a file a step makes: letters, digits, and `. - _`.
-fn file_name(name: &str) -> bool {
-    !name.is_empty()
-        && name
-            .chars()
-            .all(|character| character.is_ascii_alphanumeric() || "._-".contains(character))
-}
-
-/// `argument` with each `{name}` it holds as the file `place` gives it.
-fn placed(argument: &str, place: &dyn Fn(&str) -> PathBuf) -> String {
-    let mut out = String::new();
-    let mut rest = argument;
-    while let Some(open) = rest.find('{') {
-        out.push_str(&rest[..open]);
-        let after = &rest[open + 1..];
-        match after.split_once('}') {
-            Some((name, tail)) if file_name(name) => {
-                out.push_str(&place(name).to_string_lossy());
-                rest = tail;
-            }
-            _ => {
-                out.push('{');
-                rest = after;
-            }
-        }
-    }
-    out + rest
 }
 
 /// `words` as a person reads a command, quoted where one holds a space.
@@ -508,8 +505,6 @@ fn shown(words: impl IntoIterator<Item = String>) -> String {
 /// run.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Plan {
-    /// The recipe's file.
-    pub recipe: PathBuf,
     /// The take this making would be.
     pub take: u32,
     /// The take's file, which the run writes.
@@ -528,10 +523,9 @@ pub struct Plan {
     /// Which roll of the recipe this making is: how far on each seed is from the one its
     /// line gives. The recipe as it is written is roll 0.
     pub roll: u32,
-    /// The media made, and its recipe as the document names it.
+    /// The media made.
     media: String,
-    name: String,
-    /// The recipe as it was read for this plan, which is what runs.
+    /// The steps as they were read for this plan, which is what runs.
     text: String,
 }
 
@@ -563,183 +557,19 @@ pub(crate) fn within(folder: &Path, path: &str, what: &str) -> Result<PathBuf> {
     Ok(inside)
 }
 
-/// The file a recipe's text is kept in when it is written as the recipe
-/// `asked` names, and whether it has to be written. A recipe is never
-/// written over: a text that is not the one there is kept beside it, as its
-/// next version, so the document names the version a media is made from and
-/// undo goes back to the one before.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Version {
-    /// The file, from the project's folder, as a document names it.
-    pub path: String,
-    /// Whether it is a new file, to be written; else it holds the text.
-    pub new: bool,
-    /// What the file `asked` names held, when it was there and is not the text.
-    pub before: Option<String>,
-}
-
-/// Where `text` is kept, written as the recipe `asked` names in the project
-/// in `directory`: there, when nothing is; in the version of it that holds
-/// the same text already, `shots/open@2.kerfrecipe` or `shots/open.kerfrecipe`
-/// itself; or in the next version. The text is read as a recipe first, and
-/// what is wrong in it said with its line.
-pub fn version(directory: &Path, asked: &str, text: &str) -> Result<Version> {
-    let inside = within(Path::new(""), asked, "recipe")?;
-    if inside.extension().and_then(|extension| extension.to_str()) != Some(RECIPE_EXTENSION) {
-        return Err(EngineError::msg(format!(
-            "a recipe is a `.{RECIPE_EXTENSION}` file, not `{asked}`"
-        )));
-    }
-    Recipe::parse(text).map_err(|error| EngineError::msg(format!("{asked}: {error}")))?;
-    let read = |path: &Path| std::fs::read_to_string(directory.join(path)).ok();
-    let Some(there) = read(&inside) else {
-        return Ok(Version {
-            path: stored(&inside),
-            new: true,
-            before: None,
-        });
-    };
-    if there == text {
-        return Ok(Version {
-            path: stored(&inside),
-            new: false,
-            before: None,
-        });
-    }
-    let held = versions(directory, &inside);
-    if let Some((path, _, _)) = held.iter().find(|(_, _, held)| *held == text) {
-        return Ok(Version {
-            path: stored(path),
-            new: false,
-            before: Some(there),
-        });
-    }
-    let last = held.iter().map(|(_, number, _)| *number).max().unwrap_or(1);
-    Ok(Version {
-        path: stored(&version_named(&inside, last + 1)),
-        new: true,
-        before: Some(there),
-    })
-}
-
-/// The file of version `number` of the recipe at `recipe`, from the project's folder.
-fn version_named(recipe: &Path, number: u32) -> PathBuf {
-    let (base, _) = versioned(recipe);
-    let name = if number == 1 {
-        format!("{base}.{RECIPE_EXTENSION}")
-    } else {
-        format!("{base}@{number}.{RECIPE_EXTENSION}")
-    };
-    recipe.with_file_name(name)
-}
-
-/// The versions of the recipe at `recipe` that are there, in the project in `directory`: each
-/// file from the project's folder, its number, and its text.
-pub(crate) fn versions(directory: &Path, recipe: &Path) -> Vec<(PathBuf, u32, String)> {
-    let mut found = Vec::new();
-    let mut last = 1;
-    for number in 1.. {
-        let path = version_named(recipe, number);
-        match std::fs::read_to_string(directory.join(&path)) {
-            Ok(text) => {
-                last = number;
-                found.push((path, number, text));
-            }
-            // A version is there or not; numbers past a gap of a few are not looked for.
-            Err(_) if number > last + 8 => break,
-            Err(_) => {}
-        }
-    }
-    found
-}
-
-/// Write `text` as `version` says, in the project in `directory`: a new file
-/// only, never one that is there.
-pub fn write_version(directory: &Path, version: &Version, text: &str) -> Result<()> {
-    if !version.new {
-        return Ok(());
-    }
-    let file = directory.join(&version.path);
-    if let Some(folder) = file.parent() {
-        std::fs::create_dir_all(folder)?;
-    }
-    use std::io::Write;
-    let mut written = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&file)
-        .map_err(|error| {
-            EngineError::msg(format!(
-                "cannot write the recipe {}: {error}",
-                file.display()
-            ))
-        })?;
-    written.write_all(text.as_bytes())?;
-    Ok(())
-}
-
-/// Whether the recipes `a` and `b` name, from the project's folder, are versions of one recipe:
-/// `shots/open.kerfrecipe` and `shots/open@2.kerfrecipe` are.
-pub fn same_recipe(a: &str, b: &str) -> bool {
-    let family = |name: &str| {
-        within(Path::new(""), name, "recipe")
-            .ok()
-            .map(|path| (path.parent().map(Path::to_path_buf), versioned(&path).0))
-    };
-    family(a).is_some_and(|a| Some(a) == family(b))
-}
-
-/// A recipe file's name without its extension, split into the name its
-/// versions share and its version: `open@2.kerfrecipe` is `open`, 2.
-pub(crate) fn versioned(recipe: &Path) -> (String, u32) {
-    let stem = recipe
-        .file_stem()
-        .map(|stem| stem.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    match stem.rsplit_once('@') {
-        Some((base, number))
-            if !base.is_empty()
-                && !number.is_empty()
-                && number.bytes().all(|byte| byte.is_ascii_digit()) =>
-        {
-            match number.parse::<u32>() {
-                Ok(number) if number >= 2 => (base.to_owned(), number),
-                _ => (stem, 1),
-            }
-        }
-        _ => (stem, 1),
-    }
-}
-
-/// The name the versions of the recipe `recipe` names share, which is the
-/// shot's: `open` of `shots/open@2.kerfrecipe`.
-pub fn shot_name(recipe: &str) -> String {
-    versioned(Path::new(recipe)).0
-}
-
-/// Where the file `file` is, named as the recipe of media `id` names its
-/// files, from its own folder: its place on this machine, and its path from
-/// the project's folder as a document would write it. A path that leaves
-/// the project is refused, and so is a media that names no recipe.
+/// Where the file `file` is, named as the steps that make media `id` name their files,
+/// from the project's folder: its place on this machine, and its path as a document
+/// writes it. A path that leaves the project is refused, and so is a media nothing makes.
 pub fn beside(
     project: &kerf_model::Project,
     directory: &Path,
     id: &str,
     file: &str,
 ) -> Result<(PathBuf, String)> {
-    let media = project
-        .media(id)
-        .ok_or_else(|| EngineError::msg(format!("no media `{id}` in this project")))?;
-    let name = media
-        .recipe
-        .as_deref()
-        .ok_or_else(|| EngineError::msg(format!("media `{id}` names no recipe")))?;
-    let inside = within(&folder_of(name), file, "file the recipe names")?;
+    written(project, id)?;
+    let inside = within(Path::new(""), file, "file its steps name")?;
     Ok((directory.join(&inside), stored(&inside)))
 }
-
-/// What a recipe's file ends with.
-const RECIPE_EXTENSION: &str = "kerfrecipe";
 
 /// `directory` as a whole path, from the root.
 fn rooted(directory: &Path) -> Result<PathBuf> {
@@ -767,43 +597,24 @@ fn folder_of(recipe: &str) -> PathBuf {
         .unwrap_or_default()
 }
 
-/// A media's recipe, read: its name in the document, its text, and what
-/// the text says.
+/// The steps that make a media, read: their text, and what the text says, as its models
+/// are asked.
 pub(crate) struct Read {
-    pub name: String,
     pub text: String,
     pub recipe: Recipe,
 }
 
-/// Read the recipe media `id` of `project` names.
+/// Read the steps that make media `id` of `project`.
 pub(crate) fn read(project: &kerf_model::Project, directory: &Path, id: &str) -> Result<Read> {
-    let media = project
-        .media(id)
-        .ok_or_else(|| EngineError::msg(format!("no media `{id}` in this project")))?;
-    let name = media.recipe.as_deref().ok_or_else(|| {
-        EngineError::msg(format!(
-            "media `{id}` names no recipe; add `recipe=\"<file>\"` to its line with `media replace`"
-        ))
-    })?;
-    let file = inside_project(directory, name, "recipe")?;
-    let text = std::fs::read_to_string(&file).map_err(|error| {
-        EngineError::msg(format!(
-            "cannot read the recipe {}: {error}",
-            file.display()
-        ))
-    })?;
-    let recipe = Recipe::parse(&text)?.told(directory, &folder_of(name))?;
-    Ok(Read {
-        name: name.to_owned(),
-        text,
-        recipe,
-    })
+    let text = written(project, id)?;
+    let recipe = Recipe::parse(&text)?.told(directory)?;
+    Ok(Read { text, recipe })
 }
 
 /// What making media `id` of `project`, kept in `directory`, would run:
-/// its recipe read, and nothing run. A recipe that could not run is
+/// its steps read, and nothing run. Steps that could not run are
 /// refused here, with why: a model that is not set up, a sequence the
-/// project has not, a file it needs that is not there.
+/// project has not, a file they need that is not there.
 pub fn plan(
     project: &kerf_model::Project,
     directory: &Path,
@@ -822,7 +633,7 @@ pub fn next_roll(project: &kerf_model::Project, directory: &Path, id: &str) -> R
         .ok_or_else(|| EngineError::msg(format!("no media `{id}` in this project")))?;
     Ok(takes(project, directory, media)?
         .iter()
-        .filter(|take| take.recipe.as_deref() == media.recipe.as_deref())
+        .filter(|take| take.current)
         .map(|take| take.rolled + 1)
         .max()
         .unwrap_or(0))
@@ -837,39 +648,35 @@ pub fn plan_rolled(
     models: &Models,
     roll: u32,
 ) -> Result<Plan> {
-    // Each path a plan holds is whole: a step runs in its recipe's folder, where a path from
-    // wherever this was asked does not lead.
+    // Each path a plan holds is whole: a step runs in the project's folder, where a path
+    // from wherever this was asked does not lead.
     let directory = &rooted(directory)?;
-    let Read { name, text, recipe } = read(project, directory, id)?;
+    let Read { text, recipe } = read(project, directory, id)?;
     let recipe = recipe.rolled(roll);
     let media = project.media(id).expect("read found it");
-    let folder = folder_of(&name);
     for sequence in recipe.sequences() {
         if project.sequence(sequence).is_none() {
             return Err(EngineError::msg(format!(
-                "the recipe renders sequence `{sequence}`, which this project has not"
+                "the steps render sequence `{sequence}`, which this project has not"
             )));
         }
     }
     let made = recipe.makes();
     for file in recipe.reads() {
-        let inside = within(&folder, file, "file the recipe needs")?;
+        let inside = within(Path::new(""), file, "file the making needs")?;
         if !directory.join(&inside).is_file() {
-            // The two ways a file that is there is named so that it is not found.
+            // A file that is there, named so that it is not found.
             let why = if made.iter().any(|name| name == file) {
                 format!(
                     ": `{file}` is a file a step makes, which a later step names in braces, `{{{file}}}`"
                 )
             } else if stored(&inside) != file {
-                format!(
-                    ": it names `{file}`, and a file is named from the recipe's own folder, `{}`",
-                    stored(&folder)
-                )
+                format!(": it names `{file}`, and a file is named from the project's folder")
             } else {
                 String::new()
             };
             return Err(EngineError::msg(format!(
-                "the recipe needs `{}`, which is not there{why}",
+                "the steps need `{}`, which is not there{why}",
                 stored(&inside)
             )));
         }
@@ -883,20 +690,13 @@ pub fn plan_rolled(
     for model in recipe.models() {
         models.command(model)?;
     }
-    let place = takes::Place::of(directory, &name, &media.path)?;
+    let place = takes::Place::of_media(directory, &media.path)?;
     let take = place.next();
     let working = place.working(take);
     let steps = recipe
         .steps
         .iter()
         .map(|step| match step {
-            Step::Run { program, arguments } => shown(
-                std::iter::once(program.clone()).chain(
-                    arguments
-                        .iter()
-                        .map(|argument| placed(argument, &|name| place.file_for(take, name))),
-                ),
-            ),
             Step::Join { parts, to, lap } => format!(
                 "Kerf joins {} end to end into {}{}",
                 parts
@@ -969,7 +769,6 @@ pub fn plan_rolled(
         })
         .collect::<Vec<_>>();
     Ok(Plan {
-        recipe: directory.join(&name),
         take,
         file: place.file(take),
         stored: place.stored(take),
@@ -978,7 +777,6 @@ pub fn plan_rolled(
         notes: notes(project, &recipe, models),
         roll,
         media: id.to_owned(),
-        name,
         text,
     })
 }
@@ -1217,13 +1015,10 @@ pub fn make(
     let media = project
         .media(&plan.media)
         .ok_or_else(|| EngineError::msg(format!("no media `{}` in this project", plan.media)))?;
-    let folder = folder_of(&plan.name);
-    let recipe = Recipe::parse(&plan.text)?
-        .told(directory, &folder)?
-        .rolled(plan.roll);
-    let place = takes::Place::of(directory, &plan.name, &media.path)?;
+    let recipe = Recipe::parse(&plan.text)?.told(directory)?.rolled(plan.roll);
+    let place = takes::Place::of_media(directory, &media.path)?;
     // What the take is made from, read before anything runs.
-    let from = takes::from(project, directory, &folder, &plan.text, &recipe)?;
+    let from = takes::from(project, directory, &plan.text, &recipe)?;
     for model in recipe.models() {
         models.command(model)?;
     }
@@ -1237,7 +1032,6 @@ pub fn make(
     let making_it = Making {
         project,
         directory,
-        folder: &folder,
         place: &place,
         take,
         models,
@@ -1253,7 +1047,7 @@ pub fn make(
             .and_then(|()| match std::fs::metadata(&making) {
                 Ok(metadata) if metadata.is_file() && metadata.len() > 0 => Ok(()),
                 _ => Err(EngineError::msg(format!(
-                    "the recipe ended well and wrote nothing to {}",
+                    "the steps ended well and wrote nothing to {}",
                     making.display()
                 ))),
             });
@@ -1267,7 +1061,7 @@ pub fn make(
         // What it was made from, to go back to: not what the take stands on, so one that
         // cannot be kept is still a take.
         let _ = takes::keep(&place, take, &plan.text, plan.roll, &|named| {
-            within(&folder, named, "file")
+            within(Path::new(""), named, "file")
                 .ok()
                 .and_then(|inside| std::fs::read_to_string(directory.join(inside)).ok())
         });
@@ -1283,9 +1077,8 @@ pub fn make(
 /// One making under way: what it reads, where it runs, and what it writes.
 struct Making<'a> {
     project: &'a kerf_model::Project,
-    /// The project's folder, and the recipe's folder in it.
+    /// The project's folder, which a step runs in and names its files from.
     directory: &'a Path,
-    folder: &'a Path,
     place: &'a takes::Place,
     take: u32,
     models: &'a Models,
@@ -1293,7 +1086,7 @@ struct Making<'a> {
 }
 
 impl Making<'_> {
-    /// Run `command` in the recipe's folder to its end; one that does not
+    /// Run `command` in the project's folder to its end; one that does not
     /// end well is an error with what it said.
     fn supervised(
         &self,
@@ -1301,7 +1094,7 @@ impl Making<'_> {
         program: &str,
         on_line: &mut dyn FnMut(&str),
     ) -> Result<()> {
-        command.current_dir(self.directory.join(self.folder));
+        command.current_dir(self.directory);
         let finished = sidecar::run(command, self.cancellation, on_line)?;
         if finished.status.success() {
             Ok(())
@@ -1323,15 +1116,6 @@ impl Making<'_> {
     fn run(&self, recipe: &Recipe, on_line: &mut dyn FnMut(&str)) -> Result<()> {
         for step in &recipe.steps {
             match step {
-                Step::Run { program, arguments } => {
-                    let mut command = Command::new(program);
-                    command.args(
-                        arguments
-                            .iter()
-                            .map(|argument| placed(argument, &|name| self.file_for(name))),
-                    );
-                    self.supervised(command, program, on_line)?;
-                }
                 Step::Join { parts, to, lap } => {
                     on_line(&format!("joining {} parts", parts.len()));
                     let files: Vec<PathBuf> = parts.iter().map(|part| self.file_for(part)).collect();
@@ -1394,9 +1178,10 @@ impl Making<'_> {
                             .collect::<std::result::Result<Vec<_>, _>>()
                             .map_err(EngineError::msg)?
                     };
-                    let mut asked = ask.request(
+                    let mut asked = model::request(
+                        ask,
                         &|file| {
-                            within(self.folder, file, "file the recipe needs")
+                            within(Path::new(""), file, "file the making needs")
                                 .map(|inside| self.directory.join(inside))
                         },
                         &|name| self.file_for(name),
@@ -1426,13 +1211,15 @@ impl Making<'_> {
                         }
                     }
                     std::fs::write(&request, serde_json::to_vec_pretty(&asked)?)?;
-                    let words = self.models.command(&ask.model)?;
+                    let words = model::command_for(
+                        &ask.model,
+                        self.models.command(&ask.model)?,
+                        &request,
+                        &asked,
+                        self.models.takes(&ask.model),
+                    )?;
                     let mut command = Command::new(&words[0]);
-                    command.args(
-                        words[1..]
-                            .iter()
-                            .map(|word| word.replace(model::REQUEST, &request.to_string_lossy())),
-                    );
+                    command.args(&words[1..]);
                     self.supervised(command, &words[0], on_line)?;
                 }
             }

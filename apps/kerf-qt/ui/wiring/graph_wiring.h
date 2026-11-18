@@ -5,12 +5,16 @@
 // MainWindow, as each region's wiring is.
 //
 // Engine paths:
-//   the graph        recipe_get {media} -> recipe {media, recipe, name, text, nodes, edges, error?, cannot?, notes}
+//   the graph        recipe_get {media} -> recipe {media, recipe, name, text, nodes, edges, error?, cannot?, notes, document?}
+//                    (document true, recipe "", name its id, text its steps after a `kerf-recipe 1`
+//                    line; edits below carry that text as `was` and become step lines, one edit.
+//                    A media whose steps are still in a recipe file is not graphed: the carry is
+//                    offered, media_carry, as the bin's Carry Steps into the Document…)
 //   a field set      recipe_edit {media, was, line, key, nth, value?} -> recipe {…, edited}
-//                    (`was` is the text the graph was read from: a file changed since is left alone)
+//                    (`was` is the text the graph was read from: steps changed since are left alone)
 //   a step added     recipe_edit {media, was, add: guide|model|join} -> recipe {…, edited, added: <its line>}
 //   a step deleted   recipe_edit {media, was, line, remove: true} -> recipe {…, edited}
-//   a take's recipe restored   recipe_edit {media, was, restore: <take>} -> recipe {…, edited}
+//   a take's steps restored    recipe_edit {media, was, restore: <take>} -> recipe {…, edited}
 //   a signal drawn   edit {ops: [set <clip> value {keys}]}, as the timeline's own drawing
 //   a clip from footage     shot_picture {clip, of} -> shot_picture {path}, the clip's first frame to point on;
 //                           shot_follow {clip, of, points, outside} -> state, then shot_followed {says}, or error
@@ -21,7 +25,7 @@
 //                        text, nodes, blanks}, for a model its entry runs with kerf-comfy
 //   a value set in it    workflow_edit {media, line, was, node, input, value} -> workflow, then recipe
 //   a link pointed elsewhere   workflow_edit {media, line, was, node, input, link: [from, output]} -> the same
-//                        (the first writes the shot's own copy beside its recipe and names it on the line)
+//                        (the first writes the shot's own copy in the project and names it on the step's line)
 //   takes held to their guide   takes_read {media} -> take_read {media, take, overlap, clips} for each
 //                        take as it is read, then takes_read {media, best?}; no model is run
 //
@@ -55,8 +59,10 @@ public:
     QWidget *cover() const;
     RecipeGraphPanel *panel() const { return m_panel; }
 
-    // Opens the graph of `media`'s recipe over the window, asking the bridge
-    // for it; a media that names no recipe opens nothing.
+    // Opens the graph of how `media` is made over the window, asking the bridge
+    // for it; a media not made by steps opens nothing, and one whose steps are
+    // still in a recipe file offers to carry them into the document instead
+    // (MainWindow::carryMedia).
     void open(const QString &media);
     // The same once the project has said that media, with `node` chosen once
     // its graph is said, or with `workflow:<line>` the workflow of the model on

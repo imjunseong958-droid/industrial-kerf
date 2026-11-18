@@ -23,7 +23,7 @@
 
 use super::model::{Ask, Models, Source};
 use super::signal::Signal;
-use super::{folder_of, inside_project, stored, text::step_lines, versioned, within, Recipe, Step};
+use super::{stored, text::step_lines, within, Recipe, Step};
 use crate::error::{EngineError, Result};
 use kerf_compose::Pass;
 use kerf_model::{Content, Param, Project, Value};
@@ -75,8 +75,6 @@ pub enum Kind {
     Render,
     /// A `generate` step: a model asked for a file.
     Model,
-    /// A `run` step: a program.
-    Run,
     /// A `join` step: parts of a longer shot set end to end.
     Join,
     /// A file of the project a step reads.
@@ -129,10 +127,15 @@ pub struct Edge {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Graph {
     /// The media made, its recipe as the document names it, and the shot's name.
+    /// Steps the document holds under the media have no recipe to name: `recipe`
+    /// is then empty, and `document` says so.
     pub media: String,
     pub recipe: String,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub document: bool,
     pub name: String,
-    /// The recipe's text, as its file holds it.
+    /// The steps' text: as the recipe's file holds it, or written out from the
+    /// document, a step a line after the first.
     pub text: String,
     pub nodes: Vec<Node>,
     pub edges: Vec<Edge>,
@@ -253,7 +256,7 @@ impl Building<'_> {
     /// The node of a file of the project, named as the recipe names it.
     fn file(&mut self, file: &str) -> String {
         self.read(format!("file:{file}"), |building| {
-            let inside = within(building.folder, file, "file the recipe needs").ok();
+            let inside = within(building.folder, file, "file a step names").ok();
             let there = inside
                 .as_ref()
                 .is_some_and(|inside| building.directory.join(inside).is_file());
@@ -592,25 +595,21 @@ impl Building<'_> {
 /// The most points a signal's curve is given as: a long clip is read every few frames.
 const POINTS: usize = 512;
 
-/// The recipe media `id` of `project`, kept in `directory`, names, as a
-/// graph. A text that does not read as a recipe is a graph with no nodes
-/// that says why (`error`); one that reads and cannot be made says that
-/// (`cannot`) and is laid out all the same. Nothing is run.
+/// The steps that make media `id` of `project`, kept in `directory`, as a
+/// graph. Steps that do not end in the media's file are a graph with no nodes
+/// that says why (`error`); ones that read and cannot be made say that
+/// (`cannot`) and are laid out all the same. Nothing is run.
 pub fn graph(project: &Project, directory: &Path, id: &str, models: &Models) -> Result<Graph> {
     let media = project
         .media(id)
         .ok_or_else(|| EngineError::msg(format!("no media `{id}` in this project")))?;
-    let name = media.recipe.as_deref().ok_or_else(|| {
-        EngineError::msg(format!("media `{id}` names no recipe, so there is no graph of how it is made"))
-    })?;
-    let file = inside_project(directory, name, "recipe")?;
-    let text = std::fs::read_to_string(&file).map_err(|error| {
-        EngineError::msg(format!("cannot read the recipe {}: {error}", file.display()))
-    })?;
+    let text = super::written(project, id)?;
     let mut graph = Graph {
         media: id.to_owned(),
-        recipe: name.to_owned(),
-        name: versioned(Path::new(name)).0,
+        // The steps are the document's own: no file is named, and the shot goes by its media.
+        recipe: String::new(),
+        document: true,
+        name: id.to_owned(),
         text,
         nodes: Vec::new(),
         edges: Vec::new(),
@@ -625,7 +624,7 @@ pub fn graph(project: &Project, directory: &Path, id: &str, models: &Models) -> 
             return Ok(graph);
         }
     };
-    let folder = folder_of(name);
+    let folder = std::path::PathBuf::new();
     let cast = super::cast::Cast::read(directory).ok();
     let mut building = Building {
         project,
@@ -639,7 +638,6 @@ pub fn graph(project: &Project, directory: &Path, id: &str, models: &Models) -> 
         out: Gives::of_file(&media.path),
     };
     let lines = step_lines(&graph.text);
-    let mut runs = Vec::new();
     let mut last = None;
     for (step, line) in recipe.steps.iter().zip(lines) {
         let node = match step {
@@ -733,72 +731,8 @@ pub fn graph(project: &Project, directory: &Path, id: &str, models: &Models) -> 
                 building.makers.insert(to.clone(), id.clone());
                 id
             }
-            Step::Run { program, arguments } => {
-                // A name in braces that a step before made is read; any other is made here.
-                let named: Vec<String> = arguments
-                    .iter()
-                    .flat_map(|argument| super::stands_for(argument))
-                    .collect();
-                let makes: Vec<&String> = named
-                    .iter()
-                    .filter(|name| !building.makers.contains_key(*name))
-                    .collect();
-                let id = building.ids.of(match makes.first() {
-                    Some(first) => format!("made:{first}"),
-                    None => "run".to_owned(),
-                });
-                let mut holds = Map::new();
-                holds.insert("program".to_owned(), json!(program));
-                holds.insert("arguments".to_owned(), json!(arguments));
-                holds.insert("makes".to_owned(), json!(makes));
-                building.nodes.push(Node {
-                    id: id.clone(),
-                    kind: Kind::Run,
-                    title: Path::new(program)
-                        .file_name()
-                        .map(|name| name.to_string_lossy().into_owned())
-                        .unwrap_or_else(|| program.clone()),
-                    detail: super::shown(arguments.iter().cloned()),
-                    gives: makes
-                        .first()
-                        .map_or(Gives::File, |first| building.made(first)),
-                    line: Some(line),
-                    holds,
-                });
-                let mut read = 0;
-                for name in &named {
-                    if let Some(maker) = building.makers.get(name).cloned() {
-                        let gives = building.made(name);
-                        building.edge(maker, &id, "reads", read, gives);
-                        read += 1;
-                    }
-                }
-                for name in makes {
-                    building.makers.insert(name.clone(), id.clone());
-                }
-                runs.push((id.clone(), arguments.clone()));
-                id
-            }
         };
         last = Some(node);
-    }
-    // A file a recipe `needs` is one a program reads: it goes to the runs that name it,
-    // and to every run where none does.
-    for (nth, needed) in recipe.needs.iter().enumerate() {
-        let from = building.file(needed);
-        let naming: Vec<&String> = runs
-            .iter()
-            .filter(|(_, arguments)| arguments.iter().any(|argument| argument.contains(needed.as_str())))
-            .map(|(id, _)| id)
-            .collect();
-        let to: Vec<String> = if naming.is_empty() {
-            runs.iter().map(|(id, _)| id.clone()).collect()
-        } else {
-            naming.into_iter().cloned().collect()
-        };
-        for run in to {
-            building.edge(from.clone(), &run, "needs", nth, Gives::of_file(needed));
-        }
     }
     // What the last step writes is the shot: its takes.
     let made = super::takes::takes(project, directory, media).unwrap_or_default();
@@ -862,17 +796,27 @@ pub fn graph(project: &Project, directory: &Path, id: &str, models: &Models) -> 
 mod tests {
     use super::*;
 
+    /// `steps`, a step a line, as the document holds them under a media's line.
+    fn under(steps: &str) -> String {
+        steps
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .map(|line| format!("  {line}\n"))
+            .collect()
+    }
+
     /// A project with a court, a ball that moves across it, and a signal, whose media
-    /// `shot` the recipe `text` makes, kept in a folder with the picture the recipe names.
-    fn court(text: &str) -> (tempfile::TempDir, Project) {
+    /// `shot` the steps `steps` make, kept in a folder with the picture they name.
+    fn court(steps: &str) -> (tempfile::TempDir, Project) {
         let folder = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(folder.path().join("shots")).unwrap();
         std::fs::create_dir_all(folder.path().join("refs")).unwrap();
         std::fs::write(folder.path().join("refs/court.png"), "a picture").unwrap();
-        std::fs::write(folder.path().join("shots/bounce.kerfrecipe"), text).unwrap();
         let project = kerf_lang::parse_document(
-            "kerf 1\nproject name=\"court\"\n\
-             media shot path=\"shots/bounce.mp4\" rate=16 dur=4s video=832x480 recipe=\"shots/bounce.kerfrecipe\"\n\
+            &format!(
+                "kerf 1\nproject name=\"court\"\n\
+             media shot path=\"shots/bounce.mp4\" rate=16 dur=4s video=832x480\n{}\
              sequence main rate=24 size=1920x1080 audio=48000\n\
              sequence court name=\"The court\" rate=24 size=1920x1080 audio=48000\n\
              \x20 track V1 video\n\
@@ -880,10 +824,12 @@ mod tests {
              \x20     set three_d=true\n\
              \x20 track V2 video\n\
              \x20   clip ball gen=solid@1 at=0f dur=96f\n\
-             \x20     set path=\"-0.4,-0.3 0,0.3 0.4,-0.2\" along={0f:0 95f:1}\n\
+             \x20     set path=\"-0.4,-0.3 0,0.3 0.4,-0.2\" along={{0f:0 95f:1}}\n\
              \x20 track V3 video\n\
              \x20   clip bounce gen=signal@1 at=0f dur=96f\n\
-             \x20     set value={0f:0 47f:1 95f:0}\n",
+             \x20     set value={{0f:0 47f:1 95f:0}}\n",
+                under(steps)
+            ),
             kerf_model::Catalog::builtin(),
         )
         .expect("a project")
@@ -891,11 +837,10 @@ mod tests {
         (folder, project)
     }
 
-    const BOUNCE: &str = "kerf-recipe 1\n\
-        # A basketball bouncing on a court.\n\
-        render court {depth.mp4} pass=depth size=832x480 rate=16\n\
+    /// A basketball bouncing on a court.
+    const BOUNCE: &str = "render court {depth.mp4} pass=depth size=832x480 rate=16\n\
         generate model=still prompt=\"an orange basketball\" seed=3 out={ball.png}\n\
-        generate model=video prompt=\"it bounces\" guide={depth.mp4} ref={ball.png} ref=../refs/court.png moves=ball signal=bounce seconds=4 seed=7 strength=0.8\n";
+        generate model=video prompt=\"it bounces\" guide={depth.mp4} ref={ball.png} ref=refs/court.png signal=bounce moves=ball seconds=4 seed=7 strength=0.8\n";
 
     #[test]
     fn a_signal_says_which_clips_of_its_sequence_play_a_sound() {
@@ -908,8 +853,9 @@ mod tests {
         assert_eq!(listed(&project), json!([]));
         // A thud on a sound track, and a clip of the same recording's picture, which is not one.
         let with_sound = kerf_lang::parse_document(
-            "kerf 1\nproject name=\"court\"\n\
-             media shot path=\"shots/bounce.mp4\" rate=16 dur=4s video=832x480 recipe=\"shots/bounce.kerfrecipe\"\n\
+            &format!(
+                "kerf 1\nproject name=\"court\"\n\
+             media shot path=\"shots/bounce.mp4\" rate=16 dur=4s video=832x480\n{}\
              media a1 path=\"thud.mov\" rate=24 dur=4s video=320x180 audio=1ch@48000\n\
              sequence court rate=24 size=1920x1080 audio=48000\n\
              \x20 track V1 video\n\
@@ -920,6 +866,8 @@ mod tests {
              \x20   clip bounce gen=signal@1 at=0f dur=96f\n\
              \x20 track A1 audio\n\
              \x20   clip thud name=\"Ball on the floor\" media=a1 src=0f at=0f dur=96f\n",
+                under(BOUNCE)
+            ),
             kerf_model::Catalog::builtin(),
         );
         project = with_sound.expect("a project").project;
@@ -929,8 +877,7 @@ mod tests {
     #[test]
     fn a_longer_shot_is_laid_out_as_its_parts_and_their_join() {
         let (folder, project) = court(
-            "kerf-recipe 1\n\
-             render court {d1.mp4} pass=depth seconds=5.0625\n\
+            "render court {d1.mp4} pass=depth seconds=5.0625\n\
              render court {d2.mp4} pass=depth from=5 seconds=5.0625\n\
              generate model=video prompt=\"it bounces\" guide={d1.mp4} out={a.mp4}\n\
              generate model=video prompt=\"it bounces\" guide={d2.mp4} first={a.mp4} from=5 out={b.mp4}\n\
@@ -1029,11 +976,13 @@ mod tests {
     }
 
     #[test]
-    fn a_recipe_is_its_steps_and_what_they_read_wired() {
+    fn steps_are_laid_out_with_what_they_read_wired() {
         let (folder, project) = court(BOUNCE);
         let graph = graph(&project, folder.path(), "shot", &models(folder.path())).unwrap();
-        assert_eq!((graph.name.as_str(), graph.recipe.as_str()), ("bounce", "shots/bounce.kerfrecipe"));
-        assert_eq!(graph.text, BOUNCE);
+        // The steps are the document's: no recipe is named, and the shot goes by its media.
+        assert_eq!((graph.name.as_str(), graph.recipe.as_str(), graph.document), ("shot", "", true));
+        assert_eq!(graph.text, super::super::steps_text(&project.media[0].steps));
+        assert_eq!(graph.text, format!("kerf-recipe 1\n{BOUNCE}"));
         assert_eq!(graph.error, None);
         assert_eq!(
             edges(&graph),
@@ -1041,7 +990,7 @@ mod tests {
                 "sequence:court -> made:depth.mp4 sequence Video",
                 "made:depth.mp4 -> made:out guide Video",
                 "made:ball.png -> made:out ref Image",
-                "file:../refs/court.png -> made:out ref[1] Image",
+                "file:refs/court.png -> made:out ref[1] Image",
                 "moves:ball -> made:out moves Path",
                 "signal:bounce -> made:out signal Signal",
                 "made:out -> takes take Video",
@@ -1049,14 +998,14 @@ mod tests {
         );
         // A step is found by the line it is, and says what its line holds.
         let depth = node(&graph, "made:depth.mp4");
-        assert_eq!((depth.kind, depth.line), (Kind::Render, Some(3)));
+        assert_eq!((depth.kind, depth.line), (Kind::Render, Some(2)));
         assert_eq!((depth.title.as_str(), depth.detail.as_str()), ("Depth guide", "832×480 · 16 fps"));
         assert_eq!(depth.holds["pass"], "depth");
         let still = node(&graph, "made:ball.png");
-        assert_eq!((still.kind, still.line, still.gives), (Kind::Model, Some(4), Gives::Image));
+        assert_eq!((still.kind, still.line, still.gives), (Kind::Model, Some(3), Gives::Image));
         assert_eq!((still.holds["seed"].as_u64(), still.holds["prompt"].as_str()), (Some(3), Some("an orange basketball")));
         let video = node(&graph, "made:out");
-        assert_eq!((video.line, video.gives), (Some(5), Gives::Video));
+        assert_eq!((video.line, video.gives), (Some(4), Gives::Video));
         assert_eq!(video.holds["setUp"], true);
         // What the line sets, with what the model has when it does not; then what it leaves.
         assert_eq!(
@@ -1076,11 +1025,11 @@ mod tests {
         let moves = node(&graph, "moves:ball");
         assert_eq!(moves.holds["path"], "-0.4,-0.3 0,0.3 0.4,-0.2");
         assert_eq!(moves.detail, "where it goes in court");
-        let file = node(&graph, "file:../refs/court.png");
+        let file = node(&graph, "file:refs/court.png");
         assert_eq!((file.title.as_str(), file.detail.as_str(), &file.holds["inProject"]), ("court.png", "refs", &json!("refs/court.png")));
         // No take yet, and it wants one.
         let takes = node(&graph, "takes");
-        assert_eq!((takes.title.as_str(), takes.detail.as_str()), ("bounce", "no take yet"));
+        assert_eq!((takes.title.as_str(), takes.detail.as_str()), ("shot", "no take yet"));
         assert_eq!(takes.holds["wants"], "its file is not there yet");
         assert_eq!(graph.cannot, None);
     }
@@ -1094,43 +1043,30 @@ mod tests {
         let ada = node(&graph, "cast:Ada");
         assert_eq!((ada.kind, ada.detail.as_str()), (Kind::Cast, "not in cast.kerfcast"));
         assert!(graph.cannot.is_some());
-        // A text that is no recipe has no nodes and says its line.
-        std::fs::write(folder.path().join("shots/bounce.kerfrecipe"), "kerf-recipe 1\nrender court\n").unwrap();
+        // Steps that do not end in the media's file have no nodes and say why.
+        let (folder, project) = court("render court {d.mp4}");
         let graph = super::graph(&project, folder.path(), "shot", &none).unwrap();
         assert!(graph.nodes.is_empty() && graph.edges.is_empty());
-        assert!(graph.error.as_deref().unwrap().starts_with("line 2 of the recipe"));
-        assert_eq!(graph.text, "kerf-recipe 1\nrender court\n");
-    }
-
-    #[test]
-    fn a_program_reads_what_was_made_and_what_the_recipe_needs() {
-        let (folder, project) = court(
-            "kerf-recipe 1\nneeds scene.json look.cube\nrun vork scene.json --out {rough.mp4}\nrun grade {rough.mp4} --out {out}\n",
-        );
-        let graph = graph(&project, folder.path(), "shot", &models(folder.path())).unwrap();
-        assert_eq!(
-            edges(&graph),
-            [
-                "made:rough.mp4 -> made:out reads Video",
-                "file:scene.json -> made:rough.mp4 needs File",
-                "file:look.cube -> made:rough.mp4 needs[1] File",
-                "file:look.cube -> made:out needs[1] File",
-                "made:out -> takes take Video",
-            ]
-        );
-        assert_eq!(node(&graph, "made:rough.mp4").title, "vork");
-        assert_eq!(node(&graph, "file:scene.json").detail, "not there");
+        assert!(graph.error.as_deref().unwrap().contains("names no `{out}`"), "{:?}", graph.error);
+        assert_eq!(graph.text, "kerf-recipe 1\nrender court {d.mp4}\n");
+        // A media whose steps are still in a recipe's file is not laid out: they are carried first.
+        let (folder, project) = court("");
+        let mut uncarried = project.clone();
+        uncarried.media[0].recipe = Some("shots/bounce.kerfrecipe".to_owned());
+        let refused = super::graph(&uncarried, folder.path(), "shot", &none).unwrap_err().to_string();
+        assert!(refused.contains("`kerf carry shot`"), "{refused}");
+        assert!(super::graph(&project, folder.path(), "shot", &none).unwrap_err().to_string().contains("has no steps that make it"));
     }
 
     #[test]
     fn a_workflow_a_line_names_is_a_file_the_model_reads() {
-        let (folder, project) = court(&BOUNCE.replace("strength=0.8", "strength=0.8 workflow=bounce.video.comfy.json"));
+        let (folder, project) = court(&BOUNCE.replace("strength=0.8", "strength=0.8 workflow=shots/bounce.video.comfy.json"));
         std::fs::write(folder.path().join("shots/bounce.video.comfy.json"), "{}").unwrap();
         let graph = graph(&project, folder.path(), "shot", &models(folder.path())).unwrap();
-        assert!(edges(&graph).contains(&"file:bounce.video.comfy.json -> made:out workflow File".to_owned()));
-        let file = node(&graph, "file:bounce.video.comfy.json");
+        assert!(edges(&graph).contains(&"file:shots/bounce.video.comfy.json -> made:out workflow File".to_owned()));
+        let file = node(&graph, "file:shots/bounce.video.comfy.json");
         assert_eq!((file.detail.as_str(), &file.holds["inProject"]), ("shots", &json!("shots/bounce.video.comfy.json")));
-        assert_eq!(node(&graph, "made:out").holds["workflow"], "bounce.video.comfy.json");
+        assert_eq!(node(&graph, "made:out").holds["workflow"], "shots/bounce.video.comfy.json");
         // A line that names none says so.
         assert_eq!(node(&graph, "made:ball.png").holds["workflow"], Json::Null);
         assert_eq!(graph.cannot, None);

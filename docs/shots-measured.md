@@ -6,6 +6,12 @@ way, as it was written when it was done. The architecture keeps what each
 came to; [shots.md](shots.md) says how each is used. The numbers at the
 head of each part are the architecture's.
 
+When this was written a shot's steps were in a recipe, a text file beside
+the project (`shots/readback.kerfrecipe`), and the record names them so.
+They are the document's now, lines under the media each makes, and the same
+steps are in the `project.kerf` of the fixture named, under the media of the
+recipe's name ([shots.md](shots.md#steps)).
+
 3. **Footage into the scene, and a picture read back.** What people do in
    ComfyUI with a filmed shot is one loop, and Kerf wants the whole of it:
    the shot is made into a scene, its set as a mesh or as splats and its
@@ -462,7 +468,7 @@ head of each part are the architecture's.
 5. **More than one guide on a line**, which is in (2026-11-13): a line names each guide beside the first by what it is
    of, `guide={picture.mp4} guide_depth={depth.mp4}`, the request holds
    them under `guides`, a take is held to each, and `kerf-comfy` sends one
-   to the workflow blank of its name ([shots.md](shots.md#recipes)). A
+   to the workflow blank of its name ([shots.md](shots.md#steps)). A
    It was run on the one model in reach, which reads a picture and a
    mask of it (`kerf-comfy`'s `shot-into`): the footage of Next 3 with a
    box's place in flat grey as the guide, the same box in white on black

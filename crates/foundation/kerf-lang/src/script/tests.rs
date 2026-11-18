@@ -777,6 +777,7 @@ fn media_replace_prints_every_field_and_replays() {
         audio: None,
         reel: None,
         recipe: None,
+        steps: Vec::new(),
     });
     let printed = print_op(&silent, Catalog::builtin(), &op);
     assert!(printed.contains("tc=01:00:00;00"), "{printed}");
@@ -803,4 +804,144 @@ fn media_replace_names_the_clips_a_shorter_file_cannot_hold() {
     assert!(error.message.contains("missing `dur=`"), "{error:?}");
     let error = fails(&base(), "media swap m1");
     assert!(error.message.contains("replace"), "{error:?}");
+}
+
+/// A media made by a model, with the scene its guide is drawn from: the steps are written
+/// under the media by `step` lines, changed a name at a time, and read back as the
+/// document has them.
+#[test]
+fn steps_are_written_under_the_media_they_make() {
+    let applied = run(
+        &base(),
+        r#"
+media add depth path="shots/depth.mp4" rate=16 dur=65f video=832x480
+step depth add render s1 {guide.mp4} size=832x480 rate=16 pass=depth
+step depth add generate seed=7 model=shot guide={guide.mp4} prompt="a red car on a wet street" seconds=4
+"#,
+    );
+    let document = print_document(&applied.project, Catalog::builtin(), PrintOptions::default());
+    let media = "media depth path=\"shots/depth.mp4\" rate=16 dur=00:00:04:01 video=832x480\n\
+        \x20 render s1 {guide.mp4} pass=depth size=832x480 rate=16\n\
+        \x20 generate model=shot prompt=\"a red car on a wet street\" guide={guide.mp4} seconds=4 seed=7\n";
+    assert!(document.contains(media), "{document}");
+    // The document reads as it prints, steps and all.
+    let read = parse_document(&document, Catalog::builtin()).unwrap().project;
+    assert_eq!(read, applied.project);
+    // And its history replays: each operation prints as the line that makes it.
+    let history = print_ops(&base(), Catalog::builtin(), &applied.ops);
+    assert!(
+        history.contains("step depth add render s1 {guide.mp4} pass=depth size=832x480 rate=16\n"),
+        "{history}"
+    );
+    assert_eq!(run(&base(), &history).project, applied.project);
+
+    // One name set leaves the rest of the step as it was; a step is put before another
+    // by its number; one whose file a later step reads stays until that step lets go.
+    let project = applied.project;
+    let changed = run(
+        &project,
+        r#"
+step depth set 2 seed=8 strength=0.6
+step depth add 1 generate model=still prompt="a red sports car" out={car.png}
+step depth set 3 ref={car.png}
+"#,
+    )
+    .project;
+    let steps: Vec<String> = changed.media("depth").unwrap().steps.iter().map(crate::print_step).collect();
+    assert_eq!(
+        steps,
+        [
+            "generate model=still prompt=\"a red sports car\" out={car.png}",
+            "render s1 {guide.mp4} pass=depth size=832x480 rate=16",
+            "generate model=shot prompt=\"a red car on a wet street\" guide={guide.mp4} ref={car.png} seconds=4 seed=8 strength=0.6",
+        ]
+    );
+    let error = fails(&changed, "step depth remove 1");
+    assert_eq!(error.code, "step.order");
+    assert!(error.message.contains("step 2 reads `{car.png}`"), "{error}");
+    let without = run(&changed, "step depth set 3 ref=\"\"\nstep depth remove 1").project;
+    assert_eq!(without.media("depth").unwrap().steps.len(), 2);
+    // A step written whole replaces the one there.
+    let whole = run(&changed, "step depth set 2 render s1 {guide.mp4} pass=ids").project;
+    assert_eq!(
+        crate::print_step(&whole.media("depth").unwrap().steps[1]),
+        "render s1 {guide.mp4} pass=ids"
+    );
+
+    // Choosing another file for the media leaves how it is made as it is.
+    let take = run(
+        &changed,
+        "media replace depth path=\"shots/depth.takes/001.mp4\" rate=16 dur=65f video=832x480",
+    )
+    .project;
+    assert_eq!(take.media("depth").unwrap().path, "shots/depth.takes/001.mp4");
+    assert_eq!(take.media("depth").unwrap().steps, changed.media("depth").unwrap().steps);
+}
+
+#[test]
+fn a_step_that_cannot_be_is_refused_where_it_is_written() {
+    let project = run(
+        &base(),
+        "media add gone path=\"shots/gone.mp4\" rate=16 dur=81f video=832x480\n\
+         step gone add generate model=matte guide=footage/walk.mp4 prompt=\"man\" out={man.mp4}\n\
+         step gone add generate model=plate guide=footage/walk.mp4 guide_mask={man.mp4} reach=72",
+    )
+    .project;
+    for (script, says) in [
+        ("step gone add run vork render", "`run` is not a step"),
+        ("step gone add generate model=plate guide={man.mp4}", "writes `{out}`, the media's file, so it is the last"),
+        ("step gone add 1 generate model=plate guide_mask={man.mp4} out={a.mp4}", "no step before this one makes `{man.mp4}`"),
+        ("step gone add 5 generate model=plate out={a.mp4}", "a step added is step 3 at most"),
+        ("step gone set 3 seed=8", "has 2 steps and no step 3"),
+        ("step gone set 2 seed=eight", "not a whole number"),
+        ("step gone set 2", "say what step 2 is to be"),
+        ("step gone remove 2 now", "unexpected argument"),
+        ("step gone move 1", "expected add, set, or remove"),
+        ("step m9 add render s1 {out}", "no media `m9`"),
+        ("step gone add generate model=plate prompt=\"a\\tb\"", "a step is one line"),
+    ] {
+        let error = fails(&project, script);
+        assert!(error.message.contains(says), "{script}: {error}");
+    }
+    // A media that names a recipe file has its steps there, and one with steps names none.
+    let filed = run(
+        &base(),
+        "media add m3 path=\"shots/open.mp4\" rate=24 dur=96f video=320x180 recipe=\"shots/open.kerfrecipe\"",
+    )
+    .project;
+    let error = fails(&filed, "step m3 add render s1 {out}");
+    assert_eq!(error.code, "step.recipe");
+    let error = fails(
+        &project,
+        "media replace gone path=\"shots/gone.mp4\" rate=16 dur=81f video=832x480 recipe=\"shots/gone.kerfrecipe\"",
+    );
+    assert_eq!(error.code, "step.recipe");
+}
+
+#[test]
+fn a_document_says_what_is_wrong_under_a_media() {
+    let document = |under: &str| {
+        format!(
+            "kerf 1\nproject name=\"t\"\nmedia m3 path=\"shots/open.mp4\" rate=24 dur=96f video=320x180\n{under}sequence s1 rate=24 size=320x180\n"
+        )
+    };
+    let wrong = |under: &str| {
+        parse_document(&document(under), Catalog::builtin())
+            .expect_err("expected the document to be refused")
+            .remove(0)
+    };
+    assert!(wrong("  track V1 video\n").message.contains("under a media come the steps that make its file"));
+    assert!(wrong("  generate prompt=\"a boat\"\n").message.contains("names its model"));
+    let error = wrong("  generate model=dawn guide={guide.mp4}\n");
+    assert!(error.message.contains("no step before this one makes `{guide.mp4}`"), "{error}");
+    assert_eq!(error.span.map(|span| span.line), Some(4));
+    let error = wrong("  render s1 {out}\n  generate model=dawn\n");
+    assert_eq!(error.code, "step.order");
+    // Steps that stop short of the media's file read: the making says what is missing.
+    let read = parse_document(
+        &document("  render s1 {guide.mp4} pass=depth\n"),
+        Catalog::builtin(),
+    )
+    .unwrap();
+    assert_eq!(read.project.media[0].steps.len(), 1);
 }

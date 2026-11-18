@@ -308,6 +308,7 @@ pub fn from_timeline(
             }),
             reel: None,
             recipe: None,
+            steps: Vec::new(),
         });
     }
     if !media.is_empty() {

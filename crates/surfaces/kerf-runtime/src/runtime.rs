@@ -1449,16 +1449,6 @@ impl Runtime {
         // No probe reads a reel or a recipe, so those the media was given stay.
         replacement.reel.clone_from(&existing.reel);
         replacement.recipe.clone_from(&existing.recipe);
-        // A take was made from one version of its recipe: the media that is that take again
-        // names that version, so that it is not asked for again.
-        if let Some(version) =
-            kerf_engine::recipe::takes(&self.state.project, self.directory(), existing)
-                .ok()
-                .and_then(|takes| takes.into_iter().find(|take| take.stored == stored))
-                .and_then(|take| take.recipe)
-        {
-            replacement.recipe = Some(version);
-        }
         let (mut candidate, change) =
             self.edit_candidate(kernel::replace_media(&self.state.project, replacement)?);
         let operation = candidate.record_operation(operation, fingerprint);
@@ -3421,7 +3411,8 @@ mod tests {
         fs::write(
             directory.join(PROJECT_FILE),
             "kerf 1\nproject name=\"Mesh\"\n\
-             media set path=\"shots/set.glb\" rate=16 dur=1f video=832x480 recipe=\"shots/set.kerfrecipe\"\n\
+             media set path=\"shots/set.glb\" rate=16 dur=1f video=832x480\n\
+             \x20 generate model=room prompt=\"a room\"\n\
              sequence s1 rate=16 size=832x480 audio=48000\n\
              \x20 track V1 video\n\
              \x20   clip room gen=mesh@1 at=0f dur=32f\n\
@@ -3445,14 +3436,14 @@ mod tests {
             "{}",
             made.document
         );
-        // A clip that reads another file is left alone, and the media keeps its recipe.
+        // A clip that reads another file is left alone, and the media keeps its steps.
         assert!(
             made.document.contains("file=\"models/car.glb\""),
             "{}",
             made.document
         );
         assert!(
-            made.document.contains("recipe=\"shots/set.kerfrecipe\""),
+            made.document.contains("\n  generate model=room prompt=\"a room\"\n"),
             "{}",
             made.document
         );

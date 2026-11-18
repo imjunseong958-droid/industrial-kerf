@@ -20,6 +20,11 @@ rendered video or translate another editor's template format.
    shows the preset's editing code.
 6. Choose **Create proposal**, review the timeline, and accept the proposal.
 
+A media Kerf or a model makes, with the steps under its line
+([shots.md](shots.md#steps)), travels with its steps and is
+made again where the preset is applied; it takes no binding. See
+[Media a preset makes](#media-a-preset-makes).
+
 Export does not change the project. Applying replaces the program sequence;
 the existing project stays intact until acceptance, apart from the looks the
 preset brings (see below), and acceptance can be undone. Locked destination tracks must be unlocked first. A sequence that is
@@ -57,7 +62,8 @@ everyone. See [shared presets and media slots](collaboration.md#shared-presets-a
 
 The file uses the [Kerf language](kerf-language.md), starting with `kerf 1`.
 Its first sequence is the pattern's entry point. Only sequences reachable
-from it may be included. The project name is the preset name.
+from it, or drawn by the steps of a media the preset makes, may be included.
+The project name is the preset name.
 
 ```text
 kerf 1
@@ -74,11 +80,14 @@ sequence s1 name="Two-shot product" rate=30 size=1080x1920
       set text="Your product"
 ```
 
-- Every media declaration is a slot: its path must be exactly `slot:<id>`.
+- Every media declaration is a slot, its path exactly `slot:<id>`, or a
+  media the preset makes, `made:<id>` and its extension, with its steps
+  under it ([Media a preset makes](#media-a-preset-makes)).
   No original media paths, source timecode origins, reels, or retired IDs
   are exported. Actual video/audio files are not included.
 - A cut gets its own slot, even when several cuts use the same original
-  file. Linked picture and sound from that file share a slot, preserving
+  file, unless the steps of a media the preset makes read that file: then
+  it is one slot for all of them. Linked picture and sound from that file share a slot, preserving
   their source offsets and synchronization.
 - `video=` and `audio=` specify the required streams; `dur=` specifies the
   minimum source length **including transition handles**. Replacement
@@ -109,6 +118,101 @@ sequence s1 name="Two-shot product" rate=30 size=1080x1920
   markers and transitions it placed can be named in the edits that follow.
   A slot is listed with the media it was bound to, and the preset's first
   sequence with the target sequence, which keeps its own ID.
+
+## Media a preset makes
+
+A media of the pattern that has steps under its line is one the preset
+makes, not a slot. Its path is `made:<id>` and its file's extension, and its
+steps come with it. Two patterns, as a preset writes them:
+
+```text
+kerf 1
+project name="Moved"
+media slot1 path="slot:slot1" rate=16 dur=81f video=832x480
+media man path="made:man.mp4" rate=16 dur=81f video=832x480
+  generate model=matte prompt="man" guide=slot:slot1
+media gone path="made:gone.mp4" rate=16 dur=81f video=832x480
+  generate model=matte prompt="man" guide=slot:slot1 out={man.mp4}
+  generate model=plate prompt="an empty dirt path" guide=slot:slot1 guide_mask={man.mp4} seed=7 reach=72
+sequence s2 name="Moved" rate=16 size=832x480
+  track V1 video
+    clip plate media=gone src=0f at=0f dur=81f
+  track V2 video
+    clip mover media=slot1 src=0f at=0f dur=81f
+      set x=0.25 scale=1.5
+      fx key.trackmatte@1 matte=V3 composite=matte-luma
+  track V3 video enabled=false
+    clip moves media=man src=0f at=0f dur=81f
+      set x=0.25 scale=1.5
+```
+
+```text
+kerf 1
+project name="Car"
+media depth path="made:depth.mp4" rate=16 dur=65f video=832x480
+  render s2 {guide.mp4} pass=depth size=832x480 rate=16
+  generate model=shot prompt="a red sports car on a wet street at dusk" guide={guide.mp4} moves=body seconds=4 seed=7
+sequence s1 name="Car" rate=16 size=832x480
+  track V1 video
+    clip shot media=depth src=0f at=0f dur=65f
+sequence s2 rate=24 size=1664x960
+  track V1 video
+    clip road gen=solid@1 at=0f dur=96f
+      set color=#404448 three_d=true rotate_x=-84 y=0.75 z=4 scale=16
+  track V2 video
+    clip body gen=shape@1 at=0f dur=96f
+      set kind=rect width=0.9 height=0.22 fill=#c02020 three_d=true depth=0.4 x={0f:-0.45 96f:0.45} y=0.84 z=2
+```
+
+- **Export.** A clip that plays a media with steps makes that media one the
+  preset makes, once however many clips play it. A media with steps that a
+  step reads by its path travels the same way, and is named
+  `made:<id>.<ext>` in the steps that read it.
+- **A step reads footage by its slot.** A file a step names that is the
+  path of footage of the project (a media with no steps) becomes that
+  footage's slot, `guide=slot:slot1`. Footage a making reads is **one slot
+  for every cut that plays it**, its source range the union of theirs and of
+  the clips that play the media made of it: the making is of that one file.
+  Footage a step reads and no clip plays is a slot as long as the file. A
+  file of the project that is not footage, a reference picture or a copy of
+  a workflow, is kept as it is written; the making where the preset is
+  applied says when it is not there.
+- **The sequences its steps draw travel with it.** A sequence a `render`
+  step draws, and one that holds a clip a step names (`matte=`, `moves=`,
+  `signal=`), comes with the preset with what it nests, though the first
+  sequence does not nest it. A sequence reached neither from the first nor
+  from a step is still refused.
+- **A recipe file does not travel.** A clip that plays a media whose steps
+  are still in a recipe file (`recipe=`) is refused at export: carry them
+  into the document first (`kerf carry <media>`,
+  [shots.md](shots.md#carrying-a-recipe-into-the-document)).
+- **Applying adds each as a new media** of the project, by an ID of the
+  project's own and a file in `shots/` with its extension, `shots/p12.mp4`,
+  so its takes are kept in `shots/p12.takes/`. The edit adds the media,
+  then the sequences, then each step with a `step <id> add …` line, all in
+  the one proposal. In the steps, a sequence and a clip are named by the IDs
+  they were given, a slot by the path of the media bound to it
+  (`guide=footage/run.mp4`), and a made media by its new path. A `{name}`,
+  `cast=`, `style=`, the model and every other word stay as they are. The
+  answer's `ids` lists the made media, and the sequences and clips that
+  came with them, with the rest, so `step p12 set 2 seed=9` can follow.
+- **A matte is over its own frames.** A made media whose steps read one
+  slot's file and draw no sequence, a matte or a plate, is of that footage
+  frame for frame: it takes the bound media's `rate`, `dur` and `video` on
+  its line, and its clips start from the binding's `from` as the slot's
+  clips do. A made media drawn from a sequence keeps the pattern's line.
+- **Nothing is made by applying.** The media are made with `make` (or
+  `kerf make`), as any made media is, once the proposal is accepted.
+- A made media no clip plays and no step reads is refused, as an unused slot
+  is; so are steps out of order, steps under a slot, a `made:` path that is
+  not its own ID, and steps that name a slot, a made media, a sequence or a
+  clip the preset has not.
+
+Inspecting a preset lists the made media apart from the slots (`made`):
+each with its steps as the document writes them, the slot it is of frame for
+frame (`of`), and the clips that play it. A slot lists the made media whose
+steps read it (`readBy`). No binding is asked for a made media; one given is
+refused.
 
 ## Looks and beats
 
@@ -197,6 +301,7 @@ shared `.kerfpreset` at an explicitly supplied path. Inspecting lists the
 looks the preset carries (`looks`) and, for each
 slot, the clips that use it and the project's imported media that can fill it
 (`fits`), each with the latest start frame (`latestFrame`, usable as
-`"from": "<n>f"`). Application uses the same
+`"from": "<n>f"`), and the media the preset makes (`made`), which take no
+binding. Application uses the same
 proposal diff, checks, and before/after preview as other edits, and adds
 `ids` (see above).

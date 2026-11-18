@@ -887,7 +887,7 @@ pub static COMMANDS: &[Command] = &[
         r#"{"media": string, "path": string}"#,
     ),
     params(
-        command("media.make", "Make from Recipe…", connected),
+        command("media.make", "Make…", connected),
         r#"{"media": string, "confirmed": bool}"#,
     ),
     params(
