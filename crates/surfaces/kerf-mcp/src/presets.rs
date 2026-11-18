@@ -107,14 +107,13 @@ impl KerfMcpRouter {
         Ok(json!({"presets": files, "more": more}))
     }
 
-    /// The pattern, its text slots, and each media slot with the clips that
-    /// use it and the project's imported media that can fill it.
+    /// The pattern, its text slots, each media slot with the clips that use
+    /// it, the made media whose steps read it, and the project's imported
+    /// media that can fill it, and the media the preset makes (`made`).
     pub(super) fn inspect_preset(&self, project: &Project, file: &str) -> Result<Value, McpError> {
         let (document, preset) = self.read_preset(file)?;
         let pattern = &preset.pattern;
-        let slots: Vec<_> = pattern
-            .media
-            .iter()
+        let slots: Vec<_> = preset::slots(pattern)
             .map(|slot| {
                 // Judged from imported metadata; applying re-probes the files.
                 let fits: Vec<_> = project
@@ -129,6 +128,7 @@ impl KerfMcpRouter {
                 json!({"id": slot.id.as_str(), "video": slot.video.is_some(), "audio": slot.audio.is_some(),
                     "minimumDuration": Clock::of_media(slot).print_duration(slot.duration),
                     "seconds": slot.duration.seconds(), "clips": slot_clips(pattern, &slot.id),
+                    "readBy": read_by(pattern, &slot.path),
                     "fits": fits})
             })
             .collect();
@@ -140,7 +140,8 @@ impl KerfMcpRouter {
         Ok(
             json!({"preset": file, "name": pattern.name, "document": document,
             "sequence": pattern.sequences[0].id.as_str(),
-            "slots": slots, "textSlots": preset::text_slots(pattern), "looks": looks}),
+            "slots": slots, "made": made_media(pattern),
+            "textSlots": preset::text_slots(pattern), "looks": looks}),
         )
     }
 
@@ -193,7 +194,8 @@ impl KerfMcpRouter {
             .map(|look| format!("{}@{}", look.id, look.version))
             .collect();
         Ok(json!({"status": "saved", "preset": file, "name": name,
-            "slots": preset.pattern.media.len(), "looks": looks}))
+            "slots": preset::slots(&preset.pattern).count(),
+            "made": preset::made(&preset.pattern).count(), "looks": looks}))
     }
 
     /// The script that applies a preset, and the id each thing of its
@@ -209,7 +211,7 @@ impl KerfMcpRouter {
         let (document, preset) = self.read_preset(file)?;
         let pattern = &preset.pattern;
         let mut bindings = BTreeMap::new();
-        for slot in &pattern.media {
+        for slot in preset::slots(pattern) {
             if !inputs.contains_key(slot.id.as_str()) {
                 return Err(invalid(format!("missing binding for `{}`", slot.id)));
             }
@@ -219,6 +221,9 @@ impl KerfMcpRouter {
             let required = pattern
                 .media(slot)
                 .ok_or_else(|| invalid(format!("unknown slot `{slot}`")))?;
+            if preset::is_made(required) {
+                return Err(invalid(preset::made_takes_no_binding(slot)));
+            }
             let media = project
                 .media(&input.media)
                 .ok_or_else(|| invalid(format!("no imported media `{}`", input.media)))?;
@@ -344,6 +349,34 @@ fn write_looks(directory: &Path, looks: &[Look]) -> Result<(), McpError> {
     }
     kerf_model::look::refresh_project_looks(directory).map_err(invalid)?;
     Ok(())
+}
+
+/// The media the preset makes whose steps read the file at `path`.
+fn read_by<'a>(pattern: &'a Project, path: &str) -> Vec<&'a str> {
+    preset::made(pattern)
+        .filter(|media| {
+            media
+                .steps
+                .iter()
+                .flat_map(|step| step.names())
+                .any(|(named, name)| named == kerf_model::making::Named::File && name == path)
+        })
+        .map(|media| media.id.as_str())
+        .collect()
+}
+
+/// The media the preset makes, apart from its slots: they take no binding.
+/// Each with its steps as the document writes them, the slot it is of frame
+/// for frame where it is (`of`), and the clips that play it.
+fn made_media(pattern: &Project) -> Vec<Value> {
+    preset::made(pattern)
+        .map(|media| {
+            let steps: Vec<String> = media.steps.iter().map(kerf_lang::print_step).collect();
+            json!({"id": media.id.as_str(), "path": media.path,
+                "of": preset::footage_of(media).map(|slot| slot.to_string()),
+                "steps": steps, "clips": slot_clips(pattern, &media.id)})
+        })
+        .collect()
 }
 
 /// Where a slot appears in the pattern, so a person can tell slots apart.

@@ -242,12 +242,12 @@ enum PresetAction {
         #[arg(long)]
         sequence: Option<String>,
     },
-    /// Inspect the pattern, minimum source lengths, and text slots.
+    /// Inspect the pattern, minimum source lengths, text slots, and the media it makes from steps.
     Show { file: String },
     /// Stage a proposal replacing a sequence; accept it with `kerf accept` or in the editor.
     Apply {
         file: String,
-        /// SLOT=MEDIA or SLOT=MEDIA@FROM (e.g. slot1=m2@1.5s).
+        /// SLOT=MEDIA or SLOT=MEDIA@FROM (e.g. slot1=m2@1.5s). A media the preset makes takes none.
         #[arg(long = "bind")]
         bindings: Vec<String>,
         /// TEMPLATE_CLIP=TEXT; quote values containing spaces.

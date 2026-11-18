@@ -476,6 +476,14 @@ pub enum Step {
     },
 }
 
+/// What a name a step holds is of: a sequence, a clip, or a file of the project.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Named {
+    Sequence,
+    Clip,
+    File,
+}
+
 /// The words a step starts with.
 pub const VERBS: [&str; 3] = ["render", "generate", "join"];
 
@@ -580,6 +588,83 @@ impl Step {
         match self {
             Self::Render { to, .. } | Self::Join { to, .. } => to,
             Self::Generate(ask) => &ask.out,
+        }
+    }
+
+    /// The things of the project it names, each with what it is: the sequence a `render`
+    /// draws and the clip of its matte, the clips a model is handed (`moves=`, `signal=`),
+    /// and every file of the project, as the step writes it. A `{name}`, the cast and
+    /// styles, and the model are not of the project's sequences or files, and are left out.
+    pub fn names(&self) -> Vec<(Named, &str)> {
+        match self {
+            Self::Render {
+                sequence, matte, ..
+            } => std::iter::once((Named::Sequence, sequence.as_str()))
+                .chain(matte.iter().map(|clip| (Named::Clip, clip.as_str())))
+                .collect(),
+            Self::Join { .. } => Vec::new(),
+            Self::Generate(ask) => ask
+                .sources()
+                .filter_map(|source| match source {
+                    Source::File(file) => Some((Named::File, file.as_str())),
+                    Source::Made(_) => None,
+                })
+                .chain(
+                    ask.signals
+                        .iter()
+                        .chain(&ask.moves)
+                        .map(|clip| (Named::Clip, clip.as_str())),
+                )
+                .collect(),
+        }
+    }
+
+    /// Each thing of the project it names ([`Self::names`]) given the name `rename` gives
+    /// it, where it gives one: what a step says, said of another project.
+    pub fn rename(&mut self, mut rename: impl FnMut(Named, &str) -> Option<String>) {
+        let mut one = |named: Named, name: &mut String| {
+            if let Some(new) = rename(named, name) {
+                *name = new;
+            }
+        };
+        match self {
+            Self::Render {
+                sequence, matte, ..
+            } => {
+                one(Named::Sequence, sequence);
+                if let Some(clip) = matte {
+                    one(Named::Clip, clip);
+                }
+            }
+            Self::Join { .. } => {}
+            Self::Generate(ask) => {
+                let Ask {
+                    guide,
+                    guides,
+                    first,
+                    last,
+                    references,
+                    workflow,
+                    signals,
+                    moves,
+                    ..
+                } = &mut **ask;
+                let sources = guide
+                    .iter_mut()
+                    .chain(guides.iter_mut().map(|(_, source)| source))
+                    .chain(first.iter_mut())
+                    .chain(last.iter_mut())
+                    .chain(references.iter_mut())
+                    .chain(workflow.iter_mut());
+                for source in sources {
+                    if let Source::File(file) = source {
+                        one(Named::File, file);
+                    }
+                }
+                for clip in signals.iter_mut().chain(moves.iter_mut()) {
+                    one(Named::Clip, clip);
+                }
+            }
         }
     }
 
@@ -852,6 +937,55 @@ mod tests {
         assert!(wrong(&["generate", "model=m", "guide={b.mp4}"]).contains("no step before this one makes `{b.mp4}`"));
         assert!(wrong(&["generate", "model=m", "seed=7", "seed=8"]).contains("given twice"));
         assert!(wrong(&["join", "{a.mp4}", "{out}"]).contains("two or more parts"));
+    }
+
+    #[test]
+    fn what_a_step_names_of_the_project_is_renamed_and_nothing_else() {
+        let mut steps = read(&[
+            &["render", "s2", "{mask.mp4}", "matte=crate"],
+            &[
+                "generate",
+                "model=video",
+                "guide=footage/walk.mp4",
+                "guide_mask={mask.mp4}",
+                "ref=refs/a.png",
+                "cast=Ada",
+                "signal=bounce",
+                "moves=ball",
+            ],
+        ])
+        .unwrap();
+        assert_eq!(steps[0].names(), [(Named::Sequence, "s2"), (Named::Clip, "crate")]);
+        assert_eq!(
+            steps[1].names(),
+            [
+                (Named::File, "footage/walk.mp4"),
+                (Named::File, "refs/a.png"),
+                (Named::Clip, "bounce"),
+                (Named::Clip, "ball"),
+            ]
+        );
+        for step in &mut steps {
+            step.rename(|named, name| match named {
+                Named::Sequence => Some(format!("{name}x")),
+                Named::Clip => Some(format!("{name}2")),
+                Named::File => (name == "footage/walk.mp4").then(|| "footage/run.mp4".to_owned()),
+            });
+        }
+        assert_eq!(steps[0].words(), words(&["render", "s2x", "{mask.mp4}", "matte=crate2"]));
+        assert_eq!(
+            steps[1].words(),
+            words(&[
+                "generate",
+                "model=video",
+                "guide=footage/run.mp4",
+                "guide_mask={mask.mp4}",
+                "ref=refs/a.png",
+                "cast=Ada",
+                "signal=bounce2",
+                "moves=ball2",
+            ])
+        );
     }
 
     #[test]
