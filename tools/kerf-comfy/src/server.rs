@@ -153,6 +153,9 @@ pub fn taken(input: &serde_json::Map<String, Value>) -> serde_json::Map<String, 
 pub struct Server {
     agent: ureq::Agent,
     address: Address,
+    /// What this run is to the server: its jobs are queued under it, and what the server
+    /// says of them while they run is said to it.
+    client: String,
 }
 
 impl Server {
@@ -168,7 +171,24 @@ impl Server {
             .http_status_as_error(false)
             .build()
             .new_agent();
-        Self { agent, address }
+        let client = format!(
+            "kerf-comfy-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |since| since.as_millis())
+        );
+        Self { agent, address, client }
+    }
+
+    /// What the server says of this run's jobs while they run, where it can be listened to.
+    pub fn progress(&self) -> Option<crate::progress::Progress> {
+        let key = self.address.key_header();
+        crate::progress::follow(
+            self.url(),
+            key.as_ref().map(|(name, value)| (name.as_str(), value.as_str())),
+            &self.client,
+        )
     }
 
     /// The server's address, as a person reads it.
@@ -291,7 +311,7 @@ impl Server {
     pub fn queue(&self, graph: &Value) -> Result<String, String> {
         let asked = self
             .keyed(self.agent.post(format!("{}/prompt", self.url())))
-            .send_json(json!({"prompt": graph, "client_id": "kerf-comfy"}));
+            .send_json(json!({"prompt": graph, "client_id": self.client}));
         let said = Self::json("queue the job", self.answered("queue the job", asked)?)?;
         match said["prompt_id"].as_str() {
             Some(id) => Ok(id.to_owned()),

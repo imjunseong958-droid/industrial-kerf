@@ -21,6 +21,7 @@
 //! before it does, so nothing goes on being made that nobody will fetch.
 
 pub mod guide;
+pub mod progress;
 pub mod request;
 pub mod server;
 
@@ -58,6 +59,9 @@ const TRIES: u32 = 5;
 pub struct Patience {
     pub most: Duration,
     pub pause: Duration,
+    /// Whether to listen for which step a job is on, where the server says it
+    /// ([`progress`]). `COMFY_PROGRESS=off` does without.
+    pub listen: bool,
 }
 
 impl Patience {
@@ -72,6 +76,7 @@ impl Patience {
         Self {
             most: Duration::from_secs(most),
             pause: Duration::from_secs(2),
+            listen: std::env::var("COMFY_PROGRESS").map_or(true, |listen| listen.trim() != "off"),
         }
     }
 }
@@ -387,6 +392,8 @@ pub fn make(
     if stop.load(Ordering::SeqCst) {
         return Err("asked to stop before the server was asked for anything".to_owned());
     }
+    // Listening before the job is queued, so that its first step is heard too.
+    let progress = patience.listen.then(|| server.progress()).flatten();
     let id = server.queue(&graph)?;
     // Not where the server is: what is said here reaches whoever asked for the making, an agent
     // among them, and the server is the person's to name.
@@ -443,7 +450,11 @@ pub fn make(
                 ))
             }
             Ok(State::Waiting(ahead)) => format!("waiting, {ahead} ahead"),
-            Ok(State::Running) => "running".to_owned(),
+            // Which step of how many, where the server says: else only that it runs.
+            Ok(State::Running) => match progress.as_ref().and_then(|progress| progress.step(&id)) {
+                Some((step, of)) => format!("running, step {step} of {of}"),
+                None => "running".to_owned(),
+            },
         };
         (unanswered, unknown) = (0, 0);
         if now != told.0 || told.1.elapsed() >= Duration::from_secs(20) {

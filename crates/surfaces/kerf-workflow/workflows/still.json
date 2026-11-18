@@ -1,6 +1,6 @@
 {
   "kerf-comfy": 1,
-  "about": "A still: one picture from the prompt, or of who or what a reference picture shows (ref=), to hand a later step as its ref= or its first=, or to be a shot of its own. It is one frame of the model that makes the shots, so it looks as they do.",
+  "about": "A still: one picture from the prompt, or of who or what a reference picture shows (ref=), to hand a later step as its ref= or its first=. It is one frame of the model that makes the shots, so it looks as they do.",
   "frames": {
     "most": 1,
     "step": 1
