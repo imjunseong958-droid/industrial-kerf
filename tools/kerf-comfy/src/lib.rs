@@ -392,6 +392,8 @@ pub fn make(
     // among them, and the server is the person's to name.
     if workflow.of_file() {
         say(&format!("asked the server for a file of the file: job {id}"));
+    } else if frames == 1 && workflow.frames.most == 1 {
+        say(&format!("asked the server for a still of {width}x{height}, seed {seed}: job {id}"));
     } else {
         say(&format!(
             "asked the server for {frames} frames of {width}x{height} at {fps} a second, seed {seed}: job {id}"

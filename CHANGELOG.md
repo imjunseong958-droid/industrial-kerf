@@ -6,6 +6,10 @@ on `main`; its section here becomes the release's notes on GitHub
 
 ## 0.1.3
 
+- `kerf-comfy` comes with `still`: one picture from the prompt, or of what a
+  reference shows, made by the model that makes the shots, for a later step's
+  `ref=` or `first=`. A workflow of your own that makes one frame is a still
+  the same way.
 - A shot longer than a model makes at once is made in parts and joined: a
   recipe's `render` draws a part of a sequence (`from=`, `seconds=`), a
   `generate` goes on from the last frame of the part before

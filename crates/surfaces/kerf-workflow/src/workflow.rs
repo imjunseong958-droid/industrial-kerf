@@ -44,6 +44,9 @@
 //! over another, each in a node of its own, and still serve a shot that
 //! gives only some of them.
 //!
+//! A workflow whose `frames.most` is 1 makes a still: it needs no `fps`,
+//! and what it makes is a picture, saved by a node that saves one.
+//!
 //! A workflow that reads a picture in motion and makes a file of it, its
 //! depth or the camera that filmed it, says `"of": "guide"` and needs no
 //! `fps`. What it makes is of its guide frame for frame: `{fps}` is the
@@ -66,13 +69,14 @@ use std::path::Path;
 const WORKFLOW_VERSION: u32 = 1;
 
 /// The workflows that come with kerf-comfy, by name.
-pub const BUNDLED: [(&str, &str); 13] = [
+pub const BUNDLED: [(&str, &str); 14] = [
     ("shot", include_str!("../workflows/shot.json")),
     ("shot-timed", include_str!("../workflows/shot-timed.json")),
     ("shot-into", include_str!("../workflows/shot-into.json")),
     ("shot-led", include_str!("../workflows/shot-led.json")),
     ("shot-moved", include_str!("../workflows/shot-moved.json")),
     ("shot-directed", include_str!("../workflows/shot-directed.json")),
+    ("still", include_str!("../workflows/still.json")),
     ("depth", include_str!("../workflows/depth.json")),
     ("set", include_str!("../workflows/set.json")),
     ("depth-whole", include_str!("../workflows/depth-whole.json")),
@@ -190,7 +194,8 @@ impl Workflow {
                 "`of` is `guide`, `ref`, or is left out, not `{of}`"
             ));
         }
-        if workflow.of.is_none() && !(workflow.fps.is_finite() && workflow.fps > 0.0) {
+        // A still, one frame, has no rate either.
+        if workflow.of.is_none() && workflow.frames.most > 1 && !(workflow.fps.is_finite() && workflow.fps > 0.0) {
             return Err("`fps` is not a rate".to_owned());
         }
         if workflow.frames.most == 0 || workflow.frames.step == 0 {
@@ -379,23 +384,28 @@ impl Workflow {
             "size".to_owned(),
             Value::from(vec![self.size.0, self.size.1]),
         );
-        // A whole rate is written whole.
-        takes.insert(
-            "rate".to_owned(),
-            if self.fps.fract() == 0.0 {
-                Value::from(self.fps as u64)
-            } else {
-                Value::from(self.fps)
-            },
-        );
-        takes.insert(
-            "seconds".to_owned(),
-            Value::from(f64::from(most) / self.fps),
-        );
-        takes.insert(
-            "frames".to_owned(),
-            serde_json::json!({"most": most, "step": self.frames.step}),
-        );
+        if most == 1 {
+            // One frame: a still, which has no rate and no length to say.
+            takes.insert("still".to_owned(), Value::from(true));
+        } else {
+            // A whole rate is written whole.
+            takes.insert(
+                "rate".to_owned(),
+                if self.fps.fract() == 0.0 {
+                    Value::from(self.fps as u64)
+                } else {
+                    Value::from(self.fps)
+                },
+            );
+            takes.insert(
+                "seconds".to_owned(),
+                Value::from(f64::from(most) / self.fps),
+            );
+            takes.insert(
+                "frames".to_owned(),
+                serde_json::json!({"most": most, "step": self.frames.step}),
+            );
+        }
         takes.insert("reads".to_owned(), Value::from(reads));
         if references > 1 {
             takes.insert("refs".to_owned(), Value::from(references));
@@ -696,6 +706,18 @@ mod tests {
                 );
             }
         }
+        // One makes a still: a frame, with no rate or length to say, of a reference where given.
+        let still = Workflow::named("still").unwrap();
+        let takes = still.takes();
+        assert_eq!(takes["still"], true);
+        assert_eq!(takes["reads"], json!(["ref"]));
+        assert!(takes.get("rate").is_none() && takes.get("seconds").is_none() && takes.get("frames").is_none());
+        assert_eq!((still.frames(None, None), still.frames(Some(4.0), None)), (1, 1));
+        assert!(still.graph.values().any(|node| node["class_type"] == "SaveImage"));
+        // A workflow of more than one frame still has to say its rate.
+        let unrated = include_str!("../workflows/shot.json").replacen("\"fps\": 16,", "", 1);
+        assert_eq!(Workflow::parse(&unrated).unwrap_err(), "`fps` is not a rate");
+
         // One reads all four at once, and serves a line that gives any of them.
         let directed = Workflow::named("shot-directed").unwrap();
         assert_eq!(directed.takes()["reads"], json!(["guide", "first", "ref", "signal", "moves"]));

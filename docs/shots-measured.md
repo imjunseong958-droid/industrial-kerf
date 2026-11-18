@@ -629,3 +629,14 @@ head of each part are the architecture's.
    bright the part before went on to be. Not tried: a tone matched across
    the join, a part led in by more than one frame of the one before, three
    parts or more, a signal across a seam.
+11. **The whole example by models** (2026-11-17). Until here the ball's
+   reference came from a stand-in script. `still` asks the same model for
+   one frame: "an orange basketball, studio light", seed 3, 832x480, 8 s on
+   the server, a basketball on an orange ground with its seams. The recipe
+   of 9 then ran with nothing standing in: the court's depth drawn by Kerf,
+   the still, and `shot-directed` reading the depth, the still as `ref=`,
+   the ball's way and the signal, 124 s. Looked at on every eighth frame,
+   the ball in the take is rounder and nearer the still's orange than with
+   the stand-in, and has none of its seams: at the size the ball is in this
+   frame, a twentieth of its width, a reference's detail does not show.
+   What a reference adds was not measured.
