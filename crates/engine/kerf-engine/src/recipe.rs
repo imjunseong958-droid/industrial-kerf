@@ -1669,13 +1669,15 @@ impl Making<'_> {
                         }
                     }
                     std::fs::write(&request, serde_json::to_vec_pretty(&asked)?)?;
-                    let words = self.models.command(&ask.model)?;
+                    let words = model::command_for(
+                        &ask.model,
+                        self.models.command(&ask.model)?,
+                        &request,
+                        &asked,
+                        self.models.takes(&ask.model),
+                    )?;
                     let mut command = Command::new(&words[0]);
-                    command.args(
-                        words[1..]
-                            .iter()
-                            .map(|word| word.replace(model::REQUEST, &request.to_string_lossy())),
-                    );
+                    command.args(&words[1..]);
                     self.supervised(command, &words[0], on_line)?;
                 }
             }

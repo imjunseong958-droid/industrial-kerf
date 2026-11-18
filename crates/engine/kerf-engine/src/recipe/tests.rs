@@ -280,7 +280,7 @@ fn the_models_are_the_persons_own_file() {
     assert!(wrong("not json").contains("wrong.json"));
     assert!(wrong(r#"{"dawn": {}}"#).contains("model `dawn` has no `run`"));
     assert!(wrong(r#"{"dawn": {"run": []}}"#).contains("model `dawn` has no `run`"));
-    assert!(wrong(r#"{"dawn": {"run": ["dawn-adapter"]}}"#).contains("names no `{request}`"));
+    assert!(wrong(r#"{"dawn": {"run": ["dawn-adapter"]}}"#).contains("names neither `{request}` nor `{out}`"));
 }
 
 #[test]
@@ -2443,4 +2443,68 @@ fn what_a_recipe_cannot_carry_into_the_document_is_said() {
     assert!(carry(&project, directory, "m2").unwrap_err().to_string().contains("under its line in the document already"));
     recipe("kerf-recipe 1\nrender s2 {guide.mp4}\n");
     assert!(carry(&project, directory, "m1").unwrap_err().to_string().contains("names no `{out}`"));
+}
+
+/// A program that was not written for Kerf, a renderer, is one the person names in their
+/// models file as a model is, and is handed its arguments: what a recipe's `run` did, with
+/// the program and the shape of its command the person's own and a step only filling it.
+#[cfg(unix)]
+#[test]
+fn a_program_the_person_names_is_handed_its_arguments_by_a_step() {
+    let folder = tempfile::tempdir().unwrap();
+    let directory = folder.path();
+    std::fs::create_dir_all(directory.join("scenes")).unwrap();
+    std::fs::write(directory.join("scenes/open.scene.json"), "a blocking").unwrap();
+    // `previs` copies its scene to where its file goes, with its profile after it.
+    let some = models(
+        directory,
+        &format!(
+            r#"{{"previs": {{"run": ["sh", "-c", "cat \"$1\" > \"$3\" && printf ' as %s at %s' \"$2\" \"$4\" >> \"$3\"", "previs", "{{ref}}", "{{profile}}", "{{out}}", "{{frame_end}}"],
+                            "takes": {{"about": "a rough render of a scene file", "more": {{"profile": "std/previs", "frame_end": 95}}}}}},
+                "dawn": {{"run": {ECHO}}}}}"#
+        ),
+    );
+    let project = |steps: &str| {
+        project(&format!(
+            "media m1 path=\"shots/open.json\" rate=24 dur=1s video=160x120\n{steps}sequence s1 rate=24 size=160x120\n"
+        ))
+    };
+    let shot = project(
+        "\x20 generate model=previs ref=scenes/open.scene.json frame_end=47 out={guide.txt}\n\
+         \x20 generate model=dawn prompt=\"a boat leaves\" guide={guide.txt} seed=7\n",
+    );
+    let token = CancellationToken::new();
+    let planned = plan(&shot, directory, "m1", &some).unwrap();
+    assert!(planned.steps[0].contains("asks model `previs`"), "{}", planned.steps[0]);
+    let made = make(&shot, directory, &planned, &some, &token, |_| {}).unwrap();
+    // The scene was handed over as a file, the step's own number in place of the entry's,
+    // and the entry's own where the step said none.
+    let guide = std::fs::read_to_string(directory.join("shots/open.takes/001.work/guide.txt")).unwrap();
+    assert_eq!(guide, "a blocking as std/previs at 47");
+    let request: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(directory.join(&made.stored)).unwrap()).unwrap();
+    assert!(request["guide"].as_str().unwrap().ends_with("shots/open.takes/001.work/guide.txt"));
+    // The scene is a file the take is held to.
+    let mut taken = shot.clone();
+    taken.media[0].path = made.stored;
+    std::fs::write(directory.join("scenes/open.scene.json"), "another blocking").unwrap();
+    assert_eq!(
+        unmade(&taken, directory, &taken.media[0]),
+        Some(Unmade::Stale(vec!["scenes/open.scene.json".to_owned()]))
+    );
+    // A blank nothing fills is refused with the word that fills it, and a value that
+    // would read as a switch of the program is not handed over.
+    let wrong = |steps: &str| {
+        let shot = project(steps);
+        let planned = plan(&shot, directory, "m1", &some).unwrap();
+        make(&shot, directory, &planned, &some, &token, |_| {}).unwrap_err().to_string()
+    };
+    let unfilled = wrong("\x20 generate model=previs\n");
+    assert!(unfilled.contains("is handed `{ref}`, and the step gives none: add `ref=<file>`"), "{unfilled}");
+    let switch = wrong("\x20 generate model=previs ref=scenes/open.scene.json profile=--exec\n");
+    assert!(switch.contains("`profile=--exec` would read as an option"), "{switch}");
+    // An entry that names neither its request nor where its file goes is refused.
+    let file = directory.join("bad.json");
+    std::fs::write(&file, r#"{"previs": {"run": ["vork", "render"]}}"#).unwrap();
+    assert!(Models::read(&file).unwrap_err().to_string().contains("names neither `{request}` nor `{out}`"));
 }

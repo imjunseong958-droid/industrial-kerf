@@ -38,6 +38,13 @@
 //! file at `out` is written. A project cannot name a model's program: that
 //! file is the person's, outside any project.
 //!
+//! A program that was not written for Kerf, a renderer or a script, is named
+//! the same way and handed its arguments in place of a request
+//! ([`command_for`]): `{"previs": {"run": ["vork", "render", "{ref}",
+//! "--out", "{out}"]}}`, asked by `generate model=previs
+//! ref=scenes/open.scene.json out={guide.mp4}`. So what runs is always a
+//! program the person named, and a document only says which and with what.
+//!
 //! Beside `run`, a model's entry can say what the model takes ([`Takes`]):
 //! the picture it makes, its rate, the longest shot, the files it reads.
 //! Kerf asks no program for it, so whoever writes a recipe, an agent
@@ -57,6 +64,10 @@ use std::path::{Path, PathBuf};
 
 /// What stands for the request's file in a model's command.
 pub const REQUEST: &str = "{request}";
+
+/// What stands for where the file goes in the command of a program that is handed its
+/// arguments and no request: a renderer, or any program that was not written for Kerf.
+pub const OUT: &str = "{out}";
 
 /// The request's file, among what a take's steps made.
 pub const REQUEST_FILE: &str = "request.json";
@@ -115,6 +126,112 @@ pub(crate) fn request(
         asked["from"] = json!(from);
     }
     Ok(asked)
+}
+
+/// The command that asks a model: `words`, as the person's models file gives its `run`,
+/// with each blank filled from `asked`, the request a step comes to, whose file is
+/// `request`.
+///
+/// A program written for Kerf reads the request, and its command names it (`{request}`).
+/// One that was not, a renderer, a script, is handed what it needs as its arguments, by
+/// the names a step gives them: `{out}`, where its file goes; `{prompt}`; the files,
+/// `{guide}`, `{first}`, `{last}` and `{ref}` (`{ref2}` for the second); `{seconds}`,
+/// `{seed}`, `{size}`, `{width}` and `{height}`; and any other name the step sets
+/// (`profile=std/previs` fills `{profile}`), or the value the entry's `takes` gives it
+/// under `more` where the step does not. A blank with nothing to fill it is refused, with
+/// the word that fills it.
+///
+/// The program and the shape of its command are the person's own, and a project only
+/// fills the blanks: an argument that is a blank alone is refused where what fills it
+/// would read as an option (`-…`), so a step cannot hand the program a switch its
+/// owner did not write.
+pub(crate) fn command_for(
+    model: &str,
+    words: &[String],
+    request: &Path,
+    asked: &Value,
+    takes: Option<&Takes>,
+) -> Result<Vec<String>> {
+    let text = |value: &Value| match value {
+        Value::String(text) => Some(text.clone()),
+        Value::Number(number) => Some(match number.as_f64() {
+            Some(whole) if whole.fract() == 0.0 && whole.abs() < 1e15 => format!("{whole:.0}"),
+            _ => number.to_string(),
+        }),
+        Value::Bool(flag) => Some(flag.to_string()),
+        _ => None,
+    };
+    let filled = |name: &str| -> Option<String> {
+        let size = |at: usize| asked["size"].get(at).and_then(Value::as_u64);
+        match name {
+            "request" => Some(request.to_string_lossy().into_owned()),
+            "out" | "prompt" | "guide" | "first" | "last" | "seconds" | "seed" => text(&asked[name]),
+            "size" => Some(format!("{}x{}", size(0)?, size(1)?)),
+            "width" => size(0).map(|side| side.to_string()),
+            "height" => size(1).map(|side| side.to_string()),
+            other => {
+                // `ref` is the first picture, `ref2` the second.
+                if let Some(count) = other.strip_prefix("ref") {
+                    let at = match count {
+                        "" => Some(0),
+                        number => number.parse::<usize>().ok().filter(|at| *at >= 2).map(|at| at - 1),
+                    };
+                    if let Some(at) = at {
+                        return asked["references"].get(at).and_then(text);
+                    }
+                }
+                if let Some(guide) = other.strip_prefix("guide_") {
+                    return asked["guides"].get(guide).and_then(text);
+                }
+                asked["more"]
+                    .get(other)
+                    .and_then(text)
+                    .or_else(|| takes.and_then(|takes| takes.more.get(other)).and_then(text))
+            }
+        }
+    };
+    words
+        .iter()
+        .map(|word| {
+            let mut out = String::new();
+            let mut rest = word.as_str();
+            while let Some(open) = rest.find('{') {
+                out.push_str(&rest[..open]);
+                let after = &rest[open + 1..];
+                let named = after
+                    .split_once('}')
+                    .filter(|(name, _)| kerf_model::making::file_name(name));
+                match named {
+                    Some((name, tail)) => {
+                        let value = filled(name).ok_or_else(|| {
+                            EngineError::msg(format!(
+                                "model `{model}`'s program is handed `{{{name}}}`, and the step gives none: add `{}` to its step",
+                                match name {
+                                    "out" => "out={<name>}".to_owned(),
+                                    "width" | "height" => "size=<W>x<H>".to_owned(),
+                                    numbered if numbered.starts_with("ref") => "ref=<file>".to_owned(),
+                                    other => format!("{other}=<value>"),
+                                }
+                            ))
+                        })?;
+                        if word.len() == name.len() + 2 && value.starts_with('-') {
+                            return Err(EngineError::msg(format!(
+                                "`{name}={value}` would read as an option of model `{model}`'s program, which its owner did not write: a value does not start with `-`"
+                            )));
+                        }
+                        out.push_str(&value);
+                        rest = tail;
+                    }
+                    None => {
+                        out.push('{');
+                        rest = after;
+                    }
+                }
+            }
+            out.push_str(rest);
+            Ok(out)
+        })
+        .collect()
 }
 
 /// What a model takes, as the person's models file says it under `takes`.
@@ -284,9 +401,9 @@ impl Models {
                         "model `{name}` has no `run`, a program and its arguments as a list"
                     ))
                 })?;
-            if !command.iter().any(|word| word.contains(REQUEST)) {
+            if !command.iter().any(|word| word.contains(REQUEST) || word.contains(OUT)) {
                 return Err(wrong(format!(
-                    "model `{name}`'s `run` names no `{REQUEST}`, so its program is never told what is asked"
+                    "model `{name}`'s `run` names neither `{REQUEST}` nor `{OUT}`, so its program is never told what is asked or where its file goes"
                 )));
             }
             if let Some(said) = model.get("takes") {
