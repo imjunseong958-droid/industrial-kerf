@@ -43,7 +43,7 @@ pub fn guide(project: &Project, id: &str) -> Result<Guide, String> {
         })
         .unwrap_or_default();
     let first = clips.first().ok_or_else(|| {
-        "the recipe's model is not told where anything goes (`moves=<clip>`), so nothing says which clip is the shot's subject: wire a clip's way into the model, and its takes are held to it".to_owned()
+        "the shot's model is not told where anything goes (`moves=<clip>`), so nothing says which clip is the shot's subject: wire a clip's way into the model, and its takes are held to it".to_owned()
     })?;
     let at = project
         .locate(first)
@@ -131,7 +131,7 @@ pub fn restored(project: &Project, directory: &Path, id: &str, take: u32) -> Res
         .ok_or_else(|| format!("no media `{id}` in this project"))?;
     crate::graph::written(project, id)?;
     let kept = kerf_engine::recipe::takes::kept(directory, media, take).ok_or_else(|| {
-        format!("take {take} keeps nothing of the recipe it was made from: a take made before takes kept theirs, or one whose working folder is gone, has only what it is")
+        format!("take {take} keeps nothing of the steps it was made from: a take made before takes kept theirs, or one whose working folder is gone, has only what it is")
     })?;
     let mut now = kept.recipe.clone();
     let mut files = Vec::new();
@@ -300,6 +300,6 @@ mod tests {
         assert!(!dir.join("shots/own.take1.comfy.json").exists());
         assert_eq!(std::fs::read_to_string(dir.join("shots/own.comfy.json")).unwrap(), "{\"steps\": 30}");
         // A take that kept nothing says so.
-        assert!(restored(&changed, dir, "m1", 4).unwrap_err().contains("keeps nothing of the recipe"));
+        assert!(restored(&changed, dir, "m1", 4).unwrap_err().contains("keeps nothing of the steps"));
     }
 }

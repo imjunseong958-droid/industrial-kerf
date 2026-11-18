@@ -393,7 +393,7 @@ pub fn set_input(text: &str, node: &str, input: &str, value: &Value) -> Result<S
     }
     if let Some(blank) = blanks_of(&named.value).first() {
         return Err(format!(
-            "`{input}` of node {node} is the blank `{{{blank}}}`, which the recipe fills: set it on the `generate` line"
+            "`{input}` of node {node} is the blank `{{{blank}}}`, which the step fills: set it on the `generate` line"
         ));
     }
     let written = match (&named.value, value) {
@@ -590,7 +590,7 @@ mod tests {
     fn a_link_a_blank_and_another_kind_are_refused_with_why() {
         let refused = |node: &str, input: &str, value: Value| set_input(SMALL, node, input, &value).unwrap_err();
         assert!(refused("8", "positive", json!("x")).contains("is a link to another node"));
-        assert!(refused("8", "steps", json!(30)).contains("is the blank `{steps}`, which the recipe fills"));
+        assert!(refused("8", "steps", json!(30)).contains("is the blank `{steps}`, which the step fills"));
         assert!(refused("4", "text", json!("a boat")).contains("is the blank `{prompt}`"));
         assert!(refused("8", "cfg", json!("six")).contains("is a number, and what it is given is a text"));
         assert!(refused("9", "cfg", json!(1)).contains("has no node `9`"));

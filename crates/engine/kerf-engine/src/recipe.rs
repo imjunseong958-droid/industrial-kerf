@@ -126,7 +126,7 @@ pub fn document_steps(text: &str) -> Result<Vec<kerf_model::making::Step>> {
     let (steps, needs) = steps_of_text(text, None)?;
     match needs.first() {
         Some(file) => Err(EngineError::msg(format!(
-            "`needs {file}` is a recipe file's alone: the steps a document holds are `render`, `generate`, and `join`, and what a sequence they draw reads is found from its clips"
+            "`needs {file}` is not a step: the steps a document holds are `render`, `generate`, and `join`, and what a sequence they draw reads is found from its clips"
         ))),
         None => Ok(steps),
     }
@@ -147,7 +147,7 @@ fn steps_of_text(
         .map(|(index, line)| (index + 1, line.trim()))
         .filter(|(_, line)| !line.is_empty() && !line.starts_with('#'));
     if !matches!(lines.next(), Some((_, HEADER))) {
-        return Err(EngineError::msg(format!("a recipe starts with `{HEADER}`")));
+        return Err(EngineError::msg(format!("steps as text start with the line `{HEADER}`")));
     }
     let from_project = |file: &str| -> Result<String> {
         match folder {

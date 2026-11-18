@@ -499,7 +499,7 @@ pub(crate) fn from(
         }
     }
     for file in recipe.reads() {
-        let inside = within(folder, file, "file the recipe needs")?;
+        let inside = within(folder, file, "file a step names")?;
         from.insert(
             format!("file {}", stored(&inside)),
             file_hash(&directory.join(&inside)),

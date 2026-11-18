@@ -1,4 +1,4 @@
-//! A media's recipe as a graph, with what runs each of its models.
+//! The steps that make a media as a graph, with what runs each of its models.
 
 use kerf_engine::recipe::model::Models;
 use kerf_engine::recipe::text::{self, Change};
@@ -141,7 +141,7 @@ pub fn step(
                 .filter(|name| name.ends_with(".mp4") || name.ends_with(".mov") || name.ends_with(".webm"))
                 .collect();
             if parts.len() < 2 {
-                return Err("a join sets two or more pictures in motion that models made end to end, and the recipe has fewer: add the parts first, each a model with `out={name.mp4}`".to_owned());
+                return Err("a join sets two or more pictures in motion that models made end to end, and the steps make fewer: add the parts first, each a model with `out={name.mp4}`".to_owned());
             }
             let named: Vec<String> = parts.iter().map(|part| format!("{{{part}}}")).collect();
             Ok((

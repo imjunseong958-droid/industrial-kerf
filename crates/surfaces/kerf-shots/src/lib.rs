@@ -5,7 +5,7 @@
 //! what a person sets there an agent sets with `edit`, so both go through
 //! the one reading and the one rule here:
 //!
-//! - [`graph`]: a media's recipe laid out as its steps and what they read
+//! - [`graph`]: the steps that make a media laid out with what they read
 //!   ([`kerf_engine::recipe::graph`]), each model saying which program's
 //!   workflow it is run with, where it is run with one.
 //! - [`workflow`]: the workflow behind a model, every node and input of it,
@@ -17,13 +17,12 @@
 //! - [`tracks`]: where a thing goes and the matte of a thing, read from
 //!   footage: a clip that follows a point, and a mask that holds to an object.
 //!
-//! The two differ only in where a change is written. A person's is written
-//! in place, as a text editor writes it. An agent's is never written over
-//! anything: its recipe is the next version beside the one before
-//! ([`kerf_engine::recipe::version`]) and its workflow a new copy, which a
-//! proposal moves the media to.
+//! A change to a shot's steps is the same for both: `step` lines of an edit
+//! of the document, which undo takes back. The two differ only in a
+//! workflow's copy. A person's is made once and then changed in place; an
+//! agent's is never written over, each a new copy the step then names.
 //!
-//! Nothing here runs a recipe or asks a server.
+//! Nothing here runs a step or asks a server.
 
 pub mod graph;
 pub mod signals;

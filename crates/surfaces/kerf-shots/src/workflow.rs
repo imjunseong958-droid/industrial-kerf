@@ -13,8 +13,8 @@
 //!
 //! A person's change ([`set`]) makes that copy once and then changes it in
 //! place. An agent's ([`copied`]) writes over nothing: each is a new copy,
-//! named by a recipe that is itself kept as the next version, so that undo
-//! goes back to the workflow and the recipe before.
+//! named by a `step` line of its edit, so that undo goes back to the
+//! workflow and the steps before.
 //!
 //! A model run by anything else has no workflow to show, and its node says
 //! nothing of one. Which program runs a model is read from the person's own
@@ -677,7 +677,7 @@ mod tests {
         // A blank is the recipe's, and is refused here with where it is set.
         let now = fs::read_to_string(&copy).unwrap();
         let refused = change(&project, &now, "unet_name", json!("other")).unwrap_err();
-        assert!(refused.contains("which the recipe fills"), "{refused}");
+        assert!(refused.contains("which the step fills"), "{refused}");
         assert_eq!(fs::read_to_string(&copy).unwrap(), now);
     }
 

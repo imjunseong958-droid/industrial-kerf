@@ -256,7 +256,7 @@ impl Building<'_> {
     /// The node of a file of the project, named as the recipe names it.
     fn file(&mut self, file: &str) -> String {
         self.read(format!("file:{file}"), |building| {
-            let inside = within(building.folder, file, "file the recipe needs").ok();
+            let inside = within(building.folder, file, "file a step names").ok();
             let there = inside
                 .as_ref()
                 .is_some_and(|inside| building.directory.join(inside).is_file());

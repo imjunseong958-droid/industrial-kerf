@@ -168,7 +168,7 @@ fn nothing_in_a_step_is_expanded() {
 #[test]
 fn what_is_wrong_with_a_recipe_is_said() {
     let wrong = |text: &str| Recipe::parse(text).unwrap_err().to_string();
-    assert!(wrong("render s1 {out}").contains("starts with `kerf-recipe 1`"));
+    assert!(wrong("render s1 {out}").contains("start with the line `kerf-recipe 1`"));
     assert!(wrong("kerf-recipe 1\n").contains("has no step"));
     assert!(wrong("kerf-recipe 1\nvork {out}").contains("line 2: `vork` is not a step"));
     assert!(wrong("kerf-recipe 1\ngenerate model=dawn prompt=\"open").contains("quote is not closed"));
@@ -177,7 +177,7 @@ fn what_is_wrong_with_a_recipe_is_said() {
         .contains("step 1 writes `{out}`, the media's file, so it is the last: step 2 goes before it"));
     // A program to run, and a file said to be read, are a recipe file's alone.
     assert!(wrong("kerf-recipe 1\nrun vork {out}").contains("`run vork` runs a program, and a document names none"));
-    assert!(wrong("kerf-recipe 1\nneeds a.json\nrender s1 {out}").contains("`needs a.json` is a recipe file's alone"));
+    assert!(wrong("kerf-recipe 1\nneeds a.json\nrender s1 {out}").contains("`needs a.json` is not a step"));
     assert!(wrong("kerf-recipe 1\nrender s2 guide.mp4").contains("names the file it makes"));
     assert!(wrong("kerf-recipe 1\nrender s2").contains("`render` is"));
     assert!(wrong("kerf-recipe 1\nrender s2 {out} size=big").contains("not a size such as 832x480"));
@@ -2147,7 +2147,7 @@ fn a_change_to_the_text_of_steps_is_the_edit_that_makes_it() {
     .unwrap()
     .project;
     assert_eq!(steps_text(&edited.media[0].steps), added);
-    // A program to run is a recipe file's alone.
+    // A program to run is not a step.
     let ran = document_steps("kerf-recipe 1\nrun vork render --out {out}\n").unwrap_err().to_string();
     assert!(ran.contains("`run vork` runs a program, and a document names none"), "{ran}");
 }

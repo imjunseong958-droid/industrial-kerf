@@ -131,7 +131,7 @@ enum Command {
     Make {
         /// The media's id, as its line in the document names it.
         media: String,
-        /// Run the recipe's steps without asking first.
+        /// Run the steps without asking first.
         #[arg(long)]
         yes: bool,
         /// Make this many takes, one after another, each with its seeds one on from the
@@ -890,7 +890,7 @@ fn run_takes(directory: &Path, kerfd: Option<&Path>, id: &str, choose: Option<u3
     Ok(())
 }
 
-/// Every shot a recipe makes, a line each, and what they come to. Nothing is run.
+/// Every shot its steps make, a line each, and what they come to. Nothing is run.
 fn run_shots(directory: &Path, kerfd: Option<&Path>) -> Result<()> {
     let runtime = runtime_for(directory, kerfd)?;
     let state = runtime.get_state().map_err(runtime_error)?;
@@ -2098,8 +2098,8 @@ mod tests {
             "  take 2  shots/open.takes/002.mp4  roll 2"
         );
         assert_eq!(
-            take_line(&take(false, &["the recipe", "refs/boat.png"])),
-            "  take 2  shots/open.takes/002.mp4  (the recipe, refs/boat.png changed since)"
+            take_line(&take(false, &["its steps", "refs/boat.png"])),
+            "  take 2  shots/open.takes/002.mp4  (its steps, refs/boat.png changed since)"
         );
     }
 

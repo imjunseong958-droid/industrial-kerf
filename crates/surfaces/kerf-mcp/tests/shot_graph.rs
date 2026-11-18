@@ -276,7 +276,7 @@ fn an_agent_reads_a_shots_graph_and_sets_what_a_person_sets_there() {
         "edit",
         json!({"revise": back["proposal"], "workflowSet": [{"media": "shot", "line": line, "node": loader, "input": "unet_name", "value": "other"}]}),
     );
-    assert!(said.contains("which the recipe fills"), "{said}");
+    assert!(said.contains("which the step fills"), "{said}");
     let said = refused(&router, "look", json!({"workflow": {"media": "shot", "line": line - 1}}));
     assert!(said.contains("model `still` is not run by kerf-comfy"), "{said}");
     // A shot that says where nothing goes has nothing to hold its takes to.
