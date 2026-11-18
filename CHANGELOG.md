@@ -19,8 +19,8 @@ on `main`; its section here becomes the release's notes on GitHub
   nothing else: what the model made is laid back over the footage through
   the mask, where before the whole frame was the model's and what it kept
   came back worse. `grow=` makes anew that much around the mask as well, and
-  `feather=` is how softly the two meet. With the mask grown well past a
-  thing and the thing named under `negative=`, the thing is taken out.
+  `feather=` is how softly the two meet. A thing is taken out by `plate`,
+  below, and not by this.
 - There is one `depth`, and it holds still: the frames are read together,
   so a place that does not move in the picture keeps its grey from frame to
   frame, three times as well as before and in about a third of the time.
@@ -34,6 +34,16 @@ on `main`; its section here becomes the release's notes on GitHub
   only of frames seen together. One frame alone is `set`'s.
   `docs/shots.md` lists the files a ComfyUI server holds for the
   workflows that come with `kerf-comfy`, and which workflow loads which.
+- `kerf-comfy` comes with `plate`, for a ComfyUI server that has VOID: a
+  thing taken out of footage, with what was behind it there
+  (`generate model=plate guide=<footage> guide_mask={man.mp4} prompt="an
+  empty path"`). The mask is a matte of the thing, and the prompt says what
+  the picture shows once it is gone. Outside the mask the plate is the
+  footage's own pixels; `reach=` takes the thing's shadow with it, and
+  `refine=true` has the model's second pass go over the first. With a plate
+  under it, a thing cut out by its matte is a layer to move, make larger or
+  leave out, and the picture behind it is whole. A plate wants its mask:
+  without `guide_mask=` it is refused before the server is asked.
 - `shot-moved` no longer comes with `kerf-comfy`. It made a shot from a
   picture to start from and the way one clip goes, and read no guide.
   Beside a guide, `shot-directed` reads a first frame (`first=`) and where

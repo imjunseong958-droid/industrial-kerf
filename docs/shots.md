@@ -802,12 +802,18 @@ name, and the server has to have them under ComfyUI's `models`:
 | `depth_anything_3_base.safetensors` | `geometry_estimation` | `depth`, `cameras`, `set-views` |
 | `moge_3_vitl_fp16.safetensors` | `geometry_estimation` | `set` |
 | `sam3.1_multiplex_fp16.safetensors` | `checkpoints` | `matte`, `matte-shown` |
+| `void_pass1.safetensors`, `void_pass2.safetensors` | `diffusion_models` | `plate` |
+| `cogvideox_vae.safetensors` | `vae` | `plate` |
+| `t5xxl_fp16.safetensors` | `text_encoders` | `plate` |
+| `raft_large_C_T_SKHT_V2-ff5fadd5.safetensors` | `optical_flow` | `plate` |
 
-`moves-shown` and `set-splats` load none. Six files, then: three for the
-model that makes every shot, and one for each of the three that read a
-picture back. A server that will never be asked for a workflow need not
-hold what only that one loads, which is `set`'s one file. Each name is a
-value the workflow sets (`unet`, `vae`, `text_encoder`, `model`),
+`moves-shown` and `set-splats` load none. Eleven files, then: three for
+the model that makes every shot, one for each of the three that read a
+picture back, and five for the one that takes a thing out. A server that
+will never be asked for a workflow need not hold what only that one loads:
+`set`'s one file, `plate`'s five. Each name is a
+value the workflow sets (`unet`, `unet2`, `vae`, `text_encoder`, `flow`,
+`model`),
 so another file of the kind is a word on a line (`model=<file>`) or a
 value in a shot's own copy of the workflow, below.
 
@@ -879,7 +885,7 @@ A model can go the other way from a shot: from a picture in motion to what
 the picture is of, how near each pixel is, the shape of what it shows, where
 the camera was. To Kerf it is a model like any other, whose file is not a
 shot: `generate model=<reader> guide=<footage>`, with `out={depth.mp4}`
-where a later step reads what it makes. Six such workflows come with
+where a later step reads what it makes. Seven such workflows come with
 `kerf-comfy`, for the models ComfyUI has nodes for, one for each thing read:
 
 | Workflow | What it makes of its guide | As |
@@ -890,6 +896,7 @@ where a later step reads what it makes. Six such workflows come with
 | `set` | One frame alone rebuilt as a mesh with the frame as its colors, for a `gen=mesh@1` clip, by another model. `frame=<n>` picks the frame, from 0; `decimation=1` keeps every pixel as a corner, where 2, as it comes, keeps every other. With `out={lens.txt}` it writes the lens that frame was seen through, degrees down the picture, in place of the mesh. | a `.glb`, or a `.txt` |
 | `matte` | The thing the prompt names, in white on black, on every frame: found where it comes into the picture and followed ([A thing in footage, by its name](#a-thing-in-footage-by-its-name)). | a video |
 | `matte-shown` | What `matte` finds, each thing in a color of its own over the guide with its number on it. | a video |
+| `plate` | The guide with a thing taken out of it, and what was behind the thing there: what `guide_mask` is white on, by a model made for that. | a video |
 
 One more reads a file that is not a picture. `set-splats` takes a scene
 kept as splats (`ref=<scene.ply>`, or `.spz`, `.splat`, `.ksplat`) and makes
@@ -1227,12 +1234,49 @@ there is another shape than what was, an astronaut where a man walked.
 `feather=<pixels>` is how softly the two meet. Outside the mask the take is
 the footage's own pixels.
 
-**A thing taken out.** The same two lines, with a prompt that says what is
-behind the thing (`prompt="an empty dirt path below a dry hillside"`), the
-thing's own words under `negative=`, and `grow=` well past its edge. It
-asks more of a model than putting a thing in:
-[the record](shots-measured.md) (12) has what the small one on hand made
-of it.
+**A thing taken out.** Putting a thing in and taking one out are not one
+model's work: a model that makes a shot fills a mask in the shape of a man
+with a man. `plate` runs one made for taking out (VOID), which has what is
+behind a thing from the frames it shows in and is told only what to leave:
+
+```text
+generate model=matte guide=../footage/walk.mp4 prompt="man" out={man.mp4}
+generate model=plate guide=../footage/walk.mp4 guide_mask={man.mp4} prompt="an empty dirt path below a dry grassy hillside" reach=72
+```
+
+```json
+"plate": { "run": ["/path/to/kerf-comfy", "--workflow", "plate", "{request}"] }
+```
+
+- **The prompt says what the picture shows once the thing is gone**, and
+  not what to take out: the mask says that.
+- **Where the mask is black the plate is the guide's own pixels**, at the
+  guide's own size, as with `shot-into`. The model reads the guide smaller,
+  at about 672x384 in the guide's shape (`area=` is how many pixels), and
+  only what it made under the mask is brought back up.
+- **`grow=<pixels>`** takes out that much around the mask as well, 8 as it
+  comes.
+- **`reach=<pixels>`** lays the model's picture back that much further
+  again, for what the thing left on what is around it. A man's matte does
+  not cover his shadow, and a matte by the shadow's name does not find it;
+  the model takes the shadow out with the man all the same, and without
+  `reach` the footage's own pixels put it back. It is 0 as it comes, since
+  what it reaches is the model's picture and no longer the footage's.
+- **It is made in one pass of the model's two.** `refine=true` has the
+  second go over the first, in not quite twice the time; on the two shots
+  it was tried on it came no nearer what was behind the thing.
+- It is of its guide frame for frame, up to 197 frames, whatever count the
+  model takes: the guide is read with its last frame held to the next
+  count it does take, five and a multiple of eight, and the plate is cut
+  back to the guide's own. 81 frames of 832x480 took a little over three
+  minutes, and over seven where the server had the model still to load.
+- With no `guide_mask=` it has nothing to take out, and says so before the
+  server is asked.
+
+[The record](shots-measured.md) (13) has both beside each other: on a shot
+whose camera does not move, where the footage itself later shows what was
+behind the thing, the plate was 7 of 255 from it and the model that makes
+shots 47.
 
 **Layers.** A matte is media, so the document cuts footage by it as it
 cuts by any matte: the footage on one track, the same footage over it shown
@@ -1256,6 +1300,28 @@ thing, a title a man walks in front of:
 The matte's media is made by a recipe of one line (`generate model=matte
 guide=../footage/walk.mp4 prompt="man"`), so it is a take as any other is,
 and wants making again when its footage or its prompt changes.
+
+With a plate under it, the thing is a layer that is moved, made larger, or
+left out, and the picture behind it is whole wherever it goes: the plate on
+the lowest track in place of the footage, and what is set on the clip that
+shows the thing set on its matte's clip as well, the matte being read where
+its own clip puts it:
+
+```text
+  track V1 video
+    clip plate media=gone src=0f at=0f dur=81f
+  track V2 video
+    clip mover media=walk src=0f at=0f dur=81f
+      set x=0.25 scale=1.5
+      fx key.trackmatte@1 matte=V3 composite=matte-luma
+  track V3 video enabled=false
+    clip moves media=man src=0f at=0f dur=81f
+      set x=0.25 scale=1.5
+```
+
+A thing's shadow is not in its matte, so the layer that is moved has
+none where it goes. `fixtures/shots/walk` is such a project, with the
+recipes that make each part.
 
 Kerf's own cut ([Passes](#passes), `matte=<clip>`) goes by colour and
 edges and needs nothing set up. It holds a thing that stands apart from

@@ -845,3 +845,99 @@ head of each part are the architecture's.
    mattes in one take; a matte led by Kerf's own points on the picture in
    the editor, whose cards still cut by colour and edges; a depth of more
    than 240 frames, which wants reading in parts.
+13. **A thing taken out by a model made for that** (2026-11-18). The server
+   was given VOID the same day, the model 12 named as wanting: two passes
+   of CogVideoX-Fun, `void_pass1` and `void_pass2`, with their own coder
+   (`cogvideox_vae`), words' reader (`t5xxl_fp16`) and the flow the second
+   pass is led by (`raft_large`). `plate` is the workflow: the guide, the
+   mask of the thing as `matte` finds it, and a prompt that says what the
+   picture shows once the thing is gone. The same two shots as 12, each 81
+   frames of 832x480, with the mattes made there.
+
+   *How it is written*, each for a thing found on the way. **The model
+   takes five frames and a multiple of eight**, and where it is handed
+   another count it rounds down and says nothing: of 81 it would make 77.
+   The graph holds the guide's last frame for eight more, asks the model
+   for the next count it takes, 85, and cuts what comes back to the
+   guide's own 81. **The model reads at about 672x384**, so the graph
+   brings the guide to that area in the guide's own shape, by its own
+   arithmetic, and brings only what was made under the mask back up: the
+   plate is the guide's size, and away from the mask it is 1.9 to 2.1 of
+   255 from the footage, the file's encoding. **A mask of the thing does
+   not cover its shadow.** The model takes the shadow out all the same,
+   which its own picture shows; laid back through the mask alone, the
+   footage's pixels put it back. So `reach=` lays the model's picture back
+   further than the mask (below). Two other ways to the shadow were tried
+   and left: a matte by its name, which `matte` does not find (`shadow of
+   the man on the ground` was a speck on the first frames and nothing
+   after), and taking the model's picture wherever it differs from the
+   footage, which it does everywhere, as much far from the man as beside
+   him, being a picture made again.
+
+   *Beside the model that makes shots.* On the freeway the camera does not
+   move, so the footage itself shows what is behind the pickup once the
+   pickup has gone: the last frames, where they hold still. Each take's
+   first 40 frames held to that, over the pixels the pickup then covered
+   (34,000 a frame):
+
+   | | From what is behind the pickup, of 255 | Worst frame | Took |
+   |---|---|---|---|
+   | The footage, the pickup still in it | 68.1 | | |
+   | `shot-into`, as 12 took it out | 47.1 | 73.7 | 111 s |
+   | `plate`, both passes | 9.7 | 11.3 | 344 s |
+   | `plate`, one pass, as it comes | 7.4 | 9.2 | 186 to 211 s |
+
+   Looked at, `plate` has the stack of tires with its striped board and
+   the rail before it, as the footage has them once the pickup has passed;
+   `shot-into` had a row of tires of its own making, and no board. On the
+   walk, where the camera turns and nothing shows what was behind the man,
+   `plate` has the hillside and the path through him on every frame looked
+   at, where 12 had a patch.
+
+   *His shadow.* The ground beside the man's feet at frame 72, where his
+   shadow falls, by its darkest twentieth, of 255: 89 in the footage and
+   226 on the path just below it. With `reach=0` the plate has 93 there,
+   the shadow as it was; with `reach=72`, 224, the path. It is 0 as it
+   comes: what it reaches is the model's picture and no longer the
+   footage's, and how far a shadow goes is the shot's.
+
+   *One pass or two.* The model comes with a second pass over the first,
+   for a picture that holds stiller. Measured, it did not:
+
+   | | From what is behind the pickup | From a frame to the next, there | The walk, from a frame to the next, within 60 px of the man | Took, the freeway and the walk |
+   |---|---|---|---|---|
+   | One pass | 7.4 | 0.68 | 7.73 | 211 s, 199 s |
+   | Two | 9.7 | 0.79 | 7.74 | 344 s, 353 to 367 s |
+
+   So `plate` is one pass, and `refine=true` asks for the second. It is two
+   shots of five seconds; a longer one, or one with more in it that moves,
+   may be what the second pass is for.
+
+   *As many frames as it reads.* 240 frames of the walk at 960x540, of
+   which it reads 197 and says so: a plate of 197 frames at the guide's
+   size in 638 s, the man gone on each frame looked at.
+
+   *With no mask* it is refused before the server is asked (`this workflow
+   makes nothing without guide_mask=, which the line does not give`),
+   where the server would have run a graph with its middle left out.
+
+   *Layers apart, in the document* (`fixtures/shots/walk`, by `kerf make`
+   and no other way). `gone` is the man's matte and the plate of it with
+   `reach=72`, 22 s and 436 s: the plate took twice what it took above,
+   the server having the model to load again after the matte's. `moved` is
+   a sequence Kerf draws: the plate on the lowest track, and over it the
+   footage shown through the man's matte, a quarter of the frame further
+   along and half as large again, the same set on the matte's clip.
+   Looked at on three frames, the man walks where he was put and the path
+   is whole where he was. He has no shadow there: it is not in his matte.
+
+   What it shows, and what it does not. Taking a thing out is a line of a
+   recipe, by the model made for it, and what comes back is the footage
+   with that one thing gone: held to what the footage itself shows, it is
+   a sixth as far off as the model that makes shots was. With it a thing
+   is a layer of its own over a picture that is whole. It is two shots of
+   five seconds and one of eight, one thing in each. Not tried: a thing
+   that others pass in front of, two things taken out at once, a thing
+   that fills much of the frame, footage larger than 960x540, and what the
+   model's own affected region, the level of its mask this workflow does
+   not write, does for a shadow in place of `reach`.

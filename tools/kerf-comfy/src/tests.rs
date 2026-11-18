@@ -691,6 +691,50 @@ fn a_file_made_of_a_guide_has_the_guides_rate_size_and_frames() {
     let (_, said) = made(&alone, "depth");
     assert!(said.contains("for 1 frames of 322x180"), "{said}");
 
+    // A workflow that takes a thing out of its guide is nothing without the mask of the
+    // thing: with none given it has nothing left that saves, and says what it wants.
+    let (server, kept) = serve(|asked, before| match asked.line.as_str() {
+        line if line.starts_with("GET /object_info/") => {
+            let class = line.trim_start_matches("GET /object_info/").to_owned();
+            // What each kind of node cannot do without, as the server says: a node that
+            // chooses between two pictures, and one that lays one over another through a
+            // mask, run without what this workflow has them read.
+            let required: &[&str] = match class.as_str() {
+                "ComfySwitchNode" => &["switch"],
+                "ImageCompositeMasked" => &["destination", "source", "x", "y", "resize_source"],
+                "ImageFromBatch" => &["image", "batch_index", "length"],
+                "ImageScale" => &["image", "upscale_method", "width", "height", "crop"],
+                "CreateVideo" => &["images", "fps"],
+                "SaveVideo" => &["video", "filename_prefix", "format"],
+                _ => &[
+                    "video", "image", "mask", "image1", "image2", "positive", "negative", "vae",
+                    "quadmask", "model", "noise", "guider", "sampler", "sigmas", "latent_image",
+                    "samples", "optical_flow", "warped_noise",
+                ],
+            };
+            let required: serde_json::Map<String, serde_json::Value> =
+                required.iter().map(|name| ((*name).to_owned(), json!([]))).collect();
+            json_answer(json!({class: {"input": {"required": required}}}))
+        }
+        _ => reader(asked, before),
+    });
+    let refused = make(
+        &asking("plate.mp4", json!({})),
+        folder.path(),
+        &Workflow::named("plate").unwrap(),
+        &server,
+        &Tools::find(),
+        &patience(),
+        &AtomicBool::new(false),
+        &mut |_| {},
+    )
+    .unwrap_err();
+    assert_eq!(
+        refused,
+        "this workflow makes nothing without `guide_mask=`, which the line does not give"
+    );
+    assert!(kept.lock().unwrap().iter().all(|asked| asked.line != "POST /prompt"));
+
     // With no guide there is nothing to make a file of, and nothing is asked of the server.
     let mut none = asking("depth.mp4", json!({}));
     none.guide = None;

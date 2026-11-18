@@ -73,7 +73,7 @@ const WORKFLOW_VERSION: u32 = 1;
 const PROMPT: &str = "prompt";
 
 /// The workflows that come with kerf-comfy, by name.
-pub const BUNDLED: [(&str, &str); 14] = [
+pub const BUNDLED: [(&str, &str); 15] = [
     ("shot", include_str!("../workflows/shot.json")),
     ("shot-timed", include_str!("../workflows/shot-timed.json")),
     ("shot-into", include_str!("../workflows/shot-into.json")),
@@ -91,6 +91,7 @@ pub const BUNDLED: [(&str, &str); 14] = [
     ("moves-shown", include_str!("../workflows/moves-shown.json")),
     ("matte", include_str!("../workflows/matte.json")),
     ("matte-shown", include_str!("../workflows/matte-shown.json")),
+    ("plate", include_str!("../workflows/plate.json")),
 ];
 
 /// What fills a workflow's blanks, by name.
@@ -339,6 +340,13 @@ impl Workflow {
                 takes.insert("frames".to_owned(), frames);
             }
             let mut reads = vec![of];
+            // A guide beside the first, by its own name: the mask of what to take out of it.
+            reads.extend(
+                blanks
+                    .iter()
+                    .filter(|name| guide_named(name).is_some())
+                    .map(String::as_str),
+            );
             if blanks.contains(MOVES) {
                 reads.push(MOVES);
             }
@@ -462,6 +470,31 @@ impl Workflow {
             });
         }
         names
+    }
+
+    /// The nodes nothing else of the graph reads, by their ids: those that save what it
+    /// makes, or show it.
+    pub fn ends(&self) -> BTreeSet<String> {
+        let mut read = BTreeSet::new();
+        for node in self.graph.values() {
+            for input in node["inputs"].as_object().into_iter().flat_map(Map::values) {
+                read.extend(link(input).map(str::to_owned));
+            }
+        }
+        self.graph
+            .keys()
+            .filter(|id| !read.contains(*id))
+            .cloned()
+            .collect()
+    }
+
+    /// The names of what a request hands over that the graph has a blank for and `values`
+    /// has not got: what a line could give and did not.
+    pub fn not_given(&self, values: &Values) -> Vec<String> {
+        self.blanks()
+            .into_iter()
+            .filter(|name| names_what_is_handed(name) && !values.contains_key(name))
+            .collect()
     }
 
     /// The kinds of node its graph has, each once.
@@ -965,6 +998,75 @@ mod tests {
     }
 
     #[test]
+    fn a_plate_is_of_its_guide_and_its_mask_and_nothing_without_the_mask() {
+        let plate = Workflow::named("plate").unwrap();
+        assert!(plate.of_guide());
+        // It reads a second guide beside the first, as a shot that makes a part anew does.
+        let takes = plate.takes();
+        assert_eq!(takes["reads"], json!(["guide", "guide_mask"]));
+        assert_eq!(takes["frames"], json!({"most": 197}));
+        let more = &takes["more"];
+        assert_eq!((&more["grow"], &more["reach"], &more["refine"]), (&json!(8), &json!(0), &json!(false)));
+        // What it saves is the one node nothing reads.
+        assert_eq!(plate.ends(), BTreeSet::from(["66".to_owned()]));
+        let mut needs = |class: &str| -> Result<BTreeSet<String>, String> {
+            let names: &[&str] = match class {
+                "GetVideoComponents" => &["video"],
+                "ImageToMask" => &["image", "channel"],
+                "GrowMask" => &["mask", "expand", "tapered_corners"],
+                "MaskToImage" => &["mask"],
+                "ImageFromBatch" => &["image", "batch_index", "length"],
+                "RepeatImageBatch" => &["image", "amount"],
+                "ImageBatch" => &["image1", "image2"],
+                "ImageScale" => &["image", "upscale_method", "width", "height", "crop"],
+                "ThresholdMask" => &["mask", "value"],
+                "ImageBlur" => &["image", "blur_radius", "sigma"],
+                "VOIDInpaintConditioning" => {
+                    &["positive", "negative", "vae", "video", "quadmask", "width", "height", "length", "batch_size"]
+                }
+                "CFGGuider" => &["model", "positive", "negative", "cfg"],
+                "SamplerCustomAdvanced" => &["noise", "guider", "sampler", "sigmas", "latent_image"],
+                "VAEDecode" => &["samples", "vae"],
+                "VOIDWarpedNoise" => &["optical_flow", "video", "width", "height", "length", "batch_size"],
+                "VOIDWarpedNoiseSource" => &["warped_noise"],
+                "ComfySwitchNode" => &["switch"],
+                "ImageCompositeMasked" => &["destination", "source", "x", "y", "resize_source"],
+                "CreateVideo" => &["images", "fps"],
+                "SaveVideo" => &["video", "filename_prefix", "format"],
+                other => return Err(format!("nothing links {other} to a node left out")),
+            };
+            Ok(names.iter().map(|name| (*name).to_owned()).collect())
+        };
+        let mut sent = |files: &[(&str, &str)]| {
+            let mut given = values(files);
+            given.extend(plate.set.clone());
+            (plate.not_given(&given), plate.graph(&given, &mut needs).unwrap())
+        };
+        // Both given: all of it, the model told the mask grown, and its picture laid back
+        // through the mask grown that much further again.
+        let (wanted, whole) = sent(&[("guide", "g.mp4"), ("guide_mask", "m.mp4")]);
+        assert!(wanted.is_empty());
+        assert_eq!(whole.as_object().unwrap().len(), plate.graph.len());
+        assert_eq!(whole["34"]["inputs"]["quadmask"], json!(["22", 0]));
+        assert_eq!((&whole["6"]["inputs"]["expand"], &whole["8"]["inputs"]["expand"]), (&json!(8), &json!(0)));
+        assert_eq!(whole["64"]["inputs"]["destination"], json!(["2", 0]));
+        // The model takes five frames and a multiple of eight, and a guide has what it has:
+        // it is read with its last frame held to the next such count, and cut back to its own.
+        assert_eq!(whole["12"]["inputs"]["expression"], "ceil(max(a - 5, 0) / 8) * 8 + 5");
+        assert_eq!(whole["12"]["inputs"]["values.a"], json!(65));
+        assert_eq!(whole["34"]["inputs"]["length"], json!(["12", 1]));
+        assert_eq!(whole["60"]["inputs"]["length"], json!(65));
+        // One pass, or the second over it, is a value of the line's, read where the picture
+        // is chosen: the pass not chosen is not run.
+        assert_eq!(whole["58"]["inputs"], json!({"switch": false, "on_true": ["57", 0], "on_false": ["46", 0]}));
+        // No mask: the model has nothing to take out, and nothing is left that saves.
+        let (wanted, unmasked) = sent(&[("guide", "g.mp4")]);
+        assert_eq!(wanted, ["guide_mask"]);
+        assert!(plate.ends().iter().all(|end| unmasked.get(end).is_none()));
+        assert!(unmasked.get("34").is_none() && unmasked.get("64").is_none());
+    }
+
+    #[test]
     fn the_files_the_workflows_load_are_the_ones_a_server_is_said_to_hold() {
         // `docs/shots.md`, What the server holds: a workflow that loads another file, or
         // one that no longer loads one, changes that table with this.
@@ -985,6 +1087,13 @@ mod tests {
             ("depth_anything_3_base.safetensors", vec!["depth", "cameras", "set-views"]),
             ("moge_3_vitl_fp16.safetensors", vec!["set"]),
             ("sam3.1_multiplex_fp16.safetensors", vec!["matte", "matte-shown"]),
+            // The model that takes a thing out, in two passes, with its own coder, its own
+            // words' reader, and the flow its second pass is led by.
+            ("void_pass1.safetensors", vec!["plate"]),
+            ("void_pass2.safetensors", vec!["plate"]),
+            ("cogvideox_vae.safetensors", vec!["plate"]),
+            ("t5xxl_fp16.safetensors", vec!["plate"]),
+            ("raft_large_C_T_SKHT_V2-ff5fadd5.safetensors", vec!["plate"]),
         ]
         .into_iter()
         .map(|(file, by)| (file.to_owned(), by))

@@ -405,6 +405,24 @@ pub fn make(
     }
 
     let graph = workflow.graph(&values, &mut |class| server.required(class))?;
+    // With what the line does not give left out, and all that cannot do without it, a
+    // workflow can have nothing left that saves a file: said here, with what it wants,
+    // where the server would say only that the graph has no end.
+    if !workflow.ends().iter().any(|id| graph.get(id).is_some()) {
+        let wanted = workflow.not_given(&values);
+        return Err(if wanted.is_empty() {
+            "nothing of this workflow is left to save a file".to_owned()
+        } else {
+            format!(
+                "this workflow makes nothing without {}, which the line does not give",
+                wanted
+                    .iter()
+                    .map(|name| format!("`{name}=`"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        });
+    }
     let kept = serde_json::to_vec_pretty(&graph).map_err(|error| error.to_string())?;
     std::fs::write(work.join(GRAPH_SENT), kept)
         .map_err(|error| format!("cannot write into {}: {error}", work.display()))?;

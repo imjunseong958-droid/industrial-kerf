@@ -740,8 +740,10 @@ recipes, in `fixtures/shots/car`.
    cut out. Since 2026-11-18 the rest is the footage's own pixels, what
    the model made being laid back over it through the mask, and the mask
    of a thing that is in the footage is a matte a model finds by the
-   thing's name ([the record](shots-measured.md), 12). A picture with its
-   depth waits for a model that reads both.
+   thing's name ([the record](shots-measured.md), 12). Taking a thing out
+   is another model's work, `plate`, which has what is behind it from the
+   frames it shows in (13). A picture with its depth waits for a model
+   that reads both.
 6. **How a point moves, as a direction of its own**, which is in
    ([the record](shots-measured.md)): `generate … moves=<clip>` hands a clip's place on
    each frame, as a layout (`shot-led`, `overlap` 0.57) or as tracks of

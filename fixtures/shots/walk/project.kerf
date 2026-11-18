@@ -6,6 +6,7 @@ media shown path="shots/shown.mp4" rate=16 dur=81f video=832x480 recipe="shots/s
 media shirt path="shots/shirt.mp4" rate=16 dur=81f video=832x480 recipe="shots/shirt.kerfrecipe"
 media gone path="shots/gone.mp4" rate=16 dur=81f video=832x480 recipe="shots/gone.kerfrecipe"
 media layers path="shots/layers.mp4" rate=16 dur=81f video=832x480 recipe="shots/layers.kerfrecipe"
+media moved path="shots/moved.mp4" rate=16 dur=81f video=832x480 recipe="shots/moved.kerfrecipe"
 sequence s1 rate=16 size=832x480
   track V1 video
     clip back media=walk src=0f at=0f dur=81f
@@ -17,3 +18,13 @@ sequence s1 rate=16 size=832x480
       fx key.trackmatte@1 matte=V4 composite=matte-luma
   track V4 video enabled=false
     clip cut media=man src=0f at=0f dur=81f
+sequence s2 rate=16 size=832x480
+  track V1 video
+    clip plate media=gone src=0f at=0f dur=81f
+  track V2 video
+    clip mover media=walk src=0f at=0f dur=81f
+      set x=0.25 scale=1.5
+      fx key.trackmatte@1 matte=V3 composite=matte-luma
+  track V3 video enabled=false
+    clip moves media=man src=0f at=0f dur=81f
+      set x=0.25 scale=1.5

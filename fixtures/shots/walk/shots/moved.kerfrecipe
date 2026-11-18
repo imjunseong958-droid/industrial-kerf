@@ -1,0 +1,4 @@
+kerf-recipe 1
+# The layers apart, drawn by Kerf: the path with the man taken out, and the man over it,
+# further along the path than he was and half as large again.
+render s2 {out}
