@@ -203,7 +203,7 @@ otherwise. Nothing else has to be kept in step with it.
 | 2 | `effects` | The effects carried from FilmCraft and EffectCraft, all areas together | `kerf-fx`, `kerf-raster-fx` |
 | 2 | `image` | The little of a photo editor video needs | `kerf-image` |
 | 2 | `color` | Measuring a grade; the grading effects themselves are in `effects` for now | `kerf-scopes` |
-| 2 | `vfx` | Following what moves in a picture and cutting it out; keys and mattes are in `effects` for now | `kerf-track`, `kerf-segment` |
+| 2 | `vfx` | Following what moves in a picture and cutting it out; keys and mattes are in `effects` for now | `kerf-track` |
 | 2 | `motion` | Motion graphics drawn from numbers | `kerf-motion` |
 | 3 | `engine` | Sequences into frames and files | `kerf-core`, `kerf-compose`, `kerf-playback`, `kerf-engine` |
 | 4 | `surfaces` | What people and agents touch | `kerf-runtime`, `kerf-agent`, `kerf-mcp`, `kerf-skills`, `kerf-commands`, `kerf-cli`, `kerf-qt-bridge`, `kerf-cloud`, `kerf-fetcher`, `kerf-workflow`, `kerf-shots` |
@@ -737,14 +737,23 @@ recipes, in `fixtures/shots/car`.
    into the footage where a box stands in the scene, on all 65 frames of
    the travelling shot, the rest 7 of 255 from what it was (`overlap`
    0.66); `render … matte=<clip>` draws the mask with what the set hides
-   cut out. A picture with its depth waits for a model that reads both.
+   cut out. Since 2026-11-18 the rest is the footage's own pixels, what
+   the model made being laid back over it through the mask, and the mask
+   of a thing that is in the footage is a matte a model finds by the
+   thing's name ([the record](shots-measured.md), 12). Taking a thing out
+   is another model's work, `plate`, which has what is behind it from the
+   frames it shows in (13). A picture with its depth waits for a model
+   that reads both.
 6. **How a point moves, as a direction of its own**, which is in
    ([the record](shots-measured.md)): `generate … moves=<clip>` hands a clip's place on
    each frame, as a layout (`shot-led`, `overlap` 0.57) or as tracks of
    points with a picture to start from (`shot-moved`, 0.60). One track
    says where and not how large (0.48, a third too large), so a clip is
    five, its box's middle and toward its corners. Nothing is said of the
-   rest of the scene, which stays about where the first frame has it. It
+   rest of the scene, which stays about where the first frame has it;
+   so `shot-moved`, which read no guide, went on 2026-11-18, a guide
+   being what a shot here is made from, and the tracks are left as a
+   blank for a workflow of one's own (`{moves_box}`). It
    is the fourth row of the table at the top: where, when, what, and how
    each thing goes.
 7. **A signal measured** ([the record](shots-measured.md)): handed as a mask a frame
@@ -1294,11 +1303,19 @@ So turning and changing size cost it nothing a band cannot follow, and blur is w
 | Open all the frame, 128 px | 0.643 | 0.702 | 0.728 | 0.780 |
 | Open all the frame, half the size, 64 px | 0.649 | 0.649 | 0.700 | 0.749 |
 
-These are not the numbers this table used to give, which counted what is covered for just half of 8 moments as more than half and so put the truth a sixteenth of the blur further out at both ends; the pictures still have 8 moments, and the truth now has 33. A mask drawn from it comes nearer the true alpha as well, 0.160 off to 0.106 at the longest of these with a hard subject that can be read, and an outline's area comes within 5% of what is half covered there. It takes 39.0 ms a frame at 640x360 on a shot it applies to, from 37.4. A blur has to be a band and a half long for this to apply, below which the measure does as well or better: a disk 128 across under a blur of 12 pixels comes within 0.052 of the true alpha by the measure and 0.077 by this. Anything else stays as it was, to its bytes and its time: a still subject, one going slowly, one going fast and sharp, and one out of focus, which reads as wide whichever way its edge faces. What stays hard is a blur near as long as the subject is wide, where no pixel shows it plainly: 0.649 to 0.78 above. All of this is on synthetic shots. On a real shutter it does not come in (Real footage, below): a box truck at 56 pixels a frame at 1024x540, whose front edge says the shutter was open about 0.78 of a frame, is followed by the measure alone, overlapping what is more than half covered by 0.892 on average and 0.780 at worst over 20 frames, at 93 ms a frame on the machine it was first measured on and 0.21 s on a 4-core 2.1 GHz Xeon. Its edges facing the way it goes read 45.8 pixels of blur, past the 38.4 a shot needs, but the slope over all 40 corners of a truck with a cab and wheels says 35.4, so `fit` says no; let in (the test fits it again with no least blur), it finds the shutter open all the frame and draws no better, 0.888. A trained model is optional and swappable (`kerf_segment::MaskModel`):
-it only sharpens the cut's prior, and one that disagrees with the flow is left out for that frame.
-MobileSAM runs in plain Rust; its weights are never bundled, and `look` names the file to fetch. On a
+These are not the numbers this table used to give, which counted what is covered for just half of 8 moments as more than half and so put the truth a sixteenth of the blur further out at both ends; the pictures still have 8 moments, and the truth now has 33. A mask drawn from it comes nearer the true alpha as well, 0.160 off to 0.106 at the longest of these with a hard subject that can be read, and an outline's area comes within 5% of what is half covered there. It takes 39.0 ms a frame at 640x360 on a shot it applies to, from 37.4. A blur has to be a band and a half long for this to apply, below which the measure does as well or better: a disk 128 across under a blur of 12 pixels comes within 0.052 of the true alpha by the measure and 0.077 by this. Anything else stays as it was, to its bytes and its time: a still subject, one going slowly, one going fast and sharp, and one out of focus, which reads as wide whichever way its edge faces. What stays hard is a blur near as long as the subject is wide, where no pixel shows it plainly: 0.649 to 0.78 above. All of this is on synthetic shots. On a real shutter it does not come in (Real footage, below): a box truck at 56 pixels a frame at 1024x540, whose front edge says the shutter was open about 0.78 of a frame, is followed by the measure alone, overlapping what is more than half covered by 0.892 on average and 0.780 at worst over 20 frames, at 93 ms a frame on the machine it was first measured on and 0.21 s on a 4-core 2.1 GHz Xeon. Its edges facing the way it goes read 45.8 pixels of blur, past the 38.4 a shot needs, but the slope over all 40 corners of a truck with a cab and wheels says 35.4, so `fit` says no; let in (the test fits it again with no least blur), it finds the shutter open all the frame and draws no better, 0.888. On a
 disk over a still textured background for 24 frames at 200x150, the outline overlaps the truth by at
-least 0.994; camouflaged so colour says nothing, 0.005 alone and 0.966 with a model standing in.
+least 0.994; camouflaged so colour says nothing, 0.005.
+
+The cut goes by colour and edges and builds no model. Until 2026-11-18 a trained one could stand behind
+it (`kerf_segment::MaskModel`), and MobileSAM ran in plain Rust for that, its weights fetched. Held to a
+model that finds a thing by its name and follows it, SAM 3.1 on a ComfyUI server, on two filmed shots
+([the record](shots-measured.md), 12), the cut with MobileSAM behind it took a hillside with the man
+walking before it and a stack of tires with the pickup before them, as the cut alone did, in 111 s for
+81 frames where the server took 13. So it went, by the second rule: such a model is another program's,
+reached by a recipe's line (`generate model=matte guide=<footage> prompt="<the thing>"`,
+[shots.md](shots.md#a-thing-in-footage-by-its-name)), and its matte is a file the document cuts by as
+by any other. The cut stays for what needs nothing set up.
 
 Given `camera`, `look` solves where the camera went over a shot (`kerf_track::camera`, EffectCraft's
 camera tracker in Kerf's terms): points followed through it, a start from the essential matrix or a

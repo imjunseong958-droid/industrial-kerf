@@ -4,4 +4,4 @@ kerf-recipe 1
 # the depth it agrees on across them.
 render s3 {guide.mp4} size=832x480 rate=16
 generate model=cameras guide={guide.mp4} out={cameras.txt}
-generate model=cameras guide={guide.mp4}
+generate model=depth guide={guide.mp4}

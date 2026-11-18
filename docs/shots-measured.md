@@ -640,3 +640,304 @@ head of each part are the architecture's.
    the stand-in, and has none of its seams: at the size the ball is in this
    frame, a twentieth of its width, a reference's detail does not show.
    What a reference adds was not measured.
+12. **A thing found in footage by its name, and one reader for each thing
+   read** (2026-11-18). The server has had SAM 3.1 since
+   (`sam3.1_multiplex_fp16.safetensors`, in `models/checkpoints/`), which
+   ComfyUI's own nodes run: it finds what a text names, or what points are
+   on, and follows it through a video. So there were three models that
+   read a picture back, and a fourth in Kerf itself, MobileSAM in plain
+   Rust behind `look` with `track`; this is what each was found to do
+   beside the others, and which went. Two shots, from Netflix's *Chimera*
+   (CC BY 4.0, `licenses/README.md`), cut from the 960x540 file of the Open
+   Content bucket, neither in the repository: *the walk*, a man coming
+   along a dirt path toward a camera that turns with him, and *the
+   freeway*, a camera that does not move over two directions of traffic, a
+   white box truck crossing and a black pickup creeping across the near
+   lane. Each is 81 frames of 832x480 at 16 a second; the long ones are
+   240 frames of 960x540 at 25. The models that make a shot are the small
+   ones the rest of this record was made with, so what a take looks like
+   says that the way works and little of how good it can be.
+
+   *A matte* (`matte`: the guide, `SAM3_VideoTrack` by the prompt,
+   `SAM3_TrackToMask`, saved as a video). From the line being read to the
+   file being there:
+
+   | Line | Took | What it found |
+   |---|---|---|
+   | the walk, `prompt="man"` | 16 s, 13 once the model is loaded | the man on all 81 frames, 1.1% of the frame growing to 4.2% |
+   | the freeway, `prompt="black pickup truck" objects=1` | 13 s | the pickup on the 72 frames it is in the picture, and nothing on the 9 after it has left |
+   | `prompt="white box truck"`, `objects=4` as it comes | 14 s | the truck from the frame it drives in on, and pickups taken for trucks beside it |
+   | `prompt="car" objects=16` | 15 s | sixteen cars; those that drive in once sixteen are followed are not taken up |
+   | the same with `which=4`, the pickup's number in `matte-shown` | 13 s | the pickup, 0.991 of the matte its own words make, by what is in both of what is in either |
+   | `inside="0.55,0.80 0.45,0.82"`, no prompt | 13 s | the pickup, 0.968 of that matte, 0.928 at worst |
+   | `prompt="elephant"` | 13 s | black, but for a speck of a thousandth of the frame on 12 frames |
+   | the walk, 240 frames of 960x540, `prompt="person"` | 47 s | two words of the title card the file starts on, and then the man from his first frame to the last |
+   | `prompt="t-shirt" objects=1` | 13 s | his shirt |
+   | `prompt="sky"` | 13 s | the sky |
+
+   Four things were found on the way, and each is in how the workflow is
+   written. **An empty text is words to the model**: with no prompt the
+   matte was 16% of the frame, cars of its own choosing, so the node that
+   reads the prompt is left out when a line has none (`"given":
+   ["prompt"]`). **Words and points do not go to one follower**: handed
+   both, it had the pointed thing on the first frame and nothing of it by
+   frame 20, so there are two, and points win. **A follower handed no
+   mask at all fails** on the server's GPU (`invalid configuration
+   argument`), so the node that makes masks of points goes when no points
+   are given, and the follower of masks with it. **Which thing is which
+   is a picture**, the one ComfyUI's preview node draws; it saves among
+   the server's temporary files, which `kerf-comfy` did not fetch, and
+   does now where nothing was saved to keep (`matte-shown`).
+
+   *Beside Kerf's own cut, and MobileSAM behind it.* The same two things,
+   by `kerf_track::follow_object` with two points on the thing in the
+   first frame, on four cores, each outline drawn as a matte and held to
+   SAM 3.1's by what is in both of what is in either:
+
+   | | The man | The pickup | 81 frames took |
+   |---|---|---|---|
+   | The cut, by colour and edges | lost at frame 68; 0.69 where it had him | 0.50, and 0.004 at the end | 6 s |
+   | The cut with MobileSAM behind it | all 81 frames; 0.78 | 0.68, and 0.003 at the end | 111 s |
+
+   Looked at on four frames of each: the cut takes a wedge of the hillside
+   behind the man with him, with the model and without; of the pickup it
+   takes the stack of tires behind it as well, and stays on the tires once
+   the pickup has left the picture, where SAM 3.1 has the pickup alone and
+   then nothing. A thing among others like it, and a camera that moves
+   past what is behind, are what colour and edges cannot say, and the
+   small model did not say them either, in eight times the time of the
+   large one on the server. **So MobileSAM is out of Kerf**: the crate
+   that ran it (`kerf-segment`, its PyTorch reader and its kernels, 1,900
+   lines) and `model` of `look` with `track`. The cut stays as what needs
+   nothing set up, and a model's matte is a recipe's line as any model's
+   file is. The roto's tests pass as they did, the model having been a
+   prior the cut ran without.
+
+   *A part made anew* (`shot-into`, Wan 2.1 VACE 1.3B, 20 steps, seed 7,
+   the walk, `guide_mask=` the man's matte, "an astronaut in a white
+   spacesuit and helmet walks along a dirt path"). As the workflow was, the
+   whole frame was the model's: an astronaut where the man walked, and the
+   hillside around him 19 of 255 from the footage, a mosaic of it, since
+   what a model keeps it still draws. The model's picture is now laid back
+   over the guide through the mask, grown and softened (`grow`,
+   `feather`), and away from the mask the take is 2.1 of 255 from the
+   footage, which is the file's own encoding. 97 to 104 s.
+
+   | Line | What the take shows |
+   |---|---|
+   | the man's matte, the astronaut, `grow=12` | an astronaut in his place and at his size on each frame looked at, walking as he does |
+   | his shirt's matte, "a man wearing a bright red hawaiian shirt with yellow flowers", `grow=4 feather=5` | the man in a red flowered shirt, his face, arms and jeans the footage's own |
+   | the pickup's matte, "a yellow taxi cab parked at the side of a freeway" | the pickup, as dark as it was, with yellow lettering on its door |
+   | the same, "a bright yellow car", `grow=24` | no pickup and the tires behind it at frame 10, and a dark red car by frame 40 |
+
+   The first two are the way working. The last two are the model: a mask
+   that hugs a pickup is filled with a pickup, and its color is the
+   prompt's only as far as a small model follows a prompt.
+
+   *A thing taken out*, by the same workflow with what is behind the thing
+   as its prompt:
+
+   | Line | What the take shows |
+   |---|---|
+   | the walk, "an empty dirt path below a dry grassy hillside, nobody, no people", `grow=20` | a figure in camouflage where the man was |
+   | the same without the last words, `negative=` naming a person, a man, a figure, `grow=40` | a blurred blue figure |
+   | "a dry grassy hillside above a pale dirt path, bushes and trees, daylight", the same `negative=`, `grow=64 feather=21`, seed 11 | no figure: a patch of bush and slope, rougher than what is around it |
+   | the freeway, the pickup, "a freeway shoulder with a stack of black tire barrels by a concrete barrier, empty road", `negative=` naming a car, a truck, a vehicle, `grow=24` | no pickup: the road, and the tires carried on to where it stood |
+
+   A mask in the shape of a man walking is filled with one, whatever the
+   words: it comes out only when the mask is grown past telling what it
+   was the shape of, and what the thing is goes under `negative=`, not in
+   the prompt. Where the camera holds still the model has what is behind
+   the thing from the frames it has moved on in, and the plate is one to
+   use; where the camera turns it is a patch. ComfyUI has nodes for a
+   model made for this (VOID), whose weights the server has not got.
+
+   *Layers, in the document.* A project of the walk with three media a
+   recipe makes, each by `kerf make` and no other way: the man's matte
+   (one line, 43 s with another job ahead of it on the server); his shirt made anew (the two lines
+   above, 35 s and 179 s on a server doing other things); and a sequence
+   Kerf draws of the footage, a title over it, and the footage again over
+   that shown through the matte (`key.trackmatte`, the matte's track
+   turned off). In the frames looked at the title stands behind the man:
+   his legs are before its letters, and the path is behind them. The
+   project is kept, with its recipes and how to cut the footage, in
+   `fixtures/shots/walk`.
+
+   *One depth.* Three ways to how near each pixel is came with
+   `kerf-comfy`, by two models: each frame alone by MoGe 3 (`depth`), each
+   frame alone by Depth Anything 3 (`depth-whole`), and the frames read
+   together by Depth Anything 3 (`cameras` with `out={depth.mp4}`). Each
+   on both shots, and on 240 frames of the freeway:
+
+   | | 81 frames took | 240 frames took | Its grey moves, where the picture holds still, of 255: the walk | the freeway | 240 frames of it | The same order of near and far as MoGe's (rank correlation) |
+   |---|---|---|---|---|---|---|
+   | MoGe 3, `refine_steps=1` | 37 to 39 s | 114 s | 5.9 | 2.8 | 3.0 | |
+   | MoGe 3, `refine_steps=3` | 83 to 97 s | | 5.9 | 2.5 | | 0.999 |
+   | Depth Anything 3, a frame at a time | 14 s | 41 s | 8.1 | 3.6 | 6.6 | 0.88 and 0.95 |
+   | Depth Anything 3, the frames together | 13 to 14 s | 45 s | 1.8 | 0.9 | 1.1 | 0.88 and 0.94 |
+
+   How much a grey moves is the mean, over the pixels whose picture stays
+   within 2 of 255 through the shot and that MoGe gives a surface, of how
+   far each one's grey is from its own mean over the frames: a tenth of
+   the frame in each shot, the far ground and the barrier. Read together,
+   a place that does not move holds its grey three times as well as by
+   MoGe and four to six times as well as by its own model a frame at a
+   time, in a little over a third of MoGe's time; a guide is followed frame by frame, and
+   a depth that wavers is a thing that moves. The two models agree on the
+   order of near and far less than a model agrees with itself, 0.88 on the
+   walk, and which is right no footage says; against a depth Kerf drew, 3
+   above had them 0.993 and 0.996. **So `depth` is the frames read
+   together**, up to the 240 it was tried on, `depth-whole` is gone, and
+   `cameras` writes a path and no video, the depth of its reading being
+   `depth`'s to the grey (0.4 of 255 apart, two encodings of one answer).
+
+   What went with MoGe's depth: a sky read as no surface, which the frames
+   together give a distance, the farthest; and its other two pictures,
+   which way each pixel faces and what is a surface, which nothing in Kerf
+   read. What is sky is a matte's to say now: SAM 3.1's `sky` and MoGe's
+   no-surface are 0.89 of each other on the freeway (37% and 42% of the
+   frame, MoGe leaving out the far skyline with the sky), in 13 s where
+   MoGe's took 36 to 40.
+
+   *What MoGe is still for*: a frame alone as a mesh, with its lens
+   (`set`). The two models' lenses, degrees down the frame, of the same
+   footage: 27.6 by MoGe and 30.2 by Depth Anything 3 on the walk (29.3 to
+   32.1 over its frames), 30.5 and 28.9 on the freeway; nearer each other
+   than on the street of 3 above, 22.8 and 37.2. Whether the other model
+   could do this too was then tried, with the first frame of the walk as
+   a guide of one frame. `set-views` made a mesh of it in 3 s, and the
+   mesh is wrong: its corners run from 0 to 638 across and 0 to 346 down,
+   the picture's own pixels, at depths of 0.2 to 2.9, where `set`'s mesh
+   of the same frame is seen through a lens of 26.5 degrees. The model's
+   answer says why: of one frame its lens comes back as the identity, a
+   focal length of 1, and its camera as not moved. It finds a lens by
+   seeing frames beside each other, and of the walk's 81 together its set
+   of that frame has one, 26.8 degrees, and the same order of near and
+   far as `set`'s at 0.83. So a frame alone is MoGe's and stays so, and
+   `cameras` and `set-views` now refuse a guide of one frame
+   (`"frames": {"least": 2}`) where they answered with a flat mesh and
+   no word of it. Which of the two rebuilds a frame of many better was
+   not looked at, there being no set of this footage to hold either to.
+
+   *A workflow that read no guide.* `shot-moved` made a shot from a
+   picture to start from and the way one clip goes, as tracks of points,
+   by a model of its own (6 above), and loaded three files nothing else
+   did. A shot here is made from a guide, which says where everything is
+   and how the camera moves; told the way of one clip alone, it left the
+   rest of its picture about where the first frame had it. It went, by
+   that and not by a measure: it was not held again beside
+   `shot-directed`, which reads a first frame and a clip's way beside a
+   guide. The server then holds six files, one model that makes shots and
+   three that read a picture back.
+
+   What it shows, and what it does not. A matte by its name is a line of
+   a recipe, and with it a part of footage is made anew, a thing is cut
+   out to stand before a title, and, with the mask grown, taken out. Of
+   the four models that read a picture, one is gone and each of the
+   others has its own work: SAM 3.1 says what a pixel is of, Depth
+   Anything 3 how near it is and where the camera was, MoGe 3 what one
+   frame alone is the shape of. Every file the server holds is loaded by
+   a workflow, and which by which is in
+   [shots.md](shots.md#what-the-server-holds). It is two shots, by day, with one thing at a
+   time and nothing passing in front of it for long. Not tried: a thing
+   that goes behind another and comes back; hair, smoke, glass, and what
+   else has no edge, which a matte of white and black cannot say; two
+   mattes in one take; a matte led by Kerf's own points on the picture in
+   the editor, whose cards still cut by colour and edges; a depth of more
+   than 240 frames, which wants reading in parts.
+13. **A thing taken out by a model made for that** (2026-11-18). The server
+   was given VOID the same day, the model 12 named as wanting: two passes
+   of CogVideoX-Fun, `void_pass1` and `void_pass2`, with their own coder
+   (`cogvideox_vae`), words' reader (`t5xxl_fp16`) and the flow the second
+   pass is led by (`raft_large`). `plate` is the workflow: the guide, the
+   mask of the thing as `matte` finds it, and a prompt that says what the
+   picture shows once the thing is gone. The same two shots as 12, each 81
+   frames of 832x480, with the mattes made there.
+
+   *How it is written*, each for a thing found on the way. **The model
+   takes five frames and a multiple of eight**, and where it is handed
+   another count it rounds down and says nothing: of 81 it would make 77.
+   The graph holds the guide's last frame for eight more, asks the model
+   for the next count it takes, 85, and cuts what comes back to the
+   guide's own 81. **The model reads at about 672x384**, so the graph
+   brings the guide to that area in the guide's own shape, by its own
+   arithmetic, and brings only what was made under the mask back up: the
+   plate is the guide's size, and away from the mask it is 1.9 to 2.1 of
+   255 from the footage, the file's encoding. **A mask of the thing does
+   not cover its shadow.** The model takes the shadow out all the same,
+   which its own picture shows; laid back through the mask alone, the
+   footage's pixels put it back. So `reach=` lays the model's picture back
+   further than the mask (below). Two other ways to the shadow were tried
+   and left: a matte by its name, which `matte` does not find (`shadow of
+   the man on the ground` was a speck on the first frames and nothing
+   after), and taking the model's picture wherever it differs from the
+   footage, which it does everywhere, as much far from the man as beside
+   him, being a picture made again.
+
+   *Beside the model that makes shots.* On the freeway the camera does not
+   move, so the footage itself shows what is behind the pickup once the
+   pickup has gone: the last frames, where they hold still. Each take's
+   first 40 frames held to that, over the pixels the pickup then covered
+   (34,000 a frame):
+
+   | | From what is behind the pickup, of 255 | Worst frame | Took |
+   |---|---|---|---|
+   | The footage, the pickup still in it | 68.1 | | |
+   | `shot-into`, as 12 took it out | 47.1 | 73.7 | 111 s |
+   | `plate`, both passes | 9.7 | 11.3 | 344 s |
+   | `plate`, one pass, as it comes | 7.4 | 9.2 | 186 to 211 s |
+
+   Looked at, `plate` has the stack of tires with its striped board and
+   the rail before it, as the footage has them once the pickup has passed;
+   `shot-into` had a row of tires of its own making, and no board. On the
+   walk, where the camera turns and nothing shows what was behind the man,
+   `plate` has the hillside and the path through him on every frame looked
+   at, where 12 had a patch.
+
+   *His shadow.* The ground beside the man's feet at frame 72, where his
+   shadow falls, by its darkest twentieth, of 255: 89 in the footage and
+   226 on the path just below it. With `reach=0` the plate has 93 there,
+   the shadow as it was; with `reach=72`, 224, the path. It is 0 as it
+   comes: what it reaches is the model's picture and no longer the
+   footage's, and how far a shadow goes is the shot's.
+
+   *One pass or two.* The model comes with a second pass over the first,
+   for a picture that holds stiller. Measured, it did not:
+
+   | | From what is behind the pickup | From a frame to the next, there | The walk, from a frame to the next, within 60 px of the man | Took, the freeway and the walk |
+   |---|---|---|---|---|
+   | One pass | 7.4 | 0.68 | 7.73 | 211 s, 199 s |
+   | Two | 9.7 | 0.79 | 7.74 | 344 s, 353 to 367 s |
+
+   So `plate` is one pass, and `refine=true` asks for the second. It is two
+   shots of five seconds; a longer one, or one with more in it that moves,
+   may be what the second pass is for.
+
+   *As many frames as it reads.* 240 frames of the walk at 960x540, of
+   which it reads 197 and says so: a plate of 197 frames at the guide's
+   size in 638 s, the man gone on each frame looked at.
+
+   *With no mask* it is refused before the server is asked (`this workflow
+   makes nothing without guide_mask=, which the line does not give`),
+   where the server would have run a graph with its middle left out.
+
+   *Layers apart, in the document* (`fixtures/shots/walk`, by `kerf make`
+   and no other way). `gone` is the man's matte and the plate of it with
+   `reach=72`, 22 s and 436 s: the plate took twice what it took above,
+   the server having the model to load again after the matte's. `moved` is
+   a sequence Kerf draws: the plate on the lowest track, and over it the
+   footage shown through the man's matte, a quarter of the frame further
+   along and half as large again, the same set on the matte's clip.
+   Looked at on three frames, the man walks where he was put and the path
+   is whole where he was. He has no shadow there: it is not in his matte.
+
+   What it shows, and what it does not. Taking a thing out is a line of a
+   recipe, by the model made for it, and what comes back is the footage
+   with that one thing gone: held to what the footage itself shows, it is
+   a sixth as far off as the model that makes shots was. With it a thing
+   is a layer of its own over a picture that is whole. It is two shots of
+   five seconds and one of eight, one thing in each. Not tried: a thing
+   that others pass in front of, two things taken out at once, a thing
+   that fills much of the frame, footage larger than 960x540, and what the
+   model's own affected region, the level of its mask this workflow does
+   not write, does for a shadow in place of `reach`.

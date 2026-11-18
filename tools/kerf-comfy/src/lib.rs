@@ -201,6 +201,12 @@ pub fn make(
             guide_frames.map(|frames| f64::from(frames) / fps),
         ),
     };
+    if read.is_some() && frames < workflow.frames.least {
+        return Err(format!(
+            "this workflow reads at least {} frames of its guide together, and is handed {frames}",
+            workflow.frames.least
+        ));
+    }
     if let Some(read) = read.filter(|read| read.frames > frames && request.seconds.is_none()) {
         say(&format!(
             "the guide is {} frames, and this workflow reads {frames} at once: the rest is left out",
@@ -233,11 +239,24 @@ pub fn make(
     let mut values: Values = workflow.set.clone();
     let mut unread = Vec::new();
     for (name, text) in &request.more {
-        if ASKED.contains(&name.as_str()) || names_what_is_handed(name) || !blanks.contains(name) {
+        // Points are the line's own to give, where the workflow has a blank for them.
+        let points = request::names_points(name) && blanks.contains(name);
+        if !points
+            && (ASKED.contains(&name.as_str()) || names_what_is_handed(name) || !blanks.contains(name))
+        {
             unread.push(format!("`{name}`"));
         } else {
             values.insert(name.clone(), value_of(name, text, workflow.set.get(name))?);
         }
+    }
+    // Points on a thing of the guide's first frame, and off it, as the pixels a node reads
+    // them in. With none given, the nodes that read them are left out.
+    for name in [request::INSIDE, request::OUTSIDE] {
+        let given = match values.remove(name) {
+            Some(serde_json::Value::String(given)) if !given.trim().is_empty() => given,
+            _ => continue,
+        };
+        values.insert(name.to_owned(), json!(request::points(name, &given, (width, height))?));
     }
     let seed = request.seed.unwrap_or_else(any_seed);
     values.extend([
@@ -386,6 +405,24 @@ pub fn make(
     }
 
     let graph = workflow.graph(&values, &mut |class| server.required(class))?;
+    // With what the line does not give left out, and all that cannot do without it, a
+    // workflow can have nothing left that saves a file: said here, with what it wants,
+    // where the server would say only that the graph has no end.
+    if !workflow.ends().iter().any(|id| graph.get(id).is_some()) {
+        let wanted = workflow.not_given(&values);
+        return Err(if wanted.is_empty() {
+            "nothing of this workflow is left to save a file".to_owned()
+        } else {
+            format!(
+                "this workflow makes nothing without {}, which the line does not give",
+                wanted
+                    .iter()
+                    .map(|name| format!("`{name}=`"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        });
+    }
     let kept = serde_json::to_vec_pretty(&graph).map_err(|error| error.to_string())?;
     std::fs::write(work.join(GRAPH_SENT), kept)
         .map_err(|error| format!("cannot write into {}: {error}", work.display()))?;

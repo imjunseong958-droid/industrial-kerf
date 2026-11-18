@@ -634,7 +634,6 @@ fn a_file_made_of_a_guide_has_the_guides_rate_size_and_frames() {
         said.contains("for 10 frames of 322x180 at 12 a second"),
         "{said}"
     );
-    assert_eq!(graph["6"]["inputs"]["fps"], json!(12.0));
     assert_eq!(graph["1"]["inputs"]["file"], "kerf-guide.mp4");
     let sent = Tools::find()
         .picture(&folder.path().join(GUIDE_SENT))
@@ -645,30 +644,96 @@ fn a_file_made_of_a_guide_has_the_guides_rate_size_and_frames() {
     assert_eq!(graph["4"]["inputs"]["mode"], "multiview");
     assert_eq!(graph["4"]["inputs"]["mode.pose_method"], "cam_dec");
 
-    // The same workflow's video, and a line's own values in its blanks.
-    let depth = asking(
-        "depth.mp4",
-        json!({"pose": "ray_pose", "resolution": "756"}),
+    // A line's own values in its blanks.
+    let (graph, _) = made(
+        &asking("turned.txt", json!({"pose": "ray_pose", "resolution": "756"})),
+        "cameras",
     );
-    let (graph, _) = made(&depth, "cameras");
-    assert_eq!(std::fs::read(&depth.out).unwrap(), b"its depth");
     assert_eq!(graph["4"]["inputs"]["mode.pose_method"], "ray_pose");
     assert_eq!(graph["4"]["inputs"]["resolution"], json!(756));
 
-    // Depth is refined once as it comes, and three times where a line says so; `seconds`
-    // reads the guide's first frames only.
-    let (graph, _) = made(&asking("near.mp4", json!({})), "depth");
-    assert_eq!(graph["4"]["inputs"]["refine_steps"], json!(1));
-    assert_eq!(graph["5"]["inputs"]["output"], "depth");
-    let mut short = asking(
-        "short.mp4",
-        json!({"refine_steps": "3", "output": "normal_opengl"}),
-    );
+    // The depth of the same reading is a workflow of its own, a video at the guide's rate:
+    // the frames together, so that what holds still in the picture holds its grey.
+    let depth = asking("depth.mp4", json!({}));
+    let (graph, _) = made(&depth, "depth");
+    assert_eq!(std::fs::read(&depth.out).unwrap(), b"its depth");
+    assert_eq!(graph["6"]["inputs"]["fps"], json!(12.0));
+    assert_eq!(graph["3"]["inputs"]["weight_dtype"], "fp32");
+    assert_eq!(graph["4"]["inputs"]["mode"], "multiview");
+    assert_eq!(graph["5"]["inputs"]["output.normalization"], "v2_style");
+    // `seconds` reads the guide's first frames only.
+    let mut short = asking("short.mp4", json!({"normalization": "min_max"}));
     short.seconds = Some(0.5);
     let (graph, said) = made(&short, "depth");
-    assert_eq!(graph["4"]["inputs"]["refine_steps"], json!(3));
-    assert_eq!(graph["5"]["inputs"]["output"], "normal_opengl");
+    assert_eq!(graph["5"]["inputs"]["output.normalization"], "min_max");
     assert!(said.contains("for 6 frames of 322x180"), "{said}");
+
+    // A camera is found of frames seen beside each other: one alone is refused, where the
+    // server would answer with no lens and no word of it. Its depth is had of one.
+    let mut alone = asking("alone.txt", json!({}));
+    alone.seconds = Some(0.05);
+    let (server, kept) = serve(reader);
+    let refused = make(
+        &alone,
+        folder.path(),
+        &Workflow::named("cameras").unwrap(),
+        &server,
+        &Tools::find(),
+        &patience(),
+        &AtomicBool::new(false),
+        &mut |_| {},
+    )
+    .unwrap_err();
+    assert_eq!(refused, "this workflow reads at least 2 frames of its guide together, and is handed 1");
+    assert!(kept.lock().unwrap().is_empty());
+    let mut alone = asking("alone.mp4", json!({}));
+    alone.seconds = Some(0.05);
+    let (_, said) = made(&alone, "depth");
+    assert!(said.contains("for 1 frames of 322x180"), "{said}");
+
+    // A workflow that takes a thing out of its guide is nothing without the mask of the
+    // thing: with none given it has nothing left that saves, and says what it wants.
+    let (server, kept) = serve(|asked, before| match asked.line.as_str() {
+        line if line.starts_with("GET /object_info/") => {
+            let class = line.trim_start_matches("GET /object_info/").to_owned();
+            // What each kind of node cannot do without, as the server says: a node that
+            // chooses between two pictures, and one that lays one over another through a
+            // mask, run without what this workflow has them read.
+            let required: &[&str] = match class.as_str() {
+                "ComfySwitchNode" => &["switch"],
+                "ImageCompositeMasked" => &["destination", "source", "x", "y", "resize_source"],
+                "ImageFromBatch" => &["image", "batch_index", "length"],
+                "ImageScale" => &["image", "upscale_method", "width", "height", "crop"],
+                "CreateVideo" => &["images", "fps"],
+                "SaveVideo" => &["video", "filename_prefix", "format"],
+                _ => &[
+                    "video", "image", "mask", "image1", "image2", "positive", "negative", "vae",
+                    "quadmask", "model", "noise", "guider", "sampler", "sigmas", "latent_image",
+                    "samples", "optical_flow", "warped_noise",
+                ],
+            };
+            let required: serde_json::Map<String, serde_json::Value> =
+                required.iter().map(|name| ((*name).to_owned(), json!([]))).collect();
+            json_answer(json!({class: {"input": {"required": required}}}))
+        }
+        _ => reader(asked, before),
+    });
+    let refused = make(
+        &asking("plate.mp4", json!({})),
+        folder.path(),
+        &Workflow::named("plate").unwrap(),
+        &server,
+        &Tools::find(),
+        &patience(),
+        &AtomicBool::new(false),
+        &mut |_| {},
+    )
+    .unwrap_err();
+    assert_eq!(
+        refused,
+        "this workflow makes nothing without `guide_mask=`, which the line does not give"
+    );
+    assert!(kept.lock().unwrap().iter().all(|asked| asked.line != "POST /prompt"));
 
     // With no guide there is nothing to make a file of, and nothing is asked of the server.
     let mut none = asking("depth.mp4", json!({}));
@@ -721,4 +786,165 @@ fn a_failed_nodes_inputs_are_named_as_the_line_sets_them() {
         ""
     );
     assert_eq!(on_the_line(&workflow, "it was stopped on the server"), "");
+}
+
+/// A workflow that finds a thing by the line's words or by points on it.
+fn finder() -> Workflow {
+    Workflow::parse(
+        r#"{
+            "kerf-comfy": 1, "fps": 16, "frames": {"most": 81, "step": 4}, "size": [832, 480],
+            "set": {"inside": "", "outside": ""},
+            "workflow": {
+                "1": {"class_type": "Words", "inputs": {"text": "{prompt}"}},
+                "2": {"class_type": "Points", "inputs": {"value": "{inside}"}},
+                "3": {"class_type": "Points", "inputs": {"value": "{outside}"}},
+                "4": {"class_type": "Finder", "inputs": {"words": ["1", 0], "on": ["2", 0], "off": ["3", 0]}}
+            }
+        }"#,
+    )
+    .unwrap()
+}
+
+/// ComfyUI with a node that finds: it cannot do without words, and can without points.
+fn finding(asked: &Asked, before: usize) -> (u16, Vec<u8>) {
+    match asked.line.as_str() {
+        "GET /object_info/Finder" => json_answer(json!({"Finder": {"input": {
+            "required": {"words": []}, "optional": {"on": [], "off": []}
+        }}})),
+        _ => comfy(asked, before),
+    }
+}
+
+/// The graph `request` was queued as with [`finder`], and what was said of it.
+fn found(request: &Request, folder: &Path) -> Result<(serde_json::Value, String), String> {
+    let (server, kept) = serve(finding);
+    let mut said = Vec::new();
+    make(
+        request,
+        folder,
+        &finder(),
+        &server,
+        &Tools::find(),
+        &patience(),
+        &AtomicBool::new(false),
+        &mut |line| said.push(line.to_owned()),
+    )?;
+    let kept = kept.lock().unwrap();
+    let queued = kept
+        .iter()
+        .find(|asked| asked.line == "POST /prompt")
+        .unwrap();
+    let queued: serde_json::Value = serde_json::from_slice(&queued.body).unwrap();
+    Ok((queued["prompt"].clone(), said.join("\n")))
+}
+
+#[test]
+fn points_a_line_gives_reach_a_node_in_pixels_or_the_node_goes() {
+    let folder = tempfile::tempdir().unwrap();
+    // 1920x1080 asked of a model of 832x480 is 843x474: half across is 422, and the far
+    // corner the last pixel there is.
+    let (graph, said) = found(
+        &request(folder.path(), r#"{"inside": "0.5,0.25 1,1"}"#),
+        folder.path(),
+    )
+    .unwrap();
+    assert_eq!(
+        graph["2"]["inputs"]["value"],
+        r#"[{"x":422,"y":119},{"x":842,"y":473}]"#
+    );
+    // No point off it was given: the node that reads them goes, and the link to it.
+    assert!(graph.get("3").is_none());
+    assert_eq!(graph["4"]["inputs"], json!({"words": ["1", 0], "on": ["2", 0]}));
+    assert!(!said.contains("`inside`"), "{said}");
+
+    // None given at all: what the workflow sets for them is no point.
+    let (graph, _) = found(&request(folder.path(), "{}"), folder.path()).unwrap();
+    assert!(graph.get("2").is_none() && graph.get("3").is_none());
+    assert_eq!(graph["4"]["inputs"], json!({"words": ["1", 0]}));
+
+    // What is not points is refused before the server is asked for anything.
+    for wrong in ["412,230", "0.5", "0.5,0.5;0.6,0.6", "left"] {
+        let refused = found(
+            &request(folder.path(), &json!({"outside": wrong}).to_string()),
+            folder.path(),
+        )
+        .unwrap_err();
+        assert!(
+            refused.starts_with(&format!("`outside={wrong}` is not points")),
+            "{refused}"
+        );
+    }
+    // A workflow with no blank for points has no use for them, as for any other name.
+    let (server, _) = serve(comfy);
+    let mut said = Vec::new();
+    make(
+        &request(folder.path(), r#"{"inside": "0.5,0.5"}"#),
+        folder.path(),
+        &Workflow::named("shot").unwrap(),
+        &server,
+        &Tools::find(),
+        &patience(),
+        &AtomicBool::new(false),
+        &mut |line| said.push(line.to_owned()),
+    )
+    .unwrap();
+    assert!(said.join("\n").contains("reads no `inside`, `first`: left out"), "{said:?}");
+}
+
+#[test]
+fn a_file_saved_only_to_show_is_fetched_where_none_was_saved_to_keep() {
+    let folder = tempfile::tempdir().unwrap();
+    let request = request(folder.path(), "{}");
+    // A node that previews saves among the server's temporary files.
+    let (server, kept) = serve(|asked, before| match asked.line.as_str() {
+        "GET /history/job-1" if before > 0 => json_answer(json!({"job-1": {
+            "outputs": {
+                "20": {"images": [{"filename": "preview_1.mp4", "subfolder": "", "type": "temp"}], "animated": [true]}
+            },
+            "status": {"status_str": "success", "completed": true, "messages": []}
+        }})),
+        "GET /view?filename=preview_1.mp4&subfolder=&type=temp" => (200, b"a preview".to_vec()),
+        _ => comfy(asked, before),
+    });
+    make(
+        &request,
+        folder.path(),
+        &Workflow::named("shot").unwrap(),
+        &server,
+        &Tools::find(),
+        &patience(),
+        &AtomicBool::new(false),
+        &mut |_| {},
+    )
+    .unwrap();
+    assert_eq!(std::fs::read(&request.out).unwrap(), b"a preview");
+    assert!(kept
+        .lock()
+        .unwrap()
+        .iter()
+        .all(|asked| !asked.line.contains("type=output")));
+
+    // Where one was saved to keep as well, that is the one fetched.
+    let (server, _) = serve(|asked, before| match asked.line.as_str() {
+        "GET /history/job-1" if before > 0 => json_answer(json!({"job-1": {
+            "outputs": {
+                "20": {"images": [{"filename": "preview_1.mp4", "subfolder": "", "type": "temp"}], "animated": [true]},
+                "16": {"images": [{"filename": "kerf_00001_.mp4", "subfolder": "video", "type": "output"}], "animated": [true]}
+            },
+            "status": {"status_str": "success", "completed": true, "messages": []}
+        }})),
+        _ => comfy(asked, before),
+    });
+    make(
+        &request,
+        folder.path(),
+        &Workflow::named("shot").unwrap(),
+        &server,
+        &Tools::find(),
+        &patience(),
+        &AtomicBool::new(false),
+        &mut |_| {},
+    )
+    .unwrap();
+    assert_eq!(std::fs::read(&request.out).unwrap(), b"a shot");
 }

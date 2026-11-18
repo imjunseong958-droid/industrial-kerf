@@ -1,0 +1,5 @@
+kerf-recipe 1
+# The man taken out, by a model made for that: what was behind him is there. `reach` takes
+# his shadow with him, which the model takes out and his matte does not cover.
+generate model=matte guide=../footage/walk.mp4 prompt="man" out={man.mp4}
+generate model=plate guide=../footage/walk.mp4 guide_mask={man.mp4} prompt="an empty dirt path below a dry grassy hillside, bushes and trees, daylight" reach=72 seed=7

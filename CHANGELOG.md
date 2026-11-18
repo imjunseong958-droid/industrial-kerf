@@ -4,6 +4,65 @@ What changed in each release of Industrial Kerf. A release is a `v<version>` tag
 on `main`; its section here becomes the release's notes on GitHub
 (`.github/workflows/package.yml`), so write it for someone using Kerf.
 
+## Unreleased
+
+- `kerf-comfy` comes with `matte`, for a ComfyUI server that has SAM 3.1: a
+  thing in footage found by its name and followed, as a matte, white on
+  black on every frame (`generate model=matte guide=<footage> prompt="man"`).
+  `objects=` is how many things are followed, `matte-shown` draws each with
+  its number over the footage, `which=` keeps some of them by number, and
+  `inside="x,y x,y"` names a thing by points on it in the first frame in
+  place of words. A matte is the mask `shot-into` reads, and media the
+  document cuts footage by (`key.trackmatte`), so a title stands behind a
+  man who walks in front of it.
+- `shot-into` changes the part of the footage its mask is white on and
+  nothing else: what the model made is laid back over the footage through
+  the mask, where before the whole frame was the model's and what it kept
+  came back worse. `grow=` makes anew that much around the mask as well, and
+  `feather=` is how softly the two meet. A thing is taken out by `plate`,
+  below, and not by this.
+- There is one `depth`, and it holds still: the frames are read together,
+  so a place that does not move in the picture keeps its grey from frame to
+  frame, three times as well as before and in about a third of the time.
+  `depth-whole` is gone, and `cameras` writes a camera's path and no video:
+  a recipe that asked `cameras` for a video asks `depth`. `depth` no longer
+  takes `refine_steps=` or `output=`; a sky has a distance in it, and what
+  is sky is a matte's to say (`prompt="sky"`). Print a model's entry again
+  (`kerf-comfy --workflow depth --describe`).
+- `cameras` and `set-views` refuse a guide of one frame, where they wrote
+  a mesh that was the frame's pixels laid flat: their model finds a lens
+  only of frames seen together. One frame alone is `set`'s.
+  `docs/shots.md` lists the files a ComfyUI server holds for the
+  workflows that come with `kerf-comfy`, and which workflow loads which.
+- `kerf-comfy` comes with `plate`, for a ComfyUI server that has VOID: a
+  thing taken out of footage, with what was behind it there
+  (`generate model=plate guide=<footage> guide_mask={man.mp4} prompt="an
+  empty path"`). The mask is a matte of the thing, and the prompt says what
+  the picture shows once it is gone. Outside the mask the plate is the
+  footage's own pixels; `reach=` takes the thing's shadow with it, and
+  `refine=true` has the model's second pass go over the first. With a plate
+  under it, a thing cut out by its matte is a layer to move, make larger or
+  leave out, and the picture behind it is whole. A plate wants its mask:
+  without `guide_mask=` it is refused before the server is asked.
+- `shot-moved` no longer comes with `kerf-comfy`. It made a shot from a
+  picture to start from and the way one clip goes, and read no guide.
+  Beside a guide, `shot-directed` reads a first frame (`first=`) and where
+  a clip goes (`moves=`); with no guide there is nothing that does. The three
+  files a server held for it alone can go: `Wan21-WanMove_fp8_scaled_e4m3fn_KJ`,
+  `lightx2v_I2V_14B_480p_cfg_step_distill_rank64_bf16` and `clip_vision_h`.
+  A workflow of your own still reads a clip's way as tracks at
+  `{moves_box}`.
+- Kerf no longer runs MobileSAM: `look` with `track` takes no `model`, and
+  nothing is fetched to `~/.kerf/models`. Its cut by colour and edges is as
+  it was. A model's matte is `matte`, above, which held a man before a
+  hillside and a pickup among cars where the cut with MobileSAM behind it
+  held neither.
+- A workflow of your own reads points a line gives at `{inside}` and
+  `{outside}`, leaves a node out when the line has no words (`"given":
+  ["prompt"]` under `without`), and may end in a node that saves a preview
+  and nothing else: `kerf-comfy` fetches that where nothing was saved to
+  keep.
+
 ## 0.1.4
 
 - A shot made from a recipe opens as a graph of how it is made: Open Graph on

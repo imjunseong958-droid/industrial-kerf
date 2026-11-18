@@ -25,7 +25,7 @@
 //! Nothing here asks a server. ComfyUI is another program, asked over HTTP
 //! by kerf-comfy when a shot is made; this reads a file.
 
-use crate::names::{guide_named, names_a_file, names_a_signal, MOVES, MOVES_BOX, MOVES_VIDEO};
+use crate::names::{guide_named, names_a_file, names_a_signal, names_points, MOVES, MOVES_BOX, MOVES_VIDEO};
 use crate::workflow::Workflow;
 use serde_json::{json, Map, Value};
 use std::ops::Range;
@@ -266,6 +266,16 @@ fn filled(name: &str, workflow: &Workflow) -> (&'static str, String, Option<Valu
         "fps" => ("kerf", "the rate the model makes frames at, or its guide's for one made of its guide".to_owned()),
         "no_picture" => ("kerf", "a small black picture, for a node that will not run without one".to_owned()),
         MOVES | MOVES_VIDEO | MOVES_BOX => ("moves", "where the clips the line names with moves= go".to_owned()),
+        name if names_points(name) => {
+            // A line's to give as any value it sets, and none until it does.
+            return (
+                "set",
+                format!(
+                    "the points the line gives as {name}=\"x,y x,y\", each across and down the guide's first frame from 0 to 1; none unless it does"
+                ),
+                workflow.set.get(name).cloned(),
+            );
+        }
         name if names_a_signal(name) => ("signal", "a signal the line names with signal=".to_owned()),
         name if guide_named(name).is_some() => ("file", format!("the guide the line gives as {name}=")),
         name if names_a_file(name) => (
@@ -612,5 +622,10 @@ mod tests {
                 assert_eq!(set_input(&changed, &id, &input, &was).unwrap(), *text, "{name}");
             }
         }
+        // Points are the line's to give, as a value it sets, and said as points.
+        let matte = described(BUNDLED.iter().find(|(name, _)| *name == "matte").unwrap().1).unwrap();
+        let inside = &matte["blanks"]["inside"];
+        assert_eq!((&inside["by"], &inside["default"]), (&json!("set"), &json!("")));
+        assert!(inside["says"].as_str().unwrap().starts_with("the points the line gives as inside="), "{inside}");
     }
 }

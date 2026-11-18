@@ -104,6 +104,9 @@ impl Address {
 pub struct Made {
     pub filename: String,
     pub subfolder: String,
+    /// Saved to show and not to keep, among the server's temporary files: what a node that
+    /// previews writes. It is fetched where nothing of its kind was saved to keep.
+    pub shown: bool,
 }
 
 /// Where a job is.
@@ -375,9 +378,10 @@ impl Server {
     /// Write the file `made` names to `to`.
     pub fn fetch(&self, made: &Made, to: &Path) -> Result<(), String> {
         let path = format!(
-            "/view?filename={}&subfolder={}&type=output",
+            "/view?filename={}&subfolder={}&type={}",
             encoded(&made.filename),
-            encoded(&made.subfolder)
+            encoded(&made.subfolder),
+            if made.shown { "temp" } else { "output" }
         );
         let mut answer = self.get("fetch what was made", &path)?;
         if answer.status().as_u16() != 200 {
@@ -445,8 +449,9 @@ fn ending(job: &Value) -> State {
     if status["status_str"] == "error" {
         return State::Failed("the server gave no reason".to_owned());
     }
-    // A node that loads a file says so among the outputs, as an input.
-    let made = job["outputs"]
+    // A node that loads a file says so among the outputs, as an input. What was saved to keep
+    // comes before what was saved to show.
+    let mut made: Vec<Made> = job["outputs"]
         .as_object()
         .into_iter()
         .flat_map(|outputs| outputs.values())
@@ -454,14 +459,16 @@ fn ending(job: &Value) -> State {
         .flat_map(|output| output.values())
         .filter_map(Value::as_array)
         .flatten()
-        .filter(|file| file["type"] == "output")
+        .filter(|file| file["type"] == "output" || file["type"] == "temp")
         .filter_map(|file| {
             Some(Made {
                 filename: file["filename"].as_str()?.to_owned(),
                 subfolder: file["subfolder"].as_str().unwrap_or_default().to_owned(),
+                shown: file["type"] == "temp",
             })
         })
         .collect();
+    made.sort_by_key(|file| file.shown);
     State::Made(made)
 }
 
@@ -600,8 +607,24 @@ mod tests {
             ending(&made),
             State::Made(vec![Made {
                 filename: "kerf_00001_.mp4".to_owned(),
-                subfolder: "video".to_owned()
+                subfolder: "video".to_owned(),
+                shown: false
             }])
+        );
+        // What a node saved only to show is made too, after whatever was saved to keep.
+        let shown = json!({
+            "outputs": {
+                "20": {"images": [{"filename": "sam3_track_preview_917d7f1c.mp4", "subfolder": "", "type": "temp"}], "animated": [true]},
+                "16": {"images": [{"filename": "kerf_00002_.mp4", "subfolder": "video", "type": "output"}], "animated": [true]}
+            },
+            "status": {"status_str": "success", "completed": true, "messages": []}
+        });
+        let State::Made(files) = ending(&shown) else {
+            panic!("a job that saved files made them");
+        };
+        assert_eq!(
+            files.iter().map(|file| (file.filename.as_str(), file.shown)).collect::<Vec<_>>(),
+            [("kerf_00002_.mp4", false), ("sam3_track_preview_917d7f1c.mp4", true)]
         );
         let failed = json!({
             "outputs": {},

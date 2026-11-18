@@ -1,35 +1,41 @@
 {
   "kerf-comfy": 1,
-  "about": "How near each pixel of a guide is, as a grey video of the guide's own size, rate, and frames, nearer whiter, each frame stretched to its own nearest and farthest. output=normal_opengl gives which way each pixel faces, output=mask what is not sky. refine_steps=3 refines it as the model comes, in over twice the time, for a depth a grey of 255 from this one.",
+  "about": "How near each pixel of a guide is, as a grey video of the guide's own size, rate, and frames, nearer whiter. The frames are read together as views of one scene, so a place that holds still in the picture holds its grey from frame to frame, which a guide is followed by. A sky is given a distance, the farthest. At most 240 frames.",
   "of": "guide",
-  "frames": { "most": 480, "step": 1 },
+  "frames": { "most": 240, "step": 1 },
   "size": [1920, 1080],
   "multiple": 2,
   "set": {
-    "model": "moge_3_vitl_fp16.safetensors",
-    "output": "depth",
-    "refine_steps": 1,
-    "resolution_level": 9,
-    "batch": 4
+    "model": "depth_anything_3_base.safetensors",
+    "resolution": 504,
+    "normalization": "v2_style",
+    "anchor": "saddle_balanced"
   },
   "workflow": {
     "1": { "class_type": "LoadVideo", "inputs": { "file": "{guide}" } },
     "2": { "class_type": "GetVideoComponents", "inputs": { "video": ["1", 0] } },
-    "3": { "class_type": "LoadMoGeModel", "inputs": { "model_name": "{model}" } },
+    "3": { "class_type": "LoadDA3Model", "inputs": { "model_name": "{model}", "weight_dtype": "fp32" } },
     "4": {
-      "class_type": "MoGeInference",
+      "class_type": "DA3Inference",
       "inputs": {
-        "moge_model": ["3", 0],
+        "da3_model": ["3", 0],
         "image": ["2", 0],
-        "resolution_level": "{resolution_level}",
-        "fov_x_degrees": 0.0,
-        "batch_size": "{batch}",
-        "force_projection": true,
-        "apply_mask": true,
-        "refine_steps": "{refine_steps}"
+        "resolution": "{resolution}",
+        "resize_method": "upper_bound_resize",
+        "mode": "multiview",
+        "mode.ref_view_strategy": "{anchor}",
+        "mode.pose_method": "cam_dec"
       }
     },
-    "5": { "class_type": "MoGeRender", "inputs": { "moge_geometry": ["4", 0], "output": "{output}" } },
+    "5": {
+      "class_type": "DA3Render",
+      "inputs": {
+        "da3_geometry": ["4", 0],
+        "output": "depth",
+        "output.normalization": "{normalization}",
+        "output.apply_sky_clip": false
+      }
+    },
     "6": { "class_type": "CreateVideo", "inputs": { "images": ["5", 0], "fps": "{fps}" } },
     "7": {
       "class_type": "SaveVideo",

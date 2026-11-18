@@ -8,9 +8,9 @@
 //! subject that went further than that band is first found again by its own pixels ([`moved_by`]), where
 //! the flow has lost it ([`flow_lost`]), and the flow then only says what changed of it, with the band
 //! wider the further it went.
-//! A trained model ([`kerf_segment::MaskModel`]) is optional and swappable: its foreground
-//! probability becomes a strong prior for the same cut, so hints stay hard and edges still snap to
-//! colour, and one that disagrees with the flow is ignored for that frame.
+//! It goes by colour and edges, with nothing to install. A model that finds a thing by its name and
+//! follows it is another program's, reached by a recipe: `matte`, a workflow of `kerf-comfy`
+//! (`docs/shots.md`, A thing in footage, by its name), where one is set up.
 //!
 //! Carried from EffectCraft's `track/src/roto`. Kerf keeps no matte of its own: what this finds is
 //! written as a mask whose outline has keyframes, which merges, reads, and edits like any other, with
@@ -25,7 +25,6 @@ mod soft;
 use gmm::Gmm;
 use kerf_raster::flow::{block_flow, Flow};
 use kerf_raster::Image;
-use kerf_segment::{MaskModel, Prompt};
 use maxflow::{Graph, Segment};
 use rayon::prelude::*;
 
@@ -40,8 +39,6 @@ const HARD_BG: u8 = 2;
 /// Graph-cut energy weights.
 const GAMMA: f64 = 50.0;
 const PRIOR: f64 = 1.0;
-/// A trained model's matte as a prior: it outweighs the colour models.
-const MODEL_PRIOR: f64 = 4.0;
 /// Fixed-point scale of the energies.
 const K: f64 = 16.0;
 const INF: i64 = 1 << 40;
@@ -369,11 +366,7 @@ fn discs(points: &[[f64; 2]], radius: f64, w: usize, h: usize) -> Vec<bool> {
 }
 
 /// The first frame's matte from its hints, and the colour models that made it.
-fn first_matte(
-    picture: &Picture,
-    hints: &Hints,
-    model: Option<&dyn MaskModel>,
-) -> Option<(Vec<u8>, Gmm, Gmm)> {
+fn first_matte(picture: &Picture, hints: &Hints) -> Option<(Vec<u8>, Gmm, Gmm)> {
     let (w, h) = (picture.width, picture.height);
     let pixel = |point: &[f64; 2]| [point[0] * w as f64, point[1] * h as f64];
     let mut inside: Vec<[f64; 2]> = hints.inside.iter().map(pixel).collect();
@@ -419,28 +412,9 @@ fn first_matte(
             }
         })
         .collect();
-    let prior = model.and_then(|model| {
-        let prompt = Prompt {
-            points: inside
-                .iter()
-                .map(|p| ([p[0] as f32, p[1] as f32], true))
-                .chain(outside.iter().map(|p| ([p[0] as f32, p[1] as f32], false)))
-                .collect(),
-            bbox: bbox.map(|b| b.map(|v| v as f32)),
-            mask: None,
-        };
-        model
-            .segment(&picture.rgb, w, h, &prompt)
-            .ok()
-            .filter(|soft| soft.len() == w * h)
-    });
     let rgb = &picture.rgb;
-    let mut fg_samples = samples(rgb, |i| hard[i] == HARD_FG);
+    let fg_samples = samples(rgb, |i| hard[i] == HARD_FG);
     let mut bg_samples = samples(rgb, |i| hard[i] == HARD_BG);
-    if let Some(soft) = &prior {
-        fg_samples.extend(samples(rgb, |i| hard[i] == 0 && soft[i] >= 0.5));
-        bg_samples.extend(samples(rgb, |i| hard[i] == 0 && soft[i] < 0.5));
-    }
     if bg_samples.len() < 64 {
         // No word of what it is not: what is far from what it is.
         let distance = matting::distance(&fgs, w, h);
@@ -454,19 +428,15 @@ fn first_matte(
         Gmm::fit(&fg_samples, COMPONENTS, MAX_SAMPLES),
         Gmm::fit(&bg_samples, COMPONENTS, MAX_SAMPLES),
     );
-    let mut labels: Vec<u8> = match &prior {
-        Some(soft) => soft.iter().map(|v| u8::from(*v >= 0.5)).collect(),
-        None => fgs.iter().map(|v| u8::from(*v)).collect(),
-    };
+    let mut labels: Vec<u8> = fgs.iter().map(|v| u8::from(*v)).collect();
     for (label, known) in labels.iter_mut().zip(&hard) {
         if *known != 0 {
             *label = u8::from(*known == HARD_FG);
         }
     }
     let free = vec![true; w * h];
-    let weighed = prior.as_deref().map(|soft| (soft, MODEL_PRIOR));
     for round in 0..3 {
-        cut(rgb, w, h, &mut labels, &free, &hard, &fg, &bg, weighed);
+        cut(rgb, w, h, &mut labels, &free, &hard, &fg, &bg, None);
         if round < 2 {
             let (a, b) = fit_models(rgb, &labels);
             if !a.is_empty() && !b.is_empty() {
@@ -708,55 +678,6 @@ fn core_of(matte: &[u8], signed: &[f32], radius: f64) -> Vec<bool> {
     }
 }
 
-/// How much two mattes agree, intersection over union.
-fn iou(a: &[u8], b: &[u8]) -> f64 {
-    let (mut both, mut either) = (0usize, 0usize);
-    for (x, y) in a.iter().zip(b) {
-        let (x, y) = (*x != 0, *y != 0);
-        both += usize::from(x && y);
-        either += usize::from(x || y);
-    }
-    if either == 0 {
-        1.0
-    } else {
-        both as f64 / either as f64
-    }
-}
-
-/// The box around a soft matte, and points deep inside it, for a model's prompt.
-fn prompt_from(soft: &[f32], w: usize, h: usize) -> Option<Prompt> {
-    let (mut x0, mut y0, mut x1, mut y1) = (usize::MAX, usize::MAX, 0, 0);
-    for (i, value) in soft.iter().enumerate() {
-        if *value >= 0.5 {
-            let (x, y) = (i % w, i / w);
-            (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x), y1.max(y));
-        }
-    }
-    if x0 > x1 {
-        return None;
-    }
-    let (mx, my) = (
-        ((x1 - x0) as f32 * 0.05).max(4.0),
-        ((y1 - y0) as f32 * 0.05).max(4.0),
-    );
-    let binary: Vec<u8> = soft.iter().map(|v| u8::from(*v >= 0.5)).collect();
-    let signed = matting::signed_distance(&binary, w, h);
-    let deepest = (0..w * h).max_by(|a, b| signed[*a].total_cmp(&signed[*b]))?;
-    Some(Prompt {
-        points: vec![(
-            [(deepest % w) as f32 + 0.5, (deepest / w) as f32 + 0.5],
-            true,
-        )],
-        bbox: Some([
-            (x0 as f32 - mx).max(0.0),
-            (y0 as f32 - my).max(0.0),
-            (x1 as f32 + 1.0 + mx).min(w as f32),
-            (y1 as f32 + 1.0 + my).min(h as f32),
-        ]),
-        mask: Some(soft.to_vec()),
-    })
-}
-
 /// The next frame's matte from the one before, and how far its subject went, where that is further than
 /// a band: the flow keeps up with less, as it has done, and is left to. The search for it (8 of 48 ms a
 /// frame at 640x360) only runs where the subject was going fast last frame or the flow has lost it.
@@ -765,7 +686,6 @@ fn next_matte(
     matte: &[u8],
     next: &Picture,
     (fg, bg): (&Gmm, &Gmm),
-    model: Option<&dyn MaskModel>,
     was_fast: bool,
 ) -> (Vec<u8>, [i64; 2]) {
     let (w, h) = (next.width, next.height);
@@ -797,25 +717,14 @@ fn next_matte(
     let reach = band_of((w, h), moved);
     // A warped matte is uncertain by about the band it is searched in.
     let blurred = matting::gauss(&soft, w, h, (reach / 4.0).max(1.0));
-    let from_model = model.and_then(|model| {
-        let prompt = prompt_from(&soft, w, h)?;
-        let found = model.segment(&next.rgb, w, h, &prompt).ok()?;
-        (found.len() == w * h).then_some(found)
-    });
-    let binary = |values: &[f32]| -> Vec<u8> { values.iter().map(|v| u8::from(*v >= 0.5)).collect() };
-    let flowed = binary(&soft);
-    let agreed = from_model.filter(|found| iou(&binary(found), &flowed) >= 0.5);
-    let mut labels = flowed;
+    let mut labels: Vec<u8> = soft.iter().map(|v| u8::from(*v >= 0.5)).collect();
     // How far each pixel is from the warped matte's edge says both where the cut is free and what is
     // deep enough inside to be held to: measured once, and only as far from the matte as either asks.
     let signed = matting::signed_distance_near(&labels, w, h, reach);
     let free: Vec<bool> = signed.iter().map(|d| f64::from(d.abs()) <= reach).collect();
     let seeds = core_of(&labels, &signed, reach);
     let hard = vec![0u8; w * h];
-    let prior = match &agreed {
-        Some(found) => (found.as_slice(), MODEL_PRIOR),
-        None => (blurred.as_slice(), PRIOR),
-    };
+    let prior = (blurred.as_slice(), PRIOR);
     cut(&next.rgb, w, h, &mut labels, &free, &hard, fg, bg, Some(prior));
     clean(&mut labels, &seeds, &vec![false; w * h], w, h);
     (labels, moved)
@@ -1128,16 +1037,14 @@ impl Places {
     }
 }
 
-/// Follow what `hints` point at through `count` frames that `frame` gives as `(width, height, rgba)`,
-/// with a trained model if one is given. It stops at the frame the object is lost in, and at one
-/// `frame` cannot give.
+/// Follow what `hints` point at through `count` frames that `frame` gives as `(width, height, rgba)`.
+/// It stops at the frame the object is lost in, and at one `frame` cannot give.
 pub fn follow_object(
     count: usize,
     hints: &Hints,
-    model: Option<&dyn MaskModel>,
     frame: impl FnMut(usize) -> Option<(usize, usize, Vec<u8>)>,
 ) -> FollowedObject {
-    let traced = trace(count, hints, model, frame);
+    let traced = trace(count, hints, frame);
     match shutter::fit(&traced.raw, &traced.across, traced.shortest_blur()) {
         Some(shutter) => traced.under_a_shutter(shutter),
         None => traced.by_the_measure(),
@@ -1206,7 +1113,6 @@ impl Traced {
 fn trace(
     count: usize,
     hints: &Hints,
-    model: Option<&dyn MaskModel>,
     mut frame: impl FnMut(usize) -> Option<(usize, usize, Vec<u8>)>,
 ) -> Traced {
     let mut followed = FollowedObject::default();
@@ -1226,7 +1132,7 @@ fn trace(
     }
     let (w, h) = (width as f64, height as f64);
     let mut picture = Picture::of(width, height, &rgba);
-    let Some((mut matte, fg, bg)) = first_matte(&picture, hints, model) else {
+    let Some((mut matte, fg, bg)) = first_matte(&picture, hints) else {
         followed.lost_at = Some(0);
         return nothing(followed);
     };
@@ -1255,7 +1161,7 @@ fn trace(
             break;
         }
         let next = Picture::of(width, height, &rgba);
-        let (labels, went) = next_matte(&picture, &matte, &next, (&fg, &bg), model, was_fast);
+        let (labels, went) = next_matte(&picture, &matte, &next, (&fg, &bg), was_fast);
         was_fast = went != [0, 0];
         let now = area_of(&labels);
         // Its corners go with it, and are matched where it went.

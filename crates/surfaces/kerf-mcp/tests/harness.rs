@@ -1921,8 +1921,8 @@ fn look_cuts_out_an_object_and_gives_a_line_that_masks_it() {
         json!({"track": {"inside": [[0.5, 0.5]], "x": 0.5, "y": 0.5}, "from": "0f", "to": "2f"}),
         json!({"track": {"outside": [[0.5, 0.5]]}, "from": "0f", "to": "2f"}),
         json!({"track": {"inside": [[1.5, 0.5]]}, "from": "0f", "to": "2f"}),
-        json!({"track": {"x": 0.5, "y": 0.5, "model": "mobilesam"}, "from": "0f", "to": "2f"}),
-        json!({"track": {"inside": [[0.5, 0.5]], "model": "nobody"}, "from": "0f", "to": "2f"}),
+        // No model stands behind the cut: one is a recipe's, and makes a matte as a file.
+        json!({"track": {"inside": [[0.5, 0.5]], "model": "mobilesam"}, "from": "0f", "to": "2f"}),
     ] {
         assert_eq!(
             error(&router, "look", refused.clone())["code"],
@@ -2514,7 +2514,6 @@ fn look_says_plainly_when_a_shot_cannot_be_solved() {
 
     for refused in [
         json!({"track": {"camera": true, "x": 0.5, "y": 0.5}, "from": "0f", "to": "2f"}),
-        json!({"track": {"camera": true, "model": "classical"}, "from": "0f", "to": "2f"}),
         json!({"track": {"camera": true}, "from": "0f"}),
         json!({"track": {"camera": true, "clip": "nobody"}, "from": "0f", "to": "2f"}),
         json!({"track": {"camera": true, "fov": 0.2}, "from": "0f", "to": "2f"}),
