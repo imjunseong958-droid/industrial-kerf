@@ -29,6 +29,19 @@
 //! out, and with it whatever cannot do without it, so one workflow serves a
 //! shot with a guide, with a reference, with both, or with neither.
 //!
+//! Where the server lets a node do without an input that this workflow's
+//! node is nothing without, a second guide laid over the first, `without`
+//! says so, and which node stands in for one left out:
+//!
+//! ```json
+//! "without": { "22": { "wants": ["control_video"], "reads": "9" } }
+//! ```
+//!
+//! Node 22 is left out when its `control_video` is, and what read node 22
+//! then reads node 9, output for output. So a workflow can lay one thing
+//! over another, each in a node of its own, and still serve a shot that
+//! gives only some of them.
+//!
 //! A workflow that reads a picture in motion and makes a file of it, its
 //! depth or the camera that filmed it, says `"of": "guide"` and needs no
 //! `fps`. What it makes is of its guide frame for frame: `{fps}` is the
@@ -51,12 +64,13 @@ use std::path::Path;
 const WORKFLOW_VERSION: u32 = 1;
 
 /// The workflows that come with kerf-comfy, by name.
-pub const BUNDLED: [(&str, &str); 12] = [
+pub const BUNDLED: [(&str, &str); 13] = [
     ("shot", include_str!("../workflows/shot.json")),
     ("shot-timed", include_str!("../workflows/shot-timed.json")),
     ("shot-into", include_str!("../workflows/shot-into.json")),
     ("shot-led", include_str!("../workflows/shot-led.json")),
     ("shot-moved", include_str!("../workflows/shot-moved.json")),
+    ("shot-directed", include_str!("../workflows/shot-directed.json")),
     ("depth", include_str!("../workflows/depth.json")),
     ("set", include_str!("../workflows/set.json")),
     ("depth-whole", include_str!("../workflows/depth-whole.json")),
@@ -109,8 +123,25 @@ pub struct Workflow {
     /// The values its other blanks take unless the request says otherwise.
     #[serde(default)]
     pub set: BTreeMap<String, Value>,
+    /// The nodes that go when an input of theirs does, by their id.
+    #[serde(default)]
+    without: BTreeMap<String, Without>,
     #[serde(rename = "workflow")]
     graph: Map<String, Value>,
+}
+
+/// What a node is left out for, and what stands in for it then.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct Without {
+    /// The inputs it is nothing without, though the server lets it run
+    /// without them: with one of them left out, so is it.
+    #[serde(default)]
+    wants: Vec<String>,
+    /// The node that what read it reads in its place, output for output.
+    /// With none, what read it loses its link, or goes with it.
+    #[serde(default)]
+    reads: Option<String>,
 }
 
 fn one() -> u32 {
@@ -168,7 +199,40 @@ impl Workflow {
                 ));
             }
         }
+        for (id, without) in &workflow.without {
+            let Some(node) = workflow.graph.get(id) else {
+                return Err(format!("`without` names node {id}, which `workflow` has not got"));
+            };
+            for wanted in &without.wants {
+                if link(&node["inputs"][wanted]).is_none() {
+                    return Err(format!(
+                        "`without` says node {id} wants `{wanted}`, which is not an input of it linked to a node"
+                    ));
+                }
+            }
+            if let Some(stand) = &without.reads {
+                if stand == id || !workflow.graph.contains_key(stand) {
+                    return Err(format!(
+                        "`without` has node {stand} stand in for node {id}: it is another node of `workflow`"
+                    ));
+                }
+            }
+        }
         Ok(workflow)
+    }
+
+    /// The node that stands in for `id` among those not in `gone`, if one does.
+    fn stand_in<'a>(&'a self, id: &str, gone: &BTreeSet<String>) -> Option<&'a str> {
+        let mut at = id;
+        // No further than there are nodes, so that two that name each other end.
+        for _ in 0..self.without.len() {
+            let stand = self.without.get(at)?.reads.as_deref()?;
+            if !gone.contains(stand) {
+                return Some(stand);
+            }
+            at = stand;
+        }
+        None
     }
 
     /// Whether what it makes is of its guide, frame for frame, and not a
@@ -365,8 +429,9 @@ impl Workflow {
 
     /// The graph to send, with `values` in its blanks. A node with a blank
     /// for a file or a signal that `values` has not got is left out, and so is each
-    /// node that `required` says cannot do without one left out; an input
-    /// that can loses its link.
+    /// node that `required`, or the workflow's own `without`, says cannot do
+    /// without one left out; an input that can loses its link, or reads the
+    /// node that stands in for the one left out.
     pub fn graph(&self, values: &Values, required: &mut Required<'_>) -> Result<Value, String> {
         let mut graph = self.graph.clone();
         let mut gone: BTreeSet<String> = graph
@@ -391,12 +456,30 @@ impl Workflow {
                 let Some(inputs) = node["inputs"].as_object_mut() else {
                     continue;
                 };
+                // What read a node left out reads the one that stands in for it, where one does.
+                for value in inputs.values_mut() {
+                    let stand = link(value)
+                        .filter(|to| gone.contains(*to))
+                        .and_then(|to| self.stand_in(to, &gone));
+                    if let Some(stand) = stand {
+                        value[0] = Value::from(stand);
+                    }
+                }
                 let cut: Vec<String> = inputs
                     .iter()
                     .filter(|(_, value)| link(value).is_some_and(|to| gone.contains(to)))
                     .map(|(name, _)| name.clone())
                     .collect();
                 if cut.is_empty() {
+                    continue;
+                }
+                // What this workflow says the node is nothing without, whatever the server lets it.
+                let wanted = self
+                    .without
+                    .get(id)
+                    .is_some_and(|without| cut.iter().any(|name| without.wants.contains(name)));
+                if wanted {
+                    more.push(id.clone());
                     continue;
                 }
                 if !needs.contains_key(&class) {
@@ -592,6 +675,42 @@ mod tests {
                 );
             }
         }
+        // One reads all four at once, and serves a line that gives any of them.
+        let directed = Workflow::named("shot-directed").unwrap();
+        assert_eq!(directed.takes()["reads"], json!(["guide", "ref", "signal", "moves"]));
+        assert_eq!(directed.takes()["more"]["moves_strength"], json!(1.0));
+        let mut needs = |class: &str| -> Result<BTreeSet<String>, String> {
+            let names: &[&str] = match class {
+                "GetVideoComponents" => &["video"],
+                "ImageToMask" => &["image", "channel"],
+                "ImageCompositeMasked" => &["destination", "source", "x", "y", "resize_source"],
+                "WanVaceToVideo" => &["positive", "negative", "vae", "width", "height", "length", "batch_size", "strength"],
+                other => return Err(format!("nothing links {other} to a node left out")),
+            };
+            Ok(names.iter().map(|name| (*name).to_owned()).collect())
+        };
+        let mut sent = |files: &[(&str, &str)]| {
+            let mut given = values(files);
+            given.extend(directed.set.clone());
+            directed.graph(&given, &mut needs).unwrap()
+        };
+        let all = sent(&[("guide", "g.mp4"), ("ref", "r.png"), ("signal_video", "s.mp4"), ("moves_video", "m.mp4")]);
+        assert_eq!(all.as_object().unwrap().len(), directed.graph.len());
+        assert_eq!(all["9"]["inputs"]["control_video"], json!(["24", 0]));
+        assert_eq!(all["12"]["inputs"]["positive"], json!(["22", 0]));
+        // No signal: the guide is followed all through, with nothing laid over it in grey.
+        let unsignalled = sent(&[("guide", "g.mp4"), ("ref", "r.png"), ("moves_video", "m.mp4")]);
+        assert!(unsignalled.get("24").is_none());
+        assert_eq!(unsignalled["9"]["inputs"]["control_video"], json!(["7", 0]));
+        // No moves: what `shot` sends, the sampler reading the guide's node.
+        let unmoved = sent(&[("guide", "g.mp4"), ("ref", "r.png")]);
+        assert!(unmoved.get("22").is_none() && unmoved.get("20").is_none());
+        assert_eq!(unmoved["12"]["inputs"]["latent_image"], json!(["9", 2]));
+        assert_eq!(unmoved["13"]["inputs"]["trim_amount"], json!(["9", 3]));
+        // A signal with no guide has nothing to let go: the prompt and the layout.
+        let unguided = sent(&[("signal_video", "s.mp4"), ("moves_video", "m.mp4")]);
+        assert!(unguided.get("24").is_none() && unguided["9"]["inputs"].get("control_video").is_none());
+        assert_eq!(unguided["22"]["inputs"]["control_video"], json!(["21", 0]));
         // One that makes a file of its guide reads a guide, and has no rate of its own.
         for name in [
             "depth",
@@ -820,6 +939,65 @@ mod tests {
             .graph(&values(&[]), &mut |_| Err("the server is away".to_owned()))
             .unwrap_err();
         assert_eq!(failed, "the server is away");
+    }
+
+    #[test]
+    fn a_node_the_workflow_says_is_nothing_without_an_input_goes_and_another_stands_in() {
+        // A second guide laid over the first, in a node of its own: the server lets that node
+        // run with no guide, which would lay nothing over it at full strength.
+        let laid = |without: &str| {
+            Workflow::parse(&format!(
+                r#"{{
+                "kerf-comfy": 1, "fps": 16, "frames": {{"most": 81, "step": 4}}, "size": [832, 480],
+                {without}
+                "workflow": {{
+                    "4": {{"class_type": "CLIPTextEncode", "inputs": {{"text": "{{prompt}}"}}}},
+                    "6": {{"class_type": "LoadVideo", "inputs": {{"file": "{{guide}}"}}}},
+                    "7": {{"class_type": "GetVideoComponents", "inputs": {{"video": ["6", 0]}}}},
+                    "9": {{"class_type": "WanVaceToVideo", "inputs": {{"positive": ["4", 0], "control_video": ["7", 0]}}}},
+                    "20": {{"class_type": "LoadVideo", "inputs": {{"file": "{{moves_video}}"}}}},
+                    "21": {{"class_type": "GetVideoComponents", "inputs": {{"video": ["20", 0]}}}},
+                    "22": {{"class_type": "WanVaceToVideo", "inputs": {{"positive": ["9", 0], "control_video": ["21", 0]}}}},
+                    "12": {{"class_type": "KSampler", "inputs": {{"positive": ["22", 0], "latent_image": ["22", 2]}}}}
+                }}
+            }}"#
+            ))
+        };
+        let workflow = laid(r#""without": {"22": {"wants": ["control_video"], "reads": "9"}, "9": {"wants": ["control_video"], "reads": "4"}},"#).unwrap();
+        let graph = |files: &[(&str, &str)]| {
+            let mut values = Values::new();
+            values.insert("prompt".to_owned(), json!("a ball"));
+            values.extend(files.iter().map(|(name, file)| ((*name).to_owned(), json!(file))));
+            workflow.graph(&values, &mut required).unwrap()
+        };
+        // Both given: as written.
+        let both = graph(&[("guide", "g.mp4"), ("moves_video", "m.mp4")]);
+        assert_eq!(both.as_object().unwrap().len(), 8);
+        assert_eq!(both["12"]["inputs"]["positive"], json!(["22", 0]));
+        // No moves: the node that lays them over goes, and the sampler reads the one before it,
+        // output for output.
+        let guided = graph(&[("guide", "g.mp4")]);
+        assert!(guided.get("22").is_none() && guided.get("21").is_none());
+        assert_eq!(guided["12"]["inputs"]["positive"], json!(["9", 0]));
+        assert_eq!(guided["12"]["inputs"]["latent_image"], json!(["9", 2]));
+        // No guide: the first goes, and the second reads what it read.
+        let moved = graph(&[("moves_video", "m.mp4")]);
+        assert!(moved.get("9").is_none());
+        assert_eq!(moved["22"]["inputs"]["positive"], json!(["4", 0]));
+        // Neither: one stand-in after another, to the prompt.
+        let alone = graph(&[]);
+        assert_eq!(alone.as_object().unwrap().len(), 2);
+        assert_eq!(alone["12"]["inputs"]["positive"], json!(["4", 0]));
+        // What it says is held to the graph it says it of.
+        for (without, why) in [
+            (r#""without": {"30": {}},"#, "names node 30"),
+            (r#""without": {"22": {"wants": ["strength"]}},"#, "wants `strength`, which is not an input of it linked to a node"),
+            (r#""without": {"22": {"reads": "22"}},"#, "has node 22 stand in for node 22"),
+            (r#""without": {"22": {"reads": "31"}},"#, "has node 31 stand in for node 22"),
+        ] {
+            let refused = laid(without).unwrap_err();
+            assert!(refused.contains(why), "{refused}");
+        }
     }
 
     #[test]

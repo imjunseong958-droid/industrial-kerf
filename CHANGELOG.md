@@ -6,6 +6,12 @@ on `main`; its section here becomes the release's notes on GitHub
 
 ## 0.1.3
 
+- `kerf-comfy` comes with `shot-directed`: a shot that follows a depth guide
+  (`guide=`), looks like a reference (`ref=`), has its subject go where a clip
+  goes (`moves=<clip>`) and lets the guide go where a signal is 1
+  (`signal=<clip>`), all on one `generate` line, or any of them. A workflow of
+  your own can lay one thing over another the same way: `without` says which
+  node goes when an input of it is not given, and which stands in for it.
 - Kerf in the conversation can do in a shot's graph what you can: read the
   graph and the workflow behind a model, set one word of a recipe's line,
   wire an input in or let it go, and set a value of the workflow. Its change
