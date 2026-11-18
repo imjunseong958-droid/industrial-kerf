@@ -38,7 +38,9 @@
 //! ```
 //!
 //! Node 22 is left out when its `control_video` is, and what read node 22
-//! then reads node 9, output for output. So a workflow can lay one thing
+//! then reads node 9, output for output. `"given": ["first"]` leaves a node
+//! out when the request hands over no `first`, for one that reads nothing of
+//! it and is still only of use beside it. So a workflow can lay one thing
 //! over another, each in a node of its own, and still serve a shot that
 //! gives only some of them.
 //!
@@ -138,6 +140,11 @@ pub struct Without {
     /// without them: with one of them left out, so is it.
     #[serde(default)]
     wants: Vec<String>,
+    /// What a request hands over that it is nothing without, by the blank's
+    /// name (`first`, `guide`), though none of its own inputs reads it: with
+    /// one of them not given, it is left out.
+    #[serde(default)]
+    given: Vec<String>,
     /// The node that what read it reads in its place, output for output.
     /// With none, what read it loses its link, or goes with it.
     #[serde(default)]
@@ -207,6 +214,13 @@ impl Workflow {
                 if link(&node["inputs"][wanted]).is_none() {
                     return Err(format!(
                         "`without` says node {id} wants `{wanted}`, which is not an input of it linked to a node"
+                    ));
+                }
+            }
+            for name in &without.given {
+                if !names_what_is_handed(name) {
+                    return Err(format!(
+                        "`without` says node {id} wants `{name}` given, which is not something a request hands over"
                     ));
                 }
             }
@@ -446,6 +460,13 @@ impl Workflow {
             })
             .map(|(id, _)| id.clone())
             .collect();
+        // And each the workflow says is nothing without something the request has not got.
+        gone.extend(
+            self.without
+                .iter()
+                .filter(|(_, without)| without.given.iter().any(|name| !values.contains_key(name)))
+                .map(|(id, _)| id.clone()),
+        );
         // What a kind of node cannot do without, asked once for each kind.
         let mut needs: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
         loop {
@@ -677,13 +698,16 @@ mod tests {
         }
         // One reads all four at once, and serves a line that gives any of them.
         let directed = Workflow::named("shot-directed").unwrap();
-        assert_eq!(directed.takes()["reads"], json!(["guide", "ref", "signal", "moves"]));
+        assert_eq!(directed.takes()["reads"], json!(["guide", "first", "ref", "signal", "moves"]));
         assert_eq!(directed.takes()["more"]["moves_strength"], json!(1.0));
         let mut needs = |class: &str| -> Result<BTreeSet<String>, String> {
             let names: &[&str] = match class {
                 "GetVideoComponents" => &["video"],
                 "ImageToMask" => &["image", "channel"],
                 "ImageCompositeMasked" => &["destination", "source", "x", "y", "resize_source"],
+                "ImageScale" => &["image", "upscale_method", "width", "height", "crop"],
+                "ImageFromBatch" => &["image", "batch_index", "length"],
+                "ImageBatch" => &["image1", "image2"],
                 "WanVaceToVideo" => &["positive", "negative", "vae", "width", "height", "length", "batch_size", "strength"],
                 other => return Err(format!("nothing links {other} to a node left out")),
             };
@@ -694,9 +718,24 @@ mod tests {
             given.extend(directed.set.clone());
             directed.graph(&given, &mut needs).unwrap()
         };
-        let all = sent(&[("guide", "g.mp4"), ("ref", "r.png"), ("signal_video", "s.mp4"), ("moves_video", "m.mp4")]);
+        let all = sent(&[("guide", "g.mp4"), ("first", "f.png"), ("ref", "r.png"), ("signal_video", "s.mp4"), ("moves_video", "m.mp4")]);
         assert_eq!(all.as_object().unwrap().len(), directed.graph.len());
-        assert_eq!(all["9"]["inputs"]["control_video"], json!(["24", 0]));
+        // With a first frame the guide starts as that picture, kept: the rest of it is followed.
+        assert_eq!(all["9"]["inputs"]["control_video"], json!(["33", 0]));
+        assert_eq!(all["9"]["inputs"]["control_masks"], json!(["38", 0]));
+        assert_eq!(all["32"]["inputs"]["image"], json!(["24", 0]));
+        // No first frame: the guide as it is, and nothing kept of it.
+        let whole = sent(&[("guide", "g.mp4"), ("ref", "r.png"), ("signal_video", "s.mp4"), ("moves_video", "m.mp4")]);
+        assert!(whole.get("33").is_none() && whole.get("38").is_none() && whole.get("30").is_none());
+        assert_eq!(whole["9"]["inputs"]["control_video"], json!(["24", 0]));
+        assert!(whole["9"]["inputs"].get("control_masks").is_none());
+        // A first frame and no signal: the part of the guide after its first frame, ungated.
+        let on = sent(&[("guide", "g.mp4"), ("first", "f.png")]);
+        assert_eq!(on["32"]["inputs"]["image"], json!(["7", 0]));
+        assert_eq!(on["9"]["inputs"]["control_video"], json!(["33", 0]));
+        // A first frame with no guide has nothing to go on along: it is not kept either.
+        let unled = sent(&[("first", "f.png"), ("ref", "r.png")]);
+        assert!(unled.get("38").is_none() && unled["9"]["inputs"].get("control_video").is_none());
         assert_eq!(all["12"]["inputs"]["positive"], json!(["22", 0]));
         // No signal: the guide is followed all through, with nothing laid over it in grey.
         let unsignalled = sent(&[("guide", "g.mp4"), ("ref", "r.png"), ("moves_video", "m.mp4")]);

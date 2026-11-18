@@ -40,7 +40,8 @@ Gives givesOf(const QString &name) {
 Kind kindOf(const QString &name) {
     static const QHash<QString, Kind> named{
         {QStringLiteral("sequence"), Kind::Sequence}, {QStringLiteral("render"), Kind::Render}, {QStringLiteral("model"), Kind::Model},
-        {QStringLiteral("run"), Kind::Run},           {QStringLiteral("file"), Kind::File},     {QStringLiteral("signal"), Kind::Signal},
+        {QStringLiteral("run"), Kind::Run},           {QStringLiteral("join"), Kind::Join},
+        {QStringLiteral("file"), Kind::File},     {QStringLiteral("signal"), Kind::Signal},
         {QStringLiteral("moves"), Kind::Moves},       {QStringLiteral("cast"), Kind::Cast},     {QStringLiteral("style"), Kind::Style},
         {QStringLiteral("takes"), Kind::Takes}};
     return named.value(name, Kind::File);
@@ -196,6 +197,7 @@ QString glyphOf(const Node &node) {
     case Kind::Render: return QStringLiteral("g-picture");
     case Kind::Model: return QStringLiteral("g-model");
     case Kind::Run: return QStringLiteral("g-run");
+    case Kind::Join: return QStringLiteral("g-video");
     case Kind::File: return node.gives == Gives::Image ? QStringLiteral("g-image")
                           : node.gives == Gives::Video ? QStringLiteral("g-video") : QStringLiteral("g-file");
     case Kind::Signal: return QStringLiteral("g-signal");
@@ -246,7 +248,8 @@ QStringList portsFor(const Recipe &recipe, const Node &from, const Node &to) {
         // The guides it reads beside the first, by what each is of.
         for (const QJsonValue read : to.holds.value(QStringLiteral("reads")).toArray())
             if (read.toString().startsWith(QStringLiteral("guide_"))) ports << read.toString();
-        return ports << QStringLiteral("ref");
+        // As a first frame it is where it ended: the shot goes on from it.
+        return ports << QStringLiteral("ref") << QStringLiteral("first");
     }
     if (from.gives == Gives::Image) return {QStringLiteral("first"), QStringLiteral("last"), QStringLiteral("ref")};
     return {QStringLiteral("ref")};
@@ -1030,7 +1033,7 @@ void RecipeGraphView::paintEvent(QPaintEvent *) {
         // A guide's sequence and the shot's take are the one thing their node
         // reads; a model's inputs are told apart by name. Too small to read, none is.
         const Node *reader = m_recipe.node(edge.to);
-        if (m_zoom < 0.7 || !reader || (reader->kind != Kind::Model && reader->kind != Kind::Run)) continue;
+        if (m_zoom < 0.7 || !reader || (reader->kind != Kind::Model && reader->kind != Kind::Run && reader->kind != Kind::Join)) continue;
         const bool touches = m_selected.isEmpty() || edge.from == m_selected || edge.to == m_selected;
         const qreal width = std::ceil(portMetrics.horizontalAdvance(edge.port));
         // On the canvas's own colour, so an edge that passes behind it does not strike it through.

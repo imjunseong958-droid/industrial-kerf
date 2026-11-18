@@ -243,6 +243,7 @@ QString RecipeInspector::shape(const graph::Recipe &recipe, const Node &node) co
     }
     if (const QJsonObject made = node.holds.value(QStringLiteral("made")).toObject(); !made.isEmpty())
         parts << made.value(QStringLiteral("path")).toString() << QString::number(m_pictures.contains(made.value(QStringLiteral("path")).toString()));
+    parts << QString::number(node.holds.value(QStringLiteral("from")).isNull());
     // What is said as text, not set: another word is another card.
     if (node.kind != Kind::Model && node.kind != Kind::Render && node.kind != Kind::Signal) parts << node.title << node.detail;
     parts << node.holds.value(QStringLiteral("wants")).toString() << node.holds.value(QStringLiteral("about")).toString()
@@ -257,6 +258,7 @@ QHash<QString, QString> RecipeInspector::values(const Node &node) const {
         shown.insert(QStringLiteral("seed"), holds.value(QStringLiteral("seed")).isNull()
                                                  ? QString() : QString::number(holds.value(QStringLiteral("seed")).toVariant().toULongLong()));
         shown.insert(QStringLiteral("seconds"), shownValue(holds.value(QStringLiteral("seconds"))));
+        shown.insert(QStringLiteral("from"), shownValue(holds.value(QStringLiteral("from"))));
         shown.insert(QStringLiteral("size"), holds.value(QStringLiteral("size")).toString());
         for (const QJsonValue value : holds.value(QStringLiteral("knobs")).toArray()) {
             const QJsonObject knob = value.toObject();
@@ -273,6 +275,11 @@ QHash<QString, QString> RecipeInspector::values(const Node &node) const {
         shown.insert(QStringLiteral("size"), holds.value(QStringLiteral("size")).toString());
         shown.insert(QStringLiteral("rate"), holds.value(QStringLiteral("rate")).toString());
         shown.insert(QStringLiteral("matte"), holds.value(QStringLiteral("matte")).toString());
+        shown.insert(QStringLiteral("from"), holds.value(QStringLiteral("from")).toString());
+        shown.insert(QStringLiteral("seconds"), holds.value(QStringLiteral("seconds")).toString());
+    } else if (node.kind == Kind::Join) {
+        const int lap = holds.value(QStringLiteral("lap")).toInt();
+        shown.insert(QStringLiteral("lap"), lap > 0 ? QString::number(lap) : QString());
     }
     return shown;
 }
@@ -538,6 +545,13 @@ void RecipeInspector::rebuild(const graph::Recipe &recipe, const Node &node) {
         m_column->addWidget(open, 0, Qt::AlignLeft);
         break;
     }
+    case Kind::Join:
+        addNote(QStringLiteral("Kerf sets the parts it reads end to end into one file: a shot longer than a model makes at once, made a part at a time."));
+        addField(QStringLiteral("lap"), QStringLiteral("Lap"), QStringLiteral("lap"), QStringLiteral("0 frames"));
+        addNote(QStringLiteral("Lap is how many frames each part after the first shares with the one before it, which are left out: 1 where a "
+                               "part goes on from the last frame of the one before."));
+        buildReads(recipe, node);
+        break;
     case Kind::Run:
         addNote(QStringLiteral("%1 %2").arg(node.holds.value(QStringLiteral("program")).toString(), node.detail), ink2)->setFont(tokens::font(timecode));
         addNote(QStringLiteral("A program the recipe runs, in its own folder. Its line is the recipe's to edit as text."));
@@ -618,6 +632,10 @@ void RecipeInspector::buildModel(const graph::Recipe &recipe, const Node &node) 
     addField(QStringLiteral("seconds"), QStringLiteral("Seconds"), QStringLiteral("seconds"), longest);
     addField(QStringLiteral("size"), QStringLiteral("Size"), QStringLiteral("size"),
              holds.value(QStringLiteral("modelSize")).toString(QStringLiteral("the model's own")));
+    // A part of a longer shot says where in its sequences' time it starts: its signals and
+    // where its clips go are read from there.
+    if (!holds.value(QStringLiteral("from")).isNull())
+        addField(QStringLiteral("from"), QStringLiteral("From"), QStringLiteral("from"), QStringLiteral("the sequence's start"));
 
     // The knobs: what the line sets for this model alone, then what the model
     // has said it takes, each as it comes until the line says otherwise.
@@ -865,6 +883,9 @@ void RecipeInspector::buildRender(const Node &node) {
     addField(QStringLiteral("size"), QStringLiteral("Size"), QStringLiteral("size"), QStringLiteral("the sequence's"));
     addField(QStringLiteral("rate"), QStringLiteral("Rate"), QStringLiteral("rate"), QStringLiteral("the sequence's"));
     addField(QStringLiteral("matte"), QStringLiteral("Matte of"), QStringLiteral("matte"), QStringLiteral("a clip, alone in white"));
+    // The part of the sequence it draws, in seconds: a shot longer than a model makes at once is drawn a part at a time.
+    addField(QStringLiteral("from"), QStringLiteral("From"), QStringLiteral("from"), QStringLiteral("its start"));
+    addField(QStringLiteral("seconds"), QStringLiteral("Seconds"), QStringLiteral("seconds"), QStringLiteral("to its end"));
     // The guide as it was drawn for the take that shows: what the model was handed, to look at beside the take.
     const QJsonObject made = holds.value(QStringLiteral("made")).toObject();
     if (const QImage drawn = m_pictures.value(made.value(QStringLiteral("path")).toString()); !drawn.isNull()) {

@@ -62,6 +62,8 @@ fn a_recipe_is_steps_and_the_last_writes_the_file() {
             rate: None,
             pass: Pass::Picture,
             matte: None,
+            from: None,
+            seconds: None,
         }
     );
     let Step::Generate(ask) = &recipe.steps[2] else {
@@ -111,6 +113,8 @@ fn a_recipe_is_steps_and_the_last_writes_the_file() {
                 rate: Some(Rate::new(16, 1).unwrap()),
                 pass: Pass::Picture,
                 matte: None,
+                from: None,
+                seconds: None,
             },
             Step::Render {
                 sequence: "s3".to_owned(),
@@ -119,6 +123,8 @@ fn a_recipe_is_steps_and_the_last_writes_the_file() {
                 rate: Some(Rate::FPS_23_976),
                 pass: Pass::Picture,
                 matte: None,
+                from: None,
+                seconds: None,
             }
         ]
     );
@@ -192,11 +198,11 @@ fn what_is_wrong_with_a_recipe_is_said() {
         wrong("kerf-recipe 1\nrender s2 {out} rate=0").contains("not a rate in frames a second")
     );
     assert!(wrong("kerf-recipe 1\nrender s2 {out} fps=16")
-        .contains("`fps=16` is not something `render` takes; after the file it makes come `size=WxH`, `rate=<fps>`, `pass=ids|depth|relative|normals`, and `matte=<clip>`"));
+        .contains("`fps=16` is not something `render` takes; after the file it makes come `size=WxH`, `rate=<fps>`, `pass=ids|depth|relative|normals`, `matte=<clip>`, and the part of the sequence, `from=<seconds>` and `seconds=<seconds>`"));
     assert!(wrong("kerf-recipe 1\nrender s2 {out} pass=albedo")
         .contains("`pass=albedo` is not a pass Kerf draws: `ids`, which clip each pixel is of, `depth`, how near it is, `relative`"));
     assert!(
-        wrong("kerf-recipe 1\nrender s2 {out} seconds=4").contains("not something `render` takes")
+        wrong("kerf-recipe 1\nrender s2 {out} frames=4").contains("not something `render` takes")
     );
     assert!(wrong("kerf-recipe 1\ngenerate prompt=\"a boat\"").contains("names its model"));
     assert!(
@@ -916,7 +922,7 @@ fn a_plan_notes_what_a_model_has_said_it_does_not_take() {
     assert_eq!(
         notes("generate model=shot prompt=\"a boat\" first=boat.png seconds=9 duration=9"),
         [
-            "`seconds=9` is more than model `shot` makes at once, 5.0625 s",
+            "`seconds=9` is more than model `shot` makes at once, 5.0625 s: a longer shot is made in parts, each a guide of its part (`render <sequence> {b.mp4} from=<seconds> seconds=<seconds>`) and a `generate` that goes on from the part before (`first={a.mp4} from=<seconds>`), set end to end by `join {a.mp4} {b.mp4} {out} lap=1`",
             "model `shot` has no use for `first=`: of what a line hands it, it reads guide, ref",
             "model `shot` has nothing named `duration` to set: beside what every model is asked, a line sets its steps, strength",
         ]
@@ -1927,4 +1933,94 @@ fn a_mesh_clip_that_reads_a_set_plays_it() {
     };
     assert_eq!(read("shots/set.takes/001.glb"), 1);
     assert_eq!(read("models/car.glb"), 0);
+}
+
+/// A shot longer than a model makes at once is written in parts: a guide of each part, a
+/// `generate` that goes on from the part before, and a `join` that sets them end to end.
+#[test]
+fn a_longer_shot_is_parts_set_end_to_end() {
+    let text = "kerf-recipe 1\n\
+        render court {d1.mp4} pass=depth rate=16 seconds=5.0625\n\
+        render court {d2.mp4} pass=depth rate=16 from=5 seconds=5.0625\n\
+        generate model=video prompt=\"a ball\" guide={d1.mp4} out={a.mp4}\n\
+        generate model=video prompt=\"a ball\" guide={d2.mp4} first={a.mp4} from=5 out={b.mp4}\n\
+        join {a.mp4} {b.mp4} {out} lap=1\n";
+    let recipe = Recipe::parse(text).unwrap();
+    assert_eq!(recipe.steps.len(), 5);
+    let Step::Render { from, seconds, .. } = &recipe.steps[1] else {
+        panic!("a render step");
+    };
+    assert_eq!((*from, *seconds), (Some(5.0), Some(5.0625)));
+    let Step::Generate(second) = &recipe.steps[3] else {
+        panic!("a generate step");
+    };
+    assert_eq!(second.from, Some(5.0));
+    assert_eq!(second.first, Some(Source::Made("a.mp4".into())));
+    assert_eq!(
+        recipe.steps[4],
+        Step::Join { parts: vec!["a.mp4".into(), "b.mp4".into()], to: "out".into(), lap: 1 }
+    );
+    assert_eq!(recipe.makes(), ["a.mp4", "b.mp4", "d1.mp4", "d2.mp4"]);
+    // The request of a part says where it starts; of a whole shot it says nothing of it.
+    let place = |name: &str| PathBuf::from(format!("/takes/{name}"));
+    let asked = second.request(&|file| Ok(PathBuf::from(file)), &place, &[], &[]).unwrap();
+    assert_eq!(asked["from"], 5.0);
+    assert_eq!(asked["first"], "/takes/a.mp4");
+
+    let wrong = |line: &str| {
+        Recipe::parse(&format!("kerf-recipe 1\nrender court {{a.mp4}}\nrender court {{b.mp4}}\n{line}\n"))
+            .unwrap_err()
+            .to_string()
+    };
+    assert!(wrong("join {a.mp4} {out}").contains("two or more parts"));
+    assert!(wrong("join {a.mp4} {c.mp4} {out}").contains("no step before this one makes `{c.mp4}`"));
+    assert!(wrong("join {a.mp4} {b.mp4} {a.mp4}").contains("which is one of its parts"));
+    assert!(wrong("join {a.mp4} {b.mp4} {out} lap=some").contains("`lap=some` is not a whole number"));
+    assert!(wrong("join {a.mp4} {b.mp4} {out} fade=1").contains("is not something `join` takes"));
+    assert!(wrong("render court {out} from=-1").contains("`from=-1` is not a number of seconds"));
+    assert!(wrong("render court {out} seconds=0").contains("`seconds=0` is not a number of seconds"));
+    assert!(wrong("generate model=m prompt=\"p\" from=soon").contains("`from=soon` is not a number of seconds"));
+}
+
+/// Parts are joined by ffmpeg, each after the first without the frames it shares with the
+/// one before, and a picture in motion gives its last frame to the part that goes on from it.
+#[test]
+fn parts_are_joined_without_the_frames_they_share() {
+    let ffmpeg = crate::ffmpeg::resolve_ffmpeg_bin();
+    if std::process::Command::new(ffmpeg).arg("-version").output().is_err() {
+        return;
+    }
+    let folder = tempfile::tempdir().unwrap();
+    let part = |name: &str, color: &str| {
+        let file = folder.path().join(name);
+        let made = std::process::Command::new(ffmpeg)
+            .args(["-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i"])
+            .arg(format!("color=c={color}:s=64x36:r=16:d=1"))
+            .args(["-pix_fmt", "yuv420p"])
+            .arg(&file)
+            .status()
+            .unwrap();
+        assert!(made.success());
+        file
+    };
+    let frames = |file: &Path| -> u32 {
+        let counted = std::process::Command::new(crate::ffmpeg::resolve_ffprobe_bin())
+            .args(["-v", "error", "-count_frames", "-select_streams", "v:0"])
+            .args(["-show_entries", "stream=nb_read_frames", "-of", "csv=p=0"])
+            .arg(file)
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&counted.stdout).trim().parse().unwrap()
+    };
+    let (a, b) = (part("a.mp4", "red"), part("b.mp4", "blue"));
+    let out = folder.path().join("out.mp4");
+    assert!(join_command(&[a.clone(), b.clone()], &out, 1).status().unwrap().success());
+    assert_eq!(frames(&out), frames(&a) + frames(&b) - 1);
+    assert!(join_command(&[a.clone(), b.clone(), a.clone()], &out, 0).status().unwrap().success());
+    assert_eq!(frames(&out), 2 * frames(&a) + frames(&b));
+    // The last frame of the red part is red, and the first of the blue one blue.
+    let still = folder.path().join("a.last.png");
+    assert!(in_motion(&a) && !in_motion(&still));
+    assert!(still_command(&a, &still, true).status().unwrap().success());
+    assert!(still.is_file());
 }

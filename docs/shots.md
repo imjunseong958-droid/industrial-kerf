@@ -38,8 +38,9 @@ generate model=dawn prompt="a fishing boat leaves the harbour at dawn, fog" guid
 |---|---|
 | `needs <file> …` | Names the files the recipe reads, from the recipe's own folder, so that a change to one is seen. A file a `run` reads belongs here; a file handed to a model is counted without it. |
 | `run <program> <arguments>` | Runs a program, in the recipe's folder. Quote an argument that holds spaces. It is run as it is named, supervised, never through a shell, so `$HOME` and `;` are only characters. |
-| `render <sequence> {name} [size=WxH] [rate=<fps>] [pass=ids\|depth\|relative\|normals] [matte=<clip>]` | Has Kerf draw a sequence of this project into a file, with no sound. A guide blocked with Kerf's own clips in depth, cameras, lights, and titles reaches a model this way, at the model's size and rate when the line names them. `pass=` draws, in place of the picture, which clip each pixel is of or how near it is. See [Guides](#guides). |
+| `render <sequence> {name} [size=WxH] [rate=<fps>] [pass=ids\|depth\|relative\|normals] [matte=<clip>] [from=<seconds>] [seconds=<seconds>]` | Has Kerf draw a sequence of this project into a file, with no sound. A guide blocked with Kerf's own clips in depth, cameras, lights, and titles reaches a model this way, at the model's size and rate when the line names them. `pass=` draws, in place of the picture, which clip each pixel is of or how near it is. See [Guides](#guides). |
 | `generate model=<name> …` | Asks a model for a file. See below. |
+| `join {part} {part} … {name} [lap=<frames>]` | Sets files earlier steps made end to end into one, a picture with no sound: the parts of [a longer shot](#a-longer-shot). Each part after the first loses its first `lap` frames. |
 
 `{out}` stands for the shot's file, and the last step writes it. Any other
 `{name}`, such as `{guide.mp4}`, is a file a step makes on the way and a later
@@ -54,7 +55,8 @@ but a file's name stand for themselves.
 | `prompt="…"` | What the file should show. |
 | `guide=` | A picture in motion to follow: a blocking, a rough render, an earlier take. |
 | `guide_<name>=` | Another picture in motion to follow, by what it is of, for a model that reads more than one: `guide_depth={depth.mp4}` beside the picture, or `guide_ids=`. A name is lowercase letters and digits, each given once; the request holds them under `guides`. |
-| `first=`, `last=` | The first and the last frame. |
+| `first=`, `last=` | The first and the last frame. A picture in motion given as `first=` is its last frame, and as `last=` its first: the shot goes on from where that one ended, or ends where it began. |
+| `from=` | Where the shot starts in its sequences' time, in seconds, for a part of [a longer shot](#a-longer-shot): its signals and where its clips go are read from there. |
 | `ref=` | A picture of who or what is in it, or of how it should look. As many as wanted. |
 | `cast=`, `style=` | Who and what is in it, and how it looks, by the names the project's `cast.kerfcast` gives them. As many as wanted. See [The cast](#the-cast). |
 | `signal=` | A number over time that says when what the prompt asks for happens, and how much: a signal clip of the project, by its id. As many as wanted. See [Signals](#signals). |
@@ -68,6 +70,49 @@ Anything else on the line, such as `strength=0.6`, goes to the model as it is
 written, for the models that read it. A file is a path from the recipe's
 folder (`../refs/boat.png`) or a `{name}` an earlier step made. Every file a
 recipe names has to be inside the project.
+
+### A longer shot
+
+A model makes so much at once, about five seconds for the ones `kerf-comfy`
+runs (`seconds` in what it [takes](#what-a-model-takes)). A shot longer than
+that is made in parts, each a guide of its own part of the sequence and a
+`generate` that starts where the part before ended, and `join` sets them end
+to end:
+
+```text
+kerf-recipe 1
+# Ten seconds of a ball crossing a court: two parts of the same sequence.
+render court {d1.mp4} pass=depth size=832x480 rate=16 seconds=5.0625
+render court {d2.mp4} pass=depth size=832x480 rate=16 from=5 seconds=5.0625
+generate model=video prompt="a basketball bounces on a court" guide={d1.mp4} moves=ball seed=7 out={a.mp4}
+generate model=video prompt="a basketball bounces on a court" guide={d2.mp4} first={a.mp4} moves=ball from=5 seed=7 out={b.mp4}
+join {a.mp4} {b.mp4} {out} lap=1
+```
+
+- `render … from=5 seconds=5.0625` draws that part of the sequence and no
+  more. With `seconds` alone it starts at the sequence's start, and with
+  `from` alone it goes to its end.
+- `first={a.mp4}` hands the second part the last frame of the first, which
+  Kerf takes from the file, so it starts as the picture the first ended on.
+  The parts therefore share a frame: the second starts at 5 s, on the first's
+  last frame (81 frames at 16 a second are 5.0625 s, the 81st at 5 s), and
+  `lap=1` leaves that frame out of the join. Two parts of 81 frames make 161.
+- `from=5` on the `generate` line has the part's signals and where its clips
+  go read from 5 s of their sequence, as its guide is.
+- A third part is two more lines, `from=10`, and one more name in the `join`.
+
+What carries from part to part is what the last frame shows. A model starts
+each part anew from that one picture, so how something was moving is not
+carried, and a part can drift in tone from the one before: on the model this
+was tried with, the second part is darker from its second frame
+([the record](shots-measured.md)). `shot-directed` is the workflow that comes
+with `kerf-comfy` that reads a first frame beside a guide.
+
+The plan says so when a recipe asks one `generate` for more than its model
+makes at once, or hands it a guide longer than that, and how to write it in
+parts. In the shot's graph the join is a card of its own, each part's guide
+says which part of the sequence it draws, and all of it is set there as any
+word of the recipe ([As a graph](#as-a-graph)).
 
 So a model is told three things, each its own way: **where** things are and
 how the camera moves, by a guide; **when** something happens and how much, by

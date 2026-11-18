@@ -144,8 +144,8 @@ pub fn step_lines(text: &str) -> Vec<usize> {
 
 /// `text` with `change` made to its line `number`, counted from 1 as a
 /// recipe's errors count them. Nothing else of the text changes. The line
-/// has to be a `generate` or a `render` line, whose words after the first
-/// are `name=value`; of a `render` line, `sequence` names the sequence it
+/// has to be a `generate`, a `render` or a `join` line, whose words after
+/// what it reads and makes are `name=value`; of a `render` line, `sequence` names the sequence it
 /// draws. What the change makes is read as a recipe, and one that does not
 /// read is refused with why.
 pub fn changed(text: &str, number: usize, change: Change) -> Result<String> {
@@ -161,9 +161,17 @@ pub fn changed(text: &str, number: usize, change: Change) -> Result<String> {
     let named = match verb {
         Some("generate") => 1,
         Some("render") => 3,
+        // After the parts and the file they make, each in braces.
+        Some("join") => {
+            1 + words
+                .iter()
+                .skip(1)
+                .take_while(|word| super::whole(&word.read).is_some())
+                .count()
+        }
         _ => {
             return Err(wrong(
-                "only a `generate` or a `render` line has names to set".to_owned(),
+                "only a `generate`, a `render` or a `join` line has names to set".to_owned(),
             ))
         }
     };
@@ -304,6 +312,19 @@ mod tests {
     }
 
     #[test]
+    fn a_joins_lap_is_set_on_its_line() {
+        let text = "kerf-recipe 1\nrender s1 {a.mp4}\nrender s1 {b.mp4}\njoin {a.mp4} {b.mp4} {out}  lap=1\n";
+        let set = |value| Change::Set { key: "lap", nth: 0, value };
+        assert_eq!(changed(text, 4, set("2")).unwrap(), text.replace("lap=1", "lap=2"));
+        let none = changed(text, 4, Change::Remove { key: "lap", nth: 0 }).unwrap();
+        assert_eq!(none, text.replace("  lap=1", ""));
+        // Where the line has none it is added after the file the join makes.
+        assert_eq!(changed(&none, 4, set("1")).unwrap(), text.replace("  lap=1", " lap=1"));
+        let refused = changed(text, 4, set("some")).unwrap_err().to_string();
+        assert!(refused.contains("`lap=some` is not a whole number"), "{refused}");
+    }
+
+    #[test]
     fn a_value_is_replaced_where_it_stands_and_nothing_else_moves() {
         let now = set(RECIPE, 8, "seed", "8");
         assert_eq!(now, RECIPE.replace("seed=7", "seed=8"));
@@ -397,8 +418,8 @@ mod tests {
         assert!(refused(5, "size", "833x480").contains("has an odd side"));
         assert!(refused(8, "guide", "{nothing.mp4}").contains("no step before this one makes"));
         assert!(refused(8, "prompt", "two\nlines").contains("holds a line break"));
-        assert!(refused(3, "seed", "1").contains("only a `generate` or a `render` line"));
-        assert!(refused(2, "seed", "1").contains("only a `generate` or a `render` line"));
+        assert!(refused(3, "seed", "1").contains("only a `generate`, a `render` or a `join` line"));
+        assert!(refused(2, "seed", "1").contains("only a `generate`, a `render` or a `join` line"));
         assert!(refused(40, "seed", "1").contains("no such line"));
         // The last step writes the media's file, so its `out=` cannot be another.
         assert!(refused(8, "out", "{other.mp4}").contains("names no `{out}`"));

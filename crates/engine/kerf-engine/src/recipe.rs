@@ -94,9 +94,24 @@ pub enum Step {
         pass: Pass,
         /// A clip of the sequence drawn alone, white on black, in place of a pass.
         matte: Option<String>,
+        /// The part of the sequence drawn, in seconds from its start and for
+        /// how long: the whole of it where neither is said. A shot longer
+        /// than a model makes at once is drawn a part at a time.
+        from: Option<f64>,
+        seconds: Option<f64>,
     },
     /// A model asked for a file.
     Generate(Box<Ask>),
+    /// Pictures in motion steps before it made, set end to end into the
+    /// file `to` names: the parts of a shot longer than a model makes at
+    /// once. Each part after the first loses its first `lap` frames, the
+    /// ones it has of the part before it where it went on from that one's
+    /// last frame.
+    Join {
+        parts: Vec<String>,
+        to: String,
+        lap: u32,
+    },
 }
 
 /// A recipe as its file says it.
@@ -152,7 +167,8 @@ impl Recipe {
                             words[1]
                         ))
                     })?;
-                    let (size, rate, pass, matte) = drawn_at(&words[2..]).map_err(wrong)?;
+                    let (size, rate, pass, matte, from, seconds) =
+                        drawn_at(&words[2..]).map_err(wrong)?;
                     made.push(to.clone());
                     recipe.steps.push(Step::Render {
                         sequence: words.swap_remove(0),
@@ -161,28 +177,35 @@ impl Recipe {
                         rate,
                         pass,
                         matte,
+                        from,
+                        seconds,
                     });
+                }
+                "join" if !words.is_empty() => {
+                    let (parts, to, lap) = joined(&words, &made).map_err(wrong)?;
+                    made.push(to.clone());
+                    recipe.steps.push(Step::Join { parts, to, lap });
                 }
                 "generate" if !words.is_empty() => {
                     let ask = Ask::parse(&words, &made).map_err(wrong)?;
                     made.push(ask.out.clone());
                     recipe.steps.push(Step::Generate(Box::new(ask)));
                 }
-                "needs" | "run" | "render" | "generate" => {
+                "needs" | "run" | "render" | "generate" | "join" => {
                     return Err(wrong(format!(
-                        "`{verb}` is `needs <file> …`, `run <program> <arguments>`, `render <sequence> {{name}} [size=WxH] [rate=<fps>] [pass=ids|depth|relative|normals]`, or `generate model=<name> prompt=\"…\" …`"
+                        "`{verb}` is `needs <file> …`, `run <program> <arguments>`, `render <sequence> {{name}} [size=WxH] [rate=<fps>] [pass=ids|depth|relative|normals] [from=<seconds>] [seconds=<seconds>]`, `generate model=<name> prompt=\"…\" …`, or `join {{part}} {{part}} … {{name}} [lap=<frames>]`"
                     )))
                 }
                 other => {
                     return Err(wrong(format!(
-                        "`{other}` is not a recipe's word; it has `needs`, `run`, `render`, and `generate`"
+                        "`{other}` is not a recipe's word; it has `needs`, `run`, `render`, `generate`, and `join`"
                     )))
                 }
             }
         }
         if recipe.steps.is_empty() {
             return Err(EngineError::msg(
-                "the recipe has no step: a `run`, a `render`, or a `generate` line",
+                "the recipe has no step: a `run`, a `render`, a `generate`, or a `join` line",
             ));
         }
         if !recipe.writes_out() {
@@ -201,6 +224,7 @@ impl Recipe {
                 .any(|argument| stands_for(argument).any(|name| name == OUT)),
             Some(Step::Render { to, .. }) => to == OUT,
             Some(Step::Generate(ask)) => ask.out == OUT,
+            Some(Step::Join { to, .. }) => to == OUT,
             None => false,
         }
     }
@@ -285,7 +309,7 @@ impl Recipe {
                     .iter()
                     .flat_map(|argument| stands_for(argument))
                     .collect(),
-                Step::Render { to, .. } => vec![to.clone()],
+                Step::Render { to, .. } | Step::Join { to, .. } => vec![to.clone()],
                 Step::Generate(ask) => vec![ask.out.clone()],
             })
             .filter(|name| name != OUT)
@@ -330,10 +354,54 @@ pub(crate) fn size_of(value: &str) -> Option<Size> {
 
 /// What the words after `render <sequence> {name}` name: the size, the rate, the pass, and
 /// the clip a matte is of.
-type Drawn = (Option<Size>, Option<Rate>, Pass, Option<String>);
+type Drawn = (Option<Size>, Option<Rate>, Pass, Option<String>, Option<f64>, Option<f64>);
+
+/// A number of seconds a line gives as `name=value`: `least` or more.
+fn seconds_of(name: &str, value: &str, least: f64) -> std::result::Result<f64, String> {
+    value
+        .parse()
+        .ok()
+        .filter(|seconds: &f64| seconds.is_finite() && *seconds >= least && (least == 0.0 || *seconds > 0.0))
+        .ok_or_else(|| format!("`{name}={value}` is not a number of seconds, such as 5 or 5.0625"))
+}
+
+/// What the words after `join` name: the parts, the file they make, and how many frames
+/// each part after the first has of the one before it.
+fn joined(words: &[String], made: &[String]) -> std::result::Result<(Vec<String>, String, u32), String> {
+    let mut names = Vec::new();
+    let mut lap = 0;
+    for word in words {
+        match (whole(word), word.split_once('=')) {
+            (Some(name), _) => names.push(name),
+            (None, Some(("lap", value))) => {
+                lap = value.parse().map_err(|_| {
+                    format!("`lap={value}` is not a whole number of frames, such as 1")
+                })?;
+            }
+            _ => {
+                return Err(format!(
+                    "`{word}` is not something `join` takes: it is `join {{part}} {{part}} … {{name}} [lap=<frames>]`, each part a file a step before made"
+                ))
+            }
+        }
+    }
+    let to = names.pop().filter(|_| names.len() >= 2).ok_or_else(|| {
+        "`join` sets two or more parts end to end into the file it names last: `join {a.mp4} {b.mp4} {out}`".to_owned()
+    })?;
+    for part in &names {
+        if !made.contains(part) {
+            return Err(format!("no step before this one makes `{{{part}}}`"));
+        }
+    }
+    if names.contains(&to) {
+        return Err(format!("`join` writes `{{{to}}}`, which is one of its parts"));
+    }
+    Ok((names, to, lap))
+}
 
 fn drawn_at(words: &[String]) -> std::result::Result<Drawn, String> {
     let (mut size, mut rate, mut pass, mut matte) = (None, None, Pass::Picture, None);
+    let (mut from, mut seconds) = (None, None);
     for word in words {
         match word.split_once('=') {
             Some(("size", value)) => {
@@ -361,9 +429,11 @@ fn drawn_at(words: &[String]) -> std::result::Result<Drawn, String> {
                 })?;
             }
             Some(("matte", value)) if !value.is_empty() => matte = Some(value.to_owned()),
+            Some(("from", value)) => from = Some(seconds_of("from", value, 0.0)?),
+            Some(("seconds", value)) => seconds = Some(seconds_of("seconds", value, f64::MIN_POSITIVE)?),
             _ => {
                 return Err(format!(
-                    "`{word}` is not something `render` takes; after the file it makes come `size=WxH`, `rate=<fps>`, `pass=ids|depth|relative|normals`, and `matte=<clip>`"
+                    "`{word}` is not something `render` takes; after the file it makes come `size=WxH`, `rate=<fps>`, `pass=ids|depth|relative|normals`, `matte=<clip>`, and the part of the sequence, `from=<seconds>` and `seconds=<seconds>`"
                 ))
             }
         }
@@ -371,7 +441,7 @@ fn drawn_at(words: &[String]) -> std::result::Result<Drawn, String> {
     if matte.is_some() && pass != Pass::Picture {
         return Err("`matte=` is one clip in white on black, in place of a pass: give one of the two".to_owned());
     }
-    Ok((size, rate, pass, matte))
+    Ok((size, rate, pass, matte, from, seconds))
 }
 
 /// The names in braces an argument holds: `out` and `guide.mp4` of
@@ -827,6 +897,20 @@ pub fn plan_rolled(
                         .map(|argument| placed(argument, &|name| place.file_for(take, name))),
                 ),
             ),
+            Step::Join { parts, to, lap } => format!(
+                "Kerf joins {} end to end into {}{}",
+                parts
+                    .iter()
+                    .map(|part| format!("{{{part}}}"))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                place.file_for(take, to).display(),
+                match lap {
+                    0 => String::new(),
+                    1 => ", each part after the first without its first frame".to_owned(),
+                    lap => format!(", each part after the first without its first {lap} frames"),
+                }
+            ),
             Step::Render {
                 sequence,
                 to,
@@ -834,6 +918,8 @@ pub fn plan_rolled(
                 rate,
                 pass,
                 matte,
+                from,
+                seconds,
             } => {
                 let what = match (pass, matte) {
                     (_, Some(clip)) => format!("the matte of `{clip}` in "),
@@ -847,8 +933,17 @@ pub fn plan_rolled(
                 if let Some(rate) = rate {
                     at.push(format!("{rate} frames a second"));
                 }
+                let part = match (from, seconds) {
+                    (None, None) => String::new(),
+                    (from, Some(seconds)) => format!(
+                        ", {} s of it from {} s",
+                        plain(*seconds),
+                        plain(from.unwrap_or(0.0))
+                    ),
+                    (Some(from), None) => format!(", from {} s on", plain(*from)),
+                };
                 format!(
-                    "Kerf renders {what}sequence {sequence}{} to {}",
+                    "Kerf renders {what}sequence {sequence}{part}{} to {}",
                     if at.is_empty() {
                         String::new()
                     } else {
@@ -887,6 +982,9 @@ pub fn plan_rolled(
         text,
     })
 }
+
+/// How a shot longer than a model makes at once is made, as a note says it.
+const IN_PARTS: &str = "a longer shot is made in parts, each a guide of its part (`render <sequence> {b.mp4} from=<seconds> seconds=<seconds>`) and a `generate` that goes on from the part before (`first={a.mp4} from=<seconds>`), set end to end by `join {a.mp4} {b.mp4} {out} lap=1`";
 
 /// A number as a line writes it: whole where it is, else to four places,
 /// which holds 81 frames at 16 a second, 5.0625 s, as it is.
@@ -976,13 +1074,26 @@ fn notes(project: &kerf_model::Project, recipe: &Recipe, models: &Models) -> Vec
                     to,
                     size,
                     rate,
+                    from,
+                    seconds,
                     ..
-                } if to == name => Some((sequence, to, size, rate)),
+                } if to == name => Some((sequence, to, size, rate, from, seconds)),
                 _ => None,
             }),
             Source::File(_) => None,
         });
-        if let Some((sequence, to, size, rate)) = guide {
+        if let Some((sequence, to, size, rate, from, part)) = guide {
+            // A guide longer than the model makes at once: what is past that is not read.
+            if let (Some(most), Some(drawn)) = (takes.seconds, project.sequence(sequence)) {
+                let long = part.unwrap_or(drawn.duration().seconds() - from.unwrap_or(0.0));
+                if long > most + 1.0 / drawn.rate.fps().max(1.0) + 1e-6 {
+                    notes.push(format!(
+                        "the guide `{{{to}}}` is {} s and model `{model}` makes {} s at once, so the rest is left out: {IN_PARTS}",
+                        plain(long),
+                        plain(most)
+                    ));
+                }
+            }
             let other_size = takes.size.is_some_and(|wanted| *size != Some(wanted));
             let other_rate = takes
                 .rate
@@ -1024,7 +1135,7 @@ fn notes(project: &kerf_model::Project, recipe: &Recipe, models: &Models) -> Vec
         if let (Some(asked), Some(most)) = (ask.seconds, takes.seconds) {
             if asked > most + 1e-6 {
                 notes.push(format!(
-                    "`seconds={}` is more than model `{model}` makes at once, {} s",
+                    "`seconds={}` is more than model `{model}` makes at once, {} s: {IN_PARTS}",
                     plain(asked),
                     plain(most)
                 ));
@@ -1214,6 +1325,12 @@ impl Making<'_> {
                     );
                     self.supervised(command, program, on_line)?;
                 }
+                Step::Join { parts, to, lap } => {
+                    on_line(&format!("joining {} parts", parts.len()));
+                    let files: Vec<PathBuf> = parts.iter().map(|part| self.file_for(part)).collect();
+                    let command = join_command(&files, &self.file_for(to), *lap);
+                    self.supervised(command, "ffmpeg", &mut |_| {})?;
+                }
                 Step::Render {
                     sequence,
                     to,
@@ -1221,13 +1338,16 @@ impl Making<'_> {
                     rate,
                     pass,
                     matte,
+                    from,
+                    seconds,
                 } => {
                     let mut resolved = self.project.clone();
                     resolved.resolve_paths(kerf_model::Catalog::builtin(), self.directory);
+                    let range = part_of(&resolved, sequence, *from, *seconds)?;
                     render_program_with_cancellation(
                         &resolved,
                         Some(sequence),
-                        None,
+                        range,
                         &RenderOptions {
                             output: self.file_for(to).to_string_lossy().into_owned(),
                             project_dir: Some(self.directory.to_path_buf()),
@@ -1267,7 +1387,7 @@ impl Making<'_> {
                             .collect::<std::result::Result<Vec<_>, _>>()
                             .map_err(EngineError::msg)?
                     };
-                    let asked = ask.request(
+                    let mut asked = ask.request(
                         &|file| {
                             within(self.folder, file, "file the recipe needs")
                                 .map(|inside| self.directory.join(inside))
@@ -1276,6 +1396,28 @@ impl Making<'_> {
                         &signals,
                         &moves,
                     )?;
+                    // A picture in motion given as the first frame is where it ended, and as
+                    // the last, where it began: a shot that goes on from another, or into one.
+                    for (name, end) in [("first", true), ("last", false)] {
+                        let moving = asked[name]
+                            .as_str()
+                            .map(PathBuf::from)
+                            .filter(|file| in_motion(file));
+                        if let Some(file) = moving {
+                            let still = self.place.working(self.take).join(format!(
+                                "{}.{}.png",
+                                file.file_stem().unwrap_or_default().to_string_lossy(),
+                                if end { "last" } else { "first" }
+                            ));
+                            on_line(&format!(
+                                "taking the {} frame of {}",
+                                if end { "last" } else { "first" },
+                                file.file_name().unwrap_or_default().to_string_lossy()
+                            ));
+                            self.supervised(still_command(&file, &still, end), "ffmpeg", &mut |_| {})?;
+                            asked[name] = serde_json::Value::String(still.to_string_lossy().into_owned());
+                        }
+                    }
                     std::fs::write(&request, serde_json::to_vec_pretty(&asked)?)?;
                     let words = self.models.command(&ask.model)?;
                     let mut command = Command::new(&words[0]);
@@ -1290,6 +1432,93 @@ impl Making<'_> {
         }
         Ok(())
     }
+}
+
+/// Whether `file` is named as a picture in motion is.
+pub(crate) fn in_motion(file: &Path) -> bool {
+    file.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            ["mp4", "mov", "mkv", "webm", "m4v"]
+                .iter()
+                .any(|known| extension.eq_ignore_ascii_case(known))
+        })
+}
+
+/// The command that writes the last frame of `file`, or its first, to `still`.
+fn still_command(file: &Path, still: &Path, last: bool) -> Command {
+    let mut command = crate::ffmpeg::hidden_command(crate::ffmpeg::resolve_ffmpeg_bin());
+    command.args(["-hide_banner", "-loglevel", "error", "-y"]);
+    if last {
+        // The last second of it, each frame written over the one before: what is left is the last.
+        command.args(["-sseof", "-1"]).arg("-i").arg(file).args(["-update", "1"]);
+    } else {
+        command.arg("-i").arg(file).args(["-frames:v", "1"]);
+    }
+    command.arg(still);
+    command
+}
+
+/// The command that sets `parts` end to end into `to`, each after the first without its
+/// first `lap` frames, as a picture with no sound.
+fn join_command(parts: &[PathBuf], to: &Path, lap: u32) -> Command {
+    let mut command = crate::ffmpeg::hidden_command(crate::ffmpeg::resolve_ffmpeg_bin());
+    command.args(["-hide_banner", "-loglevel", "error", "-y"]);
+    for part in parts {
+        command.arg("-i").arg(part);
+    }
+    let mut filter = String::new();
+    let mut joined = String::new();
+    for index in 0..parts.len() {
+        if index > 0 && lap > 0 {
+            filter.push_str(&format!(
+                "[{index}:v]trim=start_frame={lap},setpts=PTS-STARTPTS[p{index}];"
+            ));
+            joined.push_str(&format!("[p{index}]"));
+        } else {
+            joined.push_str(&format!("[{index}:v]"));
+        }
+    }
+    filter.push_str(&format!("{joined}concat=n={}:v=1:a=0[v]", parts.len()));
+    command
+        .args(["-filter_complex", &filter, "-map", "[v]", "-an"])
+        .args(["-c:v", "libx264", "-preset", "medium", "-crf", "14", "-pix_fmt", "yuv420p"])
+        .args(["-f", "mp4"])
+        .arg(to);
+    command
+}
+
+/// The part of `sequence` a `render` step draws: none for the whole of it.
+fn part_of(
+    project: &kerf_model::Project,
+    sequence: &str,
+    from: Option<f64>,
+    seconds: Option<f64>,
+) -> Result<Option<(kerf_model::Time, kerf_model::Time)>> {
+    if from.is_none() && seconds.is_none() {
+        return Ok(None);
+    }
+    let drawn = project
+        .sequence(sequence)
+        .ok_or_else(|| EngineError::msg(format!("no sequence `{sequence}`")))?;
+    let ends = drawn.duration();
+    let time = |seconds: f64| {
+        kerf_model::Time::from_seconds(seconds)
+            .ok_or_else(|| EngineError::msg(format!("{seconds} s is not a time")))
+    };
+    let start = time(from.unwrap_or(0.0))?;
+    if start >= ends {
+        return Err(EngineError::msg(format!(
+            "`render {sequence} … from={}` starts where the sequence ends, at {} s",
+            plain(from.unwrap_or(0.0)),
+            plain(ends.seconds())
+        )));
+    }
+    let end = match seconds {
+        Some(seconds) => time(from.unwrap_or(0.0) + seconds)?.min(ends),
+        None => ends,
+    };
+    Ok(Some((start, end)))
 }
 
 /// A line's words: split at spaces, with `"…"` keeping what it holds as

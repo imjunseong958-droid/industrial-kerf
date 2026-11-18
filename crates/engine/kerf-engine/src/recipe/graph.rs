@@ -77,6 +77,8 @@ pub enum Kind {
     Model,
     /// A `run` step: a program.
     Run,
+    /// A `join` step: parts of a longer shot set end to end.
+    Join,
     /// A file of the project a step reads.
     File,
     /// A signal clip of the project.
@@ -459,6 +461,7 @@ impl Building<'_> {
         holds.insert("prompt".to_owned(), json!(ask.prompt));
         holds.insert("seed".to_owned(), json!(ask.seed));
         holds.insert("seconds".to_owned(), json!(ask.seconds));
+        holds.insert("from".to_owned(), json!(ask.from));
         holds.insert(
             "size".to_owned(),
             json!(ask.size.map(|(width, height)| format!("{width}x{height}"))),
@@ -623,6 +626,8 @@ pub fn graph(project: &Project, directory: &Path, id: &str, models: &Models) -> 
                 rate,
                 pass,
                 matte,
+                from: starts,
+                seconds,
             } => {
                 let from = building.sequence(sequence);
                 let id = building.ids.of(format!("made:{to}"));
@@ -646,6 +651,18 @@ pub fn graph(project: &Project, directory: &Path, id: &str, models: &Models) -> 
                 );
                 holds.insert("rate".to_owned(), json!(rate.map(|rate| rate.to_string())));
                 holds.insert("matte".to_owned(), json!(matte));
+                holds.insert("from".to_owned(), json!(starts.map(super::plain)));
+                holds.insert("seconds".to_owned(), json!(seconds.map(super::plain)));
+                // The part of the sequence it draws, where it is not the whole.
+                match (starts, seconds) {
+                    (None, None) => {}
+                    (starts, Some(seconds)) => at.push(format!(
+                        "{} s from {} s",
+                        super::plain(*seconds),
+                        super::plain(starts.unwrap_or(0.0))
+                    )),
+                    (Some(starts), None) => at.push(format!("from {} s", super::plain(*starts))),
+                }
                 building.nodes.push(Node {
                     id: id.clone(),
                     kind: Kind::Render,
@@ -664,6 +681,34 @@ pub fn graph(project: &Project, directory: &Path, id: &str, models: &Models) -> 
                 id
             }
             Step::Generate(ask) => building.model(ask, line, cast.as_ref()),
+            Step::Join { parts, to, lap } => {
+                let id = building.ids.of(format!("made:{to}"));
+                let mut holds = Map::new();
+                holds.insert("makes".to_owned(), json!(to));
+                holds.insert("parts".to_owned(), json!(parts));
+                holds.insert("lap".to_owned(), json!(lap));
+                building.nodes.push(Node {
+                    id: id.clone(),
+                    kind: Kind::Join,
+                    title: "Join".to_owned(),
+                    detail: match lap {
+                        0 => format!("{} parts, end to end", parts.len()),
+                        1 => format!("{} parts, each going on from the last frame of the one before", parts.len()),
+                        lap => format!("{} parts, each {lap} frames into the one before", parts.len()),
+                    },
+                    gives: Gives::Video,
+                    line: Some(line),
+                    holds,
+                });
+                for (nth, part) in parts.iter().enumerate() {
+                    if let Some(maker) = building.makers.get(part).cloned() {
+                        let gives = building.made(part);
+                        building.edge(maker, &id, "part", nth, gives);
+                    }
+                }
+                building.makers.insert(to.clone(), id.clone());
+                id
+            }
             Step::Run { program, arguments } => {
                 // A name in braces that a step before made is read; any other is made here.
                 let named: Vec<String> = arguments
@@ -827,6 +872,43 @@ mod tests {
         render court {depth.mp4} pass=depth size=832x480 rate=16\n\
         generate model=still prompt=\"an orange basketball\" seed=3 out={ball.png}\n\
         generate model=video prompt=\"it bounces\" guide={depth.mp4} ref={ball.png} ref=../refs/court.png moves=ball signal=bounce seconds=4 seed=7 strength=0.8\n";
+
+    #[test]
+    fn a_longer_shot_is_laid_out_as_its_parts_and_their_join() {
+        let (folder, project) = court(
+            "kerf-recipe 1\n\
+             render court {d1.mp4} pass=depth seconds=5.0625\n\
+             render court {d2.mp4} pass=depth from=5 seconds=5.0625\n\
+             generate model=video prompt=\"it bounces\" guide={d1.mp4} out={a.mp4}\n\
+             generate model=video prompt=\"it bounces\" guide={d2.mp4} first={a.mp4} from=5 out={b.mp4}\n\
+             join {a.mp4} {b.mp4} {out} lap=1\n",
+        );
+        let graph = graph(&project, folder.path(), "shot", &models(folder.path())).unwrap();
+        let second = node(&graph, "made:d2.mp4");
+        assert_eq!(second.detail, "5.0625 s from 5 s");
+        assert_eq!((second.holds["from"].as_str(), second.holds["seconds"].as_str()), (Some("5"), Some("5.0625")));
+        assert_eq!(node(&graph, "made:b.mp4").holds["from"], 5.0);
+        let join = node(&graph, "made:out");
+        assert_eq!(join.kind, Kind::Join);
+        assert_eq!(join.line, Some(6));
+        assert_eq!(join.detail, "2 parts, each going on from the last frame of the one before");
+        assert_eq!(join.holds["lap"], 1);
+        let edges: Vec<String> = graph
+            .edges
+            .iter()
+            .filter(|edge| ["first", "part", "take"].contains(&edge.port.as_str()))
+            .map(|edge| format!("{} -> {} {}[{}]", edge.from, edge.to, edge.port, edge.nth))
+            .collect();
+        assert_eq!(
+            edges,
+            [
+                "made:a.mp4 -> made:b.mp4 first[0]",
+                "made:a.mp4 -> made:out part[0]",
+                "made:b.mp4 -> made:out part[1]",
+                "made:out -> takes take[0]",
+            ]
+        );
+    }
 
     #[test]
     fn a_step_says_what_it_made_on_the_way_to_the_take_that_shows() {

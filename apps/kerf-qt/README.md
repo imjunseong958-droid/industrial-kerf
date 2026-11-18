@@ -616,6 +616,12 @@ says nothing of one.
 a node chosen (`workflow:<line>` opens the workflow of the model on that line of
 the recipe), for a capture (`--screenshot`).
 
+A `join` step, which sets the parts of a shot longer than a model makes at
+once end to end, is a card of its own (`Kind::Join`), with its `lap`; a
+guide's card has `From` and `Seconds`, the part of its sequence it draws, and
+a model that is a part says where it starts. A picture in motion drawn to a
+model can be its `first`: the shot then goes on from that one's last frame.
+
 The takes' card shows each take's picture, and a guide's card the guide as it
 was drawn for the take that shows (`made` on a step's node, a file in that
 take's working folder), both decoded off the paint path by a `MediaArtwork` of
