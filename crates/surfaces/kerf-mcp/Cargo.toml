@@ -24,6 +24,8 @@ kerf-model = { path = "../../foundation/kerf-model" }
 kerf-runtime = { path = "../../surfaces/kerf-runtime" }
 kerf-scopes = { path = "../../color/kerf-scopes" }
 kerf-skills = { path = "../../surfaces/kerf-skills" }
+# A shot's graph and the workflow behind its model, as the editor shows and sets them.
+kerf-shots = { path = "../../surfaces/kerf-shots" }
 kerf-segment = { path = "../../vfx/kerf-segment" }
 kerf-track = { path = "../../vfx/kerf-track" }
 kerf-text = { path = "../../foundation/kerf-text" }

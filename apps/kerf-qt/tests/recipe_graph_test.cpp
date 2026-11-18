@@ -118,7 +118,7 @@ QJsonObject bounceRecipe(int takes = 2, const QString &text = QString::fromLatin
 
 // A project whose media m4 is that shot, on the timeline as the clip `shot`,
 // beside one that no recipe makes.
-QJsonObject bounceState(int revision = 2) {
+QJsonObject bounceState(int revision = 2, const QString &recipe = QStringLiteral("shots/bounce.kerfrecipe")) {
     const auto clip = [](const char *id, const char *media, double start, double duration) {
         return QJsonObject{{"id", id}, {"kind", "media"}, {"sourceId", media}, {"timelineStart", start}, {"duration", duration},
                            {"startFrame", std::llround(start * 24)}, {"durationFrames", std::llround(duration * 24)}, {"enabled", true}};
@@ -129,7 +129,7 @@ QJsonObject bounceState(int revision = 2) {
                                {"sources", QJsonArray{
                                    QJsonObject{{"id", "m1"}, {"path", "media/crowd.mov"}, {"width", 1920}, {"height", 1080}, {"duration", 4}, {"fps", 24}},
                                    QJsonObject{{"id", "m4"}, {"path", "shots/bounce.takes/002.mp4"}, {"width", 832}, {"height", 480}, {"duration", 4},
-                                               {"fps", 16}, {"recipe", "shots/bounce.kerfrecipe"},
+                                               {"fps", 16}, {"recipe", recipe},
                                                {"takes", QJsonArray{QJsonObject{{"number", 1}, {"path", "shots/bounce.takes/001.mp4"}, {"chosen", false}},
                                                                     QJsonObject{{"number", 2}, {"path", "shots/bounce.takes/002.mp4"}, {"chosen", true}}}}}}},
                                {"tracks", QJsonArray{QJsonObject{{"id", "V1"}, {"type", "video"}, {"enabled", true},
@@ -537,6 +537,67 @@ private slots:
         window.m_lastCommand = {};
         window.handleEvent(bounceState(4));
         QCOMPARE(window.m_lastCommand, QJsonObject{});
+    }
+
+    // An agent's edit is the project's: once it is accepted the media is made
+    // from the recipe's next version, and the graph that is open shows that
+    // one, with nothing the person had arranged or chosen lost.
+    void anAgentsChangeShowsInTheGraphThatIsOpen() {
+        MainWindow window{QString(), QString()};
+        openBounce(window);
+        window.handleEvent(bounceWithRunner());
+        RecipeGraphPanel *panel = panelOf(window);
+        RecipeGraphView *view = panel->view();
+        const QRectF before = view->cardRect(QStringLiteral("signal:bounce"));
+        mouse(view, QEvent::MouseButtonPress, before.center());
+        mouse(view, QEvent::MouseMove, before.center() + QPointF(40, 60));
+        mouse(view, QEvent::MouseButtonRelease, before.center() + QPointF(40, 60));
+        const QPointF moved = view->cardRect(QStringLiteral("signal:bounce")).topLeft();
+        QVERIFY(moved != before.topLeft());
+        view->select(QStringLiteral("made:out"));
+        QCOMPARE(field(window, QStringLiteral("seed"))->text(), QStringLiteral("7"));
+        const int edges = view->recipe().edges.size();
+
+        // The agent set the seed, let the signal go and set a value of the workflow:
+        // one revision, in which the media names the recipe's next version.
+        window.m_lastCommand = {};
+        window.handleEvent(bounceState(3, QStringLiteral("shots/bounce@2.kerfrecipe")));
+        QCOMPARE(window.m_lastCommand, (QJsonObject{{"type", "recipe_get"}, {"media", "m4"}}));
+        QJsonObject changed = bounceWithRunner(QStringLiteral("bounce.video.comfy.json"));
+        changed.insert("recipe", "shots/bounce@2.kerfrecipe");
+        changed.insert("text", QString::fromLatin1(kBounce).replace(QStringLiteral("seed=7"), QStringLiteral("seed=8")));
+        QJsonArray nodes = changed.value("nodes").toArray();
+        QJsonObject video = nodes.at(5).toObject();
+        video.insert("seed", 8);
+        nodes.replace(5, video);
+        changed.insert("nodes", nodes);
+        QJsonArray wires;
+        for (const QJsonValue &edge : changed.value("edges").toArray())
+            if (edge.toObject().value("from").toString() != QStringLiteral("signal:bounce")) wires.append(edge);
+        changed.insert("edges", wires);
+        window.handleEvent(changed);
+
+        QCOMPARE(panel->findChild<QLabel *>(QStringLiteral("graphPath"))->text(), QStringLiteral("shots/bounce@2.kerfrecipe"));
+        QCOMPARE(view->recipe().edges.size(), edges - 1);
+        // The node chosen is still chosen, and says what the agent set.
+        QCOMPARE(view->selected(), QStringLiteral("made:out"));
+        QCOMPARE(field(window, QStringLiteral("seed"))->text(), QStringLiteral("8"));
+        QCOMPARE(panel->inspector()->findChild<QLabel *>(QStringLiteral("graphWorkflowSays"))->text().contains(QStringLiteral("bounce.video.comfy.json")), true);
+        // A version of the recipe is the same shot: its cards are where they were put.
+        QCOMPARE(view->cardRect(QStringLiteral("signal:bounce")).topLeft(), moved);
+        // The person's next change is to the version the agent left.
+        typeInto(field(window, QStringLiteral("seed")), QStringLiteral("9"));
+        QCOMPARE(window.m_lastCommand.value("was").toString(), changed.value("text").toString());
+
+        // Inside the model's workflow, that is read again too.
+        panel->inspector()->findChild<ui::Button *>(QStringLiteral("graphOpenWorkflow"))->click();
+        window.handleEvent(shotWorkflow(true));
+        QVERIFY(panel->showsWorkflow());
+        window.m_lastCommand = {};
+        window.handleEvent(bounceState(4, QStringLiteral("shots/bounce@3.kerfrecipe")));
+        QCOMPARE(window.m_lastCommand, (QJsonObject{{"type", "workflow_get"}, {"media", "m4"}, {"line", 6}}));
+        window.handleEvent(shotWorkflow(true, QStringLiteral("euler")));
+        QCOMPARE(panel->workflow().text, shotWorkflow(true, QStringLiteral("euler")).value("text").toString());
     }
 
     // A node's prompt, its seed and a knob are set in its card, and each

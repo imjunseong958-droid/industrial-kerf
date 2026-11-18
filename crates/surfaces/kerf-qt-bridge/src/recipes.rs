@@ -8,7 +8,7 @@
 
 use crate::Shared;
 use kerf_engine::recipe::model::Models;
-use kerf_engine::recipe::text::{self, Change};
+use kerf_engine::recipe::text;
 use kerf_model::Project;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -55,21 +55,8 @@ pub(crate) fn event(
     models: &Models,
     models_error: Option<String>,
 ) -> Result<Value, String> {
-    let graph =
-        kerf_engine::recipe::graph(project, directory, id, models).map_err(|error| error.to_string())?;
-    let mut event = serde_json::to_value(&graph).map_err(|error| error.to_string())?;
+    let mut event = kerf_shots::graph::shown(project, directory, id, models)?;
     event["type"] = json!("recipe");
-    // A model its entry runs with kerf-comfy has a workflow an editor can open: which one
-    // is the person's own models file's to say.
-    for node in event["nodes"].as_array_mut().into_iter().flatten() {
-        let workflow = node["model"]
-            .as_str()
-            .and_then(|model| models.command(model).ok())
-            .and_then(crate::workflows::runs);
-        if let Some(workflow) = workflow {
-            node["runner"] = json!({"kind": "comfy", "workflow": workflow});
-        }
-    }
     if let Some(error) = models_error {
         event["modelsError"] = json!(error);
     }
@@ -81,18 +68,13 @@ fn change(project: &Project, directory: &Path, edit: &Edit) -> Result<(), String
     let now = match &edit.text {
         Some(text) => text.clone(),
         None => {
-            let change = match &edit.value {
-                Some(value) => Change::Set {
-                    key: &edit.key,
-                    nth: edit.nth,
-                    value,
-                },
-                None => Change::Remove {
-                    key: &edit.key,
-                    nth: edit.nth,
-                },
+            let word = kerf_shots::graph::Word {
+                line: edit.line,
+                key: &edit.key,
+                nth: edit.nth,
+                value: edit.value.as_deref(),
             };
-            text::changed(&edit.was, edit.line, change).map_err(|error| error.to_string())?
+            kerf_shots::graph::changed(&edit.was, word)?
         }
     };
     text::write(project, directory, &edit.media, &edit.was, &now).map_err(|error| error.to_string())
