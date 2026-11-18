@@ -616,6 +616,13 @@ says nothing of one.
 a node chosen (`workflow:<line>` opens the workflow of the model on that line of
 the recipe), for a capture (`--screenshot`).
 
+A workflow is said twice where its server answers: at once as its file reads,
+and again with what each input takes there (`taken: true`, an input's
+`choices`, or `min`, `max` and `step`), asked by the model's own program on a
+thread of the bridge's and kept by the workflow's kinds of node. A value with
+`choices` is a menu in the node's card; a number with a range is put back,
+unsent, when typed outside it.
+
 Restore take's recipe, in the takes' card, shows for the take the shot is
 when what it was made from has changed and the take kept its recipe (`kept` on
 the take); it sends `recipe_edit {restore: <take>}`, which the bridge answers

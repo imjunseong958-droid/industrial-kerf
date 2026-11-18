@@ -256,6 +256,152 @@ pub fn write(file: &Path, text: &str) -> Result<(), String> {
         })
 }
 
+/// What the server a workflow would be run on takes at each input of each kind of node,
+/// as the program that runs it says (`kerf-comfy --workflow … --inputs`): by a node's
+/// kind and then its input's name, `choices` to choose among, or a number's `min`, `max`
+/// and `step`. Asked once for a workflow and kept for as long as this process runs; a
+/// program that cannot say, with no server named or none answering, is said why, and
+/// asked again the next time.
+///
+/// Kerf asks no server itself: this runs the model's own program, as a making does.
+pub fn taken(models: &Models, read: &Read) -> Result<Value, String> {
+    let command = models.command(&read.ask.model).map_err(|error| error.to_string())?;
+    let program = command.first().ok_or("the model's entry runs no program")?;
+    let named = match &read.origin {
+        Origin::Own(_, file) => file.to_string_lossy().into_owned(),
+        Origin::Bundled | Origin::File => read.name.clone(),
+    };
+    let key = taken_key(program, read);
+    if let Some(kept) = taken_kept().lock().ok().and_then(|kept| kept.get(&key).cloned()) {
+        return Ok(kept);
+    }
+    // What could not be asked is asked again the next time: a server may be back by then.
+    let asked = asked_inputs(program, &named)?;
+    if let Ok(mut kept) = taken_kept().lock() {
+        kept.insert(key, asked.clone());
+    }
+    Ok(asked)
+}
+
+/// What [`taken`] has learned of this workflow already, without asking.
+pub fn taken_before(models: &Models, read: &Read) -> Option<Value> {
+    let command = models.command(&read.ask.model).ok()?;
+    taken_kept().lock().ok()?.get(&taken_key(command.first()?, read)).cloned()
+}
+
+/// What a workflow's answer is kept under: the program asked and the kinds of node it
+/// has, so the shot's own copy of a workflow, which has the same nodes, is not asked again.
+fn taken_key(program: &str, read: &Read) -> String {
+    let classes = kerf_workflow::workflow::Workflow::parse(&read.text)
+        .map(|workflow| workflow.classes().into_iter().collect::<Vec<_>>().join(","))
+        .unwrap_or_default();
+    format!("{program}\n{classes}")
+}
+
+type Taken = std::sync::Mutex<std::collections::HashMap<String, Value>>;
+
+fn taken_kept() -> &'static Taken {
+    static KEPT: std::sync::OnceLock<Taken> = std::sync::OnceLock::new();
+    KEPT.get_or_init(Default::default)
+}
+
+/// How long the program is given to ask its server before it is given up on.
+const ASKING: std::time::Duration = std::time::Duration::from_secs(20);
+
+/// Run `program --workflow <named> --inputs` and read what it prints.
+fn asked_inputs(program: &str, named: &str) -> Result<Value, String> {
+    use std::process::{Command, Stdio};
+    let mut child = Command::new(program)
+        .args([FLAG, named, "--inputs"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| format!("cannot run {program}: {error}"))?;
+    let started = std::time::Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) if started.elapsed() < ASKING => std::thread::sleep(std::time::Duration::from_millis(50)),
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!("{PROGRAM} did not say what the server takes within {} s", ASKING.as_secs()));
+            }
+        }
+    }
+    let said = child.wait_with_output().map_err(|error| error.to_string())?;
+    if !said.status.success() {
+        let why = String::from_utf8_lossy(&said.stderr);
+        return Err(why.trim().trim_start_matches("kerf-comfy: ").to_owned());
+    }
+    serde_json::from_slice(&said.stdout).map_err(|error| format!("{PROGRAM} said something that is not what its inputs take: {error}"))
+}
+
+/// `shown`, a workflow as [`shown`] says it, with what each of its inputs takes beside
+/// it: `choices`, or `min`, `max` and `step`, from `taken`.
+pub fn with_taken(shown: &mut Value, taken: &Value) {
+    for node in shown["nodes"].as_array_mut().into_iter().flatten() {
+        let class = node["class"].as_str().unwrap_or_default().to_owned();
+        for input in node["inputs"].as_array_mut().into_iter().flatten() {
+            let name = input["name"].as_str().unwrap_or_default().to_owned();
+            if let Some(takes) = taken[&class][&name].as_object() {
+                for (key, value) in takes {
+                    input[key] = value.clone();
+                }
+            }
+        }
+    }
+    shown["taken"] = json!(true);
+}
+
+/// Whether each of `sets` is something its input takes, by `taken`: one of its choices,
+/// or a number no less than its least and no more than its most. Refused with what it
+/// does take. An input `taken` says nothing of is let through.
+pub fn check(read: &Read, sets: &[Set], taken: &Value) -> Result<(), String> {
+    let described = kerf_workflow::detail::described(&read.text)?;
+    for set in sets {
+        let class = described["nodes"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|node| node["id"] == set.node)
+            .and_then(|node| node["class"].as_str())
+            .unwrap_or_default();
+        let takes = &taken[class][set.input];
+        if let Some(choices) = takes["choices"].as_array() {
+            if !choices.contains(set.value) {
+                let listed: Vec<String> = choices.iter().take(12).map(|choice| match choice {
+                    Value::String(text) => text.clone(),
+                    other => other.to_string(),
+                }).collect();
+                return Err(format!(
+                    "`{}` of node {} takes one of {}{}, not {}",
+                    set.input,
+                    set.node,
+                    listed.join(", "),
+                    if choices.len() > listed.len() { format!(", and {} more", choices.len() - listed.len()) } else { String::new() },
+                    set.value
+                ));
+            }
+        }
+        if let Some(value) = set.value.as_f64() {
+            let (least, most) = (takes["min"].as_f64(), takes["max"].as_f64());
+            if least.is_some_and(|least| value < least) || most.is_some_and(|most| value > most) {
+                return Err(format!(
+                    "`{}` of node {} takes a number from {} to {}, not {}",
+                    set.input,
+                    set.node,
+                    takes["min"],
+                    takes["max"],
+                    set.value
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// One value of a workflow to set: input `input` of node `node`.
 #[derive(Clone, Copy, Debug)]
 pub struct Set<'a> {
@@ -345,6 +491,10 @@ pub fn set(
     let read = read(project, directory, id, line, models)?;
     if read.text != was {
         return Err("the workflow was changed by another program since it was read; it is left as that left it".to_owned());
+    }
+    // Held to what the server takes there, where that has been asked.
+    if let Some(taken) = taken_before(models, &read) {
+        check(&read, &[set], &taken)?;
     }
     let now = with(&read, &[set])?;
     if let Origin::Own(_, file) = &read.origin {
@@ -475,6 +625,52 @@ mod tests {
             let shown = crate::graph::shown(&project, dir, "m1", &models).unwrap();
             assert!(model(&shown).get("runner").is_none(), "{other}");
         }
+    }
+
+    #[test]
+    fn a_value_is_held_to_what_its_input_takes() {
+        let folder = tempfile::tempdir().unwrap();
+        let dir = folder.path();
+        let (project, models) = court(dir);
+        let read = read(&project, dir, "m1", 4, &models).unwrap();
+        let mut described = shown("m1", 4, &read).unwrap();
+        let taken = json!({
+            "UNETLoader": {"weight_dtype": {"choices": ["default", "fp8_e4m3fn"]}},
+            "KSampler": {"denoise": {"min": 0.0, "max": 1.0, "step": 0.01}},
+        });
+        with_taken(&mut described, &taken);
+        assert_eq!(described["taken"], true);
+        let input = |class: &str, name: &str| {
+            described["nodes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|node| node["class"] == class)
+                .and_then(|node| node["inputs"].as_array()?.iter().find(|input| input["name"] == name).cloned())
+                .unwrap()
+        };
+        assert_eq!(input("UNETLoader", "weight_dtype")["choices"], json!(["default", "fp8_e4m3fn"]));
+        assert_eq!(input("KSampler", "denoise")["max"], 1.0);
+        assert!(input("KSampler", "cfg").get("max").is_none());
+        let node = |class: &str| {
+            described["nodes"].as_array().unwrap().iter().find(|node| node["class"] == class).unwrap()["id"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        };
+        let (loader, sampler) = (node("UNETLoader"), node("KSampler"));
+        let held = |node: &str, input: &str, value: Value| check(&read, &[Set { node, input, value: &value }], &taken);
+        held(&loader, "weight_dtype", json!("fp8_e4m3fn")).unwrap();
+        let other = held(&loader, "weight_dtype", json!("fp64")).unwrap_err();
+        assert!(other.contains("takes one of default, fp8_e4m3fn, not \"fp64\""), "{other}");
+        held(&sampler, "denoise", json!(0.5)).unwrap();
+        let over = held(&sampler, "denoise", json!(1.5)).unwrap_err();
+        assert!(over.contains("takes a number from 0.0 to 1.0, not 1.5"), "{over}");
+        // What the server said nothing of is let through, and a program that is not there says why.
+        held(&sampler, "sampler_name", json!("anything")).unwrap();
+        assert_eq!(taken_before(&models, &read), None);
+        let cannot = super::taken(&models, &read).unwrap_err();
+        assert!(cannot.contains("cannot run /opt/kerf/kerf-comfy"), "{cannot}");
     }
 
     #[test]

@@ -951,6 +951,69 @@ private slots:
         QCOMPARE(field(window, QStringLiteral("from"))->text(), QStringLiteral("5"));
     }
 
+    // Once the model's program has asked its server, a workflow's input says
+    // what it takes: a name is chosen among those there are, and a number
+    // outside what is taken is not sent.
+    void aWorkflowsInputsOfferWhatTheServerTakes() {
+        MainWindow window{QString(), QString()};
+        openBounce(window);
+        window.handleEvent(bounceWithRunner());
+        RecipeGraphPanel *panel = panelOf(window);
+        panel->view()->select(QStringLiteral("made:out"));
+        panel->inspector()->findChild<ui::Button *>(QStringLiteral("graphOpenWorkflow"))->click();
+        window.handleEvent(shotWorkflow());
+        panel->view()->select(QStringLiteral("part:8"));
+        RecipeInspector *inspector = panel->inspector();
+        // Before the server has said, a name is typed as any text.
+        QVERIFY(field(window, QStringLiteral("input.sampler_name")));
+        QVERIFY(!inspector->findChild<ui::GhostButton *>(QStringLiteral("graphChoice.sampler_name")));
+
+        // The same workflow again, with what each input takes.
+        QJsonObject taken = shotWorkflow();
+        QJsonArray nodes = taken.value("nodes").toArray();
+        QJsonObject sampler = nodes.at(3).toObject();
+        QJsonArray inputs = sampler.value("inputs").toArray();
+        for (int index = 0; index < inputs.size(); ++index) {
+            QJsonObject input = inputs.at(index).toObject();
+            if (input.value("name") == QLatin1String("sampler_name")) input.insert("choices", QJsonArray{"euler", "uni_pc", "dpmpp_2m"});
+            if (input.value("name") == QLatin1String("denoise")) {
+                input.insert("min", 0.0);
+                input.insert("max", 1.0);
+            }
+            inputs.replace(index, input);
+        }
+        sampler.insert("inputs", inputs);
+        nodes.replace(3, sampler);
+        taken.insert("nodes", nodes);
+        taken.insert("taken", true);
+        window.handleEvent(taken);
+        auto *choose = inspector->findChild<ui::GhostButton *>(QStringLiteral("graphChoice.sampler_name"));
+        QVERIFY(choose && !field(window, QStringLiteral("input.sampler_name")));
+        QCOMPARE(choose->text(), QStringLiteral("uni_pc"));
+        choose->click();
+        auto *menu = choose->findChild<QMenu *>(QStringLiteral("graphChoiceMenu"));
+        QVERIFY(menu);
+        QCOMPARE(menu->actions().size(), 3);
+        QVERIFY(menu->actions().at(1)->isChecked());
+        window.m_lastCommand = {};
+        menu->actions().at(1)->trigger();
+        QCOMPARE(window.m_lastCommand, QJsonObject{});
+        menu->actions().at(0)->trigger();
+        QCOMPARE(window.m_lastCommand.value("type").toString(), QStringLiteral("workflow_edit"));
+        QCOMPARE(window.m_lastCommand.value("input").toString(), QStringLiteral("sampler_name"));
+        QCOMPARE(window.m_lastCommand.value("value").toString(), QStringLiteral("euler"));
+        menu->close();
+        // A number the server does not take there is put back, unsent.
+        window.m_lastCommand = {};
+        QLineEdit *denoise = field(window, QStringLiteral("input.denoise"));
+        QCOMPARE(denoise->toolTip(), QStringLiteral("0 to 1"));
+        typeInto(denoise, QStringLiteral("1.5"));
+        QCOMPARE(window.m_lastCommand, QJsonObject{});
+        QCOMPARE(denoise->text(), QStringLiteral("1"));
+        typeInto(denoise, QStringLiteral("0.8"));
+        QCOMPARE(window.m_lastCommand.value("value").toDouble(), 0.8);
+    }
+
     // The takes' card holds each take to its guide when asked: where the take
     // has the shot's subject beside where it was asked for, read by the bridge
     // a take at a time with no model, the closest said. The same reading an

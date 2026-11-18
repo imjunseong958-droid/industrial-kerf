@@ -44,6 +44,10 @@ fn event(project: &Project, shared: &Shared, id: &str, line: usize, models: &Mod
     let read = workflow::read(project, &shared.directory, id, line, models)?;
     let mut event = workflow::shown(id, line, &read)?;
     event["type"] = json!("workflow");
+    // What each input takes on the server, where that has been asked already.
+    if let Some(taken) = workflow::taken_before(models, &read) {
+        workflow::with_taken(&mut event, &taken);
+    }
     Ok(event)
 }
 
@@ -77,9 +81,50 @@ pub(crate) fn get(
             event(&project, shared, id, line, &models)
         });
     match said {
-        Ok(event) => crate::emit(tx, event),
+        Ok(event) => {
+            let asked = event.get("taken").is_some();
+            crate::emit(tx, event);
+            if !asked {
+                ask_taken(shared, client, id, line, tx);
+            }
+        }
         Err(why) => failed(tx, id, why),
     }
+}
+
+/// Ask the model's program what the server takes at each input of the workflow, off this
+/// worker, and say the workflow again with it: the choices of a sampler's name, the least
+/// and most of a number. A program that cannot say leaves the workflow as it was shown,
+/// with why (`takenError`), since it is still seen and set without.
+fn ask_taken(
+    shared: &Shared,
+    client: &kerf_runtime::RuntimeClient,
+    id: &str,
+    line: usize,
+    tx: &SyncSender<Value>,
+) {
+    let Ok(project) = project(client) else {
+        return;
+    };
+    let (directory, id, tx) = (shared.directory.clone(), id.to_owned(), tx.clone());
+    std::thread::spawn(move || {
+        let Ok(models) = Models::load() else {
+            return;
+        };
+        let Ok(read) = workflow::read(&project, &directory, &id, line, &models) else {
+            return;
+        };
+        let asked = workflow::taken(&models, &read);
+        let Ok(mut event) = workflow::shown(&id, line, &read) else {
+            return;
+        };
+        event["type"] = json!("workflow");
+        match asked {
+            Ok(taken) => workflow::with_taken(&mut event, &taken),
+            Err(why) => event["takenError"] = json!(why),
+        }
+        crate::emit(&tx, event);
+    });
 }
 
 /// Make `edit` and answer `workflow` as it now is, then `recipe`, whose
