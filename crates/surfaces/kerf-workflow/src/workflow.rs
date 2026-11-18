@@ -73,12 +73,11 @@ const WORKFLOW_VERSION: u32 = 1;
 const PROMPT: &str = "prompt";
 
 /// The workflows that come with kerf-comfy, by name.
-pub const BUNDLED: [(&str, &str); 15] = [
+pub const BUNDLED: [(&str, &str); 14] = [
     ("shot", include_str!("../workflows/shot.json")),
     ("shot-timed", include_str!("../workflows/shot-timed.json")),
     ("shot-into", include_str!("../workflows/shot-into.json")),
     ("shot-led", include_str!("../workflows/shot-led.json")),
-    ("shot-moved", include_str!("../workflows/shot-moved.json")),
     ("shot-directed", include_str!("../workflows/shot-directed.json")),
     ("still", include_str!("../workflows/still.json")),
     ("depth", include_str!("../workflows/depth.json")),
@@ -977,15 +976,12 @@ mod tests {
                 }
             }
         }
-        let made_by_one = ["shot", "shot-timed", "shot-into", "shot-led", "shot-directed", "still"];
-        let with_moved: Vec<&str> = made_by_one[..4].iter().copied().chain(["shot-moved", "shot-directed", "still"]).collect();
+        // Every shot is made by one model, with its picture's coder and its words' reader.
+        let shots = vec!["shot", "shot-timed", "shot-into", "shot-led", "shot-directed", "still"];
         let held: BTreeMap<String, Vec<&str>> = [
-            ("wan2.1_vace_1.3B_fp16.safetensors", made_by_one.to_vec()),
-            ("wan_2.1_vae.safetensors", with_moved.clone()),
-            ("umt5_xxl_fp16.safetensors", with_moved),
-            ("Wan21-WanMove_fp8_scaled_e4m3fn_KJ.safetensors", vec!["shot-moved"]),
-            ("lightx2v_I2V_14B_480p_cfg_step_distill_rank64_bf16.safetensors", vec!["shot-moved"]),
-            ("clip_vision_h.safetensors", vec!["shot-moved"]),
+            ("wan2.1_vace_1.3B_fp16.safetensors", shots.clone()),
+            ("wan_2.1_vae.safetensors", shots.clone()),
+            ("umt5_xxl_fp16.safetensors", shots),
             ("depth_anything_3_base.safetensors", vec!["depth", "cameras", "set-views"]),
             ("moge_3_vitl_fp16.safetensors", vec!["set"]),
             ("sam3.1_multiplex_fp16.safetensors", vec!["matte", "matte-shown"]),

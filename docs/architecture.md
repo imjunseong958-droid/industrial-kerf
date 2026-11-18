@@ -748,7 +748,10 @@ recipes, in `fixtures/shots/car`.
    points with a picture to start from (`shot-moved`, 0.60). One track
    says where and not how large (0.48, a third too large), so a clip is
    five, its box's middle and toward its corners. Nothing is said of the
-   rest of the scene, which stays about where the first frame has it. It
+   rest of the scene, which stays about where the first frame has it;
+   so `shot-moved`, which read no guide, went on 2026-11-18, a guide
+   being what a shot here is made from, and the tracks are left as a
+   blank for a workflow of one's own (`{moves_box}`). It
    is the fourth row of the table at the top: where, when, what, and how
    each thing goes.
 7. **A signal measured** ([the record](shots-measured.md)): handed as a mask a frame

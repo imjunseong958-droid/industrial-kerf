@@ -797,19 +797,17 @@ name, and the server has to have them under ComfyUI's `models`:
 | File | In | The workflows that load it |
 |---|---|---|
 | `wan2.1_vace_1.3B_fp16.safetensors` | `diffusion_models` | `shot`, `shot-timed`, `shot-into`, `shot-led`, `shot-directed`, `still` |
-| `wan_2.1_vae.safetensors` | `vae` | those six, and `shot-moved` |
-| `umt5_xxl_fp16.safetensors` | `text_encoders` | those six, and `shot-moved` |
-| `Wan21-WanMove_fp8_scaled_e4m3fn_KJ.safetensors` | `diffusion_models` | `shot-moved` |
-| `lightx2v_I2V_14B_480p_cfg_step_distill_rank64_bf16.safetensors` | `loras` | `shot-moved` |
-| `clip_vision_h.safetensors` | `clip_vision` | `shot-moved` |
+| `wan_2.1_vae.safetensors` | `vae` | those six |
+| `umt5_xxl_fp16.safetensors` | `text_encoders` | those six |
 | `depth_anything_3_base.safetensors` | `geometry_estimation` | `depth`, `cameras`, `set-views` |
 | `moge_3_vitl_fp16.safetensors` | `geometry_estimation` | `set` |
 | `sam3.1_multiplex_fp16.safetensors` | `checkpoints` | `matte`, `matte-shown` |
 
-`moves-shown` and `set-splats` load none. A server that will never be
-asked for a workflow need not hold what only that one loads: without
-`shot-moved`, three files; without `set`, one. Each name is a value the
-workflow sets (`unet`, `vae`, `text_encoder`, `vision`, `lora`, `model`),
+`moves-shown` and `set-splats` load none. Six files, then: three for the
+model that makes every shot, and one for each of the three that read a
+picture back. A server that will never be asked for a workflow need not
+hold what only that one loads, which is `set`'s one file. Each name is a
+value the workflow sets (`unet`, `vae`, `text_encoder`, `model`),
 so another file of the kind is a word on a line (`model=<file>`) or a
 value in a shot's own copy of the workflow, below.
 
@@ -1425,12 +1423,14 @@ white, with each clip's box outlined in black where it is on that frame.
 prompt and no picture of the scene: the subject the prompt names goes where
 the clip goes. `{moves_box}` is the same text with five tracks a clip, its box's middle and
 four points toward its corners, so that how large the clip is on each frame
-is said with where. `shot-moved`, which comes with `kerf-comfy`, hands a
-model that, a picture to start from (`first=<picture>`), and the prompt:
-`generate model=<name> first=refs/start.png moves=<clip> prompt="…"`. What
-is in the picture where the clip starts goes where the clip goes, in 4
-steps, by weights added to the model's for that (`lora=`); the rest
-of the picture stays about where it was, since nothing is said of it.
+is said with where. It is for a workflow of your own, by a model that
+follows points from a picture to start from. One that did came with
+`kerf-comfy` until 2026-11-18, `shot-moved`, and went: it read no guide, so
+of a scene blocked in depth it was told one clip's way and nothing of the
+camera or of anything else, the rest of its picture staying about where
+the first frame had it, and three files on the server were held for it
+alone. A picture to start from and where a clip goes are read beside a
+guide by `shot-directed` (`first=`, `moves=`).
 ### From footage
 
 Where the thing is in footage, the clip is led by it and not placed by hand.

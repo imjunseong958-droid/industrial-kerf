@@ -34,6 +34,14 @@ on `main`; its section here becomes the release's notes on GitHub
   only of frames seen together. One frame alone is `set`'s.
   `docs/shots.md` lists the files a ComfyUI server holds for the
   workflows that come with `kerf-comfy`, and which workflow loads which.
+- `shot-moved` no longer comes with `kerf-comfy`. It made a shot from a
+  picture to start from and the way one clip goes, and read no guide.
+  Beside a guide, `shot-directed` reads a first frame (`first=`) and where
+  a clip goes (`moves=`); with no guide there is nothing that does. The three
+  files a server held for it alone can go: `Wan21-WanMove_fp8_scaled_e4m3fn_KJ`,
+  `lightx2v_I2V_14B_480p_cfg_step_distill_rank64_bf16` and `clip_vision_h`.
+  A workflow of your own still reads a clip's way as tracks at
+  `{moves_box}`.
 - Kerf no longer runs MobileSAM: `look` with `track` takes no `model`, and
   nothing is fetched to `~/.kerf/models`. Its cut by colour and edges is as
   it was. A model's matte is `matte`, above, which held a man before a

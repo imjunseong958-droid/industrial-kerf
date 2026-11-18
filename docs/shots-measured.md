@@ -819,6 +819,17 @@ head of each part are the architecture's.
    no word of it. Which of the two rebuilds a frame of many better was
    not looked at, there being no set of this footage to hold either to.
 
+   *A workflow that read no guide.* `shot-moved` made a shot from a
+   picture to start from and the way one clip goes, as tracks of points,
+   by a model of its own (6 above), and loaded three files nothing else
+   did. A shot here is made from a guide, which says where everything is
+   and how the camera moves; told the way of one clip alone, it left the
+   rest of its picture about where the first frame had it. It went, by
+   that and not by a measure: it was not held again beside
+   `shot-directed`, which reads a first frame and a clip's way beside a
+   guide. The server then holds six files, one model that makes shots and
+   three that read a picture back.
+
    What it shows, and what it does not. A matte by its name is a line of
    a recipe, and with it a part of footage is made anew, a thing is cut
    out to stand before a title, and, with the mask grown, taken out. Of
