@@ -42,9 +42,10 @@ project.kerf.tmp
 ";
 
 /// `project.kerf` merges structurally; media goes through Git LFS when
-/// it was available when the project was made, and so do the takes a
-/// recipe makes, in the folder beside it, with each take's record and
-/// request left as the text they are.
+/// it was available when the project was made, and so do the takes of a
+/// shot, in the folder named for its file, with each take's record and
+/// request left as the text they are. A recipe file a project made before
+/// the document held steps still has stays text.
 pub fn gitattributes(lfs: bool) -> String {
     let mut text = String::from(
         "*.kerf merge=kerf\n*.kerflook text eol=lf\n*.kerfpreset text eol=lf\n\

@@ -1,6 +1,6 @@
 //! Asks a ComfyUI server for a shot.
 //!
-//! Kerf has no model of its own: a recipe's `generate` writes what is wanted
+//! Kerf has no model of its own: a `generate` step writes what is wanted
 //! as a request and runs the program a person's `~/.kerf/models.json` names
 //! for that model (`docs/shots.md`). This is such a program, for a model kept
 //! on a ComfyUI server:

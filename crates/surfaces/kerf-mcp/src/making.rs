@@ -165,8 +165,7 @@ struct MakeInput {
 
 pub(super) fn metadata() -> (&'static str, Value, super::ToolAnnotations) {
     (
-        "Make a media from the steps under its line in the document (or, for one that still names \
-         a recipe file, from that). Returns the plan: each step as it would run and the take it \
+        "Make a media from the steps under its line in the document. Returns the plan: each step as it would run and the take it \
          would write. The person's own permissions say what happens next: where they let an agent \
          make on its own it runs (`making`), as a `job` to read with `job`, `wait` for, or stop \
          with `cancel`, and the media becomes the new take when it is made; else they are asked \
@@ -315,19 +314,9 @@ impl KerfMcpRouter {
             } else {
                 format!("take {}", plan.take)
             };
-            // Where its steps are written: a recipe's file, from the project's folder, or
-            // the document itself.
-            let from = match &plan.recipe {
-                Some(recipe) => std::path::absolute(&self.dir)
-                    .ok()
-                    .and_then(|dir| recipe.strip_prefix(dir).ok())
-                    .unwrap_or(recipe)
-                    .display()
-                    .to_string(),
-                None => "the steps under its line in the document".to_owned(),
-            };
-            let in_document = plan.recipe.is_none();
-            let mut body = format!("{ASKS}{media}, as {takes}, from {from}:");
+            let mut body = format!(
+                "{ASKS}{media}, as {takes}, from the steps under its line in the document:"
+            );
             if let Some(why) = why.map(str::trim).filter(|why| !why.is_empty()) {
                 body = format!("{body}\n{why}");
             }
@@ -337,42 +326,26 @@ impl KerfMcpRouter {
             for note in &plan.notes {
                 body.push_str(&format!("\nNote: {note}"));
             }
-            // The editor's bin names the making by where the steps are.
-            body.push_str(&match (rolls > 1, in_document) {
-                (true, false) => format!(
-                    "\nEach take after the first runs the same steps with every seed one on from the last.\nMake them with `kerf make {media} --rolls {rolls}`, or Make Several from Recipe in the editor's bin."
-                ),
-                (true, true) => format!(
+            body.push_str(&if rolls > 1 {
+                format!(
                     "\nEach take after the first runs the same steps with every seed one on from the last.\nMake them with `kerf make {media} --rolls {rolls}`, or Make Several in the editor's bin."
-                ),
-                (false, false) => format!(
-                    "\nMake it with `kerf make {media}`, or Make from Recipe… in the editor's bin."
-                ),
-                (false, true) => format!(
-                    "\nMake it with `kerf make {media}`, or Make… in the editor's bin."
-                ),
+                )
+            } else {
+                format!("\nMake it with `kerf make {media}`, or Make… in the editor's bin.")
             });
             // What the person is asked, for the agent to say in the conversation.
             answer["status"] = json!("asked");
             answer["ask"] = json!(body);
-            answer["make"] = json!(match (rolls > 1, in_document) {
-                (true, false) => format!(
-                    "say `ask` to the person, who makes them with `kerf make {media} --rolls \
-                     {rolls}` or Make Several from Recipe; `look` `media` lists the takes once \
-                     they are made"
-                ),
-                (true, true) => format!(
+            answer["make"] = json!(if rolls > 1 {
+                format!(
                     "say `ask` to the person, who makes them with `kerf make {media} --rolls \
                      {rolls}` or Make Several; `look` `media` lists the takes once they are made"
-                ),
-                (false, false) => format!(
-                    "say `ask` to the person, who makes it with `kerf make {media}` or Make from \
-                     Recipe…; `look` lists the take once it is made"
-                ),
-                (false, true) => format!(
+                )
+            } else {
+                format!(
                     "say `ask` to the person, who makes it with `kerf make {media}` or Make…; \
                      `look` lists the take once it is made"
-                ),
+                )
             });
             if permissions.mode == crate::permissions::Mode::Auto {
                 answer["why"] = json!(format!(

@@ -2,19 +2,17 @@
 //! what they read ([`kerf_engine::recipe::graph`]), and a person's change to
 //! them.
 //!
-//! Steps the document holds under the media are changed by an edit, as any
-//! of the document is: the change becomes `step` lines that kerfd applies,
-//! one revision that undo takes back. Steps in a recipe's file are changed
-//! in its text, with every comment and every other line as it was
-//! ([`kerf_engine::recipe::text`]). The editor sends the same change for
-//! both: the steps' text as it read them, and the line to change.
+//! The steps are the document's own, under the media, and are changed by an
+//! edit as any of the document is: the change becomes `step` lines that kerfd
+//! applies, one revision that undo takes back. The editor sends the steps'
+//! text as it read them ([`kerf_engine::recipe::steps_text`]) and the line to
+//! change, and steps changed since it read them are left as that left them.
 //!
 //! Nothing here runs a step. A making is `media_make`, which shows what
 //! would run and asks first.
 
 use crate::Shared;
 use kerf_engine::recipe::model::Models;
-use kerf_engine::recipe::text;
 use kerf_model::Project;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -84,29 +82,22 @@ pub(crate) fn event(
 pub(crate) struct Changed {
     /// The line a step was added on, where one was.
     added: Option<usize>,
-    /// The lines of the edit that makes it, for steps the document holds: empty for a
-    /// recipe's file, which is written already.
+    /// The lines of the edit that makes it.
     script: Vec<String>,
 }
 
-/// Make `edit` to its media's steps. A recipe's file is written in place. Steps the
-/// document holds are not changed here: what would change them is given back as the
-/// lines of an edit, for kerfd to apply.
+/// What `edit` makes of its media's steps. Nothing is changed here: what would change
+/// them is given back as the lines of an edit, for kerfd to apply.
 fn change(project: &Project, directory: &Path, edit: &Edit, models: &Models) -> Result<Changed, String> {
-    let (home, there) = kerf_shots::graph::recipe(project, directory, &edit.media)?;
-    let in_document = home == kerf_engine::recipe::Home::Document;
+    let there = kerf_shots::graph::written(project, &edit.media)?;
     // What the editor read is what the document has: steps changed since are left alone.
-    if in_document && there != edit.was {
+    if there != edit.was {
         return Err(format!(
             "the steps of `{}` were changed since they were read; they are left as that left them",
             edit.media
         ));
     }
     if let Some(take) = edit.restore {
-        if !in_document {
-            return kerf_shots::takes::restore(project, directory, &edit.media, take, &edit.was)
-                .map(|()| Changed::default());
-        }
         let restored = kerf_shots::takes::restored(project, directory, &edit.media, take)?;
         if restored.text == edit.was && restored.files.is_empty() {
             return Err(format!("the steps are as take {take} was made from them already"));
@@ -137,20 +128,12 @@ fn change(project: &Project, directory: &Path, edit: &Edit, models: &Models) -> 
             kerf_shots::graph::changed(&edit.was, word)?
         }
     };
-    let added = edit
-        .add
-        .as_ref()
-        .and_then(|_| kerf_shots::graph::added_at(&edit.was, &now));
-    if in_document {
-        return Ok(Changed {
-            added,
-            script: kerf_shots::graph::step_lines(&edit.media, &edit.was, &now)?,
-        });
-    }
-    text::write(project, directory, &edit.media, &edit.was, &now).map_err(|error| error.to_string())?;
     Ok(Changed {
-        added,
-        script: Vec::new(),
+        added: edit
+            .add
+            .as_ref()
+            .and_then(|_| kerf_shots::graph::added_at(&edit.was, &now)),
+        script: kerf_shots::graph::step_lines(&edit.media, &edit.was, &now)?,
     })
 }
 
@@ -250,23 +233,29 @@ mod tests {
     use super::*;
     use std::fs;
 
-    const RECIPE: &str = "kerf-recipe 1\n# The opening shot.\ngenerate model=dawn prompt=\"a boat leaves\" seed=7 strength=0.6\n";
+    /// The opening shot's steps, as the document writes them under its line.
+    const STEP: &str = "generate model=dawn prompt=\"a boat leaves\" seed=7 strength=0.6";
 
-    fn opening(directory: &Path) -> Project {
-        fs::create_dir_all(directory.join("shots")).unwrap();
-        fs::write(directory.join("shots/open.kerfrecipe"), RECIPE).unwrap();
-        kerf_runtime::parse_document(
-            "kerf 1\nproject name=\"Shots\"\nmedia m1 path=\"shots/open.mp4\" rate=24 dur=96f video=320x180 recipe=\"shots/open.kerfrecipe\"\nsequence s1 rate=24 size=320x180\n",
-        )
+    fn opening() -> Project {
+        kerf_runtime::parse_document(&format!(
+            "kerf 1\nproject name=\"Shots\"\nmedia m1 path=\"shots/open.mp4\" rate=24 dur=96f video=320x180\n  {STEP}\nsequence s1 rate=24 size=320x180\n",
+        ))
         .unwrap()
+    }
+
+    /// `project` with `script` applied, as kerfd would apply it.
+    fn applied(project: &Project, script: &[String]) -> Project {
+        kerf_lang::apply_script(project, kerf_model::Catalog::builtin(), &script.join("\n"))
+            .unwrap()
+            .project
     }
 
     fn set(key: &str, value: Option<&str>) -> Edit {
         Edit {
             media: "m1".into(),
-            was: RECIPE.into(),
+            was: format!("kerf-recipe 1\n{STEP}\n"),
             text: None,
-            line: 3,
+            line: 2,
             key: key.into(),
             nth: 0,
             value: value.map(str::to_owned),
@@ -276,16 +265,17 @@ mod tests {
         }
     }
 
+    /// A step is taken out, its words taken off, the whole of the steps set, and the steps
+    /// set back to a take, each as the lines of an edit.
+    #[cfg(unix)]
     #[test]
-    fn a_recipe_is_shown_as_a_graph_and_changed_in_its_text() {
+    fn steps_are_changed_whole_and_set_back_to_a_take_by_an_edit() {
         let folder = tempfile::tempdir().unwrap();
         let dir = folder.path();
-        let project = opening(dir);
+        let project = opening();
         let models = Models::default();
         let shown = event(&project, dir, "m1", &models, None).unwrap();
         assert_eq!(shown["type"], "recipe");
-        assert_eq!((shown["media"].as_str(), shown["name"].as_str()), (Some("m1"), Some("open")));
-        assert_eq!(shown["text"], RECIPE);
         let kinds: Vec<&str> = shown["nodes"]
             .as_array()
             .unwrap()
@@ -293,50 +283,78 @@ mod tests {
             .map(|node| node["kind"].as_str().unwrap())
             .collect();
         assert_eq!(kinds, ["model", "takes"]);
-        assert_eq!(shown["nodes"][0]["line"], 3);
         // No model is set up, which is why it cannot be made, and is said.
         assert!(shown["cannot"].as_str().unwrap().contains("no model `dawn` is set up"));
 
-        // One name on one line: the comment and the rest of the line stay.
-        change(&project, dir, &set("seed", Some("8")), &models).unwrap();
-        let now = fs::read_to_string(dir.join("shots/open.kerfrecipe")).unwrap();
-        assert_eq!(now, RECIPE.replace("seed=7", "seed=8"));
-        // The editor's copy is now old: its next change is refused, and the file kept.
-        let stale = change(&project, dir, &set("seed", Some("9")), &models).unwrap_err();
-        assert!(stale.contains("changed by another program"), "{stale}");
-        assert_eq!(fs::read_to_string(dir.join("shots/open.kerfrecipe")).unwrap(), now);
-        // A knob taken off the line, and the whole text set.
-        let mut off = set("strength", None);
-        off.was = now.clone();
-        change(&project, dir, &off, &models).unwrap();
-        let now = fs::read_to_string(dir.join("shots/open.kerfrecipe")).unwrap();
-        assert!(now.ends_with("seed=8\n") && now.contains("# The opening shot."));
+        // A word taken off the step: the step set without it.
+        assert_eq!(
+            change(&project, dir, &set("strength", None), &models).unwrap().script,
+            ["step m1 set 1 generate model=dawn prompt=\"a boat leaves\" seed=7"]
+        );
+        // The whole of the steps set.
         let whole = Edit {
-            text: Some(RECIPE.into()),
-            was: now,
+            text: Some("kerf-recipe 1\ngenerate model=dawn prompt=\"a boat leaves\" seed=9\n".into()),
             ..set("", None)
         };
-        change(&project, dir, &whole, &models).unwrap();
-        assert_eq!(fs::read_to_string(dir.join("shots/open.kerfrecipe")).unwrap(), RECIPE);
-        // What a line cannot take is refused as a making would refuse it.
-        let refused = change(&project, dir, &set("seed", Some("soon")), &models).unwrap_err();
-        assert!(refused.contains("`seed=soon` is not a whole number"), "{refused}");
-        // A step added, by its kind, and taken out again: the file as it was.
-        let was = fs::read_to_string(dir.join("shots/open.kerfrecipe")).unwrap();
-        let add = Edit { add: Some("guide".into()), was: was.clone(), ..set("", None) };
-        // Before the last step and what is written over it, which stays its own.
-        assert_eq!(change(&project, dir, &add, &models).unwrap().added, Some(2));
-        let more = fs::read_to_string(dir.join("shots/open.kerfrecipe")).unwrap();
-        assert!(more.starts_with("kerf-recipe 1\nrender s1 {guide.mp4} pass=depth\n# The opening shot.\ngenerate model=dawn"), "{more}");
-        let out = Edit { remove: true, line: 2, was: more, ..set("", None) };
-        assert_eq!(change(&project, dir, &out, &models).unwrap(), Changed::default());
-        assert_eq!(fs::read_to_string(dir.join("shots/open.kerfrecipe")).unwrap(), was);
-        let last = Edit { remove: true, line: 3, was: was.clone(), ..set("", None) };
-        assert!(change(&project, dir, &last, &models).unwrap_err().contains("does not read"));
+        assert_eq!(
+            change(&project, dir, &whole, &models).unwrap(),
+            Changed {
+                added: None,
+                script: vec!["step m1 set 1 generate model=dawn prompt=\"a boat leaves\" seed=9".into()],
+            }
+        );
+        // A step added and taken out again, the step on its line by its number.
+        let guide = Edit { add: Some("guide".into()), ..set("", None) };
+        let two = applied(&project, &change(&project, dir, &guide, &models).unwrap().script);
+        let was = kerf_shots::graph::written(&two, "m1").unwrap();
+        assert_eq!(was, format!("kerf-recipe 1\nrender s1 {{guide.mp4}} pass=depth\n{STEP}\n"));
+        let out = Edit { remove: true, line: 2, was: was.clone(), ..set("", None) };
+        let script = change(&two, dir, &out, &models).unwrap().script;
+        assert_eq!(script, ["step m1 remove 2", "step m1 remove 1", &format!("step m1 add {STEP}")]);
+        assert_eq!(applied(&two, &script).media("m1"), project.media("m1"));
+        // The last step makes the media's file, and is not taken out from under it.
+        let last = Edit { remove: true, line: 3, was, ..set("", None) };
+        let last = change(&two, dir, &last, &models).unwrap_err();
+        assert!(last.contains("its steps do not read"), "{last}");
+
+        // A take made, and the steps changed since: going back is the step as the take had it.
+        let file = dir.join("models.json");
+        fs::write(&file, r#"{"dawn": {"run": ["sh", "-c", "printf take > \"$1\"", "dawn", "{out}"]}}"#).unwrap();
+        let making = Models::read(&file).unwrap();
+        let plan = kerf_engine::recipe::plan(&project, dir, "m1", &making).unwrap();
+        kerf_engine::recipe::make(&project, dir, &plan, &making, &kerf_engine::CancellationToken::new(), |_| {}).unwrap();
+        let back = Edit { restore: Some(1), ..set("", None) };
+        let already = change(&project, dir, &back, &models).unwrap_err();
+        assert!(already.contains("as take 1 was made from them already"), "{already}");
+        let seeded = applied(&project, &change(&project, dir, &set("seed", Some("8")), &models).unwrap().script);
+        let back = Edit { was: kerf_shots::graph::written(&seeded, "m1").unwrap(), ..back };
+        assert_eq!(
+            change(&seeded, dir, &back, &models).unwrap(),
+            Changed { added: None, script: vec![format!("step m1 set 1 {STEP}")] }
+        );
+
         // A models file that does not read is said with the graph, which is still shown.
         let shown = event(&project, dir, "m1", &models, Some("it is not JSON".into())).unwrap();
         assert_eq!(shown["modelsError"], "it is not JSON");
         assert!(event(&project, dir, "m9", &models, None).unwrap_err().contains("no media `m9`"));
+    }
+
+    /// A media whose steps are still in a recipe's file is not changed here: how its steps
+    /// are carried into the document is said.
+    #[test]
+    fn a_media_whose_steps_are_in_a_recipe_file_is_refused_with_how_to_carry_it() {
+        let folder = tempfile::tempdir().unwrap();
+        let dir = folder.path();
+        fs::create_dir_all(dir.join("shots")).unwrap();
+        fs::write(dir.join("shots/open.kerfrecipe"), format!("kerf-recipe 1\n{STEP}\n")).unwrap();
+        let project = kerf_runtime::parse_document(
+            "kerf 1\nproject name=\"Shots\"\nmedia m1 path=\"shots/open.mp4\" rate=24 dur=96f video=320x180 recipe=\"shots/open.kerfrecipe\"\nsequence s1 rate=24 size=320x180\n",
+        )
+        .unwrap();
+        let refused = change(&project, dir, &set("seed", Some("8")), &Models::default()).unwrap_err();
+        assert!(refused.contains("in the recipe file `shots/open.kerfrecipe`"), "{refused}");
+        assert!(refused.contains("`kerf carry m1`"), "{refused}");
+        assert_eq!(fs::read_to_string(dir.join("shots/open.kerfrecipe")).unwrap(), format!("kerf-recipe 1\n{STEP}\n"));
     }
 
     /// Steps the document holds are shown as a recipe's are, and a change to them is the
@@ -389,7 +407,8 @@ mod tests {
         let wrong = Edit { key: "seed".into(), value: Some("soon".into()), ..on(2) };
         assert!(change(&project, dir, &wrong, &models).unwrap_err().contains("`seed=soon` is not a whole number"));
         let ran = Edit { text: Some("kerf-recipe 1\nrun vork render --out {out}\n".into()), ..on(0) };
-        assert!(change(&project, dir, &ran, &models).unwrap_err().contains("`run` is a recipe file's alone"));
+        let ran = change(&project, dir, &ran, &models).unwrap_err();
+        assert!(ran.contains("runs a program, and a document names none"), "{ran}");
         // Steps changed since the editor read them are left as that left them.
         let stale = Edit { was: "kerf-recipe 1\ngenerate model=dawn\n".into(), ..seeded };
         assert!(change(&project, dir, &stale, &models).unwrap_err().contains("were changed since they were read"));

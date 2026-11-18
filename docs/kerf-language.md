@@ -171,14 +171,14 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
   hand a model), and says which; no other edit asks for it. Opening and
   drawing a project never run a step. A document prints each step one way,
   its words in one order, so a step has no comment of its own. See
-  [shots.md](shots.md#steps-in-the-document).
-- `recipe="shots/open.kerfrecipe"` on a media line names a text file that
-  holds its steps instead, as they were written before the document held
-  them: `kerf-recipe 1`, then a line a step, with files named from the
-  recipe's own folder, and beside the three above `run <program>
-  <arguments>` and `needs <file>`, which a document has no place for. A
-  media has its steps under its line or names a recipe, not both. See
-  [shots.md](shots.md#recipes).
+  [shots.md](shots.md#steps).
+- `recipe="shots/open.kerfrecipe"` on a media line is read, so that a
+  project made before the document held steps opens: it names the text file
+  its steps were written in then. Nothing is made from that file. `kerf
+  carry <media>`, or an agent's `edit` with `carry`, writes its steps under
+  the media and takes the word off the line, and a media has its steps under
+  its line or names a recipe, not both. See
+  [shots.md](shots.md#carrying-a-recipe-into-the-document).
 - `retired=` on the `project` line lists ids of deleted items. Ids are never
   reused, so an edit cannot claim one and generated ids skip them.
 - One line is one thing; two-space indentation nests tracks in sequences,
@@ -414,7 +414,7 @@ transition add from=c1 to=c9 fx=dissolve dur=12f
   transcript.
 - `media replace m1 path="media/take2.mov" rate=24 dur=00:04:30:00
   video=3840x2160 audio=2ch@48000` swaps the file behind a media id and
-  takes the same fields as `media add` (`tc=`, `alpha=`, `reel=`, and `recipe=` too).
+  takes the same fields as `media add` (`tc=`, `alpha=`, `reel=`), and leaves the steps under the media as they are.
   The steps under a media that say how it is made stay as they are.
   Every clip that uses it keeps its timing; a file one no longer fits (too
   short for its source range or a transition's handles, or without the

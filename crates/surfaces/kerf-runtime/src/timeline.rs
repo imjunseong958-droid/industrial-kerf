@@ -47,7 +47,7 @@ pub(crate) fn timeline_with_takes(project: &Project, directory: &std::path::Path
                 .map(|(number, path, chosen)| json!({"number": number, "path": path, "chosen": chosen}))
                 .collect();
         }
-        let (cast, styles) = kerf_engine::recipe::cast::named_by(directory, media);
+        let (cast, styles) = kerf_engine::recipe::cast::named_by(media);
         if !cast.is_empty() || !styles.is_empty() {
             source["shows"] = json!([cast, styles].concat());
         }

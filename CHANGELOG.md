@@ -7,26 +7,43 @@ on `main`; its section here becomes the release's notes on GitHub
 ## Unreleased
 
 - How a media is made is written in the document, under the media, and no
-  longer in a recipe file beside the project. A media that Kerf or a model
-  makes has its steps under its line (`render <sequence> {guide.mp4} …`,
-  `generate model=… prompt="…" …`, `join …`), an edit script writes and
-  changes them (`step <media> add <step>`, `step <media> set <n> seed=8`,
-  `step <media> remove <n>`), and undo takes a step back as it does any
-  edit. An agent that judges a request needs a model writes the steps with
-  its edit and calls `make`, with no file to write first; how much it runs
-  without asking is still yours to say in `~/.kerf/agent.json`. A take
+  longer in a recipe file (`.kerfrecipe`) beside the project. A media that
+  Kerf or a model makes has its steps under its line (`render <sequence>
+  {guide.mp4} …`, `generate model=… prompt="…" …`, `join …`), an edit script
+  writes and changes them (`step <media> add <step>`, `step <media> set <n>
+  seed=8`, `step <media> remove <n>`), and undo takes a step back as it does
+  any edit. An agent that judges a request needs a model writes the steps
+  with its edit and calls `make`, with no file to write first; how much it
+  runs without asking is still yours to say in `~/.kerf/agent.json`. A take
   keeps the steps it was made from, each making is still a new take, and a
   media says it wants making when its steps, the footage they read, or the
   sequence its guide is drawn from has changed. A file a step names is
   named from the project's folder (`guide=footage/walk.mp4`), a guide's
   mesh files are found from its clips with no `needs` line, and takes are
-  kept in a folder named for the media's file (`shots/open.takes/`), the
-  one a recipe of that name used. `kerf make`, `kerf takes` and `kerf
-  shots` read such media as they read a recipe's. A project with
-  `.kerfrecipe` files opens and makes as before; a step that runs a program
-  (`run`) stays a recipe file's alone, since a document names no program.
-  Both shot fixtures (`fixtures/shots/car`, `fixtures/shots/walk`) are
-  written this way now.
+  kept in a folder named for the media's file (`shots/open.takes/`).
+  ([docs/shots.md](docs/shots.md#steps))
+- **Recipe files are no longer made from.** A project that has them opens,
+  plays and exports as it did, and its takes are still listed and chosen
+  among, but `kerf make`, the editor's Make and an agent's `make` refuse a
+  media whose steps are still in a recipe file, and say how they come into
+  the document: `kerf carry <media>` (or `--all`), Carry Steps into the
+  Document… on the media in the editor's bin, or an agent's `edit` with
+  `carry`. Carrying writes the recipe's steps under the media, each file
+  named from the project's folder, and takes `recipe=` off its line, as one
+  edit that undo takes back. The takes the recipe made stay where they are,
+  and those made from it as it stands are not asked for again for being
+  carried. The recipe's file is left where it was. An agent's `edit` no
+  longer takes `recipes` or `recipeSet`: steps are lines of its script.
+  ([docs/shots.md](docs/shots.md#carrying-a-recipe-into-the-document))
+- **A recipe's `run <program>` line has no place in a document**, which
+  names no program: what may run on your machine is only what you named, in
+  your own `~/.kerf/models.json`, so a document, a preset, or an agent's edit
+  cannot say what runs. A renderer or a script is named there as a model is
+  and handed its arguments, `{"previs": {"run": ["vork", "render", "{ref}",
+  "--out", "{out}"]}}`, and a step asks it: `generate model=previs
+  ref=scenes/open.scene.json out={guide.mp4}`. A recipe with a `run` line is
+  carried once that line is written so; `kerf carry` says how.
+  ([docs/shots.md](docs/shots.md#a-program-of-your-own))
 - A preset carries the steps that make a media, and every sequence a step
   draws. A media with steps under its line travels as one the preset makes
   (`path="made:<id>.<ext>"`), its steps naming the footage they read by
@@ -39,18 +56,14 @@ on `main`; its section here becomes the release's notes on GitHub
   and length, its clips starting from the binding's `from`. Inspecting a
   preset lists what it makes apart from its slots. Applying a preset whose
   track matte names a track above its own no longer fails.
-- The editor offers a media made by steps in the document what it offers
-  one made by a recipe: Open Graph, Make…, Make Several and Takes in the
-  bin, "Not made" where its file is not there yet, and its graph from its
-  clip. A change made in the graph, a prompt, a seed, a step added, a take's
-  steps restored, a value of a model's workflow, is an edit of the
-  document, one revision that undo takes back.
-- `kerf carry <media>` (and `--all`) writes a recipe file's steps under the
-  media in the document, each file named from the project's folder, and
-  takes `recipe=` off its line; an agent does the same with `edit` and
-  `carry`. The takes the recipe made stay, and those made from it as it
-  stands are not asked for again for being carried. A recipe with a `run`
-  line is not carried, and is said.
+  ([docs/presets.md](docs/presets.md))
+- In the editor a made media's bin menu reads Make… and Make Several (they
+  were Make from Recipe… and Make Several from Recipe), and a change made in
+  a shot's graph, a prompt, a seed, a step added, a take's steps restored, a
+  value of a model's workflow, is an edit of the document, one revision that
+  undo takes back, where it was a change to a file.
+- Both shot fixtures (`fixtures/shots/car`, `fixtures/shots/walk`) have
+  their steps in their documents.
 - `kerf-comfy` comes with `matte`, for a ComfyUI server that has SAM 3.1: a
   thing in footage found by its name and followed, as a matte, white on
   black on every frame (`generate model=matte guide=<footage> prompt="man"`).

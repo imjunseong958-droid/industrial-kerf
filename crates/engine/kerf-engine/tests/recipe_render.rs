@@ -1,4 +1,4 @@
-//! A recipe's `render` step has Kerf draw a sequence of the project, which is how a guide blocked
+//! A `render` step has Kerf draw a sequence of the project, which is how a guide blocked
 //! with Kerf's own clips reaches the steps after it.
 
 use kerf_engine::recipe::{self, model::Models};
@@ -7,18 +7,13 @@ use kerf_lang::parse_document;
 use kerf_model::Catalog;
 
 #[test]
-fn a_recipe_renders_a_sequence_of_the_project_as_a_take() {
+fn a_render_step_draws_a_sequence_of_the_project_as_a_take() {
     let folder = tempfile::tempdir().expect("a folder");
     let directory = folder.path();
-    std::fs::create_dir(directory.join("shots")).expect("a folder");
-    std::fs::write(
-        directory.join("shots/block.kerfrecipe"),
-        "kerf-recipe 1\n# The blocking, as the guide a model would follow.\nrender s2 {out}\n",
-    )
-    .expect("a recipe");
     let project = parse_document(
         "kerf 1\nproject name=\"shots\"\n\
-         media m1 path=\"shots/block.mp4\" rate=24 dur=1s video=160x90 recipe=\"shots/block.kerfrecipe\"\n\
+         media m1 path=\"shots/block.mp4\" rate=24 dur=1s video=160x90\n\
+         \x20 render s2 {out}\n\
          sequence s1 rate=24 size=160x90 audio=48000\n\
          \x20 track V1 video\n\
          sequence s2 rate=24 size=160x90 audio=48000\n\
@@ -90,7 +85,7 @@ fn a_guide_is_drawn_from_a_sequence_and_handed_to_a_model_by_steps_in_the_docume
         .unwrap_or_else(|errors| panic!("{errors:?}"))
         .project;
     let plan = recipe::plan(&project, directory, "depth", &models).expect("a plan");
-    assert_eq!(plan.recipe, None);
+    assert_eq!(plan.steps.len(), 2);
     assert_eq!(
         plan.steps[0],
         format!(

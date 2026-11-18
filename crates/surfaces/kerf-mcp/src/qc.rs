@@ -406,18 +406,18 @@ pub fn check(project: &Project, dir: &Path) -> CheckReport {
                 "missing_media",
                 Some(media.id.as_str()),
                 // One its steps make is not lost: it has yet to be made.
-                match kerf_engine::recipe::Home::of(media) {
-                    Some(kerf_engine::recipe::Home::File(recipe)) => format!(
-                        "media `{}` is not made yet: a person makes it from its recipe, `{recipe}`, with `kerf make {}`",
+                match (kerf_engine::recipe::uncarried(media), media.steps.is_empty()) {
+                    (Some(recipe), _) => format!(
+                        "media `{}` is not made yet, and its steps are in the recipe file `{recipe}`: `kerf carry {}` writes them under the media, and it is then made from them",
                         media.id, media.id
                     ),
-                    Some(kerf_engine::recipe::Home::Document) => format!(
+                    (None, false) => format!(
                         "media `{}` is not made yet: `make` makes it from the steps under its line (`kerf make {}` where the person is asked)",
                         media.id, media.id
                     ),
                     // As the document writes it: where the project folder
                     // is on this computer says nothing of what is missing.
-                    None => format!(
+                    (None, true) => format!(
                         "media `{}` is missing: no file at `{}`",
                         media.id,
                         Path::new(&media.path)

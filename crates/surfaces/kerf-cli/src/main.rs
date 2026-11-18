@@ -127,7 +127,7 @@ enum Command {
         #[arg(short = 'm', long)]
         message: Option<String>,
     },
-    /// Make a take of a media by running the steps under its line in the document, or the recipe its line names (`recipe=`).
+    /// Make a take of a media by running the steps under its line in the document.
     Make {
         /// The media's id, as its line in the document names it.
         media: String,
@@ -752,11 +752,7 @@ fn run_make(directory: &Path, kerfd: Option<&Path>, id: &str, yes: bool, rolls: 
             .map_err(|error| anyhow!(error))
     };
     let plan = planned(0)?;
-    match &plan.recipe {
-        Some(recipe) => println!("recipe  {}", recipe.display()),
-        // Its steps are the document's own, under the media's line.
-        None => println!("steps   under `{id}` in the document"),
-    }
+    println!("steps   under `{id}` in the document");
     for (number, step) in plan.steps.iter().enumerate() {
         println!("step {}  {step}", number + 1);
     }
@@ -903,7 +899,7 @@ fn run_shots(directory: &Path, kerfd: Option<&Path>) -> Result<()> {
     let shots = kerf_engine::recipe::shots(&project, directory);
     if shots.is_empty() {
         println!(
-            "no media names a recipe; `recipe=\"<file>\"` on a media's line does (docs/shots.md)"
+            "no media has steps that make it; `step <media> add …` in an edit writes them under its line (docs/shots.md)"
         );
         return Ok(());
     }
@@ -2087,7 +2083,6 @@ mod tests {
             made: None,
             chosen,
             changed: changed.iter().map(|what| (*what).to_owned()).collect(),
-            recipe: None,
             current: true,
             kept: false,
         };

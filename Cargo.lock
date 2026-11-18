@@ -1965,6 +1965,7 @@ name = "kerf-mcp"
 version = "0.1.4"
 dependencies = [
  "base64",
+ "hex",
  "kerf-agent",
  "kerf-color",
  "kerf-compose",
@@ -1980,6 +1981,7 @@ dependencies = [
  "libc",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
 ]
 

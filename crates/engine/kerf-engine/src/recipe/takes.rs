@@ -30,7 +30,7 @@
 //! trimming, moving, grading, or titling a made shot never asks for it
 //! again.
 
-use super::{moves::Moves, signal::Signal, stored, within, Home, Recipe};
+use super::{moves::Moves, signal::Signal, stored, within, Recipe};
 use crate::error::{EngineError, Result};
 use kerf_model::{Content, Media, Project};
 use serde::{Deserialize, Serialize};
@@ -52,14 +52,6 @@ const STEPS: &str = "steps";
 /// What ends the name of a folder of takes.
 const TAKES: &str = ".takes";
 
-/// What is written in `home` is called among what a take was made from.
-fn written_key(home: &Home) -> &'static str {
-    match home {
-        Home::Document => STEPS,
-        Home::File(_) => RECIPE,
-    }
-}
-
 /// Where a recipe's takes are kept.
 pub(crate) struct Place {
     /// The project's folder.
@@ -71,13 +63,15 @@ pub(crate) struct Place {
 }
 
 impl Place {
-    /// The takes of the recipe named `recipe` in the project kept in
-    /// `directory`, for a media whose file is at `media`.
+    /// The takes a recipe's file made, for a media whose file is at `media` in the
+    /// project kept in `directory`: where the makings of recipe files put them, which
+    /// is where they are until the recipe is carried into the document and still are
+    /// after, the folder being the same for a shot named as its recipe was.
     pub fn of(directory: &Path, recipe: &str, media: &str) -> Result<Self> {
         // Every version of a recipe, `open.kerfrecipe` and `open@2.kerfrecipe`, keeps its takes
         // in one folder, so a take is never lost to the recipe being written again.
         let recipe = within(Path::new(""), recipe, "recipe")?;
-        let (base, _) = super::versioned(&recipe);
+        let (base, _) = versioned(&recipe);
         let takes = recipe.with_file_name(format!("{base}{TAKES}"));
         Ok(Self {
             directory: directory.to_path_buf(),
@@ -233,12 +227,36 @@ struct Carried {
 }
 
 impl Record {
-    /// What the take is held to, as a take of steps written in `home`.
-    fn held(&self, home: &Home) -> &BTreeMap<String, String> {
-        match (home, &self.carried) {
-            (Home::Document, Some(Carried { from: Some(from), .. })) => from,
+    /// What the take is held to as a take of steps the document holds: what it was made
+    /// from, or, for one a recipe's file made, what that came to when it was carried.
+    fn held(&self) -> &BTreeMap<String, String> {
+        match &self.carried {
+            Some(Carried { from: Some(from), .. }) => from,
             _ => &self.from,
         }
+    }
+}
+
+/// A recipe file's name without its extension, split into the name its versions shared
+/// and its version: `open@2.kerfrecipe` was `open`, 2. Every version kept its takes in
+/// one folder, named for what they shared.
+fn versioned(recipe: &Path) -> (String, u32) {
+    let stem = recipe
+        .file_stem()
+        .map(|stem| stem.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    match stem.rsplit_once('@') {
+        Some((base, number))
+            if !base.is_empty()
+                && !number.is_empty()
+                && number.bytes().all(|byte| byte.is_ascii_digit()) =>
+        {
+            match number.parse::<u32>() {
+                Ok(number) if number >= 2 => (base.to_owned(), number),
+                _ => (stem, 1),
+            }
+        }
+        _ => (stem, 1),
     }
 }
 
@@ -274,43 +292,54 @@ pub(crate) fn record(
 /// recipe it was, so that what it keeps of its making still reads. How many takes are
 /// held to the steps now.
 ///
-/// A record gains this and loses nothing: a media that names the recipe again, by undo,
-/// reads its takes as it did.
+/// A record gains this and loses nothing.
 pub fn mark_carried(before: &Project, after: &Project, directory: &Path, id: &str) -> Result<usize> {
     let no_media = || EngineError::msg(format!("no media `{id}` in this project"));
     let (was, now) = (
         before.media(id).ok_or_else(no_media)?,
         after.media(id).ok_or_else(no_media)?,
     );
-    let (Some(Home::File(recipe)), Some(Home::Document)) = (Home::of(was), Home::of(now)) else {
+    let (Some(recipe), false) = (super::uncarried(was), now.steps.is_empty()) else {
         return Err(EngineError::msg(format!(
             "media `{id}` was not carried from a recipe into the document"
         )));
     };
-    let then = Standing::of(before, directory, was);
-    let made_from = then
-        .as_ref()
-        .and_then(|standing| standing.now())
-        .and_then(|now| now.as_ref().ok());
-    let steps = Recipe::of_steps(&now.steps).told(directory, Path::new(""))?;
-    let held = from(
-        after,
-        directory,
-        &Home::Document,
-        &super::steps_text(&now.steps),
-        &steps,
-    )?;
-    let place = Home::File(recipe.clone()).place(directory, &was.path)?;
+    // What a take's record holds of each thing, as that thing stands now: a take all of
+    // whose things are as they were is one made from the recipe as it stands.
+    let text = within(Path::new(""), recipe, "recipe")
+        .ok()
+        .and_then(|inside| std::fs::read_to_string(directory.join(inside)).ok());
+    let cast = super::cast::Cast::read(directory).ok();
+    let stands = |key: &str| -> Option<String> {
+        if key == RECIPE {
+            let mut hasher = Sha256::new();
+            hasher.update(Recipe::essence(text.as_deref()?));
+            return Some(hex_of(hasher));
+        }
+        let (kind, name) = key.split_once(' ')?;
+        match kind {
+            "file" => Some(file_hash(&directory.join(name))),
+            "sequence" => Some(sequence_hash(before, directory, name)),
+            "signal" => Signal::read(before, name).ok().map(|signal| signal.hash()),
+            _ => cast.as_ref()?.held(kind, name),
+        }
+    };
+    let steps = Recipe::of_steps(&now.steps).told(directory)?;
+    let held = from(after, directory, &super::steps_text(&now.steps), &steps)?;
+    let place = Place::of(directory, recipe, &was.path)?;
     let mut marked = 0;
     for take in place.numbers() {
         let file = place.record(take);
         let Some(mut record) = read_record(&file) else {
             continue;
         };
-        let current = made_from.is_some_and(|now| changed(&record.from, now).is_empty());
+        let current = record
+            .from
+            .iter()
+            .all(|(key, hash)| stands(key).as_deref() == Some(hash.as_str()));
         marked += usize::from(current);
         record.carried = Some(Carried {
-            recipe: recipe.clone(),
+            recipe: recipe.to_owned(),
             from: current.then(|| held.clone()),
         });
         // Whole or not at all: a record half written is no record.
@@ -445,32 +474,28 @@ pub(crate) fn mesh_files(project: &Project, id: &str) -> BTreeSet<String> {
     files
 }
 
-/// What a take of `recipe`, written in `home` as `text`, is made from as things
-/// stand: each thing by name, with a hash of it. `recipe` is as its models are
-/// asked ([`Recipe::told`]), so the pictures of the cast it names are among the
-/// files it reads.
+/// What a take of `recipe`, whose text is `text`, is made from as things stand: each
+/// thing by name, with a hash of it. `recipe` is as its models are asked
+/// ([`Recipe::told`]), so the pictures of the cast it names are among the files it reads.
 pub(crate) fn from(
     project: &Project,
     directory: &Path,
-    home: &Home,
     text: &str,
     recipe: &Recipe,
 ) -> Result<BTreeMap<String, String>> {
-    let folder = &home.folder();
+    let folder = Path::new("");
     let mut from = BTreeMap::new();
     let mut hasher = Sha256::new();
     hasher.update(Recipe::essence(text));
-    from.insert(written_key(home).to_owned(), hex_of(hasher));
-    // A recipe says which files a sequence it draws reads (`needs`). Steps in the
-    // document have no such line, and need none: a mesh's file is found from its clip.
-    if *home == Home::Document {
-        for file in recipe.sequences().flat_map(|sequence| mesh_files(project, sequence)) {
-            if let Ok(inside) = within(Path::new(""), &file, "mesh") {
-                from.insert(
-                    format!("file {}", stored(&inside)),
-                    file_hash(&directory.join(&inside)),
-                );
-            }
+    from.insert(STEPS.to_owned(), hex_of(hasher));
+    // A sequence a step draws reads the files its mesh clips name, and nothing of the
+    // document says when one changes: a take is held to them, found from the clips.
+    for file in recipe.sequences().flat_map(|sequence| mesh_files(project, sequence)) {
+        if let Ok(inside) = within(Path::new(""), &file, "mesh") {
+            from.insert(
+                format!("file {}", stored(&inside)),
+                file_hash(&directory.join(&inside)),
+            );
         }
     }
     for file in recipe.reads() {
@@ -521,7 +546,7 @@ fn changed(then: &BTreeMap<String, String>, now: &BTreeMap<String, String>) -> V
         .collect()
 }
 
-/// Why a media that names a recipe wants making.
+/// Why a media its steps make wants making.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Unmade {
     /// Its file is not there.
@@ -573,39 +598,26 @@ pub(crate) struct Standing<'a> {
     project: &'a Project,
     directory: &'a Path,
     media: &'a Media,
-    /// Where the steps are written, and the recipe's file where that is one.
-    home: Home,
-    recipe_file: Option<PathBuf>,
-    /// Their text, where it reads.
-    text: Option<String>,
+    /// Their text.
+    text: String,
     /// The steps as their models are asked, or why they cannot run.
-    pub(crate) recipe: Option<Result<Recipe>>,
+    pub(crate) recipe: Result<Recipe>,
     /// What a take would be made from now, once it has been asked for.
     now: std::cell::OnceCell<Option<std::result::Result<BTreeMap<String, String>, String>>>,
 }
 
 impl<'a> Standing<'a> {
-    /// Read the steps that make `media`. `None` for a media nothing makes, or whose recipe
-    /// is outside the project.
+    /// Read the steps that make `media`. `None` for a media that has none under its line.
     pub(crate) fn of(project: &'a Project, directory: &'a Path, media: &'a Media) -> Option<Self> {
-        let home = Home::of(media)?;
-        let recipe_file = match &home {
-            Home::File(name) => Some(directory.join(within(Path::new(""), name, "recipe").ok()?)),
-            Home::Document => None,
-        };
-        let text = home.text(directory, media).ok();
-        let folder = home.folder();
-        let recipe = text.as_ref().map(|text| {
-            Recipe::parse(text)
-                .map_err(|error| super::in_document(&home, error))
-                .and_then(|recipe| recipe.told(directory, &folder))
-        });
+        if media.steps.is_empty() {
+            return None;
+        }
+        let text = super::steps_text(&media.steps);
+        let recipe = Recipe::parse(&text).and_then(|recipe| recipe.told(directory));
         Some(Self {
             project,
             directory,
             media,
-            home,
-            recipe_file,
             text,
             recipe,
             now: std::cell::OnceCell::new(),
@@ -615,70 +627,42 @@ impl<'a> Standing<'a> {
     /// What a take would be made from now: none where the steps cannot be read.
     fn now(&self) -> Option<&std::result::Result<BTreeMap<String, String>, String>> {
         self.now
-            .get_or_init(|| match (&self.text, &self.recipe) {
-                (Some(text), Some(Ok(recipe))) => Some(
-                    from(self.project, self.directory, &self.home, text, recipe)
+            .get_or_init(|| match &self.recipe {
+                Ok(recipe) => Some(
+                    from(self.project, self.directory, &self.text, recipe)
                         .map_err(|error| error.to_string()),
                 ),
-                _ => None,
+                Err(_) => None,
             })
             .as_ref()
     }
 
-    /// That the steps cannot run, as a person is told it.
-    fn cannot(&self, why: &str) -> Unmade {
-        Unmade::Unreadable(match self.home {
-            Home::File(_) => format!("its recipe cannot run: {why}"),
-            Home::Document => format!("its steps cannot run: {why}"),
-        })
-    }
-
     /// See [`unmade`].
     pub(crate) fn unmade(&self) -> Option<Unmade> {
-        match self.recipe.as_ref()? {
-            Ok(_) => {}
-            Err(error) => return Some(self.cannot(&error.to_string())),
+        let cannot = |why: &str| Unmade::Unreadable(format!("its steps cannot run: {why}"));
+        if let Err(error) = &self.recipe {
+            return Some(cannot(&error.to_string()));
         }
         let file = self.directory.join(&self.media.path);
         if !file.is_file() {
             return Some(Unmade::Missing);
         }
-        let place = self.home.place(self.directory, &self.media.path).ok()?;
-        let Some(record) = record_of(&place, self.media) else {
-            // A file no take made is held to its recipe by their times. Steps in the
-            // document have no time of their own: such a file is taken as it is.
-            let written = std::fs::metadata(self.recipe_file.as_ref()?).ok()?.modified().ok()?;
-            let made = std::fs::metadata(&file).ok()?.modified().ok()?;
-            return (made < written).then(|| Unmade::Stale(vec!["the recipe".to_owned()]));
-        };
+        let place = Place::of_media(self.directory, &self.media.path).ok()?;
+        // A file no take made is taken as it is: nothing says what it was made from.
+        let record = record_of(&place, self.media)?;
         match self.now()? {
             Ok(now) => {
-                let what = changed(record.held(&self.home), now);
+                let what = changed(record.held(), now);
                 (!what.is_empty()).then_some(Unmade::Stale(what))
             }
-            Err(error) => Some(self.cannot(error)),
+            Err(error) => Some(cannot(error)),
         }
     }
 
     /// See [`takes`].
     pub(crate) fn takes(&self) -> Result<Vec<Take>> {
-        let place = self.home.place(self.directory, &self.media.path)?;
+        let place = Place::of_media(self.directory, &self.media.path)?;
         let now = self.now().and_then(|now| now.as_ref().ok());
-        // Each version of the recipe, by the hash a take's record keeps of it.
-        let versions: HashMap<String, String> = match &self.home {
-            Home::File(name) => within(Path::new(""), name, "recipe")
-                .map(|inside| super::versions(self.directory, &inside))
-                .unwrap_or_default()
-                .into_iter()
-                .map(|(path, _, text)| {
-                    let mut hasher = Sha256::new();
-                    hasher.update(Recipe::essence(&text));
-                    (hex_of(hasher), stored(&path))
-                })
-                .collect(),
-            Home::Document => HashMap::new(),
-        };
-        let key = written_key(&self.home);
         Ok(place
             .numbers()
             .into_iter()
@@ -686,31 +670,22 @@ impl<'a> Standing<'a> {
             .map(|take| {
                 let record = read_record(&place.record(take));
                 let stored = place.stored(take);
-                let recipe = record
-                    .as_ref()
-                    .and_then(|record| record.from.get(RECIPE))
-                    .and_then(|hash| versions.get(hash).cloned());
                 Take {
                     number: take,
                     chosen: Path::new(&self.media.path) == Path::new(&stored),
                     made: record.as_ref().map(|record| record.made),
                     changed: match (&record, now) {
-                        (Some(record), Some(now)) => changed(record.held(&self.home), now),
+                        (Some(record), Some(now)) => changed(record.held(), now),
                         _ => Vec::new(),
                     },
-                    current: match &self.home {
-                        // Made from the version of the recipe the media names.
-                        Home::File(name) => recipe.as_deref() == Some(name.as_str()),
-                        // Made from the steps as the document has them now.
-                        Home::Document => match (&record, now) {
-                            (Some(record), Some(now)) => {
-                                let held = record.held(&self.home);
-                                held.contains_key(key) && held.get(key) == now.get(key)
-                            }
-                            _ => false,
-                        },
+                    // Made from the steps as the document has them now.
+                    current: match (&record, now) {
+                        (Some(record), Some(now)) => {
+                            let held = record.held();
+                            held.contains_key(STEPS) && held.get(STEPS) == now.get(STEPS)
+                        }
+                        _ => false,
                     },
-                    recipe,
                     rolled: record.as_ref().map_or(0, |record| record.rolled),
                     kept: place.working(take).join(KEPT_RECIPE).is_file(),
                     stored,
@@ -721,10 +696,15 @@ impl<'a> Standing<'a> {
 }
 
 /// Whether `media` of `project`, kept in `directory`, wants making from its
-/// steps, in the document or in the recipe it names, and why. `None` when it
-/// is made from things as they stand, when nothing makes it, and when its
-/// recipe's file cannot be read at all, since then nothing could make it.
+/// steps, and why. `None` when it is made from things as they stand, and when
+/// nothing makes it. A media whose steps are still in a recipe's file is said
+/// to want carrying: nothing is made from a recipe.
 pub fn unmade(project: &Project, directory: &Path, media: &Media) -> Option<Unmade> {
+    if let Some(recipe) = super::uncarried(media) {
+        return Some(Unmade::Unreadable(
+            super::not_carried(media.id.as_str(), recipe).to_string(),
+        ));
+    }
     Standing::of(project, directory, media)?.unmade()
 }
 
@@ -740,13 +720,8 @@ pub struct Take {
     pub chosen: bool,
     /// What has changed since it was made, of what it was made from.
     pub changed: Vec<String>,
-    /// The version of the media's recipe it was made from, as a document names it, where one
-    /// of the versions there holds what its record says: the `recipe=` a media that is this
-    /// take again names, so that it is not asked for again.
-    pub recipe: Option<String>,
-    /// Whether it was made from the steps as they are written now: from the version of
-    /// its recipe the media names, or from the steps the document has under the media.
-    /// Another making of those is another roll of this shot.
+    /// Whether it was made from the steps as the document has them now. Another making
+    /// of those is another roll of this shot.
     pub current: bool,
     /// Which roll of its recipe it is: how far on its seeds were from the ones the recipe
     /// gives.
@@ -755,7 +730,8 @@ pub struct Take {
     pub kept: bool,
 }
 
-/// What a take keeps of the recipe it was made from, in its working folder.
+/// What a take keeps of the steps it was made from, in its working folder: named as it
+/// was when steps were a recipe's, so that a take made then and one made now read alike.
 const KEPT_RECIPE: &str = "made-from.kerfrecipe";
 /// What a file its recipe named is kept as there, before its own name.
 const KEPT_FILE: &str = "made-from.";
@@ -808,20 +784,17 @@ pub(crate) fn keep(
 /// kept none: one made before takes kept it, or whose working folder is gone.
 pub fn kept(directory: &Path, media: &Media, take: u32) -> Option<Kept> {
     use super::Step;
-    let home = Home::of(media)?;
-    let place = home.place(directory, &media.path).ok()?;
+    let place = super::place_of(directory, media)?.ok()?;
     let working = place.working(take);
     let mut recipe = std::fs::read_to_string(working.join(KEPT_RECIPE)).ok()?;
     // A take a recipe's file made keeps the recipe as that file had it, its files named
     // from the recipe's folder. Once the recipe is carried into the document, what the
     // take keeps reads as the steps it became.
-    if home == Home::Document {
-        let carried = read_record(&place.record(take)).and_then(|record| record.carried);
-        if let Some(carried) = carried {
-            let folder = Home::File(carried.recipe).folder();
-            if let Ok((steps, _)) = super::steps_of_text(&recipe, Some(&folder)) {
-                recipe = super::steps_text(&steps);
-            }
+    let carried = read_record(&place.record(take)).and_then(|record| record.carried);
+    if let (Some(carried), false) = (carried, media.steps.is_empty()) {
+        let folder = super::folder_of(&carried.recipe);
+        if let Ok((steps, _)) = super::steps_of_text(&recipe, Some(&folder)) {
+            recipe = super::steps_text(&steps);
         }
     }
     let files = Recipe::parse(&recipe)
@@ -848,7 +821,7 @@ pub fn kept(directory: &Path, media: &Media, take: u32) -> Option<Kept> {
 /// it drew or a picture a model made for a later step, as a document would name it: there
 /// while the take's working folder is. `None` where it is not.
 pub fn step_file(directory: &Path, media: &Media, take: u32, name: &str) -> Option<String> {
-    let place = Home::of(media)?.place(directory, &media.path).ok()?;
+    let place = super::place_of(directory, media)?.ok()?;
     let inside = within(Path::new(""), name, "file").ok()?;
     place
         .working(take)
@@ -862,11 +835,21 @@ pub fn step_file(directory: &Path, media: &Media, take: u32, name: &str) -> Opti
 pub fn takes(project: &Project, directory: &Path, media: &Media) -> Result<Vec<Take>> {
     match Standing::of(project, directory, media) {
         Some(standing) => standing.takes(),
-        // A recipe named outside the project is said so, as it was.
-        None => match Home::of(media) {
-            Some(home) => home.place(directory, &media.path).map(|_| Vec::new()),
-            None => Ok(Vec::new()),
-        },
+        // Those a recipe's file made, before it is carried: there to see and to choose,
+        // and held to nothing until the steps are the document's.
+        None => Ok(listed(directory, media)
+            .into_iter()
+            .map(|(number, stored, chosen)| Take {
+                number,
+                stored,
+                made: None,
+                chosen,
+                changed: Vec::new(),
+                current: false,
+                rolled: 0,
+                kept: false,
+            })
+            .collect()),
     }
 }
 
@@ -875,8 +858,7 @@ pub fn takes(project: &Project, directory: &Path, media: &Media) -> Result<Vec<T
 /// names. It reads the takes' folder and nothing else, so it can be asked often: what has
 /// changed since each was made is [`takes`]'s to say.
 pub fn listed(directory: &Path, media: &Media) -> Vec<(u32, String, bool)> {
-    let Some(place) = Home::of(media).and_then(|home| home.place(directory, &media.path).ok())
-    else {
+    let Some(Ok(place)) = super::place_of(directory, media) else {
         return Vec::new();
     };
     place

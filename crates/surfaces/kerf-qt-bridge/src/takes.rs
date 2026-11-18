@@ -31,7 +31,7 @@ pub(crate) fn read(
         .and_then(|(revision, text)| Ok((revision, kerf_runtime::parse_document(&text)?)))
         .map_err(|error| error.message)
         .and_then(|(revision, project)| {
-            let guide = kerf_shots::takes::guide(&project, &directory, &id)?;
+            let guide = kerf_shots::takes::guide(&project, &id)?;
             let takes = kerf_shots::takes::takes(&project, &directory, &id)?;
             Ok((revision, project, guide, takes))
         });

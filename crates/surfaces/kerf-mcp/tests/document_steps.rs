@@ -244,7 +244,7 @@ fn an_agent_writes_a_makings_steps_in_the_document_and_makes_it() {
     // Read as the graph the editor shows: the sequence into the guide into the model, each
     // step by its number, as the document has them.
     let graph = ok(&router, "look", json!({"graph": "depth"}));
-    assert_eq!(graph["document"], true, "{graph}");
+    assert!(graph.get("document").is_none() && graph.get("recipe").is_none(), "{graph}");
     assert_eq!(
         graph["text"],
         "render s2 {guide.mp4} pass=depth size=160x90 rate=12\n\
@@ -270,19 +270,22 @@ fn an_agent_writes_a_makings_steps_in_the_document_and_makes_it() {
         "sequence s2 changed after its file was made"
     );
 
-    // What `recipeSet` sets on a recipe's line, it sets here as a line of the edit's script.
-    let set = ok(
-        &router,
-        "edit",
-        json!({"recipeSet": [{"media": "depth", "line": 2, "key": "seed", "value": "9"}]}),
+    // One word of a step, set by a line of the edit's script; the rest of the step stays.
+    let set = ok(&router, "edit", json!({"script": "step depth set 2 seed=9"}));
+    assert_eq!(set["status"], "accepted", "{set}");
+    assert_eq!(
+        steps(&router, "depth")[1],
+        "generate model=shot prompt=\"a red car on a wet street\" guide={guide.mp4} seed=9"
     );
-    assert!(set.get("recipes").is_none(), "{set}");
-    assert!(
-        set["script"].as_str().unwrap().contains(
-            "step depth set 2 generate model=shot prompt=\"a red car on a wet street\" guide={guide.mp4} seed=9"
-        ),
-        "{set}"
-    );
+    // The inputs that wrote a recipe's file are no inputs of `edit` now.
+    for gone in [
+        json!({"recipes": {"shots/depth.kerfrecipe": "kerf-recipe 1\nrender s2 {out}\n"}}),
+        json!({"recipeSet": [{"media": "depth", "line": 2, "key": "seed", "value": "10"}]}),
+    ] {
+        let response = router.call("edit", gone);
+        assert_eq!(response["error"]["code"], "INVALID_ARGUMENTS", "{response}");
+        assert!(response["error"]["message"].as_str().unwrap().contains("unknown field"), "{response}");
+    }
     assert!(steps(&router, "depth")[1].ends_with("seed=9"));
 
     // A step that is no step is refused where it is written, and the document is as it was.

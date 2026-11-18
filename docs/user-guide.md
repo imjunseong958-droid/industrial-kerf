@@ -168,19 +168,20 @@ chooses how Kerf thinks, and ▸ Account signs in to your Kerf account:
 ## Shots a renderer or a model makes
 
 A shot Kerf does not draw itself, a 3D render or a video model's, comes in as
-media with a recipe: a small text file in the project with the steps that make
-it. Ask Kerf for the shot and it writes the recipe and adds the media; Kerf
-never runs one itself. Right-click the media in the Media sheet and choose Make
-from Recipe…, read the steps it shows, and say yes; or run `kerf make <media>`
-in a terminal.
+media with the steps that make it written under it in the project. Ask Kerf
+for the shot and it adds the media and writes its steps; whether it then
+makes the shot without asking you is yours to say
+([shots.md](shots.md#an-agents-part)), and by default it asks. Right-click
+the media in the Media sheet and choose Make…, read the steps it shows, and
+say yes; or run `kerf make <media>` in a terminal.
 
 To see how a shot is made and change it, right-click the media and choose Open
-Graph, or double-click its clip on the timeline. Its recipe opens as a graph:
+Graph, or double-click its clip on the timeline. Its steps open as a graph:
 the guide drawn from your sequence, the models, and what they are handed, wired
 together, ending in the shot's takes. Choose a node to set its prompt, its seed
 or a knob, or to draw a signal's curve, and drag from a node's port to a model
-to hand it over; what you change is written into the recipe, and Make again
-makes a new take from it. A model that runs on a ComfyUI server opens further:
+to hand it over; what you change is an edit of the project, which undo takes
+back, and Make again makes a new take from it. A model that runs on a ComfyUI server opens further:
 double-click it to see the workflow it is run with, node by node, and set any
 value in it. Kerf keeps your change in a copy of the workflow in the project,
 for that shot alone; nothing on the server changes
@@ -190,21 +191,27 @@ Each making is kept as a take, and the newest is the one in your cut. `kerf
 takes <media>` lists them and `kerf takes <media> --use 1` goes back to one,
 and you can ask Kerf to do the same. Trim, move, grade and title a made shot
 as you like: none of that asks for it again. Kerf says when a shot does want
-making again, and for what: its recipe, a file the recipe reads, or the
+making again, and for what: its steps, a file they read, or the
 sequence that guides it changed.
 
 To keep the same people, places, and look from shot to shot, say them once:
 right-click in the Media sheet and choose Cast and Styles…, and give each a
-name, a few words, and pictures of it. Kerf's recipes name them, and when you
+name, a few words, and pictures of it. A shot's steps name them, and when you
 change one, saving says which shots want making again
 ([the cast](shots.md#the-cast)). For several takes of a shot to choose among,
-choose Make Several from Recipe on the media, or run `kerf make <media>
+choose Make Several on the media, or run `kerf make <media>
 --rolls 3`; pick one under Takes. `kerf shots` lists every such shot with
 its take and whether it wants making.
 
-Kerf comes with no model. To have a recipe ask one, name the program that
+Kerf comes with no model. To have a shot ask one, name the program that
 reaches it in `~/.kerf/models.json`; [shots.md](shots.md) has the format and
 what the program is handed.
+
+A project made before the steps were written in the project keeps them in
+recipe files (`.kerfrecipe`). It opens as it did, and a shot is made again
+once its steps are in the project: right-click the media and choose Carry
+Steps into the Document…, or run `kerf carry <media>`
+([shots.md](shots.md#carrying-a-recipe-into-the-document)).
 
 ## Conversations
 

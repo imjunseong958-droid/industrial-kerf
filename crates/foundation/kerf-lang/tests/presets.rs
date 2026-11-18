@@ -775,7 +775,7 @@ fn what_a_preset_cannot_make_is_refused() {
             ),
     );
     let refused = export_of(&recipe, "s1").unwrap_err();
-    assert!(refused.contains("recipe file `shots/open.kerfrecipe`") && refused.contains("carry its steps into the document"), "{refused}");
+    assert!(refused.contains("recipe file `shots/open.kerfrecipe`") && refused.contains("carry them into the document first (`kerf carry open`"), "{refused}");
 
     let walk = export_of(&walk(), "s2").unwrap();
     let car = export_of(&car(), "s1").unwrap();

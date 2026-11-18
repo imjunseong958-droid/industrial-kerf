@@ -2338,7 +2338,7 @@ impl Editor<'_> {
             return Err(fail(
                 "step.recipe",
                 format!(
-                    "media `{media}` names a recipe file, `{recipe}`, which holds its steps: to write them here, take `recipe=` off its line with `media replace` first"
+                    "media `{media}` names a recipe file, `{recipe}`, which holds its steps: `kerf carry {media}`, or an agent's `edit` with `carry`, writes them here; to write others in their place, take `recipe=` off its line with `media replace` first"
                 ),
             ));
         }

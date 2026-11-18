@@ -3,7 +3,7 @@
 //! Asks a ComfyUI server for what a Kerf request wants, with a workflow that
 //! comes with this program (`--list` names them) or one in a file. The
 //! server is `COMFY_URL`, with `COMFY_API_KEY` if it asks for a key, or what
-//! `~/.kerf/comfy.json` says. A recipe's `generate` runs it once a person's
+//! `~/.kerf/comfy.json` says. A `generate` step runs it once a person's
 //! `~/.kerf/models.json` names it for a model (`docs/shots.md`):
 //!
 //! ```json
@@ -15,7 +15,7 @@
 //! server.
 //!
 //! A request that names a workflow of its own project (`workflow=` on the
-//! `generate` line, a file kept beside the recipe) is made with that file in
+//! `generate` step, a file kept beside the shot's takes) is made with that file in
 //! place of the one named here, so a person changes how a model is run for
 //! one shot and nothing on the server, or in this program, changes.
 
@@ -159,7 +159,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
     let workflow = match &request.workflow {
         Some(own) => {
             say(&format!(
-                "kerf-comfy: with the recipe's own workflow, {}",
+                "kerf-comfy: with the shot's own workflow, {}",
                 own.display()
             ));
             Workflow::named(&own.to_string_lossy())?

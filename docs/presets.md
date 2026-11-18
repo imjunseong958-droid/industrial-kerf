@@ -21,7 +21,7 @@ rendered video or translate another editor's template format.
 6. Choose **Create proposal**, review the timeline, and accept the proposal.
 
 A media Kerf or a model makes, with the steps under its line
-([shots.md](shots.md#steps-in-the-document)), travels with its steps and is
+([shots.md](shots.md#steps)), travels with its steps and is
 made again where the preset is applied; it takes no binding. See
 [Media a preset makes](#media-a-preset-makes).
 
@@ -182,9 +182,10 @@ sequence s2 rate=24 size=1664x960
   `signal=`), comes with the preset with what it nests, though the first
   sequence does not nest it. A sequence reached neither from the first nor
   from a step is still refused.
-- **A recipe file does not travel.** A clip that plays a media made from a
-  recipe file (`recipe=`) is refused at export: write its steps under its
-  line in the document first, and take `recipe=` off it.
+- **A recipe file does not travel.** A clip that plays a media whose steps
+  are still in a recipe file (`recipe=`) is refused at export: carry them
+  into the document first (`kerf carry <media>`,
+  [shots.md](shots.md#carrying-a-recipe-into-the-document)).
 - **Applying adds each as a new media** of the project, by an ID of the
   project's own and a file in `shots/` with its extension, `shots/p12.mp4`,
   so its takes are kept in `shots/p12.takes/`. The edit adds the media,

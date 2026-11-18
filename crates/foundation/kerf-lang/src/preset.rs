@@ -201,7 +201,7 @@ fn travelling(project: &Project, root: &Id) -> Result<Travelling, String> {
                         let source = project.media(media.as_str()).expect("validated media");
                         if let Some(recipe) = &source.recipe {
                             return Err(format!(
-                                "media `{media}` is made from the recipe file `{recipe}`, which a preset does not carry: carry its steps into the document first, under its line, and take `recipe=` off it"
+                                "the steps of media `{media}` are in the recipe file `{recipe}`, which a preset does not carry: carry them into the document first (`kerf carry {media}`, or an agent's `edit` with `carry`)"
                             ));
                         }
                         if !source.steps.is_empty() {

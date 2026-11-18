@@ -26,33 +26,58 @@ fn kerfd() -> PathBuf {
     path
 }
 
-/// A project folder whose media `m1` is made by `recipe`, removed at the end.
+/// The models these tests make with, each a program handed the file it writes: one that
+/// says two things, the second twice, and one that waits, as a model's program waits on
+/// its server, and takes its job back when it is asked to end. Written once for this run
+/// of the tests, and the only models file read.
+fn models() -> &'static Path {
+    static FILE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    FILE.get_or_init(|| {
+        let file = std::env::temp_dir().join(format!("kq-models-{}.json", std::process::id()));
+        let models = json!({
+            "talk": {"run": [
+                "sh", "-c",
+                "echo blocking >&2; echo asking the model >&2; echo asking the model >&2; printf said > \"$1\"",
+                "talk", "{out}",
+            ]},
+            "wait": {"run": [
+                "sh", "-c",
+                "trap 'echo took the job back >&2; exit 1' TERM; echo waiting >&2; while :; do sleep 0.05; done",
+                "wait", "{out}",
+            ]},
+        });
+        fs::write(&file, models.to_string()).unwrap();
+        file
+    })
+}
+
+/// A project folder whose media `m1` is made by `steps`, the steps under its line,
+/// removed at the end.
 struct Project(PathBuf);
 
 impl Project {
-    fn new(tag: &str, recipe: &str) -> Self {
-        // No models a person has set up are read.
-        std::env::set_var("KERF_MODELS", "/no-such-kerf-models.json");
+    fn new(tag: &str, steps: &[&str]) -> Self {
+        // No models a person has set up are read: only these tests' own.
+        std::env::set_var("KERF_MODELS", models());
         let stamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
         let directory = std::env::temp_dir().join(format!("kq-{tag}-{:x}", stamp % 0xffff_ffff));
         fs::create_dir_all(directory.join("shots")).unwrap();
-        fs::write(
-            directory.join("shots/open.kerfrecipe"),
-            format!("kerf-recipe 1\n{recipe}\n"),
-        )
-        .unwrap();
+        let steps: String = steps.iter().map(|step| format!("  {step}\n")).collect();
         fs::write(
             directory.join("project.kerf"),
-            "kerf 1\nproject name=\"Making\"\n\
-             media m1 path=\"shots/open.mp4\" rate=24 dur=12f video=64x64 recipe=\"shots/open.kerfrecipe\"\n\
-             sequence s1 rate=24 size=64x64 audio=48000\n\
-             \x20 track V1 video\n\
-             sequence s2 rate=24 size=64x64 audio=48000\n\
-             \x20 track V1 video\n\
-             \x20   clip g1 gen=solid@1 at=0f dur=12f\n",
+            format!(
+                "kerf 1\nproject name=\"Making\"\n\
+                 media m1 path=\"shots/open.mp4\" rate=24 dur=12f video=64x64\n\
+                 {steps}\
+                 sequence s1 rate=24 size=64x64 audio=48000\n\
+                 \x20 track V1 video\n\
+                 sequence s2 rate=24 size=64x64 audio=48000\n\
+                 \x20 track V1 video\n\
+                 \x20   clip g1 gen=solid@1 at=0f dur=12f\n",
+            ),
         )
         .unwrap();
         Self(directory)
@@ -147,7 +172,7 @@ fn a_making_says_what_its_steps_say_as_they_say_it() {
     // A step that says two things, the second twice, and one that has Kerf draw the take.
     let project = Project::new(
         "making",
-        "run sh -c \"echo blocking >&2; echo asking the model >&2; echo asking the model >&2\"\nrender s2 {out}",
+        &["generate model=talk prompt=\"a word\" out={said.txt}", "render s2 {out}"],
     );
     let mut editor = Editor::open(&project.0);
 
@@ -199,10 +224,7 @@ fn a_making_says_what_its_steps_say_as_they_say_it() {
 fn a_making_that_is_cancelled_asks_its_step_to_end_and_leaves_no_take() {
     // A step that waits, as a model's program waits on its server, and takes its job back
     // when it is asked to end.
-    let project = Project::new(
-        "cancel",
-        r#"run sh -c "trap 'echo took the job back >&2; exit 1' TERM; echo waiting >&2; while :; do sleep 0.05; done" step {out}"#,
-    );
+    let project = Project::new("cancel", &["generate model=wait prompt=\"a word\""]);
     let mut editor = Editor::open(&project.0);
     editor.send(json!({"type": "media_make", "media": "m1", "confirmed": true}));
     editor.making("waiting");
@@ -255,7 +277,7 @@ fn a_making_that_is_cancelled_asks_its_step_to_end_and_leaves_no_take() {
 
 #[test]
 fn several_takes_are_made_one_after_another_and_the_cast_is_read_and_set() {
-    let project = Project::new("rolls", "render s2 {out}");
+    let project = Project::new("rolls", &["render s2 {out}"]);
     let mut editor = Editor::open(&project.0);
 
     // The plan says how many it is for, and nothing runs.

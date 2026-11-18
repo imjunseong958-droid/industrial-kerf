@@ -2552,10 +2552,11 @@ fn message(value: &Value) -> String {
     value["message"].as_str().unwrap_or_default().to_owned()
 }
 
-/// A media that names a recipe and has no file yet: an agent is told so, and that a person makes
-/// it. Once made, nothing is said.
+/// A media that still names a recipe file, as projects made before steps were the document's do:
+/// an agent is told its steps are in that file and how they come into the document, and nothing
+/// is made of it until they do. Carried, it is a media its steps make, named for `make`.
 #[test]
-fn a_media_whose_recipe_has_not_run_is_named_for_a_person_to_make() {
+fn a_media_whose_steps_are_in_a_recipe_file_is_named_for_carrying() {
     if !ffmpeg_available() {
         return;
     }
@@ -2563,7 +2564,7 @@ fn a_media_whose_recipe_has_not_run_is_named_for_a_person_to_make() {
     std::fs::create_dir(directory.path().join("shots")).unwrap();
     std::fs::write(
         directory.path().join("shots/open.kerfrecipe"),
-        "kerf-recipe 1\nrun vork render open.json --out {out}\n",
+        "kerf-recipe 1\nrender s1 {out}\n",
     )
     .unwrap();
     std::fs::write(
@@ -2578,17 +2579,33 @@ fn a_media_whose_recipe_has_not_run_is_named_for_a_person_to_make() {
     assert_eq!(to_make.as_array().map(Vec::len), Some(1), "{looked}");
     assert_eq!(to_make[0]["media"], json!("m1"));
     assert_eq!(to_make[0]["recipe"], json!("shots/open.kerfrecipe"));
-    assert_eq!(to_make[0]["why"], json!("its file is not there yet"));
+    assert_eq!(
+        to_make[0]["why"],
+        json!("its steps are in a recipe file, and a media is made from the steps under its line")
+    );
     assert!(
-        to_make[0]["make"]
+        to_make[0]["carry"]
             .as_str()
-            .is_some_and(|make| make.contains("kerf make m1") && make.contains("a person")),
+            .is_some_and(|carry| carry.contains("`edit` with `carry: [\"m1\"]`")),
         "{to_make}"
     );
-    // Its file written after its recipe, it is made.
-    std::fs::write(directory.path().join("shots/open.mp4"), "frames").unwrap();
-    let looked = ok(&router, "look", json!({}));
-    assert!(looked.get("toMake").is_none(), "{looked}");
+    assert!(to_make[0].get("make").is_none(), "{to_make}");
+    let unmade = ok(&router, "look", json!({"media": "m1"}));
+    assert_eq!(
+        unmade["analysis"],
+        "unavailable: `shots/open.mp4` is not made yet, and its steps are in the recipe file `shots/open.kerfrecipe`: `edit` with `carry: [\"m1\"]` writes them under the media, and `make` then makes it"
+    );
+    let refused = error(&router, "make", json!({"media": "m1"}));
+    assert!(
+        message(&refused).contains("`carry: [\"m1\"]`"),
+        "{refused}"
+    );
+    // Carried, it is made from its steps, and a person is asked to.
+    let carried = ok(&router, "edit", json!({"carry": ["m1"]}));
+    let to_make = &carried["toMake"][0];
+    assert_eq!(to_make["media"], json!("m1"), "{carried}");
+    assert_eq!(to_make["why"], json!("its file is not there yet"));
+    assert!(to_make.get("recipe").is_none(), "{to_make}");
 }
 
 /// What a waiting proposal would have made is said with the proposal, as it is with the project,
@@ -2607,8 +2624,7 @@ fn a_waiting_proposal_says_what_it_would_have_made() {
         &router,
         "edit",
         json!({
-            "script": "media add m1 path=\"shots/open.mp4\" rate=30 dur=00:00:04:00 video=320x180 recipe=\"shots/open.kerfrecipe\"",
-            "recipes": {"shots/open.kerfrecipe": "kerf-recipe 1\nrun vork render open.json --out {out}\n"},
+            "script": "media add m1 path=\"shots/open.mp4\" rate=30 dur=00:00:04:00 video=320x180\nstep m1 add render s1 {out}",
         }),
     );
     assert_eq!(staged["status"], "awaiting_review", "{staged}");
@@ -2641,8 +2657,8 @@ fn a_waiting_proposal_says_what_it_would_have_made() {
     assert!(!message(&nowhere).contains("proposal"), "{nowhere}");
 }
 
-/// A media a recipe made: an agent sees its takes and which one the media is, and is told what the
-/// recipe reads that has changed since, by name. A recipe that cannot run is said with why.
+/// A media its steps made: an agent sees its takes and which one the media is, and is told what
+/// the steps read that has changed since, by name.
 #[cfg(unix)]
 #[test]
 fn a_medias_takes_are_listed_and_what_changed_since_is_named() {
@@ -2653,15 +2669,9 @@ fn a_medias_takes_are_listed_and_what_changed_since_is_named() {
     let dir = directory.path();
     footage(dir);
     std::fs::create_dir(dir.join("shots")).unwrap();
-    std::fs::write(dir.join("shots/scene.txt"), "a blocking").unwrap();
-    std::fs::write(
-        dir.join("shots/open.kerfrecipe"),
-        "kerf-recipe 1\nneeds scene.txt\nrun cp ../shot.mp4 {out}\n",
-    )
-    .unwrap();
     let document = |path: &str| {
         format!(
-            "kerf 1\nproject name=\"Harness\"\nmedia m1 path=\"{path}\" rate=30 dur=00:00:04:00 video=320x180 audio=1ch@48000 recipe=\"shots/open.kerfrecipe\"\nsequence s1 rate=30 size=320x180\n"
+            "kerf 1\nproject name=\"Harness\"\nmedia m0 path=\"shot.mp4\" rate=30 dur=00:00:04:00 video=320x180 audio=1ch@48000\nmedia m1 path=\"{path}\" rate=30 dur=00:00:01:00 video=160x90\n  render s1 {{out}} size=160x90\nsequence s1 rate=30 size=320x180\n  track V1 video\n    clip c1 media=m0 at=00:00:00:00 dur=00:00:01:00\n"
         )
     };
     // A person makes it twice, and the media is the first take.
@@ -2681,11 +2691,11 @@ fn a_medias_takes_are_listed_and_what_changed_since_is_named() {
     let router = router_on(dir, Some(&kerfd));
     assert!(ok(&router, "look", json!({})).get("toMake").is_none());
     let looked = ok(&router, "look", json!({"media": "m1"}));
-    assert_eq!(looked["recipe"], json!("shots/open.kerfrecipe"));
+    assert!(looked.get("recipe").is_none(), "{looked}");
     // The take the media is not has the line that has the media be it, whole: its path alone
     // is not a line, since a take need not be as long as the one before it.
     let line = format!(
-        "media replace m1 path={:?} rate=30 dur=120f video=320x180 audio=2ch@48000 recipe=\"shots/open.kerfrecipe\"",
+        "media replace m1 path={:?} rate=30 dur=30f video=160x90",
         second.stored
     );
     assert_eq!(
@@ -2719,33 +2729,23 @@ fn a_medias_takes_are_listed_and_what_changed_since_is_named() {
         json!({"script": format!("media replace m1 path={:?}", second.stored)}),
     );
     assert!(message(&short).contains("missing `rate=`"), "{short}");
-    // What the recipe reads changes: the media wants making, and says for what.
-    std::fs::write(dir.join("shots/scene.txt"), "another blocking").unwrap();
+    // What the steps read changes, the footage the sequence they draw plays: the media wants
+    // making, and says for what.
+    std::fs::write(dir.join("shot.mp4"), "other footage").unwrap();
     let looked = ok(&router, "look", json!({}));
     assert_eq!(
         looked["toMake"][0]["why"],
-        json!("shots/scene.txt changed after its file was made")
+        json!("sequence s1 changed after its file was made")
     );
     let looked = ok(&router, "look", json!({"media": "m1"}));
     assert_eq!(
         looked["takes"]["made"][0]["changedSince"],
-        json!(["shots/scene.txt"])
-    );
-    // A recipe that cannot run says why, since an agent may have written it.
-    std::fs::write(
-        dir.join("shots/open.kerfrecipe"),
-        "kerf-recipe 1\nrun cp ../shot.mp4\n",
-    )
-    .unwrap();
-    let why = ok(&router, "look", json!({}))["toMake"][0]["why"].to_string();
-    assert!(
-        why.contains("its recipe cannot run") && why.contains("names no `{out}`"),
-        "{why}"
+        json!(["sequence s1"])
     );
 }
 
-/// A recipe that reads, and that a person could still not run: an agent is told what would refuse
-/// it when it looks, and when it proposes the media, not after someone has tried to make it.
+/// Steps that read, and that a person could still not run: an agent is told what would refuse
+/// them when it looks, and when it proposes the media, not after someone has tried to make it.
 #[cfg(unix)]
 #[test]
 fn what_would_refuse_a_making_is_said_before_anyone_is_asked_to_make_it() {
@@ -2757,29 +2757,19 @@ fn what_would_refuse_a_making_is_said_before_anyone_is_asked_to_make_it() {
     let Some((directory, router)) = router() else {
         return;
     };
-    let dir = directory.path();
-    std::fs::create_dir(dir.join("shots")).unwrap();
-    let recipe = |steps: &str| {
-        std::fs::write(
-            dir.join("shots/open.kerfrecipe"),
-            format!("kerf-recipe 1\n{steps}\n"),
-        )
-        .unwrap();
-    };
-    // Proposed with a recipe that draws a guide and names it without its braces: the edit is
-    // staged, and says what a making of it would be refused for.
-    recipe("render s1 {guide.mp4}\nrun cp guide.mp4 {out}\nneeds guide.mp4");
+    // Proposed with steps that draw a sequence the project has not: the edit is staged, and
+    // says what a making of it would be refused for.
     let staged = ok(
         &router,
         "edit",
-        json!({"script": "media add m9 path=\"shots/open.mp4\" rate=30 dur=4s video=320x180 recipe=\"shots/open.kerfrecipe\""}),
+        json!({"script": "media add m9 path=\"shots/open.mp4\" rate=30 dur=4s video=320x180\nstep m9 add render s7 {out}"}),
     );
     let to_make = &staged["toMake"][0];
     assert_eq!(to_make["media"], "m9", "{staged}");
     assert_eq!(to_make["why"], "its file is not there yet");
     assert_eq!(
         to_make["cannot"],
-        "the recipe needs `shots/guide.mp4`, which is not there: `guide.mp4` is a file a step makes, which a later step names in braces, `{guide.mp4}`"
+        "the steps render sequence `s7`, which this project has not"
     );
     assert!(
         to_make["make"]
@@ -2797,38 +2787,41 @@ fn what_would_refuse_a_making_is_said_before_anyone_is_asked_to_make_it() {
             revision,
         )
         .unwrap();
+    let step = |line: &str| {
+        let staged = ok(&router, "edit", json!({"script": format!("step m9 set 1 {line}")}));
+        let revision = router.runtime().get_state().unwrap().revision;
+        router
+            .runtime()
+            .accept_proposal(staged["proposal"].as_str().unwrap(), "ui", line, revision)
+            .unwrap();
+    };
 
-    // The same when it looks. A sequence the project has not:
-    recipe("render s7 {out}");
-    let looked = ok(&router, "look", json!({}));
-    assert_eq!(
-        looked["toMake"][0]["cannot"],
-        "the recipe renders sequence `s7`, which this project has not"
-    );
-    // A model that is not set up, without where the person keeps their models.
-    recipe("generate model=dawn prompt=\"a boat\"");
+    // The same when it looks. A model that is not set up, without where the person keeps
+    // their models:
+    step("generate model=dawn prompt=\"a boat\"");
     let looked = ok(&router, "look", json!({}));
     assert_eq!(
         looked["toMake"][0]["cannot"],
         "no model `dawn` is set up: none is; a person sets one up in their own models file"
     );
     // Mended, it can be made, and a person is asked to.
-    recipe("render s1 {out}");
+    step("render s1 {out}");
     let looked = ok(&router, "look", json!({}));
     let to_make = &looked["toMake"][0];
     assert!(to_make.get("cannot").is_none(), "{to_make}");
     assert!(
         to_make["make"]
             .as_str()
-            .is_some_and(|make| make.contains("a person runs `kerf make m9`")),
+            .is_some_and(|make| make.contains("they are asked and run `kerf make m9`")),
         "{to_make}"
     );
     // A media that is not made yet says so, not what the file system said.
     let unmade = ok(&router, "look", json!({"media": "m9"}));
     assert_eq!(
         unmade["analysis"],
-        "unavailable: `shots/open.mp4` is not made yet; a person makes it from its recipe with `kerf make m9`"
+        "unavailable: `shots/open.mp4` is not made yet; `make` makes it from its steps (`kerf make m9` where the person is asked)"
     );
+    drop(directory);
 }
 
 /// A fresh folder: footage beside the document, and nothing in it yet.
@@ -3696,139 +3689,6 @@ fn look_finds_what_is_in_properties_and_parameters() {
     assert!(near.contains("`solid`"), "{near}");
 }
 
-/// A recipe an agent writes is part of its proposal: shown in it, kept beside the one before
-/// it when it is written again, never over it, and taken back by undo.
-#[test]
-fn a_recipe_an_edit_writes_is_kept_beside_the_one_before_and_undo_goes_back() {
-    let Some((directory, router)) = router() else {
-        return;
-    };
-    let dir = directory.path();
-    let first = "kerf-recipe 1\nrender s1 {out}\n";
-    let staged = ok(
-        &router,
-        "edit",
-        json!({
-            "script": "media add m9 path=\"shots/open.mp4\" rate=30 dur=4s video=320x180 recipe=\"shots/open.kerfrecipe\"",
-            "recipes": {"shots/open.kerfrecipe": first},
-        }),
-    );
-    assert_eq!(staged["status"], "awaiting_review", "{staged}");
-    assert_eq!(
-        staged["recipes"][0],
-        json!({"recipe": "shots/open.kerfrecipe", "keptAs": "shots/open.kerfrecipe", "written": true})
-    );
-    assert_eq!(
-        std::fs::read_to_string(dir.join("shots/open.kerfrecipe")).unwrap(),
-        first
-    );
-    // The person reads the recipe in the proposal before saying yes.
-    let state = router.runtime().get_state().unwrap();
-    let source = &state.proposals[0].source;
-    assert!(
-        source.contains(
-            "# writes the recipe shots/open.kerfrecipe:\n#   kerf-recipe 1\n#   render s1 {out}\n"
-        ),
-        "{source}"
-    );
-    let accept = |proposal: &Value, key: &str| {
-        let revision = router.runtime().get_state().unwrap().revision;
-        router
-            .runtime()
-            .accept_proposal(proposal.as_str().unwrap(), "ui", key, revision)
-            .unwrap()
-    };
-    accept(&staged["proposal"], "accept-first");
-
-    // Written again with another text, alone: the first stays as it is, the second is kept
-    // beside it, and the media moves to it in the proposal.
-    let second = "kerf-recipe 1\nrender s1 {out} size=160x90\n";
-    let staged = ok(
-        &router,
-        "edit",
-        json!({"recipes": {"shots/open.kerfrecipe": second}}),
-    );
-    assert_eq!(
-        staged["recipes"][0]["keptAs"], "shots/open@2.kerfrecipe",
-        "{staged}"
-    );
-    assert!(staged["recipes"][0]["diff"]
-        .as_str()
-        .is_some_and(|diff| diff.contains("+render s1 {out} size=160x90")));
-    assert!(
-        staged["script"].as_str().is_some_and(|script| script
-            .contains("media replace m9 path=\"shots/open.mp4\"")
-            && script.contains("recipe=\"shots/open@2.kerfrecipe\"")),
-        "{staged}"
-    );
-    assert_eq!(
-        std::fs::read_to_string(dir.join("shots/open.kerfrecipe")).unwrap(),
-        first
-    );
-    assert_eq!(
-        std::fs::read_to_string(dir.join("shots/open@2.kerfrecipe")).unwrap(),
-        second
-    );
-    let state = accept(&staged["proposal"], "accept-second");
-    assert!(
-        state
-            .document
-            .contains("recipe=\"shots/open@2.kerfrecipe\""),
-        "{}",
-        state.document
-    );
-    // Undo has the media be made from the first again.
-    let state = router
-        .runtime()
-        .undo_request("ui", "undo-second", state.revision)
-        .unwrap();
-    assert!(
-        state.document.contains("recipe=\"shots/open.kerfrecipe\""),
-        "{}",
-        state.document
-    );
-    // The second text again is the version that holds it, written once.
-    let again = ok(
-        &router,
-        "edit",
-        json!({"recipes": {"shots/open.kerfrecipe": second}}),
-    );
-    assert_eq!(
-        again["recipes"][0],
-        json!({"recipe": "shots/open.kerfrecipe", "keptAs": "shots/open@2.kerfrecipe", "written": false, "diff": kerf_lang::diff_text(first, second)})
-    );
-
-    // A text that is no recipe, and a file that is no recipe's, are refused with why.
-    let wrong = error(
-        &router,
-        "edit",
-        json!({"revise": again["proposal"], "recipes": {"shots/open.kerfrecipe": "kerf-recipe 1\nrender {out}\n"}}),
-    );
-    assert_eq!(wrong["code"], "INVALID_RECIPE", "{wrong}");
-    assert!(
-        wrong["message"]
-            .as_str()
-            .unwrap()
-            .starts_with("shots/open.kerfrecipe: "),
-        "{wrong}"
-    );
-    let outside = error(
-        &router,
-        "edit",
-        json!({"revise": again["proposal"], "recipes": {"../open.kerfrecipe": first}}),
-    );
-    assert_eq!(outside["code"], "INVALID_RECIPE", "{outside}");
-    let named = error(
-        &router,
-        "edit",
-        json!({"revise": again["proposal"], "recipes": {"shots/open.json": first}}),
-    );
-    assert!(
-        named["message"].as_str().unwrap().contains("`.kerfrecipe`"),
-        "{named}"
-    );
-}
-
 /// What the person lets an agent do on its own: accept its edits, and run what it asks to have
 /// made, up to a limit; else it is asked for, in the review, and listed for a terminal.
 #[test]
@@ -3851,8 +3711,7 @@ fn a_making_is_asked_for_or_runs_as_the_persons_permissions_say() {
         &router,
         "edit",
         json!({
-            "script": "media add m9 path=\"shots/open.mp4\" rate=30 dur=4s video=320x180 recipe=\"shots/open.kerfrecipe\"",
-            "recipes": {"shots/open.kerfrecipe": "kerf-recipe 1\nrender s1 {out} size=160x90\n"},
+            "script": "media add m9 path=\"shots/open.mp4\" rate=30 dur=4s video=320x180\nstep m9 add render s1 {out} size=160x90",
         }),
     );
     assert_eq!(edited["status"], "accepted", "{edited}");
@@ -3928,12 +3787,13 @@ fn a_making_is_asked_for_or_runs_as_the_persons_permissions_say() {
         .as_str()
         .is_some_and(|why| why.contains("the 1 its person lets")));
 
-    // A making that is stopped leaves no take, and the media as it was.
+    // A making that is stopped leaves no take, and the media as it was. This one draws ten
+    // minutes of a large picture, which it is stopped long before it is through.
     given(Mode::Auto, 5);
     ok(
         &router,
         "edit",
-        json!({"recipes": {"shots/open.kerfrecipe": "kerf-recipe 1\nrun sleep 30\nrender s1 {out}\n"}}),
+        json!({"script": "sequence add s9 rate=30 size=1920x1080\nuse s9\ntrack add V1 video\ninsert gen=solid@1 at=0f dur=600s on=V1\nstep m9 set 1 render s9 {out} size=1920x1080"}),
     );
     let making = ok(&router, "make", json!({"media": "m9"}));
     assert_eq!(making["status"], "making", "{making}");
@@ -3969,23 +3829,24 @@ fn a_making_is_asked_for_or_runs_as_the_persons_permissions_say() {
     );
     assert_eq!(router.running_makings(), 0);
 
-    // Another take, of another version of the recipe: the take before is chosen again with the
-    // version it was made from, so that it is not asked for again.
+    // Another take, of other steps: the take before is chosen again by its line, which leaves
+    // the steps as they are, so that it wants making; going back to its steps, it does not.
     ok(
         &router,
         "edit",
-        json!({"recipes": {"shots/open.kerfrecipe": "kerf-recipe 1\nrender s1 {out} size=96x54\n"}}),
+        json!({"script": "step m9 set 1 render s1 {out} size=96x54"}),
     );
     let made = ok(&router, "make", json!({"media": "m9", "wait": true}));
     assert_eq!(made["path"], "shots/open.takes/002.mp4", "{made}");
     let looked = ok(&router, "look", json!({"media": "m9"}));
     let first = &looked["takes"]["made"][0];
     assert!(
-        first["use"]
-            .as_str()
-            .is_some_and(|line| line.ends_with("recipe=\"shots/open.kerfrecipe\"")),
+        first["use"].as_str().is_some_and(|line| line
+            .starts_with("media replace m9 path=\"shots/open.takes/001.mp4\"")
+            && !line.contains("recipe=")),
         "{looked}"
     );
+    assert_eq!(first["steps"], json!(["render s1 {out} size=160x90"]), "{looked}");
     let revision = router.runtime().get_state().unwrap().revision;
     let state = router
         .runtime()
@@ -3999,10 +3860,18 @@ fn a_making_is_asked_for_or_runs_as_the_persons_permissions_say() {
         .unwrap();
     assert!(
         state.document.contains("path=\"shots/open.takes/001.mp4\"")
-            && state.document.contains("recipe=\"shots/open.kerfrecipe\""),
+            && state.document.contains("  render s1 {out} size=96x54\n"),
         "{}",
         state.document
     );
+    let looked = ok(&router, "look", json!({}));
+    assert_eq!(
+        looked["toMake"][0]["why"],
+        "its steps changed after its file was made",
+        "{looked}"
+    );
+    let back = ok(&router, "edit", json!({"restoreTake": {"media": "m9", "take": 1}}));
+    assert_eq!(back["status"], "accepted", "{back}");
     assert!(ok(&router, "look", json!({})).get("toMake").is_none());
 
     let unknown = error(&router, "make", json!({"job": "make-none"}));
@@ -4024,13 +3893,12 @@ fn an_agent_adds_to_the_cast_and_asks_for_several_takes() {
         }))
     };
     given(Mode::AcceptEdits, 0);
-    // Who a recipe of the edit shows that the project has not said is added with it.
+    // Who a step of the edit shows that the project has not said is added with it.
     let edited = ok(
         &router,
         "edit",
         json!({
-            "script": "media add m9 path=\"shots/open.mp4\" rate=30 dur=4s video=320x180 recipe=\"shots/open.kerfrecipe\"",
-            "recipes": {"shots/open.kerfrecipe": "kerf-recipe 1\nrender s1 {out} size=160x90\n"},
+            "script": "media add m9 path=\"shots/open.mp4\" rate=30 dur=4s video=320x180\nstep m9 add render s1 {out} size=160x90",
             "cast": ["cast Ada \"an old keeper\"", "style film \"35mm\""],
         }),
     );

@@ -83,7 +83,7 @@ pub fn read(
     line: usize,
     models: &Models,
 ) -> Result<Read, String> {
-    let (_, recipe) = crate::graph::recipe(project, directory, id)?;
+    let recipe = crate::graph::written(project, id)?;
     read_of(project, directory, id, line, models, recipe)
 }
 
@@ -106,7 +106,7 @@ pub fn read_of(
             Step::Generate(ask) if at == line => Some(*ask),
             _ => None,
         })
-        .ok_or_else(|| format!("line {line} of the recipe asks no model"))?;
+        .ok_or_else(|| format!("step {} asks no model", line.saturating_sub(1)))?;
     let command = models.command(&ask.model).map_err(wrong)?;
     let named = runs(command).ok_or_else(|| {
         format!(
@@ -497,15 +497,9 @@ pub fn copied(
         .media(id)
         .ok_or_else(|| format!("no media `{id}` in this project"))?;
     let wrong = |error: kerf_engine::EngineError| error.to_string();
-    let home = kerf_engine::recipe::Home::of(media)
-        .ok_or_else(|| format!("media `{id}` has no steps that make it"))?;
-    let shot = home.shot(id);
-    // Beside the shot: in its recipe's folder, or the one its takes' folder is in, by a
-    // name no file there has.
-    let folder = kerf_engine::recipe::shot_folder(directory, media)
-        .map_err(wrong)?
-        .unwrap_or_default();
-    let name = copy_name(&directory.join(&folder), &shot, &read.ask.model, taken);
+    // Beside the shot: in the folder its takes' folder is in, by a name no file there has.
+    let folder = kerf_engine::recipe::shot_folder(directory, media).map_err(wrong)?;
+    let name = copy_name(&directory.join(&folder), id, &read.ask.model, taken);
     let stored = folder
         .join(&name)
         .components()
@@ -513,12 +507,8 @@ pub fn copied(
         .collect::<Vec<_>>()
         .join("/");
     let file = directory.join(&stored);
-    // The line names it as its steps name files: from a recipe's own folder, which is
-    // this one, or for steps the document holds from the project's.
-    let named = match home {
-        kerf_engine::recipe::Home::File(_) => name.as_str(),
-        kerf_engine::recipe::Home::Document => stored.as_str(),
-    };
+    // The step names it as it names any file: from the project's folder.
+    let named = stored.as_str();
     let recipe = text::changed(
         &read.recipe,
         line,
@@ -537,9 +527,9 @@ pub fn copied(
     })
 }
 
-/// What a person's change to a workflow left to do: nothing, for steps a recipe's file
-/// holds or a copy the shot has already; and for steps the document holds, whose step
-/// has yet to name a copy just made, the lines of the edit that has it name it.
+/// What a person's change to a workflow left to do: nothing, for a copy the shot has
+/// already; and for a copy just made, which its step has yet to name, the lines of the
+/// edit that has it name it.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Named {
     /// Lines for kerfd to apply, as an edit of the person's own.
@@ -582,20 +572,11 @@ pub fn set(
         let _ = std::fs::remove_file(&copy.file);
         why
     };
-    let in_document = project
-        .media(id)
-        .and_then(kerf_engine::recipe::Home::of)
-        .is_some_and(|home| home == kerf_engine::recipe::Home::Document);
-    if in_document {
-        let script = crate::graph::step_lines(id, &read.recipe, &copy.recipe).map_err(unnamed)?;
-        return Ok(Named {
-            script,
-            copy: Some(copy.file),
-        });
-    }
-    text::write(project, directory, id, &read.recipe, &copy.recipe)
-        .map_err(|error| unnamed(error.to_string()))?;
-    Ok(Named::default())
+    let script = crate::graph::step_lines(id, &read.recipe, &copy.recipe).map_err(unnamed)?;
+    Ok(Named {
+        script,
+        copy: Some(copy.file),
+    })
 }
 
 #[cfg(test)]
@@ -603,11 +584,19 @@ mod tests {
     use super::*;
     use std::fs;
 
-    const RECIPE: &str = "kerf-recipe 1\n# The court, as depth.\nrender s1 {depth.mp4} pass=depth\ngenerate model=video prompt=\"a ball bounces\" guide={depth.mp4} seed=7 steps=24\n";
+    /// The steps that make the shot, as the document writes them under its line.
+    const STEPS: &str = "  render s1 {depth.mp4} pass=depth\n  generate model=video prompt=\"a ball bounces\" guide={depth.mp4} seed=7 steps=24\n";
+
+    /// The court, its shot made by `steps`.
+    fn court_of(steps: &str) -> Project {
+        kerf_runtime::parse_document(&format!(
+            "kerf 1\nproject name=\"Court\"\nmedia m1 path=\"shots/bounce.mp4\" rate=16 dur=4s video=832x480\n{steps}sequence s1 rate=24 size=320x180\n",
+        ))
+        .unwrap()
+    }
 
     fn court(directory: &Path) -> (Project, Models) {
         fs::create_dir_all(directory.join("shots")).unwrap();
-        fs::write(directory.join("shots/bounce.kerfrecipe"), RECIPE).unwrap();
         let models = directory.join("models.json");
         fs::write(
             &models,
@@ -615,11 +604,7 @@ mod tests {
                 "other": {"run": ["dawn-adapter", "--workflow", "shot", "{request}"]}}"#,
         )
         .unwrap();
-        let project = kerf_runtime::parse_document(
-            "kerf 1\nproject name=\"Court\"\nmedia m1 path=\"shots/bounce.mp4\" rate=16 dur=4s video=832x480 recipe=\"shots/bounce.kerfrecipe\"\nsequence s1 rate=24 size=320x180\n",
-        )
-        .unwrap();
-        (project, Models::read(&models).unwrap())
+        (court_of(STEPS), Models::read(&models).unwrap())
     }
 
     #[test]
@@ -638,7 +623,7 @@ mod tests {
         let folder = tempfile::tempdir().unwrap();
         let dir = folder.path();
         let (project, models) = court(dir);
-        let shown = super::shown("m1", 4, &read(&project, dir, "m1", 4, &models).unwrap()).unwrap();
+        let shown = super::shown("m1", 3, &read(&project, dir, "m1", 3, &models).unwrap()).unwrap();
         assert_eq!((shown["name"].as_str(), shown["origin"].as_str()), (Some("shot"), Some("bundled")));
         assert_eq!(shown["file"], Value::Null);
         assert_eq!(shown["model"], "video");
@@ -661,31 +646,37 @@ mod tests {
             .expect("a loader");
         assert_eq!(was, "default");
 
-        // Set, the workflow is copied into the project beside the recipe, with that value
-        // alone changed, and the line is told to run it.
-        let change = |was: &str, input: &str, value: Value| {
-            set(&project, dir, "m1", 4, was, Set::value(&node, input, &value), &models)
+        // Set, the workflow is copied into the shot's folder, named by the media, with that
+        // value alone changed, and the step is told to run it by the lines of an edit.
+        let change = |project: &Project, was: &str, input: &str, value: Value| {
+            set(project, dir, "m1", 3, was, Set::value(&node, input, &value), &models)
         };
         let bundled = shown["text"].as_str().unwrap().to_owned();
-        change(&bundled, &input, json!("fp8_e4m3fn")).unwrap();
-        let copy = dir.join("shots/bounce.video.comfy.json");
+        let named = change(&project, &bundled, &input, json!("fp8_e4m3fn")).unwrap();
+        let copy = dir.join("shots/m1.video.comfy.json");
+        assert_eq!(
+            named,
+            Named {
+                script: vec!["step m1 set 2 generate model=video prompt=\"a ball bounces\" guide={depth.mp4} seed=7 workflow=shots/m1.video.comfy.json steps=24".to_owned()],
+                copy: Some(copy.clone()),
+            }
+        );
         let own = fs::read_to_string(&copy).unwrap();
         assert_eq!(own, bundled.replacen("\"weight_dtype\": \"default\"", "\"weight_dtype\": \"fp8_e4m3fn\"", 1));
-        let recipe = fs::read_to_string(dir.join("shots/bounce.kerfrecipe")).unwrap();
-        assert_eq!(recipe, RECIPE.replace("steps=24\n", "steps=24 workflow=bounce.video.comfy.json\n"));
-        // It is now the shot's own, and the next change is to that file.
-        let read_again = read(&project, dir, "m1", 4, &models).unwrap();
-        let shown = super::shown("m1", 4, &read_again).unwrap();
-        assert_eq!((shown["origin"].as_str(), shown["file"].as_str()), (Some("own"), Some("shots/bounce.video.comfy.json")));
-        change(&own, &input, json!("fp16")).unwrap();
+        // Once the edit is applied it is the shot's own, and the next change is to that file.
+        let project = court_of(&STEPS.replace("steps=24\n", "steps=24 workflow=shots/m1.video.comfy.json\n"));
+        let read_again = read(&project, dir, "m1", 3, &models).unwrap();
+        let shown = super::shown("m1", 3, &read_again).unwrap();
+        assert_eq!((shown["origin"].as_str(), shown["file"].as_str()), (Some("own"), Some("shots/m1.video.comfy.json")));
+        assert_eq!(change(&project, &own, &input, json!("fp16")).unwrap(), Named::default());
         assert!(fs::read_to_string(&copy).unwrap().contains("\"weight_dtype\": \"fp16\""));
-        assert_eq!(fs::read_dir(dir.join("shots")).unwrap().count(), 2, "no second copy, and nothing left beside it");
+        assert_eq!(fs::read_dir(dir.join("shots")).unwrap().count(), 1, "no second copy, and nothing left beside it");
         // The editor's copy is old: refused, and the file kept.
-        let stale = change(&own, &input, json!("default")).unwrap_err();
+        let stale = change(&project, &own, &input, json!("default")).unwrap_err();
         assert!(stale.contains("changed by another program"), "{stale}");
         // A blank is the recipe's, and is refused here with where it is set.
         let now = fs::read_to_string(&copy).unwrap();
-        let refused = change(&now, "unet_name", json!("other")).unwrap_err();
+        let refused = change(&project, &now, "unet_name", json!("other")).unwrap_err();
         assert!(refused.contains("which the recipe fills"), "{refused}");
         assert_eq!(fs::read_to_string(&copy).unwrap(), now);
     }
@@ -709,7 +700,7 @@ mod tests {
         assert_eq!(model(&shown)["workflow"], Value::Null);
         // A model another program runs, or none, has none, and its node says nothing of one.
         for other in ["other", "none"] {
-            fs::write(dir.join("shots/bounce.kerfrecipe"), RECIPE.replace("model=video", &format!("model={other}"))).unwrap();
+            let project = court_of(&STEPS.replace("model=video", &format!("model={other}")));
             let shown = crate::graph::shown(&project, dir, "m1", &models).unwrap();
             assert!(model(&shown).get("runner").is_none(), "{other}");
         }
@@ -720,8 +711,8 @@ mod tests {
         let folder = tempfile::tempdir().unwrap();
         let dir = folder.path();
         let (project, models) = court(dir);
-        let read = read(&project, dir, "m1", 4, &models).unwrap();
-        let mut described = shown("m1", 4, &read).unwrap();
+        let read = read(&project, dir, "m1", 3, &models).unwrap();
+        let mut described = shown("m1", 3, &read).unwrap();
         let taken = json!({
             "UNETLoader": {"weight_dtype": {"choices": ["default", "fp8_e4m3fn"]}},
             "KSampler": {"denoise": {"min": 0.0, "max": 1.0, "step": 0.01}},
@@ -789,16 +780,16 @@ mod tests {
         let folder = tempfile::tempdir().unwrap();
         let dir = folder.path();
         let (project, models) = court(dir);
-        let none = |line: usize| read(&project, dir, "m1", line, &models).err().unwrap();
-        assert!(none(3).contains("line 3 of the recipe asks no model"));
-        fs::write(dir.join("shots/bounce.kerfrecipe"), RECIPE.replace("model=video", "model=other")).unwrap();
-        assert!(none(4).contains("model `other` is not run by kerf-comfy"));
-        fs::write(dir.join("shots/bounce.kerfrecipe"), RECIPE.replace("model=video", "model=none")).unwrap();
-        assert!(none(4).contains("no model `none` is set up"));
-        // An agent's change is a new copy and the recipe that names it, with nothing written.
-        fs::write(dir.join("shots/bounce.kerfrecipe"), RECIPE).unwrap();
-        let read = read(&project, dir, "m1", 4, &models).unwrap();
-        let described = shown("m1", 4, &read).unwrap();
+        let none = |project: &Project, line: usize| read(project, dir, "m1", line, &models).err().unwrap();
+        let first = none(&project, 2);
+        assert!(first.contains("step 1 asks no model"), "{first}");
+        let other = court_of(&STEPS.replace("model=video", "model=other"));
+        assert!(none(&other, 3).contains("model `other` is not run by kerf-comfy"));
+        let unset = court_of(&STEPS.replace("model=video", "model=none"));
+        assert!(none(&unset, 3).contains("no model `none` is set up"));
+        // An agent's change is a new copy and the steps that name it, with nothing written.
+        let read = read(&project, dir, "m1", 3, &models).unwrap();
+        let described = shown("m1", 3, &read).unwrap();
         let loader = described["nodes"]
             .as_array()
             .unwrap()
@@ -809,13 +800,13 @@ mod tests {
         let value = json!("fp16");
         let now = with(&read, &[Set::value(loader, "weight_dtype", &value)]).unwrap();
         assert!(now.contains("\"weight_dtype\": \"fp16\""));
-        let copy = copied(&project, dir, "m1", 4, &read, &now, &[dir.join("shots/bounce.video.comfy.json")]).unwrap();
-        assert_eq!(copy.stored, "shots/bounce.video-2.comfy.json");
-        assert!(copy.recipe.ends_with("steps=24 workflow=bounce.video-2.comfy.json\n"), "{}", copy.recipe);
+        let copy = copied(&project, dir, "m1", 3, &read, &now, &[dir.join("shots/m1.video.comfy.json")]).unwrap();
+        assert_eq!(copy.stored, "shots/m1.video-2.comfy.json");
+        assert_eq!(copy.file, dir.join("shots/m1.video-2.comfy.json"));
+        assert!(copy.recipe.ends_with("seed=7 workflow=shots/m1.video-2.comfy.json steps=24\n"), "{}", copy.recipe);
         assert!(!copy.file.exists());
-        assert_eq!(fs::read_to_string(dir.join("shots/bounce.kerfrecipe")).unwrap(), RECIPE);
+        assert_eq!(fs::read_dir(dir.join("shots")).unwrap().count(), 0);
         // A copy that is already there under the name is not written over: the next name is taken.
-        fs::write(dir.join("shots/bounce.kerfrecipe"), RECIPE).unwrap();
         fs::write(dir.join("shots/bounce.video.comfy.json"), "someone's").unwrap();
         assert_eq!(copy_name(&dir.join("shots"), "bounce", "video", &[]), "bounce.video-2.comfy.json");
         assert_eq!(copy_name(&dir.join("shots"), "bounce", "wan 2.1/vace", &[]), "bounce.wan-2-1-vace.comfy.json");

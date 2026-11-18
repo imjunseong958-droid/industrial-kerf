@@ -348,7 +348,7 @@ pub(super) fn metadata(name: &str) -> Option<(&'static str, Value, ToolAnnotatio
              document diff, check findings, and a before/after preview of the frames \
              around each cut it changed. The project is unchanged until the user accepts it, \
              unless their own permissions accept an agent's edits (`status: accepted`). `extend` builds \
-             on a pending proposal; `revise` replaces it. The steps that make a media are lines of the script (`step <media> add …`); `workflowSet` sets values of the workflow a model is run with, and `restoreTake` goes back to the steps a take was made from. `recipes` and `recipeSet` are for a media that still names a recipe file. `savePreset` saves a portable \
+             on a pending proposal; `revise` replaces it. The steps that make a media are lines of the script (`step <media> add …`); `workflowSet` sets values of the workflow a model is run with, `restoreTake` goes back to the steps a take was made from, and `carry` writes the steps of a media that still names a recipe file under it. `savePreset` saves a portable \
              .kerfpreset file without changing the project. `preset` with `bindings` \
              applies one as a proposal replacing the chosen sequence.",
             json!({
@@ -368,14 +368,12 @@ pub(super) fn metadata(name: &str) -> Option<(&'static str, Value, ToolAnnotatio
                     "scopes": {"type": "array", "items": {"type": "string"}, "maxItems": MAX_LOOK_FRAMES, "description": "Sequence positions to read scopes at once the edit is made, as `look` with `scopes` reads them: the answer's `scopes` has a reading for each, with `before`, what was read there before the edit. A grade and its numbers in one call."},
                     "extend": {"type": "string", "description": "The id of a pending proposal to build on, its newest version's: the script runs on what it makes, the two become one proposal, and the preview shows what this script changed."},
                     "revise": {"type": "string", "description": "The id of a pending proposal this one replaces; the script runs on the project."},
-                    "recipes": {"type": "object", "additionalProperties": {"type": "string"}, "description": "Only for a media that names a recipe file (`recipe=`), as projects made before steps were the document's do: write a new making as `step` lines in the script instead, with no file. Recipe files to write, by the path a media line's `recipe=` names, each with its whole text. A file that is there and holds another text is not written over: the text is kept beside it as its next version (`shots/open@2.kerfrecipe`), and the media that name it move to it in this proposal, so that undo goes back. Alone, or with a script that adds the media line."},
-                    "recipeSet": {"type": "array", "minItems": 1, "items": {"type": "object", "properties": {"media": {"type": "string"}, "line": {"type": "integer", "minimum": 1}, "key": {"type": "string"}, "nth": {"type": "integer", "minimum": 0}, "value": {"type": "string"}, "add": {"type": "string"}, "remove": {"type": "boolean"}}, "required": ["media"], "additionalProperties": false}, "description": "For a media that names a recipe file (`recipe=`); steps the document holds are set in the script, `step <media> set <n> <name>=<value>`. Words of a media's recipe to set, each the name `key` on line `line` (as `look` `graph` numbers them) to `value`, as it is written after the `=` with no quotes around it: `{media: \"m3\", line: 4, key: \"seed\", value: \"8\"}`. That word alone changes; the recipe's comments, its order and its other lines stay, which writing the whole text with `recipes` does not promise. A name the line does not have is added at its end, so an input is wired in the same way (`key: \"signal\", value: \"bounce\"`, or `key: \"ref\", value: \"{ball.png}\"` for a file a step makes); `nth` picks among several words of one name, from 0; with no `value` the word is taken off the line. What a line cannot take is refused as a making would refuse it. A step is added the same way, `{media, line, add: \"render court {guide2.mp4} pass=depth\"}`, a line of its own after line `line` (0 for the first step), and taken out with `{media, line, remove: true}`, as a person adds one and deletes one in the graph: each is refused where what it leaves does not read as a recipe, a step put after the one that writes the shot's file, or one taken out that a later step reads. Later entries count lines as the earlier ones left them. The result is kept as the recipe's next version, as with `recipes`, and the answer's `recipes` has its `diff`."},
-                    "restoreTake": {"type": "object", "properties": {"media": {"type": "string"}, "take": {"type": "integer", "minimum": 1}}, "required": ["media", "take"], "additionalProperties": false, "description": "Go back to the steps a take was made from: `media`, and the `take`'s number as `look` with `graph` or `media` lists it, where it says `kept`. The steps are written as that making read them, each seed as that take had it, so a making of them is that take's again where the model gives the same file for the same seed; a workflow file they named comes back with them where the project no longer has it as it was. Steps the document holds are written back by `step` lines of this edit, which the proposal shows; a recipe's file is kept as its next version, or is the version that holds that text already, and the media moves to it. What else the take was made from, its sequences and signals, is the project's and is not changed. Used alone: change the steps in an edit after it."},
-                    "workflowSet": {"type": "array", "minItems": 1, "items": {"type": "object", "properties": {"media": {"type": "string"}, "line": {"type": "integer", "minimum": 1}, "node": {"type": "string"}, "input": {"type": "string"}, "value": {}, "link": {"type": "array", "prefixItems": [{"type": "string"}, {"type": "integer", "minimum": 0}], "minItems": 2, "maxItems": 2}}, "required": ["media", "line", "node", "input"], "additionalProperties": false}, "description": "Values to set in the workflow the model of a `generate` step is run with, each input `input` of node `node` (as `look` `workflow` lists them) to `value`, a number, a text, or true or false as it was. `line` is the step's, as `look` `graph` gives it. The workflow as it is is copied into the project beside the shot with those values changed and the rest as written, and the step names the copy with `workflow=`, by a `step` line of this edit, or for a recipe's file in its next version: the answer's `workflows` says where each is kept. An input that is a `link` is pointed at another node with `link` in place of `value`, `[<node>, <output>]`, the output counted from 0 as the node's `outputs` lists what it gives: `{media, line, node: \"12\", input: \"model\", link: [\"19\", 0]}`. It is refused where the graph would go round, and, once the server has said what each gives, where the output is not what the input takes. Only a link is linked, and an input a blank fills is not set here. Nothing on the model's server changes, and the person's models file is not touched. To go back to the workflow as it comes, take `workflow` off the step (`step <media> set <n> workflow=\"\"`)."},
-                    "carry": {"type": "array", "minItems": 1, "items": {"type": "string"}, "description": "Media that still name a recipe file (`recipe=`), to carry into the document: each recipe's `render`, `generate` and `join` lines are written as steps under its media, files named from the project's folder, and `recipe=` comes off its line. Its takes stay, and those made from the recipe as it stands are not asked for again; the answer's `carried` says how many (`takesHeld`) and what did not come with it (`notes`). The lines are first in the edit's script, so the `script` of the same edit can change the steps (`step <media> set <n> …`). A recipe with a `run` line cannot be carried, a document naming no program: it goes on being made from its file."},
+                    "restoreTake": {"type": "object", "properties": {"media": {"type": "string"}, "take": {"type": "integer", "minimum": 1}}, "required": ["media", "take"], "additionalProperties": false, "description": "Go back to the steps a take was made from: `media`, and the `take`'s number as `look` with `graph` or `media` lists it, where it says `kept`. The steps are written as that making read them, each seed as that take had it, so a making of them is that take's again where the model gives the same file for the same seed; a workflow file they named comes back with them where the project no longer has it as it was. They are written back by `step` lines of this edit, which the proposal shows. What else the take was made from, its sequences and signals, is the project's and is not changed. Used alone: change the steps in an edit after it."},
+                    "workflowSet": {"type": "array", "minItems": 1, "items": {"type": "object", "properties": {"media": {"type": "string"}, "line": {"type": "integer", "minimum": 1}, "node": {"type": "string"}, "input": {"type": "string"}, "value": {}, "link": {"type": "array", "prefixItems": [{"type": "string"}, {"type": "integer", "minimum": 0}], "minItems": 2, "maxItems": 2}}, "required": ["media", "line", "node", "input"], "additionalProperties": false}, "description": "Values to set in the workflow the model of a `generate` step is run with, each input `input` of node `node` (as `look` `workflow` lists them) to `value`, a number, a text, or true or false as it was. `line` is the step's, as `look` `graph` gives it. The workflow as it is is copied into the project beside the shot with those values changed and the rest as written, and the step names the copy with `workflow=`, by a `step` line of this edit: the answer's `workflows` says where each is kept. An input that is a `link` is pointed at another node with `link` in place of `value`, `[<node>, <output>]`, the output counted from 0 as the node's `outputs` lists what it gives: `{media, line, node: \"12\", input: \"model\", link: [\"19\", 0]}`. It is refused where the graph would go round, and, once the server has said what each gives, where the output is not what the input takes. Only a link is linked, and an input a blank fills is not set here. Nothing on the model's server changes, and the person's models file is not touched. To go back to the workflow as it comes, take `workflow` off the step (`step <media> set <n> workflow=\"\"`)."},
+                    "carry": {"type": "array", "minItems": 1, "items": {"type": "string"}, "description": "Media that still name a recipe file (`recipe=`), to carry into the document: each recipe's `render`, `generate` and `join` lines are written as steps under its media, files named from the project's folder, and `recipe=` comes off its line. Its takes stay, and those made from the recipe as it stands are not asked for again; the answer's `carried` says how many (`takesHeld`) and what did not come with it (`notes`). The lines are first in the edit's script, so the `script` of the same edit can change the steps (`step <media> set <n> …`). A recipe with a `run` line cannot be carried, a document naming no program: its program is named in the person's own models file, and a `generate` step asks it."},
                     "cast": {"type": "array", "items": {"type": "string"}, "description": "Lines to add to the project's cast file, each `cast <name> \"<who or what it is>\" [ref=<picture> …]` or `style <name> \"<how a shot looks>\"`, for who and what a step of this edit shows that `look`'s `cast` and `styles` have not. They are written at once, since adding one asks for no shot again; one the file has is the person's to change, and is refused."}
                 },
-                "anyOf": [{"required": ["script"]}, {"required": ["recipes"]}, {"required": ["recipeSet"]}, {"required": ["workflowSet"]}, {"required": ["restoreTake"]}, {"required": ["carry"]}, {"required": ["cast"]}, {"required": ["preset"]}, {"required": ["savePreset"]}],
+                "anyOf": [{"required": ["script"]}, {"required": ["workflowSet"]}, {"required": ["restoreTake"]}, {"required": ["carry"]}, {"required": ["cast"]}, {"required": ["preset"]}, {"required": ["savePreset"]}],
                 "additionalProperties": false
             }),
             ToolAnnotations {
@@ -477,29 +475,7 @@ struct StepInput {
     line: usize,
 }
 
-/// One name on one line of a media's recipe to set, or to take off; or a step to add after
-/// a line, or the step on a line to take out.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RecipeSetInput {
-    media: String,
-    #[serde(default)]
-    line: usize,
-    #[serde(default)]
-    key: String,
-    /// A step to add, its whole line, after `line` (0 for the first step).
-    add: Option<String>,
-    /// Take the step on `line` out.
-    #[serde(default)]
-    remove: bool,
-    /// Which of the words of that name on the line, from 0.
-    #[serde(default)]
-    nth: usize,
-    /// What to set it to; taken off the line where there is none.
-    value: Option<String>,
-}
-
-/// A take of a media, to go back to the recipe it was made from.
+/// A take of a media, to go back to the steps it was made from.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RestoreInput {
@@ -653,16 +629,10 @@ struct EditInput {
     texts: BTreeMap<String, String>,
     extend: Option<String>,
     revise: Option<String>,
-    /// Recipe files the edit writes, by the path a media line names, each with its text.
-    #[serde(default)]
-    recipes: BTreeMap<String, String>,
-    /// Single words of a media's recipe to set, the rest of its text kept as it is.
-    #[serde(default, rename = "recipeSet")]
-    recipe_set: Vec<RecipeSetInput>,
-    /// Values to set in the workflow a model is run with, kept in a copy of the shot's own.
+    /// Values of the workflow behind a `generate` step to set, in the shot's own copy.
     #[serde(default, rename = "workflowSet")]
     workflow_set: Vec<WorkflowSetInput>,
-    /// A take whose recipe a media goes back to.
+    /// A take whose steps a media goes back to.
     #[serde(rename = "restoreTake")]
     restore_take: Option<RestoreInput>,
     /// Media whose recipe files are carried into the document, as the steps under them.
@@ -1004,20 +974,24 @@ impl KerfMcpRouter {
             .media
             .iter()
             .filter_map(|media| {
-                let home = kerf_engine::recipe::Home::of(media)?;
+                let id = media.id.as_str();
+                // Steps still in a recipe's file are carried into the document before
+                // anything is made of them: nothing is made from a recipe.
+                if let Some(recipe) = kerf_engine::recipe::uncarried(media) {
+                    return Some(json!({
+                        "media": id,
+                        "recipe": recipe,
+                        "why": "its steps are in a recipe file, and a media is made from the steps under its line",
+                        "carry": format!(
+                            "`edit` with `carry: [\"{id}\"]` writes them under the media, in the same edit as the script lines that then change them; its takes stay"
+                        ),
+                    }));
+                }
                 let why = kerf_engine::recipe::unmade(project, &self.dir, media)?;
                 let mut entry = json!({
-                    "media": media.id.as_str(),
+                    "media": id,
                     "why": why.reason(),
                 });
-                if let kerf_engine::recipe::Home::File(recipe) = &home {
-                    entry["recipe"] = json!(recipe);
-                    entry["carry"] = json!(format!(
-                        "its steps are in that file: `edit` with `carry: [\"{}\"]` writes them under the media, where a script changes them",
-                        media.id
-                    ));
-                }
-                let id = media.id.as_str();
                 let plan = models
                     .as_ref()
                     .map_err(ToString::to_string)
@@ -1030,14 +1004,9 @@ impl KerfMcpRouter {
                         if !plan.notes.is_empty() {
                             entry["notes"] = json!(plan.notes);
                         }
-                        entry["make"] = json!(match &home {
-                            kerf_engine::recipe::Home::File(_) => format!(
-                                "{first}ask for it with `make`: a person runs `kerf make {id}`, or Make from Recipe… in the editor's bin, unless they let an agent make on its own"
-                            ),
-                            kerf_engine::recipe::Home::Document => format!(
-                                "{first}make it with `make`: it runs where the person lets an agent make on its own, and else they are asked and run `kerf make {id}`"
-                            ),
-                        });
+                        entry["make"] = json!(format!(
+                            "{first}make it with `make`: it runs where the person lets an agent make on its own, and else they are asked and run `kerf make {id}`"
+                        ));
                     }
                     Err(cannot) => {
                         entry["cannot"] = json!(cannot_said(cannot, models.as_ref().ok()));
@@ -1054,11 +1023,14 @@ impl KerfMcpRouter {
     /// `look` with `media` adds this for a media its steps make: the takes they have made,
     /// which one the media is, and what has changed since each was made.
     fn takes(&self, project: &Project, media: &kerf_model::Media) -> Option<Value> {
-        let home = kerf_engine::recipe::Home::of(media)?;
-        let in_document = home == kerf_engine::recipe::Home::Document;
+        // One whose steps are still in a recipe's file has the takes that file made.
+        let recipe = kerf_engine::recipe::uncarried(media);
+        if media.steps.is_empty() && recipe.is_none() {
+            return None;
+        }
         let takes = kerf_engine::recipe::takes(project, &self.dir, media).ok()?;
         // The steps as the document has them, to tell a take made from others.
-        let now = in_document.then(|| kerf_engine::recipe::steps_text(&media.steps));
+        let now = kerf_engine::recipe::steps_text(&media.steps);
         Some(json!({
             "made": takes
                 .iter()
@@ -1074,29 +1046,22 @@ impl KerfMcpRouter {
                     if !take.changed.is_empty() {
                         entry["changedSince"] = json!(take.changed);
                     }
-                    // The whole line, since a take need not be as long as the one before it, and
-                    // with the version of the recipe it was made from.
+                    // The whole line, since a take need not be as long as the one before it.
+                    // Which file the media is changes; its steps stay under it.
                     if !take.chosen {
                         if let Ok(fields) = self.media_fields(&take.stored) {
-                            entry["use"] = json!(match &home {
-                                kerf_engine::recipe::Home::File(recipe) => format!(
-                                    "media replace {} {fields} recipe={:?}",
-                                    media.id,
-                                    take.recipe.as_deref().unwrap_or(recipe)
-                                ),
-                                // Which file the media is changes; its steps stay under it.
-                                kerf_engine::recipe::Home::Document => {
-                                    format!("media replace {} {fields}", media.id)
-                                }
+                            entry["use"] = json!(match recipe {
+                                Some(recipe) => format!("media replace {} {fields} recipe={recipe:?}", media.id),
+                                None => format!("media replace {} {fields}", media.id),
                             });
                         }
                     }
                     // The steps a take was made from, where they are not the ones the
                     // document has now: each seed as that take had it.
-                    if let (Some(now), true) = (&now, take.kept) {
+                    if take.kept && recipe.is_none() {
                         let kept = kerf_engine::recipe::takes::kept(&self.dir, media, take.number)
                             .map(|kept| kept.recipe)
-                            .filter(|kept| kept != now)
+                            .filter(|kept| *kept != now)
                             .and_then(|kept| kerf_engine::recipe::document_steps(&kept).ok());
                         if let Some(kept) = kept {
                             entry["steps"] =
@@ -1106,17 +1071,10 @@ impl KerfMcpRouter {
                     entry
                 })
                 .collect::<Vec<_>>(),
-            "choose": if in_document {
-                format!(
-                    "a take's `use` is the line that, in an edit, has the media be that take; its `steps` are what it was made from where the document has others now, to go back to with `edit` `restoreTake` or to copy a word from; make a new one with `make` (`kerf make {}` where the person is asked)",
-                    media.id
-                )
-            } else {
-                format!(
-                    "a take's `use` is the line that, in an edit, has the media be that take, made from the recipe it was made from; ask for a new one with `make`, which a person runs with `kerf make {}` unless they let an agent make on its own",
-                    media.id
-                )
-            },
+            "choose": format!(
+                "a take's `use` is the line that, in an edit, has the media be that take; its `steps` are what it was made from where the document has others now, to go back to with `edit` `restoreTake` or to copy a word from; make a new one with `make` (`kerf make {}` where the person is asked)",
+                media.id
+            ),
         }))
     }
 
@@ -1358,35 +1316,25 @@ impl KerfMcpRouter {
         }
         // Steps the document holds are counted as the document has them: a node's `line` is
         // its step's number, and `text` the steps alone, a line each.
-        if shown["document"] == json!(true) {
-            for node in shown["nodes"].as_array_mut().into_iter().flatten() {
-                if let Some(line) = node["line"].as_u64() {
-                    node["line"] = json!(line.saturating_sub(1));
-                }
+        for node in shown["nodes"].as_array_mut().into_iter().flatten() {
+            if let Some(line) = node["line"].as_u64() {
+                node["line"] = json!(line.saturating_sub(1));
             }
-            if let Some(steps) = shown["text"].as_str().and_then(|text| text.split_once('\n')) {
-                shown["text"] = json!(steps.1);
-            }
-            if let Some(shown) = shown.as_object_mut() {
-                shown.remove("recipe");
-            }
-            shown["change"] = json!(format!(
-                "a node's `line` is its step's number, as the document has the steps under `{media}` and as `text` lists them. \
-                 Change one in an `edit` script: `step {media} set <n> <name>=<value>` sets a prompt, a seed, a knob, and an edge too, \
-                 since wiring a node in is the name its reader gives it (`signal=`, `ref=`, `guide=`, `moves=`; a name given more than \
-                 once takes every value, and `<name>=\"\"` lets it go); `step {media} add [<n>] <step>` adds one and \
-                 `step {media} remove <n>` takes one out. A signal's curve is its clip's `value`. A model with a `runner` is run \
-                 with a workflow: read it with `look` `workflow` ({{media, line}}). Make it with `make`."
-            ));
-            return Ok(shown);
+        }
+        if let Some(steps) = shown["text"].as_str().and_then(|text| text.split_once('\n')) {
+            shown["text"] = json!(steps.1);
+        }
+        if let Some(shown) = shown.as_object_mut() {
+            shown.remove("recipe");
+            shown.remove("document");
         }
         shown["change"] = json!(format!(
-            "a node's `line` is its line of `text`. Set one word of a line with `edit` `recipeSet` \
-             ({{media: \"{media}\", line, key, value}}): a prompt, a seed, a knob; an edge is a word too, \
-             so wire a node in by setting the name its reader gives it (`signal`, `ref`, `guide`, `moves`, with `nth` \
-             for the second of a name) and let one go by leaving `value` out. A signal's curve is its clip's \
-             `value`, set in an `edit` script. A model with a `runner` is run with a workflow: read it with \
-             `look` `workflow` ({{media, line}}). Make it with `make`."
+            "a node's `line` is its step's number, as the document has the steps under `{media}` and as `text` lists them. \
+             Change one in an `edit` script: `step {media} set <n> <name>=<value>` sets a prompt, a seed, a knob, and an edge too, \
+             since wiring a node in is the name its reader gives it (`signal=`, `ref=`, `guide=`, `moves=`; a name given more than \
+             once takes every value, and `<name>=\"\"` lets it go); `step {media} add [<n>] <step>` adds one and \
+             `step {media} remove <n>` takes one out. A signal's curve is its clip's `value`. A model with a `runner` is run \
+             with a workflow: read it with `look` `workflow` ({{media, line}}). Make it with `make`."
         ));
         Ok(shown)
     }
@@ -1397,12 +1345,9 @@ impl KerfMcpRouter {
         let invalid = |why: String| self.no_shot(&step.media, why);
         let models = kerf_engine::recipe::model::Models::load()
             .map_err(|error| invalid(format!("the person's models file does not read: {error}")))?;
-        // A step the document holds is named by its number, which is a line on in the
-        // text its steps are read as.
-        let in_document = in_document(project, &step.media);
-        let line = step.line + usize::from(in_document);
-        let read = kerf_shots::workflow::read(project, &self.dir, &step.media, line, &models)
-            .map_err(|why| invalid(cannot_said(as_steps(why, in_document), Some(&models))))?;
+        // A step is named by its number, which is a line on in the text of its steps.
+        let read = kerf_shots::workflow::read(project, &self.dir, &step.media, step.line + 1, &models)
+            .map_err(|why| invalid(cannot_said(why, Some(&models))))?;
         let mut shown =
             kerf_shots::workflow::shown(&step.media, step.line, &read).map_err(invalid)?;
         // What each input takes on the server the model is run on, as its program says:
@@ -1419,20 +1364,14 @@ impl KerfMcpRouter {
         if let Some(shown) = shown.as_object_mut() {
             shown.remove("text");
         }
-        shown["change"] = json!(if in_document {
+        shown["change"] = json!(
             "an input with a `link` is the graph's shape, and one with `blanks` is filled by the step \
              (`blanks` says by what, and `given` what the step gives now): set those in an `edit` script, \
              `step <media> set <n> <name>=<value>`. Any other `value` is the workflow's own: set it with `edit` \
              `workflowSet` ({media, line, node, input, value}), which keeps a copy of the workflow in the project \
              for this shot and has the step name it with `workflow=`. `step <media> set <n> workflow=\"\"` goes \
              back to the workflow as it comes."
-        } else {
-            "an input with a `link` is the graph's shape, and one with `blanks` is filled by the recipe's line \
-             (`blanks` says by what, and `given` what the line gives now): set those with `edit` `recipeSet`. \
-             Any other `value` is the workflow's own: set it with `edit` `workflowSet` ({media, line, node, input, value}), \
-             which keeps a copy of the workflow in the project for this shot and has the line name it with `workflow=`. \
-             Taking `workflow` off the line (`recipeSet` with no `value`) goes back to the workflow as it comes."
-        });
+        );
         Ok(shown)
     }
 
@@ -1440,7 +1379,7 @@ impl KerfMcpRouter {
     /// the reading the editor's graph shows beside each take (`kerf_shots::takes`).
     fn shot_takes(&self, project: &Project, media: &str) -> Result<Value, McpError> {
         let invalid = |why: String| self.no_shot(media, why);
-        let guide = kerf_shots::takes::guide(project, &self.dir, media).map_err(invalid)?;
+        let guide = kerf_shots::takes::guide(project, media).map_err(invalid)?;
         let takes = kerf_shots::takes::takes(project, &self.dir, media).map_err(invalid)?;
         let mut resolved = project.clone();
         kerf_runtime::resolve_media_paths(&mut resolved, &self.dir);
@@ -1458,38 +1397,39 @@ impl KerfMcpRouter {
         Ok(result)
     }
 
-    /// What an edit's `recipeSet`, `workflowSet` and `restoreTake` make of the steps of the
-    /// media they name, and the workflow copies those name. Steps a recipe's file holds come
-    /// to that recipe's text, by the path each media names: it is kept as its next version
-    /// once the edit's proposal is staged, never over the one before. Steps the document
-    /// holds come to lines of the edit's own script, which set them. Nothing is written
-    /// here, and a workflow is a new copy once the proposal is staged, so that undo goes
-    /// back to the ones before and no take loses the file it was made with.
+    /// What an edit's `workflowSet` and `restoreTake` make of the steps of the media they
+    /// name: lines of the edit's own script, which set them, and the workflow copies those
+    /// name. Nothing is written here, and a workflow is a new copy once the proposal is
+    /// staged, so that undo goes back to the steps before and no take loses the file it was
+    /// made with.
     fn shot_changes(&self, project: &Project, input: &EditInput) -> Result<ShotChanges, McpError> {
-        let invalid = |why: String| McpError::new("INVALID_RECIPE", why);
-        let mut texts = ShotTexts::default();
+        let invalid = |why: String| McpError::new("INVALID_STEPS", why);
+        // The steps of each media named, as text: as they were, and as this edit has them.
+        let mut texts: BTreeMap<String, (String, String)> = BTreeMap::new();
+        let read = |texts: &mut BTreeMap<String, (String, String)>, id: &str| -> Result<(), McpError> {
+            if !texts.contains_key(id) {
+                let text = kerf_shots::graph::written(project, id)
+                    .map_err(|why| invalid(format!("{why}{}", self.in_pending(id, "extend"))))?;
+                texts.insert(id.to_owned(), (text.clone(), text));
+            }
+            Ok(())
+        };
         let mut kept: Vec<WorkflowKept> = Vec::new();
         // A take gone back to: the steps it was made from, with the workflow they named.
         if let Some(restore) = &input.restore_take {
-            let restored = kerf_shots::takes::restored(project, &self.dir, &restore.media, restore.take)
-                .map_err(|why| invalid(format!("{why}{}", self.in_pending(&restore.media, "extend"))))?;
-            let written_whole = match &restored.home {
-                kerf_engine::recipe::Home::File(recipe) => input.recipes.contains_key(recipe),
-                kerf_engine::recipe::Home::Document => false,
-            };
-            if written_whole || !input.recipe_set.is_empty() || !input.workflow_set.is_empty() {
+            if !input.workflow_set.is_empty() {
                 return Err(McpError::new(
                     "INVALID_ARGUMENTS",
                     "`restoreTake` writes every step as the take had it: change them in an edit after this one",
                 ));
             }
-            let key = texts.read(project, &self.dir, &restore.media).map_err(invalid)?;
-            let in_document = matches!(key, ShotKey::Document(_));
+            let restored = kerf_shots::takes::restored(project, &self.dir, &restore.media, restore.take)
+                .map_err(|why| invalid(format!("{why}{}", self.in_pending(&restore.media, "extend"))))?;
+            read(&mut texts, &restore.media)?;
             for (file, stored, text) in restored.files {
                 kept.push(WorkflowKept {
                     media: restore.media.clone(),
-                    line: 0,
-                    in_document,
+                    step: 0,
                     of: format!("take {}", restore.take),
                     set: Vec::new(),
                     copy: kerf_shots::workflow::Copy {
@@ -1500,45 +1440,9 @@ impl KerfMcpRouter {
                     },
                 });
             }
-            texts.set(&key, restored.text);
-        }
-        // The steps of media `id`, as this edit has them so far.
-        let steps_of = |texts: &mut ShotTexts, id: &str| {
-            let key = texts
-                .read(project, &self.dir, id)
-                .map_err(|why| McpError::new("INVALID_RECIPE", format!("{why}{}", self.in_pending(id, "extend"))))?;
-            if let ShotKey::File(path) = &key {
-                if input.recipes.contains_key(path) {
-                    return Err(McpError::new(
-                        "INVALID_ARGUMENTS",
-                        format!("`recipes` writes the whole of {path}: set its words there, or leave it out of `recipes`"),
-                    ));
-                }
+            if let Some(held) = texts.get_mut(&restore.media) {
+                held.1 = restored.text;
             }
-            Ok(key)
-        };
-        for word in &input.recipe_set {
-            let key = steps_of(&mut texts, &word.media)?;
-            let in_document = matches!(key, ShotKey::Document(_));
-            // A step the document holds is named by its number: a line on, in its text.
-            let line = word.line + usize::from(in_document);
-            let text = texts.get(&key);
-            let changed = match (&word.add, word.remove) {
-                (Some(step), false) => kerf_shots::graph::added(text, line, step),
-                (None, true) => kerf_shots::graph::removed(text, line),
-                (Some(_), true) => Err("`add` a step or `remove` one, not both at once".to_owned()),
-                (None, false) => kerf_shots::graph::changed(
-                    text,
-                    kerf_shots::graph::Word {
-                        line,
-                        key: &word.key,
-                        nth: word.nth,
-                        value: word.value.as_deref(),
-                    },
-                ),
-            }
-            .map_err(|why| invalid(format!("{}: {}", key.said(), as_steps(why, in_document))))?;
-            texts.set(&key, changed);
         }
         // Every value set in one step's workflow goes into the one copy.
         let mut steps: Vec<(&str, usize, Vec<&WorkflowSetInput>)> = Vec::new();
@@ -1551,12 +1455,12 @@ impl KerfMcpRouter {
         if !steps.is_empty() {
             let models = kerf_engine::recipe::model::Models::load()
                 .map_err(|error| invalid(format!("the person's models file does not read: {error}")))?;
-            for (media, line, sets) in steps {
-                let key = steps_of(&mut texts, media)?;
-                let in_document = matches!(key, ShotKey::Document(_));
-                let line = line + usize::from(in_document);
-                let read = kerf_shots::workflow::read_of(project, &self.dir, media, line, &models, texts.get(&key).to_owned())
-                    .map_err(|why| invalid(cannot_said(as_steps(why, in_document), Some(&models))))?;
+            for (media, step, sets) in steps {
+                read(&mut texts, media)?;
+                // A step is named by its number, which is a line on in the text of its steps.
+                let line = step + 1;
+                let read = kerf_shots::workflow::read_of(project, &self.dir, media, line, &models, texts[media].1.clone())
+                    .map_err(|why| invalid(cannot_said(why, Some(&models))))?;
                 let values: Vec<kerf_shots::workflow::Set> = sets
                     .iter()
                     .map(|set| match &set.link {
@@ -1570,12 +1474,13 @@ impl KerfMcpRouter {
                 let now = kerf_shots::workflow::with(&read, &values).map_err(invalid)?;
                 let taken: Vec<PathBuf> = kept.iter().map(|kept| kept.copy.file.clone()).collect();
                 let copy = kerf_shots::workflow::copied(project, &self.dir, media, line, &read, &now, &taken)
-                    .map_err(|why| invalid(as_steps(why, in_document)))?;
-                texts.set(&key, copy.recipe.clone());
+                    .map_err(invalid)?;
+                if let Some(held) = texts.get_mut(media) {
+                    held.1.clone_from(&copy.recipe);
+                }
                 kept.push(WorkflowKept {
                     media: media.to_owned(),
-                    line,
-                    in_document,
+                    step,
                     of: read.name,
                     set: sets
                         .iter()
@@ -1588,16 +1493,15 @@ impl KerfMcpRouter {
                 });
             }
         }
-        // What was set on steps the document holds, as the lines that set them there.
+        // What was set, as the lines that set it in the document.
         let mut lines = Vec::new();
-        for (media, (was, now)) in &texts.document {
+        for (media, (was, now)) in &texts {
             lines.extend(
                 kerf_shots::graph::step_lines(media, was, now)
-                    .map_err(|why| invalid(format!("{media}'s steps: {}", as_steps(why, true))))?,
+                    .map_err(|why| invalid(format!("{media}'s steps: {why}")))?,
             );
         }
         Ok(ShotChanges {
-            recipes: texts.files,
             workflows: kept,
             steps: lines,
         })
@@ -2794,17 +2698,16 @@ impl KerfMcpRouter {
                 }
             }
             // A media its steps make has no file until it is made, which is no fault of its line.
-            Err(_) if kerf_engine::recipe::Home::of(media).is_some() && !path.is_file() => {
-                result["analysis"] = json!(if media.recipe.is_some() {
-                    format!(
-                        "unavailable: `{}` is not made yet; a person makes it from its recipe with `kerf make {}`",
+            Err(_) if (!media.steps.is_empty() || media.recipe.is_some()) && !path.is_file() => {
+                result["analysis"] = json!(match kerf_engine::recipe::uncarried(media) {
+                    Some(recipe) => format!(
+                        "unavailable: `{}` is not made yet, and its steps are in the recipe file `{recipe}`: `edit` with `carry: [\"{}\"]` writes them under the media, and `make` then makes it",
                         media.path, media.id
-                    )
-                } else {
-                    format!(
+                    ),
+                    None => format!(
                         "unavailable: `{}` is not made yet; `make` makes it from its steps (`kerf make {}` where the person is asked)",
                         media.path, media.id
-                    )
+                    ),
                 });
             }
             Err(error) => result["analysis"] = json!(format!("unavailable: {error}")),
@@ -3928,8 +3831,6 @@ impl KerfMcpRouter {
         let input: EditInput = input(arguments)?;
         if [
             input.script.is_some()
-                || !input.recipes.is_empty()
-                || !input.recipe_set.is_empty()
                 || !input.workflow_set.is_empty()
                 || input.restore_take.is_some()
                 || !input.carry.is_empty()
@@ -3944,17 +3845,12 @@ impl KerfMcpRouter {
         {
             return Err(McpError::new(
                 "INVALID_ARGUMENTS",
-                "pass exactly one of script (with or without recipes, recipeSet, workflowSet, carry and cast), any of those alone, preset, or savePreset",
+                "pass exactly one of script (with or without workflowSet, carry and cast), any of those alone, preset, or savePreset",
             ));
         }
         // A recipe carried is read as it stands: what else this edit would write of one,
         // it writes after, as lines of a script that set the steps it became.
-        if !input.carry.is_empty()
-            && (!input.recipes.is_empty()
-                || !input.recipe_set.is_empty()
-                || !input.workflow_set.is_empty()
-                || input.restore_take.is_some())
-        {
+        if !input.carry.is_empty() && (!input.workflow_set.is_empty() || input.restore_take.is_some()) {
             return Err(McpError::new(
                 "INVALID_ARGUMENTS",
                 "`carry` writes a recipe's steps under its media as they are: change them in the script of the same edit (`step <media> set <n> …`), or in an edit after it",
@@ -4062,33 +3958,20 @@ impl KerfMcpRouter {
         let facts = CachedFacts::new(&self.dir);
         let mut applied =
             apply_script_with(&before, catalog(), &facts, &source_script).map_err(refused)?;
-        // A recipe the edit writes is kept beside the one before it, and the media that name it
-        // are moved to it by lines added to the script, so that the proposal shows the move and
-        // undo takes it back. The recipe itself is shown in the script, as comments.
-        // A word set on a recipe's line, or a value in a model's workflow, makes a recipe too:
-        // the one there with that changed, kept the same way.
-        // Steps the document holds are set by lines of the script itself, after its own: no
-        // file is written for them, and undo takes them back with the rest of the edit.
-        let ShotChanges {
-            recipes: set,
-            workflows,
-            steps,
-        } = self.shot_changes(&before, &input)?;
-        let mut written_recipes = input.recipes.clone();
-        written_recipes.extend(set);
-        let recipes = self.recipe_versions(&written_recipes)?;
+        // A value set in a model's workflow, and a take gone back to, change steps: by lines
+        // of the script itself, after its own. No file says how a media is made, and undo
+        // takes them back with the rest of the edit. They are read from the steps as the
+        // script left them, so that a word it set on the same step stays.
+        let ShotChanges { workflows, steps } = self.shot_changes(&applied.project, &input)?;
         let mut source_script = source_script;
-        if !recipes.is_empty() || !workflows.is_empty() || !steps.is_empty() {
-            let (mut shown, moves) = recipe_lines(&recipes, &applied.project)?;
-            for workflow in &workflows {
-                shown.push_str(&workflow.lines());
-            }
+        if !workflows.is_empty() || !steps.is_empty() {
+            let shown: String = workflows.iter().map(WorkflowKept::lines).collect();
             let steps: String = steps.iter().map(|line| format!("{line}\n")).collect();
-            source_script = format!("{shown}{}{moves}{steps}", with_newline(&source_script));
+            source_script = format!("{shown}{}{steps}", with_newline(&source_script));
             applied =
                 apply_script_with(&before, catalog(), &facts, &source_script).map_err(refused)?;
         }
-        // Who and what the edit's recipes show that the project has not said yet is added to its
+        // Who and what the edit's steps show that the project has not said yet is added to its
         // cast file, which asks for no shot again; one it has is the person's to change.
         let cast_added = if input.cast.is_empty() {
             Vec::new()
@@ -4099,41 +3982,14 @@ impl KerfMcpRouter {
         if print_document(&applied.project, catalog(), PrintOptions::default())
             == print_document(&before, catalog(), PrintOptions::default())
         {
-            // A new recipe a media names already, which was not there: nothing in the document
-            // changes, and nothing can be made of it until a person makes it.
-            let written: Vec<&RecipeVersion> =
-                recipes.iter().filter(|recipe| recipe.version.new).collect();
-            if written.is_empty() && !cast_added.is_empty() {
+            if !cast_added.is_empty() {
                 return Ok(json!({
                     "proposal": null,
                     "status": "written",
                     "cast": cast_added,
                 }));
             }
-            if written.is_empty() {
-                return Err(McpError::new(
-                    "NO_CHANGE",
-                    if recipes.is_empty() {
-                        "the script changes nothing"
-                    } else {
-                        "the script changes nothing, and each recipe is what its file holds"
-                    },
-                ));
-            }
-            for recipe in &written {
-                kerf_engine::recipe::write_version(&self.dir, &recipe.version, &recipe.text)
-                    .map_err(engine_error)?;
-            }
-            let mut written = json!({
-                "proposal": null,
-                "status": "written",
-                "recipes": recipes.iter().map(RecipeVersion::json).collect::<Vec<_>>(),
-                "toMake": self.to_make(&applied.project, false),
-            });
-            if !cast_added.is_empty() {
-                written["cast"] = json!(cast_added);
-            }
-            return Ok(written);
+            return Err(McpError::new("NO_CHANGE", "the script changes nothing"));
         }
         // An extension runs the operations of the proposal it extends, which
         // read nothing that could have changed since, and then this script;
@@ -4201,16 +4057,6 @@ impl KerfMcpRouter {
             ));
         };
         let proposal_id = staged.proposal_id.clone();
-        // Written once the proposal is staged, so that a refused edit leaves no file; the
-        // document names a new version only once the proposal is accepted.
-        for recipe in recipes.iter().filter(|recipe| recipe.version.new) {
-            if let Err(error) =
-                kerf_engine::recipe::write_version(&self.dir, &recipe.version, &recipe.text)
-            {
-                let _ = self.runtime.reject_proposal(&proposal_id);
-                return Err(engine_error(error));
-            }
-        }
         // The takes a carried recipe made are held to the steps it became, so that none is
         // asked for again for being carried. A proposal that is rejected leaves them reading
         // as they did: a media that names its recipe goes by what the recipe's take recorded.
@@ -4257,9 +4103,6 @@ impl KerfMcpRouter {
             "check": check,
             "preview": preview,
         });
-        if !recipes.is_empty() {
-            result["recipes"] = json!(recipes.iter().map(RecipeVersion::json).collect::<Vec<_>>());
-        }
         if !workflows.is_empty() {
             result["workflows"] = json!(workflows.iter().map(WorkflowKept::json).collect::<Vec<_>>());
         }
@@ -4327,27 +4170,6 @@ impl KerfMcpRouter {
             result["toMake"] = json!(to_make);
         }
         Ok(result)
-    }
-
-    /// Where each recipe an edit writes is kept, read as a recipe first.
-    fn recipe_versions(
-        &self,
-        recipes: &BTreeMap<String, String>,
-    ) -> Result<Vec<RecipeVersion>, McpError> {
-        recipes
-            .iter()
-            .map(|(asked, text)| {
-                // A file ends with a line, as an editor writes one.
-                let text = with_newline(text);
-                let version = kerf_engine::recipe::version(&self.dir, asked, &text)
-                    .map_err(|error| McpError::new("INVALID_RECIPE", error.to_string()))?;
-                Ok(RecipeVersion {
-                    asked: asked.clone(),
-                    text,
-                    version,
-                })
-            })
-            .collect()
     }
 
     /// Contact sheets of what the edit changed in `from`–`to`, before and
@@ -5102,143 +4924,18 @@ fn not_pending(id: &str) -> McpError {
     )
 }
 
-/// Whether the document holds the steps that make media `id` of `project`, under its line.
-fn in_document(project: &Project, id: &str) -> bool {
-    project
-        .media(id)
-        .and_then(kerf_engine::recipe::Home::of)
-        .is_some_and(|home| home == kerf_engine::recipe::Home::Document)
-}
-
-/// `why`, said of a recipe's text, as it is said of steps the document holds, where it is
-/// of those: line 3 of that text is step 2, and there is no recipe to name.
-fn as_steps(why: String, in_document: bool) -> String {
-    if !in_document {
-        return why;
-    }
-    let mut said = String::new();
-    let mut rest = why.as_str();
-    while let Some(at) = rest.find("line ") {
-        let after = &rest[at + "line ".len()..];
-        let digits = after.bytes().take_while(u8::is_ascii_digit).count();
-        match (
-            after[..digits].parse::<usize>(),
-            after[digits..].strip_prefix(" of the recipe"),
-        ) {
-            (Ok(line), Some(tail)) if line >= 1 => {
-                said.push_str(&rest[..at]);
-                said.push_str(&format!("step {}", line - 1));
-                rest = tail;
-            }
-            _ => {
-                said.push_str(&rest[..at + "line ".len()]);
-                rest = after;
-            }
-        }
-    }
-    said.push_str(rest);
-    said.replace("the recipe", "its steps")
-}
-
-/// Where the steps an edit changes are written: a recipe's file, by the path the media's
-/// line names, or the document, under the media.
-#[derive(Clone, Debug, PartialEq, Eq)]
-enum ShotKey {
-    File(String),
-    Document(String),
-}
-
-impl ShotKey {
-    /// What it is of, to start an error with.
-    fn said(&self) -> String {
-        match self {
-            Self::File(path) => path.clone(),
-            Self::Document(media) => format!("{media}'s steps"),
-        }
-    }
-}
-
-/// The steps an edit changes, as their text stands so far: a recipe's by its path, and for
-/// those the document holds, by their media, the text they had beside the one they have.
-#[derive(Default)]
-struct ShotTexts {
-    files: BTreeMap<String, String>,
-    document: BTreeMap<String, (String, String)>,
-}
-
-impl ShotTexts {
-    /// The steps of media `id`, read once and then as the edit has them.
-    fn read(&mut self, project: &Project, dir: &Path, id: &str) -> Result<ShotKey, String> {
-        let (home, text) = kerf_shots::graph::recipe(project, dir, id)?;
-        Ok(match home {
-            kerf_engine::recipe::Home::File(path) => {
-                self.files.entry(path.clone()).or_insert(text);
-                ShotKey::File(path)
-            }
-            kerf_engine::recipe::Home::Document => {
-                self.document
-                    .entry(id.to_owned())
-                    .or_insert_with(|| (text.clone(), text));
-                ShotKey::Document(id.to_owned())
-            }
-        })
-    }
-
-    fn get(&self, key: &ShotKey) -> &str {
-        match key {
-            ShotKey::File(path) => &self.files[path],
-            ShotKey::Document(media) => &self.document[media].1,
-        }
-    }
-
-    fn set(&mut self, key: &ShotKey, text: String) {
-        match key {
-            ShotKey::File(path) => {
-                self.files.insert(path.clone(), text);
-            }
-            ShotKey::Document(media) => {
-                if let Some(held) = self.document.get_mut(media) {
-                    held.1 = text;
-                }
-            }
-        }
-    }
-}
-
-/// What an edit's `recipeSet`, `workflowSet` and `restoreTake` come to.
+/// What an edit's `workflowSet` and `restoreTake` come to.
 struct ShotChanges {
-    /// Recipes to keep as their next versions, by the path each media names.
-    recipes: BTreeMap<String, String>,
     workflows: Vec<WorkflowKept>,
-    /// Lines for the edit's own script, which set steps the document holds.
+    /// Lines for the edit's own script, which set the steps.
     steps: Vec<String>,
-}
-
-/// A recipe an edit writes: the file it was written as, its text, and where it is kept.
-struct RecipeVersion {
-    asked: String,
-    text: String,
-    version: kerf_engine::recipe::Version,
-}
-
-impl RecipeVersion {
-    fn json(&self) -> Value {
-        let mut value = json!({"recipe": self.asked, "keptAs": self.version.path});
-        value["written"] = json!(self.version.new);
-        if let Some(before) = &self.version.before {
-            value["diff"] = json!(kerf_lang::diff_text(before, &self.text));
-        }
-        value
-    }
 }
 
 /// A workflow an edit keeps for a shot: the step it is of, the copy, and what was set in it.
 struct WorkflowKept {
     media: String,
-    /// The step's line in the text its steps are read as.
-    line: usize,
-    /// Whether the document holds the step, which is then named by its number: a line less.
-    in_document: bool,
+    /// The step it is of, by its number; 0 for one that comes back with a take's steps.
+    step: usize,
     /// The workflow it is a copy of, as the model's entry names it.
     of: String,
     set: Vec<Value>,
@@ -5249,7 +4946,7 @@ impl WorkflowKept {
     fn json(&self) -> Value {
         json!({
             "media": self.media,
-            "line": self.line - usize::from(self.in_document && self.line > 0),
+            "line": self.step,
             "of": self.of,
             "keptAs": self.copy.stored,
             "set": self.set,
@@ -5258,27 +4955,17 @@ impl WorkflowKept {
 
     /// What a proposal's script says of it, as comments, for the person reviewing it.
     fn lines(&self) -> String {
-        // One that comes back with a take's recipe is as that take had it.
-        if self.line == 0 {
+        // One that comes back with a take's steps is as that take had it.
+        if self.step == 0 {
             return format!(
                 "# writes the workflow {}, as {} of {} was made with it\n",
                 self.copy.stored, self.of, self.media
             );
         }
-        let mut lines = if self.in_document {
-            format!(
-                "# writes the workflow {}, a copy of `{}` for step {} of {}, with:\n",
-                self.copy.stored,
-                self.of,
-                self.line - 1,
-                self.media
-            )
-        } else {
-            format!(
-                "# writes the workflow {}, a copy of `{}` for line {} of {}'s recipe, with:\n",
-                self.copy.stored, self.of, self.line, self.media
-            )
-        };
+        let mut lines = format!(
+            "# writes the workflow {}, a copy of `{}` for step {} of {}, with:\n",
+            self.copy.stored, self.of, self.step, self.media
+        );
         for set in &self.set {
             lines.push_str(&match set.get("link") {
                 Some(link) => format!(
@@ -5298,68 +4985,6 @@ impl WorkflowKept {
         }
         lines
     }
-}
-
-/// The lines an edit's script gains for the recipes it writes: each recipe as comments, for the
-/// person reviewing it to read, and a `media replace` for each media that names a version of it
-/// other than the one that holds the text, which it moves to. A recipe written again that no media
-/// names is refused: it would be a file the project never uses.
-fn recipe_lines(
-    recipes: &[RecipeVersion],
-    project: &Project,
-) -> Result<(String, String), McpError> {
-    let (mut shown, mut moves) = (String::new(), String::new());
-    for recipe in recipes {
-        let path = &recipe.version.path;
-        let heading = match (&recipe.version.before, recipe.version.new) {
-            (None, true) => format!("# writes the recipe {path}:"),
-            (None, false) => format!("# the recipe {path}, as it is:"),
-            (Some(_), true) => format!("# writes the recipe {path}, after {}:", recipe.asked),
-            (Some(_), false) => format!(
-                "# the recipe {path}, as it was, in place of {}:",
-                recipe.asked
-            ),
-        };
-        shown.push_str(&heading);
-        shown.push('\n');
-        for line in recipe.text.lines() {
-            shown.push_str(&format!("#   {line}\n"));
-        }
-        let named: Vec<&Media> = project
-            .media
-            .iter()
-            .filter(|media| {
-                media
-                    .recipe
-                    .as_deref()
-                    .is_some_and(|named| kerf_engine::recipe::same_recipe(named, &recipe.asked))
-            })
-            .collect();
-        if named.is_empty() && (recipe.version.before.is_some() || !recipe.version.new) {
-            return Err(McpError::new(
-                "INVALID_RECIPE",
-                format!(
-                    "no media names `{}`, which holds another recipe: name a new file, or the \
-                     media whose recipe it is",
-                    recipe.asked
-                ),
-            ));
-        }
-        for media in named
-            .into_iter()
-            .filter(|media| media.recipe.as_deref() != Some(path.as_str()))
-        {
-            let mut moved = media.clone();
-            moved.recipe = Some(path.clone());
-            moves.push_str(&kerf_lang::print_op(
-                project,
-                catalog(),
-                &kerf_model::Op::ReplaceMedia(moved),
-            ));
-            moves.push('\n');
-        }
-    }
-    Ok((shown, moves))
 }
 
 /// `text` ending with a line break, unless it is empty.

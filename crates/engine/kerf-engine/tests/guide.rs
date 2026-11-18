@@ -1,4 +1,4 @@
-//! A recipe's `render` step draws a guide at a model's size and rate: the
+//! A `render` step draws a guide at a model's size and rate: the
 //! file made is inspected.
 
 use kerf_engine::ffmpeg::resolve_ffmpeg_bin;
@@ -46,22 +46,29 @@ fn pixel(file: &Path, x: u32, y: u32) -> [u8; 3] {
     [output.stdout[0], output.stdout[1], output.stdout[2]]
 }
 
+/// The models file of a project in `directory` that names one program: `copy`, which
+/// copies the guide it is handed to where its file goes.
+#[cfg(unix)]
+fn copy(directory: &Path) -> Models {
+    let file = directory.join("models.json");
+    std::fs::write(&file, r#"{"copy": {"run": ["cp", "{guide}", "{out}"]}}"#).expect("a models file");
+    Models::read(&file).expect("models")
+}
+
 #[cfg(unix)]
 #[test]
 fn a_guide_is_the_size_and_rate_its_step_names_and_has_no_sound() {
     let folder = tempfile::tempdir().expect("a folder");
     let directory = folder.path();
     std::fs::create_dir(directory.join("shots")).unwrap();
-    std::fs::write(
-        directory.join("shots/open.kerfrecipe"),
-        "kerf-recipe 1\nrender s2 {guide.mp4} size=64x48 rate=12\nrender s2 {whole.mp4}\nrun cp {guide.mp4} {out}\n",
-    )
-    .unwrap();
     // A 160x90 guide: green across the middle, with red at each side for a tenth of its width
     // and more, which a 64x48 picture has no room for.
     let project = parse_document(
         "kerf 1\nproject name=\"guide\"\n\
-         media m1 path=\"shots/open.mp4\" rate=24 dur=1s video=160x90 recipe=\"shots/open.kerfrecipe\"\n\
+         media m1 path=\"shots/open.mp4\" rate=24 dur=1s video=160x90\n\
+         \x20 render s2 {guide.mp4} size=64x48 rate=12\n\
+         \x20 render s2 {whole.mp4}\n\
+         \x20 generate model=copy guide={guide.mp4}\n\
          sequence s1 rate=24 size=160x90 audio=48000\n\
          \x20 track V1 video\n\
          sequence s2 rate=24 size=160x90 audio=48000\n\
@@ -75,14 +82,14 @@ fn a_guide_is_the_size_and_rate_its_step_names_and_has_no_sound() {
     )
     .unwrap_or_else(|errors| panic!("{errors:?}"))
     .project;
-    let none = Models::default();
-    let planned = plan(&project, directory, "m1", &none).expect("a plan");
+    let copy = copy(directory);
+    let planned = plan(&project, directory, "m1", &copy).expect("a plan");
     let mut said = Vec::new();
     let made = make(
         &project,
         directory,
         &planned,
-        &none,
+        &copy,
         &CancellationToken::new(),
         |line| said.push(line.to_owned()),
     )
@@ -103,7 +110,7 @@ fn a_guide_is_the_size_and_rate_its_step_names_and_has_no_sound() {
         let [red, green, _] = pixel(&guide, x, y);
         assert!(red < 60 && green > 190, "({x}, {y}) is {red}, {green}");
     }
-    // The take is the guide, as the last step copied it.
+    // The take is the guide, as the program the last step names copied it.
     assert_eq!(
         probe(&directory.join(&made.stored), "v:0", "stream=width,height"),
         "64,48"
@@ -125,15 +132,13 @@ fn a_pass_of_a_guide_is_a_file_of_its_own() {
     let folder = tempfile::tempdir().expect("a folder");
     let directory = folder.path();
     std::fs::create_dir(directory.join("shots")).unwrap();
-    std::fs::write(
-        directory.join("shots/open.kerfrecipe"),
-        "kerf-recipe 1\nrender s2 {ids.mp4} pass=ids\nrender s2 {depth.mp4} pass=depth\nrun cp {ids.mp4} {out}\n",
-    )
-    .unwrap();
     // A backdrop out of depth, and a square in depth before it, lit from one side.
     let project = parse_document(
         "kerf 1\nproject name=\"guide\"\n\
-         media m1 path=\"shots/open.mp4\" rate=24 dur=1s video=160x90 recipe=\"shots/open.kerfrecipe\"\n\
+         media m1 path=\"shots/open.mp4\" rate=24 dur=1s video=160x90\n\
+         \x20 render s2 {ids.mp4} pass=ids\n\
+         \x20 render s2 {depth.mp4} pass=depth\n\
+         \x20 generate model=copy guide={ids.mp4}\n\
          sequence s1 rate=24 size=160x90 audio=48000\n\
          \x20 track V1 video\n\
          sequence s2 rate=24 size=160x90 audio=48000\n\
@@ -150,8 +155,8 @@ fn a_pass_of_a_guide_is_a_file_of_its_own() {
     )
     .unwrap_or_else(|errors| panic!("{errors:?}"))
     .project;
-    let none = Models::default();
-    let planned = plan(&project, directory, "m1", &none).expect("a plan");
+    let copy = copy(directory);
+    let planned = plan(&project, directory, "m1", &copy).expect("a plan");
     assert!(
         planned.steps[0].starts_with("Kerf renders the ids of sequence s2 to "),
         "{}",
@@ -166,7 +171,7 @@ fn a_pass_of_a_guide_is_a_file_of_its_own() {
         &project,
         directory,
         &planned,
-        &none,
+        &copy,
         &CancellationToken::new(),
         |_| {},
     )

@@ -1,7 +1,6 @@
 //! A media's recipe as a graph, with what runs each of its models.
 
 use kerf_engine::recipe::model::Models;
-use kerf_engine::recipe::Home;
 use kerf_engine::recipe::text::{self, Change};
 use kerf_model::Project;
 use serde_json::{json, Value};
@@ -154,11 +153,11 @@ pub fn step(
     }
 }
 
-/// The steps that make media `id`: where they are written, a recipe the media's line
-/// names or the document itself, and their text as a recipe's file holds it
-/// ([`kerf_engine::recipe::written`]).
-pub fn recipe(project: &Project, directory: &Path, id: &str) -> Result<(Home, String), String> {
-    kerf_engine::recipe::written(project, directory, id).map_err(|error| error.to_string())
+/// The steps that make media `id`, as text ([`kerf_engine::recipe::steps_text`]): a line
+/// that says what the text is, then a line a step. A media nothing makes is refused, and
+/// so is one whose steps are still in a recipe's file, with how they are carried.
+pub fn written(project: &Project, id: &str) -> Result<String, String> {
+    kerf_engine::recipe::written(project, id).map_err(|error| error.to_string())
 }
 
 /// The step lines a script gets to have media `id`, whose steps the document holds,
@@ -190,18 +189,18 @@ mod tests {
         let file = folder.path().join("models.json");
         std::fs::write(&file, r#"{"video": {"run": ["v", "{request}"]}, "still": {"run": ["s", "{request}"]}}"#).unwrap();
         let models = Models::read(&file).unwrap();
-        let recipe = "kerf-recipe 1\n# The court.\nrender court {guide.mp4} pass=depth\ngenerate model=video prompt=\"a \\\"ball\\\" bounces\" guide={guide.mp4}\n";
+        let recipe = "kerf-recipe 1\nrender court {guide.mp4} pass=depth\ngenerate model=video prompt=\"a \\\"ball\\\" bounces\" guide={guide.mp4}\n";
         let add = |recipe: &str, kind: &str| {
             let (after, line) = step(&project, &models, recipe, kind)?;
             let now = added(recipe, after, &line)?;
             Ok::<_, String>((added_at(recipe, &now), line, now))
         };
-        // A guide of the sequence the recipe draws, by a name no step has, before the last step.
+        // A guide of the sequence the steps draw, by a name no step has, before the last step.
         let (at, line, with_guide) = add(recipe, "guide").unwrap();
-        assert_eq!((at, line.as_str()), (Some(4), "render court {guide2.mp4} pass=depth"));
-        // A model as the recipe asks one, with its prompt, quotes kept.
+        assert_eq!((at, line.as_str()), (Some(3), "render court {guide2.mp4} pass=depth"));
+        // A model as the steps ask one, with its prompt, quotes kept.
         let (at, line, with_part) = add(&with_guide, "model").unwrap();
-        assert_eq!(at, Some(5));
+        assert_eq!(at, Some(4));
         assert_eq!(line, "generate model=video prompt=\"a \\\"ball\\\" bounces\" out={part.mp4}");
         // A join wants two pictures in motion that models made: a guide is not a part.
         let few = step(&project, &models, &with_part, "join").unwrap_err();
@@ -209,12 +208,12 @@ mod tests {
         let (_, _, with_parts) = add(&with_part, "model").unwrap();
         let (_, line, _) = add(&with_parts, "join").unwrap();
         assert_eq!(line, "join {part.mp4} {part2.mp4} {joined.mp4}");
-        // In a recipe of one step it is the first.
+        // In steps of one it is the first.
         let (at, _, now) = add("kerf-recipe 1\ngenerate model=still prompt=\"p\"\n", "guide").unwrap();
         assert_eq!(at, Some(2));
         assert!(now.starts_with("kerf-recipe 1\nrender main {guide.mp4} pass=depth\n"));
         assert!(step(&project, &models, recipe, "sound").unwrap_err().contains("is not a step to add"));
-        // Taken out, the recipe is as it was.
-        assert_eq!(removed(&with_guide, 4).unwrap(), recipe);
+        // Taken out, the steps are as they were.
+        assert_eq!(removed(&with_guide, 3).unwrap(), recipe);
     }
 }

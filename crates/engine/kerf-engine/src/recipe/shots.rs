@@ -12,10 +12,10 @@ use std::path::Path;
 /// One media a recipe makes, as things stand.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Shot {
-    /// The media's id, and where its steps are written: the recipe its line names, or
-    /// `the document` for steps under the line itself.
+    /// The media's id, and the recipe file its steps are still in, where they have not
+    /// been carried into the document: such a shot is listed, and nothing makes it.
     pub media: String,
-    pub recipe: String,
+    pub recipe: Option<String>,
     /// How long the media is, in seconds.
     pub seconds: f64,
     /// How many clips of the project play it.
@@ -36,17 +36,18 @@ pub fn shots(project: &Project, directory: &Path) -> Vec<Shot> {
         .media
         .iter()
         .filter_map(|media| {
-            let recipe = match super::Home::of(media)? {
-                super::Home::File(name) => name,
-                super::Home::Document => "the document".to_owned(),
-            };
+            let recipe = super::uncarried(media).map(str::to_owned);
+            if media.steps.is_empty() && recipe.is_none() {
+                return None;
+            }
             // The steps are read, and what they read hashed, once for both questions.
             let standing = Standing::of(project, directory, media);
-            let made = standing
-                .as_ref()
-                .and_then(|standing| standing.takes().ok())
-                .unwrap_or_default();
-            let (cast, styles) = super::cast::named_by(directory, media);
+            let made = match &standing {
+                Some(standing) => standing.takes().ok(),
+                None => super::takes(project, directory, media).ok(),
+            }
+            .unwrap_or_default();
+            let (cast, styles) = super::cast::named_by(media);
             Some(Shot {
                 media: media.id.to_string(),
                 seconds: media.duration.seconds(),
@@ -68,7 +69,7 @@ pub fn shots(project: &Project, directory: &Path) -> Vec<Shot> {
                 chosen: made.iter().find(|take| take.chosen).map(|take| take.number),
                 cast,
                 styles,
-                wants: standing.and_then(|standing| standing.unmade()),
+                wants: super::unmade(project, directory, media),
                 recipe,
             })
         })
@@ -84,10 +85,9 @@ impl Shot {
             (None, takes) => format!("none of its {takes} takes"),
         };
         let mut line = format!(
-            "{} {}  {}  {take}  {}",
+            "{} {}  {take}  {}",
             if self.wants.is_some() { "!" } else { " " },
             self.media,
-            self.recipe,
             seconds(self.seconds)
         );
         let shows: Vec<&str> = self
@@ -102,15 +102,22 @@ impl Shot {
         if self.clips == 0 {
             line.push_str("  (no clip plays it)");
         }
-        if let Some(wants) = &self.wants {
-            line.push_str(&format!("  to make: {}", wants.reason()));
+        match (&self.recipe, &self.wants) {
+            // Its steps are in a recipe's file: what it wants is carrying.
+            (Some(recipe), _) => line.push_str(&format!(
+                "  to carry: its steps are in {recipe}; `kerf carry {}` writes them under it",
+                self.media
+            )),
+            (None, Some(wants)) => line.push_str(&format!("  to make: {}", wants.reason())),
+            (None, None) => {}
         }
         line
     }
 }
 
 fn seconds(seconds: f64) -> String {
-    let text = format!("{seconds:.2}");
+    // No seconds at all add up to a zero that prints its sign.
+    let text = format!("{:.2}", seconds + 0.0);
     format!("{}s", text.trim_end_matches('0').trim_end_matches('.'))
 }
 

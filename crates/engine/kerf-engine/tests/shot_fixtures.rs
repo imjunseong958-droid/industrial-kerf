@@ -3,7 +3,7 @@
 //! making would ask of them: they read, each step is written as Kerf writes it, and a
 //! plan of every media can be made, with nothing run.
 
-use kerf_engine::recipe::{self, model::Models, Home};
+use kerf_engine::recipe::{self, model::Models};
 use kerf_lang::{parse_document, print_step};
 use kerf_model::{Catalog, Project};
 use std::path::{Path, PathBuf};
@@ -53,10 +53,10 @@ fn the_car_on_a_road_is_made_by_steps_in_its_document() {
     let folder = tempfile::tempdir().expect("a folder");
     let models = models(folder.path());
     for media in &project.media {
-        assert_eq!(Home::of(media), Some(Home::Document), "{}", media.id);
+        assert!(!media.steps.is_empty() && recipe::uncarried(media).is_none(), "{}", media.id);
         let plan = recipe::plan(&project, folder.path(), media.id.as_str(), &models)
             .unwrap_or_else(|error| panic!("{}: {error}", media.id));
-        assert_eq!(plan.recipe, None);
+        assert_eq!(plan.steps.len(), media.steps.len(), "{}", media.id);
         assert!(plan.steps[0].starts_with("Kerf renders "), "{}", plan.steps[0]);
         assert!(plan.notes.is_empty(), "{}: {:?}", media.id, plan.notes);
     }
@@ -86,11 +86,11 @@ fn a_walk_in_layers_is_made_by_steps_in_its_document() {
     let made: Vec<&str> = project
         .media
         .iter()
-        .filter(|media| Home::of(media).is_some())
+        .filter(|media| !media.steps.is_empty())
         .map(|media| media.id.as_str())
         .collect();
     assert_eq!(made, ["man", "shown", "shirt", "gone", "layers", "moved"]);
-    assert_eq!(Home::of(project.media("walk").expect("the footage")), None);
+    assert!(project.media("walk").expect("the footage").steps.is_empty());
     for id in made {
         let plan = recipe::plan(&project, directory, id, &models)
             .unwrap_or_else(|error| panic!("{id}: {error}"));
