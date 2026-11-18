@@ -3,7 +3,7 @@
 //! id, as it finds effects ([`crate::effect`]), so a new generator changes
 //! that crate and the catalog, not the compositor.
 
-use crate::Image;
+use crate::{Image, Rect};
 use kerf_model::{Catalog, Clip, Content, FxDef, Params, Rgba, Time, Value};
 
 /// Where and when a generator draws.
@@ -24,6 +24,23 @@ pub trait PictureSource: Sync {
 
     /// The picture of `clip`, which holds the generator's parameters.
     fn draw(&self, clip: &Clip, run: &SourceRun) -> Image;
+
+    /// Where in that picture `clip` draws, where its numbers say so with nothing drawn: none
+    /// for a generator whose picture has to be drawn to know, and for one that draws nothing
+    /// then. It is for one who measures where a clip is and has no use for its picture.
+    fn extent(&self, _clip: &Clip, _run: &SourceRun) -> Option<Extent> {
+        None
+    }
+}
+
+/// Where a generator draws in its picture, as its numbers say it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Extent {
+    /// The box around what it draws, in the picture's pixels.
+    pub rect: Rect,
+    /// Whether what it draws fills that box, as a rectangle with square corners does and an
+    /// ellipse does not.
+    pub filled: bool,
 }
 
 /// Parameters at a moment, each its default where it is not given.

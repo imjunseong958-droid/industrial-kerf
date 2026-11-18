@@ -78,6 +78,7 @@ pub struct ComposeOptions {
 pub const DRAW_STAMP: &str = env!("KERF_DRAW_STAMP");
 
 pub use alone::{draws_effect, effects_on_picture, Alone};
+pub use draw::{Form, InDepth, World};
 pub use disk::{default_frame_folder, frame_cache_stats, FrameCacheStats};
 
 /// One frame of straight RGBA, row by row: 8 bits a component, or 16 from
@@ -186,6 +187,15 @@ impl Compositor {
     /// is none, a lens being no part of where a camera is.
     pub fn mesh_view(&self, clip: &str, view: &FileView, at: Time) -> Option<CameraPlace> {
         self.drawing.mesh_view(clip, view, at)
+    }
+
+    /// What the program has in depth at sequence time `at`, in the world its frame is drawn
+    /// from: each clip in depth that draws as its corners and its surface, where the document
+    /// puts it and its parents and its file's animation have it then. Nothing is drawn for
+    /// it. It is in frame heights, so it is the same whatever size the sequence is, but for
+    /// footage fitted to the frame, which is fitted to whole pixels of it.
+    pub fn in_depth(&self, at: Time) -> World {
+        self.drawing.in_depth(at)
     }
 
     /// The canvas, made even as a render makes it.

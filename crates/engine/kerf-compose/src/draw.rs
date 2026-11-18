@@ -49,6 +49,8 @@ mod gpu;
 mod bevel;
 mod three_d;
 
+pub use three_d::world::{Form, InDepth, World};
+
 /// Nested sequences deeper than this are refused, as the graph refuses
 /// them.
 const MAX_NESTING: usize = 16;
@@ -257,6 +259,8 @@ struct ClipPlan {
     fit: bool,
     /// Padded to the canvas with black, as the graph pads it.
     letterboxed: bool,
+    /// Its source's picture may be clear in places, as a generator's is and media with alpha.
+    alpha: bool,
     /// A frame showing it alone is its media's picture as decoded.
     plain: bool,
     /// Any of the properties that place it animate.
@@ -671,6 +675,84 @@ impl Drawing {
         let scene = three_d::Scene::at(sequence, at, size);
         let to_output = self.geometry(sequence, plan, time);
         three_d::mesh::view(&scene, plan, &to_output, time, view)
+    }
+
+    /// See [`Compositor::in_depth`](crate::Compositor::in_depth).
+    pub fn in_depth(&self, at: Time) -> World {
+        let mut world = World::default();
+        let Some(sequence) = self.sequences.first() else {
+            return world;
+        };
+        let size = (sequence.width as usize, sequence.height as usize);
+        let scene = three_d::Scene::at(sequence, at, size);
+        let canvas = (f64::from(sequence.width), f64::from(sequence.height));
+        for track in sequence.tracks.iter().filter(|track| track.shows) {
+            for shown in track.shown.iter().filter(|shown| shown.shows(at)) {
+                let plan = &shown.plan;
+                let time = at - plan.clip.start;
+                let opacity = number(&param(&plan.clip, "opacity").value_at(time));
+                if matches!(plan.source, Source::Nothing | Source::Adjustment) || opacity <= 0.0 {
+                    continue;
+                }
+                let id = plan.clip.id.to_string();
+                if !plan.three_d {
+                    world.flat.push(id);
+                    continue;
+                }
+                // Where in its own pixels its picture is, where its numbers say: all of what
+                // its crop leaves of a picture that is opaque, and a shape's own outline.
+                let whole = (f64::from(plan.size.0), f64::from(plan.size.1));
+                let crop = crop_rect(plan, time, whole, 1.0, (plan.size.0 as usize, plan.size.1 as usize))
+                    .unwrap_or_else(|| Rect::new(0.0, 0.0, whole.0, whole.1));
+                let held = match &plan.source {
+                    _ if !plan.clip.masks.is_empty() => None,
+                    Source::Mesh => Some(None),
+                    Source::Solid(_) => Some(Some((crop, true))),
+                    Source::Media { .. } if !plan.alpha => Some(Some((crop, true))),
+                    Source::Drawn(source) => {
+                        let run = SourceRun {
+                            at: time,
+                            size: (plan.size.0 as usize, plan.size.1 as usize),
+                        };
+                        source.extent(&plan.clip, &run).and_then(|extent| {
+                            let (left, top) = (extent.rect.x.max(crop.x), extent.rect.y.max(crop.y));
+                            let (right, bottom) = (
+                                extent.rect.right().min(crop.right()),
+                                extent.rect.bottom().min(crop.bottom()),
+                            );
+                            (left < right && top < bottom).then(|| {
+                                let within = Rect::new(left, top, right - left, bottom - top);
+                                Some((within, extent.filled))
+                            })
+                        })
+                    }
+                    _ => None,
+                };
+                let Some(held) = held else {
+                    world.unread.push(id);
+                    continue;
+                };
+                // As the document says it and not as it is drawn: a clip that holds still is
+                // drawn on whole pixels of its sequence, under a pixel from here, and what is
+                // read here is to be the same at any size.
+                let numbers = geometry_numbers(&plan.clip, plan.path.as_ref(), time);
+                let own = placed(plan.size, plan.fit, false, canvas, numbers).0;
+                let mut moved = Affine::IDENTITY;
+                let mut parent = plan.clip.parent.as_ref();
+                while let Some(rig) = parent.and_then(|id| sequence.rigs.get(id)) {
+                    moved = parent_motion(rig, canvas, at - rig.clip.start).then_apply(&moved);
+                    parent = rig.clip.parent.as_ref();
+                }
+                // One more of its own `y` is a frame's height down, before its parents move it.
+                let fall = (moved.c.abs() <= 1e-9 * moved.d.abs() && moved.d.abs() > 1e-9)
+                    .then_some(moved.d);
+                let to_output = moved.then_apply(&own);
+                world
+                    .clips
+                    .push(three_d::world::of(&scene, plan, &to_output, time, held, fall));
+            }
+        }
+        world
     }
 
     /// See [`Compositor::frame_key`](crate::Compositor::frame_key).
@@ -2577,6 +2659,7 @@ impl<'a> Builder<'a> {
             size,
             fit,
             letterboxed: false,
+            alpha,
             plain: false,
             animated,
             three_d,

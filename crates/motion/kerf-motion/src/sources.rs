@@ -3,8 +3,8 @@
 //! parameters at the moment drawn. Sizes are in frame heights.
 
 use crate::{Combine, Emitter, Figure, Outline, Shape};
-use kerf_draw::source::{PictureSource, Reading, SourceRun};
-use kerf_draw::Image;
+use kerf_draw::source::{Extent, PictureSource, Reading, SourceRun};
+use kerf_draw::{Image, Rect};
 use kerf_model::{Catalog, Clip, Time, SHAPE_OUTLINE};
 
 /// The generators of this crate.
@@ -22,28 +22,73 @@ impl PictureSource for ShapeSource {
     fn draw(&self, clip: &Clip, run: &SourceRun) -> Image {
         let (w, h) = run.size;
         let mut image = Image::new(w, h);
-        let height = h as f64;
-        let read = Reading::generator(clip, "shape", run.at);
-        let size = |name: &str| (read.number(name) * height) as f32;
-        Shape {
-            figure: figure_of(&read, height),
-            outlines: outlines_of(clip, height, run.at),
-            offset: size("offset"),
-            fill: read.color("fill"),
-            stroke: read.color("stroke"),
-            stroke_width: size("stroke_width"),
-            trim: (
-                read.number("trim_start") as f32,
-                read.number("trim_end") as f32,
-                read.number("trim_offset") as f32,
-            ),
-            taper: (
-                read.number("taper_start") as f32,
-                read.number("taper_end") as f32,
-            ),
-        }
-        .draw(&mut image, [(w as f64 / 2.0) as f32, (height / 2.0) as f32]);
+        shape_of(clip, run).draw(&mut image, [(w as f64 / 2.0) as f32, (h as f64 / 2.0) as f32]);
         image
+    }
+
+    fn extent(&self, clip: &Clip, run: &SourceRun) -> Option<Extent> {
+        let (w, h) = run.size;
+        let shape = shape_of(clip, run);
+        let (contours, closed) = shape.contours();
+        // What `Shape::draw` puts down: a fill inside a closed outline, and a stroke along it.
+        let fills = shape.fill[3] > 0.0 && closed && contours.iter().any(|contour| contour.len() >= 3);
+        let strokes = shape.stroke[3] > 0.0 && shape.stroke_width > 0.0;
+        if !fills && !strokes {
+            return None;
+        }
+        let (mut least, mut most) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
+        for point in contours.iter().flatten() {
+            for axis in 0..2 {
+                least[axis] = least[axis].min(f64::from(point[axis]));
+                most[axis] = most[axis].max(f64::from(point[axis]));
+            }
+        }
+        if least[0] > most[0] {
+            return None;
+        }
+        // A stroke lies half to either side of the outline, whatever its trim leaves of it.
+        let grown = if strokes {
+            f64::from(shape.stroke_width) / 2.0
+        } else {
+            0.0
+        };
+        let (left, top) = (w as f64 / 2.0 + least[0] - grown, h as f64 / 2.0 + least[1] - grown);
+        let plain = matches!(shape.figure, Figure::Rect { round, .. } if round <= 0.0)
+            && shape.outlines.is_empty()
+            && shape.offset == 0.0;
+        Some(Extent {
+            rect: Rect::new(
+                left,
+                top,
+                most[0] - least[0] + 2.0 * grown,
+                most[1] - least[1] + 2.0 * grown,
+            ),
+            filled: fills && !strokes && plain,
+        })
+    }
+}
+
+/// The shape of a `gen=shape` clip as it is drawn on a picture of the run's size.
+fn shape_of(clip: &Clip, run: &SourceRun) -> Shape {
+    let height = run.size.1 as f64;
+    let read = Reading::generator(clip, "shape", run.at);
+    let size = |name: &str| (read.number(name) * height) as f32;
+    Shape {
+        figure: figure_of(&read, height),
+        outlines: outlines_of(clip, height, run.at),
+        offset: size("offset"),
+        fill: read.color("fill"),
+        stroke: read.color("stroke"),
+        stroke_width: size("stroke_width"),
+        trim: (
+            read.number("trim_start") as f32,
+            read.number("trim_end") as f32,
+            read.number("trim_offset") as f32,
+        ),
+        taper: (
+            read.number("taper_start") as f32,
+            read.number("taper_end") as f32,
+        ),
     }
 }
 

@@ -23,6 +23,7 @@ pub mod resources;
 pub mod sections;
 pub mod shows;
 pub mod sidecar;
+pub mod stands;
 pub mod still;
 pub mod sync;
 pub mod transcription;
