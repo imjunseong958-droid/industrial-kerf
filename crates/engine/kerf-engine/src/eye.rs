@@ -260,6 +260,14 @@ struct Shot<'a> {
     grown: (f64, f64),
 }
 
+/// A `render` step of a shot: the sequence it draws, the size it draws it at where it
+/// names one, and where in the sequence it starts, in seconds.
+struct Drawn<'a> {
+    sequence: &'a str,
+    size: Option<(u32, u32)>,
+    from: f64,
+}
+
 /// A shot's subject on one frame of the program.
 struct Spot {
     landing: Landing,
@@ -473,7 +481,7 @@ impl<'a> Reader<'a> {
         if media.steps.is_empty() {
             return Err(format!("`{id}` plays footage with no guide"));
         }
-        let drawn: Vec<(&str, Option<(u32, u32)>, f64)> = media
+        let drawn: Vec<Drawn> = media
             .steps
             .iter()
             .filter_map(|step| match step {
@@ -482,7 +490,11 @@ impl<'a> Reader<'a> {
                     size,
                     from,
                     ..
-                } => Some((sequence.as_str(), *size, from.unwrap_or(0.0))),
+                } => Some(Drawn {
+                    sequence,
+                    size: *size,
+                    from: from.unwrap_or(0.0),
+                }),
                 _ => None,
             })
             .collect();
@@ -512,13 +524,13 @@ impl<'a> Reader<'a> {
             .ok_or_else(|| format!("the subject of `{name}`: {}", project.no_clip(&subject)))?;
         let sequence = project.sequences[place.sequence].id.to_string();
         // A longer shot is drawn a part at a time, and starts where its first part does.
-        let of_it = || drawn.iter().filter(|(drawn, ..)| *drawn == sequence);
-        let Some((_, size, _)) = of_it().next() else {
+        let of_it = || drawn.iter().filter(|drawn| drawn.sequence == sequence);
+        let Some(Drawn { size, .. }) = of_it().next() else {
             return Err(format!(
                 "`{subject}` is a clip of `{sequence}`, which no `render` step of `{name}` draws"
             ));
         };
-        let from = of_it().map(|(_, _, from)| *from).fold(f64::INFINITY, f64::min);
+        let from = of_it().map(|drawn| drawn.from).fold(f64::INFINITY, f64::min);
         let from = Time::from_seconds(from).unwrap_or(Time::ZERO);
         let Some(video) = media.video else {
             return Err(format!("`{name}`, which `{id}` plays, has no picture"));
