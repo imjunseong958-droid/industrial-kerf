@@ -88,19 +88,25 @@ protected:
     }
 };
 
-// One of the shot's takes: its number, what there is to say of it, and a
-// tick on the one the shot is. A press has the shot be it.
+// One of the shot's takes: its picture, its number, what there is to say of
+// it, and a tick on the one the shot is. A press has the shot be it.
 class TakeRow final : public ui::KitButton {
 public:
-    TakeRow(int number, const QString &said, bool chosen, QWidget *parent = nullptr)
-        : KitButton(parent), m_number(number), m_said(said), m_chosen(chosen) {
+    // The picture's box in a row that has one.
+    static constexpr QSize kPicture{57, 32};
+
+    TakeRow(int number, const QString &said, bool chosen, const QImage &picture, QWidget *parent = nullptr)
+        : KitButton(parent), m_number(number), m_said(said), m_chosen(chosen), m_picture(picture) {
         setObjectName(QStringLiteral("graphTake%1").arg(number));
         setAccessibleName(QStringLiteral("Take %1").arg(number));
-        setFixedHeight(height::h28);
+        setAccessibleDescription(said);
+        setFixedHeight(picture.isNull() ? height::h28 : kPicture.height() + 8);
         setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
         setCheckable(true);
         setChecked(chosen);
     }
+    QString said() const { return m_said; }
+    bool hasPicture() const { return !m_picture.isNull(); }
 
 protected:
     // Which take the shot is is the document's to say, not a press's.
@@ -108,6 +114,7 @@ protected:
     void paintEvent(QPaintEvent *) override {
         QPainter p(this);
         p.setRenderHint(QPainter::Antialiasing, true);
+        p.setRenderHint(QPainter::SmoothPixmapTransform, true);
         const QRectF row = QRectF(rect());
         if (isEnabled() && hoverProgress() > 0) {
             p.setPen(Qt::NoPen);
@@ -115,16 +122,29 @@ protected:
             p.drawRoundedRect(row, radius::card, radius::card);
         }
         if (focusVisible()) ui::paintFocusRing(p, row.adjusted(2, 2, -2, -2), radius::control);
+        qreal left = row.left() + 8;
+        if (!m_picture.isNull()) {
+            // The take's picture, filling its box, its corners rounded as a card's.
+            const QRectF box(row.left() + 4, row.center().y() - kPicture.height() / 2.0, kPicture.width(), kPicture.height());
+            QPainterPath clip;
+            clip.addRoundedRect(box, radius::control, radius::control);
+            p.save();
+            p.setClipPath(clip);
+            const QSizeF fill = QSizeF(m_picture.size()).scaled(box.size(), Qt::KeepAspectRatioByExpanding);
+            p.drawImage(QRectF(box.center().x() - fill.width() / 2, box.center().y() - fill.height() / 2, fill.width(), fill.height()), m_picture);
+            p.restore();
+            left = box.right() + 8;
+        }
         p.setFont(tokens::font(m_chosen ? bodyName : body));
         p.setPen(color(isEnabled() || m_chosen ? ink : dis));
         const QString name = QStringLiteral("Take %1").arg(m_number);
-        p.drawText(row.adjusted(8, 0, -8, 0), Qt::AlignLeft | Qt::AlignVCenter, name);
+        p.drawText(QRectF(left, row.top(), row.right() - 8 - left, row.height()), Qt::AlignLeft | Qt::AlignVCenter, name);
         const qreal nameWidth = QFontMetricsF(p.font()).horizontalAdvance(name);
         const qreal end = m_chosen ? row.right() - 8 - 14 - 6 : row.right() - 8;
         const QFont quiet = tokens::font(control);
         p.setFont(quiet);
         p.setPen(color(ink3));
-        const qreal room = end - (row.left() + 8 + nameWidth + 12);
+        const qreal room = end - (left + nameWidth + 12);
         if (room > 24)
             p.drawText(QRectF(end - room, row.top(), room, row.height()), Qt::AlignRight | Qt::AlignVCenter,
                        QFontMetricsF(quiet).elidedText(m_said, Qt::ElideRight, room));
@@ -135,7 +155,9 @@ private:
     int m_number;
     QString m_said;
     bool m_chosen;
+    QImage m_picture;
 };
+
 
 // A value as a field shows it: a number without a needless fraction.
 QString shownValue(const QJsonValue &value) {
@@ -210,6 +232,17 @@ QString RecipeInspector::shape(const graph::Recipe &recipe, const Node &node) co
         parts << QStringLiteral("%1%2%3").arg(take.value(QStringLiteral("number")).toInt()).arg(take.value(QStringLiteral("chosen")).toBool() ? '*' : ' ')
                      .arg(take.value(QStringLiteral("changed")).toArray().size());
     }
+    // What a take reads beside its guide, and the pictures there are to show.
+    if (node.kind == Kind::Takes) {
+        parts << m_readState << QString::number(m_best);
+        for (const QJsonValue value : node.holds.value(QStringLiteral("takes")).toArray()) {
+            const QJsonObject take = value.toObject();
+            parts << QString::number(m_readings.value(take.value(QStringLiteral("number")).toInt()).value(QStringLiteral("overlap")).toDouble(-1))
+                  << QString::number(m_pictures.contains(take.value(QStringLiteral("path")).toString()));
+        }
+    }
+    if (const QJsonObject made = node.holds.value(QStringLiteral("made")).toObject(); !made.isEmpty())
+        parts << made.value(QStringLiteral("path")).toString() << QString::number(m_pictures.contains(made.value(QStringLiteral("path")).toString()));
     // What is said as text, not set: another word is another card.
     if (node.kind != Kind::Model && node.kind != Kind::Render && node.kind != Kind::Signal) parts << node.title << node.detail;
     parts << node.holds.value(QStringLiteral("wants")).toString() << node.holds.value(QStringLiteral("about")).toString()
@@ -344,6 +377,14 @@ void RecipeInspector::setMaking(bool making) {
     m_making = making;
     for (QWidget *row : std::as_const(m_takeRows)) row->setEnabled(!making && !static_cast<QAbstractButton *>(row)->isChecked());
 }
+
+void RecipeInspector::setTakeReadings(const QHash<int, QJsonObject> &readings, int best, const QString &state) {
+    m_readings = readings;
+    m_best = best;
+    m_readState = state;
+}
+
+void RecipeInspector::setPictures(const QHash<QString, QImage> &pictures) { m_pictures = pictures; }
 
 void RecipeInspector::refresh(const Node &node) {
     const QHash<QString, QString> now = values(node);
@@ -824,6 +865,19 @@ void RecipeInspector::buildRender(const Node &node) {
     addField(QStringLiteral("size"), QStringLiteral("Size"), QStringLiteral("size"), QStringLiteral("the sequence's"));
     addField(QStringLiteral("rate"), QStringLiteral("Rate"), QStringLiteral("rate"), QStringLiteral("the sequence's"));
     addField(QStringLiteral("matte"), QStringLiteral("Matte of"), QStringLiteral("matte"), QStringLiteral("a clip, alone in white"));
+    // The guide as it was drawn for the take that shows: what the model was handed, to look at beside the take.
+    const QJsonObject made = holds.value(QStringLiteral("made")).toObject();
+    if (const QImage drawn = m_pictures.value(made.value(QStringLiteral("path")).toString()); !drawn.isNull()) {
+        addSection(QStringLiteral("As drawn for take %1").arg(made.value(QStringLiteral("take")).toInt()));
+        auto *picture = new QLabel;
+        picture->setObjectName(QStringLiteral("graphGuidePicture"));
+        picture->setAccessibleName(QStringLiteral("The guide as drawn for take %1").arg(made.value(QStringLiteral("take")).toInt()));
+        const int width = layout::graphInspector - 2 * kPad;
+        QPixmap pixmap = QPixmap::fromImage(drawn.scaled(QSize(width, 160) * devicePixelRatioF(), Qt::KeepAspectRatio, Qt::SmoothTransformation));
+        pixmap.setDevicePixelRatio(devicePixelRatioF());
+        picture->setPixmap(pixmap);
+        m_column->addWidget(picture, 0, Qt::AlignLeft);
+    }
 }
 
 void RecipeInspector::buildSignal(const Node &node) {
@@ -855,21 +909,56 @@ void RecipeInspector::buildTakes(const Node &node) {
         const QJsonObject take = value.toObject();
         const int number = take.value(QStringLiteral("number")).toInt();
         const bool chosen = take.value(QStringLiteral("chosen")).toBool();
-        // What there is to say of it: what has changed since it was made, or which roll it is.
+        // What there is to say of it: how it holds beside its guide once that is read, what
+        // has changed since it was made, or which roll it is.
         QStringList changed;
         for (const QJsonValue what : take.value(QStringLiteral("changed")).toArray()) changed << what.toString();
         const int rolled = take.value(QStringLiteral("rolled")).toInt();
-        const QString said = !changed.isEmpty() ? QStringLiteral("%1 changed since").arg(changed.join(QStringLiteral(", ")))
-                             : rolled > 0 ? QStringLiteral("roll %1").arg(rolled) : QString();
-        auto *row = new TakeRow(number, said, chosen);
-        row->setEnabled(!m_making && !chosen);
-        row->setTip(chosen ? QStringLiteral("The shot is this take")
-                           : QStringLiteral("Have the shot be take %1 again; its clips keep their timing, and it is undone as any edit").arg(number));
+        const QJsonObject reading = m_readings.value(number);
+        QStringList says;
+        QStringList tip;
+        if (!reading.isEmpty()) {
+            says << QStringLiteral("%1 of its guide%2").arg(reading.value(QStringLiteral("overlap")).toDouble(), 0, 'f', 2)
+                        .arg(number == m_best ? QStringLiteral(", the closest") : QString());
+            for (const QJsonValue value : reading.value(QStringLiteral("clips")).toArray()) {
+                const QJsonObject clip = value.toObject();
+                const QString name = clip.value(QStringLiteral("clip")).toString();
+                tip << (clip.contains(QStringLiteral("note"))
+                            ? QStringLiteral("%1: %2").arg(name, clip.value(QStringLiteral("note")).toString())
+                            : QStringLiteral("%1: %2 of where it was asked for, followed on %3 of the %4 frames the guide shows it on")
+                                  .arg(name).arg(clip.value(QStringLiteral("overlap")).toDouble(), 0, 'f', 2)
+                                  .arg(clip.value(QStringLiteral("frames")).toInt()).arg(clip.value(QStringLiteral("shown")).toInt()));
+            }
+        }
+        if (!changed.isEmpty()) says << QStringLiteral("%1 changed since").arg(changed.join(QStringLiteral(", ")));
+        else if (rolled > 0) says << QStringLiteral("roll %1").arg(rolled);
         const QString path = take.value(QStringLiteral("path")).toString();
+        auto *row = new TakeRow(number, says.join(QStringLiteral(" · ")), chosen, m_pictures.value(path));
+        row->setEnabled(!m_making && !chosen);
+        tip.prepend(chosen ? QStringLiteral("The shot is this take")
+                           : QStringLiteral("Have the shot be take %1 again; its clips keep their timing, and it is undone as any edit").arg(number));
+        row->setTip(tip.join(QLatin1Char('\n')));
         connect(row, &QAbstractButton::clicked, this, [this, number, path] { emit takeChosen(number, path); });
         m_takeRows << row;
         m_column->addWidget(row);
     }
+    // Held to the guide: where each take has the shot's subject beside where it was asked for.
+    const bool reading = m_readState == QLatin1String("reading");
+    auto *hold = new ui::Button(reading ? QStringLiteral("Reading…") : m_readings.isEmpty() ? QStringLiteral("Hold to guide") : QStringLiteral("Hold to guide again"),
+                                ui::Button::Kind::Secondary);
+    hold->setObjectName(QStringLiteral("graphHoldTakes"));
+    hold->setEnabled(!reading);
+    hold->setTip(QStringLiteral("Read where each take has the shot's subject beside where its guide asked for it. No model is run"));
+    connect(hold, &QAbstractButton::clicked, this, [this] { emit takesReadRequested(); });
+    m_column->addWidget(hold, 0, Qt::AlignLeft);
+    if (reading)
+        addNote(QStringLiteral("Drawing the guide and following the subject through each take. A take is a few seconds."))->setObjectName(QStringLiteral("graphHoldSays"));
+    else if (m_readState == QLatin1String("read"))
+        addNote(QStringLiteral("1 is a take that has the subject where and as large as its guide asked on every frame, 0 one that has none of it. "
+                               "Hover a take for each subject; one followed on few frames says little."))
+            ->setObjectName(QStringLiteral("graphHoldSays"));
+    else if (!m_readState.isEmpty())
+        addNote(m_readState, status::failed)->setObjectName(QStringLiteral("graphHoldSays"));
     addNote(QStringLiteral("Every take is kept. Make again writes the next beside these."));
 }
 

@@ -34,7 +34,9 @@
 #include "recipe_graph.h"
 #include "test_friends.h"
 
+#include <QHash>
 #include <QJsonArray>
+#include <QJsonObject>
 #include <QJsonValue>
 #include <QString>
 #include <QWidget>
@@ -43,6 +45,7 @@ class QLabel;
 
 namespace kerf {
 
+class MediaArtwork;
 class RecipeInspector;
 namespace ui {
 class Button;
@@ -80,6 +83,10 @@ public:
     // Whether a making can be asked for now, and why not where it cannot.
     void setCanMake(bool can, const QString &why = {});
 
+    // What each take reads held to its guide, by its number, which holds best
+    // (0 for none), and how the reading stands (RecipeInspector::setTakeReadings).
+    void setTakeReadings(const QHash<int, QJsonObject> &readings, int best, const QString &state);
+
     ui::Button *makeButton() const { return m_make; }
     ui::GhostButton *severalButton() const { return m_several; }
     ui::Button *stopButton() const { return m_stop; }
@@ -93,6 +100,8 @@ signals:
     void removed(int line, const QString &key, int nth);
     void signalDrawn(const QString &clip, const QJsonArray &keys);
     void takeChosen(int number, const QString &path);
+    // Hold the shot's takes to its guide.
+    void takesReadRequested();
     // Make the shot, `rolls` takes of it; and stop the making that runs.
     void makeRequested(int rolls);
     void stopRequested();
@@ -122,6 +131,11 @@ private:
     RecipeInspector *m_inspector = nullptr;
     QWidget *m_body = nullptr;
     graph::Recipe m_shot;
+    // The pictures of the shot's takes and of what its steps drew, by their
+    // path in the project, decoded off the paint path as the bin's are.
+    MediaArtwork *m_art = nullptr;
+    QString m_directory;
+    void requestPictures();
     graph::Workflow m_workflow;
     QString m_placementKey;
     ui::IconButton *m_back = nullptr;

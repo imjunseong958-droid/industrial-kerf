@@ -3,10 +3,13 @@
 #include "recipe_graph_panel.h"
 #include "components.h"
 #include "icons.h"
+#include "media_artwork.h"
 #include "recipe_inspector.h"
 
 #include <QAction>
+#include <QDir>
 #include <QEvent>
+#include <QFileInfo>
 #include <QHBoxLayout>
 #include <QJsonArray>
 #include <QLabel>
@@ -148,12 +151,47 @@ RecipeGraphPanel::RecipeGraphPanel(QWidget *parent) : QWidget(parent) {
     connect(m_inspector, &RecipeInspector::removed, this, &RecipeGraphPanel::removed);
     connect(m_inspector, &RecipeInspector::signalDrawn, this, &RecipeGraphPanel::signalDrawn);
     connect(m_inspector, &RecipeInspector::takeChosen, this, &RecipeGraphPanel::takeChosen);
+    connect(m_inspector, &RecipeInspector::takesReadRequested, this, &RecipeGraphPanel::takesReadRequested);
+    m_art = new MediaArtwork(this);
+    connect(m_art, &MediaArtwork::changed, this, [this] {
+        m_inspector->setPictures(m_art->frames);
+        if (!showsWorkflow()) {
+            m_inspector->setNode(m_view->recipe(), m_view->selected());
+            placeInspector();
+        }
+    });
     connect(m_inspector, &RecipeInspector::castRequested, this, &RecipeGraphPanel::castRequested);
     connect(m_inspector, &RecipeInspector::modelsRequested, this, &RecipeGraphPanel::modelsRequested);
     refreshHead();
 }
 
-void RecipeGraphPanel::setProjectDirectory(const QString &directory) { m_inspector->setProjectDirectory(directory); }
+void RecipeGraphPanel::setProjectDirectory(const QString &directory) {
+    m_directory = directory;
+    m_inspector->setProjectDirectory(directory);
+}
+
+void RecipeGraphPanel::requestPictures() {
+    // Each take, and what each step drew on the way to the one that shows: only files that are there.
+    QJsonArray sources;
+    const auto add = [&](const QString &path) {
+        if (!path.isEmpty() && !m_directory.isEmpty() && QFileInfo(QDir(m_directory).filePath(path)).isFile())
+            sources.append(QJsonObject{{QStringLiteral("id"), path}, {QStringLiteral("path"), path}, {QStringLiteral("width"), 1}});
+    };
+    for (const graph::Node &node : m_shot.nodes) {
+        add(node.holds.value(QStringLiteral("made")).toObject().value(QStringLiteral("path")).toString());
+        for (const QJsonValue take : node.holds.value(QStringLiteral("takes")).toArray()) add(take.toObject().value(QStringLiteral("path")).toString());
+    }
+    m_art->request(sources, m_directory);
+    m_inspector->setPictures(m_art->frames);
+}
+
+void RecipeGraphPanel::setTakeReadings(const QHash<int, QJsonObject> &readings, int best, const QString &state) {
+    m_inspector->setTakeReadings(readings, best, state);
+    if (!showsWorkflow()) {
+        m_inspector->setNode(m_view->recipe(), m_view->selected());
+        placeInspector();
+    }
+}
 
 void RecipeGraphPanel::setPlacementKey(const QString &key) {
     m_placementKey = key;
@@ -165,6 +203,7 @@ void RecipeGraphPanel::setRecipe(const graph::Recipe &recipe) {
     // Another shot's graph is another thing to look at: its workflow goes with the one before.
     if (recipe.media != m_shot.media) m_workflow = {};
     m_shot = recipe;
+    requestPictures();
     if (!showsWorkflow()) {
         m_view->setRecipe(m_shot);
         m_inspector->setNode(m_view->recipe(), m_view->selected());

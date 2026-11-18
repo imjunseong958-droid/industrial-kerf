@@ -14,6 +14,7 @@ mod previews;
 mod qc;
 mod secrets;
 mod updates;
+mod takes;
 mod workflows;
 mod queue;
 mod recipes;
@@ -338,6 +339,11 @@ enum Command {
     /// the editor read it: one name on one line, or the whole text. `recipe`
     /// then, as it now reads.
     RecipeEdit(recipes::Edit),
+    /// Hold a media's takes to its guide by where its subjects are: a
+    /// `take_read` for each as it is read, then `takes_read`, or `error`.
+    TakesRead {
+        media: String,
+    },
     /// The workflow a `generate` step's model is run with, where its program
     /// is kerf-comfy: `workflow`, every node and input of it.
     WorkflowGet {
@@ -878,6 +884,10 @@ fn runtime_worker(
             }
             Command::WorkflowGet { media, line } => {
                 workflows::get(&shared, &active_client, &media, line, &tx);
+                continue;
+            }
+            Command::TakesRead { media } => {
+                takes::read(&shared, &active_client, media, &tx);
                 continue;
             }
             Command::WorkflowEdit(edit) => {

@@ -76,6 +76,16 @@ void GraphWiring::build() {
                                 {QStringLiteral("value"), value}});
     });
 
+    // Each take read beside its guide, off the bridge's worker: asked once, answered a take at a time.
+    connect(m_panel, &RecipeGraphPanel::takesReadRequested, this, [this] {
+        if (m_media.isEmpty() || m_readState == QLatin1String("reading") || !m_window->m_connected) return;
+        m_bus->send(QJsonObject{{QStringLiteral("type"), QStringLiteral("takes_read")}, {QStringLiteral("media"), m_media}});
+        m_readings.clear();
+        m_best = 0;
+        m_readState = QStringLiteral("reading");
+        showReadings();
+    });
+
     connect(m_bus, &EditorBus::event, this, &GraphWiring::onEvent);
     connect(m_bus, &EditorBus::snapshotChanged, this, &GraphWiring::onSnapshot);
     connect(w->m_shell, &StageShell::coveredChanged, this, [this](bool covered) {
@@ -99,6 +109,13 @@ void GraphWiring::open(const QString &media) {
     if (!wasOpen || m_panel->recipe().media != media) {
         m_workflowLine = 0;
         m_panel->closeWorkflow();
+    }
+    // Another shot's takes are not these.
+    if (m_panel->recipe().media != media) {
+        m_readings.clear();
+        m_best = 0;
+        m_readState.clear();
+        showReadings();
     }
     // Each shot keeps its own arrangement, whichever version of its recipe it is made from.
     m_panel->setPlacementKey(QStringLiteral("%1\n%2/%3").arg(w->m_projectDirectory, QFileInfo(recipe).path(), recipeShotName(recipe)));
@@ -155,6 +172,8 @@ void GraphWiring::edit(QJsonObject change) {
     m_bus->send(change);
 }
 
+void GraphWiring::showReadings() { m_panel->setTakeReadings(m_readings, m_best, m_readState); }
+
 void GraphWiring::followMaking() {
     MainWindow *w = m_window;
     const auto making = w->m_makingState.constFind(m_media);
@@ -192,8 +211,25 @@ void GraphWiring::onEvent(const QString &type, const QJsonObject &event) {
             m_panel->setWorkflow(graph::Workflow::read(event));
         return;
     }
-    if (!isOpen()) return;
     const bool ofThis = event.value(QStringLiteral("media")).toString() == m_media;
+    if (type == QLatin1String("take_read") && ofThis) {
+        m_readings.insert(event.value(QStringLiteral("take")).toInt(), event);
+        showReadings();
+        return;
+    }
+    if (type == QLatin1String("takes_read") && ofThis) {
+        m_best = event.value(QStringLiteral("best")).toInt();
+        m_readState = QStringLiteral("read");
+        showReadings();
+        return;
+    }
+    if (type == QLatin1String("error") && ofThis && event.value(QStringLiteral("command")).toString() == QLatin1String("takes_read")) {
+        // Why its takes cannot be held to anything, said where the reading was asked for.
+        m_readState = event.value(QStringLiteral("message")).toString();
+        showReadings();
+        return;
+    }
+    if (!isOpen()) return;
     if (type == QLatin1String("media_making") && ofThis) {
         followMaking();
     } else if ((type == QLatin1String("media_made") || type == QLatin1String("media_make_cancelled")) && ofThis) {

@@ -1415,6 +1415,8 @@ void MainWindow::routeEvent(const QJsonObject &event) {
         static const QString presetExists = QStringLiteral(" already exists; choose another name or replace it");
         if (!m_savingPreset.isEmpty() && message.endsWith(presetExists)) {
             replaceSavedPreset(message.chopped(presetExists.size()));
+        } else if (event.value(QStringLiteral("command")).toString() == QStringLiteral("takes_read")) {
+            // Said in the takes' card of the shot's graph, where the reading was asked for.
         } else {
             showError(message);
             // A failed turn is said in its thread too; the next turn takes it away.

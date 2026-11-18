@@ -616,6 +616,15 @@ says nothing of one.
 a node chosen (`workflow:<line>` opens the workflow of the model on that line of
 the recipe), for a capture (`--screenshot`).
 
+The takes' card shows each take's picture, and a guide's card the guide as it
+was drawn for the take that shows (`made` on a step's node, a file in that
+take's working folder), both decoded off the paint path by a `MediaArtwork` of
+the panel's own, as the bin's posters are. Hold to guide asks the bridge to
+read each take beside its guide (`takes_read`, answered with a `take_read` a
+take as it is read, on a thread of its own, then `takes_read`), and each row
+then says its number, the closest marked. Why a shot's takes cannot be held to
+anything is said in the card and not in the window's banner.
+
 What the graph shows and sets, an agent's tools read and set through the same
 crate (`kerf-shots`: `look` with `graph` and `workflow`, `edit` with
 `recipeSet` and `workflowSet`; [An agent's part](../../docs/shots.md#an-agents-part)).

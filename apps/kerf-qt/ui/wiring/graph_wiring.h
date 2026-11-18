@@ -15,6 +15,8 @@
 //                        text, nodes, blanks}, for a model its entry runs with kerf-comfy
 //   a value set in it    workflow_edit {media, line, was, node, input, value} -> workflow, then recipe
 //                        (the first writes the shot's own copy beside its recipe and names it on the line)
+//   takes held to their guide   takes_read {media} -> take_read {media, take, overlap, clips} for each
+//                        take as it is read, then takes_read {media, best?}; no model is run
 //
 // The graph is read again whenever what it shows may have changed: the
 // project (a signal's keys, a clip moved, a take made or chosen), the cast, a
@@ -22,6 +24,7 @@
 
 #include "test_friends.h"
 
+#include <QHash>
 #include <QJsonObject>
 #include <QObject>
 #include <QString>
@@ -83,6 +86,12 @@ private:
     bool m_owed = false;
     // The `generate` line whose workflow shows, or was asked for; 0 for none.
     int m_workflowLine = 0;
+    // What each of the shot's takes read held to its guide, by its number,
+    // which holds best, and how the reading stands (RecipeInspector).
+    QHash<int, QJsonObject> m_readings;
+    int m_best = 0;
+    QString m_readState;
+    void showReadings();
 };
 
 } // namespace kerf
