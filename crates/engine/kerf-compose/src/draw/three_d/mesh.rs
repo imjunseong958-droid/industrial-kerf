@@ -721,6 +721,22 @@ fn in_world(mesh: &Mesh, plane: &Plane, size: (f64, f64)) -> (Vec<Vector>, [Vect
     (points, ways)
 }
 
+/// The mesh of the clip of `plan` at clip time `time` in the world, where `to_output` puts its
+/// clip: its corners, as its file's animation has them then, and its triangles by their
+/// corners.
+pub(in crate::draw) fn in_the_world(
+    scene: &Scene,
+    plan: &ClipPlan,
+    to_output: &Affine,
+    time: Time,
+) -> (Vec<Vector>, Vec<[u32; 3]>) {
+    let mesh = Mesh::of(&plan.clip, plan.clip.start + time);
+    let size = (f64::from(plan.size.0), f64::from(plan.size.1));
+    let plane = Plane::of(scene, plan, size, to_output, time);
+    let (points, _) = in_world(&mesh, &plane, size);
+    (points, mesh.triangles)
+}
+
 /// A mesh as what may stand in a light's way: its triangles in the world, in a tree of boxes
 /// so that a ray asks few of them.
 pub(in crate::draw) struct Standing {
@@ -757,20 +773,22 @@ impl Standing {
         time: Time,
         opacity: f32,
     ) -> Self {
-        let mesh = Mesh::of(&plan.clip, plan.clip.start + time);
-        let size = (f64::from(plan.size.0), f64::from(plan.size.1));
-        let plane = Plane::of(scene, plan, size, to_output, time);
-        let (points, _) = in_world(&mesh, &plane, size);
-        let mut corners: Vec<[Vector; 3]> = mesh
-            .triangles
+        let (points, triangles) = in_the_world(scene, plan, to_output, time);
+        let corners = triangles
             .iter()
             .map(|triangle| triangle.map(|corner| points[corner as usize]))
             .collect();
+        Self::over(plan.clip.id.clone(), opacity, corners)
+    }
+
+    /// `corners`, triangles in the world, whichever clip they are of: a mesh's, or the two
+    /// of a flat clip.
+    pub fn over(clip: Id, opacity: f32, mut corners: Vec<[Vector; 3]>) -> Self {
         let mut boxes = Vec::new();
         let count = corners.len();
         Self::halve(&mut corners, 0, count, &mut boxes);
         Self {
-            clip: plan.clip.id.clone(),
+            clip,
             opacity,
             triangles: corners
                 .into_iter()
@@ -873,6 +891,65 @@ impl Standing {
             }
         }
         false
+    }
+
+    /// How far along `way`, a unit long, a ray from `at` first meets a triangle, no further
+    /// than `reach`, and the way that triangle faces, a unit long. From the very place it
+    /// starts on: one who measures how far off a surface is wants a surface touched said.
+    pub fn first(&self, at: Vector, way: Vector, reach: f64) -> Option<(f64, Vector)> {
+        let over = way.map(|side| 1.0 / if side.abs() < 1e-300 { 1e-300 } else { side });
+        let mut nearest: Option<(f64, Vector)> = None;
+        let mut waiting = vec![0usize];
+        while let Some(index) = waiting.pop() {
+            let Some(boxed) = self.boxes.get(index) else {
+                continue;
+            };
+            let (mut enters, mut leaves) = (0.0f64, nearest.map_or(reach, |(along, _)| along));
+            for axis in 0..3 {
+                let (one, other) = (
+                    (boxed.least[axis] - at[axis]) * over[axis],
+                    (boxed.most[axis] - at[axis]) * over[axis],
+                );
+                enters = enters.max(one.min(other));
+                leaves = leaves.min(one.max(other));
+            }
+            if enters > leaves {
+                continue;
+            }
+            match boxed.inside {
+                Inside::Halves(first) => {
+                    waiting.push(first);
+                    waiting.push(self.after(first));
+                }
+                Inside::Triangles(from, to) => {
+                    for [corner, one, other] in &self.triangles[from..to] {
+                        let across = cross(way, *other);
+                        let facing = dot(*one, across);
+                        if facing.abs() < 1e-18 {
+                            continue;
+                        }
+                        let from = minus(at, *corner);
+                        let u = dot(from, across) / facing;
+                        if !(0.0..=1.0).contains(&u) {
+                            continue;
+                        }
+                        let beside = cross(from, *one);
+                        let v = dot(way, beside) / facing;
+                        if v < 0.0 || u + v > 1.0 {
+                            continue;
+                        }
+                        let along = dot(*other, beside) / facing;
+                        if along >= 0.0
+                            && along <= reach
+                            && nearest.is_none_or(|(least, _)| along < least)
+                        {
+                            nearest = Some((along, unit(cross(*one, *other))));
+                        }
+                    }
+                }
+            }
+        }
+        nearest
     }
 
     /// The box after the one at `index` and everything in it: its sibling.

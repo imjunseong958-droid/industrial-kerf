@@ -68,13 +68,14 @@ with `words`); with `sheet` a contact sheet of a range in one image, the \
 cheap way to scan; with `at` frames — source frames of a media, or program \
 frames of the sequence; with `transcript` and no media, what the sequence \
 says. `sequence` picks one other than the first. \
-With `file`, the `media add` line for a file in the project's folder, or for each file of a folder of it with a `script` of them all, and with no arguments `unplaced` lists those not yet in the document, and `toMake` the media whose steps, the lines under it that say how Kerf or a model makes it, have yet to be run, or read something that has changed since its take was made, which it names: make it with `make`. With `media`, a media its steps make lists its `takes`, each making kept, with the line (`use`) that in an edit has the media be that take; a `toMake` entry's `cannot` is what would refuse its making, to mend before `make`, and its `notes` what its model has said it does not take; an edit that writes steps answers with `toMake` too; with no arguments, `cast` and `styles` list who and what the project's shots show and how they look, each by the name a `generate` line gives as `cast=` or `style=` and with the words and pictures a model is then handed, `brand` the project's colors, fonts, tone, and the words it says and avoids, which a title and a caption keep to, and `models` lists the models a `generate` step can name, each with what its owner says it takes: the picture it makes (`size`), its `rate`, the most `seconds` of one shot, the files it `reads` (of `guide`, `first`, `last`, `ref`), the other names a step can set with what they are when it does not (`more`), and, for one that follows a guide, `guide`, the `render` step that draws a guide at its size and rate. Write that step and a sequence of the model's shape, no longer than its `seconds`. A model with a name alone has not said, and none listed means none is set up: both are the person's to set, in their own models file. \
+With `file`, the `media add` line for a file in the project's folder, or for each file of a folder of it with a `script` of them all, and with no arguments `unplaced` lists those not yet in the document, and `toMake` the media whose steps, the lines under it that say how Kerf or a model makes it, have yet to be run, or read something that has changed since its take was made, which it names: make it with `make`. With `media`, a media its steps make lists its `takes`, each making kept, with the line (`use`) that in an edit has the media be that take; a `toMake` entry's `cannot` is what would refuse its making, to mend before `make`, and its `notes` what its model has said it does not take, and what `stands` finds floating, sunk, or going through another in the sequence a `render` step of it draws, on the first, middle, and last frame it draws; an edit that writes steps answers with `toMake` too; with no arguments, `cast` and `styles` list who and what the project's shots show and how they look, each by the name a `generate` line gives as `cast=` or `style=` and with the words and pictures a model is then handed, `brand` the project's colors, fonts, tone, and the words it says and avoids, which a title and a caption keep to, and `models` lists the models a `generate` step can name, each with what its owner says it takes: the picture it makes (`size`), its `rate`, the most `seconds` of one shot, the files it `reads` (of `guide`, `first`, `last`, `ref`), the other names a step can set with what they are when it does not (`more`), and, for one that follows a guide, `guide`, the `render` step that draws a guide at its size and rate. Write that step and a sequence of the model's shape, no longer than its `seconds`. A model with a name alone has not said, and none listed means none is set up: both are the person's to set, in their own models file. \
 With `cuts`, how each cut of the sequence's sound sits in the sound, by its media's own levels: in a pause, or through a word or a sound, and the pauses and repeated words the sequence still plays; look after cutting speech, and trim with `snap=pause` what it finds. \
 With `cost` and `at`, who draws each frame, what sends it to the CPU, and what it costs. \
 With `mesh`, what a mesh clip's glTF file holds, its animations and cameras, and a camera of it, or one a model found and wrote to a file, as a camera clip's keyframes. \
 With `follows`, how a take's depth read back holds beside the guide a sequence draws, clip by clip; with `placed`, where the take has one clip's subject, which `follows` does not say; with `held`, both at once and one number for the take. \
 With `signal`, the keys of a signal clip from the onsets of a sound on the timeline, so that what a model is told happens on its beats. \
 With `shows` and `at`, what shows of each clip on those frames, read from the frame and not from the document: where each is, what hides it, and what has left the frame. Read it of a scene in depth before a making is asked for. \
+With `stands`, what each clip in depth stands on, measured in the scene and not on a frame: which floats over the floor and by how much, which is sunk in it, which goes through another, and the line that sets it down. Place a thing roughly, read this, and run the line. \
 With `graph`, a media its steps make as the graph the person sees of it in the editor: its steps and what each reads, wired, with what would refuse its making; and with `workflow`, the workflow a step's model is run with, every node and input of it. With `takes`, each take of a shot held to its guide by where its subject is, to choose among them by. What they can see and set there you can: read the graph before you change a shot, and say what you changed by its nodes. \
 With `proposal` it shows what a pending proposal would make: its document, \
 what it would have made (`toMake`), its frames, and what it says.
@@ -331,6 +332,7 @@ pub(super) fn metadata(name: &str) -> Option<(&'static str, Value, ToolAnnotatio
                     "workflow": {"type": "object", "description": "The workflow the model of one `generate` step is run with, for a model whose graph node has a `runner`: `media` and the step's `line`, as `graph` gives it. `nodes` is every node of it in the file's order, each with its `class` and `inputs`: a `link` to another node's output, or a `value`, which with `blanks` is filled by the step. `blanks` says of each what fills it (`by`, `says`), its `default`, and what the step gives now (`given`). A value's input also says what the server takes there, asked of the model's own program: `choices` to choose among, or a number's `min`, `max` and `step`; `takenError` says why where it could not be asked. `origin` is `bundled` or `file` for a workflow as it comes, and `own` with its `file` for the shot's own copy. Used alone, or with `proposal`.", "properties": {"media": {"type": "string"}, "line": {"type": "integer", "minimum": 1}}, "required": ["media", "line"]},
                     "signal": {"type": "object", "description": "A signal's keys from a sound: `of` is a clip that plays a media with sound, music or what was recorded, and `clip` a `gen=signal@1` clip of the same sequence. It returns `script`, a `set <clip> value={…}` line to run with `edit`, which has the signal at 1 for `hold` frames (3 unless given) from each sound onset of `of` that falls in the signal clip and 0 between, onsets nearer than that running together; `onsets`, how many it placed, and `outside`, how many of the sound's fall outside the clip. Hold for as long as two of the model's frames last. Used alone.", "properties": {"of": {"type": "string"}, "clip": {"type": "string"}, "hold": {"type": "integer", "minimum": 1}}, "required": ["of", "clip"]},
                     "shows": {"type": "boolean", "description": "With `at`, program positions: what shows of each clip that draws there, in `frames`, each with `clips` from the lowest track up. `box` is where the clip would be with nothing before it, [left, top, right, bottom] in shares of the frame, absent when none of it is in the frame; `area` the share of the frame that is; `shows` the share of the frame it has as the frame is drawn; `hidden` the share of it other clips hide, and `by` which, each with its share, the most first; `edges` the edges of the frame it reaches, where it may go on past them; `opacity` where it is not wholly opaque, and such a clip is read as not showing. `empty` is the share of the frame no clip has. A nested sequence is one clip. A floor in `by` of what stands on it, a subject with no `box`, and a subject at an edge are what to mend. Read on a small frame, to about a hundredth of it. Not with `media`."},
+                    "stands": {"type": "boolean", "description": "What each clip in depth of the sequence stands on, measured in the scene with nothing drawn, in frame heights, down being the way `y` grows: under `stands`, `frames`, how many were read, every frame of the sequence unless `at` gives positions (`every` where one in that many was, of a long one); `ground`, the largest clip with nothing under it, which has no entry; and `clips`, from the lowest track up. A clip's feet are its lowest corners, and a line straight down through each meets the other clips' surfaces: a flat clip's rectangle, the box of one with a `depth`, a mesh's triangles as its file's animation has them on that frame. `on` is the clip under its feet. A clip that rests on it on every frame read has one entry, and no more is said of it than `slope`, how far from level what it stands on leans, in degrees, and `gap`, the room that leaves under its far feet where its own foot is level: it rests on the feet that are down first. Else it has an entry for each run of `frames`, [first, last] from 0, on which it does not rest: `floats`, how far it would come down to rest; `sunk`, how far its deepest foot is under a surface that goes through it, with `share`, how many of its feet are; or `air: true`, nothing under it within its own height, with `over` and `up` where something is further down. `worst` is the frame it is furthest off on. `script` is the line that sets it down, `set <clip> y=…`, one number or the fewest keys that keep it down on every frame read, in its own `y` under whatever parents it has; `cannot` says why where no line does. A clip that is in the air on some frame, a ball thrown, is brought up where it is sunk and left where it floats. Run the line with `edit` and read again: what stood on a clip that was moved has not moved with it. `through` lists the clips one of its edges goes through, other than what it stands on: `deep`, how far past that surface it reaches on the side it has less of, `share`, how much of it is on that side, and the `frames`. `notMeasured` names what of this scene was not read, which is not thereby right: a mesh into another mesh, the outline of a round shape within the box around it, a clip whose outline is its picture's own (a title, a nested sequence, a masked clip, media with alpha), and clips out of depth. A camera, a light, a null, and a signal are not things. A clip wholly under a surface other than the ground is taken to be under a roof. What is said is what is so, not that it is wrong, and fails no check. Not with `media`; with `shows`, both are answered."},
                     "font": {"type": "string", "description": "A font family, or `sans-serif`, `serif`, or `monospace`: its faces, and for a variable font each axis with its `tag`, `min`, `default`, and `max`, on the font's own scale, which is what a `title`'s `wght`, `wdth`, `slnt`, `opsz`, and `ital` are set on. For a name no font has, the families that contain it; for \"\", all of them. Use alone."},
                     "effects": {"type": "string", "description": "Words for the look or moment you want, such as \"glow neon\", \"zoom hit\", or \"retro tv\": the effects, transitions, and generators whose id, category, guidance, or parameters match, best first, each with when to use it, and in `properties` the clip properties that do. Use alone, or with `area`."},
                     "area": {"type": "string", "enum": ["edit", "color", "motion", "vfx", "image"], "description": "With `effects`: only what belongs to this part of the editor."}
@@ -450,6 +452,8 @@ struct LookInput {
     cost: bool,
     #[serde(default)]
     shows: bool,
+    #[serde(default)]
+    stands: bool,
     signal: Option<SignalInput>,
     mesh: Option<MeshInput>,
     /// A media that is a take's depth, to hold to the guide a sequence draws.
@@ -960,7 +964,9 @@ impl KerfMcpRouter {
     /// they name, want making, each with why. Looking runs none of them. What would refuse the
     /// making is said here (`cannot`), read as a person's plan is and with nothing run, and so is
     /// what a model has said it does not take (`notes`): steps are mended before a making is
-    /// asked for.
+    /// asked for. With those notes is what floats, is sunk, or goes through another in the
+    /// sequence a `render` step of the media draws (`crate::stands::note`), which a guide
+    /// shows a model and no frame shows an agent.
     /// `waiting` says that `project` is what a proposal not yet accepted would make: a making
     /// is asked of the project, so of such a media only once its proposal is accepted.
     fn to_make(&self, project: &Project, waiting: bool) -> Vec<Value> {
@@ -970,6 +976,40 @@ impl KerfMcpRouter {
             ""
         };
         let models = kerf_engine::recipe::model::Models::load();
+        // The project with its files where they are, for a mesh's, made when first wanted,
+        // and what was found of each part of a sequence, which several media may draw.
+        let resolved = std::cell::OnceCell::new();
+        let mut read: Vec<(String, Option<String>)> = Vec::new();
+        let mut stands = |media: &kerf_model::Media| -> Vec<String> {
+            let mut notes = Vec::new();
+            for step in &media.steps {
+                let kerf_model::making::Step::Render {
+                    sequence,
+                    from,
+                    seconds,
+                    ..
+                } = step
+                else {
+                    continue;
+                };
+                let part = format!("{sequence} {from:?} {seconds:?}");
+                let note = match read.iter().find(|(told, _)| *told == part) {
+                    Some((_, note)) => note.clone(),
+                    None => {
+                        let resolved = resolved.get_or_init(|| {
+                            let mut resolved = project.clone();
+                            kerf_runtime::resolve_media_paths(&mut resolved, &self.dir);
+                            resolved
+                        });
+                        let note = crate::stands::note(resolved, sequence, (*from, *seconds));
+                        read.push((part, note.clone()));
+                        note
+                    }
+                };
+                notes.extend(note.filter(|note| !notes.contains(note)));
+            }
+            notes
+        };
         project
             .media
             .iter()
@@ -999,10 +1039,15 @@ impl KerfMcpRouter {
                         kerf_engine::recipe::plan(project, &self.dir, id, models)
                             .map_err(|error| error.to_string())
                     });
+                let found = stands(media);
+                if !found.is_empty() {
+                    entry["notes"] = json!(found);
+                }
                 match plan {
                     Ok(plan) => {
                         if !plan.notes.is_empty() {
-                            entry["notes"] = json!(plan.notes);
+                            let notes: Vec<&String> = plan.notes.iter().chain(&found).collect();
+                            entry["notes"] = json!(notes);
                         }
                         entry["make"] = json!(format!(
                             "{first}make it with `make`: it runs where the person lets an agent make on its own, and else they are asked and run `kerf make {id}`"
@@ -2161,6 +2206,37 @@ impl KerfMcpRouter {
         }))
     }
 
+    /// What each clip in depth stands on: on the frames at `at`, or with none on every frame.
+    fn clips_stand(
+        &self,
+        project: &Project,
+        sequence: Option<&str>,
+        at: &[String],
+    ) -> Result<Value, McpError> {
+        let sequence = program(project, sequence)?;
+        let duration = sequence.duration();
+        let mut times = Vec::with_capacity(at.len());
+        for text in at {
+            let time = program_position(project, sequence, text)?;
+            if time.is_negative() || time >= duration {
+                return Err(McpError::new(
+                    "INVALID_ARGUMENTS",
+                    format!(
+                        "`{text}` is outside sequence `{}`{}",
+                        sequence.id,
+                        self.any_pending("proposal")
+                    ),
+                ));
+            }
+            times.push(time);
+        }
+        let mut resolved = project.clone();
+        kerf_runtime::resolve_media_paths(&mut resolved, &self.dir);
+        let standing = kerf_engine::stands::standing(&resolved, Some(sequence.id.as_str()), &times)
+            .map_err(|error| McpError::new("RENDER_FAILED", error.to_string()))?;
+        Ok(crate::stands::said(&standing))
+    }
+
     pub(super) fn look(&self, arguments: Value) -> Result<Value, McpError> {
         let preset_only = arguments.as_object().is_some_and(|o| o.len() == 1);
         let only_area_beside = arguments.as_object().is_some_and(|o| o.len() == 2);
@@ -2349,21 +2425,37 @@ impl KerfMcpRouter {
             let (revision, project) = self.project_at(input.proposal.as_deref())?;
             return self.mesh_file(&project, revision, mesh);
         }
-        if input.shows {
+        if input.shows || input.stands {
             if input.media.is_some() {
                 return Err(McpError::new(
                     "INVALID_ARGUMENTS",
-                    "`shows` is of program frames, not with `media`",
+                    if input.shows {
+                        "`shows` is of program frames, not with `media`"
+                    } else {
+                        "`stands` is of the clips in depth of a program's sequence, not with `media`"
+                    },
                 ));
             }
-            if input.at.is_empty() {
+            if input.shows && input.at.is_empty() {
                 return Err(McpError::new(
                     "INVALID_ARGUMENTS",
                     "`shows` is of the frames at `at`: pass the positions to read",
                 ));
             }
             let (revision, project) = self.project_at(input.proposal.as_deref())?;
-            return self.frames_show(&project, input.sequence.as_deref(), revision, &input.at);
+            let sequence = input.sequence.as_deref();
+            let mut result = if input.shows {
+                self.frames_show(&project, sequence, revision, &input.at)?
+            } else {
+                json!({
+                    "sequence": program(&project, sequence)?.id.to_string(),
+                    "revision": revision,
+                })
+            };
+            if input.stands {
+                result["stands"] = self.clips_stand(&project, sequence, &input.at)?;
+            }
+            return Ok(result);
         }
         if !input.sync.is_empty() {
             let (revision, project) = self.project_at(input.proposal.as_deref())?;

@@ -1,0 +1,581 @@
+//! What each clip in depth stands on, measured with nothing drawn: for each thing said, a
+//! scene that has to be said and one that must not be.
+
+use kerf_engine::stands::{standing, How, Run, Standing, Stood, TOUCH};
+use kerf_lang::{apply_script, parse_document};
+use kerf_model::{Catalog, Project, Rate};
+use std::path::{Path, PathBuf};
+
+fn project_of(size: &str, body: &str) -> Project {
+    parse_document(
+        &format!(
+            "kerf 1\nproject name=\"t\"\nsequence s1 rate=24 size={size} audio=48000\n{body}"
+        ),
+        Catalog::builtin(),
+    )
+    .unwrap_or_else(|errors| panic!("{errors:?}"))
+    .project
+}
+
+fn project(body: &str) -> Project {
+    project_of("320x180", body)
+}
+
+fn read(body: &str) -> Standing {
+    standing(&project(body), None, &[]).expect("reads")
+}
+
+fn clip<'a>(standing: &'a Standing, id: &str) -> &'a Stood {
+    standing
+        .clips
+        .iter()
+        .find(|stood| stood.clip == id)
+        .unwrap_or_else(|| panic!("no {id} in {standing:?}"))
+}
+
+/// The one way a clip stands, where it stands one way on every frame read.
+fn only<'a>(standing: &'a Standing, id: &str) -> &'a Run {
+    let stood = clip(standing, id);
+    assert_eq!(stood.runs.len(), 1, "{stood:?}");
+    &stood.runs[0]
+}
+
+fn near(a: f64, b: f64) -> bool {
+    (a - b).abs() < 1e-6
+}
+
+/// A clip a second long on a track of its own.
+fn on_track(track: u32, id: &str, generator: &str, set: &str) -> String {
+    format!(
+        "  track V{track} video\n    clip {id} gen={generator}@1 at=0f dur=24f\n      set {set}\n"
+    )
+}
+
+/// A level floor 0.4 under the middle of the frame, a camera, and a light.
+fn level() -> String {
+    [
+        on_track(1, "floor", "solid", "color=#404040 three_d=true rotate_x=-90 y=0.4 z=1 scale=4"),
+        on_track(8, "cam", "camera", "z=-0.5"),
+        on_track(9, "sun", "light", "kind=ambient"),
+    ]
+    .concat()
+}
+
+/// The floor the `model-shot` skill lays: tipped back 6 degrees, lower the nearer.
+fn tipped() -> String {
+    on_track(1, "road", "solid", "color=#404448 three_d=true rotate_x=-84 y=0.75 z=4 scale=16")
+}
+
+/// A box 0.2 each way with its middle at `set`.
+fn crate_at(set: &str) -> String {
+    on_track(2, "crate", "mesh", &format!("kind=box width=0.2 height=0.2 length=0.2 z=1 {set}"))
+}
+
+#[test]
+fn a_box_on_a_floor_rests_and_one_lifted_floats_and_one_let_down_is_sunk() {
+    // Its foot is a tenth under its middle, and the floor four tenths under the frame's.
+    let stands = read(&[level(), crate_at("y=0.3")].concat());
+    let rests = only(&stands, "crate");
+    assert_eq!((rests.how, rests.on.as_deref()), (How::Rests, Some("floor")));
+    assert_eq!((rests.frames, rests.slope < 0.01, rests.open < 1e-9), ((0, 23), true, true));
+    assert_eq!((&clip(&stands, "crate").script, stands.frames.len(), stands.every), (&None, 24, 1));
+    // A hundredth up, it floats by that, and the line that sets it down says where.
+    let stands = read(&[level(), crate_at("y=0.29")].concat());
+    let floats = only(&stands, "crate");
+    assert!(matches!(floats.how, How::Floats(by) if near(by, 0.01)), "{floats:?}");
+    assert_eq!(floats.on.as_deref(), Some("floor"));
+    assert_eq!(clip(&stands, "crate").script.as_deref(), Some("set crate y=0.3"));
+    // A hundredth down, all of its foot is in the floor by that.
+    let stands = read(&[level(), crate_at("y=0.31")].concat());
+    let sunk = only(&stands, "crate");
+    assert!(
+        matches!(sunk.how, How::Sunk { deep, share } if near(deep, 0.01) && share == 1.0),
+        "{sunk:?}"
+    );
+    assert_eq!(clip(&stands, "crate").script.as_deref(), Some("set crate y=0.3"));
+    // Within a touch either way it rests, and nothing is to be done.
+    for by in [-0.8 * TOUCH, 0.8 * TOUCH] {
+        let stands = read(&[level(), crate_at(&format!("y={}", 0.3 + by))].concat());
+        assert_eq!(only(&stands, "crate").how, How::Rests, "{by}");
+        assert_eq!(clip(&stands, "crate").script, None);
+    }
+}
+
+#[test]
+fn a_clip_set_down_by_its_line_rests() {
+    // Of each kind of clip, floating and sunk, on a floor that is level and on one that
+    // leans: the document with the line run on it is read again, and the clip is down.
+    let things = [
+        ("mesh", "kind=box width=0.2 height=0.3 length=0.4 z=2.2"),
+        ("mesh", "kind=ball width=0.3 height=0.3 length=0.3 z=2.2"),
+        ("mesh", "kind=cylinder width=0.2 height=0.3 length=0.2 z=2.2 x=0.1"),
+        ("solid", "color=#ff0000 three_d=true scale=0.3 z=2.2"),
+        ("solid", "color=#ff0000 three_d=true scale=0.3 depth=0.4 z=2.2 rotate_y=30"),
+        ("shape", "kind=rect width=0.9 height=0.22 fill=#c02020 three_d=true depth=0.4 z=2"),
+    ];
+    let floors = [
+        on_track(1, "road", "solid", "color=#404448 three_d=true rotate_x=-90 y=0.9 z=4 scale=16"),
+        tipped(),
+    ];
+    for floor in &floors {
+        for (generator, set) in things {
+            for y in [0.317, 0.5, 0.8631, 1.04] {
+                let body = [floor.clone(), on_track(2, "thing", generator, &format!("{set} y={y}"))].concat();
+                let before = project(&body);
+                let stands = standing(&before, None, &[]).expect("reads");
+                let Some(line) = clip(&stands, "thing").script.clone() else {
+                    // Only one that is down, or too far up to have been meant to be, has no line.
+                    let how = only(&stands, "thing").how;
+                    assert!(matches!(how, How::Rests | How::Air), "{generator} {set} y={y}: {how:?}");
+                    continue;
+                };
+                let after = apply_script(&before, Catalog::builtin(), &line)
+                    .unwrap_or_else(|error| panic!("{line}: {error:?}"))
+                    .project;
+                let stands = standing(&after, None, &[]).expect("reads");
+                let run = only(&stands, "thing");
+                assert_eq!(run.how, How::Rests, "{generator} {set} y={y}, then `{line}`: {run:?}");
+                assert_eq!((run.on.as_deref(), &clip(&stands, "thing").script), (Some("road"), &None));
+            }
+        }
+    }
+}
+
+#[test]
+fn on_the_skills_floor_a_foot_is_down_where_it_says_and_what_is_long_rests_on_its_far_side() {
+    // The floor is 0.1 lower for each frame height nearer, and 1.0 where `z` is 1.6: a card
+    // a fifth of the frame tall, its middle at 0.9 there, has its foot on it.
+    let card = on_track(2, "card", "solid", "color=#ff0000 three_d=true scale=0.2 z=1.6 y=0.9");
+    let stands = read(&[tipped(), card].concat());
+    let run = only(&stands, "card");
+    assert_eq!((run.how, run.on.as_deref()), (How::Rests, Some("road")));
+    assert!((run.slope - 6.0).abs() < 1e-6, "{run:?}");
+    assert_eq!(stands.ground.as_deref(), Some("road"));
+    // A box 0.4 long is level, and the floor is not: it is down on its far side, where the
+    // floor is highest, and 0.4 of the floor's lean is open under its near one.
+    let long = on_track(2, "car", "mesh", "kind=box width=0.3 height=0.2 length=0.4 z=1.8 y=0.86");
+    let stands = read(&[tipped(), long].concat());
+    let run = only(&stands, "car");
+    assert_eq!((run.how, run.on.as_deref()), (How::Rests, Some("road")));
+    assert!((run.slope - 6.0).abs() < 1e-6, "{run:?}");
+    assert!((run.open - 0.4 * 6f64.to_radians().tan()).abs() < 1e-3, "{run:?}");
+    assert_eq!(clip(&stands, "car").script, None);
+    // Put down by its middle, as the rule had it, its far half is in the floor.
+    let long = on_track(2, "car", "mesh", "kind=box width=0.3 height=0.2 length=0.4 z=1.8 y=0.881");
+    let stands = read(&[tipped(), long].concat());
+    let run = only(&stands, "car");
+    assert!(
+        matches!(run.how, How::Sunk { deep, share } if (deep - 0.021).abs() < 1e-3 && share == 0.5),
+        "{run:?}"
+    );
+    assert_eq!(clip(&stands, "car").script.as_deref(), Some("set car y=0.86"));
+}
+
+#[test]
+fn a_box_through_a_wall_is_said_and_one_before_it_is_not() {
+    // A wall half the frame tall facing the viewer, on the floor, and a box on the floor.
+    let scene = |z: f64| {
+        [
+            on_track(1, "floor", "solid", "color=#404040 three_d=true rotate_x=-90 y=0.25 z=1 scale=4"),
+            on_track(2, "wall", "solid", "color=#808080 three_d=true scale=0.5 z=1"),
+            on_track(3, "crate", "mesh", &format!("kind=box width=0.2 height=0.2 length=0.2 y=0.15 z={z}")),
+        ]
+        .concat()
+    };
+    let stands = read(&scene(1.0));
+    let found = &clip(&stands, "crate").through;
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!((found[0].clip.as_str(), found[0].frames), ("wall", (0, 23)));
+    // Half of it is on either side, its ends a tenth past the wall.
+    assert!(near(found[0].deep, 0.1) && near(found[0].share, 0.5), "{found:?}");
+    // Each stands on the floor all the same, and the wall goes through nothing.
+    assert_eq!(only(&stands, "crate").how, How::Rests);
+    assert_eq!(only(&stands, "wall").how, How::Rests);
+    assert!(clip(&stands, "wall").through.is_empty() && clip(&stands, "floor").through.is_empty());
+    // A little way in, less of it is past, by less.
+    let stands = read(&scene(0.93));
+    let found = &clip(&stands, "crate").through;
+    assert!(near(found[0].deep, 0.03) && near(found[0].share, 0.5), "{found:?}");
+    // Before the wall, touching it, and well before it, it goes through nothing.
+    for z in [0.9, 0.7] {
+        let stands = read(&scene(z));
+        assert!(clip(&stands, "crate").through.is_empty(), "{z}");
+    }
+    // A sign across the wall goes through it, flat as both are; the wall, whose edges
+    // pass the sign by, is not said to go through the sign.
+    let sign = on_track(4, "sign", "solid", "color=#ff0000 three_d=true scale=0.3 rotate_y=90 z=1 y=0.1");
+    let stands = read(&[scene(0.5), sign].concat());
+    assert_eq!(clip(&stands, "sign").through[0].clip, "wall");
+    assert!(clip(&stands, "wall").through.is_empty());
+    // A solid through it is said too, and one that stands on another goes through nothing.
+    let post = on_track(4, "post", "solid", "color=#ff0000 three_d=true scale=0.1 depth=0.5 z=0.8 y=0.2");
+    let stands = read(&[scene(0.5), post].concat());
+    assert_eq!(clip(&stands, "post").through[0].clip, "wall");
+    assert!((clip(&stands, "post").through[0].deep - 0.2).abs() < 1e-6);
+    let top = on_track(4, "top", "mesh", "kind=box width=0.1 height=0.1 length=0.1 y=0 z=0.5");
+    let stands = read(&[scene(0.5), top].concat());
+    assert_eq!(only(&stands, "top").on.as_deref(), Some("crate"));
+    assert!(clip(&stands, "top").through.is_empty() && clip(&stands, "crate").through.is_empty());
+    // Two meshes in each other are not measured, and that is said.
+    let other = on_track(4, "other", "mesh", "kind=box width=0.2 height=0.2 length=0.2 y=0.15 z=0.55 x=0.03");
+    let stands = read(&[scene(0.5), other].concat());
+    assert!(clip(&stands, "other").through.is_empty());
+    assert!(
+        stands.not_measured.iter().any(|said| said.contains("`crate` and `other`")),
+        "{:?}",
+        stands.not_measured
+    );
+}
+
+#[test]
+fn a_ball_in_the_air_is_in_the_air_and_the_floor_is_not() {
+    let ball = |y: f64| on_track(2, "ball", "mesh", &format!("kind=ball width=0.1 height=0.1 length=0.1 z=1 y={y}"));
+    let stands = read(&[level(), ball(-0.05)].concat());
+    let run = only(&stands, "ball");
+    assert_eq!((run.how, run.on.as_deref()), (How::Air, Some("floor")));
+    assert!(near(run.up.unwrap(), 0.4), "{run:?}");
+    assert_eq!(clip(&stands, "ball").script, None);
+    // Nothing is under the floor, and it is the ground, not a thing in the air.
+    assert_eq!(only(&stands, "floor").how, How::Ground);
+    assert_eq!(stands.ground.as_deref(), Some("floor"));
+    // Within its own height of the floor it floats, and on the floor it rests.
+    assert!(matches!(only(&read(&[level(), ball(0.3)].concat()), "ball").how, How::Floats(by) if near(by, 0.05)));
+    assert_eq!(only(&read(&[level(), ball(0.35)].concat()), "ball").how, How::Rests);
+    // Off the floor's edge there is nothing under it: in the air, over nothing.
+    let stands = read(&[level(), on_track(2, "ball", "mesh", "kind=ball width=0.1 height=0.1 length=0.1 z=1 x=5")].concat());
+    let run = only(&stands, "ball");
+    assert_eq!((run.how, run.on.as_deref(), run.up), (How::Air, None, None));
+}
+
+#[test]
+fn what_moves_along_a_floor_rests_all_the_way_and_where_it_lifts_is_the_run_said() {
+    let along = crate_at("y=0.3 x={0f:-0.3 23f:0.3}");
+    let stands = read(&[level(), along].concat());
+    let run = only(&stands, "crate");
+    assert_eq!((run.how, run.frames), (How::Rests, (0, 23)));
+    // It lifts off between frames 8 and 16, by a twentieth at the most on frame 12.
+    let lifts = crate_at("x={0f:-0.3 23f:0.3} y={0f:0.3 8f:0.3 12f:0.25 16f:0.3 23f:0.3}");
+    let before = project(&[level(), lifts].concat());
+    let stands = standing(&before, None, &[]).expect("reads");
+    let runs = &clip(&stands, "crate").runs;
+    let said: Vec<(u8, (i64, i64))> = runs
+        .iter()
+        .map(|run| (matches!(run.how, How::Floats(_)) as u8, run.frames))
+        .collect();
+    assert_eq!(said, [(0, (0, 8)), (1, (9, 15)), (0, (16, 23))], "{runs:?}");
+    assert!(matches!(runs[1].how, How::Floats(by) if near(by, 0.05)) && runs[1].worst == 12, "{runs:?}");
+    // One `y` keeps it down on every frame, and its way across is left as it was.
+    let line = clip(&stands, "crate").script.clone().expect("a line");
+    assert_eq!(line, "set crate y=0.3");
+    let after = apply_script(&before, Catalog::builtin(), &line).expect("runs").project;
+    assert_eq!(only(&standing(&after, None, &[]).expect("reads"), "crate").how, How::Rests);
+
+    // Going away over a floor that rises, a clip that holds its `y` goes into it, and what
+    // sets it down is a key at each end, a floor being flat.
+    let away = on_track(2, "crate", "mesh", "kind=box width=0.2 height=0.2 length=0.2 y=0.86 z={0f:1.9 23f:2.9}");
+    let before = project(&[tipped(), away].concat());
+    let stands = standing(&before, None, &[]).expect("reads");
+    let runs = &clip(&stands, "crate").runs;
+    assert_eq!(runs.len(), 2, "{runs:?}");
+    assert!(matches!(runs[1].how, How::Sunk { share, .. } if share == 1.0) && runs[1].worst == 23, "{runs:?}");
+    let line = clip(&stands, "crate").script.clone().expect("a line");
+    assert_eq!(line, "set crate y={0f:0.86 23f:0.755}");
+    let after = apply_script(&before, Catalog::builtin(), &line).expect("runs").project;
+    let stands = standing(&after, None, &[]).expect("reads");
+    assert_eq!((only(&stands, "crate").how, &clip(&stands, "crate").script), (How::Rests, &None));
+
+    // A clip that starts later has its keys counted from its own first frame.
+    let later = "  track V2 video\n    clip crate gen=mesh@1 at=6f dur=18f\n      set kind=box width=0.2 height=0.2 length=0.2 y=0.86 z={0f:1.9 17f:2.9}\n";
+    let late = project(&[tipped(), later.to_owned()].concat());
+    let stands = standing(&late, None, &[]).expect("reads");
+    assert_eq!(clip(&stands, "crate").runs[0].frames.0, 6);
+    let line = clip(&stands, "crate").script.clone().expect("a line");
+    assert_eq!(line, "set crate y={0f:0.86 17f:0.755}");
+    let set = apply_script(&late, Catalog::builtin(), &line).expect("runs").project;
+    assert_eq!(only(&standing(&set, None, &[]).expect("reads"), "crate").how, How::Rests);
+
+    // Read on a few frames alone, what moves has no one `y`, and no keys are made up
+    // between them: it says to read every frame.
+    let rate = Rate::FPS_24;
+    let stands = standing(&before, None, &[rate.time_of(0), rate.time_of(23)]).expect("reads");
+    let stood = clip(&stands, "crate");
+    assert_eq!((stands.frames.as_slice(), &stood.script), ([0i64, 23].as_slice(), &None));
+    assert!(stood.cannot.as_deref().is_some_and(|why| why.contains("no `at`")), "{stood:?}");
+    // What holds still is set down from a few frames as from all of them.
+    let still = project(&[level(), crate_at("y=0.25")].concat());
+    let stands = standing(&still, None, &[rate.time_of(3), rate.time_of(20)]).expect("reads");
+    assert_eq!(clip(&stands, "crate").script.as_deref(), Some("set crate y=0.3"));
+    assert_eq!(only(&stands, "crate").frames, (3, 20));
+}
+
+/// A glTF file of a sheet 2 across and 1 up standing on its ground, which its one animation,
+/// `lift`, takes as far up as it is tall in a second.
+fn lifted_sheet(folder: &Path) -> PathBuf {
+    let floats = |values: &[f32]| values.iter().flat_map(|value| value.to_le_bytes()).collect::<Vec<u8>>();
+    let parts: [(Vec<u8>, &str); 4] = [
+        (floats(&[-1.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0, 0.0, 0.0, -1.0, 0.0, 0.0]), "\"componentType\":5126,\"count\":4,\"type\":\"VEC3\""),
+        ([0u16, 1, 2, 0, 2, 3].iter().flat_map(|index| index.to_le_bytes()).collect(), "\"componentType\":5123,\"count\":6,\"type\":\"SCALAR\""),
+        (floats(&[0.0, 1.0]), "\"componentType\":5126,\"count\":2,\"type\":\"SCALAR\""),
+        (floats(&[0.0, 0.0, 0.0, 0.0, 1.0, 0.0]), "\"componentType\":5126,\"count\":2,\"type\":\"VEC3\""),
+    ];
+    let (mut bytes, mut views, mut accessors) = (Vec::new(), Vec::new(), Vec::new());
+    for (index, (part, kind)) in parts.iter().enumerate() {
+        views.push(format!("{{\"buffer\":0,\"byteOffset\":{},\"byteLength\":{}}}", bytes.len(), part.len()));
+        accessors.push(format!("{{\"bufferView\":{index},{kind}}}"));
+        bytes.extend(part);
+    }
+    let mut json = format!(
+        concat!(
+            "{{\"asset\":{{\"version\":\"2.0\"}},\"scene\":0,\"scenes\":[{{\"nodes\":[0]}}],\"nodes\":[{{\"mesh\":0}}],",
+            "\"meshes\":[{{\"primitives\":[{{\"attributes\":{{\"POSITION\":0}},\"indices\":1}}]}}],",
+            "\"animations\":[{{\"name\":\"lift\",\"channels\":[{{\"sampler\":0,\"target\":{{\"node\":0,\"path\":\"translation\"}}}}],",
+            "\"samplers\":[{{\"input\":2,\"output\":3}}]}}],",
+            "\"buffers\":[{{\"byteLength\":{}}}],\"bufferViews\":[{}],\"accessors\":[{}]}}",
+        ),
+        bytes.len(),
+        views.join(","),
+        accessors.join(",")
+    )
+    .into_bytes();
+    while !json.len().is_multiple_of(4) {
+        json.push(b' ');
+    }
+    let mut file = Vec::new();
+    file.extend(b"glTF");
+    file.extend(2u32.to_le_bytes());
+    file.extend((12 + 8 + json.len() as u32 + 8 + bytes.len() as u32).to_le_bytes());
+    file.extend((json.len() as u32).to_le_bytes());
+    file.extend(b"JSON");
+    file.extend(&json);
+    file.extend((bytes.len() as u32).to_le_bytes());
+    file.extend(b"BIN\0");
+    file.extend(&bytes);
+    let path = folder.join("sheet.glb");
+    std::fs::write(&path, file).expect("a file");
+    path
+}
+
+#[test]
+fn a_files_mesh_stands_by_its_feet_as_its_animation_has_them() {
+    let folder = tempfile::tempdir().expect("a folder");
+    lifted_sheet(folder.path());
+    // Half the frame tall about the frame's middle, its foot is a quarter under it, where
+    // the floor is.
+    let scene = |set: &str| {
+        let mut project = project(&[
+            on_track(1, "floor", "solid", "color=#404040 three_d=true rotate_x=-90 y=0.25 z=1 scale=4"),
+            on_track(2, "walker", "mesh", &format!("file=\"sheet.glb\" height=0.5 z=1 {set}")),
+        ]
+        .concat());
+        project.resolve_paths(Catalog::builtin(), folder.path());
+        project
+    };
+    // At rest it stands on every frame.
+    let stands = standing(&scene(""), None, &[]).expect("reads");
+    let run = only(&stands, "walker");
+    assert_eq!((run.how, run.on.as_deref(), run.frames), (How::Rests, Some("floor"), (0, 23)));
+    // Playing, it is down on its first frame and has gone up since: half a second in, by
+    // half its height.
+    let rate = Rate::FPS_24;
+    let playing = scene("animation=\"lift\"");
+    let stands = standing(&playing, None, &[rate.time_of(0), rate.time_of(12)]).expect("reads");
+    let runs = &clip(&stands, "walker").runs;
+    assert_eq!(runs.len(), 2, "{runs:?}");
+    assert_eq!((runs[0].how, runs[0].frames), (How::Rests, (0, 0)));
+    assert!(matches!(runs[1].how, How::Floats(by) if near(by, 0.25)) && runs[1].frames == (12, 12), "{runs:?}");
+    // And as its `seconds` has it: held half a second in, it floats on every frame.
+    let stands = standing(&scene("animation=\"lift\" seconds=0.5"), None, &[]).expect("reads");
+    assert!(matches!(only(&stands, "walker").how, How::Floats(by) if near(by, 0.25)));
+    assert_eq!(clip(&stands, "walker").script.as_deref(), Some("set walker y=0.25"));
+}
+
+#[test]
+fn a_clip_with_a_parent_is_set_down_by_its_own_y_where_that_can_be() {
+    let floor = on_track(1, "floor", "solid", "color=#404040 three_d=true rotate_x=-90 y=0.5 z=1 scale=4");
+    let child = |rig: &str, y: f64| {
+        format!(
+            concat!(
+                "  track V2 video\n    clip rig gen=null@1 at=0f dur=24f\n      set {rig}\n",
+                "  track V3 video\n    clip crate gen=mesh@1 at=0f dur=24f parent=rig\n",
+                "      set kind=box width=0.2 height=0.2 length=0.2 z=1 y={y}\n",
+            ),
+            rig = rig,
+            y = y
+        )
+    };
+    // A parent twice the size has it twice as large and twice as far from the middle: its
+    // foot is at twice its `y` and two tenths, and a tenth of its own `y` is two of the world's.
+    let before = project(&[floor.clone(), child("scale=2", 0.1)].concat());
+    let stands = standing(&before, None, &[]).expect("reads");
+    assert!(matches!(only(&stands, "crate").how, How::Floats(by) if near(by, 0.1)));
+    let line = clip(&stands, "crate").script.clone().expect("a line");
+    assert_eq!(line, "set crate y=0.15");
+    let after = apply_script(&before, Catalog::builtin(), &line).expect("runs").project;
+    assert_eq!(only(&standing(&after, None, &[]).expect("reads"), "crate").how, How::Rests);
+    // Moved by its parent, it is where the parent has it, and its own `y` is still its own.
+    let before = project(&[floor.clone(), child("y=0.1", 0.25)].concat());
+    let stands = standing(&before, None, &[]).expect("reads");
+    assert!(matches!(only(&stands, "crate").how, How::Floats(by) if near(by, 0.05)));
+    assert_eq!(clip(&stands, "crate").script.as_deref(), Some("set crate y=0.3"));
+    // Turned by its parent, its own `y` moves it across as well, and that is said.
+    let stands = read(&[floor, child("rotation=30", 0.3)].concat());
+    let stood = clip(&stands, "crate");
+    assert!(matches!(only(&stands, "crate").how, How::Floats(_)), "{stood:?}");
+    assert!(stood.script.is_none() && stood.cannot.as_deref().is_some_and(|why| why.contains("parent")), "{stood:?}");
+    // The null it moves with is no thing, and stands nowhere.
+    assert!(stands.clips.iter().all(|stood| stood.clip != "rig"));
+}
+
+#[test]
+fn only_what_is_a_thing_in_depth_stands_and_the_rest_is_said_not_to_be_measured() {
+    let scene = [
+        on_track(10, "sky", "solid", "color=#88aaff"),
+        level(),
+        crate_at("y=0.3"),
+        on_track(3, "words", "title", "text=\"HI\" three_d=true z=1"),
+        on_track(4, "wheel", "shape", "kind=ellipse width=0.2 height=0.2 fill=#202020 three_d=true depth=0.1 z=1 x=0.2 y=0.3"),
+        on_track(5, "tune", "adjustment", "three_d=true"),
+        on_track(6, "rig", "null", "three_d=true"),
+        on_track(7, "ghost", "mesh", "kind=box width=0.2 height=0.2 length=0.2 z=1 x=-0.3 opacity=0"),
+    ]
+    .concat();
+    let stands = read(&scene);
+    // From the lowest track up: a camera, a light, a null, an adjustment layer, a clip out
+    // of depth, and one that is wholly clear are none of them.
+    let said: Vec<&str> = stands.clips.iter().map(|stood| stood.clip.as_str()).collect();
+    assert_eq!(said, ["floor", "crate", "wheel"]);
+    assert_eq!(stands.ground.as_deref(), Some("floor"));
+    // A round shape is measured as the box around it, and stands on its lowest line.
+    assert_eq!((only(&stands, "wheel").how, only(&stands, "wheel").on.as_deref()), (How::Rests, Some("floor")));
+    let not = stands.not_measured.join("\n");
+    assert!(not.contains("the outline of `wheel` within the box around it"), "{not}");
+    assert!(not.contains("where `words` stands"), "{not}");
+    assert!(not.contains("`sky`, out of depth"), "{not}");
+    assert!(!not.contains("crate") && !not.contains("cam") && !not.contains("ghost"), "{not}");
+}
+
+#[test]
+fn a_sequence_of_any_size_says_the_same() {
+    // Nothing here is on a whole pixel of any of them, and a clip that holds still is
+    // drawn on whole pixels: what is read is where the document puts it.
+    let scene = [
+        tipped(),
+        on_track(2, "body", "shape", "kind=rect width=0.9 height=0.22 fill=#c02020 three_d=true depth=0.4 x=-0.1337 y=0.8431 z=2"),
+        on_track(3, "crate", "mesh", "kind=box width=0.213 height=0.217 length=0.4 x=0.3 y=0.7719 z=2.3 rotate_y=20"),
+        on_track(4, "card", "solid", "color=#ff0000 three_d=true scale=0.2 z=1.6 y=0.8873 x=-0.31"),
+        on_track(5, "ball", "mesh", "kind=ball width=0.1 height=0.1 length=0.1 z=3 y={0f:0.2 23f:0.9}"),
+    ]
+    .concat();
+    let read_at = |size: &str| standing(&project_of(size, &scene), None, &[]).expect("reads");
+    // To a millionth of the frame: a shape's outline is kept in 32 bits, of its pixels.
+    let rounded = |value: f64| (value * 1e6).round() / 1e6;
+    let said = |standing: &Standing| -> Vec<String> {
+        standing
+            .clips
+            .iter()
+            .map(|stood| {
+                let runs: Vec<String> = stood
+                    .runs
+                    .iter()
+                    .map(|run| {
+                        let how = match run.how {
+                            How::Floats(by) => format!("floats {}", rounded(by)),
+                            How::Sunk { deep, share } => format!("sunk {} {}", rounded(deep), rounded(share)),
+                            other => format!("{other:?}"),
+                        };
+                        format!("{how} on {:?} {} {} {:?} {}", run.on, rounded(run.slope), rounded(run.open), run.frames, run.worst)
+                    })
+                    .collect();
+                format!("{}: {} | {:?} {:?}", stood.clip, runs.join("; "), stood.script, stood.cannot)
+            })
+            .collect()
+    };
+    let small = read_at("320x180");
+    // Something of each kind is said, or this would hold of nothing.
+    let text = said(&small).join("\n");
+    assert!(text.contains("sunk") && text.contains("floats") && text.contains("Air"), "{text}");
+    for size in ["1920x1080", "832x468", "1664x936"] {
+        assert_eq!(said(&read_at(size)), said(&small), "{size}");
+    }
+}
+
+fn fixture(name: &str) -> Project {
+    let folder = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../fixtures/shots")
+        .join(name);
+    let text = std::fs::read_to_string(folder.join("project.kerf")).expect("the fixture");
+    parse_document(&text, Catalog::builtin())
+        .unwrap_or_else(|errors| panic!("{name}: {errors:?}"))
+        .project
+}
+
+#[test]
+fn what_the_fixtures_scenes_stand_on_is_what_was_found_of_them() {
+    // The car on a road, as it is kept: its takes are of this guide, so what is found is
+    // written down here and the scene is left as it is. The body's foot is level at 0.95
+    // and the road leans, 0.960 under its front and 0.918 under its back: its far half is in
+    // the road by 0.032, which the road hides in a depth pass, and what is drawn of a car
+    // is as tall as what shows of it (docs/architecture.md, "A floor truly higher than the
+    // car's foot").
+    let car = fixture("car");
+    for (sequence, body, cabin, road) in [
+        ("s2", "body", "cabin", "road"),
+        ("s3", "parked_body", "parked_cabin", "parked_road"),
+    ] {
+        let stands = standing(&car, Some(sequence), &[]).expect("reads");
+        assert_eq!((stands.frames.len(), stands.ground.as_deref()), (96, Some(road)));
+        let run = only(&stands, body);
+        assert!(
+            matches!(run.how, How::Sunk { deep, share } if (deep - 0.032).abs() < 5e-4 && share == 0.5),
+            "{run:?}"
+        );
+        // It is as deep on every frame, so its worst is its first.
+        assert_eq!((run.on.as_deref(), run.frames, run.worst), (Some(road), (0, 95), 0));
+        assert!((run.slope - 6.0).abs() < 1e-6 && (run.open - 0.042).abs() < 5e-4, "{run:?}");
+        assert_eq!(clip(&stands, body).script.as_deref(), Some(format!("set {body} y=0.808").as_str()));
+        // The cabin is on the body, and would have to follow it up.
+        let run = only(&stands, cabin);
+        assert_eq!((run.how, run.on.as_deref()), (How::Rests, Some(body)));
+        assert!(stands.clips.iter().all(|stood| stood.through.is_empty()), "{stands:?}");
+        // Both are shapes with a depth, plain rectangles, so their boxes are what they are.
+        let sky = if sequence == "s2" { "sky" } else { "parked_sky" };
+        assert_eq!(stands.not_measured, [format!("`{sky}`, out of depth: it is nowhere in the scene")]);
+    }
+    // A walk in layers has nothing in depth: nothing stands, and that is what is said.
+    let walk = fixture("walk");
+    for (sequence, flat) in [("s1", "`back`, `words`, `front`"), ("s2", "`plate`, `mover`")] {
+        let stands = standing(&walk, Some(sequence), &[]).expect("reads");
+        assert!(stands.clips.is_empty() && stands.ground.is_none(), "{stands:?}");
+        assert_eq!(stands.not_measured, [format!("{flat}, out of depth: it is nowhere in the scene")]);
+    }
+}
+
+#[test]
+#[ignore = "a measurement, not a check: cargo test -p kerf-engine --test stands --release -- --ignored --nocapture"]
+fn what_reading_a_scene_costs() {
+    let car = fixture("car");
+    let rate = Rate::new(24, 1).expect("a rate");
+    let three = [rate.time_of(0), rate.time_of(48), rate.time_of(95)];
+    let time = |run: &dyn Fn()| {
+        run();
+        let started = std::time::Instant::now();
+        for _ in 0..20 {
+            run();
+        }
+        started.elapsed().as_secs_f64() * 1000.0 / 20.0
+    };
+    let few = time(&|| drop(standing(&car, Some("s2"), &three).expect("reads")));
+    let all = time(&|| drop(standing(&car, Some("s2"), &[]).expect("reads")));
+    println!("the car on a road, s2: 3 frames in {few:.2} ms, all 96 in {all:.2} ms");
+    // A mesh of some size on the road beside the car: a ball's 2,200 triangles.
+    let ball = "\n  track V6 video\n    clip ball gen=mesh@1 at=0f dur=96f\n      set kind=ball width=0.3 height=0.3 length=0.3 x=0.3 y=0.8 z=2\n";
+    let text = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../fixtures/shots/car/project.kerf"),
+    )
+    .expect("the fixture")
+    .replace("\nsequence s3", &format!("{ball}sequence s3"));
+    let with = parse_document(&text, Catalog::builtin()).expect("reads").project;
+    let few = time(&|| drop(standing(&with, Some("s2"), &three).expect("reads")));
+    let all = time(&|| drop(standing(&with, Some("s2"), &[]).expect("reads")));
+    println!("with a ball of 2,208 triangles: 3 frames in {few:.2} ms, all 96 in {all:.2} ms");
+}

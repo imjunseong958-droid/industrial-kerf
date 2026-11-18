@@ -51,3 +51,7 @@ media gone path="shots/gone.mp4" rate=16 dur=81f video=832x480
   lowest track, and over it the man through his matte, further along the
   path and half as large again, with the path whole where he was. Make
   `man` and `gone` first.
+
+Neither sequence has a clip in depth, so `look` with `stands` has nothing
+to measure of them and says so: every clip that draws is named as out of
+depth.

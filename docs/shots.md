@@ -360,6 +360,8 @@ the agent's to judge: nothing is written for it first.
 - `look` lists what wants making under `toMake`, as an `edit` that writes
   steps answers it, with what would refuse it (`cannot`) and the notes a
   person would be shown (`notes`), so steps are mended before anyone runs them.
+  With those notes is what `stands` finds of the sequence a `render` step
+  draws ([Guides](#guides)): what floats, is sunk, or goes through another.
   `look` with a proposal lists what that proposal would have made. A making is
   of the project: of a media a waiting proposal adds, `make` says which
   proposal, and that it comes first.
@@ -1721,6 +1723,19 @@ steps:
   model reads from it first ([A picture read back](#a-picture-read-back)):
   `generate model=depth guide=footage/shot.mp4 out={depth.mp4}`, and then
   `guide={depth.mp4}`.
+
+A scene written as text can be wrong where no frame shows it: a crate a
+hundredth of the frame over the road, a car's far wheels in it. A depth pass
+shows a model both, and a model draws what shows of a thing. An agent's
+`look` with `stands` measures what each clip in depth stands on, in the
+scene and with nothing drawn: which floats and by how much, which is sunk,
+which goes through another, on which frames, and the line that sets it down
+(`set crate y=0.839`, or keys where it or what it stands on moves). A thing
+is placed roughly and set down by that line. What it finds on the first,
+middle, and last frame of a sequence a `render` step draws is among the
+`notes` of what `look` lists to make. It says what is so and fails nothing:
+a ball thrown is in the air. What it does not measure it names
+([architecture.md](architecture.md#what-directs-a-model), 3).
 
 ### Passes
 

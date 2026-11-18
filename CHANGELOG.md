@@ -6,6 +6,19 @@ on `main`; its section here becomes the release's notes on GitHub
 
 ## Unreleased
 
+- An agent's `look` with `stands` says what each thing in a scene in depth
+  stands on, which no frame shows: a crate a hundredth of the frame over
+  the road, a car's far wheels in it, a box through a wall. It is measured
+  in the scene with nothing drawn, in milliseconds, on every frame of the
+  sequence or the ones asked for, and comes with the line that sets a thing
+  down (`set crate y=0.839`, or keys where it or its floor moves). So a
+  thing is placed roughly and set down by that line, where the `model-shot`
+  playbook had its height worked out by hand. What it finds of a guide's
+  sequence is among the `notes` of what `look` lists to make. It is what is
+  so and fails no check, a ball thrown being in the air, and it names what
+  it does not measure: a mesh into another mesh, the outline of a round
+  shape within its box, and a clip whose outline is its picture's own
+  ([docs/shots.md](docs/shots.md#guides)).
 - How a media is made is written in the document, under the media, and no
   longer in a recipe file (`.kerfrecipe`) beside the project. A media that
   Kerf or a model makes has its steps under its line (`render <sequence>

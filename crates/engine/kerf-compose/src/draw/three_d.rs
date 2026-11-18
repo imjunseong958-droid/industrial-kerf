@@ -22,6 +22,7 @@ use super::*;
 mod gltf;
 mod texture;
 pub(super) mod mesh;
+pub(super) mod world;
 
 /// The field of view at which a clip at z = 0 is its 2D self, in degrees.
 const DEFAULT_FOV: f64 = 40.0;

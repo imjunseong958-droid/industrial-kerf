@@ -3211,6 +3211,105 @@ fn look_says_what_shows_of_each_clip_and_what_hides_it() {
     assert!(on_media.contains("program"), "{on_media}");
 }
 
+/// `look` says what each clip in depth stands on, and the line it gives sets a clip down.
+#[test]
+fn look_says_what_stands_on_what_and_its_line_sets_a_clip_down() {
+    // The floor the skill lays, a crate hung over it, a post let into it, a ball thrown,
+    // and a card through a wall: each placed roughly, as an agent places them.
+    let Some((_directory, router)) = router_with(
+        "    clip sky gen=solid@1 at=0f dur=60f
+      set color=#88aaff
+  track V2 video
+    clip road gen=solid@1 at=0f dur=60f
+      set color=#404448 three_d=true rotate_x=-84 y=0.75 z=4 scale=16
+  track V3 video
+    clip crate gen=mesh@1 at=0f dur=60f
+      set kind=box width=0.3 height=0.2 length=0.4 x=-0.2 y=0.83 z=2
+  track V4 video
+    clip post gen=mesh@1 at=0f dur=60f
+      set kind=cylinder width=0.05 height=0.4 length=0.05 x=0.2 y=0.8 z=2
+  track V5 video
+    clip ball gen=mesh@1 at=0f dur=60f
+      set kind=ball width=0.1 height=0.1 length=0.1 z=3 y=0.2
+  track V6 video
+    clip wall gen=solid@1 at=0f dur=60f
+      set color=#808080 three_d=true scale=0.4 z=3 x=0.4 y=0.656
+  track V7 video
+    clip sign gen=solid@1 at=0f dur=60f
+      set color=#ff0000 three_d=true scale=0.1 rotate_y=90 z=3 x=0.4 y=0.6
+  track V8 video
+    clip cam gen=camera@1 at=0f dur=60f
+  track V9 video
+    clip sun gen=light@1 at=0f dur=60f
+      set kind=ambient
+",
+    ) else {
+        return;
+    };
+    let read = |arguments: Value| ok(&router, "look", arguments);
+    let said = read(json!({"stands": true}));
+    assert_eq!(said["sequence"], "s1", "{said}");
+    let stands = &said["stands"];
+    assert_eq!((&stands["frames"], &stands["ground"]), (&json!(60), &json!("road")), "{stands}");
+    let clips = stands["clips"].as_array().unwrap();
+    let of = |id: &str| -> Vec<&Value> { clips.iter().filter(|clip| clip["clip"] == id).collect() };
+    // A camera, a light, the sky out of depth, and the ground have no entry.
+    assert_eq!(
+        clips.iter().map(|clip| clip["clip"].as_str().unwrap()).collect::<Vec<_>>(),
+        ["crate", "post", "ball", "wall", "sign"],
+        "{stands}"
+    );
+    // The crate hangs over the road, which leans; the post's foot is all in it.
+    let crate_ = of("crate")[0];
+    assert_eq!((&crate_["on"], &crate_["floats"], &crate_["slope"]), (&json!("road"), &json!(0.009), &json!(6.0)), "{crate_}");
+    assert_eq!((&crate_["frames"], &crate_["script"]), (&json!([0, 59]), &json!("set crate y=0.839")), "{crate_}");
+    let post = of("post")[0];
+    assert_eq!((&post["sunk"], &post["share"], &post["script"]), (&json!(0.042), &json!(1.0), &json!("set post y=0.758")), "{post}");
+    // The ball is in the air over the road, and no line brings it down.
+    let ball = of("ball")[0];
+    assert_eq!((&ball["air"], &ball["over"]), (&json!(true), &json!("road")), "{ball}");
+    assert!(ball.get("script").is_none() && ball.get("frames").is_none(), "{ball}");
+    // The wall rests, and the sign goes through it: the wall's own edges pass the sign by.
+    assert_eq!(of("wall")[0], &json!({"clip": "wall", "on": "road", "slope": 6.0}));
+    let through = &of("sign")[0]["through"][0];
+    assert_eq!((&through["clip"], &through["share"]), (&json!("wall"), &json!(0.5)), "{through}");
+    assert_eq!(stands["notMeasured"], json!(["`sky`, out of depth: it is nowhere in the scene"]));
+
+    // The lines, run as one edit, set both down: the proposal reads as resting.
+    let script = format!("{}\n{}", crate_["script"].as_str().unwrap(), post["script"].as_str().unwrap());
+    let proposal = ok(&router, "edit", json!({"script": script}));
+    let id = proposal["proposal"].as_str().unwrap();
+    let after = read(json!({"stands": true, "proposal": id}));
+    let clips = after["stands"]["clips"].as_array().unwrap();
+    assert_eq!(clips[0], json!({"clip": "crate", "on": "road", "slope": 6.0, "gap": 0.042}), "{after}");
+    assert_eq!(clips[1], json!({"clip": "post", "on": "road", "slope": 6.0, "gap": 0.005}), "{after}");
+    // A media whose steps draw the sequence is told of it before it is made: what floats,
+    // is sunk, or goes through, and not the ball, which is in the air.
+    let staged = ok(
+        &router,
+        "edit",
+        json!({"script": "media add m9 path=\"shots/open.mp4\" rate=30 dur=2s video=320x180\nstep m9 add render s1 {out}"}),
+    );
+    let notes = staged["toMake"][0]["notes"].as_array().unwrap_or_else(|| panic!("{staged}"));
+    assert_eq!(notes.len(), 1, "{staged}");
+    let note = notes[0].as_str().unwrap();
+    assert!(
+        note.starts_with("in sequence `s1`, on its first, middle, and last frame, `crate` floats 0.009 over `road`, `post` is sunk 0.042 in `road`, `sign` goes through `wall`, in frame heights: `look` with `stands`"),
+        "{note}"
+    );
+    assert!(!note.contains("ball"), "{note}");
+    // On the frames asked for alone, and with what shows on them in one answer.
+    let both = read(json!({"stands": true, "shows": true, "at": ["0f", "30f"]}));
+    assert_eq!(both["stands"]["frames"], 2, "{both}");
+    assert_eq!(both["frames"].as_array().map(Vec::len), Some(2), "{both}");
+    assert_eq!(both["stands"]["clips"][0]["frames"], json!([0, 30]), "{both}");
+    // Where it is not asked for sensibly, it says how.
+    let on_media = message(&error(&router, "look", json!({"stands": true, "media": "m1"})));
+    assert!(on_media.contains("in depth"), "{on_media}");
+    let outside = message(&error(&router, "look", json!({"stands": true, "at": ["600f"]})));
+    assert!(outside.contains("outside sequence"), "{outside}");
+}
+
 /// A glTF file of one triangle 2 across and 1 up, with a camera 5 before it that goes 2 to the
 /// right in a second, and another that holds still and has no perspective.
 fn set_with_a_camera(folder: &std::path::Path) {

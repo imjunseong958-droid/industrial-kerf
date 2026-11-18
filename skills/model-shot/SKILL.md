@@ -43,9 +43,9 @@ description: Block a shot in Kerf and have a video model film it, from a guide s
   heights (x in frame widths); `depth` gives a flat clip sides. What is nearer
   at a place in the picture is drawn over what is farther there. Make a
   floor a large clip tipped back, below the middle (`rotate_x=-84 y=0.75
-  z=4 scale=16`). Tipped so, it is 0.1 lower for each frame height nearer:
-  1.0 where z is 1.6. A clip stands on it with its foot there. What of a
-  clip is under the floor is hidden, and a model leaves out what is hidden.
+  z=4 scale=16`). Put a thing near its place: `look` with `stands` gives
+  the `script` that sets it down. What of a clip is under the floor is
+  hidden, and a model leaves out what is hidden.
 - Leave a far backdrop, a sky, out of depth: a plain clip on the lowest
   track draws flat behind the scene, unlit. In depth it takes longer to
   draw, and where it meets the floor is the take's horizon.
@@ -64,11 +64,12 @@ description: Block a shot in Kerf and have a video model film it, from a guide s
   model that does not read one is said to have no use for it in `notes`:
   leave it off the step.
 - Read the guide before writing the steps, at its first, middle, and last
-  frame: `look` with `shows` and `at` says of each clip where it is (`box`),
-  what hides it (`hidden`, `by`), and which edges of the frame it reaches.
-  Mend a subject with a floor in its `by`, one with no `box`, which has left
-  the frame, and one at an edge it should not be at. Then look at the frames
-  themselves: nothing crossing by accident, the move plain.
+  frame: `look` with `shows`, `stands`, and `at`. `shows` says where each
+  clip is (`box`), what hides it (`hidden`, `by`), and the `edges` it
+  reaches; `stands`, what `floats`, is `sunk`, or goes `through` another.
+  Mend those, and a subject with a floor in its `by`, no `box`, or an edge
+  it should not be at. Then look at the frames themselves: nothing crossing
+  by accident, the move plain.
 - The shot is a media with two steps under it: `step <id> add render
   <sequence> {guide.mp4} …`, then `step <id> add generate model=…
   prompt="…" guide={guide.mp4}` with `seconds` and a `seed`, so that a

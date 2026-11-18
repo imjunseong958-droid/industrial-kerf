@@ -554,6 +554,64 @@ What is built for it, in this order, each measured before the next:
    of the frame. A clip that is partly clear is read as not showing, and
    said to be.
 
+   What it does not see is whether a foot is on the floor, which a frame
+   does not show: a hundredth of the frame is a pixel or two, and behind the
+   floor it is no pixel. A model follows the depth pass all the same, and
+   draws what shows of a thing (above, "A floor truly higher than the car's
+   foot"). So `look` with `stands` measures it (`kerf_engine::stands`,
+   2026-11-18), in the scene and with nothing drawn. The compositor says
+   what a frame is drawn from (`Compositor::in_depth`,
+   `kerf-compose/src/draw/three_d/world.rs`): each clip's plane, the box of
+   one with a `depth`, a mesh's triangles where its file's animation has
+   them, in frame heights and so the same at any size of sequence. A clip's
+   feet are its lowest corners. A line straight down through each meets the
+   other clips' surfaces, found through the tree of boxes a mesh's shadow is
+   found by (`mesh::Standing`), and how far off the first of them is says
+   how the clip stands: on it, floating over it and by how much, sunk in it
+   and with how many of its feet, or in the air, with nothing under it
+   within its own height. An edge of a clip that goes through another's
+   surface is said too, a box through a wall. With each that floats or is
+   sunk comes the line that sets it down, its own `y` under whatever parents
+   it has, as one number or as the fewest keys that keep it down on every
+   frame (`kerf_track::simplified`); the document gets no new word for it,
+   and the agent runs the line as it runs the one `track` gives. Runs of
+   frames that say the same are one entry with its worst frame. It is what
+   is so and no verdict, as `no_effect` is: a ball thrown is in the air, and
+   one that leaves the ground is brought up where it is sunk and no more.
+
+   What came of the first scenes read. The floor the skill lays leans 6
+   degrees, so a thing whose foot is level cannot sit flat on it: 0.4 long,
+   it is down on its far side and 0.042 open under its near one, which is
+   said as `slope` and `gap` and counts as resting. And the car kept in
+   `fixtures/shots/car` has its far half 0.032 in the road on every frame,
+   its foot being level at 0.95 where the road is 0.960 under its front and
+   0.918 under its back: the scene is left as it is, its takes being of
+   that guide, and the test holds what was found
+   (`what_the_fixtures_scenes_stand_on_is_what_was_found_of_them`).
+   `fixtures/shots/walk` has nothing in depth, which is what is said of it.
+
+   What it costs, on four cores, the compositor's plan of the sequence
+   included: the car's scene, three clips in depth, 0.6 ms for three frames
+   and 3.2 ms for all 96; with a ball of 2,208 triangles beside the car,
+   3.1 ms and 54 ms. A guide takes one to six seconds to draw and a making
+   78 to 97, so it is read without being asked for: what `look` lists
+   under `toMake` has in its `notes` what floats, is sunk, or goes through
+   another on the first, middle, and last frame a `render` step draws.
+
+   Not measured, and said in `notMeasured` where a scene has it, since
+   saying nothing reads as nothing wrong: a mesh into another mesh; the
+   outline of a shape that is no plain rectangle, which is measured as the
+   box around it, and so is a solid's; a clip whose outline is its
+   picture's alpha, a title, a nested sequence, a masked clip, media with
+   alpha, which is passed over; clips out of depth. A clip wholly under a
+   surface other than the ground is taken to be under a roof. A shape's box
+   is read from its numbers (`PictureSource::extent`), a `gen=shape` clip's
+   plane being the whole frame whatever its size. It reads where the
+   document puts a clip: one that holds still is drawn on whole pixels of
+   its sequence, under a pixel from there, and a touch is 0.003 of the
+   frame's height, a pixel and a half of a guide 480 high and six times
+   what a `y` written to three places is off by.
+
 4. **Geometry in the guide**, which is in (Next, 2). By the
    fifth rule what a guide shows is what the shot has: a model covers a
    render and keeps its shapes, so a car that is two boxes is a shot of two
@@ -1406,6 +1464,8 @@ it is flagged below WCAG's 3:1 over a fifth of it. It draws frames, so it is ask
 An agent starts with nothing to go on but the reference, so what it is told has to carry it. `look` on a fresh folder says in `unplaced` what footage is there and not in the document, and `look` with `file` gives the `media add` line that adds one, measured from the file. A refused line says what to do: which tracks there are and the `track add` that makes the one it asked for, the name a slip of a letter or two was for, and, where a clip or a media exists only in a pending proposal, that proposal's id and that `extend` builds on it. An `extend` that names a version since replaced is refused with the newest version's id, since built on the old one it would leave out what was added after and become the newest all the same. So do `look` and `render` where a pending proposal has what the project does not. Set where nothing reads it, such as a `bevel` with no `depth` or a `focus` with no `aperture`, a value draws nothing and fails nothing, so the check says so, as information that fails no row (`no_effect`). And `look` with `cost` and `at` says who draws a frame, which clip and effect send it to the CPU, and what it costs at full size and at half, against a frame's share of the time. `effects` looks through generators' parameters and clip properties too, since nothing else would lead from "shadow" to `gen=light@1` or from "bevel" to `bevel=`.
 
 `look` with `shows` and `at` reads a frame as an eye would, for a scene whose text does not show what is wrong with it: of each clip that draws, where it is on the frame, how much of it other clips hide and which, the edges it reaches, and whether any of it is in the frame at all (What directs a model). It is asked for and not part of the check, since it draws a small frame for each clip.
+
+`look` with `stands` says what no frame shows: what each clip in depth stands on, measured in the scene, which floats, which is sunk, which goes through another, and the line that sets it down (What directs a model, 3). It draws nothing and costs milliseconds, so what it finds on three frames of a guide's sequence is in `toMake`'s `notes` unasked. It fails no check either: a ball thrown is in the air.
 
 `look` with `media` and `facts` gives a fact sheet beside the index: what the camera does in each shot, from the one move, turn, and zoom that
 most of the picture agrees on between small frames four times a second (`kerf_track::shot`, so a subject crossing the frame is left out), and R128 loudness.

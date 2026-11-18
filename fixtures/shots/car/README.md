@@ -47,6 +47,16 @@ those names:
   puts the camera on each frame (`cameras.txt` in the `.work` folder) and
   the depth it agrees on across the frames, which is the media.
 
+What `look` with `stands` says of it (2026-11-18), which is left as it is,
+its takes being of this guide: in `s2` and in `s3` the body is sunk 0.032
+of the frame's height in the road with half of its feet, on every frame.
+Its foot is level at 0.95, and the road leans 6 degrees, 0.960 under the
+body's front and 0.918 under its back, so the road hides its far side from
+the depth pass. `set body y=0.808` would have it rest on its far side with
+0.042 open under its front, and the cabin, which stands on the body, would
+then be 0.032 in it until it is moved up as well. Nothing goes through
+anything, and the sky is out of depth.
+
 `project.kerf` was written again on 2026-11-13 from what
 `docs/architecture.md` says of the scene: the one the first measurements were
 made on was never in the repository, a `project.kerf` being a file Git is told
