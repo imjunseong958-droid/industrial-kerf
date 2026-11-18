@@ -5,9 +5,9 @@
 > under the media they make ([Steps in the document](#steps-in-the-document)):
 > an agent writes them with its edit and makes them with `make`, and `kerf
 > make` runs them. Recipe files, where the steps were written before, are
-> still read, and are the one place a step that runs a program (`run`) can
-> be; the editor's graph and bin still work on those alone, and this page
-> below that section still says "recipe" where the same holds of steps. No
+> still read, are carried into the document with `kerf carry`, and are the
+> one place a step that runs a program (`run`) can be; this page below that
+> section still says "recipe" where the same holds of steps. No
 > model comes with Kerf, and none is set up until a person names one in
 > their own `~/.kerf/models.json`; see [Models](#models).
 
@@ -103,18 +103,39 @@ media gone path="shots/gone.mp4" rate=16 dur=81f video=832x480
   is still read.
 
 `kerf make`, `kerf takes` and `kerf shots` read a media made this way as
-they read a recipe's. The editor's graph and its bin (Open Graph, Make from
-Recipe…, Takes) are still of recipe files, and a preset does not carry steps
-yet.
+they read a recipe's, and so does the editor: its bin offers Open Graph,
+Make…, Make Several and Takes for it, and a change made in its graph is an
+edit of the document, which undo takes back.
 
-**A recipe carried into the document** is its `render`, `generate` and
-`join` lines written under the media, each file named from the project's
-folder in place of the recipe's (`../footage/walk.mp4` in `shots/` is
-`footage/walk.mp4`), and `recipe=` taken off the media's line. Its takes
-stay where they are, the folder being the same. The take the media is was
-recorded against the recipe's text, so it says that the recipe and its
-steps changed until the shot is made again; nothing carries a recipe over
-for you yet, and one that is not carried is made as it always was.
+### Carrying a recipe into the document
+
+A project made before the document held steps has them in recipe files, and
+opens and makes as it did. `kerf carry` moves one over:
+
+```bash
+kerf carry m3            # show the steps it would write, and ask
+kerf carry --all --yes   # every media that names a recipe file
+```
+
+- Its `render`, `generate` and `join` lines are written under the media,
+  each file named from the project's folder in place of the recipe's
+  (`../footage/walk.mp4` in `shots/` is `footage/walk.mp4`), and `recipe=`
+  comes off the media's line. It is one edit, which undo takes back.
+- Its takes stay where they are, the folder being the same, and none is
+  asked for again for being carried: a take made from the recipe and what
+  it read as they stand is held from then on to the steps the recipe
+  became. A take that wanted making already still does. What a take keeps
+  of its making reads as steps too, so going back to one sets them.
+- The recipe's file is left where it is, with nothing naming it.
+- A file the recipe said it reads (`needs`) that no step names is said,
+  since nothing watches it after. A mesh a guide draws needs no saying: it
+  is found from its clip.
+- A recipe with a `run` line is not carried, a document naming no program:
+  it is said, and the media goes on being made from its file.
+
+An agent carries one with `edit` and `carry` (`{"carry": ["m3"]}`), in the
+same edit as the script lines that then change its steps, and `look` says
+of each media that wants making from a recipe's file how.
 
 ## Recipes
 
@@ -312,9 +333,10 @@ kerf proposals           # the proposals an agent's `edit` left waiting, and wha
 kerf proposals <id>      # what one would change: its script and the document's lines
 kerf accept [<id>]       # accept the one that waits, or the one named
 kerf reject [<id>]       # leave the project as it is
-kerf make m3             # run its recipe
+kerf make m3             # run its steps
 kerf takes m3            # its takes
-kerf shots               # every media a recipe makes: its take, its cast, whether it wants making
+kerf shots               # every media its steps make: its take, its cast, whether it wants making
+kerf carry m3            # write a recipe file's steps under the media, in the document
 ```
 
 - `kerf load` is the editor's Load from Disk. Kerf reads its own state of a
@@ -372,11 +394,13 @@ the agent's to judge: nothing is written for it first.
 - What was made only to be looked at, the numbered picture of
   `matte-shown` or a trial, the agent takes out of the document once it has
   read it (`media remove <id>`). Its takes stay on disk.
-- A media that still names a recipe file is changed as before: `edit` takes
-  recipe files with its script (`recipes`), sets single words of one with
-  `recipeSet`, and each text that is not the one there is kept beside it as
-  its next version, `shots/open@2.kerfrecipe`, which the proposal moves the
-  media to with `media replace`, never written over the one before.
+- A media that still names a recipe file is carried into the document first
+  (`edit` with `carry`,
+  [Carrying a recipe into the document](#carrying-a-recipe-into-the-document)),
+  and is then changed as any is. Until it is, `edit` still takes recipe
+  files with its script (`recipes`) and sets single words of one with
+  `recipeSet`, each text that is not the one there kept beside it as its
+  next version, `shots/open@2.kerfrecipe`.
 - `look` lists what wants making under `toMake`, as an `edit` that writes
   steps answers it, with what would refuse it (`cannot`) and the notes a
   person would be shown (`notes`), so a recipe is mended before anyone runs it.

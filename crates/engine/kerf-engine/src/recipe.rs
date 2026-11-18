@@ -193,6 +193,24 @@ pub fn steps_text(steps: &[kerf_model::making::Step]) -> String {
 /// with a line the document has no place for is refused: a `run`, which names a program
 /// to run, and a `needs`, which says what one reads.
 pub fn document_steps(text: &str) -> Result<Vec<kerf_model::making::Step>> {
+    let (steps, needs) = steps_of_text(text, None)?;
+    match needs.first() {
+        Some(file) => Err(EngineError::msg(format!(
+            "`needs {file}` is a recipe file's alone: the steps a document holds are `render`, `generate`, and `join`, and what a sequence they draw reads is found from its clips"
+        ))),
+        None => Ok(steps),
+    }
+}
+
+/// The steps a recipe's text says, as the document holds them, and the files its `needs`
+/// lines name. With `folder`, the recipe's own from the project's, each file a step names
+/// is named from the project's folder as a document names it: `../refs/boat.png` in
+/// `shots` is `refs/boat.png`. A `run` is refused: a document names no program.
+fn steps_of_text(
+    text: &str,
+    folder: Option<&Path>,
+) -> Result<(Vec<kerf_model::making::Step>, Vec<String>)> {
+    use kerf_model::making::Step as Written;
     let mut lines = text
         .lines()
         .enumerate()
@@ -201,20 +219,144 @@ pub fn document_steps(text: &str) -> Result<Vec<kerf_model::making::Step>> {
     if !matches!(lines.next(), Some((_, HEADER))) {
         return Err(EngineError::msg(format!("a recipe starts with `{HEADER}`")));
     }
-    let mut steps: Vec<kerf_model::making::Step> = Vec::new();
+    let from_project = |file: &str| -> Result<String> {
+        match folder {
+            Some(folder) => within(folder, file, "file the recipe names").map(|inside| stored(&inside)),
+            None => Ok(file.to_owned()),
+        }
+    };
+    let mut steps: Vec<Written> = Vec::new();
+    let mut needs = Vec::new();
     for (number, line) in lines {
         let wrong = |what: String| EngineError::msg(format!("line {number}: {what}"));
         let words = words(line).map_err(wrong)?;
-        if let Some(verb @ ("run" | "needs")) = words.first().map(String::as_str) {
-            return Err(wrong(format!(
-                "`{verb}` is a recipe file's alone: the steps a document holds are `render`, `generate`, and `join`, and none of them names a program to run"
-            )));
+        match words.first().map(String::as_str) {
+            Some("run") => {
+                return Err(wrong(format!(
+                    "`run {}` runs a program, and a document names none: the steps it holds are `render`, `generate`, and `join`. A `run` is a recipe file's alone",
+                    words.get(1).map_or("", String::as_str)
+                )))
+            }
+            Some("needs") => {
+                for file in &words[1..] {
+                    needs.push(from_project(file)?);
+                }
+                continue;
+            }
+            _ => {}
         }
         let made: Vec<String> = steps.iter().map(|step| step.makes().to_owned()).collect();
-        steps.push(kerf_model::making::Step::parse(&words, &made).map_err(wrong)?);
+        let mut step = Written::parse(&words, &made).map_err(wrong)?;
+        if let Written::Generate(ask) = &mut step {
+            let sources = ask
+                .guide
+                .iter_mut()
+                .chain(ask.guides.iter_mut().map(|(_, source)| source))
+                .chain(&mut ask.first)
+                .chain(&mut ask.last)
+                .chain(&mut ask.references)
+                .chain(&mut ask.workflow);
+            for source in sources {
+                if let Source::File(file) = source {
+                    *file = from_project(file)?;
+                }
+            }
+        }
+        steps.push(step);
     }
     kerf_model::making::check(&steps).map_err(EngineError::msg)?;
-    Ok(steps)
+    Ok((steps, needs))
+}
+
+/// What carrying a media's recipe into the document comes to: the edit that writes its
+/// steps under its line, and what is worth knowing of it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Carry {
+    /// The recipe the media named, as the document named it.
+    pub recipe: String,
+    /// The lines of the edit: the media's line without `recipe=`, and a `step` line for
+    /// each step, its files named from the project's folder.
+    pub script: Vec<String>,
+    /// What does not come with it, each as a line for whoever carries it.
+    pub notes: Vec<String>,
+}
+
+/// Carry the recipe media `id` of `project` names into the document: its `render`,
+/// `generate` and `join` lines as steps under the media, each file named from the project's
+/// folder in place of the recipe's, and `recipe=` taken off the media's line. Nothing is
+/// changed here: what comes back is the edit that does it. The recipe's file is left where
+/// it is, and so are its takes, whose folder is the same. A recipe with a `run` is refused:
+/// a document names no program, and it goes on being made from its file.
+///
+/// Once the edit is in the project, [`takes::mark_carried`] has the takes made from the
+/// recipe held to the steps it became, so that none is asked for again for being carried.
+pub fn carry(project: &kerf_model::Project, directory: &Path, id: &str) -> Result<Carry> {
+    let media = project
+        .media(id)
+        .ok_or_else(|| EngineError::msg(format!("no media `{id}` in this project")))?;
+    let name = match Home::of(media) {
+        Some(Home::File(name)) => name,
+        Some(Home::Document) => {
+            return Err(EngineError::msg(format!(
+                "media `{id}` has its steps under its line in the document already"
+            )))
+        }
+        None => return Err(not_made(id)),
+    };
+    let home = Home::File(name.clone());
+    let text = home.text(directory, media)?;
+    let (steps, needs) = steps_of_text(&text, Some(&home.folder()))
+        .map_err(|error| EngineError::msg(format!("{name}: {error}")))?;
+    if !steps.iter().any(|step| step.makes() == OUT) {
+        return Err(EngineError::msg(format!(
+            "{name}: the recipe's last step names no `{{{OUT}}}`, so nothing says where its file goes"
+        )));
+    }
+    let mut notes = Vec::new();
+    // What the recipe said it reads beside what its steps name: a mesh a sequence it draws
+    // reads is found from the clip; anything else is no longer watched.
+    let recipe = Recipe::of_steps(&steps);
+    let meshes: Vec<String> = recipe
+        .sequences()
+        .flat_map(|sequence| takes::mesh_files(project, sequence))
+        .collect();
+    for file in needs.iter().filter(|file| !meshes.contains(file)) {
+        notes.push(format!(
+            "`{file}`, which the recipe said it reads (`needs`), is no longer watched: no step of the document reads it, so changing it does not ask for `{id}` again"
+        ));
+    }
+    // The takes a recipe made are in a folder named for the recipe, and those of steps in
+    // the document in one named for the media's file: the same, for a shot named as its
+    // recipe is.
+    let (was, now) = (
+        home.place(directory, &media.path)?.stored(1),
+        Home::Document.place(directory, &media.path)?.stored(1),
+    );
+    if was != now {
+        notes.push(format!(
+            "the takes made so far are kept as `{was}` and those made from now on as `{now}`: the media's file is not named as its recipe is. Have the media be one of its takes first (`kerf takes {id} --use <n>`) and they stay together"
+        ));
+    }
+    let mut line = Media {
+        recipe: None,
+        ..media.clone()
+    };
+    line.steps.clear();
+    let mut script = vec![kerf_lang::print_op(
+        project,
+        kerf_model::Catalog::builtin(),
+        &kerf_model::Op::ReplaceMedia(line),
+    )];
+    script.extend(
+        steps
+            .iter()
+            .map(|step| format!("step {id} add {}", kerf_lang::print_step(step))),
+    );
+    Ok(Carry {
+        recipe: name,
+        script,
+        notes,
+    })
 }
 
 /// The step lines a script gets to have media `id`, whose steps the document holds, made

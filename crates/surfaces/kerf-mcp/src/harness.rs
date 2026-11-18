@@ -103,7 +103,8 @@ A shot longer than its model makes at once (`models` says its `seconds`) is writ
 of the part before, and `join {a.mp4} {b.mp4} {out} lap=1` sets them end to end. \
 What was made only to be looked at, a numbered picture or a trial, is taken out of the document \
 once it has been read (`media remove <id>`); its takes stay on disk. A media that still names a \
-recipe file (`recipe=`) has its steps in that file: `recipeSet` sets its words. \
+recipe file (`recipe=`) has its steps in that file: `carry` writes them under the media, in the \
+same edit as the lines that then change them. \
 Where the person's own permissions accept an agent's edits, \
 the answer says `accepted`: it is in the project, one revision undo takes \
 back.
@@ -367,9 +368,10 @@ pub(super) fn metadata(name: &str) -> Option<(&'static str, Value, ToolAnnotatio
                     "recipeSet": {"type": "array", "minItems": 1, "items": {"type": "object", "properties": {"media": {"type": "string"}, "line": {"type": "integer", "minimum": 1}, "key": {"type": "string"}, "nth": {"type": "integer", "minimum": 0}, "value": {"type": "string"}, "add": {"type": "string"}, "remove": {"type": "boolean"}}, "required": ["media"], "additionalProperties": false}, "description": "For a media that names a recipe file (`recipe=`); steps the document holds are set in the script, `step <media> set <n> <name>=<value>`. Words of a media's recipe to set, each the name `key` on line `line` (as `look` `graph` numbers them) to `value`, as it is written after the `=` with no quotes around it: `{media: \"m3\", line: 4, key: \"seed\", value: \"8\"}`. That word alone changes; the recipe's comments, its order and its other lines stay, which writing the whole text with `recipes` does not promise. A name the line does not have is added at its end, so an input is wired in the same way (`key: \"signal\", value: \"bounce\"`, or `key: \"ref\", value: \"{ball.png}\"` for a file a step makes); `nth` picks among several words of one name, from 0; with no `value` the word is taken off the line. What a line cannot take is refused as a making would refuse it. A step is added the same way, `{media, line, add: \"render court {guide2.mp4} pass=depth\"}`, a line of its own after line `line` (0 for the first step), and taken out with `{media, line, remove: true}`, as a person adds one and deletes one in the graph: each is refused where what it leaves does not read as a recipe, a step put after the one that writes the shot's file, or one taken out that a later step reads. Later entries count lines as the earlier ones left them. The result is kept as the recipe's next version, as with `recipes`, and the answer's `recipes` has its `diff`."},
                     "restoreTake": {"type": "object", "properties": {"media": {"type": "string"}, "take": {"type": "integer", "minimum": 1}}, "required": ["media", "take"], "additionalProperties": false, "description": "Go back to the steps a take was made from: `media`, and the `take`'s number as `look` with `graph` or `media` lists it, where it says `kept`. The steps are written as that making read them, each seed as that take had it, so a making of them is that take's again where the model gives the same file for the same seed; a workflow file they named comes back with them where the project no longer has it as it was. Steps the document holds are written back by `step` lines of this edit, which the proposal shows; a recipe's file is kept as its next version, or is the version that holds that text already, and the media moves to it. What else the take was made from, its sequences and signals, is the project's and is not changed. Used alone: change the steps in an edit after it."},
                     "workflowSet": {"type": "array", "minItems": 1, "items": {"type": "object", "properties": {"media": {"type": "string"}, "line": {"type": "integer", "minimum": 1}, "node": {"type": "string"}, "input": {"type": "string"}, "value": {}, "link": {"type": "array", "prefixItems": [{"type": "string"}, {"type": "integer", "minimum": 0}], "minItems": 2, "maxItems": 2}}, "required": ["media", "line", "node", "input"], "additionalProperties": false}, "description": "Values to set in the workflow the model of a `generate` step is run with, each input `input` of node `node` (as `look` `workflow` lists them) to `value`, a number, a text, or true or false as it was. `line` is the step's, as `look` `graph` gives it. The workflow as it is is copied into the project beside the shot with those values changed and the rest as written, and the step names the copy with `workflow=`, by a `step` line of this edit, or for a recipe's file in its next version: the answer's `workflows` says where each is kept. An input that is a `link` is pointed at another node with `link` in place of `value`, `[<node>, <output>]`, the output counted from 0 as the node's `outputs` lists what it gives: `{media, line, node: \"12\", input: \"model\", link: [\"19\", 0]}`. It is refused where the graph would go round, and, once the server has said what each gives, where the output is not what the input takes. Only a link is linked, and an input a blank fills is not set here. Nothing on the model's server changes, and the person's models file is not touched. To go back to the workflow as it comes, take `workflow` off the step (`step <media> set <n> workflow=\"\"`)."},
+                    "carry": {"type": "array", "minItems": 1, "items": {"type": "string"}, "description": "Media that still name a recipe file (`recipe=`), to carry into the document: each recipe's `render`, `generate` and `join` lines are written as steps under its media, files named from the project's folder, and `recipe=` comes off its line. Its takes stay, and those made from the recipe as it stands are not asked for again; the answer's `carried` says how many (`takesHeld`) and what did not come with it (`notes`). The lines are first in the edit's script, so the `script` of the same edit can change the steps (`step <media> set <n> …`). A recipe with a `run` line cannot be carried, a document naming no program: it goes on being made from its file."},
                     "cast": {"type": "array", "items": {"type": "string"}, "description": "Lines to add to the project's cast file, each `cast <name> \"<who or what it is>\" [ref=<picture> …]` or `style <name> \"<how a shot looks>\"`, for who and what a step of this edit shows that `look`'s `cast` and `styles` have not. They are written at once, since adding one asks for no shot again; one the file has is the person's to change, and is refused."}
                 },
-                "anyOf": [{"required": ["script"]}, {"required": ["recipes"]}, {"required": ["recipeSet"]}, {"required": ["workflowSet"]}, {"required": ["restoreTake"]}, {"required": ["cast"]}, {"required": ["preset"]}, {"required": ["savePreset"]}],
+                "anyOf": [{"required": ["script"]}, {"required": ["recipes"]}, {"required": ["recipeSet"]}, {"required": ["workflowSet"]}, {"required": ["restoreTake"]}, {"required": ["carry"]}, {"required": ["cast"]}, {"required": ["preset"]}, {"required": ["savePreset"]}],
                 "additionalProperties": false
             }),
             ToolAnnotations {
@@ -659,6 +661,9 @@ struct EditInput {
     /// A take whose recipe a media goes back to.
     #[serde(rename = "restoreTake")]
     restore_take: Option<RestoreInput>,
+    /// Media whose recipe files are carried into the document, as the steps under them.
+    #[serde(default)]
+    carry: Vec<String>,
     /// Lines the edit adds to the project's cast file, each a cast or a style the file has
     /// not.
     #[serde(default)]
@@ -1003,6 +1008,10 @@ impl KerfMcpRouter {
                 });
                 if let kerf_engine::recipe::Home::File(recipe) = &home {
                     entry["recipe"] = json!(recipe);
+                    entry["carry"] = json!(format!(
+                        "its steps are in that file: `edit` with `carry: [\"{}\"]` writes them under the media, where a script changes them",
+                        media.id
+                    ));
                 }
                 let id = media.id.as_str();
                 let plan = models
@@ -3919,6 +3928,7 @@ impl KerfMcpRouter {
                 || !input.recipe_set.is_empty()
                 || !input.workflow_set.is_empty()
                 || input.restore_take.is_some()
+                || !input.carry.is_empty()
                 || !input.cast.is_empty(),
             input.preset.is_some(),
             input.save_preset.is_some(),
@@ -3930,7 +3940,20 @@ impl KerfMcpRouter {
         {
             return Err(McpError::new(
                 "INVALID_ARGUMENTS",
-                "pass exactly one of script (with or without recipes, recipeSet, workflowSet and cast), any of those alone, preset, or savePreset",
+                "pass exactly one of script (with or without recipes, recipeSet, workflowSet, carry and cast), any of those alone, preset, or savePreset",
+            ));
+        }
+        // A recipe carried is read as it stands: what else this edit would write of one,
+        // it writes after, as lines of a script that set the steps it became.
+        if !input.carry.is_empty()
+            && (!input.recipes.is_empty()
+                || !input.recipe_set.is_empty()
+                || !input.workflow_set.is_empty()
+                || input.restore_take.is_some())
+        {
+            return Err(McpError::new(
+                "INVALID_ARGUMENTS",
+                "`carry` writes a recipe's steps under its media as they are: change them in the script of the same edit (`step <media> set <n> …`), or in an edit after it",
             ));
         }
         if let Some(file) = &input.save_preset {
@@ -4009,6 +4032,28 @@ impl KerfMcpRouter {
                 script
             }
             None => input.script.clone().unwrap_or_default(),
+        };
+        // A recipe carried into the document: the lines that write its steps under its
+        // media come first, so that the script's own lines can change them.
+        let mut carried = Vec::new();
+        for id in &input.carry {
+            let carry = kerf_engine::recipe::carry(&before, &self.dir, id).map_err(|error| {
+                McpError::new(
+                    "INVALID_RECIPE",
+                    format!("{error}{}", self.in_pending(id, "extend")),
+                )
+            })?;
+            carried.push((id.clone(), carry));
+        }
+        let source_script = if carried.is_empty() {
+            source_script
+        } else {
+            let lines: String = carried
+                .iter()
+                .flat_map(|(_, carry)| &carry.script)
+                .map(|line| format!("{line}\n"))
+                .collect();
+            format!("{lines}{source_script}")
         };
         let facts = CachedFacts::new(&self.dir);
         let mut applied =
@@ -4162,6 +4207,19 @@ impl KerfMcpRouter {
                 return Err(engine_error(error));
             }
         }
+        // The takes a carried recipe made are held to the steps it became, so that none is
+        // asked for again for being carried. A proposal that is rejected leaves them reading
+        // as they did: a media that names its recipe goes by what the recipe's take recorded.
+        let mut carried_said = Vec::new();
+        for (id, carry) in &carried {
+            let held = kerf_engine::recipe::takes::mark_carried(&before, &applied.project, &self.dir, id)
+                .map_err(engine_error)?;
+            let mut said = json!({"media": id, "recipe": carry.recipe, "takesHeld": held});
+            if !carry.notes.is_empty() {
+                said["notes"] = json!(carry.notes);
+            }
+            carried_said.push(said);
+        }
         // And each workflow a recipe of it names: a new file, beside the ones before it.
         for workflow in &workflows {
             if let Err(why) = kerf_shots::workflow::write(&workflow.copy.file, &workflow.copy.text) {
@@ -4200,6 +4258,9 @@ impl KerfMcpRouter {
         }
         if !workflows.is_empty() {
             result["workflows"] = json!(workflows.iter().map(WorkflowKept::json).collect::<Vec<_>>());
+        }
+        if !carried_said.is_empty() {
+            result["carried"] = json!(carried_said);
         }
         if !cast_added.is_empty() {
             result["cast"] = json!(cast_added);

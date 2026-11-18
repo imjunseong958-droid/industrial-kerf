@@ -22,13 +22,23 @@ on `main`; its section here becomes the release's notes on GitHub
   mesh files are found from its clips with no `needs` line, and takes are
   kept in a folder named for the media's file (`shots/open.takes/`), the
   one a recipe of that name used. `kerf make`, `kerf takes` and `kerf
-  shots` read such media as they read a recipe's. Not yet: the editor's
-  graph and bin (Open Graph, Make from Recipe, Takes) still work on recipe
-  files only, and a preset does not carry steps. A project with
+  shots` read such media as they read a recipe's. A project with
   `.kerfrecipe` files opens and makes as before; a step that runs a program
   (`run`) stays a recipe file's alone, since a document names no program.
   Both shot fixtures (`fixtures/shots/car`, `fixtures/shots/walk`) are
-  written this way now.
+  written this way now. A preset does not carry steps yet.
+- The editor offers a media made by steps in the document what it offers
+  one made by a recipe: Open Graph, Make…, Make Several and Takes in the
+  bin, "Not made" where its file is not there yet, and its graph from its
+  clip. A change made in the graph, a prompt, a seed, a step added, a take's
+  steps restored, a value of a model's workflow, is an edit of the
+  document, one revision that undo takes back.
+- `kerf carry <media>` (and `--all`) writes a recipe file's steps under the
+  media in the document, each file named from the project's folder, and
+  takes `recipe=` off its line; an agent does the same with `edit` and
+  `carry`. The takes the recipe made stay, and those made from it as it
+  stands are not asked for again for being carried. A recipe with a `run`
+  line is not carried, and is said.
 - `kerf-comfy` comes with `matte`, for a ComfyUI server that has SAM 3.1: a
   thing in footage found by its name and followed, as a matte, white on
   black on every frame (`generate model=matte guide=<footage> prompt="man"`).

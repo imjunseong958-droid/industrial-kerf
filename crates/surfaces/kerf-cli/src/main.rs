@@ -149,6 +149,18 @@ enum Command {
     },
     /// List every media its steps make: its take, its cast, and whether it wants making.
     Shots,
+    /// Carry a media's recipe file into the document: its steps are written under the
+    /// media's line, where an edit changes them, and its takes stay as they are.
+    Carry {
+        /// The media to carry, by their ids.
+        media: Vec<String>,
+        /// Every media that names a recipe file.
+        #[arg(long)]
+        all: bool,
+        /// Carry them without asking first.
+        #[arg(long)]
+        yes: bool,
+    },
     /// Take `project.kerf` as it is on disk, changed by hand or by another program, as the project.
     Load {
         /// Load it without asking first.
@@ -295,6 +307,10 @@ fn run() -> Result<()> {
         Some(Command::Shots) => {
             let directory = resolve_directory(&requested.unwrap_or_else(current))?;
             return run_shots(&directory, args.kerfd.as_deref());
+        }
+        Some(Command::Carry { media, all, yes }) => {
+            let directory = resolve_directory(&requested.unwrap_or_else(current))?;
+            return run_carry(&directory, args.kerfd.as_deref(), media, *all, *yes);
         }
         Some(Command::Load { yes }) => {
             let directory = resolve_directory(&requested.unwrap_or_else(current))?;
@@ -895,6 +911,73 @@ fn run_shots(directory: &Path, kerfd: Option<&Path>) -> Result<()> {
         println!("{}", shot.line());
     }
     println!("{}", kerf_engine::recipe::shots::summary(&shots));
+    Ok(())
+}
+
+/// Carry the recipes of `ids`, or with `all` of every media that names one, into the
+/// document: what would be written is shown first, and a person says yes. It is one edit,
+/// which undo takes back, and the takes each recipe made are then held to the steps it
+/// became, so that none is asked for again for being carried.
+fn run_carry(directory: &Path, kerfd: Option<&Path>, ids: &[String], all: bool, yes: bool) -> Result<()> {
+    let runtime = runtime_for(directory, kerfd)?;
+    let state = runtime.get_state().map_err(runtime_error)?;
+    in_step(&state)?;
+    let before = kerf_runtime::parse_document(&state.document).map_err(runtime_error)?;
+    let named: Vec<String> = if all {
+        before
+            .media
+            .iter()
+            .filter(|media| media.recipe.is_some())
+            .map(|media| media.id.to_string())
+            .collect()
+    } else {
+        ids.to_vec()
+    };
+    if named.is_empty() {
+        if all {
+            println!("no media names a recipe file: there is nothing to carry");
+            return Ok(());
+        }
+        bail!("name the media to carry, or pass --all for every media that names a recipe file");
+    }
+    let mut script = Vec::new();
+    let mut carried = Vec::new();
+    for id in &named {
+        match kerf_engine::recipe::carry(&before, directory, id) {
+            Ok(carry) => {
+                println!("{id}, from {}:", carry.recipe);
+                for line in &carry.script {
+                    println!("  {line}");
+                }
+                for note in &carry.notes {
+                    println!("  note  {note}");
+                }
+                script.extend(carry.script);
+                carried.push((id.clone(), carry.recipe));
+            }
+            // With --all, one that cannot be carried is said and left as it is.
+            Err(error) if all => println!("{id} is left as it is: {error}"),
+            Err(error) => return Err(anyhow!(error)),
+        }
+    }
+    if carried.is_empty() {
+        return Ok(());
+    }
+    if !yes && !confirmed("Write these steps into the document?") {
+        bail!("not carried: say yes at the terminal, or pass --yes");
+    }
+    let state = runtime
+        .apply_script_request("ui", &operation_key("carry"), &script.join("\n"), state.revision)
+        .map_err(runtime_error)?;
+    let after = kerf_runtime::parse_document(&state.document).map_err(runtime_error)?;
+    for (id, recipe) in &carried {
+        let held = kerf_engine::recipe::takes::mark_carried(&before, &after, directory, id)
+            .map_err(|error| anyhow!(error))?;
+        println!(
+            "carried {id} (revision {}): {held} of its takes held to its steps; {recipe} is left where it is, and nothing names it now",
+            state.revision
+        );
+    }
     Ok(())
 }
 
@@ -1787,6 +1870,22 @@ mod tests {
             panic!("sync command");
         };
         assert_eq!(message, None);
+    }
+
+    #[test]
+    fn carry_names_media_or_all_of_them() {
+        let Some(Command::Carry { media, all, yes }) =
+            Args::try_parse_from(["kerf", "carry", "m3", "m4", "--yes"]).unwrap().command
+        else {
+            panic!("carry command");
+        };
+        assert_eq!((media.as_slice(), all, yes), (["m3".to_owned(), "m4".to_owned()].as_slice(), false, true));
+        let Some(Command::Carry { media, all, .. }) =
+            Args::try_parse_from(["kerf", "carry", "--all"]).unwrap().command
+        else {
+            panic!("carry command");
+        };
+        assert!(media.is_empty() && all);
     }
 
     #[test]

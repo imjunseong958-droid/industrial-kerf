@@ -157,11 +157,10 @@ pub(crate) fn edit(
     // kerfd applies, and the workflow shown after is of the project as that left it.
     let named = workflow::set(&project, &shared.directory, &edit.media, edit.line, &edit.was, set, &models)
         .and_then(|named| {
-            crate::recipes::apply(client, &named.script).map_err(|why| {
+            crate::recipes::apply(client, &named.script).inspect_err(|_| {
                 if let Some(copy) = &named.copy {
                     let _ = std::fs::remove_file(copy);
                 }
-                why
             })?;
             Ok(!named.script.is_empty())
         });

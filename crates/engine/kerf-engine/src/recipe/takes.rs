@@ -212,6 +212,34 @@ struct Record {
     /// gives. A take is not held to it, being another of the same shot.
     #[serde(default, skip_serializing_if = "is_zero")]
     rolled: u32,
+    /// Said of a take a recipe's file made, once that recipe was carried into the
+    /// document ([`mark_carried`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    carried: Option<Carried>,
+}
+
+/// What a take a recipe's file made says once the recipe's steps are the document's.
+#[derive(Clone, Serialize, Deserialize)]
+struct Carried {
+    /// The recipe it was made from, as the document named it: the folder the files of
+    /// what it keeps of its making ([`kept`]) are named from.
+    recipe: String,
+    /// What it is held to as a take of the steps the recipe became, in place of `from`,
+    /// where it was made from the recipe and everything it read as they stood when it
+    /// was carried: such a take is not asked for again for being carried. None for a
+    /// take that was stale already, which stays so.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    from: Option<BTreeMap<String, String>>,
+}
+
+impl Record {
+    /// What the take is held to, as a take of steps written in `home`.
+    fn held(&self, home: &Home) -> &BTreeMap<String, String> {
+        match (home, &self.carried) {
+            (Home::Document, Some(Carried { from: Some(from), .. })) => from,
+            _ => &self.from,
+        }
+    }
 }
 
 fn is_zero(number: &u32) -> bool {
@@ -232,9 +260,65 @@ pub(crate) fn record(
             .map_or(0, |since| since.as_secs()),
         from,
         rolled,
+        carried: None,
     };
     std::fs::write(place.record(take), serde_json::to_vec_pretty(&record)?)?;
     Ok(())
+}
+
+/// Have the takes of media `id` say that the recipe they were made from was carried into
+/// the document: `before` is the project while the media named its recipe, and `after`
+/// once its steps are under its line ([`super::carry`]). A take made from the recipe and
+/// what it read as they stand is then held to the steps as they stand, so that it is not
+/// asked for again for being carried; one that was stale stays so. Each says which
+/// recipe it was, so that what it keeps of its making still reads. How many takes are
+/// held to the steps now.
+///
+/// A record gains this and loses nothing: a media that names the recipe again, by undo,
+/// reads its takes as it did.
+pub fn mark_carried(before: &Project, after: &Project, directory: &Path, id: &str) -> Result<usize> {
+    let no_media = || EngineError::msg(format!("no media `{id}` in this project"));
+    let (was, now) = (
+        before.media(id).ok_or_else(no_media)?,
+        after.media(id).ok_or_else(no_media)?,
+    );
+    let (Some(Home::File(recipe)), Some(Home::Document)) = (Home::of(was), Home::of(now)) else {
+        return Err(EngineError::msg(format!(
+            "media `{id}` was not carried from a recipe into the document"
+        )));
+    };
+    let then = Standing::of(before, directory, was);
+    let made_from = then
+        .as_ref()
+        .and_then(|standing| standing.now())
+        .and_then(|now| now.as_ref().ok());
+    let steps = Recipe::of_steps(&now.steps).told(directory, Path::new(""))?;
+    let held = from(
+        after,
+        directory,
+        &Home::Document,
+        &super::steps_text(&now.steps),
+        &steps,
+    )?;
+    let place = Home::File(recipe.clone()).place(directory, &was.path)?;
+    let mut marked = 0;
+    for take in place.numbers() {
+        let file = place.record(take);
+        let Some(mut record) = read_record(&file) else {
+            continue;
+        };
+        let current = made_from.is_some_and(|now| changed(&record.from, now).is_empty());
+        marked += usize::from(current);
+        record.carried = Some(Carried {
+            recipe: recipe.clone(),
+            from: current.then(|| held.clone()),
+        });
+        // Whole or not at all: a record half written is no record.
+        let beside = file.with_extension(format!("{}.writing", std::process::id()));
+        std::fs::write(&beside, serde_json::to_vec_pretty(&record)?)?;
+        std::fs::rename(&beside, &file)?;
+    }
+    Ok(marked)
 }
 
 fn read_record(file: &Path) -> Option<Record> {
@@ -329,7 +413,7 @@ fn sequence_hash(project: &Project, directory: &Path, id: &str) -> String {
 /// The files the mesh clips of sequence `id` of `project` take their meshes from
 /// (`file=`), and those of the sequences it nests, as the document names them. Drawing
 /// the sequence reads them, and nothing of the document says when one changes.
-fn mesh_files(project: &Project, id: &str) -> BTreeSet<String> {
+pub(crate) fn mesh_files(project: &Project, id: &str) -> BTreeSet<String> {
     let mut files = BTreeSet::new();
     let mut seen: BTreeSet<String> = BTreeSet::new();
     let mut waiting = vec![id.to_owned()];
@@ -569,7 +653,7 @@ impl<'a> Standing<'a> {
         };
         match self.now()? {
             Ok(now) => {
-                let what = changed(&record.from, now);
+                let what = changed(record.held(&self.home), now);
                 (!what.is_empty()).then_some(Unmade::Stale(what))
             }
             Err(error) => Some(self.cannot(error)),
@@ -611,7 +695,7 @@ impl<'a> Standing<'a> {
                     chosen: Path::new(&self.media.path) == Path::new(&stored),
                     made: record.as_ref().map(|record| record.made),
                     changed: match (&record, now) {
-                        (Some(record), Some(now)) => changed(&record.from, now),
+                        (Some(record), Some(now)) => changed(record.held(&self.home), now),
                         _ => Vec::new(),
                     },
                     current: match &self.home {
@@ -620,7 +704,8 @@ impl<'a> Standing<'a> {
                         // Made from the steps as the document has them now.
                         Home::Document => match (&record, now) {
                             (Some(record), Some(now)) => {
-                                record.from.contains_key(key) && record.from.get(key) == now.get(key)
+                                let held = record.held(&self.home);
+                                held.contains_key(key) && held.get(key) == now.get(key)
                             }
                             _ => false,
                         },
@@ -723,9 +808,22 @@ pub(crate) fn keep(
 /// kept none: one made before takes kept it, or whose working folder is gone.
 pub fn kept(directory: &Path, media: &Media, take: u32) -> Option<Kept> {
     use super::Step;
-    let place = Home::of(media)?.place(directory, &media.path).ok()?;
+    let home = Home::of(media)?;
+    let place = home.place(directory, &media.path).ok()?;
     let working = place.working(take);
-    let recipe = std::fs::read_to_string(working.join(KEPT_RECIPE)).ok()?;
+    let mut recipe = std::fs::read_to_string(working.join(KEPT_RECIPE)).ok()?;
+    // A take a recipe's file made keeps the recipe as that file had it, its files named
+    // from the recipe's folder. Once the recipe is carried into the document, what the
+    // take keeps reads as the steps it became.
+    if home == Home::Document {
+        let carried = read_record(&place.record(take)).and_then(|record| record.carried);
+        if let Some(carried) = carried {
+            let folder = Home::File(carried.recipe).folder();
+            if let Ok((steps, _)) = super::steps_of_text(&recipe, Some(&folder)) {
+                recipe = super::steps_text(&steps);
+            }
+        }
+    }
     let files = Recipe::parse(&recipe)
         .ok()?
         .steps

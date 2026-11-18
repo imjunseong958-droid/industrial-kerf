@@ -2331,3 +2331,116 @@ fn a_step_the_document_writes_is_the_step_a_making_reads() {
     assert_eq!(ask.more["knob"], "x=1");
     assert_eq!(document_steps(&steps_text(steps)).unwrap(), *steps);
 }
+
+/// A recipe carried into the document: its lines become the steps under the media, each
+/// file named from the project's folder, and the takes it made are held to the steps it
+/// became, so that none is asked for again for being carried.
+#[cfg(unix)]
+#[test]
+fn a_recipe_is_carried_into_the_document_and_its_takes_with_it() {
+    let folder = tempfile::tempdir().unwrap();
+    let directory = folder.path();
+    std::fs::create_dir_all(directory.join("shots")).unwrap();
+    std::fs::create_dir_all(directory.join("footage")).unwrap();
+    std::fs::write(directory.join("footage/walk.json"), "a man walks").unwrap();
+    let text = "kerf-recipe 1\n# The man taken out.\ngenerate model=matte guide=../footage/walk.json prompt=\"man\" out={man.json}\ngenerate model=plate guide=../footage/walk.json guide_mask={man.json} prompt=\"an empty path\" reach=72 seed=7\n";
+    std::fs::write(directory.join("shots/gone.kerfrecipe"), text).unwrap();
+    let some = models(directory, &format!(r#"{{"matte": {{"run": {ECHO}}}, "plate": {{"run": {ECHO}}}}}"#));
+    let mut before = project(
+        "media gone path=\"shots/gone.json\" rate=16 dur=81f video=832x480 recipe=\"shots/gone.kerfrecipe\"\n\
+         sequence s1 rate=16 size=832x480\n",
+    );
+    // Two takes of the recipe, the second a roll of it, and the media is the second.
+    let token = CancellationToken::new();
+    for roll in 0..2 {
+        let planned = plan_rolled(&before, directory, "gone", &some, roll).unwrap();
+        let made = make(&before, directory, &planned, &some, &token, |_| {}).unwrap();
+        before.media[0].path = made.stored;
+    }
+    assert_eq!(unmade(&before, directory, &before.media[0]), None);
+
+    let carried = carry(&before, directory, "gone").unwrap();
+    assert_eq!(carried.recipe, "shots/gone.kerfrecipe");
+    assert_eq!(
+        carried.script,
+        [
+            "media replace gone path=\"shots/gone.takes/002.json\" rate=16 dur=00:00:05:01 video=832x480",
+            "step gone add generate model=matte prompt=\"man\" guide=footage/walk.json out={man.json}",
+            "step gone add generate model=plate prompt=\"an empty path\" guide=footage/walk.json guide_mask={man.json} seed=7 reach=72",
+        ]
+    );
+    assert!(carried.notes.is_empty(), "{:?}", carried.notes);
+    let after = kerf_lang::apply_script(&before, kerf_model::Catalog::builtin(), &carried.script.join("\n"))
+        .unwrap()
+        .project;
+    let media = after.media("gone").unwrap();
+    assert_eq!((Home::of(media), media.recipe.as_deref()), (Some(Home::Document), None));
+    // Its takes are where they were. Carried and not yet marked, the take reads as made
+    // from something else: its record is of the recipe's text.
+    assert_eq!(takes(&after, directory, media).unwrap().len(), 2);
+    assert!(unmade(&after, directory, media).is_some());
+    assert_eq!(takes::mark_carried(&before, &after, directory, "gone").unwrap(), 2);
+    assert_eq!(unmade(&after, directory, media), None);
+    let all = takes(&after, directory, media).unwrap();
+    assert!(all.iter().all(|take| take.current && take.changed.is_empty()), "{all:?}");
+    // Another making goes on from the rolls the recipe had.
+    assert_eq!(next_roll(&after, directory, "gone").unwrap(), 2);
+    // What a take keeps of its making reads as the steps it became, its seed as it had it.
+    let kept = takes::kept(directory, media, 2).unwrap().recipe;
+    assert_eq!(
+        kept,
+        steps_text(&media.steps).replace("seed=7", "seed=8"),
+        "the second take was a roll"
+    );
+    // The footage changing still asks for it, and an edit to a step.
+    std::fs::write(directory.join("footage/walk.json"), "another man").unwrap();
+    assert_eq!(
+        unmade(&after, directory, media),
+        Some(Unmade::Stale(vec!["footage/walk.json".to_owned()]))
+    );
+    std::fs::write(directory.join("footage/walk.json"), "a man walks").unwrap();
+    // Undone, the media names its recipe again and reads its takes as it did.
+    assert_eq!(unmade(&before, directory, &before.media[0]), None);
+    assert!(takes(&before, directory, &before.media[0]).unwrap().iter().all(|take| take.changed.is_empty()));
+    // The recipe's file is left where it was.
+    assert_eq!(std::fs::read_to_string(directory.join("shots/gone.kerfrecipe")).unwrap(), text);
+}
+
+/// What does not carry is said: a program to run, which a document cannot name, and a file
+/// the recipe said it reads that no step of the document does.
+#[test]
+fn what_a_recipe_cannot_carry_into_the_document_is_said() {
+    let folder = tempfile::tempdir().unwrap();
+    let directory = folder.path();
+    std::fs::create_dir_all(directory.join("shots")).unwrap();
+    let recipe = |text: &str| std::fs::write(directory.join("shots/open.kerfrecipe"), text).unwrap();
+    let project = project(
+        "media m1 path=\"shots/open.mp4\" rate=24 dur=1s video=160x120 recipe=\"shots/open.kerfrecipe\"\n\
+         media m2 path=\"shots/b.mp4\" rate=24 dur=1s video=160x120\n\
+         \x20 render s2 {out}\n\
+         sequence s1 rate=24 size=160x120\n\
+         sequence s2 rate=24 size=160x120\n\
+         \x20 track V1 video\n\
+         \x20   clip car gen=mesh@1 at=0f dur=12f\n\
+         \x20     set file=\"models/car.glb\"\n",
+    );
+    recipe("kerf-recipe 1\nneeds open.scene.json\nrun vork render open.scene.json --out {guide.mp4}\ngenerate model=dawn guide={guide.mp4}\n");
+    let ran = carry(&project, directory, "m1").unwrap_err().to_string();
+    assert!(ran.contains("shots/open.kerfrecipe: line 3: `run vork` runs a program, and a document names none"), "{ran}");
+    // A mesh its guide draws is found from the clip; a file nothing else names is said.
+    recipe("kerf-recipe 1\nneeds ../models/car.glb look.cube\nrender s2 {guide.mp4} pass=depth\ngenerate model=dawn guide={guide.mp4} first=../refs/boat.png\n");
+    let carried = carry(&project, directory, "m1").unwrap();
+    assert_eq!(
+        carried.script[1..],
+        [
+            "step m1 add render s2 {guide.mp4} pass=depth",
+            "step m1 add generate model=dawn guide={guide.mp4} first=refs/boat.png",
+        ]
+    );
+    assert_eq!(carried.notes.len(), 1, "{:?}", carried.notes);
+    assert!(carried.notes[0].starts_with("`shots/look.cube`, which the recipe said it reads"), "{:?}", carried.notes);
+    // Steps that are the document's already have nothing to carry, nor has footage.
+    assert!(carry(&project, directory, "m2").unwrap_err().to_string().contains("under its line in the document already"));
+    recipe("kerf-recipe 1\nrender s2 {guide.mp4}\n");
+    assert!(carry(&project, directory, "m1").unwrap_err().to_string().contains("names no `{out}`"));
+}

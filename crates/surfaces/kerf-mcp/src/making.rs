@@ -337,19 +337,20 @@ impl KerfMcpRouter {
             for note in &plan.notes {
                 body.push_str(&format!("\nNote: {note}"));
             }
-            // The editor's bin offers its makings for a recipe's file; steps the document
-            // holds are made from a terminal until it shows them too.
+            // The editor's bin names the making by where the steps are.
             body.push_str(&match (rolls > 1, in_document) {
                 (true, false) => format!(
                     "\nEach take after the first runs the same steps with every seed one on from the last.\nMake them with `kerf make {media} --rolls {rolls}`, or Make Several from Recipe in the editor's bin."
                 ),
                 (true, true) => format!(
-                    "\nEach take after the first runs the same steps with every seed one on from the last.\nMake them with `kerf make {media} --rolls {rolls}`."
+                    "\nEach take after the first runs the same steps with every seed one on from the last.\nMake them with `kerf make {media} --rolls {rolls}`, or Make Several in the editor's bin."
                 ),
                 (false, false) => format!(
                     "\nMake it with `kerf make {media}`, or Make from Recipe… in the editor's bin."
                 ),
-                (false, true) => format!("\nMake it with `kerf make {media}`."),
+                (false, true) => format!(
+                    "\nMake it with `kerf make {media}`, or Make… in the editor's bin."
+                ),
             });
             // What the person is asked, for the agent to say in the conversation.
             answer["status"] = json!("asked");
@@ -362,15 +363,15 @@ impl KerfMcpRouter {
                 ),
                 (true, true) => format!(
                     "say `ask` to the person, who makes them with `kerf make {media} --rolls \
-                     {rolls}`; `look` `media` lists the takes once they are made"
+                     {rolls}` or Make Several; `look` `media` lists the takes once they are made"
                 ),
                 (false, false) => format!(
                     "say `ask` to the person, who makes it with `kerf make {media}` or Make from \
                      Recipe…; `look` lists the take once it is made"
                 ),
                 (false, true) => format!(
-                    "say `ask` to the person, who makes it with `kerf make {media}`; `look` lists \
-                     the take once it is made"
+                    "say `ask` to the person, who makes it with `kerf make {media}` or Make…; \
+                     `look` lists the take once it is made"
                 ),
             });
             if permissions.mode == crate::permissions::Mode::Auto {

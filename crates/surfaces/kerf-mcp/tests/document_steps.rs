@@ -302,7 +302,7 @@ fn an_agent_writes_a_makings_steps_in_the_document_and_makes_it() {
         ask.starts_with("Asks to make depth, as take 2, from the steps under its line in the document:\nanother seed\n1. Kerf renders"),
         "{ask}"
     );
-    assert!(ask.ends_with("Make it with `kerf make depth`."), "{ask}");
+    assert!(ask.ends_with("Make it with `kerf make depth`, or Make… in the editor's bin."), "{ask}");
     assert!(!dir.join("shots/depth.takes/002.mp4").exists());
     // And past the limit they set, it is asked for again.
     given(Mode::Auto, 0);
