@@ -1,8 +1,8 @@
 {
   "kerf-comfy": 1,
-  "about": "A guide's frames together as views of one scene: where the camera was on each frame, as a .txt (out={cameras.txt}). The depth of the same reading is depth's. At most 81 frames.",
+  "about": "A guide's frames together as views of one scene: where the camera was on each frame, as a .txt (out={cameras.txt}). The depth of the same reading is depth's. From 2 frames to 81: of a frame alone no lens is found.",
   "of": "guide",
-  "frames": { "most": 81, "step": 1 },
+  "frames": { "most": 81, "step": 1, "least": 2 },
   "size": [1920, 1080],
   "multiple": 2,
   "set": {

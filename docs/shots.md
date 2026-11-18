@@ -789,6 +789,30 @@ Windows a making that is stopped ends the program outright, so its job stays
 on the server; and what it sends up and what the server saves stay on the
 server.
 
+### What the server holds
+
+Each workflow that comes with `kerf-comfy` loads its model's files by
+name, and the server has to have them under ComfyUI's `models`:
+
+| File | In | The workflows that load it |
+|---|---|---|
+| `wan2.1_vace_1.3B_fp16.safetensors` | `diffusion_models` | `shot`, `shot-timed`, `shot-into`, `shot-led`, `shot-directed`, `still` |
+| `wan_2.1_vae.safetensors` | `vae` | those six, and `shot-moved` |
+| `umt5_xxl_fp16.safetensors` | `text_encoders` | those six, and `shot-moved` |
+| `Wan21-WanMove_fp8_scaled_e4m3fn_KJ.safetensors` | `diffusion_models` | `shot-moved` |
+| `lightx2v_I2V_14B_480p_cfg_step_distill_rank64_bf16.safetensors` | `loras` | `shot-moved` |
+| `clip_vision_h.safetensors` | `clip_vision` | `shot-moved` |
+| `depth_anything_3_base.safetensors` | `geometry_estimation` | `depth`, `cameras`, `set-views` |
+| `moge_3_vitl_fp16.safetensors` | `geometry_estimation` | `set` |
+| `sam3.1_multiplex_fp16.safetensors` | `checkpoints` | `matte`, `matte-shown` |
+
+`moves-shown` and `set-splats` load none. A server that will never be
+asked for a workflow need not hold what only that one loads: without
+`shot-moved`, three files; without `set`, one. Each name is a value the
+workflow sets (`unet`, `vae`, `text_encoder`, `vision`, `lora`, `model`),
+so another file of the kind is a word on a line (`model=<file>`) or a
+value in a shot's own copy of the workflow, below.
+
 ### A workflow of the shot's own
 
 A workflow that comes with `kerf-comfy` is one way of running its model.
@@ -863,8 +887,8 @@ where a later step reads what it makes. Six such workflows come with
 | Workflow | What it makes of its guide | As |
 |---|---|---|
 | `depth` | How near each pixel is, nearer whiter. The frames are read together as views of one scene, so a place that holds still in the picture holds its grey from frame to frame. A sky is given a distance, the farthest. At most 240 frames. | a video |
-| `cameras` | The same reading of the frames, as where the camera was on each (`out={cameras.txt}`). At most 81 frames. | a `.txt` |
-| `set-views` | The same reading, and one of the frames rebuilt as a mesh with the frame as its colors: a set in the units of the camera path found of the same frames. `frame=<n>` picks the frame; `confidence=0` keeps every pixel, where 0.1, as it comes, keeps what the model is surest of, the near ground of a street. At most 81 frames. | a `.glb` |
+| `cameras` | The same reading of the frames, as where the camera was on each (`out={cameras.txt}`). From 2 frames to 81. | a `.txt` |
+| `set-views` | The same reading, and one of the frames rebuilt as a mesh with the frame as its colors: a set in the units of the camera path found of the same frames. `frame=<n>` picks the frame; `confidence=0` keeps every pixel, where 0.1, as it comes, keeps what the model is surest of, the near ground of a street. From 2 frames to 81. | a `.glb` |
 | `set` | One frame alone rebuilt as a mesh with the frame as its colors, for a `gen=mesh@1` clip, by another model. `frame=<n>` picks the frame, from 0; `decimation=1` keeps every pixel as a corner, where 2, as it comes, keeps every other. With `out={lens.txt}` it writes the lens that frame was seen through, degrees down the picture, in place of the mesh. | a `.glb`, or a `.txt` |
 | `matte` | The thing the prompt names, in white on black, on every frame: found where it comes into the picture and followed ([A thing in footage, by its name](#a-thing-in-footage-by-its-name)). | a video |
 | `matte-shown` | What `matte` finds, each thing in a color of its own over the guide with its number on it. | a video |
@@ -923,6 +947,16 @@ those, and with no `guide=` nothing is asked of the server. Its entry, as
   faces, which the old `depth` gave with `output=normal_opengl`, no
   workflow that comes with `kerf-comfy` gives now: nothing in Kerf read
   it.
+- **A frame alone is `set`'s.** The model that reads frames together
+  finds a lens by seeing them beside each other. Of one frame it answers
+  with no lens at all, a focal length of 1, and the mesh made of that is
+  the frame's pixels laid flat, with nothing to say it is wrong. So
+  `cameras` and `set-views` want two frames at the least and refuse one,
+  before the server is asked; a still, or one frame of a shot with no
+  path wanted, is rebuilt by `set`, whose model reads a frame at a time.
+  That is the one thing its model is still for, and why the server keeps
+  two that rebuild
+  ([What the server holds](#what-the-server-holds)).
 - **A camera's path, and the depth of the same reading, are found only
   with the model's weights as 32-bit floats**, which `cameras`,
   `set-views` and `depth` set where they load them (`weight_dtype=fp32`):

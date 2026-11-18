@@ -107,6 +107,10 @@ pub struct Frames {
     pub most: u32,
     /// It makes one frame and a multiple of this many: 4 for 5, 9, … 81.
     pub step: u32,
+    /// The fewest frames of a guide it makes a file of: 2 for one that reads them as
+    /// views of one scene, which a frame alone is not.
+    #[serde(default = "one")]
+    pub least: u32,
 }
 
 /// A workflow as its file says it.
@@ -206,6 +210,9 @@ impl Workflow {
         }
         if workflow.frames.most == 0 || workflow.frames.step == 0 {
             return Err("`frames` needs a `most` and a `step` of at least 1".to_owned());
+        }
+        if workflow.frames.least == 0 || workflow.frames.least > workflow.frames.most {
+            return Err("`frames` has a `least` from 1 to its `most`".to_owned());
         }
         if workflow.size.0 == 0 || workflow.size.1 == 0 || workflow.multiple == 0 {
             return Err("`size` and `multiple` cannot be 0".to_owned());
@@ -326,10 +333,11 @@ impl Workflow {
             }
             takes.insert("of".to_owned(), Value::from(of));
             if self.of_guide() {
-                takes.insert(
-                    "frames".to_owned(),
-                    serde_json::json!({"most": self.frames.most}),
-                );
+                let mut frames = serde_json::json!({"most": self.frames.most});
+                if self.frames.least > 1 {
+                    frames["least"] = Value::from(self.frames.least);
+                }
+                takes.insert("frames".to_owned(), frames);
             }
             let mut reads = vec![of];
             if blanks.contains(MOVES) {
@@ -839,6 +847,13 @@ mod tests {
         let cameras = Workflow::named("cameras").unwrap();
         assert!(cameras.classes().contains("SaveText") && !cameras.classes().contains("SaveVideo"));
         assert!(Workflow::named("depth-whole").is_err());
+        // A camera and a set in its space are found of frames seen beside each other, so of
+        // two at the least; a depth, and a frame alone as a set, are had of one.
+        for (name, least) in [("cameras", 2), ("set-views", 2), ("depth", 1), ("set", 1), ("matte", 1)] {
+            let workflow = Workflow::named(name).unwrap();
+            assert_eq!(workflow.frames.least, least, "{name}");
+            assert_eq!(workflow.takes()["frames"].get("least").is_some(), least > 1, "{name}");
+        }
         let missing = Workflow::named("no-such").unwrap_err();
         assert!(missing.contains("shot"), "{missing}");
     }
@@ -951,6 +966,37 @@ mod tests {
     }
 
     #[test]
+    fn the_files_the_workflows_load_are_the_ones_a_server_is_said_to_hold() {
+        // `docs/shots.md`, What the server holds: a workflow that loads another file, or
+        // one that no longer loads one, changes that table with this.
+        let mut loaded: BTreeMap<String, Vec<&str>> = BTreeMap::new();
+        for (name, _) in BUNDLED {
+            for value in Workflow::named(name).unwrap().set.values() {
+                if let Some(file) = value.as_str().filter(|file| file.ends_with(".safetensors")) {
+                    loaded.entry(file.to_owned()).or_default().push(name);
+                }
+            }
+        }
+        let made_by_one = ["shot", "shot-timed", "shot-into", "shot-led", "shot-directed", "still"];
+        let with_moved: Vec<&str> = made_by_one[..4].iter().copied().chain(["shot-moved", "shot-directed", "still"]).collect();
+        let held: BTreeMap<String, Vec<&str>> = [
+            ("wan2.1_vace_1.3B_fp16.safetensors", made_by_one.to_vec()),
+            ("wan_2.1_vae.safetensors", with_moved.clone()),
+            ("umt5_xxl_fp16.safetensors", with_moved),
+            ("Wan21-WanMove_fp8_scaled_e4m3fn_KJ.safetensors", vec!["shot-moved"]),
+            ("lightx2v_I2V_14B_480p_cfg_step_distill_rank64_bf16.safetensors", vec!["shot-moved"]),
+            ("clip_vision_h.safetensors", vec!["shot-moved"]),
+            ("depth_anything_3_base.safetensors", vec!["depth", "cameras", "set-views"]),
+            ("moge_3_vitl_fp16.safetensors", vec!["set"]),
+            ("sam3.1_multiplex_fp16.safetensors", vec!["matte", "matte-shown"]),
+        ]
+        .into_iter()
+        .map(|(file, by)| (file.to_owned(), by))
+        .collect();
+        assert_eq!(loaded, held);
+    }
+
+    #[test]
     fn a_workflow_says_what_its_model_takes() {
         let takes = bundled().takes();
         assert_eq!(takes["size"], json!([832, 480]));
@@ -1007,6 +1053,10 @@ mod tests {
             wrong(&whole(r#""workflow": {}"#).replace("\"step\": 4", "\"step\": 0"))
                 .contains("at least 1")
         );
+        for least in ["0", "82"] {
+            assert!(wrong(&whole(r#""workflow": {}"#).replace("\"step\": 4", &format!("\"step\": 4, \"least\": {least}")))
+                .contains("`least` from 1 to its `most`"));
+        }
         // With no rate it makes a file of its guide, and of nothing else.
         let of = |of: &str| {
             whole(r#""workflow": {}"#).replace("\"fps\": 16", &format!("\"of\": \"{of}\""))

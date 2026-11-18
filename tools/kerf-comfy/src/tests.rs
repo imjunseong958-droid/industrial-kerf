@@ -668,6 +668,29 @@ fn a_file_made_of_a_guide_has_the_guides_rate_size_and_frames() {
     assert_eq!(graph["5"]["inputs"]["output.normalization"], "min_max");
     assert!(said.contains("for 6 frames of 322x180"), "{said}");
 
+    // A camera is found of frames seen beside each other: one alone is refused, where the
+    // server would answer with no lens and no word of it. Its depth is had of one.
+    let mut alone = asking("alone.txt", json!({}));
+    alone.seconds = Some(0.05);
+    let (server, kept) = serve(reader);
+    let refused = make(
+        &alone,
+        folder.path(),
+        &Workflow::named("cameras").unwrap(),
+        &server,
+        &Tools::find(),
+        &patience(),
+        &AtomicBool::new(false),
+        &mut |_| {},
+    )
+    .unwrap_err();
+    assert_eq!(refused, "this workflow reads at least 2 frames of its guide together, and is handed 1");
+    assert!(kept.lock().unwrap().is_empty());
+    let mut alone = asking("alone.mp4", json!({}));
+    alone.seconds = Some(0.05);
+    let (_, said) = made(&alone, "depth");
+    assert!(said.contains("for 1 frames of 322x180"), "{said}");
+
     // With no guide there is nothing to make a file of, and nothing is asked of the server.
     let mut none = asking("depth.mp4", json!({}));
     none.guide = None;

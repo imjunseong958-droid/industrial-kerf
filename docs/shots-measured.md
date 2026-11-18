@@ -803,9 +803,21 @@ head of each part are the architecture's.
    (`set`). The two models' lenses, degrees down the frame, of the same
    footage: 27.6 by MoGe and 30.2 by Depth Anything 3 on the walk (29.3 to
    32.1 over its frames), 30.5 and 28.9 on the freeway; nearer each other
-   than on the street of 3 above, 22.8 and 37.2. Whether a frame's mesh
-   comes out better by one or the other was not looked at, there being no
-   set of this footage to hold either to, so `set` is as it was.
+   than on the street of 3 above, 22.8 and 37.2. Whether the other model
+   could do this too was then tried, with the first frame of the walk as
+   a guide of one frame. `set-views` made a mesh of it in 3 s, and the
+   mesh is wrong: its corners run from 0 to 638 across and 0 to 346 down,
+   the picture's own pixels, at depths of 0.2 to 2.9, where `set`'s mesh
+   of the same frame is seen through a lens of 26.5 degrees. The model's
+   answer says why: of one frame its lens comes back as the identity, a
+   focal length of 1, and its camera as not moved. It finds a lens by
+   seeing frames beside each other, and of the walk's 81 together its set
+   of that frame has one, 26.8 degrees, and the same order of near and
+   far as `set`'s at 0.83. So a frame alone is MoGe's and stays so, and
+   `cameras` and `set-views` now refuse a guide of one frame
+   (`"frames": {"least": 2}`) where they answered with a flat mesh and
+   no word of it. Which of the two rebuilds a frame of many better was
+   not looked at, there being no set of this footage to hold either to.
 
    What it shows, and what it does not. A matte by its name is a line of
    a recipe, and with it a part of footage is made anew, a thing is cut
@@ -813,7 +825,9 @@ head of each part are the architecture's.
    the four models that read a picture, one is gone and each of the
    others has its own work: SAM 3.1 says what a pixel is of, Depth
    Anything 3 how near it is and where the camera was, MoGe 3 what one
-   frame is the shape of. It is two shots, by day, with one thing at a
+   frame alone is the shape of. Every file the server holds is loaded by
+   a workflow, and which by which is in
+   [shots.md](shots.md#what-the-server-holds). It is two shots, by day, with one thing at a
    time and nothing passing in front of it for long. Not tried: a thing
    that goes behind another and comes back; hair, smoke, glass, and what
    else has no edge, which a matte of white and black cannot say; two

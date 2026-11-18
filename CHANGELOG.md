@@ -29,6 +29,11 @@ on `main`; its section here becomes the release's notes on GitHub
   takes `refine_steps=` or `output=`; a sky has a distance in it, and what
   is sky is a matte's to say (`prompt="sky"`). Print a model's entry again
   (`kerf-comfy --workflow depth --describe`).
+- `cameras` and `set-views` refuse a guide of one frame, where they wrote
+  a mesh that was the frame's pixels laid flat: their model finds a lens
+  only of frames seen together. One frame alone is `set`'s.
+  `docs/shots.md` lists the files a ComfyUI server holds for the
+  workflows that come with `kerf-comfy`, and which workflow loads which.
 - Kerf no longer runs MobileSAM: `look` with `track` takes no `model`, and
   nothing is fetched to `~/.kerf/models`. Its cut by colour and edges is as
   it was. A model's matte is `matte`, above, which held a man before a

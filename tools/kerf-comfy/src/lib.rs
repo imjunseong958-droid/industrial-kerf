@@ -201,6 +201,12 @@ pub fn make(
             guide_frames.map(|frames| f64::from(frames) / fps),
         ),
     };
+    if read.is_some() && frames < workflow.frames.least {
+        return Err(format!(
+            "this workflow reads at least {} frames of its guide together, and is handed {frames}",
+            workflow.frames.least
+        ));
+    }
     if let Some(read) = read.filter(|read| read.frames > frames && request.seconds.is_none()) {
         say(&format!(
             "the guide is {} frames, and this workflow reads {frames} at once: the rest is left out",
