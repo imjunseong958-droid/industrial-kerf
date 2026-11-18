@@ -14,6 +14,7 @@ mod brand;
 mod camera_file;
 mod cuts;
 pub mod docs;
+mod eye;
 pub mod harness;
 pub mod inbound;
 mod lint;

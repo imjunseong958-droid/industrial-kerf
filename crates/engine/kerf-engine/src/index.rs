@@ -235,6 +235,37 @@ pub fn small_color_frames(
     frames_with(resolve_ffmpeg_bin(), src, rate, size, ("rgba", 4), each)
 }
 
+/// One frame of the picture of `src`, the first at or after `seconds` in, as `width` by `height`
+/// pixels of four bytes, as [`small_color_frames`] gives each. FFmpeg goes to half a second before
+/// it in the file and decodes from there, so a frame far into a long file costs what one near its
+/// start does.
+pub fn small_color_frame(src: &Path, seconds: f64, (width, height): (u32, u32)) -> Result<Vec<u8>> {
+    let seconds = seconds.max(0.0);
+    let lead = seconds.min(0.5);
+    let read = crate::ffmpeg::hidden_command(resolve_ffmpeg_bin())
+        .args(video_decode_prefix())
+        .args(["-hide_banner", "-loglevel", "error", "-ss"])
+        .arg((seconds - lead).to_string())
+        .arg("-i")
+        .arg(src)
+        .arg("-ss")
+        .arg(lead.to_string())
+        .args(["-map", "0:v:0", "-frames:v", "1", "-vf"])
+        .arg(format!("scale={width}:{height},format=rgba"))
+        .args(["-f", "rawvideo", "-"])
+        .stdin(std::process::Stdio::null())
+        .output()?;
+    if !read.status.success() || read.stdout.len() != (width * height) as usize * 4 {
+        let said = String::from_utf8_lossy(&read.stderr);
+        return Err(EngineError::msg(if said.trim().is_empty() {
+            format!("`{}` has no frame {seconds} s in", src.display())
+        } else {
+            format!("the picture could not be read: {}", said.trim())
+        }));
+    }
+    Ok(read.stdout)
+}
+
 /// [`small_grey_frames`] with the FFmpeg at `ffmpeg`, in the pixel format `format`, which is
 /// `bytes` a pixel.
 fn frames_with(

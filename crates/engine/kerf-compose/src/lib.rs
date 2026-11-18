@@ -151,6 +151,37 @@ impl FileView {
     };
 }
 
+/// Where a clip of footage has its media's picture on the program's frame at a moment
+/// ([`Compositor::lands`]): the numbers the frame is drawn from, with nothing drawn and no
+/// file read.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Landing {
+    /// The frame of its media it shows then, counted from 0.
+    pub frame: i64,
+    /// What its crop leaves of the picture: left, top, right, bottom, each a share of it.
+    pub kept: [f64; 4],
+    /// How opaque it is then, a transition's fade apart.
+    pub opacity: f64,
+    /// Whether masks cut its picture.
+    pub masked: bool,
+    /// The effects done to its picture, by their ids, in order: a look as the effects it
+    /// stands for. What a look sets of the clip's own place is in where it lands, and what
+    /// an effect does to the picture is not.
+    pub effects: Vec<String>,
+    /// Where a place in the picture is on the frame, both in shares: (x, y) goes to
+    /// (a x + c y + e, b x + d y + f), the six in that order.
+    to_frame: [f64; 6],
+}
+
+impl Landing {
+    /// Where on the frame a place in the media's picture is, each across and down from 0
+    /// to 1. Past 0 or 1 it is off the frame.
+    pub fn on_frame(&self, [x, y]: [f64; 2]) -> [f64; 2] {
+        let [a, b, c, d, e, f] = self.to_frame;
+        [a * x + c * y + e, b * x + d * y + f]
+    }
+}
+
 impl Compositor {
     pub fn new(
         project: &Project,
@@ -196,6 +227,15 @@ impl Compositor {
     /// footage fitted to the frame, which is fitted to whole pixels of it.
     pub fn in_depth(&self, at: Time) -> World {
         self.drawing.in_depth(at)
+    }
+
+    /// Where the program's clip `clip` has its media's picture on the frame at sequence time
+    /// `at`: the placing a frame is drawn by, its crop, fit, scale, turn, and move, its motion
+    /// path, and its parents', as [`Self::frame`] puts it down. It is refused, with why,
+    /// for a clip that does not show then, one that plays no footage, and one in depth, which
+    /// a camera puts on the frame.
+    pub fn lands(&self, clip: &str, at: Time) -> Result<Landing, String> {
+        self.drawing.lands(clip, at)
     }
 
     /// The canvas, made even as a render makes it.

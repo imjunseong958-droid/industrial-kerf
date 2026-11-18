@@ -7,6 +7,7 @@ pub use kerf_core::{overlay, program};
 pub mod derivatives;
 pub mod encoder;
 pub mod error;
+pub mod eye;
 pub mod ffmpeg;
 pub mod follows;
 pub mod index;

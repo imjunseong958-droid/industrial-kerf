@@ -8,44 +8,42 @@ description: Block a shot in Kerf and have a video model film it, from a guide s
 - Start from the model. `look` lists `models` with what each takes: make the
   guide a sequence of its own, in the model's shape (`size`) and no longer
   than its `seconds`, and write the `render` step `look` gives as `guide`, so
-  the guide is drawn at the model's size and rate and not the sequence's.
+  it is drawn at the model's size and rate.
 - Which kind of guide a model follows is the model's, and its `about`
-  says: the picture, for a model that covers a render, or a pass of it,
-  `render <sequence> {guide.mp4} pass=depth size=… rate=…`, for one that
-  follows depth. With a depth pass the guide's colors say nothing, so the
-  prompt gives every color, and a backdrop out of depth is black.
+  says: the picture, for a model that covers a render, or a pass of it
+  (`pass=depth` on the `render` step), for one that follows depth. With a
+  depth pass the guide's colors say nothing, so the prompt gives every
+  color, and a backdrop out of depth is black.
 - A guide is read for layout, motion, and camera, not for finish. Flat colors
   and plain solids that differ clearly from each other guide better than
-  detail; what the picture should look like goes in the prompt. A model keeps
-  where things are and how they move, and takes their color from the prompt
-  alone: a white box is a dark boat until the prompt says a white hull. What
-  kind of thing it is comes from the prompt and its outline: one box for a
-  car was a van, and a low body with a cabin on it was a car.
+  detail. A model keeps where things are and how they move, and takes their
+  color from the prompt alone: a white box is a dark boat until the prompt
+  says a white hull. What kind of thing it is comes from the prompt and its
+  outline: one box was a van, and a low body with a cabin on it a car.
 - Stack the scene with `overwrite`, a clip a track, each at `at=0f` for the
   length of the shot. `insert` opens time, and puts each clip after the last.
   The camera and the lights go on the top tracks.
 - A thing that is seen from more than one side is a `gen=mesh@1` clip:
   `kind=box|ball|cylinder` with `width`, `height`, and `length` in frame
-  heights, and a `color`. It is in depth as it is, with its middle at `x`,
-  `y`, `z`, and has every side, so a camera can go round it; a body and a
-  cabin are two of them. Give it a light, or it is one flat color. With
-  `file="car.glb"` it is a glTF model, `height` tall, a color a part;
-  replacing the file asks for the shot again. A part the file gives a
-  picture or corner colors is drawn in them, and lights do not change it.
-  `animation="Walk"` plays one of the file's animations, by name or number,
-  looping from the clip's start; `seconds={0f:0 48f:1}` retimes it.
+  heights, and a `color`. It is in depth, its middle at `x`, `y`, `z`, and
+  has every side, so a camera can go round it; a body and a cabin are two.
+  Give it a light, or it is one flat color. With `file="car.glb"` it is a
+  glTF model, `height` tall, a color a part; replacing the file asks for
+  the shot again. A part the file gives a picture or corner colors is
+  drawn in them, and lights do not change it. `animation="Walk"` plays one
+  of the file's animations, by name or number, looping from the clip's
+  start; `seconds={0f:0 48f:1}` retimes it.
 - A set rebuilt from a shot is seen through the shot's camera: `look`
   with `mesh: {"clip": "set", "camera": "shot"}` returns the lines that
-  add a camera of the file, or with `from` one a model wrote.
-  `mesh` alone lists what the file has. What is added stands in the set,
-  before or behind its walls.
+  add a camera of the file, or with `from` one a model wrote. What is
+  added stands in the set, before or behind its walls.
 - In depth x runs right, y down, and z away from the viewer, in frame
-  heights (x in frame widths); `depth` gives a flat clip sides. What is nearer
-  at a place in the picture is drawn over what is farther there. Make a
-  floor a large clip tipped back, below the middle (`rotate_x=-84 y=0.75
-  z=4 scale=16`). Put a thing near its place: `look` with `stands` gives
-  the `script` that sets it down. What of a clip is under the floor is
-  hidden, and a model leaves out what is hidden.
+  heights (x in frame widths); `depth` gives a flat clip sides. What is
+  nearer is drawn over what is farther. Make a floor a large clip tipped
+  back, below the middle (`rotate_x=-84 y=0.75 z=4 scale=16`). Put a thing
+  near its place: `look` with `stands` gives the `script` that sets it
+  down. What of a clip is under the floor is hidden, and a model leaves
+  out what is hidden.
 - Leave a far backdrop, a sky, out of depth: a plain clip on the lowest
   track draws flat behind the scene, unlit. In depth it takes longer to
   draw, and where it meets the floor is the take's horizon.
@@ -53,16 +51,15 @@ description: Block a shot in Kerf and have a video model film it, from a guide s
   directional light's `x y z` is the way it shines. With a light that casts
   a `shadow`, add an `ambient` one, or what faces away is black. A guide may
   go without lights: a model lights the shot itself, and made as good a take.
-- When something has to happen on a frame, a ball landing, a flash, smoke
-  building, and the model's `reads` has `signal`, say when with a signal: a
+- When something has to happen on a frame, a ball landing, a flash, and
+  the model's `reads` has `signal`, say when with a signal: a
   `gen=signal@1` clip on a track of its own in the guide's sequence, from
   `at=0f` for the shot's length, with `value` keyed 0 to 1, and
   `signal=<clip>` on the `generate` step. The prompt says what the number is
   of. Where the moments are a sound's, music's beats or what was recorded,
   `look` with `signal` writes the keys from the clip that plays it. Hold a
-  peak for two of the model's frames, or it arrives lower. A
-  model that does not read one is said to have no use for it in `notes`:
-  leave it off the step.
+  peak for two of the model's frames, or it arrives lower. A model that
+  reads none says so in `notes`: leave it off the step.
 - Read the guide before writing the steps, at its first, middle, and last
   frame: `look` with `shows`, `stands`, and `at`. `shows` says where each
   clip is (`box`), what hides it (`hidden`, `by`), and the `edges` it
@@ -72,12 +69,16 @@ description: Block a shot in Kerf and have a video model film it, from a guide s
   by accident, the move plain.
 - The shot is a media with two steps under it: `step <id> add render
   <sequence> {guide.mp4} …`, then `step <id> add generate model=…
-  prompt="…" guide={guide.mp4}` with `seconds` and a `seed`, so that a
-  take can be made again. The media's line names the file the shot
-  will be, with the model's rate and size, and a making replaces them with
-  what was made. A picture is fit inside the frame before its `scale`, so a
-  shot of another shape leaves edges: the check says the `scale` that fills
-  it.
+  prompt="…" guide={guide.mp4}` with `seconds` and a `seed`. The media's
+  line names the shot's file, with the model's rate and size; a making
+  replaces them with what was made. A picture is fit inside the frame
+  before its `scale`, so a shot of another shape leaves edges: the check
+  says the `scale` that fills it.
+- A shot cut beside another: `look` with `eye`. Before making, `guide`
+  has each subject (the step's `moves=`, or `eye`'s `subjects`) either
+  side of the cut, its `jump`, `size`, and `reversed`; the eye holds under
+  0.1, and the guide mends it. After, where `guide` holds and `take`
+  jumps, roll again.
 - `look` lists the project's `cast` and `styles`: name them,
   `cast=Ada style=film`, and have the prompt say what they do, not how
   they look. One it lacks is added with `edit`'s `cast`.

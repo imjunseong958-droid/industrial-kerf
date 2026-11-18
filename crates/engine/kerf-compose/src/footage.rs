@@ -352,6 +352,12 @@ impl Pictures {
         self.pool.problems()
     }
 
+    /// Which frame of its media clip `index` shows at clip time `at`, counted from 0. No
+    /// file is read to say it.
+    pub fn frame_shown(&self, index: usize, at: Time) -> Option<i64> {
+        Some(self.clips.get(index)?.frame_at_time(at))
+    }
+
     /// The frame clip `index` shows at clip time `at`, decoded at `size`.
     pub fn picture(&self, index: usize, at: Time, size: (u32, u32)) -> Option<Arc<Picture>> {
         let clip = self.clips.get(index)?;

@@ -135,7 +135,9 @@ What stays, and none of it because a model is weak:
 - *What makes shots agree.* A model gives each shot a look of its own, and a
   cut wants them the same: color correction and grades, grain and a vignette
   laid over a whole cut as a finish, lens correction, stabilizing,
-  restoration.
+  restoration. What else a cut wants the same, where its subject is on the
+  frame either side of it, is no effect's: it is read from the two shots'
+  guides (Edit, `look` with `eye`).
 - *What has to be exact.* Text and logos, and what is done to them in depth;
   keys, mattes, masks, and what tracking writes, by which exact things are
   laid on a made shot.
@@ -1226,6 +1228,58 @@ of a word quiet. Not done: a cut in the dip between two words run together, whic
 transcript to tell it from a stopped consonant, and so a pause under 0.16 s; and a room whose
 level drifts over an hour, since one room tone is taken for a whole file.
 
+The picture of a cut is read from what the document has too, where the two clips are shots
+whose guides it holds (`kerf_engine::eye`, `look` with `eye`, 2026-11-18). A model makes each
+shot by itself, so where its subject is on the frame as it ends, how large, and which way it was
+going are in no shot's making, and a cut sets them beside the next shot's. A cut is where one
+clip of a video track ends on the frame the next starts. A side of it is read where its clip
+plays a media whose `render` step draws a guide, and what is read is the clip of that guide the
+`generate` step hands the model as where a thing goes (`moves=`); the call names the subject
+where no step does, and the document gets no word for it. Two readings are given side by side.
+The guide's is the box around the subject in the guide's ids pass, as `shows` reads a clip: what
+was asked for, known before anything is made. The take's, where the shot has a file, finds the
+subject in the take's own picture as `placed` does, where the guide has it with room around it,
+on the one frame at the cut, and in the guide's own picture the same way; the take's box is the
+guide's moved by how far apart those two are, so that what a tracker's box adds to an ids
+pass's is in neither. Where the guides jump and that is not meant, a guide is changed, which
+costs no making; where they hold and the takes do not, the model did not keep its guide, and it
+is rolled again.
+
+A box gets to the program's frame the way the frame it is on does. Which frame of its media a
+clip shows at the cut is the compositor's to say, the clip's trim and speed being in it, and
+that frame's time is a moment of the guide's sequence: a guide at another rate than its
+sequence, or than the program, is read at the moment the take has and not at the frame of the
+same number. The guide's frame is the take's picture where the two are one shape; where they
+are not, the picture fills the take's size and what is over is cut off evenly, as a `render`
+step draws it and as `kerf-comfy` brings a `moves` request to a model's pixels. From the take's
+picture to the program's frame is the placing a frame is drawn by, asked of the compositor and
+not worked out a second time (`Compositor::lands`: fit, crop, scale, turn, move, a motion path,
+parents, and what a look sets of them; `kerf-compose/tests/lands.rs` holds it to where eleven
+placings draw a box, to a pixel and a half). What that does not carry is said with its reason
+and given no number (`notMeasured`): a clip in depth, a mask, an effect that may move or cut a
+picture (a grade, a blur, grain, and a burn-in are read through), a crop that cuts the subject,
+footage with no guide, a shot whose subject nothing names, a subject its guide does not show
+there. A transition across a cut and the clips of tracks above it are named and not read.
+
+Which way a subject goes is the sign of how fast the middle of its box goes across the frame
+over a quarter of a second before the cut and after it, and `still` under 0.1 of a frame
+height a second, nine times what two boxes read a quarter of a second apart are off by; one way
+before and the other after is `reversed`. A cut whose subject jumps less than 0.1 of the frame's
+height is counted as `held`: from three picture heights off, where a picture 1080 high is meant
+to be seen from, that is 1.9 degrees, about what an eye sees sharply without moving. It is a
+count and no verdict. A hard cut jumps on purpose, and nothing here fails a check row.
+
+What it costs, measured beside this work on four cores with no GPU (no test holds it), on the
+car of `fixtures/shots/car` driving across cut to the same car parked, two guides of clips in
+depth at 1664x960 read 360 high, and takes of 832x480: by the guides alone 0.1 s for one cut and
+0.42 s for six, four small frames of an ids pass a cut at 16 ms each; with the takes read as
+well, 0.45 s for one cut and 2.8 s for six. Nearly all of what a take adds is finding the subject
+in four pictures, 0.17 to 0.27 s each and done side by side; a frame read from a take's file is
+40 ms, and the guide's own picture 16 ms. Either guide takes three seconds to draw as a file and
+a making 78 to 97, so the guides are what to read before a making. It draws frames, so it is
+asked for, as `shows` is, and is no part of a check; at most 64 cuts are read at once, and
+`from` and `to` choose a range.
+
 Slow motion can make frames: `retime=blend` or `retime=flow`, on the CPU. Speed changes over a clip
 (`kerf_model::Speed`, `speed={0f:1 24f:1/4}`): the model knows one curve, source played by clip time,
 and everything from trims to handles reads it. FFmpeg's `atempo` cannot follow a ramp (timed tempo
@@ -1479,6 +1533,15 @@ clean with the level either side of it, and the pauses and repeated words the se
 plays. It measures nothing new, so it costs a read of what each media's index kept, and indexes a
 media that has none.
 
+`look` with `eye` reads the picture of a cut between two shots, as `cuts` reads its sound (Edit,
+above): where the subject of the shot that ends is on the frame and where the next one's is, how
+far the eye has to go between them, how much larger or smaller the second is, and whether it
+turns back, by the two guides before either shot is made and by the takes once they are. An agent
+makes shots one at a time, and nothing else it has holds one to the next. It draws small frames of
+the guides, a tenth of a second for a cut and less for each more, and half a second a cut where
+takes are read, so it is asked for and not part of the check. It fails no check either: what is
+said of a cut is what is so, and a cut that jumps may be meant to.
+
 That loudness is the media's own. `look` with `loudness` gives the sequence's, as it plays: its whole mix through the meter a delivery is checked with (`kerf_engine::measure_program`), as integrated loudness beside the target, loudness range, true peak beside its limit, and the loudest three seconds and 400 ms with where each ends. It is measured once for a revision, of the project or of a pending proposal, so a gain or a mix can be read back before it is accepted.
 
 ## Before shipping
@@ -1551,7 +1614,7 @@ x64, and Linux x86-64 as new as Ubuntu 24.04.
   with no timeline document or proposals, so it is not a base for Kerf. **Its
   license, FSL-1.1-ALv2, forbids a competing commercial product, and Kerf Cloud is a
   paid tier, so none of its code comes here;** each version turns Apache-2.0 two
-  years after release. One idea of it was worth doing our own way, one kernel source for the CPU and WGSL, which is measured and begun under Kernels. Decoded IOSurfaces as wgpu textures were measured, and cost more than they save here; uploading decoded planes got more than that (see Depth and color). The fact sheet and the contrast check are in `look`.
+  years after release. One idea of it was worth doing our own way, one kernel source for the CPU and WGSL, which is measured and begun under Kernels. Decoded IOSurfaces as wgpu textures were measured, and cost more than they save here; uploading decoded planes got more than that (see Depth and color). The fact sheet and the contrast check are in `look`. So is its check of a match cut, the subject put through the camera on the frames of a cut to see where it lands: here it is read from each shot's guide, which the document has, and from the take (Edit, `look` with `eye`), and none of raea's code was read for it.
 - **[vork](https://github.com/voyager-so/vork)** (reviewed at `3389022`, 0.5.0) is a headless 3D
   renderer for agents: scene JSON in, a picture, a movie, or control passes (depth, normals, object
   ids, motion, the camera) out, in Rust and Slang on wgpu, with no timeline and no editor. It is

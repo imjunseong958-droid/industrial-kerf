@@ -755,6 +755,52 @@ impl Drawing {
         world
     }
 
+    /// See [`Compositor::lands`](crate::Compositor::lands).
+    pub fn lands(&self, id: &str, at: Time) -> std::result::Result<crate::Landing, String> {
+        let sequence = self.sequences.first().ok_or("there is no sequence")?;
+        let plan = sequence
+            .tracks
+            .iter()
+            .flat_map(|track| &track.shown)
+            .map(|shown| &shown.plan)
+            .find(|plan| plan.clip.id.as_str() == id)
+            .ok_or("it is no clip of this sequence that draws")?;
+        let time = at - plan.clip.start;
+        if time.is_negative() || time >= plan.clip.duration {
+            return Err("it does not show then".to_owned());
+        }
+        let Source::Media { picture } = plan.source else {
+            return Err("it plays no footage".to_owned());
+        };
+        if plan.three_d {
+            return Err("it is in depth, where a camera puts it on the frame".to_owned());
+        }
+        let frame = self
+            .pictures
+            .frame_shown(picture, time)
+            .ok_or("it plays no footage")?;
+        // The placing a frame is drawn by, from shares of the picture to shares of the canvas.
+        let (wide, tall) = (f64::from(plan.size.0), f64::from(plan.size.1));
+        let canvas = (f64::from(sequence.width), f64::from(sequence.height));
+        let placed = Affine::scale(1.0 / canvas.0.max(1.0), 1.0 / canvas.1.max(1.0))
+            .then_apply(&self.geometry(sequence, plan, time))
+            .then_apply(&Affine::scale(wide, tall));
+        let [left, right, top, bottom] = ["crop_l", "crop_r", "crop_t", "crop_b"]
+            .map(|name| number(&param(&plan.clip, name).value_at(time)));
+        Ok(crate::Landing {
+            frame,
+            kept: [left, top, 1.0 - right, 1.0 - bottom],
+            opacity: number(&param(&plan.clip, "opacity").value_at(time)),
+            masked: !plan.clip.masks.is_empty(),
+            effects: plan
+                .effects
+                .iter()
+                .map(|effect| effect.fx.to_string())
+                .collect(),
+            to_frame: [placed.a, placed.b, placed.c, placed.d, placed.e, placed.f],
+        })
+    }
+
     /// See [`Compositor::frame_key`](crate::Compositor::frame_key).
     pub fn frame_key(&self, at: Time, scale: f64) -> Option<u64> {
         let mut hash = DefaultHasher::new();
