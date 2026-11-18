@@ -26,7 +26,19 @@ on `main`; its section here becomes the release's notes on GitHub
   `.kerfrecipe` files opens and makes as before; a step that runs a program
   (`run`) stays a recipe file's alone, since a document names no program.
   Both shot fixtures (`fixtures/shots/car`, `fixtures/shots/walk`) are
-  written this way now. A preset does not carry steps yet.
+  written this way now.
+- A preset carries the steps that make a media, and every sequence a step
+  draws. A media with steps under its line travels as one the preset makes
+  (`path="made:<id>.<ext>"`), its steps naming the footage they read by
+  its slot (`guide=slot:slot1`); applying adds it as a new media of the
+  project with its steps, and `make` makes it there. So "a thing as a moved
+  layer" applied to other footage makes that footage's matte and plate, and
+  a blocked 3D scene applied again makes the same shot, with another prompt
+  or seed by a `step … set` after it. Footage a making reads is one slot
+  for every cut of it, and a matte or a plate takes the bound media's rate
+  and length, its clips starting from the binding's `from`. Inspecting a
+  preset lists what it makes apart from its slots. Applying a preset whose
+  track matte names a track above its own no longer fails.
 - The editor offers a media made by steps in the document what it offers
   one made by a recipe: Open Graph, Make…, Make Several and Takes in the
   bin, "Not made" where its file is not there yet, and its graph from its
