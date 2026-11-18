@@ -309,7 +309,7 @@ enum Command {
         media: String,
         path: String,
     },
-    /// Make a media's file from its recipe: `media_make_plan` and nothing
+    /// Make a media's file from its steps: `media_make_plan` and nothing
     /// run unless `confirmed`, which a person's yes to that plan sends.
     MediaMake {
         media: String,
@@ -327,18 +327,26 @@ enum Command {
     CastSet {
         entries: Vec<media::CastEntry>,
     },
+    /// Carry the steps of a media that names a recipe file into the document, under its
+    /// line: `media_carry_plan` and nothing written unless `confirmed`, which a person's yes
+    /// to that plan sends; then one edit and `media_carried`.
+    MediaCarry {
+        media: String,
+        #[serde(default)]
+        confirmed: bool,
+    },
     /// Stop the making of a media that is running: `media_make_cancelled`.
     MediaMakeCancel {
         media: String,
     },
-    /// How a media is made, as a graph of its recipe's steps and what they
-    /// read: `recipe`. Nothing is run.
+    /// How a media is made, as a graph of its steps and what they read:
+    /// `recipe`. Nothing is run.
     RecipeGet {
         media: String,
     },
-    /// Change a media's recipe in its file, where the file still reads as
-    /// the editor read it: one name on one line, or the whole text. `recipe`
-    /// then, as it now reads.
+    /// Change a media's steps, where they still read as the editor read them:
+    /// one name on one line, or the whole text, as `step` lines applied as one
+    /// edit. `recipe` then, as they now read.
     RecipeEdit(recipes::Edit),
     /// Set a signal clip's keys from the onsets of the sound another clip of
     /// its sequence plays ([`kerf_shots::signals::from_sound`]): one edit of
@@ -891,6 +899,10 @@ fn runtime_worker(
             }
             Command::CastSet { entries } => {
                 media::cast(&shared, &active_client, Some(entries), &tx);
+                continue;
+            }
+            Command::MediaCarry { media, confirmed } => {
+                recipes::carry(&shared, &active_client, &media, confirmed, &tx);
                 continue;
             }
             Command::RecipeGet { media } => {

@@ -297,7 +297,6 @@ QHash<QString, QString> RecipeInspector::values(const Node &node) const {
 }
 
 void RecipeInspector::setNode(const graph::Recipe &recipe, const QString &id) {
-    m_document = recipe.document;
     const Node *node = recipe.node(id);
     if (!node && recipe.parts) {
         // No node of a workflow chosen: the workflow itself, and what fills its blanks.
@@ -564,8 +563,7 @@ void RecipeInspector::rebuild(const graph::Recipe &recipe, const Node &node) {
             }
         }
         addNote(node.holds.value(QStringLiteral("path")).toString(), ink2)->setFont(tokens::font(timecode));
-        if (graph::isMissing(node)) addNote(m_document ? QStringLiteral("This file is not there. The steps cannot run until it is.")
-                                                       : QStringLiteral("This file is not there. The recipe cannot run until it is."), status::failed);
+        if (graph::isMissing(node)) addNote(QStringLiteral("This file is not there. The steps cannot run until it is."), status::failed);
         break;
     }
     case Kind::Cast:
@@ -589,8 +587,7 @@ void RecipeInspector::rebuild(const graph::Recipe &recipe, const Node &node) {
         break;
     case Kind::Run:
         addNote(QStringLiteral("%1 %2").arg(node.holds.value(QStringLiteral("program")).toString(), node.detail), ink2)->setFont(tokens::font(timecode));
-        addNote(m_document ? QStringLiteral("A program the shot's steps run, in its own folder. Its line is the document's to edit as text.")
-                           : QStringLiteral("A program the recipe runs, in its own folder. Its line is the recipe's to edit as text."));
+        addNote(QStringLiteral("A program the shot's steps run, in its own folder. Its line is the document's to edit as text."));
         buildReads(recipe, node);
         break;
     }
@@ -742,20 +739,19 @@ void RecipeInspector::rebuildWorkflow() {
                                         "line then runs. Nothing on the ComfyUI server, and nothing of kerf-comfy, is changed.")
                              .arg(m_workflow.origin == QLatin1String("file") ? QStringLiteral(", from the file your models entry names")
                                                                              : QStringLiteral(" with kerf-comfy"),
-                                  m_document ? QStringLiteral("in the project") : QStringLiteral("beside its recipe")),
+                                  QStringLiteral("in the project")),
                          ink2);
     }
     origin->setObjectName(QStringLiteral("graphWorkflowOrigin"));
     if (!m_workflow.blanks.isEmpty()) {
-        addSection(m_document ? QStringLiteral("Blanks the steps fill") : QStringLiteral("Blanks the recipe fills"));
+        addSection(QStringLiteral("Blanks the steps fill"));
         for (auto blank = m_workflow.blanks.constBegin(); blank != m_workflow.blanks.constEnd(); ++blank) {
             QLabel *name = text(QStringLiteral("{%1}").arg(blank.key()), timecode, accentInk);
             m_column->addWidget(name);
             addNote(blankSays(blank.key()))->setProperty("graphBlank", blank.key());
         }
     }
-    addNote(m_document ? QStringLiteral("Choose a node to see its inputs. A blank is set on the step's line; any other value is set here.")
-                       : QStringLiteral("Choose a node to see its inputs. A blank is set on the recipe's line; any other value is set here."));
+    addNote(QStringLiteral("Choose a node to see its inputs. A blank is set on the step's line; any other value is set here."));
     m_column->addStretch(1);
     m_scroll->setWidget(m_content);
     m_content->show();
@@ -1092,7 +1088,7 @@ void RecipeInspector::addRemoveStep(const Node &node) {
     remove->setObjectName(QStringLiteral("graphDeleteStep"));
     remove->setTip(QStringLiteral("Take line %1 out of %2. A step whose file a later one reads, and the last, stay until that is changed")
                        .arg(node.line)
-                       .arg(m_document ? QStringLiteral("the shot's steps") : QStringLiteral("the recipe")));
+                       .arg(QStringLiteral("the shot's steps")));
     connect(remove, &QAbstractButton::clicked, this, [this, line = node.line] { emit stepRemoveRequested(line); });
     m_column->addWidget(remove, 0, Qt::AlignLeft);
 }
@@ -1103,8 +1099,7 @@ void RecipeInspector::buildTakes(const Node &node) {
     if (const QString wants = holds.value(QStringLiteral("wants")).toString(); !wants.isEmpty())
         addNote(QStringLiteral("Wants making: %1.").arg(wants), status::request)->setObjectName(QStringLiteral("graphWants"));
     if (takes.isEmpty()) {
-        addNote(m_document ? QStringLiteral("No take yet. Make runs its steps and writes the first; every take after it is kept beside it.")
-                           : QStringLiteral("No take yet. Make runs the recipe and writes the first; every take after it is kept beside it."));
+        addNote(QStringLiteral("No take yet. Make runs its steps and writes the first; every take after it is kept beside it."));
         return;
     }
     addSection(QStringLiteral("Takes"));
@@ -1152,14 +1147,14 @@ void RecipeInspector::buildTakes(const Node &node) {
             take.value(QStringLiteral("changed")).toArray().isEmpty())
             continue;
         const int number = take.value(QStringLiteral("number")).toInt();
-        auto *restore = new ui::Button(QStringLiteral("Restore take %1's %2").arg(number).arg(m_document ? QStringLiteral("steps") : QStringLiteral("recipe")),
+        auto *restore = new ui::Button(QStringLiteral("Restore take %1's steps").arg(number),
                                        ui::Button::Kind::Secondary);
         restore->setObjectName(QStringLiteral("graphRestoreTake"));
         restore->setEnabled(!m_making);
         restore->setTip(QStringLiteral("Write %2 back as take %1 was made from it: its words, its seeds, and the workflow it named. "
                                        "The sequences and signals it was made from are the project's, and come back by undoing there")
                             .arg(number)
-                            .arg(m_document ? QStringLiteral("the shot's steps") : QStringLiteral("the recipe")));
+                            .arg(QStringLiteral("the shot's steps")));
         connect(restore, &QAbstractButton::clicked, this, [this, number] { emit takeRestoreRequested(number); });
         m_column->addWidget(restore, 0, Qt::AlignLeft);
     }

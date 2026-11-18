@@ -777,7 +777,7 @@ private slots:
         QVERIFY(w.window.m_turnRendered);
     }
 
-    // Kerf asks before a recipe's making runs, in the conversation: a card
+    // Kerf asks before a shot's making runs, in the conversation: a card
     // with the plan, Make and Not now. Make runs it as the bin does; the card
     // follows the making to its take, and Look at it asks Kerf about it.
     void kerfAsksToMakeInTheConversation() {
@@ -785,13 +785,13 @@ private slots:
         ChatPanel *chat = w.chat();
         w.window.applySnapshot(QJsonObject{{"revision", 3}, {"duration", 4}, {"timeline", QJsonObject{
             {"fps", 24}, {"tracks", QJsonArray{}}, {"sources", QJsonArray{
-                QJsonObject{{"id", "m4"}, {"path", "shots/open.mp4"}, {"recipe", "shots/open.kerfrecipe"}}}}}}});
+                QJsonObject{{"id", "m4"}, {"path", "shots/open.mp4"}, {"steps", 2}}}}}}});
         chat->composerWidget()->fill(QStringLiteral("Film the opening shot"));
         QVERIFY(w.window.m_chatWiring->post());
         w.window.handleEvent(QJsonObject{{"type", "agent_busy"}, {"busy", true}});
-        const QString plan = QStringLiteral("Asks to make m4, as take 2, from shots/open.kerfrecipe:\n1. render s2 {guide.mp4} size=832x480\n"
+        const QString plan = QStringLiteral("Asks to make m4, as take 2, from its steps:\n1. render s2 {guide.mp4} size=832x480\n"
                                             "2. generate model=wan prompt=\"a boat at dawn\" guide={guide.mp4}\n"
-                                            "Make it with `kerf make m4`, or Make from Recipe… in the editor's bin.");
+                                            "Make it with `kerf make m4`, or Make… in the editor's bin.");
         w.window.handleEvent(QJsonObject{{"type", "agent_ask"}, {"media", "m4"}, {"take", 2}, {"text", plan}});
         // The same making asked twice is one card.
         w.window.handleEvent(QJsonObject{{"type", "agent_ask"}, {"media", "m4"}, {"take", 2}, {"text", plan}});
@@ -807,7 +807,7 @@ private slots:
         w.sent.clear();
         QVERIFY(card->makeButton()->isEnabled());
         card->makeButton()->click();
-        // Sent to the bridge as the bin's Make from Recipe… is.
+        // Sent to the bridge as the bin's Make… is.
         const QJsonObject made = w.window.m_lastCommand;
         QCOMPARE(made.value("type").toString(), QStringLiteral("media_make"));
         QCOMPARE(made.value("media").toString(), QStringLiteral("m4"));

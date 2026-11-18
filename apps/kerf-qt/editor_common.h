@@ -120,13 +120,18 @@ QString sourceFileName(const QJsonObject &source);
 // A made shot's name, from its recipe's path: "shots/open@2.kerfrecipe", the recipe's
 // next version, is still "open".
 QString recipeShotName(const QString &recipe);
-// Whether a source is a shot Kerf makes: one that names a recipe file (`recipe`) or
-// whose steps the document holds under its media line (`steps`, how many there are).
+// Whether a source is a shot Kerf makes: one whose steps the document holds under its
+// media line (`steps`, how many there are), or one whose steps are still in the recipe
+// file it names (`recipe`), to be carried into the document first.
 bool sourceIsMade(const QJsonObject &source);
-// Whether a made source's steps are the document's own, with no recipe file.
+// Whether a made source's steps are the document's own: it is made from them, and its
+// graph shows them.
 bool sourceStepsInDocument(const QJsonObject &source);
-// Where a made source is made from, to follow "from" or "running" in a sentence: its
-// recipe's path, or "its steps in the document". Empty for a source not made.
+// Whether a source names a recipe file and has no steps under its line: nothing is made
+// from it, or graphed, until its steps are carried into the document (media_carry).
+bool sourceIsUncarried(const QJsonObject &source);
+// Where a made source is made from, to follow "from" or "running" in a sentence: "its
+// steps in the document". Empty for a source not made from steps.
 QString sourceMadeFrom(const QJsonObject &source);
 // What a media a preset makes (an entry of its `made`) is, in words, from the
 // model its last step runs and the slot it is of: "a matte of slot1", "a plate

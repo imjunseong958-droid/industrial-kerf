@@ -47,7 +47,7 @@ pub(crate) struct Edit {
     /// Take the step on `line` out.
     #[serde(default)]
     remove: bool,
-    /// Go back to the recipe this take was made from ([`kerf_shots::takes::restore`]).
+    /// Go back to the steps this take was made from ([`kerf_shots::takes::restored`]).
     #[serde(default)]
     restore: Option<u32>,
 }
@@ -147,6 +147,60 @@ pub(crate) fn apply(client: &kerf_runtime::RuntimeClient, lines: &[String]) -> R
         .apply_script_request("ui", &crate::key(), &lines.join("\n"), revision)
         .map(|_| ())
         .map_err(|error| error.message)
+}
+
+/// The `media_carry_plan` event of media `id`, whose steps are in the recipe file it names:
+/// what carrying them into the document would write. Nothing is changed.
+fn carry_plan(project: &Project, directory: &Path, id: &str) -> Result<Value, String> {
+    let carry = kerf_engine::recipe::carry(project, directory, id).map_err(|error| error.to_string())?;
+    Ok(json!({
+        "type": "media_carry_plan",
+        "media": id,
+        "recipe": carry.recipe,
+        "script": carry.script,
+        "notes": carry.notes,
+    }))
+}
+
+/// Have the takes of media `id`, carried between `before` and `after`, held to the steps it
+/// now has: the `media_carried` event, with how many are.
+fn carried(before: &Project, after: &Project, directory: &Path, id: &str, recipe: &str) -> Result<Value, String> {
+    let held = kerf_engine::recipe::takes::mark_carried(before, after, directory, id)
+        .map_err(|error| error.to_string())?;
+    Ok(json!({"type": "media_carried", "media": id, "recipe": recipe, "held": held}))
+}
+
+/// Answer `media_carry` for media `id`, whose steps are in the recipe file it names.
+/// Unconfirmed, say what would be written (`media_carry_plan`) and change nothing.
+/// Confirmed, which only a person's yes to that plan sends, have kerfd apply the lines as
+/// one edit of the person's own, which undo takes back, then hold the takes made from the
+/// recipe to the steps (`media_carried`). The recipe's file is left where it is. What
+/// cannot be carried is an `error` that names the media, with the document as it was.
+pub(crate) fn carry(
+    shared: &Shared,
+    client: &kerf_runtime::RuntimeClient,
+    id: &str,
+    confirmed: bool,
+    tx: &SyncSender<Value>,
+) {
+    let directory = shared.directory.as_path();
+    let answered = project(client).and_then(|before| {
+        if !confirmed {
+            return carry_plan(&before, directory, id);
+        }
+        let carry = kerf_engine::recipe::carry(&before, directory, id).map_err(|error| error.to_string())?;
+        apply(client, &carry.script)?;
+        let after = project(client)?;
+        carried(&before, &after, directory, id, &carry.recipe)
+    });
+    match answered {
+        Ok(event) => crate::emit(tx, event),
+        Err(why) => crate::emit(
+            tx,
+            json!({"type": "error", "message": format!("cannot carry {id}: {why}"),
+                "command": "media_carry", "media": id}),
+        ),
+    }
 }
 
 /// The project as kerfd has it.
@@ -355,6 +409,84 @@ mod tests {
         assert!(refused.contains("in the recipe file `shots/open.kerfrecipe`"), "{refused}");
         assert!(refused.contains("`kerf carry m1`"), "{refused}");
         assert_eq!(fs::read_to_string(dir.join("shots/open.kerfrecipe")).unwrap(), format!("kerf-recipe 1\n{STEP}\n"));
+    }
+
+    /// A project whose media `m1` names the recipe file `shots/open.kerfrecipe`, with
+    /// `recipe` written there.
+    fn uncarried(dir: &Path, recipe: &str) -> Project {
+        fs::create_dir_all(dir.join("shots")).unwrap();
+        fs::write(dir.join("shots/open.kerfrecipe"), recipe).unwrap();
+        kerf_runtime::parse_document(
+            "kerf 1\nproject name=\"Shots\"\nmedia m1 path=\"shots/open.mp4\" rate=24 dur=96f video=320x180 recipe=\"shots/open.kerfrecipe\"\nsequence s1 rate=24 size=320x180\n",
+        )
+        .unwrap()
+    }
+
+    /// The SHA-256 of `text`, as a take's record holds it.
+    #[cfg(unix)]
+    fn sha256(text: &str) -> String {
+        use std::io::Write;
+        let mut summing = std::process::Command::new("sha256sum")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .expect("sha256sum");
+        summing.stdin.take().unwrap().write_all(text.as_bytes()).unwrap();
+        let out = summing.wait_with_output().unwrap();
+        String::from_utf8(out.stdout).unwrap().split_whitespace().next().unwrap().to_owned()
+    }
+
+    /// Carrying says first what it would write, changing nothing; once the lines are in the
+    /// document, the take the recipe made before is held to the steps it became.
+    #[cfg(unix)]
+    #[test]
+    fn a_recipe_is_carried_into_the_document_and_its_take_is_held() {
+        let folder = tempfile::tempdir().unwrap();
+        let dir = folder.path();
+        let recipe = format!("kerf-recipe 1\n# The boat.\n{STEP}\n");
+        let before = uncarried(dir, &recipe);
+        // The take a making of the recipe left, before a document held steps.
+        let takes = dir.join("shots/open.takes");
+        fs::create_dir_all(takes.join("001.work")).unwrap();
+        fs::write(takes.join("001.mp4"), "take").unwrap();
+        fs::write(takes.join("001.work/made-from.kerfrecipe"), &recipe).unwrap();
+        let record = json!({
+            "kerf-take": 1,
+            "made": 1_700_000_000u64,
+            "from": {"recipe": sha256(&kerf_engine::recipe::Recipe::essence(&recipe))},
+        });
+        fs::write(takes.join("001.take.json"), record.to_string()).unwrap();
+
+        let plan = carry_plan(&before, dir, "m1").unwrap();
+        assert_eq!(plan["type"], "media_carry_plan");
+        assert_eq!((plan["media"].as_str(), plan["recipe"].as_str()), (Some("m1"), Some("shots/open.kerfrecipe")));
+        let script: Vec<String> = serde_json::from_value(plan["script"].clone()).unwrap();
+        assert_eq!(script.last().unwrap(), &format!("step m1 add {STEP}"));
+        assert!(!script[0].contains("recipe="), "{script:?}");
+        assert_eq!(plan["notes"], json!([]));
+
+        let after = applied(&before, &script);
+        assert_eq!(after.media("m1").unwrap().steps.len(), 1);
+        let done = carried(&before, &after, dir, "m1", "shots/open.kerfrecipe").unwrap();
+        assert_eq!(done, json!({"type": "media_carried", "media": "m1", "recipe": "shots/open.kerfrecipe", "held": 1}));
+        let held = kerf_engine::recipe::takes::takes(&after, dir, after.media("m1").unwrap()).unwrap();
+        assert_eq!(held.len(), 1);
+        assert!(held[0].current, "{held:?}");
+        // The recipe's file is left where it is, and once carried there is nothing to carry.
+        assert_eq!(fs::read_to_string(dir.join("shots/open.kerfrecipe")).unwrap(), recipe);
+        assert!(carry_plan(&after, dir, "m1").unwrap_err().contains("has its steps under its line"));
+    }
+
+    /// A recipe that runs a program is not carried: a document names none.
+    #[test]
+    fn a_recipe_that_runs_a_program_is_not_carried() {
+        let folder = tempfile::tempdir().unwrap();
+        let dir = folder.path();
+        let project = uncarried(dir, "kerf-recipe 1\nrun vork render --out {guide.mp4}\ngenerate model=dawn guide={guide.mp4}\n");
+        let refused = carry_plan(&project, dir, "m1").unwrap_err();
+        let engine = kerf_engine::recipe::carry(&project, dir, "m1").unwrap_err().to_string();
+        assert_eq!(refused, engine);
+        assert!(refused.contains("runs a program, and a document names none"), "{refused}");
     }
 
     /// Steps the document holds are shown as a recipe's are, and a change to them is the

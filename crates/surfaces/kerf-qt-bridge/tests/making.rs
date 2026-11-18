@@ -349,3 +349,68 @@ fn several_takes_are_made_one_after_another_and_the_cast_is_read_and_set() {
         .unwrap()
         .contains("cast Ada"));
 }
+
+#[test]
+fn a_recipe_file_is_carried_into_the_document_once_a_person_says_yes() {
+    let project = Project::new("carry", &[]);
+    let file = project.0.join("project.kerf");
+    let text = fs::read_to_string(&file).unwrap().replace(
+        "video=64x64\n",
+        "video=64x64 recipe=\"shots/open.kerfrecipe\"\n",
+    );
+    fs::write(&file, text).unwrap();
+    fs::write(
+        project.0.join("shots/open.kerfrecipe"),
+        "kerf-recipe 1\nrender s2 {out}\n",
+    )
+    .unwrap();
+    let mut editor = Editor::open(&project.0);
+
+    // Nothing is made from the recipe file: how to carry its steps is said.
+    editor.send(json!({"type": "media_make", "media": "m1"}));
+    let refused = editor.expect("an error", |event| event["type"] == "error");
+    assert!(
+        refused["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("`kerf carry m1`")),
+        "{refused}"
+    );
+
+    // Asked for plainly, what would be written is shown and nothing is.
+    editor.send(json!({"type": "media_carry", "media": "m1"}));
+    let plan = editor.expect("the plan", |event| event["type"] == "media_carry_plan");
+    assert_eq!(
+        (&plan["media"], &plan["recipe"]),
+        (&json!("m1"), &json!("shots/open.kerfrecipe"))
+    );
+    assert_eq!(plan["script"].as_array().unwrap().last().unwrap(), "step m1 add render s2 {out}");
+    assert!(fs::read_to_string(&file).unwrap().contains("recipe="));
+
+    // Confirmed, the steps are under the media's line, one edit, and the file is left.
+    editor.send(json!({"type": "media_carry", "media": "m1", "confirmed": true}));
+    let carried = editor.expect("the carry", |event| event["type"] == "media_carried");
+    assert_eq!(
+        carried,
+        json!({"type": "media_carried", "media": "m1", "recipe": "shots/open.kerfrecipe", "held": 0})
+    );
+    editor.expect("the steps in the document", |event| {
+        event["type"] == "state"
+            && event["snapshot"]["document"].as_str().is_some_and(|document| {
+                document.contains("\n  render s2 {out}\n") && !document.contains("recipe=")
+            })
+    });
+    assert!(project.0.join("shots/open.kerfrecipe").is_file());
+
+    // Carried, there is nothing to carry again: that is said, naming the media.
+    editor.send(json!({"type": "media_carry", "media": "m1"}));
+    let again = editor.expect("an error", |event| {
+        event["type"] == "error" && event["command"] == "media_carry"
+    });
+    assert_eq!(again["media"], "m1");
+    assert!(
+        again["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("has its steps under its line")),
+        "{again}"
+    );
+}

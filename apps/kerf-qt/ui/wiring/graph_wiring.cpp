@@ -137,7 +137,12 @@ bool GraphWiring::isOpen() const {
 void GraphWiring::open(const QString &media) {
     MainWindow *w = m_window;
     if (!w->mediaIsMade(media) || !m_scrim) return;
-    // A recipe file, or none where the steps are the document's own.
+    // Steps still in a recipe file are not graphed: carrying them into the document is offered.
+    if (w->mediaIsUncarried(media)) {
+        w->carryMedia(media);
+        return;
+    }
+    // A media made before steps were the document's own may still name a recipe file.
     const QString recipe = w->mediaRecipe(media);
     const bool wasOpen = isOpen();
     m_media = media;

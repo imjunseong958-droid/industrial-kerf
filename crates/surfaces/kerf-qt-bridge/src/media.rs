@@ -54,7 +54,7 @@ pub(crate) fn copy_then(
     });
 }
 
-/// Make a take of media `id` from its recipe. Unconfirmed, say what would
+/// Make a take of media `id` from its steps. Unconfirmed, say what would
 /// run (`media_make_plan`) and run nothing. Confirmed, run it on its own
 /// thread, saying each line its steps say as `media_making`, and then hand
 /// the runtime worker the replace that has the media be the new take, the
@@ -880,6 +880,16 @@ mod tests {
                 ..
             }
         ));
+        // Steps are carried into the document only when the command says a person agreed.
+        assert!(matches!(
+            read(json!({"type": "media_carry", "media": "m2"})).unwrap(),
+            Command::MediaCarry { ref media, confirmed: false } if media == "m2"
+        ));
+        assert!(matches!(
+            read(json!({"type": "media_carry", "media": "m2", "confirmed": true})).unwrap(),
+            Command::MediaCarry { confirmed: true, .. }
+        ));
+        assert!(read(json!({"type": "media_carry"})).is_err());
         // A making that is running is stopped by the media it makes.
         let Command::MediaMakeCancel { media } =
             read(json!({"type": "media_make_cancel", "media": "m2"})).unwrap()

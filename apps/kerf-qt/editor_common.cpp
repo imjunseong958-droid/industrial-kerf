@@ -227,8 +227,11 @@ bool sourceIsMade(const QJsonObject &source) {
     return !source.value(QStringLiteral("recipe")).toString().isEmpty() || sourceStepsInDocument(source);
 }
 
+bool sourceIsUncarried(const QJsonObject &source) {
+    return !source.value(QStringLiteral("recipe")).toString().isEmpty() && source.value(QStringLiteral("steps")).toInt() == 0;
+}
+
 QString sourceMadeFrom(const QJsonObject &source) {
-    if (const QString recipe = source.value(QStringLiteral("recipe")).toString(); !recipe.isEmpty()) return recipe;
     return sourceStepsInDocument(source) ? QStringLiteral("its steps in the document") : QString();
 }
 

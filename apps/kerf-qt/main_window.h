@@ -390,25 +390,39 @@ private:
     QString mediaName(const QString &mediaId) const;
     // The project's source of `mediaId`, as the snapshot lists it; empty when there is none.
     QJsonObject mediaSource(const QString &mediaId) const;
-    // The recipe `mediaId` names (recipe= on its media line), or empty: also empty for
-    // a media whose steps are the document's own (mediaIsMade says either).
+    // The recipe file `mediaId` names (recipe= on its media line), or empty: a media
+    // whose steps are still there, to be carried into the document (mediaIsUncarried).
     QString mediaRecipe(const QString &mediaId) const;
-    // Whether `mediaId` is a shot Kerf makes, from a recipe file or from the steps
-    // written under its line in the document (sourceIsMade).
+    // Whether `mediaId` is a shot Kerf makes: from the steps written under its line in
+    // the document, or once the steps of the recipe file it names are carried there
+    // (sourceIsMade).
     bool mediaIsMade(const QString &mediaId) const;
-    // Where it is made from, for a sentence: its recipe's path, or "its steps in the
-    // document" (sourceMadeFrom).
+    // Whether `mediaId` names a recipe file and has no steps under its line: it is not
+    // made or graphed until they are carried (sourceIsUncarried).
+    bool mediaIsUncarried(const QString &mediaId) const;
+    // Where it is made from, for a sentence: "its steps in the document"
+    // (sourceMadeFrom).
     QString mediaMadeFrom(const QString &mediaId) const;
-    // The takes a media's recipe has made, as the project lists them: each one's number,
+    // The takes a media's steps have made, as the project lists them: each one's number,
     // its path, and whether it is the one the media is.
     QJsonArray mediaTakes(const QString &mediaId) const;
     void useTake(const QString &mediaId, int take, const QString &path);
-    // Who and what `mediaId`'s recipe shows and how it looks: the names of the project's
+    // Who and what `mediaId`'s steps show and how it looks: the names of the project's
     // cast and styles it gives, as the project lists them.
     QStringList mediaShows(const QString &mediaId) const;
-    // Ask the bridge what making `mediaId` from its recipe would run, `rolls` takes of it
+    // Ask the bridge what making `mediaId` from its steps would run, `rolls` takes of it
     // one after another; it answers media_make_plan and runs nothing.
     void makeMedia(const QString &mediaId, int rolls = 1);
+    // Ask the bridge what carrying the steps of the recipe file `mediaId` names into the
+    // document would write; it answers media_carry_plan and changes nothing.
+    void carryMedia(const QString &mediaId);
+    // What a person is asked before a carry is written, from a media_carry_plan event:
+    // the recipe file, each line of the edit, and what does not come with it.
+    static QString carryQuestion(const QJsonObject &plan);
+    // Carry the steps of `mediaId` into the document: only after a person's yes to its plan.
+    void runCarry(const QString &mediaId);
+    // What the status line says once a carry is written, from a media_carried event.
+    static QString carriedStatus(const QJsonObject &carried);
     // Ask the bridge for the project's cast; it answers cast, which shows the dialog.
     void showCast();
     // The dialog that shows and sets the project's cast and styles, from a cast event:
@@ -420,23 +434,22 @@ private:
     // `file` as a cast's picture names it, from the project's folder: as it is where it is
     // inside the project, else copied into its refs folder. Empty where it cannot be copied.
     static QString castPicturePath(const QString &projectDirectory, const QString &file);
-    // What a person is asked before a recipe's command is run, from a
+    // What a person is asked before a shot's steps are run, from a
     // media_make_plan event.
     static QString makeQuestion(const QJsonObject &plan);
-    // Run the recipe of `mediaId`, `rolls` takes of it: only after a person's yes to its
+    // Run the steps of `mediaId`, `rolls` takes of it: only after a person's yes to its
     // plan.
     void runMake(const QString &mediaId, int rolls = 1);
     // Stop the making of `mediaId` that is running: its step is asked to end.
     void stopMake(const QString &mediaId);
     // What the toolbar says of a making under way, from a media_making event.
-    // What a making's steps say, of the media called name (its id when there is none);
-    // `document` for a media made by steps in the document rather than a recipe.
-    static QString makingStatus(const QJsonObject &making, const QString &name = QString(), bool document = false);
+    // What a making's steps say, of the media called name (its id when there is none).
+    static QString makingStatus(const QJsonObject &making, const QString &name = QString());
     // The bin's context menu for `mediaId` (empty for the bin itself).
     QMenu *binMenu(const QString &mediaId);
     // How a shot is made, as a graph of its steps, over the window
-    // (ui/recipe_graph_panel.h): for a media made from a recipe or from steps in
-    // the document.
+    // (ui/recipe_graph_panel.h); for a media whose steps are still in a recipe
+    // file, carrying them into the document is offered instead.
     void showGraph(const QString &mediaId);
     // The media a clip of the program plays; empty for one that plays none.
     QString clipMedia(const QString &clipId) const;

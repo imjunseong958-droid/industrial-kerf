@@ -154,9 +154,6 @@ private:
     QString m_shape;
     int m_line = 0;
     bool m_making = false;
-    // Whether the shot's steps are the document's own rather than a recipe file's:
-    // what its words call them.
-    bool m_document = false;
     ui::FadeScrollArea *m_scroll = nullptr;
     QWidget *m_content = nullptr;
     QVBoxLayout *m_column = nullptr;

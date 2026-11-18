@@ -117,9 +117,9 @@ QJsonObject bounceRecipe(int takes = 2, const QString &text = QString::fromLatin
                        {"notes", QJsonArray{}}};
 }
 
-// A project whose media m4 is that shot, on the timeline as the clip `shot`,
-// beside one that no recipe makes.
-QJsonObject bounceState(int revision = 2, const QString &recipe = QStringLiteral("shots/bounce.kerfrecipe")) {
+// A project whose media m4 is that shot, its three steps under its line in the
+// document, on the timeline as the clip `shot`, beside one that no steps make.
+QJsonObject bounceState(int revision = 2) {
     const auto clip = [](const char *id, const char *media, double start, double duration) {
         return QJsonObject{{"id", id}, {"kind", "media"}, {"sourceId", media}, {"timelineStart", start}, {"duration", duration},
                            {"startFrame", std::llround(start * 24)}, {"durationFrames", std::llround(duration * 24)}, {"enabled", true}};
@@ -130,7 +130,7 @@ QJsonObject bounceState(int revision = 2, const QString &recipe = QStringLiteral
                                {"sources", QJsonArray{
                                    QJsonObject{{"id", "m1"}, {"path", "media/crowd.mov"}, {"width", 1920}, {"height", 1080}, {"duration", 4}, {"fps", 24}},
                                    QJsonObject{{"id", "m4"}, {"path", "shots/bounce.takes/002.mp4"}, {"width", 832}, {"height", 480}, {"duration", 4},
-                                               {"fps", 16}, {"recipe", recipe},
+                                               {"fps", 16}, {"steps", 3},
                                                {"takes", QJsonArray{QJsonObject{{"number", 1}, {"path", "shots/bounce.takes/001.mp4"}, {"chosen", false}},
                                                                     QJsonObject{{"number", 2}, {"path", "shots/bounce.takes/002.mp4"}, {"chosen", true}}}}}}},
                                {"tracks", QJsonArray{QJsonObject{{"id", "V1"}, {"type", "video"}, {"enabled", true},
@@ -693,9 +693,9 @@ private slots:
         const int edges = view->recipe().edges.size();
 
         // The agent set the seed, let the signal go and set a value of the workflow:
-        // one revision, in which the media names the recipe's next version.
+        // one revision, after which the graph is read again.
         window.m_lastCommand = {};
-        window.handleEvent(bounceState(3, QStringLiteral("shots/bounce@2.kerfrecipe")));
+        window.handleEvent(bounceState(3));
         QCOMPARE(window.m_lastCommand, (QJsonObject{{"type", "recipe_get"}, {"media", "m4"}}));
         QJsonObject changed = bounceWithRunner(QStringLiteral("bounce.video.comfy.json"));
         changed.insert("recipe", "shots/bounce@2.kerfrecipe");
@@ -717,7 +717,7 @@ private slots:
         QCOMPARE(view->selected(), QStringLiteral("made:out"));
         QCOMPARE(field(window, QStringLiteral("seed"))->text(), QStringLiteral("8"));
         QCOMPARE(panel->inspector()->findChild<QLabel *>(QStringLiteral("graphWorkflowSays"))->text().contains(QStringLiteral("bounce.video.comfy.json")), true);
-        // A version of the recipe is the same shot: its cards are where they were put.
+        // The same shot read again: its cards are where they were put.
         QCOMPARE(view->cardRect(QStringLiteral("signal:bounce")).topLeft(), moved);
         // The person's next change is to the version the agent left.
         typeInto(field(window, QStringLiteral("seed")), QStringLiteral("9"));
@@ -728,7 +728,7 @@ private slots:
         window.handleEvent(shotWorkflow(true));
         QVERIFY(panel->showsWorkflow());
         window.m_lastCommand = {};
-        window.handleEvent(bounceState(4, QStringLiteral("shots/bounce@3.kerfrecipe")));
+        window.handleEvent(bounceState(4));
         QCOMPARE(window.m_lastCommand, (QJsonObject{{"type", "workflow_get"}, {"media", "m4"}, {"line", 6}}));
         window.handleEvent(shotWorkflow(true, QStringLiteral("euler")));
         QCOMPARE(panel->workflow().text, shotWorkflow(true, QStringLiteral("euler")).value("text").toString());
@@ -1094,7 +1094,7 @@ private slots:
         changed.insert("nodes", nodes);
         window.handleEvent(changed);
         QVERIFY(restore());
-        QCOMPARE(restore()->text(), QStringLiteral("Restore take 3's recipe"));
+        QCOMPARE(restore()->text(), QStringLiteral("Restore take 3's steps"));
         restore()->click();
         QCOMPARE(window.m_lastCommand,
                  (QJsonObject{{"type", "recipe_edit"}, {"media", "m4"}, {"was", QString::fromLatin1(kBounce)}, {"restore", 3}}));
@@ -1391,7 +1391,7 @@ private slots:
         hold()->click();
         window.m_errorBanner->hide();
         window.handleEvent(QJsonObject{{"type", "error"}, {"command", "takes_read"}, {"media", "m4"},
-                                       {"message", "the recipe's model is not told where anything goes (`moves=<clip>`)"}});
+                                       {"message", "the shot's model is not told where anything goes (`moves=<clip>`)"}});
         QVERIFY(says()->text().contains(QStringLiteral("moves=<clip>")));
         QVERIFY(hold()->isEnabled());
         QVERIFY(!window.m_errorBanner->isVisible());
