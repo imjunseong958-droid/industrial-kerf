@@ -62,6 +62,17 @@ on `main`; its section here becomes the release's notes on GitHub
   ["prompt"]` under `without`), and may end in a node that saves a preview
   and nothing else: `kerf-comfy` fetches that where nothing was saved to
   keep.
+- An agent is told how to work on a part of footage without being led
+  through it. A new playbook, `footage-parts`, is in every agent
+  conversation beside `model-shot`: which of the models set up fits what is
+  asked, a matte by a thing's name, a thing taken out, a part made anew, a
+  thing as a layer of its own; what to look at after each making; and what
+  a take asks for next, so that a man moved in his footage is his matte,
+  then a plate under him where the footage still had him, and then the
+  layers. How much of that runs without asking is still yours to say, in
+  `~/.kerf/agent.json`. `shot-into`'s entry no longer says it takes a thing
+  out, which is `plate`'s: print it again (`kerf-comfy --workflow shot-into
+  --describe`).
 
 ## 0.1.4
 

@@ -281,6 +281,19 @@ the take; the person says how much of that it does without asking them.
   making runs in the agent's session, as a job it reads, waits for, or stops,
   as Stop Making stops one, and the media becomes the new take once it is made.
   The agent then looks at the take, and changes one thing for the next.
+- What an agent is told of this beforehand is two of the playbooks that are
+  whole in every conversation's instructions (`skills/`; `kerf --skills`
+  lists them). `model-shot` is for a shot a model films from a guide.
+  `footage-parts` is for a part of filmed footage
+  ([A thing in footage, by its name](#a-thing-in-footage-by-its-name)): which
+  of the models set up fits what is asked, a matte, a thing taken out, a part
+  made anew, a thing as a layer of its own; what to look at after each
+  making; and what a take asks for next. By it an agent asked to move a man
+  in his footage makes his matte, sees that the footage under the layer
+  still has him, and makes the plate, told of neither. A model is chosen by
+  what its entry says it is `about`, never by its name, so the playbook
+  holds whatever a person's file calls them. It has been held to the tools
+  by hand and not yet to a chat agent: [the record](shots-measured.md) (14).
 
 What an agent may do without asking is the person's to say, in their own
 `~/.kerf/agent.json` (`KERF_AGENT` names another file), outside any project,
