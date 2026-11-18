@@ -575,10 +575,16 @@ fn the_presets_in_the_docs_read() {
     }
 }
 
+/// A fixture's document with the line ends the tests write theirs with, whatever the
+/// checkout gave it: on Windows a file comes with `\r\n`.
+fn fixture(text: &str) -> String {
+    text.replace("\r\n", "\n")
+}
+
 /// `fixtures/shots/walk`, its layers playing frames 8 to 48 of the footage.
 fn walk() -> Project {
     parse(
-        &include_str!("../../../../fixtures/shots/walk/project.kerf")
+        &fixture(include_str!("../../../../fixtures/shots/walk/project.kerf"))
             .replace("src=0f at=0f dur=81f", "src=8f at=0f dur=40f"),
     )
 }
@@ -587,7 +593,7 @@ fn walk() -> Project {
 /// whose model is handed where the car's body goes.
 fn car() -> Project {
     parse(
-        &include_str!("../../../../fixtures/shots/car/project.kerf")
+        &fixture(include_str!("../../../../fixtures/shots/car/project.kerf"))
             .replace(
                 "sequence s1 rate=24 size=1664x960\n  track V1 video\n",
                 "sequence s1 rate=16 size=832x480\n  track V1 video\n    clip shot media=depth src=0f at=0f dur=65f\n",
@@ -764,7 +770,7 @@ fn a_blocked_scene_travels_with_the_shot_its_guide_is_drawn_from() {
 fn what_a_preset_cannot_make_is_refused() {
     // A recipe file does not travel.
     let recipe = parse(
-        &include_str!("../../../../fixtures/shots/car/project.kerf")
+        &fixture(include_str!("../../../../fixtures/shots/car/project.kerf"))
             .replace(
                 "sequence s1 rate=24 size=1664x960\n  track V1 video\n",
                 "sequence s1 rate=24 size=1664x960\n  track V1 video\n    clip shot media=open src=0f at=0f dur=1s\n",
