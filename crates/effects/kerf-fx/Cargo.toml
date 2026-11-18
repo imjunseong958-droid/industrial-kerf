@@ -22,3 +22,7 @@ rayon = "1"
 [dev-dependencies]
 # The kernels' WGSL is checked with no GPU.
 naga = { version = "30", features = ["wgsl-in"] }
+
+# Empty on purpose: this crate does not take the workspace's lints. The root
+# Cargo.toml says why.
+[lints]

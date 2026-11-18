@@ -7,3 +7,7 @@ description = "Loadable SKILL.md playbooks for the native Kerf agent"
 
 [dev-dependencies]
 tempfile = "3"
+
+# Empty on purpose: this crate does not take the workspace's lints. The root
+# Cargo.toml says why.
+[lints]

@@ -7,8 +7,11 @@ description = "Native Rust agent session with OpenAI and Anthropic adapters"
 
 [dependencies]
 base64 = "0.23"
-kerf-runtime = { path = "../../surfaces/kerf-runtime" }
 kerf-skills = { path = "../../surfaces/kerf-skills" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 ureq = { version = "3", features = ["json"] }
+
+# Empty on purpose: this crate does not take the workspace's lints. The root
+# Cargo.toml says why.
+[lints]

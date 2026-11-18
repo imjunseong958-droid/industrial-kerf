@@ -53,3 +53,7 @@ tempfile = "3"
 [[bench]]
 name = "engine_hotpath"
 harness = false
+
+# Empty on purpose: this crate does not take the workspace's lints. The root
+# Cargo.toml says why.
+[lints]
