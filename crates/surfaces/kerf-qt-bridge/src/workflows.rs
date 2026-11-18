@@ -4,8 +4,9 @@
 //!
 //! Setting one changes nothing on a ComfyUI server and nothing of
 //! `kerf-comfy`. The workflow as it comes is copied into the project, beside
-//! the recipe, with that value changed and the rest as it was written
-//! ([`kerf_workflow::detail`]), and the step's line is given `workflow=<file>`,
+//! the shot, with that value changed and the rest as it was written
+//! ([`kerf_workflow::detail`]), and the step is given `workflow=<file>`, by an
+//! edit where the document holds it and in its recipe's text where a file does,
 //! which has the model's program run the copy for this shot
 //! (`docs/shots.md`). The copy is a file of the project: it travels with it,
 //! a take is held to it, and taking the word off the line goes back to the
@@ -152,9 +153,29 @@ pub(crate) fn edit(
         Some((from, output)) => Set::link(&edit.node, &edit.input, from, *output),
         None => Set::value(&edit.node, &edit.input, &edit.value),
     };
-    if let Err(why) = workflow::set(&project, &shared.directory, &edit.media, edit.line, &edit.was, set, &models) {
-        failed(tx, &edit.media, why);
-    }
+    // A copy just made is named by its step: for steps the document holds, by an edit
+    // kerfd applies, and the workflow shown after is of the project as that left it.
+    let named = workflow::set(&project, &shared.directory, &edit.media, edit.line, &edit.was, set, &models)
+        .and_then(|named| {
+            crate::recipes::apply(client, &named.script).map_err(|why| {
+                if let Some(copy) = &named.copy {
+                    let _ = std::fs::remove_file(copy);
+                }
+                why
+            })?;
+            Ok(!named.script.is_empty())
+        });
+    let project = match named {
+        Ok(true) => match self::project(client) {
+            Ok(project) => project,
+            Err(why) => return failed(tx, &edit.media, why),
+        },
+        Ok(false) => project,
+        Err(why) => {
+            failed(tx, &edit.media, why);
+            project
+        }
+    };
     match event(&project, shared, &edit.media, edit.line, &models) {
         Ok(mut event) => {
             event["edited"] = json!(true);

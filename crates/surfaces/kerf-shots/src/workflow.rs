@@ -537,9 +537,21 @@ pub fn copied(
     })
 }
 
+/// What a person's change to a workflow left to do: nothing, for steps a recipe's file
+/// holds or a copy the shot has already; and for steps the document holds, whose step
+/// has yet to name a copy just made, the lines of the edit that has it name it.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Named {
+    /// Lines for kerfd to apply, as an edit of the person's own.
+    pub script: Vec<String>,
+    /// The copy just made, which nothing names until the lines are applied: if they are
+    /// refused, it is not left lying there.
+    pub copy: Option<PathBuf>,
+}
+
 /// A person's change: the shot's own copy of the workflow of the step on
-/// `line` with `set` made, made beside the recipe where the shot had none,
-/// and the line told to run it. `was` is the workflow as they read it: one
+/// `line` with `set` made, made beside the shot where it had none,
+/// and the step told to run it. `was` is the workflow as they read it: one
 /// changed since is left alone.
 pub fn set(
     project: &Project,
@@ -549,7 +561,7 @@ pub fn set(
     was: &str,
     set: Set,
     models: &Models,
-) -> Result<(), String> {
+) -> Result<Named, String> {
     let read = read(project, directory, id, line, models)?;
     if read.text != was {
         return Err("the workflow was changed by another program since it was read; it is left as that left it".to_owned());
@@ -560,16 +572,30 @@ pub fn set(
     }
     let now = with(&read, &[set])?;
     if let Origin::Own(_, file) = &read.origin {
-        return write(file, &now);
+        return write(file, &now).map(|()| Named::default());
     }
     // The first change: the workflow as it comes is copied into the project with it.
     let copy = copied(project, directory, id, line, &read, &now, &[])?;
     write(&copy.file, &copy.text)?;
-    text::write(project, directory, id, &read.recipe, &copy.recipe).map_err(|error| {
-        // The line does not name it, so nothing would run it: it is not left lying there.
+    // The step does not name it yet, so nothing would run it: it is not left lying there.
+    let unnamed = |why: String| {
         let _ = std::fs::remove_file(&copy.file);
-        error.to_string()
-    })
+        why
+    };
+    let in_document = project
+        .media(id)
+        .and_then(kerf_engine::recipe::Home::of)
+        .is_some_and(|home| home == kerf_engine::recipe::Home::Document);
+    if in_document {
+        let script = crate::graph::step_lines(id, &read.recipe, &copy.recipe).map_err(unnamed)?;
+        return Ok(Named {
+            script,
+            copy: Some(copy.file),
+        });
+    }
+    text::write(project, directory, id, &read.recipe, &copy.recipe)
+        .map_err(|error| unnamed(error.to_string()))?;
+    Ok(Named::default())
 }
 
 #[cfg(test)]

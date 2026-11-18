@@ -81,6 +81,10 @@ pub(crate) fn timeline_json(project: &Project) -> Json {
             if let Some(recipe) = &media.recipe {
                 source["recipe"] = json!(recipe);
             }
+            // How many steps the document has under it: a media those make.
+            if !media.steps.is_empty() {
+                source["steps"] = json!(media.steps.len());
+            }
             source
         }).collect::<Vec<_>>(),
         "sequences": project.sequences.iter().map(|sequence| {
