@@ -528,7 +528,7 @@ private slots:
         menu->close();
     }
 
-    // A shot made from a recipe opens as its graph: from its menu in the bin,
+    // A shot made from its steps opens as its graph: from its menu in the bin,
     // and by double-clicking its clip. Esc gives the window back.
     void aShotOpensAsItsGraphFromItsMenuAndItsClip() {
         MainWindow window{QString(), QString()};
@@ -540,7 +540,7 @@ private slots:
         GraphWiring *wiring = window.m_graphWiring.get();
         QVERIFY(!wiring->isOpen());
 
-        // Only a media a recipe makes has a graph.
+        // Only a media its steps make has a graph.
         QMenu *menu = window.binMenu(QStringLiteral("m1"));
         QVERIFY(!menu->findChild<QAction *>(QStringLiteral("binGraph")));
         delete menu;
@@ -558,8 +558,8 @@ private slots:
         QCOMPARE(window.m_shell->cover(), wiring->cover());
         RecipeGraphPanel *panel = wiring->panel();
         QVERIFY(panel->isVisible());
-        // Until the bridge has said it, the shot's name over an empty canvas.
-        QCOMPARE(panel->findChild<QLabel *>(QStringLiteral("graphTitle"))->text(), QStringLiteral("bounce"));
+        // Until the bridge has said it, the shot's name, its id, over an empty canvas.
+        QCOMPARE(panel->findChild<QLabel *>(QStringLiteral("graphTitle"))->text(), QStringLiteral("m4"));
         QVERIFY(panel->view()->recipe().nodes.isEmpty());
         window.handleEvent(bounceRecipe());
         QCOMPARE(panel->view()->recipe().nodes.size(), 7);
@@ -665,12 +665,11 @@ private slots:
         emit window.m_timeline->clipActivated(QStringLiteral("car"));
         QVERIFY(wiring->isOpen());
         QCOMPARE(window.m_lastCommand, (QJsonObject{{"type", "recipe_get"}, {"media", "depth"}}));
-        // Another shot, made by a recipe file, opens as it always has, and keeps its own cards.
+        // Another shot opens as its own graph, and keeps its own cards, by its id.
         window.showGraph(QStringLiteral("m4"));
-        QCOMPARE(panel->m_placementKey, QStringLiteral("/p/court\nshots/bounce"));
+        QCOMPARE(panel->m_placementKey, QStringLiteral("/p/court\nmedia m4"));
         window.handleEvent(bounceRecipe());
-        QVERIFY(!panel->recipe().document);
-        QCOMPARE(panel->findChild<QLabel *>(QStringLiteral("graphPath"))->text(), QStringLiteral("shots/bounce.kerfrecipe"));
+        QCOMPARE(panel->recipe().media, QStringLiteral("m4"));
     }
 
     // An agent's edit is the project's: once it is accepted the media is made

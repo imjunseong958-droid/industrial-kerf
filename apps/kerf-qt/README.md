@@ -374,7 +374,7 @@ named down its side with their glyphs; Esc, its close or a press on the dim
 gives the window back. Chat is the model the
 conversation runs on, a key of one's own with its fields under that choice,
 and how far Kerf goes without asking, the same choice as the composer's chip.
-Models lists the models a recipe's `generate` can name, read from the
+Models lists the models a shot's `generate` step can name, read from the
 person's own models file (nothing is run to learn them), and says what runs
 inside Kerf; it names no model of its own. Appearance
 chooses the faces text is set in (`editor_theme.h`, `setEditorFaces`): the
@@ -530,35 +530,60 @@ Version.
 File ▸ Save Current as Preset… adds the program sequence to the project's
 `presets/`, which travels with the repository. Right-click media in the Project bin to Replace Media… (swap the
 file behind the media for everyone; its clips keep their timing), Reveal in
-Finder, or Consolidate Media. A shot Kerf makes also offers Open Graph, Make
-from Recipe… and Make Several from Recipe (Make… and Make Several where its
-steps are the document's own), and Takes. Bin items show Offline when the file is
+Finder, or Consolidate Media. A shot Kerf makes from the steps under its line in
+the document also offers Open Graph, Make… and Make Several, and Takes. A media
+that still names a recipe file (`recipe=`) and has no steps offers Carry Steps
+into the Document… in their place (and Takes): see below. Bin items show Offline when the file is
 missing (Not made for a shot not made yet), Not downloaded for a Git LFS file a sync has not fetched, and
 External when it lives outside the project folder.
 
 ## A shot's graph
 
-A shot a recipe makes ([docs/shots.md](../../docs/shots.md)) opens as a graph of
-how it is made: Open Graph on the media in the bin or on its clip's menu, or a
-double-click on its clip. It opens over the window, as Settings does
+A shot Kerf makes ([docs/shots.md](../../docs/shots.md)) is made from the steps
+written under its media line in the document (a source with `steps`, how many):
+`render`, `generate` and `join` lines. It opens as a graph of how it is made:
+Open Graph on the media in the bin or on its clip's menu, or a double-click on
+its clip. It opens over the window, as Settings does
 (`ui/recipe_graph_panel.h`), and Esc, its close or a press on the dim gives the
-window back.
+window back. The editor offers and shows such a media as a shot
+(`sourceIsMade`, `sourceStepsInDocument` and `sourceMadeFrom` in
+`editor_common.h`, `MainWindow::mediaIsMade`): its graph, Make… and Make
+Several, Takes, Not made while its file is not there. It goes by its id, and
+the make question and the activity say it comes from its steps in the
+document. Its graph is a `recipe` event with `document: true`, `recipe` empty
+and `name` its id, whose `text` is the steps after a `kerf-recipe 1` line; each
+change carries that text as `was`, and the bridge makes it `step` lines applied
+as one undoable edit of the document. Its cards are kept by the project and the
+media's id.
 
-A shot's steps can also be the document's own, written under its media line
-with no recipe file (a source with `steps`, how many, and no `recipe`). The
-editor offers and shows such a media as one a recipe makes (`sourceIsMade` and
-`sourceMadeFrom` in `editor_common.h`, `MainWindow::mediaIsMade`): its graph,
-Make… and Make Several, Takes, Not made while its file is not there. It goes by
-its id, where a recipe's shot goes by the recipe's name, and the make question
-and the activity say it comes from its steps in the document. Its graph is a
-`recipe` event with `document: true`, `recipe` empty and `name` its id, whose
-`text` is the steps after a `kerf-recipe 1` line; each change carries that text
-as `was`, as a recipe's does, and the bridge makes it one undoable edit of the
-document. The graph then says steps where it would say the recipe (Restore
-take 3's steps), and its cards are kept by the project and the media's id.
+### Carrying a recipe file's steps into the document
 
-The graph is the recipe, read by the engine and laid out (`recipe_get` answers
-`recipe`, from `kerf_engine::recipe::graph`): a card for each step, a `render`
+Nothing is made from a `.kerfrecipe` file any more. A media of an older project
+that still says `recipe="shots/open.kerfrecipe"` and has no steps under its line
+is not made or graphed (`sourceIsUncarried`, `MainWindow::mediaIsUncarried`): its
+bin menu offers Carry Steps into the Document… in place of Open Graph, Make… and
+Make Several, and its clip's menu, a double-click on its clip, and anything else
+that would open its graph offer the same (`MainWindow::carryMedia`,
+`GraphWiring::open`). Takes stays offered: its takes are still listed and
+chosen.
+
+Carrying is asked first, as making is. `media_carry {media}` answers
+`media_carry_plan {media, recipe, script, notes}` and writes nothing: the recipe
+file, the lines of the edit (the media's line without `recipe=`, then a `step`
+line for each step, its files named from the project's folder) and what does not
+come with them (`kerf_engine::recipe::carry`). The window shows them in a
+question (`MainWindow::carryQuestion`); on yes it sends `media_carry {media,
+confirmed: true}`, which kerfd applies as one edit undo takes back, after which
+the bridge holds the takes made from the recipe to the steps it became
+(`kerf_engine::recipe::takes::mark_carried`) and answers `media_carried {media,
+recipe, held}`. The status line says how many takes are held and that the recipe
+file is left where it is (`MainWindow::carriedStatus`). A recipe the engine will
+not carry (one with a `run` line, which names a program a document cannot) is an
+`error` with `command: media_carry` and its reason, and the document is as it
+was. `kerf carry` does the same at a terminal.
+
+The graph is the shot's steps, read by the engine and laid out (`recipe_get`
+answers `recipe`, from `kerf_engine::recipe::graph`): a card for each step, a `render`
 that draws a guide from a sequence or a `generate` that asks a model, and for
 each thing of the project a step reads, a sequence, a picture, a signal clip,
 the way a clip goes (`moves=`), one of the cast; and an edge for each reading,
@@ -571,7 +596,7 @@ legend at the canvas's foot. What a model has said it has no use for goes to it
 dashed.
 
 The canvas is free-form (`ui/recipe_graph.h`): a card stays where it is dragged,
-kept per shot in the editor's settings on this computer and never in the recipe;
+kept per shot in the editor's settings on this computer and never in the document;
 a drag on the canvas moves it, two fingers pan, a wheel or a pinch zooms about
 the pointer, and Fit (F, or a double-click on the canvas) takes the whole graph
 in. Until a card is moved they stand in columns by how far each is from what it
@@ -595,12 +620,13 @@ dragging across it; the takes, the one the shot is ticked, another chosen at a
 press. With no node chosen it says the shot: why it cannot be made where it
 cannot, and what a making would note first.
 
-A change to a step is one word of one line of the recipe (`recipe_edit {media,
-was, line, key, nth, value?}`): the engine sets that word where it stands
-(`kerf_engine::recipe::text`), so comments, order, spacing and line endings stay,
-reads the result as a recipe before writing it, and refuses a file another
-program changed since the graph was read. It is the person's own edit, written in
-place as a text editor would; an agent's recipe is still kept as a version. A
+A change to a step is one word of one step (`recipe_edit {media, was, line,
+key, nth, value?}`, `line` counting the `kerf-recipe 1` line first): the bridge
+sets that word on the step (`kerf_shots::graph::changed`), reads the result as
+steps a making would take, and gives the change as `step <media> set <n> …`
+lines (`kerf_shots::graph::step_lines`), which kerfd applies as one edit of the
+person's own that undo takes back. Steps another program changed since the
+graph was read are left as that left them, and the change is refused. A
 signal's curve is the clip's `value` in the project, one undoable edit, as the
 timeline's own drawing of it is. The head makes the shot as the bin does: Make
 (Make again once it has a take) shows what would run and asks, Several makes two
@@ -613,7 +639,7 @@ double-click on it (`workflow_get {media, line}` answers `workflow`, read by
 `kerf_workflow::detail` from the workflow that comes with the program, the file
 the entry names, or the shot's own copy). The same canvas then shows the
 ComfyUI graph: a card for each node with a row for each input, a link coming in
-at its row, a blank the recipe fills (`{prompt}`, `{steps}`) marked in the
+at its row, a blank the step fills (`{prompt}`, `{steps}`) marked in the
 accent's ink, a value the workflow sets itself plain; the legend says the three.
 The node's card sets any value that is neither a link nor a blank: a text, a
 number (which stays one), a yes or no. With no node chosen it says where the
@@ -622,7 +648,7 @@ now. The head's arrow goes back to the shot's graph.
 
 A value set there is kept in the shot's own copy of the workflow
 (`workflow_edit {media, line, was, node, input, value}`): the first copies the
-workflow as it comes into the project beside the recipe
+workflow as it comes into the project
 (`<shot>.<model>.comfy.json`) with that value changed and nothing else, and adds
 `workflow=<file>` to the step's line; the next changes that file. The model's
 entry is untouched, so other shots are made as before, and Use it as it comes
@@ -633,7 +659,7 @@ says nothing of one.
 
 `--graph <media>` starts a run on that shot's graph, and `--graph-node <id>` with
 a node chosen (`workflow:<line>` opens the workflow of the model on that line of
-the recipe), for a capture (`--screenshot`).
+the steps), for a capture (`--screenshot`).
 
 A workflow is said twice where its server answers: at once as its file reads,
 and again with what each input takes there (`taken: true`, an input's
@@ -667,18 +693,18 @@ with `track` writes its keys with), applies the one edit, and answers
 `shot_followed {says, frames, keyframes, lostAt}`, or `error` with `command`
 `shot_picture` or `shot_follow`, which is said on the card and not as a banner.
 
-Restore take's recipe, in the takes' card, shows for the take the shot is
-when what it was made from has changed and the take kept its recipe (`kept` on
-the take); it sends `recipe_edit {restore: <take>}`, which the bridge answers
-by writing the recipe as that take was made from it
-(`kerf_shots::takes::restore`).
+Restore take's steps, in the takes' card, shows for the take the shot is
+when what it was made from has changed and the take kept the steps it was made
+from (`kept` on the take); it sends `recipe_edit {restore: <take>}`, which the
+bridge answers by setting the steps back as that take was made from them
+(`kerf_shots::takes::restored`), `step` lines applied as one undoable edit.
 
 Add step, in the head, sends the kind of step wanted (`recipe_edit {add:
-guide|model|join}`): the bridge writes the line (`kerf_shots::graph::step`)
-and answers with the graph and the line it added (`added`), whose card the
-wiring opens. Delete step, at the foot of a step's card, sends its line
-(`recipe_edit {line, remove: true}`). Both are changes to the recipe's text,
-refused as a making would refuse what they leave.
+guide|model|join}`): the bridge makes the step (`kerf_shots::graph::step`),
+applies it as `step` lines, and answers with the graph and the line it added
+(`added`), whose card the wiring opens. Delete step, at the foot of a step's
+card, sends its line (`recipe_edit {line, remove: true}`). Both are edits of the
+document, refused as a making would refuse what they leave.
 
 A `join` step, which sets the parts of a shot longer than a model makes at
 once end to end, is a card of its own (`Kind::Join`), with its `lap`; a
@@ -696,13 +722,13 @@ then says its number, the closest marked. Why a shot's takes cannot be held to
 anything is said in the card and not in the window's banner.
 
 What the graph shows and sets, an agent's tools read and set through the same
-crate (`kerf-shots`: `look` with `graph` and `workflow`, `edit` with
-`recipeSet` and `workflowSet`; [An agent's part](../../docs/shots.md#an-agents-part)).
-An agent's change is a revision of the project, in which the media names the
-recipe's next version: the open graph asks for the recipe again on any
+crate (`kerf-shots`: `look` with `graph` and `workflow`, `edit` with `step`
+lines in its `script`, `workflowSet`, `restoreTake` and `carry`;
+[An agent's part](../../docs/shots.md#an-agents-part)). An agent's change is a
+revision of the project: the open graph asks for the steps again on any
 revision (`GraphWiring::onSnapshot`), so it shows the shot as the agent left
-it, with the node chosen still chosen and the cards where they were put, a
-version being the same shot (`anAgentsChangeShowsInTheGraphThatIsOpen`).
+it, with the node chosen still chosen and the cards where they were put
+(`anAgentsChangeShowsInTheGraphThatIsOpen`).
 
 ## Masks
 

@@ -5,7 +5,7 @@
 //! ([`crate::permissions`]). Asking, the default, it is shown what the
 //! making would run, as a person is, and the person is asked in the
 //! conversation (the editor shows the plan as a card with Make), or makes it
-//! with `kerf make` or Make from Recipe…, which show the same plan and ask. Where the person lets an agent make on its own, the
+//! with `kerf make` or the editor's Make…, which show the same plan and ask. Where the person lets an agent make on its own, the
 //! making runs here, on a thread of this process, as a job the agent reads
 //! and can stop, and the media becomes the new take once it is made: an
 //! edit undo takes back, and a take kept beside the ones before it.
