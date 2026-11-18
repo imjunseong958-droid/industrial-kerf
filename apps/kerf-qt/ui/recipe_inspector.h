@@ -84,6 +84,8 @@ signals:
     void takeChosen(int number, const QString &path);
     // Hold each take to its guide: read where its subject is beside where it was asked for.
     void takesReadRequested();
+    // Take the step on `line` out of the recipe.
+    void stepRemoveRequested(int line);
     // Open the project's cast, and the person's models, where they are set.
     void castRequested();
     void modelsRequested();
@@ -114,6 +116,8 @@ private:
     void buildSignal(const graph::Node &node);
     void buildTakes(const graph::Node &node);
     void buildReads(const graph::Recipe &recipe, const graph::Node &node);
+    // What a step's card ends with: taking the step out of the recipe.
+    void addRemoveStep(const graph::Node &node);
     void buildPart(const graph::Recipe &recipe, const graph::Node &node);
     void rebuildWorkflow();
     // What fills a blank, and what the line gives for it now, in a line.

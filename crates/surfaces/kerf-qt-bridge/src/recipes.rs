@@ -36,6 +36,13 @@ pub(crate) struct Edit {
     nth: usize,
     #[serde(default)]
     value: Option<String>,
+    /// A step to add, by its kind: `guide`, `model`, or `join`
+    /// ([`kerf_shots::graph::step`]).
+    #[serde(default)]
+    add: Option<String>,
+    /// Take the step on `line` out.
+    #[serde(default)]
+    remove: bool,
 }
 
 /// The person's models, and why their file does not read where it does not:
@@ -63,10 +70,16 @@ pub(crate) fn event(
     Ok(event)
 }
 
-/// Make `edit` to its media's recipe, in its file.
-fn change(project: &Project, directory: &Path, edit: &Edit) -> Result<(), String> {
+/// Make `edit` to its media's recipe, in its file: the line a step was added on, where one was.
+fn change(project: &Project, directory: &Path, edit: &Edit, models: &Models) -> Result<Option<usize>, String> {
     let now = match &edit.text {
         Some(text) => text.clone(),
+        None if edit.remove => kerf_shots::graph::removed(&edit.was, edit.line)?,
+        None if edit.add.is_some() => {
+            let kind = edit.add.as_deref().unwrap_or_default();
+            let (after, line) = kerf_shots::graph::step(project, models, &edit.was, kind)?;
+            kerf_shots::graph::added(&edit.was, after, &line)?
+        }
         None => {
             let word = kerf_shots::graph::Word {
                 line: edit.line,
@@ -77,7 +90,11 @@ fn change(project: &Project, directory: &Path, edit: &Edit) -> Result<(), String
             kerf_shots::graph::changed(&edit.was, word)?
         }
     };
-    text::write(project, directory, &edit.media, &edit.was, &now).map_err(|error| error.to_string())
+    text::write(project, directory, &edit.media, &edit.was, &now).map_err(|error| error.to_string())?;
+    Ok(edit
+        .add
+        .as_ref()
+        .and_then(|_| kerf_shots::graph::added_at(&edit.was, &now)))
 }
 
 /// The project as kerfd has it.
@@ -126,15 +143,23 @@ pub(crate) fn edit(
         Ok(project) => project,
         Err(why) => return failed(tx, &edit.media, why),
     };
-    let refused = change(&project, &shared.directory, edit).err();
     let (models, models_error) = models();
+    let changed = change(&project, &shared.directory, edit, &models);
     let shown = event(&project, &shared.directory, &edit.media, &models, models_error);
-    if let Some(why) = refused {
-        failed(tx, &edit.media, why);
-    }
+    let added = match changed {
+        Ok(added) => added,
+        Err(why) => {
+            failed(tx, &edit.media, why);
+            None
+        }
+    };
     match shown {
         Ok(mut event) => {
             event["edited"] = json!(true);
+            // The line of the step that was added, for what shows the graph to choose it.
+            if let Some(line) = added {
+                event["added"] = json!(line);
+            }
             crate::emit(tx, event);
         }
         Err(why) => failed(tx, &edit.media, why),
@@ -166,6 +191,8 @@ mod tests {
             key: key.into(),
             nth: 0,
             value: value.map(str::to_owned),
+            add: None,
+            remove: false,
         }
     }
 
@@ -191,17 +218,17 @@ mod tests {
         assert!(shown["cannot"].as_str().unwrap().contains("no model `dawn` is set up"));
 
         // One name on one line: the comment and the rest of the line stay.
-        change(&project, dir, &set("seed", Some("8"))).unwrap();
+        change(&project, dir, &set("seed", Some("8")), &models).unwrap();
         let now = fs::read_to_string(dir.join("shots/open.kerfrecipe")).unwrap();
         assert_eq!(now, RECIPE.replace("seed=7", "seed=8"));
         // The editor's copy is now old: its next change is refused, and the file kept.
-        let stale = change(&project, dir, &set("seed", Some("9"))).unwrap_err();
+        let stale = change(&project, dir, &set("seed", Some("9")), &models).unwrap_err();
         assert!(stale.contains("changed by another program"), "{stale}");
         assert_eq!(fs::read_to_string(dir.join("shots/open.kerfrecipe")).unwrap(), now);
         // A knob taken off the line, and the whole text set.
         let mut off = set("strength", None);
         off.was = now.clone();
-        change(&project, dir, &off).unwrap();
+        change(&project, dir, &off, &models).unwrap();
         let now = fs::read_to_string(dir.join("shots/open.kerfrecipe")).unwrap();
         assert!(now.ends_with("seed=8\n") && now.contains("# The opening shot."));
         let whole = Edit {
@@ -209,11 +236,23 @@ mod tests {
             was: now,
             ..set("", None)
         };
-        change(&project, dir, &whole).unwrap();
+        change(&project, dir, &whole, &models).unwrap();
         assert_eq!(fs::read_to_string(dir.join("shots/open.kerfrecipe")).unwrap(), RECIPE);
         // What a line cannot take is refused as a making would refuse it.
-        let refused = change(&project, dir, &set("seed", Some("soon"))).unwrap_err();
+        let refused = change(&project, dir, &set("seed", Some("soon")), &models).unwrap_err();
         assert!(refused.contains("`seed=soon` is not a whole number"), "{refused}");
+        // A step added, by its kind, and taken out again: the file as it was.
+        let was = fs::read_to_string(dir.join("shots/open.kerfrecipe")).unwrap();
+        let add = Edit { add: Some("guide".into()), was: was.clone(), ..set("", None) };
+        // Before the last step and what is written over it, which stays its own.
+        assert_eq!(change(&project, dir, &add, &models).unwrap(), Some(2));
+        let more = fs::read_to_string(dir.join("shots/open.kerfrecipe")).unwrap();
+        assert!(more.starts_with("kerf-recipe 1\nrender s1 {guide.mp4} pass=depth\n# The opening shot.\ngenerate model=dawn"), "{more}");
+        let out = Edit { remove: true, line: 2, was: more, ..set("", None) };
+        assert_eq!(change(&project, dir, &out, &models).unwrap(), None);
+        assert_eq!(fs::read_to_string(dir.join("shots/open.kerfrecipe")).unwrap(), was);
+        let last = Edit { remove: true, line: 3, was: was.clone(), ..set("", None) };
+        assert!(change(&project, dir, &last, &models).unwrap_err().contains("does not read"));
         // A models file that does not read is said with the graph, which is still shown.
         let shown = event(&project, dir, "m1", &models, Some("it is not JSON".into())).unwrap();
         assert_eq!(shown["modelsError"], "it is not JSON");

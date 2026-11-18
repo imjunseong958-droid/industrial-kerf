@@ -359,7 +359,7 @@ pub(super) fn metadata(name: &str) -> Option<(&'static str, Value, ToolAnnotatio
                     "extend": {"type": "string", "description": "The id of a pending proposal to build on, its newest version's: the script runs on what it makes, the two become one proposal, and the preview shows what this script changed."},
                     "revise": {"type": "string", "description": "The id of a pending proposal this one replaces; the script runs on the project."},
                     "recipes": {"type": "object", "additionalProperties": {"type": "string"}, "description": "Recipe files to write, by the path a media line's `recipe=` names, each with its whole text. A file that is there and holds another text is not written over: the text is kept beside it as its next version (`shots/open@2.kerfrecipe`), and the media that name it move to it in this proposal, so that undo goes back. Alone, or with a script that adds the media line."},
-                    "recipeSet": {"type": "array", "minItems": 1, "items": {"type": "object", "properties": {"media": {"type": "string"}, "line": {"type": "integer", "minimum": 1}, "key": {"type": "string"}, "nth": {"type": "integer", "minimum": 0}, "value": {"type": "string"}}, "required": ["media", "line", "key"], "additionalProperties": false}, "description": "Words of a media's recipe to set, each the name `key` on line `line` (as `look` `graph` numbers them) to `value`, as it is written after the `=` with no quotes around it: `{media: \"m3\", line: 4, key: \"seed\", value: \"8\"}`. That word alone changes; the recipe's comments, its order and its other lines stay, which writing the whole text with `recipes` does not promise. A name the line does not have is added at its end, so an input is wired in the same way (`key: \"signal\", value: \"bounce\"`, or `key: \"ref\", value: \"{ball.png}\"` for a file a step makes); `nth` picks among several words of one name, from 0; with no `value` the word is taken off the line. What a line cannot take is refused as a making would refuse it. The result is kept as the recipe's next version, as with `recipes`, and the answer's `recipes` has its `diff`."},
+                    "recipeSet": {"type": "array", "minItems": 1, "items": {"type": "object", "properties": {"media": {"type": "string"}, "line": {"type": "integer", "minimum": 1}, "key": {"type": "string"}, "nth": {"type": "integer", "minimum": 0}, "value": {"type": "string"}, "add": {"type": "string"}, "remove": {"type": "boolean"}}, "required": ["media"], "additionalProperties": false}, "description": "Words of a media's recipe to set, each the name `key` on line `line` (as `look` `graph` numbers them) to `value`, as it is written after the `=` with no quotes around it: `{media: \"m3\", line: 4, key: \"seed\", value: \"8\"}`. That word alone changes; the recipe's comments, its order and its other lines stay, which writing the whole text with `recipes` does not promise. A name the line does not have is added at its end, so an input is wired in the same way (`key: \"signal\", value: \"bounce\"`, or `key: \"ref\", value: \"{ball.png}\"` for a file a step makes); `nth` picks among several words of one name, from 0; with no `value` the word is taken off the line. What a line cannot take is refused as a making would refuse it. A step is added the same way, `{media, line, add: \"render court {guide2.mp4} pass=depth\"}`, a line of its own after line `line` (0 for the first step), and taken out with `{media, line, remove: true}`, as a person adds one and deletes one in the graph: each is refused where what it leaves does not read as a recipe, a step put after the one that writes the shot's file, or one taken out that a later step reads. Later entries count lines as the earlier ones left them. The result is kept as the recipe's next version, as with `recipes`, and the answer's `recipes` has its `diff`."},
                     "workflowSet": {"type": "array", "minItems": 1, "items": {"type": "object", "properties": {"media": {"type": "string"}, "line": {"type": "integer", "minimum": 1}, "node": {"type": "string"}, "input": {"type": "string"}, "value": {}}, "required": ["media", "line", "node", "input", "value"], "additionalProperties": false}, "description": "Values to set in the workflow the model of a `generate` step is run with, each input `input` of node `node` (as `look` `workflow` lists them) to `value`, a number, a text, or true or false as it was. The workflow as it is is copied into the project beside the recipe with those values changed and the rest as written, and the step's line names the copy with `workflow=`, in the recipe's next version: the answer's `workflows` says where each is kept. A link and an input a blank fills are not set here. Nothing on the model's server changes, and the person's models file is not touched. To go back to the workflow as it comes, take `workflow` off the line with `recipeSet`."},
                     "cast": {"type": "array", "items": {"type": "string"}, "description": "Lines to add to the project's cast file, each `cast <name> \"<who or what it is>\" [ref=<picture> …]` or `style <name> \"<how a shot looks>\"`, for who and what a recipe of this edit shows that `look`'s `cast` and `styles` have not. They are written at once, since adding one asks for no shot again; one the file has is the person's to change, and is refused."}
                 },
@@ -465,13 +465,21 @@ struct StepInput {
     line: usize,
 }
 
-/// One name on one line of a media's recipe to set, or to take off.
+/// One name on one line of a media's recipe to set, or to take off; or a step to add after
+/// a line, or the step on a line to take out.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RecipeSetInput {
     media: String,
+    #[serde(default)]
     line: usize,
+    #[serde(default)]
     key: String,
+    /// A step to add, its whole line, after `line` (0 for the first step).
+    add: Option<String>,
+    /// Take the step on `line` out.
+    #[serde(default)]
+    remove: bool,
     /// Which of the words of that name on the line, from 0.
     #[serde(default)]
     nth: usize,
@@ -1414,15 +1422,20 @@ impl KerfMcpRouter {
         };
         for word in &input.recipe_set {
             let path = recipe_of(&mut texts, &word.media)?;
-            let changed = kerf_shots::graph::changed(
-                &texts[&path],
-                kerf_shots::graph::Word {
-                    line: word.line,
-                    key: &word.key,
-                    nth: word.nth,
-                    value: word.value.as_deref(),
-                },
-            )
+            let changed = match (&word.add, word.remove) {
+                (Some(line), false) => kerf_shots::graph::added(&texts[&path], word.line, line),
+                (None, true) => kerf_shots::graph::removed(&texts[&path], word.line),
+                (Some(_), true) => Err("`add` a step or `remove` one, not both at once".to_owned()),
+                (None, false) => kerf_shots::graph::changed(
+                    &texts[&path],
+                    kerf_shots::graph::Word {
+                        line: word.line,
+                        key: &word.key,
+                        nth: word.nth,
+                        value: word.value.as_deref(),
+                    },
+                ),
+            }
             .map_err(|why| invalid(format!("{path}: {why}")))?;
             texts.insert(path, changed);
         }

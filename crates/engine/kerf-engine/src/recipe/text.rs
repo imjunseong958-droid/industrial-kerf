@@ -240,6 +240,75 @@ pub fn changed(text: &str, number: usize, change: Change) -> Result<String> {
     Ok(now)
 }
 
+/// `text` with `line`, a step, added as a line of its own after line `after`, counted from
+/// 1, or as the first step where `after` is 0 or the recipe's first line. Nothing else of
+/// the text changes. What it makes is read as a recipe, so a step put after the one that
+/// writes the shot's file, or one that reads a file no step before it makes, is refused
+/// with why.
+pub fn added(text: &str, after: usize, line: &str) -> Result<String> {
+    let line = line.trim();
+    if line.is_empty() || line.contains(['\n', '\r']) {
+        return Err(EngineError::msg("a step is one line of the recipe"));
+    }
+    // Not before the line that says it is a recipe.
+    let header = lines(text)
+        .position(|(_, line)| line.trim() == HEADER)
+        .map_or(0, |index| index + 1);
+    let after = after.max(header);
+    let (at, ends) = match after.checked_sub(1).and_then(|index| lines(text).nth(index)) {
+        Some((at, line)) => (at + line.len(), true),
+        None if after == 0 => (0, false),
+        None => return Err(EngineError::msg(format!("the recipe has no line {after} to add a step after"))),
+    };
+    // Past the line break that ends the line it follows, which a last line may not have.
+    let rest = &text[at..];
+    let broken = rest.strip_prefix("\r\n").or_else(|| rest.strip_prefix('\n'));
+    let mut now = String::with_capacity(text.len() + line.len() + 2);
+    match (ends, broken) {
+        (true, Some(rest)) => {
+            now.push_str(&text[..text.len() - rest.len()]);
+            now.push_str(line);
+            now.push('\n');
+            now.push_str(rest);
+        }
+        (true, None) => {
+            now.push_str(text);
+            now.push('\n');
+            now.push_str(line);
+            now.push('\n');
+        }
+        (false, _) => {
+            now.push_str(line);
+            now.push('\n');
+            now.push_str(text);
+        }
+    }
+    Recipe::parse(&now)?;
+    Ok(now)
+}
+
+/// `text` without its line `number`, a step, counted from 1. Nothing else of the text
+/// changes. What is left is read as a recipe, so a step whose file a later one reads, or
+/// the one that writes the shot's file, is refused with why.
+pub fn removed(text: &str, number: usize) -> Result<String> {
+    if !step_lines(text).contains(&number) {
+        return Err(EngineError::msg(format!(
+            "line {number} of the recipe is not a step to take out"
+        )));
+    }
+    let (at, line) = lines(text).nth(number - 1).expect("a step's line is there");
+    let rest = &text[at + line.len()..];
+    let rest = rest
+        .strip_prefix("\r\n")
+        .or_else(|| rest.strip_prefix('\n'))
+        .unwrap_or(rest);
+    let now = format!("{}{rest}", &text[..at]);
+    Recipe::parse(&now).map_err(|error| {
+        EngineError::msg(format!("without line {number} the recipe does not read: {error}"))
+    })?;
+    Ok(now)
+}
+
 /// Have the recipe media `id` of `project`, kept in `directory`, names hold
 /// `now` in place of `was`: the file is written only where it still holds
 /// `was`, so that what another program wrote since is not written over
@@ -309,6 +378,39 @@ mod tests {
 
     fn set(text: &str, line: usize, key: &str, value: &str) -> String {
         changed(text, line, Change::Set { key, nth: 0, value }).unwrap()
+    }
+
+    #[test]
+    fn a_step_is_added_and_taken_out_as_a_line_of_its_own() {
+        let text = "kerf-recipe 1\n# The court.\nrender s1 {a.mp4}\n\n# The shot.\ngenerate model=m prompt=\"p\" guide={a.mp4}\n";
+        // After the step it follows, the comments and the blank line where they were.
+        let more = added(text, 3, "  render s1 {b.mp4} pass=depth ").unwrap();
+        assert_eq!(more, text.replace("{a.mp4}\n\n", "{a.mp4}\nrender s1 {b.mp4} pass=depth\n\n"));
+        // As the first step: after the line that says it is a recipe, wherever it was asked.
+        let first = added(text, 0, "render s1 {b.mp4}").unwrap();
+        assert_eq!(first, text.replace("kerf-recipe 1\n", "kerf-recipe 1\nrender s1 {b.mp4}\n"));
+        // After a last line that has no line break.
+        let open = "kerf-recipe 1\nrender s1 {a.mp4}";
+        assert_eq!(
+            added(open, 2, "join {a.mp4} {a.mp4} {out}").unwrap(),
+            "kerf-recipe 1\nrender s1 {a.mp4}\njoin {a.mp4} {a.mp4} {out}\n"
+        );
+        // What it would make of the recipe is read as one.
+        let late = added(text, 6, "render s1 {b.mp4}").unwrap_err().to_string();
+        assert!(late.contains("so it is the last"), "{late}");
+        let unmade = added(text, 1, "generate model=m prompt=\"p\" guide={c.mp4} out={d.mp4}").unwrap_err().to_string();
+        assert!(unmade.contains("no step before this one makes `{c.mp4}`"), "{unmade}");
+        assert!(added(text, 9, "render s1 {b.mp4}").unwrap_err().to_string().contains("no line 9"));
+        assert!(added(text, 3, "render s1 {b.mp4}\nrun x").is_err());
+
+        // Taken out again, the text is as it was.
+        assert_eq!(removed(&more, 4).unwrap(), text);
+        // A step a later one reads, the last, and a line that is no step stay.
+        let read = removed(text, 3).unwrap_err().to_string();
+        assert!(read.contains("without line 3 the recipe does not read") && read.contains("{a.mp4}"), "{read}");
+        assert!(removed(text, 6).unwrap_err().to_string().contains("does not read"));
+        assert!(removed(text, 2).unwrap_err().to_string().contains("is not a step"));
+        assert!(removed(text, 1).unwrap_err().to_string().contains("is not a step"));
     }
 
     #[test]

@@ -8,6 +8,8 @@
 //   the graph        recipe_get {media} -> recipe {media, recipe, name, text, nodes, edges, error?, cannot?, notes}
 //   a field set      recipe_edit {media, was, line, key, nth, value?} -> recipe {…, edited}
 //                    (`was` is the text the graph was read from: a file changed since is left alone)
+//   a step added     recipe_edit {media, was, add: guide|model|join} -> recipe {…, edited, added: <its line>}
+//   a step deleted   recipe_edit {media, was, line, remove: true} -> recipe {…, edited}
 //   a signal drawn   edit {ops: [set <clip> value {keys}]}, as the timeline's own drawing
 //   a take chosen    media_replace {media, path}, as the bin's Takes
 //   Make, Stop       the registry's media.make and media.makeCancel, as the bin's

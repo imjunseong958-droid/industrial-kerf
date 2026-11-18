@@ -814,6 +814,50 @@ private slots:
         QVERIFY(inspector->findChild<QLabel *>(QStringLiteral("graphCannot"))->text().contains(QStringLiteral("no model `video` is set up")));
     }
 
+    // A step is added from the head, by its kind, and deleted from its card:
+    // each a change to the recipe's text, and the step that was added is the
+    // one whose card opens.
+    void stepsAreAddedFromTheHeadAndDeletedFromTheirCard() {
+        MainWindow window{QString(), QString()};
+        openBounce(window);
+        RecipeGraphPanel *panel = panelOf(window);
+        QVERIFY(panel->addButton()->isVisible() && panel->addButton()->isEnabled());
+        const QString was = QString::fromLatin1(kBounce);
+        for (const QString kind : {QStringLiteral("guide"), QStringLiteral("model"), QStringLiteral("join")}) {
+            emit panel->stepAddRequested(kind);
+            QCOMPARE(window.m_lastCommand, (QJsonObject{{"type", "recipe_edit"}, {"media", "m4"}, {"was", was}, {"add", kind}}));
+        }
+        // The bridge answers with the graph and the line it added: that step's card opens.
+        panel->view()->select(QStringLiteral("takes"));
+        QJsonObject added = bounceRecipe();
+        added.insert("edited", true);
+        added.insert("added", 5);
+        window.handleEvent(added);
+        QCOMPARE(panel->view()->selected(), QStringLiteral("made:ball.png"));
+        // Its card ends with taking it out again, by its line.
+        auto *remove = panel->inspector()->findChild<ui::GhostButton *>(QStringLiteral("graphDeleteStep"));
+        QVERIFY(remove);
+        remove->click();
+        QCOMPARE(window.m_lastCommand, (QJsonObject{{"type", "recipe_edit"}, {"media", "m4"}, {"was", was}, {"line", 5}, {"remove", true}}));
+        // What is not a step has nothing to delete, and a workflow's nodes are not the recipe's lines.
+        for (const QString other : {QStringLiteral("signal:bounce"), QStringLiteral("takes"), QStringLiteral("sequence:court")}) {
+            panel->view()->select(other);
+            QVERIFY(!panel->inspector()->findChild<ui::GhostButton *>(QStringLiteral("graphDeleteStep")));
+        }
+        window.handleEvent(bounceWithRunner());
+        panel->view()->select(QStringLiteral("made:out"));
+        panel->inspector()->findChild<ui::Button *>(QStringLiteral("graphOpenWorkflow"))->click();
+        window.handleEvent(shotWorkflow());
+        QVERIFY(panel->showsWorkflow() && !panel->addButton()->isVisible());
+        panel->view()->select(QStringLiteral("8"));
+        QVERIFY(!panel->inspector()->findChild<ui::GhostButton *>(QStringLiteral("graphDeleteStep")));
+        // While the shot is made no step is added.
+        emit panel->workflowClosed();
+        QVERIFY(panel->addButton()->isVisible());
+        window.handleEvent(QJsonObject{{"type", "media_making"}, {"media", "m4"}, {"take", 3}, {"line", ""}});
+        QVERIFY(!panel->addButton()->isVisible());
+    }
+
     // A shot longer than a model makes at once is its parts and their join: the
     // join is a card of its own, a guide says which part of its sequence it
     // draws, and each is set in its card as any word of the recipe.

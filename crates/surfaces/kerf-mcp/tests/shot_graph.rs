@@ -220,6 +220,33 @@ fn an_agent_reads_a_shots_graph_and_sets_what_a_person_sets_there() {
     let kept = back["recipes"][0]["keptAs"].as_str().unwrap();
     assert!(!read(&dir.join(kept)).contains("workflow="), "{back}");
 
+    // A step added and one taken out, as a person does in the graph: lines of their own, the
+    // comments and the rest as they were. Later entries count lines as the earlier ones left them.
+    let stepped = ok(
+        &router,
+        "edit",
+        json!({"revise": back["proposal"], "recipeSet": [
+            {"media": "shot", "line": 4, "add": "render court {ids.mp4} pass=ids size=832x480 rate=16"},
+            {"media": "shot", "line": line + 1, "key": "guide_ids", "value": "{ids.mp4}"},
+        ]}),
+    );
+    let kept = read(&dir.join(stepped["recipes"][0]["keptAs"].as_str().unwrap()));
+    assert!(kept.contains("pass=depth size=832x480 rate=16\nrender court {ids.mp4} pass=ids size=832x480 rate=16\n\n# The ball"), "{kept}");
+    assert!(kept.contains("guide_ids={ids.mp4}"), "{kept}");
+    let shown = ok(&router, "look", json!({"graph": "shot", "proposal": stepped["proposal"]}));
+    assert!(wired(&shown, "made:ids.mp4", &made, "guide_ids"), "{shown}");
+    let said = refused(
+        &router,
+        "edit",
+        json!({"revise": stepped["proposal"], "recipeSet": [{"media": "shot", "line": 4, "remove": true}]}),
+    );
+    assert!(said.contains("without line 4 the recipe does not read"), "{said}");
+    let back = ok(
+        &router,
+        "edit",
+        json!({"revise": stepped["proposal"], "recipeSet": [{"media": "shot", "line": line, "key": "workflow"}]}),
+    );
+
     // What a line or a workflow cannot take is refused, with why, and nothing is kept of it.
     let files = || std::fs::read_dir(dir.join("shots")).unwrap().count();
     let before = files();

@@ -79,6 +79,29 @@ RecipeGraphPanel::RecipeGraphPanel(QWidget *parent) : QWidget(parent) {
     m_status->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
     m_status->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     row->addWidget(m_status, 2, Qt::AlignVCenter);
+    // A step added to the recipe: written to read as it stands, then set in its card.
+    m_add = new ui::GhostButton(QStringLiteral("Add step"));
+    m_add->setObjectName(QStringLiteral("graphAddStep"));
+    m_add->setChevron(true);
+    m_add->setControlHeight(height::h28);
+    connect(m_add, &QAbstractButton::clicked, this, [this] {
+        auto *menu = new QMenu(m_add);
+        menu->setObjectName(QStringLiteral("graphAddMenu"));
+        menu->setAttribute(Qt::WA_DeleteOnClose);
+        ui::styleMenu(menu);
+        ui::addMenuHeader(menu, QStringLiteral("A new line of the recipe"));
+        static const QList<QPair<QString, QString>> kinds{
+            {QStringLiteral("guide"), QStringLiteral("Guide, drawn from a sequence")},
+            {QStringLiteral("model"), QStringLiteral("Model, asked for a file")},
+            {QStringLiteral("join"), QStringLiteral("Join, parts set end to end")}};
+        for (const auto &[kind, name] : kinds) {
+            QAction *add = menu->addAction(name);
+            add->setObjectName(QStringLiteral("graphAdd.%1").arg(kind));
+            connect(add, &QAction::triggered, this, [this, kind = kind] { emit stepAddRequested(kind); });
+        }
+        ui::popupMenu(menu, m_add);
+    });
+    row->addWidget(m_add, 0, Qt::AlignVCenter);
     m_several = new ui::GhostButton(QStringLiteral("Several"));
     m_several->setObjectName(QStringLiteral("graphSeveral"));
     m_several->setChevron(true);
@@ -152,6 +175,7 @@ RecipeGraphPanel::RecipeGraphPanel(QWidget *parent) : QWidget(parent) {
     connect(m_inspector, &RecipeInspector::signalDrawn, this, &RecipeGraphPanel::signalDrawn);
     connect(m_inspector, &RecipeInspector::takeChosen, this, &RecipeGraphPanel::takeChosen);
     connect(m_inspector, &RecipeInspector::takesReadRequested, this, &RecipeGraphPanel::takesReadRequested);
+    connect(m_inspector, &RecipeInspector::stepRemoveRequested, this, &RecipeGraphPanel::stepRemoveRequested);
     m_art = new MediaArtwork(this);
     connect(m_art, &MediaArtwork::changed, this, [this] {
         m_inspector->setPictures(m_art->frames);
@@ -291,6 +315,9 @@ void RecipeGraphPanel::refreshHead() {
     const QString why = !m_canMake ? m_cannotWhy : !recipe.error.isEmpty() ? QStringLiteral("The recipe does not read") : QString();
     m_make->setVisible(!m_making);
     m_several->setVisible(!m_making);
+    // A step is added to the shot's recipe, not to a model's workflow, and to one that reads.
+    m_add->setVisible(!m_making && !showsWorkflow());
+    m_add->setEnabled(recipe.isValid() && recipe.said && recipe.error.isEmpty());
     m_stop->setVisible(m_making);
     m_make->setEnabled(can);
     m_several->setEnabled(can);

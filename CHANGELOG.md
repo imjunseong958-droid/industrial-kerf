@@ -6,6 +6,11 @@ on `main`; its section here becomes the release's notes on GitHub
 
 ## 0.1.3
 
+- Steps are added and deleted in a shot's graph: Add step puts a guide, a
+  model or a join into the recipe as a line that reads as it stands, and its
+  card opens to set it; Delete step, in a step's card, takes its line out.
+  Kerf in the conversation does the same (`edit` with `recipeSet`, `add` and
+  `remove`).
 - `kerf-comfy` comes with `still`: one picture from the prompt, or of what a
   reference shows, made by the model that makes the shots, for a later step's
   `ref=` or `first=`. A workflow of your own that makes one frame is a still

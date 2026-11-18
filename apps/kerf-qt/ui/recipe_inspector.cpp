@@ -558,6 +558,7 @@ void RecipeInspector::rebuild(const graph::Recipe &recipe, const Node &node) {
         buildReads(recipe, node);
         break;
     }
+    if (node.line > 0 && node.kind != Kind::Part) addRemoveStep(node);
     m_column->addStretch(1);
     m_scroll->setWidget(m_content);
     m_content->show();
@@ -914,6 +915,14 @@ void RecipeInspector::buildSignal(const Node &node) {
     connect(m_curve, &SignalCurve::drawn, this, [this, clip](const QJsonArray &keys) { emit signalDrawn(clip, keys); });
     m_column->addWidget(m_curve);
     addNote(QStringLiteral("%1. Drag across it to draw it anew; it is the clip's value in the project, and is undone as any edit.").arg(node.detail));
+}
+
+void RecipeInspector::addRemoveStep(const Node &node) {
+    auto *remove = new ui::GhostButton(QStringLiteral("Delete step"));
+    remove->setObjectName(QStringLiteral("graphDeleteStep"));
+    remove->setTip(QStringLiteral("Take line %1 out of the recipe. A step whose file a later one reads, and the last, stay until that is changed").arg(node.line));
+    connect(remove, &QAbstractButton::clicked, this, [this, line = node.line] { emit stepRemoveRequested(line); });
+    m_column->addWidget(remove, 0, Qt::AlignLeft);
 }
 
 void RecipeInspector::buildTakes(const Node &node) {
