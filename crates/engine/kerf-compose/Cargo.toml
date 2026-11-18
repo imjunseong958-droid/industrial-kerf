@@ -25,3 +25,7 @@ thiserror = "2"
 kerf-text = { path = "../../foundation/kerf-text" }
 kerf-lang = { path = "../../foundation/kerf-lang" }
 tempfile = "3"
+
+# Empty on purpose: this crate does not take the workspace's lints. The root
+# Cargo.toml says why.
+[lints]

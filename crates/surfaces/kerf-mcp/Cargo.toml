@@ -34,3 +34,7 @@ serde_json = "1"
 
 [dev-dependencies]
 tempfile = "3"
+
+# Empty on purpose: this crate does not take the workspace's lints. The root
+# Cargo.toml says why.
+[lints]

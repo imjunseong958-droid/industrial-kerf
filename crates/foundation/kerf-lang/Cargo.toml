@@ -7,3 +7,7 @@ description = "Text form of Kerf projects: the canonical .kerf document and the 
 
 [dependencies]
 kerf-model = { path = "../../foundation/kerf-model" }
+
+# Empty on purpose: this crate does not take the workspace's lints. The root
+# Cargo.toml says why.
+[lints]

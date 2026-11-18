@@ -31,3 +31,7 @@ windows-sys = { version = "0.61", optional = true, features = ["Win32_System_Com
 kerf-lang = { path = "../../foundation/kerf-lang" }
 kerf-model = { path = "../../foundation/kerf-model" }
 tempfile = "3"
+
+# Empty on purpose: this crate does not take the workspace's lints. The root
+# Cargo.toml says why.
+[lints]

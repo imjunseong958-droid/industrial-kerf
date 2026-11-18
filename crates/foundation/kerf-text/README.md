@@ -1,7 +1,7 @@
 # kerf-text
 
-Kerf's text engine, carried from FilmCraft (depends on `kerf-color`, `skrifa`, `harfrust`,
-`unicode-bidi` and `unicode-linebreak`). It draws graphic-clip text and shapes, caption burn-in
+Kerf's text engine, carried from FilmCraft (depends on `skrifa`, `harfrust`, `unicode-bidi`
+and `unicode-linebreak`). It draws graphic-clip text and shapes, caption burn-in
 and the Timecode / Clip Name effects. Pure Rust; it builds for `wasm32-unknown-unknown`.
 
 | Module | What |

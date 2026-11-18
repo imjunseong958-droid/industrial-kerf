@@ -1715,7 +1715,6 @@ name = "kerf-agent"
 version = "0.1.4"
 dependencies = [
  "base64",
- "kerf-runtime",
  "kerf-skills",
  "serde",
  "serde_json",
@@ -2114,7 +2113,6 @@ name = "kerf-text"
 version = "0.1.4"
 dependencies = [
  "harfrust",
- "kerf-color",
  "skrifa",
  "tempfile",
  "unicode-bidi",

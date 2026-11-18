@@ -56,8 +56,8 @@ edition = "2021"
 license = "MIT"
 
 # The crates carried from EffectCraft and FilmCraft (kerf-color, kerf-geom,
-# kerf-text, kerf-raster, kerf-raster-fx; see licenses/README.md) take these
-# and the lints below from the workspace.
+# kerf-text, kerf-raster, kerf-raster-fx; see licenses/README.md) brought
+# these and the lints below with them.
 [workspace.dependencies]
 serde = { version = "1", features = ["derive", "rc"] }
 rayon = "1"
@@ -65,6 +65,11 @@ proptest = "1"
 kurbo = "0.13"
 linesweeper = "0.4"
 
+# A crate takes these with `[lints] workspace = true`. A crate with an empty
+# `[lints]` table is left out on purpose, and the empty table is how Cargo is
+# told so: kerf-engine, kerf-playback, kerf-mcp, kerf-qt-bridge and
+# kerf-runtime have unsafe code, which `forbid` allows no exception to, and
+# the others stay on clippy's defaults, which the allows below would loosen.
 [workspace.lints.rust]
 unsafe_code = "forbid"
 

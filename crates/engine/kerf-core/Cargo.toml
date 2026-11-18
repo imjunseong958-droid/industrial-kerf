@@ -16,3 +16,7 @@ thiserror = "2"
 
 [dev-dependencies]
 kerf-lang = { path = "../../foundation/kerf-lang" }
+
+# Empty on purpose: this crate does not take the workspace's lints. The root
+# Cargo.toml says why.
+[lints]
