@@ -107,10 +107,11 @@ private slots:
 
     // The table is spec 16 without the device preview's glyphs, the panes',
     // folders', account's and archive's glyphs, the account menu's help and
-    // sign out, a track head's captions, and the two drawn outside the 16 set.
+    // sign out, a track head's captions, a shot's graph's seven, and the two
+    // drawn outside the 16 set.
     void kitIconTableIsTheDesignsSet() {
         const QStringList names = icons::names();
-        QCOMPARE(names.size(), 86);
+        QCOMPARE(names.size(), 93);
         QCOMPARE(names.first(), QStringLiteral("g-169"));
         for (const char *name : {"g-169", "g-916", "g-settings", "g-chev", "g-kerf", "g-gauge", "g-cdr",
                                  "playhead-head", "checkbox-check"})

@@ -15,6 +15,7 @@ mod qc;
 mod secrets;
 mod updates;
 mod queue;
+mod recipes;
 mod conversations;
 mod sessions;
 mod steps;
@@ -327,6 +328,15 @@ enum Command {
     MediaMakeCancel {
         media: String,
     },
+    /// How a media is made, as a graph of its recipe's steps and what they
+    /// read: `recipe`. Nothing is run.
+    RecipeGet {
+        media: String,
+    },
+    /// Change a media's recipe in its file, where the file still reads as
+    /// the editor read it: one name on one line, or the whole text. `recipe`
+    /// then, as it now reads.
+    RecipeEdit(recipes::Edit),
     /// The person's models a recipe's `generate` can name, from their own
     /// models file: `models {file, exists, models, error?}`.
     Models,
@@ -846,6 +856,14 @@ fn runtime_worker(
             }
             Command::CastSet { entries } => {
                 media::cast(&shared, &active_client, Some(entries), &tx);
+                continue;
+            }
+            Command::RecipeGet { media } => {
+                recipes::get(&shared, &active_client, &media, &tx);
+                continue;
+            }
+            Command::RecipeEdit(edit) => {
+                recipes::edit(&shared, &active_client, &edit, &tx);
                 continue;
             }
             Command::MediaReplace { media, path } => active_client.get_state().and_then(|state| {

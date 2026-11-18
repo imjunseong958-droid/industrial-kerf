@@ -42,11 +42,13 @@
 //! opening or drawing a project.
 
 pub mod cast;
+pub mod graph;
 pub mod model;
 pub mod moves;
 pub mod shots;
 pub mod signal;
 pub mod takes;
+pub mod text;
 pub mod told;
 
 use crate::error::{EngineError, Result};
@@ -60,6 +62,7 @@ use signal::Signal;
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 
+pub use graph::{graph, Graph};
 pub use shots::{shots, Shot};
 pub use takes::{take, takes, unmade, Take, Unmade};
 pub use told::{ask_to_stop, told, Going, Told};

@@ -111,6 +111,34 @@ is ended outright. A stopped making leaves no take, nothing of one, and the
 media as it was. A second Ctrl-C ends `kerf` and its step at once, and what
 the step asked a server for goes on there.
 
+### As a graph
+
+In the editor a shot opens as a graph of how it is made: **Open Graph** on the
+media in the bin, or a double-click on its clip. Each step is a node, a guide
+drawn from a sequence or a model asked for a file, and so is each thing of the
+project a step reads: a sequence, a picture, a signal, the way a clip goes, one
+of the cast. An edge is a reading, in the colour of what goes along it: a picture
+in motion, a still, the way a thing goes, a number over time. The last step's
+file is the shot, so the graph ends in its takes.
+
+Choosing a node shows what it holds, to set: a model's prompt, seed, length, size
+and knobs, and what it reads; a guide's sequence, pass, size and rate; a signal's
+curve, drawn by dragging across it. A change is written into the recipe's text,
+that word alone, so its comments, its order and how each line was spelled stay,
+and one a line cannot take is refused as a making would refuse it. A signal's
+curve is its clip's `value` in the project, one edit that undo takes back. An
+edge drawn from a node's port to a step that could read it adds the word to that
+step's line, `signal=bounce` or `ref={ball.png}`, and one is let go under the
+step's Reads. Make,
+Make again, Several and Stop are in the graph's head and do what the bin's do:
+what would run is shown first, and each making is a new take, chosen among in the
+takes' node.
+
+This is a person's own change, written in place as a text editor writes it: the
+takes made before say the recipe changed since, and the next making is of the
+recipe as it reads now. An agent's recipe is still never written over
+([An agent's part](#an-agents-part)).
+
 ### From a terminal alone
 
 Nothing here needs the editor open. A scene and its recipe written as files,
@@ -943,10 +971,12 @@ loud it is.
 The editor shows a signal where its clip is, in the timeline: its number
 along the clip as a curve, 0 at the bottom and 1 at the top.
 
+It is drawn by hand there too: Option-drag across the clip, or drag across its
+curve in the shot's graph ([As a graph](#as-a-graph)). What is drawn is kept as
+the keys that say it, a straight run as its two ends.
+
 Not here yet: a signal from how loud a sound is, as a voice swells, and from
-footage, such as how fast something moves. Nor can one be drawn by hand in
-the editor: its keys are text, which an agent writes, or a person with
-`set`.
+footage, such as how fast something moves.
 
 ## Where a thing goes
 

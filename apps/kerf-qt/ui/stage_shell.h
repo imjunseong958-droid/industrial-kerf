@@ -125,7 +125,10 @@ public:
     // A page that takes the room while it shows (Settings): everything right
     // of the sidebar, over the regions and a sheet, under the bars. Esc
     // uncovers.
+    // One at a time: another widget given while one covers takes its place,
+    // and the window is uncovered first.
     void setCover(QWidget *cover);
+    QWidget *cover() const { return m_cover; }
     void setCovered(bool covered);
     bool covered() const { return m_covered; }
     // Bars that take over the top of the content while they show (the

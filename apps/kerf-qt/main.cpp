@@ -109,6 +109,9 @@ int main(int argc, char **argv) {
     bool renderPreview = false;
     int quitAfterMs = 0;
     QSize windowSize;
+    // A shot's graph to start on, and the node chosen in it.
+    QString graphMedia;
+    QString graphNode;
     QStringList positional;
     QStringList links;
     for (int i = 1; i < argc; ++i) {
@@ -123,6 +126,10 @@ int main(int argc, char **argv) {
             quitAfterMs = QString::fromUtf8(argv[++i]).toInt();
         } else if (argument.startsWith(QStringLiteral("--quit-after-ms="))) {
             quitAfterMs = argument.mid(16).toInt();
+        } else if (argument == QStringLiteral("--graph") && i + 1 < argc) {
+            graphMedia = QString::fromUtf8(argv[++i]);
+        } else if (argument == QStringLiteral("--graph-node") && i + 1 < argc) {
+            graphNode = QString::fromUtf8(argv[++i]);
         } else if (argument == QStringLiteral("--settings-dir") && i + 1 < argc) {
             ++i; // applied before the application was made
         } else if (argument == QStringLiteral("--window-size") && i + 1 < argc) {
@@ -207,6 +214,7 @@ int main(int argc, char **argv) {
     if (!shown) {
         QPointer<kerf::MainWindow> window = openEditor(project.isEmpty() ? QString() : QDir(project).absolutePath(), kerfd);
         if (windowSize.isValid() && !windowSize.isEmpty()) window->resize(windowSize);
+        if (!graphMedia.isEmpty()) window->openGraph(graphMedia, graphNode);
         shown = window.data();
         if (renderPreview && !project.isEmpty()) {
             QTimer::singleShot(1500, window.data(), [window] {

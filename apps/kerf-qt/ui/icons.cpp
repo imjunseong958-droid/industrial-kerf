@@ -121,6 +121,16 @@ constexpr Source kSources[] = {
     // The sidebar's conversations: put away in the archive, and taken out again.
     {"g-archive", 16, 16, true, R"svg(<rect x="2.5" y="3" width="11" height="3" rx="1"/><path d="M3.5 6v6a1 1 0 0 0 1 1h7a1 1 0 0 0 1-1V6M6.5 8.5h3"/>)svg"},
     {"g-unarchive", 16, 16, true, R"svg(<rect x="2.5" y="3" width="11" height="3" rx="1"/><path d="M3.5 6v6a1 1 0 0 0 1 1h7a1 1 0 0 0 1-1V6M8 11.5V8.25M6.5 9.75 8 8.25l1.5 1.5"/>)svg"},
+    // A shot's graph (ui/recipe_graph.h): the graph itself, and its nodes' kinds
+    // that had no glyph: a model, a program, a still, any other file, a signal;
+    // and another seed.
+    {"g-graph", 16, 16, true, R"svg(<rect x="1.5" y="3" width="5" height="4" rx="1"/><rect x="9.5" y="9" width="5" height="4" rx="1"/><path d="M6.5 5H10a2 2 0 0 1 2 2v2"/>)svg"},
+    {"g-model", 16, 16, true, R"svg(<path d="M8 2.5 9.4 6.6 13.5 8 9.4 9.4 8 13.5 6.6 9.4 2.5 8 6.6 6.6z"/>)svg"},
+    {"g-run", 16, 16, true, R"svg(<rect x="1.5" y="3" width="13" height="10" rx="1.5"/><path d="M4.5 6.5 6.5 8l-2 1.5M8 10h3"/>)svg"},
+    {"g-image", 16, 16, true, R"svg(<rect x="2" y="3" width="12" height="10" rx="1.5"/><circle cx="5.75" cy="6.5" r="1"/><path d="M2.5 11.5 6 8.5l2.5 2 2-1.5 3 2.5"/>)svg"},
+    {"g-file", 16, 16, true, R"svg(<path d="M4 2.5h5l3 3v7a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-9a1 1 0 0 1 1-1z"/><path d="M9 2.5v3h3"/>)svg"},
+    {"g-signal", 16, 16, true, R"svg(<path d="M2 12.5c2.5 0 2.5-9 5-9s2.5 6 4.5 6 1.5-2 2.5-2"/>)svg"},
+    {"g-dice", 16, 16, true, R"svg(<rect x="2.5" y="2.5" width="11" height="11" rx="2"/><circle cx="5.75" cy="5.75" r=".75" fill="currentColor" stroke="none"/><circle cx="8" cy="8" r=".75" fill="currentColor" stroke="none"/><circle cx="10.25" cy="10.25" r=".75" fill="currentColor" stroke="none"/>)svg"},
     // Drawn outside the 16-unit set.
     {"playhead-head", 9, 12, false, R"svg(<path d="M.5 .5h8v7L4.5 11.5.5 7.5z" fill="#a084d4" stroke="#0e0e0e" stroke-width="1"/>)svg"},
     {"checkbox-check", 16, 16, true, R"svg(<path d="M3.5 8.5 6.5 11.5 12.5 4.5" stroke="#ada79b" stroke-width="1.75"/>)svg"},

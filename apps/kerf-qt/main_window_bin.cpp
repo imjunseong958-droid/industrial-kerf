@@ -83,6 +83,7 @@
 #include "wiring/main_window_shared.h"
 #include "editor_bus.h"
 #include "wiring/bin_wiring.h"
+#include "wiring/graph_wiring.h"
 
 namespace kerf {
 
@@ -573,6 +574,20 @@ QString MainWindow::makingStatus(const QJsonObject &making, const QString &name)
                           : QStringLiteral("Making %1: %2").arg(media, line);
 }
 
+void MainWindow::showGraph(const QString &mediaId) {
+    if (mediaRecipe(mediaId).isEmpty()) {
+        showStatus(QStringLiteral("%1 is not made from a recipe, so there is no graph of how it is made").arg(mediaName(mediaId)), 4000);
+        return;
+    }
+    m_graphWiring->open(mediaId);
+}
+
+void MainWindow::openGraph(const QString &media, const QString &node) { m_graphWiring->openWhenReady(media, node); }
+
+QString MainWindow::clipMedia(const QString &clipId) const {
+    return clipObject(clipId).value(QStringLiteral("sourceId")).toString();
+}
+
 void MainWindow::revealMedia(const QString &mediaId) {
     const QString path = mediaPath(mediaId);
     if (path.isEmpty()) return;
@@ -630,6 +645,13 @@ QMenu *MainWindow::binMenu(const QString &mediaId) {
         replace->setToolTip(replace->isEnabled() ? QStringLiteral("Swap the file behind %1 for everyone; its clips keep their timing").arg(mediaId)
                                                  : m_commands->reason(QStringLiteral("media.replace")));
         connect(replace, &QAction::triggered, this, [this, mediaId] { replaceMedia(mediaId); });
+        if (const QString recipe = mediaRecipe(mediaId); !recipe.isEmpty()) {
+            // How it is made, to see and to set: its recipe's steps and what they read, wired.
+            QAction *graph = menu->addAction(QStringLiteral("Open Graph"));
+            graph->setObjectName(QStringLiteral("binGraph"));
+            graph->setToolTip(QStringLiteral("See how %1 is made and set it: the steps of %2 and what they read, as a graph").arg(mediaId, recipe));
+            connect(graph, &QAction::triggered, this, [this, mediaId] { showGraph(mediaId); });
+        }
         if (m_making.contains(mediaId)) {
             // While it is being made, the menu stops it and does not start another.
             QAction *stop = menu->addAction(QStringLiteral("Stop Making"));

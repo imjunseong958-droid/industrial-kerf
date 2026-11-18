@@ -174,6 +174,14 @@ never runs one itself. Right-click the media in the Media sheet and choose Make
 from Recipe…, read the steps it shows, and say yes; or run `kerf make <media>`
 in a terminal.
 
+To see how a shot is made and change it, right-click the media and choose Open
+Graph, or double-click its clip on the timeline. Its recipe opens as a graph:
+the guide drawn from your sequence, the models, and what they are handed, wired
+together, ending in the shot's takes. Choose a node to set its prompt, its seed
+or a knob, or to draw a signal's curve, and drag from a node's port to a model
+to hand it over; what you change is written into the recipe, and Make again
+makes a new take from it.
+
 Each making is kept as a take, and the newest is the one in your cut. `kerf
 takes <media>` lists them and `kerf takes <media> --use 1` goes back to one,
 and you can ask Kerf to do the same. Trim, move, grade and title a made shot
