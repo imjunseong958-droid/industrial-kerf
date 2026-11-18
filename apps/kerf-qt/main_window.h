@@ -386,10 +386,19 @@ private:
     void replaceMedia(const QString &mediaId, const QString &path = QString());
     void revealMedia(const QString &mediaId);
     QString mediaPath(const QString &mediaId) const;
-    // The recipe `mediaId` names (recipe= on its media line), or empty.
     // The media as the bin names it.
     QString mediaName(const QString &mediaId) const;
+    // The project's source of `mediaId`, as the snapshot lists it; empty when there is none.
+    QJsonObject mediaSource(const QString &mediaId) const;
+    // The recipe `mediaId` names (recipe= on its media line), or empty: also empty for
+    // a media whose steps are the document's own (mediaIsMade says either).
     QString mediaRecipe(const QString &mediaId) const;
+    // Whether `mediaId` is a shot Kerf makes, from a recipe file or from the steps
+    // written under its line in the document (sourceIsMade).
+    bool mediaIsMade(const QString &mediaId) const;
+    // Where it is made from, for a sentence: its recipe's path, or "its steps in the
+    // document" (sourceMadeFrom).
+    QString mediaMadeFrom(const QString &mediaId) const;
     // The takes a media's recipe has made, as the project lists them: each one's number,
     // its path, and whether it is the one the media is.
     QJsonArray mediaTakes(const QString &mediaId) const;
@@ -420,12 +429,14 @@ private:
     // Stop the making of `mediaId` that is running: its step is asked to end.
     void stopMake(const QString &mediaId);
     // What the toolbar says of a making under way, from a media_making event.
-    // What a making's steps say, of the media called name (its id when there is none).
-    static QString makingStatus(const QJsonObject &making, const QString &name = QString());
+    // What a making's steps say, of the media called name (its id when there is none);
+    // `document` for a media made by steps in the document rather than a recipe.
+    static QString makingStatus(const QJsonObject &making, const QString &name = QString(), bool document = false);
     // The bin's context menu for `mediaId` (empty for the bin itself).
     QMenu *binMenu(const QString &mediaId);
-    // How a shot is made, as a graph of its recipe, over the window
-    // (ui/recipe_graph_panel.h): for a media that names a recipe.
+    // How a shot is made, as a graph of its steps, over the window
+    // (ui/recipe_graph_panel.h): for a media made from a recipe or from steps in
+    // the document.
     void showGraph(const QString &mediaId);
     // The media a clip of the program plays; empty for one that plays none.
     QString clipMedia(const QString &clipId) const;

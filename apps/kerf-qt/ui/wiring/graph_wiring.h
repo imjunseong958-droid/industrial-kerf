@@ -5,7 +5,9 @@
 // MainWindow, as each region's wiring is.
 //
 // Engine paths:
-//   the graph        recipe_get {media} -> recipe {media, recipe, name, text, nodes, edges, error?, cannot?, notes}
+//   the graph        recipe_get {media} -> recipe {media, recipe, name, text, nodes, edges, error?, cannot?, notes, document?}
+//                    (a media made by steps in the document: document true, recipe "", name its id,
+//                    text its steps after a `kerf-recipe 1` line; edits below carry that text as `was`)
 //   a field set      recipe_edit {media, was, line, key, nth, value?} -> recipe {…, edited}
 //                    (`was` is the text the graph was read from: a file changed since is left alone)
 //   a step added     recipe_edit {media, was, add: guide|model|join} -> recipe {…, edited, added: <its line>}
@@ -55,8 +57,9 @@ public:
     QWidget *cover() const;
     RecipeGraphPanel *panel() const { return m_panel; }
 
-    // Opens the graph of `media`'s recipe over the window, asking the bridge
-    // for it; a media that names no recipe opens nothing.
+    // Opens the graph of how `media` is made over the window, asking the bridge
+    // for it; a media made neither from a recipe nor by steps in the document
+    // opens nothing.
     void open(const QString &media);
     // The same once the project has said that media, with `node` chosen once
     // its graph is said, or with `workflow:<line>` the workflow of the model on

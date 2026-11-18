@@ -75,6 +75,7 @@ Recipe Recipe::read(const QJsonObject &event) {
     recipe.media = event.value(QStringLiteral("media")).toString();
     recipe.recipe = event.value(QStringLiteral("recipe")).toString();
     recipe.name = event.value(QStringLiteral("name")).toString();
+    recipe.document = event.value(QStringLiteral("document")).toBool();
     recipe.text = event.value(QStringLiteral("text")).toString();
     recipe.error = event.value(QStringLiteral("error")).toString();
     recipe.cannot = event.value(QStringLiteral("cannot")).toString();
@@ -405,7 +406,10 @@ constexpr int kLegendSample = 16;
 // A workflow's legend: what its rows are.
 const QString kLegendLink = QStringLiteral("link");
 const QString kLegendBlank = QStringLiteral("{blank}");
-const QString kLegendBlankSays = QStringLiteral("the recipe fills");
+// What fills a blank: the shot's recipe, or its steps where the document holds them.
+QString legendBlankSays(const graph::Recipe &recipe) {
+    return recipe.document ? QStringLiteral("the steps fill") : QStringLiteral("the recipe fills");
+}
 const QString kLegendValue = QStringLiteral("value");
 const QString kLegendValueSays = QStringLiteral("set here");
 
@@ -680,7 +684,7 @@ QRectF RecipeGraphView::legendRect() const {
         // A link, a blank and a value, as a workflow's rows show them.
         const QFontMetricsF mono(tokens::font(monoSmall));
         width += kLegendSample + 6 + metrics.horizontalAdvance(kLegendLink) + 14;
-        width += mono.horizontalAdvance(kLegendBlank) + 10 + 6 + metrics.horizontalAdvance(kLegendBlankSays) + 14;
+        width += mono.horizontalAdvance(kLegendBlank) + 10 + 6 + metrics.horizontalAdvance(legendBlankSays(m_recipe)) + 14;
         width += mono.horizontalAdvance(kLegendValue) + 6 + metrics.horizontalAdvance(kLegendValueSays) + 14;
         return QRectF(layout::graphPad, height() - layout::graphPad - kLegendHeight, std::ceil(width - 2), kLegendHeight);
     }
@@ -950,7 +954,7 @@ void RecipeGraphView::paintLegend(QPainter &p) const {
         p.setPen(color(accentInk));
         p.drawText(pill, Qt::AlignCenter, kLegendBlank);
         x += blank + 6;
-        says(kLegendBlankSays);
+        says(legendBlankSays(m_recipe));
         p.setFont(mono);
         p.setPen(color(ink2));
         const qreal value = monoMetrics.horizontalAdvance(kLegendValue);
@@ -1000,9 +1004,12 @@ void RecipeGraphView::paintEvent(QPaintEvent *) {
     }
     if (m_recipe.nodes.isEmpty()) {
         // Nothing to lay out: say why, where the cards would be.
-        const QString why = !m_recipe.error.isEmpty() ? QStringLiteral("This recipe does not read: %1").arg(m_recipe.error)
+        const bool document = m_recipe.document;
+        const QString why = !m_recipe.error.isEmpty() ? (document ? QStringLiteral("These steps do not read: %1") : QStringLiteral("This recipe does not read: %1")).arg(m_recipe.error)
                             : !m_recipe.isValid() ? QString()
-                            : m_recipe.said ? QStringLiteral("This recipe has no steps") : QStringLiteral("Reading %1…").arg(m_recipe.recipe);
+                            : m_recipe.said ? (document ? QStringLiteral("This shot has no steps") : QStringLiteral("This recipe has no steps"))
+                            : document ? QStringLiteral("Reading %1's steps…").arg(m_recipe.name)
+                                       : QStringLiteral("Reading %1…").arg(m_recipe.recipe);
         p.setFont(tokens::font(body));
         p.setPen(color(m_recipe.error.isEmpty() ? ink3 : status::request));
         p.drawText(QRectF(rect()).adjusted(48, 48, -48 - m_covered, -48), Qt::AlignCenter | Qt::TextWordWrap, why);

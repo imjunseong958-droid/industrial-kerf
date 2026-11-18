@@ -323,9 +323,9 @@ void MainWindow::quietenCutPreview() {
 QHash<QString, activity::MediaActivity> MainWindow::mediaActivity() const {
     using State = activity::MediaActivity::State;
     QHash<QString, activity::MediaActivity> media;
-    // Missing: a shot whose recipe has not made it yet, or a file that is gone.
+    // Missing: a shot whose recipe or steps have not made it yet, or a file that is gone.
     for (const QJsonValue id : m_mediaStatus.value(QStringLiteral("missing")).toArray())
-        media.insert(id.toString(), {mediaRecipe(id.toString()).isEmpty() ? State::Offline : State::NotMade});
+        media.insert(id.toString(), {mediaIsMade(id.toString()) ? State::NotMade : State::Offline});
     for (auto it = m_makingState.cbegin(); it != m_makingState.cend(); ++it) {
         const activity::MakingLine line = activity::parseMakingLine(it->line);
         activity::MediaActivity making;

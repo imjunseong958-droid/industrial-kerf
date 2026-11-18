@@ -187,6 +187,67 @@ QJsonObject bounceWithRunner(const QString &workflow = QString()) {
     return recipe;
 }
 
+// A shot made by steps written under its media line in the document, with no
+// recipe file: a guide drawn from the sequence court, and a model that follows it.
+const char *kDepthSteps = "kerf-recipe 1\n"
+                          "render court {guide.mp4} pass=depth size=832x480 rate=16\n"
+                          "generate model=shot prompt=\"a red car on a wet street\" guide={guide.mp4} seconds=4 seed=7\n";
+
+// The `recipe` event of that shot, as the bridge says it: document, no recipe,
+// named by its id, its text the steps with a line numbered for each. Its take 2
+// was made from steps that have changed since.
+QJsonObject depthRecipe(const QString &text = QString::fromLatin1(kDepthSteps)) {
+    const QJsonArray made{QJsonObject{{"number", 1}, {"path", "shots/depth.takes/001.mp4"}, {"chosen", false}, {"kept", true}},
+                          QJsonObject{{"number", 2}, {"path", "shots/depth.takes/002.mp4"}, {"chosen", true}, {"kept", true},
+                                      {"changed", QJsonArray{"its steps"}}}};
+    const QJsonArray nodes{
+        QJsonObject{{"id", "sequence:court"}, {"kind", "sequence"}, {"title", "The court"}, {"detail", "1920×1080 · 24 fps · 4 s"},
+                    {"gives", "video"}, {"sequence", "court"}, {"there", true}},
+        QJsonObject{{"id", "made:guide.mp4"}, {"kind", "render"}, {"title", "Depth guide"}, {"detail", "832×480 · 16 fps"}, {"gives", "video"},
+                    {"line", 2}, {"sequence", "court"}, {"makes", "guide.mp4"}, {"pass", "depth"}, {"size", "832x480"}, {"rate", "16"},
+                    {"matte", QJsonValue()}},
+        QJsonObject{{"id", "made:out"}, {"kind", "model"}, {"title", "shot"}, {"detail", "a red car on a wet street"}, {"gives", "video"},
+                    {"line", 3}, {"model", "shot"}, {"setUp", true}, {"prompt", "a red car on a wet street"}, {"seed", 7}, {"seconds", 4.0},
+                    {"size", QJsonValue()}, {"makes", "out"}, {"reads", QJsonArray{"guide"}}, {"knobs", QJsonArray{}}},
+        QJsonObject{{"id", "takes"}, {"kind", "takes"}, {"title", "depth"}, {"detail", "take 2 of 2"}, {"gives", "video"},
+                    {"media", "depth"}, {"takes", made}}};
+    const auto edge = [](const char *from, const char *to, const char *port) {
+        return QJsonObject{{"from", from}, {"to", to}, {"port", port}, {"nth", 0}, {"gives", "video"}};
+    };
+    return QJsonObject{{"type", "recipe"}, {"media", "depth"}, {"recipe", ""}, {"document", true}, {"name", "depth"}, {"text", text},
+                       {"nodes", nodes},
+                       {"edges", QJsonArray{edge("sequence:court", "made:guide.mp4", "sequence"), edge("made:guide.mp4", "made:out", "guide"),
+                                            edge("made:out", "takes", "take")}},
+                       {"notes", QJsonArray{}}};
+}
+
+// A project with that shot as media `depth`, on the timeline as the clip `car`,
+// beside the bounce shot its recipe file makes.
+QJsonObject depthState(int revision = 2) {
+    QJsonObject state = bounceState(revision);
+    QJsonObject snapshot = state.value("snapshot").toObject();
+    QJsonObject timeline = snapshot.value("timeline").toObject();
+    QJsonArray sources = timeline.value("sources").toArray();
+    sources.append(QJsonObject{{"id", "depth"}, {"path", "shots/depth.takes/002.mp4"}, {"width", 832}, {"height", 480}, {"duration", 4},
+                               {"fps", 16}, {"steps", 2},
+                               {"takes", QJsonArray{QJsonObject{{"number", 1}, {"path", "shots/depth.takes/001.mp4"}, {"chosen", false}},
+                                                    QJsonObject{{"number", 2}, {"path", "shots/depth.takes/002.mp4"}, {"chosen", true}}}}});
+    timeline.insert("sources", sources);
+    QJsonArray tracks = timeline.value("tracks").toArray();
+    QJsonObject track = tracks.at(0).toObject();
+    QJsonArray clips = track.value("clips").toArray();
+    clips.append(QJsonObject{{"id", "car"}, {"kind", "media"}, {"sourceId", "depth"}, {"timelineStart", 8.0}, {"duration", 4.0},
+                             {"startFrame", 192}, {"durationFrames", 96}, {"enabled", true}});
+    track.insert("clips", clips);
+    tracks.replace(0, track);
+    timeline.insert("tracks", tracks);
+    timeline.insert("duration", 12);
+    snapshot.insert("timeline", timeline);
+    snapshot.insert("duration", 12);
+    state.insert("snapshot", snapshot);
+    return state;
+}
+
 // The middle of an edge, where it is clear of both cards.
 QPointF middleOf(const QPainterPath &path) { return path.pointAtPercent(0.5); }
 
@@ -538,6 +599,78 @@ private slots:
         window.m_lastCommand = {};
         window.handleEvent(bounceState(4));
         QCOMPARE(window.m_lastCommand, QJsonObject{});
+    }
+
+    // A shot whose steps the document holds, with no recipe file, opens as its
+    // graph as one a recipe makes does: from the bin and its clip, named by its
+    // id, its cards kept by its id, and a change sent with the steps as read.
+    void aShotMadeByStepsInTheDocumentOpensAsItsGraph() {
+        MainWindow window{QStringLiteral("/p/court"), QString()};
+        window.setConnection(QStringLiteral("ready"));
+        window.handleEvent(depthState());
+        window.resize(1600, 1000);
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        GraphWiring *wiring = window.m_graphWiring.get();
+        QMenu *menu = window.binMenu(QStringLiteral("depth"));
+        QAction *open = menu->findChild<QAction *>(QStringLiteral("binGraph"));
+        QVERIFY(open);
+        open->trigger();
+        delete menu;
+        QCOMPARE(window.m_lastCommand, (QJsonObject{{"type", "recipe_get"}, {"media", "depth"}}));
+        QVERIFY(wiring->isOpen());
+        RecipeGraphPanel *panel = wiring->panel();
+        // Until the bridge has said it, the shot's id over an empty canvas, waiting on its steps.
+        QCOMPARE(panel->findChild<QLabel *>(QStringLiteral("graphTitle"))->text(), QStringLiteral("depth"));
+        QVERIFY(panel->recipe().document && !panel->recipe().said && panel->recipe().recipe.isEmpty());
+        // Its cards are kept by the project and its id, not by a recipe's folder.
+        QCOMPARE(panel->m_placementKey, QStringLiteral("/p/court\nmedia depth"));
+        window.handleEvent(depthRecipe());
+        QCOMPARE(panel->view()->recipe().nodes.size(), 4);
+        QVERIFY(panel->recipe().document);
+        QCOMPARE(panel->findChild<QLabel *>(QStringLiteral("graphPath"))->text(), QStringLiteral("steps in the document"));
+        RecipeInspector *inspector = panel->inspector();
+        QCOMPARE(inspector->findChild<QLabel *>(QStringLiteral("graphInspectorTitle"))->text(), QStringLiteral("depth"));
+        bool says = false;
+        for (const QLabel *label : inspector->findChildren<QLabel *>())
+            says |= label->text().startsWith(QStringLiteral("Choose a node to see and set what it holds. A change is written into the shot's steps"));
+        QVERIFY(says);
+
+        // A change is one word of one line of the steps as they were read, as a recipe's is.
+        window.m_errorBanner->hide();
+        panel->view()->select(QStringLiteral("made:out"));
+        typeInto(field(window, QStringLiteral("seed")), QStringLiteral("8"));
+        QCOMPARE(window.m_lastCommand, (QJsonObject{{"type", "recipe_edit"}, {"media", "depth"}, {"was", QString::fromLatin1(kDepthSteps)},
+                                                    {"line", 3}, {"key", "seed"}, {"nth", 0}, {"value", "8"}}));
+        // The take the shot is goes back to the steps it was made from.
+        panel->view()->select(QStringLiteral("takes"));
+        auto *restore = inspector->findChild<ui::Button *>(QStringLiteral("graphRestoreTake"));
+        QVERIFY(restore);
+        QCOMPARE(restore->text(), QStringLiteral("Restore take 2's steps"));
+        restore->click();
+        QCOMPARE(window.m_lastCommand,
+                 (QJsonObject{{"type", "recipe_edit"}, {"media", "depth"}, {"was", QString::fromLatin1(kDepthSteps)}, {"restore", 2}}));
+        // A change refused is said as any error is, over the graph that stays open; the
+        // bridge answers it with the graph as the document has it.
+        window.m_lastCommand = {};
+        window.handleEvent(QJsonObject{{"type", "error"}, {"command", "recipe_edit"}, {"media", "depth"},
+                                       {"message", "the steps of `depth` were changed since they were read; read them again"}});
+        QVERIFY(wiring->isOpen() && !window.m_errorBanner->isHidden());
+        QCOMPARE(window.m_lastCommand, QJsonObject{});
+        window.m_shell->dismiss();
+        QVERIFY(!wiring->isOpen());
+
+        // Its clip, double-clicked, opens it; its menu offers it.
+        window.m_lastCommand = {};
+        emit window.m_timeline->clipActivated(QStringLiteral("car"));
+        QVERIFY(wiring->isOpen());
+        QCOMPARE(window.m_lastCommand, (QJsonObject{{"type", "recipe_get"}, {"media", "depth"}}));
+        // Another shot, made by a recipe file, opens as it always has, and keeps its own cards.
+        window.showGraph(QStringLiteral("m4"));
+        QCOMPARE(panel->m_placementKey, QStringLiteral("/p/court\nshots/bounce"));
+        window.handleEvent(bounceRecipe());
+        QVERIFY(!panel->recipe().document);
+        QCOMPARE(panel->findChild<QLabel *>(QStringLiteral("graphPath"))->text(), QStringLiteral("shots/bounce.kerfrecipe"));
     }
 
     // An agent's edit is the project's: once it is accepted the media is made

@@ -89,7 +89,7 @@ RecipeGraphPanel::RecipeGraphPanel(QWidget *parent) : QWidget(parent) {
         menu->setObjectName(QStringLiteral("graphAddMenu"));
         menu->setAttribute(Qt::WA_DeleteOnClose);
         ui::styleMenu(menu);
-        ui::addMenuHeader(menu, QStringLiteral("A new line of the recipe"));
+        ui::addMenuHeader(menu, m_shot.document ? QStringLiteral("A new step of the shot") : QStringLiteral("A new line of the recipe"));
         static const QList<QPair<QString, QString>> kinds{
             {QStringLiteral("guide"), QStringLiteral("Guide, drawn from a sequence")},
             {QStringLiteral("model"), QStringLiteral("Model, asked for a file")},
@@ -272,6 +272,8 @@ void RecipeGraphPanel::setRecipe(const graph::Recipe &recipe) {
 void RecipeGraphPanel::setWorkflow(const graph::Workflow &workflow) {
     const bool another = !showsWorkflow() || m_workflow.line != workflow.line || m_workflow.name != workflow.name;
     m_workflow = workflow;
+    // Its blanks are filled by the shot's steps, from a recipe or from the document.
+    m_workflow.graph.document = m_shot.document;
     setPlacementKey(m_placementKey);
     m_inspector->setWorkflow(m_workflow);
     m_view->setRecipe(m_workflow.graph);
@@ -314,9 +316,12 @@ void RecipeGraphPanel::refreshHead() {
     const graph::Recipe &recipe = m_shot;
     m_back->setVisible(showsWorkflow());
     m_title->setText(recipe.name);
-    // The shot's recipe; or, in a model's workflow, the model and the workflow it is run with.
+    // The shot's recipe, or that its steps are the document's; or, in a model's workflow,
+    // the model and the workflow it is run with.
     m_path->setText(showsWorkflow() ? QStringLiteral("%1 · %2").arg(m_workflow.model, m_workflow.isOwn() ? m_workflow.file : m_workflow.name)
-                                    : recipe.recipe);
+                    : recipe.document ? QStringLiteral("steps in the document")
+                                      : recipe.recipe);
+    const QString unread = recipe.document ? QStringLiteral("The steps do not read") : QStringLiteral("The recipe does not read");
     const graph::Node *takes = recipe.node(QStringLiteral("takes"));
     const bool has = takes && !takes->holds.value(QStringLiteral("takes")).toArray().isEmpty();
     const QString wants = takes ? takes->holds.value(QStringLiteral("wants")).toString() : QString();
@@ -327,7 +332,7 @@ void RecipeGraphPanel::refreshHead() {
         said = m_makingLine.isEmpty() ? QStringLiteral("Making take %1…").arg(m_makingTake) : QStringLiteral("Making take %1: %2").arg(m_makingTake).arg(m_makingLine);
         ink = tokens::activity::gpu;
     } else if (!recipe.error.isEmpty()) {
-        said = QStringLiteral("The recipe does not read");
+        said = unread;
         ink = status::failed;
     } else if (!recipe.cannot.isEmpty()) {
         said = QStringLiteral("Cannot be made as things stand");
@@ -345,7 +350,7 @@ void RecipeGraphPanel::refreshHead() {
     // A kit button is as wide as what it says when it is made: this one says another thing later.
     m_make->setFixedSize(m_make->sizeHint().width(), height::h28);
     const bool can = m_canMake && recipe.isValid() && recipe.error.isEmpty();
-    const QString why = !m_canMake ? m_cannotWhy : !recipe.error.isEmpty() ? QStringLiteral("The recipe does not read") : QString();
+    const QString why = !m_canMake ? m_cannotWhy : !recipe.error.isEmpty() ? unread : QString();
     m_make->setVisible(!m_making);
     m_several->setVisible(!m_making);
     // A step is added to the shot's recipe, not to a model's workflow, and to one that reads.
@@ -354,7 +359,9 @@ void RecipeGraphPanel::refreshHead() {
     m_stop->setVisible(m_making);
     m_make->setEnabled(can);
     m_several->setEnabled(can);
-    m_make->setTip(can ? QStringLiteral("Run the recipe and write a new take; what it runs is shown first") : why);
+    m_make->setTip(can ? (recipe.document ? QStringLiteral("Run its steps and write a new take; what it runs is shown first")
+                                          : QStringLiteral("Run the recipe and write a new take; what it runs is shown first"))
+                       : why);
     m_several->setTip(can ? QStringLiteral("Make two to four takes to choose among") : why);
     m_stop->setTip(QStringLiteral("Stop making: its step is asked to end, and no take is kept"));
 }

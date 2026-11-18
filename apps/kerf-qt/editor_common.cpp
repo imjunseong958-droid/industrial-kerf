@@ -219,10 +219,25 @@ QString recipeShotName(const QString &recipe) {
     return match.hasMatch() ? match.captured(1) : stem;
 }
 
+bool sourceStepsInDocument(const QJsonObject &source) {
+    return source.value(QStringLiteral("recipe")).toString().isEmpty() && source.value(QStringLiteral("steps")).toInt() > 0;
+}
+
+bool sourceIsMade(const QJsonObject &source) {
+    return !source.value(QStringLiteral("recipe")).toString().isEmpty() || sourceStepsInDocument(source);
+}
+
+QString sourceMadeFrom(const QJsonObject &source) {
+    if (const QString recipe = source.value(QStringLiteral("recipe")).toString(); !recipe.isEmpty()) return recipe;
+    return sourceStepsInDocument(source) ? QStringLiteral("its steps in the document") : QString();
+}
+
 QString sourceName(const QJsonObject &source) {
-    // A made shot's file is its take ("shots/boat.takes/001.mp4"): it is named for its recipe.
+    // A made shot's file is its take ("shots/boat.takes/001.mp4"): it is named for its recipe,
+    // or, made by steps in the document, it is its id, as its graph names it.
     const QString recipe = source.value(QStringLiteral("recipe")).toString();
     if (!recipe.isEmpty()) return recipeShotName(recipe);
+    if (sourceStepsInDocument(source)) return source.value(QStringLiteral("id")).toString();
     const QString path = source.value(QStringLiteral("path")).toString();
     return path.isEmpty() ? QStringLiteral("Untitled media") : withoutContentHash(QFileInfo(path).completeBaseName());
 }

@@ -188,8 +188,12 @@ void kerf_bridge_free(void *bridge);
 // without the streams the clips need is refused, naming them), copying it
 // into media/ the same way. media_make {media, confirmed?} makes a take of
 // a media that names a recipe (recipe= on its media line; a source says its
-// recipe). Without confirmed it runs nothing and answers media_make_plan
-// {media, recipe, command, steps, notes, take, file}: the recipe's file, its
+// recipe), or whose steps the document holds, written under its media line
+// with no recipe file (a source says steps, how many; the editor offers it
+// as Make… and Make Several where a recipe's is Make from Recipe…). Without
+// confirmed it runs nothing and answers media_make_plan
+// {media, recipe, command, steps, notes, take, file}: the recipe's file (the
+// empty string for steps in the document), its
 // steps as they would be run (command holds them a line each), what its
 // model has said it does not take (notes, none when the recipe asks only
 // what it takes), and the number and file of the take they would write, for

@@ -216,7 +216,8 @@ int RecipeInspector::heightFor(int most) const {
 }
 
 QString RecipeInspector::shape(const graph::Recipe &recipe, const Node &node) const {
-    QStringList parts{node.id, QString::number(int(node.kind)), QString::number(node.line), QString::number(graph::isMissing(node))};
+    QStringList parts{node.id, QString::number(int(node.kind)), QString::number(node.line), QString::number(graph::isMissing(node)),
+                      QString::number(recipe.document)};
     for (const QJsonValue value : node.holds.value(QStringLiteral("knobs")).toArray()) parts << value.toObject().value(QStringLiteral("name")).toString();
     for (const Edge &edge : recipe.into(node.id)) parts << QStringLiteral("%1[%2]<%3").arg(edge.port).arg(edge.nth).arg(edge.from);
     // A workflow's node: which inputs it has and what each is, and of a blank what the line gives.
@@ -296,10 +297,11 @@ QHash<QString, QString> RecipeInspector::values(const Node &node) const {
 }
 
 void RecipeInspector::setNode(const graph::Recipe &recipe, const QString &id) {
+    m_document = recipe.document;
     const Node *node = recipe.node(id);
     if (!node && recipe.parts) {
         // No node of a workflow chosen: the workflow itself, and what fills its blanks.
-        QStringList said{QStringLiteral("workflow"), m_workflow.name, m_workflow.origin, m_workflow.file, m_workflow.about};
+        QStringList said{QStringLiteral("workflow"), QString::number(recipe.document), m_workflow.name, m_workflow.origin, m_workflow.file, m_workflow.about};
         for (auto blank = m_workflow.blanks.constBegin(); blank != m_workflow.blanks.constEnd(); ++blank) said << blank.key() << blankSays(blank.key());
         const QString now = said.join(QLatin1Char('\x1f'));
         m_id.clear();
@@ -312,7 +314,7 @@ void RecipeInspector::setNode(const graph::Recipe &recipe, const QString &id) {
     }
     if (!node) {
         // No node chosen: the shot itself, and what is worth knowing before it is made.
-        const QString now = QStringList{QStringLiteral("shot"), QString::number(recipe.said), recipe.media, recipe.name, recipe.recipe, recipe.error, recipe.cannot,
+        const QString now = QStringList{QStringLiteral("shot"), QString::number(recipe.said), QString::number(recipe.document), recipe.media, recipe.name, recipe.recipe, recipe.error, recipe.cannot,
                                         recipe.modelsError, recipe.notes.join(QLatin1Char('\n'))}.join(QLatin1Char('\x1f'));
         m_id.clear();
         m_line = 0;
@@ -354,9 +356,9 @@ void RecipeInspector::rebuildShot(const graph::Recipe &recipe) {
         QLabel *title = text(recipe.name, tokens::title, ink);
         title->setObjectName(QStringLiteral("graphInspectorTitle"));
         m_column->addWidget(title);
-        addNote(recipe.recipe, ink3)->setFont(tokens::font(monoSmall));
+        addNote(recipe.document ? QStringLiteral("steps in the document") : recipe.recipe, ink3)->setFont(tokens::font(monoSmall));
         if (!recipe.error.isEmpty())
-            addNote(QStringLiteral("This recipe does not read: %1").arg(recipe.error), status::failed)->setObjectName(QStringLiteral("graphError"));
+            addNote((recipe.document ? QStringLiteral("These steps do not read: %1") : QStringLiteral("This recipe does not read: %1")).arg(recipe.error), status::failed)->setObjectName(QStringLiteral("graphError"));
         if (!recipe.cannot.isEmpty())
             addNote(QStringLiteral("It cannot be made as things stand: %1").arg(recipe.cannot), status::failed)->setObjectName(QStringLiteral("graphCannot"));
         if (!recipe.modelsError.isEmpty()) addNote(recipe.modelsError, status::failed);
@@ -366,8 +368,10 @@ void RecipeInspector::rebuildShot(const graph::Recipe &recipe) {
             for (const QString &note : recipe.notes) addNote(note, status::request)->setProperty("graphNote", true);
         }
         if (recipe.error.isEmpty() && recipe.said)
-            addNote(QStringLiteral("Choose a node to see and set what it holds. A change is written into the recipe, which keeps its "
-                                   "comments and its order; Make then writes a new take."));
+            addNote(recipe.document ? QStringLiteral("Choose a node to see and set what it holds. A change is written into the shot's steps in "
+                                                     "the document, as an edit that is undone as any other; Make then writes a new take.")
+                                    : QStringLiteral("Choose a node to see and set what it holds. A change is written into the recipe, which keeps its "
+                                                     "comments and its order; Make then writes a new take."));
     }
     m_column->addStretch(1);
     m_scroll->setWidget(m_content);
@@ -560,7 +564,8 @@ void RecipeInspector::rebuild(const graph::Recipe &recipe, const Node &node) {
             }
         }
         addNote(node.holds.value(QStringLiteral("path")).toString(), ink2)->setFont(tokens::font(timecode));
-        if (graph::isMissing(node)) addNote(QStringLiteral("This file is not there. The recipe cannot run until it is."), status::failed);
+        if (graph::isMissing(node)) addNote(m_document ? QStringLiteral("This file is not there. The steps cannot run until it is.")
+                                                       : QStringLiteral("This file is not there. The recipe cannot run until it is."), status::failed);
         break;
     }
     case Kind::Cast:
@@ -584,7 +589,8 @@ void RecipeInspector::rebuild(const graph::Recipe &recipe, const Node &node) {
         break;
     case Kind::Run:
         addNote(QStringLiteral("%1 %2").arg(node.holds.value(QStringLiteral("program")).toString(), node.detail), ink2)->setFont(tokens::font(timecode));
-        addNote(QStringLiteral("A program the recipe runs, in its own folder. Its line is the recipe's to edit as text."));
+        addNote(m_document ? QStringLiteral("A program the shot's steps run, in its own folder. Its line is the document's to edit as text.")
+                           : QStringLiteral("A program the recipe runs, in its own folder. Its line is the recipe's to edit as text."));
         buildReads(recipe, node);
         break;
     }
@@ -732,22 +738,24 @@ void RecipeInspector::rebuildWorkflow() {
         connect(drop, &QAbstractButton::clicked, this, [this, line = m_workflow.line] { emit workflowDropped(line); });
         m_column->addWidget(drop, 0, Qt::AlignLeft);
     } else {
-        origin = addNote(QStringLiteral("As it comes%1. Set a value in it and this shot keeps a copy with that change, beside its recipe, which its "
+        origin = addNote(QStringLiteral("As it comes%1. Set a value in it and this shot keeps a copy with that change, %2, which its "
                                         "line then runs. Nothing on the ComfyUI server, and nothing of kerf-comfy, is changed.")
                              .arg(m_workflow.origin == QLatin1String("file") ? QStringLiteral(", from the file your models entry names")
-                                                                             : QStringLiteral(" with kerf-comfy")),
+                                                                             : QStringLiteral(" with kerf-comfy"),
+                                  m_document ? QStringLiteral("in the project") : QStringLiteral("beside its recipe")),
                          ink2);
     }
     origin->setObjectName(QStringLiteral("graphWorkflowOrigin"));
     if (!m_workflow.blanks.isEmpty()) {
-        addSection(QStringLiteral("Blanks the recipe fills"));
+        addSection(m_document ? QStringLiteral("Blanks the steps fill") : QStringLiteral("Blanks the recipe fills"));
         for (auto blank = m_workflow.blanks.constBegin(); blank != m_workflow.blanks.constEnd(); ++blank) {
             QLabel *name = text(QStringLiteral("{%1}").arg(blank.key()), timecode, accentInk);
             m_column->addWidget(name);
             addNote(blankSays(blank.key()))->setProperty("graphBlank", blank.key());
         }
     }
-    addNote(QStringLiteral("Choose a node to see its inputs. A blank is set on the recipe's line; any other value is set here."));
+    addNote(m_document ? QStringLiteral("Choose a node to see its inputs. A blank is set on the step's line; any other value is set here.")
+                       : QStringLiteral("Choose a node to see its inputs. A blank is set on the recipe's line; any other value is set here."));
     m_column->addStretch(1);
     m_scroll->setWidget(m_content);
     m_content->show();
@@ -1082,7 +1090,9 @@ void RecipeInspector::buildPointing(const QString &clip, const QString &of) {
 void RecipeInspector::addRemoveStep(const Node &node) {
     auto *remove = new ui::GhostButton(QStringLiteral("Delete step"));
     remove->setObjectName(QStringLiteral("graphDeleteStep"));
-    remove->setTip(QStringLiteral("Take line %1 out of the recipe. A step whose file a later one reads, and the last, stay until that is changed").arg(node.line));
+    remove->setTip(QStringLiteral("Take line %1 out of %2. A step whose file a later one reads, and the last, stay until that is changed")
+                       .arg(node.line)
+                       .arg(m_document ? QStringLiteral("the shot's steps") : QStringLiteral("the recipe")));
     connect(remove, &QAbstractButton::clicked, this, [this, line = node.line] { emit stepRemoveRequested(line); });
     m_column->addWidget(remove, 0, Qt::AlignLeft);
 }
@@ -1093,7 +1103,8 @@ void RecipeInspector::buildTakes(const Node &node) {
     if (const QString wants = holds.value(QStringLiteral("wants")).toString(); !wants.isEmpty())
         addNote(QStringLiteral("Wants making: %1.").arg(wants), status::request)->setObjectName(QStringLiteral("graphWants"));
     if (takes.isEmpty()) {
-        addNote(QStringLiteral("No take yet. Make runs the recipe and writes the first; every take after it is kept beside it."));
+        addNote(m_document ? QStringLiteral("No take yet. Make runs its steps and writes the first; every take after it is kept beside it.")
+                           : QStringLiteral("No take yet. Make runs the recipe and writes the first; every take after it is kept beside it."));
         return;
     }
     addSection(QStringLiteral("Takes"));
@@ -1141,11 +1152,14 @@ void RecipeInspector::buildTakes(const Node &node) {
             take.value(QStringLiteral("changed")).toArray().isEmpty())
             continue;
         const int number = take.value(QStringLiteral("number")).toInt();
-        auto *restore = new ui::Button(QStringLiteral("Restore take %1's recipe").arg(number), ui::Button::Kind::Secondary);
+        auto *restore = new ui::Button(QStringLiteral("Restore take %1's %2").arg(number).arg(m_document ? QStringLiteral("steps") : QStringLiteral("recipe")),
+                                       ui::Button::Kind::Secondary);
         restore->setObjectName(QStringLiteral("graphRestoreTake"));
         restore->setEnabled(!m_making);
-        restore->setTip(QStringLiteral("Write the recipe back as take %1 was made from it: its words, its seeds, and the workflow it named. "
-                                       "The sequences and signals it was made from are the project's, and come back by undoing there").arg(number));
+        restore->setTip(QStringLiteral("Write %2 back as take %1 was made from it: its words, its seeds, and the workflow it named. "
+                                       "The sequences and signals it was made from are the project's, and come back by undoing there")
+                            .arg(number)
+                            .arg(m_document ? QStringLiteral("the shot's steps") : QStringLiteral("the recipe")));
         connect(restore, &QAbstractButton::clicked, this, [this, number] { emit takeRestoreRequested(number); });
         m_column->addWidget(restore, 0, Qt::AlignLeft);
     }

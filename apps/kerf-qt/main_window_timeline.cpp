@@ -541,9 +541,9 @@ void MainWindow::wireTimeline() {
         triggerCommand(QStringLiteral("ai.ask"));
     });
     // A double-click goes into a clip: one that plays a shot made from a
-    // recipe opens how it is made.
+    // recipe, or from steps in the document, opens how it is made.
     connect(m_timeline, &TimelineWidget::clipActivated, this, [this](const QString &id) {
-        if (const QString media = clipMedia(id); !mediaRecipe(media).isEmpty()) showGraph(media);
+        if (const QString media = clipMedia(id); mediaIsMade(media)) showGraph(media);
     });
     connect(m_timeline, &TimelineWidget::clipMenuRequested, this, [this](const QString &clip, const QPoint &at) {
         QMenu menu(this);
@@ -554,7 +554,7 @@ void MainWindow::wireTimeline() {
             else menu.addAction(m_commands->action(id));
         }
         if (canStartMotionPath(selectedClipObject())) menu.addAction(m_commands->action(QStringLiteral("clip.startPath")));
-        if (const QString media = clipMedia(clip); !mediaRecipe(media).isEmpty()) {
+        if (const QString media = clipMedia(clip); mediaIsMade(media)) {
             menu.addSeparator();
             QAction *graph = menu.addAction(QStringLiteral("Open Graph"));
             graph->setObjectName(QStringLiteral("clipGraph"));

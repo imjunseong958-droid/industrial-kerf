@@ -120,6 +120,14 @@ QString sourceFileName(const QJsonObject &source);
 // A made shot's name, from its recipe's path: "shots/open@2.kerfrecipe", the recipe's
 // next version, is still "open".
 QString recipeShotName(const QString &recipe);
+// Whether a source is a shot Kerf makes: one that names a recipe file (`recipe`) or
+// whose steps the document holds under its media line (`steps`, how many there are).
+bool sourceIsMade(const QJsonObject &source);
+// Whether a made source's steps are the document's own, with no recipe file.
+bool sourceStepsInDocument(const QJsonObject &source);
+// Where a made source is made from, to follow "from" or "running" in a sentence: its
+// recipe's path, or "its steps in the document". Empty for a source not made.
+QString sourceMadeFrom(const QJsonObject &source);
 // Every source's name by id, told apart where they would read the same:
 // two media named "Beach Day" are "Beach Day.mov" and "Beach Day.wav", and
 // two "Interview.mov" keep their copies' names, hash and all, so the bin,

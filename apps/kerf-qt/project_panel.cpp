@@ -76,10 +76,10 @@ void paintCheckerboard(QPainter &painter, const QRectF &rect) {
 // at its own shape (black either side when it is narrower), over the
 // checkerboard when it has alpha; sound is its waveform on raised; a picture
 // not decoded yet is black with the film symbol; offline media says so, and a
-// shot its recipe has not made yet is a dashed hole saying that. The duration
+// shot its recipe or its steps have not made yet is a dashed hole saying that. The duration
 // badge sits at right 4, bottom 4; another status is a dot.
 QIcon tile(const QImage &frame, const AudioPeaks &peaks, bool audio, bool alpha, const QString &badge,
-           const QString &duration, qreal ratio, bool recipe) {
+           const QString &duration, qreal ratio, bool made) {
     QPixmap pixmap(QSize(int(std::ceil(kThumbnail.width() * ratio)), int(std::ceil(kThumbnail.height() * ratio))));
     pixmap.setDevicePixelRatio(ratio);
     pixmap.fill(Qt::transparent);
@@ -90,7 +90,7 @@ QIcon tile(const QImage &frame, const AudioPeaks &peaks, bool audio, bool alpha,
     round.addRoundedRect(box, kThumbRadius, kThumbRadius);
     painter.setClipPath(round);
     const bool offline = badge == kOffline;
-    if (offline && recipe) {
+    if (offline && made) {
         painter.fillRect(box, color(tokens::well));
         QPen dashed(color(tokens::lineh), 1, Qt::CustomDashLine);
         dashed.setDashPattern({3, 3});
@@ -745,7 +745,7 @@ QIcon ProjectPanel::tileFor(const QJsonObject &source) const {
     const bool alpha = pixelFormatHasAlpha(m_info.value(id).value(QStringLiteral("pixFmt")).toString());
     return tile(m_artwork ? m_artwork->frames.value(id) : QImage(), m_artwork ? m_artwork->peaks.value(id) : AudioPeaks(), audio,
                 alpha, m_badges.value(id), badgeText(source.value(QStringLiteral("duration")).toDouble(), m_fps), devicePixelRatioF(),
-                !source.value(QStringLiteral("recipe")).toString().isEmpty());
+                sourceIsMade(source));
 }
 
 void ProjectPanel::setMediaActivity(const QHash<QString, activity::MediaActivity> &media) {
@@ -817,11 +817,10 @@ QString ProjectPanel::statusText(const QJsonObject &source, const activity::Medi
     case State::Ready: break;
     }
     if (badge == kOffline)
-        return source.value(QStringLiteral("recipe")).toString().isEmpty() ? QStringLiteral("Offline · file missing")
-                                                                           : QStringLiteral("Not made yet");
+        return sourceIsMade(source) ? QStringLiteral("Not made yet") : QStringLiteral("Offline · file missing");
     if (badge == kNotDownloaded) return joined({kNotDownloaded});
     if (!wants.isEmpty()) return QStringLiteral("Wants making · %1").arg(wants);
-    if (!source.value(QStringLiteral("recipe")).toString().isEmpty()) {
+    if (sourceIsMade(source)) {
         QStringList parts{QStringLiteral("Made"), QStringLiteral("shot")};
         const QJsonArray takes = source.value(QStringLiteral("takes")).toArray();
         int chosen = 0;

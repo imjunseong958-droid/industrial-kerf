@@ -86,10 +86,14 @@ struct Edge {
 // A media's recipe, as a `recipe` event says it.
 struct Recipe {
     QString media;
-    // The recipe as the document names it, and the shot's name.
+    // The recipe as the document names it, and the shot's name. A media made by
+    // steps written under its line in the document has no recipe file: `recipe`
+    // is empty, `document` is set, and its name is the media's id.
     QString recipe;
     QString name;
-    // Its text, as its file holds it: what a change is made to.
+    bool document = false;
+    // Its text, as its file holds it (for steps in the document, those steps as the
+    // bridge says them, after a `kerf-recipe 1` line): what a change is made to.
     QString text;
     QList<Node> nodes;
     QList<Edge> edges;

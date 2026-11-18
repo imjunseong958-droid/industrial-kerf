@@ -1429,8 +1429,9 @@ void MainWindow::routeEvent(const QJsonObject &event) {
     } else if (type == QStringLiteral("models")) {
         applyModels(event);
     } else if (type == QStringLiteral("media_make_plan")) {
-        // Nothing has run: the recipe's steps run only on a yes here.
-        if (QMessageBox::question(this, QStringLiteral("Make from Recipe"), makeQuestion(event), QMessageBox::Yes | QMessageBox::No,
+        // Nothing has run: the steps run only on a yes here. Steps in the document come with no recipe.
+        const QString title = event.value(QStringLiteral("recipe")).toString().isEmpty() ? QStringLiteral("Make") : QStringLiteral("Make from Recipe");
+        if (QMessageBox::question(this, title, makeQuestion(event), QMessageBox::Yes | QMessageBox::No,
                                   QMessageBox::No) == QMessageBox::Yes)
             runMake(event.value(QStringLiteral("media")).toString(), event.value(QStringLiteral("rolls")).toInt(1));
     } else if (type == QStringLiteral("cast")) {
@@ -1451,14 +1452,16 @@ void MainWindow::routeEvent(const QJsonObject &event) {
         if (state == m_makingState.end() || state->take != take)
             state = m_makingState.insert(media, activity::Making{take, QString(), activity::clock()});
         state->line = event.value(QStringLiteral("line")).toString();
-        showStatus(makingStatus(event, mediaName(media)));
+        showStatus(makingStatus(event, mediaName(media), sourceStepsInDocument(mediaSource(media))));
     } else if (type == QStringLiteral("media_made")) {
         m_making.remove(event.value(QStringLiteral("media")).toString());
         m_makingState.remove(event.value(QStringLiteral("media")).toString());
         m_wantsMaking.remove(event.value(QStringLiteral("media")).toString());
-        showStatus(QStringLiteral("Made take %2 of %1 from its recipe")
-                       .arg(mediaName(event.value(QStringLiteral("media")).toString()))
-                       .arg(event.value(QStringLiteral("take")).toInt()),
+        const QString media = event.value(QStringLiteral("media")).toString();
+        showStatus(QStringLiteral("Made take %2 of %1 from its %3")
+                       .arg(mediaName(media))
+                       .arg(event.value(QStringLiteral("take")).toInt())
+                       .arg(sourceStepsInDocument(mediaSource(media)) ? QStringLiteral("steps") : QStringLiteral("recipe")),
                    6000);
     } else if (type == QStringLiteral("media_make_cancelled")) {
         const QString media = event.value(QStringLiteral("media")).toString();

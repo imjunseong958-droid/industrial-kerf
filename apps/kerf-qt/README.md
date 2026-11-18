@@ -526,8 +526,10 @@ Version.
 File ▸ Save Current as Preset… adds the program sequence to the project's
 `presets/`, which travels with the repository. Right-click media in the Project bin to Replace Media… (swap the
 file behind the media for everyone; its clips keep their timing), Reveal in
-Finder, or Consolidate Media. Bin items show Offline when the file is
-missing, Not downloaded for a Git LFS file a sync has not fetched, and
+Finder, or Consolidate Media. A shot Kerf makes also offers Open Graph, Make
+from Recipe… and Make Several from Recipe (Make… and Make Several where its
+steps are the document's own), and Takes. Bin items show Offline when the file is
+missing (Not made for a shot not made yet), Not downloaded for a Git LFS file a sync has not fetched, and
 External when it lives outside the project folder.
 
 ## A shot's graph
@@ -537,6 +539,19 @@ how it is made: Open Graph on the media in the bin or on its clip's menu, or a
 double-click on its clip. It opens over the window, as Settings does
 (`ui/recipe_graph_panel.h`), and Esc, its close or a press on the dim gives the
 window back.
+
+A shot's steps can also be the document's own, written under its media line
+with no recipe file (a source with `steps`, how many, and no `recipe`). The
+editor offers and shows such a media as one a recipe makes (`sourceIsMade` and
+`sourceMadeFrom` in `editor_common.h`, `MainWindow::mediaIsMade`): its graph,
+Make… and Make Several, Takes, Not made while its file is not there. It goes by
+its id, where a recipe's shot goes by the recipe's name, and the make question
+and the activity say it comes from its steps in the document. Its graph is a
+`recipe` event with `document: true`, `recipe` empty and `name` its id, whose
+`text` is the steps after a `kerf-recipe 1` line; each change carries that text
+as `was`, as a recipe's does, and the bridge makes it one undoable edit of the
+document. The graph then says steps where it would say the recipe (Restore
+take 3's steps), and its cards are kept by the project and the media's id.
 
 The graph is the recipe, read by the engine and laid out (`recipe_get` answers
 `recipe`, from `kerf_engine::recipe::graph`): a card for each step, a `render`
