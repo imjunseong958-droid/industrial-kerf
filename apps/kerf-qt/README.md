@@ -493,7 +493,11 @@ CLI is signed in, naming the account) or a remote URL publishes it. Recent lists
 lately with their branch and last edit. From Preset starts a project from a
 shared preset: pick one from your projects' `presets/` folders or any
 `.kerfpreset`, then choose a file for each media slot; each slot says what
-it needs, and Choose waits until every file fits. Clone from GitHub copies a
+it needs, and Choose waits until every file fits. Media the preset makes (a
+matte or plate of a slot's footage, or a shot from a guide sequence) is
+listed under Made by the preset, each with its steps in a tooltip: it takes
+no file, and is made after applying, with Make… in the bin. A slot such
+media is made of says so ("man and gone are made of this"). Clone from GitHub copies a
 shared project by its Git address. Open an Existing Project… opens any
 folder. Choose explains in the footer why it is unavailable, shows progress
 while the folder is made or cloned, and reports what went wrong.
@@ -722,7 +726,10 @@ compositor.
 File → Export Editing Preset… saves the accepted edit as a portable
 `.kerfpreset` containing media slots and Kerf editing code. File → Import
 Editing Preset… opens a native dialog to assign media from the Project bin,
-set source starts, change title/caption text, and inspect the code. Create
+set source starts, change title/caption text, and inspect the code. Media
+the preset makes is listed under Makes ("man, a matte of slot1", its steps
+in a tooltip) and asks for nothing: it is made after applying, with Make…
+in the bin, and Create Proposal waits for the slots alone. Create
 proposal opens the normal timeline review before acceptance. See the
 [preset contract](../../docs/presets.md).
 

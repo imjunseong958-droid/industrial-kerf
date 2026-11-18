@@ -269,6 +269,58 @@ private slots:
             {"bindings", QJsonObject{{"slot1", QJsonObject{{"file", "/clips/long.mov"}, {"from", "1.50s"}}},
                                      {"slot2", QJsonObject{{"file", "/clips/short.mov"}}}}},
             {"texts", QJsonObject{{"c4", "New title"}}}}));
+        // A preset with no made media says nothing about making.
+        QCOMPARE(fromPreset.m_presetTitle->text(), QStringLiteral("Intro  ·  2 media slots"));
+        for (auto *label : fromPreset.m_presetSlots->findChildren<QLabel *>())
+            QVERIFY(!label->text().contains(QStringLiteral("made"), Qt::CaseInsensitive));
+
+        // A preset that makes media: they are listed apart from its one slot,
+        // take no file, and Choose waits for the slot alone. The bridge's
+        // inspection has no readBy: the slot's makings are read from the steps.
+        ProjectLauncher makes;
+        makes.m_inspectPreset = [](const QJsonObject &request) {
+            if (!request.contains("files"))
+                return QJsonObject{{"name", "Moved"}, {"texts", QJsonObject{}}, {"slots", QJsonArray{
+                    QJsonObject{{"id", "slot1"}, {"seconds", 5}, {"video", true}, {"audio", false}, {"clips", 1}}}},
+                    {"made", QJsonArray{
+                        QJsonObject{{"id", "man"}, {"of", "slot1"}, {"clips", 1},
+                            {"steps", QJsonArray{"generate model=matte prompt=\"man\" guide=slot:slot1"}}},
+                        QJsonObject{{"id", "gone"}, {"of", "slot1"}, {"clips", 1},
+                            {"steps", QJsonArray{"generate model=matte prompt=\"man\" guide=slot:slot1 out={man.mp4}",
+                                                 "generate model=plate prompt=\"an empty dirt path\" guide=slot:slot1 guide_mask={man.mp4}"}}}}}};
+            QJsonArray files;
+            for (const QJsonValue &file : request.value("files").toArray())
+                files.append(QJsonObject{{"path", file}, {"seconds", 6}, {"video", true}, {"audio", false}, {"fits", QJsonArray{"slot1"}}});
+            return QJsonObject{{"files", files}};
+        };
+        makes.showPage(ProjectLauncher::FromPreset);
+        makes.m_name->setText(QStringLiteral("Walk"));
+        makes.m_location->setText(location);
+        makes.loadPreset(QStringLiteral("/library/moved.kerfpreset"));
+        QCOMPARE(makes.m_presetTitle->text(), QStringLiteral("Moved  ·  1 media slot  ·  makes 2"));
+        QCOMPARE(makes.m_slotOrder, QStringList{"slot1"});
+        QVERIFY(!makes.findChild<QPushButton *>(QStringLiteral("presetSlotFile_man")));
+        QVERIFY(!makes.findChild<QPushButton *>(QStringLiteral("presetSlotFile_gone")));
+        QCOMPARE(makes.m_presetSlots->findChildren<QPushButton *>().size(), 1);
+        QHash<QString, QLabel *> madeLabels;
+        QStringList shown;
+        for (auto *label : makes.m_presetSlots->findChildren<QLabel *>()) {
+            shown << label->text();
+            if (label->property("presetMade").isValid()) madeLabels.insert(label->property("presetMade").toString(), label);
+        }
+        QCOMPARE(madeLabels.value("man")->text(), QStringLiteral("A matte of slot1 · 1 clip"));
+        QCOMPARE(madeLabels.value("gone")->text(), QStringLiteral("A plate of slot1 · 1 clip"));
+        QVERIFY(madeLabels.value("gone")->toolTip().contains(QStringLiteral("model=plate")));
+        QVERIFY(shown.contains(QStringLiteral("Made by the preset  ·  2 media")));
+        QVERIFY(shown.contains(QStringLiteral("man and gone are made of this")));
+        QVERIFY(shown.contains(QStringLiteral("Made after applying, with Make… in the bin.")));
+        QCOMPARE(shown.count(QStringLiteral("No file needed")), 2);
+        QCOMPARE(makes.m_problem->text(), QStringLiteral("Choose a file for each media slot"));
+        makes.setSlotFile(QStringLiteral("slot1"), QStringLiteral("/clips/walk.mov"));
+        QVERIFY(makes.m_choose->isEnabled());
+        makes.m_choose->click();
+        QCOMPARE(makes.m_requests.last().value("preset").toObject().value("bindings").toObject(),
+                 (QJsonObject{{"slot1", QJsonObject{{"file", "/clips/walk.mov"}}}}));
 
         // File ▸ Open Recent opens a project in a new window.
         MainWindow window{taken, QString()};

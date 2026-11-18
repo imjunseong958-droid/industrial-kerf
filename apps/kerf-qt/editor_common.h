@@ -128,6 +128,16 @@ bool sourceStepsInDocument(const QJsonObject &source);
 // Where a made source is made from, to follow "from" or "running" in a sentence: its
 // recipe's path, or "its steps in the document". Empty for a source not made.
 QString sourceMadeFrom(const QJsonObject &source);
+// What a media a preset makes (an entry of its `made`) is, in words, from the
+// model its last step runs and the slot it is of: "a matte of slot1", "a plate
+// of slot1", "a shot from a guide sequence", or "made from its steps".
+QString presetMadeKind(const QJsonObject &made);
+// The ids of the media `preset` makes whose steps read `slot`: the slot's
+// `readBy`, or, where the inspection leaves it out, the made media whose steps
+// name `slot:<id>`.
+QStringList presetSlotReadBy(const QJsonObject &preset, const QJsonObject &slot);
+// Said under such a slot: "man is made of this", "man and gone are made of this".
+QString presetReadByLine(const QStringList &made);
 // Every source's name by id, told apart where they would read the same:
 // two media named "Beach Day" are "Beach Day.mov" and "Beach Day.wav", and
 // two "Interview.mov" keep their copies' names, hash and all, so the bin,

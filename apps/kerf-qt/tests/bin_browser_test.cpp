@@ -174,6 +174,102 @@ private slots:
         QCOMPARE(request.value("texts").toObject().value("title1").toString(), QStringLiteral("New title"));
     }
 
+    // What a preset makes is shown beside its slots, read-only: nothing asks
+    // for its media, and Create Proposal waits for the slots alone.
+    void presetDialogShowsWhatThePresetMakes() {
+        QTemporaryDir project;
+        QVERIFY(project.isValid());
+        MainWindow window{project.path(), QString()};
+        const QString path = QDir(project.path()).filePath(QStringLiteral("moved.kerfpreset"));
+        window.setConnection(QStringLiteral("ready"));
+        window.applySnapshot(QJsonObject{{"revision", 3}, {"duration", 4}, {"timeline", QJsonObject{
+            {"fps", 16}, {"sources", QJsonArray{
+                QJsonObject{{"id", "other"}, {"path", "other.mp4"}, {"width", 832}, {"duration", 6}, {"fps", 16}}}},
+            {"tracks", QJsonArray{}}}}});
+        const QJsonArray made{
+            QJsonObject{{"id", "man"}, {"path", "made:man.mp4"}, {"of", "slot1"}, {"clips", QJsonArray{}},
+                {"steps", QJsonArray{"generate model=matte prompt=\"man\" guide=slot:slot1"}}},
+            QJsonObject{{"id", "gone"}, {"path", "made:gone.mp4"}, {"of", "slot1"}, {"clips", QJsonArray{}},
+                {"steps", QJsonArray{"generate model=matte prompt=\"man\" guide=slot:slot1 out={man.mp4}",
+                                     "generate model=plate prompt=\"an empty dirt path\" guide=slot:slot1 guide_mask={man.mp4} seed=7 reach=72"}}}};
+        const auto slot = [](bool readBy) {
+            QJsonObject slot{{"id", "slot1"}, {"seconds", 5}, {"video", true}, {"audio", false},
+                {"clips", QJsonArray{QJsonObject{{"id", "mover"}, {"sequence", "s2"}, {"track", "V2"}, {"at", "00:00:00:00"}}}},
+                {"fits", QJsonArray{QJsonObject{{"media", "other"}, {"latestFrame", 15}}}}};
+            if (readBy) slot.insert("readBy", QJsonArray{"man", "gone"});
+            return slot;
+        };
+        // With readBy as kerfd gives it, and without, where it is read from the steps.
+        for (const bool readBy : {true, false}) {
+            QTimer::singleShot(0, &window, [&window] {
+                auto *dialog = window.findChild<QDialog *>(QStringLiteral("presetBindingsDialog"));
+                QVERIFY(dialog);
+                QTimer::singleShot(2000, dialog, &QDialog::reject);
+                auto *man = dialog->findChild<QLabel *>(QStringLiteral("presetMade_man"));
+                auto *gone = dialog->findChild<QLabel *>(QStringLiteral("presetMade_gone"));
+                QVERIFY(man && gone);
+                QCOMPARE(man->text(), QStringLiteral("man, a matte of slot1"));
+                QCOMPARE(gone->text(), QStringLiteral("gone, a plate of slot1"));
+                QCOMPARE(man->toolTip(), QStringLiteral("generate model=matte prompt=\"man\" guide=slot:slot1"));
+                QVERIFY(gone->toolTip().contains(QStringLiteral("\ngenerate model=plate")));
+                QStringList muted;
+                for (auto *label : dialog->findChildren<QLabel *>(QStringLiteral("muted"))) muted << label->text();
+                QVERIFY(muted.contains(QStringLiteral("man and gone are made of this")));
+                QVERIFY(muted.contains(QStringLiteral("Made after applying, with Make… in the bin. They need no file.")));
+                // Only the slot is bound.
+                QCOMPARE(dialog->findChildren<QComboBox *>().size(), 1);
+                QVERIFY(!dialog->findChild<QComboBox *>(QStringLiteral("presetMedia_man")));
+                QVERIFY(!dialog->findChild<QComboBox *>(QStringLiteral("presetMedia_gone")));
+                auto *choice = dialog->findChild<QComboBox *>(QStringLiteral("presetMedia_slot1"));
+                auto *buttons = dialog->findChild<QDialogButtonBox *>();
+                QVERIFY(choice && buttons);
+                QVERIFY(!buttons->button(QDialogButtonBox::Ok)->isEnabled());
+                choice->setCurrentIndex(1);
+                QVERIFY(buttons->button(QDialogButtonBox::Ok)->isEnabled());
+                buttons->button(QDialogButtonBox::Ok)->click();
+            });
+            window.m_lastCommand = QJsonObject{};
+            window.showPresetBindings(path, QJsonObject{{"name", "Moved"}, {"document", "kerf 1\n"}, {"sequence", "s2"},
+                {"slots", QJsonArray{slot(readBy)}}, {"made", made}, {"textSlots", QJsonObject{}}});
+            const QJsonObject request = window.m_lastCommand;
+            QCOMPARE(request.value("type").toString(), QStringLiteral("preset_apply"));
+            QCOMPARE(request.value("bindings").toObject().keys(), QStringList{"slot1"});
+        }
+
+        // A preset that only makes: nothing to choose, so it can be applied at once.
+        QTimer::singleShot(0, &window, [&window] {
+            auto *dialog = window.findChild<QDialog *>(QStringLiteral("presetBindingsDialog"));
+            QVERIFY(dialog);
+            QTimer::singleShot(2000, dialog, &QDialog::reject);
+            auto *depth = dialog->findChild<QLabel *>(QStringLiteral("presetMade_depth"));
+            QVERIFY(depth);
+            QCOMPARE(depth->text(), QStringLiteral("depth, a shot from a guide sequence"));
+            QVERIFY(dialog->findChildren<QComboBox *>().isEmpty());
+            auto *buttons = dialog->findChild<QDialogButtonBox *>();
+            QVERIFY(buttons && buttons->button(QDialogButtonBox::Ok)->isEnabled());
+            buttons->button(QDialogButtonBox::Ok)->click();
+        });
+        window.m_lastCommand = QJsonObject{};
+        window.showPresetBindings(path, QJsonObject{{"name", "Car"}, {"document", "kerf 1\n"}, {"sequence", "s1"},
+            {"slots", QJsonArray{}}, {"textSlots", QJsonObject{}},
+            {"made", QJsonArray{QJsonObject{{"id", "depth"}, {"path", "made:depth.mp4"}, {"of", QJsonValue::Null},
+                {"steps", QJsonArray{"render s2 {guide.mp4} pass=depth size=832x480 rate=16",
+                                     "generate model=shot prompt=\"a red sports car\" guide={guide.mp4} moves=body seconds=4 seed=7"}}}}}});
+        QCOMPARE(window.m_lastCommand.value("bindings").toObject(), QJsonObject{});
+
+        // Without made, nothing about making is said.
+        QTimer::singleShot(0, &window, [&window] {
+            auto *dialog = window.findChild<QDialog *>(QStringLiteral("presetBindingsDialog"));
+            QVERIFY(dialog);
+            QTimer::singleShot(2000, dialog, &QDialog::reject);
+            QVERIFY(!dialog->findChild<QWidget *>(QStringLiteral("presetMade")));
+            for (auto *label : dialog->findChildren<QLabel *>()) QVERIFY(!label->text().contains(QStringLiteral("made")));
+            dialog->reject();
+        });
+        window.showPresetBindings(path, QJsonObject{{"name", "Plain"}, {"document", "kerf 1\n"}, {"sequence", "s2"},
+            {"slots", QJsonArray{slot(false)}}, {"textSlots", QJsonObject{}}});
+    }
+
     // Media is named as it was imported: the content hash media.rs gives the
     // copy, and the extension, stay out of the bin, timeline and Inspector.
     void mediaIsNamedWithoutItsContentHash() {

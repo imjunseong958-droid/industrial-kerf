@@ -232,6 +232,52 @@ QString sourceMadeFrom(const QJsonObject &source) {
     return sourceStepsInDocument(source) ? QStringLiteral("its steps in the document") : QString();
 }
 
+QString presetMadeKind(const QJsonObject &made) {
+    const QJsonArray steps = made.value(QStringLiteral("steps")).toArray();
+    static const QRegularExpression modelWord(QStringLiteral("(?:^|\\s)model=(\\w+)"));
+    QString model;
+    bool drawn = false;
+    for (const QJsonValue &step : steps) {
+        const QString line = step.toString();
+        if (line.startsWith(QStringLiteral("render "))) drawn = true;
+        if (const QRegularExpressionMatch match = modelWord.match(line); match.hasMatch()) model = match.captured(1);
+    }
+    const QString of = made.value(QStringLiteral("of")).toString();
+    if (model.isEmpty()) return of.isEmpty() ? QStringLiteral("made from its steps") : QStringLiteral("made of %1").arg(of);
+    static const QString vowels = QStringLiteral("aeiou");
+    const QString article = vowels.contains(model.front().toLower()) ? QStringLiteral("an") : QStringLiteral("a");
+    if (!of.isEmpty()) return QStringLiteral("%1 %2 of %3").arg(article, model, of);
+    return drawn ? QStringLiteral("%1 %2 from a guide sequence").arg(article, model) : QStringLiteral("%1 %2").arg(article, model);
+}
+
+QStringList presetSlotReadBy(const QJsonObject &preset, const QJsonObject &slot) {
+    if (slot.contains(QStringLiteral("readBy"))) {
+        QStringList ids;
+        for (const QJsonValue &id : slot.value(QStringLiteral("readBy")).toArray()) ids << id.toString();
+        return ids;
+    }
+    const QString id = slot.value(QStringLiteral("id")).toString();
+    if (id.isEmpty()) return {};
+    const QRegularExpression reads(QStringLiteral("(?:^|[\\s=])slot:%1(?=$|[\\s,}])").arg(QRegularExpression::escape(id)));
+    QStringList ids;
+    for (const QJsonValue &value : preset.value(QStringLiteral("made")).toArray()) {
+        const QJsonObject made = value.toObject();
+        for (const QJsonValue &step : made.value(QStringLiteral("steps")).toArray()) {
+            if (reads.match(step.toString()).hasMatch()) {
+                ids << made.value(QStringLiteral("id")).toString();
+                break;
+            }
+        }
+    }
+    return ids;
+}
+
+QString presetReadByLine(const QStringList &made) {
+    if (made.isEmpty()) return {};
+    if (made.size() == 1) return QStringLiteral("%1 is made of this").arg(made.first());
+    return QStringLiteral("%1 and %2 are made of this").arg(made.mid(0, made.size() - 1).join(QStringLiteral(", ")), made.last());
+}
+
 QString sourceName(const QJsonObject &source) {
     // A made shot's file is its take ("shots/boat.takes/001.mp4"): it is named for its recipe,
     // or, made by steps in the document, it is its id, as its graph names it.

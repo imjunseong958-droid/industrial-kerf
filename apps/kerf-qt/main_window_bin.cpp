@@ -194,11 +194,46 @@ void MainWindow::showPresetBindings(const QString &path, const QJsonObject &pres
         rowLayout->addWidget(choice, 0, 0);
         rowLayout->addWidget(from, 0, 1);
         rowLayout->addWidget(usedBy, 1, 0, 1, 2);
+        // The media the preset makes of this slot's footage: what is chosen
+        // here decides what they are made of.
+        if (const QString readBy = presetReadByLine(presetSlotReadBy(preset, slot)); !readBy.isEmpty()) {
+            auto *madeOf = new QLabel(readBy);
+            madeOf->setObjectName(QStringLiteral("muted"));
+            madeOf->setProperty("presetReadBy", id);
+            madeOf->setWordWrap(true);
+            rowLayout->addWidget(madeOf, 2, 0, 1, 2);
+        }
         rowLayout->setColumnStretch(0, 1);
         rowLayout->setColumnStretch(1, 0);
         form->addRow(QStringLiteral("%1 · %2 s").arg(id).arg(slot.value(QStringLiteral("seconds")).toDouble(), 0, 'f', 3), row);
         media.insert(id, choice);
         starts.insert(id, from);
+    }
+    // The media the preset makes: shown, never bound. Applying adds them to
+    // the project with their steps; Make… in the bin makes them.
+    const QJsonArray made = preset.value(QStringLiteral("made")).toArray();
+    if (!made.isEmpty()) {
+        auto *makes = new QWidget;
+        makes->setObjectName(QStringLiteral("presetMade"));
+        auto *makesLayout = new QVBoxLayout(makes);
+        makesLayout->setContentsMargins(0, 0, 0, 0);
+        makesLayout->setSpacing(4);
+        for (const QJsonValue &value : made) {
+            const QJsonObject entry = value.toObject();
+            const QString id = entry.value(QStringLiteral("id")).toString();
+            auto *line = new QLabel(QStringLiteral("%1, %2").arg(id, presetMadeKind(entry)));
+            line->setObjectName(QStringLiteral("presetMade_%1").arg(id));
+            line->setWordWrap(true);
+            QStringList steps;
+            for (const QJsonValue &step : entry.value(QStringLiteral("steps")).toArray()) steps << step.toString();
+            line->setToolTip(steps.join(QLatin1Char('\n')));
+            makesLayout->addWidget(line);
+        }
+        auto *note = new QLabel(QStringLiteral("Made after applying, with Make… in the bin. They need no file."));
+        note->setObjectName(QStringLiteral("muted"));
+        note->setWordWrap(true);
+        makesLayout->addWidget(note);
+        form->addRow(QStringLiteral("Makes"), makes);
     }
     // Text slots by number, as the launcher shows them; their clip ids are
     // the document's names, in the tooltip.

@@ -1329,10 +1329,13 @@ void ProjectLauncher::showPreset(const QString &path, const QJsonObject &preset)
         return;
     }
     const QJsonArray mediaSlots = preset.value(QStringLiteral("slots")).toArray();
-    m_presetTitle->setText(QStringLiteral("%1  ·  %2 media slot%3")
-                               .arg(preset.value(QStringLiteral("name")).toString(QFileInfo(path).completeBaseName()))
-                               .arg(mediaSlots.size())
-                               .arg(mediaSlots.size() == 1 ? QString() : QStringLiteral("s")));
+    const QJsonArray made = preset.value(QStringLiteral("made")).toArray();
+    QString title = QStringLiteral("%1  ·  %2 media slot%3")
+                        .arg(preset.value(QStringLiteral("name")).toString(QFileInfo(path).completeBaseName()))
+                        .arg(mediaSlots.size())
+                        .arg(mediaSlots.size() == 1 ? QString() : QStringLiteral("s"));
+    if (!made.isEmpty()) title += QStringLiteral("  ·  makes %1").arg(made.size());
+    m_presetTitle->setText(title);
     // The slots, then the preset's texts, each as a grouped list. Every row
     // shares one grid: what a slot needs, what its file gives, then where it
     // starts and the file button in a fixed tail. A text's field starts
@@ -1395,6 +1398,15 @@ void ProjectLauncher::showPreset(const QString &path, const QJsonObject &preset)
         detail->setObjectName(QStringLiteral("launcherHint"));
         detail->setToolTip(detail->text());
         grid->addWidget(detail, 1, 0);
+        // The media the preset makes of this slot's footage: the file
+        // chosen here decides what they are made of.
+        if (const QString readBy = presetReadByLine(presetSlotReadBy(preset, slot)); !readBy.isEmpty()) {
+            auto *madeOf = cell(new ElidedLabel(readBy, Qt::ElideRight));
+            madeOf->setObjectName(QStringLiteral("launcherHint"));
+            madeOf->setProperty("presetReadBy", id);
+            madeOf->setToolTip(readBy);
+            grid->addWidget(madeOf, 2, 0, 1, 2);
+        }
         auto *status = cell(new ElidedLabel(QStringLiteral("No file chosen"), Qt::ElideRight));
         status->setObjectName(QStringLiteral("presetSlotStatus_%1").arg(id));
         status->setProperty("fit", QStringLiteral("none"));
@@ -1429,6 +1441,52 @@ void ProjectLauncher::showPreset(const QString &path, const QJsonObject &preset)
         m_slotStatus.insert(id, status);
         m_slotStarts.insert(id, start);
         slotRows->addWidget(frame);
+    }
+    // The media the preset makes: shown, never bound. They take no file;
+    // the new project gets them with their steps, made with Make… in the bin.
+    if (!made.isEmpty()) {
+        if (row > 0) m_presetSlotsLayout->insertSpacing(row++, 18);
+        auto *heading = new QLabel(QStringLiteral("Made by the preset  ·  %1 media").arg(made.size()));
+        heading->setObjectName(QStringLiteral("launcherEyebrow"));
+        m_presetSlotsLayout->insertWidget(row++, heading);
+        m_presetSlotsLayout->insertSpacing(row++, 8);
+        QVBoxLayout *madeRows = addGroup(row);
+        bool first = true;
+        for (const QJsonValue &value : made) {
+            const QJsonObject entry = value.toObject();
+            const QString id = entry.value(QStringLiteral("id")).toString();
+            if (!std::exchange(first, false)) madeRows->addWidget(groupSeparator());
+            auto *frame = new QFrame;
+            frame->setObjectName(QStringLiteral("presetSlot"));
+            QGridLayout *grid = slotGrid(frame);
+            auto *name = cell(new ElidedLabel(id, Qt::ElideRight));
+            name->setObjectName(QStringLiteral("presetSlotName"));
+            name->setToolTip(id);
+            grid->addWidget(name, 0, 0);
+            QString kind = presetMadeKind(entry);
+            kind.front() = kind.front().toUpper();
+            QStringList about{kind};
+            const QJsonValue clipsValue = entry.value(QStringLiteral("clips"));
+            const int clips = clipsValue.isArray() ? int(clipsValue.toArray().size()) : clipsValue.toInt();
+            if (clips > 0) about << (clips == 1 ? QStringLiteral("1 clip") : QStringLiteral("%1 clips").arg(clips));
+            auto *detail = cell(new ElidedLabel(about.join(QStringLiteral(" · ")), Qt::ElideRight));
+            detail->setObjectName(QStringLiteral("launcherHint"));
+            detail->setProperty("presetMade", id);
+            QStringList steps;
+            for (const QJsonValue &step : entry.value(QStringLiteral("steps")).toArray()) steps << step.toString();
+            detail->setToolTip(steps.join(QLatin1Char('\n')));
+            grid->addWidget(detail, 1, 0);
+            auto *status = cell(new ElidedLabel(QStringLiteral("No file needed"), Qt::ElideRight));
+            status->setProperty("fit", QStringLiteral("none"));
+            status->setToolTip(detail->toolTip());
+            grid->addWidget(status, 0, 1, 2, 2);
+            madeRows->addWidget(frame);
+        }
+        m_presetSlotsLayout->insertSpacing(row++, 6);
+        auto *note = new QLabel(QStringLiteral("Made after applying, with Make… in the bin."));
+        note->setObjectName(QStringLiteral("launcherHint"));
+        note->setWordWrap(true);
+        m_presetSlotsLayout->insertWidget(row++, note);
     }
     const QJsonObject texts = preset.value(QStringLiteral("texts")).toObject();
     if (!texts.isEmpty()) {
