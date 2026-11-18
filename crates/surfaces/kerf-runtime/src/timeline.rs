@@ -526,16 +526,15 @@ mod tests {
     }
 
     #[test]
-    fn a_source_lists_the_takes_its_recipe_has_made() {
+    fn a_source_lists_the_takes_its_steps_have_made() {
         let folder = tempfile::tempdir().unwrap();
         let directory = folder.path();
         std::fs::create_dir_all(directory.join("shots/open.takes")).unwrap();
-        std::fs::write(directory.join("shots/open.kerfrecipe"), "kerf-recipe 1\n").unwrap();
         for take in ["001.mp4", "002.mp4", "002.take.json", "003.take.json"] {
             std::fs::write(directory.join("shots/open.takes").join(take), "").unwrap();
         }
         let project = kerf_lang::parse_document(
-            "kerf 1\nproject name=\"t\"\nmedia m1 path=\"shots/open.takes/002.mp4\" rate=24 dur=1s video=160x120 recipe=\"shots/open.kerfrecipe\"\nmedia m2 path=\"plain.mp4\" rate=24 dur=1s video=160x120\nsequence s1 rate=24 size=160x120 audio=48000\n",
+            "kerf 1\nproject name=\"t\"\nmedia m1 path=\"shots/open.takes/002.mp4\" rate=24 dur=1s video=160x120\n  render s1 {guide.mp4} pass=depth\n  generate model=dawn prompt=\"a boat\" guide={guide.mp4}\nmedia m2 path=\"plain.mp4\" rate=24 dur=1s video=160x120\nsequence s1 rate=24 size=160x120 audio=48000\n",
             Catalog::builtin(),
         )
         .unwrap()
@@ -549,8 +548,11 @@ mod tests {
                 {"number": 2, "path": "shots/open.takes/002.mp4", "chosen": true},
             ])
         );
-        // A source with no recipe has none, and says nothing of them.
+        // How many steps make it is said with it.
+        assert_eq!(value["sources"][0]["steps"], 2);
+        // A source no steps make has no takes and no steps, and says nothing of them.
         assert!(value["sources"][1].get("takes").is_none());
+        assert!(value["sources"][1].get("steps").is_none());
     }
 
     #[test]

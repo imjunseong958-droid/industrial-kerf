@@ -29,9 +29,11 @@ fn kerfd() -> Option<PathBuf> {
 }
 
 /// Run `kerf` on the project in `directory`, with no terminal to ask at: what it printed,
-/// what it said, and whether it ended well.
+/// what it said, and whether it ended well. The models it reads are the project folder's
+/// `models.json`, and none where there is none: never those of whoever runs the tests.
 fn kerf(directory: &Path, kerfd: &Path, words: &[&str]) -> (String, String, bool) {
     let output = Command::new(env!("CARGO_BIN_EXE_kerf"))
+        .env("KERF_MODELS", directory.join("models.json"))
         .arg("--dir")
         .arg(directory)
         .arg("--kerfd")
@@ -153,17 +155,16 @@ fn a_project_changed_by_hand_is_loaded_before_anything_is_made_from_it() {
         "project.kerf is the project as Kerf has it (revision 0); nothing to load\n"
     );
 
-    // A media with a recipe and another clip, written by hand, as an agent with only file
-    // tools would.
-    std::fs::create_dir(directory.join("shots")).unwrap();
+    // A media with a step under it and another clip, written by hand, as an agent with
+    // only file tools would; its model is a program that is not there.
     std::fs::write(
-        directory.join("shots/a.kerfrecipe"),
-        "kerf-recipe 1\nrun no-such-program-of-kerf {out}\n",
+        directory.join("models.json"),
+        r#"{"absent": {"run": ["no-such-program-of-kerf", "{out}"]}}"#,
     )
     .unwrap();
     let edited = DOCUMENT.replace(
         "sequence s1",
-        "media m1 path=\"shots/a.mp4\" rate=24 dur=24f video=320x180 recipe=\"shots/a.kerfrecipe\"\nsequence s1",
+        "media m1 path=\"shots/a.mp4\" rate=24 dur=24f video=320x180\n  generate model=absent prompt=\"a boat\"\nsequence s1",
     ) + "    clip c2 gen=solid@1 at=24f dur=24f\n";
     std::fs::write(directory.join("project.kerf"), &edited).unwrap();
 
@@ -209,7 +210,7 @@ fn a_project_changed_by_hand_is_loaded_before_anything_is_made_from_it() {
     assert!(state.document.contains("clip c2"), "{}", state.document);
     assert_eq!(run(&["proposals"]).0, "no proposal is waiting\n");
 
-    // Now the recipe is the file's: the making gets as far as its own step.
+    // Now the steps are the file's: the making gets as far as its own step.
     let (_, said, ok) = run(&["make", "m1", "--yes"]);
     assert!(!ok);
     assert!(said.contains("could not start"), "{said}");
@@ -229,4 +230,65 @@ fn a_project_changed_by_hand_is_loaded_before_anything_is_made_from_it() {
     assert!(said.contains("does not read"), "{said}");
     assert!(said.contains("unknown generator `nothing`"), "{said}");
     assert_eq!(runtime.get_state().unwrap().revision, 1);
+}
+
+/// A project written before steps were the document's: its media names a recipe file and
+/// has no steps under its line.
+const LEGACY: &str = "kerf 1
+project name=\"legacy\"
+media m1 path=\"shots/open.mp4\" rate=24 dur=24f video=160x90 recipe=\"shots/open.kerfrecipe\"
+sequence s1 rate=24 size=160x90 audio=48000
+  track V1 video
+    clip c1 gen=solid@1 at=0f dur=24f
+";
+
+#[test]
+fn a_media_whose_steps_are_in_a_recipe_file_is_made_once_they_are_carried() {
+    let Some(kerfd) = kerfd() else {
+        return;
+    };
+    let folder = tempfile::tempdir().unwrap();
+    let directory = folder.path();
+    std::fs::create_dir(directory.join("shots")).unwrap();
+    std::fs::write(
+        directory.join("shots/open.kerfrecipe"),
+        "kerf-recipe 1\nrender s1 {out} size=160x90\n",
+    )
+    .unwrap();
+    std::fs::write(directory.join("project.kerf"), LEGACY).unwrap();
+    let runtime = RuntimeClient::connect_or_spawn(directory, Some(&kerfd)).unwrap();
+    let _held = runtime.hold();
+    let run = |words: &[&str]| kerf(directory, &kerfd, words);
+
+    // Nothing is made from a recipe file: how its steps come into the document is said.
+    let (_, said, ok) = run(&["make", "m1", "--yes"]);
+    assert!(!ok);
+    assert!(
+        said.contains("the steps of media `m1` are in the recipe file `shots/open.kerfrecipe`")
+            && said.contains("`kerf carry m1`"),
+        "{said}"
+    );
+    assert!(!directory.join("shots/open.takes").exists());
+    assert_eq!(runtime.get_state().unwrap().revision, 0);
+
+    // Carried, the steps are under the media's line and its line names no recipe.
+    let (carried, said, ok) = run(&["carry", "m1", "--yes"]);
+    assert!(ok, "{said}");
+    assert!(carried.contains("m1, from shots/open.kerfrecipe:"), "{carried}");
+    assert!(carried.contains("  step m1 add render s1 {out} size=160x90\n"), "{carried}");
+    assert!(carried.contains("carried m1 (revision 1)"), "{carried}");
+    let document = runtime.get_state().unwrap().document;
+    assert!(
+        document.contains("\n  render s1 {out} size=160x90\n"),
+        "{document}"
+    );
+    assert!(!document.contains("recipe="), "{document}");
+    // The recipe file is left where it is.
+    assert!(directory.join("shots/open.kerfrecipe").is_file());
+
+    // And the media is made from them.
+    let (made, said, ok) = run(&["make", "m1", "--yes"]);
+    assert!(ok, "{said}");
+    assert!(made.contains("steps   under `m1` in the document"), "{made}");
+    assert!(directory.join("shots/open.takes/001.mp4").is_file(), "{made}");
 }
