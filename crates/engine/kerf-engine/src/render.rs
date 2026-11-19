@@ -369,14 +369,138 @@ struct Encoding {
     /// A filter that converts drawn RGBA frames the way the codec needs.
     convert: Option<&'static str>,
     output: Vec<String>,
+    /// What the drawn frames go to FFmpeg as.
+    frames: FramesIn,
+    /// A pass: no pixel of it is made of its neighbors when it is brought to size.
+    pass: bool,
+}
+
+/// What drawn frames go to FFmpeg as.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FramesIn {
+    /// RGBA, 8 bits a component.
+    Rgba,
+    /// RGBA, 16 bits a component: a deeper file is worth deeper frames, as 8 bits would only be
+    /// stretched to fill it.
+    Rgba16,
+    /// One grey of 16 bits a pixel, the first component of a 16-bit frame: a pass of how near
+    /// things are, whose three components are the same.
+    Grey16,
+    /// [`Self::Grey16`] rounded to 10 bits, for a file that holds no more, so that FFmpeg has
+    /// nothing to bring down, which it would dither.
+    Grey10,
+}
+
+impl FramesIn {
+    fn pix_fmt(self) -> &'static str {
+        match self {
+            Self::Rgba => "rgba",
+            Self::Rgba16 => "rgba64le",
+            Self::Grey16 => "gray16le",
+            Self::Grey10 => "gray10le",
+        }
+    }
+
+    /// Whether they are drawn at 16 bits a component.
+    fn deep(self) -> bool {
+        self != Self::Rgba
+    }
+}
+
+/// How a pass is written to a file: with no loss, each pixel as it was drawn, in the container
+/// the file's extension names.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PassCodec {
+    /// The video codec's arguments, but for its pixel format.
+    pub video: Vec<String>,
+    pub pix_fmt: &'static str,
+    /// The container, as FFmpeg's `-f` names it.
+    pub format: &'static str,
+}
+
+/// Whether a render of `pass`, or of a matte, is of greys: how near each pixel is.
+pub(crate) fn pass_of_greys(pass: kerf_compose::Pass, matte: bool) -> bool {
+    !matte && matches!(pass, kerf_compose::Pass::Depth | kerf_compose::Pass::Relative)
+}
+
+/// How a pass is written to `file`, of greys or of colors ([`pass_of_greys`]). No container
+/// holds every kind of pass at every depth, so the extension decides:
+///
+/// - `.mp4`, `.mov`, `.m4v`: H.264 with no loss (`-qp 0`), colors as RGB at 8 bits a channel,
+///   with none shared between pixels as 4:2:0 shares them, and greys at 10 bits, full range.
+/// - `.mkv`: FFV1, colors as RGB at 8 bits a channel and greys at 16.
+pub(crate) fn pass_codec(file: &Path, greys: bool) -> Result<PassCodec> {
+    let extension = file
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let video = |args: &[&str]| -> Vec<String> {
+        // Greys are of the whole range, as a depth pass is drawn.
+        let range = if greys { &["-color_range", "pc"][..] } else { &[] };
+        args.iter().chain(range).map(|arg| (*arg).to_owned()).collect()
+    };
+    match extension.as_str() {
+        "mp4" | "mov" | "m4v" => Ok(PassCodec {
+            video: video(&[
+                "-c:v",
+                if greys { "libx264" } else { "libx264rgb" },
+                "-qp",
+                "0",
+                "-preset",
+                budget().software_preset,
+            ]),
+            pix_fmt: if greys { "gray10le" } else { "rgb24" },
+            format: if extension == "mov" { "mov" } else { "mp4" },
+        }),
+        "mkv" => Ok(PassCodec {
+            video: video(&["-c:v", "ffv1", "-level", "3"]),
+            pix_fmt: if greys { "gray16le" } else { "gbrp" },
+            format: "matroska",
+        }),
+        _ => Err(EngineError::msg(format!(
+            "a pass is written with no loss to an .mp4, .mov, .m4v or .mkv file, not to `{}`",
+            file.file_name().unwrap_or_default().to_string_lossy()
+        ))),
+    }
+}
+
+/// A pass, or a matte, written with no loss ([`pass_codec`]), with no sound.
+fn pass_encoding(opts: &RenderOptions) -> Result<Encoding> {
+    if opts.draft || opts.preset != RenderPreset::Standard {
+        return Err(EngineError::msg(format!(
+            "a pass is written with no loss; it cannot be a {} render",
+            if opts.draft { "draft" } else { opts.preset.label() }
+        )));
+    }
+    let greys = pass_of_greys(opts.pass, opts.matte.is_some());
+    let codec = pass_codec(Path::new(&opts.output), greys)?;
+    let frames = match codec.pix_fmt {
+        "gray16le" => FramesIn::Grey16,
+        "gray10le" => FramesIn::Grey10,
+        _ => FramesIn::Rgba,
+    };
+    Ok(Encoding {
+        video: codec.video,
+        pix_fmt: codec.pix_fmt,
+        convert: None,
+        output: Vec::new(),
+        frames,
+        pass: true,
+    })
 }
 
 fn encoding(opts: &RenderOptions, color: ColorSpace) -> Result<Encoding> {
+    if opts.pass != kerf_compose::Pass::Picture || opts.matte.is_some() {
+        return pass_encoding(opts);
+    }
     let plain = |video| Encoding {
         video,
         pix_fmt: "yuv420p",
         convert: None,
         output: Vec::new(),
+        frames: FramesIn::Rgba,
+        pass: false,
     };
     if opts.draft {
         if opts.preset != RenderPreset::Standard {
@@ -444,6 +568,8 @@ fn encoding(opts: &RenderOptions, color: ColorSpace) -> Result<Encoding> {
                 pix_fmt,
                 convert: Some(convert),
                 output,
+                frames: FramesIn::Rgba16,
+                pass: false,
             })
         }
     }
@@ -517,6 +643,8 @@ fn hevc_hdr_encoding(opts: &RenderOptions, color: ColorSpace) -> Result<Encoding
         pix_fmt: "yuv420p10le",
         convert: Some(convert),
         output,
+        frames: FramesIn::Rgba16,
+        pass: false,
     })
 }
 
@@ -751,8 +879,8 @@ struct CompositedRender {
     /// The share of the canvas drawn, and the frame size that gives.
     scale: f64,
     size: (u32, u32),
-    /// Frames go to FFmpeg at 16 bits a component.
-    deep: bool,
+    /// What frames go to FFmpeg as.
+    frames: FramesIn,
     /// How the picture is encoded a stretch at a time and joined, where it can be.
     sections: Option<SectionArgs>,
     /// How many frames a second it draws.
@@ -874,8 +1002,7 @@ fn composited_render(
     let color = kerf_core::program::program_sequence(project, sequence)
         .map_or(ColorSpace::default(), |top| top.color);
     let encoding = encoding(opts, color)?;
-    // A deeper file is worth deeper frames: 8 bits would only be stretched to fill it.
-    let deep = encoding.pix_fmt != "yuv420p";
+    let frames = encoding.frames;
     let picture = args.iter().filter(|arg| *arg == "-i").count();
     let at = args
         .iter()
@@ -885,7 +1012,7 @@ fn composited_render(
         "-f".to_owned(),
         "rawvideo".to_owned(),
         "-pix_fmt".to_owned(),
-        if deep { "rgba64le" } else { "rgba" }.to_owned(),
+        frames.pix_fmt().to_owned(),
         "-s".to_owned(),
         format!("{}x{}", size.0, size.1),
         "-framerate".to_owned(),
@@ -950,11 +1077,18 @@ fn composited_render(
     }
     args.extend(encoding.video);
     let mut filters = Vec::new();
+    // A pass is numbers: a pixel brought to size is the one nearest, not a mix of its
+    // neighbors, which would be a color that is no clip's, or a distance nothing is at.
+    let (resample, even) = if encoding.pass {
+        ("neighbor", ":flags=neighbor")
+    } else {
+        ("bicubic", "")
+    };
     // What was drawn fills the size asked for; what is over is cut off evenly.
     let written = match opts.size.filter(|wanted| *wanted != size) {
         Some((width, height)) => {
             filters.push(format!(
-                "scale={width}:{height}:force_original_aspect_ratio=increase:flags=bicubic,crop={width}:{height},setsar=1"
+                "scale={width}:{height}:force_original_aspect_ratio=increase:flags={resample},crop={width}:{height},setsar=1"
             ));
             (width, height)
         }
@@ -962,7 +1096,7 @@ fn composited_render(
     };
     if written.0 % 2 == 1 || written.1 % 2 == 1 {
         // 4:2:0 needs even sides.
-        filters.push("scale=trunc(iw/2)*2:trunc(ih/2)*2".to_owned());
+        filters.push(format!("scale=trunc(iw/2)*2:trunc(ih/2)*2{even}"));
     }
     filters.extend(encoding.convert.map(str::to_owned));
     if !filters.is_empty() {
@@ -987,24 +1121,30 @@ fn composited_render(
         opts.output.clone(),
     ]);
     // HDR10 says how bright the whole picture is in every stretch of it, so a stretch would be
-    // another file whenever any other changed.
-    let sections = (opts.preset != RenderPreset::HevcHdr).then(|| SectionArgs {
+    // another file whenever any other changed. Matroska times frames in thousandths of a second,
+    // so stretches at a rate whose frames are not a whole number of them, such as 16 or 24 a
+    // second, join to a file whose frames are not evenly timed, and are encoded whole after all.
+    let extension = Path::new(&opts.output)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .unwrap_or("mp4")
+        .to_owned();
+    let timed = !extension.eq_ignore_ascii_case("mkv")
+        || (1000 * u64::from(rate.den())).is_multiple_of(u64::from(rate.num()));
+    let joins = opts.preset != RenderPreset::HevcHdr && timed;
+    let sections = joins.then_some(SectionArgs {
         encode,
         sound,
         mix,
         join,
-        extension: Path::new(&opts.output)
-            .extension()
-            .and_then(|extension| extension.to_str())
-            .unwrap_or("mp4")
-            .to_owned(),
+        extension,
     });
     Ok(CompositedRender {
         args,
         times,
         scale,
         size,
-        deep,
+        frames,
         sections,
         rate,
     })
@@ -1035,6 +1175,8 @@ where
             frame_folder: kerf_compose::default_frame_folder(),
             pass: opts.pass,
             matte: opts.matte.clone(),
+            // A file of the pass is read a pixel at a time, each taken for one clip's.
+            hard_edges: true,
             ..Default::default()
         },
     )?;
@@ -1122,7 +1264,7 @@ fn encode_frames(
         frames.len(),
         RENDER_DRAWERS,
         |index| {
-            if render.deep {
+            if render.frames.deep() {
                 compositor.frame16(render.times[first + index], render.scale)
             } else {
                 compositor.frame(render.times[first + index], render.scale)
@@ -1135,7 +1277,12 @@ fn encode_frames(
                     frame.width, frame.height, render.size.0, render.size.1
                 )));
             }
-            stdin.write_all(&frame.rgba)?;
+            match render.frames {
+                FramesIn::Rgba | FramesIn::Rgba16 => stdin.write_all(&frame.rgba)?,
+                FramesIn::Grey16 | FramesIn::Grey10 => {
+                    stdin.write_all(&greys(&frame.rgba, render.frames == FramesIn::Grey10))?;
+                }
+            }
             drawn();
             Ok(())
         },
@@ -1157,6 +1304,23 @@ fn encode_frames(
         Err(error) => Err(error),
         Ok(()) => Ok(()),
     }
+}
+
+/// The first component of each pixel of 16-bit RGBA, as 16-bit greys, or rounded to 10 bits.
+fn greys(rgba: &[u8], ten: bool) -> Vec<u8> {
+    rgba.as_chunks::<8>()
+        .0
+        .iter()
+        .flat_map(|pixel| {
+            let grey = u16::from_le_bytes([pixel[0], pixel[1]]);
+            let grey = if ten {
+                ((u32::from(grey) * 1023 + 32_767) / 65_535) as u16
+            } else {
+                grey
+            };
+            grey.to_le_bytes()
+        })
+        .collect()
 }
 
 /// Render with the picture encoded a stretch at a time ([`crate::sections`]): the stretches
@@ -1890,6 +2054,90 @@ mod tests {
         .expect("render");
         assert_eq!((slower.size, slower.times.len()), ((160, 120), 160));
         assert_eq!(flag(&slower.args, "-vf"), None);
+    }
+
+    #[test]
+    fn a_pass_is_written_with_no_loss_in_the_container_its_extension_names() {
+        use kerf_compose::Pass;
+        let pass = |output: &str, pass: Pass, matte: Option<&str>| RenderOptions {
+            output: output.into(),
+            size: Some((832, 480)),
+            sound: false,
+            pass,
+            matte: matte.map(str::to_owned),
+            ..RenderOptions::default()
+        };
+        let render = |opts: &RenderOptions| {
+            composited_render(&project(), None, None, opts, (1920, 1080)).map(|render| {
+                let args = render.args;
+                let flags = ["-c:v", "-pix_fmt", "-qp", "-color_range"].map(|name| {
+                    args.iter()
+                        .enumerate()
+                        .filter(|(_, arg)| *arg == name)
+                        .map(|(at, _)| args[at + 1].clone())
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                });
+                (flags, render.frames, flag(&args, "-vf").map(str::to_owned), render.sections)
+            })
+        };
+        // Colors as RGB, with no loss and none of a pixel shared with its neighbors; greys at
+        // 10 bits, which Kerf rounds to so that FFmpeg dithers nothing.
+        let (flags, frames, scaled, sections) = render(&pass("ids.mp4", Pass::Ids, None)).unwrap();
+        assert_eq!(flags, ["libx264rgb", "rgba rgb24", "0", ""]);
+        assert_eq!(frames, FramesIn::Rgba);
+        assert!(sections.is_some());
+        // Brought to size, a pixel is the one nearest it, never a mix of two clips' colors.
+        assert_eq!(
+            scaled.as_deref(),
+            Some("scale=832:480:force_original_aspect_ratio=increase:flags=neighbor,crop=832:480,setsar=1")
+        );
+        let (flags, frames, ..) = render(&pass("depth.mov", Pass::Depth, None)).unwrap();
+        assert_eq!(flags, ["libx264", "gray10le gray10le", "0", "pc"]);
+        assert_eq!(frames, FramesIn::Grey10);
+        let (flags, ..) = render(&pass("mask.m4v", Pass::Depth, Some("ball"))).unwrap();
+        assert_eq!(flags[..2], ["libx264rgb", "rgba rgb24"]);
+        // In Matroska, FFV1: greys at 16 bits, encoded whole.
+        let (flags, frames, _, sections) = render(&pass("depth.mkv", Pass::Relative, None)).unwrap();
+        assert_eq!(flags[..2], ["ffv1", "gray16le gray16le"]);
+        assert_eq!(frames, FramesIn::Grey16);
+        // Encoded whole, at a rate whose frames Matroska cannot time to the thousandth, and in
+        // stretches at one it can.
+        assert!(sections.is_none());
+        let rate = Rate::new(25, 1).ok();
+        let (.., sections) = render(&RenderOptions { rate, ..pass("depth.mkv", Pass::Depth, None) })
+            .unwrap();
+        assert!(sections.is_some());
+        let (flags, frames, ..) = render(&pass("normals.MKV", Pass::Normals, None)).unwrap();
+        assert_eq!(flags[..2], ["ffv1", "rgba gbrp"]);
+        assert_eq!(frames, FramesIn::Rgba);
+        // Nothing else holds a pass with no loss, nor is a pass a draft or another preset's.
+        for refused in [
+            pass("ids.webm", Pass::Ids, None),
+            pass("ids", Pass::Ids, None),
+            RenderOptions { draft: true, ..pass("ids.mp4", Pass::Ids, None) },
+            RenderOptions {
+                preset: RenderPreset::Review,
+                ..pass("ids.mp4", Pass::Depth, None)
+            },
+        ] {
+            assert!(render(&refused).is_err(), "{refused:?}");
+        }
+        // The picture is as it was.
+        let (flags, frames, scaled, _) = render(&pass("guide.mp4", Pass::Picture, None)).unwrap();
+        assert_eq!(flags[1], "rgba yuv420p");
+        assert_eq!(frames, FramesIn::Rgba);
+        assert!(scaled.is_some_and(|scaled| scaled.contains("flags=bicubic")));
+        // Greys are the first channel of 16-bit frames, or that rounded to 10 bits.
+        let rgba: Vec<u8> = [0u16, 65_535, 32_768, 31]
+            .iter()
+            .flat_map(|grey| [grey.to_le_bytes(), [9, 9], [9, 9], [255, 255]].concat())
+            .collect();
+        let words = |bytes: Vec<u8>| -> Vec<u16> {
+            bytes.as_chunks::<2>().0.iter().map(|pair| u16::from_le_bytes(*pair)).collect()
+        };
+        assert_eq!(words(greys(&rgba, false)), [0, 65_535, 32_768, 31]);
+        assert_eq!(words(greys(&rgba, true)), [0, 1023, 512, 0]);
     }
 
     #[test]

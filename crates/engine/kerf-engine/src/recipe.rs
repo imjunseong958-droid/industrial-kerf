@@ -18,7 +18,8 @@
 //!   size and rate, not the sequence's: a picture of another shape fills
 //!   the size, and what is over is cut off evenly. The file has no sound.
 //!   `pass=ids` or `pass=depth` draws, in place of the picture, which clip
-//!   each pixel is of or how near it is ([`kerf_compose::Pass`]).
+//!   each pixel is of or how near it is ([`kerf_compose::Pass`]), written
+//!   with no loss in the container the file's extension names.
 //! - `generate` asks a model ([`model`]) for the file: what it should show
 //!   (`prompt=`), what guides it (`guide=`, `first=`, `last=`, `ref=`), when
 //!   it happens (`signal=`, a signal clip of the project: [`signal`]), and
@@ -1110,7 +1111,12 @@ impl Making<'_> {
                 Step::Join { parts, to, lap } => {
                     on_line(&format!("joining {} parts", parts.len()));
                     let files: Vec<PathBuf> = parts.iter().map(|part| self.file_for(part)).collect();
-                    let command = join_command(&files, &self.file_for(to), *lap);
+                    let to = self.file_for(to);
+                    let lossless = match passes_joined(&recipe.steps[..index], parts) {
+                        Some(greys) => Some(crate::render::pass_codec(&to, greys)?),
+                        None => None,
+                    };
+                    let command = join_command(&files, &to, *lap, lossless.as_ref());
                     self.supervised(command, "ffmpeg", &mut |_| {})?;
                 }
                 Step::Render {
@@ -1268,9 +1274,30 @@ fn still_command(file: &Path, still: &Path, last: bool) -> Command {
     command
 }
 
+/// Whether each of `parts` is a pass that one of `before` renders, and all of one kind: then
+/// whether they are of greys ([`crate::render::pass_of_greys`]). Passes are joined as they were
+/// written, with no loss.
+fn passes_joined(before: &[Step], parts: &[String]) -> Option<bool> {
+    let kind = |part: &String| match before.iter().rev().find(|step| step.makes() == part)? {
+        Step::Render { pass, matte, .. } if *pass != Pass::Picture || matte.is_some() => {
+            Some(crate::render::pass_of_greys(*pass, matte.is_some()))
+        }
+        _ => None,
+    };
+    let mut kinds = parts.iter().map(kind);
+    let first = kinds.next()??;
+    kinds.all(|kind| kind == Some(first)).then_some(first)
+}
+
 /// The command that sets `parts` end to end into `to`, each after the first without its
-/// first `lap` frames, as a picture with no sound.
-fn join_command(parts: &[PathBuf], to: &Path, lap: u32) -> Command {
+/// first `lap` frames, as a picture with no sound: in H.264 at a high quality, or with no loss
+/// as `lossless` says, for passes.
+fn join_command(
+    parts: &[PathBuf],
+    to: &Path,
+    lap: u32,
+    lossless: Option<&crate::render::PassCodec>,
+) -> Command {
     let mut command = crate::ffmpeg::hidden_command(crate::ffmpeg::resolve_ffmpeg_bin());
     command.args(["-hide_banner", "-loglevel", "error", "-y"]);
     for part in parts {
@@ -1289,11 +1316,16 @@ fn join_command(parts: &[PathBuf], to: &Path, lap: u32) -> Command {
         }
     }
     filter.push_str(&format!("{joined}concat=n={}:v=1:a=0[v]", parts.len()));
-    command
-        .args(["-filter_complex", &filter, "-map", "[v]", "-an"])
-        .args(["-c:v", "libx264", "-preset", "medium", "-crf", "14", "-pix_fmt", "yuv420p"])
-        .args(["-f", "mp4"])
-        .arg(to);
+    command.args(["-filter_complex", &filter, "-map", "[v]", "-an"]);
+    match lossless {
+        Some(codec) => command
+            .args(&codec.video)
+            .args(["-pix_fmt", codec.pix_fmt, "-f", codec.format]),
+        None => command
+            .args(["-c:v", "libx264", "-preset", "medium", "-crf", "14", "-pix_fmt", "yuv420p"])
+            .args(["-f", "mp4"]),
+    };
+    command.arg(to);
     command
 }
 

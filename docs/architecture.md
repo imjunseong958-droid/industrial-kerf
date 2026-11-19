@@ -526,7 +526,18 @@ What is built for it, in this order, each measured before the next:
    exactly (`Drawing::as_pass`, `three_d::shade_by_depth`), and the scene is
    seen with no lights and no focus. So what is in front is decided as it is
    in the picture, by the pixel where clips cross. It is drawn on the CPU,
-   with no kernels: a guide is small. Depth is one over the distance, scaled
+   with no kernels: a guide is small. It is written with no loss, in RGB
+   or in grey at 10 or 16 bits by the file's extension, and its ids drawn
+   hard, each clip laid down whole where it covers half a pixel or more
+   (2026-11-19): written as a picture is, in H.264 at 4:2:0, a 640x360
+   ids pass of a phone stood in depth, its screen cut by a mask feathered
+   over 30 pixels, had 7.7% of its pixels of no clip as drawn, each clip
+   covering as much of an edge as it does, and the same frames drawn hard
+   still had 3.7% once so encoded; now it has none, and is the pass as
+   drawn to the byte
+   (`a_pass_is_written_with_no_loss_and_each_pixel_of_an_ids_pass_is_one_clips`).
+   `look` reads a frame drawn soft, by how much of each pixel each clip
+   has. Depth is one over the distance, scaled
    by the scene's own numbers and by nothing in the frame, so it holds still;
    a model trained on depth stretched to each frame's own nearest and
    farthest may want it stretched, which is `pass=relative` (2026-11-13).

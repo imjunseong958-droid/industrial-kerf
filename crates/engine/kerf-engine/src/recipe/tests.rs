@@ -1904,15 +1904,92 @@ fn parts_are_joined_without_the_frames_they_share() {
     };
     let (a, b) = (part("a.mp4", "red"), part("b.mp4", "blue"));
     let out = folder.path().join("out.mp4");
-    assert!(join_command(&[a.clone(), b.clone()], &out, 1).status().unwrap().success());
+    assert!(join_command(&[a.clone(), b.clone()], &out, 1, None).status().unwrap().success());
     assert_eq!(frames(&out), frames(&a) + frames(&b) - 1);
-    assert!(join_command(&[a.clone(), b.clone(), a.clone()], &out, 0).status().unwrap().success());
+    assert!(join_command(&[a.clone(), b.clone(), a.clone()], &out, 0, None).status().unwrap().success());
     assert_eq!(frames(&out), 2 * frames(&a) + frames(&b));
     // The last frame of the red part is red, and the first of the blue one blue.
     let still = folder.path().join("a.last.png");
     assert!(in_motion(&a) && !in_motion(&still));
     assert!(still_command(&a, &still, true).status().unwrap().success());
     assert!(still.is_file());
+}
+
+/// Parts that are passes of one kind are joined with no loss, greys as greys; any other parts,
+/// passes of two kinds among them, are joined as a picture.
+#[test]
+fn passes_are_joined_as_they_were_written() {
+    let joined = |text: &str| {
+        let steps = Recipe::parse(&format!("kerf-recipe 1\n{text}\n")).unwrap().steps;
+        let Some((Step::Join { parts, .. }, before)) = steps.split_last() else {
+            panic!("{text} ends with no join");
+        };
+        passes_joined(before, parts)
+    };
+    let join = "join {a.mp4} {b.mp4} {out}";
+    let two = |a: &str, b: &str| joined(&format!("render s1 {{a.mp4}} {a}\nrender s1 {{b.mp4}} {b}\n{join}"));
+    assert_eq!(two("pass=ids", "pass=ids"), Some(false));
+    assert_eq!(two("pass=depth seconds=1", "pass=relative from=1"), Some(true));
+    assert_eq!(two("matte=ball", "pass=normals"), Some(false));
+    assert_eq!(two("pass=depth", "pass=ids"), None);
+    assert_eq!(two("", ""), None);
+    assert_eq!(
+        joined(&format!("render s1 {{a.mp4}} pass=ids\ngenerate model=m prompt=\"p\" out={{b.mp4}}\n{join}")),
+        None
+    );
+
+    let ffmpeg = crate::ffmpeg::resolve_ffmpeg_bin();
+    if std::process::Command::new(ffmpeg).arg("-version").output().is_err() {
+        return;
+    }
+    let folder = tempfile::tempdir().unwrap();
+    let run = |args: &[&str], file: &Path| {
+        let made = std::process::Command::new(ffmpeg)
+            .args(["-hide_banner", "-loglevel", "error", "-y"])
+            .args(args)
+            .arg(file)
+            .status()
+            .unwrap();
+        assert!(made.success());
+    };
+    let decoded = |file: &Path, pix_fmt: &str| {
+        std::process::Command::new(ffmpeg)
+            .args(["-hide_banner", "-loglevel", "error", "-i"])
+            .arg(file)
+            .args(["-f", "rawvideo", "-pix_fmt", pix_fmt, "-"])
+            .output()
+            .unwrap()
+            .stdout
+    };
+    // Colors in every pixel, and greys at 16 bits, each in its own container.
+    for (extension, greys, source, pix_fmt) in [
+        ("mp4", false, "testsrc2=s=64x36:r=16:d=1", "rgb24"),
+        ("mkv", false, "testsrc2=s=64x36:r=16:d=1", "rgb24"),
+        ("mkv", true, "gradients=s=64x36:r=16:d=1,format=gray16le", "gray16le"),
+        ("mp4", true, "gradients=s=64x36:r=16:d=1,format=gray16le", "gray16le"),
+    ] {
+        let to = folder.path().join(format!("joined.{extension}"));
+        let codec = crate::render::pass_codec(&to, greys).unwrap();
+        let mut written: Vec<String> = codec.video.clone();
+        written.extend(["-pix_fmt".to_owned(), codec.pix_fmt.to_owned()]);
+        let written: Vec<&str> = written.iter().map(String::as_str).collect();
+        let part = |name: &str, offset: &str| {
+            let file = folder.path().join(format!("{name}.{extension}"));
+            let source = format!("{source},hue=h={offset}");
+            let source = if greys { source.replace(",hue=h=", ",lutyuv=y=val+") } else { source };
+            run(&[&["-f", "lavfi", "-i", &source], &written[..]].concat(), &file);
+            file
+        };
+        let (a, b) = (part("a", "0"), part("b", "90"));
+        assert!(join_command(&[a.clone(), b.clone()], &to, 1, Some(&codec))
+            .status()
+            .unwrap()
+            .success());
+        let frame = if greys { 64 * 36 * 2 } else { 64 * 36 * 3 };
+        let mut wanted = decoded(&a, pix_fmt);
+        wanted.extend_from_slice(&decoded(&b, pix_fmt)[frame..]);
+        assert!(decoded(&to, pix_fmt) == wanted, "{extension} of greys: {greys}");
+    }
 }
 
 /// A model that answers with what it was asked: it copies its request to where the request

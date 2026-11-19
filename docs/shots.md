@@ -50,11 +50,12 @@ media gone path="shots/gone.mp4" rate=16 dur=81f video=832x480
 |---|---|
 | `render <sequence> {name} [size=WxH] [rate=<fps>] [pass=ids\|depth\|relative\|normals] [matte=<clip>] [from=<seconds>] [seconds=<seconds>]` | Has Kerf draw a sequence of this project into a file, with no sound. A guide blocked with Kerf's own clips in depth, cameras, lights, and titles reaches a model this way, at the model's size and rate when the step names them. `pass=` draws, in place of the picture, which clip each pixel is of or how near it is. See [Guides](#guides). |
 | `generate model=<name> …` | Asks a model, or another program the person has named, for a file. See below. |
-| `join {part} {part} … {name} [lap=<frames>]` | Sets files earlier steps made end to end into one, a picture with no sound: the parts of [a longer shot](#a-longer-shot). Each part after the first loses its first `lap` frames. |
+| `join {part} {part} … {name} [lap=<frames>]` | Sets files earlier steps made end to end into one, a picture with no sound: the parts of [a longer shot](#a-longer-shot). Each part after the first loses its first `lap` frames. Parts that are all passes of one kind, depth or relative, or ids, normals or mattes, are joined with no loss, as a pass is written ([Passes](#passes)). |
 
 `{out}` stands for the shot's file, and the last step writes it. Any other
 `{name}`, such as `{guide.mp4}`, is a file a step makes on the way and a later
-step reads; its extension tells a program the format.
+step reads; its extension tells a program the format. A pass is written with
+no loss, to a `.mp4`, `.mov`, `.m4v` or `.mkv` ([Passes](#passes)).
 
 `generate` says what is wanted in words any video or image model takes:
 
@@ -1782,7 +1783,11 @@ render s2 {ids.mp4} pass=ids size=832x480 rate=16
 - **`pass=ids`**: every clip that draws, in one flat color of its own, over
   black where there is none. A clip keeps its color from frame to frame, so
   the file says which thing is which as the camera and the clips move. A
-  nested sequence is one clip. The colors go by the clips' order, the lowest
+  nested sequence is one clip. Each pixel is wholly one clip's: a clip is
+  laid down where it covers half a pixel or more, and not at all where it
+  covers less, so a soft edge, a feathered mask, a clip at less than full
+  opacity, and a dissolve give each pixel to one clip and never a color
+  between two. A feathered mask cuts where it is half through. The colors go by the clips' order, the lowest
   track first, so adding a clip below others gives those above it new ones.
   Every clip of the sequence that draws is counted, at whatever moment it
   does, and then those of the sequences it nests. 7,488 of them have a color
@@ -1824,8 +1829,9 @@ render s2 {ids.mp4} pass=ids size=832x480 rate=16
   of it faces; a surface seen from behind faces whoever sees it. What is
   not in depth is black.
 - **`pass=relative`**: the same as `pass=depth`, each frame stretched to its own nearest
-  and farthest: white at the nearest thing in the frame and one step above
-  black at the farthest, as a model that reads depth from a picture gives
+  and farthest: white at the nearest thing in the frame and a 255th of white,
+  one step above black at 8 bits, at the farthest, whatever the file's depth,
+  as a model that reads depth from a picture gives
   it and as one trained on such depth expects it. It does not hold still:
   a place is another grey when something nearer comes into the frame. It
   is what to try where a scene's own depth comes out flat, a far set with
@@ -1840,6 +1846,24 @@ A pass has no lights, no focus, no adjustment layers, no dips, and no
 captions, and every clip is laid over what is behind it whatever its blend.
 It is drawn on the CPU. The sides of a clip with a `depth` take the grey of
 its face beside them, as they take its color, and not their own distance.
+
+A pass is numbers to be read a pixel at a time, not a picture to look at, so
+it is written with no loss: each pixel as it was drawn, none of its color
+shared with the pixels beside it as a picture's file shares it, and, brought
+to a step's `size=`, the pixel nearest, never a mix of two. The file's
+extension says the container, and that says how deep a grey is kept:
+
+| File | `pass=ids`, `pass=normals`, `matte=` | `pass=depth`, `pass=relative` |
+|---|---|---|
+| `.mp4`, `.mov`, `.m4v` | H.264 with no loss (`-qp 0`), RGB at 8 bits a channel | H.264 with no loss, grey at 10 bits, full range |
+| `.mkv` | FFV1, RGB at 8 bits a channel | FFV1, grey at 16 bits |
+
+A pass to any other kind of file is refused when it is made. Such files are read by FFmpeg and what is
+built on it, as a model's program reads a guide (`kerf-comfy` copies it at
+the model's size and rate first); few players play them. An ids pass in H.264
+is smaller than a picture of it was, its colors being flat; depth in a
+`.mkv` keeps the 16 bits it is drawn at, where the 8 of a picture leave a
+far set a few greys.
 
 A pass is a file as a guide is, and a model that follows one is handed it as
 its guide (`guide={depth.mp4}`); what kind of guide a model follows is its
