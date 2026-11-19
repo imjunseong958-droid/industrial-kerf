@@ -85,7 +85,11 @@ through a cut. They are listed there too and written like any effect or
 transition (`fx c1 add look.shake@1 intensity=0.7 hit=12f`, `transition add
 from=c1 to=c2 fx=look.whip@1 dur=12f`); a time parameter is a time in the
 clip, or the id of a marker in its sequence to land on (`hit=beat1`). The document keeps the one line and the look expands when it draws;
-`fx c1 flatten 1` replaces it with what it expands to. A number that a look's lines only scale animates like any
+`fx c1 flatten 1` replaces it with what it expands to. A time that says when
+a look happens (`hit`, `start`) stays on the moment of the picture it was on
+when the clip's head is trimmed or the clip is split, as keyframes do: the
+second part has it that much earlier, written out where it was left to its
+default, and a marker it names stays where it is. A number that a look's lines only scale animates like any
 effect's; `look` with `effect` marks it `animatable`. A project's own looks are `.kerf/looks/*.kerflook` files.
 
 A track parameter names another picture track of the sequence, whose
@@ -450,8 +454,11 @@ transition add from=c1 to=c9 fx=dissolve dur=12f
   stops 0.15 s after the sound before it, which dies away, and 0.1 s before
   the sound after it, on the nearest frame still in the pause; a pause too
   short for both is divided in that proportion, and an edge already clear
-  of both stays where it was put. A split stays inside its clip and a
-  trimmed clip keeps a length. Without an index, or with nothing in reach,
+  of both stays where it was put. Where the media's picture cuts in that
+  pause within 0.15 s of that place, and 0.06 s or more from the sound
+  either side, the edge goes onto the cut instead, so that a clip of the
+  picture keeps no frame or two of the other shot; the answer says so. A
+  split stays inside its clip and a trimmed clip keeps a length. Without an index, or with nothing in reach,
   the line is refused.
 
   An edge is taken past no word. It goes into the pause it is in, or the

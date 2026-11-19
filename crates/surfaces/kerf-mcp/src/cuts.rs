@@ -76,11 +76,26 @@ pub(crate) struct SoundCut<'a> {
     /// The frame of the sequence the clip plays beside the cut: its first,
     /// or its last.
     pub frame: Time,
-    /// A transition plays across the cut, which fades what it goes through.
+    /// A transition plays across the cut, or the clip's gain is down by
+    /// [`FADED_GAIN_DB`] or more on its frame beside the cut, which fades
+    /// what it goes through.
     pub faded: bool,
     /// What of its media the clip plays past the cut under that transition,
     /// fading: from when to when, in seconds of the media.
     pub fade: Option<(f64, f64)>,
+}
+
+/// A clip's gain this low on its first or last frame fades its sound in or
+/// out there, as a transition across the cut would: speech at -24 dB plays
+/// under -60, which nobody hears as a cut.
+pub(crate) const FADED_GAIN_DB: f64 = -36.0;
+
+/// Whether `clip`'s gain at clip time `at` is down by [`FADED_GAIN_DB`] or more.
+fn faded_by_gain(clip: &Clip, at: Time) -> bool {
+    clip.props
+        .get("gain")
+        .and_then(|gain| gain.value_at(at).as_number())
+        .is_some_and(|db| db <= FADED_GAIN_DB)
 }
 
 /// The tracks of `sequence` that sound.
@@ -141,7 +156,7 @@ pub(crate) fn sound_cuts<'a>(project: &'a Project, sequence: &'a Sequence) -> Ve
                     end: End::Starts,
                     source: source_in,
                     frame: clip.start,
-                    faded: fade.is_some(),
+                    faded: fade.is_some() || faded_by_gain(clip, Time::ZERO),
                     fade: fade
                         .map(|fade| fade.split_at_cut(sequence.rate).0)
                         .filter(|before| before.is_positive())
@@ -162,7 +177,7 @@ pub(crate) fn sound_cuts<'a>(project: &'a Project, sequence: &'a Sequence) -> Ve
                     end: End::Ends,
                     source: source_out,
                     frame: clip.end() - frame,
-                    faded: fade.is_some(),
+                    faded: fade.is_some() || faded_by_gain(clip, clip.duration - frame),
                     fade: fade
                         .map(|fade| fade.split_at_cut(sequence.rate).1)
                         .filter(|after| after.is_positive())

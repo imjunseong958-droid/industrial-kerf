@@ -6,6 +6,28 @@ on `main`; its section here becomes the release's notes on GitHub
 
 ## Unreleased
 
+- Cutting a clip that has a look on it keeps the look on its moment. A zoom
+  pulse, shake, flash, pop-in or wobble says when it happens in its clip
+  (`hit=`, `start=`), and splitting the clip gave both parts the same time,
+  so a pulse after the split landed past the end of each part and played in
+  neither, and one left at the clip's start played again at the second
+  part's. Trimming a clip's head moved it later on the picture too. Now the
+  second part of a split, and a clip whose head is trimmed, have it that
+  much earlier, as keyframes are kept; a time that names a marker stays
+  where the marker is.
+- `snap=pause` no longer leaves a frame or two of the next shot at a clip's
+  edge. Where the footage's picture cuts inside the pause, within 0.15 s of
+  where the edge would have gone and clear of the sound either side, the
+  edge goes onto that cut, and the answer says so.
+- A sound clip whose gain fades it out by its last frame, or in from its
+  first, is no longer said to be cut in the middle of a sound: the check
+  and `look` with `cuts` count it as faded, as under a crossfade.
+- An agent's `look` with `effect` reads an effect named with its version,
+  as the reference writes them (`push@1`, `look.pop-in@1`), where it was
+  refused; a version this Kerf does not read is said as a document's is.
+- A speed change that would make a clip run into the next one names that
+  clip and how many frames longer it would be.
+
 - Lining recordings up by their sound says when one offset does not fit. An
   agent's `look` with `sync` gave each recording one offset and built a
   multicam by it, whether or not the two stayed together. It now places

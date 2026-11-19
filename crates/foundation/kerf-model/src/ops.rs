@@ -1531,6 +1531,7 @@ impl Editor<'_> {
     ) -> Vec<Id> {
         let mut tails_by_group: BTreeMap<Id, Vec<Id>> = BTreeMap::new();
         let mut tails = Vec::new();
+        let (rate, catalog) = (self.project.sequences[s].rate, self.catalog);
         for (t, id) in members {
             let tail_id = match &named {
                 Some((clip, tail)) if clip == id => tail.clone(),
@@ -1540,6 +1541,7 @@ impl Editor<'_> {
             let c = track.clip_index(id.as_str()).expect("member exists");
             let offset = at - track.clips[c].start;
             let mut tail = track.clips[c].split_off(offset, tail_id.clone());
+            keep_looks(&mut tail, offset, rate, catalog);
             if let Some(group) = tail.link.take() {
                 tails_by_group
                     .entry(group)
@@ -1651,6 +1653,7 @@ impl Editor<'_> {
             }
         }
         self.split_all(s, &inside, to, None);
+        let (rate, catalog) = (self.project.sequences[s].rate, self.catalog);
         for &t in tracks {
             let overlapping: Vec<Id> = self.project.sequences[s].tracks[t]
                 .clips
@@ -1670,6 +1673,7 @@ impl Editor<'_> {
                 } else {
                     let start = clip.start;
                     clip.move_head(to - start);
+                    keep_looks(clip, to - start, rate, catalog);
                 }
             }
         }
@@ -1891,6 +1895,7 @@ impl Editor<'_> {
                 }
             }
         }
+        let (rate, catalog) = (self.project.sequences[s].rate, self.catalog);
         for id in &members {
             let member = self.find(id);
             let found = self.project.clip_at_mut(member);
@@ -1898,6 +1903,7 @@ impl Editor<'_> {
                 Edge::Out => found.move_tail(delta),
                 Edge::In => {
                     found.move_head(delta);
+                    keep_looks(found, delta, rate, catalog);
                     if ripple {
                         found.start -= delta;
                     }
@@ -1959,7 +1965,10 @@ impl Editor<'_> {
             self.project.clip_at_mut(a).move_tail(delta);
             self.check_source(a)?;
             let b = self.find(&incoming);
-            self.project.clip_at_mut(b).move_head(delta);
+            let (rate, catalog) = (self.project.sequences[b.sequence].rate, self.catalog);
+            let found = self.project.clip_at_mut(b);
+            found.move_head(delta);
+            keep_looks(found, delta, rate, catalog);
             self.check_source(b)?;
         }
         Ok(())
@@ -2044,9 +2053,13 @@ impl Editor<'_> {
             }
             for (neighbor, edge) in moves {
                 let n = self.find(&neighbor);
+                let (rate, catalog) = (self.project.sequences[n.sequence].rate, self.catalog);
                 let found = self.project.clip_at_mut(n);
                 match edge {
-                    Edge::In => found.move_head(delta),
+                    Edge::In => {
+                        found.move_head(delta);
+                        keep_looks(found, delta, rate, catalog);
+                    }
                     Edge::Out => found.move_tail(delta),
                 }
                 self.check_source(n)?;
@@ -2251,10 +2264,28 @@ impl Editor<'_> {
             let duration = rate.time_of(frames);
             let track = &self.project.sequences[s].tracks[member.track];
             if !track.is_free(found.start, found.start + duration, &[id]) {
+                let how = match speed.constant() {
+                    Some(_) => format!("at speed {speed}"),
+                    None => "with that ramp".to_owned(),
+                };
+                let into = track
+                    .clips
+                    .iter()
+                    .find(|other| {
+                        other.id != *id
+                            && other.start >= found.start + found.duration
+                            && other.start < found.start + duration
+                    })
+                    .map_or_else(
+                        || "the next clip".to_owned(),
+                        |other| format!("`{}`", other.id),
+                    );
                 return Err(fail(
                     "speed.collision",
                     format!(
-                        "at speed {speed} `{id}` would run into the next clip on track {}",
+                        "`{id}` {how} would be {frames} frames long, {} more than it is, and run \
+                         into {into} on track {}; make room after it first, or trim it shorter",
+                        frames - rate.frames_round(found.duration),
                         track.id
                     ),
                 ));
@@ -2615,6 +2646,19 @@ impl Editor<'_> {
                     clip.parent = None;
                 }
             }
+        }
+    }
+}
+
+/// Keep each look of `clip` on the moment of its picture it was on, once the clip's first frame
+/// has come `delta` later in it: a zoom pulse's `hit` on a split's second part, or on a clip whose
+/// head was trimmed, is where its frame still is, as keyframes are ([`Look::shift_moments`]).
+///
+/// [`Look::shift_moments`]: crate::look::Look::shift_moments
+fn keep_looks(clip: &mut Clip, delta: Time, rate: Rate, catalog: &Catalog) {
+    for effect in &mut clip.effects {
+        if let Some(look) = catalog.look(effect.fx.as_str(), effect.version) {
+            look.shift_moments(&mut effect.params, delta, rate);
         }
     }
 }

@@ -1364,6 +1364,93 @@ fn a_look_s_time_can_name_a_marker_it_lands_on() {
 }
 
 #[test]
+fn a_slower_clip_that_has_no_room_says_what_it_runs_into() {
+    let error = fails(&base(), "speed c1 0.5\n");
+    assert_eq!(error.code, "speed.collision", "{error:?}");
+    assert!(
+        error.message.contains(
+            "`c1` at speed 0.5 would be 192 frames long, 96 more than it is, and run into `c2` on \
+             track V1; make room after it first"
+        ),
+        "{error:?}"
+    );
+    let error = fails(&base(), "speed c1 {0f:1 24f:1/4}\n");
+    assert!(
+        error.message.contains("`c1` with that ramp would be"),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn a_look_stays_on_its_moment_when_its_clip_is_split_or_trimmed() {
+    let printed = |applied: &Applied| {
+        print_document(
+            &applied.project,
+            Catalog::builtin(),
+            PrintOptions::default(),
+        )
+    };
+    let pulsed = run(
+        &base(),
+        "fx c1 add look.zoom-pulse@1 amount=0.1 hit=60f length=10f\n",
+    );
+    // Split before the pulse: the second part pulses where the frame it pulsed on now is, and its
+    // length is a length, which stays; the first part keeps its numbers, which trimming it back
+    // brings back.
+    let split = run(&pulsed.project, "split c1 at=01:00:00:20 as=c9\n");
+    let text = printed(&split);
+    assert!(
+        text.contains("    clip c1 media=m1 src=00:00:10:00 at=01:00:00:00 dur=00:00:00:20 link=L1\n      fx look.zoom-pulse@1 amount=0.1 hit=60f length=10f\n"),
+        "{text}"
+    );
+    assert!(
+        text.contains("    clip c9 media=m1 src=00:00:10:20 at=01:00:00:20 dur=00:00:03:04 link=L3\n      fx look.zoom-pulse@1 amount=0.1 hit=40f length=10f\n"),
+        "{text}"
+    );
+    // So does a trimmed head, and a moment left to its default is written, so that the pulse at
+    // the clip's first frame stays where that frame was.
+    let shaken = run(&base(), "fx c1 add look.shake@1\ntrim c1 in +6f\n");
+    assert!(
+        printed(&shaken).contains("fx look.shake@1 hit=-6f\n"),
+        "{}",
+        printed(&shaken)
+    );
+    // A moment that names a marker is a place in the sequence.
+    let marked = run(
+        &base(),
+        "marker add as=beat at=01:00:02:00\nfx c1 add look.shake@1 hit=beat\nsplit c1 at=01:00:01:00\n",
+    );
+    assert_eq!(
+        printed(&marked)
+            .matches("fx look.shake@1 hit=beat\n")
+            .count(),
+        2
+    );
+    // A slow push has no moment: its push is from the clip's first frame, whichever that is.
+    let pushed = run(
+        &base(),
+        "fx c1 add look.slow-push@1 length=2s\nsplit c1 at=01:00:01:00\n",
+    );
+    assert_eq!(
+        printed(&pushed)
+            .matches("fx look.slow-push@1 length=48f\n")
+            .count(),
+        2
+    );
+    // Transitions' looks have no moments either.
+    let whip = Catalog::builtin().look("look.whip", 1).unwrap();
+    assert!(whip.moments().is_empty());
+    assert_eq!(
+        Catalog::builtin().look("look.flash", 1).unwrap().moments(),
+        ["hit"]
+    );
+    assert_eq!(
+        Catalog::builtin().look("look.pop-in", 1).unwrap().moments(),
+        ["start"]
+    );
+}
+
+#[test]
 fn media_replace_prints_every_field_and_replays() {
     let project = base();
     let script = r#"media replace m1 path="media/take 2-0123abcd.mov" rate=23.976 tc=14:22:31:05 dur=00:12:00:00 video=3840x2160 alpha=true audio=6ch@96000 reel="B002""#;

@@ -2676,8 +2676,13 @@ fn place_said(media: &Media, (snap, place): (Snap, &Place), speech: &Speech) -> 
                 (false, None, Some(after)) => ("pause", format!(", before {after}")),
                 (false, None, None) => ("pause", String::new()),
             };
+            let cut = if place.on_cut {
+                format!(", on the cut of its picture at {}", position(place.at))
+            } else {
+                String::new()
+            };
             format!(
-                "the {:.2}s {quiet} of `{}` at {}{beside}",
+                "the {:.2}s {quiet} of `{}` at {}{beside}{cut}",
                 end - start,
                 media.id,
                 position(start)

@@ -2429,6 +2429,17 @@ impl KerfMcpRouter {
                     "reference": kerf_lang::property_reference(property),
                 }));
             }
+            // The reference names each with its version, as documents do: `title@1` is `title`,
+            // and a version this Kerf does not read is said as a document's would be.
+            let (id, version) = match id.split_once('@') {
+                Some(_) => {
+                    let (id, version) = kerf_lang::parse_fx_ref(id)
+                        .map_err(|message| McpError::new("INVALID_ARGUMENTS", message))?;
+                    (id.to_string(), version)
+                }
+                None => (id.clone(), None),
+            };
+            let id = id.as_str();
             let fx = catalog().fx(id).ok_or_else(|| {
                 let message = match kerf_model::catalog::retired(id) {
                     Some(_) => kerf_model::catalog::unknown("effect", id),
@@ -2445,6 +2456,10 @@ impl KerfMcpRouter {
                 };
                 McpError::new("INVALID_ARGUMENTS", message)
             })?;
+            if let Some(version) = version {
+                fx.reads(version)
+                    .map_err(|message| McpError::new("INVALID_ARGUMENTS", message))?;
+            }
             return Ok(json!({
                 "effect": fx.id.as_str(),
                 "category": fx.category,

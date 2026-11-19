@@ -2245,6 +2245,51 @@ sequence s1 rate=24 size=1920x1080
     }
 
     #[test]
+    fn a_cut_its_clip_s_gain_fades_is_not_heard() {
+        // a1 ends at 4 s of m1 in the middle of somebody speaking.
+        let through = Known {
+            sound: Some(recording(&[(3.2, 4.4)], &[])),
+            ..Known::default()
+        };
+        let cut = |script: &str| {
+            let project = apply_script(&project(), Catalog::builtin(), script)
+                .unwrap()
+                .project;
+            let found: Vec<String> = findings(&project, &through)
+                .into_iter()
+                .filter(|finding| finding.code == CUT_IN_SOUND)
+                .map(|finding| finding.message)
+                .collect();
+            let report = cuts::report(
+                &project,
+                &project.sequences[0],
+                &through,
+                &cuts::Asked::default(),
+            );
+            (found, report["summary"]["faded"].clone())
+        };
+        let (found, faded) = cut("set a1 gain=-3");
+        assert!(
+            found.iter().any(|message| message.contains("`a1` ends")),
+            "{found:?}"
+        );
+        assert_eq!(faded, 0);
+        // Its gain brought down to nothing by its last frame fades it out, as a transition would.
+        let (found, faded) = cut("set a1 gain={0f:0 84f:0 95f:-60:ease}");
+        assert!(
+            !found.iter().any(|message| message.contains("`a1` ends")),
+            "{found:?}"
+        );
+        assert_eq!(faded, 1);
+        // Down a little is still a cut through the sound.
+        let (found, _) = cut("set a1 gain={0f:0 95f:-12}");
+        assert!(
+            found.iter().any(|message| message.contains("`a1` ends")),
+            "{found:?}"
+        );
+    }
+
+    #[test]
     fn a_cut_between_two_words_said_in_one_breath_is_in_neither() {
         // Somebody speaks up to 0.06 s before a1 ends at 4 s of m1 and again 0.06 s after: the
         // two words part for an eighth of a second, too short for a pause, and the cut is in it.
