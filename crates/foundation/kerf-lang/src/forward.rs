@@ -310,6 +310,7 @@ impl Place<'_> {
             | Op::RelinkMedia { .. }
             | Op::ReplaceMedia(_)
             | Op::RemoveMedia { .. }
+            | Op::SyncMedia { .. }
             | Op::AddStep { .. }
             | Op::SetStep { .. }
             | Op::RemoveStep { .. }

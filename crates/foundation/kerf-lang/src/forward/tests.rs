@@ -283,3 +283,17 @@ fn what_the_edited_project_refuses_is_refused_with_its_reason() {
     assert_eq!(error.code, "id.taken");
     assert_eq!(error.span.map(|span| span.line), Some(1));
 }
+
+#[test]
+fn a_recording_lined_up_with_another_comes_forward_as_it_is() {
+    // `media sync` names media alone, and a media keeps its id: no clip and
+    // no place to carry.
+    let current = edited("trim c3 out -24f ripple");
+    let script = "media add m2 path=\"recorder.wav\" rate=24 dur=00:10:00:00 audio=2ch@48000\n\
+                  media sync m2 with=m1@1.5s";
+    let forwarded = forward(&current, script);
+    let (with, at) = forwarded.project.synced_to("m2").unwrap();
+    assert_eq!((with.as_str(), at.seconds()), ("m1", 1.5));
+    assert!(script_of(&current, &forwarded).ends_with("media sync m2 with=m1@1.5s\n"));
+    assert_eq!(span(&forwarded.project, "c4"), (264, 360));
+}
