@@ -6,6 +6,18 @@ on `main`; its section here becomes the release's notes on GitHub
 
 ## Unreleased
 
+- A guide of solids draws several times faster under a light that casts a
+  shadow, and to the same picture. A street of 53 solids with a soft shadow
+  (`gen=light@1 shadow=0.55 size=2.5`) took 42 s a frame at 1080p on four
+  CPU cores and takes 2.5, where it takes 1.8 with no shadow at all; with a
+  hard shadow it took 4.8 s and takes 2.1; and three solids with a soft
+  shadow took 2.4 s and take 0.4. A ray to a light asked every mesh of the
+  scene, and now asks the ones it comes to; the many rays to a light with a
+  `size` are sent only where a mesh is between the place and the light; and
+  a mesh of many triangles, a ball or a model, no longer costs each ray
+  that comes to it a walk through much of its tree. `motion_bench` has the
+  scenes
+  ([docs/architecture.md](docs/architecture.md#motion)).
 - An agent's `look` with `eye` says where the eye is either side of each
   cut between two shots: where the subject of the shot that ends is on the
   frame and where the next one's is, how far that jumps, how much larger or
