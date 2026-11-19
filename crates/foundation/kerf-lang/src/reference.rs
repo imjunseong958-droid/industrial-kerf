@@ -30,7 +30,7 @@ line, applied in order and atomically.
 - Keyframes, clip time: `opacity={0f:0 12f:1:ease}`; linear, hold, ease-in,
   ease-out, ease, or an overshooting curve: `{0f:1 12f:1.2:0.2,0.8,0.4,1}`.
   Or `(t*90)`, `t` seconds: `pi sin cos abs floor min max noise`
-- `set c2 parent=c1` moves `c2` with `c1`, which `gen=null@1` is for. It is written with `set`, not where a clip is placed.
+- `set c2 parent=c1` moves `c2` with `c1` across the frame, which `gen=null@1` is for; `c2` keeps its own depth (`z`, `rotate_x`, `rotate_y`). It is written with `set`, not where a clip is placed.
 - `retime=flow` on footage draws new frames between its own for slow motion; `retime=blend` fades.
 - `rect=`, `ellipse=`, and `points=` on a mask animate: `rect={0f:0,0,0.2,0.2 24f:0.5,0,0.7,0.2:ease}`,
   `points={0f:0,0;0.5,0;0.5,0.5 24f:0.1,0;0.6,0;0.6,0.5}`, corners one for one. A third number on a corner, `0.5,0,12`, softens the edge there by that many pixels.

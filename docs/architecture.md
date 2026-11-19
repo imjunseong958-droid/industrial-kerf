@@ -661,6 +661,40 @@ What is built for it, in this order, each measured before the next:
    last places come to
    (`what_is_as_near_to_two_clips_is_on_the_lower_tracks_on_every_frame`).
 
+   What came of a snowman (2026-11-19). Nine scenes were blocked from solids
+   for a model to film, kept with the steps that make each shot of them in
+   `fixtures/shots/solids`, and of every thing stacked the lower part was said to
+   be sunk in the upper: a snowman's base 0.494 in its belly, a barn 0.743
+   in its roof, a cow's legs in its body, a lantern in its cap, with the line
+   that would have set each on top of what stands on it. A line down through
+   a foot starts at its clip's top, and where the upper part reaches a little
+   way into the lower, as a ball set on a ball has to, it starts inside the
+   upper part and comes out by its underside, which was taken for a floor
+   through the lower. A thing whose surface closes round it has an inside
+   (`InDepth::closed`: a solid, a box, a ball, a cylinder, and a file's mesh
+   with no open edge, found once of its corners at rest), and the surface a
+   line leaves it by is passed (`stands::comes_to`): the lower part stands as
+   it stood, and the upper is the one sunk in it, by how far it reaches in.
+   Inside is asked a hair toward the clip's own middle, a line down the very
+   edge of a crate under a crate as wide running along surfaces. A flat clip
+   and a mesh that is open, a set rebuilt from a shot, are read as they were,
+   every surface a floor. So the cart's axle, whose ends are inside its
+   wheels, is over the road and no longer over the inside of a wheel.
+
+   And what is wider than what it stands on was in the air, or over the
+   floor: a roof on its walls, a hat's brim on a head, their corners having
+   nothing under them. A thing that bulges nowhere inward (`InDepth::convex`:
+   all but a file's mesh, a table on four legs) has its underside between its
+   lowest corners, so one whose corners are down on nothing is read with the
+   middle of them as one foot more, where that comes down first; and a clip
+   none of whose feet is on anything is sunk by the few that are in
+   something, which were passed over as a corner that dips
+   (`what_stands_on_a_clip_and_reaches_into_it_is_sunk_and_the_clip_under_it_is_not`,
+   `a_clip_wider_than_what_it_stands_on_stands_by_the_feet_that_are_over_it`).
+   One whose corners are down is down, and what is under its middle goes
+   through it. The line that sets a clip down is said once for the clip, a
+   foot that lifts on every step having had its keys again with each run.
+
    What it costs, on four cores, the compositor's plan of the sequence
    included: the car's scene, three clips in depth, 0.6 ms for three frames
    and 3.2 ms for all 96; with a ball of 2,208 triangles beside the car,

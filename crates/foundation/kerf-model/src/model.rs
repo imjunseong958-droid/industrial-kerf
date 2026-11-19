@@ -429,6 +429,15 @@ impl Clip {
         self.start + self.duration
     }
 
+    /// Whether it is in depth, as the compositor places it: it says `three_d=true`, or it
+    /// is a mesh, which is in depth whether it says so or not.
+    pub fn in_depth(&self) -> bool {
+        matches!(
+            self.props.get("three_d"),
+            Some(Param::Static(Value::Bool(true)))
+        ) || matches!(&self.content, Content::Generator { fx, .. } if fx.as_str() == "mesh")
+    }
+
     pub fn speed(&self) -> &Speed {
         match &self.content {
             Content::Media { speed, .. } | Content::Sequence { speed, .. } => speed,

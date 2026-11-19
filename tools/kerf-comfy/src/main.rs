@@ -12,7 +12,8 @@
 //!
 //! `kerf-comfy --workflow NAME|FILE --describe` prints that entry for a
 //! workflow, with what its model takes beside how it is run, and asks no
-//! server.
+//! server. `kerf-comfy --describe` alone prints one for every workflow that
+//! comes with it, each under the workflow's own name: a models file whole.
 //!
 //! A request that names a workflow of its own project (`workflow=` on the
 //! `generate` step, a file kept beside the shot's takes) is made with that file in
@@ -30,7 +31,7 @@ use kerf_comfy::server::{Address, Server};
 use kerf_comfy::workflow::{Workflow, BUNDLED};
 use kerf_comfy::{make, Patience};
 
-const USAGE: &str = "usage: kerf-comfy --workflow NAME|FILE REQUEST.json, kerf-comfy --workflow NAME|FILE --describe, kerf-comfy --workflow NAME|FILE --inputs, or kerf-comfy --list";
+const USAGE: &str = "usage: kerf-comfy --workflow NAME|FILE REQUEST.json, kerf-comfy [--workflow NAME|FILE] --describe, kerf-comfy --workflow NAME|FILE --inputs, or kerf-comfy --list";
 
 /// A model's entry in a person's models file for the workflow `named`: how
 /// this program is run for it, and what its model takes. A workflow in a
@@ -119,8 +120,22 @@ fn run(args: Vec<String>) -> Result<(), String> {
         }
     }
     if describe {
-        let (true, Some(named)) = (requests.is_empty(), workflow) else {
+        if !requests.is_empty() {
             return Err(USAGE.to_owned());
+        }
+        let Some(named) = workflow else {
+            // Every workflow that comes with this program, each under its own name: what
+            // a person would else ask for a workflow at a time and put together by hand.
+            let mut models = serde_json::Map::new();
+            for (name, _) in BUNDLED {
+                models.insert((*name).to_owned(), entry(name, &Workflow::named(name)?));
+            }
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&models).map_err(|error| error.to_string())?
+            );
+            say("kerf-comfy: that is a models file, an entry for each workflow that comes with this program under the workflow's own name; keep it as ~/.kerf/models.json, or put the entries wanted into the one there is, under the names the steps are to say");
+            return Ok(());
         };
         let entry = entry(&named, &Workflow::named(&named)?);
         println!(

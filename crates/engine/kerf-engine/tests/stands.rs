@@ -247,6 +247,133 @@ fn a_ball_in_the_air_is_in_the_air_and_the_floor_is_not() {
     assert_eq!((run.how, run.on.as_deref(), run.up), (How::Air, None, None));
 }
 
+/// A mesh a second long on track `track`, its middle at `z=1`.
+fn mesh(track: u32, id: &str, set: &str) -> String {
+    on_track(track, id, "mesh", &format!("{set} z=1"))
+}
+
+#[test]
+fn what_stands_on_a_clip_and_reaches_into_it_is_sunk_and_the_clip_under_it_is_not() {
+    // A snowman: a ball on the floor, a ball set two hundredths into its top, and a third
+    // as far into that one's. The underside of each is inside the one under it, and is no
+    // floor through it: the lower one stands as it stood, and the upper one is in it.
+    let snowman = [
+        level(),
+        mesh(2, "base", "kind=ball width=0.3 height=0.3 length=0.3 y=0.25"),
+        mesh(3, "belly", "kind=ball width=0.2 height=0.2 length=0.2 y=0.02"),
+        mesh(4, "head", "kind=ball width=0.1 height=0.1 length=0.1 y=-0.11"),
+    ]
+    .concat();
+    let before = project(&snowman);
+    let stands = standing(&before, None, &[]).expect("reads");
+    let base = only(&stands, "base");
+    assert_eq!((base.how, base.on.as_deref()), (How::Rests, Some("floor")), "{base:?}");
+    assert_eq!(clip(&stands, "base").script, None);
+    for (upper, lower) in [("belly", "base"), ("head", "belly")] {
+        let run = only(&stands, upper);
+        assert!(
+            matches!(run.how, How::Sunk { deep, share } if near(deep, 0.02) && share == 1.0),
+            "{upper}: {run:?}"
+        );
+        assert_eq!(run.on.as_deref(), Some(lower));
+    }
+    // Each set down by its line, from the lowest up, the whole of it rests.
+    let mut after = before;
+    for upper in ["belly", "head"] {
+        let stands = standing(&after, None, &[]).expect("reads");
+        let line = clip(&stands, upper).script.clone().expect("a line");
+        after = apply_script(&after, Catalog::builtin(), &line).expect("runs").project;
+    }
+    let stands = standing(&after, None, &[]).expect("reads");
+    for (id, on) in [("base", "floor"), ("belly", "base"), ("head", "belly")] {
+        let run = only(&stands, id);
+        assert_eq!((run.how, run.on.as_deref()), (How::Rests, Some(on)), "{id}: {run:?}");
+    }
+
+    // Two crates as wide as each other, the upper a hundredth into the lower: a line down
+    // the lower one's corner runs down the upper one's edge, and says the same.
+    let stack = [
+        level(),
+        mesh(2, "lower", "kind=box width=0.2 height=0.2 length=0.2 y=0.3"),
+        mesh(3, "upper", "kind=box width=0.2 height=0.2 length=0.2 y=0.11"),
+    ]
+    .concat();
+    let stands = read(&stack);
+    assert_eq!(only(&stands, "lower").how, How::Rests, "{:?}", clip(&stands, "lower"));
+    let upper = only(&stands, "upper");
+    assert!(matches!(upper.how, How::Sunk { deep, .. } if near(deep, 0.01)), "{upper:?}");
+    assert_eq!(upper.on.as_deref(), Some("lower"));
+
+    // A roof wider than its walls and a clip with a `depth` are closed the same way, and
+    // what hangs under a body, a leg a little way up into it, is not sunk in the body.
+    let barn = [
+        level(),
+        mesh(2, "walls", "kind=box width=0.2 height=0.2 length=0.2 y=0.3"),
+        on_track(3, "roof", "solid", "color=#802020 three_d=true scale=0.4 depth=0.3 z=0.85 y=0.01"),
+        mesh(4, "leg", "kind=box width=0.05 height=0.1 length=0.05 y=0.35 x=0.3"),
+        mesh(5, "body", "kind=box width=0.2 height=0.1 length=0.2 y=0.26 x=0.3"),
+    ]
+    .concat();
+    let stands = read(&barn);
+    for id in ["walls", "leg"] {
+        let run = only(&stands, id);
+        assert_eq!((run.how, run.on.as_deref()), (How::Rests, Some("floor")), "{id}: {run:?}");
+    }
+    // The roof's foot is at 0.21, a hundredth under the walls' top.
+    let roof = only(&stands, "roof");
+    assert!(matches!(roof.how, How::Sunk { deep, .. } if near(deep, 0.01)), "{roof:?}");
+    assert_eq!(roof.on.as_deref(), Some("walls"));
+    let body = only(&stands, "body");
+    assert!(matches!(body.how, How::Sunk { deep, .. } if near(deep, 0.01)), "{body:?}");
+    assert_eq!(body.on.as_deref(), Some("leg"));
+
+    // A clip that is in another from above is still sunk in it: a crate let half its
+    // height into a block, the block's top being a floor through it.
+    let block = [
+        level(),
+        mesh(2, "block", "kind=box width=0.4 height=0.2 length=0.4 y=0.3"),
+        mesh(3, "crate", "kind=box width=0.1 height=0.1 length=0.1 y=0.2"),
+    ]
+    .concat();
+    let stands = read(&block);
+    let sunk = only(&stands, "crate");
+    assert!(matches!(sunk.how, How::Sunk { deep, share } if near(deep, 0.05) && share == 1.0), "{sunk:?}");
+    assert_eq!((sunk.on.as_deref(), only(&stands, "block").how), (Some("block"), How::Rests));
+}
+
+#[test]
+fn a_clip_wider_than_what_it_stands_on_stands_by_the_feet_that_are_over_it() {
+    // A brim on a head it is wider than: of its feet only its middle is over the head, the
+    // rest being round its rim with the floor far under them. Level with the head's top it
+    // rests on it, and pressed a hundredth into it, it is sunk in it by that one foot and
+    // is not in the air.
+    let hat = |y: f64| {
+        [
+            level(),
+            mesh(2, "head", "kind=box width=0.1 height=0.3 length=0.1 y=0.25"),
+            mesh(3, "brim", &format!("kind=cylinder width=0.3 height=0.02 length=0.3 y={y}")),
+        ]
+        .concat()
+    };
+    let rests = read(&hat(0.09));
+    let run = only(&rests, "brim");
+    assert_eq!((run.how, run.on.as_deref()), (How::Rests, Some("head")), "{run:?}");
+    let before = project(&hat(0.1));
+    let stands = standing(&before, None, &[]).expect("reads");
+    let run = only(&stands, "brim");
+    assert!(matches!(run.how, How::Sunk { deep, share } if near(deep, 0.01) && share < 0.1), "{run:?}");
+    assert_eq!(run.on.as_deref(), Some("head"));
+    let line = clip(&stands, "brim").script.clone().expect("a line");
+    assert_eq!(line, "set brim y=0.09");
+    let after = apply_script(&before, Catalog::builtin(), &line).expect("runs").project;
+    assert_eq!(only(&standing(&after, None, &[]).expect("reads"), "brim").how, How::Rests);
+    // A corner that dips where the rest of it is on the floor is still passed over: a ball
+    // a touch and a half into the floor has its lowest corner in it and its lowest ring on it.
+    let stands = read(&[level(), mesh(2, "ball", "kind=ball width=0.3 height=0.3 length=0.3 y=0.2545")].concat());
+    let ball = only(&stands, "ball");
+    assert!(!matches!(ball.how, How::Air), "{ball:?}");
+}
+
 #[test]
 fn what_moves_along_a_floor_rests_all_the_way_and_where_it_lifts_is_the_run_said() {
     let along = crate_at("y=0.3 x={0f:-0.3 23f:0.3}");
@@ -388,10 +515,11 @@ fn what_is_as_near_to_two_clips_is_on_the_lower_tracks_on_every_frame() {
     for moves in [true, false] {
         let stands = cart(moves);
         assert_eq!(stands.frames.len(), 81);
-        // Each axle is as far over the inside of the one wheel as of the other.
-        for (axle, wheel) in [("axle_f", "wheel_lf"), ("axle_b", "wheel_lb")] {
+        // Each axle's ends are inside its wheels, whose undersides are no floor under it:
+        // what it is over is the road, on every frame, and neither wheel.
+        for axle in ["axle_f", "axle_b"] {
             let run = only(&stands, axle);
-            assert_eq!((run.how, run.on.as_deref(), run.frames), (How::Air, Some(wheel), (0, 80)), "{moves}");
+            assert_eq!((run.how, run.on.as_deref(), run.frames), (How::Air, Some("road"), (0, 80)), "{moves}");
         }
         // The bed is on both axles, and the back board as deep in each side board.
         let run = only(&stands, "bed");
@@ -651,6 +779,65 @@ fn what_the_fixtures_scenes_stand_on_is_what_was_found_of_them() {
         assert!(stands.clips.is_empty() && stands.ground.is_none(), "{stands:?}");
         assert_eq!(stands.not_measured, [format!("{flat}, out of depth: it is nowhere in the scene")]);
     }
+}
+
+#[test]
+fn what_the_scenes_of_solids_stand_on_is_what_was_found_of_them() {
+    // Things stacked from solids, as an agent blocked them for a model to film
+    // (`fixtures/shots/solids`): each part a little way into the one under it, or hanging
+    // under it. The lower part of each was said to be sunk in the upper, a snowman's base
+    // 0.494 in its belly, with the line that would have set it on top of its belly.
+    let folder = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../fixtures/shots/solids");
+    let mut solids = fixture("solids");
+    // Three of its things are meshes of files, which are read from where the paths say.
+    solids.resolve_paths(Catalog::builtin(), &folder);
+    let first = [Rate::new(16, 1).expect("a rate").time_of(0)];
+    let reads = |sequence: &str| standing(&solids, Some(sequence), &first).expect("reads");
+    let rests = |stands: &Standing, id: &str, on: &str| {
+        let run = only(stands, id);
+        assert_eq!((run.how, run.on.as_deref()), (How::Rests, Some(on)), "{id}: {run:?}");
+    };
+    let sunk = |stands: &Standing, id: &str, on: &str, by: f64| {
+        let run = only(stands, id);
+        assert!(matches!(run.how, How::Sunk { deep, .. } if (deep - by).abs() < 5e-4), "{id}: {run:?}");
+        assert_eq!(run.on.as_deref(), Some(on), "{id}");
+    };
+
+    // A snowman: its base is on the snow, and each part above is in the one under it by
+    // what it was written to reach in. The brim is wider than the head, on which it stands
+    // by its middle alone.
+    let snowman = reads("snowman");
+    assert_eq!(snowman.ground.as_deref(), Some("snow_ground"));
+    rests(&snowman, "snow_base", "snow_ground");
+    sunk(&snowman, "snow_belly", "snow_base", 0.07);
+    sunk(&snowman, "snow_head", "snow_belly", 0.04);
+    sunk(&snowman, "snow_brim", "snow_head", 0.025);
+    sunk(&snowman, "snow_hat", "snow_brim", 0.005);
+    assert_eq!(clip(&snowman, "snow_base").script, None);
+    assert_eq!(clip(&snowman, "snow_belly").script.as_deref(), Some("set snow_belly y=-0.27"));
+
+    // A barn under a roof that is a box turned on its edge, and a cow whose legs go a
+    // little way up into its body: the barn and the legs are on the field.
+    let saucer = reads("saucer");
+    rests(&saucer, "barn", "field");
+    assert_eq!(only(&saucer, "barn_roof").on.as_deref(), Some("barn"));
+    for leg in ["cow_leg0", "cow_leg1", "cow_leg2", "cow_leg3"] {
+        rests(&saucer, leg, "field");
+    }
+
+    // A lighthouse: the lantern is on the gallery under it, and the cap is the one in the
+    // lantern. A robot's legs are on the floor of the alley and not in its body.
+    let lighthouse = reads("lighthouse");
+    rests(&lighthouse, "lantern", "gallery");
+    sunk(&lighthouse, "cap", "lantern", 0.12);
+    let robot = reads("robot");
+    rests(&robot, "bot_leg_l", "alley_floor");
+    rests(&robot, "bot_leg_r", "alley_floor");
+    rests(&robot, "bot_antenna", "bot_head");
+
+    // The files' meshes stand as any do: the rocket on its pad, the donut on its plate.
+    rests(&reads("rocket"), "ship", "pad");
+    rests(&reads("donut"), "ring_cake", "plate");
 }
 
 #[test]
