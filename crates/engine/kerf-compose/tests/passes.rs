@@ -215,6 +215,54 @@ fn a_matte_is_one_clip_in_white_with_what_stands_before_it_cut_out() {
 }
 
 #[test]
+fn a_matte_has_none_of_a_clip_told_long_after_its_own() {
+    // A square on the left, 143 clips that follow it on its track, and on the track above a
+    // square on the right, which is told 145th: where the colors once came round.
+    let mut body =
+        "  track V1 video\n    clip left gen=solid@1 at=0f dur=24f\n      set scale=0.4 x=-0.25\n"
+            .to_owned();
+    for after in 0..143 {
+        body += &format!("    clip c{after} gen=solid@1 at={}f dur=1f\n", 24 + after);
+    }
+    body += "  track V2 video\n    clip right gen=solid@1 at=0f dur=24f\n      set scale=0.4 x=0.25\n";
+    let project = parse_document(
+        &format!("kerf 1\nproject name=\"t\"\nsequence s1 rate=24 size=320x180 audio=48000\n{body}"),
+        Catalog::builtin(),
+    )
+    .unwrap_or_else(|errors| panic!("{errors:?}"))
+    .project;
+    let drawn = |pass: Pass, matte: Option<&str>| {
+        Compositor::new(
+            &project,
+            Catalog::builtin(),
+            &ComposeOptions {
+                pass,
+                matte: matte.map(str::to_owned),
+                ..ComposeOptions::default()
+            },
+        )
+        .expect("composes")
+    };
+    let at = Rate::FPS_24.time_of(3);
+    let (on_left, on_right) = ((80, 90), (240, 90));
+    let ids = drawn(Pass::Ids, None);
+    let colors = ids.ids();
+    assert_eq!((colors[0].0.as_str(), colors[144].0.as_str()), ("left", "right"));
+    // Each is its own color in the pass, further from the other's than a reader takes for it.
+    let frame = ids.frame(at, 1.0);
+    assert!(same(pixel(&frame, on_left.0, on_left.1), colors[0].1));
+    assert!(same(pixel(&frame, on_right.0, on_right.1), colors[144].1));
+    let apart = |a: [u8; 3], b: [u8; 3]| a.iter().zip(b).map(|(a, b)| a.abs_diff(b)).max().unwrap();
+    assert!(apart(colors[0].1, colors[144].1) > 6, "{:?} {:?}", colors[0].1, colors[144].1);
+    // So a matte of either is white on it and black on the other.
+    for (clip, its, others) in [("left", on_left, on_right), ("right", on_right, on_left)] {
+        let matte = drawn(Pass::Picture, Some(clip)).frame(at, 1.0);
+        assert_eq!(pixel(&matte, its.0, its.1), [255, 255, 255], "{clip}");
+        assert_eq!(pixel(&matte, others.0, others.1), [0, 0, 0], "{clip}");
+    }
+}
+
+#[test]
 fn a_pass_holds_still_and_is_kept_apart_from_the_picture() {
     // The same scene drawn twice is the same pass to the byte, and its number is its own.
     let at = Rate::FPS_24.time_of(3);

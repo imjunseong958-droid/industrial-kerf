@@ -107,12 +107,105 @@ pub(crate) struct Drawing {
     ids: Vec<(Id, Rgba)>,
 }
 
-/// The color the clip told `index`th has in an ids pass: no two near each other for as many clips
-/// as a scene has, and none near black, which is where there is no clip.
+/// How many clips an ids pass has a color of their own for. The colors come round after them,
+/// the next clip told having the first's.
+pub const ID_COLORS: usize = 7_488;
+
+/// The colors of one lap: three rings of 48 in turn, a ring being the colors of one brightest
+/// and one dimmest channel, which differ by their hue alone.
+const LAP: usize = 144;
+
+/// How far a byte of a pixel of an ids pass may be from a clip's color and still be that
+/// clip's, to a matte here and to what reads the pass elsewhere.
+const NEAR: u8 = 6;
+
+/// How far apart any two colors not both of the first lap are, in bytes of the channel they
+/// differ most by: well past [`NEAR`].
+const APART: u8 = 10;
+
+/// The brightest channel of the darkest ring, black being where there is no clip.
+const DARKEST: u8 = 125;
+
+/// The rings of the laps after the first, each by its brightest and its dimmest channel.
+///
+/// Two colors differ in some channel by as much as their brightest channels differ, and by as
+/// much as their dimmest: the channels of each put in order are no further apart than they
+/// were. So the colors of two rings are as far apart as the rings are, whatever their hues,
+/// and these are the rings [`APART`] apart: every brightest from white's down to [`DARKEST`]
+/// and every dimmest from black's up, a step of [`APART`] at a time, that leaves between the
+/// two the eight such steps a ring's own hues are parted by, and that is as far from each
+/// ring of the first lap.
+///
+/// They are told by how much room each has, the most first: the fewer clips a program has,
+/// the further apart their colors are. A ring's room is the least of three: how far apart its
+/// own colors are, how far it is from the rings of the first lap, and how far from the rings
+/// told before it, which is 40 for the rings that are every 40 apart, 20 for those every 20,
+/// and [`APART`] for the rest.
+fn rings() -> &'static [[u8; 2]] {
+    static RINGS: std::sync::OnceLock<Vec<[u8; 2]>> = std::sync::OnceLock::new();
+    RINGS.get_or_init(|| {
+        let first: Vec<[u8; 2]> = (0..3)
+            .map(|kind| {
+                let Rgba { r, g, b, .. } = id_color(kind);
+                [r.max(g).max(b), r.min(g).min(b)]
+            })
+            .collect();
+        let apart = |a: &[u8; 2], b: &[u8; 2]| a[0].abs_diff(b[0]).max(a[1].abs_diff(b[1]));
+        let from_first = |ring: &[u8; 2]| first.iter().map(|first| apart(ring, first)).min();
+        let mut rings: Vec<[u8; 2]> = (DARKEST..=u8::MAX)
+            .rev()
+            .step_by(usize::from(APART))
+            .flat_map(|brightest| {
+                (0..=brightest - 8 * APART)
+                    .step_by(usize::from(APART))
+                    .map(move |dimmest| [brightest, dimmest])
+            })
+            .filter(|ring| from_first(ring) >= Some(APART))
+            .collect();
+        rings.sort_by_key(|ring| {
+            let [brightest, dimmest] = *ring;
+            let strength = brightest - dimmest;
+            let every = [4 * APART, 2 * APART]
+                .into_iter()
+                .find(|step| (u8::MAX - brightest) % step == 0 && dimmest % step == 0);
+            let room = (strength / 8)
+                .min(every.unwrap_or(APART))
+                .min(from_first(ring).unwrap_or(u8::MAX));
+            (
+                std::cmp::Reverse(room),
+                std::cmp::Reverse(strength),
+                std::cmp::Reverse(brightest),
+            )
+        });
+        rings
+    })
+}
+
+/// The color the clip told `index`th has in an ids pass: no two near each other for
+/// [`ID_COLORS`] clips, and none near black, which is where there is no clip.
 fn id_color(index: usize) -> Rgba {
-    // Hues a golden angle apart never bunch, and three kinds of color in turn part neighbors.
-    let hue = (index as f64 * 137.507_764) % 360.0;
-    let (saturation, value) = [(0.85, 1.0), (0.55, 0.8), (1.0, 0.62)][index % 3];
+    let index = index % ID_COLORS;
+    let (hue, saturation, value) = if index < LAP {
+        // Hues a golden angle apart never bunch, and three kinds of color in turn part neighbors.
+        let hue = (index as f64 * 137.507_764) % 360.0;
+        let (saturation, value) = [(0.85, 1.0), (0.55, 0.8), (1.0, 0.62)][index % 3];
+        (hue, saturation, value)
+    } else {
+        // 144 golden angles are 55 turns, so a lap that started over would have the first
+        // lap's hues, and with its three kinds its colors. Each later lap has three rings of
+        // its own, taken in turn as those kinds are. A ring's hues are the 48ths of a turn:
+        // from one to the next a single channel changes, by an eighth of what is between
+        // the ring's brightest and dimmest, six of them being the hues where one channel
+        // stops changing and another starts. Hues a golden angle apart can be half as
+        // far apart, either side of one of those six. They are told in the order the
+        // golden angle has them in, a lap's 144 hues being 55 144ths of a turn apart, each
+        // brought back to the 48th before it.
+        let (lap, place) = (index / LAP, index % LAP);
+        let [brightest, dimmest] = rings()[(lap - 1) * 3 + place % 3];
+        let hue = (place * 55 % LAP / 3) as f64 * 7.5;
+        let saturation = f64::from(brightest - dimmest) / f64::from(brightest);
+        (hue, saturation, f64::from(brightest) / 255.0)
+    };
     let chroma = value * saturation;
     let within = chroma * (1.0 - ((hue / 60.0) % 2.0 - 1.0).abs());
     let (r, g, b) = match (hue / 60.0) as u32 {
@@ -618,7 +711,7 @@ impl Drawing {
         }
         if let Some(color) = self.matte {
             rgba.par_chunks_mut(4).for_each(|pixel| {
-                let its = color.iter().zip(pixel.iter()).all(|(a, b)| a.abs_diff(*b) <= 6);
+                let its = color.iter().zip(pixel.iter()).all(|(a, b)| a.abs_diff(*b) <= NEAR);
                 pixel[..3].fill(if its { u8::MAX } else { 0 });
             });
         }
@@ -3109,6 +3202,79 @@ impl Frames {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_first_lap_of_id_colors_is_as_it_was() {
+        // As the colors were when they came round after a lap, so that what was told apart
+        // then is told apart by the same colors now.
+        let as_it_was = |index: usize| {
+            let hue = (index as f64 * 137.507_764) % 360.0;
+            let (saturation, value) = [(0.85, 1.0), (0.55, 0.8), (1.0, 0.62)][index % 3];
+            let chroma = value * saturation;
+            let within = chroma * (1.0 - ((hue / 60.0) % 2.0 - 1.0).abs());
+            let (r, g, b) = match (hue / 60.0) as u32 {
+                0 => (chroma, within, 0.0),
+                1 => (within, chroma, 0.0),
+                2 => (0.0, chroma, within),
+                3 => (0.0, within, chroma),
+                4 => (within, 0.0, chroma),
+                _ => (chroma, 0.0, within),
+            };
+            [r, g, b].map(|channel| ((channel + value - chroma) * 255.0).round() as u8)
+        };
+        let now = |index: usize| {
+            let Rgba { r, g, b, a } = id_color(index);
+            assert_eq!(a, 255);
+            [r, g, b]
+        };
+        for index in 0..LAP {
+            assert_eq!(now(index), as_it_was(index), "{index}");
+        }
+        assert_eq!([now(0), now(1), now(2)], [[255, 38, 38], [92, 204, 125], [92, 0, 158]]);
+        // The next clip had the first's color, to within what a reader takes for it.
+        assert_eq!(as_it_was(LAP), [255, 42, 38]);
+        assert_ne!(now(LAP), as_it_was(LAP));
+    }
+
+    #[test]
+    fn no_two_id_colors_are_near_each_other_and_none_is_near_black() {
+        // Every lap is whole, and the colors are as many as is said of them.
+        assert_eq!(rings().len() % 3, 0);
+        assert_eq!(ID_COLORS, LAP * (1 + rings().len() / 3));
+        let colors: Vec<[u8; 3]> = (0..ID_COLORS)
+            .map(|index| {
+                let Rgba { r, g, b, .. } = id_color(index);
+                [r, g, b]
+            })
+            .collect();
+        for (index, color) in colors.iter().enumerate() {
+            let brightest = color.iter().max().unwrap();
+            assert!(*brightest >= DARKEST, "{index} is {color:?}, near black");
+            // The first lap's are as near each other as they were, which is past what a
+            // reader takes one for another by, and the rest are further from all before
+            // them: the first of them further still, the rings with the most room being told
+            // first, and for ten laps so far that no pixel is near two of them.
+            let least = match index / LAP {
+                0 => NEAR + 1,
+                1..=4 => 20,
+                5..=10 => 2 * NEAR + 2,
+                _ => APART,
+            };
+            for (before, other) in colors[..index].iter().enumerate() {
+                let apart = color[0]
+                    .abs_diff(other[0])
+                    .max(color[1].abs_diff(other[1]))
+                    .max(color[2].abs_diff(other[2]));
+                assert!(
+                    apart >= least,
+                    "{before} is {other:?} and {index} is {color:?}, {apart} apart"
+                );
+            }
+        }
+        // After them the colors come round.
+        assert_eq!(id_color(ID_COLORS), id_color(0));
+        assert_eq!(id_color(2 * ID_COLORS + LAP + 7), id_color(LAP + 7));
+    }
 
     /// The same table holds the editor's overlay to this, in `graph_test.cpp`
     /// (`parentsMoveAsTheCompositorMovesThem`).

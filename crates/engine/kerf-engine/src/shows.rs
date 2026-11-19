@@ -52,8 +52,9 @@ const MOST_ORDERS: usize = 512;
 /// and each is a small frame to draw and to hold: this is there against a
 /// frame of many hundreds, and where there are more the highest tracks' are
 /// the ones read, a scene being stacked from what is behind up to its subject.
-/// Fewer are read where the ids pass has not a color for each, which as it
-/// is comes after 144 clips: see [`Showing::unread`].
+/// Fewer are read where the ids pass has not a color for each, which is in a
+/// program of more than [`kerf_compose::ID_COLORS`] clips: see
+/// [`Showing::unread`].
 pub const MOST_CLIPS: usize = 256;
 
 /// The most frames drawn at once, each being some megabytes while it is drawn.
@@ -93,8 +94,10 @@ pub struct Showing {
     /// Clips left out, from the lowest track up: those past [`MOST_CLIPS`],
     /// counting from the highest track down, and any whose color in the ids
     /// pass is also that of a clip on a higher track, which a frame cannot
-    /// tell from it. They are left out of the frame that is read as well, so
-    /// what is said of the others is as if these were not there.
+    /// tell from it: the pass's colors come round after
+    /// [`kerf_compose::ID_COLORS`] clips of a program. They are left out of
+    /// the frame that is read as well, so what is said of the others is as if
+    /// these were not there.
     pub unread: Vec<String>,
 }
 
