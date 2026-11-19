@@ -22,7 +22,9 @@ pub use captions::{
 };
 pub use diff::diff_text;
 pub use doc::{parse_document, print_document, Document, PrintOptions, VERSION};
-pub use facts::{Barred, Breaks, Facts, NoFacts, Place, Snap, Snaps, Speech, WORD_SLACK};
+pub use facts::{
+    airs, Barred, Breaks, Facts, NoFacts, Place, Snap, Snaps, Speech, BEAT, WORD_SLACK,
+};
 pub use making::print_step;
 pub use reference::{fx_reference, property_reference, reference};
 pub use script::{

@@ -54,6 +54,8 @@ delete <clip> …                         remove clips (and linked partners), le
 ripple-delete <clip> …                  remove and close the gap on every unlocked track
 lift from=<pos> to=<pos> [tracks=…]     clear a range, leaving a gap
 extract from=<pos> to=<pos> [tracks=…]  cut a range out and close it
+lift|extract <clip> said="…"  ·  extract <clip> pause="…"  [leave=<dur>]
+    take its words out, or the pause after them down to leave (0.25s)
 trim <clip> in|out <amount>|to=<pos>|src=<src> [ripple]
     src= puts the edge on that source position
 roll <clip> <amount>|to=<pos>           move the cut after the clip
@@ -89,10 +91,9 @@ media relink <id> path="…"  ·  media remove <id>
 sequence add <id> rate=<fps> size=WxH [name="…"] [start=<tc>] [color=rec2100-pq|rec2100-hlg]  ·  sequence set|remove <id> …
 ```
 
-`snap=pause|cut [within=<amount>]` on trim, split, insert, and overwrite
-moves the edge into the pause at the nearer end of the sound it is in, past
-no word, or with a transcript into the gap two words run together part for;
-or onto a cut of its picture; by its index, within half a second unless given.
+`snap=pause|cut [within=<amount>]` on trim, split, insert, overwrite, and lift
+or extract naming a clip moves the edge into the pause beside it, past no
+word, or onto a picture cut; within 0.5s unless given.
 
 The effect `shape.outline@1` adds an outline to a `gen=shape` clip, in order, by `mode` (add, subtract,
 intersect, difference), with the shape's own numbers and `x`, `y`, `rotation`.

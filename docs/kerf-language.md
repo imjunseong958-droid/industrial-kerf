@@ -396,8 +396,10 @@ transition add from=c1 to=c9 fx=dissolve dur=12f
 - `trim`, `roll`, `slide`, and `move` accept either an amount (`+12f`) or an
   absolute `to=`/`at=` position.
 - `snap=pause|cut [within=<amount>]` on `trim`, `split`, `insert`, and
-  `overwrite` moves the edges the line gives (`insert` and `overwrite`:
-  `src=` and `out=`) into a pause of the media's sound, clear of the sound
+  `overwrite`, and on a `lift` or `extract` that names the clip whose sound
+  its edges go by (`extract c1 from=… to=… snap=pause`), moves the edges the
+  line gives (`insert` and `overwrite`: `src=` and `out=`) into a pause of
+  the media's sound, clear of the sound
   either side, or onto a cut of its picture, as the index made on import
   found them; within half a second unless given. A pause is 0.16 s or more
   of quiet, which is what lies between two words, and quiet is measured by
@@ -413,10 +415,10 @@ transition add from=c1 to=c9 fx=dissolve dur=12f
   An edge is taken past no word. It goes into the pause it is in, or the
   one at the nearer end of the sound it is in, and never on to a pause
   beyond: that would leave a word in, or out, that the line did not ask
-  for. Where the media has a transcript, it goes past the middle of no word
-  of it either, so an edge asked for between two words said with nothing
-  between them stays on its side of each, and is refused for want of a
-  pause. Two words said in one breath often part for a tenth of a second
+  for. Where the media has a transcript, it goes past no more than half of
+  what any word of it sounds for either, so an edge asked for between two
+  words said with nothing between them stays on its side of each, and is
+  refused for want of a pause. Two words said in one breath often part for a tenth of a second
   or so, a gap too short for a pause and as long as a consonant held inside
   one word. Where a transcript covers such a gap and times no word right
   through it, the edge may go there, on a frame of its middle half; with no
@@ -424,6 +426,27 @@ transition add from=c1 to=c9 fx=dissolve dur=12f
   the pause or gap it could not take and the word in the way. What an edit
   answers with says, as `snapped`, how far each edge went and between which
   words it now is.
+- `extract <clip> said="…"` takes words out of what a clip says and closes
+  up, in one line: the phrase as a transcript heard it, found in what the
+  clip plays. The range starts in the quiet after the sound before the
+  words and ends in the quiet before the sound after them, so the words go
+  with the quiet round them and a pause of `leave=` is left where they
+  were: 0.25 s unless given, 0.15 s after what plays before the cut and
+  0.1 s before what plays after it. A longer `leave` is longer before the
+  cut and the voice comes in as soon after it; each edge stays in the quiet
+  on its side, so where that is shorter than its share less is left, and
+  the answer says how much. `lift <clip> said="…"` clears the same range
+  and leaves a gap. Words that run on into what is said before or after
+  them have no quiet to cut in on that side, and the line is refused with
+  the word in the way, as a snapped edge is: name the words they run on
+  into as well, or give `from=` and `to=`.
+- `extract <clip> pause="…" [leave=<dur>]` brings the pause after those
+  words down to `leave`, the same way: from 0.15 s after the words, or more
+  of a longer `leave`, to 0.1 s before the next word the clip plays, or to
+  the clip's end. A breath in the pause goes with it. Sound in it at the
+  level of speech that no word of the transcript accounts for may be a word
+  a transcriber missed, so the line is refused and says where to listen. A
+  pause no longer than `leave` is not shortened.
 - `trim … src=<source position>` puts the edge where the clip plays that
   position of its media, so a cut can land on a word's time from a
   transcript.

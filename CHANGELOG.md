@@ -6,11 +6,20 @@ on `main`; its section here becomes the release's notes on GitHub
 
 ## Unreleased
 
+- Words come out of what a clip says in one line: `extract c1 said="um, so"`
+  takes them out with the quiet round them and closes up, leaving a pause
+  of a quarter of a second, or of `leave=`; `extract c1 pause="the deal."
+  leave=0.3s` brings the pause after those words down to a length; and a
+  `lift` or `extract` that names a clip takes `snap=pause` for its two
+  positions. Each edge goes into the quiet beside what stays, past no word,
+  and the answer says what went and what pause is left. It took two snapped
+  splits and a `ripple-delete` before, with each time read off a transcript
+  ([docs/kerf-language.md](docs/kerf-language.md#scripts)).
 - `snap=pause` takes an edge past no word. It went into the nearest pause
   whichever way that was, so where the nearest lay beyond a word the edit
   came back with that word in, or out, and said nothing of it. An edge now
   goes into the pause at the nearer end of the sound it is in and no
-  further, past the middle of no word a transcript heard, and an agent's
+  further, past no more than half of a word a transcript heard, and an agent's
   edit answers with how far each edge went and between which words it now
   is (`snapped`). Where the media has a transcript, an edge can also go
   between two words said in one breath, which part for too short a time to

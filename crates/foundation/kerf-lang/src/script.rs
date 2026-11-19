@@ -22,7 +22,8 @@ use crate::doc::{
     parse_sequence_color, parse_size, pinned, sequence_fields, sequence_line, take_mask_shape,
     take_role, take_sync, word_or_quote,
 };
-use crate::facts::{Barred, Breaks, Facts, NoFacts, Place, Snap, Snaps, Speech};
+use crate::facts::{airs, Barred, Breaks, Facts, NoFacts, Place, Snap, Snaps, Speech, BEAT};
+use crate::sound::Heard;
 use crate::lex::{lex, Arg, Atom, Line};
 use crate::making::print_step;
 use crate::text::{
@@ -48,7 +49,9 @@ pub struct Applied {
     pub report: Report,
     /// Each edge `snap=` moved, in the order the script moved them: how
     /// far it went, into what, and between which words where a transcript
-    /// has them. An edge that was already in place is not said.
+    /// has them. An edge that was already in place is not said. And what
+    /// each `said=` or `pause=` took out: from where to where, and the
+    /// pause it leaves.
     pub snapped: Vec<String>,
 }
 
@@ -338,30 +341,7 @@ impl Script<'_> {
                 fields.finish(count)?;
                 Ok(vec![Op::Link { clips, group }])
             }
-            "lift" | "extract" => {
-                let s = self.current(line)?;
-                let clock = Positions::of(&self.project, s);
-                let from = required(&mut fields, "from", |t| clock.position(t))?;
-                let to = required(&mut fields, "to", |t| clock.position(t))?;
-                let tracks = fields.take_ids("tracks")?;
-                fields.finish(1)?;
-                let sequence = self.project.sequences[s].id.clone();
-                Ok(vec![if command == "lift" {
-                    Op::Lift {
-                        sequence,
-                        from,
-                        to,
-                        tracks,
-                    }
-                } else {
-                    Op::Extract {
-                        sequence,
-                        from,
-                        to,
-                        tracks,
-                    }
-                }])
-            }
+            "lift" | "extract" => self.take_out(fields, command == "extract"),
             "trim" => self.trim(fields),
             "roll" | "slip" | "slide" => {
                 let clip = fields.id(1, "a clip id")?;
@@ -1244,6 +1224,359 @@ impl Script<'_> {
         Ok(Some(spoken))
     }
 
+    /// `lift` and `extract`: a range of the sequence between two positions,
+    /// or, with a clip named, what the clip says (`said=`), the pause after
+    /// what it says (`pause=`), or two positions moved by its sound
+    /// (`snap=`).
+    fn take_out(&mut self, mut fields: Fields<'_>, close: bool) -> Parsed {
+        let line = fields.line();
+        let named = fields.positional().len() > 1;
+        let (s, from, to) = if named {
+            let clip = fields.id(1, "a clip id")?;
+            let (found, positions) = self.clip(&clip, line)?;
+            let clock = &positions.clock;
+            let (said, pause) = (fields.take("said"), fields.take("pause"));
+            let from = fields.take_with("from", |t| positions.position(t))?;
+            let to = fields.take_with("to", |t| positions.position(t))?;
+            let leave = fields.take_with("leave", |t| clock.duration(t))?;
+            let range = match (said, pause, from, to) {
+                (Some(_), Some(_), ..) => {
+                    return Err(line.error(1, "give said= or pause=, not both"))
+                }
+                (Some(arg), None, None, None) | (None, Some(arg), None, None) => {
+                    if pause.is_some() && !close {
+                        return Err(fields.error(arg, "pause= closes a pause up: use extract"));
+                    }
+                    let within = fields
+                        .take_with("within", |text| clock.duration(text))?
+                        .unwrap_or_else(|| Time::from_flicks(FLICKS_PER_SECOND / 2));
+                    let cut = Said {
+                        phrase: fields.text(arg)?,
+                        pause: pause.is_some(),
+                        leave: leave.map_or(BEAT, Time::seconds),
+                        within,
+                    };
+                    self.said(found, clock, &cut)
+                        .map_err(|m| fields.error(arg, m))?
+                }
+                (None, None, Some(from), Some(to)) => {
+                    if leave.is_some() {
+                        return Err(line.error(1, "leave= goes with said= or pause="));
+                    }
+                    let snap = take_snap(&mut fields, clock)?.ok_or_else(|| {
+                        line.error(
+                            1,
+                            format!(
+                                "naming `{clip}` puts the edges by its sound: add snap=pause or \
+                                 snap=cut, or leave the clip out"
+                            ),
+                        )
+                    })?;
+                    for (key, at) in [("from", from), ("to", to)] {
+                        if at < found.start || at > found.end() {
+                            return Err(line.error(
+                                1,
+                                format!(
+                                    "{key}= is not in `{clip}`, which plays from {} to {}",
+                                    clock.print_position(found.start),
+                                    clock.print_position(found.end())
+                                ),
+                            ));
+                        }
+                    }
+                    let rate = clock.rate;
+                    let starts = |at: Time| found.start <= at && at < found.end();
+                    let ends = |at: Time| found.start < at && at <= found.end();
+                    (
+                        self.snap_edge(found, from, snap, rate, starts, "from=")
+                            .map_err(|m| line.error(1, m))?,
+                        self.snap_edge(found, to, snap, rate, ends, "to=")
+                            .map_err(|m| line.error(1, m))?,
+                    )
+                }
+                _ => {
+                    return Err(line.error(
+                        1,
+                        "with a clip, give said=\"…\", pause=\"…\", or from= and to= with snap=",
+                    ))
+                }
+            };
+            let at = self.project.locate(clip.as_str());
+            (at.expect("the clip was found").sequence, range.0, range.1)
+        } else {
+            for key in ["snap", "said", "pause", "leave"] {
+                if let Some(arg) = fields.take(key) {
+                    return Err(fields.error(
+                        arg,
+                        format!(
+                            "{key}= goes by a clip's sound and words: name the clip, as in \
+                             `extract c1 said=\"…\"` or `extract c1 from=… to=… snap=pause`"
+                        ),
+                    ));
+                }
+            }
+            let s = self.current(line)?;
+            let clock = Positions::of(&self.project, s);
+            let from = required(&mut fields, "from", |t| clock.position(t))?;
+            let to = required(&mut fields, "to", |t| clock.position(t))?;
+            (s, from, to)
+        };
+        let tracks = fields.take_ids("tracks")?;
+        fields.finish(if named { 2 } else { 1 })?;
+        let sequence = self.project.sequences[s].id.clone();
+        Ok(vec![if close {
+            Op::Extract {
+                sequence,
+                from,
+                to,
+                tracks,
+            }
+        } else {
+            Op::Lift {
+                sequence,
+                from,
+                to,
+                tracks,
+            }
+        }])
+    }
+
+    /// The range of its sequence that takes what `clip` says out of it, as
+    /// `cut` asks: the words of a phrase, or the pause after them, with
+    /// each edge in the quiet beside what stays, so that the pause the cut
+    /// leaves is `cut.leave` long where the quiet there allows it. What is
+    /// taken is kept for [`Applied::snapped`].
+    fn said(&self, clip: &Clip, clock: &Clock, cut: &Said<'_>) -> Result<(Time, Time), String> {
+        let media = self
+            .media_of(clip)
+            .ok_or_else(|| format!("clip `{}` plays no media to hear", clip.id))?;
+        if clip.speed().is_reverse() {
+            return Err(format!(
+                "clip `{}` plays in reverse; use from= and to=",
+                clip.id
+            ));
+        }
+        let (source_in, source_out) = clip.source_range().expect("a media clip plays a source");
+        let (source_in, source_out) = (source_in.seconds(), source_out.seconds());
+        let speech = self.heard(media);
+        let media_clock = Clock::of_media(media);
+        let phrase = cut.phrase;
+        // Where the clip says it, give or take what a transcript is out by.
+        let everywhere = speech.said(phrase);
+        let here: Vec<(f64, f64)> = everywhere
+            .iter()
+            .copied()
+            .filter(|(start, end)| *start >= source_in - 0.05 && *end <= source_out + 0.05)
+            .collect();
+        let (start, end) = match (&here[..], &everywhere[..]) {
+            ([once], _) => *once,
+            ([], []) => {
+                return Err(format!(
+                    "no transcript of `{}` heard \"{phrase}\"; look at it with transcript first",
+                    media.id
+                ))
+            }
+            ([], elsewhere) => {
+                let times: Vec<String> = elsewhere
+                    .iter()
+                    .map(|(at, _)| {
+                        media_clock.print_position(source_time(*at, media_clock.rate, false))
+                    })
+                    .collect();
+                return Err(format!(
+                    "`{}` does not play \"{phrase}\", which `{}` has at {}",
+                    clip.id,
+                    media.id,
+                    times.join(", ")
+                ));
+            }
+            (many, _) => {
+                let times: Vec<String> = many
+                    .iter()
+                    .filter_map(|(at, _)| clip.played_at(media_time(*at)))
+                    .map(|at| clock.print_position(clock.rate.round(at)))
+                    .collect();
+                return Err(format!(
+                    "\"{phrase}\" is said {} times in `{}`, at {}; give more words, or from= and to=",
+                    many.len(),
+                    clip.id,
+                    times.join(", ")
+                ));
+            }
+        };
+        let mut words = speech.heard();
+        words.retain(|word| !is_a_sound_note(&word.text));
+        // The quiet before what goes, and the quiet after it.
+        let (before, after) = if cut.pause {
+            let before = self
+                .quiet_beside(clip, media, end, cut.within)
+                .map_err(|why| format!("no pause after \"{phrase}\": {why}"))?;
+            // The pause runs to the next word the clip plays, or its end.
+            let next = words
+                .iter()
+                .find(|word| (word.start + word.end) / 2.0 > end && word.start < source_out);
+            let after = match next {
+                Some(word) => Some(
+                    self.quiet_beside(clip, media, word.start, cut.within)
+                        .map_err(|why| {
+                            format!("no pause before {}: {why}", quote(word.text.trim()))
+                        })?,
+                ),
+                None => None,
+            };
+            // What sounds in the wait and has no word: a breath goes with
+            // the pause, and what may be a word nobody transcribed does not.
+            let waits_to = after.map_or(source_out, |after| after.quiet.0);
+            let sounds = self
+                .facts
+                .sound(media)
+                .filter(|_| waits_to > before.quiet.1)
+                .and_then(|sound| sound.heard(before.quiet.1, waits_to));
+            if sounds == Some(Heard::Sound) {
+                let position = |seconds: f64| {
+                    media_clock.print_position(media.rate.round(media_time(seconds)))
+                };
+                return Err(format!(
+                    "the wait after \"{phrase}\" holds sound at the level of speech, from {} to {} \
+                     of `{}`, which no word accounts for: listen to it, and take it out by from= \
+                     and to= if it is to go",
+                    position(before.quiet.1),
+                    position(waits_to),
+                    media.id
+                ));
+            }
+            (Some(before), after)
+        } else {
+            (
+                Some(
+                    self.quiet_beside(clip, media, start, cut.within)
+                        .map_err(|why| format!("nowhere to cut before \"{phrase}\": {why}"))?,
+                ),
+                Some(
+                    self.quiet_beside(clip, media, end, cut.within)
+                        .map_err(|why| format!("nowhere to cut after \"{phrase}\": {why}"))?,
+                ),
+            )
+        };
+        let before = before.expect("a cut starts in a quiet");
+        // Words sound between the quiet before them and the quiet after.
+        if !cut.pause && after.is_some_and(|after| after.quiet.0 < before.quiet.1) {
+            return Err(format!(
+                "`{}` has no sound for \"{phrase}\" between two quiets, so its transcript's times \
+                 are out there: use from= and to=",
+                media.id
+            ));
+        }
+        let (air_after, air_before) = airs(cut.leave);
+        let played = |seconds: f64| {
+            clip.played_at(media_time(seconds))
+                .expect("a media clip plays a source")
+        };
+        // A frame of the sequence in a quiet, nearest a moment of the media.
+        let frame = |ideal: f64, place: &Place| {
+            frame_within(
+                clock.rate,
+                played(ideal),
+                (played(place.room.0), played(place.room.1)),
+            )
+            .ok_or_else(|| {
+                format!(
+                    "no frame falls in the {:.2}s quiet of `{}` at {}",
+                    place.quiet.1 - place.quiet.0,
+                    media.id,
+                    media_clock.print_position(media.rate.round(media_time(place.quiet.0)))
+                )
+            })
+        };
+        // An edge the clip does not play is the clip's own: what goes runs
+        // from its start, or to its end.
+        let from = frame(before.quiet.0 + air_after, &before)?.max(clip.start);
+        let to = match &after {
+            Some(after) => frame(after.quiet.1 - air_before, after)?.min(clip.end()),
+            None => clip.end(),
+        };
+        if to <= from {
+            return Err(if cut.pause {
+                format!(
+                    "the pause after \"{phrase}\" is {:.2}s, which leave={:.2}s does not shorten",
+                    after.map_or(source_out, |after| after.quiet.1) - before.quiet.0,
+                    cut.leave
+                )
+            } else {
+                format!("nothing of \"{phrase}\" is left to take out of `{}`", clip.id)
+            });
+        }
+        // What is said of it: where, what it leaves, and between which words.
+        let source = |at: Time| clip.source_at(at).map_or(0.0, |at| at.seconds());
+        let heard_end = after.map_or(source_out, |after| after.quiet.1);
+        // No more of a quiet than the clip plays.
+        let left = (source(from) - before.quiet.0.max(source_in)).max(0.0)
+            + (heard_end.min(source_out) - source(to)).max(0.0);
+        let (last, next) = beside(&words, before.quiet.0, heard_end);
+        let between = match (last, next) {
+            (Some(last), Some(next)) if next.start < source_out && last.end > source_in => format!(
+                " between {} and {}",
+                quote(last.text.trim()),
+                quote(next.text.trim())
+            ),
+            _ => String::new(),
+        };
+        let range = format!(
+            "{} to {}",
+            clock.print_position(from),
+            clock.print_position(to)
+        );
+        self.snapped.borrow_mut().push(if cut.pause {
+            format!(
+                "the pause after \"{phrase}\" in `{}`, {:.2}s, comes down to {left:.2}s{between}: \
+                 {range} goes",
+                clip.id,
+                heard_end - before.quiet.0,
+            )
+        } else {
+            format!(
+                "\"{phrase}\" goes from `{}`, {range}, which leaves {left:.2}s{between}",
+                clip.id
+            )
+        });
+        Ok((from, to))
+    }
+
+    /// The quiet an edge asked for at `seconds` of `media` would go into,
+    /// within `within` of where `clip` plays it: the one it is in, or the
+    /// one at the nearer end of the sound it is in, past no word.
+    fn quiet_beside(
+        &self,
+        clip: &Clip,
+        media: &Media,
+        seconds: f64,
+        within: Time,
+    ) -> Result<Place, String> {
+        let at = media_time(seconds);
+        let offset = clip.played_at(at).expect("a media clip plays a source") - clip.start;
+        let speed = clip.speed();
+        let reach = speed.played(offset + within) - speed.played(offset);
+        let (found, _) = self.snaps(media, at, Snap::Pause, reach)?;
+        found.places.first().copied().ok_or_else(|| {
+            nothing_near(
+                media,
+                media.rate.round(at),
+                Snap::Pause,
+                reach,
+                &found.barred,
+            )
+        })
+    }
+
+    /// What transcripts of `media` heard, read once for a script.
+    fn heard(&self, media: &Media) -> Rc<Speech> {
+        self.speech
+            .borrow_mut()
+            .entry(media.id.clone())
+            .or_insert_with(|| Rc::new(self.facts.speech(media)))
+            .clone()
+    }
+
     fn media_of(&self, clip: &Clip) -> Option<&Media> {
         match &clip.content {
             Content::Media { media, .. } => self.project.media(media.as_str()),
@@ -1364,12 +1697,7 @@ impl Script<'_> {
                 )
             })?;
         let speech = match snap {
-            Snap::Pause => self
-                .speech
-                .borrow_mut()
-                .entry(media.id.clone())
-                .or_insert_with(|| Rc::new(self.facts.speech(media)))
-                .clone(),
+            Snap::Pause => self.heard(media),
             // A cut of the picture is where it is, whatever is said.
             Snap::Cut => Rc::default(),
         };
@@ -1405,17 +1733,10 @@ impl Script<'_> {
                 // transcript heard them near.
                 let mut heard = speech.heard();
                 heard.retain(|word| !is_a_sound_note(&word.text));
-                let middle = |word: &Word| (word.start + word.end) / 2.0;
-                let before = heard
-                    .iter()
-                    .rev()
-                    .find(|word| middle(word) <= place.at)
-                    .filter(|word| word.end > start - WORDS_BESIDE_SECONDS);
-                let after = heard
-                    .iter()
-                    .find(|word| middle(word) > place.at)
-                    .filter(|word| word.start < end + WORDS_BESIDE_SECONDS);
-                let said = |word: &&Word| quote(word.text.trim());
+                let (before, after) = beside(&heard, place.at, place.at);
+                let before = before.filter(|word| word.end > start - WORDS_BESIDE_SECONDS);
+                let after = after.filter(|word| word.start < end + WORDS_BESIDE_SECONDS);
+                let said = |word: &Word| quote(word.text.trim());
                 let (quiet, beside) = match (place.gap, before.map(said), after.map(said)) {
                     (true, Some(before), Some(after)) => {
                         ("gap", format!(", where {before} and {after} run together"))
@@ -1910,6 +2231,28 @@ impl Script<'_> {
 }
 
 /// Why nothing near `at` on `media` would do for `snap`.
+/// What `extract <clip> said=` or `pause=` asks for.
+struct Said<'a> {
+    /// The words, as a transcript heard them.
+    phrase: &'a str,
+    /// Whether it is the pause after them that goes, and not the words.
+    pause: bool,
+    /// How long a pause the cut leaves, in seconds.
+    leave: f64,
+    /// How far from a word's time the quiet beside it is looked for.
+    within: Time,
+}
+
+/// Of `words` in the order they were said, the last whose middle is at or
+/// before `from` seconds and the first whose middle is after `to`.
+fn beside<'w>(words: &[&'w Word], from: f64, to: f64) -> (Option<&'w Word>, Option<&'w Word>) {
+    let middle = |word: &Word| (word.start + word.end) / 2.0;
+    (
+        words.iter().rev().find(|word| middle(word) <= from).copied(),
+        words.iter().find(|word| middle(word) > to).copied(),
+    )
+}
+
 fn nothing_near(media: &Media, at: Time, snap: Snap, reach: Time, barred: &[Barred]) -> String {
     let what = match snap {
         Snap::Pause => "pause",

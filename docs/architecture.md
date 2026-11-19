@@ -1278,11 +1278,14 @@ nothing said so: 21 of the 306 cuts placed on the recording below, each moved a 
 second. An edge now goes into the quiet it is in, or into the one at the nearer end of the sound
 it is in, and no further (`kerf_lang::Breaks::snaps`); where the nearer end will not do, the other
 is not taken in its place, since most of that sound lies before it. Where a transcript has words
-it goes past the middle of none of them either, because two words said with nothing between them
-are one sound to the levels. What an edit answers with says how far each edge went, into what,
-and between which words it now is (`snapped`), since the document shows where an edge is and not
-that it was asked for elsewhere; and a line that is refused names the pause it could not take and
-the word in the way.
+it goes past no more than half of what any of them sounds for either, because two words said with
+nothing between them are one sound to the levels. A word sounds where its times are not quiet: a
+transcript stretches a word over the pause beside it, and by the middle of a word's times, one
+timed from halfway through the pause before it let an edge past all of its sound (found taking
+each word of the recording below out by name). What an edit answers with says how far each edge
+went, into what, and between which words it now is (`snapped`), since the document shows where
+an edge is and not that it was asked for elsewhere; and a line that is refused names the pause it
+could not take and the word in the way.
 
 Two words said in one breath often part for a tenth of a second or so: quiet by the recording's
 own levels, too short for a pause, and as long as a consonant held in the middle of one word,
@@ -1291,6 +1294,25 @@ to 0.16 s that a transcript covers, and that no word of it is timed right throug
 0.06 s to spare at both ends, is between two words, and an edge may go into it, on a frame of its
 middle half; one a word is timed through is a consonant held, and is no end of that word's sound.
 With no transcript such a gap is neither taken nor gone past, and the refusal says to make one.
+
+Words and pauses come out by name (2026-11-19). Taking a word out took two snapped splits and a
+`ripple-delete`, each at a time read off a transcript; and since a snapped edge stays where it is
+asked for when that is already in a pause, what was left was the pause before the word and the
+pause after it, whole. `extract <clip> said="…"` does it in one line (`Script::said` in
+`kerf-lang/src/script.rs`): the range starts in the quiet before the words, as soon after the
+sound before them as an edge's air allows, and ends in the quiet after, as near the sound that
+follows, so the words go with the quiet round them and one pause is left, 0.25 s unless `leave=`
+gives another. A longer pause is longer before the cut, where a word dies away, and the voice
+comes in 0.1 s after the cut whatever the pause (`kerf_lang::airs`): Scarlet, which divided a
+pause in proportion, found the voice coming in later the longer the pause, heard as a wait after
+each cut. `extract <clip> pause="…"` brings the pause after those words down to `leave` the same
+way, as far as the next word the clip plays. A breath in it goes with it; sound at the level of
+speech there that no word accounts for refuses the line, since a gap in a transcript is not a
+pause until the recording says so. And `lift` and `extract` take `snap=` for two positions where
+they name the clip whose sound to go by. The quiet each edge goes into is the one a snapped edge
+asked for at the word's time would go into, so nothing here goes past a word either: words that
+run on into what stays have no quiet on that side, and the line is refused with the word in the
+way.
 
 A check judges each cut of a sequence's sound the same way (`kerf-mcp/src/cuts.rs`): a cut
 with sound at the level of speech on both sides goes through it (`cut.in_sound`), whether or not a
@@ -1331,7 +1353,12 @@ air to leave than a pause has: 16 of those 101 and 3 of those 17 are hard agains
 none is in one. The other 1 and 7 are in pauses; the 7 are a hiss barely over the room's tone,
 which reads as the room. A check called every cut through a voice sound (17 of 17 and 9 of 9),
 none sound that was in no word, every cut clear of a word quiet, and every cut placed with a
-transcript quiet and in no word (386 and 418). Not done: an edge between two words with no quiet
+transcript quiet and in no word (386 and 418). Each word taken out by its name (`lift a1
+said=…`), with the same transcript: 394 of 418 in the quiet room, each the whole word and nothing
+of the words beside it, the other 24 refused for running on into one of those; and all 418 in the
+noisy room, 2 of them with 0.03 s left of a hiss that leads the word and reads as the room. The
+pause left is 0.20 s and 0.22 s at the middle one, under the 0.25 s asked for where a gap or a
+frame leaves less. Not done: an edge between two words with no quiet
 between them at all, where the level only dips, since a syllable leaves such a dip inside a word
 too and telling them apart takes word times closer than a transcriber's (the recording here has
 none: every two of its words are 0.08 s apart or more); the 0.1 s tried on real speech, since it
@@ -1738,16 +1765,17 @@ x64, and Linux x86-64 as new as Ubuntu 24.04.
   judged by the recording and not by a transcript's times, more quiet left after a word than
   before one, the pauses and doubled words an edit still plays, and a score of all of it against a
   recording whose words are known; and from the second reading, an edge moved past no word, each
-  move said with the words it ended between, and an edge put between two words said in one breath.
+  move said with the words it ended between, an edge put between two words said in one breath,
+  and words taken out, or a pause brought down to a length, by one line that names them, with the
+  pause that is left played before the cut.
   Its encoded sections, kept by what they depend on and joined without encoding again, are done
   too (The engine, Kept frames). Left: its forced alignment of words (wav2vec2, a model of English
   letters), its filler and transcription models (their own licenses, one not for commercial use),
   reading the text on a screen, and telling speakers apart. Read the second time and not done: an
   edge on the dip between two words with no quiet between them, which its alignment's word times
-  make safe and a transcriber's do not; words taken out, or a pause brought down to a length, by
-  one line that names them; a restart found with other words between its two sayings; a proposal
-  brought forward onto an edit that changed under it, where Kerf's goes stale; and a check that
-  two recordings of one thing still play in step after a cut.
+  make safe and a transcriber's do not; a restart found with other words between its two
+  sayings; a proposal brought forward onto an edit that changed under it, where Kerf's goes
+  stale; and a check that two recordings of one thing still play in step after a cut.
 - **Jumper and the Resolve and Premiere MCP servers** bolt agents onto editors
   that were not built for them. Kerf's document, proposals, and Git merging are
   what they cannot have, and each area has to keep that: every feature is text in

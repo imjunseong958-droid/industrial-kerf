@@ -503,6 +503,45 @@ fn a_cut_snapped_into_a_pause_takes_nothing_off_a_word() {
             clear_said += usize::from(!near_word(0.03) && heard == Some(Heard::Quiet));
         }
 
+        // Each word in turn is taken out by its name, and scored against
+        // where it truly is: all of it gone, and nothing of the words either
+        // side of it, which the edit keeps; by all an ear picks out of the
+        // room, and by the voice alone.
+        let (mut taken, mut not_taken, mut exactly, mut voices) = (0, 0, 0, 0);
+        let mut left = Vec::new();
+        for (at, said) in recording.words.iter().enumerate() {
+            let (Some(last), Some(next)) = (
+                at.checked_sub(1).map(|at| &recording.words[at]),
+                recording.words.get(at + 1),
+            ) else {
+                continue;
+            };
+            let applied = apply_script_with(
+                &project,
+                catalog,
+                &transcribed,
+                &format!("lift a1 said=\"w{at}\""),
+            );
+            let Ok(applied) = applied else {
+                not_taken += 1;
+                continue;
+            };
+            taken += 1;
+            // What the lift left a gap for is what it took.
+            let clips = &applied.project.sequences[0].tracks[0].clips;
+            let (from, to) = (clips[0].end().seconds(), clips[1].start.seconds());
+            let whole = from <= said.heard.0 && said.heard.1 <= to;
+            let kept = last.heard.1 <= from && to <= next.heard.0;
+            exactly += usize::from(whole && kept);
+            voices += usize::from(
+                from <= said.voiced.0
+                    && said.voiced.1 <= to
+                    && last.voiced.1 <= from
+                    && to <= next.voiced.0,
+            );
+            left.push((from - last.heard.1) + (next.heard.0 - to));
+        }
+
         println!(
             "\n{name}, {room} dBFS: speech at {:.0} dB, quiet under {:.0} dB",
             sound.speech(),
@@ -557,6 +596,20 @@ fn a_cut_snapped_into_a_pause_takes_nothing_off_a_word() {
         );
         // What is placed with a transcript, a check then calls clean.
         assert_eq!(placed_clean, heard.placed, "{name}");
+        // A word taken out by its name is that word's voice, whole, and
+        // none of another's; and all an ear hears of it but for one in a
+        // hundred, where a hiss that leads a word in a noisy room reads as
+        // the room and a little of it stays. Most words can be taken, the
+        // rest running on into a word beside them.
+        println!(
+            "words taken out by name: {taken} of {}, {exactly} of them whole with nothing of the \
+             words beside them, leaving {:.2} s at the middle one",
+            taken + not_taken,
+            Score::median(&left)
+        );
+        assert_eq!(voices, taken, "{name}");
+        assert!(exactly * 100 >= taken * 99, "{name}");
+        assert!(taken * 10 >= (taken + not_taken) * 9, "{name}");
         // A check calls nearly every cut through a voice sound, calls none sound that is in
         // no word, and calls a cut clear of every word quiet.
         assert!(voiced_said * 100 >= voiced * 95, "{name}");

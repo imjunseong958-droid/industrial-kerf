@@ -222,6 +222,28 @@ impl Sound {
             .map(f64::from)
     }
 
+    /// What sounds from `from` to `to` seconds, by the loudest of it: room
+    /// tone, a sound too low to follow, or sound at the level of speech.
+    /// `None` where the sound was not measured or does not
+    /// [tell](Self::tells).
+    pub fn heard(&self, from: f64, to: f64) -> Option<Heard> {
+        if !self.tells() {
+            return None;
+        }
+        Some(self.class(self.loudest(from, to)?))
+    }
+
+    /// What a level is, by the recording's own.
+    fn class(&self, level: f64) -> Heard {
+        if level <= self.quiet_below() {
+            Heard::Quiet
+        } else if level >= (self.speech - SOUND_UNDER_SPEECH_DB).max(FAINTEST_SOUND_DB) {
+            Heard::Sound
+        } else {
+            Heard::Low
+        }
+    }
+
     /// What a cut at `at` seconds goes through; `None` where the sound was
     /// not measured or does not [tell](Self::tells).
     pub fn edge(&self, at: f64) -> Option<EdgeSound> {
@@ -233,18 +255,10 @@ impl Sound {
         let cut = self.time((at / self.hop).round() as usize);
         let before = self.loudest(cut - EDGE_SECONDS, cut)?;
         let after = self.loudest(cut, cut + EDGE_SECONDS)?;
-        let through = before.min(after);
-        let heard = if through <= self.quiet_below() {
-            Heard::Quiet
-        } else if through >= (self.speech - SOUND_UNDER_SPEECH_DB).max(FAINTEST_SOUND_DB) {
-            Heard::Sound
-        } else {
-            Heard::Low
-        };
         Some(EdgeSound {
             before,
             after,
-            heard,
+            heard: self.class(before.min(after)),
         })
     }
 
@@ -392,6 +406,12 @@ mod tests {
         // Outside what was measured.
         assert_eq!(heard(0.0), None);
         assert_eq!(heard(10.0), None);
+        // A stretch is what the loudest of it is: a pause, the pause with
+        // the breath in it, and one that runs into a word.
+        assert_eq!(sound.heard(5.1, 5.5), Some(Heard::Quiet));
+        assert_eq!(sound.heard(8.1, 9.5), Some(Heard::Low));
+        assert_eq!(sound.heard(5.1, 5.7), Some(Heard::Sound));
+        assert_eq!(sound.heard(20.0, 21.0), None);
 
         // The air a cut leaves: back to the word before, on to the breath.
         assert!((sound.air(8.3, true) - 0.3).abs() < 1e-9);
