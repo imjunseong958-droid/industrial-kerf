@@ -1303,7 +1303,7 @@ impl Script<'_> {
                 .expect("a clip is on a sequence")
                 .sequence],
         );
-        self.say_snapped(what, &clock, (edge, at), media, snap, place, &speech);
+        self.say_snapped(what, &clock, (edge, at), media, (snap, place), &speech);
         Ok(at)
     }
 
@@ -1336,7 +1336,7 @@ impl Script<'_> {
             })
             .ok_or_else(|| nothing_near(media, at, snap, reach, &found.barred))?;
         let clock = Clock::of_media(media);
-        self.say_snapped(what, &clock, (at, to), media, snap, place, &speech);
+        self.say_snapped(what, &clock, (at, to), media, (snap, place), &speech);
         Ok(to)
     }
 
@@ -1378,17 +1378,16 @@ impl Script<'_> {
     }
 
     /// Keep for [`Applied::snapped`] where `snap` put the edge `what`,
-    /// which was asked for at `from` and is now at `to` on `clock`, when it
-    /// moved: a move is silent in the document, and one that left a word in
-    /// or out is not what was asked for.
+    /// which was asked for at `from` and is now at `to` on `clock`, in
+    /// `place` of `media`, when it moved: a move is silent in the document,
+    /// and one that left a word in or out is not what was asked for.
     fn say_snapped(
         &self,
         what: &str,
         clock: &Clock,
         (from, to): (Time, Time),
         media: &Media,
-        snap: Snap,
-        place: &Place,
+        (snap, place): (Snap, &Place),
         speech: &Speech,
     ) {
         let frames = clock.rate.frames_round(to - from);
