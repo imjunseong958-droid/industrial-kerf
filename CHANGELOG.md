@@ -6,6 +6,21 @@ on `main`; its section here becomes the release's notes on GitHub
 
 ## Unreleased
 
+- An agent is told in what order to tidy speech, cut to a length, and get
+  through a wait. Three playbooks join those in every agent conversation.
+  `speech-cleanup` takes out a phrase said and taken again, the later
+  saying kept, then doubled words and fillers, then long pauses, and reads
+  each join back as a sentence; a line that is refused, such as a pause
+  holding a sound the transcript has no word for, is left alone and told to
+  you with where it is, not forced. `target-length` brings a talk down to
+  a length you name: pauses first, then what was said twice, then whole
+  sentences, with the length read after each step, and where only content
+  is left it stops and gives you the choices with what each costs.
+  `wait-speedup` finds the stretches of a screen recording where nobody
+  speaks, looks at each, plays it fast where the screen shows something
+  going on, an install or a page loading, with its sound off, and cuts it
+  where nothing does. They name only commands and fields the tools have,
+  which a test holds (`skills/`; `kerf --skills` lists them).
 - The shots and the still that come with `kerf-comfy` are made by Wan 2.1
   VACE 14B, where its 1.3B made them: `shot`, `shot-timed`, `shot-into`,
   `shot-led`, `shot-directed` and `still` load
