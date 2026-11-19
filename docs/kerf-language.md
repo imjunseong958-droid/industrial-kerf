@@ -404,7 +404,9 @@ transition add from=c1 to=c9 fx=dissolve dur=12f
   found them; within half a second unless given. A pause is 0.16 s or more
   of quiet, which is what lies between two words, and quiet is measured by
   the recording itself: within 8 dB of its room tone, so a noisy room has
-  pauses and a soft recording is not all pause. An edge moved into one
+  pauses and a soft recording is not all pause. The room tone is read half
+  a minute at a time, so a room that changes has pauses throughout, and a
+  tick of lips parting in a pause does not end it. An edge moved into one
   stops 0.15 s after the sound before it, which dies away, and 0.1 s before
   the sound after it, on the nearest frame still in the pause; a pause too
   short for both is divided in that proportion, and an edge already clear

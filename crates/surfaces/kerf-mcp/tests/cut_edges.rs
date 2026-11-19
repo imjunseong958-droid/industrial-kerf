@@ -68,16 +68,51 @@ struct Recording {
     words: Vec<Said>,
 }
 
+/// The room a recording is made in.
+struct Room {
+    /// Its tone, in dBFS, as the recording starts.
+    tone: f64,
+    /// Its tone as the recording ends, where that is another: it changes
+    /// evenly between the two, as a room does that a fan comes on in.
+    ends_at: Option<f64>,
+    /// Whether lips part with a tick an eighth of a second before a word
+    /// that follows a pause.
+    ticks: bool,
+}
+
 /// About four minutes of words in a room whose tone is at `room` dBFS.
 fn recording(room: f64, seed: u64) -> Recording {
+    recording_in(
+        &Room {
+            tone: room,
+            ends_at: None,
+            ticks: false,
+        },
+        seed,
+    )
+}
+
+/// About four minutes of words in `room`.
+fn recording_in(room: &Room, seed: u64) -> Recording {
     let mut dice = Dice(seed);
-    let noise = 10f64.powf(room / 20.0);
-    // What an ear picks out of the room: 6 dB over its tone in the band
-    // speech is in, under 8 kHz, which is a third of this noise.
-    let audible = noise * (8.0f64 / 24.0).sqrt() * 2.0;
+    const WORDS: usize = 420;
+    // The room's tone as each word starts, as an amplitude: it changes from
+    // word to word, and evenly between two.
+    let tone = |word: usize| {
+        let end = room.ends_at.unwrap_or(room.tone);
+        10f64.powf((room.tone + (end - room.tone) * word as f64 / WORDS as f64) / 20.0)
+    };
     let mut samples = vec![0.0f32; RATE];
     let mut words = Vec::new();
-    for _ in 0..420 {
+    let mut starts = Vec::new();
+    // The ticks have dice of their own, so that the words are the same
+    // words with them and without.
+    let mut ticks = Dice(seed ^ 0x71c5);
+    for word in 0..WORDS {
+        starts.push(samples.len());
+        // What an ear picks out of the room: 6 dB over its tone in the band
+        // speech is in, under 8 kHz, which is a third of this noise.
+        let audible = tone(word) * (8.0f64 / 24.0).sqrt() * 2.0;
         let start = samples.len() as f64 / RATE as f64;
         let length = dice.between(0.14, 0.55);
         let level = 0.3 * 10f64.powf(dice.between(-6.0, 3.0) / 20.0);
@@ -143,12 +178,32 @@ fn recording(room: f64, seed: u64) -> Recording {
         };
         let silent = (start + lead + length + gap) * RATE as f64;
         samples.resize(samples.len().max(silent as usize), 0.0);
+        // A tick of 12 ms, far under the voice, in a pause long enough to
+        // have one: where the next word starts, less an eighth of a second.
+        if room.ticks && gap >= 0.3 {
+            let first = (silent - 0.125 * RATE as f64) as usize;
+            for sample in &mut samples[first..first + RATE * 12 / 1000] {
+                *sample += (ticks.between(-1.0, 1.0) * 0.025) as f32;
+            }
+        }
     }
     samples.extend(vec![0.0; RATE]);
-    for sample in &mut samples {
+    starts.push(samples.len());
+    let mut word = 0;
+    for (at, sample) in samples.iter_mut().enumerate() {
         // The room: the sum of three rolls is near enough to a bell.
-        let tone: f64 = (0..3).map(|_| dice.between(-1.0, 1.0)).sum();
-        *sample += (tone * noise) as f32;
+        let roll: f64 = (0..3).map(|_| dice.between(-1.0, 1.0)).sum();
+        while word + 1 < WORDS && at >= starts[word + 1] {
+            word += 1;
+        }
+        let level = if at < starts[0] {
+            tone(0)
+        } else {
+            let (from, to) = (starts[word], starts[word + 1]);
+            let along = (at - from) as f64 / (to - from).max(1) as f64;
+            tone(word) + (tone(word + 1) - tone(word)) * along
+        };
+        *sample += (roll * level) as f32;
     }
     Recording { samples, words }
 }
@@ -615,5 +670,127 @@ fn a_cut_snapped_into_a_pause_takes_nothing_off_a_word() {
         assert!(voiced_said * 100 >= voiced * 95, "{name}");
         assert_eq!(said_wrongly, 0, "{name}");
         assert!(clear_said * 100 >= clear * 95, "{name}");
+    }
+}
+
+/// The cuts of [`a_cut_snapped_into_a_pause_takes_nothing_off_a_word`],
+/// placed in `room` with no transcript and with one.
+fn placed_in(room: &Room) -> Option<(Score, Score, Score)> {
+    let directory = TempDir::new().unwrap();
+    let recording = recording_in(room, 0x5eed_cafe);
+    let path = directory.path().join("speech.wav");
+    write_wav(&path, &recording.samples);
+    pauses_before(&path)?;
+    let cache = DerivativeCache::new(directory.path());
+    media_index(&path, &cache, &CancellationToken::new()).unwrap();
+    let sound = cached_media_sound(&path, &cache).expect("an index keeps the levels");
+    let frames = (recording.samples.len() as f64 / RATE as f64 * FPS) as usize;
+    let document = format!(
+        "kerf 1\nproject name=\"Cuts\"\n\
+         media m1 path=\"speech.wav\" rate=24 dur={frames}f audio=1ch@48000\n\
+         sequence s1 rate=24 size=1920x1080\n  track A1 audio\n    \
+         clip a1 media=m1 at=00:00:00:00 dur={frames}f\n"
+    );
+    let catalog = Catalog::builtin();
+    let project = parse_document(&document, catalog).unwrap().project;
+    let facts = CachedFacts::new(directory.path());
+    let mut dice = Dice(0xfeed_beef);
+    let asks: Vec<Option<f64>> = recording
+        .words
+        .windows(2)
+        .map(|pair| {
+            let (from, to) = (pair[0].heard.1, pair[1].heard.0);
+            (to - from >= 0.1).then(|| (from + to) / 2.0 + dice.between(-0.12, 0.12))
+        })
+        .collect();
+    let mut other = Dice(0xdead_10cc);
+    let parts: Vec<f64> = recording
+        .words
+        .windows(2)
+        .zip(&asks)
+        .map(|(pair, ask)| {
+            ask.unwrap_or_else(|| {
+                (pair[0].heard.1 + pair[1].heard.0) / 2.0 + other.between(-0.12, 0.12)
+            })
+        })
+        .collect();
+    let transcribed = Transcribed {
+        cached: &facts,
+        speech: transcript(&recording.words, &parts),
+    };
+    let (mut asked, mut now, mut heard) = (Score::default(), Score::default(), Score::default());
+    for (pair, ask) in recording.words.windows(2).zip(&asks) {
+        let Some(at) = *ask else {
+            continue;
+        };
+        let frame = (at * FPS).round() as i64;
+        let words = &recording.words;
+        asked.place(words, pair, &sound, at, Some(frame as f64 / FPS));
+        let split = |facts: &dyn Facts| {
+            apply_script_with(
+                &project,
+                catalog,
+                facts,
+                &format!("split a1 at={frame}f snap=pause as=b1"),
+            )
+            .ok()
+            .map(|applied| applied.project.clip("b1").unwrap().start.seconds())
+        };
+        now.place(words, pair, &sound, at, split(&facts));
+        heard.place(words, pair, &sound, at, split(&transcribed));
+    }
+    Some((asked, now, heard))
+}
+
+#[test]
+fn a_tick_and_a_room_that_changes_leave_a_pause_a_pause() {
+    for (name, room) in [
+        (
+            "a quiet room, lips parting with a tick before a word",
+            Room {
+                tone: -55.0,
+                ends_at: None,
+                ticks: true,
+            },
+        ),
+        (
+            "a room that goes from -55 dBFS to -38 dBFS",
+            Room {
+                tone: -55.0,
+                ends_at: Some(-38.0),
+                ticks: false,
+            },
+        ),
+    ] {
+        let Some((asked, now, heard)) = placed_in(&room) else {
+            eprintln!("skipping: ffmpeg is not installed");
+            return;
+        };
+        println!(
+            "\n{name}\n        placed refused in words across clip decay clip onset in gap   hard air after air before    moved"
+        );
+        println!(
+            "{}\n{}\n{}",
+            asked.row("asked"),
+            now.row("now"),
+            heard.row("heard")
+        );
+        for (way, placed) in [("now", &now), ("heard", &heard)] {
+            assert_eq!(placed.in_words, 0, "{name}, {way}");
+            assert_eq!(placed.across, 0, "{name}, {way}");
+            assert!(
+                (placed.clip_decay + placed.clip_onset) * 100
+                    <= (placed.placed - placed.in_gaps) * 3,
+                "{name}, {way}"
+            );
+        }
+        // A tick is in the pause it parts, and a room is read where it is:
+        // with a transcript nearly every cut finds its place, where a room
+        // read as one room refused a quarter of them once it had changed.
+        assert!(
+            heard.placed * 100 >= (heard.placed + heard.refused) * 97,
+            "{name}"
+        );
+        assert!(now.placed * 10 >= (now.placed + now.refused) * 7, "{name}");
     }
 }

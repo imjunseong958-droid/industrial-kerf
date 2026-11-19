@@ -6,6 +6,13 @@ on `main`; its section here becomes the release's notes on GitHub
 
 ## Unreleased
 
+- Pauses are found in a recording whose room changes. Quiet was measured by
+  one room tone for a whole file, so where a fan came on, or the gain went
+  up, the louder part had no pause at all and `snap=pause` refused every
+  cut in it; each half minute is now read by its own room. A tick of lips
+  parting in a pause no longer ends it either. Media indexed before needs
+  no indexing again
+  ([docs/architecture.md](docs/architecture.md#edit)).
 - An agent's `look` with `cuts` reads an edit as it will be heard. `joins`
   gives what each cut plays, the words either side of it, and the words it
   left out, so a cut that takes a word the sentence needs is seen though

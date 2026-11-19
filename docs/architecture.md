@@ -1263,7 +1263,12 @@ keeps the level of a media's sound for each hundredth of a second, read at 16 kH
 is in it (`kerf_engine::cached_media_sound`), and `kerf_lang::Sound` reads it by the recording's
 own levels: its room tone is the level a tenth of what sounds stays under, its speech the level it
 is over for the loudest seventh, and quiet is within 8 dB of the first and at least 15 dB under the
-second. A fixed -35 dB, which the index went by before, calls a noisy room all sound and takes the
+second. A recording of more than a minute is read half a minute at a time, each by its own room
+(2026-11-19), since a room changes, as when a fan comes on, and by one room tone for a whole file
+the louder part of it had no pause at all; a half minute nobody speaks in, or nobody stops in,
+goes by the nearest that tells. And a tick, lips parting for two hundredths of a second or less
+and too low to follow, does not end a quiet that has lasted a tenth of a second: sooner after a
+sound it may be a stopped consonant let go, and is left as the sound it is. A fixed -35 dB, which the index went by before, calls a noisy room all sound and takes the
 last of a word for the pause after it: on 3.7 minutes of read speech (LJ Speech, public domain),
 at 21 of the 46 places `snap=pause` then put an edge after a word, the sound was still over that
 recording's quiet, -47 dB (worked out beside this work, by the same rule; no test holds it).
@@ -1274,7 +1279,7 @@ pause.
 
 An edge is taken past no word (2026-11-19). It went into the nearest pause whichever way that
 was, and where the nearest was beyond a word the edit came back with that word in, or out, and
-nothing said so: 21 of the 306 cuts placed on the recording below, each moved a third to half a
+nothing said so: 20 of the 308 cuts placed on the recording below, each moved a third to half a
 second. An edge now goes into the quiet it is in, or into the one at the nearer end of the sound
 it is in, and no further (`kerf_lang::Breaks::snaps`); where the nearer end will not do, the other
 is not taken in its place, since most of that sound lies before it. Where a transcript has words
@@ -1351,36 +1356,59 @@ are as far out as the cuts. Nobody listened to it, and it is not speech:
 |---|---|---|---|---|---|---|
 | -55 dBFS | as asked | 386 | 0 | 112 | 0 | 105 |
 | | `snap=pause` at first | 106 | 280 | 8 | 15 | 9 |
-| | into the nearest pause | 306 | 80 | 0 | 21 | 1 |
-| | now, with no transcript | 285 | 101 | 0 | 0 | 1 |
-| | now, with a transcript | 386 | 0 | 0 | 0 | 17 |
+| | into the nearest pause | 308 | 78 | 0 | 20 | 1 |
+| | now, with no transcript | 288 | 98 | 0 | 0 | 1 |
+| | now, with a transcript | 386 | 0 | 0 | 0 | 18 |
 | -38 dBFS | as asked | 418 | 0 | 51 | 0 | 99 |
 | | `snap=pause` at first | 65 | 353 | 0 | 11 | 2 |
-| | into the nearest pause | 408 | 10 | 0 | 7 | 8 |
-| | now, with no transcript | 401 | 17 | 0 | 0 | 7 |
-| | now, with a transcript | 418 | 0 | 0 | 0 | 10 |
+| | into the nearest pause | 408 | 10 | 0 | 7 | 10 |
+| | now, with no transcript | 401 | 17 | 0 | 0 | 9 |
+| | now, with a transcript | 418 | 0 | 0 | 0 | 12 |
 
 Hard against a word is less than 0.05 s after one ends or 0.03 s before one starts, and across a
 word is on the other side of a whole word from the two the cut was asked between. With no
-transcript a cut is refused where the quiet beside it is no pause: the 101 and the 17 are every
-cut asked for between two words 0.1 s to 0.16 s apart, which until now were refused (80 and 10)
-or taken across a word (21 and 7). With a transcript all of them are placed, in a gap with less
-air to leave than a pause has: 16 of those 101 and 3 of those 17 are hard against a word, and
-none is in one. The other 1 and 7 are in pauses; the 7 are a hiss barely over the room's tone,
-which reads as the room. A check called every cut through a voice sound (17 of 17 and 9 of 9),
-none sound that was in no word, every cut clear of a word quiet, and every cut placed with a
-transcript quiet and in no word (386 and 418). Each word taken out by its name (`lift a1
-said=…`), with the same transcript: 394 of 418 in the quiet room, each the whole word and nothing
-of the words beside it, the other 24 refused for running on into one of those; and all 418 in the
-noisy room, 2 of them with 0.03 s left of a hiss that leads the word and reads as the room. The
-pause left is 0.20 s and 0.22 s at the middle one, under the 0.25 s asked for where a gap or a
-frame leaves less. Not done: an edge between two words with no quiet
+transcript a cut is refused where the quiet beside it is no pause: the 98 and the 17 are every cut
+asked for between two words 0.1 s to 0.16 s apart, which until now were refused (78 and 10) or
+taken across a word (20 and 7). With a transcript all of them are placed, in a gap with less air
+to leave than a pause has: 17 of those 98 and 3 of those 17 are hard against a word, and none is
+in one. The other 1 and 9 are in pauses; the 9 are a hiss barely over the room's tone, which reads
+as the room. (Read as one room, before each half minute had its own, the rows were a cut or three
+off these: 285 and 101 where 288 and 98 are, and 7 hard where 9 are.) A check called every cut
+through a voice sound (17 of 17 and 9 of 9), none sound that was in no word, every cut clear of a
+word quiet, and every cut placed with a transcript quiet and in no word (386 and 418). Each word
+taken out by its name (`lift a1 said=…`), with the same transcript: 394 of 418 in the quiet room,
+each the whole word and nothing of the words beside it, the other 24 refused for running on into
+one of those; and all 418 in the noisy room, 2 of them with 0.03 s left of a hiss that leads the
+word and reads as the room. The pause left is 0.20 s and 0.22 s at the middle one, under the 0.25
+s asked for where a gap or a frame leaves less.
+
+The same cuts in two more rooms (`a_tick_and_a_room_that_changes_leave_a_pause_a_pause`), each
+before and after the reading above: the quiet room with a tick of 12 ms an eighth of a second
+before each word that follows 0.3 s or more, and a room that goes evenly from -55 dBFS to
+-38 dBFS over the recording, where a word is heard down to 6 dB over the room as it then is:
+
+| Room | Reading | Transcript | Placed | Refused | In a word | Across a word | Hard against one |
+|---|---|---|---|---|---|---|---|
+| Ticks | before | none | 265 | 121 | 0 | 0 | 1 |
+| | now | none | 271 | 115 | 0 | 0 | 1 |
+| | before | one | 381 | 5 | 0 | 0 | 26 |
+| | now | one | 380 | 6 | 0 | 0 | 18 |
+| -55 to -38 dBFS | before | none | 240 | 172 | 0 | 0 | 2 |
+| | now | none | 348 | 64 | 0 | 0 | 1 |
+| | before | one | 304 | 108 | 0 | 0 | 7 |
+| | now | one | 412 | 0 | 0 | 0 | 8 |
+
+A room read where it is gives back every cut its change had taken: by the one room tone of the
+whole recording, nothing in its louder end came down to what was quiet at its start. A tick gains less than it might, 6 cuts and 8 fewer hard against a word: most of
+these ticks come within a tenth of a second of where the word before them has died away, and
+those are left as sounds. Not done: an edge between two words with no quiet
 between them at all, where the level only dips, since a syllable leaves such a dip inside a word
 too and telling them apart takes word times closer than a transcriber's (the recording here has
 none: every two of its words are 0.08 s apart or more); the 0.1 s tried on real speech, since it
 is set by this recording's stopped consonants, which hold 0.09 s at most, and where a language
-holds one longer only the transcript says so; and a room whose level drifts over an hour, since
-one room tone is taken for a whole file.
+holds one longer only the transcript says so; a change of room found where it happens, which is
+now somewhere in the half minute it falls in; and a breath taken for part of the pause it is in,
+which an edge still stops short of.
 
 The picture of a cut is read from what the document has too, where the two clips are shots
 whose guides it holds (`kerf_engine::eye`, `look` with `eye`, 2026-11-18). A model makes each
@@ -1784,8 +1812,8 @@ x64, and Linux x86-64 as new as Ubuntu 24.04.
   move said with the words it ended between, an edge put between two words said in one breath,
   words taken out, or a pause brought down to a length, by one line that names them, with the
   pause that is left played before the cut, a phrase found that is taken again with other words
-  between its two sayings, what each join plays and took out, and a pause listed from the length
-  an edit names.
+  between its two sayings, what each join plays and took out, a pause listed from the length an
+  edit names, and a room read where it is with a tick left in its pause.
   Its encoded sections, kept by what they depend on and joined without encoding again, are done
   too (The engine, Kept frames). Left: its forced alignment of words (wav2vec2, a model of English
   letters), its filler and transcription models (their own licenses, one not for commercial use),
