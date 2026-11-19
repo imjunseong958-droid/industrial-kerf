@@ -13,7 +13,7 @@ use crate::id::{Id, IdGen};
 use crate::making::Step;
 use crate::model::{
     Align, Clip, ClipAt, Content, Effect, Marker, MarkerColor, Mask, MaskMode, MaskShape, Media,
-    Params, Project, Sequence, Track, TrackKind, Transition,
+    Params, Project, Sequence, Synced, Track, TrackKind, Transition,
 };
 use crate::speed::Speed;
 use crate::time::{format_timecode, Rate, Time};
@@ -147,6 +147,12 @@ pub enum Op {
     ReplaceMedia(Media),
     RemoveMedia {
         media: Id,
+    },
+    /// Say that a media is a recording of the same thing as another, and where it begins in
+    /// it, or with none that it is lined up with nothing.
+    SyncMedia {
+        media: Id,
+        sync: Option<Synced>,
     },
     /// Write a step of how a media's file is made ([`crate::making`]): the
     /// last of its steps, or the one that becomes step `index`, from 0.
@@ -585,6 +591,7 @@ impl Editor<'_> {
                 Ok(())
             }
             Op::RemoveMedia { media } => self.remove_media(media),
+            Op::SyncMedia { media, sync } => self.sync_media(media, sync.as_ref()),
             Op::AddStep { media, index, step } => self.steps(media, |steps| {
                 let at = index.unwrap_or(steps.len());
                 if at > steps.len() {
@@ -2415,6 +2422,44 @@ impl Editor<'_> {
             ));
         }
         self.project.media.remove(index);
+        // What was lined up with it is lined up with nothing, as a child of a deleted clip is let
+        // go.
+        for other in &mut self.project.media {
+            if other.sync.as_ref().is_some_and(|sync| sync.with == *media) {
+                other.sync = None;
+                self.notes.push(format!(
+                    "media `{}` was lined up with `{media}`, and is now with nothing",
+                    other.id
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn sync_media(&mut self, media: &Id, sync: Option<&Synced>) -> Outcome {
+        let missing = |id: &Id| fail("ref.missing", format!("no media `{id}`"));
+        if self.project.media(media.as_str()).is_none() {
+            return Err(missing(media));
+        }
+        if let Some(sync) = sync {
+            if self.project.media(sync.with.as_str()).is_none() {
+                return Err(missing(&sync.with));
+            }
+            let ring = self.project.sync_comes_back(media, &sync.with);
+            if ring {
+                return Err(fail(
+                    "sync.ring",
+                    format!(
+                        "media `{media}` cannot be lined up with `{}`, which is lined up with it",
+                        sync.with
+                    ),
+                ));
+            }
+        }
+        let found = self.project.media.iter_mut().find(|m| m.id == *media);
+        if let Some(found) = found {
+            found.sync = sync.cloned();
+        }
         Ok(())
     }
 

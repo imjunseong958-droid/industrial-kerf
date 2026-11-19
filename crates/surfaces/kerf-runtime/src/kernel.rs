@@ -677,6 +677,7 @@ pub(crate) fn media_from_probe(
         reel: None,
         recipe: None,
         steps: Vec::new(),
+        sync: None,
     })
 }
 
@@ -711,8 +712,13 @@ fn assumed_media(
 /// Swap the file behind `media.id` for the one `media` describes. Every
 /// clip keeps its timing; a file one no longer fits is refused with the
 /// clips (and transitions) it would break.
-pub(crate) fn replace_media(project: &Project, media: Media) -> Result<Edited, RuntimeError> {
+pub(crate) fn replace_media(project: &Project, mut media: Media) -> Result<Edited, RuntimeError> {
     let (id, path) = (media.id.clone(), media.path.clone());
+    // Clips keep their timing, so the file is taken to keep its own: what the media was lined
+    // up with, a file read from disk having nothing to say of it, it still is.
+    if media.sync.is_none() {
+        media.sync = project.media(id.as_str()).and_then(|was| was.sync.clone());
+    }
     // A generator that reads the media's file by its path, as a mesh clip
     // reads a set a model made, reads the new one with it: a take made
     // again, or an earlier one chosen, is what the clip then shows.

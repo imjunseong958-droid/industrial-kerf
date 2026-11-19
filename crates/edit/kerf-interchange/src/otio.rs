@@ -544,6 +544,7 @@ pub fn from_timeline(
             reel: None,
             recipe: None,
             steps: Vec::new(),
+            sync: None,
         });
     }
     if !media.is_empty() {

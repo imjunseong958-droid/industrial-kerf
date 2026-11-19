@@ -73,6 +73,26 @@ fn exported() -> String {
 }
 
 #[test]
+fn a_preset_leaves_behind_what_its_footage_was_recorded_beside() {
+    // The footage is lined up with a recorder the sequence does not play.
+    let edit = EDIT.replace(
+        "reel=\"PRIVATE_REEL\"\n",
+        "reel=\"PRIVATE_REEL\" sync=rec@1.5s\nmedia rec path=\"/private/recorder.wav\" rate=30 dur=120s audio=2ch@48000\n",
+    );
+    assert_ne!(edit, EDIT);
+    let document = preset::export(
+        &parse(&edit),
+        Catalog::builtin(),
+        &Id::new("s1").unwrap(),
+        "Pattern",
+    )
+    .unwrap();
+    // A slot is whatever footage a project gives it, and the pattern has no recorder.
+    assert!(!document.contains("sync=rec") && !document.contains("recorder"), "{document}");
+    preset::parse(&document, Catalog::builtin()).unwrap();
+}
+
+#[test]
 fn exports_independent_cuts_but_keeps_linked_audio_in_the_same_slot() {
     let document = exported();
     assert!(!document.contains("original-footage"));

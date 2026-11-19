@@ -286,6 +286,7 @@ pub const ROWS: &[RowDef] = &[
     FRAME_EDGES,
     FLASH_FRAMES,
     CUTS_IN_WORDS,
+    IN_STEP,
     TITLE_SAFE,
     CAPTION_OVERLAP,
     READING_SPEED_ROW,
@@ -351,6 +352,14 @@ pub(crate) const CUTS_IN_WORDS: RowDef = RowDef {
     ],
     noun: "in words",
     limit: None,
+};
+
+pub(crate) const IN_STEP: RowDef = RowDef {
+    code: crate::lint::SYNC_SLIPPED,
+    name: "Picture and sound in step",
+    codes: &[crate::lint::SYNC_SLIPPED],
+    noun: "out of step",
+    limit: Some("≤ 1 frame"),
 };
 
 pub(crate) const TITLE_SAFE: RowDef = RowDef {

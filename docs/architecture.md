@@ -1837,6 +1837,72 @@ Accept stands for one that is current, and as Clip ▸ Bring Proposal Forward
 (`proposal.forward`), and says a refusal in its error banner; an agent's `edit` takes the
 proposal's id as `forward`. Not done: `kerf` in a terminal has no command for it.
 
+Two recordings of one thing, a camera and the recorder beside it or the cameras of a multicam, are
+lined up by their sound and then held to that (2026-11-19). One offset is right for the whole of a
+recording only where neither clock runs fast and neither recording lost time, and matching the
+whole of it at once says neither: a drift spreads the match over as many lags as it drifts, until
+nothing stands out, and a step leaves two matches of which one is given. So a recording is placed
+again a stretch at a time, a minute each, or a quarter of a recording too short for four, and none
+under ten seconds. A stretch is looked for a minute either side of where the one before it fell,
+which follows a drift and a step of up to that, and the first few that match nothing there are
+looked for in the whole of the first, which finds a step of any size. It is placed where its best
+match stands twice as high as the next. One that is quiet, or that the first has nothing like, or
+whose sound keeps a beat and so matches itself a beat on nearly as well, has no offset and is given
+none: it is listed as unknown. A match that a drift has spread is found by counting a few lags next
+to each other as one, and is put at its middle, since it is highest wherever most sounds happen to
+fall along it.
+
+What the stretches come to is the recording's course. `steady` is one offset to within 10 ms,
+about what two people at different distances from two microphones move it by, so that a step or a
+drift under that is not told from them. `drift` is an offset that changes evenly, by the rate most
+neighbouring stretches agree on and then a least-squares line through them, given in milliseconds
+a minute. `jump` is a step between two stretches that the drift does not account for, a recording
+that stopped and went on or lost sound: its place is narrowed by holding each two-second piece
+between them to both offsets, to between the last piece that fits the old one and the first that
+fits the new, so a step in a pause is as wide as the pause. A stretch neither neighbour agrees
+with, while they agree with each other, is taken for a misplacing and not for a step out and a
+step back. `unknown` is fewer than two stretches placed, of which nothing follows. `look` with
+`sync` gives all of it, and its script places a recording only where one offset is within half a
+frame of every stretch read: a drift that stays inside that is placed by its middle and said, and
+a recording that drifts further or steps is left out, with what does not fit and what to do
+(`notPlaced`). A recording nothing could be read of is placed by the whole of it, as before, with
+its `confidence` to go by.
+
+The offset is then the document's: `sync=m1@1.234s` on a media's line says it begins that far
+into `m1` (`kerf_model::Synced`, written by `media sync`). It is on the line and not in the media
+cache because it is what clips are held to, which every copy of a project has to agree on and a
+merge has to carry, and because it is a person's to change: what lines the sound up is not always
+what should line the picture up, a camera at the back of a hall hearing the stage a few frames
+late. A check reads it with nothing analysed (`sync.slipped`, `kerf_mcp::lint::out_of_step`), and
+holds to each other clips that play at once. A picture and a sound of one file, or of one nested
+sequence as a cut of a multicam is, that are linked are in step where each plays the frames the
+other does, which the document alone says: where each starts, less what it starts on. Clips of two
+files lined up with each other are held to the line where they are linked, and, linked or not,
+where they play some of the same moment; two files further apart than the time they share play
+different moments, which is a choice, as a voice over other pictures of its own take is, and two
+shots of one file linked to keep them together are no picture and its sound. More than a frame
+apart is a finding that names the clip, how many frames, and the line that puts it back. A frame
+is let pass because each clip goes on a whole frame from an offset finer than frames, and because
+less than that is not seen. A clip played at another speed is held to nothing.
+
+How well this tells has been measured on recordings made for the tests and on none recorded in a
+room (2026-11-19): claps 0.35 to 2.55 s apart over a noise floor, five minutes beside five, each
+through its own gain and noise. One offset comes back within 2 ms. A drift of 12 ms a minute is
+told within a tenth, and one of 60 ms a minute, a file conformed from 30 frames a second to 29.97,
+within a fiftieth, though the whole of that recording matches nothing; one of 0.6 ms a minute is
+measured and called steady. Half a second lost at 137 s is put between 135 s and 139 s, and steps
+of 50 ms and of a minute and a half are found, with a drift beside one told apart from it. Through
+`look`, from WAV files of the same claps two and a half minutes long, a drift of 30 ms a minute
+came back as 33. What a voice in a room, music, an echo, or microphones far apart do to any of
+these numbers is not known, and the tool says so: what it says is to be listened to before
+anything is cut by it. Measured beside this work on one core of four, with no test holding it:
+half an hour of the same claps beside half an hour, a drift of 3 ms a minute came back within a
+hundredth of it, and it took a third of a second to place the whole, as before, and under half a
+second more to place its 29 stretches, in a release build with the sound already read. One thing
+was wrong before and is mended: a short recording that began past the middle of a long first one
+was said to begin before it, the lags of the transform being parted at its middle and not at the
+first's length.
+
 ### Color
 
 Has: Lumetri, curves, levels, Hue/Saturation, Selective Color, CDL, LUTs, Auto
@@ -2205,11 +2271,13 @@ x64, and Linux x86-64 as new as Ubuntu 24.04.
   words taken out, or a pause brought down to a length, by one line that names them, with the
   pause that is left played before the cut, a phrase found that is taken again with other words
   between its two sayings, what each join plays and took out, a join named that took a word or
-  two more than the restart it took out, a pause listed from the length an edit names, a room read where it is and a tick left in its pause, and what a crossfade plays
-  past the cut it is on. One reading of the picture is taken too: a picture that shows only
-  briefly as layers start and end over one another. It finds one between any two changes of what
-  is on screen less than a second apart; here it is a shot hidden, shown for under three frames,
-  and cut from, read by what is known to hide what (Edit).
+  two more than the restart it took out, a pause listed from the length an edit names, a room read where it is and a tick left in its pause, what a crossfade plays
+  past the cut it is on, and a check that two recordings of one thing still play in step after a
+  cut, with a drift and a step told apart when they are lined up (its `audio-sync.ts` gave the
+  idea, and none of its code was read for it). One reading of the picture is taken too: a
+  picture that shows only briefly as layers start and end over one another. It finds one between
+  any two changes of what is on screen less than a second apart; here it is a shot hidden, shown
+  for under three frames, and cut from, read by what is known to hide what (Edit).
   Its encoded sections, kept by what they depend on and joined without encoding again, are done
   too (The engine, Kept frames). So is a proposal brought forward onto an edit that changed
   under it, where Kerf's went stale and had to be written again: its operations run again on the
@@ -2220,10 +2288,8 @@ x64, and Linux x86-64 as new as Ubuntu 24.04.
   apart. Read the second time and not done: an edge on the dip between two words with no quiet
   between them, which its alignment's word times make safe and a transcriber's do not (measured
   since, under Edit: every way of taking the dip by a transcriber's times put cuts inside words);
-  an overlay's edge moved onto the cut it misses, which it does itself for a flash of a tenth of
-  a second or less, where the check here says the flash and leaves the move; and a check that
-  two recordings of one thing still play in step after a cut (a snapped `blade` cuts both at one
-  place where both are quiet, Edit, and nothing looks at what was cut another way).
+  and an overlay's edge moved onto the cut it misses, which it does itself for a flash of a tenth
+  of a second or less, where the check here says the flash and leaves the move.
 - **Jumper and the Resolve and Premiere MCP servers** bolt agents onto editors
   that were not built for them. Kerf's document, proposals, and Git merging are
   what they cannot have, and each area has to keep that: every feature is text in

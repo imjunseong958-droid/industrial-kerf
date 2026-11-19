@@ -1412,11 +1412,90 @@ fn media_replace_prints_every_field_and_replays() {
         reel: None,
         recipe: None,
         steps: Vec::new(),
+        sync: None,
     });
     let printed = print_op(&silent, Catalog::builtin(), &op);
     assert!(printed.contains("tc=01:00:00;00"), "{printed}");
     assert!(printed.ends_with("fl video=1280x720"), "{printed}");
     assert_eq!(run(&silent, &printed).ops, vec![op]);
+}
+
+#[test]
+fn a_media_is_lined_up_with_another_recording_of_the_same_thing() {
+    let add = r#"media add m2 path="recorder.wav" rate=24 dur=00:10:00:00 audio=2ch@48000
+media add m3 path="b-cam.mov" rate=24 dur=00:10:00:00 video=1920x1080 audio=2ch@48000 sync=m1@-2.5s"#;
+    let project = run(&base(), add).project;
+    // A camera's sound is finer than its frames: the offset is in seconds, to the millisecond.
+    let script = "media sync m2 with=m1@1.234s";
+    let applied = run(&project, script);
+    let printed = print_document(&applied.project, Catalog::builtin(), PrintOptions::default());
+    assert!(
+        printed.contains(
+            "media m2 path=\"recorder.wav\" rate=24 dur=00:10:00:00 audio=2ch@48000 sync=m1@1.234s\n"
+        ),
+        "{printed}"
+    );
+    assert!(printed.contains(" sync=m1@-2.5s\n"), "{printed}");
+    assert_eq!(
+        parse_document(&printed, Catalog::builtin()).unwrap().project,
+        applied.project
+    );
+    assert_eq!(print_ops(&project, Catalog::builtin(), &applied.ops), format!("{script}\n"));
+    // A moment of one is the moment of the other that far on, through each it names in turn.
+    let chained = run(&applied.project, "media sync m3 with=m2@0.5s").project;
+    let seconds = |id: &str| {
+        let (with, at) = chained.synced_to(id).unwrap();
+        (with.to_string(), at.seconds())
+    };
+    assert_eq!(seconds("m1"), ("m1".to_owned(), 0.0));
+    assert_eq!(seconds("m2"), ("m1".to_owned(), 1.234));
+    assert_eq!(seconds("m3"), ("m1".to_owned(), 1.734));
+    // `with=""` lets go, as `parent=""` does, and prints as it was written.
+    let free = run(&applied.project, "media sync m2 with=\"\"");
+    assert_eq!(free.project.media("m2").unwrap().sync, None);
+    assert_eq!(
+        print_ops(&applied.project, Catalog::builtin(), &free.ops),
+        "media sync m2 with=\"\"\n"
+    );
+    // An offset that is no whole number of milliseconds is kept exactly, in flicks.
+    let exact = run(&project, "media sync m2 with=m1@7fl").project;
+    let printed = print_document(&exact, Catalog::builtin(), PrintOptions::default());
+    assert!(printed.contains(" sync=m1@7fl\n"), "{printed}");
+
+    for (script, code, says) in [
+        ("media sync m2 with=m9@1s", "ref.missing", "no media `m9`"),
+        ("media sync m9 with=m1@1s", "ref.missing", "no media `m9`"),
+        ("media sync m2 with=m2@1s", "sync.ring", "cannot be lined up with `m2`"),
+        // m3 is lined up with m1 already.
+        ("media sync m1 with=m3@1s", "sync.ring", "which is lined up with it"),
+        ("media sync m2 with=m1", "syntax", "as in `m1@1.5s` or `m1@-0.25s`"),
+        ("media sync m2 with=m1@30f", "syntax", "in seconds"),
+        ("media sync m2", "syntax", "missing `with=`"),
+    ] {
+        let error = fails(&project, script);
+        assert_eq!(error.code, code, "{script}: {error:?}");
+        assert!(error.message.contains(says), "{script}: {error:?}");
+    }
+    // A document that goes round, or names a media it has not, does not open.
+    let ring = printed.replace("audio=2ch@48000\nmedia m2", "audio=2ch@48000 sync=m2@0s\nmedia m2");
+    assert_ne!(ring, printed);
+    let errors = parse_document(&ring, Catalog::builtin()).unwrap_err();
+    assert!(errors.iter().any(|error| error.code == "sync.ring"), "{errors:#?}");
+    let missing = printed.replace("sync=m1@7fl", "sync=m9@7fl");
+    let errors = parse_document(&missing, Catalog::builtin()).unwrap_err();
+    assert!(
+        errors[0].message.contains("lined up with unknown media `m9`"),
+        "{errors:#?}"
+    );
+    // Removing what a media is lined up with lets it go, and says so.
+    let alone = run(&chained, "delete c1 c2\nmedia remove m1");
+    assert_eq!(alone.project.media("m2").unwrap().sync, None);
+    assert!(alone.project.media("m3").unwrap().sync.is_some());
+    assert!(
+        alone.report.notes.iter().any(|note| note.contains("`m2` was lined up with `m1`")),
+        "{:?}",
+        alone.report.notes
+    );
 }
 
 #[test]

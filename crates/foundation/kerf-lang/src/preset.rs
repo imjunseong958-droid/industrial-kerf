@@ -289,6 +289,8 @@ pub fn export(
         slot.start = Time::ZERO;
         slot.reel = None;
         slot.recipe = None;
+        // What it was recorded beside is the project's, and the pattern has no such media.
+        slot.sync = None;
         slot.steps.clear();
         slot.video = None;
         slot.audio = None;
@@ -324,6 +326,7 @@ pub fn export(
             media.path.clone_from(&made_paths[&media.path]);
             media.start = Time::ZERO;
             media.reel = None;
+            media.sync = None;
             for step in &mut media.steps {
                 step.rename(|named, name| match named {
                     Named::File => travel

@@ -326,7 +326,7 @@ pub(super) fn metadata(name: &str) -> Option<(&'static str, Value, ToolAnnotatio
                     },
                     "transcript": {"type": "boolean", "description": "What is said, by local transcription, up to 15 minutes per call: of `media`, or else of the sequence as it plays. `unheard`, when it is there, lists stretches that sound like speech and have no words: the transcriber may have missed something, so listen there."},
                     "words": {"type": "boolean", "description": "With `transcript`: time every word, for cutting on speech. Choose a short range; it is long."},
-                    "sync": {"type": "array", "items": {"type": "string"}, "description": "Media ids of recordings of the same thing to line up by their sound, as for a multicam. Returns how far each falls after the first, `offset` in seconds, with `confidence`, and a `script` that builds a sequence with a camera on each track. Then a clip of that sequence (`seq=multicam`) with `angle=V2` shows one camera, and splitting it cuts between them. Check `confidence`: low means they may have nothing in common."},
+                    "sync": {"type": "array", "items": {"type": "string"}, "description": "Media ids of recordings of the same thing to line up by their sound: the cameras of a multicam, or a camera and the recorder beside it. `recordings` says of each how far into the first it begins, `offset` in seconds, with `confidence`, how far the match of the whole of it stands above the next best: low means they may have nothing in common, or that no one offset fits the whole. Each is then placed again a minute at a time (less for a short one), and `course` says what those stretches come to: `steady`, one offset fits them all, to `within` seconds; `drift`, the offset changes evenly, one clock running faster than the other, with `drift`: `msPerMinute`, over how many `minutes`, and the offset `from` the first stretch `to` the last; `jump`, the offset steps where one of the two stopped and went on or lost sound, with `jumps`: each is between `after` and `before`, seconds of that recording, as near as the sound around it says, and the offset goes `from` one `to` another; `unknown`, fewer than two stretches could be placed, so nothing says. `read` of `of` stretches were placed; one that is quiet, or that the first has nothing like, is given no offset and is listed in `unknown`, each [from, to] in seconds of the recording: it is not guessed at. `script` builds a sequence with a camera on each track, each on the frame nearest its offset (`at`), and writes how each lines up on its media's line (`media sync mb with=ma@1.5s`, in the document `sync=ma@1.5s`: it begins 1.5 s into `ma`; `with=\"\"` lets go), which a check then holds clips to: two of them that play the same moment at once, more than a frame apart, are `sync.slipped`, as a sound that left the picture of its own file it is linked to is. Change the line where the sound is not what should line up, a camera far from what it hears. A recording is in the script where one offset is within half a frame of every stretch read; one that drifts further or jumps is left out of it, its `notPlaced` saying what does not fit and what to do, and with fewer than two to place there is no `script`. Then a clip of that sequence (`seq=multicam`) with `angle=V2` shows one camera, and splitting it cuts between them. How well drift and jumps are told has been measured on recordings made for the test and on none recorded in a room: listen to what it says before cutting by it."},
                     "track": {"type": "object", "description": "Follow a point of the program's picture over `from`–`to`: `x` and `y` where it is at `from`, 0 to 1 across the frame, on something with detail, such as a corner rather than a flat area. Returns where it went, and with `clip` a line setting that clip's x and y to follow it: run it with `edit`, and parent what should stick to it to that clip, a `gen=null@1` for instance. `lostAt` says where the point was lost, if it was. Or give `corners` instead of `x` and `y`, four [x, y] at `from` going upper left, upper right, lower right, lower left, around a flat surface with detail on it, such as a screen or a sign, to follow how it moves and turns: it returns those corners over time, `outline`, the keyframes a moving mask takes (`mask c add k1 points=...`), and with `clip` a corner pin line that fits that clip, one filling the frame, onto the surface. Or to cut out an object that changes shape, a person for instance, give `inside`, [x, y] points on it at `from`, with `outside`, points off it, and `box`, [left, top, right, bottom] around it, as needed: it returns its outline over time, as few corners as shape it and the same ones in every keyframe: `outline` as above, or with `clip` a mask line for that clip instead, `script`, which holds it (`mask c add object points=...`). A third number on each corner says where the edge measures soft, such as out of focus or moving fast. It goes by colour and edges, with nothing to install; where a model that finds a thing by its name is set up (`models`, one whose `about` says it makes a matte), a `generate model=<it> guide=<footage> prompt=<the thing>` step makes the matte as a file instead, and holds a thing among others like it. With `clip` and no `from` and `to` it is followed for as long as that clip runs, and a clip that follows a point is not drawn while the point is followed: this is how a clip a `generate` step names with `moves=` is led by footage, and how the clip a `render` step names with `matte=` is cut to what it shows, as a person does on the picture in a shot's graph. Or give `camera: true` to solve where the camera went over the range, one shot of a camera that moves through a still scene, to pin clips in depth to moving footage: it returns a `script` of `gen=camera@1` keyframes (on `clip`, or on a new camera without one), `fit` (`error` and `worst`, how far what was followed lands from where the solve puts it in the sequence's pixels; under a pixel holds, and past two a clip slides; `agreeing`, the share of it that fits), `fov`, and `points`, places in the world to set a clip's `x`, `y`, and `z` to with `three_d=true`, each with where it shows (`at`, on `frame`) and the frame it was last seen on (`lastFrame`), so that it stays on that spot. Hide what is not in the footage first. `solved: false` with a `reason` says when a shot cannot be solved, such as a camera that only turns; `lostAt` says where a cut or lost frame ended it. `lensKnown: false` means the camera never turned, so any lens fits and `fov` is the default: give `fov`, down the frame in degrees, if you know it. A zoom reads as a move along the camera's way, with a higher `error`. Use with `from`, `to`, and optionally `sequence` or `proposal`.", "properties": {"x": {"type": "number"}, "y": {"type": "number"}, "corners": {"type": "array", "items": {"type": "array", "items": {"type": "number"}}}, "inside": {"type": "array", "items": {"type": "array", "items": {"type": "number"}}}, "outside": {"type": "array", "items": {"type": "array", "items": {"type": "number"}}}, "box": {"type": "array", "items": {"type": "number"}}, "camera": {"type": "boolean"}, "fov": {"type": "number"}, "clip": {"type": "string"}}},
                     "facts": {"type": "boolean", "description": "With `media`: its fact sheet beside its index, the first time slowly: what the camera does in each shot (`camera`, such as `pan right` or `handheld`; `pan`, `tilt`, and `zoom` in shares of the frame a second, `roll` in degrees a second, and `agreeing`, how much of the picture follows that), how loud it is (`loudness`, in LUFS and dBTP), and in `notMeasured` what it does not say and why: faces, the subject, and on-screen text."},
                     "loudness": {"type": "boolean", "description": "How loud the sequence is as it plays, by R128, measured from its whole mix: `integrated` in LUFS beside the `target`, `range` in LU, `truePeak` in dBTP beside its `limit`, and the loudest three seconds (`shortTermMax`) and 400 ms (`momentaryMax`) with where each ends. A silent sequence has `integrated: null`. Measured once for a revision; a media's own loudness is in its `facts`. Use with `sequence` or `proposal` only."},
@@ -3398,13 +3398,13 @@ impl KerfMcpRouter {
             .map_err(|error| McpError::new("RENDER_FAILED", error.to_string()))?;
         let first = media[0];
         let rate = first.rate;
-        // Times start with whichever began first.
-        let earliest = found.iter().map(|a| a.offset).fold(0.0, f64::min);
-        let frame_of = |seconds: f64| {
-            rate.frames_round(
-                kerf_model::Time::from_seconds(seconds).unwrap_or(kerf_model::Time::ZERO),
-            )
-        };
+        let lined = crate::lined_up::lined_up(&found, rate.frame_duration().seconds());
+        // Times start with whichever of those placed began first.
+        let placed = || lined.iter().filter(|lined| lined.left.is_none());
+        let earliest = placed().map(|lined| lined.offset).fold(0.0, f64::min);
+        // Each on a whole frame from the first, so that none is more than half a frame from
+        // where its offset has it.
+        let frames = |seconds: f64| (seconds * rate.fps()).round() as i64;
         let mut id = "multicam".to_owned();
         let mut number = 1;
         while project.sequence(&id).is_some() {
@@ -3418,36 +3418,53 @@ impl KerfMcpRouter {
             format!("sequence add {id} rate={rate} size={width}x{height} name=\"Multicam\""),
             format!("use {id}"),
         ];
-        let mut rows = Vec::with_capacity(ids.len());
-        for (index, (media, alignment)) in media.iter().zip(&found).enumerate() {
-            let at = frame_of(alignment.offset - earliest);
-            let camera = index + 1;
-            let dur = rate.frames_round(media.duration).max(1);
-            let mut targets = Vec::new();
-            if media.video.is_some() {
-                lines.push(format!("track add V{camera} video"));
-                targets.push(format!("V{camera}"));
-            }
-            lines.push(format!("track add A{camera} audio"));
-            targets.push(format!("A{camera}"));
-            lines.push(format!(
-                "overwrite media={} src=0f at={at}f dur={dur}f on={}",
-                media.id,
-                targets.join(",")
-            ));
-            rows.push(json!({
-                "media": media.id.as_str(),
-                "offset": (alignment.offset * 1000.0).round() / 1000.0,
-                "at": format!("{at}f"),
-                "confidence": (alignment.confidence * 100.0).round() / 100.0,
-            }));
+        // The document says how each lines up with the first, which a check holds clips to. A
+        // first that was lined up with one of these is let go, since they are now with it.
+        if media[1..]
+            .iter()
+            .any(|media| project.sync_comes_back(&media.id, &first.id))
+        {
+            lines.push(format!("media sync {} with=\"\"", first.id));
         }
-        Ok(json!({
-            "revision": revision,
-            "recordings": rows,
-            "sequence": id,
-            "script": lines.join("\n"),
-        }))
+        let mut rows = Vec::with_capacity(ids.len());
+        for (index, (media, lined)) in media.iter().zip(&lined).enumerate() {
+            let mut row = lined.row.clone();
+            row["media"] = json!(media.id.as_str());
+            if lined.left.is_none() {
+                let at = frames(lined.offset) - frames(earliest);
+                let camera = index + 1;
+                let dur = rate.frames_round(media.duration).max(1);
+                let mut targets = Vec::new();
+                if media.video.is_some() {
+                    lines.push(format!("track add V{camera} video"));
+                    targets.push(format!("V{camera}"));
+                }
+                lines.push(format!("track add A{camera} audio"));
+                targets.push(format!("A{camera}"));
+                lines.push(format!(
+                    "overwrite media={} src=0f at={at}f dur={dur}f on={}",
+                    media.id,
+                    targets.join(",")
+                ));
+                if index > 0 {
+                    lines.push(format!(
+                        "media sync {} with={}@{}s",
+                        media.id,
+                        first.id,
+                        crate::lined_up::milliseconds(lined.offset)
+                    ));
+                }
+                row["at"] = json!(format!("{at}f"));
+            }
+            rows.push(row);
+        }
+        let mut answer = json!({"revision": revision, "recordings": rows});
+        // A sequence of one camera lines nothing up.
+        if placed().count() >= 2 {
+            answer["sequence"] = json!(id);
+            answer["script"] = json!(lines.join("\n"));
+        }
+        Ok(answer)
     }
 
     /// Where a point of the program's picture goes over `from`–`to`.

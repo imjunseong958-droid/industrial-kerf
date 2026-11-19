@@ -513,15 +513,17 @@ fn merge_list<K: Ord + Clone, T: Clone + PartialEq>(
 /// The file merges as one unit, path and what it holds together: a relink
 /// on one side and a replacement on the other must not make one record of
 /// both. The reel and the recipe are labels, and each merges on its own, as do the
-/// steps that say how the file is made.
+/// steps that say how the file is made and the recording it is lined up with.
 fn merge_media(base: &Media, ours: &Media, theirs: &Media, clashes: &mut Vec<String>) -> Media {
     let file = |media: &Media| Media {
         reel: None,
         recipe: None,
         steps: Vec::new(),
+        sync: None,
         ..media.clone()
     };
     Media {
+        sync: pick("sync", &base.sync, &ours.sync, &theirs.sync, clashes),
         reel: pick("reel", &base.reel, &ours.reel, &theirs.reel, clashes),
         recipe: pick(
             "recipe",
@@ -1526,6 +1528,7 @@ fn media_changes(before: &Media, after: &Media) -> Vec<String> {
     differs(&mut fields, "reel", &before.reel, &after.reel);
     differs(&mut fields, "recipe", &before.recipe, &after.recipe);
     differs(&mut fields, "steps", &before.steps, &after.steps);
+    differs(&mut fields, "sync", &before.sync, &after.sync);
     fields
 }
 
@@ -1939,6 +1942,25 @@ sequence s1 name="Main" rate=24 size=1920x1080 audio=48000 start=01:00:00:00
         let merged = merge(BASE, &ours, &edit(BASE, &[recipe]));
         assert_eq!(merged.text, edit(&ours, &[recipe]));
         assert_eq!(merged.conflicts, vec![]);
+        // Nor what it is lined up with: theirs lines m1 up with m2 while ours relinks it.
+        let sync = (
+            "audio=2ch@48000\nmedia m2",
+            "audio=2ch@48000 sync=m2@1.234s\nmedia m2",
+        );
+        let merged = merge(BASE, &ours, &edit(BASE, &[sync]));
+        assert_eq!(merged.text, edit(&ours, &[sync]));
+        assert_eq!(merged.conflicts, vec![]);
+        // Two offsets for it are one clash, and ours is kept.
+        let other = (
+            "audio=2ch@48000\nmedia m2",
+            "audio=2ch@48000 sync=m2@1.5s\nmedia m2",
+        );
+        let merged = merge(BASE, &edit(BASE, &[other]), &edit(BASE, &[sync]));
+        assert_eq!(merged.text, edit(BASE, &[other]));
+        assert_eq!(
+            merged.conflicts,
+            vec![conflict("media m1", "sync changed on both sides", "ours")]
+        );
     }
 
     #[test]

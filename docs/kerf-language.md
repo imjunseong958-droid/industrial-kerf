@@ -179,6 +179,23 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
   the media and takes the word off the line, and a media has its steps under
   its line or names a recipe, not both. See
   [shots.md](shots.md#carrying-a-recipe-into-the-document).
+- `sync=m1@1.234s` on a media line says the media is another recording of
+  what `m1` recorded and begins 1.234 s into it, or before it where the
+  number is negative: a camera and the recorder beside it, or the cameras of
+  a multicam. The seconds are not rounded to a frame as a position's are,
+  since sound lines up finer than frames, and an offset that is no whole
+  number of milliseconds is written in flicks (`m1@7fl`). Media may name
+  each other in turn and not in a ring; a media is let go when the one it
+  names is removed, and keeps its line when its file is replaced. A check
+  holds clips that play at once to it: clips of two media lined up with
+  each other, where they are linked or play some of the same moment, are a
+  finding (`sync.slipped`) when they play that moment more than a frame
+  apart, and so are a linked picture and sound of one file, or of one
+  nested sequence, that no longer play the same frames. Each clip is put on a whole frame, so two files in
+  step are up to a frame apart, which is why a frame is let pass. Two files
+  that play at once and further apart than the time they share play
+  different moments, which is a choice and is not said; nor is a clip
+  played at another speed.
 - `retired=` on the `project` line lists ids of deleted items. Ids are never
   reused, so an edit cannot claim one and generated ids skip them.
 - One line is one thing; two-space indentation nests tracks in sequences,
@@ -239,7 +256,11 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
   track plays that one sound track, even if muted: a multicam is a sequence with a camera on each
   track. `set c1 angle=V3` switches it, `angle=""` shows them all, and `split` cuts between them.
   `look` with `sync: ["m1", "m2"]` lines recordings up by their sound and gives a script that builds
-  that sequence.
+  that sequence and writes on each media's line how it lines up with the first (`sync=`). It reads
+  each recording a minute at a time as well, and says where one offset does not fit the whole: a
+  clock that drifts, in milliseconds a minute, or a recording that stopped and went on, with where
+  and by how much. Such a recording is left out of the script, which says why; a stretch that is
+  quiet or has nothing in common is said to be unknown and is not guessed at.
 - `bus music gain=-6 to=mix` under a `sequence`, with `fx` lines under it, mixes the sound tracks that
   say `bus=music`, then through its gain, pan, and effects, on to another bus or the sequence's mix.
   Gain is keyframed from the sequence's start. Sound effects (`audio.compressor`, `audio.gate`,
@@ -498,6 +519,13 @@ transition add from=c1 to=c9 fx=dissolve dur=12f
   short for its source range or a transition's handles, or without the
   picture or sound its track needs) is refused, naming the clips.
   `media relink` changes only the path, for the same file moved.
+- `media sync m2 with=m1@1.234s` says `m2` is another recording of what `m1`
+  recorded, beginning 1.234 s into it (`with=m1@-0.5s` where it began half a
+  second before), and `with=""` takes that back. It is the media's `sync=`
+  in the document, which a check holds clips to. `look` with `sync` measures
+  the offset by sound and its script writes this line; write it by hand
+  where the sound is not what should line up, as with a camera far from
+  what it hears, which hears it late.
 - `step m3 add render s2 {guide.mp4} pass=depth` writes a step of how media
   `m3` is made, the last of them, and `step m3 add 1 …` the one that becomes
   step 1. `step m3 set 2 seed=8 prompt="…"` gives names of step 2 their

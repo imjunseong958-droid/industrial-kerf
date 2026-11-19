@@ -2190,14 +2190,57 @@ fn look_lines_recordings_up_by_their_sound_and_gives_a_multicam() {
     assert_eq!(rows[1]["at"], "45f", "{found}");
     assert!(rows[1]["confidence"].as_f64().unwrap() > 0.2, "{found}");
     assert_eq!(found["sequence"], "multicam");
+    // Five seconds is one stretch, and one stretch says nothing of drift or of a step: the
+    // camera is placed by the whole of it, as it always was.
+    assert_eq!(rows[1]["course"], "unknown", "{found}");
+    assert_eq!(rows[1]["of"], 1, "{found}");
+    assert!(rows[1].get("notPlaced").is_none(), "{found}");
     // What it gives builds the sequence, and a clip of it shows one camera, then the other.
     let script = found["script"].as_str().unwrap();
+    // It writes how the second lines up with the first on the second's own line.
+    let written: f64 = script
+        .split_once("media sync mb with=ma@")
+        .and_then(|(_, rest)| rest.split_once('s'))
+        .and_then(|(seconds, _)| seconds.parse().ok())
+        .unwrap_or_else(|| panic!("{script}"));
+    assert_eq!(Some(written), rows[1]["offset"].as_f64(), "{script}");
+    let slips = |answer: &Value| -> Vec<String> {
+        answer["check"]["findings"]
+            .as_array()
+            .unwrap_or_else(|| panic!("{answer}"))
+            .iter()
+            .filter(|finding| finding["code"] == "sync.slipped")
+            .map(|finding| finding["message"].as_str().unwrap_or_default().to_owned())
+            .collect()
+    };
     let built = ok(
         &router,
         "edit",
         json!({"extend": proposal, "script": format!("{script}\nuse s1\ntrack add V9 video\noverwrite seq=multicam src=60f at=0f dur=30f on=V9 as=cam\nset cam angle=V1\nsplit cam at=15f as=cam2\nset cam2 angle=V2")}),
     );
     assert!(built.get("proposal").is_some(), "{built}");
+    // As built, the two cameras are in step by what the document now says of them.
+    assert_eq!(slips(&built), Vec::<String>::new(), "{built}");
+    // The same two laid by hand, and the second then moved a third of a second with its own
+    // sound: a check holds them to the line, and says once how far out the camera is.
+    let newest = built["proposal"]["id"]
+        .as_str()
+        .or_else(|| built["proposal"].as_str())
+        .unwrap_or_else(|| panic!("{built}"));
+    let moved = ok(
+        &router,
+        "edit",
+        json!({"extend": newest, "script": "sequence add by-hand rate=30 size=160x90\nuse by-hand\ntrack add V1 video\ntrack add A1 audio\noverwrite media=ma src=0f at=0f dur=240f on=V1,A1 as=va,aa\ntrack add V2 video\ntrack add A2 audio\noverwrite media=mb src=0f at=45f dur=150f on=V2,A2 as=vb,ab\nmedia sync mb with=ma@1.5s\nmove vb by=+10f"}),
+    );
+    let said = slips(&moved);
+    assert_eq!(said.len(), 1, "{moved}");
+    assert!(
+        said[0].starts_with(
+            "clip `vb` plays 10 frames later than `va`, which plays beside it: `mb` begins 1.5 s \
+             into `ma` (`sync=`)"
+        ),
+        "{moved}"
+    );
     for refused in [
         json!({"sync": ["ma"]}),
         json!({"sync": ["ma", "nobody"], "proposal": proposal}),
@@ -2208,6 +2251,129 @@ fn look_lines_recordings_up_by_their_sound_and_gives_a_multicam() {
             "{refused}"
         );
     }
+}
+
+/// A WAV file of `seconds` of claps at irregular times, 0.35 to 2.55 s apart and the same in
+/// every file, over a little noise of the file's own. `moment` is the moment of them the
+/// recorder has at its own second `t`, as its clock and its stops have it.
+fn write_claps(path: &Path, seconds: f64, moment: impl Fn(f64) -> f64, seed: u32) {
+    const RATE: u32 = 8000;
+    let next = |state: &mut u32| {
+        *state ^= *state << 13;
+        *state ^= *state >> 17;
+        *state ^= *state << 5;
+        f64::from(*state % 1000) / 1000.0
+    };
+    let (mut state, mut at, mut claps) = (0x2545_f491u32, -30.0, Vec::new());
+    while at < seconds + 120.0 {
+        at += 0.35 + next(&mut state) * 2.2;
+        claps.push(at);
+    }
+    let mut noise = seed | 1;
+    let frames = (seconds * f64::from(RATE)) as u32;
+    let mut bytes = Vec::with_capacity(44 + frames as usize * 2);
+    bytes.extend(b"RIFF");
+    bytes.extend((36 + frames * 2).to_le_bytes());
+    bytes.extend(b"WAVEfmt ");
+    bytes.extend(16u32.to_le_bytes());
+    // PCM, one channel, 16 bits.
+    bytes.extend(1u16.to_le_bytes());
+    bytes.extend(1u16.to_le_bytes());
+    bytes.extend(RATE.to_le_bytes());
+    bytes.extend((RATE * 2).to_le_bytes());
+    bytes.extend(2u16.to_le_bytes());
+    bytes.extend(16u16.to_le_bytes());
+    bytes.extend(b"data");
+    bytes.extend((frames * 2).to_le_bytes());
+    for frame in 0..frames {
+        let t = moment(f64::from(frame) / f64::from(RATE));
+        let mut value = (next(&mut noise) - 0.5) * 0.01;
+        let last = claps.partition_point(|clap| *clap <= t);
+        let since = last.checked_sub(1).map_or(f64::INFINITY, |clap| t - claps[clap]);
+        if since < 0.15 {
+            value += (since * 900.0 * std::f64::consts::TAU).sin() * (-since * 30.0).exp() * 0.6;
+        }
+        bytes.extend(((value * 30_000.0) as i16).to_le_bytes());
+    }
+    std::fs::write(path, bytes).unwrap();
+}
+
+#[test]
+fn look_says_when_no_one_offset_lines_two_recordings_up() {
+    let Some((directory, router)) = router() else {
+        return;
+    };
+    let file = |name: &str| directory.path().join(name);
+    write_claps(&file("first.wav"), 160.0, |t| t, 11);
+    // Began 7.25 s in and kept time.
+    write_claps(&file("steady.wav"), 120.0, |t| t + 7.25, 23);
+    // Its clock is slow by one part in 2000: 30 ms a minute.
+    write_claps(&file("drifts.wav"), 150.0, |t| t * 1.0005 + 3.0, 37);
+    // Lost half a second of what happened at 70 s of itself.
+    write_claps(&file("jumps.wav"), 150.0, |t| if t < 70.0 { t + 5.0 } else { t + 5.5 }, 41);
+    let added = ok(
+        &router,
+        "edit",
+        json!({"script": "media add first path=\"first.wav\" rate=30 dur=160s audio=1ch@8000\nmedia add steady path=\"steady.wav\" rate=30 dur=120s audio=1ch@8000\nmedia add drifts path=\"drifts.wav\" rate=30 dur=150s audio=1ch@8000\nmedia add jumps path=\"jumps.wav\" rate=30 dur=150s audio=1ch@8000"}),
+    );
+    let proposal = added["proposal"]["id"]
+        .as_str()
+        .or_else(|| added["proposal"].as_str())
+        .unwrap_or_else(|| panic!("{added}"));
+    let found = ok(
+        &router,
+        "look",
+        json!({"sync": ["first", "steady", "drifts", "jumps"], "proposal": proposal}),
+    );
+    let rows = found["recordings"].as_array().unwrap();
+    let number = |value: &Value| value.as_f64().unwrap_or_else(|| panic!("{found}"));
+
+    let steady = &rows[1];
+    assert_eq!(steady["course"], "steady", "{found}");
+    assert!((number(&steady["offset"]) - 7.25).abs() < 0.003, "{found}");
+    assert_eq!((&steady["read"], &steady["of"]), (&json!(4), &json!(4)), "{found}");
+    assert!(number(&steady["within"]) < 0.003, "{found}");
+    // 7.25 s is frame 217.5 at 30 a second, and it goes on a frame beside that.
+    assert!(steady["at"] == "217f" || steady["at"] == "218f", "{found}");
+
+    // Read in four stretches of 37.5 s, the middle of the first 113 s before that of the last.
+    let drifts = &rows[2];
+    assert_eq!(drifts["course"], "drift", "{found}");
+    // Two minutes is little to tell a rate by: it is told to a tenth or so.
+    assert!((number(&drifts["drift"]["msPerMinute"]) - 30.0).abs() < 4.0, "{found}");
+    assert!((number(&drifts["drift"]["from"]) - 3.009).abs() < 0.004, "{found}");
+    assert!((number(&drifts["drift"]["to"]) - 3.066).abs() < 0.004, "{found}");
+    // 28 ms either side of the nearest offset is more than half a frame of 33 ms.
+    let why = drifts["notPlaced"].as_str().unwrap_or_else(|| panic!("{found}"));
+    assert!(why.starts_with("its offset drifts ") && why.contains(" ms a minute"), "{why}");
+    assert!(drifts.get("at").is_none(), "{found}");
+
+    let jumps = &rows[3];
+    assert_eq!(jumps["course"], "jump", "{found}");
+    let jump = &jumps["jumps"][0];
+    assert!(number(&jump["after"]) <= 70.0 && number(&jump["before"]) >= 70.0, "{found}");
+    assert!(number(&jump["before"]) - number(&jump["after"]) < 10.0, "{found}");
+    assert!((number(&jump["to"]) - number(&jump["from"]) - 0.5).abs() < 0.003, "{found}");
+    let why = jumps["notPlaced"].as_str().unwrap_or_else(|| panic!("{found}"));
+    assert!(why.starts_with("its offset steps by 0.5 s between "), "{why}");
+
+    // The script places the two that one offset fits, and neither of the others.
+    let script = found["script"].as_str().unwrap_or_else(|| panic!("{found}"));
+    assert!(script.contains("overwrite media=first src=0f at=0f "), "{script}");
+    assert!(script.contains("overwrite media=steady src=0f at=21"), "{script}");
+    assert!(script.contains("media sync steady with=first@7.2"), "{script}");
+    assert!(!script.contains("drifts") && !script.contains("jumps"), "{script}");
+    let built = ok(&router, "edit", json!({"extend": proposal, "script": script}));
+    assert!(built.get("proposal").is_some(), "{built}");
+
+    // With none that one offset fits beside the first, there is nothing to build.
+    let found = ok(
+        &router,
+        "look",
+        json!({"sync": ["first", "jumps"], "proposal": proposal}),
+    );
+    assert!(found.get("script").is_none() && found.get("sequence").is_none(), "{found}");
+    assert_eq!(found["recordings"][1]["course"], "jump", "{found}");
 }
 
 #[test]

@@ -19,7 +19,7 @@
 use crate::lint;
 use crate::qc::{
     check, CheckReport, Finding, RowDef, Severity, CAPTION_DURATION, CAPTION_GAPS, CAPTION_OVERLAP,
-    CUTS_IN_WORDS, DOCUMENT, FRAME_EDGES, MEDIA, READING_SPEED_ROW, RENDER, TITLE_SAFE,
+    CUTS_IN_WORDS, DOCUMENT, FRAME_EDGES, IN_STEP, MEDIA, READING_SPEED_ROW, RENDER, TITLE_SAFE,
 };
 use kerf_engine::loudness::{self, Loudness};
 use kerf_engine::program::{compile_program, ProgramOptions};
@@ -146,6 +146,7 @@ pub const FULL_ROWS: &[RowDef] = &[
     DOCUMENT,
     FRAME_EDGES,
     CUTS_IN_WORDS,
+    IN_STEP,
     READING_SPEED_ROW,
     CAPTION_DURATION,
     CAPTION_GAPS,

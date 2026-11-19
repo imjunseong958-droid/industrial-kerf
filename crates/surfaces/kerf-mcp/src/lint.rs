@@ -3,8 +3,9 @@
 //! (including a sliver of another shot at a clip's edge, and a picture the
 //! tracks over it leave showing for a frame or two), sound cut inside a
 //! word or through a sound, pauses and repeated words the cut still plays,
-//! a word it took with a restart (see `cuts`), and text and captions a
-//! viewer cannot read (see `text_lint`).
+//! a word it took with a restart (see `cuts`), a picture and a sound of one
+//! thing that play out of step, and text and captions a viewer cannot read
+//! (see `text_lint`).
 
 use crate::cuts::{self, Known};
 use crate::qc::{Finding, Severity};
@@ -41,6 +42,7 @@ pub(crate) fn findings(project: &Project, facts: &dyn Facts) -> Vec<Finding> {
         if let Some(sequence) = drawn.sequence(sequence.id.as_str()) {
             picture_flashes(drawn, sequence, facts, &mut indexed, &said, &mut findings);
         }
+        out_of_step(project, sequence, &mut findings);
         let mut known = Known::new(facts);
         cuts_in_sound(project, sequence, &mut known, &mut findings);
         leftovers(project, sequence, &mut known, &mut findings);
@@ -1170,6 +1172,161 @@ fn plays_on(clip: &Clip, next: &Clip) -> bool {
         }
 }
 
+/// What a clip that plays out of step with the one it belongs with is called.
+pub(crate) const SYNC_SLIPPED: &str = "sync.slipped";
+
+/// Clips that play one thing at once and play it more than a frame apart.
+///
+/// Two clips play one thing where they play one media or one nested sequence, or two media the
+/// document says are recordings of one thing (`sync=`, which says how far into the one the
+/// other begins). Of one file, a picture and a sound that are linked belong together, as they
+/// were laid. Of two
+/// files, a camera and the recorder beside it or two cameras, clips belong together where they
+/// are linked, and where they play some of the same moment at once whether linked or not. Two
+/// files that play at once and further apart than the time they share play different moments,
+/// which is a choice and no slip; so are a picture and a sound of one file that are not linked,
+/// a voice over other pictures of its own take, and two pictures of one file that are, which
+/// is a way to keep shots together.
+///
+/// Read from the document alone: where each clip starts and what it starts on. Two clips of one
+/// file were made on the same frames, so any distance is the edit's; two files are each placed
+/// on a whole frame from an offset finer than frames, which leaves them up to a frame apart
+/// when they are in step, and that much is not said of either. A clip played at another speed
+/// is not held to anything.
+fn out_of_step(project: &Project, sequence: &Sequence, findings: &mut Vec<Finding>) {
+    struct Plays<'a> {
+        clip: &'a Clip,
+        picture: bool,
+        /// The media it plays, or the nested sequence.
+        media: &'a Id,
+        /// The recording its media is lined up with in the end, and how far into that it begins.
+        of: &'a Id,
+        begins: Time,
+        /// Where on the sequence the first moment of that recording plays, or would.
+        zero: Time,
+    }
+    let plays: Vec<Plays<'_>> = sequence
+        .tracks
+        .iter()
+        .flat_map(|track| track.clips.iter().map(move |clip| (track, clip)))
+        .filter(|(_, clip)| clip.enabled && clip.speed().is_one())
+        .filter_map(|(track, clip)| {
+            let (media, source_in, (of, begins)) = match &clip.content {
+                Content::Media {
+                    media, source_in, ..
+                } => (media, source_in, project.synced_to(media.as_str())?),
+                // A nested sequence is one thing as a file is, with a picture and a sound.
+                Content::Sequence {
+                    sequence,
+                    source_in,
+                    ..
+                } => (sequence, source_in, (sequence, Time::ZERO)),
+                Content::Generator { .. } | Content::Caption { .. } => return None,
+            };
+            Some(Plays {
+                clip,
+                picture: track.kind == TrackKind::Video,
+                media,
+                of,
+                begins,
+                zero: clip.start - (*source_in + begins),
+            })
+        })
+        .collect();
+    let frame = sequence.rate.frame_duration();
+    let linked = |a: &Plays<'_>, b: &Plays<'_>| a.clip.link.is_some() && a.clip.link == b.clip.link;
+    let mut says = |slipped: &Plays<'_>, held_to: &Plays<'_>, linked: bool| {
+        let late = slipped.zero - held_to.zero;
+        let frames = late.abs().seconds() / frame.seconds();
+        let (id, other) = (&slipped.clip.id, &held_to.clip.id);
+        // To a tenth, and never the one frame that is let pass.
+        let frames = ((frames * 10.0).round() / 10.0).max(1.1);
+        let apart = format!("{frames} frames");
+        let way = if late.is_positive() { "later" } else { "earlier" };
+        // Other source frames in the same place undo it, or the same frames in another place.
+        let by = sequence.rate.frames_round(late);
+        let back = format!("`slip {id} {by:+}f` or `move {id} by={:+}f`", -by);
+        let message = if slipped.media == held_to.media {
+            format!(
+                "clip `{id}` plays `{}` {apart} {way} than `{other}`, which it is linked to: \
+                 they are out of step. Linked clips slip and move together, so `unlink {id}` \
+                 first; then {back} brings it back, to link again",
+                slipped.media,
+            )
+        } else {
+            let into = (slipped.begins - held_to.begins).seconds();
+            let into = (into * 1000.0).round() / 1000.0;
+            format!(
+                "clip `{id}` plays {apart} {way} than `{other}`, which {}: `{}` begins {} s {} \
+                 `{}` (`sync=`), and they play what both recorded that far out of step. {} {back} \
+                 brings it back",
+                if linked { "it is linked to" } else { "plays beside it" },
+                slipped.media,
+                into.abs(),
+                if into < 0.0 { "before" } else { "into" },
+                held_to.media,
+                if linked {
+                    format!("Linked clips slip and move together, so `unlink {id}` first; then")
+                } else {
+                    "Either of".to_owned()
+                },
+            ) + if linked { ", to link again" } else { "" }
+        };
+        // Said where both play.
+        let (from, to) = (
+            slipped.clip.start.max(held_to.clip.start),
+            slipped.clip.end().min(held_to.clip.end()),
+        );
+        findings.push(
+            finding(SYNC_SLIPPED, id.as_str(), message)
+                .during(sequence, from, to)
+                .measured(frames, 1.0, "frames"),
+        );
+    };
+    // Each clip against those on the tracks before it, and said once, of the first it is out
+    // with. A clip already said to be out is not what another is held to.
+    let mut said: Vec<&Id> = Vec::new();
+    for (index, later) in plays.iter().enumerate() {
+        let out_with = plays[..index].iter().find(|earlier| {
+            let shared = later.clip.end().min(earlier.clip.end())
+                - later.clip.start.max(earlier.clip.start);
+            let apart = (later.zero - earlier.zero).abs();
+            let belong = if earlier.media == later.media {
+                linked(earlier, later) && earlier.picture != later.picture
+            } else {
+                linked(earlier, later) || apart < shared
+            };
+            earlier.of == later.of
+                && shared.is_positive()
+                && apart > frame
+                && belong
+                && !said.contains(&&earlier.clip.id)
+        });
+        let Some(earlier) = out_with else {
+            continue;
+        };
+        // A sound is held to its picture; of two files, the one on the later track to the other.
+        let same_file = earlier.media == later.media;
+        let (slipped, held_to) = if same_file && later.picture {
+            (earlier, later)
+        } else {
+            (later, earlier)
+        };
+        // A camera moved with its own sound is one slip, said of the first of the two.
+        let went_with_one_said = !same_file
+            && plays.iter().any(|other| {
+                said.contains(&&other.clip.id)
+                    && linked(other, slipped)
+                    && other.media == slipped.media
+                    && other.zero == slipped.zero
+            });
+        if !went_with_one_said && !said.contains(&&slipped.clip.id) {
+            says(slipped, held_to, linked(earlier, later));
+            said.push(&slipped.clip.id);
+        }
+    }
+}
+
 /// What cuts no transcript covers are called: information, since nothing is known to be wrong with
 /// them, only that nobody looked.
 pub(crate) const CUT_UNHEARD: &str = "cut.unheard";
@@ -1819,6 +1976,201 @@ sequence s1 rate=24 size=1920x1080
             .into_iter()
             .map(|finding| (finding.code, finding.message))
             .collect()
+    }
+
+    /// What the check says of clips out of step once `script` has run on `document`.
+    fn slipped(document: &str, script: &str) -> Vec<Finding> {
+        let catalog = Catalog::builtin();
+        let project = parse_document(document, catalog).unwrap().project;
+        let project = apply_script(&project, catalog, script)
+            .unwrap_or_else(|errors| panic!("{script}: {errors:#?}"))
+            .project;
+        findings(&project, &Known::default())
+            .into_iter()
+            .filter(|finding| finding.code == SYNC_SLIPPED)
+            .collect()
+    }
+
+    #[test]
+    fn a_linked_clip_slipped_alone_is_said_and_one_that_went_with_its_picture_is_not() {
+        // As cut, each sound plays the frames its picture does.
+        assert!(slipped(DOCUMENT, "").is_empty());
+        // Linked clips slip, move, and trim together, and stay in step.
+        for together in [
+            "slip a1 +12f",
+            "move c2 by=+2s",
+            "trim a2 in +6f",
+            "split c1 at=00:00:02:00",
+        ] {
+            let found = slipped(DOCUMENT, together);
+            assert!(found.is_empty(), "{together}: {found:?}");
+        }
+        // A sound that plays on past its picture, as in an L cut, is in step with it.
+        let l_cut = "unlink a1\ntrim c1 out -12f\nlink c1 a1";
+        assert!(slipped(DOCUMENT, l_cut).is_empty());
+
+        // Let go, slipped alone, and linked again, the sound plays half a second of its file
+        // further on than its picture does: each moment comes 12 frames early.
+        let alone = "unlink a1\nslip a1 +12f\nlink c1 a1";
+        let found = slipped(DOCUMENT, alone);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].severity, Severity::Warning);
+        assert_eq!(found[0].entity.as_deref(), Some("a1"));
+        assert_eq!(
+            found[0].message,
+            "clip `a1` plays `m1` 12 frames earlier than `c1`, which it is linked to: they are \
+             out of step. Linked clips slip and move together, so `unlink a1` first; then \
+             `slip a1 -12f` or `move a1 by=+12f` brings it back, to link again"
+        );
+        assert_eq!((found[0].value, found[0].limit), (Some(12.0), Some(1.0)));
+        assert_eq!(found[0].unit.as_deref(), Some("frames"));
+        // It is said over the four seconds the two play together.
+        assert_eq!((found[0].at, found[0].duration), (Some(0.0), Some(4.0)));
+        // What it says to do puts it back.
+        let back = format!("{alone}\nunlink a1\nslip a1 -12f\nlink c1 a1");
+        assert!(slipped(DOCUMENT, &back).is_empty());
+
+        // Moved alone, it plays the same frames later, and from where it now starts.
+        let found = slipped(DOCUMENT, "unlink a2\nmove a2 by=+6f\nlink c2 a2");
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(
+            found[0].message.starts_with(
+                "clip `a2` plays `m1` 6 frames later than `c2`, which it is linked to"
+            ),
+            "{found:?}"
+        );
+        assert!(found[0]
+            .message
+            .ends_with("`slip a2 +6f` or `move a2 by=-6f` brings it back, to link again"));
+        assert_eq!(found[0].at, Some(4.25));
+        // A frame is not seen or heard, and is not said; two are.
+        assert!(slipped(DOCUMENT, "unlink a1\nslip a1 +1f\nlink c1 a1").is_empty());
+        assert_eq!(slipped(DOCUMENT, "unlink a1\nslip a1 +2f\nlink c1 a1").len(), 1);
+        // Clips that are not linked are held to nothing: a voice over other pictures of its
+        // own take.
+        assert!(slipped(DOCUMENT, "unlink a1\nslip a1 +12f").is_empty());
+        // Two shots of one file linked to keep them together are no picture and its sound, and
+        // each sound is held to the picture it plays with.
+        assert!(slipped(DOCUMENT, "link c1 c2").is_empty());
+        assert!(slipped(DOCUMENT, "link c1 a1 c2 a2").is_empty());
+        let found = slipped(DOCUMENT, "unlink a2\nslip a2 -8f\nlink c1 a1 c2 a2");
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(
+            found[0].message.starts_with("clip `a2` plays `m1` 8 frames later than `c2`"),
+            "{found:?}"
+        );
+        // A nested sequence is one thing as a file is: a cut of a multicam whose sound left
+        // its picture.
+        let nested = "kerf 1
+project name=\"Test\"
+media m1 path=\"a.mov\" rate=24 dur=00:01:00:00 video=1920x1080 audio=2ch@48000
+sequence s1 rate=24 size=1920x1080
+  track V1 video
+    clip c1 seq=s2 src=0f at=0f dur=48f link=L1
+  track A1 audio
+    clip a1 seq=s2 src=0f at=0f dur=48f link=L1
+sequence s2 rate=24 size=1920x1080
+  track V1 video
+    clip n1 media=m1 at=0f dur=96f link=L2
+  track A1 audio
+    clip n2 media=m1 at=0f dur=96f link=L2
+";
+        assert!(slipped(nested, "slip c1 +12f").is_empty());
+        let found = slipped(nested, "unlink a1\nslip a1 +12f\nlink c1 a1");
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(
+            found[0].message.starts_with("clip `a1` plays `s2` 12 frames earlier than `c1`"),
+            "{found:?}"
+        );
+        // The row of the summary that is theirs fails, and no other.
+        let project = parse_document(DOCUMENT, Catalog::builtin()).unwrap().project;
+        let project = apply_script(&project, Catalog::builtin(), alone).unwrap().project;
+        let report = crate::qc::CheckReport::new(findings(&project, &Known::default()), crate::qc::ROWS);
+        let failed: Vec<&str> = report
+            .summary
+            .rows
+            .iter()
+            .filter(|row| !row.passed)
+            .map(|row| row.name.as_str())
+            .collect();
+        assert_eq!(failed, ["Picture and sound in step"], "{report:?}");
+    }
+
+    /// A camera, the recorder beside it, which began 1.234 s into the camera's take, and a
+    /// second camera that began 2.5 s before it. The recorder's sound is laid under the first
+    /// camera's picture, on the nearest frame: 8.75 s of it is the camera's 9.984 s.
+    const TWO_FILES: &str = "kerf 1
+project name=\"Test\"
+media m1 path=\"a.mov\" rate=24 dur=00:01:00:00 video=1920x1080 audio=2ch@48000
+media m2 path=\"recorder.wav\" rate=24 dur=00:01:00:00 audio=2ch@48000 sync=m1@1.234s
+media m3 path=\"b.mov\" rate=24 dur=00:01:00:00 video=1920x1080 audio=2ch@48000 sync=m1@-2.5s
+sequence s1 rate=24 size=1920x1080
+  track V1 video
+    clip c1 media=m1 src=00:00:10:00 at=00:00:00:00 dur=00:00:04:00 link=L1
+  track A1 audio
+    clip a1 media=m1 src=00:00:10:00 at=00:00:00:00 dur=00:00:04:00 link=L1
+  track A2 audio
+    clip r1 media=m2 src=00:00:08:18 at=00:00:00:00 dur=00:00:04:00
+";
+
+    #[test]
+    fn two_recordings_of_one_thing_are_held_to_how_the_document_lines_them_up() {
+        // As laid, the recorder is a third of a frame from the camera, which is in step.
+        assert!(slipped(TWO_FILES, "").is_empty());
+        // Slipped half a second, it plays what both recorded half a second early, linked or not.
+        let found = slipped(TWO_FILES, "slip r1 +12f");
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].entity.as_deref(), Some("r1"));
+        assert_eq!(
+            found[0].message,
+            "clip `r1` plays 11.6 frames earlier than `c1`, which plays beside it: `m2` begins \
+             1.234 s into `m1` (`sync=`), and they play what both recorded that far out of step. \
+             Either of `slip r1 -12f` or `move r1 by=+12f` brings it back"
+        );
+        assert_eq!(found[0].value, Some(11.6));
+        assert!(slipped(TWO_FILES, "slip r1 +12f\nslip r1 -12f").is_empty());
+        // Ten seconds on is another moment of the take under this picture, which is a choice.
+        assert!(slipped(TWO_FILES, "slip r1 +10s").is_empty());
+        // Linked to the picture it is meant to stay with it, however far it went.
+        let found = slipped(TWO_FILES, "slip r1 +10s\nlink c1 a1 r1");
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(
+            found[0].message.starts_with(
+                "clip `r1` plays 239.6 frames earlier than `c1`, which it is linked to: `m2` \
+                 begins 1.234 s into `m1` (`sync=`)"
+            ),
+            "{found:?}"
+        );
+        // With nothing saying they are one thing, nothing is held to anything.
+        assert!(slipped(TWO_FILES, "slip r1 +12f\nmedia sync m2 with=\"\"").is_empty());
+        // A line that says otherwise is what they are held to: the recorder began half a
+        // second later than was measured, and it is the clip as laid that is out.
+        let found = slipped(TWO_FILES, "media sync m2 with=m1@1.734s");
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(
+            found[0].message.starts_with("clip `r1` plays 11.6 frames earlier than `c1`"),
+            "{found:?}"
+        );
+
+        // The second camera, in step: its 12.5 s is the first's 10 s.
+        let second = "track add V2 video\ntrack add A3 audio\n\
+                      overwrite media=m3 src=00:00:12:12 at=00:00:00:00 dur=4s on=V2,A3 as=c3,a3";
+        assert!(slipped(TWO_FILES, second).is_empty());
+        // Moved with its own sound it is one slip, said once, of its picture. It began before
+        // the first camera, which is said so.
+        let found = slipped(TWO_FILES, &format!("{second}\nmove c3 by=+8f"));
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(
+            found[0].message,
+            "clip `c3` plays 8 frames later than `c1`, which plays beside it: `m3` begins 2.5 s \
+             before `m1` (`sync=`), and they play what both recorded that far out of step. \
+             Either of `slip c3 +8f` or `move c3 by=-8f` brings it back"
+        );
+        // It is said where the two play at once.
+        assert_eq!((found[0].at, found[0].duration), (Some(8.0 / 24.0), Some(4.0 - 8.0 / 24.0)));
+        // A clip played at another speed is held to nothing.
+        let fast = format!("{second}\nunlink c3\nmove c3 by=+8f\nspeed c3 2");
+        assert!(slipped(TWO_FILES, &fast).is_empty());
     }
 
     #[test]

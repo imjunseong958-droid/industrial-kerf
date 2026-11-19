@@ -6,6 +6,34 @@ on `main`; its section here becomes the release's notes on GitHub
 
 ## Unreleased
 
+- Lining recordings up by their sound says when one offset does not fit. An
+  agent's `look` with `sync` gave each recording one offset and built a
+  multicam by it, whether or not the two stayed together. It now places
+  each recording again a minute at a time and says what that comes to
+  (`course`): `steady`; `drift`, one clock running faster than the other, in
+  milliseconds a minute; or `jump`, a recording that stopped and went on or
+  lost sound, with where and by how much. A stretch that is quiet, or that
+  has nothing in common with the first, is listed as `unknown` and not
+  guessed at. The script it gives leaves out a recording that drifts more
+  than half a frame from any one offset, or that jumps, and says what does
+  not fit. A short recording that began late in a long one was placed
+  before its start, and no longer is. These were measured on recordings
+  made for the tests, claps over noise, and on none recorded in a room:
+  listen to what it says before cutting by it
+  ([docs/architecture.md](docs/architecture.md#edit)).
+- The check says when a picture and its sound, or two recordings of one
+  thing, no longer play in step (`sync.slipped`, the row "Picture and sound
+  in step" of QC). A linked picture and sound of one file, or of one
+  nested sequence, are held to each other: a sound slipped or moved without
+  its picture is named, with how many frames it is out and the line that
+  puts it back. Two files are held to a line the
+  document now has: `sync=m1@1.234s` on a media says it begins that far
+  into `m1`, written by `media sync m2 with=m1@1.234s`, which `look` with
+  `sync` puts in its script and which is yours to change. Clips of such
+  media that are linked, or that play some of the same moment at once, are
+  named where they play it more than a frame apart; clips that play
+  different moments are left alone
+  ([docs/kerf-language.md](docs/kerf-language.md#documents)).
 - The check finds a flash frame that no one clip shows. An overlay that
   ends two frames before the cut under it shows two frames of the shot
   that cut ends, and one that starts two frames after it shows two of the
