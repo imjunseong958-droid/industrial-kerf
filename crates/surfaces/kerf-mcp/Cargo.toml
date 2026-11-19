@@ -19,6 +19,8 @@ kerf-agent = { path = "../../surfaces/kerf-agent" }
 kerf-color = { path = "../../foundation/kerf-color" }
 kerf-compose = { path = "../../engine/kerf-compose" }
 kerf-engine = { path = "../../engine/kerf-engine" }
+# The timeline files `render` hands another editor.
+kerf-interchange = { path = "../../edit/kerf-interchange" }
 kerf-lang = { path = "../../foundation/kerf-lang" }
 kerf-model = { path = "../../foundation/kerf-model" }
 kerf-runtime = { path = "../../surfaces/kerf-runtime" }

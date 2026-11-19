@@ -6,6 +6,21 @@ on `main`; its section here becomes the release's notes on GitHub
 
 ## Unreleased
 
+- A sequence goes to another editor without Python. `kerf export cut.otio`
+  writes OpenTimelineIO, which DaVinci Resolve and Premiere Pro import, and
+  `kerf export cut.fcpxml` writes Final Cut Pro XML 1.9, which Final Cut Pro
+  and DaVinci Resolve import; an agent does the same with `render` and
+  `handoff`. Both answer with the list of what the file does not carry:
+  titles and other clips that play no file arrive as gaps, captions,
+  effects, masks and clip properties are not written, a speed ramp is
+  written as its speed overall, and a transition that is no dissolve arrives
+  as one. An `.otio` now carries a clip's speed, a disabled clip, and a
+  marker's note, and Kerf reads its own file back as the project it wrote,
+  frame size included. Reading an `.otio` needs no Python either; `otioz` and
+  the other OpenTimelineIO adapters still use the Python bridge, which no
+  longer loses ids on the way in. Neither file has been opened in those
+  editors yet: they are checked against OpenTimelineIO itself and against
+  Apple's DTD ([README](README.md#interchange)).
 - A proposal the edit changed under can be brought forward. Accepting one
   proposal, or editing the timeline, left every other proposal still waiting
   out of date, and each had to be written again by the agent that made it.

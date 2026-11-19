@@ -129,7 +129,10 @@ make on its own it runs (`making`), as a `job` to read, `wait` for, or `cancel`,
 and the media is the new take once it is made; else they are asked (`asked`), in \
 the conversation, and make it. Then look at the take, and change one thing for the next.
 - `render` renders the sequence, or a range of it, to a file; with \
-  `proposal`, what that proposal would make.
+  `proposal`, what that proposal would make. With `handoff` it writes the \
+  sequence as a timeline file another editor opens instead, `otio` for DaVinci \
+  Resolve and Premiere Pro or `fcpxml` for Final Cut Pro and DaVinci Resolve, \
+  and answers with `notCarried`, what that file leaves out: say it to the person.
 
 Reusable presets are portable .kerfpreset files. `look` with `presets: true` \
 lists project presets: the shared `presets/` library first, then \
@@ -406,7 +409,10 @@ pub(super) fn metadata(name: &str) -> Option<(&'static str, Value, ToolAnnotatio
         "render" => (
             "Render the sequence, or the range `from`–`to`, to a file — of the project, or \
              of what a pending `proposal` would make. Returns a job that renders while this \
-             session lasts; pass `job` to read its progress and output, with `cancel` to stop it.",
+             session lasts; pass `job` to read its progress and output, with `cancel` to stop it. \
+             `handoff` writes the sequence as a timeline file for another editor instead, \
+             an OpenTimelineIO `.otio` or a Final Cut Pro `.fcpxml`, at once and with no \
+             Python, and lists what the file does not carry.",
             json!({
                 "type": "object",
                 "properties": {
@@ -416,7 +422,8 @@ pub(super) fn metadata(name: &str) -> Option<(&'static str, Value, ToolAnnotatio
                     "sequence": {"type": "string", "description": sequence},
                     "proposal": {"type": "string", "description": proposal},
                     "job": {"type": "string", "description": "A render job id."},
-                    "cancel": {"type": "boolean"}
+                    "cancel": {"type": "boolean"},
+                    "handoff": {"type": "string", "enum": ["otio", "fcpxml"], "description": "Write the sequence, whole, as a timeline file another editor opens, in place of rendering it: `otio`, OpenTimelineIO JSON, which DaVinci Resolve and Premiere Pro import, or `fcpxml`, Final Cut Pro XML 1.9, which Final Cut Pro and DaVinci Resolve import and Premiere Pro does not. It is written at once, to `output` in the project's `deliveries` folder, with the media named by where their files are. `notCarried` lists what the file leaves out, each with the `code` of its kind, `at` the clip, track, or transition it is, and what happened to it: clips that play no media file (titles, generators, nested sequences) arrive as gaps; captions, clip properties, masks and effects, links, and the mix are not written; a speed ramp is written as its speed overall and reverse as forward; a transition that is no dissolve arrives as one, and in an `fcpxml` one off the first video track as a cut; an `otio` has no frame size. `check` lists what arrives changed in form: an `fcpxml` has no tracks, so every track but the first video track arrives as connected clips. Tell the person what is in both. Use with `sequence` or `proposal` only."}
                 },
                 "additionalProperties": false
             }),
@@ -747,6 +754,8 @@ struct RenderInput {
     job: Option<String>,
     #[serde(default)]
     cancel: bool,
+    /// The timeline file to write for another editor, in place of a render.
+    handoff: Option<String>,
 }
 
 pub(crate) fn input<T: serde::de::DeserializeOwned>(arguments: Value) -> Result<T, McpError> {
@@ -4590,8 +4599,71 @@ impl KerfMcpRouter {
         Ok((job, output))
     }
 
+    /// Write a sequence of the project, or of what a pending proposal would
+    /// make, as a timeline file another editor opens, and say what the file
+    /// does not carry.
+    fn handoff(
+        &self,
+        format: &str,
+        sequence: Option<&str>,
+        proposal: Option<&str>,
+    ) -> Result<Value, McpError> {
+        let format = kerf_interchange::Format::ALL
+            .into_iter()
+            .find(|known| known.name() == format)
+            .ok_or_else(|| {
+                McpError::new(
+                    "INVALID_ARGUMENTS",
+                    format!("handoff `{format}` is not otio or fcpxml"),
+                )
+            })?;
+        let (revision, mut project) = self.project_at(proposal)?;
+        let sequence = program(&project, sequence)?;
+        let (id, name) = (sequence.id.to_string(), sequence.name.clone());
+        // Another editor finds a file by where it is, not by where the project is.
+        let directory = self.runtime.directory();
+        kerf_runtime::resolve_media_paths(&mut project, directory);
+        let output = directory
+            .join("deliveries")
+            .join(format!("{}.{}", file_stem(&name, &id), format.name()));
+        let written = kerf_interchange::export(&project, Some(&id), &output, format)
+            .map_err(|error| McpError::new("HANDLER_FAILED", error.to_string()))?;
+        let listed = |issues: &[kerf_interchange::InterchangeIssue]| -> Vec<Value> {
+            issues
+                .iter()
+                .map(|issue| json!({"code": issue.code, "at": issue.path, "what": issue.message}))
+                .collect()
+        };
+        let mut result = json!({
+            "output": written.output_path,
+            "handoff": format.name(),
+            "sequence": id,
+            "revision": revision,
+            "notCarried": listed(&written.report.losses),
+            "check": listed(&written.report.warnings),
+        });
+        if let Some(proposal) = proposal {
+            result["proposal"] = json!(proposal);
+        }
+        Ok(result)
+    }
+
     pub(super) fn render(&self, arguments: Value) -> Result<Value, McpError> {
         let input: RenderInput = input(arguments)?;
+        if let Some(format) = input.handoff.as_deref() {
+            if input.job.is_some()
+                || input.cancel
+                || input.quality.is_some()
+                || input.from.is_some()
+                || input.to.is_some()
+            {
+                return Err(McpError::new(
+                    "INVALID_ARGUMENTS",
+                    "`handoff` writes the whole sequence as a timeline file; it takes no job, quality, or range",
+                ));
+            }
+            return self.handoff(format, input.sequence.as_deref(), input.proposal.as_deref());
+        }
         if let Some(job) = input.job.as_deref() {
             if input.quality.is_some()
                 || input.from.is_some()
@@ -4678,6 +4750,25 @@ impl KerfMcpRouter {
             result["proposal"] = json!(id);
         }
         Ok(result)
+    }
+}
+
+/// A file name for a sequence's hand-off: its name without what a path or a
+/// file system keeps for itself, or its id where that leaves nothing.
+fn file_stem(name: &str, id: &str) -> String {
+    let stem: String = name
+        .chars()
+        .map(|c| match c {
+            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '-',
+            c if c.is_control() => ' ',
+            c => c,
+        })
+        .collect();
+    let stem = stem.trim().trim_matches('.').trim();
+    if stem.is_empty() {
+        id.to_owned()
+    } else {
+        stem.to_owned()
     }
 }
 

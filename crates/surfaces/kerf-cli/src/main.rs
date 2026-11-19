@@ -7,7 +7,8 @@
 //! project's edits through Git. `kerf load` takes a `project.kerf` changed
 //! outside Kerf as the project, and `kerf proposals`, `kerf accept` and
 //! `kerf reject` answer what an agent proposed, so a project is worked on
-//! from a terminal with no editor open.
+//! from a terminal with no editor open. `kerf export` writes a sequence as a
+//! timeline file another editor opens, and says what the file leaves out.
 
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{Parser, Subcommand};
@@ -185,6 +186,19 @@ enum Command {
         /// The proposal's id, where more than one waits.
         proposal: Option<String>,
     },
+    /// Write a sequence as a timeline file another editor opens, and list what the file
+    /// does not carry: .otio for DaVinci Resolve and Premiere Pro, .fcpxml for Final Cut
+    /// Pro and DaVinci Resolve. No Python needed.
+    Export {
+        /// The file to write. Its extension says the format: .otio or .fcpxml.
+        file: PathBuf,
+        /// otio or fcpxml, for a file whose extension does not say.
+        #[arg(long)]
+        format: Option<String>,
+        /// The sequence to write, by its id; the first when absent.
+        #[arg(long)]
+        sequence: Option<String>,
+    },
 }
 
 #[derive(Debug, clap::Args)]
@@ -346,6 +360,22 @@ fn run() -> Result<()> {
         Some(Command::Preset { action }) => {
             let directory = resolve_directory(&requested.unwrap_or_else(current))?;
             return run_preset(action, &directory, args.kerfd.as_deref());
+        }
+        Some(Command::Export {
+            file,
+            format,
+            sequence,
+        }) => {
+            // Refused before kerfd is started for it.
+            let format = export_format(file, format.as_deref())?;
+            let directory = resolve_directory(&requested.unwrap_or_else(current))?;
+            return run_export(
+                &directory,
+                args.kerfd.as_deref(),
+                file,
+                format,
+                sequence.as_deref(),
+            );
         }
         None => {}
     }
@@ -709,6 +739,71 @@ fn confirmed(question: &str) -> bool {
     let mut answer = String::new();
     stdin.lock().read_line(&mut answer).is_ok()
         && matches!(answer.trim(), "y" | "Y" | "yes" | "Yes")
+}
+
+/// The format `kerf export` writes `file` as: the one `--format` names, else the one its
+/// extension does.
+fn export_format(file: &Path, format: Option<&str>) -> Result<kerf_interchange::Format> {
+    use kerf_interchange::Format;
+    match format {
+        Some(name) => Format::parse(name)
+            .ok_or_else(|| anyhow!("`{name}` is not a format kerf export writes: otio or fcpxml")),
+        None => Format::of_path(file).ok_or_else(|| {
+            anyhow!(
+                "{} does not say its format: name it .otio or .fcpxml, or pass --format",
+                file.display()
+            )
+        }),
+    }
+}
+
+/// Write a sequence of the project as a timeline file another editor opens, then say what
+/// the file does not carry. The project is not changed.
+fn run_export(
+    directory: &Path,
+    kerfd: Option<&Path>,
+    file: &Path,
+    format: kerf_interchange::Format,
+    sequence: Option<&str>,
+) -> Result<()> {
+    let runtime = runtime_for(directory, kerfd)?;
+    let state = runtime.get_state().map_err(runtime_error)?;
+    in_step(&state)?;
+    let mut project = kerf_runtime::parse_document(&state.document).map_err(runtime_error)?;
+    // Another editor finds a file by where it is, not by where the project is.
+    kerf_runtime::resolve_media_paths(&mut project, runtime.directory());
+    let output = std::path::absolute(file).with_context(|| format!("resolve {}", file.display()))?;
+    let written =
+        kerf_interchange::export(&project, sequence, &output, format).map_err(|error| anyhow!(error))?;
+    print!("{}", export_report(&written));
+    Ok(())
+}
+
+/// What `kerf export` says of the file it wrote: where it is, then everything it does not
+/// carry and everything that arrives changed, a line each.
+fn export_report(written: &kerf_interchange::ExportResult) -> String {
+    let report = &written.report;
+    let mut text = format!(
+        "wrote {} ({})\n",
+        written.output_path.display(),
+        written.adapter
+    );
+    let mut list = |heading: &str, issues: &[kerf_interchange::InterchangeIssue]| {
+        if issues.is_empty() {
+            return;
+        }
+        text.push_str(&format!("{heading} ({}):\n", issues.len()));
+        for issue in issues {
+            let at = issue.path.as_deref().unwrap_or("-");
+            text.push_str(&format!("  {at}\t{}\n", issue.message));
+        }
+    };
+    list("not carried", &report.losses);
+    list("check", &report.warnings);
+    if report.issues.is_empty() {
+        text.push_str("everything in the sequence is in the file\n");
+    }
+    text
 }
 
 /// A connection to the project's kerfd, started if it is not running.
@@ -2477,5 +2572,74 @@ mod tests {
             let args = Args::try_parse_from(argv).expect("parse terminal launcher args");
             assert!(uses_terminal(&args));
         }
+    }
+
+    #[test]
+    fn a_sequence_is_exported_for_another_editor_by_the_name_of_its_file() {
+        use super::{export_format, export_report};
+        use kerf_interchange::Format;
+        let Some(Command::Export {
+            file,
+            format,
+            sequence,
+        }) = Args::try_parse_from(["kerf", "export", "out/cut.fcpxml", "--sequence", "s2"])
+            .unwrap()
+            .command
+        else {
+            panic!("export command");
+        };
+        assert_eq!(sequence.as_deref(), Some("s2"));
+        assert_eq!(export_format(&file, format.as_deref()).unwrap(), Format::Fcpxml);
+        assert_eq!(export_format(Path::new("cut.OTIO"), None).unwrap(), Format::Otio);
+        // Said by `--format` for a name that does not say, and over one that does.
+        assert_eq!(export_format(Path::new("cut"), Some("otio")).unwrap(), Format::Otio);
+        assert_eq!(export_format(Path::new("cut.xml"), Some("fcpxml")).unwrap(), Format::Fcpxml);
+        let error = export_format(Path::new("cut.edl"), None).unwrap_err().to_string();
+        assert!(error.contains(".otio or .fcpxml"), "{error}");
+        let error = export_format(Path::new("cut.otio"), Some("aaf")).unwrap_err().to_string();
+        assert!(error.contains("`aaf` is not a format"), "{error}");
+
+        // The file is written with nothing but this program, and what it leaves out is
+        // listed under it.
+        let project = kerf_runtime::parse_document(
+            "kerf 1
+project name=\"Hand-off\"
+media m1 path=\"/media/a.mov\" rate=24 dur=00:01:00:00 video=1920x1080
+sequence s1 name=\"Cut\" rate=24 size=1920x1080
+  track V1 video
+    clip c1 media=m1 src=00:00:00:00 at=00:00:00:00 dur=00:00:02:00 speed=-1
+  track V2 video
+    clip c2 media=m1 src=00:00:10:00 at=00:00:00:00 dur=00:00:01:00
+",
+        )
+        .unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let output = directory.path().join("cut.fcpxml");
+        let written = kerf_interchange::export(&project, None, &output, Format::Fcpxml).unwrap();
+        assert_eq!(
+            export_report(&written),
+            format!(
+                "wrote {} (fcpxml)\n\
+                 not carried (1):\n\
+                 \x20 c1\treverse was not exported: the clip plays the same source forward\n\
+                 check (1):\n\
+                 \x20 s1\tFCPXML has no tracks: the first video track is the primary storyline and the clips of the others are connected to it in lanes, without the tracks' names and locks\n",
+                output.display()
+            )
+        );
+        assert!(std::fs::read_to_string(&output).unwrap().contains("<fcpxml version=\"1.9\">"));
+        // A sequence all of which a file carries says so.
+        let project = kerf_runtime::parse_document(
+            "kerf 1
+project name=\"Whole\"
+media m1 path=\"/media/a.mov\" rate=24 dur=00:01:00:00 video=1920x1080
+sequence s1 name=\"Cut\" rate=24 size=1920x1080
+  track V1 video
+    clip c1 media=m1 src=00:00:00:00 at=00:00:00:00 dur=00:00:02:00
+",
+        )
+        .unwrap();
+        let written = kerf_interchange::export(&project, None, &output, Format::Fcpxml).unwrap();
+        assert!(export_report(&written).ends_with("everything in the sequence is in the file\n"));
     }
 }

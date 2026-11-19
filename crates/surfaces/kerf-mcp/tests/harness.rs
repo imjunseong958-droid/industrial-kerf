@@ -669,6 +669,68 @@ fn render_runs_a_range_to_a_file() {
 }
 
 #[test]
+fn render_hands_the_sequence_to_another_editor_and_says_what_is_left_out() {
+    let Some((directory, router)) = router() else {
+        return;
+    };
+    // An `.fcpxml`, written at once: no job, and no Python.
+    let handed = ok(&router, "render", json!({"handoff": "fcpxml"}));
+    assert_eq!(handed["job"], Value::Null, "{handed}");
+    assert_eq!((handed["handoff"].as_str(), handed["sequence"].as_str()), (Some("fcpxml"), Some("s1")));
+    let output = Path::new(handed["output"].as_str().unwrap());
+    // In the project's deliveries, and an unnamed sequence's file takes its id.
+    assert_eq!(
+        output.canonicalize().unwrap(),
+        directory.path().join("deliveries/s1.fcpxml").canonicalize().unwrap()
+    );
+    let text = std::fs::read_to_string(output).unwrap();
+    assert!(text.contains("<fcpxml version=\"1.9\">"), "{text}");
+    // The media is named by where its file is, not by where the project is.
+    let source = text.split("src=\"").nth(1).unwrap().split('"').next().unwrap();
+    assert!(source.starts_with("file:///") && source.ends_with("/shot.mp4"), "{source}");
+    // What the file leaves out, and what arrives in another form.
+    let codes = |list: &Value| -> Vec<String> {
+        list.as_array()
+            .unwrap()
+            .iter()
+            .map(|issue| format!("{} {}", issue["code"].as_str().unwrap(), issue["at"].as_str().unwrap()))
+            .collect()
+    };
+    assert_eq!(codes(&handed["notCarried"]), ["links_not_exported s1"], "{handed}");
+    assert_eq!(codes(&handed["check"]), ["tracks_as_lanes s1"], "{handed}");
+    assert!(handed["notCarried"][0]["what"].as_str().unwrap().contains("separate clips"));
+
+    // An `.otio` of what a proposal would make, which the project is not yet.
+    let proposed = ok(&router, "edit", json!({"script": "set c1 opacity=0.5\nmarker add at=1s name=\"here\""}));
+    let id = proposed["proposal"].as_str().unwrap();
+    let handed = ok(&router, "render", json!({"handoff": "otio", "proposal": id}));
+    assert_eq!(handed["proposal"], id);
+    let text = std::fs::read_to_string(handed["output"].as_str().unwrap()).unwrap();
+    assert!(text.starts_with("{\n    \"OTIO_SCHEMA\": \"Timeline.1\","), "{text}");
+    assert!(text.contains("\"name\": \"here\""), "{text}");
+    assert_eq!(
+        codes(&handed["notCarried"]),
+        ["canvas_not_exported s1", "links_not_exported s1", "properties_not_exported c1"],
+        "{handed}"
+    );
+    router.runtime().reject_proposal(id).unwrap();
+
+    // It is the whole sequence and no job: a range, a quality, or a job with it is refused,
+    // as is a format this does not write.
+    for arguments in [
+        json!({"handoff": "otio", "from": "0f"}),
+        json!({"handoff": "otio", "quality": "full"}),
+        json!({"handoff": "otio", "job": "j1"}),
+        json!({"handoff": "edl"}),
+        json!({"handoff": "json"}),
+    ] {
+        let refused = error(&router, "render", arguments.clone());
+        assert_eq!(refused["code"], "INVALID_ARGUMENTS", "{arguments}: {refused}");
+    }
+    assert_eq!(router.running_renders(), 0);
+}
+
+#[test]
 fn renders_are_waited_for_or_cancelled_before_the_process_exits() {
     let Some((directory, router)) = router() else {
         return;
