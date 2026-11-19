@@ -2721,11 +2721,13 @@ fn nothing_near(media: &Media, at: Time, snap: Snap, reach: Time, barred: &[Barr
             ),
         })
         .collect();
+    // Where the edge was asked for falls between the media's frames when the clip plays at
+    // another rate or speed than the media's own; it is said on the frame it falls in.
     let mut said = format!(
         "no {what} of `{}` within {:.2}s of {} would do here",
         media.id,
         reach.seconds(),
-        clock.print_position(at)
+        clock.print_position(media.rate.round(at))
     );
     if !why.is_empty() {
         said.push_str(": ");
