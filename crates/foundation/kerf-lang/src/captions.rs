@@ -91,7 +91,7 @@ fn ends_a_sentence(text: &str) -> bool {
 
 /// Whether `text` is a transcriber's note of a sound, such as whisper's
 /// `[BLANK_AUDIO]` or `[MUSIC]`, and not something said.
-pub(crate) fn is_a_sound_note(text: &str) -> bool {
+pub fn is_a_sound_note(text: &str) -> bool {
     let text = text.trim();
     text.len() > 2 && text.starts_with('[') && text.ends_with(']')
 }

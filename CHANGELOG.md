@@ -6,6 +6,19 @@ on `main`; its section here becomes the release's notes on GitHub
 
 ## Unreleased
 
+- An agent's `look` with `cuts` says when a cut took a word with a restart.
+  A cut that takes out a start that was taken again, and a word or two more
+  than that, plays whole words and measures clean, with the word gone from
+  the sentence: "absolutely beautiful. The detail, the, the detail, the
+  spatial awareness" came out as "absolutely ‖ detail, the spatial
+  awareness", and nothing said so. A join now has `tookMore` where it took
+  such words and nothing within six words either side says them again:
+  `out` is the end of the phrase kept before the cut, `in` the start of the
+  take it goes on with. `summary` counts those joins, and the check says
+  each as information (`cut.took_more`). It is found from the words alone
+  and says where to read: the sentence may do without the word, as it does
+  without a correction or an aside
+  ([docs/architecture.md](docs/architecture.md#edit)).
 - `blade` takes `snap=pause|cut`. A blade is one cut through every track, so
   `blade at=01:00:12:08 snap=pause` goes to one place where every sound it
   cuts is quiet at once, each taken past no word as a snapped `split` is,

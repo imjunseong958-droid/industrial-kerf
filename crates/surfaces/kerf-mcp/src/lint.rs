@@ -2,8 +2,8 @@
 //! frames, picture that leaves the frame's edges uncovered, flash frames
 //! (including a sliver of another shot at a clip's edge), sound cut
 //! inside a word or through a sound, pauses and repeated words the cut
-//! still plays (see `cuts`), and text and captions a viewer cannot read
-//! (see `text_lint`).
+//! still plays, a word it took with a restart (see `cuts`), and text and
+//! captions a viewer cannot read (see `text_lint`).
 
 use crate::cuts::{self, Known};
 use crate::qc::{Finding, Severity};
@@ -739,6 +739,10 @@ pub(crate) const WORD_REPEATED: &str = "word.repeated";
 /// What a phrase the sequence plays and takes again a moment later is called, with other words
 /// between its two sayings or a word more or less in the second: information, as a repeat is.
 pub(crate) const PHRASE_RESTARTED: &str = "phrase.restarted";
+/// What a join is called that took a restart out and a word or two with it, which nothing beside
+/// it says again: information, as a restart is, since the sentence may do without them and only
+/// reading it tells.
+pub(crate) const CUT_TOOK_MORE: &str = "cut.took_more";
 /// How many pauses or repeats one finding names.
 const NAMED: usize = 4;
 
@@ -746,7 +750,8 @@ const NAMED: usize = 4;
 /// quarters of a second or more between words, and the words and phrases said twice in a row.
 /// A cut reads the footage and not what it leaves, so a wait it trimmed too little, a second take
 /// it kept, and a word doubled across one of its own cuts are said here. Each repeat across a cut
-/// is a finding, since the cut may have made it; the rest are counted in one.
+/// is a finding, since the cut may have made it; the rest are counted in one. And what it no
+/// longer plays where a cut took a restart out: a word or two the cut took with it.
 fn leftovers(
     project: &Project,
     sequence: &Sequence,
@@ -938,6 +943,56 @@ fn leftovers(
         finding.value = Some(said.len() as f64);
         finding.unit = Some("restarts".to_owned());
         findings.push(finding);
+    }
+
+    // And the other way about: a cut that took a restart out, and with it a word or two that
+    // nothing beside it says again. Each by itself, since the cut did it, and as information,
+    // since the sentence may do without them, as it does without a correction.
+    for join in cuts::joins(project, sequence, &words, known) {
+        let (out, into) = (&join.more.out, &join.more.into);
+        let ends: Vec<String> = [
+            out.as_ref().map(|took| {
+                format!("\"{took}\" with it, the end of what `{}` was saying", join.from.id)
+            }),
+            into.as_ref().map(|took| {
+                format!("\"{took}\", the start of the take `{}` goes on with", join.to.id)
+            }),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        if ends.is_empty() {
+            continue;
+        }
+        let trims = match (out, into) {
+            (Some(_), Some(_)) => format!("`{}` out and `{}` in", join.from.id, join.to.id),
+            (Some(_), None) => format!("`{}` out", join.from.id),
+            _ => format!("`{}` in", join.to.id),
+        };
+        let one = out.iter().chain(into).flat_map(|took| took.split(' ')).count() == 1;
+        let it = if one { "it" } else { "them" };
+        findings.push(
+            Finding::new(
+                Severity::Info,
+                CUT_TOOK_MORE,
+                Some(join.to.id.as_str()),
+                format!(
+                    "the cut from `{}` to `{}` at {} took a restart out and {}, which nothing \
+                     beside the cut says again: it plays \"{}\"; if the sentence needs {it}, trim \
+                     {trims} to play {it}",
+                    join.from.id,
+                    join.to.id,
+                    at(join.to.start),
+                    ends.join(" and "),
+                    join.plays(),
+                ),
+            )
+            .during(
+                sequence,
+                join.before.first().map_or(join.to.start, |word| word.start),
+                join.after.last().map_or(join.to.start, |word| word.end),
+            ),
+        );
     }
 }
 
@@ -1447,7 +1502,7 @@ sequence s1 rate=24 size=1920x1080
             report["summary"],
             serde_json::json!({
                 "cuts": 3, "quiet": 1, "low": 0, "sound": 2, "inWords": 1, "tight": 1,
-                "faded": 0, "fadesInSound": 0, "notMeasured": 0,
+                "faded": 0, "fadesInSound": 0, "notMeasured": 0, "tookMore": 0,
                 "air": {"least": 0.03, "median": 0.03},
             }),
             "{report:#}"
@@ -1693,6 +1748,195 @@ sequence s1 rate=24 size=1920x1080
             &cuts::Asked::default(),
         );
         assert_eq!(report["joins"]["count"], 1, "{report:#}");
+    }
+
+    /// A transcript of m1 that has `before` said up to 4 s of it, where a1 stops, `took` from
+    /// there on, which the cut to a2 leaves out, and `after` from 10 s, where a2 goes on: each
+    /// word for 0.3 s.
+    fn spoken(before: &str, took: &str, after: &str) -> Known {
+        let starts = 3.95 - 0.3 * before.split(' ').count() as f64;
+        let said: Vec<(f64, f64, &str)> = [(starts, before), (4.1, took), (10.05, after)]
+            .into_iter()
+            .flat_map(|(starts, said)| {
+                said.split(' ').enumerate().map(move |(at, word)| {
+                    let start = starts + 0.3 * at as f64;
+                    (start, start + 0.3, word)
+                })
+            })
+            .collect();
+        Known {
+            words: words(&said),
+            covered: vec![(0.0, 60.0)],
+            ..Known::default()
+        }
+    }
+
+    #[test]
+    fn a_join_that_took_a_word_with_a_restart_says_which() {
+        // "…absolutely beautiful. The detail, the, the detail, the spatial awareness": the cut
+        // that takes the start taken again takes "beautiful." with it. Every word it plays is
+        // whole, and nothing it plays is said twice.
+        let known = spoken(
+            "this is absolutely",
+            "beautiful. The detail, the, the",
+            "detail, the spatial awareness",
+        );
+        let report = cuts_of(&known, &cuts::Asked::default());
+        assert_eq!(
+            report["joins"],
+            serde_json::json!({"count": 1, "first": [{
+                "at": "00:00:04:00", "from": "a1", "to": "a2",
+                "plays": "this is absolutely ‖ detail, the spatial awareness",
+                "took": "beautiful. The detail, the, the", "tookSeconds": 6.0,
+                "tookMore": {"out": "beautiful."},
+            }]}),
+            "{report:#}"
+        );
+        assert_eq!(report["summary"]["tookMore"], 1, "{report:#}");
+        // The check says it as information: the sentence may do without the word.
+        let found: Vec<Finding> = findings(&project(), &known);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].code, CUT_TOOK_MORE);
+        assert_eq!(found[0].severity, Severity::Info);
+        assert_eq!(
+            found[0].message,
+            "the cut from `a1` to `a2` at 00:00:04:00 took a restart out and \"beautiful.\" with \
+             it, the end of what `a1` was saying, which nothing beside the cut says again: it \
+             plays \"this is absolutely ‖ detail, the spatial awareness\"; if the sentence needs \
+             it, trim `a1` out to play it"
+        );
+
+        // The start of the take the cut goes on with: "we went to the, we went to the store",
+        // and the cut takes the second "we" with the first take. The first "we" is the
+        // restart's own, and no end of what was kept.
+        let known = spoken("and after that", "we went to the, we", "went to the store");
+        let report = cuts_of(&known, &cuts::Asked::default());
+        assert_eq!(
+            report["joins"]["first"][0]["tookMore"],
+            serde_json::json!({"in": "we"}),
+            "{report:#}"
+        );
+        let found = said(&known);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(
+            found[0].1,
+            "the cut from `a1` to `a2` at 00:00:04:00 took a restart out and \"we\", the start \
+             of the take `a2` goes on with, which nothing beside the cut says again: it plays \
+             \"and after that ‖ went to the store\"; if the sentence needs it, trim `a2` in to \
+             play it"
+        );
+        // Both at once, two words off the one end: "…they came back home. We went to the, we
+        // drove to the store", where the second take says another word.
+        let known = spoken(
+            "and then they came",
+            "back home. We went to the, we",
+            "drove to the store",
+        );
+        let report = cuts_of(&known, &cuts::Asked::default());
+        assert_eq!(
+            report["joins"]["first"][0]["tookMore"],
+            serde_json::json!({"out": "back home.", "in": "we"}),
+            "{report:#}"
+        );
+        assert_eq!(report["summary"]["tookMore"], 1, "{report:#}");
+        assert!(
+            said(&known)[0].1.ends_with(
+                "if the sentence needs them, trim `a1` out and `a2` in to play them"
+            ),
+            "{:?}",
+            said(&known)
+        );
+    }
+
+    #[test]
+    fn a_join_names_no_word_it_took_on_purpose_or_that_is_said_again() {
+        let named = |before: &str, took: &str, after: &str| {
+            let known = spoken(before, took, after);
+            let report = cuts_of(&known, &cuts::Asked::default());
+            let join = &report["joins"]["first"][0];
+            assert_eq!(join["took"], took, "{report:#}");
+            assert_eq!(
+                report["summary"]["tookMore"],
+                u8::from(!join["tookMore"].is_null()),
+                "{report:#}"
+            );
+            assert_eq!(
+                said(&known).iter().any(|(code, _)| code == CUT_TOOK_MORE),
+                !join["tookMore"].is_null(),
+                "{:?}",
+                said(&known)
+            );
+            join["tookMore"].clone()
+        };
+        let none = serde_json::Value::Null;
+        // An aside taken out. The cut goes on with its "and", and three words before that
+        // are more than a cut takes by going too far, as the four after its "I" are.
+        assert_eq!(
+            named(
+                "I gave it a prompt",
+                "which, honestly speaking, and I mean this, nobody expected,",
+                "and it worked"
+            ),
+            none
+        );
+        // With two words before its "and" the cut has the shape and is named: the words
+        // alone do not tell an aside from a restart, which is why this is information.
+        assert_eq!(
+            named(
+                "I gave it a prompt",
+                "which, honestly, and I mean this, nobody expected,",
+                "and it worked"
+            ),
+            serde_json::json!({"out": "which, honestly,"})
+        );
+        // A hesitation at the edge of what was taken is no word, and neither is a
+        // transcriber's note of a sound: the restart went, and nothing with it.
+        assert_eq!(
+            named(
+                "this is absolutely beautiful,",
+                "um, the detail, the,",
+                "the detail, the spatial awareness"
+            ),
+            none
+        );
+        assert_eq!(
+            named(
+                "this is absolutely beautiful,",
+                "[MUSIC] Uhh, the detail, the,",
+                "the detail, the spatial awareness"
+            ),
+            none
+        );
+        assert_eq!(
+            named(
+                "this is absolutely beautiful,",
+                "truly, the detail, the,",
+                "the detail, the spatial awareness"
+            ),
+            serde_json::json!({"out": "truly,"})
+        );
+        // The word is said again after the cut: nothing is lost.
+        assert_eq!(
+            named(
+                "this is absolutely",
+                "beautiful. The detail, the,",
+                "the detail is beautiful too"
+            ),
+            none
+        );
+        // Words taken on purpose, one of which is said again further on, are no restart.
+        assert_eq!(named("I gave it", "a very simple", "prompt and then a test"), none);
+        assert_eq!(named("and you can", "you know", "see it and you"), none);
+        assert_eq!(named("it is", "sort of", "a kind of magic"), none);
+        // The phrase before the cut had ended its sentence: nothing was cut short.
+        assert_eq!(
+            named("It works.", "And the detail, the,", "the detail is great"),
+            none
+        );
+        assert_eq!(
+            named("It works", "and the detail, the,", "the detail is great"),
+            serde_json::json!({"out": "and"})
+        );
     }
 
     #[test]
