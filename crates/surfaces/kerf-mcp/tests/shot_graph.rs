@@ -4,7 +4,9 @@
 //! value set in the workflow its model is run with.
 //!
 //! In a file of its own: it names a models file of its own in `KERF_MODELS`,
-//! which the other tests' process must not see.
+//! and no ComfyUI server in `KERF_COMFY`, which the other tests' process must
+//! not see. What a server says of a workflow's inputs is read in
+//! `workflow_server.rs`, from one that is a thread there.
 
 use kerf_mcp::KerfMcpRouter;
 use serde_json::{json, Value};
@@ -114,6 +116,12 @@ fn an_agent_reads_a_shots_graph_and_sets_what_a_person_sets_there() {
     )
     .unwrap();
     std::env::set_var("KERF_MODELS", &models);
+    // No server a person has named is asked what the workflow's nodes take: the file named
+    // here is not there, and nothing else names one.
+    std::env::set_var("KERF_COMFY", dir.join("no-such-comfy.json"));
+    for names_one in ["COMFY_URL", "COMFY_API_KEY", "COMFY_API_HEADER"] {
+        std::env::remove_var(names_one);
+    }
     let kerfd = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../target/debug/kerfd");
     let router = KerfMcpRouter::new(dir, Some(&kerfd)).unwrap();
     router.set_permissions(Some(kerf_mcp::permissions::Permissions::default()));
@@ -160,6 +168,8 @@ fn an_agent_reads_a_shots_graph_and_sets_what_a_person_sets_there() {
     let workflow = ok(&router, "look", json!({"workflow": {"media": "shot", "line": line}}));
     assert_eq!((workflow["name"].as_str(), workflow["origin"].as_str()), (Some("shot"), Some("bundled")));
     assert!(workflow.get("text").is_none(), "the nodes say it");
+    // With no server named, none was asked: the workflow is read without, and says why.
+    assert!(workflow.get("taken").is_none() && workflow["takenError"].is_string(), "{workflow}");
     assert_eq!(workflow["blanks"]["seed"]["given"], "7");
     let loader = node(&workflow, |node| {
         node["inputs"].as_array().is_some_and(|inputs| inputs.iter().any(|input| input["name"] == "weight_dtype"))

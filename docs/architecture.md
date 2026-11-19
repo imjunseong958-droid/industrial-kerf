@@ -553,8 +553,14 @@ What is built for it, in this order, each measured before the next:
    more than half hidden, by the floor
    (`a_floor_over_what_stands_on_it_is_said`). It is one small frame for
    each clip that draws, at most 32 of them, and reads to about a hundredth
-   of the frame. A clip that is partly clear is read as not showing, and
-   said to be.
+   of the frame. A pixel that clips share, along an edge or all over a title
+   whose strokes are a pixel wide on that frame, is each one's by its part
+   of it: a clip alone says how much of the pixel it would have, and the
+   pixel's color says which order the clips there are in, so a thin title
+   over a floor is before it and not hidden by it
+   (`thin_strokes_are_not_hidden_by_what_they_are_drawn_over`). A clip that
+   is partly clear has that much less of each pixel it is on, and is said
+   to be.
 
    What it does not see is whether a foot is on the floor, which a frame
    does not show: a hundredth of the frame is a pixel or two, and behind the
@@ -675,7 +681,11 @@ What is built for it, in this order, each measured before the next:
    its shadow on the clips in depth and the meshes a light reaches past it,
    and not on itself: a ray to the light is stopped by the first of its
    triangles it meets, found through a tree of boxes (`mesh::Standing`,
-   2026-11-13). Its effects, its masks, and a
+   2026-11-13), the meshes of a scene being in a tree of the boxes about
+   them in turn, and a light with a size sends its rays to a mesh only
+   where a triangle of it lies between the four rays around the light
+   (`mesh::InTheWay`, `mesh::Beam`, 2026-11-19; Motion has what a shadow
+   costs a street of solids, and what it cost). Its effects, its masks, and a
    transition's wipe are of its picture as the camera sees it, on the
    canvas, after which it goes down among the clips in depth as before; a
    pass draws the mask and no effect. Its triangles are the CPU's, and a
@@ -1370,6 +1380,31 @@ Median frame with `examples/motion_bench.rs` on an M1 with 8 GB, in ms, the byte
 | Solid title with a soft shadow | 176 | 25 | 698 | 91 |
 
 So one clip in depth draws past 24 fps at 1080p in every row here; at 4K a hard shadow is about 24 fps, a soft one 17 to 21, and a solid title with a soft shadow 11. These are single frames of one thing with no footage, and a scene adds up: a 4K H.264 clip in depth with a beveled solid, a beveled title, a soft shadow, and an aperture over it takes 129 ms a frame on the GPU at 1080p, about 8 fps, and plays smaller, as Playing says.
+
+A mesh stands in a light's way by its triangles, and its frame is the CPU's wherever a light casts a shadow, on a machine with a GPU too. What that takes is in the same bench: `3d mesh …`, a box, a ball, and a cylinder on a floor, and `3d street …`, 53 solids as a guide blocks a street, seven houses each with a roof and a door, two carts of thirteen solids on cylinder wheels, and three people each a cylinder under a ball, on a floor that is a flat clip, under a directional light and an ambient one, the camera moving. On 4 vCPUs with no GPU, which take about 2.6 times as long over the rows above as the M1 does, median frame in ms, as it was until 2026-11-19 and as it is (the street's soft shadow as it was is the median of three frames, not of nine):
+
+| Scene | 1080p, was | 1080p | 4K, was | 4K |
+|---|---|---|---|---|
+| Three solids, lit | 201 | 202 | 1119 | 1094 |
+| Three solids, hard shadow | 328 | 263 | 1493 | 1303 |
+| Three solids, soft shadow | 2446 | 417 | 9845 | 1816 |
+| Street, lit | 1697 | 1776 | 11554 | 12000 |
+| Street, hard shadow | 4752 | 2080 | 22738 | 12743 |
+| Street, soft shadow | 42220 | 2514 | 171887 | 14699 |
+
+So at 1080p a hard shadow costs the street a sixth more than its lit frame and a soft one two fifths more, and at 4K less, where a hard one cost twice to three times the lit frame and a soft one 15 to 25 times. At 832x480, a size a guide is drawn at for a model, the street's frame is 348 ms lit, 358 with a hard shadow where it was 847, and 482 with a soft one where it was 7769, and the three solids' with a soft shadow is 85 where it was 1264.
+
+Where it went was read from a profile and not supposed: callgrind over one frame of the street with a soft shadow at 208x120, 33.7 billion instructions. 95% of them were asking a mesh whether a ray meets it. Each of a place's 32 rays asked every other mesh of the scene, 97 million askings, and 99 in 100 ended at the box about the mesh, each having made on the heap the list its tree is walked with, which was 37% of the whole. A ray that did go into a tree found each box's second half by walking through all of its first, which is nothing to a box of 12 triangles and to a ball of 2,208 was most of the three solids' soft frame, which took a third as long with that and the list gone. What was done about it (`draw/three_d/mesh.rs`):
+
+- A box of a tree says where the walk goes on past it, so a tree is walked with no list and no search (`Tree`).
+- The meshes are in a tree of the boxes about them (`InTheWay`), and a ray asks the ones it comes to, which is what a hard shadow now costs.
+- The four rays around a light with a size, which already say which flat clips none of the 32 can meet, are the corners of a beam that all 32 are inside (`Beam`). The beam walks the meshes' tree and then a mesh's own, once, and the 32 go to a mesh only where a triangle of it is not wholly outside the beam: past one of its four sides, behind the place, beyond the light, or past one of the triangle's own edges as the place sees it. The last is for large triangles, a wall lying askew of a narrow beam being past none of the beam's sides: without it two meshes in three that the rays went to stopped none of them, and with it one in four.
+- Of the 32, each asks first the triangle that stopped the one before it, and a ray that nothing gets along asks no further mesh, so in full shadow most rays ask one triangle.
+- A place that faces away from a light gets none of it whatever is in the way, and asks nothing.
+
+That frame is 0.90 billion instructions, its lit frame being 0.36. Each step leaves every ray's answer what it was: the six scenes come to the same bytes before and after, at 832x480 and at 1664x960, and the tests in `mesh.rs` hold the trees, the beam, and what a light with a size gets past meshes to asking every mesh and every triangle with every ray, to the bit. One thing is not as it was: meshes are asked in the order of their tree and not of their tracks, so where three or more that let light by stand in one ray's way, what they leave of it is multiplied in another order and may differ in its last bit.
+
+Not taken: saying from a few rays that a place is in full shadow, as a flat clip's summed table says that all of a rectangle is opaque. A mesh has no such table, and rays that agree say nothing of a hole between them, so it would be right only of a solid that is convex, for an eighth of that frame as judged from the counts and not measured. And what is left is mostly not the shadow's. A mesh is drawn into pictures the size of the whole canvas however little of it the mesh covers, one mesh at a time, and each is lit where another hides it, and once for each of its triangles in a pixel, 844,000 places for the 399,000 pixels of a frame at 832x480: so the street's lit frame is 1.7 s at 1080p and 12 at 4K before any light is asked what is in its way.
 
 A title that stays the same from frame to frame is not made again. Glyphs on the CPU turned out to be the least of it: of 263 ms for a 4K beveled title with a soft shadow, 5 go to drawing them, 40 to sending the picture up as floats, 41 to the distance field, 16 to its outlines taken in and its summed table, and 129 to the rays. So the GPU keeps the picture (133 MB at 4K, 36 ms a frame) and the field (33 MB, 41 ms) in textures of their own (`Frame::image_kept`, `kerf-gpu/src/kept.rs`), by a key saying all that goes into them, which includes the numbers a title's axes and reveal come to at that moment. What was left out does not pay for its memory: outlines taken in hold 133 MB for 5 ms, and a summed table 10 ms is all it would save. On the CPU a field takes 476 ms at 4K and is kept, by a hash of the alpha it is made from that takes 3 (`bevel::kept_distance_field`), up to four at that size; a picture is not, since copying one out costs more than the 5 ms of drawing it. Only what is asked for twice is held, so a title whose numbers move holds nothing and takes what it did (41 ms at 4K with a reveal under way, 42 before). Nothing is held past 512 MB on the GPU, three such titles at 4K, or past ten seconds of frames without it. The peak footprint of the run in `examples/motion_bench.rs` goes from 1849 MB to 1922 and from 1350 MB to 1435 with a flat title, since each kept picture stands in for an upload the pool would have held. Drawing a frame from what was kept comes to the same bytes (`a_kept_title_draws_what_it_drew`), and no kernel writes a kept picture, since each makes a new one, whichever drawn from it.
 

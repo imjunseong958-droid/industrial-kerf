@@ -167,6 +167,99 @@ fn masked(corner: impl Fn(f64) -> String, rest: &str) -> String {
     )
 }
 
+/// A solid `kind`, as large as `size` across, down, and back and with its middle at `place`,
+/// both in frame heights, of a frame of 16 by 9.
+fn solid(kind: &str, size: [f64; 3], place: [f64; 3], color: &str, more: &str) -> String {
+    let [w, h, l] = size;
+    let [x, y, z] = place;
+    format!(
+        "gen=mesh@1 at=0f dur=96f\n      set kind={kind} width={w:.3} height={h:.3} length={l:.3} color={color} x={:.4} y={y:.3} z={z:.3}{more}",
+        x * 9.0 / 16.0
+    )
+}
+
+/// Clips one over another, each on a track of its own, as a scene's first clip.
+fn stacked(clips: &[String]) -> String {
+    let mut scene = clips[0].clone();
+    for (above, clip) in clips[1..].iter().enumerate() {
+        let track = above + 2;
+        scene += &format!("\n  track V{track} video\n    clip c{track} {clip}");
+    }
+    scene
+}
+
+/// The ground `solids` stand on, half a frame under its middle, with a light on them from
+/// over the viewer's left shoulder and a little light all around, seen by a camera that moves.
+fn lit(mut solids: Vec<String>, light: &str) -> String {
+    let ground = "gen=solid@1 at=0f dur=96f\n      set color=#a09880 three_d=true rotate_x=-90 y=0.5 z=4 scale=16";
+    solids.insert(0, ground.to_owned());
+    solids.push(format!(
+        "gen=light@1 at=0f dur=96f\n      set kind=directional x=0.35 y=1 z=0.45{light}"
+    ));
+    solids.push("gen=light@1 at=0f dur=96f\n      set kind=ambient intensity=0.35".to_owned());
+    solids.push(
+        "gen=camera@1 at=0f dur=96f\n      set y=-0.3 tilt=-9 z={0f:-0.3 96f:0.5} pan={0f:-5 96f:5}"
+            .to_owned(),
+    );
+    stacked(&solids)
+}
+
+/// A box, a ball, and a cylinder standing beside each other.
+fn few() -> Vec<String> {
+    vec![
+        solid("box", [0.5, 0.5, 0.5], [-0.75, 0.25, 1.0], "#c04030", " rotate_y=30"),
+        solid("ball", [0.5, 0.5, 0.5], [0.0, 0.25, 0.8], "#3060c0", ""),
+        solid("cylinder", [0.35, 0.6, 0.35], [0.7, 0.2, 1.1], "#40a050", ""),
+    ]
+}
+
+/// A street of 53 solids, as a guide blocks one: seven houses, each a box with a roof and a
+/// door, two carts of thirteen solids on cylinder wheels, and three people, each a cylinder
+/// under a ball.
+fn street() -> Vec<String> {
+    let mut solids = Vec::new();
+    let houses = [
+        (-1.15, 0.4, "#c8b090"),
+        (1.15, 1.0, "#b0b8c0"),
+        (-1.15, 1.6, "#d0c0a0"),
+        (1.15, 2.2, "#c0a890"),
+        (-1.15, 2.8, "#a8b0a0"),
+        (1.15, 3.4, "#d8c8b0"),
+        (-1.15, 4.0, "#b8a8a0"),
+    ];
+    for (x, z, color) in houses {
+        let toward_street = if x < 0.0 { 1.0 } else { -1.0 };
+        solids.push(solid("box", [0.9, 0.8, 0.9], [x, 0.1, z], color, ""));
+        solids.push(solid("box", [0.64, 0.64, 0.9], [x, -0.3, z], "#804030", " rotation=45"));
+        let door = [x + toward_street * 0.47, 0.3, z];
+        solids.push(solid("box", [0.04, 0.4, 0.2], door, "#503020", ""));
+    }
+    for (x, z) in [(-0.3, 1.1), (0.35, 2.5)] {
+        let wood = "#906838";
+        solids.push(solid("box", [0.5, 0.04, 0.3], [x, 0.34, z], wood, ""));
+        for side in [-0.14, 0.14] {
+            solids.push(solid("box", [0.5, 0.1, 0.02], [x, 0.27, z + side], wood, ""));
+            solids.push(solid("box", [0.3, 0.02, 0.02], [x + 0.4, 0.34, z + side * 0.7], wood, ""));
+        }
+        for end in [-0.24, 0.24] {
+            solids.push(solid("box", [0.02, 0.1, 0.3], [x + end, 0.27, z], wood, ""));
+        }
+        for axle in [-0.17, 0.17] {
+            let turned = " rotate_x=90";
+            solids.push(solid("cylinder", [0.03, 0.36, 0.03], [x + axle, 0.38, z], "#403020", turned));
+            for wheel in [-0.17, 0.17] {
+                let place = [x + axle, 0.38, z + wheel];
+                solids.push(solid("cylinder", [0.24, 0.03, 0.24], place, "#604020", turned));
+            }
+        }
+    }
+    for (x, z, color) in [(0.25, 0.7, "#3050a0"), (-0.2, 1.9, "#a03040"), (0.1, 3.2, "#308050")] {
+        solids.push(solid("cylinder", [0.12, 0.3, 0.12], [x, 0.35, z], color, ""));
+        solids.push(solid("ball", [0.11, 0.11, 0.11], [x, 0.145, z], "#e0b090", ""));
+    }
+    solids
+}
+
 fn main() {
     // A word on the command line picks the scenes with it in their names.
     let wanted = std::env::args().nth(1).unwrap_or_default();
@@ -184,9 +277,24 @@ fn main() {
             masked(|turn| format!(",{:.1}", 24.0 + 24.0 * turn.cos()), ""),
         ),
     ];
+    // Solids, which are meshes: a few and a street of them, lit, and in the way of a light
+    // that casts a hard shadow and of one that casts a soft one.
+    let shadows = [
+        ("lit", ""),
+        ("shadow", " shadow=0.55"),
+        ("soft", " shadow=0.55 size=2.5"),
+    ];
+    let meshes: Vec<(String, String)> = [("mesh", few()), ("street", street())]
+        .into_iter()
+        .flat_map(|(name, solids)| {
+            shadows
+                .map(|(shadow, light)| (format!("3d {name} {shadow}"), lit(solids.clone(), light)))
+        })
+        .collect();
     let scenes = SCENES
         .iter()
         .map(|(name, clip)| (*name, *clip))
+        .chain(meshes.iter().map(|(name, clip)| (name.as_str(), clip.as_str())))
         .chain(masks.iter().map(|(name, clip)| (*name, clip.as_str())));
     for (name, clip) in scenes.filter(|(name, _)| name.contains(&wanted)) {
         let mut line = format!("{name:<18}");

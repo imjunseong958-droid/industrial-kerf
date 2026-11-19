@@ -261,7 +261,7 @@ pub(super) struct Scene {
     /// What may be in a light's way, when one says it casts shadows ([`Scene::casts_shadows`]).
     pub casters: Vec<Caster>,
     /// The meshes that may be in a light's way, with them.
-    pub standing: Vec<mesh::Standing>,
+    pub standing: mesh::InTheWay,
     /// How far along the camera's way is in focus, in pixels, and how far what is far from that may
     /// spread: 0 for all of it sharp.
     focus: f64,
@@ -372,7 +372,7 @@ impl Scene {
             height,
             lights,
             casters: Vec::new(),
-            standing: Vec::new(),
+            standing: mesh::InTheWay::default(),
             focus,
             aperture: read("aperture", 0.0) * height,
         }
@@ -382,7 +382,7 @@ impl Scene {
     pub(super) fn bare(mut self) -> Self {
         self.lights.clear();
         self.casters.clear();
-        self.standing.clear();
+        self.standing = mesh::InTheWay::default();
         self.aperture = 0.0;
         self
     }
@@ -494,19 +494,14 @@ impl Scene {
             .filter(|caster| caster.clip != *receiver)
             .map(|caster| caster.lets_through(at, way, reach))
             .product::<f32>()
-            * self
-                .standing
-                .iter()
-                .filter(|mesh| mesh.clip != *receiver)
-                .map(|mesh| mesh.lets_through(at, way, reach))
-                .product::<f32>();
+            * self.standing.lets_through(receiver, at, way, reach);
         1.0 - shadow * (1.0 - through)
     }
 
     /// [`Self::gets_through`] for a light with a `size`, whose middle lies along `way`: how much gets
     /// to `at` along [`RAYS`] rays, `ray` being the way and the reach of the one that ends that far off
     /// the middle. From here the light goes `spread` to either side of it for each pixel it is away.
-    /// The four rays around all of it say which clips none of them can meet.
+    /// The four rays around all of it say which clips and which meshes none of them can meet.
     fn gets_through_across(
         &self,
         receiver: &Id,
@@ -545,12 +540,23 @@ impl Scene {
                 return 1.0 - shadow;
             }
         }
-        // A mesh has no one plane to say which rays can meet it, so each ray asks it.
-        for mesh in self.standing.iter().filter(|mesh| mesh.clip != *receiver) {
-            let rays = rays.get_or_insert_with(|| spiral().map(|at| off(at, radius)));
-            for (through, (way, reach)) in through.iter_mut().zip(rays.iter()) {
-                *through *= mesh.lets_through(at, *way, *reach);
-            }
+        // A mesh has no one plane to say which rays can meet it. Its triangles say that none can,
+        // where all of them are outside what the four rays around the light go around, and else
+        // each ray asks it.
+        if !self.standing.is_empty() {
+            let beam = mesh::Beam::between(at, way, &around);
+            self.standing.reached(receiver, &beam, |mesh| {
+                let rays = rays.get_or_insert_with(|| spiral().map(|at| off(at, radius)));
+                let (mut some_left, mut met) = (false, None);
+                for (through, (way, reach)) in through.iter_mut().zip(rays.iter()) {
+                    // Nothing more is taken of a ray that nothing gets along.
+                    if *through != 0.0 {
+                        *through *= mesh.lets_through_after(at, *way, *reach, &mut met);
+                        some_left |= *through != 0.0;
+                    }
+                }
+                !some_left
+            });
         }
         let through = all_alike * through.iter().sum::<f32>() / RAYS as f32;
         1.0 - shadow * (1.0 - through)
@@ -630,6 +636,12 @@ impl Scene {
                 Light::Point(place, color, shadow, radius) => {
                     let to = minus(*place, at);
                     let way = unit(to);
+                    let facing = facing(dot(way, normal));
+                    // What faces away from a light gets none of it, whatever is in the light's
+                    // way, which is then not asked what it lets through.
+                    if facing == 0.0 {
+                        continue;
+                    }
                     let reach = dot(to, to).sqrt();
                     let through = if *radius > 0.0 {
                         let ray = |off| {
@@ -642,10 +654,15 @@ impl Scene {
                     } else {
                         self.gets_through(receiver, at, (way, reach), *shadow)
                     };
-                    (color, facing(dot(way, normal)), through)
+                    (color, facing, through)
                 }
                 Light::Directional(way, color, shadow, spread) => {
                     let back = times(*way, -1.0);
+                    let facing = facing(dot(back, normal));
+                    // As under a point light.
+                    if facing == 0.0 {
+                        continue;
+                    }
                     let through = if *spread > 0.0 {
                         let ray = |off| (unit(add(back, off)), f64::INFINITY);
                         let wide = (*spread, *spread);
@@ -653,7 +670,7 @@ impl Scene {
                     } else {
                         self.gets_through(receiver, at, (back, f64::INFINITY), *shadow)
                     };
-                    (color, facing(dot(back, normal)), through)
+                    (color, facing, through)
                 }
             };
             for (sum, channel) in sum.iter_mut().zip(color) {

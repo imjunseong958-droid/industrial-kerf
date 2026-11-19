@@ -109,14 +109,32 @@ fn what_has_left_the_frame_or_lets_light_through_is_said() {
     let car = clip(&shown, "car");
     assert_eq!(car.edges, ["right"], "{car:?}");
     assert!((car.area - 0.02).abs() < 0.004, "{car:?}");
-    // Half clear, it is where it is, and is read as not showing, with why.
+    // Half clear, it is where it is, with half of each pixel it is on, and why is said. What
+    // shows through it is hidden by that half, and the car by nothing.
     let shown = read(&scene(
         "rotate_x=-80 y=0.4 z=1 scale=3",
         "scale=0.2 opacity=0.5",
     ));
     let car = clip(&shown, "car");
-    assert!(car.at.is_some() && car.shows == 0.0, "{car:?}");
+    let [left, top, right, bottom] = car.at.unwrap();
+    assert!(
+        (left - 0.4).abs() < 0.02 && (right - 0.6).abs() < 0.02,
+        "{car:?}"
+    );
+    assert!(
+        (top - 0.4).abs() < 0.02 && (bottom - 0.6).abs() < 0.02,
+        "{car:?}"
+    );
+    assert!((car.area - 0.02).abs() < 0.003, "{car:?}");
+    assert!((car.shows - car.area).abs() <= 0.001, "{car:?}");
+    assert!(car.hidden < 0.03 && car.by.is_empty(), "{car:?}");
     assert_eq!(car.opacity, Some(0.5));
+    let opaque = read(&scene("rotate_x=-80 y=0.4 z=1 scale=3", "scale=0.2"));
+    let behind = |shown: &[Shown]| clip(shown, "sky").shows + clip(shown, "floor").shows;
+    assert!(
+        (behind(&shown) - behind(&opaque) - car.shows).abs() <= 0.002,
+        "{shown:?} {opaque:?}"
+    );
 }
 
 #[test]
@@ -161,6 +179,56 @@ fn a_mesh_is_read_as_any_clip_is() {
     let shown = read(&car("rotate_x=-80 y=0.4 z=1 scale=3", "rotate_y=90"));
     let there = clip(&shown, "car");
     assert!(there.at.is_some() && there.area > 0.01, "{there:?}");
+}
+
+/// A sky, a floor in depth, and over the floor a title in depth, on a frame of 1920 by 1080:
+/// read a fifth as tall, the title's strokes are about a pixel wide.
+fn word(set: &str) -> Vec<Shown> {
+    let text = format!(
+        concat!(
+            "kerf 1\nproject name=\"t\"\nsequence set rate=24 size=1920x1080 audio=48000\n",
+            "  track V1 video\n    clip sky gen=solid@1 at=0f dur=96f\n      set color=#7fa8d8\n",
+            "  track V2 video\n    clip floor gen=solid@1 at=0f dur=96f\n",
+            "      set color=#50545a three_d=true rotate_x=-84 y=0.75 z=4 scale=16\n",
+            "  track V3 video\n    clip word gen=title@1 at=0f dur=96f\n",
+            "      set text=\"KERF\" size=0.25 three_d=true {set}\n",
+        ),
+        set = set,
+    );
+    let project = parse_document(&text, Catalog::builtin())
+        .unwrap_or_else(|errors| panic!("{errors:?}"))
+        .project;
+    showing(&project, None, Rate::FPS_24.time_of(0))
+        .expect("reads")
+        .clips
+}
+
+#[test]
+fn thin_strokes_are_not_hidden_by_what_they_are_drawn_over() {
+    // Every pixel of the title is part the title's color and part the floor's, and the title
+    // is before the floor on all of them.
+    let shown = word("z=2.6 y=0.2 depth=0.1 bevel=0.03");
+    let title = clip(&shown, "word");
+    assert!(title.at.is_some() && title.area > 0.0, "{title:?}");
+    assert!(title.hidden < 0.05 && title.by.is_empty(), "{title:?}");
+    assert!((title.shows - title.area).abs() <= 0.001, "{title:?}");
+    // What it says of a clip agrees with itself: what shows is what is not hidden, and what is
+    // hidden is hidden by the clips it names.
+    for shown in &shown {
+        let by: f64 = shown.by.iter().map(|(_, share)| share).sum();
+        assert!(by <= shown.hidden + 0.002, "{shown:?}");
+        assert!(shown.hidden - by < 0.06, "{shown:?}");
+        assert!(
+            (shown.shows - shown.area * (1.0 - shown.hidden)).abs() <= 0.002,
+            "{shown:?}"
+        );
+    }
+    // Sunk under the floor, the same strokes are hidden, and by the floor.
+    let shown = word("z=2.6 y=1.2 depth=0.1 bevel=0.03");
+    let title = clip(&shown, "word");
+    assert!(title.hidden > 0.9 && title.shows < 0.001, "{title:?}");
+    assert_eq!(title.by[0].0, "floor", "{title:?}");
+    assert!(title.by[0].1 > 0.9, "{title:?}");
 }
 
 #[test]
