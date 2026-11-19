@@ -6,6 +6,15 @@ on `main`; its section here becomes the release's notes on GitHub
 
 ## Unreleased
 
+- The shots and the still that come with `kerf-comfy` are made by Wan 2.1
+  VACE 14B, where its 1.3B made them: `shot`, `shot-timed`, `shot-into`,
+  `shot-led`, `shot-directed` and `still` load
+  `wan2.1_vace_14B_fp16.safetensors`, which a ComfyUI server has to hold
+  under `models/diffusion_models` in place of
+  `wan2.1_vace_1.3B_fp16.safetensors`. Nothing else of them changed: their
+  size, steps, sampler and other two files are as they were. A line that
+  says `unet=wan2.1_vace_1.3B_fp16.safetensors` is made by the smaller one
+  still ([docs/shots.md](docs/shots.md#what-the-server-holds)).
 - The check says when a crossfade plays what a cut left out. A cut put in
   the pause before a word that was taken out is clean, and a crossfade
   across it plays the clip on past the cut, into that word, heard fading
