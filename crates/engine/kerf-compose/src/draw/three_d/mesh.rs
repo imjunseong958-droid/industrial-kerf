@@ -23,7 +23,11 @@
 //!
 //! It stands in a light's way as a clip in depth does ([`Standing`]): a ray from a place to a
 //! light is stopped by the first of its triangles it meets, found through a tree of boxes
-//! about them, and not by the mesh the place is on.
+//! about them, and not by the mesh the place is on. The meshes of a scene are in such a tree
+//! themselves ([`InTheWay`]), so that a ray asks the few it comes to. A light with a size
+//! sends many rays from each place, and a mesh is asked for them only where one of its
+//! triangles is between the four rays around the light ([`Beam`]): a place in plain light
+//! walks the trees once and sends no ray.
 //!
 //! It is one of a few solids, a box, a ball, a cylinder, or the triangles of a glTF file
 //! ([`super::gltf`]), as tall as the clip says and in the file's own proportions. A file's
@@ -742,26 +746,255 @@ pub(in crate::draw) fn in_the_world(
 pub(in crate::draw) struct Standing {
     pub clip: Id,
     opacity: f32,
-    /// Each triangle as a corner and the two sides from it.
+    /// Each triangle as a corner and the two sides from it, in the order of the tree's boxes.
     triangles: Vec<[Vector; 3]>,
-    /// The tree, the root first: a box, and either its two halves or a run of `triangles`.
+    tree: Tree,
+}
+
+/// Boxes about things in a row, a mesh's triangles or a scene's meshes, each box halved while
+/// it holds more than a few. The root is first, and after each box come all those in it, so
+/// that one who walks it keeps no list of where to go next: into a box is the box after it,
+/// and past a box is where the box says.
+#[derive(Default)]
+struct Tree {
     boxes: Vec<Boxed>,
 }
 
 struct Boxed {
     least: Vector,
     most: Vector,
-    /// The first of its two halves, the other being the next; or a run of triangles.
-    inside: Inside,
+    /// The run of things it holds, where it is not halved.
+    run: Option<(usize, usize)>,
+    /// The box after it and all that are in it.
+    after: usize,
 }
 
-enum Inside {
-    Halves(usize),
-    Triangles(usize, usize),
-}
-
-/// The most triangles a box of the tree holds without being halved.
+/// The most triangles a box of a mesh's tree holds without being halved.
 const LEAF: usize = 8;
+
+/// How far along a ray to a light a triangle starts being in its way: not from the very place
+/// the ray starts, which may be on a triangle of another clip touching this one, but a
+/// ten-thousandth of a pixel on, the world being in pixels.
+const STARTS: f64 = 1e-4;
+
+impl Tree {
+    /// Over `things`, which it puts in the order of its boxes, no box left unhalved with more
+    /// than `few` of them. `about` is the box about a thing, and `middle` where along an axis
+    /// the thing is taken to be, which says the half it goes in.
+    fn over<T>(
+        things: &mut [T],
+        few: usize,
+        about: impl Fn(&T) -> (Vector, Vector),
+        middle: impl Fn(&T, usize) -> f64,
+    ) -> Self {
+        let mut boxes = Vec::new();
+        let all = (0, things.len());
+        Self::halve(things, all, few.max(1), &(about, middle), &mut boxes);
+        Self { boxes }
+    }
+
+    /// Put `things[from..to]` in a box at the end of `boxes`, halved along its longest side
+    /// while it holds more than `few`.
+    fn halve<T, A: Fn(&T) -> (Vector, Vector), M: Fn(&T, usize) -> f64>(
+        things: &mut [T],
+        (from, to): (usize, usize),
+        few: usize,
+        of: &(A, M),
+        boxes: &mut Vec<Boxed>,
+    ) {
+        let (about, middle) = of;
+        let (mut least, mut most) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
+        for thing in &things[from..to] {
+            let (low, high) = about(thing);
+            for axis in 0..3 {
+                least[axis] = least[axis].min(low[axis]);
+                most[axis] = most[axis].max(high[axis]);
+            }
+        }
+        let own = boxes.len();
+        boxes.push(Boxed {
+            least,
+            most,
+            run: Some((from, to)),
+            after: 0,
+        });
+        if to - from > few {
+            let axis = (0..3)
+                .max_by(|a, b| (most[*a] - least[*a]).total_cmp(&(most[*b] - least[*b])))
+                .unwrap_or(0);
+            let half = from + (to - from) / 2;
+            things[from..to].select_nth_unstable_by(half - from, |a, b| {
+                middle(a, axis).total_cmp(&middle(b, axis))
+            });
+            // The second half is walked before the first, as it was when a walk kept a list
+            // and took the last thing put on it: which of two triangles met equally far off is
+            // the first met stays as it was.
+            Self::halve(things, (half, to), few, of, boxes);
+            Self::halve(things, (from, half), few, of, boxes);
+            boxes[own].run = None;
+        }
+        boxes[own].after = boxes.len();
+    }
+
+    /// Walk it from the root. `into` says whether a box is gone into, and `run` is given the
+    /// things of each box gone into that is not halved, and says whether the walk is over.
+    /// Whether a run ended it.
+    #[inline]
+    fn walk(
+        &self,
+        mut into: impl FnMut(&Boxed) -> bool,
+        mut run: impl FnMut(usize, usize) -> bool,
+    ) -> bool {
+        let mut index = 0;
+        while let Some(boxed) = self.boxes.get(index) {
+            index = match (into(boxed), boxed.run) {
+                (false, _) => boxed.after,
+                (true, None) => index + 1,
+                (true, Some((from, to))) => {
+                    if run(from, to) {
+                        return true;
+                    }
+                    boxed.after
+                }
+            };
+        }
+        false
+    }
+}
+
+impl Boxed {
+    /// Whether a ray from `at` is in it anywhere from `from` to `to` along itself, `over` being
+    /// one over how far the ray goes along each axis ([`over`]).
+    #[inline]
+    fn crossed(&self, at: &Vector, over: &Vector, from: f64, to: f64) -> bool {
+        let (mut enters, mut leaves) = (from, to);
+        for axis in 0..3 {
+            let (one, other) = (
+                (self.least[axis] - at[axis]) * over[axis],
+                (self.most[axis] - at[axis]) * over[axis],
+            );
+            enters = enters.max(one.min(other));
+            leaves = leaves.min(one.max(other));
+        }
+        enters <= leaves
+    }
+}
+
+/// One over how far a ray along `way` goes along each axis, and a great deal where it does not.
+#[inline]
+fn over(way: Vector) -> Vector {
+    way.map(|side| 1.0 / if side.abs() < 1e-300 { 1e-300 } else { side })
+}
+
+/// How far along `way` from `at` a line meets a triangle, a corner and the two sides from it:
+/// before `at` as well as after it, and not at all where it passes the triangle or runs along it.
+#[inline]
+fn along(at: Vector, way: Vector, [corner, one, other]: &[Vector; 3]) -> Option<f64> {
+    let across = cross(way, *other);
+    let facing = dot(*one, across);
+    if facing.abs() < 1e-18 {
+        return None;
+    }
+    let from = minus(at, *corner);
+    let u = dot(from, across) / facing;
+    if !(0.0..=1.0).contains(&u) {
+        return None;
+    }
+    let beside = cross(from, *one);
+    let v = dot(way, beside) / facing;
+    if v < 0.0 || u + v > 1.0 {
+        return None;
+    }
+    Some(dot(*other, beside) / facing)
+}
+
+/// Where the rays from a place to a light with a size go: ahead of the place, between the
+/// four rays around the light, and no further than the light. What is nowhere in it, none of
+/// them can meet.
+pub(in crate::draw) struct Beam {
+    from: Vector,
+    /// The ways of the four rays around the light, in order round it.
+    around: [Vector; 4],
+    /// The way into it across each of its four sides, the planes those rays lie in by twos,
+    /// and the way ahead from where it starts.
+    inward: [Vector; 5],
+    /// How far ahead the light is.
+    reach: f64,
+}
+
+impl Beam {
+    /// The beam from `from` toward a light whose middle lies along `way`, a unit long, which
+    /// the rays `around` go around, each a way and a reach, in order round it.
+    pub fn between(from: Vector, way: Vector, around: &[(Vector, f64); 4]) -> Self {
+        let mut inward = [way; 5];
+        let mut reach = 0.0f64;
+        for (corner, (ray, length)) in around.iter().enumerate() {
+            // Square to the plane two neighbors lie in, toward the side the middle is on.
+            let side = cross(*ray, around[(corner + 1) % 4].0);
+            inward[corner] = if dot(side, way) < 0.0 {
+                times(side, -1.0)
+            } else {
+                side
+            };
+            reach = reach.max(length * dot(*ray, way));
+        }
+        Self {
+            from,
+            around: around.map(|(ray, _)| ray),
+            inward,
+            reach,
+        }
+    }
+
+    /// Whether the box from `least` to `most` is wholly outside it: past one of its sides,
+    /// behind where it starts, or beyond the light. A box that is not may still be met by none
+    /// of its rays.
+    #[inline]
+    fn clears_box(&self, least: &Vector, most: &Vector) -> bool {
+        let (least, most) = (minus(*least, self.from), minus(*most, self.from));
+        // How far along a way the box reaches at the most, or with `nearest` at the least: its
+        // corner there is of `least` or of `most` along each axis, whichever goes further.
+        let furthest = |way: &Vector, nearest: bool| {
+            let mut sum = 0.0;
+            for axis in 0..3 {
+                let (one, other) = (least[axis] * way[axis], most[axis] * way[axis]);
+                sum += if (one > other) != nearest { one } else { other };
+            }
+            sum
+        };
+        self.inward.iter().any(|way| furthest(way, false) < 0.0)
+            || furthest(&self.inward[4], true) > self.reach
+    }
+
+    /// Whether a triangle, a corner and the two sides from it, is wholly outside it: past one
+    /// of its sides, behind where it starts, or beyond the light, as a box is, or on the far
+    /// side of one of its own edges from every ray around the light, as a large triangle
+    /// lying askew of a narrow beam is of no side of the beam.
+    #[inline]
+    fn clears_triangle(&self, [corner, one, other]: &[Vector; 3]) -> bool {
+        let first = minus(*corner, self.from);
+        let corners = [first, add(first, *one), add(first, *other)];
+        let along = |way: &Vector| corners.map(|corner| dot(corner, *way));
+        let ahead = along(&self.inward[4]);
+        if ahead.iter().all(|ahead| *ahead < 0.0)
+            || ahead.iter().all(|ahead| *ahead > self.reach)
+            || self.inward[..4]
+                .iter()
+                .any(|way| along(way).iter().all(|along| *along < 0.0))
+        {
+            return true;
+        }
+        // The plane an edge lies in with where the beam starts has the triangle on one side
+        // of it. With the four rays around the light all on the other, no ray comes to it.
+        (0..3).any(|edge| {
+            let side = cross(corners[edge], corners[(edge + 1) % 3]);
+            let third = dot(corners[(edge + 2) % 3], side);
+            let rays = self.around.map(|ray| dot(ray, side));
+            (third >= 0.0 && rays.iter().all(|ray| *ray < 0.0))
+                || (third <= 0.0 && rays.iter().all(|ray| *ray > 0.0))
+        })
+    }
+}
 
 impl Standing {
     /// The mesh clip `plan` at clip time `time`, where `to_output` puts it, as opaque as
@@ -784,9 +1017,21 @@ impl Standing {
     /// `corners`, triangles in the world, whichever clip they are of: a mesh's, or the two
     /// of a flat clip.
     pub fn over(clip: Id, opacity: f32, mut corners: Vec<[Vector; 3]>) -> Self {
-        let mut boxes = Vec::new();
-        let count = corners.len();
-        Self::halve(&mut corners, 0, count, &mut boxes);
+        let tree = Tree::over(
+            &mut corners,
+            LEAF,
+            |triangle| {
+                let (mut least, mut most) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
+                for corner in triangle {
+                    for axis in 0..3 {
+                        least[axis] = least[axis].min(corner[axis]);
+                        most[axis] = most[axis].max(corner[axis]);
+                    }
+                }
+                (least, most)
+            },
+            |triangle, axis| triangle[0][axis] + triangle[1][axis] + triangle[2][axis],
+        );
         Self {
             clip,
             opacity,
@@ -794,170 +1039,176 @@ impl Standing {
                 .into_iter()
                 .map(|[a, b, c]| [a, minus(b, a), minus(c, a)])
                 .collect(),
-            boxes,
+            tree,
         }
     }
 
-    /// Put `corners[from..to]` in a box at the end of `boxes`, halved along its longest side
-    /// while it holds more than a few.
-    fn halve(corners: &mut [[Vector; 3]], from: usize, to: usize, boxes: &mut Vec<Boxed>) {
-        let (mut least, mut most) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
-        for corner in corners[from..to].iter().flatten() {
-            for axis in 0..3 {
-                least[axis] = least[axis].min(corner[axis]);
-                most[axis] = most[axis].max(corner[axis]);
-            }
-        }
-        let own = boxes.len();
-        boxes.push(Boxed {
-            least,
-            most,
-            inside: Inside::Triangles(from, to),
-        });
-        if to - from <= LEAF {
-            return;
-        }
-        let axis = (0..3)
-            .max_by(|a, b| (most[*a] - least[*a]).total_cmp(&(most[*b] - least[*b])))
-            .unwrap_or(0);
-        let middle = |triangle: &[Vector; 3]| triangle[0][axis] + triangle[1][axis] + triangle[2][axis];
-        let half = from + (to - from) / 2;
-        corners[from..to].select_nth_unstable_by(half - from, |a, b| middle(a).total_cmp(&middle(b)));
-        // The first half is the next box, and the second is whatever comes after all of it.
-        let first = boxes.len();
-        Self::halve(corners, from, half, boxes);
-        Self::halve(corners, half, to, boxes);
-        boxes[own].inside = Inside::Halves(first);
+    /// The box about all of it: nowhere, for a mesh of no triangles.
+    fn about(&self) -> (Vector, Vector) {
+        self.tree.boxes.first().map_or(
+            ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]),
+            |boxed| (boxed.least, boxed.most),
+        )
     }
 
-    /// How much of a light gets past it to `at`, going along `way`, a unit long, for `reach`.
-    pub fn lets_through(&self, at: Vector, way: Vector, reach: f64) -> f32 {
-        if self.meets(at, way, reach) {
-            1.0 - self.opacity
-        } else {
-            1.0
+    /// How much of a light gets past it to `at`, going along `way`, a unit long, for `reach`,
+    /// `over` being [`over`] of the way.
+    #[inline]
+    fn lets_through(&self, at: Vector, way: Vector, over: &Vector, reach: f64) -> f32 {
+        match self.meets(at, way, over, reach) {
+            Some(_) => 1.0 - self.opacity,
+            None => 1.0,
         }
     }
 
-    /// Whether a ray from `at` along `way` meets a triangle within `reach`.
-    fn meets(&self, at: Vector, way: Vector, reach: f64) -> bool {
-        // Not from the very place it starts, which may be on a triangle of another clip
-        // touching this one: a ten-thousandth of a pixel on, the world being in pixels.
-        let least = 1e-4f64;
-        let over = way.map(|side| 1.0 / if side.abs() < 1e-300 { 1e-300 } else { side });
-        let mut waiting = vec![0usize];
-        while let Some(index) = waiting.pop() {
-            let boxed = &self.boxes[index];
-            let (mut enters, mut leaves) = (least, reach);
-            for axis in 0..3 {
-                let (one, other) = (
-                    (boxed.least[axis] - at[axis]) * over[axis],
-                    (boxed.most[axis] - at[axis]) * over[axis],
-                );
-                enters = enters.max(one.min(other));
-                leaves = leaves.min(one.max(other));
-            }
-            if enters > leaves {
-                continue;
-            }
-            match boxed.inside {
-                Inside::Halves(first) => {
-                    waiting.push(first);
-                    waiting.push(self.after(first));
-                }
-                Inside::Triangles(from, to) => {
-                    for [corner, one, other] in &self.triangles[from..to] {
-                        let across = cross(way, *other);
-                        let facing = dot(*one, across);
-                        if facing.abs() < 1e-18 {
-                            continue;
-                        }
-                        let from = minus(at, *corner);
-                        let u = dot(from, across) / facing;
-                        if !(0.0..=1.0).contains(&u) {
-                            continue;
-                        }
-                        let beside = cross(from, *one);
-                        let v = dot(way, beside) / facing;
-                        if v < 0.0 || u + v > 1.0 {
-                            continue;
-                        }
-                        let along = dot(*other, beside) / facing;
-                        if along > least && along < reach {
-                            return true;
-                        }
-                    }
-                }
-            }
+    /// How much of a light gets past it to `at`, going along `way`, a unit long, for `reach`,
+    /// for one ray after another from one place toward one light, as the rays to a light
+    /// with a size are. `met` is the triangle that stopped the last of them to be stopped,
+    /// and is asked first: where a mesh hides all of a light it mostly stops the next ray
+    /// too, and the tree is not walked.
+    pub fn lets_through_after(
+        &self,
+        at: Vector,
+        way: Vector,
+        reach: f64,
+        met: &mut Option<usize>,
+    ) -> f32 {
+        let again = met.is_some_and(|triangle| self.stops(triangle, at, way, reach));
+        if !again {
+            *met = self.meets(at, way, &over(way), reach);
         }
-        false
+        match met {
+            Some(_) => 1.0 - self.opacity,
+            None => 1.0,
+        }
+    }
+
+    /// Whether the triangle `which` is in the way of a ray from `at` along `way` within `reach`.
+    #[inline]
+    fn stops(&self, which: usize, at: Vector, way: Vector, reach: f64) -> bool {
+        along(at, way, &self.triangles[which]).is_some_and(|along| along > STARTS && along < reach)
+    }
+
+    /// The first triangle found in the way of a ray from `at` along `way` within `reach`,
+    /// which need not be the nearest.
+    #[inline]
+    fn meets(&self, at: Vector, way: Vector, over: &Vector, reach: f64) -> Option<usize> {
+        let mut met = None;
+        self.tree.walk(
+            |boxed| boxed.crossed(&at, over, STARTS, reach),
+            |from, to| {
+                met = (from..to).find(|which| self.stops(*which, at, way, reach));
+                met.is_some()
+            },
+        );
+        met
+    }
+
+    /// Whether any ray of `beam` may meet it: whether a triangle of it is not wholly outside
+    /// the beam, which one walk of its tree says for all of the beam's rays.
+    fn reached_by(&self, beam: &Beam) -> bool {
+        self.tree.walk(
+            |boxed| !beam.clears_box(&boxed.least, &boxed.most),
+            |from, to| {
+                self.triangles[from..to]
+                    .iter()
+                    .any(|triangle| !beam.clears_triangle(triangle))
+            },
+        )
     }
 
     /// How far along `way`, a unit long, a ray from `at` first meets a triangle, no further
     /// than `reach`, and the way that triangle faces, a unit long. From the very place it
     /// starts on: one who measures how far off a surface is wants a surface touched said.
     pub fn first(&self, at: Vector, way: Vector, reach: f64) -> Option<(f64, Vector)> {
-        let over = way.map(|side| 1.0 / if side.abs() < 1e-300 { 1e-300 } else { side });
-        let mut nearest: Option<(f64, Vector)> = None;
-        let mut waiting = vec![0usize];
-        while let Some(index) = waiting.pop() {
-            let Some(boxed) = self.boxes.get(index) else {
-                continue;
-            };
-            let (mut enters, mut leaves) = (0.0f64, nearest.map_or(reach, |(along, _)| along));
-            for axis in 0..3 {
-                let (one, other) = (
-                    (boxed.least[axis] - at[axis]) * over[axis],
-                    (boxed.most[axis] - at[axis]) * over[axis],
-                );
-                enters = enters.max(one.min(other));
-                leaves = leaves.min(one.max(other));
-            }
-            if enters > leaves {
-                continue;
-            }
-            match boxed.inside {
-                Inside::Halves(first) => {
-                    waiting.push(first);
-                    waiting.push(self.after(first));
-                }
-                Inside::Triangles(from, to) => {
-                    for [corner, one, other] in &self.triangles[from..to] {
-                        let across = cross(way, *other);
-                        let facing = dot(*one, across);
-                        if facing.abs() < 1e-18 {
-                            continue;
-                        }
-                        let from = minus(at, *corner);
-                        let u = dot(from, across) / facing;
-                        if !(0.0..=1.0).contains(&u) {
-                            continue;
-                        }
-                        let beside = cross(from, *one);
-                        let v = dot(way, beside) / facing;
-                        if v < 0.0 || u + v > 1.0 {
-                            continue;
-                        }
-                        let along = dot(*other, beside) / facing;
-                        if along >= 0.0
-                            && along <= reach
-                            && nearest.is_none_or(|(least, _)| along < least)
-                        {
-                            nearest = Some((along, unit(cross(*one, *other))));
-                        }
+        let over = over(way);
+        // Read by the one who says which boxes are gone into, and set by the one given their
+        // triangles.
+        let nearest: std::cell::Cell<Option<(f64, Vector)>> = std::cell::Cell::new(None);
+        self.tree.walk(
+            |boxed| {
+                let within = nearest.get().map_or(reach, |(along, _)| along);
+                boxed.crossed(&at, &over, 0.0, within)
+            },
+            |from, to| {
+                for triangle in &self.triangles[from..to] {
+                    let Some(along) = along(at, way, triangle) else {
+                        continue;
+                    };
+                    if along >= 0.0
+                        && along <= reach
+                        && nearest.get().is_none_or(|(least, _)| along < least)
+                    {
+                        let [_, one, other] = triangle;
+                        nearest.set(Some((along, unit(cross(*one, *other)))));
                     }
                 }
-            }
-        }
-        nearest
+                false
+            },
+        );
+        nearest.get()
+    }
+}
+
+/// The meshes that may stand in a light's way, in a tree of the boxes about them, so that a
+/// ray asks those it comes to and not every mesh of the scene.
+#[derive(Default)]
+pub(in crate::draw) struct InTheWay {
+    /// In the order of the tree's boxes.
+    meshes: Vec<Standing>,
+    tree: Tree,
+}
+
+impl InTheWay {
+    /// `meshes`, each in a box of the tree by itself.
+    pub fn of(mut meshes: Vec<Standing>) -> Self {
+        let tree = Tree::over(
+            &mut meshes,
+            1,
+            |mesh| mesh.about(),
+            |mesh, axis| {
+                let (least, most) = mesh.about();
+                least[axis] + most[axis]
+            },
+        );
+        Self { meshes, tree }
     }
 
-    /// The box after the one at `index` and everything in it: its sibling.
-    fn after(&self, index: usize) -> usize {
-        match self.boxes[index].inside {
-            Inside::Triangles(..) => index + 1,
-            Inside::Halves(first) => self.after(self.after(first)),
-        }
+    pub fn is_empty(&self) -> bool {
+        self.meshes.is_empty()
+    }
+
+    /// How much of a light gets past all of them but that of the clip `receiver` to `at`,
+    /// going along `way`, a unit long, for `reach`.
+    pub fn lets_through(&self, receiver: &Id, at: Vector, way: Vector, reach: f64) -> f32 {
+        let over = over(way);
+        let mut through = 1.0f32;
+        self.tree.walk(
+            |boxed| boxed.crossed(&at, &over, STARTS, reach),
+            |from, to| {
+                for mesh in &self.meshes[from..to] {
+                    if mesh.clip != *receiver {
+                        through *= mesh.lets_through(at, way, &over, reach);
+                    }
+                }
+                // Past one that lets nothing by, the rest take nothing more.
+                through == 0.0
+            },
+        );
+        through
+    }
+
+    /// Give `each` every mesh but that of the clip `receiver` that a ray of `beam` may meet,
+    /// until it says that no more are wanted.
+    pub fn reached(&self, receiver: &Id, beam: &Beam, mut each: impl FnMut(&Standing) -> bool) {
+        self.tree.walk(
+            |boxed| !beam.clears_box(&boxed.least, &boxed.most),
+            |from, to| {
+                self.meshes[from..to]
+                    .iter()
+                    .any(|mesh| mesh.clip != *receiver && mesh.reached_by(beam) && each(mesh))
+            },
+        );
     }
 }
 
@@ -1237,5 +1488,243 @@ mod tests {
         // All of it behind, and none is left; all of it ahead, and it is as it was.
         assert!(cut_near(&corners, 4.0).is_empty());
         assert_eq!(cut_near(&corners, -2.0).len(), 3);
+    }
+
+    /// The triangles of `mesh` in a world of pixels, turned `turn` degrees about the way down
+    /// and with its middle at `place`, as what stands in a light's way.
+    fn standing(clip: &str, opacity: f32, mesh: &Mesh, turn: f64, place: Vector) -> Standing {
+        let (sin, cos) = turn.to_radians().sin_cos();
+        let corners = mesh
+            .triangles
+            .iter()
+            .map(|triangle| {
+                triangle.map(|corner| {
+                    let [x, y, z] = mesh.points[corner as usize];
+                    add([x * cos + z * sin, y, z * cos - x * sin], place)
+                })
+            })
+            .collect();
+        Standing::over(Id::new(clip).unwrap(), opacity, corners)
+    }
+
+    /// Solids on a floor at y = 100: a box, a ball, a cylinder, and a box askew, with two that
+    /// let light by, a sheet over them all and a box. No more than two, so that what gets
+    /// past them is the same whichever is asked first.
+    fn solids() -> Vec<Standing> {
+        let white = [1.0; 3];
+        let (cube, ball) = (Mesh::a_box([80.0; 3], white), Mesh::a_ball([100.0; 3], white));
+        vec![
+            standing("box", 1.0, &Mesh::a_box([120.0, 80.0, 100.0], white), 0.0, [-150.0, 60.0, 0.0]),
+            standing("ball", 1.0, &ball, 0.0, [0.0, 50.0, 50.0]),
+            standing("cylinder", 1.0, &Mesh::a_cylinder([60.0, 140.0, 60.0], white), 0.0, [150.0, 30.0, -40.0]),
+            standing("askew", 1.0, &Mesh::a_box([30.0, 160.0, 90.0], white), 35.0, [40.0, 20.0, -160.0]),
+            standing("sheet", 0.5, &Mesh::a_box([260.0, 4.0, 200.0], white), 20.0, [-40.0, -90.0, 0.0]),
+            standing("glass", 0.25, &cube, 0.0, [60.0, 60.0, -150.0]),
+        ]
+    }
+
+    /// Places on the floor under `solids` and on the solids themselves, each under lights far
+    /// off and near, of several sizes. `ask` is given the clip a place is on, the place and the
+    /// way from it to a light's middle, how wide the light is, and where each of its rays goes,
+    /// the last two as [`Scene::gets_through_across`] takes them.
+    fn asked(
+        solids: &[Standing],
+        mut ask: impl FnMut(&Id, (Vector, Vector), (f64, f64), &dyn Fn(Vector) -> (Vector, f64)),
+    ) {
+        let floor = Id::new("floor").unwrap();
+        let mut places: Vec<(Id, Vector)> = (0..13 * 13)
+            .map(|at| {
+                let (x, z) = (f64::from(at % 13), f64::from(at / 13));
+                (floor.clone(), [50.0 * x - 297.0, 100.0, 50.0 * z - 293.0])
+            })
+            .collect();
+        for mesh in solids {
+            let some = mesh.triangles.iter().step_by(mesh.triangles.len() / 12 + 1);
+            places.extend(some.map(|[corner, one, other]| {
+                (mesh.clip.clone(), add(*corner, times(add(*one, *other), 1.0 / 3.0)))
+            }));
+        }
+        for (clip, at) in &places {
+            // Far off: the way back to each, and the tangent of half the angle it fills.
+            for (back, spread) in [
+                ([-0.3, -1.0, -0.2], 0.02),
+                ([-0.3, -1.0, -0.2], 0.2),
+                ([0.9, -0.5, 0.3], 0.05),
+            ] {
+                let back = unit(back);
+                let ray = |off| (unit(add(back, off)), f64::INFINITY);
+                ask(clip, (*at, back), (spread, spread), &ray);
+            }
+            // Near: where each is, the second in among the solids, and how far across.
+            for (light, radius) in [([-100.0, -300.0, -200.0], 25.0), ([120.0, -40.0, 60.0], 60.0)] {
+                let to = minus(light, *at);
+                let reach = dot(to, to).sqrt();
+                let ray = |off| {
+                    let to = add(to, off);
+                    let reach = dot(to, to).sqrt();
+                    (times(to, 1.0 / reach.max(1e-12)), reach)
+                };
+                ask(clip, (*at, unit(to)), (radius, radius / reach.max(1e-12)), &ray);
+            }
+        }
+    }
+
+    #[test]
+    fn a_ray_through_the_tree_meets_what_it_meets_of_every_triangle() {
+        // A ball has triangles enough for a tree some levels deep.
+        let ball = Mesh::a_ball([100.0, 140.0, 80.0], [1.0; 3]);
+        let ball = standing("ball", 1.0, &ball, 0.0, [10.0, -20.0, 30.0]);
+        assert!(ball.tree.boxes.len() > 100);
+        let (mut met, mut passed) = (0, 0);
+        for step in 0..400 {
+            // From all around it, toward it and beside it.
+            let turn = f64::from(step) * 0.7;
+            let at = [
+                150.0 * turn.cos(),
+                120.0 * (turn * 0.37).sin(),
+                150.0 * turn.sin(),
+            ];
+            let toward = [
+                10.0 + 70.0 * (turn * 1.3).sin(),
+                -20.0 + 90.0 * (turn * 0.9).cos(),
+                30.0 + 60.0 * (turn * 0.53).sin(),
+            ];
+            let way = unit(minus(toward, at));
+            for reach in [f64::INFINITY, 140.0] {
+                let every = (0..ball.triangles.len()).any(|which| ball.stops(which, at, way, reach));
+                let found = ball.meets(at, way, &over(way), reach);
+                assert_eq!(found.is_some(), every, "from {at:?} along {way:?}");
+                if every {
+                    met += 1;
+                } else {
+                    passed += 1;
+                }
+                // And the first it meets is the nearest of them all.
+                let nearest = ball
+                    .triangles
+                    .iter()
+                    .filter_map(|triangle| along(at, way, triangle))
+                    .filter(|along| *along >= 0.0 && *along <= reach)
+                    .min_by(f64::total_cmp);
+                let first = ball.first(at, way, reach).map(|(along, _)| along);
+                assert_eq!(first, nearest, "from {at:?} along {way:?}");
+            }
+        }
+        assert!(met > 100 && passed > 100, "{met} {passed}");
+    }
+
+    #[test]
+    fn meshes_together_let_through_what_each_lets_through_alone() {
+        let together = InTheWay::of(solids());
+        let (mut stopped, mut dimmed, mut clear) = (0, 0, 0);
+        for place in 0..25 * 25 {
+            let (x, z) = (f64::from(place % 25), f64::from(place / 25));
+            let at = [25.0 * x - 297.0, 99.0, 25.0 * z - 293.0];
+            for (toward, reach) in [
+                ([-0.3, -1.0, -0.2], f64::INFINITY),
+                ([0.5, -1.0, -0.4], f64::INFINITY),
+                ([0.9, -0.5, 0.3], 150.0),
+            ] {
+                let way = unit(toward);
+                // On the floor, which is none of them, and on one of them, which is not asked.
+                for receiver in ["floor", "ball"] {
+                    let receiver = Id::new(receiver).unwrap();
+                    let alone: f32 = together
+                        .meshes
+                        .iter()
+                        .filter(|mesh| mesh.clip != receiver)
+                        .map(|mesh| mesh.lets_through(at, way, &over(way), reach))
+                        .product();
+                    let all = together.lets_through(&receiver, at, way, reach);
+                    assert_eq!(all, alone, "on {receiver} from {at:?} along {way:?}");
+                    if alone == 0.0 {
+                        stopped += 1;
+                    } else if alone < 1.0 {
+                        dimmed += 1;
+                    } else {
+                        clear += 1;
+                    }
+                }
+            }
+        }
+        assert!(stopped > 100 && dimmed > 100 && clear > 100, "{stopped} {dimmed} {clear}");
+    }
+
+    #[test]
+    fn what_a_beam_clears_none_of_its_rays_meets() {
+        let solids = solids();
+        let (mut cleared, mut met, mut in_vain) = (0, 0, 0);
+        asked(&solids, |clip, (at, way), (radius, _), ray| {
+            // The rays around a light and the rays across it, as a place asks for them.
+            let (side, other) = square_to(way);
+            let off = |(a, b): (f64, f64), by: f64| {
+                ray(add(times(side, a * by), times(other, b * by)))
+            };
+            let out = radius * (1.0 + share() / 2.0);
+            let around = [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)].map(|at| off(at, out));
+            let beam = Beam::between(at, way, &around);
+            let rays = spiral().map(|at| off(at, radius));
+            for mesh in solids.iter().filter(|mesh| mesh.clip != *clip) {
+                let stops = rays
+                    .iter()
+                    .any(|(way, reach)| mesh.meets(at, *way, &over(*way), *reach).is_some());
+                match (mesh.reached_by(&beam), stops) {
+                    (false, true) => panic!("{} stops a ray from {at:?} toward {way:?}", mesh.clip),
+                    (false, false) => cleared += 1,
+                    (true, true) => met += 1,
+                    (true, false) => in_vain += 1,
+                }
+            }
+        });
+        // It has to be good for something, the test has to have seen them all, and rays are sent
+        // in vain less often than not: a beam has corners, and a light is round.
+        assert!(
+            cleared > 1000 && met > 100 && in_vain < met,
+            "{cleared} {met} {in_vain}"
+        );
+    }
+
+    #[test]
+    fn a_light_with_a_size_gets_past_meshes_as_each_of_its_rays_does() {
+        let scene = Scene {
+            eye: [0.0, 0.0, -1000.0],
+            right: [1.0, 0.0, 0.0],
+            down: [0.0, 1.0, 0.0],
+            forward: [0.0, 0.0, 1.0],
+            focal: 1000.0,
+            center: (0.0, 0.0),
+            height: 500.0,
+            lights: Vec::new(),
+            casters: Vec::new(),
+            standing: InTheWay::of(solids()),
+            focus: 0.0,
+            aperture: 0.0,
+        };
+        let meshes = &scene.standing.meshes;
+        let shadow = 0.8f32;
+        let (mut lit, mut dark, mut between) = (0, 0, 0);
+        asked(meshes, |clip, (at, way), (radius, spread), ray| {
+            // Ray by ray and mesh by mesh, with none of either passed over.
+            let (side, other) = square_to(way);
+            let through = spiral().map(|(a, b)| {
+                let (way, reach) = ray(add(times(side, a * radius), times(other, b * radius)));
+                meshes
+                    .iter()
+                    .filter(|mesh| mesh.clip != *clip)
+                    .map(|mesh| mesh.lets_through(at, way, &over(way), reach))
+                    .product::<f32>()
+            });
+            let plainly = 1.0 - shadow * (1.0 - through.iter().sum::<f32>() / RAYS as f32);
+            let got = scene.gets_through_across(clip, (at, way), (radius, spread), shadow, ray);
+            assert_eq!(got, plainly, "on {clip} at {at:?} toward {way:?}");
+            if through == [1.0; RAYS] {
+                lit += 1;
+            } else if through == [0.0; RAYS] {
+                dark += 1;
+            } else {
+                between += 1;
+            }
+        });
+        assert!(lit > 100 && dark > 100 && between > 100, "{lit} {dark} {between}");
     }
 }

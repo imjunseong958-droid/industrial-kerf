@@ -1091,7 +1091,7 @@ impl Drawing {
                     })
                 })
                 .collect();
-            scene.standing = standing;
+            scene.standing = three_d::mesh::InTheWay::of(standing);
         }
         for wanted in scene.environments() {
             let picture = plan
