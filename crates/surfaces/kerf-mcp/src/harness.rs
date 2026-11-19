@@ -1545,10 +1545,9 @@ impl KerfMcpRouter {
                         None => kerf_shots::workflow::Set::value(&set.node, &set.input, &set.value),
                     })
                     .collect();
-                if let Some(taken) = kerf_shots::workflow::taken_before(&models, &read) {
-                    kerf_shots::workflow::check(&read, &values, &taken).map_err(invalid)?;
-                }
-                let now = kerf_shots::workflow::with(&read, &values).map_err(invalid)?;
+                // Held to what the server takes there, where a `look` has asked.
+                let asked = kerf_shots::workflow::taken_before(&models, &read);
+                let now = kerf_shots::workflow::with(&read, &values, asked.as_ref()).map_err(invalid)?;
                 let taken: Vec<PathBuf> = kept.iter().map(|kept| kept.copy.file.clone()).collect();
                 let copy = kerf_shots::workflow::copied(project, &self.dir, media, line, &read, &now, &taken)
                     .map_err(invalid)?;

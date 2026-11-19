@@ -8,7 +8,8 @@
 //! draws from a sequence and hands to a model.
 //!
 //! In a file of its own: it names a models file of its own in `KERF_MODELS`,
-//! which the other tests' process must not see.
+//! and no ComfyUI server in `KERF_COMFY`, which the other tests' process must
+//! not see.
 #![cfg(unix)]
 
 use kerf_mcp::permissions::{Mode, Permissions};
@@ -119,6 +120,12 @@ fn an_agent_writes_a_makings_steps_in_the_document_and_makes_it() {
     )
     .unwrap();
     std::env::set_var("KERF_MODELS", &models);
+    // No server a person has named is asked what the workflow's nodes take: the file named
+    // here is not there, and nothing else names one.
+    std::env::set_var("KERF_COMFY", dir.join("no-such-comfy.json"));
+    for names_one in ["COMFY_URL", "COMFY_API_KEY", "COMFY_API_HEADER"] {
+        std::env::remove_var(names_one);
+    }
     let kerfd = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../target/debug/kerfd");
     let router = KerfMcpRouter::new(dir, Some(&kerfd)).unwrap();
     // The person lets an agent's edits through and its makings run, up to a limit of theirs.
@@ -341,6 +348,8 @@ fn an_agent_writes_a_makings_steps_in_the_document_and_makes_it() {
     );
     let workflow = ok(&router, "look", json!({"workflow": {"media": "bounce", "line": 2}}));
     assert_eq!((workflow["name"].as_str(), workflow["origin"].as_str()), (Some("shot"), Some("bundled")));
+    // With no server named, none was asked: the workflow is read without, and says why.
+    assert!(workflow.get("taken").is_none() && workflow["takenError"].is_string(), "{workflow}");
     assert_eq!(workflow["blanks"]["seed"]["given"], "7");
     let loader = workflow["nodes"]
         .as_array()
