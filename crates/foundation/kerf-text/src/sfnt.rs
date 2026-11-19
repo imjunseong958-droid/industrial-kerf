@@ -1,13 +1,20 @@
 //! Minimal SFNT (TrueType / OpenType / collection) header reader for font discovery: reads only
 //! the table directory, `name` and `OS/2` of each face, so scanning a system font folder does not
-//! load whole files.
+//! load whole files. [`read_charset`] reads one face's `cmap` the same way, to learn which
+//! characters it has without loading it.
 
 use std::io::{Read, Seek, SeekFrom};
 
 /// The tables skrifa reads glyph outlines from: TrueType, CFF, CFF2 and VARC. The renderer draws
-/// no glyph of a face that has none of them, such as a face with bitmaps only or with its outlines
-/// in Apple's `hvgl` table.
+/// no outline of a face that has none of them, such as a face with bitmaps only or with its
+/// outlines in Apple's `hvgl` table.
 const OUTLINE_TABLES: [&[u8; 4]; 4] = [b"glyf", b"CFF ", b"CFF2", b"VARC"];
+/// The tables of colour bitmaps the renderer draws (`render::color`): Google's `CBDT` (Noto
+/// Color Emoji) and Apple's `sbix` (Apple Color Emoji). A face with one of them and no outlines
+/// is still listed.
+pub(crate) const COLOR_BITMAP_TABLES: [&[u8; 4]; 2] = [b"CBDT", b"sbix"];
+/// The tables a face draws in colour from: [`COLOR_BITMAP_TABLES`] and `COLR` layers.
+pub(crate) const COLOR_TABLES: [&[u8; 4]; 3] = [b"CBDT", b"sbix", b"COLR"];
 
 /// Names and style attributes of one face in a font file.
 #[derive(Clone, Debug, PartialEq)]
@@ -16,8 +23,14 @@ pub struct FaceNames {
     pub family: String,
     pub style: String,
     pub full_name: String,
+    /// Other names the face goes by, which [`crate::fonts::resolve`] takes for a family: its
+    /// full name, its PostScript name, and, for the Regular of a legacy family (name ID 1, such
+    /// as "Inter Black" for Inter's Black), that family.
+    pub names: Vec<String>,
     pub weight: u16,
     pub italic: bool,
+    /// Whether it draws in colour ([`COLOR_TABLES`]).
+    pub color: bool,
 }
 
 fn be16(b: &[u8], o: usize) -> Option<u16> {
@@ -38,17 +51,69 @@ fn read_at<R: Read + Seek>(r: &mut R, off: u64, len: usize) -> Option<Vec<u8>> {
 }
 
 /// Read the names of every face in a font file (a single font or a collection). Faces with none
-/// of the `OUTLINE_TABLES` are left out.
+/// of the `OUTLINE_TABLES` or `COLOR_BITMAP_TABLES` are left out.
 pub fn read_faces<R: Read + Seek>(r: &mut R) -> Vec<FaceNames> {
+    face_offsets(r).iter().enumerate().filter_map(|(i, &o)| read_face(r, o as u64, i as u32)).collect()
+}
+
+/// Where each face of a font file starts: one for a single font, each of a collection's.
+fn face_offsets<R: Read + Seek>(r: &mut R) -> Vec<u32> {
     let Some(head) = read_at(r, 0, 12) else { return Vec::new() };
-    let offsets: Vec<u32> = if &head[0..4] == b"ttcf" {
+    if &head[0..4] == b"ttcf" {
         let n = be32(&head, 8).unwrap_or(0).min(256) as usize;
         let Some(t) = read_at(r, 12, n * 4) else { return Vec::new() };
         (0..n).filter_map(|i| be32(&t, i * 4)).collect()
     } else {
         vec![0]
-    };
-    offsets.iter().enumerate().filter_map(|(i, &o)| read_face(r, o as u64, i as u32)).collect()
+    }
+}
+
+/// A face's table directory: each table's tag, offset and length.
+fn table_directory<R: Read + Seek>(r: &mut R, off: u64) -> Option<Vec<([u8; 4], u64, usize)>> {
+    let h = read_at(r, off, 12)?;
+    let tag = &h[0..4];
+    if tag != [0, 1, 0, 0] && tag != b"OTTO" && tag != b"true" {
+        return None;
+    }
+    let n = be16(&h, 4)? as usize;
+    let dir = read_at(r, off + 12, n * 16)?;
+    dir.as_chunks::<16>().0.iter().map(|rec| Some(([rec[0], rec[1], rec[2], rec[3]], be32(rec, 8)? as u64, be32(rec, 12)? as usize))).collect()
+}
+
+/// The characters a face maps, as sorted, disjoint ranges of code points, and whether it draws in
+/// colour ([`COLOR_TABLES`]). Only the face's table directory, `maxp` and `cmap` are read.
+pub(crate) fn read_charset<R: Read + Seek>(r: &mut R, index: u32) -> Option<(Vec<(u32, u32)>, bool)> {
+    let off = *face_offsets(r).get(index as usize)?;
+    let dir = table_directory(r, u64::from(off))?;
+    let find = |tag: &[u8; 4]| dir.iter().find(|(t, _, _)| t == tag).map(|&(_, o, l)| (o, l));
+    let color = COLOR_TABLES.iter().any(|tag| find(tag).is_some());
+    let glyphs = find(b"maxp").and_then(|(o, l)| read_at(r, o, l.min(6))).and_then(|b| be16(&b, 4)).map_or(u32::from(u16::MAX), u32::from);
+    let (o, l) = find(b"cmap")?;
+    let cmap = read_at(r, o, l)?;
+    Some((charset_of(&cmap, glyphs), color))
+}
+
+/// The ranges of code points a `cmap` table maps to glyphs other than `.notdef`, by its most
+/// complete subtable.
+pub(crate) fn charset_of(cmap: &[u8], glyphs: u32) -> Vec<(u32, u32)> {
+    use skrifa::raw::tables::cmap::{Cmap, CmapIterLimits};
+    use skrifa::raw::{FontData, FontRead};
+    let Ok(table) = Cmap::read(FontData::new(cmap)) else { return Vec::new() };
+    let Some((_, _, subtable)) = table.best_subtable() else { return Vec::new() };
+    let mut points: Vec<u32> = subtable
+        .iter_with_limits(CmapIterLimits { max_char: char::MAX as u32, glyph_count: glyphs })
+        .filter(|(_, glyph)| glyph.to_u32() != 0)
+        .map(|(c, _)| c)
+        .collect();
+    points.sort_unstable();
+    let mut ranges: Vec<(u32, u32)> = Vec::new();
+    for c in points {
+        match ranges.last_mut() {
+            Some(last) if c <= last.1 + 1 => last.1 = last.1.max(c),
+            _ => ranges.push((c, c)),
+        }
+    }
+    ranges
 }
 
 /// Names from in-memory font data.
@@ -57,33 +122,25 @@ pub fn read_faces_bytes(data: &[u8]) -> Vec<FaceNames> {
 }
 
 fn read_face<R: Read + Seek>(r: &mut R, off: u64, index: u32) -> Option<FaceNames> {
-    let h = read_at(r, off, 12)?;
-    let tag = &h[0..4];
-    if tag != [0, 1, 0, 0] && tag != b"OTTO" && tag != b"true" {
+    let dir = table_directory(r, off)?;
+    if !dir.iter().any(|(tag, _, _)| OUTLINE_TABLES.contains(&tag) || COLOR_BITMAP_TABLES.contains(&tag)) {
         return None;
     }
-    let n = be16(&h, 4)? as usize;
-    let dir = read_at(r, off + 12, n * 16)?;
-    if !dir.as_chunks::<16>().0.iter().any(|rec| OUTLINE_TABLES.iter().any(|t| rec.starts_with(*t))) {
-        return None;
-    }
-    let mut name = None;
-    let mut os2 = None;
-    for i in 0..n {
-        let rec = &dir[i * 16..i * 16 + 16];
-        let (o, l) = (be32(rec, 8)? as u64, be32(rec, 12)? as usize);
-        match &rec[0..4] {
-            b"name" => name = Some((o, l)),
-            b"OS/2" => os2 = Some((o, l)),
-            _ => {}
-        }
-    }
+    let find = |tag: &[u8; 4]| dir.iter().find(|(t, _, _)| t == tag).map(|&(_, o, l)| (o, l));
+    let (name, os2) = (find(b"name"), find(b"OS/2"));
     let (no, nl) = name?;
     let nb = read_at(r, no, nl)?;
     let get = |id: u16| name_string(&nb, id);
     let family = get(16).or_else(|| get(1))?;
     let style = get(17).or_else(|| get(2)).unwrap_or_else(|| "Regular".into());
     let full_name = get(4).unwrap_or_else(|| format!("{family} {style}"));
+    let legacy = get(1).filter(|_| get(2).is_none_or(|sub| sub.eq_ignore_ascii_case("Regular")));
+    let mut names: Vec<String> = Vec::new();
+    for n in [Some(full_name.clone()), get(6), legacy].into_iter().flatten() {
+        if !n.eq_ignore_ascii_case(&family) && !names.iter().any(|m| m.eq_ignore_ascii_case(&n)) {
+            names.push(n);
+        }
+    }
     let (mut weight, mut italic) = (400u16, false);
     if let Some((oo, ol)) = os2
         && let Some(ob) = read_at(r, oo, ol.min(78))
@@ -93,7 +150,8 @@ fn read_face<R: Read + Seek>(r: &mut R, off: u64, index: u32) -> Option<FaceName
     }
     let sl = style.to_ascii_lowercase();
     italic |= sl.contains("italic") || sl.contains("oblique");
-    Some(FaceNames { index, family, style, full_name, weight, italic })
+    let color = dir.iter().any(|(tag, _, _)| COLOR_TABLES.contains(&tag));
+    Some(FaceNames { index, family, style, full_name, names, weight, italic, color })
 }
 
 /// A name-table string by id, preferring Windows Unicode English, then any Unicode, then Mac Roman.

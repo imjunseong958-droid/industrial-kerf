@@ -272,7 +272,10 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
   `audio.deesser`, `audio.denoise`, `audio.delay`, `audio.reverb`, `audio.eq`, `audio.eq3`,
   `audio.limiter`) go on a clip or a bus, and on a bus see the sum, as a compressor on a mix should.
 - `set c1 three_d=true z=0.5 rotate_y=30` places a clip in depth. Its 2D geometry applies first; `z`
-  is in frame heights, positive away from the viewer. `gen=camera@1` sees the scene, the topmost one
+  is in frame heights, positive away from the viewer. A shape or a title in depth is all of its outline, however far past the
+  frame it reaches: `gen=shape@1 width=6 height=8 rotate_x=90` is a floor six frame heights across and eight deep, which a crop
+  cuts only where it says, and one so large that its picture would be huge is drawn coarser. A solid is its frame, and particles
+  stay within theirs. `gen=camera@1` sees the scene, the topmost one
   showing (`x y z pan tilt roll fov focus aperture`, animatable, and with a `parent=` it goes where the parent takes it), and at its defaults a clip at
   z=0 looks as it does in 2D. `depth=0.1` makes a clip in depth a solid that deep behind it, in the outline of its picture's alpha, so a title
   has sides with its letters' colors, its holes kept, and shadows as long as it is deep; it animates, 0 is flat as ever, and a light behind a solid does not come through it. `bevel=0.02` cuts its edges back that far at each face, at 45 degrees and at most half its depth, following its outline and keeping its holes: lights shade the cut as a surface of its own, and its shadow follows it; it animates, and 0 is no bevel. `bevel_profile=round` makes the cut a quarter of a circle, so that the way it faces turns from the side to the face across its width and lights shade it as a curve; `flat`, as it is when not said, is the 45-degree cut. A bevel is as wide on each side of a clip scaled unevenly. `gen=light@1` (`kind=point|ambient|directional|environment color intensity shadow size image`, with
@@ -350,6 +353,23 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
   has on by itself, `salt=2` for its second alternate. Spaces or commas part them, and one alone needs no
   quotes: `features=smcp`. `look` with `font` names the features each face has; one the font has not
   draws nothing, which check says. Features do not animate.
+- A `title` picks the face of its `font` by `weight`, 100 thin, 400 regular, 700 bold, 900 black, and
+  by `style`, a style name the family has (`style="Black Italic"`, as `look` with `font` lists each
+  face's) or `italic`: `font="Inter" weight=900` is Inter Black where it is installed. A `weight`
+  holds over the weight a `style` names, and 0 leaves it to `style`, or to the family's Regular. A
+  family without that face takes its nearest weight and slant and is emboldened or slanted to make up
+  the rest, and in a variable font `weight` sets `wght` unless `wght` is set too. `font` can also be a
+  face's own name, `font="Inter Black"` or `font="Inter-Black"`, or a family followed by its style,
+  `font="NanumSquare Bold"`, which `look` with `font` answers with the family and the `style` it names.
+  Neither `weight` nor `style` animates.
+  Where the font has no glyph for a character, the character is drawn in a font that has it: the
+  bundled faces first, then the fonts installed on the machine, a Korean, Japanese, or Chinese Gothic
+  for sans text and a Myeongjo or Mincho for serif, at the nearest weight and emboldened for bold
+  text. Emoji (`💀`, `❤️`, `👍🏽`, flags) are drawn in their own colours from a colour emoji font
+  (Apple Color Emoji, Segoe UI Emoji, Noto Color Emoji), with the text's colour around them only where
+  the font asks for it, and under its outline; with none installed, in a black-and-white emoji font
+  if one is. A character no installed font has is drawn as an empty box, and check warns of it
+  (`text.missing_glyphs`), for captions too, naming the characters.
 - `parent=` names a clip of the same sequence this one moves with: the parent's position,
   scale, and rotation apply on top of the clip's own, about the parent's pivot, at each moment,
   and parents chain. `gen=null@1` draws nothing, to rig several clips under one

@@ -1689,6 +1689,69 @@ fn projected(
     }
 }
 
+/// The box around what the camera of `scene` can see of the rectangle `within` of `plane`, in the
+/// plane's own terms, out to `margin` output pixels past the frame: of a solid `deep`, of all of it
+/// between its front and its back. None where it sees none of it.
+///
+/// What it sees is where the rectangle is on the near side of each side of what the camera sees,
+/// and far enough ahead: five half-planes of the plane, which cut the rectangle down to what is in
+/// all of them. A point of a solid is in one where any point of the solid in line with it, at its
+/// front or its back or between, is, which is as much as a solid's sides can show.
+pub(super) fn seen_of(
+    scene: &Scene,
+    plane: &Plane,
+    deep: f64,
+    within: Rect,
+    margin: f64,
+) -> Option<Rect> {
+    let (cx, cy) = scene.center;
+    let (left, top, right, bottom) = (-margin, -margin, 2.0 * cx + margin, 2.0 * cy + margin);
+    let focal = scene.focal;
+    // Each as the way that goes in from it, and how far in a point must at least be.
+    let sides = [
+        (minus(times(scene.right, focal), times(scene.forward, left - cx)), 0.0),
+        (minus(times(scene.forward, right - cx), times(scene.right, focal)), 0.0),
+        (minus(times(scene.down, focal), times(scene.forward, top - cy)), 0.0),
+        (minus(times(scene.forward, bottom - cy), times(scene.down, focal)), 0.0),
+        (scene.forward, NEAR * scene.height),
+    ];
+    let from_eye = minus(plane.origin, scene.eye);
+    let mut corners = vec![
+        (within.x, within.y),
+        (within.right(), within.y),
+        (within.right(), within.bottom()),
+        (within.x, within.bottom()),
+    ];
+    for (way, least) in sides {
+        let (across, down) = (dot(way, plane.across), dot(way, plane.down));
+        let back = (deep * dot(way, plane.normal)).max(0.0);
+        let held = dot(way, from_eye) - least + back;
+        let inside = |(u, v): (f64, f64)| across * u + down * v + held;
+        let mut kept = Vec::with_capacity(corners.len() + 1);
+        for (index, &from) in corners.iter().enumerate() {
+            let to = corners[(index + 1) % corners.len()];
+            let (a, b) = (inside(from), inside(to));
+            if a >= 0.0 {
+                kept.push(from);
+            }
+            if (a >= 0.0) != (b >= 0.0) {
+                let along = a / (a - b);
+                kept.push((from.0 + (to.0 - from.0) * along, from.1 + (to.1 - from.1) * along));
+            }
+        }
+        corners = kept;
+        if corners.is_empty() {
+            return None;
+        }
+    }
+    let (mut least, mut most) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
+    for (u, v) in corners {
+        least = [least[0].min(u), least[1].min(v)];
+        most = [most[0].max(u), most[1].max(v)];
+    }
+    Some(Rect::new(least[0], least[1], most[0] - least[0], most[1] - least[1]))
+}
+
 /// How much of its size to read a picture at when it lands far smaller than it was drawn, or it would
 /// sparkle; `None` for all of it.
 pub(super) fn read_smaller(scene: &Scene, plane: &Plane, _size: (f64, f64)) -> Option<f64> {

@@ -514,3 +514,30 @@ fn a_cameras_blur_through_more_holds_to_the_cpu() {
         "  track V1 video\n    clip n seq=inner src=0f at=0f dur=24f\n      set three_d=true rotate_y=25 scale=0.8\nsequence inner rate=24 size=960x540 audio=48000\n  track V1 video\n    clip a gen=solid@1 at=0f dur=24f\n      set color=#40c040 three_d=true scale=0.5 z=0.5\n  track V2 video\n    clip cam gen=camera@1 at=0f dur=24f\n      set aperture=0.05\n",
     );
 }
+
+#[test]
+fn generators_that_reach_past_their_frame_hold_to_the_cpu() {
+    // A bar and a line of words wider than the frame, two back, and a floor that reaches under the
+    // camera and back toward the horizon, each drawn on a picture that goes past its frame.
+    let reaching = concat!(
+        "  track V1 video\n    clip floor gen=shape@1 at=0f dur=24f\n",
+        "      set width=6 height=8 fill=#4080ff three_d=true rotate_x=90 y=0.35 z=3\n",
+        "  track V2 video\n    clip bar gen=shape@1 at=0f dur=24f\n",
+        "      set width=3 height=0.3 fill=#ff4040 three_d=true z=2 y=-0.3\n",
+        "  track V3 video\n    clip words gen=title@1 at=0f dur=24f\n",
+        "      set text=\"A line of words wider than the frame\" size=0.12 three_d=true z=2 y=0.1\n",
+    );
+    holds("past the frame", reaching);
+    // Cut by a mask and a crop where they are on the frame.
+    let cut = concat!(
+        "  track V1 video\n    clip bar gen=shape@1 at=0f dur=24f\n",
+        "      set width=3 height=0.3 fill=#ff4040 three_d=true z=2 crop_l=0.3\n",
+        "      mask k1 rect=0,0,0.8,1\n",
+    );
+    holds("past the frame, cut", cut);
+    // Under a light that casts a shadow, all of each outline, out of sight or not.
+    let lit = format!(
+        "{reaching}  track V4 video\n    clip l gen=light@1 at=0f dur=24f\n      set kind=point y=-0.5 z=1 shadow=0.8\n"
+    );
+    holds("past the frame, shadowed", &lit);
+}

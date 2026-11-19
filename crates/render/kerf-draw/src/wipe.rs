@@ -6,10 +6,26 @@
 //! shows and at 1 all of it; `softness` (a fraction of the way across)
 //! fades the front.
 
+use crate::Rect;
 use rayon::prelude::*;
 
 /// How much of each pixel of a `w` × `h` incoming picture shows.
 pub fn coverage(w: usize, h: usize, angle: f64, softness: f64, progress: f64) -> Vec<f32> {
+    let whole = Rect::new(0.0, 0.0, w as f64, h as f64);
+    coverage_within(w, h, whole, angle, softness, progress)
+}
+
+/// [`coverage`] of a `w` × `h` picture whose frame is `frame` of it, which the front goes across. Past
+/// the frame it shows as the frame's edge nearest it does, so that nothing shows at the start and
+/// all of it at the end.
+pub fn coverage_within(
+    w: usize,
+    h: usize,
+    frame: Rect,
+    angle: f64,
+    softness: f64,
+    progress: f64,
+) -> Vec<f32> {
     let (dy, dx) = angle.to_radians().sin_cos();
     let low = dx.min(0.0) + dy.min(0.0);
     let span = (dx.max(0.0) + dy.max(0.0) - low).max(1e-6);
@@ -19,10 +35,12 @@ pub fn coverage(w: usize, h: usize, angle: f64, softness: f64, progress: f64) ->
     if w == 0 {
         return out;
     }
+    let (fw, fh) = (frame.w.max(1e-9), frame.h.max(1e-9));
     out.par_chunks_mut(w).enumerate().for_each(|(y, row)| {
-        let down = y as f64 / h as f64 * dy;
+        let down = ((y as f64 - frame.y) / fh).clamp(0.0, 1.0) * dy;
         for (x, covered) in row.iter_mut().enumerate() {
-            let position = (x as f64 / w as f64 * dx + down - low) / span;
+            let across = ((x as f64 - frame.x) / fw).clamp(0.0, 1.0);
+            let position = (across * dx + down - low) / span;
             *covered = ((front - position) / soft).clamp(0.0, 1.0) as f32;
         }
     });
@@ -44,5 +62,17 @@ mod tests {
         // From the top down.
         let down = coverage(1, 8, 90.0, 0.0, 0.5);
         assert_eq!((down[1], down[6]), (1.0, 0.0));
+    }
+
+    #[test]
+    fn past_its_frame_a_picture_wipes_as_the_frames_edge_does() {
+        // A frame of 8 in the middle of 16: the same front across it, and its edges beyond.
+        let frame = Rect::new(4.0, 0.0, 8.0, 1.0);
+        let half = coverage_within(16, 1, frame, 0.0, 0.0, 0.5);
+        assert_eq!(&half[4..12], &coverage(8, 1, 0.0, 0.0, 0.5)[..]);
+        assert_eq!(&half[..4], &[1.0; 4]);
+        assert_eq!(&half[12..], &[0.0; 4]);
+        assert!(coverage_within(16, 1, frame, 0.0, 0.0, 0.0).iter().all(|c| *c == 0.0));
+        assert!(coverage_within(16, 1, frame, 0.0, 0.0, 1.0).iter().all(|c| *c == 1.0));
     }
 }

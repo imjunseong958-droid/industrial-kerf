@@ -4,7 +4,14 @@
 //!
 //! Faces are addressed by [`FaceId`] (an index that never changes for the life of the process).
 //! [`resolve`] maps a family + style name (as stored in projects) to a face and the synthetic
-//! bold/italic needed when the family lacks that style. Unknown families fall back to Inter.
+//! bold/italic needed when the family lacks that style. A family is also found by the name of one
+//! of its faces ("Inter Black", "Inter-Black") or written with its style ("NanumSquare Bold"), and
+//! a style can name a weight by number ("900 Italic"). Unknown families fall back to Inter.
+//!
+//! [`face_for_cluster`] picks the face a grapheme cluster is drawn in when the requested face lacks
+//! it: emoji go to a colour emoji face, everything else to the bundled faces, the craft-fonts and
+//! then any installed face that has it. Which characters a face has is read from its `cmap` alone
+//! ([`Face::covers`]), so looking does not load every installed font.
 
 use std::path::PathBuf;
 use std::collections::HashMap;
@@ -140,6 +147,11 @@ pub struct FaceInfo {
     pub data: FaceData,
     /// "bundled", "system", …
     pub origin: &'static str,
+    /// Other names the face goes by (full name, PostScript name, legacy family), which
+    /// [`resolve`] takes for a family.
+    pub names: Vec<String>,
+    /// Whether it draws in colour (`COLR`, `CBDT` or `sbix`): an emoji font.
+    pub color: bool,
 }
 
 /// Something that can list fonts (system folders, a web font picker, a project's font folder…).
@@ -243,7 +255,7 @@ impl FontSource for DirectorySource {
 }
 
 fn info_from(n: FaceNames, data: FaceData, origin: &'static str) -> FaceInfo {
-    FaceInfo { family: n.family, style: n.style, weight: n.weight, italic: n.italic, index: n.index, data, origin }
+    FaceInfo { family: n.family, style: n.style, weight: n.weight, italic: n.italic, index: n.index, data, origin, names: n.names, color: n.color }
 }
 
 /// A loaded (or loadable) face.
@@ -252,6 +264,8 @@ pub struct Face {
     pub info: FaceInfo,
     bytes: OnceLock<Option<FaceBytes>>,
     shaper: OnceLock<harfrust::ShaperData>,
+    /// The code points it maps, as sorted ranges.
+    charset: OnceLock<Vec<(u32, u32)>>,
 }
 
 #[derive(Clone)]
@@ -333,6 +347,26 @@ impl Face {
     pub fn has_char(&self, c: char) -> bool {
         self.glyph(c).is_some()
     }
+    /// Whether the face maps `c` to a glyph, read from its `cmap` alone: a face not yet loaded
+    /// stays unloaded.
+    pub fn covers(&self, c: char) -> bool {
+        let c = c as u32;
+        let ranges = self.charset();
+        let i = ranges.partition_point(|r| r.1 < c);
+        ranges.get(i).is_some_and(|r| r.0 <= c)
+    }
+    fn charset(&self) -> &[(u32, u32)] {
+        self.charset.get_or_init(|| {
+            use skrifa::raw::TableProvider;
+            if let (FaceData::File(path), None) = (&self.info.data, self.bytes.get()) {
+                let Ok(mut file) = std::fs::File::open(path) else { return Vec::new() };
+                return crate::sfnt::read_charset(&mut file, self.info.index).map(|(ranges, _)| ranges).unwrap_or_default();
+            }
+            let Some(font) = self.font() else { return Vec::new() };
+            let glyphs = font.maxp().map_or(u32::from(u16::MAX), |m| u32::from(m.num_glyphs()));
+            font.table_data(Tag::new(b"cmap")).map(|cmap| crate::sfnt::charset_of(cmap.as_bytes(), glyphs)).unwrap_or_default()
+        })
+    }
     /// Height of the glyph's vertical origin above its baseline, in pixels.
     /// OpenType VORG takes precedence; TrueType uses the ink top plus vmtx's top bearing.
     pub(crate) fn vertical_origin(&self, gid: u32, px: f32) -> Option<f32> {
@@ -411,7 +445,7 @@ fn db() -> &'static RwLock<Db> {
 
 fn push(db: &mut Db, info: FaceInfo) -> FaceId {
     let id = db.faces.len();
-    db.faces.push(Arc::new(Face { id, info, bytes: OnceLock::new(), shaper: OnceLock::new() }));
+    db.faces.push(Arc::new(Face { id, info, bytes: OnceLock::new(), shaper: OnceLock::new(), charset: OnceLock::new() }));
     id
 }
 
@@ -503,9 +537,24 @@ pub struct Resolved {
     pub missing: bool,
 }
 
-fn style_wants(style: &str) -> (u16, bool) {
-    let s = style.to_ascii_lowercase().replace([' ', '-'], "");
-    let italic = s.contains("italic") || s.contains("oblique");
+/// The weight a style name asks for (100 thin … 900 black), where it names one: by a word
+/// ("SemiBold", "Black"), a number from 100 to 1000 ("900", "700 Italic") or a Japanese W-number
+/// ("W6"). None for "Regular", "Italic" and names with no weight in them.
+pub fn style_weight(style: &str) -> Option<u16> {
+    let lower = style.to_ascii_lowercase();
+    for word in lower.split(|c: char| c.is_whitespace() || c == '-' || c == '_' || c == ',') {
+        if let Ok(n) = word.parse::<u16>()
+            && (100..=1000).contains(&n)
+        {
+            return Some(n);
+        }
+        if let Some(d) = word.strip_prefix('w').and_then(|d| d.parse::<u16>().ok())
+            && (1..=9).contains(&d)
+        {
+            return Some(d * 100);
+        }
+    }
+    let s = lower.replace([' ', '-', '_'], "");
     let w = if s.contains("thin") || s.contains("hairline") {
         100
     } else if s.contains("extralight") || s.contains("ultralight") {
@@ -514,7 +563,7 @@ fn style_wants(style: &str) -> (u16, bool) {
         300
     } else if s.contains("medium") {
         500
-    } else if s.contains("semibold") || s.contains("demibold") {
+    } else if s.contains("semibold") || s.contains("demibold") || s == "demi" {
         600
     } else if s.contains("extrabold") || s.contains("ultrabold") {
         800
@@ -523,43 +572,182 @@ fn style_wants(style: &str) -> (u16, bool) {
     } else if s.contains("bold") {
         700
     } else {
-        400
+        return None;
     };
-    (w, italic)
+    Some(w)
+}
+
+/// Whether a style name asks for italic (or oblique).
+pub fn style_italic(style: &str) -> bool {
+    let s = style.to_ascii_lowercase();
+    s.contains("italic") || s.contains("oblique")
+}
+
+fn style_wants(style: &str) -> (u16, bool) {
+    (style_weight(style).unwrap_or(400), style_italic(style))
+}
+
+/// A style that asks for nothing past the face it names: the face as it comes.
+fn is_plain_style(style: &str) -> bool {
+    let s = style.trim();
+    s.is_empty() || ["regular", "normal", "book", "roman", "plain", "standard"].iter().any(|p| s.eq_ignore_ascii_case(p))
+}
+
+/// Whether every word of `words` is one a style name is made of, so "NanumSquare Bold" can be read
+/// as the family NanumSquare in Bold, and "Noto Sans KR" is not.
+fn is_style_words(words: &str) -> bool {
+    const WORDS: &[&str] = &[
+        "thin", "hairline", "extralight", "ultralight", "light", "regular", "normal", "book", "roman", "medium", "semibold", "demibold",
+        "demi", "bold", "extrabold", "ultrabold", "black", "heavy", "italic", "oblique", "extra", "ultra", "semi",
+    ];
+    !words.trim().is_empty()
+        && words.split_whitespace().all(|w| {
+            let w = w.to_ascii_lowercase();
+            WORDS.contains(&w.as_str()) || w.parse::<u16>().is_ok_and(|n| (100..=1000).contains(&n)) || style_weight(&w).is_some() && w.len() == 2 && w.starts_with('w')
+        })
 }
 
 /// Resolve a family + style name. Family matching is case-insensitive; a style that the family
 /// lacks picks the nearest weight and synthesises bold (≥ 600 requested, ≤ 500 found) or italic.
+/// A family no font has is also looked for as a face's own name ("Inter Black", whose Italic is
+/// then Inter Black Italic) and as a family followed by a style ("NanumSquare Bold"). Unknown
+/// names come to Inter, flagged `missing`.
 pub fn resolve(family: &str, style: &str) -> Resolved {
-    if let Some(r) = resolve_in(family, style) {
+    if let Some(r) = lookup(family, style) {
         return r;
     }
-    if !system_scanned() && !family.is_empty() && !family.eq_ignore_ascii_case(DEFAULT_FAMILY) {
-        scan_system();
-        if let Some(r) = resolve_in(family, style) {
-            return r;
-        }
-    }
-    let mut r = resolve_in(DEFAULT_FAMILY, style).unwrap_or(Resolved { face: 0, synth_bold: false, synth_italic: false, missing: true });
-    r.missing = !family.is_empty() && !family.eq_ignore_ascii_case(DEFAULT_FAMILY);
+    let mut r = find(DEFAULT_FAMILY, style).map_or(Resolved { face: 0, synth_bold: false, synth_italic: false, missing: true }, |f| f.resolved);
+    r.missing = !family.trim().is_empty() && !family.trim().eq_ignore_ascii_case(DEFAULT_FAMILY);
     r
 }
 
-fn resolve_in(family: &str, style: &str) -> Option<Resolved> {
-    let faces = all_faces();
-    let fam: Vec<&Arc<Face>> = faces.iter().filter(|f| f.info.family.eq_ignore_ascii_case(family)).collect();
-    if fam.is_empty() {
+/// [`resolve`] without the fall back to Inter: None when no font goes by `family`.
+pub fn lookup(family: &str, style: &str) -> Option<Resolved> {
+    let family = family.trim();
+    if family.is_empty() {
         return None;
     }
-    if let Some(f) = fam.iter().find(|f| f.info.style.eq_ignore_ascii_case(style)) {
-        return Some(Resolved { face: f.id, synth_bold: false, synth_italic: false, missing: false });
+    match find(family, style) {
+        // A face of that style, or one of the weight and slant asked for, is there.
+        Some(found) if found.exact || system_scanned() => Some(found.resolved),
+        // Installed fonts may have the face the bundled ones lack (Inter Black).
+        _ if !system_scanned() => {
+            scan_system();
+            find(family, style).map(|found| found.resolved)
+        }
+        _ => None,
+    }
+}
+
+/// The family a font name stands for, and the style when the name is a face's own ("Inter Black"
+/// is Inter's Black) or names one ("NanumSquare Bold"). None when no font goes by it.
+pub fn family_named(name: &str) -> Option<(String, Option<String>)> {
+    lookup(name, "")?;
+    let found = find(name.trim(), "")?;
+    let f = face(found.resolved.face);
+    Some((f.info.family.clone(), found.named.then(|| f.info.style.clone())))
+}
+
+/// What [`find`] found.
+struct Found {
+    resolved: Resolved,
+    /// A face of the style asked for, by name or by weight and slant.
+    exact: bool,
+    /// Found by a face's name or by a family written with a style, not by the family alone.
+    named: bool,
+}
+
+/// `family` among the faces registered so far: as a family, a face's own name, or a family
+/// written with a style.
+fn find(family: &str, style: &str) -> Option<Found> {
+    let faces = all_faces();
+    if let Some(found) = in_family(&faces, family, style) {
+        return Some(found);
+    }
+    if let Some(found) = by_face_name(&faces, family, style) {
+        return Some(found);
+    }
+    let words: Vec<&str> = family.split_whitespace().collect();
+    for k in (1..words.len()).rev() {
+        let (fam, tail) = (words[..k].join(" "), words[k..].join(" "));
+        let has_style = faces.iter().any(|f| f.info.family.eq_ignore_ascii_case(&fam) && f.info.style.eq_ignore_ascii_case(&tail));
+        if !has_style && !is_style_words(&tail) {
+            continue;
+        }
+        let combined = if is_plain_style(style) { tail } else { format!("{tail} {style}") };
+        if let Some(found) = in_family(&faces, &fam, &combined).or_else(|| by_face_name(&faces, &fam, &combined)) {
+            return Some(Found { named: true, ..found });
+        }
+    }
+    None
+}
+
+fn in_family(faces: &[Arc<Face>], family: &str, style: &str) -> Option<Found> {
+    let fam: Vec<&Arc<Face>> = faces.iter().filter(|f| f.info.family.eq_ignore_ascii_case(family)).collect();
+    pick(&fam, style).map(|(resolved, exact)| Found { resolved, exact, named: false })
+}
+
+/// A face whose own name is `name`, with `style` asked of it: as it comes for a plain style, else
+/// the face of its family at the weight `style` names (or its own) and italic if either is.
+fn by_face_name(faces: &[Arc<Face>], name: &str, style: &str) -> Option<Found> {
+    let named = faces.iter().find(|f| f.info.names.iter().any(|n| n.eq_ignore_ascii_case(name)))?;
+    if is_plain_style(style) {
+        let resolved = Resolved { face: named.id, synth_bold: false, synth_italic: false, missing: false };
+        return Some(Found { resolved, exact: true, named: true });
+    }
+    let weight = style_weight(style).unwrap_or(named.info.weight);
+    let italic = style_italic(style) || named.info.italic;
+    let fam: Vec<&Arc<Face>> = faces.iter().filter(|f| f.info.family == named.info.family).collect();
+    let (resolved, exact) = pick(&fam, &format!("{weight}{}", if italic { " Italic" } else { "" }))?;
+    Some(Found { resolved, exact, named: true })
+}
+
+/// The face of `fam` for `style`: the one named so, else the nearest weight of the same slant.
+/// Whether it is exact: named so, or of the weight and slant asked for.
+fn pick(fam: &[&Arc<Face>], style: &str) -> Option<(Resolved, bool)> {
+    if let Some(f) = fam.iter().find(|f| f.info.style.eq_ignore_ascii_case(style.trim())) {
+        return Some((Resolved { face: f.id, synth_bold: false, synth_italic: false, missing: false }, true));
     }
     let (w, it) = style_wants(style);
     let best = fam.iter().min_by_key(|f| {
         let italic_pen = if f.info.italic == it { 0 } else { 1000 };
         italic_pen + (f.info.weight as i32 - w as i32).unsigned_abs()
     })?;
-    Some(Resolved { face: best.id, synth_bold: w >= 600 && best.info.weight <= 500, synth_italic: it && !best.info.italic, missing: false })
+    let exact = best.info.weight == w && best.info.italic == it;
+    // A variable face sets its own `wght` and `ital` axes for what it lacks (`style_axes`).
+    let wants_bold = w >= 600 && best.info.weight <= 500;
+    let wants_italic = it && !best.info.italic;
+    let axes = if wants_bold || wants_italic { best.axes() } else { Vec::new() };
+    let has = |tag: &[u8; 4]| axes.iter().any(|a| &a.tag == tag);
+    let synth_bold = wants_bold && !has(b"wght");
+    let synth_italic = wants_italic && !has(b"ital");
+    Some((Resolved { face: best.id, synth_bold, synth_italic, missing: false }, exact))
+}
+
+/// The axes text in `style` is shaped and drawn at in the face `r` resolved it to: `axes`, and
+/// where the face is variable, its `wght` at the weight `style` names and its `ital` at 1 for an
+/// italic it is not, unless `axes` sets them.
+pub fn style_axes(r: &Resolved, style: &str, axes: &[Axis]) -> Vec<Axis> {
+    let mut out = axes.to_vec();
+    let (weight, italic) = (style_weight(style), style_italic(style));
+    if weight.is_none() && !italic {
+        return out;
+    }
+    let f = face(r.face);
+    let ranges = f.axes();
+    let range = |tag: &[u8; 4]| ranges.iter().find(|a| &a.tag == tag).filter(|_| !axes.iter().any(|(t, _)| t == tag));
+    if let Some(w) = weight.filter(|w| *w != f.info.weight)
+        && let Some(a) = range(b"wght")
+    {
+        out.push((*b"wght", f32::from(w).clamp(a.min, a.max)));
+    }
+    if italic
+        && !f.info.italic
+        && let Some(a) = range(b"ital")
+    {
+        out.push((*b"ital", a.max.min(1.0)));
+    }
+    out
 }
 
 /// Whether a family name reads as a serif face (Noto Serif, Shippori Mincho, …), to pick a Mincho
@@ -569,35 +757,316 @@ fn is_serif(family: &str) -> bool {
     (f.contains("serif") && !f.contains("sans")) || f.contains("mincho")
 }
 
-/// A face that covers `c`, preferring `prefer`; bundled, craft-fonts and already-registered faces
-/// are searched, in that order.
+/// A face that covers `c`, preferring `prefer`: [`face_for_cluster`] for one character.
 pub fn fallback_for(c: char, prefer: FaceId) -> FaceId {
     let p = face(prefer);
-    if p.has_char(c) || c.is_control() {
+    face_for_cluster(&[c], prefer, (p.info.weight, p.info.italic))
+}
+
+/// Characters that only join or vary the cluster they are in, and that no face needs to have for
+/// the cluster to draw: joiners, variation selectors and tags.
+fn is_joiner(c: char) -> bool {
+    matches!(c as u32, 0x200C | 0x200D | 0xFE00..=0xFE0F | 0xE0020..=0xE007F | 0xE0100..=0xE01EF) || c.is_control()
+}
+
+/// Whether a character is drawn as an emoji by itself (Unicode's `Emoji_Presentation`, in the
+/// blocks where it is most of what they hold).
+fn emoji_presentation(c: char) -> bool {
+    matches!(
+        c as u32,
+        0x231A..=0x231B
+            | 0x23E9..=0x23EC
+            | 0x23F0
+            | 0x23F3
+            | 0x25FD..=0x25FE
+            | 0x2614..=0x2615
+            | 0x2648..=0x2653
+            | 0x267F
+            | 0x2693
+            | 0x26A1
+            | 0x26AA..=0x26AB
+            | 0x26BD..=0x26BE
+            | 0x26C4..=0x26C5
+            | 0x26CE
+            | 0x26D4
+            | 0x26EA
+            | 0x26F2..=0x26F3
+            | 0x26F5
+            | 0x26FA
+            | 0x26FD
+            | 0x2705
+            | 0x270A..=0x270B
+            | 0x2728
+            | 0x274C
+            | 0x274E
+            | 0x2753..=0x2755
+            | 0x2757
+            | 0x2795..=0x2797
+            | 0x27B0
+            | 0x27BF
+            | 0x2B1B..=0x2B1C
+            | 0x2B50
+            | 0x2B55
+            | 0x1F004
+            | 0x1F0CF
+            | 0x1F18E
+            | 0x1F191..=0x1F19A
+            | 0x1F1E6..=0x1F1FF
+            | 0x1F201
+            | 0x1F21A
+            | 0x1F22F
+            | 0x1F232..=0x1F236
+            | 0x1F238..=0x1F23A
+            | 0x1F250..=0x1F251
+            | 0x1F300..=0x1F64F
+            | 0x1F680..=0x1F6FF
+            | 0x1F7E0..=0x1F7EB
+            | 0x1F7F0
+            | 0x1F90C..=0x1F9FF
+            | 0x1FA70..=0x1FAFF
+    )
+}
+
+/// Whether a cluster is drawn as an emoji: an emoji character, or one followed by U+FE0F, unless
+/// U+FE0E asks for it as text.
+pub fn wants_emoji(cluster: &[char]) -> bool {
+    if cluster.contains(&'\u{FE0E}') {
+        return false;
+    }
+    cluster.contains(&'\u{FE0F}') || cluster.first().is_some_and(|c| emoji_presentation(*c)) || cluster.iter().any(|c| matches!(*c as u32, 0x1F3FB..=0x1F3FF))
+}
+
+/// Emoji families, best first.
+const EMOJI_FAMILIES: &[&str] =
+    &["Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", "Twemoji Mozilla", "Twitter Color Emoji", "JoyPixels", "EmojiOne Color", "Noto Emoji", "Segoe UI Symbol", "Symbola"];
+
+/// Installed families to draw what a sans face lacks, best first: Korean, Japanese and Chinese
+/// Gothics, then faces with many scripts and symbols.
+const FALLBACK_SANS: &[&str] = &[
+    "Apple SD Gothic Neo",
+    "Malgun Gothic",
+    "Noto Sans KR",
+    "Noto Sans CJK KR",
+    "Source Han Sans K",
+    "Source Han Sans KR",
+    "Pretendard",
+    "NanumGothic",
+    "Nanum Gothic",
+    "NanumBarunGothic",
+    "Hiragino Sans",
+    "Hiragino Kaku Gothic ProN",
+    "Yu Gothic",
+    "Meiryo",
+    "Noto Sans JP",
+    "Noto Sans CJK JP",
+    "Source Han Sans",
+    "IPAexGothic",
+    "IPAGothic",
+    "TakaoGothic",
+    "PingFang SC",
+    "PingFang TC",
+    "Microsoft YaHei",
+    "Microsoft JhengHei",
+    "Noto Sans SC",
+    "Noto Sans TC",
+    "Noto Sans CJK SC",
+    "Noto Sans CJK TC",
+    "Source Han Sans SC",
+    "WenQuanYi Zen Hei",
+    "WenQuanYi Micro Hei",
+    "Heiti SC",
+    "Noto Sans",
+    "Segoe UI",
+    "Helvetica Neue",
+    "Arial",
+    "Arial Unicode MS",
+    "DejaVu Sans",
+    "FreeSans",
+    "Liberation Sans",
+    "Segoe UI Symbol",
+    "Apple Symbols",
+    "Noto Sans Symbols",
+    "Noto Sans Symbols 2",
+    "Symbola",
+];
+
+/// Installed families to draw what a serif face lacks, best first: Myeongjo and Mincho faces, then
+/// serif faces with many scripts. Sans faces come after them.
+const FALLBACK_SERIF: &[&str] = &[
+    "AppleMyungjo",
+    "Batang",
+    "Noto Serif KR",
+    "Noto Serif CJK KR",
+    "Source Han Serif K",
+    "NanumMyeongjo",
+    "Hiragino Mincho ProN",
+    "Yu Mincho",
+    "Noto Serif JP",
+    "Noto Serif CJK JP",
+    "Source Han Serif",
+    "IPAexMincho",
+    "IPAMincho",
+    "Songti SC",
+    "SimSun",
+    "Noto Serif SC",
+    "Noto Serif CJK SC",
+    "Noto Serif",
+    "Times New Roman",
+    "DejaVu Serif",
+    "FreeSerif",
+    "Liberation Serif",
+];
+
+/// Faces that map every character to a placeholder, or to nothing visible: never a fallback.
+fn is_placeholder(family: &str) -> bool {
+    let f = family.trim_start_matches('.').to_ascii_lowercase();
+    f.starts_with("lastresort") || f.starts_with("last resort") || f.starts_with("adobe blank")
+}
+
+/// Where a family comes among installed fallbacks for serif or sans text: listed ones in their
+/// order, then the rest, then colour faces and bitmap-looking catch-alls (Unifont).
+fn fallback_rank(family: &str, color: bool, serif: bool) -> usize {
+    let listed = |list: &[&str]| list.iter().position(|f| f.eq_ignore_ascii_case(family));
+    let (first, second) = if serif { (FALLBACK_SERIF, FALLBACK_SANS) } else { (FALLBACK_SANS, FALLBACK_SERIF) };
+    if let Some(i) = listed(first) {
+        return i;
+    }
+    if let Some(i) = listed(second) {
+        return 100 + i;
+    }
+    if color {
+        return 400;
+    }
+    if family.to_ascii_lowercase().starts_with("unifont") {
+        return 300;
+    }
+    200
+}
+
+/// The installed and other registered faces (not bundled, not craft-fonts) by family, in the
+/// order they are looked through for what a serif or sans face lacks.
+fn fallback_families(serif: bool) -> Arc<Vec<Vec<FaceId>>> {
+    type Order = (usize, Option<Arc<Vec<Vec<FaceId>>>>);
+    static ORDER: Mutex<[Order; 2]> = Mutex::new([(0, None), (0, None)]);
+    let faces = all_faces();
+    let mut held = ORDER.lock().unwrap_or_else(|e| e.into_inner());
+    let slot = &mut held[usize::from(serif)];
+    if slot.0 == faces.len()
+        && let Some(order) = &slot.1
+    {
+        return order.clone();
+    }
+    let mut families: std::collections::BTreeMap<(usize, String), Vec<FaceId>> = Default::default();
+    for f in faces.iter().filter(|f| f.info.origin != "bundled" && f.info.origin != CRAFT_ORIGIN && !is_placeholder(&f.info.family)) {
+        let key = (fallback_rank(&f.info.family, f.info.color, serif), f.info.family.to_ascii_lowercase());
+        families.entry(key).or_default().push(f.id);
+    }
+    let order = Arc::new(families.into_values().collect::<Vec<_>>());
+    *slot = (faces.len(), Some(order.clone()));
+    order
+}
+
+/// Colour emoji faces, best first.
+fn emoji_faces() -> Vec<FaceId> {
+    let mut faces: Vec<Arc<Face>> = all_faces().into_iter().filter(|f| f.info.color && !is_placeholder(&f.info.family)).collect();
+    faces.sort_by_key(|f| (EMOJI_FAMILIES.iter().position(|e| e.eq_ignore_ascii_case(&f.info.family)).unwrap_or(usize::MAX), f.id));
+    faces.into_iter().map(|f| f.id).collect()
+}
+
+/// Recently chosen fallbacks, by cluster and preferred face, for as long as no face is added.
+fn fallback_cache() -> &'static Mutex<(usize, HashMap<(String, FaceId, u16, bool), FaceId>)> {
+    static C: OnceLock<Mutex<(usize, HashMap<(String, FaceId, u16, bool), FaceId>)>> = OnceLock::new();
+    C.get_or_init(Default::default)
+}
+
+/// The face a grapheme cluster is drawn in when its text is set in `prefer`, at `want` (the
+/// weight and slant the text asks for). `prefer` itself when it has every character of the cluster
+/// (joiners and variation selectors aside), except that an emoji goes to a colour emoji face first.
+/// Otherwise the first face with all of them: the bundled faces, the craft-fonts (Mincho for serif
+/// text, Gothic otherwise, nearest weight), then installed faces, family by family (`FALLBACK_SANS`
+/// or `FALLBACK_SERIF` first), each family's face nearest `want`. The system font folders are
+/// scanned the first time an installed face is needed. When no face has all of the cluster, the
+/// first that has its first character; when none has that, `prefer`.
+pub fn face_for_cluster(cluster: &[char], prefer: FaceId, want: (u16, bool)) -> FaceId {
+    let need: Vec<char> = cluster.iter().copied().filter(|c| !is_joiner(*c)).collect();
+    let Some(&first) = need.first() else { return prefer };
+    let emoji = wants_emoji(cluster);
+    let p = face(prefer);
+    let all = |f: &Face| need.iter().all(|c| f.covers(*c));
+    if !emoji && all(&p) {
         return prefer;
     }
+    let key = (cluster.iter().collect::<String>(), prefer, want.0, want.1);
+    let generation = db().read().unwrap_or_else(|e| e.into_inner()).faces.len();
+    {
+        let cache = fallback_cache().lock().unwrap_or_else(|e| e.into_inner());
+        if cache.0 == generation
+            && let Some(id) = cache.1.get(&key)
+        {
+            return *id;
+        }
+    }
+    let found = search(&need, first, emoji, &p, want);
+    let generation = db().read().unwrap_or_else(|e| e.into_inner()).faces.len();
+    let mut cache = fallback_cache().lock().unwrap_or_else(|e| e.into_inner());
+    if cache.0 != generation || cache.1.len() > 4096 {
+        *cache = (generation, HashMap::new());
+    }
+    cache.1.insert(key, found);
+    found
+}
+
+fn search(need: &[char], first: char, emoji: bool, p: &Face, (weight, italic): (u16, bool)) -> FaceId {
+    let mut by_first: Option<FaceId> = p.covers(first).then_some(p.id);
+    let mut consider = |f: &Face| -> bool {
+        if need.iter().all(|c| f.covers(*c)) {
+            return true;
+        }
+        if by_first.is_none() && f.covers(first) {
+            by_first = Some(f.id);
+        }
+        false
+    };
+    if emoji {
+        if !system_scanned() {
+            scan_system();
+        }
+        for id in emoji_faces() {
+            if consider(&face(id)) {
+                return id;
+            }
+        }
+        if consider(p) {
+            return p.id;
+        }
+    }
     let faces = all_faces();
-    // prefer a face of the same italic-ness that is bundled (cheap), then anything loaded already
     for f in faces.iter().filter(|f| f.info.origin == "bundled") {
-        if f.has_char(c) {
+        if consider(f) {
             return f.id;
         }
     }
-    // then the craft-fonts faces (Japanese): Mincho for serif text, Gothic otherwise, nearest weight
     let serif = is_serif(&p.info.family);
     let mut craft: Vec<&Arc<Face>> = faces.iter().filter(|f| f.info.origin == CRAFT_ORIGIN).collect();
-    craft.sort_by_key(|f| (is_serif(&f.info.family) != serif, f.info.italic != p.info.italic, f.info.weight.abs_diff(p.info.weight)));
+    craft.sort_by_key(|f| (is_serif(&f.info.family) != serif, f.info.italic != italic, f.info.weight.abs_diff(weight)));
     for f in craft {
-        if f.has_char(c) {
+        if consider(f) {
             return f.id;
         }
     }
-    for f in faces.iter().filter(|f| f.info.origin != "bundled" && f.bytes.get().is_some()) {
-        if f.has_char(c) {
-            return f.id;
+    if !system_scanned() {
+        scan_system();
+    }
+    for family in fallback_families(serif).iter() {
+        let mut members: Vec<Arc<Face>> = family.iter().map(|id| face(*id)).collect();
+        members.sort_by_key(|f| (f.info.italic != italic, f.info.weight.abs_diff(weight), f.id));
+        for f in &members {
+            if consider(f) {
+                return f.id;
+            }
         }
     }
-    prefer
+    by_first.unwrap_or(p.id)
 }
 
 #[cfg(test)]
@@ -616,13 +1085,129 @@ mod tests {
         let b = resolve("inter", "bold");
         assert_eq!(face(b.face).info.style, "Bold");
         assert!(!b.synth_bold);
-        // Noto Serif has only Regular: Bold Italic is synthesised
-        let s = resolve("Noto Serif", "Bold Italic");
+        // Among the bundled faces alone: Noto Serif has only Regular, so Bold Italic is
+        // synthesised; Inter's nearest to Bold Italic is Italic (400), emboldened.
+        let bundled: Vec<Arc<Face>> = all_faces().into_iter().filter(|f| f.info.origin == "bundled").collect();
+        let of = |family: &str| bundled.iter().filter(|f| f.info.family == family).collect::<Vec<_>>();
+        let (s, exact) = pick(&of("Noto Serif"), "Bold Italic").unwrap();
         assert_eq!(face(s.face).info.family, "Noto Serif");
-        assert!(s.synth_bold && s.synth_italic);
-        // Inter Bold Italic: nearest is Italic (400) → synth bold
+        assert!(s.synth_bold && s.synth_italic && !exact);
+        let (bi, exact) = pick(&of("Inter"), "Bold Italic").unwrap();
+        assert!(face(bi.face).info.italic && bi.synth_bold && !bi.synth_italic && !exact);
+        // Resolved for real, a face installed here may have it; either way it is bold and italic.
         let bi = resolve("Inter", "Bold Italic");
-        assert!(face(bi.face).info.italic && bi.synth_bold && !bi.synth_italic);
+        let f = face(bi.face);
+        assert!(f.info.family == "Inter" && f.info.italic && (f.info.weight >= 600 || bi.synth_bold), "{} {}", f.info.family, f.info.style);
+    }
+
+    #[test]
+    fn styles_name_weights_by_word_and_number() {
+        assert_eq!(style_weight("Black Italic"), Some(900));
+        assert_eq!(style_weight("ExtraBold"), Some(800));
+        assert_eq!(style_weight("Semi Bold"), Some(600));
+        assert_eq!(style_weight("900"), Some(900));
+        assert_eq!(style_weight("300 Italic"), Some(300));
+        assert_eq!(style_weight("W6"), Some(600));
+        assert_eq!(style_weight("45 Light"), Some(300));
+        assert_eq!(style_weight("Regular"), None);
+        assert_eq!(style_weight("Italic"), None);
+        assert!(style_italic("Bold Oblique") && !style_italic("Bold"));
+        // A number picks the face of that weight.
+        let semi = resolve("Inter", "600");
+        assert_eq!(face(semi.face).info.style, "SemiBold");
+        assert!(!semi.synth_bold);
+    }
+
+    #[test]
+    fn a_face_is_found_by_its_own_name_or_its_family_and_style() {
+        // The full name and the PostScript name of a bundled face.
+        let bold = resolve("Inter Bold", "");
+        assert_eq!((face(bold.face).info.family.as_str(), face(bold.face).info.style.as_str(), bold.missing), ("Inter", "Bold", false));
+        let medium = resolve("Inter-Medium", "Regular");
+        assert_eq!(face(medium.face).info.style, "Medium");
+        assert_eq!(family_named("Inter SemiBold"), Some(("Inter".to_owned(), Some("SemiBold".to_owned()))));
+        // A style asked of a named face keeps its weight and adds the slant.
+        let medium_italic = resolve("Inter Medium", "Italic");
+        let f = face(medium_italic.face);
+        assert!(f.info.family == "Inter" && f.info.italic, "{}", f.info.style);
+        // A family written with its style: Noto Serif has no bold, so it is synthesised.
+        let serif = resolve("Noto Serif Bold", "");
+        assert!(!serif.missing && face(serif.face).info.family == "Noto Serif");
+        assert!(serif.synth_bold || face(serif.face).info.weight >= 600);
+        // Inter Black: the face where one is installed; where not, the heaviest bundled face, Bold,
+        // which is not emboldened further (only a face of 500 or less is).
+        let bundled: Vec<Arc<Face>> = all_faces().into_iter().filter(|f| f.info.origin == "bundled" && f.info.family == "Inter").collect();
+        let (heaviest, exact) = pick(&bundled.iter().collect::<Vec<_>>(), "Black").unwrap();
+        assert_eq!((face(heaviest.face).info.style.as_str(), heaviest.synth_bold, exact), ("Bold", false, false));
+        let black = resolve("Inter Black", "Regular");
+        let f = face(black.face);
+        assert!(!black.missing && f.info.family == "Inter" && f.info.weight >= 700, "{} {}", f.info.family, f.info.style);
+        assert_eq!(family_named("Inter Black").map(|(family, _)| family).as_deref(), Some("Inter"));
+        // Words that are no style do not split a family off.
+        assert!(resolve("Inter Bogus", "").missing);
+        assert_eq!(family_named("Inter"), Some(("Inter".to_owned(), None)));
+        assert_eq!(family_named("No Such Font Family 123"), None);
+    }
+
+    #[test]
+    fn coverage_is_read_without_loading_the_face() {
+        struct Unloaded;
+        impl FontSource for Unloaded {
+            fn faces(&self) -> Vec<FaceInfo> {
+                let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/KerfTestColr.ttf");
+                let mut file = std::fs::File::open(&path).unwrap();
+                let names = read_faces(&mut file).remove(0);
+                vec![FaceInfo { family: "Kerf Test Unloaded".into(), ..info_from(names, FaceData::File(path), "test") }]
+            }
+        }
+        // A face of its own, which no other test can load meanwhile.
+        let info = Unloaded.faces().remove(0);
+        let alone = Face { id: usize::MAX, info, bytes: OnceLock::new(), shaper: OnceLock::new(), charset: OnceLock::new() };
+        assert!(alone.info.color);
+        assert!(alone.covers('\u{10FFFC}') && alone.covers(' ') && !alone.covers('A'));
+        assert!(alone.bytes.get().is_none(), "covers() loaded the font");
+        // Fallback finds it among the registered faces.
+        add_source(&Unloaded);
+        let f = faces_of("Kerf Test Unloaded").remove(0);
+        let inter = resolve("Inter", "Regular").face;
+        assert_eq!(fallback_for('\u{10FFFC}', inter), f.id);
+    }
+
+    #[test]
+    fn clusters_keep_their_face_and_emoji_want_colour() {
+        assert!(wants_emoji(&['\u{1F480}']));
+        assert!(wants_emoji(&['\u{2764}', '\u{FE0F}']));
+        assert!(!wants_emoji(&['\u{2764}']));
+        assert!(!wants_emoji(&['\u{1F480}', '\u{FE0E}']));
+        assert!(wants_emoji(&['\u{1F44D}', '\u{1F3FD}']));
+        let inter = resolve("Inter", "Regular").face;
+        // A letter and its accent, both in Inter, stay in it; a variation selector needs no glyph.
+        assert_eq!(face_for_cluster(&['e', '\u{301}'], inter, (400, false)), inter);
+        assert_eq!(face_for_cluster(&['A', '\u{FE0F}'], inter, (400, false)), inter);
+    }
+
+    /// Hangul in an Inter title is drawn by an installed Korean face, where one is installed.
+    #[test]
+    fn hangul_falls_back_to_an_installed_face() {
+        scan_system();
+        if !all_faces().iter().any(|f| f.info.origin == "system" && f.covers('안')) {
+            eprintln!("SKIPPED: no installed face has Hangul");
+            return;
+        }
+        let text = "안녕하세요 Hello";
+        let l = crate::layout(text, &crate::TextStyle { size: 40.0, style: "Bold".into(), ..Default::default() }, &Default::default());
+        assert!(l.glyphs.iter().all(|g| g.id != 0), "{:?}", l.glyphs);
+        let inter = resolve("Inter", "Bold").face;
+        for g in &l.glyphs {
+            let c = text[g.cluster..].chars().next().unwrap();
+            if c.is_ascii() {
+                assert_eq!(g.face, inter);
+            } else {
+                assert!(face(g.face).covers(c) && g.face != inter);
+                // Bold text: a fallback face lighter than bold is emboldened.
+                assert!(face(g.face).info.weight >= 600 || g.synth_bold);
+            }
+        }
     }
 
     #[test]

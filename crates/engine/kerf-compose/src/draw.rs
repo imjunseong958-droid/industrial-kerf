@@ -489,6 +489,8 @@ enum Source {
 struct TitlePlan {
     text: String,
     font: String,
+    /// The face of `font`, from `style` and `weight` ([`kerf_model::title_face`]).
+    style: String,
     /// In frame heights.
     size: f64,
     color: Rgba,
@@ -929,21 +931,16 @@ impl Drawing {
                     Source::Mesh => Some(None),
                     Source::Solid(_) => Some(Some((crop, true))),
                     Source::Media { .. } if !plan.alpha => Some(Some((crop, true))),
+                    // Its picture reaches past its frame as far as its outline goes, which its
+                    // crop alone cuts ([`Drawing::reach`]).
                     Source::Drawn(source) => {
-                        let run = SourceRun {
-                            at: time,
-                            size: (plan.size.0 as usize, plan.size.1 as usize),
-                        };
-                        source.extent(&plan.clip, &run).and_then(|extent| {
-                            let (left, top) = (extent.rect.x.max(crop.x), extent.rect.y.max(crop.y));
-                            let (right, bottom) = (
-                                extent.rect.right().min(crop.right()),
-                                extent.rect.bottom().min(crop.bottom()),
-                            );
-                            (left < right && top < bottom).then(|| {
-                                let within = Rect::new(left, top, right - left, bottom - top);
-                                Some((within, extent.filled))
-                            })
+                        let size = (plan.size.0 as usize, plan.size.1 as usize);
+                        let frame = Rect::new(0.0, 0.0, whole.0, whole.1);
+                        source.extent(&plan.clip, &SourceRun::new(time, size)).and_then(|extent| {
+                            let drawn = extent.rect;
+                            let within = crop_past(plan, time, frame, drawn).unwrap_or(drawn);
+                            let some = within.w > 0.0 && within.h > 0.0;
+                            some.then_some(Some((within, extent.filled)))
                         })
                     }
                     _ => None,
@@ -1277,7 +1274,7 @@ impl Drawing {
                         )
                 })
                 .filter_map(|shown| {
-                    let ready = self.ready(plan, shown, at, scale, size)?;
+                    let ready = self.ready(plan, shown, at, scale, size, Some(&scene))?;
                     let time = at - shown.plan.clip.start;
                     let caster = three_d::Caster::new(
                         &scene,
@@ -1319,7 +1316,7 @@ impl Drawing {
                 .iter()
                 .find(|track| track.id.as_str() == wanted)
                 .and_then(|track| track.shown.iter().find(|shown| shown.shows(at)))
-                .and_then(|shown| self.ready(plan, shown, at, scale, size));
+                .and_then(|shown| self.ready(plan, shown, at, scale, size, None));
             if let Some(ready) = picture {
                 scene.light_from(&wanted, &ready.picture);
             }
@@ -1354,14 +1351,18 @@ impl Drawing {
                 let place =
                     Affine::scale(scale, scale).then_apply(&self.geometry(plan, clip, time));
                 let (w, h) = (f64::from(clip.size.0), f64::from(clip.size.1));
-                let crop = crop_rect(
-                    clip,
-                    time,
-                    (w, h),
-                    1.0,
-                    (clip.size.0 as usize, clip.size.1 as usize),
-                )
-                .unwrap_or_else(|| Rect::new(0.0, 0.0, w, h));
+                let frame = Rect::new(0.0, 0.0, w, h);
+                // As far as its picture reaches, for a generator that reaches past its frame.
+                let crop = match self.reach(plan, clip, time, scale, Some(scene)) {
+                    Some(Reach { beyond: (x, y), .. }) => {
+                        let whole = Rect::new(-x, -y, w + 2.0 * x, h + 2.0 * y);
+                        crop_past(clip, time, frame, whole).unwrap_or(whole)
+                    }
+                    None => {
+                        let size = (clip.size.0 as usize, clip.size.1 as usize);
+                        crop_rect(clip, time, (w, h), 1.0, size).unwrap_or(frame)
+                    }
+                };
                 (three_d::Plane::of(scene, clip, (w, h), &place, time), crop)
             })
             .collect();
@@ -1431,7 +1432,7 @@ impl Drawing {
         if matches!(shown.plan.source, Source::Mesh) {
             return self.mesh(sequence, shown, moment, size);
         }
-        let ready = self.ready(sequence, shown, at, scale, size)?;
+        let ready = self.ready(sequence, shown, at, scale, size, Some(scene))?;
         let (picture, depth) = three_d::project_with_depth(
             scene,
             &shown.plan,
@@ -1591,7 +1592,7 @@ impl Drawing {
             to_output,
             crop,
             opacity,
-        }) = self.ready(sequence, shown, at, scale, (w, h))
+        }) = self.ready(sequence, shown, at, scale, (w, h), scene)
         else {
             return;
         };
@@ -1670,6 +1671,7 @@ impl Drawing {
                 to_output: Affine::IDENTITY,
                 per_source: scale,
                 env: false,
+                reach: None,
             };
             self.effects(&mut picture, plan, time, &placed, plan.effects.len());
         }
@@ -1681,8 +1683,71 @@ impl Drawing {
         })
     }
 
+    /// How far past its frame a generator in depth is drawn at clip time `time` and `scale`, so that
+    /// all of it that the camera of `scene` may see is drawn: as far as its own outline goes, cut where
+    /// its crop cuts, and no further than the camera sees. All of its outline where its effects run on
+    /// its picture, which is not to change as the camera moves, and where a light casts shadows, which
+    /// what is out of sight may cast too.
+    ///
+    /// None for a clip out of depth, for a solid, which is its frame, for a generator that cannot say
+    /// where it draws, as particles cannot, and for one that stays within its frame. Its picture is
+    /// drawn coarser where it reaches so far that it would be too large.
+    fn reach(
+        &self,
+        sequence: &SequencePlan,
+        plan: &ClipPlan,
+        time: Time,
+        scale: f64,
+        scene: Option<&three_d::Scene>,
+    ) -> Option<Reach> {
+        let scene = scene.filter(|_| plan.three_d && !plan.letterboxed)?;
+        let size = (plan.size.0 as usize, plan.size.1 as usize);
+        let own = match &plan.source {
+            Source::Title(title) => title_extent(title, size, time)?,
+            Source::Drawn(source) => source.extent(&plan.clip, &SourceRun::new(time, size))?.rect,
+            _ => return None,
+        };
+        let (w, h) = (f64::from(plan.size.0), f64::from(plan.size.1));
+        let frame = Rect::new(0.0, 0.0, w, h);
+        let kept = crop_past(plan, time, frame, own).unwrap_or(own);
+        if kept.w <= 0.0 || kept.h <= 0.0 {
+            return None;
+        }
+        let (cw, ch) = output_size(sequence.width, sequence.height, scale);
+        let kept = if plan.effects.is_empty() && !scene.casts_shadows() {
+            let place =
+                Affine::scale(scale, scale).then_apply(&self.geometry(sequence, plan, time));
+            let plane = three_d::Plane::of(scene, plan, (w, h), &place, time);
+            let deep = three_d::depth_of(plan, time, ch as f64);
+            three_d::seen_of(scene, &plane, deep, kept, SEEN_PAST)?
+        } else {
+            kept
+        };
+        // And a pixel more, for its edge to be read whole.
+        let past = |low: f64, high: f64, side: f64| {
+            let past = (-low).max(high - side);
+            if past > 1e-6 {
+                past + 1.0
+            } else {
+                0.0
+            }
+        };
+        let beyond = (past(kept.x, kept.right(), w), past(kept.y, kept.bottom(), h));
+        if beyond == (0.0, 0.0) {
+            return None;
+        }
+        let (pw, ph) = ((w + 2.0 * beyond.0) * scale, (h + 2.0 * beyond.1) * scale);
+        let most = (cw as f64 * ch as f64 * MOST_CANVASES_BEYOND).min(MOST_PIXELS_BEYOND);
+        let per = (most / (pw * ph))
+            .sqrt()
+            .min(LONGEST_BEYOND / pw.max(ph))
+            .min(1.0);
+        Some(Reach { beyond, per })
+    }
+
     /// A shown clip's picture at sequence time `at` with its effects and reveal done, and how it goes
-    /// down, for a canvas of `(w, h)`.
+    /// down, for a canvas of `(w, h)`. A generator in depth is drawn as far past its frame as `scene`
+    /// may see of it ([`Self::reach`]).
     fn ready(
         &self,
         sequence: &SequencePlan,
@@ -1690,16 +1755,19 @@ impl Drawing {
         at: Time,
         scale: f64,
         (w, h): (usize, usize),
+        scene: Option<&three_d::Scene>,
     ) -> Option<Ready> {
         let plan = &shown.plan;
         let clip = &plan.clip;
         let time = at - clip.start;
+        let reach = self.reach(sequence, plan, time, scale, scene);
         let Input {
             mut picture,
             to_output,
             crop,
             per_source,
-        } = self.input(sequence, plan, time, scale, (w, h))?;
+            frame,
+        } = self.input(sequence, plan, time, scale, (w, h), reach)?;
         if !plan.effects.is_empty() {
             let placed = Placed {
                 sequence,
@@ -1708,6 +1776,7 @@ impl Drawing {
                 to_output,
                 per_source,
                 env: true,
+                reach,
             };
             self.effects(
                 Arc::make_mut(&mut picture),
@@ -1721,7 +1790,12 @@ impl Drawing {
             .reveal
             .map(|(reveal, start, end)| (reveal, progress(at, start, end)));
         if let Some((Reveal::Wipe { angle, softness }, progress)) = reveal {
-            let covered = wipe::coverage(picture.w, picture.h, angle, softness, progress);
+            // Across its frame, wherever that is in its picture.
+            let (pw, ph) = (picture.w, picture.h);
+            let covered = match frame {
+                Some(frame) => wipe::coverage_within(pw, ph, frame, angle, softness, progress),
+                None => wipe::coverage(pw, ph, angle, softness, progress),
+            };
             Arc::make_mut(&mut picture).mul_coverage(&covered);
         }
         let fade = match reveal {
@@ -1743,7 +1817,8 @@ impl Drawing {
 
     /// A clip's picture at clip time `time` as its effects get it, on a
     /// `canvas` of output pixels: masked and cropped, or, letterboxed, on
-    /// black the size of the canvas.
+    /// black the size of the canvas. A generator is drawn as far past its
+    /// frame as `reach` says.
     fn input(
         &self,
         sequence: &SequencePlan,
@@ -1751,12 +1826,23 @@ impl Drawing {
         time: Time,
         scale: f64,
         (w, h): (usize, usize),
+        reach: Option<Reach>,
     ) -> Option<Input> {
         // Shared with the frame cache until something changes it.
-        let (mut picture, per_source) = self.picture(sequence, plan, time, scale)?;
+        let (mut picture, per_source) = self.picture(sequence, plan, time, scale, reach)?;
         let size = (f64::from(plan.size.0), f64::from(plan.size.1));
         let place = Affine::scale(scale, scale).then_apply(&self.geometry(sequence, plan, time));
-        let mut crop = crop_rect(plan, time, size, per_source, (picture.w, picture.h));
+        let frame = reach.map(|reach| {
+            let canvas = output_size(sequence.width, sequence.height, scale);
+            frame_in(&reach.run(time, canvas, scale))
+        });
+        let mut crop = match frame {
+            Some(frame) => {
+                let whole = Rect::new(0.0, 0.0, picture.w as f64, picture.h as f64);
+                crop_past(plan, time, frame, whole)
+            }
+            None => crop_rect(plan, time, size, per_source, (picture.w, picture.h)),
+        };
         Some(if plan.letterboxed {
             // The fitted picture on black, the size of the canvas.
             let mut boxed = Image::filled(w, h, [0.0, 0.0, 0.0, 1.0]);
@@ -1774,31 +1860,42 @@ impl Drawing {
                 to_output: Affine::IDENTITY,
                 crop,
                 per_source: place.determinant().abs().sqrt(),
+                frame: None,
             }
         } else {
-            let masks = mask::prepare(&plan.clip.masks, size, per_source, time);
+            let (x, y) = frame.map_or((0.0, 0.0), |frame| (frame.x, frame.y));
+            let masks = past_frame(mask::prepare(&plan.clip.masks, size, per_source, time), (x, y));
             if let Some(covered) = mask::coverage(&masks, picture.w, picture.h) {
                 Arc::make_mut(&mut picture).mul_coverage(&covered);
             }
             Input {
                 picture,
-                to_output: place.then_apply(&Affine::scale(1.0 / per_source, 1.0 / per_source)),
+                to_output: place
+                    .then_apply(&Affine::scale(1.0 / per_source, 1.0 / per_source))
+                    .then_apply(&Affine::translate(-x, -y)),
                 crop,
                 per_source,
+                frame,
             }
         })
     }
 
     /// A clip's picture at clip time `time` before its masks and effects,
-    /// with how many of its pixels a source pixel is.
+    /// with how many of its pixels a source pixel is. A generator is drawn
+    /// as far past its frame as `reach` says, at its share of the canvas.
     fn picture(
         &self,
         sequence: &SequencePlan,
         plan: &ClipPlan,
         time: Time,
         scale: f64,
+        reach: Option<Reach>,
     ) -> Option<(Arc<Image>, f64)> {
         let (cw, ch) = output_size(sequence.width, sequence.height, scale);
+        let (run, per) = match reach {
+            Some(reach) => (reach.run(time, (cw, ch), scale), scale * reach.per),
+            None => (SourceRun::new(time, (cw, ch)), scale),
+        };
         Some(match &plan.source {
             Source::Media { picture } => {
                 let factor = plan.shown * scale;
@@ -1827,14 +1924,8 @@ impl Drawing {
                 Arc::new(Image::filled(cw, ch, premultiplied(*color))),
                 scale,
             ),
-            Source::Title(title) => (Arc::new(title_on(title, (cw, ch), time)), scale),
-            Source::Drawn(source) => {
-                let run = SourceRun {
-                    at: time,
-                    size: (cw, ch),
-                };
-                (Arc::new(source.draw(&plan.clip, &run)), scale)
-            }
+            Source::Title(title) => (Arc::new(title_on(title, &run)), per),
+            Source::Drawn(source) => (Arc::new(source.draw(&plan.clip, &run)), per),
             Source::Adjustment | Source::Nothing | Source::Mesh => return None,
         })
     }
@@ -1965,6 +2056,7 @@ impl Drawing {
             to_output: Affine::IDENTITY,
             per_source: scale,
             env: false,
+            reach: None,
         };
         self.effects(&mut adjusted, plan, time, &placed, plan.effects.len());
         let size = (f64::from(plan.size.0), f64::from(plan.size.1));
@@ -2066,15 +2158,17 @@ fn effect_text_is_empty(effect: &Effect, name: &str) -> bool {
     }
 }
 
-/// All that goes into what [`title_on`] draws at `time`, to keep that picture by. Most titles have no
+/// All that goes into what [`title_on`] draws on `run`, to keep that picture by. Most titles have no
 /// keys and come to the same each frame, as a reveal does once it is over; one whose numbers move has
 /// a key of its own at each frame, which is never kept.
-fn title_key(title: &TitlePlan, (w, h): (usize, usize), time: Time) -> String {
+fn title_key(title: &TitlePlan, run: &SourceRun) -> String {
     use std::fmt::Write;
+    let ((w, h), (across, down), time) = (run.size, run.beyond, run.at);
     let mut key = format!(
-        "title|{w}x{h}|{:?}|{:?}|{:x}|{:?}|{:?}",
+        "title|{w}x{h}+{across}+{down}|{:?}|{:?}|{:?}|{:x}|{:?}|{:?}",
         title.text,
         title.font,
+        title.style,
         title.size.to_bits(),
         title.color,
         title.justify
@@ -2104,34 +2198,72 @@ fn title_key(title: &TitlePlan, (w, h): (usize, usize), time: Time) -> String {
     key
 }
 
-/// A title drawn on a transparent `w` × `h` picture.
-fn title_on(title: &TitlePlan, (w, h): (usize, usize), time: Time) -> Image {
-    let mut image = Image::new(w, h);
-    // At 0, an axis is left as the font has it.
-    let axes: Vec<([u8; 4], f32)> = title
+/// A title's variable font's axes at `time`. At 0, an axis is left as the font has it.
+fn title_axes(title: &TitlePlan, time: Time) -> Vec<([u8; 4], f32)> {
+    title
         .axes
         .iter()
         .map(|(tag, param)| (*tag, number(&param.value_at(time)) as f32))
         .filter(|(_, value)| *value != 0.0)
-        .collect();
-    let text = Text {
+        .collect()
+}
+
+/// A title's text, on a canvas `height` pixels high.
+fn title_text<'a>(title: &'a TitlePlan, axes: &'a [([u8; 4], f32)], height: f64) -> Text<'a> {
+    Text {
         text: &title.text,
         font: &title.font,
-        size: (title.size * h as f64).max(1.0) as f32,
+        style: &title.style,
+        size: (title.size * height).max(1.0) as f32,
         color: title.color,
         justify: title.justify,
         outline: None,
-        axes: &axes,
+        axes,
         features: &title.features,
-    };
-    let at = [w as f32 / 2.0, h as f32 / 2.0];
+    }
+}
+
+/// Where a title draws at clip time `time` on a canvas of `(w, h)` pixels: the box of its lines, and
+/// as far as a reveal takes each of its pieces. None for one that draws nothing.
+fn title_extent(title: &TitlePlan, (w, h): (usize, usize), time: Time) -> Option<Rect> {
+    let axes = title_axes(title, time);
+    let text = title_text(title, &axes, h as f64);
+    let [left, top, right, bottom] = text::extent(&text, [w as f32 / 2.0, h as f32 / 2.0], 0.5)?;
+    let [mut left, mut top, mut right, mut bottom] = [left, top, right, bottom].map(f64::from);
+    let em = f64::from(text.size);
+    // A glyph reaches a little past its line, as an italic's does. A reveal moves each piece of it as
+    // far as its `from_` numbers say, and grows and turns it about its own middle.
+    let mut around = em / 2.0;
+    if let Some(reveal) = &title.reveal {
+        let read = |param: &Param| number(&param.value_at(time));
+        let (x, y) = (read(&reveal.from[0]) * h as f64, read(&reveal.from[1]) * h as f64);
+        (left, right) = (left + x.min(0.0), right + x.max(0.0));
+        (top, bottom) = (top + y.min(0.0), bottom + y.max(0.0));
+        around += em * read(&reveal.scale).abs().max(1.0);
+    }
+    Some(Rect::new(
+        left - around,
+        top - around,
+        right - left + 2.0 * around,
+        bottom - top + 2.0 * around,
+    ))
+}
+
+/// A title drawn on a transparent picture of the canvas of `run` and as far past it as that says.
+fn title_on(title: &TitlePlan, run: &SourceRun) -> Image {
+    let (w, h) = run.picture();
+    let mut image = Image::new(w, h);
+    let time = run.at;
+    let axes = title_axes(title, time);
+    let text = title_text(title, &axes, run.size.1 as f64);
+    let at = run.middle().map(|at| at as f32);
     let Some(reveal) = &title.reveal else {
         text::draw(&mut image, &text, at, 0.5);
         return image;
     };
     let read = |param: &Param| number(&param.value_at(time));
     let (progress, soft) = (read(&reveal.reveal), read(&reveal.soft).max(0.01));
-    let down = h as f64;
+    let down = run.size.1 as f64;
     let (from_x, from_y, from_scale, from_rotation, from_opacity) = (
         read(&reveal.from[0]) * down,
         read(&reveal.from[1]) * down,
@@ -2164,6 +2296,7 @@ fn caption_text(caption: &CaptionPlan, size: f64) -> Text<'_> {
     Text {
         text: &caption.text,
         font: "sans-serif",
+        style: "",
         size: size as f32,
         color: Rgba::WHITE,
         justify: Justify::Center,
@@ -2291,6 +2424,46 @@ struct Input {
     crop: Option<Rect>,
     /// How many of its pixels a source pixel is.
     per_source: f64,
+    /// Where its frame is in it, in its pixels, for a generator in depth whose picture reaches past
+    /// it ([`Reach`]).
+    frame: Option<Rect>,
+}
+
+/// The most pixels a generator's picture in depth that reaches past its frame is drawn with, as
+/// canvases of them: one that would be larger is drawn coarser.
+const MOST_CANVASES_BEYOND: f64 = 4.0;
+/// And at most this many, however large the canvas.
+const MOST_PIXELS_BEYOND: f64 = 4096.0 * 4096.0;
+/// And no longer than this on either side, which any GPU holds.
+const LONGEST_BEYOND: f64 = 8192.0;
+/// How far past the frame what a camera sees of a clip is read, in output pixels: as far as a pixel
+/// at the frame's edge reads of its picture.
+const SEEN_PAST: f64 = 2.0;
+
+/// How far past its frame a generator's picture in depth reaches, so that all of its outline that
+/// is to be seen is in it ([`Drawing::reach`]). The frame stays in its middle, so that the clip turns
+/// about the same point as ever.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Reach {
+    /// How far past the frame on each side, across and down, in the frame's pixels.
+    beyond: (f64, f64),
+    /// What share of the canvas's pixels across it is drawn with: under 1 where it reaches so far
+    /// that it would otherwise be too large.
+    per: f64,
+}
+
+impl Reach {
+    /// What its generator is drawn on at clip time `time`, for a canvas of `canvas` pixels drawn at
+    /// `scale` of the sequence: the canvas at its share, and that many of its pixels past it.
+    fn run(&self, time: Time, (cw, ch): (usize, usize), scale: f64) -> SourceRun {
+        let pixels = |frame: usize| ((frame as f64 * self.per).round() as usize).max(1);
+        let past = |beyond: f64| (beyond * scale * self.per).ceil() as usize;
+        SourceRun {
+            at: time,
+            size: (pixels(cw), pixels(ch)),
+            beyond: (past(self.beyond.0), past(self.beyond.1)),
+        }
+    }
 }
 
 /// Where a clip's effects run: on its picture at sequence time `at`, drawn
@@ -2304,6 +2477,8 @@ struct Placed<'a> {
     /// Whether FilmCraft's effects may read the clip's other frames and the
     /// sequence's other tracks.
     env: bool,
+    /// How far past its frame the clip's picture reaches, which its other frames reach as well.
+    reach: Option<Reach>,
 }
 
 /// What the effect at `upto` among a clip's effects reads beyond its
@@ -2327,9 +2502,14 @@ impl ClipEnv<'_> {
         let placed = self.placed;
         let time = at - self.plan.clip.start;
         let (cw, ch) = output_size(placed.sequence.width, placed.sequence.height, placed.scale);
-        let input = self
-            .drawing
-            .input(placed.sequence, self.plan, time, placed.scale, (cw, ch))?;
+        let input = self.drawing.input(
+            placed.sequence,
+            self.plan,
+            time,
+            placed.scale,
+            (cw, ch),
+            placed.reach,
+        )?;
         let mut picture = Arc::unwrap_or_clone(input.picture);
         if (picture.w, picture.h) != self.working {
             let (w, h) = self.working;
@@ -2400,6 +2580,7 @@ impl EffectHost for ClipEnv<'_> {
             self.plan,
             at,
             f64::from(scale.clamp(1.0 / 64.0, 1.0)),
+            None,
         )?;
         Some(Arc::unwrap_or_clone(picture))
     }
@@ -3065,6 +3246,13 @@ impl<'a> Builder<'a> {
                 Value::Text(font) if !font.trim().is_empty() => font,
                 _ => "sans-serif".to_owned(),
             },
+            style: kerf_model::title_face(
+                match &get("style")? {
+                    Value::Text(style) => style,
+                    _ => "",
+                },
+                get("weight")?.as_number().unwrap_or(0.0),
+            ),
             size: get("size")?.as_number().unwrap_or(0.08),
             color: match get("color")? {
                 Value::Color(color) => color,
@@ -3212,6 +3400,52 @@ fn crop_rect(
         w * (1.0 - l - r),
         h * (1.0 - t - b),
     ))
+}
+
+/// What a clip's crop at clip time `time` leaves of `whole`, in pixels in which its frame is `frame`:
+/// a side cropped is cut where it is on the frame, and one that is not is left as far as `whole`
+/// goes. Of a generator's picture in depth, which reaches past its frame, as [`crop_rect`] is of one
+/// that does not. None when nothing is cropped.
+fn crop_past(plan: &ClipPlan, time: Time, frame: Rect, whole: Rect) -> Option<Rect> {
+    let [l, r, t, b] = ["crop_l", "crop_r", "crop_t", "crop_b"]
+        .map(|name| number(&param(&plan.clip, name).value_at(time)));
+    if l == 0.0 && r == 0.0 && t == 0.0 && b == 0.0 {
+        return None;
+    }
+    let left = if l > 0.0 { (frame.x + l * frame.w).max(whole.x) } else { whole.x };
+    let top = if t > 0.0 { (frame.y + t * frame.h).max(whole.y) } else { whole.y };
+    let right = if r > 0.0 {
+        (frame.right() - r * frame.w).min(whole.right())
+    } else {
+        whole.right()
+    };
+    let bottom = if b > 0.0 {
+        (frame.bottom() - b * frame.h).min(whole.bottom())
+    } else {
+        whole.bottom()
+    };
+    Some(Rect::new(left, top, (right - left).max(0.0), (bottom - top).max(0.0)))
+}
+
+/// Where the canvas is in the picture a generator draws on `run`, in its pixels.
+fn frame_in(run: &SourceRun) -> Rect {
+    Rect::new(
+        run.beyond.0 as f64,
+        run.beyond.1 as f64,
+        run.size.0 as f64,
+        run.size.1 as f64,
+    )
+}
+
+/// `masks`, ready for a picture whose frame is `at` in it.
+fn past_frame(mut masks: Vec<mask::FlatMask>, (x, y): (f64, f64)) -> Vec<mask::FlatMask> {
+    if (x, y) != (0.0, 0.0) {
+        for point in masks.iter_mut().flat_map(|mask| &mut mask.points) {
+            point[0] += x as f32;
+            point[1] += y as f32;
+        }
+    }
+    masks
 }
 
 /// Whether the graph pads a clip's picture to the canvas with black:

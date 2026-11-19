@@ -6,9 +6,11 @@
 //! Boxes are laid out by `kerf-text` exactly as the compositor lays them
 //! out (`kerf-compose` `draw.rs`, through `kerf-draw` `text::draw`): a
 //! caption is Inter at 4.5% of the frame height (at least 12 px), centred,
-//! its bottom at 95% of the frame; a title is its font at `size` frame
-//! heights at its axes, centred on the frame, then cropped, scaled, rotated, and moved
-//! like any picture. A box is the layout's line boxes, not its ink.
+//! its bottom at 95% of the frame; a title is its font, in the face its
+//! `style` and `weight` pick, at `size` frame heights at its axes, centred on
+//! the frame, then cropped, scaled, rotated, and moved like any picture. A box
+//! is the layout's line boxes, not its ink. Text no installed font can draw is
+//! found as it is laid out (`undrawable`).
 
 use crate::qc::{Finding, Rect};
 use kerf_lang::Clock;
@@ -162,9 +164,9 @@ fn axes_keyed(clip: &Clip) -> bool {
 
 /// The features a title names that the font it is drawn in has not, with that font's family: they
 /// draw nothing. One turned off is not among them, as nothing was asked of the font.
-pub(crate) fn features_unread(font: &str, features: &str) -> (String, Vec<String>) {
+pub(crate) fn features_unread(font: &str, style: &str, features: &str) -> (String, Vec<String>) {
     let family = family_of(font);
-    let face = fonts::face(fonts::resolve(if family.is_empty() { "Inter" } else { family }, "Regular").face);
+    let face = fonts::face(fonts::resolve(if family.is_empty() { "Inter" } else { family }, style).face);
     let has = face.features();
     let mut unread: Vec<String> = kerf_model::parse_features(features)
         .unwrap_or_default()
@@ -194,7 +196,7 @@ fn canvas(sequence: &Sequence) -> (f64, f64) {
 /// `place` of their height above `at`'s y and its x where `align` puts it.
 fn laid_box(
     text: &str,
-    (font, axes, features): (&str, Vec<Axis>, Vec<Feature>),
+    (font, style, axes, features): (&str, &str, Vec<Axis>, Vec<Feature>),
     size: f64,
     align: Align,
     at: [f64; 2],
@@ -206,6 +208,7 @@ fn laid_box(
     let family = family_of(font);
     let style = TextStyle {
         family: if family.is_empty() { "Inter" } else { family }.to_owned(),
+        style: style.trim().to_owned(),
         size: size as f32,
         axes,
         features,
@@ -236,7 +239,7 @@ fn caption_box(sequence: &Sequence, text: &str) -> Option<[f64; 4]> {
     let size = (f64::from(sequence.height) * 0.045).max(12.0);
     laid_box(
         text,
-        ("sans-serif", Vec::new(), Vec::new()),
+        ("sans-serif", "", Vec::new(), Vec::new()),
         size,
         Align::Center,
         [w / 2.0, h * 0.95],
@@ -278,6 +281,13 @@ fn title_box(sequence: &Sequence, clip: &Clip, at: Time) -> Option<[f64; 4]> {
         Value::Text(font) if !font.trim().is_empty() => font,
         _ => "sans-serif".to_owned(),
     };
+    let style = kerf_model::title_face(
+        match &get("style")? {
+            Value::Text(style) => style,
+            _ => "",
+        },
+        get("weight")?.as_number().unwrap_or(0.0),
+    );
     let size = get("size")?.as_number().unwrap_or(0.08);
     let align = match get("align")? {
         Value::Enum(align) if align == "left" => Align::Left,
@@ -301,7 +311,7 @@ fn title_box(sequence: &Sequence, clip: &Clip, at: Time) -> Option<[f64; 4]> {
     let (cw, ch) = canvas(sequence);
     let laid = laid_box(
         &text,
-        (&font, axes, features),
+        (&font, &style, axes, features),
         (size * ch).max(1.0),
         align,
         [cw / 2.0, ch / 2.0],
@@ -948,6 +958,107 @@ pub(crate) fn text(sequence: &Sequence, findings: &mut Vec<Finding>) {
                 .on(normalised(sequence, both)),
             );
         }
+    }
+}
+
+/// What a finding of text no installed font can draw is called.
+pub(crate) const MISSING_GLYPHS: &str = "text.missing_glyphs";
+
+/// The font and face a title is drawn in, as the compositor reads them.
+fn title_font(clip: &Clip) -> (String, String) {
+    let Content::Generator { params, .. } = &clip.content else {
+        return ("sans-serif".to_owned(), String::new());
+    };
+    let text = |name: &str| match params.get(name) {
+        Some(Param::Static(Value::Text(text))) if !text.trim().is_empty() => Some(text.clone()),
+        _ => None,
+    };
+    let weight = match params.get("weight") {
+        Some(Param::Static(Value::Number(weight))) => *weight,
+        _ => 0.0,
+    };
+    let style = kerf_model::title_face(text("style").as_deref().unwrap_or(""), weight);
+    (text("font").unwrap_or_else(|| "sans-serif".to_owned()), style)
+}
+
+/// Characters that only join or vary others, which no font needs to draw.
+fn joins(c: char) -> bool {
+    c.is_whitespace()
+        || c.is_control()
+        || matches!(c as u32, 0x00AD | 0x200B..=0x200F | 0x2060..=0x206F | 0xFE00..=0xFE0F | 0xFEFF | 0xE0000..=0xE0FFF)
+}
+
+/// The characters of `text` that neither `font` in `style` nor any font installed here draws: the
+/// glyphs they are laid out as are `.notdef`, an empty box. Each once, in the order they come.
+pub(crate) fn missing_glyphs(text: &str, font: &str, style: &str) -> Vec<char> {
+    let family = family_of(font);
+    let laid = layout(
+        text,
+        &TextStyle {
+            family: if family.is_empty() { "Inter" } else { family }.to_owned(),
+            style: style.trim().to_owned(),
+            size: 40.0,
+            ..TextStyle::default()
+        },
+        &ParagraphStyle::default(),
+    );
+    let mut starts: Vec<usize> = laid.glyphs.iter().map(|glyph| glyph.cluster).collect();
+    starts.sort_unstable();
+    starts.dedup();
+    let mut missing: Vec<char> = Vec::new();
+    for glyph in laid.glyphs.iter().filter(|glyph| glyph.id == 0) {
+        let end = starts.iter().find(|start| **start > glyph.cluster).copied().unwrap_or(text.len());
+        let Some(piece) = text.get(glyph.cluster..end) else {
+            continue;
+        };
+        let face = fonts::face(glyph.face);
+        let mut lacking: Vec<char> = piece.chars().filter(|c| !joins(*c) && !face.covers(*c)).collect();
+        if lacking.is_empty() {
+            lacking.extend(piece.chars().find(|c| !joins(*c)));
+        }
+        for c in lacking {
+            if !missing.contains(&c) {
+                missing.push(c);
+            }
+        }
+    }
+    missing
+}
+
+/// Titles and captions with characters no font installed here draws, which show as empty boxes:
+/// emoji with no emoji font, a script with no font for it.
+pub(crate) fn undrawable(sequence: &Sequence, findings: &mut Vec<Finding>) {
+    const LISTED: usize = 6;
+    for item in shown(sequence) {
+        let (font, style) = match item.kind {
+            Kind::Caption => ("sans-serif".to_owned(), String::new()),
+            Kind::Title => title_font(item.clip),
+        };
+        let missing = missing_glyphs(item.text, &font, &style);
+        if missing.is_empty() {
+            continue;
+        }
+        let mut listed: Vec<String> =
+            missing.iter().take(LISTED).map(|c| format!("\"{c}\" (U+{:04X})", *c as u32)).collect();
+        if missing.len() > LISTED {
+            listed.push(format!("{} more", missing.len() - LISTED));
+        }
+        let remedy = match item.kind {
+            Kind::Title => "set `font` to one that has them (`look` with `font`), or take them out",
+            Kind::Caption => "install a font that has them, or take them out",
+        };
+        findings.push(
+            Finding::warning(
+                MISSING_GLYPHS,
+                item.clip.id.as_str(),
+                format!(
+                    "{}: no font here draws {}, which show as empty boxes; {remedy}",
+                    item.describe(),
+                    listed.join(", "),
+                ),
+            )
+            .during(sequence, item.clip.start, item.clip.end()),
+        );
     }
 }
 
