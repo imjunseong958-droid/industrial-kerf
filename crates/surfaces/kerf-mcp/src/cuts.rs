@@ -14,9 +14,6 @@ use kerf_model::{Clip, Content, Id, Media, Project, Sequence, Time, Track, Track
 use serde_json::{json, Value};
 use std::collections::HashMap;
 
-/// How far inside a word a cut must land to count as cutting through it,
-/// in seconds. Word times from a transcript are approximate.
-const WORD_MARGIN: f64 = 0.06;
 /// A pause is said from this length, as it plays, in seconds: long enough
 /// to hear as a wait.
 pub(crate) const KEPT_PAUSE_SECONDS: f64 = 0.75;
@@ -176,7 +173,8 @@ impl<'a> Known<'a> {
 /// What a cut goes through.
 pub(crate) struct Judged {
     /// The word its transcript has there, from when to when in seconds of
-    /// the media, unless the sound says the cut is in a pause.
+    /// the media, unless the sound says the cut is in a pause, or between
+    /// two words said in one breath.
     pub word: Option<Word>,
     /// The sound either side of it, where its media's index measured it and
     /// no transition fades it.
@@ -207,24 +205,29 @@ pub(crate) fn judge(cut: &SoundCut<'_>, known: &mut Known<'_>) -> Judged {
         .sound(cut.media)
         .filter(|_| !cut.faded)
         .and_then(|sound| Some((sound, sound.edge(at)?)));
-    let (air, in_pause) = match edge {
+    let (air, in_pause, parts) = match edge {
         Some((sound, _)) => (
             Some(sound.air(at, cut.end == End::Ends)),
             sound.in_pause(at),
+            sound.parts(at),
         ),
-        None => (None, false),
+        None => (None, false, None),
     };
     let edge = edge.map(|(_, edge)| edge);
     let speech = known.speech(cut.media);
     let transcribed = speech.reaches(at);
-    let word = speech
-        .words
-        .iter()
-        .find(|word| word.start + WORD_MARGIN < at && at < word.end - WORD_MARGIN)
-        // A transcript's times are loose, and the sound is not: a cut in a
-        // pause takes nothing off the word a transcript stretches over it.
-        .filter(|_| transcribed && !in_pause)
-        .cloned();
+    // A transcript's times are loose, and the sound is not. A cut in a
+    // pause takes nothing off the word a transcript stretches over it. One
+    // in the shorter gap two words said in one breath part for takes
+    // nothing off either, unless a word's times go right through the gap,
+    // which is then a consonant held inside it: what `snap=pause` goes by.
+    let word = match (in_pause, parts) {
+        (true, _) => None,
+        (false, Some((from, to))) => speech.through(from, to),
+        (false, None) => speech.through(at, at),
+    }
+    .filter(|_| transcribed)
+    .cloned();
     Judged {
         word,
         edge,

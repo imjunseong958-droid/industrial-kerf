@@ -913,6 +913,11 @@ fn edits_snap_to_what_the_index_found() {
     );
     let script = split["script"].as_str().unwrap();
     assert!(script.contains("split c1 at=00:00:02:00"), "{script}");
+    // An edge that moved is said, with how far and onto what.
+    assert_eq!(
+        split["snapped"],
+        json!(["the split of `c1` went 5 frames later, to 00:00:02:00: onto the cut of `m1` at 00:00:02:00"]),
+    );
     router
         .runtime()
         .reject_proposal(split["proposal"].as_str().unwrap())
@@ -931,6 +936,11 @@ fn edits_snap_to_what_the_index_found() {
         .and_then(|(frames, _)| frames.parse().ok())
         .unwrap_or_else(|| panic!("{script}"));
     assert!((24..=26).contains(&shortened), "{script}");
+    let snapped = trimmed["snapped"][0].as_str().unwrap_or_default();
+    assert!(
+        snapped.starts_with("the out of `c1` went ") && snapped.contains(" pause of `m1` at "),
+        "{trimmed}"
+    );
     router
         .runtime()
         .reject_proposal(trimmed["proposal"].as_str().unwrap())

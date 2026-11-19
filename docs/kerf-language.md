@@ -397,18 +397,33 @@ transition add from=c1 to=c9 fx=dissolve dur=12f
   absolute `to=`/`at=` position.
 - `snap=pause|cut [within=<amount>]` on `trim`, `split`, `insert`, and
   `overwrite` moves the edges the line gives (`insert` and `overwrite`:
-  `src=` and `out=`) into the nearest pause of the media's sound, clear of
-  the sound either side, or onto a cut of its picture, as the index made on
-  import found them; within half a second unless given. A pause is 0.16 s
-  or more of quiet, which is what lies between two words, and quiet is
-  measured by the recording itself: within 8 dB of its room tone, so a
-  noisy room has pauses and a soft recording is not all pause. An edge
-  moved into one stops 0.15 s after the sound before it, which dies away,
-  and 0.1 s before the sound after it, on the nearest frame still in the
-  pause; a pause too short for both is divided in that proportion, and an
-  edge already clear of both stays where it was put. A split stays inside
-  its clip and a trimmed clip keeps a length. Without an index, or with
-  nothing in reach, the line is refused.
+  `src=` and `out=`) into a pause of the media's sound, clear of the sound
+  either side, or onto a cut of its picture, as the index made on import
+  found them; within half a second unless given. A pause is 0.16 s or more
+  of quiet, which is what lies between two words, and quiet is measured by
+  the recording itself: within 8 dB of its room tone, so a noisy room has
+  pauses and a soft recording is not all pause. An edge moved into one
+  stops 0.15 s after the sound before it, which dies away, and 0.1 s before
+  the sound after it, on the nearest frame still in the pause; a pause too
+  short for both is divided in that proportion, and an edge already clear
+  of both stays where it was put. A split stays inside its clip and a
+  trimmed clip keeps a length. Without an index, or with nothing in reach,
+  the line is refused.
+
+  An edge is taken past no word. It goes into the pause it is in, or the
+  one at the nearer end of the sound it is in, and never on to a pause
+  beyond: that would leave a word in, or out, that the line did not ask
+  for. Where the media has a transcript, it goes past the middle of no word
+  of it either, so an edge asked for between two words said with nothing
+  between them stays on its side of each, and is refused for want of a
+  pause. Two words said in one breath often part for a tenth of a second
+  or so, a gap too short for a pause and as long as a consonant held inside
+  one word. Where a transcript covers such a gap and times no word right
+  through it, the edge may go there, on a frame of its middle half; with no
+  transcript it may not, and the refusal says to make one. A refusal names
+  the pause or gap it could not take and the word in the way. What an edit
+  answers with says, as `snapped`, how far each edge went and between which
+  words it now is.
 - `trim … src=<source position>` puts the edge where the clip plays that
   position of its media, so a cut can land on a word's time from a
   transcript.

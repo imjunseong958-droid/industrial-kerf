@@ -481,7 +481,8 @@ fn a_line_that_names_what_is_not_there_is_not_a_syntax_error() {
     assert_eq!(fails(&base(), "trim c1 sideways +1f").code, "syntax");
 }
 
-/// What analysis knows of m1: a few words, a pause, and a cut.
+/// What analysis knows of m1: a few words, a pause, the gap "So we" part
+/// for, and a cut.
 struct Known;
 
 impl Facts for Known {
@@ -507,6 +508,7 @@ impl Facts for Known {
     fn breaks(&self, _: &Media) -> Option<Breaks> {
         Some(Breaks {
             pauses: vec![(12.0, 12.6)],
+            gaps: vec![(10.95, 11.07)],
             cuts: vec![11.5],
         })
     }
@@ -562,20 +564,49 @@ fn edges_snap_into_pauses_and_onto_cuts() {
     // to the frame nearest 12.15s, which leaves the word before it its decay.
     let trimmed = known(&project, "trim c1 out to=01:00:01:21 snap=pause").unwrap();
     assert_eq!(frames(trimmed.project.clip("c1").unwrap().duration), 52);
-    // An in point from after the pause stops a tenth of a second short of
-    // the word that follows it at 12.6s.
-    let trimmed = known(&project, "trim c1 in to=01:00:02:20 snap=pause").unwrap();
+    // What moved is said, with the words it is now between: the document
+    // shows where an edge is, and not that it was asked for elsewhere.
+    assert_eq!(
+        trimmed.snapped,
+        [
+            "the out of `c1` went 7 frames later, to 01:00:02:04: into the 0.60s pause \
+          of `m1` at 00:00:12:00, between \"closed,\" and \"the\""
+        ]
+    );
+    // An in point from early in "the", which follows the pause at 12.6s,
+    // stops a tenth of a second short of it.
+    let trimmed = known(&project, "trim c1 in to=01:00:02:18 snap=pause").unwrap();
     assert_eq!(source(&trimmed, "c1").0, 300);
+    assert_eq!(
+        trimmed.snapped,
+        [
+            "the in of `c1` went 6 frames earlier, to 01:00:02:12: into the 0.60s pause \
+          of `m1` at 00:00:12:00, between \"closed,\" and \"the\""
+        ]
+    );
     // 1s 10f plays 11.42s; the picture cuts at 11.5s.
     let split = known(&project, "split c1 at=01:00:01:10 snap=cut as=c1b").unwrap();
     assert_eq!(frames(split.project.clip("c1b").unwrap().start), 36);
-    // A placed source's in and out points move into the pause too.
+    assert_eq!(
+        split.snapped,
+        [
+            "the split of `c1` went 2 frames later, to 01:00:01:12: onto the cut of `m1` \
+          at 00:00:11:12"
+        ]
+    );
+    // A placed source's in and out points move into the pause too, and one
+    // already in place is not said.
     let placed = known(
         &project,
-        "insert media=m1 src=00:00:11:20 out=00:00:13:00 snap=pause at=end on=V1 as=c3",
+        "insert media=m1 src=00:00:11:20 out=00:00:12:14 snap=pause at=end on=V1 as=c3",
     )
     .unwrap();
     assert_eq!(source(&placed, "c3"), (292, 300));
+    assert_eq!(placed.snapped.len(), 2, "{:?}", placed.snapped);
+    assert!(placed.snapped[0].starts_with("src= went 8 frames later, to 00:00:12:04:"));
+    assert!(placed.snapped[1].starts_with("out= went 2 frames earlier, to 00:00:12:12:"));
+    let stays = known(&project, "trim c1 out to=01:00:02:06 snap=pause").unwrap();
+    assert!(stays.snapped.is_empty(), "{:?}", stays.snapped);
 
     let far = known(&project, "split c1 at=01:00:00:12 snap=cut within=2f").unwrap_err();
     assert!(far.message.contains("no cut of `m1` within"), "{far:?}");
@@ -590,6 +621,69 @@ fn edges_snap_into_pauses_and_onto_cuts() {
         .contains("use pause or cut"));
 }
 
+#[test]
+fn an_edge_snaps_past_no_word() {
+    let project = base();
+    // 2s 20f plays 12.83s, past the middle of "the": the pause before it is
+    // on the other side of the word, and "the deal." has none after it.
+    let across = known(&project, "trim c1 in to=01:00:02:20 snap=pause").unwrap_err();
+    assert_eq!(
+        across.message,
+        "no pause of `m1` within 0.50s of 00:00:12:20 would do here: the pause at 00:00:12:00 \
+         is on the other side of \"the\""
+    );
+    // An out point asked for where "the" ends is the same.
+    let across = known(
+        &project,
+        "insert media=m1 src=00:00:11:20 out=00:00:13:00 snap=pause at=end on=V1 as=c3",
+    )
+    .unwrap_err();
+    assert!(
+        across.message.contains("is on the other side of \"the\""),
+        "{across:?}"
+    );
+    // "So we" is said in one breath, parting for an eighth of a second: by
+    // the transcript that is between two words, so a split asked for where
+    // "we" starts goes into it and not on to the pause past "we closed,".
+    let split = known(&project, "split c1 at=01:00:01:01 snap=pause as=c1b").unwrap();
+    assert_eq!(frames(split.project.clip("c1b").unwrap().start), 24);
+    assert_eq!(
+        split.snapped,
+        [
+            "the split of `c1` went 1 frame earlier, to 01:00:01:00: into the 0.12s gap \
+          of `m1` at 00:00:10:23, where \"So\" and \"we\" run together"
+        ]
+    );
+    // From inside "we" the gap is the nearer end of the word, and the pause
+    // past "closed," is never reached.
+    let split = known(&project, "split c1 at=01:00:01:03 snap=pause as=c1b").unwrap();
+    assert_eq!(frames(split.project.clip("c1b").unwrap().start), 24);
+    // Facts with no transcript do not say what a gap is.
+    struct Unheard;
+    impl Facts for Unheard {
+        fn speech(&self, _: &Media) -> Speech {
+            Speech::default()
+        }
+        fn breaks(&self, media: &Media) -> Option<Breaks> {
+            Known.breaks(media)
+        }
+    }
+    let unheard = apply_script_with(
+        &project,
+        Catalog::builtin(),
+        &Unheard,
+        "split c1 at=01:00:01:01 snap=pause as=c1b",
+    )
+    .unwrap_err()
+    .remove(0);
+    assert_eq!(
+        unheard.message,
+        "no pause of `m1` within 0.50s of 00:00:11:01 would do here: the sound parts for 0.12s \
+         at 00:00:10:23, which no transcript covers to say is between two words: look at `m1` \
+         with transcript there first"
+    );
+}
+
 /// Facts that know only where m1's picture cuts, as an index records them.
 struct Cuts(Vec<f64>);
 
@@ -601,6 +695,7 @@ impl Facts for Cuts {
     fn breaks(&self, _: &Media) -> Option<Breaks> {
         Some(Breaks {
             pauses: Vec::new(),
+            gaps: Vec::new(),
             cuts: self.0.clone(),
         })
     }

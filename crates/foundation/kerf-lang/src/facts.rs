@@ -4,9 +4,13 @@
 //! facts come from (`kerfd` reads its media cache), and a line that needs a
 //! fact it lacks says so.
 
-use crate::captions::Word;
+use crate::captions::{is_a_sound_note, Word};
 use crate::sound::Sound;
 use kerf_model::Media;
+
+/// How far inside a word's times a moment must be to count as inside the
+/// word, in seconds: a transcript times a word about this loosely.
+pub const WORD_SLACK: f64 = 0.06;
 
 /// What transcripts of a media heard: its words, in seconds of the media,
 /// and the ranges those transcripts cover.
@@ -38,6 +42,18 @@ impl Speech {
         self.covered
             .iter()
             .any(|(start, end)| *start <= at + 0.05 && at <= *end + 0.05)
+    }
+
+    /// The word whose times go right through `from`–`to` seconds, with
+    /// more than [`WORD_SLACK`] to spare at both ends: a moment or a quiet
+    /// that a transcript has inside a word, loose as its times are. A
+    /// transcriber's note of a sound, such as `[MUSIC]`, is no word.
+    pub fn through(&self, from: f64, to: f64) -> Option<&Word> {
+        self.words.iter().find(|word| {
+            word.start + WORD_SLACK < from
+                && to < word.end - WORD_SLACK
+                && !is_a_sound_note(&word.text)
+        })
     }
 
     /// The words in the order they were said, each once: transcripts of
@@ -103,10 +119,13 @@ fn plain(text: &str) -> impl Iterator<Item = char> + '_ {
 
 /// Where a media's sound pauses and its picture cuts, in seconds of the
 /// media, as its index found them. A pause is a stretch its sound is quiet
-/// throughout, long enough to lie between two words and not inside one.
+/// throughout, long enough to lie between two words and not inside one. A
+/// gap is a shorter quiet: what two words said in one breath part for, and
+/// what a consonant held long inside one word leaves too.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Breaks {
     pub pauses: Vec<(f64, f64)>,
+    pub gaps: Vec<(f64, f64)>,
     pub cuts: Vec<f64>,
 }
 
@@ -126,6 +145,35 @@ pub enum Snap {
 pub struct Place {
     pub at: f64,
     pub room: (f64, f64),
+    /// The quiet it is in, from when to when; for a cut, the cut.
+    pub quiet: (f64, f64),
+    /// Whether that quiet is a gap between two words said in one breath.
+    pub gap: bool,
+}
+
+/// Why a quiet beside an edge is no place for it.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Barred {
+    /// The edge would go past the middle of this word to get there: the
+    /// quiet, a gap or else a pause, is on the other side of it.
+    Across {
+        quiet: (f64, f64),
+        gap: bool,
+        word: Word,
+    },
+    /// A gap no transcript covers: its level alone does not tell it from a
+    /// consonant held long.
+    Unheard { quiet: (f64, f64) },
+    /// A gap this word's times go right through.
+    Inside { quiet: (f64, f64), word: Word },
+}
+
+/// Where an edge may snap to, nearest first, and the quiets beside it that
+/// would not do.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Snaps {
+    pub places: Vec<Place>,
+    pub barred: Vec<Barred>,
 }
 
 /// How much of a pause a snapped edge leaves after the sound before it, in
@@ -140,46 +188,120 @@ const PAUSE_MARGIN: f64 = 0.02;
 
 impl Breaks {
     /// The places `snap` allows within `within` seconds of `at`, nearest
-    /// first: the nearest point of each pause, or each cut.
+    /// first: each cut, or a point of the quiet the edge is beside.
+    ///
+    /// An edge goes into the quiet it is in, or into the one at either end
+    /// of the sound it is in, the nearer end first, and no further: past
+    /// either lies another word. Where the nearer end will not do, the
+    /// other is not taken in its place, since most of that sound lies
+    /// before it. Where `speech` has words, the edge goes past the middle
+    /// of none of them, which keeps it on its side of two words said with
+    /// no quiet between them. A gap is a place only where `speech` covers
+    /// it; one a word goes [through](Speech::through) is a consonant held
+    /// inside that word, and is no end of the sound at all.
     ///
     /// A point of a pause keeps [`AIR_AFTER`] from the sound before it and
-    /// [`AIR_BEFORE`] from the sound after it; a pause too short for both
+    /// [`AIR_BEFORE`] from the sound after it; a quiet too short for both
     /// is divided between them in the same proportion.
-    pub fn snaps(&self, snap: Snap, at: f64, within: f64) -> Vec<Place> {
-        let candidates: Vec<Place> = match snap {
-            Snap::Pause => self
-                .pauses
-                .iter()
-                .map(|&(from, to)| {
-                    let length = to - from;
-                    let (first, last) = if length >= AIR_AFTER + AIR_BEFORE {
-                        (from + AIR_AFTER, to - AIR_BEFORE)
-                    } else {
-                        let split = from + length * AIR_AFTER / (AIR_AFTER + AIR_BEFORE);
-                        (split, split)
-                    };
-                    let margin = PAUSE_MARGIN.min(length / 4.0);
-                    Place {
-                        at: at.clamp(first, last),
-                        room: (from + margin, to - margin),
-                    }
-                })
-                .collect(),
-            Snap::Cut => self
-                .cuts
-                .iter()
-                .map(|&cut| Place {
-                    at: cut,
-                    room: (cut, cut),
-                })
-                .collect(),
-        };
-        let mut near: Vec<Place> = candidates
-            .into_iter()
-            .filter(|place| (place.at - at).abs() <= within)
+    pub fn snaps(&self, snap: Snap, at: f64, within: f64, speech: &Speech) -> Snaps {
+        match snap {
+            Snap::Pause => self.quiets(at, within, speech),
+            Snap::Cut => {
+                let mut places: Vec<Place> = self
+                    .cuts
+                    .iter()
+                    .filter(|cut| (*cut - at).abs() <= within)
+                    .map(|&cut| Place {
+                        at: cut,
+                        room: (cut, cut),
+                        quiet: (cut, cut),
+                        gap: false,
+                    })
+                    .collect();
+                places.sort_by(|a, b| (a.at - at).abs().total_cmp(&(b.at - at).abs()));
+                Snaps {
+                    places,
+                    barred: Vec::new(),
+                }
+            }
+        }
+    }
+
+    fn quiets(&self, at: f64, within: f64, speech: &Speech) -> Snaps {
+        let mut found = Snaps::default();
+        // How far the edge is from where a quiet begins: none when in it.
+        let away = |(from, to): (f64, f64)| (from - at).max(at - to).max(0.0);
+        // Every quiet the sound parts in, in order. A gap a word goes
+        // through is not one: said only where the edge was asked for in it.
+        let mut quiets: Vec<(f64, f64, bool)> = self
+            .pauses
+            .iter()
+            .map(|&(from, to)| (from, to, false))
             .collect();
-        near.sort_by(|a, b| (a.at - at).abs().total_cmp(&(b.at - at).abs()));
-        near
+        for &(from, to) in &self.gaps {
+            match speech.through(from, to) {
+                Some(word) if away((from, to)) == 0.0 => found.barred.push(Barred::Inside {
+                    quiet: (from, to),
+                    word: word.clone(),
+                }),
+                Some(_) => {}
+                None => quiets.push((from, to, true)),
+            }
+        }
+        quiets.sort_by(|a, b| a.0.total_cmp(&b.0));
+        // The quiet the edge is in, or the one before and the one after the
+        // sound it is in, the nearer first.
+        let after = quiets.partition_point(|quiet| quiet.1 < at);
+        let mut beside = match quiets.get(after) {
+            Some(quiet) if quiet.0 <= at => &quiets[after..after + 1],
+            _ => &quiets[after.saturating_sub(1)..(after + 1).min(quiets.len())],
+        }
+        .to_vec();
+        beside.sort_by(|a, b| away((a.0, a.1)).total_cmp(&away((b.0, b.1))));
+        let heard = speech.heard();
+        for (nth, (from, to, gap)) in beside.into_iter().enumerate() {
+            let quiet = (from, to);
+            let length = to - from;
+            let (first, last) = if length >= AIR_AFTER + AIR_BEFORE {
+                (from + AIR_AFTER, to - AIR_BEFORE)
+            } else {
+                let split = from + length * AIR_AFTER / (AIR_AFTER + AIR_BEFORE);
+                (split, split)
+            };
+            let place = at.clamp(first, last);
+            if (place - at).abs() > within {
+                continue;
+            }
+            // The sound between the edge and this quiet.
+            let (low, high) = (at.min(to), at.max(from));
+            let crossed = heard.iter().find(|word| {
+                let middle = (word.start + word.end) / 2.0;
+                low < middle && middle < high && !is_a_sound_note(&word.text)
+            });
+            if let Some(word) = crossed {
+                found.barred.push(Barred::Across {
+                    quiet,
+                    gap,
+                    word: (*word).clone(),
+                });
+            } else if gap && !speech.reaches((from + to) / 2.0) {
+                found.barred.push(Barred::Unheard { quiet });
+            } else if nth == 0 || !found.places.is_empty() {
+                // A gap has no air to spare, so a frame keeps to its middle.
+                let margin = if gap {
+                    length / 4.0
+                } else {
+                    PAUSE_MARGIN.min(length / 4.0)
+                };
+                found.places.push(Place {
+                    at: place,
+                    room: (from + margin, to - margin),
+                    quiet,
+                    gap,
+                });
+            }
+        }
+        found
     }
 }
 
@@ -274,11 +396,14 @@ mod tests {
     fn edges_snap_into_pauses_and_onto_cuts() {
         let breaks = Breaks {
             pauses: vec![(2.0, 3.0), (5.0, 5.2)],
+            gaps: Vec::new(),
             cuts: vec![4.0],
         };
+        let none = Speech::default();
         let at = |snap, at, within| -> Vec<f64> {
             breaks
-                .snaps(snap, at, within)
+                .snaps(snap, at, within, &none)
+                .places
                 .into_iter()
                 .map(|place| (place.at * 1000.0).round() / 1000.0)
                 .collect()
@@ -297,8 +422,145 @@ mod tests {
         assert!(at(Snap::Cut, 3.0, 0.5).is_empty());
         // A frame may be put anywhere in the pause but hard against the
         // sound, and a cut has no room.
-        let room = |snap, at| breaks.snaps(snap, at, 0.5)[0].room;
+        let room = |snap, at| breaks.snaps(snap, at, 0.5, &none).places[0].room;
         assert_eq!(room(Snap::Pause, 2.5), (2.02, 2.98));
         assert_eq!(room(Snap::Cut, 3.7), (4.0, 4.0));
+    }
+
+    /// "So we" in one breath, parting for 0.12 s, then a pause, "closed"
+    /// with its stopped consonant held for 0.12 s, a pause, and "the deal"
+    /// with no quiet between its words at all.
+    fn said() -> (Breaks, Speech) {
+        let breaks = Breaks {
+            pauses: vec![(0.0, 1.0), (1.8, 2.3), (3.0, 3.6), (4.4, 5.0)],
+            gaps: vec![(1.3, 1.42), (2.6, 2.72)],
+            cuts: Vec::new(),
+        };
+        let speech = Speech {
+            words: vec![
+                word(1.0, 1.38, " So"),
+                word(1.38, 1.8, " we"),
+                word(2.3, 3.0, " closed,"),
+                word(3.6, 3.95, " the"),
+                word(3.95, 4.4, " deal."),
+            ],
+            covered: vec![(0.0, 5.0)],
+        };
+        (breaks, speech)
+    }
+
+    fn rounded(places: &[Place]) -> Vec<f64> {
+        places
+            .iter()
+            .map(|place| (place.at * 1000.0).round() / 1000.0)
+            .collect()
+    }
+
+    #[test]
+    fn an_edge_snaps_past_no_word() {
+        let (breaks, speech) = said();
+        let snaps = |at: f64, within: f64| breaks.snaps(Snap::Pause, at, within, &speech);
+        // In the end of "we": into the pause after it, and not back over
+        // "we" into the gap before it.
+        let found = snaps(1.7, 0.5);
+        assert_eq!(rounded(&found.places), [1.95]);
+        assert!(
+            matches!(&found.barred[..], [Barred::Across { quiet, gap: true, word }]
+                if *quiet == (1.3, 1.42) && word.text == " we"),
+            "{found:?}"
+        );
+        // Between "the" and "deal", which run together, there is nowhere to
+        // go: a pause lies past each of them.
+        let found = snaps(3.95, 1.0);
+        assert!(found.places.is_empty(), "{found:?}");
+        let across: Vec<&str> = found
+            .barred
+            .iter()
+            .map(|barred| match barred {
+                Barred::Across { word, .. } => word.text.as_str(),
+                other => panic!("{other:?}"),
+            })
+            .collect();
+        assert_eq!(across, [" the", " deal."]);
+        // A little way into "deal", it is the same: the edge is on the side
+        // of "deal" it was asked on.
+        assert!(snaps(4.05, 1.0).places.is_empty());
+        // Without a transcript the sound alone says where words are: an edge
+        // goes to either end of the sound it is in, the nearer first.
+        let unheard = Speech::default();
+        let found = breaks.snaps(Snap::Pause, 1.7, 1.0, &unheard);
+        assert_eq!(rounded(&found.places), [1.95]);
+        assert_eq!(found.barred, [Barred::Unheard { quiet: (1.3, 1.42) }]);
+        let found = breaks.snaps(Snap::Pause, 3.9, 1.0, &unheard);
+        assert_eq!(rounded(&found.places), [3.5, 4.55]);
+        // Where the nearer end will not do, the other is not taken for it:
+        // from the start of "we", past the gap nothing says is one, the
+        // pause is at the far end of the word.
+        let found = breaks.snaps(Snap::Pause, 1.5, 1.0, &unheard);
+        assert!(found.places.is_empty(), "{found:?}");
+        assert_eq!(found.barred, [Barred::Unheard { quiet: (1.3, 1.42) }]);
+    }
+
+    #[test]
+    fn a_gap_is_a_place_where_a_transcript_parts_two_words() {
+        let (breaks, speech) = said();
+        // In the gap between "So" and "we": it is divided as a pause's air
+        // is, and a frame keeps to its middle half.
+        let found = breaks.snaps(Snap::Pause, 1.4, 0.5, &speech);
+        assert_eq!(rounded(&found.places), [1.372]);
+        let place = found.places[0];
+        assert!(place.gap && place.quiet == (1.3, 1.42), "{place:?}");
+        assert!((place.room.0 - 1.33).abs() < 1e-9 && (place.room.1 - 1.39).abs() < 1e-9);
+        // From the start of "we", it is the gap just before it.
+        assert_eq!(
+            rounded(&breaks.snaps(Snap::Pause, 1.45, 0.5, &speech).places),
+            [1.372]
+        );
+        // The gap in "closed" is a consonant held: its word goes right
+        // through it, so it is no end of the word's sound. From before it
+        // the pause before the word is the place, and from after it the
+        // pause after, which is nearer than the gap would have been far.
+        let found = breaks.snaps(Snap::Pause, 2.55, 0.5, &speech);
+        assert_eq!(rounded(&found.places), [2.2]);
+        assert!(found.barred.is_empty(), "{found:?}");
+        assert_eq!(
+            rounded(&breaks.snaps(Snap::Pause, 2.8, 0.5, &speech).places),
+            [3.15]
+        );
+        // Asked for in it, the edge is in the word, and that is said.
+        let found = breaks.snaps(Snap::Pause, 2.65, 0.3, &speech);
+        assert!(found.places.is_empty(), "{found:?}");
+        assert!(
+            matches!(&found.barred[..], [Barred::Inside { quiet, word }]
+                if *quiet == (2.6, 2.72) && word.text == " closed,"),
+            "{found:?}"
+        );
+        // A gap no transcript covers is not known to be either.
+        let unheard = Speech {
+            words: Vec::new(),
+            covered: vec![(2.0, 5.0)],
+        };
+        let found = breaks.snaps(Snap::Pause, 1.4, 0.5, &unheard);
+        assert!(found.places.is_empty());
+        assert_eq!(found.barred, [Barred::Unheard { quiet: (1.3, 1.42) }]);
+        // A transcript's times are loose: a word that ends a little way
+        // into a gap, or past it, does not go through it.
+        assert!(speech.through(1.3, 1.42).is_none());
+        assert_eq!(
+            speech.through(2.6, 2.72).map(|word| word.text.as_str()),
+            Some(" closed,")
+        );
+        assert!(speech.through(2.94, 2.96).is_none());
+        // A transcriber's note of a sound is timed over all of it, and is
+        // no word to be inside or to go past.
+        let noted = Speech {
+            words: vec![word(0.5, 5.0, "[MUSIC]")],
+            covered: vec![(0.0, 5.0)],
+        };
+        assert!(noted.through(1.3, 1.42).is_none());
+        assert_eq!(
+            rounded(&breaks.snaps(Snap::Pause, 2.9, 0.5, &noted).places),
+            [3.15, 2.672]
+        );
     }
 }

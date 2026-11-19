@@ -1270,36 +1270,74 @@ recording's quiet, -47 dB (worked out beside this work, by the same rule; no tes
 `snap=pause`
 takes a quiet of 0.16 s or more, where it took 0.35 s, leaves 0.15 s after the sound before an
 edge and 0.1 s before the sound after it, and puts the edge on the nearest frame still inside the
-pause. A check judges each cut of a sequence's sound the same way (`kerf-mcp/src/cuts.rs`): a cut
+pause.
+
+An edge is taken past no word (2026-11-19). It went into the nearest pause whichever way that
+was, and where the nearest was beyond a word the edit came back with that word in, or out, and
+nothing said so: 21 of the 306 cuts placed on the recording below, each moved a third to half a
+second. An edge now goes into the quiet it is in, or into the one at the nearer end of the sound
+it is in, and no further (`kerf_lang::Breaks::snaps`); where the nearer end will not do, the other
+is not taken in its place, since most of that sound lies before it. Where a transcript has words
+it goes past the middle of none of them either, because two words said with nothing between them
+are one sound to the levels. What an edit answers with says how far each edge went, into what,
+and between which words it now is (`snapped`), since the document shows where an edge is and not
+that it was asked for elsewhere; and a line that is refused names the pause it could not take and
+the word in the way.
+
+Two words said in one breath often part for a tenth of a second or so: quiet by the recording's
+own levels, too short for a pause, and as long as a consonant held in the middle of one word,
+which the levels cannot tell it from. A transcript can, loose as its times are. A quiet of 0.1 s
+to 0.16 s that a transcript covers, and that no word of it is timed right through with more than
+0.06 s to spare at both ends, is between two words, and an edge may go into it, on a frame of its
+middle half; one a word is timed through is a consonant held, and is no end of that word's sound.
+With no transcript such a gap is neither taken nor gone past, and the refusal says to make one.
+
+A check judges each cut of a sequence's sound the same way (`kerf-mcp/src/cuts.rs`): a cut
 with sound at the level of speech on both sides goes through it (`cut.in_sound`), whether or not a
 transcript has a word there; a cut in a pause is not said to be in the word a transcript stretches
-over it; and the pauses of 0.75 s or more and the words said twice in a row that the cut still
-plays are said as information (`pause.kept`, `word.repeated`), since an edit reads the footage and
-not what it leaves. A sound that holds one level, a room's own tone or music mastered loud, has
-no pauses and judges no cut. `look` with `cuts` gives all of it as numbers.
+over it, nor is one in a gap unless the word is timed right through the gap, so what `snap=pause`
+places is never then said to be in a word; and the pauses of 0.75 s or more and the words said
+twice in a row that the cut still plays are said as information (`pause.kept`, `word.repeated`),
+since an edit reads the footage and not what it leaves. A sound that holds one level, a room's own
+tone or music mastered loud, has no pauses and judges no cut. `look` with `cuts` gives all of it as
+numbers.
 
 Measured by `kerf-mcp/tests/cut_edges.rs` on a recording made there, so that where each word
 starts and ends is known: 420 voiced words with a decay, some with a hiss before or after, some
 with the gap of a stopped consonant, in a room at -55 dBFS and again at -38 dBFS, a cut asked for
-in every gap of 0.1 s or more, as far out as a transcript is, on a 24 fps frame. Nobody listened
-to it, and it is not speech:
+in every gap of 0.1 s or more, as far out as a transcript is, on a 24 fps frame. The transcript,
+where there is one, parts each two words where the cut between them is asked for, so its times
+are as far out as the cuts. Nobody listened to it, and it is not speech:
 
-| Room | Placing | Placed | Refused | In a word | Hard against one |
-|---|---|---|---|---|---|
-| -55 dBFS | as asked | 386 | 0 | 112 | 105 |
-| | `snap=pause` before | 106 | 280 | 8 | 9 |
-| | `snap=pause` now | 306 | 80 | 0 | 1 |
-| -38 dBFS | as asked | 418 | 0 | 51 | 99 |
-| | `snap=pause` before | 65 | 353 | 0 | 2 |
-| | `snap=pause` now | 408 | 10 | 0 | 8 |
+| Room | Placing | Placed | Refused | In a word | Across a word | Hard against one |
+|---|---|---|---|---|---|---|
+| -55 dBFS | as asked | 386 | 0 | 112 | 0 | 105 |
+| | `snap=pause` at first | 106 | 280 | 8 | 15 | 9 |
+| | into the nearest pause | 306 | 80 | 0 | 21 | 1 |
+| | now, with no transcript | 285 | 101 | 0 | 0 | 1 |
+| | now, with a transcript | 386 | 0 | 0 | 0 | 17 |
+| -38 dBFS | as asked | 418 | 0 | 51 | 0 | 99 |
+| | `snap=pause` at first | 65 | 353 | 0 | 11 | 2 |
+| | into the nearest pause | 408 | 10 | 0 | 7 | 8 |
+| | now, with no transcript | 401 | 17 | 0 | 0 | 7 |
+| | now, with a transcript | 418 | 0 | 0 | 0 | 10 |
 
-Hard against a word is less than 0.05 s after one ends or 0.03 s before one starts. A cut is
-refused where no pause is within half a second of it. The 8 are a hiss barely over the room's
-tone, which reads as the room. A check called every cut
-through a voice sound (17 of 17 and 9 of 9), none sound that was in no word, and every cut clear
-of a word quiet. Not done: a cut in the dip between two words run together, which needs a
-transcript to tell it from a stopped consonant, and so a pause under 0.16 s; and a room whose
-level drifts over an hour, since one room tone is taken for a whole file.
+Hard against a word is less than 0.05 s after one ends or 0.03 s before one starts, and across a
+word is on the other side of a whole word from the two the cut was asked between. With no
+transcript a cut is refused where the quiet beside it is no pause: the 101 and the 17 are every
+cut asked for between two words 0.1 s to 0.16 s apart, which until now were refused (80 and 10)
+or taken across a word (21 and 7). With a transcript all of them are placed, in a gap with less
+air to leave than a pause has: 16 of those 101 and 3 of those 17 are hard against a word, and
+none is in one. The other 1 and 7 are in pauses; the 7 are a hiss barely over the room's tone,
+which reads as the room. A check called every cut through a voice sound (17 of 17 and 9 of 9),
+none sound that was in no word, every cut clear of a word quiet, and every cut placed with a
+transcript quiet and in no word (386 and 418). Not done: an edge between two words with no quiet
+between them at all, where the level only dips, since a syllable leaves such a dip inside a word
+too and telling them apart takes word times closer than a transcriber's (the recording here has
+none: every two of its words are 0.08 s apart or more); the 0.1 s tried on real speech, since it
+is set by this recording's stopped consonants, which hold 0.09 s at most, and where a language
+holds one longer only the transcript says so; and a room whose level drifts over an hour, since
+one room tone is taken for a whole file.
 
 The picture of a cut is read from what the document has too, where the two clips are shots
 whose guides it holds (`kerf_engine::eye`, `look` with `eye`, 2026-11-18). A model makes each
@@ -1693,16 +1731,23 @@ x64, and Linux x86-64 as new as Ubuntu 24.04.
   a plain one, since a model covers it. Kerf takes the assets, as files a
   step makes, and builds none of the models (What directs a model, Next
   2).
-- **[Scarlet](https://github.com/Forward-Future/scarlet)** (MIT, reviewed at `9f966e9`) is an
-  editor for dialogue that agents cut: TypeScript over FFmpeg filter graphs, with nothing to take
-  for the picture. What it measures of a cut was worth doing our own way, and is (Edit): levels
-  kept fine enough to place an edge between syllables, an edge judged by the recording and not by
-  a transcript's times, more quiet left after a word than before one, the pauses and doubled
-  words an edit still plays, and a score of all of it against a recording whose words are known.
-  Left: its forced alignment of words (wav2vec2, a model of English letters), its filler and
-  transcription models (their own licenses, one not for commercial use), reading the text on a
-  screen, and telling speakers apart. Not yet looked at closely: encoded sections kept by what
-  they depend on and joined without encoding again, where Kerf encodes a whole program each time.
+- **[Scarlet](https://github.com/Forward-Future/scarlet)** (MIT, reviewed at `9f966e9` and again
+  at `6e93a9e`, 577 commits on) is an editor for dialogue that agents cut: TypeScript over FFmpeg
+  filter graphs, with nothing to take for the picture. What it measures of a cut was worth doing
+  our own way, and is (Edit): levels kept fine enough to place an edge between syllables, an edge
+  judged by the recording and not by a transcript's times, more quiet left after a word than
+  before one, the pauses and doubled words an edit still plays, and a score of all of it against a
+  recording whose words are known; and from the second reading, an edge moved past no word, each
+  move said with the words it ended between, and an edge put between two words said in one breath.
+  Its encoded sections, kept by what they depend on and joined without encoding again, are done
+  too (The engine, Kept frames). Left: its forced alignment of words (wav2vec2, a model of English
+  letters), its filler and transcription models (their own licenses, one not for commercial use),
+  reading the text on a screen, and telling speakers apart. Read the second time and not done: an
+  edge on the dip between two words with no quiet between them, which its alignment's word times
+  make safe and a transcriber's do not; words taken out, or a pause brought down to a length, by
+  one line that names them; a restart found with other words between its two sayings; a proposal
+  brought forward onto an edit that changed under it, where Kerf's goes stale; and a check that
+  two recordings of one thing still play in step after a cut.
 - **Jumper and the Resolve and Premiere MCP servers** bolt agents onto editors
   that were not built for them. Kerf's document, proposals, and Git merging are
   what they cannot have, and each area has to keep that: every feature is text in

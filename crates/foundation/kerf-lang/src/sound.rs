@@ -32,10 +32,14 @@ const FAR_UNDER_SPEECH_DB: f64 = 40.0;
 /// fainter than that is a decay or a hiss, which a cut takes unheard.
 const SOUND_UNDER_SPEECH_DB: f64 = 18.0;
 const FAINTEST_SOUND_DB: f64 = -45.0;
-/// The shortest quiet an edge is snapped into, in seconds: what lies
-/// between two words. The gap a stopped consonant leaves inside a word is
-/// shorter.
+/// The shortest quiet that is a pause by its levels alone, in seconds: what
+/// lies between two words. The gap a stopped consonant leaves inside a word
+/// is shorter.
 const BETWEEN_WORDS_SECONDS: f64 = 0.16;
+/// The shortest quiet that may lie between two words said in one breath, in
+/// seconds: longer than a stopped consonant usually holds, and too short to
+/// tell from one that is held long without a transcript of what is said.
+const RUN_ON_SECONDS: f64 = 0.10;
 /// How long either side of a cut is listened to, in seconds.
 const EDGE_SECONDS: f64 = 0.03;
 /// How far from a cut the quiet around it is followed, in seconds.
@@ -165,6 +169,28 @@ impl Sound {
         self.quiet(BETWEEN_WORDS_SECONDS)
     }
 
+    /// Every quiet too short for a [pause](Self::pauses) and longer than a
+    /// stopped consonant usually holds, from when to when in seconds: where
+    /// two words said in one breath part, or where one word holds a
+    /// consonant long. The levels do not say which; a transcript does.
+    pub fn gaps(&self) -> Vec<(f64, f64)> {
+        self.quiet(RUN_ON_SECONDS)
+            .into_iter()
+            .filter(|(from, to)| to - from < BETWEEN_WORDS_SECONDS - 1e-9)
+            .collect()
+    }
+
+    /// The quiet around `at` seconds, from when to when, as far as
+    /// [`AIR_REACH_SECONDS`] either way, where it is a [pause](Self::pauses)
+    /// or a [gap](Self::gaps); `None` in sound, and in a quiet shorter than
+    /// either, which a stopped consonant leaves.
+    pub fn parts(&self, at: f64) -> Option<(f64, f64)> {
+        let cut = ((at / self.hop).round() as usize).min(self.levels.len());
+        let (back, on) = (self.air_hops(at, true), self.air_hops(at, false));
+        let least = (RUN_ON_SECONDS / self.hop - 1e-6).ceil() as usize;
+        (back + on >= least).then(|| (self.time(cut - back), self.time(cut + on)))
+    }
+
     /// How much of `from` to `to` seconds is quiet, in seconds; `None`
     /// outside what was measured.
     pub fn quiet_seconds(&self, from: f64, to: f64) -> Option<f64> {
@@ -227,11 +253,16 @@ impl Sound {
     /// cut there leaves beside what is kept. Nothing where it is not quiet
     /// at `at`.
     pub fn air(&self, at: f64, before: bool) -> f64 {
+        self.air_hops(at, before) as f64 * self.hop
+    }
+
+    /// [`air`](Self::air), counted in hops.
+    fn air_hops(&self, at: f64, before: bool) -> usize {
         let quiet = self.quiet_below() as f32;
         let cut = (at / self.hop).round() as usize;
         let reach = (AIR_REACH_SECONDS / self.hop).round() as usize;
         let is_quiet = |hop: usize| self.levels.get(hop).is_some_and(|level| *level <= quiet);
-        let hops = if before {
+        if before {
             (0..cut.min(self.levels.len()))
                 .rev()
                 .take(reach)
@@ -242,8 +273,7 @@ impl Sound {
                 .take(reach)
                 .take_while(|hop| is_quiet(*hop))
                 .count()
-        };
-        hops as f64 * self.hop
+        }
     }
 
     fn hop_of(&self, seconds: f64) -> usize {
@@ -378,6 +408,15 @@ mod tests {
         sound.levels[200..208].fill(-55.0);
         assert!(!sound.in_pause(2.04));
         assert_eq!(sound.edge(2.04).unwrap().heard, Heard::Quiet);
+        // Two words said in one breath part for a tenth of a second or so:
+        // a gap and no pause, and a stopped consonant's is neither.
+        assert_eq!(sound.gaps(), []);
+        sound.levels[400..412].fill(-55.0);
+        assert_eq!(sound.gaps(), [(4.0, 4.12)]);
+        assert_eq!(sound.parts(4.05), Some((4.0, 4.12)));
+        assert_eq!(sound.parts(5.3), Some((5.0, 5.6)));
+        assert_eq!(sound.parts(2.04), None);
+        assert_eq!(sound.parts(4.5), None);
         // How much of a stretch is quiet: the pause from 5 s to 5.6 s.
         assert!((sound.quiet_seconds(4.5, 6.0).unwrap() - 0.6).abs() < 1e-9);
         assert_eq!(sound.quiet_seconds(20.0, 21.0), None);

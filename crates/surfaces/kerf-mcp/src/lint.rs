@@ -570,7 +570,7 @@ fn cuts_in_sound(
                 format!(
                     "clip `{}` {end} in the middle of a sound{}: {:.0} dB at {} of `{}`, which speaks at \
                      {:.0} dB and pauses under {:.0} dB; trim it with snap=pause to move the cut into \
-                     the nearest pause",
+                     the pause beside it",
                     clip.id,
                     if judged.transcribed {
                         " its transcript has no word for"
@@ -914,6 +914,7 @@ sequence s1 rate=24 size=1920x1080
         fn breaks(&self, _: &Media) -> Option<Breaks> {
             Some(Breaks {
                 pauses: Vec::new(),
+                gaps: Vec::new(),
                 cuts: self.cuts.clone(),
             })
         }
@@ -1003,6 +1004,42 @@ sequence s1 rate=24 size=1920x1080
     }
 
     #[test]
+    fn a_cut_between_two_words_said_in_one_breath_is_in_neither() {
+        // Somebody speaks up to 0.06 s before a1 ends at 4 s of m1 and again 0.06 s after: the
+        // two words part for an eighth of a second, too short for a pause, and the cut is in it.
+        let run_on = || Some(recording(&[(3.2, 3.94)], &[(4.0, 4.06)]));
+        // A transcript ends the first word a tenth of a second late, past the cut. The cut
+        // takes nothing off it: the word does not go through the gap, and `snap=pause` would
+        // have put a cut there.
+        let loose = Known {
+            words: words(&[(3.5, 4.1, "country"), (4.1, 4.6, "side")]),
+            covered: vec![(0.0, 60.0)],
+            sound: run_on(),
+            ..Known::default()
+        };
+        assert!(said(&loose).is_empty(), "{:?}", said(&loose));
+        // One word timed right through the gap holds a consonant there, and is cut through.
+        let held = Known {
+            words: words(&[(3.5, 4.5, "countryside")]),
+            covered: vec![(0.0, 60.0)],
+            sound: run_on(),
+            ..Known::default()
+        };
+        let found = said(&held);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].0, "cut.in_word");
+        // A quiet as short as a stopped consonant's is no gap: the cut is in the word a
+        // transcript has there, as before.
+        let stopped = Known {
+            words: words(&[(3.5, 4.1, "country"), (4.1, 4.6, "side")]),
+            covered: vec![(0.0, 60.0)],
+            sound: Some(recording(&[(3.2, 3.97)], &[(4.0, 4.03)])),
+            ..Known::default()
+        };
+        assert_eq!(said(&stopped)[0].0, "cut.in_word");
+    }
+
+    #[test]
     fn a_cut_is_judged_by_the_sound_where_a_transcript_is_loose_or_has_nothing() {
         // a1 ends at 4 s of m1, a2 starts at 10 s of it and ends at 14 s. The room is quiet for
         // 0.8 s before each of those, and somebody starts to speak at each.
@@ -1042,7 +1079,7 @@ sequence s1 rate=24 size=1920x1080
             found[0].1,
             "clip `a2` starts in the middle of a sound its transcript has no word for: -20 dB at \
              00:00:10:00 of `m1`, which speaks at -20 dB and pauses under -47 dB; trim it with \
-             snap=pause to move the cut into the nearest pause"
+             snap=pause to move the cut into the pause beside it"
         );
         // With no transcript at all the sound still checks every cut: the one is found, and the
         // other two are not said to be unchecked.

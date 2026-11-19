@@ -90,8 +90,9 @@ sequence add <id> rate=<fps> size=WxH [name="…"] [start=<tc>] [color=rec2100-p
 ```
 
 `snap=pause|cut [within=<amount>]` on trim, split, insert, and overwrite
-moves the edge into the nearest pause of the media's sound, or onto a cut of
-its picture, by its index; within half a second unless given.
+moves the edge into the pause at the nearer end of the sound it is in, past
+no word, or with a transcript into the gap two words run together part for;
+or onto a cut of its picture; by its index, within half a second unless given.
 
 The effect `shape.outline@1` adds an outline to a `gen=shape` clip, in order, by `mode` (add, subtract,
 intersect, difference), with the shape's own numbers and `x`, `y`, `rotation`.

@@ -6,6 +6,17 @@ on `main`; its section here becomes the release's notes on GitHub
 
 ## Unreleased
 
+- `snap=pause` takes an edge past no word. It went into the nearest pause
+  whichever way that was, so where the nearest lay beyond a word the edit
+  came back with that word in, or out, and said nothing of it. An edge now
+  goes into the pause at the nearer end of the sound it is in and no
+  further, past the middle of no word a transcript heard, and an agent's
+  edit answers with how far each edge went and between which words it now
+  is (`snapped`). Where the media has a transcript, an edge can also go
+  between two words said in one breath, which part for too short a time to
+  be a pause; and a line that finds nowhere to go names the pause or gap it
+  could not take and the word in the way
+  ([docs/architecture.md](docs/architecture.md#edit)).
 - An agent's `look` with `shows` reads every clip that draws on a frame,
   whichever track it is on. It read 32 from the lowest track up, so of a
   street of 55 solids the cart on the top tracks, its subject, was left

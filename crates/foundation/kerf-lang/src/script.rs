@@ -15,14 +15,14 @@
 //! Lines that read analysis, such as `captions`, read it from the facts the
 //! script runs with.
 
-use crate::captions::{caption_script, DEFAULT_CAPTION_WORDS};
+use crate::captions::{caption_script, is_a_sound_note, Word, DEFAULT_CAPTION_WORDS};
 use crate::doc::{
     content, content_text, mask_shape_text, mask_text, media_fields, media_line, params_text,
     parse_align, parse_marker_color, parse_mask_mode, parse_retime, parse_sample_rate,
     parse_sequence_color, parse_size, pinned, sequence_fields, sequence_line, take_mask_shape,
     take_role, take_sync, word_or_quote,
 };
-use crate::facts::{Facts, NoFacts, Place, Snap};
+use crate::facts::{Barred, Breaks, Facts, NoFacts, Place, Snap, Snaps, Speech};
 use crate::lex::{lex, Arg, Atom, Line};
 use crate::making::print_step;
 use crate::text::{
@@ -34,7 +34,10 @@ use kerf_model::{
     Mask, Media, NewClip, Op, ParamDef, Params, Project, Rate, Report, Sequence, SequenceChange,
     Time, TrackChange, TrackKind, TrackRoleChange,
 };
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::fmt::Write as _;
+use std::rc::Rc;
 
 /// The result of a script: the new project, the operations it ran (ready to
 /// journal or replay), and what they did.
@@ -43,6 +46,10 @@ pub struct Applied {
     pub project: Project,
     pub ops: Vec<Op>,
     pub report: Report,
+    /// Each edge `snap=` moved, in the order the script moved them: how
+    /// far it went, into what, and between which words where a transcript
+    /// has them. An edge that was already in place is not said.
+    pub snapped: Vec<String>,
 }
 
 /// Run `script` with no analysis: lines that read facts are refused.
@@ -67,6 +74,9 @@ pub fn apply_script_with(
         catalog,
         facts,
         sequence: None,
+        breaks: RefCell::default(),
+        speech: RefCell::default(),
+        snapped: RefCell::default(),
     };
     let mut ops = Vec::new();
     for line in &lines {
@@ -98,6 +108,7 @@ pub fn apply_script_with(
         project,
         ops,
         report,
+        snapped: state.snapped.into_inner(),
     })
 }
 
@@ -108,6 +119,12 @@ struct Script<'c> {
     catalog: &'c Catalog,
     facts: &'c dyn Facts,
     sequence: Option<Id>,
+    /// What the facts said of each media a line has snapped to, so that a
+    /// script of many snapped lines reads each once.
+    breaks: RefCell<HashMap<Id, Option<Rc<Breaks>>>>,
+    speech: RefCell<HashMap<Id, Rc<Speech>>>,
+    /// See [`Applied::snapped`].
+    snapped: RefCell<Vec<String>>,
 }
 
 type Parsed<T = Vec<Op>> = Result<T, Diagnostic>;
@@ -378,10 +395,16 @@ impl Script<'_> {
                 let tail = fields.take_id("as")?;
                 if let Some(snap) = take_snap(&mut fields, &clock)? {
                     // A split must fall inside the clip.
+                    let what = format!("the split of `{clip}`");
                     at = self
-                        .snap_edge(found, at, snap, clock.rate, |at| {
-                            found.start < at && at < found.end()
-                        })
+                        .snap_edge(
+                            found,
+                            at,
+                            snap,
+                            clock.rate,
+                            |at| found.start < at && at < found.end(),
+                            &what,
+                        )
                         .map_err(|m| line.error(1, m))?;
                 }
                 fields.finish(2)?;
@@ -904,7 +927,7 @@ impl Script<'_> {
         ) = (media, snap, &mut content, wrote("src"))
         {
             *source_in = self
-                .snap_source(media, *source_in, to, speed.played(within))
+                .snap_source(media, *source_in, to, speed.played(within), "src=")
                 .map_err(|m| line.error(1, m))?;
         }
         let positions = Positions::of(&self.project, s);
@@ -925,7 +948,7 @@ impl Script<'_> {
                     (media, snap, &content)
                 {
                     out_time = self
-                        .snap_source(media, out_time, to, speed.played(within))
+                        .snap_source(media, out_time, to, speed.played(within), "out=")
                         .map_err(|m| fields.error(out, m))?;
                 }
                 let (Content::Media {
@@ -1112,7 +1135,11 @@ impl Script<'_> {
                     Edge::In => at < found.end(),
                     Edge::Out => at > found.start,
                 };
-                self.snap_edge(found, edge_time + delta, snap, clock.rate, keeps)
+                let what = format!(
+                    "the {} of `{clip}`",
+                    if edge == Edge::In { "in" } else { "out" }
+                );
+                self.snap_edge(found, edge_time + delta, snap, clock.rate, keeps, &what)
                     .map_err(|m| line.error(1, m))?
                     - edge_time
             }
@@ -1228,6 +1255,7 @@ impl Script<'_> {
     /// nearest place `snap` allows in the clip's media that `keeps`, on a
     /// frame of the sequence: the frame nearest a cut, or the frame nearest
     /// the place in a pause that the clip still plays inside that pause.
+    /// `what` names the edge for what is said of the move.
     fn snap_edge(
         &self,
         clip: &Clip,
@@ -1235,6 +1263,7 @@ impl Script<'_> {
         (snap, within): (Snap, Time),
         rate: Rate,
         keeps: impl Fn(Time) -> bool,
+        what: &str,
     ) -> Result<Time, String> {
         let media = self
             .media_of(clip)
@@ -1247,65 +1276,174 @@ impl Script<'_> {
             clip.played_at(media_time(seconds))
                 .expect("a media clip plays a source")
         };
-        self.snaps(media, source, snap, reach)?
-            .into_iter()
-            .filter_map(|place| match snap {
-                // An index's times are rounded to microseconds.
-                Snap::Cut => Some(
-                    rate.round(
+        let (found, speech) = self.snaps(media, source, snap, reach)?;
+        let (at, place) = found
+            .places
+            .iter()
+            .find_map(|place| {
+                let at = match snap {
+                    // An index's times are rounded to microseconds.
+                    Snap::Cut => rate.round(
                         clip.played_at(media.rate.round(media_time(place.at)))
                             .expect("a media clip plays a source"),
                     ),
-                ),
-                Snap::Pause => {
-                    // A clip in reverse plays the end of a pause first.
-                    let (from, to) = (played(place.room.0), played(place.room.1));
-                    frame_within(rate, played(place.at), (from.min(to), from.max(to)))
-                }
+                    Snap::Pause => {
+                        // A clip in reverse plays the end of a pause first.
+                        let (from, to) = (played(place.room.0), played(place.room.1));
+                        frame_within(rate, played(place.at), (from.min(to), from.max(to)))?
+                    }
+                };
+                keeps(at).then_some((at, place))
             })
-            .find(|at| keeps(*at))
-            .ok_or_else(|| nothing_near(media, source, snap, reach))
+            .ok_or_else(|| nothing_near(media, source, snap, reach, &found.barred))?;
+        let clock = Clock::of_sequence(
+            &self.project.sequences[self
+                .project
+                .locate(clip.id.as_str())
+                .expect("a clip is on a sequence")
+                .sequence],
+        );
+        self.say_snapped(what, &clock, (edge, at), media, snap, place, &speech);
+        Ok(at)
     }
 
     /// `at`, a time on `media`, moved to the nearest place `snap` allows
     /// within `reach`, on a frame of the media: the frame a cut starts, or
     /// the frame nearest the place in a pause that is still inside it.
+    /// `what` names the edge for what is said of the move.
     fn snap_source(
         &self,
         media: &Media,
         at: Time,
         snap: Snap,
         reach: Time,
+        what: &str,
     ) -> Result<Time, String> {
-        self.snaps(media, at, snap, reach)?
-            .into_iter()
-            .find_map(|place| match snap {
-                Snap::Cut => Some(media.rate.round(media_time(place.at))),
-                Snap::Pause => frame_within(
-                    media.rate,
-                    media_time(place.at),
-                    (media_time(place.room.0), media_time(place.room.1)),
-                ),
+        let (found, speech) = self.snaps(media, at, snap, reach)?;
+        let (to, place) = found
+            .places
+            .iter()
+            .find_map(|place| {
+                let to = match snap {
+                    Snap::Cut => media.rate.round(media_time(place.at)),
+                    Snap::Pause => frame_within(
+                        media.rate,
+                        media_time(place.at),
+                        (media_time(place.room.0), media_time(place.room.1)),
+                    )?,
+                };
+                Some((to, place))
             })
-            .ok_or_else(|| nothing_near(media, at, snap, reach))
+            .ok_or_else(|| nothing_near(media, at, snap, reach, &found.barred))?;
+        let clock = Clock::of_media(media);
+        self.say_snapped(what, &clock, (at, to), media, snap, place, &speech);
+        Ok(to)
     }
 
     /// The places `snap` allows within `reach` of `at` on `media`, nearest
-    /// first, in seconds of the media.
+    /// first, in seconds of the media, with the quiets beside `at` that
+    /// would not do, and what the media's transcripts heard where a pause
+    /// is asked for: an edge is taken past no word of them.
     fn snaps(
         &self,
         media: &Media,
         at: Time,
         snap: Snap,
         reach: Time,
-    ) -> Result<Vec<Place>, String> {
-        let breaks = self.facts.breaks(media).ok_or_else(|| {
-            format!(
-                "`{}` is not indexed yet; look at it with media first",
-                media.id
-            )
-        })?;
-        Ok(breaks.snaps(snap, at.seconds(), reach.seconds()))
+    ) -> Result<(Snaps, Rc<Speech>), String> {
+        let breaks = self
+            .breaks
+            .borrow_mut()
+            .entry(media.id.clone())
+            .or_insert_with(|| self.facts.breaks(media).map(Rc::new))
+            .clone()
+            .ok_or_else(|| {
+                format!(
+                    "`{}` is not indexed yet; look at it with media first",
+                    media.id
+                )
+            })?;
+        let speech = match snap {
+            Snap::Pause => self
+                .speech
+                .borrow_mut()
+                .entry(media.id.clone())
+                .or_insert_with(|| Rc::new(self.facts.speech(media)))
+                .clone(),
+            // A cut of the picture is where it is, whatever is said.
+            Snap::Cut => Rc::default(),
+        };
+        let found = breaks.snaps(snap, at.seconds(), reach.seconds(), &speech);
+        Ok((found, speech))
+    }
+
+    /// Keep for [`Applied::snapped`] where `snap` put the edge `what`,
+    /// which was asked for at `from` and is now at `to` on `clock`, when it
+    /// moved: a move is silent in the document, and one that left a word in
+    /// or out is not what was asked for.
+    fn say_snapped(
+        &self,
+        what: &str,
+        clock: &Clock,
+        (from, to): (Time, Time),
+        media: &Media,
+        snap: Snap,
+        place: &Place,
+        speech: &Speech,
+    ) {
+        let frames = clock.rate.frames_round(to - from);
+        if frames == 0 {
+            return;
+        }
+        let position = |seconds: f64| {
+            Clock::of_media(media).print_position(media.rate.round(media_time(seconds)))
+        };
+        let (start, end) = place.quiet;
+        let into = match snap {
+            Snap::Cut => format!("onto the cut of `{}` at {}", media.id, position(start)),
+            Snap::Pause => {
+                // The words either side of where it is now, where a
+                // transcript heard them near.
+                let mut heard = speech.heard();
+                heard.retain(|word| !is_a_sound_note(&word.text));
+                let middle = |word: &Word| (word.start + word.end) / 2.0;
+                let before = heard
+                    .iter()
+                    .rev()
+                    .find(|word| middle(word) <= place.at)
+                    .filter(|word| word.end > start - WORDS_BESIDE_SECONDS);
+                let after = heard
+                    .iter()
+                    .find(|word| middle(word) > place.at)
+                    .filter(|word| word.start < end + WORDS_BESIDE_SECONDS);
+                let said = |word: &&Word| quote(word.text.trim());
+                let (quiet, beside) = match (place.gap, before.map(said), after.map(said)) {
+                    (true, Some(before), Some(after)) => {
+                        ("gap", format!(", where {before} and {after} run together"))
+                    }
+                    (true, ..) => ("gap", String::new()),
+                    (false, Some(before), Some(after)) => {
+                        ("pause", format!(", between {before} and {after}"))
+                    }
+                    (false, Some(before), None) => ("pause", format!(", after {before}")),
+                    (false, None, Some(after)) => ("pause", format!(", before {after}")),
+                    (false, None, None) => ("pause", String::new()),
+                };
+                format!(
+                    "into the {:.2}s {quiet} of `{}` at {}{beside}",
+                    end - start,
+                    media.id,
+                    position(start)
+                )
+            }
+        };
+        self.snapped.borrow_mut().push(format!(
+            "{what} went {} frame{} {}, to {}: {into}",
+            frames.abs(),
+            if frames.abs() == 1 { "" } else { "s" },
+            if frames < 0 { "earlier" } else { "later" },
+            clock.print_position(to),
+        ));
     }
 
     /// Where on the sequence `clip` plays the source position `text`, on
@@ -1773,17 +1911,52 @@ impl Script<'_> {
 }
 
 /// Why nothing near `at` on `media` would do for `snap`.
-fn nothing_near(media: &Media, at: Time, snap: Snap, reach: Time) -> String {
+fn nothing_near(media: &Media, at: Time, snap: Snap, reach: Time, barred: &[Barred]) -> String {
     let what = match snap {
         Snap::Pause => "pause",
         Snap::Cut => "cut",
     };
-    format!(
+    let clock = Clock::of_media(media);
+    let position = |seconds: f64| clock.print_position(media.rate.round(media_time(seconds)));
+    let why: Vec<String> = barred
+        .iter()
+        .map(|barred| match barred {
+            Barred::Across {
+                quiet: at,
+                gap,
+                word,
+            } => format!(
+                "the {} at {} is on the other side of {}",
+                if *gap { "gap" } else { "pause" },
+                position(at.0),
+                quote(word.text.trim())
+            ),
+            Barred::Unheard { quiet: at } => format!(
+                "the sound parts for {:.2}s at {}, which no transcript covers to say is \
+                 between two words: look at `{}` with transcript there first",
+                at.1 - at.0,
+                position(at.0),
+                media.id
+            ),
+            Barred::Inside { quiet: at, word } => format!(
+                "the sound parts for {:.2}s at {} inside {}, by its transcript",
+                at.1 - at.0,
+                position(at.0),
+                quote(word.text.trim())
+            ),
+        })
+        .collect();
+    let mut said = format!(
         "no {what} of `{}` within {:.2}s of {} would do here",
         media.id,
         reach.seconds(),
-        Clock::of_media(media).print_position(at)
-    )
+        clock.print_position(at)
+    );
+    if !why.is_empty() {
+        said.push_str(": ");
+        said.push_str(&why.join("; "));
+    }
+    said
 }
 
 /// `seconds` of a media on its frame grid: the frame it falls in, or for an
@@ -1811,6 +1984,10 @@ fn frame_within(rate: Rate, at: Time, (from, to): (Time, Time)) -> Option<Time> 
     let last = rate.frames_floor(to);
     (first <= last).then(|| rate.time_of(rate.frames_round(at).clamp(first, last)))
 }
+
+/// How near a quiet a word has to be for it to be named as beside it, in
+/// seconds.
+const WORDS_BESIDE_SECONDS: f64 = 2.0;
 
 /// `snap=pause|cut` and `within=<amount>`, half a second unless given: what
 /// an edge snaps to and how far it may move.
