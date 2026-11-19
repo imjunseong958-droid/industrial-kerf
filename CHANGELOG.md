@@ -23,6 +23,15 @@ on `main`; its section here becomes the release's notes on GitHub
 - A document that writes `parent=` on a clip's `set` line is told it goes on
   the clip's own line, as a script's `set c2 parent=n1` might suggest, rather
   than given the list of every property.
+- Zoom Through keeps the next shot filling the frame. Its first version
+  brought the next shot in smaller than the frame and grew it to fit, and
+  showed it whole from 30% in, so most of the transition was an inset with
+  hard edges over the punched-in outgoing shot: a picture-in-picture.
+  `look.zoom-through@2` brings it in punched in as far as the outgoing shot
+  went, with the same zoom blur, and settles it on the frame, the two
+  changing over in the middle as `cross-zoom` does. A new transition takes
+  `@2`; one that names `@1` draws as it did until its line names `@2`
+  ([docs/looks.md](docs/looks.md#transitions)).
 - Lining recordings up by their sound says when one offset does not fit. An
   agent's `look` with `sync` gave each recording one offset and built a
   multicam by it, whether or not the two stayed together. It now places

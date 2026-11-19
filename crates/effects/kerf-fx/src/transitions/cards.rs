@@ -105,6 +105,18 @@ impl Card {
         let front = dot(n, d) > 0.0;
         Some((lx, ly, t, front))
     }
+
+    /// Where image pixel (lx, ly) of the card is on the screen, seen from `eye`; `None` when it is
+    /// not in front of the eye.
+    pub fn seen(&self, eye: V3, lx: f32, ly: f32) -> Option<[f32; 2]> {
+        let at = |k: usize| self.origin[k] + lx * self.ex[k] + ly * self.ey[k];
+        let ahead = at(2) - eye[2];
+        if ahead.is_nan() || ahead <= 1e-3 {
+            return None;
+        }
+        let k = -eye[2] / ahead;
+        Some([eye[0] + (at(0) - eye[0]) * k, eye[1] + (at(1) - eye[1]) * k])
+    }
 }
 
 #[inline]

@@ -764,6 +764,10 @@ const BUNDLED_LOOKS: &[(&str, &str)] = &[
         "zoom-through.kerflook",
         include_str!("../looks/zoom-through.kerflook"),
     ),
+    (
+        "zoom-through@2.kerflook",
+        include_str!("../looks/zoom-through@2.kerflook"),
+    ),
 ];
 
 fn mask_props() -> Vec<ParamDef> {
@@ -1483,7 +1487,8 @@ pub fn unknown(kind: &str, id: &str) -> String {
 }
 
 /// Read a definition table: an `effect` or `transition` line (id,
-/// category, name, when to use it, and the version when it is not 1) per
+/// category, name, when to use it, the version when it is not 1, and the
+/// oldest version it still reads when that is not the version itself) per
 /// definition, then a tab-indented line per parameter (type, name, default,
 /// `min..max`, `option|option`, or a file's `extension|extension`, unit,
 /// label). `#` lines are comments.
@@ -1507,9 +1512,14 @@ fn table_definitions(text: &str, engine: Engine) -> Vec<FxDef> {
             };
             let mut def = FxDef::new(fields[1], kind, Domain::Video, &doc).category(fields[2]);
             if let Some(version) = fields.get(5) {
-                // A version that replaced another definition under the id.
+                // A version that replaced another definition under the id, or
+                // that draws the same parameters differently and still reads
+                // the documents of the older ones.
                 let version = version.parse().expect("versions are whole numbers");
-                def = def.version(version, version);
+                let oldest = fields.get(6).map_or(version, |oldest| {
+                    oldest.parse().expect("versions are whole numbers")
+                });
+                def = def.version(version, oldest);
             }
             def.engine = engine;
             definitions.push(def);
@@ -1686,12 +1696,28 @@ mod tests {
         );
         // A point is two numbers across the picture, and another track a track.
         let magnify = catalog.fx("distort.magnify").unwrap();
-        assert_eq!(magnify.find("center_x").unwrap().default, Value::Number(0.5));
+        assert_eq!(
+            magnify.find("center_x").unwrap().default,
+            Value::Number(0.5)
+        );
         let matte = catalog.fx("key.trackmatte").unwrap();
         assert_eq!(
             (matte.version, matte.find("matte").unwrap().ty.clone()),
             (1, ParamType::Track)
         );
+    }
+
+    /// A transition whose parameters draw a different picture goes up a
+    /// version and still reads the documents of the older one.
+    #[test]
+    fn a_transition_drawn_anew_reads_its_older_documents() {
+        // Push smears its motion blur since version 2.
+        let push = Catalog::builtin().fx("push").unwrap();
+        assert_eq!((push.version, push.reads_from), (2, 1));
+        assert!(push.reads(1).is_ok() && push.reads(2).is_ok() && push.reads(3).is_err());
+        // Film Dissolve draws as it did.
+        let dissolve = Catalog::builtin().fx("film-dissolve").unwrap();
+        assert_eq!((dissolve.version, dissolve.reads_from), (1, 1));
     }
 
     #[test]

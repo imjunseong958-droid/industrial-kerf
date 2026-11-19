@@ -138,6 +138,33 @@ fn each_kernel_draws_what_the_cpu_draws() {
     assert!(kerf_gpu::shared().is_some(), "the device failed");
 }
 
+/// The kernels are WGSL, with no GPU to say so, and their uniforms are what a pass writes: no more than
+/// the 16 KiB of them that any Vulkan device binds, which the cards of a card scene's every moment fit.
+#[test]
+fn the_kernels_read_the_uniforms_a_pass_writes() {
+    let source = format!(
+        "{}{}",
+        include_str!("kernels.wgsl"),
+        kerf_kernel::wipe_wgsl()
+    );
+    let module = naga::front::wgsl::parse_str(&source)
+        .unwrap_or_else(|error| panic!("{}", error.emit_to_string(&source)));
+    naga::valid::Validator::new(
+        naga::valid::ValidationFlags::all(),
+        naga::valid::Capabilities::all(),
+    )
+    .validate(&module)
+    .unwrap_or_else(|error| panic!("{error:?}"));
+    let (_, u) = module
+        .global_variables
+        .iter()
+        .find(|(_, global)| global.name.as_deref() == Some("u"))
+        .expect("the uniforms");
+    let size = module.types[u.ty].inner.size(module.to_ctx()) as usize;
+    assert_eq!(size, 32 + 4 * super::gpu::NUMBERS);
+    assert!(size <= 16 * 1024, "{size} bytes");
+}
+
 /// Which have kernels and which do not, by name, so that neither list can drift.
 #[test]
 fn which_transitions_have_kernels() {

@@ -41,9 +41,13 @@ pub const TOOL_NAMES: &[&str] = &["look", "edit", "render", "make"];
 /// As many frames as one tool result carries to a model.
 const MAX_LOOK_FRAMES: usize = kerf_agent::MAX_TOOL_RESULT_IMAGES;
 const DEFAULT_FRAME_WIDTH: u32 = 960;
-/// A preview shows the frames either side of the first four cuts an edit
-/// made or moved, two cuts to a row.
+/// A preview shows the frame that shows best each picture generator an edit
+/// added or changed, then, as many as fit, the frames either side of the
+/// first cuts it made or moved, two cuts to a row.
 const PREVIEW_FRAMES: usize = 8;
+/// The most frames of a generator read for the one that shows it best: a
+/// longer one is read at frames spread through it.
+const MOST_SHOWN_READS: i64 = 600;
 const PREVIEW_COLUMNS: usize = 4;
 const PREVIEW_WIDTH: u32 = 480;
 /// The largest document carried as context; `look` returns all of it.
@@ -86,8 +90,11 @@ the document diff, check findings, `snapped` where a `snap=` moved an edge \
 have left a word in or out) or a `said=` or `pause=` took something out \
 (from where to where, and the pause it leaves), and a before/after preview: the frames \
 either side of each cut it made or moved, the middle of a clip it changed \
-in place (with its first and last frame when the clip moves), and three \
-frames through a transition it added or changed. Each sheet is an image \
+in place (with its first and last frame when the clip moves), three \
+frames through a transition it added or changed, and the frame that shows \
+most of a title, shape, particles or solid it added or changed (revealed, \
+at its full opacity and size, nearest its middle). A sheet holds eight frames: \
+those of the generators first, then the earliest of the rest. Each sheet is an image \
 after a line that says which it is and its frames in reading order, the \
 one before the edit first. The project does not change until the user accepts it. Several \
 proposals can wait side by side. Pass a pending proposal's id as `extend` to \
@@ -4532,9 +4539,8 @@ impl KerfMcpRouter {
     }
 
     /// Contact sheets of what the edit changed in `from`–`to`, before and
-    /// after: the frames either side of each cut it made or moved, and the
-    /// middle of a clip it changed in place. `before` and `after` have their
-    /// media paths resolved.
+    /// after: the frames [`preview_times`] picks on each side. `before` and
+    /// `after` have their media paths resolved.
     fn preview(
         &self,
         sequence: &Sequence,
@@ -5241,30 +5247,141 @@ fn moves(clip: &Clip) -> bool {
         || matches!(&clip.content, Content::Generator { params, .. } if animated(params))
 }
 
+/// Whether `clip` is a generator that draws a picture of its own: a title,
+/// a shape, particles, a solid, a mesh. A camera, a light, a null, a signal
+/// and an adjustment show nothing of themselves.
+fn draws(clip: &Clip) -> bool {
+    matches!(
+        &clip.content,
+        Content::Generator { fx, .. }
+            if !matches!(
+                fx.as_str(),
+                "adjustment" | "camera" | "light" | "null" | kerf_model::SIGNAL
+            )
+    )
+}
+
+/// How much of the generator `clip` shows at `at`, clip-relative, from 0 to
+/// 1: its opacity, how far a title has revealed itself and a shape drawn its
+/// stroke on, and, out of depth, how much of the frame its picture covers by
+/// its scale, crop and place. Growing past the frame shows no more of it, so
+/// a pop's overshoot shows it as much as where it settles.
+fn shows(clip: &Clip, at: Time) -> f64 {
+    let Content::Generator { fx, params, .. } = &clip.content else {
+        return 1.0;
+    };
+    let read = |params: &kerf_model::Params, name: &str, default: f64| {
+        params
+            .get(name)
+            .and_then(|param| param.value_at(at).as_number())
+            .unwrap_or(default)
+    };
+    let prop = |name: &str, default: f64| read(&clip.props, name, default);
+    let param = |name: &str, default: f64| read(params, name, default);
+    let unit = |value: f64| value.clamp(0.0, 1.0);
+    let mut shows = unit(prop("opacity", 1.0));
+    match fx.as_str() {
+        "title" => shows *= unit(param("reveal", 1.0)),
+        "shape" if param("stroke_width", 0.0) > 0.0 => {
+            shows *= unit(param("trim_end", 1.0) - param("trim_start", 0.0));
+        }
+        _ => {}
+    }
+    if clip.in_depth() {
+        return shows;
+    }
+    // A generator's picture is the frame's: how much of the frame it covers
+    // across and down, in frame widths and heights about its middle.
+    let covers = |scale: f64, (low, high): (f64, f64), place: f64| {
+        let (low, high) = (unit(low), unit(high));
+        if low + high >= 1.0 {
+            return 0.0;
+        }
+        let scale = scale.abs();
+        let (from, to) = (place + scale * (low - 0.5), place + scale * (0.5 - high));
+        (to.min(0.5) - from.max(-0.5)).max(0.0)
+    };
+    let scale = prop("scale", 1.0);
+    let crop = |low: &str, high: &str| (prop(low, 0.0), prop(high, 0.0));
+    shows
+        * covers(
+            scale * prop("scale_x", 1.0),
+            crop("crop_l", "crop_r"),
+            prop("x", 0.0),
+        )
+        * covers(
+            scale * prop("scale_y", 1.0),
+            crop("crop_t", "crop_b"),
+            prop("y", 0.0),
+        )
+}
+
+/// The frame of the picture generator `clip` that shows it most, by
+/// [`shows`]: of those that show it as much, the nearest its middle, so a
+/// still one is seen at its middle and one that reveals and fades out where
+/// it has come in.
+fn shown_most(clip: &Clip, rate: kerf_model::Rate) -> Time {
+    let (first, last) = (rate.frames_floor(clip.start), rate.frames_floor(clip.end()));
+    let middle = first + (last - first) / 2;
+    let step = ((last - first) / MOST_SHOWN_READS + 1) as usize;
+    let read: Vec<(i64, f64)> = (first..last)
+        .step_by(step)
+        .chain([middle])
+        .map(|frame| (frame, shows(clip, rate.time_of(frame) - clip.start)))
+        .collect();
+    let most = read.iter().map(|(_, shows)| *shows).fold(0.0, f64::max);
+    let frame = read
+        .into_iter()
+        .filter(|(_, shows)| *shows >= most - 1e-3)
+        .min_by_key(|(frame, _)| (frame - middle).abs())
+        .map_or(middle, |(frame, _)| frame);
+    rate.time_of(frame)
+}
+
 /// The positions in `sequence` that show what an edit changed on `side`, the
 /// project before or after it, compared with `other`: the last frame
 /// before and the first frame of every cut it made or moved; the middle
 /// frame of a clip it changed in place, with its first and last when the
-/// clip moves; and a quarter, half and three quarters of the way through a
-/// transition it added or changed. The earliest come first.
+/// clip moves; a quarter, half and three quarters of the way through a
+/// transition it added or changed; and, in place of its middle, the frame
+/// that shows most of a picture generator it added or changed.
+/// [`PREVIEW_FRAMES`] of them at most, in order: the generators' frames, as a
+/// title's first and last frame may show none of it, and the earliest of the
+/// rest.
 fn preview_times(side: &Project, other: &Project, sequence: &str) -> Vec<Time> {
     let Some(sequence) = side.sequence(sequence) else {
         return Vec::new();
     };
     let old = other.sequence(sequence.id.as_str());
     let rate = sequence.rate;
+    // How much a generator shows is of what is drawn: a look as the keys it
+    // stands for. One that does not expand is read as it is.
+    let drawn = kerf_model::look::expand(side, Catalog::builtin()).ok();
+    let drawn = drawn
+        .as_ref()
+        .and_then(|drawn| drawn.sequence(sequence.id.as_str()));
     let mut times = Vec::new();
     let mut cut = |at: Time| times.extend([at - rate.frame_duration(), at]);
     let mut middles = Vec::new();
+    let mut most = Vec::new();
     for track in &sequence.tracks {
         let previous = old.and_then(|old| old.track(track.id.as_str()));
+        let drawn = drawn.and_then(|drawn| drawn.track(track.id.as_str()));
+        let mut show_most = |clip: &Clip| {
+            let drawn = drawn.and_then(|drawn| drawn.clip(clip.id.as_str()));
+            most.push(shown_most(drawn.unwrap_or(clip), rate));
+        };
         for clip in &track.clips {
             match previous.and_then(|previous| previous.clip(clip.id.as_str())) {
                 Some(was) if was == clip => {}
                 Some(was) if (was.start, was.end()) == (clip.start, clip.end()) => {
                     let (first, last) =
                         (rate.frames_floor(clip.start), rate.frames_floor(clip.end()));
-                    middles.push(rate.time_of(first + (last - first) / 2));
+                    if draws(clip) {
+                        show_most(clip);
+                    } else {
+                        middles.push(rate.time_of(first + (last - first) / 2));
+                    }
                     // One frame says nothing of a move: where it starts and
                     // where it ends, either side of the middle.
                     if moves(clip) || moves(was) {
@@ -5274,6 +5391,9 @@ fn preview_times(side: &Project, other: &Project, sequence: &str) -> Vec<Time> {
                 _ => {
                     cut(clip.start);
                     cut(clip.end());
+                    if draws(clip) {
+                        show_most(clip);
+                    }
                 }
             }
         }
@@ -5302,11 +5422,23 @@ fn preview_times(side: &Project, other: &Project, sequence: &str) -> Vec<Time> {
     }
     times.extend(middles);
     let duration = sequence.duration();
-    times.retain(|time| !time.is_negative() && *time < duration);
-    times.sort();
-    times.dedup();
-    times.truncate(PREVIEW_FRAMES);
-    times
+    let shown = |mut times: Vec<Time>| {
+        times.retain(|time| !time.is_negative() && *time < duration);
+        times.sort();
+        times.dedup();
+        times
+    };
+    let mut most = shown(most);
+    most.truncate(PREVIEW_FRAMES);
+    let room = PREVIEW_FRAMES - most.len();
+    let rest: Vec<Time> = shown(times)
+        .into_iter()
+        .filter(|time| !most.contains(time))
+        .take(room)
+        .collect();
+    most.extend(rest);
+    most.sort();
+    most
 }
 
 /// Frames of the program, and their contact sheet when one was asked for.
@@ -5638,6 +5770,97 @@ sequence s1 rate=24 size=1920x1080
         assert_eq!(
             print(&dissolved, preview_times(&dissolved, &before, "s1")),
             ["00:00:03:18", "00:00:04:00", "00:00:04:06"]
+        );
+    }
+
+    #[test]
+    fn preview_shows_a_generator_where_it_shows_most() {
+        let before = project(DOCUMENT);
+        let print = |project: &Project, times: Vec<Time>| {
+            let clock = Clock::of_sequence(&project.sequences[0]);
+            times
+                .into_iter()
+                .map(|time| clock.print_position(time))
+                .collect::<Vec<_>>()
+        };
+        let edit = |project: &Project, script: &str| {
+            apply_script(project, catalog(), script).unwrap().project
+        };
+        let title = "track add V2 video\n\
+            overwrite gen=title dur=90f at=0f on=V2 as=t text=\"Opening\"\n\
+            set t reveal={6f:0 40f:1} opacity={0f:1 74f:1 89f:0}";
+
+        // A title that reveals itself and fades out shows nothing at its first
+        // frame and its last: it is seen where it has come in, nearest its
+        // middle, besides them.
+        let titled = edit(&before, title);
+        assert_eq!(
+            print(&titled, preview_times(&titled, &before, "s1")),
+            ["00:00:00:00", "00:00:01:21", "00:00:03:17", "00:00:03:18"]
+        );
+        // Taken out, it is seen as it was.
+        let deleted = edit(&titled, "delete t");
+        assert_eq!(
+            print(&titled, preview_times(&titled, &deleted, "s1")),
+            ["00:00:00:00", "00:00:01:21", "00:00:03:17", "00:00:03:18"]
+        );
+
+        // Changed in place, it is seen where it has come in in place of its
+        // middle, where it is still coming in, between its first and last.
+        let later = edit(&titled, "set t reveal={6f:0 60f:1}");
+        assert_eq!(
+            print(&later, preview_times(&later, &titled, "s1")),
+            ["00:00:00:00", "00:00:02:12", "00:00:03:17"]
+        );
+
+        // A look is read as the keys it stands for: a title that pops in late
+        // is seen once it has, not at its middle, before it has.
+        let popped = edit(
+            &before,
+            "track add V2 video\n\
+             overwrite gen=title dur=48f at=0f on=V2 as=t text=\"Hi\"\n\
+             fx t add look.pop-in start=30f",
+        );
+        assert_eq!(
+            print(&popped, preview_times(&popped, &before, "s1")),
+            ["00:00:00:00", "00:00:01:10", "00:00:01:23", "00:00:02:00"]
+        );
+
+        // A bar that grows across is seen once it has.
+        let bar = edit(
+            &before,
+            "track add V2 video\n\
+             overwrite gen=shape dur=48f at=0f on=V2 as=bar\n\
+             set bar scale_x={0f:0 36f:1}",
+        );
+        assert_eq!(
+            print(&bar, preview_times(&bar, &before, "s1")),
+            ["00:00:00:00", "00:00:01:12", "00:00:01:23", "00:00:02:00"]
+        );
+
+        // With more cuts than a sheet holds, the title is seen still, and the
+        // earliest cuts fill the rest.
+        let cut = edit(
+            &before,
+            &format!(
+                "split c1 at=6f as=d1\nsplit d1 at=12f as=d2\nsplit d2 at=18f as=d3\n\
+                 split d3 at=24f as=d4\n{title}"
+            ),
+        );
+        let times = print(&cut, preview_times(&cut, &before, "s1"));
+        assert_eq!(times.len(), PREVIEW_FRAMES);
+        assert_eq!(
+            times,
+            [
+                "00:00:00:00",
+                "00:00:00:05",
+                "00:00:00:06",
+                "00:00:00:11",
+                "00:00:00:12",
+                "00:00:00:17",
+                "00:00:00:18",
+                "00:00:01:21",
+            ]
         );
     }
 
