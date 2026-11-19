@@ -325,7 +325,7 @@ fn a_transition_keeps_what_its_clips_are() {
         ),
         (
             "in depth",
-            "  track V1 video\n    clip c1 media=m src=0f at=0f dur=12f\n      set three_d=true rotate_y=25 z=0.3\n    clip c2 media=m src=6f at=12f dur=12f\n      set three_d=true rotate_x=-15\n    transition t1 from=c1 to=c2 fx=push@1 dur=12f\n  track V2 video\n    clip l1 gen=light@1 at=0f dur=24f\n      set kind=directional x=-0.4 z=1\n".to_owned(),
+            "  track V1 video\n    clip c1 media=m src=0f at=0f dur=12f\n      set three_d=true rotate_y=25 z=0.3\n    clip c2 media=m src=6f at=12f dur=12f\n      set three_d=true rotate_x=-15\n    transition t1 from=c1 to=c2 fx=push@2 dur=12f\n  track V2 video\n    clip l1 gen=light@1 at=0f dur=24f\n      set kind=directional x=-0.4 z=1\n".to_owned(),
         ),
         (
             "in HDR, whose values go past 1",

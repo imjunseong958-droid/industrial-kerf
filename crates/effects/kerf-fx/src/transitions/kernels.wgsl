@@ -13,7 +13,8 @@ struct U {
     size: vec2<f32>,
     p: f32,
     shutter: f32,
-    v: array<vec4<f32>, 200>,
+    // `NUMBERS` in gpu.rs, four to an entry.
+    v: array<vec4<f32>, 961>,
 };
 
 @group(0) @binding(0) var<uniform> u: U;

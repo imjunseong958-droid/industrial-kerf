@@ -12,7 +12,7 @@ cargo run -p kerf-lang --example reference
 A video editor's transitions, carried from FilmCraft, are listed there by
 category: pushes, slides, whips, zooms, flashes, light leaks, glitches,
 irises, page peels, and more, drawn from both clips across the cut
-(`transition add from=c1 to=c2 fx=push@1 dur=12f direction=from-east`). A
+(`transition add from=c1 to=c2 fx=push@2 dur=12f direction=from-east`). A
 `direction` names the side the incoming clip enters from; a center is
 `center_x` and `center_y` in fractions of the frame; pixel sizes are canvas
 pixels. Kerf's own renderer draws them, on the GPU where there is one, except
