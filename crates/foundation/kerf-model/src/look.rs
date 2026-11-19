@@ -2205,6 +2205,94 @@ look look.test.lines version=1 name="Lines" category="Fun" on=clip
         }
     }
 
+    /// `look.zoom-through@2` brings the next shot in punched in, as far as the outgoing one went,
+    /// and settles it on 1, so it fills the frame all the way through. `@1` grew it from under 1,
+    /// whole from 30%: an inset with hard edges over the outgoing shot, which documents naming
+    /// `@1` keep drawing.
+    #[test]
+    fn zoom_through_2_never_draws_the_next_shot_smaller_than_the_frame() {
+        let rate = Rate::FPS_24;
+        // The incoming clip's least scale through the transition and its scale after it, each
+        // with any `scale_x` and `scale_y` on it.
+        let incoming = |version: u32, strength: f64, align: crate::Align, frames: i64| {
+            let solid = |id: &str, at: i64| {
+                let solid = Content::Generator {
+                    fx: Id::new("solid").unwrap(),
+                    version: 1,
+                    params: Params::new(),
+                };
+                Clip::new(
+                    Id::new(id).unwrap(),
+                    solid,
+                    rate.time_of(at),
+                    rate.time_of(48),
+                )
+            };
+            let transition = crate::Transition {
+                id: Id::new("t1").unwrap(),
+                from: Id::new("c1").unwrap(),
+                to: Id::new("c2").unwrap(),
+                fx: Id::new("look.zoom-through").unwrap(),
+                version,
+                duration: rate.time_of(frames),
+                align,
+                params: [("strength".into(), Param::Static(Value::Number(strength)))].into(),
+            };
+            let (before, after) = transition.split_at_cut(rate);
+            let mut track = crate::Track::new(Id::new("V1").unwrap(), crate::TrackKind::Video);
+            track.clips = vec![solid("c1", 0), solid("c2", 48)];
+            track.transitions.push(transition);
+            let mut project = Project::new("p");
+            project.sequences.push(crate::Sequence {
+                buses: Vec::new(),
+                id: Id::new("s1").unwrap(),
+                name: "s1".into(),
+                rate,
+                drop_frame: false,
+                width: 320,
+                height: 180,
+                sample_rate: 48_000,
+                color: Default::default(),
+                start: Time::ZERO,
+                tracks: vec![track],
+                markers: Vec::new(),
+            });
+            let expanded = expand(&project, Catalog::bundled()).unwrap();
+            let clip = &expanded.sequences[0].tracks[0].clips[1];
+            for moved in ["x", "y", "rotation"] {
+                assert!(!clip.props.contains_key(moved), "{moved}");
+            }
+            let scale = |at: Time| {
+                let at = at - clip.start;
+                let value = |prop: &str| {
+                    clip.props
+                        .get(prop)
+                        .map_or(1.0, |p| p.value_at(at).as_number().unwrap())
+                };
+                value("scale") * value("scale_x").min(value("scale_y"))
+            };
+            // Every eighth of a frame, from where it starts to past where it ends.
+            let (cut, step) = (rate.time_of(48), rate.time_of(1).flicks() / 8);
+            let least = (0..)
+                .map(|n| cut - before + Time::from_flicks(n * step))
+                .take_while(|&at| at <= cut + after)
+                .map(scale)
+                .fold(f64::INFINITY, f64::min);
+            (least, scale(cut + after + rate.time_of(1)))
+        };
+        for strength in [0.0, 0.25, 1.0, 2.0] {
+            for align in [crate::Align::Center, crate::Align::Start, crate::Align::End] {
+                for frames in [3, 10, 31] {
+                    let (least, after) = incoming(2, strength, align, frames);
+                    assert!(least >= 1.0, "{strength} {align:?} {frames}f: {least}");
+                    assert_eq!(after, 1.0, "{strength} {align:?} {frames}f");
+                }
+            }
+        }
+        let (least, after) = incoming(1, 1.0, crate::Align::Center, 10);
+        assert_eq!((least, after), (0.7, 1.0));
+    }
+
     #[test]
     fn a_project_s_looks_join_the_catalog_and_an_id_and_version_is_one_look() {
         let dir = std::env::temp_dir().join(format!("kerf-looks-{}", std::process::id()));
