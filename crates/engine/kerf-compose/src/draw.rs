@@ -374,6 +374,7 @@ impl Drawing {
             .map(|plan| plan.expect("every sequence planned"))
             .collect();
         let mut ids: Vec<(Id, Rgba)> = Vec::new();
+        let mut told = std::collections::HashSet::new();
         for shown in sequences
             .iter()
             .flat_map(|sequence| &sequence.tracks)
@@ -381,7 +382,7 @@ impl Drawing {
         {
             let id = &shown.plan.clip.id;
             let draws = !matches!(shown.plan.source, Source::Nothing | Source::Adjustment);
-            if draws && !ids.iter().any(|(told, _)| told == id) {
+            if draws && told.insert(id) {
                 ids.push((id.clone(), id_color(ids.len())));
             }
         }
@@ -2319,17 +2320,17 @@ impl<'a> Builder<'a> {
                 _ => {}
             }
         }
+        let parents: std::collections::HashSet<&Id> = sequence
+            .tracks
+            .iter()
+            .flat_map(|track| &track.clips)
+            .filter_map(|clip| clip.parent.as_ref())
+            .collect();
         let rigs = tracks
             .iter()
             .flat_map(|track: &TrackPlan| &track.shown)
             .map(|shown| &shown.plan)
-            .filter(|plan| {
-                sequence
-                    .tracks
-                    .iter()
-                    .flat_map(|track| &track.clips)
-                    .any(|clip| clip.parent.as_ref() == Some(&plan.clip.id))
-            })
+            .filter(|plan| parents.contains(&plan.clip.id))
             .map(|plan| {
                 (
                     plan.clip.id.clone(),
