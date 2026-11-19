@@ -445,7 +445,7 @@ fn filmcraft_transitions_render_from_one_clip_to_the_next() {
          \x20 track V1 video\n\
          \x20   clip c1 media=red src=0f at=0f dur=24f\n\
          \x20   clip c2 media=blue src=24f at=24f dur=24f\n\
-         \x20   transition t1 from=c1 to=c2 fx=push@1 dur=12f motion_blur=0\n",
+         \x20   transition t1 from=c1 to=c2 fx=push@2 dur=12f motion_blur=0\n",
     );
     let output = dir.path().join("push.mp4");
     let options = RenderOptions {

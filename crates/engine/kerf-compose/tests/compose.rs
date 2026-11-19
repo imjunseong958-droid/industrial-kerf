@@ -310,7 +310,7 @@ fn filmcraft_transitions_mix_both_clips_across_the_cut() {
     };
     // A push from the west halfway through: the incoming clip fills the
     // left half, the outgoing one is pushed into the right.
-    let push = cut("\x20   transition x1 from=g1 to=g2 fx=push@1 dur=12f motion_blur=0\n");
+    let push = cut("\x20   transition x1 from=g1 to=g2 fx=push@2 dur=12f motion_blur=0\n");
     let middle = frame(&push, 24, false);
     assert_eq!(pixel(&middle, 40, 90), [0, 0, 255]);
     assert_eq!(pixel(&middle, 280, 90), [255, 0, 0]);
@@ -319,7 +319,7 @@ fn filmcraft_transitions_mix_both_clips_across_the_cut() {
     assert_eq!(pixel(&frame(&push, 31, false), 160, 90), [0, 0, 255]);
     // From the east, the other way round.
     let east = cut(
-        "\x20   transition x1 from=g1 to=g2 fx=push@1 dur=12f motion_blur=0 direction=from-east\n",
+        "\x20   transition x1 from=g1 to=g2 fx=push@2 dur=12f motion_blur=0 direction=from-east\n",
     );
     let middle = frame(&east, 24, false);
     assert_eq!(pixel(&middle, 280, 90), [0, 0, 255]);

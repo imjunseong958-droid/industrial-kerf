@@ -569,12 +569,19 @@ pub(crate) fn temporal(
     }
     scale4(acc, 1.0 / n as f32)
 }
-/// Motion-blur settings from the `motion_blur` param: (shutter in progress units, samples).
+/// How long the shutter is open from the `motion_blur` param, in progress units: `max` at 100 %, 0 for
+/// no motion blur. A scene of cards takes as many samples over it as how far its cards move needs
+/// ([`motion::CardScene::moments`]).
+pub(crate) fn exposure(t: &Tx, max: f32) -> f32 {
+    max * t.frac("motion_blur").clamp(0.0, 1.0)
+}
+/// Motion-blur settings from the `motion_blur` param: (shutter in progress units, samples), a number
+/// of samples that does not follow how far the picture moves.
 pub(crate) fn shutter(t: &Tx, max: f32) -> (f32, usize) {
     let mb = t.frac("motion_blur").clamp(0.0, 1.0);
     if mb <= 0.0 {
         (0.0, 1)
     } else {
-        (max * mb, ((mb * 12.0).ceil() as usize).clamp(2, 12))
+        (exposure(t, max), ((mb * 12.0).ceil() as usize).clamp(2, 12))
     }
 }

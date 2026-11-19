@@ -3,7 +3,7 @@
 //! frame works out once (a wipe's sweep, the cards of a scene), and a test holds each kernel to
 //! [`apply_scaled`](super::apply_scaled) value by value.
 
-use super::motion::{card_scene, whip_layers, Layer};
+use super::motion::{card_scene, whip_layers, Layer, MOST_MOMENTS};
 use super::wipe::{angle_dir, field_range, star_dist, threshold, WipeStyle};
 use super::{
     bell, disc_offsets, ease_in, ease_in_out, ease_out, hash, mid_mix, smoothstep, Fx, Tx,
@@ -22,11 +22,12 @@ const ON_THE_CPU: &[(&str, &str)] = &[(
     "dense optical flow between the two frames, which needs both read back",
 )];
 
-/// As many of the numbers as `v` in `kernels.wgsl` has room for.
-const NUMBERS: usize = 800;
+/// The most cards a pixel of a card scene reads over all of its moments: three at each.
+const MOST_CARDS: usize = 3 * MOST_MOMENTS;
 
-/// The most samples a pixel takes of a card scene's cards, past which the uniforms would not hold them.
-const MOST_CARDS: usize = 36;
+/// As many of the numbers as `v` in `kernels.wgsl` has room for: the eye's four and each card's
+/// sixteen, which is what any of the kernels reads the most of.
+pub(super) const NUMBERS: usize = 4 + 16 * MOST_CARDS;
 
 /// Which of the kernels in `kernels.wgsl` a pass runs.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -198,17 +199,6 @@ fn card_numbers(t: &Tx, focal: f32, moments: &[Vec<Layer>]) -> Option<(Vec<f32>,
     Some((numbers, layers))
 }
 
-/// The moments `motion::scene` draws a scene at.
-fn moments((shutter, samples): (f32, usize), p: f32) -> Vec<f32> {
-    if samples <= 1 || shutter <= 0.0 {
-        vec![p]
-    } else {
-        (0..samples)
-            .map(|i| (p + (i as f32 / (samples - 1) as f32 - 0.5) * shutter).clamp(0.0, 1.0))
-            .collect()
-    }
-}
-
 /// A color's numbers, then a kernel's own.
 fn with_color(color: [f32; 4], own: &[f32]) -> Vec<f32> {
     let mut numbers = color.to_vec();
@@ -374,7 +364,7 @@ fn how(id: &str, t: &Tx) -> Option<How> {
         return Some(how);
     }
     if let Some(found) = card_scene(id, t) {
-        let at = moments(found.blur, t.p);
+        let at = found.moments(t);
         let built: Vec<Vec<Layer>> = at.iter().map(|&q| (found.build)(q)).collect();
         let (numbers, layers) = card_numbers(t, found.focal, &built)?;
         let mut pass = Pass::new(Entry::Scene, 0, numbers).with_count(at.len());

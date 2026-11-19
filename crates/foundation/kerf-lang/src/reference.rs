@@ -193,7 +193,7 @@ pub fn reference(catalog: &Catalog) -> String {
 
 const KERF_TRANSITIONS: &str = "## Transitions from FilmCraft
 Drawn from both clips across the cut, and written
-like any transition (`transition add from=c1 to=c2 fx=push@1 dur=12f
+like any transition (`transition add from=c1 to=c2 fx=push@2 dur=12f
 direction=from-east`). A direction names the side the incoming clip enters
 from, and a center is `center_x`/`center_y` in fractions of the frame.";
 
