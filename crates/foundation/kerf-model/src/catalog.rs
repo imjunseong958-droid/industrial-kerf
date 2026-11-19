@@ -755,6 +755,7 @@ const BUNDLED_LOOKS: &[(&str, &str)] = &[
         include_str!("../looks/slow-push.kerflook"),
     ),
     ("whip.kerflook", include_str!("../looks/whip.kerflook")),
+    ("whip-2.kerflook", include_str!("../looks/whip-2.kerflook")),
     ("wobble.kerflook", include_str!("../looks/wobble.kerflook")),
     (
         "zoom-pulse.kerflook",
@@ -1186,7 +1187,11 @@ fn builtin_catalog() -> Catalog {
             P::number("taper_end", 0.0)
                 .range(0.0, 1.0)
                 .doc("How much of the stroke narrows to nothing."),
-        ),
+        )
+        .param(P::choice("align", &["center", "left", "right"]).doc(
+            "The side of it at `x`, which it turns and scales about, as a title's text: \
+             `left` lines its left edge up with a left-aligned title at the same `x`.",
+        )),
         figure_params(FxDef::new(
             crate::SHAPE_OUTLINE,
             FxKind::Effect,

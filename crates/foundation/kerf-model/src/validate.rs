@@ -809,7 +809,10 @@ impl Validator<'_> {
             self.error("fx.version", owner, format!("`{owner}`: {message}"));
             return;
         }
-        if version < def.version {
+        // A look's versions sit side by side: one still defined draws as it is named.
+        let kept = def.engine == crate::catalog::Engine::Look
+            && self.catalog.look(fx.as_str(), version).is_some();
+        if version < def.version && !kept {
             self.warning(
                 "fx.version_older",
                 owner,

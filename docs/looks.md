@@ -2,7 +2,8 @@
 
 > Status: the plan at the end is in: versions, the built-in effects, looks
 > (the reader, the catalog layers, expansion, `flatten`, and 29 bundled
-> looks in `crates/foundation/kerf-model/looks`), presets that carry their looks, and
+> looks in `crates/foundation/kerf-model/looks`, the whip in two versions), presets that
+> carry their looks, and
 > markers placed on new music's beats.
 
 Kerf draws with a small set of **built-in effects**: transitions, color,
