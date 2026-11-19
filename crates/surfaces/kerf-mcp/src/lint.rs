@@ -1434,7 +1434,7 @@ fn cuts_in_sound(
             finding.value = Some((fade.level * 10.0).round() / 10.0);
             finding.unit = Some("dB".to_owned());
             findings.push(finding);
-        } else if judged.unchecked() {
+        } else if judged.unchecked() && !cut.silenced {
             // Nothing heard the media here: the cut is not checked, and that is said.
             match unheard.iter_mut().find(|(id, ..)| *id == &media.id) {
                 Some((_, clips, cuts, _)) => {
@@ -2255,9 +2255,10 @@ sequence s1 rate=24 size=1920x1080
             let project = apply_script(&project(), Catalog::builtin(), script)
                 .unwrap()
                 .project;
+            // What it says is cut in a sound, and what it says nobody checked.
             let found: Vec<String> = findings(&project, &through)
                 .into_iter()
-                .filter(|finding| finding.code == CUT_IN_SOUND)
+                .filter(|finding| finding.code == CUT_IN_SOUND || finding.code == CUT_UNHEARD)
                 .map(|finding| finding.message)
                 .collect();
             let report = cuts::report(
@@ -2274,10 +2275,11 @@ sequence s1 rate=24 size=1920x1080
             "{found:?}"
         );
         assert_eq!(faded, 0);
-        // Its gain brought down to nothing by its last frame fades it out, as a transition would.
+        // Its gain brought down to nothing by its last frame fades it out, as a transition would,
+        // and leaves no word to check.
         let (found, faded) = cut("set a1 gain={0f:0 84f:0 95f:-60:ease}");
         assert!(
-            !found.iter().any(|message| message.contains("`a1` ends")),
+            !found.iter().any(|message| message.contains("`a1`")),
             "{found:?}"
         );
         assert_eq!(faded, 1);

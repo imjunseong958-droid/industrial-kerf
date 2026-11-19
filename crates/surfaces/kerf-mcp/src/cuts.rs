@@ -80,6 +80,9 @@ pub(crate) struct SoundCut<'a> {
     /// [`FADED_GAIN_DB`] or more on its frame beside the cut, which fades
     /// what it goes through.
     pub faded: bool,
+    /// It is the clip's gain that fades it, under hearing: there is no word
+    /// for anybody to hear cut, so nothing is left unchecked.
+    pub silenced: bool,
     /// What of its media the clip plays past the cut under that transition,
     /// fading: from when to when, in seconds of the media.
     pub fade: Option<(f64, f64)>,
@@ -157,6 +160,7 @@ pub(crate) fn sound_cuts<'a>(project: &'a Project, sequence: &'a Sequence) -> Ve
                     source: source_in,
                     frame: clip.start,
                     faded: fade.is_some() || faded_by_gain(clip, Time::ZERO),
+                    silenced: faded_by_gain(clip, Time::ZERO),
                     fade: fade
                         .map(|fade| fade.split_at_cut(sequence.rate).0)
                         .filter(|before| before.is_positive())
@@ -178,6 +182,7 @@ pub(crate) fn sound_cuts<'a>(project: &'a Project, sequence: &'a Sequence) -> Ve
                     source: source_out,
                     frame: clip.end() - frame,
                     faded: fade.is_some() || faded_by_gain(clip, clip.duration - frame),
+                    silenced: faded_by_gain(clip, clip.duration - frame),
                     fade: fade
                         .map(|fade| fade.split_at_cut(sequence.rate).1)
                         .filter(|after| after.is_positive())
