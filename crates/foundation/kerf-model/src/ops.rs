@@ -415,52 +415,94 @@ pub fn apply(
     catalog: &Catalog,
     ops: &[Op],
 ) -> Result<(Project, Report), Rejected> {
-    let before: HashSet<(&'static str, Option<Id>)> = errors(project, catalog)
-        .into_iter()
-        .map(|d| (d.code, d.entity))
-        .collect();
-    let mut editor = Editor {
-        project: project.clone(),
-        catalog,
-        ids: IdGen::default(),
-        notes: Vec::new(),
-    };
-    for (index, op) in ops.iter().enumerate() {
+    let mut steps = Steps::new(project, catalog);
+    for op in ops {
+        steps.step(op)?;
+    }
+    steps.finish()
+}
+
+/// Operations applied one at a time, for a caller that reads the project
+/// between them: what each one names is there to be looked at as it stood
+/// when that operation ran. [`apply`] is every step, then
+/// [`Steps::finish`].
+pub struct Steps<'a> {
+    from: &'a Project,
+    editor: Editor<'a>,
+    done: usize,
+}
+
+impl<'a> Steps<'a> {
+    pub fn new(project: &'a Project, catalog: &'a Catalog) -> Self {
+        Self {
+            from: project,
+            editor: Editor {
+                project: project.clone(),
+                catalog,
+                ids: IdGen::default(),
+                notes: Vec::new(),
+            },
+            done: 0,
+        }
+    }
+
+    /// The project as the operations so far leave it. It is checked as a
+    /// whole only by [`Steps::finish`].
+    pub fn project(&self) -> &Project {
+        &self.editor.project
+    }
+
+    /// Apply the next operation. One that is refused leaves the steps of
+    /// no further use.
+    pub fn step(&mut self, op: &Op) -> Result<(), Rejected> {
+        let editor = &mut self.editor;
         editor.ids = editor.project.id_gen();
         let before: Vec<Id> = editor.project.ids().cloned().collect();
         editor.apply(op).map_err(|diagnostic| Rejected {
-            op: Some(index),
+            op: Some(self.done),
             diagnostics: vec![diagnostic],
         })?;
         editor.housekeep();
         editor.project.retire_missing(&before);
+        self.done += 1;
+        Ok(())
     }
-    let introduced: Vec<_> = errors(&editor.project, catalog)
-        .into_iter()
-        .filter(|d| !before.contains(&(d.code, d.entity.clone())))
-        .collect();
-    if !introduced.is_empty() {
-        return Err(Rejected {
-            op: None,
-            diagnostics: introduced,
-        });
+
+    /// The project every step made and what they did, when they leave no
+    /// error the project did not start with.
+    pub fn finish(self) -> Result<(Project, Report), Rejected> {
+        let Self { from, editor, .. } = self;
+        let before: HashSet<(&'static str, Option<Id>)> = errors(from, editor.catalog)
+            .into_iter()
+            .map(|d| (d.code, d.entity))
+            .collect();
+        let introduced: Vec<_> = errors(&editor.project, editor.catalog)
+            .into_iter()
+            .filter(|d| !before.contains(&(d.code, d.entity.clone())))
+            .collect();
+        if !introduced.is_empty() {
+            return Err(Rejected {
+                op: None,
+                diagnostics: introduced,
+            });
+        }
+        let old: HashSet<&Id> = clip_ids(from).collect();
+        let new: HashSet<&Id> = clip_ids(&editor.project).collect();
+        let mut report = Report {
+            created: clip_ids(&editor.project)
+                .filter(|id| !old.contains(id))
+                .cloned()
+                .collect(),
+            removed: clip_ids(from)
+                .filter(|id| !new.contains(id))
+                .cloned()
+                .collect(),
+            notes: editor.notes,
+        };
+        report.created.sort();
+        report.removed.sort();
+        Ok((editor.project, report))
     }
-    let old: HashSet<&Id> = clip_ids(project).collect();
-    let new: HashSet<&Id> = clip_ids(&editor.project).collect();
-    let mut report = Report {
-        created: clip_ids(&editor.project)
-            .filter(|id| !old.contains(id))
-            .cloned()
-            .collect(),
-        removed: clip_ids(project)
-            .filter(|id| !new.contains(id))
-            .cloned()
-            .collect(),
-        notes: editor.notes,
-    };
-    report.created.sort();
-    report.removed.sort();
-    Ok((editor.project, report))
 }
 
 fn clip_ids(project: &Project) -> impl Iterator<Item = &Id> {

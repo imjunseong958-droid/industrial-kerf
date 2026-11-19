@@ -6,6 +6,22 @@ on `main`; its section here becomes the release's notes on GitHub
 
 ## Unreleased
 
+- A proposal the edit changed under can be brought forward. Accepting one
+  proposal, or editing the timeline, left every other proposal still waiting
+  out of date, and each had to be written again by the agent that made it.
+  **Bring forward**, on the proposal's card where Accept was and in the
+  Clip menu, now runs such a proposal's own edits
+  again on the timeline as it is: a clip it names is found where it has
+  moved to, and a time it names moves with the clips that were there, so a
+  trim that closes up, made before another trim closed up ahead of it, still
+  leaves its clips end to end. What comes of it is the proposal's next
+  version, to look at and accept like any other; nothing is brought forward
+  without being asked. Where a clip it names, or one a time it names was on,
+  has been cut, moved or removed since, or a line would change other clips
+  than it did, it is refused with that clip's name and waits as it was, for
+  Kerf to prepare again. An agent does the same with `edit` and the
+  proposal's id as `forward`
+  ([docs/architecture.md](docs/architecture.md#edit)).
 - An agent's `look` with `cuts` says when a cut took a word with a restart.
   A cut that takes out a start that was taken again, and a word or two more
   than that, plays whole words and measures clean, with the word gone from

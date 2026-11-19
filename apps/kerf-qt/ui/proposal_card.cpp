@@ -786,6 +786,13 @@ ProposalCard::ProposalCard(const QString &proposalId, QWidget *parent) : QFrame(
     m_accept->setTip(m_acceptTip, m_acceptKey);
     connect(m_accept, &QAbstractButton::clicked, this, [this] { emit acceptRequested(shownId()); });
     footer->addWidget(m_accept);
+    // In Accept's place while the proposal is out of date.
+    m_forward = new ui::Button(QStringLiteral("Bring forward"), ui::Button::Kind::Secondary);
+    m_forward->setObjectName(QStringLiteral("proposalForward"));
+    m_forward->setTip(QStringLiteral("Out of date · run it again on the edit as it is, to review as a new version"));
+    m_forward->hide();
+    connect(m_forward, &QAbstractButton::clicked, this, [this] { emit forwardRequested(m_id); });
+    footer->addWidget(m_forward);
     m_layout->addWidget(m_footer);
 
     // The settled line.
@@ -920,28 +927,31 @@ void ProposalCard::setPreview(bool on) {
 
 bool ProposalCard::previewOn() const { return m_preview->isChecked(); }
 
-void ProposalCard::setPrimary(bool primary) { m_accept->setKind(primary && !m_compact ? ui::Button::Kind::Primary : ui::Button::Kind::Secondary); }
+void ProposalCard::setPrimary(bool primary) {
+    const ui::Button::Kind kind = primary && !m_compact ? ui::Button::Kind::Primary : ui::Button::Kind::Secondary;
+    m_accept->setKind(kind);
+    m_forward->setKind(kind);
+}
 
 void ProposalCard::setAcceptTip(const QString &tip) {
     m_acceptTip = tip;
-    if (!m_acceptBlocked) m_accept->setTip(m_acceptTip, m_acceptKey);
+    m_accept->setTip(m_acceptTip, m_acceptKey);
 }
 
 void ProposalCard::setAcceptKey(const QString &key) {
     m_acceptKey = key;
-    if (!m_acceptBlocked) m_accept->setTip(m_acceptTip, m_acceptKey);
+    m_accept->setTip(m_acceptTip, m_acceptKey);
 }
 
-void ProposalCard::setAcceptBlocked(const QString &reason) {
-    m_accept->setEnabled(reason.isEmpty());
-    m_acceptBlocked = !reason.isEmpty();
-    if (m_acceptBlocked) m_accept->setTip(reason);
-    else m_accept->setTip(m_acceptTip, m_acceptKey);
+void ProposalCard::setStale(bool stale) {
+    m_stale = stale;
+    updateParts();
 }
 
 void ProposalCard::setActionsEnabled(bool enabled) {
     m_reject->setEnabled(enabled);
     m_preview->setEnabled(enabled);
+    m_forward->setEnabled(enabled);
     if (!enabled) m_accept->setEnabled(false);
 }
 
@@ -956,6 +966,7 @@ void ProposalCard::setCompact(bool compact) {
     m_compact = compact;
     m_watch->setKind(compact ? ui::Button::Kind::Primary : ui::Button::Kind::Secondary);
     m_accept->setKind(compact ? ui::Button::Kind::Secondary : ui::Button::Kind::Primary);
+    m_forward->setKind(m_accept->kind());
     updateParts();
 }
 
@@ -1000,7 +1011,9 @@ void ProposalCard::updateParts() {
     m_settledLabel->setVisible(m_settled);
     // Nothing to do with a cut until Kerf has made it.
     m_reject->setVisible(!m_building);
-    m_accept->setVisible(!m_building);
+    // One that is out of date is brought forward before it can be accepted.
+    m_accept->setVisible(!m_building && !m_stale);
+    m_forward->setVisible(!m_building && m_stale);
     updateGeometry();
     update();
 }

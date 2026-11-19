@@ -114,7 +114,12 @@ Kerf answers with a **proposal**, a card under its answer:
   focused) drops it. **Versions** appear once Kerf has revised it.
 
 A proposal that has gone stale, because the edit changed under it, cannot be
-accepted: ask Kerf to stage it again.
+accepted as it is. Its card has **Bring forward** where Accept was (also Clip ▸
+Bring Proposal Forward): that runs it again on the edit as it is now, each clip
+found where it has moved to, and stages the result as the proposal's next
+version for you to look at and accept. Where a clip it names has been cut,
+moved or removed since, Kerf says which and changes nothing: ask it to stage
+the proposal again.
 
 ### How far Kerf goes without asking
 

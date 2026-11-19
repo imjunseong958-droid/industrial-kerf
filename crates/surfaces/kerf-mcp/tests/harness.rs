@@ -1356,6 +1356,120 @@ fn a_proposal_can_be_seen_extended_and_rendered() {
 }
 
 #[test]
+fn a_stale_proposal_is_brought_forward_as_its_next_version() {
+    let Some((_directory, router)) = router() else {
+        return;
+    };
+    // A cut three seconds into the one clip.
+    let staged = ok(&router, "edit", json!({"script": "split c1 at=00:00:03:00"}));
+    let id = staged["proposal"].as_str().unwrap().to_owned();
+    // On the revision it was made on there is nowhere to bring it.
+    let current = error(&router, "edit", json!({"forward": id}));
+    assert_eq!(current["code"], "PROPOSAL_NOT_STALE", "{current}");
+
+    // The person puts a second of colour at the head: the clip is where it
+    // was cut from, a second later.
+    let revision = router.runtime().get_state().unwrap().revision;
+    router
+        .runtime()
+        .apply_script_request(
+            "ui",
+            "ui-head",
+            "insert gen=solid at=0f dur=30f on=V1 as=g1",
+            revision,
+        )
+        .unwrap();
+    let context = kerf_mcp::harness::context(router.runtime()).unwrap();
+    assert!(
+        context.contains(
+            "The project has changed since, so the user cannot accept it: bring it forward \
+             with `edit` and its id as `forward`, or `revise` it."
+        ),
+        "{context}"
+    );
+    // `forward` runs the proposal's own operations, so it takes no script.
+    let with_script = error(
+        &router,
+        "edit",
+        json!({"forward": id, "script": "trim c1 in +1f"}),
+    );
+    assert_eq!(with_script["code"], "INVALID_ARGUMENTS", "{with_script}");
+
+    let forwarded = ok(&router, "edit", json!({"forward": id}));
+    assert_eq!(forwarded["forwarded"], id.as_str());
+    assert_eq!(forwarded["version"], 2, "{forwarded}");
+    assert_eq!(forwarded["supersedes"], id.as_str());
+    assert_eq!(forwarded["status"], "awaiting_review");
+    assert_eq!(forwarded["baseRevision"], revision + 1);
+    // The cut is in the clip where it was, which is a second later.
+    assert_eq!(forwarded["script"], "split c1 at=00:00:04:00\n");
+    let diff = forwarded["diff"].as_str().unwrap();
+    assert!(diff.contains("at=00:00:04:00 dur=00:00:01:00"), "{diff}");
+    assert!(forwarded["check"].is_object(), "{forwarded}");
+    let v2 = forwarded["proposal"].as_str().unwrap().to_owned();
+    assert_ne!(v2, id);
+    let state = router.runtime().get_state().unwrap();
+    assert_eq!(state.revision, revision + 1, "nothing was accepted");
+    assert_eq!(state.proposals[0].proposal_id, v2);
+    assert_eq!(
+        state.proposals[0].freshness,
+        kerf_runtime::ProposalFreshness::Current
+    );
+    let context = kerf_mcp::harness::context(router.runtime()).unwrap();
+    assert!(
+        context.contains(&format!("Proposal {v2} (v2, by Kerf, from revision {})", revision + 1)),
+        "{context}"
+    );
+    assert!(context.contains(&format!("Earlier versions: v1 {id}.")), "{context}");
+    assert!(!context.contains("The project has changed since"), "{context}");
+    // What it would make can be looked at again before it is accepted.
+    let shown = ok(&router, "look", json!({"proposal": v2}));
+    let text = shown["document"].as_str().unwrap();
+    assert!(text.contains("at=00:00:01:00 dur=00:00:03:00"), "{text}");
+
+    // The clip is cut since: the line is not the edit it was, and says so
+    // by the clip's name. The proposal waits as it was.
+    router
+        .runtime()
+        .apply_script_request("ui", "ui-cut", "trim c1 out -15f", revision + 1)
+        .unwrap();
+    let refused = error(&router, "edit", json!({"forward": v2}));
+    assert_eq!(refused["code"], "PROPOSAL_NOT_FORWARDED", "{refused}");
+    let message = refused["message"].as_str().unwrap();
+    assert!(
+        message.contains("1:1: clip `c1` was cut since this was proposed"),
+        "{message}"
+    );
+    assert!(
+        message.contains(&format!("proposal {v2} waits as it was; pass it as `revise`")),
+        "{message}"
+    );
+    let state = router.runtime().get_state().unwrap();
+    assert_eq!(state.proposals[0].proposal_id, v2);
+    assert_eq!(state.proposals[0].version, 2);
+    assert_eq!(
+        state.proposals[0].freshness,
+        kerf_runtime::ProposalFreshness::Stale
+    );
+    // An earlier version, or a proposal that is not waiting, is not brought anywhere.
+    assert_eq!(
+        error(&router, "edit", json!({"forward": id}))["code"],
+        "PROPOSAL_SUPERSEDED"
+    );
+    assert_eq!(
+        error(&router, "edit", json!({"forward": "proposal-none"}))["code"],
+        "NOT_PENDING"
+    );
+    // It is revised, as before.
+    let revised = ok(
+        &router,
+        "edit",
+        json!({"script": "split c1 at=00:00:03:00", "revise": v2}),
+    );
+    assert_eq!(revised["version"], 3, "{revised}");
+}
+
+#[test]
 fn look_shows_no_more_frames_than_a_model_receives() {
     let Some((_directory, router)) = router() else {
         return;

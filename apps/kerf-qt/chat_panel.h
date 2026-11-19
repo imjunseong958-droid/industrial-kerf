@@ -286,6 +286,8 @@ signals:
     void seekRequested(double seconds);
     void acceptRequested(const QString &proposalId);
     void rejectRequested(const QString &proposalId);
+    // A stale card's Bring forward.
+    void forwardRequested(const QString &proposalId);
     // The Preview checkbox, or an older version chosen while previewing.
     void previewRequested(const QString &proposalId, bool on);
     // A card's Watch what changed.

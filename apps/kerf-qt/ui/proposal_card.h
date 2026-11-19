@@ -196,8 +196,11 @@ public:
     void setAcceptTip(const QString &tip);
     // The key Accept's tip names: proposal.accept's, ⌘↩ until told otherwise.
     void setAcceptKey(const QString &key);
-    // Accept refused (stale, offline): disabled with the reason as its tip.
-    void setAcceptBlocked(const QString &reason);
+    // Out of date, the edit having changed under it: it cannot be accepted, so
+    // Bring forward stands where Accept does, to run it again on the edit as
+    // it is.
+    void setStale(bool stale);
+    bool isStale() const { return m_stale; }
     void setActionsEnabled(bool enabled);
     // Settled: one line, accent ink for an accept, ink2 for a reject. Empty
     // text opens the card again.
@@ -231,6 +234,7 @@ public:
     ui::CheckBox *previewBox() const { return m_preview; }
     ui::GhostButton *scriptButton() const { return m_script; }
     ui::Button *acceptButton() const { return m_accept; }
+    ui::Button *forwardButton() const { return m_forward; }
     ui::Button *rejectButton() const { return m_reject; }
     QLabel *settledLabel() const { return m_settledLabel; }
     // The versions menu's labels, checked first (for tests and menus).
@@ -246,6 +250,9 @@ signals:
     void versionChosen(const QString &proposalId);
     void acceptRequested(const QString &proposalId);
     void rejectRequested(const QString &proposalId);
+    // Bring forward: the proposal itself, whose newest version is what is
+    // brought forward whichever the card shows.
+    void forwardRequested(const QString &proposalId);
 
 protected:
     void paintEvent(QPaintEvent *) override;
@@ -289,9 +296,10 @@ private:
     ui::GhostButton *m_script = nullptr;
     ui::Button *m_reject = nullptr;
     ui::Button *m_accept = nullptr;
+    ui::Button *m_forward = nullptr;
+    bool m_stale = false;
     QString m_acceptTip = QStringLiteral("Accept");
     QString m_acceptKey;
-    bool m_acceptBlocked = false;
     QLabel *m_settledLabel = nullptr;
 };
 

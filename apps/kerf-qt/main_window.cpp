@@ -1419,6 +1419,9 @@ void MainWindow::routeEvent(const QJsonObject &event) {
             // Said in the takes' card of the shot's graph, where the reading was asked for.
         } else if (event.value(QStringLiteral("command")).toString().startsWith(QLatin1String("shot_"))) {
             // Said on the card of the shot's graph that asked for a clip to be read from footage.
+        } else if (event.value(QStringLiteral("command")).toString() == QStringLiteral("forward")) {
+            // The proposal stays as it was, on its card: this says which clip stopped it.
+            showError(message, QStringLiteral("Not brought forward"));
         } else {
             showError(message);
             // A failed turn is said in its thread too; the next turn takes it away.
@@ -1788,14 +1791,14 @@ void MainWindow::addActivity(const QString &kind, const QString &text) {
     }
 }
 
-void MainWindow::showError(const QString &message) {
+void MainWindow::showError(const QString &message, const QString &what) {
     m_errorFromAgent = false;
     // An engine diagnostic opens with its severity and code ("error[ripple.blocked]: "), which
     // are for tools that read it; a person reads what follows.
     static const QRegularExpression diagnostic(QStringLiteral("^(?:error|warning)\\[[A-Za-z0-9_.\\-]+\\](?: \\d+:\\d+)?: "));
     QString readable = message;
     readable.remove(diagnostic);
-    m_errorMessage->setText(readable);
+    m_errorMessage->setText(what.isEmpty() ? readable : QStringLiteral("%1 · %2").arg(what, readable));
     m_errorBanner->show();
     // The toolbar's subtitle says so too, until it is dismissed.
     if (!m_errorBanner->isHidden()) layoutProjectTitle();

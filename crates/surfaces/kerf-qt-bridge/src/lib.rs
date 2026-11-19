@@ -199,6 +199,13 @@ enum Command {
         proposal_id: String,
         revision: u64,
     },
+    /// Bring a stale proposal onto the project as it is, as its next
+    /// version.
+    Forward {
+        #[serde(rename = "proposalId")]
+        proposal_id: String,
+        revision: u64,
+    },
     Agent {
         text: String,
         /// The clip, range, or playhead the request is about.
@@ -995,6 +1002,14 @@ fn runtime_worker(
                 proposal_id,
                 revision,
             } => active_client.reject_proposal_request(&proposal_id, "ui", &operation, revision),
+            Command::Forward {
+                proposal_id,
+                revision,
+            } => {
+                // Its refusal is said as one, with the clip that stopped it.
+                refusal = Some("forward");
+                active_client.forward_proposal(&operation, revision, &proposal_id)
+            }
             Command::PresetExport { path } => {
                 match active_client
                     .get_document(false)
@@ -3493,6 +3508,7 @@ mod tests {
                 json!({"clip": "c1", "edge": "in", "frames": 2}),
             ),
             ("proposal.reject", json!({"proposal": "p1"})),
+            ("proposal.forward", json!({"proposal": "p1"})),
             ("ai.stop", json!(null)),
         ] {
             let result = super::run_command(

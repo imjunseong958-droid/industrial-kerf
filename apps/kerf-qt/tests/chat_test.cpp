@@ -746,6 +746,94 @@ private slots:
         QCOMPARE(w.of("accept").first().value("proposalId").toString(), QStringLiteral("p-kerf"));
     }
 
+    // A proposal the edit changed under cannot be accepted. Its card offers to
+    // bring it forward where Accept stood; that is sent for the proposal, and
+    // what comes back, its next version, is accepted as any other. Refused,
+    // the window says which clip stopped it. KERF_SCREENSHOT_DIR=<dir> saves
+    // the stale card and the window with the refusal.
+    void aStaleCardIsBroughtForward() {
+        Window w;
+        w.window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&w.window));
+        const QJsonObject program{{"fps", 25}, {"tracks", QJsonArray{QJsonObject{{"id", "V1"}, {"type", "video"}, {"clips", QJsonArray{
+            QJsonObject{{"id", "sea"}, {"name", "B003_C011"}, {"timelineStart", 0.0}, {"duration", 4.0}}}}}}}};
+        const QJsonObject kerf{{"kind", "kerf"}, {"name", "Kerf"}};
+        const QJsonObject v1{{"proposalId", "p-1"}, {"status", "pending"}, {"freshness", "stale"}, {"baseRevision", 3},
+                             {"script", "trim sea out -25f\n"}, {"author", kerf}, {"version", 1}};
+        const auto show = [&](int revision, const QJsonObject &proposal) {
+            const QJsonObject snapshot{{"revision", revision}, {"duration", 4}, {"timeline", program}, {"proposals", QJsonArray{proposal}}};
+            w.window.applySnapshot(snapshot);
+            w.window.m_chatWiring->handleEvent(QStringLiteral("state"), QJsonObject{{"type", "state"}, {"snapshot", snapshot}});
+            settle();
+        };
+        show(4, v1);
+        w.window.m_chatWiring->openConversation(QStringLiteral("c-1"));
+        w.window.handleEvent(conversation("c-1", "Trim the sea",
+                                          {item("i1", "you", "Trim the sea"), item("i2", "kerf", "Trimmed a second.", {{"proposal", "p-1"}})}));
+        settle();
+        ProposalCard *card = w.chat()->card(QStringLiteral("p-1"));
+        QVERIFY(card && card->isStale());
+        QVERIFY(card->acceptButton()->isHidden());
+        ui::Button *forward = card->forwardButton();
+        QVERIFY(!forward->isHidden() && forward->isEnabled());
+        QCOMPARE(forward->text(), QStringLiteral("Bring forward"));
+        // It stands where Accept does, after Reject.
+        QCOMPARE(forward->parentWidget(), card->rejectButton()->parentWidget());
+        QCOMPARE(forward->kind(), card->acceptButton()->kind());
+        const QString shots = qEnvironmentVariable("KERF_SCREENSHOT_DIR");
+        if (!shots.isEmpty()) {
+            QVERIFY(QDir().mkpath(shots));
+            QVERIFY(card->grab().save(QDir(shots).filePath(QStringLiteral("proposal-card-stale.png"))));
+        }
+        // Reject, then Bring forward, each whole on the card's line.
+        QVERIFY(forward->isVisible() && !card->acceptButton()->isVisible());
+        QVERIFY(card->rejectButton()->geometry().right() < forward->geometry().left());
+        QVERIFY(forward->geometry().right() <= forward->parentWidget()->width());
+        QVERIFY(forward->width() >= forward->sizeHint().width());
+        w.sent.clear();
+        forward->click();
+        QCOMPARE(w.of("forward").size(), 1);
+        QCOMPARE(w.of("forward").first().value("proposalId").toString(), QStringLiteral("p-1"));
+        QCOMPARE(w.of("forward").first().value("revision").toInt(), 4);
+        QVERIFY(w.of("accept").isEmpty());
+        // Nothing is settled by it: the card waits for what comes back.
+        settle();
+        QVERIFY(!w.chat()->card(QStringLiteral("p-1"))->isSettled());
+
+        // Refused, the proposal is as it was, and the window says why.
+        w.window.handleEvent(QJsonObject{{"type", "error"}, {"command", "forward"}, {"code", "PROPOSAL_NOT_FORWARDED"},
+                                         {"message", "error[forward.changed] 1:1: clip `sea` was cut since this was proposed"}});
+        QVERIFY(!w.window.m_errorBanner->isHidden());
+        QCOMPARE(w.window.m_errorMessage->text(), QStringLiteral("Not brought forward · clip `sea` was cut since this was proposed"));
+        QVERIFY(w.chat()->card(QStringLiteral("p-1"))->isStale());
+        if (!shots.isEmpty()) QVERIFY(w.window.grab().save(QDir(shots).filePath(QStringLiteral("proposal-not-forwarded.png"))));
+
+        // Brought forward, it is version 2 under a new id, on the edit as it is.
+        QJsonObject v2 = v1;
+        v2["proposalId"] = "p-2";
+        v2["freshness"] = "current";
+        v2["baseRevision"] = 4;
+        v2["version"] = 2;
+        v2["supersedes"] = "p-1";
+        v2["versions"] = QJsonArray{QJsonObject{{"version", 1}, {"proposalId", "p-1"}, {"script", "trim sea out -25f\n"}},
+                                    QJsonObject{{"version", 2}, {"proposalId", "p-2"}, {"script", "trim sea out -25f\n"}}};
+        show(4, v2);
+        ProposalCard *next = w.chat()->card(QStringLiteral("p-1"));
+        QVERIFY(next);
+        QCOMPARE(next->proposalId(), QStringLiteral("p-2"));
+        QVERIFY(!next->isStale());
+        QVERIFY(next->forwardButton()->isHidden() && !next->acceptButton()->isHidden());
+        w.sent.clear();
+        next->acceptButton()->click();
+        QCOMPARE(w.of("accept").first().value("proposalId").toString(), QStringLiteral("p-2"));
+
+        // With the project gone there is nothing to bring it to.
+        show(5, v1);
+        w.window.setConnection(QStringLiteral("disconnected"));
+        settle();
+        QVERIFY(!w.chat()->card(QStringLiteral("p-1"))->forwardButton()->isEnabled());
+    }
+
     // A tool call is one row of the work log: said as it starts and put in its
     // place once it ends, as a coding agent's log reads; a failed one in neg.
     void aToolCallIsOneRowOfTheLog() {

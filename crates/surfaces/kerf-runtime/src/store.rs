@@ -86,6 +86,16 @@ pub(crate) struct HistoryEntry {
     pub(crate) project: Arc<Project>,
 }
 
+/// The project as it was at `revision`, kept from when the project moved on
+/// while a proposal made on it was still open: what that proposal is
+/// brought forward from.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct ProposalBase {
+    pub(crate) revision: u64,
+    #[serde(with = "document_text")]
+    pub(crate) project: Arc<Project>,
+}
+
 /// Projects in history and checkpoints are stored as `.kerf` text.
 mod document_text {
     use super::kernel;
@@ -203,6 +213,11 @@ pub(crate) struct PersistedCheckpoint {
     pub(crate) proposal: Option<ProposalRecord>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) proposals: Vec<ProposalRecord>,
+    /// The projects stale open proposals were made on; absent in
+    /// checkpoints from before they were kept, whose stale proposals are
+    /// revised instead.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) bases: Vec<ProposalBase>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) revision_time: Option<String>,
     #[serde(default)]

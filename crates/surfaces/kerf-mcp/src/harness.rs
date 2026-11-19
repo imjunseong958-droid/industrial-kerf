@@ -94,7 +94,15 @@ proposals can wait side by side. Pass a pending proposal's id as `extend` to \
 run more lines on top of it, or as `revise` to replace it: either way it \
 becomes that proposal's next version (v2, v3) under a new id, and the user \
 can still see the versions before it. `extend` takes the newest version's \
-id, the one the last `edit` returned. What Kerf or a model makes is written in the script too, \
+id, the one the last `edit` returned. A proposal goes stale when the project \
+changes under it, as when another is accepted first, and cannot be accepted \
+then. Pass its id as `forward`, alone, to bring it onto the project as it is: \
+its own operations run again there, each time they name moved with the clips \
+that were at it, and that is its next version, for the user to review again. \
+It is refused, naming the clip, where a clip a line names, or one a time it \
+names was on, has been cut, moved or removed since, or where the line would \
+change other clips than it did; then `revise` it with a script written on \
+the project as it is. What Kerf or a model makes is written in the script too, \
 as the steps under its media: `media add` its line, naming the file it will be with the \
 model's rate and size, then a `step <media> add` line for each step, in the order they run \
 (the language below). There is no file to write first, and undo takes a step back as it does \
@@ -187,6 +195,10 @@ pub fn context(runtime: &RuntimeClient) -> Result<String, String> {
     Ok(text)
 }
 
+/// What is said of a proposal the project has changed under.
+const STALE: &str = " The project has changed since, so the user cannot accept it: bring it \
+                     forward with `edit` and its id as `forward`, or `revise` it.";
+
 /// The proposals waiting for review, each with who made it, its version,
 /// and its diff; with none waiting, what became of the last one.
 fn proposals_status(state: &StateSnapshot) -> Option<String> {
@@ -202,7 +214,7 @@ fn proposals_status(state: &StateSnapshot) -> Option<String> {
     let mut text = String::new();
     for entry in open {
         let stale = if entry.freshness == ProposalFreshness::Stale {
-            " The project has changed since; revise it before the user can accept it."
+            STALE
         } else {
             ""
         };
@@ -241,7 +253,7 @@ fn proposal_status(proposal: Option<&PendingProposal>) -> Option<String> {
             ..
         } => {
             let stale = if *freshness == ProposalFreshness::Stale {
-                " The project has changed since; revise it before the user can accept it."
+                STALE
             } else {
                 ""
             };
@@ -355,7 +367,8 @@ pub(super) fn metadata(name: &str) -> Option<(&'static str, Value, ToolAnnotatio
              document diff, check findings, and a before/after preview of the frames \
              around each cut it changed. The project is unchanged until the user accepts it, \
              unless their own permissions accept an agent's edits (`status: accepted`). `extend` builds \
-             on a pending proposal; `revise` replaces it. The steps that make a media are lines of the script (`step <media> add …`); `workflowSet` sets values of the workflow a model is run with, `restoreTake` goes back to the steps a take was made from, and `carry` writes the steps of a media that still names a recipe file under it. `savePreset` saves a portable \
+             on a pending proposal; `revise` replaces it; `forward`, alone, brings one the project \
+             has changed under onto the project as it is. The steps that make a media are lines of the script (`step <media> add …`); `workflowSet` sets values of the workflow a model is run with, `restoreTake` goes back to the steps a take was made from, and `carry` writes the steps of a media that still names a recipe file under it. `savePreset` saves a portable \
              .kerfpreset file without changing the project. `preset` with `bindings` \
              applies one as a proposal replacing the chosen sequence.",
             json!({
@@ -375,12 +388,13 @@ pub(super) fn metadata(name: &str) -> Option<(&'static str, Value, ToolAnnotatio
                     "scopes": {"type": "array", "items": {"type": "string"}, "maxItems": MAX_LOOK_FRAMES, "description": "Sequence positions to read scopes at once the edit is made, as `look` with `scopes` reads them: the answer's `scopes` has a reading for each, with `before`, what was read there before the edit. A grade and its numbers in one call."},
                     "extend": {"type": "string", "description": "The id of a pending proposal to build on, its newest version's: the script runs on what it makes, the two become one proposal, and the preview shows what this script changed."},
                     "revise": {"type": "string", "description": "The id of a pending proposal this one replaces; the script runs on the project."},
+                    "forward": {"type": "string", "description": "The id of a pending proposal the project has changed under (stale), its newest version's, passed alone. Its own operations run again on the project as it is, each time they name moved with the clips that were at it, and that is the proposal's next version, which always waits for the user's review. Refused, naming the clip, where a clip a line names, or one a time it names was on, was cut, moved or removed since, or the line would change other clips than it did: nothing is staged, and `revise` replaces it."},
                     "restoreTake": {"type": "object", "properties": {"media": {"type": "string"}, "take": {"type": "integer", "minimum": 1}}, "required": ["media", "take"], "additionalProperties": false, "description": "Go back to the steps a take was made from: `media`, and the `take`'s number as `look` with `graph` or `media` lists it, where it says `kept`. The steps are written as that making read them, each seed as that take had it, so a making of them is that take's again where the model gives the same file for the same seed; a workflow file they named comes back with them where the project no longer has it as it was. They are written back by `step` lines of this edit, which the proposal shows. What else the take was made from, its sequences and signals, is the project's and is not changed. Used alone: change the steps in an edit after it."},
                     "workflowSet": {"type": "array", "minItems": 1, "items": {"type": "object", "properties": {"media": {"type": "string"}, "line": {"type": "integer", "minimum": 1}, "node": {"type": "string"}, "input": {"type": "string"}, "value": {}, "link": {"type": "array", "prefixItems": [{"type": "string"}, {"type": "integer", "minimum": 0}], "minItems": 2, "maxItems": 2}}, "required": ["media", "line", "node", "input"], "additionalProperties": false}, "description": "Values to set in the workflow the model of a `generate` step is run with, each input `input` of node `node` (as `look` `workflow` lists them) to `value`, a number, a text, or true or false as it was. `line` is the step's, as `look` `graph` gives it. The workflow as it is is copied into the project beside the shot with those values changed and the rest as written, and the step names the copy with `workflow=`, by a `step` line of this edit: the answer's `workflows` says where each is kept. An input that is a `link` is pointed at another node with `link` in place of `value`, `[<node>, <output>]`, the output counted from 0 as the node's `outputs` lists what it gives: `{media, line, node: \"12\", input: \"model\", link: [\"19\", 0]}`. It is refused where the graph would go round, and, once the server has said what each gives, where the output is not what the input takes. Only a link is linked, and an input a blank fills is not set here. Nothing on the model's server changes, and the person's models file is not touched. To go back to the workflow as it comes, take `workflow` off the step (`step <media> set <n> workflow=\"\"`)."},
                     "carry": {"type": "array", "minItems": 1, "items": {"type": "string"}, "description": "Media that still name a recipe file (`recipe=`), to carry into the document: each recipe's `render`, `generate` and `join` lines are written as steps under its media, files named from the project's folder, and `recipe=` comes off its line. Its takes stay, and those made from the recipe as it stands are not asked for again; the answer's `carried` says how many (`takesHeld`) and what did not come with it (`notes`). The lines are first in the edit's script, so the `script` of the same edit can change the steps (`step <media> set <n> …`). A recipe with a `run` line cannot be carried, a document naming no program: its program is named in the person's own models file, and a `generate` step asks it."},
                     "cast": {"type": "array", "items": {"type": "string"}, "description": "Lines to add to the project's cast file, each `cast <name> \"<who or what it is>\" [ref=<picture> …]` or `style <name> \"<how a shot looks>\"`, for who and what a step of this edit shows that `look`'s `cast` and `styles` have not. They are written at once, since adding one asks for no shot again; one the file has is the person's to change, and is refused."}
                 },
-                "anyOf": [{"required": ["script"]}, {"required": ["workflowSet"]}, {"required": ["restoreTake"]}, {"required": ["carry"]}, {"required": ["cast"]}, {"required": ["preset"]}, {"required": ["savePreset"]}],
+                "anyOf": [{"required": ["script"]}, {"required": ["workflowSet"]}, {"required": ["restoreTake"]}, {"required": ["carry"]}, {"required": ["cast"]}, {"required": ["preset"]}, {"required": ["savePreset"]}, {"required": ["forward"]}],
                 "additionalProperties": false
             }),
             ToolAnnotations {
@@ -702,6 +716,8 @@ struct EditInput {
     texts: BTreeMap<String, String>,
     extend: Option<String>,
     revise: Option<String>,
+    /// A stale pending proposal to bring onto the project as it is.
+    forward: Option<String>,
     /// Values of the workflow behind a `generate` step to set, in the shot's own copy.
     #[serde(default, rename = "workflowSet")]
     workflow_set: Vec<WorkflowSetInput>,
@@ -949,7 +965,8 @@ impl KerfMcpRouter {
                 "PROPOSAL_STALE",
                 format!(
                     "proposal {id} was made at revision {base_revision} and the project is \
-                     at revision {revision}; revise it"
+                     at revision {revision}; bring it forward (`edit` with it as `forward`) \
+                     or revise it"
                 ),
             ));
         }
@@ -4073,7 +4090,17 @@ impl KerfMcpRouter {
     }
 
     fn run_edit(&self, arguments: Value) -> Result<Value, McpError> {
+        let alone = arguments.as_object().is_some_and(|given| given.len() == 1);
         let input: EditInput = input(arguments)?;
+        if let Some(id) = &input.forward {
+            if !alone {
+                return Err(McpError::new(
+                    "INVALID_ARGUMENTS",
+                    "`forward` is passed alone: it runs the proposal's own operations again, with no script of this edit's",
+                ));
+            }
+            return self.forward(id);
+        }
         if [
             input.script.is_some()
                 || !input.workflow_set.is_empty()
@@ -4322,32 +4349,7 @@ impl KerfMcpRouter {
                 return Err(McpError::new("INVALID_RECIPE", why));
             }
         }
-        let script = staged.script.clone();
-        let document_diff = staged.document_diff.clone();
-        let (version, supersedes) = (staged.version, staged.supersedes.clone());
-        let (_, after_document) = self.runtime.proposal_documents(&proposal_id)?;
-        let after_program = parse(&after_document)?;
-        let mut before_program = before.clone();
-        kerf_runtime::resolve_media_paths(&mut before_program, &self.dir);
-        let check = crate::qc::check(&after_program, &self.dir).to_json();
-        let preview = match changed_range(&before, &applied.project) {
-            None => json!({"unavailable": "the edit changes nothing on the sequence"}),
-            Some((sequence, from, to)) => self
-                .preview(&sequence, from, to, &before_program, &after_program)
-                .unwrap_or_else(|error| json!({"unavailable": error.message})),
-        };
-        let mut result = json!({
-            "proposal": proposal_id,
-            "version": version,
-            "supersedes": supersedes,
-            "author": author.name,
-            "baseRevision": revision,
-            "status": "awaiting_review",
-            "script": script,
-            "diff": document_diff,
-            "check": check,
-            "preview": preview,
-        });
+        let mut result = self.staged(staged, revision, &before, &applied.project)?;
         // Where `snap=` put each edge it moved, which the diff shows only as where it is.
         if !applied.snapped.is_empty() {
             result["snapped"] = json!(applied.snapped);
@@ -4419,6 +4421,84 @@ impl KerfMcpRouter {
             result["toMake"] = json!(to_make);
         }
         Ok(result)
+    }
+
+    /// Bring the stale pending proposal `id` onto the project as it is, as
+    /// its next version. It waits for review whatever the person lets an
+    /// agent's own edits be: it may be another's, and its frames are not the
+    /// ones that were looked at.
+    fn forward(&self, id: &str) -> Result<Value, McpError> {
+        let (revision, before) = self.project_at(None)?;
+        let snapshot = self
+            .runtime
+            .forward_proposal(&operation_key("agent-forward"), revision, id)
+            .map_err(|error| match error.code.as_str() {
+                "PROPOSAL_NOT_PENDING" | "PROPOSAL_NOT_FOUND" => not_pending(id),
+                // The line and the clip that stopped it, as the runtime
+                // said them, and what is left to do.
+                "PROPOSAL_NOT_FORWARDED" => McpError::new(
+                    "PROPOSAL_NOT_FORWARDED",
+                    format!(
+                        "{}. Nothing was staged and proposal {id} waits as it was; pass it as `revise` with a script written on the project as it is",
+                        error.message
+                    ),
+                ),
+                "PROPOSAL_SUPERSEDED" | "PROPOSAL_NOT_STALE" | "PROPOSAL_BASE_GONE" => {
+                    McpError::new(&error.code, error.message)
+                }
+                _ => McpError::from(error),
+            })?;
+        let Some(staged) = snapshot
+            .proposals
+            .first()
+            .filter(|entry| entry.status == "pending")
+        else {
+            return Err(McpError::new(
+                "RUNTIME_ERROR",
+                "the runtime did not keep the proposal",
+            ));
+        };
+        let after = apply_script(&before, catalog(), &staged.script)
+            .map_err(refused)?
+            .project;
+        let mut result = self.staged(staged, revision, &before, &after)?;
+        result["forwarded"] = json!(id);
+        Ok(result)
+    }
+
+    /// What `edit` says of the proposal it staged on the project at
+    /// `revision`: its id, version and author, its script and diff, what the
+    /// checks find in what it makes, and the frames `before` and `after`.
+    fn staged(
+        &self,
+        staged: &ProposalEntry,
+        revision: u64,
+        before: &Project,
+        after: &Project,
+    ) -> Result<Value, McpError> {
+        let (_, after_document) = self.runtime.proposal_documents(&staged.proposal_id)?;
+        let after_program = parse(&after_document)?;
+        let mut before_program = before.clone();
+        kerf_runtime::resolve_media_paths(&mut before_program, &self.dir);
+        let check = crate::qc::check(&after_program, &self.dir).to_json();
+        let preview = match changed_range(before, after) {
+            None => json!({"unavailable": "the edit changes nothing on the sequence"}),
+            Some((sequence, from, to)) => self
+                .preview(&sequence, from, to, &before_program, &after_program)
+                .unwrap_or_else(|error| json!({"unavailable": error.message})),
+        };
+        Ok(json!({
+            "proposal": staged.proposal_id,
+            "version": staged.version,
+            "supersedes": staged.supersedes,
+            "author": staged.author.name,
+            "baseRevision": revision,
+            "status": "awaiting_review",
+            "script": staged.script,
+            "diff": staged.document_diff,
+            "check": check,
+            "preview": preview,
+        }))
     }
 
     /// Contact sheets of what the edit changed in `from`–`to`, before and
@@ -5485,7 +5565,11 @@ sequence s1 rate=24 size=1920x1080
         };
         let text = proposal_status(Some(&pending)).unwrap();
         assert!(text.contains("Proposal p1 (from revision 3)"));
-        assert!(text.contains("revise it"));
+        // A stale one is not accepted; what moves it is said with it.
+        assert!(text.contains(
+            "The project has changed since, so the user cannot accept it: bring it forward \
+             with `edit` and its id as `forward`, or `revise` it."
+        ));
         assert!(text.contains("```diff\n-a\n+b\n```"));
         let rejected = PendingProposal::Rejected {
             proposal_id: "p1".into(),

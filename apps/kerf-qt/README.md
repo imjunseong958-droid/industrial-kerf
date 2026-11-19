@@ -773,7 +773,8 @@ struck through. Kerf's turns are the conversation's (above), and Stop ends
 one. A pending proposal is a card under Kerf's answer: its
 changes in words, Preview, Script (the script and the document diff, in
 colour), Reject and Accept (⌘Return; Escape with the timeline focused
-rejects), and Versions once Kerf has revised it. Kerf's next steps become
+rejects), and Versions once Kerf has revised it. A proposal the edit has
+changed under has Bring forward where Accept stands. Kerf's next steps become
 the welcome's requests to try and the composer's suggestions. The model each
 request names is the active connection's (Settings); with your own keys the
 More menu's Model chooses among its models, and Agent settings… names the one
@@ -797,8 +798,12 @@ unchanged snapshots do not redraw the UI or reopen playback.
 
 Proposal review shows semantic clip changes, time ranges, and all supplied
 before/after field values in a scrollable view. Stale proposals and proposals
-whose field diff was truncated cannot be accepted; ask the agent to restage
-or split them into smaller changes.
+whose field diff was truncated cannot be accepted. A stale one is brought
+onto the edit as it is with Bring forward on its card, or Clip ▸ Bring
+Proposal Forward (`proposal.forward`), as its next version. Where a clip it
+names has changed since, the error banner says which (`Not brought forward ·
+…`) and the card stays as it was; ask the agent to restage it then, or to
+split a truncated one into smaller changes.
 
 Agent settings are in Settings (Edit → Settings…, ⌘, ; on macOS in the
 application menu), also reachable from the chat's ⋯ menu. Settings → AI

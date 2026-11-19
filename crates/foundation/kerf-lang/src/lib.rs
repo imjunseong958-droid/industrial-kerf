@@ -8,6 +8,7 @@ mod captions;
 mod diff;
 mod doc;
 mod facts;
+mod forward;
 mod lex;
 mod making;
 pub mod preset;
@@ -25,6 +26,7 @@ pub use doc::{parse_document, print_document, Document, PrintOptions, VERSION};
 pub use facts::{
     airs, Barred, Breaks, Facts, NoFacts, Place, Snap, Snaps, Speech, BEAT, WORD_SLACK,
 };
+pub use forward::{bring_forward, Forwarded};
 pub use making::print_step;
 pub use reference::{fx_reference, property_reference, reference};
 pub use script::{

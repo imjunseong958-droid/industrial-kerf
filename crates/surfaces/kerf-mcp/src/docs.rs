@@ -180,7 +180,7 @@ fn protocol_markdown(metadata: &Value, tools: &[ToolDefinition]) -> Result<Strin
     );
     output.push_str("## Proposals\n\n");
     output.push_str(
-        "Proposals carry their author: the MCP client's `clientInfo.name` from `initialize` (Claude Code, Cursor, and Codex by those names, any other client as it named itself), with the role `MCP`. Several proposals can wait for review at once. `edit` with `revise` (or `extend`) and a pending proposal's id makes that proposal's next version, v2, v3, and so on; the earlier versions stay visible and can still be accepted in its place. Its result gives `version` and `supersedes`.\n\n\
+        "Proposals carry their author: the MCP client's `clientInfo.name` from `initialize` (Claude Code, Cursor, and Codex by those names, any other client as it named itself), with the role `MCP`. Several proposals can wait for review at once. `edit` with `revise` (or `extend`) and a pending proposal's id makes that proposal's next version, v2, v3, and so on; the earlier versions stay visible and can still be accepted in its place. Its result gives `version` and `supersedes`. A proposal the project has changed under is stale and cannot be accepted; `edit` with its id as `forward`, alone, runs its operations again on the project as it is, each time they name moved with the clips that were at it, as its next version. It is refused, naming the clip, where what a line names was cut, moved or removed since.\n\n\
 What the person is asked, and what an agent does next, is said in the conversation: the editor shows a proposal as a card under the answer that staged it, and a making `make` asks for as a card with Make.\n\n",
     );
     output.push_str("## Tools\n\n");
