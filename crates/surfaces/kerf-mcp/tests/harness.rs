@@ -1844,6 +1844,50 @@ fn look_reads_an_hdr_sequences_scopes_by_its_signal() {
     assert_eq!(pushed["hdr"]["overWhite"], 1.0, "{pushed}");
 }
 
+/// A title an edit adds that reveals itself and fades out shows none of
+/// itself at its first frame and its last: its preview shows it where it has
+/// come in as well.
+#[test]
+fn an_edits_preview_shows_a_title_it_adds_where_it_has_come_in() {
+    let Some((_directory, router)) = router() else {
+        return;
+    };
+    let title = |keys: &str| {
+        format!(
+            "track add V2 video\noverwrite gen=title dur=90f at=0f on=V2 as=t\n\
+             set t text=\"OPENING\" size=0.25 color=#ffffff{keys}"
+        )
+    };
+    let added = ok(
+        &router,
+        "edit",
+        json!({"script": title(" reveal={6f:0 40f:1} opacity={0f:1 74f:1 89f:0}")}),
+    );
+    let preview = &added["preview"];
+    assert!(has_image(&preview["after"]), "{preview}");
+    // Whole from 40f to 74f, it is seen nearest its middle, between its first
+    // frame and its last.
+    assert_eq!(
+        preview["after"]["frames"],
+        json!(["00:00:00:00", "00:00:01:15", "00:00:02:29", "00:00:03:00"]),
+        "{preview}"
+    );
+    // There it is whole: the frame reads as the same title with nothing keyed
+    // does, as its first frame does not.
+    let whole = ok(&router, "edit", json!({"script": title(" reveal=1")}));
+    let read = |proposal: &Value, at: &str| {
+        let read = ok(
+            &router,
+            "look",
+            json!({"at": [at], "scopes": true, "proposal": proposal}),
+        );
+        read["readings"][0]["scopes"].clone()
+    };
+    let (added, whole) = (&added["proposal"], &whole["proposal"]);
+    assert_eq!(read(added, "00:00:01:15"), read(whole, "00:00:01:15"));
+    assert_ne!(read(added, "00:00:00:00"), read(whole, "00:00:00:00"));
+}
+
 #[test]
 fn look_says_which_text_is_too_faint_from_the_frames() {
     let Some((_directory, router)) = router() else {
