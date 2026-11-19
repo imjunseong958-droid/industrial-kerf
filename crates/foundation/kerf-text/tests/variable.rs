@@ -21,6 +21,8 @@ impl FontSource for TestFont {
             index: 0,
             data: FaceData::Static(bytes),
             origin: "test",
+            names: Vec::new(),
+            color: false,
         };
         vec![
             face(FAMILY, include_bytes!("../testdata/KerfTestVariable.ttf")),
@@ -211,4 +213,21 @@ fn a_real_cff2_font_draws_and_shapes_at_its_axes() {
     let (narrow, wide) = (across(&family, text, &[(WGHT, light)]), across(&family, text, &[(WGHT, heavy)]));
     assert!(wide > narrow, "{family}: {narrow} {wide}");
     eprintln!("{family}: ink {thin} to {thick}, across {narrow} to {wide}");
+}
+
+#[test]
+fn a_style_that_names_a_weight_sets_a_variable_face_there() {
+    fonts::add_source(&TestFont);
+    let ink_in = |style: &str, axes: &[Axis]| {
+        let laid = layout("I", &TextStyle { style: style.into(), ..styled(FAMILY, axes) }, &ParagraphStyle::default());
+        let (mask, _, _) = render::rasterize(&laid, &render::at(200.0, 200.0));
+        mask.a.iter().sum::<f32>()
+    };
+    // Black is 900: a stem 300 wide, 70 pixels high at 100 to the em, and not emboldened on top.
+    close(ink_in("Black", &[]), 2100.0);
+    close(ink_in("900", &[]), 2100.0);
+    assert!(!kerf_text::resolve(FAMILY, "Black").synth_bold);
+    // `wght` set by name holds over the style; Regular leaves the font as it comes.
+    close(ink_in("Black", &[(WGHT, 100.0)]), 280.0);
+    close(ink_in("Regular", &[]), 700.0);
 }

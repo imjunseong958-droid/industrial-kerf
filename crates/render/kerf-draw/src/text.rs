@@ -1,11 +1,14 @@
 //! Titles and captions, laid out and drawn by FilmCraft's text engine:
 //! OpenType shaping, line breaks at `\n`, and antialiased glyphs whose
 //! coverage is linear, so they composite correctly in linear light.
+//! A character the font lacks is drawn by an installed font that has it,
+//! and emoji in their own colours, over the fill (`kerf_text::color`).
 
 use crate::color;
 use crate::image::Image;
 use kerf_model::Rgba;
 use kerf_text::mask::{stroke, StrokeKind};
+use kerf_text::color::ColorImage;
 use kerf_text::raster::Mask;
 use kerf_text::{layout, render, Align, ParagraphStyle, TextStyle};
 use rayon::prelude::*;
@@ -33,9 +36,13 @@ pub enum Justify {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Text<'a> {
     pub text: &'a str,
-    /// A family, or `sans-serif`, `serif`, or `monospace`. One the machine
-    /// lacks is drawn in Inter.
+    /// A family, or `sans-serif`, `serif`, or `monospace`, or a face's own
+    /// name ("Inter Black"). One the machine lacks is drawn in Inter.
     pub font: &'a str,
+    /// The face of the family: a style name it has (`Bold`, `Black
+    /// Italic`), or a weight from 100 to 900 with or without `Italic`.
+    /// Empty for the face `font` names, or the family's Regular.
+    pub style: &'a str,
     /// The font size, in pixels.
     pub size: f32,
     pub color: Rgba,
@@ -56,12 +63,34 @@ pub fn draw(image: &mut Image, text: &Text, at: [f32; 2], place: f32) {
     if text.text.trim().is_empty() || text.size <= 0.0 {
         return;
     }
+    let (style, paragraph) = styles(text);
+    let laid = layout(text.text, &style, &paragraph);
+    let [_, top, _, bottom] = laid.bounds;
+    let baseline = at[1] - (top + (bottom - top) * place);
+    let m = render::at(at[0], baseline);
+    let (glyphs, x, y) = render::rasterize(&laid, &m);
+    if let Some((edge, width)) = text.outline.filter(|(_, width)| *width > 0.0) {
+        let margin = width.ceil() as i32 + 2;
+        let mut room = Mask::new(
+            glyphs.w + 2 * margin as usize,
+            glyphs.h + 2 * margin as usize,
+        );
+        room.add(&glyphs, margin, margin);
+        let outline = stroke(&room, width, StrokeKind::Outer);
+        cover(image, &outline, x - margin, y - margin, edge);
+    }
+    fill(image, &laid, &m, glyphs, (x, y), text.color, 1.0);
+}
+
+/// The character and paragraph styles `text` is laid out in.
+fn styles(text: &Text) -> (TextStyle, ParagraphStyle) {
     let family = GENERIC
         .iter()
         .find(|(generic, _)| generic.eq_ignore_ascii_case(text.font.trim()))
         .map_or(text.font.trim(), |(_, family)| family);
     let style = TextStyle {
         family: if family.is_empty() { "Inter" } else { family }.to_owned(),
+        style: text.style.trim().to_owned(),
         size: text.size,
         axes: text.axes.to_vec(),
         features: text.features.to_vec(),
@@ -75,21 +104,77 @@ pub fn draw(image: &mut Image, text: &Text, at: [f32; 2], place: f32) {
         },
         ..ParagraphStyle::default()
     };
-    let laid = layout(text.text, &style, &paragraph);
-    let [_, top, _, bottom] = laid.bounds;
-    let baseline = at[1] - (top + (bottom - top) * place);
-    let (glyphs, x, y) = render::rasterize(&laid, &render::at(at[0], baseline));
-    if let Some((edge, width)) = text.outline.filter(|(_, width)| *width > 0.0) {
-        let margin = width.ceil() as i32 + 2;
-        let mut room = Mask::new(
-            glyphs.w + 2 * margin as usize,
-            glyphs.h + 2 * margin as usize,
-        );
-        room.add(&glyphs, margin, margin);
-        let outline = stroke(&room, width, StrokeKind::Outer);
-        cover(image, &outline, x - margin, y - margin, edge);
+    (style, paragraph)
+}
+
+/// Fill the glyphs of `laid`, whose coverage `glyphs` is placed at `at`, in `color`, and draw
+/// its colour glyphs (emoji) over that in their own colours, all at `opacity`.
+fn fill(
+    image: &mut Image,
+    laid: &kerf_text::Layout,
+    m: &kerf_text::Xform,
+    mut glyphs: Mask,
+    (x, y): (i32, i32),
+    color: Rgba,
+    opacity: f32,
+) {
+    let alpha = f32::from(color.a) / 255.0 * opacity.clamp(0.0, 1.0);
+    let foreground = [
+        f32::from(color.r) / 255.0,
+        f32::from(color.g) / 255.0,
+        f32::from(color.b) / 255.0,
+        1.0,
+    ];
+    let colors = render::rasterize_color(laid, m, foreground);
+    if let Some((colors, _, _)) = &colors {
+        // The fill shows only where no colour glyph covers.
+        for (covered, painted) in glyphs.a.iter_mut().zip(&colors.px) {
+            *covered = (*covered - painted[3]).max(0.0);
+        }
     }
-    cover(image, &glyphs, x, y, text.color);
+    let shown = Rgba {
+        a: (alpha * 255.0).round() as u8,
+        ..color
+    };
+    cover(image, &glyphs, x, y, shown);
+    if let Some((colors, cx, cy)) = colors {
+        paint(image, &colors, cx, cy, alpha);
+    }
+}
+
+/// Draw `colors` (premultiplied, sRGB-encoded), placed at `x`, `y`, over `image` in linear light,
+/// at `opacity`.
+fn paint(image: &mut Image, colors: &ColorImage, x: i32, y: i32, opacity: f32) {
+    let w = image.w;
+    image
+        .px
+        .par_chunks_mut(w * 4)
+        .enumerate()
+        .for_each(|(row_y, row)| {
+            let cy = row_y as i32 - y;
+            if cy < 0 || cy >= colors.h as i32 {
+                return;
+            }
+            let from = x.max(0);
+            let to = (x + colors.w as i32).min(w as i32);
+            for px in from..to {
+                let p = colors.px[cy as usize * colors.w + (px - x) as usize];
+                if p[3] <= 0.0 {
+                    continue;
+                }
+                let a = (p[3] * opacity).min(1.0);
+                let paint = [
+                    color::to_linear(p[0] / p[3]) * a,
+                    color::to_linear(p[1] / p[3]) * a,
+                    color::to_linear(p[2] / p[3]) * a,
+                    a,
+                ];
+                let pixel = &mut row[px as usize * 4..px as usize * 4 + 4];
+                for k in 0..4 {
+                    pixel[k] = paint[k] + pixel[k] * (1.0 - a);
+                }
+            }
+        });
 }
 
 /// How a piece of text looks at a moment, against how it would rest.
@@ -117,25 +202,7 @@ pub fn draw_pieces(
     if text.text.trim().is_empty() || text.size <= 0.0 {
         return;
     }
-    let family = GENERIC
-        .iter()
-        .find(|(generic, _)| generic.eq_ignore_ascii_case(text.font.trim()))
-        .map_or(text.font.trim(), |(_, family)| family);
-    let style = TextStyle {
-        family: if family.is_empty() { "Inter" } else { family }.to_owned(),
-        size: text.size,
-        axes: text.axes.to_vec(),
-        features: text.features.to_vec(),
-        ..TextStyle::default()
-    };
-    let paragraph = ParagraphStyle {
-        align: match text.justify {
-            Justify::Left => Align::Left,
-            Justify::Center => Align::Center,
-            Justify::Right => Align::Right,
-        },
-        ..ParagraphStyle::default()
-    };
+    let (style, paragraph) = styles(text);
     let laid = layout(text.text, &style, &paragraph);
     let [_, top, _, bottom] = laid.bounds;
     let baseline = at[1] - (top + (bottom - top) * place);
@@ -190,11 +257,7 @@ pub fn draw_pieces(
             baseline + piece.offset[1] + cy - (b * cx + d * cy),
         ];
         let (mask, x, y) = render::rasterize(&single, &m);
-        let color = Rgba {
-            a: (f32::from(text.color.a) * piece.opacity.min(1.0)).round() as u8,
-            ..text.color
-        };
-        cover(image, &mask, x, y, color);
+        fill(image, &single, &m, mask, (x, y), text.color, piece.opacity);
     }
 }
 
@@ -268,6 +331,7 @@ mod tests {
         Text {
             text: "Kerf it up",
             font: "sans-serif",
+            style: "",
             size: 40.0,
             color: Rgba::WHITE,
             justify: Justify::Center,
@@ -360,6 +424,7 @@ mod tests {
         let text = Text {
             text: "Day One",
             font: "sans-serif",
+            style: "",
             size: 48.0,
             color: Rgba::WHITE,
             justify: Justify::Center,
@@ -380,6 +445,7 @@ mod tests {
             let text = Text {
                 text: "Edge",
                 font: "serif",
+                style: "",
                 size: 30.0,
                 color: Rgba::WHITE,
                 justify,
@@ -394,6 +460,82 @@ mod tests {
         assert!(draw_at(Justify::Right).2 <= 201);
     }
 
+    /// The colour test font of `kerf-text`: U+10FFFC is a red box with an inner box in the
+    /// text's own colour.
+    struct ColorFont;
+
+    impl kerf_text::fonts::FontSource for ColorFont {
+        fn faces(&self) -> Vec<kerf_text::fonts::FaceInfo> {
+            vec![kerf_text::fonts::FaceInfo {
+                family: "Kerf Test COLR".into(),
+                style: "Regular".into(),
+                weight: 400,
+                italic: false,
+                index: 0,
+                data: kerf_text::fonts::FaceData::Static(include_bytes!(
+                    "../../../foundation/kerf-text/testdata/KerfTestColr.ttf"
+                )),
+                origin: "test",
+                names: Vec::new(),
+                color: true,
+            }]
+        }
+    }
+
+    #[test]
+    fn colour_glyphs_keep_their_colours_over_the_fill() {
+        kerf_text::fonts::add_source(&ColorFont);
+        let draw_in = |color: Rgba| {
+            let mut image = Image::new(300, 120);
+            let text = Text {
+                text: "H\u{10FFFC}",
+                font: "Kerf Test COLR",
+                style: "",
+                size: 80.0,
+                color,
+                justify: Justify::Center,
+                outline: Some((Rgba::BLACK, 3.0)),
+                axes: &[],
+                features: &[],
+            };
+            draw(&mut image, &text, [150.0, 60.0], 0.5);
+            image
+        };
+        let green = Rgba {
+            r: 0,
+            g: 255,
+            b: 0,
+            a: 255,
+        };
+        let image = draw_in(green);
+        let count = |test: &dyn Fn(&[f32]) -> bool| {
+            image
+                .px
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .filter(|p| test(&p[..]))
+                .count()
+        };
+        // The H falls back to Inter and is filled green; the box is red, with a green middle,
+        // the text's colour, and nothing of the fill shows through the red.
+        let red = count(&|p| p[0] > 0.95 && p[1] < 0.05 && p[3] > 0.99);
+        let filled = count(&|p| p[1] > 0.95 && p[0] < 0.05);
+        assert!(red > 1000, "{red}");
+        assert!(filled > 600, "{filled}");
+        assert_eq!(count(&|p| p[0] > 0.2 && p[1] > 0.2), 0);
+        // Half the text's alpha, half the emoji's.
+        let half = draw_in(Rgba { a: 128, ..green });
+        let most = half
+            .px
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|p| p[0])
+            .fold(0.0f32, f32::max);
+        assert!((most - 0.5).abs() < 0.03, "{most}");
+    }
+
     #[test]
     fn outlines_reach_past_the_glyphs() {
         let mut plain = Image::new(300, 100);
@@ -401,6 +543,7 @@ mod tests {
         let text = Text {
             text: "Hi",
             font: "sans-serif",
+            style: "",
             size: 40.0,
             color: Rgba::WHITE,
             justify: Justify::Center,

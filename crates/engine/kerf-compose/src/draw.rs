@@ -438,6 +438,8 @@ enum Source {
 struct TitlePlan {
     text: String,
     font: String,
+    /// The face of `font`, from `style` and `weight` ([`kerf_model::title_face`]).
+    style: String,
     /// In frame heights.
     size: f64,
     color: Rgba,
@@ -1937,9 +1939,10 @@ fn effect_text_is_empty(effect: &Effect, name: &str) -> bool {
 fn title_key(title: &TitlePlan, (w, h): (usize, usize), time: Time) -> String {
     use std::fmt::Write;
     let mut key = format!(
-        "title|{w}x{h}|{:?}|{:?}|{:x}|{:?}|{:?}",
+        "title|{w}x{h}|{:?}|{:?}|{:?}|{:x}|{:?}|{:?}",
         title.text,
         title.font,
+        title.style,
         title.size.to_bits(),
         title.color,
         title.justify
@@ -1982,6 +1985,7 @@ fn title_on(title: &TitlePlan, (w, h): (usize, usize), time: Time) -> Image {
     let text = Text {
         text: &title.text,
         font: &title.font,
+        style: &title.style,
         size: (title.size * h as f64).max(1.0) as f32,
         color: title.color,
         justify: title.justify,
@@ -2029,6 +2033,7 @@ fn caption_text(caption: &CaptionPlan, size: f64) -> Text<'_> {
     Text {
         text: &caption.text,
         font: "sans-serif",
+        style: "",
         size: size as f32,
         color: Rgba::WHITE,
         justify: Justify::Center,
@@ -2902,6 +2907,13 @@ impl<'a> Builder<'a> {
                 Value::Text(font) if !font.trim().is_empty() => font,
                 _ => "sans-serif".to_owned(),
             },
+            style: kerf_model::title_face(
+                match &get("style")? {
+                    Value::Text(style) => style,
+                    _ => "",
+                },
+                get("weight")?.as_number().unwrap_or(0.0),
+            ),
             size: get("size")?.as_number().unwrap_or(0.08),
             color: match get("color")? {
                 Value::Color(color) => color,

@@ -37,7 +37,7 @@ line, applied in order and atomically.
   `points={0f:0,0;0.5,0;0.5,0.5 24f:0.1,0;0.6,0;0.6,0.5}`, corners one for one. A third number on a corner, `0.5,0,12`, softens the edge there by that many pixels.
 - `angle=V2` on a clip of a nested sequence shows or plays that track alone; `angle=""` undoes it. With none it shows every
   track, the highest over the rest: each part of a multicam wants its own.
-- `gen=shape@1 align=left scale_x={0f:0 9f:1}` grows from its left edge at `x`, as a title; `gen=particles@1 rate=200 life=2 gravity=0.5` emits from the clip's center; a `title`'s `reveal={0f:0 24f:1} reveal_by=word from_y=0.05` brings it in piece by piece.
+- `gen=shape@1 align=left scale_x={0f:0 9f:1}` grows from its left edge at `x`, as a title; `gen=particles@1 rate=200 life=2 gravity=0.5` emits from the clip's center; a `title`'s `weight=900` picks its face, and `reveal={0f:0 24f:1} reveal_by=word` brings it in piece by piece.
 - `three_d=true z=0.5 rotate_y=30` places a clip in depth; `gen=camera@1` and `gen=light@1` clips see and light it. Adjacent 3D tracks draw far to near, cut where they cross. `depth=0.1 bevel=0.02`: a solid, its edges cut.
 
 ## Versions
@@ -448,5 +448,7 @@ mod tests {
         // A roll and a blade take `snap=` too, and are one cut where all they cut are quiet.
         assert!(text.contains("trim, roll, split, blade, insert"));
         assert!(text.contains("a blade or roll where all it cuts are quiet"));
+        // A bold title is a face of its font, not a guess at `wght`.
+        assert!(text.contains("`weight=900` picks its face"));
     }
 }

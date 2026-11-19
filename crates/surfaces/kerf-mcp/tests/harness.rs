@@ -319,6 +319,8 @@ impl kerf_text::fonts::FontSource for TestFont {
                 "../../../foundation/kerf-text/testdata/KerfTestVariable.ttf"
             )),
             origin: "test",
+            names: Vec::new(),
+            color: false,
         }]
     }
 }
@@ -3441,6 +3443,74 @@ fn rendering_nothing_is_refused_and_says_where_the_cut_is() {
         pending.contains(id) && pending.contains("`proposal`"),
         "{pending}"
     );
+}
+
+/// A title with a character no font installed here has is warned of in the edit's check: it
+/// would show as an empty box. Text every character of which some font draws is not.
+#[test]
+fn the_check_warns_of_text_no_font_draws() {
+    let Some((_directory, router)) = router_with(
+        "    clip c1 media=m1 at=00:00:00:00 dur=00:00:04:00
+",
+    ) else {
+        return;
+    };
+    let last = std::cell::RefCell::new(None::<String>);
+    let missing = |script: &str| {
+        let mut arguments = json!({"script": script});
+        if let Some(id) = last.borrow().as_ref() {
+            arguments["revise"] = json!(id);
+        }
+        let staged = ok(&router, "edit", arguments);
+        *last.borrow_mut() = staged["proposal"].as_str().map(str::to_owned);
+        staged["check"]["findings"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|finding| finding["code"] == "text.missing_glyphs")
+            .collect::<Vec<Value>>()
+    };
+    // U+10FFFD is private use, in no font: in a title and in a caption.
+    let found = missing(
+        "track add V2 video\noverwrite gen=title at=0f dur=30f on=V2 text=\"Bold \u{10FFFD} move\" weight=900 as=t1",
+    );
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0]["severity"], "warning");
+    assert_eq!(found[0]["entity"], "t1");
+    let message = found[0]["message"].as_str().unwrap_or_default();
+    assert!(message.contains("U+10FFFD") && message.contains("`font`"), "{message}");
+    let found = missing("track add S1 subtitle\ninsert caption=\"oh \u{10FFFD}\" at=0f dur=30f on=S1 as=cap");
+    assert_eq!(found.len(), 1, "{found:?}");
+    // Letters any font has, and an emoji that a font here draws or one that does not: only what
+    // nothing draws is said.
+    assert!(missing("track add V2 video\noverwrite gen=title at=0f dur=30f on=V2 text=\"Day One\" as=t1").is_empty());
+    kerf_text::fonts::scan_system();
+    let emoji_drawn = kerf_text::fonts::all_faces().iter().any(|face| face.covers('\u{1F480}'));
+    let found = missing("track add V2 video\noverwrite gen=title at=0f dur=30f on=V2 text=\"\u{1F480}\" as=t1");
+    assert_eq!(found.is_empty(), emoji_drawn, "{found:?}");
+}
+
+/// `look` takes a face's own name for its family, and says which face it named.
+#[test]
+fn look_finds_a_font_by_the_name_of_a_face() {
+    let Some((_directory, router)) = router() else {
+        return;
+    };
+    let bold = ok(&router, "look", json!({"font":"Inter Bold"}));
+    assert_eq!(bold["found"], true);
+    assert_eq!(bold["font"], "Inter");
+    assert_eq!(bold["style"], "Bold");
+    // A face installed here or not, Inter Black is Inter's heaviest it has.
+    let black = ok(&router, "look", json!({"font":"Inter Black"}));
+    assert_eq!(black["found"], true, "{black}");
+    assert_eq!(black["font"], "Inter");
+    assert!(matches!(black["style"].as_str(), Some("Black" | "Bold")), "{black}");
+    assert!(black["faces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|face| face["weight"] == 700));
 }
 
 /// What is set and can do nothing is said in the check, as information, without failing anything.

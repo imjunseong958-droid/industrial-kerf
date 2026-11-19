@@ -422,6 +422,8 @@ impl kerf_text::fonts::FontSource for TestFont {
                 "../../../foundation/kerf-text/testdata/KerfTestVariable.ttf"
             )),
             origin: "test",
+            names: Vec::new(),
+            color: false,
         }]
     }
 }

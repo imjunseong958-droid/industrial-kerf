@@ -6,6 +6,17 @@ on `main`; its section here becomes the release's notes on GitHub
 
 ## Unreleased
 
+- Titles can be bold in any font, and draw Korean and emoji. A `title`
+  picks its font's face by `weight` (100 to 900) and `style` (`style="Black
+  Italic"`, or `italic`), where before it always drew the family's Regular,
+  and `font` takes a face's own name too (`font="Inter Black"`), which
+  `look` with `font` used to call not found. A character the font lacks is
+  drawn in an installed font that has it, emboldened for bold text, where it
+  used to be an empty box; emoji are drawn in their own colours from the
+  system's colour emoji font (Noto Color Emoji, Apple Color Emoji, Segoe UI
+  Emoji). A title or caption with a character no installed font draws is
+  warned of in the check (`text.missing_glyphs`)
+  ([docs/kerf-language.md](docs/kerf-language.md)).
 - A file whose frames average a little off its rate is imported at the rate it
   was made at. A 24 a second file one of whose frames is short averages
   23.962, which no rate counts time in exactly, and it came in at the

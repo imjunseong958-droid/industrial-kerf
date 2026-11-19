@@ -350,6 +350,23 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
   has on by itself, `salt=2` for its second alternate. Spaces or commas part them, and one alone needs no
   quotes: `features=smcp`. `look` with `font` names the features each face has; one the font has not
   draws nothing, which check says. Features do not animate.
+- A `title` picks the face of its `font` by `weight`, 100 thin, 400 regular, 700 bold, 900 black, and
+  by `style`, a style name the family has (`style="Black Italic"`, as `look` with `font` lists each
+  face's) or `italic`: `font="Inter" weight=900` is Inter Black where it is installed. A `weight`
+  holds over the weight a `style` names, and 0 leaves it to `style`, or to the family's Regular. A
+  family without that face takes its nearest weight and slant and is emboldened or slanted to make up
+  the rest, and in a variable font `weight` sets `wght` unless `wght` is set too. `font` can also be a
+  face's own name, `font="Inter Black"` or `font="Inter-Black"`, or a family followed by its style,
+  `font="NanumSquare Bold"`, which `look` with `font` answers with the family and the `style` it names.
+  Neither `weight` nor `style` animates.
+  Where the font has no glyph for a character, the character is drawn in a font that has it: the
+  bundled faces first, then the fonts installed on the machine, a Korean, Japanese, or Chinese Gothic
+  for sans text and a Myeongjo or Mincho for serif, at the nearest weight and emboldened for bold
+  text. Emoji (`💀`, `❤️`, `👍🏽`, flags) are drawn in their own colours from a colour emoji font
+  (Apple Color Emoji, Segoe UI Emoji, Noto Color Emoji), with the text's colour around them only where
+  the font asks for it, and under its outline; with none installed, in a black-and-white emoji font
+  if one is. A character no installed font has is drawn as an empty box, and check warns of it
+  (`text.missing_glyphs`), for captions too, naming the characters.
 - `parent=` names a clip of the same sequence this one moves with: the parent's position,
   scale, and rotation apply on top of the clip's own, about the parent's pivot, at each moment,
   and parents chain. `gen=null@1` draws nothing, to rig several clips under one

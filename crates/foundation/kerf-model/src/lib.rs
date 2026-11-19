@@ -53,4 +53,16 @@ pub const SIGNAL_VALUE: &str = "value";
 
 /// The axes of a variable font a title can set, by the tags fonts name them with.
 pub const TITLE_AXES: [[u8; 4]; 5] = [*b"wght", *b"wdth", *b"slnt", *b"opsz", *b"ital"];
+
+/// The style a title's face is asked for by, from its `style` and `weight`: the style name, with
+/// the weight in front of it where one is set (above 0), which then holds over a weight the name
+/// gives ("900 italic", "300 Black").
+pub fn title_face(style: &str, weight: f64) -> String {
+    let style = style.trim();
+    if weight > 0.0 && weight.is_finite() {
+        format!("{} {style}", weight.round() as u32).trim_end().to_owned()
+    } else {
+        style.to_owned()
+    }
+}
 pub use value::{Bezier, Interp, Keyframe, Param, Rgba, Value};
