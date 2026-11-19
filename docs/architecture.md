@@ -553,8 +553,14 @@ What is built for it, in this order, each measured before the next:
    more than half hidden, by the floor
    (`a_floor_over_what_stands_on_it_is_said`). It is one small frame for
    each clip that draws, at most 32 of them, and reads to about a hundredth
-   of the frame. A clip that is partly clear is read as not showing, and
-   said to be.
+   of the frame. A pixel that clips share, along an edge or all over a title
+   whose strokes are a pixel wide on that frame, is each one's by its part
+   of it: a clip alone says how much of the pixel it would have, and the
+   pixel's color says which order the clips there are in, so a thin title
+   over a floor is before it and not hidden by it
+   (`thin_strokes_are_not_hidden_by_what_they_are_drawn_over`). A clip that
+   is partly clear has that much less of each pixel it is on, and is said
+   to be.
 
    What it does not see is whether a foot is on the floor, which a frame
    does not show: a hundredth of the frame is a pixel or two, and behind the
