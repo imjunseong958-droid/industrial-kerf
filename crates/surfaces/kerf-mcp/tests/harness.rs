@@ -2463,6 +2463,14 @@ fn raster_effects_are_looked_up_checked_and_previewed() {
     assert_eq!(whip["effects"][0]["id"], "whip", "{whip}");
     let push = ok(&router, "look", json!({"effect": "push"}));
     assert_eq!(push["engine"], "kerf", "{push}");
+    // The reference names each with its version, and so may the one asking.
+    assert_eq!(ok(&router, "look", json!({"effect": "push@1"})), push);
+    let pop = ok(&router, "look", json!({"effect": "look.pop-in@1"}));
+    assert_eq!(pop["effect"], "look.pop-in", "{pop}");
+    let newer = message(&error(&router, "look", json!({"effect": "push@9"})));
+    assert!(newer.contains("newer than this Kerf"), "{newer}");
+    let bad = message(&error(&router, "look", json!({"effect": "push@x"})));
+    assert!(bad.contains("whole version"), "{bad}");
     assert!(
         push["reference"]
             .as_str()

@@ -392,9 +392,10 @@ impl Place<'_> {
                 delta: *delta,
                 ripple: *ripple,
             },
-            Op::Roll { clip, delta } => Op::Roll {
+            Op::Roll { clip, delta, alone } => Op::Roll {
                 clip: self.clip(clip)?.0,
                 delta: *delta,
+                alone: *alone,
             },
             Op::Slip { clip, delta } => Op::Slip {
                 clip: self.clip(clip)?.0,

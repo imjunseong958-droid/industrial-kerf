@@ -22,13 +22,17 @@ impl PictureSource for ShapeSource {
     fn draw(&self, clip: &Clip, run: &SourceRun) -> Image {
         let (w, h) = run.size;
         let mut image = Image::new(w, h);
-        shape_of(clip, run).draw(&mut image, [(w as f64 / 2.0) as f32, (h as f64 / 2.0) as f32]);
+        let (shape, across) = shape_of(clip, run);
+        shape.draw(
+            &mut image,
+            [(w as f64 / 2.0 + across) as f32, (h as f64 / 2.0) as f32],
+        );
         image
     }
 
     fn extent(&self, clip: &Clip, run: &SourceRun) -> Option<Extent> {
         let (w, h) = run.size;
-        let shape = shape_of(clip, run);
+        let (shape, across) = shape_of(clip, run);
         let (contours, closed) = shape.contours();
         // What `Shape::draw` puts down: a fill inside a closed outline, and a stroke along it.
         let fills = shape.fill[3] > 0.0 && closed && contours.iter().any(|contour| contour.len() >= 3);
@@ -52,7 +56,10 @@ impl PictureSource for ShapeSource {
         } else {
             0.0
         };
-        let (left, top) = (w as f64 / 2.0 + least[0] - grown, h as f64 / 2.0 + least[1] - grown);
+        let (left, top) = (
+            w as f64 / 2.0 + across + least[0] - grown,
+            h as f64 / 2.0 + least[1] - grown,
+        );
         let plain = matches!(shape.figure, Figure::Rect { round, .. } if round <= 0.0)
             && shape.outlines.is_empty()
             && shape.offset == 0.0;
@@ -68,12 +75,13 @@ impl PictureSource for ShapeSource {
     }
 }
 
-/// The shape of a `gen=shape` clip as it is drawn on a picture of the run's size.
-fn shape_of(clip: &Clip, run: &SourceRun) -> Shape {
+/// The shape of a `gen=shape` clip as it is drawn on a picture of the run's size, and how far
+/// across from the picture's middle it is drawn ([`aligned`]).
+fn shape_of(clip: &Clip, run: &SourceRun) -> (Shape, f64) {
     let height = run.size.1 as f64;
     let read = Reading::generator(clip, "shape", run.at);
     let size = |name: &str| (read.number(name) * height) as f32;
-    Shape {
+    let shape = Shape {
         figure: figure_of(&read, height),
         outlines: outlines_of(clip, height, run.at),
         offset: size("offset"),
@@ -89,6 +97,39 @@ fn shape_of(clip: &Clip, run: &SourceRun) -> Shape {
             read.number("taper_start") as f32,
             read.number("taper_end") as f32,
         ),
+    };
+    let across = aligned(&shape, &read.word("align"));
+    (shape, across)
+}
+
+/// How far across its picture a shape is drawn from the middle, in pixels: not at all where it
+/// is centered, and with `align=left` or `right` as far as puts that side of it, its stroke
+/// included, on the middle. The middle is where `x` places the clip and what it turns and scales
+/// about, so the shape's side is at `x` and grows from there, as a title's text does.
+fn aligned(shape: &Shape, align: &str) -> f64 {
+    let left = match align {
+        "left" => true,
+        "right" => false,
+        _ => return 0.0,
+    };
+    let (contours, _) = shape.contours();
+    let (mut least, mut most) = (f64::INFINITY, f64::NEG_INFINITY);
+    for point in contours.iter().flatten() {
+        least = least.min(f64::from(point[0]));
+        most = most.max(f64::from(point[0]));
+    }
+    if least > most {
+        return 0.0;
+    }
+    let grown = if shape.stroke[3] > 0.0 && shape.stroke_width > 0.0 {
+        f64::from(shape.stroke_width) / 2.0
+    } else {
+        0.0
+    };
+    if left {
+        grown - least
+    } else {
+        -(most + grown)
     }
 }
 

@@ -683,6 +683,15 @@ fn unknown_param(
     props: &[ParamDef],
     generator: Option<&[ParamDef]>,
 ) -> Diagnostic {
+    // A script writes a parent with `set`, so a document written by hand often does too.
+    if name == "parent" {
+        return fields.error(
+            arg,
+            "`parent=` goes on the clip's own line in a document \
+             (`clip c2 gen=shape@1 at=0f dur=24f parent=n1`); a script writes it `set c2 parent=n1`"
+                .to_owned(),
+        );
+    }
     let known: Vec<&str> = props
         .iter()
         .chain(generator.into_iter().flatten())
@@ -1549,6 +1558,29 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
     clip cap1 caption="Where are we?" at=01:00:01:00 dur=00:00:02:00
   marker mk1 at=01:00:05:00 name="pickup needed" color=red note="ADR \"line 4\""
 "#;
+
+    #[test]
+    fn a_parent_under_set_says_where_it_goes() {
+        let text = "kerf 1\n\nsequence s1 rate=30 size=640x360\n  track V1 video\n    \
+                    clip n gen=null@1 at=0f dur=24f\n  track V2 video\n    \
+                    clip c gen=shape@1 at=0f dur=24f\n      set parent=n width=0.2\n";
+        let errors = parse_document(text, Catalog::builtin()).unwrap_err();
+        assert!(
+            errors[0].message.contains("goes on the clip's own line"),
+            "{errors:#?}"
+        );
+        let placed = text.replace("dur=24f\n      set parent=n", "dur=24f parent=n\n      set");
+        let document =
+            parse_document(&placed, Catalog::builtin()).unwrap_or_else(|e| panic!("{e:#?}"));
+        assert_eq!(
+            document
+                .project
+                .clip("c")
+                .and_then(|clip| clip.parent.as_ref())
+                .map(|id| id.as_str()),
+            Some("n")
+        );
+    }
 
     #[test]
     fn canonical_documents_round_trip_exactly() {

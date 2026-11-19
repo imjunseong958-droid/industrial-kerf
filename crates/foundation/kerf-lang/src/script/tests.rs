@@ -622,6 +622,17 @@ fn edges_snap_into_pauses_and_onto_cuts() {
 }
 
 #[test]
+fn a_refused_snap_says_its_edge_on_the_media_frame() {
+    // At 1.3 the clip plays its media between the media's frames; the refusal still says
+    // where as a timecode of the media, never as flicks.
+    let slowed = run(&base(), "speed c1 1.3").project;
+    let far = known(&slowed, "split c1 at=01:00:00:13 snap=cut within=2f").unwrap_err();
+    assert!(far.message.contains("no cut of `m1` within"), "{far:?}");
+    assert!(!far.message.contains("fl "), "{far:?}");
+    assert!(far.message.contains("of 00:00:"), "{far:?}");
+}
+
+#[test]
 fn an_edge_snaps_past_no_word() {
     let project = base();
     // 2s 20f plays 12.83s, past the middle of "the": the pause before it is
@@ -1361,6 +1372,220 @@ fn a_look_s_time_can_name_a_marker_it_lands_on() {
     // The marker must be the clip's sequence's.
     let error = fails(&base(), "fx c1 add look.shake@1 hit=nowhere\n");
     assert_eq!(error.code, "marker.read", "{error:?}");
+}
+
+#[test]
+fn a_roll_alone_makes_a_j_or_l_cut_and_prints_as_written() {
+    // a1 and a2 are c1's and c2's sound: the sound's cut comes half a second early.
+    let applied = run(&base(), "roll a1 -12f alone\n");
+    let project = &applied.project;
+    assert_eq!(frames(project.clip("a1").unwrap().duration), 84);
+    assert_eq!(frames(project.clip("c1").unwrap().duration), 96);
+    assert_eq!(
+        print_ops(project, Catalog::builtin(), &applied.ops),
+        "roll a1 -12f alone\n"
+    );
+    // To a place, and with the word anywhere after the clip.
+    let to = run(&base(), "roll c1 alone to=01:00:04:12\n");
+    assert_eq!(frames(to.project.clip("c1").unwrap().duration), 108);
+    assert_eq!(frames(to.project.clip("a1").unwrap().duration), 96);
+    // Without it, every linked track's cut goes, as before.
+    let both = run(&base(), "roll a1 -12f\n");
+    assert_eq!(frames(both.project.clip("c1").unwrap().duration), 84);
+    // Slip and slide have no such word.
+    assert!(fails(&base(), "slip c1 +2f alone\n")
+        .message
+        .contains("unexpected"));
+    assert!(fails(&base(), "roll c1 -2f alone -4f\n")
+        .message
+        .contains("unexpected"));
+}
+
+/// m1 pauses at 12.0–12.6 s, which c1 plays 2.0–2.6 s into the sequence, and at 58.2–58.9 s,
+/// which c2, starting at 60 s of m1 at 4 s in, would play from 2.2 s had it started earlier.
+struct BothSides;
+
+impl Facts for BothSides {
+    fn speech(&self, _: &Media) -> Speech {
+        Speech::default()
+    }
+
+    fn breaks(&self, _: &Media) -> Option<Breaks> {
+        Some(Breaks {
+            pauses: vec![(12.0, 12.6), (58.2, 58.9)],
+            gaps: Vec::new(),
+            cuts: vec![58.5],
+        })
+    }
+}
+
+/// m1's picture cuts at 14 s, where c1 ends.
+struct CutAtTheEnd;
+
+impl Facts for CutAtTheEnd {
+    fn speech(&self, _: &Media) -> Speech {
+        Speech::default()
+    }
+
+    fn breaks(&self, _: &Media) -> Option<Breaks> {
+        Some(Breaks {
+            pauses: Vec::new(),
+            gaps: Vec::new(),
+            cuts: vec![14.0],
+        })
+    }
+}
+
+#[test]
+fn a_roll_snaps_where_the_clips_either_side_are_quiet_together() {
+    let roll = |script: &str| {
+        apply_script_with(&base(), Catalog::builtin(), &BothSides, script)
+            .map_err(|mut errors| errors.remove(0))
+    };
+    let end = |applied: &Applied, clip: &str| frames(applied.project.clip(clip).unwrap().end());
+    // Asked for 2.1 s in, where c1 is quiet and c2 would still be speaking: it goes to where both
+    // are, clear of c2's sound before it, on every track the two are linked on.
+    let rolled = roll("roll c1 -1.9s snap=pause").unwrap();
+    let at = end(&rolled, "c1");
+    assert_eq!(end(&rolled, "a1"), at);
+    let seconds = at as f64 / 24.0;
+    assert!((2.3..=2.5).contains(&seconds), "{seconds}");
+    let said = rolled.snapped.join("\n");
+    assert!(said.starts_with("the roll went"), "{said}");
+    assert!(said.contains("quiet together for 0.40s"), "{said}");
+    // It prints as the roll it became.
+    assert!(rolled.ops.len() == 1 && matches!(rolled.ops[0], Op::Roll { .. }));
+    // Alone on the picture, it goes by the sound of the pictures' media, as a split of one does.
+    let alone = roll("roll c1 -1.9s alone snap=pause").unwrap();
+    assert_eq!(end(&alone, "c1"), at);
+    assert_eq!(frames(alone.project.clip("a1").unwrap().duration), 96);
+    // Onto a cut of either picture.
+    let onto = roll("roll c1 -1.6s snap=cut").unwrap();
+    assert_eq!(end(&onto, "c1"), 60);
+    // Where they have no quiet in common nearby, it is refused and nothing moves.
+    assert!(roll("roll c1 -0.5s snap=pause").is_err());
+    // Nor where the nearest is the cut as it is, which is said: m1's picture cuts where c1 ends.
+    let back = apply_script_with(
+        &base(),
+        Catalog::builtin(),
+        &CutAtTheEnd,
+        "roll c1 +2f snap=cut",
+    )
+    .unwrap_err()
+    .remove(0);
+    assert!(back.message.contains("is the cut where it is"), "{back:?}");
+    // A slip or a slide has no cut to snap.
+    assert!(roll("slip c1 +2f snap=pause").is_err());
+}
+
+#[test]
+fn an_older_look_kept_beside_its_newer_one_draws_as_named_without_a_warning() {
+    let applied = run(
+        &base(),
+        "transition add from=c1 to=c2 fx=look.whip@1 dur=12f\n",
+    );
+    let text = print_document(
+        &applied.project,
+        Catalog::builtin(),
+        PrintOptions::default(),
+    );
+    assert!(text.contains("fx=look.whip@1"), "{text}");
+    let parsed = parse_document(&text, Catalog::builtin()).unwrap();
+    assert!(
+        !parsed
+            .warnings
+            .iter()
+            .any(|warning| warning.code == "fx.version_older"),
+        "{:?}",
+        parsed.warnings
+    );
+}
+
+#[test]
+fn a_slower_clip_that_has_no_room_says_what_it_runs_into() {
+    let error = fails(&base(), "speed c1 0.5\n");
+    assert_eq!(error.code, "speed.collision", "{error:?}");
+    assert!(
+        error.message.contains(
+            "`c1` at speed 0.5 would be 192 frames long, 96 more than it is, and run into `c2` on \
+             track V1; make room after it first"
+        ),
+        "{error:?}"
+    );
+    let error = fails(&base(), "speed c1 {0f:1 24f:1/4}\n");
+    assert!(
+        error.message.contains("`c1` with that ramp would be"),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn a_look_stays_on_its_moment_when_its_clip_is_split_or_trimmed() {
+    let printed = |applied: &Applied| {
+        print_document(
+            &applied.project,
+            Catalog::builtin(),
+            PrintOptions::default(),
+        )
+    };
+    let pulsed = run(
+        &base(),
+        "fx c1 add look.zoom-pulse@1 amount=0.1 hit=60f length=10f\n",
+    );
+    // Split before the pulse: the second part pulses where the frame it pulsed on now is, and its
+    // length is a length, which stays; the first part keeps its numbers, which trimming it back
+    // brings back.
+    let split = run(&pulsed.project, "split c1 at=01:00:00:20 as=c9\n");
+    let text = printed(&split);
+    assert!(
+        text.contains("    clip c1 media=m1 src=00:00:10:00 at=01:00:00:00 dur=00:00:00:20 link=L1\n      fx look.zoom-pulse@1 amount=0.1 hit=60f length=10f\n"),
+        "{text}"
+    );
+    assert!(
+        text.contains("    clip c9 media=m1 src=00:00:10:20 at=01:00:00:20 dur=00:00:03:04 link=L3\n      fx look.zoom-pulse@1 amount=0.1 hit=40f length=10f\n"),
+        "{text}"
+    );
+    // So does a trimmed head, and a moment left to its default is written, so that the pulse at
+    // the clip's first frame stays where that frame was.
+    let shaken = run(&base(), "fx c1 add look.shake@1\ntrim c1 in +6f\n");
+    assert!(
+        printed(&shaken).contains("fx look.shake@1 hit=-6f\n"),
+        "{}",
+        printed(&shaken)
+    );
+    // A moment that names a marker is a place in the sequence.
+    let marked = run(
+        &base(),
+        "marker add as=beat at=01:00:02:00\nfx c1 add look.shake@1 hit=beat\nsplit c1 at=01:00:01:00\n",
+    );
+    assert_eq!(
+        printed(&marked)
+            .matches("fx look.shake@1 hit=beat\n")
+            .count(),
+        2
+    );
+    // A slow push has no moment: its push is from the clip's first frame, whichever that is.
+    let pushed = run(
+        &base(),
+        "fx c1 add look.slow-push@1 length=2s\nsplit c1 at=01:00:01:00\n",
+    );
+    assert_eq!(
+        printed(&pushed)
+            .matches("fx look.slow-push@1 length=48f\n")
+            .count(),
+        2
+    );
+    // Transitions' looks have no moments either.
+    let whip = Catalog::builtin().look("look.whip", 1).unwrap();
+    assert!(whip.moments().is_empty());
+    assert_eq!(
+        Catalog::builtin().look("look.flash", 1).unwrap().moments(),
+        ["hit"]
+    );
+    assert_eq!(
+        Catalog::builtin().look("look.pop-in", 1).unwrap().moments(),
+        ["start"]
+    );
 }
 
 #[test]

@@ -1090,6 +1090,92 @@ impl Look {
         })
     }
 
+    /// The time parameters that say when a clip's or a title's look happens in its clip, as `hit`
+    /// says of a zoom pulse: every keyframe time the look writes moves one for one with each of
+    /// them, and nothing else of it reads them. A look with a keyframe no parameter moves, as a
+    /// slow push from the clip's first frame has, has none, nor has a transition's.
+    pub fn moments(&self) -> Vec<&str> {
+        if self.on == On::Transition {
+            return Vec::new();
+        }
+        let (mut times, mut values) = (Vec::new(), Vec::new());
+        for line in &self.lines {
+            let vals: Vec<&Val> = match line {
+                Line::Set { value, .. } => vec![value],
+                Line::Fx { params, .. } => params.iter().map(|(_, value)| value).collect(),
+                // An outline's keys are at times no parameter moves.
+                Line::Mask {
+                    shape: MaskShape::Moving(_),
+                    ..
+                } => return Vec::new(),
+                Line::Mask { params, .. } => params.iter().map(|(_, value)| value).collect(),
+            };
+            for val in vals {
+                match val {
+                    Val::Expr(e) => values.push(e),
+                    Val::Keys(keys) => {
+                        for key in keys {
+                            times.push(&key.at);
+                            values.push(&key.value);
+                        }
+                    }
+                    Val::Word(_) => {}
+                }
+            }
+        }
+        if times.is_empty() {
+            return Vec::new();
+        }
+        self.params
+            .iter()
+            .filter(|param| param.def.ty == ParamType::Time)
+            .map(|param| param.def.name.as_str())
+            .filter(|name| {
+                times.iter().all(|at| slope(at, name) == Some(1.0))
+                    && !values.iter().any(|value| mentions(value, name))
+            })
+            .collect()
+    }
+
+    /// Keep the look on the moment of its clip's picture it was on, once the clip's first frame
+    /// has come `delta` later in it, as when its head is trimmed or it is split and this is the
+    /// second part: each of its [`moments`](Self::moments) in `params` comes `delta` earlier. One
+    /// left to its default is written, so that what the default puts at the clip's first frame
+    /// stays where that frame was; one that names a marker is a place in the sequence and stays.
+    pub fn shift_moments(&self, params: &mut Params, delta: Time, rate: Rate) {
+        if delta == Time::ZERO {
+            return;
+        }
+        let defaults = Env {
+            values: BTreeMap::new(),
+            keys: BTreeMap::new(),
+            times: BTreeSet::new(),
+            rate,
+            span: None,
+        };
+        for name in self.moments() {
+            let Some(param) = self.params.iter().find(|param| param.def.name == name) else {
+                continue;
+            };
+            let seconds = match params.get(name) {
+                Some(Param::Static(Value::Number(seconds))) => Some(*seconds),
+                Some(_) => None,
+                None => match &param.default {
+                    Some(default) => defaults.number(default).ok(),
+                    None => param.def.default.as_number(),
+                },
+            };
+            // In flicks, so that a time on a frame stays on one.
+            let Some(at) = seconds.and_then(Time::from_seconds) else {
+                continue;
+            };
+            let moved = Param::Static(Value::Number((at - delta).seconds()));
+            if param.def.check(&moved).is_ok() {
+                params.insert(name.to_owned(), moved);
+            }
+        }
+    }
+
     /// The catalog definition that lists the look.
     pub fn def(&self, catalog: &Catalog) -> FxDef {
         let kind = match self.on {
@@ -1250,6 +1336,53 @@ fn combine(op: char, a: Kind, b: Kind) -> Result<Kind, String> {
             ))
         }
     })
+}
+
+/// How far `e` moves for each second parameter `name` moves, where that is the same whatever
+/// the parameters are: `$hit+$length*0.25` moves 1 with `hit` and 0.25 with `length`, and
+/// `$hit*$length` has no one slope in either.
+fn slope(e: &Expr, name: &str) -> Option<f64> {
+    Some(match e {
+        Expr::Number(_) | Expr::Frames(_) | Expr::Seconds(_) | Expr::Percent(_) => 0.0,
+        Expr::Param(param) => f64::from(u8::from(param == name)),
+        Expr::Neg(inner) => -slope(inner, name)?,
+        Expr::Op(op, a, b) => {
+            let (sa, sb) = (slope(a, name)?, slope(b, name)?);
+            match op {
+                '+' => sa + sb,
+                '-' => sa - sb,
+                _ if sa == 0.0 && sb == 0.0 => 0.0,
+                '*' => match (plain_number(a), plain_number(b)) {
+                    (_, Some(k)) if sb == 0.0 => sa * k,
+                    (Some(k), _) if sa == 0.0 => k * sb,
+                    _ => return None,
+                },
+                _ => match plain_number(b) {
+                    Some(k) if sb == 0.0 && k != 0.0 => sa / k,
+                    _ => return None,
+                },
+            }
+        }
+    })
+}
+
+/// The number `e` is with no parameter in it, where it is a plain number.
+fn plain_number(e: &Expr) -> Option<f64> {
+    match e {
+        Expr::Number(n) => Some(*n),
+        Expr::Neg(inner) => plain_number(inner).map(|n| -n),
+        _ => None,
+    }
+}
+
+/// Whether `e` reads parameter `name`.
+fn mentions(e: &Expr, name: &str) -> bool {
+    match e {
+        Expr::Param(param) => param == name,
+        Expr::Neg(inner) => mentions(inner, name),
+        Expr::Op(_, a, b) => mentions(a, name) || mentions(b, name),
+        _ => false,
+    }
 }
 
 // ---------------------------------------------------------------- expanding
@@ -2332,5 +2465,38 @@ look look.test.lines version=1 name="Lines" category="Fun" on=clip
         let def = catalog.fx("look.project.shake").unwrap();
         assert_eq!((def.version, def.reads_from), (2, 1));
         std::fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn the_second_whip_takes_both_shots_along_together() {
+        let whip = Catalog::builtin().look("look.whip", 2).expect("bundled");
+        let x = |side: Side| -> Vec<(Expr, Expr, Interp)> {
+            whip.lines
+                .iter()
+                .find_map(|line| match line {
+                    Line::Set {
+                        side: on,
+                        prop,
+                        value: Val::Keys(keys),
+                        ..
+                    } if *on == side && prop == "x" => Some(
+                        keys.iter()
+                            .map(|key| (key.at.clone(), key.value.clone(), key.interp))
+                            .collect(),
+                    ),
+                    _ => None,
+                })
+                .expect("each side moves across")
+        };
+        let (a, b) = (x(Side::A), x(Side::B));
+        assert_eq!(a.len(), b.len());
+        for ((a_at, a_x, a_interp), (b_at, b_x, b_interp)) in a.iter().zip(&b) {
+            // At the same moments, and the same way between them, the next shot one frame width
+            // to the right of the one leaving: they never overlap and never part.
+            assert_eq!((a_at, a_interp), (b_at, b_interp));
+            let (Some(a_x), Some(b_x)) = (plain_number(a_x), plain_number(b_x)) else {
+                panic!("{a_x:?} {b_x:?}");
+            };
+            assert_eq!(b_x - a_x, 1.0);
+        }
     }
 }

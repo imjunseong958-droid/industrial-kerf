@@ -33,4 +33,4 @@ pub use script::{
     apply_script, apply_script_with, print_op, print_ops, sequence_position, Applied,
 };
 pub use sound::{EdgeSound, Heard, Sound};
-pub use text::Clock;
+pub use text::{parse_fx_ref, Clock};

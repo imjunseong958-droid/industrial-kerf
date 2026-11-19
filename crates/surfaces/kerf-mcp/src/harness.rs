@@ -163,7 +163,8 @@ earlier with `look`; the proposal's script shows the caption lines it became.
 
 Check findings include what an editor would catch: black frames, picture that \
 leaves the frame's edges black, flash frames, a frame or two of another shot at \
-a clip's edge (from the media's index), a frame or two of a shot between what \
+a clip's edge or in what a transition plays past it (from the media's index), \
+a frame or two of a shot between what \
 is over it and a cut (an overlay that ends just before the cut under it, or \
 starts just after), sound cut inside a word (known once \
 a transcript of that media has been made), titles and captions outside 90% \
@@ -2436,6 +2437,17 @@ impl KerfMcpRouter {
                     "reference": kerf_lang::property_reference(property),
                 }));
             }
+            // The reference names each with its version, as documents do: `title@1` is `title`,
+            // and a version this Kerf does not read is said as a document's would be.
+            let (id, version) = match id.split_once('@') {
+                Some(_) => {
+                    let (id, version) = kerf_lang::parse_fx_ref(id)
+                        .map_err(|message| McpError::new("INVALID_ARGUMENTS", message))?;
+                    (id.to_string(), version)
+                }
+                None => (id.clone(), None),
+            };
+            let id = id.as_str();
             let fx = catalog().fx(id).ok_or_else(|| {
                 let message = match kerf_model::catalog::retired(id) {
                     Some(_) => kerf_model::catalog::unknown("effect", id),
@@ -2452,6 +2464,10 @@ impl KerfMcpRouter {
                 };
                 McpError::new("INVALID_ARGUMENTS", message)
             })?;
+            if let Some(version) = version {
+                fx.reads(version)
+                    .map_err(|message| McpError::new("INVALID_ARGUMENTS", message))?;
+            }
             return Ok(json!({
                 "effect": fx.id.as_str(),
                 "category": fx.category,
@@ -3440,7 +3456,9 @@ impl KerfMcpRouter {
             if lined.left.is_none() {
                 let at = frames(lined.offset) - frames(earliest);
                 let camera = index + 1;
-                let dur = rate.frames_round(media.duration).max(1);
+                // Whole frames of the sequence within the media: the nearer one can be past
+                // the end of media at another rate.
+                let dur = rate.frames_floor(media.duration).max(1);
                 let mut targets = Vec::new();
                 if media.video.is_some() {
                     lines.push(format!("track add V{camera} video"));
