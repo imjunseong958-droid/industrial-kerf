@@ -217,9 +217,10 @@ tools cover the work:
 
 An edit's check findings include what an editor would catch, as warnings:
 black stretches with nothing on screen, picture that leaves the frame's
-edges black, flash frames shorter than three frames, and sound cut inside a
-word (known from transcripts of that media already made; nothing is
-transcribed for the check). In a project with a `brand.kerfbrand`
+edges black, flash frames shorter than three frames (a clip that short, or
+a shot that shows for that long between an overlay and a cut), and sound
+cut inside a word (known from transcripts of that media already made;
+nothing is transcribed for the check). In a project with a `brand.kerfbrand`
 ([the user guide](docs/user-guide.md#a-brand)), a title in a font or a color
 the brand has not, and a title or a caption that says a word it avoids, are
 said as information.

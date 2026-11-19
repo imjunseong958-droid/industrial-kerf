@@ -6,6 +6,20 @@ on `main`; its section here becomes the release's notes on GitHub
 
 ## Unreleased
 
+- The check finds a flash frame that no one clip shows. An overlay that
+  ends two frames before the cut under it shows two frames of the shot
+  that cut ends, and one that starts two frames after it shows two of the
+  shot it starts; every clip was long enough, so nothing was said. The
+  video tracks are now read as they stack, and a shot that shows for one
+  or two frames between what is over it and a cut is a finding
+  (`picture.flash`), with the clips, the frames, and where: "2 frames of
+  `c1` show at 00:00:03:22, between `o1` ending and the cut to `c2`". It
+  counts as a flash frame in the check's table. A picture in a corner, a
+  fade, a transition across the edge, and a track that is off take no
+  flash from what is under them; a cut the media's index found inside a
+  clip counts as one; and a frame or two of black behind a title is said
+  the same way
+  ([docs/architecture.md](docs/architecture.md#edit)).
 - The shots and the still that come with `kerf-comfy` are made by Wan 2.1
   VACE 14B, where its 1.3B made them: `shot`, `shot-timed`, `shot-into`,
   `shot-led`, `shot-directed` and `still` load

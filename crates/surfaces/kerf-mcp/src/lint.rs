@@ -1,30 +1,46 @@
 //! What an editor would catch in a cut that validation does not: black
 //! frames, picture that leaves the frame's edges uncovered, flash frames
-//! (including a sliver of another shot at a clip's edge), sound cut
-//! inside a word or through a sound, pauses and repeated words the cut
-//! still plays (see `cuts`), and text and captions a viewer cannot read
-//! (see `text_lint`).
+//! (including a sliver of another shot at a clip's edge, and a picture the
+//! tracks over it leave showing for a frame or two), sound cut inside a
+//! word or through a sound, pauses and repeated words the cut still plays
+//! (see `cuts`), and text and captions a viewer cannot read (see
+//! `text_lint`).
 
 use crate::cuts::{self, Known};
 use crate::qc::{Finding, Severity};
 use crate::text_lint;
 use kerf_lang::{Breaks, Clock, Facts};
-use kerf_model::{Clip, Content, Id, Param, Project, Sequence, Time, TrackKind, Value};
+use kerf_model::{
+    Catalog, Clip, Content, Id, Media, Param, Project, Rate, Sequence, Time, Track, TrackKind, Value,
+};
+use std::collections::{BTreeMap, HashMap};
 
-/// A picture or sound clip shorter than this many frames is a flash frame.
+/// A picture or sound clip shorter than this many frames is a flash frame, and so is a
+/// picture that shows for fewer.
 const FLASH_FRAMES: i64 = 3;
 /// Pixels of frame edge a picture may leave uncovered without a finding.
 const EDGE_TOLERANCE: f64 = 0.5;
+
+/// What the index of each media found of it, looked up once.
+type Indexed = HashMap<Id, Option<Breaks>>;
 
 /// Findings for every sequence of `project`, whose media paths are
 /// resolved. `facts` knows what transcripts and indexes already made of its
 /// media heard and found; nothing is analysed for a check.
 pub(crate) fn findings(project: &Project, facts: &dyn Facts) -> Vec<Finding> {
     let mut findings = Vec::new();
+    let mut indexed = Indexed::new();
+    // What is laid over what is read as it is drawn: a look as the keys and effects it stands
+    // for. One that does not expand is left as the effect it is, of which nothing is known.
+    let drawn = kerf_model::look::expand(project, Catalog::builtin()).ok();
+    let drawn = drawn.as_ref().unwrap_or(project);
     for sequence in &project.sequences {
-        picture(project, sequence, &mut findings);
+        let said = picture(project, sequence, &mut findings);
         flash_frames(sequence, &mut findings);
-        slivers(project, sequence, facts, &mut findings);
+        slivers(project, sequence, facts, &mut indexed, &mut findings);
+        if let Some(sequence) = drawn.sequence(sequence.id.as_str()) {
+            picture_flashes(drawn, sequence, facts, &mut indexed, &said, &mut findings);
+        }
         let mut known = Known::new(facts);
         cuts_in_sound(project, sequence, &mut known, &mut findings);
         leftovers(project, sequence, &mut known, &mut findings);
@@ -280,8 +296,14 @@ fn pictures<'a>(project: &'a Project, sequence: &'a Sequence) -> impl Iterator<I
         .iter()
         .filter(|track| track.kind == TrackKind::Video && track.enabled)
         .flat_map(|track| &track.clips)
-        .filter(|clip| clip.enabled)
-        .filter(move |clip| match &clip.content {
+        .filter(move |clip| draws(project, clip))
+}
+
+/// Whether `clip` shows a picture where it is on a video track: it is enabled, and is not an
+/// adjustment layer or media without one.
+fn draws(project: &Project, clip: &Clip) -> bool {
+    clip.enabled
+        && match &clip.content {
             Content::Media { media, .. } => project
                 .media(media.as_str())
                 .is_some_and(|media| media.video.is_some()),
@@ -293,7 +315,7 @@ fn pictures<'a>(project: &'a Project, sequence: &'a Sequence) -> impl Iterator<I
             ),
             Content::Sequence { .. } => true,
             Content::Caption { .. } => false,
-        })
+        }
 }
 
 /// Whether `clip` is laid over a picture and is not one that fills a frame: text, a shape,
@@ -304,8 +326,13 @@ fn laid_over(clip: &Clip) -> bool {
 }
 
 /// Black stretches with no picture, and stretches where no picture covers
-/// the whole frame.
-fn picture(project: &Project, sequence: &Sequence, findings: &mut Vec<Finding>) {
+/// the whole frame. It gives back the stretches it said, which are not to be said again.
+fn picture(
+    project: &Project,
+    sequence: &Sequence,
+    findings: &mut Vec<Finding>,
+) -> Vec<(Time, Time)> {
+    let mut said = Vec::new();
     let duration = sequence.duration();
     if duration <= Time::ZERO
         || !sequence
@@ -313,13 +340,14 @@ fn picture(project: &Project, sequence: &Sequence, findings: &mut Vec<Finding>) 
             .iter()
             .any(|track| track.kind == TrackKind::Video)
     {
-        return;
+        return said;
     }
     let clock = Clock::of_sequence(sequence);
     let shown: Vec<&Clip> = pictures(project, sequence).collect();
     let span = |clip: &&Clip| (clip.start, clip.end());
     let pictured = union(shown.iter().map(span));
     for (from, to) in complement(&pictured, duration) {
+        said.push((from, to));
         findings.push(
             finding(
                 "picture.black",
@@ -348,6 +376,7 @@ fn picture(project: &Project, sequence: &Sequence, findings: &mut Vec<Finding>) 
             .map(span),
     );
     for (from, to) in subtract(&union(framed.iter().map(span)), &covered) {
+        said.push((from, to));
         let short: Vec<&Clip> = framed
             .iter()
             .copied()
@@ -375,6 +404,7 @@ fn picture(project: &Project, sequence: &Sequence, findings: &mut Vec<Finding>) 
         )
         .during(sequence, from, to));
     }
+    said
 }
 
 /// What to say after a finding that `short` do not fill the frame: the `scale` at which each
@@ -447,30 +477,39 @@ fn covers(project: &Project, sequence: &Sequence, clip: &Clip) -> bool {
             .map(|nested| (nested.width, nested.height)),
         Content::Generator { .. } | Content::Caption { .. } => None,
     };
-    let Some((width, height)) = size else {
-        return true;
-    };
+    let moves = PLACED.iter().any(|name| {
+        clip.props
+            .get(*name)
+            .is_some_and(|param| !matches!(param, Param::Static(_)))
+    });
+    size.is_none_or(|size| moves || placed_over(sequence, clip, size, Time::ZERO).unwrap_or(true))
+}
+
+/// Whether a picture `width` by `height` covers the whole frame where `clip` puts it at `at`
+/// of the clip, and `None` where that is not worked out: it is turned.
+fn placed_over(
+    sequence: &Sequence,
+    clip: &Clip,
+    (width, height): (u32, u32),
+    at: Time,
+) -> Option<bool> {
     let mut values = [0.0; 10];
-    let names = [
-        "x", "y", "scale", "scale_x", "scale_y", "rotation", "crop_l", "crop_r", "crop_t", "crop_b",
-    ];
-    for (value, name) in values.iter_mut().zip(names) {
+    for (value, name) in values.iter_mut().zip(PLACED) {
         let default = if name.starts_with("scale") { 1.0 } else { 0.0 };
         *value = match clip.props.get(name) {
             None => default,
-            Some(Param::Static(Value::Number(number))) => *number,
-            Some(_) => return true,
+            Some(param) => param.value_at(at).as_number()?,
         };
     }
     let [x, y, scale, scale_x, scale_y, rotation, left, right, top, bottom] = values;
     if rotation != 0.0 {
-        return true;
+        return None;
     }
     let (frame_width, frame_height) = (f64::from(sequence.width), f64::from(sequence.height));
     let cropped_width = f64::from(width) * (1.0 - left - right);
     let cropped_height = f64::from(height) * (1.0 - top - bottom);
     if cropped_width <= 0.0 || cropped_height <= 0.0 {
-        return false;
+        return Some(false);
     }
     // The renderer fits the picture inside the frame, then scales it about
     // its center and offsets it by fractions of the frame.
@@ -479,10 +518,12 @@ fn covers(project: &Project, sequence: &Sequence, clip: &Clip) -> bool {
     let shown_height = cropped_height * fit * (scale * scale_y).abs();
     let center_x = frame_width / 2.0 + x * frame_width;
     let center_y = frame_height / 2.0 + y * frame_height;
-    center_x - shown_width / 2.0 <= EDGE_TOLERANCE
-        && center_x + shown_width / 2.0 >= frame_width - EDGE_TOLERANCE
-        && center_y - shown_height / 2.0 <= EDGE_TOLERANCE
-        && center_y + shown_height / 2.0 >= frame_height - EDGE_TOLERANCE
+    Some(
+        center_x - shown_width / 2.0 <= EDGE_TOLERANCE
+            && center_x + shown_width / 2.0 >= frame_width - EDGE_TOLERANCE
+            && center_y - shown_height / 2.0 <= EDGE_TOLERANCE
+            && center_y + shown_height / 2.0 >= frame_height - EDGE_TOLERANCE,
+    )
 }
 
 fn flash_frames(sequence: &Sequence, findings: &mut Vec<Finding>) {
@@ -520,9 +561,14 @@ fn flash_frames(sequence: &Sequence, findings: &mut Vec<Finding>) {
 /// Picture clips that show a frame or two of another shot at an edge: a
 /// cut of their media's picture just inside the clip, which plays as a
 /// flash frame.
-fn slivers(project: &Project, sequence: &Sequence, facts: &dyn Facts, findings: &mut Vec<Finding>) {
+fn slivers(
+    project: &Project,
+    sequence: &Sequence,
+    facts: &dyn Facts,
+    known: &mut Indexed,
+    findings: &mut Vec<Finding>,
+) {
     let rate = sequence.rate;
-    let mut known: std::collections::HashMap<_, Option<Breaks>> = std::collections::HashMap::new();
     for clip in pictures(project, sequence) {
         let Content::Media { media, .. } = &clip.content else {
             continue;
@@ -583,6 +629,545 @@ fn slivers(project: &Project, sequence: &Sequence, facts: &dyn Facts, findings: 
             }
         }
     }
+}
+
+/// What a picture that shows for a frame or two between what is over it and a cut is called.
+pub(crate) const PICTURE_FLASH: &str = "picture.flash";
+
+/// The categories of the catalog whose effects leave a picture as whole and as opaque as it
+/// was: a grade, a blur, grain, a finish, a burn-in. Any other may cut it, key it, or move it.
+const KEEPS_WHOLE: [&str; 5] = [
+    "Color Correction",
+    "Blur & Sharpen",
+    "Noise & Grain",
+    "Stylize",
+    "Text",
+];
+
+/// Effects that only take away from a picture or draw at its edge: a keyer, a choker, a drop
+/// shadow, a rounded crop, a feather, an outline. A picture that does not cover the frame
+/// without them does not with them. The first three are categories of the catalog.
+const TRIMS: [&str; 6] = [
+    "Keying",
+    "Matte",
+    "Perspective",
+    "utility.roundedcrop",
+    "utility.edgefeather",
+    "utility.stroke",
+];
+
+/// How a clip lies over what is under it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Over {
+    /// It hides all of it.
+    Hides,
+    /// It leaves it showing, around it or through it.
+    Shows,
+    /// Whether it hides it is not known.
+    Unknown,
+}
+
+/// A stretch of `clip` as a layer over what is under it, over which it lies one way.
+#[derive(Clone, Copy)]
+struct Layer<'a> {
+    from: Time,
+    to: Time,
+    clip: &'a Clip,
+    over: Over,
+}
+
+/// What a shot has at one end of it.
+#[derive(Clone, Copy)]
+enum Edge<'a> {
+    /// A cut from or to the clip beside it on its track.
+    Clip(&'a Clip),
+    /// A cut in its media's picture, by the media's index, at that time of the media.
+    Media(&'a Media, Time),
+    /// Nothing beside it on its track: its clip starts or ends there.
+    Open,
+}
+
+/// A stretch of one track's picture with no cut in it: a clip, the part of one between two
+/// cuts of its media's picture, or several that a transition joins or that play on from one
+/// another as the halves of a split do.
+#[derive(Clone, Copy)]
+struct Shot<'a> {
+    from: Time,
+    to: Time,
+    enters: Edge<'a>,
+    leaves: Edge<'a>,
+}
+
+/// Pictures that show for a frame or two because of what is over them, which nothing that
+/// looks at one clip finds: an overlay that ends two frames before the cut under it shows two
+/// frames of the shot that cut ends, and one that starts two frames after it, two of the shot
+/// it starts, with every clip long enough.
+///
+/// The video tracks are laid over one another from the top, each clip read as it is drawn at
+/// each frame ([`over_at`]), in `project` with its looks expanded. A shot shows wherever
+/// nothing over it hides the whole frame, and a stretch of it shorter than [`FLASH_FRAMES`] is
+/// a flash, said once whatever shows in it. So a clip that does not fill the frame leaves the
+/// shot under it showing, and takes no flash from it.
+///
+/// Only what is certain is said. A fade and a transition are no cut, so a stretch that one of
+/// them starts or ends is left; so is one under a clip that may or may not hide it; and so is
+/// a shot that is itself that short, which is its clip's to say ([`flash_frames`],
+/// [`slivers`]). Where nothing fills the frame for a frame or two and something laid over it
+/// keeps [`picture`] from calling it black, that is said too; `said` are the stretches
+/// [`picture`] did say.
+fn picture_flashes(
+    project: &Project,
+    sequence: &Sequence,
+    facts: &dyn Facts,
+    indexed: &mut Indexed,
+    said: &[(Time, Time)],
+    findings: &mut Vec<Finding>,
+) {
+    let rate = sequence.rate;
+    let clock = Clock::of_sequence(sequence);
+    let tracks: Vec<&Track> = sequence
+        .tracks
+        .iter()
+        .filter(|track| track.kind == TrackKind::Video && track.enabled)
+        .collect();
+    let layers: Vec<Vec<Layer>> = tracks
+        .iter()
+        .map(|track| layers(project, sequence, track))
+        .collect();
+    let hidden_by = |layers: &[Layer]| {
+        union(
+            layers
+                .iter()
+                .filter(|layer| layer.over == Over::Hides)
+                .map(|layer| (layer.from, layer.to)),
+        )
+    };
+    // How many frames a stretch is, where they are few enough to be a flash.
+    let flash = |from: Time, to: Time| {
+        Some(rate.frames_round(to - from)).filter(|frames| (1..FLASH_FRAMES).contains(frames))
+    };
+    // Each stretch that flashes: the clips it shows, from the top one down, and what is before
+    // it and after it by the top one.
+    let mut flashes: BTreeMap<(Time, Time), (Vec<&Id>, String, String)> = BTreeMap::new();
+    for (index, track) in tracks.iter().enumerate().rev() {
+        let over: Vec<Layer> = layers[index + 1..].iter().flatten().copied().collect();
+        let hidden = hidden_by(&over);
+        for shot in shots(project, track, rate, facts, indexed) {
+            // A shot that is itself a flash is its clip's to say.
+            if rate.frames_round(shot.to - shot.from) < FLASH_FRAMES {
+                continue;
+            }
+            // Only what is hidden while the shot plays, of a long sequence's many stretches.
+            let first = hidden.partition_point(|(_, to)| *to <= shot.from);
+            let last = hidden.partition_point(|(from, _)| *from < shot.to);
+            for (from, to) in subtract(&[(shot.from, shot.to)], &hidden[first..last]) {
+                // The clip it shows, unless that is one said already for being as short.
+                let shown = track
+                    .clips
+                    .iter()
+                    .find(|clip| clip.start <= from && from < clip.end() && draws(project, clip))
+                    .filter(|clip| rate.frames_round(clip.duration) >= FLASH_FRAMES);
+                let (Some(_), Some(clip), Some((ends, starts))) =
+                    (flash(from, to), shown, cut_by(&over, from, to))
+                else {
+                    continue;
+                };
+                // What stopped hiding it is what was seen before it, whatever its own track
+                // has there.
+                let before = match (ends, shot.enters) {
+                    (Some(over), _) => format!("`{}` ending", over.id),
+                    (None, Edge::Clip(other)) => format!("the cut from `{}`", other.id),
+                    (None, Edge::Media(media, at)) => cut_in(media, at),
+                    (None, Edge::Open) => format!("`{}` starting", clip.id),
+                };
+                let after = match (starts, shot.leaves) {
+                    (Some(over), _) => format!("`{}` starting", over.id),
+                    (None, Edge::Clip(other)) => format!("the cut to `{}`", other.id),
+                    (None, Edge::Media(media, at)) => cut_in(media, at),
+                    (None, Edge::Open) => format!("`{}` ending", clip.id),
+                };
+                flashes
+                    .entry((from, to))
+                    .or_insert((Vec::new(), before, after))
+                    .0
+                    .push(&clip.id);
+            }
+        }
+    }
+    // Where nothing fills the frame, it is black behind whatever else is on it.
+    let layers: Vec<Layer> = layers.into_iter().flatten().collect();
+    for (from, to) in complement(&hidden_by(&layers), sequence.duration()) {
+        let known = said.iter().any(|(start, end)| *start < to && from < *end);
+        let (Some(_), false, Some((ends, starts))) =
+            (flash(from, to), known, cut_by(&layers, from, to))
+        else {
+            continue;
+        };
+        let before = ends.map_or_else(
+            || format!("the start of `{}`", sequence.id),
+            |clip| format!("`{}` ending", clip.id),
+        );
+        let after = starts.map_or_else(
+            || format!("the end of `{}`", sequence.id),
+            |clip| format!("`{}` starting", clip.id),
+        );
+        flashes
+            .entry((from, to))
+            .or_insert((Vec::new(), before, after));
+    }
+    for ((from, to), (clips, before, after)) in flashes {
+        let frames = rate.frames_round(to - from);
+        let shown = if clips.is_empty() {
+            "black".to_owned()
+        } else {
+            clips
+                .iter()
+                .map(|id| format!("`{id}`"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        findings.push(
+            finding(
+                PICTURE_FLASH,
+                clips.first().map_or(sequence.id.as_str(), |id| id.as_str()),
+                format!(
+                    "{frames} {} of {shown} {} at {}, between {before} and {after}",
+                    if frames == 1 { "frame" } else { "frames" },
+                    if frames == 1 { "shows" } else { "show" },
+                    clock.print_position(from),
+                ),
+            )
+            .during(sequence, from, to)
+            .measured(frames as f64, FLASH_FRAMES as f64, "frames"),
+        );
+    }
+}
+
+/// What cuts to and from the stretch `from`–`to` among `over`, the clips that lie over it in
+/// order from the lowest track up: the clip that stops hiding at `from` and the one that
+/// starts hiding at `to`, the topmost of each.
+///
+/// Nothing where that is not certain. One of them stops or starts hiding at a moment that is
+/// not its clip's own first or last frame: there it fades, or a transition takes it, and what
+/// is under it comes up through it and is not cut to. Or a clip that may or may not hide is
+/// over the stretch, and what is under it may not show at all.
+fn cut_by<'a>(
+    over: &[Layer<'a>],
+    from: Time,
+    to: Time,
+) -> Option<(Option<&'a Clip>, Option<&'a Clip>)> {
+    let hides = || over.iter().filter(|layer| layer.over == Over::Hides);
+    let ends = || hides().filter(|layer| layer.to == from);
+    let starts = || hides().filter(|layer| layer.from == to);
+    let certain = ends().all(|layer| layer.to == layer.clip.end())
+        && starts().all(|layer| layer.from == layer.clip.start)
+        && !over
+            .iter()
+            .any(|layer| layer.over == Over::Unknown && layer.from < to && from < layer.to);
+    certain.then(|| {
+        (
+            ends().next_back().map(|layer| layer.clip),
+            starts().next_back().map(|layer| layer.clip),
+        )
+    })
+}
+
+/// How a cut in the picture of `media` at `at` of it is said.
+fn cut_in(media: &Media, at: Time) -> String {
+    format!(
+        "a cut in its picture (`{}` cuts at {}, by its index)",
+        media.id,
+        Clock::of_media(media).print_position(media.rate.round(at)),
+    )
+}
+
+/// How each clip of `track` lies over what is under it, in the order they play: a stretch for
+/// each way it does, found a frame at a time where a property of it changes over time.
+fn layers<'a>(project: &Project, sequence: &Sequence, track: &'a Track) -> Vec<Layer<'a>> {
+    let rate = sequence.rate;
+    let mut layers: Vec<Layer<'a>> = Vec::new();
+    for clip in track.clips.iter().filter(|clip| draws(project, clip)) {
+        let changes = clip.props.values().any(Param::varies)
+            || matches!(&clip.content, Content::Generator { params, .. }
+                if params.values().any(Param::varies));
+        let frames = if changes {
+            rate.frames_round(clip.duration)
+        } else {
+            1
+        };
+        let first = layers.len();
+        for frame in 0..frames {
+            let at = rate.time_of(frame);
+            let over = over_at(project, sequence, clip, at);
+            if layers[first..].last().is_none_or(|last| last.over != over) {
+                if let Some(last) = layers[first..].last_mut() {
+                    last.to = clip.start + at;
+                }
+                layers.push(Layer {
+                    from: clip.start + at,
+                    to: clip.end(),
+                    clip,
+                    over,
+                });
+            }
+        }
+    }
+    // A transition mixes its two clips from before their cut to after it. Two that both hide
+    // right up to the cut go on hiding through it. One that hides beside one that does not is
+    // coming or going all that while, and what is under it shows through; beside one that may
+    // or may not hide, whether it shows is not known either.
+    for transition in &track.transitions {
+        let (Some(from), Some(to)) = (
+            track.clip(transition.from.as_str()),
+            track.clip(transition.to.as_str()),
+        ) else {
+            continue;
+        };
+        let cut = from.end();
+        let leaves = layers
+            .iter()
+            .find(|layer| layer.clip.id == from.id && layer.to == cut)
+            .map(|layer| layer.over);
+        let enters = layers
+            .iter()
+            .find(|layer| layer.clip.id == to.id && layer.from == cut)
+            .map(|layer| layer.over);
+        if (leaves, enters) == (Some(Over::Hides), Some(Over::Hides)) {
+            continue;
+        }
+        let (before, after) = transition.split_at_cut(rate);
+        for layer in layers.iter_mut().filter(|layer| layer.over == Over::Hides) {
+            if layer.clip.id == from.id {
+                layer.to = layer.to.min(cut - before);
+            }
+            if layer.clip.id == to.id {
+                layer.from = layer.from.max(cut + after);
+            }
+        }
+        if leaves == Some(Over::Unknown) || enters == Some(Over::Unknown) {
+            layers.push(Layer {
+                from: cut - before,
+                to: cut + after,
+                clip: from,
+                over: Over::Unknown,
+            });
+        }
+    }
+    layers.retain(|layer| layer.from < layer.to);
+    layers
+}
+
+/// The properties that place a picture on the frame, as [`placed_over`] reads them.
+const PLACED: [&str; 10] = [
+    "x", "y", "scale", "scale_x", "scale_y", "rotation", "crop_l", "crop_r", "crop_t", "crop_b",
+];
+
+/// How `clip` lies over what is under it at `at` of the clip, as the compositor draws it: its
+/// picture fit inside the frame and cut by its masks and crop, its effects run on that, and
+/// then scaled, moved, and laid on at its opacity (`kerf_compose::draw`).
+///
+/// It hides what is under it where it is a picture with no transparency of its own, or a
+/// solid of a color with none, that covers the whole frame at full opacity and is laid
+/// straight over it; a picture left where fitting puts it is padded to the frame with black,
+/// and hides as much. It leaves it showing where it is seen through or does not cover the
+/// frame: at less than full opacity, blended, a picture with transparency, text, a shape,
+/// particles, a mesh, and a picture scaled down or moved aside, whatever is cut from it.
+///
+/// The benefit of the doubt goes the other way from [`covers`], which lets a picture that
+/// moves pass for one that fills the frame. Here what is not worked out is not known: a clip
+/// that is turned, moved by a parent or along a path, or in depth, one over the whole frame
+/// with a mask or an effect that may cut or key it, one with an effect that may move or
+/// redraw it, and a nested sequence, which is transparent wherever it has nothing and is not
+/// read for where that is.
+fn over_at(project: &Project, sequence: &Sequence, clip: &Clip, at: Time) -> Over {
+    let prop = |name: &str| clip.props.get(name);
+    let opacity = prop("opacity").map_or(Some(1.0), |param| param.value_at(at).as_number());
+    let blended = prop("blend").is_some_and(
+        |blend| !matches!(blend, Param::Static(Value::Enum(mode)) if mode == "normal"),
+    );
+    if laid_over(clip) || blended || opacity.is_some_and(|opacity| opacity < 1.0) {
+        return Over::Shows;
+    }
+    let (size, media) = match &clip.content {
+        Content::Media { media, .. } => {
+            match project.media(media.as_str()).and_then(|media| media.video) {
+                Some(video) if video.alpha => return Over::Shows,
+                Some(video) => ((video.width, video.height), true),
+                None => return Over::Unknown,
+            }
+        }
+        // A solid is the size of the frame, and is placed as a picture is.
+        Content::Generator { fx, params, .. } if fx.as_str() == "solid" => {
+            match params.get("color").map(|color| color.value_at(at)) {
+                Some(Value::Color(color)) if color.a < u8::MAX => return Over::Shows,
+                None | Some(Value::Color(_)) => ((sequence.width, sequence.height), false),
+                Some(_) => return Over::Unknown,
+            }
+        }
+        _ => return Over::Unknown,
+    };
+    let moved = opacity.is_none()
+        || clip.in_depth()
+        || clip.parent.is_some()
+        || ["path", "anchor_x", "anchor_y"]
+            .iter()
+            .any(|name| prop(name).is_some());
+    let effects_of = |kinds: &[&str]| {
+        clip.effects
+            .iter()
+            .filter(|effect| effect.enabled)
+            .all(|effect| {
+                kinds.contains(&effect.fx.as_str())
+                    || Catalog::builtin()
+                        .fx(effect.fx.as_str())
+                        .is_some_and(|fx| kinds.contains(&fx.category.as_str()))
+            })
+    };
+    let whole = clip.masks.is_empty() && effects_of(&KEEPS_WHOLE);
+    match placed_over(sequence, clip, size, at) {
+        _ if moved => Over::Unknown,
+        Some(true) if whole => Over::Hides,
+        Some(false) if media && whole && padded(clip) => Over::Hides,
+        Some(false) if effects_of(&[KEEPS_WHOLE.as_slice(), &TRIMS].concat()) => Over::Shows,
+        _ => Over::Unknown,
+    }
+}
+
+/// Whether the compositor pads the picture of `clip` to the frame with black where it does
+/// not fill it, as it does opaque media with no mask left where fitting puts it, flipped or
+/// cropped as it may be (`letterboxed` in `kerf_compose::draw`).
+fn padded(clip: &Clip) -> bool {
+    let fixed = |name: &str, default: f64| match clip.props.get(name) {
+        None => Some(default),
+        Some(Param::Static(Value::Number(number))) => Some(*number),
+        Some(_) => None,
+    };
+    let unit = |axis: &str| {
+        fixed("scale", 1.0)
+            .zip(fixed(axis, 1.0))
+            .is_some_and(|(scale, factor)| ((scale * factor).abs() - 1.0).abs() < 5e-7)
+    };
+    clip.masks.is_empty()
+        && ["x", "y", "rotation", "anchor_x", "anchor_y"]
+            .iter()
+            .all(|name| fixed(name, 0.0) == Some(0.0))
+        && unit("scale_x")
+        && unit("scale_y")
+}
+
+/// The shots of `track` in the order they play.
+fn shots<'a>(
+    project: &'a Project,
+    track: &'a Track,
+    rate: Rate,
+    facts: &dyn Facts,
+    indexed: &mut Indexed,
+) -> Vec<Shot<'a>> {
+    let mut shots = Vec::new();
+    let mut open: Option<Shot<'a>> = None;
+    let mut before: Option<&'a Clip> = None;
+    for clip in track.clips.iter().filter(|clip| draws(project, clip)) {
+        let beside = before.filter(|before| before.end() == clip.start);
+        let joined = beside.is_some_and(|before| {
+            plays_on(before, clip)
+                || track
+                    .transitions
+                    .iter()
+                    .any(|transition| transition.from == before.id && transition.to == clip.id)
+        });
+        let mut shot = match open.take() {
+            Some(shot) if joined => shot,
+            last => {
+                shots.extend(last.map(|last| Shot {
+                    leaves: beside.map_or(Edge::Open, |_| Edge::Clip(clip)),
+                    ..last
+                }));
+                Shot {
+                    from: clip.start,
+                    to: clip.end(),
+                    enters: beside.map_or(Edge::Open, Edge::Clip),
+                    leaves: Edge::Open,
+                }
+            }
+        };
+        for (at, cut) in cuts_within(project, clip, rate, facts, indexed) {
+            shots.push(Shot {
+                to: at,
+                leaves: cut,
+                ..shot
+            });
+            shot = Shot {
+                from: at,
+                enters: cut,
+                ..shot
+            };
+        }
+        open = Some(Shot {
+            to: clip.end(),
+            ..shot
+        });
+        before = Some(clip);
+    }
+    shots.extend(open);
+    shots
+}
+
+/// The cuts of its media's picture that `clip` plays, by the media's index: the frame of the
+/// sequence each falls on, in the order they play.
+fn cuts_within<'a>(
+    project: &'a Project,
+    clip: &Clip,
+    rate: Rate,
+    facts: &dyn Facts,
+    indexed: &mut Indexed,
+) -> Vec<(Time, Edge<'a>)> {
+    let Content::Media { media, .. } = &clip.content else {
+        return Vec::new();
+    };
+    let (Some(media), Some((low, high))) = (project.media(media.as_str()), clip.source_range())
+    else {
+        return Vec::new();
+    };
+    let Some(breaks) = indexed
+        .entry(media.id.clone())
+        .or_insert_with(|| facts.breaks(media))
+    else {
+        return Vec::new();
+    };
+    let mut cuts: Vec<(Time, Edge<'a>)> = breaks
+        .cuts
+        .iter()
+        .filter_map(|cut| Time::from_seconds(*cut))
+        .filter(|at| low < *at && *at < high)
+        .filter_map(|at| Some((rate.round(clip.played_at(at)?), Edge::Media(media, at))))
+        .filter(|(played, _)| clip.start < *played && *played < clip.end())
+        .collect();
+    cuts.sort_by_key(|(played, _)| *played);
+    cuts.dedup_by_key(|(played, _)| *played);
+    cuts
+}
+
+/// Whether `next` plays on from where `clip` stops, as the two halves of a split do: no cut
+/// is seen between them.
+fn plays_on(clip: &Clip, next: &Clip) -> bool {
+    let same = match (&clip.content, &next.content) {
+        (Content::Media { media, .. }, Content::Media { media: other, .. }) => media == other,
+        (Content::Sequence { sequence, .. }, Content::Sequence { sequence: other, .. }) => {
+            sequence == other && clip.angle == next.angle
+        }
+        _ => false,
+    };
+    let (Some((low, high)), Some((next_low, next_high))) =
+        (clip.source_range(), next.source_range())
+    else {
+        return false;
+    };
+    same && clip.speed() == next.speed()
+        && if clip.speed().is_reverse() {
+            low == next_high
+        } else {
+            high == next_low
+        }
 }
 
 /// What cuts no transcript covers are called: information, since nothing is known to be wrong with
@@ -1802,6 +2387,17 @@ sequence s1 rate=24 size=1920x1080
     }
 
     #[test]
+    fn a_picture_whose_placement_changes_is_taken_to_fill_the_frame() {
+        // c1 is pushed in from where it leaves the tall frame's edges black to where it fills
+        // it: its edges are given the benefit of the doubt, as they were.
+        let found = codes(
+            "sequence set s1 size=1080x1920\nset c1 scale={0f:1 24f:3.17}\nset c2 scale=3.17",
+            &[],
+        );
+        assert!(found.is_empty(), "{found:?}");
+    }
+
+    #[test]
     fn the_scale_that_fills_the_frame_is_said_with_one_clip() {
         let found = codes("sequence set s1 size=1080x1920\nset c2 scale=3.17", &[]);
         assert_eq!(found.len(), 1, "{found:?}");
@@ -1959,6 +2555,317 @@ sequence s1 rate=24 size=1920x1080
         assert!(
             found[1].1.contains("clip `c1` ends with 1 frame"),
             "{found:?}"
+        );
+    }
+
+    /// A second picture, with no sound, and a track over V1 to lay it on.
+    const OVER: &str = "media add m2 path=\"b.mov\" rate=24 dur=00:01:00:00 video=1920x1080\n\
+                        track add V2 video\n";
+
+    /// What `script`, after [`OVER`], leaves showing for a frame or two.
+    fn flashes(script: &str) -> Vec<String> {
+        codes(&format!("{OVER}{script}"), &[])
+            .into_iter()
+            .filter(|(code, _)| code == PICTURE_FLASH)
+            .map(|(_, message)| message)
+            .collect()
+    }
+
+    #[test]
+    fn an_overlay_that_misses_the_cut_under_it_shows_a_flash_of_a_shot() {
+        // V1 cuts from c1 to c2 at four seconds. o1 fills the frame over it and ends two
+        // frames before: c1 is seen again for those two, and then the cut. Both are long.
+        let script =
+            format!("{OVER}overwrite media=m2 at=00:00:02:00 dur=00:00:01:22 on=V2 as=o1");
+        let found = codes(&script, &[]);
+        assert_eq!(
+            found,
+            [(
+                "picture.flash".to_owned(),
+                "2 frames of `c1` show at 00:00:03:22, between `o1` ending and the cut to `c2`"
+                    .to_owned()
+            )]
+        );
+        // It is said of the shot, where it shows, and fails the rows flash frames do.
+        let catalog = Catalog::builtin();
+        let project = parse_document(DOCUMENT, catalog).unwrap().project;
+        let project = apply_script(&project, catalog, &script).unwrap().project;
+        let known = Known {
+            covered: vec![(0.0, 60.0)],
+            ..Known::default()
+        };
+        let found = findings(&project, &known);
+        assert_eq!(found[0].entity.as_deref(), Some("c1"));
+        assert_eq!(found[0].timecode.as_deref(), Some("00:00:03:22"));
+        assert_eq!((found[0].value, found[0].limit), (Some(2.0), Some(3.0)));
+        let failed = |rows| {
+            crate::qc::CheckReport::new(found.clone(), rows)
+                .summary
+                .rows
+                .into_iter()
+                .filter(|row| !row.passed)
+                .map(|row| row.code)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(failed(crate::qc::ROWS), ["clip.flash"]);
+        assert_eq!(failed(crate::FULL_ROWS), ["picture.flash_black"]);
+        // One that starts two frames after the cut shows two of the shot the cut starts.
+        assert_eq!(
+            flashes("overwrite media=m2 at=00:00:04:02 dur=00:00:02:00 on=V2 as=o1"),
+            ["2 frames of `c2` show at 00:00:04:00, between the cut from `c1` and `o1` starting"]
+        );
+        // And one frame is one.
+        assert_eq!(
+            flashes("overwrite media=m2 at=00:00:02:00 dur=00:00:01:23 on=V2 as=o1"),
+            ["1 frame of `c1` shows at 00:00:03:23, between `o1` ending and the cut to `c2`"]
+        );
+    }
+
+    #[test]
+    fn an_overlay_that_ends_or_starts_on_the_cut_shows_no_flash() {
+        for edge in ["at=00:00:02:00 dur=00:00:02:00", "at=00:00:04:00 dur=00:00:02:00"] {
+            let found = codes(&format!("{OVER}overwrite media=m2 {edge} on=V2 as=o1"), &[]);
+            assert!(found.is_empty(), "{edge}: {found:?}");
+        }
+        // Three frames of a shot are a short shot, and no flash.
+        let three = flashes("overwrite media=m2 at=00:00:02:00 dur=00:00:01:21 on=V2 as=o1");
+        assert!(three.is_empty(), "{three:?}");
+    }
+
+    #[test]
+    fn what_does_not_hide_the_shot_under_it_takes_no_flash_from_it() {
+        // Each ends two frames before the cut, and c1 shows the whole time, or may: a picture
+        // in a corner, one seen through, one blended, one that is masked, keyed, turned, in
+        // depth, or scaled about another point than its middle, one that slides off, a picture
+        // with transparency of its own, a clip that is off, and a track that is.
+        let o1 = "overwrite media=m2 at=00:00:02:00 dur=00:00:01:22 on=V2 as=o1\n";
+        for kept in [
+            "set o1 scale=0.5",
+            "set o1 opacity=0.5",
+            "set o1 blend=screen",
+            "mask o1 add m rect=0,0,0.5,1",
+            "fx o1 add key.luma",
+            "set o1 rotation=180",
+            "set o1 three_d=true",
+            "set o1 anchor_x=0.5",
+            "set o1 x={0f:0 46f:1}",
+            "media replace m2 path=\"b.mov\" rate=24 dur=00:01:00:00 video=1920x1080 alpha=true",
+            "set o1 enabled=false",
+            "track set V2 enabled=false",
+        ] {
+            let found = codes(&format!("{OVER}{o1}{kept}"), &[]);
+            assert!(found.is_empty(), "{kept}: {found:?}");
+        }
+        // What leaves it over the whole frame leaves it hiding what it hid: a grade, a look
+        // that is one, and a push in, by keys or by a look. A solid in its place hides as much.
+        let solid = "overwrite gen=solid at=00:00:02:00 dur=00:00:01:22 on=V2 as=o1".to_owned();
+        for hides in [
+            format!("{o1}fx o1 add color.basic"),
+            format!("{o1}fx o1 add look.grade.sepia"),
+            format!("{o1}set o1 scale={{0f:1 46f:1.2}}"),
+            format!("{o1}fx o1 add look.slow-push"),
+            solid,
+        ] {
+            assert_eq!(
+                flashes(&hides),
+                ["2 frames of `c1` show at 00:00:03:22, between `o1` ending and the cut to `c2`"],
+                "{hides}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_picture_padded_with_black_hides_what_is_under_it() {
+        // A picture narrower than the frame, left where fitting puts it, is drawn with black
+        // either side of it: nothing of c1 shows beside it, and c1 flashes when it ends.
+        let narrow = "media add m3 path=\"c.mov\" rate=24 dur=00:01:00:00 video=1440x1080\n\
+                      overwrite media=m3 at=00:00:02:00 dur=00:00:01:22 on=V2 as=o1\n";
+        assert_eq!(
+            flashes(narrow),
+            ["2 frames of `c1` show at 00:00:03:22, between `o1` ending and the cut to `c2`"]
+        );
+        // Flipped it is padded still. Scaled down it is not, and c1 shows around it.
+        assert_eq!(flashes(&format!("{narrow}set o1 scale_x=-1")).len(), 1);
+        let small = flashes(&format!("{narrow}set o1 scale=0.9"));
+        assert!(small.is_empty(), "{small:?}");
+    }
+
+    #[test]
+    fn nothing_is_said_of_what_may_be_hidden() {
+        // o1 ends two frames before the cut, under a picture that is turned over: whether
+        // that fills the frame is not worked out, so whether c1 shows at all is not known.
+        let o1 = "overwrite media=m2 at=00:00:02:00 dur=00:00:01:22 on=V2 as=o1\n";
+        let over = "track add V3 video\n\
+                    overwrite media=m2 src=00:00:30:00 at=00:00:00:00 dur=00:00:08:00 on=V3 as=o2\n";
+        let turned = flashes(&format!("{o1}{over}set o2 rotation=180"));
+        assert!(turned.is_empty(), "{turned:?}");
+        // In a corner it leaves c1 showing, and the flash is seen beside it, whatever is cut
+        // from it there: a rounded crop, a mask, and a key take nothing off c1.
+        let corner = format!("{o1}{over}set o2 scale=0.5\n");
+        assert_eq!(flashes(&corner).len(), 1);
+        let dressed = flashes(&format!(
+            "{corner}fx o2 add utility.roundedcrop\nfx o2 add key.luma\n\
+             mask o2 add m ellipse=0.5,0.5,0.4,0.4"
+        ));
+        assert_eq!(dressed.len(), 1, "{dressed:?}");
+        // An effect that may move it or draw it larger may put it over c1 again.
+        let moved = flashes(&format!("{corner}fx o2 add distort.transform"));
+        assert!(moved.is_empty(), "{moved:?}");
+        // Nor is it known while such a picture is dissolved into, before its own first frame:
+        // o1 on the top track ends two frames before the cut, and on the track between a
+        // picture that hides c1 is by then mixing into one that is turned over.
+        let mixed = "track add V3 video\n\
+                     overwrite media=m2 at=00:00:02:00 dur=00:00:01:22 on=V3 as=o1\n\
+                     overwrite media=m2 src=00:00:10:00 at=00:00:01:00 dur=00:00:03:02 on=V2 as=o2\n\
+                     overwrite media=m2 src=00:00:30:00 at=00:00:04:02 dur=00:00:02:00 on=V2 as=o3\n\
+                     transition add from=o2 to=o3 fx=dissolve dur=12f\n";
+        let turned = flashes(&format!("{mixed}set o3 rotation=180"));
+        assert!(turned.is_empty(), "{turned:?}");
+        // Mixing into one in a corner, it lets c1 through, and those two frames are seen.
+        assert_eq!(
+            flashes(&format!("{mixed}set o3 scale=0.5")),
+            ["2 frames of `c1` show at 00:00:03:22, between `o1` ending and the cut to `c2`"]
+        );
+    }
+
+    #[test]
+    fn a_transition_or_a_fade_at_an_edge_is_no_flash() {
+        let o1 = "overwrite media=m2 at=00:00:02:00 dur=00:00:01:22 on=V2 as=o1\n";
+        // A dissolve across the cut under it: c1 is not cut from, it is mixed into c2.
+        let found = codes(
+            &format!("{OVER}{o1}transition add from=c1 to=c2 fx=dissolve dur=12f"),
+            &[],
+        );
+        assert!(found.is_empty(), "{found:?}");
+        // o1 fades out over its last twelve frames, and c1 comes up through it for those.
+        let faded = flashes(&format!("{o1}set o1 opacity={{0f:1 34f:1 46f:0}}"));
+        assert!(faded.is_empty(), "{faded:?}");
+        // Faded in and cut out, it hides c1 to its last frame as it did.
+        let cut = flashes(&format!("{o1}set o1 opacity={{0f:0 12f:1}}"));
+        assert_eq!(cut.len(), 1, "{cut:?}");
+        // One that starts to fade two frames before the cut and ends after it hides little
+        // less of c1 in those two frames than it did, and they are no flash of it.
+        let over = flashes(
+            "overwrite media=m2 at=00:00:02:00 dur=00:00:02:10 on=V2 as=o1\n\
+             set o1 opacity={0f:1 46f:1 58f:0}",
+        );
+        assert!(over.is_empty(), "{over:?}");
+        // o1 dissolves into a picture in a corner, so c1 comes up from where that starts;
+        // cut to it, c1 is seen for the two frames before its own cut.
+        let corner = format!(
+            "{o1}overwrite media=m2 src=00:00:20:00 at=00:00:03:22 dur=00:00:02:00 on=V2 as=o2\n\
+             set o2 scale=0.5\n"
+        );
+        assert_eq!(
+            flashes(&corner),
+            ["2 frames of `c1` show at 00:00:03:22, between `o1` ending and the cut to `c2`"]
+        );
+        let mixed = flashes(&format!(
+            "{corner}transition add from=o1 to=o2 fx=dissolve dur=12f"
+        ));
+        assert!(mixed.is_empty(), "{mixed:?}");
+    }
+
+    #[test]
+    fn a_shot_is_cut_where_its_picture_is_and_not_where_its_clip_is_split() {
+        // c2 split at six seconds plays on: an overlay that ends two frames before shows
+        // more of the one shot.
+        let o1 = "overwrite media=m2 at=00:00:04:12 dur=00:00:01:10 on=V2 as=o1";
+        let split = flashes(&format!("split c2 at=00:00:06:00 as=c3\n{o1}"));
+        assert!(split.is_empty(), "{split:?}");
+        // c2 plays m1 from ten seconds, and m1's picture cuts at twelve, by its index: the
+        // same overlay ends two frames before a cut that no clip's edge is on.
+        let found = found(&format!("{OVER}{o1}"), &[], &[12.0]);
+        assert_eq!(
+            found,
+            [(
+                "picture.flash".to_owned(),
+                "2 frames of `c2` show at 00:00:05:22, between `o1` ending and a cut in its \
+                 picture (`m1` cuts at 00:00:12:00, by its index)"
+                    .to_owned()
+            )]
+        );
+    }
+
+    #[test]
+    fn a_frame_or_two_of_black_is_said_once() {
+        // V1 has nothing for the two frames before c2.
+        let gap = "delete c1\noverwrite media=m2 at=00:00:00:00 dur=00:00:03:22 on=V1 as=c0\n";
+        let found = codes(&format!("{OVER}{gap}"), &[]);
+        let said: Vec<&str> = found.iter().map(|(code, _)| code.as_str()).collect();
+        assert_eq!(said, ["picture.black"], "{found:?}");
+        // A title over them is something on screen, and they are black behind it.
+        let found = codes(
+            &format!(
+                "{OVER}{gap}overwrite gen=title at=00:00:03:00 dur=00:00:02:00 on=V2 as=t1\n\
+                 set t1 text=\"Hi\""
+            ),
+            &[],
+        );
+        assert_eq!(
+            found,
+            [(
+                "picture.flash".to_owned(),
+                "2 frames of black show at 00:00:03:22, between `c0` ending and `c2` starting"
+                    .to_owned()
+            )]
+        );
+        // A picture in a corner over them leaves the frame's edges black, which is said.
+        let found = codes(
+            &format!(
+                "{OVER}{gap}overwrite media=m2 src=00:00:20:00 at=00:00:03:00 dur=00:00:02:00 on=V2 as=o1\n\
+                 set o1 scale=0.5"
+            ),
+            &[],
+        );
+        let said: Vec<&str> = found.iter().map(|(code, _)| code.as_str()).collect();
+        assert_eq!(said, ["picture.edges"], "{found:?}");
+    }
+
+    #[test]
+    fn a_flash_is_said_once_whatever_shows_in_it() {
+        // A title over V1, and over both a track whose two overlays leave two frames between
+        // them at the cut: the title and c1 show for the same two frames.
+        let found = flashes(
+            "track add V3 video\n\
+             overwrite gen=title at=00:00:00:00 dur=00:00:08:00 on=V2 as=t1\nset t1 text=\"Hi\"\n\
+             overwrite media=m2 at=00:00:02:00 dur=00:00:01:22 on=V3 as=o1\n\
+             overwrite media=m2 src=00:00:20:00 at=00:00:04:00 dur=00:00:02:00 on=V3 as=o2",
+        );
+        assert_eq!(
+            found,
+            ["2 frames of `t1`, `c1` show at 00:00:03:22, between `o1` ending and `o2` starting"]
+        );
+        // A clip two frames long between two overlays is a flash of its own, said of it.
+        let found = codes(
+            &format!(
+                "{OVER}delete c1\noverwrite media=m2 src=00:00:30:00 at=00:00:03:22 dur=2f on=V1 as=x\n\
+                 overwrite media=m2 at=00:00:00:00 dur=00:00:03:22 on=V2 as=o1\n\
+                 overwrite media=m2 src=00:00:20:00 at=00:00:04:00 dur=00:00:04:00 on=V2 as=o2"
+            ),
+            &[],
+        );
+        assert_eq!(
+            found,
+            [(
+                "clip.flash".to_owned(),
+                "clip `x` on V1 is 2 frames long".to_owned()
+            )]
+        );
+        // So is one split off the end of a shot, though it plays on from the rest of it.
+        let found = codes(
+            &format!(
+                "{OVER}unlink c1\nsplit c1 at=00:00:03:22 as=x\n\
+                 overwrite media=m2 at=00:00:00:00 dur=00:00:03:22 on=V2 as=o1"
+            ),
+            &[],
+        );
+        assert_eq!(
+            found,
+            [(
+                "clip.flash".to_owned(),
+                "clip `x` on V1 is 2 frames long".to_owned()
+            )]
         );
     }
 

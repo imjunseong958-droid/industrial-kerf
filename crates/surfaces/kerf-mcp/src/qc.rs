@@ -336,7 +336,7 @@ pub(crate) const FRAME_EDGES: RowDef = RowDef {
 pub(crate) const FLASH_FRAMES: RowDef = RowDef {
     code: "clip.flash",
     name: "Flash frames",
-    codes: &["clip.flash", "cut.near_scene_cut"],
+    codes: &["clip.flash", "cut.near_scene_cut", lint::PICTURE_FLASH],
     noun: "flash frames",
     limit: Some("≥ 3 frames"),
 };

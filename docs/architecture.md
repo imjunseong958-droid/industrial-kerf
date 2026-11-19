@@ -1549,6 +1549,38 @@ a making 78 to 97, so the guides are what to read before a making. It draws fram
 asked for, as `shows` is, and is no part of a check; at most 64 cuts are read at once, and
 `from` and `to` choose a range.
 
+A check reads the picture as its tracks stack up, for a flash that no one clip shows
+(`picture.flash`, `kerf-mcp/src/lint.rs`, 2026-11-19). An overlay that fills the frame and ends two
+frames before the cut under it shows two frames of the shot that cut ends, and one that starts two
+frames after it, two of the shot it starts. Every clip is long enough, so the check of a clip under
+three frames (`clip.flash`) and the one of a sliver of another shot at a clip's edge
+(`cut.near_scene_cut`) said nothing. The video tracks that are on are laid over one another from
+the top, each clip read as it is drawn at each frame, a look as the keys and effects it stands for:
+it hides what is under it where it is a picture with no transparency of its own, or a solid, at
+full opacity over the whole frame, and leaves it showing where it is seen through or does not fill
+the frame. A picture narrower than the frame and left where fitting puts it hides as much as one
+that fills it, since the compositor pads it with black. A shot is a clip, or the part of one
+between two cuts its media's index found, and goes on through a transition and through a split that
+plays on, since nothing cuts there. A stretch of a shot that shows for under three frames is said
+once, with what shows in it, for how many frames, where, and what is before it and after it: "2
+frames of `c1` show at 00:00:03:22, between `o1` ending and the cut to `c2`".
+
+Only what is certain is said. A picture in a corner leaves the shot under it showing all the while,
+whatever is cut from it, so that shot does not flash. An overlay that fades, or that a transition
+takes, lets what is under it come up through it and is not cut from, so a stretch that starts or
+ends there is left. Nothing is said under a clip whose cover is not worked out: one that is turned,
+in depth, or moved by a parent or along a path, one over the whole frame that is masked or keyed,
+one with an effect that may move it or draw it larger, and a nested sequence, which is transparent
+where it has nothing and is not read for where that is. A shot that is itself under three frames is
+left to the two checks that say it of its clip. A frame or two with nothing on screen was said as
+black already (`picture.black`), and under a picture that does not fill the frame as edges left
+black (`picture.edges`); what neither said is the frame or two of black behind a title, or anything
+else laid over them, between one picture that fills the frame and the next, and that is said here.
+It draws nothing: the 2,000 cuts and 1,000 overlays of a sequence 67 minutes long are read in 6 ms,
+and in 11 ms where every overlay ends two frames early and is said (measured beside this work, a
+release build on one core; no test holds it). The idea is Scarlet's (What others do, and what to
+take).
+
 Slow motion can make frames: `retime=blend` or `retime=flow`, on the CPU. Speed changes over a clip
 (`kerf_model::Speed`, `speed={0f:1 24f:1/4}`): the model knows one curve, source played by clip time,
 and everything from trims to handles reads it. FFmpeg's `atempo` cannot follow a ramp (timed tempo
@@ -1891,8 +1923,8 @@ x64, and Linux x86-64 as new as Ubuntu 24.04.
   2).
 - **[Scarlet](https://github.com/Forward-Future/scarlet)** (MIT, reviewed at `9f966e9` and again
   at `6e93a9e`, 577 commits on) is an editor for dialogue that agents cut: TypeScript over FFmpeg
-  filter graphs, with nothing to take for the picture. What it measures of a cut was worth doing
-  our own way, and is (Edit): levels kept fine enough to place an edge between syllables, an edge
+  filter graphs, with nothing to take for drawing a picture. What it measures of a cut was worth
+  doing our own way, and is (Edit): levels kept fine enough to place an edge between syllables, an edge
   judged by the recording and not by a transcript's times, more quiet left after a word than
   before one, the pauses and doubled words an edit still plays, and a score of all of it against a
   recording whose words are known; and from the second reading, an edge moved past no word, each
@@ -1901,14 +1933,19 @@ x64, and Linux x86-64 as new as Ubuntu 24.04.
   pause that is left played before the cut, a phrase found that is taken again with other words
   between its two sayings, what each join plays and took out, a pause listed from the length an
   edit names, a room read where it is and a tick left in its pause, and what a crossfade plays
-  past the cut it is on.
+  past the cut it is on. One reading of the picture is taken too: a picture that shows only
+  briefly as layers start and end over one another. It finds one between any two changes of what
+  is on screen less than a second apart; here it is a shot hidden, shown for under three frames,
+  and cut from, read by what is known to hide what (Edit).
   Its encoded sections, kept by what they depend on and joined without encoding again, are done
   too (The engine, Kept frames). Left: its forced alignment of words (wav2vec2, a model of English
   letters), its filler and transcription models (their own licenses, one not for commercial use),
   reading the text on a screen, and telling speakers apart. Read the second time and not done: an
   edge on the dip between two words with no quiet between them, which its alignment's word times
   make safe and a transcriber's do not; a cut named that takes a word or two more than the
-  restart it removes; a check that two recordings of one thing still play in step after a cut;
+  restart it removes; an overlay's edge moved onto the cut it misses, which it does itself for a
+  flash of a tenth of a second or less, where the check here says the flash and leaves the move;
+  a check that two recordings of one thing still play in step after a cut;
   and a proposal brought forward onto an edit that changed under it, where Kerf's goes stale.
   Merging the two documents by their ids, as a sync does, is not the way to that: two edits that
   each close a gap both move every clip after them, the merge keeps one side's place for it, and
