@@ -6,6 +6,18 @@ on `main`; its section here becomes the release's notes on GitHub
 
 ## Unreleased
 
+- A shape or a title in depth draws all of its outline. It was drawn on a
+  picture the size of the frame and then placed in depth, so whatever of it
+  lay past the frame was lost, and the cut showed as a hard edge once the
+  clip was pushed back, turned, or seen by a moving camera: a bar three frame
+  heights wide at `z=2` ended where the frame did, and a floor laid down with
+  `width=6 height=8 rotate_x=90` was only the frame's 1.78 by 1, so a phone
+  standing on its near part was said by `look` with `stands` to be in the
+  air. Its picture now reaches as far past the frame as its outline goes and
+  the camera can see of it, and is drawn coarser where it would otherwise be
+  very large; a crop cuts it only where it says. `stands` measures the same
+  outline. A solid is its frame as before, and particles stay within theirs
+  ([docs/kerf-language.md](docs/kerf-language.md)).
 - Titles can be bold in any font, and draw Korean and emoji. A `title`
   picks its font's face by `weight` (100 to 900) and `style` (`style="Black
   Italic"`, or `italic`), where before it always drew the family's Regular,

@@ -1067,3 +1067,101 @@ fn a_clip_scaled_unevenly_has_a_bevel_as_wide_on_each_side() {
     }
     assert!(across.abs_diff(down) <= 3, "{across} and {down}");
 }
+
+/// A generator a second long on track `track`, with what `set` says.
+fn generator(track: u32, id: &str, generator: &str, set: &str) -> String {
+    format!(
+        "  track V{track} video\n    clip {id} gen={generator}@1 at=0f dur=24f\n      set {set}\n"
+    )
+}
+
+/// The columns of row `y` that are lit, by its red, green, or blue.
+fn lit_columns(frame: &Frame, y: u32) -> Vec<u32> {
+    (0..frame.width)
+        .filter(|x| pixel(frame, *x, y).iter().any(|channel| *channel > 128))
+        .collect()
+}
+
+/// Two frame heights back, the default camera sees 1.374 / 3.374 of what is at `z=0`: the frame,
+/// 320 pixels across, is 130 there about the middle, from 95 to 225.
+const TWO_BACK: f64 = 0.407_18;
+
+#[test]
+fn a_generator_in_depth_draws_all_of_itself_and_not_the_frame_it_is_drawn_on() {
+    // A bar three frame heights across, 540 pixels, two back: 220 across, from 50 to 270. Its own
+    // frame cut it at 95 and 225.
+    let bar = generator(1, "bar", "shape", "width=3 height=0.3 fill=#ff0000 three_d=true z=2");
+    let row = lit_columns(&frame(&bar, 0), 90);
+    let wide = 540.0 * TWO_BACK;
+    let (first, last) = (row[0], *row.last().unwrap());
+    let (left, right) = (160.0 - wide / 2.0, 160.0 + wide / 2.0);
+    let edge = |found: u32, wanted: f64| (f64::from(found) - wanted).abs() <= 1.5;
+    assert!(edge(first, left) && edge(last + 1, right), "{first} to {last}");
+    assert_eq!(row.len() as u32, last - first + 1, "{row:?}");
+    // A line of a title wider than the frame, the same way back: past where its frame was on
+    // either side.
+    let title = generator(
+        1,
+        "words",
+        "title",
+        "text=\"A very long title line that is wider than the frame\" size=0.12 three_d=true z=2",
+    );
+    let drawn = frame(&title, 0);
+    let columns: Vec<u32> = (80..100).flat_map(|y| lit_columns(&drawn, y)).collect();
+    let (least, most) = (columns.iter().min().unwrap(), columns.iter().max().unwrap());
+    assert!(*least < 90 && *most > 230, "{least} to {most}");
+}
+
+#[test]
+fn a_floor_made_of_a_shape_reaches_as_far_as_its_numbers_say() {
+    let floor = |set: &str| {
+        generator(1, "floor", "shape", &format!("fill=#0000ff three_d=true rotate_x=90 {set}"))
+    };
+    let blue = |frame: &Frame, x: u32, y: u32| {
+        let [r, g, b] = pixel(frame, x, y);
+        r < 30 && g < 30 && b > 200
+    };
+    // Six frame heights across and eight long, its middle three back and 0.35 down. Its frame's
+    // own picture of it was 1.78 across and 1 long, and came no nearer the bottom of the frame than
+    // 22 pixels under its middle. The near end of the floor is under the camera: all of it reaches
+    // to the bottom of the frame and past its sides.
+    let drawn = frame(&floor("width=6 height=8 y=0.35 z=3"), 0);
+    for y in [120, 150, 179] {
+        assert!((0..320).all(|x| blue(&drawn, x, y)), "row {y}: {:?}", lit_columns(&drawn, y));
+    }
+    // Above the horizon there is none of it.
+    assert!((0..320).all(|x| !blue(&drawn, x, 60)));
+    // One sixty across and sixty long, under a camera looking down: there is no edge of it to see.
+    let camera = generator(2, "cam", "camera", "tilt=-30");
+    let drawn = frame(&[floor("width=60 height=60 y=0.35 z=3"), camera].concat(), 0);
+    for y in 0..180 {
+        assert!((0..320).all(|x| blue(&drawn, x, y)), "row {y}: {:?}", lit_columns(&drawn, y));
+    }
+}
+
+#[test]
+fn what_cuts_a_generator_in_depth_cuts_it_where_it_is_on_its_frame() {
+    let bar = |more: &str| {
+        let set = format!("width=3 height=0.3 fill=#ff0000 three_d=true z=2\n{more}");
+        frame(&generator(1, "bar", "shape", &set), 0)
+    };
+    let span = |frame: &Frame| {
+        let row = lit_columns(frame, 90);
+        (row[0], *row.last().unwrap())
+    };
+    let near = |(first, last): (u32, u32), (left, right): (f64, f64)| {
+        let edge = |found: u32, wanted: f64| (f64::from(found) - wanted).abs() <= 1.5;
+        assert!(
+            edge(first, left) && edge(last + 1, right),
+            "{first} to {last}, not {left} to {right}"
+        );
+    };
+    // A mask that keeps the left half of its frame keeps that and none of what is past it: from the
+    // frame's left edge, 95, to its middle.
+    near(span(&bar("      mask k1 rect=0,0,0.5,1")), (160.0 - 160.0 * TWO_BACK, 160.0));
+    // A crop cuts it at the middle of its frame and leaves what is past the other side, and what is
+    // left is put where the crop puts it, the middle of what was left of the frame moved to the
+    // middle: from 80 left of that to 270 right of the cut, 80 left of the middle.
+    let cut = span(&bar("      set crop_l=0.5"));
+    near(cut, (160.0 - 80.0 * TWO_BACK, 160.0 + (270.0 - 80.0) * TWO_BACK));
+}

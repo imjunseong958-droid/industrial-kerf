@@ -60,11 +60,9 @@ pub struct Text<'a> {
 /// justification, and `place` of the block's height above `at`'s y: a half
 /// centers the block on it, 1 puts its bottom there.
 pub fn draw(image: &mut Image, text: &Text, at: [f32; 2], place: f32) {
-    if text.text.trim().is_empty() || text.size <= 0.0 {
+    let Some(laid) = laid(text) else {
         return;
-    }
-    let (style, paragraph) = styles(text);
-    let laid = layout(text.text, &style, &paragraph);
+    };
     let [_, top, _, bottom] = laid.bounds;
     let baseline = at[1] - (top + (bottom - top) * place);
     let m = render::at(at[0], baseline);
@@ -80,6 +78,15 @@ pub fn draw(image: &mut Image, text: &Text, at: [f32; 2], place: f32) {
         cover(image, &outline, x - margin, y - margin, edge);
     }
     fill(image, &laid, &m, glyphs, (x, y), text.color, 1.0);
+}
+
+/// The lines of `text` laid out, or none for text that draws nothing.
+fn laid(text: &Text) -> Option<std::sync::Arc<kerf_text::layout::Layout>> {
+    if text.text.trim().is_empty() || text.size <= 0.0 {
+        return None;
+    }
+    let (style, paragraph) = styles(text);
+    Some(layout(text.text, &style, &paragraph))
 }
 
 /// The character and paragraph styles `text` is laid out in.
@@ -105,6 +112,16 @@ fn styles(text: &Text) -> (TextStyle, ParagraphStyle) {
         ..ParagraphStyle::default()
     };
     (style, paragraph)
+}
+
+/// The box `[left, top, right, bottom]` that [`draw`] lays `text`'s lines in, placed as it places
+/// them: none for text that draws nothing. A glyph may reach a little past it, as an italic's
+/// overhang does.
+pub fn extent(text: &Text, at: [f32; 2], place: f32) -> Option<[f32; 4]> {
+    let laid = laid(text)?;
+    let [left, top, right, bottom] = laid.bounds;
+    let baseline = at[1] - (top + (bottom - top) * place);
+    Some([at[0] + left, baseline + top, at[0] + right, baseline + bottom])
 }
 
 /// Fill the glyphs of `laid`, whose coverage `glyphs` is placed at `at`, in `color`, and draw
@@ -199,11 +216,9 @@ pub fn draw_pieces(
     by_word: bool,
     look: &dyn Fn(usize, usize) -> Piece,
 ) {
-    if text.text.trim().is_empty() || text.size <= 0.0 {
+    let Some(laid) = laid(text) else {
         return;
-    }
-    let (style, paragraph) = styles(text);
-    let laid = layout(text.text, &style, &paragraph);
+    };
     let [_, top, _, bottom] = laid.bounds;
     let baseline = at[1] - (top + (bottom - top) * place);
     // Which piece each glyph is of: the words or characters that came before where it sets.

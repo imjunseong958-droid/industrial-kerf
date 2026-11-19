@@ -20,18 +20,16 @@ impl PictureSource for ShapeSource {
     }
 
     fn draw(&self, clip: &Clip, run: &SourceRun) -> Image {
-        let (w, h) = run.size;
+        let (w, h) = run.picture();
         let mut image = Image::new(w, h);
         let (shape, across) = shape_of(clip, run);
-        shape.draw(
-            &mut image,
-            [(w as f64 / 2.0 + across) as f32, (h as f64 / 2.0) as f32],
-        );
+        let [x, y] = run.middle();
+        shape.draw(&mut image, [(x + across) as f32, y as f32]);
         image
     }
 
     fn extent(&self, clip: &Clip, run: &SourceRun) -> Option<Extent> {
-        let (w, h) = run.size;
+        let [middle_x, middle_y] = run.middle();
         let (shape, across) = shape_of(clip, run);
         let (contours, closed) = shape.contours();
         // What `Shape::draw` puts down: a fill inside a closed outline, and a stroke along it.
@@ -57,8 +55,8 @@ impl PictureSource for ShapeSource {
             0.0
         };
         let (left, top) = (
-            w as f64 / 2.0 + across + least[0] - grown,
-            h as f64 / 2.0 + least[1] - grown,
+            middle_x + across + least[0] - grown,
+            middle_y + least[1] - grown,
         );
         let plain = matches!(shape.figure, Figure::Rect { round, .. } if round <= 0.0)
             && shape.outlines.is_empty()
@@ -142,9 +140,9 @@ impl PictureSource for Particles {
     }
 
     fn draw(&self, clip: &Clip, run: &SourceRun) -> Image {
-        let (w, h) = run.size;
+        let (w, h) = run.picture();
         let mut image = Image::new(w, h);
-        let height = h as f64;
+        let height = run.size.1 as f64;
         let read = Reading::generator(clip, "particles", run.at);
         // Who is alive and where they are comes from the rate and the rest at the start, since
         // a particle's way is worked out from its birth.
@@ -163,7 +161,7 @@ impl PictureSource for Particles {
             ),
             color: (read.color("color"), read.color("color_end")),
             soft: read.number("soft"),
-            origin: [w as f64 / 2.0, height / 2.0],
+            origin: run.middle(),
             area: [
                 read.number("area_width") * height,
                 read.number("area_height") * height,

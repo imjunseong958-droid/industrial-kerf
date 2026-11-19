@@ -95,6 +95,8 @@ struct Shape {
     /// How many of the pixels its effects see a source pixel is.
     per_source: f64,
     to_output: Affine,
+    /// What a generator in depth that reaches past its frame is drawn on ([`Reach`]).
+    past: Option<SourceRun>,
 }
 
 impl Drawing {
@@ -244,7 +246,8 @@ impl Drawing {
             return;
         }
         let time = at - plan.clip.start;
-        let shape = self.gpu_shape(sequence, plan, time, scale);
+        let reach = self.gpu_reach(sequence, plan, at, scale);
+        let shape = self.gpu_shape(sequence, plan, time, scale, reach);
         if !gpu.fits(shape.source.0, shape.source.1) {
             why.push(format!("clip `{clip}` is larger than the GPU can hold"));
         }
@@ -392,16 +395,48 @@ impl Drawing {
                 return false;
             }
         }
-        let shape = self.gpu_shape(sequence, plan, time, scale);
+        let reach = self.gpu_reach(sequence, plan, at, scale);
+        let shape = self.gpu_shape(sequence, plan, time, scale, reach);
         gpu.fits(shape.source.0, shape.source.1)
             && self
                 .gpu_ops(sequence, plan, time, at, scale, &shape)
                 .is_some()
     }
 
-    /// The numbers [`Drawing::input`] works out for a clip's picture.
-    fn gpu_shape(&self, sequence: &SequencePlan, plan: &ClipPlan, time: Time, scale: f64) -> Shape {
+    /// How far past its frame a clip in depth is drawn at sequence time `at`, as the scene then sees
+    /// it ([`Drawing::reach`]), for deciding where the frame is drawn before it is.
+    fn gpu_reach(
+        &self,
+        sequence: &SequencePlan,
+        plan: &ClipPlan,
+        at: Time,
+        scale: f64,
+    ) -> Option<Reach> {
+        if !plan.three_d {
+            return None;
+        }
+        let size = output_size(sequence.width, sequence.height, scale);
+        let scene = three_d::Scene::at(sequence, at, size);
+        self.reach(sequence, plan, at - plan.clip.start, scale, Some(&scene))
+    }
+
+    /// The numbers [`Drawing::input`] works out for a clip's picture, a generator's reaching as far
+    /// past its frame as `reach` says.
+    fn gpu_shape(
+        &self,
+        sequence: &SequencePlan,
+        plan: &ClipPlan,
+        time: Time,
+        scale: f64,
+        reach: Option<Reach>,
+    ) -> Shape {
         let canvas = output_size(sequence.width, sequence.height, scale);
+        let past = match &plan.source {
+            Source::Title(_) | Source::Drawn(_) => {
+                reach.map(|reach| reach.run(time, canvas, scale))
+            }
+            _ => None,
+        };
         let (source, per_source) = match &plan.source {
             Source::Media { .. } => {
                 let factor = plan.shown * scale;
@@ -416,7 +451,10 @@ impl Drawing {
                 let size = output_size(inner.width, inner.height, scale);
                 (size, size.0 as f64 / f64::from(inner.width))
             }
-            Source::Solid(_) | Source::Title(_) | Source::Drawn(_) => (canvas, scale),
+            Source::Solid(_) | Source::Title(_) | Source::Drawn(_) => match (past, reach) {
+                (Some(run), Some(reach)) => (run.picture(), scale * reach.per),
+                _ => (canvas, scale),
+            },
             // It works on the canvas beneath it, unplaced.
             Source::Adjustment | Source::Nothing | Source::Mesh => {
                 return Shape {
@@ -425,6 +463,7 @@ impl Drawing {
                     size: canvas,
                     per_source: scale,
                     to_output: Affine::IDENTITY,
+                    past: None,
                 }
             }
         };
@@ -436,14 +475,19 @@ impl Drawing {
                 size: canvas,
                 per_source: place.determinant().abs().sqrt(),
                 to_output: Affine::IDENTITY,
+                past: None,
             }
         } else {
+            let (x, y) = past.map_or((0.0, 0.0), |run| (run.beyond.0 as f64, run.beyond.1 as f64));
             Shape {
                 source,
                 source_per: per_source,
                 size: source,
                 per_source,
-                to_output: place.then_apply(&Affine::scale(1.0 / per_source, 1.0 / per_source)),
+                to_output: place
+                    .then_apply(&Affine::scale(1.0 / per_source, 1.0 / per_source))
+                    .then_apply(&Affine::translate(-x, -y)),
+                past,
             }
         }
     }
@@ -707,7 +751,7 @@ impl Drawing {
             return Some(canvas);
         }
         if matches!(plan.source, Source::Adjustment) {
-            let shape = self.gpu_shape(sequence, plan, time, scale);
+            let shape = self.gpu_shape(sequence, plan, time, scale, None);
             let ops = self.gpu_ops(sequence, plan, time, at, scale, &shape)?;
             return self.gpu_adjust(frame, canvas, (sequence, plan, time, scale), &ops);
         }
@@ -732,7 +776,10 @@ impl Drawing {
         if let (true, Some(depth)) = (plan.three_d, depth) {
             let ready = match depth.ready.iter().position(|(id, _)| *id == clip.id) {
                 Some(place) => Some(depth.ready.swap_remove(place).1),
-                None => self.gpu_ready(frame, sequence, shown, at, scale, size)?,
+                None => {
+                    let scene = Some(&depth.scene);
+                    self.gpu_ready(frame, sequence, shown, (at, scale), size, scene)?
+                }
             };
             // Media that cannot be read draws nothing, as on the CPU.
             let Some(ready) = ready else {
@@ -752,7 +799,7 @@ impl Drawing {
             frame.release(ready.picture);
             return Some(canvas);
         }
-        let Some(ready) = self.gpu_ready(frame, sequence, shown, at, scale, size)? else {
+        let Some(ready) = self.gpu_ready(frame, sequence, shown, (at, scale), size, None)? else {
             return Some(canvas);
         };
         let whole = Rect::new(
@@ -800,7 +847,9 @@ impl Drawing {
                         && !matches!(shown.plan.source, Source::Nothing | Source::Adjustment)
                 })
             {
-                let Some(one) = self.gpu_ready(frame, plan, shown, at, scale, canvas)? else {
+                let Some(one) =
+                    self.gpu_ready(frame, plan, shown, (at, scale), canvas, Some(&scene))?
+                else {
                     continue;
                 };
                 let time = at - shown.plan.clip.start;
@@ -853,7 +902,7 @@ impl Drawing {
             let Some(shown) = shown else {
                 continue;
             };
-            if let Some(one) = self.gpu_ready(frame, plan, shown, at, scale, canvas)? {
+            if let Some(one) = self.gpu_ready(frame, plan, shown, (at, scale), canvas, None)? {
                 around.push((light, one.picture));
             }
         }
@@ -1023,7 +1072,10 @@ impl Drawing {
             }
             let ready = match depth.ready.iter().position(|(kept, _)| kept == id) {
                 Some(place) => Some(depth.ready.swap_remove(place).1),
-                None => self.gpu_ready(frame, sequence, shown, at, scale, size)?,
+                None => {
+                    let scene = Some(&depth.scene);
+                    self.gpu_ready(frame, sequence, shown, (at, scale), size, scene)?
+                }
             };
             let Some(ready) = ready else {
                 continue;
@@ -1045,21 +1097,23 @@ impl Drawing {
         frame.by_depth(canvas, layers)
     }
 
-    /// A shown clip's picture with its effects and reveal done, as [`Drawing::ready`] makes it. `None`
-    /// when the frame has to go to the CPU, and `Some(None)` when the clip draws nothing.
+    /// A shown clip's picture with its effects and reveal done, as [`Drawing::ready`] makes it, a
+    /// generator in depth reaching as far past its frame as `scene` may see of it. `None` when the
+    /// frame has to go to the CPU, and `Some(None)` when the clip draws nothing.
     fn gpu_ready(
         &self,
         frame: &mut GpuFrame<'static>,
         sequence: &SequencePlan,
         shown: &Shown,
-        at: Time,
-        scale: f64,
+        (at, scale): (Time, f64),
         canvas: (u32, u32),
+        scene: Option<&three_d::Scene>,
     ) -> Option<Option<GpuReady>> {
         let plan = &shown.plan;
         let clip = &plan.clip;
         let time = at - clip.start;
-        let shape = self.gpu_shape(sequence, plan, time, scale);
+        let reach = self.reach(sequence, plan, time, scale, scene);
+        let shape = self.gpu_shape(sequence, plan, time, scale, reach);
         let ops = self.gpu_ops(sequence, plan, time, at, scale, &shape)?;
         // Media that cannot be read draws nothing, as on the CPU.
         let Some(picture) = self.gpu_source(frame, sequence, plan, time, scale, &shape)? else {
@@ -1068,13 +1122,20 @@ impl Drawing {
         let mut picture = picture;
         let size = (f64::from(plan.size.0), f64::from(plan.size.1));
         let source_per = shape.source_per;
-        let mut crop = crop_rect(
-            plan,
-            time,
-            size,
-            source_per,
-            (picture.w as usize, picture.h as usize),
-        );
+        let past = shape.past.as_ref().map(frame_in);
+        let mut crop = match past {
+            Some(past) => {
+                let whole = Rect::new(0.0, 0.0, f64::from(picture.w), f64::from(picture.h));
+                crop_past(plan, time, past, whole)
+            }
+            None => crop_rect(
+                plan,
+                time,
+                size,
+                source_per,
+                (picture.w as usize, picture.h as usize),
+            ),
+        };
         if plan.letterboxed {
             let place =
                 Affine::scale(scale, scale).then_apply(&self.geometry(sequence, plan, time));
@@ -1092,7 +1153,8 @@ impl Drawing {
             frame.release(picture);
             picture = boxed;
         } else {
-            let masks = mask::prepare(&clip.masks, size, source_per, time);
+            let at = past.map_or((0.0, 0.0), |past| (past.x, past.y));
+            let masks = past_frame(mask::prepare(&clip.masks, size, source_per, time), at);
             if let Some(covered) = mask::coverage(&masks, picture.w as usize, picture.h as usize) {
                 picture = frame.multiply(picture, &covered);
             }
@@ -1114,13 +1176,12 @@ impl Drawing {
             .reveal
             .map(|(reveal, start, end)| (reveal, progress(at, start, end)));
         if let Some((Reveal::Wipe { angle, softness }, progress)) = reveal {
-            let covered = wipe::coverage(
-                picture.w as usize,
-                picture.h as usize,
-                angle,
-                softness,
-                progress,
-            );
+            // Across its frame, wherever that is in its picture.
+            let (pw, ph) = (picture.w as usize, picture.h as usize);
+            let covered = match past {
+                Some(past) => wipe::coverage_within(pw, ph, past, angle, softness, progress),
+                None => wipe::coverage(pw, ph, angle, softness, progress),
+            };
             picture = frame.multiply(picture, &covered);
         }
         let fade = match reveal {
@@ -1211,6 +1272,7 @@ impl Drawing {
         shape: &Shape,
     ) -> Option<Option<GpuPicture>> {
         let (cw, ch) = output_size(sequence.width, sequence.height, scale);
+        let run = shape.past.unwrap_or_else(|| SourceRun::new(time, (cw, ch)));
         Some(Some(match &plan.source {
             Source::Media { picture } => {
                 let (w, h) = shape.source;
@@ -1247,16 +1309,10 @@ impl Drawing {
             }
             Source::Solid(color) => frame.filled(cw as u32, ch as u32, premultiplied(*color)),
             Source::Title(title) => {
-                let key = title_key(title, (cw, ch), time);
-                frame.image_kept(&key, || title_on(title, (cw, ch), time))
+                let key = title_key(title, &run);
+                frame.image_kept(&key, || title_on(title, &run))
             }
-            Source::Drawn(source) => {
-                let run = SourceRun {
-                    at: time,
-                    size: (cw, ch),
-                };
-                frame.image(&source.draw(&plan.clip, &run))
-            }
+            Source::Drawn(source) => frame.image(&source.draw(&plan.clip, &run)),
             Source::Adjustment | Source::Nothing | Source::Mesh => return None,
         }))
     }
