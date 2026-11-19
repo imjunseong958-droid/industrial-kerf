@@ -755,6 +755,7 @@ const BUNDLED_LOOKS: &[(&str, &str)] = &[
         include_str!("../looks/slow-push.kerflook"),
     ),
     ("whip.kerflook", include_str!("../looks/whip.kerflook")),
+    ("whip-2.kerflook", include_str!("../looks/whip-2.kerflook")),
     ("wobble.kerflook", include_str!("../looks/wobble.kerflook")),
     (
         "zoom-pulse.kerflook",

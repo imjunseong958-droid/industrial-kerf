@@ -1,0 +1,8 @@
+kerf-look 1
+look look.whip version=2 name="Whip" category="Transitions" on=transition
+  doc "Whips the outgoing shot off sideways with the next one on its heels, the two smeared by their speed; travel, energy, and montage cuts."
+  param strength number default=1 range=0..2 doc="How hard it smears."
+  a set x={0%:0:ease 100%:-1}
+  a fx blur.directional@2 direction=90 length={0%:0:ease 50%:300*$strength:ease 100%:0}
+  b set x={0%:1:ease 100%:0}
+  b fx blur.directional@2 direction=90 length={0%:0:ease 50%:300*$strength:ease 100%:0}

@@ -1468,6 +1468,29 @@ fn a_roll_snaps_where_the_clips_either_side_are_quiet_together() {
 }
 
 #[test]
+fn an_older_look_kept_beside_its_newer_one_draws_as_named_without_a_warning() {
+    let applied = run(
+        &base(),
+        "transition add from=c1 to=c2 fx=look.whip@1 dur=12f\n",
+    );
+    let text = print_document(
+        &applied.project,
+        Catalog::builtin(),
+        PrintOptions::default(),
+    );
+    assert!(text.contains("fx=look.whip@1"), "{text}");
+    let parsed = parse_document(&text, Catalog::builtin()).unwrap();
+    assert!(
+        !parsed
+            .warnings
+            .iter()
+            .any(|warning| warning.code == "fx.version_older"),
+        "{:?}",
+        parsed.warnings
+    );
+}
+
+#[test]
 fn a_slower_clip_that_has_no_room_says_what_it_runs_into() {
     let error = fails(&base(), "speed c1 0.5\n");
     assert_eq!(error.code, "speed.collision", "{error:?}");

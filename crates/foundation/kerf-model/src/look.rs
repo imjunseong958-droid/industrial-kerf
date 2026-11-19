@@ -2378,4 +2378,37 @@ look look.test.lines version=1 name="Lines" category="Fun" on=clip
         assert_eq!((def.version, def.reads_from), (2, 1));
         std::fs::remove_dir_all(dir).unwrap();
     }
+    #[test]
+    fn the_second_whip_takes_both_shots_along_together() {
+        let whip = Catalog::builtin().look("look.whip", 2).expect("bundled");
+        let x = |side: Side| -> Vec<(Expr, Expr, Interp)> {
+            whip.lines
+                .iter()
+                .find_map(|line| match line {
+                    Line::Set {
+                        side: on,
+                        prop,
+                        value: Val::Keys(keys),
+                        ..
+                    } if *on == side && prop == "x" => Some(
+                        keys.iter()
+                            .map(|key| (key.at.clone(), key.value.clone(), key.interp))
+                            .collect(),
+                    ),
+                    _ => None,
+                })
+                .expect("each side moves across")
+        };
+        let (a, b) = (x(Side::A), x(Side::B));
+        assert_eq!(a.len(), b.len());
+        for ((a_at, a_x, a_interp), (b_at, b_x, b_interp)) in a.iter().zip(&b) {
+            // At the same moments, and the same way between them, the next shot one frame width
+            // to the right of the one leaving: they never overlap and never part.
+            assert_eq!((a_at, a_interp), (b_at, b_interp));
+            let (Some(a_x), Some(b_x)) = (plain_number(a_x), plain_number(b_x)) else {
+                panic!("{a_x:?} {b_x:?}");
+            };
+            assert_eq!(b_x - a_x, 1.0);
+        }
+    }
 }

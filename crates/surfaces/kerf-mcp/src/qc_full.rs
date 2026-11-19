@@ -67,9 +67,14 @@ const LOUDNESS_UNAVAILABLE: &str = "loudness.unavailable";
 /// The picture could not be measured: fails every picture row.
 const PICTURE_UNAVAILABLE: &str = "picture.unavailable";
 const FLASH_BLACK: &str = "picture.flash_black";
-/// Short clips, slivers of another shot, and pictures that show for a frame or two under
-/// what is over them, from the fast check.
-const FLASH_FRAME_CODES: [&str; 3] = ["clip.flash", "cut.near_scene_cut", lint::PICTURE_FLASH];
+/// Short clips, slivers of another shot, pictures that show for a frame or two under what is
+/// over them, and transitions that play frames of another shot, from the fast check.
+const FLASH_FRAME_CODES: [&str; 4] = [
+    "clip.flash",
+    "cut.near_scene_cut",
+    lint::PICTURE_FLASH,
+    lint::TRANSITION_OTHER_SHOT,
+];
 
 /// The rows [`check_full`] reports, in the order the editor's QC table
 /// lists them: the measured checks and the text checks first, then the
@@ -122,6 +127,7 @@ pub const FULL_ROWS: &[RowDef] = &[
             FLASH_FRAME_CODES[0],
             FLASH_FRAME_CODES[1],
             FLASH_FRAME_CODES[2],
+            FLASH_FRAME_CODES[3],
             PICTURE_UNAVAILABLE,
         ],
         noun: "",
@@ -537,6 +543,7 @@ fn label_rows(
         FLASH_FRAME_CODES[0],
         FLASH_FRAME_CODES[1],
         FLASH_FRAME_CODES[2],
+        FLASH_FRAME_CODES[3],
     ]);
     let blacks = count(&[picture::CODE_BLACK]);
     let level = |value: f64, unit: &str| {

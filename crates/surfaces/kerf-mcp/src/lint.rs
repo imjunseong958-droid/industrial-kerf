@@ -39,6 +39,7 @@ pub(crate) fn findings(project: &Project, facts: &dyn Facts) -> Vec<Finding> {
         let said = picture(project, sequence, &mut findings);
         flash_frames(sequence, &mut findings);
         slivers(project, sequence, facts, &mut indexed, &mut findings);
+        transitions_into_other_shots(project, sequence, facts, &mut indexed, &mut findings);
         if let Some(sequence) = drawn.sequence(sequence.id.as_str()) {
             picture_flashes(drawn, sequence, facts, &mut indexed, &said, &mut findings);
         }
@@ -628,6 +629,126 @@ fn slivers(
                     ),
                 )
                 .during(sequence, from, to));
+            }
+        }
+    }
+}
+
+/// What a transition is called that plays frames of another shot from past where a clip ends
+/// or from before where it starts, as its media's index has it.
+pub(crate) const TRANSITION_OTHER_SHOT: &str = "transition.other_shot";
+
+/// Transitions of a picture track that reach into another shot of a clip's media: what a
+/// transition plays of the clip before the cut past its end, or of the clip after it before its
+/// start, takes in a cut of that media's picture, so a frame or more of a shot the edit left out
+/// shows through it. Each says how many, and what keeps it to the shots the clips play: the
+/// transition put on the cut's other side, or no longer than the frames it has.
+fn transitions_into_other_shots(
+    project: &Project,
+    sequence: &Sequence,
+    facts: &dyn Facts,
+    known: &mut Indexed,
+    findings: &mut Vec<Finding>,
+) {
+    let rate = sequence.rate;
+    let tracks = sequence
+        .tracks
+        .iter()
+        .filter(|track| track.kind == TrackKind::Video && track.enabled);
+    for track in tracks {
+        for transition in &track.transitions {
+            let (Some(outgoing), Some(incoming)) = (
+                track.clip(transition.from.as_str()),
+                track.clip(transition.to.as_str()),
+            ) else {
+                continue;
+            };
+            let (before, after) = transition.split_at_cut(rate);
+            // How many frames each side has before it reaches another shot, where it does, and
+            // how many of what the transition plays of it are of that shot.
+            let mut reach = |clip: &Clip, ends: bool| -> Option<(i64, i64, Time, &Media)> {
+                let Content::Media { media, speed, .. } = &clip.content else {
+                    return None;
+                };
+                if speed.is_reverse() {
+                    return None;
+                }
+                let media = project.media(media.as_str())?;
+                let breaks = known
+                    .entry(media.id.clone())
+                    .or_insert_with(|| facts.breaks(media))
+                    .as_ref()?;
+                let (low, high) = clip.source_range()?;
+                // The clip as it would play on into the other's frames.
+                let mut on = clip.clone();
+                let edge = if ends {
+                    on.move_tail(transition.duration);
+                    clip.end()
+                } else {
+                    on.move_head(Time::ZERO - transition.duration);
+                    clip.start
+                };
+                let cut = breaks
+                    .cuts
+                    .iter()
+                    .filter_map(|cut| Time::from_seconds(*cut))
+                    .filter(|at| if ends { *at >= high } else { *at <= low })
+                    .filter_map(|at| Some((at, rate.round(on.played_at(at)?))))
+                    .min_by_key(|(_, played)| (*played - edge).abs())?;
+                let clean = rate.frames_round((cut.1 - edge).abs());
+                let plays = rate.frames_round(if ends { after } else { before });
+                Some((clean, plays - clean, cut.0, media))
+            };
+            let out = reach(outgoing, true);
+            let into = reach(incoming, false);
+            let total = rate.frames_round(transition.duration);
+            let fits =
+                |side: &Option<(i64, i64, Time, &Media)>| side.is_none_or(|side| side.0 >= total);
+            for (side, clip, ends, other) in
+                [(out, outgoing, true, into), (into, incoming, false, out)]
+            {
+                let Some((clean, shows, at, media)) = side else {
+                    continue;
+                };
+                if shows <= 0 {
+                    continue;
+                }
+                let longest = 2 * clean.min(other.map_or(clean, |other| other.0));
+                let mend = if fits(&other) {
+                    format!(
+                        "align={} puts it all on the other side of the cut",
+                        if ends { "end" } else { "start" }
+                    )
+                } else if longest > 0 {
+                    format!("make it {longest} frames or shorter")
+                } else {
+                    "take it off, or move the cut".to_owned()
+                };
+                let clock = Clock::of_media(media);
+                let (from, to) = if ends {
+                    (clip.end(), clip.end() + after)
+                } else {
+                    (clip.start - before, clip.start)
+                };
+                let mut finding = finding(
+                    TRANSITION_OTHER_SHOT,
+                    transition.id.as_str(),
+                    format!(
+                        "transition `{}` plays {shows} frame{} of another shot {} `{}` {} (`{}` cuts \
+                         at {}, by its index): {mend}",
+                        transition.id,
+                        if shows == 1 { "" } else { "s" },
+                        if ends { "after" } else { "before" },
+                        clip.id,
+                        if ends { "ends" } else { "starts" },
+                        media.id,
+                        clock.print_position(media.rate.round(at)),
+                    ),
+                )
+                .during(sequence, from, to);
+                finding.value = Some(shows as f64);
+                finding.unit = Some("frames".to_owned());
+                findings.push(finding);
             }
         }
     }
@@ -3333,6 +3454,41 @@ sequence s1 rate=24 size=1920x1080
             found[1].1.contains("clip `c1` ends with 1 frame"),
             "{found:?}"
         );
+    }
+
+    #[test]
+    fn a_transition_that_reaches_into_another_shot_is_said() {
+        // A dissolve of 12 frames across the cut at 4 s plays c1 on to 4.25 s of m1 and c2 from
+        // 9.75 s, a quarter of a second before where it starts at 10 s.
+        let dissolve = "transition add from=c1 to=c2 fx=dissolve dur=12f";
+        let other = |script: &str, cuts: &[f64]| -> Vec<String> {
+            found(script, &[], cuts)
+                .into_iter()
+                .filter(|(code, _)| code == TRANSITION_OTHER_SHOT)
+                .map(|(_, message)| message)
+                .collect()
+        };
+        // m1 cuts a tenth of a second before c2 starts: four of the six frames before it are
+        // another shot, and the dissolve has room after the cut, in c1.
+        let before = other(dissolve, &[9.9]);
+        assert_eq!(
+            before,
+            [
+                "transition `t1` plays 4 frames of another shot before `c2` starts (`m1` cuts at \
+              00:00:09:22, by its index): align=start puts it all on the other side of the cut"
+            ],
+        );
+        // With a cut past c1's end too, neither side has room for all of it.
+        let both = other(dissolve, &[4.1, 9.9]);
+        assert_eq!(both.len(), 2, "{both:?}");
+        assert!(both[0].contains("after `c1` ends"), "{both:?}");
+        assert!(both
+            .iter()
+            .all(|message| message.ends_with("make it 4 frames or shorter")));
+        // After the cut, it plays nothing from before c2.
+        assert!(other(&format!("{dissolve} align=start"), &[9.9]).is_empty());
+        // A cut c2 plays is not one a transition reaches into.
+        assert!(other(dissolve, &[12.0]).is_empty());
     }
 
     /// A second picture, with no sound, and a track over V1 to lay it on.

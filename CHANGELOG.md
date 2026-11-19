@@ -6,6 +6,18 @@ on `main`; its section here becomes the release's notes on GitHub
 
 ## Unreleased
 
+- The check says when a transition plays frames of another shot: a
+  dissolve or a wipe plays the clip before the cut on past its end and the
+  one after it from before its start, and where the footage cuts to
+  another shot in those frames, it shows through the transition
+  (`transition.other_shot`, in QC's flash frames). It says how many frames,
+  and whether `align=start` or `align=end` keeps it to the shots, or how
+  short it would have to be.
+- `look.whip@2` takes both shots along together, the next on the heels of
+  the one leaving, smeared most at their fastest. The first version slid
+  the next shot over the last at another speed, with a hard edge between
+  them; a document that names `look.whip@1` still draws it, and is no
+  longer told it draws as the newer one.
 - A J or L cut is one line: `roll a1 -12f alone` moves the cut on the
   clip's own track and leaves the cut of the clips linked to it, so the
   sound of the next shot comes in before its picture, or with the
