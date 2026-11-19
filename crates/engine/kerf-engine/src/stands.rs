@@ -14,10 +14,13 @@
 //! stands: on it, over it, in it, or with nothing under it. A clip is on what the first of
 //! its feet to come down touches. So one whose foot is level, on a floor that leans, rests
 //! on the side the floor is highest under and is open under the other, which is said with
-//! the lean. A surface that goes through a clip is one it is sunk in; one over its top is a
-//! roof, or something that stands on it, but for the ground, the largest clip with nothing
-//! under it, which a clip wholly under is sunk in however deep. And an edge of a clip that
-//! goes through another's surface, a box through a wall, is said of the two.
+//! the lean. One that comes down on two clips at once, an axle across two wheels, is on the
+//! one of the lower track: which of two as near is the nearer is in the last places of
+//! their numbers, and is the other on the next frame of a thing that moves. A surface that
+//! goes through a clip is one it is sunk in; one over its top is a roof, or something that
+//! stands on it, but for the ground, the largest clip with nothing under it, which a clip
+//! wholly under is sunk in however deep. And an edge of a clip that goes through another's
+//! surface, a box through a wall, is said of the two.
 //!
 //! What is said is what is so, and not that it is wrong: a ball thrown is in the air. The
 //! line that sets a clip down is its own `y`, which the one who asked runs or does not.
@@ -68,6 +71,12 @@ const FAR: f64 = 1e3;
 
 const DOWN: [f64; 3] = [0.0, 1.0, 0.0];
 
+/// How much nearer a surface has to be than another to be the nearer: two as far off but
+/// for the last places of their numbers are as near, and a clip is on the lower track's.
+/// It is a thousandth of the least a line's `y` can put two surfaces apart by, so those
+/// written apart are apart, and millions of times what the last places come to.
+const NEARER: f64 = 1e-6;
+
 /// How much further off a frame has to be to be a run's worst: what holds still is as far
 /// off on every frame, but for the last places of its numbers, and its first frame is said.
 const WORSE: f64 = 1e-6;
@@ -114,7 +123,8 @@ impl How {
 pub struct Run {
     /// As on its worst frame.
     pub how: How,
-    /// The clip under its feet: the one its lowest foot is on, or would come down on.
+    /// The clip under its feet: the one its lowest foot is on, or would come down on, and of
+    /// two as near the one of the lower track.
     pub on: Option<String>,
     /// How far from level the surface under it leans, in degrees, at the most.
     pub slope: f64,
@@ -390,7 +400,8 @@ fn stand(index: usize, body: &Body, bodies: &[Option<Body>], ground: Option<usiz
             }
             if let Some((along, facing)) = other.of.meets(from, DOWN, f64::INFINITY) {
                 let gap = along - lift;
-                if first.is_none_or(|(least, ..)| gap < least) {
+                // The others are asked from the lowest track up, and one as near is no nearer.
+                if first.is_none_or(|(least, ..)| gap < least - NEARER) {
                     first = Some((gap, other_index, facing));
                 }
             }
@@ -402,13 +413,22 @@ fn stand(index: usize, body: &Body, bodies: &[Option<Body>], ground: Option<usiz
     let within = under.iter().filter(|(_, gap, ..)| *gap < -TOUCH).count();
     let share = within as f64 / body.feet.len().max(1) as f64;
     let sunk = within > 0 && share >= IN;
-    // The foot that is down first, or with the clip sunk the one that is deepest.
-    let first = under
+    // The feet it stands by: all of them where it is sunk, and else those in no surface.
+    let stood_by = |gap: f64| sunk || gap >= -TOUCH;
+    // How far off the foot that is down first is, or with the clip sunk the one that is deepest.
+    let drop = under
         .iter()
-        .filter(|(_, gap, ..)| sunk || *gap >= -TOUCH)
-        .min_by(|a, b| a.1.total_cmp(&b.1))
-        .copied();
-    let Some((_, drop, on, facing)) = first else {
+        .map(|(_, gap, ..)| *gap)
+        .filter(|gap| stood_by(*gap))
+        .min_by(f64::total_cmp);
+    // What is under that foot: of feet as near, the first over the lowest track's clip.
+    let first = drop.and_then(|drop| {
+        under
+            .iter()
+            .filter(|(_, gap, ..)| stood_by(*gap) && *gap <= drop + NEARER)
+            .min_by_key(|(_, _, other, _)| *other)
+    });
+    let (Some(drop), Some(&(_, _, on, facing))) = (drop, first) else {
         return Stand {
             how: How::Air,
             on: None,

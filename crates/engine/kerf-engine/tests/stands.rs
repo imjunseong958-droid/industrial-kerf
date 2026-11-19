@@ -308,6 +308,109 @@ fn what_moves_along_a_floor_rests_all_the_way_and_where_it_lifts_is_the_run_said
     assert_eq!(only(&stands, "crate").frames, (3, 20));
 }
 
+/// A level road 0.4 under the middle of the frame, 81 frames long.
+fn road() -> String {
+    "  track V1 video\n    clip road gen=solid@1 at=0f dur=81f\n      set color=#404448 three_d=true rotate_x=-90 y=0.4 z=4 scale=16\n".to_owned()
+}
+
+/// A part of a thing on that road: a mesh `x` across from the thing's middle and `off` it in
+/// `z`, in frame heights. The thing is a little right of the frame's middle, and where it
+/// `moves` it goes away down the road, each part by the same keys but for its own `off`.
+fn part(moves: bool, track: u32, id: &str, set: &str, (x, off): (f64, f64)) -> String {
+    // A line's `x` is in frame widths, of a frame 16 by 9.
+    let x = (x + 0.07) * 9.0 / 16.0;
+    let z = if moves {
+        format!("{{0f:{} 80f:{}}}", 1.3 + off, 6.1 + off)
+    } else {
+        format!("{}", 1.3 + off)
+    };
+    format!("  track V{track} video\n    clip {id} gen=mesh@1 at=0f dur=81f\n      set {set} x={x} z={z}\n")
+}
+
+#[test]
+fn what_is_as_near_to_two_clips_is_on_the_lower_tracks_on_every_frame() {
+    // A plank across two blocks, each turned a little, the three going away down a road
+    // together. Its ends are as far over the one block as over the other but for the last
+    // places of the two numbers, and which is the less is another from frame to frame: it
+    // rests on the block of the lower track on all of them, whichever side that one is on,
+    // as it does parked.
+    let block = |y: f64| format!("kind=box width=0.1 height=0.1 length=0.1 rotate_y=30 y={y}");
+    let plank = |moves: bool, one: (f64, f64), other: (f64, f64)| {
+        let scene = [
+            road(),
+            part(moves, 2, "one", &block(one.1), (one.0, 0.0)),
+            part(moves, 3, "other", &block(other.1), (other.0, 0.0)),
+            part(moves, 4, "plank", "kind=box width=0.5 height=0.02 length=0.06 y=0.29", (0.0, 0.0)),
+        ]
+        .concat();
+        standing(&project(&scene), None, &[]).expect("reads")
+    };
+    let rests_on = |stands: &Standing| {
+        let run = only(stands, "plank");
+        assert_eq!((run.how, run.frames), (How::Rests, (0, 80)), "{run:?}");
+        run.on.clone().expect("a block")
+    };
+    for moves in [true, false] {
+        for (one, other) in [(-0.25, 0.25), (0.25, -0.25)] {
+            assert_eq!(rests_on(&plank(moves, (one, 0.35), (other, 0.35))), "one", "{moves} {one}");
+        }
+        // A block written a thousandth lower is not as near, nor is one a touch lower, which
+        // a touch either way of would be on some frames and not on others: the plank is on
+        // the block that was left, whichever its track.
+        for lower in [0.001, TOUCH] {
+            assert_eq!(rests_on(&plank(moves, (-0.25, 0.35 + lower), (0.25, 0.35))), "other", "{moves} {lower}");
+            assert_eq!(rests_on(&plank(moves, (-0.25, 0.35), (0.25, 0.35 + lower))), "one", "{moves} {lower}");
+        }
+    }
+
+    // A cart: an axle through a wheel at each end, a bed on the two axles, a board along
+    // each side of the bed, and one across its back that goes down into those two.
+    let cart = |moves: bool| {
+        let wheel = "kind=cylinder rotation=90 width=0.2 height=0.06 length=0.2 y=0.3";
+        let axle = "kind=box width=0.5 height=0.03 length=0.03 y=0.3";
+        let side = "kind=box width=0.03 height=0.14 length=0.6 y=0.175";
+        let scene = [
+            road(),
+            part(moves, 2, "wheel_lf", wheel, (-0.25, 0.3)),
+            part(moves, 3, "wheel_rf", wheel, (0.25, 0.3)),
+            part(moves, 4, "wheel_lb", wheel, (-0.25, -0.3)),
+            part(moves, 5, "wheel_rb", wheel, (0.25, -0.3)),
+            part(moves, 6, "axle_f", axle, (0.0, 0.3)),
+            part(moves, 7, "axle_b", axle, (0.0, -0.3)),
+            part(moves, 8, "bed", "kind=box width=0.4 height=0.04 length=0.6 y=0.265", (0.0, 0.0)),
+            part(moves, 9, "side_l", side, (-0.185, 0.0)),
+            part(moves, 10, "side_r", side, (0.185, 0.0)),
+            part(moves, 11, "back", "kind=box width=0.37 height=0.2 length=0.03 y=0.145", (0.0, -0.285)),
+        ]
+        .concat();
+        standing(&project(&scene), None, &[]).expect("reads")
+    };
+    for moves in [true, false] {
+        let stands = cart(moves);
+        assert_eq!(stands.frames.len(), 81);
+        // Each axle is as far over the inside of the one wheel as of the other.
+        for (axle, wheel) in [("axle_f", "wheel_lf"), ("axle_b", "wheel_lb")] {
+            let run = only(&stands, axle);
+            assert_eq!((run.how, run.on.as_deref(), run.frames), (How::Air, Some(wheel), (0, 80)), "{moves}");
+        }
+        // The bed is on both axles, and the back board as deep in each side board.
+        let run = only(&stands, "bed");
+        assert_eq!((run.how, run.on.as_deref()), (How::Rests, Some("axle_f")), "{moves}");
+        let run = only(&stands, "back");
+        assert!(matches!(run.how, How::Sunk { deep, share } if near(deep, 0.14) && share == 1.0), "{moves} {run:?}");
+        assert_eq!(run.on.as_deref(), Some("side_l"), "{moves}");
+        // Every part is said once, and so is what is not measured of the board it is not in.
+        for stood in &stands.clips {
+            assert_eq!((stood.runs.len(), stood.through.len()), (1, 0), "{moves} {stood:?}");
+        }
+        assert_eq!(
+            stands.not_measured,
+            ["whether `side_r` and `back` go into each other: a mesh into another mesh"],
+            "{moves}"
+        );
+    }
+}
+
 /// A glTF file of a sheet 2 across and 1 up standing on its ground, which its one animation,
 /// `lift`, takes as far up as it is tall in a second.
 fn lifted_sheet(folder: &Path) -> PathBuf {
