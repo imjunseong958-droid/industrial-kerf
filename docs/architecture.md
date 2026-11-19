@@ -1321,7 +1321,11 @@ way.
 
 A check judges each cut of a sequence's sound the same way (`kerf-mcp/src/cuts.rs`): a cut
 with sound at the level of speech on both sides goes through it (`cut.in_sound`), whether or not a
-transcript has a word there; a cut in a pause is not said to be in the word a transcript stretches
+transcript has a word there; a cut under a transition is not judged, since the transition fades
+what it goes through, but one that is in quiet and whose transition plays on past it into sound
+at the level of speech is said (`cut.fade_in_sound`, 2026-11-19), since a crossfade plays each
+clip beyond its cut by half its length, and beyond a cut put in the pause before a word that was
+taken out lies that word, heard fading; a cut in a pause is not said to be in the word a transcript stretches
 over it, nor is one in a gap unless the word is timed right through the gap, so what `snap=pause`
 places is never then said to be in a word; and the pauses of 0.75 s or more, the words said
 twice in a row, and the phrases taken again a moment later that the cut still plays are said as
@@ -1813,7 +1817,8 @@ x64, and Linux x86-64 as new as Ubuntu 24.04.
   words taken out, or a pause brought down to a length, by one line that names them, with the
   pause that is left played before the cut, a phrase found that is taken again with other words
   between its two sayings, what each join plays and took out, a pause listed from the length an
-  edit names, and a room read where it is with a tick left in its pause.
+  edit names, a room read where it is and a tick left in its pause, and what a crossfade plays
+  past the cut it is on.
   Its encoded sections, kept by what they depend on and joined without encoding again, are done
   too (The engine, Kept frames). Left: its forced alignment of words (wav2vec2, a model of English
   letters), its filler and transcription models (their own licenses, one not for commercial use),

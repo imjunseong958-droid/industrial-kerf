@@ -6,6 +6,12 @@ on `main`; its section here becomes the release's notes on GitHub
 
 ## Unreleased
 
+- The check says when a crossfade plays what a cut left out. A cut put in
+  the pause before a word that was taken out is clean, and a crossfade
+  across it plays the clip on past the cut, into that word, heard fading
+  out. Cuts under a transition were not looked at; one in quiet whose
+  transition reaches sound at the level of speech is now a finding
+  (`cut.fade_in_sound`), and `look` with `cuts` counts and lists them.
 - Pauses are found in a recording whose room changes. Quiet was measured by
   one room tone for a whole file, so where a fan came on, or the gain went
   up, the louder part had no pause at all and `snap=pause` refused every

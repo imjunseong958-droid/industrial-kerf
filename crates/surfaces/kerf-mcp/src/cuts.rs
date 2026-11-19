@@ -66,6 +66,9 @@ pub(crate) struct SoundCut<'a> {
     pub frame: Time,
     /// A transition plays across the cut, which fades what it goes through.
     pub faded: bool,
+    /// What of its media the clip plays past the cut under that transition,
+    /// fading: from when to when, in seconds of the media.
+    pub fade: Option<(f64, f64)>,
 }
 
 /// The tracks of `sequence` that sound.
@@ -117,26 +120,42 @@ pub(crate) fn sound_cuts<'a>(project: &'a Project, sequence: &'a Sequence) -> Ve
             if source_in > Time::ZERO
                 && !before.is_some_and(|before| plays_on(project, before, clip))
             {
+                // The part of a transition before the cut plays what comes
+                // before the clip's first frame, fading in.
+                let fade = track.transitions.iter().find(|t| t.to == clip.id);
                 cuts.push(SoundCut {
                     clip,
                     media,
                     end: End::Starts,
                     source: source_in,
                     frame: clip.start,
-                    faded: track.transitions.iter().any(|t| t.to == clip.id),
+                    faded: fade.is_some(),
+                    fade: fade
+                        .map(|fade| fade.split_at_cut(sequence.rate).0)
+                        .filter(|before| before.is_positive())
+                        .and_then(|before| clip.source_at(clip.start - before))
+                        .map(|from| (from.seconds(), source_in.seconds())),
                 });
             }
             let after = track.clips.get(index + 1);
             if source_out < media.duration
                 && !after.is_some_and(|after| plays_on(project, clip, after))
             {
+                // And the part after it plays on past the clip's last,
+                // fading out.
+                let fade = track.transitions.iter().find(|t| t.from == clip.id);
                 cuts.push(SoundCut {
                     clip,
                     media,
                     end: End::Ends,
                     source: source_out,
                     frame: clip.end() - frame,
-                    faded: track.transitions.iter().any(|t| t.from == clip.id),
+                    faded: fade.is_some(),
+                    fade: fade
+                        .map(|fade| fade.split_at_cut(sequence.rate).1)
+                        .filter(|after| after.is_positive())
+                        .and_then(|after| clip.source_at(clip.end() + after))
+                        .map(|to| (source_out.seconds(), to.seconds())),
                 });
             }
         }
@@ -197,6 +216,19 @@ pub(crate) struct Judged {
     pub air: Option<f64>,
     /// Whether a transcript covers it.
     pub transcribed: bool,
+    /// What a transition across it plays past it, where the cut is in quiet
+    /// and that is sound at the level of speech: a word the cut left out,
+    /// heard fading.
+    pub fade: Option<Fade>,
+}
+
+/// The sound a transition plays past a cut that is itself in quiet.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Fade {
+    /// How long the clip plays past the cut, fading, in seconds of its media.
+    pub seconds: f64,
+    /// The loudest of it, in dBFS.
+    pub level: f64,
 }
 
 impl Judged {
@@ -215,10 +247,23 @@ impl Judged {
 
 pub(crate) fn judge(cut: &SoundCut<'_>, known: &mut Known<'_>) -> Judged {
     let at = cut.source.seconds();
-    let edge = known
+    let measured = known
         .sound(cut.media)
-        .filter(|_| !cut.faded)
         .and_then(|sound| Some((sound, sound.edge(at)?)));
+    // A transition fades what its cut goes through, so the cut is not
+    // judged. What it plays past a cut that is in quiet is another thing:
+    // sound a hard cut there would not have played.
+    let fade = match (cut.fade, measured) {
+        (Some((from, to)), Some((sound, edge))) if edge.heard == Heard::Quiet => sound
+            .loudest(from, to)
+            .filter(|_| sound.heard(from, to) == Some(Heard::Sound))
+            .map(|level| Fade {
+                seconds: to - from,
+                level,
+            }),
+        _ => None,
+    };
+    let edge = measured.filter(|_| !cut.faded);
     let (air, in_pause, parts) = match edge {
         Some((sound, _)) => (
             Some(sound.air(at, cut.end == End::Ends)),
@@ -247,6 +292,7 @@ pub(crate) fn judge(cut: &SoundCut<'_>, known: &mut Known<'_>) -> Judged {
         edge,
         air,
         transcribed,
+        fade,
     }
 }
 
@@ -752,7 +798,7 @@ pub(crate) fn report(
         (0, 0, 0, 0, 0, 0, 0);
     let mut airs = Vec::new();
     let mut listed = Vec::new();
-    let mut unclean = 0;
+    let (mut unclean, mut fades) = (0, 0);
     for cut in &cuts {
         let judged = judge(cut, &mut known);
         let heard = judged.edge.map(|edge| edge.heard);
@@ -770,8 +816,11 @@ pub(crate) fn report(
         if let (Some(Heard::Quiet), Some(air)) = (heard, judged.air) {
             airs.push(air);
         }
-        let clean =
-            judged.word.is_none() && heard.is_none_or(|heard| heard == Heard::Quiet) && !is_tight;
+        fades += usize::from(judged.fade.is_some());
+        let clean = judged.word.is_none()
+            && heard.is_none_or(|heard| heard == Heard::Quiet)
+            && !is_tight
+            && judged.fade.is_none();
         unclean += usize::from(!clean);
         if clean || listed.len() == LISTED_CUTS {
             continue;
@@ -798,6 +847,12 @@ pub(crate) fn report(
         if let Some(word) = &judged.word {
             entry["word"] = json!(word.text.trim());
         }
+        if let Some(fade) = &judged.fade {
+            entry["fade"] = json!({
+                "seconds": rounded(fade.seconds, 2),
+                "level": rounded(fade.level, 1),
+            });
+        }
         listed.push(entry);
     }
     airs.sort_by(f64::total_cmp);
@@ -809,6 +864,7 @@ pub(crate) fn report(
         "inWords": in_words,
         "tight": tight,
         "faded": faded,
+        "fadesInSound": fades,
         "notMeasured": unmeasured,
     });
     if let (Some(least), Some(median)) = (airs.first(), airs.get(airs.len() / 2)) {

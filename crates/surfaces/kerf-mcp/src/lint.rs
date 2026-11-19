@@ -520,6 +520,9 @@ pub(crate) const CUT_UNHEARD: &str = "cut.unheard";
 /// What a cut through a sound no transcript has a word for is called.
 pub(crate) const CUT_IN_SOUND: &str = "cut.in_sound";
 
+/// What a transition is called that plays sound past a cut which is itself in quiet.
+pub(crate) const CUT_FADE_IN_SOUND: &str = "cut.fade_in_sound";
+
 /// Sound clips whose first or last frame falls inside a word, by a transcript, or in the middle of
 /// a sound, by the levels their media's index kept; and, as information, the cuts that could not be
 /// checked because no transcript of their media covers them and its sound was not measured, once
@@ -586,6 +589,32 @@ fn cuts_in_sound(
             )
             .during(sequence, cut.frame, cut.frame + frame);
             finding.value = Some((edge.through() * 10.0).round() / 10.0);
+            finding.unit = Some("dB".to_owned());
+            findings.push(finding);
+        } else if let (Some(fade), Some(sound)) = (judged.fade, known.sound(media)) {
+            // The cut is in quiet and the transition across it is not: it plays on past the
+            // cut, or from before it, into what the cut left out.
+            let mut finding = finding(
+                CUT_FADE_IN_SOUND,
+                clip.id.as_str(),
+                format!(
+                    "the transition where clip `{}` {end} plays {:.2} s {} the cut, at {} of `{}`, \
+                     into a sound at {:.0} dB, where `{}` speaks at {:.0} dB: what the cut left out \
+                     is heard fading {}; shorten the transition, put it on the cut's other side \
+                     with align=, or move the cut",
+                    clip.id,
+                    fade.seconds,
+                    if cut.end == cuts::End::Ends { "past" } else { "before" },
+                    position(cut.source.seconds()),
+                    media.id,
+                    fade.level,
+                    media.id,
+                    sound.speech(),
+                    if cut.end == cuts::End::Ends { "out" } else { "in" },
+                ),
+            )
+            .during(sequence, cut.frame, cut.frame + frame);
+            finding.value = Some((fade.level * 10.0).round() / 10.0);
             finding.unit = Some("dB".to_owned());
             findings.push(finding);
         } else if judged.unchecked() {
@@ -1078,6 +1107,77 @@ sequence s1 rate=24 size=1920x1080
     }
 
     #[test]
+    fn a_transition_that_plays_sound_past_a_quiet_cut_is_said() {
+        // a1 ends at 4 s of m1, in the pause before somebody speaks from 4 s on, and a2 starts
+        // at 10 s, after 0.8 s of quiet. Both cuts are in quiet. A crossfade of half a second
+        // across them plays a1 on for a quarter of a second, into the word the cut left out.
+        let known = Known {
+            covered: vec![(0.0, 60.0)],
+            sound: Some(recording(&[], &[])),
+            ..Known::default()
+        };
+        let faded = |script: &str| {
+            let project = apply_script(&project(), Catalog::builtin(), script)
+                .unwrap()
+                .project;
+            let found: Vec<(String, String)> = findings(&project, &known)
+                .into_iter()
+                .map(|finding| (finding.code, finding.message))
+                .collect();
+            let report = cuts::report(
+                &project,
+                &project.sequences[0],
+                &known,
+                &cuts::Asked::default(),
+            );
+            (found, report)
+        };
+        let (found, report) = faded("transition add from=a1 to=a2 fx=crossfade dur=12f");
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].0, CUT_FADE_IN_SOUND);
+        assert_eq!(
+            found[0].1,
+            "the transition where clip `a1` ends plays 0.25 s past the cut, at 00:00:04:00 of \
+             `m1`, into a sound at -20 dB, where `m1` speaks at -20 dB: what the cut left out is \
+             heard fading out; shorten the transition, put it on the cut's other side with \
+             align=, or move the cut"
+        );
+        assert_eq!(report["summary"]["faded"], 2, "{report:#}");
+        assert_eq!(report["summary"]["fadesInSound"], 1, "{report:#}");
+        assert_eq!(
+            report["cuts"],
+            serde_json::json!([{"clip": "a1", "end": "ends", "at": "00:00:03:23", "media": "m1",
+                "source": "00:00:04:00", "fade": {"seconds": 0.25, "level": -20.0}}]),
+            "{report:#}"
+        );
+        // Ending at the cut, it plays a1 no further, and half a second of the quiet before
+        // a2: nothing is said.
+        let (found, report) =
+            faded("transition add from=a1 to=a2 fx=crossfade dur=12f align=end");
+        assert!(found.is_empty(), "{found:?}");
+        assert_eq!(report["summary"]["fadesInSound"], 0, "{report:#}");
+        // A cut that is in sound under a transition is the transition's to fade, as before.
+        let through = Known {
+            sound: Some(recording(&[(3.2, 4.0)], &[])),
+            ..Known::default()
+        };
+        let project = apply_script(
+            &project(),
+            Catalog::builtin(),
+            "transition add from=a1 to=a2 fx=crossfade dur=12f",
+        )
+        .unwrap()
+        .project;
+        let found = findings(&project, &through);
+        assert!(
+            !found
+                .iter()
+                .any(|finding| finding.code == CUT_FADE_IN_SOUND || finding.code == CUT_IN_SOUND),
+            "{found:?}"
+        );
+    }
+
+    #[test]
     fn a_cut_between_two_words_said_in_one_breath_is_in_neither() {
         // Somebody speaks up to 0.06 s before a1 ends at 4 s of m1 and again 0.06 s after: the
         // two words part for an eighth of a second, too short for a pause, and the cut is in it.
@@ -1272,7 +1372,8 @@ sequence s1 rate=24 size=1920x1080
             report["summary"],
             serde_json::json!({
                 "cuts": 3, "quiet": 1, "low": 0, "sound": 2, "inWords": 1, "tight": 1,
-                "faded": 0, "notMeasured": 0, "air": {"least": 0.03, "median": 0.03},
+                "faded": 0, "fadesInSound": 0, "notMeasured": 0,
+                "air": {"least": 0.03, "median": 0.03},
             }),
             "{report:#}"
         );
