@@ -262,8 +262,9 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
   and by how much. Such a recording is left out of the script, which says why; a stretch that is
   quiet or has nothing in common is said to be unknown and is not guessed at.
 - `bus music gain=-6 to=mix` under a `sequence`, with `fx` lines under it, mixes the sound tracks that
-  say `bus=music`, then through its gain, pan, and effects, on to another bus or the sequence's mix.
-  Gain is keyframed from the sequence's start. Sound effects (`audio.compressor`, `audio.gate`,
+  say `bus=music`, then through its effects and after them its gain and pan, as a fader comes after a
+  desk's inserts, on to another bus or the sequence's mix. So a limiter on a bus does not hold back
+  gain the bus adds after it. Gain is keyframed from the sequence's start. Sound effects (`audio.compressor`, `audio.gate`,
   `audio.deesser`, `audio.denoise`, `audio.delay`, `audio.reverb`, `audio.eq`, `audio.eq3`,
   `audio.limiter`) go on a clip or a bus, and on a bus see the sum, as a compressor on a mix should.
 - `set c1 three_d=true z=0.5 rotate_y=30` places a clip in depth. Its 2D geometry applies first; `z`
