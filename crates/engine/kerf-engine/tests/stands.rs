@@ -375,6 +375,35 @@ fn a_clip_wider_than_what_it_stands_on_stands_by_the_feet_that_are_over_it() {
 }
 
 #[test]
+fn a_shapes_floor_is_as_large_as_its_numbers_and_not_its_frame() {
+    // A floor six frame heights across and eight long, its middle three back, the upper half of its
+    // picture its near half: where the frame cut it, it went from 2.5 to 3.5 back, and a phone at
+    // the front of it was in the air.
+    let floor = |set: &str| {
+        let set = format!("width=6 height=8 fill=#4080ff three_d=true rotate_x=90 {set} z=3");
+        [
+            on_track(1, "floor", "shape", &set),
+            on_track(2, "phone", "shape", "width=0.2 height=0.4 three_d=true y=0.15 z=0"),
+            on_track(8, "cam", "camera", "z=0"),
+        ]
+        .concat()
+    };
+    let stands = read(&floor("y=0.35"));
+    let run = only(&stands, "phone");
+    assert_eq!((run.how, run.on.as_deref()), (How::Rests, Some("floor")), "{run:?}");
+    // Its crop cuts it where it says on the frame, and what is left goes where the crop puts it,
+    // a quarter of a frame up or down, which its `y` takes back. With the lower half of its frame
+    // cut, what is left of it reaches from its middle as far forward as it goes, under the phone.
+    let stands = read(&floor("crop_b=0.5 y=0.1"));
+    let run = only(&stands, "phone");
+    assert_eq!((run.how, run.on.as_deref()), (How::Rests, Some("floor")), "{run:?}");
+    // With the upper half cut, it reaches from its middle back, and the phone is before it.
+    let stands = read(&floor("crop_t=0.5 y=0.6"));
+    let run = only(&stands, "phone");
+    assert!(matches!(run.how, How::Air), "{run:?}");
+}
+
+#[test]
 fn what_moves_along_a_floor_rests_all_the_way_and_where_it_lifts_is_the_run_said() {
     let along = crate_at("y=0.3 x={0f:-0.3 23f:0.3}");
     let stands = read(&[level(), along].concat());

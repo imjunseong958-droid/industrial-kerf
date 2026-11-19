@@ -53,8 +53,29 @@ pub struct Text<'a> {
 /// justification, and `place` of the block's height above `at`'s y: a half
 /// centers the block on it, 1 puts its bottom there.
 pub fn draw(image: &mut Image, text: &Text, at: [f32; 2], place: f32) {
-    if text.text.trim().is_empty() || text.size <= 0.0 {
+    let Some(laid) = laid(text) else {
         return;
+    };
+    let [_, top, _, bottom] = laid.bounds;
+    let baseline = at[1] - (top + (bottom - top) * place);
+    let (glyphs, x, y) = render::rasterize(&laid, &render::at(at[0], baseline));
+    if let Some((edge, width)) = text.outline.filter(|(_, width)| *width > 0.0) {
+        let margin = width.ceil() as i32 + 2;
+        let mut room = Mask::new(
+            glyphs.w + 2 * margin as usize,
+            glyphs.h + 2 * margin as usize,
+        );
+        room.add(&glyphs, margin, margin);
+        let outline = stroke(&room, width, StrokeKind::Outer);
+        cover(image, &outline, x - margin, y - margin, edge);
+    }
+    cover(image, &glyphs, x, y, text.color);
+}
+
+/// The lines of `text` laid out, or none for text that draws nothing.
+fn laid(text: &Text) -> Option<std::sync::Arc<kerf_text::layout::Layout>> {
+    if text.text.trim().is_empty() || text.size <= 0.0 {
+        return None;
     }
     let family = GENERIC
         .iter()
@@ -75,21 +96,17 @@ pub fn draw(image: &mut Image, text: &Text, at: [f32; 2], place: f32) {
         },
         ..ParagraphStyle::default()
     };
-    let laid = layout(text.text, &style, &paragraph);
-    let [_, top, _, bottom] = laid.bounds;
+    Some(layout(text.text, &style, &paragraph))
+}
+
+/// The box `[left, top, right, bottom]` that [`draw`] lays `text`'s lines in, placed as it places
+/// them: none for text that draws nothing. A glyph may reach a little past it, as an italic's
+/// overhang does.
+pub fn extent(text: &Text, at: [f32; 2], place: f32) -> Option<[f32; 4]> {
+    let laid = laid(text)?;
+    let [left, top, right, bottom] = laid.bounds;
     let baseline = at[1] - (top + (bottom - top) * place);
-    let (glyphs, x, y) = render::rasterize(&laid, &render::at(at[0], baseline));
-    if let Some((edge, width)) = text.outline.filter(|(_, width)| *width > 0.0) {
-        let margin = width.ceil() as i32 + 2;
-        let mut room = Mask::new(
-            glyphs.w + 2 * margin as usize,
-            glyphs.h + 2 * margin as usize,
-        );
-        room.add(&glyphs, margin, margin);
-        let outline = stroke(&room, width, StrokeKind::Outer);
-        cover(image, &outline, x - margin, y - margin, edge);
-    }
-    cover(image, &glyphs, x, y, text.color);
+    Some([at[0] + left, baseline + top, at[0] + right, baseline + bottom])
 }
 
 /// How a piece of text looks at a moment, against how it would rest.
@@ -114,29 +131,9 @@ pub fn draw_pieces(
     by_word: bool,
     look: &dyn Fn(usize, usize) -> Piece,
 ) {
-    if text.text.trim().is_empty() || text.size <= 0.0 {
+    let Some(laid) = laid(text) else {
         return;
-    }
-    let family = GENERIC
-        .iter()
-        .find(|(generic, _)| generic.eq_ignore_ascii_case(text.font.trim()))
-        .map_or(text.font.trim(), |(_, family)| family);
-    let style = TextStyle {
-        family: if family.is_empty() { "Inter" } else { family }.to_owned(),
-        size: text.size,
-        axes: text.axes.to_vec(),
-        features: text.features.to_vec(),
-        ..TextStyle::default()
     };
-    let paragraph = ParagraphStyle {
-        align: match text.justify {
-            Justify::Left => Align::Left,
-            Justify::Center => Align::Center,
-            Justify::Right => Align::Right,
-        },
-        ..ParagraphStyle::default()
-    };
-    let laid = layout(text.text, &style, &paragraph);
     let [_, top, _, bottom] = laid.bounds;
     let baseline = at[1] - (top + (bottom - top) * place);
     // Which piece each glyph is of: the words or characters that came before where it sets.

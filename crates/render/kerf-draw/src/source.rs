@@ -11,13 +11,44 @@ use kerf_model::{Catalog, Clip, Content, FxDef, Params, Rgba, Time, Value};
 pub struct SourceRun {
     /// Clip time.
     pub at: Time,
-    /// The picture's size, in its pixels: the sequence's canvas at the scale
-    /// drawn.
+    /// The canvas's size, in the picture's pixels: the sequence's canvas at
+    /// the scale drawn. A size in frame heights is of its height.
     pub size: (usize, usize),
+    /// How far the picture reaches past the canvas on each side, across and
+    /// down, in its pixels: nothing but for a clip in depth, whose outline
+    /// may go past the frame and still be seen. The canvas is in its middle.
+    pub beyond: (usize, usize),
 }
 
-/// A generator drawn on a transparent picture the size of the canvas,
-/// premultiplied linear light.
+impl SourceRun {
+    /// A run on a picture the size of the canvas.
+    pub fn new(at: Time, size: (usize, usize)) -> Self {
+        Self {
+            at,
+            size,
+            beyond: (0, 0),
+        }
+    }
+
+    /// The picture's size: the canvas and what it reaches past it.
+    pub fn picture(&self) -> (usize, usize) {
+        (
+            self.size.0 + 2 * self.beyond.0,
+            self.size.1 + 2 * self.beyond.1,
+        )
+    }
+
+    /// The middle of the canvas, in the picture's pixels.
+    pub fn middle(&self) -> [f64; 2] {
+        [
+            self.size.0 as f64 / 2.0 + self.beyond.0 as f64,
+            self.size.1 as f64 / 2.0 + self.beyond.1 as f64,
+        ]
+    }
+}
+
+/// A generator drawn on a transparent picture of the canvas and as far past
+/// it as [`SourceRun::beyond`] says, premultiplied linear light.
 pub trait PictureSource: Sync {
     /// Its id in the catalog, as a document names it (`gen=shape@1`).
     fn id(&self) -> &'static str;
