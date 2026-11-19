@@ -1402,6 +1402,29 @@ asked for at the word's time would go into, so nothing here goes past a word eit
 run on into what stays have no quiet on that side, and the line is refused with the word in the
 way.
 
+A blade is snapped as the one cut it is (2026-11-19). `blade` took no `snap=`, so a cut through a
+picture and two microphones in a pause was a snapped `split` of each, and each went into the
+pause of its own sound: two cuts a few frames apart where one was meant. `blade at=… snap=pause`
+(`Script::snap_blade` and `quiet_together` in `kerf-lang/src/script.rs`) finds one frame that is
+in a quiet of every sound the blade cuts. Those are the clips it cuts on sound tracks, where the
+check below judges cuts too, and one on a muted track among them, since the blade cuts it all the
+same: a picture's own sound is not heard where another recording is laid under it, and going by
+it would refuse a blade for a sound nobody hears. Clips
+that play one media together are one sound, and where the blade cuts no clip on a sound track it
+goes by the media of the picture clips it cuts, as a `split` of one does. Each sound takes the
+blade by the rule any edge goes by (`kerf_lang::Breaks::snaps`), past no word of its own, so a
+blade through one sound lands where a split of it lands. Through several it lands where their
+quiets overlap: clear of the sound either side in each where the overlap is long enough, and
+where it is not, at the point that divides it as a short pause of one is divided (`clear` in
+`kerf-lang/src/facts.rs`). What it answers with names the pause of each and says how long they are
+quiet together, since that can be shorter than either pause. With no overlap the line is refused
+and nothing moves, since a cut at a place of its own on each track is several cuts, which `split`
+already makes; the refusal names each clip, where it alone would have the blade, and the word
+another clip says there. A snapped blade also cuts the clips it was asked to cut and no other: it
+stays inside each of them and goes into no other clip of its tracks, whose sound was never
+looked at. `tracks=` cuts fewer tracks and goes by those alone, and `snap=cut` goes to the
+nearest cut of any picture the blade cuts.
+
 A check judges each cut of a sequence's sound the same way (`kerf-mcp/src/cuts.rs`): a cut
 with sound at the level of speech on both sides goes through it (`cut.in_sound`), whether or not a
 transcript has a word there; a cut under a transition is not judged, since the transition fades
@@ -1494,8 +1517,11 @@ too and telling them apart takes word times closer than a transcriber's (the rec
 none: every two of its words are 0.08 s apart or more); the 0.1 s tried on real speech, since it
 is set by this recording's stopped consonants, which hold 0.09 s at most, and where a language
 holds one longer only the transcript says so; a change of room found where it happens, which is
-now somewhere in the half minute it falls in; and a breath taken for part of the pause it is in,
-which an edge still stops short of.
+now somewhere in the half minute it falls in; a breath taken for part of the pause it is in,
+which an edge still stops short of; a sound left out of what a snapped blade goes by for what it
+is, as music under speech is, which has no pauses and refuses the blade until `tracks=` leaves
+its track out, uncut; and a quiet found for a blade in a nested sequence's sound, which has no
+index, so that such a clip on a sound track refuses it too.
 
 The picture of a cut is read from what the document has too, where the two clips are shots
 whose guides it holds (`kerf_engine::eye`, `look` with `eye`, 2026-11-18). A model makes each
@@ -1908,8 +1934,10 @@ x64, and Linux x86-64 as new as Ubuntu 24.04.
   reading the text on a screen, and telling speakers apart. Read the second time and not done: an
   edge on the dip between two words with no quiet between them, which its alignment's word times
   make safe and a transcriber's do not; a cut named that takes a word or two more than the
-  restart it removes; a check that two recordings of one thing still play in step after a cut;
-  and a proposal brought forward onto an edit that changed under it, where Kerf's goes stale.
+  restart it removes; a check that two recordings of one thing still play in step after a cut
+  (a snapped `blade` cuts both at one place where both are quiet, Edit, and nothing looks at
+  what was cut another way); and a proposal brought forward onto an edit that changed under it,
+  where Kerf's goes stale.
   Merging the two documents by their ids, as a sync does, is not the way to that: two edits that
   each close a gap both move every clip after them, the merge keeps one side's place for it, and
   a clip is left half a second after the one before it (tried on four clips, 2026-11-19).

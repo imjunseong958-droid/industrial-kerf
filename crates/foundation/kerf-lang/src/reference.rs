@@ -49,7 +49,7 @@ Effects, transitions, and generators have versions, listed below as
 use <sequence>  choose a sequence
 insert <content> at=<pos> dur=<dur>|out=<src> on=<track>[,<track>] [as=<id>[,<id>]] [name="…"] [<prop>=<value> …]
     open time on every unlocked track; several tracks get linked clips
-overwrite <same arguments as insert>  replace the range on the target tracks: lays a clip over others, where insert pushes them along
+overwrite <same as insert>  replace the range on the target tracks: lays a clip over others, where insert pushes them along
     <content> is media=<id> [src=<src>] [speed=<speed>] | seq=<id> [src=<src>] | gen=<generator> | caption="…"
 delete <clip> …  remove clips (and linked partners), leaving gaps
 ripple-delete <clip> …  remove and close the gap on every unlocked track
@@ -92,9 +92,9 @@ media relink <id> path="…"  ·  media remove <id>
 sequence add <id> rate=<fps> size=WxH [name="…"] [start=<tc>] [color=rec2100-pq|rec2100-hlg]  ·  sequence set|remove <id> …
 ```
 
-`snap=pause|cut [within=<amount>]` on trim, split, insert, overwrite, and lift
-or extract naming a clip moves the edge into the pause beside it, past no
-word, or onto a picture cut; within 0.5s unless given.
+`snap=pause|cut [within=<amount>]` (0.5s) on trim, split, blade, insert, overwrite, and
+lift|extract <clip> puts the edge in the pause beside it, past no word, or on a
+picture cut; a blade where all it cuts are quiet.
 
 The effect `shape.outline@1` adds an outline to a `gen=shape` clip, in order, by `mode` (add, subtract,
 intersect, difference), with the shape's own numbers and `x`, `y`, `rotation`.
@@ -444,5 +444,8 @@ mod tests {
         assert!(text.contains("`set c2 parent=c1` moves `c2` with `c1`"));
         // A multicam part with no angle shows the highest track.
         assert!(text.contains("With none it shows every\n  track, the highest over the rest"));
+        // A blade takes `snap=` too, and is one cut where all it cuts are quiet.
+        assert!(text.contains("split, blade, insert"));
+        assert!(text.contains("a blade where all it cuts are quiet"));
     }
 }

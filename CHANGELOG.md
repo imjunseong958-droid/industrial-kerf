@@ -6,6 +6,17 @@ on `main`; its section here becomes the release's notes on GitHub
 
 ## Unreleased
 
+- `blade` takes `snap=pause|cut`. A blade is one cut through every track, so
+  `blade at=01:00:12:08 snap=pause` goes to one place where every sound it
+  cuts is quiet at once, each taken past no word as a snapped `split` is,
+  and the answer says how far it went and into which pause of each
+  (`snapped`). Sounds with no quiet in common refuse the line and move
+  nothing: it names each clip, where that clip alone would have the blade,
+  and the word another says there. `tracks=` cuts fewer tracks and goes by
+  those alone, and `snap=cut` goes to the nearest cut of any picture the
+  blade cuts. It took a snapped `split` of each clip before, and each went
+  into its own pause
+  ([docs/kerf-language.md](docs/kerf-language.md#scripts)).
 - The shots and the still that come with `kerf-comfy` are made by Wan 2.1
   VACE 14B, where its 1.3B made them: `shot`, `shot-timed`, `shot-into`,
   `shot-led`, `shot-directed` and `still` load
