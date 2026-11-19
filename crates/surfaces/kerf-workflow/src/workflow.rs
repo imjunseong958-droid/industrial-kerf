@@ -1081,7 +1081,7 @@ mod tests {
         // Every shot is made by one model, with its picture's coder and its words' reader.
         let shots = vec!["shot", "shot-timed", "shot-into", "shot-led", "shot-directed", "still"];
         let held: BTreeMap<String, Vec<&str>> = [
-            ("wan2.1_vace_1.3B_fp16.safetensors", shots.clone()),
+            ("wan2.1_vace_14B_fp16.safetensors", shots.clone()),
             ("wan_2.1_vae.safetensors", shots.clone()),
             ("umt5_xxl_fp16.safetensors", shots),
             ("depth_anything_3_base.safetensors", vec!["depth", "cameras", "set-views"]),
@@ -1242,7 +1242,7 @@ mod tests {
         assert_eq!(graph["15"]["inputs"]["fps"], json!(16.0));
         assert_eq!(
             graph["1"]["inputs"]["unet_name"],
-            "wan2.1_vace_1.3B_fp16.safetensors"
+            "wan2.1_vace_14B_fp16.safetensors"
         );
         assert_eq!(graph.as_object().unwrap().len(), 16);
 

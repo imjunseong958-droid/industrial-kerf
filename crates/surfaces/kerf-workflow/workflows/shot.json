@@ -14,7 +14,7 @@
     "cache": 0.2,
     "sampler": "uni_pc",
     "scheduler": "simple",
-    "unet": "wan2.1_vace_1.3B_fp16.safetensors",
+    "unet": "wan2.1_vace_14B_fp16.safetensors",
     "vae": "wan_2.1_vae.safetensors",
     "text_encoder": "umt5_xxl_fp16.safetensors"
   },

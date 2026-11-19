@@ -958,7 +958,7 @@ name, and the server has to have them under ComfyUI's `models`:
 
 | File | In | The workflows that load it |
 |---|---|---|
-| `wan2.1_vace_1.3B_fp16.safetensors` | `diffusion_models` | `shot`, `shot-timed`, `shot-into`, `shot-led`, `shot-directed`, `still` |
+| `wan2.1_vace_14B_fp16.safetensors` | `diffusion_models` | `shot`, `shot-timed`, `shot-into`, `shot-led`, `shot-directed`, `still` |
 | `wan_2.1_vae.safetensors` | `vae` | those six |
 | `umt5_xxl_fp16.safetensors` | `text_encoders` | those six |
 | `depth_anything_3_base.safetensors` | `geometry_estimation` | `depth`, `cameras`, `set-views` |
