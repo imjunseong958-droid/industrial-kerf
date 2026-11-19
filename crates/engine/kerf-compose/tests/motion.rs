@@ -101,6 +101,41 @@ fn a_shape_is_the_size_its_numbers_say_and_the_clip_places_it() {
     assert_eq!(pixel(&ellipse, WIDE / 2 - 44, TALL / 2 - 44), [0, 0, 0]);
 }
 
+#[test]
+fn an_aligned_shape_has_that_side_at_its_x_and_grows_from_it() {
+    let lit_row = |set: &str| -> Vec<u32> {
+        let drawn = frame(&clip("shape", set), 3);
+        (0..WIDE)
+            .filter(|x| pixel(&drawn, *x, TALL / 2)[0] > 128)
+            .collect()
+    };
+    // 90 pixels across, its left edge where the clip's x is: the middle, then a quarter left.
+    let left = lit_row("width=0.5 height=0.2 align=left");
+    assert_eq!((left[0], left.len()), (160, 90), "{left:?}");
+    let placed = lit_row("width=0.5 height=0.2 align=left x=-0.25");
+    assert_eq!((placed[0], placed.len()), (80, 90), "{placed:?}");
+    // Half of it, scaled about that side, still starts there: a bar grows from its left end.
+    let half = lit_row("width=0.5 height=0.2 align=left x=-0.25 scale_x=0.5");
+    assert_eq!((half[0], half.len()), (80, 45), "{half:?}");
+    // A stroke is part of its side.
+    let stroked = lit_row("width=0.5 height=0.2 align=left stroke_width=0.1 stroke=#ffffff");
+    assert_eq!(stroked[0], 160, "{stroked:?}");
+    // Right-aligned, its right edge is there.
+    let right = lit_row("width=0.5 height=0.2 align=right");
+    assert_eq!(
+        (*right.last().unwrap(), right.len()),
+        (159, 90),
+        "{right:?}"
+    );
+    // A path is aligned by where its points reach.
+    let path = lit_row(
+        "kind=path points=\"0.1,0 0.3,0\" closed=false stroke_width=0.02 fill=#ffffff00 align=left",
+    );
+    assert_eq!(path[0], 160, "{path:?}");
+    // Centered, as it was.
+    assert_eq!(lit_row("width=0.5 height=0.2 align=center")[0], 115);
+}
+
 fn shape_with(set: &str, outlines: &str) -> String {
     format!("    clip c1 gen=shape@1 at=0f dur=96f\n      set {set}\n{outlines}")
 }

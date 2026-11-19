@@ -1321,6 +1321,7 @@ fn lower(project: &Project, op: &EditOp) -> Result<Vec<Op>, RuntimeError> {
         EditOp::Roll { clip, frames } => Op::Roll {
             clip: edit_id(clip)?,
             delta: clip_rate(clip)?.time_of(*frames),
+            alone: false,
         },
         EditOp::Slip { clip, frames } => Op::Slip {
             clip: edit_id(clip)?,

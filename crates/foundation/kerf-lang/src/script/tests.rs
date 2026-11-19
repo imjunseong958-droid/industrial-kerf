@@ -1364,6 +1364,33 @@ fn a_look_s_time_can_name_a_marker_it_lands_on() {
 }
 
 #[test]
+fn a_roll_alone_makes_a_j_or_l_cut_and_prints_as_written() {
+    // a1 and a2 are c1's and c2's sound: the sound's cut comes half a second early.
+    let applied = run(&base(), "roll a1 -12f alone\n");
+    let project = &applied.project;
+    assert_eq!(frames(project.clip("a1").unwrap().duration), 84);
+    assert_eq!(frames(project.clip("c1").unwrap().duration), 96);
+    assert_eq!(
+        print_ops(project, Catalog::builtin(), &applied.ops),
+        "roll a1 -12f alone\n"
+    );
+    // To a place, and with the word anywhere after the clip.
+    let to = run(&base(), "roll c1 alone to=01:00:04:12\n");
+    assert_eq!(frames(to.project.clip("c1").unwrap().duration), 108);
+    assert_eq!(frames(to.project.clip("a1").unwrap().duration), 96);
+    // Without it, every linked track's cut goes, as before.
+    let both = run(&base(), "roll a1 -12f\n");
+    assert_eq!(frames(both.project.clip("c1").unwrap().duration), 84);
+    // Slip and slide have no such word.
+    assert!(fails(&base(), "slip c1 +2f alone\n")
+        .message
+        .contains("unexpected"));
+    assert!(fails(&base(), "roll c1 -2f alone -4f\n")
+        .message
+        .contains("unexpected"));
+}
+
+#[test]
 fn a_slower_clip_that_has_no_room_says_what_it_runs_into() {
     let error = fails(&base(), "speed c1 0.5\n");
     assert_eq!(error.code, "speed.collision", "{error:?}");

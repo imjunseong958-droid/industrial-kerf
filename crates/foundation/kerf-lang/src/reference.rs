@@ -30,14 +30,14 @@ line, applied in order and atomically.
 - Keyframes, clip time: `opacity={0f:0 12f:1:ease}`; linear, hold, ease-in,
   ease-out, ease, or an overshooting curve: `{0f:1 12f:1.2:0.2,0.8,0.4,1}`.
   Or `(t*90)`, `t` seconds: `pi sin cos abs floor min max noise`
-- `set c2 parent=c1` moves `c2` with `c1`, which `gen=null@1` is for. It is written with `set`, not where a clip is placed.
+- `set c2 parent=c1` moves `c2` with `c1`, which `gen=null@1` is for. Only `set` writes it, not `insert`.
   Its `z`, `rotate_x`, and `rotate_y` take children in depth, a camera, and a light with it, round its middle; a flat child stays flat.
 - `retime=flow` on footage draws new frames between its own for slow motion; `retime=blend` fades.
 - `rect=`, `ellipse=`, and `points=` on a mask animate: `rect={0f:0,0,0.2,0.2 24f:0.5,0,0.7,0.2:ease}`,
   `points={0f:0,0;0.5,0;0.5,0.5 24f:0.1,0;0.6,0;0.6,0.5}`, corners one for one. A third number on a corner, `0.5,0,12`, softens the edge there by that many pixels.
 - `angle=V2` on a clip of a nested sequence shows or plays that track alone; `angle=""` undoes it. With none it shows every
   track, the highest over the rest: each part of a multicam wants its own.
-- `gen=shape@1 kind=star sides=5 stroke_width=0.01 trim_end={0f:0 24f:1}` is a shape with a stroke that draws on; `gen=particles@1 rate=200 life=2 gravity=0.5` emits from the clip's center; a `title`'s `reveal={0f:0 24f:1} reveal_by=word from_y=0.05` brings it in piece by piece.
+- `gen=shape@1 align=left scale_x={0f:0 9f:1}` grows from its left edge, at `x`, as a title does; `gen=particles@1 rate=200 life=2 gravity=0.5` emits from the clip's center; a `title`'s `reveal={0f:0 24f:1} reveal_by=word from_y=0.05` brings it in piece by piece.
 - `three_d=true z=0.5 rotate_y=30` places a clip in depth; `gen=camera@1` and `gen=light@1` clips see and light it. Adjacent 3D tracks draw far to near, cut where they cross. `depth=0.1 bevel=0.02`: a solid, its edges cut.
 
 ## Versions
@@ -59,7 +59,7 @@ lift|extract <clip> said="…"  ·  extract <clip> pause="…"  [leave=<dur>]
     take its words out, or the pause after them down to leave (0.25s)
 trim <clip> in|out <amount>|to=<pos>|src=<src> [ripple]
     src= puts the edge on that source position
-roll <clip> <amount>|to=<pos>  move the cut after the clip
+roll <clip> <amount>|to=<pos> [alone]  move the cut after the clip; alone: its track's only, a J/L cut
 slip <clip> <amount>  other source frames in the same place
 slide <clip> <amount>|to=<pos>  move a clip between its neighbors
 split <clip> at=<pos> [as=<id>]
@@ -97,7 +97,7 @@ sequence add <id> rate=<fps> size=WxH [name="…"] [start=<tc>] [color=rec2100-p
 lift|extract <clip> puts the edge in the pause by it, past no word, or on a
 picture cut; a blade where all it cuts are quiet.
 
-The effect `shape.outline@1` adds an outline to a `gen=shape` clip, in order, by `mode` (add, subtract,
+`shape.outline@1` adds an outline to a `gen=shape` clip, in order, by `mode` (add, subtract,
 intersect, difference), with the shape's own numbers and `x`, `y`, `rotation`.
 
 A media Kerf or a model makes has the steps that make it under its line, written by `step` lines after its `media add`: `render <sequence> {name}

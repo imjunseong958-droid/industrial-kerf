@@ -266,10 +266,12 @@ pub enum Op {
         delta: Time,
         ripple: bool,
     },
-    /// Move the cut after `clip`, trimming both sides.
+    /// Move the cut after `clip`, trimming both sides: on every track its linked clips end with
+    /// it, or `alone` on its own, which leaves theirs where it is, as a J or an L cut does.
     Roll {
         clip: Id,
         delta: Time,
+        alone: bool,
     },
     Slip {
         clip: Id,
@@ -847,7 +849,7 @@ impl Editor<'_> {
                 delta,
                 ripple,
             } => self.trim(clip, *edge, *delta, *ripple),
-            Op::Roll { clip, delta } => self.roll(clip, *delta),
+            Op::Roll { clip, delta, alone } => self.roll(clip, *delta, *alone),
             Op::Slip { clip, delta } => {
                 let at = self.locate(clip)?;
                 self.aligned(at.sequence, *delta, "slip")?;
@@ -1914,13 +1916,14 @@ impl Editor<'_> {
         Ok(())
     }
 
-    fn roll(&mut self, clip: &Id, delta: Time) -> Outcome {
+    fn roll(&mut self, clip: &Id, delta: Time, alone: bool) -> Outcome {
         let at = self.locate(clip)?;
         let s = at.sequence;
         self.aligned(s, delta, "roll amount")?;
         let cut = self.clip(at).end();
         let mut pairs = Vec::new();
-        for member in self.linked(at) {
+        let members = if alone { vec![at] } else { self.linked(at) };
+        for member in members {
             let track = &self.project.sequences[s].tracks[member.track];
             let outgoing = &track.clips[member.clip];
             if outgoing.end() != cut {

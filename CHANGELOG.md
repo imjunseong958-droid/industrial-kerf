@@ -6,6 +6,17 @@ on `main`; its section here becomes the release's notes on GitHub
 
 ## Unreleased
 
+- A J or L cut is one line: `roll a1 -12f alone` moves the cut on the
+  clip's own track and leaves the cut of the clips linked to it, so the
+  sound of the next shot comes in before its picture, or with the
+  picture's clip named, the sound runs on under the next shot. The clips
+  stay linked. It took unlinking, rolling and linking again before.
+- A shape lines up with a title: `align=left` or `align=right` on a
+  `gen=shape` puts that side of it at its `x`, as a title's text is put,
+  and it turns and scales about that side. A lower third's bar at its
+  left-aligned name's `x` now starts where the name does, and
+  `scale_x={0f:0 9f:1}` grows it from there; before, `x` was the shape's
+  middle, and `anchor_x` counted in widths of the whole frame.
 - Cutting a clip that has a look on it keeps the look on its moment. A zoom
   pulse, shake, flash, pop-in or wobble says when it happens in its clip
   (`hit=`, `start=`), and splitting the clip gave both parts the same time,

@@ -371,24 +371,42 @@ impl Script<'_> {
             "roll" | "slip" | "slide" => {
                 let clip = fields.id(1, "a clip id")?;
                 let (found, clock) = self.clip(&clip, line)?;
+                // A roll of the clip's own track alone, its linked clips' cut staying: a J or L cut.
+                let alone_word = Atom::Word("alone".into());
+                let alone = command == "roll"
+                    && fields.positional()[2..]
+                        .iter()
+                        .any(|arg| arg.value == alone_word);
+                let rest: Vec<&Arg> = fields.positional()[2..]
+                    .iter()
+                    .copied()
+                    .filter(|arg| !(alone && arg.value == alone_word))
+                    .collect();
                 let to = fields.take_with("to", |t| clock.position(t))?;
-                if to.is_some() && fields.positional().len() > 2 {
-                    return Err(
-                        fields.error(fields.positional()[2], "give an amount or to=, not both")
-                    );
+                if let (Some(_), Some(extra)) = (to, rest.first()) {
+                    return Err(fields.error(extra, "give an amount or to=, not both"));
                 }
-                let delta = match to {
-                    Some(to) if command == "roll" => to - found.end(),
-                    Some(to) if command == "slide" => to - found.start,
-                    Some(_) => return Err(line.error(1, "slip takes an amount like +12f, not to=")),
-                    None => clock
+                let delta = match (to, rest.as_slice()) {
+                    (Some(to), _) if command == "roll" => to - found.end(),
+                    (Some(to), _) if command == "slide" => to - found.start,
+                    (Some(_), _) => {
+                        return Err(line.error(1, "slip takes an amount like +12f, not to="))
+                    }
+                    (None, [amount, ..]) => {
+                        let text = fields.text(amount)?;
+                        clock.delta(text).map_err(|m| fields.error(amount, m))?
+                    }
+                    (None, []) => clock
                         .delta(fields.word(2, "an amount like +12f or -0.5s")?)
                         .map_err(|m| line.error(fields.positional()[2].column, m))?,
                 };
-                let used = if fields.positional().len() > 2 { 3 } else { 2 };
-                fields.finish(used)?;
+                let count = fields.positional().len();
+                if let Some(extra) = rest.get(1) {
+                    return Err(fields.error(extra, "unexpected argument"));
+                }
+                fields.finish(count)?;
                 Ok(vec![match command {
-                    "roll" => Op::Roll { clip, delta },
+                    "roll" => Op::Roll { clip, delta, alone },
                     "slip" => Op::Slip { clip, delta },
                     _ => Op::Slide { clip, delta },
                 }])
@@ -3277,9 +3295,10 @@ fn op_line(project: &Project, catalog: &Catalog, op: &Op) -> String {
             let ripple = if *ripple { " ripple" } else { "" };
             format!("trim {clip} {edge} {}{ripple}", clock.print_delta(*delta))
         }
-        Op::Roll { clip, delta } => format!(
-            "roll {clip} {}",
-            clip_clock(clip).unwrap_or(fallback).print_delta(*delta)
+        Op::Roll { clip, delta, alone } => format!(
+            "roll {clip} {}{}",
+            clip_clock(clip).unwrap_or(fallback).print_delta(*delta),
+            if *alone { " alone" } else { "" }
         ),
         Op::Slip { clip, delta } => format!(
             "slip {clip} {}",

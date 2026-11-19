@@ -668,12 +668,42 @@ fn ripple_trims_shift_downstream_material() {
 }
 
 #[test]
+fn a_roll_alone_moves_one_track_s_cut_for_a_j_or_l_cut() {
+    // The sound comes in half a second before its picture: a J cut.
+    let j = run(
+        &scene(),
+        vec![Op::Roll {
+            clip: id("a1"),
+            delta: f(-12),
+            alone: true,
+        }],
+    );
+    assert_eq!(layout(&j, "V1"), vec![row("c1", 0, 48), row("c2", 48, 96)]);
+    assert_eq!(layout(&j, "A1"), vec![row("a1", 0, 36), row("a2", 36, 96)]);
+    // The two stay linked, and each pair still plays one moment of its media together.
+    assert_eq!(j.clip("a2").unwrap().link, j.clip("c2").unwrap().link);
+    assert_eq!(source_in(&j, "a2"), source_in(&j, "c2") - 12);
+    // The picture's cut alone, the sound running on under the next shot: an L cut.
+    let l = run(
+        &scene(),
+        vec![Op::Roll {
+            clip: id("c1"),
+            delta: f(-12),
+            alone: true,
+        }],
+    );
+    assert_eq!(layout(&l, "V1"), vec![row("c1", 0, 36), row("c2", 36, 96)]);
+    assert_eq!(layout(&l, "A1"), vec![row("a1", 0, 48), row("a2", 48, 96)]);
+}
+
+#[test]
 fn roll_moves_the_cut_on_linked_tracks() {
     let project = run(
         &scene(),
         vec![Op::Roll {
             clip: id("c1"),
             delta: f(12),
+            alone: false,
         }],
     );
     assert_eq!(
@@ -690,7 +720,8 @@ fn roll_moves_the_cut_on_linked_tracks() {
             &scene(),
             vec![Op::Roll {
                 clip: id("c2"),
-                delta: f(6)
+                delta: f(6),
+                alone: false,
             }]
         ),
         "roll.no_cut"

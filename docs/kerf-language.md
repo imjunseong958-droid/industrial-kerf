@@ -316,7 +316,11 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
 - `gen=shape@1` is a shape: `kind=rect|ellipse|polygon|star|path`, `width`, `height`, `round`, `sides`,
   `inner`, or a `points="x,y x,y"` path with `closed` and `smooth`; `fill`, `stroke`, and `stroke_width`,
   sizes in frame heights. `trim_end={0f:0 24f:1}` draws its stroke on, with `trim_start` and
-  `trim_offset`. A color with alpha `#ffffff00` is none.
+  `trim_offset`. A color with alpha `#ffffff00` is none. A shape is drawn on a picture the size of
+  the frame, its middle where `x` and `y` put the clip, which is what it turns and scales about,
+  and `anchor_x` is in widths of that picture; `align=left` or `align=right` puts that side of it
+  there instead, as a title's text is put, so a bar at a left-aligned title's `x` starts where the
+  text does and `scale_x={0f:0 9f:1}` grows it from there.
   `fx shape.outline@1` combines another outline with it, in order, by `mode=add|subtract|intersect|difference`,
   with the same `kind`, `width`, `height`, `round`, `sides`, `inner`, `points`, and `smooth`, and `x`, `y`
   (frame heights from the clip's center) and `rotation` to place it. It goes only on a `gen=shape` clip, and is
@@ -439,6 +443,12 @@ transition add from=c1 to=c9 fx=dissolve dur=12f
   changes; `speed c9 {0f:1 24f:1/4}` does the same with a ramp, whose times stay on the clip.
 - `trim`, `roll`, `slide`, and `move` accept either an amount (`+12f`) or an
   absolute `to=`/`at=` position.
+- `roll` moves the cut after a clip, and the cut after each clip linked to
+  it that ends there too. `roll a1 -12f alone` moves the cut on the clip's own track only, and
+  leaves the cut of the clips linked to it where it is: the sound comes in
+  before its picture (a J cut), or with the picture's clip named, the sound
+  runs on under the next shot (an L cut). They stay linked, and play one
+  moment of their media together where both play.
 - `snap=pause|cut [within=<amount>]` on `trim`, `split`, `blade`, `insert`, and
   `overwrite`, and on a `lift` or `extract` that names the clip whose sound
   its edges go by (`extract c1 from=… to=… snap=pause`), moves the edges the
