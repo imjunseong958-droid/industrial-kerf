@@ -1730,6 +1730,18 @@ steps:
   `generate model=depth guide=footage/shot.mp4 out={depth.mp4}`, and then
   `guide={depth.mp4}`.
 
+What is wrong with a scene written as text is often plain on a frame of
+it: a floor drawn over what stands on it, a subject gone past the frame's
+edge. An agent's `look` with `shows` and `at` reads the frame for it,
+without an eye: of every clip that draws there, whichever track it is on,
+where it is, how much of it other clips hide and which, and the edges it
+reaches. It draws a small frame for each clip, side by side: a street of 55
+clips is read in a fifth of a second on four cores. What it leaves out it
+names (`unread`), the lowest tracks' first: clips past 256 on one frame,
+and a clip whose color in the ids pass a higher one has too, which comes
+after 144 clips ([architecture.md](architecture.md#what-directs-a-model),
+3).
+
 A scene written as text can be wrong where no frame shows it: a crate a
 hundredth of the frame over the road, a car's far wheels in it. A depth pass
 shows a model both, and a model draws what shows of a thing. An agent's

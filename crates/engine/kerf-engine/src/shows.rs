@@ -23,11 +23,16 @@
 //! pixel, the order is the nearest of those tried ([`MOST_ORDERS`]).
 //!
 //! It is of the clips of one sequence, a nested sequence being one clip, on a
-//! small frame, so it reads to about a hundredth of the frame.
+//! small frame, so it reads to about a hundredth of the frame. Every clip that
+//! draws is read, whichever track it is on. That is a frame drawn for each,
+//! and they are drawn side by side, as many at once as there are cores, so a
+//! scene of some tens of clips is read in a fraction of a second
+//! (`what_reading_a_frame_costs` in `tests/shows.rs` measures one).
 
 use crate::error::Result;
 use kerf_compose::{ComposeOptions, Compositor, Frame, Pass};
 use kerf_model::{Catalog, Param, Project, Time, Value};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// The height of the frames read, in pixels, where the sequence is as tall.
 const HEIGHT: f64 = 216.0;
@@ -43,8 +48,16 @@ const THROUGH: f32 = 1.0 / 64.0;
 /// every order of five that let light through over one that lets none.
 const MOST_ORDERS: usize = 512;
 
-/// The most clips read one by one on a frame.
-pub const MOST_CLIPS: usize = 32;
+/// The most clips read on a frame. A scene blocked out by hand has some tens,
+/// and each is a small frame to draw and to hold: this is there against a
+/// frame of many hundreds, and where there are more the highest tracks' are
+/// the ones read, a scene being stacked from what is behind up to its subject.
+/// Fewer are read where the ids pass has not a color for each, which as it
+/// is comes after 144 clips: see [`Showing::unread`].
+pub const MOST_CLIPS: usize = 256;
+
+/// The most frames drawn at once, each being some megabytes while it is drawn.
+const MOST_AT_ONCE: usize = 8;
 
 /// What shows of one clip on a frame.
 #[derive(Clone, Debug, PartialEq)]
@@ -75,9 +88,13 @@ pub struct Shown {
 pub struct Showing {
     /// The clips that draw at that moment, from the lowest track up.
     pub clips: Vec<Shown>,
-    /// The share of the frame no clip has.
+    /// The share of the frame no clip that is read has.
     pub empty: f64,
-    /// Clips left out, where there are more than [`MOST_CLIPS`].
+    /// Clips left out, from the lowest track up: those past [`MOST_CLIPS`],
+    /// counting from the highest track down, and any whose color in the ids
+    /// pass is also that of a clip on a higher track, which a frame cannot
+    /// tell from it. They are left out of the frame that is read as well, so
+    /// what is said of the others is as if these were not there.
     pub unread: Vec<String>,
 }
 
@@ -91,6 +108,27 @@ fn compositor(project: &Project, sequence: &str) -> Result<Compositor> {
             ..ComposeOptions::default()
         },
     )?)
+}
+
+/// `project` with the clips of its sequence `id` that `which` picks made clear:
+/// they draw nothing, and still move what is parented to them.
+fn with_clear(project: &Project, id: &str, which: impl Fn(&kerf_model::Clip) -> bool) -> Project {
+    let mut cleared = project.clone();
+    let own = cleared
+        .sequences
+        .iter_mut()
+        .find(|sequence| sequence.id == id)
+        .expect("the sequence is there");
+    for clip in own
+        .tracks
+        .iter_mut()
+        .flat_map(|track| &mut track.clips)
+        .filter(|clip| which(clip))
+    {
+        clip.props
+            .insert("opacity".to_owned(), Param::Static(Value::Number(0.0)));
+    }
+    cleared
 }
 
 fn rounded(share: f64) -> f64 {
@@ -119,7 +157,9 @@ struct Alone {
     place: usize,
     /// Its color as light.
     light: [f32; 3],
-    /// How much of each pixel it would have with nothing before it, from 0 to 1.
+    /// How much of each pixel it reaches it would have with nothing before
+    /// it, from 0 to 1, row by row. It has none of any other pixel, and they
+    /// are not kept: a scene is mostly of clips that are small on the frame.
     cover: Vec<f32>,
     /// The pixels it reaches: left, top, right, bottom. `None` when it has none.
     reach: Option<[usize; 4]>,
@@ -132,7 +172,7 @@ impl Alone {
         let whole: f32 = own.iter().map(|channel| channel * channel).sum();
         let w = (frame.width as usize).max(1);
         let mut reach: Option<[usize; 4]> = None;
-        let cover = frame
+        let cover: Vec<f32> = frame
             .rgba
             .as_chunks::<4>()
             .0
@@ -156,12 +196,34 @@ impl Alone {
                 (along / whole).clamp(0.0, 1.0)
             })
             .collect();
+        let cover = match reach {
+            Some([left, top, right, bottom]) => cover
+                .chunks_exact(w)
+                .take(bottom)
+                .skip(top)
+                .flat_map(|row| &row[left..right])
+                .copied()
+                .collect(),
+            None => Vec::new(),
+        };
         Self {
             place,
             light: own,
             cover,
             reach,
         }
+    }
+
+    /// How much of the pixel at `x` across and `y` down it would have with
+    /// nothing before it.
+    fn cover(&self, x: usize, y: usize) -> f32 {
+        let Some([left, top, right, bottom]) = self.reach else {
+            return 0.0;
+        };
+        if x < left || x >= right || y < top || y >= bottom {
+            return 0.0;
+        }
+        self.cover[(y - top) * (right - left) + x - left]
     }
 }
 
@@ -246,7 +308,111 @@ pub fn showing(project: &Project, sequence: Option<&str>, at: Time) -> Result<Sh
     let whole = compositor(project, &id)?;
     let colors = whole.ids();
     let scale = (HEIGHT / f64::from(target.height.max(1))).min(1.0);
-    let frame = whole.frame(at, scale);
+
+    // The clips of the sequence that draw now, from the lowest track up, each
+    // with its place among the colors.
+    let drawing: Vec<(&kerf_model::Clip, usize)> = target
+        .tracks
+        .iter()
+        .filter(|track| track.enabled)
+        .flat_map(|track| &track.clips)
+        .filter(|clip| clip.enabled && clip.start <= at && at < clip.end())
+        .filter_map(|clip| {
+            let place = colors
+                .iter()
+                .position(|(told, _)| *told == clip.id.as_str());
+            place.map(|place| (clip, place))
+        })
+        .collect();
+    // Those read, taken from the highest track down: as many as are read at
+    // most, each with a color no clip above it has. Two of one color are one
+    // clip to a frame, so the lower is left out, of the frame as well.
+    let (mut read, mut unread) = (Vec::new(), Vec::new());
+    for (clip, place) in drawing.into_iter().rev() {
+        let its_own = read
+            .iter()
+            .all(|(_, taken): &(_, usize)| !is(&colors[*taken].1, &colors[place].1));
+        if read.len() < MOST_CLIPS && its_own {
+            read.push((clip, place));
+        } else {
+            unread.push(clip);
+        }
+    }
+    read.reverse();
+    unread.reverse();
+    let whole = if unread.is_empty() {
+        whole
+    } else {
+        let out = |clip: &kerf_model::Clip| unread.iter().any(|left| left.id == clip.id);
+        compositor(&with_clear(project, &id, out), &id)?
+    };
+
+    let one = |(clip, place): &(&kerf_model::Clip, usize)| -> Result<Alone> {
+        // The frame with the others clear: they still move what is parented to them.
+        let others_clear = with_clear(project, &id, |other| other.id != clip.id);
+        let there = compositor(&others_clear, &id)?.frame(at, scale);
+        Ok(Alone::read(&there, *place, &colors[*place].1))
+    };
+    // Each clip alone is a frame of its own that waits on no other, so they are
+    // drawn side by side, and beside the frame of them all, which the first
+    // drawer starts with. A drawer is a thread that is a pool of one: a
+    // frame's own loops then run on the thread that draws it, and a frame is
+    // one core's work. Not tasks of the pool those loops share, where a thread
+    // that waits on a loop takes up another frame while the one it is in is
+    // half drawn, and would wait for good on a lock that one holds, of what
+    // is kept between frames. And not plain threads, from which every loop of
+    // a small frame is handed to that pool and waited for.
+    let drawers = std::thread::available_parallelism()
+        .map_or(2, usize::from)
+        .min(MOST_AT_ONCE)
+        .min(read.len() + 1);
+    let next = AtomicUsize::new(0);
+    let draw = |first: bool| {
+        let frame = first.then(|| whole.frame(at, scale));
+        let mut alone = Vec::new();
+        loop {
+            let index = next.fetch_add(1, Ordering::Relaxed);
+            let Some(clip) = read.get(index) else {
+                return (frame, alone);
+            };
+            alone.push((index, one(clip)));
+        }
+    };
+    type Drawn = (Option<Frame>, Vec<(usize, Result<Alone>)>);
+    let drawn: Vec<Drawn> = std::thread::scope(|scope| {
+        let draw = &draw;
+        let drawers: Vec<_> = (0..drawers)
+            .map(|drawer| {
+                scope.spawn(move || {
+                    let draw = || draw(drawer == 0);
+                    match rayon::ThreadPoolBuilder::new().num_threads(1).build() {
+                        Ok(of_one) => of_one.install(draw),
+                        Err(_) => draw(),
+                    }
+                })
+            })
+            .collect();
+        drawers
+            .into_iter()
+            .map(|drawer| {
+                drawer
+                    .join()
+                    .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+            })
+            .collect()
+    });
+    let (mut frame, mut alone) = (None, Vec::with_capacity(read.len()));
+    for (whole, clips) in drawn {
+        frame = frame.or(whole);
+        alone.extend(clips);
+    }
+    let frame = frame.expect("the first drawer drew it");
+    // In the clips' order, whichever drawer drew each.
+    alone.sort_by_key(|(index, _)| *index);
+    let alone = alone
+        .into_iter()
+        .map(|(_, alone)| alone)
+        .collect::<Result<Vec<Alone>>>()?;
     let pixels = (frame.width * frame.height).max(1) as usize;
     let empty = frame
         .rgba
@@ -256,69 +422,37 @@ pub fn showing(project: &Project, sequence: Option<&str>, at: Time) -> Result<Sh
         .filter(|pixel| dark(*pixel))
         .count();
 
-    // The clips of the sequence that draw now, from the lowest track up.
-    let drawing: Vec<&kerf_model::Clip> = target
-        .tracks
-        .iter()
-        .filter(|track| track.enabled)
-        .flat_map(|track| &track.clips)
-        .filter(|clip| clip.enabled && clip.start <= at && at < clip.end())
-        .filter(|clip| colors.iter().any(|(told, _)| *told == clip.id.as_str()))
-        .collect();
-    let (read, unread) = drawing.split_at(drawing.len().min(MOST_CLIPS));
-
-    let mut alone = Vec::with_capacity(read.len());
-    for clip in read {
-        let place = colors
-            .iter()
-            .position(|(told, _)| *told == clip.id.as_str())
-            .expect("it has a color");
-        // The frame with the others clear: they still move what is parented to them.
-        let mut others_clear = project.clone();
-        let own = others_clear
-            .sequences
-            .iter_mut()
-            .find(|sequence| sequence.id == id.as_str())
-            .expect("the sequence is there");
-        for other in own
-            .tracks
-            .iter_mut()
-            .flat_map(|track| &mut track.clips)
-            .filter(|other| other.id != clip.id)
-        {
-            other
-                .props
-                .insert("opacity".to_owned(), Param::Static(Value::Number(0.0)));
-        }
-        let there = compositor(&others_clear, &id)?.frame(at, scale);
-        alone.push(Alone::read(&there, place, &colors[place].1));
-    }
-
     // How much of the frame's pixels each clip has, and how much of what it
     // would have each other clip takes by being before it, in pixels.
     let mut seen = vec![0.0f64; alone.len()];
     let mut hidden_by = vec![vec![0.0f64; colors.len()]; alone.len()];
     let mut here: Vec<(usize, f32)> = Vec::with_capacity(alone.len());
     let mut before: Vec<(usize, f32)> = Vec::with_capacity(alone.len());
+    let across = (frame.width as usize).max(1);
     for (index, pixel) in frame.rgba.as_chunks::<4>().0.iter().enumerate() {
+        let (x, y) = (index % across, index / across);
         // The highest track first, which is the nearest where no depth says otherwise.
         here.clear();
         here.extend(alone.iter().enumerate().rev().filter_map(|(clip, alone)| {
-            let cover = alone.cover[index];
+            let cover = alone.cover(x, y);
             (cover > 0.0).then_some((clip, cover))
         }));
         if here.is_empty() {
             continue;
         }
         // A pixel of one clip's color is that clip's, where that clip is, and
-        // all else there is behind it.
-        let front = colors
+        // all else there is behind it. A clip that is read before any other
+        // of that color: no two that are read share one, and a clip elsewhere
+        // in the program may.
+        let front = alone
             .iter()
-            .position(|(_, color)| is(pixel, color))
-            .filter(|front| {
-                alone
+            .find(|alone| alone.cover(x, y) > 0.0 && is(pixel, &colors[alone.place].1))
+            .map(|alone| alone.place)
+            .or_else(|| {
+                colors
                     .iter()
-                    .all(|alone| alone.place != *front || alone.cover[index] > 0.0)
+                    .position(|(_, color)| is(pixel, color))
+                    .filter(|front| alone.iter().all(|alone| alone.place != *front))
             });
         if let Some(front) = front {
             for (clip, cover) in &here {
@@ -356,7 +490,8 @@ pub fn showing(project: &Project, sequence: Option<&str>, at: Time) -> Result<Sh
 
     let (w, h) = (frame.width.max(1) as f64, frame.height.max(1) as f64);
     let mut clips = Vec::with_capacity(read.len());
-    for (((clip, alone), seen), hidden_by) in read.iter().zip(&alone).zip(seen).zip(hidden_by) {
+    for ((((clip, _), alone), seen), hidden_by) in read.iter().zip(&alone).zip(seen).zip(hidden_by)
+    {
         let area: f64 = alone.cover.iter().map(|cover| f64::from(*cover)).sum();
         let share = |count: f64| rounded(count / pixels as f64);
         let of_it = |count: f64| if area > 0.0 { rounded(count / area) } else { 0.0 };
