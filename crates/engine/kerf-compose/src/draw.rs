@@ -103,8 +103,14 @@ pub(crate) struct Drawing {
     pass: Pass,
     /// The color of the one clip a matte is of, as an ids pass writes it.
     matte: Option<[u8; 3]>,
+    /// An ids pass, or a matte, with each clip laid down whole or not at all at each pixel
+    /// ([`ComposeOptions::hard_edges`]).
+    hard: bool,
     /// The color each clip that draws has in an ids pass, in the order they are told in.
     ids: Vec<(Id, Rgba)>,
+    /// Clear pictures the size of a frame, to draw a clip alone on and lay it down hard, kept to
+    /// be drawn on again: a picture that size made anew for each clip took more than drawing it.
+    clear: std::sync::Mutex<Vec<Image>>,
 }
 
 /// How many clips an ids pass has a color of their own for. The colors come round after them,
@@ -233,6 +239,51 @@ fn flat(picture: &mut Image, color: [f32; 3]) {
         pixel[1] = color[1] * alpha;
         pixel[2] = color[2] * alpha;
     });
+}
+
+/// Of `colors`, the one a pixel of a picture in an ids pass is nearest, by its color with its
+/// coverage taken out: the clip's own, or of two clips mixed, the one it is the more of.
+fn nearest<'a>(pixel: &[f32], colors: &'a [[f32; 4]]) -> Option<&'a [f32; 4]> {
+    let distance = |color: &[f32; 4]| -> f32 {
+        (0..3)
+            .map(|channel| (pixel[channel] / pixel[3] - color[channel]).powi(2))
+            .sum()
+    };
+    colors
+        .iter()
+        .min_by(|a, b| distance(a).total_cmp(&distance(b)))
+}
+
+/// `picture`, in an ids pass drawn hard, made whole or nothing at each pixel: whole where it covers
+/// half of it or more with `opacity`, in whichever of `colors` it is [`nearest`] there, and clear
+/// elsewhere. Laid over another, it then gives each pixel one clip's color, never one between two.
+fn harden(picture: &mut Image, opacity: f32, colors: &[[f32; 4]]) {
+    picture.px.par_chunks_mut(4).for_each(|pixel| {
+        match nearest(pixel, colors).filter(|_| pixel[3] * opacity >= 0.5) {
+            Some(color) => pixel.copy_from_slice(color),
+            None => pixel.fill(0.0),
+        }
+    });
+}
+
+/// `layer` laid over `canvas` as [`harden`] would make it and then lay it, in one pass that writes
+/// only the pixels it covers, and leaves `layer` clear.
+fn lay_hard(canvas: &mut Image, layer: &mut Image, colors: &[[f32; 4]]) {
+    canvas
+        .px
+        .par_chunks_mut(4)
+        .zip(layer.px.par_chunks_mut(4))
+        .for_each(|(to, from)| {
+            if from.iter().all(|channel| *channel == 0.0) {
+                return;
+            }
+            if from[3] >= 0.5 {
+                if let Some(color) = nearest(from, colors) {
+                    to.copy_from_slice(color);
+                }
+            }
+            from.fill(0.0);
+        });
 }
 
 struct SequencePlan {
@@ -547,8 +598,27 @@ impl Drawing {
             files,
             pass,
             matte,
+            hard: options.hard_edges && pass == Pass::Ids,
             ids,
+            clear: std::sync::Mutex::default(),
         })
+    }
+
+    /// A clear picture of `w` by `h`: one kept, or a new one.
+    fn clear_picture(&self, w: usize, h: usize) -> Image {
+        let mut kept = self.clear.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        match kept.iter().position(|picture| (picture.w, picture.h) == (w, h)) {
+            Some(at) => kept.swap_remove(at),
+            None => Image::new(w, h),
+        }
+    }
+
+    /// Keep `picture`, clear again, for [`Self::clear_picture`]: as many as are drawn on at once.
+    fn keep_clear(&self, picture: Image) {
+        let mut kept = self.clear.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if kept.len() < 16 {
+            kept.push(picture);
+        }
     }
 
     /// See [`Compositor::ids`](crate::Compositor::ids).
@@ -557,6 +627,16 @@ impl Drawing {
             .iter()
             .map(|(id, color)| (id.to_string(), [color.r, color.g, color.b]))
             .collect()
+    }
+
+    /// The color clip `id` has in an ids pass, premultiplied, as a picture holds it.
+    fn id_color(&self, id: &Id) -> [f32; 4] {
+        premultiplied(
+            self.ids
+                .iter()
+                .find(|(told, _)| told == id)
+                .map_or(Rgba::WHITE, |(_, color)| *color),
+        )
     }
 
     /// A clip's blend, which a pass does not have: it is laid over what is behind it.
@@ -582,12 +662,7 @@ impl Drawing {
         match self.pass {
             Pass::Picture => {}
             Pass::Ids => {
-                let color = self
-                    .ids
-                    .iter()
-                    .find(|(id, _)| *id == plan.clip.id)
-                    .map_or(Rgba::WHITE, |(_, color)| *color);
-                let [r, g, b, _] = premultiplied(color);
+                let [r, g, b, _] = self.id_color(&plan.clip.id);
                 flat(picture, [r, g, b]);
             }
             Pass::Depth | Pass::Relative if plan.three_d => {
@@ -703,12 +778,25 @@ impl Drawing {
             return frame;
         }
         let image = self.draw(0, at, scale);
-        let rgba = match &self.hdr {
+        let mut rgba = match &self.hdr {
             Some(output) if self.pass == Pass::Picture => {
                 image.to_signal16_over_black(|c| output.signal(c))
             }
             _ => image.to_rgba16_over_black(),
         };
+        if self.pass == Pass::Relative {
+            stretch_to_its_own16(&mut rgba);
+        }
+        if let Some(color) = self.matte {
+            rgba.par_chunks_mut(8).for_each(|pixel| {
+                let byte = |at: usize| {
+                    let code = u16::from_le_bytes([pixel[at * 2], pixel[at * 2 + 1]]);
+                    ((u32::from(code) * 255 + 32_767) / 65_535) as u8
+                };
+                let its = (0..3).all(|at| color[at].abs_diff(byte(at)) <= NEAR);
+                pixel[..6].fill(if its { u8::MAX } else { 0 });
+            });
+        }
         Frame {
             width: image.w as u32,
             height: image.h as u32,
@@ -941,6 +1029,10 @@ impl Drawing {
             self.pass.hash(&mut hash);
         }
         self.matte.hash(&mut hash);
+        // Only where it is, so that a pass drawn soft has the number it had.
+        if self.hard {
+            self.hard.hash(&mut hash);
+        }
         self.hash_sequence(&mut hash, 0, at)?;
         Some(hash.finish())
     }
@@ -1303,35 +1395,57 @@ impl Drawing {
         run: &[&Shown],
         moment: &Moment,
     ) {
-        let Moment { at, scale, scene } = *moment;
-        let Some(scene) = scene else {
+        if moment.scene.is_none() {
             return;
-        };
+        }
         let size = (canvas.w, canvas.h);
         let layers: Vec<three_d::Layer> = run
             .iter()
             .filter_map(|shown| {
-                if matches!(shown.plan.source, Source::Mesh) {
-                    return self.mesh(sequence, shown, moment, size);
+                let mut layer = self.in_run(sequence, shown, moment, size)?;
+                if self.hard {
+                    // Whole or not at all, and so too where two cross.
+                    harden(
+                        &mut layer.picture,
+                        layer.opacity,
+                        &[self.id_color(&shown.plan.clip.id)],
+                    );
+                    layer.opacity = 1.0;
                 }
-                let ready = self.ready(sequence, shown, at, scale, size)?;
-                let (picture, depth) = three_d::project_with_depth(
-                    scene,
-                    &shown.plan,
-                    &ready.picture,
-                    (&ready.to_output, ready.crop),
-                    at - shown.plan.clip.start,
-                    size,
-                );
-                Some(three_d::Layer {
-                    picture,
-                    depth,
-                    opacity: ready.opacity,
-                    blend: self.blend(shown.plan.blend),
-                })
+                Some(layer)
             })
             .collect();
-        three_d::composite_by_depth(canvas, &layers);
+        three_d::composite_by_depth(canvas, &layers, self.hard);
+    }
+
+    /// A clip of a run that crosses, projected, and how far ahead it is at each pixel.
+    fn in_run(
+        &self,
+        sequence: &SequencePlan,
+        shown: &Shown,
+        moment: &Moment,
+        size: (usize, usize),
+    ) -> Option<three_d::Layer> {
+        let Moment { at, scale, scene } = *moment;
+        let scene = scene?;
+        if matches!(shown.plan.source, Source::Mesh) {
+            return self.mesh(sequence, shown, moment, size);
+        }
+        let ready = self.ready(sequence, shown, at, scale, size)?;
+        let (picture, depth) = three_d::project_with_depth(
+            scene,
+            &shown.plan,
+            &ready.picture,
+            (&ready.to_output, ready.crop),
+            at - shown.plan.clip.start,
+            size,
+        );
+        Some(three_d::Layer {
+            picture,
+            depth,
+            opacity: ready.opacity,
+            blend: self.blend(shown.plan.blend),
+        })
     }
 
     /// A track of `sequence` at `moment` over `canvas`.
@@ -1404,7 +1518,13 @@ impl Drawing {
             return;
         };
         let p = progress(at, pair.start, pair.end) as f32;
-        let mixed = apply_scaled(&fx, &a, &b, p, scale as f32);
+        let mut mixed = apply_scaled(&fx, &a, &b, p, scale as f32);
+        if self.hard {
+            // Each pixel is the one of the two clips it is the more of.
+            let colors = [&from.plan.clip.id, &to.plan.clip.id].map(|id| self.id_color(id));
+            lay_hard(canvas, &mut mixed, &colors);
+            return;
+        }
         // A fade from or to nothing keeps the one clip's blend mode;
         // between two they mix normally.
         let blend = match (from.shows(at), to.shows(at)) {
@@ -1416,8 +1536,28 @@ impl Drawing {
         composite(canvas, &mixed, 1.0, self.blend(blend));
     }
 
-    /// Draw a shown clip over `canvas` at `moment` with `blend`.
+    /// Draw a shown clip over `canvas` at `moment` with `blend`. Drawn hard, it is drawn by itself
+    /// and laid down whole where it covers half a pixel or more.
     fn layer(
+        &self,
+        canvas: &mut Image,
+        sequence: &SequencePlan,
+        shown: &Shown,
+        moment: &Moment,
+        blend: Blend,
+    ) {
+        if !self.hard {
+            self.lay(canvas, sequence, shown, moment, blend);
+            return;
+        }
+        let mut alone = self.clear_picture(canvas.w, canvas.h);
+        self.lay(&mut alone, sequence, shown, moment, Blend::Normal);
+        lay_hard(canvas, &mut alone, &[self.id_color(&shown.plan.clip.id)]);
+        self.keep_clear(alone);
+    }
+
+    /// [`Self::layer`], with the clip covering as much of each pixel as it does.
+    fn lay(
         &self,
         canvas: &mut Image,
         sequence: &SequencePlan,
@@ -1503,12 +1643,7 @@ impl Drawing {
         let shade = match self.pass {
             Pass::Picture => three_d::mesh::Shade::Lit(&clip.id),
             Pass::Ids => {
-                let color = self
-                    .ids
-                    .iter()
-                    .find(|(id, _)| *id == clip.id)
-                    .map_or(Rgba::WHITE, |(_, color)| *color);
-                let [r, g, b, _] = premultiplied(color);
+                let [r, g, b, _] = self.id_color(&clip.id);
                 three_d::mesh::Shade::Flat([r, g, b])
             }
             Pass::Depth | Pass::Relative => three_d::mesh::Shade::Near,
@@ -2097,6 +2232,34 @@ fn stretch_to_its_own(rgba: &mut [u8]) {
                 u8::MAX
             };
             pixel[..3].fill(grey);
+        }
+    });
+}
+
+/// [`stretch_to_its_own`] for 16-bit RGBA, little-endian: the farthest is a 255th of white, a step
+/// above black at 8 bits, so that it is not taken for black at any depth the file has.
+fn stretch_to_its_own16(rgba: &mut [u8]) {
+    let grey = |pixel: &[u8]| u16::from_le_bytes([pixel[0], pixel[1]]);
+    let (mut least, mut most) = (u16::MAX, 0u16);
+    for pixel in rgba.as_chunks::<8>().0.iter().filter(|pixel| grey(&pixel[..]) > 0) {
+        (least, most) = (least.min(grey(pixel)), most.max(grey(pixel)));
+    }
+    if most == 0 {
+        return;
+    }
+    const FARTHEST: f64 = 65_535.0 / 255.0;
+    let span = f64::from(most - least).max(1.0);
+    rgba.par_chunks_mut(8).for_each(|pixel| {
+        let here = grey(pixel);
+        if here > 0 {
+            let stretched = if most > least {
+                (FARTHEST + f64::from(here - least) / span * (65_535.0 - FARTHEST)).round() as u16
+            } else {
+                u16::MAX
+            };
+            for channel in 0..3 {
+                pixel[channel * 2..channel * 2 + 2].copy_from_slice(&stretched.to_le_bytes());
+            }
         }
     });
 }

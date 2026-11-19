@@ -70,6 +70,13 @@ pub struct ComposeOptions {
     /// pixel is that clip's, as [`Pass::Ids`] has it, and black everywhere else, so what
     /// stands before the clip is cut out of it.
     pub matte: Option<String>,
+    /// In [`Pass::Ids`] and a matte, each clip is laid down whole where it covers half a pixel
+    /// or more and not at all where it covers less, so that every pixel is one clip's color or
+    /// black, with none between two: as a file of the pass is written, for what reads it to take
+    /// each pixel for one clip's. A feathered mask then cuts where it is half through. Else a
+    /// clip covers as much of a pixel as it does, and where two share a pixel it is between
+    /// their colors, as measuring how much of each clip shows reads it.
+    pub hard_edges: bool,
 }
 
 /// A stamp of the code that draws frames: what was drawn under one stamp is what would be drawn
@@ -195,8 +202,9 @@ impl Compositor {
 
     /// The color each clip that draws has in [`Pass::Ids`], as the bytes of a frame: the program's
     /// clips from its lowest track up, then those of the sequences it nests. Along an edge two
-    /// clips share a pixel, which is then between their colors. The first [`ID_COLORS`] each
-    /// have a color of their own, and after them the colors come round.
+    /// clips share a pixel, which is then between their colors, unless the pass is drawn with
+    /// [`ComposeOptions::hard_edges`]. The first [`ID_COLORS`] each have a color of their own,
+    /// and after them the colors come round.
     pub fn ids(&self) -> Vec<(String, [u8; 3])> {
         self.drawing.ids()
     }

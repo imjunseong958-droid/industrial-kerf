@@ -6,6 +6,18 @@ on `main`; its section here becomes the release's notes on GitHub
 
 ## Unreleased
 
+- A pass is written with no loss, and every pixel of an ids pass is one
+  clip's. A `render` step's `pass=ids`, `depth`, `relative` or `normals`,
+  and its `matte=`, were encoded as a picture is, in H.264 that shares color
+  between neighboring pixels and loses some, and a clip with a soft edge,
+  a feathered mask or less than full opacity was laid over what was behind
+  it in part: on a phone in depth with a feathered screen, 7.7% of an ids
+  pass's pixels were of no clip. Each clip is now laid down whole where it
+  covers half a pixel or more, and the file holds every pixel as it was
+  drawn: H.264 with no loss in RGB in a `.mp4`, `.mov` or `.m4v`, with depth
+  in grey at 10 bits, or FFV1 in a `.mkv`, with depth at 16 bits. Another
+  extension is refused. `join` keeps passes as they were written
+  ([docs/shots.md](docs/shots.md#passes)).
 - Zoom Through keeps the next shot filling the frame. Its first version
   brought the next shot in smaller than the frame and grew it to fit, and
   showed it whole from 30% in, so most of the transition was an inset with

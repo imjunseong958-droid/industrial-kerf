@@ -1988,8 +1988,10 @@ fn cover(far: &Layer, near: &Layer, (x, y): (usize, usize), (w, h): (usize, usiz
 }
 
 /// `layers`, far to near as a whole, over `canvas`: at each pixel in the order of their depth there,
-/// the nearest last, each with its opacity and blend.
-pub(super) fn composite_by_depth(canvas: &mut Image, layers: &[Layer]) {
+/// the nearest last, each with its opacity and blend. `hard`, a pixel the line where two meet goes
+/// through is the one of them that covers the more of it, not shared, as an ids pass drawn hard has
+/// it.
+pub(super) fn composite_by_depth(canvas: &mut Image, layers: &[Layer], hard: bool) {
     let (w, h) = (canvas.w, canvas.h);
     canvas
         .px
@@ -2018,6 +2020,11 @@ pub(super) fn composite_by_depth(canvas: &mut Image, layers: &[Layer]) {
                     let shared = match place {
                         0 => 1.0,
                         _ => cover(&layers[here[place - 1]], layer, (x, y), (w, h)),
+                    };
+                    let shared = match hard {
+                        true if shared < 0.5 => continue,
+                        true => 1.0,
+                        false => shared,
                     };
                     let picture = &layer.picture.px[at * 4..at * 4 + 4];
                     let by = layer.opacity * shared;

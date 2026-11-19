@@ -312,3 +312,103 @@ fn a_nested_sequence_is_one_clip_in_a_pass() {
     assert_eq!(Pass::parse(Pass::Depth.name()), Some(Pass::Depth));
     assert_eq!(Pass::parse("albedo"), None);
 }
+
+#[test]
+fn an_ids_pass_drawn_hard_gives_every_pixel_to_one_clip() {
+    // Two planes in depth that cross, a square at less than full opacity with a mask feathered
+    // over 30 pixels, a dissolve between two clips, and a nested sequence over all of them.
+    let body = concat!(
+        "  track V1 video\n    clip inner gen=solid@1 at=0f dur=24f\n",
+        "      set scale=0.3 rotation=30\n      mask k1 ellipse=0.5,0.5,0.4,0.4 feather=12\n",
+        "sequence s2 rate=24 size=320x180 audio=48000\n",
+        "  track V1 video\n    clip sky gen=solid@1 at=0f dur=24f\n",
+        "  track V2 video\n    clip floor gen=solid@1 at=0f dur=24f\n",
+        "      set three_d=true rotate_x=-80 y=0.4 z=1 scale=3\n",
+        "  track V3 video\n    clip wall gen=solid@1 at=0f dur=24f\n",
+        "      set three_d=true rotate_y=60 z=1 scale=0.8\n",
+        "  track V4 video\n    clip soft gen=solid@1 at=0f dur=24f\n",
+        "      set scale=0.5 opacity=0.8\n      mask k1 rect=0.2,0.2,0.8,0.8 feather=30\n",
+        "  track V5 video\n    clip glow gen=solid@1 at=0f dur=12f\n      set scale=0.3 x=-0.3\n",
+        "    clip spark gen=solid@1 at=12f dur=12f\n      set scale=0.2 x=-0.3 rotation=20\n",
+        "    transition t1 from=glow to=spark fx=dissolve@1 dur=8f\n",
+        "  track V6 video\n    clip shot seq=s1 src=0f at=0f dur=24f\n      set x=0.3 y=-0.2\n",
+    );
+    let project = parse_document(
+        &format!("kerf 1\nproject name=\"t\"\nsequence s1 rate=24 size=320x180 audio=48000\n{body}"),
+        Catalog::builtin(),
+    )
+    .unwrap_or_else(|errors| panic!("{errors:?}"))
+    .project;
+    let drawn = |hard_edges: bool| {
+        Compositor::new(
+            &project,
+            Catalog::builtin(),
+            &ComposeOptions {
+                sequence: Some("s2".to_owned()),
+                pass: Pass::Ids,
+                hard_edges,
+                ..ComposeOptions::default()
+            },
+        )
+        .expect("composes")
+    };
+    let (soft, hard) = (drawn(false), drawn(true));
+    let colors: Vec<[u8; 3]> = hard.ids().into_iter().map(|(_, color)| color).collect();
+    // The nested sequence's own clip is told after the program's, and draws as the clip it is in.
+    assert_eq!(colors.len(), 8, "{:?}", hard.ids());
+    let (mut between, mut drawn_hard) = (0, 0);
+    // Mid dissolve, and either side of it.
+    for frame in [4, 9, 12, 15, 20] {
+        let at = Rate::FPS_24.time_of(frame);
+        let of_none = |frame: &Frame| {
+            frame
+                .rgba
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .filter(|pixel| {
+                    let pixel = [pixel[0], pixel[1], pixel[2]];
+                    pixel != [0; 3] && !colors.iter().any(|color| same(*color, pixel))
+                })
+                .count()
+        };
+        between += of_none(&soft.frame(at, 1.0));
+        let frame = hard.frame(at, 1.0);
+        drawn_hard += of_none(&frame);
+        // Not a clip's color to within a step: exactly one.
+        let exact = frame.rgba.as_chunks::<4>().0.iter().all(|pixel| {
+            let pixel = [pixel[0], pixel[1], pixel[2]];
+            pixel == [0; 3] || colors.contains(&pixel)
+        });
+        assert!(exact, "frame {frame:?}");
+        // A pass drawn hard is a frame of its own, kept apart from one drawn soft.
+        assert_ne!(soft.frame_key(at, 1.0), hard.frame_key(at, 1.0));
+    }
+    assert!(between > 1000, "only {between} pixels are between two clips drawn soft");
+    assert_eq!(drawn_hard, 0);
+    // The square, at 0.8 of full opacity over the wall, is between the two drawn soft all over,
+    // and drawn hard is its own color wherever it covers half a pixel or more: its feathered
+    // mask cuts where it is that far through.
+    let at = Rate::FPS_24.time_of(4);
+    let (soft_frame, frame) = (soft.frame(at, 1.0), hard.frame(at, 1.0));
+    let (wall, square) = (colors[2], colors[3]);
+    assert!(!colors.iter().any(|color| same(pixel(&soft_frame, 160, 90), *color)));
+    assert_eq!(pixel(&frame, 160, 90), square);
+    assert_eq!(pixel(&frame, 160, 66), square);
+    assert_eq!(pixel(&frame, 160, 60), wall);
+    // The picture and its other passes do not take the option.
+    let picture = |hard_edges: bool| {
+        Compositor::new(
+            &project,
+            Catalog::builtin(),
+            &ComposeOptions {
+                sequence: Some("s2".to_owned()),
+                hard_edges,
+                ..ComposeOptions::default()
+            },
+        )
+        .expect("composes")
+        .frame_key(Rate::FPS_24.time_of(4), 1.0)
+    };
+    assert_eq!(picture(false), picture(true));
+}
