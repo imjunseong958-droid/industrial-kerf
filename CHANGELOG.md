@@ -6,6 +6,23 @@ on `main`; its section here becomes the release's notes on GitHub
 
 ## Unreleased
 
+- A file whose frames average a little off its rate is imported at the rate it
+  was made at. A 24 a second file one of whose frames is short averages
+  23.962, which no rate counts time in exactly, and it came in at the
+  sequence's rate (30) instead; it now takes the rate FFmpeg says it was made
+  at where that is within a percent. Variable-rate footage keeps its average.
+- Media at another rate than the sequence is cut in whole and no further. A
+  24 a second file in a 30 a second sequence was cut in to the nearest frame
+  of the sequence, which can be past the file's end, and the import was
+  refused ("runs out of media"); it is now cut in to the last whole frame of
+  the sequence within it. Lining recordings up by their sound builds its
+  multicam the same way.
+- A snapped edge that is refused says where it was asked for as a timecode of
+  its media. A clip playing its media at another rate or speed put that place
+  between the media's frames, and the refusal printed it in flicks.
+- A document that writes `parent=` on a clip's `set` line is told it goes on
+  the clip's own line, as a script's `set c2 parent=n1` might suggest, rather
+  than given the list of every property.
 - Zoom Through keeps the next shot filling the frame. Its first version
   brought the next shot in smaller than the frame and grew it to fit, and
   showed it whole from 30% in, so most of the transition was an inset with

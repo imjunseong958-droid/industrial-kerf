@@ -622,6 +622,17 @@ fn edges_snap_into_pauses_and_onto_cuts() {
 }
 
 #[test]
+fn a_refused_snap_says_its_edge_on_the_media_frame() {
+    // At 1.3 the clip plays its media between the media's frames; the refusal still says
+    // where as a timecode of the media, never as flicks.
+    let slowed = run(&base(), "speed c1 1.3").project;
+    let far = known(&slowed, "split c1 at=01:00:00:13 snap=cut within=2f").unwrap_err();
+    assert!(far.message.contains("no cut of `m1` within"), "{far:?}");
+    assert!(!far.message.contains("fl "), "{far:?}");
+    assert!(far.message.contains("of 00:00:"), "{far:?}");
+}
+
+#[test]
 fn an_edge_snaps_past_no_word() {
     let project = base();
     // 2s 20f plays 12.83s, past the middle of "the": the pause before it is

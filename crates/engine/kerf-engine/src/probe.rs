@@ -189,6 +189,28 @@ pub fn parse_rate(rate: Option<&str>) -> Option<f64> {
     Some(numerator / denominator)
 }
 
+/// How many frames a second a picture plays: its average, as FFmpeg counts it from the
+/// frames the file holds. An average that no rate counts time in exactly, as a file one of
+/// whose frames is short or missing has (288000/12019, of a 24 a second file), is not one
+/// the file was made at: there the rate it was made at, FFmpeg's `r_frame_rate`, is taken
+/// where it is a rate and within a percent of the average. Variable-rate footage, whose
+/// `r_frame_rate` is often a timebase such as 90000, keeps its average.
+fn frame_rate(average: Option<&str>, made_at: Option<&str>) -> Option<f64> {
+    let average = parse_rate(average).filter(|fps| *fps > 0.0);
+    let made_at = parse_rate(made_at).filter(|fps| *fps > 0.0);
+    match (average, made_at) {
+        (Some(average), Some(made_at))
+            if kerf_model::Rate::from_fps(average).is_err()
+                && kerf_model::Rate::from_fps(made_at).is_ok()
+                && (made_at - average).abs() <= average * 0.01 =>
+        {
+            Some(made_at)
+        }
+        (Some(average), _) => Some(average),
+        (None, made_at) => made_at,
+    }
+}
+
 /// The color space a file's tags say it is in, when that is not BT.709. Log footage rarely tags
 /// itself, so that is for a person or an agent to write in the document.
 fn input_color(transfer: Option<&str>, primaries: Option<&str>) -> Option<kerf_model::ColorSpace> {
@@ -256,8 +278,10 @@ pub fn parse_ffprobe_json(stdout: &str) -> Result<ProbeInfo> {
     if let Some(video) = video {
         result.width = video.width;
         result.height = video.height;
-        result.fps = parse_rate(video.avg_frame_rate.as_deref())
-            .or_else(|| parse_rate(video.r_frame_rate.as_deref()));
+        result.fps = frame_rate(
+            video.avg_frame_rate.as_deref(),
+            video.r_frame_rate.as_deref(),
+        );
         result.video_codec = video.codec_name.clone();
         result.alpha = video.pix_fmt.as_deref().map(has_alpha);
         result.bits = video
@@ -1711,6 +1735,28 @@ mod tests {
         let info = parse_media_info_json(untagged).expect("parses");
         assert_eq!(info.bit_depth, Some(8));
         assert_eq!((info.color_space, info.primaries), (None, None));
+    }
+
+    #[test]
+    fn a_rate_is_the_one_a_file_was_made_at_where_its_average_is_none() {
+        let probe = |average: &str, made_at: &str| {
+            let json = format!(
+                r#"{{"streams": [{{"codec_type": "audio"}},
+                    {{"codec_type": "video", "width": 640, "height": 360,
+                      "avg_frame_rate": "{average}", "r_frame_rate": "{made_at}"}}],
+                    "format": {{"duration": "60.095"}}}}"#
+            );
+            parse_ffprobe_json(&json).expect("parses").fps
+        };
+        // A 24 a second file, sound first, one of whose frames is short.
+        assert_eq!(probe("288000/12019", "24/1"), Some(24.0));
+        // An average that is a rate stays, NTSC's among them.
+        assert_eq!(probe("24000/1001", "24/1"), Some(24000.0 / 1001.0));
+        assert_eq!(probe("25/1", "50/1"), Some(25.0));
+        // Variable-rate footage keeps its average over a timebase.
+        assert_eq!(probe("2987/100", "90000/1"), Some(29.87));
+        // With no average, the rate it was made at.
+        assert_eq!(probe("0/0", "30/1"), Some(30.0));
     }
 }
 
