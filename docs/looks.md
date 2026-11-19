@@ -111,17 +111,23 @@ enters (`b`). Its keyframe times are percentages of the transition, from
 
 ```text
 kerf-look 1
-look look.zoom-through version=1 name="Zoom Through" category="Transitions" on=transition
+look look.zoom-through version=2 name="Zoom Through" category="Transitions" on=transition
   doc "Punches into the outgoing shot and lands on the next; energetic cuts on a beat."
   param strength number default=1 range=0..2
-  a set scale={0%:1:ease-in 100%:1+0.6*$strength}
-  a fx blur.radialzoom@1 amount={0%:0 100%:40*$strength}
-  b set scale={0%:1-0.3*$strength:ease-out 100%:1}
-  b set opacity={0%:0 30%:1}
+  a set scale={0%:1:ease-in 50%:1+0.6*$strength}
+  a fx blur.radialzoom@1 amount={0%:0 50%:40*$strength}
+  b set scale={50%:1+0.6*$strength:ease-out 100%:1}
+  b fx blur.radialzoom@1 amount={50%:40*$strength 100%:0}
+  b set opacity={30%:0:ease 70%:1}
 ```
 
 It draws over the built-in `stack` transition: both clips show across the
-cut, the incoming one over the outgoing, as the look's lines move them.
+cut, the incoming one over the outgoing, as the look's lines move them. A
+property holds its first key before it and its last after, so `b` waits
+punched in as far as `a` goes, and settles on the frame. Kept at a scale of
+1 or more, the incoming clip covers the outgoing one wherever it shows.
+`look.zoom-through@1` grew it from under 1 and showed it whole from 30%, an
+inset with hard edges, and stays for the documents that name it.
 
 ## Where looks come from
 
