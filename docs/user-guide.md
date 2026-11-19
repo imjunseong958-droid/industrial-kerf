@@ -285,7 +285,8 @@ left alone, and nothing is changed for you.
 ## Check and export
 
 - **Sequence ▸ Run QC** runs the checks a delivery needs: loudness, true peak,
-  gamut, title safe, caption overlap and timing, flash, and black. What it finds
+  gamut, title safe, caption overlap and timing, flash, black, and a picture
+  and its sound more than a frame out of step. What it finds
   is listed under Preflight in the toolbar's Export menu, where Ask Kerf on a
   failed row asks Kerf to fix it; the conversation offers each failed row as
   something to ask.
