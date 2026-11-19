@@ -199,6 +199,20 @@ pub fn airs(leave: f64) -> (f64, f64) {
     (leave - before, before)
 }
 
+/// The part of a quiet, from when to when in seconds, that keeps
+/// [`AIR_AFTER`] from the sound before it and [`AIR_BEFORE`] from the sound
+/// after it; of a quiet too short for both, the one point that divides it in
+/// the same proportion.
+pub(crate) fn clear((from, to): (f64, f64)) -> (f64, f64) {
+    let length = to - from;
+    if length >= AIR_AFTER + AIR_BEFORE {
+        (from + AIR_AFTER, to - AIR_BEFORE)
+    } else {
+        let split = from + length * AIR_AFTER / (AIR_AFTER + AIR_BEFORE);
+        (split, split)
+    }
+}
+
 impl Breaks {
     /// The places `snap` allows within `within` seconds of `at`, nearest
     /// first: each cut, or a point of the quiet the edge is beside.
@@ -286,12 +300,7 @@ impl Breaks {
         for (nth, (from, to, gap)) in beside.into_iter().enumerate() {
             let quiet = (from, to);
             let length = to - from;
-            let (first, last) = if length >= AIR_AFTER + AIR_BEFORE {
-                (from + AIR_AFTER, to - AIR_BEFORE)
-            } else {
-                let split = from + length * AIR_AFTER / (AIR_AFTER + AIR_BEFORE);
-                (split, split)
-            };
+            let (first, last) = clear(quiet);
             let place = at.clamp(first, last);
             if (place - at).abs() > within {
                 continue;

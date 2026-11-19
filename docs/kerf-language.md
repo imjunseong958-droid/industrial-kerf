@@ -414,7 +414,7 @@ transition add from=c1 to=c9 fx=dissolve dur=12f
   changes; `speed c9 {0f:1 24f:1/4}` does the same with a ramp, whose times stay on the clip.
 - `trim`, `roll`, `slide`, and `move` accept either an amount (`+12f`) or an
   absolute `to=`/`at=` position.
-- `snap=pause|cut [within=<amount>]` on `trim`, `split`, `insert`, and
+- `snap=pause|cut [within=<amount>]` on `trim`, `split`, `blade`, `insert`, and
   `overwrite`, and on a `lift` or `extract` that names the clip whose sound
   its edges go by (`extract c1 from=… to=… snap=pause`), moves the edges the
   line gives (`insert` and `overwrite`: `src=` and `out=`) into a pause of
@@ -447,6 +447,26 @@ transition add from=c1 to=c9 fx=dissolve dur=12f
   the pause or gap it could not take and the word in the way. What an edit
   answers with says, as `snapped`, how far each edge went and between which
   words it now is.
+
+  A `blade` is one cut through every track, so `blade at=… snap=pause` goes
+  to one place where every sound it cuts is quiet at once, and never to a
+  place of its own on each track. The sounds are the clips it cuts on sound
+  tracks, two that play one media together being one; where it cuts no clip
+  on a sound track, as with `tracks=V1`, it goes by the media of the picture
+  clips it cuts, as a `split` of one does. Each takes the blade as it would
+  a split of itself, past no word of its own. Where they are quiet together
+  for long enough the blade keeps 0.15 s from the sound before it and
+  0.1 s from the sound after it in each of them, and a shorter time is
+  divided in that proportion; `snapped` names the pause of each and says
+  how long they are quiet together. Sounds with no quiet in common refuse
+  the line and move nothing: it names each clip, where that clip alone
+  would have the blade, and the word another says there. `tracks=` cuts
+  fewer tracks and goes by those alone. `snap=cut` goes to the nearest cut
+  of any picture the blade cuts. A snapped blade cuts the clips it was
+  asked to cut and no other, so a place outside one of them, or inside
+  another clip of its tracks, is refused with that clip named. A clip on a
+  sound track that plays no media, such as a nested sequence, has no index
+  to go by: leave its track out.
 - `extract <clip> said="…"` takes words out of what a clip says and closes
   up, in one line: the phrase as a transcript heard it, found in what the
   clip plays. The range starts in the quiet after the sound before the

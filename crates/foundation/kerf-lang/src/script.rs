@@ -22,7 +22,7 @@ use crate::doc::{
     parse_sequence_color, parse_size, pinned, sequence_fields, sequence_line, take_mask_shape,
     take_role, take_sync, word_or_quote,
 };
-use crate::facts::{airs, Barred, Breaks, Facts, NoFacts, Place, Snap, Snaps, Speech, BEAT};
+use crate::facts::{airs, clear, Barred, Breaks, Facts, NoFacts, Place, Snap, Snaps, Speech, BEAT};
 use crate::sound::Heard;
 use crate::lex::{lex, Arg, Atom, Line};
 use crate::making::print_step;
@@ -33,7 +33,7 @@ use kerf_model::time::{parse_timecode, FLICKS_PER_SECOND};
 use kerf_model::{
     apply, Catalog, Clip, ClipChange, Content, Diagnostic, Domain, Edge, Effect, Id, MarkerChange,
     Mask, Media, NewClip, Op, ParamDef, Params, Project, Rate, Report, Sequence, SequenceChange,
-    Time, TrackChange, TrackKind, TrackRoleChange,
+    Time, Track, TrackChange, TrackKind, TrackRoleChange,
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -393,8 +393,13 @@ impl Script<'_> {
             "blade" => {
                 let s = self.current(line)?;
                 let clock = Positions::of(&self.project, s);
-                let at = required(&mut fields, "at", |t| clock.position(t))?;
+                let mut at = required(&mut fields, "at", |t| clock.position(t))?;
                 let tracks = fields.take_ids("tracks")?;
+                if let Some(snap) = take_snap(&mut fields, &clock)? {
+                    at = self
+                        .snap_blade(s, at, tracks.as_deref(), snap)
+                        .map_err(|m| line.error(1, m))?;
+                }
                 fields.finish(1)?;
                 Ok(vec![Op::Blade {
                     sequence: self.project.sequences[s].id.clone(),
@@ -1713,50 +1718,26 @@ impl Script<'_> {
         &self,
         what: &str,
         clock: &Clock,
-        (from, to): (Time, Time),
+        moved: (Time, Time),
         media: &Media,
         (snap, place): (Snap, &Place),
         speech: &Speech,
     ) {
+        let onto = match snap {
+            Snap::Cut => "onto",
+            Snap::Pause => "into",
+        };
+        let place = place_said(media, (snap, place), speech);
+        self.say_went(what, clock, moved, &format!("{onto} {place}"));
+    }
+
+    /// Keep for [`Applied::snapped`] that `what`, asked for at `from`, went
+    /// to `to` on `clock`, `into` what, when it moved.
+    fn say_went(&self, what: &str, clock: &Clock, (from, to): (Time, Time), into: &str) {
         let frames = clock.rate.frames_round(to - from);
         if frames == 0 {
             return;
         }
-        let position = |seconds: f64| {
-            Clock::of_media(media).print_position(media.rate.round(media_time(seconds)))
-        };
-        let (start, end) = place.quiet;
-        let into = match snap {
-            Snap::Cut => format!("onto the cut of `{}` at {}", media.id, position(start)),
-            Snap::Pause => {
-                // The words either side of where it is now, where a
-                // transcript heard them near.
-                let mut heard = speech.heard();
-                heard.retain(|word| !is_a_sound_note(&word.text));
-                let (before, after) = beside(&heard, place.at, place.at);
-                let before = before.filter(|word| word.end > start - WORDS_BESIDE_SECONDS);
-                let after = after.filter(|word| word.start < end + WORDS_BESIDE_SECONDS);
-                let said = |word: &Word| quote(word.text.trim());
-                let (quiet, beside) = match (place.gap, before.map(said), after.map(said)) {
-                    (true, Some(before), Some(after)) => {
-                        ("gap", format!(", where {before} and {after} run together"))
-                    }
-                    (true, ..) => ("gap", String::new()),
-                    (false, Some(before), Some(after)) => {
-                        ("pause", format!(", between {before} and {after}"))
-                    }
-                    (false, Some(before), None) => ("pause", format!(", after {before}")),
-                    (false, None, Some(after)) => ("pause", format!(", before {after}")),
-                    (false, None, None) => ("pause", String::new()),
-                };
-                format!(
-                    "into the {:.2}s {quiet} of `{}` at {}{beside}",
-                    end - start,
-                    media.id,
-                    position(start)
-                )
-            }
-        };
         self.snapped.borrow_mut().push(format!(
             "{what} went {} frame{} {}, to {}: {into}",
             frames.abs(),
@@ -1764,6 +1745,159 @@ impl Script<'_> {
             if frames < 0 { "earlier" } else { "later" },
             clock.print_position(to),
         ));
+    }
+
+    /// `at`, where a blade was asked for on sequence `s`, moved to the
+    /// nearest place `snap` allows where it still cuts what it cut there and
+    /// nothing else, on one frame for every track: a blade is one cut.
+    ///
+    /// A pause is a place every sound the blade cuts is quiet in at once.
+    /// Those are the clips it cuts on sound tracks, or where it cuts none
+    /// there, the media of the picture clips it cuts, as a split of one goes
+    /// by. Each takes the blade past no word of its own, as it would a split
+    /// of it, so sounds with no quiet in common refuse the blade, and what
+    /// each would take, and what of another is in the way there, is said. A
+    /// cut is the nearest of any picture the blade cuts.
+    fn snap_blade(
+        &self,
+        s: usize,
+        at: Time,
+        tracks: Option<&[Id]>,
+        (snap, within): (Snap, Time),
+    ) -> Result<Time, String> {
+        let sequence = &self.project.sequences[s];
+        let clock = Clock::of_sequence(sequence);
+        let rate = sequence.rate;
+        // The tracks it cuts, as the kernel takes them: one that is missing
+        // or locked is the kernel's to refuse.
+        let cut_tracks: Vec<&Track> = match tracks {
+            None => sequence.tracks.iter().filter(|track| !track.locked).collect(),
+            Some(ids) => {
+                let named: Vec<&Track> = ids
+                    .iter()
+                    .filter_map(|id| sequence.track(id.as_str()))
+                    .filter(|track| !track.locked)
+                    .collect();
+                if named.len() < ids.len() {
+                    return Ok(at);
+                }
+                named
+            }
+        };
+        // It stays inside each clip it was asked to cut and goes into no
+        // other, so that it cuts the same clips wherever it lands.
+        let crosses = |clip: &Clip| clip.start < at && at < clip.end();
+        let frame = rate.frame_duration();
+        let mut cut: Vec<(&Track, &Clip)> = Vec::new();
+        let mut low: Option<(Time, &Clip)> = None;
+        let mut high: Option<(Time, &Clip)> = None;
+        for &track in &cut_tracks {
+            for clip in &track.clips {
+                let (from, to) = if crosses(clip) {
+                    cut.push((track, clip));
+                    (Some(clip.start + frame), Some(clip.end() - frame))
+                } else if clip.end() <= at {
+                    (Some(clip.end()), None)
+                } else {
+                    (None, Some(clip.start))
+                };
+                if let Some(from) = from.filter(|from| low.is_none_or(|(low, _)| *from > low)) {
+                    low = Some((from, clip));
+                }
+                if let Some(to) = to.filter(|to| high.is_none_or(|(high, _)| *to < high)) {
+                    high = Some((to, clip));
+                }
+            }
+        }
+        let with = |has: fn(&Media) -> bool| -> Vec<(&Clip, &Media)> {
+            let media = |clip| self.media_of(clip).filter(|media| has(media));
+            cut.iter()
+                .filter_map(|(_, clip)| Some((*clip, media(clip)?)))
+                .collect()
+        };
+        let goes_by: Vec<(&Clip, &Media)> = match snap {
+            Snap::Pause => {
+                let mut sounds = Vec::new();
+                for (track, clip) in &cut {
+                    if track.kind != TrackKind::Audio {
+                        continue;
+                    }
+                    // What sounds and has no index cannot be said to be quiet.
+                    let media = self.media_of(clip).ok_or_else(|| {
+                        format!(
+                            "clip `{}` sounds and plays no media to snap to: leave its track \
+                             out with tracks=",
+                            clip.id
+                        )
+                    })?;
+                    sounds.push((*clip, media));
+                }
+                if sounds.is_empty() {
+                    sounds = with(|media| media.audio.is_some());
+                }
+                sounds
+            }
+            Snap::Cut => with(|media| media.video.is_some()),
+        };
+        let mut bladed: Vec<Bladed<'_>> = Vec::new();
+        for (clip, media) in goes_by {
+            let source = clip.source_at(at).expect("a media clip plays a source");
+            let speed = clip.speed();
+            // Clips that play one media together, as a picture and its
+            // sound do, are one to go by.
+            if bladed.iter().any(|other| {
+                other.media.id == media.id && other.source == source && other.clip.speed() == speed
+            }) {
+                continue;
+            }
+            let offset = at - clip.start;
+            let reach = speed.played(offset + within) - speed.played(offset);
+            let (found, speech) = self.snaps(media, source, snap, reach)?;
+            bladed.push(Bladed {
+                clip,
+                media,
+                source,
+                reach,
+                found,
+                speech,
+            });
+        }
+        let Some((low, high)) = low.zip(high).filter(|_| !bladed.is_empty()) else {
+            return Err(format!(
+                "nothing the blade cuts at {} has {} to snap to",
+                clock.print_position(at),
+                match snap {
+                    Snap::Pause => "a sound",
+                    Snap::Cut => "a picture",
+                }
+            ));
+        };
+        let span = Span { at, low, high };
+        let (to, into) = match snap {
+            Snap::Pause => quiet_together(&bladed, &span, &clock, within)?,
+            Snap::Cut => {
+                let cuts = bladed.iter().flat_map(|one| {
+                    one.found.places.iter().map(move |place| {
+                        // An index's times are rounded to microseconds.
+                        let cut = one.media.rate.round(media_time(place.at));
+                        let to = one.clip.played_at(cut);
+                        let to = rate.round(to.expect("a media clip plays a source"));
+                        (to, one, place)
+                    })
+                });
+                let (to, one, place) = cuts
+                    .filter(|(to, ..)| span.holds(*to))
+                    .min_by_key(|(to, ..)| (*to - at).abs())
+                    .ok_or_else(|| {
+                        let none: Vec<String> = bladed.iter().map(|one| one.nowhere(snap)).collect();
+                        none.join("; ")
+                    })?;
+                let place = place_said(one.media, (snap, place), &one.speech);
+                (to, format!("onto {place}"))
+            }
+        };
+        self.say_went("the blade", &clock, (at, to), &into);
+        Ok(to)
     }
 
     /// Where on the sequence `clip` plays the source position `text`, on
@@ -2251,6 +2385,269 @@ fn beside<'w>(words: &[&'w Word], from: f64, to: f64) -> (Option<&'w Word>, Opti
         words.iter().rev().find(|word| middle(word) <= from).copied(),
         words.iter().find(|word| middle(word) > to).copied(),
     )
+}
+
+/// A clip a blade cuts and goes by: where the blade was asked for in its
+/// media, and the places beside that.
+struct Bladed<'a> {
+    clip: &'a Clip,
+    media: &'a Media,
+    source: Time,
+    reach: Time,
+    found: Snaps,
+    speech: Rc<Speech>,
+}
+
+impl Bladed<'_> {
+    /// Where the clip plays `seconds` of its media.
+    fn played(&self, seconds: f64) -> Time {
+        self.clip
+            .played_at(media_time(seconds))
+            .expect("a media clip plays a source")
+    }
+
+    /// Where the clip plays a stretch of its media, the earlier end first:
+    /// a clip in reverse plays the end of a pause first.
+    fn plays(&self, (from, to): (f64, f64)) -> (Time, Time) {
+        let (from, to) = (self.played(from), self.played(to));
+        (from.min(to), from.max(to))
+    }
+
+    fn nowhere(&self, snap: Snap) -> String {
+        nothing_near(self.media, self.source, snap, self.reach, &self.found.barred)
+    }
+
+    /// What of this clip is in the way of a blade at `to` on its sequence,
+    /// where that is no place for it: the word a quiet there is on the
+    /// other side of, or the word its transcript has it saying there.
+    fn in_the_way(&self, to: Time) -> Option<String> {
+        let takes = self.found.places.iter().any(|place| {
+            let room = self.plays(place.room);
+            room.0 <= to && to <= room.1
+        });
+        if takes {
+            return None;
+        }
+        let playing = self.clip.source_at(to)?.seconds();
+        let across = self.found.barred.iter().find_map(|barred| match barred {
+            Barred::Across { quiet, word, .. } if quiet.0 <= playing && playing <= quiet.1 => {
+                Some(word)
+            }
+            _ => None,
+        });
+        let heard = self.speech.heard();
+        let says = heard.iter().find(|word| {
+            !is_a_sound_note(&word.text) && word.start <= playing && playing <= word.end
+        });
+        let id = &self.clip.id;
+        Some(match (across, says) {
+            (Some(word), _) => format!(
+                ", which is on the other side of {} in `{id}`",
+                quote(word.text.trim())
+            ),
+            (None, Some(word)) => format!(", while `{id}` says {}", quote(word.text.trim())),
+            (None, None) => format!(", which is no place for `{id}`"),
+        })
+    }
+}
+
+/// How far a blade asked for at `at` may go and still cut the clips it cuts
+/// there and no other: from `low` to `high`, each with the clip that says
+/// so, one the blade would come out of or one it would go into.
+struct Span<'a> {
+    at: Time,
+    low: (Time, &'a Clip),
+    high: (Time, &'a Clip),
+}
+
+impl Span<'_> {
+    fn holds(&self, to: Time) -> bool {
+        self.low.0 <= to && to <= self.high.0
+    }
+
+    /// Why a blade at `to`, which the span does not hold, is refused: what
+    /// it would cut there that it was not asked to, or would not that it was.
+    fn refuses(&self, to: Time) -> String {
+        let (_, clip) = if to < self.low.0 { self.low } else { self.high };
+        let would = if clip.start < self.at && self.at < clip.end() {
+            format!("not cut `{}`", clip.id)
+        } else {
+            format!("cut `{}` as well", clip.id)
+        };
+        format!("where it would {would}: blade there with at=, or leave a track out with tracks=")
+    }
+}
+
+/// Where a blade goes that is to be in a quiet of every clip of `bladed` at
+/// once, within `span`: the frame of `clock`, and what is said of where it
+/// went. Each clip takes it as it would a split of itself; where the clips
+/// are quiet together it keeps clear of the sound either side in each, and
+/// a quiet too short together for that is divided as a short pause of one.
+fn quiet_together(
+    bladed: &[Bladed<'_>],
+    span: &Span<'_>,
+    clock: &Clock,
+    within: Time,
+) -> Result<(Time, String), String> {
+    let (rate, at) = (clock.rate, span.at);
+    let said =
+        |one: &Bladed<'_>, place: &Place| place_said(one.media, (Snap::Pause, place), &one.speech);
+    // What each would take by itself, as a split of it would.
+    let mut alone: Vec<(Time, &Place)> = Vec::new();
+    let mut nowhere: Vec<String> = Vec::new();
+    for one in bladed {
+        let mut frames = one.found.places.iter().filter_map(|place| {
+            let to = frame_within(rate, one.played(place.at), one.plays(place.room))?;
+            Some((to, place))
+        });
+        let first = frames.clone().next();
+        match (frames.find(|(to, _)| span.holds(*to)), first) {
+            (Some(took), _) => alone.push(took),
+            (None, Some((to, place))) => nowhere.push(format!(
+                "`{}` would take the blade to {}, into {}, {}",
+                one.clip.id,
+                clock.print_position(to),
+                said(one, place),
+                span.refuses(to)
+            )),
+            (None, None) => nowhere.push(format!(
+                "in `{}`, {}",
+                one.clip.id,
+                one.nowhere(Snap::Pause)
+            )),
+        }
+    }
+    if !nowhere.is_empty() {
+        return Err(nowhere.join("; "));
+    }
+    // The stretches a frame would do in for all of them: in a quiet of
+    // each, the `nth` of its places, where those are quiet together.
+    let ever = (Time::from_flicks(i64::MIN), Time::from_flicks(i64::MAX));
+    let mut together: Vec<((Time, Time), Vec<usize>)> = vec![(ever, Vec::new())];
+    for one in bladed {
+        together = together
+            .iter()
+            .flat_map(|(all, taken)| {
+                let places = one.found.places.iter().enumerate();
+                places.filter_map(move |(nth, place)| {
+                    let room = one.plays(place.room);
+                    let both = (all.0.max(room.0), all.1.min(room.1));
+                    let taken = taken.iter().copied().chain([nth]).collect();
+                    (both.0 <= both.1).then_some((both, taken))
+                })
+            })
+            .collect();
+    }
+    let mut frames: Vec<_> = together
+        .iter()
+        .filter_map(|(room, taken)| {
+            let places: Vec<(&Bladed<'_>, &Place)> = bladed
+                .iter()
+                .zip(taken)
+                .map(|(one, nth)| (one, &one.found.places[*nth]))
+                .collect();
+            let all = |stretch: fn(&Place) -> (f64, f64)| {
+                let each = places.iter().map(|(one, place)| one.plays(stretch(place)));
+                let from = each.clone().map(|(from, _)| from).max()?;
+                Some((from, each.map(|(_, to)| to).min()?))
+            };
+            let quiet = all(|place| place.quiet)?;
+            let (from, to) = all(|place| clear(place.quiet))?;
+            let (from, to) = if from <= to {
+                (from, to)
+            } else {
+                let (from, to) = clear((quiet.0.seconds(), quiet.1.seconds()));
+                let time = |seconds: f64| Time::from_seconds(seconds).unwrap_or(at);
+                (time(from), time(to))
+            };
+            let to = frame_within(rate, at.clamp(from, to), *room)?;
+            Some((to, places, quiet, taken.iter().max().copied()))
+        })
+        .collect();
+    // The nearer end of the sound each is in first, as for one of them;
+    // else the nearer frame.
+    frames.sort_by_key(|(to, _, _, furthest)| (*furthest, (*to - at).abs()));
+    if let Some((to, places, quiet, _)) = frames.iter().find(|(to, ..)| span.holds(*to)) {
+        let places: Vec<String> = places.iter().map(|(one, place)| said(one, place)).collect();
+        let mut into = format!("into {}", places.join(", and "));
+        if places.len() > 1 {
+            let together = (quiet.1 - quiet.0).seconds();
+            write!(into, ", quiet together for {together:.2}s").unwrap();
+        }
+        return Ok((*to, into));
+    }
+    if let Some((to, ..)) = frames.first() {
+        return Err(format!(
+            "the clips this blade cuts are quiet together at {}, {}",
+            clock.print_position(*to),
+            span.refuses(*to)
+        ));
+    }
+    let each: Vec<String> = bladed
+        .iter()
+        .zip(&alone)
+        .map(|(one, (to, place))| {
+            let place = said(one, place);
+            let way = bladed.iter().find_map(|other| other.in_the_way(*to));
+            let way = way.unwrap_or_default();
+            if *to == at {
+                format!("`{}` is quiet there, in {place}{way}", one.clip.id)
+            } else {
+                format!(
+                    "`{}` would take it to {}, into {place}{way}",
+                    one.clip.id,
+                    clock.print_position(*to)
+                )
+            }
+        })
+        .collect();
+    Err(format!(
+        "the clips this blade cuts have no quiet in common within {:.2}s of {}: {}: cut them one \
+         at a time with tracks=",
+        within.seconds(),
+        clock.print_position(at),
+        each.join("; ")
+    ))
+}
+
+/// A place of `media` that `snap` put an edge in, as it is said of the edge:
+/// the cut, or the pause or gap and the words either side of it.
+fn place_said(media: &Media, (snap, place): (Snap, &Place), speech: &Speech) -> String {
+    let position = |seconds: f64| {
+        Clock::of_media(media).print_position(media.rate.round(media_time(seconds)))
+    };
+    let (start, end) = place.quiet;
+    match snap {
+        Snap::Cut => format!("the cut of `{}` at {}", media.id, position(start)),
+        Snap::Pause => {
+            // The words either side of where it is now, where a
+            // transcript heard them near.
+            let mut heard = speech.heard();
+            heard.retain(|word| !is_a_sound_note(&word.text));
+            let (before, after) = beside(&heard, place.at, place.at);
+            let before = before.filter(|word| word.end > start - WORDS_BESIDE_SECONDS);
+            let after = after.filter(|word| word.start < end + WORDS_BESIDE_SECONDS);
+            let said = |word: &Word| quote(word.text.trim());
+            let (quiet, beside) = match (place.gap, before.map(said), after.map(said)) {
+                (true, Some(before), Some(after)) => {
+                    ("gap", format!(", where {before} and {after} run together"))
+                }
+                (true, ..) => ("gap", String::new()),
+                (false, Some(before), Some(after)) => {
+                    ("pause", format!(", between {before} and {after}"))
+                }
+                (false, Some(before), None) => ("pause", format!(", after {before}")),
+                (false, None, Some(after)) => ("pause", format!(", before {after}")),
+                (false, None, None) => ("pause", String::new()),
+            };
+            format!(
+                "the {:.2}s {quiet} of `{}` at {}{beside}",
+                end - start,
+                media.id,
+                position(start)
+            )
+        }
+    }
 }
 
 fn nothing_near(media: &Media, at: Time, snap: Snap, reach: Time, barred: &[Barred]) -> String {
