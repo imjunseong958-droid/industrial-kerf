@@ -85,7 +85,11 @@ through a cut. They are listed there too and written like any effect or
 transition (`fx c1 add look.shake@1 intensity=0.7 hit=12f`, `transition add
 from=c1 to=c2 fx=look.whip@1 dur=12f`); a time parameter is a time in the
 clip, or the id of a marker in its sequence to land on (`hit=beat1`). The document keeps the one line and the look expands when it draws;
-`fx c1 flatten 1` replaces it with what it expands to. A number that a look's lines only scale animates like any
+`fx c1 flatten 1` replaces it with what it expands to. A time that says when
+a look happens (`hit`, `start`) stays on the moment of the picture it was on
+when the clip's head is trimmed or the clip is split, as keyframes do: the
+second part has it that much earlier, written out where it was left to its
+default, and a marker it names stays where it is. A number that a look's lines only scale animates like any
 effect's; `look` with `effect` marks it `animatable`. A project's own looks are `.kerf/looks/*.kerflook` files.
 
 A track parameter names another picture track of the sequence, whose
@@ -312,7 +316,11 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
 - `gen=shape@1` is a shape: `kind=rect|ellipse|polygon|star|path`, `width`, `height`, `round`, `sides`,
   `inner`, or a `points="x,y x,y"` path with `closed` and `smooth`; `fill`, `stroke`, and `stroke_width`,
   sizes in frame heights. `trim_end={0f:0 24f:1}` draws its stroke on, with `trim_start` and
-  `trim_offset`. A color with alpha `#ffffff00` is none.
+  `trim_offset`. A color with alpha `#ffffff00` is none. A shape is drawn on a picture the size of
+  the frame, its middle where `x` and `y` put the clip, which is what it turns and scales about,
+  and `anchor_x` is in widths of that picture; `align=left` or `align=right` puts that side of it
+  there instead, as a title's text is put, so a bar at a left-aligned title's `x` starts where the
+  text does and `scale_x={0f:0 9f:1}` grows it from there.
   `fx shape.outline@1` combines another outline with it, in order, by `mode=add|subtract|intersect|difference`,
   with the same `kind`, `width`, `height`, `round`, `sides`, `inner`, `points`, and `smooth`, and `x`, `y`
   (frame heights from the clip's center) and `rotation` to place it. It goes only on a `gen=shape` clip, and is
@@ -435,8 +443,15 @@ transition add from=c1 to=c9 fx=dissolve dur=12f
   changes; `speed c9 {0f:1 24f:1/4}` does the same with a ramp, whose times stay on the clip.
 - `trim`, `roll`, `slide`, and `move` accept either an amount (`+12f`) or an
   absolute `to=`/`at=` position.
-- `snap=pause|cut [within=<amount>]` on `trim`, `split`, `blade`, `insert`, and
-  `overwrite`, and on a `lift` or `extract` that names the clip whose sound
+- `roll` moves the cut after a clip, and the cut after each clip linked to
+  it that ends there too. `roll a1 -12f alone` moves the cut on the clip's own track only, and
+  leaves the cut of the clips linked to it where it is: the sound comes in
+  before its picture (a J cut), or with the picture's clip named, the sound
+  runs on under the next shot (an L cut). They stay linked, and play one
+  moment of their media together where both play. `snap=` puts the cut in
+  a quiet of both sounds, as below.
+- `snap=pause|cut [within=<amount>]` on `trim`, `roll`, `split`, `blade`,
+  `insert`, and `overwrite`, and on a `lift` or `extract` that names the clip whose sound
   its edges go by (`extract c1 from=… to=… snap=pause`), moves the edges the
   line gives (`insert` and `overwrite`: `src=` and `out=`) into a pause of
   the media's sound, clear of the sound
@@ -450,8 +465,11 @@ transition add from=c1 to=c9 fx=dissolve dur=12f
   stops 0.15 s after the sound before it, which dies away, and 0.1 s before
   the sound after it, on the nearest frame still in the pause; a pause too
   short for both is divided in that proportion, and an edge already clear
-  of both stays where it was put. A split stays inside its clip and a
-  trimmed clip keeps a length. Without an index, or with nothing in reach,
+  of both stays where it was put. Where the media's picture cuts in that
+  pause within 0.15 s of that place, and 0.06 s or more from the sound
+  either side, the edge goes onto the cut instead, so that a clip of the
+  picture keeps no frame or two of the other shot; the answer says so. A
+  split stays inside its clip and a trimmed clip keeps a length. Without an index, or with nothing in reach,
   the line is refused.
 
   An edge is taken past no word. It goes into the pause it is in, or the
@@ -488,6 +506,14 @@ transition add from=c1 to=c9 fx=dissolve dur=12f
   another clip of its tracks, is refused with that clip named. A clip on a
   sound track that plays no media, such as a nested sequence, has no index
   to go by: leave its track out.
+
+  A `roll` with `snap=` goes through the clips either side of the cut as a
+  blade goes through the clips it cuts: the one before as it would play on
+  past where it ends and the one after as it would play from before where
+  it starts, on each track the roll moves the cut on, so `roll a1 -12f
+  alone snap=pause` puts a J cut where the sound that ends and the sound
+  that comes in early are quiet together. Each clip keeps a frame, and a
+  place where one would not is refused with that clip named.
 - `extract <clip> said="…"` takes words out of what a clip says and closes
   up, in one line: the phrase as a transcript heard it, found in what the
   clip plays. The range starts in the quiet after the sound before the

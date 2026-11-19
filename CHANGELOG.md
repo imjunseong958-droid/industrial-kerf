@@ -15,6 +15,53 @@ on `main`; its section here becomes the release's notes on GitHub
   changing over in the middle as `cross-zoom` does. A new transition takes
   `@2`; one that names `@1` draws as it did until its line names `@2`
   ([docs/looks.md](docs/looks.md#transitions)).
+- The check says when a transition plays frames of another shot: a
+  dissolve or a wipe plays the clip before the cut on past its end and the
+  one after it from before its start, and where the footage cuts to
+  another shot in those frames, it shows through the transition
+  (`transition.other_shot`, in QC's flash frames). It says how many frames,
+  and whether `align=start` or `align=end` keeps it to the shots, or how
+  short it would have to be.
+- `look.whip@2` takes both shots along together, the next on the heels of
+  the one leaving, smeared most at their fastest. The first version slid
+  the next shot over the last at another speed, with a hard edge between
+  them; a document that names `look.whip@1` still draws it, and is no
+  longer told it draws as the newer one.
+- A J or L cut is one line: `roll a1 -12f alone` moves the cut on the
+  clip's own track and leaves the cut of the clips linked to it, so the
+  sound of the next shot comes in before its picture, or with the
+  picture's clip named, the sound runs on under the next shot. The clips
+  stay linked. It took unlinking, rolling and linking again before. A roll
+  takes `snap=pause` and `snap=cut` as a blade does: it goes where the
+  sound that ends and the sound that comes in are quiet together.
+- A shape lines up with a title: `align=left` or `align=right` on a
+  `gen=shape` puts that side of it at its `x`, as a title's text is put,
+  and it turns and scales about that side. A lower third's bar at its
+  left-aligned name's `x` now starts where the name does, and
+  `scale_x={0f:0 9f:1}` grows it from there; before, `x` was the shape's
+  middle, and `anchor_x` counted in widths of the whole frame.
+- Cutting a clip that has a look on it keeps the look on its moment. A zoom
+  pulse, shake, flash, pop-in or wobble says when it happens in its clip
+  (`hit=`, `start=`), and splitting the clip gave both parts the same time,
+  so a pulse after the split landed past the end of each part and played in
+  neither, and one left at the clip's start played again at the second
+  part's. Trimming a clip's head moved it later on the picture too. Now the
+  second part of a split, and a clip whose head is trimmed, have it that
+  much earlier, as keyframes are kept; a time that names a marker stays
+  where the marker is.
+- `snap=pause` no longer leaves a frame or two of the next shot at a clip's
+  edge. Where the footage's picture cuts inside the pause, within 0.15 s of
+  where the edge would have gone and clear of the sound either side, the
+  edge goes onto that cut, and the answer says so.
+- A sound clip whose gain fades it out by its last frame, or in from its
+  first, is no longer said to be cut in the middle of a sound: the check
+  and `look` with `cuts` count it as faded, as under a crossfade.
+- An agent's `look` with `effect` reads an effect named with its version,
+  as the reference writes them (`push@1`, `look.pop-in@1`), where it was
+  refused; a version this Kerf does not read is said as a document's is.
+- A speed change that would make a clip run into the next one names that
+  clip and how many frames longer it would be.
+
 - Lining recordings up by their sound says when one offset does not fit. An
   agent's `look` with `sync` gave each recording one offset and built a
   multicam by it, whether or not the two stayed together. It now places

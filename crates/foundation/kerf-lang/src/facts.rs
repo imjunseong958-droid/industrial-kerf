@@ -149,6 +149,9 @@ pub struct Place {
     pub quiet: (f64, f64),
     /// Whether that quiet is a gap between two words said in one breath.
     pub gap: bool,
+    /// Whether `at` is a cut of the picture in that pause, which an edge
+    /// goes to rather than leave a frame or two of the shot across it.
+    pub on_cut: bool,
 }
 
 /// Why a quiet beside an edge is no place for it.
@@ -185,6 +188,13 @@ const AIR_BEFORE: f64 = 0.10;
 /// How near the sound either side a frame may still be put, where none
 /// falls further in: about as fine as an index measures.
 const PAUSE_MARGIN: f64 = 0.02;
+/// How far from where it would go in a pause an edge goes to a cut of the
+/// picture there instead: the frame or two of another shot a check calls a
+/// flash, at any rate from 15 frames a second.
+const CUT_NEAR: f64 = 0.15;
+/// The least air a cut of the picture leaves the sound either side for an
+/// edge to go to it: more than a cut that is tight on the sound has.
+const CUT_AIR: f64 = 0.06;
 
 /// The pause a cut leaves where it took something out, unless a line says
 /// another: the air a snapped edge leaves either side, together.
@@ -245,6 +255,7 @@ impl Breaks {
                         room: (cut, cut),
                         quiet: (cut, cut),
                         gap: false,
+                        on_cut: true,
                     })
                     .collect();
                 places.sort_by(|a, b| (a.at - at).abs().total_cmp(&(b.at - at).abs()));
@@ -327,11 +338,26 @@ impl Breaks {
                 } else {
                     PAUSE_MARGIN.min(length / 4.0)
                 };
+                // A cut of the picture in the pause, a frame or two from the place, is where
+                // the edge goes: as quiet, with air kept either side, and no frame of the shot
+                // across it left at the clip's edge, which the place would have left.
+                let cut = self
+                    .cuts
+                    .iter()
+                    .copied()
+                    .filter(|&cut| {
+                        !gap && (cut - place).abs() <= CUT_NEAR
+                            && (cut - at).abs() <= within
+                            && cut >= from + CUT_AIR
+                            && cut <= to - CUT_AIR
+                    })
+                    .min_by(|a, b| (a - place).abs().total_cmp(&(b - place).abs()));
                 found.places.push(Place {
-                    at: place,
+                    at: cut.unwrap_or(place),
                     room: (from + margin, to - margin),
                     quiet,
                     gap,
+                    on_cut: cut.is_some(),
                 });
             }
         }
@@ -459,6 +485,29 @@ mod tests {
         let room = |snap, at| breaks.snaps(snap, at, 0.5, &none).places[0].room;
         assert_eq!(room(Snap::Pause, 2.5), (2.02, 2.98));
         assert_eq!(room(Snap::Cut, 3.7), (4.0, 4.0));
+    }
+
+    #[test]
+    fn an_edge_in_a_pause_goes_to_the_cut_of_the_picture_beside_it() {
+        // The picture cuts 0.1 s into the pause, where an edge snapped after the sound before
+        // would go 0.15 s in and keep two frames of the next shot: it goes to the cut.
+        let breaks = |cuts: Vec<f64>| Breaks {
+            pauses: vec![(2.0, 3.0)],
+            gaps: Vec::new(),
+            cuts,
+        };
+        let none = Speech::default();
+        let first = |breaks: Breaks, at: f64| {
+            let place = breaks.snaps(Snap::Pause, at, 0.5, &none).places[0];
+            ((place.at * 1000.0).round() / 1000.0, place.on_cut)
+        };
+        assert_eq!(first(breaks(vec![2.1]), 1.9), (2.1, true));
+        assert_eq!(first(breaks(vec![2.88]), 3.2), (2.88, true));
+        // Not one hard against the sound, nor one further in than a flash is long.
+        assert_eq!(first(breaks(vec![2.03]), 1.9), (2.15, false));
+        assert_eq!(first(breaks(vec![2.6]), 1.9), (2.15, false));
+        // An edge already clear of both, beside a cut, goes to it as well.
+        assert_eq!(first(breaks(vec![2.6]), 2.5), (2.6, true));
     }
 
     /// "So we" in one breath, parting for 0.12 s, then a pause, "closed"
