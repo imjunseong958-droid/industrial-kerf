@@ -272,7 +272,10 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
   `audio.deesser`, `audio.denoise`, `audio.delay`, `audio.reverb`, `audio.eq`, `audio.eq3`,
   `audio.limiter`) go on a clip or a bus, and on a bus see the sum, as a compressor on a mix should.
 - `set c1 three_d=true z=0.5 rotate_y=30` places a clip in depth. Its 2D geometry applies first; `z`
-  is in frame heights, positive away from the viewer. `gen=camera@1` sees the scene, the topmost one
+  is in frame heights, positive away from the viewer. A shape or a title in depth is all of its outline, however far past the
+  frame it reaches: `gen=shape@1 width=6 height=8 rotate_x=90` is a floor six frame heights across and eight deep, which a crop
+  cuts only where it says, and one so large that its picture would be huge is drawn coarser. A solid is its frame, and particles
+  stay within theirs. `gen=camera@1` sees the scene, the topmost one
   showing (`x y z pan tilt roll fov focus aperture`, animatable, and with a `parent=` it goes where the parent takes it), and at its defaults a clip at
   z=0 looks as it does in 2D. `depth=0.1` makes a clip in depth a solid that deep behind it, in the outline of its picture's alpha, so a title
   has sides with its letters' colors, its holes kept, and shadows as long as it is deep; it animates, 0 is flat as ever, and a light behind a solid does not come through it. `bevel=0.02` cuts its edges back that far at each face, at 45 degrees and at most half its depth, following its outline and keeping its holes: lights shade the cut as a surface of its own, and its shadow follows it; it animates, and 0 is no bevel. `bevel_profile=round` makes the cut a quarter of a circle, so that the way it faces turns from the side to the face across its width and lights shade it as a curve; `flat`, as it is when not said, is the 45-degree cut. A bevel is as wide on each side of a clip scaled unevenly. `gen=light@1` (`kind=point|ambient|directional|environment color intensity shadow size image`, with
