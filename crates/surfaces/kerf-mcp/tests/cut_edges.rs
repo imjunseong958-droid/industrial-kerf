@@ -23,6 +23,14 @@
 //! And what a check says of a cut ([`kerf_lang::Sound::edge`]) is scored
 //! against the same truth. Run with `--nocapture` for the table. It says
 //! how the placing does on this recording, not on speech: nobody listened.
+//!
+//! A second recording is the same words said as people talk
+//! ([`Room::runs_on`]): most of those inside a phrase run on into the next
+//! with no quiet between them, and a stopped consonant closes anywhere in a
+//! word. `snap=pause` refuses a cut between two such words, and the ways it
+//! might be put in the dip between them instead are scored on those cuts
+//! ([`ways`]). None of them is built: each puts cuts inside words, taking a
+//! closure or a hiss for where two words part, or finds next to no dips.
 
 use kerf_engine::derivatives::DerivativeCache;
 use kerf_engine::{cached_media_sound, media_index, CancellationToken};
@@ -57,6 +65,11 @@ impl Dice {
 struct Said {
     /// From the first of it an ear can pick out of the room to the last.
     heard: (f64, f64),
+    /// From the first of it to where its voice stops, or the hiss after
+    /// that: the word less its decay, with any closure inside it. A cut
+    /// between two words that run together goes through the decay of the
+    /// first, and is in a word where it is in the body of one.
+    body: (f64, f64),
     /// Where its voice is at its full level, less the gap of a stopped
     /// consonant, which `closure` is.
     voiced: (f64, f64),
@@ -78,6 +91,14 @@ struct Room {
     /// Whether lips part with a tick an eighth of a second before a word
     /// that follows a pause.
     ticks: bool,
+    /// Whether it is said as people talk. Most words inside a phrase then
+    /// run on into the next: it starts from no time at all to a tenth of a
+    /// second after the voice or the hiss of the one before stops, over
+    /// what is left of its decay, so the level between them dips from not
+    /// at all to all the way to the room. And a stopped consonant closes
+    /// anywhere in a word, near its start or its end as well as in its
+    /// middle, on nothing or on a murmur of the voice.
+    runs_on: bool,
 }
 
 /// About four minutes of words in a room whose tone is at `room` dBFS.
@@ -87,6 +108,7 @@ fn recording(room: f64, seed: u64) -> Recording {
             tone: room,
             ends_at: None,
             ticks: false,
+            runs_on: false,
         },
         seed,
     )
@@ -108,12 +130,18 @@ fn recording_in(room: &Room, seed: u64) -> Recording {
     // The ticks have dice of their own, so that the words are the same
     // words with them and without.
     let mut ticks = Dice(seed ^ 0x71c5);
+    // And so has the way it is said.
+    let mut manner = Dice(seed ^ 0x900d_5a1d);
+    // Where the next word begins: after all of the one before, or over its
+    // decay.
+    let mut begins = samples.len();
     for word in 0..WORDS {
-        starts.push(samples.len());
+        samples.resize(samples.len().max(begins), 0.0);
+        starts.push(begins);
         // What an ear picks out of the room: 6 dB over its tone in the band
         // speech is in, under 8 kHz, which is a third of this noise.
         let audible = tone(word) * (8.0f64 / 24.0).sqrt() * 2.0;
-        let start = samples.len() as f64 / RATE as f64;
+        let start = begins as f64 / RATE as f64;
         let length = dice.between(0.14, 0.55);
         let level = 0.3 * 10f64.powf(dice.between(-6.0, 3.0) / 20.0);
         let pitch = dice.between(110.0, 230.0);
@@ -124,12 +152,29 @@ fn recording_in(room: &Room, seed: u64) -> Recording {
             let at = length * dice.between(0.4, 0.6);
             (at, at + dice.between(0.04, 0.09))
         });
+        // As people talk a closure is as long, and anywhere that leaves
+        // 0.05 s of the voice before it and 0.03 s after, which is its
+        // release; two in five are voiced, a murmur 12 to 24 dB down.
+        let (closure, murmur) = if room.runs_on {
+            let closure = (length > 0.2 && manner.roll() < 0.4).then(|| {
+                let held = manner.between(0.04, 0.09);
+                let at = manner.between(0.05, length - held - 0.03);
+                (at, at + held)
+            });
+            let voiced = closure.is_some() && manner.roll() < 0.4;
+            let murmur = 10f64.powf(-manner.between(12.0, 24.0) / 20.0);
+            (closure, if voiced { murmur } else { 0.0 })
+        } else {
+            (closure, 0.0)
+        };
         let lead = hiss_before.unwrap_or(0.0);
         // How loud the voice and the hiss are at `t` seconds into the word.
         let voice = |t: f64| {
             let t = t - lead;
-            if t < 0.0 || closure.is_some_and(|(from, to)| t >= from && t < to) {
+            if t < 0.0 {
                 0.0
+            } else if closure.is_some_and(|(from, to)| t >= from && t < to) {
+                level * murmur
             } else if t < length {
                 level * (t / 0.012).min(1.0)
             } else {
@@ -147,7 +192,7 @@ fn recording_in(room: &Room, seed: u64) -> Recording {
             }
         };
         let whole = lead + length + hiss_after.unwrap_or(0.0).max(decay * 9.0);
-        let (mut first, mut last) = (None, 0.0);
+        let (mut first, mut last, mut stops) = (None, 0.0, 0.0);
         let mut smooth = 0.0;
         for n in 0..(whole * RATE as f64) as usize {
             let t = n as f64 / RATE as f64;
@@ -158,26 +203,42 @@ fn recording_in(room: &Room, seed: u64) -> Recording {
             // Noise in a band around 5.5 kHz, where an `s` is.
             smooth += 0.2 * (dice.between(-1.0, 1.0) - smooth);
             let band = smooth * 6.0 * (std::f64::consts::TAU * 5500.0 * t).sin();
-            samples.push((voice(t) * harmonics + hiss(t) * band) as f32);
+            let sample = (voice(t) * harmonics + hiss(t) * band) as f32;
+            // Over what the word before left sounding, where it runs on.
+            match samples.get_mut(begins + n) {
+                Some(under) => *under += sample,
+                None => samples.push(sample),
+            }
             if voice(t).max(hiss(t)) >= audible {
                 first.get_or_insert(t);
                 last = t;
+                if t < lead + length || hiss(t) >= audible {
+                    stops = t;
+                }
             }
         }
         words.push(Said {
             heard: (start + first.unwrap_or(0.0), start + last),
+            body: (start + first.unwrap_or(0.0), start + stops),
             voiced: (start + lead + 0.02, start + lead + length),
             closure: closure.map(|(from, to)| (start + lead + from, start + lead + to)),
         });
         // Mostly the short gaps inside a phrase, and the pauses between
         // phrases; a word's decay runs on into either.
-        let gap = match dice.roll() {
+        let inside = dice.roll();
+        let gap = match inside {
             roll if roll < 0.55 => dice.between(0.03, 0.14),
             roll if roll < 0.80 => dice.between(0.18, 0.34),
             _ => dice.between(0.4, 1.2),
         };
         let silent = (start + lead + length + gap) * RATE as f64;
         samples.resize(samples.len().max(silent as usize), 0.0);
+        begins = samples.len();
+        // Three in five of the words inside a phrase run on into the next.
+        if room.runs_on && inside < 0.55 && manner.roll() < 0.6 {
+            let stopped = start + lead + length + hiss_after.unwrap_or(0.0);
+            begins = ((stopped + manner.between(0.0, 0.10)) * RATE as f64) as usize;
+        }
         // A tick of 12 ms, far under the voice, in a pause long enough to
         // have one: where the next word starts, less an eighth of a second.
         if room.ticks && gap >= 0.3 {
@@ -751,6 +812,7 @@ fn a_tick_and_a_room_that_changes_leave_a_pause_a_pause() {
                 tone: -55.0,
                 ends_at: None,
                 ticks: true,
+                runs_on: false,
             },
         ),
         (
@@ -759,6 +821,7 @@ fn a_tick_and_a_room_that_changes_leave_a_pause_a_pause() {
                 tone: -55.0,
                 ends_at: Some(-38.0),
                 ticks: false,
+                runs_on: false,
             },
         ),
     ] {
@@ -792,5 +855,463 @@ fn a_tick_and_a_room_that_changes_leave_a_pause_a_pause() {
             "{name}"
         );
         assert!(now.placed * 10 >= (now.placed + now.refused) * 7, "{name}");
+    }
+}
+
+/// The hop an index keeps a level for, in seconds.
+const HOP: f64 = 0.01;
+
+/// A dip in the levels an index kept: the hops about a lowest one that are
+/// within 3 dB of it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Dip {
+    /// Its first hop, and the one after its last.
+    hops: (usize, usize),
+    lowest: usize,
+    /// The level of its lowest hop, in dBFS.
+    floor: f64,
+    /// How far that is under the loudest of the 0.15 s before the dip and
+    /// of the 0.15 s after it, whichever is less.
+    depth: f64,
+}
+
+impl Dip {
+    /// The dip `hop` is in, of the hops `within`: the one its level runs
+    /// down into.
+    fn about(levels: &[f64], hop: usize, within: (usize, usize)) -> Self {
+        let run = |lowest: usize| {
+            let under = levels[lowest] + 3.0;
+            let from = (within.0..lowest)
+                .rev()
+                .take_while(|at| levels[*at] <= under)
+                .last()
+                .unwrap_or(lowest);
+            let to = (lowest + 1..within.1)
+                .take_while(|at| levels[*at] <= under)
+                .last()
+                .map_or(lowest + 1, |at| at + 1);
+            (from, to)
+        };
+        let (from, to) = run(hop);
+        let lowest = (from..to)
+            .min_by(|a, b| levels[*a].total_cmp(&levels[*b]))
+            .unwrap_or(hop);
+        let (from, to) = run(lowest);
+        let loudest = |hops: std::ops::Range<usize>| {
+            levels[hops]
+                .iter()
+                .copied()
+                .fold(f64::NEG_INFINITY, f64::max)
+        };
+        let before = loudest(from.saturating_sub(15)..from);
+        let after = loudest(to..(to + 15).min(levels.len()));
+        Self {
+            hops: (from, to),
+            lowest,
+            floor: levels[lowest],
+            depth: before.min(after) - levels[lowest],
+        }
+    }
+
+    /// Where a cut in it goes: the middle of its lowest hop, in seconds.
+    fn at(&self) -> f64 {
+        (self.lowest as f64 + 0.5) * HOP
+    }
+
+    /// The frame nearest that which is still in the dip, where one is.
+    fn frame(&self) -> Option<f64> {
+        let (from, to) = (self.hops.0 as f64 * HOP, self.hops.1 as f64 * HOP);
+        let (first, last) = ((from * FPS).ceil(), (to * FPS).floor());
+        (first <= last).then(|| (self.at() * FPS).round().clamp(first, last) / FPS)
+    }
+}
+
+/// A cut asked for between two words with no quiet between them, which
+/// `snap=pause` refuses.
+struct RunOn<'a> {
+    levels: &'a [f64],
+    sound: &'a Sound,
+    /// The sound it is asked in, from the quiet before it to the quiet
+    /// after, in hops.
+    stretch: (usize, usize),
+    /// What of that the two words a transcript has either side of it are
+    /// timed over, in hops, and where it parts them, in seconds.
+    both: (usize, usize),
+    parted: f64,
+}
+
+impl RunOn<'_> {
+    /// Every dip of `depth` dB or more that the hops `from` to `to` run
+    /// down into: shorter than a gap, and with sound of this stretch on
+    /// both its sides.
+    fn dips(&self, (from, to): (usize, usize), depth: f64) -> Vec<Dip> {
+        let mut dips: Vec<Dip> = Vec::new();
+        for hop in from..to {
+            let dip = Dip::about(self.levels, hop, self.stretch);
+            if dip.depth >= depth
+                && dip.hops.1 - dip.hops.0 < 10
+                && dip.hops.0 > self.stretch.0
+                && dip.hops.1 < self.stretch.1
+                && !dips.contains(&dip)
+            {
+                dips.push(dip);
+            }
+        }
+        dips
+    }
+
+    /// The lowest dip of `depth` dB or more in what the two words are
+    /// timed over, wherever in them it is.
+    fn lowest(&self, depth: f64) -> Option<Dip> {
+        self.dips(self.both, depth)
+            .into_iter()
+            .min_by(|a, b| a.floor.total_cmp(&b.floor))
+    }
+
+    /// The lowest dip of `depth` dB or more within `slack` seconds of where
+    /// the transcript parts the two words: one that neither word is timed
+    /// right through with more than `slack` to spare, which at
+    /// [`kerf_lang::WORD_SLACK`] is what makes a gap a place.
+    fn near(&self, slack: f64, depth: f64) -> Option<Dip> {
+        self.dips(self.stretch, depth)
+            .into_iter()
+            .filter(|dip| {
+                dip.hops.1 as f64 * HOP >= self.parted - slack
+                    && dip.hops.0 as f64 * HOP <= self.parted + slack
+            })
+            .min_by(|a, b| a.floor.total_cmp(&b.floor))
+    }
+
+    /// Whether a dip is down at the room's tone.
+    fn quiet(&self, dip: &Dip) -> bool {
+        self.sound.heard(dip.at(), dip.at() + 1e-6) == Some(Heard::Quiet)
+    }
+
+    /// Whether a dip is low enough by Scarlet's levels: down at the room's
+    /// tone, or at -48 dBFS or under and 10 dB under both its sides.
+    fn scarlets(&self, dip: &Dip) -> bool {
+        self.quiet(dip) || (dip.floor <= -48.0 && dip.depth >= 10.0)
+    }
+
+    /// Whether the two words have one dip of 3 dB between them and no
+    /// other: no closure to take for where they part, and no parting to
+    /// take a closure for.
+    fn one_dip(&self) -> bool {
+        self.dips(self.both, 3.0).len() == 1
+    }
+}
+
+/// Where the cuts a way put in a dip came down.
+#[derive(Default)]
+struct Landed {
+    found: usize,
+    /// Between the two words they were asked between.
+    between: usize,
+    /// In a word: in the closure of its stopped consonant, in the hiss it
+    /// starts or ends with, or in its voice.
+    closure: usize,
+    hiss: usize,
+    voice: usize,
+    /// Between two other words: on the other side of a whole word.
+    across: usize,
+}
+
+impl Landed {
+    /// A cut at `at` seconds, asked for between `words[pair]` and the next.
+    fn land(&mut self, words: &[Said], pair: usize, at: f64) {
+        self.found += 1;
+        // In a word is further into it than an index tells: a hop.
+        let inside = words
+            .iter()
+            .find(|word| word.body.0 + HOP < at && at < word.body.1 - HOP);
+        match inside {
+            Some(word) if word.closure.is_some_and(|(from, to)| from <= at && at <= to) => {
+                self.closure += 1
+            }
+            Some(word) if word.voiced.0 < at && at < word.voiced.1 => self.voice += 1,
+            Some(_) => self.hiss += 1,
+            None if words[pair].body.1 - HOP <= at && at <= words[pair + 1].body.0 + HOP => {
+                self.between += 1
+            }
+            None => self.across += 1,
+        }
+    }
+
+    fn in_words(&self) -> usize {
+        self.closure + self.hiss + self.voice
+    }
+}
+
+/// A way of putting a cut in the dip between two words that run together,
+/// and how it did: at the dip's lowest point, and on the frame nearest that
+/// which is still in the dip, where one is.
+struct Way {
+    name: &'static str,
+    rule: fn(&RunOn<'_>) -> Option<Dip>,
+    lowest: Landed,
+    framed: Landed,
+}
+
+/// The ways measured, none of which is built: from the dip alone, as it can
+/// be taken where an aligner times the words, to the most a transcript's
+/// times and the levels can be asked to agree on.
+fn ways() -> Vec<Way> {
+    let way = |name, rule| Way {
+        name,
+        rule,
+        lowest: Landed::default(),
+        framed: Landed::default(),
+    };
+    vec![
+        way("the lowest of both words, 6 dB", |ask| ask.lowest(6.0)),
+        way("the lowest of both, Scarlet's levels", |ask| {
+            ask.lowest(0.0).filter(|dip| ask.scarlets(dip))
+        }),
+        way("within 0.06 s of the parting, 6 dB", |ask| ask.near(0.06, 6.0)),
+        way("within 0.06 s, 10 dB", |ask| ask.near(0.06, 10.0)),
+        way("within 0.06 s, 20 dB", |ask| ask.near(0.06, 20.0)),
+        way("within 0.06 s, Scarlet's levels", |ask| {
+            ask.near(0.06, 0.0).filter(|dip| ask.scarlets(dip))
+        }),
+        way("within 0.06 s, at the room's tone", |ask| {
+            ask.near(0.06, 6.0).filter(|dip| ask.quiet(dip))
+        }),
+        way("within 0.03 s, 10 dB", |ask| ask.near(0.03, 10.0)),
+        way("the parting in it, 10 dB", |ask| ask.near(0.0, 10.0)),
+        way("within 0.06 s and the lowest of both", |ask| {
+            ask.near(0.06, 6.0)
+                .filter(|dip| ask.lowest(6.0) == Some(*dip))
+        }),
+        way("within 0.06 s and the only dip", |ask| {
+            ask.near(0.06, 6.0).filter(|_| ask.one_dip())
+        }),
+        way("within 0.06 s, the only dip, room's tone", |ask| {
+            ask.near(0.06, 6.0)
+                .filter(|dip| ask.quiet(dip) && ask.one_dip())
+        }),
+        way("the parting in it, the only, room's tone", |ask| {
+            ask.near(0.0, 6.0)
+                .filter(|dip| ask.quiet(dip) && ask.one_dip())
+        }),
+    ]
+}
+
+/// Cuts asked for between every two words of a recording said as people
+/// talk, in a room whose tone is at `tone` dBFS: what `snap=pause` makes of
+/// them with a transcript, and what each of [`ways`] would make of those it
+/// refuses for want of a quiet.
+fn dips_in(tone: f64, seed: u64) -> Option<(Score, Vec<Way>)> {
+    let directory = TempDir::new().unwrap();
+    let room = Room {
+        tone,
+        ends_at: None,
+        ticks: false,
+        runs_on: true,
+    };
+    let recording = recording_in(&room, seed);
+    let path = directory.path().join("speech.wav");
+    write_wav(&path, &recording.samples);
+    pauses_before(&path)?;
+    let cache = DerivativeCache::new(directory.path());
+    media_index(&path, &cache, &CancellationToken::new()).unwrap();
+    let sound = cached_media_sound(&path, &cache).expect("an index keeps the levels");
+    let frames = (recording.samples.len() as f64 / RATE as f64 * FPS) as usize;
+    let document = format!(
+        "kerf 1\nproject name=\"Cuts\"\n\
+         media m1 path=\"speech.wav\" rate=24 dur={frames}f audio=1ch@48000\n\
+         sequence s1 rate=24 size=1920x1080\n  track A1 audio\n    \
+         clip a1 media=m1 at=00:00:00:00 dur={frames}f\n"
+    );
+    let catalog = Catalog::builtin();
+    let project = parse_document(&document, catalog).unwrap().project;
+    let facts = CachedFacts::new(directory.path());
+
+    // A transcript parts each two words as far out as its times are: in the
+    // quiet between them, or about where the one stops and the other starts
+    // when they run together.
+    let words = &recording.words;
+    let mut dice = Dice(0xfeed_beef);
+    let parts: Vec<f64> = words
+        .windows(2)
+        .map(|pair| {
+            let (from, to) = if pair[1].heard.0 - pair[0].heard.1 >= 0.1 {
+                (pair[0].heard.1, pair[1].heard.0)
+            } else {
+                (pair[0].body.1, pair[1].body.0)
+            };
+            (from + to) / 2.0 + dice.between(-0.12, 0.12)
+        })
+        .collect();
+    let transcribed = Transcribed {
+        cached: &facts,
+        speech: transcript(words, &parts),
+    };
+    let speech = &transcribed.speech;
+    let levels: Vec<f64> = (0..(sound.duration() / HOP).round() as usize)
+        .map(|hop| {
+            let at = (hop as f64 + 0.5) * HOP;
+            sound.loudest(at, at + 1e-6).unwrap()
+        })
+        .collect();
+    // Every quiet an edge may go into, as `snap=pause` has them.
+    let mut quiets = sound.pauses();
+    let between_words = |(from, to): &(f64, f64)| speech.through(*from, *to).is_none();
+    quiets.extend(sound.gaps().into_iter().filter(between_words));
+    quiets.sort_by(|a, b| a.0.total_cmp(&b.0));
+
+    let (mut asked, mut now) = (Score::default(), Score::default());
+    let mut ways = ways();
+    // Of the cuts placed now that are in a word, how many are in its voice.
+    let mut in_voices = 0;
+    let (mut run_on, mut dipless) = (0, 0);
+    for (at, pair) in words.windows(2).enumerate() {
+        // A cut is asked for where the transcript parts the two.
+        let frame = (speech.words[at].end * FPS).round() as i64;
+        let on_frame = frame as f64 / FPS;
+        asked.place(words, pair, &sound, on_frame, Some(on_frame));
+        let placed = apply_script_with(
+            &project,
+            catalog,
+            &transcribed,
+            &format!("split a1 at={frame}f snap=pause as=b1"),
+        )
+        .ok()
+        .map(|applied| applied.project.clip("b1").unwrap().start.seconds());
+        now.place(words, pair, &sound, on_frame, placed);
+        if let Some(placed) = placed {
+            in_voices += usize::from(
+                words
+                    .iter()
+                    .any(|word| word.voiced.0 < placed && placed < word.voiced.1),
+            );
+            continue;
+        }
+        // Refused: the sound it was asked in, between the quiets either
+        // side, where it was asked for in none.
+        let before = quiets.iter().rev().find(|quiet| quiet.1 <= on_frame);
+        let after = quiets.iter().find(|quiet| quiet.0 >= on_frame);
+        let (Some(before), Some(after)) = (before, after) else {
+            continue;
+        };
+        if quiets
+            .iter()
+            .any(|quiet| quiet.0 < on_frame && on_frame < quiet.1)
+        {
+            continue;
+        }
+        run_on += 1;
+        let hop = |seconds: f64| (seconds / HOP).round() as usize;
+        let stretch = (hop(before.1), hop(after.0));
+        let ask = RunOn {
+            levels: &levels,
+            sound: &sound,
+            stretch,
+            both: (
+                hop(speech.words[at].start).max(stretch.0),
+                hop(speech.words[at + 1].end).min(stretch.1),
+            ),
+            parted: speech.words[at].end,
+        };
+        // Whether the level is lowest where the two truly meet.
+        let meet = (
+            hop(pair[0].body.1).saturating_sub(1),
+            hop(pair[1].body.0) + 2,
+        );
+        let lowest_there = |dip: &Dip| meet.0 <= dip.lowest && dip.lowest < meet.1;
+        dipless += usize::from(!ask.dips(meet, 3.0).iter().any(lowest_there));
+        for way in &mut ways {
+            if let Some(dip) = (way.rule)(&ask) {
+                way.lowest.land(words, at, dip.at());
+                if let Some(frame) = dip.frame() {
+                    way.framed.land(words, at, frame);
+                }
+            }
+        }
+    }
+
+    println!(
+        "\na room at {tone} dBFS, said as people talk: speech at {:.0} dB, quiet under {:.0} dB",
+        sound.speech(),
+        sound.quiet_below()
+    );
+    println!(
+        "        placed refused in words across clip decay clip onset in gap   hard air after air before    moved"
+    );
+    println!("{}\n{}", asked.row("asked"), now.row("now"));
+    println!(
+        "of the {} refused, {run_on} are between two words with no quiet between them, and at \
+         {dipless} of those no dip of 3 dB has its lowest where the two meet",
+        now.refused
+    );
+    println!(
+        "{:<40} {:>5} {:>7} {:>7} {:>4} {:>5} {:>6} {:>8} {:>7}",
+        "a cut in a dip",
+        "found",
+        "between",
+        "closure",
+        "hiss",
+        "voice",
+        "across",
+        "on frame",
+        "in word"
+    );
+    for way in &ways {
+        println!(
+            "{:<40} {:>5} {:>7} {:>7} {:>4} {:>5} {:>6} {:>8} {:>7}",
+            way.name,
+            way.lowest.found,
+            way.lowest.between,
+            way.lowest.closure,
+            way.lowest.hiss,
+            way.lowest.voice,
+            way.lowest.across,
+            way.framed.found,
+            way.framed.in_words(),
+        );
+    }
+    // No cut placed now is across a word or in a voice, a closure included.
+    assert_eq!(now.across, 0, "{tone}");
+    assert_eq!(in_voices, 0, "{tone}");
+    // Every cut refused is one between two words with no quiet between.
+    assert_eq!(run_on, now.refused, "{tone}");
+    Some((now, ways))
+}
+
+#[test]
+fn a_dip_between_two_words_is_not_told_from_one_inside_a_word() {
+    let (Some((quiet, in_quiet)), Some((noisy, in_noise))) =
+        (dips_in(-55.0, 0x5eed_cafe), dips_in(-38.0, 0x5eed_cafe))
+    else {
+        eprintln!("skipping: ffmpeg is not installed");
+        return;
+    };
+    // Said as people talk, with a closure anywhere in a word, a third of
+    // the cuts asked for have no quiet to go into and are refused, and what
+    // is placed is in no word in the quiet room. In the noisy one a cut in
+    // a hundred is: where a word runs on into one that starts with a hiss
+    // barely over the room's tone, the hiss reads as the room and as part
+    // of a quiet before the word, and the cut is a few hundredths of a
+    // second into it.
+    assert_eq!(quiet.in_words, 0);
+    assert!(noisy.in_words * 100 <= noisy.placed * 2);
+    for now in [&quiet, &noisy] {
+        assert!(now.refused * 4 >= now.placed + now.refused);
+    }
+    // Which is what a cut in the dip between two such words would be for,
+    // and no way of finding the dip keeps out of words: the lowest dip of
+    // two words is mostly a closure inside one of them; a transcript's
+    // times are too far out to say which dip is where it parts them; and
+    // where the level is lowest between two words is often in the hiss one
+    // of them starts or ends with. The ways that ask for the most find a
+    // dip at fewer than one in ten of the cuts refused.
+    let refused = quiet.refused + noisy.refused;
+    for (in_quiet, in_noise) in in_quiet.iter().zip(&in_noise) {
+        let found = in_quiet.lowest.found + in_noise.lowest.found;
+        let in_words = in_quiet.lowest.in_words() + in_noise.lowest.in_words();
+        assert!(
+            in_words > 0 || found * 10 < refused,
+            "{}: {in_words} of {found}",
+            in_quiet.name
+        );
     }
 }
