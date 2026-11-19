@@ -569,12 +569,112 @@ pub(crate) fn temporal(
     }
     scale4(acc, 1.0 / n as f32)
 }
-/// Motion-blur settings from the `motion_blur` param: (shutter in progress units, samples).
+/// How far apart on the screen, in pixels of the picture, a pixel's motion blur sees what moves at
+/// most from one of its samples to the next. Each sample is sharp, so copies much further apart than
+/// this read as copies and not as a smear.
+pub(crate) const BLUR_STEP: f32 = 4.0;
+
+/// The most moments a pixel's motion blur takes of a card scene: at 1080p, with the motion blur as it
+/// comes, the cards of any of them are then under 6 pixels apart in its fastest frame. Three cards at
+/// each of these are about what the GPU's scene kernel has room for.
+pub(crate) const MOST_MOMENTS: usize = 80;
+
+/// The most samples a pixel's motion blur takes of a transition that works out where the picture is
+/// at each, for what drawing it costs: at 1080p, with the motion blur as it comes, Block Motion's
+/// blocks, which move fastest, are then under 5 pixels apart.
+pub(crate) const MOST_SAMPLES: usize = 120;
+
+/// How many stretches of the shutter [`samples_over`] follows what moves over to see how fast it goes.
+const PROBES: usize = 8;
+
+/// How long the shutter is open from the `motion_blur` param, in progress units: `max` at 100 %, 0 for
+/// no motion blur.
+pub(crate) fn exposure(t: &Tx, max: f32) -> f32 {
+    max * t.frac("motion_blur").clamp(0.0, 1.0)
+}
+
+/// How many samples a shutter open for `open` (progress units) around `p` takes: as many as keep
+/// `points` within [`BLUR_STEP`] pixels of where they were at the sample before, where they move
+/// fastest over any of [`PROBES`] stretches of the shutter, and `most` at most. `points` are places on
+/// the screen that move with the picture, as they are at a moment, `None` for one that is not on it
+/// then. 1 with the shutter closed.
+pub(crate) fn samples_over(
+    p: f32,
+    open: f32,
+    most: usize,
+    points: impl Fn(f32) -> Vec<Option<[f32; 2]>>,
+) -> usize {
+    if open <= 0.0 {
+        return 1;
+    }
+    let (first, last) = ((p - open / 2.0).max(0.0), (p + open / 2.0).min(1.0));
+    if last <= first {
+        return 1;
+    }
+    let stretch = (last - first) / PROBES as f32;
+    let mut farthest = 0f32;
+    let mut before = points(first);
+    for i in 1..=PROBES {
+        let after = points(first + stretch * i as f32);
+        for (a, b) in before.iter().zip(&after) {
+            if let (Some(a), Some(b)) = (a, b) {
+                farthest = farthest.max((b[0] - a[0]).hypot(b[1] - a[1]));
+            }
+        }
+        before = after;
+    }
+    // Pixels over the whole shutter at that speed; NaN (from no picture to speak of) takes one sample.
+    let across = farthest / stretch * open;
+    let steps = (across / BLUR_STEP)
+        .ceil()
+        .clamp(1.0, (most.max(2) - 1) as f32);
+    steps as usize + 1
+}
+
+/// Motion blur from the `motion_blur` param that follows how far the picture moves: the shutter, as
+/// [`exposure`] gives it, and the samples [`samples_over`] gives `points` over it, [`MOST_SAMPLES`] at
+/// most. [`temporal`] takes them.
+pub(crate) fn following(
+    t: &Tx,
+    max: f32,
+    points: impl Fn(f32) -> Vec<Option<[f32; 2]>>,
+) -> (f32, usize) {
+    let open = exposure(t, max);
+    (open, samples_over(t.p, open, MOST_SAMPLES, points))
+}
+
+/// The moments [`temporal`] evaluates a pixel at, for what is the same at every pixel to be worked out
+/// once a frame; [`averaged`] then takes a pixel at each.
+pub(crate) fn sample_times(p: f32, shutter: f32, n: usize) -> Vec<f32> {
+    if n <= 1 || shutter <= 1e-5 {
+        return vec![p];
+    }
+    (0..n)
+        .map(|i| (p + (i as f32 / (n - 1) as f32 - 0.5) * shutter).clamp(0.0, 1.0))
+        .collect()
+}
+
+/// A pixel at each of `n` of [`sample_times`] (`f` takes which), averaged as [`temporal`] averages them.
+pub(crate) fn averaged(n: usize, f: impl Fn(usize) -> [f32; 4]) -> [f32; 4] {
+    if n <= 1 {
+        return f(0);
+    }
+    let mut acc = [0.0; 4];
+    for i in 0..n {
+        let c = f(i);
+        for k in 0..4 {
+            acc[k] += c[k];
+        }
+    }
+    scale4(acc, 1.0 / n as f32)
+}
+/// Motion-blur settings from the `motion_blur` param: (shutter in progress units, samples), a number
+/// of samples that does not follow how far the picture moves.
 pub(crate) fn shutter(t: &Tx, max: f32) -> (f32, usize) {
     let mb = t.frac("motion_blur").clamp(0.0, 1.0);
     if mb <= 0.0 {
         (0.0, 1)
     } else {
-        (max * mb, ((mb * 12.0).ceil() as usize).clamp(2, 12))
+        (exposure(t, max), ((mb * 12.0).ceil() as usize).clamp(2, 12))
     }
 }

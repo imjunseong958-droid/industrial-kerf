@@ -3,10 +3,11 @@
 //! frame works out once (a wipe's sweep, the cards of a scene), and a test holds each kernel to
 //! [`apply_scaled`](super::apply_scaled) value by value.
 
-use super::motion::{card_scene, whip_layers, Layer};
+use super::motion::{block_blur, card_scene, film_roll_blur, slice_blur, whip_layers, Layer};
 use super::wipe::{angle_dir, field_range, star_dist, threshold, WipeStyle};
 use super::{
     bell, disc_offsets, ease_in, ease_in_out, ease_out, hash, mid_mix, smoothstep, Fx, Tx,
+    MOST_MOMENTS,
 };
 use crate::filmcraft::gpu::run as run_ops;
 use crate::filmcraft::gpufx::FxOp;
@@ -22,11 +23,12 @@ const ON_THE_CPU: &[(&str, &str)] = &[(
     "dense optical flow between the two frames, which needs both read back",
 )];
 
-/// As many of the numbers as `v` in `kernels.wgsl` has room for.
-const NUMBERS: usize = 800;
+/// The most cards a pixel of a card scene reads over all of its moments: three at each.
+const MOST_CARDS: usize = 3 * MOST_MOMENTS;
 
-/// The most samples a pixel takes of a card scene's cards, past which the uniforms would not hold them.
-const MOST_CARDS: usize = 36;
+/// As many of the numbers as `v` in `kernels.wgsl` has room for: the eye's four and each card's
+/// sixteen, which is what any of the kernels reads the most of.
+pub(super) const NUMBERS: usize = 4 + 16 * MOST_CARDS;
 
 /// Which of the kernels in `kernels.wgsl` a pass runs.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -198,17 +200,6 @@ fn card_numbers(t: &Tx, focal: f32, moments: &[Vec<Layer>]) -> Option<(Vec<f32>,
     Some((numbers, layers))
 }
 
-/// The moments `motion::scene` draws a scene at.
-fn moments((shutter, samples): (f32, usize), p: f32) -> Vec<f32> {
-    if samples <= 1 || shutter <= 0.0 {
-        vec![p]
-    } else {
-        (0..samples)
-            .map(|i| (p + (i as f32 / (samples - 1) as f32 - 0.5) * shutter).clamp(0.0, 1.0))
-            .collect()
-    }
-}
-
 /// A color's numbers, then a kernel's own.
 fn with_color(color: [f32; 4], own: &[f32]) -> Vec<f32> {
     let mut numbers = color.to_vec();
@@ -374,7 +365,7 @@ fn how(id: &str, t: &Tx) -> Option<How> {
         return Some(how);
     }
     if let Some(found) = card_scene(id, t) {
-        let at = moments(found.blur, t.p);
+        let at = found.moments(t);
         let built: Vec<Vec<Layer>> = at.iter().map(|&q| (found.build)(q)).collect();
         let (numbers, layers) = card_numbers(t, found.focal, &built)?;
         let mut pass = Pass::new(Entry::Scene, 0, numbers).with_count(at.len());
@@ -832,7 +823,7 @@ fn how_move(id: &str, t: &Tx) -> Option<How> {
                     &[dx, dy, travel + gap, travel, gap, truth(horiz)],
                 ),
             )
-            .with_time(super::shutter(t, 0.1))
+            .with_time(film_roll_blur(t, travel + gap))
         }
         "stretch" => {
             let e = ease_in_out(p);
@@ -845,9 +836,14 @@ fn how_move(id: &str, t: &Tx) -> Option<How> {
             let cols = t.num("blocks").round().clamp(2.0, 32.0);
             let rows = (cols * h / w).round().clamp(1.0, 32.0);
             let (lanes, cells) = if horiz { (rows, cols) } else { (cols, rows) };
-            let (sh, n) = super::shutter(t, 0.08);
             let sgn = if horiz { dx } else { dy };
-            moves(2, vec![lanes, cells, sgn, truth(horiz)]).with_time((sh, n.min(4)))
+            moves(2, vec![lanes, cells, sgn, truth(horiz)]).with_time(block_blur(
+                t,
+                lanes,
+                cells,
+                sgn,
+                if horiz { w } else { h },
+            ))
         }
         "frame" => {
             let fw = t.px("frame_width");
@@ -908,7 +904,7 @@ fn how_move(id: &str, t: &Tx) -> Option<How> {
             let span = (hi - lo).max(1.0);
             let dist = w.abs() * ax.abs() + h * ay.abs() + span * 0.2;
             moves(7, vec![count, ax, ay, px_, py_, lo, span, dist])
-                .with_time(super::shutter(t, 0.08))
+                .with_time(slice_blur(t, count, dist))
         }
         "wave" => {
             let band = travel * 0.25;
