@@ -7,8 +7,8 @@
 use crate::RuntimeError;
 use kerf_engine::ProbeInfo;
 use kerf_lang::{
-    apply_script_with, parse_document, print_document, print_ops, Breaks, Facts, PrintOptions,
-    Sound, Speech,
+    apply_script_with, bring_forward, parse_document, print_document, print_ops, Breaks, Facts,
+    NoFacts, PrintOptions, Sound, Speech,
 };
 use kerf_model::{
     apply, track_role, AudioInfo, Catalog, ClipChange, Content, Diagnostic, Domain, Edge, Effect,
@@ -494,6 +494,34 @@ impl Edit {
             }
         }
     }
+}
+
+/// The edit `script` made on `base`, as it is on `current`, the same project
+/// edited since: its operations run again, each place it names moved with
+/// the clips that held it. Refused where a line would not be the edit it
+/// was (`kerf_lang::bring_forward`), with the line and the clip that stopped
+/// it.
+pub(crate) fn forward(
+    base: &Project,
+    current: &Project,
+    script: &str,
+) -> Result<Edited, RuntimeError> {
+    let refused = |errors: Vec<Diagnostic>| diagnostics_error("PROPOSAL_NOT_FORWARDED", &errors);
+    let forwarded = bring_forward(base, current, catalog(), script).map_err(refused)?;
+    // What is kept is the script, so it is the script that has to make this
+    // project.
+    let edited = Edit::Script {
+        script: print_ops(current, catalog(), &forwarded.ops),
+    }
+    .run(current, &NoFacts)
+    .map_err(|error| RuntimeError::new("PROPOSAL_NOT_FORWARDED", error.message))?;
+    if edited.project != forwarded.project {
+        return Err(RuntimeError::new(
+            "PROPOSAL_NOT_FORWARDED",
+            "the operations do not read back as the edit they made on the project as it is",
+        ));
+    }
+    Ok(edited)
 }
 
 pub(crate) fn apply_ops(project: &Project, ops: &[Op]) -> Result<Edited, RuntimeError> {

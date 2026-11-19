@@ -449,6 +449,22 @@ impl RuntimeClient {
         })?)
     }
 
+    /// Bring the stale open proposal `proposal_id` onto the project at
+    /// `base_revision`, as its next version
+    /// ([`RuntimeRequest::ForwardProposal`]).
+    pub fn forward_proposal(
+        &self,
+        request_key: &str,
+        base_revision: u64,
+        proposal_id: &str,
+    ) -> Result<StateSnapshot, RuntimeError> {
+        expect_state(self.request(RuntimeRequest::ForwardProposal {
+            proposal_id: proposal_id.to_owned(),
+            request_key: request_key.to_owned(),
+            base_revision,
+        })?)
+    }
+
     /// Load a `project.kerf` changed outside kerfd as one revision.
     pub fn import_projection_request(
         &self,
@@ -1144,7 +1160,7 @@ fn request_has_stable_idempotency_key(request: &RuntimeRequest) -> bool {
         // Staging has a request key, but it is not backed by the durable
         // operation-receipt table. A lost response is therefore ambiguous
         // and must not be replayed automatically.
-        RuntimeRequest::StageScriptProposal { .. } => false,
+        RuntimeRequest::StageScriptProposal { .. } | RuntimeRequest::ForwardProposal { .. } => false,
         RuntimeRequest::RejectProposal {
             idempotency_key: Some(idempotency_key),
             ..

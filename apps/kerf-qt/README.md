@@ -797,8 +797,10 @@ unchanged snapshots do not redraw the UI or reopen playback.
 
 Proposal review shows semantic clip changes, time ranges, and all supplied
 before/after field values in a scrollable view. Stale proposals and proposals
-whose field diff was truncated cannot be accepted; ask the agent to restage
-or split them into smaller changes.
+whose field diff was truncated cannot be accepted. A stale one is brought
+onto the edit as it is with Clip ▸ Bring Proposal Forward
+(`proposal.forward`), as its next version; otherwise ask the agent to restage
+it, or to split a truncated one into smaller changes.
 
 Agent settings are in Settings (Edit → Settings…, ⌘, ; on macOS in the
 application menu), also reachable from the chat's ⋯ menu. Settings → AI

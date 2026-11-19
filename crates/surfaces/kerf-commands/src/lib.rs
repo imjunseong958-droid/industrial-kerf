@@ -196,6 +196,11 @@ pub enum Request {
         proposal_id: String,
         revision: u64,
     },
+    Forward {
+        #[serde(rename = "proposalId")]
+        proposal_id: String,
+        revision: u64,
+    },
     Abort,
     /// Load a project.kerf changed outside Kerf as one revision.
     ProjectionImport,
@@ -396,9 +401,29 @@ fn can_accept(context: &Context) -> Result<(), &'static str> {
     match &context.proposal {
         None => Err("There is no proposal to review"),
         Some(ProposalState {
+            blocked: Some(why), ..
+        }) if why == STALE => Err(
+            "The edit changed under this proposal: bring it forward (Clip menu), or ask Kerf to prepare it again",
+        ),
+        Some(ProposalState {
             blocked: Some(_), ..
         }) => Err("Ask Kerf to prepare this proposal again"),
         Some(_) => Ok(()),
+    }
+}
+
+/// How a proposal is blocked when the edit has changed under it.
+const STALE: &str = "stale";
+
+/// A proposal the edit changed under can be brought onto the edit as it is.
+fn can_forward(context: &Context) -> Result<(), &'static str> {
+    connected(context)?;
+    match &context.proposal {
+        None => Err("There is no proposal to review"),
+        Some(ProposalState {
+            blocked: Some(why), ..
+        }) if why == STALE => Ok(()),
+        Some(_) => Err("This proposal is already on the edit as it is"),
     }
 }
 
@@ -794,6 +819,16 @@ pub static COMMANDS: &[Command] = &[
             r#"{"proposal"?: string}"#,
         )),
         &["Escape"],
+    ),
+    // A proposal the edit changed under: its operations run again on the
+    // edit as it is, as its next version, to be reviewed again.
+    params(
+        menu(
+            command("proposal.forward", "Bring Proposal Forward", can_forward),
+            Menu::Clip,
+            1,
+        ),
+        r#"{"proposal"?: string}"#,
     ),
     menu(command("ai.stop", "Stop Kerf", agent_busy), Menu::Clip, 1),
     keys(
@@ -1432,21 +1467,24 @@ pub fn run(id: &str, context: &Context, params: &Value) -> Result<Request, Strin
         "qc.run" => Request::Check {
             sequence: params.trimmed("sequence"),
         },
-        "proposal.accept" | "proposal.reject" => {
+        "proposal.accept" | "proposal.reject" | "proposal.forward" => {
             let proposal_id = match params.string("proposal") {
                 Some(id) => id,
                 None => context.proposal.clone().unwrap_or_default().id,
             };
-            if id == "proposal.accept" {
-                Request::Accept {
+            match id {
+                "proposal.accept" => Request::Accept {
                     proposal_id,
                     revision,
-                }
-            } else {
-                Request::Reject {
+                },
+                "proposal.reject" => Request::Reject {
                     proposal_id,
                     revision,
-                }
+                },
+                _ => Request::Forward {
+                    proposal_id,
+                    revision,
+                },
             }
         }
         "ai.stop" => Request::Abort,
@@ -2148,7 +2186,16 @@ mod tests {
             id: "p1".into(),
             blocked: Some("stale".into()),
         });
-        assert!(run("proposal.accept", &context, &Value::Null).is_err());
+        // Accepting a stale proposal is refused with what moves it, and
+        // that is a command of its own: nothing is moved unasked.
+        assert_eq!(
+            run("proposal.accept", &context, &Value::Null).unwrap_err(),
+            "The edit changed under this proposal: bring it forward (Clip menu), or ask Kerf to prepare it again"
+        );
+        assert_eq!(
+            serde_json::to_value(run("proposal.forward", &context, &Value::Null).unwrap()).unwrap(),
+            json!({"type": "forward", "proposalId": "p1", "revision": 7})
+        );
         assert_eq!(
             run("proposal.reject", &context, &Value::Null),
             Ok(Request::Reject {
@@ -2157,6 +2204,10 @@ mod tests {
             })
         );
         context.proposal.as_mut().unwrap().blocked = None;
+        assert_eq!(
+            run("proposal.forward", &context, &Value::Null).unwrap_err(),
+            "This proposal is already on the edit as it is"
+        );
         assert_eq!(
             serde_json::to_value(run("proposal.accept", &context, &Value::Null).unwrap()).unwrap(),
             json!({"type": "accept", "proposalId": "p1", "revision": 7})
@@ -2496,6 +2547,7 @@ mod tests {
             ("collab.consolidate", json!({})),
             ("qc.run", Value::Null),
             ("export.master", Value::Null),
+            ("proposal.forward", json!({"proposal": "p1"})),
         ];
         for (id, params) in invocations {
             let request = request(id, &context, params);

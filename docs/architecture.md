@@ -1563,6 +1563,52 @@ clip effects and then buses (`kerf_model::Bus`), mixed by the render's graph and
 program, by the live mixer's own stream for each bus, so a compressor hears the same sum in both. A
 timeline's own tools stay in `kerf-model` and `kerf-lang`.
 
+**A proposal brought forward** (2026-11-19). A proposal is made on one revision, and once the
+project moves on, as when another proposal is accepted first, it is stale: its script names times
+and clips of a project that is no longer there, and it is not accepted. It used to be written
+again by whoever made it. Merging the two documents by their ids, as a sync does
+(`kerf_collab::merge_projects`), is not the way to keep it: two edits that each close a gap both
+move every clip after them, the merge keeps one side's place for such a clip, and on four clips,
+one trimmed by a second and another by half a second, the last was left half a second after the
+one before it. Running the proposal's operations again on the project as it is puts it where it
+belongs, so that is what is done (`kerf_lang::bring_forward`), and the work is in knowing that a
+line run again is the edit it was. The two projects are stepped through together, one operation
+at a time (`kerf_model::Steps`), and each operation is held to three things:
+
+- *A clip it names is as it was*: on its track still, playing the same length of the same source
+  at the same speed. Where it starts may have moved, which is all a ripple does to a clip.
+- *A time it names is carried by the clips that held it*: every clip that was under that time, or
+  met it with an edge, on any track of the sequence. They must each be placed as they were and
+  have all moved by one amount, and the time moves by that amount. So an `insert` at a cut goes
+  to where that cut is now, and a time in a clip stays in that clip. Where picture and sound have
+  moved apart, or a clip that held it was cut, moved or removed, there is no one place it is now.
+  A time no clip held, in a gap or past the end, stays where it was.
+- *It changes what it changed*: the same clips, transitions, markers, media, tracks, buses and
+  sequences, each from the same state to the same state, and no others. A clip is read as where
+  it plays and what of its source, its properties, its effects, and its masks, each on its own,
+  so a grade given to a clip since does not stop a trim of it, and stops a line that sets its
+  effects. This is what catches what a line does not name: a `roll` whose neighbour is another
+  clip now, a `lift` over a range a title was put in since. A clip that only moves along its
+  track is left out of it, since a ripple follows the timeline as it is.
+
+A clip the script itself makes has another id where the project has taken that one since, and
+the lines after it follow the id it gets now. A line that fails any of the three is refused with
+its number and the clip that stopped it (``clip `c3` was cut since this was proposed``), nothing is
+staged, and the proposal waits as it was, to be revised. What does come forward is the
+proposal's next version on the current revision, by the same author, one record in kerfd's
+journal as any staged version is, and it waits to be reviewed again: its frames are not the ones
+that were looked at. To have the project a proposal was made on, kerfd keeps it from the moment
+the revision moves on while that proposal is open (`RuntimeRequest::ForwardProposal`), in the
+checkpoint, and again by replaying the journal; undo history would not do, since an edit made
+after an undo drops it. A proposal that went stale under a kerfd from before this has none kept
+and is revised.
+
+It is asked for, never done unasked. An accept of a stale proposal is refused and says that it
+can be brought forward; the editor has that as Clip ▸ Bring Proposal Forward
+(`proposal.forward`), and an agent's `edit` takes the proposal's id as `forward`. Not done: the
+proposal's card in the conversation still only says that it is out of date, and `kerf` in a
+terminal has no command for it.
+
 ### Color
 
 Has: Lumetri, curves, levels, Hue/Saturation, Selective Color, CDL, LUTs, Auto
@@ -1903,19 +1949,16 @@ x64, and Linux x86-64 as new as Ubuntu 24.04.
   edit names, a room read where it is and a tick left in its pause, and what a crossfade plays
   past the cut it is on.
   Its encoded sections, kept by what they depend on and joined without encoding again, are done
-  too (The engine, Kept frames). Left: its forced alignment of words (wav2vec2, a model of English
-  letters), its filler and transcription models (their own licenses, one not for commercial use),
-  reading the text on a screen, and telling speakers apart. Read the second time and not done: an
-  edge on the dip between two words with no quiet between them, which its alignment's word times
-  make safe and a transcriber's do not; a cut named that takes a word or two more than the
-  restart it removes; a check that two recordings of one thing still play in step after a cut;
-  and a proposal brought forward onto an edit that changed under it, where Kerf's goes stale.
-  Merging the two documents by their ids, as a sync does, is not the way to that: two edits that
-  each close a gap both move every clip after them, the merge keeps one side's place for it, and
-  a clip is left half a second after the one before it (tried on four clips, 2026-11-19).
-  Running the proposal's operations again on the project as it is gives the right edit there,
-  and what is not built is knowing that it is the same edit: each place a line names carried by
-  the clip that holds it, and refused where that clip has changed.
+  too (The engine, Kept frames). So is a proposal brought forward onto an edit that changed
+  under it, where Kerf's went stale and had to be written again: its operations run again on the
+  project as it is, each place a line names carried by the clips that held it, and refused where
+  one of them has changed (Edit, A proposal brought forward). Left: its forced alignment of
+  words (wav2vec2, a model of English letters), its filler and transcription models (their own
+  licenses, one not for commercial use), reading the text on a screen, and telling speakers
+  apart. Read the second time and not done: an edge on the dip between two words with no quiet
+  between them, which its alignment's word times make safe and a transcriber's do not; a cut
+  named that takes a word or two more than the restart it removes; and a check that two
+  recordings of one thing still play in step after a cut.
 - **Jumper and the Resolve and Premiere MCP servers** bolt agents onto editors
   that were not built for them. Kerf's document, proposals, and Git merging are
   what they cannot have, and each area has to keep that: every feature is text in

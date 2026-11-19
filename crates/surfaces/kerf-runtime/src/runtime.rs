@@ -10,9 +10,9 @@ use crate::store::{
     preserve_previous_state, projection_digest, projection_matches, seal_journal_record,
     sha256_hex, truncate_journal, write_bytes_atomic, write_json_atomic, Change, HistoryEntry,
     ImportRecord, JournalAction, JournalImport, JournalOperation, JournalRecord, Loaded,
-    OperationRecord, PersistedCheckpoint, ProjectionStatus, ProposalMeta, ProposalReceipt,
-    ProposalRecord, RuntimeLock, CHECKPOINT_FILE, CHECKPOINT_VERSION, JOURNAL_FILE,
-    JOURNAL_VERSION, PREVIOUS_STATE_PREFIX, PROJECT_FILE,
+    OperationRecord, PersistedCheckpoint, ProjectionStatus, ProposalBase, ProposalMeta,
+    ProposalReceipt, ProposalRecord, RuntimeLock, CHECKPOINT_FILE, CHECKPOINT_VERSION,
+    JOURNAL_FILE, JOURNAL_VERSION, PREVIOUS_STATE_PREFIX, PROJECT_FILE,
 };
 use crate::timeline;
 use crate::{
@@ -122,6 +122,10 @@ struct DurableState {
     imports: HashMap<String, ImportRecord>,
     /// Newest first: the open proposals and the last few settled.
     proposals: Vec<ProposalRecord>,
+    /// The project as it was at each revision a stale open proposal was
+    /// made on, kept from when the project left that revision: what the
+    /// proposal is brought forward from.
+    bases: HashMap<u64, Arc<Project>>,
     /// When `revision` was made, RFC 3339.
     revision_time: Option<String>,
 }
@@ -243,6 +247,11 @@ impl Runtime {
                     } else {
                         checkpoint.proposals
                     },
+                    bases: checkpoint
+                        .bases
+                        .into_iter()
+                        .map(|base| (base.revision, base.project))
+                        .collect(),
                     revision_time: checkpoint.revision_time,
                 },
                 import_warnings: checkpoint.import_warnings,
@@ -266,6 +275,7 @@ impl Runtime {
                     operations: HashMap::new(),
                     imports: HashMap::new(),
                     proposals: Vec::new(),
+                    bases: HashMap::new(),
                     revision_time: None,
                 },
                 import_warnings: notes,
@@ -469,6 +479,17 @@ impl Runtime {
         if revised && candidate.revision_time == self.state.revision_time {
             candidate.revision_time = Some(timestamp());
         }
+        // An open proposal made on the revision being left goes stale here.
+        // The project it was made on is kept for it to be brought forward
+        // from. A journal carries none of them: replay keeps them as this
+        // does.
+        if revised && made_on(&candidate.proposals, self.state.revision) {
+            candidate
+                .bases
+                .entry(self.state.revision)
+                .or_insert_with(|| Arc::new(self.state.project.clone()));
+        }
+        bound_bases(&mut candidate.bases, &candidate.proposals);
         let project_changed = candidate.project != self.state.project;
         if project_changed {
             self.projection_status = inspect_projection(&self.project_path, &self.state.project);
@@ -762,12 +783,35 @@ impl Runtime {
         };
 
         let edited = edit.run(&self.state.project, &self.facts())?;
+        self.stage_edited(
+            request_key,
+            fingerprint,
+            edited,
+            source.unwrap_or(script),
+            author,
+            revised,
+        )
+    }
+
+    /// Keep `edited`, an edit of the project as it is, as an open proposal
+    /// by `author`: the next version of the open proposal at `revised`, or
+    /// a new one.
+    fn stage_edited(
+        &mut self,
+        request_key: &str,
+        fingerprint: String,
+        edited: Edited,
+        source: &str,
+        author: &Author,
+        revised: Option<usize>,
+    ) -> Result<StateSnapshot, RuntimeError> {
+        let base_revision = self.state.revision;
         let document_diff = kerf_lang::diff_text(
             &kernel::print(&self.state.project),
             &kernel::print(&edited.project),
         );
         let proposal_id = format!("proposal-{}", unique_id());
-        let source = source.unwrap_or(script).to_owned();
+        let source = source.to_owned();
         let previous = revised.map(|index| proposal_meta(&self.state.proposals[index]));
         let version = previous.as_ref().map_or(1, |meta| meta.version + 1);
         let mut versions = previous
@@ -820,6 +864,96 @@ impl Runtime {
         self.commit_candidate(candidate, JournalEvent::Proposal { proposals })
     }
 
+    /// Bring a stale open proposal onto the project as it is. Its
+    /// operations run again there, each place they name moved with the
+    /// clips that held it (`kernel::forward`), and what that makes is
+    /// staged as the proposal's next version, by the same author, to be
+    /// reviewed again: its frames are not the ones that were looked at. One
+    /// journal record keeps it, as it keeps any staged version.
+    ///
+    /// Refused, leaving the proposal as it was, where a line would not be
+    /// the edit it was, with the clip that stopped it; and for a proposal
+    /// whose project is no longer kept, which is revised instead.
+    pub fn forward_proposal(
+        &mut self,
+        request_key: &str,
+        base_revision: u64,
+        proposal_id: &str,
+    ) -> Result<StateSnapshot, RuntimeError> {
+        if request_key.trim().is_empty() || proposal_id.trim().is_empty() {
+            return Err(RuntimeError::new(
+                "INVALID_REQUEST",
+                "requestKey and proposalId are required",
+            ));
+        }
+        self.check_revision(Some(base_revision))?;
+        let fingerprint = format!("{base_revision}:forward:{proposal_id}");
+        if let Some(existing) = self
+            .state
+            .proposals
+            .iter()
+            .find(|record| record.request_key == request_key)
+        {
+            if existing.fingerprint != fingerprint {
+                return Err(RuntimeError::new(
+                    "IDEMPOTENCY_CONFLICT",
+                    "request key was already used for a different proposal",
+                ));
+            }
+            return Ok(self.snapshot());
+        }
+        let index = find_proposal(&self.state.proposals, proposal_id)
+            .ok_or_else(|| proposal_not_found(proposal_id))?;
+        let record = &self.state.proposals[index];
+        let PendingProposal::Pending {
+            proposal_id: newest,
+            base_revision: made,
+            script,
+            ..
+        } = &record.lifecycle
+        else {
+            return Err(RuntimeError::new(
+                "PROPOSAL_NOT_PENDING",
+                format!("only an open proposal can be brought forward: {proposal_id}"),
+            ));
+        };
+        if newest != proposal_id {
+            return Err(RuntimeError::new(
+                "PROPOSAL_SUPERSEDED",
+                format!(
+                    "{proposal_id} is an earlier version of a proposal; its newest, {newest}, is the one to bring forward"
+                ),
+            ));
+        }
+        if *made == self.state.revision {
+            return Err(RuntimeError::new(
+                "PROPOSAL_NOT_STALE",
+                format!(
+                    "proposal {proposal_id} was made on revision {made}, which the project is at; it can be accepted as it is"
+                ),
+            ));
+        }
+        let base = self.state.bases.get(made).ok_or_else(|| {
+            RuntimeError::new(
+                "PROPOSAL_BASE_GONE",
+                format!(
+                    "the project as it was at revision {made}, which proposal {proposal_id} was made on, is no longer kept; revise the proposal instead"
+                ),
+            )
+        })?;
+        let edited = kernel::forward(base, &self.state.project, script)?;
+        let author = proposal_meta(record).author;
+        let source = edited.script.clone();
+        self.stage_edited(
+            request_key,
+            fingerprint,
+            edited,
+            &source,
+            &author,
+            Some(index),
+        )
+    }
+
     /// Apply a previously staged proposal, or one of its earlier versions,
     /// as exactly one canonical request. The other open proposals go stale.
     pub fn accept_proposal(
@@ -843,15 +977,32 @@ impl Runtime {
             PendingProposal::Pending { .. } => {
                 let version = proposal_version(&record, proposal_id)
                     .ok_or_else(|| proposal_not_found(proposal_id))?;
-                self.check_revision(Some(base_revision))?;
-                if base_revision != version.base_revision {
-                    return Err(RuntimeError::new(
+                let checked = self.check_revision(Some(base_revision)).and_then(|()| {
+                    if base_revision == version.base_revision {
+                        return Ok(());
+                    }
+                    Err(RuntimeError::new(
                         "PROPOSAL_BASE_MISMATCH",
                         format!(
                             "proposal was created at revision {}, not {base_revision}",
                             version.base_revision
                         ),
-                    ));
+                    ))
+                });
+                if let Err(mut error) = checked {
+                    // A stale proposal is not accepted, and is never moved
+                    // without being asked: say what moves it.
+                    let newest = matches!(
+                        &record.lifecycle,
+                        PendingProposal::Pending { proposal_id: id, .. } if id == proposal_id
+                    );
+                    if newest && version.base_revision != self.state.revision {
+                        error.message = format!(
+                            "{}; the project has changed since proposal {proposal_id} was made: bring it forward onto revision {} to review it there, or revise it",
+                            error.message, self.state.revision
+                        );
+                    }
+                    return Err(error);
                 }
                 let mut proposals = self.state.proposals.clone();
                 proposals[index] = ProposalRecord {
@@ -1623,6 +1774,15 @@ impl Runtime {
                 &author.unwrap_or_else(Author::kerf),
                 revises.as_deref(),
             )?)),
+            RuntimeRequest::ForwardProposal {
+                proposal_id,
+                request_key,
+                base_revision,
+            } => Ok(RuntimeResponse::State(self.forward_proposal(
+                &request_key,
+                base_revision,
+                &proposal_id,
+            )?)),
             RuntimeRequest::GetProposalDocuments { proposal_id } => {
                 let (before, after) = self.proposal_documents(&proposal_id)?;
                 Ok(RuntimeResponse::ProposalDocuments { before, after })
@@ -1822,6 +1982,11 @@ impl Runtime {
         let missing = |what: &str| {
             RuntimeError::new("INVALID_JOURNAL", format!("{what} record has no change"))
         };
+        // As a commit keeps it: the project an open proposal was made on,
+        // when this record leaves its revision.
+        let left = (record.revision != self.state.revision
+            && made_on(&self.state.proposals, self.state.revision))
+        .then(|| (self.state.revision, Arc::new(self.state.project.clone())));
         match record.action {
             JournalAction::Apply => {
                 let change = record.change.as_ref().ok_or_else(|| missing("apply"))?;
@@ -1898,6 +2063,12 @@ impl Runtime {
                 }
             }
         }
+        if let Some((revision, project)) = left {
+            if made_on(&self.state.proposals, revision) {
+                self.state.bases.entry(revision).or_insert(project);
+            }
+        }
+        bound_bases(&mut self.state.bases, &self.state.proposals);
         if let Some(time) = record.time.take() {
             self.state.revision_time = Some(time);
         }
@@ -1952,6 +2123,19 @@ impl Runtime {
             imports: self.state.imports.clone(),
             proposal: None,
             proposals: self.state.proposals.clone(),
+            bases: {
+                let mut bases: Vec<ProposalBase> = self
+                    .state
+                    .bases
+                    .iter()
+                    .map(|(revision, project)| ProposalBase {
+                        revision: *revision,
+                        project: project.clone(),
+                    })
+                    .collect();
+                bases.sort_by_key(|base| base.revision);
+                bases
+            },
             revision_time: self.state.revision_time.clone(),
             jobs: self.state.jobs.clone(),
             import_warnings: self.import_warnings.clone(),
@@ -2340,6 +2524,21 @@ fn bound_jobs(jobs: &mut HashMap<String, RenderJob>) {
     }
 }
 
+/// Whether the current version of an open proposal was made on `revision`.
+fn made_on(proposals: &[ProposalRecord], revision: u64) -> bool {
+    proposals.iter().any(|record| {
+        matches!(
+            record.lifecycle,
+            PendingProposal::Pending { base_revision, .. } if base_revision == revision
+        )
+    })
+}
+
+/// Keep only the projects open proposals were made on.
+fn bound_bases(bases: &mut HashMap<u64, Arc<Project>>, proposals: &[ProposalRecord]) {
+    bases.retain(|revision, _| made_on(proposals, *revision));
+}
+
 fn freshness_at(base_revision: u64, revision: u64) -> ProposalFreshness {
     if base_revision == revision {
         ProposalFreshness::Current
@@ -2605,6 +2804,8 @@ fn project_relative(directory: &Path, file: &Path) -> Option<String> {
 
 #[cfg(test)]
 mod edit_render_tests;
+#[cfg(test)]
+mod forward_tests;
 #[cfg(test)]
 mod proposal_tests;
 

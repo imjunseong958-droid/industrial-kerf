@@ -71,6 +71,35 @@ pub fn apply_script_with(
     facts: &dyn Facts,
     script: &str,
 ) -> Result<Applied, Vec<Diagnostic>> {
+    let Lines { lines, snapped } = lines_with(project, catalog, facts, script)?;
+    let ops: Vec<Op> = lines.into_iter().flat_map(|(_, ops)| ops).collect();
+    let (project, report) =
+        apply(project, catalog, &ops).map_err(|rejected| rejected.diagnostics)?;
+    Ok(Applied {
+        project,
+        ops,
+        report,
+        snapped,
+    })
+}
+
+/// A script as its lines ran.
+pub(crate) struct Lines {
+    /// Each line that ran operations: its number, and them.
+    pub lines: Vec<(usize, Vec<Op>)>,
+    /// See [`Applied::snapped`].
+    pub snapped: Vec<String>,
+}
+
+/// The operations each line of `script` runs as on `project`. Each line has
+/// been applied to the project the lines before it leave; the whole has not
+/// been applied as one.
+pub(crate) fn lines_with(
+    project: &Project,
+    catalog: &Catalog,
+    facts: &dyn Facts,
+    script: &str,
+) -> Result<Lines, Vec<Diagnostic>> {
     let lines = lex(script)?;
     let mut state = Script {
         project: project.clone(),
@@ -103,14 +132,10 @@ pub fn apply_script_with(
                     .collect())
             }
         }
-        ops.extend(line_ops);
+        ops.push((line.number, line_ops));
     }
-    let (project, report) =
-        apply(project, catalog, &ops).map_err(|rejected| rejected.diagnostics)?;
-    Ok(Applied {
-        project,
-        ops,
-        report,
+    Ok(Lines {
+        lines: ops,
         snapped: state.snapped.into_inner(),
     })
 }

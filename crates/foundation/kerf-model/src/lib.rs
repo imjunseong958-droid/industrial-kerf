@@ -34,7 +34,7 @@ pub use making::Pass;
 pub use path::{parse_moves, parse_path_points, parse_points, MotionPath, PathPoint};
 pub use ops::{
     apply, BusChange, BusFx, ClipChange, Edge, MarkerChange, NewClip, Op, Rejected, Report, SequenceChange,
-    TrackChange, TrackRoleChange,
+    Steps, TrackChange, TrackRoleChange,
 };
 pub use speed::{Ramp, RampKey, Speed};
 pub use time::{Rate, Ratio, Time, TimeError};

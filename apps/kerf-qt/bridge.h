@@ -8,7 +8,7 @@ extern "C" {
 void *kerf_bridge_new(const char *project_directory, const char *kerfd_binary);
 void kerf_bridge_free(void *bridge);
 // JSON commands: refresh, reconnect, import {path}, edit {ops,revision},
-// undo/redo {revision}, accept/reject {proposalId,revision}, agent {text,
+// undo/redo {revision}, accept/reject/forward {proposalId,revision}, agent {text,
 // focus?: {scope: clip|range|sequence, clip?, fromFrame, toFrame} (what the
 // request is about, in sequence frames), provider (anthropic|openai|
 // claude-code: the installed Claude Code, signed in on its own, with this
@@ -86,9 +86,15 @@ void kerf_bridge_free(void *bridge);
 // counted again.
 // One check runs at a time; another meanwhile is error {command: check}.
 // Proposals: several can wait at once (at most 8, newest first in the
-// snapshot's proposals); accepting one makes the others stale (they then
-// need a revise). An earlier version's proposalId accepts that
-// version.
+// snapshot's proposals); accepting one makes the others stale. A stale
+// one is not accepted: forward {proposalId,revision} brings it onto the
+// project as it is, its operations run again with each place they name
+// moved with the clips that held it, as its next version (a new
+// proposalId, freshness current) to be reviewed again. It answers with an
+// error, the proposal left as it was, where a clip a line names or a place
+// was on has been cut, moved or removed since: the message names the clip,
+// and the proposal needs a revise. An earlier version's proposalId accepts
+// that version.
 // Rendering: preview {proposalId?, start?, duration?} renders the program,
 // or what that pending proposal would make of it, over start..start+duration
 // seconds when given (both or neither, at most 120 s), and plays it in place
