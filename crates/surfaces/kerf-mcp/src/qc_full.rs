@@ -16,9 +16,10 @@
 //! frame. A measurement that cannot run fails its rows as `unavailable`
 //! rather than passing them.
 
+use crate::lint;
 use crate::qc::{
     check, CheckReport, Finding, RowDef, Severity, CAPTION_DURATION, CAPTION_GAPS, CAPTION_OVERLAP,
-    CUTS_IN_WORDS, DOCUMENT, FRAME_EDGES, MEDIA, READING_SPEED_ROW, RENDER, TITLE_SAFE,
+    CUTS_IN_WORDS, DOCUMENT, FRAME_EDGES, IN_STEP, MEDIA, READING_SPEED_ROW, RENDER, TITLE_SAFE,
 };
 use kerf_engine::loudness::{self, Loudness};
 use kerf_engine::program::{compile_program, ProgramOptions};
@@ -66,8 +67,9 @@ const LOUDNESS_UNAVAILABLE: &str = "loudness.unavailable";
 /// The picture could not be measured: fails every picture row.
 const PICTURE_UNAVAILABLE: &str = "picture.unavailable";
 const FLASH_BLACK: &str = "picture.flash_black";
-/// Short clips and slivers of another shot, from the fast check.
-const FLASH_FRAME_CODES: [&str; 2] = ["clip.flash", "cut.near_scene_cut"];
+/// Short clips, slivers of another shot, and pictures that show for a frame or two under
+/// what is over them, from the fast check.
+const FLASH_FRAME_CODES: [&str; 3] = ["clip.flash", "cut.near_scene_cut", lint::PICTURE_FLASH];
 
 /// The rows [`check_full`] reports, in the order the editor's QC table
 /// lists them: the measured checks and the text checks first, then the
@@ -119,6 +121,7 @@ pub const FULL_ROWS: &[RowDef] = &[
             picture::CODE_BLACK,
             FLASH_FRAME_CODES[0],
             FLASH_FRAME_CODES[1],
+            FLASH_FRAME_CODES[2],
             PICTURE_UNAVAILABLE,
         ],
         noun: "",
@@ -143,6 +146,7 @@ pub const FULL_ROWS: &[RowDef] = &[
     DOCUMENT,
     FRAME_EDGES,
     CUTS_IN_WORDS,
+    IN_STEP,
     READING_SPEED_ROW,
     CAPTION_DURATION,
     CAPTION_GAPS,
@@ -532,6 +536,7 @@ fn label_rows(
         picture::CODE_FLASHING,
         FLASH_FRAME_CODES[0],
         FLASH_FRAME_CODES[1],
+        FLASH_FRAME_CODES[2],
     ]);
     let blacks = count(&[picture::CODE_BLACK]);
     let level = |value: f64, unit: &str| {

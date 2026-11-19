@@ -6,6 +6,118 @@ on `main`; its section here becomes the release's notes on GitHub
 
 ## Unreleased
 
+- Lining recordings up by their sound says when one offset does not fit. An
+  agent's `look` with `sync` gave each recording one offset and built a
+  multicam by it, whether or not the two stayed together. It now places
+  each recording again a minute at a time and says what that comes to
+  (`course`): `steady`; `drift`, one clock running faster than the other, in
+  milliseconds a minute; or `jump`, a recording that stopped and went on or
+  lost sound, with where and by how much. A stretch that is quiet, or that
+  has nothing in common with the first, is listed as `unknown` and not
+  guessed at. The script it gives leaves out a recording that drifts more
+  than half a frame from any one offset, or that jumps, and says what does
+  not fit. A short recording that began late in a long one was placed
+  before its start, and no longer is. These were measured on recordings
+  made for the tests, claps over noise, and on none recorded in a room:
+  listen to what it says before cutting by it
+  ([docs/architecture.md](docs/architecture.md#edit)).
+- The check says when a picture and its sound, or two recordings of one
+  thing, no longer play in step (`sync.slipped`, the row "Picture and sound
+  in step" of QC). A linked picture and sound of one file, or of one
+  nested sequence, are held to each other: a sound slipped or moved without
+  its picture is named, with how many frames it is out and the line that
+  puts it back. Two files are held to a line the
+  document now has: `sync=m1@1.234s` on a media says it begins that far
+  into `m1`, written by `media sync m2 with=m1@1.234s`, which `look` with
+  `sync` puts in its script and which is yours to change. Clips of such
+  media that are linked, or that play some of the same moment at once, are
+  named where they play it more than a frame apart; clips that play
+  different moments are left alone
+  ([docs/kerf-language.md](docs/kerf-language.md#documents)).
+- The check finds a flash frame that no one clip shows. An overlay that
+  ends two frames before the cut under it shows two frames of the shot
+  that cut ends, and one that starts two frames after it shows two of the
+  shot it starts; every clip was long enough, so nothing was said. The
+  video tracks are now read as they stack, and a shot that shows for one
+  or two frames between what is over it and a cut is a finding
+  (`picture.flash`), with the clips, the frames, and where: "2 frames of
+  `c1` show at 00:00:03:22, between `o1` ending and the cut to `c2`". It
+  counts as a flash frame in the check's table. A picture in a corner, a
+  fade, a transition across the edge, and a track that is off take no
+  flash from what is under them; a cut the media's index found inside a
+  clip counts as one; and a frame or two of black behind a title is said
+  the same way
+  ([docs/architecture.md](docs/architecture.md#edit)).
+- A sequence goes to another editor without Python. `kerf export cut.otio`
+  writes OpenTimelineIO, which DaVinci Resolve and Premiere Pro import, and
+  `kerf export cut.fcpxml` writes Final Cut Pro XML 1.9, which Final Cut Pro
+  and DaVinci Resolve import; an agent does the same with `render` and
+  `handoff`. Both answer with the list of what the file does not carry:
+  titles and other clips that play no file arrive as gaps, captions,
+  effects, masks and clip properties are not written, a speed ramp is
+  written as its speed overall, and a transition that is no dissolve arrives
+  as one. An `.otio` now carries a clip's speed, a disabled clip, and a
+  marker's note, and Kerf reads its own file back as the project it wrote,
+  frame size included. Reading an `.otio` needs no Python either; `otioz` and
+  the other OpenTimelineIO adapters still use the Python bridge, which no
+  longer loses ids on the way in. Neither file has been opened in those
+  editors yet: they are checked against OpenTimelineIO itself and against
+  Apple's DTD ([README](README.md#interchange)).
+- A proposal the edit changed under can be brought forward. Accepting one
+  proposal, or editing the timeline, left every other proposal still waiting
+  out of date, and each had to be written again by the agent that made it.
+  **Bring forward**, on the proposal's card where Accept was and in the
+  Clip menu, now runs such a proposal's own edits
+  again on the timeline as it is: a clip it names is found where it has
+  moved to, and a time it names moves with the clips that were there, so a
+  trim that closes up, made before another trim closed up ahead of it, still
+  leaves its clips end to end. What comes of it is the proposal's next
+  version, to look at and accept like any other; nothing is brought forward
+  without being asked. Where a clip it names, or one a time it names was on,
+  has been cut, moved or removed since, or a line would change other clips
+  than it did, it is refused with that clip's name and waits as it was, for
+  Kerf to prepare again. An agent does the same with `edit` and the
+  proposal's id as `forward`
+  ([docs/architecture.md](docs/architecture.md#edit)).
+- An agent's `look` with `cuts` says when a cut took a word with a restart.
+  A cut that takes out a start that was taken again, and a word or two more
+  than that, plays whole words and measures clean, with the word gone from
+  the sentence: "absolutely beautiful. The detail, the, the detail, the
+  spatial awareness" came out as "absolutely ‖ detail, the spatial
+  awareness", and nothing said so. A join now has `tookMore` where it took
+  such words and nothing within six words either side says them again:
+  `out` is the end of the phrase kept before the cut, `in` the start of the
+  take it goes on with. `summary` counts those joins, and the check says
+  each as information (`cut.took_more`). It is found from the words alone
+  and says where to read: the sentence may do without the word, as it does
+  without a correction or an aside
+  ([docs/architecture.md](docs/architecture.md#edit)).
+- `blade` takes `snap=pause|cut`. A blade is one cut through every track, so
+  `blade at=01:00:12:08 snap=pause` goes to one place where every sound it
+  cuts is quiet at once, each taken past no word as a snapped `split` is,
+  and the answer says how far it went and into which pause of each
+  (`snapped`). Sounds with no quiet in common refuse the line and move
+  nothing: it names each clip, where that clip alone would have the blade,
+  and the word another says there. `tracks=` cuts fewer tracks and goes by
+  those alone, and `snap=cut` goes to the nearest cut of any picture the
+  blade cuts. It took a snapped `split` of each clip before, and each went
+  into its own pause
+  ([docs/kerf-language.md](docs/kerf-language.md#scripts)).
+- An agent is told in what order to tidy speech, cut to a length, and get
+  through a wait. Three playbooks join those in every agent conversation.
+  `speech-cleanup` takes out a phrase said and taken again, the later
+  saying kept, then doubled words and fillers, then long pauses, and reads
+  each join back as a sentence; a line that is refused, such as a pause
+  holding a sound the transcript has no word for, is left alone and told to
+  you with where it is, not forced. `target-length` brings a talk down to
+  a length you name: pauses first, then what was said twice, then whole
+  sentences, with the length read after each step, and where only content
+  is left it stops and gives you the choices with what each costs.
+  `wait-speedup` finds the stretches of a screen recording where nobody
+  speaks, looks at each, plays it fast where the screen shows something
+  going on, an install or a page loading, with its sound off, and cuts it
+  where nothing does. They name only commands and fields the tools have,
+  which a test holds (`skills/`; `kerf --skills` lists them).
 - The shots and the still that come with `kerf-comfy` are made by Wan 2.1
   VACE 14B, where its 1.3B made them: `shot`, `shot-timed`, `shot-into`,
   `shot-led`, `shot-directed` and `still` load

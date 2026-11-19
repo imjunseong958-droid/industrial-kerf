@@ -114,7 +114,12 @@ Kerf answers with a **proposal**, a card under its answer:
   focused) drops it. **Versions** appear once Kerf has revised it.
 
 A proposal that has gone stale, because the edit changed under it, cannot be
-accepted: ask Kerf to stage it again.
+accepted as it is. Its card has **Bring forward** where Accept was (also Clip ▸
+Bring Proposal Forward): that runs it again on the edit as it is now, each clip
+found where it has moved to, and stages the result as the proposal's next
+version for you to look at and accept. Where a clip it names has been cut,
+moved or removed since, Kerf says which and changes nothing: ask it to stage
+the proposal again.
 
 ### How far Kerf goes without asking
 
@@ -285,7 +290,8 @@ left alone, and nothing is changed for you.
 ## Check and export
 
 - **Sequence ▸ Run QC** runs the checks a delivery needs: loudness, true peak,
-  gamut, title safe, caption overlap and timing, flash, and black. What it finds
+  gamut, title safe, caption overlap and timing, flash, black, and a picture
+  and its sound more than a frame out of step. What it finds
   is listed under Preflight in the toolbar's Export menu, where Ask Kerf on a
   failed row asks Kerf to fix it; the conversation offers each failed row as
   something to ask.
@@ -294,6 +300,14 @@ left alone, and nothing is changed for you.
   `<project>_master` and `<project>_draft`; a draft made again is numbered.
 - **Presets.** File ▸ Save Current as Preset… keeps the program as a preset
   others can fill with their own media (File ▸ Import Editing Preset…).
+- **To another editor.** `kerf export cut.otio` in a terminal writes the
+  sequence for DaVinci Resolve or Premiere Pro, and `kerf export cut.fcpxml`
+  for Final Cut Pro or DaVinci Resolve; asking Kerf to hand the edit to one
+  of them does the same, into `deliveries/`. Nothing else has to be
+  installed. Either way you are told what the file does not carry (titles,
+  captions, effects, a speed ramp), so read that list before you finish the
+  edit there ([README](../README.md#interchange)). The editor has no menu
+  item for it yet.
 
 ## When something goes wrong
 

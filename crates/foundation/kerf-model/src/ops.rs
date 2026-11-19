@@ -13,7 +13,7 @@ use crate::id::{Id, IdGen};
 use crate::making::Step;
 use crate::model::{
     Align, Clip, ClipAt, Content, Effect, Marker, MarkerColor, Mask, MaskMode, MaskShape, Media,
-    Params, Project, Sequence, Track, TrackKind, Transition,
+    Params, Project, Sequence, Synced, Track, TrackKind, Transition,
 };
 use crate::speed::Speed;
 use crate::time::{format_timecode, Rate, Time};
@@ -147,6 +147,12 @@ pub enum Op {
     ReplaceMedia(Media),
     RemoveMedia {
         media: Id,
+    },
+    /// Say that a media is a recording of the same thing as another, and where it begins in
+    /// it, or with none that it is lined up with nothing.
+    SyncMedia {
+        media: Id,
+        sync: Option<Synced>,
     },
     /// Write a step of how a media's file is made ([`crate::making`]): the
     /// last of its steps, or the one that becomes step `index`, from 0.
@@ -415,52 +421,94 @@ pub fn apply(
     catalog: &Catalog,
     ops: &[Op],
 ) -> Result<(Project, Report), Rejected> {
-    let before: HashSet<(&'static str, Option<Id>)> = errors(project, catalog)
-        .into_iter()
-        .map(|d| (d.code, d.entity))
-        .collect();
-    let mut editor = Editor {
-        project: project.clone(),
-        catalog,
-        ids: IdGen::default(),
-        notes: Vec::new(),
-    };
-    for (index, op) in ops.iter().enumerate() {
+    let mut steps = Steps::new(project, catalog);
+    for op in ops {
+        steps.step(op)?;
+    }
+    steps.finish()
+}
+
+/// Operations applied one at a time, for a caller that reads the project
+/// between them: what each one names is there to be looked at as it stood
+/// when that operation ran. [`apply`] is every step, then
+/// [`Steps::finish`].
+pub struct Steps<'a> {
+    from: &'a Project,
+    editor: Editor<'a>,
+    done: usize,
+}
+
+impl<'a> Steps<'a> {
+    pub fn new(project: &'a Project, catalog: &'a Catalog) -> Self {
+        Self {
+            from: project,
+            editor: Editor {
+                project: project.clone(),
+                catalog,
+                ids: IdGen::default(),
+                notes: Vec::new(),
+            },
+            done: 0,
+        }
+    }
+
+    /// The project as the operations so far leave it. It is checked as a
+    /// whole only by [`Steps::finish`].
+    pub fn project(&self) -> &Project {
+        &self.editor.project
+    }
+
+    /// Apply the next operation. One that is refused leaves the steps of
+    /// no further use.
+    pub fn step(&mut self, op: &Op) -> Result<(), Rejected> {
+        let editor = &mut self.editor;
         editor.ids = editor.project.id_gen();
         let before: Vec<Id> = editor.project.ids().cloned().collect();
         editor.apply(op).map_err(|diagnostic| Rejected {
-            op: Some(index),
+            op: Some(self.done),
             diagnostics: vec![diagnostic],
         })?;
         editor.housekeep();
         editor.project.retire_missing(&before);
+        self.done += 1;
+        Ok(())
     }
-    let introduced: Vec<_> = errors(&editor.project, catalog)
-        .into_iter()
-        .filter(|d| !before.contains(&(d.code, d.entity.clone())))
-        .collect();
-    if !introduced.is_empty() {
-        return Err(Rejected {
-            op: None,
-            diagnostics: introduced,
-        });
+
+    /// The project every step made and what they did, when they leave no
+    /// error the project did not start with.
+    pub fn finish(self) -> Result<(Project, Report), Rejected> {
+        let Self { from, editor, .. } = self;
+        let before: HashSet<(&'static str, Option<Id>)> = errors(from, editor.catalog)
+            .into_iter()
+            .map(|d| (d.code, d.entity))
+            .collect();
+        let introduced: Vec<_> = errors(&editor.project, editor.catalog)
+            .into_iter()
+            .filter(|d| !before.contains(&(d.code, d.entity.clone())))
+            .collect();
+        if !introduced.is_empty() {
+            return Err(Rejected {
+                op: None,
+                diagnostics: introduced,
+            });
+        }
+        let old: HashSet<&Id> = clip_ids(from).collect();
+        let new: HashSet<&Id> = clip_ids(&editor.project).collect();
+        let mut report = Report {
+            created: clip_ids(&editor.project)
+                .filter(|id| !old.contains(id))
+                .cloned()
+                .collect(),
+            removed: clip_ids(from)
+                .filter(|id| !new.contains(id))
+                .cloned()
+                .collect(),
+            notes: editor.notes,
+        };
+        report.created.sort();
+        report.removed.sort();
+        Ok((editor.project, report))
     }
-    let old: HashSet<&Id> = clip_ids(project).collect();
-    let new: HashSet<&Id> = clip_ids(&editor.project).collect();
-    let mut report = Report {
-        created: clip_ids(&editor.project)
-            .filter(|id| !old.contains(id))
-            .cloned()
-            .collect(),
-        removed: clip_ids(project)
-            .filter(|id| !new.contains(id))
-            .cloned()
-            .collect(),
-        notes: editor.notes,
-    };
-    report.created.sort();
-    report.removed.sort();
-    Ok((editor.project, report))
 }
 
 fn clip_ids(project: &Project) -> impl Iterator<Item = &Id> {
@@ -543,6 +591,7 @@ impl Editor<'_> {
                 Ok(())
             }
             Op::RemoveMedia { media } => self.remove_media(media),
+            Op::SyncMedia { media, sync } => self.sync_media(media, sync.as_ref()),
             Op::AddStep { media, index, step } => self.steps(media, |steps| {
                 let at = index.unwrap_or(steps.len());
                 if at > steps.len() {
@@ -2373,6 +2422,44 @@ impl Editor<'_> {
             ));
         }
         self.project.media.remove(index);
+        // What was lined up with it is lined up with nothing, as a child of a deleted clip is let
+        // go.
+        for other in &mut self.project.media {
+            if other.sync.as_ref().is_some_and(|sync| sync.with == *media) {
+                other.sync = None;
+                self.notes.push(format!(
+                    "media `{}` was lined up with `{media}`, and is now with nothing",
+                    other.id
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn sync_media(&mut self, media: &Id, sync: Option<&Synced>) -> Outcome {
+        let missing = |id: &Id| fail("ref.missing", format!("no media `{id}`"));
+        if self.project.media(media.as_str()).is_none() {
+            return Err(missing(media));
+        }
+        if let Some(sync) = sync {
+            if self.project.media(sync.with.as_str()).is_none() {
+                return Err(missing(&sync.with));
+            }
+            let ring = self.project.sync_comes_back(media, &sync.with);
+            if ring {
+                return Err(fail(
+                    "sync.ring",
+                    format!(
+                        "media `{media}` cannot be lined up with `{}`, which is lined up with it",
+                        sync.with
+                    ),
+                ));
+            }
+        }
+        let found = self.project.media.iter_mut().find(|m| m.id == *media);
+        if let Some(found) = found {
+            found.sync = sync.cloned();
+        }
         Ok(())
     }
 

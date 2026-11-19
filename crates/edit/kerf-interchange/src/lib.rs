@@ -1,13 +1,20 @@
-//! Project interchange: OpenTimelineIO through the bundled Python bridge,
-//! and a native CMX3600 EDL writer (`edl`).
+//! Project interchange: the timeline files another editor opens.
 //!
-//! OTIO remains an optional process dependency. Rust owns validation,
-//! invocation, timeout handling, conversion to and from the model (see
-//! `otio`), and structured reports; the bridge owns the Python OTIO object
-//! model.
+//! Three are written here, in Rust, with nothing else to install: an
+//! OpenTimelineIO `.otio` file (`otio_json`, which also reads one), Final
+//! Cut Pro XML (`fcpxml`), and a CMX3600 EDL (`edl`). [`export`] writes the
+//! first two and returns, with the file, the list of what it does not carry.
+//!
+//! Every other OpenTimelineIO adapter (`otioz` and the adapter plugins) goes
+//! through the bundled Python bridge, an optional process dependency. Rust
+//! owns validation, invocation, timeout handling, conversion to and from the
+//! model (see `otio`), and structured reports; the bridge owns the Python
+//! OTIO object model.
 
 pub mod edl;
+pub mod fcpxml;
 pub mod otio;
+pub mod otio_json;
 
 use kerf_model::Project;
 use serde::{Deserialize, Serialize};
@@ -20,6 +27,141 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// The adapter name of an `.otio` file, which is written and read here.
+pub const NATIVE_OTIO: &str = "otio_json";
+
+/// A timeline file written here, in Rust.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Format {
+    /// OpenTimelineIO JSON, an `.otio` file: DaVinci Resolve and Premiere
+    /// Pro import it.
+    Otio,
+    /// Final Cut Pro XML, an `.fcpxml` file: Final Cut Pro and DaVinci
+    /// Resolve import it.
+    Fcpxml,
+}
+
+impl Format {
+    pub const ALL: [Self; 2] = [Self::Otio, Self::Fcpxml];
+
+    /// Its name, which is also its file extension.
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Otio => "otio",
+            Self::Fcpxml => "fcpxml",
+        }
+    }
+
+    /// The name [`ExportResult::adapter`] reports it under.
+    pub const fn adapter(self) -> &'static str {
+        match self {
+            Self::Otio => NATIVE_OTIO,
+            Self::Fcpxml => "fcpxml",
+        }
+    }
+
+    /// The format `name` asks for: `otio` (or `json`, `otio_json`), `fcpxml`.
+    pub fn parse(name: &str) -> Option<Self> {
+        match name.to_ascii_lowercase().as_str() {
+            "otio" | "json" | "otio_json" | "otio-json" => Some(Self::Otio),
+            "fcpxml" => Some(Self::Fcpxml),
+            _ => None,
+        }
+    }
+
+    /// The format a file's extension names.
+    pub fn of_path(path: &Path) -> Option<Self> {
+        let extension = path.extension()?.to_str()?;
+        Self::ALL
+            .into_iter()
+            .find(|format| format.name().eq_ignore_ascii_case(extension))
+    }
+}
+
+impl fmt::Display for Format {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.name())
+    }
+}
+
+/// `sequence` of `project` as the text of a `format` file, and what the file
+/// leaves out.
+pub fn render(
+    project: &Project,
+    sequence: &kerf_model::Sequence,
+    format: Format,
+) -> Result<(String, Vec<InterchangeIssue>), InterchangeError> {
+    match format {
+        Format::Otio => {
+            let (timeline, issues) = otio::sequence_timeline(project, sequence);
+            Ok((otio_json::write(&timeline)?, issues))
+        }
+        Format::Fcpxml => Ok(fcpxml::to_fcpxml(project, sequence)),
+    }
+}
+
+/// Write a sequence of `project`, its first unless `sequence` names one, to
+/// `output_path` as `format`. The report lists what the file does not carry.
+pub fn export(
+    project: &Project,
+    sequence: Option<&str>,
+    output_path: &Path,
+    format: Format,
+) -> Result<ExportResult, InterchangeError> {
+    validate_path(output_path, "outputPath")?;
+    let chosen = match sequence {
+        Some(id) => project.sequence(id).ok_or_else(|| {
+            InterchangeError::new(
+                "INTERCHANGE_PROJECT_INVALID",
+                format!("the project has no sequence `{id}`"),
+            )
+        })?,
+        None => project.sequences.first().ok_or_else(|| {
+            InterchangeError::new("INTERCHANGE_PROJECT_INVALID", "the project has no sequence")
+        })?,
+    };
+    let (text, issues) = render(project, chosen, format)?;
+    let failed = |error: io::Error| {
+        InterchangeError::new(
+            "INTERCHANGE_IO_FAILED",
+            format!("could not write {}: {error}", output_path.display()),
+        )
+    };
+    if let Some(folder) = output_path.parent().filter(|folder| !folder.as_os_str().is_empty()) {
+        std::fs::create_dir_all(folder).map_err(failed)?;
+    }
+    std::fs::write(output_path, text).map_err(failed)?;
+    Ok(ExportResult {
+        output_path: output_path.to_path_buf(),
+        adapter: format.adapter().to_owned(),
+        report: create_report("export", Some(format.adapter()), issues),
+    })
+}
+
+/// Read an `.otio` file as a one-sequence project. The report lists what of
+/// the file was not imported and what was assumed.
+pub fn import_otio(input_path: &Path) -> Result<ImportResult, InterchangeError> {
+    validate_path(input_path, "inputPath")?;
+    let text = std::fs::read_to_string(input_path).map_err(|error| {
+        InterchangeError::new(
+            "INTERCHANGE_IO_FAILED",
+            format!("could not read {}: {error}", input_path.display()),
+        )
+    })?;
+    let (timeline, read) = otio_json::read(&text)?;
+    let (project, converted) = otio::from_timeline(&timeline)?;
+    Ok(ImportResult {
+        project,
+        input_path: input_path.to_path_buf(),
+        adapter: Some(NATIVE_OTIO.to_owned()),
+        report: create_report(
+            "import",
+            Some(NATIVE_OTIO),
+            read.into_iter().chain(converted),
+        ),
+    })
+}
 
 #[derive(Clone, Debug)]
 pub struct InterchangeConfig {
@@ -120,7 +262,9 @@ impl From<io::Error> for InterchangeError {
     }
 }
 
-/// A validated OTIO adapter client.
+/// A validated OTIO adapter client. An `.otio` file is written and read
+/// here ([`export`], [`import_otio`]); every other adapter is asked of the
+/// Python bridge.
 #[derive(Clone, Debug)]
 pub struct OpenTimelineIoAdapter {
     config: InterchangeConfig,
@@ -219,6 +363,13 @@ impl OpenTimelineIoAdapter {
         input_path: &Path,
         adapter: Option<&str>,
     ) -> Result<ImportResult, InterchangeError> {
+        let native = match adapter {
+            Some(adapter) => normalize_adapter(Some(adapter), None)? == NATIVE_OTIO,
+            None => Format::of_path(input_path) == Some(Format::Otio),
+        };
+        if native {
+            return import_otio(input_path);
+        }
         let invocation = self.build_import_invocation(input_path, adapter)?;
         let parsed = self.run_bridge(invocation)?;
         let timeline = parsed.get("timeline").cloned().ok_or_else(|| {
@@ -256,6 +407,9 @@ impl OpenTimelineIoAdapter {
         adapter: Option<&str>,
     ) -> Result<ExportResult, InterchangeError> {
         let adapter = normalize_adapter(adapter, Some(output_path))?;
+        if adapter == NATIVE_OTIO {
+            return export(project, None, output_path, Format::Otio);
+        }
         let (invocation, issues) =
             self.build_export_invocation(project, output_path, Some(&adapter))?;
         let parsed = self.run_bridge(invocation)?;

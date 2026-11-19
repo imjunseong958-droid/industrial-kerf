@@ -1,10 +1,16 @@
-//! The timeline the OTIO bridge exchanges: the program sequence of a
-//! `kerf-model` project in OpenTimelineIO's terms.
+//! The timeline an OTIO file holds: one sequence of a `kerf-model` project
+//! in OpenTimelineIO's terms. `otio_json` writes and reads it as an `.otio`
+//! file; the Python bridge exchanges the same form for every other adapter.
 //!
 //! Positions and durations count frames of the timeline `rate`. Media times
 //! count frames of the media `rate` and include its timecode `start`, as
 //! OTIO source ranges do. Each track lists its clips in order with each
 //! transition between the two clips it joins; time between clips is a gap.
+//!
+//! What OTIO has no field for and Kerf needs to read its own file back (ids,
+//! the sequence's name and frame size) travels in `metadata["kerf"]`. Another
+//! editor does not read it, so the frame size is still reported as not
+//! carried.
 
 use crate::{issue, InterchangeError, InterchangeIssue, IssueSeverity};
 use kerf_model::{
@@ -21,12 +27,32 @@ pub struct Timeline {
     pub rate: f64,
     #[serde(default)]
     pub start: i64,
+    /// The sequence as Kerf knows it, in `metadata["kerf"]` of the timeline.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sequence: Option<WireSequence>,
     #[serde(default)]
     pub media: Vec<WireMedia>,
     #[serde(default)]
     pub tracks: Vec<WireTrack>,
     #[serde(default)]
     pub markers: Vec<WireMarker>,
+}
+
+/// What a sequence is besides its timeline, which OTIO has no field for.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WireSequence {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height: Option<u32>,
+    /// Its timecode counts drop-frame.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub drop_frame: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -58,6 +84,10 @@ fn enabled() -> bool {
     true
 }
 
+fn is_enabled(enabled: &bool) -> bool {
+    *enabled
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum WireKind {
@@ -79,6 +109,12 @@ pub enum Item {
         source_in: i64,
         start: i64,
         duration: i64,
+        /// How fast it plays its media, forward: OTIO's `LinearTimeWarp`.
+        /// Absent at normal speed.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        speed: Option<f64>,
+        #[serde(default = "enabled", skip_serializing_if = "is_enabled")]
+        enabled: bool,
     },
     /// Frames taken from either side of the cut.
     Transition {
@@ -100,6 +136,9 @@ pub struct WireMarker {
     pub name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color: Option<String>,
+    /// OTIO's marker `comment`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
 }
 
 /// The program sequence of `project` as a timeline, and what it leaves out.
@@ -109,103 +148,117 @@ pub fn to_timeline(
     let sequence = project.sequences.first().ok_or_else(|| {
         InterchangeError::new("INTERCHANGE_PROJECT_INVALID", "the project has no sequence")
     })?;
+    Ok(sequence_timeline(project, sequence))
+}
+
+/// `sequence` of `project` as a timeline, and what it leaves out.
+pub fn sequence_timeline(
+    project: &Project,
+    sequence: &Sequence,
+) -> (Timeline, Vec<InterchangeIssue>) {
     let rate = sequence.rate;
     let mut issues = Vec::new();
-    let mut loss = |code: &str, message: String, path: &str| {
-        issues.push(issue(code, message, IssueSeverity::Loss, Some(path)));
-    };
     if project.sequences.len() > 1 {
-        loss(
+        issues.push(lost(
             "sequences_not_exported",
-            "only the first sequence was exported".into(),
+            format!("only sequence `{}` was exported", sequence.id),
             "sequences",
-        );
+        ));
     }
-    loss(
+    issues.push(lost(
         "canvas_not_exported",
         format!(
             "the {}x{} frame size has no OTIO equivalent",
             sequence.width, sequence.height
         ),
         sequence.id.as_str(),
-    );
-    let media_index: HashMap<&Id, usize> = project
-        .media
-        .iter()
-        .enumerate()
-        .map(|(index, media)| (&media.id, index))
-        .collect();
-    let media = project
-        .media
-        .iter()
-        .map(|media| WireMedia {
-            id: Some(media.id.to_string()),
-            path: media.path.clone(),
-            rate: media.rate.fps(),
-            start: media.rate.frames_round(media.start),
-            duration: Some(media.rate.frames_round(media.duration)),
-        })
-        .collect();
+    ));
+    if sequence.drop_frame {
+        issues.push(lost(
+            "drop_frame_not_exported",
+            "OTIO does not say that timecode counts drop-frame".into(),
+            sequence.id.as_str(),
+        ));
+    }
+    sequence_losses(sequence, &mut issues);
+    // The media the sequence plays, in the order it first plays each: all a
+    // file holds of them is what its clips name.
+    let mut media: Vec<WireMedia> = Vec::new();
+    let mut media_index: HashMap<&Id, usize> = HashMap::new();
     let mut tracks = Vec::new();
     for track in &sequence.tracks {
         let kind = match track.kind {
             TrackKind::Video => WireKind::Video,
             TrackKind::Audio => WireKind::Audio,
             TrackKind::Subtitle => {
-                loss(
-                    "captions_not_exported",
-                    "caption tracks have no OTIO equivalent".into(),
-                    track.id.as_str(),
-                );
+                issues.push(captions_lost(track, "OTIO"));
                 continue;
             }
         };
         if track.locked || track.muted {
-            loss(
+            issues.push(lost(
                 "track_state_not_exported",
                 "track lock and mute were not exported".into(),
                 track.id.as_str(),
-            );
+            ));
+        }
+        // The clips that are written, by id: a transition needs both of its own.
+        let written = |id: &Id| {
+            track.clip(id.as_str()).is_some_and(|clip| {
+                matches!(&clip.content, Content::Media { media, .. } if project.media(media.as_str()).is_some())
+            })
+        };
+        for transition in &track.transitions {
+            if !(written(&transition.from) && written(&transition.to)) {
+                issues.push(lost(
+                    "transition_not_exported",
+                    format!(
+                        "`{}` joins a clip that was not exported, and was dropped",
+                        transition.fx
+                    ),
+                    transition.id.as_str(),
+                ));
+            }
         }
         let mut items = Vec::new();
         for clip in &track.clips {
             let Content::Media {
                 media: id,
                 source_in,
-                speed,
+                ..
             } = &clip.content
             else {
-                loss(
-                    "content_not_exported",
-                    "only media clips are exported; this clip became a gap".into(),
-                    clip.id.as_str(),
-                );
+                issues.push(content_lost(clip));
                 continue;
             };
-            if !speed.is_one() {
-                loss(
-                    "speed_not_exported",
-                    format!("speed {speed} was not exported"),
-                    clip.id.as_str(),
-                );
-            }
-            if !clip.props.is_empty() || !clip.effects.is_empty() {
-                loss(
-                    "properties_not_exported",
-                    "clip properties and effects were not exported".into(),
-                    clip.id.as_str(),
-                );
-            }
-            if let Some(transition) = track.transitions.iter().find(|t| t.to == clip.id) {
+            let Some(source) = project.media(id.as_str()) else {
+                issues.push(content_lost(clip));
+                continue;
+            };
+            let index = *media_index.entry(&source.id).or_insert_with(|| {
+                media.push(WireMedia {
+                    id: Some(source.id.to_string()),
+                    path: source.path.clone(),
+                    rate: source.rate.fps(),
+                    start: source.rate.frames_round(source.start),
+                    duration: Some(source.rate.frames_round(source.duration)),
+                });
+                media.len() - 1
+            });
+            let speed = carried_speed(clip, &mut issues);
+            clip_losses(clip, &mut issues);
+            if let Some(transition) = track
+                .transitions
+                .iter()
+                .find(|t| t.to == clip.id && written(&t.from))
+            {
                 let (before, after) = transition.split_at_cut(rate);
-                if !matches!(transition.fx.as_str(), "dissolve" | "crossfade")
-                    || !transition.params.is_empty()
-                {
-                    loss(
+                if !is_dissolve(transition) {
+                    issues.push(lost(
                         "transition_not_exported",
                         format!("`{}` was exported as a dissolve", transition.fx),
                         transition.id.as_str(),
-                    );
+                    ));
                 }
                 items.push(Item::Transition {
                     id: Some(transition.id.to_string()),
@@ -213,14 +266,15 @@ pub fn to_timeline(
                     after: rate.frames_round(after),
                 });
             }
-            let source = &project.media[media_index[id]];
             items.push(Item::Clip {
                 id: Some(clip.id.to_string()),
                 name: clip.name.clone(),
-                media: media_index[id],
+                media: index,
                 source_in: source.rate.frames_round(source.start + *source_in),
                 start: rate.frames_round(clip.start),
                 duration: rate.frames_round(clip.duration),
+                speed: (speed != Ratio::ONE).then(|| speed.value()),
+                enabled: clip.enabled,
             });
         }
         tracks.push(WireTrack {
@@ -231,6 +285,22 @@ pub fn to_timeline(
             items,
         });
     }
+    let unused: Vec<&str> = project
+        .media
+        .iter()
+        .filter(|media| !media_index.contains_key(&media.id))
+        .map(|media| media.id.as_str())
+        .collect();
+    if !unused.is_empty() {
+        issues.push(lost(
+            "media_not_exported",
+            format!(
+                "media the sequence does not play were not exported: {}",
+                unused.join(", ")
+            ),
+            "media",
+        ));
+    }
     let markers = sequence
         .markers
         .iter()
@@ -240,19 +310,177 @@ pub fn to_timeline(
             duration: rate.frames_round(marker.duration),
             name: marker.name.clone(),
             color: marker.color.map(|color| color.name().to_owned()),
+            note: marker.note.clone(),
         })
         .collect();
-    Ok((
-        Timeline {
-            name: project.name.clone(),
-            rate: rate.fps(),
-            start: rate.frames_round(sequence.start),
-            media,
-            tracks,
-            markers,
-        },
-        issues,
-    ))
+    let timeline = Timeline {
+        name: project.name.clone(),
+        rate: rate.fps(),
+        start: rate.frames_round(sequence.start),
+        sequence: Some(WireSequence {
+            id: Some(sequence.id.to_string()),
+            name: Some(sequence.name.clone()),
+            width: Some(sequence.width),
+            height: Some(sequence.height),
+            drop_frame: sequence.drop_frame,
+        }),
+        media,
+        tracks,
+        markers,
+    };
+    (timeline, issues)
+}
+
+pub(crate) fn lost(code: &str, message: String, path: &str) -> InterchangeIssue {
+    issue(code, message, IssueSeverity::Loss, Some(path))
+}
+
+/// Whether another editor's cross dissolve is what `transition` is.
+pub(crate) fn is_dissolve(transition: &Transition) -> bool {
+    matches!(transition.fx.as_str(), "dissolve" | "crossfade") && transition.params.is_empty()
+}
+
+/// What a caption track is to a file that takes none of it.
+pub(crate) fn captions_lost(track: &Track, format: &str) -> InterchangeIssue {
+    lost(
+        "captions_not_exported",
+        format!(
+            "the {} caption(s) of this track were not exported to {format}; export them as an .srt or .vtt file",
+            track.clips.len()
+        ),
+        track.id.as_str(),
+    )
+}
+
+/// A clip that plays no media file: a generator, a nested sequence, a caption.
+pub(crate) fn content_lost(clip: &Clip) -> InterchangeIssue {
+    let what = match &clip.content {
+        Content::Generator { fx, .. } => format!("the `{fx}` generator"),
+        Content::Sequence { sequence, .. } => format!("the nested sequence `{sequence}`"),
+        Content::Caption { .. } => "a caption".to_owned(),
+        Content::Media { media, .. } => format!("media `{media}`, which the project does not have,"),
+    };
+    lost(
+        "content_not_exported",
+        format!("only media clips are exported; {what} became a gap"),
+        clip.id.as_str(),
+    )
+}
+
+/// What of a media clip no timeline file here carries: how it is drawn and heard.
+pub(crate) fn clip_losses(clip: &Clip, issues: &mut Vec<InterchangeIssue>) {
+    let mut parts = Vec::new();
+    if !clip.props.is_empty() {
+        let names: Vec<&str> = clip.props.keys().map(String::as_str).collect();
+        parts.push(format!("properties ({})", names.join(", ")));
+    }
+    if !clip.effects.is_empty() {
+        let names: Vec<&str> = clip.effects.iter().map(|effect| effect.fx.as_str()).collect();
+        parts.push(format!("effects ({})", names.join(", ")));
+    }
+    if !clip.masks.is_empty() {
+        parts.push(format!("{} mask(s)", clip.masks.len()));
+    }
+    if !parts.is_empty() {
+        issues.push(lost(
+            "properties_not_exported",
+            format!("not exported: {}", parts.join("; ")),
+            clip.id.as_str(),
+        ));
+    }
+}
+
+/// What of a sequence as a whole no timeline file here carries.
+pub(crate) fn sequence_losses(sequence: &Sequence, issues: &mut Vec<InterchangeIssue>) {
+    let clips = || sequence.tracks.iter().flat_map(|track| &track.clips);
+    if clips().any(|clip| clip.link.is_some()) {
+        issues.push(lost(
+            "links_not_exported",
+            "clip links were not exported: picture and sound arrive as separate clips".into(),
+            sequence.id.as_str(),
+        ));
+    }
+    if clips().any(|clip| clip.parent.is_some()) {
+        issues.push(lost(
+            "parents_not_exported",
+            "clips that follow a parent clip arrive where they are without it".into(),
+            sequence.id.as_str(),
+        ));
+    }
+    if sequence.color != Default::default() {
+        issues.push(lost(
+            "color_space_not_exported",
+            format!(
+                "the sequence's color space, {}, was not exported: the other editor gives the timeline its own",
+                sequence.color.id()
+            ),
+            sequence.id.as_str(),
+        ));
+    }
+    if !sequence.buses.is_empty() || sequence.tracks.iter().any(|track| track.bus.is_some()) {
+        issues.push(lost(
+            "mix_not_exported",
+            "the mix buses and what is on them were not exported".into(),
+            sequence.id.as_str(),
+        ));
+    }
+}
+
+/// The one forward speed a timeline file plays `clip` at, with what that
+/// leaves out: a ramp becomes its speed overall, as in an EDL, and reverse
+/// plays the same source forward.
+pub(crate) fn carried_speed(clip: &Clip, issues: &mut Vec<InterchangeIssue>) -> Ratio {
+    let speed = clip.speed();
+    let forward = match speed.constant() {
+        Some(ratio) => Ratio::new(ratio.num().abs(), ratio.den()).unwrap_or(Ratio::ONE),
+        None => {
+            let overall = ratio_of(speed.average(clip.duration)).unwrap_or(Ratio::ONE);
+            issues.push(lost(
+                "speed_ramp_not_exported",
+                format!("a speed ramp was exported as its speed overall, {overall}"),
+                clip.id.as_str(),
+            ));
+            overall
+        }
+    };
+    if speed.is_reverse() {
+        issues.push(lost(
+            "reverse_not_exported",
+            "reverse was not exported: the clip plays the same source forward".into(),
+            clip.id.as_str(),
+        ));
+    }
+    forward
+}
+
+/// The ratio Kerf holds nearest `value`, with a denominator up to 1000:
+/// `None` outside 1% to 10,000%.
+pub(crate) fn ratio_of(value: f64) -> Option<Ratio> {
+    if !value.is_finite() || value <= 0.0 {
+        return None;
+    }
+    // Continued fractions: each step is the best ratio of its size.
+    let (mut num, mut den) = (1_i64, 0_i64);
+    let (mut last_num, mut last_den) = (0_i64, 1_i64);
+    let mut rest = value;
+    for _ in 0..32 {
+        let whole = rest.floor();
+        let next_num = whole as i64 * num + last_num;
+        let next_den = whole as i64 * den + last_den;
+        if next_den > 1000 || next_num > i64::from(i32::MAX) {
+            break;
+        }
+        (last_num, last_den, num, den) = (num, den, next_num, next_den);
+        let fraction = rest - whole;
+        if fraction < 1e-9 {
+            break;
+        }
+        rest = 1.0 / fraction;
+    }
+    if den == 0 {
+        return None;
+    }
+    Ratio::new(num as i32, den as u32).ok()
 }
 
 /// A one-sequence project from a timeline, and what the conversion changed.
@@ -261,13 +489,20 @@ pub fn from_timeline(
 ) -> Result<(Project, Vec<InterchangeIssue>), InterchangeError> {
     let invalid = |message: String| InterchangeError::new("INTERCHANGE_OUTPUT_INVALID", message);
     let rate = Rate::from_fps(timeline.rate).map_err(|e| invalid(format!("timeline rate: {e}")))?;
-    let (width, height) = (1920, 1080);
-    let mut issues = vec![issue(
-        "canvas_assumed",
-        format!("OTIO has no frame size; the sequence is {width}x{height}"),
-        IssueSeverity::Warning,
-        None,
-    )];
+    let mut issues = Vec::new();
+    let wire = timeline.sequence.clone().unwrap_or_default();
+    let (width, height) = match (wire.width, wire.height) {
+        (Some(width), Some(height)) if width > 0 && height > 0 => (width, height),
+        _ => {
+            issues.push(issue(
+                "canvas_assumed",
+                "OTIO has no frame size; the sequence is 1920x1080",
+                IssueSeverity::Warning,
+                None,
+            ));
+            (1920, 1080)
+        }
+    };
     let mut ids = IdGen::default();
     let mut claim = |wanted: Option<&str>, prefix: &str| {
         wanted
@@ -309,6 +544,7 @@ pub fn from_timeline(
             reel: None,
             recipe: None,
             steps: Vec::new(),
+            sync: None,
         });
     }
     if !media.is_empty() {
@@ -319,16 +555,15 @@ pub fn from_timeline(
             None,
         ));
     }
+    let named = |name: Option<String>| name.filter(|name| !name.is_empty());
     let mut sequence = Sequence {
         buses: Vec::new(),
-        id: claim(None, "s"),
-        name: if timeline.name.is_empty() {
-            "Main".into()
-        } else {
-            timeline.name.clone()
-        },
+        id: claim(wire.id.as_deref(), "s"),
+        name: named(wire.name)
+            .or_else(|| named(Some(timeline.name.clone())))
+            .unwrap_or_else(|| "Main".into()),
         rate,
-        drop_frame: false,
+        drop_frame: wire.drop_frame && rate.supports_drop_frame(),
         width,
         height,
         sample_rate: 48_000,
@@ -359,21 +594,37 @@ pub fn from_timeline(
                     source_in,
                     start,
                     duration,
+                    speed,
+                    enabled,
                 } => {
                     let source = media.get(*index).ok_or_else(|| {
                         invalid(format!("a clip names media {index}, which does not exist"))
                     })?;
+                    let id = claim(id.as_deref(), "c");
+                    let speed = match speed {
+                        None => Ratio::ONE,
+                        Some(value) => ratio_of(*value).unwrap_or_else(|| {
+                            issues.push(issue(
+                                "speed_dropped",
+                                format!("a speed of {value} is outside what a clip plays at; it plays at 1"),
+                                IssueSeverity::Loss,
+                                Some(id.as_str()),
+                            ));
+                            Ratio::ONE
+                        }),
+                    };
                     let mut clip = Clip::new(
-                        claim(id.as_deref(), "c"),
+                        id,
                         Content::Media {
                             media: source.id.clone(),
                             source_in: source.rate.time_of(*source_in) - source.start,
-                            speed: Ratio::ONE.into(),
+                            speed: speed.into(),
                         },
                         rate.time_of(*start),
                         rate.time_of(*duration),
                     );
                     clip.name.clone_from(name);
+                    clip.enabled = *enabled;
                     if let Some((id, before, after)) = pending.take() {
                         match track.clips.last() {
                             Some(from) if from.end() == clip.start => {
@@ -444,7 +695,7 @@ pub fn from_timeline(
             duration: rate.time_of(wire.duration),
             name: wire.name.clone(),
             color,
-            note: None,
+            note: wire.note.clone().filter(|note| !note.is_empty()),
         });
     }
     sequence.markers.sort_by_key(|marker| marker.at);

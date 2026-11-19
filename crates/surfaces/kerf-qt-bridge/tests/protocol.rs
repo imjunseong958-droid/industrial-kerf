@@ -596,6 +596,86 @@ fn proposals_wait_side_by_side_and_one_previews_in_place_of_the_program() {
     });
 }
 
+#[test]
+fn a_stale_proposal_is_brought_forward_or_refused_by_the_clip_that_changed() {
+    let Some(project) = tone_project("forward") else {
+        return;
+    };
+    let mut editor = Editor::open(&project.0);
+    ready(&mut editor);
+    let client = RuntimeClient::new(&project.0).unwrap();
+    let base = client.get_state().unwrap().revision;
+    let agent = Author {
+        id: Some("codex".into()),
+        ..Author::new("mcp", "Codex")
+    };
+    // A marker where the clips end.
+    let staged = client
+        .stage_script_proposal_by(
+            "agent-1",
+            base,
+            "marker add as=end at=96f name=\"end\"",
+            None,
+            &agent,
+            None,
+        )
+        .unwrap();
+    let v1 = staged.proposals[0].proposal_id.clone();
+    // A second of colour at the head moves every clip, and their end.
+    client
+        .apply_script_request(
+            "ui",
+            "head",
+            "insert gen=solid at=0f dur=24f on=V1 as=g1",
+            base,
+        )
+        .unwrap();
+    let stale = editor.state("the proposal gone stale", |snapshot| {
+        proposal(snapshot, &v1).is_some_and(|entry| entry["freshness"] == "stale")
+    });
+    editor.send(json!({"type": "forward", "proposalId": v1, "revision": stale["revision"]}));
+    let forwarded = editor.state("version 2", |snapshot| {
+        snapshot["proposals"]
+            .as_array()
+            .is_some_and(|entries| entries.iter().any(|entry| entry["supersedes"] == v1.as_str()))
+    });
+    assert_eq!(forwarded["revision"], stale["revision"], "nothing is accepted");
+    let v2 = forwarded["proposals"][0].clone();
+    assert_eq!(v2["version"], 2);
+    assert_eq!(v2["freshness"], "current");
+    assert_eq!(v2["author"]["name"], "Codex");
+    assert_eq!(v2["script"], "marker add as=end at=00:00:05:00 name=\"end\"\n");
+    let v2_id = v2["proposalId"].as_str().unwrap().to_owned();
+    assert!(forwarded["proposalTimelines"][&v2_id].is_object());
+
+    // With the clip the place was on cut, it is refused by that clip's
+    // name, and waits as it was.
+    client
+        .apply_script_request(
+            "ui",
+            "cut",
+            "trim c1 out -6f",
+            forwarded["revision"].as_u64().unwrap(),
+        )
+        .unwrap();
+    let cut = editor.state("stale again", |snapshot| {
+        proposal(snapshot, &v2_id).is_some_and(|entry| entry["freshness"] == "stale")
+    });
+    editor.forget("error");
+    editor.send(json!({"type": "forward", "proposalId": v2_id, "revision": cut["revision"]}));
+    let refused = editor.expect("the refusal", |event| event["type"] == "error");
+    assert_eq!(refused["command"], "forward");
+    assert_eq!(refused["code"], "PROPOSAL_NOT_FORWARDED");
+    let message = refused["message"].as_str().unwrap();
+    assert!(
+        message.contains("00:00:05:00 was on clip `c1`, which was cut since this was proposed"),
+        "{message}"
+    );
+    let after = client.get_state().unwrap();
+    assert_eq!(after.proposals[0].proposal_id, v2_id);
+    assert_eq!(after.proposals[0].version, 2);
+}
+
 /// What the viewer says when it opens something to play: a preview shown,
 /// or the program again.
 fn opened(event: &Value) -> bool {

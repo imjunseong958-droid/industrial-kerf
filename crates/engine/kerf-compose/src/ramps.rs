@@ -78,6 +78,7 @@ pub fn with_sound<'a>(
                     reel: None,
                     recipe: None,
                     steps: Vec::new(),
+                    sync: None,
                 });
                 out.sequences[s].tracks[t].clips[c].content = Content::Media {
                     media: id,

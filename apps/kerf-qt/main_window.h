@@ -353,7 +353,8 @@ private:
     // The activity log, from the conversation's ⋯ menu.
     void showActivity();
     void addActivity(const QString &kind, const QString &text);
-    void showError(const QString &message);
+    // `what`, when given, is said before the message: what was asked that it refuses.
+    void showError(const QString &message, const QString &what = QString());
     void setConnection(const QString &status, const QString &message = QString());
     // Requests a fresh connection needs: Git status,
     // and live sync when it was on for this project.

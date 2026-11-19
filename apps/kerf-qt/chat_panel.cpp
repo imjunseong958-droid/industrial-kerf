@@ -1168,7 +1168,7 @@ ProposalCard *ChatPanel::buildCard(const ProposalModel::Proposal &proposal) {
         card->setWatchLength(reel::total(reel::plan(proposal.changes, end, end)));
     }
     card->setPrimary(pinned);
-    if (proposal.stale) card->setAcceptBlocked(QStringLiteral("Out of date · ask for a new version"));
+    card->setStale(proposal.isOpen() && proposal.stale);
     if (!m_connected) card->setActionsEnabled(false);
     if (!proposal.isOpen()) {
         const bool accepted = proposal.status == QLatin1String("accepted");
@@ -1198,6 +1198,7 @@ ProposalCard *ChatPanel::buildCard(const ProposalModel::Proposal &proposal) {
         scheduleRebuild();
     });
     connect(card, &ProposalCard::acceptRequested, this, &ChatPanel::acceptRequested);
+    connect(card, &ProposalCard::forwardRequested, this, &ChatPanel::forwardRequested);
     connect(card, &ProposalCard::watchRequested, this, [this, card] { emit changedPartsRequested(card->shownId()); });
     connect(card, &ProposalCard::rejectRequested, this, &ChatPanel::rejectRequested);
     return card;

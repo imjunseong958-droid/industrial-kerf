@@ -418,6 +418,21 @@ pub enum RuntimeRequest {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         revises: Option<String>,
     },
+    /// Bring a stale open proposal onto the project as it is, at
+    /// `baseRevision`: its operations run again there, each place they name
+    /// moved with the clips that held it, and the result is staged as the
+    /// proposal's next version for review. Refused, leaving the proposal as
+    /// it was, where a clip a line names or a place it names was on has been
+    /// cut, moved or removed since (`PROPOSAL_NOT_FORWARDED`, naming the
+    /// clip), or a line would change other clips than it did.
+    ForwardProposal {
+        #[serde(rename = "proposalId")]
+        proposal_id: String,
+        #[serde(rename = "requestKey")]
+        request_key: String,
+        #[serde(rename = "baseRevision")]
+        base_revision: u64,
+    },
     Undo {
         actor: String,
         #[serde(rename = "idempotencyKey")]

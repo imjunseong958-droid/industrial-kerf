@@ -1402,6 +1402,29 @@ asked for at the word's time would go into, so nothing here goes past a word eit
 run on into what stays have no quiet on that side, and the line is refused with the word in the
 way.
 
+A blade is snapped as the one cut it is (2026-11-19). `blade` took no `snap=`, so a cut through a
+picture and two microphones in a pause was a snapped `split` of each, and each went into the
+pause of its own sound: two cuts a few frames apart where one was meant. `blade at=… snap=pause`
+(`Script::snap_blade` and `quiet_together` in `kerf-lang/src/script.rs`) finds one frame that is
+in a quiet of every sound the blade cuts. Those are the clips it cuts on sound tracks, where the
+check below judges cuts too, and one on a muted track among them, since the blade cuts it all the
+same: a picture's own sound is not heard where another recording is laid under it, and going by
+it would refuse a blade for a sound nobody hears. Clips
+that play one media together are one sound, and where the blade cuts no clip on a sound track it
+goes by the media of the picture clips it cuts, as a `split` of one does. Each sound takes the
+blade by the rule any edge goes by (`kerf_lang::Breaks::snaps`), past no word of its own, so a
+blade through one sound lands where a split of it lands. Through several it lands where their
+quiets overlap: clear of the sound either side in each where the overlap is long enough, and
+where it is not, at the point that divides it as a short pause of one is divided (`clear` in
+`kerf-lang/src/facts.rs`). What it answers with names the pause of each and says how long they are
+quiet together, since that can be shorter than either pause. With no overlap the line is refused
+and nothing moves, since a cut at a place of its own on each track is several cuts, which `split`
+already makes; the refusal names each clip, where it alone would have the blade, and the word
+another clip says there. A snapped blade also cuts the clips it was asked to cut and no other: it
+stays inside each of them and goes into no other clip of its tracks, whose sound was never
+looked at. `tracks=` cuts fewer tracks and goes by those alone, and `snap=cut` goes to the
+nearest cut of any picture the blade cuts.
+
 A check judges each cut of a sequence's sound the same way (`kerf-mcp/src/cuts.rs`): a cut
 with sound at the level of speech on both sides goes through it (`cut.in_sound`), whether or not a
 transcript has a word there; a cut under a transition is not judged, since the transition fades
@@ -1424,13 +1447,33 @@ loud, has no pauses and judges no cut.
 either side of where the sound goes from one stretch of footage to another, with the cut marked,
 and the words it left out between them. A cut that takes "a very simple" out of "I gave it a
 very simple prompt" has both its edges in quiet and every word whole, and measures clean; read
-as "I gave it ‖ prompt" it does not. Scarlet goes on to name a cut that takes a word or two more
-than the restart it removes, from the words alone; that is left, having no cuts here to hold it
-to, and what a join plays is there to read. The length a pause is listed from is the edit's to
+as "I gave it ‖ prompt" it does not. The length a pause is listed from is the edit's to
 say (`{"pauses": 0.5}`, 0.3 s at least), since what is dead air depends on the pace: a fixed
 three quarters of a second hid every pause a tighter cut would take. And `from` and `to` take a
 part of a sequence, where the lists, which stop at 40 cuts and joins and 8 of the rest, said
 nothing of what they left out.
+
+A join that took a restart out and a word or two with it is named (`tookMore` on the join,
+counted in `summary`, and `cut.took_more` from the check, 2026-11-19), which reading `plays`
+was left to find. A cut that takes "beautiful. The detail, the, the" out of "absolutely
+beautiful. The detail, the, the detail, the spatial awareness" plays "absolutely ‖ detail, the
+spatial awareness": the start that was taken again is gone, and "beautiful." with it, every
+word played is whole, and nothing is said twice. It is found from the words alone, as Scarlet
+finds it (`took_more` in `kerf-mcp/src/cuts.rs`). The words at an end of what a join took that
+none of the six words played either side of it says again are named where what was taken
+beside them is a restart. At its start (`out`) they are the end of the phrase kept, two at
+most: one of the six words taken after them is said twice among those or is one of the first
+two the join goes on with, and the phrase before the join had not ended its sentence. A word
+there that is said again in the six taken after it is the restart's own, and no end of what
+was kept. At its end (`in`) they are the start of the take the join goes on with, three at
+most: the first of them was said in the six words taken before it, as a take starts the way
+the one it replaces did. More than that at an end is a passage taken out on purpose, as an
+aside is, and so is anything a join took none of which is said again beside it.
+Words are compared as a restart's are; a hesitation ("um", "uh", "hmm") and a transcriber's
+note of a sound (`[MUSIC]`) are no words, at an end or among the six. Scarlet found the shape
+at 14 of the 96 joins of a 58-minute edit, with a word lost from the sentence at about half
+and a correction or an aside taken out at the rest, so it is information that says where, and
+the sentence tells. Those numbers are Scarlet's: no edit here has been read against it.
 
 Measured by `kerf-mcp/tests/cut_edges.rs` on a recording made there, so that where each word
 starts and ends is known: 420 voiced words with a decay, some with a hiss before or after, some
@@ -1489,13 +1532,118 @@ A room read where it is gives back every cut its change had taken: by the one ro
 whole recording, nothing in its louder end came down to what was quiet at its start. A tick gains less than it might, 6 cuts and 8 fewer hard against a word: most of
 these ticks come within a tenth of a second of where the word before them has died away, and
 those are left as sounds. Not done: an edge between two words with no quiet
-between them at all, where the level only dips, since a syllable leaves such a dip inside a word
-too and telling them apart takes word times closer than a transcriber's (the recording here has
-none: every two of its words are 0.08 s apart or more); the 0.1 s tried on real speech, since it
+between them at all, where the level only dips, which is measured below and not built; the 0.1 s
+tried on real speech, since it
 is set by this recording's stopped consonants, which hold 0.09 s at most, and where a language
 holds one longer only the transcript says so; a change of room found where it happens, which is
-now somewhere in the half minute it falls in; and a breath taken for part of the pause it is in,
-which an edge still stops short of.
+now somewhere in the half minute it falls in; a breath taken for part of the pause it is in,
+which an edge still stops short of; a sound left out of what a snapped blade goes by for what it
+is, as music under speech is, which has no pauses and refuses the blade until `tracks=` leaves
+its track out, uncut; and a quiet found for a blade in a nested sequence's sound, which has no
+index, so that such a clip on a sound track refuses it too.
+
+An edge in the dip between two words that run together is measured, and not built (2026-11-19).
+Scarlet puts one where the level is lowest between them, where that is down at the room's tone,
+or at -48 dBFS or under and 10 dB under both its sides, and can because an aligner tells it where
+the two words part. A transcriber's times are a tenth of a second or two out, and the closure of a
+stopped consonant leaves as low a dip inside a word. To count how often the one is taken for the
+other, `cut_edges.rs` makes a second recording
+(`a_dip_between_two_words_is_not_told_from_one_inside_a_word`): the same 420 words said as people
+talk. Three in five of those inside a phrase run on into the next, which starts from no time at
+all to 0.1 s after the voice or the hiss of the one before stops, over what is left of its decay,
+so the level between them dips from not at all to all the way to the room. And a closure, as long
+as before (0.04 s to 0.09 s), is in two in five of the words longer than 0.2 s, anywhere that
+leaves 0.05 s of the voice before it and 0.03 s after: near a word's start or its end as well as
+in its middle, two in five of them on a murmur of the voice 12 to 24 dB down and the rest on
+nothing. A cut is asked for where a transcript parts each two words, as far out as before (0.12 s
+either way), on a 24 fps frame. Like the first recording it is not speech, and nobody listened to
+it. `snap=pause` as it is, with that transcript:
+
+| Room | Placed | Refused | In a word | Across a word |
+|---|---|---|---|---|
+| -55 dBFS | 263 | 156 | 0 | 0 |
+| -38 dBFS | 285 | 134 | 3 | 0 |
+
+Every cut refused is between two words with no quiet between them, a third of all that are asked
+for; the first recording asks for a cut only where a tenth of a second lies between two words,
+and has every one placed. No cut placed is in a voice or in a closure. The 3 in the noisy room
+are in a word all the same, and were not looked for: each is where a word runs on into one that
+starts with a hiss barely over the room's tone, so that the hiss reads as the room, and with what
+is left of the word before it as a quiet a tenth of a second long, and the cut is 5, 8 and 27 ms
+into the hiss. It is the hiss the first recording has hard against a cut (the 9 above), nearer
+now that the quiet beside it is short, and it is left as it is found.
+
+What follows is what each way of finding the dip makes of the cuts refused, by where the lowest
+point of the dip it takes truly is: between the two words; in a word, in the closure of its
+consonant or in the hiss it starts or ends with (none is in a voice); or between two other words,
+across a whole one. A dip is the hops within 3 dB of a lowest one, shorter than a gap, and its
+depth is how far that is under the loudest of the 0.15 s before it and after it. The parting is
+where the transcript parts the two words, and a dip is within 0.06 s of it where neither word is
+timed right through the dip with more to spare, which is the rule a gap goes by. The last two
+columns are the dips a 24 fps frame falls in, and how many of those frames are in a word:
+
+| Room | A cut goes in | Found | Between the two | In a closure | In a hiss | Across a word | On a frame | In a word |
+|---|---|---|---|---|---|---|---|---|
+| -55 dBFS, 156 refused | the lowest dip of both words, 6 dB or more | 152 | 44 | 75 | 7 | 26 | 124 | 80 |
+| | the lowest of both, by Scarlet's levels | 94 | 15 | 68 | 0 | 11 | 89 | 67 |
+| | a dip within 0.06 s of the parting, 6 dB | 82 | 54 | 9 | 19 | 0 | 63 | 27 |
+| | within 0.06 s, 10 dB | 78 | 50 | 9 | 19 | 0 | 63 | 27 |
+| | within 0.06 s, 20 dB | 54 | 34 | 9 | 11 | 0 | 46 | 20 |
+| | within 0.06 s, by Scarlet's levels | 25 | 19 | 6 | 0 | 0 | 22 | 6 |
+| | within 0.06 s, at the room's tone | 20 | 14 | 6 | 0 | 0 | 17 | 6 |
+| | within 0.03 s, 10 dB | 49 | 29 | 4 | 16 | 0 | 41 | 18 |
+| | a dip the parting is in, 10 dB | 17 | 8 | 1 | 8 | 0 | 17 | 9 |
+| | within 0.06 s, and the lowest of both words | 34 | 24 | 7 | 3 | 0 | 29 | 9 |
+| | within 0.06 s, and the only dip of both words | 11 | 9 | 0 | 2 | 0 | 9 | 2 |
+| | within 0.06 s, the only dip, at the room's tone | 2 | 2 | 0 | 0 | 0 | 2 | 0 |
+| | the parting in it, the only dip, at the room's tone | 1 | 1 | 0 | 0 | 0 | 1 | 0 |
+| -38 dBFS, 134 refused | the lowest dip of both words, 6 dB or more | 130 | 37 | 62 | 9 | 22 | 110 | 69 |
+| | the lowest of both, by Scarlet's levels | 110 | 28 | 60 | 2 | 20 | 95 | 61 |
+| | a dip within 0.06 s of the parting, 6 dB | 70 | 46 | 8 | 16 | 0 | 60 | 24 |
+| | within 0.06 s, 10 dB | 67 | 43 | 8 | 16 | 0 | 60 | 24 |
+| | within 0.06 s, 20 dB | 38 | 25 | 8 | 5 | 0 | 35 | 14 |
+| | within 0.06 s, by Scarlet's levels | 44 | 30 | 8 | 6 | 0 | 39 | 13 |
+| | within 0.06 s, at the room's tone | 44 | 30 | 8 | 6 | 0 | 39 | 13 |
+| | within 0.03 s, 10 dB | 42 | 25 | 4 | 13 | 0 | 37 | 15 |
+| | a dip the parting is in, 10 dB | 22 | 12 | 1 | 9 | 0 | 22 | 10 |
+| | within 0.06 s, and the lowest of both words | 31 | 20 | 5 | 6 | 0 | 30 | 10 |
+| | within 0.06 s, and the only dip of both words | 12 | 9 | 0 | 3 | 0 | 12 | 3 |
+| | within 0.06 s, the only dip, at the room's tone | 8 | 7 | 0 | 1 | 0 | 8 | 1 |
+| | the parting in it, the only dip, at the room's tone | 2 | 1 | 0 | 1 | 0 | 2 | 1 |
+
+No way keeps a cut out of a word, for three reasons the rows show. The lowest dip of two words is
+a closure in one of them half the time: a closure goes down to the room, and what two words part
+for mostly does not (at 46 and 37 of the cuts refused, no dip of 3 dB has its lowest where the two
+meet). Keeping to the dip the transcript's parting is at leaves the closures that are as near it
+as the transcript is out, 9 and 8, and a deeper dip or the room's tone takes out none of them,
+since a closure is the deepest dip there is. And the lowest of a dip that is between two words is
+often in one of them: where a word starts or ends with a hiss, the level goes on falling through
+the hiss as the voice beside it dies away under it, and a cut at the lowest is between that
+word's hiss and its voice (19 and 16). Asking for the room's tone takes the hisses out in the
+quiet room and leaves them in the noisy one, where a hiss reads as the room. Taking a dip only
+where the two words have that one and no other leaves 11 and 12 cuts found, 2 and 3 of them in a
+hiss; and asking for the room's tone as well leaves 2 and 8, one of the 8 in a hiss, which is
+nothing to build for. Nor are those few safe. Over twelve such recordings in each room (other
+seeds, worked out beside this work; no test holds it), the only dip within 0.06 s and at the
+room's tone was found at 32 of the 1,740 cuts refused in the quiet room, 2 of them in a closure,
+which is the one dip of two words whose own parting has none, timed into by the transcript; and
+at 132 of 1,561 in the noisy room, 22 of them in a word. The only dip with the parting in it and
+at the room's tone was found at 7 and at 33, none of the 7 in a word and 8 of the 33 in a hiss.
+(`snap=pause` as it is, over the same twelve: 3,288 cuts placed in the quiet room, none in a
+word, and 3,467 in the noisy one, 38 of them in a hiss that leads a word, as above.) Nor does it
+rest on where the closures were put: with each kept to the middle of its word, as in the first
+recording, a dip within 0.06 s of the parting was still a closure 8 and 7 times over four
+recordings in each room.
+
+So nothing is built, and no line, check or answer changes: an edge asked for between two words
+with no quiet between them is refused, as it was. What would change that is not a finer rule
+over the same two things. With the transcript's times 0.03 s out, as an aligner's might be, and
+not 0.12 s (four recordings in each room, beside this work), a dip within 0.03 s of the parting
+was in no closure, of 289 found in the quiet room and 254 in the noisy one, and 34 and 33 were
+still in a hiss: with times that near a cut can go by the times, and the dip is only what bears
+them out, which is what an aligner gives Scarlet and a transcriber does not give Kerf. An aligner
+is left out as before (What else exists), and the levels, a hundredth of a second at a time, do
+not tell a closure or a hiss from where two words part.
 
 The picture of a cut is read from what the document has too, where the two clips are shots
 whose guides it holds (`kerf_engine::eye`, `look` with `eye`, 2026-11-18). A model makes each
@@ -1549,6 +1697,38 @@ a making 78 to 97, so the guides are what to read before a making. It draws fram
 asked for, as `shows` is, and is no part of a check; at most 64 cuts are read at once, and
 `from` and `to` choose a range.
 
+A check reads the picture as its tracks stack up, for a flash that no one clip shows
+(`picture.flash`, `kerf-mcp/src/lint.rs`, 2026-11-19). An overlay that fills the frame and ends two
+frames before the cut under it shows two frames of the shot that cut ends, and one that starts two
+frames after it, two of the shot it starts. Every clip is long enough, so the check of a clip under
+three frames (`clip.flash`) and the one of a sliver of another shot at a clip's edge
+(`cut.near_scene_cut`) said nothing. The video tracks that are on are laid over one another from
+the top, each clip read as it is drawn at each frame, a look as the keys and effects it stands for:
+it hides what is under it where it is a picture with no transparency of its own, or a solid, at
+full opacity over the whole frame, and leaves it showing where it is seen through or does not fill
+the frame. A picture narrower than the frame and left where fitting puts it hides as much as one
+that fills it, since the compositor pads it with black. A shot is a clip, or the part of one
+between two cuts its media's index found, and goes on through a transition and through a split that
+plays on, since nothing cuts there. A stretch of a shot that shows for under three frames is said
+once, with what shows in it, for how many frames, where, and what is before it and after it: "2
+frames of `c1` show at 00:00:03:22, between `o1` ending and the cut to `c2`".
+
+Only what is certain is said. A picture in a corner leaves the shot under it showing all the while,
+whatever is cut from it, so that shot does not flash. An overlay that fades, or that a transition
+takes, lets what is under it come up through it and is not cut from, so a stretch that starts or
+ends there is left. Nothing is said under a clip whose cover is not worked out: one that is turned,
+in depth, or moved by a parent or along a path, one over the whole frame that is masked or keyed,
+one with an effect that may move it or draw it larger, and a nested sequence, which is transparent
+where it has nothing and is not read for where that is. A shot that is itself under three frames is
+left to the two checks that say it of its clip. A frame or two with nothing on screen was said as
+black already (`picture.black`), and under a picture that does not fill the frame as edges left
+black (`picture.edges`); what neither said is the frame or two of black behind a title, or anything
+else laid over them, between one picture that fills the frame and the next, and that is said here.
+It draws nothing: the 2,000 cuts and 1,000 overlays of a sequence 67 minutes long are read in 6 ms,
+and in 11 ms where every overlay ends two frames early and is said (measured beside this work, a
+release build on one core; no test holds it). The idea is Scarlet's (What others do, and what to
+take).
+
 Slow motion can make frames: `retime=blend` or `retime=flow`, on the CPU. Speed changes over a clip
 (`kerf_model::Speed`, `speed={0f:1 24f:1/4}`): the model knows one curve, source played by clip time,
 and everything from trims to handles reads it. FFmpeg's `atempo` cannot follow a ramp (timed tempo
@@ -1562,6 +1742,166 @@ the compositor. A multicam is a sequence with a camera on each track, and a clip
 clip effects and then buses (`kerf_model::Bus`), mixed by the render's graph and, at the top of a
 program, by the live mixer's own stream for each bus, so a compressor hears the same sum in both. A
 timeline's own tools stay in `kerf-model` and `kerf-lang`.
+
+A sequence leaves for another editor as a timeline file that `kerf-interchange` writes in Rust, with
+no Python: an OpenTimelineIO `.otio` (`otio_json.rs`), Final Cut Pro XML (`fcpxml.rs`), or a CMX3600
+EDL (`edl.rs`). `kerf export` and an agent's `render` with `handoff` write the first two
+(`kerf_interchange::export`), and each answers with the list of what the file does not carry
+(`InterchangeReport`: `losses` for what is left out or flattened, `warnings` for what arrives in
+another form), because an edit that loses its titles, effects, or a ramp on the way has to be told
+at the hand-off and not found in the other editor. One conversion says what a media clip loses
+whichever file it goes into (`otio::clip_losses`, `carried_speed`, `sequence_losses`), so the two
+lists do not drift apart.
+
+- **`.otio`.** A sequence becomes `otio::Timeline`, frames of the sequence and of each media, and
+  that is written as OpenTimelineIO's JSON by hand, field by field in the order OpenTimelineIO
+  writes them. The schema versions are the ones its serialized-data documentation gives for the
+  releases from 0.15 through 0.18.1 (`Timeline.1`, `Stack.1`, `Track.1`, `Clip.2`, `Gap.1`,
+  `Transition.1`, `ExternalReference.1`, `Marker.2`, `LinearTimeWarp.1`, `RationalTime.1`,
+  `TimeRange.1`), and the fields those of 0.15: a reader upgrades an older schema and refuses a
+  newer one, which 0.18.1 does to the `Marker.3` of the unreleased main branch
+  (`UnsupportedSchemaError`), so the oldest form is the one every reader takes. Reading takes any
+  version, `Clip.1` and `Marker.3` among them. What OpenTimelineIO has no field for and Kerf needs
+  to read its own file back, ids and the sequence's name and frame size, is in `metadata["kerf"]`;
+  another editor does not read that, so the frame size is still listed as not carried. A clip of
+  media at another rate than the sequence's is written as long as it plays, a part of a media frame
+  where that is what it comes to, where rounding to whole media frames moved every cut after it.
+  The Python bridge is kept for the adapters this does not write (`otioz`, the plugins) and holds
+  the same form: where Python has OpenTimelineIO the tests have each read what the other wrote and
+  OpenTimelineIO compare the two files. That found the bridge had never kept an id through a file,
+  since what OpenTimelineIO makes of a file's metadata is not a `dict`.
+- **`.fcpxml`.** Version 1.9, chosen by what reads it: Resolve refuses a file newer than it knows by
+  its number (by its users' reports 17.4 reads to 1.9 and 18 to 1.10), Final Cut Pro reads the
+  versions before its own, and 1.9 is the first with a `media-rep` saying where a file is. Premiere Pro reads no FCPXML, only
+  Final Cut Pro 7's XML and, in its recent releases, OpenTimelineIO, so the `.otio` is its file.
+  FCPXML has no tracks: the first video track is the primary storyline, with gaps where it plays
+  nothing, and the clips of every other track are connected to the storyline item under their first
+  frame, picture in lanes above and sound below, each playing its picture or its sound alone
+  (`srcEnable`) as a track here does. Times are whole frames of the sequence as rational seconds,
+  worked out in integers from flicks. A transition sits between two clips that still meet at the
+  cut, as a file Final Cut Pro exports has it, though the DTD's own example reads as an overlap. A
+  speed is a `timeMap` from the clip's clock to the media's. The golden file is valid by Apple's DTD
+  for 1.9, 1.10 and 1.11 (`xmllint --dtdvalid`; the DTD ships inside Final Cut Pro and is not in
+  this repository, so that test runs where `KERF_FCPXML_DTD` names a copy).
+
+Not done: neither file has been opened in Resolve, Final Cut Pro, or Premiere Pro, so what is known
+is that they are well-formed and say what was meant, not that an importer agrees; the place that is
+least sure is a retimed clip whose media has timecode, where the time map counts from zero and the
+clip's start is the media's timecode divided by the speed. Captions go to neither file (FCPXML has a
+`caption` element, which Resolve does not read), transitions off the primary storyline arrive as
+cuts for want of a secondary storyline, and the EDL has no list of what it leaves out.
+
+**A proposal brought forward** (2026-11-19). A proposal is made on one revision, and once the
+project moves on, as when another proposal is accepted first, it is stale: its script names times
+and clips of a project that is no longer there, and it is not accepted. It used to be written
+again by whoever made it. Merging the two documents by their ids, as a sync does
+(`kerf_collab::merge_projects`), is not the way to keep it: two edits that each close a gap both
+move every clip after them, the merge keeps one side's place for such a clip, and on four clips,
+one trimmed by a second and another by half a second, the last was left half a second after the
+one before it. Running the proposal's operations again on the project as it is puts it where it
+belongs, so that is what is done (`kerf_lang::bring_forward`), and the work is in knowing that a
+line run again is the edit it was. The two projects are stepped through together, one operation
+at a time (`kerf_model::Steps`), and each operation is held to three things:
+
+- *A clip it names is as it was*: on its track still, playing the same length of the same source
+  at the same speed. Where it starts may have moved, which is all a ripple does to a clip.
+- *A time it names is carried by the clips that held it*: every clip that was under that time, or
+  met it with an edge, on any track of the sequence. They must each be placed as they were and
+  have all moved by one amount, and the time moves by that amount. So an `insert` at a cut goes
+  to where that cut is now, and a time in a clip stays in that clip. Where picture and sound have
+  moved apart, or a clip that held it was cut, moved or removed, there is no one place it is now.
+  A time no clip held, in a gap or past the end, stays where it was.
+- *It changes what it changed*: the same clips, transitions, markers, media, tracks, buses and
+  sequences, each from the same state to the same state, and no others. A clip is read as where
+  it plays and what of its source, its properties, its effects, and its masks, each on its own,
+  so a grade given to a clip since does not stop a trim of it, and stops a line that sets its
+  effects. This is what catches what a line does not name: a `roll` whose neighbour is another
+  clip now, a `lift` over a range a title was put in since. A clip that only moves along its
+  track is left out of it, since a ripple follows the timeline as it is.
+
+A clip the script itself makes has another id where the project has taken that one since, and
+the lines after it follow the id it gets now. A line that fails any of the three is refused with
+its number and the clip that stopped it (``clip `c3` was cut since this was proposed``), nothing is
+staged, and the proposal waits as it was, to be revised. What does come forward is the
+proposal's next version on the current revision, by the same author, one record in kerfd's
+journal as any staged version is, and it waits to be reviewed again: its frames are not the ones
+that were looked at. To have the project a proposal was made on, kerfd keeps it from the moment
+the revision moves on while that proposal is open (`RuntimeRequest::ForwardProposal`), in the
+checkpoint, and again by replaying the journal; undo history would not do, since an edit made
+after an undo drops it. A proposal that went stale under a kerfd from before this has none kept
+and is revised.
+
+It is asked for, never done unasked. An accept of a stale proposal is refused and says that it
+can be brought forward; the editor has that as Bring forward on the proposal's card, where
+Accept stands for one that is current, and as Clip ▸ Bring Proposal Forward
+(`proposal.forward`), and says a refusal in its error banner; an agent's `edit` takes the
+proposal's id as `forward`. Not done: `kerf` in a terminal has no command for it.
+
+Two recordings of one thing, a camera and the recorder beside it or the cameras of a multicam, are
+lined up by their sound and then held to that (2026-11-19). One offset is right for the whole of a
+recording only where neither clock runs fast and neither recording lost time, and matching the
+whole of it at once says neither: a drift spreads the match over as many lags as it drifts, until
+nothing stands out, and a step leaves two matches of which one is given. So a recording is placed
+again a stretch at a time, a minute each, or a quarter of a recording too short for four, and none
+under ten seconds. A stretch is looked for a minute either side of where the one before it fell,
+which follows a drift and a step of up to that, and the first few that match nothing there are
+looked for in the whole of the first, which finds a step of any size. It is placed where its best
+match stands twice as high as the next. One that is quiet, or that the first has nothing like, or
+whose sound keeps a beat and so matches itself a beat on nearly as well, has no offset and is given
+none: it is listed as unknown. A match that a drift has spread is found by counting a few lags next
+to each other as one, and is put at its middle, since it is highest wherever most sounds happen to
+fall along it.
+
+What the stretches come to is the recording's course. `steady` is one offset to within 10 ms,
+about what two people at different distances from two microphones move it by, so that a step or a
+drift under that is not told from them. `drift` is an offset that changes evenly, by the rate most
+neighbouring stretches agree on and then a least-squares line through them, given in milliseconds
+a minute. `jump` is a step between two stretches that the drift does not account for, a recording
+that stopped and went on or lost sound: its place is narrowed by holding each two-second piece
+between them to both offsets, to between the last piece that fits the old one and the first that
+fits the new, so a step in a pause is as wide as the pause. A stretch neither neighbour agrees
+with, while they agree with each other, is taken for a misplacing and not for a step out and a
+step back. `unknown` is fewer than two stretches placed, of which nothing follows. `look` with
+`sync` gives all of it, and its script places a recording only where one offset is within half a
+frame of every stretch read: a drift that stays inside that is placed by its middle and said, and
+a recording that drifts further or steps is left out, with what does not fit and what to do
+(`notPlaced`). A recording nothing could be read of is placed by the whole of it, as before, with
+its `confidence` to go by.
+
+The offset is then the document's: `sync=m1@1.234s` on a media's line says it begins that far
+into `m1` (`kerf_model::Synced`, written by `media sync`). It is on the line and not in the media
+cache because it is what clips are held to, which every copy of a project has to agree on and a
+merge has to carry, and because it is a person's to change: what lines the sound up is not always
+what should line the picture up, a camera at the back of a hall hearing the stage a few frames
+late. A check reads it with nothing analysed (`sync.slipped`, `kerf_mcp::lint::out_of_step`), and
+holds to each other clips that play at once. A picture and a sound of one file, or of one nested
+sequence as a cut of a multicam is, that are linked are in step where each plays the frames the
+other does, which the document alone says: where each starts, less what it starts on. Clips of two
+files lined up with each other are held to the line where they are linked, and, linked or not,
+where they play some of the same moment; two files further apart than the time they share play
+different moments, which is a choice, as a voice over other pictures of its own take is, and two
+shots of one file linked to keep them together are no picture and its sound. More than a frame
+apart is a finding that names the clip, how many frames, and the line that puts it back. A frame
+is let pass because each clip goes on a whole frame from an offset finer than frames, and because
+less than that is not seen. A clip played at another speed is held to nothing.
+
+How well this tells has been measured on recordings made for the tests and on none recorded in a
+room (2026-11-19): claps 0.35 to 2.55 s apart over a noise floor, five minutes beside five, each
+through its own gain and noise. One offset comes back within 2 ms. A drift of 12 ms a minute is
+told within a tenth, and one of 60 ms a minute, a file conformed from 30 frames a second to 29.97,
+within a fiftieth, though the whole of that recording matches nothing; one of 0.6 ms a minute is
+measured and called steady. Half a second lost at 137 s is put between 135 s and 139 s, and steps
+of 50 ms and of a minute and a half are found, with a drift beside one told apart from it. Through
+`look`, from WAV files of the same claps two and a half minutes long, a drift of 30 ms a minute
+came back as 33. What a voice in a room, music, an echo, or microphones far apart do to any of
+these numbers is not known, and the tool says so: what it says is to be listened to before
+anything is cut by it. Measured beside this work on one core of four, with no test holding it:
+half an hour of the same claps beside half an hour, a drift of 3 ms a minute came back within a
+hundredth of it, and it took a third of a second to place the whole, as before, and under half a
+second more to place its 29 stretches, in a release build with the sound already read. One thing
+was wrong before and is mended: a short recording that began past the middle of a long first one
+was said to begin before it, the lags of the transform being parted at its middle and not at the
+first's length.
 
 ### Color
 
@@ -1827,6 +2167,37 @@ clean with the level either side of it, and the pauses and repeated words the se
 plays. It measures nothing new, so it costs a read of what each media's index kept, and indexes a
 media that has none.
 
+The tools say what each does and not which comes first, so three playbooks give the order
+(`skills/speech-cleanup`, `skills/target-length`, `skills/wait-speedup`, 2026-11-19). Tidying
+speech reads each media's transcript and then `cuts`, takes out what was said and taken again
+with the later saying kept, then doubled words and fillers, then pauses, and reads every join
+back as a sentence. Cutting to a length takes pauses, then what was said twice, then whole
+sentences, and reads the sequence's `# duration` after each. A wait in a screen recording is
+found between the transcript's cues, looked at on a sheet, played fast where its frames differ
+and cut where they do not. A line that is refused is left out and told to the person. Every
+name the three put in backticks is held to the grammar, the two tools' schemas, a `cuts` report
+with one of everything in it, and the check's codes
+(`the_playbooks_for_speech_name_only_what_the_tools_have` in `kerf-mcp/src/lint.rs`).
+
+Each was followed once by hand through `kerf-mcp`, on a recording made beside this work (no test
+holds it): 52 s of a terminal with a narration of 59 words, three fillers, a doubled word, a
+sentence started twice, a cough in a pause, 16 s of an install with keys and a fan under a bar
+that fills, and 5 s of a still screen. It is not speech. Each word is a voiced burst at a pitch
+of its own, and a stand-in for whisper.cpp reads the words back from the pitch, so it hears an
+edit's mix as well as the file; nobody listened, no agent was run with the playbooks, and the
+loose times of a real transcript were not in it. Tidied, it went from 52.1 s to 40.9 s with all
+14 of its cuts in quiet, and four lines were refused and left: the doubled word, whose two
+sayings have no quiet between them, a filler said in one breath with the words beside it, the
+pause with the cough, and the install, which is no pause. Cut to under 30 s as one proposal
+extended three times, it read 45.1 s after the pauses, 40.4 s after what was said twice, 37.8 s
+after a sentence, and 25.7 s with the install at four times its speed. What the playbooks say
+that the tools' own words do not came of it: that a script is written from the end of a
+sequence toward its start, since a cut gives the later part of its clip a new id; that a word
+said twice in its clip is taken by its times; that a wait with sound in it reads short among
+`pauses` and is found by the cues; that `snap=pause` is refused where a fan leaves no pause
+beside a word; and that a speed moves nothing after its clip, so a range is taken out to close
+up.
+
 `look` with `eye` reads the picture of a cut between two shots, as `cuts` reads its sound (Edit,
 above): where the subject of the shot that ends is on the frame and where the next one's is, how
 far the eye has to go between them, how much larger or smaller the second is, and whether it
@@ -1891,31 +2262,34 @@ x64, and Linux x86-64 as new as Ubuntu 24.04.
   2).
 - **[Scarlet](https://github.com/Forward-Future/scarlet)** (MIT, reviewed at `9f966e9` and again
   at `6e93a9e`, 577 commits on) is an editor for dialogue that agents cut: TypeScript over FFmpeg
-  filter graphs, with nothing to take for the picture. What it measures of a cut was worth doing
-  our own way, and is (Edit): levels kept fine enough to place an edge between syllables, an edge
+  filter graphs, with nothing to take for drawing a picture. What it measures of a cut was worth
+  doing our own way, and is (Edit): levels kept fine enough to place an edge between syllables, an edge
   judged by the recording and not by a transcript's times, more quiet left after a word than
   before one, the pauses and doubled words an edit still plays, and a score of all of it against a
   recording whose words are known; and from the second reading, an edge moved past no word, each
   move said with the words it ended between, an edge put between two words said in one breath,
   words taken out, or a pause brought down to a length, by one line that names them, with the
   pause that is left played before the cut, a phrase found that is taken again with other words
-  between its two sayings, what each join plays and took out, a pause listed from the length an
-  edit names, a room read where it is and a tick left in its pause, and what a crossfade plays
-  past the cut it is on.
+  between its two sayings, what each join plays and took out, a join named that took a word or
+  two more than the restart it took out, a pause listed from the length an edit names, a room read where it is and a tick left in its pause, what a crossfade plays
+  past the cut it is on, and a check that two recordings of one thing still play in step after a
+  cut, with a drift and a step told apart when they are lined up (its `audio-sync.ts` gave the
+  idea, and none of its code was read for it). One reading of the picture is taken too: a
+  picture that shows only briefly as layers start and end over one another. It finds one between
+  any two changes of what is on screen less than a second apart; here it is a shot hidden, shown
+  for under three frames, and cut from, read by what is known to hide what (Edit).
   Its encoded sections, kept by what they depend on and joined without encoding again, are done
-  too (The engine, Kept frames). Left: its forced alignment of words (wav2vec2, a model of English
-  letters), its filler and transcription models (their own licenses, one not for commercial use),
-  reading the text on a screen, and telling speakers apart. Read the second time and not done: an
-  edge on the dip between two words with no quiet between them, which its alignment's word times
-  make safe and a transcriber's do not; a cut named that takes a word or two more than the
-  restart it removes; a check that two recordings of one thing still play in step after a cut;
-  and a proposal brought forward onto an edit that changed under it, where Kerf's goes stale.
-  Merging the two documents by their ids, as a sync does, is not the way to that: two edits that
-  each close a gap both move every clip after them, the merge keeps one side's place for it, and
-  a clip is left half a second after the one before it (tried on four clips, 2026-11-19).
-  Running the proposal's operations again on the project as it is gives the right edit there,
-  and what is not built is knowing that it is the same edit: each place a line names carried by
-  the clip that holds it, and refused where that clip has changed.
+  too (The engine, Kept frames). So is a proposal brought forward onto an edit that changed
+  under it, where Kerf's went stale and had to be written again: its operations run again on the
+  project as it is, each place a line names carried by the clips that held it, and refused where
+  one of them has changed (Edit, A proposal brought forward). Left: its forced alignment of
+  words (wav2vec2, a model of English letters), its filler and transcription models (their own
+  licenses, one not for commercial use), reading the text on a screen, and telling speakers
+  apart. Read the second time and not done: an edge on the dip between two words with no quiet
+  between them, which its alignment's word times make safe and a transcriber's do not (measured
+  since, under Edit: every way of taking the dip by a transcriber's times put cuts inside words);
+  and an overlay's edge moved onto the cut it misses, which it does itself for a flash of a tenth
+  of a second or less, where the check here says the flash and leaves the move.
 - **Jumper and the Resolve and Premiere MCP servers** bolt agents onto editors
   that were not built for them. Kerf's document, proposals, and Git merging are
   what they cannot have, and each area has to keep that: every feature is text in

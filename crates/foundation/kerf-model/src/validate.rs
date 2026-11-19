@@ -190,6 +190,27 @@ impl Validator<'_> {
                     ),
                 );
             }
+            if let Some(sync) = &media.sync {
+                if self.project.media(sync.with.as_str()).is_none() {
+                    self.error(
+                        "ref.missing",
+                        &media.id,
+                        format!(
+                            "media `{}` is lined up with unknown media `{}`",
+                            media.id, sync.with
+                        ),
+                    );
+                } else if self.project.sync_comes_back(&media.id, &sync.with) {
+                    self.error(
+                        "sync.ring",
+                        &media.id,
+                        format!(
+                            "media `{}` is lined up with `{}`, which is lined up with it",
+                            media.id, sync.with
+                        ),
+                    );
+                }
+            }
             if media.video.is_none() && media.audio.is_none() {
                 self.error(
                     "media.streams",

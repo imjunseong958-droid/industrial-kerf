@@ -177,9 +177,10 @@ import does. The terminal workflow, `kerf preset`, `kerf sync`,
 and a media import use the current directory unless `--dir` or
 `KERF_PROJECT_DIR` names a project. So do `kerf load`, which takes a
 `project.kerf` changed outside Kerf as the project, `kerf proposals`,
-`kerf accept` and `kerf reject`, which answer what an agent proposed, and
+`kerf accept` and `kerf reject`, which answer what an agent proposed,
 `kerf make` and `kerf takes`
-([docs/shots.md](docs/shots.md#from-a-terminal-alone)). The editor's Kerf Assistant (the chat beside the picture) uses the same provider
+([docs/shots.md](docs/shots.md#from-a-terminal-alone)), and `kerf export`,
+which writes a sequence for another editor ([Interchange](#interchange)). The editor's Kerf Assistant (the chat beside the picture) uses the same provider
 configuration as the terminal agent. `--kerfd PATH` selects an explicit
 daemon; the `KERFD_BIN` environment variable does the same.
 
@@ -212,14 +213,15 @@ tools cover the work:
 | Tool | Purpose |
 |---|---|
 | `look` | No arguments: the annotated document and proposal state, `toMake`, the media that have yet to be made from their steps or whose steps read something that changed since, by name, `cast` and `styles`, who and what the project's shots show and how they look, `brand`, its colors, fonts, and words, and `models`, the models a recipe can ask, each with what it takes (the size and rate of its guide, its longest shot, the files it reads). `media`: that media's index, and the takes its recipe has made — where it is used, scene cuts, pauses, loudest moments, sound onsets, and tempo, and with `transcript: true` what is said (`words: true` times each word). `sheet: N`: a contact sheet of N frames over `from`–`to`, of `media` or the sequence, as one image. `at`: up to eight full-size frames — source frames of `media`, or program frames of the sequence. `transcript: true` without `media`: what the sequence says as it plays. `cuts: true`: whether each cut of the sequence's sound is in a pause or goes through a word or a sound, by each media's own levels, and the pauses and repeated words it still plays. `scopes: true` with `at`: what scopes read there, as numbers, for grading by measuring. `track`: follow a point of the picture over `from`–`to`, with a line to make a clip follow it. `sequence` picks a sequence other than the first. `proposal`: the same, as a pending proposal would make the project. `effects`: the catalog entries for a look or moment ("neon glow", "zoom hit"), best first, each with when to use it; `effect`: one entry's parameters |
-| `edit` | Run an edit script. It becomes a proposal, returned with the document diff, check findings, and a before/after preview: the frames either side of each cut it made or moved, and the middle of a clip it changed in place. `extend` runs the script on top of a pending proposal and makes the two one proposal; `revise` replaces it |
+| `edit` | Run an edit script. It becomes a proposal, returned with the document diff, check findings, and a before/after preview: the frames either side of each cut it made or moved, and the middle of a clip it changed in place. `extend` runs the script on top of a pending proposal and makes the two one proposal; `revise` replaces it; `forward`, alone, brings a proposal the project changed under onto the project as it is, as its next version, or is refused by the name of the clip that changed |
 | `render` | Render the sequence (or another `sequence`), or `from`–`to`, as a draft or full-quality file — of the project, or of a pending `proposal`; `job` reads progress, `cancel` stops it. |
 
 An edit's check findings include what an editor would catch, as warnings:
 black stretches with nothing on screen, picture that leaves the frame's
-edges black, flash frames shorter than three frames, and sound cut inside a
-word (known from transcripts of that media already made; nothing is
-transcribed for the check). In a project with a `brand.kerfbrand`
+edges black, flash frames shorter than three frames (a clip that short, or
+a shot that shows for that long between an overlay and a cut), and sound
+cut inside a word (known from transcripts of that media already made;
+nothing is transcribed for the check). In a project with a `brand.kerfbrand`
 ([the user guide](docs/user-guide.md#a-brand)), a title in a font or a color
 the brand has not, and a title or a caption that says a word it avoids, are
 said as information.
@@ -252,10 +254,17 @@ Transcripts come from local `whisper.cpp` (`KERF_WHISPER_BIN` and
 and pauses are cached with the media's other derivatives in
 `.kerf/cache/derived`.
 
-Skills hold editorial guidance only — what makes a good short, how a meme
-lands — not tool procedures. Bundled skills are compiled into `kerf-skills`;
-user (`~/.kerf/skills`) and project (`.kerf/skills`) skills override them by
-name. Every skill's guidance is part of the agent's instructions.
+Skills hold what the tools do not say: editorial guidance — what makes a
+good short, how a meme lands — and, for work done in steps, the order to
+take them in and what to read back after each. Three are for footage of
+someone talking: `speech-cleanup` takes out phrases said and taken again,
+doubled words and fillers, and long pauses; `target-length` brings an edit
+down to a length you name, pauses first and whole sentences last; and
+`wait-speedup` plays the waits of a screen recording fast where the screen
+shows something going on, and cuts them where it does not. Bundled skills
+are compiled into `kerf-skills`; user (`~/.kerf/skills`) and project
+(`.kerf/skills`) skills override them by name. Every skill's guidance is
+part of the agent's instructions; `kerf --skills` lists them.
 
 The built-in agent keeps its whole transcript and sends it to the provider
 append-only, so the system prompt and everything already sent stay the same
@@ -403,13 +412,49 @@ and media of the current document and cannot change project state.
 
 ## Interchange
 
-`kerf-interchange` converts the program sequence of a project to a
+A sequence goes to another editor as a timeline file, written by Kerf itself
+with nothing else to install:
+
+```bash
+kerf export cut.otio      # OpenTimelineIO: DaVinci Resolve, Premiere Pro
+kerf export cut.fcpxml    # Final Cut Pro XML 1.9: Final Cut Pro, DaVinci Resolve
+```
+
+`--sequence <id>` picks a sequence other than the first and `--format`
+names the format for a file whose extension does not. An agent does the
+same with `render` and `handoff` (`otio` or `fcpxml`), into the project's
+`deliveries/` folder. Either way the answer lists what the file does not
+carry, so nothing is left out without a word: clips that play no media
+file (titles, generators, nested sequences) arrive as gaps; captions, clip
+properties, masks, effects, links and the mix are not written; a speed
+ramp is written as its speed overall and reverse as forward; a transition
+that is no dissolve arrives as one.
+
+| | `.otio` | `.fcpxml` |
+|---|---|---|
+| Opens in | DaVinci Resolve; Premiere Pro, which takes OpenTimelineIO in its recent releases and no FCPXML | Final Cut Pro; DaVinci Resolve (17.4 and later read version 1.9) |
+| Tracks | As they are | None in the format: the first video track is the primary storyline, the rest connected clips in lanes |
+| Frame size | Not in the format (kept for Kerf's own reading) | Carried |
+| Transitions | Each as a dissolve | On the first video track, as a cross dissolve; elsewhere a cut |
+| Speed | One forward speed a clip (`LinearTimeWarp`) | One forward speed a clip (`timeMap`) |
+| Markers | With their colors and notes | With their notes, without colors |
+| Read back by Kerf | Yes | No |
+
+Neither file has been opened in those editors yet: the `.otio` is checked
+against OpenTimelineIO 0.18.1 itself, which reads it as the timeline
+written and holds it equal to the one its own writer makes, and the
+`.fcpxml` against Apple's DTD for version 1.9 and the format's rules
+(`crates/edit/kerf-interchange/tests`). Treat a first import as a check, and
+read the list.
+
+`kerf-interchange` holds the formats. It converts a sequence to a
 frame-exact timeline (positions in frames of the sequence, media times in
-frames of the media) and invokes the configured native or external adapter
-through a small JSON bridge, reporting what the conversion leaves out.
-OpenTimelineIO conversion uses the bundled
-`crates/edit/kerf-interchange/python/otio_bridge.py` and requires an environment
-with `opentimelineio` plus the requested adapter installed.
+frames of the media) and writes and reads that as OpenTimelineIO's JSON
+(`otio_json.rs`), writes FCPXML (`fcpxml.rs`) and a CMX3600 EDL
+(`edl.rs`), and reports what each conversion leaves out. Only the other
+OpenTimelineIO adapters, `otioz` and the adapter plugins, still go through
+the bundled `crates/edit/kerf-interchange/python/otio_bridge.py`, which
+needs an environment with `opentimelineio` and the adapter asked for.
 
 ## Verification
 

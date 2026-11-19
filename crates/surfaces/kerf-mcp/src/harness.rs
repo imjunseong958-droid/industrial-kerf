@@ -69,7 +69,7 @@ cheap way to scan; with `at` frames — source frames of a media, or program \
 frames of the sequence; with `transcript` and no media, what the sequence \
 says. `sequence` picks one other than the first. \
 With `file`, the `media add` line for a file in the project's folder, or for each file of a folder of it with a `script` of them all, and with no arguments `unplaced` lists those not yet in the document, and `toMake` the media whose steps, the lines under it that say how Kerf or a model makes it, have yet to be run, or read something that has changed since its take was made, which it names: make it with `make`. With `media`, a media its steps make lists its `takes`, each making kept, with the line (`use`) that in an edit has the media be that take; a `toMake` entry's `cannot` is what would refuse its making, to mend before `make`, and its `notes` what its model has said it does not take, and what `stands` finds floating, sunk, or going through another in the sequence a `render` step of it draws, on the first, middle, and last frame it draws; an edit that writes steps answers with `toMake` too; with no arguments, `cast` and `styles` list who and what the project's shots show and how they look, each by the name a `generate` line gives as `cast=` or `style=` and with the words and pictures a model is then handed, `brand` the project's colors, fonts, tone, and the words it says and avoids, which a title and a caption keep to, and `models` lists the models a `generate` step can name, each with what its owner says it takes: the picture it makes (`size`), its `rate`, the most `seconds` of one shot, the files it `reads` (of `guide`, `first`, `last`, `ref`), the other names a step can set with what they are when it does not (`more`), and, for one that follows a guide, `guide`, the `render` step that draws a guide at its size and rate. Write that step and a sequence of the model's shape, no longer than its `seconds`. A model with a name alone has not said, and none listed means none is set up: both are the person's to set, in their own models file. \
-With `cuts`, how each cut of the sequence's sound sits in the sound, by its media's own levels: in a pause, or through a word or a sound; what each join plays and took out, to read as a sentence; and the pauses, repeated words and restarts the sequence still plays. Look after cutting speech, and trim with `snap=pause` what it finds. \
+With `cuts`, how each cut of the sequence's sound sits in the sound, by its media's own levels: in a pause, or through a word or a sound; what each join plays and took out, to read as a sentence, and the word or two it took with a restart (`tookMore`); and the pauses, repeated words and restarts the sequence still plays. Look after cutting speech, and trim with `snap=pause` what it finds. \
 With `eye`, where the eye is either side of each cut of the sequence's picture, between two shots whose guides the document has: where the subject of the shot that ends is on the frame and where the next one's is, how far that jumps, how much larger or smaller it is, and whether it turns back, read from the guides before anything is made and from the takes once they are. Read it of a shot with another before or after it. \
 With `cost` and `at`, who draws each frame, what sends it to the CPU, and what it costs. \
 With `mesh`, what a mesh clip's glTF file holds, its animations and cameras, and a camera of it, or one a model found and wrote to a file, as a camera clip's keyframes. \
@@ -94,7 +94,15 @@ proposals can wait side by side. Pass a pending proposal's id as `extend` to \
 run more lines on top of it, or as `revise` to replace it: either way it \
 becomes that proposal's next version (v2, v3) under a new id, and the user \
 can still see the versions before it. `extend` takes the newest version's \
-id, the one the last `edit` returned. What Kerf or a model makes is written in the script too, \
+id, the one the last `edit` returned. A proposal goes stale when the project \
+changes under it, as when another is accepted first, and cannot be accepted \
+then. Pass its id as `forward`, alone, to bring it onto the project as it is: \
+its own operations run again there, each time they name moved with the clips \
+that were at it, and that is its next version, for the user to review again. \
+It is refused, naming the clip, where a clip a line names, or one a time it \
+names was on, has been cut, moved or removed since, or where the line would \
+change other clips than it did; then `revise` it with a script written on \
+the project as it is. What Kerf or a model makes is written in the script too, \
 as the steps under its media: `media add` its line, naming the file it will be with the \
 model's rate and size, then a `step <media> add` line for each step, in the order they run \
 (the language below). There is no file to write first, and undo takes a step back as it does \
@@ -121,7 +129,10 @@ make on its own it runs (`making`), as a `job` to read, `wait` for, or `cancel`,
 and the media is the new take once it is made; else they are asked (`asked`), in \
 the conversation, and make it. Then look at the take, and change one thing for the next.
 - `render` renders the sequence, or a range of it, to a file; with \
-  `proposal`, what that proposal would make.
+  `proposal`, what that proposal would make. With `handoff` it writes the \
+  sequence as a timeline file another editor opens instead, `otio` for DaVinci \
+  Resolve and Premiere Pro or `fcpxml` for Final Cut Pro and DaVinci Resolve, \
+  and answers with `notCarried`, what that file leaves out: say it to the person.
 
 Reusable presets are portable .kerfpreset files. `look` with `presets: true` \
 lists project presets: the shared `presets/` library first, then \
@@ -145,7 +156,9 @@ earlier with `look`; the proposal's script shows the caption lines it became.
 
 Check findings include what an editor would catch: black frames, picture that \
 leaves the frame's edges black, flash frames, a frame or two of another shot at \
-a clip's edge (from the media's index), sound cut inside a word (known once \
+a clip's edge (from the media's index), a frame or two of a shot between what \
+is over it and a cut (an overlay that ends just before the cut under it, or \
+starts just after), sound cut inside a word (known once \
 a transcript of that media has been made), titles and captions outside 90% \
 title safe or over each other (with the overlap's rect and depth in pixels), \
 and captions faster than 17 characters a second, up for less than 5/6 of a \
@@ -187,6 +200,10 @@ pub fn context(runtime: &RuntimeClient) -> Result<String, String> {
     Ok(text)
 }
 
+/// What is said of a proposal the project has changed under.
+const STALE: &str = " The project has changed since, so the user cannot accept it: bring it \
+                     forward with `edit` and its id as `forward`, or `revise` it.";
+
 /// The proposals waiting for review, each with who made it, its version,
 /// and its diff; with none waiting, what became of the last one.
 fn proposals_status(state: &StateSnapshot) -> Option<String> {
@@ -202,7 +219,7 @@ fn proposals_status(state: &StateSnapshot) -> Option<String> {
     let mut text = String::new();
     for entry in open {
         let stale = if entry.freshness == ProposalFreshness::Stale {
-            " The project has changed since; revise it before the user can accept it."
+            STALE
         } else {
             ""
         };
@@ -241,7 +258,7 @@ fn proposal_status(proposal: Option<&PendingProposal>) -> Option<String> {
             ..
         } => {
             let stale = if *freshness == ProposalFreshness::Stale {
-                " The project has changed since; revise it before the user can accept it."
+                STALE
             } else {
                 ""
             };
@@ -309,11 +326,11 @@ pub(super) fn metadata(name: &str) -> Option<(&'static str, Value, ToolAnnotatio
                     },
                     "transcript": {"type": "boolean", "description": "What is said, by local transcription, up to 15 minutes per call: of `media`, or else of the sequence as it plays. `unheard`, when it is there, lists stretches that sound like speech and have no words: the transcriber may have missed something, so listen there."},
                     "words": {"type": "boolean", "description": "With `transcript`: time every word, for cutting on speech. Choose a short range; it is long."},
-                    "sync": {"type": "array", "items": {"type": "string"}, "description": "Media ids of recordings of the same thing to line up by their sound, as for a multicam. Returns how far each falls after the first, `offset` in seconds, with `confidence`, and a `script` that builds a sequence with a camera on each track. Then a clip of that sequence (`seq=multicam`) with `angle=V2` shows one camera, and splitting it cuts between them. Check `confidence`: low means they may have nothing in common."},
+                    "sync": {"type": "array", "items": {"type": "string"}, "description": "Media ids of recordings of the same thing to line up by their sound: the cameras of a multicam, or a camera and the recorder beside it. `recordings` says of each how far into the first it begins, `offset` in seconds, with `confidence`, how far the match of the whole of it stands above the next best: low means they may have nothing in common, or that no one offset fits the whole. Each is then placed again a minute at a time (less for a short one), and `course` says what those stretches come to: `steady`, one offset fits them all, to `within` seconds; `drift`, the offset changes evenly, one clock running faster than the other, with `drift`: `msPerMinute`, over how many `minutes`, and the offset `from` the first stretch `to` the last; `jump`, the offset steps where one of the two stopped and went on or lost sound, with `jumps`: each is between `after` and `before`, seconds of that recording, as near as the sound around it says, and the offset goes `from` one `to` another; `unknown`, fewer than two stretches could be placed, so nothing says. `read` of `of` stretches were placed; one that is quiet, or that the first has nothing like, is given no offset and is listed in `unknown`, each [from, to] in seconds of the recording: it is not guessed at. `script` builds a sequence with a camera on each track, each on the frame nearest its offset (`at`), and writes how each lines up on its media's line (`media sync mb with=ma@1.5s`, in the document `sync=ma@1.5s`: it begins 1.5 s into `ma`; `with=\"\"` lets go), which a check then holds clips to: two of them that play the same moment at once, more than a frame apart, are `sync.slipped`, as a sound that left the picture of its own file it is linked to is. Change the line where the sound is not what should line up, a camera far from what it hears. A recording is in the script where one offset is within half a frame of every stretch read; one that drifts further or jumps is left out of it, its `notPlaced` saying what does not fit and what to do, and with fewer than two to place there is no `script`. Then a clip of that sequence (`seq=multicam`) with `angle=V2` shows one camera, and splitting it cuts between them. How well drift and jumps are told has been measured on recordings made for the test and on none recorded in a room: listen to what it says before cutting by it."},
                     "track": {"type": "object", "description": "Follow a point of the program's picture over `from`–`to`: `x` and `y` where it is at `from`, 0 to 1 across the frame, on something with detail, such as a corner rather than a flat area. Returns where it went, and with `clip` a line setting that clip's x and y to follow it: run it with `edit`, and parent what should stick to it to that clip, a `gen=null@1` for instance. `lostAt` says where the point was lost, if it was. Or give `corners` instead of `x` and `y`, four [x, y] at `from` going upper left, upper right, lower right, lower left, around a flat surface with detail on it, such as a screen or a sign, to follow how it moves and turns: it returns those corners over time, `outline`, the keyframes a moving mask takes (`mask c add k1 points=...`), and with `clip` a corner pin line that fits that clip, one filling the frame, onto the surface. Or to cut out an object that changes shape, a person for instance, give `inside`, [x, y] points on it at `from`, with `outside`, points off it, and `box`, [left, top, right, bottom] around it, as needed: it returns its outline over time, as few corners as shape it and the same ones in every keyframe: `outline` as above, or with `clip` a mask line for that clip instead, `script`, which holds it (`mask c add object points=...`). A third number on each corner says where the edge measures soft, such as out of focus or moving fast. It goes by colour and edges, with nothing to install; where a model that finds a thing by its name is set up (`models`, one whose `about` says it makes a matte), a `generate model=<it> guide=<footage> prompt=<the thing>` step makes the matte as a file instead, and holds a thing among others like it. With `clip` and no `from` and `to` it is followed for as long as that clip runs, and a clip that follows a point is not drawn while the point is followed: this is how a clip a `generate` step names with `moves=` is led by footage, and how the clip a `render` step names with `matte=` is cut to what it shows, as a person does on the picture in a shot's graph. Or give `camera: true` to solve where the camera went over the range, one shot of a camera that moves through a still scene, to pin clips in depth to moving footage: it returns a `script` of `gen=camera@1` keyframes (on `clip`, or on a new camera without one), `fit` (`error` and `worst`, how far what was followed lands from where the solve puts it in the sequence's pixels; under a pixel holds, and past two a clip slides; `agreeing`, the share of it that fits), `fov`, and `points`, places in the world to set a clip's `x`, `y`, and `z` to with `three_d=true`, each with where it shows (`at`, on `frame`) and the frame it was last seen on (`lastFrame`), so that it stays on that spot. Hide what is not in the footage first. `solved: false` with a `reason` says when a shot cannot be solved, such as a camera that only turns; `lostAt` says where a cut or lost frame ended it. `lensKnown: false` means the camera never turned, so any lens fits and `fov` is the default: give `fov`, down the frame in degrees, if you know it. A zoom reads as a move along the camera's way, with a higher `error`. Use with `from`, `to`, and optionally `sequence` or `proposal`.", "properties": {"x": {"type": "number"}, "y": {"type": "number"}, "corners": {"type": "array", "items": {"type": "array", "items": {"type": "number"}}}, "inside": {"type": "array", "items": {"type": "array", "items": {"type": "number"}}}, "outside": {"type": "array", "items": {"type": "array", "items": {"type": "number"}}}, "box": {"type": "array", "items": {"type": "number"}}, "camera": {"type": "boolean"}, "fov": {"type": "number"}, "clip": {"type": "string"}}},
                     "facts": {"type": "boolean", "description": "With `media`: its fact sheet beside its index, the first time slowly: what the camera does in each shot (`camera`, such as `pan right` or `handheld`; `pan`, `tilt`, and `zoom` in shares of the frame a second, `roll` in degrees a second, and `agreeing`, how much of the picture follows that), how loud it is (`loudness`, in LUFS and dBTP), and in `notMeasured` what it does not say and why: faces, the subject, and on-screen text."},
                     "loudness": {"type": "boolean", "description": "How loud the sequence is as it plays, by R128, measured from its whole mix: `integrated` in LUFS beside the `target`, `range` in LU, `truePeak` in dBTP beside its `limit`, and the loudest three seconds (`shortTermMax`) and 400 ms (`momentaryMax`) with where each ends. A silent sequence has `integrated: null`. Measured once for a revision; a media's own loudness is in its `facts`. Use with `sequence` or `proposal` only."},
-                    "cuts": {"type": ["boolean", "object"], "description": "How the cuts of the sequence's sound sit in the sound, measured from each media's own levels a hundredth of a second at a time and from its transcripts, so an edit is checked without listening: `summary` counts every cut as `quiet` (in a pause), `low` (through a breath or a decay), or `sound` (through sound at the level of speech), with `inWords` (inside a word a transcript heard), `tight` (quiet, but within 0.05 s of the sound the clip plays), `faded` (under a transition, which fades what the cut goes through, so the cut is not judged), `fadesInSound` (of those, a cut in quiet whose transition plays on past it into sound at the level of speech, what the cut left out heard fading: listed with `fade`, its `seconds` and `level`), `notMeasured`, and `air`, the `least` and `median` quiet a cut leaves beside what its clip plays, in seconds. `cuts` lists each that is not clean, 40 at most with `cutsNotListed` for the rest: its `clip` and which `end`, `at` on the sequence and `source` on the `media`, the level `before` and `after` it in dBFS, and the `word`. `media` gives the level each media speaks at and pauses under. `joins` are where the sound goes from one stretch of footage to another, in the order they play: what each `plays`, the words either side with ‖ for the cut, and what it `took` out, the words between where the one clip stops and the other starts with `tookSeconds`, or `replays` where the second starts back before the first stopped: read `plays` as a sentence, since a cut that takes a word the sentence needs measures clean. With a transcript of what plays, `pauses` are the waits still played between words, longest first, of 0.75 s or more unless `cuts` is {\"pauses\": <seconds>} (0.3 at least: what is dead air is the edit's to say); `repeats` the words and phrases said twice in a row; and `restarts` the phrases said and taken `again` a moment later, with what is said `between`: a start taken again, a take left beside the one that replaced it, or something meant, which the sentence tells. Each has `cutTo` where a cut sits in it. `from` and `to` take a part of the sequence, for one too long to list. A trim or split with `snap=pause` moves a cut into the pause beside it, past no word, and with a transcript into the gap two words said in one breath part for; `extract <clip> pause=\"…\" leave=<dur>` brings a pause listed here down to a length, by the words it comes after, and `extract <clip> said=\"…\"` takes a repeated word or phrase out. Use with `sequence` or `proposal`."},
+                    "cuts": {"type": ["boolean", "object"], "description": "How the cuts of the sequence's sound sit in the sound, measured from each media's own levels a hundredth of a second at a time and from its transcripts, so an edit is checked without listening: `summary` counts every cut as `quiet` (in a pause), `low` (through a breath or a decay), or `sound` (through sound at the level of speech), with `inWords` (inside a word a transcript heard), `tight` (quiet, but within 0.05 s of the sound the clip plays), `faded` (under a transition, which fades what the cut goes through, so the cut is not judged), `fadesInSound` (of those, a cut in quiet whose transition plays on past it into sound at the level of speech, what the cut left out heard fading: listed with `fade`, its `seconds` and `level`), `notMeasured`, and `air`, the `least` and `median` quiet a cut leaves beside what its clip plays, in seconds. `cuts` lists each that is not clean, 40 at most with `cutsNotListed` for the rest: its `clip` and which `end`, `at` on the sequence and `source` on the `media`, the level `before` and `after` it in dBFS, and the `word`. `media` gives the level each media speaks at and pauses under. `joins` are where the sound goes from one stretch of footage to another, in the order they play: what each `plays`, the words either side with ‖ for the cut, and what it `took` out, the words between where the one clip stops and the other starts with `tookSeconds`, or `replays` where the second starts back before the first stopped: read `plays` as a sentence, since a cut that takes a word the sentence needs measures clean. A join has `tookMore` where it took a restart out, a start taken again beside it, and a word or two with it that nothing within six words either side says again: `out` the end of the phrase kept before the cut, two words at most, and `in` the start of the take it goes on with, three at most, a hesitation such as \"um\" not counted; `summary` counts those joins as `tookMore`. It is found by the words alone and says where to read, since the sentence may do without them, as it does without a correction: read `plays`, and trim the clip to play a word the sentence needs. With a transcript of what plays, `pauses` are the waits still played between words, longest first, of 0.75 s or more unless `cuts` is {\"pauses\": <seconds>} (0.3 at least: what is dead air is the edit's to say); `repeats` the words and phrases said twice in a row; and `restarts` the phrases said and taken `again` a moment later, with what is said `between`: a start taken again, a take left beside the one that replaced it, or something meant, which the sentence tells. Each has `cutTo` where a cut sits in it. `from` and `to` take a part of the sequence, for one too long to list. A trim or split with `snap=pause` moves a cut into the pause beside it, past no word, and with a transcript into the gap two words said in one breath part for; `extract <clip> pause=\"…\" leave=<dur>` brings a pause listed here down to a length, by the words it comes after, and `extract <clip> said=\"…\"` takes a repeated word or phrase out. Use with `sequence` or `proposal`."},
                     "eye": {"type": ["boolean", "object"], "description": "Where the eye is either side of each cut of the sequence's picture, a cut being where one clip of a video track ends on the frame the next starts: `true`, or an object with `subjects`. Under `eye`, `summary` counts the `cuts`, those `read`, of them `held` (the subject jumps less than 0.1 of the frame's height, about what an eye sees sharply without moving) and `jumps`, `reversed`, `takes` (read in the takes too), and `notMeasured`; `cuts` lists each as it plays: `at`, the frame the second clip starts on, and the clips `from` and `to`. A cut is read where both clips play a shot whose steps draw its guide (`render <sequence> …`). `on` is what the eye is on in each: the clip of the guide's sequence its `generate` step names with `moves=`, the first of them, or the one `subjects` gives for that media, as {\"subjects\": {\"<media>\": \"<clip of its guide>\"}}. `guide` is read from the two guides' ids passes, as `shows` reads a clip, with nothing made: `out` and `in`, the subject's box on the last frame before the cut and on the first after it, [left, top, right, bottom] in shares of the program's frame, the clip being where the program has it, trimmed, retimed, scaled, turned, moved, cropped, or parented, and a guide of another rate, size, or shape than its take read at the moment and the place the take has of it; `jump`, how far the middle of the second is from the middle of the first, in frame heights; `across` and `down`, the same with their direction, above 0 to the right, and lower; `size`, how large the second is beside the first, above 1 larger; `going`, which way each goes across the frame over a quarter of a second before the cut and after it, `left`, `right`, or `still` (under 0.1 of a frame height a second), absent where a clip is a frame long or its guide does not show the subject that far off; and `reversed: true` where one goes left and the other right. `take` is the same boxes and numbers where both shots have a file: the subject found in the take's own picture on the frame at the cut, where the guide has it with room around it, as `placed` finds it, and in the guide's own picture the same way, the take's box being the guide's moved by how far apart those are. Where `guide` jumps and that is not meant, change a guide, which costs no making; where `guide` holds and `take` does not, the model did not keep its guide: make it again, or choose another take. `notMeasured` says why a cut was not read, in place of both readings: footage with no guide, a shot whose subject nothing names, a clip in depth, a mask, an effect that may move its picture (a grade, a blur, and grain are read through), a crop that cuts the subject, a subject its guide does not show there; under `take`, why the takes were not. `transition` names the transition across a cut, which is not read: the boxes are the two clips' at the cut. `under` lists the clips of tracks above that draw there and may hide it. A cut costs four small frames of its guides, about a tenth of a second, and half a second where the takes are read, so it is asked for and no part of a check; `from` and `to` choose the cuts of a range, and at most 64 are read (`unread`, how many more there are). What is said is what is so, not that it is wrong, and fails no check: a hard cut jumps on purpose. Use with `sequence`, `proposal`, `from`, or `to` only.", "properties": {"subjects": {"type": "object", "additionalProperties": {"type": "string"}}}, "additionalProperties": false},
                     "contrast": {"type": "boolean", "description": "Read each title and caption of the sequence over `from`–`to` (all of it by default) against what is behind it, from rendered frames, and return `contrast`, findings for those too faint to read or that do not show, with `read` and `of`, how many of them it read. Slower than a check, so it is not part of one; the editor's full QC has it as a row."},
                     "scopes": {"type": "boolean", "description": "With `at`: instead of frames, what scopes read at those program positions, as numbers, in each of `readings` under `scopes`: `luma`, `red`, `green`, and `blue` (`min`, `mean`, `max`, in percent); `clipped` (the share of samples at `black` and at `white`, each as [red, green, blue]); `zones` (the share of samples in `shadows`, under 25% luma, `midtones`, and `highlights`, over 75%); `histogram` (the share in each of 16 even bands of luma, darkest first); `chroma` (`castHueDeg` and `castMagnitude`, the mean color as an angle on the vectorscope and how far out in percent, a cast when it is far from 0; `saturation`, the mean of how far out each sample is; `onSkinLine`, the share of colored samples near the skin tone line); `peaks` (the densest colors, each `hueDeg`, `magnitude`, `share`). Angles are a vectorscope's, from +Cb: magenta 50, red 103, skin 123, yellow 175, green 230, cyan 283, blue 355. Grade by these: compare shots with each other and the result with where it should land; with `proposal`, each reading also has `before`, what the project reads there, so one call compares the two. Read from 8-bit frames, or in an HDR sequence from its PQ or HLG signal in BT.2020, with `hdr` saying what that comes to: `peakNits`, `meanNits`, `overWhite` and `outsideBt709` as shares of the samples, and `referenceWhite`, where SDR white falls on the signal in percent."},
@@ -355,7 +372,8 @@ pub(super) fn metadata(name: &str) -> Option<(&'static str, Value, ToolAnnotatio
              document diff, check findings, and a before/after preview of the frames \
              around each cut it changed. The project is unchanged until the user accepts it, \
              unless their own permissions accept an agent's edits (`status: accepted`). `extend` builds \
-             on a pending proposal; `revise` replaces it. The steps that make a media are lines of the script (`step <media> add …`); `workflowSet` sets values of the workflow a model is run with, `restoreTake` goes back to the steps a take was made from, and `carry` writes the steps of a media that still names a recipe file under it. `savePreset` saves a portable \
+             on a pending proposal; `revise` replaces it; `forward`, alone, brings one the project \
+             has changed under onto the project as it is. The steps that make a media are lines of the script (`step <media> add …`); `workflowSet` sets values of the workflow a model is run with, `restoreTake` goes back to the steps a take was made from, and `carry` writes the steps of a media that still names a recipe file under it. `savePreset` saves a portable \
              .kerfpreset file without changing the project. `preset` with `bindings` \
              applies one as a proposal replacing the chosen sequence.",
             json!({
@@ -375,12 +393,13 @@ pub(super) fn metadata(name: &str) -> Option<(&'static str, Value, ToolAnnotatio
                     "scopes": {"type": "array", "items": {"type": "string"}, "maxItems": MAX_LOOK_FRAMES, "description": "Sequence positions to read scopes at once the edit is made, as `look` with `scopes` reads them: the answer's `scopes` has a reading for each, with `before`, what was read there before the edit. A grade and its numbers in one call."},
                     "extend": {"type": "string", "description": "The id of a pending proposal to build on, its newest version's: the script runs on what it makes, the two become one proposal, and the preview shows what this script changed."},
                     "revise": {"type": "string", "description": "The id of a pending proposal this one replaces; the script runs on the project."},
+                    "forward": {"type": "string", "description": "The id of a pending proposal the project has changed under (stale), its newest version's, passed alone. Its own operations run again on the project as it is, each time they name moved with the clips that were at it, and that is the proposal's next version, which always waits for the user's review. Refused, naming the clip, where a clip a line names, or one a time it names was on, was cut, moved or removed since, or the line would change other clips than it did: nothing is staged, and `revise` replaces it."},
                     "restoreTake": {"type": "object", "properties": {"media": {"type": "string"}, "take": {"type": "integer", "minimum": 1}}, "required": ["media", "take"], "additionalProperties": false, "description": "Go back to the steps a take was made from: `media`, and the `take`'s number as `look` with `graph` or `media` lists it, where it says `kept`. The steps are written as that making read them, each seed as that take had it, so a making of them is that take's again where the model gives the same file for the same seed; a workflow file they named comes back with them where the project no longer has it as it was. They are written back by `step` lines of this edit, which the proposal shows. What else the take was made from, its sequences and signals, is the project's and is not changed. Used alone: change the steps in an edit after it."},
                     "workflowSet": {"type": "array", "minItems": 1, "items": {"type": "object", "properties": {"media": {"type": "string"}, "line": {"type": "integer", "minimum": 1}, "node": {"type": "string"}, "input": {"type": "string"}, "value": {}, "link": {"type": "array", "prefixItems": [{"type": "string"}, {"type": "integer", "minimum": 0}], "minItems": 2, "maxItems": 2}}, "required": ["media", "line", "node", "input"], "additionalProperties": false}, "description": "Values to set in the workflow the model of a `generate` step is run with, each input `input` of node `node` (as `look` `workflow` lists them) to `value`, a number, a text, or true or false as it was. `line` is the step's, as `look` `graph` gives it. The workflow as it is is copied into the project beside the shot with those values changed and the rest as written, and the step names the copy with `workflow=`, by a `step` line of this edit: the answer's `workflows` says where each is kept. An input that is a `link` is pointed at another node with `link` in place of `value`, `[<node>, <output>]`, the output counted from 0 as the node's `outputs` lists what it gives: `{media, line, node: \"12\", input: \"model\", link: [\"19\", 0]}`. It is refused where the graph would go round, and, once the server has said what each gives, where the output is not what the input takes. Only a link is linked, and an input a blank fills is not set here. Nothing on the model's server changes, and the person's models file is not touched. To go back to the workflow as it comes, take `workflow` off the step (`step <media> set <n> workflow=\"\"`)."},
                     "carry": {"type": "array", "minItems": 1, "items": {"type": "string"}, "description": "Media that still name a recipe file (`recipe=`), to carry into the document: each recipe's `render`, `generate` and `join` lines are written as steps under its media, files named from the project's folder, and `recipe=` comes off its line. Its takes stay, and those made from the recipe as it stands are not asked for again; the answer's `carried` says how many (`takesHeld`) and what did not come with it (`notes`). The lines are first in the edit's script, so the `script` of the same edit can change the steps (`step <media> set <n> …`). A recipe with a `run` line cannot be carried, a document naming no program: its program is named in the person's own models file, and a `generate` step asks it."},
                     "cast": {"type": "array", "items": {"type": "string"}, "description": "Lines to add to the project's cast file, each `cast <name> \"<who or what it is>\" [ref=<picture> …]` or `style <name> \"<how a shot looks>\"`, for who and what a step of this edit shows that `look`'s `cast` and `styles` have not. They are written at once, since adding one asks for no shot again; one the file has is the person's to change, and is refused."}
                 },
-                "anyOf": [{"required": ["script"]}, {"required": ["workflowSet"]}, {"required": ["restoreTake"]}, {"required": ["carry"]}, {"required": ["cast"]}, {"required": ["preset"]}, {"required": ["savePreset"]}],
+                "anyOf": [{"required": ["script"]}, {"required": ["workflowSet"]}, {"required": ["restoreTake"]}, {"required": ["carry"]}, {"required": ["cast"]}, {"required": ["preset"]}, {"required": ["savePreset"]}, {"required": ["forward"]}],
                 "additionalProperties": false
             }),
             ToolAnnotations {
@@ -392,7 +411,10 @@ pub(super) fn metadata(name: &str) -> Option<(&'static str, Value, ToolAnnotatio
         "render" => (
             "Render the sequence, or the range `from`–`to`, to a file — of the project, or \
              of what a pending `proposal` would make. Returns a job that renders while this \
-             session lasts; pass `job` to read its progress and output, with `cancel` to stop it.",
+             session lasts; pass `job` to read its progress and output, with `cancel` to stop it. \
+             `handoff` writes the sequence as a timeline file for another editor instead, \
+             an OpenTimelineIO `.otio` or a Final Cut Pro `.fcpxml`, at once and with no \
+             Python, and lists what the file does not carry.",
             json!({
                 "type": "object",
                 "properties": {
@@ -402,7 +424,8 @@ pub(super) fn metadata(name: &str) -> Option<(&'static str, Value, ToolAnnotatio
                     "sequence": {"type": "string", "description": sequence},
                     "proposal": {"type": "string", "description": proposal},
                     "job": {"type": "string", "description": "A render job id."},
-                    "cancel": {"type": "boolean"}
+                    "cancel": {"type": "boolean"},
+                    "handoff": {"type": "string", "enum": ["otio", "fcpxml"], "description": "Write the sequence, whole, as a timeline file another editor opens, in place of rendering it: `otio`, OpenTimelineIO JSON, which DaVinci Resolve and Premiere Pro import, or `fcpxml`, Final Cut Pro XML 1.9, which Final Cut Pro and DaVinci Resolve import and Premiere Pro does not. It is written at once, to `output` in the project's `deliveries` folder, with the media named by where their files are. `notCarried` lists what the file leaves out, each with the `code` of its kind, `at` the clip, track, or transition it is, and what happened to it: clips that play no media file (titles, generators, nested sequences) arrive as gaps; captions, clip properties, masks and effects, links, and the mix are not written; a speed ramp is written as its speed overall and reverse as forward; a transition that is no dissolve arrives as one, and in an `fcpxml` one off the first video track as a cut; an `otio` has no frame size. `check` lists what arrives changed in form: an `fcpxml` has no tracks, so every track but the first video track arrives as connected clips. Tell the person what is in both. Use with `sequence` or `proposal` only."}
                 },
                 "additionalProperties": false
             }),
@@ -702,6 +725,8 @@ struct EditInput {
     texts: BTreeMap<String, String>,
     extend: Option<String>,
     revise: Option<String>,
+    /// A stale pending proposal to bring onto the project as it is.
+    forward: Option<String>,
     /// Values of the workflow behind a `generate` step to set, in the shot's own copy.
     #[serde(default, rename = "workflowSet")]
     workflow_set: Vec<WorkflowSetInput>,
@@ -731,6 +756,8 @@ struct RenderInput {
     job: Option<String>,
     #[serde(default)]
     cancel: bool,
+    /// The timeline file to write for another editor, in place of a render.
+    handoff: Option<String>,
 }
 
 pub(crate) fn input<T: serde::de::DeserializeOwned>(arguments: Value) -> Result<T, McpError> {
@@ -949,7 +976,8 @@ impl KerfMcpRouter {
                 "PROPOSAL_STALE",
                 format!(
                     "proposal {id} was made at revision {base_revision} and the project is \
-                     at revision {revision}; revise it"
+                     at revision {revision}; bring it forward (`edit` with it as `forward`) \
+                     or revise it"
                 ),
             ));
         }
@@ -3370,13 +3398,13 @@ impl KerfMcpRouter {
             .map_err(|error| McpError::new("RENDER_FAILED", error.to_string()))?;
         let first = media[0];
         let rate = first.rate;
-        // Times start with whichever began first.
-        let earliest = found.iter().map(|a| a.offset).fold(0.0, f64::min);
-        let frame_of = |seconds: f64| {
-            rate.frames_round(
-                kerf_model::Time::from_seconds(seconds).unwrap_or(kerf_model::Time::ZERO),
-            )
-        };
+        let lined = crate::lined_up::lined_up(&found, rate.frame_duration().seconds());
+        // Times start with whichever of those placed began first.
+        let placed = || lined.iter().filter(|lined| lined.left.is_none());
+        let earliest = placed().map(|lined| lined.offset).fold(0.0, f64::min);
+        // Each on a whole frame from the first, so that none is more than half a frame from
+        // where its offset has it.
+        let frames = |seconds: f64| (seconds * rate.fps()).round() as i64;
         let mut id = "multicam".to_owned();
         let mut number = 1;
         while project.sequence(&id).is_some() {
@@ -3390,36 +3418,53 @@ impl KerfMcpRouter {
             format!("sequence add {id} rate={rate} size={width}x{height} name=\"Multicam\""),
             format!("use {id}"),
         ];
-        let mut rows = Vec::with_capacity(ids.len());
-        for (index, (media, alignment)) in media.iter().zip(&found).enumerate() {
-            let at = frame_of(alignment.offset - earliest);
-            let camera = index + 1;
-            let dur = rate.frames_round(media.duration).max(1);
-            let mut targets = Vec::new();
-            if media.video.is_some() {
-                lines.push(format!("track add V{camera} video"));
-                targets.push(format!("V{camera}"));
-            }
-            lines.push(format!("track add A{camera} audio"));
-            targets.push(format!("A{camera}"));
-            lines.push(format!(
-                "overwrite media={} src=0f at={at}f dur={dur}f on={}",
-                media.id,
-                targets.join(",")
-            ));
-            rows.push(json!({
-                "media": media.id.as_str(),
-                "offset": (alignment.offset * 1000.0).round() / 1000.0,
-                "at": format!("{at}f"),
-                "confidence": (alignment.confidence * 100.0).round() / 100.0,
-            }));
+        // The document says how each lines up with the first, which a check holds clips to. A
+        // first that was lined up with one of these is let go, since they are now with it.
+        if media[1..]
+            .iter()
+            .any(|media| project.sync_comes_back(&media.id, &first.id))
+        {
+            lines.push(format!("media sync {} with=\"\"", first.id));
         }
-        Ok(json!({
-            "revision": revision,
-            "recordings": rows,
-            "sequence": id,
-            "script": lines.join("\n"),
-        }))
+        let mut rows = Vec::with_capacity(ids.len());
+        for (index, (media, lined)) in media.iter().zip(&lined).enumerate() {
+            let mut row = lined.row.clone();
+            row["media"] = json!(media.id.as_str());
+            if lined.left.is_none() {
+                let at = frames(lined.offset) - frames(earliest);
+                let camera = index + 1;
+                let dur = rate.frames_round(media.duration).max(1);
+                let mut targets = Vec::new();
+                if media.video.is_some() {
+                    lines.push(format!("track add V{camera} video"));
+                    targets.push(format!("V{camera}"));
+                }
+                lines.push(format!("track add A{camera} audio"));
+                targets.push(format!("A{camera}"));
+                lines.push(format!(
+                    "overwrite media={} src=0f at={at}f dur={dur}f on={}",
+                    media.id,
+                    targets.join(",")
+                ));
+                if index > 0 {
+                    lines.push(format!(
+                        "media sync {} with={}@{}s",
+                        media.id,
+                        first.id,
+                        crate::lined_up::milliseconds(lined.offset)
+                    ));
+                }
+                row["at"] = json!(format!("{at}f"));
+            }
+            rows.push(row);
+        }
+        let mut answer = json!({"revision": revision, "recordings": rows});
+        // A sequence of one camera lines nothing up.
+        if placed().count() >= 2 {
+            answer["sequence"] = json!(id);
+            answer["script"] = json!(lines.join("\n"));
+        }
+        Ok(answer)
     }
 
     /// Where a point of the program's picture goes over `from`–`to`.
@@ -4073,7 +4118,17 @@ impl KerfMcpRouter {
     }
 
     fn run_edit(&self, arguments: Value) -> Result<Value, McpError> {
+        let alone = arguments.as_object().is_some_and(|given| given.len() == 1);
         let input: EditInput = input(arguments)?;
+        if let Some(id) = &input.forward {
+            if !alone {
+                return Err(McpError::new(
+                    "INVALID_ARGUMENTS",
+                    "`forward` is passed alone: it runs the proposal's own operations again, with no script of this edit's",
+                ));
+            }
+            return self.forward(id);
+        }
         if [
             input.script.is_some()
                 || !input.workflow_set.is_empty()
@@ -4322,32 +4377,7 @@ impl KerfMcpRouter {
                 return Err(McpError::new("INVALID_RECIPE", why));
             }
         }
-        let script = staged.script.clone();
-        let document_diff = staged.document_diff.clone();
-        let (version, supersedes) = (staged.version, staged.supersedes.clone());
-        let (_, after_document) = self.runtime.proposal_documents(&proposal_id)?;
-        let after_program = parse(&after_document)?;
-        let mut before_program = before.clone();
-        kerf_runtime::resolve_media_paths(&mut before_program, &self.dir);
-        let check = crate::qc::check(&after_program, &self.dir).to_json();
-        let preview = match changed_range(&before, &applied.project) {
-            None => json!({"unavailable": "the edit changes nothing on the sequence"}),
-            Some((sequence, from, to)) => self
-                .preview(&sequence, from, to, &before_program, &after_program)
-                .unwrap_or_else(|error| json!({"unavailable": error.message})),
-        };
-        let mut result = json!({
-            "proposal": proposal_id,
-            "version": version,
-            "supersedes": supersedes,
-            "author": author.name,
-            "baseRevision": revision,
-            "status": "awaiting_review",
-            "script": script,
-            "diff": document_diff,
-            "check": check,
-            "preview": preview,
-        });
+        let mut result = self.staged(staged, revision, &before, &applied.project)?;
         // Where `snap=` put each edge it moved, which the diff shows only as where it is.
         if !applied.snapped.is_empty() {
             result["snapped"] = json!(applied.snapped);
@@ -4419,6 +4449,84 @@ impl KerfMcpRouter {
             result["toMake"] = json!(to_make);
         }
         Ok(result)
+    }
+
+    /// Bring the stale pending proposal `id` onto the project as it is, as
+    /// its next version. It waits for review whatever the person lets an
+    /// agent's own edits be: it may be another's, and its frames are not the
+    /// ones that were looked at.
+    fn forward(&self, id: &str) -> Result<Value, McpError> {
+        let (revision, before) = self.project_at(None)?;
+        let snapshot = self
+            .runtime
+            .forward_proposal(&operation_key("agent-forward"), revision, id)
+            .map_err(|error| match error.code.as_str() {
+                "PROPOSAL_NOT_PENDING" | "PROPOSAL_NOT_FOUND" => not_pending(id),
+                // The line and the clip that stopped it, as the runtime
+                // said them, and what is left to do.
+                "PROPOSAL_NOT_FORWARDED" => McpError::new(
+                    "PROPOSAL_NOT_FORWARDED",
+                    format!(
+                        "{}. Nothing was staged and proposal {id} waits as it was; pass it as `revise` with a script written on the project as it is",
+                        error.message
+                    ),
+                ),
+                "PROPOSAL_SUPERSEDED" | "PROPOSAL_NOT_STALE" | "PROPOSAL_BASE_GONE" => {
+                    McpError::new(&error.code, error.message)
+                }
+                _ => McpError::from(error),
+            })?;
+        let Some(staged) = snapshot
+            .proposals
+            .first()
+            .filter(|entry| entry.status == "pending")
+        else {
+            return Err(McpError::new(
+                "RUNTIME_ERROR",
+                "the runtime did not keep the proposal",
+            ));
+        };
+        let after = apply_script(&before, catalog(), &staged.script)
+            .map_err(refused)?
+            .project;
+        let mut result = self.staged(staged, revision, &before, &after)?;
+        result["forwarded"] = json!(id);
+        Ok(result)
+    }
+
+    /// What `edit` says of the proposal it staged on the project at
+    /// `revision`: its id, version and author, its script and diff, what the
+    /// checks find in what it makes, and the frames `before` and `after`.
+    fn staged(
+        &self,
+        staged: &ProposalEntry,
+        revision: u64,
+        before: &Project,
+        after: &Project,
+    ) -> Result<Value, McpError> {
+        let (_, after_document) = self.runtime.proposal_documents(&staged.proposal_id)?;
+        let after_program = parse(&after_document)?;
+        let mut before_program = before.clone();
+        kerf_runtime::resolve_media_paths(&mut before_program, &self.dir);
+        let check = crate::qc::check(&after_program, &self.dir).to_json();
+        let preview = match changed_range(before, after) {
+            None => json!({"unavailable": "the edit changes nothing on the sequence"}),
+            Some((sequence, from, to)) => self
+                .preview(&sequence, from, to, &before_program, &after_program)
+                .unwrap_or_else(|error| json!({"unavailable": error.message})),
+        };
+        Ok(json!({
+            "proposal": staged.proposal_id,
+            "version": staged.version,
+            "supersedes": staged.supersedes,
+            "author": staged.author.name,
+            "baseRevision": revision,
+            "status": "awaiting_review",
+            "script": staged.script,
+            "diff": staged.document_diff,
+            "check": check,
+            "preview": preview,
+        }))
     }
 
     /// Contact sheets of what the edit changed in `from`–`to`, before and
@@ -4510,8 +4618,71 @@ impl KerfMcpRouter {
         Ok((job, output))
     }
 
+    /// Write a sequence of the project, or of what a pending proposal would
+    /// make, as a timeline file another editor opens, and say what the file
+    /// does not carry.
+    fn handoff(
+        &self,
+        format: &str,
+        sequence: Option<&str>,
+        proposal: Option<&str>,
+    ) -> Result<Value, McpError> {
+        let format = kerf_interchange::Format::ALL
+            .into_iter()
+            .find(|known| known.name() == format)
+            .ok_or_else(|| {
+                McpError::new(
+                    "INVALID_ARGUMENTS",
+                    format!("handoff `{format}` is not otio or fcpxml"),
+                )
+            })?;
+        let (revision, mut project) = self.project_at(proposal)?;
+        let sequence = program(&project, sequence)?;
+        let (id, name) = (sequence.id.to_string(), sequence.name.clone());
+        // Another editor finds a file by where it is, not by where the project is.
+        let directory = self.runtime.directory();
+        kerf_runtime::resolve_media_paths(&mut project, directory);
+        let output = directory
+            .join("deliveries")
+            .join(format!("{}.{}", file_stem(&name, &id), format.name()));
+        let written = kerf_interchange::export(&project, Some(&id), &output, format)
+            .map_err(|error| McpError::new("HANDLER_FAILED", error.to_string()))?;
+        let listed = |issues: &[kerf_interchange::InterchangeIssue]| -> Vec<Value> {
+            issues
+                .iter()
+                .map(|issue| json!({"code": issue.code, "at": issue.path, "what": issue.message}))
+                .collect()
+        };
+        let mut result = json!({
+            "output": written.output_path,
+            "handoff": format.name(),
+            "sequence": id,
+            "revision": revision,
+            "notCarried": listed(&written.report.losses),
+            "check": listed(&written.report.warnings),
+        });
+        if let Some(proposal) = proposal {
+            result["proposal"] = json!(proposal);
+        }
+        Ok(result)
+    }
+
     pub(super) fn render(&self, arguments: Value) -> Result<Value, McpError> {
         let input: RenderInput = input(arguments)?;
+        if let Some(format) = input.handoff.as_deref() {
+            if input.job.is_some()
+                || input.cancel
+                || input.quality.is_some()
+                || input.from.is_some()
+                || input.to.is_some()
+            {
+                return Err(McpError::new(
+                    "INVALID_ARGUMENTS",
+                    "`handoff` writes the whole sequence as a timeline file; it takes no job, quality, or range",
+                ));
+            }
+            return self.handoff(format, input.sequence.as_deref(), input.proposal.as_deref());
+        }
         if let Some(job) = input.job.as_deref() {
             if input.quality.is_some()
                 || input.from.is_some()
@@ -4598,6 +4769,25 @@ impl KerfMcpRouter {
             result["proposal"] = json!(id);
         }
         Ok(result)
+    }
+}
+
+/// A file name for a sequence's hand-off: its name without what a path or a
+/// file system keeps for itself, or its id where that leaves nothing.
+fn file_stem(name: &str, id: &str) -> String {
+    let stem: String = name
+        .chars()
+        .map(|c| match c {
+            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '-',
+            c if c.is_control() => ' ',
+            c => c,
+        })
+        .collect();
+    let stem = stem.trim().trim_matches('.').trim();
+    if stem.is_empty() {
+        id.to_owned()
+    } else {
+        stem.to_owned()
     }
 }
 
@@ -5485,7 +5675,11 @@ sequence s1 rate=24 size=1920x1080
         };
         let text = proposal_status(Some(&pending)).unwrap();
         assert!(text.contains("Proposal p1 (from revision 3)"));
-        assert!(text.contains("revise it"));
+        // A stale one is not accepted; what moves it is said with it.
+        assert!(text.contains(
+            "The project has changed since, so the user cannot accept it: bring it forward \
+             with `edit` and its id as `forward`, or `revise` it."
+        ));
         assert!(text.contains("```diff\n-a\n+b\n```"));
         let rejected = PendingProposal::Rejected {
             proposal_id: "p1".into(),

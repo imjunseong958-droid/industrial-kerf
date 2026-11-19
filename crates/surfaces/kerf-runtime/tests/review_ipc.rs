@@ -183,6 +183,72 @@ fn proposals_from_two_clients_wait_side_by_side_and_a_revise_makes_version_two()
 }
 
 #[test]
+fn a_stale_proposal_is_brought_forward_by_either_client_or_refused_by_name() {
+    let project = Project::new("forward", Some(SOLID));
+    let (editor, mcp) = (project.client(), project.client());
+    let base = editor.get_state().unwrap().revision;
+    // A second clip put where the first ends.
+    let theirs = mcp
+        .stage_script_proposal_by(
+            "agent",
+            base,
+            "overwrite gen=solid at=48f dur=24f on=V1 as=c2",
+            None,
+            &agent(),
+            None,
+        )
+        .unwrap()
+        .proposals[0]
+        .proposal_id
+        .clone();
+    // The person makes room at the head: the first clip ends a second later.
+    let moved = editor
+        .apply_script_request(
+            "ui",
+            "make-room",
+            "insert gen=solid at=0f dur=24f on=V1 as=c0",
+            base,
+        )
+        .unwrap();
+    let refused = editor
+        .accept_proposal(&theirs, "ui", "accept-stale", moved.revision)
+        .unwrap_err();
+    assert!(
+        refused.message.contains("bring it forward"),
+        "{}",
+        refused.message
+    );
+    // The editor brings the agent's proposal forward; the agent sees it.
+    let forwarded = editor
+        .forward_proposal("forward", moved.revision, &theirs)
+        .unwrap();
+    let seen = mcp.get_state().unwrap();
+    assert_eq!(seen.proposals, forwarded.proposals);
+    let v2 = &seen.proposals[0];
+    assert_eq!((v2.version, v2.supersedes.as_deref()), (2, Some(theirs.as_str())));
+    assert_eq!(v2.freshness, kerf_runtime::ProposalFreshness::Current);
+    assert_eq!(v2.author, agent());
+    assert!(v2.script.contains("at=00:00:03:00"), "{}", v2.script);
+
+    // Cut since, the clip the place was on stops it, by name, and the
+    // proposal waits as it was.
+    let cut = editor
+        .apply_script_request("ui", "cut", "trim c1 out -6f", moved.revision)
+        .unwrap();
+    let error = mcp
+        .forward_proposal("forward-again", cut.revision, &v2.proposal_id)
+        .unwrap_err();
+    assert_eq!(error.code, "PROPOSAL_NOT_FORWARDED");
+    assert!(error.message.contains("clip `c1`"), "{}", error.message);
+    let after = editor.get_state().unwrap();
+    assert_eq!(after.proposals[0].proposal_id, v2.proposal_id);
+    assert_eq!(
+        after.proposals[0].freshness,
+        kerf_runtime::ProposalFreshness::Stale
+    );
+}
+
+#[test]
 fn the_render_queue_keeps_the_newest_finished_jobs_for_every_client() {
     let project = Project::new("queue", Some(SOLID));
     let (editor, other) = (project.client(), project.client());

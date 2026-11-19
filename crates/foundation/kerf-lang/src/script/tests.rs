@@ -924,6 +924,305 @@ fn a_range_snaps_by_the_clip_it_names() {
     assert_eq!(frames(plain.project.clip("c2").unwrap().start), 69);
 }
 
+/// Where the blade a script ends with was put, in frames.
+fn bladed(applied: &Applied) -> i64 {
+    match applied.ops.last() {
+        Some(Op::Blade { at, .. }) => frames(*at),
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn a_blade_snaps_as_a_split_of_the_one_sound_it_cuts() {
+    let project = base();
+    // c1 and a1 play m1 together from 10s, so the blade has one sound to go
+    // by. 1s 21f plays 11.875s, just before the pause at 12s: it goes where
+    // a split of either goes, and cuts both there.
+    let blade = known(&project, "blade at=01:00:01:21 snap=pause").unwrap();
+    assert_eq!(
+        print_ops(&project, Catalog::builtin(), &blade.ops).trim(),
+        "blade at=01:00:02:04"
+    );
+    assert_eq!(
+        blade.snapped,
+        [
+            "the blade went 7 frames later, to 01:00:02:04: into the 0.60s pause of `m1` at \
+             00:00:12:00, between \"closed,\" and \"the\""
+        ]
+    );
+    for clip in ["c1", "a1"] {
+        assert_eq!(frames(blade.project.clip(clip).unwrap().duration), 52);
+    }
+    let split = known(&project, "split c1 at=01:00:01:21 snap=pause").unwrap();
+    assert_eq!(split.project, blade.project);
+    // One asked for in the pause stays, and nothing is said of it.
+    let stays = known(&project, "blade at=01:00:02:06 snap=pause").unwrap();
+    assert_eq!(bladed(&stays), 54);
+    assert!(stays.snapped.is_empty(), "{:?}", stays.snapped);
+    // Between "So" and "we", which part for an eighth of a second.
+    let gap = known(&project, "blade at=01:00:01:01 snap=pause").unwrap();
+    assert_eq!(
+        gap.snapped,
+        [
+            "the blade went 1 frame earlier, to 01:00:01:00: into the 0.12s gap of `m1` at \
+             00:00:10:23, where \"So\" and \"we\" run together"
+        ]
+    );
+    // 1s 10f plays 11.42s; the picture cuts at 11.5s.
+    let cut = known(&project, "blade at=01:00:01:10 snap=cut").unwrap();
+    assert_eq!(
+        cut.snapped,
+        [
+            "the blade went 2 frames later, to 01:00:01:12: onto the cut of `m1` at \
+             00:00:11:12"
+        ]
+    );
+    // Past the middle of "the" the pause is on the other side of the word,
+    // and the refusal names the clip that says it.
+    let across = known(&project, "blade at=01:00:02:20 snap=pause").unwrap_err();
+    assert_eq!(
+        across.message,
+        "in `a1`, no pause of `m1` within 0.50s of 00:00:12:20 would do here: the pause at \
+         00:00:12:00 is on the other side of \"the\""
+    );
+    let far = known(&project, "blade at=01:00:00:12 snap=cut within=2f").unwrap_err();
+    assert!(far.message.contains("no cut of `m1` within"), "{far:?}");
+    // Past the last clip there is nothing to go by.
+    let nothing = known(&project, "blade at=01:00:08:00 snap=pause").unwrap_err();
+    assert_eq!(
+        nothing.message,
+        "nothing the blade cuts at 01:00:08:00 has a sound to snap to"
+    );
+    assert!(fails(&project, "blade at=01:00:01:10 snap=cut")
+        .message
+        .contains("not indexed yet"));
+}
+
+#[test]
+fn a_blade_without_snap_is_where_it_was_asked_for() {
+    let project = base();
+    // In "closed,", three frames short of a pause: it is one operation at
+    // the time it was given, and reads no facts.
+    let plain = run(&project, "blade at=01:00:01:21");
+    assert_eq!(
+        plain.ops,
+        [Op::Blade {
+            sequence: Id::new("s1").unwrap(),
+            at: Rate::FPS_24.time_of(45),
+            tracks: None,
+        }]
+    );
+    assert!(plain.snapped.is_empty());
+    for clip in ["c1", "a1"] {
+        assert_eq!(frames(plain.project.clip(clip).unwrap().duration), 45);
+    }
+    // With facts at hand it is the same.
+    assert_eq!(known(&project, "blade at=01:00:01:21").unwrap(), plain);
+    let one = run(&project, "blade at=01:00:01:21 tracks=A1");
+    assert_eq!(
+        print_ops(&project, Catalog::builtin(), &one.ops).trim(),
+        "blade at=01:00:01:21 tracks=A1"
+    );
+    assert_eq!(frames(one.project.clip("c1").unwrap().duration), 96);
+    assert!(fails(&project, "blade at=01:00:01:21 within=2f")
+        .message
+        .contains("within= goes with snap="));
+    assert!(fails(&project, "blade at=01:00:01:21 snap=beat")
+        .message
+        .contains("use pause or cut"));
+}
+
+/// m1 as [`Known`] has it, and m2, a second voice recorded beside it: "Good
+/// morning." and "Fine.", with a pause before each, and a cut of its own
+/// picture.
+struct Two;
+
+impl Facts for Two {
+    fn speech(&self, media: &Media) -> Speech {
+        if media.id.as_str() != "m2" {
+            return Known.speech(media);
+        }
+        let word = |start: f64, end: f64, text: &str| Word {
+            start,
+            end,
+            text: text.into(),
+        };
+        Speech {
+            words: vec![
+                word(30.85, 31.4, " Good"),
+                word(31.4, 32.25, " morning."),
+                word(32.9, 33.4, " Fine."),
+            ],
+            covered: vec![(0.0, 600.0)],
+        }
+    }
+
+    fn breaks(&self, media: &Media) -> Option<Breaks> {
+        if media.id.as_str() != "m2" {
+            return Known.breaks(media);
+        }
+        Some(Breaks {
+            pauses: vec![(30.25, 30.85), (32.25, 32.9)],
+            gaps: Vec::new(),
+            cuts: vec![31.25],
+        })
+    }
+}
+
+/// `script` on the base project with m2 laid over c1 and a1 from `src`, its
+/// picture d1 on V2 and its sound b1 on A2.
+fn two_from(src: &str, script: &str) -> Result<Applied, Diagnostic> {
+    let script = format!(
+        "media add m2 path=\"b.mov\" rate=24 dur=00:10:00:00 video=1920x1080 audio=2ch@48000\n\
+         track add V2 video\n\
+         track add A2 audio\n\
+         overwrite media=m2 src={src} dur=00:00:04:00 at=01:00:00:00 on=V2,A2 as=d1,b1\n\
+         {script}"
+    );
+    apply_script_with(&base(), Catalog::builtin(), &Two, &script).map_err(|mut e| e.remove(0))
+}
+
+/// With m2 from 30s.
+fn two(script: &str) -> Result<Applied, Diagnostic> {
+    two_from("00:00:30:00", script)
+}
+
+#[test]
+fn a_blade_goes_where_every_sound_it_cuts_is_quiet() {
+    // At 1s 22f a1 is ending "closed,", before a pause it plays from 2s to
+    // 2s 14f, and b1 is in "morning.", before one it plays from 2s 6f to
+    // 2s 21f. A split of a1 goes to 2s 4f, where "morning." is still being
+    // said; the blade goes on to where both are quiet, clear of that too.
+    let blade = two("blade at=01:00:01:22 snap=pause").unwrap();
+    assert_eq!(bladed(&blade), 58);
+    assert_eq!(
+        blade.snapped,
+        [
+            "the blade went 12 frames later, to 01:00:02:10: into the 0.60s pause of `m1` at \
+             00:00:12:00, between \"closed,\" and \"the\", and the 0.65s pause of `m2` at \
+             00:00:32:06, between \"morning.\" and \"Fine.\", quiet together for 0.35s"
+        ]
+    );
+    // It is one cut: every clip under it ends on the same frame.
+    for clip in ["c1", "a1", "d1", "b1"] {
+        assert_eq!(frames(blade.project.clip(clip).unwrap().duration), 58);
+    }
+    // With tracks= only their clips are cut, and only their sound gone by.
+    let one = two("blade at=01:00:01:22 tracks=V1,A1 snap=pause").unwrap();
+    assert_eq!(bladed(&one), 52);
+    assert_eq!(frames(one.project.clip("b1").unwrap().duration), 96);
+    // m2 four frames later has its pause from 2s 10f, and the two are quiet
+    // together for less than the air an edge leaves either side, 0.25s:
+    // that is divided as a short pause of one is, and said.
+    let short = two_from("00:00:29:20", "blade at=01:00:02:02 snap=pause").unwrap();
+    assert_eq!(bladed(&short), 61);
+    assert!(
+        short.snapped[0].ends_with("quiet together for 0.18s"),
+        "{:?}",
+        short.snapped
+    );
+
+    // At 1s 1f a1 is between "So" and "we" and b1 is in "Good", with a pause
+    // just before it: each has somewhere to go and it is not the same place,
+    // so nothing moves, and each clip is named with the word in its way.
+    let apart = two("blade at=01:00:01:01 snap=pause").unwrap_err();
+    assert_eq!(
+        apart.message,
+        "the clips this blade cuts have no quiet in common within 0.50s of 01:00:01:01: `a1` \
+         would take it to 01:00:01:00, into the 0.12s gap of `m1` at 00:00:10:23, where \"So\" \
+         and \"we\" run together, while `b1` says \"Good\"; `b1` would take it to 01:00:00:18, \
+         into the 0.60s pause of `m2` at 00:00:30:06, before \"Good\", while `a1` says \"So\": \
+         cut them one at a time with tracks="
+    );
+    // One that is quiet where the blade was asked for stays for no other:
+    // with m2 from 28s 20f, a1 is in its pause at 2s 4f and b1 in "Good".
+    let stays = two_from("00:00:28:20", "blade at=01:00:02:04 snap=pause").unwrap_err();
+    assert!(
+        stays.message.contains(
+            "`a1` is quiet there, in the 0.60s pause of `m1` at 00:00:12:00, between \
+             \"closed,\" and \"the\", while `b1` says \"Good\"; `b1` would take it to 01:00:01:22,"
+        ),
+        "{stays:?}"
+    );
+    assert_eq!(bladed(&two("blade at=01:00:01:01 tracks=A1 snap=pause").unwrap()), 24);
+    assert_eq!(bladed(&two("blade at=01:00:01:01 tracks=A2 snap=pause").unwrap()), 18);
+    // A picture cut alone goes by its media's sound, as a split of it does.
+    assert_eq!(bladed(&two("blade at=01:00:01:01 tracks=V2 snap=pause").unwrap()), 18);
+    // One sound with nowhere to go refuses the blade too: past the middle
+    // of "the", where b1 is in its pause.
+    let across = two("blade at=01:00:02:20 snap=pause").unwrap_err();
+    assert_eq!(
+        across.message,
+        "in `a1`, no pause of `m1` within 0.50s of 00:00:12:20 would do here: the pause at \
+         00:00:12:00 is on the other side of \"the\""
+    );
+
+    // A cut is the nearest of either picture: m2's at 1s 6f, m1's at 1s 12f.
+    let cut = two("blade at=01:00:01:07 snap=cut").unwrap();
+    assert_eq!(
+        cut.snapped,
+        [
+            "the blade went 1 frame earlier, to 01:00:01:06: onto the cut of `m2` at \
+             00:00:31:06"
+        ]
+    );
+    let cut = two("blade at=01:00:01:10 snap=cut").unwrap();
+    assert_eq!(bladed(&cut), 36);
+    assert!(cut.snapped[0].ends_with("onto the cut of `m1` at 00:00:11:12"));
+}
+
+#[test]
+fn a_snapped_blade_cuts_the_clips_it_was_asked_to_cut() {
+    let project = base();
+    // A picture that starts on V2 between where the blade is asked for and
+    // the pause it would go into: the blade would cut that too.
+    let over = "track add V2 video\n\
+                overwrite media=m1 src=00:05:00:00 dur=00:00:01:00 at=01:00:02:02 on=V2 as=t1\n";
+    let into = known(&project, &format!("{over}blade at=01:00:01:21 snap=pause")).unwrap_err();
+    assert_eq!(
+        into.message,
+        "`a1` would take the blade to 01:00:02:04, into the 0.60s pause of `m1` at 00:00:12:00, \
+         between \"closed,\" and \"the\", where it would cut `t1` as well: blade there with at=, \
+         or leave a track out with tracks="
+    );
+    let left = known(
+        &project,
+        &format!("{over}blade at=01:00:01:21 tracks=V1,A1 snap=pause"),
+    )
+    .unwrap();
+    assert_eq!(bladed(&left), 52);
+    assert_eq!(frames(left.project.clip("t1").unwrap().duration), 24);
+    // And one that ends there: the blade would no longer cut it.
+    let under = "track add V2 video\n\
+                 overwrite media=m1 src=00:05:00:00 dur=00:00:00:14 at=01:00:01:12 on=V2 as=t1\n";
+    let out = known(&project, &format!("{under}blade at=01:00:01:21 snap=cut")).unwrap_err();
+    assert!(out.message.contains("no cut of `m1` within"), "{out:?}");
+    let out = known(&project, &format!("{under}blade at=01:00:01:21 snap=pause")).unwrap_err();
+    assert!(
+        out.message.contains("where it would not cut `t1`"),
+        "{out:?}"
+    );
+    // A track that is not there is the kernel's to name, as without snap=.
+    let missing = known(&project, "blade at=01:00:01:21 tracks=A9 snap=pause").unwrap_err();
+    assert_eq!(
+        missing.message,
+        fails(&project, "blade at=01:00:01:21 tracks=A9").message
+    );
+    // A clip on a sound track that plays no media has no index to go by.
+    let nested = "sequence add s2 rate=24 size=1920x1080\n\
+                  use s2\n\
+                  track add A1 audio\n\
+                  insert media=m1 src=00:02:00:00 dur=00:00:04:00 at=0f on=A1\n\
+                  use s1\n\
+                  track add A2 audio\n\
+                  overwrite seq=s2 dur=00:00:04:00 at=01:00:00:00 on=A2 as=n1\n";
+    let unheard = known(&project, &format!("{nested}blade at=01:00:01:21 snap=pause")).unwrap_err();
+    assert_eq!(
+        unheard.message,
+        "clip `n1` sounds and plays no media to snap to: leave its track out with tracks="
+    );
+}
+
 /// Facts that know only where m1's picture cuts, as an index records them.
 struct Cuts(Vec<f64>);
 
@@ -1113,11 +1412,90 @@ fn media_replace_prints_every_field_and_replays() {
         reel: None,
         recipe: None,
         steps: Vec::new(),
+        sync: None,
     });
     let printed = print_op(&silent, Catalog::builtin(), &op);
     assert!(printed.contains("tc=01:00:00;00"), "{printed}");
     assert!(printed.ends_with("fl video=1280x720"), "{printed}");
     assert_eq!(run(&silent, &printed).ops, vec![op]);
+}
+
+#[test]
+fn a_media_is_lined_up_with_another_recording_of_the_same_thing() {
+    let add = r#"media add m2 path="recorder.wav" rate=24 dur=00:10:00:00 audio=2ch@48000
+media add m3 path="b-cam.mov" rate=24 dur=00:10:00:00 video=1920x1080 audio=2ch@48000 sync=m1@-2.5s"#;
+    let project = run(&base(), add).project;
+    // A camera's sound is finer than its frames: the offset is in seconds, to the millisecond.
+    let script = "media sync m2 with=m1@1.234s";
+    let applied = run(&project, script);
+    let printed = print_document(&applied.project, Catalog::builtin(), PrintOptions::default());
+    assert!(
+        printed.contains(
+            "media m2 path=\"recorder.wav\" rate=24 dur=00:10:00:00 audio=2ch@48000 sync=m1@1.234s\n"
+        ),
+        "{printed}"
+    );
+    assert!(printed.contains(" sync=m1@-2.5s\n"), "{printed}");
+    assert_eq!(
+        parse_document(&printed, Catalog::builtin()).unwrap().project,
+        applied.project
+    );
+    assert_eq!(print_ops(&project, Catalog::builtin(), &applied.ops), format!("{script}\n"));
+    // A moment of one is the moment of the other that far on, through each it names in turn.
+    let chained = run(&applied.project, "media sync m3 with=m2@0.5s").project;
+    let seconds = |id: &str| {
+        let (with, at) = chained.synced_to(id).unwrap();
+        (with.to_string(), at.seconds())
+    };
+    assert_eq!(seconds("m1"), ("m1".to_owned(), 0.0));
+    assert_eq!(seconds("m2"), ("m1".to_owned(), 1.234));
+    assert_eq!(seconds("m3"), ("m1".to_owned(), 1.734));
+    // `with=""` lets go, as `parent=""` does, and prints as it was written.
+    let free = run(&applied.project, "media sync m2 with=\"\"");
+    assert_eq!(free.project.media("m2").unwrap().sync, None);
+    assert_eq!(
+        print_ops(&applied.project, Catalog::builtin(), &free.ops),
+        "media sync m2 with=\"\"\n"
+    );
+    // An offset that is no whole number of milliseconds is kept exactly, in flicks.
+    let exact = run(&project, "media sync m2 with=m1@7fl").project;
+    let printed = print_document(&exact, Catalog::builtin(), PrintOptions::default());
+    assert!(printed.contains(" sync=m1@7fl\n"), "{printed}");
+
+    for (script, code, says) in [
+        ("media sync m2 with=m9@1s", "ref.missing", "no media `m9`"),
+        ("media sync m9 with=m1@1s", "ref.missing", "no media `m9`"),
+        ("media sync m2 with=m2@1s", "sync.ring", "cannot be lined up with `m2`"),
+        // m3 is lined up with m1 already.
+        ("media sync m1 with=m3@1s", "sync.ring", "which is lined up with it"),
+        ("media sync m2 with=m1", "syntax", "as in `m1@1.5s` or `m1@-0.25s`"),
+        ("media sync m2 with=m1@30f", "syntax", "in seconds"),
+        ("media sync m2", "syntax", "missing `with=`"),
+    ] {
+        let error = fails(&project, script);
+        assert_eq!(error.code, code, "{script}: {error:?}");
+        assert!(error.message.contains(says), "{script}: {error:?}");
+    }
+    // A document that goes round, or names a media it has not, does not open.
+    let ring = printed.replace("audio=2ch@48000\nmedia m2", "audio=2ch@48000 sync=m2@0s\nmedia m2");
+    assert_ne!(ring, printed);
+    let errors = parse_document(&ring, Catalog::builtin()).unwrap_err();
+    assert!(errors.iter().any(|error| error.code == "sync.ring"), "{errors:#?}");
+    let missing = printed.replace("sync=m1@7fl", "sync=m9@7fl");
+    let errors = parse_document(&missing, Catalog::builtin()).unwrap_err();
+    assert!(
+        errors[0].message.contains("lined up with unknown media `m9`"),
+        "{errors:#?}"
+    );
+    // Removing what a media is lined up with lets it go, and says so.
+    let alone = run(&chained, "delete c1 c2\nmedia remove m1");
+    assert_eq!(alone.project.media("m2").unwrap().sync, None);
+    assert!(alone.project.media("m3").unwrap().sync.is_some());
+    assert!(
+        alone.report.notes.iter().any(|note| note.contains("`m2` was lined up with `m1`")),
+        "{:?}",
+        alone.report.notes
+    );
 }
 
 #[test]

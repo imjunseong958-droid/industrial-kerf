@@ -1,2 +1,4 @@
 # Compared byte for byte with what the exporter writes, on every platform.
 crates/edit/kerf-interchange/tests/golden/*.edl -text
+crates/edit/kerf-interchange/tests/golden/*.otio -text
+crates/edit/kerf-interchange/tests/golden/*.fcpxml -text

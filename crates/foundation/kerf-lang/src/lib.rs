@@ -8,6 +8,7 @@ mod captions;
 mod diff;
 mod doc;
 mod facts;
+mod forward;
 mod lex;
 mod making;
 pub mod preset;
@@ -17,14 +18,15 @@ mod sound;
 mod text;
 
 pub use captions::{
-    caption_characters, caption_script, to_srt, to_vtt, Word, CAPTION_GAP_FRAMES, READING_SPEED,
-    SHORT_CAPTION_SIXTHS,
+    caption_characters, caption_script, is_a_sound_note, to_srt, to_vtt, Word, CAPTION_GAP_FRAMES,
+    READING_SPEED, SHORT_CAPTION_SIXTHS,
 };
 pub use diff::diff_text;
 pub use doc::{parse_document, print_document, Document, PrintOptions, VERSION};
 pub use facts::{
     airs, Barred, Breaks, Facts, NoFacts, Place, Snap, Snaps, Speech, BEAT, WORD_SLACK,
 };
+pub use forward::{bring_forward, Forwarded};
 pub use making::print_step;
 pub use reference::{fx_reference, property_reference, reference};
 pub use script::{

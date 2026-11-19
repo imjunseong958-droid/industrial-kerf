@@ -6,17 +6,24 @@ selected Python executable must already have ``opentimelineio`` and any
 optional adapter plugin installed.  The Rust side speaks a small JSON protocol
 over stdin/stdout so its tests can replace the process entirely.
 
-Both directions exchange the timeline form defined in ``otio.rs``: the
-program sequence of a Kerf project with positions in frames of the timeline
-rate and media times in frames of the media rate, timecode included. Kerf ids
-travel in ``metadata["kerf"]["id"]`` so a round trip keeps them.
+Both directions exchange the timeline form defined in ``otio.rs``: one
+sequence of a Kerf project with positions in frames of the timeline rate and
+media times in frames of the media rate, timecode included. Kerf ids travel in
+``metadata["kerf"]["id"]`` so a round trip keeps them, and the sequence's own
+name and frame size in the timeline's ``metadata["kerf"]``.
+
+An ``.otio`` file does not come here: ``otio_json.rs`` writes and reads it in
+Rust. The two hold the same things, so a file means the same whichever wrote
+or read it; a change to one is a change to the other.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
+from collections.abc import Mapping
 from typing import Any, Iterable
 from urllib.parse import unquote, urlparse
 
@@ -43,11 +50,16 @@ def _range(start: int, duration: int, rate: float) -> opentime.TimeRange:
     return opentime.TimeRange(_rt(start, rate), _rt(duration, rate))
 
 
-def _kerf_id(value: Any) -> str | None:
+def _kerf(value: Any) -> Mapping[str, Any]:
+    """``metadata["kerf"]`` of an object: a dict set here, or the dictionary
+    OpenTimelineIO makes of one it read from a file, which is not a dict."""
     kerf = getattr(value, "metadata", {}).get("kerf")
-    if isinstance(kerf, dict) and isinstance(kerf.get("id"), str):
-        return kerf["id"]
-    return None
+    return kerf if isinstance(kerf, Mapping) else {}
+
+
+def _kerf_id(value: Any) -> str | None:
+    identifier = _kerf(value).get("id")
+    return identifier if isinstance(identifier, str) else None
 
 
 def _tag(value: Any, item: dict[str, Any]) -> None:
@@ -60,9 +72,37 @@ def _path_from_url(target: str) -> str:
         return target
     parsed = urlparse(target)
     path = unquote(parsed.path)
-    if parsed.netloc and parsed.netloc not in ("", "localhost"):
+    # ``/C:/footage/a.mov`` is ``C:/footage/a.mov``.
+    if re.match(r"^/[A-Za-z]:", path):
+        path = path[1:]
+    if parsed.netloc and parsed.netloc.lower() not in ("", "localhost"):
         path = f"//{parsed.netloc}{path}"
     return path or target
+
+
+def _file_name(path: str) -> str:
+    return re.split(r"[/\\]", path)[-1]
+
+
+def _file_stem(path: str) -> str:
+    name = _file_name(path)
+    dot = name.rfind(".")
+    return name[:dot] if dot > 0 else name
+
+
+def _first_rate(item: Any) -> float | None:
+    """The first rate anything in ``item`` counts at."""
+    source = getattr(item, "source_range", None)
+    if source is not None:
+        return float(source.duration.rate)
+    if isinstance(item, schema.Clip):
+        available = getattr(item.media_reference, "available_range", None)
+        return float(available.duration.rate) if available is not None else None
+    for child in item if isinstance(item, (schema.Stack, schema.Track)) else ():
+        rate = _first_rate(child)
+        if rate is not None:
+            return rate
+    return None
 
 
 def _marker(marker: Any, rate: float, offset: int = 0) -> dict[str, Any]:
@@ -73,8 +113,10 @@ def _marker(marker: Any, rate: float, offset: int = 0) -> dict[str, Any]:
     }
     if marker.name:
         result["name"] = str(marker.name)
-    if marker.color:
+    if marker.color and _kerf(marker).get("uncolored") is not True:
         result["color"] = str(marker.color).lower()
+    if marker.comment:
+        result["note"] = str(marker.comment)
     if _kerf_id(marker):
         result["id"] = _kerf_id(marker)
     return result
@@ -83,7 +125,9 @@ def _marker(marker: Any, rate: float, offset: int = 0) -> dict[str, Any]:
 def otio_to_timeline(timeline: Any) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     issues: list[dict[str, Any]] = []
     start_time = timeline.global_start_time
-    rate = float(start_time.rate) if start_time is not None else 24.0
+    # A timeline counts at its start time's rate; one with no start time, at
+    # the rate of the first thing on it.
+    rate = float(start_time.rate) if start_time is not None else (_first_rate(timeline.tracks) or 24.0)
     media: list[dict[str, Any]] = []
     media_index: dict[str, int] = {}
     tracks: list[dict[str, Any]] = []
@@ -121,6 +165,9 @@ def otio_to_timeline(timeline: Any) -> tuple[dict[str, Any], list[dict[str, Any]
         for child_index, child in enumerate(track):
             child_path = f"{path}.children[{child_index}]"
             if isinstance(child, schema.Clip):
+                if child.source_range is None and getattr(child.media_reference, "available_range", None) is None:
+                    issues.append(_issue("item_not_imported", "a clip with neither a source range nor media of a known length was not imported", "loss", child_path))
+                    continue
                 source = child.source_range or child.trimmed_range()
                 index = media_of(child, child_path)
                 item: dict[str, Any] = {
@@ -130,11 +177,31 @@ def otio_to_timeline(timeline: Any) -> tuple[dict[str, Any], list[dict[str, Any]
                     "start": _frames(child.range_in_parent().start_time, rate),
                     "duration": _frames(source.duration, rate),
                 }
-                if child.name:
+                # A clip named after itself or its file has no name of its own.
+                path_of_media = media[index]["path"]
+                if child.name and str(child.name) not in (_kerf_id(child), _file_name(path_of_media), _file_stem(path_of_media)):
                     item["name"] = str(child.name)
                 if _kerf_id(child):
                     item["id"] = _kerf_id(child)
-                if child.effects:
+                if not child.enabled:
+                    item["enabled"] = False
+                other_effects = False
+                for effect in child.effects:
+                    scalar = effect.time_scalar if type(effect) is schema.LinearTimeWarp else None
+                    if scalar is not None and scalar > 0:
+                        if scalar != 1:
+                            item["speed"] = float(scalar)
+                        else:
+                            item.pop("speed", None)
+                    elif scalar is not None and scalar < 0:
+                        issues.append(_issue("reverse_not_imported", "a reversed clip was imported playing forward", "loss", child_path))
+                        if scalar != -1:
+                            item["speed"] = float(-scalar)
+                        else:
+                            item.pop("speed", None)
+                    else:
+                        other_effects = True
+                if other_effects:
                     issues.append(_issue("effects_not_imported", "clip effects and time warps were not imported", "loss", child_path))
                 for marker in child.markers:
                     offset = item["start"] - _frames(source.start_time, rate)
@@ -157,7 +224,7 @@ def otio_to_timeline(timeline: Any) -> tuple[dict[str, Any], list[dict[str, Any]
             "enabled": bool(track.enabled),
             "items": items,
         }
-        if track.name:
+        if track.name and str(track.name) != _kerf_id(track):
             entry["name"] = str(track.name)
         if _kerf_id(track):
             entry["id"] = _kerf_id(track)
@@ -171,15 +238,33 @@ def otio_to_timeline(timeline: Any) -> tuple[dict[str, Any], list[dict[str, Any]
         "tracks": tracks,
         "markers": markers,
     }
+    kerf = timeline.metadata.get("kerf")
+    if isinstance(kerf, Mapping):
+        sequence: dict[str, Any] = {}
+        for field in ("id", "name"):
+            if isinstance(kerf.get(field), str) and kerf[field]:
+                sequence[field] = kerf[field]
+        for field in ("width", "height"):
+            if isinstance(kerf.get(field), int) and not isinstance(kerf[field], bool) and 0 <= kerf[field] < 2**32:
+                sequence[field] = kerf[field]
+        if kerf.get("dropFrame") is True:
+            sequence["dropFrame"] = True
+        result["sequence"] = sequence
     return result, issues
 
 
 def _new_marker(value: dict[str, Any], rate: float) -> schema.Marker:
     marker = schema.Marker(name=value.get("name", ""), marked_range=_range(value["at"], value.get("duration", 0), rate))
-    color = str(value.get("color", "")).upper()
+    color = str(value.get("color") or "").upper()
+    _tag(marker, value)
     if color and hasattr(schema.MarkerColor, color):
         marker.color = getattr(schema.MarkerColor, color)
-    _tag(marker, value)
+    else:
+        # OpenTimelineIO has no marker without a color.
+        marker.color = schema.MarkerColor.RED
+        marker.metadata["kerf"] = {**_kerf(marker), "uncolored": True}
+    if value.get("note"):
+        marker.comment = value["note"]
     return marker
 
 
@@ -187,11 +272,14 @@ def timeline_to_otio(value: dict[str, Any]) -> Any:
     rate = float(value["rate"])
     timeline = schema.Timeline(name=value.get("name", ""))
     timeline.global_start_time = _rt(value.get("start", 0), rate)
+    if isinstance(value.get("sequence"), dict):
+        timeline.metadata["kerf"] = dict(value["sequence"])
     references = []
     for media in value.get("media", []):
         media_rate = float(media["rate"])
         reference = schema.ExternalReference(target_url=media["path"])
-        reference.available_range = _range(media.get("start", 0), media.get("duration", 0), media_rate)
+        if media.get("duration") is not None:
+            reference.available_range = _range(media.get("start", 0), media["duration"], media_rate)
         _tag(reference, media)
         references.append((reference, media_rate))
     for track_value in value.get("tracks", []):
@@ -213,12 +301,18 @@ def timeline_to_otio(value: dict[str, Any]) -> Any:
             if item["start"] > cursor:
                 track.append(schema.Gap(source_range=_range(0, item["start"] - cursor, rate)))
             reference, media_rate = references[item["media"]]
-            duration = round(_rt(item["duration"], rate).value_rescaled_to(media_rate))
+            # How long it plays, counted in its media's frames: a part of one
+            # where the two rates differ, so that the cut stays where the
+            # sequence has it.
+            duration = item["duration"] if media_rate == rate else item["duration"] * media_rate / rate
             clip = schema.Clip(
-                name=item.get("name") or item.get("id", ""),
+                name=item.get("name") or _file_name(str(reference.target_url)),
                 media_reference=reference.clone(),
                 source_range=_range(item["sourceIn"], duration, media_rate),
             )
+            if item.get("speed") is not None:
+                clip.effects.append(schema.LinearTimeWarp(time_scalar=float(item["speed"])))
+            clip.enabled = item.get("enabled", True)
             _tag(clip, item)
             track.append(clip)
             cursor = item["start"] + item["duration"]

@@ -26,7 +26,7 @@ pub use id::{Id, IdGen, InvalidId};
 pub use model::{
     Retime,
     track_role, Align, AudioInfo, Clip, ClipAt, Content, Effect, Marker, MarkerColor, Mask,
-    Bus, MaskMode, MaskShape, Media, OutlineKey, Params, Project, Sequence, Track, TrackKind, Transition, VideoInfo,
+    Bus, MaskMode, MaskShape, Media, OutlineKey, Params, Project, Sequence, Synced, Track, TrackKind, Transition, VideoInfo,
     TRACK_ROLES,
 };
 pub use kerf_color::ColorSpace;
@@ -34,7 +34,7 @@ pub use making::Pass;
 pub use path::{parse_moves, parse_path_points, parse_points, MotionPath, PathPoint};
 pub use ops::{
     apply, BusChange, BusFx, ClipChange, Edge, MarkerChange, NewClip, Op, Rejected, Report, SequenceChange,
-    TrackChange, TrackRoleChange,
+    Steps, TrackChange, TrackRoleChange,
 };
 pub use speed::{Ramp, RampKey, Speed};
 pub use time::{Rate, Ratio, Time, TimeError};
