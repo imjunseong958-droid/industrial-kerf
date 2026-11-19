@@ -365,7 +365,7 @@ fn a_scene_of_many_clips_has_those_on_its_upper_tracks_read() {
 }
 
 #[test]
-fn of_more_clips_than_are_read_the_lowest_are_left_out_and_named() {
+fn of_more_clips_than_a_frame_tells_apart_the_lowest_are_left_out_and_named() {
     // More boxes than are read on one frame, side by side in rows, each on a track of its
     // own, and on the lowest track a wall nearer than them all, before the last of them.
     let boxes = MOST_CLIPS + 2;
@@ -384,20 +384,45 @@ fn of_more_clips_than_are_read_the_lowest_are_left_out_and_named() {
         .unwrap_or_else(|errors| panic!("{errors:?}"))
         .project;
     let whole = showing(&project, None, Rate::FPS_24.time_of(3)).expect("reads");
-    // The highest tracks' are the ones read, and what is left out is said.
-    assert_eq!(whole.unread, ["wall", "b1", "b2"]);
-    assert_eq!(whole.clips.len(), MOST_CLIPS);
-    assert_eq!(whole.clips[0].clip, "b3");
-    let apart = &whole.clips[0];
-    assert!(
-        apart.at.is_some() && apart.area > 0.0 && apart.hidden < 0.03,
-        "{apart:?}"
-    );
-    // A clip that is read says what hides it, one that is not read as well.
-    let behind = whole.clips.last().unwrap();
-    assert_eq!(behind.clip, format!("b{boxes}"));
-    assert!(behind.at.is_some() && behind.hidden > 0.9, "{behind:?}");
-    assert_eq!(behind.by[0].0, "wall", "{behind:?}");
+    // The highest tracks' are the ones read, and what is left out is said, from the lowest
+    // track up: every clip is one or the other.
+    assert_eq!(whole.unread[0], "wall", "{:?}", whole.unread);
+    assert_eq!(whole.clips.last().unwrap().clip, format!("b{boxes}"));
+    assert!(whole.clips.len() <= MOST_CLIPS, "{}", whole.clips.len());
+    assert_eq!(whole.clips.len() + whole.unread.len(), boxes + 1);
+    // No more are read than the ids pass has colors for, which as it is are fewer than that:
+    // a box 144 above another has its color, and the lower of the two is left out.
+    assert!(whole.unread.contains(&"b1".to_owned()), "{:?}", whole.unread);
+    // What is left out is out of the frame that is read: a box is where it is with nothing
+    // before it, the one behind the wall and the one of the wall's own color with the rest.
+    for shown in &whole.clips {
+        assert!(shown.at.is_some() && shown.area > 0.0, "{shown:?}");
+        assert!(shown.hidden < 0.03 && shown.by.is_empty(), "{shown:?}");
+    }
+}
+
+#[test]
+fn a_clip_is_not_hidden_by_one_of_its_color_at_another_moment() {
+    // A long program has more clips than the ids pass has colors, and the clip that draws
+    // now has the color of one that ended long before: 144 clips of a frame each, and then one
+    // that stays.
+    let mut text =
+        "kerf 1\nproject name=\"t\"\nsequence s1 rate=24 size=160x90 audio=48000\n".to_owned();
+    text += "  track V1 video\n";
+    for at in 0..144 {
+        text += &format!("    clip c{at} gen=solid@1 at={at}f dur=1f\n      set scale=0.5\n");
+    }
+    text += "  track V2 video\n    clip stays gen=solid@1 at=0f dur=200f\n      set scale=0.5\n";
+    let project = parse_document(&text, Catalog::builtin())
+        .unwrap_or_else(|errors| panic!("{errors:?}"))
+        .project;
+    let whole = showing(&project, None, Rate::FPS_24.time_of(150)).expect("reads");
+    assert!(whole.unread.is_empty(), "{:?}", whole.unread);
+    assert_eq!(whole.clips.len(), 1, "{:?}", whole.clips);
+    let stays = clip(&whole.clips, "stays");
+    assert!((stays.area - 0.25).abs() < 0.01, "{stays:?}");
+    assert!(stays.hidden < 0.03 && stays.by.is_empty(), "{stays:?}");
+    assert!((stays.shows - stays.area).abs() <= 0.001, "{stays:?}");
 }
 
 #[test]

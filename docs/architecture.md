@@ -566,11 +566,21 @@ What is built for it, in this order, each measured before the next:
    another frame with the one it is in half drawn, and waits for good on a
    lock that one holds; on plain threads, every loop handed to that pool,
    340. Each clip's part of every pixel is kept only where the clip is,
-   most being small on the frame. Past 256 clips on one frame, well over what a
-   scene blocked by hand has, the highest tracks' are the ones read and the
-   rest are named (`unread`), a scene being stacked from what is behind up
-   to its subject; one of those that hides a clip that is read is still in
-   its `by`. A pixel that clips share, along an edge or all over a title
+   most being small on the frame. Past 256 clips on one frame, well over
+   what a scene blocked by hand has, the highest tracks' are the ones read,
+   a scene being stacked from what is behind up to its subject, and the
+   rest are named (`unread`) and left out of the frame that is read. So is
+   a clip whose color in the ids pass a higher clip has too. The pass's
+   colors come round after 144 clips, the 145th within four of a byte of
+   the first's, and a frame cannot tell two such apart: in a program of 145
+   clips one after another, the one on the frame read as wholly hidden by
+   one that had ended long before
+   (`a_clip_is_not_hidden_by_one_of_its_color_at_another_moment`). A pixel
+   is now a clip's that is read before any other's of that color, and of
+   two of one color on a frame the lower is left out and said to be. What
+   the pass itself draws of two such is as it was, one color for both, in
+   a `render` step's `pass=ids` and in a `matte=`. A pixel that clips
+   share, along an edge or all over a title
    whose strokes are a pixel wide on that frame, is each one's by its part
    of it: a clip alone says how much of the pixel it would have, and the
    pixel's color says which order the clips there are in, so a thin title

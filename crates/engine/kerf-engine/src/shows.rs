@@ -52,6 +52,8 @@ const MOST_ORDERS: usize = 512;
 /// and each is a small frame to draw and to hold: this is there against a
 /// frame of many hundreds, and where there are more the highest tracks' are
 /// the ones read, a scene being stacked from what is behind up to its subject.
+/// Fewer are read where the ids pass has not a color for each, which as it
+/// is comes after 144 clips: see [`Showing::unread`].
 pub const MOST_CLIPS: usize = 256;
 
 /// The most frames drawn at once, each being some megabytes while it is drawn.
@@ -86,10 +88,13 @@ pub struct Shown {
 pub struct Showing {
     /// The clips that draw at that moment, from the lowest track up.
     pub clips: Vec<Shown>,
-    /// The share of the frame no clip has.
+    /// The share of the frame no clip that is read has.
     pub empty: f64,
-    /// Clips left out, where there are more than [`MOST_CLIPS`]: those of the
-    /// lowest tracks. A clip that is read still names one of them that hides it.
+    /// Clips left out, from the lowest track up: those past [`MOST_CLIPS`],
+    /// counting from the highest track down, and any whose color in the ids
+    /// pass is also that of a clip on a higher track, which a frame cannot
+    /// tell from it. They are left out of the frame that is read as well, so
+    /// what is said of the others is as if these were not there.
     pub unread: Vec<String>,
 }
 
@@ -103,6 +108,27 @@ fn compositor(project: &Project, sequence: &str) -> Result<Compositor> {
             ..ComposeOptions::default()
         },
     )?)
+}
+
+/// `project` with the clips of its sequence `id` that `which` picks made clear:
+/// they draw nothing, and still move what is parented to them.
+fn with_clear(project: &Project, id: &str, which: impl Fn(&kerf_model::Clip) -> bool) -> Project {
+    let mut cleared = project.clone();
+    let own = cleared
+        .sequences
+        .iter_mut()
+        .find(|sequence| sequence.id == id)
+        .expect("the sequence is there");
+    for clip in own
+        .tracks
+        .iter_mut()
+        .flat_map(|track| &mut track.clips)
+        .filter(|clip| which(clip))
+    {
+        clip.props
+            .insert("opacity".to_owned(), Param::Static(Value::Number(0.0)));
+    }
+    cleared
 }
 
 fn rounded(share: f64) -> f64 {
@@ -283,41 +309,49 @@ pub fn showing(project: &Project, sequence: Option<&str>, at: Time) -> Result<Sh
     let colors = whole.ids();
     let scale = (HEIGHT / f64::from(target.height.max(1))).min(1.0);
 
-    // The clips of the sequence that draw now, from the lowest track up.
-    let drawing: Vec<&kerf_model::Clip> = target
+    // The clips of the sequence that draw now, from the lowest track up, each
+    // with its place among the colors.
+    let drawing: Vec<(&kerf_model::Clip, usize)> = target
         .tracks
         .iter()
         .filter(|track| track.enabled)
         .flat_map(|track| &track.clips)
         .filter(|clip| clip.enabled && clip.start <= at && at < clip.end())
-        .filter(|clip| colors.iter().any(|(told, _)| *told == clip.id.as_str()))
+        .filter_map(|clip| {
+            let place = colors
+                .iter()
+                .position(|(told, _)| *told == clip.id.as_str());
+            place.map(|place| (clip, place))
+        })
         .collect();
-    let (unread, read) = drawing.split_at(drawing.len().saturating_sub(MOST_CLIPS));
-
-    let one = |clip: &kerf_model::Clip| -> Result<Alone> {
-        let place = colors
+    // Those read, taken from the highest track down: as many as are read at
+    // most, each with a color no clip above it has. Two of one color are one
+    // clip to a frame, so the lower is left out, of the frame as well.
+    let (mut read, mut unread) = (Vec::new(), Vec::new());
+    for (clip, place) in drawing.into_iter().rev() {
+        let its_own = read
             .iter()
-            .position(|(told, _)| *told == clip.id.as_str())
-            .expect("it has a color");
-        // The frame with the others clear: they still move what is parented to them.
-        let mut others_clear = project.clone();
-        let own = others_clear
-            .sequences
-            .iter_mut()
-            .find(|sequence| sequence.id == id.as_str())
-            .expect("the sequence is there");
-        for other in own
-            .tracks
-            .iter_mut()
-            .flat_map(|track| &mut track.clips)
-            .filter(|other| other.id != clip.id)
-        {
-            other
-                .props
-                .insert("opacity".to_owned(), Param::Static(Value::Number(0.0)));
+            .all(|(_, taken): &(_, usize)| !is(&colors[*taken].1, &colors[place].1));
+        if read.len() < MOST_CLIPS && its_own {
+            read.push((clip, place));
+        } else {
+            unread.push(clip);
         }
+    }
+    read.reverse();
+    unread.reverse();
+    let whole = if unread.is_empty() {
+        whole
+    } else {
+        let out = |clip: &kerf_model::Clip| unread.iter().any(|left| left.id == clip.id);
+        compositor(&with_clear(project, &id, out), &id)?
+    };
+
+    let one = |(clip, place): &(&kerf_model::Clip, usize)| -> Result<Alone> {
+        // The frame with the others clear: they still move what is parented to them.
+        let others_clear = with_clear(project, &id, |other| other.id != clip.id);
         let there = compositor(&others_clear, &id)?.frame(at, scale);
-        Ok(Alone::read(&there, place, &colors[place].1))
+        Ok(Alone::read(&there, *place, &colors[*place].1))
     };
     // Each clip alone is a frame of its own that waits on no other, so they are
     // drawn side by side, and beside the frame of them all, which the first
@@ -407,14 +441,18 @@ pub fn showing(project: &Project, sequence: Option<&str>, at: Time) -> Result<Sh
             continue;
         }
         // A pixel of one clip's color is that clip's, where that clip is, and
-        // all else there is behind it.
-        let front = colors
+        // all else there is behind it. A clip that is read before any other
+        // of that color: no two that are read share one, and a clip elsewhere
+        // in the program may.
+        let front = alone
             .iter()
-            .position(|(_, color)| is(pixel, color))
-            .filter(|front| {
-                alone
+            .find(|alone| alone.cover(x, y) > 0.0 && is(pixel, &colors[alone.place].1))
+            .map(|alone| alone.place)
+            .or_else(|| {
+                colors
                     .iter()
-                    .all(|alone| alone.place != *front || alone.cover(x, y) > 0.0)
+                    .position(|(_, color)| is(pixel, color))
+                    .filter(|front| alone.iter().all(|alone| alone.place != *front))
             });
         if let Some(front) = front {
             for (clip, cover) in &here {
@@ -452,7 +490,8 @@ pub fn showing(project: &Project, sequence: Option<&str>, at: Time) -> Result<Sh
 
     let (w, h) = (frame.width.max(1) as f64, frame.height.max(1) as f64);
     let mut clips = Vec::with_capacity(read.len());
-    for (((clip, alone), seen), hidden_by) in read.iter().zip(&alone).zip(seen).zip(hidden_by) {
+    for ((((clip, _), alone), seen), hidden_by) in read.iter().zip(&alone).zip(seen).zip(hidden_by)
+    {
         let area: f64 = alone.cover.iter().map(|cover| f64::from(*cover)).sum();
         let share = |count: f64| rounded(count / pixels as f64);
         let of_it = |count: f64| if area > 0.0 { rounded(count / area) } else { 0.0 };
