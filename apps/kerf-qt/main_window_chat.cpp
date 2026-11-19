@@ -174,6 +174,7 @@ void ChatWiring::attach(ChatPanel *panel) {
     connect(panel, &ChatPanel::seekRequested, w, &MainWindow::queueSeek);
     connect(panel, &ChatPanel::acceptRequested, this, &ChatWiring::accept);
     connect(panel, &ChatPanel::rejectRequested, this, &ChatWiring::reject);
+    connect(panel, &ChatPanel::forwardRequested, this, &ChatWiring::forward);
     connect(panel, &ChatPanel::previewRequested, this, &ChatWiring::preview);
     // ⌘↩ and Esc act on the version the pinned card shows.
     connect(panel, &ChatPanel::shownVersionChanged, this, &ChatWiring::syncPinnedProposal);
@@ -369,6 +370,13 @@ bool ChatWiring::reject(const QString &proposalId) {
                                               {QStringLiteral("revision"), m_window->revisionValue()}});
     if (sent && m_panel) m_panel->markSettledHere(proposalId, false);
     return sent;
+}
+
+bool ChatWiring::forward(const QString &proposalId) {
+    // Nothing settles: what comes back is the proposal's next version, or why there is none.
+    return m_bus->send(QJsonObject{{QStringLiteral("type"), QStringLiteral("forward")},
+                                   {QStringLiteral("proposalId"), proposalId},
+                                   {QStringLiteral("revision"), m_window->revisionValue()}});
 }
 
 bool ChatWiring::preview(const QString &proposalId, bool on) {

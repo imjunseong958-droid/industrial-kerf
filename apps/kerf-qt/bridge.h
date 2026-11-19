@@ -90,11 +90,11 @@ void kerf_bridge_free(void *bridge);
 // one is not accepted: forward {proposalId,revision} brings it onto the
 // project as it is, its operations run again with each place they name
 // moved with the clips that held it, as its next version (a new
-// proposalId, freshness current) to be reviewed again. It answers with an
-// error, the proposal left as it was, where a clip a line names or a place
-// was on has been cut, moved or removed since: the message names the clip,
-// and the proposal needs a revise. An earlier version's proposalId accepts
-// that version.
+// proposalId, freshness current) to be reviewed again. It answers with
+// error {command: forward, code, message}, the proposal left as it was,
+// where a clip a line names or a place was on has been cut, moved or
+// removed since: the message names the clip, and the proposal needs a
+// revise. An earlier version's proposalId accepts that version.
 // Rendering: preview {proposalId?, start?, duration?} renders the program,
 // or what that pending proposal would make of it, over start..start+duration
 // seconds when given (both or neither, at most 120 s), and plays it in place

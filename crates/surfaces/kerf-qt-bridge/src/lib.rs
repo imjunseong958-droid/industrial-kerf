@@ -1005,7 +1005,11 @@ fn runtime_worker(
             Command::Forward {
                 proposal_id,
                 revision,
-            } => active_client.forward_proposal(&operation, revision, &proposal_id),
+            } => {
+                // Its refusal is said as one, with the clip that stopped it.
+                refusal = Some("forward");
+                active_client.forward_proposal(&operation, revision, &proposal_id)
+            }
             Command::PresetExport { path } => {
                 match active_client
                     .get_document(false)

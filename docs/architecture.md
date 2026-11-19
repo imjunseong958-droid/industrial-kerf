@@ -1604,10 +1604,10 @@ after an undo drops it. A proposal that went stale under a kerfd from before thi
 and is revised.
 
 It is asked for, never done unasked. An accept of a stale proposal is refused and says that it
-can be brought forward; the editor has that as Clip ▸ Bring Proposal Forward
-(`proposal.forward`), and an agent's `edit` takes the proposal's id as `forward`. Not done: the
-proposal's card in the conversation still only says that it is out of date, and `kerf` in a
-terminal has no command for it.
+can be brought forward; the editor has that as Bring forward on the proposal's card, where
+Accept stands for one that is current, and as Clip ▸ Bring Proposal Forward
+(`proposal.forward`), and says a refusal in its error banner; an agent's `edit` takes the
+proposal's id as `forward`. Not done: `kerf` in a terminal has no command for it.
 
 ### Color
 

@@ -68,6 +68,8 @@ public:
 
     bool accept(const QString &proposalId);
     bool reject(const QString &proposalId);
+    // Bring a stale proposal onto the edit as it is, as its next version.
+    bool forward(const QString &proposalId);
     bool preview(const QString &proposalId, bool on);
     bool previewRange(const QString &proposalId, double start, double duration);
     // The pinned proposal is the one ⌘↩ and Esc act on (MainWindow::m_proposalId).

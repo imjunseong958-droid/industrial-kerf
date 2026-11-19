@@ -9,7 +9,8 @@ on `main`; its section here becomes the release's notes on GitHub
 - A proposal the edit changed under can be brought forward. Accepting one
   proposal, or editing the timeline, left every other proposal still waiting
   out of date, and each had to be written again by the agent that made it.
-  **Clip ▸ Bring Proposal Forward** now runs such a proposal's own edits
+  **Bring forward**, on the proposal's card where Accept was and in the
+  Clip menu, now runs such a proposal's own edits
   again on the timeline as it is: a clip it names is found where it has
   moved to, and a time it names moves with the clips that were there, so a
   trim that closes up, made before another trim closed up ahead of it, still
@@ -19,8 +20,7 @@ on `main`; its section here becomes the release's notes on GitHub
   has been cut, moved or removed since, or a line would change other clips
   than it did, it is refused with that clip's name and waits as it was, for
   Kerf to prepare again. An agent does the same with `edit` and the
-  proposal's id as `forward`. The proposal's card still shows it as out of
-  date until it is brought forward
+  proposal's id as `forward`
   ([docs/architecture.md](docs/architecture.md#edit)).
 - The shots and the still that come with `kerf-comfy` are made by Wan 2.1
   VACE 14B, where its 1.3B made them: `shot`, `shot-timed`, `shot-into`,

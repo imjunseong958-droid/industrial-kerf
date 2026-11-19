@@ -664,6 +664,8 @@ fn a_stale_proposal_is_brought_forward_or_refused_by_the_clip_that_changed() {
     editor.forget("error");
     editor.send(json!({"type": "forward", "proposalId": v2_id, "revision": cut["revision"]}));
     let refused = editor.expect("the refusal", |event| event["type"] == "error");
+    assert_eq!(refused["command"], "forward");
+    assert_eq!(refused["code"], "PROPOSAL_NOT_FORWARDED");
     let message = refused["message"].as_str().unwrap();
     assert!(
         message.contains("00:00:05:00 was on clip `c1`, which was cut since this was proposed"),

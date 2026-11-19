@@ -358,7 +358,10 @@ private slots:
             QVERIFY(window.grab().save(shot + QStringLiteral(".proposal.png")));
         }
         QAction *accept = window.m_commands->action(QStringLiteral("proposal.accept"));
+        QAction *forward = window.m_commands->action(QStringLiteral("proposal.forward"));
         QVERIFY(accept->isEnabled());
+        // There is nowhere to bring a proposal that is on the edit as it is.
+        QVERIFY(forward && !forward->isEnabled());
         accept->trigger();
         QCOMPARE(window.m_lastCommand.value("type").toString(), QStringLiteral("accept"));
         QCOMPARE(window.m_lastCommand.value("proposalId").toString(), QStringLiteral("p1"));
@@ -372,6 +375,12 @@ private slots:
         window.applySnapshot(QJsonObject{{"revision", 5}, {"duration", 2}, {"timeline", current},
                                          {"pendingProposal", proposal}, {"proposalTimeline", proposed}});
         QVERIFY(!accept->isEnabled());
+        // Out of date, it is brought forward where it cannot be accepted.
+        QVERIFY(forward->isEnabled());
+        forward->trigger();
+        QCOMPARE(window.m_lastCommand.value("type").toString(), QStringLiteral("forward"));
+        QCOMPARE(window.m_lastCommand.value("proposalId").toString(), QStringLiteral("p1"));
+        QCOMPARE(window.m_lastCommand.value("revision").toInt(), 5);
         window.applySnapshot(QJsonObject{{"revision", 6}, {"duration", 2}, {"timeline", current}});
         QVERIFY(!window.m_timeline->hasProposal());
     }
