@@ -40,14 +40,16 @@ pub(crate) fn findings(project: &Project, facts: &dyn Facts) -> Vec<Finding> {
 /// show nothing in a frame. As information: a person may mean to come back to them.
 fn does_nothing(sequence: &Sequence, findings: &mut Vec<Finding>) {
     let clips = || sequence.tracks.iter().flat_map(|track| &track.clips);
+    // A mesh among them: it is in depth without saying so.
     let in_depth_over = |clip: &Clip| {
         clips().any(|other| {
             other.id != clip.id
-                && is_set_true(other.props.get("three_d"))
+                && other.in_depth()
                 && other.start < clip.start + clip.duration
                 && clip.start < other.start + other.duration
         })
     };
+    let is_parent = |clip: &Clip| clips().any(|other| other.parent.as_ref() == Some(&clip.id));
     for clip in clips() {
         let id = clip.id.as_str();
         let mut says = |message: String| {
@@ -68,6 +70,23 @@ fn does_nothing(sequence: &Sequence, findings: &mut Vec<Finding>) {
         };
         let fx = generator.map(|(fx, _)| fx);
         let draws_nothing = matches!(fx, Some("camera" | "light" | "null" | kerf_model::SIGNAL));
+        // What a parent carries to its children is across the frame, and nothing of depth.
+        let carried = "what is parented to a clip follows its `x`, `y`, `scale`, and `rotation`, and keeps its own depth";
+        if fx == Some("null") {
+            for name in ["three_d", "z", "rotate_x", "rotate_y", "depth", "bevel"] {
+                if prop(name).is_some() {
+                    says(format!("`{name}` does nothing on a null: {carried}"));
+                }
+            }
+        } else if !draws_nothing && is_parent(clip) {
+            for name in ["z", "rotate_x", "rotate_y"] {
+                if matches!(prop(name), Some(Param::Animated(_) | Param::Expr(_))) {
+                    says(format!(
+                        "`{name}` moves it alone: {carried}, so each wants the same `{name}`"
+                    ));
+                }
+            }
+        }
         if draws_nothing {
             if !clip.masks.is_empty() || !clip.effects.is_empty() {
                 says("masks and effects on it do nothing, since it draws nothing".to_owned());

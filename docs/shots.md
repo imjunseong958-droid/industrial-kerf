@@ -433,6 +433,12 @@ shots/open.takes/001.work/       the guide its steps drew, the request its model
 shots/open.takes/002.mp4
 ```
 
+A take that more than one model made, a still and then the shot of it, a
+matte and then a plate, the parts of a longer shot, has each step's request
+in a folder of the step's number (`001.work/step2/request.json`), with what
+that model's program kept beside it; a take one model made has it in the
+working folder itself.
+
 After a making, the media's line names the new take
 (`path="shots/open.takes/002.mp4"`), with its length and streams, and clips
 keep their timing. Its takes go on being kept in that folder. Because the
@@ -844,6 +850,12 @@ under the model's name. It reads the workflow and asks no server:
 
 `more` is each value the workflow sets that a `generate` line can replace.
 Print it again when the workflow changes.
+
+`kerf-comfy --describe`, with no workflow named, prints such an entry for
+every workflow that comes with it, each under the workflow's own name
+(`shot`, `shot-directed`, `still`, `depth`, …): a models file whole, to keep
+as `~/.kerf/models.json` or to take entries from. A step names a model by
+whatever name its entry is under, so rename them as you like.
 
 The server is `COMFY_URL`, with `COMFY_API_KEY` if it asks for a key. The key
 goes in the header `X-API-Key` unless `COMFY_API_HEADER` names another, and

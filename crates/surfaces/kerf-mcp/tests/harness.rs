@@ -3093,6 +3093,16 @@ fn the_check_says_what_does_nothing() {
         "track add V3 video\noverwrite gen=camera at=0f dur=30f on=V3 as=lens\nmask lens add k1 rect=0,0,1,1",
         "draws nothing",
     );
+    // A parent carries nothing of depth: on a null it does nothing at all, and on a clip
+    // that draws it moves that clip alone.
+    says(
+        "track add V3 video\noverwrite gen=null at=0f dur=30f on=V3 z={0f:4 29f:1} as=rig\nset s1a parent=rig",
+        "`z` does nothing on a null",
+    );
+    says(
+        "track add V3 video\noverwrite gen=mesh at=0f dur=30f on=V3 kind=box z={0f:4 29f:1} as=body\nset s1a parent=body",
+        "`z` moves it alone",
+    );
     // A feature the title's font has not, by the font's name; one turned off asks nothing of it.
     says(
         "track add V3 video\noverwrite gen=title at=0f dur=30f on=V3 text=\"No. 10\" features=\"tnum smcp\" as=word",
@@ -3101,6 +3111,19 @@ fn the_check_says_what_does_nothing() {
     // A scene that means what it says has none of them.
     let clean = run("set c1 three_d=true z=0.4\nset s1a three_d=true depth=0.1 bevel=0.02 bevel_profile=round\ntrack add V3 video\noverwrite gen=light at=0f dur=30f on=V3 kind=directional shadow=0.5 size=3 as=lamp\ntrack add V4 video\noverwrite gen=camera at=0f dur=30f on=V4 aperture=0.03 focus=0.1 as=lens\ntrack add V5 video\noverwrite gen=title at=0f dur=30f on=V5 text=\"No. 10\" features=\"tnum -smcp\" as=word");
     let findings = clean["check"]["findings"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        !findings
+            .iter()
+            .any(|finding| finding["code"] == "no_effect"),
+        "{findings:?}"
+    );
+    // Nor has one whose only thing in depth is a mesh, which is in depth without saying so:
+    // its light falls on the mesh, and its camera's aperture blurs it.
+    let meshes = run("track add V3 video\noverwrite gen=mesh at=0f dur=30f on=V3 kind=ball z=1 as=ball\ntrack add V4 video\noverwrite gen=light at=0f dur=30f on=V4 kind=point z=-1 as=lamp\ntrack add V5 video\noverwrite gen=camera at=0f dur=30f on=V5 aperture=0.03 focus=0.1 as=lens");
+    let findings = meshes["check"]["findings"]
         .as_array()
         .cloned()
         .unwrap_or_default();

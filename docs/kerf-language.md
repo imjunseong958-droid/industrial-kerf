@@ -324,7 +324,10 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
   scale, and rotation apply on top of the clip's own, about the parent's pivot, at each moment,
   and parents chain. `gen=null@1` draws nothing, to rig several clips under one
   (`set c2 parent=n1`, and `parent=""` to let go). Deleting a parent lets its children go; a
-  child of a clip that is split stays with its first part.
+  child of a clip that is split stays with its first part. A parent moves its children across
+  the frame and carries nothing of depth: each keeps its own `z`, `rotate_x`, and `rotate_y`,
+  which on a null do nothing, so a thing of several parts that goes away from the camera has
+  the same `z` keys on each part. The check says so of a null, and of a parent whose `z` moves.
 - `gen=signal@1` draws nothing and holds a number for a model: `set swell value={0f:0 48f:1:ease}`,
   from 0 to 1. A `generate … signal=swell` step hands the model what it comes to on each frame
   of its sequence, to say when what the prompt asks for happens, and how much; where the clip is
@@ -415,7 +418,6 @@ transition add from=c1 to=c9 fx=dissolve dur=12f
 - `media replace m1 path="media/take2.mov" rate=24 dur=00:04:30:00
   video=3840x2160 audio=2ch@48000` swaps the file behind a media id and
   takes the same fields as `media add` (`tc=`, `alpha=`, `reel=`), and leaves the steps under the media as they are.
-  The steps under a media that say how it is made stay as they are.
   Every clip that uses it keeps its timing; a file one no longer fits (too
   short for its source range or a transition's handles, or without the
   picture or sound its track needs) is refused, naming the clips.

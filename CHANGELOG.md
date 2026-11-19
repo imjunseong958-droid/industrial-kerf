@@ -6,6 +6,33 @@ on `main`; its section here becomes the release's notes on GitHub
 
 ## Unreleased
 
+- An agent's `look` with `stands` reads a thing stacked from solids as it
+  stands. Of a snowman, a barn under its roof, a cow on its legs, the lower
+  part was said to be sunk in the upper, with a line that would have set it
+  on top of what stands on it: the underside of a part that reaches a little
+  way into the one under it was taken for a floor through the lower one. It
+  is the upper part that is said to be sunk, by how far it reaches in. A
+  roof wider than its walls and a brim wider than its head stand on them,
+  where they were over the floor or in the air. The line that sets a clip
+  down is said once for the clip and not again with each run of frames. So
+  what `look` lists to make no longer notes a stacked thing as sunk in
+  itself ([docs/architecture.md](docs/architecture.md#what-directs-a-model)).
+- The check no longer says of a scene of meshes that its light falls on
+  nothing and its camera's `aperture` blurs nothing: a `gen=mesh@1` clip is
+  in depth without `three_d`. And it says where depth is set on a parent to
+  no end: `z`, `rotate_x`, and `rotate_y` on a `gen=null@1` do nothing, and a
+  parent whose `z` moves leaves its children where they were, a parent
+  carrying them across the frame and nothing of depth
+  ([docs/kerf-language.md](docs/kerf-language.md)).
+- A take that more than one model made, a still and then the shot of it, a
+  matte and then a plate, the parts of a longer shot, keeps what each model
+  was asked, in a folder of its step's number (`001.work/step2/request.json`).
+  Every step's request was written to the one name, and only the last was
+  left to read ([docs/shots.md](docs/shots.md#takes)).
+- `kerf-comfy --describe`, with no workflow named, prints a models file
+  whole: an entry for every workflow that comes with it, each under the
+  workflow's own name, where each was asked for one at a time and put
+  together by hand ([docs/shots.md](docs/shots.md#a-model-on-a-comfyui-server)).
 - An agent's `look` with `shows` reads every clip that draws on a frame,
   whichever track it is on. It read 32 from the lowest track up, so of a
   street of 55 solids the cart on the top tracks, its subject, was left

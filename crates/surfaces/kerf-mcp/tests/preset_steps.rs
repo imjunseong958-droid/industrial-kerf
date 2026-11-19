@@ -113,8 +113,18 @@ fn plays(project: &Project, clip: &str) -> (String, Time) {
     }
 }
 
+/// What the last model of a media's first take was asked. A take one model made has its
+/// request in its working folder, and one that several made has each in a folder of its
+/// step's number: the last of those.
 fn request(dir: &Path, media: &str) -> Value {
-    let file = dir.join(format!("shots/{media}.takes/001.work/request.json"));
+    let work = dir.join(format!("shots/{media}.takes/001.work"));
+    let mut steps: Vec<_> = std::fs::read_dir(&work)
+        .unwrap_or_else(|e| panic!("{}: {e}", work.display()))
+        .filter_map(|entry| Some(entry.ok()?.path().join("request.json")))
+        .filter(|file| file.is_file())
+        .collect();
+    steps.sort();
+    let file = steps.pop().unwrap_or_else(|| work.join("request.json"));
     serde_json::from_slice(&std::fs::read(&file).unwrap_or_else(|e| panic!("{}: {e}", file.display())))
         .unwrap()
 }

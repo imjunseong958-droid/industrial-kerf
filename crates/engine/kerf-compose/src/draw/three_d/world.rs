@@ -34,6 +34,16 @@ pub struct InDepth {
     /// Whether it fills what its corners go round. A shape that is no plain rectangle, a
     /// solid with a bevel, and a mesh do not: they are within it.
     pub filled: bool,
+    /// Whether its surface closes round it, so that a line that goes into it comes out of it
+    /// again: a solid, a box, a ball, a cylinder, and a file's mesh with no open edge. Of
+    /// such a thing a surface has a side that is inside it, and its underside is told from
+    /// its top. A flat clip has none, nor has a file's mesh that is open, a set rebuilt from
+    /// a shot.
+    pub closed: bool,
+    /// Whether it bulges nowhere inward, so that what is between any of its corners is in
+    /// it or on it: a flat clip, a solid, a box, a ball, a cylinder. Of a file's mesh, a
+    /// table on four legs, that is not known, and it is taken not to be.
+    pub convex: bool,
     /// How far down the world one more of its own `y` puts it. Other than 1 where a parent
     /// has scaled it, and none where a parent has turned it, so that its own `y` moves it
     /// across as well.
@@ -101,7 +111,8 @@ pub(in crate::draw) fn of(
     // Frame heights, where the scene is in pixels.
     let by = 1.0 / scene.height.max(1.0);
     let Some((rect, filled)) = held else {
-        let (points, triangles) = mesh::in_the_world(scene, plan, to_output, time);
+        let mesh::InWorld { points, triangles, closed, convex } =
+            mesh::in_the_world(scene, plan, to_output, time);
         let corners: Vec<Vector> = points.iter().map(|point| times(*point, by)).collect();
         return InDepth {
             surface: surface(&clip, &corners, &triangles),
@@ -109,6 +120,8 @@ pub(in crate::draw) fn of(
             form: Form::Mesh,
             corners,
             filled: false,
+            closed,
+            convex,
             fall,
             sides: Vec::new(),
             triangles,
@@ -141,6 +154,8 @@ pub(in crate::draw) fn of(
         corners,
         // A bevel takes a solid's edges in.
         filled: filled && bevel_of(plan, time, scene.height) <= 0.0,
+        closed: deep > 0.0,
+        convex: true,
         fall,
         sides,
         triangles,
