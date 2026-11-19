@@ -1,7 +1,7 @@
 # Transitions Kerf draws with its own renderer, carried from FilmCraft's
 # (crates/render/src/transitions), which kerf-fx runs. The same layout as
 # raster_effects.tsv; this table is written by hand.
-transition	block-motion	Animation	Block Motion	Slices the frame into blocks that slide in one after another; tech, data, and energetic list cuts.
+transition	block-motion	Animation	Block Motion	Slices the frame into blocks that slide in one after another; tech, data, and energetic list cuts.	2	1
 	enum	direction	from-west	from-north|from-east|from-south|from-west		Direction
 	number	blocks	6	2..32		Blocks
 	number	motion_blur	50	0..100	%	Motion Blur
@@ -139,7 +139,7 @@ transition	zoom-blur	Lights & Blurs	Zoom Blur	A zoom blur out of a point and int
 transition	roll-3d	Slide	3D Roll	Rolls the frame over like a cylinder to the next shot; playful and techy changes.
 	enum	direction	from-west	from-north|from-east|from-south|from-west		Direction
 	number	perspective	50	0..100	%	Perspective
-transition	film-roll	Slide	Film Roll	Rolls the shots past like film frames with a gap between; retro and reel-like cuts.
+transition	film-roll	Slide	Film Roll	Rolls the shots past like film frames with a gap between; retro and reel-like cuts.	2	1
 	enum	direction	from-west	from-north|from-east|from-south|from-west		Direction
 	number	gap	40	0..400	px	Gap
 	color	gap_color	#080808			Gap Color
@@ -180,7 +180,7 @@ transition	page-peel	Transformers	Page Peel	Peels the outgoing shot back like a 
 	enum	corner	bottom-right	top-left|top-right|bottom-right|bottom-left		Corner
 	number	radius	60	0..500	px	Curl Radius
 	bool	shadow	true			Shadow
-transition	slice	Transformers	Slice	Slices the frame into strips that slide apart; dynamic, modern cuts.
+transition	slice	Transformers	Slice	Slices the frame into strips that slide apart; dynamic, modern cuts.	2	1
 	number	slices	8	1..64		Slices
 	number	angle	20	-3600..3600	degrees	Angle
 	number	motion_blur	50	0..100	%	Motion Blur

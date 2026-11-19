@@ -4,8 +4,9 @@ use std::f32::consts::{FRAC_PI_2, PI};
 
 use super::cards::{eye, focal_for, Card, V3};
 use super::{
-    bell, ease_in, ease_in_out, ease_out, exposure, hash, line_blur, mid_mix, mix, over, paint,
-    scale4, shutter, smoothstep, temporal, zoom_blur, Tx,
+    averaged, bell, ease_in, ease_in_out, ease_out, exposure, following, hash, line_blur, mid_mix,
+    mix, over, paint, sample_times, samples_over, scale4, smoothstep, temporal, zoom_blur, Tx,
+    MOST_MOMENTS,
 };
 use kerf_draw::Image;
 
@@ -182,20 +183,6 @@ fn spring(x: f32, bounce: f32) -> f32 {
     f(x) + x * (1.0 - f(1.0))
 }
 
-/// How far apart on the screen, in pixels of the picture, a pixel's motion blur sees the cards at
-/// most from one of its moments to the next. Each moment draws the cards sharp, so copies much
-/// further apart than this read as copies and not as a smear.
-const BLUR_STEP: f32 = 4.0;
-
-/// The most moments a pixel's motion blur takes of a scene, for what drawing it costs: at 1080p, with
-/// the motion blur as it comes, the cards of any scene are then under 6 pixels apart in its fastest
-/// frame. Three cards at each of these are about what the GPU's kernel has room for.
-pub(crate) const MOST_MOMENTS: usize = 80;
-
-/// How many stretches of the shutter [`CardScene::moments`] follows the cards over to see how fast
-/// they move.
-const PROBES: usize = 8;
-
 /// What a scene of cards takes: how far off the eye is, how long the shutter is open (in progress
 /// units, 0 for no motion blur), and the cards at each moment.
 pub(crate) struct CardScene<'a, 'b> {
@@ -206,9 +193,9 @@ pub(crate) struct CardScene<'a, 'b> {
 
 impl CardScene<'_, '_> {
     /// The moments whose cards a pixel averages for its motion blur, evenly over the shutter around
-    /// `t.p`: as many as keep the cards within [`BLUR_STEP`] pixels on the screen from one moment to
-    /// the next where they move fastest, and [`MOST_MOMENTS`] at most. Just `t.p` with the shutter
-    /// closed. The CPU and the GPU's kernel draw the cards at the same moments.
+    /// `t.p`: as many as keep the cards within [`BLUR_STEP`](super::BLUR_STEP) pixels on the screen
+    /// from one moment to the next where they move fastest, and [`MOST_MOMENTS`] at most
+    /// ([`samples_over`]). Just `t.p` with the shutter closed. The CPU and the GPU's kernel draw the cards at the same moments.
     pub fn moments(&self, t: &Tx) -> Vec<f32> {
         let n = self.samples(t);
         if n <= 1 {
@@ -219,44 +206,16 @@ impl CardScene<'_, '_> {
             .collect()
     }
 
-    /// How many moments the shutter takes: how far the corners of the cards' visible parts move on
-    /// the screen while it is open, at the speed of the fastest of them over any of [`PROBES`]
-    /// stretches of it.
+    /// How many moments the shutter takes: enough for how fast the corners of the cards' visible parts
+    /// move on the screen while it is open.
     fn samples(&self, t: &Tx) -> usize {
-        let open = self.shutter;
-        if open <= 0.0 {
-            return 1;
-        }
-        let (first, last) = ((t.p - open / 2.0).max(0.0), (t.p + open / 2.0).min(1.0));
-        if last <= first {
-            return 1;
-        }
-        let stretch = (last - first) / PROBES as f32;
         let eye = eye(t.wf, t.hf, self.focal);
-        let corners = |i: usize| -> Vec<Option<[f32; 2]>> {
-            (self.build)(first + stretch * i as f32)
+        samples_over(t.p, self.shutter, MOST_MOMENTS, |q| {
+            (self.build)(q)
                 .iter()
                 .flat_map(|layer| layer.corners_seen(eye))
                 .collect()
-        };
-        let mut farthest = 0f32;
-        let mut before = corners(0);
-        for i in 1..=PROBES {
-            let after = corners(i);
-            for (a, b) in before.iter().zip(&after) {
-                if let (Some(a), Some(b)) = (a, b) {
-                    farthest = farthest.max((b[0] - a[0]).hypot(b[1] - a[1]));
-                }
-            }
-            before = after;
-        }
-        // Pixels over the whole shutter at that speed; NaN (from no picture to speak of) takes one
-        // moment.
-        let across = farthest / stretch * open;
-        let steps = (across / BLUR_STEP)
-            .ceil()
-            .clamp(1.0, (MOST_MOMENTS - 1) as f32);
-        steps as usize + 1
+        })
     }
 }
 
@@ -594,6 +553,53 @@ pub(crate) fn whip_layers<'a>(t: &Tx<'a>) -> Vec<Layer<'a>> {
     ]
 }
 
+/// Film Roll's motion blur: its frames roll `step` along the way it goes, eased.
+pub(crate) fn film_roll_blur(t: &Tx, step: f32) -> (f32, usize) {
+    following(t, 0.1, |q| vec![Some([step * ease_in_out(q), 0.0])])
+}
+
+/// How far slice `i` of `count` has slid along its way at `q`: `dist` at most, the odd ones the other
+/// way, each a little after the one before.
+pub(crate) fn slice_offset(q: f32, i: f32, count: f32, dist: f32) -> f32 {
+    let sign = if (i as i32) % 2 == 0 { 1.0 } else { -1.0 };
+    let qi = ((q - 0.3 * i / count.max(1.0)) / 0.7).clamp(0.0, 1.0);
+    sign * dist * ease_in(qi)
+}
+
+/// Slice's motion blur: `count` slices sliding `dist` apart.
+pub(crate) fn slice_blur(t: &Tx, count: f32, dist: f32) -> (f32, usize) {
+    following(t, 0.08, |q| {
+        (0..count as i32)
+            .map(|i| Some([slice_offset(q, i as f32, count, dist), 0.0]))
+            .collect()
+    })
+}
+
+/// How far block `ci` of `cells` in `lane` of Block Motion is along its way at `q`, eased from 0 to 1:
+/// the leading blocks (towards the exit side, which `sgn` says) leave first.
+pub(crate) fn block_eased(q: f32, ci: i32, lane: f32, cells: f32, sgn: f32) -> f32 {
+    let order = if sgn > 0.0 {
+        (cells as i32 - 1 - ci) as f32
+    } else {
+        ci as f32
+    } / cells;
+    let delay = 0.6 * (0.6 * order + 0.4 * hash(ci, lane as i32, 17));
+    let qi = ((q - delay) / (1.0 - 0.6)).clamp(0.0, 1.0);
+    ease_in_out(qi)
+}
+
+/// Block Motion's motion blur: each of `cells` blocks in each of `lanes` moving `len` along its lane.
+pub(crate) fn block_blur(t: &Tx, lanes: f32, cells: f32, sgn: f32, len: f32) -> (f32, usize) {
+    following(t, 0.08, |q| {
+        (0..lanes as i32)
+            .flat_map(|lane| {
+                (0..cells as i32)
+                    .map(move |ci| Some([len * block_eased(q, ci, lane as f32, cells, sgn), 0.0]))
+            })
+            .collect()
+    })
+}
+
 pub(super) fn apply(id: &str, t: &Tx) -> Option<Image> {
     if let Some(found) = card_scene(id, t) {
         return Some(scene(t, &found));
@@ -620,7 +626,7 @@ pub(super) fn apply(id: &str, t: &Tx) -> Option<Image> {
             let gap = t.px("gap");
             let gcol = t.color("gap_color");
             let step = travel + gap;
-            let (sh, n) = shutter(t, 0.1);
+            let (sh, n) = film_roll_blur(t, step);
             let inside = move |u: f32, v: f32| u >= 0.0 && v >= 0.0 && u < w && v < h;
             paint(t.w, t.h, |x, y| {
                 temporal(x, y, t.p, sh, n, &|x, y, q| {
@@ -682,30 +688,32 @@ pub(super) fn apply(id: &str, t: &Tx) -> Option<Image> {
             let cols = t.num("blocks").round().clamp(2.0, 32.0);
             let rows = (cols * h / w).round().clamp(1.0, 32.0);
             let (lanes, cells) = if horiz { (rows, cols) } else { (cols, rows) };
-            let (sh, n) = shutter(t, 0.08);
-            let n = n.min(4);
-            let seed = 17;
+            let sgn = if horiz { dx } else { dy };
+            let (sh, n) = block_blur(t, lanes, cells, sgn, if horiz { w } else { h });
+            // Where each block of each lane is along its way at each moment, the same at every pixel.
+            let count = cells as usize;
+            let eased: Vec<Vec<f32>> = sample_times(t.p, sh, n)
+                .iter()
+                .map(|&q| {
+                    (0..lanes as i32)
+                        .flat_map(|lane| {
+                            (0..count as i32)
+                                .map(move |ci| block_eased(q, ci, lane as f32, cells, sgn))
+                        })
+                        .collect()
+                })
+                .collect();
             paint(t.w, t.h, |x, y| {
-                temporal(x, y, t.p, sh, n, &|x, y, q| {
-                    let (along, across, len_al, len_ac) =
-                        if horiz { (x, y, w, h) } else { (y, x, h, w) };
-                    let sgn = if horiz { dx } else { dy };
-                    let lane = (across / len_ac * lanes).floor().clamp(0.0, lanes - 1.0);
-                    let cell_len = len_al / cells;
+                let (along, across, len_al, len_ac) =
+                    if horiz { (x, y, w, h) } else { (y, x, h, w) };
+                let lane = (across / len_ac * lanes).floor().clamp(0.0, lanes - 1.0);
+                let cell_len = len_al / cells;
+                let at = |places: &[f32]| {
                     let mut col = [0.0f32; 4];
                     let mut got_a = false;
                     let mut got_b = [0.0f32; 4];
                     let mut has_b = false;
-                    for ci in 0..cells as i32 {
-                        // leading blocks (towards the exit side) leave first
-                        let order = if sgn > 0.0 {
-                            (cells as i32 - 1 - ci) as f32
-                        } else {
-                            ci as f32
-                        } / cells;
-                        let delay = 0.6 * (0.6 * order + 0.4 * hash(ci, lane as i32, seed));
-                        let qi = ((q - delay) / (1.0 - 0.6)).clamp(0.0, 1.0);
-                        let e = ease_in_out(qi);
+                    for (ci, &e) in places.iter().enumerate() {
                         let off_a = sgn * len_al * e;
                         let off_b = sgn * len_al * (e - 1.0);
                         let (lo, hi) = (ci as f32 * cell_len, (ci + 1) as f32 * cell_len);
@@ -727,7 +735,9 @@ pub(super) fn apply(id: &str, t: &Tx) -> Option<Image> {
                     } else {
                         got_b
                     }
-                })
+                };
+                let row = lane as usize * count;
+                averaged(eased.len(), |i| at(&eased[i][row..row + count]))
             })
         }
         // ---------------- Transformers ----------------
@@ -849,17 +859,26 @@ pub(super) fn apply(id: &str, t: &Tx) -> Option<Image> {
             }
             let span = (hi - lo).max(1.0);
             let dist = w.abs() * ax.abs() + h * ay.abs() + span * 0.2;
-            let (sh, ns) = shutter(t, 0.08);
+            let (sh, ns) = slice_blur(t, n, dist);
+            // Where each slice is, and how far B is zoomed, at each moment: the same at every pixel.
+            let times = sample_times(t.p, sh, ns);
+            let offsets: Vec<Vec<f32>> = times
+                .iter()
+                .map(|&q| {
+                    (0..n as i32)
+                        .map(|i| slice_offset(q, i as f32, n, dist))
+                        .collect()
+                })
+                .collect();
+            let zooms: Vec<f32> = times.iter().map(|&q| 1.0 + 0.05 * (1.0 - q)).collect();
             paint(t.w, t.h, |x, y| {
-                temporal(x, y, t.p, sh, ns, &|x, y, q| {
-                    let i = (((x * px_ + y * py_) - lo) / span * n)
-                        .floor()
-                        .clamp(0.0, n - 1.0);
-                    let sign = if (i as i32) % 2 == 0 { 1.0 } else { -1.0 };
-                    let qi = ((q - 0.3 * i / n.max(1.0)) / 0.7).clamp(0.0, 1.0);
-                    let off = sign * dist * ease_in(qi);
+                let i = (((x * px_ + y * py_) - lo) / span * n)
+                    .floor()
+                    .clamp(0.0, n - 1.0);
+                averaged(times.len(), |at| {
+                    let off = offsets[at][i as usize];
                     let (sx, sy) = (x - ax * off, y - ay * off);
-                    let zb = 1.0 + 0.05 * (1.0 - q);
+                    let zb = zooms[at];
                     let b = t.sbc((x - w / 2.0) / zb + w / 2.0, (y - h / 2.0) / zb + h / 2.0);
                     if sx >= 0.0 && sx < w && sy >= 0.0 && sy < h {
                         // keep the slice's own band only (slices do not bleed into each other)
@@ -1028,7 +1047,7 @@ fn page_peel(t: &Tx) -> Image {
 
 #[cfg(test)]
 mod unit {
-    use super::super::{apply, Fx};
+    use super::super::{apply, Fx, BLUR_STEP, MOST_SAMPLES};
     use super::*;
     use kerf_model::{Catalog, Param, Params, Value};
 
@@ -1124,13 +1143,14 @@ mod unit {
         assert_eq!(blur_of("roll-3d", &params, (1920, 1080), 0.5).0, 1);
     }
 
-    /// A hard edge pushed at its fastest smears into a ramp: from one pixel to the next it changes by
-    /// no more than a tenth of the edge, where six copies of it changed by a sixth.
+    /// A hard edge pushed or rolled at its fastest smears into a ramp: from one pixel to the next it
+    /// changes by no more than a tenth of the edge, where six copies of it changed by a sixth.
     #[test]
-    fn a_pushed_edge_smears_into_a_ramp() {
+    fn a_hard_edge_moving_fast_smears_into_a_ramp() {
         let (w, h) = (320, 180);
         let a = Image::filled(w, h, [0.5, 0.5, 0.5, 1.0]);
-        // At the middle of a push from the west, B's right half shows on the left of the frame.
+        // At the middle of either from the west, B's right side shows on the left of the frame: its
+        // edge at 80 pushed, at 60 rolled with the gap before it.
         let b = paint(w, h, |x, _| {
             if x < 240.0 {
                 [0.0, 0.0, 0.0, 1.0]
@@ -1139,17 +1159,124 @@ mod unit {
             }
         });
         let params = Params::new();
-        let fx = Fx::new(Catalog::builtin().fx("push").unwrap(), &params).unwrap();
-        let drawn = apply(&fx, &a, &b, 0.5);
-        let row: Vec<f32> = (0..w / 2).map(|x| drawn.get(x, h / 2)[0]).collect();
-        let steepest = row
+        for id in ["push", "film-roll"] {
+            let fx = Fx::new(Catalog::builtin().fx(id).unwrap(), &params).unwrap();
+            let drawn = apply(&fx, &a, &b, 0.5);
+            let row: Vec<f32> = (0..112).map(|x| drawn.get(x, h / 2)[0]).collect();
+            let steepest = row
+                .windows(2)
+                .map(|two| (two[1] - two[0]).abs())
+                .fold(0f32, f32::max);
+            let ramp = row.iter().filter(|&&v| v > 0.02 && v < 0.98).count();
+            assert!(steepest < 0.1, "{id}: a step of {steepest}");
+            // The shutter is open for 5 or 6 % of it, which moves at 3 widths at its middle.
+            assert!(ramp >= 45, "{id}: a ramp {ramp} pixels long");
+        }
+    }
+
+    /// `id` at its defaults at `p` on a `w`×`h` picture, as Kerf's renderer reads it.
+    fn fx_at<'a>(fx: &'a Fx<'a>, a: &'a Image, b: &'a Image, p: f32) -> Tx<'a> {
+        Tx {
+            e: fx,
+            a,
+            b,
+            p,
+            w: a.w,
+            h: a.h,
+            wf: a.w as f32,
+            hf: a.h as f32,
+            scale: 1.0,
+        }
+    }
+
+    /// How many samples, and the farthest anything moves between two in a row, of a motion blur that
+    /// takes `blur` and moves `offsets` (along each one's way) at a moment.
+    fn spacing(p: f32, (open, n): (f32, usize), offsets: impl Fn(f32) -> Vec<f32>) -> (usize, f32) {
+        let at: Vec<Vec<f32>> = (0..n)
+            .map(|i| offsets((p + (i as f32 / (n.max(2) - 1) as f32 - 0.5) * open).clamp(0.0, 1.0)))
+            .collect();
+        let apart = at
             .windows(2)
-            .map(|two| (two[1] - two[0]).abs())
+            .flat_map(|two| two[0].iter().zip(&two[1]).map(|(a, b)| (b - a).abs()))
             .fold(0f32, f32::max);
-        let ramp = row.iter().filter(|&&v| v > 0.02 && v < 0.98).count();
-        assert!(steepest < 0.1, "a step of {steepest}");
-        // The shutter is open for 6 % of the push, which moves at 3 widths a push at its middle.
-        assert!(ramp >= 50, "a ramp {ramp} pixels long");
+        (n, apart)
+    }
+
+    /// Film Roll, Slice and Block Motion at their defaults: their motion blur's samples, and the
+    /// farthest apart what moves is from one to the next.
+    fn moving_frames(id: &str, (w, h): (usize, usize), p: f32) -> (usize, f32) {
+        let params = Params::new();
+        let fx = Fx::new(Catalog::builtin().fx(id).unwrap(), &params).unwrap();
+        let picture = || Image {
+            w,
+            h,
+            px: Vec::new(),
+        };
+        let (a, b) = (picture(), picture());
+        let t = fx_at(&fx, &a, &b, p);
+        let (wf, hf) = (t.wf, t.hf);
+        match id {
+            "film-roll" => {
+                let step = t.travel() + t.px("gap");
+                spacing(p, film_roll_blur(&t, step), |q| vec![step * ease_in_out(q)])
+            }
+            "slice" => {
+                let count = t.num("slices").round().clamp(1.0, 64.0);
+                let ang = t.num("angle").to_radians();
+                let (ax, ay) = (ang.cos(), ang.sin());
+                let span = ay.abs() * wf + ax.abs() * hf;
+                let dist = wf * ax.abs() + hf * ay.abs() + span * 0.2;
+                spacing(p, slice_blur(&t, count, dist), |q| {
+                    (0..count as i32)
+                        .map(|i| slice_offset(q, i as f32, count, dist))
+                        .collect()
+                })
+            }
+            _ => {
+                let (dx, dy) = t.dir();
+                let horiz = dx != 0.0;
+                let cols = t.num("blocks").round().clamp(2.0, 32.0);
+                let rows = (cols * hf / wf).round().clamp(1.0, 32.0);
+                let (lanes, cells) = if horiz { (rows, cols) } else { (cols, rows) };
+                let (sgn, len) = if horiz { (dx, wf) } else { (dy, hf) };
+                spacing(p, block_blur(&t, lanes, cells, sgn, len), |q| {
+                    (0..lanes as i32)
+                        .flat_map(|lane| {
+                            (0..cells as i32)
+                                .map(move |ci| len * block_eased(q, ci, lane as f32, cells, sgn))
+                        })
+                        .collect()
+                })
+            }
+        }
+    }
+
+    /// What Film Roll, Slice and Block Motion move smears as a card scene's cards do: no further apart
+    /// from one sample to the next than [`BLUR_STEP`], and where that would take more samples than
+    /// there are, under 5 pixels apart at 1080p (and a frame as small) and twice that at 4K.
+    #[test]
+    fn the_moving_frames_are_sampled_a_few_pixels_apart() {
+        for id in ["film-roll", "slice", "block-motion"] {
+            for (size, capped) in [
+                ((320, 180), 5.0),
+                ((1920, 1080), 5.0),
+                ((1080, 1920), 5.0),
+                ((3840, 2160), 10.0),
+            ] {
+                for p in [0.05, 0.2, 0.35, 0.5, 0.65, 0.8, 0.95] {
+                    let (n, apart) = moving_frames(id, size, p);
+                    let most = if n < MOST_SAMPLES {
+                        BLUR_STEP * 1.05
+                    } else {
+                        capped
+                    };
+                    assert!(
+                        (2..=MOST_SAMPLES).contains(&n) && apart <= most,
+                        "{id} at {p} on {size:?}: {n} samples, {apart} pixels apart"
+                    );
+                }
+            }
+        }
     }
 
     #[test]

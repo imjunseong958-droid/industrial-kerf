@@ -3,10 +3,11 @@
 //! frame works out once (a wipe's sweep, the cards of a scene), and a test holds each kernel to
 //! [`apply_scaled`](super::apply_scaled) value by value.
 
-use super::motion::{card_scene, whip_layers, Layer, MOST_MOMENTS};
+use super::motion::{block_blur, card_scene, film_roll_blur, slice_blur, whip_layers, Layer};
 use super::wipe::{angle_dir, field_range, star_dist, threshold, WipeStyle};
 use super::{
     bell, disc_offsets, ease_in, ease_in_out, ease_out, hash, mid_mix, smoothstep, Fx, Tx,
+    MOST_MOMENTS,
 };
 use crate::filmcraft::gpu::run as run_ops;
 use crate::filmcraft::gpufx::FxOp;
@@ -822,7 +823,7 @@ fn how_move(id: &str, t: &Tx) -> Option<How> {
                     &[dx, dy, travel + gap, travel, gap, truth(horiz)],
                 ),
             )
-            .with_time(super::shutter(t, 0.1))
+            .with_time(film_roll_blur(t, travel + gap))
         }
         "stretch" => {
             let e = ease_in_out(p);
@@ -835,9 +836,14 @@ fn how_move(id: &str, t: &Tx) -> Option<How> {
             let cols = t.num("blocks").round().clamp(2.0, 32.0);
             let rows = (cols * h / w).round().clamp(1.0, 32.0);
             let (lanes, cells) = if horiz { (rows, cols) } else { (cols, rows) };
-            let (sh, n) = super::shutter(t, 0.08);
             let sgn = if horiz { dx } else { dy };
-            moves(2, vec![lanes, cells, sgn, truth(horiz)]).with_time((sh, n.min(4)))
+            moves(2, vec![lanes, cells, sgn, truth(horiz)]).with_time(block_blur(
+                t,
+                lanes,
+                cells,
+                sgn,
+                if horiz { w } else { h },
+            ))
         }
         "frame" => {
             let fw = t.px("frame_width");
@@ -898,7 +904,7 @@ fn how_move(id: &str, t: &Tx) -> Option<How> {
             let span = (hi - lo).max(1.0);
             let dist = w.abs() * ax.abs() + h * ay.abs() + span * 0.2;
             moves(7, vec![count, ax, ay, px_, py_, lo, span, dist])
-                .with_time(super::shutter(t, 0.08))
+                .with_time(slice_blur(t, count, dist))
         }
         "wave" => {
             let band = travel * 0.25;
