@@ -404,6 +404,23 @@ impl Script<'_> {
                 if let Some(extra) = rest.get(1) {
                     return Err(fields.error(extra, "unexpected argument"));
                 }
+                // A slip or a slide moves no cut between two clips: snap= is left to refuse.
+                let snap = match command {
+                    "roll" => take_snap(&mut fields, &clock)?,
+                    _ => None,
+                };
+                let delta = match snap {
+                    Some(snap) => {
+                        let s = self
+                            .project
+                            .locate(clip.as_str())
+                            .expect("a clip is on a sequence")
+                            .sequence;
+                        self.snap_roll(s, found, delta, alone, snap)
+                            .map_err(|m| line.error(1, m))?
+                    }
+                    None => delta,
+                };
                 fields.finish(count)?;
                 Ok(vec![match command {
                     "roll" => Op::Roll { clip, delta, alone },
@@ -1863,7 +1880,155 @@ impl Script<'_> {
                 }
             }
         }
-        let with = |has: fn(&Media) -> bool| -> Vec<(&Clip, &Media)> {
+        let bladed = self.goes_by(&cut, at, (snap, within))?;
+        let Some((low, high)) = low.zip(high).filter(|_| !bladed.is_empty()) else {
+            return Err(format!(
+                "nothing the blade cuts at {} has {} to snap to",
+                clock.print_position(at),
+                match snap {
+                    Snap::Pause => "a sound",
+                    Snap::Cut => "a picture",
+                }
+            ));
+        };
+        let refuses = |clip: &Clip| {
+            let would = if clip.start < at && at < clip.end() {
+                format!("not cut `{}`", clip.id)
+            } else {
+                format!("cut `{}` as well", clip.id)
+            };
+            format!(
+                "where it would {would}: blade there with at=, or leave a track out with tracks="
+            )
+        };
+        let span = Span {
+            at,
+            low: (low.0, refuses(low.1)),
+            high: (high.0, refuses(high.1)),
+            name: "blade",
+            apart: "cut them one at a time with tracks=",
+        };
+        let (to, into) = self.snap_place(&bladed, &span, &clock, snap, within)?;
+        self.say_went("the blade", &clock, (at, to), &into);
+        Ok(to)
+    }
+
+    /// `delta`, how far a roll of the cut after `clip` on sequence `s` was asked to move it,
+    /// moved to where `snap` allows in every clip the roll cuts at once: the clip and the one
+    /// after it on its track, and, unless `alone`, on each track where a clip linked to it ends
+    /// with it. Each is taken as it would play across the two, the one before on past where it
+    /// ends and the one after from before where it starts, and the roll goes through them as a
+    /// blade would: into a quiet of every sound it cuts together, past no word of any, or onto
+    /// the nearest cut of their pictures. Each clip keeps a frame. A roll the kernel would
+    /// refuse is left for it to.
+    fn snap_roll(
+        &self,
+        s: usize,
+        clip: &Clip,
+        delta: Time,
+        alone: bool,
+        (snap, within): (Snap, Time),
+    ) -> Result<Time, String> {
+        let sequence = &self.project.sequences[s];
+        let clock = Clock::of_sequence(sequence);
+        let frame = sequence.rate.frame_duration();
+        let cut = clip.end();
+        let at = cut + delta;
+        let mut pairs: Vec<(&Track, &Clip, &Clip)> = Vec::new();
+        for track in &sequence.tracks {
+            for (index, outgoing) in track.clips.iter().enumerate() {
+                let rolled = outgoing.id == clip.id
+                    || (!alone && clip.link.is_some() && outgoing.link == clip.link);
+                if !rolled || outgoing.end() != cut {
+                    continue;
+                }
+                if let Some(incoming) = track.clips.get(index + 1).filter(|next| next.start == cut)
+                {
+                    pairs.push((track, outgoing, incoming));
+                }
+            }
+        }
+        if pairs.is_empty()
+            || pairs
+                .iter()
+                .any(|(_, outgoing, incoming)| at <= outgoing.start || at >= incoming.end())
+        {
+            return Ok(delta);
+        }
+        // Each pair as it would play across the whole of the two.
+        let across: Vec<(&Track, Clip, Clip)> = pairs
+            .iter()
+            .map(|(track, outgoing, incoming)| {
+                let mut on = (*outgoing).clone();
+                on.move_tail(incoming.end() - outgoing.end());
+                let mut from = (*incoming).clone();
+                from.move_head(outgoing.start - incoming.start);
+                (*track, on, from)
+            })
+            .collect();
+        let cut_clips: Vec<(&Track, &Clip)> = across
+            .iter()
+            .flat_map(|(track, on, from)| [(*track, on), (*track, from)])
+            .collect();
+        let rolled = self.goes_by(&cut_clips, at, (snap, within))?;
+        if rolled.is_empty() {
+            return Err(format!(
+                "nothing the roll cuts at {} has {} to snap to",
+                clock.print_position(at),
+                match snap {
+                    Snap::Pause => "a sound",
+                    Snap::Cut => "a picture",
+                }
+            ));
+        }
+        let keeps = |clip: &Clip| format!("where `{}` would keep no frame", clip.id);
+        let (low, first) = pairs
+            .iter()
+            .map(|(_, outgoing, _)| (outgoing.start + frame, *outgoing))
+            .max_by_key(|(low, _)| *low)
+            .expect("a roll has a pair");
+        let (high, last) = pairs
+            .iter()
+            .map(|(_, _, incoming)| (incoming.end() - frame, *incoming))
+            .min_by_key(|(high, _)| *high)
+            .expect("a roll has a pair");
+        let span = Span {
+            at,
+            low: (low, keeps(first)),
+            high: (high, keeps(last)),
+            name: "roll",
+            apart: if alone {
+                "roll it another amount, or without snap="
+            } else {
+                "roll one track alone, or without snap="
+            },
+        };
+        let (to, into) = self.snap_place(&rolled, &span, &clock, snap, within)?;
+        if to == cut && at != cut {
+            // Back where it is, which changes nothing: say so rather than nothing.
+            return Err(format!(
+                "the nearest place for the roll within {:.2}s of {} is the cut where it is, at {}, \
+                 {into}: roll further, give a longer within=, or roll without snap=",
+                within.seconds(),
+                clock.print_position(at),
+                clock.print_position(cut),
+            ));
+        }
+        self.say_went("the roll", &clock, (at, to), &into);
+        Ok(to - cut)
+    }
+
+    /// The clips of `cut` that `snap` goes by at `at`, each with where `at` is in its media and
+    /// the places beside it within `within`: for a pause the sounds, or where it cuts none the
+    /// sound of the pictures' media, as a split of one goes by; for a cut the pictures. Clips that
+    /// play one media together, as a picture and its sound do, are one.
+    fn goes_by<'c>(
+        &'c self,
+        cut: &[(&Track, &'c Clip)],
+        at: Time,
+        (snap, within): (Snap, Time),
+    ) -> Result<Vec<Bladed<'c>>, String> {
+        let with = |has: fn(&Media) -> bool| -> Vec<(&'c Clip, &'c Media)> {
             let media = |clip| self.media_of(clip).filter(|media| has(media));
             cut.iter()
                 .filter_map(|(_, clip)| Some((*clip, media(clip)?)))
@@ -1872,7 +2037,7 @@ impl Script<'_> {
         let goes_by: Vec<(&Clip, &Media)> = match snap {
             Snap::Pause => {
                 let mut sounds = Vec::new();
-                for (track, clip) in &cut {
+                for (track, clip) in cut {
                     if track.kind != TrackKind::Audio {
                         continue;
                     }
@@ -1916,19 +2081,23 @@ impl Script<'_> {
                 speech,
             });
         }
-        let Some((low, high)) = low.zip(high).filter(|_| !bladed.is_empty()) else {
-            return Err(format!(
-                "nothing the blade cuts at {} has {} to snap to",
-                clock.print_position(at),
-                match snap {
-                    Snap::Pause => "a sound",
-                    Snap::Cut => "a picture",
-                }
-            ));
-        };
-        let span = Span { at, low, high };
-        let (to, into) = match snap {
-            Snap::Pause => quiet_together(&bladed, &span, &clock, within)?,
+        Ok(bladed)
+    }
+
+    /// Where something that cuts the clips of `bladed` at once goes, within `span`: into a quiet
+    /// of each of them together, or onto the nearest cut of any picture of them, as a frame of
+    /// `clock`, with what is said of where it went.
+    fn snap_place(
+        &self,
+        bladed: &[Bladed<'_>],
+        span: &Span,
+        clock: &Clock,
+        snap: Snap,
+        within: Time,
+    ) -> Result<(Time, String), String> {
+        let (rate, at) = (clock.rate, span.at);
+        Ok(match snap {
+            Snap::Pause => quiet_together(bladed, span, clock, within)?,
             Snap::Cut => {
                 let cuts = bladed.iter().flat_map(|one| {
                     one.found.places.iter().map(move |place| {
@@ -1949,9 +2118,7 @@ impl Script<'_> {
                 let place = place_said(one.media, (snap, place), &one.speech);
                 (to, format!("onto {place}"))
             }
-        };
-        self.say_went("the blade", &clock, (at, to), &into);
-        Ok(to)
+        })
     }
 
     /// Where on the sequence `clip` plays the source position `text`, on
@@ -2508,27 +2675,30 @@ impl Bladed<'_> {
 /// How far a blade asked for at `at` may go and still cut the clips it cuts
 /// there and no other: from `low` to `high`, each with the clip that says
 /// so, one the blade would come out of or one it would go into.
-struct Span<'a> {
+struct Span {
     at: Time,
-    low: (Time, &'a Clip),
-    high: (Time, &'a Clip),
+    low: (Time, String),
+    high: (Time, String),
+    /// What it is, as what is said of it names it: `blade` or `roll`.
+    name: &'static str,
+    /// What to do where the clips it cuts have no quiet in common.
+    apart: &'static str,
 }
 
-impl Span<'_> {
+impl Span {
     fn holds(&self, to: Time) -> bool {
         self.low.0 <= to && to <= self.high.0
     }
 
-    /// Why a blade at `to`, which the span does not hold, is refused: what
-    /// it would cut there that it was not asked to, or would not that it was.
+    /// Why a place at `to`, which the span does not hold, is refused: for a blade, what it
+    /// would cut there that it was not asked to, or would not that it was; for a roll, which
+    /// clip would keep no frame.
     fn refuses(&self, to: Time) -> String {
-        let (_, clip) = if to < self.low.0 { self.low } else { self.high };
-        let would = if clip.start < self.at && self.at < clip.end() {
-            format!("not cut `{}`", clip.id)
+        if to < self.low.0 {
+            self.low.1.clone()
         } else {
-            format!("cut `{}` as well", clip.id)
-        };
-        format!("where it would {would}: blade there with at=, or leave a track out with tracks=")
+            self.high.1.clone()
+        }
     }
 }
 
@@ -2539,7 +2709,7 @@ impl Span<'_> {
 /// a quiet too short together for that is divided as a short pause of one.
 fn quiet_together(
     bladed: &[Bladed<'_>],
-    span: &Span<'_>,
+    span: &Span,
     clock: &Clock,
     within: Time,
 ) -> Result<(Time, String), String> {
@@ -2558,8 +2728,9 @@ fn quiet_together(
         match (frames.find(|(to, _)| span.holds(*to)), first) {
             (Some(took), _) => alone.push(took),
             (None, Some((to, place))) => nowhere.push(format!(
-                "`{}` would take the blade to {}, into {}, {}",
+                "`{}` would take the {} to {}, into {}, {}",
                 one.clip.id,
+                span.name,
                 clock.print_position(to),
                 said(one, place),
                 span.refuses(to)
@@ -2632,7 +2803,8 @@ fn quiet_together(
     }
     if let Some((to, ..)) = frames.first() {
         return Err(format!(
-            "the clips this blade cuts are quiet together at {}, {}",
+            "the clips this {} cuts are quiet together at {}, {}",
+            span.name,
             clock.print_position(*to),
             span.refuses(*to)
         ));
@@ -2656,11 +2828,12 @@ fn quiet_together(
         })
         .collect();
     Err(format!(
-        "the clips this blade cuts have no quiet in common within {:.2}s of {}: {}: cut them one \
-         at a time with tracks=",
+        "the clips this {} cuts have no quiet in common within {:.2}s of {}: {}: {}",
+        span.name,
         within.seconds(),
         clock.print_position(at),
-        each.join("; ")
+        each.join("; "),
+        span.apart
     ))
 }
 

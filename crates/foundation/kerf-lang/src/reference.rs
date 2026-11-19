@@ -30,14 +30,14 @@ line, applied in order and atomically.
 - Keyframes, clip time: `opacity={0f:0 12f:1:ease}`; linear, hold, ease-in,
   ease-out, ease, or an overshooting curve: `{0f:1 12f:1.2:0.2,0.8,0.4,1}`.
   Or `(t*90)`, `t` seconds: `pi sin cos abs floor min max noise`
-- `set c2 parent=c1` moves `c2` with `c1`, which `gen=null@1` is for. Only `set` writes it, not `insert`.
+- `set c2 parent=c1` moves `c2` with `c1`, which `gen=null@1` is for. Only `set` writes it.
   Its `z`, `rotate_x`, and `rotate_y` take children in depth, a camera, and a light with it, round its middle; a flat child stays flat.
 - `retime=flow` on footage draws new frames between its own for slow motion; `retime=blend` fades.
 - `rect=`, `ellipse=`, and `points=` on a mask animate: `rect={0f:0,0,0.2,0.2 24f:0.5,0,0.7,0.2:ease}`,
   `points={0f:0,0;0.5,0;0.5,0.5 24f:0.1,0;0.6,0;0.6,0.5}`, corners one for one. A third number on a corner, `0.5,0,12`, softens the edge there by that many pixels.
 - `angle=V2` on a clip of a nested sequence shows or plays that track alone; `angle=""` undoes it. With none it shows every
   track, the highest over the rest: each part of a multicam wants its own.
-- `gen=shape@1 align=left scale_x={0f:0 9f:1}` grows from its left edge, at `x`, as a title does; `gen=particles@1 rate=200 life=2 gravity=0.5` emits from the clip's center; a `title`'s `reveal={0f:0 24f:1} reveal_by=word from_y=0.05` brings it in piece by piece.
+- `gen=shape@1 align=left scale_x={0f:0 9f:1}` grows from its left edge at `x`, as a title; `gen=particles@1 rate=200 life=2 gravity=0.5` emits from the clip's center; a `title`'s `reveal={0f:0 24f:1} reveal_by=word from_y=0.05` brings it in piece by piece.
 - `three_d=true z=0.5 rotate_y=30` places a clip in depth; `gen=camera@1` and `gen=light@1` clips see and light it. Adjacent 3D tracks draw far to near, cut where they cross. `depth=0.1 bevel=0.02`: a solid, its edges cut.
 
 ## Versions
@@ -93,9 +93,9 @@ media sync m2 with=m1@1.5s  m2 recorded what m1 did, 1.5s into it
 sequence add <id> rate=<fps> size=WxH [name="…"] [start=<tc>] [color=rec2100-pq|rec2100-hlg]  ·  sequence set|remove <id> …
 ```
 
-`snap=pause|cut [within=<amount>]` (0.5s) on trim, split, blade, insert, overwrite, and
+`snap=pause|cut [within=<amount>]` (0.5s) on trim, roll, split, blade, insert, overwrite, and
 lift|extract <clip> puts the edge in the pause by it, past no word, or on a
-picture cut; a blade where all it cuts are quiet.
+picture cut; a blade or roll where all it cuts are quiet.
 
 `shape.outline@1` adds an outline to a `gen=shape` clip, in order, by `mode` (add, subtract,
 intersect, difference), with the shape's own numbers and `x`, `y`, `rotation`.
@@ -445,8 +445,8 @@ mod tests {
         assert!(text.contains("`set c2 parent=c1` moves `c2` with `c1`"));
         // A multicam part with no angle shows the highest track.
         assert!(text.contains("With none it shows every\n  track, the highest over the rest"));
-        // A blade takes `snap=` too, and is one cut where all it cuts are quiet.
-        assert!(text.contains("split, blade, insert"));
-        assert!(text.contains("a blade where all it cuts are quiet"));
+        // A roll and a blade take `snap=` too, and are one cut where all they cut are quiet.
+        assert!(text.contains("trim, roll, split, blade, insert"));
+        assert!(text.contains("a blade or roll where all it cuts are quiet"));
     }
 }

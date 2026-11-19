@@ -1390,6 +1390,83 @@ fn a_roll_alone_makes_a_j_or_l_cut_and_prints_as_written() {
         .contains("unexpected"));
 }
 
+/// m1 pauses at 12.0–12.6 s, which c1 plays 2.0–2.6 s into the sequence, and at 58.2–58.9 s,
+/// which c2, starting at 60 s of m1 at 4 s in, would play from 2.2 s had it started earlier.
+struct BothSides;
+
+impl Facts for BothSides {
+    fn speech(&self, _: &Media) -> Speech {
+        Speech::default()
+    }
+
+    fn breaks(&self, _: &Media) -> Option<Breaks> {
+        Some(Breaks {
+            pauses: vec![(12.0, 12.6), (58.2, 58.9)],
+            gaps: Vec::new(),
+            cuts: vec![58.5],
+        })
+    }
+}
+
+/// m1's picture cuts at 14 s, where c1 ends.
+struct CutAtTheEnd;
+
+impl Facts for CutAtTheEnd {
+    fn speech(&self, _: &Media) -> Speech {
+        Speech::default()
+    }
+
+    fn breaks(&self, _: &Media) -> Option<Breaks> {
+        Some(Breaks {
+            pauses: Vec::new(),
+            gaps: Vec::new(),
+            cuts: vec![14.0],
+        })
+    }
+}
+
+#[test]
+fn a_roll_snaps_where_the_clips_either_side_are_quiet_together() {
+    let roll = |script: &str| {
+        apply_script_with(&base(), Catalog::builtin(), &BothSides, script)
+            .map_err(|mut errors| errors.remove(0))
+    };
+    let end = |applied: &Applied, clip: &str| frames(applied.project.clip(clip).unwrap().end());
+    // Asked for 2.1 s in, where c1 is quiet and c2 would still be speaking: it goes to where both
+    // are, clear of c2's sound before it, on every track the two are linked on.
+    let rolled = roll("roll c1 -1.9s snap=pause").unwrap();
+    let at = end(&rolled, "c1");
+    assert_eq!(end(&rolled, "a1"), at);
+    let seconds = at as f64 / 24.0;
+    assert!((2.3..=2.5).contains(&seconds), "{seconds}");
+    let said = rolled.snapped.join("\n");
+    assert!(said.starts_with("the roll went"), "{said}");
+    assert!(said.contains("quiet together for 0.40s"), "{said}");
+    // It prints as the roll it became.
+    assert!(rolled.ops.len() == 1 && matches!(rolled.ops[0], Op::Roll { .. }));
+    // Alone on the picture, it goes by the sound of the pictures' media, as a split of one does.
+    let alone = roll("roll c1 -1.9s alone snap=pause").unwrap();
+    assert_eq!(end(&alone, "c1"), at);
+    assert_eq!(frames(alone.project.clip("a1").unwrap().duration), 96);
+    // Onto a cut of either picture.
+    let onto = roll("roll c1 -1.6s snap=cut").unwrap();
+    assert_eq!(end(&onto, "c1"), 60);
+    // Where they have no quiet in common nearby, it is refused and nothing moves.
+    assert!(roll("roll c1 -0.5s snap=pause").is_err());
+    // Nor where the nearest is the cut as it is, which is said: m1's picture cuts where c1 ends.
+    let back = apply_script_with(
+        &base(),
+        Catalog::builtin(),
+        &CutAtTheEnd,
+        "roll c1 +2f snap=cut",
+    )
+    .unwrap_err()
+    .remove(0);
+    assert!(back.message.contains("is the cut where it is"), "{back:?}");
+    // A slip or a slide has no cut to snap.
+    assert!(roll("slip c1 +2f snap=pause").is_err());
+}
+
 #[test]
 fn a_slower_clip_that_has_no_room_says_what_it_runs_into() {
     let error = fails(&base(), "speed c1 0.5\n");

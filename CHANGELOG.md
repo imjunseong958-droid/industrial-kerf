@@ -10,7 +10,9 @@ on `main`; its section here becomes the release's notes on GitHub
   clip's own track and leaves the cut of the clips linked to it, so the
   sound of the next shot comes in before its picture, or with the
   picture's clip named, the sound runs on under the next shot. The clips
-  stay linked. It took unlinking, rolling and linking again before.
+  stay linked. It took unlinking, rolling and linking again before. A roll
+  takes `snap=pause` and `snap=cut` as a blade does: it goes where the
+  sound that ends and the sound that comes in are quiet together.
 - A shape lines up with a title: `align=left` or `align=right` on a
   `gen=shape` puts that side of it at its `x`, as a title's text is put,
   and it turns and scales about that side. A lower third's bar at its

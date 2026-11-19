@@ -448,9 +448,10 @@ transition add from=c1 to=c9 fx=dissolve dur=12f
   leaves the cut of the clips linked to it where it is: the sound comes in
   before its picture (a J cut), or with the picture's clip named, the sound
   runs on under the next shot (an L cut). They stay linked, and play one
-  moment of their media together where both play.
-- `snap=pause|cut [within=<amount>]` on `trim`, `split`, `blade`, `insert`, and
-  `overwrite`, and on a `lift` or `extract` that names the clip whose sound
+  moment of their media together where both play. `snap=` puts the cut in
+  a quiet of both sounds, as below.
+- `snap=pause|cut [within=<amount>]` on `trim`, `roll`, `split`, `blade`,
+  `insert`, and `overwrite`, and on a `lift` or `extract` that names the clip whose sound
   its edges go by (`extract c1 from=… to=… snap=pause`), moves the edges the
   line gives (`insert` and `overwrite`: `src=` and `out=`) into a pause of
   the media's sound, clear of the sound
@@ -505,6 +506,14 @@ transition add from=c1 to=c9 fx=dissolve dur=12f
   another clip of its tracks, is refused with that clip named. A clip on a
   sound track that plays no media, such as a nested sequence, has no index
   to go by: leave its track out.
+
+  A `roll` with `snap=` goes through the clips either side of the cut as a
+  blade goes through the clips it cuts: the one before as it would play on
+  past where it ends and the one after as it would play from before where
+  it starts, on each track the roll moves the cut on, so `roll a1 -12f
+  alone snap=pause` puts a J cut where the sound that ends and the sound
+  that comes in early are quiet together. Each clip keeps a frame, and a
+  place where one would not is refused with that clip named.
 - `extract <clip> said="…"` takes words out of what a clip says and closes
   up, in one line: the phrase as a transcript heard it, found in what the
   clip plays. The range starts in the quiet after the sound before the
