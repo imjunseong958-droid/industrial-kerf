@@ -6,6 +6,13 @@ on `main`; its section here becomes the release's notes on GitHub
 
 ## Unreleased
 
+- An agent's `look` with `shows` reads every clip that draws on a frame,
+  whichever track it is on. It read 32 from the lowest track up, so of a
+  street of 55 solids the cart on the top tracks, its subject, was left
+  out. A clip's frame is drawn beside the others', on as many cores as
+  there are: that street's frame took 390 ms for its 32 clips on four CPU
+  cores and takes 200 for all 55
+  ([docs/architecture.md](docs/architecture.md#what-directs-a-model)).
 - A guide of solids draws several times faster under a light that casts a
   shadow, and to the same picture. A street of 53 solids with a soft shadow
   (`gen=light@1 shadow=0.55 size=2.5`) took 42 s a frame at 1080p on four

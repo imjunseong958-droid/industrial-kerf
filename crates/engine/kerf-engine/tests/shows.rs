@@ -1,6 +1,6 @@
 //! What shows of each clip on a frame, read without an eye.
 
-use kerf_engine::shows::{showing, Shown};
+use kerf_engine::shows::{showing, Shown, MOST_CLIPS};
 use kerf_lang::parse_document;
 use kerf_model::{Catalog, Project, Rate};
 
@@ -229,6 +229,197 @@ fn thin_strokes_are_not_hidden_by_what_they_are_drawn_over() {
     assert!(title.hidden > 0.9 && title.shows < 0.001, "{title:?}");
     assert_eq!(title.by[0].0, "floor", "{title:?}");
     assert!(title.by[0].1 > 0.9, "{title:?}");
+}
+
+/// A solid `kind` named `id`, as large as `size` across, down, and back and with its middle
+/// at `place`, both in frame heights, of a frame of 16 by 9.
+fn solid(id: &str, kind: &str, size: [f64; 3], place: [f64; 3], color: &str) -> (String, String) {
+    let ([w, h, l], [x, y, z]) = (size, place);
+    let x = x * 9.0 / 16.0;
+    let shape = format!("kind={kind} width={w:.3} height={h:.3} length={l:.3} color={color}");
+    let clip = format!("gen=mesh@1 at=0f dur=96f\n      set {shape} x={x:.4} y={y:.3} z={z:.3}");
+    (id.to_owned(), clip)
+}
+
+/// A clip with more set on it.
+fn with((id, clip): (String, String), more: &str) -> (String, String) {
+    (id, clip + more)
+}
+
+/// A cart of thirteen solids, named `<name>_…`: a bed, two sides, two shafts, two ends, and
+/// two axles with four wheels.
+fn cart(name: &str, x: f64, z: f64) -> Vec<(String, String)> {
+    let wood = |part: &str, size, place| {
+        solid(&format!("{name}_{part}"), "box", size, place, "#906838")
+    };
+    let round = |part: &str, size, place, color| {
+        let part = solid(&format!("{name}_{part}"), "cylinder", size, place, color);
+        with(part, " rotate_x=90")
+    };
+    vec![
+        wood("bed", [0.5, 0.04, 0.3], [x, 0.34, z]),
+        wood("side1", [0.5, 0.1, 0.02], [x, 0.27, z - 0.14]),
+        wood("shaft1", [0.3, 0.02, 0.02], [x + 0.4, 0.34, z - 0.098]),
+        wood("side2", [0.5, 0.1, 0.02], [x, 0.27, z + 0.14]),
+        wood("shaft2", [0.3, 0.02, 0.02], [x + 0.4, 0.34, z + 0.098]),
+        wood("end1", [0.02, 0.1, 0.3], [x - 0.24, 0.27, z]),
+        wood("end2", [0.02, 0.1, 0.3], [x + 0.24, 0.27, z]),
+        round("axle1", [0.03, 0.36, 0.03], [x - 0.17, 0.38, z], "#403020"),
+        round("wheel1", [0.24, 0.03, 0.24], [x - 0.17, 0.38, z - 0.17], "#604020"),
+        round("wheel2", [0.24, 0.03, 0.24], [x - 0.17, 0.38, z + 0.17], "#604020"),
+        round("axle2", [0.03, 0.36, 0.03], [x + 0.17, 0.38, z], "#403020"),
+        round("wheel3", [0.24, 0.03, 0.24], [x + 0.17, 0.38, z - 0.17], "#604020"),
+        round("wheel4", [0.24, 0.03, 0.24], [x + 0.17, 0.38, z + 0.17], "#604020"),
+    ]
+}
+
+/// A street blocked out of solids, as a guide has one, on a frame of `size`: a sky out of
+/// depth, a ground, seven houses each with a roof and a door, three people of two solids, a
+/// cart parked, and the cart that is the subject, written last and so on the top tracks under
+/// the lights and the camera. Fifty-five clips draw, the cart's thirteen the highest.
+fn street(size: &str) -> Project {
+    let flat = |id: &str, set: &str| {
+        let clip = format!("gen=solid@1 at=0f dur=96f\n      set {set}");
+        (id.to_owned(), clip)
+    };
+    let mut clips = vec![
+        flat("sky", "color=#88aaff"),
+        flat("ground", "color=#a09880 three_d=true rotate_x=-90 y=0.5 z=4 scale=16"),
+    ];
+    let houses = [
+        (-1.15, 0.4, "#c8b090"),
+        (1.15, 1.0, "#b0b8c0"),
+        (-1.15, 1.6, "#d0c0a0"),
+        (1.15, 2.2, "#c0a890"),
+        (-1.15, 2.8, "#a8b0a0"),
+        (1.15, 3.4, "#d8c8b0"),
+        (-1.15, 4.0, "#b8a8a0"),
+    ];
+    for (at, (x, z, color)) in houses.into_iter().enumerate() {
+        let door = [x + if x < 0.0 { 0.47 } else { -0.47 }, 0.3, z];
+        let roof = solid(&format!("roof{at}"), "box", [0.64, 0.64, 0.9], [x, -0.3, z], "#804030");
+        clips.push(solid(&format!("house{at}"), "box", [0.9, 0.8, 0.9], [x, 0.1, z], color));
+        clips.push(with(roof, " rotation=45"));
+        clips.push(solid(&format!("door{at}"), "box", [0.04, 0.4, 0.2], door, "#503020"));
+    }
+    let people = [(0.25, 0.7, "#3050a0"), (-0.2, 1.9, "#a03040"), (0.1, 3.2, "#308050")];
+    for (at, (x, z, color)) in people.into_iter().enumerate() {
+        clips.push(solid(&format!("body{at}"), "cylinder", [0.12, 0.3, 0.12], [x, 0.35, z], color));
+        clips.push(solid(&format!("head{at}"), "ball", [0.11; 3], [x, 0.145, z], "#e0b090"));
+    }
+    clips.extend(cart("parked", 0.35, 2.5));
+    clips.extend(cart("cart", -0.3, 1.1));
+    let camera = "y=-0.3 tilt=-9 z={0f:-0.3 96f:0.5} pan={0f:-5 96f:5}";
+    for (id, kind, set) in [
+        ("sun", "light", "kind=directional x=0.35 y=1 z=0.45"),
+        ("air", "light", "kind=ambient intensity=0.35"),
+        ("cam", "camera", camera),
+    ] {
+        let clip = format!("gen={kind}@1 at=0f dur=96f\n      set {set}");
+        clips.push((id.to_owned(), clip));
+    }
+    let mut text =
+        format!("kerf 1\nproject name=\"t\"\nsequence s1 rate=24 size={size} audio=48000\n");
+    for (track, (id, clip)) in clips.iter().enumerate() {
+        text += &format!("  track V{} video\n    clip {id} {clip}\n", track + 1);
+    }
+    parse_document(&text, Catalog::builtin())
+        .unwrap_or_else(|errors| panic!("{errors:?}"))
+        .project
+}
+
+#[test]
+fn a_scene_of_many_clips_has_those_on_its_upper_tracks_read() {
+    let whole = showing(&street("320x180"), None, Rate::FPS_24.time_of(40)).expect("reads");
+    // Every clip that draws is read, from the lowest track up: none is left out.
+    assert_eq!(whole.unread, Vec::<String>::new());
+    assert_eq!(whole.clips.len(), 55, "{:?}", whole.clips);
+    assert_eq!(
+        (whole.clips[0].clip.as_str(), whole.clips[1].clip.as_str()),
+        ("sky", "ground")
+    );
+    // The subject is the highest thirteen, and each part of it is somewhere in the frame.
+    let cart = &whole.clips[42..];
+    for part in cart {
+        assert!(part.clip.starts_with("cart_"), "{part:?}");
+        assert!(part.at.is_some() && part.area > 0.0, "{part:?}");
+        assert!(part.edges.is_empty(), "{part:?}");
+    }
+    // A wheel on the near side shows whole, and the one across from it is behind the cart.
+    let near = clip(&whole.clips, "cart_wheel1");
+    assert!(near.hidden < 0.05 && near.shows > 0.0, "{near:?}");
+    let far = clip(&whole.clips, "cart_wheel2");
+    assert!(far.hidden > 0.9, "{far:?}");
+    assert_eq!(far.by[0].0, "cart_wheel1", "{far:?}");
+    assert!(
+        far.by.iter().all(|(by, _)| by.starts_with("cart_")),
+        "{far:?}"
+    );
+    // With every clip read, every pixel of the frame is some clip's or no clip's.
+    let had: f64 = whole.clips.iter().map(|shown| shown.shows).sum();
+    assert!(
+        (had + whole.empty - 1.0).abs() < 0.02,
+        "{had} {}",
+        whole.empty
+    );
+}
+
+#[test]
+fn of_more_clips_than_are_read_the_lowest_are_left_out_and_named() {
+    // More boxes than are read on one frame, side by side in rows, each on a track of its
+    // own, and on the lowest track a wall nearer than them all, before the last of them.
+    let boxes = MOST_CLIPS + 2;
+    let place = |at: usize| ((at % 24) as f64 / 24.0 - 0.48, (at / 24) as f64 / 12.0 - 0.45);
+    let clip = |track: usize, id: &str, side: f64, (x, y): (f64, f64), more: &str| {
+        let set = format!("kind=box width={side} height={side} length=0.02 x={x:.3} y={y:.3}{more}");
+        format!("  track V{track} video\n    clip {id} gen=mesh@1 at=0f dur=24f\n      set {set}\n")
+    };
+    let mut text =
+        "kerf 1\nproject name=\"t\"\nsequence s1 rate=24 size=160x90 audio=48000\n".to_owned();
+    text += &clip(1, "wall", 0.2, place(boxes), " z=-0.1");
+    for at in 1..=boxes {
+        text += &clip(at + 1, &format!("b{at}"), 0.04, place(at), "");
+    }
+    let project = parse_document(&text, Catalog::builtin())
+        .unwrap_or_else(|errors| panic!("{errors:?}"))
+        .project;
+    let whole = showing(&project, None, Rate::FPS_24.time_of(3)).expect("reads");
+    // The highest tracks' are the ones read, and what is left out is said.
+    assert_eq!(whole.unread, ["wall", "b1", "b2"]);
+    assert_eq!(whole.clips.len(), MOST_CLIPS);
+    assert_eq!(whole.clips[0].clip, "b3");
+    let apart = &whole.clips[0];
+    assert!(
+        apart.at.is_some() && apart.area > 0.0 && apart.hidden < 0.03,
+        "{apart:?}"
+    );
+    // A clip that is read says what hides it, one that is not read as well.
+    let behind = whole.clips.last().unwrap();
+    assert_eq!(behind.clip, format!("b{boxes}"));
+    assert!(behind.at.is_some() && behind.hidden > 0.9, "{behind:?}");
+    assert_eq!(behind.by[0].0, "wall", "{behind:?}");
+}
+
+#[test]
+#[ignore = "a measurement, not a check: cargo test -p kerf-engine --test shows --release -- --ignored --nocapture"]
+fn what_reading_a_frame_costs() {
+    let street = street("1920x1080");
+    let at = Rate::FPS_24.time_of(40);
+    let read = showing(&street, None, at).expect("reads");
+    let mut times: Vec<f64> = (0..9)
+        .map(|_| {
+            let started = std::time::Instant::now();
+            drop(showing(&street, None, at).expect("reads"));
+            started.elapsed().as_secs_f64() * 1000.0
+        })
+        .collect();
+    times.sort_by(f64::total_cmp);
+    println!(
+        "the street, a frame: {} clips read and {} left out in {:.0} ms",
+        read.clips.len(),
+        read.unread.len(),
+        times[4]
+    );
 }
 
 #[test]
