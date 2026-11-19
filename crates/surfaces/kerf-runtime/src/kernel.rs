@@ -149,15 +149,16 @@ impl Facts for CachedFacts {
     }
 
     /// Where the media index made on import found cuts, and the pauses its
-    /// sound has between words and longer. Nothing is indexed here.
+    /// sound has between words and longer, with the shorter gaps two words
+    /// said in one breath part for. Nothing is indexed here.
     fn breaks(&self, media: &Media) -> Option<Breaks> {
         let path = self.directory.join(&media.path);
         let cache = kerf_engine::derivatives::DerivativeCache::new(&self.directory);
         let index = kerf_engine::cached_media_index(&path, &cache)?;
+        let sound = kerf_engine::cached_media_sound(&path, &cache);
         Some(Breaks {
-            pauses: kerf_engine::cached_media_sound(&path, &cache)
-                .map(|sound| sound.pauses())
-                .unwrap_or_default(),
+            pauses: sound.as_ref().map(Sound::pauses).unwrap_or_default(),
+            gaps: sound.as_ref().map(Sound::gaps).unwrap_or_default(),
             cuts: index.cuts,
         })
     }

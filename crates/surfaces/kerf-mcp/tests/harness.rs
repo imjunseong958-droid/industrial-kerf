@@ -913,6 +913,11 @@ fn edits_snap_to_what_the_index_found() {
     );
     let script = split["script"].as_str().unwrap();
     assert!(script.contains("split c1 at=00:00:02:00"), "{script}");
+    // An edge that moved is said, with how far and onto what.
+    assert_eq!(
+        split["snapped"],
+        json!(["the split of `c1` went 5 frames later, to 00:00:02:00: onto the cut of `m1` at 00:00:02:00"]),
+    );
     router
         .runtime()
         .reject_proposal(split["proposal"].as_str().unwrap())
@@ -931,6 +936,11 @@ fn edits_snap_to_what_the_index_found() {
         .and_then(|(frames, _)| frames.parse().ok())
         .unwrap_or_else(|| panic!("{script}"));
     assert!((24..=26).contains(&shortened), "{script}");
+    let snapped = trimmed["snapped"][0].as_str().unwrap_or_default();
+    assert!(
+        snapped.starts_with("the out of `c1` went ") && snapped.contains(" pause of `m1` at "),
+        "{trimmed}"
+    );
     router
         .runtime()
         .reject_proposal(trimmed["proposal"].as_str().unwrap())
@@ -1109,9 +1119,31 @@ fn look_counts_the_cuts_of_a_sequences_sound() {
     );
     assert_eq!(cut["summary"]["cuts"], 1, "{cut}");
     assert_eq!(cut["summary"]["notMeasured"], 1, "{cut}");
-    // It is of a sequence's sound and nothing else.
+    // A part of it, with pauses listed from the length the edit names: the cut is in the
+    // part that holds it and not in the one after.
+    let part = |from: &str, to: &str| {
+        ok(
+            &router,
+            "look",
+            json!({"cuts": {"pauses": 0.5}, "from": from, "to": to,
+                "proposal": proposal["proposal"]}),
+        )
+    };
+    let first = part("00:00:01:00", "00:00:02:00");
+    assert_eq!(first["from"], "00:00:01:00", "{first}");
+    assert_eq!(first["summary"]["cuts"], 1, "{first}");
+    assert_eq!(first["joins"]["count"], 0, "{first}");
+    assert_eq!(part("00:00:02:00", "00:00:03:00")["summary"]["cuts"], 0);
+    // It is of a sequence's sound and nothing else, and a pause shorter than a third of a
+    // second is how anybody speaks.
     let refused = error(&router, "look", json!({"cuts": true, "media": "m1"}));
     assert_eq!(refused["code"], "INVALID_ARGUMENTS");
+    let refused = error(&router, "look", json!({"cuts": {"pauses": 0.1}}));
+    assert_eq!(refused["code"], "INVALID_ARGUMENTS");
+    assert!(
+        refused["message"].as_str().unwrap().contains("0.3 or more"),
+        "{refused}"
+    );
 }
 
 #[test]

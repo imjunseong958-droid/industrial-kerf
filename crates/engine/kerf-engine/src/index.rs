@@ -96,14 +96,19 @@ fn index_entry(src: &Path, cache: &DerivativeCache) -> Result<crate::derivatives
     )
 }
 
-/// The index of `src` when the cache already has it; nothing is made.
+/// The index of `src` when the cache already has it; nothing is made. Its
+/// pauses are read again from the levels it kept, so that an index made by
+/// a Kerf that read quiet another way has the pauses this one finds.
 pub fn cached_media_index(src: &Path, cache: &DerivativeCache) -> Option<MediaIndex> {
     let entry = index_entry(src, cache).ok()?;
-    if entry.is_complete(&["index.json"]) {
-        entry.read_json("index.json").ok()
-    } else {
-        None
+    if !entry.is_complete(&["index.json"]) {
+        return None;
     }
+    let mut index: MediaIndex = entry.read_json("index.json").ok()?;
+    if let Some(levels) = fs::read(entry.path(LEVELS)).ok().filter(|levels| !levels.is_empty()) {
+        index.pauses = sound(&levels).quiet(PAUSE_SECONDS);
+    }
+    Some(index)
 }
 
 /// How loud the sound of `src` is, a hundredth of a second at a time, when
