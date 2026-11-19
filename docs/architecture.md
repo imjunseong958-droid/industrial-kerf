@@ -1318,11 +1318,27 @@ A check judges each cut of a sequence's sound the same way (`kerf-mcp/src/cuts.r
 with sound at the level of speech on both sides goes through it (`cut.in_sound`), whether or not a
 transcript has a word there; a cut in a pause is not said to be in the word a transcript stretches
 over it, nor is one in a gap unless the word is timed right through the gap, so what `snap=pause`
-places is never then said to be in a word; and the pauses of 0.75 s or more and the words said
-twice in a row that the cut still plays are said as information (`pause.kept`, `word.repeated`),
-since an edit reads the footage and not what it leaves. A sound that holds one level, a room's own
-tone or music mastered loud, has no pauses and judges no cut. `look` with `cuts` gives all of it as
-numbers.
+places is never then said to be in a word; and the pauses of 0.75 s or more, the words said
+twice in a row, and the phrases taken again a moment later that the cut still plays are said as
+information (`pause.kept`, `word.repeated`, `phrase.restarted`), since an edit reads the footage
+and not what it leaves. A phrase taken again is three words or more, of two different ones at
+least, said again within twelve words and twelve seconds, with what was said between or a word
+more or less in the second saying: a start taken again, or a take left beside the one that
+replaced it, which a doubled word is not found by. It may be meant, as a list is, and the sentence
+tells; the check says where. A sound that holds one level, a room's own tone or music mastered
+loud, has no pauses and judges no cut.
+
+`look` with `cuts` gives all of it as numbers, and what each join plays (`joins`): the words
+either side of where the sound goes from one stretch of footage to another, with the cut marked,
+and the words it left out between them. A cut that takes "a very simple" out of "I gave it a
+very simple prompt" has both its edges in quiet and every word whole, and measures clean; read
+as "I gave it ‖ prompt" it does not. Scarlet goes on to name a cut that takes a word or two more
+than the restart it removes, from the words alone; that is left, having no cuts here to hold it
+to, and what a join plays is there to read. The length a pause is listed from is the edit's to
+say (`{"pauses": 0.5}`, 0.3 s at least), since what is dead air depends on the pace: a fixed
+three quarters of a second hid every pause a tighter cut would take. And `from` and `to` take a
+part of a sequence, where the lists, which stop at 40 cuts and joins and 8 of the rest, said
+nothing of what they left out.
 
 Measured by `kerf-mcp/tests/cut_edges.rs` on a recording made there, so that where each word
 starts and ends is known: 420 voiced words with a decay, some with a hiss before or after, some
@@ -1766,16 +1782,19 @@ x64, and Linux x86-64 as new as Ubuntu 24.04.
   before one, the pauses and doubled words an edit still plays, and a score of all of it against a
   recording whose words are known; and from the second reading, an edge moved past no word, each
   move said with the words it ended between, an edge put between two words said in one breath,
-  and words taken out, or a pause brought down to a length, by one line that names them, with the
-  pause that is left played before the cut.
+  words taken out, or a pause brought down to a length, by one line that names them, with the
+  pause that is left played before the cut, a phrase found that is taken again with other words
+  between its two sayings, what each join plays and took out, and a pause listed from the length
+  an edit names.
   Its encoded sections, kept by what they depend on and joined without encoding again, are done
   too (The engine, Kept frames). Left: its forced alignment of words (wav2vec2, a model of English
   letters), its filler and transcription models (their own licenses, one not for commercial use),
   reading the text on a screen, and telling speakers apart. Read the second time and not done: an
   edge on the dip between two words with no quiet between them, which its alignment's word times
-  make safe and a transcriber's do not; a restart found with other words between its two
-  sayings; a proposal brought forward onto an edit that changed under it, where Kerf's goes
-  stale; and a check that two recordings of one thing still play in step after a cut.
+  make safe and a transcriber's do not; a cut named that takes a word or two more than the
+  restart it removes; a proposal brought forward onto an edit that changed under it, where
+  Kerf's goes stale; and a check that two recordings of one thing still play in step after a
+  cut.
 - **Jumper and the Resolve and Premiere MCP servers** bolt agents onto editors
   that were not built for them. Kerf's document, proposals, and Git merging are
   what they cannot have, and each area has to keep that: every feature is text in

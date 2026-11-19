@@ -1119,9 +1119,31 @@ fn look_counts_the_cuts_of_a_sequences_sound() {
     );
     assert_eq!(cut["summary"]["cuts"], 1, "{cut}");
     assert_eq!(cut["summary"]["notMeasured"], 1, "{cut}");
-    // It is of a sequence's sound and nothing else.
+    // A part of it, with pauses listed from the length the edit names: the cut is in the
+    // part that holds it and not in the one after.
+    let part = |from: &str, to: &str| {
+        ok(
+            &router,
+            "look",
+            json!({"cuts": {"pauses": 0.5}, "from": from, "to": to,
+                "proposal": proposal["proposal"]}),
+        )
+    };
+    let first = part("00:00:01:00", "00:00:02:00");
+    assert_eq!(first["from"], "00:00:01:00", "{first}");
+    assert_eq!(first["summary"]["cuts"], 1, "{first}");
+    assert_eq!(first["joins"]["count"], 0, "{first}");
+    assert_eq!(part("00:00:02:00", "00:00:03:00")["summary"]["cuts"], 0);
+    // It is of a sequence's sound and nothing else, and a pause shorter than a third of a
+    // second is how anybody speaks.
     let refused = error(&router, "look", json!({"cuts": true, "media": "m1"}));
     assert_eq!(refused["code"], "INVALID_ARGUMENTS");
+    let refused = error(&router, "look", json!({"cuts": {"pauses": 0.1}}));
+    assert_eq!(refused["code"], "INVALID_ARGUMENTS");
+    assert!(
+        refused["message"].as_str().unwrap().contains("0.3 or more"),
+        "{refused}"
+    );
 }
 
 #[test]

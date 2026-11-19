@@ -17,6 +17,20 @@ use std::collections::HashMap;
 /// A pause is said from this length, as it plays, in seconds: long enough
 /// to hear as a wait.
 pub(crate) const KEPT_PAUSE_SECONDS: f64 = 0.75;
+/// The shortest pause a report may be asked to list, in seconds: under it
+/// a gap between two words is the rhythm of speech.
+pub(crate) const LEAST_PAUSE_SECONDS: f64 = 0.3;
+/// A phrase taken again is this many words or more, or two with at most a
+/// word between its two sayings: less is how anybody speaks.
+const RESTART_WORDS: usize = 3;
+/// The second saying of a phrase taken again starts within this many words
+/// and this many seconds of where the first ends, as it plays.
+const RESTART_BETWEEN_WORDS: usize = 12;
+const RESTART_WITHIN_SECONDS: f64 = 12.0;
+/// How many words either side of a join are given as what it plays, and
+/// how many of what it took out from each end of that.
+const JOIN_WORDS: usize = 4;
+const TOOK_WORDS: usize = 6;
 /// The second saying of a word or phrase starts within this long of the
 /// first, as it plays, in seconds.
 const REPEAT_WITHIN_SECONDS: f64 = 3.0;
@@ -362,14 +376,15 @@ fn quiet_seconds(sound: Option<&Sound>, from: f64, to: f64) -> f64 {
         .unwrap_or((to - from).max(0.0))
 }
 
-/// The pauses of [`KEPT_PAUSE_SECONDS`] or more that `words` play between
-/// them, longest first: within one clip, or across the cut between two
-/// clips that play one after the other on one track.
+/// The pauses of `least` seconds or more that `words` play between them,
+/// longest first: within one clip, or across the cut between two clips that
+/// play one after the other on one track.
 pub(crate) fn kept_pauses<'a>(
     project: &Project,
     sequence: &Sequence,
     words: &'a [Played<'a>],
     known: &Known<'_>,
+    least: f64,
 ) -> Vec<KeptPause<'a>> {
     let follows = |after: &Clip, before: &Clip| {
         after.end() == before.start
@@ -385,7 +400,7 @@ pub(crate) fn kept_pauses<'a>(
     for pair in words.windows(2) {
         let (after, before) = (&pair[0], &pair[1]);
         let plays = (before.start - after.end).seconds();
-        if plays < KEPT_PAUSE_SECONDS {
+        if plays < least {
             continue;
         }
         // What the sequence plays between the two, as stretches of media.
@@ -418,7 +433,7 @@ pub(crate) fn kept_pauses<'a>(
         } else {
             0.0
         };
-        if seconds >= KEPT_PAUSE_SECONDS {
+        if seconds >= least {
             pauses.push(KeptPause {
                 after,
                 before,
@@ -458,6 +473,232 @@ pub(crate) fn repeats<'a>(words: &'a [Played<'a>]) -> Vec<Repeat<'a>> {
     repeats
 }
 
+/// A phrase the sequence plays and plays again a moment later: a start
+/// taken again, or a take left beside the one that replaced it. What is
+/// said between the two, or a word more or less in the second, keeps it
+/// from being a [`Repeat`]. It may be meant, as a list or an emphasis is:
+/// which takes the sentence to tell, so this says only where.
+pub(crate) struct Restart<'a> {
+    pub first: &'a [Played<'a>],
+    /// What is said between the two sayings.
+    pub between: &'a [Played<'a>],
+    pub second: &'a [Played<'a>],
+}
+
+impl Restart<'_> {
+    /// Whether a cut sits between the first word of the first saying and
+    /// the last of the second: the cut may have left both takes in.
+    pub(crate) fn at_cut(&self) -> bool {
+        self.between
+            .iter()
+            .chain(self.second)
+            .any(|word| !std::ptr::eq(word.clip, self.first[0].clip))
+    }
+}
+
+fn text_of(words: &[Played<'_>]) -> String {
+    let said: Vec<&str> = words.iter().map(|word| word.text).collect();
+    said.join(" ")
+}
+
+/// How far the words from `first` and from `second` say the same, as how
+/// many of each: word for word, or with one word more or less in either
+/// where they say the same again after it. The first saying stops short of
+/// the second.
+fn same_run(said: &[String], first: usize, second: usize) -> (usize, usize) {
+    let same = |a: usize, b: usize| {
+        a < second && b < said.len() && !said[a].is_empty() && said[a] == said[b]
+    };
+    let mut exact = 0;
+    while same(first + exact, second + exact) {
+        exact += 1;
+    }
+    let mut run = (exact, exact);
+    if exact == 0 {
+        return run;
+    }
+    for (skip_first, skip_second) in [(1, 0), (0, 1)] {
+        let (mut a, mut b) = (first + exact + skip_first, second + exact + skip_second);
+        let mut more = 0;
+        while same(a, b) {
+            (a, b, more) = (a + 1, b + 1, more + 1);
+        }
+        if more > 0 && a - first > run.0 {
+            run = (a - first, b - second);
+        }
+    }
+    run
+}
+
+/// The phrases `words` play and then take again, in the order they play:
+/// [`RESTART_WORDS`] words or more of at least two different ones, said
+/// again within [`RESTART_BETWEEN_WORDS`] words and
+/// [`RESTART_WITHIN_SECONDS`], or two words said again with at most one
+/// between. What [`repeats`] finds, a phrase said twice in a row at once,
+/// is left to it.
+pub(crate) fn restarts<'a>(words: &'a [Played<'a>]) -> Vec<Restart<'a>> {
+    let said: Vec<String> = words.iter().map(|word| plain(word.text)).collect();
+    let mut found = Vec::new();
+    // Where a second saying starts: it is the second of one phrase only.
+    let mut again = std::collections::HashSet::new();
+    let mut at = 0;
+    while at < words.len() {
+        let mut best: Option<(usize, usize, usize)> = None;
+        // How long a phrase said twice at once from here is: its words are
+        // a repeat's, and no start of anything taken again.
+        let mut repeated = 0;
+        let reach = (at + 2 * RESTART_BETWEEN_WORDS + 2).min(words.len());
+        for second in at + 1..reach {
+            if again.contains(&second) {
+                continue;
+            }
+            let (length, length_again) = same_run(&said, at, second);
+            if length == 0 {
+                continue;
+            }
+            let between = second - (at + length);
+            let different = said[at..at + length]
+                .iter()
+                .collect::<std::collections::HashSet<_>>()
+                .len();
+            let waits = (words[second].start - words[at + length - 1].end).seconds();
+            let phrase = (length.min(length_again) >= RESTART_WORDS && different >= 2)
+                || (length == 2 && length_again == 2 && different == 2 && between <= 1);
+            // Said twice in a row at once is a repeat.
+            let repeat = between == 0
+                && length == length_again
+                && length <= REPEAT_WORDS
+                && waits < REPEAT_WITHIN_SECONDS;
+            if repeat {
+                repeated = repeated.max(length);
+            }
+            if phrase
+                && !repeat
+                && between <= RESTART_BETWEEN_WORDS
+                && waits <= RESTART_WITHIN_SECONDS
+                && best.is_none_or(|(most, ..)| length > most)
+            {
+                best = Some((length, second, length_again));
+            }
+        }
+        match best {
+            Some((length, second, length_again)) => {
+                again.insert(second);
+                found.push(Restart {
+                    first: &words[at..at + length],
+                    between: &words[at + length..second],
+                    second: &words[second..second + length_again],
+                });
+                at += length;
+            }
+            None => at += repeated.max(1),
+        }
+    }
+    found
+}
+
+/// Where the sound of a sequence goes from one stretch of footage to
+/// another: two clips that play one after the other on a track, the second
+/// not playing on from where the first stops.
+pub(crate) struct Join<'a> {
+    pub from: &'a Clip,
+    pub to: &'a Clip,
+    /// The last words the sequence plays before it, and the first after.
+    pub before: &'a [Played<'a>],
+    pub after: &'a [Played<'a>],
+    /// What the join left out, where both clips play one media and the
+    /// second starts later in it: the words a transcript has there, and how
+    /// long it is, in seconds.
+    pub took: Option<(Vec<String>, f64)>,
+    /// How far back in its media the second clip starts from where the
+    /// first stopped, in seconds, where it does: what plays twice.
+    pub replays: Option<f64>,
+}
+
+impl Join<'_> {
+    /// What the join plays, the cut marked: "we went to ‖ the store."
+    pub(crate) fn plays(&self) -> String {
+        format!("{} ‖ {}", text_of(self.before), text_of(self.after))
+    }
+
+    /// What it took out, the middle of a long stretch left out.
+    pub(crate) fn took_text(&self) -> Option<String> {
+        let (words, _) = self.took.as_ref()?;
+        Some(if words.len() > 2 * TOOK_WORDS {
+            format!(
+                "{} … {}",
+                words[..TOOK_WORDS].join(" "),
+                words[words.len() - TOOK_WORDS..].join(" ")
+            )
+        } else {
+            words.join(" ")
+        })
+    }
+}
+
+/// The joins of `sequence`'s sound, in the order they play, with the
+/// `words` it plays either side of each and what each left out.
+pub(crate) fn joins<'a>(
+    project: &'a Project,
+    sequence: &'a Sequence,
+    words: &'a [Played<'a>],
+    known: &Known<'_>,
+) -> Vec<Join<'a>> {
+    let mut joins = Vec::new();
+    for track in sounding(sequence) {
+        for pair in track.clips.windows(2) {
+            let (from, to) = (&pair[0], &pair[1]);
+            let (Some((media, _, out)), Some((next_media, into, _))) =
+                (played(project, from), played(project, to))
+            else {
+                continue;
+            };
+            if from.end() != to.start || plays_on(project, from, to) {
+                continue;
+            }
+            // The words either side: the last of the one clip's, the first
+            // of the other's.
+            let first = words.partition_point(|word| word.start < to.start);
+            let before = &words[..first];
+            let before = &before[before
+                .iter()
+                .rposition(|word| !std::ptr::eq(word.clip, from))
+                .map_or(0, |at| at + 1)..];
+            let after = &words[first..];
+            let after = &after[..after
+                .iter()
+                .position(|word| !std::ptr::eq(word.clip, to))
+                .unwrap_or(after.len())];
+            let one_take = media.id == next_media.id && from.speed() == to.speed();
+            let (out, into) = (out.seconds(), into.seconds());
+            let took = (one_take && into > out).then(|| {
+                let said = known.speech.get(&media.id).map_or_else(Vec::new, |speech| {
+                    speech
+                        .heard()
+                        .into_iter()
+                        .filter(|word| {
+                            let middle = (word.start + word.end) / 2.0;
+                            out <= middle && middle < into && !plain(&word.text).is_empty()
+                        })
+                        .map(|word| word.text.trim().to_owned())
+                        .collect()
+                });
+                (said, into - out)
+            });
+            joins.push(Join {
+                from,
+                to,
+                before: &before[before.len().saturating_sub(JOIN_WORDS)..],
+                after: &after[..after.len().min(JOIN_WORDS)],
+                took,
+                replays: (one_take && into < out).then_some(out - into),
+            });
+        }
+    }
+    joins.sort_by_key(|join| join.to.start);
+    joins
+}
+
 /// A cut that is quiet but nearer than this to the sound its clip plays,
 /// in seconds, takes the end of a word's decay or the breath before one.
 const TIGHT_SECONDS: f64 = 0.05;
@@ -470,18 +711,48 @@ fn rounded(value: f64, places: i32) -> f64 {
     (value * scale).round() / scale + 0.0
 }
 
+/// What a report is asked for of its sequence.
+pub(crate) struct Asked {
+    /// A pause is listed from this length, as it plays, in seconds.
+    pub pauses: f64,
+    /// From when to when on the sequence, where less than all of it is
+    /// asked for: what lies outside is neither counted nor listed.
+    pub range: Option<(Time, Time)>,
+}
+
+impl Default for Asked {
+    fn default() -> Self {
+        Self {
+            pauses: KEPT_PAUSE_SECONDS,
+            range: None,
+        }
+    }
+}
+
 /// How the cuts of `sequence`'s sound sit in the sound, and what it still
 /// plays between and of its words, for `look` with `cuts`: counts of every
-/// cut, and each cut that is not clean, with what was measured of it.
-pub(crate) fn report(project: &Project, sequence: &Sequence, facts: &dyn Facts) -> Value {
+/// cut, each cut that is not clean with what was measured of it, the pauses
+/// and the words said twice that it still plays, and what each join plays
+/// and left out.
+pub(crate) fn report(
+    project: &Project,
+    sequence: &Sequence,
+    facts: &dyn Facts,
+    asked: &Asked,
+) -> Value {
     let clock = Clock::of_sequence(sequence);
+    let within = |at: Time| asked.range.is_none_or(|(from, to)| from <= at && at < to);
     let mut known = Known::new(facts);
     known.hear(project, sequence);
-    let cuts = sound_cuts(project, sequence);
+    let cuts: Vec<SoundCut<'_>> = sound_cuts(project, sequence)
+        .into_iter()
+        .filter(|cut| within(cut.frame))
+        .collect();
     let (mut quiet, mut low, mut sound, mut in_words, mut faded, mut unmeasured, mut tight) =
         (0, 0, 0, 0, 0, 0, 0);
     let mut airs = Vec::new();
     let mut listed = Vec::new();
+    let mut unclean = 0;
     for cut in &cuts {
         let judged = judge(cut, &mut known);
         let heard = judged.edge.map(|edge| edge.heard);
@@ -501,6 +772,7 @@ pub(crate) fn report(project: &Project, sequence: &Sequence, facts: &dyn Facts) 
         }
         let clean =
             judged.word.is_none() && heard.is_none_or(|heard| heard == Heard::Quiet) && !is_tight;
+        unclean += usize::from(!clean);
         if clean || listed.len() == LISTED_CUTS {
             continue;
         }
@@ -561,11 +833,18 @@ pub(crate) fn report(project: &Project, sequence: &Sequence, facts: &dyn Facts) 
     media.sort_by(|a, b| a["media"].as_str().cmp(&b["media"].as_str()));
 
     let words = played_words(project, sequence, &known);
-    let pauses = kept_pauses(project, sequence, &words, &known);
-    let repeats = repeats(&words);
+    let mut pauses = kept_pauses(project, sequence, &words, &known, asked.pauses);
+    pauses.retain(|pause| within(pause.after.end));
+    let mut repeats = repeats(&words);
+    repeats.retain(|repeat| within(repeat.words[0].start));
+    let mut restarts = restarts(&words);
+    restarts.retain(|restart| within(restart.first[0].start));
+    let mut joins = joins(project, sequence, &words, &known);
+    joins.retain(|join| within(join.to.start));
+    let at = |time: Time| clock.print_position(sequence.rate.round(time));
     let pause = |pause: &KeptPause<'_>| {
         let mut entry = json!({
-            "at": clock.print_position(sequence.rate.round(pause.after.end)),
+            "at": at(pause.after.end),
             "seconds": rounded(pause.seconds, 2),
             "after": pause.after.text,
             "before": pause.before.text,
@@ -579,7 +858,7 @@ pub(crate) fn report(project: &Project, sequence: &Sequence, facts: &dyn Facts) 
     let repeat = |repeat: &Repeat<'_>| {
         let first = &repeat.words[0];
         let mut entry = json!({
-            "at": clock.print_position(sequence.rate.round(first.start)),
+            "at": at(first.start),
             "said": repeat.text(),
             "clip": first.clip.id.as_str(),
         });
@@ -589,10 +868,58 @@ pub(crate) fn report(project: &Project, sequence: &Sequence, facts: &dyn Facts) 
         }
         entry
     };
+    let restart = |restart: &Restart<'_>| {
+        let (first, second) = (&restart.first[0], &restart.second[0]);
+        let mut entry = json!({
+            "at": at(first.start),
+            "said": text_of(restart.first),
+            "again": text_of(restart.second),
+            "againAt": at(second.start),
+            "clip": first.clip.id.as_str(),
+        });
+        if !restart.between.is_empty() {
+            entry["between"] = json!(text_of(restart.between));
+        }
+        if restart.at_cut() {
+            let last = &restart.second[restart.second.len() - 1];
+            entry["cutTo"] = json!(last.clip.id.as_str());
+        }
+        entry
+    };
+    let join = |join: &Join<'_>| {
+        let mut entry = json!({
+            "at": at(join.to.start),
+            "from": join.from.id.as_str(),
+            "to": join.to.id.as_str(),
+        });
+        if !join.before.is_empty() || !join.after.is_empty() {
+            entry["plays"] = json!(join.plays());
+        }
+        if let (Some(took), Some((_, seconds))) = (join.took_text(), &join.took) {
+            entry["took"] = json!(took);
+            entry["tookSeconds"] = json!(rounded(*seconds, 2));
+        }
+        if let Some(seconds) = join.replays {
+            entry["replays"] = json!(rounded(seconds, 2));
+        }
+        entry
+    };
     let mut report = json!({
         "summary": summary,
         "cuts": listed,
         "media": media,
+    });
+    // What a list leaves out is said, with how to read on.
+    if unclean > LISTED_CUTS {
+        report["cutsNotListed"] = json!(unclean - LISTED_CUTS);
+    }
+    if let Some((from, to)) = asked.range {
+        report["from"] = json!(clock.print_position(from));
+        report["to"] = json!(clock.print_position(to));
+    }
+    report["joins"] = json!({
+        "count": joins.len(),
+        "first": joins.iter().take(LISTED_CUTS).map(join).collect::<Vec<_>>(),
     });
     if words.is_empty() {
         report["words"] = json!(
@@ -601,6 +928,7 @@ pub(crate) fn report(project: &Project, sequence: &Sequence, facts: &dyn Facts) 
         );
     } else {
         report["pauses"] = json!({
+            "from": asked.pauses,
             "count": pauses.len(),
             "seconds": rounded(pauses.iter().map(|pause| pause.seconds).sum(), 1),
             "longest": pauses.iter().take(LISTED_LEFTOVERS).map(pause).collect::<Vec<_>>(),
@@ -609,6 +937,11 @@ pub(crate) fn report(project: &Project, sequence: &Sequence, facts: &dyn Facts) 
             "count": repeats.len(),
             "atCuts": repeats.iter().filter(|repeat| repeat.at_cut()).count(),
             "first": repeats.iter().take(LISTED_LEFTOVERS).map(repeat).collect::<Vec<_>>(),
+        });
+        report["restarts"] = json!({
+            "count": restarts.len(),
+            "atCuts": restarts.iter().filter(|restart| restart.at_cut()).count(),
+            "first": restarts.iter().take(LISTED_LEFTOVERS).map(restart).collect::<Vec<_>>(),
         });
     }
     report

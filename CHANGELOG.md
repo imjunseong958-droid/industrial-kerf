@@ -6,6 +6,16 @@ on `main`; its section here becomes the release's notes on GitHub
 
 ## Unreleased
 
+- An agent's `look` with `cuts` reads an edit as it will be heard. `joins`
+  gives what each cut plays, the words either side of it, and the words it
+  left out, so a cut that takes a word the sentence needs is seen though
+  its edges are in quiet. `restarts` are the phrases said and taken again a
+  moment later, with other words between the two or a word more or less in
+  the second, which a doubled word was not found by; the check says them
+  too (`phrase.restarted`). Pauses are listed from the length the edit
+  names (`{"pauses": 0.5}`) where three quarters of a second was fixed, and
+  `from` and `to` take a part of a long sequence
+  ([docs/architecture.md](docs/architecture.md#edit)).
 - Words come out of what a clip says in one line: `extract c1 said="um, so"`
   takes them out with the quiet round them and closes up, leaving a pause
   of a quarter of a second, or of `leave=`; `extract c1 pause="the deal."
