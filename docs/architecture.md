@@ -1532,9 +1532,8 @@ A room read where it is gives back every cut its change had taken: by the one ro
 whole recording, nothing in its louder end came down to what was quiet at its start. A tick gains less than it might, 6 cuts and 8 fewer hard against a word: most of
 these ticks come within a tenth of a second of where the word before them has died away, and
 those are left as sounds. Not done: an edge between two words with no quiet
-between them at all, where the level only dips, since a syllable leaves such a dip inside a word
-too and telling them apart takes word times closer than a transcriber's (the recording here has
-none: every two of its words are 0.08 s apart or more); the 0.1 s tried on real speech, since it
+between them at all, where the level only dips, which is measured below and not built; the 0.1 s
+tried on real speech, since it
 is set by this recording's stopped consonants, which hold 0.09 s at most, and where a language
 holds one longer only the transcript says so; a change of room found where it happens, which is
 now somewhere in the half minute it falls in; a breath taken for part of the pause it is in,
@@ -1542,6 +1541,109 @@ which an edge still stops short of; a sound left out of what a snapped blade goe
 is, as music under speech is, which has no pauses and refuses the blade until `tracks=` leaves
 its track out, uncut; and a quiet found for a blade in a nested sequence's sound, which has no
 index, so that such a clip on a sound track refuses it too.
+
+An edge in the dip between two words that run together is measured, and not built (2026-11-19).
+Scarlet puts one where the level is lowest between them, where that is down at the room's tone,
+or at -48 dBFS or under and 10 dB under both its sides, and can because an aligner tells it where
+the two words part. A transcriber's times are a tenth of a second or two out, and the closure of a
+stopped consonant leaves as low a dip inside a word. To count how often the one is taken for the
+other, `cut_edges.rs` makes a second recording
+(`a_dip_between_two_words_is_not_told_from_one_inside_a_word`): the same 420 words said as people
+talk. Three in five of those inside a phrase run on into the next, which starts from no time at
+all to 0.1 s after the voice or the hiss of the one before stops, over what is left of its decay,
+so the level between them dips from not at all to all the way to the room. And a closure, as long
+as before (0.04 s to 0.09 s), is in two in five of the words longer than 0.2 s, anywhere that
+leaves 0.05 s of the voice before it and 0.03 s after: near a word's start or its end as well as
+in its middle, two in five of them on a murmur of the voice 12 to 24 dB down and the rest on
+nothing. A cut is asked for where a transcript parts each two words, as far out as before (0.12 s
+either way), on a 24 fps frame. Like the first recording it is not speech, and nobody listened to
+it. `snap=pause` as it is, with that transcript:
+
+| Room | Placed | Refused | In a word | Across a word |
+|---|---|---|---|---|
+| -55 dBFS | 263 | 156 | 0 | 0 |
+| -38 dBFS | 285 | 134 | 3 | 0 |
+
+Every cut refused is between two words with no quiet between them, a third of all that are asked
+for; the first recording asks for a cut only where a tenth of a second lies between two words,
+and has every one placed. No cut placed is in a voice or in a closure. The 3 in the noisy room
+are in a word all the same, and were not looked for: each is where a word runs on into one that
+starts with a hiss barely over the room's tone, so that the hiss reads as the room, and with what
+is left of the word before it as a quiet a tenth of a second long, and the cut is 5, 8 and 27 ms
+into the hiss. It is the hiss the first recording has hard against a cut (the 9 above), nearer
+now that the quiet beside it is short, and it is left as it is found.
+
+What follows is what each way of finding the dip makes of the cuts refused, by where the lowest
+point of the dip it takes truly is: between the two words; in a word, in the closure of its
+consonant or in the hiss it starts or ends with (none is in a voice); or between two other words,
+across a whole one. A dip is the hops within 3 dB of a lowest one, shorter than a gap, and its
+depth is how far that is under the loudest of the 0.15 s before it and after it. The parting is
+where the transcript parts the two words, and a dip is within 0.06 s of it where neither word is
+timed right through the dip with more to spare, which is the rule a gap goes by. The last two
+columns are the dips a 24 fps frame falls in, and how many of those frames are in a word:
+
+| Room | A cut goes in | Found | Between the two | In a closure | In a hiss | Across a word | On a frame | In a word |
+|---|---|---|---|---|---|---|---|---|
+| -55 dBFS, 156 refused | the lowest dip of both words, 6 dB or more | 152 | 44 | 75 | 7 | 26 | 124 | 80 |
+| | the lowest of both, by Scarlet's levels | 94 | 15 | 68 | 0 | 11 | 89 | 67 |
+| | a dip within 0.06 s of the parting, 6 dB | 82 | 54 | 9 | 19 | 0 | 63 | 27 |
+| | within 0.06 s, 10 dB | 78 | 50 | 9 | 19 | 0 | 63 | 27 |
+| | within 0.06 s, 20 dB | 54 | 34 | 9 | 11 | 0 | 46 | 20 |
+| | within 0.06 s, by Scarlet's levels | 25 | 19 | 6 | 0 | 0 | 22 | 6 |
+| | within 0.06 s, at the room's tone | 20 | 14 | 6 | 0 | 0 | 17 | 6 |
+| | within 0.03 s, 10 dB | 49 | 29 | 4 | 16 | 0 | 41 | 18 |
+| | a dip the parting is in, 10 dB | 17 | 8 | 1 | 8 | 0 | 17 | 9 |
+| | within 0.06 s, and the lowest of both words | 34 | 24 | 7 | 3 | 0 | 29 | 9 |
+| | within 0.06 s, and the only dip of both words | 11 | 9 | 0 | 2 | 0 | 9 | 2 |
+| | within 0.06 s, the only dip, at the room's tone | 2 | 2 | 0 | 0 | 0 | 2 | 0 |
+| | the parting in it, the only dip, at the room's tone | 1 | 1 | 0 | 0 | 0 | 1 | 0 |
+| -38 dBFS, 134 refused | the lowest dip of both words, 6 dB or more | 130 | 37 | 62 | 9 | 22 | 110 | 69 |
+| | the lowest of both, by Scarlet's levels | 110 | 28 | 60 | 2 | 20 | 95 | 61 |
+| | a dip within 0.06 s of the parting, 6 dB | 70 | 46 | 8 | 16 | 0 | 60 | 24 |
+| | within 0.06 s, 10 dB | 67 | 43 | 8 | 16 | 0 | 60 | 24 |
+| | within 0.06 s, 20 dB | 38 | 25 | 8 | 5 | 0 | 35 | 14 |
+| | within 0.06 s, by Scarlet's levels | 44 | 30 | 8 | 6 | 0 | 39 | 13 |
+| | within 0.06 s, at the room's tone | 44 | 30 | 8 | 6 | 0 | 39 | 13 |
+| | within 0.03 s, 10 dB | 42 | 25 | 4 | 13 | 0 | 37 | 15 |
+| | a dip the parting is in, 10 dB | 22 | 12 | 1 | 9 | 0 | 22 | 10 |
+| | within 0.06 s, and the lowest of both words | 31 | 20 | 5 | 6 | 0 | 30 | 10 |
+| | within 0.06 s, and the only dip of both words | 12 | 9 | 0 | 3 | 0 | 12 | 3 |
+| | within 0.06 s, the only dip, at the room's tone | 8 | 7 | 0 | 1 | 0 | 8 | 1 |
+| | the parting in it, the only dip, at the room's tone | 2 | 1 | 0 | 1 | 0 | 2 | 1 |
+
+No way keeps a cut out of a word, for three reasons the rows show. The lowest dip of two words is
+a closure in one of them half the time: a closure goes down to the room, and what two words part
+for mostly does not (at 46 and 37 of the cuts refused, no dip of 3 dB has its lowest where the two
+meet). Keeping to the dip the transcript's parting is at leaves the closures that are as near it
+as the transcript is out, 9 and 8, and a deeper dip or the room's tone takes out none of them,
+since a closure is the deepest dip there is. And the lowest of a dip that is between two words is
+often in one of them: where a word starts or ends with a hiss, the level goes on falling through
+the hiss as the voice beside it dies away under it, and a cut at the lowest is between that
+word's hiss and its voice (19 and 16). Asking for the room's tone takes the hisses out in the
+quiet room and leaves them in the noisy one, where a hiss reads as the room. Taking a dip only
+where the two words have that one and no other leaves 11 and 12 cuts found, 2 and 3 of them in a
+hiss; and asking for the room's tone as well leaves 2 and 8, one of the 8 in a hiss, which is
+nothing to build for. Nor are those few safe. Over twelve such recordings in each room (other
+seeds, worked out beside this work; no test holds it), the only dip within 0.06 s and at the
+room's tone was found at 32 of the 1,740 cuts refused in the quiet room, 2 of them in a closure,
+which is the one dip of two words whose own parting has none, timed into by the transcript; and
+at 132 of 1,561 in the noisy room, 22 of them in a word. The only dip with the parting in it and
+at the room's tone was found at 7 and at 33, none of the 7 in a word and 8 of the 33 in a hiss.
+(`snap=pause` as it is, over the same twelve: 3,288 cuts placed in the quiet room, none in a
+word, and 3,467 in the noisy one, 38 of them in a hiss that leads a word, as above.) Nor does it
+rest on where the closures were put: with each kept to the middle of its word, as in the first
+recording, a dip within 0.06 s of the parting was still a closure 8 and 7 times over four
+recordings in each room.
+
+So nothing is built, and no line, check or answer changes: an edge asked for between two words
+with no quiet between them is refused, as it was. What would change that is not a finer rule
+over the same two things. With the transcript's times 0.03 s out, as an aligner's might be, and
+not 0.12 s (four recordings in each room, beside this work), a dip within 0.03 s of the parting
+was in no closure, of 289 found in the quiet room and 254 in the noisy one, and 34 and 33 were
+still in a hiss: with times that near a cut can go by the times, and the dip is only what bears
+them out, which is what an aligner gives Scarlet and a transcriber does not give Kerf. An aligner
+is left out as before (What else exists), and the levels, a hundredth of a second at a time, do
+not tell a closure or a hiss from where two words part.
 
 The picture of a cut is read from what the document has too, where the two clips are shots
 whose guides it holds (`kerf_engine::eye`, `look` with `eye`, 2026-11-18). A model makes each
@@ -2081,9 +2183,11 @@ x64, and Linux x86-64 as new as Ubuntu 24.04.
   words (wav2vec2, a model of English letters), its filler and transcription models (their own
   licenses, one not for commercial use), reading the text on a screen, and telling speakers
   apart. Read the second time and not done: an edge on the dip between two words with no quiet
-  between them, which its alignment's word times make safe and a transcriber's do not; and a
-  check that two recordings of one thing still play in step after a cut (a snapped `blade` cuts
-  both at one place where both are quiet, Edit, and nothing looks at what was cut another way).
+  between them, which its alignment's word times make safe and a transcriber's do not (measured
+  since, under Edit: every way of taking the dip by a transcriber's times put cuts inside words);
+  and a check that two recordings of one thing still play in step after a cut (a snapped `blade`
+  cuts both at one place where both are quiet, Edit, and nothing looks at what was cut another
+  way).
 - **Jumper and the Resolve and Premiere MCP servers** bolt agents onto editors
   that were not built for them. Kerf's document, proposals, and Git merging are
   what they cannot have, and each area has to keep that: every feature is text in
