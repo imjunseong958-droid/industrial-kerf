@@ -782,6 +782,65 @@ fn what_the_fixtures_scenes_stand_on_is_what_was_found_of_them() {
 }
 
 #[test]
+fn what_the_scenes_of_solids_stand_on_is_what_was_found_of_them() {
+    // Things stacked from solids, as an agent blocked them for a model to film
+    // (`fixtures/shots/solids`): each part a little way into the one under it, or hanging
+    // under it. The lower part of each was said to be sunk in the upper, a snowman's base
+    // 0.494 in its belly, with the line that would have set it on top of its belly.
+    let folder = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../fixtures/shots/solids");
+    let mut solids = fixture("solids");
+    // Three of its things are meshes of files, which are read from where the paths say.
+    solids.resolve_paths(Catalog::builtin(), &folder);
+    let first = [Rate::new(16, 1).expect("a rate").time_of(0)];
+    let reads = |sequence: &str| standing(&solids, Some(sequence), &first).expect("reads");
+    let rests = |stands: &Standing, id: &str, on: &str| {
+        let run = only(stands, id);
+        assert_eq!((run.how, run.on.as_deref()), (How::Rests, Some(on)), "{id}: {run:?}");
+    };
+    let sunk = |stands: &Standing, id: &str, on: &str, by: f64| {
+        let run = only(stands, id);
+        assert!(matches!(run.how, How::Sunk { deep, .. } if (deep - by).abs() < 5e-4), "{id}: {run:?}");
+        assert_eq!(run.on.as_deref(), Some(on), "{id}");
+    };
+
+    // A snowman: its base is on the snow, and each part above is in the one under it by
+    // what it was written to reach in. The brim is wider than the head, on which it stands
+    // by its middle alone.
+    let snowman = reads("snowman");
+    assert_eq!(snowman.ground.as_deref(), Some("snow_ground"));
+    rests(&snowman, "snow_base", "snow_ground");
+    sunk(&snowman, "snow_belly", "snow_base", 0.07);
+    sunk(&snowman, "snow_head", "snow_belly", 0.04);
+    sunk(&snowman, "snow_brim", "snow_head", 0.025);
+    sunk(&snowman, "snow_hat", "snow_brim", 0.005);
+    assert_eq!(clip(&snowman, "snow_base").script, None);
+    assert_eq!(clip(&snowman, "snow_belly").script.as_deref(), Some("set snow_belly y=-0.27"));
+
+    // A barn under a roof that is a box turned on its edge, and a cow whose legs go a
+    // little way up into its body: the barn and the legs are on the field.
+    let saucer = reads("saucer");
+    rests(&saucer, "barn", "field");
+    assert_eq!(only(&saucer, "barn_roof").on.as_deref(), Some("barn"));
+    for leg in ["cow_leg0", "cow_leg1", "cow_leg2", "cow_leg3"] {
+        rests(&saucer, leg, "field");
+    }
+
+    // A lighthouse: the lantern is on the gallery under it, and the cap is the one in the
+    // lantern. A robot's legs are on the floor of the alley and not in its body.
+    let lighthouse = reads("lighthouse");
+    rests(&lighthouse, "lantern", "gallery");
+    sunk(&lighthouse, "cap", "lantern", 0.12);
+    let robot = reads("robot");
+    rests(&robot, "bot_leg_l", "alley_floor");
+    rests(&robot, "bot_leg_r", "alley_floor");
+    rests(&robot, "bot_antenna", "bot_head");
+
+    // The files' meshes stand as any do: the rocket on its pad, the donut on its plate.
+    rests(&reads("rocket"), "ship", "pad");
+    rests(&reads("donut"), "ring_cake", "plate");
+}
+
+#[test]
 #[ignore = "a measurement, not a check: cargo test -p kerf-engine --test stands --release -- --ignored --nocapture"]
 fn what_reading_a_scene_costs() {
     let car = fixture("car");
