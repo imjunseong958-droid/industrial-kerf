@@ -159,6 +159,11 @@ on `main`; its section here becomes the release's notes on GitHub
   `~/.kerf/agent.json`. `shot-into`'s entry no longer says it takes a thing
   out, which is `plate`'s: print it again (`kerf-comfy --workflow shot-into
   --describe`).
+- In a model's workflow, a value given to an input a blank fills is refused
+  as the step's to fill, with where it is set, whether or not the ComfyUI
+  server has said what the input takes. Once the server had listed the
+  input's choices it was refused for not being among them, and a value that
+  was among them was refused all the same.
 
 ## 0.1.4
 

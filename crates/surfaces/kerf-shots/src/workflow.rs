@@ -362,7 +362,10 @@ pub fn with_taken(shown: &mut Value, taken: &Value) {
 /// Whether each of `sets` is something its input takes, by `taken`: one of its choices,
 /// or a number no less than its least and no more than its most. Refused with what it
 /// does take. An input `taken` says nothing of is let through.
-pub fn check(read: &Read, sets: &[Set], taken: &Value) -> Result<(), String> {
+///
+/// Asked by [`with`], of sets the workflow itself has taken: what a server lists for an
+/// input says nothing of whether the input is the workflow's to set.
+fn check(read: &Read, sets: &[Set], taken: &Value) -> Result<(), String> {
     let described = kerf_workflow::detail::described(&read.text)?;
     for set in sets {
         let class = described["nodes"]
@@ -473,12 +476,22 @@ pub struct Copy {
     pub recipe: String,
 }
 
-/// `read`'s workflow with each of `sets` made, in turn.
-pub fn with(read: &Read, sets: &[Set]) -> Result<String, String> {
-    sets.iter().try_fold(read.text.clone(), |text, set| match set.link {
+/// `read`'s workflow with each of `sets` made, in turn, and each held to what its input
+/// takes on the server, where that has been asked: `taken`, as [`taken_before`] has it.
+///
+/// What the workflow itself refuses is refused first. A blank is the step's to fill and a
+/// link the graph's shape whatever a server lists for the input, and the refusal says
+/// where each is set. The server's list is no answer there: it sends whoever set the
+/// value to one that is on the list, which is refused all the same.
+pub fn with(read: &Read, sets: &[Set], taken: Option<&Value>) -> Result<String, String> {
+    let now = sets.iter().try_fold(read.text.clone(), |text, set| match set.link {
         Some((from, output)) => kerf_workflow::detail::set_link(&text, set.node, set.input, from, output),
         None => kerf_workflow::detail::set_input(&text, set.node, set.input, set.value),
-    })
+    })?;
+    if let Some(taken) = taken {
+        check(read, sets, taken)?;
+    }
+    Ok(now)
 }
 
 /// A new copy of the workflow of the step on `line`, holding `now`, beside
@@ -557,10 +570,7 @@ pub fn set(
         return Err("the workflow was changed by another program since it was read; it is left as that left it".to_owned());
     }
     // Held to what the server takes there, where that has been asked.
-    if let Some(taken) = taken_before(models, &read) {
-        check(&read, &[set], &taken)?;
-    }
-    let now = with(&read, &[set])?;
+    let now = with(&read, &[set], taken_before(models, &read).as_ref())?;
     if let Origin::Own(_, file) = &read.origin {
         return write(file, &now).map(|()| Named::default());
     }
@@ -757,8 +767,20 @@ mod tests {
         assert!(wrong.contains("takes a MODEL") && wrong.contains("a VAELoader, is a VAE"), "{wrong}");
         let none = check(&read, &[Set::link(&sampler, "model", &loader, 3)], &types).unwrap_err();
         assert!(none.contains("has 1 outputs"), "{none}");
+        // A blank is the step's to fill whatever the server lists for its input: a value for
+        // it is refused as that, with where it is set, on the server's list or not.
+        let listed = json!({"UNETLoader": {"unet_name": {"choices": ["a.safetensors", "b.safetensors"]}}});
+        for value in ["other", "a.safetensors"] {
+            let blank = with(&read, &[Set::value(&loader, "unet_name", &json!(value))], Some(&listed)).unwrap_err();
+            assert!(blank.contains("is the blank `{unet}`, which the step fills"), "{blank}");
+        }
+        // A value that is the workflow's own is made and then held: refused off the list.
+        let made = with(&read, &[Set::value(&loader, "weight_dtype", &json!("fp8_e4m3fn"))], Some(&taken)).unwrap();
+        assert!(made.contains("\"weight_dtype\": \"fp8_e4m3fn\""));
+        let off = with(&read, &[Set::value(&loader, "weight_dtype", &json!("fp64"))], Some(&taken)).unwrap_err();
+        assert!(off.contains("takes one of default, fp8_e4m3fn, not \"fp64\""), "{off}");
         // Linked in the text: the sampler reads the loader where it read what sat between.
-        let linked = with(&read, &[Set::link(&sampler, "model", &loader, 0)]).unwrap();
+        let linked = with(&read, &[Set::link(&sampler, "model", &loader, 0)], None).unwrap();
         let again = kerf_workflow::detail::described(&linked).unwrap();
         let reads = again["nodes"].as_array().unwrap().iter().find(|node| node["id"] == sampler.as_str()).unwrap()["inputs"]
             .as_array()
@@ -798,7 +820,7 @@ mod tests {
             .and_then(|node| node["id"].as_str())
             .expect("a loader");
         let value = json!("fp16");
-        let now = with(&read, &[Set::value(loader, "weight_dtype", &value)]).unwrap();
+        let now = with(&read, &[Set::value(loader, "weight_dtype", &value)], None).unwrap();
         assert!(now.contains("\"weight_dtype\": \"fp16\""));
         let copy = copied(&project, dir, "m1", 3, &read, &now, &[dir.join("shots/m1.video.comfy.json")]).unwrap();
         assert_eq!(copy.stored, "shots/m1.video-2.comfy.json");
