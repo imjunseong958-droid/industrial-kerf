@@ -1699,22 +1699,8 @@ QJsonObject MainWindow::selectedClipObject() const {
 QSizeF MainWindow::selectedPictureSize(bool *fit) const { return pictureSizeOf(selectedClipObject(), selectedTrackType(), fit); }
 
 QSizeF MainWindow::pictureSizeOf(const QJsonObject &clip, const QString &trackType, bool *fit) const {
-    // A picture clip draws media, a nested sequence, or a generator.
-    const QString kind = clip.value(QStringLiteral("kind")).toString();
-    if (clip.isEmpty() || trackType != QStringLiteral("video") || kind == QStringLiteral("caption")) return {};
-    *fit = kind == QStringLiteral("media") || kind == QStringLiteral("sequence");
-    const QJsonArray sources = m_project.value(QStringLiteral("sources")).toArray();
-    if (kind == QStringLiteral("media")) {
-        for (const QJsonValue &value : sources) {
-            const QJsonObject source = value.toObject();
-            if (source.value(QStringLiteral("id")).toString() != clip.value(QStringLiteral("sourceId")).toString()) continue;
-            const QSizeF size(source.value(QStringLiteral("width")).toDouble(), source.value(QStringLiteral("height")).toDouble());
-            return size.isEmpty() ? QSizeF() : size;
-        }
-        return {};
-    }
-    // Generators fill the canvas; a nested sequence is fitted to it.
-    return QSizeF(resolvedCanvasSize(m_project, sources));
+    const QSizeF canvas(resolvedCanvasSize(m_project, m_project.value(QStringLiteral("sources")).toArray()));
+    return pictureSizeIn(m_project, clip, trackType, canvas, fit);
 }
 
 void MainWindow::showSettings(const QString &page) {

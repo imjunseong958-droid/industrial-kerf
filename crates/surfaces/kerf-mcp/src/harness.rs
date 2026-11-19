@@ -69,7 +69,7 @@ cheap way to scan; with `at` frames — source frames of a media, or program \
 frames of the sequence; with `transcript` and no media, what the sequence \
 says. `sequence` picks one other than the first. \
 With `file`, the `media add` line for a file in the project's folder, or for each file of a folder of it with a `script` of them all, and with no arguments `unplaced` lists those not yet in the document, and `toMake` the media whose steps, the lines under it that say how Kerf or a model makes it, have yet to be run, or read something that has changed since its take was made, which it names: make it with `make`. With `media`, a media its steps make lists its `takes`, each making kept, with the line (`use`) that in an edit has the media be that take; a `toMake` entry's `cannot` is what would refuse its making, to mend before `make`, and its `notes` what its model has said it does not take, and what `stands` finds floating, sunk, or going through another in the sequence a `render` step of it draws, on the first, middle, and last frame it draws; an edit that writes steps answers with `toMake` too; with no arguments, `cast` and `styles` list who and what the project's shots show and how they look, each by the name a `generate` line gives as `cast=` or `style=` and with the words and pictures a model is then handed, `brand` the project's colors, fonts, tone, and the words it says and avoids, which a title and a caption keep to, and `models` lists the models a `generate` step can name, each with what its owner says it takes: the picture it makes (`size`), its `rate`, the most `seconds` of one shot, the files it `reads` (of `guide`, `first`, `last`, `ref`), the other names a step can set with what they are when it does not (`more`), and, for one that follows a guide, `guide`, the `render` step that draws a guide at its size and rate. Write that step and a sequence of the model's shape, no longer than its `seconds`. A model with a name alone has not said, and none listed means none is set up: both are the person's to set, in their own models file. \
-With `cuts`, how each cut of the sequence's sound sits in the sound, by its media's own levels: in a pause, or through a word or a sound, and the pauses and repeated words the sequence still plays; look after cutting speech, and trim with `snap=pause` what it finds. \
+With `cuts`, how each cut of the sequence's sound sits in the sound, by its media's own levels: in a pause, or through a word or a sound; what each join plays and took out, to read as a sentence; and the pauses, repeated words and restarts the sequence still plays. Look after cutting speech, and trim with `snap=pause` what it finds. \
 With `eye`, where the eye is either side of each cut of the sequence's picture, between two shots whose guides the document has: where the subject of the shot that ends is on the frame and where the next one's is, how far that jumps, how much larger or smaller it is, and whether it turns back, read from the guides before anything is made and from the takes once they are. Read it of a shot with another before or after it. \
 With `cost` and `at`, who draws each frame, what sends it to the CPU, and what it costs. \
 With `mesh`, what a mesh clip's glTF file holds, its animations and cameras, and a camera of it, or one a model found and wrote to a file, as a camera clip's keyframes. \
@@ -81,7 +81,10 @@ With `graph`, a media its steps make as the graph the person sees of it in the e
 With `proposal` it shows what a pending proposal would make: its document, \
 what it would have made (`toMake`), its frames, and what it says.
 - `edit` runs one script. It becomes a proposal for the user, returned with \
-the document diff, check findings, and a before/after preview: the frames \
+the document diff, check findings, `snapped` where a `snap=` moved an edge \
+(how far, into which pause, between which words: read it, since a move may \
+have left a word in or out) or a `said=` or `pause=` took something out \
+(from where to where, and the pause it leaves), and a before/after preview: the frames \
 either side of each cut it made or moved, the middle of a clip it changed \
 in place (with its first and last frame when the clip moves), and three \
 frames through a transition it added or changed. Each sheet is an image \
@@ -310,7 +313,7 @@ pub(super) fn metadata(name: &str) -> Option<(&'static str, Value, ToolAnnotatio
                     "track": {"type": "object", "description": "Follow a point of the program's picture over `from`–`to`: `x` and `y` where it is at `from`, 0 to 1 across the frame, on something with detail, such as a corner rather than a flat area. Returns where it went, and with `clip` a line setting that clip's x and y to follow it: run it with `edit`, and parent what should stick to it to that clip, a `gen=null@1` for instance. `lostAt` says where the point was lost, if it was. Or give `corners` instead of `x` and `y`, four [x, y] at `from` going upper left, upper right, lower right, lower left, around a flat surface with detail on it, such as a screen or a sign, to follow how it moves and turns: it returns those corners over time, `outline`, the keyframes a moving mask takes (`mask c add k1 points=...`), and with `clip` a corner pin line that fits that clip, one filling the frame, onto the surface. Or to cut out an object that changes shape, a person for instance, give `inside`, [x, y] points on it at `from`, with `outside`, points off it, and `box`, [left, top, right, bottom] around it, as needed: it returns its outline over time, as few corners as shape it and the same ones in every keyframe: `outline` as above, or with `clip` a mask line for that clip instead, `script`, which holds it (`mask c add object points=...`). A third number on each corner says where the edge measures soft, such as out of focus or moving fast. It goes by colour and edges, with nothing to install; where a model that finds a thing by its name is set up (`models`, one whose `about` says it makes a matte), a `generate model=<it> guide=<footage> prompt=<the thing>` step makes the matte as a file instead, and holds a thing among others like it. With `clip` and no `from` and `to` it is followed for as long as that clip runs, and a clip that follows a point is not drawn while the point is followed: this is how a clip a `generate` step names with `moves=` is led by footage, and how the clip a `render` step names with `matte=` is cut to what it shows, as a person does on the picture in a shot's graph. Or give `camera: true` to solve where the camera went over the range, one shot of a camera that moves through a still scene, to pin clips in depth to moving footage: it returns a `script` of `gen=camera@1` keyframes (on `clip`, or on a new camera without one), `fit` (`error` and `worst`, how far what was followed lands from where the solve puts it in the sequence's pixels; under a pixel holds, and past two a clip slides; `agreeing`, the share of it that fits), `fov`, and `points`, places in the world to set a clip's `x`, `y`, and `z` to with `three_d=true`, each with where it shows (`at`, on `frame`) and the frame it was last seen on (`lastFrame`), so that it stays on that spot. Hide what is not in the footage first. `solved: false` with a `reason` says when a shot cannot be solved, such as a camera that only turns; `lostAt` says where a cut or lost frame ended it. `lensKnown: false` means the camera never turned, so any lens fits and `fov` is the default: give `fov`, down the frame in degrees, if you know it. A zoom reads as a move along the camera's way, with a higher `error`. Use with `from`, `to`, and optionally `sequence` or `proposal`.", "properties": {"x": {"type": "number"}, "y": {"type": "number"}, "corners": {"type": "array", "items": {"type": "array", "items": {"type": "number"}}}, "inside": {"type": "array", "items": {"type": "array", "items": {"type": "number"}}}, "outside": {"type": "array", "items": {"type": "array", "items": {"type": "number"}}}, "box": {"type": "array", "items": {"type": "number"}}, "camera": {"type": "boolean"}, "fov": {"type": "number"}, "clip": {"type": "string"}}},
                     "facts": {"type": "boolean", "description": "With `media`: its fact sheet beside its index, the first time slowly: what the camera does in each shot (`camera`, such as `pan right` or `handheld`; `pan`, `tilt`, and `zoom` in shares of the frame a second, `roll` in degrees a second, and `agreeing`, how much of the picture follows that), how loud it is (`loudness`, in LUFS and dBTP), and in `notMeasured` what it does not say and why: faces, the subject, and on-screen text."},
                     "loudness": {"type": "boolean", "description": "How loud the sequence is as it plays, by R128, measured from its whole mix: `integrated` in LUFS beside the `target`, `range` in LU, `truePeak` in dBTP beside its `limit`, and the loudest three seconds (`shortTermMax`) and 400 ms (`momentaryMax`) with where each ends. A silent sequence has `integrated: null`. Measured once for a revision; a media's own loudness is in its `facts`. Use with `sequence` or `proposal` only."},
-                    "cuts": {"type": "boolean", "description": "How the cuts of the sequence's sound sit in the sound, measured from each media's own levels a hundredth of a second at a time and from its transcripts, so an edit is checked without listening: `summary` counts every cut as `quiet` (in a pause), `low` (through a breath or a decay), or `sound` (through sound at the level of speech), with `inWords` (inside a word a transcript heard), `tight` (quiet, but within 0.05 s of the sound the clip plays), `faded` (under a transition, not judged), `notMeasured`, and `air`, the `least` and `median` quiet a cut leaves beside what its clip plays, in seconds. `cuts` lists each that is not clean: its `clip` and which `end`, `at` on the sequence and `source` on the `media`, the level `before` and `after` it in dBFS, and the `word`. `media` gives the level each media speaks at and pauses under. With a transcript of what plays, `pauses` are the waits of 0.75 s or more still played between words, longest first, and `repeats` the words and phrases said twice in a row, with `cutTo` where a cut sits in one. A trim or split with `snap=pause` moves a cut into the nearest pause. Use with `sequence` or `proposal` only."},
+                    "cuts": {"type": ["boolean", "object"], "description": "How the cuts of the sequence's sound sit in the sound, measured from each media's own levels a hundredth of a second at a time and from its transcripts, so an edit is checked without listening: `summary` counts every cut as `quiet` (in a pause), `low` (through a breath or a decay), or `sound` (through sound at the level of speech), with `inWords` (inside a word a transcript heard), `tight` (quiet, but within 0.05 s of the sound the clip plays), `faded` (under a transition, which fades what the cut goes through, so the cut is not judged), `fadesInSound` (of those, a cut in quiet whose transition plays on past it into sound at the level of speech, what the cut left out heard fading: listed with `fade`, its `seconds` and `level`), `notMeasured`, and `air`, the `least` and `median` quiet a cut leaves beside what its clip plays, in seconds. `cuts` lists each that is not clean, 40 at most with `cutsNotListed` for the rest: its `clip` and which `end`, `at` on the sequence and `source` on the `media`, the level `before` and `after` it in dBFS, and the `word`. `media` gives the level each media speaks at and pauses under. `joins` are where the sound goes from one stretch of footage to another, in the order they play: what each `plays`, the words either side with ‖ for the cut, and what it `took` out, the words between where the one clip stops and the other starts with `tookSeconds`, or `replays` where the second starts back before the first stopped: read `plays` as a sentence, since a cut that takes a word the sentence needs measures clean. With a transcript of what plays, `pauses` are the waits still played between words, longest first, of 0.75 s or more unless `cuts` is {\"pauses\": <seconds>} (0.3 at least: what is dead air is the edit's to say); `repeats` the words and phrases said twice in a row; and `restarts` the phrases said and taken `again` a moment later, with what is said `between`: a start taken again, a take left beside the one that replaced it, or something meant, which the sentence tells. Each has `cutTo` where a cut sits in it. `from` and `to` take a part of the sequence, for one too long to list. A trim or split with `snap=pause` moves a cut into the pause beside it, past no word, and with a transcript into the gap two words said in one breath part for; `extract <clip> pause=\"…\" leave=<dur>` brings a pause listed here down to a length, by the words it comes after, and `extract <clip> said=\"…\"` takes a repeated word or phrase out. Use with `sequence` or `proposal`."},
                     "eye": {"type": ["boolean", "object"], "description": "Where the eye is either side of each cut of the sequence's picture, a cut being where one clip of a video track ends on the frame the next starts: `true`, or an object with `subjects`. Under `eye`, `summary` counts the `cuts`, those `read`, of them `held` (the subject jumps less than 0.1 of the frame's height, about what an eye sees sharply without moving) and `jumps`, `reversed`, `takes` (read in the takes too), and `notMeasured`; `cuts` lists each as it plays: `at`, the frame the second clip starts on, and the clips `from` and `to`. A cut is read where both clips play a shot whose steps draw its guide (`render <sequence> …`). `on` is what the eye is on in each: the clip of the guide's sequence its `generate` step names with `moves=`, the first of them, or the one `subjects` gives for that media, as {\"subjects\": {\"<media>\": \"<clip of its guide>\"}}. `guide` is read from the two guides' ids passes, as `shows` reads a clip, with nothing made: `out` and `in`, the subject's box on the last frame before the cut and on the first after it, [left, top, right, bottom] in shares of the program's frame, the clip being where the program has it, trimmed, retimed, scaled, turned, moved, cropped, or parented, and a guide of another rate, size, or shape than its take read at the moment and the place the take has of it; `jump`, how far the middle of the second is from the middle of the first, in frame heights; `across` and `down`, the same with their direction, above 0 to the right, and lower; `size`, how large the second is beside the first, above 1 larger; `going`, which way each goes across the frame over a quarter of a second before the cut and after it, `left`, `right`, or `still` (under 0.1 of a frame height a second), absent where a clip is a frame long or its guide does not show the subject that far off; and `reversed: true` where one goes left and the other right. `take` is the same boxes and numbers where both shots have a file: the subject found in the take's own picture on the frame at the cut, where the guide has it with room around it, as `placed` finds it, and in the guide's own picture the same way, the take's box being the guide's moved by how far apart those are. Where `guide` jumps and that is not meant, change a guide, which costs no making; where `guide` holds and `take` does not, the model did not keep its guide: make it again, or choose another take. `notMeasured` says why a cut was not read, in place of both readings: footage with no guide, a shot whose subject nothing names, a clip in depth, a mask, an effect that may move its picture (a grade, a blur, and grain are read through), a crop that cuts the subject, a subject its guide does not show there; under `take`, why the takes were not. `transition` names the transition across a cut, which is not read: the boxes are the two clips' at the cut. `under` lists the clips of tracks above that draw there and may hide it. A cut costs four small frames of its guides, about a tenth of a second, and half a second where the takes are read, so it is asked for and no part of a check; `from` and `to` choose the cuts of a range, and at most 64 are read (`unread`, how many more there are). What is said is what is so, not that it is wrong, and fails no check: a hard cut jumps on purpose. Use with `sequence`, `proposal`, `from`, or `to` only.", "properties": {"subjects": {"type": "object", "additionalProperties": {"type": "string"}}}, "additionalProperties": false},
                     "contrast": {"type": "boolean", "description": "Read each title and caption of the sequence over `from`–`to` (all of it by default) against what is behind it, from rendered frames, and return `contrast`, findings for those too faint to read or that do not show, with `read` and `of`, how many of them it read. Slower than a check, so it is not part of one; the editor's full QC has it as a row."},
                     "scopes": {"type": "boolean", "description": "With `at`: instead of frames, what scopes read at those program positions, as numbers, in each of `readings` under `scopes`: `luma`, `red`, `green`, and `blue` (`min`, `mean`, `max`, in percent); `clipped` (the share of samples at `black` and at `white`, each as [red, green, blue]); `zones` (the share of samples in `shadows`, under 25% luma, `midtones`, and `highlights`, over 75%); `histogram` (the share in each of 16 even bands of luma, darkest first); `chroma` (`castHueDeg` and `castMagnitude`, the mean color as an angle on the vectorscope and how far out in percent, a cast when it is far from 0; `saturation`, the mean of how far out each sample is; `onSkinLine`, the share of colored samples near the skin tone line); `peaks` (the densest colors, each `hueDeg`, `magnitude`, `share`). Angles are a vectorscope's, from +Cb: magenta 50, red 103, skin 123, yellow 175, green 230, cyan 283, blue 355. Grade by these: compare shots with each other and the result with where it should land; with `proposal`, each reading also has `before`, what the project reads there, so one call compares the two. Read from 8-bit frames, or in an HDR sequence from its PQ or HLG signal in BT.2020, with `hdr` saying what that comes to: `peakNits`, `meanNits`, `overWhite` and `outsideBt709` as shares of the samples, and `referenceWhite`, where SDR white falls on the signal in percent."},
@@ -334,7 +337,7 @@ pub(super) fn metadata(name: &str) -> Option<(&'static str, Value, ToolAnnotatio
                     "workflow": {"type": "object", "description": "The workflow the model of one `generate` step is run with, for a model whose graph node has a `runner`: `media` and the step's `line`, as `graph` gives it. `nodes` is every node of it in the file's order, each with its `class` and `inputs`: a `link` to another node's output, or a `value`, which with `blanks` is filled by the step. `blanks` says of each what fills it (`by`, `says`), its `default`, and what the step gives now (`given`). A value's input also says what the server takes there, asked of the model's own program: `choices` to choose among, or a number's `min`, `max` and `step`; `takenError` says why where it could not be asked. `origin` is `bundled` or `file` for a workflow as it comes, and `own` with its `file` for the shot's own copy. Used alone, or with `proposal`.", "properties": {"media": {"type": "string"}, "line": {"type": "integer", "minimum": 1}}, "required": ["media", "line"]},
                     "signal": {"type": "object", "description": "A signal's keys from a sound: `of` is a clip that plays a media with sound, music or what was recorded, and `clip` a `gen=signal@1` clip of the same sequence. It returns `script`, a `set <clip> value={…}` line to run with `edit`, which has the signal at 1 for `hold` frames (3 unless given) from each sound onset of `of` that falls in the signal clip and 0 between, onsets nearer than that running together; `onsets`, how many it placed, and `outside`, how many of the sound's fall outside the clip. Hold for as long as two of the model's frames last. Used alone.", "properties": {"of": {"type": "string"}, "clip": {"type": "string"}, "hold": {"type": "integer", "minimum": 1}}, "required": ["of", "clip"]},
                     "shows": {"type": "boolean", "description": format!("With `at`, program positions: what shows of each clip that draws there, whichever track it is on, in `frames`, each with `clips` from the lowest track up. `box` is where the clip would be with nothing before it, [left, top, right, bottom] in shares of the frame, absent when none of it is in the frame; `area` the share of the frame that is; `shows` the share of the frame it has as the frame is drawn; `hidden` the share of it other clips hide, and `by` which, each with its share, the most first; `edges` the edges of the frame it reaches, where it may go on past them; `opacity` where it is not wholly opaque, and such a clip has that much less of each pixel it is on, in `area` and in `shows`. A pixel clips share, along an edge or all over a clip of thin strokes, is each one's by its part of it. `empty` is the share of the frame no clip has. A nested sequence is one clip. A floor in `by` of what stands on it, a subject with no `box`, and a subject at an edge are what to mend. `unread` names clips left out, the lowest tracks' first: those past {most} on one frame, and one whose color in the ids pass a higher clip has too, which only a program of more than {colors} clips has. They are out of the frame that is read, and the others are read as if those were not there. Read on a small frame, to about a hundredth of it. Not with `media`.", most = kerf_engine::shows::MOST_CLIPS, colors = kerf_compose::ID_COLORS)},
-                    "stands": {"type": "boolean", "description": "What each clip in depth of the sequence stands on, measured in the scene with nothing drawn, in frame heights, down being the way `y` grows: under `stands`, `frames`, how many were read, every frame of the sequence unless `at` gives positions (`every` where one in that many was, of a long one); `ground`, the largest clip with nothing under it, which has no entry; and `clips`, from the lowest track up. A clip's feet are its lowest corners, and a line straight down through each meets the other clips' surfaces: a flat clip's rectangle, the box of one with a `depth`, a mesh's triangles as its file's animation has them on that frame. `on` is the clip under its feet, and of two it is as near to, an axle across two wheels, the one of the lower track. A clip that rests on it on every frame read has one entry, and no more is said of it than `slope`, how far from level what it stands on leans, in degrees, and `gap`, the room that leaves under its far feet where its own foot is level: it rests on the feet that are down first. Else it has an entry for each run of `frames`, [first, last] from 0, on which it does not rest: `floats`, how far it would come down to rest; `sunk`, how far its deepest foot is under a surface that goes through it, with `share`, how many of its feet are; or `air: true`, nothing under it within its own height, with `over` and `up` where something is further down. `worst` is the frame it is furthest off on. `script` is the line that sets it down, `set <clip> y=…`, one number or the fewest keys that keep it down on every frame read, in its own `y` under whatever parents it has; `cannot` says why where no line does. A clip that is in the air on some frame, a ball thrown, is brought up where it is sunk and left where it floats. Run the line with `edit` and read again: what stood on a clip that was moved has not moved with it. `through` lists the clips one of its edges goes through, other than what it stands on: `deep`, how far past that surface it reaches on the side it has less of, `share`, how much of it is on that side, and the `frames`. `notMeasured` names what of this scene was not read, which is not thereby right: a mesh into another mesh, the outline of a round shape within the box around it, a clip whose outline is its picture's own (a title, a nested sequence, a masked clip, media with alpha), and clips out of depth. A camera, a light, a null, and a signal are not things. A clip wholly under a surface other than the ground is taken to be under a roof. What is said is what is so, not that it is wrong, and fails no check. Not with `media`; with `shows`, both are answered."},
+                    "stands": {"type": "boolean", "description": "What each clip in depth of the sequence stands on, measured in the scene with nothing drawn, in frame heights, down being the way `y` grows: under `stands`, `frames`, how many were read, every frame of the sequence unless `at` gives positions (`every` where one in that many was, of a long one); `ground`, the largest clip with nothing under it, which has no entry; and `clips`, from the lowest track up. A clip's feet are its lowest corners, and a line straight down through each meets the other clips' surfaces: a flat clip's rectangle, the box of one with a `depth`, a mesh's triangles as its file's animation has them on that frame. The underside of what stands on a clip, a ball set a little way into the one under it, is no floor through the lower clip: the upper one is sunk in it, and a box, a ball, a cylinder, or a solid whose corners are over nothing stands by what is under its middle, a roof on walls it is wider than. `on` is the clip under its feet, and of two it is as near to, an axle across two wheels, the one of the lower track. A clip that rests on it on every frame read has one entry, and no more is said of it than `slope`, how far from level what it stands on leans, in degrees, and `gap`, the room that leaves under its far feet where its own foot is level: it rests on the feet that are down first. Else it has an entry for each run of `frames`, [first, last] from 0, on which it does not rest: `floats`, how far it would come down to rest; `sunk`, how far its deepest foot is under a surface that goes through it, with `share`, how many of its feet are; or `air: true`, nothing under it within its own height, with `over` and `up` where something is further down. `worst` is the frame it is furthest off on. `script` is the line that sets it down, `set <clip> y=…`, one number or the fewest keys that keep it down on every frame read, in its own `y` under whatever parents it has, said once for a clip, with the first of its entries it mends; `cannot` says why where no line does. A clip that is in the air on some frame, a ball thrown, is brought up where it is sunk and left where it floats. Run the line with `edit` and read again: what stood on a clip that was moved has not moved with it. `through` lists the clips one of its edges goes through, other than what it stands on: `deep`, how far past that surface it reaches on the side it has less of, `share`, how much of it is on that side, and the `frames`. `notMeasured` names what of this scene was not read, which is not thereby right: a mesh into another mesh, the outline of a round shape within the box around it, a clip whose outline is its picture's own (a title, a nested sequence, a masked clip, media with alpha), and clips out of depth. A camera, a light, a null, and a signal are not things. A clip wholly under a surface other than the ground is taken to be under a roof. What is said is what is so, not that it is wrong, and fails no check. Not with `media`; with `shows`, both are answered."},
                     "font": {"type": "string", "description": "A font family, or `sans-serif`, `serif`, or `monospace`: its faces, and for a variable font each axis with its `tag`, `min`, `default`, and `max`, on the font's own scale, which is what a `title`'s `wght`, `wdth`, `slnt`, `opsz`, and `ital` are set on. For a name no font has, the families that contain it; for \"\", all of them. Use alone."},
                     "effects": {"type": "string", "description": "Words for the look or moment you want, such as \"glow neon\", \"zoom hit\", or \"retro tv\": the effects, transitions, and generators whose id, category, guidance, or parameters match, best first, each with when to use it, and in `properties` the clip properties that do. Use alone, or with `area`."},
                     "area": {"type": "string", "enum": ["edit", "color", "motion", "vfx", "image"], "description": "With `effects`: only what belongs to this part of the editor."}
@@ -438,8 +441,9 @@ struct LookInput {
     contrast: bool,
     #[serde(default)]
     loudness: bool,
+    /// `true`, or from what length a pause the sequence still plays is listed.
     #[serde(default)]
-    cuts: bool,
+    cuts: Option<Value>,
     /// `true`, or what the eye is on in a shot whose steps do not say: where it is either
     /// side of each cut.
     eye: Option<Value>,
@@ -473,6 +477,39 @@ struct LookInput {
     workflow: Option<StepInput>,
     /// A media a recipe makes, to hold each of its takes to its guide.
     takes: Option<String>,
+}
+
+/// What `cuts` is given: nothing where it is not asked for, and else from what length a pause
+/// is listed, in seconds.
+fn cuts_asked(given: Option<&Value>) -> Result<Option<f64>, McpError> {
+    let wrong = || {
+        McpError::new(
+            "INVALID_ARGUMENTS",
+            format!(
+                "`cuts` is `true`, or says from what length a pause is listed, as {{\"pauses\": 0.5}}: \
+                 seconds, {} or more",
+                crate::cuts::LEAST_PAUSE_SECONDS
+            ),
+        )
+    };
+    match given {
+        None | Some(Value::Bool(false)) => Ok(None),
+        Some(Value::Bool(true)) => Ok(Some(crate::cuts::KEPT_PAUSE_SECONDS)),
+        Some(Value::Object(with)) => {
+            if with.keys().any(|name| name != "pauses") {
+                return Err(wrong());
+            }
+            match with.get("pauses") {
+                None => Ok(Some(crate::cuts::KEPT_PAUSE_SECONDS)),
+                Some(pauses) => pauses
+                    .as_f64()
+                    .filter(|seconds| *seconds >= crate::cuts::LEAST_PAUSE_SECONDS)
+                    .map(Some)
+                    .ok_or_else(wrong),
+            }
+        }
+        Some(_) => Err(wrong()),
+    }
 }
 
 /// What `eye` is given: nothing where it is not asked for, and else what the eye is on in
@@ -2562,11 +2599,12 @@ impl KerfMcpRouter {
             || input.sheet.is_some()
             || input.media.is_some()
             || input.track.is_some()
-            || input.contrast;
+            || input.contrast
+            || cuts_asked(input.cuts.as_ref())?.is_some();
         if !ranged && (input.from.is_some() || input.to.is_some()) {
             return Err(McpError::new(
                 "INVALID_ARGUMENTS",
-                "from and to choose a range for `transcript`, `sheet`, `contrast`, `eye`, or a media's onsets",
+                "from and to choose a range for `transcript`, `sheet`, `contrast`, `cuts`, `eye`, or a media's onsets",
             ));
         }
         if let Some(count) = input.sheet {
@@ -2641,7 +2679,7 @@ impl KerfMcpRouter {
             && !input.transcript
             && !input.contrast
             && !input.loudness
-            && !input.cuts
+            && matches!(input.cuts, None | Some(Value::Bool(false)))
             && input.track.is_none()
             && input.sheet.is_none()
             && input.sequence.is_none()
@@ -2721,8 +2759,8 @@ impl KerfMcpRouter {
             // Of the sequence only, which it says of a look that asks more.
             return self.program_loudness(&project, revision, &input);
         }
-        if input.cuts {
-            return self.program_cuts(&project, revision, &input);
+        if let Some(pauses) = cuts_asked(input.cuts.as_ref())? {
+            return self.program_cuts(&project, revision, &input, pauses);
         }
         let mut result = match input.media.as_deref() {
             None if input.contrast => self.program_contrast(&project, revision, &input)?,
@@ -3704,21 +3742,40 @@ impl KerfMcpRouter {
         project: &Project,
         revision: u64,
         input: &LookInput,
+        pauses: f64,
     ) -> Result<Value, McpError> {
         if input.media.is_some()
             || !input.at.is_empty()
-            || input.from.is_some()
-            || input.to.is_some()
             || input.transcript
             || input.loudness
             || input.sheet.is_some()
         {
             return Err(McpError::new(
                 "INVALID_ARGUMENTS",
-                "`cuts` is of a whole sequence's sound: use it with `sequence` or `proposal` only",
+                "`cuts` is of a sequence's sound: use it with `sequence` or `proposal`, and \
+                 `from` and `to` for a part of it",
             ));
         }
         let sequence = program(project, input.sequence.as_deref())?;
+        let range = if input.from.is_some() || input.to.is_some() {
+            let at = |text: &Option<String>, otherwise: Time| match text {
+                Some(text) => program_position(project, sequence, text),
+                None => Ok(otherwise),
+            };
+            let (from, to) = (
+                at(&input.from, Time::ZERO)?,
+                at(&input.to, sequence.duration())?,
+            );
+            if to <= from {
+                return Err(McpError::new(
+                    "INVALID_ARGUMENTS",
+                    "`to` must come after `from`",
+                ));
+            }
+            Some((from, to))
+        } else {
+            None
+        };
         let cache = DerivativeCache::new(&self.dir);
         let mut indexed = Vec::new();
         for cut in crate::cuts::sound_cuts(project, sequence) {
@@ -3733,7 +3790,12 @@ impl KerfMcpRouter {
                     kerf_engine::media_index(&path, &cache, &kerf_engine::CancellationToken::new());
             }
         }
-        let mut report = crate::cuts::report(project, sequence, &CachedFacts::new(&self.dir));
+        let mut report = crate::cuts::report(
+            project,
+            sequence,
+            &CachedFacts::new(&self.dir),
+            &crate::cuts::Asked { pauses, range },
+        );
         report["sequence"] = json!(sequence.id.to_string());
         report["revision"] = json!(revision);
         Ok(report)
@@ -4286,6 +4348,10 @@ impl KerfMcpRouter {
             "check": check,
             "preview": preview,
         });
+        // Where `snap=` put each edge it moved, which the diff shows only as where it is.
+        if !applied.snapped.is_empty() {
+            result["snapped"] = json!(applied.snapped);
+        }
         if !workflows.is_empty() {
             result["workflows"] = json!(workflows.iter().map(WorkflowKept::json).collect::<Vec<_>>());
         }

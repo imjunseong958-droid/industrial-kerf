@@ -174,8 +174,16 @@ fn an_agent_writes_a_makings_steps_in_the_document_and_makes_it() {
     assert_eq!((take["status"].as_str(), take["take"].as_u64()), (Some("made"), Some(1)), "{take}");
     assert_eq!(take["path"], "shots/gone.takes/001.mp4");
     assert!(dir.join("shots/gone.takes/001.work/man.mp4").is_file());
-    let request: Value =
-        serde_json::from_slice(&std::fs::read(dir.join("shots/gone.takes/001.work/request.json")).unwrap()).unwrap();
+    // Two models made it, and what each was asked is kept, by its step's number: the
+    // plate's request did not replace the matte's.
+    let asked = |step: u32| -> Value {
+        let file = dir.join(format!("shots/gone.takes/001.work/step{step}/request.json"));
+        serde_json::from_slice(&std::fs::read(&file).unwrap_or_else(|error| panic!("{}: {error}", file.display())))
+            .unwrap()
+    };
+    assert_eq!((&asked(1)["model"], &asked(1)["prompt"]), (&json!("matte"), &json!("man")));
+    assert!(!dir.join("shots/gone.takes/001.work/request.json").exists());
+    let request = asked(2);
     assert_eq!(request["model"], "plate");
     let handed = |name: &Value| name.as_str().unwrap_or_default().to_owned();
     assert!(handed(&request["guide"]).ends_with("/footage/walk.mp4"), "{request}");

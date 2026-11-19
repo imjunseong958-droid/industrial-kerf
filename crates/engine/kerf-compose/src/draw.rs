@@ -337,7 +337,45 @@ struct Rig {
     size: (u32, u32),
     fit: bool,
     path: Option<MotionPath>,
+    /// Its `z`, `rotate_x`, and `rotate_y` are its place in depth, which its children in depth
+    /// take with it: a clip in depth, or a null. On a flat clip that draws they are nothing, to
+    /// itself or to its children, and a camera and a light are turned by numbers of their own.
+    in_depth: bool,
     digest: Option<u64>,
+}
+
+impl SequencePlan {
+    /// The clips `clip` moves with, from the one it names outward.
+    fn parents_of<'a>(&'a self, clip: &'a Clip) -> impl Iterator<Item = &'a Rig> {
+        let mut parent = clip.parent.as_ref();
+        std::iter::from_fn(move || {
+            let rig = parent.and_then(|id| self.rigs.get(id))?;
+            parent = rig.clip.parent.as_ref();
+            Some(rig)
+        })
+    }
+
+    /// How the parents of `clip` have moved it across the canvas at sequence time `at`, in
+    /// canvas pixels: each one's [`parent_motion`], the one it names first.
+    fn moved_by_parents(&self, clip: &Clip, at: Time) -> Affine {
+        let canvas = (f64::from(self.width), f64::from(self.height));
+        self.parents_of(clip).fold(Affine::IDENTITY, |moved, rig| {
+            parent_motion(rig, canvas, at - rig.clip.start).then_apply(&moved)
+        })
+    }
+
+    /// Where the middle of a parent's picture is on the canvas at sequence time `at`, its own
+    /// parents having moved it: what it turns about in depth, and its children with it. As
+    /// the document says it, and not on the whole pixels a clip that holds still is drawn on.
+    fn middle_of(&self, rig: &Rig, at: Time) -> Vec2 {
+        let canvas = (f64::from(self.width), f64::from(self.height));
+        let numbers = geometry_numbers(&rig.clip, rig.path.as_ref(), at - rig.clip.start);
+        let own = placed(rig.size, rig.fit, false, canvas, numbers).0;
+        let middle = Vec2::new(f64::from(rig.size.0) / 2.0, f64::from(rig.size.1) / 2.0);
+        self.moved_by_parents(&rig.clip, at)
+            .then_apply(&own)
+            .apply(middle)
+    }
 }
 
 struct ClipPlan {
@@ -831,15 +869,12 @@ impl Drawing {
                 // read here is to be the same at any size.
                 let numbers = geometry_numbers(&plan.clip, plan.path.as_ref(), time);
                 let own = placed(plan.size, plan.fit, false, canvas, numbers).0;
-                let mut moved = Affine::IDENTITY;
-                let mut parent = plan.clip.parent.as_ref();
-                while let Some(rig) = parent.and_then(|id| sequence.rigs.get(id)) {
-                    moved = parent_motion(rig, canvas, at - rig.clip.start).then_apply(&moved);
-                    parent = rig.clip.parent.as_ref();
-                }
-                // One more of its own `y` is a frame's height down, before its parents move it.
+                let moved = sequence.moved_by_parents(&plan.clip, at);
+                // One more of its own `y` is a frame's height down, before its parents move it
+                // across the frame and then in depth.
                 let fall = (moved.c.abs() <= 1e-9 * moved.d.abs() && moved.d.abs() > 1e-9)
-                    .then_some(moved.d);
+                    .then_some(moved.d)
+                    .and_then(|fall| scene.falls(plan, fall));
                 let to_output = moved.then_apply(&own);
                 world
                     .clips
@@ -942,11 +977,10 @@ impl Drawing {
                 time.flicks().hash(hash);
                 clip.shown.to_bits().hash(hash);
                 clip.letterboxed.hash(hash);
-                let mut parent = clip.clip.parent.as_ref();
-                while let Some(rig) = parent.and_then(|id| plan.rigs.get(id)) {
+                // All of a parent, its place in depth with the rest, and when in it this is.
+                for rig in plan.parents_of(&clip.clip) {
                     rig.digest?.hash(hash);
                     (at - rig.clip.start).flicks().hash(hash);
-                    parent = rig.clip.parent.as_ref();
                 }
                 if clip.reads_sequence_time {
                     at.flicks().hash(hash);
@@ -1673,16 +1707,13 @@ impl Drawing {
     /// Where a clip's source pixels land on the canvas at clip time `time`,
     /// in canvas pixels: cropped, fitted, scaled, flipped, rotated about
     /// its anchor, and moved, as the graph places it, and then moved with each of its parents.
+    /// Where its parents are in depth is not in this: a clip in depth takes that where its
+    /// plane is made ([`three_d::Plane::of`]), from the scene.
     fn geometry(&self, sequence: &SequencePlan, plan: &ClipPlan, time: Time) -> Affine {
         let canvas = (f64::from(sequence.width), f64::from(sequence.height));
-        let mut geometry = place(plan, canvas, time).0;
-        let at = plan.clip.start + time;
-        let mut parent = plan.clip.parent.as_ref();
-        while let Some(rig) = parent.and_then(|id| sequence.rigs.get(id)) {
-            geometry = parent_motion(rig, canvas, at - rig.clip.start).then_apply(&geometry);
-            parent = rig.clip.parent.as_ref();
-        }
-        geometry
+        sequence
+            .moved_by_parents(&plan.clip, plan.clip.start + time)
+            .then_apply(&place(plan, canvas, time).0)
     }
 
     /// Run a clip's effects before the one at `upto` on its picture at clip
@@ -2432,6 +2463,7 @@ impl<'a> Builder<'a> {
                         size: plan.size,
                         fit: plan.fit,
                         path: plan.path.clone(),
+                        in_depth: plan.three_d || is_null(&plan.clip),
                         digest: plan.digest,
                     },
                 )
@@ -2974,8 +3006,15 @@ fn placed(
     (Affine::motion(position, scale, rotation, anchor), scale)
 }
 
+/// Whether a clip is a null: it draws nothing, and is there for other clips to move with.
+fn is_null(clip: &Clip) -> bool {
+    matches!(&clip.content, Content::Generator { fx, .. } if fx.as_str() == "null")
+}
+
 /// How a parent has moved its children at its clip time `time`: from where it would sit with no
-/// position, scale, or rotation of its own, to where it is.
+/// position, scale, or rotation of its own, to where it is. Across the frame, which is all of it
+/// for a flat child; one in depth is then turned and moved back with it
+/// ([`three_d::Scene::at`]).
 fn parent_motion(rig: &Rig, canvas: (f64, f64), time: Time) -> Affine {
     let numbers = geometry_numbers(&rig.clip, rig.path.as_ref(), time);
     let [l, r, t, b, _, _, _, _, ax, ay, _, _] = numbers;
@@ -3363,6 +3402,7 @@ mod tests {
                 size,
                 fit,
                 path,
+                in_depth: true,
                 digest: None,
             };
             let moved = parent_motion(&rig, canvas, Time::ZERO);
@@ -3374,11 +3414,13 @@ mod tests {
         }
     }
 
-    /// The same table holds the editor's overlays to this, in `graph_test.cpp`
+    /// The same table holds the editor's overlays to this, in `motion_path_test.cpp`
     /// (`clipsInDepthLandAsTheCompositorDrawsThem`). Each row is a camera, a parent, a clip, its
     /// picture's size and whether it is fitted, and the canvas; then a point of the picture, in
     /// fractions of it, and where on the canvas it lands, or that no pixel shows it. A row with a path
-    /// names the clip's anchor, which the path says the place of.
+    /// names the clip's anchor, which the path says the place of. The parent is a null, so its `z`,
+    /// `rotate_x`, and `rotate_y` are the clip's with its own: the last rows, the first two of them
+    /// landing where a clip with those numbers itself does, further up.
     #[test]
     fn a_clip_in_depth_lands_where_the_table_says() {
         type Row = (
@@ -3392,7 +3434,7 @@ mod tests {
             Option<(f64, f64)>,
         );
         #[rustfmt::skip]
-        let table: [Row; 25] = [
+        let table: [Row; 30] = [
             ("", "", "three_d=true", (1920, 1080), false, (1920, 1080), (0.25, 0.75), Some((480.0, 810.0))),
             ("", "", "three_d=true z=1", (1920, 1080), false, (1920, 1080), (0.0, 0.0), Some((404.425304296, 227.489233666))),
             ("", "", "three_d=true z=-0.5 x=0.25 y=-0.25 scale=0.5", (1920, 1080), false, (1920, 1080), (1.0, 1.0), Some((2469.363321845, 540.0))),
@@ -3419,6 +3461,11 @@ mod tests {
             ("", "", "three_d=true x=0.1 rotate_y=90", (1920, 1080), false, (1920, 1080), (0.75, 0.5), Some((1243.825954944, 540.0))),
             ("pan=80", "", "three_d=true", (1920, 1080), false, (1920, 1080), (0.0, 0.5), None),
             ("pan=80", "", "three_d=true", (1920, 1080), false, (1920, 1080), (1.0, 0.5), Some((-636.292895473, 540.0))),
+            ("", "z=1", "three_d=true", (1920, 1080), false, (1920, 1080), (0.0, 0.0), Some((404.425304296, 227.489233666))),
+            ("", "rotate_y=60", "three_d=true", (1920, 1080), false, (1920, 1080), (1.0, 1.0), Some((2051.824322445, 1768.30236275))),
+            ("", "x=0.1 y=-0.05 z=0.3 rotate_x=-20 rotate_y=35", "three_d=true z=0.2 rotate_y=15 x=0.2 scale=0.5", (1920, 1080), false, (1920, 1080), (0.25, 0.75), Some((1304.251220744, 671.403611257))),
+            ("pan=10 tilt=-5", "x=-0.1 rotation=20 scale=0.8 z=0.5 rotate_y=-40", "three_d=true z=-0.1 rotate_x=25 y=0.15 scale=0.6", (1920, 1080), false, (1920, 1080), (0.9, 0.2), Some((806.73633729, 481.710745385))),
+            ("", "anchor_x=0.25 rotation=15 rotate_y=50 z=0.2", "three_d=true x=0.3", (1920, 1080), false, (1920, 1080), (0.5, 0.5), Some((1395.719634219, 568.948088124))),
         ];
         for (camera, rig, set, size, fit, canvas, from, to) in table {
             let line = |set: &str| {

@@ -288,6 +288,20 @@ impl Mesh {
         }
     }
 
+    /// Whether its surface closes round it: a file's mesh none of whose edges is open, and a
+    /// box, a ball, or a cylinder, which are made closed, unless it has no size one way and
+    /// so nothing inside it.
+    fn closed(&self) -> bool {
+        match &self.file {
+            Some(read) => read.closed(),
+            None => (0..3).all(|axis| {
+                let along = self.points.iter().map(|point| point[axis]);
+                along.clone().fold(f64::NEG_INFINITY, f64::max)
+                    > along.fold(f64::INFINITY, f64::min)
+            }),
+        }
+    }
+
     fn part_of(&self, triangle: usize) -> Option<&Part> {
         let part = self.parts.partition_point(|part| part.end <= triangle);
         self.parts.get(part)
@@ -725,20 +739,37 @@ fn in_world(mesh: &Mesh, plane: &Plane, size: (f64, f64)) -> (Vec<Vector>, [Vect
     (points, ways)
 }
 
+/// A mesh in the world at a moment.
+pub(in crate::draw) struct InWorld {
+    /// Its corners, as its file's animation has them then.
+    pub points: Vec<Vector>,
+    /// Its triangles, by their corners.
+    pub triangles: Vec<[u32; 3]>,
+    /// Whether its surface closes round it ([`Mesh::closed`]).
+    pub closed: bool,
+    /// Whether it is a box, a ball, or a cylinder, which bulge nowhere inward: what is
+    /// between any of its corners is inside it. Of a file's mesh that is not known.
+    pub convex: bool,
+}
+
 /// The mesh of the clip of `plan` at clip time `time` in the world, where `to_output` puts its
-/// clip: its corners, as its file's animation has them then, and its triangles by their
-/// corners.
+/// clip.
 pub(in crate::draw) fn in_the_world(
     scene: &Scene,
     plan: &ClipPlan,
     to_output: &Affine,
     time: Time,
-) -> (Vec<Vector>, Vec<[u32; 3]>) {
+) -> InWorld {
     let mesh = Mesh::of(&plan.clip, plan.clip.start + time);
     let size = (f64::from(plan.size.0), f64::from(plan.size.1));
     let plane = Plane::of(scene, plan, size, to_output, time);
     let (points, _) = in_world(&mesh, &plane, size);
-    (points, mesh.triangles)
+    InWorld {
+        points,
+        closed: mesh.closed(),
+        convex: mesh.file.is_none(),
+        triangles: mesh.triangles,
+    }
 }
 
 /// A mesh as what may stand in a light's way: its triangles in the world, in a tree of boxes
@@ -1006,7 +1037,7 @@ impl Standing {
         time: Time,
         opacity: f32,
     ) -> Self {
-        let (points, triangles) = in_the_world(scene, plan, to_output, time);
+        let InWorld { points, triangles, .. } = in_the_world(scene, plan, to_output, time);
         let corners = triangles
             .iter()
             .map(|triangle| triangle.map(|corner| points[corner as usize]))
@@ -1454,19 +1485,15 @@ mod tests {
             }
             // Closed: every edge between two different places is one of two triangles, counted by
             // where its ends are, since a corner is told again for each way it faces.
-            let key =
-                |index: u32| mesh.points[index as usize].map(|value| (value * 1e6).round() as i64);
-            let mut edges = std::collections::BTreeMap::new();
-            for triangle in &mesh.triangles {
-                for side in 0..3 {
-                    let (a, b) = (key(triangle[side]), key(triangle[(side + 1) % 3]));
-                    if a != b {
-                        *edges.entry((a.min(b), a.max(b))).or_insert(0) += 1;
-                    }
-                }
-            }
-            assert!(edges.values().all(|count| *count == 2), "an edge is open");
+            assert!(super::super::gltf::closes(&mesh.points, &mesh.triangles), "an edge is open");
+            assert!(mesh.closed());
         }
+        // One with no size one way has nothing inside it, and one with a side taken off is open.
+        assert!(!Mesh::a_box([1.0, 0.0, 3.0], [1.0; 3]).closed());
+        let mut open = Mesh::a_box([1.0, 2.0, 3.0], [1.0; 3]);
+        open.triangles.truncate(open.triangles.len() - 2);
+        assert!(!super::super::gltf::closes(&open.points, &open.triangles));
+        assert!(!super::super::gltf::closes(&[], &[]));
     }
 
     #[test]
@@ -1699,6 +1726,7 @@ mod tests {
             standing: InTheWay::of(solids()),
             focus: 0.0,
             aperture: 0.0,
+            carried: HashMap::new(),
         };
         let meshes = &scene.standing.meshes;
         let shadow = 0.8f32;

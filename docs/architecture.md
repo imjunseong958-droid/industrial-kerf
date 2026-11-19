@@ -661,6 +661,40 @@ What is built for it, in this order, each measured before the next:
    last places come to
    (`what_is_as_near_to_two_clips_is_on_the_lower_tracks_on_every_frame`).
 
+   What came of a snowman (2026-11-19). Nine scenes were blocked from solids
+   for a model to film, kept with the steps that make each shot of them in
+   `fixtures/shots/solids`, and of every thing stacked the lower part was said to
+   be sunk in the upper: a snowman's base 0.494 in its belly, a barn 0.743
+   in its roof, a cow's legs in its body, a lantern in its cap, with the line
+   that would have set each on top of what stands on it. A line down through
+   a foot starts at its clip's top, and where the upper part reaches a little
+   way into the lower, as a ball set on a ball has to, it starts inside the
+   upper part and comes out by its underside, which was taken for a floor
+   through the lower. A thing whose surface closes round it has an inside
+   (`InDepth::closed`: a solid, a box, a ball, a cylinder, and a file's mesh
+   with no open edge, found once of its corners at rest), and the surface a
+   line leaves it by is passed (`stands::comes_to`): the lower part stands as
+   it stood, and the upper is the one sunk in it, by how far it reaches in.
+   Inside is asked a hair toward the clip's own middle, a line down the very
+   edge of a crate under a crate as wide running along surfaces. A flat clip
+   and a mesh that is open, a set rebuilt from a shot, are read as they were,
+   every surface a floor. So the cart's axle, whose ends are inside its
+   wheels, is over the road and no longer over the inside of a wheel.
+
+   And what is wider than what it stands on was in the air, or over the
+   floor: a roof on its walls, a hat's brim on a head, their corners having
+   nothing under them. A thing that bulges nowhere inward (`InDepth::convex`:
+   all but a file's mesh, a table on four legs) has its underside between its
+   lowest corners, so one whose corners are down on nothing is read with the
+   middle of them as one foot more, where that comes down first; and a clip
+   none of whose feet is on anything is sunk by the few that are in
+   something, which were passed over as a corner that dips
+   (`what_stands_on_a_clip_and_reaches_into_it_is_sunk_and_the_clip_under_it_is_not`,
+   `a_clip_wider_than_what_it_stands_on_stands_by_the_feet_that_are_over_it`).
+   One whose corners are down is down, and what is under its middle goes
+   through it. The line that sets a clip down is said once for the clip, a
+   foot that lifts on every step having had its keys again with each run.
+
    What it costs, on four cores, the compositor's plan of the sequence
    included: the car's scene, three clips in depth, 0.6 ms for three frames
    and 3.2 ms for all 96; with a ball of 2,208 triangles beside the car,
@@ -743,6 +777,55 @@ What is built for it, in this order, each measured before the next:
    software GPU; a frame whose lights cast shadows or shine from a
    picture is still the CPU's. It has been handed to a model: the crate of
    Next 3 is one, in the guide of every take there.
+   A thing of several meshes is one thing by `parent=` (2026-11-19). Nine
+   guide scenes were blocked that day with a robot of nine parts under a
+   null, and the null's `z` moved none of them: a parent's motion was the
+   2D one alone, and each part's `z` and turns were read from the part. So
+   every part was given the same keys by hand, and a thing could not be
+   turned about its upright at all without working out each part's `x` and
+   `z`. Now a parent in depth takes its children in depth with it. A
+   child's plane is made as it was, its parents' position, scale, and
+   rotation with its own and then its own `z` and turns about its own
+   middle; then each parent, from the one it names outward, turns that
+   plane by its `rotate_x` and `rotate_y` about the parent's own middle
+   and moves it back by its `z`, which keeps every length and angle of
+   it (`three_d.rs`, `Carried`). With no parent in depth nothing is
+   changed, to the last place of every row the table of placements had
+   (`a_clip_in_depth_lands_where_the_table_says`). A parent that draws and
+   is in depth is the same motion applied to itself, so a head on a body
+   is on it. Decided with it: a null needs no `three_d` to lead; a flat
+   clip that draws leads nowhere in depth, its `z` being nothing to itself
+   either; a flat child keeps to the frame, since putting it in depth
+   would have it sorted, cut, and lit as it was not, and `three_d=true`
+   says that; a parent's `scale` is not a scale of the `z` between its
+   children, which stays what each child says; and a parent's turns are
+   about the frame's level and upright lines, as a clip's own are, so one
+   turned on the frame by `rotation` does not tip its upright. A camera
+   and a light with a parent go the same way, where they went nowhere
+   before: where they are by the parent's motion on the frame and then in
+   depth, and the way a camera looks and a directional light shines by as
+   much as the parent turns. So a camera on a null at a thing's middle
+   goes round the thing, and a scene all of which is on one null,
+   camera and lights with it, is the same picture wherever the null goes
+   (`tests/parent_depth.rs`, which holds that in the picture and in the
+   ids, depth, and normals passes, and holds a rig to its parts placed by
+   hand). What it took was one place: every plane of a clip is made by
+   `Plane::of`, by the CPU and for the GPU alike, for the picture, the
+   passes, a shadow's casters, a mesh's triangles, and what `look` with
+   `stands` measures, and each is handed the scene of its moment; so the
+   scene, which is made from the sequence and its parents, holds each
+   clip's motion in depth and the plane takes it there, and none of those
+   who ask could leave it out. `stands` reads a child where it is drawn,
+   and gives no line for one a parent tips, whose own `y` then moves it
+   back as well as down; one turned about its parent's upright is set down
+   as ever. A frame is kept by a number that had all of a parent in it
+   already. Check says of a null's `z` or turns that they move nothing
+   where no clip in depth, camera, or light is on it, and of a flat clip
+   on a parent in depth that it stays on the frame; it had said that a
+   light over nothing but meshes falls on nothing, which was wrong. The
+   editor's overlays, a mask's outline and a motion path on the picture,
+   go through the same motion (`editor_common.cpp`, `carriedBy`), held to
+   the compositor by the rows the two tables share.
 5. **A making that streams**, last. Models that answer in under a second
    are reported, on data-center cards and at small sizes for now. A making writes
    files in steps, and a draft that is not kept wants a way of its own: the
@@ -1263,43 +1346,156 @@ keeps the level of a media's sound for each hundredth of a second, read at 16 kH
 is in it (`kerf_engine::cached_media_sound`), and `kerf_lang::Sound` reads it by the recording's
 own levels: its room tone is the level a tenth of what sounds stays under, its speech the level it
 is over for the loudest seventh, and quiet is within 8 dB of the first and at least 15 dB under the
-second. A fixed -35 dB, which the index went by before, calls a noisy room all sound and takes the
+second. A recording of more than a minute is read half a minute at a time, each by its own room
+(2026-11-19), since a room changes, as when a fan comes on, and by one room tone for a whole file
+the louder part of it had no pause at all; a half minute nobody speaks in, or nobody stops in,
+goes by the nearest that tells. And a tick, lips parting for two hundredths of a second or less
+and too low to follow, does not end a quiet that has lasted a tenth of a second: sooner after a
+sound it may be a stopped consonant let go, and is left as the sound it is. A fixed -35 dB, which the index went by before, calls a noisy room all sound and takes the
 last of a word for the pause after it: on 3.7 minutes of read speech (LJ Speech, public domain),
 at 21 of the 46 places `snap=pause` then put an edge after a word, the sound was still over that
 recording's quiet, -47 dB (worked out beside this work, by the same rule; no test holds it).
 `snap=pause`
 takes a quiet of 0.16 s or more, where it took 0.35 s, leaves 0.15 s after the sound before an
 edge and 0.1 s before the sound after it, and puts the edge on the nearest frame still inside the
-pause. A check judges each cut of a sequence's sound the same way (`kerf-mcp/src/cuts.rs`): a cut
+pause.
+
+An edge is taken past no word (2026-11-19). It went into the nearest pause whichever way that
+was, and where the nearest was beyond a word the edit came back with that word in, or out, and
+nothing said so: 20 of the 308 cuts placed on the recording below, each moved a third to half a
+second. An edge now goes into the quiet it is in, or into the one at the nearer end of the sound
+it is in, and no further (`kerf_lang::Breaks::snaps`); where the nearer end will not do, the other
+is not taken in its place, since most of that sound lies before it. Where a transcript has words
+it goes past no more than half of what any of them sounds for either, because two words said with
+nothing between them are one sound to the levels. A word sounds where its times are not quiet: a
+transcript stretches a word over the pause beside it, and by the middle of a word's times, one
+timed from halfway through the pause before it let an edge past all of its sound (found taking
+each word of the recording below out by name). What an edit answers with says how far each edge
+went, into what, and between which words it now is (`snapped`), since the document shows where
+an edge is and not that it was asked for elsewhere; and a line that is refused names the pause it
+could not take and the word in the way.
+
+Two words said in one breath often part for a tenth of a second or so: quiet by the recording's
+own levels, too short for a pause, and as long as a consonant held in the middle of one word,
+which the levels cannot tell it from. A transcript can, loose as its times are. A quiet of 0.1 s
+to 0.16 s that a transcript covers, and that no word of it is timed right through with more than
+0.06 s to spare at both ends, is between two words, and an edge may go into it, on a frame of its
+middle half; one a word is timed through is a consonant held, and is no end of that word's sound.
+With no transcript such a gap is neither taken nor gone past, and the refusal says to make one.
+
+Words and pauses come out by name (2026-11-19). Taking a word out took two snapped splits and a
+`ripple-delete`, each at a time read off a transcript; and since a snapped edge stays where it is
+asked for when that is already in a pause, what was left was the pause before the word and the
+pause after it, whole. `extract <clip> said="…"` does it in one line (`Script::said` in
+`kerf-lang/src/script.rs`): the range starts in the quiet before the words, as soon after the
+sound before them as an edge's air allows, and ends in the quiet after, as near the sound that
+follows, so the words go with the quiet round them and one pause is left, 0.25 s unless `leave=`
+gives another. A longer pause is longer before the cut, where a word dies away, and the voice
+comes in 0.1 s after the cut whatever the pause (`kerf_lang::airs`): Scarlet, which divided a
+pause in proportion, found the voice coming in later the longer the pause, heard as a wait after
+each cut. `extract <clip> pause="…"` brings the pause after those words down to `leave` the same
+way, as far as the next word the clip plays. A breath in it goes with it; sound at the level of
+speech there that no word accounts for refuses the line, since a gap in a transcript is not a
+pause until the recording says so. And `lift` and `extract` take `snap=` for two positions where
+they name the clip whose sound to go by. The quiet each edge goes into is the one a snapped edge
+asked for at the word's time would go into, so nothing here goes past a word either: words that
+run on into what stays have no quiet on that side, and the line is refused with the word in the
+way.
+
+A check judges each cut of a sequence's sound the same way (`kerf-mcp/src/cuts.rs`): a cut
 with sound at the level of speech on both sides goes through it (`cut.in_sound`), whether or not a
-transcript has a word there; a cut in a pause is not said to be in the word a transcript stretches
-over it; and the pauses of 0.75 s or more and the words said twice in a row that the cut still
-plays are said as information (`pause.kept`, `word.repeated`), since an edit reads the footage and
-not what it leaves. A sound that holds one level, a room's own tone or music mastered loud, has
-no pauses and judges no cut. `look` with `cuts` gives all of it as numbers.
+transcript has a word there; a cut under a transition is not judged, since the transition fades
+what it goes through, but one that is in quiet and whose transition plays on past it into sound
+at the level of speech is said (`cut.fade_in_sound`, 2026-11-19), since a crossfade plays each
+clip beyond its cut by half its length, and beyond a cut put in the pause before a word that was
+taken out lies that word, heard fading; a cut in a pause is not said to be in the word a transcript stretches
+over it, nor is one in a gap unless the word is timed right through the gap, so what `snap=pause`
+places is never then said to be in a word; and the pauses of 0.75 s or more, the words said
+twice in a row, and the phrases taken again a moment later that the cut still plays are said as
+information (`pause.kept`, `word.repeated`, `phrase.restarted`), since an edit reads the footage
+and not what it leaves. A phrase taken again is three words or more, of two different ones at
+least, said again within twelve words and twelve seconds, with what was said between or a word
+more or less in the second saying: a start taken again, or a take left beside the one that
+replaced it, which a doubled word is not found by. It may be meant, as a list is, and the sentence
+tells; the check says where. A sound that holds one level, a room's own tone or music mastered
+loud, has no pauses and judges no cut.
+
+`look` with `cuts` gives all of it as numbers, and what each join plays (`joins`): the words
+either side of where the sound goes from one stretch of footage to another, with the cut marked,
+and the words it left out between them. A cut that takes "a very simple" out of "I gave it a
+very simple prompt" has both its edges in quiet and every word whole, and measures clean; read
+as "I gave it ‖ prompt" it does not. Scarlet goes on to name a cut that takes a word or two more
+than the restart it removes, from the words alone; that is left, having no cuts here to hold it
+to, and what a join plays is there to read. The length a pause is listed from is the edit's to
+say (`{"pauses": 0.5}`, 0.3 s at least), since what is dead air depends on the pace: a fixed
+three quarters of a second hid every pause a tighter cut would take. And `from` and `to` take a
+part of a sequence, where the lists, which stop at 40 cuts and joins and 8 of the rest, said
+nothing of what they left out.
 
 Measured by `kerf-mcp/tests/cut_edges.rs` on a recording made there, so that where each word
 starts and ends is known: 420 voiced words with a decay, some with a hiss before or after, some
 with the gap of a stopped consonant, in a room at -55 dBFS and again at -38 dBFS, a cut asked for
-in every gap of 0.1 s or more, as far out as a transcript is, on a 24 fps frame. Nobody listened
-to it, and it is not speech:
+in every gap of 0.1 s or more, as far out as a transcript is, on a 24 fps frame. The transcript,
+where there is one, parts each two words where the cut between them is asked for, so its times
+are as far out as the cuts. Nobody listened to it, and it is not speech:
 
-| Room | Placing | Placed | Refused | In a word | Hard against one |
-|---|---|---|---|---|---|
-| -55 dBFS | as asked | 386 | 0 | 112 | 105 |
-| | `snap=pause` before | 106 | 280 | 8 | 9 |
-| | `snap=pause` now | 306 | 80 | 0 | 1 |
-| -38 dBFS | as asked | 418 | 0 | 51 | 99 |
-| | `snap=pause` before | 65 | 353 | 0 | 2 |
-| | `snap=pause` now | 408 | 10 | 0 | 8 |
+| Room | Placing | Placed | Refused | In a word | Across a word | Hard against one |
+|---|---|---|---|---|---|---|
+| -55 dBFS | as asked | 386 | 0 | 112 | 0 | 105 |
+| | `snap=pause` at first | 106 | 280 | 8 | 15 | 9 |
+| | into the nearest pause | 308 | 78 | 0 | 20 | 1 |
+| | now, with no transcript | 288 | 98 | 0 | 0 | 1 |
+| | now, with a transcript | 386 | 0 | 0 | 0 | 18 |
+| -38 dBFS | as asked | 418 | 0 | 51 | 0 | 99 |
+| | `snap=pause` at first | 65 | 353 | 0 | 11 | 2 |
+| | into the nearest pause | 408 | 10 | 0 | 7 | 10 |
+| | now, with no transcript | 401 | 17 | 0 | 0 | 9 |
+| | now, with a transcript | 418 | 0 | 0 | 0 | 12 |
 
-Hard against a word is less than 0.05 s after one ends or 0.03 s before one starts. A cut is
-refused where no pause is within half a second of it. The 8 are a hiss barely over the room's
-tone, which reads as the room. A check called every cut
-through a voice sound (17 of 17 and 9 of 9), none sound that was in no word, and every cut clear
-of a word quiet. Not done: a cut in the dip between two words run together, which needs a
-transcript to tell it from a stopped consonant, and so a pause under 0.16 s; and a room whose
-level drifts over an hour, since one room tone is taken for a whole file.
+Hard against a word is less than 0.05 s after one ends or 0.03 s before one starts, and across a
+word is on the other side of a whole word from the two the cut was asked between. With no
+transcript a cut is refused where the quiet beside it is no pause: the 98 and the 17 are every cut
+asked for between two words 0.1 s to 0.16 s apart, which until now were refused (78 and 10) or
+taken across a word (20 and 7). With a transcript all of them are placed, in a gap with less air
+to leave than a pause has: 17 of those 98 and 3 of those 17 are hard against a word, and none is
+in one. The other 1 and 9 are in pauses; the 9 are a hiss barely over the room's tone, which reads
+as the room. (Read as one room, before each half minute had its own, the rows were a cut or three
+off these: 285 and 101 where 288 and 98 are, and 7 hard where 9 are.) A check called every cut
+through a voice sound (17 of 17 and 9 of 9), none sound that was in no word, every cut clear of a
+word quiet, and every cut placed with a transcript quiet and in no word (386 and 418). Each word
+taken out by its name (`lift a1 said=…`), with the same transcript: 394 of 418 in the quiet room,
+each the whole word and nothing of the words beside it, the other 24 refused for running on into
+one of those; and all 418 in the noisy room, 2 of them with 0.03 s left of a hiss that leads the
+word and reads as the room. The pause left is 0.20 s and 0.22 s at the middle one, under the 0.25
+s asked for where a gap or a frame leaves less.
+
+The same cuts in two more rooms (`a_tick_and_a_room_that_changes_leave_a_pause_a_pause`), each
+before and after the reading above: the quiet room with a tick of 12 ms an eighth of a second
+before each word that follows 0.3 s or more, and a room that goes evenly from -55 dBFS to
+-38 dBFS over the recording, where a word is heard down to 6 dB over the room as it then is:
+
+| Room | Reading | Transcript | Placed | Refused | In a word | Across a word | Hard against one |
+|---|---|---|---|---|---|---|---|
+| Ticks | before | none | 265 | 121 | 0 | 0 | 1 |
+| | now | none | 271 | 115 | 0 | 0 | 1 |
+| | before | one | 381 | 5 | 0 | 0 | 26 |
+| | now | one | 380 | 6 | 0 | 0 | 18 |
+| -55 to -38 dBFS | before | none | 240 | 172 | 0 | 0 | 2 |
+| | now | none | 348 | 64 | 0 | 0 | 1 |
+| | before | one | 304 | 108 | 0 | 0 | 7 |
+| | now | one | 412 | 0 | 0 | 0 | 8 |
+
+A room read where it is gives back every cut its change had taken: by the one room tone of the
+whole recording, nothing in its louder end came down to what was quiet at its start. A tick gains less than it might, 6 cuts and 8 fewer hard against a word: most of
+these ticks come within a tenth of a second of where the word before them has died away, and
+those are left as sounds. Not done: an edge between two words with no quiet
+between them at all, where the level only dips, since a syllable leaves such a dip inside a word
+too and telling them apart takes word times closer than a transcriber's (the recording here has
+none: every two of its words are 0.08 s apart or more); the 0.1 s tried on real speech, since it
+is set by this recording's stopped consonants, which hold 0.09 s at most, and where a language
+holds one longer only the transcript says so; a change of room found where it happens, which is
+now somewhere in the half minute it falls in; and a breath taken for part of the pause it is in,
+which an edge still stops short of.
 
 The picture of a cut is read from what the document has too, where the two clips are shots
 whose guides it holds (`kerf_engine::eye`, `look` with `eye`, 2026-11-18). A model makes each
@@ -1693,16 +1889,33 @@ x64, and Linux x86-64 as new as Ubuntu 24.04.
   a plain one, since a model covers it. Kerf takes the assets, as files a
   step makes, and builds none of the models (What directs a model, Next
   2).
-- **[Scarlet](https://github.com/Forward-Future/scarlet)** (MIT, reviewed at `9f966e9`) is an
-  editor for dialogue that agents cut: TypeScript over FFmpeg filter graphs, with nothing to take
-  for the picture. What it measures of a cut was worth doing our own way, and is (Edit): levels
-  kept fine enough to place an edge between syllables, an edge judged by the recording and not by
-  a transcript's times, more quiet left after a word than before one, the pauses and doubled
-  words an edit still plays, and a score of all of it against a recording whose words are known.
-  Left: its forced alignment of words (wav2vec2, a model of English letters), its filler and
-  transcription models (their own licenses, one not for commercial use), reading the text on a
-  screen, and telling speakers apart. Not yet looked at closely: encoded sections kept by what
-  they depend on and joined without encoding again, where Kerf encodes a whole program each time.
+- **[Scarlet](https://github.com/Forward-Future/scarlet)** (MIT, reviewed at `9f966e9` and again
+  at `6e93a9e`, 577 commits on) is an editor for dialogue that agents cut: TypeScript over FFmpeg
+  filter graphs, with nothing to take for the picture. What it measures of a cut was worth doing
+  our own way, and is (Edit): levels kept fine enough to place an edge between syllables, an edge
+  judged by the recording and not by a transcript's times, more quiet left after a word than
+  before one, the pauses and doubled words an edit still plays, and a score of all of it against a
+  recording whose words are known; and from the second reading, an edge moved past no word, each
+  move said with the words it ended between, an edge put between two words said in one breath,
+  words taken out, or a pause brought down to a length, by one line that names them, with the
+  pause that is left played before the cut, a phrase found that is taken again with other words
+  between its two sayings, what each join plays and took out, a pause listed from the length an
+  edit names, a room read where it is and a tick left in its pause, and what a crossfade plays
+  past the cut it is on.
+  Its encoded sections, kept by what they depend on and joined without encoding again, are done
+  too (The engine, Kept frames). Left: its forced alignment of words (wav2vec2, a model of English
+  letters), its filler and transcription models (their own licenses, one not for commercial use),
+  reading the text on a screen, and telling speakers apart. Read the second time and not done: an
+  edge on the dip between two words with no quiet between them, which its alignment's word times
+  make safe and a transcriber's do not; a cut named that takes a word or two more than the
+  restart it removes; a check that two recordings of one thing still play in step after a cut;
+  and a proposal brought forward onto an edit that changed under it, where Kerf's goes stale.
+  Merging the two documents by their ids, as a sync does, is not the way to that: two edits that
+  each close a gap both move every clip after them, the merge keeps one side's place for it, and
+  a clip is left half a second after the one before it (tried on four clips, 2026-11-19).
+  Running the proposal's operations again on the project as it is gives the right edit there,
+  and what is not built is knowing that it is the same edit: each place a line names carried by
+  the clip that holds it, and refused where that clip has changed.
 - **Jumper and the Resolve and Premiere MCP servers** bolt agents onto editors
   that were not built for them. Kerf's document, proposals, and Git merging are
   what they cannot have, and each area has to keep that: every feature is text in

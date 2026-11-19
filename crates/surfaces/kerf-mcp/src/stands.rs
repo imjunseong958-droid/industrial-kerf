@@ -2,11 +2,13 @@
 //!
 //! [`kerf_engine::stands`] measures it; this is how it is told: an entry for each clip, or
 //! for each run of frames a clip floats, is sunk, or is in the air on, with the line that
-//! sets it down where one does. A clip that rests on every frame read is one entry with what
-//! it is on, and the ground is named once and has none.
+//! sets it down where one does. The line is one for the whole of a clip, the keys that keep
+//! it down on every frame, so it is said once, with the first run it mends, however many
+//! runs a thing that walks has. A clip that rests on every frame read is one entry with
+//! what it is on, and the ground is named once and has none.
 
 use kerf_engine::stands::{How, Run, Standing, Stood, LEANS, TOUCH};
-use kerf_model::{Content, Param, Project, Time};
+use kerf_model::{Project, Time};
 use serde_json::{json, Value};
 
 /// A distance, to a thousandth of the frame's height.
@@ -50,6 +52,8 @@ fn entries(stood: &Stood) -> Vec<Value> {
     // Where it leaves the ground, the line brings it up where it is sunk and no more.
     let leaves = runs.iter().any(|run| run.how == How::Air);
     let told = if found.is_empty() { &runs } else { &found };
+    // The line, and why there is none, are the clip's: said with the first run they mend.
+    let mut line_said = false;
     let mut entries: Vec<Value> = told
         .iter()
         .map(|run| {
@@ -90,7 +94,8 @@ fn entries(stood: &Stood) -> Vec<Value> {
             } else if runs.len() > 1 {
                 entry["frames"] = frames;
             }
-            if mended {
+            if mended && !line_said {
+                line_said = true;
                 if let Some(script) = &stood.script {
                     entry["script"] = json!(script);
                 }
@@ -135,12 +140,12 @@ pub(crate) fn note(
     (from, seconds): (Option<f64>, Option<f64>),
 ) -> Option<String> {
     let drawn = project.sequence(sequence)?;
-    // As a pass sees it: a clip that says it is in depth, or a mesh, which is whether or not.
-    let in_depth = |clip: &kerf_model::Clip| {
-        matches!(clip.props.get("three_d"), Some(Param::Static(kerf_model::Value::Bool(true))))
-            || matches!(&clip.content, Content::Generator { fx, .. } if fx.as_str() == "mesh")
-    };
-    if !drawn.tracks.iter().flat_map(|track| &track.clips).any(in_depth) {
+    if !drawn
+        .tracks
+        .iter()
+        .flat_map(|track| &track.clips)
+        .any(kerf_model::Clip::in_depth)
+    {
         return None;
     }
     let rate = drawn.rate;
@@ -269,12 +274,22 @@ mod tests {
             frames: (0, 64),
             worst: 3,
         }];
+        // A foot that lifts twice as it walks: two runs, and the one line that mends both.
+        let mut foot = stood(
+            "foot",
+            vec![
+                run(How::Floats(0.02), Some("road"), (0, 7)),
+                run(How::Rests, Some("road"), (8, 15)),
+                run(How::Floats(0.03), Some("road"), (16, 23)),
+            ],
+        );
+        foot.script = Some("set foot y={0f:0.4 8f:0.38 16f:0.41}".to_owned());
         let mut road = stood("road", vec![run(How::Ground, None, (0, 64))]);
         let said = said(&Standing {
             frames: (0..65).collect(),
             every: 1,
             ground: Some("road".to_owned()),
-            clips: vec![road.clone(), car, crate_, post, ball, sign],
+            clips: vec![road.clone(), car, crate_, post, ball, sign, foot],
             not_measured: vec!["a mesh into another mesh".to_owned()],
         });
         assert_eq!(
@@ -290,6 +305,8 @@ mod tests {
                     {"clip": "ball", "on": "road", "floats": 0.05, "frames": [41, 50], "worst": 41},
                     {"clip": "ball", "on": "road", "sunk": 0.01, "share": 1.0, "frames": [51, 64], "worst": 51, "script": "set ball y={0f:0 50f:0.9 64f:0.9}"},
                     {"clip": "sign", "on": "road", "through": [{"clip": "wall", "deep": 0.05, "share": 0.3, "frames": [0, 64], "worst": 3}]},
+                    {"clip": "foot", "on": "road", "floats": 0.02, "frames": [0, 7], "worst": 0, "script": "set foot y={0f:0.4 8f:0.38 16f:0.41}"},
+                    {"clip": "foot", "on": "road", "floats": 0.03, "frames": [16, 23], "worst": 16},
                 ],
                 "notMeasured": ["a mesh into another mesh"],
             })

@@ -6,6 +6,97 @@ on `main`; its section here becomes the release's notes on GitHub
 
 ## Unreleased
 
+- The shots and the still that come with `kerf-comfy` are made by Wan 2.1
+  VACE 14B, where its 1.3B made them: `shot`, `shot-timed`, `shot-into`,
+  `shot-led`, `shot-directed` and `still` load
+  `wan2.1_vace_14B_fp16.safetensors`, which a ComfyUI server has to hold
+  under `models/diffusion_models` in place of
+  `wan2.1_vace_1.3B_fp16.safetensors`. Nothing else of them changed: their
+  size, steps, sampler and other two files are as they were. A line that
+  says `unet=wan2.1_vace_1.3B_fp16.safetensors` is made by the smaller one
+  still ([docs/shots.md](docs/shots.md#what-the-server-holds)).
+- The check says when a crossfade plays what a cut left out. A cut put in
+  the pause before a word that was taken out is clean, and a crossfade
+  across it plays the clip on past the cut, into that word, heard fading
+  out. Cuts under a transition were not looked at; one in quiet whose
+  transition reaches sound at the level of speech is now a finding
+  (`cut.fade_in_sound`), and `look` with `cuts` counts and lists them.
+- Pauses are found in a recording whose room changes. Quiet was measured by
+  one room tone for a whole file, so where a fan came on, or the gain went
+  up, the louder part had no pause at all and `snap=pause` refused every
+  cut in it; each half minute is now read by its own room. A tick of lips
+  parting in a pause no longer ends it either. Media indexed before needs
+  no indexing again
+  ([docs/architecture.md](docs/architecture.md#edit)).
+- An agent's `look` with `cuts` reads an edit as it will be heard. `joins`
+  gives what each cut plays, the words either side of it, and the words it
+  left out, so a cut that takes a word the sentence needs is seen though
+  its edges are in quiet. `restarts` are the phrases said and taken again a
+  moment later, with other words between the two or a word more or less in
+  the second, which a doubled word was not found by; the check says them
+  too (`phrase.restarted`). Pauses are listed from the length the edit
+  names (`{"pauses": 0.5}`) where three quarters of a second was fixed, and
+  `from` and `to` take a part of a long sequence
+  ([docs/architecture.md](docs/architecture.md#edit)).
+- Words come out of what a clip says in one line: `extract c1 said="um, so"`
+  takes them out with the quiet round them and closes up, leaving a pause
+  of a quarter of a second, or of `leave=`; `extract c1 pause="the deal."
+  leave=0.3s` brings the pause after those words down to a length; and a
+  `lift` or `extract` that names a clip takes `snap=pause` for its two
+  positions. Each edge goes into the quiet beside what stays, past no word,
+  and the answer says what went and what pause is left. It took two snapped
+  splits and a `ripple-delete` before, with each time read off a transcript
+  ([docs/kerf-language.md](docs/kerf-language.md#scripts)).
+- `snap=pause` takes an edge past no word. It went into the nearest pause
+  whichever way that was, so where the nearest lay beyond a word the edit
+  came back with that word in, or out, and said nothing of it. An edge now
+  goes into the pause at the nearer end of the sound it is in and no
+  further, past no more than half of a word a transcript heard, and an agent's
+  edit answers with how far each edge went and between which words it now
+  is (`snapped`). Where the media has a transcript, an edge can also go
+  between two words said in one breath, which part for too short a time to
+  be a pause; and a line that finds nowhere to go names the pause or gap it
+  could not take and the word in the way
+  ([docs/architecture.md](docs/architecture.md#edit)).
+- A thing built of several parts moves in depth as one. `parent=` carried
+  only where a parent is on the frame: a `gen=null@1` with nine meshes on
+  it and `z` keyed moved none of them, and a group could not be turned
+  about its upright at all. Now a null's `z`, `rotate_x`, and `rotate_y`,
+  or those of a parent that is itself in depth, take every child in depth
+  with it, turned about the parent's middle and moved back, and parents
+  chain: `set bot z={0f:6.5 80f:1.6} rotate_y={0f:0 80f:90}` once, where
+  each part had the same keys by hand. A camera and a light with a parent
+  go with it too, so a camera on a null at a thing's middle goes round it.
+  The picture, the ids, depth, and normals passes, shadows, and `look` with
+  `shows` and `stands` all have a child where it is drawn. A flat child
+  keeps to the frame, as before; check says so, and says of a null's `z`
+  that it moves nothing where no clip in depth is on it. A document with no
+  parent in depth draws as it did
+  ([docs/kerf-language.md](docs/kerf-language.md)).
+- An agent's `look` with `stands` reads a thing stacked from solids as it
+  stands. Of a snowman, a barn under its roof, a cow on its legs, the lower
+  part was said to be sunk in the upper, with a line that would have set it
+  on top of what stands on it: the underside of a part that reaches a little
+  way into the one under it was taken for a floor through the lower one. It
+  is the upper part that is said to be sunk, by how far it reaches in. A
+  roof wider than its walls and a brim wider than its head stand on them,
+  where they were over the floor or in the air. The line that sets a clip
+  down is said once for the clip and not again with each run of frames. So
+  what `look` lists to make no longer notes a stacked thing as sunk in
+  itself ([docs/architecture.md](docs/architecture.md#what-directs-a-model)).
+- The check no longer says of a scene of meshes that its light falls on
+  nothing and its camera's `aperture` blurs nothing: a `gen=mesh@1` clip is
+  in depth without `three_d`
+  ([docs/kerf-language.md](docs/kerf-language.md)).
+- A take that more than one model made, a still and then the shot of it, a
+  matte and then a plate, the parts of a longer shot, keeps what each model
+  was asked, in a folder of its step's number (`001.work/step2/request.json`).
+  Every step's request was written to the one name, and only the last was
+  left to read ([docs/shots.md](docs/shots.md#takes)).
+- `kerf-comfy --describe`, with no workflow named, prints a models file
+  whole: an entry for every workflow that comes with it, each under the
+  workflow's own name, where each was asked for one at a time and put
+  together by hand ([docs/shots.md](docs/shots.md#a-model-on-a-comfyui-server)).
 - An agent's `look` with `shows` reads every clip that draws on a frame,
   whichever track it is on. It read 32 from the lowest track up, so of a
   street of 55 solids the cart on the top tracks, its subject, was left

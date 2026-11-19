@@ -247,7 +247,7 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
   `audio.limiter`) go on a clip or a bus, and on a bus see the sum, as a compressor on a mix should.
 - `set c1 three_d=true z=0.5 rotate_y=30` places a clip in depth. Its 2D geometry applies first; `z`
   is in frame heights, positive away from the viewer. `gen=camera@1` sees the scene, the topmost one
-  showing (`x y z pan tilt roll fov focus aperture`, animatable, and `parent=` works), and at its defaults a clip at
+  showing (`x y z pan tilt roll fov focus aperture`, animatable, and with a `parent=` it goes where the parent takes it), and at its defaults a clip at
   z=0 looks as it does in 2D. `depth=0.1` makes a clip in depth a solid that deep behind it, in the outline of its picture's alpha, so a title
   has sides with its letters' colors, its holes kept, and shadows as long as it is deep; it animates, 0 is flat as ever, and a light behind a solid does not come through it. `bevel=0.02` cuts its edges back that far at each face, at 45 degrees and at most half its depth, following its outline and keeping its holes: lights shade the cut as a surface of its own, and its shadow follows it; it animates, and 0 is no bevel. `bevel_profile=round` makes the cut a quarter of a circle, so that the way it faces turns from the side to the face across its width and lights shade it as a curve; `flat`, as it is when not said, is the 45-degree cut. A bevel is as wide on each side of a clip scaled unevenly. `gen=light@1` (`kind=point|ambient|directional|environment color intensity shadow size image`, with
   `x y z` where it is or which way it shines) lights it, per pixel by which way it faces; with no
@@ -325,6 +325,25 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
   and parents chain. `gen=null@1` draws nothing, to rig several clips under one
   (`set c2 parent=n1`, and `parent=""` to let go). Deleting a parent lets its children go; a
   child of a clip that is split stays with its first part.
+  In depth a parent takes its children with it as one thing. A child in depth (`three_d=true`, or
+  a `gen=mesh@1`) is first where its own numbers put it, with its parents' position, scale, and
+  rotation as on the frame; then the parent turns it by the parent's `rotate_x` and `rotate_y`
+  about the parent's middle, and moves it back by the parent's `z`. With a chain that is done by
+  the parent it names, then by that one's parent, and so on out. So a thing of several parts is rigged
+  under one null and keyed once: `set bot z={0f:6.5 80f:1.6} rotate_y={0f:0 80f:90}` brings every
+  part parented to `bot` nearer and swings it round the middle of `bot`, each part keeping its
+  own `z` and its own turns within it. A null needs no `three_d` for this. A clip that draws
+  leads the same way where it is itself in depth, a body its head and arms; on a flat one `z`,
+  `rotate_x`, and `rotate_y` are nothing, to it or to its children. The turns are about the
+  frame's own level and upright lines through the parent's middle, whatever `rotation` it has.
+  A flat child keeps to the frame, and takes its parent's position, scale, and rotation only:
+  `three_d=true` has it follow in depth, and check says so of one that does not. A parent's
+  `scale` sizes its children and spreads them across the frame, and leaves each one's `z` as it
+  is. A `gen=camera@1` and a `gen=light@1` with a parent go with it as a clip in depth does: where
+  they are moves with it, and a camera looks, and a directional light shines, the way the parent
+  turns them. So a camera parented to a null at the middle of a thing goes round the thing as
+  the null's `rotate_y` is keyed, facing it as it did; a camera or a light that is a parent
+  hands on only where it is on the frame.
 - `gen=signal@1` draws nothing and holds a number for a model: `set swell value={0f:0 48f:1:ease}`,
   from 0 to 1. A `generate … signal=swell` step hands the model what it comes to on each frame
   of its sequence, to say when what the prompt asks for happens, and how much; where the clip is
@@ -396,26 +415,65 @@ transition add from=c1 to=c9 fx=dissolve dur=12f
 - `trim`, `roll`, `slide`, and `move` accept either an amount (`+12f`) or an
   absolute `to=`/`at=` position.
 - `snap=pause|cut [within=<amount>]` on `trim`, `split`, `insert`, and
-  `overwrite` moves the edges the line gives (`insert` and `overwrite`:
-  `src=` and `out=`) into the nearest pause of the media's sound, clear of
-  the sound either side, or onto a cut of its picture, as the index made on
-  import found them; within half a second unless given. A pause is 0.16 s
-  or more of quiet, which is what lies between two words, and quiet is
-  measured by the recording itself: within 8 dB of its room tone, so a
-  noisy room has pauses and a soft recording is not all pause. An edge
-  moved into one stops 0.15 s after the sound before it, which dies away,
-  and 0.1 s before the sound after it, on the nearest frame still in the
-  pause; a pause too short for both is divided in that proportion, and an
-  edge already clear of both stays where it was put. A split stays inside
-  its clip and a trimmed clip keeps a length. Without an index, or with
-  nothing in reach, the line is refused.
+  `overwrite`, and on a `lift` or `extract` that names the clip whose sound
+  its edges go by (`extract c1 from=… to=… snap=pause`), moves the edges the
+  line gives (`insert` and `overwrite`: `src=` and `out=`) into a pause of
+  the media's sound, clear of the sound
+  either side, or onto a cut of its picture, as the index made on import
+  found them; within half a second unless given. A pause is 0.16 s or more
+  of quiet, which is what lies between two words, and quiet is measured by
+  the recording itself: within 8 dB of its room tone, so a noisy room has
+  pauses and a soft recording is not all pause. The room tone is read half
+  a minute at a time, so a room that changes has pauses throughout, and a
+  tick of lips parting in a pause does not end it. An edge moved into one
+  stops 0.15 s after the sound before it, which dies away, and 0.1 s before
+  the sound after it, on the nearest frame still in the pause; a pause too
+  short for both is divided in that proportion, and an edge already clear
+  of both stays where it was put. A split stays inside its clip and a
+  trimmed clip keeps a length. Without an index, or with nothing in reach,
+  the line is refused.
+
+  An edge is taken past no word. It goes into the pause it is in, or the
+  one at the nearer end of the sound it is in, and never on to a pause
+  beyond: that would leave a word in, or out, that the line did not ask
+  for. Where the media has a transcript, it goes past no more than half of
+  what any word of it sounds for either, so an edge asked for between two
+  words said with nothing between them stays on its side of each, and is
+  refused for want of a pause. Two words said in one breath often part for a tenth of a second
+  or so, a gap too short for a pause and as long as a consonant held inside
+  one word. Where a transcript covers such a gap and times no word right
+  through it, the edge may go there, on a frame of its middle half; with no
+  transcript it may not, and the refusal says to make one. A refusal names
+  the pause or gap it could not take and the word in the way. What an edit
+  answers with says, as `snapped`, how far each edge went and between which
+  words it now is.
+- `extract <clip> said="…"` takes words out of what a clip says and closes
+  up, in one line: the phrase as a transcript heard it, found in what the
+  clip plays. The range starts in the quiet after the sound before the
+  words and ends in the quiet before the sound after them, so the words go
+  with the quiet round them and a pause of `leave=` is left where they
+  were: 0.25 s unless given, 0.15 s after what plays before the cut and
+  0.1 s before what plays after it. A longer `leave` is longer before the
+  cut and the voice comes in as soon after it; each edge stays in the quiet
+  on its side, so where that is shorter than its share less is left, and
+  the answer says how much. `lift <clip> said="…"` clears the same range
+  and leaves a gap. Words that run on into what is said before or after
+  them have no quiet to cut in on that side, and the line is refused with
+  the word in the way, as a snapped edge is: name the words they run on
+  into as well, or give `from=` and `to=`.
+- `extract <clip> pause="…" [leave=<dur>]` brings the pause after those
+  words down to `leave`, the same way: from 0.15 s after the words, or more
+  of a longer `leave`, to 0.1 s before the next word the clip plays, or to
+  the clip's end. A breath in the pause goes with it. Sound in it at the
+  level of speech that no word of the transcript accounts for may be a word
+  a transcriber missed, so the line is refused and says where to listen. A
+  pause no longer than `leave` is not shortened.
 - `trim … src=<source position>` puts the edge where the clip plays that
   position of its media, so a cut can land on a word's time from a
   transcript.
 - `media replace m1 path="media/take2.mov" rate=24 dur=00:04:30:00
   video=3840x2160 audio=2ch@48000` swaps the file behind a media id and
   takes the same fields as `media add` (`tc=`, `alpha=`, `reel=`), and leaves the steps under the media as they are.
-  The steps under a media that say how it is made stay as they are.
   Every clip that uses it keeps its timing; a file one no longer fits (too
   short for its source range or a transition's handles, or without the
   picture or sound its track needs) is refused, naming the clips.

@@ -913,6 +913,11 @@ fn edits_snap_to_what_the_index_found() {
     );
     let script = split["script"].as_str().unwrap();
     assert!(script.contains("split c1 at=00:00:02:00"), "{script}");
+    // An edge that moved is said, with how far and onto what.
+    assert_eq!(
+        split["snapped"],
+        json!(["the split of `c1` went 5 frames later, to 00:00:02:00: onto the cut of `m1` at 00:00:02:00"]),
+    );
     router
         .runtime()
         .reject_proposal(split["proposal"].as_str().unwrap())
@@ -931,6 +936,11 @@ fn edits_snap_to_what_the_index_found() {
         .and_then(|(frames, _)| frames.parse().ok())
         .unwrap_or_else(|| panic!("{script}"));
     assert!((24..=26).contains(&shortened), "{script}");
+    let snapped = trimmed["snapped"][0].as_str().unwrap_or_default();
+    assert!(
+        snapped.starts_with("the out of `c1` went ") && snapped.contains(" pause of `m1` at "),
+        "{trimmed}"
+    );
     router
         .runtime()
         .reject_proposal(trimmed["proposal"].as_str().unwrap())
@@ -1109,9 +1119,31 @@ fn look_counts_the_cuts_of_a_sequences_sound() {
     );
     assert_eq!(cut["summary"]["cuts"], 1, "{cut}");
     assert_eq!(cut["summary"]["notMeasured"], 1, "{cut}");
-    // It is of a sequence's sound and nothing else.
+    // A part of it, with pauses listed from the length the edit names: the cut is in the
+    // part that holds it and not in the one after.
+    let part = |from: &str, to: &str| {
+        ok(
+            &router,
+            "look",
+            json!({"cuts": {"pauses": 0.5}, "from": from, "to": to,
+                "proposal": proposal["proposal"]}),
+        )
+    };
+    let first = part("00:00:01:00", "00:00:02:00");
+    assert_eq!(first["from"], "00:00:01:00", "{first}");
+    assert_eq!(first["summary"]["cuts"], 1, "{first}");
+    assert_eq!(first["joins"]["count"], 0, "{first}");
+    assert_eq!(part("00:00:02:00", "00:00:03:00")["summary"]["cuts"], 0);
+    // It is of a sequence's sound and nothing else, and a pause shorter than a third of a
+    // second is how anybody speaks.
     let refused = error(&router, "look", json!({"cuts": true, "media": "m1"}));
     assert_eq!(refused["code"], "INVALID_ARGUMENTS");
+    let refused = error(&router, "look", json!({"cuts": {"pauses": 0.1}}));
+    assert_eq!(refused["code"], "INVALID_ARGUMENTS");
+    assert!(
+        refused["message"].as_str().unwrap().contains("0.3 or more"),
+        "{refused}"
+    );
 }
 
 #[test]
@@ -3098,9 +3130,62 @@ fn the_check_says_what_does_nothing() {
         "track add V3 video\noverwrite gen=title at=0f dur=30f on=V3 text=\"No. 10\" features=\"tnum smcp\" as=word",
         "Inter has no `smcp`",
     );
+    // A null is somewhere in depth for the clips in depth that move with it, and for nothing
+    // else: alone, and with a flat clip, which is told that it stays on the frame.
+    let rig = "track add V3 video\noverwrite gen=null at=0f dur=30f on=V3 as=rig\n";
+    says(&format!("{rig}set rig z=0.5"), "`z` on a null");
+    says(&format!("{rig}set rig rotate_y={{0f:0 20f:90}}"), "`rotate_y` on a null");
+    says(&format!("{rig}set rig three_d=true"), "`three_d` does nothing on a null");
+    says(&format!("{rig}set rig z=0.5\nset s1a parent=rig"), "`z` on a null");
+    says(
+        &format!("{rig}set rig z=0.5 rotate_y=20\nset s1a parent=rig"),
+        "`s1a`: the `z`, `rotate_y` of `rig`, which it moves with, does nothing to it",
+    );
+    // And so is a clip in depth that draws, for what moves with it.
+    says(
+        "set c1 three_d=true rotate_x=10\nset s1a parent=c1",
+        "the `rotate_x` of `c1`",
+    );
+    // None of that is said of a rig that works: a null, or a clip in depth, with a clip in
+    // depth, a camera, or a light on it, however far up the null is.
+    let unsaid = |script: &str| {
+        let staged = run(script);
+        let findings = staged["check"]["findings"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        let said: Vec<&Value> = findings
+            .iter()
+            .filter(|finding| finding["code"] == "no_effect")
+            .collect();
+        assert!(said.is_empty(), "`{script}` should say nothing: {said:?}");
+    };
+    unsaid(&format!("{rig}set rig z=0.5 rotate_x=5 rotate_y=20\nset s1a three_d=true parent=rig"));
+    // Through a flat clip, which is told that it stays behind, to one in depth, which does not.
+    let through = format!("{rig}set rig z=0.5\nset s1a parent=rig\nset c1 three_d=true parent=s1a");
+    says(&through, "`s1a`: the `z` of `rig`");
+    let findings = run(&through)["check"]["findings"].to_string();
+    assert!(!findings.contains("on a null") && !findings.contains("`c1`: the `z`"), "{findings}");
+    unsaid("set c1 three_d=true z=0.5 rotate_y=20\nset s1a three_d=true parent=c1");
+    unsaid(&format!("{rig}set rig rotate_y=20\ntrack add V4 video\noverwrite gen=camera at=0f dur=30f on=V4 as=lens\nset lens parent=rig\nset c1 three_d=true"));
+    // A mesh is in depth without saying so: a light falls on it, and a parent takes it.
+    unsaid(&format!("{rig}set rig z=0.5\ntrack add V4 video\noverwrite gen=mesh at=0f dur=30f on=V4 as=thing\nset thing parent=rig\ntrack add V5 video\noverwrite gen=light at=0f dur=30f on=V5 as=lamp"));
     // A scene that means what it says has none of them.
     let clean = run("set c1 three_d=true z=0.4\nset s1a three_d=true depth=0.1 bevel=0.02 bevel_profile=round\ntrack add V3 video\noverwrite gen=light at=0f dur=30f on=V3 kind=directional shadow=0.5 size=3 as=lamp\ntrack add V4 video\noverwrite gen=camera at=0f dur=30f on=V4 aperture=0.03 focus=0.1 as=lens\ntrack add V5 video\noverwrite gen=title at=0f dur=30f on=V5 text=\"No. 10\" features=\"tnum -smcp\" as=word");
     let findings = clean["check"]["findings"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        !findings
+            .iter()
+            .any(|finding| finding["code"] == "no_effect"),
+        "{findings:?}"
+    );
+    // Nor has one whose only thing in depth is a mesh, which is in depth without saying so:
+    // its light falls on the mesh, and its camera's aperture blurs it.
+    let meshes = run("track add V3 video\noverwrite gen=mesh at=0f dur=30f on=V3 kind=ball z=1 as=ball\ntrack add V4 video\noverwrite gen=light at=0f dur=30f on=V4 kind=point z=-1 as=lamp\ntrack add V5 video\noverwrite gen=camera at=0f dur=30f on=V5 aperture=0.03 focus=0.1 as=lens");
+    let findings = meshes["check"]["findings"]
         .as_array()
         .cloned()
         .unwrap_or_default();

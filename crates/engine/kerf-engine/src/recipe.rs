@@ -696,7 +696,8 @@ pub fn plan_rolled(
     let steps = recipe
         .steps
         .iter()
-        .map(|step| match step {
+        .enumerate()
+        .map(|(index, step)| match step {
             Step::Join { parts, to, lap } => format!(
                 "Kerf joins {} end to end into {}{}",
                 parts
@@ -753,7 +754,7 @@ pub fn plan_rolled(
                 )
             }
             Step::Generate(ask) => {
-                let request = working.join(model::REQUEST_FILE);
+                let request = request_file(&working, &recipe.steps, index);
                 let command = models.command(&ask.model).expect("checked above");
                 format!(
                     "{} asks model `{}` for {}",
@@ -791,16 +792,6 @@ fn plain(number: f64) -> String {
     text.trim_end_matches('0').trim_end_matches('.').to_owned()
 }
 
-/// Whether a pass sees `clip` in depth, as the compositor does: it says
-/// `three_d=true`, or it is a mesh, which is in depth whether it says so or not.
-fn in_depth(clip: &kerf_model::Clip) -> bool {
-    use kerf_model::{Content, Param, Value};
-    matches!(
-        clip.props.get("three_d"),
-        Some(Param::Static(Value::Bool(true)))
-    ) || matches!(&clip.content, Content::Generator { fx, .. } if fx.as_str() == "mesh")
-}
-
 /// What `recipe` asks of its models that they have said they do not take,
 /// each as a line for whoever is about to make it, and what it hands one
 /// that says nothing. A model that has not said what it takes
@@ -823,7 +814,7 @@ fn notes(project: &kerf_model::Project, recipe: &Recipe, models: &Models) -> Vec
             continue;
         };
         let clips = || drawn.tracks.iter().flat_map(|track| &track.clips);
-        if clips().any(in_depth) {
+        if clips().any(kerf_model::Clip::in_depth) {
             continue;
         }
         let nested: Vec<&str> = clips()
@@ -1114,7 +1105,7 @@ impl Making<'_> {
 
     /// Run each step of `recipe`, in order, stopping at the first that fails.
     fn run(&self, recipe: &Recipe, on_line: &mut dyn FnMut(&str)) -> Result<()> {
-        for step in &recipe.steps {
+        for (index, step) in recipe.steps.iter().enumerate() {
             match step {
                 Step::Join { parts, to, lap } => {
                     on_line(&format!("joining {} parts", parts.len()));
@@ -1158,7 +1149,11 @@ impl Making<'_> {
                     )?;
                 }
                 Step::Generate(ask) => {
-                    let request = self.place.working(self.take).join(model::REQUEST_FILE);
+                    let request =
+                        request_file(&self.place.working(self.take), &recipe.steps, index);
+                    if let Some(folder) = request.parent() {
+                        std::fs::create_dir_all(folder)?;
+                    }
                     let signals = ask
                         .signals
                         .iter()
@@ -1225,6 +1220,26 @@ impl Making<'_> {
             }
         }
         Ok(())
+    }
+}
+
+/// Where the request of step `index` of `steps` is written, in a take's `working` folder,
+/// with what its model's program keeps beside it: the guide and the graph as they went up.
+/// A take one model makes has them in the folder itself. One that several make, a still and
+/// then the shot of it, a matte and then a plate, the parts of a longer shot, has each
+/// step's in a folder of the step's number (`step2/request.json`), where they were all
+/// written to the one name and only the last step's were left to read.
+fn request_file(working: &Path, steps: &[Step], index: usize) -> PathBuf {
+    let asked = steps
+        .iter()
+        .filter(|step| matches!(step, Step::Generate(_)))
+        .count();
+    if asked > 1 {
+        working
+            .join(format!("step{}", index + 1))
+            .join(model::REQUEST_FILE)
+    } else {
+        working.join(model::REQUEST_FILE)
     }
 }
 

@@ -200,7 +200,8 @@ private slots:
     // The same table holds the compositor to these, in kerf-compose's draw.rs: a camera,
     // a parent, a clip, its picture's size and whether it is fitted, and the canvas;
     // then a point of the picture, in fractions of it, and where on the canvas it
-    // lands, or that nothing shows it. A row with a path names the clip's anchor.
+    // lands, or that nothing shows it. A row with a path names the clip's anchor. The
+    // parent is a null, so where it is in depth is the clip's with its own: the last rows.
     void clipsInDepthLandAsTheCompositorDrawsThem() {
         const struct {
             QJsonObject camera;
@@ -235,12 +236,21 @@ private slots:
             {{}, {}, {{"three_d", true}, {"x", 0.1}, {"rotate_y", 90.0}}, {1920, 1080}, false, {1920, 1080}, {0.75, 0.5}, QPointF(1243.825954944, 540.0)},
             {{{"pan", 80.0}}, {}, {{"three_d", true}}, {1920, 1080}, false, {1920, 1080}, {0.0, 0.5}, std::nullopt},
             {{{"pan", 80.0}}, {}, {{"three_d", true}}, {1920, 1080}, false, {1920, 1080}, {1.0, 0.5}, QPointF(-636.292895473, 540.0)},
+            {{}, {{"z", 1.0}}, {{"three_d", true}}, {1920, 1080}, false, {1920, 1080}, {0.0, 0.0}, QPointF(404.425304296, 227.489233666)},
+            {{}, {{"rotate_y", 60.0}}, {{"three_d", true}}, {1920, 1080}, false, {1920, 1080}, {1.0, 1.0}, QPointF(2051.824322445, 1768.30236275)},
+            {{}, {{"x", 0.1}, {"y", -0.05}, {"z", 0.3}, {"rotate_x", -20.0}, {"rotate_y", 35.0}}, {{"three_d", true}, {"z", 0.2}, {"rotate_y", 15.0}, {"x", 0.2}, {"scale", 0.5}}, {1920, 1080}, false, {1920, 1080}, {0.25, 0.75}, QPointF(1304.251220744, 671.403611257)},
+            {{{"pan", 10.0}, {"tilt", -5.0}}, {{"x", -0.1}, {"rotation", 20.0}, {"scale", 0.8}, {"z", 0.5}, {"rotate_y", -40.0}}, {{"three_d", true}, {"z", -0.1}, {"rotate_x", 25.0}, {"y", 0.15}, {"scale", 0.6}}, {1920, 1080}, false, {1920, 1080}, {0.9, 0.2}, QPointF(806.73633729, 481.710745385)},
+            {{}, {{"anchor_x", 0.25}, {"rotation", 15.0}, {"rotate_y", 50.0}, {"z", 0.2}}, {{"three_d", true}, {"x", 0.3}}, {1920, 1080}, false, {1920, 1080}, {0.5, 0.5}, QPointF(1395.719634219, 568.948088124)},
         };
         for (const auto &row : table) {
             const QJsonObject camera{{"id", "cam"}, {"kind", "generator"}, {"fx", "camera"}, {"timelineStart", 0.0}, {"duration", 2.0}, {"props", row.camera}};
-            const QJsonObject timeline{{"tracks", QJsonArray{QJsonObject{{"id", "V1"}, {"type", "video"}, {"clips", QJsonArray{camera}}}}}};
-            const QTransform parents = row.rig.isEmpty() ? QTransform{} : parentMotion(QJsonObject{{"props", row.rig}}, row.canvas, false, row.canvas, 0.0);
-            const QJsonObject clip{{"id", "c1"}, {"props", row.props}};
+            // The parent is a clip of the timeline, which is where what it does in depth is read from.
+            const QJsonObject rig{{"id", "n1"}, {"kind", "generator"}, {"fx", "null"}, {"timelineStart", 0.0}, {"duration", 2.0}, {"props", row.rig}};
+            const QJsonObject timeline{{"tracks", QJsonArray{QJsonObject{{"id", "V1"}, {"type", "video"}, {"clips", QJsonArray{camera, rig}}}}}};
+            QJsonObject clip{{"id", "c1"}, {"props", row.props}};
+            if (!row.rig.isEmpty()) clip.insert("parent", "n1");
+            const QTransform parents = parentsMotionIn(timeline, clip, row.canvas, 0.0);
+            if (!row.rig.isEmpty()) QCOMPARE(parents, parentMotion(rig, row.canvas, false, row.canvas, 0.0));
             const QTransform placement = picturePlacement(clip, row.size, row.fit, row.canvas, 0.0, parents, timeline);
             const QString name = QString::fromUtf8(QJsonDocument(row.props).toJson(QJsonDocument::Compact));
             if (!row.to) {
@@ -263,13 +273,56 @@ private slots:
                 if (row.props.value("orient").toBool() && along != row.props.value("along").toDouble()) continue;
                 QJsonObject elsewhere = row.props;
                 elsewhere.insert("along", along);
-                const QTransform path = pathPlacement(QJsonObject{{"id", "c1"}, {"props", elsewhere}}, row.size, row.fit, row.canvas, 0.0, parents, timeline);
+                QJsonObject moved = clip;
+                moved.insert("props", elsewhere);
+                const QTransform path = pathPlacement(moved, row.size, row.fit, row.canvas, 0.0, parents, timeline);
                 QVERIFY2(inSight(path, QPointF(on.x, on.y)), qPrintable(where));
                 const QPointF shares = path.map(QPointF(on.x, on.y));
                 const QPointF landed(shares.x() * row.canvas.width(), shares.y() * row.canvas.height());
                 const QString there = QStringLiteral("%1 along %2: %3,%4").arg(name).arg(along).arg(landed.x(), 0, 'f', 6).arg(landed.y(), 0, 'f', 6);
                 QVERIFY2(QLineF(landed, *row.to).length() < 1e-6, qPrintable(there));
             }
+        }
+    }
+
+    // A scene all of which is on one null is the same picture wherever the null goes, since what
+    // sees it went with it: so a camera with a parent is where the parent takes it, as a clip is
+    // (kerf-compose `tests/parent_depth.rs`, which holds the compositor to the same).
+    void aCameraGoesWithItsParentAsAClipDoes() {
+        const QSizeF canvas(1920, 1080);
+        const auto scene = [&](const QJsonObject &rigProps, const QJsonObject &clipProps, bool cameraFollows) {
+            QJsonObject camera{{"id", "cam"}, {"kind", "generator"}, {"fx", "camera"}, {"timelineStart", 0.0}, {"duration", 2.0},
+                               {"props", QJsonObject{{"x", 0.15}, {"y", -0.2}, {"z", -0.3}, {"pan", -8.0}, {"tilt", -10.0}, {"roll", 4.0}, {"fov", 50.0}}}};
+            if (cameraFollows) camera.insert("parent", "rig");
+            // The null is itself on a null that does nothing, so that the chain is walked.
+            const QJsonObject rig{{"id", "rig"}, {"kind", "generator"}, {"fx", "null"}, {"timelineStart", 0.0}, {"duration", 2.0}, {"parent", "still"}, {"props", rigProps}};
+            const QJsonObject still{{"id", "still"}, {"kind", "generator"}, {"fx", "null"}, {"timelineStart", 0.0}, {"duration", 2.0}, {"props", QJsonObject{}}};
+            const QJsonObject clip{{"id", "c1"}, {"parent", "rig"}, {"props", clipProps}};
+            const QJsonObject timeline{{"tracks", QJsonArray{QJsonObject{{"id", "V1"}, {"type", "video"}, {"clips", QJsonArray{camera, rig, still}}}}}};
+            return picturePlacement(clip, canvas, false, canvas, 0.0, parentsMotionIn(timeline, clip, canvas, 0.0), timeline);
+        };
+        const struct {
+            QJsonObject rig;
+            QJsonObject clip;
+        } table[] = {
+            {{{"x", 0.3}, {"y", -0.2}, {"z", 1.5}}, {{"three_d", true}, {"z", 0.8}, {"rotate_x", -75.0}, {"rotate_y", 35.0}, {"scale", 0.5}, {"x", 0.1}}},
+            {{{"rotate_y", 70.0}, {"z", 0.4}}, {{"three_d", true}, {"z", 0.8}, {"rotate_y", 35.0}, {"scale", 0.5}, {"x", -0.2}}},
+            {{{"x", -0.1}, {"rotate_x", -40.0}, {"rotate_y", 25.0}, {"z", -0.3}}, {{"three_d", true}, {"z", 0.5}, {"rotate_x", 20.0}, {"scale", 0.5}}},
+            // Turned on the canvas, a clip's own turns are still about the canvas's lines: this one has none.
+            {{{"x", 0.2}, {"rotation", 30.0}, {"z", 0.5}, {"rotate_y", -50.0}}, {{"three_d", true}, {"z", 0.8}, {"scale", 0.5}, {"y", 0.1}}},
+        };
+        for (const auto &row : table) {
+            const QString name = QString::fromUtf8(QJsonDocument(row.rig).toJson(QJsonDocument::Compact));
+            const QTransform still = scene({}, row.clip, true);
+            const QTransform moved = scene(row.rig, row.clip, true);
+            QVERIFY2(still.isInvertible() && moved.isInvertible(), qPrintable(name));
+            for (const QPointF &corner : {QPointF(0.0, 0.0), QPointF(1.0, 0.0), QPointF(1.0, 1.0), QPointF(0.25, 0.75)}) {
+                QVERIFY2(inSight(still, corner) && inSight(moved, corner), qPrintable(name));
+                QVERIFY2(QLineF(still.map(corner), moved.map(corner)).length() < 1e-6, qPrintable(name));
+            }
+            // Let go, the camera stays where it was, and the clip has gone.
+            const QTransform alone = scene(row.rig, row.clip, false);
+            QVERIFY2(!alone.isInvertible() || QLineF(alone.map(QPointF(0.25, 0.75)), still.map(QPointF(0.25, 0.75))).length() > 1.0, qPrintable(name));
         }
     }
 

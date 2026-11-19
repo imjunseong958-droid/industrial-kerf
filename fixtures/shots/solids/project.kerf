@@ -1,0 +1,710 @@
+kerf 1
+project name="Scenes of solids"
+
+media snowman_shot path="shots/snowman.mp4" rate=16 dur=00:00:05:01 video=832x480
+  render snowman {guide.mp4} pass=depth size=832x480 rate=16
+  generate model=shot prompt="a snowman with a black top hat, a carrot nose and stick arms stands in a snowy field with dark green pine trees at sunrise, long blue shadows on the snow, the camera circles around it, cinematic, photorealistic" guide={guide.mp4} seed=7
+media rocket_shot path="shots/rocket.mp4" rate=16 dur=00:00:05:01 video=832x480
+  render rocket {guide.mp4} pass=depth size=832x480 rate=16
+  generate model=shot prompt="a white rocket with red fins lifts off from a concrete launch pad beside a red steel tower, fire and billowing white smoke under it, clear blue sky, the camera tilts up after it, cinematic, photorealistic" guide={guide.mp4} seed=7
+media solar_shot path="shots/solar.mp4" rate=16 dur=00:00:05:01 video=832x480
+  render solar {guide.mp4} pass=depth size=832x480 rate=16
+  generate model=shot prompt="planets orbit a blazing yellow sun in deep black space full of stars: a blue earth, a red mars, a small grey mercury and a tan gas giant with rings, cinematic space documentary" guide={guide.mp4} seed=7
+media robot_shot path="shots/robot.mp4" rate=16 dur=00:00:05:01 video=832x480
+  render robot {guide.mp4} pass=depth size=832x480 rate=16
+  generate model=shot prompt="a chunky retro tin toy robot with a yellow body, a silver head and glowing cyan eyes walks toward the camera down a narrow alley between dark buildings at night, wet pavement, neon reflections, cinematic" guide={guide.mp4} seed=7
+media city_shot path="shots/city.mp4" rate=16 dur=00:00:05:01 video=832x480
+  render city {guide.mp4} pass=depth size=832x480 rate=16
+  generate model=shot prompt="aerial drone shot flying between glass skyscrapers of a futuristic city at golden hour, orange sky, a tall white spire ahead, cinematic, photorealistic" guide={guide.mp4} seed=7
+media saucer_shot path="shots/saucer.mp4" rate=16 dur=00:00:05:01 video=832x480
+  render saucer {guide.mp4} pass=depth size=832x480 rate=16
+  generate model=shot prompt="a silver flying saucer with a glowing cyan dome flies in over a red barn and a grain silo at night and shines a green beam of light down on a white cow standing in a dark green field, starry dark blue sky, 1950s science fiction film" guide={guide.mp4} seed=7
+media lighthouse_shot path="shots/lighthouse.mp4" rate=16 dur=00:00:05:01 video=832x480
+  render lighthouse {guide.mp4} pass=depth size=832x480 rate=16
+  generate model=shot prompt="a white lighthouse with a red cap and a glowing yellow lamp beside a small white house on a brown rocky cliff above a dark blue sea at dusk, the camera rises and circles, cinematic, photorealistic" guide={guide.mp4} seed=7
+media bowling_shot path="shots/bowling.mp4" rate=16 dur=00:00:05:01 video=832x480
+  render bowling {guide.mp4} pass=depth size=832x480 rate=16
+  generate model=directed prompt="a glossy dark blue bowling ball rolls down a polished wooden bowling lane and smashes into white bowling pins, the pins fly apart on the strike, dark bowling alley, cinematic slow motion" guide={guide.mp4} signal=strike moves=ball seed=7
+media donut_shot path="shots/donut.mp4" rate=16 dur=00:00:05:01 video=832x480
+  generate model=still prompt="a giant donut with glossy pink icing and rainbow sprinkles on a white plate, bakery counter, soft window light, macro food photography" seed=3 out={donut.png}
+  render donut {guide.mp4} pass=depth size=832x480 rate=16
+  generate model=shot prompt="a giant donut with glossy pink icing and rainbow sprinkles turns slowly on a white plate on a wooden bakery counter, a white cup and a glass jar behind it, soft window light, macro food photography" guide={guide.mp4} ref={donut.png} seed=7
+media f1 path="shots/f1.mp4" rate=16 dur=00:00:05:01 video=832x480
+  render robot {guide.mp4} pass=depth size=832x480 rate=16
+  generate model=shot prompt="Bolt walks toward the camera down a narrow alley between dark brick buildings at night, wet pavement, blue moonlight" guide={guide.mp4} cast=Bolt style=pulp seed=7
+media f2 path="shots/f2.mp4" rate=16 dur=00:00:05:01 video=832x480
+  render gaze {guide.mp4} pass=depth size=832x480 rate=16
+  generate model=shot prompt="Bolt stands on a rooftop at night with his back to the camera and looks up at a huge glowing full moon above the dark city skyline, stars in the sky" guide={guide.mp4} cast=Bolt style=pulp seed=7
+media f3 path="shots/f3.mp4" rate=16 dur=00:00:05:01 video=832x480
+  render ready {guide.mp4} pass=depth size=832x480 rate=16
+  generate model=shot prompt="at dawn Bolt walks across a concrete launch site toward the rocket standing on its launch pad beside a red steel tower, orange sunrise sky" guide={guide.mp4} cast=Bolt cast=rocket style=pulp seed=7
+media f4 path="shots/f4.mp4" rate=16 dur=00:00:05:01 video=832x480
+  render rocket {guide.mp4} pass=depth size=832x480 rate=16
+  generate model=shot prompt="the rocket lifts off from its launch pad beside a red steel tower, fire and billowing white smoke under it, orange sunrise sky, the camera tilts up after it" guide={guide.mp4} cast=rocket style=pulp seed=7
+media f5 path="shots/f5.mp4" rate=16 dur=00:00:05:01 video=832x480
+  render voyage {guide.mp4} pass=depth size=832x480 rate=16
+  generate model=shot prompt="the rocket flies through black starry space away from the big blue earth toward the grey cratered moon, a bright flame at its tail" guide={guide.mp4} cast=rocket style=pulp seed=7
+media f6 path="shots/f6.mp4" rate=16 dur=00:00:05:01 video=832x480
+  render landed {guide.mp4} pass=depth size=832x480 rate=16
+  generate model=shot prompt="Bolt stands on the grey dusty surface of the moon and waves one arm, the rocket stands landed behind him, the blue earth hangs in the black starry sky, craters and rocks, long shadows" guide={guide.mp4} cast=Bolt cast=rocket style=pulp seed=7
+media pad_2 path="media/pad.wav" rate=30 dur=00:00:28:10 audio=2ch@48000
+media rumble path="media/rumble.wav" rate=30 dur=00:00:06:15 audio=2ch@48000
+media snow_read path="shots/snow_read.mp4" rate=16 dur=00:00:05:01 video=832x480
+  generate model=depth guide=shots/snowman.takes/001.mp4
+media orbit_views path="shots/orbit_views.mp4" rate=16 dur=00:00:05:01 video=832x480
+  render snowman {guide.mp4} size=832x480 rate=16
+  generate model=cameras guide={guide.mp4} out={cameras.txt}
+  generate model=depth guide={guide.mp4}
+media ufo_led path="shots/ufo_led.mp4" rate=16 dur=00:00:05:01 video=832x480
+  generate model=led prompt="a silver flying saucer flies in over a dark field under a starry night sky and stops, hovering" moves=ufo seed=7
+media robot_matte path="shots/robot_matte.mp4" rate=16 dur=00:00:05:01 video=832x480
+  generate model=matte prompt="robot" guide=shots/robot.takes/001.mp4 objects=1
+media city_long path="shots/city_long.mp4" rate=16 dur=00:00:05:01 video=832x480
+  render city {d1.mp4} pass=depth size=832x480 rate=16 seconds=2.5625
+  render city {d2.mp4} pass=depth size=832x480 rate=16 from=2.5 seconds=2.5625
+  generate model=directed prompt="aerial drone shot flying between glass skyscrapers of a futuristic city at golden hour, orange sky, cinematic, photorealistic" guide={d1.mp4} seed=7 out={a.mp4}
+  generate model=directed prompt="aerial drone shot flying between glass skyscrapers of a futuristic city at golden hour, orange sky, cinematic, photorealistic" guide={d2.mp4} first={a.mp4} from=2.5 seed=7 out={b.mp4}
+  join {a.mp4} {b.mp4} {out} lap=1
+media pass_picture path="shots/pass_picture.mp4" rate=16 dur=00:00:05:01 video=832x480
+  render saucer {out} size=832x480 rate=16
+media pass_depth path="shots/pass_depth.mp4" rate=16 dur=00:00:05:01 video=832x480
+  render saucer {out} pass=depth size=832x480 rate=16
+media pass_relative path="shots/pass_relative.mp4" rate=16 dur=00:00:05:01 video=832x480
+  render saucer {out} pass=relative size=832x480 rate=16
+media pass_ids path="shots/pass_ids.mp4" rate=16 dur=00:00:05:01 video=832x480
+  render saucer {out} pass=ids size=832x480 rate=16
+media pass_normals path="shots/pass_normals.mp4" rate=16 dur=00:00:05:01 video=832x480
+  render saucer {out} pass=normals size=832x480 rate=16
+media pass_matte path="shots/pass_matte.mp4" rate=16 dur=00:00:05:01 video=832x480
+  render saucer {out} matte=ufo size=832x480 rate=16
+
+sequence s1 name="Scenes of solids" rate=30 size=1920x1080 audio=48000 start=00:00:00:00
+
+sequence snowman name="Snowman orbit" rate=16 size=832x480 audio=48000 start=00:00:00:00
+  track V1 video
+    clip snow_sky gen=solid@1 at=00:00:00:00 dur=00:00:05:01
+      set color=#9fc4e8
+  track V2 video
+    clip snow_ground gen=solid@1 at=00:00:00:00 dur=00:00:05:01
+      set y=0.5 three_d=true z=3 rotate_x=-90 scale=40 color=#eef1f5
+  track V3 video
+    clip snow_base gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set y=0.22 z=2 kind=ball width=0.56 height=0.56 length=0.56 color=#ffffff
+  track V4 video
+    clip snow_belly gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set y=-0.2 z=2 kind=ball width=0.42 height=0.42 length=0.42 color=#ffffff
+  track V5 video
+    clip snow_head gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set y=-0.52 z=2 kind=ball width=0.3 height=0.3 length=0.3 color=#ffffff
+  track V6 video
+    clip snow_brim gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set y=-0.66 z=2 kind=cylinder width=0.36 height=0.03 length=0.36 color=#202020
+  track V7 video
+    clip snow_hat gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set y=-0.78 z=2 kind=cylinder width=0.22 height=0.22 length=0.22 color=#202020
+  track V8 video
+    clip snow_nose gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set y=-0.52 z=1.8 kind=box width=0.05 height=0.05 length=0.2 color=#ff7a1a
+  track V9 video
+    clip snow_arm_l gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x=-0.2077 y=-0.26 z=2 rotation=-25 kind=box width=0.36 height=0.03 length=0.03 color=#5a3a1a
+  track V10 video
+    clip snow_arm_r gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x=0.2077 y=-0.26 z=2 rotation=25 kind=box width=0.36 height=0.03 length=0.03 color=#5a3a1a
+  track V11 video
+    clip snow_tree gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x=0.9231 y=-0.15 z=4.5 kind=cylinder width=0.5 height=1.3 length=0.5 color=#1f5a2a
+  track V12 video
+    clip snow_tree2 gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x=-1.0962 y=0 z=5.5 kind=cylinder width=0.4 height=1 length=0.4 color=#1f5a2a
+  track V13 video
+    clip snow_sun gen=light@1 at=00:00:00:00 dur=00:00:05:01
+      set x=0.5 y=0.8 z=0.5 kind=directional intensity=1 shadow=0.7
+  track V14 video
+    clip snow_fill gen=light@1 at=00:00:00:00 dur=00:00:05:01
+      set kind=ambient intensity=0.45
+  track V15 video
+    clip snow_cam gen=camera@1 at=00:00:00:00 dur=00:00:05:01
+      set x={0f:0 10f:0.2961 20f:0.5853 30f:0.8609 40f:1.1164 50f:1.346 60f:1.5442 70f:1.7065 80f:1.829} y=-0.15 z={0f:0 10f:0.0393 20f:0.1561 30f:0.3479 40f:0.6101 50f:0.9367 60f:1.3199 70f:1.751 80f:2.2199} pan={0f:0 10f:-8.75 20f:-17.5 30f:-26.25 40f:-35 50f:-43.75 60f:-52.5 70f:-61.25 80f:-70} tilt=-4
+
+sequence rocket name="Rocket launch" rate=16 size=832x480 audio=48000 start=00:00:00:00
+  track V1 video
+    clip pad_sky gen=solid@1 at=00:00:00:00 dur=00:00:05:01
+      set color=#6fa8dc
+  track V2 video
+    clip pad_ground gen=solid@1 at=00:00:00:00 dur=00:00:05:01
+      set y=0.5 three_d=true z=4 rotate_x=-90 scale=40 color=#8a8f7a
+  track V3 video
+    clip pad gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set y=0.45 z=4 kind=box width=1.4 height=0.1 length=1.4 color=#777777
+  track V4 video
+    clip tower gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x=-0.3577 y=-0.5 z=4 kind=box width=0.16 height=1.9 length=0.16 color=#b03a2e
+  track V5 video
+    clip ship gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set y={0f:-0.38 16f:-0.38 32f:-0.62 48f:-1.3 64f:-2.5 80f:-4.4} z=4 height=1.56 file="models/rocket.glb"
+  track V6 video
+    clip launch_sun gen=light@1 at=00:00:00:00 dur=00:00:05:01
+      set x=-0.5 y=0.7 z=0.5 kind=directional intensity=1
+  track V7 video
+    clip launch_fill gen=light@1 at=00:00:00:00 dur=00:00:05:01
+      set kind=ambient intensity=0.5
+  track V8 video
+    clip launch_cam gen=camera@1 at=00:00:00:00 dur=00:00:05:01
+      set y=0.1 z=-1.2 tilt={0f:6 16f:6 40f:14 64f:30 80f:42}
+
+sequence solar name="Planets round a sun" rate=16 size=832x480 audio=48000 start=00:00:00:00
+  track V1 video
+    clip space gen=solid@1 at=00:00:00:00 dur=00:00:05:01
+      set color=#05060c
+  track V2 video
+    clip sun gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set z=3 kind=ball width=0.7 height=0.7 length=0.7 color=#ffcc33
+  track V3 video
+    clip mercury gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x=(cos(t*2.2+0.4)*0.3577) y=(sin(t*2.2+0.4)*-0.1364) z=(3+sin(t*2.2+0.4)*0.62) kind=ball width=0.1 height=0.1 length=0.1 color=#b0a090
+  track V4 video
+    clip earth gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x=(cos(t*1.3+2.1)*0.6058) y=(sin(t*1.3+2.1)*-0.231) z=(3+sin(t*1.3+2.1)*1.05) kind=ball width=0.18 height=0.18 length=0.18 color=#3a7bd5
+  track V5 video
+    clip mars gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x=(cos(t*0.95+4)*0.8654) y=(sin(t*0.95+4)*-0.33) z=(3+sin(t*0.95+4)*1.5) kind=ball width=0.14 height=0.14 length=0.14 color=#c1440e
+  track V6 video
+    clip jupiter gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x=(cos(t*0.6+5.2)*1.2404) y=(sin(t*0.6+5.2)*-0.473) z=(3+sin(t*0.6+5.2)*2.15) kind=ball width=0.34 height=0.34 length=0.34 color=#d9b38c
+  track V7 video
+    clip ring gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x=(cos(t*0.6+5.2)*1.2404) y=(sin(t*0.6+5.2)*-0.473) z=(3+sin(t*0.6+5.2)*2.15) kind=cylinder width=0.62 height=0.012 length=0.62 color=#e8d8b0
+  track V8 video
+    clip sunlight gen=light@1 at=00:00:00:00 dur=00:00:05:01
+      set x=0 y=0 z=3 kind=point intensity=2.2
+  track V9 video
+    clip starlight gen=light@1 at=00:00:00:00 dur=00:00:05:01
+      set kind=ambient intensity=0.35
+  track V10 video
+    clip space_cam gen=camera@1 at=00:00:00:00 dur=00:00:05:01
+      set y=-0.9 z={0f:-1.6 80f:-0.4} tilt=-13
+
+sequence robot name="Robot walks up" rate=16 size=832x480 audio=48000 start=00:00:00:00
+  track V1 video
+    clip alley_sky gen=solid@1 at=00:00:00:00 dur=00:00:05:01
+      set color=#101828
+  track V2 video
+    clip alley_floor gen=solid@1 at=00:00:00:00 dur=00:00:05:01
+      set y=0.5 three_d=true z=4 rotate_x=-90 scale=40 color=#30343c
+  track V3 video
+    clip wall_l0 gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x=-1.0962 y=-0.4 z=1.5 kind=box width=1.2 height=1.8 length=2.4 color=#3b4252
+  track V4 video
+    clip wall_l1 gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x=-1.0962 y=-0.65 z=4.1 kind=box width=1.2 height=2.3 length=2.4 color=#3b4252
+  track V5 video
+    clip wall_l2 gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x=-1.0962 y=-0.9 z=6.7 kind=box width=1.2 height=2.8 length=2.4 color=#3b4252
+  track V6 video
+    clip wall_r0 gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x=1.0962 y=-0.4 z=1.5 kind=box width=1.2 height=1.8 length=2.4 color=#3b4252
+  track V7 video
+    clip wall_r1 gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x=1.0962 y=-0.65 z=4.1 kind=box width=1.2 height=2.3 length=2.4 color=#3b4252
+  track V8 video
+    clip wall_r2 gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x=1.0962 y=-0.9 z=6.7 kind=box width=1.2 height=2.8 length=2.4 color=#3b4252
+  track V9 video
+    clip bot gen=null@1 at=00:00:00:00 dur=00:00:05:01
+      set y=(abs(sin(t*6.2832))*-0.03)
+  track V10 video
+    clip bot_body gen=mesh@1 at=00:00:00:00 dur=00:00:05:01 parent=bot
+      set y=-0.05 z={0f:6.5 80f:1.6} kind=box width=0.5 height=0.5 length=0.32 color=#c9a227
+  track V11 video
+    clip bot_head gen=mesh@1 at=00:00:00:00 dur=00:00:05:01 parent=bot
+      set y=-0.45 z={0f:6.5 80f:1.6} kind=box width=0.34 height=0.26 length=0.28 color=#d8d8d8
+  track V12 video
+    clip bot_eye_l gen=mesh@1 at=00:00:00:00 dur=00:00:05:01 parent=bot
+      set x=-0.0462 y=-0.47 z={0f:6.34 80f:1.44} rotate_x=90 kind=cylinder width=0.07 height=0.04 length=0.07 color=#40e0ff
+  track V13 video
+    clip bot_eye_r gen=mesh@1 at=00:00:00:00 dur=00:00:05:01 parent=bot
+      set x=0.0462 y=-0.47 z={0f:6.34 80f:1.44} rotate_x=90 kind=cylinder width=0.07 height=0.04 length=0.07 color=#40e0ff
+  track V14 video
+    clip bot_antenna gen=mesh@1 at=00:00:00:00 dur=00:00:05:01 parent=bot
+      set y=-0.66 z={0f:6.5 80f:1.6} kind=cylinder width=0.03 height=0.16 length=0.03 color=#d8d8d8
+  track V15 video
+    clip bot_leg_l gen=mesh@1 at=00:00:00:00 dur=00:00:05:01 parent=bot
+      set x=-0.075 y=0.35 z={0f:6.5 80f:1.6} rotate_x=(sin(t*6.2832)*28) kind=box width=0.14 height=0.3 length=0.16 color=#8a8a8a
+  track V16 video
+    clip bot_leg_r gen=mesh@1 at=00:00:00:00 dur=00:00:05:01 parent=bot
+      set x=0.075 y=0.35 z={0f:6.5 80f:1.6} rotate_x=(sin(t*6.2832)*-28) kind=box width=0.14 height=0.3 length=0.16 color=#8a8a8a
+  track V17 video
+    clip bot_arm_l gen=mesh@1 at=00:00:00:00 dur=00:00:05:01 parent=bot
+      set x=-0.1904 y=-0.05 z={0f:6.5 80f:1.6} rotate_x=(sin(t*6.2832)*-28) kind=box width=0.1 height=0.42 length=0.12 color=#8a8a8a
+  track V18 video
+    clip bot_arm_r gen=mesh@1 at=00:00:00:00 dur=00:00:05:01 parent=bot
+      set x=0.1904 y=-0.05 z={0f:6.5 80f:1.6} rotate_x=(sin(t*6.2832)*28) kind=box width=0.1 height=0.42 length=0.12 color=#8a8a8a
+  track V19 video
+    clip alley_key gen=light@1 at=00:00:00:00 dur=00:00:05:01
+      set x=0.3 y=0.8 z=0.6 kind=directional intensity=1
+  track V20 video
+    clip alley_fill gen=light@1 at=00:00:00:00 dur=00:00:05:01
+      set kind=ambient intensity=0.5
+  track V21 video
+    clip alley_cam gen=camera@1 at=00:00:00:00 dur=00:00:05:01
+      set y=0.2 tilt=5
+
+sequence city name="Flight between towers" rate=16 size=832x480 audio=48000 start=00:00:00:00
+  track V1 video
+    clip city_sky gen=solid@1 at=00:00:00:00 dur=00:00:05:01
+      set color=#f2b279
+  track V2 video
+    clip city_ground gen=solid@1 at=00:00:00:00 dur=00:00:05:01
+      set y=0.5 three_d=true z=10 rotate_x=-90 scale=60 color=#4a4f57
+  track V3 video
+    clip tower0 gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x=-0.7212 y=-0.3 z=2.5 kind=box width=0.9 height=1.6 length=1.1 color=#b8c4d0
+  track V4 video
+    clip tower1 gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x=1.125 y=-0.8 z=2.5 kind=box width=1.1 height=2.6 length=1.1 color=#8fa3b8
+  track V5 video
+    clip tower2 gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x=-0.9231 y=-0.1 z=4.9 kind=box width=1.3 height=1.2 length=1.1 color=#b8c4d0
+  track V6 video
+    clip tower3 gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x=0.7212 y=-1.2 z=4.9 kind=box width=0.9 height=3.4 length=1.1 color=#8fa3b8
+  track V7 video
+    clip tower4 gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x=-1.125 y=-0.5 z=7.3 kind=box width=1.1 height=2 length=1.1 color=#b8c4d0
+  track V8 video
+    clip tower5 gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x=0.9231 y=-0.95 z=7.3 kind=box width=1.3 height=2.9 length=1.1 color=#8fa3b8
+  track V9 video
+    clip tower6 gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x=-0.7212 y=-0.25 z=9.7 kind=box width=0.9 height=1.5 length=1.1 color=#b8c4d0
+  track V10 video
+    clip tower7 gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x=1.125 y=-1.4 z=9.7 kind=box width=1.1 height=3.8 length=1.1 color=#8fa3b8
+  track V11 video
+    clip tower8 gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x=-0.9231 y=-0.65 z=12.1 kind=box width=1.3 height=2.3 length=1.1 color=#b8c4d0
+  track V12 video
+    clip tower9 gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x=0.7212 y=-0.4 z=12.1 kind=box width=0.9 height=1.8 length=1.1 color=#8fa3b8
+  track V13 video
+    clip tower10 gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x=-1.125 y=-1.05 z=14.5 kind=box width=1.1 height=3.1 length=1.1 color=#b8c4d0
+  track V14 video
+    clip tower11 gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x=0.9231 y=-0.75 z=14.5 kind=box width=1.3 height=2.5 length=1.1 color=#8fa3b8
+  track V15 video
+    clip spire gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set y=-2.1 z=17.5 kind=cylinder width=0.5 height=5.2 length=0.5 color=#d0d8e0
+  track V16 video
+    clip city_sun gen=light@1 at=00:00:00:00 dur=00:00:05:01
+      set x=0.6 y=0.6 z=0.5 kind=directional intensity=1
+  track V17 video
+    clip city_fill gen=light@1 at=00:00:00:00 dur=00:00:05:01
+      set kind=ambient intensity=0.5
+  track V18 video
+    clip drone gen=camera@1 at=00:00:00:00 dur=00:00:05:01
+      set y={0f:-1.9 80f:-0.7} z={0f:-1.5 80f:6.5} tilt={0f:-18 80f:-2} roll={0f:-4 40f:4 80f:0}
+
+sequence bowling name="A strike" rate=16 size=832x480 audio=48000 start=00:00:00:00
+  track V1 video
+    clip hall gen=solid@1 at=00:00:00:00 dur=00:00:05:01
+      set color=#1a1410
+  track V2 video
+    clip lane gen=solid@1 at=00:00:00:00 dur=00:00:05:01
+      set y=0.5 three_d=true z=6 rotate_x=-90 scale=14 scale_x=0.09 scale_y=1 color=#c89b5a
+  track V3 video
+    clip gutter_l gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x=-0.6923 y=0.5 z=6 kind=box width=0.12 height=0.06 length=12 color=#2a2a2a
+  track V4 video
+    clip gutter_r gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x=0.6923 y=0.5 z=6 kind=box width=0.12 height=0.06 length=12 color=#2a2a2a
+  track V5 video
+    clip ball gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x={0f:0.1442 48f:0 80f:-0.1154} y=0.32 z={0f:2.6 48f:7.6 80f:10.5} kind=ball width=0.36 height=0.36 length=0.36 color=#1b3fa8
+  track V6 video
+    clip pin0 gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x=0 y={0f:0.22 48f:0.22 62f:0.4} z={0f:8 48f:8 80f:9.2} rotation={0f:0 48f:0 62f:55} kind=cylinder width=0.16 height=0.56 length=0.16 color=#ffffff
+  track V7 video
+    clip pin1 gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x=-0.1269 y={0f:0.22 50f:0.22 64f:0.4} z={0f:8.4 50f:8.4 80f:9.8} rotation={0f:0 50f:0 64f:-65} kind=cylinder width=0.16 height=0.56 length=0.16 color=#ffffff
+  track V8 video
+    clip pin2 gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x=0.1269 y={0f:0.22 52f:0.22 66f:0.4} z={0f:8.4 52f:8.4 80f:10} rotation={0f:0 52f:0 66f:75} kind=cylinder width=0.16 height=0.56 length=0.16 color=#ffffff
+  track V9 video
+    clip pin3 gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x=-0.2538 y={0f:0.22 54f:0.22 68f:0.4} z={0f:8.8 54f:8.8 80f:10.6} rotation={0f:0 54f:0 68f:-85} kind=cylinder width=0.16 height=0.56 length=0.16 color=#ffffff
+  track V10 video
+    clip pin4 gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x=0 y={0f:0.22 56f:0.22 70f:0.4} z={0f:8.8 56f:8.8 80f:10.8} rotation={0f:0 56f:0 70f:95} kind=cylinder width=0.16 height=0.56 length=0.16 color=#ffffff
+  track V11 video
+    clip pin5 gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x=0.2538 y={0f:0.22 58f:0.22 72f:0.4} z={0f:8.8 58f:8.8 80f:11} rotation={0f:0 58f:0 72f:105} kind=cylinder width=0.16 height=0.56 length=0.16 color=#ffffff
+  track V12 video
+    clip strike gen=signal@1 at=00:00:00:00 dur=00:00:05:01
+      set value={0f:0 47f:0 48f:1 52f:1 56f:0}
+  track V13 video
+    clip lane_key gen=light@1 at=00:00:00:00 dur=00:00:05:01
+      set x=0.2 y=0.9 z=0.4 kind=directional intensity=1
+  track V14 video
+    clip lane_fill gen=light@1 at=00:00:00:00 dur=00:00:05:01
+      set kind=ambient intensity=0.5
+  track V15 video
+    clip lane_cam gen=camera@1 at=00:00:00:00 dur=00:00:05:01
+      set y=-0.05 z={0f:3.2 48f:5.6 80f:6.2} tilt=-7
+
+sequence donut name="A donut turns" rate=16 size=832x480 audio=48000 start=00:00:00:00
+  track V1 video
+    clip bakery gen=solid@1 at=00:00:00:00 dur=00:00:05:01
+      set color=#e8d9c5
+  track V2 video
+    clip counter gen=solid@1 at=00:00:00:00 dur=00:00:05:01
+      set y=0.5 three_d=true z=2 rotate_x=-90 scale=30 color=#b89068
+  track V3 video
+    clip plate gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set y=0.48 z=1.6 kind=cylinder width=1.5 height=0.04 length=1.5 color=#f6f6f6
+  track V4 video
+    clip ring_cake gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set y=0.28 z=1.6 height=0.36 file="models/donut.glb" animation="Spin"
+  track V5 video
+    clip cup gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x=0.7212 y=0.3 z=2.6 kind=cylinder width=0.34 height=0.4 length=0.34 color=#ffffff
+  track V6 video
+    clip jar gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x=-0.8077 y=0.1 z=3.2 kind=cylinder width=0.4 height=0.8 length=0.4 color=#c8e0e8
+  track V7 video
+    clip shop_key gen=light@1 at=00:00:00:00 dur=00:00:05:01
+      set x=-0.4 y=0.8 z=0.5 kind=directional intensity=1 shadow=0.6
+  track V8 video
+    clip shop_fill gen=light@1 at=00:00:00:00 dur=00:00:05:01
+      set kind=ambient intensity=0.55
+  track V9 video
+    clip macro gen=camera@1 at=00:00:00:00 dur=00:00:05:01
+      set x={0f:-0.1731 80f:0.1731} y=-0.5 z={0f:-0.5 80f:0.25} pan={0f:6 80f:-6} tilt=-24
+
+sequence saucer name="A saucer over a barn" rate=16 size=832x480 audio=48000 start=00:00:00:00
+  track V1 video
+    clip night gen=solid@1 at=00:00:00:00 dur=00:00:05:01
+      set color=#0b1030
+  track V2 video
+    clip field gen=solid@1 at=00:00:00:00 dur=00:00:05:01
+      set y=0.5 three_d=true z=5 rotate_x=-90 scale=40 color=#27402a
+  track V3 video
+    clip barn gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x=-0.8654 y=0.1 z=6 kind=box width=1.3 height=0.8 length=1.6 color=#8c2f23
+  track V4 video
+    clip barn_roof gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x=-0.8654 y=-0.3 z=6 rotation=45 kind=box width=1 height=1 length=1.7 color=#5a2018
+  track V5 video
+    clip silo gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x=-1.5 y=-0.25 z=6.8 kind=cylinder width=0.5 height=1.5 length=0.5 color=#b8bcc0
+  track V6 video
+    clip cow_body gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x=0.5192 y=0.25 z=4.6 kind=box width=0.5 height=0.26 length=0.24 color=#f0f0f0
+  track V7 video
+    clip cow_head gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x=0.7038 y=0.14 z=4.6 kind=box width=0.16 height=0.16 length=0.16 color=#f0f0f0
+  track V8 video
+    clip cow_leg0 gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x=0.4154 y=0.43 z=4.52 kind=box width=0.06 height=0.14 length=0.06 color=#f0f0f0
+  track V9 video
+    clip cow_leg1 gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x=0.6231 y=0.43 z=4.52 kind=box width=0.06 height=0.14 length=0.06 color=#f0f0f0
+  track V10 video
+    clip cow_leg2 gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x=0.4154 y=0.43 z=4.68 kind=box width=0.06 height=0.14 length=0.06 color=#f0f0f0
+  track V11 video
+    clip cow_leg3 gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x=0.6231 y=0.43 z=4.68 kind=box width=0.06 height=0.14 length=0.06 color=#f0f0f0
+  track V12 video
+    clip ufo gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x={0f:1.9615 50f:0.5481 80f:0.5192} y={0f:-1.5 50f:-0.95 64f:-0.86 80f:-0.9} z=4.6 rotation={0f:-14 50f:0} height=0.42 file="models/saucer.glb" animation="Spin"
+  track V13 video
+    clip beam gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x=0.5192 y=-0.2 z=4.6 opacity={0f:0 54f:0 62f:0.5} kind=cylinder width=0.7 height=1.1 length=0.7 color=#c8ffd0
+  track V14 video
+    clip moon gen=light@1 at=00:00:00:00 dur=00:00:05:01
+      set x=-0.5 y=0.6 z=0.6 kind=directional intensity=0.9
+  track V15 video
+    clip night_fill gen=light@1 at=00:00:00:00 dur=00:00:05:01
+      set kind=ambient intensity=0.5
+  track V16 video
+    clip field_cam gen=camera@1 at=00:00:00:00 dur=00:00:05:01
+      set y=0.15 z={0f:-1 80f:-0.2} tilt={0f:15 80f:9}
+
+sequence lighthouse name="A lighthouse, craned" rate=16 size=832x480 audio=48000 start=00:00:00:00
+  track V1 video
+    clip dusk gen=solid@1 at=00:00:00:00 dur=00:00:05:01
+      set color=#5d6f8f
+  track V2 video
+    clip sea gen=solid@1 at=00:00:00:00 dur=00:00:05:01
+      set y=1.3 three_d=true z=8 rotate_x=-90 scale=60 color=#1d3b53
+  track V3 video
+    clip cliff gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set y=0.65 z=5 rotate_y=18 kind=box width=3.4 height=1.3 length=3 color=#6b5d4f
+  track V4 video
+    clip rock gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x=1.3269 y=0.95 z=4.2 rotate_y=-30 rotation=8 kind=box width=1.2 height=0.7 length=1.2 color=#5a4e42
+  track V5 video
+    clip house gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x=-0.4327 y=-0.25 z=5.2 rotate_y=18 kind=box width=0.8 height=0.5 length=0.7 color=#e8e2d4
+  track V6 video
+    clip tower_base gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x=0.1731 y=-0.75 z=5 kind=cylinder width=0.62 height=1.5 length=0.62 color=#f4f1ea
+  track V7 video
+    clip gallery gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x=0.1731 y=-1.53 z=5 kind=cylinder width=0.8 height=0.06 length=0.8 color=#303030
+  track V8 video
+    clip lantern gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x=0.1731 y=-1.73 z=5 kind=cylinder width=0.42 height=0.34 length=0.42 color=#ffe680
+  track V9 video
+    clip cap gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x=0.1731 y=-1.93 z=5 kind=ball width=0.5 height=0.3 length=0.5 color=#a02a22
+  track V10 video
+    clip lamp gen=light@1 at=00:00:00:00 dur=00:00:05:01
+      set x=0.1731 y=-1.73 z=4.2 kind=point color=#ffe9a8 intensity=1.5
+  track V11 video
+    clip dusk_sun gen=light@1 at=00:00:00:00 dur=00:00:05:01
+      set x=0.6 y=0.5 z=0.5 kind=directional intensity=0.9
+  track V12 video
+    clip dusk_fill gen=light@1 at=00:00:00:00 dur=00:00:05:01
+      set kind=ambient intensity=0.5
+  track V13 video
+    clip crane gen=camera@1 at=00:00:00:00 dur=00:00:05:01
+      set x={0f:-1.554 10f:-1.182 20f:-0.7959 30f:-0.4003 40f:0 50f:0.4003 60f:0.7959 70f:1.182 80f:1.554} y={0f:0.9 80f:-1.6} z={0f:0.5972 10f:0.3383 20f:0.1511 30f:0.0379 40f:0 50f:0.0379 60f:0.1511 70f:0.3383 80f:0.5972} pan={0f:25 10f:18.75 20f:12.5 30f:6.25 40f:0 50f:-6.25 60f:-12.5 70f:-18.75 80f:-25} tilt={0f:22 80f:-8}
+
+sequence ready name="Bolt walks to the rocket" rate=16 size=832x480 audio=48000 start=00:00:00:00
+  track V1 video
+    clip dawn gen=solid@1 at=00:00:00:00 dur=00:00:05:01
+      set color=#f0b890
+  track V2 video
+    clip apron gen=solid@1 at=00:00:00:00 dur=00:00:05:01
+      set y=0.5 three_d=true z=4 rotate_x=-90 scale=40 color=#8a8f7a
+  track V3 video
+    clip ready_pad gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set y=0.45 z=4 kind=box width=1.4 height=0.1 length=1.4 color=#777777
+  track V4 video
+    clip ready_tower gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x=-0.3577 y=-0.5 z=4 kind=box width=0.16 height=1.9 length=0.16 color=#b03a2e
+  track V5 video
+    clip ready_ship gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set y=-0.38 z=4 height=1.56 file="models/rocket.glb"
+  track V6 video
+    clip rd_body gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x={0f:1.3269 80f:0.6058} y=0.197 z={0f:3.2 80f:3.7} kind=box width=0.275 height=0.275 length=0.176 color=#c9a227
+  track V7 video
+    clip rd_head gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x={0f:1.3269 80f:0.6058} y=-0.022 z={0f:3.2 80f:3.7} kind=box width=0.187 height=0.143 length=0.154 color=#d8d8d8
+  track V8 video
+    clip rd_eye_l gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x={0f:1.3015 80f:0.5804} y=-0.033 z={0f:3.112 80f:3.612} rotate_x=90 kind=cylinder width=0.039 height=0.022 length=0.039 color=#40e0ff
+  track V9 video
+    clip rd_eye_r gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x={0f:1.3523 80f:0.6312} y=-0.033 z={0f:3.112 80f:3.612} rotate_x=90 kind=cylinder width=0.039 height=0.022 length=0.039 color=#40e0ff
+  track V10 video
+    clip rd_antenna gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x={0f:1.3269 80f:0.6058} y=-0.138 z={0f:3.2 80f:3.7} kind=cylinder width=0.017 height=0.088 length=0.017 color=#d8d8d8
+  track V11 video
+    clip rd_leg_l gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x={0f:1.2857 80f:0.5645} y=0.417 z={0f:3.2 80f:3.7} rotate_x=(sin(t*6.2832)*26) kind=box width=0.077 height=0.165 length=0.088 color=#8a8a8a
+  track V12 video
+    clip rd_leg_r gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x={0f:1.3682 80f:0.647} y=0.417 z={0f:3.2 80f:3.7} rotate_x=(sin(t*6.2832)*-26) kind=box width=0.077 height=0.165 length=0.088 color=#8a8a8a
+  track V13 video
+    clip rd_arm_l gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x={0f:1.2222 80f:0.5011} y=0.197 z={0f:3.2 80f:3.7} rotate_x=(sin(t*6.2832)*-26) kind=box width=0.055 height=0.231 length=0.066 color=#8a8a8a
+  track V14 video
+    clip rd_arm_r gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x={0f:1.4316 80f:0.7105} y=0.197 z={0f:3.2 80f:3.7} rotate_x=(sin(t*6.2832)*26) kind=box width=0.055 height=0.231 length=0.066 color=#8a8a8a
+  track V15 video
+    clip ready_sun gen=light@1 at=00:00:00:00 dur=00:00:05:01
+      set x=-0.6 y=0.5 z=0.5 kind=directional intensity=1
+  track V16 video
+    clip ready_fill gen=light@1 at=00:00:00:00 dur=00:00:05:01
+      set kind=ambient intensity=0.5
+  track V17 video
+    clip ready_cam gen=camera@1 at=00:00:00:00 dur=00:00:05:01
+      set y=0.2 z={0f:-1.4 80f:-0.5} tilt={0f:7 80f:10}
+
+sequence landed name="Bolt on the moon" rate=16 size=832x480 audio=48000 start=00:00:00:00
+  track V1 video
+    clip black_sky gen=solid@1 at=00:00:00:00 dur=00:00:05:01
+      set color=#020204
+  track V2 video
+    clip regolith gen=solid@1 at=00:00:00:00 dur=00:00:05:01
+      set y=0.5 three_d=true z=5 rotate_x=-90 scale=40 color=#9a9a9a
+  track V3 video
+    clip crater0 gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x=-1.0962 y=0.49 z=3 kind=cylinder width=1.1 height=0.05 length=1.1 color=#7d7d7d
+  track V4 video
+    clip crater1 gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x=1.0962 y=0.49 z=6.2 kind=cylinder width=1.6 height=0.05 length=1.6 color=#7d7d7d
+  track V5 video
+    clip crater2 gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x=-0.2308 y=0.49 z=8 kind=cylinder width=2.2 height=0.05 length=2.2 color=#7d7d7d
+  track V6 video
+    clip stone0 gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x=1.3846 y=0.41 z=3.2 kind=ball width=0.3 height=0.21 length=0.3 color=#6f6f6f
+  track V7 video
+    clip stone1 gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x=-1.6154 y=0.365 z=5.4 kind=ball width=0.45 height=0.315 length=0.45 color=#6f6f6f
+  track V8 video
+    clip stone2 gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x=0.3462 y=0.44 z=5.2 kind=ball width=0.2 height=0.14 length=0.2 color=#6f6f6f
+  track V9 video
+    clip lander gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x=-0.6058 y=-0.26 z=5 height=1.7 file="models/rocket.glb"
+  track V10 video
+    clip ld_body gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x=0.4327 y=0.087 z=2.6 kind=box width=0.375 height=0.375 length=0.24 color=#c9a227
+  track V11 video
+    clip ld_head gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x=0.4327 y=-0.212 z=2.6 kind=box width=0.255 height=0.195 length=0.21 color=#d8d8d8
+  track V12 video
+    clip ld_eye_l gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x=0.3981 y=-0.228 z=2.48 rotate_x=90 kind=cylinder width=0.053 height=0.03 length=0.053 color=#40e0ff
+  track V13 video
+    clip ld_eye_r gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x=0.4673 y=-0.228 z=2.48 rotate_x=90 kind=cylinder width=0.053 height=0.03 length=0.053 color=#40e0ff
+  track V14 video
+    clip ld_antenna gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x=0.4327 y=-0.37 z=2.6 kind=cylinder width=0.022 height=0.12 length=0.022 color=#d8d8d8
+  track V15 video
+    clip ld_leg_l gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x=0.3764 y=0.387 z=2.6 rotate_x=0 kind=box width=0.105 height=0.225 length=0.12 color=#8a8a8a
+  track V16 video
+    clip ld_leg_r gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x=0.4889 y=0.387 z=2.6 rotate_x=0 kind=box width=0.105 height=0.225 length=0.12 color=#8a8a8a
+  track V17 video
+    clip ld_arm_l gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x=0.2899 y=0.087 z=2.6 rotate_x=0 kind=box width=0.075 height=0.315 length=0.09 color=#8a8a8a
+  track V18 video
+    clip ld_arm_r gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x=0.6058 y={0f:0.087 24f:0.087 36f:-0.19} z=2.6 rotation={0f:0 24f:0 36f:150 44f:125 52f:155 60f:125 68f:155 80f:140} kind=box width=0.075 height=0.315 length=0.09 color=#8a8a8a
+  track V19 video
+    clip home gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x=3.1731 y=-2.3 z=11 kind=ball width=2.4 height=2.4 length=2.4 color=#2f6fd0
+  track V20 video
+    clip landed_sun gen=light@1 at=00:00:00:00 dur=00:00:05:01
+      set x=0.5 y=0.6 z=0.6 kind=directional intensity=1.1 shadow=0.7
+  track V21 video
+    clip landed_fill gen=light@1 at=00:00:00:00 dur=00:00:05:01
+      set kind=ambient intensity=0.4
+  track V22 video
+    clip landed_cam gen=camera@1 at=00:00:00:00 dur=00:00:05:01
+      set y={0f:0.05 80f:-0.35} z={0f:0.5 80f:-0.9} tilt={0f:3 80f:-2}
+
+sequence gaze name="Bolt looks at the moon" rate=16 size=832x480 audio=48000 start=00:00:00:00
+  track V1 video
+    clip gaze_sky gen=solid@1 at=00:00:00:00 dur=00:00:05:01
+      set color=#0a0e24
+  track V2 video
+    clip roof gen=solid@1 at=00:00:00:00 dur=00:00:05:01
+      set y=0.5 three_d=true z=3 rotate_x=-90 scale=30 color=#2a2c34
+  track V3 video
+    clip block0 gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x=-1.5 y=-0.3 z=6.5 kind=box width=1.2 height=1.6 length=1 color=#1c2030
+  track V4 video
+    clip block1 gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x=-0.6923 y=-0.05 z=7.5 kind=box width=0.9 height=1.1 length=1 color=#1c2030
+  track V5 video
+    clip block2 gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x=0.5192 y=-0.45 z=7 kind=box width=1.3 height=1.9 length=1 color=#1c2030
+  track V6 video
+    clip block3 gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x=1.5 y=-0.15 z=6.2 kind=box width=1 height=1.3 length=1 color=#1c2030
+  track V7 video
+    clip chimney gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x=0.75 y=0.25 z=2.6 kind=box width=0.3 height=0.5 length=0.3 color=#3a3038
+  track V8 video
+    clip gz_body gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x=-0.3173 y=0.06 z=1.5 kind=box width=0.4 height=0.4 length=0.256 color=#c9a227
+  track V9 video
+    clip gz_head gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x=-0.3173 y=-0.26 z=1.5 kind=box width=0.272 height=0.208 length=0.224 color=#d8d8d8
+  track V10 video
+    clip gz_eye_l gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x=-0.3542 y=-0.276 z=1.628 rotate_x=90 kind=cylinder width=0.056 height=0.032 length=0.056 color=#40e0ff
+  track V11 video
+    clip gz_eye_r gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x=-0.2804 y=-0.276 z=1.628 rotate_x=90 kind=cylinder width=0.056 height=0.032 length=0.056 color=#40e0ff
+  track V12 video
+    clip gz_antenna gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x=-0.3173 y=-0.428 z=1.5 kind=cylinder width=0.024 height=0.128 length=0.024 color=#d8d8d8
+  track V13 video
+    clip gz_leg_l gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x=-0.3773 y=0.38 z=1.5 rotate_x=0 kind=box width=0.112 height=0.24 length=0.128 color=#8a8a8a
+  track V14 video
+    clip gz_leg_r gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x=-0.2573 y=0.38 z=1.5 rotate_x=0 kind=box width=0.112 height=0.24 length=0.128 color=#8a8a8a
+  track V15 video
+    clip gz_arm_l gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x=-0.4696 y=0.06 z=1.5 rotate_x=0 kind=box width=0.08 height=0.336 length=0.096 color=#8a8a8a
+  track V16 video
+    clip gz_arm_r gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x=-0.165 y=0.06 z=1.5 rotate_x=0 kind=box width=0.08 height=0.336 length=0.096 color=#8a8a8a
+  track V17 video
+    clip full_moon gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x=0.5769 y=-2.6 z=9 kind=ball width=2.6 height=2.6 length=2.6 color=#f2f0e0
+  track V18 video
+    clip gaze_glow gen=light@1 at=00:00:00:00 dur=00:00:05:01
+      set x=-0.3 y=0.5 z=-0.8 kind=directional intensity=1
+  track V19 video
+    clip gaze_fill gen=light@1 at=00:00:00:00 dur=00:00:05:01
+      set kind=ambient intensity=0.45
+  track V20 video
+    clip gaze_cam gen=camera@1 at=00:00:00:00 dur=00:00:05:01
+      set y=0.05 z={0f:-0.3 80f:-0.7} tilt={0f:2 20f:2 64f:15 80f:16}
+
+sequence voyage name="The rocket in space" rate=16 size=832x480 audio=48000 start=00:00:00:00
+  track V1 video
+    clip void gen=solid@1 at=00:00:00:00 dur=00:00:05:01
+      set color=#030408
+  track V2 video
+    clip blue_earth gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x=-0.8654 y=1 z=2.6 kind=ball width=2.4 height=2.4 length=2.4 color=#2f6fd0
+  track V3 video
+    clip far_moon gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x=1.0962 y=-0.75 z=7 kind=ball width=1.3 height=1.3 length=1.3 color=#d8d6cc
+  track V4 video
+    clip voyager gen=mesh@1 at=00:00:00:00 dur=00:00:05:01
+      set x={0f:-0.7212 80f:0.5769} y={0f:0.2 80f:-0.42} z={0f:1.3 80f:4.6} rotation=58 height=0.8 file="models/rocket.glb" animation="Spin"
+  track V5 video
+    clip voyage_sun gen=light@1 at=00:00:00:00 dur=00:00:05:01
+      set x=0.7 y=0.3 z=0.5 kind=directional intensity=1.1
+  track V6 video
+    clip voyage_fill gen=light@1 at=00:00:00:00 dur=00:00:05:01
+      set kind=ambient intensity=0.3
+  track V7 video
+    clip voyage_cam gen=camera@1 at=00:00:00:00 dur=00:00:05:01
+      set z={0f:-0.6 80f:0} pan={0f:-4 80f:6}
+
+sequence film name="Bolt goes to the Moon" rate=16 size=832x480 audio=48000 start=00:00:00:00
+  track V1 video
+    clip card gen=solid@1 at=00:00:00:00 dur=00:00:02:08
+      set color=#05060c
+    clip shot1 media=f1 src=00:00:00:10 at=00:00:02:08 dur=00:00:04:00
+    clip shot2 media=f2 src=00:00:00:08 at=00:00:06:08 dur=00:00:04:00
+    clip shot3 media=f3 src=00:00:00:12 at=00:00:10:08 dur=00:00:03:08
+    clip shot4 media=f4 src=00:00:00:08 at=00:00:14:00 dur=00:00:04:08
+    clip shot5 media=f5 src=00:00:00:08 at=00:00:18:08 dur=00:00:04:00
+    clip shot6 media=f6 src=00:00:00:04 at=00:00:22:08 dur=00:00:04:13
+    transition t1 from=card to=shot1 fx=dissolve@1 dur=00:00:00:08
+    transition t2 from=shot2 to=shot3 fx=dissolve@1 dur=00:00:00:08
+    transition t3 from=shot5 to=shot6 fx=dissolve@1 dur=00:00:00:08
+  track V2 video
+    clip title_en gen=title@1 at=00:00:00:04 dur=00:00:02:04
+      set y=-0.06 text="BOLT GOES TO THE MOON" reveal={0f:0 14f:1} reveal_by=word from_y=0.04 size=0.11 color=#ffd24a
+    clip the_end gen=title@1 at=00:00:24:13 dur=00:00:02:08
+      set y=-0.3 opacity={0f:0 10f:1} text="THE END" size=0.14 color=#ffffff
+  track V3 video
+    clip title_ko gen=title@1 at=00:00:00:12 dur=00:00:01:12
+      set y=0.12 opacity={0f:0 8f:1} text="볼트, 달에 가다" font="WenQuanYi Zen Hei" size=0.07 color=#e8e8e8
+    clip fade gen=solid@1 at=00:00:26:05 dur=00:00:01:00
+      set opacity={0f:0 15f:1} color=#000000
+  track A1 audio
+    clip bed media=pad_2 src=00:00:00:00 at=00:00:00:00 dur=00:00:27:05
+      set gain=-14
+  track A2 audio
+    clip roar media=rumble src=00:00:00:00 at=00:00:13:14 dur=00:00:06:08
+      set gain=-9

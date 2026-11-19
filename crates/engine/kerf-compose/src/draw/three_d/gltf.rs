@@ -39,6 +39,44 @@ pub(super) struct Read {
     /// The cameras its nodes hold.
     pub cameras: Vec<Camera>,
     rig: Rig,
+    /// Whether its surface closes round what it holds, once that has been asked.
+    closed: std::sync::OnceLock<bool>,
+}
+
+/// Whether `triangles` close round what is in them: every edge between two different places
+/// is one of two triangles. An edge is told by where its ends are, to a millionth of how
+/// large the whole is, since a corner is told again for each way it faces and each part it
+/// is a corner of. A triangle with no size has no edge, and nothing closes round nothing.
+pub(super) fn closes(points: &[Vector], triangles: &[[u32; 3]]) -> bool {
+    let (mut least, mut most) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
+    for point in points {
+        for axis in 0..3 {
+            least[axis] = least[axis].min(point[axis]);
+            most[axis] = most[axis].max(point[axis]);
+        }
+    }
+    let large = (0..3).map(|axis| most[axis] - least[axis]).fold(0.0, f64::max);
+    if !(large > 0.0 && large.is_finite()) {
+        return false;
+    }
+    let place = |corner: u32| {
+        points
+            .get(corner as usize)
+            .map(|point| [0, 1, 2].map(|axis| ((point[axis] - least[axis]) / large * 1e6).round() as i64))
+    };
+    let mut edges = Vec::with_capacity(triangles.len() * 3);
+    for triangle in triangles {
+        for side in 0..3 {
+            let (Some(from), Some(to)) = (place(triangle[side]), place(triangle[(side + 1) % 3])) else {
+                return false;
+            };
+            if from != to {
+                edges.push((from.min(to), from.max(to)));
+            }
+        }
+    }
+    edges.sort_unstable();
+    !edges.is_empty() && edges.chunk_by(|one, other| one == other).all(|same| same.len() == 2)
 }
 
 /// A camera of a file: a node that holds one.
@@ -61,6 +99,16 @@ pub(super) struct Seen {
 }
 
 impl Read {
+    /// Whether the file's surface closes round what it holds, so that a line that goes into
+    /// it comes out of it again ([`closes`], of its corners at rest): a thing modelled whole
+    /// does, and a sheet, a set rebuilt from a shot, or a thing left open underneath does
+    /// not. How it moves opens and closes nothing, so it is found once.
+    pub(super) fn closed(&self) -> bool {
+        *self
+            .closed
+            .get_or_init(|| closes(&self.points, &self.triangles))
+    }
+
     /// Where camera `which` is: at rest, or `seconds` into the animation numbered. A glTF camera
     /// looks along its node's z backward, with its node's y up.
     pub(super) fn seen_from(&self, which: usize, animation: Option<(usize, f64)>) -> Option<Seen> {
@@ -1287,6 +1335,7 @@ pub(super) fn read(path: &Path) -> Result<Read, String> {
             runs: Vec::new(),
             skins: file.skins()?,
         },
+        closed: std::sync::OnceLock::new(),
     };
     for index in shown {
         let node = &told[index];

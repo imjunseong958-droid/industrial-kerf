@@ -31,6 +31,7 @@ line, applied in order and atomically.
   ease-out, ease, or an overshooting curve: `{0f:1 12f:1.2:0.2,0.8,0.4,1}`.
   Or `(t*90)`, `t` seconds: `pi sin cos abs floor min max noise`
 - `set c2 parent=c1` moves `c2` with `c1`, which `gen=null@1` is for. It is written with `set`, not where a clip is placed.
+  Its `z`, `rotate_x`, and `rotate_y` take children in depth, a camera, and a light with it, round its middle; a flat child stays flat.
 - `retime=flow` on footage draws new frames between its own for slow motion; `retime=blend` fades.
 - `rect=`, `ellipse=`, and `points=` on a mask animate: `rect={0f:0,0,0.2,0.2 24f:0.5,0,0.7,0.2:ease}`,
   `points={0f:0,0;0.5,0;0.5,0.5 24f:0.1,0;0.6,0;0.6,0.5}`, corners one for one. A third number on a corner, `0.5,0,12`, softens the edge there by that many pixels.
@@ -45,25 +46,27 @@ Effects, transitions, and generators have versions, listed below as
 
 ## Operations
 ```
-use <sequence>                          choose a sequence
+use <sequence>  choose a sequence
 insert <content> at=<pos> dur=<dur>|out=<src> on=<track>[,<track>] [as=<id>[,<id>]] [name="…"] [<prop>=<value> …]
     open time on every unlocked track; several tracks get linked clips
-overwrite <same arguments as insert>    replace the range on the target tracks: lays a clip over others, where insert pushes them along
+overwrite <same arguments as insert>  replace the range on the target tracks: lays a clip over others, where insert pushes them along
     <content> is media=<id> [src=<src>] [speed=<speed>] | seq=<id> [src=<src>] | gen=<generator> | caption="…"
-delete <clip> …                         remove clips (and linked partners), leaving gaps
-ripple-delete <clip> …                  remove and close the gap on every unlocked track
-lift from=<pos> to=<pos> [tracks=…]     clear a range, leaving a gap
+delete <clip> …  remove clips (and linked partners), leaving gaps
+ripple-delete <clip> …  remove and close the gap on every unlocked track
+lift from=<pos> to=<pos> [tracks=…]  clear a range, leaving a gap
 extract from=<pos> to=<pos> [tracks=…]  cut a range out and close it
+lift|extract <clip> said="…"  ·  extract <clip> pause="…"  [leave=<dur>]
+    take its words out, or the pause after them down to leave (0.25s)
 trim <clip> in|out <amount>|to=<pos>|src=<src> [ripple]
     src= puts the edge on that source position
-roll <clip> <amount>|to=<pos>           move the cut after the clip
-slip <clip> <amount>                    other source frames in the same place
-slide <clip> <amount>|to=<pos>          move a clip between its neighbors
+roll <clip> <amount>|to=<pos>  move the cut after the clip
+slip <clip> <amount>  other source frames in the same place
+slide <clip> <amount>|to=<pos>  move a clip between its neighbors
 split <clip> at=<pos> [as=<id>]
-blade at=<pos> [tracks=…]               split every clip crossing a point
+blade at=<pos> [tracks=…]  split every clip crossing a point
 move <clip> [on=<track>] [at=<pos>|by=<amount>]
 set <clip> <prop>=<value> … [name="…"] [enabled=false] [caption="…"] [reset=<prop>,…]
-speed <clip> <speed>                    2, 0.5, -1 for reverse, or {0f:1 24f:1/4} to change over the clip, with no overshoot; keeps the source range
+speed <clip> <speed>  2, 0.5, -1 for reverse, or {0f:1 24f:1/4} to change over the clip, with no overshoot; keeps the source range
 fx <clip> add <effect> [at=<n>] [<param>=<value> …]
 fx <clip> set <n|effect> [enabled=…] [reset=…] [<param>=<value> …]
 fx <clip> remove <n|effect>  ·  fx <clip> move <n|effect> to=<n>
@@ -89,9 +92,9 @@ media relink <id> path="…"  ·  media remove <id>
 sequence add <id> rate=<fps> size=WxH [name="…"] [start=<tc>] [color=rec2100-pq|rec2100-hlg]  ·  sequence set|remove <id> …
 ```
 
-`snap=pause|cut [within=<amount>]` on trim, split, insert, and overwrite
-moves the edge into the nearest pause of the media's sound, or onto a cut of
-its picture, by its index; within half a second unless given.
+`snap=pause|cut [within=<amount>]` on trim, split, insert, overwrite, and lift
+or extract naming a clip moves the edge into the pause beside it, past no
+word, or onto a picture cut; within 0.5s unless given.
 
 The effect `shape.outline@1` adds an outline to a `gen=shape` clip, in order, by `mode` (add, subtract,
 intersect, difference), with the shape's own numbers and `x`, `y`, `rotation`.

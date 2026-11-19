@@ -19,8 +19,11 @@
 //! their numbers, and is the other on the next frame of a thing that moves. A surface that
 //! goes through a clip is one it is sunk in; one over its top is a roof, or something that
 //! stands on it, but for the ground, the largest clip with nothing under it, which a clip
-//! wholly under is sunk in however deep. And an edge of a clip that goes through another's
-//! surface, a box through a wall, is said of the two.
+//! wholly under is sunk in however deep. What stands on a clip may reach a little way into
+//! it, a ball set on a ball, a roof on its walls: the underside of that is inside the lower
+//! clip and is no floor through it, so of a thing whose surface closes round it the side a
+//! line comes out by is not one to stand on or be sunk in ([`comes_to`]). And an edge of a
+//! clip that goes through another's surface, a box through a wall, is said of the two.
 //!
 //! What is said is what is so, and not that it is wrong: a ball thrown is in the air. The
 //! line that sets a clip down is its own `y`, which the one who asked runs or does not.
@@ -52,8 +55,22 @@ const MOST_FEET: usize = 256;
 const ACROSS: usize = 16;
 
 /// The share of its feet under a surface from which a clip is in it. Fewer are a corner of
-/// a mesh that dips, and are passed over.
+/// a mesh that dips, and are passed over where the rest of it stands on something.
 const IN: f64 = 0.1;
+
+/// How far toward its clip's middle a foot is moved to ask whether it is inside another
+/// clip: a line down the very edge of a box set on a box as wide, or through the very top
+/// of a ball, runs along surfaces and through corners, where what it meets is in the last
+/// places of its numbers. This is a twenty-thousandth of a pixel of a guide 480 high.
+const INWARD: f64 = 1e-7;
+
+/// How far past a surface a line is taken up again to find the next one: over what the
+/// last places of a number come to, and under anything a thing is thick by.
+const PAST: f64 = 1e-9;
+
+/// The most surfaces of one clip a line is followed through: a mesh folded on itself more
+/// often than this is read as far as that.
+const MOST_CROSSED: usize = 64;
 
 /// The least a clip looks under itself for something to stand on, where it is flatter than
 /// this: past its own height, or this, it is in the air.
@@ -208,6 +225,44 @@ struct Body<'a> {
     least: [f64; 3],
     most: [f64; 3],
     feet: Vec<[f64; 3]>,
+    /// The middle of its feet, where that is a place of it: of a thing that bulges nowhere
+    /// inward, a box, what is between its lowest corners is its underside.
+    middle: Option<[f64; 3]>,
+}
+
+/// Where a line straight down from `from` first comes to a surface of `other` that is one
+/// to stand on or be sunk in: how far along, and the way it faces.
+///
+/// A flat clip's surface is one, from either side, and so is each surface of a mesh that
+/// is open, a set rebuilt from a shot. A thing whose surface closes round it has an inside,
+/// and a line that starts in it comes out by its underside, which nothing stands on: a ball
+/// set on another and a little way into it has its underside in the lower one, and the
+/// lower one is not sunk in it. So where `from` is inside such a thing, the surface the
+/// line leaves it by is passed, and what it comes to is the next. `inward` is `from` moved
+/// a hair toward the middle of the clip whose foot it is over, by which inside is asked:
+/// what the line itself meets is told as it always was.
+fn comes_to(from: [f64; 3], inward: [f64; 3], other: &Body) -> Option<(f64, [f64; 3])> {
+    let first = other.of.meets(from, DOWN, f64::INFINITY)?;
+    // A line from over all of it goes in by the first surface it meets and out by the
+    // next, so one that has met an odd number of them by `from` is inside it there.
+    let inside = other.of.closed && other.least[1] < from[1] && {
+        let mut at = [inward[0], other.least[1] - 1.0, inward[2]];
+        let mut met = 0;
+        while met < MOST_CROSSED {
+            let Some((along, _)) = other.of.meets(at, DOWN, from[1] - at[1]) else {
+                break;
+            };
+            met += 1;
+            at[1] += along + PAST;
+        }
+        met % 2 == 1
+    };
+    if !inside {
+        return Some(first);
+    }
+    let past = first.0 + PAST;
+    let (along, facing) = other.of.meets([from[0], from[1] + past, from[2]], DOWN, f64::INFINITY)?;
+    Some((past + along, facing))
 }
 
 impl<'a> Body<'a> {
@@ -227,8 +282,15 @@ impl<'a> Body<'a> {
             least,
             most,
             feet: Vec::new(),
+            middle: None,
         };
         body.feet = body.find_feet();
+        if of.convex && body.feet.len() > 1 {
+            let count = body.feet.len() as f64;
+            body.middle = Some([0, 1, 2].map(|axis| {
+                body.feet.iter().map(|foot| foot[axis]).sum::<f64>() / count
+            }));
+        }
         Some(body)
     }
 
@@ -376,7 +438,37 @@ fn read(world: &World) -> Read {
 
 /// How `body`, the one at `index` of `bodies`, stands on the others, `ground` being the one
 /// of them that is the ground, where that is known and is no mesh.
+///
+/// It stands by its feet, its lowest corners. A thing that bulges nowhere inward has its
+/// underside between them, and what is under the middle of that is under the thing as
+/// much as what is under a corner: a roof on walls it is wider than has its corners over
+/// the floor and its middle on the walls. So a thing whose corners are down on nothing,
+/// over a floor or in the air, is read with that one foot more where its middle comes
+/// down on something first. One whose corners are down is down: what is under its middle
+/// then goes through it, which is said of its edges.
 fn stand(index: usize, body: &Body, bodies: &[Option<Body>], ground: Option<usize>) -> Stand {
+    let by_corners = stand_by(index, body, &body.feet, bodies, ground);
+    let (Some(middle), How::Air | How::Floats(_)) = (body.middle, by_corners.how) else {
+        return by_corners;
+    };
+    let mut feet = body.feet.clone();
+    feet.push(middle);
+    let by_all = stand_by(index, body, &feet, bodies, ground);
+    match (by_corners.drop, by_all.drop) {
+        (None, Some(_)) => by_all,
+        (Some(corners), Some(all)) if all < corners - TOUCH => by_all,
+        _ => by_corners,
+    }
+}
+
+/// How `body` stands by `feet`, places of its underside.
+fn stand_by(
+    index: usize,
+    body: &Body,
+    feet: &[[f64; 3]],
+    bodies: &[Option<Body>],
+    ground: Option<usize>,
+) -> Stand {
     let height = body.height();
     // From as high as the clip is: a surface that goes through it is one it is sunk in, and
     // one over its top is a roof, or something that stands on it. The ground is no roof, so
@@ -384,8 +476,13 @@ fn stand(index: usize, body: &Body, bodies: &[Option<Body>], ground: Option<usiz
     let lift = (height - TOUCH).max(TOUCH);
     // Each foot with something under it: how far off that is, whose it is, and how it faces.
     let mut under: Vec<(usize, f64, usize, [f64; 3])> = Vec::new();
-    for (foot_index, foot) in body.feet.iter().enumerate() {
+    let middle = [0, 2].map(|axis| (body.least[axis] + body.most[axis]) / 2.0);
+    for (foot_index, foot) in feet.iter().enumerate() {
         let mut first: Option<(f64, usize, [f64; 3])> = None;
+        // The foot a hair toward its clip's middle, to ask what it is inside of.
+        let toward = [middle[0] - foot[0], middle[1] - foot[2]];
+        let far = toward[0].hypot(toward[1]);
+        let hair = if far > INWARD { INWARD / far } else { 0.0 };
         for (other_index, other) in bodies.iter().enumerate() {
             let Some(other) = other.as_ref().filter(|_| other_index != index) else {
                 continue;
@@ -398,7 +495,8 @@ fn stand(index: usize, body: &Body, bodies: &[Option<Body>], ground: Option<usiz
             if beside || other.most[1] < from[1] {
                 continue;
             }
-            if let Some((along, facing)) = other.of.meets(from, DOWN, f64::INFINITY) {
+            let inward = [from[0] + toward[0] * hair, from[1], from[2] + toward[1] * hair];
+            if let Some((along, facing)) = comes_to(from, inward, other) {
                 let gap = along - lift;
                 // The others are asked from the lowest track up, and one as near is no nearer.
                 if first.is_none_or(|(least, ..)| gap < least - NEARER) {
@@ -411,8 +509,15 @@ fn stand(index: usize, body: &Body, bodies: &[Option<Body>], ground: Option<usiz
         }
     }
     let within = under.iter().filter(|(_, gap, ..)| *gap < -TOUCH).count();
-    let share = within as f64 / body.feet.len().max(1) as f64;
-    let sunk = within > 0 && share >= IN;
+    let share = within as f64 / feet.len().max(1) as f64;
+    // A few feet in a surface are a corner that dips, where the others are on something or
+    // over it. Where none is, they are all it stands by: a brim on a head it is wider than,
+    // a table's top on its one leg.
+    let reach = height.max(LEAST_REACH);
+    let stands_by_others = under
+        .iter()
+        .any(|(_, gap, ..)| (-TOUCH..=reach).contains(gap));
+    let sunk = within > 0 && (share >= IN || !stands_by_others);
     // The feet it stands by: all of them where it is sunk, and else those in no surface.
     let stood_by = |gap: f64| sunk || gap >= -TOUCH;
     // How far off the foot that is down first is, or with the clip sunk the one that is deepest.
@@ -443,7 +548,7 @@ fn stand(index: usize, body: &Body, bodies: &[Option<Body>], ground: Option<usiz
         How::Sunk { deep: -drop, share }
     } else if drop <= TOUCH {
         How::Rests
-    } else if drop <= height.max(LEAST_REACH) {
+    } else if drop <= reach {
         How::Floats(drop)
     } else {
         How::Air
@@ -451,7 +556,7 @@ fn stand(index: usize, body: &Body, bodies: &[Option<Body>], ground: Option<usiz
     // Of its feet level with its lowest, over the same clip: the one with the most under it.
     let open = under
         .iter()
-        .filter(|(foot, _, other, _)| *other == on && body.feet[*foot][1] >= body.most[1] - LEVEL)
+        .filter(|(foot, _, other, _)| *other == on && feet[*foot][1] >= body.most[1] - LEVEL)
         .map(|(_, gap, ..)| gap - drop)
         .fold(0.0, f64::max);
     Stand {
@@ -739,7 +844,7 @@ fn set_down(
     {
         return (
             None,
-            Some("a parent turns it, so its own `y` moves it across as well as down: set it down by its parent, or by `x` and `y` together".to_owned()),
+            Some("a parent turns it, so its own `y` moves it across or back as well as down: set it down by its parent, or by its own `x`, `y`, and `z` together".to_owned()),
         );
     }
     let own = clip.props.get("y");

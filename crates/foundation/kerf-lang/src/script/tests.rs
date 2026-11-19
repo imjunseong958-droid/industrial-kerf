@@ -481,7 +481,8 @@ fn a_line_that_names_what_is_not_there_is_not_a_syntax_error() {
     assert_eq!(fails(&base(), "trim c1 sideways +1f").code, "syntax");
 }
 
-/// What analysis knows of m1: a few words, a pause, and a cut.
+/// What analysis knows of m1: a few words, a pause, the gap "So we" part
+/// for, and a cut.
 struct Known;
 
 impl Facts for Known {
@@ -507,6 +508,7 @@ impl Facts for Known {
     fn breaks(&self, _: &Media) -> Option<Breaks> {
         Some(Breaks {
             pauses: vec![(12.0, 12.6)],
+            gaps: vec![(10.95, 11.07)],
             cuts: vec![11.5],
         })
     }
@@ -562,20 +564,49 @@ fn edges_snap_into_pauses_and_onto_cuts() {
     // to the frame nearest 12.15s, which leaves the word before it its decay.
     let trimmed = known(&project, "trim c1 out to=01:00:01:21 snap=pause").unwrap();
     assert_eq!(frames(trimmed.project.clip("c1").unwrap().duration), 52);
-    // An in point from after the pause stops a tenth of a second short of
-    // the word that follows it at 12.6s.
-    let trimmed = known(&project, "trim c1 in to=01:00:02:20 snap=pause").unwrap();
+    // What moved is said, with the words it is now between: the document
+    // shows where an edge is, and not that it was asked for elsewhere.
+    assert_eq!(
+        trimmed.snapped,
+        [
+            "the out of `c1` went 7 frames later, to 01:00:02:04: into the 0.60s pause \
+          of `m1` at 00:00:12:00, between \"closed,\" and \"the\""
+        ]
+    );
+    // An in point from early in "the", which follows the pause at 12.6s,
+    // stops a tenth of a second short of it.
+    let trimmed = known(&project, "trim c1 in to=01:00:02:18 snap=pause").unwrap();
     assert_eq!(source(&trimmed, "c1").0, 300);
+    assert_eq!(
+        trimmed.snapped,
+        [
+            "the in of `c1` went 6 frames earlier, to 01:00:02:12: into the 0.60s pause \
+          of `m1` at 00:00:12:00, between \"closed,\" and \"the\""
+        ]
+    );
     // 1s 10f plays 11.42s; the picture cuts at 11.5s.
     let split = known(&project, "split c1 at=01:00:01:10 snap=cut as=c1b").unwrap();
     assert_eq!(frames(split.project.clip("c1b").unwrap().start), 36);
-    // A placed source's in and out points move into the pause too.
+    assert_eq!(
+        split.snapped,
+        [
+            "the split of `c1` went 2 frames later, to 01:00:01:12: onto the cut of `m1` \
+          at 00:00:11:12"
+        ]
+    );
+    // A placed source's in and out points move into the pause too, and one
+    // already in place is not said.
     let placed = known(
         &project,
-        "insert media=m1 src=00:00:11:20 out=00:00:13:00 snap=pause at=end on=V1 as=c3",
+        "insert media=m1 src=00:00:11:20 out=00:00:12:14 snap=pause at=end on=V1 as=c3",
     )
     .unwrap();
     assert_eq!(source(&placed, "c3"), (292, 300));
+    assert_eq!(placed.snapped.len(), 2, "{:?}", placed.snapped);
+    assert!(placed.snapped[0].starts_with("src= went 8 frames later, to 00:00:12:04:"));
+    assert!(placed.snapped[1].starts_with("out= went 2 frames earlier, to 00:00:12:12:"));
+    let stays = known(&project, "trim c1 out to=01:00:02:06 snap=pause").unwrap();
+    assert!(stays.snapped.is_empty(), "{:?}", stays.snapped);
 
     let far = known(&project, "split c1 at=01:00:00:12 snap=cut within=2f").unwrap_err();
     assert!(far.message.contains("no cut of `m1` within"), "{far:?}");
@@ -590,6 +621,309 @@ fn edges_snap_into_pauses_and_onto_cuts() {
         .contains("use pause or cut"));
 }
 
+#[test]
+fn an_edge_snaps_past_no_word() {
+    let project = base();
+    // 2s 20f plays 12.83s, past the middle of "the": the pause before it is
+    // on the other side of the word, and "the deal." has none after it.
+    let across = known(&project, "trim c1 in to=01:00:02:20 snap=pause").unwrap_err();
+    assert_eq!(
+        across.message,
+        "no pause of `m1` within 0.50s of 00:00:12:20 would do here: the pause at 00:00:12:00 \
+         is on the other side of \"the\""
+    );
+    // An out point asked for where "the" ends is the same.
+    let across = known(
+        &project,
+        "insert media=m1 src=00:00:11:20 out=00:00:13:00 snap=pause at=end on=V1 as=c3",
+    )
+    .unwrap_err();
+    assert!(
+        across.message.contains("is on the other side of \"the\""),
+        "{across:?}"
+    );
+    // "So we" is said in one breath, parting for an eighth of a second: by
+    // the transcript that is between two words, so a split asked for where
+    // "we" starts goes into it and not on to the pause past "we closed,".
+    let split = known(&project, "split c1 at=01:00:01:01 snap=pause as=c1b").unwrap();
+    assert_eq!(frames(split.project.clip("c1b").unwrap().start), 24);
+    assert_eq!(
+        split.snapped,
+        [
+            "the split of `c1` went 1 frame earlier, to 01:00:01:00: into the 0.12s gap \
+          of `m1` at 00:00:10:23, where \"So\" and \"we\" run together"
+        ]
+    );
+    // From inside "we" the gap is the nearer end of the word, and the pause
+    // past "closed," is never reached.
+    let split = known(&project, "split c1 at=01:00:01:03 snap=pause as=c1b").unwrap();
+    assert_eq!(frames(split.project.clip("c1b").unwrap().start), 24);
+    // Facts with no transcript do not say what a gap is.
+    struct Unheard;
+    impl Facts for Unheard {
+        fn speech(&self, _: &Media) -> Speech {
+            Speech::default()
+        }
+        fn breaks(&self, media: &Media) -> Option<Breaks> {
+            Known.breaks(media)
+        }
+    }
+    let unheard = apply_script_with(
+        &project,
+        Catalog::builtin(),
+        &Unheard,
+        "split c1 at=01:00:01:01 snap=pause as=c1b",
+    )
+    .unwrap_err()
+    .remove(0);
+    assert_eq!(
+        unheard.message,
+        "no pause of `m1` within 0.50s of 00:00:11:01 would do here: the sound parts for 0.12s \
+         at 00:00:10:23, which no transcript covers to say is between two words: look at `m1` \
+         with transcript there first"
+    );
+}
+
+/// A recording of m1 as an index and a transcriber leave it: "So", a pause,
+/// "um,", a longer one, "we closed." in one breath, and a wait before
+/// "Then", which c1 stops short of. `wait` is the level of something that
+/// sounds in the pause after "um," and has no word.
+struct Talk {
+    wait: Option<f32>,
+}
+
+impl Talk {
+    fn sound(&self) -> crate::Sound {
+        let mut levels = vec![-55.0f32; 1500];
+        // Talk before any of it, so that the levels tell speech from the room.
+        for (from, to) in [(100, 900), (1050, 1090), (1130, 1160), (1240, 1320), (1450, 1490)] {
+            levels[from..to].fill(-20.0);
+        }
+        if let Some(level) = self.wait {
+            levels[1190..1210].fill(level);
+        }
+        crate::Sound::new(0.01, levels)
+    }
+}
+
+impl Facts for Talk {
+    fn speech(&self, _: &Media) -> Speech {
+        let word = |start: f64, end: f64, text: &str| Word {
+            start,
+            end,
+            text: text.into(),
+        };
+        Speech {
+            words: vec![
+                word(10.5, 10.9, " So"),
+                word(11.3, 11.6, " um,"),
+                word(12.4, 12.7, " we"),
+                word(12.7, 13.2, " closed."),
+                word(14.5, 14.9, " Then"),
+            ],
+            covered: vec![(0.0, 15.0)],
+        }
+    }
+
+    fn breaks(&self, _: &Media) -> Option<Breaks> {
+        let sound = self.sound();
+        Some(Breaks {
+            pauses: sound.pauses(),
+            gaps: sound.gaps(),
+            cuts: Vec::new(),
+        })
+    }
+
+    fn sound(&self, _: &Media) -> Option<crate::Sound> {
+        Some(self.sound())
+    }
+}
+
+fn talk(project: &Project, script: &str) -> Result<Applied, Diagnostic> {
+    apply_script_with(project, Catalog::builtin(), &Talk { wait: None }, script)
+        .map_err(|mut e| e.remove(0))
+}
+
+#[test]
+fn words_come_out_of_a_clip_by_one_line() {
+    let project = base();
+    // c1 plays m1 from 10s. "um," goes with the quiet round it, down to the
+    // pause an edge's air makes: 0.15s after "So" and 0.1s before "we".
+    let cut = talk(&project, r#"extract c1 said="um""#).unwrap();
+    assert_eq!(
+        print_ops(&project, Catalog::builtin(), &cut.ops).trim(),
+        "extract from=01:00:01:01 to=01:00:02:07"
+    );
+    assert_eq!(frames(cut.project.clip("c2").unwrap().start), 66);
+    assert_eq!(
+        cut.snapped,
+        [
+            "\"um\" goes from `c1`, 01:00:01:01 to 01:00:02:07, which leaves 0.25s between \
+             \"So\" and \"we\""
+        ]
+    );
+    // A longer pause is longer before the cut, as far as the quiet after
+    // "So" goes, and the voice comes in as soon after it.
+    let slower = talk(&project, r#"extract c1 said="um" leave=0.5s"#).unwrap();
+    assert_eq!(
+        print_ops(&project, Catalog::builtin(), &slower.ops).trim(),
+        "extract from=01:00:01:06 to=01:00:02:07"
+    );
+    assert!(
+        slower.snapped[0].contains("which leaves 0.46s"),
+        "{:?}",
+        slower.snapped
+    );
+    // Words that end the clip go to its end, and lifted they leave a gap.
+    let last = talk(&project, r#"extract c1 said="we closed""#).unwrap();
+    assert_eq!(
+        print_ops(&project, Catalog::builtin(), &last.ops).trim(),
+        "extract from=01:00:01:18 to=01:00:04:00"
+    );
+    assert_eq!(
+        last.snapped,
+        ["\"we closed\" goes from `c1`, 01:00:01:18 to 01:00:04:00, which leaves 0.15s"]
+    );
+    let lifted = talk(&project, r#"lift c1 said="um""#).unwrap();
+    assert_eq!(
+        print_ops(&project, Catalog::builtin(), &lifted.ops).trim(),
+        "lift from=01:00:01:01 to=01:00:02:07"
+    );
+    assert_eq!(frames(lifted.project.clip("c2").unwrap().start), 96);
+
+    // "we" runs on into "closed.": there is no quiet to cut in after it.
+    let run_on = talk(&project, r#"extract c1 said="we""#).unwrap_err();
+    assert_eq!(
+        run_on.message,
+        "nowhere to cut after \"we\": no pause of `m1` within 0.50s of 00:00:12:17 would do \
+         here: the pause at 00:00:11:14 is on the other side of \"we\""
+    );
+    // Words are the clip's own, and a transcript's.
+    let elsewhere = talk(&project, r#"extract c1 said="then""#).unwrap_err();
+    assert_eq!(
+        elsewhere.message,
+        "`c1` does not play \"then\", which `m1` has at 00:00:14:12"
+    );
+    assert!(talk(&project, r#"extract c1 said="nowhere""#)
+        .unwrap_err()
+        .message
+        .contains("no transcript of `m1` heard \"nowhere\""));
+}
+
+#[test]
+fn a_pause_comes_down_to_a_length() {
+    let project = base();
+    // The 0.8s after "um," comes down to a quarter of a second.
+    let cut = talk(&project, r#"extract c1 pause="um""#).unwrap();
+    assert_eq!(
+        print_ops(&project, Catalog::builtin(), &cut.ops).trim(),
+        "extract from=01:00:01:18 to=01:00:02:07"
+    );
+    assert_eq!(
+        cut.snapped,
+        [
+            "the pause after \"um\" in `c1`, 0.80s, comes down to 0.26s between \"um,\" and \
+             \"we\": 01:00:01:18 to 01:00:02:07 goes"
+        ]
+    );
+    // One no longer than is asked for is not shortened.
+    let long = talk(&project, r#"extract c1 pause="um" leave=1s"#).unwrap_err();
+    assert_eq!(
+        long.message,
+        "the pause after \"um\" is 0.80s, which leave=1.00s does not shorten"
+    );
+    // A breath in the pause goes with it.
+    let breath = Talk { wait: Some(-40.0) };
+    let cut = apply_script_with(
+        &project,
+        Catalog::builtin(),
+        &breath,
+        r#"extract c1 pause="um""#,
+    )
+    .unwrap();
+    assert_eq!(
+        print_ops(&project, Catalog::builtin(), &cut.ops).trim(),
+        "extract from=01:00:01:18 to=01:00:02:07"
+    );
+    // What sounds as loud as speech there and has no word may be one a
+    // transcriber missed: it is not taken for a pause.
+    let missed = Talk { wait: Some(-20.0) };
+    let refused = apply_script_with(
+        &project,
+        Catalog::builtin(),
+        &missed,
+        r#"extract c1 pause="um""#,
+    )
+    .unwrap_err()
+    .remove(0);
+    assert_eq!(
+        refused.message,
+        "the wait after \"um\" holds sound at the level of speech, from 00:00:11:22 to \
+         00:00:12:02 of `m1`, which no word accounts for: listen to it, and take it out by \
+         from= and to= if it is to go"
+    );
+    // A lift closes nothing up.
+    assert!(talk(&project, r#"lift c1 pause="um""#)
+        .unwrap_err()
+        .message
+        .contains("pause= closes a pause up: use extract"));
+}
+
+#[test]
+fn a_range_snaps_by_the_clip_it_names() {
+    let project = base();
+    // From late in the pause before "um," and just into "we": each edge
+    // goes into the pause beside it.
+    let cut = talk(
+        &project,
+        "extract c1 from=01:00:01:07 to=01:00:02:10 snap=pause",
+    )
+    .unwrap();
+    assert_eq!(
+        print_ops(&project, Catalog::builtin(), &cut.ops).trim(),
+        "extract from=01:00:01:05 to=01:00:02:07"
+    );
+    assert_eq!(frames(cut.project.clip("c2").unwrap().start), 70);
+    assert_eq!(
+        cut.snapped,
+        [
+            "from= went 2 frames earlier, to 01:00:01:05: into the 0.40s pause of `m1` at \
+             00:00:10:22, between \"So\" and \"um,\"",
+            "to= went 3 frames earlier, to 01:00:02:07: into the 0.80s pause of `m1` at \
+             00:00:11:14, between \"um,\" and \"we\""
+        ]
+    );
+    for (script, says) in [
+        (
+            "extract from=01:00:01:07 to=01:00:02:10 snap=pause",
+            "snap= goes by a clip's sound and words: name the clip",
+        ),
+        (
+            "extract c1 from=01:00:01:07 to=01:00:02:10",
+            "naming `c1` puts the edges by its sound: add snap=pause or snap=cut",
+        ),
+        (
+            "extract c1 from=01:00:01:07 to=01:00:09:00 snap=pause",
+            "to= is not in `c1`, which plays from 01:00:00:00 to 01:00:04:00",
+        ),
+        (
+            r#"extract c1 said="um" from=01:00:01:07 to=01:00:02:10"#,
+            "with a clip, give said=",
+        ),
+        (
+            "extract c1 from=01:00:01:07 to=01:00:02:10 snap=pause leave=1s",
+            "leave= goes with said= or pause=",
+        ),
+        (r#"extract c1 c2 said="um""#, "unexpected argument"),
+    ] {
+        let error = talk(&project, script).unwrap_err();
+        assert!(error.message.contains(says), "{script}: {}", error.message);
+    }
+    // Without a clip a range is its two positions, as it always was.
+    let plain = talk(&project, "extract from=01:00:01:07 to=01:00:02:10").unwrap();
+    assert_eq!(frames(plain.project.clip("c2").unwrap().start), 69);
+}
+
 /// Facts that know only where m1's picture cuts, as an index records them.
 struct Cuts(Vec<f64>);
 
@@ -601,6 +935,7 @@ impl Facts for Cuts {
     fn breaks(&self, _: &Media) -> Option<Breaks> {
         Some(Breaks {
             pauses: Vec::new(),
+            gaps: Vec::new(),
             cuts: self.0.clone(),
         })
     }

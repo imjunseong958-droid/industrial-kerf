@@ -183,6 +183,40 @@ fn a_mesh_is_read_as_any_clip_is() {
 
 /// A sky, a floor in depth, and over the floor a title in depth, on a frame of 1920 by 1080:
 /// read a fifth as tall, the title's strokes are about a pixel wide.
+#[test]
+fn a_clip_a_parent_takes_into_depth_is_read_where_it_is_drawn() {
+    // A box on a null: where the null is in depth is where the box is read.
+    let rigged = |rig: &str, set: &str| {
+        format!(
+            concat!(
+                "  track V1 video\n    clip rig gen=null@1 at=0f dur=24f\n      set {rig}\n",
+                "  track V2 video\n    clip box gen=mesh@1 at=0f dur=24f parent=rig\n",
+                "      set kind=box width=0.4 height=0.4 length=0.4 color=#ff0000 {set}\n",
+            ),
+            rig = rig,
+            set = set
+        )
+    };
+    let at = |body: &str| {
+        let shown = read(body);
+        (clip(&shown, "box").at.expect("it is in the frame"), clip(&shown, "box").area)
+    };
+    let (near, near_area) = at(&rigged("x=0", ""));
+    // Moved back with its null it is as small as its own `z` would have it, and smaller
+    // than it was.
+    let (far, far_area) = at(&rigged("z=2", ""));
+    assert_eq!((far, far_area), at(&rigged("x=0", "z=2")));
+    assert!(far_area < near_area / 4.0, "{far_area} of {near_area}");
+    assert!(far[2] - far[0] < (near[2] - near[0]) / 2.0, "{far:?} of {near:?}");
+    // Swung a quarter round its null from the right of it, it is in the middle of the
+    // frame and further off; the other way, it has come past the camera and is not read.
+    let (swung, _) = at(&rigged("rotate_y=-90", "x=0.5625"));
+    assert!((swung[0] + swung[2] - 1.0).abs() < 0.02, "{swung:?}");
+    assert!(swung[2] - swung[0] < near[2] - near[0], "{swung:?} of {near:?}");
+    let shown = read(&rigged("rotate_y=90", "x=1.125"));
+    assert!(clip(&shown, "box").at.is_none(), "{shown:?}");
+}
+
 fn word(set: &str) -> Vec<Shown> {
     let text = format!(
         concat!(

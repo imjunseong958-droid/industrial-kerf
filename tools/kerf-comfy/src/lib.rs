@@ -93,7 +93,6 @@ fn extension(file: &Path) -> Option<String> {
         .map(|extension| extension.to_string_lossy().to_ascii_lowercase())
 }
 
-/// A seed for a request that names none.
 /// Which of a `generate` line's names set the inputs a failed node's message
 /// names, as " (on the line: confidence_threshold is confidence=, …)", or nothing:
 /// the server names its node's inputs, which no line can set by those names.
@@ -117,6 +116,7 @@ fn on_the_line(workflow: &Workflow, why: &str) -> String {
     }
 }
 
+/// A seed for a request that names none.
 fn any_seed() -> u64 {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
