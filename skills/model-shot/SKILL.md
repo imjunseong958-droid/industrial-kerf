@@ -21,18 +21,18 @@ description: Block a shot in Kerf and have a video model film it, from a guide s
   says a white hull. What kind of thing it is comes from the prompt and its
   outline: one box was a van, and a low body with a cabin on it a car.
 - Stack the scene with `overwrite`, a clip a track, each at `at=0f` for the
-  length of the shot. `insert` opens time, and puts each clip after the last.
+  shot's length. `insert` opens time, and puts each clip after the last.
   The camera and the lights go on the top tracks.
-- A thing that is seen from more than one side is a `gen=mesh@1` clip:
-  `kind=box|ball|cylinder` with `width`, `height`, and `length` in frame
+- A thing seen from more than one side is a `gen=mesh@1`:
+  `kind=box|ball|cylinder`, `width`, `height`, and `length` in frame
   heights, and a `color`. It is in depth, its middle at `x`, `y`, `z`, and
-  has every side, so a camera can go round it; a body and a cabin are two.
-  Give it a light, or it is one flat color. With `file="car.glb"` it is a
-  glTF model, `height` tall, a color a part; replacing the file asks for
-  the shot again. A part the file gives a picture or corner colors is
-  drawn in them, and lights do not change it. `animation="Walk"` plays one
-  of the file's animations, by name or number, looping from the clip's
-  start; `seconds={0f:0 48f:1}` retimes it.
+  has every side, so a camera can go round it; a body and a cabin are two,
+  and with a `gen=null@1` as `parent=` move and turn as one. With no light
+  it is one flat color. With `file="car.glb"` it is a glTF model, `height`
+  tall, a color a part; replacing the file asks for the shot again. A part
+  the file gives a picture or corner colors is drawn in them, unlit.
+  `animation="Walk"` plays one of the file's animations, by name or number,
+  looping from the clip's start; `seconds={0f:0 48f:1}` retimes it.
 - A set rebuilt from a shot is seen through the shot's camera: `look`
   with `mesh: {"clip": "set", "camera": "shot"}` returns the lines that
   add a camera of the file, or with `from` one a model wrote. What is

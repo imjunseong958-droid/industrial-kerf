@@ -6,6 +6,21 @@ on `main`; its section here becomes the release's notes on GitHub
 
 ## Unreleased
 
+- A thing built of several parts moves in depth as one. `parent=` carried
+  only where a parent is on the frame: a `gen=null@1` with nine meshes on
+  it and `z` keyed moved none of them, and a group could not be turned
+  about its upright at all. Now a null's `z`, `rotate_x`, and `rotate_y`,
+  or those of a parent that is itself in depth, take every child in depth
+  with it, turned about the parent's middle and moved back, and parents
+  chain: `set bot z={0f:6.5 80f:1.6} rotate_y={0f:0 80f:90}` once, where
+  each part had the same keys by hand. A camera and a light with a parent
+  go with it too, so a camera on a null at a thing's middle goes round it.
+  The picture, the ids, depth, and normals passes, shadows, and `look` with
+  `shows` and `stands` all have a child where it is drawn. A flat child
+  keeps to the frame, as before; check says so, and says of a null's `z`
+  that it moves nothing where no clip in depth is on it. A document with no
+  parent in depth draws as it did
+  ([docs/kerf-language.md](docs/kerf-language.md)).
 - An agent's `look` with `stands` reads a thing stacked from solids as it
   stands. Of a snowman, a barn under its roof, a cow on its legs, the lower
   part was said to be sunk in the upper, with a line that would have set it
@@ -19,10 +34,7 @@ on `main`; its section here becomes the release's notes on GitHub
   itself ([docs/architecture.md](docs/architecture.md#what-directs-a-model)).
 - The check no longer says of a scene of meshes that its light falls on
   nothing and its camera's `aperture` blurs nothing: a `gen=mesh@1` clip is
-  in depth without `three_d`. And it says where depth is set on a parent to
-  no end: `z`, `rotate_x`, and `rotate_y` on a `gen=null@1` do nothing, and a
-  parent whose `z` moves leaves its children where they were, a parent
-  carrying them across the frame and nothing of depth
+  in depth without `three_d`
   ([docs/kerf-language.md](docs/kerf-language.md)).
 - A take that more than one model made, a still and then the shot of it, a
   matte and then a plate, the parts of a longer shot, keeps what each model

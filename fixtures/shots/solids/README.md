@@ -13,7 +13,7 @@ has what was found on them and mended. How each media is made is in
 | `snowman` | Three balls, a hat of two cylinders, a nose and arms of boxes, two trees | A camera going 70 degrees round, by keys of `x`, `z`, and `pan` |
 | `rocket` | `models/rocket.glb` on a pad beside a tower | A file's mesh that rises out of the frame, the camera tilting after it |
 | `solar` | A sun, four planets, a ring | Places that are expressions of `t`, each planet on a circle |
-| `robot` | A robot of nine boxes and cylinders in an alley of six walls | Parts swung by expressions, parented to a null that bobs; each part has the walk's `z` keys itself, a parent carrying nothing of depth |
+| `robot` | A robot of nine boxes and cylinders in an alley of six walls | Parts swung by expressions, parented to a null that bobs; each part has the walk's `z` keys itself, as a parent carried nothing of depth when the scene was made |
 | `city` | Twelve towers and a spire | A camera that flies between them, rises, tilts, and rolls |
 | `bowling` | A ball, six pins that tip, a lane | A signal that is 1 on the strike, and where the ball goes (`moves=ball`) |
 | `donut` | `models/donut.glb` on a plate, a cup, a jar | A file's animation (`animation="Spin"`), and a still made first for the shot to look like |

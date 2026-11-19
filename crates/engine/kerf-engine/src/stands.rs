@@ -844,7 +844,7 @@ fn set_down(
     {
         return (
             None,
-            Some("a parent turns it, so its own `y` moves it across as well as down: set it down by its parent, or by `x` and `y` together".to_owned()),
+            Some("a parent turns it, so its own `y` moves it across or back as well as down: set it down by its parent, or by its own `x`, `y`, and `z` together".to_owned()),
         );
     }
     let own = clip.props.get("y");
