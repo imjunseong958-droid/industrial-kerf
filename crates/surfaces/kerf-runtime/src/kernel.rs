@@ -575,9 +575,11 @@ pub(crate) fn import_media(
         _ => assumed_media(id, path, probe, sequence)?,
     };
     let at = program_duration(project);
+    // The whole frames of the sequence the media fills: a 24 a second file in a 30 a second
+    // sequence ends between the sequence's frames, and the nearer frame can be past its end.
     let length = sequence
         .rate
-        .round(media.duration)
+        .time_of(sequence.rate.frames_floor(media.duration))
         .max(sequence.rate.frame_duration());
     let content = Content::Media {
         media: media.id.clone(),

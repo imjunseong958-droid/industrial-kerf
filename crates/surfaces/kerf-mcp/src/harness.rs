@@ -3433,7 +3433,9 @@ impl KerfMcpRouter {
             if lined.left.is_none() {
                 let at = frames(lined.offset) - frames(earliest);
                 let camera = index + 1;
-                let dur = rate.frames_round(media.duration).max(1);
+                // Whole frames of the sequence within the media: the nearer one can be past
+                // the end of media at another rate.
+                let dur = rate.frames_floor(media.duration).max(1);
                 let mut targets = Vec::new();
                 if media.video.is_some() {
                     lines.push(format!("track add V{camera} video"));

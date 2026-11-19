@@ -3390,6 +3390,25 @@ mod tests {
     }
 
     #[test]
+    fn media_at_another_rate_is_cut_in_whole_and_no_further() {
+        // 60.095 s is 1442.28 frames at 24 and 1802.85 at 30: the media keeps 1442, and the
+        // nearer frame of the 30 a second sequence, 1803, would be past its end.
+        let project = kernel::empty_project();
+        let probe = kerf_engine::ProbeInfo {
+            duration: Some(60.095),
+            width: Some(640),
+            height: Some(360),
+            fps: Some(24.0),
+            has_audio: Some(true),
+            ..Default::default()
+        };
+        let (ops, _, clip) = kernel::import_media(&project, "/media/b.mp4", Some(&probe)).unwrap();
+        let edited = kernel::apply_ops(&project, &ops).unwrap();
+        let placed = edited.project.clip(clip.as_str()).unwrap();
+        assert_eq!(kerf_model::Rate::FPS_30.frames_floor(placed.duration), 1802);
+    }
+
+    #[test]
     fn media_can_join_a_project_without_going_on_the_timeline() {
         let project = kernel::empty_project();
         let probe = kerf_engine::ProbeInfo {
