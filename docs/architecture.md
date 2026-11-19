@@ -592,6 +592,21 @@ What is built for it, in this order, each measured before the next:
    (`what_the_fixtures_scenes_stand_on_is_what_was_found_of_them`).
    `fixtures/shots/walk` has nothing in depth, which is what is said of it.
 
+   What came of a cart (2026-11-19). An axle across two wheels is as far
+   over the one as over the other but for the last places of the two
+   numbers, a part in 10^13 of the frame's height, and driven down a road
+   which of the two was the less changed from frame to frame: 22 entries for
+   one axle over 81 frames, the one wheel and then the other. So of two
+   surfaces within a millionth of each other a clip is on the lower track's
+   (`NEARER`), on every frame and whichever frames are read. A touch was
+   tried for how near is as near, and is not it: two blocks written 0.003
+   apart were then as near on some frames and not on others by the same last
+   places, 37 entries for the plank across them, and an axle a thousandth
+   nearer the inside of its wheel than the road was said to be over the
+   road. A millionth is under anything a line writes and far over what the
+   last places come to
+   (`what_is_as_near_to_two_clips_is_on_the_lower_tracks_on_every_frame`).
+
    What it costs, on four cores, the compositor's plan of the sequence
    included: the car's scene, three clips in depth, 0.6 ms for three frames
    and 3.2 ms for all 96; with a ball of 2,208 triangles beside the car,
