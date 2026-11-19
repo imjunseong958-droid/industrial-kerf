@@ -1134,10 +1134,14 @@ mod tests {
         let serif = resolve("Noto Serif Bold", "");
         assert!(!serif.missing && face(serif.face).info.family == "Noto Serif");
         assert!(serif.synth_bold || face(serif.face).info.weight >= 600);
-        // Inter Black: the face where one is installed, Inter emboldened where not.
+        // Inter Black: the face where one is installed; where not, the heaviest bundled face, Bold,
+        // which is not emboldened further (only a face of 500 or less is).
+        let bundled: Vec<Arc<Face>> = all_faces().into_iter().filter(|f| f.info.origin == "bundled" && f.info.family == "Inter").collect();
+        let (heaviest, exact) = pick(&bundled.iter().collect::<Vec<_>>(), "Black").unwrap();
+        assert_eq!((face(heaviest.face).info.style.as_str(), heaviest.synth_bold, exact), ("Bold", false, false));
         let black = resolve("Inter Black", "Regular");
         let f = face(black.face);
-        assert!(!black.missing && f.info.family == "Inter" && (f.info.weight == 900 || black.synth_bold), "{} {}", f.info.family, f.info.style);
+        assert!(!black.missing && f.info.family == "Inter" && f.info.weight >= 700, "{} {}", f.info.family, f.info.style);
         assert_eq!(family_named("Inter Black").map(|(family, _)| family).as_deref(), Some("Inter"));
         // Words that are no style do not split a family off.
         assert!(resolve("Inter Bogus", "").missing);
