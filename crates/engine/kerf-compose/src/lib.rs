@@ -78,7 +78,7 @@ pub struct ComposeOptions {
 pub const DRAW_STAMP: &str = env!("KERF_DRAW_STAMP");
 
 pub use alone::{draws_effect, effects_on_picture, Alone};
-pub use draw::{Form, InDepth, World};
+pub use draw::{Form, InDepth, World, ID_COLORS};
 pub use disk::{default_frame_folder, frame_cache_stats, FrameCacheStats};
 
 /// One frame of straight RGBA, row by row: 8 bits a component, or 16 from
@@ -195,7 +195,8 @@ impl Compositor {
 
     /// The color each clip that draws has in [`Pass::Ids`], as the bytes of a frame: the program's
     /// clips from its lowest track up, then those of the sequences it nests. Along an edge two
-    /// clips share a pixel, which is then between their colors.
+    /// clips share a pixel, which is then between their colors. The first [`ID_COLORS`] each
+    /// have a color of their own, and after them the colors come round.
     pub fn ids(&self) -> Vec<(String, [u8; 3])> {
         self.drawing.ids()
     }

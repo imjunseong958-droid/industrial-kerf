@@ -388,13 +388,13 @@ fn of_more_clips_than_a_frame_tells_apart_the_lowest_are_left_out_and_named() {
     // track up: every clip is one or the other.
     assert_eq!(whole.unread[0], "wall", "{:?}", whole.unread);
     assert_eq!(whole.clips.last().unwrap().clip, format!("b{boxes}"));
-    assert!(whole.clips.len() <= MOST_CLIPS, "{}", whole.clips.len());
     assert_eq!(whole.clips.len() + whole.unread.len(), boxes + 1);
-    // No more are read than the ids pass has colors for, which as it is are fewer than that:
-    // a box 144 above another has its color, and the lower of the two is left out.
-    assert!(whole.unread.contains(&"b1".to_owned()), "{:?}", whole.unread);
+    // The ids pass has a color for each of them, so as many are read as are read at most,
+    // and the lowest are the ones left out.
+    assert_eq!(whole.clips.len(), MOST_CLIPS);
+    assert_eq!(whole.unread, ["wall", "b1", "b2"]);
     // What is left out is out of the frame that is read: a box is where it is with nothing
-    // before it, the one behind the wall and the one of the wall's own color with the rest.
+    // before it, the one behind the wall with the rest.
     for shown in &whole.clips {
         assert!(shown.at.is_some() && shown.area > 0.0, "{shown:?}");
         assert!(shown.hidden < 0.03 && shown.by.is_empty(), "{shown:?}");
@@ -403,26 +403,58 @@ fn of_more_clips_than_a_frame_tells_apart_the_lowest_are_left_out_and_named() {
 
 #[test]
 fn a_clip_is_not_hidden_by_one_of_its_color_at_another_moment() {
-    // A long program has more clips than the ids pass has colors, and the clip that draws
-    // now has the color of one that ended long before: 144 clips of a frame each, and then one
-    // that stays.
+    // A program of more clips than the ids pass has colors: a clip for each color, a frame
+    // each and one after another, and over them all one that stays, which has the first's.
+    let colors = kerf_compose::ID_COLORS;
     let mut text =
         "kerf 1\nproject name=\"t\"\nsequence s1 rate=24 size=160x90 audio=48000\n".to_owned();
     text += "  track V1 video\n";
-    for at in 0..144 {
+    for at in 0..colors {
         text += &format!("    clip c{at} gen=solid@1 at={at}f dur=1f\n      set scale=0.5\n");
     }
-    text += "  track V2 video\n    clip stays gen=solid@1 at=0f dur=200f\n      set scale=0.5\n";
+    text += &format!(
+        "  track V2 video\n    clip stays gen=solid@1 at=0f dur={}f\n      set scale=0.5\n",
+        colors + 56
+    );
     let project = parse_document(&text, Catalog::builtin())
         .unwrap_or_else(|errors| panic!("{errors:?}"))
         .project;
-    let whole = showing(&project, None, Rate::FPS_24.time_of(150)).expect("reads");
-    assert!(whole.unread.is_empty(), "{:?}", whole.unread);
-    assert_eq!(whole.clips.len(), 1, "{:?}", whole.clips);
-    let stays = clip(&whole.clips, "stays");
-    assert!((stays.area - 0.25).abs() < 0.01, "{stays:?}");
-    assert!(stays.hidden < 0.03 && stays.by.is_empty(), "{stays:?}");
-    assert!((stays.shows - stays.area).abs() <= 0.001, "{stays:?}");
+    let ids = kerf_compose::Compositor::new(
+        &project,
+        Catalog::builtin(),
+        &kerf_compose::ComposeOptions {
+            pass: kerf_compose::Pass::Ids,
+            ..kerf_compose::ComposeOptions::default()
+        },
+    )
+    .expect("composes")
+    .ids();
+    assert_eq!((ids[0].0.as_str(), ids[colors].0.as_str()), ("c0", "stays"));
+    assert_eq!(ids[0].1, ids[colors].1);
+    // Long after the first has ended, the one that stays is read as itself, with nothing
+    // before it.
+    let alone = |whole: &[Shown]| {
+        assert_eq!(whole.len(), 1, "{whole:?}");
+        let stays = clip(whole, "stays");
+        assert!((stays.area - 0.25).abs() < 0.01, "{stays:?}");
+        assert!(stays.hidden < 0.03 && stays.by.is_empty(), "{stays:?}");
+        assert!((stays.shows - stays.area).abs() <= 0.001, "{stays:?}");
+    };
+    let later = showing(&project, None, Rate::FPS_24.time_of(colors as i64 + 6)).expect("reads");
+    assert!(later.unread.is_empty(), "{:?}", later.unread);
+    alone(&later.clips);
+    // On the frame they share, a frame cannot tell the two apart: the lower is left out and
+    // named, and the higher is read as if it were not there.
+    let shared = showing(&project, None, Rate::FPS_24.time_of(0)).expect("reads");
+    assert_eq!(shared.unread, ["c0"]);
+    alone(&shared.clips);
+    // Between the two, a clip under the one that stays has a color of its own, and is read
+    // as all hidden by it.
+    let between = showing(&project, None, Rate::FPS_24.time_of(144)).expect("reads");
+    assert!(between.unread.is_empty(), "{:?}", between.unread);
+    let under = clip(&between.clips, "c144");
+    assert!(under.hidden > 0.97, "{under:?}");
+    assert_eq!(under.by[0].0, "stays", "{under:?}");
 }
 
 #[test]

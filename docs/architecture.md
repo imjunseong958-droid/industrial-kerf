@@ -570,16 +570,37 @@ What is built for it, in this order, each measured before the next:
    what a scene blocked by hand has, the highest tracks' are the ones read,
    a scene being stacked from what is behind up to its subject, and the
    rest are named (`unread`) and left out of the frame that is read. So is
-   a clip whose color in the ids pass a higher clip has too. The pass's
-   colors come round after 144 clips, the 145th within four of a byte of
-   the first's, and a frame cannot tell two such apart: in a program of 145
-   clips one after another, the one on the frame read as wholly hidden by
-   one that had ended long before
-   (`a_clip_is_not_hidden_by_one_of_its_color_at_another_moment`). A pixel
-   is now a clip's that is read before any other's of that color, and of
-   two of one color on a frame the lower is left out and said to be. What
-   the pass itself draws of two such is as it was, one color for both, in
-   a `render` step's `pass=ids` and in a `matte=`. A pixel that clips
+   a clip whose color in the ids pass a higher clip has too, which a frame
+   cannot tell from it. The pass's colors came round after 144 clips, the
+   145th within four of a byte of the first's: in a program of 145 clips
+   one after another, the one on the frame read as wholly hidden by one
+   that had ended long before, and a `matte=` of a clip was white on the
+   clip told 144 after it as well
+   (`a_matte_has_none_of_a_clip_told_long_after_its_own`). They now come
+   round after 7,488 (`kerf_compose::ID_COLORS`). The first 144 are as
+   they were, the nearest two of them 7 of a byte apart in the channel
+   they differ most by, and each of the rest is 10 or more from every
+   other, where a pixel within 6 is taken for a clip's
+   (`no_two_id_colors_are_near_each_other_and_none_is_near_black`). Two
+   colors are as far apart as their brightest channels are, and as their
+   dimmest, so the rest are rings of 48 hues, a ring for each brightest
+   and dimmest 10 apart with 80 or more between the two and the brightest
+   125 or more. A ring's hues are those from one to the next of which one
+   channel changes, by an eighth of what is between; hues a golden angle
+   apart, as the first 144 have, are half as far apart where one channel
+   stops changing and another starts. The rings with the most room are
+   told first: through the 720th clip, a color past the first 144 is 20 or
+   more from every other, and through the 1,584th 14, which is too far for
+   one pixel to be within 6 of two. So a `render` step's `pass=ids` and a
+   `matte=` have each clip of such a program in a color of its own, and
+   `shows` reads as many on one frame as it reads at most. In a longer
+   program, a pixel is a clip's that is read before any other's of that
+   color, and of two of one color on a frame the lower is left out and
+   said to be
+   (`a_clip_is_not_hidden_by_one_of_its_color_at_another_moment`). A
+   compositor of 7,489 clips took about 1.2 s to make in a test build, its
+   plan asking for every clip which of the others was parented to it, and
+   takes about 0.14. A pixel that clips
    share, along an edge or all over a title
    whose strokes are a pixel wide on that frame, is each one's by its part
    of it: a clip alone says how much of the pixel it would have, and the

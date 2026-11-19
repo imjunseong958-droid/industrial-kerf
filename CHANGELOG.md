@@ -14,6 +14,15 @@ on `main`; its section here becomes the release's notes on GitHub
   cores and takes 200 for all 55. In a program of more than 144 clips, a
   clip is no longer read as hidden by one that is not on the frame
   ([docs/architecture.md](docs/architecture.md#what-directs-a-model)).
+- A `render` step's `pass=ids` gives 7,488 clips a color of their own,
+  where the colors came round after 144: the 145th clip of a sequence had
+  the first's to within what is taken for the same, so a `matte=` of
+  either was white on both, and what finds a clip by its color (an agent's
+  `look` with `placed`, `follows` and `eye`, and a `generate` line's
+  `moves=`) could take one for the other. The first 144 clips keep the
+  colors they had. `look` with `shows` reads up to 256 clips of one frame
+  for it, where no more than 144 could be told apart
+  ([docs/shots.md](docs/shots.md#passes)).
 - A guide of solids draws several times faster under a light that casts a
   shadow, and to the same picture. A street of 53 solids with a soft shadow
   (`gen=light@1 shadow=0.55 size=2.5`) took 42 s a frame at 1080p on four

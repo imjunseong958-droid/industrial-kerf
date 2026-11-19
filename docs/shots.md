@@ -1738,9 +1738,9 @@ where it is, how much of it other clips hide and which, and the edges it
 reaches. It draws a small frame for each clip, side by side: a street of 55
 clips is read in a fifth of a second on four cores. What it leaves out it
 names (`unread`), the lowest tracks' first: clips past 256 on one frame,
-and a clip whose color in the ids pass a higher one has too, which comes
-after 144 clips ([architecture.md](architecture.md#what-directs-a-model),
-3).
+and a clip whose color in the ids pass a higher one has too, which only a
+program of more than 7,488 clips has
+([architecture.md](architecture.md#what-directs-a-model), 3).
 
 A scene written as text can be wrong where no frame shows it: a crate a
 hundredth of the frame over the road, a car's far wheels in it. A depth pass
@@ -1772,6 +1772,15 @@ render s2 {ids.mp4} pass=ids size=832x480 rate=16
   the file says which thing is which as the camera and the clips move. A
   nested sequence is one clip. The colors go by the clips' order, the lowest
   track first, so adding a clip below others gives those above it new ones.
+  Every clip of the sequence that draws is counted, at whatever moment it
+  does, and then those of the sequences it nests. 7,488 of them have a color
+  of their own, none near black: what reads the pass takes a pixel for a
+  clip's when each of its channels is within 6, of 255, of the clip's color,
+  and no two colors are that near. The first 144 differ by 7 or more in some
+  channel, and each after them from every other by 10 or more: by 20 through
+  the 720th clip, and by 14 through the 1,584th, which is too far for one
+  pixel to be taken for two clips. In a program of more clips the colors
+  come round, the 7,489th having the first's.
 - **`pass=depth`**: how near each pixel is, as a grey: white at the camera,
   mid grey where a clip at `z=0` stands before a camera left where it is,
   and darker the farther, by one over the distance, as a model that reads
