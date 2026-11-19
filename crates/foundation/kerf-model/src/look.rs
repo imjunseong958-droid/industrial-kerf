@@ -1104,9 +1104,10 @@ impl Look {
                 Line::Set { value, .. } => vec![value],
                 Line::Fx { params, .. } => params.iter().map(|(_, value)| value).collect(),
                 // An outline's keys are at times no parameter moves.
-                Line::Mask { shape, .. } if matches!(shape, MaskShape::Moving(_)) => {
-                    return Vec::new()
-                }
+                Line::Mask {
+                    shape: MaskShape::Moving(_),
+                    ..
+                } => return Vec::new(),
                 Line::Mask { params, .. } => params.iter().map(|(_, value)| value).collect(),
             };
             for val in vals {
