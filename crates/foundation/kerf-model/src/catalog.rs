@@ -169,6 +169,12 @@ impl ParamDef {
         self
     }
 
+    /// One that holds a single value for the clip: no keyframes and no expression.
+    pub fn still(mut self) -> Self {
+        self.animatable = false;
+        self
+    }
+
     /// Check a value's type and range.
     pub fn check_value(&self, value: &Value) -> Result<(), String> {
         match (&self.ty, value) {
@@ -1088,14 +1094,14 @@ fn builtin_catalog() -> Catalog {
             "title",
             FxKind::Generator,
             Domain::Video,
-            "A line of text. `reveal` animates it by character or word, from the look the `from_` numbers give.",
+            "A line of text. `reveal` animates it by character or word, from the `from_` look.",
         )
         .category("Generate")
         .param(P::text("text", ""))
         .param(
             P::number("reveal", 1.0)
                 .range(0.0, 1.0)
-                .doc("How far in it has come; animate 0 to 1."),
+                .doc("How far in it has come; animate it."),
         )
         .param(P::choice("reveal_by", &["char", "word"]))
         .param(
@@ -1117,6 +1123,13 @@ fn builtin_catalog() -> Catalog {
         .param(P::number("from_rotation", 0.0).range(-36000.0, 36000.0).unit("degrees"))
         .param(P::number("from_opacity", 0.0).range(0.0, 1.0))
         .param(P::text("font", "sans-serif"))
+        .param(
+            P::number("weight", 0.0)
+                .range(0.0, 1000.0)
+                .still()
+                .doc("The face by weight: 100 thin, 400 regular, 700 bold, 900 black; 0 is `style`'s or the font's own."),
+        )
+        .param(P::text("style", "").doc("The face by its style name (`look` `font`), e.g. `Black Italic`, or `italic`."))
         .param(
             P::number("wght", 0.0)
                 .range(0.0, 1000.0)

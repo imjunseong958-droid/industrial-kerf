@@ -4,8 +4,8 @@
 //! tracks over it leave showing for a frame or two), sound cut inside a
 //! word or through a sound, pauses and repeated words the cut still plays,
 //! a word it took with a restart (see `cuts`), a picture and a sound of one
-//! thing that play out of step, and text and captions a viewer cannot read
-//! (see `text_lint`).
+//! thing that play out of step, and text and captions a viewer cannot read,
+//! or that no installed font can draw (see `text_lint`).
 
 use crate::cuts::{self, Known};
 use crate::qc::{Finding, Severity};
@@ -49,6 +49,7 @@ pub(crate) fn findings(project: &Project, facts: &dyn Facts) -> Vec<Finding> {
         leftovers(project, sequence, &mut known, &mut findings);
         speech_unheard(project, sequence, facts, &mut findings);
         text_lint::text(sequence, &mut findings);
+        text_lint::undrawable(sequence, &mut findings);
         text_lint::captions(sequence, &mut findings);
         does_nothing(sequence, &mut findings);
     }
@@ -213,7 +214,16 @@ fn does_nothing(sequence: &Sequence, findings: &mut Vec<Finding>) {
                         Some(Param::Static(Value::Text(font))) if !font.trim().is_empty() => font.as_str(),
                         _ => "sans-serif",
                     };
-                    let (family, unread) = crate::text_lint::features_unread(font, features);
+                    let style = match params.get("style") {
+                        Some(Param::Static(Value::Text(style))) => style.as_str(),
+                        _ => "",
+                    };
+                    let weight = match params.get("weight") {
+                        Some(Param::Static(Value::Number(weight))) => *weight,
+                        _ => 0.0,
+                    };
+                    let style = kerf_model::title_face(style, weight);
+                    let (family, unread) = crate::text_lint::features_unread(font, &style, features);
                     for tag in unread {
                         says(format!("`features`: {family} has no `{tag}`, which draws nothing (`look` `font` names the ones it has)"));
                     }

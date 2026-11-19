@@ -2119,6 +2119,7 @@ name = "kerf-text"
 version = "0.1.4"
 dependencies = [
  "harfrust",
+ "png",
  "skrifa",
  "tempfile",
  "unicode-bidi",

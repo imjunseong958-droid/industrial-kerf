@@ -173,6 +173,10 @@ impl Hash for StyleRun {
 struct Styles<'a> {
     list: Vec<&'a TextStyle>,
     prim: Vec<Resolved>,
+    /// The axes each style is shaped and drawn at ([`fonts::style_axes`]).
+    axes: Vec<Vec<fonts::Axis>>,
+    /// The weight and slant each style asks for, which fallback faces are chosen and synthesised by.
+    want: Vec<(u16, bool)>,
     /// Style index of every byte (None = all base style).
     per_byte: Option<Vec<u16>>,
 }
@@ -181,7 +185,18 @@ impl<'a> Styles<'a> {
     fn new(text: &str, base: &'a TextStyle, runs: &'a [StyleRun]) -> Self {
         let mut list = vec![base];
         list.extend(runs.iter().map(|r| &r.style));
-        let prim = list.iter().map(|s| fonts::resolve(&s.family, &s.style)).collect();
+        let prim: Vec<Resolved> = list.iter().map(|s| fonts::resolve(&s.family, &s.style)).collect();
+        let axes = list.iter().zip(&prim).map(|(s, r)| fonts::style_axes(r, &s.style, &s.axes)).collect();
+        let want = list
+            .iter()
+            .zip(&prim)
+            .map(|(s, r)| {
+                let f = fonts::face(r.face);
+                let weight = fonts::style_weight(&s.style).unwrap_or(f.info.weight);
+                let weight = if s.faux_bold || r.synth_bold { weight.max(700) } else { weight };
+                (weight, fonts::style_italic(&s.style) || f.info.italic || s.faux_italic)
+            })
+            .collect();
         let per_byte = (!runs.is_empty()).then(|| {
             let mut v = vec![0u16; text.len() + 1];
             for (i, r) in runs.iter().enumerate() {
@@ -192,7 +207,7 @@ impl<'a> Styles<'a> {
             }
             v
         });
-        Styles { list, prim, per_byte }
+        Styles { list, prim, axes, want, per_byte }
     }
     fn at(&self, byte: usize) -> usize {
         self.per_byte.as_ref().and_then(|v| v.get(byte)).map_or(0, |&i| i as usize)
@@ -344,13 +359,12 @@ fn uses_vertical_form(c: char) -> bool {
     matches!(c as u32, 0x2E80..=0x9FFF | 0xF900..=0xFAFF | 0xFE10..=0xFE1F | 0xFE30..=0xFE4F | 0xFF00..=0xFFEF | 0x20000..=0x3FFFF)
 }
 
-fn shape_item(text: &str, chars: &[(usize, char, char)], rtl: bool, face: FaceId, size: f32, style: &TextStyle, vertical: bool) -> Vec<ShapedGlyph> {
+fn shape_item(text: &str, chars: &[(usize, char, char)], rtl: bool, face: FaceId, size: f32, style: &TextStyle, axes: &[fonts::Axis], vertical: bool) -> Vec<ShapedGlyph> {
     let f = fonts::face(face);
     let (Some(font), Some(data)) = (f.font(), f.shaper_data()) else { return Vec::new() };
-    let variations = (!style.axes.is_empty()).then(|| {
-        harfrust::ShaperInstance::from_variations(&font, fonts::settled(&style.axes).map(|(tag, value)| harfrust::Variation { tag: Tag::new(&tag), value }))
-    });
-    let instance = fonts::instance(face, &style.axes);
+    let variations = (!axes.is_empty())
+        .then(|| harfrust::ShaperInstance::from_variations(&font, fonts::settled(axes).map(|(tag, value)| harfrust::Variation { tag: Tag::new(&tag), value })));
+    let instance = fonts::instance(face, axes);
     let shaper = data.shaper(&font).instance(variations.as_ref()).build();
     let mut buf = UnicodeBuffer::new();
     for &(b, _, sc) in chars {
@@ -403,6 +417,26 @@ struct ParaLine {
     underlines: Vec<(f32, f32, u16)>,
 }
 
+/// Whether glyphs of style `si` set in `face` are emboldened and slanted: as the style's own face is,
+/// or as its faux styles ask. A fallback face lighter than the text asks for is emboldened and an
+/// upright one slanted where the text is italic, unless it draws in colour or sets its own axes.
+fn synthesised(sty: &Styles, si: usize, face: FaceId) -> (bool, bool) {
+    let (st, pr) = (sty.list[si], sty.prim[si]);
+    let (mut bold, mut italic) = (pr.synth_bold || st.faux_bold, pr.synth_italic || st.faux_italic);
+    if face != pr.face {
+        let f = fonts::face(face);
+        let (weight, slant) = sty.want[si];
+        if !f.info.color {
+            let axes = f.axes();
+            bold |= weight >= 600 && f.info.weight <= 500 && !axes.iter().any(|a| &a.tag == b"wght");
+            italic |= slant && !f.info.italic && !axes.iter().any(|a| &a.tag == b"ital");
+        }
+        bold &= !f.info.color;
+        italic &= !f.info.color;
+    }
+    (bold, italic)
+}
+
 /// Lay out one paragraph (no newlines) whose text starts at byte `base` of the whole string.
 fn paragraph(text: &str, base: usize, sty: &Styles, para: &ParagraphStyle) -> Vec<ParaLine> {
     let style = sty.list[0];
@@ -425,7 +459,7 @@ fn paragraph(text: &str, base: usize, sty: &Styles, para: &ParagraphStyle) -> Ve
     let pinfo = &bidi.paragraphs[0];
     let base_rtl = pinfo.level.is_rtl();
     // per char: (byte, char, shaped char), face, level, small, style
-    let chars: Vec<(usize, char, char, FaceId, bool, bool, usize)> = text
+    let mut chars: Vec<(usize, char, char, FaceId, bool, bool, usize)> = text
         .char_indices()
         .map(|(b, c)| {
             let si = sty.at(base + b);
@@ -435,11 +469,29 @@ fn paragraph(text: &str, base: usize, sty: &Styles, para: &ParagraphStyle) -> Ve
                 Caps::Small if c.is_lowercase() => (upper_single(c), true),
                 Caps::Small => (c, false),
             };
-            let pf = sty.prim[si].face;
-            let face = if sc.is_whitespace() { pf } else { fonts::fallback_for(sc, pf) };
-            (b, c, sc, face, bidi.levels[b].is_rtl(), small, si)
+            (b, c, sc, sty.prim[si].face, bidi.levels[b].is_rtl(), small, si)
         })
         .collect();
+    // A face per grapheme cluster, so that an emoji sequence, a base and its marks, or a character
+    // and its variation selector are drawn by one face.
+    let mut k = 0;
+    for (offset, cluster) in text.grapheme_indices(true) {
+        let end = offset + cluster.len();
+        let start = k;
+        while k < chars.len() && chars[k].0 < end {
+            k += 1;
+        }
+        let members = &chars[start..k];
+        let Some(&(_, _, sc, pf, _, _, si)) = members.first() else { continue };
+        if sc.is_whitespace() {
+            continue;
+        }
+        let shaped: Vec<char> = members.iter().map(|c| c.2).collect();
+        let face = fonts::face_for_cluster(&shaped, pf, sty.want[si]);
+        for c in &mut chars[start..k] {
+            c.3 = face;
+        }
+    }
     // items: runs of equal (face, rtl, small, style)
     let mut items: Vec<Item> = Vec::new();
     let mut i = 0;
@@ -452,7 +504,7 @@ fn paragraph(text: &str, base: usize, sty: &Styles, para: &ParagraphStyle) -> Ve
         let st = sty.list[si];
         let sub: Vec<(usize, char, char)> = chars[i..j].iter().map(|c| (c.0, c.1, c.2)).collect();
         let size = if small { st.size * SMALL_CAPS_SCALE } else { st.size };
-        let mut glyphs = shape_item(text, &sub, rtl, face, size, st, para.vertical);
+        let mut glyphs = shape_item(text, &sub, rtl, face, size, st, &sty.axes[si], para.vertical);
         // tracking after each cluster
         if st.tracking != 0.0 {
             let t = st.tracking * st.size / 1000.0;
@@ -543,6 +595,7 @@ fn paragraph(text: &str, base: usize, sty: &Styles, para: &ParagraphStyle) -> Ve
             for k in idx {
                 let si = items[k].style;
                 let (st, pr) = (sty.list[si], sty.prim[si]);
+                let (synth_bold, synth_italic) = synthesised(sty, si, items[k].glyphs.first().map_or(pr.face, |g| g.face));
                 for g in items[k].glyphs.iter().filter(|g| run.contains(&g.cluster)) {
                     let x0 = pen;
                     glyphs.push(Glyph {
@@ -552,8 +605,8 @@ fn paragraph(text: &str, base: usize, sty: &Styles, para: &ParagraphStyle) -> Ve
                         y: -g.dy - st.baseline_shift,
                         size: g.size,
                         cluster: base + g.cluster,
-                        synth_bold: pr.synth_bold || st.faux_bold,
-                        synth_italic: pr.synth_italic || st.faux_italic,
+                        synth_bold,
+                        synth_italic,
                         instance: g.instance,
                         run: si as u16,
                     });
@@ -969,7 +1022,7 @@ mod tests {
         // Japanese glyphs come from the craft-fonts (built with CRAFT_FONTS_DIR) or a system font:
         // skip where neither is present.
         crate::fonts::scan_system();
-        if !crate::fonts::all_faces().iter().any(|f| "日本語縦書き".chars().all(|c| f.has_char(c))) {
+        if !crate::fonts::all_faces().iter().any(|f| "日本語縦書き".chars().all(|c| f.covers(c))) {
             eprintln!("SKIPPED: no Japanese font installed");
             return;
         }
