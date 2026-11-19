@@ -1825,9 +1825,14 @@ x64, and Linux x86-64 as new as Ubuntu 24.04.
   reading the text on a screen, and telling speakers apart. Read the second time and not done: an
   edge on the dip between two words with no quiet between them, which its alignment's word times
   make safe and a transcriber's do not; a cut named that takes a word or two more than the
-  restart it removes; a proposal brought forward onto an edit that changed under it, where
-  Kerf's goes stale; and a check that two recordings of one thing still play in step after a
-  cut.
+  restart it removes; a check that two recordings of one thing still play in step after a cut;
+  and a proposal brought forward onto an edit that changed under it, where Kerf's goes stale.
+  Merging the two documents by their ids, as a sync does, is not the way to that: two edits that
+  each close a gap both move every clip after them, the merge keeps one side's place for it, and
+  a clip is left half a second after the one before it (tried on four clips, 2026-11-19).
+  Running the proposal's operations again on the project as it is gives the right edit there,
+  and what is not built is knowing that it is the same edit: each place a line names carried by
+  the clip that holds it, and refused where that clip has changed.
 - **Jumper and the Resolve and Premiere MCP servers** bolt agents onto editors
   that were not built for them. Kerf's document, proposals, and Git merging are
   what they cannot have, and each area has to keep that: every feature is text in
