@@ -589,6 +589,9 @@ fn slivers(project: &Project, sequence: &Sequence, facts: &dyn Facts, findings: 
 /// them, only that nobody looked.
 pub(crate) const CUT_UNHEARD: &str = "cut.unheard";
 
+/// What a cut inside a word a transcript heard is called.
+pub(crate) const CUT_IN_WORD: &str = "cut.in_word";
+
 /// What a cut through a sound no transcript has a word for is called.
 pub(crate) const CUT_IN_SOUND: &str = "cut.in_sound";
 
@@ -623,7 +626,7 @@ fn cuts_in_sound(
         if let Some(word) = &judged.word {
             findings.push(
                 finding(
-                    "cut.in_word",
+                    CUT_IN_WORD,
                     clip.id.as_str(),
                     format!(
                         "clip `{}` {end} inside the word \"{}\" ({}–{} of `{}`, by its transcript)",
@@ -1492,6 +1495,137 @@ sequence s1 rate=24 size=1920x1080
     fn cuts_of(known: &Known, asked: &cuts::Asked) -> serde_json::Value {
         let project = project();
         cuts::report(&project, &project.sequences[0], known, asked)
+    }
+
+    /// Every name an answer holds: its keys, all the way down.
+    fn names_in(value: &serde_json::Value, names: &mut Vec<String>) {
+        match value {
+            serde_json::Value::Object(fields) => {
+                for (name, value) in fields {
+                    names.push(name.clone());
+                    names_in(value, names);
+                }
+            }
+            serde_json::Value::Array(values) => {
+                values.iter().for_each(|value| names_in(value, names))
+            }
+            _ => {}
+        }
+    }
+
+    /// The playbooks for speech put what they name in backticks: a line of a script, a word of
+    /// one, an argument of `look` or `edit`, a field of an answer, a check's code. Each is one
+    /// the grammar, a tool's schema, a report, or a check has, so that a name changed there
+    /// fails here, and not in an edit an agent wrote by a playbook.
+    #[test]
+    fn the_playbooks_for_speech_name_only_what_the_tools_have() {
+        let grammar = kerf_lang::reference(Catalog::builtin());
+        // What `look` and `edit` take, and what their descriptions and the guide name.
+        let mut said = crate::harness::system_prompt(&[]);
+        let mut taken = Vec::new();
+        for tool in ["look", "edit"] {
+            let (about, schema, _) = crate::harness::metadata(tool).unwrap();
+            said.push_str(about);
+            for (name, property) in schema["properties"].as_object().unwrap() {
+                taken.push(name.clone());
+                said.push_str(property["description"].as_str().unwrap_or_default());
+            }
+        }
+        // A report with one of everything it lists: a1 stops at 4 s of m1 and a2 goes on from
+        // 10 s, a take either side of the cut, a word doubled, and a wait before the last.
+        let known = Known {
+            words: words(&[
+                (1.0, 1.2, "so"),
+                (1.2, 1.5, "this"),
+                (1.5, 1.8, "is"),
+                (1.8, 2.2, "the"),
+                (2.2, 2.6, "plan"),
+                (5.0, 5.3, "um"),
+                (10.2, 10.4, "okay"),
+                (10.4, 10.7, "this"),
+                (10.7, 11.0, "is"),
+                (11.0, 11.3, "the"),
+                (11.3, 11.6, "plan"),
+                (11.6, 11.9, "plan"),
+                (13.0, 13.3, "done"),
+            ]),
+            covered: vec![(0.0, 60.0)],
+            // a2 starts in the middle of a sound, so a cut is listed too.
+            sound: Some(recording(&[(9.8, 10.0)], &[])),
+            ..Known::default()
+        };
+        let report = cuts_of(&known, &cuts::Asked::default());
+        for list in ["pauses", "repeats", "restarts", "joins"] {
+            assert!(report[list]["count"].as_u64() > Some(0), "{list}: {report:#}");
+        }
+        assert_eq!(report["restarts"]["atCuts"], 1, "{report:#}");
+        assert!(!report["cuts"].as_array().unwrap().is_empty(), "{report:#}");
+        let mut answered = Vec::new();
+        names_in(&report, &mut answered);
+        // How a cut is heard is a value of its entry, and a count of the summary.
+        for heard in ["quiet", "low", "sound"] {
+            assert!(report["summary"][heard].is_number(), "{heard}");
+        }
+        let codes = [
+            CUT_IN_WORD,
+            CUT_IN_SOUND,
+            CUT_FADE_IN_SOUND,
+            PAUSE_KEPT,
+            WORD_REPEATED,
+            PHRASE_RESTARTED,
+        ];
+        let document = kerf_lang::print_document(
+            &project(),
+            Catalog::builtin(),
+            kerf_lang::PrintOptions { annotate: true },
+        );
+        let skills = kerf_skills::bundled_skills();
+        // A line of the grammar starts with its operation, and gives each name with `=`.
+        let operation = |word: &str| grammar.contains(&format!("\n{word} "));
+        let given = |name: &str| grammar.contains(&format!("{name}="));
+        let mut read = 0;
+        for playbook in ["speech-cleanup", "target-length", "wait-speedup"] {
+            let body = &kerf_skills::find_skill(&skills, playbook).unwrap().body;
+            let body = body.split_whitespace().collect::<Vec<_>>().join(" ");
+            for span in body.split('`').skip(1).step_by(2) {
+                read += 1;
+                let mut parts = span.split(' ');
+                let first = parts.next().unwrap();
+                let there = if span.starts_with('{') {
+                    // What `cuts` is given in place of `true`.
+                    let asked: serde_json::Value = serde_json::from_str(span).unwrap();
+                    let cuts = &crate::harness::metadata("look").unwrap().1["properties"]["cuts"];
+                    asked["pauses"].as_f64() >= Some(cuts::LEAST_PAUSE_SECONDS)
+                        && cuts["description"]
+                            .as_str()
+                            .unwrap()
+                            .contains("{\"pauses\": <seconds>}")
+                } else if span.contains(' ') && operation(first) {
+                    // A script line: the grammar has its operation and each name it gives.
+                    parts
+                        .filter_map(|part| part.split_once('='))
+                        .all(|(name, _)| given(name))
+                } else if let Some((name, value)) = span.split_once('=') {
+                    given(name) && (value.is_empty() || grammar.contains(span))
+                } else if span.ends_with(".start") || span.ends_with(".end") {
+                    grammar.contains("`c3.start`") && grammar.contains("`c3.end`")
+                } else if span.contains('@') {
+                    grammar.contains("`c3@<media timecode>`")
+                } else if span.starts_with('#') {
+                    document.contains(span)
+                } else if span.contains('.') {
+                    codes.contains(&span)
+                } else {
+                    operation(span)
+                        || taken.iter().any(|name| name == span)
+                        || answered.iter().any(|name| name == span)
+                        || said.contains(&format!("`{span}`"))
+                        || skills.iter().any(|skill| skill.name == span)
+                };
+                assert!(there, "`{span}`, which `{playbook}` names, is not there");
+            }
+        }
+        assert!(read > 100, "{read}");
     }
 
     #[test]

@@ -1827,6 +1827,37 @@ clean with the level either side of it, and the pauses and repeated words the se
 plays. It measures nothing new, so it costs a read of what each media's index kept, and indexes a
 media that has none.
 
+The tools say what each does and not which comes first, so three playbooks give the order
+(`skills/speech-cleanup`, `skills/target-length`, `skills/wait-speedup`, 2026-11-19). Tidying
+speech reads each media's transcript and then `cuts`, takes out what was said and taken again
+with the later saying kept, then doubled words and fillers, then pauses, and reads every join
+back as a sentence. Cutting to a length takes pauses, then what was said twice, then whole
+sentences, and reads the sequence's `# duration` after each. A wait in a screen recording is
+found between the transcript's cues, looked at on a sheet, played fast where its frames differ
+and cut where they do not. A line that is refused is left out and told to the person. Every
+name the three put in backticks is held to the grammar, the two tools' schemas, a `cuts` report
+with one of everything in it, and the check's codes
+(`the_playbooks_for_speech_name_only_what_the_tools_have` in `kerf-mcp/src/lint.rs`).
+
+Each was followed once by hand through `kerf-mcp`, on a recording made beside this work (no test
+holds it): 52 s of a terminal with a narration of 59 words, three fillers, a doubled word, a
+sentence started twice, a cough in a pause, 16 s of an install with keys and a fan under a bar
+that fills, and 5 s of a still screen. It is not speech. Each word is a voiced burst at a pitch
+of its own, and a stand-in for whisper.cpp reads the words back from the pitch, so it hears an
+edit's mix as well as the file; nobody listened, no agent was run with the playbooks, and the
+loose times of a real transcript were not in it. Tidied, it went from 52.1 s to 40.9 s with all
+14 of its cuts in quiet, and four lines were refused and left: the doubled word, whose two
+sayings have no quiet between them, a filler said in one breath with the words beside it, the
+pause with the cough, and the install, which is no pause. Cut to under 30 s as one proposal
+extended three times, it read 45.1 s after the pauses, 40.4 s after what was said twice, 37.8 s
+after a sentence, and 25.7 s with the install at four times its speed. What the playbooks say
+that the tools' own words do not came of it: that a script is written from the end of a
+sequence toward its start, since a cut gives the later part of its clip a new id; that a word
+said twice in its clip is taken by its times; that a wait with sound in it reads short among
+`pauses` and is found by the cues; that `snap=pause` is refused where a fan leaves no pause
+beside a word; and that a speed moves nothing after its clip, so a range is taken out to close
+up.
+
 `look` with `eye` reads the picture of a cut between two shots, as `cuts` reads its sound (Edit,
 above): where the subject of the shot that ends is on the frame and where the next one's is, how
 far the eye has to go between them, how much larger or smaller the second is, and whether it

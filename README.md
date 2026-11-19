@@ -252,10 +252,17 @@ Transcripts come from local `whisper.cpp` (`KERF_WHISPER_BIN` and
 and pauses are cached with the media's other derivatives in
 `.kerf/cache/derived`.
 
-Skills hold editorial guidance only — what makes a good short, how a meme
-lands — not tool procedures. Bundled skills are compiled into `kerf-skills`;
-user (`~/.kerf/skills`) and project (`.kerf/skills`) skills override them by
-name. Every skill's guidance is part of the agent's instructions.
+Skills hold what the tools do not say: editorial guidance — what makes a
+good short, how a meme lands — and, for work done in steps, the order to
+take them in and what to read back after each. Three are for footage of
+someone talking: `speech-cleanup` takes out phrases said and taken again,
+doubled words and fillers, and long pauses; `target-length` brings an edit
+down to a length you name, pauses first and whole sentences last; and
+`wait-speedup` plays the waits of a screen recording fast where the screen
+shows something going on, and cuts them where it does not. Bundled skills
+are compiled into `kerf-skills`; user (`~/.kerf/skills`) and project
+(`.kerf/skills`) skills override them by name. Every skill's guidance is
+part of the agent's instructions; `kerf --skills` lists them.
 
 The built-in agent keeps its whole transcript and sends it to the provider
 append-only, so the system prompt and everything already sent stay the same

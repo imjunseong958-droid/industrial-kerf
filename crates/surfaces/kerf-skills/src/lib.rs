@@ -26,6 +26,9 @@ pub fn bundled_skills() -> Vec<Skill> {
         include_str!("../../../../skills/stream-gameplay/SKILL.md"),
         include_str!("../../../../skills/model-shot/SKILL.md"),
         include_str!("../../../../skills/footage-parts/SKILL.md"),
+        include_str!("../../../../skills/speech-cleanup/SKILL.md"),
+        include_str!("../../../../skills/target-length/SKILL.md"),
+        include_str!("../../../../skills/wait-speedup/SKILL.md"),
     ]
     .into_iter()
     .map(|content| {
@@ -129,17 +132,20 @@ pub fn find_skill<'a>(skills: &'a [Skill], name: &str) -> Option<&'a Skill> {
 
 /// The longest skill body carried in a system prompt.
 const MAX_PROMPT_SKILL_BYTES: usize = 6 * 1024;
+/// How many skills a system prompt carries.
+const PROMPT_SKILLS: usize = 16;
 
 /// Compose a prompt that carries each skill's editorial guidance in full.
-/// Skills hold judgment, not procedures, so they are short enough to keep in
-/// context; an overlong body is cut at a line boundary.
+/// Skills hold judgment, and for work done in steps the order to take them
+/// in, in short items, so they are short enough to keep in context; an
+/// overlong body is cut at a line boundary.
 pub fn compose_system_prompt(base: &str, skills: &[Skill]) -> String {
     if skills.is_empty() {
         return base.to_owned();
     }
     let mut prompt =
         format!("{base}\n\n# Editorial guidance\n\nApply the guidance that fits the request.");
-    for skill in skills.iter().take(16) {
+    for skill in skills.iter().take(PROMPT_SKILLS) {
         prompt.push_str(&format!(
             "\n\n## {}\n\n{}\n\n{}",
             skill.name,
@@ -260,5 +266,106 @@ mod tests {
             find_skill(&skills, "shorts").unwrap().dir,
             PathBuf::from("<bundled>")
         );
+    }
+
+    #[test]
+    fn every_bundled_skill_is_in_the_prompt_whole() {
+        let skills = bundled_skills();
+        let names: Vec<&str> = skills.iter().map(|skill| skill.name.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "shorts",
+                "meme",
+                "stream-gameplay",
+                "model-shot",
+                "footage-parts",
+                "speech-cleanup",
+                "target-length",
+                "wait-speedup",
+            ]
+        );
+        // A prompt carries sixteen at most, and cuts a body off past its bound.
+        assert!(skills.len() <= PROMPT_SKILLS);
+        let prompt = compose_system_prompt("base", &skills);
+        for skill in &skills {
+            assert!(!skill.description.is_empty(), "{}", skill.name);
+            assert!(
+                skill.body.len() <= MAX_PROMPT_SKILL_BYTES,
+                "{} is {} bytes",
+                skill.name,
+                skill.body.len()
+            );
+            assert!(prompt.contains(&format!("## {}\n\n{}", skill.name, skill.description)));
+            assert!(prompt.contains(&skill.body), "{}", skill.name);
+        }
+    }
+
+    /// The order each playbook for speech gives, and what it has an agent read back, as one
+    /// line of words whatever the wrapping.
+    #[test]
+    fn the_speech_playbooks_say_their_order_and_what_to_read_back() {
+        let skills = bundled_skills();
+        let said = |name: &str| {
+            let body = &find_skill(&skills, name).unwrap().body;
+            body.split_whitespace().collect::<Vec<_>>().join(" ")
+        };
+        // What is read first, what goes in which order, that the later saying is kept, that a
+        // refused line is the user's to hear of, and what is read once it is cut.
+        let cleanup = said("speech-cleanup");
+        for rule in [
+            "Read first. `look` with `media` and `transcript`",
+            "Then `look` with `cuts`, as `{\"pauses\": 0.5}`",
+            "restarts, then doubled words and fillers, then pauses",
+            "Keep the later saying",
+            "`extract <clip> said=\"…\"`",
+            "`extract <clip> pause=\"…\" leave=<dur>`",
+            "work from the end of the sequence toward its start",
+            "Do not force a refused line",
+            "tell the user each line refused, where it is, and why",
+            "Read `snapped` after each edit",
+            "Each of the `joins` reads as a sentence in `plays`",
+            "`cut.in_word`, `cut.in_sound`, or `cut.fade_in_sound`",
+            "`phrase.restarted`",
+        ] {
+            assert!(cleanup.contains(rule), "{rule}");
+        }
+        // Pauses, then what was said twice, then whole sentences, with the length read after
+        // each, and the choice handed to the user where content is what is left.
+        let length = said("target-length");
+        let order: Vec<usize> = [
+            "First the pauses",
+            "Second, what was said twice",
+            "Third, whole sentences",
+        ]
+        .iter()
+        .map(|step| length.find(step).unwrap_or_else(|| panic!("{step}")))
+        .collect();
+        assert!(order.windows(2).all(|pair| pair[0] < pair[1]), "{order:?}");
+        for rule in [
+            "ends `# duration`",
+            "After each step, read `# duration` again",
+            "Stop at the target",
+            "A sentence goes whole",
+            "give the user the choices",
+            "pending proposal's newest id as `extend`",
+        ] {
+            assert!(length.contains(rule), "{rule}");
+        }
+        // Where nobody speaks, what tells a wait to speed from one to cut, and the lines that
+        // speed one and close up after it.
+        let waits = said("wait-speedup");
+        for rule in [
+            "Find them in the transcript",
+            "`look` with `sheet`",
+            "play it fast where something is going on, cut it where nothing is",
+            "`split <clip> at=<pos> snap=pause as=wait1`",
+            "`speed wait1 <speed>`",
+            "`extract from=wait1.end to=rest1.start`",
+            "`set wait1 enabled=false`",
+            "never speech",
+        ] {
+            assert!(waits.contains(rule), "{rule}");
+        }
     }
 }
