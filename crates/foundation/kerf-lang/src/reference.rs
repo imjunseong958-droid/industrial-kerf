@@ -89,12 +89,12 @@ media add <id> path="…" rate=<fps> dur=<dur> [tc=<tc>] [video=WxH [alpha=true]
 media replace <id> <same as media add>
     swap the file behind an id; clips keep their timing and must fit
 media relink <id> path="…"  ·  media remove <id>
-media sync m2 with=m1@1.5s  m2 recorded what m1 did, from 1.5s into it
+media sync m2 with=m1@1.5s  m2 recorded what m1 did, 1.5s into it
 sequence add <id> rate=<fps> size=WxH [name="…"] [start=<tc>] [color=rec2100-pq|rec2100-hlg]  ·  sequence set|remove <id> …
 ```
 
 `snap=pause|cut [within=<amount>]` (0.5s) on trim, split, blade, insert, overwrite, and
-lift|extract <clip> puts the edge in the pause beside it, past no word, or on a
+lift|extract <clip> puts the edge in the pause by it, past no word, or on a
 picture cut; a blade where all it cuts are quiet.
 
 The effect `shape.outline@1` adds an outline to a `gen=shape` clip, in order, by `mode` (add, subtract,
