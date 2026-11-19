@@ -156,7 +156,9 @@ earlier with `look`; the proposal's script shows the caption lines it became.
 
 Check findings include what an editor would catch: black frames, picture that \
 leaves the frame's edges black, flash frames, a frame or two of another shot at \
-a clip's edge (from the media's index), sound cut inside a word (known once \
+a clip's edge (from the media's index), a frame or two of a shot between what \
+is over it and a cut (an overlay that ends just before the cut under it, or \
+starts just after), sound cut inside a word (known once \
 a transcript of that media has been made), titles and captions outside 90% \
 title safe or over each other (with the overlap's rect and depth in pixels), \
 and captions faster than 17 characters a second, up for less than 5/6 of a \
