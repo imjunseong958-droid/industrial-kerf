@@ -1119,6 +1119,7 @@ fn look_counts_the_cuts_of_a_sequences_sound() {
     );
     assert_eq!(cut["summary"]["cuts"], 1, "{cut}");
     assert_eq!(cut["summary"]["notMeasured"], 1, "{cut}");
+    assert_eq!(cut["summary"]["tookMore"], 0, "{cut}");
     // A part of it, with pauses listed from the length the edit names: the cut is in the
     // part that holds it and not in the one after.
     let part = |from: &str, to: &str| {

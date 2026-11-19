@@ -1424,13 +1424,33 @@ loud, has no pauses and judges no cut.
 either side of where the sound goes from one stretch of footage to another, with the cut marked,
 and the words it left out between them. A cut that takes "a very simple" out of "I gave it a
 very simple prompt" has both its edges in quiet and every word whole, and measures clean; read
-as "I gave it ‖ prompt" it does not. Scarlet goes on to name a cut that takes a word or two more
-than the restart it removes, from the words alone; that is left, having no cuts here to hold it
-to, and what a join plays is there to read. The length a pause is listed from is the edit's to
+as "I gave it ‖ prompt" it does not. The length a pause is listed from is the edit's to
 say (`{"pauses": 0.5}`, 0.3 s at least), since what is dead air depends on the pace: a fixed
 three quarters of a second hid every pause a tighter cut would take. And `from` and `to` take a
 part of a sequence, where the lists, which stop at 40 cuts and joins and 8 of the rest, said
 nothing of what they left out.
+
+A join that took a restart out and a word or two with it is named (`tookMore` on the join,
+counted in `summary`, and `cut.took_more` from the check, 2026-11-19), which reading `plays`
+was left to find. A cut that takes "beautiful. The detail, the, the" out of "absolutely
+beautiful. The detail, the, the detail, the spatial awareness" plays "absolutely ‖ detail, the
+spatial awareness": the start that was taken again is gone, and "beautiful." with it, every
+word played is whole, and nothing is said twice. It is found from the words alone, as Scarlet
+finds it (`took_more` in `kerf-mcp/src/cuts.rs`). The words at an end of what a join took that
+none of the six words played either side of it says again are named where what was taken
+beside them is a restart. At its start (`out`) they are the end of the phrase kept, two at
+most: one of the six words taken after them is said twice among those or is one of the first
+two the join goes on with, and the phrase before the join had not ended its sentence. A word
+there that is said again in the six taken after it is the restart's own, and no end of what
+was kept. At its end (`in`) they are the start of the take the join goes on with, three at
+most: the first of them was said in the six words taken before it, as a take starts the way
+the one it replaces did. More than that at an end is a passage taken out on purpose, as an
+aside is, and so is anything a join took none of which is said again beside it.
+Words are compared as a restart's are; a hesitation ("um", "uh", "hmm") and a transcriber's
+note of a sound (`[MUSIC]`) are no words, at an end or among the six. Scarlet found the shape
+at 14 of the 96 joins of a 58-minute edit, with a word lost from the sentence at about half
+and a correction or an aside taken out at the rest, so it is information that says where, and
+the sentence tells. Those numbers are Scarlet's: no edit here has been read against it.
 
 Measured by `kerf-mcp/tests/cut_edges.rs` on a recording made there, so that where each word
 starts and ends is known: 420 voiced words with a decay, some with a hiss before or after, some
@@ -1899,16 +1919,15 @@ x64, and Linux x86-64 as new as Ubuntu 24.04.
   move said with the words it ended between, an edge put between two words said in one breath,
   words taken out, or a pause brought down to a length, by one line that names them, with the
   pause that is left played before the cut, a phrase found that is taken again with other words
-  between its two sayings, what each join plays and took out, a pause listed from the length an
-  edit names, a room read where it is and a tick left in its pause, and what a crossfade plays
+  between its two sayings, what each join plays and took out, a join named that took a word or
+  two more than the restart it took out, a pause listed from the length an edit names, a room read where it is and a tick left in its pause, and what a crossfade plays
   past the cut it is on.
   Its encoded sections, kept by what they depend on and joined without encoding again, are done
   too (The engine, Kept frames). Left: its forced alignment of words (wav2vec2, a model of English
   letters), its filler and transcription models (their own licenses, one not for commercial use),
   reading the text on a screen, and telling speakers apart. Read the second time and not done: an
   edge on the dip between two words with no quiet between them, which its alignment's word times
-  make safe and a transcriber's do not; a cut named that takes a word or two more than the
-  restart it removes; a check that two recordings of one thing still play in step after a cut;
+  make safe and a transcriber's do not; a check that two recordings of one thing still play in step after a cut;
   and a proposal brought forward onto an edit that changed under it, where Kerf's goes stale.
   Merging the two documents by their ids, as a sync does, is not the way to that: two edits that
   each close a gap both move every clip after them, the merge keeps one side's place for it, and

@@ -9,7 +9,7 @@
 //! missed. Everything here is measured from what analysis already made, so
 //! an edit can be checked by its numbers without anyone listening to it.
 
-use kerf_lang::{Clock, EdgeSound, Facts, Heard, Sound, Speech, Word};
+use kerf_lang::{is_a_sound_note, Clock, EdgeSound, Facts, Heard, Sound, Speech, Word};
 use kerf_model::{Clip, Content, Id, Media, Project, Sequence, Time, Track, TrackKind};
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -36,6 +36,18 @@ const TOOK_WORDS: usize = 6;
 const REPEAT_WITHIN_SECONDS: f64 = 3.0;
 /// The longest phrase looked for twice in a row, in words.
 const REPEAT_WORDS: usize = 8;
+/// A word a join took is said again where one of this many words played
+/// either side of the join says it, and a start is taken again within as
+/// many.
+const AGAIN_WORDS: usize = 6;
+/// The most words a join is said to have taken with a restart: off the end
+/// of the phrase it kept, and off the start of the take it goes on with.
+/// More at an end is a passage taken out on purpose, as an aside is.
+const MORE_OUT_WORDS: usize = 2;
+const MORE_IN_WORDS: usize = 3;
+/// A join goes on with a start taken again within this many words: at
+/// once, or after the one word more a second saying may hold.
+const GOES_ON_WORDS: usize = 2;
 
 /// Which end of a clip a cut is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -371,6 +383,30 @@ fn plain(text: &str) -> String {
         .collect()
 }
 
+/// Whether `said`, a word as [`plain`] leaves it, is the sound of somebody
+/// hesitating, however long it is drawn out: "uh", "um", "er", "ah", "eh",
+/// "hmm", "mm-hmm". No sentence needs one.
+fn hesitation(said: &str) -> bool {
+    let mut sounds = String::new();
+    for c in said.chars() {
+        if !sounds.ends_with(c) {
+            sounds.push(c);
+        }
+    }
+    matches!(
+        sounds.as_str(),
+        "uh" | "uhm" | "um" | "er" | "erm" | "ah" | "eh" | "hm" | "mh" | "mhm"
+    ) || (sounds == "m" && said.len() > 1)
+}
+
+/// `text` as matching reads it, where it is a word a sentence may need:
+/// not a transcriber's note of a sound, such as `[MUSIC]`, and not a
+/// [`hesitation`].
+fn needed(text: &str) -> Option<String> {
+    Some(plain(text))
+        .filter(|said| !said.is_empty() && !is_a_sound_note(text) && !hesitation(said))
+}
+
 /// Whether `text` ends a sentence: "…it. It…" ends one and starts the next.
 fn ends_sentence(text: &str) -> bool {
     text.trim_end_matches(['"', '\'', '”', '’', ')', ']'])
@@ -659,6 +695,99 @@ pub(crate) struct Join<'a> {
     /// How far back in its media the second clip starts from where the
     /// first stopped, in seconds, where it does: what plays twice.
     pub replays: Option<f64>,
+    /// The words it took with a restart it took out.
+    pub more: TookMore,
+}
+
+/// The words a join took with the restart it took out, which nothing beside
+/// the join says again: a cut that takes "beautiful. The detail, the, the"
+/// out of "absolutely beautiful. The detail, the, the detail, the spatial
+/// awareness" takes the start that was taken again and "beautiful." with
+/// it, and plays "absolutely ‖ detail, the spatial awareness". Every word
+/// it plays is whole and both its edges may be in quiet. The sentence may
+/// do without the word, as it does without a correction: which takes
+/// reading it, so this says only where.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct TookMore {
+    /// Off the end of the phrase kept before the join.
+    pub out: Option<String>,
+    /// Off the start of the take the join goes on with.
+    pub into: Option<String>,
+}
+
+impl TookMore {
+    pub(crate) fn any(&self) -> bool {
+        self.out.is_some() || self.into.is_some()
+    }
+}
+
+/// What a join took with a restart, by the words alone: `took` is what it
+/// left out, in the order it was said, and `before` and `after` what the
+/// sequence plays up to it and from it on.
+///
+/// The words at an end of `took` that are not said again within
+/// [`AGAIN_WORDS`] either side of the join are named where what was taken
+/// beside them is a restart. At its start they are the end of the phrase
+/// kept, [`MORE_OUT_WORDS`] at most: the words after them are a start taken
+/// again, one of the next few said twice or the join going on with it, and
+/// the phrase before the join had not ended its sentence. At its end they
+/// are the start of the take the join goes on with, [`MORE_IN_WORDS`] at
+/// most: the first of them was said a few words before, in what the join
+/// took, as a take starts the way the one it replaces did. A longer run, or
+/// nothing of `took` said again beside the join, is a passage taken out on
+/// purpose. A hesitation and a transcriber's note of a sound are no words.
+fn took_more(before: &[Played<'_>], took: &[String], after: &[Played<'_>]) -> TookMore {
+    let taken: Vec<(&str, String)> = took
+        .iter()
+        .filter_map(|text| Some((text.as_str(), needed(text)?)))
+        .collect();
+    let said: Vec<&String> = taken.iter().map(|(_, said)| said).collect();
+    // The nearest of what plays either side, in the order it plays.
+    let mut before: Vec<(&str, String)> = before
+        .iter()
+        .rev()
+        .filter_map(|word| Some((word.text, needed(word.text)?)))
+        .take(AGAIN_WORDS)
+        .collect();
+    before.reverse();
+    let after: Vec<String> = after
+        .iter()
+        .filter_map(|word| needed(word.text))
+        .take(AGAIN_WORDS)
+        .collect();
+    let again =
+        |word: &String| before.iter().any(|(_, said)| said == word) || after.contains(word);
+    let text = |words: &[(&str, String)]| {
+        let texts: Vec<&str> = words.iter().map(|(text, _)| *text).collect();
+        texts.join(" ")
+    };
+
+    // Off the start of the take the join goes on with: the last words taken.
+    let last = said.iter().rev().take_while(|word| !again(word)).count();
+    if last == said.len() {
+        // Nothing the join took is said beside it: no restart, and nothing
+        // was taken with one.
+        return TookMore::default();
+    }
+    let starts = said.len() - last;
+    let into = ((1..=MORE_IN_WORDS).contains(&last)
+        && said[starts.saturating_sub(AGAIN_WORDS)..starts].contains(&said[starts]))
+    .then(|| text(&taken[starts..]));
+
+    // Off the end of the phrase kept: the first words taken. One said again
+    // in the few taken after it is the restart's own.
+    let next = |at: usize| &said[at..(at + AGAIN_WORDS).min(said.len())];
+    let first = (0..said.len())
+        .take_while(|&at| !again(said[at]) && !next(at + 1).contains(&said[at]))
+        .count();
+    let restarts = next(first).iter().enumerate().any(|(at, word)| {
+        next(first)[at + 1..].contains(word)
+            || after.iter().take(GOES_ON_WORDS).any(|on| on == *word)
+    });
+    let cut_short = before.last().is_some_and(|(text, _)| !ends_sentence(text));
+    let out = ((1..=MORE_OUT_WORDS).contains(&first) && restarts && cut_short)
+        .then(|| text(&taken[..first]));
+    TookMore { out, into }
 }
 
 impl Join<'_> {
@@ -683,7 +812,8 @@ impl Join<'_> {
 }
 
 /// The joins of `sequence`'s sound, in the order they play, with the
-/// `words` it plays either side of each and what each left out.
+/// `words` it plays either side of each, what each left out, and what of
+/// that it took with a restart.
 pub(crate) fn joins<'a>(
     project: &'a Project,
     sequence: &'a Sequence,
@@ -731,6 +861,9 @@ pub(crate) fn joins<'a>(
                 });
                 (said, into - out)
             });
+            let more = took.as_ref().map_or_else(TookMore::default, |(took, _)| {
+                took_more(&words[..first], took, &words[first..])
+            });
             joins.push(Join {
                 from,
                 to,
@@ -738,6 +871,7 @@ pub(crate) fn joins<'a>(
                 after: &after[..after.len().min(JOIN_WORDS)],
                 took,
                 replays: (one_take && into < out).then_some(out - into),
+                more,
             });
         }
     }
@@ -778,8 +912,8 @@ impl Default for Asked {
 /// How the cuts of `sequence`'s sound sit in the sound, and what it still
 /// plays between and of its words, for `look` with `cuts`: counts of every
 /// cut, each cut that is not clean with what was measured of it, the pauses
-/// and the words said twice that it still plays, and what each join plays
-/// and left out.
+/// and the words said twice that it still plays, and what each join plays,
+/// left out, and took with a restart.
 pub(crate) fn report(
     project: &Project,
     sequence: &Sequence,
@@ -897,6 +1031,7 @@ pub(crate) fn report(
     restarts.retain(|restart| within(restart.first[0].start));
     let mut joins = joins(project, sequence, &words, &known);
     joins.retain(|join| within(join.to.start));
+    summary["tookMore"] = json!(joins.iter().filter(|join| join.more.any()).count());
     let at = |time: Time| clock.print_position(sequence.rate.round(time));
     let pause = |pause: &KeptPause<'_>| {
         let mut entry = json!({
@@ -957,6 +1092,12 @@ pub(crate) fn report(
         }
         if let Some(seconds) = join.replays {
             entry["replays"] = json!(rounded(seconds, 2));
+        }
+        if let Some(out) = &join.more.out {
+            entry["tookMore"]["out"] = json!(out);
+        }
+        if let Some(into) = &join.more.into {
+            entry["tookMore"]["in"] = json!(into);
         }
         entry
     };
