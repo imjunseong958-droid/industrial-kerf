@@ -35,7 +35,8 @@ use kerf_model::Align;
 use kerf_model::{
     validate, AudioInfo, Catalog, Clip, Content, Diagnostic, Domain, Effect, FxDef, Id, Interp,
     Marker, MarkerColor, Mask, MaskMode, MaskShape, Media, OutlineKey, Param, ParamDef, ParamType,
-    Params, Project, Rate, Sequence, Speed, Time, Track, TrackKind, Transition, Value, VideoInfo,
+    Params, Project, Rate, Sequence, Speed, Synced, Time, Track, TrackKind, Transition, Value,
+    VideoInfo,
 };
 use std::collections::HashMap;
 use std::fmt::Write as _;
@@ -693,7 +694,7 @@ fn unknown_param(
     )
 }
 
-/// `path= rate= [tc=] dur= [video= [alpha=] [bits=] [color=]] [audio=] [reel=] [recipe=]`.
+/// `path= rate= [tc=] dur= [video= [alpha=] [bits=] [color=]] [audio=] [reel=] [recipe=] [sync=]`.
 pub(crate) fn media_fields(fields: &mut Fields<'_>, id: Id) -> Result<Media, Diagnostic> {
     let line = fields.line();
     let path = fields
@@ -761,6 +762,10 @@ pub(crate) fn media_fields(fields: &mut Fields<'_>, id: Id) -> Result<Media, Dia
     {
         return Err(line.error(1, "`recipe=` names no file; leave it out instead"));
     }
+    let sync = fields.take_with("sync", parse_synced)?;
+    if sync.as_ref().is_some_and(|sync| sync.with == id) {
+        return Err(line.error(1, "`sync=` names the media's own id"));
+    }
     Ok(Media {
         id,
         path,
@@ -773,7 +778,46 @@ pub(crate) fn media_fields(fields: &mut Fields<'_>, id: Id) -> Result<Media, Dia
         reel,
         recipe,
         steps: Vec::new(),
+        sync,
     })
+}
+
+/// A media's `sync=`: another recording of the same thing and where this one begins in it,
+/// `m1@1.5s`, or `m1@-0.25s` where this one began first. In seconds, which are not rounded to a
+/// frame as a position's are, since sound lines up finer than frames; or in flicks.
+pub(crate) fn parse_synced(text: &str) -> Result<Synced, String> {
+    let shape = || {
+        format!(
+            "`{text}` is not a media and where this one begins in it, in seconds, as in `m1@1.5s` or `m1@-0.25s`"
+        )
+    };
+    let (with, at) = text.split_once('@').ok_or_else(shape)?;
+    let with = Id::new(with).map_err(|error| error.to_string())?;
+    let at = if let Some(flicks) = at.strip_suffix("fl") {
+        Time::from_flicks(flicks.parse().map_err(|_| shape())?)
+    } else {
+        let seconds: f64 = at
+            .strip_suffix('s')
+            .and_then(|seconds| seconds.parse().ok())
+            .ok_or_else(shape)?;
+        Time::from_seconds(seconds).ok_or_else(shape)?
+    };
+    if !at.in_range() {
+        return Err(format!("`{text}` is outside the supported range"));
+    }
+    Ok(Synced { with, at })
+}
+
+/// A media's `sync=` as documents write it: seconds where it is a whole number of
+/// milliseconds, as a measurement is, and flicks otherwise.
+pub(crate) fn print_synced(sync: &Synced) -> String {
+    const MILLISECOND: i64 = kerf_model::time::FLICKS_PER_SECOND / 1000;
+    let flicks = sync.at.flicks();
+    if flicks % MILLISECOND == 0 {
+        format!("{}@{}s", sync.with, (flicks / MILLISECOND) as f64 / 1000.0)
+    } else {
+        format!("{}@{flicks}fl", sync.with)
+    }
 }
 
 /// A clip's `retime=`.
@@ -1160,6 +1204,9 @@ pub(crate) fn media_line(media: &Media) -> String {
     }
     if let Some(recipe) = &media.recipe {
         write!(line, " recipe={}", quote(recipe)).unwrap();
+    }
+    if let Some(sync) = &media.sync {
+        write!(line, " sync={}", print_synced(sync)).unwrap();
     }
     line
 }

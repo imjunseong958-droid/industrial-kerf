@@ -42,14 +42,14 @@ line, applied in order and atomically.
 
 ## Versions
 Effects, transitions, and generators have versions, listed below as
-`id@version`. Documents keep the version an edit used; leave it out for the current one.
+`id@version`. Documents keep the one an edit used; omit it for the current one.
 
 ## Operations
 ```
 use <sequence>  choose a sequence
 insert <content> at=<pos> dur=<dur>|out=<src> on=<track>[,<track>] [as=<id>[,<id>]] [name="…"] [<prop>=<value> …]
     open time on every unlocked track; several tracks get linked clips
-overwrite <same arguments as insert>  replace the range on the target tracks: lays a clip over others, where insert pushes them along
+overwrite <same as insert>  replace the range on the target tracks: lays a clip over others, where insert pushes them along
     <content> is media=<id> [src=<src>] [speed=<speed>] | seq=<id> [src=<src>] | gen=<generator> | caption="…"
 delete <clip> …  remove clips (and linked partners), leaving gaps
 ripple-delete <clip> …  remove and close the gap on every unlocked track
@@ -79,16 +79,17 @@ marker add at=<pos> [dur=<dur>] [name="…"] [color=<color>] [note="…"] [as=<i
 marker set <id> …  ·  marker remove <id>
 captions <clip> on=<subtitle track> [words=<n>]
     caption what the clip says, timed to its speech, from its media's transcript;
-    up to <n> words a line (4), two lines where one alone goes by too fast to read
+    up to <n> words a line (4), two lines where one goes by too fast to read
 link <clip> <clip> … [as=<group>]  ·  unlink <clip> …
 track add <id> video|audio|subtitle [before=<track>|after=<track>] [name="…"] [locked=true]
 bus add <id> [to=<bus>] [name="…"] [gain=…] [pan=…]  ·  bus set <id> …  ·  bus remove <id>
-bus fx <id> add <effect> [<param>=<value> …]  ·  bus fx <id> set|remove <n|effect>  ·  track set <id> bus=<id>
-track set <id> [name=…] [enabled=…] [locked=…] [muted=…]  ·  track remove <id>
+bus fx <id> add <effect> [<param>=<value> …]  ·  bus fx <id> set|remove <n|effect>
+track set <id> [bus=<id>] [name=…] [enabled=…] [locked=…] [muted=…]  ·  track remove <id>
 media add <id> path="…" rate=<fps> dur=<dur> [tc=<tc>] [video=WxH [alpha=true]] [audio=<n>ch@<hz>] [reel="…"]
 media replace <id> <same as media add>
-    swap the file behind an id; clips keep their timing and must still fit
+    swap the file behind an id; clips keep their timing and must fit
 media relink <id> path="…"  ·  media remove <id>
+media sync m2 with=m1@1.5s  m2 recorded what m1 did, from 1.5s into it
 sequence add <id> rate=<fps> size=WxH [name="…"] [start=<tc>] [color=rec2100-pq|rec2100-hlg]  ·  sequence set|remove <id> …
 ```
 
@@ -113,14 +114,14 @@ step <media> set <n> <step>  ·  step <media> set <n> <name>=<value> …
     names of step <n>: seed=8; one given twice (ref=) takes each; <name>="" takes it off
 ```
 
-`make` runs them. Each making is a take: `look` with `media` lists them, each with the `media replace` line that chooses it.
+`make` runs them. Each making is a take: `look` with `media` lists each with the `media replace` line that chooses it.
 
 Masks combine in order by `mode` (add, subtract, intersect, lighten,
 darken, difference); `mode=none` cuts nothing and leaves a path that
 effects such as `generate.audiowaveform path=<name>` read. Linked clips (a picture
-and its sound) move, trim, split, slip, and delete together. Ripple edits act on every unlocked track so sync holds; lock a
-track to leave it out. Edits that would cut through another track's clip are
-refused with the clip named.
+and its sound) move, trim, split, slip, and delete together. Ripple edits act on every unlocked track so sync holds; lock one
+to leave it out. An edit that would cut through another track's clip is
+refused, naming it.
 "#;
 
 pub fn reference(catalog: &Catalog) -> String {

@@ -50,6 +50,18 @@ pub struct Media {
     /// under its line, in the order they run ([`crate::making`]). A media
     /// that is footage has none.
     pub steps: Vec<crate::making::Step>,
+    /// Another recording of what this one recorded, and where this one begins in it: a camera
+    /// and a recorder beside it, or the cameras of a multicam.
+    pub sync: Option<Synced>,
+}
+
+/// That a media is a recording of the same thing as another, and how the two line up.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Synced {
+    /// The other recording.
+    pub with: Id,
+    /// How far into the other this one begins; negative where this one began first.
+    pub at: Time,
 }
 
 impl Media {
@@ -989,6 +1001,42 @@ impl Project {
         self.media.iter().find(|media| media.id == id)
     }
 
+    /// Whether `with`, or a media it is lined up with in turn, is `media`: lining `media` up
+    /// with it would go round.
+    pub fn sync_comes_back(&self, media: &Id, with: &Id) -> bool {
+        let mut on = Some(with);
+        for _ in 0..=self.media.len() {
+            let Some(id) = on else {
+                return false;
+            };
+            if id == media {
+                return true;
+            }
+            let next = self.media(id.as_str());
+            on = next.and_then(|next| next.sync.as_ref()).map(|sync| &sync.with);
+        }
+        // Others go round among themselves, and never reach it.
+        false
+    }
+
+    /// The recording a media is lined up with in the end, through each it names in turn, and
+    /// how far into that one it begins: itself at 0 for a media that names none. Two media with
+    /// one such recording are recordings of one thing, and a moment of the one is the moment of
+    /// the other that is as far into it. None for an id that is no media's, or for media that
+    /// name each other in a ring, which validation refuses.
+    pub fn synced_to(&self, id: &str) -> Option<(&Id, Time)> {
+        let mut media = self.media(id)?;
+        let mut at = Time::ZERO;
+        for _ in 0..self.media.len() {
+            let Some(sync) = &media.sync else {
+                return Some((&media.id, at));
+            };
+            at += sync.at;
+            media = self.media(sync.with.as_str())?;
+        }
+        None
+    }
+
     /// Make the paths a document keeps relative to its project absolute
     /// against `directory`: media files and the files clips' effects and generators read
     /// (`ParamType::File`).
@@ -1207,6 +1255,7 @@ mod tests {
             reel: None,
             recipe: None,
             steps: Vec::new(),
+            sync: None,
         });
         project.sequences.push(Sequence {
             buses: Vec::new(),

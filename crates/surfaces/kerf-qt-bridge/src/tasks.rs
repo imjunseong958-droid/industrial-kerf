@@ -220,6 +220,7 @@ pub(crate) fn probed_media(path: &Path, info: &ProbeInfo) -> Result<Media, Strin
         reel: None,
         recipe: None,
         steps: Vec::new(),
+        sync: None,
     })
 }
 

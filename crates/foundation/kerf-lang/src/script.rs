@@ -486,7 +486,7 @@ impl Script<'_> {
 
     fn media(&mut self, mut fields: Fields<'_>) -> Parsed {
         let line = fields.line();
-        let action = fields.word(1, "add, relink, replace, or remove")?;
+        let action = fields.word(1, "add, relink, replace, sync, or remove")?;
         let id = fields.id(2, "a media id")?;
         let op = match action {
             "add" => Op::AddMedia(media_fields(&mut fields, id)?),
@@ -499,10 +499,21 @@ impl Script<'_> {
             },
             "replace" => Op::ReplaceMedia(media_fields(&mut fields, id)?),
             "remove" => Op::RemoveMedia { media: id },
+            // `with=""` lets go, as `parent=""` does.
+            "sync" => {
+                let arg = fields.require("with")?;
+                let with = fields.text(arg)?;
+                let sync = if with.is_empty() {
+                    None
+                } else {
+                    Some(crate::doc::parse_synced(with).map_err(|why| fields.error(arg, why))?)
+                };
+                Op::SyncMedia { media: id, sync }
+            }
             other => {
                 return Err(line.error(
                     1,
-                    format!("media {other}? use add, relink, replace, or remove"),
+                    format!("media {other}? use add, relink, replace, sync, or remove"),
                 ))
             }
         };
@@ -2541,6 +2552,11 @@ fn op_line(project: &Project, catalog: &Catalog, op: &Op) -> String {
         Op::RelinkMedia { media, path } => format!("media relink {media} path={}", quote(path)),
         Op::ReplaceMedia(media) => media_line(media).replacen("media ", "media replace ", 1),
         Op::RemoveMedia { media } => format!("media remove {media}"),
+        Op::SyncMedia { media, sync } => format!(
+            "media sync {media} with={}",
+            sync.as_ref()
+                .map_or_else(|| "\"\"".to_owned(), crate::doc::print_synced)
+        ),
         Op::AddStep { media, index, step } => match index {
             Some(index) => format!("step {media} add {} {}", index + 1, print_step(step)),
             None => format!("step {media} add {}", print_step(step)),
