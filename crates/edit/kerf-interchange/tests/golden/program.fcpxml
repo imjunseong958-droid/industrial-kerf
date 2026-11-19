@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE fcpxml>
+
+<fcpxml version="1.9">
+    <resources>
+        <format id="r1" frameDuration="1001/24000s" width="1920" height="1080"/>
+        <format id="r2" frameDuration="1001/24000s" width="3840" height="2160"/>
+        <asset id="r3" name="A001_C003" start="1243271029/24000s" duration="63063/250s" hasVideo="1" format="r2" hasAudio="1" audioSources="1" audioChannels="2" audioRate="48000">
+            <media-rep kind="original-media" src="file:///shoot/Day%201/A001_C003.mov"/>
+        </asset>
+        <format id="r4" frameDuration="1/25s" width="1920" height="1080"/>
+        <asset id="r5" name="B002_C010-graded" start="36000s" duration="60s" hasVideo="1" format="r4" hasAudio="1" audioSources="1" audioChannels="2" audioRate="48000">
+            <media-rep kind="original-media" src="file:///shoot/B002_C010-graded.mov"/>
+        </asset>
+        <asset id="r6" name="Score Final" start="0s" duration="9009/50s" hasAudio="1" audioSources="1" audioChannels="2" audioRate="48000">
+            <media-rep kind="original-media" src="file:///shoot/music/Score%20Final.wav"/>
+        </asset>
+        <effect id="r7" name="Cross Dissolve" uid="FxPlug:4731E73A-8DAC-4113-9A30-AE85B1761265"/>
+    </resources>
+    <library>
+        <event name="Short Film">
+            <project name="Main Edit">
+                <sequence format="r1" duration="721721/24000s" tcStart="18018/5s" tcFormat="NDF" audioLayout="stereo" audioRate="48k">
+                    <spine>
+                        <asset-clip ref="r3" offset="18018/5s" name="A001_C003.mov" start="10361351/200s" duration="13013/2000s" tcFormat="NDF" srcEnable="video">
+                            <asset-clip ref="r3" lane="-1" offset="10361351/200s" name="A001_C003.mov" start="10361351/200s" duration="13013/2000s" tcFormat="NDF" srcEnable="audio"/>
+                            <asset-clip ref="r6" lane="-2" offset="10361351/200s" name="Score Final.wav" start="1001/100s" duration="1001/50s" tcFormat="NDF" enabled="0"/>
+                            <marker start="1295294/25s" duration="1001/24000s" value="pickup needed" note="ADR line 4"/>
+                        </asset-clip>
+                        <transition name="Cross Dissolve" offset="577577/160s" duration="1001/2000s">
+                            <filter-video ref="r7" name="Cross Dissolve"/>
+                        </transition>
+                        <asset-clip ref="r5" offset="7220213/2000s" name="Wide" start="36010s" duration="1001/250s" tcFormat="NDF" srcEnable="video"/>
+                        <asset-clip ref="r3" offset="7228221/2000s" name="A001_C003.mov" start="2591589/100s" duration="1001/500s" tcFormat="NDF" srcEnable="video">
+                            <timeMap>
+                                <timept time="0s" value="0s" interp="linear"/>
+                                <timept time="208221013/8000s" value="208221013/4000s" interp="linear"/>
+                            </timeMap>
+                            <asset-clip ref="r5" lane="1" offset="51832781/2000s" name="B002_C010-graded.mov" start="36020s" duration="1001/1000s" tcFormat="NDF" enabled="0" srcEnable="video"/>
+                        </asset-clip>
+                        <gap name="Gap" offset="289289/80s" start="3600s" duration="1001/1000s">
+                            <asset-clip ref="r3" lane="-1" offset="3600s" name="A001_C003.mov" start="5184179/100s" duration="1001/500s" tcFormat="NDF" srcEnable="audio"/>
+                        </gap>
+                        <asset-clip ref="r3" offset="7234227/2000s" name="A001_C003.mov" start="5184179/100s" duration="1001/500s" tcFormat="NDF" srcEnable="video">
+                            <asset-clip ref="r3" lane="-1" offset="51842791/1000s" name="A001_C003.mov" start="259259/5s" duration="1001/1000s" tcFormat="NDF" srcEnable="audio"/>
+                        </asset-clip>
+                        <gap name="Gap" offset="7238231/2000s" start="3600s" duration="1001/1000s"/>
+                        <gap name="Gap" offset="7240233/2000s" start="3600s" duration="13013/960s">
+                            <marker start="7227027/2000s" duration="1001/24000s" value="Marker"/>
+                        </gap>
+                    </spine>
+                </sequence>
+            </project>
+        </event>
+    </library>
+</fcpxml>

@@ -177,9 +177,10 @@ import does. The terminal workflow, `kerf preset`, `kerf sync`,
 and a media import use the current directory unless `--dir` or
 `KERF_PROJECT_DIR` names a project. So do `kerf load`, which takes a
 `project.kerf` changed outside Kerf as the project, `kerf proposals`,
-`kerf accept` and `kerf reject`, which answer what an agent proposed, and
+`kerf accept` and `kerf reject`, which answer what an agent proposed,
 `kerf make` and `kerf takes`
-([docs/shots.md](docs/shots.md#from-a-terminal-alone)). The editor's Kerf Assistant (the chat beside the picture) uses the same provider
+([docs/shots.md](docs/shots.md#from-a-terminal-alone)), and `kerf export`,
+which writes a sequence for another editor ([Interchange](#interchange)). The editor's Kerf Assistant (the chat beside the picture) uses the same provider
 configuration as the terminal agent. `--kerfd PATH` selects an explicit
 daemon; the `KERFD_BIN` environment variable does the same.
 
@@ -403,13 +404,49 @@ and media of the current document and cannot change project state.
 
 ## Interchange
 
-`kerf-interchange` converts the program sequence of a project to a
+A sequence goes to another editor as a timeline file, written by Kerf itself
+with nothing else to install:
+
+```bash
+kerf export cut.otio      # OpenTimelineIO: DaVinci Resolve, Premiere Pro
+kerf export cut.fcpxml    # Final Cut Pro XML 1.9: Final Cut Pro, DaVinci Resolve
+```
+
+`--sequence <id>` picks a sequence other than the first and `--format`
+names the format for a file whose extension does not. An agent does the
+same with `render` and `handoff` (`otio` or `fcpxml`), into the project's
+`deliveries/` folder. Either way the answer lists what the file does not
+carry, so nothing is left out without a word: clips that play no media
+file (titles, generators, nested sequences) arrive as gaps; captions, clip
+properties, masks, effects, links and the mix are not written; a speed
+ramp is written as its speed overall and reverse as forward; a transition
+that is no dissolve arrives as one.
+
+| | `.otio` | `.fcpxml` |
+|---|---|---|
+| Opens in | DaVinci Resolve; Premiere Pro, which takes OpenTimelineIO in its recent releases and no FCPXML | Final Cut Pro; DaVinci Resolve (17.4 and later read version 1.9) |
+| Tracks | As they are | None in the format: the first video track is the primary storyline, the rest connected clips in lanes |
+| Frame size | Not in the format (kept for Kerf's own reading) | Carried |
+| Transitions | Each as a dissolve | On the first video track, as a cross dissolve; elsewhere a cut |
+| Speed | One forward speed a clip (`LinearTimeWarp`) | One forward speed a clip (`timeMap`) |
+| Markers | With their colors and notes | With their notes, without colors |
+| Read back by Kerf | Yes | No |
+
+Neither file has been opened in those editors yet: the `.otio` is checked
+against OpenTimelineIO 0.18.1 itself, which reads it as the timeline
+written and holds it equal to the one its own writer makes, and the
+`.fcpxml` against Apple's DTD for version 1.9 and the format's rules
+(`crates/edit/kerf-interchange/tests`). Treat a first import as a check, and
+read the list.
+
+`kerf-interchange` holds the formats. It converts a sequence to a
 frame-exact timeline (positions in frames of the sequence, media times in
-frames of the media) and invokes the configured native or external adapter
-through a small JSON bridge, reporting what the conversion leaves out.
-OpenTimelineIO conversion uses the bundled
-`crates/edit/kerf-interchange/python/otio_bridge.py` and requires an environment
-with `opentimelineio` plus the requested adapter installed.
+frames of the media) and writes and reads that as OpenTimelineIO's JSON
+(`otio_json.rs`), writes FCPXML (`fcpxml.rs`) and a CMX3600 EDL
+(`edl.rs`), and reports what each conversion leaves out. Only the other
+OpenTimelineIO adapters, `otioz` and the adapter plugins, still go through
+the bundled `crates/edit/kerf-interchange/python/otio_bridge.py`, which
+needs an environment with `opentimelineio` and the adapter asked for.
 
 ## Verification
 

@@ -294,6 +294,14 @@ left alone, and nothing is changed for you.
   `<project>_master` and `<project>_draft`; a draft made again is numbered.
 - **Presets.** File ▸ Save Current as Preset… keeps the program as a preset
   others can fill with their own media (File ▸ Import Editing Preset…).
+- **To another editor.** `kerf export cut.otio` in a terminal writes the
+  sequence for DaVinci Resolve or Premiere Pro, and `kerf export cut.fcpxml`
+  for Final Cut Pro or DaVinci Resolve; asking Kerf to hand the edit to one
+  of them does the same, into `deliveries/`. Nothing else has to be
+  installed. Either way you are told what the file does not carry (titles,
+  captions, effects, a speed ramp), so read that list before you finish the
+  edit there ([README](../README.md#interchange)). The editor has no menu
+  item for it yet.
 
 ## When something goes wrong
 

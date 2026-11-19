@@ -1563,6 +1563,54 @@ clip effects and then buses (`kerf_model::Bus`), mixed by the render's graph and
 program, by the live mixer's own stream for each bus, so a compressor hears the same sum in both. A
 timeline's own tools stay in `kerf-model` and `kerf-lang`.
 
+A sequence leaves for another editor as a timeline file that `kerf-interchange` writes in Rust, with
+no Python: an OpenTimelineIO `.otio` (`otio_json.rs`), Final Cut Pro XML (`fcpxml.rs`), or a CMX3600
+EDL (`edl.rs`). `kerf export` and an agent's `render` with `handoff` write the first two
+(`kerf_interchange::export`), and each answers with the list of what the file does not carry
+(`InterchangeReport`: `losses` for what is left out or flattened, `warnings` for what arrives in
+another form), because an edit that loses its titles, effects, or a ramp on the way has to be told
+at the hand-off and not found in the other editor. One conversion says what a media clip loses
+whichever file it goes into (`otio::clip_losses`, `carried_speed`, `sequence_losses`), so the two
+lists do not drift apart.
+
+- **`.otio`.** A sequence becomes `otio::Timeline`, frames of the sequence and of each media, and
+  that is written as OpenTimelineIO's JSON by hand, field by field in the order OpenTimelineIO
+  writes them. The schema versions are the ones its serialized-data documentation gives for the
+  releases from 0.15 through 0.18.1 (`Timeline.1`, `Stack.1`, `Track.1`, `Clip.2`, `Gap.1`,
+  `Transition.1`, `ExternalReference.1`, `Marker.2`, `LinearTimeWarp.1`, `RationalTime.1`,
+  `TimeRange.1`), and the fields those of 0.15: a reader upgrades an older schema and refuses a
+  newer one, which 0.18.1 does to the `Marker.3` of the unreleased main branch
+  (`UnsupportedSchemaError`), so the oldest form is the one every reader takes. Reading takes any
+  version, `Clip.1` and `Marker.3` among them. What OpenTimelineIO has no field for and Kerf needs
+  to read its own file back, ids and the sequence's name and frame size, is in `metadata["kerf"]`;
+  another editor does not read that, so the frame size is still listed as not carried. A clip of
+  media at another rate than the sequence's is written as long as it plays, a part of a media frame
+  where that is what it comes to, where rounding to whole media frames moved every cut after it.
+  The Python bridge is kept for the adapters this does not write (`otioz`, the plugins) and holds
+  the same form: where Python has OpenTimelineIO the tests have each read what the other wrote and
+  OpenTimelineIO compare the two files. That found the bridge had never kept an id through a file,
+  since what OpenTimelineIO makes of a file's metadata is not a `dict`.
+- **`.fcpxml`.** Version 1.9, chosen by what reads it: Resolve refuses a file newer than it knows by
+  its number (by its users' reports 17.4 reads to 1.9 and 18 to 1.10), Final Cut Pro reads the
+  versions before its own, and 1.9 is the first with a `media-rep` saying where a file is. Premiere Pro reads no FCPXML, only
+  Final Cut Pro 7's XML and, in its recent releases, OpenTimelineIO, so the `.otio` is its file.
+  FCPXML has no tracks: the first video track is the primary storyline, with gaps where it plays
+  nothing, and the clips of every other track are connected to the storyline item under their first
+  frame, picture in lanes above and sound below, each playing its picture or its sound alone
+  (`srcEnable`) as a track here does. Times are whole frames of the sequence as rational seconds,
+  worked out in integers from flicks. A transition sits between two clips that still meet at the
+  cut, as a file Final Cut Pro exports has it, though the DTD's own example reads as an overlap. A
+  speed is a `timeMap` from the clip's clock to the media's. The golden file is valid by Apple's DTD
+  for 1.9, 1.10 and 1.11 (`xmllint --dtdvalid`; the DTD ships inside Final Cut Pro and is not in
+  this repository, so that test runs where `KERF_FCPXML_DTD` names a copy).
+
+Not done: neither file has been opened in Resolve, Final Cut Pro, or Premiere Pro, so what is known
+is that they are well-formed and say what was meant, not that an importer agrees; the place that is
+least sure is a retimed clip whose media has timecode, where the time map counts from zero and the
+clip's start is the media's timecode divided by the speed. Captions go to neither file (FCPXML has a
+`caption` element, which Resolve does not read), transitions off the primary storyline arrive as
+cuts for want of a secondary storyline, and the EDL has no list of what it leaves out.
+
 ### Color
 
 Has: Lumetri, curves, levels, Hue/Saturation, Selective Color, CDL, LUTs, Auto
