@@ -127,6 +127,46 @@ fn a_mesh_among_clips_in_depth_holds_to_the_cpu() {
 }
 
 #[test]
+fn clips_a_parent_takes_into_depth_hold_to_the_cpu() {
+    // A wall, and before it two cards and a solid on a null that is turned, tipped, and moved
+    // back, itself on a null that is turned the other way: under a light on the same null that
+    // casts their shadows, seen by a camera on the outer one.
+    let rigged = |shadow: &str| {
+        format!(
+            concat!(
+                "  track V1 video\n    clip w gen=solid@1 at=0f dur=24f\n",
+                "      set color=#ffffff three_d=true z=1 scale=3\n",
+                "  track V2 video\n    clip outer gen=null@1 at=0f dur=24f\n",
+                "      set rotate_y=-15 z=0.2\n",
+                "  track V3 video\n    clip inner gen=null@1 at=0f dur=24f parent=outer\n",
+                "      set x=0.1 rotate_x=-10 rotate_y={{0f:0 24f:80}} z=0.3\n",
+                "  track V4 video\n    clip a gen=solid@1 at=0f dur=24f parent=inner\n",
+                "      set color=#0000ff three_d=true scale=0.3 x=-0.2\n",
+                "  track V5 video\n    clip b gen=solid@1 at=0f dur=24f parent=inner\n",
+                "      set color=#ff0000 three_d=true scale=0.3 x=0.2 z=-0.2 rotate_y=20\n",
+                "  track V6 video\n    clip c gen=title@1 at=0f dur=24f parent=inner\n",
+                "      set text=\"Rig\" size=0.3 three_d=true depth=0.1 y=-0.25\n",
+                "  track V7 video\n    clip l gen=light@1 at=0f dur=24f parent=inner\n",
+                "      set kind=point x=0.3 y=-0.4 z=-1{shadow}\n",
+                "  track V8 video\n    clip seen gen=camera@1 at=0f dur=24f parent=outer\n",
+                "      set x=-0.1 z=-0.3 pan=5\n",
+            ),
+            shadow = shadow
+        )
+    };
+    holds("a rig in depth", &rigged(""));
+    holds("a rig in depth, shadowed", &rigged(" shadow=0.8"));
+    holds("a rig in depth, softly", &rigged(" shadow=0.8 size=0.2"));
+    // A mesh on the rig is the CPU's picture laid among the GPU's, by the same plane.
+    let with_mesh = rigged("").replace(
+        "gen=solid@1 at=0f dur=24f parent=inner\n      set color=#0000ff three_d=true scale=0.3 x=-0.2",
+        "gen=mesh@1 at=0f dur=24f parent=inner\n      set kind=box width=0.3 height=0.3 length=0.3 color=#0000ff x=-0.2",
+    );
+    assert_ne!(with_mesh, rigged(""));
+    holds("a mesh on a rig in depth", &with_mesh);
+}
+
+#[test]
 fn flat_clips_hold_to_the_cpu() {
     holds(
         "apart",

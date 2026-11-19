@@ -1699,6 +1699,7 @@ mod tests {
             standing: InTheWay::of(solids()),
             focus: 0.0,
             aperture: 0.0,
+            carried: HashMap::new(),
         };
         let meshes = &scene.standing.meshes;
         let shadow = 0.8f32;

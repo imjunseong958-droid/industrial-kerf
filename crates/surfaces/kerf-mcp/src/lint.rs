@@ -43,11 +43,12 @@ fn does_nothing(sequence: &Sequence, findings: &mut Vec<Finding>) {
     let in_depth_over = |clip: &Clip| {
         clips().any(|other| {
             other.id != clip.id
-                && is_set_true(other.props.get("three_d"))
+                && in_depth(other)
                 && other.start < clip.start + clip.duration
                 && clip.start < other.start + other.duration
         })
     };
+    let parents = |clip| parents_of(sequence, clip);
     for clip in clips() {
         let id = clip.id.as_str();
         let mut says = |message: String| {
@@ -71,6 +72,22 @@ fn does_nothing(sequence: &Sequence, findings: &mut Vec<Finding>) {
         if draws_nothing {
             if !clip.masks.is_empty() || !clip.effects.is_empty() {
                 says("masks and effects on it do nothing, since it draws nothing".to_owned());
+            }
+            if fx == Some("null") {
+                // A null is somewhere in depth for what moves with it, and for nothing else.
+                if prop("three_d").is_some() {
+                    says("`three_d` does nothing on a null, which takes its children in depth with it without it".to_owned());
+                }
+                let leads = clips().any(|other| {
+                    follows_in_depth(other) && parents(other).any(|parent| parent.id == clip.id)
+                });
+                for name in IN_DEPTH {
+                    if prop(name).is_some() && !leads {
+                        says(format!(
+                            "`{name}` on a null moves the clips in depth parented to it, and none is"
+                        ));
+                    }
+                }
             }
         } else if fx == Some("mesh") {
             // It is in depth without saying so, and is a solid of its own.
@@ -105,6 +122,25 @@ fn does_nothing(sequence: &Sequence, findings: &mut Vec<Finding>) {
                         depth / 2.0
                     ));
                 }
+            }
+        }
+        // A flat clip keeps to the frame where a parent goes off into depth, which is easy to
+        // take for a rig that does not work. An adjustment layer is nowhere to be taken from.
+        if !draws_nothing && !in_depth(clip) && fx != Some("adjustment") {
+            let led = parents(clip).find(|parent| {
+                leads_in_depth(parent) && IN_DEPTH.iter().any(|name| parent.props.contains_key(*name))
+            });
+            if let Some(parent) = led {
+                let set: Vec<String> = IN_DEPTH
+                    .iter()
+                    .filter(|name| parent.props.contains_key(**name))
+                    .map(|name| format!("`{name}`"))
+                    .collect();
+                says(format!(
+                    "the {} of `{}`, which it moves with, does nothing to it: only a clip in depth follows a parent there (`three_d=true`)",
+                    set.join(", "),
+                    parent.id
+                ));
             }
         }
         if prop("path").is_none() {
@@ -178,6 +214,46 @@ fn does_nothing(sequence: &Sequence, findings: &mut Vec<Finding>) {
 
 /// What [`does_nothing`] calls what it finds.
 const NO_EFFECT: &str = "no_effect";
+
+/// The properties that say where a clip is in depth, which a parent hands on to its children there.
+const IN_DEPTH: [&str; 3] = ["z", "rotate_x", "rotate_y"];
+
+fn generator(clip: &Clip) -> Option<&str> {
+    match &clip.content {
+        Content::Generator { fx, .. } => Some(fx.as_str()),
+        _ => None,
+    }
+}
+
+/// The clips a clip moves with, from the one it names outward: no further than there are clips,
+/// so that a document validation has not yet refused does not go round for ever.
+fn parents_of<'a>(sequence: &'a Sequence, clip: &'a Clip) -> impl Iterator<Item = &'a Clip> {
+    let clips = || sequence.tracks.iter().flat_map(|track| &track.clips);
+    let mut parent = clip.parent.as_ref();
+    let mut left = clips().count();
+    std::iter::from_fn(move || {
+        let id = parent?;
+        left = left.checked_sub(1)?;
+        let found = clips().find(|other| other.id == *id)?;
+        parent = found.parent.as_ref();
+        Some(found)
+    })
+}
+
+/// Whether a clip is drawn in depth: it says so, or it is a mesh, which is without saying.
+fn in_depth(clip: &Clip) -> bool {
+    is_set_true(clip.props.get("three_d")) || generator(clip) == Some("mesh")
+}
+
+/// Whether a clip's place in depth is its children's: a null's, and that of a clip in depth.
+fn leads_in_depth(clip: &Clip) -> bool {
+    generator(clip) == Some("null") || in_depth(clip)
+}
+
+/// Whether a clip goes where a parent in depth takes it: a clip in depth, a camera, and a light.
+fn follows_in_depth(clip: &Clip) -> bool {
+    in_depth(clip) || matches!(generator(clip), Some("camera" | "light"))
+}
 
 fn is_set_true(param: Option<&Param>) -> bool {
     matches!(param, Some(Param::Static(Value::Bool(true))))

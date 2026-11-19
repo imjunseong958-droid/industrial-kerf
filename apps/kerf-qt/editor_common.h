@@ -318,6 +318,13 @@ double propertyAt(const QJsonObject &props, const QString &name, double clipTime
 // shows at that moment, or the default one, which makes the map projective (see
 // inSight). One edge on to the camera, or wholly behind it, gives a placement that
 // is not invertible: there is nothing to draw on.
+//
+// Before it is seen, a clip in depth goes where the parents it has in `timeline`
+// take it in depth: each one that is a null, or in depth itself, turns it by its
+// `rotate_x` and `rotate_y` about the parent's own middle and moves it back by its
+// `z`, the parent the clip names first (kerf-compose `Carried`). `parents` is what
+// they do across the canvas, which a flat clip takes and nothing more. A camera with
+// a parent is where the parent takes it, the same way.
 QTransform picturePlacement(const QJsonObject &clip, const QSizeF &picture, bool fit, const QSizeF &canvas, double clipTime,
                             const QTransform &parents = QTransform{}, const QJsonObject &timeline = QJsonObject{});
 // How a parent has moved its children at its clip time `clipTime`, in canvas
@@ -325,6 +332,14 @@ QTransform picturePlacement(const QJsonObject &clip, const QSizeF &picture, bool
 // own, to where it is (kerf-compose `parent_motion`). A clip's picture goes
 // through each of its parents in turn, nearest first.
 QTransform parentMotion(const QJsonObject &parent, const QSizeF &picture, bool fit, const QSizeF &canvas, double clipTime);
+// What a picture clip of `timeline` on a track of `trackType` draws, in its own
+// pixels; empty for one that draws none. `fit` says whether it is fitted to the
+// canvas, as media and nested sequences are; a generator fills `canvas`.
+QSizeF pictureSizeIn(const QJsonObject &timeline, const QJsonObject &clip, const QString &trackType, const QSizeF &canvas, bool *fit);
+// What the parents `clip` has in `timeline` have done to it across the canvas at
+// `at` seconds of it, in canvas pixels: each one's parentMotion, the nearest first
+// (kerf-compose `moved_by_parents`).
+QTransform parentsMotionIn(const QJsonObject &timeline, const QJsonObject &clip, const QSizeF &canvas, double at);
 // Where a clip's motion path lands: from shares of the canvas from the path's
 // 0,0 to shares of the canvas, the path's 0,0 being where the clip would be with
 // no path at `clipTime`, and `parents` what its parents do, in canvas pixels.

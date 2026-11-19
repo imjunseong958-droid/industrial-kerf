@@ -743,6 +743,55 @@ What is built for it, in this order, each measured before the next:
    software GPU; a frame whose lights cast shadows or shine from a
    picture is still the CPU's. It has been handed to a model: the crate of
    Next 3 is one, in the guide of every take there.
+   A thing of several meshes is one thing by `parent=` (2026-11-19). Nine
+   guide scenes were blocked that day with a robot of nine parts under a
+   null, and the null's `z` moved none of them: a parent's motion was the
+   2D one alone, and each part's `z` and turns were read from the part. So
+   every part was given the same keys by hand, and a thing could not be
+   turned about its upright at all without working out each part's `x` and
+   `z`. Now a parent in depth takes its children in depth with it. A
+   child's plane is made as it was, its parents' position, scale, and
+   rotation with its own and then its own `z` and turns about its own
+   middle; then each parent, from the one it names outward, turns that
+   plane by its `rotate_x` and `rotate_y` about the parent's own middle
+   and moves it back by its `z`, which keeps every length and angle of
+   it (`three_d.rs`, `Carried`). With no parent in depth nothing is
+   changed, to the last place of every row the table of placements had
+   (`a_clip_in_depth_lands_where_the_table_says`). A parent that draws and
+   is in depth is the same motion applied to itself, so a head on a body
+   is on it. Decided with it: a null needs no `three_d` to lead; a flat
+   clip that draws leads nowhere in depth, its `z` being nothing to itself
+   either; a flat child keeps to the frame, since putting it in depth
+   would have it sorted, cut, and lit as it was not, and `three_d=true`
+   says that; a parent's `scale` is not a scale of the `z` between its
+   children, which stays what each child says; and a parent's turns are
+   about the frame's level and upright lines, as a clip's own are, so one
+   turned on the frame by `rotation` does not tip its upright. A camera
+   and a light with a parent go the same way, where they went nowhere
+   before: where they are by the parent's motion on the frame and then in
+   depth, and the way a camera looks and a directional light shines by as
+   much as the parent turns. So a camera on a null at a thing's middle
+   goes round the thing, and a scene all of which is on one null,
+   camera and lights with it, is the same picture wherever the null goes
+   (`tests/parent_depth.rs`, which holds that in the picture and in the
+   ids, depth, and normals passes, and holds a rig to its parts placed by
+   hand). What it took was one place: every plane of a clip is made by
+   `Plane::of`, by the CPU and for the GPU alike, for the picture, the
+   passes, a shadow's casters, a mesh's triangles, and what `look` with
+   `stands` measures, and each is handed the scene of its moment; so the
+   scene, which is made from the sequence and its parents, holds each
+   clip's motion in depth and the plane takes it there, and none of those
+   who ask could leave it out. `stands` reads a child where it is drawn,
+   and gives no line for one a parent tips, whose own `y` then moves it
+   back as well as down; one turned about its parent's upright is set down
+   as ever. A frame is kept by a number that had all of a parent in it
+   already. Check says of a null's `z` or turns that they move nothing
+   where no clip in depth, camera, or light is on it, and of a flat clip
+   on a parent in depth that it stays on the frame; it had said that a
+   light over nothing but meshes falls on nothing, which was wrong. The
+   editor's overlays, a mask's outline and a motion path on the picture,
+   go through the same motion (`editor_common.cpp`, `carriedBy`), held to
+   the compositor by the rows the two tables share.
 5. **A making that streams**, last. Models that answer in under a second
    are reported, on data-center cards and at small sizes for now. A making writes
    files in steps, and a draft that is not kept wants a way of its own: the

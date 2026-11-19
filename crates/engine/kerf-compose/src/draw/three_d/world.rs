@@ -35,8 +35,9 @@ pub struct InDepth {
     /// solid with a bevel, and a mesh do not: they are within it.
     pub filled: bool,
     /// How far down the world one more of its own `y` puts it. Other than 1 where a parent
-    /// has scaled it, and none where a parent has turned it, so that its own `y` moves it
-    /// across as well.
+    /// has scaled it, and none where a parent has turned it on the frame or tipped it in
+    /// depth, so that its own `y` moves it across or back as well. A parent turned about its
+    /// upright leaves down where it was.
     pub fall: Option<f64>,
     /// Its sides, a flat clip's four and a solid's twelve, each by its two corners. A mesh's
     /// are its triangles'.

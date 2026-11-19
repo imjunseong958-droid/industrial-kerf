@@ -530,6 +530,53 @@ fn a_clip_with_a_parent_is_set_down_by_its_own_y_where_that_can_be() {
 }
 
 #[test]
+fn a_clip_a_parent_takes_into_depth_stands_where_it_is_drawn() {
+    // A step no wider than the box, two frame heights back, and nothing else under anything.
+    let step = on_track(1, "step", "solid", "color=#404040 three_d=true rotate_x=-90 y=0.5 z=2 scale=0.5");
+    let child = |rig: &str, set: &str| {
+        format!(
+            concat!(
+                "  track V2 video\n    clip rig gen=null@1 at=0f dur=24f\n      set {rig}\n",
+                "  track V3 video\n    clip crate gen=mesh@1 at=0f dur=24f parent=rig\n",
+                "      set kind=box width=0.2 height=0.2 length=0.2 {set}\n",
+            ),
+            rig = rig,
+            set = set
+        )
+    };
+    // Where its own numbers have it, the box is over nothing.
+    let stands = read(&[step.clone(), child("x=0", "y=0.3")].concat());
+    assert!(!matches!(only(&stands, "crate").how, How::Floats(_) | How::Rests), "{stands:?}");
+    // Its parent moved back, it is over the step, by the tenth its foot is short of it, and
+    // its own `y` still sets it down.
+    let before = project(&[step.clone(), child("z=2", "y=0.3")].concat());
+    let stands = standing(&before, None, &[]).expect("reads");
+    let floats = only(&stands, "crate");
+    assert!(matches!(floats.how, How::Floats(by) if near(by, 0.1)), "{floats:?}");
+    assert_eq!(floats.on.as_deref(), Some("step"));
+    let line = clip(&stands, "crate").script.clone().expect("a line");
+    assert_eq!(line, "set crate y=0.4");
+    let after = apply_script(&before, Catalog::builtin(), &line).expect("runs").project;
+    assert_eq!(only(&standing(&after, None, &[]).expect("reads"), "crate").how, How::Rests);
+    // Swung round its parent's upright from a frame height to the right of it, two of them
+    // back: down is still down, so it is set down the same way. The frame is 320 by 180.
+    let before = project(&[step.clone(), child("rotate_y=-90", "x=1.125 y=0.35")].concat());
+    let stands = standing(&before, None, &[]).expect("reads");
+    let floats = only(&stands, "crate");
+    assert!(matches!(floats.how, How::Floats(by) if near(by, 0.05)), "{floats:?}");
+    assert_eq!(floats.on.as_deref(), Some("step"));
+    assert_eq!(clip(&stands, "crate").script.as_deref(), Some("set crate y=0.4"));
+    // With its parent a quarter of the way round it is beside the step again.
+    let stands = read(&[step.clone(), child("rotate_y=-45", "x=1.125 y=0.35")].concat());
+    assert!(!matches!(only(&stands, "crate").how, How::Floats(_) | How::Rests), "{stands:?}");
+    // Tipped by its parent, its own `y` moves it back as well as down, and that is said.
+    let stands = read(&[step, child("z=2 rotate_x=10", "y=0.3")].concat());
+    let stood = clip(&stands, "crate");
+    assert!(matches!(only(&stands, "crate").how, How::Floats(_)), "{stood:?}");
+    assert!(stood.script.is_none() && stood.cannot.as_deref().is_some_and(|why| why.contains("parent")), "{stood:?}");
+}
+
+#[test]
 fn only_what_is_a_thing_in_depth_stands_and_the_rest_is_said_not_to_be_measured() {
     let scene = [
         on_track(10, "sky", "solid", "color=#88aaff"),

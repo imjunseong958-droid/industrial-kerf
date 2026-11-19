@@ -150,27 +150,7 @@ void MainWindow::updateViewerMasks() {
 }
 
 QTransform MainWindow::parentsMotion(const QJsonObject &clip, const QSizeF &canvas, double at) const {
-    QTransform moved;
-    QStringList seen;
-    QString parent = clip.value(QStringLiteral("parent")).toString();
-    // As `Scene::geometry` goes: up the chain until one is not there to follow.
-    while (!parent.isEmpty() && !seen.contains(parent)) {
-        seen << parent;
-        QJsonObject rig;
-        QString type;
-        for (const QJsonValue &track : m_project.value(QStringLiteral("tracks")).toArray())
-            for (const QJsonValue &value : track.toObject().value(QStringLiteral("clips")).toArray())
-                if (value.toObject().value(QStringLiteral("id")).toString() == parent) {
-                    rig = value.toObject();
-                    type = track.toObject().value(QStringLiteral("type")).toString();
-                }
-        bool fit = false;
-        const QSizeF picture = pictureSizeOf(rig, type, &fit);
-        if (picture.isEmpty()) break;
-        moved *= parentMotion(rig, picture, fit, canvas, at - rig.value(QStringLiteral("timelineStart")).toDouble());
-        parent = rig.value(QStringLiteral("parent")).toString();
-    }
-    return moved;
+    return parentsMotionIn(m_project, clip, canvas, at);
 }
 
 void MainWindow::startMotionPath() {

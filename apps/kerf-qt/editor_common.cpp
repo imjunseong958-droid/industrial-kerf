@@ -1104,6 +1104,77 @@ struct Camera {
     }
 };
 
+bool isInDepth(const QJsonObject &clip) { return clip.value(QStringLiteral("props")).toObject().value(QStringLiteral("three_d")).toBool(); }
+
+// A clip's own numbers in depth at `clipTime`.
+struct Depth {
+    double z = 0.0, pitch = 0.0, yaw = 0.0;
+};
+
+Depth depthAt(const QJsonObject &clip, const QSizeF &canvas, double clipTime) {
+    const QJsonObject props = clip.value(QStringLiteral("props")).toObject();
+    return {propertyAt(props, QStringLiteral("z"), clipTime, 0.0) * std::max(1.0, canvas.height()), propertyAt(props, QStringLiteral("rotate_x"), clipTime, 0.0),
+            propertyAt(props, QStringLiteral("rotate_y"), clipTime, 0.0)};
+}
+
+// Whether a parent's place in depth is its children's (kerf-compose `Rig::in_depth`):
+// a null's, and that of a clip in depth, which a mesh is without saying so.
+bool leadsInDepth(const QJsonObject &clip) {
+    const QString fx = clip.value(QStringLiteral("fx")).toString();
+    return fx == QStringLiteral("null") || fx == QStringLiteral("mesh") || isInDepth(clip);
+}
+
+// The clip `id` of `timeline`, and the kind of track it is on.
+QJsonObject clipIn(const QJsonObject &timeline, const QString &id, QString *trackType) {
+    QJsonObject found;
+    for (const QJsonValue &track : timeline.value(QStringLiteral("tracks")).toArray())
+        for (const QJsonValue &value : track.toObject().value(QStringLiteral("clips")).toArray())
+            if (value.toObject().value(QStringLiteral("id")).toString() == id) {
+                found = value.toObject();
+                *trackType = track.toObject().value(QStringLiteral("type")).toString();
+            }
+    return found;
+}
+
+// How its parents have taken a clip in depth, as one thing with them (kerf-compose
+// `Carried`): where the world's x, y, and z go, and where its middle goes.
+struct Carried {
+    World x{1.0, 0.0, 0.0}, y{0.0, 1.0, 0.0}, z{0.0, 0.0, 1.0}, shift{};
+
+    World way(const World &of) const { return x * of.x + y * of.y + z * of.z; }
+    World point(const World &at) const { return way(at) + shift; }
+    // This, and then as a parent takes it: turned about `about` by the parent's
+    // `pitch` and `yaw`, and moved `back`.
+    Carried then(const World &about, double pitch, double yaw, double back) const {
+        return {turned(x, pitch, yaw), turned(y, pitch, yaw), turned(z, pitch, yaw), about + turned(shift - about, pitch, yaw) + World{0.0, 0.0, back}};
+    }
+};
+
+// How the parents of `clip` have taken it in depth at `at` seconds of `timeline`, the
+// one it names first (kerf-compose `Scene::at`): each that is somewhere in depth turns
+// it about the parent's own middle, where that is on the canvas, and moves it back.
+Carried carriedBy(const QJsonObject &timeline, const QJsonObject &clip, const QSizeF &canvas, double at) {
+    Carried carried;
+    QStringList seen;
+    QString parent = clip.value(QStringLiteral("parent")).toString();
+    while (!parent.isEmpty() && !seen.contains(parent)) {
+        seen << parent;
+        QString type;
+        const QJsonObject rig = clipIn(timeline, parent, &type);
+        bool fit = false;
+        const QSizeF picture = pictureSizeIn(timeline, rig, type, canvas, &fit);
+        if (picture.isEmpty()) break;
+        parent = rig.value(QStringLiteral("parent")).toString();
+        if (!leadsInDepth(rig)) continue;
+        const double rigTime = at - rig.value(QStringLiteral("timelineStart")).toDouble();
+        const Depth depth = depthAt(rig, canvas, rigTime);
+        if (depth.z == 0.0 && depth.pitch == 0.0 && depth.yaw == 0.0) continue;
+        const QPointF middle = flatPlacement(rig, picture, fit, canvas, rigTime, parentsMotionIn(timeline, rig, canvas, at)).map(QPointF(0.5, 0.5));
+        carried = carried.then({middle.x() - canvas.width() / 2.0, middle.y() - canvas.height() / 2.0, 0.0}, depth.pitch, depth.yaw, depth.z);
+    }
+    return carried;
+}
+
 // `timeline`'s topmost camera showing at `at` seconds, or the default one.
 Camera cameraAt(const QJsonObject &timeline, const QSizeF &canvas, double at) {
     // Times come as seconds in doubles, a hair off the frames they name.
@@ -1133,23 +1204,61 @@ Camera cameraAt(const QJsonObject &timeline, const QSizeF &canvas, double at) {
     const World levelDown = cross(camera.forward, levelRight);
     camera.right = levelRight * std::cos(roll) + levelDown * std::sin(roll);
     camera.down = levelDown * std::cos(roll) - levelRight * std::sin(roll);
+    if (shown.value(QStringLiteral("parent")).toString().isEmpty()) return camera;
+    // A camera with a parent is where the parent takes it, looking as the parent turns
+    // it (kerf-compose `Rigged`): across the canvas as a clip is moved, and then in depth.
+    const QTransform moved = parentsMotionIn(timeline, shown, canvas, at);
+    const Carried carried = carriedBy(timeline, shown, canvas, at);
+    const QPointF on = moved.map(QPointF(camera.width / 2.0 + camera.eye.x, camera.height / 2.0 + camera.eye.y));
+    camera.eye = carried.point({on.x() - camera.width / 2.0, on.y() - camera.height / 2.0, camera.eye.z});
+    // By as much as its parents turn a clip on the canvas, however they size it.
+    const double turn = std::atan2(moved.m12(), moved.m11());
+    const auto way = [&carried, turn](const World &of) {
+        return carried.way({of.x * std::cos(turn) - of.y * std::sin(turn), of.x * std::sin(turn) + of.y * std::cos(turn), of.z});
+    };
+    camera.right = way(camera.right);
+    camera.down = way(camera.down);
+    camera.forward = way(camera.forward);
     return camera;
 }
 
-bool isInDepth(const QJsonObject &clip) { return clip.value(QStringLiteral("props")).toObject().value(QStringLiteral("three_d")).toBool(); }
+} // namespace
 
-// A clip's own numbers in depth at `clipTime`.
-struct Depth {
-    double z = 0.0, pitch = 0.0, yaw = 0.0;
-};
-
-Depth depthAt(const QJsonObject &clip, const QSizeF &canvas, double clipTime) {
-    const QJsonObject props = clip.value(QStringLiteral("props")).toObject();
-    return {propertyAt(props, QStringLiteral("z"), clipTime, 0.0) * std::max(1.0, canvas.height()), propertyAt(props, QStringLiteral("rotate_x"), clipTime, 0.0),
-            propertyAt(props, QStringLiteral("rotate_y"), clipTime, 0.0)};
+QSizeF pictureSizeIn(const QJsonObject &timeline, const QJsonObject &clip, const QString &trackType, const QSizeF &canvas, bool *fit) {
+    // A picture clip draws media, a nested sequence, or a generator.
+    const QString kind = clip.value(QStringLiteral("kind")).toString();
+    if (clip.isEmpty() || trackType != QStringLiteral("video") || kind == QStringLiteral("caption")) return {};
+    *fit = kind == QStringLiteral("media") || kind == QStringLiteral("sequence");
+    if (kind == QStringLiteral("media")) {
+        for (const QJsonValue &value : timeline.value(QStringLiteral("sources")).toArray()) {
+            const QJsonObject source = value.toObject();
+            if (source.value(QStringLiteral("id")).toString() != clip.value(QStringLiteral("sourceId")).toString()) continue;
+            const QSizeF size(source.value(QStringLiteral("width")).toDouble(), source.value(QStringLiteral("height")).toDouble());
+            return size.isEmpty() ? QSizeF() : size;
+        }
+        return {};
+    }
+    // Generators fill the canvas; a nested sequence is fitted to it.
+    return canvas;
 }
 
-} // namespace
+QTransform parentsMotionIn(const QJsonObject &timeline, const QJsonObject &clip, const QSizeF &canvas, double at) {
+    QTransform moved;
+    QStringList seen;
+    QString parent = clip.value(QStringLiteral("parent")).toString();
+    // As `Drawing::geometry` goes: up the chain until one is not there to follow.
+    while (!parent.isEmpty() && !seen.contains(parent)) {
+        seen << parent;
+        QString type;
+        const QJsonObject rig = clipIn(timeline, parent, &type);
+        bool fit = false;
+        const QSizeF picture = pictureSizeIn(timeline, rig, type, canvas, &fit);
+        if (picture.isEmpty()) break;
+        moved *= parentMotion(rig, picture, fit, canvas, at - rig.value(QStringLiteral("timelineStart")).toDouble());
+        parent = rig.value(QStringLiteral("parent")).toString();
+    }
+    return moved;
+}
 
 QTransform pathPlacement(const QJsonObject &clip, const QSizeF &picture, bool fit, const QSizeF &canvas, double clipTime,
                          const QTransform &parents, const QJsonObject &timeline) {
@@ -1169,9 +1278,12 @@ QTransform pathPlacement(const QJsonObject &clip, const QSizeF &picture, bool fi
     const Depth depth = depthAt(clip, canvas, clipTime);
     const World swung = turned({-toMiddle.x(), -toMiddle.y(), 0.0}, depth.pitch, depth.yaw) + World{toMiddle.x(), toMiddle.y(), 0.0};
     if (dot(swung, swung) > 1e-12 && clip.value(QStringLiteral("props")).toObject().value(QStringLiteral("orient")).toBool()) return unseen();
-    const Camera camera = cameraAt(timeline, canvas, clip.value(QStringLiteral("timelineStart")).toDouble() + clipTime);
+    const double at = clip.value(QStringLiteral("timelineStart")).toDouble() + clipTime;
+    const Camera camera = cameraAt(timeline, canvas, at);
     const World plane = World{-cw / 2.0, -ch / 2.0, depth.z} + swung;
-    return onCanvas * camera.sees(plane, {1.0, 0.0, 0.0}, {0.0, 1.0, 0.0}) * toShares;
+    // And where the clip's parents in depth take it, the path's plane with it.
+    const Carried carried = carriedBy(timeline, clip, canvas, at);
+    return onCanvas * camera.sees(carried.point(plane), carried.way({1.0, 0.0, 0.0}), carried.way({0.0, 1.0, 0.0})) * toShares;
 }
 
 QList<std::optional<QPointF>> sampledPath(const QJsonObject &clip, const QSizeF &picture, bool fit, const QSizeF &canvas, double clipTime,
@@ -1282,7 +1394,10 @@ QTransform picturePlacement(const QJsonObject &clip, const QSizeF &picture, bool
     const World across = turned({flat.m11(), flat.m12(), 0.0}, depth.pitch, depth.yaw);
     const World below = turned({flat.m21(), flat.m22(), 0.0}, depth.pitch, depth.yaw);
     const World origin = World{middle.x() - canvas.width() / 2.0, middle.y() - canvas.height() / 2.0, depth.z} - across * 0.5 - below * 0.5;
-    const QTransform seen = cameraAt(timeline, canvas, clip.value(QStringLiteral("timelineStart")).toDouble() + clipTime).sees(origin, across, below);
+    // And then where its parents in depth take it, as one thing with them.
+    const double at = clip.value(QStringLiteral("timelineStart")).toDouble() + clipTime;
+    const Carried carried = carriedBy(timeline, clip, canvas, at);
+    const QTransform seen = cameraAt(timeline, canvas, at).sees(carried.point(origin), carried.way(across), carried.way(below));
     const std::array<QPointF, 4> corners{QPointF(0.0, 0.0), QPointF(1.0, 0.0), QPointF(1.0, 1.0), QPointF(0.0, 1.0)};
     const bool shows = std::any_of(corners.cbegin(), corners.cend(), [&seen](const QPointF &corner) { return inSight(seen, corner); });
     return shows ? seen : unseen();

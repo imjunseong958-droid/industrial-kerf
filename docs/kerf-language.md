@@ -247,7 +247,7 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
   `audio.limiter`) go on a clip or a bus, and on a bus see the sum, as a compressor on a mix should.
 - `set c1 three_d=true z=0.5 rotate_y=30` places a clip in depth. Its 2D geometry applies first; `z`
   is in frame heights, positive away from the viewer. `gen=camera@1` sees the scene, the topmost one
-  showing (`x y z pan tilt roll fov focus aperture`, animatable, and `parent=` works), and at its defaults a clip at
+  showing (`x y z pan tilt roll fov focus aperture`, animatable, and with a `parent=` it goes where the parent takes it), and at its defaults a clip at
   z=0 looks as it does in 2D. `depth=0.1` makes a clip in depth a solid that deep behind it, in the outline of its picture's alpha, so a title
   has sides with its letters' colors, its holes kept, and shadows as long as it is deep; it animates, 0 is flat as ever, and a light behind a solid does not come through it. `bevel=0.02` cuts its edges back that far at each face, at 45 degrees and at most half its depth, following its outline and keeping its holes: lights shade the cut as a surface of its own, and its shadow follows it; it animates, and 0 is no bevel. `bevel_profile=round` makes the cut a quarter of a circle, so that the way it faces turns from the side to the face across its width and lights shade it as a curve; `flat`, as it is when not said, is the 45-degree cut. A bevel is as wide on each side of a clip scaled unevenly. `gen=light@1` (`kind=point|ambient|directional|environment color intensity shadow size image`, with
   `x y z` where it is or which way it shines) lights it, per pixel by which way it faces; with no
@@ -325,6 +325,25 @@ sequence s1 name="Main Edit" rate=23.976 size=1920x1080 audio=48000 start=01:00:
   and parents chain. `gen=null@1` draws nothing, to rig several clips under one
   (`set c2 parent=n1`, and `parent=""` to let go). Deleting a parent lets its children go; a
   child of a clip that is split stays with its first part.
+  In depth a parent takes its children with it as one thing. A child in depth (`three_d=true`, or
+  a `gen=mesh@1`) is first where its own numbers put it, with its parents' position, scale, and
+  rotation as on the frame; then the parent turns it by the parent's `rotate_x` and `rotate_y`
+  about the parent's middle, and moves it back by the parent's `z`. With a chain that is done by
+  the parent it names, then by that one's parent, and so on out. So a thing of several parts is rigged
+  under one null and keyed once: `set bot z={0f:6.5 80f:1.6} rotate_y={0f:0 80f:90}` brings every
+  part parented to `bot` nearer and swings it round the middle of `bot`, each part keeping its
+  own `z` and its own turns within it. A null needs no `three_d` for this. A clip that draws
+  leads the same way where it is itself in depth, a body its head and arms; on a flat one `z`,
+  `rotate_x`, and `rotate_y` are nothing, to it or to its children. The turns are about the
+  frame's own level and upright lines through the parent's middle, whatever `rotation` it has.
+  A flat child keeps to the frame, and takes its parent's position, scale, and rotation only:
+  `three_d=true` has it follow in depth, and check says so of one that does not. A parent's
+  `scale` sizes its children and spreads them across the frame, and leaves each one's `z` as it
+  is. A `gen=camera@1` and a `gen=light@1` with a parent go with it as a clip in depth does: where
+  they are moves with it, and a camera looks, and a directional light shines, the way the parent
+  turns them. So a camera parented to a null at the middle of a thing goes round the thing as
+  the null's `rotate_y` is keyed, facing it as it did; a camera or a light that is a parent
+  hands on only where it is on the frame.
 - `gen=signal@1` draws nothing and holds a number for a model: `set swell value={0f:0 48f:1:ease}`,
   from 0 to 1. A `generate … signal=swell` step hands the model what it comes to on each frame
   of its sequence, to say when what the prompt asks for happens, and how much; where the clip is
