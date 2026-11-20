@@ -2,15 +2,18 @@
 # Industrial Kerf for Linux as a folder that runs on its own, packed as
 # target/package-linux/<name>.tar.xz with its sha256, and the same folder as <name>.deb,
 # which apt installs (scripts/package-kerf-linux-deb.sh), and as <name>.rpm, which dnf
-# does (scripts/package-kerf-linux-rpm.sh). bin/ holds the editor, kerfd, kerf,
-# kerf-mcp, ffmpeg and ffprobe; lib/ every library they load that a desktop Linux does not
-# have of its own (Qt and its ICU, FFmpeg, the xcb utilities, xkbcommon), found through each
-# one's RPATH, $ORIGIN/../lib; plugins/ the Qt plugins, which bin/qt.conf points Qt to. What
-# it takes from the system is apps/kerf-qt/packaging/linux/system-libraries.txt.
+# does (scripts/package-kerf-linux-rpm.sh). bin/ holds the editor (kerf-editor), kerfd,
+# kerf, kerf-mcp, ffmpeg and ffprobe; lib/ every library they load that a desktop Linux does
+# not have of its own (FFmpeg's), found through each one's RPATH, $ORIGIN/../lib. The editor
+# is one Rust binary drawn with GPUI: it carries no toolkit, and what it takes from the
+# system is apps/kerf-editor/packaging/linux/system-libraries.txt (xkbcommon, libxcb, the
+# Wayland client library, the Vulkan loader and the system's Vulkan driver, ALSA).
 #
-# Runs on Ubuntu with Rust, CMake, patchelf, dpkg-dev and Xvfb, the Qt in QT_ROOT_DIR (as
-# install-qt-action sets it) and a shared GPL build of FFmpeg in FFMPEG_DIR (BtbN's, pinned in
-# package.yml). Built on Ubuntu 24.04, it needs a glibc and a libstdc++ at least that new.
+# Runs on Ubuntu with Rust, patchelf, dpkg-dev, Xvfb with a Vulkan driver (Mesa's lavapipe,
+# mesa-vulkan-drivers), GPUI's build dependencies (libxkbcommon-dev, libxkbcommon-x11-dev,
+# libwayland-dev, libxcb1-dev, libx11-xcb-dev, libfontconfig-dev, libfreetype-dev, libvulkan1),
+# and a shared GPL build of FFmpeg in FFMPEG_DIR (BtbN's, pinned in package.yml). Built on
+# Ubuntu 24.04, it needs a glibc at least that new.
 # The FFmpeg makes the package GPL: target/package-linux/bundled-packages.txt names each
 # Ubuntu package it carries a library of, for scripts/collect-kerf-linux-sources.sh.
 #
@@ -22,18 +25,16 @@ skip_run=false
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$root"
-: "${QT_ROOT_DIR:?the Qt to build with and carry (install-qt-action sets it)}"
 : "${FFMPEG_DIR:?a shared GPL build of FFmpeg, with bin/ffmpeg and lib/}"
-qt="$QT_ROOT_DIR"
 ffmpeg="$FFMPEG_DIR"
 version="$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml)"
 name="Industrial-Kerf-$version-linux-x64"
 out="$root/target/package-linux"
 stage="$out/$name"
 commit="$(git rev-parse HEAD)"
-system_list="$root/apps/kerf-qt/packaging/linux/system-libraries.txt"
+system_list="$root/apps/kerf-editor/packaging/linux/system-libraries.txt"
 
-for tool in patchelf readelf cmake; do
+for tool in patchelf readelf; do
     command -v "$tool" > /dev/null || { echo "$tool is needed" >&2; exit 1; }
 done
 if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
@@ -52,50 +53,20 @@ if ! grep -q -- --enable-gpl <<< "$buildconf" || ! grep -q -- --enable-version3 
 fi
 
 rm -rf "$out"
-mkdir -p "$stage/bin" "$stage/lib" "$stage/plugins" "$stage/share/doc/industrial-kerf"
+mkdir -p "$stage/bin" "$stage/lib" "$stage/share/doc/industrial-kerf"
 
-# Optimized: the editor's live preview and its exports draw frames in the bridge.
-cargo build --release -p kerf-qt-bridge -p kerf-runtime --lib --bin kerfd
+# Optimized: the editor's live preview and its exports draw frames in kerf-bridge, which it
+# links. The FFmpeg in FFMPEG_DIR is the one they all link (ffmpeg-sys-next reads it).
+cargo build --release --manifest-path apps/kerf-editor/Cargo.toml
+cargo build --release -p kerf-runtime --bin kerfd
 cargo build --release -p kerf-cli --bin kerf
 cargo build --release -p kerf-mcp --bin kerf-mcp
 cargo build --release -p kerf-guide
-bridge="$root/target/release/libkerf_qt_bridge.so"
-# The bridge links FFmpeg, which the linker has to find to link the editor to it.
-cmake -S apps/kerf-qt -B target/qt-linux -DCMAKE_BUILD_TYPE=Release \
-    -DCMAKE_PREFIX_PATH="$qt" -DKERF_BRIDGE_LIBRARY="$bridge" \
-    -DCMAKE_EXE_LINKER_FLAGS="-Wl,-rpath-link,$ffmpeg/lib"
-cmake --build target/qt-linux --target kerf-qt --parallel
 
 # The editor looks beside itself for kerfd and kerf-mcp, and each of them for ffmpeg and
 # ffprobe (kerf-engine's ffmpeg.rs).
-cp target/qt-linux/kerf-qt "$stage/bin/"
-for tool in kerfd kerf kerf-mcp; do cp "target/release/$tool" "$stage/bin/"; done
+for tool in kerf-editor kerfd kerf kerf-mcp; do cp "target/release/$tool" "$stage/bin/"; done
 for tool in ffmpeg ffprobe; do cp "$ffmpeg/bin/$tool" "$stage/bin/"; done
-cp "$bridge" "$stage/lib/"
-# Cargo gives the bridge no soname, so the editor names it by the path it was linked from.
-patchelf --set-soname libkerf_qt_bridge.so "$stage/lib/libkerf_qt_bridge.so"
-while read -r needed; do
-    case "$needed" in */*) patchelf --replace-needed "$needed" "$(basename "$needed")" "$stage/bin/kerf-qt" ;; esac
-done < <(patchelf --print-needed "$stage/bin/kerf-qt")
-
-# Qt's plugins for an X11 desktop (Wayland's run it through XWayland): the xcb platform
-# and its GL integrations, compose keys and ibus, the portal's file dialogs, the image
-# formats Qt reads, TLS, and network reachability. The editor draws its icons in code and
-# uses no SVG.
-for plugin in platforms/libqxcb.so xcbglintegrations platforminputcontexts/libcomposeplatforminputcontextplugin.so \
-    platforminputcontexts/libibusplatforminputcontextplugin.so platformthemes/libqxdgdesktopportal.so \
-    imageformats/libqgif.so imageformats/libqico.so imageformats/libqjpeg.so tls networkinformation; do
-    source="$qt/plugins/$plugin"
-    [ -e "$source" ] || { echo "Qt has no $plugin" >&2; exit 1; }
-    mkdir -p "$stage/plugins/$(dirname "$plugin")"
-    cp -R "$source" "$stage/plugins/$(dirname "$plugin")/"
-done
-cat > "$stage/bin/qt.conf" <<'EOF'
-[Paths]
-Prefix = ..
-Libraries = lib
-Plugins = plugins
-EOF
 
 # Every library one of these loads, and one of those, that the system does not provide:
 # found where the build took it from, and copied into lib/.
@@ -106,7 +77,7 @@ from_system="$out/.from-system"
 missing=""
 find_library() {
     local soname="$1" folder
-    for folder in "$qt/lib" "$ffmpeg/lib" "$root/target/release"; do
+    for folder in "$ffmpeg/lib" "$root/target/release"; do
         [ -e "$folder/$soname" ] && { echo "$folder/$soname"; return; }
     done
     # The build machine's own, by the loader's cache.
@@ -115,7 +86,7 @@ find_library() {
 queue=()
 while IFS= read -r -d '' file; do
     queue+=("$file")
-done < <(find "$stage/bin" "$stage/lib" "$stage/plugins" -type f -print0)
+done < <(find "$stage/bin" "$stage/lib" -type f -print0)
 while [ "${#queue[@]}" -gt 0 ]; do
     current="${queue[0]}"
     queue=("${queue[@]:1}")
@@ -130,7 +101,7 @@ while [ "${#queue[@]}" -gt 0 ]; do
         fi
         cp -L "$found" "$stage/lib/$soname"
         chmod 755 "$stage/lib/$soname"
-        case "$found" in "$qt"/*|"$ffmpeg"/*|"$root"/*) ;; *) echo "$found" >> "$from_system" ;; esac
+        case "$found" in "$ffmpeg"/*|"$root"/*) ;; *) echo "$found" >> "$from_system" ;; esac
         queue+=("$stage/lib/$soname")
     done < <(patchelf --print-needed "$current")
 done
@@ -146,7 +117,6 @@ while IFS= read -r -d '' file; do
     case "$file" in
         "$stage"/bin/*) rpath='$ORIGIN/../lib' ;;
         "$stage"/lib/*) rpath='$ORIGIN' ;;
-        "$stage"/plugins/*/*) rpath='$ORIGIN/../../lib' ;;
     esac
     patchelf --force-rpath --set-rpath "$rpath" "$file"
 done < <(find "$stage" -type f -print0)
@@ -170,16 +140,15 @@ rm -f "$from_system"
 cp LICENSE "$stage/LICENSE.txt"
 cp -R licenses "$stage/licenses"
 mkdir -p "$stage/fonts"
-cp apps/kerf-qt/resources/fonts/*-LICENSE.txt "$stage/fonts/"
+cp apps/kerf-editor/assets/fonts/*-LICENSE.txt "$stage/fonts/"
 cp "$ffmpeg/LICENSE.txt" "$stage/COPYING-GPLv3.txt"
 grep -q 'GNU GENERAL PUBLIC LICENSE' "$stage/COPYING-GPLv3.txt" || { echo "No GPL text in $ffmpeg/LICENSE.txt" >&2; exit 1; }
 printf '%s\n' "$buildconf" > "$stage/FFmpeg-BUILD.txt"
-# Help > Kerf User Guide opens it from bin/../share/doc/industrial-kerf (user_guide.cpp).
+# Help > Kerf User Guide opens it from bin/../share/doc/industrial-kerf.
 target/release/kerf-guide docs/user-guide.md "$stage/share/doc/industrial-kerf/user-guide.html" \
     --version "$version" --link-base "https://github.com/imjunseong958-droid/industrial-kerf/blob/$commit/docs/"
-qt_version="$("$qt/bin/qtpaths6" --qt-query QT_VERSION 2>/dev/null || basename "$(dirname "$qt")")"
 {
-    cat apps/kerf-qt/packaging/linux/THIRD-PARTY.txt
+    cat apps/kerf-editor/packaging/linux/THIRD-PARTY.txt
     echo
     echo "Every Ubuntu package with a library in lib/, its version, and its licence (its copyright file):"
     while read -r package package_version; do
@@ -198,18 +167,18 @@ Its source: https://github.com/imjunseong958-droid/industrial-kerf
 
 This package is under the GNU General Public License version 3 (COPYING-GPLv3.txt), and
 you have the right to its complete source. That is $name-source.tar, published beside this
-package wherever you got it. It holds Kerf and its Rust crates, FFmpeg, each library built
-into FFmpeg, the scripts that built them, Qt $qt_version, and the source of each Ubuntu
-package a library in lib/ comes from.
+package wherever you got it. It holds Kerf and its Rust crates (GPUI, which draws the
+editor, among them), FFmpeg, each library built into FFmpeg, the scripts that built them,
+and the source of each Ubuntu package a library in lib/ comes from, if any.
 
 Which licence covers which part is in THIRD-PARTY.txt.
 EOF
 cat > "$stage/README.txt" <<EOF
 Industrial Kerf $version for Linux.
 
-Run bin/kerf-qt. The folder can go anywhere; it needs no installing. It uses what every
-desktop Linux has of its own (system-libraries.txt): glibc and libstdc++ as new as Ubuntu
-24.04's, X11 (or XWayland), OpenGL, fontconfig, D-Bus, GLib and ALSA.
+Run bin/kerf-editor. The folder can go anywhere; it needs no installing. It uses what
+every desktop Linux has of its own (system-libraries.txt): glibc as new as Ubuntu 24.04's,
+X11 or Wayland with xkbcommon, a Vulkan driver (Mesa's, or your GPU vendor's), and ALSA.
 
 To have Kerf among your applications, and kerf:// project links open in it, run
 ./install-desktop-entry.sh once: it is for you alone and needs no administrator. Run it
@@ -217,12 +186,12 @@ again after moving the folder; ./install-desktop-entry.sh --remove takes it away
 is in icons/.
 EOF
 # The desktop entry and kerf:// links, which a folder cannot register of itself.
-install -m 755 apps/kerf-qt/packaging/linux/install-desktop-entry.sh "$stage/install-desktop-entry.sh"
+install -m 755 apps/kerf-editor/packaging/linux/install-desktop-entry.sh "$stage/install-desktop-entry.sh"
 # Kerf's icon at each size that script installs for the entry (tools/kerf-icon makes them
-# from apps/kerf-qt/resources/icon/industrial-kerf.svg).
+# from apps/kerf-editor/assets/icon/industrial-kerf.svg).
 mkdir -p "$stage/icons"
 for size in 16 24 32 48 64 128 256 512; do
-    cp "apps/kerf-qt/resources/icon/industrial-kerf-$size.png" "$stage/icons/"
+    cp "apps/kerf-editor/assets/icon/industrial-kerf-$size.png" "$stage/icons/"
 done
 cp "$system_list" "$stage/system-libraries.txt"
 

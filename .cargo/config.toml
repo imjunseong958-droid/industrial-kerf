@@ -1,3 +1,9 @@
+# One target folder for the repository's workspace and the editor's
+# (apps/kerf-editor, a workspace of its own), so the editor builds to
+# target/debug/kerf-editor beside kerfd wherever cargo runs from.
+[build]
+target-dir = "target"
+
 [env]
 MACOSX_DEPLOYMENT_TARGET = "11.0"
 

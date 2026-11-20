@@ -1,6 +1,6 @@
 # kerf-engine
 
-Native media engine for Kerf. `kerfd`, the agent harness, and the Qt bridge call
+Native media engine for Kerf. `kerfd`, the agent harness, and the editor's bridge call
 it in-process as the `kerf_engine` library; the `kerf-engine` binary exposes the
 same operations for debugging and scripting.
 

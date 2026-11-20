@@ -4,19 +4,19 @@
     fail if it needs anything it does not carry.
 
 .DESCRIPTION
-    With nothing on PATH but Windows' own folders, and no Qt plugin path from the
-    environment, has kerfd import a clip the package's ffmpeg made, and runs ffmpeg -version,
-    ffprobe -version, kerf --version and kerfd --endpoint from the package, and opens
-    the editor with no project and takes a picture of it.
+    With nothing on PATH but Windows' own folders, has kerfd import a clip the package's
+    ffmpeg made, and runs ffmpeg -version, ffprobe -version, kerf --version and kerfd
+    --endpoint from the package, and opens the editor with no project, which has to draw
+    its window (DirectX 11, through GPUI) and quit on its own when asked to.
 
     A machine that builds or tests Kerf has Visual Studio's C++ runtime in System32,
     so a package missing one of those libraries still runs there. While the editor
     runs, every library it has loaded is listed: each has to come from the package or
-    from Windows, and none of the libraries the package carries (Qt, FFmpeg, the C++
-    runtime) from anywhere else. The editor loads all that kerf, kerfd and the bridge
-    link to, as it links the bridge, and the bridge FFmpeg.
+    from Windows, and none of the libraries the package carries (FFmpeg, the C++
+    runtime) from anywhere else. The editor loads all that kerf and kerfd link to, as
+    it links kerf-bridge, and kerf-bridge FFmpeg.
 
-    kerf-qt.exe has to carry Kerf's icon as a resource, which is where Explorer, the
+    kerf-editor.exe has to carry Kerf's icon as a resource, which is where Explorer, the
     taskbar, the Start menu entry and kerf:// links take it from (kerf-windows-icon.ps1).
     A package from before 0.1.2 has none, and is not held to it.
 
@@ -25,7 +25,7 @@
     runner.
 
 .PARAMETER Package
-    The unpacked folder, with kerf-qt.exe in it.
+    The unpacked folder, with kerf-editor.exe in it.
 
 .EXAMPLE
     pwsh scripts/check-kerf-windows.ps1 -Package target/package/Industrial-Kerf-0.1.0-windows-x64
@@ -37,13 +37,12 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $Package = (Resolve-Path $Package).Path.TrimEnd('\')
-if (-not (Test-Path (Join-Path $Package 'kerf-qt.exe'))) { throw "No kerf-qt.exe in $Package" }
+if (-not (Test-Path (Join-Path $Package 'kerf-editor.exe'))) { throw "No kerf-editor.exe in $Package" }
 . (Join-Path $PSScriptRoot 'kerf-windows-icon.ps1')
 
 # Names of what the package has to bring itself. Windows has none of them, so one
-# of these loaded from anywhere but the package was missing from it. (Its icuuc.dll
-# is Windows' own, which windeployqt copies, and passes Qt on to System32's icu.dll.)
-$carried = @('vcruntime*', 'msvcp1*', 'concrt*', 'vccorlib*', 'qt6*', 'av*-*', 'sw*-*', 'postproc*')
+# of these loaded from anywhere but the package was missing from it.
+$carried = @('vcruntime*', 'msvcp1*', 'concrt*', 'vccorlib*', 'av*-*', 'sw*-*', 'postproc*')
 
 # Every library the process has loaded so far, by full path. The process may exit
 # while being read.
@@ -75,14 +74,6 @@ function Find-OutsideModules([string[]]$modules) {
 
 $path = $env:Path
 $env:Path = "$env:SystemRoot\System32;$env:SystemRoot"
-# Nor where a Qt is: a build machine names its Qt's plugins (install-qt-action sets
-# QT_PLUGIN_PATH), and the editor would load them in place of the package's own.
-$qtVariables = 'QT_PLUGIN_PATH', 'QT_QPA_PLATFORM_PLUGIN_PATH', 'QML2_IMPORT_PATH', 'QML_IMPORT_PATH'
-$qtSettings = @{}
-foreach ($name in $qtVariables) {
-    $qtSettings[$name] = [Environment]::GetEnvironmentVariable($name)
-    [Environment]::SetEnvironmentVariable($name, $null)
-}
 $scratch = Join-Path ([System.IO.Path]::GetTempPath()) "kerf-check-$([guid]::NewGuid())"
 New-Item -ItemType Directory -Path $scratch | Out-Null
 try {
@@ -97,12 +88,12 @@ try {
     if ($said -notmatch '(\d+\.\d+\.\d+)' -or -not [version]::TryParse($Matches[1], [ref]$packageVersion)) {
         throw "kerf.exe --version said '$said', with no version in it"
     }
-    $editorExe = Join-Path $Package 'kerf-qt.exe'
+    $editorExe = Join-Path $Package 'kerf-editor.exe'
     if ($packageVersion -lt [version]'0.1.2' -and (Get-KerfProgramIcon $editorExe).Count -eq 0) {
         Write-Host "Industrial Kerf $packageVersion is from before the editor had an icon: not checked."
     } else {
         $pictures = Assert-KerfProgramIcon $editorExe
-        Write-Host "kerf-qt.exe carries its icon at $(($pictures.Side | Sort-Object) -join ', ') pixels."
+        Write-Host "kerf-editor.exe carries its icon at $(($pictures.Side | Sort-Object) -join ', ') pixels."
     }
 
     # kerfd only has to say where clients reach it.
@@ -122,12 +113,8 @@ try {
         throw "kerfd.exe did not probe the clip with the package's ffprobe (it is 320x240, 25 fps, 2 s): $answers"
     }
 
-    # The editor, opening with no project and taking a picture of it.
-    $shot = Join-Path $scratch 'start.png'
-    $editor = Start-Process -FilePath (Join-Path $Package 'kerf-qt.exe') -PassThru -ArgumentList @(
-        '--settings-dir', "`"$(Join-Path $scratch 'settings')`"",
-        '--screenshot', "`"$shot`"",
-        '--quit-after-ms', '5000')
+    # The editor, opening with no project, and quitting on its own after five seconds.
+    $editor = Start-Process -FilePath $editorExe -PassThru -ArgumentList @('--quit-after-ms', '5000')
     # Taken now: Start-Process leaves no exit code otherwise.
     $null = $editor.Handle
     $modules = @()
@@ -138,24 +125,22 @@ try {
     }
     if (-not $editor.WaitForExit(1000)) {
         $editor.Kill()
-        throw 'kerf-qt.exe did not finish on its own'
+        throw 'kerf-editor.exe did not finish on its own'
     }
-    if ($editor.ExitCode -ne 0) { throw "kerf-qt.exe failed with exit code $($editor.ExitCode)" }
-    if (-not (Test-Path $shot)) { throw 'kerf-qt.exe ran and made no screenshot' }
+    if ($editor.ExitCode -ne 0) { throw "kerf-editor.exe failed with exit code $($editor.ExitCode)" }
 
     $modules = @($modules | Sort-Object -Unique)
-    # Qt's platform plugin is loaded once the window is made, so a list without it
-    # was read too early to say anything.
-    if (-not ($modules | Where-Object { $_ -like '*\platforms\qwindows.dll' })) {
-        throw "Read the editor's libraries too early: no platform plugin among $($modules.Count)"
+    # Direct3D 11 is loaded once GPUI makes the device it draws the window with, so a
+    # list without it was read too early to say anything.
+    if (-not ($modules | Where-Object { $_ -like '*\d3d11.dll' })) {
+        throw "Read the editor's libraries too early: no d3d11.dll among $($modules.Count)"
     }
     $outside = @(Find-OutsideModules $modules)
     if ($outside.Count -gt 0) {
-        throw "kerf-qt.exe loaded libraries from outside the package:`n  $($outside -join "`n  ")"
+        throw "kerf-editor.exe loaded libraries from outside the package:`n  $($outside -join "`n  ")"
     }
     Write-Host "The package ran on its own; the editor loaded $($modules.Count) libraries, each from the package or Windows."
 } finally {
     $env:Path = $path
-    foreach ($name in $qtVariables) { [Environment]::SetEnvironmentVariable($name, $qtSettings[$name]) }
     Remove-Item $scratch -Recurse -Force -ErrorAction SilentlyContinue
 }

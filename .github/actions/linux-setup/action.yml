@@ -4,9 +4,10 @@ runs:
   using: composite
   steps:
     # libclang for ffmpeg-sys-next's bindgen; ALSA for playback's audio
-    # output (cpal); Qt with its private GUI headers and xcb for the
-    # docking library; the offscreen platform plugin and a font for the
-    # UI tests.
+    # output (cpal); what GPUI, which draws the editor, builds against
+    # (xkbcommon, xcb, Wayland, fontconfig, freetype, the Vulkan loader);
+    # Mesa's Vulkan drivers (lavapipe) and Xvfb, to start the editor with no
+    # GPU or display; a font; and the keyring for the keychain tests.
     # Ubuntu's mirror on Azure has handed these packages over at 100 kB/s,
     # fourteen minutes of a job, while the job beside it had them in half a
     # minute (2026-11-10). So their .deb files are kept in the Actions cache,
@@ -19,9 +20,9 @@ runs:
       shell: bash
       run: |
         packages="libclang-dev libasound2-dev \
-          qt6-base-dev qt6-base-private-dev qt6-qpa-plugins libgl-dev \
-          libvulkan-dev libxkbcommon-dev libxcb1-dev fonts-dejavu-core \
-          mesa-vulkan-drivers gnome-keyring dbus-daemon"
+          libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libxcb1-dev \
+          libx11-xcb-dev libfontconfig-dev libfreetype-dev libvulkan1 libvulkan-dev \
+          mesa-vulkan-drivers xvfb xauth fonts-dejavu-core gnome-keyring dbus-daemon"
         sudo apt-get update
         # Each line is a URL, the file's name, its size and its checksum.
         sudo apt-get install --print-uris -qq --no-install-recommends $packages > "$RUNNER_TEMP/apt-uris.txt"
@@ -38,7 +39,7 @@ runs:
         path: ${{ runner.temp }}/apt-archives
         key: ${{ steps.apt.outputs.key }}
         restore-keys: ${{ steps.apt.outputs.prefix }}
-    - name: Install native and Qt dependencies
+    - name: Install native dependencies
       shell: bash
       run: |
         kept="$RUNNER_TEMP/apt-archives"
@@ -61,7 +62,7 @@ runs:
     # Ubuntu ships FFmpeg 8; Kerf builds against 9, as on macOS and
     # Windows, so all three test the same FFmpeg. Take a pinned FFmpeg 9.0
     # shared build with libx264; BtbN keeps its month-end builds for about
-    # two years. Tests, kerfd, and the bridge load its libraries through
+    # two years. Tests, kerfd, and the editor load its libraries through
     # LD_LIBRARY_PATH.
     # GitHub's release downloads have answered 504 for an hour at a time
     # (2026-11-09), so the pinned archive is kept in the Actions cache and

@@ -4,9 +4,9 @@
 # /opt/industrial-kerf, which apt installs for every user and removes again.
 #
 # A folder registers nothing of itself; a .deb does. It puts the desktop entry
-# (apps/kerf-qt/packaging/linux/industrial-kerf.desktop) in /usr/share/applications, so Kerf
-# is among the applications and opens kerf:// project links, its icon in the hicolor theme,
-# and kerf-qt, kerf, kerfd and kerf-mcp on PATH, as links into /opt/industrial-kerf/bin:
+# (apps/kerf-editor/packaging/linux/industrial-kerf.desktop) in /usr/share/applications, so
+# Kerf is among the applications and opens kerf:// project links, its icon in the hicolor
+# theme, and kerf-editor, kerf, kerfd and kerf-mcp on PATH, as links into /opt/industrial-kerf/bin:
 # each finds the rest beside the file it really is. ffmpeg and ffprobe stay off PATH, where
 # the distribution's own may be.
 #
@@ -14,8 +14,10 @@
 # packages of this machine that provide each library a binary names, with the versions
 # their symbols ask for: dpkg-shlibdeps reads them out of the binaries. So apt brings what
 # a bare system lacks, and refuses a system whose C library is too old rather than leave
-# the editor not to start. What it loads only when first used is in Recommends: OpenSSL for
-# Qt's TLS and the Vulkan loader for the GPU.
+# the editor not to start. What the editor opens as it starts rather than names, which
+# dpkg-shlibdeps cannot see, is added to them: the Vulkan loader and a Vulkan driver
+# (Mesa's, unless the system has another), which it draws with, and the Wayland client
+# library, which it uses on a Wayland desktop.
 #
 # Runs on the Ubuntu machine that made the folder, with dpkg-dev. It has no maintainer
 # scripts: the desktop's own triggers read the entry and the icons.
@@ -28,7 +30,7 @@ set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 stage="$(cd "$1" && pwd -P)"
 deb="${2:-$stage.deb}"
-packaging="$root/apps/kerf-qt/packaging/linux"
+packaging="$root/apps/kerf-editor/packaging/linux"
 version="$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' "$root/Cargo.toml")"
 prefix=/opt/industrial-kerf
 . "$root/scripts/kerf-linux-desktop.sh"
@@ -36,7 +38,7 @@ prefix=/opt/industrial-kerf
 for tool in dpkg-deb dpkg-shlibdeps; do
     command -v "$tool" > /dev/null || { echo "$tool is needed (apt install dpkg-dev)" >&2; exit 1; }
 done
-[ -x "$stage/bin/kerf-qt" ] || { echo "No bin/kerf-qt in $stage" >&2; exit 1; }
+[ -x "$stage/bin/kerf-editor" ] || { echo "No bin/kerf-editor in $stage" >&2; exit 1; }
 [ -x "$stage/install-desktop-entry.sh" ] || { echo "No install-desktop-entry.sh in $stage" >&2; exit 1; }
 
 work="$(mktemp -d)"
@@ -51,8 +53,8 @@ rm -rf "$tree$prefix/install-desktop-entry.sh" "$tree$prefix/icons" "$tree$prefi
 cat > "$tree$prefix/README.txt" <<EOF
 Industrial Kerf $version for Linux, as its .deb installs it.
 
-It is among your applications, opens kerf:// project links, and has kerf-qt, kerf, kerfd
-and kerf-mcp on PATH. This folder carries its own Qt and FFmpeg; what it takes from the
+It is among your applications, opens kerf:// project links, and has kerf-editor, kerf,
+kerfd and kerf-mcp on PATH. This folder carries its own FFmpeg; what it takes from the
 system (system-libraries.txt) the package's Depends name.
 
   sudo apt remove industrial-kerf
@@ -60,7 +62,7 @@ system (system-libraries.txt) the package's Depends name.
 takes all of it away. Your projects and settings are yours and stay.
 EOF
 
-for tool in kerf-qt kerf kerfd kerf-mcp; do
+for tool in kerf-editor kerf kerfd kerf-mcp; do
     [ -x "$tree$prefix/bin/$tool" ] || { echo "No bin/$tool in $stage" >&2; exit 1; }
     ln -s "$prefix/bin/$tool" "$tree/usr/bin/$tool"
 done
@@ -75,7 +77,7 @@ if ! diff <(grep -v -e '^Exec=' -e '^TryExec=' "$work/home/data/applications/ind
     echo "industrial-kerf.desktop and the entry install-desktop-entry.sh writes differ in more than where the editor is" >&2
     exit 1
 fi
-kerf_check_entry "$tree/usr/share/applications/industrial-kerf.desktop" "$prefix/bin/kerf-qt"
+kerf_check_entry "$tree/usr/share/applications/industrial-kerf.desktop" "$prefix/bin/kerf-editor"
 for size in $kerf_icon_sizes; do
     install -D -m 644 "$stage/icons/industrial-kerf-$size.png" \
         "$tree/usr/share/icons/hicolor/${size}x${size}/apps/industrial-kerf.png"
@@ -88,7 +90,8 @@ Source: https://github.com/imjunseong958-droid/industrial-kerf
 Industrial Kerf's own code is under the MIT licence ($prefix/LICENSE.txt). This package
 as a whole is under the GNU General Public License version 3 ($prefix/COPYING-GPLv3.txt;
 on Debian also /usr/share/common-licenses/GPL-3), as it joins that code with a GPL build
-of FFmpeg. It also carries Qt 6 under the LGPL version 3, and libraries from Ubuntu under
+of FFmpeg. Its programs are compiled with Rust crates under their own terms, among them
+GPUI (Apache-2.0), which draws the editor, and it may carry libraries from Ubuntu under
 their own terms.
 
 $prefix/THIRD-PARTY.txt says which licence covers which part, and
@@ -123,14 +126,14 @@ depends="$(sed -e 's/^shlibs:Depends=//' -e 's/, /\n/g' <<< "$shlibs" | grep -Ev
 grep -q 'libc6 (>= ' <<< "$depends" || { echo "dpkg-shlibdeps named no C library: $shlibs" >&2; exit 1; }
 
 # hicolor-icon-theme has the theme's index, without which no desktop looks in its folders.
+# The Vulkan loader, a driver and the Wayland client library are opened, not named: see above.
 cat > "$tree/DEBIAN/control" <<EOF
 Package: industrial-kerf
 Version: ${version//-/\~}
 Architecture: amd64
 Maintainer: Industrial Kerf <imjunseong958-droid@users.noreply.github.com>
 Installed-Size: $(du -sk --exclude=DEBIAN "$tree" | cut -f1)
-Depends: $depends, hicolor-icon-theme
-Recommends: libssl3t64, libvulkan1
+Depends: $depends, libvulkan1, mesa-vulkan-drivers | vulkan-icd, libwayland-client0, hicolor-icon-theme
 Section: video
 Priority: optional
 Homepage: https://github.com/imjunseong958-droid/industrial-kerf
@@ -139,16 +142,15 @@ Description: Video editor, with an agent editing beside you
  agent edits it beside you, through proposals you take or refuse, and people
  share it through Git.
  .
- This package carries its own Qt and a GPL build of FFmpeg, in
- $prefix, and takes the C library, X11, OpenGL, fontconfig,
- D-Bus, GLib and ALSA from the system. It adds Kerf to the applications, opens
- kerf:// project links in it, and puts kerf-qt, kerf, kerfd and kerf-mcp on
- PATH.
+ This package carries a GPL build of FFmpeg, in $prefix, and
+ takes the C library, X11 or Wayland, xkbcommon, a Vulkan driver and ALSA from
+ the system. It adds Kerf to the applications, opens kerf:// project links in
+ it, and puts kerf-editor, kerf, kerfd and kerf-mcp on PATH.
 EOF
 (cd "$tree" && find . -type f ! -path './DEBIAN/*' -printf '%P\0' | LC_ALL=C sort -z | xargs -0 md5sum > DEBIAN/md5sums)
 
 rm -f "$deb"
 dpkg-deb --root-owner-group -Zxz --build "$tree" "$deb" > /dev/null
 (cd "$(dirname "$deb")" && sha256sum "$(basename "$deb")" > "$(basename "$deb").sha256")
-echo "Depends: $depends, hicolor-icon-theme" >&2
+echo "Depends: $depends, libvulkan1, mesa-vulkan-drivers | vulkan-icd, libwayland-client0, hicolor-icon-theme" >&2
 echo "$deb"

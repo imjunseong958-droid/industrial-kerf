@@ -1,5 +1,5 @@
-//! What a crash that is not a panic leaves behind: a bad memory access or an abort in C or C++,
-//! such as the editor's own code, Qt or FFmpeg, where Rust's panic hook never runs. A signal
+//! What a crash that is not a panic leaves behind: a bad memory access or an abort, such as one
+//! in FFmpeg or a graphics driver, where Rust's panic hook never runs. A signal
 //! handler (macOS, Linux), or an unhandled-exception filter and the C runtime's `SIGABRT`
 //! (Windows), writes a report into the crash folder in a panic's format, so `reports` lists it and
 //! the editor tells of it the next time it opens.
@@ -117,8 +117,8 @@ pub(super) fn panic_reported() {
     LAST_PANIC_MS.store(now_ms(), Ordering::SeqCst);
 }
 
-/// Report `message` now, as a fatal error the process is about to die of, such as Qt's `qFatal`
-/// before its abort; the crash that follows writes no second report. Not from a signal handler:
+/// Report `message` now, as a fatal error the process is about to die of, just before its
+/// abort; the crash that follows writes no second report. Not from a signal handler:
 /// this one may allocate. Nothing is written when no handler was installed.
 pub(super) fn fatal(message: &str) -> Option<std::path::PathBuf> {
     let setup = SETUP.get()?;
@@ -738,7 +738,7 @@ mod windows {
         }
     }
 
-    /// `kerf-qt.exe+0x1a2b`, or the bare address outside any module.
+    /// `kerf-editor.exe+0x1a2b`, or the bare address outside any module.
     unsafe fn module_and_offset<const N: usize>(text: &mut Text<N>, address: usize) {
         let mut module: HMODULE = std::ptr::null_mut();
         let found = GetModuleHandleExW(

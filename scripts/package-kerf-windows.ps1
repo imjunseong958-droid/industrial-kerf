@@ -1,20 +1,21 @@
 <#
 .SYNOPSIS
-    Build the Qt editor and its tools for Windows and pack them into a folder that
-    runs on its own, as a zip: unpack it anywhere and run kerf-qt.exe. The same folder
+    Build the editor and its tools for Windows and pack them into a folder that runs
+    on its own, as a zip: unpack it anywhere and run kerf-editor.exe. The same folder
     also becomes an installer, for the current user alone, with a Start menu entry,
-    kerf:// links and an uninstaller (apps/kerf-qt/packaging/windows/kerf.iss).
+    kerf:// links and an uninstaller (apps/kerf-editor/packaging/windows/kerf.iss).
 
 .DESCRIPTION
-    Needs, as a Windows build of the editor does: Rust, Visual Studio's C++ tools,
-    CMake, Qt for MSVC with its bin folder on PATH (for windeployqt), a shared GPL
-    build of FFmpeg in FFMPEG_DIR, LIBCLANG_PATH for its bindings, and Inno Setup 6
-    for the installer (choco install innosetup).
+    Needs, as a Windows build of the editor does: Rust, Visual Studio's C++ tools (the
+    linker, the resource compiler that puts the icon in kerf-editor.exe, and the C++
+    runtime to carry), a shared GPL build of FFmpeg in FFMPEG_DIR, LIBCLANG_PATH for
+    its bindings, and Inno Setup 6 for the installer (choco install innosetup). The
+    editor is one Rust program drawn with GPUI (DirectX 11): it carries no toolkit.
 
     The FFmpeg build makes the package GPL, so it may only be given to anyone with
     its source: scripts/collect-kerf-windows-sources.sh makes that, of this commit.
 
-    The package finds everything beside kerf-qt.exe. check-kerf-windows.ps1 runs it
+    The package finds everything beside kerf-editor.exe. check-kerf-windows.ps1 runs it
     once with nothing else on PATH and lists what the editor loaded, so a library that
     was left out stops the package here and not on someone else's machine.
 
@@ -54,8 +55,9 @@ function Invoke-Tool {
     if ($LASTEXITCODE -ne 0) { throw "$program $arguments failed with exit code $LASTEXITCODE" }
 }
 
-# The C++ runtime the editor and the Rust programs link to, which a Windows without
-# Visual Studio may not have: from the folder Microsoft keeps for redistributing it.
+# The Visual C++ runtime (vcruntime140.dll) the editor and the other Rust programs link
+# to, which a Windows without Visual Studio may not have: from the folder Microsoft keeps
+# for redistributing it.
 function Find-CppRuntime {
     $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
     if (-not (Test-Path $vswhere)) { throw "vswhere.exe not found at $vswhere" }
@@ -85,8 +87,6 @@ function Find-InnoSetup {
 if (-not $FfmpegDir -or -not (Test-Path (Join-Path $FfmpegDir 'bin\ffmpeg.exe'))) {
     throw 'Set FFMPEG_DIR, or pass -FfmpegDir, to a shared build of FFmpeg (with bin\ffmpeg.exe)'
 }
-$windeployqt = (Get-Command windeployqt -ErrorAction SilentlyContinue).Source
-if (-not $windeployqt) { throw 'windeployqt not found: put the bin folder of Qt for MSVC on PATH' }
 
 # What the package says about its licence and its source has to hold.
 $ffmpegBuild = & (Join-Path $FfmpegDir 'bin\ffmpeg.exe') -hide_banner -buildconf
@@ -106,35 +106,26 @@ $commit = & git -C $root rev-parse HEAD
 
 $version = (Select-String -Path (Join-Path $root 'Cargo.toml') -Pattern '^version = "(.+)"' | Select-Object -First 1).Matches[0].Groups[1].Value
 $name = "Industrial-Kerf-$version-windows-x64"
-$build = Join-Path $root 'target/qt-package'
 $release = Join-Path $root 'target/release'
 
 Push-Location $root
 try {
     if (-not $SkipBuild) {
-        # Optimized: the editor's live preview and its exports draw frames in the bridge.
+        # Optimized: the editor's live preview and its exports draw frames in kerf-bridge,
+        # which it links.
+        Invoke-Tool cargo build --release --manifest-path apps/kerf-editor/Cargo.toml
         Invoke-Tool cargo build --release -p kerf-cli --bin kerf
         Invoke-Tool cargo build --release -p kerf-runtime --bin kerfd
         Invoke-Tool cargo build --release -p kerf-mcp --bin kerf-mcp
-        Invoke-Tool cargo build --release -p kerf-qt-bridge
         Invoke-Tool cargo build --release -p kerf-guide
-        $bridge = (Join-Path $release 'kerf_qt_bridge.dll.lib').Replace('\', '/')
-        Invoke-Tool cmake -S apps/kerf-qt -B $build "-DKERF_BRIDGE_LIBRARY=$bridge"
-        Invoke-Tool cmake --build $build --config Release --target kerf-qt --parallel
     }
 
     $stage = Join-Path $OutDir $name
     if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
     New-Item -ItemType Directory -Force -Path $stage | Out-Null
 
-    Copy-Item (Join-Path $build 'Release/kerf-qt.exe') $stage
-    Copy-Item (Join-Path $release 'kerf_qt_bridge.dll') $stage
     # The editor looks beside itself for kerfd and kerf-mcp. kerf opens the editor beside it.
-    foreach ($tool in 'kerfd', 'kerf', 'kerf-mcp') { Copy-Item (Join-Path $release "$tool.exe") $stage }
-
-    # Qt's libraries and plugins. Its software OpenGL is for what draws with OpenGL, and
-    # the editor draws without.
-    Invoke-Tool $windeployqt --release --no-translations --no-system-d3d-compiler --no-opengl-sw (Join-Path $stage 'kerf-qt.exe')
+    foreach ($tool in 'kerf-editor', 'kerfd', 'kerf', 'kerf-mcp') { Copy-Item (Join-Path $release "$tool.exe") $stage }
 
     # Windows starts a program's child from the parent's folder before PATH, so these are
     # the ffmpeg and ffprobe that kerfd and the editor run.
@@ -145,25 +136,25 @@ try {
     Copy-Item (Join-Path (Find-CppRuntime) '*.dll') $stage
 
     Copy-Item LICENSE (Join-Path $stage 'LICENSE.txt')
-    Copy-Item apps/kerf-qt/packaging/windows/THIRD-PARTY.txt $stage
+    Copy-Item apps/kerf-editor/packaging/windows/THIRD-PARTY.txt $stage
     Copy-Item licenses (Join-Path $stage 'licenses') -Recurse
     New-Item -ItemType Directory -Path (Join-Path $stage 'fonts') | Out-Null
-    Copy-Item apps/kerf-qt/resources/fonts/*-LICENSE.txt (Join-Path $stage 'fonts')
+    Copy-Item apps/kerf-editor/assets/fonts/*-LICENSE.txt (Join-Path $stage 'fonts')
     Copy-Item $gplText (Join-Path $stage 'COPYING-GPLv3.txt')
     # The user guide beside the editor, where Help > Kerf User Guide opens it with no
-    # connection (user_guide.cpp); its links to the rest of the repository go to this commit.
+    # connection; its links to the rest of the repository go to this commit.
     Invoke-Tool (Join-Path $release 'kerf-guide.exe') docs/user-guide.md (Join-Path $stage 'user-guide.html') `
         --version $version --link-base "https://github.com/imjunseong958-droid/industrial-kerf/blob/$commit/docs/"
     $ffmpegBuild | Set-Content -Path (Join-Path $stage 'FFmpeg-BUILD.txt') -Encoding utf8
-    $qtVersion = (Get-Item (Join-Path $stage 'Qt6Core.dll')).VersionInfo.ProductVersion
     @"
 Industrial Kerf $version for Windows, from commit $commit.
 Its source: https://github.com/imjunseong958-droid/industrial-kerf
 
 This package is under the GNU General Public License version 3 (COPYING-GPLv3.txt),
 and you have the right to its complete source. That is $name-source.tar, published
-beside this package wherever you got it. It holds Kerf and its Rust crates, FFmpeg,
-each library built into FFmpeg, the scripts that built them, and Qt $qtVersion.
+beside this package wherever you got it. It holds Kerf and its Rust crates (GPUI,
+which draws the editor, among them), FFmpeg, each library built into FFmpeg, and the
+scripts that built them.
 
 Which licence covers which part is in THIRD-PARTY.txt.
 "@ | Set-Content -Path (Join-Path $stage 'SOURCE.txt') -Encoding utf8
@@ -189,7 +180,7 @@ Which licence covers which part is in THIRD-PARTY.txt.
         $source = $stage.Replace('/', '\')
         $output = $OutDir.Replace('/', '\')
         Invoke-Tool $iscc /Qp "/DSource=$source" "/DVersion=$version" "/DOutputDir=$output" "/DOutputName=$name-setup" `
-            (Join-Path $root 'apps/kerf-qt/packaging/windows/kerf.iss')
+            (Join-Path $root 'apps/kerf-editor/packaging/windows/kerf.iss')
         $setup = Join-Path $OutDir "$name-setup.exe"
         if (-not (Test-Path $setup)) { throw "Inno Setup made no $setup" }
         $hash = (Get-FileHash $setup -Algorithm SHA256).Hash.ToLowerInvariant()

@@ -492,28 +492,6 @@ fn a_clip_is_not_hidden_by_one_of_its_color_at_another_moment() {
 }
 
 #[test]
-#[ignore = "a measurement, not a check: cargo test -p kerf-engine --test shows --release -- --ignored --nocapture"]
-fn what_reading_a_frame_costs() {
-    let street = street("1920x1080");
-    let at = Rate::FPS_24.time_of(40);
-    let read = showing(&street, None, at).expect("reads");
-    let mut times: Vec<f64> = (0..9)
-        .map(|_| {
-            let started = std::time::Instant::now();
-            drop(showing(&street, None, at).expect("reads"));
-            started.elapsed().as_secs_f64() * 1000.0
-        })
-        .collect();
-    times.sort_by(f64::total_cmp);
-    println!(
-        "the street, a frame: {} clips read and {} left out in {:.0} ms",
-        read.clips.len(),
-        read.unread.len(),
-        times[4]
-    );
-}
-
-#[test]
 fn nothing_is_said_of_a_moment_with_no_clips() {
     let whole = showing(
         &project("  track V1 video\n    clip one gen=solid@1 at=0f dur=2f\n      set scale=0.5\n"),

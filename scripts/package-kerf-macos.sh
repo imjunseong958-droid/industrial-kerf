@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# Industrial Kerf for macOS as an app that runs on its own: the editor, kerfd, kerf,
-# kerf-mcp, ffmpeg and ffprobe, with Qt, FFmpeg and every Homebrew library they need
-# copied into the bundle, zipped as target/package-macos/<name>.zip with its sha256.
+# Industrial Kerf for macOS as an app that runs on its own: the editor (kerf-editor, one
+# Rust binary drawn with GPUI and Metal), kerfd, kerf, kerf-mcp, ffmpeg and ffprobe, with
+# FFmpeg and every Homebrew library they need copied into the bundle, zipped as
+# target/package-macos/<name>.zip with its sha256.
 #
-# Runs on a Mac with Homebrew's ffmpeg, qt, pkg-config and cmake, as CI's macOS job
-# installs them. Homebrew's FFmpeg is GPL, so the zip is too: it says so, and
+# Runs on a Mac with Xcode (GPUI compiles its Metal shaders with it), Rust, and Homebrew's
+# ffmpeg and pkg-config, as CI's macOS job installs them. Homebrew's FFmpeg is GPL, so the zip is too: it says so, and
 # target/package-macos/bundled-formulae.txt names each Homebrew formula whose files
 # went in, for scripts/collect-kerf-macos-sources.sh to fetch the source of.
 #
@@ -27,37 +28,20 @@ app="$out/Industrial Kerf.app"
 macos="$app/Contents/MacOS"
 frameworks="$app/Contents/Frameworks"
 brew_prefix="$(brew --prefix)"
-qt_prefix="$(brew --prefix qt)"
 ffmpeg_prefix="$(brew --prefix ffmpeg)"
 commit="$(git rev-parse HEAD)"
 
 rm -rf "$out"
 mkdir -p "$out"
 
-# The bridge and the tools optimized, as the editor draws frames inside the bridge.
-cargo build --release -p kerf-qt-bridge -p kerf-runtime --lib --bin kerfd
+# Optimized, as the editor draws frames in kerf-bridge, which it links.
+cargo build --release --manifest-path apps/kerf-editor/Cargo.toml
+cargo build --release -p kerf-runtime --bin kerfd
 cargo build --release -p kerf-cli --bin kerf
 cargo build --release -p kerf-mcp --bin kerf-mcp
 cargo build --release -p kerf-guide
-bridge="$root/target/release/libkerf_qt_bridge.dylib"
-cmake -S apps/kerf-qt -B target/qt-release -DCMAKE_BUILD_TYPE=Release \
-    -DCMAKE_PREFIX_PATH="$qt_prefix" -DKERF_BRIDGE_LIBRARY="$bridge"
-cmake --build target/qt-release --target kerf-qt --parallel
-
-cp -R target/qt-release/kerf-qt.app "$app"
+scripts/bundle-kerf-macos.sh target/release/kerf-editor "$app"
 mkdir -p "$frameworks"
-
-# The bridge in Frameworks, found through the editor's rpath, as the local install does.
-editor="$macos/kerf-qt"
-bridge_ref="$(otool -L "$editor" | awk '/libkerf_qt_bridge/ {print $1; exit}')"
-cp -fL "$bridge" "$frameworks/libkerf_qt_bridge.dylib"
-chmod 755 "$frameworks/libkerf_qt_bridge.dylib"
-install_name_tool -id @rpath/libkerf_qt_bridge.dylib "$frameworks/libkerf_qt_bridge.dylib"
-install_name_tool -change "$bridge_ref" @rpath/libkerf_qt_bridge.dylib "$editor"
-for rpath in $(otool -l "$editor" | awk '/LC_RPATH/ {getline; getline; print $2}'); do
-    case "$rpath" in "$root"/*) install_name_tool -delete_rpath "$rpath" "$editor" ;; esac
-done
-install_name_tool -add_rpath @executable_path/../Frameworks "$editor"
 
 # The editor looks beside itself for kerfd and kerf-mcp, and kerfd for ffmpeg and ffprobe.
 tools=(kerfd kerf kerf-mcp)
@@ -70,65 +54,57 @@ for tool in ffmpeg ffprobe; do
     chmod 755 "$macos/$tool"
 done
 
-# Qt's frameworks and plugins, and every library from Homebrew that any of these
-# executables or the bridge loads, copied in with their references rewritten.
-executables=()
-for tool in "${tools[@]}" ffmpeg ffprobe; do executables+=("-executable=$macos/$tool"); done
-# Homebrew splits Qt into a formula per module (qtbase, qtsvg, qtdeclarative, ...),
-# each with its own lib; all of them are linked into $brew_prefix/lib, where
-# macdeployqt finds what a plugin of one module needs from another.
-"$qt_prefix/bin/macdeployqt" "$app" -always-overwrite -no-strip "-libpath=$brew_prefix/lib" \
-    "-executable=$frameworks/libkerf_qt_bridge.dylib" "${executables[@]}"
-
-# The editor draws its icons in code and uses no SVG, PDF, QML or on-screen keyboard
-# (ui/icons.h), but macdeployqt deploys every input-context and image plugin, and
-# what they load. Drop those plugins, then any framework or library in the app that
-# nothing left in it loads, until none is left over.
-rm -rf "$app/Contents/PlugIns/platforminputcontexts" "$app/Contents/PlugIns/virtualkeyboard" \
-    "$app/Contents/PlugIns/qmltooling" "$app/Contents/PlugIns/iconengines"
-rm -f "$app/Contents/PlugIns/imageformats/"libqpdf.dylib "$app/Contents/PlugIns/imageformats/"libqsvg.dylib
-while :; do
-    # Every Mach-O, executable bit or not: Homebrew installs libraries read-only.
-    loaded="$(find "$app" -type f -print0 | xargs -0 file | grep 'Mach-O' | cut -d: -f1 |
-        while IFS= read -r binary; do
-            own="$(otool -D "$binary" 2>/dev/null | tail -n +2)"
-            otool -L "$binary" | tail -n +2 | awk '{print $1}' | grep -vxF "${own:-//}"
-        done | sed 's#.*/##' | sort -u)"
-    removed=false
-    for item in "$frameworks"/*.framework "$frameworks"/*.dylib; do
-        [ -e "$item" ] || continue
-        base="$(basename "$item")"
-        case "$base" in
-            *.framework) needle="${base%.framework}" ;;
-            *) needle="$base" ;;
+# Every library from Homebrew that one of these loads, and one of those, copied into
+# Frameworks and named there by @rpath, which each executable finds through its rpath,
+# @executable_path/../Frameworks. Each copy is followed from where it came from, since
+# Homebrew names a library's own dependencies by Homebrew's paths, or by @loader_path or
+# @rpath relative to it. What is not Homebrew's is macOS's own.
+copies=()
+origins=()
+for executable in kerf-editor "${tools[@]}"; do
+    copies+=("$macos/$executable")
+    origins+=("$root/target/release/$executable")
+done
+for tool in ffmpeg ffprobe; do
+    copies+=("$macos/$tool")
+    origins+=("$ffmpeg_prefix/bin/$tool")
+done
+while [ "${#copies[@]}" -gt 0 ]; do
+    copy="${copies[0]}"
+    origin="$(cd "$(dirname "${origins[0]}")" && pwd -P)/$(basename "${origins[0]}")"
+    copies=("${copies[@]:1}")
+    origins=("${origins[@]:1}")
+    own="$(otool -D "$copy" 2>/dev/null | tail -n +2)"
+    while IFS= read -r ref; do
+        name="$(basename "$ref")"
+        source=""
+        case "$ref" in
+            /System/*|/usr/lib/*) continue ;;
+            "$brew_prefix"/*|/opt/homebrew/*|/usr/local/*) source="$ref" ;;
+            @loader_path/*) source="$(dirname "$origin")/${ref#@loader_path/}" ;;
+            @rpath/*)
+                for dir in "$(dirname "$origin")" "$brew_prefix/lib"; do
+                    if [ -e "$dir/${ref#@rpath/}" ]; then source="$dir/${ref#@rpath/}"; break; fi
+                done
+                ;;
+            *) continue ;;
         esac
-        if ! grep -qxF "$needle" <<< "$loaded"; then
-            rm -rf "$item"
-            removed=true
+        [ -n "$source" ] && [ -e "$source" ] || { echo "$(basename "$copy") loads $ref, which is nowhere" >&2; exit 1; }
+        if [ ! -e "$frameworks/$name" ]; then
+            cp -fL "$source" "$frameworks/$name"
+            chmod 755 "$frameworks/$name"
+            install_name_tool -id "@rpath/$name" "$frameworks/$name"
+            copies+=("$frameworks/$name")
+            origins+=("$source")
         fi
-    done
-    $removed || break
+        [ "$ref" = "@rpath/$name" ] || install_name_tool -change "$ref" "@rpath/$name" "$copy"
+    done < <(otool -L "$copy" | tail -n +2 | awk '{print $1}' | grep -vxF "${own:-//}")
+done
+for executable in kerf-editor "${tools[@]}" ffmpeg ffprobe; do
+    install_name_tool -add_rpath @executable_path/../Frameworks "$macos/$executable"
 done
 
-# A copied library keeps the install name it had in the Cellar as its own id. That id
-# is only what a later link would record, but name it as found inside the app, so
-# nothing in the app names Homebrew.
-while IFS= read -r -d '' file; do
-    file -b "$file" | grep -q 'Mach-O.*shared library' || continue
-    id="$(otool -D "$file" | tail -n +2)"
-    case "$id" in
-        "$brew_prefix"/*|/usr/local/*|/opt/homebrew/*)
-            case "$id" in
-                *.framework/*) install_name_tool -id "@rpath/${id#*/lib/}" "$file" ;;
-                *) install_name_tool -id "@rpath/$(basename "$id")" "$file" ;;
-            esac
-            ;;
-    esac
-done < <(find "$app/Contents/Frameworks" "$app/Contents/PlugIns" -type f -print0)
-
-# Homebrew's libraries keep rpaths into the Cellar, the editor keeps one into
-# Homebrew's Qt from its link, and Qt's plugins one to a lib folder beside the app.
-# For an @rpath reference dyld tries the rpaths of the library and of whatever loaded
+# Homebrew's libraries keep rpaths into the Cellar. For an @rpath reference dyld tries the rpaths of the library and of whatever loaded
 # it, so each of these could find a library outside the app before the app's own,
 # on a Mac that has one there. Only rpaths that lead inside the app stay.
 while IFS= read -r -d '' file; do
@@ -165,19 +141,15 @@ if [ -n "$outside" ]; then
 fi
 
 # Which Homebrew formulae the bundle carries files of, with their versions and
-# licences, for the source archive and THIRD-PARTY.txt. macdeployqt names a copied
-# library as it was named in the Cellar; resolving each original from the build tree
-# finds its formula.
+# licences, for the source archive and THIRD-PARTY.txt: resolving each original from the
+# build tree finds its formula.
 formulae="$out/bundled-formulae.txt"
 : > "$formulae.all"
 # Walk the dependency tree of the originals (not the rewritten copies).
 seen="$out/.seen"
 : > "$seen"
-queue=("target/qt-release/kerf-qt.app/Contents/MacOS/kerf-qt" "$bridge" "target/release/kerfd"
-    "target/release/kerf" "target/release/kerf-mcp" "$ffmpeg_prefix/bin/ffmpeg" "$ffmpeg_prefix/bin/ffprobe")
-for plugin in $(find "$app/Contents/PlugIns" -name '*.dylib' 2>/dev/null); do
-    queue+=("$qt_prefix/share/qt/plugins/${plugin#"$app/Contents/PlugIns/"}")
-done
+queue=("target/release/kerf-editor" "target/release/kerfd" "target/release/kerf"
+    "target/release/kerf-mcp" "$ffmpeg_prefix/bin/ffmpeg" "$ffmpeg_prefix/bin/ffprobe")
 while [ "${#queue[@]}" -gt 0 ]; do
     current="${queue[0]}"
     queue=("${queue[@]:1}")
@@ -193,22 +165,23 @@ while [ "${#queue[@]}" -gt 0 ]; do
     while IFS= read -r ref; do
         case "$ref" in
             @rpath/*)
-                # Homebrew's Qt frameworks, the only @rpath references outside the build.
-                for dir in "$qt_prefix/lib" "$brew_prefix/lib"; do
+                # Homebrew's own, beside the library or in its lib folder.
+                for dir in "$(dirname "$real")" "$brew_prefix/lib"; do
                     if [ -e "$dir/${ref#@rpath/}" ]; then
                         queue+=("$dir/${ref#@rpath/}")
                         break
                     fi
                 done
                 ;;
+            @loader_path/*) queue+=("$(dirname "$real")/${ref#@loader_path/}") ;;
             "$brew_prefix"/*|/opt/homebrew/*|/usr/local/*) queue+=("$ref") ;;
         esac
     done < <(otool -L "$real" 2>/dev/null | tail -n +2 | awk '{print $1}')
 done
 sort -u "$formulae.all" | tr '/' ' ' > "$formulae"
 rm -f "$formulae.all" "$seen"
-if ! grep -q '^ffmpeg ' "$formulae" || ! grep -q '^qt' "$formulae"; then
-    echo "bundled-formulae.txt names no ffmpeg or Qt formula:" >&2
+if ! grep -q '^ffmpeg ' "$formulae"; then
+    echo "bundled-formulae.txt names no ffmpeg formula:" >&2
     cat "$formulae" >&2
     exit 1
 fi
@@ -216,10 +189,9 @@ fi
 # The terms, and where the source is.
 cp LICENSE "$app/Contents/Resources/LICENSE.txt"
 cp -R licenses "$app/Contents/Resources/licenses"
-mkdir -p "$app/Contents/Resources/fonts"
-cp apps/kerf-qt/resources/fonts/*-LICENSE.txt "$app/Contents/Resources/fonts/"
-# The user guide in Resources, where Help > Kerf User Guide opens it with no connection
-# (user_guide.cpp); its links to the rest of the repository go to this commit.
+# The fonts' licences are in Resources/fonts already (bundle-kerf-macos.sh).
+# The user guide in Resources, where Help > Kerf User Guide opens it with no connection;
+# its links to the rest of the repository go to this commit.
 target/release/kerf-guide docs/user-guide.md "$app/Contents/Resources/user-guide.html" \
     --version "$version" --link-base "https://github.com/imjunseong958-droid/industrial-kerf/blob/$commit/docs/"
 gpl="$(brew --prefix ffmpeg)/share/doc/ffmpeg/COPYING.GPLv3"
@@ -231,7 +203,7 @@ else
 fi
 "$macos/ffmpeg" -hide_banner -buildconf > "$app/Contents/Resources/FFmpeg-BUILD.txt"
 {
-    cat apps/kerf-qt/packaging/macos/THIRD-PARTY.txt
+    cat apps/kerf-editor/packaging/macos/THIRD-PARTY.txt
     echo
     echo "Every Homebrew formula with files in this app, its version, and its licence:"
     while read -r formula formula_version; do
@@ -245,9 +217,9 @@ Its source: https://github.com/imjunseong958-droid/industrial-kerf
 
 This app is under the GNU General Public License version 3 (COPYING-GPLv3.txt), and
 you have the right to its complete source. That is $name-source.tar, published beside
-this app wherever you got it. It holds Kerf and its Rust crates, and the source of
-each Homebrew formula whose files are in the app, FFmpeg and Qt among them, as
-Homebrew builds them.
+this app wherever you got it. It holds Kerf and its Rust crates (GPUI, which draws
+the editor, among them), and the source of each Homebrew formula whose files are in
+the app, FFmpeg among them, as Homebrew builds them.
 
 Which licence covers which part is in THIRD-PARTY.txt.
 EOF

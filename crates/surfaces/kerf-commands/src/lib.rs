@@ -299,8 +299,9 @@ pub struct Command {
     /// Its parameters, for frontends and agents. Omitted parameters come
     /// from the context.
     pub params: &'static str,
-    /// Shortcuts in the Kerf keymap, in Qt's portable text form: `Ctrl` is
-    /// ⌘ on macOS and `Meta` is ⌃.
+    /// Shortcuts in the Kerf keymap, written like `Ctrl+Shift+Z`: `Ctrl` is
+    /// ⌘ on macOS and `Meta` is ⌃. Each frontend turns them into its own
+    /// key bindings.
     pub keys: &'static [&'static str],
     enabled: Check,
 }
@@ -2519,42 +2520,5 @@ mod tests {
             json!({"type": "projection_repair"})
         );
         assert!(run("file.openProject", &context, &Value::Null).is_err());
-    }
-
-    #[test]
-    fn every_engine_request_is_a_bridge_command() {
-        // bridge.h is the contract: each request type the registry sends is
-        // a command it documents.
-        const BRIDGE: &str = include_str!("../../../../apps/kerf-qt/bridge.h");
-        let mut context = shared();
-        context.collab.as_mut().unwrap().external_media = 1;
-        let invocations = [
-            ("file.refresh", Value::Null),
-            ("media.replace", json!({"media": "m1", "path": "a.mov"})),
-            ("media.make", json!({"media": "m1"})),
-            ("media.makeCancel", json!({"media": "m1"})),
-            ("preset.save", json!({"name": "Intro"})),
-            ("collab.status", Value::Null),
-            ("collab.sync", Value::Null),
-            ("collab.live", json!({"enabled": true})),
-            ("collab.commit", json!({"message": "m"})),
-            ("collab.newBranch", json!({"name": "b"})),
-            ("collab.pullRequest", json!({"title": "t"})),
-            (
-                "collab.publish",
-                json!({"remote": "git@example.com:film.git"}),
-            ),
-            ("collab.consolidate", json!({})),
-            ("qc.run", Value::Null),
-            ("export.master", Value::Null),
-            ("proposal.forward", json!({"proposal": "p1"})),
-        ];
-        for (id, params) in invocations {
-            let request = request(id, &context, params);
-            let kind = request["type"].as_str().unwrap();
-            assert!(BRIDGE.contains(kind), "bridge.h has no `{kind}` for {id}");
-        }
-        assert!(BRIDGE.contains("check {sequence?}"));
-        assert!(BRIDGE.contains("projection_import") && BRIDGE.contains("projection_repair"));
     }
 }

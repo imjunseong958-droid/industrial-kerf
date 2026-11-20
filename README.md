@@ -1,6 +1,7 @@
 # Industrial Kerf
 
-Industrial Kerf is a native, agentic video editor. `kerf` opens the Qt6 editor by default,
+Industrial Kerf is a native, agentic video editor. `kerf` opens the editor (a Rust app
+drawn with GPUI) by default,
 on the project last worked on when none is named;
 pass `--terminal` for the project-scoped terminal agent. `kerf-mcp` is the
 project-scoped MCP server and primary external-agent integration surface.
@@ -25,7 +26,7 @@ and GitHub: a sync commits, merges, and pushes, and `project.kerf` merges by
 the ids of what it holds ([shared projects](docs/collaboration.md)).
 
 ```text
-Qt6 editor ──────────────────────────┐
+GPUI editor (Rust) ──────────────────┐
 Rust agent and CLI ──────────────────┼─> kerfd ─> kerf-model ─> project.kerf
 Rust MCP server ─────────────────────┘     │
                                            └─> .kerf document ─> render compiler,
@@ -106,28 +107,40 @@ playbooks are data in `skills/*/SKILL.md` and are loaded by `kerf-skills`.
 
 ```bash
 cargo build --release -p kerf-runtime --bin kerfd
-cargo build -p kerf-qt-bridge
-cmake -S apps/kerf-qt -B target/qt
-cmake --build target/qt
+cargo build --release --manifest-path apps/kerf-editor/Cargo.toml
 cargo build --release -p kerf-cli --bin kerf
 cargo build --release -p kerf-mcp --bin kerf-mcp
 ```
 
+The editor is one Rust binary, `kerf-editor` (`apps/kerf-editor`), drawn with
+[GPUI](https://www.gpui.rs); it links `kerf-bridge` and FFmpeg as kerfd does,
+and needs no toolkit. It is a Cargo workspace of its own, built with
+`--manifest-path`, so that GPUI's features never reach kerfd, `kerf` or
+`kerf-mcp` (its manifest says why); it builds into the same `target`. On Linux GPUI builds against xkbcommon, xcb, Wayland,
+fontconfig and freetype, and draws with Vulkan; on Debian and Ubuntu:
+
+```bash
+sudo apt install libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libxcb1-dev \
+    libx11-xcb-dev libfontconfig-dev libfreetype-dev libvulkan1 mesa-vulkan-drivers
+```
+
+On macOS it draws with Metal, whose shaders Xcode compiles; on Windows with
+DirectX 11.
+
 Or build and install everything: `kerf`, `kerfd` and `kerf-mcp` to
 `~/.local/bin` (`KERF_LOCAL_BIN` moves them), and the editor. On macOS the
 editor is an app, `~/Applications/Industrial Kerf.app` (`KERF_LOCAL_APPS`
-moves it), carrying its own libraries and `kerfd`; it replaces an older
-install's app, and the plain `~/.local/bin/kerf-qt` an older install left.
-Elsewhere it is `~/.local/bin/kerf-qt`, with its libraries in
-`~/.local/lib/kerf` (`KERF_LOCAL_LIB`). The install does not refer back to
-the checkout, so cleaning `target` is safe; Qt and FFmpeg still come from the
-system:
+moves it), carrying `kerfd` beside it; it replaces an older install's app.
+Elsewhere it is `~/.local/bin/kerf-editor`, with its fonts' licences in
+`~/.local/lib/kerf` (`KERF_LOCAL_LIB`). Either removes what the Qt editor's
+install left there. The install does not refer back to the checkout, so
+cleaning `target` is safe; FFmpeg still comes from the system:
 
 ```bash
-scripts/install-kerf-local.sh        # or: cli, qt
+scripts/install-kerf-local.sh        # or: cli, editor
 ```
 
-Open the Qt editor. Without a project it shows the project launcher, where
+Open the editor. Without a project it shows the project launcher, where
 you make a project from a template or a preset, clone one from GitHub, or
 open a recent one; `--dir` (or `KERF_PROJECT_DIR`) opens a project directly:
 
@@ -137,19 +150,18 @@ target/release/kerf --dir ./my-project
 ```
 
 `kerf` finds the editor beside itself, then on macOS in the installed app,
-then in `target/qt` (on macOS in its bundle, `target/qt/kerf-qt.app`); run
-from the checkout, it tries the checkout's build before the app.
-`KERF_QT_BIN` overrides it. It finds `kerfd` beside itself or in `target`.
-`scripts/run-kerf-qt.sh [project]` builds the debug editor and opens it the
-same way.
+then in `target/debug` and `target/release`; run from the checkout, it tries
+the checkout's build before the app. `KERF_EDITOR_BIN` overrides it. It finds
+`kerfd` beside itself or in `target`. `cargo run --manifest-path apps/kerf-editor/Cargo.toml -- [project]`
+runs the debug editor directly, with kerfd from `KERFD_BIN`.
 
 The editor is dark only (one graphite ramp and one blue accent) and fills the
 screen edge to edge. It
-shows a 16:9 picture in an exact MacBook Pro 14" frame and 9:16, 1:1 and 4:5 in
-an exact iPhone 16 Pro frame, and keeps each conversation with Kerf beside the
+shows a 16:9 picture in a laptop's frame and 9:16, 1:1 and 4:5 in a phone's
+frame, and keeps each conversation with Kerf beside the
 project, with what Kerf did in it. On macOS it opens
 `kerf://<project>/rev<N>@HH:MM:SS:FF` links. See
-[the editor's README](apps/kerf-qt/README.md).
+[the editor's README](apps/kerf-editor/README.md).
 
 Make a project and share it from a terminal (see
 [shared projects](docs/collaboration.md)):
@@ -188,9 +200,10 @@ daemon; the `KERFD_BIN` environment variable does the same.
 `~/.kerf/mcp.json` or `<project>/.kerf/mcp.json`. `--mcp-tools` (or
 `KERF_ENABLE_MCP=1`) attaches those inbound stdio servers through `mcp_search`,
 `mcp_describe`, and `mcp_call`; configured tool allowlists are enforced.
-The Qt editor's Settings tab can enable the same attachment for its Chat,
+The editor's Settings tab can enable the same attachment for its Chat,
 edit the project config, or import a Cursor config. `KERF_ENABLE_MCP=1` remains
-available as an environment fallback. Qt remains a presentation layer.
+available as an environment fallback. The editor remains a presentation layer:
+what it does goes through `kerf-bridge` to `kerfd`.
 
 ## Agents
 
@@ -300,12 +313,12 @@ after 30 seconds (`KERF_MCP_TIMEOUT_MS` overrides it) and running calls observe
 the agent's cancellation flag. A cancelled external operation
 may have already taken effect; verify its state before retrying it.
 
-The Qt bridge, daemon, decoder, agent proposal, and restart smoke test are
-available at:
+The bridge's tests drive a real kerfd as the editor does: starting it beside
+another client, renders and playback through the protocol, makings, and two
+editors sharing a project:
 
 ```bash
-cargo build -p kerf-qt-bridge -p kerf-runtime --lib --bin kerfd
-python3 scripts/test-kerf-qt-bridge.py
+cargo test -p kerf-bridge
 ```
 
 ## Kerf's hosted model and optional embedded-agent providers
@@ -465,9 +478,11 @@ skills, fetch, interchange, CLI wiring, and protocol conformance fixtures.
 ```bash
 cargo test --workspace
 cargo clippy --workspace --all-targets --no-deps -- -D warnings
+cargo test --manifest-path apps/kerf-editor/Cargo.toml
+cargo clippy --manifest-path apps/kerf-editor/Cargo.toml --all-targets -- -D warnings
 ```
 
-The Qt release gate also includes a manual window check: open a project, edit
+The release gate also includes a manual window check: open a project, edit
 it, restart it, enter Korean text, play/seek media, verify captions/mute, and
 accept or reject an agent proposal.
 

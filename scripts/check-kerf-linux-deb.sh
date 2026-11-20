@@ -5,14 +5,16 @@
 #
 # apt installs it without its Recommends, so its Depends alone have to bring every library
 # its binaries name: before anything else is installed, the loader has to find each (ldd).
+# They have to bring a Vulkan loader and driver too, which the editor opens rather than
+# names, or it cannot draw.
 # On a system with a desktop that says little; in a bare container (debian:trixie,
 # ubuntu:24.04), where package.yml and verify-release.yml run this, it is what shows the
 # Depends to be whole. Then it installs what the checks themselves need (Xvfb, binutils,
 # GLib's gio, desktop-file-utils, procps) and runs scripts/check-kerf-linux.sh on
 # /opt/industrial-kerf: the folder as installed, with nothing on PATH. After that, what a
-# .deb adds to the folder: kerf, kerfd, kerf-mcp and kerf-qt on PATH, each working through
+# .deb adds to the folder: kerf, kerfd, kerf-mcp and kerf-editor on PATH, each working through
 # its link (kerfd imports a clip, which it probes right only if it finds the ffprobe beside
-# the file it really is, and the editor opens with no project); the desktop entry in
+# the file it really is, and the editor opens with no project and quits); the desktop entry in
 # /usr/share/applications, running the installed editor with the link; Kerf's icon in the
 # system's hicolor theme at each size; GLib taking Kerf for kerf:// links for a user who
 # has set nothing, and a link followed through it starting the installed editor. Last,
@@ -62,7 +64,7 @@ installed=true
 apt-get install -y -q --no-install-recommends "$scratch/industrial-kerf.deb" > "$scratch/apt.log" 2>&1 ||
     { grep -E '^(W|E|Err):' "$scratch/update.log" >&2 || true; cat "$scratch/apt.log" >&2; echo "apt could not install $deb" >&2; exit 1; }
 [ "$(dpkg-query -W -f='${Version}' industrial-kerf)" = "$version" ] || { echo "apt installed another version than $version" >&2; exit 1; }
-[ -x "$prefix/bin/kerf-qt" ] || { echo "The package installed no $prefix/bin/kerf-qt" >&2; exit 1; }
+[ -x "$prefix/bin/kerf-editor" ] || { echo "The package installed no $prefix/bin/kerf-editor" >&2; exit 1; }
 
 # With only what apt brought for it: every library a binary names is found.
 unfound="$(while IFS= read -r -d '' file; do
@@ -86,13 +88,12 @@ apt-get install -y -q --no-install-recommends xvfb xauth binutils procps libglib
 home="$scratch/home"
 mkdir -p "$home"
 as_user() {
-    env -u LD_LIBRARY_PATH -u LD_PRELOAD -u QT_PLUGIN_PATH -u QT_QPA_PLATFORM_PLUGIN_PATH \
-        -u QML2_IMPORT_PATH -u QML_IMPORT_PATH -u QT_QPA_PLATFORM -u XDG_DATA_HOME -u XDG_CONFIG_HOME \
-        -u XDG_DATA_DIRS HOME="$home" XDG_RUNTIME_DIR="$scratch" "$@"
+    env -u LD_LIBRARY_PATH -u LD_PRELOAD -u XDG_DATA_HOME -u XDG_CONFIG_HOME \
+        -u XDG_DATA_DIRS -u WAYLAND_DISPLAY HOME="$home" XDG_RUNTIME_DIR="$scratch" "$@"
 }
 
 # On PATH, each through its link in /usr/bin.
-for tool in kerf-qt kerf kerfd kerf-mcp; do
+for tool in kerf-editor kerf kerfd kerf-mcp; do
     [ "$(as_user bash -c 'command -v "$1"' which "$tool")" = "/usr/bin/$tool" ] || { echo "$tool is not on PATH as /usr/bin/$tool" >&2; exit 1; }
     [ "$(readlink -f "/usr/bin/$tool")" = "$prefix/bin/$tool" ] || { echo "/usr/bin/$tool is not $prefix/bin/$tool" >&2; exit 1; }
 done
@@ -108,16 +109,15 @@ if ! grep -q 'rate=25 dur=00:00:02:00 video=320x240' "$scratch/import.json"; the
     grep -o 'rate=[^ ]* dur=[^ ]* video=[0-9x]*' "$scratch/import.json" >&2 || grep '"id":"import"' "$scratch/import.json" >&2
     exit 1
 fi
-as_user xvfb-run -a -s "-screen 0 1600x1200x24" \
-    kerf-qt --settings-dir "$scratch/settings" --screenshot "$scratch/start.png" --quit-after-ms 3000
-[ -s "$scratch/start.png" ] || { echo "The editor, started as /usr/bin/kerf-qt, made no screenshot" >&2; exit 1; }
+as_user xvfb-run -a -s "-screen 0 1600x1000x24 +extension Composite" timeout 120 kerf-editor --quit-after-ms 3000 ||
+    { echo "The editor, started as /usr/bin/kerf-editor, did not open and quit on its own" >&2; exit 1; }
 
 # Among the applications, under its own icon, and opening kerf:// links.
-kerf_check_entry "$entry" "$prefix/bin/kerf-qt"
+kerf_check_entry "$entry" "$prefix/bin/kerf-editor"
 [ -f /usr/share/icons/hicolor/index.theme ] || { echo "No hicolor theme for the icon to be found in: the package depends on hicolor-icon-theme" >&2; exit 1; }
 kerf_check_icons /usr/share/icons/hicolor
 kerf_takes_links as_user
-kerf_follow_link "$prefix/bin/kerf-qt" as_user
+kerf_follow_link "$prefix/bin/kerf-editor" as_user
 
 # Removed, it leaves nothing: none of its files, its folder, nor its claim on kerf://.
 dpkg-query -L industrial-kerf > "$scratch/files.txt"

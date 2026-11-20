@@ -5,7 +5,7 @@
 #
 # With nothing of Homebrew's on PATH, runs ffmpeg -version, ffprobe -version,
 # kerf --version and kerfd --endpoint from the app, and opens the editor's start
-# window and takes a picture of it. kerfd imports a clip the app's ffmpeg made, which it
+# window, which has to draw (Metal, through GPUI) and quit on its own when asked to. kerfd imports a clip the app's ffmpeg made, which it
 # probes right only with the app's ffprobe: a Mac without Homebrew has none on PATH.
 # Each runs with DYLD_PRINT_LIBRARIES, so dyld
 # names every library it loads: each has to be inside the app or macOS's own
@@ -26,7 +26,7 @@ app="$(cd "$1" && pwd)"
 # a symbolic link such as /var: either is the app's.
 app_real="$(cd "$1" && pwd -P)"
 macos="$app/Contents/MacOS"
-[ -x "$macos/kerf-qt" ] || { echo "No Contents/MacOS/kerf-qt in $app" >&2; exit 1; }
+[ -x "$macos/kerf-editor" ] || { echo "No Contents/MacOS/kerf-editor in $app" >&2; exit 1; }
 
 scratch="$(mktemp -d)"
 trap 'rm -rf -- "$scratch"' EXIT
@@ -34,15 +34,13 @@ clean_path="/usr/bin:/bin:/usr/sbin:/sbin"
 loaded="$scratch/loaded.txt"
 : > "$loaded"
 
-# Runs a program from the app with a clean PATH and no dyld or Qt plugin settings of the
-# caller's (a build machine's Qt may name its own plugins),
+# Runs a program from the app with a clean PATH and no dyld settings of the caller's,
 # keeping what dyld says it loaded and passing the program's own output through.
 run() {
     local log="$scratch/dyld.log"
     local status=0
     env -u DYLD_LIBRARY_PATH -u DYLD_FALLBACK_LIBRARY_PATH -u DYLD_FRAMEWORK_PATH \
         -u DYLD_FALLBACK_FRAMEWORK_PATH -u DYLD_INSERT_LIBRARIES \
-        -u QT_PLUGIN_PATH -u QT_QPA_PLATFORM_PLUGIN_PATH -u QML2_IMPORT_PATH -u QML_IMPORT_PATH \
         PATH="$clean_path" DYLD_PRINT_LIBRARIES=1 "$@" 2> "$log" || status=$?
     # dyld's lines are "dyld[pid]: <uuid> /path"; the rest is the program's.
     grep '^dyld\[' "$log" | grep -o '/.*' >> "$loaded" || true
@@ -129,16 +127,14 @@ if ! grep -q 'rate=25 dur=00:00:02:00 video=320x240' "$scratch/import.json"; the
         grep '"id":"import"' "$scratch/import.json" >&2
     exit 1
 fi
-# On the Mac's own window system, as someone opening the app gets: the app carries
-# only that platform plugin.
-run "$macos/kerf-qt" --settings-dir "$scratch/settings" \
-    --screenshot "$scratch/start.png" --quit-after-ms 3000
-[ -s "$scratch/start.png" ] || { echo "kerf-qt ran and made no screenshot" >&2; exit 1; }
+# On the Mac's own window system, as someone opening the app gets.
+before="$(wc -l < "$loaded")"
+run "$macos/kerf-editor" --quit-after-ms 3000
 
-# The platform plugin is loaded once the window is made: without it in the list,
-# dyld did not say what it loaded, and the list proves nothing.
-grep -q '/PlugIns/platforms/libqcocoa.dylib$' "$loaded" || {
-    echo "dyld named no platform plugin for the editor: DYLD_PRINT_LIBRARIES had no effect" >&2
+# The editor draws with Metal, which dyld loads with it: without Metal among what it
+# named for the editor, dyld did not say what it loaded, and the list proves nothing.
+tail -n "+$((before + 1))" "$loaded" | grep -q '/Metal.framework/' || {
+    echo "dyld named no Metal for the editor: DYLD_PRINT_LIBRARIES had no effect" >&2
     exit 1
 }
 outside="$(sort -u "$loaded" | grep -vF -e "$app/" -e "$app_real/" |

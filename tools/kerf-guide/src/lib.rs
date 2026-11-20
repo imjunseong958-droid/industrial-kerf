@@ -1,8 +1,8 @@
 //! The user guide as a page of its own: `docs/user-guide.md` rendered to one HTML
 //! file, its style inside it and nothing to fetch, which the packages carry for
 //! Help ▸ Kerf User Guide to open without a connection
-//! (`scripts/package-kerf-windows.ps1`, `package-kerf-macos.sh`;
-//! `apps/kerf-qt/user_guide.cpp` finds it).
+//! (`scripts/package-kerf-windows.ps1`, `package-kerf-macos.sh`; the editor in
+//! `apps/kerf-editor` finds it).
 
 use std::collections::HashMap;
 
@@ -189,7 +189,7 @@ fn escape(text: &str) -> String {
     escaped
 }
 
-/// The editor's own colours and type (`apps/kerf-qt/design_tokens.h`), with the
+/// The editor's own colours and type (`apps/kerf-editor/src/theme.rs`), with the
 /// accent lightened to read as text on the dark ground. No web font: the page is
 /// read offline, so it falls back to the system's.
 const STYLE: &str = "
@@ -237,12 +237,12 @@ mod tests {
     #[test]
     fn links_to_the_rest_of_the_repository_go_to_github_at_the_commit() {
         let html = page(
-            "# Guide\n\n[cloud](cloud.md) [build](../apps/kerf-qt/README.md#build) [here](#start) \
+            "# Guide\n\n[cloud](cloud.md) [build](../apps/kerf-editor/README.md#build) [here](#start) \
              [there](./looks.md?plain=1) [web](https://example.org/a) [mail](mailto:a@b.c)\n",
         );
         for href in [
             "https://github.com/imjunseong958-droid/industrial-kerf/blob/0123abc/docs/cloud.md",
-            "https://github.com/imjunseong958-droid/industrial-kerf/blob/0123abc/apps/kerf-qt/README.md#build",
+            "https://github.com/imjunseong958-droid/industrial-kerf/blob/0123abc/apps/kerf-editor/README.md#build",
             "#start",
             "https://github.com/imjunseong958-droid/industrial-kerf/blob/0123abc/docs/looks.md?plain=1",
             "https://example.org/a",

@@ -1,0 +1,48 @@
+# What the Linux package takes from the system rather than carrying: the libraries every
+# desktop Linux has, and that may not be carried, since each must match the system's own
+# (the C library and loader, the compiler's runtime, X11's libxcb and xkbcommon, the
+# Wayland client library, the Vulkan loader, which finds the system's driver, fontconfig
+# and freetype, ALSA). The editor is drawn with GPUI and carries no toolkit: it links
+# libxcb and xkbcommon, and opens the Vulkan loader and the Wayland client library when it
+# starts. Everything else it loads, it carries in lib/. scripts/package-kerf-linux.sh does
+# not walk into these, and scripts/check-kerf-linux.sh fails the package if it loads
+# anything else from outside.
+#
+# One soname a line.
+
+# glibc
+ld-linux-x86-64.so.2
+libc.so.6
+libm.so.6
+libmvec.so.1
+libdl.so.2
+libpthread.so.0
+librt.so.1
+libresolv.so.2
+libutil.so.1
+libanl.so.1
+# The compiler's runtime, which the system's Vulkan driver loads too
+libgcc_s.so.1
+libstdc++.so.6
+# Vulkan: the loader, which finds the system's driver (Mesa's, or the GPU vendor's)
+libvulkan.so.1
+libdrm.so.2
+# X11: libxcb and what it loads, and the keyboard through xkbcommon
+libxcb.so.1
+libxcb-xkb.so.1
+libXau.so.6
+libXdmcp.so.6
+libX11.so.6
+libX11-xcb.so.1
+libxkbcommon.so.0
+libxkbcommon-x11.so.0
+# Wayland
+libwayland-client.so.0
+libffi.so.8
+# Fonts
+libfontconfig.so.1
+libfreetype.so.6
+libexpat.so.1
+libz.so.1
+# Sound
+libasound.so.2

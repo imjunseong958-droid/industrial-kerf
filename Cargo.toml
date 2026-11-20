@@ -37,7 +37,7 @@ members = [
     "crates/surfaces/kerf-skills",
     "crates/surfaces/kerf-commands",
     "crates/surfaces/kerf-cli",
-    "crates/surfaces/kerf-qt-bridge",
+    "crates/surfaces/kerf-bridge",
     "crates/surfaces/kerf-cloud",
     "crates/surfaces/kerf-fetcher",
     "crates/surfaces/kerf-shots",
@@ -48,6 +48,8 @@ members = [
     "tools/kerf-layers",
     "tools/kerf-icon",
 ]
+# The editor (apps/kerf-editor) is a workspace of its own: its manifest says why.
+exclude = ["apps/kerf-editor"]
 resolver = "2"
 
 [workspace.package]
@@ -67,9 +69,10 @@ linesweeper = "0.4"
 
 # A crate takes these with `[lints] workspace = true`. A crate with an empty
 # `[lints]` table is left out on purpose, and the empty table is how Cargo is
-# told so: kerf-engine, kerf-playback, kerf-mcp, kerf-qt-bridge and
-# kerf-runtime have unsafe code, which `forbid` allows no exception to, and
-# the others stay on clippy's defaults, which the allows below would loosen.
+# told so: kerf-engine, kerf-playback, kerf-mcp and kerf-runtime have unsafe
+# code, and so does kerf-bridge's Windows connection test (an exception
+# handler), which `forbid` allows no exception to; the others stay on
+# clippy's defaults, which the allows below would loosen.
 [workspace.lints.rust]
 unsafe_code = "forbid"
 
@@ -87,17 +90,11 @@ opt-level = 3
 lto = "thin"
 codegen-units = 1
 # Unwind, not abort: a panic in one editor task or one media file's index is
-# caught (kerf-qt-bridge tasks.rs, kerf-runtime kernel.rs) and becomes an
+# caught (kerf-bridge tasks.rs, kerf-runtime kernel.rs) and becomes an
 # error, where abort would take the editor or kerfd down with it.
 # Keep symbol names, dropping only debug info, so a crash report's backtrace
 # (kerf-runtime crash.rs) says which function it was in.
 strip = "debuginfo"
-
-# The editor links against the bridge, so leave its symbols in: a stripped
-# dylib's string table can land off an 8-byte boundary, which Apple's linker
-# refuses ("mis-aligned LINKEDIT string pool").
-[profile.release.package.kerf-qt-bridge]
-strip = false
 
 # Whole-program LTO for a local max-speed binary:
 #   cargo build --profile maxperf -p kerf-engine

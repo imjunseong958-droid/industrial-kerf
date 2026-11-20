@@ -2,7 +2,7 @@ name: Verify release
 
 # A published release as someone downloads it: its Windows zip and installer, its macOS
 # app and its Linux tar.xz and .deb, fetched from the release onto fresh runners with no
-# FFmpeg and no Qt (on macOS, Homebrew moved out of reach), unpacked and run by
+# FFmpeg (on macOS, Homebrew moved out of reach), unpacked and run by
 # check-kerf-windows.ps1, check-kerf-macos.sh and check-kerf-linux.sh, the checks the
 # Package workflow runs on what it packs; the Linux one in a Debian container too, and the
 # .deb installed by apt in bare Ubuntu and Debian containers (check-kerf-linux-deb.sh).
@@ -142,7 +142,7 @@ jobs:
             "SETUP=$($setup.FullName)" >> $env:GITHUB_ENV
           }
           Write-Host "Unpacked $($zip.Name) to $package"
-      - name: Nothing of FFmpeg or Qt on the machine
+      - name: Nothing of FFmpeg on the machine
         shell: pwsh
         run: |
           # The check runs with only Windows' folders on PATH; these are what it would
@@ -150,11 +150,11 @@ jobs:
           $found = @()
           foreach ($folder in @("$env:SystemRoot\System32", $env:SystemRoot)) {
             $found += Get-ChildItem $folder -File -ErrorAction SilentlyContinue |
-              Where-Object { $_.Name -like 'Qt6*.dll' -or $_.Name -like 'av*-*.dll' -or $_.Name -like 'sw*-*.dll' -or $_.Name -like 'ffmpeg*.exe' } |
+              Where-Object { $_.Name -like 'av*-*.dll' -or $_.Name -like 'sw*-*.dll' -or $_.Name -like 'ffmpeg*.exe' } |
               ForEach-Object { $_.FullName }
           }
-          if ($found) { throw "Windows' own folders have FFmpeg or Qt in them:`n$($found -join "`n")" }
-          foreach ($tool in 'ffmpeg', 'ffprobe', 'qmake', 'windeployqt') {
+          if ($found) { throw "Windows' own folders have FFmpeg in them:`n$($found -join "`n")" }
+          foreach ($tool in 'ffmpeg', 'ffprobe') {
             $command = Get-Command $tool -ErrorAction SilentlyContinue
             if ($command) { Write-Host "On this runner's PATH, and not on the check's: $($command.Source)" }
           }
@@ -168,16 +168,17 @@ jobs:
           if (-not $env:SETUP) { Write-Host "$env:TAG has no installer"; exit 0 }
           scripts/check-kerf-windows-installer.ps1 -Installer $env:SETUP
       # The check fails a package that leans on this machine: without its own copy of
-      # a C++ runtime library, the editor still starts here, on System32's.
+      # the Visual C++ runtime the Rust programs link (vcruntime140.dll), the editor
+      # still starts here, on System32's.
       - name: The check fails a package missing a library
         shell: pwsh
         run: |
           $broken = Join-Path $env:RUNNER_TEMP 'broken'
           Copy-Item $env:PACKAGE $broken -Recurse
-          Remove-Item (Join-Path $broken 'vcruntime140_1.dll')
+          Remove-Item (Join-Path $broken 'vcruntime140.dll')
           $failed = $false
           try { & ./scripts/check-kerf-windows.ps1 -Package $broken } catch { $failed = $true; Write-Host "Failed, as it should: $_" }
-          if (-not $failed) { throw 'The check passed a package without vcruntime140_1.dll' }
+          if (-not $failed) { throw 'The check passed a package without vcruntime140.dll' }
 
   macos:
     needs: assets
@@ -208,7 +209,7 @@ jobs:
           echo "APP=$app" >> "$GITHUB_ENV"
       - name: Move Homebrew out of reach
         run: |
-          brew list --versions ffmpeg qt qtbase || true
+          brew list --versions ffmpeg || true
           # Homebrew, and what an Intel Mac's /usr/local would hold; restored at the end.
           for dir in /opt/homebrew /usr/local/Homebrew /usr/local/Cellar /usr/local/opt /usr/local/lib /usr/local/Frameworks; do
             if [ -e "$dir" ]; then
@@ -216,8 +217,8 @@ jobs:
               echo "Moved $dir away"
             fi
           done
-          if command -v ffmpeg || command -v qmake; then
-            echo "FFmpeg or Qt is still on PATH" >&2
+          if command -v ffmpeg; then
+            echo "FFmpeg is still on PATH" >&2
             exit 1
           fi
       - name: Run the app
@@ -286,19 +287,19 @@ jobs:
           package="$(find "$RUNNER_TEMP/unpacked" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
           echo "PACKAGE=$package" >> "$GITHUB_ENV"
       # What every desktop has and system-libraries.txt asks of the system, as the Debian
-      # run below installs it: the runner image leaves out OpenGL's and EGL's dispatch
-      # libraries (libOpenGL.so.0, libEGL.so.1), which failed v0.1.1's first check. Xvfb to
-      # run the editor, and GLib's gio and desktop-file-validate for its desktop entry.
+      # run below installs it: xkbcommon, libxcb, the Wayland client library, the Vulkan
+      # loader and Mesa's Vulkan drivers (lavapipe draws the editor with no GPU), fonts and
+      # ALSA. Xvfb to run the editor, and GLib's gio and desktop-file-validate for its
+      # desktop entry.
       - name: Run the package
         if: env.PACKAGE != ''
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends xvfb xauth libglib2.0-bin desktop-file-utils \
-            libgl1 libegl1 libopengl0 libx11-6 libx11-xcb1 libxcb1 libxext6 libsm6 libice6 \
-            libfontconfig1 libfreetype6 libdbus-1-3 libglib2.0-0t64 libasound2t64 \
-            libgssapi-krb5-2 libstdc++6
-          if command -v ffmpeg || command -v qmake6; then
-            echo "On this runner's PATH, and not on the check's: $(command -v ffmpeg qmake6 | tr '\n' ' ')"
+            libxkbcommon0 libxkbcommon-x11-0 libxcb1 libwayland-client0 libvulkan1 mesa-vulkan-drivers \
+            libfontconfig1 libfreetype6 libasound2t64 libstdc++6
+          if command -v ffmpeg; then
+            echo "On this runner's PATH, and not on the check's: $(command -v ffmpeg)"
           fi
           scripts/check-kerf-linux.sh "$PACKAGE"
       # On another distribution, with only what system-libraries.txt asks of the system.
@@ -309,9 +310,8 @@ jobs:
             set -e
             apt-get update -q > /dev/null
             apt-get install -y -q --no-install-recommends xvfb xauth binutils \
-              libgl1 libegl1 libopengl0 libx11-6 libx11-xcb1 libxcb1 libxext6 libsm6 libice6 \
-              libfontconfig1 libfreetype6 libdbus-1-3 libglib2.0-0t64 libasound2t64 \
-              libgssapi-krb5-2 libstdc++6 > /dev/null
+              libxkbcommon0 libxkbcommon-x11-0 libxcb1 libwayland-client0 libvulkan1 mesa-vulkan-drivers \
+              libfontconfig1 libfreetype6 libasound2t64 libstdc++6 > /dev/null
             /scripts/check-kerf-linux.sh /package'
       # The .deb as apt installs it where nothing of a desktop is yet: its Depends bring
       # all it needs, it runs, takes a kerf:// link, and is removed with nothing left.

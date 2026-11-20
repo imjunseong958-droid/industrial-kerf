@@ -1,6 +1,6 @@
 name: Rust runtime
 
-# Linux carries the testing, the Qt editor included; Windows and macOS
+# Linux carries the testing, the editor included; Windows and macOS
 # check what differs on them. The repository is public, so hosted runners
 # cost nothing: the systems run side by side, and so do the parts of one
 # that do not wait on each other (Linux's tests, lint and editor; macOS's
@@ -8,7 +8,7 @@ name: Rust runtime
 # hand (Actions > Rust runtime > Run workflow). A run takes as long as its
 # slowest job, not the sum of them.
 # Feature branches are not built on push: their pull request runs the
-# jobs. A weekly run catches what a newer toolchain, Qt, or FFmpeg broke.
+# jobs. A weekly run catches what a newer toolchain or FFmpeg broke.
 on:
   schedule:
     # Mondays, 03:00 in Seoul.
@@ -21,8 +21,7 @@ on:
       - ".cargo/**"
       - "crates/**"
       - "tools/**"
-      - "apps/kerf-qt/**"
-      - "scripts/test-kerf-qt-bridge.py"
+      - "apps/kerf-editor/**"
       - ".github/workflows/rust-runtime.yml"
       - ".github/actions/**"
   pull_request:
@@ -32,8 +31,7 @@ on:
       - ".cargo/**"
       - "crates/**"
       - "tools/**"
-      - "apps/kerf-qt/**"
-      - "scripts/test-kerf-qt-bridge.py"
+      - "apps/kerf-editor/**"
       - ".github/workflows/rust-runtime.yml"
       - ".github/actions/**"
   workflow_dispatch:
@@ -138,13 +136,13 @@ jobs:
       - name: Lint workspace
         run: cargo clippy --workspace --all-targets --no-deps -- -D warnings
 
-  # The Qt editor, its UI tests, and the bridge workflow against a real
-  # kerfd. They need the bridge and the daemon built, not the tests.
+  # The editor: a workspace of its own (its manifest says why), so its lint
+  # and tests run here, not in the workspace's above. Then it is started as a
+  # desktop starts it: on a virtual X server, drawn by Mesa's lavapipe in
+  # place of a GPU, with kerfd beside it.
   linux-editor:
     runs-on: ubuntu-26.04
     timeout-minutes: 45
-    env:
-      WGPU_BACKEND: vulkan
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -153,16 +151,41 @@ jobs:
         with:
           shared-key: linux
           save-if: false
-      - name: Build native bridge and daemon for integration tests
-        run: cargo build -p kerf-qt-bridge -p kerf-runtime --lib --bin kerfd
-      - name: Build Qt editor and UI tests
+      - name: Build the editor and the daemon
+        run: cargo build -p kerf-runtime --bin kerfd && cargo build --manifest-path apps/kerf-editor/Cargo.toml
+      - name: Lint the editor
+        run: cargo clippy --manifest-path apps/kerf-editor/Cargo.toml --all-targets -- -D warnings
+      - name: Test the editor
+        run: cargo test --manifest-path apps/kerf-editor/Cargo.toml
+      # It has to open its window and quit on its own when asked to. Xvfb
+      # needs the Composite extension, or the editor's Vulkan frames come
+      # out black.
+      - name: Start the editor on a virtual X server
+        timeout-minutes: 5
+        env:
+          KERFD_BIN: ${{ github.workspace }}/target/debug/kerfd
         run: |
-          cmake -S apps/kerf-qt -B target/qt -DKERF_QT_BUILD_TESTS=ON
-          cmake --build target/qt --parallel "$(nproc)"
-      - name: Test Qt UI
-        run: ctest --test-dir target/qt --output-on-failure
-      - name: Test real media and cross-client workflow
-        run: python3 scripts/test-kerf-qt-bridge.py
+          xvfb-run -a -s "-screen 0 1600x1000x24 +extension Composite" \
+            target/debug/kerf-editor --quit-after-ms 5000
+      # And on a project with a cut: it starts kerfd for it, which keeps the
+      # project's checkpoint, and quits cleanly.
+      - name: Open a project with a cut
+        timeout-minutes: 5
+        env:
+          KERFD_BIN: ${{ github.workspace }}/target/debug/kerfd
+          KERF_EDITOR_PREFS: ${{ runner.temp }}/editor-prefs/editor.json
+        run: |
+          project="$RUNNER_TEMP/smoke-project"
+          mkdir -p "$project/media"
+          ffmpeg -loglevel error -f lavfi -i testsrc2=size=640x360:rate=24 -t 3 \
+            -c:v libx264 -pix_fmt yuv420p "$project/media/a.mp4"
+          printf '%s\n' 'kerf 1' 'project name="Smoke"' \
+            'media a path="media/a.mp4" rate=24 dur=72f video=640x360' \
+            'sequence main rate=24 size=1280x720' '  track V1 video' \
+            '    clip one media=a src=0f at=0f dur=72f' > "$project/project.kerf"
+          xvfb-run -a -s "-screen 0 1600x1000x24 +extension Composite" \
+            target/debug/kerf-editor "$project" --quit-after-ms 8000
+          test -f "$project/.kerf-runtime.checkpoint.json"
 
   windows-runtime:
     runs-on: windows-latest
@@ -201,13 +224,6 @@ jobs:
           $llvm = 'C:\Program Files\LLVM\bin'
           if (-not (Test-Path "$llvm\libclang.dll")) { throw "libclang.dll not found in $llvm" }
           "LIBCLANG_PATH=$llvm" >> $env:GITHUB_ENV
-      # Qt for MSVC, with its bin folder on PATH so the editor and its
-      # tests find Qt's DLLs and plugins.
-      - uses: jurplel/install-qt-action@v4
-        with:
-          version: "6.10.*"
-          arch: win64_msvc2022_64
-          cache: true
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -221,18 +237,18 @@ jobs:
       # Sidecars run in job objects, which end them with kerfd.
       - name: Test sidecar supervision
         run: cargo test -p kerf-engine --lib "sidecar::"
-      # The editor steps run even when a test above failed, so the bridge
-      # they link is built regardless.
-      - name: Build native bridge and daemon
+      # The editor steps run even when a test above failed, so the editor
+      # and the bridge it links are built regardless.
+      - name: Build the editor and the daemon
         if: ${{ !cancelled() }}
-        run: cargo build -p kerf-qt-bridge -p kerf-runtime --lib --bin kerfd
+        run: cargo build -p kerf-runtime --bin kerfd && cargo build --manifest-path apps/kerf-editor/Cargo.toml
       # The real store API keys and the Kerf Cloud token go to, which every
       # other test replaces with one in memory: here Credential Manager, which
       # also refuses a value over 1280 UTF-16 units.
       - name: Test the system keychain
         if: ${{ !cancelled() }}
-        run: cargo test -p kerf-qt-bridge --lib real_keychain -- --ignored
-      # The editor's C ABI starts kerfd and edits through the pipe beside
+        run: cargo test -p kerf-bridge --lib real_keychain -- --ignored
+      # The editor's bridge starts kerfd and edits through the pipe beside
       # another client. On Windows it also fails on any access violation,
       # handled or not; it runs a few times, since a crash once came and
       # went.
@@ -241,20 +257,9 @@ jobs:
         timeout-minutes: 10
         run: |
           for ($run = 1; $run -le 5; $run++) {
-            cargo test -q -p kerf-qt-bridge --test connection -- --nocapture
+            cargo test -q -p kerf-bridge --test connection -- --nocapture
             if ($LASTEXITCODE -ne 0) { "failed on run $run"; exit 1 }
           }
-      - name: Build Qt editor and UI tests
-        if: ${{ !cancelled() }}
-        run: |
-          cmake -S apps/kerf-qt -B target/qt -DKERF_QT_BUILD_TESTS=ON
-          cmake --build target/qt --config Release --parallel 4
-      # Qt logs to the debugger on Windows unless told otherwise.
-      - name: Test Qt UI
-        if: ${{ !cancelled() }}
-        env:
-          QT_FORCE_STDERR_LOGGING: "1"
-        run: ctest --test-dir target/qt -C Release --output-on-failure
 
   macos-editor:
     runs-on: macos-latest
@@ -268,9 +273,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       # Homebrew's current FFmpeg, as developers and scripts/install-kerf-local.sh
       # build against; ffmpeg-next 9 binds it.
-      - name: Install native media and Qt dependencies
+      - name: Install native media dependencies
         run: |
-          brew install ffmpeg qt pkg-config cmake
+          brew install ffmpeg pkg-config
           ffmpeg_prefix="$(brew --prefix ffmpeg)"
           echo "$ffmpeg_prefix/bin" >> "$GITHUB_PATH"
           echo "FFMPEG_DIR=$ffmpeg_prefix" >> "$GITHUB_ENV"
@@ -279,19 +284,11 @@ jobs:
         with:
           shared-key: macos
           save-if: false
-      # Only what Linux cannot show: the editor's dylib against Homebrew's
-      # libav and Qt, the macOS Qt build, and the daemon's macOS peer check
-      # and sockets, which the bridge workflow below goes through.
-      - name: Build native bridge and daemon for integration tests
-        run: cargo build -p kerf-qt-bridge -p kerf-runtime --lib --bin kerfd
-      - name: Build Qt editor and UI tests
-        run: |
-          cmake -S apps/kerf-qt -B target/qt -DCMAKE_PREFIX_PATH="$(brew --prefix qt)" -DKERF_QT_BUILD_TESTS=ON
-          cmake --build target/qt --parallel 3
-      - name: Test Qt UI
-        run: ctest --test-dir target/qt --output-on-failure
-      - name: Test real media and cross-client workflow
-        run: python3 scripts/test-kerf-qt-bridge.py
+      # Only what Linux cannot show: the editor against Homebrew's libav,
+      # drawn with GPUI's Metal renderer (its shaders compiled by Xcode's
+      # metal), and the daemon beside it.
+      - name: Build the editor and the daemon
+        run: cargo build -p kerf-runtime --bin kerfd && cargo build --manifest-path apps/kerf-editor/Cargo.toml
 
   macos-workspace:
     runs-on: macos-latest

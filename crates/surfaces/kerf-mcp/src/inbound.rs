@@ -108,7 +108,7 @@ pub fn enabled(explicit: bool) -> bool {
 }
 
 /// Extend an agent's native tool map with the configured inbound MCP tools.
-/// The UI calls this from its Rust bridge; Qt itself remains presentation-only.
+/// The editor calls this from kerf-bridge, as the CLI does from its own agent loop.
 pub fn add_agent_tools(
     tools: &mut ToolMap,
     directory: &Path,

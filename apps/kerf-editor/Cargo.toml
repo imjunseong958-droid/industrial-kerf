@@ -1,0 +1,80 @@
+# The editor is a workspace of its own, not a member of the repository's.
+# GPUI turns on serde_json's `preserve_order`, and Cargo gives a feature to
+# every crate built in the same run: in the repository's workspace it would
+# change how kerfd, kerf and kerf-mcp order every JSON object whenever they
+# were built beside the editor, and kerfd checksums its journal over JSON it
+# writes again. Here the editor's features stay its own. It builds into the
+# repository's `target` (`.cargo/config.toml`), so `target/debug/kerf-editor`
+# is where `kerf` looks:
+#
+#   cargo build --manifest-path apps/kerf-editor/Cargo.toml
+#
+# Its version is the repository's (`tests/version.rs` holds them together),
+# and its profiles and lints are the repository's own, repeated here.
+[workspace]
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+too_many_arguments = "allow"
+needless_range_loop = "allow"
+type_complexity = "allow"
+
+[package]
+name = "kerf-editor"
+version = "0.1.4"
+edition = "2021"
+license = "MIT"
+description = "Industrial Kerf's native editor, drawn with GPUI"
+
+[lib]
+name = "kerf_editor"
+path = "src/lib.rs"
+
+[[bin]]
+name = "kerf-editor"
+path = "src/main.rs"
+
+[dependencies]
+kerf-bridge = { path = "../../crates/surfaces/kerf-bridge" }
+gpui = "0.2.2"
+# The version gpui draws pictures with: its RenderImage holds these frames.
+image = { version = "0.25", default-features = false }
+serde = { version = "1", features = ["derive", "rc"] }
+serde_json = "1"
+unicode-segmentation = "1"
+env_logger = "0.11"
+log = "0.4"
+
+[build-dependencies]
+embed-resource = "3"
+
+[dev-dependencies]
+proptest = "1"
+tempfile = "3"
+
+[lints]
+workspace = true
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = "debuginfo"
+
+[profile.dev]
+opt-level = 0
+debug = 1
+incremental = true
+
+[profile.dev.package.kerf-raster]
+opt-level = 3
+
+[profile.dev.package.kerf-raster-fx]
+opt-level = 3
+
+[profile.dev.package.kerf-track]
+opt-level = 3
