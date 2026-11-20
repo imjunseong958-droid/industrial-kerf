@@ -41,6 +41,12 @@ pub enum Icon {
     Lock,
     Mute,
     Clock,
+    /// Playback goes round: the transport's Loop.
+    Loop,
+    /// The mask tools: a rectangle, an ellipse, a pen's nib.
+    MaskRectangle,
+    MaskEllipse,
+    Pen,
 }
 
 impl Icon {
@@ -80,6 +86,10 @@ impl Icon {
             Icon::Lock => "lock",
             Icon::Mute => "mute",
             Icon::Clock => "clock",
+            Icon::Loop => "loop",
+            Icon::MaskRectangle => "mask-rectangle",
+            Icon::MaskEllipse => "mask-ellipse",
+            Icon::Pen => "pen",
         }
     }
 
@@ -179,6 +189,14 @@ impl Icon {
                 r#"<path d="M2.5 6.25h2.25L8 3.5v9L4.75 9.75H2.5z"/><path d="M10.5 6l3 4M13.5 6l-3 4"/>"#
             }
             Icon::Clock => r#"<circle cx="8" cy="8" r="5.75"/><path d="M8 4.75V8l2.25 1.5"/>"#,
+            Icon::Loop => {
+                r#"<path d="M11 2.5l2 2-2 2"/><path d="M13 4.5H5.5a3 3 0 0 0-3 3"/><path d="M5 13.5l-2-2 2-2"/><path d="M3 11.5h7.5a3 3 0 0 0 3-3"/>"#
+            }
+            Icon::MaskRectangle => r#"<rect x="2.5" y="3.5" width="11" height="9"/>"#,
+            Icon::MaskEllipse => r#"<ellipse cx="8" cy="8" rx="6" ry="5"/>"#,
+            Icon::Pen => {
+                r#"<path d="M5.6 10.4l7-7"/><path d="M3 13l1.3-3.6 2.3 2.3z" fill="black"/>"#
+            }
         }
     }
 
@@ -189,7 +207,7 @@ impl Icon {
         )
     }
 
-    pub const ALL: [Icon; 34] = [
+    pub const ALL: [Icon; 38] = [
         Icon::Sidebar,
         Icon::Panel,
         Icon::Play,
@@ -224,6 +242,10 @@ impl Icon {
         Icon::Lock,
         Icon::Mute,
         Icon::Clock,
+        Icon::Loop,
+        Icon::MaskRectangle,
+        Icon::MaskEllipse,
+        Icon::Pen,
     ];
 }
 

@@ -33,6 +33,7 @@ use crate::icons::Icon;
 use crate::model::{self, Clip, Timeline, Track, TrackKind};
 use crate::motion;
 use crate::session::Session;
+use crate::stage::{self, MaskTool};
 use crate::store::{Change, Making};
 use crate::theme::{self, layout, radius, text, TypeStyle};
 use crate::ui;
@@ -1489,6 +1490,16 @@ impl Render for TimelineView {
         div()
             .key_context(crate::commands::TIMELINE)
             .track_focus(&self.focus_handle)
+            // ⇧R ⇧E ⇧P: the picture's mask tools, for the clip chosen here.
+            .on_action(cx.listener(|this, _: &stage::RectangleMask, window, cx| {
+                stage::toggle_mask_tool(&this.session, MaskTool::Rectangle, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &stage::EllipseMask, window, cx| {
+                stage::toggle_mask_tool(&this.session, MaskTool::Ellipse, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &stage::PenMask, window, cx| {
+                stage::toggle_mask_tool(&this.session, MaskTool::Pen, window, cx);
+            }))
             .size_full()
             .flex()
             .flex_col()

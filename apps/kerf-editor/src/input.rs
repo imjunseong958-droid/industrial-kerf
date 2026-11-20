@@ -1,8 +1,10 @@
-//! A text field: one line, or several that wrap (the composer). It takes
-//! the platform's input method, so Hangul and other composed text arrive
-//! as they are written. Enter submits; Shift+Enter starts a new line where
-//! the field has several. A field of several lines given a most height
-//! grows with its lines up to it, then scrolls, keeping the cursor in view.
+//! A text field: one line, or several that wrap (the composer), or code
+//! (several lines in mono, as a settings file is written). It takes the
+//! platform's input method, so Hangul and other composed text arrive as
+//! they are written. Enter submits; Shift+Enter starts a new line where the
+//! field has several. In code, Enter starts a new line and ⌘↩ / Ctrl+Enter
+//! submits. A field of several lines given a most height grows with its
+//! lines up to it, then scrolls, keeping the cursor in view.
 
 use crate::theme::{self, TypeStyle};
 use gpui::{
@@ -33,6 +35,7 @@ actions!(
         Cut,
         Copy,
         Submit,
+        SubmitCode,
         Newline,
         WordLeft,
         WordRight,
@@ -50,6 +53,13 @@ pub const CONTEXT: &str = "TextInput";
 /// [`CONTEXT`], so they come before what the keymap unbinds there, and
 /// Backspace, the arrows and Esc still do what they do in a field.
 pub const KEYS: &str = "TextInputKeys";
+
+/// The key context a code field adds to [`KEYS`], where ⌘↩ / Ctrl+Enter
+/// submits (Enter there starts a new line).
+pub const CODE: &str = "CodeInput";
+
+/// What a code field's own keys answer in: [`KEYS`] and [`CODE`] at once.
+pub const CODE_KEYS: &str = "TextInputKeys CodeInput";
 
 pub fn bind_keys(cx: &mut App) {
     cx.bind_keys(key_bindings());
@@ -82,6 +92,8 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("alt-backspace", DeleteWordLeft, context),
         KeyBinding::new("ctrl-backspace", DeleteWordLeft, context),
         KeyBinding::new("escape", Cancel, context),
+        // In code, Enter is a new line, and this is what sends it.
+        KeyBinding::new("secondary-enter", SubmitCode, Some(CODE)),
         // In the composer, what Kerf does without asking goes round.
         KeyBinding::new(
             "shift-tab",
@@ -106,6 +118,8 @@ pub struct TextInput {
     multiline: bool,
     style: TypeStyle,
     reading: bool,
+    /// Code: mono in the field's own size, Enter a new line.
+    code: bool,
     secret: bool,
     selected_range: Range<usize>,
     selection_reversed: bool,
@@ -145,6 +159,7 @@ impl TextInput {
             multiline: false,
             style: theme::text::BODY,
             reading: false,
+            code: false,
             secret: false,
             selected_range: 0..0,
             selection_reversed: false,
@@ -169,6 +184,22 @@ impl TextInput {
         self.multiline = true;
         self.reading = true;
         self
+    }
+
+    /// Several lines of code: mono in the field's own size (see
+    /// [`TextInput::with_style`]), not the reading face; Enter starts a new
+    /// line and ⌘↩ / Ctrl+Enter submits. Settings' MCP servers are written
+    /// in one.
+    pub fn code(mut self) -> Self {
+        self.multiline = true;
+        self.reading = false;
+        self.code = true;
+        self
+    }
+
+    /// Whether Enter starts a new line here rather than submitting.
+    pub fn is_code(&self) -> bool {
+        self.code
     }
 
     /// Shows dots in place of what is typed: a key.
@@ -336,8 +367,19 @@ impl TextInput {
         self.replace_text_in_range(None, "", window, cx)
     }
 
-    fn submit(&mut self, _: &Submit, _: &mut Window, cx: &mut Context<Self>) {
+    fn submit(&mut self, _: &Submit, window: &mut Window, cx: &mut Context<Self>) {
         // While text is being composed, Enter belongs to the input method.
+        if self.marked_range.is_some() {
+            return;
+        }
+        if self.code {
+            self.replace_text_in_range(None, "\n", window, cx);
+        } else {
+            cx.emit(InputEvent::Submit);
+        }
+    }
+
+    fn submit_code(&mut self, _: &SubmitCode, _: &mut Window, cx: &mut Context<Self>) {
         if self.marked_range.is_some() {
             return;
         }
@@ -619,7 +661,7 @@ impl TextInput {
     fn font(&self) -> gpui::Font {
         if self.reading {
             theme::prose_font(self.style.weight)
-        } else if self.style.mono {
+        } else if self.style.mono || self.code {
             theme::mono_font(self.style.weight)
         } else {
             theme::ui_font(self.style.weight)
@@ -1102,7 +1144,7 @@ impl Render for TextInput {
         let keys = div()
             .flex()
             .w_full()
-            .key_context(KEYS)
+            .key_context(if self.code { CODE_KEYS } else { KEYS })
             .track_focus(&self.focus_handle(cx))
             .cursor(CursorStyle::IBeam)
             .on_action(cx.listener(Self::backspace))
@@ -1123,6 +1165,7 @@ impl Render for TextInput {
             .on_action(cx.listener(Self::cut))
             .on_action(cx.listener(Self::copy))
             .on_action(cx.listener(Self::submit))
+            .on_action(cx.listener(Self::submit_code))
             .on_action(cx.listener(Self::newline))
             .on_action(cx.listener(Self::cancel))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))

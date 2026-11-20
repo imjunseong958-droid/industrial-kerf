@@ -373,7 +373,16 @@ pub mod motion {
     pub const DOUBLE_CLICK: Duration = ms(400);
     /// How often the bridge is asked for events and frames.
     pub const POLL: Duration = ms(16);
+    /// How long a notice stays at the conversation's foot (Qt's 6 s).
+    pub const NOTICE_HOLD: Duration = ms(6000);
+    /// And one saying what went wrong, which takes longer to read (a
+    /// failed push's ssh and git lines, an import's refusal).
+    pub const NOTICE_ERROR_HOLD: Duration = ms(12000);
 
+    /// Where a flight lands in a row, as Qt landed it: in from the row's
+    /// left and top (and as far up from its bottom), and how wide.
+    pub const LANDING_INSET: (f32, f32) = (8.0, 4.0);
+    pub const LANDING_WIDTH: f32 = 44.0;
     /// Points Settings' pages come up.
     pub const PAGE_RISE: f32 = 16.0;
     /// Points a message rises as it fades in.
@@ -386,6 +395,8 @@ pub mod motion {
     pub const EDGE_GAP: f32 = 1.0;
     /// The rest of the ring, under the light, as a share of it.
     pub const EDGE_REST: f32 = 0.28;
+    /// The ring under Reduce Motion, whole and steady, with no light running.
+    pub const EDGE_STILL: f32 = 0.85;
     /// Points from one stripe to the next.
     pub const STRIPE_SPACE: f32 = 10.0;
     /// The conversation while a modal covers it.
@@ -423,6 +434,23 @@ pub mod layout {
     pub const COMPOSER: f32 = 110.0;
     /// A bar under the toolbar (kerfd gone, the file changed, an error).
     pub const BAR: f32 = 40.0;
+    /// Points a press on an edge or a handle moves before it is a drag.
+    pub const DRAG_START: f32 = 4.0;
+    /// The widest a notice is, at the conversation's foot; longer words wrap.
+    pub const NOTICE_MOST: f32 = 560.0;
+    /// Width over height from which a picture is wide (Qt's isWide).
+    pub const WIDE: f32 = 1.2;
+    /// The timeline's share of the panel's height under a wide picture,
+    /// and its least there (Qt's timelineWideShare and timelineWideLeast;
+    /// the transport, which Qt's timeline carried, counted in).
+    pub const TIMELINE_WIDE_SHARE: f32 = 0.5625;
+    pub const TIMELINE_WIDE_LEAST: f32 = 260.0;
+    /// And under a vertical or square one.
+    pub const TIMELINE_UPRIGHT_SHARE: f32 = 0.36;
+    pub const TIMELINE_UPRIGHT_LEAST: f32 = 220.0;
+    /// What the Media band leaves the timeline under it before the
+    /// picture gives way.
+    pub const MEDIA_BAND_TIMELINE_LEAST: f32 = 200.0;
 
     /// The widest a drag leaves the sidebar in a window `window` wide.
     pub fn sidebar_most(window: f32) -> f32 {
@@ -539,4 +567,53 @@ pub fn bundled_fonts() -> Vec<std::borrow::Cow<'static, [u8]>> {
 /// The black of a screen around and under a picture.
 pub fn overlay_screen() -> Rgba {
     rgb(0x000000)
+}
+
+/// What is drawn over the picture, whatever it shows: white over a dark
+/// rule reads on any picture, in the accent's own hue too, so none of it
+/// is the accent but the chosen mask's tag and its handles.
+pub mod over_picture {
+    use gpui::{rgb, rgba, Rgba};
+    /// A chosen mask's outline, a motion path's curve, a handle's edge.
+    pub fn line() -> Rgba {
+        rgb(0xffffff)
+    }
+    /// A mask's outline while it is not the chosen one (white, 70%).
+    pub fn line_idle() -> Rgba {
+        rgba(0xffffffb3)
+    }
+    /// The dark rule under a line, so that it reads on a light picture (black, 55%).
+    pub fn rule() -> Rgba {
+        rgba(0x0000008c)
+    }
+    /// A mask's name tag; the chosen one's is the accent (black, 60%).
+    pub fn tag() -> Rgba {
+        rgba(0x00000099)
+    }
+    /// The words on a tag.
+    pub fn tag_ink() -> Rgba {
+        rgb(0xffffff)
+    }
+    /// Title-safe corner ticks and the centre cross (white, 45%).
+    pub fn tick() -> Rgba {
+        rgba(0xffffff73)
+    }
+    /// The device round the picture: its bezel, and a phone's island.
+    pub fn bezel() -> Rgba {
+        rgb(0x0a0a0a)
+    }
+    pub fn island() -> Rgba {
+        rgb(0x000000)
+    }
+    /// The ground under the caption at the playhead, and its words.
+    pub fn caption_ground() -> Rgba {
+        rgba(0x000000b8)
+    }
+    pub fn caption_ink() -> Rgba {
+        rgb(0xffffff)
+    }
+    /// The box a check found text overlapping in (the brick, 32%).
+    pub fn overlap() -> Rgba {
+        rgba(0xec5d6152)
+    }
 }

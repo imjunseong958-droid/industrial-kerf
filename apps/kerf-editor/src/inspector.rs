@@ -2352,12 +2352,18 @@ impl InspectorView {
         card.into_any_element()
     }
 
-    fn masks_section(&self, clip: &Inspected) -> Option<AnyElement> {
+    /// The clip's masks, a row each; a press chooses one, here and on the
+    /// picture (`Session::chosen_mask`), and the one chosen there is
+    /// chosen here.
+    fn masks_section(&self, clip: &Inspected, cx: &mut Context<Self>) -> Option<AnyElement> {
         if clip.masks.is_empty() {
             return None;
         }
-        let rows = clip.masks.iter().map(|mask| {
+        let chosen = self.session.read(cx).chosen_mask.clone();
+        let rows = clip.masks.iter().enumerate().map(|(index, mask)| {
             let name = mask["name"].as_str().unwrap_or_default().to_owned();
+            let is_chosen = chosen.as_deref() == Some(name.as_str());
+            let choose = name.clone();
             let mode = humanize(mask["mode"].as_str().unwrap_or("add"));
             let shape = ["rect", "ellipse", "points"]
                 .into_iter()
@@ -2368,11 +2374,29 @@ impl InspectorView {
                     _ => "Path",
                 });
             div()
+                .id(ElementId::NamedInteger(
+                    "inspector-mask".into(),
+                    index as u64,
+                ))
                 .flex()
                 .items_center()
                 .gap(px(space::S8))
                 .h(px(height::H28))
                 .px(px(space::S12))
+                .cursor_pointer()
+                .when(is_chosen, |row| row.bg(theme::on()))
+                .when(!is_chosen, |row| {
+                    row.hover(|style| style.bg(theme::raised()))
+                })
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    let name = Some(choose.clone());
+                    this.session.update(cx, |session, cx| {
+                        if session.chosen_mask != name {
+                            session.chosen_mask = name;
+                            cx.notify();
+                        }
+                    });
+                }))
                 .child(
                     ui::line(name, text::TIMECODE, theme::ink())
                         .w(px(LABEL))
@@ -2579,7 +2603,7 @@ impl Render for InspectorView {
             self.caption_section(&clip),
             self.clip_section(&clip, window, cx),
             self.effects_section(&clip, window, cx),
-            self.masks_section(&clip),
+            self.masks_section(&clip, cx),
         ]
         .into_iter()
         .flatten()

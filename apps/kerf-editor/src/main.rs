@@ -131,6 +131,8 @@ fn main() {
         })
         .detach();
         let kerfd = arguments.kerfd;
+        // Every window opened later keeps the kerfd given here.
+        app::set_kerfd(kerfd.clone(), cx);
         match link {
             Some(link) => app::follow(&link, kerfd.clone(), cx),
             None => app::open(project, kerfd.clone(), cx),

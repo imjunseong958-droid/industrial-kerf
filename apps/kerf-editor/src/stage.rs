@@ -12,25 +12,29 @@
 //! proposes on an empty program brings its own), and a frame is drawn whole
 //! at its own shape, never stretched. Over it: the safe zones when they are
 //! on (View ▸ Safe Zones), and the chosen clip's masks and motion path,
-//! which a drag reshapes. A click on the picture plays or pauses; moving the
-//! pointer across it skims the program, the timeline showing a skimmer, and
-//! leaving it brings the playhead's frame back. Nothing here moves by
-//! itself: frames are asked for only while the light runs.
+//! which a drag reshapes. The mask tools (⇧R ⇧E ⇧P, or the transport's)
+//! draw a new mask on the chosen picture clip: a rectangle or an ellipse
+//! dragged out, or a pen's corners clicked, closed on its first point. A
+//! click on the picture plays or pauses; moving the pointer across it skims
+//! the program, the timeline showing a skimmer, and leaving it brings the
+//! playhead's frame back. Nothing here moves by itself: frames are asked
+//! for only while the light runs.
 
 use crate::icons::Icon;
 use crate::model;
 use crate::motion::{self, Tween};
 use crate::session::{BridgeEvent, Session};
 use crate::store::Change;
-use crate::theme::{self, layout, motion as scene, text};
+use crate::theme::{self, layout, motion as scene, over_picture, text};
 use crate::ui::{self, icon_button};
 use gpui::{
-    canvas, div, fill, point, prelude::*, px, quad, size, App, BorderStyle, Bounds, ContentMask,
-    Context, Corners, CursorStyle, DispatchPhase, Entity, EntityId, FocusHandle, FontWeight,
-    Global, KeyBinding, Keystroke, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
-    PathBuilder, Pixels, Point, Rgba, SharedString, Subscription, TextRun, WeakEntity, Window,
+    canvas, div, fill, point, prelude::*, px, quad, size, AnimationExt, App, BorderStyle, Bounds,
+    ContentMask, Context, Corners, CursorStyle, DispatchPhase, ElementId, Entity, EntityId,
+    FocusHandle, FontWeight, Global, KeyBinding, KeyContext, MouseButton, MouseDownEvent,
+    MouseMoveEvent, MouseUpEvent, PathBuilder, Pixels, Point, Rgba, SharedString, Subscription,
+    Task, TextRun, WeakEntity, Window,
 };
-use overlay::{Affine, MotionPath, Outline, Pt};
+use overlay::{Affine, MotionPath, Outline, Overlap, Pt};
 use serde_json::{json, Value};
 use std::cell::Cell;
 use std::collections::HashMap;
@@ -41,6 +45,10 @@ use std::time::{Duration, Instant};
 const ACTION_SAFE: f32 = 0.035;
 /// Title safe, shown by ticks at its corners: this share in.
 const TITLE_SAFE: f32 = 0.05;
+/// Points either side of the caption's words, and over and under them.
+const CAPTION_PAD: (f32, f32) = (8.0, 2.0);
+/// The preview render's card: its widest and its height.
+const HUD_SIZE: (f32, f32) = (288.0, 72.0);
 /// Points of each title-safe tick.
 const SAFE_TICK: f32 = 16.0;
 /// Points across the cross at the picture's centre.
@@ -56,36 +64,191 @@ const HOLD: Duration = Duration::from_millis(1500);
 /// The least move across the picture, as a share of it, that skims again.
 const SKIM_STEP: f64 = 0.0005;
 
-gpui::actions!(stage, [RemoveChosen]);
+// RemoveChosen: Delete or Backspace on what the picture has chosen (a
+// mask, a path point) or the pen's last corner. RectangleMask, EllipseMask
+// and PenMask take out a mask tool, or put it down again. CancelDrawing:
+// Esc lets go of what is being drawn, then puts the tool down. FinishPen:
+// Return leaves the pen's outline open.
+gpui::actions!(
+    stage,
+    [
+        RemoveChosen,
+        RectangleMask,
+        EllipseMask,
+        PenMask,
+        CancelDrawing,
+        FinishPen,
+        CloseZoomMenu
+    ]
+);
 
-/// The picture's key context, there while a mask or a path point is chosen:
-/// Delete and Backspace take it ahead of the window's own keys.
-const CONTEXT: &str = "Stage";
+/// The picture's key context, there while the stage has the focus.
+pub const CONTEXT: &str = "Stage";
+/// With it while Delete and Backspace have something on the picture to
+/// take: a mask or a path point chosen, or a pen's corners. Otherwise the
+/// window's own Delete has the key.
+const DELETES: &str = "deletes";
+/// With it while a mask tool is out: Esc is the picture's.
+const DRAWS: &str = "draws";
+/// With it while the pen has two corners or more: Return leaves it open.
+const PEN_OPEN: &str = "pen_open";
+/// With it while the zoom's menu is open: Esc closes it.
+const ZOOM_MENU: &str = "zoom_menu";
 
-/// Binds Delete and Backspace to the chosen mask or point. Binding a keymap
-/// clears this, so it is bound again whenever it is missing.
-fn bind_keys(cx: &mut App) {
-    let bound = Keystroke::parse("delete").is_ok_and(|delete| {
-        cx.all_bindings_for_input(&[delete])
-            .iter()
-            .any(|binding| binding.action().partial_eq(&RemoveChosen))
-    });
-    if !bound {
-        cx.bind_keys([
-            KeyBinding::new("delete", RemoveChosen, Some(CONTEXT)),
-            KeyBinding::new("backspace", RemoveChosen, Some(CONTEXT)),
-        ]);
+/// A tool that draws a new mask on the chosen picture clip.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MaskTool {
+    Rectangle,
+    Ellipse,
+    Pen,
+}
+
+impl MaskTool {
+    pub const ALL: [MaskTool; 3] = [MaskTool::Rectangle, MaskTool::Ellipse, MaskTool::Pen];
+
+    /// Its name, as Qt's View menu had it.
+    pub fn label(self) -> &'static str {
+        match self {
+            MaskTool::Rectangle => "Rectangle mask",
+            MaskTool::Ellipse => "Ellipse mask",
+            MaskTool::Pen => "Pen mask",
+        }
+    }
+
+    /// What to do with it, while it is out.
+    pub fn hint(self) -> &'static str {
+        match self {
+            MaskTool::Rectangle | MaskTool::Ellipse => "Drag on the picture to draw it",
+            MaskTool::Pen => {
+                "Click its corners, then the first again to close it (Return leaves it open)"
+            }
+        }
+    }
+
+    /// Its key, as the registry writes keys.
+    pub fn shortcut(self) -> &'static str {
+        match self {
+            MaskTool::Rectangle => "Shift+R",
+            MaskTool::Ellipse => "Shift+E",
+            MaskTool::Pen => "Shift+P",
+        }
+    }
+
+    pub fn icon(self) -> Icon {
+        match self {
+            MaskTool::Rectangle => Icon::MaskRectangle,
+            MaskTool::Ellipse => Icon::MaskEllipse,
+            MaskTool::Pen => Icon::Pen,
+        }
+    }
+
+    fn id(self) -> &'static str {
+        match self {
+            MaskTool::Rectangle => "mask-rectangle",
+            MaskTool::Ellipse => "mask-ellipse",
+            MaskTool::Pen => "mask-pen",
+        }
     }
 }
 
-/// Over the picture, whatever the theme: white over a dark rule reads on any
-/// picture, in the accent's own hue too.
-fn white(alpha: f32) -> Rgba {
-    theme::with_alpha(gpui::rgb(0xffffff), alpha)
+/// Binds the picture's keys. ⇧R ⇧E ⇧P take out (or put down) a mask tool
+/// wherever the window has the keys, as Qt's View menu did (typing in a
+/// field types them); Delete and Backspace, Esc and Return act on what the
+/// picture has chosen or is drawing, ahead of the window's own keys, only
+/// while it has something to act on.
+///
+/// `commands::bind` calls it after the registry's keys, since binding a
+/// keymap clears these; the stage binds them again whenever it draws and
+/// finds them gone.
+pub fn bind_keys(cx: &mut App) {
+    let mut bindings = Vec::new();
+    for context in [
+        CONTEXT,
+        crate::commands::TIMELINE,
+        crate::commands::WORKSPACE,
+    ] {
+        bindings.push(KeyBinding::new("shift-r", RectangleMask, Some(context)));
+        bindings.push(KeyBinding::new("shift-e", EllipseMask, Some(context)));
+        bindings.push(KeyBinding::new("shift-p", PenMask, Some(context)));
+    }
+    for key in ["shift-r", "shift-e", "shift-p"] {
+        bindings.push(KeyBinding::new(
+            key,
+            gpui::NoAction,
+            Some(crate::input::CONTEXT),
+        ));
+    }
+    let deletes = format!("{CONTEXT} && {DELETES}");
+    bindings.push(KeyBinding::new("delete", RemoveChosen, Some(&deletes)));
+    bindings.push(KeyBinding::new("backspace", RemoveChosen, Some(&deletes)));
+    let draws = format!("{CONTEXT} && {DRAWS}");
+    bindings.push(KeyBinding::new("escape", CancelDrawing, Some(&draws)));
+    let open = format!("{CONTEXT} && {PEN_OPEN}");
+    bindings.push(KeyBinding::new("enter", FinishPen, Some(&open)));
+    let menu = format!("{CONTEXT} && {ZOOM_MENU}");
+    bindings.push(KeyBinding::new("escape", CloseZoomMenu, Some(&menu)));
+    cx.bind_keys(bindings);
 }
 
-fn black(alpha: f32) -> Rgba {
-    theme::with_alpha(gpui::rgb(0x000000), alpha)
+/// Binds the picture's keys again if a keymap bound since cleared them.
+fn ensure_keys(cx: &mut App) {
+    let bound = cx
+        .key_bindings()
+        .borrow()
+        .bindings_for_action(&RectangleMask)
+        .next()
+        .is_some();
+    if !bound {
+        bind_keys(cx);
+    }
+}
+
+/// Each window's picture, by its session.
+#[derive(Default)]
+struct Stages(HashMap<EntityId, WeakEntity<StageView>>);
+
+impl Global for Stages {}
+
+/// Takes out the mask tool `tool` on `session`'s picture, or puts it down
+/// if it is out, as ⇧R ⇧E ⇧P do: the timeline calls it for its keys, and a
+/// menu may. False (and a notice saying why) when no picture clip is chosen
+/// to draw on.
+pub fn toggle_mask_tool(
+    session: &Entity<Session>,
+    tool: MaskTool,
+    window: &mut Window,
+    cx: &mut App,
+) -> bool {
+    let stage = cx
+        .try_global::<Stages>()
+        .and_then(|stages| stages.0.get(&session.entity_id()))
+        .and_then(WeakEntity::upgrade);
+    stage.is_some_and(|stage| stage.update(cx, |stage, cx| stage.toggle_tool(tool, window, cx)))
+}
+
+/// Width over height of what `session`'s picture shows: the sequence's
+/// format; a first cut proposed on an empty program brings its own; with
+/// neither, the frame's, else 16:9. The workspace splits the panel by it.
+pub fn shown_aspect(session: &Session) -> f32 {
+    let timeline = session.timeline();
+    let proposed = session
+        .state
+        .snapshot
+        .proposal_timeline
+        .as_ref()
+        .filter(|proposal| !timeline.has_clips() && proposal.width > 0 && proposal.height > 0);
+    match (
+        proposed,
+        session.picture.as_ref(),
+        timeline.width > 0 && timeline.height > 0,
+    ) {
+        (Some(proposal), _, _) => proposal.aspect(),
+        (None, _, true) => timeline.aspect(),
+        (None, Some(picture), false) if picture.height > 0 => {
+            picture.width as f32 / picture.height as f32
+        }
+        _ => 16.0 / 9.0,
+    }
 }
 
 /// Which of the two lights runs round the picture.
@@ -279,6 +442,41 @@ fn contain(bounds: Bounds<Pixels>, width: u32, height: u32) -> Bounds<Pixels> {
     )
 }
 
+/// The zooms the viewer offers: Fit (0), then shares of the frame's own pixels.
+pub const ZOOMS: [f32; 4] = [0.0, 0.5, 1.0, 2.0];
+
+/// A zoom as its menu names it: "Fit", "50%".
+pub fn zoom_words(zoom: f32) -> String {
+    if zoom <= 0.0 {
+        "Fit".to_owned()
+    } else {
+        format!("{}%", (zoom * 100.0).round() as i64)
+    }
+}
+
+/// Where a frame `frame` pixels big is drawn over the picture `card` at
+/// `zoom`: the card itself at Fit (or with no frame size); else that share
+/// of its pixels, one frame pixel a device pixel at 100% (`scale` device
+/// pixels to the point), centred on the card.
+pub fn zoomed(card: Bounds<Pixels>, frame: (u32, u32), zoom: f32, scale: f32) -> Bounds<Pixels> {
+    let (width, height) = frame;
+    if zoom <= 0.0 || width == 0 || height == 0 {
+        return card;
+    }
+    let scale = scale.max(1.0);
+    let shown = size(
+        px(width as f32 * zoom / scale),
+        px(height as f32 * zoom / scale),
+    );
+    Bounds::new(
+        point(
+            card.center().x - shown.width / 2.0,
+            card.center().y - shown.height / 2.0,
+        ),
+        shown,
+    )
+}
+
 /// The point `share` (0..1) of the way round `bounds`, clockwise from its top left.
 fn round_point(bounds: Bounds<Pixels>, share: f32) -> Point<Pixels> {
     let width = f32::from(bounds.size.width);
@@ -372,6 +570,11 @@ impl Shown {
                 if let Some(mask) = self.masks.iter_mut().find(|mask| mask.name == *name) {
                     mask.outline = now.clone();
                 }
+            }
+            Drag::Added { clip, mask }
+                if *clip == self.clip && self.masks.iter().all(|has| has.name != mask.name) =>
+            {
+                self.masks.push(mask.clone());
             }
             _ => {}
         }
@@ -480,6 +683,27 @@ enum Drag {
         pressed: Pt,
         moved: bool,
     },
+    /// A rectangle or an ellipse being dragged out by its tool, corner to
+    /// corner, in fractions of the clip's picture.
+    Draw {
+        clip: String,
+        tool: MaskTool,
+        from: Pt,
+        to: Pt,
+    },
+    /// Not a drag: a mask just drawn, shown until kerfd's snapshot has it.
+    Added { clip: String, mask: overlay::Mask },
+}
+
+/// What a mask tool has drawn so far, as the picture shows it.
+#[derive(Clone, Debug, Default)]
+struct Drawn {
+    /// A rectangle or an ellipse being dragged out.
+    outline: Option<Outline>,
+    /// The pen's corners, in fractions of the clip's picture.
+    pen: Vec<Pt>,
+    /// Where the pointer is, in the window, for the pen's next side.
+    pointer: Option<Pt>,
 }
 
 // --------------------------------------------------------------------- view
@@ -490,6 +714,15 @@ pub struct StageView {
     area: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// The picture as last placed, in the window: what a press and the pointer hit.
     picture: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// The frame as last drawn in it, in the window: the picture itself at
+    /// Fit, else the frame at the zoom, centred and cut to the picture.
+    /// What the overlays are drawn over and hit on.
+    canvas: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// The viewer's zoom: 0 fits the frame to the picture; else the share
+    /// of its own pixels it is drawn at.
+    zoom: f32,
+    /// Whether the zoom's menu is open.
+    zoom_menu: bool,
     hue: Option<Hue>,
     /// The light's hue as it fades out.
     last_hue: Hue,
@@ -504,10 +737,36 @@ pub struct StageView {
     skim: Option<f64>,
     /// The playhead while kerfd may still answer the skim's seeks.
     kept: Option<Kept>,
-    /// The clip whose mask or path point is chosen, and which.
+    /// The clip whose mask (`Session::chosen_mask`, shared with the
+    /// inspector) or path point is chosen, and which point.
     chosen_clip: Option<String>,
-    chosen_mask: Option<String>,
     chosen_point: Option<usize>,
+    /// The mask tool out, if one is.
+    tool: Option<MaskTool>,
+    /// The pen's corners so far, in fractions of the clip's picture.
+    pen: Vec<Pt>,
+    /// Where the pointer is over the stage, in the window, while the pen draws.
+    pointer: Option<Pt>,
+    /// What the chip over the picture said last, kept while it fades out.
+    said: Option<String>,
+    /// Ticks the chip's clock once a second while a making runs and
+    /// nothing else asks for frames (Reduce Motion).
+    clock: Option<Task<()>>,
+    /// The snapshot's proposals, their versions and timelines: what the
+    /// preview's card says it renders.
+    book: Rc<crate::chat::ProposalBook>,
+    /// The proposal whose preview render Stop was pressed on, hidden until
+    /// that run ends.
+    stopped: Option<String>,
+    /// The last finished check (`check` done), for its caption-overlap box.
+    check: Option<Rc<Value>>,
+    /// The overlap box over the picture, fading in and out, and the last
+    /// one shown, kept while it fades out.
+    overlap_level: Tween,
+    overlap: Option<Overlap>,
+    /// The caption's balanced width on a vertical picture, for its words
+    /// and the most it may be: words, most, width, lines.
+    caption_fit: Option<(SharedString, i32, f32, usize)>,
     drag: Option<Drag>,
     /// What a drag let go, drawn where it was dropped until kerfd's
     /// snapshot (the revision it was sent at) says where it is.
@@ -519,8 +778,14 @@ pub struct StageView {
 impl StageView {
     pub fn new(session: Entity<Session>, _window: &mut Window, cx: &mut Context<Self>) -> Self {
         let id = session.entity_id();
+        let this = cx.weak_entity();
+        cx.default_global::<Stages>().0.insert(id, this);
+        ensure_keys(cx);
         let subscriptions = vec![
-            cx.observe(&session, |_, _, cx| cx.notify()),
+            cx.observe(&session, |this, session, cx| {
+                this.follow_selection(&session, cx);
+                cx.notify();
+            }),
             cx.subscribe(&session, |this, _, event: &BridgeEvent, cx| {
                 match event.0["type"].as_str() {
                     Some("state") => {
@@ -529,6 +794,21 @@ impl StageView {
                             Rc::new(event.0["snapshot"]["timeline"].clone()),
                         );
                         this.follow_chosen_point(&before, cx);
+                        this.book = Rc::new(crate::chat::ProposalBook::read(&event.0["snapshot"]));
+                    }
+                    // The last finished check's findings; one running keeps them.
+                    Some("check") if event.0["status"] == "done" => {
+                        this.check = Some(Rc::new(event.0.clone()));
+                        cx.notify();
+                    }
+                    // A render stopped here stays hidden until its run ends,
+                    // unless another proposal's render takes over.
+                    Some("preview") => {
+                        let running = event.0["status"] == "running";
+                        let proposal = event.0["proposalId"].as_str().unwrap_or_default();
+                        if !running || this.stopped.as_deref() != Some(proposal) {
+                            this.stopped = None;
+                        }
                     }
                     Some("clock") => {
                         if let Some(at) = event.0["position"].as_f64() {
@@ -575,13 +855,21 @@ impl StageView {
             // A key that moves the playhead while the pointer skims (a frame
             // on, the start) ends the skim, from the playhead.
             cx.observe_keystrokes(|this, _, _, cx| this.follow_playhead(cx)),
-            cx.on_release(move |_, cx| forget_skim(id, cx)),
+            cx.on_release(move |_, cx| {
+                forget_skim(id, cx);
+                if cx.has_global::<Stages>() {
+                    cx.global_mut::<Stages>().0.remove(&id);
+                }
+            }),
         ];
         Self {
             session,
             focus_handle: cx.focus_handle(),
             area: Rc::new(Cell::new(None)),
             picture: Rc::new(Cell::new(None)),
+            canvas: Rc::new(Cell::new(None)),
+            zoom: 0.0,
+            zoom_menu: false,
             hue: None,
             last_hue: Hue::Kerf,
             edge: Tween::at(0.0),
@@ -591,8 +879,18 @@ impl StageView {
             skim: None,
             kept: None,
             chosen_clip: None,
-            chosen_mask: None,
             chosen_point: None,
+            tool: None,
+            pen: Vec::new(),
+            pointer: None,
+            said: None,
+            clock: None,
+            book: Rc::default(),
+            stopped: None,
+            check: None,
+            overlap_level: Tween::at(0.0),
+            overlap: None,
+            caption_fit: None,
             drag: None,
             held: None,
             cursor: None,
@@ -600,14 +898,29 @@ impl StageView {
         }
     }
 
-    /// What runs, and the light that says so.
+    /// What runs, and the light that says so: a making wins over a render,
+    /// which wins over Kerf.
     fn activity(&self, cx: &App) -> (Option<Hue>, Option<String>) {
-        let state = &self.session.read(cx).state;
+        let session = self.session.read(cx);
+        let state = &session.state;
+        if !state.makings.is_empty() {
+            let timeline = session.timeline();
+            let makings: Vec<(String, String, u64)> = state
+                .makings
+                .iter()
+                .map(|(media, making)| {
+                    let name = timeline
+                        .source(media)
+                        .map(|source| chip::stem(source.file_name()).to_owned())
+                        .filter(|name| !name.is_empty())
+                        .unwrap_or_else(|| media.clone());
+                    (name, making.line.clone(), making.since.elapsed().as_secs())
+                })
+                .collect();
+            return (Some(Hue::Computer), chip::makings(&makings));
+        }
         if let Some(rendering) = state.rendering() {
             return (Some(Hue::Computer), Some(rendering));
-        }
-        if let Some(making) = state.making_label() {
-            return (Some(Hue::Computer), Some(making));
         }
         if state.work.busy() {
             let words = if state.agent_clips.is_empty() {
@@ -618,6 +931,28 @@ impl StageView {
             return (Some(Hue::Kerf), Some(words.to_owned()));
         }
         (None, None)
+    }
+
+    /// The chip's clock goes on once a second while a making runs, even
+    /// when nothing else asks for frames.
+    fn tick_makings(&mut self, cx: &mut Context<Self>) {
+        if self.clock.is_some() || self.session.read(cx).state.makings.is_empty() {
+            return;
+        }
+        self.clock = Some(cx.spawn(async move |this, cx| loop {
+            cx.background_executor().timer(scene::CLOCK_FRAME).await;
+            let going = this.update(cx, |this, cx| {
+                let going = !this.session.read(cx).state.makings.is_empty();
+                if !going {
+                    this.clock = None;
+                }
+                cx.notify();
+                going
+            });
+            if !matches!(going, Ok(true)) {
+                break;
+            }
+        }));
     }
 
     /// The chosen clip's masks and motion path where the picture shows the
@@ -660,23 +995,340 @@ impl StageView {
         }
     }
 
+    /// The mask chosen on the chosen clip, as the picture and the inspector
+    /// share it.
+    fn chosen_mask(&self, cx: &App) -> Option<String> {
+        self.session.read(cx).chosen_mask.clone()
+    }
+
+    /// Chooses the mask `name` (or none) on the picture and in the inspector.
+    fn choose_mask(&mut self, name: Option<String>, cx: &mut Context<Self>) {
+        if self.session.read(cx).chosen_mask == name {
+            return;
+        }
+        self.session.update(cx, |session, cx| {
+            session.chosen_mask = name;
+            cx.notify();
+        });
+    }
+
+    /// Another clip chosen: what was chosen on the last one, and what was
+    /// being drawn on it, is let go. The tool stays out while there is a
+    /// clip to draw on.
+    fn follow_selection(&mut self, session: &Entity<Session>, cx: &mut Context<Self>) {
+        let first = session.read(cx).selection.first().cloned();
+        if first == self.chosen_clip {
+            return;
+        }
+        self.chosen_clip = first;
+        self.chosen_point = None;
+        self.end_drawing();
+        if self.chosen_clip.is_none() {
+            self.tool = None;
+        }
+        if session.read(cx).chosen_mask.is_some() {
+            // Read in this same frame by the inspector: no notice needed.
+            session.update(cx, |session, _| session.chosen_mask = None);
+        }
+    }
+
+    /// Whether there is a picture clip chosen that a mask tool can draw on.
+    fn can_draw(&self, cx: &App) -> bool {
+        self.overlays(self.session.read(cx)).is_some()
+    }
+
+    /// The picture as last placed, in the window's coordinates: where the
+    /// workspace's export flight leaves from (`Workspace::fly_export_home`).
+    pub fn picture_bounds(&self) -> Option<Bounds<Pixels>> {
+        self.picture.get()
+    }
+
+    /// The mask tool out, if one is.
+    pub fn mask_tool(&self) -> Option<MaskTool> {
+        self.tool
+    }
+
+    /// Takes out `tool`, or puts it down if it is out (⇧R ⇧E ⇧P, the
+    /// transport's tools). False, with a notice saying why, when no picture
+    /// clip is chosen to draw on.
+    pub fn toggle_tool(
+        &mut self,
+        tool: MaskTool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if self.tool == Some(tool) {
+            self.set_tool(None, window, cx);
+            return true;
+        }
+        if !self.can_draw(cx) {
+            self.session.update(cx, |session, cx| {
+                session
+                    .state
+                    .notify("Choose a picture clip to draw a mask on", false);
+                cx.notify();
+            });
+            return false;
+        }
+        self.set_tool(Some(tool), window, cx);
+        true
+    }
+
+    /// Takes out `tool` (None puts the one out down): what was being drawn
+    /// is let go, and the picture takes the keys and holds still.
+    pub fn set_tool(
+        &mut self,
+        tool: Option<MaskTool>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let tool = tool.filter(|_| self.can_draw(cx));
+        if tool == self.tool {
+            return;
+        }
+        self.end_drawing();
+        self.tool = tool;
+        if tool.is_some() {
+            ensure_keys(cx);
+            self.end_skim(cx);
+            window.focus(&self.focus_handle);
+        }
+        cx.notify();
+    }
+
+    /// Lets go of a rectangle or ellipse being dragged out and of the
+    /// pen's corners.
+    fn end_drawing(&mut self) {
+        if matches!(self.drag, Some(Drag::Draw { .. })) {
+            self.drag = None;
+        }
+        self.pen.clear();
+        self.pointer = None;
+    }
+
+    /// Whether a mask is being drawn: dragged out, or the pen's corners.
+    fn drawing(&self) -> bool {
+        !self.pen.is_empty() || matches!(self.drag, Some(Drag::Draw { .. }))
+    }
+
+    /// Whether a press at `at` (in the window) is on the pen's first corner
+    /// with enough corners to close the outline.
+    fn pen_closes(&self, shown: &Shown, picture: Bounds<Pixels>, at: Pt) -> bool {
+        self.pen.len() >= 3
+            && self.pen.first().is_some_and(|first| {
+                let (x, y) = shown.to_window(picture).apply(*first);
+                (x - at.0).abs() <= REACH && (y - at.1).abs() <= REACH
+            })
+    }
+
+    /// A press with a mask tool out: a corner of the pen (its first again
+    /// closes it), or the start of a rectangle or an ellipse.
+    fn press_tool(
+        &mut self,
+        tool: MaskTool,
+        shown: &Shown,
+        picture: Bounds<Pixels>,
+        at: Pt,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(back) = shown.to_window(picture).inverse() else {
+            return;
+        };
+        let on = back.apply(at);
+        match tool {
+            MaskTool::Pen => {
+                if self.pen_closes(shown, picture, at) {
+                    self.finish_pen(true, cx);
+                    return;
+                }
+                // A second press of a double-click is not another corner.
+                let again = self.pen.last().is_some_and(|last| {
+                    apart(shown.to_window(picture).apply(*last), at) < DRAG_START
+                });
+                if !again {
+                    self.pen.push(on);
+                }
+                self.pointer = Some(at);
+            }
+            MaskTool::Rectangle | MaskTool::Ellipse => {
+                self.drag = Some(Drag::Draw {
+                    clip: shown.clip.clone(),
+                    tool,
+                    from: on,
+                    to: on,
+                });
+            }
+        }
+        cx.notify();
+    }
+
+    /// The pen's corners become a mask: closed on its first corner (three
+    /// or more), or left open by Return (two or more). False when there are
+    /// too few.
+    fn finish_pen(&mut self, closed: bool, cx: &mut Context<Self>) -> bool {
+        if self.pen.len() < if closed { 3 } else { 2 } {
+            return false;
+        }
+        let Some(clip) = self.shown.as_ref().map(|shown| shown.clip.clone()) else {
+            return false;
+        };
+        let points = std::mem::take(&mut self.pen);
+        self.pointer = None;
+        self.add_mask(&clip, Outline::Points { points, closed }, cx);
+        true
+    }
+
+    /// Adds `outline` to `clip` as a new mask, named the first of `k1`,
+    /// `k2`, … the clip does not use. It shows, chosen, at once; the tool
+    /// is put down.
+    fn add_mask(&mut self, clip: &str, outline: Outline, cx: &mut Context<Self>) {
+        let mut taken = overlay::clip_in(&self.program, clip)
+            .map(|(data, _)| overlay::mask_names(data))
+            .unwrap_or_default();
+        if let Some((Drag::Added { clip: held, mask }, _, _)) = &self.held {
+            if held == clip {
+                taken.push(mask.name.clone());
+            }
+        }
+        let name = overlay::new_mask_name(&taken);
+        let op = overlay::mask_add(clip, &name, &outline);
+        self.tool = None;
+        self.chosen_point = None;
+        self.choose_mask(Some(name.clone()), cx);
+        let mask = overlay::Mask {
+            name,
+            mode: "add".to_owned(),
+            outline,
+        };
+        self.send_held(
+            Drag::Added {
+                clip: clip.to_owned(),
+                mask,
+            },
+            op,
+            cx,
+        );
+        cx.notify();
+    }
+
+    /// The viewer's zoom: 0 is Fit.
+    pub fn zoom(&self) -> f32 {
+        self.zoom
+    }
+
+    /// Draws the frame at `zoom` (0 fits it to the picture), and closes the
+    /// zoom's menu.
+    pub fn set_zoom(&mut self, zoom: f32, cx: &mut Context<Self>) {
+        self.zoom = zoom.max(0.0);
+        self.zoom_menu = false;
+        cx.notify();
+    }
+
+    /// Opens the zoom's menu (Fit, 50%, 100%, 200%) over the transport, or
+    /// closes it: View ▸ Viewer Zoom… (`viewer.zoom`, ⇧Z) calls it, and the
+    /// transport's zoom. Open, the picture takes Esc to close it.
+    pub fn toggle_zoom_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.zoom_menu = !self.zoom_menu;
+        if self.zoom_menu {
+            ensure_keys(cx);
+            window.focus(&self.focus_handle);
+        }
+        cx.notify();
+    }
+
+    /// The zoom's menu: each zoom, the one in use checked; Fit says its key.
+    fn zoom_menu(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let rows = ZOOMS.map(|zoom| {
+            let chosen = (zoom - self.zoom).abs() < f32::EPSILON;
+            crate::sidebar::menu_item(
+                ElementId::Name(format!("viewer-zoom-{}", zoom_words(zoom)).into()),
+                zoom_words(zoom),
+                chosen.then_some(Icon::Check),
+                false,
+                false,
+            )
+            .when(zoom <= 0.0, |row| {
+                row.child(div().flex_1()).child(ui::label(
+                    crate::commands::shown_keys("Shift+Z"),
+                    text::META,
+                    theme::ink3(),
+                ))
+            })
+            .on_click(cx.listener(move |this, _, _, cx| this.set_zoom(zoom, cx)))
+        });
+        div()
+            .absolute()
+            .bottom(px(layout::TRANSPORT - 4.0))
+            .left(px(0.0))
+            .child(
+                crate::sidebar::menu_panel()
+                    .id("viewer-zoom-menu")
+                    .w(px(168.0))
+                    .on_mouse_down_out(cx.listener(|this, event: &MouseDownEvent, _, cx| {
+                        // A press on the picture closes it there, and does
+                        // nothing else (it would play).
+                        if this
+                            .area
+                            .get()
+                            .is_some_and(|area| area.contains(&event.position))
+                        {
+                            return;
+                        }
+                        this.zoom_menu = false;
+                        cx.notify();
+                    }))
+                    .children(rows)
+                    .with_animation(
+                        "viewer-zoom-menu",
+                        motion::animation(scene::FADE),
+                        |menu, delta| menu.opacity(delta),
+                    ),
+            )
+    }
+
+    /// Esc: lets go of what is being drawn, else puts the tool down; with
+    /// neither, the window's Esc has it.
+    fn cancel_drawing(&mut self, _: &CancelDrawing, window: &mut Window, cx: &mut Context<Self>) {
+        if self.drawing() {
+            self.end_drawing();
+            cx.notify();
+        } else if self.tool.is_some() {
+            self.set_tool(None, window, cx);
+        } else {
+            cx.propagate();
+        }
+    }
+
+    /// Return: the pen's corners become an open outline, as Stroke draws along.
+    fn finish_pen_open(&mut self, _: &FinishPen, _window: &mut Window, cx: &mut Context<Self>) {
+        if !self.finish_pen(false, cx) {
+            cx.propagate();
+        }
+    }
+
     /// A press on the stage: the overlays' if they take it, else on the
     /// picture it plays or pauses; on the bars around it, nothing.
     fn press(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(picture) = self.picture.get() else {
+        let (Some(picture), Some(canvas)) = (self.picture.get(), self.canvas.get()) else {
             return;
         };
+        if self.zoom_menu {
+            // A press outside the zoom menu closes it, and does nothing else.
+            self.zoom_menu = false;
+            cx.notify();
+            return;
+        }
+        if let (Some(tool), Some(shown)) = (self.tool, self.shown.clone()) {
+            // A mask tool out has the picture's presses.
+            window.focus(&self.focus_handle);
+            self.press_tool(tool, &shown, canvas, to_pt(event.position), cx);
+            return;
+        }
         if let Some(shown) = self.shown.clone() {
-            if self.press_overlays(
-                &shown,
-                picture,
-                to_pt(event.position),
-                event.click_count,
-                cx,
-            ) {
+            if self.press_overlays(&shown, canvas, to_pt(event.position), event.click_count, cx) {
                 // What is chosen takes Delete.
-                if self.chosen_mask.is_some() || self.chosen_point.is_some() {
-                    bind_keys(cx);
+                if self.chosen_mask(cx).is_some() || self.chosen_point.is_some() {
+                    ensure_keys(cx);
                     window.focus(&self.focus_handle);
                 }
                 cx.notify();
@@ -707,13 +1359,14 @@ impl StageView {
         let clip = shown.clip.clone();
         if self.chosen_clip.as_ref() != Some(&clip) {
             self.chosen_clip = Some(clip.clone());
-            self.chosen_mask = None;
+            self.choose_mask(None, cx);
             self.chosen_point = None;
         }
+        let chosen = self.chosen_mask(cx);
         if let Some(points) = &shown.path {
             if let Some(index) = shown.point_at(picture, at) {
                 // One thing chosen at a time.
-                self.chosen_mask = None;
+                self.choose_mask(None, cx);
                 self.chosen_point = Some(index);
                 let (x, y) = shown.path_to_window(picture).apply(points[index]);
                 self.drag = Some(Drag::Point {
@@ -727,7 +1380,7 @@ impl StageView {
                 });
                 return true;
             }
-            let handle = shown.handle_at(picture, self.chosen_mask.as_deref(), at);
+            let handle = shown.handle_at(picture, chosen.as_deref(), at);
             if let Some(u) = handle
                 .is_none()
                 .then(|| shown.curve_at(picture, at))
@@ -753,12 +1406,12 @@ impl StageView {
         }
         // The masks take the picture's clicks: a handle of the chosen one,
         // else the mask under the pointer, else none chosen.
-        let handle = shown.handle_at(picture, self.chosen_mask.as_deref(), at);
+        let handle = shown.handle_at(picture, chosen.as_deref(), at);
         let name = match handle {
-            Some(_) => self.chosen_mask.clone(),
-            None => shown.mask_at(picture, self.chosen_mask.as_deref(), at),
+            Some(_) => chosen,
+            None => shown.mask_at(picture, chosen.as_deref(), at),
         };
-        self.chosen_mask = name.clone();
+        self.choose_mask(name.clone(), cx);
         self.chosen_point = None;
         let map = shown.to_window(picture);
         let found = name.and_then(|name| {
@@ -786,20 +1439,32 @@ impl StageView {
         if self.drag.is_some() || event.pressed_button.is_some() {
             return;
         }
-        let Some(picture) = self.picture.get() else {
+        let (Some(picture), Some(canvas)) = (self.picture.get(), self.canvas.get()) else {
             return;
         };
         let at = to_pt(event.position);
+        if self.tool.is_some() && self.shown.is_some() {
+            // A mask tool out: the picture holds still, and the pen's next
+            // side follows the pointer.
+            self.set_cursor(Some(CursorStyle::Crosshair), cx);
+            self.end_skim(cx);
+            if !self.pen.is_empty() {
+                self.pointer = Some(at);
+                cx.notify();
+            }
+            return;
+        }
         if let Some(shown) = self.shown.clone().filter(|shown| shown.edits()) {
             // The picture holds still while its masks or its path can be dragged.
-            let chosen = self.chosen_mask.as_deref();
-            let cursor = if shown.point_at(picture, at).is_some()
-                || shown.handle_at(picture, chosen, at).is_some()
+            let chosen = self.chosen_mask(cx);
+            let chosen = chosen.as_deref();
+            let cursor = if shown.point_at(canvas, at).is_some()
+                || shown.handle_at(canvas, chosen, at).is_some()
             {
                 Some(CursorStyle::PointingHand)
-            } else if shown.curve_at(picture, at).is_some() {
+            } else if shown.curve_at(canvas, at).is_some() {
                 Some(CursorStyle::Crosshair)
-            } else if shown.mask_at(picture, chosen, at).is_some() {
+            } else if shown.mask_at(canvas, chosen, at).is_some() {
                 Some(CursorStyle::OpenHand)
             } else {
                 None
@@ -928,7 +1593,7 @@ impl StageView {
             self.release(cx);
             return;
         }
-        let (Some(picture), Some(shown)) = (self.picture.get(), self.shown.clone()) else {
+        let (Some(picture), Some(shown)) = (self.canvas.get(), self.shown.clone()) else {
             return;
         };
         let at = to_pt(event.position);
@@ -974,7 +1639,12 @@ impl StageView {
                     };
                 }
             }
-            None => return,
+            Some(Drag::Draw { to, .. }) => {
+                if let Some(back) = shown.to_window(picture).inverse() {
+                    *to = back.apply(at);
+                }
+            }
+            Some(Drag::Added { .. }) | None => return,
         }
         cx.notify();
     }
@@ -985,6 +1655,23 @@ impl StageView {
             return;
         };
         cx.notify();
+        if let Drag::Draw {
+            clip,
+            tool,
+            from,
+            to,
+        } = &drag
+        {
+            // A click, not a drag, draws nothing; the tool stays out.
+            let (Some(picture), Some(shown)) = (self.canvas.get(), self.shown.clone()) else {
+                return;
+            };
+            let map = shown.to_window(picture);
+            if let Some(outline) = overlay::drawn(*tool == MaskTool::Ellipse, *from, *to, map) {
+                self.add_mask(clip, outline, cx);
+            }
+            return;
+        }
         let op = match &drag {
             Drag::Point {
                 clip,
@@ -1039,18 +1726,19 @@ impl StageView {
     /// shown, or a mask the clip has now. A mask chosen outlives a snapshot
     /// that lacks it (one read before a new mask was added does), but the
     /// key is the window's while it does.
-    fn takes_delete(&self) -> bool {
+    fn takes_delete(&self, cx: &App) -> bool {
         let Some(shown) = &self.shown else {
             return false;
         };
+        if self.drawing() {
+            return true;
+        }
         let point = self
             .chosen_point
             .is_some_and(|index| shown.path.as_ref().is_some_and(|path| index < path.len()));
-        let mask = self.chosen_mask.as_ref().is_some_and(|name| {
+        let mask = self.chosen_mask(cx).is_some_and(|name| {
             overlay::clip_in(&self.program, &shown.clip).is_some_and(|(clip, _)| {
-                overlay::masks_of(clip)
-                    .iter()
-                    .any(|mask| mask.name == *name)
+                overlay::masks_of(clip).iter().any(|mask| mask.name == name)
             })
         });
         point || mask
@@ -1096,7 +1784,17 @@ impl StageView {
     /// Delete or Backspace: the chosen path point goes (a path keeps its
     /// two), else the chosen mask.
     fn remove_chosen(&mut self, _: &RemoveChosen, _window: &mut Window, cx: &mut Context<Self>) {
-        if !self.takes_delete() {
+        if !self.takes_delete(cx) {
+            cx.propagate();
+            return;
+        }
+        // While drawing: the pen's last corner goes; a rectangle or an
+        // ellipse in hand keeps the key and nothing else.
+        if self.drawing() {
+            if self.pen.pop().is_some() && self.pen.is_empty() {
+                self.pointer = None;
+            }
+            cx.notify();
             return;
         }
         let Some(shown) = self.shown.clone() else {
@@ -1117,7 +1815,8 @@ impl StageView {
             cx.notify();
             return;
         }
-        if let Some(name) = self.chosen_mask.take() {
+        if let Some(name) = self.chosen_mask(cx) {
+            self.choose_mask(None, cx);
             let op = json!({"op": "mask-remove", "clip": shown.clip, "name": name});
             self.session.update(cx, |session, cx| {
                 session.edit(vec![op]);
@@ -1148,6 +1847,132 @@ impl StageView {
         })
     }
 
+    /// Where the caption at the playhead sits over `picture` (in the
+    /// stage's own points): centred, its foot on title safe. On a wide
+    /// picture it is one line cut at title safe; on a vertical one it wraps
+    /// within title safe, balanced: the narrowest width that keeps the
+    /// lines the widest needs.
+    fn caption_box(
+        &mut self,
+        window: &Window,
+        picture: Bounds<Pixels>,
+        vertical: bool,
+        words: SharedString,
+    ) -> Bounds<Pixels> {
+        let style = text::CAPTION;
+        let (w, h) = (
+            f32::from(picture.size.width),
+            f32::from(picture.size.height),
+        );
+        let (tx, ty) = ((w * TITLE_SAFE).round(), (h * TITLE_SAFE).round());
+        let runs = [TextRun {
+            len: words.len(),
+            font: theme::ui_font(style.weight),
+            color: over_picture::caption_ink().into(),
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        }];
+        let font_size = px(style.px);
+        let (across, lines) = if vertical {
+            let most = (w - 2.0 * tx - 16.0 - 2.0 * CAPTION_PAD.0).max(1.0);
+            let key = (words.clone(), most.round() as i32);
+            match &self.caption_fit {
+                Some((cached, at, across, lines)) if (cached, at) == (&key.0, &key.1) => {
+                    (*across, *lines)
+                }
+                _ => {
+                    let lines_at = |width: f32| {
+                        window
+                            .text_system()
+                            .shape_text(words.clone(), font_size, &runs, Some(px(width)), None)
+                            .map(|lines| {
+                                lines
+                                    .iter()
+                                    .map(|line| line.wrap_boundaries().len() + 1)
+                                    .sum::<usize>()
+                            })
+                            .unwrap_or(1)
+                            .max(1)
+                    };
+                    let lines = lines_at(most);
+                    let (mut low, mut high) = (1.0_f32, most);
+                    for _ in 0..24 {
+                        if high - low <= 0.5 {
+                            break;
+                        }
+                        let middle = (low + high) / 2.0;
+                        if lines_at(middle) <= lines {
+                            high = middle;
+                        } else {
+                            low = middle;
+                        }
+                    }
+                    let fit = (high.ceil().min(most), lines);
+                    self.caption_fit = Some((key.0, key.1, fit.0, fit.1));
+                    fit
+                }
+            }
+        } else {
+            let most = (w - 2.0 * tx - 2.0 * CAPTION_PAD.0).max(1.0);
+            let shaped = window
+                .text_system()
+                .shape_line(words, font_size, &runs, None);
+            (f32::from(shaped.width).ceil().min(most), 1)
+        };
+        let shown = size(
+            px(across + 2.0 * CAPTION_PAD.0),
+            px(lines as f32 * style.line + 2.0 * CAPTION_PAD.1),
+        );
+        Bounds::new(
+            point(
+                picture.origin.x + px(((w - f32::from(shown.width)) / 2.0).round()),
+                picture.origin.y + px(h - ty) - shown.height,
+            ),
+            shown,
+        )
+    }
+
+    /// What the preview render's card says while one runs, unless Stop was
+    /// pressed on it or Kerf is building a cut (the picture just keeps up):
+    /// its title, its line, and how far it has got.
+    fn preview_card(&self, cx: &App) -> Option<(String, String, f64)> {
+        let session = self.session.read(cx);
+        let state = &session.state;
+        let preview = &state.preview;
+        if !preview.rendering() {
+            return None;
+        }
+        let proposal_id = preview.proposal.clone().unwrap_or_default();
+        if self.stopped.as_deref() == Some(proposal_id.as_str()) {
+            return None;
+        }
+        if state.work.busy() && state.snapshot.proposal_timeline.is_some() {
+            return None;
+        }
+        let proposal = self.book.find(&state.snapshot.proposals, &proposal_id);
+        let version = proposal.map_or(0, |proposal| {
+            self.book
+                .versions_of(proposal)
+                .iter()
+                .find(|version| version.proposal_id == proposal_id)
+                .map_or(proposal.version, |version| version.version)
+        });
+        let timeline = session.timeline();
+        let changes = proposal
+            .and_then(|proposal| self.book.timeline_of(proposal, &proposal_id))
+            .map(|proposed| crate::chat::clip_changes(timeline, proposed))
+            .unwrap_or_default();
+        let summary = proposal.map(model::Proposal::summary).unwrap_or_default();
+        let detail = hud::detail(
+            &changes,
+            &summary,
+            preview.message.as_deref().unwrap_or_default(),
+            timeline.rate(),
+        );
+        Some((hud::title(version), detail, preview.progress.unwrap_or(0.0)))
+    }
+
     fn transport(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let session = self.session.read(cx);
         let fps = session.timeline().rate();
@@ -1156,6 +1981,7 @@ impl StageView {
         let playing = session.state.playing;
         let (mark_in, mark_out, looping) = session.marks();
         let marked = mark_in.is_some() || mark_out.is_some();
+        let drawable = self.overlays(session).is_some();
         let preview = session.state.preview.clone();
         let preview_control = match preview.status.as_str() {
             "required" => Some(
@@ -1167,24 +1993,7 @@ impl StageView {
                     }))
                     .into_any_element(),
             ),
-            "running" => Some(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(6.0))
-                    .child(ui::chip(
-                        format!("Rendering {:.0}%", preview.progress.unwrap_or(0.0) * 100.0),
-                        theme::activity::gpu(),
-                    ))
-                    .child(ui::button("stop-preview", "Stop").small().ghost().on_click(
-                        cx.listener(|this, _, _, cx| {
-                            this.session.update(cx, |session, _| {
-                                session.send(json!({"type": "preview_stop"}));
-                            })
-                        }),
-                    ))
-                    .into_any_element(),
-            ),
+            // While it renders, its card over the picture says so, with Stop.
             "ready" | "live" if preview.proposal.is_some() => Some(
                 div()
                     .flex()
@@ -1257,53 +2066,95 @@ impl StageView {
             )
             .child(
                 div().pl(px(8.0)).child(
-                    toggle_words(
-                        "loop-playback",
-                        if looping && marked {
+                    icon_button("loop-playback", Icon::Loop)
+                        .on(looping)
+                        .tooltip(if looping && marked {
                             "Loop in to out"
                         } else {
                             "Loop"
-                        },
-                        looping,
-                    )
-                    .tooltip(|_, cx| cx.new(|_| ui::Tooltip("Loop playback".into())).into())
-                    .on_click(cx.listener(|_, _, window, cx| {
-                        window.dispatch_action(
-                            Box::new(crate::commands::RunCommand::new("playback.loop")),
-                            cx,
-                        );
-                    })),
+                        })
+                        .on_click(cx.listener(|_, _, window, cx| {
+                            window.dispatch_action(
+                                Box::new(crate::commands::RunCommand::new("playback.loop")),
+                                cx,
+                            );
+                        })),
                 ),
             )
+            .child(
+                div()
+                    .relative()
+                    .pl(px(4.0))
+                    .child(
+                        theme::type_style(
+                            crate::sidebar::trigger("viewer-zoom", {
+                                let this = cx.entity().downgrade();
+                                move |_, window, cx| {
+                                    this.update(cx, |this, cx| this.toggle_zoom_menu(window, cx))
+                                        .ok();
+                                }
+                            }),
+                            text::CONTROL,
+                        )
+                        .flex()
+                        .items_center()
+                        .h(px(22.0))
+                        .px(px(7.0))
+                        .rounded(px(theme::radius::CONTROL))
+                        .cursor_pointer()
+                        .text_color(if self.zoom_menu || self.zoom > 0.0 {
+                            theme::ink()
+                        } else {
+                            theme::ink3()
+                        })
+                        .when(self.zoom_menu, |button| button.bg(theme::on()))
+                        .hover(|style| style.bg(theme::raised()).text_color(theme::ink()))
+                        .tooltip(|_, cx| cx.new(|_| ui::Tooltip("Viewer zoom".into())).into())
+                        .child(zoom_words(self.zoom)),
+                    )
+                    .when(self.zoom_menu, |anchor| anchor.child(self.zoom_menu(cx))),
+            )
+            .child(ui::hairline(false).h(px(16.0)).mx(px(6.0)))
+            .children(MaskTool::ALL.map(|tool| {
+                let words = format!(
+                    "{} ({})",
+                    tool.label(),
+                    crate::commands::shown_keys(tool.shortcut())
+                );
+                icon_button(tool.id(), tool.icon())
+                    .on(self.tool == Some(tool))
+                    .disabled(!drawable)
+                    .tooltip(if drawable {
+                        words
+                    } else {
+                        format!("{words} · Choose a picture clip to draw on")
+                    })
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.toggle_tool(tool, window, cx);
+                    }))
+            }))
+            .children(self.tool.map(|tool| {
+                ui::line(tool.hint(), text::CONTROL, theme::ink3())
+                    .pl(px(6.0))
+                    .min_w_0()
+                    .flex_shrink()
+            }))
             .child(div().flex_1())
             .children(preview_control)
     }
 }
 
-/// A small button of words, held down while what it switches is on.
-fn toggle_words(id: &'static str, words: &'static str, on: bool) -> gpui::Stateful<gpui::Div> {
-    theme::type_style(div(), text::CONTROL)
-        .id(id)
-        .flex()
-        .flex_none()
-        .items_center()
-        .justify_center()
-        .h(px(22.0))
-        .px(px(7.0))
-        .rounded(px(theme::radius::CONTROL))
-        .cursor_pointer()
-        .whitespace_nowrap()
-        .text_color(if on { theme::ink() } else { theme::ink3() })
-        .when(on, |button| button.bg(theme::on()))
-        .when(!on, |button| {
-            button.hover(|style| style.bg(theme::raised()).text_color(theme::ink()))
-        })
-        .child(words)
-}
-
 impl Render for StageView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        ensure_keys(cx);
+        let session = self.session.clone();
+        self.follow_selection(&session, cx);
         let (hue, chip) = self.activity(cx);
+        // The chip keeps what it said while it fades out.
+        if chip.is_some() {
+            self.said = chip.clone();
+        }
+        self.tick_makings(cx);
         if hue != self.hue {
             if let Some(hue) = hue {
                 self.last_hue = hue;
@@ -1334,25 +2185,14 @@ impl Render for StageView {
             .picture
             .as_ref()
             .map(|picture| (picture.image.clone(), picture.width, picture.height));
-        // The format of what the picture shows: a first cut proposed on an
-        // empty program brings its own.
-        let proposed = session
-            .state
-            .snapshot
-            .proposal_timeline
-            .as_ref()
-            .filter(|proposal| !timeline.has_clips() && proposal.width > 0 && proposal.height > 0);
-        let aspect = match (
-            proposed,
-            &picture,
-            timeline.width > 0 && timeline.height > 0,
-        ) {
-            (Some(proposal), _, _) => proposal.aspect(),
-            (None, _, true) => timeline.aspect(),
-            (None, Some((_, width, height)), false) if *height > 0 => {
-                *width as f32 / *height as f32
-            }
-            _ => 16.0 / 9.0,
+        let aspect = shown_aspect(session);
+        // The frame's own pixels, for the zoom: the sequence's, else the picture's.
+        let frame_size = if timeline.width > 0 && timeline.height > 0 {
+            (timeline.width, timeline.height)
+        } else {
+            picture
+                .as_ref()
+                .map_or((0, 0), |(_, width, height)| (*width, *height))
         };
         let safe_zones = session.prefs.safe_zones;
         let caption = session.state.caption.clone();
@@ -1365,18 +2205,41 @@ impl Render for StageView {
         } else {
             Some(session.project_name().into())
         };
-        // What was chosen on another clip is let go.
-        if shown.as_ref().map(|shown| &shown.clip) != self.chosen_clip.as_ref() {
-            self.chosen_clip = shown.as_ref().map(|shown| shown.clip.clone());
-            self.chosen_mask = None;
-            self.chosen_point = None;
-        }
+        let chosen_mask = session.chosen_mask.clone();
+        // A picture that cannot be seen cannot be drawn on: the tool goes
+        // down, and what was in hand is let go.
         if shown.is_none() {
             self.drag = None;
+            self.tool = None;
+            self.end_drawing();
         }
         self.shown = shown.clone();
-        if self.shown.as_ref().is_none_or(|shown| !shown.edits()) {
+        if self.tool.is_none() && self.shown.as_ref().is_none_or(|shown| !shown.edits()) {
             self.cursor = None;
+        }
+        let in_hand = Drawn {
+            outline: match &self.drag {
+                Some(Drag::Draw { tool, from, to, .. }) => {
+                    Some(overlay::dragged(*tool == MaskTool::Ellipse, *from, *to))
+                }
+                _ => None,
+            },
+            pen: self.pen.clone(),
+            pointer: self.pointer,
+        };
+        let mut context = KeyContext::default();
+        context.add(CONTEXT);
+        if self.takes_delete(cx) {
+            context.add(DELETES);
+        }
+        if self.tool.is_some() || self.drawing() {
+            context.add(DRAWS);
+        }
+        if self.pen.len() >= 2 {
+            context.add(PEN_OPEN);
+        }
+        if self.zoom_menu {
+            context.add(ZOOM_MENU);
         }
 
         // Overlays sit on the picture as it was placed last frame.
@@ -1391,15 +2254,17 @@ impl Render for StageView {
         let since = self.edge_since;
         let frame = picture.clone();
         let framed = frame.is_some();
-        let chosen_mask = self.chosen_mask.clone();
         let chosen_point = self.chosen_point;
         let dragging = match &self.drag {
             Some(Drag::Mask { handle: None, .. }) => Some(CursorStyle::ClosedHand),
-            Some(_) => Some(CursorStyle::PointingHand),
-            None => None,
+            Some(Drag::Draw { .. }) => Some(CursorStyle::Crosshair),
+            Some(Drag::Mask { .. } | Drag::Point { .. }) => Some(CursorStyle::PointingHand),
+            Some(Drag::Added { .. }) | None => None,
         };
         let this = cx.entity().downgrade();
 
+        let canvas_cell = self.canvas.clone();
+        let zoom = self.zoom;
         let stage = canvas(
             move |bounds, window, _| {
                 if area_cell.get() != Some(bounds) {
@@ -1408,14 +2273,16 @@ impl Render for StageView {
                 }
                 let placement = place(bounds, aspect);
                 picture_cell.set(Some(placement.picture));
-                placement
+                let drawn = zoomed(placement.picture, frame_size, zoom, window.scale_factor());
+                canvas_cell.set(Some(drawn));
+                (placement, drawn)
             },
-            move |bounds, placement: Placement, window, cx| {
+            move |bounds, (placement, drawn): (Placement, Bounds<Pixels>), window, cx| {
                 // The device: a bezel, a hairline round it.
                 window.paint_quad(quad(
                     placement.device,
                     Corners::all(placement.device_radius),
-                    gpui::rgb(0x0a0a0a),
+                    over_picture::bezel(),
                     px(1.0),
                     theme::line2(),
                     BorderStyle::Solid,
@@ -1429,14 +2296,31 @@ impl Render for StageView {
                     BorderStyle::Solid,
                 ));
                 if let Some((image, width, height)) = frame {
-                    // Whole, at its own shape.
-                    let _ = window.paint_image(
-                        contain(placement.picture, width, height),
-                        Corners::all(placement.picture_radius),
-                        image,
-                        0,
-                        false,
-                    );
+                    // Whole, at its own shape; zoomed, cut to the picture.
+                    if zoom > 0.0 {
+                        window.with_content_mask(
+                            Some(ContentMask {
+                                bounds: placement.picture,
+                            }),
+                            |window| {
+                                let _ = window.paint_image(
+                                    contain(drawn, width, height),
+                                    Corners::default(),
+                                    image,
+                                    0,
+                                    false,
+                                );
+                            },
+                        );
+                    } else {
+                        let _ = window.paint_image(
+                            contain(placement.picture, width, height),
+                            Corners::all(placement.picture_radius),
+                            image,
+                            0,
+                            false,
+                        );
+                    }
                 }
                 if placement.phone {
                     // The phone's island.
@@ -1451,7 +2335,7 @@ impl Render for StageView {
                     window.paint_quad(quad(
                         Bounds::new(origin, island),
                         Corners::all(island.height / 2.0),
-                        gpui::rgb(0x000000),
+                        over_picture::island(),
                         px(0.0),
                         theme::line(),
                         BorderStyle::Solid,
@@ -1463,7 +2347,7 @@ impl Render for StageView {
                         Some(ContentMask {
                             bounds: placement.picture,
                         }),
-                        |window| paint_safe_zones(window, placement.picture),
+                        |window| paint_safe_zones(window, drawn),
                     );
                 }
                 if let Some(shown) = &shown {
@@ -1471,11 +2355,12 @@ impl Render for StageView {
                         paint_overlays(
                             window,
                             cx,
-                            placement.picture,
+                            drawn,
                             shown,
                             chosen_mask.as_deref(),
                             chosen_point,
-                        )
+                        );
+                        paint_drawn(window, drawn, shown, &in_hand);
                     });
                 }
                 if edge > 0.001 {
@@ -1490,12 +2375,19 @@ impl Render for StageView {
         .absolute()
         .size_full();
 
+        let preview_card = self.preview_card(cx);
         let mut overlays = div().absolute().inset_0();
         if let Some(placed) = placed {
             let picture = placed.picture;
             let left = picture.origin.x;
             let top = picture.origin.y;
-            if let Some(chip) = chip.clone() {
+            let card_says =
+                preview_card.is_some() && self.session.read(cx).state.makings.is_empty();
+            if let Some(chip) = chip
+                .clone()
+                .or_else(|| self.said.clone())
+                .filter(|_| edge > 0.001 && !card_says)
+            {
                 let color = self.last_hue.color();
                 overlays = overlays.child(
                     div()
@@ -1532,23 +2424,221 @@ impl Render for StageView {
                         .child(ui::label(stand_in, text::BODY, theme::ink3())),
                 );
             }
-            if !caption.trim().is_empty() {
+            // The caption and the check's box are over the frame as drawn,
+            // and kept inside the picture as Qt kept them: zoomed in, the
+            // frame is bigger than the picture, and they go with its edges.
+            let card = picture;
+            let frame_at = zoomed(card, frame_size, self.zoom, window.scale_factor());
+            // In the picture's own points, as the layer kept to it places them.
+            let picture = Bounds::new(
+                point(
+                    frame_at.origin.x - card.origin.x,
+                    frame_at.origin.y - card.origin.y,
+                ),
+                frame_at.size,
+            );
+            let (left, top) = (picture.origin.x, picture.origin.y);
+            let mut on_frame = div()
+                .absolute()
+                .left(card.origin.x)
+                .top(card.origin.y)
+                .w(card.size.width)
+                .h(card.size.height)
+                .overflow_hidden();
+            let words: SharedString = caption
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+                .into();
+            let caption_box = (!words.is_empty())
+                .then(|| self.caption_box(window, picture, aspect < 1.0, words.clone()));
+            if let Some(shown) = caption_box {
+                on_frame = on_frame.child(
+                    div()
+                        .absolute()
+                        .left(shown.origin.x)
+                        .top(shown.origin.y)
+                        .w(shown.size.width)
+                        .h(shown.size.height)
+                        .px(px(CAPTION_PAD.0))
+                        .py(px(CAPTION_PAD.1))
+                        .bg(over_picture::caption_ground())
+                        .child(
+                            theme::type_style(div(), text::CAPTION)
+                                .w_full()
+                                .text_center()
+                                .text_color(over_picture::caption_ink())
+                                .when(aspect >= 1.0, |line| {
+                                    line.whitespace_nowrap().overflow_hidden().text_ellipsis()
+                                })
+                                .child(words),
+                        ),
+                );
+            }
+            // The last finished check's caption-overlap box at the playhead,
+            // fading in and out.
+            let (playhead, fps) = {
+                let session = self.session.read(cx);
+                (session.state.position, session.timeline().rate())
+            };
+            let found = self
+                .check
+                .as_ref()
+                .and_then(|check| overlay::overlap_at(check, playhead, fps))
+                .filter(|_| framed);
+            if found.is_some() != (self.overlap_level.target() > 0.5) {
+                self.overlap_level
+                    .go(if found.is_some() { 1.0 } else { 0.0 }, scene::FADE);
+            }
+            if found.is_some() {
+                self.overlap = found;
+            }
+            let level = self.overlap_level.sample(window);
+            if let Some(overlap) = self.overlap.clone().filter(|_| level > 0.001) {
+                let [x, y, w, h] = overlap.rect;
+                let (across, down) = (
+                    f64::from(f32::from(picture.size.width)),
+                    f64::from(f32::from(picture.size.height)),
+                );
+                let found_box = Bounds::new(
+                    point(left + px((x * across) as f32), top + px((y * down) as f32)),
+                    size(px((w * across) as f32), px((h * down) as f32)),
+                );
+                on_frame = on_frame.child(
+                    div()
+                        .absolute()
+                        .left(found_box.origin.x)
+                        .top(found_box.origin.y)
+                        .w(found_box.size.width)
+                        .h(found_box.size.height)
+                        .bg(over_picture::overlap())
+                        .border_1()
+                        .border_color(theme::neg())
+                        .opacity(level),
+                );
+                if let Some(shown) = caption_box {
+                    // The caption the note is about, outlined 2 points out.
+                    on_frame = on_frame.child(
+                        div()
+                            .absolute()
+                            .left(shown.origin.x - px(3.0))
+                            .top(shown.origin.y - px(3.0))
+                            .w(shown.size.width + px(6.0))
+                            .h(shown.size.height + px(6.0))
+                            .border_1()
+                            .border_color(theme::neg())
+                            .opacity(level),
+                    );
+                }
+                if !overlap.tag.is_empty() {
+                    // Over the caption's right end, 4 points up; without a
+                    // caption, over the box's.
+                    let anchor = caption_box.unwrap_or(found_box);
+                    on_frame = on_frame.child(
+                        div()
+                            .absolute()
+                            .right(card.size.width - (anchor.origin.x + anchor.size.width))
+                            .top(anchor.origin.y - px(4.0 + 16.0))
+                            .child(
+                                theme::type_style(div(), text::MONO_SMALL)
+                                    .h(px(16.0))
+                                    .px(px(4.0))
+                                    .flex()
+                                    .items_center()
+                                    .rounded(px(theme::radius::SMALL))
+                                    .bg(theme::chrome())
+                                    .text_color(theme::neg())
+                                    .child(overlap.tag),
+                            )
+                            .opacity(level),
+                    );
+                }
+            }
+            overlays = overlays.child(on_frame);
+            // The preview render's card, in title safe at the picture's top right.
+            if let Some((title, detail, progress)) = preview_card {
+                let (left, top) = (card.origin.x, card.origin.y);
+                let (w, h) = (f32::from(card.size.width), f32::from(card.size.height));
+                let (tx, ty) = ((w * TITLE_SAFE).round(), (h * TITLE_SAFE).round());
+                let across = HUD_SIZE.0.min(w - 2.0 * tx - 16.0).max(0.0);
                 overlays = overlays.child(
                     div()
                         .absolute()
-                        .left(left)
-                        .w(picture.size.width)
-                        .top(top + picture.size.height * 0.82)
+                        .left(left + px(w - tx - 8.0 - across))
+                        .top(top + px(ty + 8.0))
+                        .w(px(across))
+                        .h(px(HUD_SIZE.1))
                         .flex()
-                        .justify_center()
+                        .flex_col()
+                        .justify_between()
+                        .px(px(12.0))
+                        .py(px(8.0))
+                        .rounded(px(theme::radius::CARD))
+                        .bg(theme::with_alpha(theme::card(), 0.94))
+                        .border_1()
+                        .border_color(theme::line2())
+                        .shadow_lg()
+                        // Its presses are its own, not the picture's (which plays).
+                        .occlude()
                         .child(
-                            theme::type_style(div(), text::CAPTION)
-                                .px(px(8.0))
-                                .py(px(2.0))
-                                .rounded(px(theme::radius::SMALL))
-                                .bg(theme::with_alpha(gpui::rgb(0x000000), 0.72))
-                                .text_color(gpui::rgb(0xffffff))
-                                .child(caption),
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(8.0))
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_none()
+                                        .items_center()
+                                        .justify_center()
+                                        .size(px(16.0))
+                                        .rounded(px(theme::radius::SMALL))
+                                        .bg(theme::on())
+                                        .child(Icon::Sparkle.view(12.0, theme::ink())),
+                                )
+                                .child(
+                                    ui::line(title, text::CONTROL_STRONG, theme::ink())
+                                        .flex_1()
+                                        .min_w_0(),
+                                ),
+                        )
+                        .child(ui::line(detail, text::META, theme::ink3()).pl(px(24.0)))
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(8.0))
+                                .pl(px(24.0))
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .child(ui::progress(progress, theme::activity::gpu())),
+                                )
+                                .child(ui::label(
+                                    hud::percent(progress),
+                                    text::MONO_SMALL,
+                                    theme::ink2(),
+                                ))
+                                .child(
+                                    ui::button("stop-preview", "Stop").small().ghost().on_click(
+                                        cx.listener(|this, _, _, cx| {
+                                            let proposal = this
+                                                .session
+                                                .read(cx)
+                                                .state
+                                                .preview
+                                                .proposal
+                                                .clone()
+                                                .unwrap_or_default();
+                                            this.stopped = Some(proposal);
+                                            this.session.update(cx, |session, cx| {
+                                                session.send(json!({"type": "preview_stop"}));
+                                                cx.notify();
+                                            });
+                                            cx.notify();
+                                        }),
+                                    ),
+                                ),
                         ),
                 );
             }
@@ -1563,8 +2653,23 @@ impl Render for StageView {
                 div()
                     .id("stage-picture")
                     .track_focus(&self.focus_handle)
-                    .when(self.takes_delete(), |area| area.key_context(CONTEXT))
+                    .key_context(context)
                     .on_action(cx.listener(Self::remove_chosen))
+                    .on_action(cx.listener(Self::cancel_drawing))
+                    .on_action(cx.listener(Self::finish_pen_open))
+                    .on_action(cx.listener(|this, _: &CloseZoomMenu, _, cx| {
+                        this.zoom_menu = false;
+                        cx.notify();
+                    }))
+                    .on_action(cx.listener(|this, _: &RectangleMask, window, cx| {
+                        this.toggle_tool(MaskTool::Rectangle, window, cx);
+                    }))
+                    .on_action(cx.listener(|this, _: &EllipseMask, window, cx| {
+                        this.toggle_tool(MaskTool::Ellipse, window, cx);
+                    }))
+                    .on_action(cx.listener(|this, _: &PenMask, window, cx| {
+                        this.toggle_tool(MaskTool::Pen, window, cx);
+                    }))
                     .flex_1()
                     .min_h_0()
                     .relative()
@@ -1632,7 +2737,7 @@ fn paint_safe_zones(window: &mut Window, picture: Bounds<Pixels>) {
     let (tx, ty) = (x + w * TITLE_SAFE, y + h * TITLE_SAFE);
     let (right, bottom) = (x + w * (1.0 - TITLE_SAFE), y + h * (1.0 - TITLE_SAFE));
     let k = SAFE_TICK;
-    let tick = white(0.45);
+    let tick = over_picture::tick();
     for line in [
         rect(tx, ty, k, 1.0),
         rect(tx, ty + 1.0, 1.0, k - 1.0),
@@ -1703,11 +2808,45 @@ fn paint_overlays(
                 size(radius * 2.0, radius * 2.0),
             ),
             Corners::all(radius),
-            white(1.0),
+            over_picture::line(),
             px(1.0),
             theme::accent(),
             BorderStyle::Solid,
         ));
+    }
+}
+
+/// What a mask tool has drawn so far: a rectangle or an ellipse dragged
+/// out, or the pen's corners with a dashed side to the pointer, its first
+/// corner white when a click there would close the outline.
+fn paint_drawn(window: &mut Window, picture: Bounds<Pixels>, shown: &Shown, drawn: &Drawn) {
+    let map = shown.to_window(picture);
+    if let Some(outline) = &drawn.outline {
+        let (line, closed) = outline.line();
+        let line: Vec<Point<Pixels>> = line.into_iter().map(|at| to_point(map.apply(at))).collect();
+        stroke_over(window, &line, closed, true, false);
+    }
+    let corners: Vec<Pt> = drawn.pen.iter().map(|at| map.apply(*at)).collect();
+    let Some((&first, &last)) = corners.first().zip(corners.last()) else {
+        return;
+    };
+    let line: Vec<Point<Pixels>> = corners.iter().map(|at| to_point(*at)).collect();
+    stroke_over(window, &line, false, true, false);
+    if let Some(pointer) = drawn.pointer {
+        stroke_over(
+            window,
+            &[to_point(last), to_point(pointer)],
+            false,
+            false,
+            true,
+        );
+    }
+    let closes = corners.len() >= 3
+        && drawn.pointer.is_some_and(|pointer| {
+            (first.0 - pointer.0).abs() <= REACH && (first.1 - pointer.1).abs() <= REACH
+        });
+    for (index, corner) in corners.iter().enumerate() {
+        paint_handle(window, to_point(*corner), index == 0 && closes);
     }
 }
 
@@ -1745,10 +2884,15 @@ fn stroke_over(
         builder.build().ok()
     };
     if let Some(path) = build(3.0, false) {
-        window.paint_path(path, black(0.55));
+        window.paint_path(path, over_picture::rule());
     }
     if let Some(path) = build(1.5, dashed) {
-        window.paint_path(path, white(if chosen { 1.0 } else { 0.7 }));
+        let ink = if chosen {
+            over_picture::line()
+        } else {
+            over_picture::line_idle()
+        };
+        window.paint_path(path, ink);
     }
 }
 
@@ -1766,7 +2910,7 @@ fn paint_tag(
     let run = TextRun {
         len: words.len(),
         font: theme::ui_font(FontWeight::SEMIBOLD),
-        color: white(1.0).into(),
+        color: over_picture::tag_ink().into(),
         background_color: None,
         underline: None,
         strikethrough: None,
@@ -1789,7 +2933,11 @@ fn paint_tag(
     window.paint_quad(quad(
         tag,
         Corners::all(px(4.0)),
-        if chosen { theme::accent() } else { black(0.6) },
+        if chosen {
+            theme::accent()
+        } else {
+            over_picture::tag()
+        },
         px(0.0),
         gpui::transparent_black(),
         BorderStyle::Solid,
@@ -1802,9 +2950,9 @@ fn paint_tag(
 fn paint_handle(window: &mut Window, center: Point<Pixels>, inverted: bool) {
     let half = px(HANDLE / 2.0);
     let (fill, edge) = if inverted {
-        (white(1.0), theme::accent())
+        (over_picture::line(), theme::accent())
     } else {
-        (theme::accent(), white(1.0))
+        (theme::accent(), over_picture::line())
     };
     window.paint_quad(quad(
         Bounds::new(
@@ -1839,15 +2987,23 @@ fn paint_edge_light(
             placement.picture.size.height + out * 2.0,
         ),
     );
+    // Quiet under the light; whole and steady under Reduce Motion, where
+    // no light runs to say that something works.
+    let still = motion::reduced();
+    let rest = if still {
+        scene::EDGE_STILL
+    } else {
+        scene::EDGE_REST
+    };
     window.paint_quad(quad(
         ring,
         Corners::all(placement.picture_radius + out),
         theme::with_alpha(color, 0.0),
         px(scene::EDGE_WIDTH),
-        theme::with_alpha(color, scene::EDGE_REST * opacity),
+        theme::with_alpha(color, rest * opacity),
         BorderStyle::Solid,
     ));
-    if motion::reduced() {
+    if still {
         return;
     }
     let head = motion::phase(since, scene::EDGE_TURN);
@@ -1869,6 +3025,162 @@ fn paint_edge_light(
         if let Ok(path) = path.build() {
             window.paint_path(path, theme::with_alpha(color, opacity * strength));
         }
+    }
+}
+
+/// What the chip over the picture says of what is being made: pure, so
+/// that it can be held to what Qt's said.
+pub mod chip {
+    /// How a making's line says it stands (`asked`, `waiting … 2 ahead`,
+    /// `running 12s`, `rendering 40%`, `made 31s`).
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum Phase {
+        Asked,
+        /// Its turn on the server not yet come, with how many are ahead.
+        Waiting {
+            ahead: Option<u32>,
+        },
+        Running,
+        Rendering,
+        Made,
+        Other,
+    }
+
+    impl Phase {
+        /// Waiting its turn: queued, not yet making.
+        pub fn queued(self) -> bool {
+            matches!(self, Phase::Asked | Phase::Waiting { .. })
+        }
+    }
+
+    /// The first word of `line`, taken whole. The line is whatever the
+    /// making's program printed, in any script: it is cut only where a
+    /// character ends.
+    fn starts_with_word(line: &str, word: &str) -> bool {
+        let (Some(head), Some(rest)) = (line.get(..word.len()), line.get(word.len()..)) else {
+            return false;
+        };
+        head.eq_ignore_ascii_case(word)
+            && !rest
+                .chars()
+                .next()
+                .is_some_and(|next| next.is_alphanumeric() || next == '_')
+    }
+
+    /// How the making's `line` says it stands.
+    pub fn phase(line: &str) -> Phase {
+        let said = line.trim();
+        if starts_with_word(said, "asked") {
+            return Phase::Asked;
+        }
+        if starts_with_word(said, "waiting") {
+            // The number just before "ahead".
+            let words: Vec<&str> = said.split_whitespace().collect();
+            let bare = |word: &str| word.trim_matches(|c: char| !c.is_alphanumeric()).to_owned();
+            let ahead = words
+                .windows(2)
+                .find(|pair| bare(pair[1]).eq_ignore_ascii_case("ahead"))
+                .and_then(|pair| bare(pair[0]).parse().ok());
+            return Phase::Waiting { ahead };
+        }
+        for (word, phase) in [
+            ("running", Phase::Running),
+            ("rendering", Phase::Rendering),
+            ("made", Phase::Made),
+        ] {
+            if starts_with_word(said, word) {
+                return phase;
+            }
+        }
+        Phase::Other
+    }
+
+    /// Seconds as a clock: `1:05`, or `1:02:05` past the hour.
+    pub fn elapsed(seconds: u64) -> String {
+        let (hours, minutes, rest) = (seconds / 3600, (seconds / 60) % 60, seconds % 60);
+        if hours > 0 {
+            format!("{hours}:{minutes:02}:{rest:02}")
+        } else {
+            format!("{minutes}:{rest:02}")
+        }
+    }
+
+    /// A file's name without its extension.
+    pub fn stem(file: &str) -> &str {
+        match file.rfind('.') {
+            Some(at) if at > 0 => &file[..at],
+            _ => file,
+        }
+    }
+
+    /// The chip for the makings, each its media's name, its line and the
+    /// seconds since it began, in the window's order: the one making ahead
+    /// of those waiting their turn, "queued, N ahead" while it waits, its
+    /// clock while it makes, and " +N" for the others. None with none.
+    pub fn makings(makings: &[(String, String, u64)]) -> Option<String> {
+        let shown = makings
+            .iter()
+            .find(|(_, line, _)| !phase(line).queued())
+            .or_else(|| makings.first())?;
+        let (name, line, seconds) = shown;
+        let mut chip = format!("Making {name} · ");
+        match phase(line) {
+            Phase::Waiting { ahead: Some(ahead) } if ahead > 0 => {
+                chip.push_str(&format!("queued, {ahead} ahead"))
+            }
+            other if other.queued() => chip.push_str("queued"),
+            _ => chip.push_str(&elapsed(*seconds)),
+        }
+        if makings.len() > 1 {
+            chip.push_str(&format!(" +{}", makings.len() - 1));
+        }
+        Some(chip)
+    }
+}
+
+/// What the preview render's card over the picture says: pure, so that it
+/// can be held to what Qt's said.
+pub mod hud {
+    use crate::chat::ClipChange;
+    use crate::model;
+
+    /// Its title: "Rendering preview · v2", with the version when known.
+    pub fn title(version: u32) -> String {
+        if version > 0 {
+            format!("Rendering preview · v{version}")
+        } else {
+            "Rendering preview".to_owned()
+        }
+    }
+
+    /// Its second line: the proposal's first change ("Logo → 00:00:26:12 ·
+    /// 2 changes", "Logo removed · 1 change"), else the first line of what
+    /// it does, else what the render's event said.
+    pub fn detail(changes: &[ClipChange], summary: &str, message: &str, fps: f64) -> String {
+        if let Some(first) = changes.first() {
+            let name = if first.name.is_empty() {
+                &first.clip
+            } else {
+                &first.name
+            };
+            let count = match changes.len() {
+                1 => " · 1 change".to_owned(),
+                n => format!(" · {n} changes"),
+            };
+            if first.removed {
+                return format!("{name} removed{count}");
+            }
+            return format!("{name} → {}{count}", model::timecode(first.new_start, fps));
+        }
+        if let Some(line) = summary.lines().map(str::trim).find(|line| !line.is_empty()) {
+            return line.to_owned();
+        }
+        message.split_whitespace().collect::<Vec<_>>().join(" ")
+    }
+
+    /// How far it has got, as a whole percent.
+    pub fn percent(progress: f64) -> String {
+        format!("{}%", (progress.clamp(0.0, 1.0) * 100.0).round() as i64)
     }
 }
 
@@ -2486,6 +3798,134 @@ pub mod overlay {
         op.insert("clip".into(), json!(clip));
         op.insert("name".into(), json!(name));
         Value::Object(op)
+    }
+
+    /// The names of a clip's masks, whatever their outlines.
+    pub fn mask_names(clip: &Value) -> Vec<String> {
+        clip["masks"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|mask| mask["name"].as_str().map(str::to_owned))
+            .collect()
+    }
+
+    /// The name a new mask takes: the first of `k1`, `k2`, … not `taken`.
+    pub fn new_mask_name(taken: &[String]) -> String {
+        (1..)
+            .map(|n| format!("k{n}"))
+            .find(|name| !taken.contains(name))
+            .unwrap_or_default()
+    }
+
+    /// The edit that adds the mask `name` with the outline `outline` to
+    /// `clip`, after its others.
+    pub fn mask_add(clip: &str, name: &str, outline: &Outline) -> Value {
+        let mut op = outline.fields();
+        op.insert("op".into(), json!("mask-add"));
+        op.insert("clip".into(), json!(clip));
+        op.insert("name".into(), json!(name));
+        Value::Object(op)
+    }
+
+    /// A rectangle, or the ellipse inside it, dragged out from `from` to
+    /// `to` (fractions of the clip's picture), corner to corner.
+    pub fn dragged(ellipse: bool, from: Pt, to: Pt) -> Outline {
+        let (left, right) = (from.0.min(to.0), from.0.max(to.0));
+        let (top, bottom) = (from.1.min(to.1), from.1.max(to.1));
+        if ellipse {
+            Outline::Ellipse([
+                (left + right) / 2.0,
+                (top + bottom) / 2.0,
+                (right - left) / 2.0,
+                (bottom - top) / 2.0,
+            ])
+        } else {
+            Outline::Rect([left, top, right, bottom])
+        }
+    }
+
+    /// Points a drag must go, across or down on the picture, to draw a
+    /// rectangle or an ellipse rather than be a click.
+    pub const DRAW_LEAST: f64 = 4.0;
+
+    /// The mask a rectangle or ellipse tool draws when its drag from `from`
+    /// to `to` is let go, `map` taking the clip's picture to the window.
+    /// None for a click (under [`DRAW_LEAST`] points both across and down),
+    /// and for an outline too thin to hold an area as the document keeps it.
+    pub fn drawn(ellipse: bool, from: Pt, to: Pt, map: Affine) -> Option<Outline> {
+        let (a, b) = (map.apply(from), map.apply(to));
+        if (a.0 - b.0).abs() < DRAW_LEAST && (a.1 - b.1).abs() < DRAW_LEAST {
+            return None;
+        }
+        let outline = dragged(ellipse, from, to);
+        let holds = match &outline {
+            Outline::Rect([l, t, r, b]) => {
+                fraction(*r) > fraction(*l) && fraction(*b) > fraction(*t)
+            }
+            Outline::Ellipse([_, _, rx, ry]) => fraction(*rx) > 0.0 && fraction(*ry) > 0.0,
+            Outline::Points { .. } => true,
+        };
+        holds.then_some(outline)
+    }
+
+    /// The caption-overlap box a finished check puts over the picture: where
+    /// (fractions of the frame: left, top, width, height) and what it measured.
+    #[derive(Clone, Debug, PartialEq)]
+    pub struct Overlap {
+        pub rect: [f64; 4],
+        /// "8 px"; empty when the finding measured nothing.
+        pub tag: String,
+    }
+
+    /// A number as a person reads it: four figures at most, no trailing zeros.
+    fn figures(value: f64) -> String {
+        if value.fract() == 0.0 && value.abs() < 1e9 {
+            return format!("{value:.0}");
+        }
+        let digits = (4 - 1 - value.abs().log10().floor() as i32).clamp(0, 6) as usize;
+        let text = format!("{value:.digits$}");
+        let text = text.trim_end_matches('0').trim_end_matches('.');
+        text.to_owned()
+    }
+
+    /// The `text.overlap` finding of `check` (a `check` event, done) whose
+    /// frames the playhead at `playhead` is on, give or take half a frame
+    /// at `fps`: the first such with an area.
+    pub fn overlap_at(check: &Value, playhead: f64, fps: f64) -> Option<Overlap> {
+        let slack = 0.5 / fps.max(1.0);
+        check["findings"].as_array()?.iter().find_map(|finding| {
+            if finding["code"] != "text.overlap" {
+                return None;
+            }
+            let rect = &finding["rect"];
+            let (x, y) = (rect["x"].as_f64()?, rect["y"].as_f64()?);
+            let (w, h) = (rect["w"].as_f64()?, rect["h"].as_f64()?);
+            if w <= 0.0 || h <= 0.0 {
+                return None;
+            }
+            if let Some(at) = finding["at"].as_f64() {
+                let end = at + finding["duration"].as_f64().unwrap_or(0.0).max(0.0);
+                if playhead < at - slack || playhead > end + slack {
+                    return None;
+                }
+            }
+            let tag = match &finding["value"] {
+                Value::Number(number) => {
+                    let number = figures(number.as_f64().unwrap_or(0.0));
+                    match finding["unit"].as_str().filter(|unit| !unit.is_empty()) {
+                        Some(unit) => format!("{number} {unit}"),
+                        None => number,
+                    }
+                }
+                Value::String(text) => text.clone(),
+                _ => String::new(),
+            };
+            Some(Overlap {
+                rect: [x, y, w, h],
+                tag,
+            })
+        })
     }
 
     /// The distance from `at` to the line through `points`.

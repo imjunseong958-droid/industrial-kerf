@@ -11,11 +11,12 @@ use crate::launcher::{LauncherEvent, LauncherView};
 use crate::motion;
 use crate::prefs::Prefs;
 use crate::session::{BridgeEvent, Session};
+use crate::store::Change;
 use crate::theme::{self, radius, text};
 use crate::ui;
 use crate::workspace::Workspace;
 use gpui::{
-    actions, div, prelude::*, px, size, AnimationExt, App, AppContext, Bounds, Context,
+    actions, div, prelude::*, px, size, AnimationExt, App, AppContext, Bounds, Context, Entity,
     EventEmitter, FocusHandle, Focusable, FontWeight, Global, KeyBinding, PromptButton,
     PromptHandle, PromptLevel, PromptResponse, RenderablePromptHandle, TitlebarOptions, WeakEntity,
     Window, WindowBounds, WindowHandle, WindowOptions,
@@ -24,7 +25,10 @@ use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-fn options(title: &str, cx: &mut App) -> WindowOptions {
+/// The options every editor window opens with (a project's, the
+/// launcher's, New Project's launcher): the screen edge to edge, titled
+/// `title`.
+pub fn options(title: &str, cx: &mut App) -> WindowOptions {
     let bounds = Bounds::centered(None, size(px(1600.0), px(1000.0)), cx);
     WindowOptions {
         // The editor fills the screen edge to edge.
@@ -97,9 +101,29 @@ fn raise(open: &OpenProject, link: Option<crate::links::Link>, cx: &mut App) {
 }
 
 /// Opens `project` in a window, or the launcher with none. A project open
-/// already has its window raised.
+/// already has its window raised. With no `kerfd`, the one the editor was
+/// started with ([`set_kerfd`]) is kept.
 pub fn open(project: Option<PathBuf>, kerfd: Option<PathBuf>, cx: &mut App) {
     open_at(project, kerfd, None, cx);
+}
+
+/// The kerfd the editor was started with (its argument, or `KERFD_BIN`).
+struct StartedKerfd(PathBuf);
+
+impl Global for StartedKerfd {}
+
+/// Keeps the kerfd the editor was started with, so every window opened
+/// later (a project from the launcher, New and Open Project, a link) uses
+/// it too. `main` calls it once, before the first window.
+pub fn set_kerfd(kerfd: Option<PathBuf>, cx: &mut App) {
+    if let Some(kerfd) = kerfd.filter(|kerfd| !kerfd.as_os_str().is_empty()) {
+        cx.set_global(StartedKerfd(kerfd));
+    }
+}
+
+/// The kerfd the editor was started with, if one was given.
+pub fn started_kerfd(cx: &App) -> Option<PathBuf> {
+    cx.try_global::<StartedKerfd>().map(|kerfd| kerfd.0.clone())
 }
 
 /// Follows a kerf:// link: the recent project it names, at its moment, in
@@ -139,7 +163,7 @@ fn explain_link(link: &str, message: &str, cx: &mut App) {
             .ok()
     });
     if asked.is_none() {
-        open_launcher(Some(format!("{link}: {message}")), cx);
+        open_launcher(Some(format!("{link}: {message}")), started_kerfd(cx), cx);
     }
 }
 
@@ -149,14 +173,16 @@ fn open_at(
     link: Option<crate::links::Link>,
     cx: &mut App,
 ) {
+    let kerfd = kerfd.or_else(|| started_kerfd(cx));
     let Some(project) = project else {
-        open_launcher(None, cx);
+        open_launcher(None, kerfd, cx);
         return;
     };
     if let Some(open) = find_open(&project, cx) {
         raise(&open, link, cx);
         return;
     }
+    let warnings = take_warnings(&project, cx);
     let mut prefs = Prefs::load();
     prefs.opened(&project);
     prefs.save();
@@ -178,6 +204,7 @@ fn open_at(
         if let Some(link) = link {
             session.update(cx, |session, _| session.follow(link));
         }
+        say_when_up(&session, warnings, cx);
         made = Some(session.downgrade());
         cx.new(|cx| Workspace::new(session, window, cx))
     });
@@ -193,12 +220,14 @@ fn open_at(
 }
 
 /// Opens the launcher, saying `problem` when there is one (a link that
-/// could not be followed).
-fn open_launcher(problem: Option<String>, cx: &mut App) {
+/// could not be followed). `kerfd` is the one the editor was started with:
+/// a project made from a preset imports its media with it, and the window
+/// the launcher opens keeps it.
+fn open_launcher(problem: Option<String>, kerfd: Option<PathBuf>, cx: &mut App) {
     let prefs = Prefs::load();
     let options = options("Industrial Kerf", cx);
     let window = cx.open_window(options, |window, cx| {
-        let launcher = cx.new(|cx| LauncherView::new(prefs, window, cx));
+        let launcher = cx.new(|cx| LauncherView::new(prefs, window, cx).with_kerfd(kerfd.clone()));
         if let Some(problem) = problem {
             launcher.update(cx, |launcher, cx| launcher.say(problem, cx));
         }
@@ -206,7 +235,7 @@ fn open_launcher(problem: Option<String>, cx: &mut App) {
         cx.subscribe(&launcher, move |_, event: &LauncherEvent, cx| match event {
             LauncherEvent::Open { project, starts } => {
                 // A folder that was no project yet brings its media in.
-                crate::workspace::open_folder(project.clone(), *starts, cx);
+                crate::workspace::open_folder_with(project.clone(), *starts, kerfd.clone(), cx);
                 let _ = handle.update(cx, |_, window, _| window.remove_window());
             }
         })
@@ -216,6 +245,85 @@ fn open_launcher(problem: Option<String>, cx: &mut App) {
     if let Err(error) = window {
         log::error!("could not open the launcher: {error}");
     }
+}
+
+/// What making or cloning a project warned of, until its window is open.
+#[derive(Default)]
+struct Warnings(Vec<(PathBuf, Vec<String>)>);
+
+impl Global for Warnings {}
+
+/// Says `warnings` (from making or cloning `project`: Git LFS missing, a
+/// push that failed) at the foot of its window once kerfd has it open, so
+/// they are there to be read. The launcher calls it as it opens the
+/// project; the window opened for it, now or next, takes them.
+pub fn warn_when_open(project: &Path, warnings: Vec<String>, cx: &mut App) {
+    if warnings.is_empty() {
+        return;
+    }
+    match find_open(project, cx).and_then(|open| open.session.upgrade()) {
+        Some(session) => say_when_up(&session, warnings, cx),
+        None => cx
+            .default_global::<Warnings>()
+            .0
+            .push((project.to_path_buf(), warnings)),
+    }
+}
+
+/// The warnings kept for `project`, taken.
+fn take_warnings(project: &Path, cx: &mut App) -> Vec<String> {
+    let Some(kept) = cx.try_global::<Warnings>() else {
+        return Vec::new();
+    };
+    if kept.0.is_empty() {
+        return Vec::new();
+    }
+    let kept = &mut cx.default_global::<Warnings>().0;
+    let mut taken = Vec::new();
+    kept.retain(|(folder, warnings)| {
+        if same_folder(folder, project) {
+            taken.extend(warnings.iter().cloned());
+            false
+        } else {
+            true
+        }
+    });
+    taken
+}
+
+/// Says `warnings` in `session`'s window once its project is up (its
+/// first snapshot), or kerfd could not be reached
+/// ([`EditorState::opened_or_failed`](crate::store::EditorState::opened_or_failed)):
+/// at once when it is already, else at the first change after which it is.
+/// Not while it only connects: a notice goes after a while, and a large
+/// project can take longer than that to open.
+fn say_when_up(session: &Entity<Session>, warnings: Vec<String>, cx: &mut App) {
+    if warnings.is_empty() {
+        return;
+    }
+    fn say(session: &Entity<Session>, warnings: &[String], cx: &mut App) {
+        session.update(cx, |session, cx| {
+            for warning in warnings {
+                session.state.notify(warning, true);
+            }
+            cx.emit(Change::Notice);
+            cx.notify();
+        });
+    }
+    if session.read(cx).state.opened_or_failed() {
+        say(session, &warnings, cx);
+        return;
+    }
+    let mut warnings = Some(warnings);
+    cx.subscribe(session, move |session, _: &Change, cx| {
+        if warnings.is_none() || !session.read(cx).state.opened_or_failed() {
+            return;
+        }
+        if let Some(warnings) = warnings.take() {
+            say(&session, &warnings, cx);
+        }
+    })
+    .detach();
 }
 
 // ---------------------------------------------------------------- Kerf's account

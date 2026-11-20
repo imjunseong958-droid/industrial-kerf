@@ -10,22 +10,36 @@
 //! are, one after another, as they unfold. A title is renamed where it is
 //! (Rename… in its menu, or F2), and deleting one asks first, over the
 //! window.
+//!
+//! The open folder's name opens the folders and the ways to another; each
+//! other folder has its own menu (Remove from Sidebar). The account at the
+//! foot says who chat runs on, and its menu has Sign Out while signed in to
+//! Kerf. The edge, pressed once, puts the sidebar away after a double-click's
+//! wait; pressed twice, its width goes back. Tab reaches the rows and
+//! buttons from the window, with a ring; Enter or Space presses them,
+//! Shift+F10 or the Menu key opens a row's menu, the arrows move in menus.
 
-use crate::commands::RunCommand;
+use crate::commands::{OpenRecent, RunCommand};
 use crate::icons::Icon;
 use crate::input::{InputEvent, TextInput};
 use crate::model::{Conversation, ConversationSummary, Proposal, Speaker};
 use crate::motion;
-use crate::session::Session;
+use crate::prefs::Provider;
+use crate::session::{BridgeEvent, Session};
 use crate::store::Change;
 use crate::theme::{self, layout, motion as scene, text};
 use crate::ui::{self, icon_button};
 use gpui::{
-    deferred, div, linear_color_stop, linear_gradient, prelude::*, px, AnimationExt, App, Context,
-    Div, ElementId, Entity, EventEmitter, Focusable, KeyDownEvent, MouseButton, MouseDownEvent,
-    SharedString, Stateful, Subscription, Window,
+    canvas, deferred, div, linear_color_stop, linear_gradient, prelude::*, px, AnimationExt,
+    AnyElement, App, Bounds, ClickEvent, ClipboardItem, Context, DispatchPhase, Div, ElementId,
+    Entity, EventEmitter, FocusHandle, Focusable, KeyBinding, KeyUpEvent, Keystroke, MouseButton,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, NoAction, Pixels, Point, SharedString, Stateful,
+    Subscription, Task, Window,
 };
+use serde_json::Value;
+use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
@@ -333,19 +347,307 @@ pub fn menu_separator() -> Div {
     div().my(px(4.0)).mx(px(6.0)).h(px(1.0)).bg(theme::line())
 }
 
-/// The app's menu, as the account at the sidebar's foot (or the toolbar's
-/// ⋯ while the sidebar is away) opens it: whose account it is, then
-/// Settings, the account, the help, and Quit. Each runs its command;
-/// `close` puts the menu away first.
-pub fn app_menu(header: SharedString, close: Rc<dyn Fn(&mut Window, &mut App)>) -> Div {
-    let items: [(&'static str, &'static str, Option<Icon>); 6] = [
-        ("app.preferences", "Settings…", Some(Icon::Gear)),
-        ("app.account", "Account…", Some(Icon::Lock)),
-        ("help.guide", "User Guide", None),
-        ("help.crashReports", "Crash Reports", Some(Icon::Folder)),
-        ("help.about", "About", None),
-        ("app.quit", "Quit", None),
+/// What an item of one of the sidebar's menus does.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Entry {
+    /// A conversation's title becomes a field.
+    Rename(String),
+    /// A conversation archived (true) or brought back.
+    Archive(String, bool),
+    /// A conversation deleted, once the person has said so.
+    Delete(String),
+    /// The registry's command by its id.
+    Command(&'static str),
+    /// Out of the Kerf account.
+    SignOut,
+    /// The project in a folder, in place of this window's.
+    Open(PathBuf),
+    /// A folder in the system's file manager.
+    Reveal(PathBuf),
+    /// A folder's path on the clipboard.
+    CopyPath(PathBuf),
+    /// A folder off the recent ones, its files left alone.
+    Forget(PathBuf),
+}
+
+/// An item of one of the sidebar's menus, as it shows.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MenuEntry {
+    pub entry: Entry,
+    pub words: String,
+    pub icon: Option<Icon>,
+    /// What cannot be undone: in brick.
+    pub danger: bool,
+    /// What cannot be done now: shown, and not chosen.
+    pub disabled: bool,
+    /// The one chosen among its like: ticked at its end.
+    pub checked: bool,
+    /// What a hover over it says (a folder's path).
+    pub tip: Option<String>,
+    /// A line goes before it.
+    pub separated: bool,
+}
+
+impl MenuEntry {
+    fn new(entry: Entry, words: impl Into<String>) -> Self {
+        Self {
+            entry,
+            words: words.into(),
+            icon: None,
+            danger: false,
+            disabled: false,
+            checked: false,
+            tip: None,
+            separated: false,
+        }
+    }
+
+    fn icon(mut self, icon: Icon) -> Self {
+        self.icon = Some(icon);
+        self
+    }
+
+    fn separated(mut self) -> Self {
+        self.separated = true;
+        self
+    }
+}
+
+/// A conversation's menu: Rename…, Archive (Unarchive), and Delete…, which
+/// is off while Kerf works in it.
+pub fn row_entries(id: &str, archived: bool, working: bool) -> Vec<MenuEntry> {
+    vec![
+        MenuEntry::new(Entry::Rename(id.to_owned()), "Rename…"),
+        MenuEntry::new(
+            Entry::Archive(id.to_owned(), !archived),
+            if archived { "Unarchive" } else { "Archive" },
+        )
+        .icon(Icon::Archive),
+        MenuEntry {
+            danger: true,
+            disabled: working,
+            ..MenuEntry::new(Entry::Delete(id.to_owned()), "Delete…")
+                .icon(Icon::Trash)
+                .separated()
+        },
+    ]
+}
+
+/// The app's menu under the account: Settings, the account, the help,
+/// Sign Out while signed in to Kerf, and Quit.
+pub fn account_entries(signed_in: bool) -> Vec<MenuEntry> {
+    let mut entries = vec![
+        MenuEntry::new(Entry::Command("app.preferences"), "Settings…").icon(Icon::Gear),
+        MenuEntry::new(Entry::Command("app.account"), "Account…").icon(Icon::Lock),
+        MenuEntry::new(Entry::Command("help.guide"), "User Guide"),
+        MenuEntry::new(Entry::Command("help.crashReports"), "Crash Reports").icon(Icon::Folder),
+        MenuEntry::new(Entry::Command("help.about"), "About"),
     ];
+    if signed_in {
+        entries.push(MenuEntry::new(Entry::SignOut, "Sign Out").separated());
+    }
+    let quit = MenuEntry::new(Entry::Command("app.quit"), "Quit");
+    entries.push(if signed_in { quit } else { quit.separated() });
+    entries
+}
+
+/// What the system's file manager is called here.
+pub fn reveal_words() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "Show in Finder"
+    } else if cfg!(target_os = "windows") {
+        "Show in Explorer"
+    } else {
+        "Show in Files"
+    }
+}
+
+/// The folders to work in, as the folder's menu lists them: the open one
+/// first, then the recent ones still there, each once.
+pub fn recent_folders(recent: &[PathBuf], open: Option<&Path>) -> Vec<PathBuf> {
+    let mut folders: Vec<PathBuf> = open.map(Path::to_path_buf).into_iter().collect();
+    for folder in recent {
+        if folder.is_dir()
+            && !folders
+                .iter()
+                .any(|known| crate::app::same_folder(known, folder))
+        {
+            folders.push(folder.clone());
+        }
+    }
+    folders
+}
+
+fn folder_name(folder: &Path) -> String {
+    folder
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| folder.display().to_string())
+}
+
+/// The menu of the open folder's name, as Qt's: the folders (the open one
+/// ticked, each with its path as tip), Open Folder… and New Project…, then
+/// the open folder in the file manager and its path to copy.
+pub fn folder_entries(recent: &[PathBuf], open: Option<&Path>) -> Vec<MenuEntry> {
+    let folders = recent_folders(recent, open);
+    let mut entries: Vec<MenuEntry> = folders
+        .iter()
+        .map(|folder| MenuEntry {
+            checked: open.is_some_and(|open| crate::app::same_folder(open, folder)),
+            tip: Some(folder.display().to_string()),
+            ..MenuEntry::new(Entry::Open(folder.clone()), folder_name(folder)).icon(Icon::Folder)
+        })
+        .collect();
+    let mut open_folder = MenuEntry::new(Entry::Command("file.openProject"), "Open Folder…");
+    if !entries.is_empty() {
+        open_folder = open_folder.separated();
+    }
+    entries.push(open_folder);
+    entries.push(MenuEntry::new(
+        Entry::Command("file.newProject"),
+        "New Project…",
+    ));
+    if let Some(open) = open {
+        entries.push(MenuEntry::new(Entry::Reveal(open.to_path_buf()), reveal_words()).separated());
+        entries.push(MenuEntry::new(
+            Entry::CopyPath(open.to_path_buf()),
+            "Copy Path",
+        ));
+    }
+    entries
+}
+
+/// Another folder's menu: open it, show it, copy its path, or take it off
+/// the sidebar, its files left alone.
+pub fn other_folder_entries(folder: &Path) -> Vec<MenuEntry> {
+    vec![
+        MenuEntry::new(Entry::Open(folder.to_path_buf()), "Open Project"),
+        MenuEntry::new(Entry::Reveal(folder.to_path_buf()), reveal_words()).separated(),
+        MenuEntry::new(Entry::CopyPath(folder.to_path_buf()), "Copy Path"),
+        MenuEntry::new(Entry::Forget(folder.to_path_buf()), "Remove from Sidebar").separated(),
+    ]
+}
+
+/// The recent folders with `folder` taken off, however written.
+pub fn forget_folder(recent: &[PathBuf], folder: &Path) -> Vec<PathBuf> {
+    recent
+        .iter()
+        .filter(|known| !crate::app::same_folder(known, folder))
+        .cloned()
+        .collect()
+}
+
+/// The item the arrows go to from `from` in `entries`: the next (or the
+/// one before) that can be chosen, round from the end; None when none can.
+pub fn menu_step(entries: &[MenuEntry], from: Option<usize>, down: bool) -> Option<usize> {
+    let count = entries.len();
+    if count == 0 {
+        return None;
+    }
+    let start = match from {
+        Some(at) => at.min(count - 1),
+        None if down => count - 1,
+        None => 0,
+    };
+    (1..=count)
+        .map(|step| {
+            if down {
+                (start + step) % count
+            } else {
+                (start + count * 2 - step) % count
+            }
+        })
+        .find(|at| !entries[*at].disabled)
+}
+
+/// Who chat runs on, as the account at the sidebar's foot says it: the Kerf
+/// account's email and plan while signed in; else Claude Code on "Your
+/// Claude plan", Kerf "Not signed in", or "My own API key" with its model,
+/// "Set up in Settings" while there is no key.
+pub fn account_line(
+    provider: Provider,
+    cloud: Option<&Value>,
+    has_key: bool,
+    model: &str,
+) -> (String, String) {
+    if crate::settings::account_status(cloud).sign_out {
+        let account = cloud.map(|cloud| &cloud["account"]);
+        let email = account
+            .and_then(|account| account["email"].as_str())
+            .unwrap_or_default();
+        let plan = account
+            .and_then(|account| account["plan"].as_str())
+            .filter(|plan| !plan.trim().is_empty())
+            .map_or_else(|| "Kerf account".to_owned(), |plan| format!("{plan} plan"));
+        return (email.to_owned(), plan);
+    }
+    match provider {
+        Provider::ClaudeCode => ("Claude Code".into(), "Your Claude plan".into()),
+        Provider::Cloud => ("Kerf".into(), "Not signed in".into()),
+        Provider::Anthropic | Provider::Openai => {
+            let model = model.trim();
+            let below = if !has_key {
+                "Set up in Settings".to_owned()
+            } else if model.is_empty() {
+                provider.label().to_owned()
+            } else {
+                crate::chat::model_label(model)
+            };
+            ("My own API key".into(), below)
+        }
+    }
+}
+
+/// The app's menu, as the toolbar's ⋯ opens it while the sidebar is away:
+/// whose account it is, then Settings, the account, the help, and Quit.
+/// Each runs its command; `close` puts the menu away first. (The sidebar's
+/// own, under the account, adds Sign Out while signed in: see
+/// [`account_menu`].)
+pub fn app_menu(header: SharedString, close: Rc<dyn Fn(&mut Window, &mut App)>) -> Div {
+    app_menu_with(header, None, close)
+}
+
+/// The app's menu for `session`'s window: headed by who chat runs on
+/// ([`account_of`]), with Sign Out while signed in to Kerf, which signs
+/// `session` out. For the toolbar's ⋯ while the sidebar is away
+/// (`Workspace::render`), so it says what the sidebar's own says.
+pub fn account_menu(
+    session: &Entity<Session>,
+    close: Rc<dyn Fn(&mut Window, &mut App)>,
+    cx: &App,
+) -> Div {
+    let (title, _, signed_in) = account_of(session.read(cx), cx);
+    let sign_out: Option<Rc<dyn Fn(&mut Window, &mut App)>> = signed_in.then(|| {
+        let session = session.downgrade();
+        Rc::new(move |_: &mut Window, cx: &mut App| {
+            let _ = session.update(cx, |session, _| session.cloud_sign(None));
+        }) as Rc<dyn Fn(&mut Window, &mut App)>
+    });
+    app_menu_with(title.into(), sign_out, close)
+}
+
+/// Who chat runs on in `session`'s window, as the account at the foot says
+/// it ([`account_line`]), and whether it is signed in to Kerf.
+pub fn account_of(session: &Session, cx: &App) -> (String, String, bool) {
+    let cloud = crate::app::cloud(cx);
+    let has_key = session.ai_access(cloud).as_deref() != Some("noKey");
+    let (title, below) = account_line(
+        session.prefs.provider,
+        cloud,
+        has_key,
+        session.prefs.model(),
+    );
+    let signed_in = crate::settings::account_status(cloud).sign_out;
+    (title, below, signed_in)
+}
+
+/// The app's menu under `header`, with Sign Out (running `sign_out`) where
+/// one is given.
+fn app_menu_with(
+    header: SharedString,
+    sign_out: Option<Rc<dyn Fn(&mut Window, &mut App)>>,
+    close: Rc<dyn Fn(&mut Window, &mut App)>,
+) -> Div {
     let mut menu = menu_panel().w(px(220.0)).child(
         div().px(px(10.0)).pt(px(4.0)).pb(px(6.0)).child(ui::line(
             header,
@@ -353,24 +655,35 @@ pub fn app_menu(header: SharedString, close: Rc<dyn Fn(&mut Window, &mut App)>) 
             theme::ink3(),
         )),
     );
-    for (index, (id, words, icon)) in items.into_iter().enumerate() {
-        if id == "app.quit" {
+    for (index, entry) in account_entries(sign_out.is_some()).into_iter().enumerate() {
+        if entry.separated {
             menu = menu.child(menu_separator());
         }
         let close = close.clone();
-        menu = menu.child(
-            menu_item(
-                ElementId::Name(format!("app-menu-{index}").into()),
-                words,
-                icon,
-                false,
-                false,
-            )
-            .on_click(move |_, window, cx| {
+        let item = menu_item(
+            ElementId::Name(format!("app-menu-{index}").into()),
+            entry.words,
+            entry.icon,
+            false,
+            false,
+        );
+        let item = match entry.entry {
+            Entry::Command(id) => item.on_click(move |_, window, cx| {
                 close(window, cx);
                 window.dispatch_action(Box::new(RunCommand { id: id.into() }), cx);
             }),
-        );
+            Entry::SignOut => {
+                let sign_out = sign_out.clone();
+                item.on_click(move |_, window, cx| {
+                    close(window, cx);
+                    if let Some(sign_out) = &sign_out {
+                        sign_out(window, cx);
+                    }
+                })
+            }
+            _ => continue,
+        };
+        menu = menu.child(item);
     }
     menu
 }
@@ -392,7 +705,110 @@ pub fn trigger(
         })
 }
 
+// ------------------------------------------------------------ keys
+
+gpui::actions!(
+    sidebar,
+    [
+        FocusNext,
+        FocusPrevious,
+        OpenMenu,
+        RenameRow,
+        DeleteRow,
+        MenuUp,
+        MenuDown,
+        MenuChoose,
+        MenuClose,
+    ]
+);
+
+/// The sidebar's key context: Tab goes from one of its rows and buttons
+/// to the next, Shift-Tab back.
+pub const CONTEXT: &str = "Sidebar";
+/// What in it takes the keys: Enter and Space press it, Shift+F10 or the
+/// Menu key opens its menu.
+pub const ITEM: &str = "SidebarItem";
+/// A conversation's row, where F2 renames it and Delete or Backspace
+/// deletes it (after asking).
+pub const ROW: &str = "SidebarRow";
+/// One of its menus, open: the arrows move in it (Tab and Shift-Tab too,
+/// as in Qt's menus), Enter or Space chooses, Esc closes it.
+pub const MENU: &str = "SidebarMenu";
+/// What a conversation's row answers in: [`ITEM`] and [`ROW`] at once.
+pub const ROW_KEYS: &str = "SidebarItem SidebarRow";
+
+/// The sidebar's keys, as [`bind_keys`] binds them. Enter and Space on a
+/// row or button run nothing of the window's (Play, a render): GPUI
+/// presses what has the keys as they come up.
+pub fn key_bindings() -> Vec<KeyBinding> {
+    vec![
+        KeyBinding::new("tab", FocusNext, Some(CONTEXT)),
+        KeyBinding::new("shift-tab", FocusPrevious, Some(CONTEXT)),
+        KeyBinding::new("enter", NoAction, Some(ITEM)),
+        KeyBinding::new("space", NoAction, Some(ITEM)),
+        KeyBinding::new("shift-f10", OpenMenu, Some(ITEM)),
+        KeyBinding::new("menu", OpenMenu, Some(ITEM)),
+        KeyBinding::new("f2", RenameRow, Some(ROW)),
+        KeyBinding::new("delete", DeleteRow, Some(ROW)),
+        KeyBinding::new("backspace", DeleteRow, Some(ROW)),
+        KeyBinding::new("up", MenuUp, Some(MENU)),
+        KeyBinding::new("down", MenuDown, Some(MENU)),
+        KeyBinding::new("shift-tab", MenuUp, Some(MENU)),
+        KeyBinding::new("tab", MenuDown, Some(MENU)),
+        KeyBinding::new("enter", MenuChoose, Some(MENU)),
+        KeyBinding::new("space", MenuChoose, Some(MENU)),
+        KeyBinding::new("escape", MenuClose, Some(MENU)),
+    ]
+}
+
+/// Binds the sidebar's keys, unless they are bound. Binding a keymap
+/// clears every binding, so Settings calls this again when it changes one,
+/// and every sidebar as it opens.
+pub fn bind_keys(cx: &mut App) {
+    let bound = Keystroke::parse("shift-f10").is_ok_and(|keystroke| {
+        cx.all_bindings_for_input(&[keystroke])
+            .iter()
+            .any(|binding| binding.action().partial_eq(&OpenMenu))
+    });
+    if !bound {
+        cx.bind_keys(key_bindings());
+    }
+}
+
+/// Whether a press on the sidebar's edge at `now` is the second of a
+/// double-click: the platform counts it so, or the press before it was let
+/// go less than [`scene::DOUBLE_CLICK`] ago.
+pub fn is_second_press(last_click: Option<Instant>, now: Instant, click_count: usize) -> bool {
+    click_count >= 2
+        || last_click.is_some_and(|at| now.saturating_duration_since(at) < scene::DOUBLE_CLICK)
+}
+
+/// What the sidebar's edge's tooltip says.
+pub const EDGE_TIP: &str = "Drag to resize · click to hide · double-click to reset";
+
 // ------------------------------------------------------------ the view
+
+/// Which of the sidebar's menus is open.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SidebarMenu {
+    /// A conversation's, by its id.
+    Row(String),
+    /// The account's: the app's menu.
+    Account,
+    /// The open folder's name: the folders, and the ways to another.
+    Folder,
+    /// Another folder's, by its path.
+    Other(PathBuf),
+}
+
+/// A press on the sidebar's edge, while it is held.
+struct EdgePress {
+    from: Point<Pixels>,
+    /// It moved past a press: it is a drag.
+    moved: bool,
+    /// The second press of a double-click: the width went back.
+    second: bool,
+}
 
 pub struct SidebarView {
     session: Entity<Session>,
@@ -400,10 +816,20 @@ pub struct SidebarView {
     /// How many times the archived ones were unfolded: each unfolding
     /// staggers them in afresh.
     unfoldings: u64,
-    /// The row whose menu is open.
-    menu: Option<String>,
-    /// The account's menu is open.
-    app_menu: bool,
+    /// The menu open, if one is, and the item of it the arrows are on.
+    menu: Option<SidebarMenu>,
+    menu_chosen: Option<usize>,
+    /// An open menu holds the keys; it gives them back to what had them
+    /// (`menu_return`) when it closes from the keys or by a choice.
+    menu_focus: FocusHandle,
+    menu_return: Option<FocusHandle>,
+    /// Keys to give back once the menu that had them is gone.
+    refocus: Option<FocusHandle>,
+    /// An item was chosen from the keys: the menu, gone, holds them until
+    /// that key comes up, then gives them back to what had them (None:
+    /// nothing did). Given back at once, the key coming up would press
+    /// what had them, which opens the menu again or the folder it was for.
+    give_back_on_key_up: Option<Option<FocusHandle>>,
     shimmer_since: Instant,
     search: Entity<TextInput>,
     /// The Search row is a field.
@@ -422,20 +848,51 @@ pub struct SidebarView {
     arrivals: HashMap<String, Instant>,
     /// The sidebar is in the window: put away, its titles' light rests.
     shown: bool,
+    /// A press held on the edge; the last press on it let go where it was,
+    /// and the wait before that press puts the sidebar away (dropped when
+    /// a second press comes).
+    edge_press: Option<EdgePress>,
+    edge_clicked: Option<Instant>,
+    edge_hide: Option<Task<()>>,
+    /// Where the open folder's heading was laid out last, in the window.
+    heading_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
     _subscriptions: Vec<Subscription>,
 }
 
 impl SidebarView {
     pub fn new(session: Entity<Session>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        bind_keys(cx);
         let search = cx.new(|cx| TextInput::new(cx, "Search").with_style(text::SIDE));
         let rename = cx.new(|cx| TextInput::new(cx, "Conversation title").with_style(text::SIDE));
         let search_focus = search.read(cx).focus_handle(cx);
         let rename_focus = rename.read(cx).focus_handle(cx);
+        let menu_focus = cx.focus_handle();
         let subscriptions = vec![
+            // A menu that loses the keys to something else goes; one
+            // waiting for a key to come up gives them back if the window
+            // goes to the back first.
+            cx.on_blur(&menu_focus, window, |this, window, cx| {
+                if this.give_back_on_key_up.is_some() {
+                    if window.is_window_active() {
+                        this.give_back_on_key_up = None;
+                    } else {
+                        this.give_back_keys(window, cx);
+                    }
+                } else {
+                    this.close_menus(cx);
+                }
+            }),
             cx.observe(&session, |_, _, cx| cx.notify()),
             cx.subscribe(&session, |this, _, change: &Change, cx| {
                 if *change == Change::Conversations {
                     this.note_arrivals(true, cx);
+                }
+            }),
+            // Kerf's account, as the foot says it.
+            cx.subscribe(&session, |_, _, event: &BridgeEvent, cx| {
+                if event.0["type"] == "cloud" {
+                    crate::app::hear_cloud(&event.0, cx);
+                    cx.notify();
                 }
             }),
             cx.subscribe_in(&search, window, |this, field, event: &InputEvent, _, cx| {
@@ -469,13 +926,50 @@ impl SidebarView {
             cx.on_blur(&rename_focus, window, |this, _, cx| {
                 this.finish_rename(true, false, cx)
             }),
+            // Tab from the window itself (nothing in it holding the keys)
+            // comes into the sidebar; a field, a menu or what is over the
+            // window keeps its own Tab.
+            {
+                let this = cx.weak_entity();
+                let handle = window.window_handle();
+                cx.intercept_keystrokes(move |event, window, cx| {
+                    let keystroke = &event.keystroke;
+                    let modifiers = keystroke.modifiers;
+                    if window.window_handle() != handle
+                        || keystroke.key != "tab"
+                        || modifiers.control
+                        || modifiers.alt
+                        || modifiers.platform
+                        || modifiers.function
+                    {
+                        return;
+                    }
+                    let at_window = window
+                        .context_stack()
+                        .last()
+                        .is_none_or(|context| context.contains(crate::commands::WORKSPACE));
+                    let shown = this.read_with(cx, |this, _| this.shown).unwrap_or(false);
+                    if at_window && shown {
+                        if modifiers.shift {
+                            window.focus_prev();
+                        } else {
+                            window.focus_next();
+                        }
+                        cx.stop_propagation();
+                    }
+                })
+            },
         ];
         let mut sidebar = Self {
             session,
             archived_open: false,
             unfoldings: 0,
             menu: None,
-            app_menu: false,
+            menu_chosen: None,
+            menu_focus,
+            menu_return: None,
+            refocus: None,
+            give_back_on_key_up: None,
             shimmer_since: Instant::now(),
             search,
             searching: false,
@@ -487,10 +981,21 @@ impl SidebarView {
             listed: false,
             arrivals: HashMap::new(),
             shown: true,
+            edge_press: None,
+            edge_clicked: None,
+            edge_hide: None,
+            heading_bounds: Rc::new(Cell::new(None)),
             _subscriptions: subscriptions,
         };
         sidebar.note_arrivals(false, cx);
         sidebar
+    }
+
+    /// The open folder's heading (the project's row) as last laid out, in
+    /// the window's coordinates: where a finished export's frame lands
+    /// (`Workspace::fly_export_home`).
+    pub fn project_row_bounds(&self) -> Option<Bounds<Pixels>> {
+        self.heading_bounds.get()
     }
 
     /// Whether the sidebar is in the window; put away, it asks for no
@@ -506,15 +1011,214 @@ impl SidebarView {
         }
     }
 
-    /// Puts away the account's menu and a row's menu; whether one was open.
+    /// Puts away whichever of its menus is open (the account's, a row's, a
+    /// folder's); whether one was. The keys go back to what had them.
     pub fn close_menus(&mut self, cx: &mut Context<Self>) -> bool {
-        let open = self.app_menu || self.menu.is_some();
+        let open = self.menu.take().is_some();
         if open {
-            self.app_menu = false;
-            self.menu = None;
+            self.menu_chosen = None;
+            self.refocus = self.menu_return.take();
             cx.notify();
         }
         open
+    }
+
+    /// The menu open is `menu`.
+    fn menu_is(&self, menu: &SidebarMenu) -> bool {
+        self.menu.as_ref() == Some(menu)
+    }
+
+    /// Opens `menu` (another open one goes), taking the keys so the arrows
+    /// move in it; from the keys (`keyboard`), its first item is chosen.
+    fn open_menu(
+        &mut self,
+        menu: SidebarMenu,
+        keyboard: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let entries = self.entries_of(&menu, cx);
+        self.menu = Some(menu);
+        self.menu_chosen = if keyboard {
+            menu_step(&entries, None, true)
+        } else {
+            None
+        };
+        // One opening in place of a menu just closed (a right-click on
+        // another row) keeps the keys' way back of the first.
+        let earlier = self.refocus.take();
+        self.give_back_on_key_up = None;
+        if !self.menu_focus.is_focused(window) {
+            self.menu_return = window.focused(cx);
+        } else if self.menu_return.is_none() {
+            self.menu_return = earlier;
+        }
+        window.focus(&self.menu_focus);
+        cx.emit(SidebarEvent::MenuOpened);
+        cx.notify();
+    }
+
+    /// `menu` opens, or closes when it is the one open.
+    fn toggle_menu(
+        &mut self,
+        menu: SidebarMenu,
+        keyboard: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.menu_is(&menu) {
+            self.close_menus(cx);
+        } else {
+            self.open_menu(menu, keyboard, window, cx);
+        }
+    }
+
+    /// A press outside the menu put it away: what was pressed has the keys
+    /// if it takes them, else they go back to what had them.
+    fn menu_pressed_out(&mut self, cx: &mut Context<Self>) {
+        self.close_menus(cx);
+    }
+
+    /// What the menu `menu` holds now.
+    fn entries_of(&self, menu: &SidebarMenu, cx: &App) -> Vec<MenuEntry> {
+        let session = self.session.read(cx);
+        match menu {
+            SidebarMenu::Row(id) => {
+                let archived = session
+                    .state
+                    .conversations
+                    .iter()
+                    .find(|conversation| &conversation.id == id)
+                    .is_some_and(|conversation| conversation.archived);
+                let working = session.state.work.busy()
+                    && (session.state.work.conversation.as_deref() == Some(id.as_str())
+                        || (session.state.work.conversation.is_none()
+                            && session.conversation.as_deref() == Some(id.as_str())));
+                row_entries(id, archived, working)
+            }
+            SidebarMenu::Account => {
+                account_entries(crate::settings::account_status(crate::app::cloud(cx)).sign_out)
+            }
+            SidebarMenu::Folder => {
+                folder_entries(&session.prefs.recent, session.project.as_deref())
+            }
+            SidebarMenu::Other(folder) => other_folder_entries(folder),
+        }
+    }
+
+    fn step_menu(&mut self, down: bool, cx: &mut Context<Self>) {
+        let Some(menu) = self.menu.clone() else {
+            return;
+        };
+        let entries = self.entries_of(&menu, cx);
+        self.menu_chosen = menu_step(&entries, self.menu_chosen, down);
+        cx.notify();
+    }
+
+    fn choose_in_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(menu) = self.menu.clone() else {
+            return;
+        };
+        let entries = self.entries_of(&menu, cx);
+        if let Some(entry) = self
+            .menu_chosen
+            .and_then(|at| entries.get(at))
+            .filter(|entry| !entry.disabled)
+        {
+            self.run_entry(entry.entry.clone(), true, window, cx);
+        }
+    }
+
+    /// The key that chose in a menu came up (or the window went to the
+    /// back first): the keys go back to what had them, if the menu still
+    /// holds them.
+    fn give_back_keys(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(back) = self.give_back_on_key_up.take() else {
+            return;
+        };
+        if self.menu_focus.is_focused(window) {
+            match back {
+                Some(back) => window.focus(&back),
+                None => window.blur(),
+            }
+        }
+        cx.notify();
+    }
+
+    /// Esc in an open menu: it goes, and the keys go back.
+    fn menu_escape(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let back = self.menu_return.clone();
+        self.close_menus(cx);
+        self.refocus = None;
+        if let Some(back) = back {
+            window.focus(&back);
+        }
+    }
+
+    /// Does what a menu's item says (`from_keys`: chosen with Enter or
+    /// Space); the menu goes first. Where nothing else took the keys, they
+    /// go back to what had them: from the keys, once the key comes up.
+    fn run_entry(
+        &mut self,
+        entry: Entry,
+        from_keys: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.menu = None;
+        self.menu_chosen = None;
+        let back = self.menu_return.take();
+        match entry {
+            Entry::Rename(id) => self.begin_rename(&id, window, cx),
+            Entry::Archive(id, archived) => self
+                .session
+                .update(cx, |session, _| session.archive_conversation(&id, archived)),
+            Entry::Delete(id) => cx.emit(SidebarEvent::Delete(id)),
+            Entry::Command(id) => {
+                window.dispatch_action(Box::new(RunCommand { id: id.into() }), cx)
+            }
+            Entry::SignOut => {
+                self.session
+                    .update(cx, |session, _| session.cloud_sign(None));
+            }
+            Entry::Open(folder) => {
+                let here = self
+                    .session
+                    .read(cx)
+                    .project
+                    .as_deref()
+                    .is_some_and(|open| crate::app::same_folder(open, &folder));
+                if !here {
+                    window.dispatch_action(
+                        Box::new(OpenRecent {
+                            path: folder.to_string_lossy().into_owned().into(),
+                        }),
+                        cx,
+                    );
+                }
+            }
+            Entry::Reveal(folder) => cx.reveal_path(&folder),
+            Entry::CopyPath(folder) => {
+                cx.write_to_clipboard(ClipboardItem::new_string(folder.display().to_string()))
+            }
+            Entry::Forget(folder) => {
+                let project = self.session.update(cx, |session, cx| {
+                    session.prefs.recent = forget_folder(&session.prefs.recent, &folder);
+                    session.save_prefs();
+                    cx.notify();
+                    session.project.clone()
+                });
+                crate::commands::refresh_menus(project.as_deref(), cx);
+            }
+        }
+        if self.menu_focus.is_focused(window) {
+            if from_keys {
+                self.give_back_on_key_up = Some(back);
+            } else if let Some(back) = back {
+                window.focus(&back);
+            }
+        }
+        cx.notify();
     }
 
     /// Remembers the conversations listed (`listed`: as the bridge listed
@@ -573,18 +1277,14 @@ impl SidebarView {
             self.query.clear();
         }
         self.menu = None;
+        self.menu_return = None;
         self.renaming = Some(id.to_owned());
-        self.rename
-            .update(cx, |field, cx| field.set_text(title, cx));
-        self.rename.read(cx).focus(window);
-        // The whole title is chosen, to type over, once the field is drawn.
-        cx.on_next_frame(window, |_, window, cx| {
-            cx.on_next_frame(window, |this, window, cx| {
-                if this.renaming.is_some() {
-                    window.dispatch_action(Box::new(crate::input::SelectAll), cx);
-                }
-            });
+        // The whole title is chosen, to type over.
+        self.rename.update(cx, |field, cx| {
+            field.set_text(title, cx);
+            field.choose_all(cx);
         });
+        self.rename.read(cx).focus(window);
         cx.notify();
     }
 
@@ -632,6 +1332,228 @@ impl SidebarView {
         }
     }
 
+    // ------------------------------------------------------------ the edge
+
+    /// A press on the edge: the second of a double-click puts the width
+    /// back, and stops the first from putting the sidebar away.
+    fn edge_down(&mut self, event: &MouseDownEvent, cx: &mut Context<Self>) {
+        let second = is_second_press(self.edge_clicked, Instant::now(), event.click_count);
+        if second {
+            self.edge_hide = None;
+            self.edge_clicked = None;
+            self.session.update(cx, |session, cx| {
+                session.prefs.sidebar_width = layout::SIDEBAR;
+                session.save_prefs();
+                cx.notify();
+            });
+        }
+        self.edge_press = Some(EdgePress {
+            from: event.position,
+            moved: false,
+            second,
+        });
+        cx.notify();
+    }
+
+    /// The pointer moved with the edge held: past a press, the sidebar is
+    /// as wide as the pointer is far in, with no motion.
+    fn edge_moved(&mut self, at: Point<Pixels>, window_width: Pixels, cx: &mut Context<Self>) {
+        let Some(press) = self.edge_press.as_mut() else {
+            return;
+        };
+        if !press.moved && f32::from((at.x - press.from.x).abs()) < layout::DRAG_START {
+            return;
+        }
+        press.moved = true;
+        self.edge_hide = None;
+        self.edge_clicked = None;
+        let most = layout::sidebar_most(f32::from(window_width));
+        let width = f32::from(at.x).clamp(layout::SIDEBAR_LEAST, most);
+        self.session.update(cx, |session, cx| {
+            if (session.prefs.sidebar_width - width).abs() > f32::EPSILON {
+                session.prefs.sidebar_width = width;
+                cx.notify();
+            }
+        });
+        cx.notify();
+    }
+
+    /// The edge let go: a drag keeps its width; a press waits
+    /// `DOUBLE_CLICK` for a second, and with none puts the sidebar away.
+    fn edge_released(&mut self, cx: &mut Context<Self>) {
+        let Some(press) = self.edge_press.take() else {
+            return;
+        };
+        if press.moved {
+            self.session.read(cx).save_prefs();
+        } else if !press.second {
+            self.edge_clicked = Some(Instant::now());
+            self.edge_hide = Some(cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(scene::DOUBLE_CLICK).await;
+                let _ = this.update(cx, |this, cx| {
+                    this.edge_clicked = None;
+                    cx.emit(SidebarEvent::Hide);
+                });
+            }));
+        }
+        cx.notify();
+    }
+
+    /// The sidebar's edge: dragged, it sets how wide the sidebar is;
+    /// pressed, it puts it away; pressed twice, the width goes back.
+    /// Nothing shows until the pointer is over it; then a line, in the
+    /// accent while it is dragged.
+    fn edge(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let pressed = self.edge_press.is_some();
+        let dragging = self.edge_press.as_ref().is_some_and(|press| press.moved);
+        let line = div()
+            .absolute()
+            .top_0()
+            .bottom_0()
+            .left(px(layout::SIDEBAR_GRIP / 2.0 - 1.0))
+            .w(px(2.0))
+            .bg(if dragging {
+                theme::accent()
+            } else {
+                theme::lineh()
+            })
+            .when(!pressed, |line| {
+                line.invisible()
+                    .group_hover("sidebar-edge", |line| line.visible())
+            });
+        let mut edge = div()
+            .id("sidebar-edge")
+            .group("sidebar-edge")
+            .absolute()
+            .top_0()
+            .bottom_0()
+            .right(px(-layout::SIDEBAR_GRIP / 2.0))
+            .w(px(layout::SIDEBAR_GRIP))
+            .cursor_col_resize()
+            .child(line)
+            .when(!pressed, |edge| {
+                edge.tooltip(|_, cx| cx.new(|_| ui::Tooltip(EDGE_TIP.into())).into())
+            })
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, event: &MouseDownEvent, _, cx| this.edge_down(event, cx)),
+            )
+            // Let go over it or anywhere else.
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _: &MouseUpEvent, _, cx| this.edge_released(cx)),
+            )
+            .on_mouse_up_out(
+                MouseButton::Left,
+                cx.listener(|this, _: &MouseUpEvent, _, cx| this.edge_released(cx)),
+            );
+        if pressed {
+            // While it is held, the pointer is followed wherever it goes.
+            let this = cx.weak_entity();
+            edge = edge.child(
+                canvas(
+                    |_, _, _| {},
+                    move |_, _, window, _| {
+                        window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
+                            if phase == DispatchPhase::Bubble {
+                                let width = window.viewport_size().width;
+                                let _ = this.update(cx, |this, cx| {
+                                    this.edge_moved(event.position, width, cx)
+                                });
+                            }
+                        });
+                    },
+                )
+                .absolute()
+                .size_full(),
+            );
+        }
+        edge
+    }
+
+    // ------------------------------------------------------------ menus
+
+    /// The menu `menu` as it shows, `width` wide: its header if it has one,
+    /// its items, the one the arrows are on lit.
+    fn menu_view(
+        &self,
+        menu: &SidebarMenu,
+        header: Option<SharedString>,
+        width: f32,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let entries = self.entries_of(menu, cx);
+        let mut panel = menu_panel()
+            .id("sidebar-menu")
+            .w(px(width))
+            .track_focus(&self.menu_focus)
+            .key_context(MENU)
+            .on_action(cx.listener(|this, _: &MenuUp, _, cx| this.step_menu(false, cx)))
+            .on_action(cx.listener(|this, _: &MenuDown, _, cx| this.step_menu(true, cx)))
+            .on_action(
+                cx.listener(|this, _: &MenuChoose, window, cx| this.choose_in_menu(window, cx)),
+            )
+            .on_action(cx.listener(|this, _: &MenuClose, window, cx| this.menu_escape(window, cx)))
+            .on_mouse_down_out(cx.listener(|this, _, _, cx| this.menu_pressed_out(cx)));
+        if let Some(header) = header {
+            panel = panel.child(div().px(px(10.0)).pt(px(4.0)).pb(px(6.0)).child(ui::line(
+                header,
+                text::META,
+                theme::ink3(),
+            )));
+        }
+        for (index, entry) in entries.into_iter().enumerate() {
+            if entry.separated {
+                panel = panel.child(menu_separator());
+            }
+            let chosen = self.menu_chosen == Some(index);
+            let mut item = menu_item(
+                ElementId::Name(format!("sidebar-menu-{index}").into()),
+                entry.words.clone(),
+                entry.icon,
+                entry.danger,
+                entry.disabled,
+            )
+            .when(chosen, |item| item.bg(theme::popup_hover()))
+            .when(entry.checked, |item| {
+                item.child(div().flex_1())
+                    .child(Icon::Check.view(14.0, theme::ink2()))
+            });
+            if let Some(tip) = entry.tip.clone() {
+                item =
+                    item.tooltip(move |_, cx| cx.new(|_| ui::Tooltip(tip.clone().into())).into());
+            }
+            if !entry.disabled {
+                let run = entry.entry.clone();
+                item = item.on_click(cx.listener(move |this, _, window, cx| {
+                    this.run_entry(run.clone(), false, window, cx)
+                }));
+            }
+            panel = panel.child(item);
+        }
+        panel
+            .with_animation(
+                ElementId::Name(format!("sidebar-menu-{menu:?}").into()),
+                motion::animation(scene::FADE),
+                |menu, t| menu.opacity(t),
+            )
+            .into_any_element()
+    }
+
+    /// What takes the keys in the sidebar (in key context `context`, an
+    /// [`ITEM`]): Tab reaches it, a ring shows round it while it has them,
+    /// and Enter or Space presses it.
+    fn keyed(element: Stateful<Div>, context: &'static str) -> Stateful<Div> {
+        element
+            .tab_index(0)
+            .key_context(context)
+            .border_1()
+            .border_color(theme::with_alpha(theme::accent(), 0.0))
+            .focus(|style| style.border_color(theme::accent()))
+            // A press of the pointer leaves the keys where they were.
+            .capture_any_mouse_down(|_, window, _| window.prevent_default())
+    }
+
     fn row(
         &self,
         conversation: &ConversationSummary,
@@ -645,7 +1567,8 @@ impl SidebarView {
         let chosen = session.conversation.as_deref() == Some(conversation.id.as_str());
         let working = state == RowState::Working;
         let id = conversation.id.clone();
-        let menu_open = self.menu.as_deref() == Some(conversation.id.as_str());
+        let menu = SidebarMenu::Row(id.clone());
+        let menu_open = self.menu_is(&menu);
         let editing = self.renaming.as_deref() == Some(conversation.id.as_str());
         let style = if chosen { text::SIDE_NAME } else { text::SIDE };
         let title: SharedString = conversation.label().to_owned().into();
@@ -702,14 +1625,6 @@ impl SidebarView {
                 .bg(theme::card())
                 .border_1()
                 .border_color(theme::accent())
-                // Esc reaches the field's holder as a key, whatever the
-                // keymap leaves bound in fields.
-                .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
-                    if event.keystroke.key == "escape" {
-                        cx.stop_propagation();
-                        this.finish_rename(false, true, cx);
-                    }
-                }))
                 .child(self.rename.clone())
                 .into_any_element()
         } else {
@@ -722,99 +1637,117 @@ impl SidebarView {
             RowState::Idle => None,
         };
 
-        let row = div()
-            .id(ElementId::Name(format!("conversation-{id}").into()))
-            .group("row")
-            .relative()
-            .flex()
-            .items_center()
-            .gap(px(8.0))
-            .h(px(theme::height::H32))
-            .px(px(10.0))
-            .mx(px(8.0))
-            .rounded(px(theme::radius::CONTROL))
-            .cursor_pointer()
-            .when(chosen, |row| row.bg(theme::on()))
-            .when(!chosen, |row| row.hover(|row| row.bg(theme::raised())))
-            .when(!editing, |row| {
-                let tip = tip.clone();
-                row.tooltip(move |_, cx| cx.new(|_| ui::Tooltip(tip.clone())).into())
-            })
-            .child(words)
-            .when_some(dot.filter(|_| !editing), |row, color| {
-                row.child(ui::dot(color, 6.0))
-            })
-            .when(!editing, |row| {
-                row.child(
-                    div()
-                        .invisible()
-                        .group_hover("row", |more| more.visible())
-                        .when(menu_open, |more| more.visible())
+        let row = Self::keyed(
+            div().id(ElementId::Name(format!("conversation-{id}").into())),
+            ROW_KEYS,
+        )
+        .group("row")
+        .relative()
+        .flex()
+        .items_center()
+        .gap(px(8.0))
+        .h(px(theme::height::H32))
+        .px(px(10.0))
+        .mx(px(8.0))
+        .rounded(px(theme::radius::CONTROL))
+        .cursor_pointer()
+        .when(chosen, |row| row.bg(theme::on()))
+        .when(!chosen, |row| row.hover(|row| row.bg(theme::raised())))
+        .when(!editing, |row| {
+            let tip = tip.clone();
+            row.tooltip(move |_, cx| cx.new(|_| ui::Tooltip(tip.clone())).into())
+        })
+        .child(words)
+        .when_some(dot.filter(|_| !editing), |row, color| {
+            row.child(ui::dot(color, 6.0))
+        })
+        .when(!editing, |row| {
+            row.child(
+                div()
+                    .invisible()
+                    .group_hover("row", |more| more.visible())
+                    .when(menu_open, |more| more.visible())
+                    .child(
+                        trigger(
+                            ElementId::Name(format!("more-{id}").into()),
+                            cx.listener({
+                                let menu = menu.clone();
+                                move |this, _: &MouseDownEvent, window, cx| {
+                                    this.toggle_menu(menu.clone(), false, window, cx)
+                                }
+                            }),
+                        )
                         .child(
-                            trigger(
-                                ElementId::Name(format!("more-{id}").into()),
-                                cx.listener({
-                                    let id = id.clone();
-                                    move |this, _: &MouseDownEvent, _, cx| {
-                                        this.app_menu = false;
-                                        this.menu = if this.menu.as_deref() == Some(id.as_str()) {
-                                            None
-                                        } else {
-                                            cx.emit(SidebarEvent::MenuOpened);
-                                            Some(id.clone())
-                                        };
-                                        cx.notify();
-                                    }
-                                }),
+                            icon_button(
+                                ElementId::Name(format!("more-button-{id}").into()),
+                                Icon::More,
                             )
-                            .child(
-                                icon_button(
-                                    ElementId::Name(format!("more-button-{id}").into()),
-                                    Icon::More,
-                                )
-                                .size(22.0),
-                            ),
+                            .size(22.0),
                         ),
-                )
-            })
-            // A right-click opens its menu too.
-            .on_mouse_down(
-                MouseButton::Right,
-                cx.listener({
-                    let id = id.clone();
-                    move |this, _, _, cx| {
-                        cx.stop_propagation();
-                        this.app_menu = false;
-                        this.menu = Some(id.clone());
-                        cx.emit(SidebarEvent::MenuOpened);
-                        cx.notify();
-                    }
-                }),
+                    ),
             )
-            .on_click(cx.listener({
-                let id = id.clone();
-                move |this, _, _, cx| {
-                    if this.renaming.as_deref() == Some(id.as_str()) {
-                        return;
-                    }
-                    this.menu = None;
-                    this.session.update(cx, |session, cx| {
-                        session.open_conversation(Some(id.clone()));
-                        cx.notify();
-                    });
+        })
+        // A right-click opens its menu too; Shift+F10 or the Menu key with
+        // the row holding the keys.
+        .on_mouse_down(
+            MouseButton::Right,
+            cx.listener({
+                let menu = menu.clone();
+                move |this, _, window, cx| {
+                    cx.stop_propagation();
+                    this.open_menu(menu.clone(), false, window, cx);
                 }
-            }));
-        let archived = conversation.archived;
+            }),
+        )
+        .on_action(cx.listener({
+            let menu = menu.clone();
+            move |this, _: &OpenMenu, window, cx| this.open_menu(menu.clone(), true, window, cx)
+        }))
+        .on_action(cx.listener({
+            let id = id.clone();
+            move |this, _: &RenameRow, window, cx| this.begin_rename(&id, window, cx)
+        }))
+        .on_action(cx.listener({
+            let id = id.clone();
+            move |_, _: &DeleteRow, _, cx| {
+                // Not while Kerf works in it; asked first, over the window.
+                if !working {
+                    cx.emit(SidebarEvent::Delete(id.clone()));
+                }
+            }
+        }))
+        .on_click(cx.listener({
+            let id = id.clone();
+            move |this, _, _, cx| {
+                if this.renaming.as_deref() == Some(id.as_str()) {
+                    return;
+                }
+                this.menu_pressed_out(cx);
+                this.session.update(cx, |session, cx| {
+                    session.open_conversation(Some(id.clone()));
+                    cx.notify();
+                });
+            }
+        }));
         let with_menu = div().relative().child(row).when(menu_open, |wrapper| {
             // Over the rows after it, and past the list's edge.
-            wrapper.child(deferred(self.row_menu(&id, archived, working, cx)).with_priority(1))
+            wrapper.child(
+                deferred(
+                    div()
+                        .absolute()
+                        .top(px(30.0))
+                        .right(px(8.0))
+                        .child(self.menu_view(&menu, None, 180.0, cx)),
+                )
+                .with_priority(1),
+            )
         });
         let arrived = self
             .arrivals
             .get(&id)
             .filter(|at| at.elapsed() < scene::APPEAR)
             .copied();
-        if archived {
+        if conversation.archived {
             // Unfolding, each fades in where it is, one after another.
             let delay = scene::UNFOLD_STAGGER.as_secs_f32() * index as f32;
             let total = scene::APPEAR.as_secs_f32() + delay;
@@ -844,75 +1777,6 @@ impl SidebarView {
         }
     }
 
-    fn row_menu(
-        &self,
-        id: &str,
-        archived: bool,
-        working: bool,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let rename_id = id.to_owned();
-        let archive_id = id.to_owned();
-        let delete_id = id.to_owned();
-        menu_panel()
-            .absolute()
-            .top(px(30.0))
-            .right(px(8.0))
-            .w(px(180.0))
-            .on_mouse_down_out(cx.listener(|this, _, _, cx| {
-                this.menu = None;
-                cx.notify();
-            }))
-            .child(
-                menu_item(
-                    ElementId::Name(format!("rename-{id}").into()),
-                    "Rename…",
-                    None,
-                    false,
-                    false,
-                )
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    this.begin_rename(&rename_id, window, cx);
-                })),
-            )
-            .child(
-                menu_item(
-                    ElementId::Name(format!("archive-{id}").into()),
-                    if archived { "Unarchive" } else { "Archive" },
-                    Some(Icon::Archive),
-                    false,
-                    false,
-                )
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.menu = None;
-                    this.session.update(cx, |session, _| {
-                        session.archive_conversation(&archive_id, !archived)
-                    });
-                })),
-            )
-            .child(menu_separator())
-            .child(
-                // Not while Kerf works in it; asked first, over the window.
-                menu_item(
-                    ElementId::Name(format!("delete-{id}").into()),
-                    "Delete…",
-                    Some(Icon::Trash),
-                    true,
-                    working,
-                )
-                .when(!working, |item| {
-                    item.on_click(cx.listener(move |this, _, _, cx| {
-                        this.menu = None;
-                        cx.emit(SidebarEvent::Delete(delete_id.clone()));
-                        cx.notify();
-                    }))
-                }),
-            )
-            .with_animation("row-menu", motion::animation(scene::FADE), |menu, t| {
-                menu.opacity(t)
-            })
-    }
-
     fn search_row(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let shell = div()
             .flex()
@@ -925,17 +1789,10 @@ impl SidebarView {
             shell
                 .bg(theme::raised())
                 .child(Icon::Search.view(16.0, theme::ink3()))
-                .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
-                    if event.keystroke.key == "escape" {
-                        cx.stop_propagation();
-                        this.search_escape(cx);
-                    }
-                }))
                 .child(div().flex_1().min_w_0().child(self.search.clone()))
                 .into_any_element()
         } else {
-            shell
-                .id("search-conversations")
+            Self::keyed(shell.id("search-conversations"), ITEM)
                 .cursor_pointer()
                 .hover(|row| row.bg(theme::raised()))
                 .child(Icon::Search.view(16.0, theme::ink()))
@@ -944,11 +1801,256 @@ impl SidebarView {
                 .into_any_element()
         }
     }
+
+    /// The open folder's name over its conversations, a chevron after it:
+    /// pressed, the folders and the ways to another.
+    fn folder_heading(&self, project: String, cx: &mut Context<Self>) -> impl IntoElement {
+        let open = self.menu_is(&SidebarMenu::Folder);
+        let heading = Self::keyed(
+            trigger(
+                "folder-heading",
+                cx.listener(|this, _: &MouseDownEvent, window, cx| {
+                    this.toggle_menu(SidebarMenu::Folder, false, window, cx)
+                }),
+            ),
+            ITEM,
+        )
+        .mx(px(8.0))
+        .mt(px(4.0))
+        .px(px(10.0))
+        .h(px(theme::height::H28))
+        .flex()
+        .items_center()
+        .gap(px(6.0))
+        .rounded(px(theme::radius::CONTROL))
+        .cursor_pointer()
+        .when(open, |heading| heading.bg(theme::raised()))
+        .hover(|heading| heading.bg(theme::raised()))
+        .child(Icon::Folder.view(14.0, theme::ink3()))
+        .child(ui::line(project, text::SIDE_NOTE, theme::ink3()).min_w_0())
+        .child(Icon::ChevronDown.view(12.0, theme::ink3()))
+        .when(!open, |heading| {
+            heading.tooltip(|_, cx| cx.new(|_| ui::Tooltip("Folders".into())).into())
+        })
+        .on_action(cx.listener(|this, _: &OpenMenu, window, cx| {
+            this.open_menu(SidebarMenu::Folder, true, window, cx)
+        }))
+        .on_click(cx.listener(|this, event: &ClickEvent, window, cx| {
+            if event.is_keyboard() {
+                this.toggle_menu(SidebarMenu::Folder, true, window, cx);
+            }
+        }));
+        let bounds = self.heading_bounds.clone();
+        div()
+            .relative()
+            .child(heading)
+            // Where the project's row is, for a finished export to land on.
+            .child(
+                canvas(
+                    move |placed, _, _| bounds.set(Some(placed)),
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .top(px(4.0))
+                .left(px(8.0))
+                .right(px(8.0))
+                .h(px(theme::height::H28)),
+            )
+            .when(open, |wrapper| {
+                wrapper.child(
+                    deferred(
+                        div()
+                            .absolute()
+                            .top(px(34.0))
+                            .left(px(8.0))
+                            .child(self.menu_view(&SidebarMenu::Folder, None, 240.0, cx)),
+                    )
+                    .with_priority(1),
+                )
+            })
+    }
+
+    /// Another folder worked on here: pressed, it opens in place of this
+    /// project; its ⋯ or a right-click has its menu.
+    fn other_folder(&self, index: usize, folder: PathBuf, cx: &mut Context<Self>) -> AnyElement {
+        let name = folder_name(&folder);
+        let menu = SidebarMenu::Other(folder.clone());
+        let menu_open = self.menu_is(&menu);
+        let row = Self::keyed(
+            div().id(ElementId::Name(format!("folder-{index}").into())),
+            ITEM,
+        )
+        .group("folder-row")
+        .flex()
+        .items_center()
+        .gap(px(6.0))
+        .h(px(theme::height::H28))
+        .px(px(10.0))
+        .mx(px(8.0))
+        .rounded(px(theme::radius::CONTROL))
+        .cursor_pointer()
+        .hover(|row| row.bg(theme::raised()))
+        .when(menu_open, |row| row.bg(theme::raised()))
+        .child(Icon::Folder.view(14.0, theme::ink3()))
+        .child(
+            ui::line(name, text::SIDE_NOTE, theme::ink2())
+                .flex_1()
+                .min_w_0(),
+        )
+        .child(
+            div()
+                .invisible()
+                .group_hover("folder-row", |more| more.visible())
+                .when(menu_open, |more| more.visible())
+                .child(
+                    trigger(
+                        ElementId::Name(format!("folder-more-{index}").into()),
+                        cx.listener({
+                            let menu = menu.clone();
+                            move |this, _: &MouseDownEvent, window, cx| {
+                                this.toggle_menu(menu.clone(), false, window, cx)
+                            }
+                        }),
+                    )
+                    .child(
+                        icon_button(
+                            ElementId::Name(format!("folder-more-button-{index}").into()),
+                            Icon::More,
+                        )
+                        .size(20.0),
+                    ),
+                ),
+        )
+        .tooltip({
+            let tip: SharedString = folder.display().to_string().into();
+            move |_, cx| cx.new(|_| ui::Tooltip(tip.clone())).into()
+        })
+        .on_mouse_down(
+            MouseButton::Right,
+            cx.listener({
+                let menu = menu.clone();
+                move |this, _, window, cx| {
+                    cx.stop_propagation();
+                    this.open_menu(menu.clone(), false, window, cx);
+                }
+            }),
+        )
+        .on_action(cx.listener({
+            let menu = menu.clone();
+            move |this, _: &OpenMenu, window, cx| this.open_menu(menu.clone(), true, window, cx)
+        }))
+        .on_click(cx.listener({
+            let folder = folder.clone();
+            move |this, _, window, cx| {
+                // Another folder opens in a window of its own, in place of this one.
+                this.run_entry(Entry::Open(folder.clone()), false, window, cx)
+            }
+        }));
+        div()
+            .relative()
+            .child(row)
+            .when(menu_open, |wrapper| {
+                wrapper.child(
+                    deferred(
+                        div()
+                            .absolute()
+                            .top(px(28.0))
+                            .right(px(8.0))
+                            .child(self.menu_view(&menu, None, 200.0, cx)),
+                    )
+                    .with_priority(1),
+                )
+            })
+            .into_any_element()
+    }
+
+    /// The account at the foot: a disc with its first letter, who chat
+    /// runs on, and under it the plan or the model. Pressed, the app's menu
+    /// opens above it.
+    fn account(&self, title: String, below: String, cx: &mut Context<Self>) -> impl IntoElement {
+        let open = self.menu_is(&SidebarMenu::Account);
+        let letter = title
+            .chars()
+            .find(|ch| ch.is_alphanumeric())
+            .map(|ch| ch.to_uppercase().collect::<String>())
+            .unwrap_or_default();
+        Self::keyed(
+            trigger(
+                "account",
+                cx.listener(|this, _: &MouseDownEvent, window, cx| {
+                    this.toggle_menu(SidebarMenu::Account, false, window, cx)
+                }),
+            ),
+            ITEM,
+        )
+        .flex()
+        .items_center()
+        .gap(px(8.0))
+        .flex_1()
+        .min_w_0()
+        .h(px(36.0))
+        .px(px(6.0))
+        .rounded(px(theme::radius::CARD))
+        .cursor_pointer()
+        .when(open, |account| account.bg(theme::raised()))
+        .hover(|account| account.bg(theme::raised()))
+        .child(
+            theme::type_style(div(), text::CONTROL_STRONG)
+                .flex_none()
+                .size(px(24.0))
+                .rounded_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .bg(theme::on())
+                .text_color(theme::ink2())
+                .child(letter),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .flex_1()
+                .min_w_0()
+                .child(ui::line(title, text::CONTROL_STRONG, theme::ink2()))
+                .child(ui::line(below, text::META, theme::ink3())),
+        )
+        .on_action(cx.listener(|this, _: &OpenMenu, window, cx| {
+            this.open_menu(SidebarMenu::Account, true, window, cx)
+        }))
+        .on_click(cx.listener(|this, event: &ClickEvent, window, cx| {
+            if event.is_keyboard() {
+                this.toggle_menu(SidebarMenu::Account, true, window, cx);
+            }
+        }))
+    }
 }
 
 impl Render for SidebarView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.arrivals.retain(|_, at| at.elapsed() < scene::APPEAR);
+        // A menu that had the keys has gone: they go back where they were.
+        if let Some(back) = self.refocus.take() {
+            if self.menu_focus.is_focused(window) {
+                cx.defer_in(window, move |_, window, _| window.focus(&back));
+            }
+        }
+        // What a menu's choice did took the keys: they stay there.
+        if self.give_back_on_key_up.is_some() && !self.menu_focus.is_focused(window) {
+            self.give_back_on_key_up = None;
+        }
+        // A menu gone by a key still down holds the keys, unseen, until it
+        // comes up; Enter and Space press nothing meanwhile.
+        let key_down_after_choice = self.give_back_on_key_up.is_some().then(|| {
+            div()
+                .absolute()
+                .size_0()
+                .track_focus(&self.menu_focus)
+                .key_context(ITEM)
+                .on_key_up(
+                    cx.listener(|this, _: &KeyUpEvent, window, cx| this.give_back_keys(window, cx)),
+                )
+        });
         let session = self.session.read(cx);
         let project = session.project_name();
         let new_chosen = session.conversation.is_none();
@@ -964,15 +2066,20 @@ impl Render for SidebarView {
         let open_conversation = session.state.open_conversation.clone();
         let proposals = session.state.snapshot.proposals.clone();
         let settled = session.state.settled.clone();
-        let connection = session.state.connection.clone();
-        let provider = session.prefs.provider.label();
+        // Who chat runs on, at the foot.
+        let (account_title, account_below, _) = account_of(session, cx);
         // The other folders worked on here, newest first.
         let current = session.project.clone();
-        let others: Vec<std::path::PathBuf> = session
+        let others: Vec<PathBuf> = session
             .prefs
             .recent
             .iter()
-            .filter(|project| Some(*project) != current.as_ref() && project.is_dir())
+            .filter(|project| {
+                !current
+                    .as_deref()
+                    .is_some_and(|current| crate::app::same_folder(current, project))
+                    && project.is_dir()
+            })
             .take(6)
             .cloned()
             .collect();
@@ -1021,23 +2128,22 @@ impl Render for SidebarView {
         };
         let archived_count = archived.len();
         let nothing_found = !query.is_empty() && open.is_empty() && archived.is_empty();
-
-        let (status_color, status) = match &connection {
-            crate::store::Connection::Connected => (theme::pos(), "Connected".to_owned()),
-            crate::store::Connection::Connecting => (theme::warn(), "Connecting…".to_owned()),
-            crate::store::Connection::Failed(message) => (theme::neg(), message.clone()),
+        let account_open = self.menu_is(&SidebarMenu::Account);
+        let header: SharedString = account_title.clone().into();
+        let heading = self.folder_heading(project, cx);
+        let other_rows: Vec<AnyElement> = if query.is_empty() {
+            others
+                .into_iter()
+                .enumerate()
+                .map(|(index, folder)| self.other_folder(index, folder, cx))
+                .collect()
+        } else {
+            Vec::new()
         };
-        let app_menu_open = self.app_menu;
-        let header: SharedString = provider.into();
-        let close_app_menu: Rc<dyn Fn(&mut Window, &mut App)> = {
-            let this = cx.entity().downgrade();
-            Rc::new(move |_, cx| {
-                let _ = this.update(cx, |this, cx| {
-                    this.app_menu = false;
-                    cx.notify();
-                });
-            })
-        };
+        let account = self.account(account_title, account_below, cx);
+        let account_menu =
+            account_open.then(|| self.menu_view(&SidebarMenu::Account, Some(header), 220.0, cx));
+        let edge = self.edge(cx);
 
         div()
             .size_full()
@@ -1047,6 +2153,10 @@ impl Render for SidebarView {
             .bg(theme::sidebar())
             .border_r_1()
             .border_color(theme::line())
+            .key_context(CONTEXT)
+            .on_action(cx.listener(|_, _: &FocusNext, window, _| window.focus_next()))
+            .on_action(cx.listener(|_, _: &FocusPrevious, window, _| window.focus_prev()))
+            .children(key_down_after_choice)
             .child(
                 div()
                     .h(px(layout::TOOLBAR))
@@ -1070,8 +2180,7 @@ impl Render for SidebarView {
                     .flex_col()
                     .gap(px(2.0))
                     .child(
-                        div()
-                            .id("new-conversation")
+                        Self::keyed(div().id("new-conversation"), ITEM)
                             .flex()
                             .items_center()
                             .gap(px(8.0))
@@ -1092,22 +2201,13 @@ impl Render for SidebarView {
                     )
                     .child(self.search_row(cx)),
             )
-            .child(
-                div()
-                    .px(px(18.0))
-                    .pt(px(8.0))
-                    .pb(px(6.0))
-                    .flex()
-                    .items_center()
-                    .gap(px(6.0))
-                    .child(Icon::Folder.view(14.0, theme::ink3()))
-                    .child(ui::line(project, text::SIDE_NOTE, theme::ink3())),
-            )
+            .child(heading)
             .child(
                 div()
                     .id("conversations")
                     .flex_1()
                     .min_h_0()
+                    .pt(px(4.0))
                     .overflow_y_scroll()
                     .flex()
                     .flex_col()
@@ -1119,8 +2219,7 @@ impl Render for SidebarView {
                             More::Less => "Show less".to_owned(),
                         };
                         list.child(
-                            div()
-                                .id("show-more")
+                            Self::keyed(div().id("show-more"), ITEM)
                                 .flex()
                                 .items_center()
                                 .h(px(theme::height::H28))
@@ -1150,41 +2249,17 @@ impl Render for SidebarView {
                             theme::ink3(),
                         )))
                     })
-                    .when(!others.is_empty() && query.is_empty(), |list| {
+                    .when(!other_rows.is_empty(), |list| {
                         list.child(div().px(px(18.0)).pt(px(18.0)).pb(px(4.0)).child(ui::label(
                             "Other folders",
                             text::META,
                             theme::ink3(),
                         )))
-                        .children(others.into_iter().enumerate().map(|(index, project)| {
-                            let name = project
-                                .file_name()
-                                .map(|name| name.to_string_lossy().into_owned())
-                                .unwrap_or_default();
-                            div()
-                                .id(ElementId::Name(format!("folder-{index}").into()))
-                                .flex()
-                                .items_center()
-                                .gap(px(6.0))
-                                .h(px(theme::height::H28))
-                                .px(px(10.0))
-                                .mx(px(8.0))
-                                .rounded(px(theme::radius::CONTROL))
-                                .cursor_pointer()
-                                .hover(|row| row.bg(theme::raised()))
-                                .child(Icon::Folder.view(14.0, theme::ink3()))
-                                .child(ui::line(name, text::SIDE_NOTE, theme::ink2()))
-                                .on_click(move |_, window, cx| {
-                                    // Another folder opens in a window of its own, in place of this one.
-                                    crate::app::open(Some(project.clone()), None, cx);
-                                    window.remove_window();
-                                })
-                        }))
+                        .children(other_rows)
                     })
                     .when(archived_count > 0, |list| {
                         list.child(
-                            div()
-                                .id("archived")
+                            Self::keyed(div().id("archived"), ITEM)
                                 .mt(px(10.0))
                                 .mx(px(8.0))
                                 .px(px(10.0))
@@ -1227,69 +2302,37 @@ impl Render for SidebarView {
                     .px(px(6.0))
                     .border_t_1()
                     .border_color(theme::line())
+                    .child(account)
                     .child(
-                        // The account: pressed, the app's menu opens above it.
-                        trigger(
-                            "account",
-                            cx.listener(|this, _: &MouseDownEvent, _, cx| {
-                                this.menu = None;
-                                this.app_menu = !this.app_menu;
-                                if this.app_menu {
-                                    cx.emit(SidebarEvent::MenuOpened);
+                        Self::keyed(div().id("settings-keys"), ITEM)
+                            .rounded(px(theme::radius::CONTROL))
+                            .child(
+                                icon_button("settings", Icon::Gear)
+                                    .tooltip("Settings")
+                                    .on_click(
+                                        cx.listener(|_, _, _, cx| cx.emit(SidebarEvent::Settings)),
+                                    ),
+                            )
+                            .on_click(cx.listener(|_, event: &ClickEvent, _, cx| {
+                                if event.is_keyboard() {
+                                    cx.emit(SidebarEvent::Settings);
                                 }
-                                cx.notify();
-                            }),
-                        )
-                        .flex()
-                        .items_center()
-                        .gap(px(8.0))
-                        .flex_1()
-                        .min_w_0()
-                        .h(px(36.0))
-                        .px(px(6.0))
-                        .rounded(px(theme::radius::CONTROL))
-                        .cursor_pointer()
-                        .when(app_menu_open, |account| account.bg(theme::raised()))
-                        .hover(|account| account.bg(theme::raised()))
-                        .child(ui::dot(status_color, 7.0))
-                        .child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .flex_1()
-                                .min_w_0()
-                                .child(ui::line(provider, text::CONTROL_STRONG, theme::ink2()))
-                                .child(ui::line(status, text::META, theme::ink3())),
-                        ),
-                    )
-                    .child(
-                        icon_button("settings", Icon::Gear)
-                            .tooltip("Settings")
-                            .on_click(cx.listener(|_, _, _, cx| cx.emit(SidebarEvent::Settings))),
+                            })),
                     ),
             )
             // The account's menu, just above the foot. Drawn after it, so the
             // account's press is taken before the menu hears a press outside
             // it: pressed again, the account puts the menu away.
-            .when(app_menu_open, |sidebar| {
+            .when_some(account_menu, |sidebar, menu| {
                 sidebar.child(
                     div()
                         .absolute()
                         .left(px(8.0))
                         .bottom(px(layout::SIDEBAR_FOOT + 4.0))
-                        .child(
-                            app_menu(header, close_app_menu).on_mouse_down_out(cx.listener(
-                                |this, _, _, cx| {
-                                    this.app_menu = false;
-                                    cx.notify();
-                                },
-                            )),
-                        )
-                        .with_animation("app-menu", motion::animation(scene::FADE), |menu, t| {
-                            menu.opacity(t)
-                        }),
+                        .child(menu),
                 )
             })
+            .child(edge)
             .on_mouse_down(MouseButton::Right, |_, _, _| {})
     }
 }

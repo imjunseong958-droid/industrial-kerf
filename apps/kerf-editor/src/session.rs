@@ -9,7 +9,7 @@ use crate::store::{Change, EditorState};
 use crate::theme::motion;
 use gpui::{App, AppContext, Context, Entity, EventEmitter, RenderImage, Task, Window};
 use serde_json::{json, Value};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
@@ -65,6 +65,15 @@ pub struct Session {
     mark_in: Option<f64>,
     mark_out: Option<f64>,
     looping: bool,
+    /// What the toolbar's Export renders in one press, as its menu was
+    /// last left in this window: the master or a draft.
+    pub export_quality: crate::export::Quality,
+    /// The open proposal the window's keys and menus act on: the pinned
+    /// card's, set by the window (`ChatView::proposal_target`) before it
+    /// asks what can run. None takes the newest pending one.
+    pub pinned_proposal: Option<String>,
+    /// What the window and Kerf did, a line each (Activity, in the title's menu).
+    pub activity: ActivityLog,
     _poll: Option<Task<()>>,
 }
 
@@ -114,6 +123,9 @@ impl Session {
                 mark_in: None,
                 mark_out: None,
                 looping: false,
+                export_quality: crate::export::Quality::default(),
+                pinned_proposal: None,
+                activity: ActivityLog::default(),
                 _poll: poll,
             };
             session.send(json!({"type": "conversations", "action": "list"}));
@@ -152,6 +164,14 @@ impl Session {
                 log::debug!("bridge event: {}", truncate(&event.to_string(), 400));
             }
             let change = self.state.apply(&event);
+            if let Some((kind, text)) = activity_of(&event) {
+                self.activity.push(kind, &text);
+            }
+            if change == Change::Connection
+                && self.state.connection == crate::store::Connection::Connected
+            {
+                self.activity.push("project", "Project connected");
+            }
             cx.emit(BridgeEvent(event.clone()));
             match &change {
                 Change::Snapshot => self.follow_link(),
@@ -189,7 +209,10 @@ impl Session {
             cx.emit(Change::Clock);
             changed = true;
         }
-        if self.state.expire_notices(6.0) {
+        if self
+            .state
+            .expire_notices(motion::NOTICE_HOLD, motion::NOTICE_ERROR_HOLD)
+        {
             cx.emit(Change::Notice);
             changed = true;
         }
@@ -245,10 +268,10 @@ impl Session {
             .filter(|revision| *revision != self.revision())
         {
             let now = self.revision();
-            self.state.notify(
-                &format!("The link was to revision {revision}; the project is at revision {now}."),
-                false,
-            );
+            let said =
+                format!("The link was to revision {revision}; the project is at revision {now}.");
+            self.state.notify(&said, false);
+            self.activity.push("link", &said);
         }
     }
 
@@ -342,36 +365,42 @@ impl Session {
     }
 
     pub fn import(&mut self, path: &Path, media_only: bool) {
-        self.send(
+        let sent = self.send(
             json!({"type": "import", "path": path.to_string_lossy(), "mediaOnly": media_only}),
         );
+        if sent {
+            let name = path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| path.display().to_string());
+            self.activity.push("import", &format!("Importing {name}"));
+        }
     }
 
-    pub fn export(&mut self, quality: &str) {
-        self.send(json!({"type": "export", "quality": quality}));
+    /// Queues a render of `quality` as [`export_request`] makes it: a
+    /// master or a review copy goes into the project's deliveries/, as ⌘E
+    /// and the toolbar's Export send it. False when it was not sent.
+    pub fn export(&mut self, quality: &str) -> bool {
+        let command = export_request(self.project.as_deref(), quality);
+        let sent = self.send(command);
+        if sent {
+            let name = match quality {
+                "master" => "Master",
+                "review" => "Draft",
+                "full" => "Full render",
+                "preview" => "Preview",
+                other => other,
+            };
+            self.activity
+                .push("export", &format!("Export started ({name})"));
+        }
+        sent
     }
 
     /// Renders the master (`master`) or a review copy (`review`) into the
-    /// project's deliveries/, named after its folder: `<folder>_master`,
-    /// `<folder>_draft`. Without a folder name, as kerfd names it.
+    /// project's deliveries/ (Finish, ⌘E): [`Session::export`].
     pub fn deliver(&mut self, quality: &str) {
-        let folder = self
-            .project
-            .as_deref()
-            .and_then(Path::file_name)
-            .map(|name| name.to_string_lossy().into_owned())
-            .filter(|name| !name.trim().is_empty());
-        let Some(folder) = folder else {
-            self.export(quality);
-            return;
-        };
-        let command = if quality == "master" {
-            json!({"type": "export", "quality": "master", "output": DELIVERIES, "name": format!("{folder}_master")})
-        } else {
-            json!({"type": "export", "quality": "review", "codec": "h264", "output": DELIVERIES,
-                "name": format!("{folder}_draft")})
-        };
-        self.send(command);
+        self.export(quality);
     }
 
     /// Turns Live Sync on or off for this project, and remembers it for the
@@ -578,11 +607,21 @@ impl Session {
         if let Some(collab) = &self.state.collab {
             context["collab"] = collab.clone();
         }
-        if let Some(proposal) = self.state.snapshot.pending() {
-            context["proposal"] = json!({
-                "id": proposal.proposal_id,
-                "blocked": proposal.is_stale().then_some("The project changed since Kerf proposed this"),
-            });
+        // The pinned card's proposal, else (none pinned, or one gone since)
+        // the newest pending one.
+        let snapshot = &self.state.snapshot;
+        let proposal = self
+            .pinned_proposal
+            .as_deref()
+            .and_then(|pinned| {
+                snapshot
+                    .proposals
+                    .iter()
+                    .find(|proposal| proposal.proposal_id == pinned && proposal.is_pending())
+            })
+            .or_else(|| snapshot.pending());
+        if let Some(proposal) = proposal {
+            context["proposal"] = proposal_context(proposal);
         }
         if let Some(source) = self
             .chosen_media
@@ -613,13 +652,38 @@ impl Session {
     /// Runs an engine command of the registry: the request it resolves to
     /// goes to the bridge; why it cannot run is said.
     pub fn run_command(&mut self, id: &str, params: Value) {
+        self.request_command(id, params);
+    }
+
+    /// [`Session::run_command`], true when its request went to the bridge.
+    fn request_command(&mut self, id: &str, params: Value) -> bool {
         let invocation =
             json!({"command": id, "context": self.command_context(), "params": params});
         let answer = kerf_bridge::commands_run(&invocation);
         if let Some(request) = answer.get("request").filter(|request| request.is_object()) {
-            self.send(request.clone());
-        } else if let Some(error) = answer["error"].as_str() {
-            self.state.notify(error, true);
+            let sent = self.send(request.clone());
+            if sent && request["type"] == "preview" {
+                self.activity.push("preview", "Rendering preview");
+            }
+            sent
+        } else {
+            if let Some(error) = answer["error"].as_str() {
+                self.state.notify(error, true);
+            }
+            false
+        }
+    }
+
+    /// File ▸ Export…: the registry's `file.export` at the quality chosen
+    /// in Export's menu, as File ▸ Export… names it (`full` for Master,
+    /// `preview` for Draft), rendered where kerfd puts it. The toolbar's
+    /// Export renders into deliveries/ instead ([`Session::export`]).
+    /// The workspace calls it for `file.export`.
+    pub fn export_file(&mut self) {
+        let quality = self.export_quality;
+        if self.request_command("file.export", json!({"quality": quality.file_wire()})) {
+            self.activity
+                .push("export", &format!("Export started ({})", quality.name()));
         }
     }
 
@@ -786,6 +850,124 @@ impl Session {
     /// window asks it again (a key changed outside Kerf).
     pub fn forget_keys(&self) {
         keychain().clear();
+    }
+}
+
+/// What the command registry is told of the proposal its commands act on
+/// (kerf-commands' `ProposalState`): its id, and `blocked: "stale"` once
+/// the edit has changed under it, so Accept says to bring it forward and
+/// Bring Proposal Forward can run. [`Session::command_context`] sends it.
+pub fn proposal_context(proposal: &crate::model::Proposal) -> Value {
+    json!({
+        "id": proposal.proposal_id,
+        "blocked": proposal.is_stale().then_some("stale"),
+    })
+}
+
+/// The `export` request for `quality` in `project`. A master (`master`)
+/// or a review copy (`review`, H.264) goes into the project's deliveries/,
+/// named after its folder: `<folder>_master`, `<folder>_draft`. Another
+/// quality (`full`, `preview`), or a project with no folder name, goes
+/// where kerfd puts it, under its own name.
+pub fn export_request(project: Option<&Path>, quality: &str) -> Value {
+    let folder = project
+        .and_then(Path::file_name)
+        .map(|name| name.to_string_lossy().into_owned())
+        .filter(|name| !name.trim().is_empty());
+    let mut command = json!({"type": "export", "quality": quality});
+    if quality == "review" {
+        command["codec"] = json!("h264");
+    }
+    if let (Some(folder), true) = (folder, matches!(quality, "master" | "review")) {
+        let suffix = if quality == "master" {
+            "master"
+        } else {
+            "draft"
+        };
+        command["output"] = json!(DELIVERIES);
+        command["name"] = json!(format!("{folder}_{suffix}"));
+    }
+    command
+}
+
+/// How many lines Activity keeps, and how many it shows.
+pub const ACTIVITY_KEPT: usize = 80;
+pub const ACTIVITY_SHOWN: usize = 8;
+
+/// What the window and Kerf did, a line each, oldest first: imports,
+/// exports, previews, analyses, a link to another revision, the project
+/// connecting. The newest [`ACTIVITY_KEPT`] are kept.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ActivityLog {
+    lines: VecDeque<(String, String)>,
+}
+
+impl ActivityLog {
+    /// Keeps `text` under `kind` ("export", "import", …); empty text is not kept.
+    pub fn push(&mut self, kind: &str, text: &str) {
+        let text = text.trim();
+        if text.is_empty() {
+            return;
+        }
+        self.lines.push_back((kind.to_owned(), text.to_owned()));
+        while self.lines.len() > ACTIVITY_KEPT {
+            self.lines.pop_front();
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.lines.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.lines.is_empty()
+    }
+
+    /// The newest `most` lines, oldest first, as (kind, text).
+    pub fn latest(&self, most: usize) -> impl Iterator<Item = (&str, &str)> {
+        self.lines
+            .iter()
+            .skip(self.lines.len().saturating_sub(most))
+            .map(|(kind, text)| (kind.as_str(), text.as_str()))
+    }
+}
+
+/// The Activity line a bridge event leaves, if any: an export that ended
+/// (the file it made, or how it ended), an analysis made in the
+/// background, a preview that could not render.
+pub fn activity_of(event: &Value) -> Option<(&'static str, String)> {
+    match event["type"].as_str()? {
+        "export" => {
+            let status = event["status"].as_str().unwrap_or_default();
+            let path = event["path"].as_str().unwrap_or_default();
+            match status {
+                "completed" | "complete" | "ready" if !path.is_empty() => {
+                    Some(("export", path.to_owned()))
+                }
+                "failed" => Some((
+                    "export",
+                    format!(
+                        "Export failed: {}",
+                        event["message"].as_str().unwrap_or("it could not render")
+                    ),
+                )),
+                "cancelled" | "canceled" => Some(("export", "Export cancelled".to_owned())),
+                _ => None,
+            }
+        }
+        "analysis" => event["message"]
+            .as_str()
+            .filter(|message| !message.trim().is_empty())
+            .map(|message| ("analysis", message.to_owned())),
+        "preview" if event["status"] == "failed" || event["status"] == "unavailable" => Some((
+            "preview",
+            event["message"]
+                .as_str()
+                .filter(|message| !message.trim().is_empty())
+                .unwrap_or("Native preview unavailable")
+                .to_owned(),
+        )),
+        _ => None,
     }
 }
 

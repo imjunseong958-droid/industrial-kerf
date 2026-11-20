@@ -13,8 +13,56 @@ use gpui::{
     FocusHandle, Focusable, ScrollHandle, SharedString, Subscription, Window,
 };
 use serde_json::Value;
+use std::path::{Path, PathBuf};
 
 actions!(palette, [OpenPalette, Previous, Next]);
+
+/// How a recent project's row's id starts in the palette; its path follows.
+const RECENT: &str = "file.openRecent:";
+
+/// What a recent project's row says it is under, where a command's menu is.
+pub const RECENT_MENU: &str = "File ▸ Open Recent";
+
+/// Why a recent project whose folder is gone cannot be opened.
+pub const RECENT_GONE: &str = "Its folder is no longer there";
+
+/// File ▸ Open Recent's rows as the palette lists them after the
+/// registry's commands (off macOS the palette is where the menus are):
+/// each recent project by its folder's name under [`RECENT_MENU`], newest
+/// first, the one open here ticked as in the menu, with whether its folder
+/// is gone. Chosen, one opens as Open Recent does ([`recent_path`]).
+pub fn recent_commands(
+    recent: &[PathBuf],
+    current: Option<&Path>,
+) -> Vec<(commands::Command, bool)> {
+    commands::recent_rows(recent, current)
+        .into_iter()
+        .map(|row| {
+            let label = if row.current {
+                format!("✓ {}", row.name)
+            } else {
+                row.name.clone()
+            };
+            (
+                commands::Command {
+                    id: format!("{RECENT}{}", row.path.to_string_lossy()),
+                    label,
+                    menu: RECENT_MENU.to_owned(),
+                    group: 0,
+                    scope: "window".to_owned(),
+                    keys: Vec::new(),
+                },
+                row.missing,
+            )
+        })
+        .collect()
+}
+
+/// The project a row of [`recent_commands`] opens, by its id; None for a
+/// command of the registry.
+pub fn recent_path(id: &str) -> Option<&str> {
+    id.strip_prefix(RECENT)
+}
 
 /// The widest a command's reason (or menu) is before it is cut.
 const REASON_MOST: f32 = 280.0;
@@ -50,9 +98,23 @@ impl CommandPalette {
         // settings file), so Ask is said to be available as it is.
         session.update(cx, |session, _| session.prefs.refresh());
         let keymap = session.read(cx).prefs.keymap.wire();
-        let commands = commands::catalog(keymap);
+        let mut commands = commands::catalog(keymap);
         let cloud = crate::app::cloud(cx).cloned();
-        let states = session.read(cx).command_states(cloud.as_ref());
+        let mut states = session.read(cx).command_states(cloud.as_ref());
+        // The recent projects, as File ▸ Open Recent lists them; one whose
+        // folder is gone says so.
+        let recent = {
+            let session = session.read(cx);
+            recent_commands(&session.prefs.recent, session.project.as_deref())
+        };
+        for (command, missing) in recent {
+            if missing {
+                if let Some(states) = states.as_object_mut() {
+                    states.insert(command.id.clone(), Value::from(RECENT_GONE));
+                }
+            }
+            commands.push(command);
+        }
         let query = cx.new(|cx| TextInput::new(cx, "Find a command…").with_style(text::MENU_ITEM));
         query.read(cx).focus(window);
         let subscriptions =
@@ -103,7 +165,15 @@ impl CommandPalette {
             return;
         }
         // Dispatched from here, where the workspace hears it, before giving the window back.
-        window.dispatch_action(Box::new(RunCommand { id: id.into() }), cx);
+        match recent_path(&id) {
+            Some(path) => window.dispatch_action(
+                Box::new(commands::OpenRecent {
+                    path: path.to_owned().into(),
+                }),
+                cx,
+            ),
+            None => window.dispatch_action(Box::new(RunCommand { id: id.into() }), cx),
+        }
         cx.emit(DismissEvent);
     }
 
@@ -116,6 +186,17 @@ impl CommandPalette {
         self.scroll.scroll_to_item(self.chosen);
         cx.notify();
     }
+}
+
+/// The shortcut `command`'s row shows: its first, as the system writes it
+/// and the window binds it ("⌘E" on a Mac; "Ctrl+R" elsewhere for a
+/// keymap's "Meta+R"). Empty when it has none.
+pub fn shortcut(command: &commands::Command) -> String {
+    command
+        .keys
+        .first()
+        .map(|keys| commands::shown_keys(keys))
+        .unwrap_or_default()
 }
 
 /// Why `id` cannot run, as `states` (`kerf_bridge::commands_states`) says;
@@ -132,7 +213,7 @@ impl Focusable for CommandPalette {
 
 impl Render for CommandPalette {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let found: Vec<(String, String, String, Vec<String>, Option<String>)> = self
+        let found: Vec<(String, String, String, String, Option<String>)> = self
             .found(cx)
             .into_iter()
             .map(|command| {
@@ -140,7 +221,7 @@ impl Render for CommandPalette {
                     command.id.clone(),
                     command.label.clone(),
                     command.menu.clone(),
-                    command.keys.clone(),
+                    shortcut(command),
                     unavailable(&self.states, &command.id).map(str::to_owned),
                 )
             })
@@ -150,6 +231,12 @@ impl Render for CommandPalette {
             .key_context(CONTEXT)
             .on_action(cx.listener(|this, _: &Previous, _, cx| this.step(-1, cx)))
             .on_action(cx.listener(|this, _: &Next, _, cx| this.step(1, cx)))
+            // A press on the dim around it gives the window back, and does
+            // nothing to what lies under the dim.
+            .on_mouse_down_out(cx.listener(|_, _, _, cx| {
+                cx.stop_propagation();
+                cx.emit(DismissEvent);
+            }))
             .w(px(560.0))
             .max_h(px(460.0))
             .flex()
@@ -183,9 +270,8 @@ impl Render for CommandPalette {
                         )))
                     })
                     .children(found.into_iter().enumerate().map(
-                        |(index, (id, label, menu, keys, reason))| {
-                            let shortcut: SharedString =
-                                keys.first().cloned().unwrap_or_default().into();
+                        |(index, (id, label, menu, shortcut, reason))| {
+                            let shortcut: SharedString = shortcut.into();
                             let able = reason.is_none();
                             div()
                                 .id(ElementId::Name(format!("palette-{id}").into()))

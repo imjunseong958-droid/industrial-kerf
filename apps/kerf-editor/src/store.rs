@@ -6,7 +6,7 @@
 use crate::model::{Conversation, ConversationSummary, RenderJob, Snapshot};
 use serde_json::Value;
 use std::collections::BTreeMap;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 /// The connection to kerfd.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -145,6 +145,15 @@ pub struct EditorState {
     pub settled: Vec<String>,
     /// The project's Git standing, as the last `collab` event said it.
     pub collab: Option<Value>,
+    /// The name Save Current as Preset sent, until the bridge answers: a
+    /// refusal for a preset of that name already there is then asked
+    /// about ([`crate::presets::SavePreset`]), not said.
+    pub saving_preset: Option<String>,
+    /// The preset that refusal named (`presets/Intro.kerfpreset`).
+    pub preset_exists: Option<String>,
+    /// The preset file last read (`preset_inspect`): its path, and what it
+    /// holds.
+    pub inspected_preset: Option<(String, Value)>,
     /// How many notices there have been.
     noticed: u64,
 }
@@ -158,6 +167,15 @@ fn answered_in_place(command: &str) -> bool {
 }
 
 impl EditorState {
+    /// Whether the project is up (its first snapshot has come) or kerfd
+    /// could not be reached: what waits on the project opening, such as
+    /// the warnings a new or cloned project leaves, can be said now. Not
+    /// while it is only connecting, or connected with no snapshot yet.
+    /// `app::say_when_up` waits for it.
+    pub fn opened_or_failed(&self) -> bool {
+        self.has_snapshot || matches!(self.connection, Connection::Failed(_))
+    }
+
     /// Folds one bridge event into the state.
     pub fn apply(&mut self, event: &Value) -> Change {
         let kind = event["type"].as_str().unwrap_or_default();
@@ -200,6 +218,13 @@ impl EditorState {
                     return Change::Making;
                 }
                 let message = event["message"].as_str().unwrap_or("Something went wrong");
+                // Saving over a preset of that name is asked about, not refused.
+                if self.saving_preset.is_some() {
+                    if let Some(path) = crate::presets::existing_preset(message) {
+                        self.preset_exists = Some(path.to_owned());
+                        return Change::Other;
+                    }
+                }
                 self.notify(message, true);
                 Change::Notice
             }
@@ -477,6 +502,35 @@ impl EditorState {
                 }
                 Change::Making
             }
+            "preset_inspect" => {
+                let path = event["path"].as_str().unwrap_or_default().to_owned();
+                self.inspected_preset = Some((path, event["preset"].clone()));
+                Change::Other
+            }
+            "preset_applied" => {
+                self.notify("Preset proposal ready for review", false);
+                Change::Notice
+            }
+            // The bridge hands back the document; the editor writes it.
+            "preset_export" => {
+                let path = event["path"].as_str().unwrap_or_default();
+                let document = event["document"].as_str().unwrap_or_default();
+                match crate::presets::write_document(std::path::Path::new(path), document) {
+                    Ok(()) => {
+                        let name = path.rsplit(['/', '\\']).next().unwrap_or(path);
+                        self.notify(&format!("Preset exported: {name}"), false);
+                    }
+                    Err(error) => self.notify(&format!("Could not export preset: {error}"), true),
+                }
+                Change::Notice
+            }
+            "preset_saved" => {
+                self.saving_preset = None;
+                self.preset_exists = None;
+                let path = event["path"].as_str().unwrap_or_default();
+                self.notify(&format!("Saved preset {path}"), false);
+                Change::Notice
+            }
             _ => Change::Other,
         }
     }
@@ -528,11 +582,13 @@ impl EditorState {
         }
     }
 
-    /// Drops notices older than `seconds`; true when any went.
-    pub fn expire_notices(&mut self, seconds: f32) -> bool {
+    /// Drops notices that have been said for `hold`, and errors for
+    /// `error_hold` (what went wrong takes longer to read); true when any
+    /// went.
+    pub fn expire_notices(&mut self, hold: Duration, error_hold: Duration) -> bool {
         let before = self.notices.len();
         self.notices
-            .retain(|notice| notice.at.elapsed().as_secs_f32() < seconds);
+            .retain(|notice| notice.at.elapsed() < if notice.error { error_hold } else { hold });
         before != self.notices.len()
     }
 

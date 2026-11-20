@@ -13,10 +13,17 @@
 //! a failed or stopped one, Ask again. A request written while Kerf works
 //! waits over the composer ("Next: …") and goes when the turn ends.
 //!
-//! Proposal cards say what each proposal does and the clips it changes, with
-//! its versions; the open one nearest the playhead is pinned. A proposal has
-//! one card, under the newest turn that names it; an earlier one that named
-//! it says so in a line. Esc puts a menu of the conversation away first.
+//! Proposal cards say what each proposal does and the clips it changes (a
+//! colour change on one clip in a line of its own), with its versions; the
+//! open one nearest the playhead is pinned. A proposal has one card, under
+//! the newest turn that names it; an earlier one that named it says so in a
+//! line. Esc puts a menu of the conversation away first.
+//!
+//! The composer's chips name the folder, the model (Claude Code's chosen
+//! there) and what Kerf does without asking. Where nothing can be asked (no
+//! folder, kerfd gone, no key or no Kerf account) its placeholder says so in
+//! Qt's words, a hover says why, and Send is off. A request written while
+//! Kerf works keeps the playhead time it was written at.
 
 use crate::commands::{RevealPicture, RunCommand};
 use crate::icons::Icon;
@@ -32,7 +39,7 @@ use gpui::{
     anchored, deferred, div, linear_color_stop, linear_gradient, point, prelude::*, px, radians,
     AnimationExt, AnyElement, App, ClipboardItem, Context, Corner, Edges, ElementId, Entity,
     FocusHandle, Focusable, FontWeight, InteractiveText, Rgba, ScrollHandle, SharedString,
-    StyledText, Subscription, TextRun, Transformation, Window,
+    StyledText, Subscription, Task, TextRun, Transformation, Window,
 };
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
@@ -223,6 +230,40 @@ pub fn join_queued(waiting: Option<&str>, text: &str) -> String {
     }
 }
 
+/// What waits for Kerf to finish: the requests written while it works,
+/// joined as one, and the playhead time the latest of them was written at
+/// (Qt's queue took the time again with each request).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Queued(Option<(String, f64)>);
+
+impl Queued {
+    /// `text`, written with the playhead at `at`, joins what waits, and the
+    /// whole goes with `at`; nothing written leaves the queue as it is.
+    pub fn push(&mut self, text: &str, at: f64) {
+        if text.trim().is_empty() {
+            return;
+        }
+        let waiting = self.0.as_ref().map(|(waiting, _)| waiting.as_str());
+        self.0 = Some((join_queued(waiting, text), at));
+    }
+
+    /// The request waiting, if one is.
+    pub fn text(&self) -> Option<&str> {
+        self.0.as_ref().map(|(text, _)| text.as_str())
+    }
+
+    /// The request waiting and its playhead time, taken to be sent: nothing
+    /// waits after.
+    pub fn take(&mut self) -> Option<(String, f64)> {
+        self.0.take()
+    }
+
+    /// Nothing waits any more (Cancel).
+    pub fn clear(&mut self) {
+        self.0 = None;
+    }
+}
+
 /// "Worked for 1m 12s · 6 steps": what a finished turn folds to.
 pub fn worked_headline(seconds: Option<f64>, steps: usize) -> String {
     let seconds = seconds.unwrap_or(0.0).max(0.0).round() as u64;
@@ -279,6 +320,63 @@ pub fn permission_words(permissions: Permissions) -> (&'static str, &'static str
         Permissions::AcceptEdits => ("Accept edits", "Edits apply as Kerf makes them"),
         Permissions::Auto => ("Auto", "Edits apply, and Kerf makes its shots"),
     }
+}
+
+/// Whether a proposal's preview in `status` is showing or on its way, so
+/// its card says Previewing: not once it failed, stopped or was left, nor
+/// while it waits to be rendered (`required`, `unavailable`), when
+/// pressing Preview tries again.
+pub fn previewing(status: &str) -> bool {
+    matches!(status, "running" | "completed" | "ready" | "live")
+}
+
+/// Why the composer cannot ask: what it says in its placeholder's place,
+/// and the reason a hover over it (or Return) gives.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Refusal {
+    pub placeholder: &'static str,
+    pub reason: String,
+}
+
+/// Why nothing can be asked now, in Qt's words: no folder open, kerfd not
+/// connected, or (while Kerf is not working) a connection that cannot take
+/// requests, `ask_reason` being the registry's reason for `ai.ask` ("Add
+/// your API key in Settings → Chat", the Kerf account's). None when a
+/// request can go.
+pub fn refusal(
+    has_project: bool,
+    disconnected: bool,
+    busy: bool,
+    ask_reason: Option<&str>,
+) -> Option<Refusal> {
+    let refused = |placeholder, reason: &str| {
+        Some(Refusal {
+            placeholder,
+            reason: reason.to_owned(),
+        })
+    };
+    if !has_project {
+        refused(
+            "Open a folder to ask Kerf",
+            "Open a folder or start a project first",
+        )
+    } else if disconnected {
+        refused("Connect to ask Kerf", "Connect to start editing")
+    } else {
+        match ask_reason.filter(|reason| !busy && !reason.trim().is_empty()) {
+            Some(reason) => refused("Set up Kerf in Settings to ask", reason),
+            None => None,
+        }
+    }
+}
+
+/// The registry's reason Ask cannot run on a connection whose access is
+/// `access` (`noKey`, or a Kerf account's standing such as `signedOut`),
+/// whatever else holds; None for `ready`.
+pub fn access_reason(access: &str) -> Option<String> {
+    let states =
+        kerf_bridge::commands_states(&serde_json::json!({"connected": true, "aiAccess": access}));
+    states["ai.ask"].as_str().map(str::to_owned)
 }
 
 /// The models the chip offers for `provider`: Claude Code's own aliases
@@ -603,6 +701,150 @@ pub fn clip_changes(program: &Timeline, proposed: &Timeline) -> Vec<ClipChange> 
     changes
 }
 
+/// Whether an effect is a colour one, by its id: Qt's rule.
+fn is_colour_effect(fx: &str) -> bool {
+    let id = fx.to_lowercase();
+    id.starts_with("color.")
+        || id.starts_with("colour.")
+        || [
+            "hue",
+            "grade",
+            "lut",
+            "look",
+            "curve",
+            "balance",
+            "saturation",
+        ]
+        .iter()
+        .any(|word| id.contains(word))
+}
+
+/// An effect's or a parameter's id as a card says it: "color.white_balance"
+/// is "White balance".
+pub fn effect_label(id: &str) -> String {
+    let name = id.rsplit('.').next().unwrap_or(id).replace('_', " ");
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+        None => id.to_owned(),
+    }
+}
+
+/// A parameter's value as a card says it: "−9", "0.5", "on"; None for
+/// keyframes, which are no one value.
+fn param_value(value: &Value) -> Option<String> {
+    match value {
+        Value::Number(number) => {
+            let number = number.as_f64()?;
+            // Four significant figures, as Qt's 'g' wrote them.
+            let magnitude = number.abs();
+            let decimals = if magnitude == 0.0 {
+                0
+            } else {
+                (3 - magnitude.log10().floor() as i32).max(0) as usize
+            };
+            let text = format!("{magnitude:.decimals$}");
+            let text = if text.contains('.') {
+                text.trim_end_matches('0').trim_end_matches('.').to_owned()
+            } else {
+                text
+            };
+            Some(if number < 0.0 {
+                format!("−{text}")
+            } else {
+                text
+            })
+        }
+        Value::Bool(on) => Some(if *on { "on" } else { "off" }.to_owned()),
+        Value::String(text) => Some(text.clone()),
+        _ => None,
+    }
+}
+
+/// A clip's colour change, said on its card in a line of its own when it
+/// is all the proposal changes: "B003_C011 · Hue vs hue", and what it sets
+/// ("Hue −9, Sat −6"). None for anything else.
+pub fn colour_change(
+    program: &Timeline,
+    proposed: &Timeline,
+    changes: &[ClipChange],
+) -> Option<(String, String)> {
+    let [change] = changes else {
+        return None;
+    };
+    if !change.effects || change.added || change.removed {
+        return None;
+    }
+    let before = program
+        .clip(&change.clip)
+        .map(|(_, clip)| clip.effects.clone())
+        .unwrap_or_default();
+    let (_, now) = proposed.clip(&change.clip)?;
+    // Only what holds still: keyframes are no one value.
+    let still = |effect: &Value| -> serde_json::Map<String, Value> {
+        effect["params"]
+            .as_object()
+            .map(|params| {
+                params
+                    .iter()
+                    .filter(|(_, value)| !value.is_array() && !value.is_object())
+                    .map(|(key, value)| (key.clone(), value.clone()))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    for effect in &now.effects {
+        let fx = effect["fx"].as_str().unwrap_or_default();
+        let old = before.iter().find(|old| old["fx"].as_str() == Some(fx));
+        let old_params = old.map(still).unwrap_or_default();
+        let new_params = still(effect);
+        if old.is_some() && old_params == new_params {
+            continue;
+        }
+        if !is_colour_effect(fx) {
+            return None;
+        }
+        let title = format!("{} · {}", change.name, effect_label(fx));
+        let params = new_params
+            .iter()
+            .filter(|(key, value)| old.is_none() || old_params.get(*key) != Some(*value))
+            .filter_map(|(key, value)| {
+                param_value(value).map(|value| format!("{} {value}", effect_label(key)))
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Some((title, params));
+    }
+    None
+}
+
+/// What a finished check (`check {status: "done", summary: {rows}}`) offers
+/// to ask: "Fix the true peak" for each failing row with a name, with its
+/// timecode where it has one ("Fix the true peak at 00:00:04:12"): the words
+/// shown, and the request they fill the composer with.
+pub fn check_suggestions(event: &Value, fps: f64) -> Vec<(String, String)> {
+    event["summary"]["rows"]
+        .as_array()
+        .map(|rows| {
+            rows.iter()
+                .filter(|row| !row["passed"].as_bool().unwrap_or(true))
+                .filter_map(|row| {
+                    let name = row["name"].as_str().map(str::trim).unwrap_or_default();
+                    let mut chars = name.chars();
+                    let first = chars.next()?;
+                    let lowered: String = first.to_lowercase().chain(chars).collect();
+                    let label = format!("Fix the {lowered}");
+                    let request = match row["at"].as_f64() {
+                        Some(at) => format!("{label} at {}", model::timecode(at, fps)),
+                        None => label.clone(),
+                    };
+                    Some((label, request))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// The stretch of the program `changes` lie in; None for none.
 pub fn changes_span(changes: &[ClipChange]) -> Option<(f64, f64)> {
     changes
@@ -675,6 +917,8 @@ pub fn script_summary(script: &str, version: u32) -> String {
 enum Menu {
     Permissions,
     Model,
+    /// The folder chip's: the folders, Open Folder… and New Project….
+    Folder,
     /// A card's versions, by the proposal's id.
     Versions(String),
 }
@@ -693,8 +937,9 @@ pub struct ChatView {
     /// The version a card shows where it is not the newest, by proposal id.
     shown: HashMap<String, String>,
     book: ProposalBook,
-    /// A request written while Kerf worked, to go when the turn ends.
-    queued: Option<String>,
+    /// A request written while Kerf worked, to go when the turn ends, and
+    /// the playhead time it goes with.
+    queued: Queued,
     /// The turn under way was stopped, here or from a menu or the palette,
     /// and has not ended yet.
     stopping: bool,
@@ -705,6 +950,18 @@ pub struct ChatView {
     /// chip does not open it again.
     menu_closed: Option<(Menu, Instant)>,
     placeholder: SharedString,
+    /// Why nothing can be asked now (its placeholder, and the reason), as
+    /// last worked out; the connection's access (None: it can take
+    /// requests) it was worked out for, and the registry's reason for it.
+    refusal: Option<Refusal>,
+    access: Option<Option<String>>,
+    ask_reason: Option<String>,
+    /// Under Reduce Motion the working clock goes on once a second: the one
+    /// timer that says so, while Kerf works.
+    clock: Option<Task<()>>,
+    /// What the last check found failing, as requests to fill the composer
+    /// with: the words shown, and the request.
+    fixes: Vec<(String, String)>,
     focus_handle: FocusHandle,
     _subscriptions: Vec<Subscription>,
 }
@@ -718,11 +975,15 @@ impl ChatView {
                 .multiline()
                 .max_height(px(COMPOSER_MOST))
         });
+        let composer_focus = composer.read(cx).focus_handle(cx);
         let subscriptions = vec![
             cx.observe(&session, |this, _, cx| {
                 this.refresh_placeholder(cx);
                 cx.notify()
             }),
+            // Run QC is offered while the box has the keys and is empty.
+            cx.on_focus(&composer_focus, window, |_, _, cx| cx.notify()),
+            cx.on_blur(&composer_focus, window, |_, _, cx| cx.notify()),
             cx.subscribe(&session, |this, _, change: &Change, cx| {
                 if *change == Change::TurnEnded {
                     this.turn_ended(cx);
@@ -739,6 +1000,18 @@ impl ChatView {
             cx.subscribe(&session, |this, _, event: &BridgeEvent, cx| {
                 if event.0["type"] == "state" {
                     this.book = ProposalBook::read(&event.0["snapshot"]);
+                    cx.notify();
+                } else if event.0["type"] == "check" && event.0["status"] == "done" {
+                    // A check's failing rows are offered as what to ask next.
+                    let fps = this.session.read(cx).timeline().rate();
+                    this.fixes = check_suggestions(&event.0, fps);
+                    cx.notify();
+                } else if event.0["type"] == "cloud" {
+                    // Kerf's account, as every window keeps it, says whether
+                    // Kerf can be asked.
+                    crate::app::hear_cloud(&event.0, cx);
+                    this.access = None;
+                    this.refresh_placeholder(cx);
                     cx.notify();
                 } else if event.0["type"] == "agent_state" && event.0["state"] == "aborted" {
                     // Stopped from anywhere (here, a menu, the palette). The
@@ -794,7 +1067,7 @@ impl ChatView {
             },
         ];
         let makings = cx.new(|cx| crate::making::Makings::new(session.clone(), window, cx));
-        Self {
+        let mut view = Self {
             session,
             composer,
             makings,
@@ -804,15 +1077,22 @@ impl ChatView {
             folds: HashMap::new(),
             shown: HashMap::new(),
             book: ProposalBook::default(),
-            queued: None,
+            queued: Queued::default(),
             stopping: false,
             copied: None,
             menu: None,
             menu_closed: None,
             placeholder: PLACEHOLDER.into(),
+            refusal: None,
+            access: None,
+            ask_reason: None,
+            clock: None,
+            fixes: Vec::new(),
             focus_handle: cx.focus_handle(),
             _subscriptions: subscriptions,
-        }
+        };
+        view.refresh_placeholder(cx);
+        view
     }
 
     pub fn focus_composer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -821,7 +1101,7 @@ impl ChatView {
 
     /// The request waiting for Kerf to finish, if one is.
     pub fn queued(&self) -> Option<&str> {
-        self.queued.as_deref()
+        self.queued.text()
     }
 
     /// The pinned proposal's id, and the id of the version its card shows.
@@ -878,20 +1158,34 @@ impl ChatView {
         most - offset < 48.0
     }
 
-    /// Why the composer cannot ask now, in its own words; None when it can.
-    fn cannot_ask(&self, cx: &App) -> Option<&'static str> {
-        let session = self.session.read(cx);
-        if !session.has_project() {
-            Some("Open a folder to ask Kerf")
-        } else if matches!(session.state.connection, Connection::Failed(_)) {
-            Some("Connect to ask Kerf")
-        } else {
-            None
-        }
+    /// Why the composer cannot ask now, as last worked out; None when it can.
+    fn cannot_ask(&self) -> Option<&Refusal> {
+        self.refusal.as_ref()
     }
 
+    /// Works out again whether a request can go, and says so in the
+    /// composer's placeholder. The connection's access (its key, Kerf's
+    /// account) is asked of the registry only when it changes.
     fn refresh_placeholder(&mut self, cx: &mut Context<Self>) {
-        let placeholder: SharedString = self.cannot_ask(cx).unwrap_or(PLACEHOLDER).into();
+        let session = self.session.read(cx);
+        let busy = session.state.work.busy();
+        let cloud = crate::app::cloud(cx);
+        let access = (!busy).then(|| session.ai_access(cloud)).flatten();
+        if self.access.as_ref() != Some(&access) {
+            self.ask_reason = access.as_deref().and_then(access_reason);
+            self.access = Some(access);
+        }
+        self.refusal = refusal(
+            session.has_project(),
+            matches!(session.state.connection, Connection::Failed(_)),
+            busy,
+            self.ask_reason.as_deref(),
+        );
+        let placeholder: SharedString = self
+            .refusal
+            .as_ref()
+            .map_or(PLACEHOLDER, |refused| refused.placeholder)
+            .into();
         if placeholder != self.placeholder {
             self.placeholder = placeholder.clone();
             self.composer
@@ -903,26 +1197,47 @@ impl ChatView {
     /// joining what already waits.
     fn send(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let text = self.composer.read(cx).text().trim().to_owned();
-        if text.is_empty() || self.cannot_ask(cx).is_some() {
+        if text.is_empty() {
             return;
         }
-        if self.session.read(cx).state.work.busy() {
-            self.queued = Some(join_queued(self.queued.as_deref(), &text));
+        if self.cannot_ask().is_some() {
+            // A key or a choice saved in another window since counts.
+            self.session
+                .update(cx, |session, _| session.prefs.refresh());
+            self.access = None;
+            self.refresh_placeholder(cx);
+        }
+        if let Some(refused) = self.cannot_ask() {
+            let reason = refused.reason.clone();
+            self.session.update(cx, |session, cx| {
+                session.state.notify(&reason, true);
+                cx.notify();
+            });
+            return;
+        }
+        let session = self.session.read(cx);
+        if session.state.work.busy() {
+            // It goes with the playhead time the latest request was written at.
+            let at = session.state.position;
+            self.queued.push(&text, at);
             self.composer.update(cx, |composer, cx| composer.clear(cx));
             self.focus_composer(window, cx);
             cx.notify();
             return;
         }
-        if self.ask(&text, cx) {
+        if self.ask(&text, None, cx) {
             self.composer.update(cx, |composer, cx| composer.clear(cx));
         }
         self.focus_composer(window, cx);
         cx.notify();
     }
 
-    fn ask(&mut self, text: &str, cx: &mut Context<Self>) -> bool {
+    /// Asks Kerf `text`, stamped `at` (the playhead time it was written at;
+    /// None for now).
+    fn ask(&mut self, text: &str, at: Option<f64>, cx: &mut Context<Self>) -> bool {
         let sent = self.session.update(cx, |session, cx| {
-            let sent = session.ask(text);
+            let at = at.unwrap_or(session.state.position);
+            let sent = session.ask_at(text, at);
             cx.notify();
             sent
         });
@@ -934,10 +1249,12 @@ impl ChatView {
 
     /// Sends `text` again: at once, or after the turn under way.
     fn ask_again(&mut self, text: String, cx: &mut Context<Self>) {
-        if self.session.read(cx).state.work.busy() {
-            self.queued = Some(join_queued(self.queued.as_deref(), &text));
+        let session = self.session.read(cx);
+        if session.state.work.busy() {
+            let at = session.state.position;
+            self.queued.push(&text, at);
         } else {
-            self.ask(&text, cx);
+            self.ask(&text, None, cx);
         }
         cx.notify();
     }
@@ -956,7 +1273,8 @@ impl ChatView {
     /// failed, when it goes back in the composer to send or change.
     fn turn_ended(&mut self, cx: &mut Context<Self>) {
         let stopped = std::mem::take(&mut self.stopping);
-        let Some(text) = self.queued.take() else {
+        self.clock = None;
+        let Some((text, at)) = self.queued.take() else {
             cx.notify();
             return;
         };
@@ -967,7 +1285,7 @@ impl ChatView {
                 || matches!(session.state.work.state.as_str(), "aborted" | "failed")
                 || session.state.connection != Connection::Connected
         };
-        if !troubled && self.ask(&text, cx) {
+        if !troubled && self.ask(&text, Some(at), cx) {
             cx.notify();
             return;
         }
@@ -1523,6 +1841,9 @@ impl ChatView {
         let changes = timeline
             .map(|timeline| clip_changes(session.timeline(), timeline))
             .unwrap_or_default();
+        // A colour change on one clip is said in a line of its own.
+        let colour =
+            timeline.and_then(|proposed| colour_change(session.timeline(), proposed, &changes));
         let rows: Vec<(String, String, String)> = if changes.is_empty() {
             // Without its timeline, the script's lines say what it does.
             version
@@ -1554,7 +1875,7 @@ impl ChatView {
                 .collect();
         }
         let preview_shown = session.state.preview.proposal.as_deref() == Some(shown_id.as_str())
-            && !matches!(session.state.preview.status.as_str(), "exited" | "stopped");
+            && previewing(&session.state.preview.status);
         // Only what it changes, with a little either side; the bridge renders
         // at most two minutes of a preview.
         let watch = timeline
@@ -1690,6 +2011,19 @@ impl ChatView {
                                 theme::ink3(),
                             )))
                     }))
+                    .when_some(colour, |rows, (title, params)| {
+                        rows.child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap(px(theme::space::S4))
+                                .py(px(theme::space::S4))
+                                .child(ui::line(title, text::CONTROL, theme::ink()))
+                                .when(!params.is_empty(), |line| {
+                                    line.child(ui::line(params, text::MONO_SMALL, theme::ink2()))
+                                }),
+                        )
+                    })
                     .with_animation(
                         ElementId::Name(format!("{changes_key}-open").into()),
                         motion::animation(scene::FADE),
@@ -1904,24 +2238,45 @@ impl ChatView {
 
     // ------------------------------------------------------------ while Kerf works
 
+    /// Under Reduce Motion, the working clock's one timer: it draws the
+    /// conversation again once each `CLOCK_FRAME` while Kerf works, and
+    /// stops when it does not. Drawing more often starts no other.
+    fn keep_clock(&mut self, cx: &mut Context<Self>) {
+        if self.clock.is_some() {
+            return;
+        }
+        self.clock = Some(cx.spawn(async move |this, cx| loop {
+            cx.background_executor().timer(scene::CLOCK_FRAME).await;
+            let going = this
+                .update(cx, |this, cx| {
+                    let busy = this.session.read(cx).state.work.busy();
+                    if busy && motion::reduced() {
+                        cx.notify();
+                    } else {
+                        this.clock = None;
+                    }
+                    busy && motion::reduced()
+                })
+                .unwrap_or(false);
+            if !going {
+                break;
+            }
+        }));
+    }
+
     /// What Kerf is doing now, under your request.
-    fn working(&self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let session = self.session.read(cx);
-        let work = &session.state.work;
-        let started = work.started?;
-        let elapsed = started.elapsed().as_secs();
-        let clock = format!("{}:{:02}", elapsed / 60, elapsed % 60);
+    fn working(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let started = self.session.read(cx).state.work.started?;
         // The clock goes on once a second; the light 30 times a second while it shows.
         if motion::reduced() {
-            let next = scene::CLOCK_FRAME;
-            cx.spawn_in(window, async move |this, cx| {
-                cx.background_executor().timer(next).await;
-                let _ = this.update(cx, |_, cx| cx.notify());
-            })
-            .detach();
+            self.keep_clock(cx);
         } else {
             window.request_animation_frame();
         }
+        let session = self.session.read(cx);
+        let work = &session.state.work;
+        let elapsed = started.elapsed().as_secs();
+        let clock = format!("{}:{:02}", elapsed / 60, elapsed % 60);
         let phase = motion::phase(started, scene::WORK_SHIMMER);
         let status = if self.stopping {
             "Stopping…".to_owned()
@@ -2037,19 +2392,33 @@ impl ChatView {
 
     // ------------------------------------------------------------ the composer
 
-    /// A chip in the composer's row that opens its menu over it.
+    /// A chip in the composer's row that opens its menu over it: its icon
+    /// (if any) and words, and what a hover over it says.
     fn menu_chip(
         &self,
         menu: Menu,
         id: &'static str,
-        words: String,
-        tip: String,
+        (icon, words, tip): (Option<Icon>, String, String),
         body: impl FnOnce(&Self, &Context<Self>) -> AnyElement,
         cx: &Context<Self>,
     ) -> AnyElement {
         let open = self.menu.as_ref() == Some(&menu);
         let toggle = menu.clone();
-        let chip = ui::chip(words, if open { theme::ink() } else { theme::ink3() })
+        let ink = if open { theme::ink() } else { theme::ink3() };
+        let chip = theme::type_style(div(), text::META)
+            .flex()
+            .flex_none()
+            .items_center()
+            .gap(px(4.0))
+            .h(px(20.0))
+            .pl(px(8.0))
+            .rounded(px(10.0))
+            .bg(theme::raised())
+            .text_color(ink)
+            .when_some(icon, |chip, icon| {
+                chip.child(icon.view(12.0, theme::ink3()))
+            })
+            .child(words)
             .id(id)
             .pr(px(4.0))
             .cursor_pointer()
@@ -2077,6 +2446,56 @@ impl ChatView {
             );
         }
         wrapper.into_any_element()
+    }
+
+    /// The folder chip's menu: the folders (the open one ticked), Open
+    /// Folder… and New Project…. Another folder opens in place of this one.
+    fn folder_menu(&self, cx: &Context<Self>) -> AnyElement {
+        use crate::sidebar::Entry;
+        let session = self.session.read(cx);
+        let entries =
+            crate::sidebar::folder_entries(&session.prefs.recent, session.project.as_deref());
+        let mut frame = menu_frame(px(240.0), cx);
+        for (index, entry) in entries
+            .into_iter()
+            .filter(|entry| matches!(entry.entry, Entry::Open(_) | Entry::Command(_)))
+            .enumerate()
+        {
+            if entry.separated {
+                frame = frame.child(div().my(px(4.0)).child(ui::hairline(true)));
+            }
+            let tip = entry.tip.clone();
+            let chosen = entry.checked;
+            let run = entry.entry.clone();
+            frame = frame.child(
+                menu_item(
+                    ElementId::Name(format!("folder-{index}").into()),
+                    entry.words,
+                    None,
+                    chosen,
+                )
+                .when_some(tip, |item, tip| {
+                    item.tooltip(move |_, cx| cx.new(|_| ui::Tooltip(tip.clone().into())).into())
+                })
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.menu = None;
+                    match &run {
+                        Entry::Open(folder) if !chosen => window.dispatch_action(
+                            Box::new(crate::commands::OpenRecent {
+                                path: folder.to_string_lossy().into_owned().into(),
+                            }),
+                            cx,
+                        ),
+                        Entry::Command(id) => {
+                            window.dispatch_action(Box::new(RunCommand::new(id)), cx)
+                        }
+                        _ => {}
+                    }
+                    cx.notify();
+                })),
+            );
+        }
+        frame.into_any_element()
     }
 
     /// "What Kerf does without asking": the three modes, each with its line.
@@ -2117,23 +2536,38 @@ impl ChatView {
         } else {
             configured.clone()
         };
-        // A key's model is the one typed in Settings. Claude Code's aliases
-        // can be offered only once the editor's settings keep one for it;
-        // until then the model in use is said, and not offered as a choice.
+        // Claude Code's aliases are chosen here. A key's model is the one
+        // typed in Settings: it is said, and not offered as a choice.
+        let choosable = provider == Provider::ClaudeCode;
         let choices: Vec<String> = model_choices(provider, &configured)
             .into_iter()
-            .filter(|model| *model == current)
+            .filter(|model| choosable || *model == current)
             .collect();
         let stamped = session.prefs.send_playhead;
         menu_frame(px(240.0), cx)
             .child(menu_header(provider.label()))
             .children(choices.into_iter().map(|model| {
-                menu_row(
-                    ElementId::Name(format!("model-{model}").into()),
-                    model_label(&model),
-                    None,
-                    true,
-                )
+                let id = ElementId::Name(format!("model-{model}").into());
+                let chosen = model == current;
+                if !choosable {
+                    return menu_row(id, model_label(&model), None, chosen);
+                }
+                menu_item(id, model_label(&model), None, chosen).on_click(cx.listener(
+                    move |this, _, _, cx| {
+                        this.menu = None;
+                        let model = model.clone();
+                        this.session.update(cx, |session, cx| {
+                            session.prefs.claude_code_model = if model == "default" {
+                                String::new()
+                            } else {
+                                model
+                            };
+                            session.save_prefs();
+                            cx.notify();
+                        });
+                        cx.notify();
+                    },
+                ))
             }))
             .child(div().my(px(4.0)).child(ui::hairline(true)))
             .child(
@@ -2165,49 +2599,108 @@ impl ChatView {
             .into_any_element()
     }
 
-    fn composer(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn composer(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let session = self.session.read(cx);
         let busy = session.state.work.busy();
         let empty = self.composer.read(cx).text().trim().is_empty();
-        let refused = self.cannot_ask(cx).is_some();
+        let typing_in = self.composer.read(cx).focus_handle(cx).is_focused(window);
+        let refused = self.cannot_ask().map(|refused| refused.reason.clone());
+        let refused_now = refused.clone();
         let provider = session.prefs.provider;
         let model = session.prefs.model().to_owned();
         let permissions = session.prefs.permissions;
         let context = session.state.context;
-        let next = session.state.next_steps.clone();
+        // What to ask next: Kerf's next steps, then what the last check found
+        // failing; each fills the composer to be changed before it is sent.
+        let mut next: Vec<(String, String)> = session
+            .state
+            .next_steps
+            .iter()
+            .map(|step| (step.clone(), step.clone()))
+            .collect();
+        next.extend(self.fixes.iter().cloned());
+        // Run QC is offered while the box waits empty for words.
+        let offer_qc = typing_in && empty && refused_now.is_none();
         let focus = session
             .selection
             .first()
             .and_then(|id| session.timeline().clip(id))
             .map(|(_, clip)| clip.label().to_owned());
-        let model_words = if provider == Provider::ClaudeCode || model.is_empty() {
+        let model_words = if model.is_empty() {
             provider.label().to_owned()
         } else {
-            format!("{} · {}", provider.label(), model)
+            format!("{} · {}", provider.label(), model_label(&model))
         };
-        let model_tip = format!("Answers come from {model_words}");
+        // Where there is a choice it is named as one.
+        let model_tip = if provider == Provider::ClaudeCode {
+            format!(
+                "Model · {}",
+                model_label(if model.is_empty() { "default" } else { &model })
+            )
+        } else {
+            format!("Answers come from {model_words}")
+        };
+        // Where a request goes: the open folder, or the way to one.
+        let (folder_words, folder_tip) = match session.project.as_deref() {
+            Some(project) => (
+                project
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| project.display().to_string()),
+                project.display().to_string(),
+            ),
+            None => ("No folder".to_owned(), "Open a folder".to_owned()),
+        };
         let (mode_words, mode_line) = permission_words(permissions);
         let mode_tip = format!("{mode_words} · {mode_line}");
-        let queued = self.queued.clone();
+        let queued = self.queued.text().map(str::to_owned);
         let stopping = self.stopping;
         div()
             .flex()
             .flex_col()
             .gap(px(8.0))
-            .when(!next.is_empty() && !busy, |column| {
-                column.child(div().flex().flex_wrap().gap(px(6.0)).children(
-                    next.into_iter().enumerate().map(|(index, step)| {
-                        ui::button(
-                            ElementId::Name(format!("next-{index}").into()),
-                            step.clone(),
+            .when((!next.is_empty() || offer_qc) && !busy, |column| {
+                column.child(
+                    div()
+                        .flex()
+                        .flex_wrap()
+                        .gap(px(6.0))
+                        // A press here leaves the keys in the box, as Qt's
+                        // list of suggestions did: Run QC, offered only while
+                        // the box has them, stays under the pointer to be let
+                        // go on, and the row does not shift as it goes.
+                        .on_any_mouse_down(|_, window, _| window.prevent_default())
+                        .children(
+                            next.into_iter()
+                                .enumerate()
+                                .map(|(index, (words, request))| {
+                                    ui::button(
+                                        ElementId::Name(format!("next-{index}").into()),
+                                        words,
+                                    )
+                                    .small()
+                                    .icon(Icon::Sparkle)
+                                    .on_click(cx.listener(
+                                        move |this, _, window, cx| {
+                                            this.fill(request.clone(), window, cx)
+                                        },
+                                    ))
+                                }),
                         )
-                        .small()
-                        .icon(Icon::Sparkle)
-                        .on_click(cx.listener(
-                            move |this, _, window, cx| this.fill(step.clone(), window, cx),
-                        ))
-                    }),
-                ))
+                        .when(offer_qc, |row| {
+                            row.child(
+                                ui::button("run-qc", "Run QC on the whole sequence")
+                                    .small()
+                                    .icon(Icon::Check)
+                                    .on_click(cx.listener(|_, _, window, cx| {
+                                        window.dispatch_action(
+                                            Box::new(RunCommand::new("qc.run")),
+                                            cx,
+                                        )
+                                    })),
+                            )
+                        }),
+                )
             })
             // What waits for Kerf to finish: "Next: …" and Cancel, over the box.
             .when_some(queued, |column, queued| {
@@ -2229,7 +2722,7 @@ impl ChatView {
                                 .small()
                                 .ghost()
                                 .on_click(cx.listener(|this, _, _, cx| {
-                                    this.queued = None;
+                                    this.queued.clear();
                                     cx.notify();
                                 })),
                         )
@@ -2260,25 +2753,41 @@ impl ChatView {
                     .when_some(focus, |box_, clip| {
                         box_.child(ui::chip(format!("@{clip}"), theme::accent_ink()))
                     })
-                    .child(self.composer.clone())
+                    .child(
+                        // Refused, a hover over the words says why.
+                        div()
+                            .id("composer-field")
+                            .w_full()
+                            .when_some(refused.clone(), |field, reason| {
+                                field.tooltip(move |_, cx| {
+                                    cx.new(|_| ui::Tooltip(reason.clone().into())).into()
+                                })
+                            })
+                            .child(self.composer.clone()),
+                    )
                     .child(
                         div()
                             .flex()
                             .items_center()
                             .gap(px(6.0))
                             .child(self.menu_chip(
+                                Menu::Folder,
+                                "folder-chip",
+                                (Some(Icon::Folder), folder_words, folder_tip),
+                                |this, cx| this.folder_menu(cx),
+                                cx,
+                            ))
+                            .child(self.menu_chip(
                                 Menu::Model,
                                 "model-chip",
-                                model_words,
-                                model_tip,
+                                (None, model_words, model_tip),
                                 |this, cx| this.model_menu(cx),
                                 cx,
                             ))
                             .child(self.menu_chip(
                                 Menu::Permissions,
                                 "permissions-chip",
-                                mode_words.to_owned(),
-                                mode_tip,
+                                (None, mode_words.to_owned(), mode_tip),
                                 |this, cx| this.permissions_menu(cx),
                                 cx,
                             ))
@@ -2308,9 +2817,16 @@ impl ChatView {
                                     .on_click(cx.listener(|this, _, _, cx| this.stop(cx)))
                                     .into_any_element()
                             } else {
-                                let live = !empty && !refused;
+                                let live = !empty && refused.is_none();
+                                let tip: SharedString = refused
+                                    .clone()
+                                    .unwrap_or_else(|| "Send · Return".to_owned())
+                                    .into();
                                 div()
                                     .id("send")
+                                    .tooltip(move |_, cx| {
+                                        cx.new(|_| ui::Tooltip(tip.clone())).into()
+                                    })
                                     .size(px(28.0))
                                     .flex()
                                     .items_center()
@@ -2556,7 +3072,7 @@ impl Render for ChatView {
             self.scroll.scroll_to_bottom();
             self.follow = false;
         }
-        let composer = self.composer(cx);
+        let composer = self.composer(window, cx);
 
         div()
             .size_full()

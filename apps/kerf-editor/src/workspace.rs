@@ -13,16 +13,20 @@
 //! editor's version or load the file's), the last error (Dismiss). What
 //! cannot be undone, and a folder that is not a project yet, are asked
 //! first, over the window ([`Confirm`]).
+//!
+//! A command that cannot run now says why, as a notice, and the toolbar's
+//! buttons are greyed with the reason (and their keys) in their tooltips.
+//! Another project, new, chosen or recent, opens in place of this window.
 
 use crate::chat::ChatView;
-use crate::commands::{RunCommand, WORKSPACE};
-use crate::export::{ExportEvent, ExportView};
+use crate::commands::{ClearRecent, OpenRecent, RunCommand, WORKSPACE};
+use crate::export::{ExportEvent, ExportView, Quality};
 use crate::icons::Icon;
 use crate::input::{InputEvent, TextInput};
 use crate::media::MediaBand;
 use crate::motion::{self, Tween};
 use crate::session::{BridgeEvent, Session};
-use crate::settings::{SettingsEvent, SettingsView};
+use crate::settings::{Page, SettingsEvent, SettingsView};
 use crate::sidebar::{self, SidebarEvent, SidebarView};
 use crate::stage::StageView;
 use crate::store::{Change, Connection};
@@ -30,13 +34,17 @@ use crate::theme::{self, layout, motion as scene, text};
 use crate::timeline::TimelineView;
 use crate::ui::{self, icon_button};
 use gpui::{
-    div, prelude::*, px, AnimationExt, AnyElement, AnyView, App, ClickEvent, Context, DismissEvent,
-    Entity, EventEmitter, FocusHandle, Focusable, KeyBinding, KeyDownEvent, MouseButton,
-    MouseDownEvent, MouseMoveEvent, PathPromptOptions, Pixels, Rgba, SharedString, Subscription,
-    Window,
+    canvas, div, img, point, prelude::*, px, size, AnimationExt, AnyElement, AnyView, App, Bounds,
+    ClickEvent, Context, DismissEvent, ElementId, Entity, EventEmitter, FocusHandle, Focusable,
+    KeyBinding, KeyDownEvent, MouseButton, MouseDownEvent, ObjectFit, PathPromptOptions, Pixels,
+    RenderImage, Rgba, SharedString, Stateful, Subscription, Window,
 };
+use std::cell::Cell;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 /// The last error, kept in a bar under the toolbar until it is dismissed.
 struct ErrorBar {
@@ -77,7 +85,9 @@ pub struct Workspace {
     media_shown: Tween,
     picture_shown: Tween,
     timeline_shown: Tween,
-    dragging_sidebar: bool,
+    /// The window is too narrow for the sidebar (as last drawn): it gives
+    /// way, whatever its switch says.
+    sidebar_gives_way: bool,
     /// The conversation's menu, from the chevron after its title.
     title_menu: bool,
     /// The app's menu, from the toolbar's ⋯ while the sidebar is away.
@@ -90,7 +100,27 @@ pub struct Workspace {
     /// A folder that was no project yet: its media comes in once kerfd has it.
     start_media: Option<PathBuf>,
     window_title: String,
+    /// Activity, from the title's menu: what the window and Kerf did.
+    activity_open: bool,
+    /// The renders this window queued, by job: one that finishes flies home.
+    queued_here: HashSet<String>,
+    /// A frame of the picture on its way to the project's row (Manual export).
+    flight: Option<Flight>,
+    /// Where the stage was laid out last, in the window.
+    stage_slot: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// Each command's keys in the keymap they were read for, as the system
+    /// writes them, for the toolbar's tooltips.
+    keys: (String, HashMap<String, Vec<String>>),
     _subscriptions: Vec<Subscription>,
+}
+
+/// A frame of the picture flying from the stage to the project's row in
+/// the sidebar once an export this window started is done.
+struct Flight {
+    image: Arc<RenderImage>,
+    from: Bounds<Pixels>,
+    to: Bounds<Pixels>,
+    started: Instant,
 }
 
 impl Workspace {
@@ -119,7 +149,7 @@ impl Workspace {
                 &sidebar,
                 window,
                 |this, _, event: &SidebarEvent, window, cx| match event {
-                    SidebarEvent::Settings => this.show_settings(window, cx),
+                    SidebarEvent::Settings => this.show_settings(None, window, cx),
                     SidebarEvent::Hide => this.set_sidebar(false, cx),
                     SidebarEvent::Delete(id) => this.confirm_delete(id.clone(), window, cx),
                     SidebarEvent::Done => {
@@ -145,9 +175,22 @@ impl Workspace {
                     InputEvent::Changed => {}
                 },
             ),
+            // File ▸ Open Recent checks this window's project while it is in front.
+            cx.observe_window_activation(window, |this, window, cx| {
+                if window.is_window_active() {
+                    let project = this.session.read(cx).project.clone();
+                    crate::commands::refresh_menus(project.as_deref(), cx);
+                }
+            }),
             // Leaving the title's field keeps what was typed.
             cx.on_blur(&title_focus, window, |this, _, cx| {
                 this.finish_title_rename(true, cx)
+            }),
+            // Nothing has the keys (Esc left the composer or a field, what
+            // had them went away): the window has them again, so its keys
+            // (the palette, Play, the mask tools) go on working.
+            cx.on_focus_lost(window, |this, window, _| {
+                window.focus(&this.focus_handle);
             }),
             // Esc puts an open menu away wherever the keys are: before the
             // timeline's Esc (Reject Proposal) or a field's has it. A menu's
@@ -197,7 +240,7 @@ impl Workspace {
             media_shown: Tween::at(0.0),
             picture_shown: Tween::at(1.0),
             timeline_shown: Tween::at(1.0),
-            dragging_sidebar: false,
+            sidebar_gives_way: false,
             title_menu: false,
             app_menu: false,
             title_field,
@@ -206,6 +249,11 @@ impl Workspace {
             errors: 0,
             start_media: None,
             window_title: String::new(),
+            activity_open: false,
+            queued_here: HashSet::new(),
+            flight: None,
+            stage_slot: Rc::new(Cell::new(None)),
+            keys: (String::new(), HashMap::new()),
             _subscriptions: subscriptions,
         }
     }
@@ -278,6 +326,25 @@ impl Workspace {
                     .as_str()
                     .unwrap_or("Something went wrong")
                     .to_owned();
+                // Saving over a preset of that name: the Save dialog asks
+                // about it itself (the store kept the question).
+                if crate::presets::existing_preset(&raw).is_some()
+                    && self.session.read(cx).state.preset_exists.is_some()
+                {
+                    return;
+                }
+                // A file imported for a preset's slot, refused: said under
+                // its slot in the dialog, not again here.
+                if self.preset_importing(cx) && crate::presets::import_refusal(event).is_some() {
+                    self.session.update(cx, |session, cx| {
+                        session
+                            .state
+                            .notices
+                            .retain(|notice| !(notice.error && notice.text == raw));
+                        cx.notify();
+                    });
+                    return;
+                }
                 let readable = readable_error(&raw);
                 let text = if command == "forward" {
                     format!("Not brought forward · {readable}")
@@ -300,7 +367,115 @@ impl Workspace {
                 self.error = None;
                 cx.notify();
             }
+            // A render this window queued is answered here first; once it
+            // is done, a frame of the picture goes home to the project.
+            "export" => {
+                let Some(job) = event["jobId"].as_str() else {
+                    return;
+                };
+                match event["status"].as_str().unwrap_or_default() {
+                    "queued" => {
+                        self.queued_here.insert(job.to_owned());
+                    }
+                    "completed" | "complete" | "ready" => {
+                        if self.queued_here.remove(job) && event["kind"] != "captions" {
+                            self.fly_export_home(cx);
+                        }
+                    }
+                    "failed" | "cancelled" | "canceled" => {
+                        self.queued_here.remove(job);
+                    }
+                    _ => {}
+                }
+            }
             _ => {}
+        }
+    }
+
+    /// Whether Import Editing Preset's dialog is open over the window with
+    /// a file for one of its slots coming in.
+    fn preset_importing(&self, cx: &App) -> bool {
+        self.modal
+            .as_ref()
+            .and_then(|(view, _)| view.clone().downcast::<crate::presets::ApplyPreset>().ok())
+            .is_some_and(|dialog| dialog.read(cx).importing())
+    }
+
+    /// Manual export: a frame of the picture flies from the stage to the
+    /// project's row in the sidebar, fading as it goes. Not under Reduce
+    /// Motion, while Kerf works, with no picture showing, or with the
+    /// sidebar away (the row is not there to land on).
+    fn fly_export_home(&mut self, cx: &mut Context<Self>) {
+        if motion::reduced()
+            || !self.sidebar_open
+            || self.sidebar_gives_way
+            || !self.panel_open
+            || self.picture_shown.target() < 0.5
+        {
+            return;
+        }
+        let session = self.session.read(cx);
+        if session.state.work.busy() {
+            return;
+        }
+        let Some(picture) = session.picture.as_ref() else {
+            return;
+        };
+        // From the picture where the stage placed it (else where it would
+        // be in its slot), to the project's row where the sidebar laid it.
+        let Some(from) = self.stage.read(cx).picture_bounds().or_else(|| {
+            self.stage_slot
+                .get()
+                .map(|slot| picture_within(slot, picture.width, picture.height))
+        }) else {
+            return;
+        };
+        let to = self
+            .sidebar
+            .read(cx)
+            .project_row_bounds()
+            .map(landing_in)
+            .unwrap_or_else(project_row);
+        self.flight = Some(Flight {
+            image: picture.image.clone(),
+            from,
+            to,
+            started: Instant::now(),
+        });
+        cx.notify();
+    }
+
+    /// Where the flight is this frame, and how clear: None once it has
+    /// landed and faded, when what it carried leaves the atlas (unless the
+    /// stage still shows it).
+    fn flight_now(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<(Bounds<Pixels>, f32, Arc<RenderImage>)> {
+        let flight = self.flight.as_ref()?;
+        match export_flight_at(flight.started.elapsed()) {
+            Some((along, opacity)) => {
+                window.request_animation_frame();
+                Some((
+                    lerp_bounds(flight.from, flight.to, along),
+                    opacity,
+                    flight.image.clone(),
+                ))
+            }
+            None => {
+                let flight = self.flight.take()?;
+                let shown = self
+                    .session
+                    .read(cx)
+                    .picture
+                    .as_ref()
+                    .is_some_and(|picture| Arc::ptr_eq(&picture.image, &flight.image));
+                if !shown {
+                    cx.drop_image(flight.image, Some(window));
+                }
+                None
+            }
         }
     }
 
@@ -378,17 +553,12 @@ impl Workspace {
         };
         self.title_menu = false;
         self.renaming_title = Some(id);
-        self.title_field
-            .update(cx, |field, cx| field.set_text(title, cx));
-        self.title_field.read(cx).focus(window);
-        // The whole title is chosen, to type over, once the field is drawn.
-        cx.on_next_frame(window, |_, window, cx| {
-            cx.on_next_frame(window, |this, window, cx| {
-                if this.renaming_title.is_some() {
-                    window.dispatch_action(Box::new(crate::input::SelectAll), cx);
-                }
-            });
+        // The whole title is chosen, to type over.
+        self.title_field.update(cx, |field, cx| {
+            field.set_text(title, cx);
+            field.choose_all(cx);
         });
+        self.title_field.read(cx).focus(window);
         cx.notify();
     }
 
@@ -424,7 +594,10 @@ impl Workspace {
         match &session.state.connection {
             Connection::Failed(_) => Some("Offline".into()),
             Connection::Connecting => Some("Connecting…".into()),
-            Connection::Connected => self.error.as_ref().map(|error| error.text.clone()),
+            Connection::Connected => self
+                .error
+                .as_ref()
+                .map(|error| first_line(&error.text).to_owned()),
         }
     }
 
@@ -474,6 +647,34 @@ impl Workspace {
         cx.notify();
     }
 
+    /// Looking at something opens the picture, as by hand.
+    fn reveal_picture(&mut self, cx: &mut Context<Self>) {
+        if !self.panel_open {
+            self.set_panel(true, cx);
+        } else if self.picture_shown.target() < 0.5 {
+            self.toggle_pane(true, cx);
+        }
+    }
+
+    /// Takes out mask tool `tool` on the picture, or puts it down; the
+    /// picture comes in for it. Not while something is open over the window.
+    fn toggle_mask_tool(
+        &mut self,
+        tool: crate::stage::MaskTool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.modal.is_some() {
+            return;
+        }
+        let taken = self
+            .stage
+            .update(cx, |stage, cx| stage.toggle_tool(tool, window, cx));
+        if taken && self.stage.read(cx).mask_tool().is_some() {
+            self.reveal_picture(cx);
+        }
+    }
+
     /// One of the panel's two, the picture or the timeline, on or off.
     fn toggle_pane(&mut self, picture: bool, cx: &mut Context<Self>) {
         let (this, other) = if picture {
@@ -496,16 +697,35 @@ impl Workspace {
         cx.notify();
     }
 
-    pub fn show_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.modal.is_some() {
+    /// Opens Settings over the window, on `page` (None: where Settings
+    /// opens by itself, Chat). Open already, it goes to `page`; anything
+    /// else open over the window gives way to it.
+    pub fn show_settings(
+        &mut self,
+        page: Option<Page>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let open = self
+            .modal
+            .as_ref()
+            .and_then(|(view, _)| view.clone().downcast::<SettingsView>().ok());
+        if let Some(settings) = open {
+            if let Some(page) = page {
+                settings.update(cx, |settings, cx| settings.show_page(page, cx));
+            }
             return;
         }
-        let settings = cx.new(|cx| SettingsView::new(self.session.clone(), window, cx));
+        let session = self.session.clone();
+        let settings = cx.new(|cx| match page {
+            Some(page) => SettingsView::new_at(session, page, window, cx),
+            None => SettingsView::new(session, window, cx),
+        });
         cx.subscribe_in(
             &settings,
             window,
-            |this, _, event: &SettingsEvent, window, cx| match event {
-                SettingsEvent::Dismiss => this.close_modal(window, cx),
+            |this, settings, event: &SettingsEvent, window, cx| match event {
+                SettingsEvent::Dismiss => this.close_modal_of(settings.entity_id(), window, cx),
             },
         )
         .detach();
@@ -520,8 +740,8 @@ impl Workspace {
     where
         V: Render + Focusable + EventEmitter<DismissEvent>,
     {
-        cx.subscribe_in(&view, window, |this, _, _: &DismissEvent, window, cx| {
-            this.close_modal(window, cx)
+        cx.subscribe_in(&view, window, |this, view, _: &DismissEvent, window, cx| {
+            this.close_modal_of(view.entity_id(), window, cx)
         })
         .detach();
         window.focus(&view.focus_handle(cx));
@@ -535,10 +755,24 @@ impl Workspace {
         cx.notify();
     }
 
-    fn close_modal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.modal = None;
-        window.focus(&self.focus_handle);
-        cx.notify();
+    /// Gives the window back from `view`, if it is what is open over the
+    /// window still: one another has taken the place of (Settings opened
+    /// from the palette) has nothing to give back.
+    fn close_modal_of(
+        &mut self,
+        view: gpui::EntityId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self
+            .modal
+            .as_ref()
+            .is_some_and(|(open, _)| open.entity_id() == view)
+        {
+            self.modal = None;
+            window.focus(&self.focus_handle);
+            cx.notify();
+        }
     }
 
     fn toggle_export(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -561,21 +795,26 @@ impl Workspace {
         cx.notify();
     }
 
+    /// File ▸ Import Media…: the files chosen come into the project's media.
+    /// No chooser to ask (no portal), or a name kerfd cannot be sent, says so.
     fn import(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let paths = cx.prompt_for_paths(PathPromptOptions {
-            files: true,
-            directories: false,
-            multiple: true,
-            prompt: Some("Import".into()),
-        });
+        let chosen = crate::presets::choose_paths(
+            cx,
+            PathPromptOptions {
+                files: true,
+                directories: false,
+                multiple: true,
+                prompt: Some("Import".into()),
+            },
+        );
         let session = self.session.downgrade();
         cx.spawn_in(window, async move |_, cx| {
-            let Ok(Ok(Some(paths))) = paths.await else {
-                return;
-            };
+            let answer = chosen.await;
             let _ = session.update(cx, |session, cx| {
-                for path in &paths {
-                    session.import(path, false);
+                if let Some(paths) = chosen_paths(answer, session) {
+                    for path in &paths {
+                        session.import(path, false);
+                    }
                 }
                 cx.notify();
             });
@@ -586,15 +825,23 @@ impl Workspace {
     /// Opens a folder in place of this project. One that is not a project
     /// yet is asked about first; this project is open already.
     fn open_project(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let paths = cx.prompt_for_paths(PathPromptOptions {
-            files: false,
-            directories: true,
-            multiple: false,
-            prompt: Some("Open".into()),
-        });
+        let chosen = crate::presets::choose_paths(
+            cx,
+            PathPromptOptions {
+                files: false,
+                directories: true,
+                multiple: false,
+                prompt: Some("Open".into()),
+            },
+        );
         let current = self.session.read(cx).project.clone();
+        let session = self.session.downgrade();
         cx.spawn_in(window, async move |this, cx| {
-            let Ok(Ok(Some(paths))) = paths.await else {
+            let answer = chosen.await;
+            let Ok(Some(paths)) = session.update(cx, |session, cx| {
+                cx.notify();
+                chosen_paths(answer, session)
+            }) else {
                 return;
             };
             let Some(project) = paths.into_iter().next() else {
@@ -602,20 +849,89 @@ impl Workspace {
             };
             if current
                 .as_deref()
-                .is_some_and(|current| same_folder(current, &project))
+                .is_some_and(|current| crate::app::same_folder(current, &project))
             {
                 return;
             }
-            let _ = this.update_in(cx, |this, window, cx| {
-                if needs_start(&project) {
-                    this.ask_to_start(project, window, cx);
-                } else {
-                    open_folder(project, false, cx);
-                    window.remove_window();
-                }
-            });
+            let _ = this.update_in(cx, |this, window, cx| this.open_chosen(project, window, cx));
         })
         .detach();
+    }
+
+    /// Opens `project` in place of this window: one that is not a project
+    /// yet is asked about first; this window's own project stays as it is.
+    fn open_chosen(&mut self, project: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        if needs_start(&project) {
+            self.ask_to_start(project, window, cx);
+        } else {
+            self.replace_with(project, false, window, cx);
+        }
+    }
+
+    /// Opens `project` in a window of its own with this window's kerfd,
+    /// and closes this one: another project takes its place, as in Qt.
+    /// This window's own project stays open.
+    fn replace_with(
+        &mut self,
+        project: PathBuf,
+        starts: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let session = self.session.read(cx);
+        if session
+            .project
+            .as_deref()
+            .is_some_and(|current| crate::app::same_folder(current, &project))
+        {
+            window.activate_window();
+            return;
+        }
+        let kerfd = session.kerfd().map(Path::to_path_buf);
+        open_folder_with(project, starts, kerfd, cx);
+        window.remove_window();
+    }
+
+    /// New Project: the launcher, in a window of its own. What it opens
+    /// takes this window's place, with this window's kerfd; closed with
+    /// nothing chosen, this window stays.
+    fn new_project(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let session = self.session.read(cx);
+        let kerfd = session.kerfd().map(Path::to_path_buf);
+        let current = session.project.clone();
+        let replaced = window.window_handle();
+        let prefs = crate::prefs::Prefs::load();
+        let options = crate::app::options("Industrial Kerf", cx);
+        let opened = cx.open_window(options, move |launcher_window, cx| {
+            // What it makes from a preset brings its media in with this kerfd too.
+            let launcher = cx.new(|cx| {
+                crate::launcher::LauncherView::new(prefs, launcher_window, cx)
+                    .with_kerfd(kerfd.clone())
+            });
+            let handle = launcher_window.window_handle();
+            cx.subscribe(
+                &launcher,
+                move |_, event: &crate::launcher::LauncherEvent, cx| match event {
+                    crate::launcher::LauncherEvent::Open { project, starts } => {
+                        let here = current
+                            .as_deref()
+                            .is_some_and(|current| crate::app::same_folder(current, project));
+                        if !here {
+                            open_folder_with(project.clone(), *starts, kerfd.clone(), cx);
+                            let _ = replaced.update(cx, |_, window, _| window.remove_window());
+                        } else {
+                            let _ = replaced.update(cx, |_, window, _| window.activate_window());
+                        }
+                        let _ = handle.update(cx, |_, window, _| window.remove_window());
+                    }
+                },
+            )
+            .detach();
+            launcher
+        });
+        if let Err(error) = opened {
+            log::error!("could not open the launcher: {error}");
+        }
     }
 
     /// "“X” is not a project yet. Start one here, with its media?"
@@ -627,6 +943,7 @@ impl Workspace {
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_else(|| project.display().to_string());
+        let kerfd = self.session.read(cx).kerfd().map(Path::to_path_buf);
         let confirm = cx.new(|cx| {
             Confirm::new(
                 cx,
@@ -636,7 +953,7 @@ impl Workspace {
                 false,
                 true,
                 move |window, cx| {
-                    open_folder(project, true, cx);
+                    open_folder_with(project, true, kerfd, cx);
                     window.remove_window();
                 },
             )
@@ -644,14 +961,51 @@ impl Workspace {
         self.open_modal(confirm, window, cx);
     }
 
+    /// The pinned proposal (the card the conversation pins) is what the
+    /// registry's proposal commands act on and are said to be available for.
+    fn pin_proposal(&mut self, cx: &mut Context<Self>) {
+        let pinned = self.chat.read(cx).proposal_target("proposal.reject", cx);
+        self.session
+            .update(cx, |session, _| session.pinned_proposal = pinned);
+    }
+
+    /// Why command `id` cannot run now, as the registry says; None when it
+    /// can. Only Ask's reason asks after the connection's key (the keychain).
+    fn unavailable(&mut self, id: &str, cx: &mut Context<Self>) -> Option<String> {
+        self.pin_proposal(cx);
+        let session = self.session.read(cx);
+        let states = if id == "ai.ask" {
+            let cloud = crate::app::cloud(cx).cloned();
+            session.command_states(cloud.as_ref())
+        } else {
+            kerf_bridge::commands_states(&session.command_context())
+        };
+        crate::palette::unavailable(&states, id).map(str::to_owned)
+    }
+
     /// Carries out a command by its id: what the window does itself, else
-    /// the request the registry resolves it to.
+    /// the request the registry resolves it to. One that cannot run now
+    /// says why, and its key goes on to whatever else it means there.
     fn run_command(&mut self, action: &RunCommand, window: &mut Window, cx: &mut Context<Self>) {
         let id = action.id.as_ref();
+        self.refresh_keys(cx);
+        if let Some(reason) = self.unavailable(id, cx) {
+            // Esc puts things away everywhere: saying on each press that
+            // there is no proposal to reject would be noise.
+            if !self.bound_to_escape(id) {
+                self.session.update(cx, |session, cx| {
+                    session.state.notify(&reason, true);
+                    cx.notify();
+                });
+            }
+            cx.propagate();
+            return;
+        }
         let session = self.session.clone();
         match id {
             "app.quit" => cx.quit(),
-            "app.preferences" | "app.account" => self.show_settings(window, cx),
+            "app.preferences" => self.show_settings(None, window, cx),
+            "app.account" => self.show_settings(Some(Page::Account), window, cx),
             "view.sidebar" => self.set_sidebar(!self.sidebar_open, cx),
             "view.picture" => self.toggle_pane(true, cx),
             "view.timeline" => self.toggle_pane(false, cx),
@@ -661,51 +1015,81 @@ impl Workspace {
                 .update(cx, |chat, cx| chat.focus_composer(window, cx)),
             "file.import" => self.import(window, cx),
             "file.openProject" => self.open_project(window, cx),
-            // The launcher, in a window of its own: a new project, a clone, or a recent one.
-            "file.newProject" => crate::app::open(None, None, cx),
-            "file.export" => self.toggle_export(window, cx),
-            "export.master" => session.update(cx, |session, _| session.deliver("master")),
+            // The launcher, in a window of its own; what it opens takes this one's place.
+            "file.newProject" => self.new_project(window, cx),
+            // The quality chosen in Export's menu, full size or a preview,
+            // where kerfd puts it (Qt's File ▸ Export…); the toolbar's
+            // Export renders it into deliveries/ (`ExportChosen`).
+            "file.export" => session.update(cx, |session, _| session.export_file()),
+            "export.master" => session.update(cx, |session, _| {
+                session.deliver(Quality::Master.wire());
+            }),
             "file.refresh" => session.update(cx, |session, _| {
                 session.send(serde_json::json!({"type": "refresh"}));
             }),
             "edit.undo" => session.update(cx, |session, _| session.undo()),
             "edit.redo" => session.update(cx, |session, _| session.redo()),
-            "playback.toggle" => session.update(cx, |session, _| session.toggle_playback()),
+            "playback.toggle" => {
+                // A skim ends first, so kerfd is back at the playhead before it plays.
+                self.stage.update(cx, |stage, cx| stage.end_skim(cx));
+                session.update(cx, |session, _| session.toggle_playback());
+            }
             "playback.goToStart" => session.update(cx, |session, _| session.seek(0.0, false)),
             "playback.goToEnd" => session.update(cx, |session, _| {
                 let end = session.state.program_length();
                 session.seek(end, false);
             }),
             "playback.previousFrame" | "playback.nextFrame" => session.update(cx, |session, _| {
-                let step = 1.0 / session.timeline().rate();
-                let step = if id == "playback.nextFrame" {
-                    step
-                } else {
-                    -step
-                };
-                let at = session.state.position + step;
-                session.seek(at.max(0.0), false);
+                let frames = if id == "playback.nextFrame" { 1 } else { -1 };
+                let at = frame_step(session.state.position, session.timeline().rate(), frames);
+                session.seek(at, false);
             }),
-            "ai.stop" => session.update(cx, |session, _| session.stop()),
+            // As the conversation's Stop: its work row says "Stopping…" at once.
+            "ai.stop" => self.chat.update(cx, |chat, cx| chat.stop(cx)),
+            // As the pinned card's own buttons: Accept takes the version it
+            // shows, Reject and Bring Forward the proposal.
             "proposal.accept" | "proposal.reject" | "proposal.forward" => {
-                session.update(cx, |session, _| {
-                    let Some(proposal) = session
-                        .state
-                        .snapshot
-                        .pending()
-                        .map(|p| p.proposal_id.clone())
-                    else {
-                        return;
-                    };
-                    match id {
-                        "proposal.accept" => session.accept(&proposal),
-                        "proposal.reject" => session.reject(&proposal),
-                        _ => session.forward(&proposal),
-                    }
+                let Some(proposal) = self.chat.read(cx).proposal_target(id, cx) else {
+                    return;
+                };
+                session.update(cx, |session, _| match id {
+                    "proposal.accept" => session.accept(&proposal),
+                    "proposal.reject" => session.reject(&proposal),
+                    _ => session.forward(&proposal),
                 })
             }
+            "clip.startPath" => {
+                let started = self.stage.update(cx, |stage, cx| stage.start_path(cx));
+                if !started {
+                    session.update(cx, |session, _| {
+                        session
+                            .state
+                            .notify("Choose a picture clip with no motion path", true)
+                    });
+                }
+            }
+            // Editing presets: Import asks for the file, then its dialog
+            // comes over the window (through this entity: the window is
+            // being updated now); Export asks where; Save asks the name.
+            "file.applyPreset" => {
+                let workspace = cx.entity().downgrade();
+                crate::presets::import_preset(session, window, cx, move |view, window, cx| {
+                    let _ = workspace.update(cx, |this, cx| this.open_modal(view, window, cx));
+                });
+            }
+            "file.exportPreset" => crate::presets::export_preset(session, window, cx),
+            "preset.save" => {
+                let view = crate::presets::save_preset(session, window, cx);
+                self.open_modal(view, window, cx);
+            }
+            // The zoom's menu over the transport (⇧Z, View ▸ Viewer Zoom…).
+            "viewer.zoom" => {
+                self.reveal_picture(cx);
+                self.stage
+                    .update(cx, |stage, cx| stage.toggle_zoom_menu(window, cx));
+            }
             "help.guide" => cx.open_url(&user_guide()),
-            "help.about" => self.show_settings(window, cx),
+            "help.about" => self.show_settings(Some(Page::About), window, cx),
             // Where crash reports are kept, in the system's file manager.
             "help.crashReports" => match kerf_bridge::crash_reports()["folder"].as_str() {
                 Some(folder) => {
@@ -745,10 +1129,58 @@ impl Workspace {
                 window.dispatch_action(Box::new(crate::finish::OpenFinish { run_check: true }), cx)
             }
             _ => session.update(cx, |session, _| {
-                session.run_command(id, serde_json::json!({}))
+                session.run_command(id, serde_json::json!({}));
             }),
         }
         cx.notify();
+    }
+
+    /// The toolbar's Export (its main part): renders the quality chosen in
+    /// its menu into deliveries/. While Kerf cannot export it says why, as
+    /// Export Master would.
+    fn export_chosen(&mut self, cx: &mut Context<Self>) {
+        if let Some(reason) = self.unavailable("export.master", cx) {
+            self.session.update(cx, |session, cx| {
+                session.state.notify(&reason, true);
+                cx.notify();
+            });
+            return;
+        }
+        self.session.update(cx, |session, cx| {
+            let quality = session.export_quality;
+            session.export(quality.wire());
+            cx.notify();
+        });
+    }
+
+    /// Whether `id` answers plain Esc in the keymap in use.
+    fn bound_to_escape(&self, id: &str) -> bool {
+        self.keys.1.get(id).is_some_and(|keys| {
+            keys.iter()
+                .any(|key| crate::commands::keystroke(key).as_deref() == Some("escape"))
+        })
+    }
+
+    /// Reads each command's keys again when the keymap has changed.
+    fn refresh_keys(&mut self, cx: &App) {
+        let keymap = self.session.read(cx).prefs.keymap.wire();
+        if self.keys.0 == keymap {
+            return;
+        }
+        let keys = crate::commands::catalog(keymap)
+            .into_iter()
+            .map(|command| (command.id, command.keys))
+            .collect();
+        self.keys = (keymap.to_owned(), keys);
+    }
+
+    /// Command `id`'s first key as the system writes it ("⌘E", "Ctrl+E").
+    fn shown_key(&self, id: &str) -> Option<String> {
+        self.keys
+            .1
+            .get(id)
+            .and_then(|keys| keys.first())
+            .map(|key| crate::commands::shown_keys(key))
     }
 
     /// Esc in the window (outside a field, the timeline, and whatever is
@@ -768,13 +1200,14 @@ impl Workspace {
         }
     }
 
-    /// Puts away whichever menu is open: the title's, the toolbar's app
-    /// menu, the sidebar's. Whether one was.
+    /// Puts away whichever menu is open: the title's, Activity, the
+    /// toolbar's app menu, the sidebar's. Whether one was.
     fn close_menus(&mut self, cx: &mut Context<Self>) -> bool {
-        let mine = self.title_menu || self.app_menu;
+        let mine = self.title_menu || self.app_menu || self.activity_open;
         if mine {
             self.title_menu = false;
             self.app_menu = false;
+            self.activity_open = false;
             cx.notify();
         }
         let sidebar = self
@@ -788,29 +1221,6 @@ impl Workspace {
             .prefs
             .sidebar_width
             .clamp(layout::SIDEBAR_LEAST, 900.0)
-    }
-
-    fn on_drag(&mut self, event: &MouseMoveEvent, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.dragging_sidebar {
-            return;
-        }
-        if event.pressed_button != Some(MouseButton::Left) {
-            self.end_drag(cx);
-            return;
-        }
-        let most = layout::sidebar_most(f32::from(window.viewport_size().width));
-        let width = f32::from(event.position.x).clamp(layout::SIDEBAR_LEAST, most);
-        self.session
-            .update(cx, |session, _| session.prefs.sidebar_width = width);
-        cx.notify();
-    }
-
-    fn end_drag(&mut self, cx: &mut Context<Self>) {
-        if self.dragging_sidebar {
-            self.dragging_sidebar = false;
-            self.session.read(cx).save_prefs();
-            cx.notify();
-        }
     }
 
     fn toolbar(&self, leading: bool, cx: &mut Context<Self>) -> impl IntoElement {
@@ -843,10 +1253,36 @@ impl Workspace {
                 .then(|| (project.clone(), theme::ink3())),
         };
         let follow = session.prefs.follow_kerf;
-        let can_undo = session.state.snapshot.can_undo;
-        let can_redo = session.state.snapshot.can_redo;
         let rendering = session.state.rendering();
-        let exporting = session.state.renders.iter().any(|job| job.is_active());
+        let quality = session.export_quality;
+        // What can be done now, as the registry says it (none of these is
+        // Ask, so the keychain is not asked).
+        let states = kerf_bridge::commands_states(&session.command_context());
+        let reason = |id: &str| crate::palette::unavailable(&states, id).map(str::to_owned);
+        let (undo_reason, redo_reason, export_reason) = (
+            reason("edit.undo"),
+            reason("edit.redo"),
+            reason("export.master"),
+        );
+        let tip = |words: &str, id: &str, why: Option<&String>| -> (String, Option<String>) {
+            match why {
+                Some(why) => (format!("{words} · {why}"), None),
+                None => (words.to_owned(), self.shown_key(id)),
+            }
+        };
+        let undo_tip = tip("Undo", "edit.undo", undo_reason.as_ref());
+        let redo_tip = tip("Redo", "edit.redo", redo_reason.as_ref());
+        // The master's key goes with it; a draft has none of its own.
+        let export_tip = (
+            crate::export::export_tip(quality, export_reason.as_deref()),
+            (quality == Quality::Master && export_reason.is_none())
+                .then(|| self.shown_key("export.master"))
+                .flatten(),
+        );
+        let sidebar_key = self.shown_key("view.sidebar");
+        let follow_key = self.shown_key("view.followKerf");
+        let media_key = self.shown_key("window.project");
+        let export_open = self.export.is_some();
         let renaming = self.renaming_title.is_some();
         let title_menu = self.title_menu;
         div()
@@ -857,11 +1293,12 @@ impl Workspace {
             .gap(px(4.0))
             .px(px(8.0))
             .when(leading, |bar| {
-                bar.child(
+                bar.child(key_tip(
+                    "show-sidebar-tip",
+                    ("Sidebar".into(), sidebar_key),
                     icon_button("show-sidebar", Icon::Sidebar)
-                        .tooltip("Sidebar")
                         .on_click(cx.listener(|this, _, _, cx| this.set_sidebar(true, cx))),
-                )
+                ))
                 // With the sidebar away, its account's menu opens from here.
                 .child(
                     sidebar::trigger(
@@ -869,14 +1306,18 @@ impl Workspace {
                         cx.listener(|this, _: &MouseDownEvent, _, cx| {
                             this.app_menu = !this.app_menu;
                             this.title_menu = false;
+                            this.activity_open = false;
                             this.sidebar
                                 .update(cx, |sidebar, cx| sidebar.close_menus(cx));
                             cx.notify();
                         }),
                     )
                     .child(
+                        // Its menu says all the tooltip would, so the tooltip waits while it is open.
                         icon_button("toolbar-app-menu-button", Icon::More)
-                            .tooltip("Settings, account and more")
+                            .when(!self.app_menu, |button| {
+                                button.tooltip("Settings, account and more")
+                            })
                             .on(self.app_menu),
                     ),
                 )
@@ -901,15 +1342,6 @@ impl Workspace {
                             .bg(theme::card())
                             .border_1()
                             .border_color(theme::accent())
-                            // Esc reaches the field's holder as a key, whatever
-                            // the keymap leaves bound in fields.
-                            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                                if event.keystroke.key == "escape" {
-                                    cx.stop_propagation();
-                                    this.finish_title_rename(false, cx);
-                                    window.focus(&this.focus_handle);
-                                }
-                            }))
                             .child(self.title_field.clone())
                             .into_any_element()
                     } else {
@@ -919,6 +1351,7 @@ impl Workspace {
                             "toolbar-title",
                             cx.listener(|this, event: &MouseDownEvent, window, cx| {
                                 this.app_menu = false;
+                                this.activity_open = false;
                                 this.sidebar
                                     .update(cx, |sidebar, cx| sidebar.close_menus(cx));
                                 if event.click_count >= 2 {
@@ -965,22 +1398,24 @@ impl Workspace {
                         .child(ui::dot(theme::activity::gpu(), 6.0)),
                 )
             })
-            .child(
+            .child(key_tip(
+                "undo-tip",
+                undo_tip,
                 icon_button("undo", Icon::Undo)
-                    .tooltip("Undo")
-                    .disabled(!can_undo)
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.session.update(cx, |session, _| session.undo())
-                    })),
-            )
-            .child(
+                    .disabled(undo_reason.is_some())
+                    .on_click(|_, window, cx| {
+                        window.dispatch_action(Box::new(RunCommand::new("edit.undo")), cx)
+                    }),
+            ))
+            .child(key_tip(
+                "redo-tip",
+                redo_tip,
                 icon_button("redo", Icon::Redo)
-                    .tooltip("Redo")
-                    .disabled(!can_redo)
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.session.update(cx, |session, _| session.redo())
-                    })),
-            )
+                    .disabled(redo_reason.is_some())
+                    .on_click(|_, window, cx| {
+                        window.dispatch_action(Box::new(RunCommand::new("edit.redo")), cx)
+                    }),
+            ))
             .child(
                 ui::button("finish", "Finish")
                     .small()
@@ -993,38 +1428,98 @@ impl Workspace {
                         )
                     }),
             )
-            .child(
-                ui::button("export", "Export")
-                    .icon(Icon::Export)
-                    .small()
-                    .kind(if exporting {
-                        ui::Kind::Primary
-                    } else {
-                        ui::Kind::Secondary
-                    })
-                    .on_click(cx.listener(|this, _, window, cx| this.toggle_export(window, cx))),
-            )
-            .child(
+            .child(self.export_button(
+                quality,
+                export_tip,
+                export_reason.is_none(),
+                export_open,
+                cx,
+            ))
+            .child(key_tip(
+                "follow-kerf-tip",
+                ("Follow Kerf".into(), follow_key),
                 // While Kerf works, the playhead goes where it looks.
                 icon_button("follow-kerf", Icon::Eye)
-                    .tooltip("Follow Kerf")
                     .on(follow)
                     .on_click(|_, window, cx| {
                         window.dispatch_action(Box::new(RunCommand::new("view.followKerf")), cx)
                     }),
-            )
-            .child(
+            ))
+            .child(key_tip(
+                "media-tip",
+                ("Media".into(), media_key),
                 icon_button("media", Icon::Media)
-                    .tooltip("Media")
                     .on(self.media_open)
                     .on_click(cx.listener(|this, _, _, cx| this.set_media(!this.media_open, cx))),
-            )
+            ))
             .child(
                 icon_button("panel", Icon::Panel)
-                    .tooltip("Panel")
+                    .tooltip("Picture and timeline")
                     .on(self.panel_open)
                     .on_click(cx.listener(|this, _, _, cx| this.set_panel(!this.panel_open, cx))),
             )
+    }
+
+    /// Export, a split button: its main part renders the quality chosen
+    /// in one press ("Export Master"); its chevron opens the menu that
+    /// chooses it, with the queue. Off, with the reason in its tooltip,
+    /// while it cannot render.
+    fn export_button(
+        &self,
+        quality: Quality,
+        tip: (String, Option<String>),
+        able: bool,
+        open: bool,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let ink = if able { theme::ink() } else { theme::dis() };
+        let main = div()
+            .id("export-main")
+            .flex()
+            .items_center()
+            .gap(px(6.0))
+            .h(px(EXPORT_INNER))
+            .px(px(10.0))
+            .child(Icon::Export.view(14.0, ink))
+            .child(ui::line("Export", text::CONTROL_STRONG, ink))
+            .child(ui::line(
+                quality.name(),
+                text::CONTROL,
+                if able { theme::ink3() } else { theme::dis() },
+            ))
+            .when(able, |main| {
+                main.cursor_pointer()
+                    .hover(|main| main.bg(theme::hover2()))
+                    .on_click(|_, window, cx| {
+                        window.dispatch_action(Box::new(crate::export::ExportChosen), cx)
+                    })
+            });
+        let chevron = div()
+            .id("export-options")
+            .flex()
+            .items_center()
+            .justify_center()
+            .w(px(EXPORT_CHEVRON))
+            .h(px(EXPORT_INNER))
+            .border_l_1()
+            .border_color(theme::line2())
+            .cursor_pointer()
+            .when(open, |chevron| chevron.bg(theme::on()))
+            .hover(|chevron| chevron.bg(theme::hover2()))
+            .child(Icon::ChevronDown.view(14.0, theme::ink2()))
+            .tooltip(|_, cx| cx.new(|_| ui::Tooltip("Export options".into())).into())
+            .on_click(cx.listener(|this, _, window, cx| this.toggle_export(window, cx)));
+        div()
+            .flex()
+            .flex_none()
+            .h(px(theme::height::H28))
+            .rounded(px(theme::radius::CONTROL))
+            .overflow_hidden()
+            .bg(theme::raised())
+            .border_1()
+            .border_color(theme::line2())
+            .child(key_tip("export-tip", tip, main))
+            .child(chevron)
     }
 
     /// What can be done with the open conversation, under its title.
@@ -1045,8 +1540,22 @@ impl Workspace {
             .as_deref()
             .is_some_and(|id| self.conversation_working(id, cx));
         let can_delete = kept && !working;
+        // The models the connection offers to choose between (Claude
+        // Code's), and the one in use.
+        let provider = session.prefs.provider;
+        let configured = session.prefs.model().to_owned();
+        let model = if configured.is_empty() {
+            "default".to_owned()
+        } else {
+            configured.clone()
+        };
+        let choices = crate::chat::model_choices(provider, &configured);
+        let choosable = choices.len() > 1 && provider == crate::prefs::Provider::ClaudeCode;
+        // A request carries the playhead's time while the picture is open.
+        let stamp_offered = self.panel_open;
+        let stamped = session.prefs.send_playhead;
         sidebar::menu_panel()
-            .w(px(200.0))
+            .w(px(TITLE_MENU_WIDTH))
             .on_mouse_down_out(cx.listener(|this, _, _, cx| {
                 this.title_menu = false;
                 cx.notify();
@@ -1103,13 +1612,124 @@ impl Workspace {
                     false,
                     false,
                 )
+                // The model in use, where a menu writes a key.
+                .child(div().flex_1())
+                .child(ui::line(
+                    crate::chat::model_label(&model),
+                    text::META,
+                    theme::ink3(),
+                ))
                 .on_click(cx.listener(|this, _, window, cx| {
                     this.title_menu = false;
-                    this.show_settings(window, cx);
+                    this.show_settings(Some(Page::Chat), window, cx);
                 })),
+            )
+            .when(choosable, |menu| {
+                menu.child(div().px(px(10.0)).pt(px(6.0)).pb(px(2.0)).child(ui::line(
+                    "Model",
+                    text::META,
+                    theme::ink3(),
+                )))
+                .children(choices.into_iter().map(|choice| {
+                    let chosen = choice == model;
+                    sidebar::menu_item(
+                        ElementId::Name(format!("title-model-{choice}").into()),
+                        crate::chat::model_label(&choice),
+                        chosen.then_some(Icon::Check),
+                        false,
+                        false,
+                    )
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.title_menu = false;
+                        this.session.update(cx, |session, cx| {
+                            session.prefs.claude_code_model = choice.clone();
+                            session.save_prefs();
+                            cx.notify();
+                        });
+                        cx.notify();
+                    }))
+                }))
+            })
+            .when(stamp_offered, |menu| {
+                menu.child(
+                    sidebar::menu_item(
+                        "title-stamp",
+                        "Send playhead time",
+                        stamped.then_some(Icon::Check),
+                        false,
+                        false,
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.title_menu = false;
+                        this.session.update(cx, |session, cx| {
+                            session.prefs.send_playhead = !session.prefs.send_playhead;
+                            session.save_prefs();
+                            cx.notify();
+                        });
+                        cx.notify();
+                    })),
+                )
+            })
+            .child(
+                sidebar::menu_item("title-activity", "Activity", None, false, false).on_click(
+                    cx.listener(|this, _, _, cx| {
+                        this.title_menu = false;
+                        this.activity_open = true;
+                        cx.notify();
+                    }),
+                ),
             )
             .with_animation("title-menu", motion::animation(scene::FADE), |menu, t| {
                 menu.opacity(t)
+            })
+    }
+
+    /// Activity, under the title: the newest of what the window and Kerf
+    /// did, a line each. A press outside or Esc puts it away.
+    fn activity_view(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let lines: Vec<(String, String)> = self
+            .session
+            .read(cx)
+            .activity
+            .latest(crate::session::ACTIVITY_SHOWN)
+            .map(|(kind, text)| (kind.to_uppercase(), text.to_owned()))
+            .collect();
+        sidebar::menu_panel()
+            .w(px(ACTIVITY_WIDTH))
+            .px(px(12.0))
+            .py(px(10.0))
+            .flex()
+            .flex_col()
+            .gap(px(6.0))
+            .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                this.activity_open = false;
+                cx.notify();
+            }))
+            .child(ui::line("Activity", text::META_STRONG, theme::ink3()))
+            .when(lines.is_empty(), |panel| {
+                panel.child(ui::label(
+                    "Nothing yet: imports, exports and previews are listed here.",
+                    text::CONTROL,
+                    theme::ink3(),
+                ))
+            })
+            .children(lines.into_iter().map(|(kind, words)| {
+                div()
+                    .flex()
+                    .gap(px(8.0))
+                    .child(
+                        ui::line(kind, text::MONO_SMALL, theme::ink3())
+                            .w(px(ACTIVITY_KIND))
+                            .flex_none(),
+                    )
+                    .child(
+                        ui::label(words, text::CONTROL, theme::ink2())
+                            .flex_1()
+                            .min_w_0(),
+                    )
+            }))
+            .with_animation("activity", motion::animation(scene::FADE), |panel, t| {
+                panel.opacity(t)
             })
     }
 
@@ -1135,6 +1755,7 @@ impl Workspace {
                         })
                     }))
                     .into_any_element()],
+                None,
             ));
         }
         if session.state.snapshot.projection_status == "diverged" {
@@ -1165,13 +1786,18 @@ impl Workspace {
                         }))
                         .into_any_element(),
                 ],
+                None,
             ));
         }
         if let Some(error) = &self.error {
+            // Its first line; the whole of a longer one (an import's ffmpeg
+            // arguments and stderr) in its tooltip.
+            let line = first_line(&error.text);
+            let whole = (line != error.text.trim()).then(|| error.text.clone().into());
             bars.push(bar(
                 format!("bar-error-{}", error.key).into(),
                 theme::neg(),
-                error.text.clone().into(),
+                line.to_owned().into(),
                 None,
                 vec![ui::button("bar-dismiss", "Dismiss")
                     .small()
@@ -1181,20 +1807,29 @@ impl Workspace {
                         cx.notify();
                     }))
                     .into_any_element()],
+                whole,
             ));
         }
         bars
     }
 
-    fn panel(&self, width: f32, height: f32, inspecting: bool, window: &Window) -> AnyElement {
+    fn panel(
+        &self,
+        width: f32,
+        height: f32,
+        inspecting: bool,
+        aspect: f32,
+        window: &Window,
+    ) -> AnyElement {
         let picture = self.picture_shown.sample(window);
         let timeline = self.timeline_shown.sample(window);
         let media = self.media_shown.sample(window);
         let band = layout::MEDIA_BAND * media;
-        // The timeline keeps its height; the picture takes the rest. One of
-        // the two alone has all of it.
+        // The timeline's share follows the picture's shape; the picture
+        // takes the rest. One of the two alone has all of it.
         let timeline_full = (height - band).max(0.0);
-        let timeline_tall = layout::TIMELINE.min(timeline_full * 0.55);
+        let stage_width = width - if inspecting { layout::INSPECTOR } else { 0.0 };
+        let timeline_tall = timeline_split(height, band, stage_width, aspect);
         let timeline_height = timeline_tall + (timeline_full - timeline_tall) * (1.0 - picture);
         let timeline_height = timeline_height * timeline;
         let picture_height = (height - band - timeline_height).max(0.0);
@@ -1211,7 +1846,21 @@ impl Workspace {
                     .flex_none()
                     .flex()
                     .overflow_hidden()
-                    .child(div().flex_1().min_w_0().h_full().child(self.stage.clone()))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .h_full()
+                            .relative()
+                            .child(self.stage.clone())
+                            // Where the stage is, for a frame to fly from.
+                            .child({
+                                let slot = self.stage_slot.clone();
+                                canvas(move |bounds, _, _| slot.set(Some(bounds)), |_, _, _, _| {})
+                                    .absolute()
+                                    .inset_0()
+                            }),
+                    )
                     .when(inspecting, |row| {
                         row.child(
                             div()
@@ -1282,7 +1931,7 @@ impl Workspace {
                     .flex()
                     .items_center()
                     .gap(px(8.0))
-                    .max_w(px(560.0))
+                    .max_w(px(layout::NOTICE_MOST))
                     .px(px(12.0))
                     .py(px(8.0))
                     .rounded(px(theme::radius::CARD))
@@ -1291,8 +1940,9 @@ impl Workspace {
                     .border_color(theme::line2())
                     .shadow_lg()
                     .text_color(theme::ink())
-                    .child(ui::dot(color, 6.0))
-                    .child(notice.text.clone())
+                    .child(div().flex_none().child(ui::dot(color, 6.0)))
+                    // Long words (a failed push's ssh line) wrap inside it.
+                    .child(div().flex_1().min_w_0().child(notice.text.clone()))
                     .with_animation(
                         ("notice", key),
                         motion::animation(scene::APPEAR),
@@ -1378,10 +2028,19 @@ impl Focusable for Workspace {
 
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.refresh_keys(cx);
+        let flight = self.flight_now(window, cx);
         let viewport = window.viewport_size();
         let (window_width, window_height) = (f32::from(viewport.width), f32::from(viewport.height));
         let sidebar_width = self.sidebar_width(self.session.read(cx));
-        let sidebar = self.sidebar_shown.sample(window);
+        // In a window too narrow for it, the sidebar gives way (Qt's
+        // sidebarWindowLeast), and the toolbar has its menu.
+        self.sidebar_gives_way = window_width < layout::SIDEBAR_WINDOW_LEAST;
+        let sidebar = if self.sidebar_gives_way {
+            0.0
+        } else {
+            self.sidebar_shown.sample(window)
+        };
         let panel = self.panel_shown.sample(window);
         let main_left = sidebar_width * sidebar;
         let main_width = (window_width - main_left).max(0.0);
@@ -1398,9 +2057,10 @@ impl Render for Workspace {
         // The chosen clip's inspector stands beside the picture when there is room.
         let inspecting =
             !self.session.read(cx).selection.is_empty() && panel_width > layout::INSPECTOR * 2.2;
+        // The picture's shape, which splits the panel.
+        let aspect = crate::stage::shown_aspect(self.session.read(cx));
         // Where the title starts, for its menu to open under it.
         let title_left = main_left + if leading { 84.0 } else { 16.0 };
-        let provider: SharedString = self.session.read(cx).prefs.provider.label().into();
         let close_app_menu: Rc<dyn Fn(&mut Window, &mut App)> = {
             let this = cx.entity().downgrade();
             Rc::new(move |_, cx| {
@@ -1415,20 +2075,46 @@ impl Render for Workspace {
             .key_context(WORKSPACE)
             .track_focus(&self.focus_handle)
             .on_action(cx.listener(Self::run_command))
+            .on_action(
+                cx.listener(|this, _: &crate::export::ExportChosen, _, cx| this.export_chosen(cx)),
+            )
             .on_action(cx.listener(|this, _: &crate::commands::Escape, _, cx| this.escape(cx)))
             .on_action(
                 cx.listener(|this, _: &crate::commands::RevealPicture, _, cx| {
-                    // Looking at something opens the picture, as by hand.
-                    if !this.panel_open {
-                        this.set_panel(true, cx);
-                    } else if this.picture_shown.target() < 0.5 {
-                        this.toggle_pane(true, cx);
-                    }
+                    this.reveal_picture(cx)
+                }),
+            )
+            // ⇧R ⇧E ⇧P wherever the window has the keys, as Qt's View menu
+            // had them: a mask tool on the chosen picture clip.
+            .on_action(
+                cx.listener(|this, _: &crate::stage::RectangleMask, window, cx| {
+                    this.toggle_mask_tool(crate::stage::MaskTool::Rectangle, window, cx)
                 }),
             )
             .on_action(
+                cx.listener(|this, _: &crate::stage::EllipseMask, window, cx| {
+                    this.toggle_mask_tool(crate::stage::MaskTool::Ellipse, window, cx)
+                }),
+            )
+            .on_action(cx.listener(|this, _: &crate::stage::PenMask, window, cx| {
+                this.toggle_mask_tool(crate::stage::MaskTool::Pen, window, cx)
+            }))
+            .on_action(cx.listener(|this, action: &OpenRecent, window, cx| {
+                this.open_chosen(PathBuf::from(action.path.as_ref()), window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &ClearRecent, _, cx| {
+                this.session.update(cx, |session, _| {
+                    session.prefs.recent.clear();
+                    session.save_prefs();
+                });
+                let project = this.session.read(cx).project.clone();
+                crate::commands::refresh_menus(project.as_deref(), cx);
+            }))
+            .on_action(
                 cx.listener(|this, _: &crate::palette::OpenPalette, window, cx| {
                     if this.modal.is_none() {
+                        // What the palette says of a proposal is of the pinned one.
+                        this.pin_proposal(cx);
                         let palette = cx.new(|cx| {
                             crate::palette::CommandPalette::new(this.session.clone(), window, cx)
                         });
@@ -1486,7 +2172,6 @@ impl Render for Workspace {
                     this.rename_open(window, cx);
                 }
             }))
-            .on_mouse_move(cx.listener(Self::on_drag))
             // Files dropped on the window come into the project's media.
             .on_drop(cx.listener(|this, paths: &gpui::ExternalPaths, _, cx| {
                 this.session.update(cx, |session, cx| {
@@ -1499,10 +2184,6 @@ impl Render for Workspace {
                     this.set_media(true, cx);
                 }
             }))
-            .on_mouse_up(
-                MouseButton::Left,
-                cx.listener(|this, _, _, cx| this.end_drag(cx)),
-            )
             .size_full()
             .relative()
             .overflow_hidden()
@@ -1517,37 +2198,8 @@ impl Render for Workspace {
                     .bottom_0()
                     .left(px(-sidebar_width * (1.0 - sidebar)))
                     .w(px(sidebar_width))
-                    .child(self.sidebar.clone())
-                    .child(
-                        // Its edge takes a drag, and shows a line under the pointer.
-                        div()
-                            .id("sidebar-grip")
-                            .absolute()
-                            .top_0()
-                            .bottom_0()
-                            .right(px(-layout::SIDEBAR_GRIP / 2.0))
-                            .w(px(layout::SIDEBAR_GRIP))
-                            .cursor_col_resize()
-                            .when(self.dragging_sidebar, |grip| {
-                                grip.child(
-                                    div()
-                                        .absolute()
-                                        .top_0()
-                                        .bottom_0()
-                                        .left(px(3.0))
-                                        .w(px(2.0))
-                                        .bg(theme::lineh()),
-                                )
-                            })
-                            .hover(|grip| grip.bg(theme::with_alpha(theme::lineh(), 0.25)))
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(|this, _, _, cx| {
-                                    this.dragging_sidebar = true;
-                                    cx.notify();
-                                }),
-                            ),
-                    ),
+                    // Its edge (drag, press, double-click) is the sidebar's own.
+                    .child(self.sidebar.clone()),
             )
             .child(
                 div()
@@ -1590,6 +2242,7 @@ impl Render for Workspace {
                                             panel_width - 8.0,
                                             content_height - 8.0,
                                             inspecting,
+                                            aspect,
                                             window,
                                         )),
                                 )
@@ -1601,7 +2254,7 @@ impl Render for Workspace {
                     div()
                         .absolute()
                         .top(px(layout::TOOLBAR))
-                        .right(px(80.0))
+                        .right(px(EXPORT_RIGHT))
                         .child(export)
                         .with_animation(
                             "export-pop",
@@ -1619,6 +2272,15 @@ impl Render for Workspace {
                         .child(self.title_menu_view(cx)),
                 )
             })
+            .when(self.activity_open, |root| {
+                root.child(
+                    div()
+                        .absolute()
+                        .top(px(layout::TOOLBAR - 2.0))
+                        .left(px(title_left))
+                        .child(self.activity_view(cx)),
+                )
+            })
             .when(self.app_menu && leading, |root| {
                 root.child(
                     div()
@@ -1626,7 +2288,7 @@ impl Render for Workspace {
                         .top(px(layout::TOOLBAR - 2.0))
                         .left(px(main_left + 40.0))
                         .child(
-                            sidebar::app_menu(provider.clone(), close_app_menu.clone())
+                            sidebar::account_menu(&self.session, close_app_menu.clone(), cx)
                                 .on_mouse_down_out(cx.listener(|this, _, _, cx| {
                                     this.app_menu = false;
                                     cx.notify();
@@ -1636,6 +2298,27 @@ impl Render for Workspace {
                             "toolbar-app-menu",
                             motion::animation(scene::FADE),
                             |menu, t| menu.opacity(t),
+                        ),
+                )
+            })
+            // Manual export: a frame of the picture on its way to the project's row.
+            .when_some(flight, |root, (bounds, opacity, image)| {
+                root.child(
+                    div()
+                        .absolute()
+                        .left(bounds.origin.x)
+                        .top(bounds.origin.y)
+                        .w(bounds.size.width)
+                        .h(bounds.size.height)
+                        .opacity(opacity)
+                        // Covering its box, and cut to it.
+                        .overflow_hidden()
+                        .rounded(px(theme::radius::CARD))
+                        .child(
+                            img(image)
+                                .size_full()
+                                .rounded(px(theme::radius::CARD))
+                                .object_fit(ObjectFit::Cover),
                         ),
                 )
             })
@@ -1660,6 +2343,17 @@ pub fn points(value: Pixels) -> f32 {
 
 /// A bar's height under the toolbar.
 const BAR: f32 = theme::height::H40;
+/// Export's chevron, and the height inside the button's outline.
+const EXPORT_CHEVRON: f32 = 24.0;
+const EXPORT_INNER: f32 = theme::height::H28 - 2.0;
+/// How far Export's right edge is from the window's: the toolbar's end,
+/// past Follow Kerf, Media and the panel's button. Its menu opens there.
+const EXPORT_RIGHT: f32 = 8.0 + 3.0 * (theme::height::H28 + 4.0);
+/// The title's menu: room for Agent settings… and the model after it.
+const TITLE_MENU_WIDTH: f32 = 260.0;
+/// Activity's width, and its column of kinds.
+const ACTIVITY_WIDTH: f32 = 380.0;
+const ACTIVITY_KIND: f32 = 64.0;
 /// The toolbar's title field, while a conversation is renamed there.
 const TITLE_FIELD: f32 = 280.0;
 
@@ -1671,9 +2365,13 @@ fn bar(
     title: SharedString,
     detail: Option<SharedString>,
     buttons: Vec<AnyElement>,
+    tip: Option<SharedString>,
 ) -> AnyElement {
     div()
         .id(id.clone())
+        .when_some(tip, |bar, tip| {
+            bar.tooltip(move |_, cx| cx.new(|_| ui::Tooltip(tip.clone())).into())
+        })
         .h(px(BAR))
         .flex_none()
         .flex()
@@ -1707,6 +2405,48 @@ fn bar(
         .children(buttons)
         .with_animation(id, motion::animation(scene::FADE), |bar, t| bar.opacity(t))
         .into_any_element()
+}
+
+/// The paths a file chooser gave; None, with a notice in `session`'s window
+/// saying why where there is something to say (no chooser could open, a
+/// name kerfd cannot be sent), when there are none to use.
+fn chosen_paths(answer: crate::presets::Picked, session: &mut Session) -> Option<Vec<PathBuf>> {
+    use crate::presets::Picked;
+    match answer {
+        Picked::Paths(paths) => Some(paths),
+        Picked::Failed(error) => {
+            session
+                .state
+                .notify(&format!("No file chooser could open: {error}"), true);
+            None
+        }
+        Picked::Unusable(words) => {
+            session.state.notify(&words, true);
+            None
+        }
+        Picked::Nothing => None,
+    }
+}
+
+/// The first line of what `text` says, trimmed (the whole of it when it
+/// has one): what the error bar and the toolbar's line show of an error.
+pub fn first_line(text: &str) -> &str {
+    text.lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or_default()
+}
+
+/// One frame on from `position`, or `frames` back, on the frame grid at
+/// `rate` frames a second: the playhead rounded to its frame first (after a
+/// skim or the clock it can sit between frames), never before the start.
+pub fn frame_step(position: f64, rate: f64, frames: i64) -> f64 {
+    let rate = if rate.is_finite() && rate > 0.0 {
+        rate
+    } else {
+        30.0
+    };
+    (((position * rate).round() + frames as f64) / rate).max(0.0)
 }
 
 /// Whether an error the bridge sends stays in the error bar: not what a
@@ -1805,19 +2545,17 @@ pub fn needs_start(folder: &Path) -> bool {
     !folder.join("project.kerf").exists()
 }
 
-/// Whether two paths name the same folder.
-fn same_folder(a: &Path, b: &Path) -> bool {
-    match (a.canonicalize(), b.canonicalize()) {
-        (Ok(a), Ok(b)) => a == b,
-        _ => a == b,
-    }
-}
-
 /// Opens `project` in a window of its own. `starts` when it was no project
 /// yet: once kerfd has it, its folder's media comes in (the launcher's
 /// `LauncherEvent::Open { starts }` means the same).
 pub fn open_folder(project: PathBuf, starts: bool, cx: &mut App) {
-    crate::app::open(Some(project.clone()), None, cx);
+    open_folder_with(project, starts, None, cx);
+}
+
+/// [`open_folder`] with the kerfd the project is opened with (None finds
+/// one as at launch): a window opening another project keeps its own.
+pub fn open_folder_with(project: PathBuf, starts: bool, kerfd: Option<PathBuf>, cx: &mut App) {
+    crate::app::open(Some(project.clone()), kerfd, cx);
     if !starts {
         return;
     }
@@ -1832,12 +2570,186 @@ pub fn open_folder(project: PathBuf, starts: bool, cx: &mut App) {
             let here = session
                 .project
                 .as_deref()
-                .is_some_and(|open| same_folder(open, &project));
+                .is_some_and(|open| crate::app::same_folder(open, &project));
             if fresh && here && workspace.start_media.is_none() {
                 workspace.start_media = Some(project.clone());
             }
         });
     }
+}
+
+/// `child` with a tooltip of words and, dimmer after them, its keys.
+fn key_tip(
+    id: &'static str,
+    (words, keys): (String, Option<String>),
+    child: impl IntoElement,
+) -> Stateful<gpui::Div> {
+    let words: SharedString = words.into();
+    let keys: Option<SharedString> = keys.map(Into::into);
+    div()
+        .id(id)
+        .flex()
+        .flex_none()
+        .items_center()
+        .tooltip(move |_, cx| {
+            cx.new(|_| KeyTip {
+                words: words.clone(),
+                keys: keys.clone(),
+            })
+            .into()
+        })
+        .child(child)
+}
+
+/// What a toolbar button says when the pointer rests on it: what it does
+/// (or why it cannot now), and its keys.
+struct KeyTip {
+    words: SharedString,
+    keys: Option<SharedString>,
+}
+
+impl Render for KeyTip {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        theme::type_style(div(), text::CONTROL)
+            .flex()
+            .items_center()
+            .gap(px(8.0))
+            .px(px(8.0))
+            .py(px(4.0))
+            .rounded(px(theme::radius::CONTROL))
+            .bg(theme::popup())
+            .border_1()
+            .border_color(theme::line2())
+            .text_color(theme::ink())
+            .shadow_md()
+            .child(self.words.clone())
+            .when_some(self.keys.clone(), |tip, keys| {
+                tip.child(div().text_color(theme::ink3()).child(keys))
+            })
+    }
+}
+
+/// Where a manual export's frame is at `elapsed`: how far along (eased,
+/// 0..1) and how clear. It crosses over [`scene::FLIGHT`] fading from 0.9
+/// to 0.2, then fades out where it landed over [`scene::FLIGHT_LAND`].
+/// None once it has gone.
+pub fn export_flight_at(elapsed: Duration) -> Option<(f32, f32)> {
+    if elapsed >= scene::FLIGHT + scene::FLIGHT_LAND {
+        return None;
+    }
+    let flight = scene::FLIGHT.as_secs_f32();
+    let land = scene::FLIGHT_LAND.as_secs_f32();
+    let elapsed = elapsed.as_secs_f32();
+    let t = (elapsed / flight).clamp(0.0, 1.0);
+    let opacity = FLIGHT_FROM + (FLIGHT_TO - FLIGHT_FROM) * t;
+    let fading = ((elapsed - flight) / land).clamp(0.0, 1.0);
+    Some((motion::ease(t), opacity * (1.0 - fading)))
+}
+
+/// How clear a manual export's frame is as it leaves the picture and as it lands.
+const FLIGHT_FROM: f32 = 0.9;
+const FLIGHT_TO: f32 = 0.2;
+
+/// The rect `along` (0..1) of the way from `from` to `to`.
+pub fn lerp_bounds(from: Bounds<Pixels>, to: Bounds<Pixels>, along: f32) -> Bounds<Pixels> {
+    let mix = |a: Pixels, b: Pixels| a + (b - a) * along;
+    Bounds::new(
+        point(
+            mix(from.origin.x, to.origin.x),
+            mix(from.origin.y, to.origin.y),
+        ),
+        size(
+            mix(from.size.width, to.size.width),
+            mix(from.size.height, to.size.height),
+        ),
+    )
+}
+
+/// Where the stage puts a `width` × `height` picture within `slot` (the
+/// stage, its transport under it): in its room, inset as the stage insets
+/// its device, at its own aspect, centred.
+pub fn picture_within(slot: Bounds<Pixels>, width: u32, height: u32) -> Bounds<Pixels> {
+    let area_height = (f32::from(slot.size.height) - layout::TRANSPORT).max(1.0);
+    let inset = STAGE_MARGIN + STAGE_BEZEL;
+    let room_width = (f32::from(slot.size.width) - inset * 2.0).max(1.0);
+    let room_height = (area_height - inset * 2.0).max(1.0);
+    let aspect = if width == 0 || height == 0 {
+        16.0 / 9.0
+    } else {
+        width as f32 / height as f32
+    };
+    let (shown_width, shown_height) = if room_width / room_height > aspect {
+        (room_height * aspect, room_height)
+    } else {
+        (room_width, room_width / aspect)
+    };
+    Bounds::new(
+        point(
+            slot.origin.x + px((f32::from(slot.size.width) - shown_width) / 2.0),
+            slot.origin.y + px((area_height - shown_height) / 2.0),
+        ),
+        size(px(shown_width), px(shown_height)),
+    )
+}
+
+/// How tall the timeline is under the picture in a panel `height` tall,
+/// with the Media band `band` tall between them and the stage `width` wide,
+/// split as Qt split it by the picture's shape (`aspect`, width over
+/// height): under a wide picture [`layout::TIMELINE_WIDE_SHARE`] of the
+/// height, at least [`layout::TIMELINE_WIDE_LEAST`], and what the picture
+/// cannot use at that width; under a vertical or square one
+/// [`layout::TIMELINE_UPRIGHT_SHARE`], at least
+/// [`layout::TIMELINE_UPRIGHT_LEAST`]. The band takes the timeline's top
+/// until that would leave it under [`layout::MEDIA_BAND_TIMELINE_LEAST`];
+/// then the picture gives way. The transport, which Qt's timeline carried,
+/// is under the picture here, and counts as the timeline's.
+pub fn timeline_split(height: f32, band: f32, width: f32, aspect: f32) -> f32 {
+    let height = height.max(0.0);
+    let band = band.clamp(0.0, height);
+    let wide = aspect >= layout::WIDE;
+    let (share, least) = if wide {
+        (layout::TIMELINE_WIDE_SHARE, layout::TIMELINE_WIDE_LEAST)
+    } else {
+        (
+            layout::TIMELINE_UPRIGHT_SHARE,
+            layout::TIMELINE_UPRIGHT_LEAST,
+        )
+    };
+    // Qt's slot: the picture with its air, under it the timeline and its transport.
+    let mut slot = height - (height * share).max(least).min(height);
+    if wide {
+        let air = (STAGE_MARGIN + STAGE_BEZEL) * 2.0;
+        slot = slot.min((width - air).max(0.0) / aspect + air);
+    }
+    if band > 0.0 {
+        slot = slot.min(height - band - layout::MEDIA_BAND_TIMELINE_LEAST);
+    }
+    let picture = (slot.max(0.0) + layout::TRANSPORT).min(height - band);
+    (height - band - picture).max(0.0)
+}
+
+/// The stage's air round its device, and the device's bezel.
+const STAGE_MARGIN: f32 = 24.0;
+const STAGE_BEZEL: f32 = 8.0;
+
+/// Where a flight lands on `row` (the project's row in the sidebar), as
+/// Qt landed it: a small frame at the row's start, inside its height.
+pub fn landing_in(row: Bounds<Pixels>) -> Bounds<Pixels> {
+    let (left, top) = scene::LANDING_INSET;
+    let height = (f32::from(row.size.height) - top * 2.0).max(1.0);
+    let width = scene::LANDING_WIDTH.min(f32::from(row.size.width)).max(1.0);
+    Bounds::new(
+        point(row.origin.x + px(left), row.origin.y + px(top)),
+        size(px(width), px(height)),
+    )
+}
+
+/// Where a manual export's frame lands when the sidebar has not laid the
+/// project's row out yet: at its folder, under the toolbar, New
+/// conversation and Search.
+fn project_row() -> Bounds<Pixels> {
+    let top = layout::TOOLBAR + theme::height::H32 * 2.0 + 2.0 + 8.0 + 4.0;
+    Bounds::new(point(px(12.0), px(top)), size(px(44.0), px(26.0)))
 }
 
 gpui::actions!(confirm, [CloseConfirm, ConfirmDefault]);

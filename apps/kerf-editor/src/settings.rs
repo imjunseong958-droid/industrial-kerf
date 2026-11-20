@@ -21,9 +21,8 @@ use crate::theme::{self, height, radius, text, Face};
 use crate::ui::{self, icon_button};
 use gpui::{
     actions, div, img, prelude::*, px, Action, AnimationExt, AnyElement, App, ClipboardItem,
-    Context, ElementId, Entity, EntityInputHandler, EventEmitter, FocusHandle, Focusable,
-    FontWeight, KeyBinding, Keystroke, MouseButton, ScrollHandle, SharedString, Subscription, Task,
-    Window,
+    Context, ElementId, Entity, EventEmitter, FocusHandle, Focusable, FontWeight, KeyBinding,
+    Keystroke, MouseButton, ScrollHandle, SharedString, Subscription, Task, Window,
 };
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
@@ -240,8 +239,10 @@ impl SettingsView {
         let token = cx.new(|cx| TextInput::new(cx, "Sign-in token").secret());
         let (servers_text, servers_status) = project_servers(project.as_deref());
         let servers = cx.new(|cx| {
+            // JSON, in mono: Return starts a line, ⌘↩ / Ctrl+Enter saves.
             let mut input = TextInput::new(cx, NO_SERVERS.trim())
-                .multiline()
+                .code()
+                .with_style(text::TIMECODE)
                 .max_height(px(SERVERS_HEIGHT));
             input.set_text(servers_text, cx);
             input
@@ -965,17 +966,16 @@ impl SettingsView {
 
     fn servers_event(
         &mut self,
-        input: &Entity<TextInput>,
+        _: &Entity<TextInput>,
         event: &InputEvent,
-        window: &mut Window,
+        _: &mut Window,
         cx: &mut Context<Self>,
     ) {
         match event {
             InputEvent::Changed => {}
-            // Return starts a new line: saving is Save and Apply's.
-            InputEvent::Submit => input.update(cx, |input, cx| {
-                input.replace_text_in_range(None, "\n", window, cx)
-            }),
+            // Return starts a new line in the field itself; ⌘↩ / Ctrl+Enter
+            // is Save and Apply.
+            InputEvent::Submit => self.save_servers(cx),
             InputEvent::Cancel => self.dismiss(cx),
         }
     }
@@ -1321,10 +1321,8 @@ impl SettingsView {
             session.prefs.keymap = keymap;
             session.save_prefs();
         });
+        // Binding the keymap clears every binding; it binds the views' own again.
         commands::bind(keymap.wire(), cx);
-        // Binding the keymap clears every binding, ours among them.
-        bind_close(cx);
-        crate::export::bind_close(cx);
         self.catalog = (keymap, commands::catalog(keymap.wire()));
         cx.notify();
     }
@@ -1849,34 +1847,8 @@ fn keycaps(shortcut: &str) -> impl IntoElement {
                 .border_color(theme::line2())
                 .text_color(theme::ink2())
                 .whitespace_nowrap()
-                .child(shown_chord(chord))
+                .child(commands::shown_keys(chord))
         }))
-}
-
-/// A chord as this platform writes it: ⌘⇧Z on a Mac, Ctrl+Shift+Z elsewhere.
-fn shown_chord(chord: &str) -> String {
-    if !cfg!(target_os = "macos") {
-        return chord.to_owned();
-    }
-    let (modifiers, key) = match chord.strip_suffix("++") {
-        Some(rest) => (rest, "+"),
-        None => match chord.rfind('+') {
-            Some(at) => (&chord[..at], &chord[at + 1..]),
-            None => ("", chord),
-        },
-    };
-    let mut shown = String::new();
-    for modifier in modifiers.split('+').filter(|part| !part.is_empty()) {
-        shown.push_str(match modifier.to_ascii_lowercase().as_str() {
-            "ctrl" | "cmd" | "command" => "⌘",
-            "meta" => "⌃",
-            "alt" | "option" => "⌥",
-            "shift" => "⇧",
-            other => other,
-        });
-    }
-    shown.push_str(key);
-    shown
 }
 
 /// `file` → `File`, as a menu's name.
