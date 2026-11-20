@@ -3287,6 +3287,8 @@ pub struct ShotGraph {
     /// Where the canvas, a signal's curve and a picture pointed on were last drawn.
     canvas_bounds: Rc<Cell<Bounds<Pixels>>>,
     curve_bounds: Rc<Cell<Bounds<Pixels>>>,
+    /// The inspector's column, for its fades.
+    inspector_scroll: gpui::ScrollHandle,
     point_bounds: Rc<Cell<Bounds<Pixels>>>,
     _subscriptions: Vec<Subscription>,
 }
@@ -3355,6 +3357,7 @@ impl ShotGraph {
             pending_node,
             canvas_bounds: Rc::default(),
             curve_bounds: Rc::default(),
+            inspector_scroll: gpui::ScrollHandle::new(),
             point_bounds: Rc::default(),
             _subscriptions: subscriptions,
         };
@@ -4902,18 +4905,16 @@ impl ShotGraph {
                         .max_w(px(320.0)),
                 )
             })
-            .child(
+            .child(ui::tip_on(
                 div()
                     .id("graph-status")
                     .flex_1()
                     .min_w_0()
                     .flex()
                     .justify_end()
-                    .child(ui::line(status, text::CONTROL, status_color))
-                    .when(!status_tip.is_empty(), |line| {
-                        line.tooltip(ui::tooltip(ui::Tip::new(status_tip)))
-                    }),
-            );
+                    .child(ui::line(status, text::CONTROL, status_color)),
+                (!status_tip.is_empty()).then(|| ui::Tip::new(status_tip)),
+            ));
         if making.is_some() {
             head = head.child(
                 ui::button("graph-stop", "Stop")
@@ -5832,16 +5833,25 @@ impl ShotGraph {
                 }
             }
         }
+        // Scrolling with no bar, it fades where a row is cut and while
+        // there is more below.
         div()
-            .id("graph-inspector")
+            .relative()
             .w(px(INSPECTOR))
             .flex_none()
             .h_full()
-            .overflow_y_scroll()
-            .bg(theme::chrome())
-            .border_l_1()
-            .border_color(theme::line())
-            .child(column)
+            .child(
+                div()
+                    .id("graph-inspector")
+                    .track_scroll(&self.inspector_scroll)
+                    .size_full()
+                    .overflow_y_scroll()
+                    .bg(theme::chrome())
+                    .border_l_1()
+                    .border_color(theme::line())
+                    .child(column),
+            )
+            .child(ui::scroll_fade(&self.inspector_scroll, theme::chrome()))
             .into_any_element()
     }
 
@@ -6291,7 +6301,7 @@ impl ShotGraph {
             });
         let bounds = self.curve_bounds.clone();
         let press_clip = clip.clone();
-        column = column.child(
+        column = column.child(ui::tip_on(
             div()
                 .id("graph-signal-curve")
                 .h(px(CURVE_HEIGHT))
@@ -6301,9 +6311,6 @@ impl ShotGraph {
                 .border_1()
                 .border_color(theme::line2())
                 .cursor(CursorStyle::Crosshair)
-                .tooltip(ui::tooltip(ui::Tip::new(
-                    "Drag across to draw the signal: 0 at the foot, 1 at the top",
-                )))
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(move |this, event: &MouseDownEvent, window, cx| {
@@ -6320,7 +6327,10 @@ impl ShotGraph {
                     )
                     .size_full(),
                 ),
-        );
+            Some(ui::Tip::new(
+                "Drag across to draw the signal: 0 at the foot, 1 at the top",
+            )),
+        ));
         column = column.child(note(
             format!(
                 "{}. Drag across it to draw it anew; it is the clip's value in the project, and is undone as any edit.",
@@ -6859,7 +6869,6 @@ impl ShotGraph {
                     theme::line()
                 })
                 .when(chosen, |row| row.bg(theme::accent_wash()))
-                .tooltip(ui::tooltip(ui::Tip::new(tip)))
                 .child(match picture {
                     // The take's picture, filling its box, its corners rounded as a card's.
                     Some(image) => div()
@@ -6923,7 +6932,7 @@ impl ShotGraph {
             } else {
                 row
             };
-            column = column.child(row);
+            column = column.child(ui::tip_on(row, Some(ui::Tip::new(tip))));
         }
         // The take the shot is, made from steps that have changed since: back to them.
         for take in &takes {

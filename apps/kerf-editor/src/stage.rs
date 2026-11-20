@@ -34,7 +34,7 @@ use gpui::{
     MouseMoveEvent, MouseUpEvent, PathBuilder, Pixels, Point, Rgba, SharedString, Subscription,
     Task, TextRun, WeakEntity, Window,
 };
-use overlay::{Affine, MotionPath, Outline, Overlap, Pt};
+use overlay::{Affine, MotionPath, Outline, Overlap, Projective, Pt};
 use serde_json::{json, Value};
 use std::cell::Cell;
 use std::collections::HashMap;
@@ -526,12 +526,25 @@ struct Shown {
     path: Option<Vec<Pt>>,
     /// How far along its path the clip is now.
     along: f64,
+    /// Seconds into the program it is shown at.
+    position: f64,
+    /// A path in depth that no one map shows, sampled where the clip's
+    /// anchor goes (`overlay::sampled`), its points where a drag has them.
+    sampled: Option<overlay::Sampled>,
 }
 
 impl Shown {
     /// Whether the picture's clicks are its own: there is something to drag.
+    /// A path is only here while some of it can be seen (`Stage::overlays`).
     fn edits(&self) -> bool {
-        !self.masks.is_empty() || self.path.is_some()
+        self.edits_masks() || self.path.is_some()
+    }
+
+    /// Whether its masks take the picture's clicks: it has some, and its
+    /// picture can be seen (Qt's `editsMasks`). Turned edge on or behind
+    /// the camera, a click on the picture plays as it would with none.
+    fn edits_masks(&self) -> bool {
+        !self.masks.is_empty() && self.placement.masks_seen()
     }
 
     fn aspect(&self) -> f64 {
@@ -540,28 +553,49 @@ impl Shown {
     }
 
     /// Fractions of the clip's picture to the window, with the canvas drawn
-    /// at `picture`.
-    fn to_window(&self, picture: Bounds<Pixels>) -> Affine {
+    /// at `picture`; none when the clip cannot be seen.
+    fn to_window(&self, picture: Bounds<Pixels>) -> Option<Projective> {
         let (width, height) = self.placement.canvas;
         let (x, y) = to_pt(picture.origin);
         let (across, down) = to_pt(point(picture.size.width, picture.size.height));
-        self.placement
-            .picture
-            .then(Affine::scale(
-                across / width.max(1.0),
-                down / height.max(1.0),
-            ))
-            .then(Affine::translate(x, y))
+        self.placement.picture.shows().then(|| {
+            self.placement
+                .picture
+                .then(Affine::scale(
+                    across / width.max(1.0),
+                    down / height.max(1.0),
+                ))
+                .then(Affine::translate(x, y))
+        })
     }
 
-    /// A point of the clip's motion path to the window.
-    fn path_to_window(&self, picture: Bounds<Pixels>) -> Affine {
+    /// A point of the clip's motion path to the window; none when no one
+    /// map shows it.
+    fn path_to_window(&self, picture: Bounds<Pixels>) -> Option<Projective> {
         let (x, y) = to_pt(picture.origin);
         let (across, down) = to_pt(point(picture.size.width, picture.size.height));
-        self.placement
-            .path
-            .then(Affine::scale(across, down))
-            .then(Affine::translate(x, y))
+        self.placement.path.shows().then(|| {
+            self.placement
+                .path
+                .then(Affine::scale(across, down))
+                .then(Affine::translate(x, y))
+        })
+    }
+
+    /// Where the path's point `index` is in the window: on its sampled
+    /// curve, or as its map shows it; none out of sight.
+    fn point_place(&self, picture: Bounds<Pixels>, index: usize) -> Option<Pt> {
+        if let Some(sampled) = &self.sampled {
+            return sampled
+                .handles
+                .get(index)
+                .copied()
+                .flatten()
+                .map(|share| share_to_window(picture, share));
+        }
+        let at = *self.path.as_ref()?.get(index)?;
+        let map = self.path_to_window(picture)?;
+        map.in_sight(at).then(|| map.apply(at))
     }
 
     /// With what a drag holds in place of what the snapshot says.
@@ -590,16 +624,22 @@ impl Shown {
             .masks
             .iter()
             .find(|mask| Some(mask.name.as_str()) == chosen)?;
-        let map = self.to_window(picture);
+        let map = self.to_window(picture)?;
         square_at(&mask.outline.handles(), map, at)
     }
 
     /// The mask under `at`: the chosen one first, then the last drawn.
     fn mask_at(&self, picture: Bounds<Pixels>, chosen: Option<&str>, at: Pt) -> Option<String> {
-        let map = self.to_window(picture);
+        let map = self.to_window(picture)?;
         let hit = |mask: &overlay::Mask| {
             let (line, closed) = mask.outline.line();
-            let line: Vec<Pt> = line.into_iter().map(|point| map.apply(point)).collect();
+            // What is out of sight is not there to press.
+            let closed = closed && line.iter().all(|point| map.in_sight(*point));
+            let line: Vec<Pt> = line
+                .into_iter()
+                .filter(|point| map.in_sight(*point))
+                .map(|point| map.apply(point))
+                .collect();
             (closed && overlay::inside(&line, at))
                 || overlay::distance_to_line(&line, closed, at) <= REACH
         };
@@ -620,22 +660,30 @@ impl Shown {
 
     /// The point of the motion path under `at`.
     fn point_at(&self, picture: Bounds<Pixels>, at: Pt) -> Option<usize> {
-        square_at(self.path.as_ref()?, self.path_to_window(picture), at)
+        let count = self.path.as_ref()?.len();
+        (0..count).rev().find(|index| {
+            self.point_place(picture, *index)
+                .is_some_and(|(x, y)| (x - at.0).abs() <= REACH && (y - at.1).abs() <= REACH)
+        })
     }
 
     /// How far along the path's curve `at` is, in spans, when it is on it.
+    /// A sampled path's curve takes no point.
     fn curve_at(&self, picture: Bounds<Pixels>, at: Pt) -> Option<f64> {
+        if self.sampled.is_some() {
+            return None;
+        }
         let points = self.path.as_ref()?;
-        let map = self.path_to_window(picture);
-        let line: Vec<Pt> = MotionPath::new(points.clone(), self.aspect())
-            .samples()
-            .into_iter()
-            .map(|point| map.apply(point))
-            .collect();
+        let map = self.path_to_window(picture)?;
+        let samples = MotionPath::new(points.clone(), self.aspect()).samples();
         let mut nearest = REACH;
         let mut found = None;
-        for (index, pair) in line.windows(2).enumerate() {
-            let (from, to) = (pair[0], pair[1]);
+        for (index, pair) in samples.windows(2).enumerate() {
+            // In depth, what is on or behind the camera breaks the curve.
+            if !map.in_sight(pair[0]) || !map.in_sight(pair[1]) {
+                continue;
+            }
+            let (from, to) = (map.apply(pair[0]), map.apply(pair[1]));
             let (dx, dy) = (to.0 - from.0, to.1 - from.1);
             let length = dx * dx + dy * dy;
             let t = if length > 0.0 {
@@ -653,12 +701,86 @@ impl Shown {
     }
 }
 
-/// The square of `points`, mapped by `map`, under `at`: the last drawn first.
-fn square_at(points: &[Pt], map: Affine, at: Pt) -> Option<usize> {
+/// How wide `words` are, set on one line in `style`.
+fn line_width(window: &Window, words: &str, style: theme::TypeStyle) -> f32 {
+    let words: SharedString = words.to_owned().into();
+    let run = TextRun {
+        len: words.len(),
+        font: theme::ui_font(style.weight),
+        color: theme::ink().into(),
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    };
+    f32::from(
+        window
+            .text_system()
+            .shape_line(words, px(style.px), &[run], None)
+            .width,
+    )
+}
+
+/// `words` cut short with an ellipsis to fit `room` points, set in `style`.
+fn cut_to(cx: &App, words: &str, room: f32, style: theme::TypeStyle) -> SharedString {
+    let font = theme::ui_font(style.weight);
+    let mut runs = vec![TextRun {
+        len: words.len(),
+        font: font.clone(),
+        color: theme::ink().into(),
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    }];
+    cx.text_system()
+        .line_wrapper(font, px(style.px))
+        .truncate_line(words.to_owned().into(), px(room.max(0.0)), "…", &mut runs)
+}
+
+/// A place in fractions of the canvas, drawn at `picture`, in the window.
+fn share_to_window(picture: Bounds<Pixels>, (x, y): Pt) -> Pt {
+    let (left, top) = to_pt(picture.origin);
+    let (across, down) = to_pt(point(picture.size.width, picture.size.height));
+    (left + x * across, top + y * down)
+}
+
+/// A place in the window as fractions of the canvas drawn at `picture`.
+fn window_to_share(picture: Bounds<Pixels>, (x, y): Pt) -> Pt {
+    let (left, top) = to_pt(picture.origin);
+    let (across, down) = to_pt(point(picture.size.width, picture.size.height));
+    ((x - left) / across.max(1.0), (y - top) / down.max(1.0))
+}
+
+/// The square of `points`, mapped by `map`, under `at`: the last drawn
+/// first, and none out of sight.
+fn square_at(points: &[Pt], map: Projective, at: Pt) -> Option<usize> {
     points.iter().rposition(|point| {
+        if !map.in_sight(*point) {
+            return false;
+        }
         let (x, y) = map.apply(*point);
         (x - at.0).abs() <= REACH && (y - at.1).abs() <= REACH
     })
+}
+
+/// `points` mapped by `map` into the window, in the runs that are in
+/// sight: one run, `closed`, when all of a closed outline is.
+fn runs_in_sight(points: &[Pt], closed: bool, map: Projective) -> (Vec<Vec<Point<Pixels>>>, bool) {
+    let mut runs: Vec<Vec<Point<Pixels>>> = Vec::new();
+    let mut going = false;
+    for at in points {
+        if !map.in_sight(*at) {
+            going = false;
+            continue;
+        }
+        let shown = to_point(map.apply(*at));
+        match runs.last_mut() {
+            Some(run) if going => run.push(shown),
+            _ => runs.push(vec![shown]),
+        }
+        going = true;
+    }
+    let whole = runs.len() == 1 && runs[0].len() == points.len();
+    (runs, closed && whole)
 }
 
 /// A press on the picture's overlays, followed until its button comes up.
@@ -710,6 +832,26 @@ struct Drawn {
     pointer: Option<Pt>,
 }
 
+/// What the chip over the picture says: its words, cut short where it has
+/// no room; how a making stands after them, never cut; and its tip, the
+/// whole of it, while a making runs.
+#[derive(Clone, Debug, PartialEq)]
+struct Said {
+    words: String,
+    stands: Option<String>,
+    tip: Option<String>,
+}
+
+impl Said {
+    fn words(words: String) -> Self {
+        Self {
+            words,
+            stands: None,
+            tip: None,
+        }
+    }
+}
+
 // --------------------------------------------------------------------- view
 
 pub struct StageView {
@@ -753,7 +895,7 @@ pub struct StageView {
     /// Where the pointer is over the stage, in the window, while the pen draws.
     pointer: Option<Pt>,
     /// What the chip over the picture said last, kept while it fades out.
-    said: Option<String>,
+    said: Option<Said>,
     /// Ticks the chip's clock once a second while a making runs and
     /// nothing else asks for frames (Reduce Motion).
     clock: Option<Task<()>>,
@@ -978,6 +1120,10 @@ pub const TRANSPORT: [(&str, &str, Icon); 5] = [
     ("playback.goToEnd", "Go to end", Icon::StepForward),
 ];
 
+/// The transport's other commands whose keys its tips say: Loop and the
+/// viewer's zoom.
+const TRANSPORT_MORE: [&str; 2] = ["playback.loop", "viewer.zoom"];
+
 /// What a transport control's tip says: its name while it can be pressed;
 /// greyed, its name and why not (Qt's tipWithReason).
 pub fn transport_tip(name: &str, reason: Option<&str>) -> String {
@@ -1140,11 +1286,11 @@ impl StageView {
 
     /// What runs, and the light that says so: a making wins over a render,
     /// which wins over Kerf.
-    fn activity(&self, cx: &App) -> (Option<Hue>, Option<String>) {
+    fn activity(&self, cx: &App) -> (Option<Hue>, Option<Said>) {
         let session = self.session.read(cx);
         let state = &session.state;
         if !state.makings.is_empty() {
-            let makings: Vec<(String, String, u64)> = state
+            let makings: Vec<(String, crate::store::Making)> = state
                 .makings
                 .iter()
                 .map(|(media, making)| {
@@ -1152,16 +1298,21 @@ impl StageView {
                     let name = Some(session.media_name(media))
                         .filter(|name| !name.is_empty())
                         .unwrap_or_else(|| media.clone());
-                    (name, making.line.clone(), making.since.elapsed().as_secs())
+                    (name, making.clone())
                 })
                 .collect();
-            return (Some(Hue::Computer), chip::makings(&makings));
+            let said = chip::following(&makings).map(|following| Said {
+                words: following.said,
+                stands: Some(following.stands),
+                tip: Some(following.tip),
+            });
+            return (Some(Hue::Computer), said);
         }
         // A change reel's previews and a first cut's are the reel's and the
         // cut card's to say (Qt's quietenCutPreview); an export still is.
         let quiet = state.preview.rendering() && (session.reel().is_some() || session.cutting());
         if let Some(rendering) = state.rendering().filter(|_| !quiet) {
-            return (Some(Hue::Computer), Some(rendering));
+            return (Some(Hue::Computer), Some(Said::words(rendering)));
         }
         if state.work.busy() {
             let cutting = kerf_cutting(
@@ -1174,7 +1325,7 @@ impl StageView {
             } else {
                 "Kerf is looking"
             };
-            return (Some(Hue::Kerf), Some(words.to_owned()));
+            return (Some(Hue::Kerf), Some(Said::words(words.to_owned())));
         }
         (None, None)
     }
@@ -1343,6 +1494,10 @@ impl StageView {
 
     /// The chosen clip's masks and motion path where the picture shows the
     /// program; none while a proposal's cut or its preview stands in for it.
+    /// Its path only while some of it can be seen: a path in depth no one
+    /// map shows is sampled where the clip's anchor goes, its points where a
+    /// drag has them; one all on or behind the camera is no path to show
+    /// or edit (Qt's `setMotionPath`), unless one of its points is in hand.
     fn overlays(&self, session: &Session) -> Option<Shown> {
         let state = &session.state;
         if state.snapshot.proposal_timeline.is_some()
@@ -1361,6 +1516,8 @@ impl StageView {
             masks: overlay::masks_of(data),
             path: props["path"].as_str().and_then(overlay::parse_path),
             along: overlay::property_at(props, "along", placement.clip_time, 0.0),
+            position: state.position,
+            sampled: None,
         };
         for drag in [
             self.held.as_ref().map(|(drag, _, _)| drag),
@@ -1370,6 +1527,23 @@ impl StageView {
         .flatten()
         {
             shown.holding(drag);
+        }
+        if !shown.placement.path.shows() {
+            shown.sampled = overlay::sampled(
+                &self.program,
+                &shown.clip,
+                shown.position,
+                shown.path.as_deref(),
+            );
+        }
+        let in_hand = matches!(&self.drag, Some(Drag::Point { clip, .. }) if *clip == shown.clip);
+        let seen = shown.sampled.is_some()
+            || shown
+                .path
+                .as_deref()
+                .is_some_and(|points| shown.placement.path_seen(points));
+        if !seen && !in_hand {
+            shown.path = None;
         }
         Some(shown)
     }
@@ -1418,9 +1592,11 @@ impl StageView {
         }
     }
 
-    /// Whether there is a picture clip chosen that a mask tool can draw on.
+    /// Whether there is a picture clip chosen that a mask tool can draw on:
+    /// one that can be seen.
     fn can_draw(&self, cx: &App) -> bool {
-        self.overlays(self.session.read(cx)).is_some()
+        self.overlays(self.session.read(cx))
+            .is_some_and(|shown| shown.placement.masks_seen())
     }
 
     /// The picture as last placed, in the window's coordinates: where the
@@ -1500,10 +1676,13 @@ impl StageView {
     /// Whether a press at `at` (in the window) is on the pen's first corner
     /// with enough corners to close the outline.
     fn pen_closes(&self, shown: &Shown, picture: Bounds<Pixels>, at: Pt) -> bool {
+        let Some(map) = shown.to_window(picture) else {
+            return false;
+        };
         self.pen.len() >= 3
             && self.pen.first().is_some_and(|first| {
-                let (x, y) = shown.to_window(picture).apply(*first);
-                (x - at.0).abs() <= REACH && (y - at.1).abs() <= REACH
+                let (x, y) = map.apply(*first);
+                map.in_sight(*first) && (x - at.0).abs() <= REACH && (y - at.1).abs() <= REACH
             })
     }
 
@@ -1517,10 +1696,13 @@ impl StageView {
         at: Pt,
         cx: &mut Context<Self>,
     ) {
-        let Some(back) = shown.to_window(picture).inverse() else {
+        // A press past the horizon, where none of the picture is, draws nothing.
+        let Some(map) = shown.to_window(picture) else {
             return;
         };
-        let on = back.apply(at);
+        let Some(on) = map.point_in_sight(at) else {
+            return;
+        };
         match tool {
             MaskTool::Pen => {
                 if self.pen_closes(shown, picture, at) {
@@ -1528,9 +1710,10 @@ impl StageView {
                     return;
                 }
                 // A second press of a double-click is not another corner.
-                let again = self.pen.last().is_some_and(|last| {
-                    apart(shown.to_window(picture).apply(*last), at) < DRAG_START
-                });
+                let again = self
+                    .pen
+                    .last()
+                    .is_some_and(|last| apart(map.apply(*last), at) < DRAG_START);
                 if !again {
                     self.pen.push(on);
                 }
@@ -1689,7 +1872,11 @@ impl StageView {
             cx.notify();
             return;
         }
-        if let (Some(tool), Some(shown)) = (self.tool, self.shown.clone()) {
+        let drawn_on = self
+            .shown
+            .clone()
+            .filter(|shown| shown.placement.masks_seen());
+        if let (Some(tool), Some(shown)) = (self.tool, drawn_on) {
             // A mask tool out has the picture's presses.
             window.focus(&self.focus_handle);
             self.press_tool(tool, &shown, canvas, to_pt(event.position), cx);
@@ -1735,11 +1922,13 @@ impl StageView {
         }
         let chosen = self.chosen_mask(cx);
         if let Some(points) = &shown.path {
-            if let Some(index) = shown.point_at(picture, at) {
+            if let Some((index, (x, y))) = shown
+                .point_at(picture, at)
+                .and_then(|index| Some((index, shown.point_place(picture, index)?)))
+            {
                 // One thing chosen at a time.
                 self.choose_mask(None, cx);
                 self.chosen_point = Some(index);
-                let (x, y) = shown.path_to_window(picture).apply(points[index]);
                 self.drag = Some(Drag::Point {
                     clip,
                     index,
@@ -1768,11 +1957,12 @@ impl StageView {
                 return true;
             }
             // A click off it lets go of the point rather than playing.
-            if self.chosen_point.take().is_some() && shown.masks.is_empty() {
+            if self.chosen_point.take().is_some() && !shown.edits_masks() {
                 return true;
             }
         }
-        if shown.masks.is_empty() {
+        // Masks that cannot be seen take no click: it plays.
+        if !shown.edits_masks() {
             return false;
         }
         // The masks take the picture's clicks: a handle of the chosen one,
@@ -1784,17 +1974,17 @@ impl StageView {
         };
         self.choose_mask(name.clone(), cx);
         self.chosen_point = None;
-        let map = shown.to_window(picture);
         let found = name.and_then(|name| {
             let mask = shown.masks.iter().find(|mask| mask.name == name)?;
-            Some((name, mask.outline.clone(), map.inverse()?))
+            let from = shown.to_window(picture)?.point_in_sight(at)?;
+            Some((name, mask.outline.clone(), from))
         });
-        if let Some((name, outline, back)) = found {
+        if let Some((name, outline, from)) = found {
             self.drag = Some(Drag::Mask {
                 clip,
                 name,
                 handle,
-                from: back.apply(at),
+                from,
                 original: outline.clone(),
                 now: outline,
                 pressed: at,
@@ -1814,7 +2004,12 @@ impl StageView {
             return;
         };
         let at = to_pt(event.position);
-        if self.tool.is_some() && self.shown.is_some() {
+        if self.tool.is_some()
+            && self
+                .shown
+                .as_ref()
+                .is_some_and(|shown| shown.placement.masks_seen())
+        {
             // A mask tool out: the picture holds still, and the pen's next
             // side follows the pointer.
             self.set_cursor(Some(CursorStyle::Crosshair), cx);
@@ -2008,8 +2203,10 @@ impl StageView {
             return;
         };
         let at = to_pt(event.position);
+        let program = self.program.clone();
         match &mut self.drag {
             Some(Drag::Point {
+                clip,
                 index,
                 now,
                 held,
@@ -2022,11 +2219,20 @@ impl StageView {
                     return;
                 }
                 *moved = true;
-                if let Some(back) = shown.path_to_window(picture).inverse() {
-                    let to = back.apply((at.0 + held.0, at.1 + held.1));
-                    if overlay::path_holds(to) {
-                        now[*index] = to;
-                    }
+                let to = (at.0 + held.0, at.1 + held.1);
+                // On a sampled path, the point that puts the clip's anchor
+                // there, solved for; else the point the path's map sees there.
+                let point = if shown.sampled.is_some() {
+                    let seen = window_to_share(picture, to);
+                    overlay::sampled_point_for(&program, clip, shown.position, now, *index, seen)
+                } else {
+                    shown
+                        .path_to_window(picture)
+                        .and_then(|map| map.point_in_sight(to))
+                };
+                // What cannot land there, as past a horizon, stays where it last was.
+                if let Some(to) = point.filter(|to| overlay::path_holds(*to)) {
+                    now[*index] = to;
                 }
             }
             Some(Drag::Mask {
@@ -2042,8 +2248,10 @@ impl StageView {
                     return;
                 }
                 *moved = true;
-                if let Some(back) = shown.to_window(picture).inverse() {
-                    let to = back.apply(at);
+                if let Some(to) = shown
+                    .to_window(picture)
+                    .and_then(|map| map.point_in_sight(at))
+                {
                     *now = match handle {
                         Some(handle) => original.with_handle(*handle, to),
                         None => original.moved_by((to.0 - from.0, to.1 - from.1)),
@@ -2051,8 +2259,11 @@ impl StageView {
                 }
             }
             Some(Drag::Draw { to, .. }) => {
-                if let Some(back) = shown.to_window(picture).inverse() {
-                    *to = back.apply(at);
+                if let Some(at) = shown
+                    .to_window(picture)
+                    .and_then(|map| map.point_in_sight(at))
+                {
+                    *to = at;
                 }
             }
             Some(Drag::Added { .. }) | None => return,
@@ -2077,7 +2288,9 @@ impl StageView {
             let (Some(picture), Some(shown)) = (self.canvas.get(), self.shown.clone()) else {
                 return;
             };
-            let map = shown.to_window(picture);
+            let Some(map) = shown.to_window(picture) else {
+                return;
+            };
             if let Some(outline) = overlay::drawn(*tool == MaskTool::Ellipse, *from, *to, map) {
                 self.add_mask(clip, outline, cx);
             }
@@ -2394,7 +2607,10 @@ impl StageView {
         if self.keys.0 != keymap {
             let keys = crate::commands::catalog(keymap)
                 .into_iter()
-                .filter(|command| TRANSPORT.iter().any(|(id, _, _)| *id == command.id))
+                .filter(|command| {
+                    TRANSPORT.iter().any(|(id, _, _)| *id == command.id)
+                        || TRANSPORT_MORE.contains(&command.id.as_str())
+                })
                 .filter_map(|command| {
                     let key = command
                         .keys
@@ -2433,7 +2649,9 @@ impl StageView {
         let playing = session.state.playing;
         let (mark_in, mark_out, looping) = session.marks();
         let marked = mark_in.is_some() || mark_out.is_some();
-        let drawable = self.overlays(session).is_some();
+        let drawable = self
+            .overlays(session)
+            .is_some_and(|shown| shown.placement.picture.shows());
         let preview = session.state.preview.clone();
         let preview_control = match preview.status.as_str() {
             "required" => Some(
@@ -2527,6 +2745,9 @@ impl StageView {
                         } else {
                             "Loop"
                         })
+                        .when_some(keys.get("playback.loop").cloned(), |button, key| {
+                            button.key(key)
+                        })
                         .on_click(cx.listener(|_, _, window, cx| {
                             window.dispatch_action(
                                 Box::new(crate::commands::RunCommand::new("playback.loop")),
@@ -2539,7 +2760,7 @@ impl StageView {
                 div()
                     .relative()
                     .pl(px(4.0))
-                    .child(
+                    .child(ui::tip_on(
                         theme::type_style(
                             crate::sidebar::trigger("viewer-zoom", {
                                 let this = cx.entity().downgrade();
@@ -2563,31 +2784,25 @@ impl StageView {
                         })
                         .when(self.zoom_menu.is_some(), |button| button.bg(theme::on()))
                         .hover(|style| style.bg(theme::raised()).text_color(theme::ink()))
-                        // Its menu says all the tip would: none while it is open.
-                        .when(self.zoom_menu.is_none(), |button| {
-                            button.tooltip(|_, cx| {
-                                cx.new(|_| ui::Tooltip("Viewer zoom".into())).into()
-                            })
-                        })
                         .child(zoom_words(self.zoom)),
-                    )
+                        // Its menu says all the tip would: none while it is open.
+                        self.zoom_menu.is_none().then(|| {
+                            ui::Tip::new("Viewer zoom").maybe_key(keys.get("viewer.zoom").cloned())
+                        }),
+                    ))
                     .children(self.zoom_menu()),
             )
             .child(ui::hairline(false).h(px(16.0)).mx(px(6.0)))
             .children(MaskTool::ALL.map(|tool| {
-                let words = format!(
-                    "{} ({})",
-                    tool.label(),
-                    crate::commands::shown_keys(tool.shortcut())
-                );
                 icon_button(tool.id(), tool.icon())
                     .on(self.tool == Some(tool))
                     .disabled(!drawable)
-                    .tooltip(if drawable {
-                        words
-                    } else {
-                        format!("{words} · Choose a picture clip to draw on")
-                    })
+                    .tooltip(tool.label())
+                    .key(crate::commands::shown_keys(tool.shortcut()))
+                    .reason(transport_tip(
+                        tool.label(),
+                        Some("Choose a picture clip to draw on"),
+                    ))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.toggle_tool(tool, window, cx);
                     }))
@@ -2673,6 +2888,7 @@ impl Render for StageView {
             self.held = None;
         }
         let session = self.session.read(cx);
+        // Once a frame, for what is drawn and what the pointer hits.
         let shown = self.overlays(session).map(Rc::new);
         let timeline = session.timeline();
         let picture = session
@@ -2759,9 +2975,15 @@ impl Render for StageView {
         };
         let chosen_mask = session.chosen_mask.clone();
         // A picture that cannot be seen cannot be drawn on: the tool goes
-        // down, and what was in hand is let go.
+        // down, and what was being drawn is let go; with no clip shown at
+        // all, whatever was in hand.
         if shown.is_none() {
             self.drag = None;
+        }
+        if !shown
+            .as_ref()
+            .is_some_and(|shown| shown.placement.masks_seen())
+        {
             self.tool = None;
             self.end_drawing();
         }
@@ -2986,24 +3208,59 @@ impl Render for StageView {
                     window.request_animation_frame();
                     pulse_level(motion::phase(self.edge_since, scene::WORK_PULSE))
                 };
+                // As wide as its words, up to CHIP_MOST and inside the
+                // picture: what a making last said is cut short there, and
+                // its tip says the whole of it.
+                let most = (f32::from(picture.size.width) - 2.0 * layout::CHIP_IN)
+                    .clamp(0.0, layout::CHIP_MOST);
+                // The chip is as wide as its words, up to `most`; past that
+                // its words are cut short with an ellipsis.
+                let stands = chip.stands.map(|stands| format!("· {stands}"));
+                let after = stands.as_deref().map_or(0.0, |stands| {
+                    6.0 + line_width(window, stands, text::CONTROL)
+                });
+                let words = line_width(window, &chip.words, text::CONTROL);
+                let width = (2.0 * 10.0 + 6.0 + 6.0 + words + after).ceil().min(most);
+                let shown = cut_to(
+                    cx,
+                    &chip.words,
+                    width - 2.0 * 10.0 - 6.0 - 6.0 - after,
+                    text::CONTROL,
+                );
+                let body = theme::type_style(div(), text::CONTROL)
+                    .id("stage-chip")
+                    .flex()
+                    .items_center()
+                    .gap(px(6.0))
+                    .h(px(24.0))
+                    .w(px(width))
+                    .px(px(10.0))
+                    .rounded(px(12.0))
+                    .overflow_hidden()
+                    .bg(theme::activity::chip())
+                    .text_color(theme::ink())
+                    .child(ui::dot(color, 6.0).opacity(dot).flex_none())
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .whitespace_nowrap()
+                            .overflow_hidden()
+                            .child(shown),
+                    )
+                    .children(stands.map(|stands| {
+                        div()
+                            .flex_none()
+                            .whitespace_nowrap()
+                            .text_color(theme::ink2())
+                            .child(stands)
+                    }));
                 overlays = overlays.child(
                     div()
                         .absolute()
-                        .left(left + px(12.0))
-                        .top(top + px(if placed.phone { 36.0 } else { 12.0 }))
-                        .child(
-                            theme::type_style(div(), text::CONTROL)
-                                .flex()
-                                .items_center()
-                                .gap(px(6.0))
-                                .h(px(24.0))
-                                .px(px(10.0))
-                                .rounded(px(12.0))
-                                .bg(theme::activity::chip())
-                                .text_color(theme::ink())
-                                .child(ui::dot(color, 6.0).opacity(dot))
-                                .child(chip),
-                        )
+                        .left(left + px(layout::CHIP_IN))
+                        .top(top + px(if placed.phone { 36.0 } else { layout::CHIP_IN }))
+                        .child(ui::tip_on(body, chip.tip.map(ui::Tip::new)))
                         .opacity(edge.max(0.0)),
                 );
             }
@@ -3144,10 +3401,15 @@ impl Render for StageView {
                                 .w_full()
                                 .text_center()
                                 .text_color(over_picture::caption_ink())
-                                .when(aspect >= 1.0, |line| {
-                                    line.whitespace_nowrap().overflow_hidden().text_ellipsis()
-                                })
-                                .child(words),
+                                .map(|line| {
+                                    if aspect >= 1.0 {
+                                        line.whitespace_nowrap()
+                                            .overflow_hidden()
+                                            .child(ui::cut_line(words))
+                                    } else {
+                                        line.child(words)
+                                    }
+                                }),
                         ),
                 );
             }
@@ -3483,40 +3745,31 @@ fn paint_overlays(
     chosen_mask: Option<&str>,
     chosen_point: Option<usize>,
 ) {
-    let map = shown.to_window(picture);
-    for mask in &shown.masks {
-        let chosen = chosen_mask == Some(mask.name.as_str());
-        let (line, closed) = mask.outline.line();
-        let line: Vec<Point<Pixels>> = line.into_iter().map(|at| to_point(map.apply(at))).collect();
-        stroke_over(window, &line, closed, chosen, mask.path_only());
-        if let Some(anchor) = top_left(&line) {
-            paint_tag(window, cx, anchor, &mask.name, chosen, picture);
-        }
-        if chosen {
-            for handle in mask.outline.handles() {
-                paint_handle(window, to_point(map.apply(handle)), false);
+    // In depth, what is on or behind the camera breaks an outline.
+    if let Some(map) = shown.to_window(picture) {
+        for mask in &shown.masks {
+            let chosen = chosen_mask == Some(mask.name.as_str());
+            let (line, closed) = mask.outline.line();
+            let (runs, closed) = runs_in_sight(&line, closed, map);
+            for run in &runs {
+                stroke_over(window, run, closed, chosen, mask.path_only());
+            }
+            if let Some(anchor) = top_left(&runs.concat()) {
+                paint_tag(window, cx, anchor, &mask.name, chosen, picture);
+            }
+            if chosen {
+                for handle in mask.outline.handles() {
+                    if map.in_sight(handle) {
+                        paint_handle(window, to_point(map.apply(handle)), false);
+                    }
+                }
             }
         }
     }
-    if let Some(points) = &shown.path {
-        let map = shown.path_to_window(picture);
-        let path = MotionPath::new(points.clone(), shown.aspect());
-        let line: Vec<Point<Pixels>> = path
-            .samples()
-            .into_iter()
-            .map(|at| to_point(map.apply(at)))
-            .collect();
-        stroke_over(window, &line, false, true, false);
-        // The points are square, as a mask's handles are; the chosen one white.
-        for (index, at) in points.iter().enumerate() {
-            paint_handle(
-                window,
-                to_point(map.apply(*at)),
-                chosen_point == Some(index),
-            );
-        }
-        let on = path.at(shown.along);
-        let center = to_point(map.apply((on.x, on.y)));
+    let Some(points) = &shown.path else {
+        return;
+    };
+    let marker = |window: &mut Window, center: Point<Pixels>| {
         let radius = px(HANDLE / 2.0);
         window.paint_quad(quad(
             Bounds::new(
@@ -3529,6 +3782,68 @@ fn paint_overlays(
             theme::accent(),
             BorderStyle::Solid,
         ));
+    };
+    // A path no one map shows: the curve where the clip's anchor goes, its
+    // points where the anchor is at each.
+    if let Some(sampled) = &shown.sampled {
+        let mut runs: Vec<Vec<Point<Pixels>>> = Vec::new();
+        let mut going = false;
+        for place in &sampled.places {
+            match place {
+                Some(share) => {
+                    let at = to_point(share_to_window(picture, *share));
+                    match runs.last_mut() {
+                        Some(run) if going => run.push(at),
+                        _ => runs.push(vec![at]),
+                    }
+                    going = true;
+                }
+                None => going = false,
+            }
+        }
+        for run in &runs {
+            stroke_over(window, run, false, true, false);
+        }
+        if let Some(now) = sampled.now {
+            marker(window, to_point(share_to_window(picture, now)));
+        }
+        for (index, handle) in sampled.handles.iter().enumerate() {
+            if let Some(share) = handle {
+                paint_handle(
+                    window,
+                    to_point(share_to_window(picture, *share)),
+                    chosen_point == Some(index),
+                );
+            }
+        }
+        return;
+    }
+    let Some(map) = shown.path_to_window(picture) else {
+        return;
+    };
+    let path = MotionPath::new(points.clone(), shown.aspect());
+    let samples = path.samples();
+    // All of it on or behind the camera is no curve to show.
+    if !samples.iter().any(|at| map.in_sight(*at)) {
+        return;
+    }
+    let (runs, _) = runs_in_sight(&samples, false, map);
+    for run in &runs {
+        stroke_over(window, run, false, true, false);
+    }
+    // The points are square, as a mask's handles are; the chosen one white.
+    for (index, at) in points.iter().enumerate() {
+        if map.in_sight(*at) {
+            paint_handle(
+                window,
+                to_point(map.apply(*at)),
+                chosen_point == Some(index),
+            );
+        }
+    }
+    let on = path.at(shown.along);
+    if map.in_sight((on.x, on.y)) {
+        marker(window, to_point(map.apply((on.x, on.y))));
     }
 }
 
@@ -3536,13 +3851,22 @@ fn paint_overlays(
 /// out, or the pen's corners with a dashed side to the pointer, its first
 /// corner white when a click there would close the outline.
 fn paint_drawn(window: &mut Window, picture: Bounds<Pixels>, shown: &Shown, drawn: &Drawn) {
-    let map = shown.to_window(picture);
+    let Some(map) = shown.to_window(picture) else {
+        return;
+    };
     if let Some(outline) = &drawn.outline {
         let (line, closed) = outline.line();
-        let line: Vec<Point<Pixels>> = line.into_iter().map(|at| to_point(map.apply(at))).collect();
-        stroke_over(window, &line, closed, true, false);
+        let (runs, closed) = runs_in_sight(&line, closed, map);
+        for run in &runs {
+            stroke_over(window, run, closed, true, false);
+        }
     }
-    let corners: Vec<Pt> = drawn.pen.iter().map(|at| map.apply(*at)).collect();
+    let corners: Vec<Pt> = drawn
+        .pen
+        .iter()
+        .filter(|at| map.in_sight(**at))
+        .map(|at| map.apply(*at))
+        .collect();
     let Some((&first, &last)) = corners.first().zip(corners.last()) else {
         return;
     };
@@ -3840,18 +4164,89 @@ pub mod chip {
             .find(|(_, line, _)| !phase(line).queued())
             .or_else(|| makings.first())?;
         let (name, line, seconds) = shown;
-        let mut chip = format!("Making {name} · ");
-        match phase(line) {
-            Phase::Waiting { ahead: Some(ahead) } if ahead > 0 => {
-                chip.push_str(&format!("queued, {ahead} ahead"))
-            }
-            other if other.queued() => chip.push_str("queued"),
-            _ => chip.push_str(&elapsed(*seconds)),
-        }
+        let mut chip = format!("Making {name} · {}", stands(line, *seconds));
         if makings.len() > 1 {
             chip.push_str(&format!(" +{}", makings.len() - 1));
         }
         Some(chip)
+    }
+
+    /// How a making stands, by its `line` and the `seconds` since it
+    /// began: "queued, 2 ahead" or "queued" while it waits its turn, else
+    /// its clock.
+    fn stands(line: &str, seconds: u64) -> String {
+        match phase(line) {
+            Phase::Waiting { ahead: Some(ahead) } if ahead > 0 => format!("queued, {ahead} ahead"),
+            other if other.queued() => "queued".to_owned(),
+            _ => elapsed(seconds),
+        }
+    }
+
+    /// What the chip says of the makings while they run, followed in words
+    /// as Qt's toolbar status followed them.
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    pub struct Following {
+        /// What the one shown last said, as `store::making_status` puts it
+        /// ("Making m4: <line>", "Making take 2 of m4 from its steps…"):
+        /// cut short on the chip where it has no room.
+        pub said: String,
+        /// After it, never cut: how it stands ("0:41", "queued, 2 ahead")
+        /// and " +N" for the others.
+        pub stands: String,
+        /// Its tip: each making's words whole and how it stands, a line
+        /// each, the one shown first.
+        pub tip: String,
+    }
+
+    /// The chip for the makings, each its media's name, its take, its line
+    /// and the seconds since it began, in the window's order: the one
+    /// making ahead of those waiting their turn, as `makings` chooses.
+    /// None with none.
+    pub fn following(makings: &[(String, crate::store::Making)]) -> Option<Following> {
+        following_at(makings, std::time::Instant::now())
+    }
+
+    /// The chip for the makings as it stands at `now`: `following`, with
+    /// each clock counted from when its making began to `now` (none for
+    /// one that begins after it).
+    pub fn following_at(
+        makings: &[(String, crate::store::Making)],
+        now: std::time::Instant,
+    ) -> Option<Following> {
+        let seconds =
+            |making: &crate::store::Making| now.saturating_duration_since(making.since).as_secs();
+        let first = makings
+            .iter()
+            .position(|(_, making)| !phase(&making.line).queued())
+            .unwrap_or(0);
+        let (name, shown) = makings.get(first)?;
+        let mut stands = stands(&shown.line, seconds(shown));
+        if makings.len() > 1 {
+            stands.push_str(&format!(" +{}", makings.len() - 1));
+        }
+        let line = |(name, making): &(String, crate::store::Making)| {
+            format!(
+                "{} · {}",
+                crate::store::making_status(name, making),
+                self::stands(&making.line, seconds(making))
+            )
+        };
+        let tip = std::iter::once(&makings[first])
+            .chain(
+                makings
+                    .iter()
+                    .enumerate()
+                    .filter(|(index, _)| *index != first)
+                    .map(|(_, making)| making),
+            )
+            .map(line)
+            .collect::<Vec<_>>()
+            .join("\n");
+        Some(Following {
+            said: crate::store::making_status(name, shown),
+            stands,
+            tip,
+        })
     }
 }
 
@@ -3997,6 +4392,126 @@ pub mod overlay {
                 e: -(a * self.e + c * self.f),
                 f: -(b * self.e + d * self.f),
             })
+        }
+    }
+
+    /// The nearest a camera sees, in frame heights (kerf-compose's `NEAR`):
+    /// what is nearer than this along its way, or behind it, is out of sight.
+    pub const NEAREST: f64 = 0.001;
+
+    /// What `w` is held to at least as a point is mapped, as QTransform's
+    /// near clip has it: a point on or behind the camera still maps somewhere.
+    const NEAR_CLIP: f64 = 1e-6;
+
+    /// A map of the plane as a camera may see it, in perspective, in
+    /// QTransform's order: `(x, y)` goes to `(m11 x + m21 y + m31,
+    /// m12 x + m22 y + m32)` over `w = m13 x + m23 y + m33`, `m[r][c]` being
+    /// `m(r+1)(c+1)`. For a placement in depth `w` is how far along the
+    /// camera's way the point is, in frame heights; for a flat one it is 1.
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    pub struct Projective {
+        pub m: [[f64; 3]; 3],
+    }
+
+    impl From<Affine> for Projective {
+        fn from(map: Affine) -> Self {
+            Self {
+                m: [
+                    [map.a, map.b, 0.0],
+                    [map.c, map.d, 0.0],
+                    [map.e, map.f, 1.0],
+                ],
+            }
+        }
+    }
+
+    impl Projective {
+        /// What a placement is when there is nothing to place on: no map back.
+        pub const UNSEEN: Self = Self { m: [[0.0; 3]; 3] };
+
+        /// This map, and then `next`.
+        pub fn then(self, next: impl Into<Self>) -> Self {
+            let next = next.into();
+            let mut m = [[0.0; 3]; 3];
+            for (row, out) in m.iter_mut().enumerate() {
+                for (column, cell) in out.iter_mut().enumerate() {
+                    *cell = (0..3).map(|k| self.m[row][k] * next.m[k][column]).sum();
+                }
+            }
+            Self { m }
+        }
+
+        /// How far along the camera's way `(x, y)` is: its `w`.
+        fn depth(self, (x, y): Pt) -> f64 {
+            self.m[0][2] * x + self.m[1][2] * y + self.m[2][2]
+        }
+
+        /// Where `(x, y)` goes. One on or behind the camera goes somewhere
+        /// far off; [`Self::in_sight`] says which are seen.
+        pub fn apply(self, (x, y): Pt) -> Pt {
+            let across = self.m[0][0] * x + self.m[1][0] * y + self.m[2][0];
+            let down = self.m[0][1] * x + self.m[1][1] * y + self.m[2][1];
+            let w = self.depth((x, y));
+            if w == 1.0 {
+                return (across, down);
+            }
+            let w = w.max(NEAR_CLIP);
+            (across / w, down / w)
+        }
+
+        /// Whether `(x, y)` is in front of the camera, where it can be seen.
+        pub fn in_sight(self, at: Pt) -> bool {
+            self.depth(at) >= NEAREST
+        }
+
+        /// The map back; none when it folds the plane onto a line, or
+        /// there is nothing to place on ([`Self::UNSEEN`]).
+        pub fn inverse(self) -> Option<Self> {
+            let m = self.m;
+            let cofactor = |r0: usize, r1: usize, c0: usize, c1: usize| {
+                m[r0][c0] * m[r1][c1] - m[r0][c1] * m[r1][c0]
+            };
+            let adjugate = [
+                [
+                    cofactor(1, 2, 1, 2),
+                    -cofactor(0, 2, 1, 2),
+                    cofactor(0, 1, 1, 2),
+                ],
+                [
+                    -cofactor(1, 2, 0, 2),
+                    cofactor(0, 2, 0, 2),
+                    -cofactor(0, 1, 0, 2),
+                ],
+                [
+                    cofactor(1, 2, 0, 1),
+                    -cofactor(0, 2, 0, 1),
+                    cofactor(0, 1, 0, 1),
+                ],
+            ];
+            let det =
+                m[0][0] * adjugate[0][0] + m[0][1] * adjugate[1][0] + m[0][2] * adjugate[2][0];
+            if !det.is_finite() || det.abs() < 1e-12 {
+                return None;
+            }
+            Some(Self {
+                m: adjugate.map(|row| row.map(|cell| cell / det)),
+            })
+        }
+
+        /// Whether it places anything: it has a map back.
+        pub fn shows(self) -> bool {
+            self.inverse().is_some()
+        }
+
+        /// The point that is seen at `seen`: none past the horizon, where
+        /// nothing of the plane is, and none on or behind the camera.
+        pub fn point_in_sight(self, seen: Pt) -> Option<Pt> {
+            let back = self.inverse()?;
+            if back.depth(seen) <= NEAR_CLIP {
+                return None;
+            }
+            let point = back.apply(seen);
+            self.in_sight(point).then_some(point)
         }
     }
 
@@ -4269,62 +4784,647 @@ pub mod overlay {
     /// Where a picture clip is on the canvas at a moment.
     #[derive(Clone, Copy, Debug, PartialEq)]
     pub struct Placement {
-        /// Fractions of the clip's picture to canvas pixels: where its masks are.
-        pub picture: Affine,
-        /// A point of its motion path to fractions of the canvas.
-        pub path: Affine,
+        /// Fractions of the clip's picture to canvas pixels: where its
+        /// masks are. In depth, as the camera sees it; [`Projective::UNSEEN`]
+        /// when it cannot be seen (turned edge on, behind the camera).
+        pub picture: Projective,
+        /// A point of its motion path to fractions of the canvas;
+        /// [`Projective::UNSEEN`] for a path in depth no one map shows
+        /// ([`sampled`] shows that one).
+        pub path: Projective,
         pub canvas: Pt,
         /// Seconds into the clip.
         pub clip_time: f64,
     }
 
-    /// Where the clip `id` of `timeline` is at `position` seconds into the
-    /// program; none for a clip that draws no picture, one in depth (which
-    /// no flat map shows), and one that cannot be seen.
-    pub fn placement(timeline: &Value, id: &str, position: f64) -> Option<Placement> {
-        let (clip, track) = clip_in(timeline, id)?;
-        let props = &clip["props"];
-        if props["three_d"].as_bool() == Some(true) {
-            return None;
+    impl Placement {
+        /// Whether its masks can be drawn, chosen and dragged on the
+        /// picture: its picture can be seen, not turned edge on or behind
+        /// the camera (Qt's `editsMasks`: an invertible placement).
+        pub fn masks_seen(&self) -> bool {
+            self.picture.shows()
         }
+
+        /// Whether its motion path `points` can be seen through its map:
+        /// the map shows, and some of its curve is in front of the camera
+        /// (Qt's `setMotionPath` drops one all on or behind it). A path no
+        /// one map shows is seen by [`sampled`] instead.
+        pub fn path_seen(&self, points: &[Pt]) -> bool {
+            let (width, height) = self.canvas;
+            self.path.shows()
+                && MotionPath::new(points.to_vec(), width.max(1.0) / height.max(1.0))
+                    .samples()
+                    .iter()
+                    .any(|at| self.path.in_sight(*at))
+        }
+    }
+
+    /// What a clip is placed with at a moment: its picture's size, whether
+    /// it is fitted to the canvas, the canvas, seconds into it, how its
+    /// parents have moved it on the canvas, and where it starts.
+    #[derive(Clone, Copy, Debug)]
+    struct Scene {
+        picture: Pt,
+        fit: bool,
+        canvas: Pt,
+        clip_time: f64,
+        parents: Affine,
+        start: f64,
+    }
+
+    impl Scene {
+        /// Seconds into the program.
+        fn at(&self) -> f64 {
+            self.start + self.clip_time
+        }
+    }
+
+    /// The clip `id` of `timeline` and what it is placed with at `position`
+    /// seconds into the program; none for a clip that draws no picture.
+    fn scene_of<'a>(timeline: &'a Value, id: &str, position: f64) -> Option<(&'a Value, Scene)> {
+        let (clip, track) = clip_in(timeline, id)?;
         let canvas = canvas_of(timeline);
         let (picture, fit) = picture_of(timeline, clip, track, canvas)?;
         let start = clip["timelineStart"].as_f64().unwrap_or(0.0);
         let duration = clip["duration"].as_f64().unwrap_or(0.0).max(0.0);
         let clip_time = (position - start).clamp(0.0, duration);
-        let parents = parents_motion(
-            timeline,
+        let parents = parents_motion(timeline, clip, canvas, start + clip_time);
+        Some((
             clip,
-            canvas,
-            position.clamp(start, start + duration),
+            Scene {
+                picture,
+                fit,
+                canvas,
+                clip_time,
+                parents,
+                start,
+            },
+        ))
+    }
+
+    /// Where the clip `id` of `timeline` is at `position` seconds into the
+    /// program, flat or in depth as the camera sees it; none for a clip
+    /// that draws no picture, and one of which nothing can be seen.
+    pub fn placement(timeline: &Value, id: &str, position: f64) -> Option<Placement> {
+        let (clip, scene) = scene_of(timeline, id, position)?;
+        let picture = picture_placement(timeline, clip, &scene);
+        let path = path_placement(timeline, clip, &scene);
+        if !picture.shows() && !path.shows() && sampled(timeline, id, position, None).is_none() {
+            return None;
+        }
+        Some(Placement {
+            picture,
+            path,
+            canvas: scene.canvas,
+            clip_time: scene.clip_time,
+        })
+    }
+
+    // ------------------------------------------------------------- depth
+
+    /// The field of view at which a clip at z = 0 is its flat self, in
+    /// degrees (kerf-compose's `DEFAULT_FOV`).
+    const RESTING_FOV: f64 = 40.0;
+
+    /// A point or a way in the compositor's world: x right, y down and z
+    /// away from the viewer, in canvas pixels, 0, 0, 0 the canvas's middle.
+    type World = [f64; 3];
+
+    fn add(a: World, b: World) -> World {
+        [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
+    }
+
+    fn minus(a: World, b: World) -> World {
+        [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+    }
+
+    fn times(a: World, by: f64) -> World {
+        [a[0] * by, a[1] * by, a[2] * by]
+    }
+
+    fn dot(a: World, b: World) -> f64 {
+        a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+    }
+
+    fn cross(a: World, b: World) -> World {
+        [
+            a[1] * b[2] - a[2] * b[1],
+            a[2] * b[0] - a[0] * b[2],
+            a[0] * b[1] - a[1] * b[0],
+        ]
+    }
+
+    /// Turned about x by `pitch` and then about y by `yaw`, in degrees.
+    fn turned(a: World, pitch: f64, yaw: f64) -> World {
+        let (sp, cp) = pitch.to_radians().sin_cos();
+        let (sy, cy) = yaw.to_radians().sin_cos();
+        let (y, z) = (a[1] * cp - a[2] * sp, a[1] * sp + a[2] * cp);
+        [a[0] * cy + z * sy, y, -a[0] * sy + z * cy]
+    }
+
+    /// Whether a clip is placed in depth (`three_d`).
+    fn in_depth(clip: &Value) -> bool {
+        clip["props"]["three_d"].as_bool() == Some(true)
+    }
+
+    /// Whether a parent's place in depth is its children's (kerf-compose's
+    /// `Rig::in_depth`): a null's, and that of a clip in depth, which a mesh
+    /// is without saying so.
+    fn leads_in_depth(clip: &Value) -> bool {
+        matches!(clip["fx"].as_str(), Some("null" | "mesh")) || in_depth(clip)
+    }
+
+    /// A clip's own numbers in depth at `clip_time`: how far back, in canvas
+    /// pixels, and how it is turned about x and about y, in degrees.
+    struct Depth {
+        z: f64,
+        pitch: f64,
+        yaw: f64,
+    }
+
+    fn depth_at(props: &Value, canvas: Pt, clip_time: f64) -> Depth {
+        Depth {
+            z: property_at(props, "z", clip_time, 0.0) * canvas.1.max(1.0),
+            pitch: property_at(props, "rotate_x", clip_time, 0.0),
+            yaw: property_at(props, "rotate_y", clip_time, 0.0),
+        }
+    }
+
+    /// How its parents have taken a clip in depth, as one thing with them
+    /// (kerf-compose's `Carried`): where the world's x, y and z go, and
+    /// where its middle goes.
+    #[derive(Clone, Copy, Debug)]
+    struct Carried {
+        ways: [World; 3],
+        shift: World,
+    }
+
+    impl Carried {
+        const STILL: Self = Self {
+            ways: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+            shift: [0.0; 3],
+        };
+
+        /// This, and then as a parent takes it: turned about `about` by the
+        /// parent's `pitch` and `yaw` (degrees), and moved `back`.
+        fn then(self, about: World, pitch: f64, yaw: f64, back: f64) -> Self {
+            Self {
+                ways: self.ways.map(|way| turned(way, pitch, yaw)),
+                shift: add(
+                    add(about, turned(minus(self.shift, about), pitch, yaw)),
+                    [0.0, 0.0, back],
+                ),
+            }
+        }
+
+        fn way(&self, of: World) -> World {
+            add(
+                add(times(self.ways[0], of[0]), times(self.ways[1], of[1])),
+                times(self.ways[2], of[2]),
+            )
+        }
+
+        fn point(&self, at: World) -> World {
+            add(self.way(at), self.shift)
+        }
+    }
+
+    /// Fractions of a clip's picture to canvas pixels, flat: the
+    /// compositor's geometry with its parents'.
+    fn flat_placement(clip: &Value, scene: &Scene) -> Affine {
+        let (picture, canvas) = (scene.picture, scene.canvas);
+        Affine::scale(picture.0.max(1.0), picture.1.max(1.0))
+            .then(placed(
+                &moved_geometry_at(&clip["props"], canvas, scene.clip_time),
+                picture,
+                scene.fit,
+                canvas,
+            ))
+            .then(scene.parents)
+    }
+
+    /// How the parents of `clip` have taken it in depth at `at` seconds of
+    /// `timeline`, the one it names first (kerf-compose's `Scene::at`):
+    /// each somewhere in depth turns it about its own middle, where that
+    /// is on the canvas, and moves it back.
+    fn carried_by(timeline: &Value, clip: &Value, canvas: Pt, at: f64) -> Carried {
+        let mut carried = Carried::STILL;
+        let mut seen: Vec<String> = Vec::new();
+        let mut parent = clip["parent"].as_str().map(str::to_owned);
+        while let Some(id) = parent.filter(|id| !id.is_empty() && !seen.contains(id)) {
+            seen.push(id.clone());
+            let Some((rig, track)) = clip_in(timeline, &id) else {
+                break;
+            };
+            let Some((picture, fit)) = picture_of(timeline, rig, track, canvas) else {
+                break;
+            };
+            parent = rig["parent"].as_str().map(str::to_owned);
+            if !leads_in_depth(rig) {
+                continue;
+            }
+            let start = rig["timelineStart"].as_f64().unwrap_or(0.0);
+            let depth = depth_at(&rig["props"], canvas, at - start);
+            if depth.z == 0.0 && depth.pitch == 0.0 && depth.yaw == 0.0 {
+                continue;
+            }
+            let scene = Scene {
+                picture,
+                fit,
+                canvas,
+                clip_time: at - start,
+                parents: parents_motion(timeline, rig, canvas, at),
+                start,
+            };
+            let middle = flat_placement(rig, &scene).apply((0.5, 0.5));
+            let about = [middle.0 - canvas.0 / 2.0, middle.1 - canvas.1 / 2.0, 0.0];
+            carried = carried.then(about, depth.pitch, depth.yaw, depth.z);
+        }
+        carried
+    }
+
+    /// How a sequence is seen at a moment (kerf-compose's `Scene::at`).
+    struct Camera {
+        eye: World,
+        right: World,
+        down: World,
+        forward: World,
+        focal: f64,
+        width: f64,
+        height: f64,
+    }
+
+    impl Camera {
+        /// Where `(a, b)` of the plane `origin + a across + b below` lands,
+        /// in canvas pixels; its `w` is how far along the camera's way that
+        /// is, in frame heights. Edge on, it is a line at most a pixel wide,
+        /// which the compositor's rays miss: unseen.
+        fn sees(&self, origin: World, across: World, below: World) -> Projective {
+            let from = minus(origin, self.eye);
+            let perpendicular = cross(across, below);
+            let area = dot(perpendicular, perpendicular).sqrt();
+            if area <= 0.0 || dot(from, perpendicular).abs() / area < NEAREST * self.height {
+                return Projective::UNSEEN;
+            }
+            let sideways = add(
+                times(self.right, self.focal),
+                times(self.forward, self.width / 2.0),
+            );
+            let downwards = add(
+                times(self.down, self.focal),
+                times(self.forward, self.height / 2.0),
+            );
+            let row = |of: World| {
+                [
+                    dot(of, sideways) / self.height,
+                    dot(of, downwards) / self.height,
+                    dot(of, self.forward) / self.height,
+                ]
+            };
+            Projective {
+                m: [row(across), row(below), row(from)],
+            }
+        }
+    }
+
+    /// `timeline`'s topmost camera showing at `at` seconds, or the resting
+    /// one, which sees the plane z = 0 as the flat picture.
+    fn camera_at(timeline: &Value, canvas: Pt, at: f64) -> Camera {
+        // Times come as seconds in doubles, a hair off the frames they name.
+        const SAME_MOMENT: f64 = 1e-9;
+        let mut shown: Option<&Value> = None;
+        for track in timeline["tracks"].as_array().into_iter().flatten() {
+            if track["enabled"].as_bool() == Some(false) {
+                continue;
+            }
+            for clip in track["clips"].as_array().into_iter().flatten() {
+                if clip["fx"].as_str() != Some("camera") || clip["enabled"].as_bool() == Some(false)
+                {
+                    continue;
+                }
+                let start = clip["timelineStart"].as_f64().unwrap_or(0.0);
+                let duration = clip["duration"].as_f64().unwrap_or(0.0);
+                if start - SAME_MOMENT <= at && at < start + duration - SAME_MOMENT {
+                    shown = Some(clip);
+                }
+            }
+        }
+        let empty = Value::Null;
+        let camera_clip = shown.unwrap_or(&empty);
+        let props = &camera_clip["props"];
+        let clip_time = at - camera_clip["timelineStart"].as_f64().unwrap_or(0.0);
+        let read = |name: &str, otherwise: f64| property_at(props, name, clip_time, otherwise);
+        let (width, height) = (canvas.0.max(1.0), canvas.1.max(1.0));
+        let distance = |fov: f64| height / 2.0 / (fov.clamp(1.0, 170.0).to_radians() / 2.0).tan();
+        let mut camera = Camera {
+            eye: [
+                read("x", 0.0) * width,
+                read("y", 0.0) * height,
+                read("z", 0.0) * height - distance(RESTING_FOV),
+            ],
+            right: [1.0, 0.0, 0.0],
+            down: [0.0, 1.0, 0.0],
+            forward: [0.0, 0.0, 1.0],
+            focal: distance(read("fov", RESTING_FOV)),
+            width,
+            height,
+        };
+        let (pitch, yaw) = (read("tilt", 0.0), read("pan", 0.0));
+        let roll = read("roll", 0.0).to_radians();
+        camera.forward = turned([0.0, 0.0, 1.0], pitch, yaw);
+        let level_right = turned([1.0, 0.0, 0.0], pitch, yaw);
+        let level_down = cross(camera.forward, level_right);
+        camera.right = add(
+            times(level_right, roll.cos()),
+            times(level_down, roll.sin()),
         );
-        let source = Affine::scale(picture.0.max(1.0), picture.1.max(1.0));
-        let geometry = moved_geometry_at(props, canvas, clip_time);
-        let on_canvas = source
-            .then(placed(&geometry, picture, fit, canvas))
-            .then(parents);
-        on_canvas.inverse()?;
-        // The path says where the anchor goes.
-        let g = geometry_at(props, clip_time);
+        camera.down = minus(
+            times(level_down, roll.cos()),
+            times(level_right, roll.sin()),
+        );
+        if camera_clip["parent"].as_str().is_none_or(str::is_empty) {
+            return camera;
+        }
+        // A camera with a parent is where the parent takes it, looking as
+        // the parent turns it (kerf-compose's `Rigged`): across the canvas
+        // as a clip is moved, and then in depth.
+        let moved = parents_motion(timeline, camera_clip, canvas, at);
+        let carried = carried_by(timeline, camera_clip, canvas, at);
+        let on = moved.apply((width / 2.0 + camera.eye[0], height / 2.0 + camera.eye[1]));
+        camera.eye = carried.point([on.0 - width / 2.0, on.1 - height / 2.0, camera.eye[2]]);
+        // By as much as its parents turn a clip on the canvas, however they size it.
+        let (sin, cos) = moved.b.atan2(moved.a).sin_cos();
+        let way =
+            |of: World| carried.way([of[0] * cos - of[1] * sin, of[0] * sin + of[1] * cos, of[2]]);
+        camera.right = way(camera.right);
+        camera.down = way(camera.down);
+        camera.forward = way(camera.forward);
+        camera
+    }
+
+    /// Fractions of `clip`'s picture to canvas pixels: flat, or in depth
+    /// as the camera sees it (kerf-compose's `Plane::of`: lifted to its `z`
+    /// and turned about its middle, then where its parents in depth take
+    /// it). [`Projective::UNSEEN`] when none of its corners is in sight.
+    fn picture_placement(timeline: &Value, clip: &Value, scene: &Scene) -> Projective {
+        let flat = flat_placement(clip, scene);
+        if !in_depth(clip) {
+            return flat.into();
+        }
+        let canvas = scene.canvas;
+        let depth = depth_at(&clip["props"], canvas, scene.clip_time);
+        let middle = flat.apply((0.5, 0.5));
+        let across = turned([flat.a, flat.b, 0.0], depth.pitch, depth.yaw);
+        let below = turned([flat.c, flat.d, 0.0], depth.pitch, depth.yaw);
+        let origin = minus(
+            minus(
+                [
+                    middle.0 - canvas.0 / 2.0,
+                    middle.1 - canvas.1 / 2.0,
+                    depth.z,
+                ],
+                times(across, 0.5),
+            ),
+            times(below, 0.5),
+        );
+        let carried = carried_by(timeline, clip, canvas, scene.at());
+        let seen = camera_at(timeline, canvas, scene.at()).sees(
+            carried.point(origin),
+            carried.way(across),
+            carried.way(below),
+        );
+        let corners = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)];
+        if corners.iter().any(|corner| seen.in_sight(*corner)) {
+            seen
+        } else {
+            Projective::UNSEEN
+        }
+    }
+
+    /// Where the clip's anchor is in its picture, in fractions of it: what
+    /// its motion path takes along.
+    fn anchor_of(g: &Geometry) -> Pt {
+        let [l, r, t, b] = g.crop;
+        (
+            l + (1.0 - l - r) * (0.5 + g.anchor.0),
+            t + (1.0 - t - b) * (0.5 + g.anchor.1),
+        )
+    }
+
+    /// A point of `clip`'s motion path to fractions of the canvas. In depth
+    /// the path is on the plane at the clip's `z`, where the camera sees it;
+    /// [`Projective::UNSEEN`] for a clip that faces along its path
+    /// (`orient`) from an anchor off its middle, which no one map shows.
+    fn path_placement(timeline: &Value, clip: &Value, scene: &Scene) -> Projective {
+        let (canvas, picture) = (scene.canvas, scene.picture);
+        let g = geometry_at(&clip["props"], scene.clip_time);
         let [l, r, t, b] = g.crop;
         let width = picture.0.max(1.0) * (1.0 - l - r).max(1e-6);
         let height = picture.1.max(1.0) * (1.0 - t - b).max(1e-6);
-        let (fw, fh) = filled((width, height), fit, canvas);
+        let (fw, fh) = filled((width, height), scene.fit, canvas);
         let (cw, ch) = (canvas.0.max(1.0), canvas.1.max(1.0));
         let origin = (
             0.5 + g.at.0 + g.anchor.0 * fw / cw,
             0.5 + g.at.1 + g.anchor.1 * fh / ch,
         );
-        let path = Affine::translate(origin.0, origin.1)
+        let on_canvas = Affine::translate(origin.0, origin.1)
             .then(Affine::scale(cw, ch))
-            .then(parents)
-            .then(Affine::scale(1.0 / cw, 1.0 / ch));
-        Some(Placement {
-            picture: on_canvas,
-            path,
-            canvas,
-            clip_time,
+            .then(scene.parents);
+        let to_shares = Affine::scale(1.0 / cw, 1.0 / ch);
+        if !in_depth(clip) {
+            return on_canvas.then(to_shares).into();
+        }
+        // The path says where the anchor goes, and the clip turns about its middle.
+        let flat = flat_placement(clip, scene);
+        let (middle, anchor) = (flat.apply((0.5, 0.5)), flat.apply(anchor_of(&g)));
+        let to_middle = [middle.0 - anchor.0, middle.1 - anchor.1, 0.0];
+        let depth = depth_at(&clip["props"], canvas, scene.clip_time);
+        let swung = add(
+            turned(times(to_middle, -1.0), depth.pitch, depth.yaw),
+            to_middle,
+        );
+        if dot(swung, swung) > 1e-12 && clip["props"]["orient"].as_bool() == Some(true) {
+            return Projective::UNSEEN;
+        }
+        let plane = add([-cw / 2.0, -ch / 2.0, depth.z], swung);
+        // And where the clip's parents in depth take it, the path's plane with it.
+        let carried = carried_by(timeline, clip, canvas, scene.at());
+        let seen = camera_at(timeline, canvas, scene.at()).sees(
+            carried.point(plane),
+            carried.way([1.0, 0.0, 0.0]),
+            carried.way([0.0, 1.0, 0.0]),
+        );
+        Projective::from(on_canvas).then(seen).then(to_shares)
+    }
+
+    // ------------------------------------------------------- sampled paths
+
+    /// How many steps a path in depth that no one map shows is sampled in.
+    pub const SAMPLED_STEPS: usize = 96;
+
+    /// A path in depth that no one map shows (a clip facing along it from
+    /// an anchor off its middle), sampled where the clip's anchor goes, in
+    /// fractions of the canvas: none where that is out of sight.
+    #[derive(Clone, Debug, PartialEq)]
+    pub struct Sampled {
+        /// The curve, [`SAMPLED_STEPS`] steps along it.
+        pub places: Vec<Option<Pt>>,
+        /// Where the clip is on it now.
+        pub now: Option<Pt>,
+        /// Where its anchor is at each of the path's points.
+        pub handles: Vec<Option<Pt>>,
+    }
+
+    /// `clip` with its path's points `points` (as `path=` would say them
+    /// exactly) and, if given, `along`.
+    fn with_path(clip: &Value, points: &[Pt], along: Option<f64>) -> Value {
+        let mut moved = clip.clone();
+        let text = points
+            .iter()
+            .map(|(x, y)| format!("{x},{y}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        moved["props"]["path"] = json!(text);
+        if let Some(along) = along {
+            moved["props"]["along"] = json!(along);
+        }
+        moved
+    }
+
+    /// Where `placement` puts the clip's `anchor`, in fractions of the canvas;
+    /// none when that cannot be seen.
+    fn share_of(placement: Projective, anchor: Pt, canvas: Pt) -> Option<Pt> {
+        if !placement.shows() || !placement.in_sight(anchor) {
+            return None;
+        }
+        let on = placement.apply(anchor);
+        Some((on.0 / canvas.0.max(1.0), on.1 / canvas.1.max(1.0)))
+    }
+
+    /// Where the anchor of `clip`, with its path's points `points`, is when
+    /// at its point `index`.
+    fn anchor_at_point(
+        timeline: &Value,
+        clip: &Value,
+        scene: &Scene,
+        points: &[Pt],
+        index: usize,
+    ) -> Option<Pt> {
+        let along = MotionPath::new(points.to_vec(), aspect(scene.canvas)).along_of(index);
+        let moved = with_path(clip, points, Some(along));
+        let anchor = anchor_of(&geometry_at(&clip["props"], scene.clip_time));
+        share_of(
+            picture_placement(timeline, &moved, scene),
+            anchor,
+            scene.canvas,
+        )
+    }
+
+    /// The clip `id` and what it is placed with, when its path is one no
+    /// one map shows: in depth, facing along a path it has, from an anchor
+    /// off its middle.
+    fn sampled_scene<'a>(
+        timeline: &'a Value,
+        id: &str,
+        position: f64,
+    ) -> Option<(&'a Value, Scene, Vec<Pt>)> {
+        let (clip, scene) = scene_of(timeline, id, position)?;
+        let props = &clip["props"];
+        let points = props["path"].as_str().and_then(parse_path)?;
+        let facing = in_depth(clip) && props["orient"].as_bool() == Some(true);
+        (facing && !path_placement(timeline, clip, &scene).shows()).then_some((clip, scene, points))
+    }
+
+    /// The path of the clip `id` at `position` seconds into the program,
+    /// sampled, when it is one no one map shows; with its points as
+    /// `points` say in place of the document's (a point being dragged).
+    /// None for any other clip, and for one whose path is all out of sight.
+    pub fn sampled(
+        timeline: &Value,
+        id: &str,
+        position: f64,
+        points: Option<&[Pt]>,
+    ) -> Option<Sampled> {
+        let (clip, scene, written) = sampled_scene(timeline, id, position)?;
+        let points = points.map_or(written, <[Pt]>::to_vec);
+        let moved = with_path(clip, &points, None);
+        let anchor = anchor_of(&geometry_at(&clip["props"], scene.clip_time));
+        let places: Vec<Option<Pt>> = (0..=SAMPLED_STEPS)
+            .map(|step| {
+                let there = with_path(clip, &points, Some(step as f64 / SAMPLED_STEPS as f64));
+                share_of(
+                    picture_placement(timeline, &there, &scene),
+                    anchor,
+                    scene.canvas,
+                )
+            })
+            .collect();
+        if places.iter().all(Option::is_none) {
+            return None;
+        }
+        let along = property_at(&moved["props"], "along", scene.clip_time, 0.0);
+        let now = places[(along.clamp(0.0, 1.0) * SAMPLED_STEPS as f64).round() as usize];
+        let handles = (0..points.len())
+            .map(|index| anchor_at_point(timeline, clip, &scene, &points, index))
+            .collect();
+        Some(Sampled {
+            places,
+            now,
+            handles,
         })
+    }
+
+    /// Where point `index` of the path `points` of the clip `id` must be for
+    /// its anchor to be seen at `seen` (fractions of the canvas), found by
+    /// solving from the clip's own placement there; none when no point
+    /// puts it there, as past a horizon.
+    pub fn sampled_point_for(
+        timeline: &Value,
+        id: &str,
+        position: f64,
+        points: &[Pt],
+        index: usize,
+        seen: Pt,
+    ) -> Option<Pt> {
+        // Far closer than the document can say a point, a ten-thousandth of the frame.
+        const CLOSE: f64 = 1e-7;
+        // How far a point is moved to see what that does, and the most a step may take it.
+        const NUDGE: f64 = 1e-4;
+        const MOST_STEP: f64 = 0.5;
+        const MOST_STEPS: usize = 12;
+        let (clip, scene, _) = sampled_scene(timeline, id, position)?;
+        if index >= points.len() {
+            return None;
+        }
+        let mut trying = points.to_vec();
+        let mut landing = |point: Pt| {
+            trying[index] = point;
+            anchor_at_point(timeline, clip, &scene, &trying, index)
+        };
+        let mut point = points[index];
+        for _ in 0..MOST_STEPS {
+            let on = landing(point)?;
+            let across = landing((point.0 + NUDGE, point.1))?;
+            let down = landing((point.0, point.1 + NUDGE))?;
+            let off = (on.0 - seen.0, on.1 - seen.1);
+            if off.0.hypot(off.1) < CLOSE {
+                return Some(point);
+            }
+            let (a, b) = ((across.0 - on.0) / NUDGE, (down.0 - on.0) / NUDGE);
+            let (c, d) = ((across.1 - on.1) / NUDGE, (down.1 - on.1) / NUDGE);
+            let det = a * d - b * c;
+            if det.abs() < 1e-12 {
+                return None;
+            }
+            let mut by = ((d * off.0 - b * off.1) / det, (a * off.1 - c * off.0) / det);
+            let length = by.0.hypot(by.1);
+            if length > MOST_STEP {
+                by = (by.0 * MOST_STEP / length, by.1 * MOST_STEP / length);
+            }
+            point = (point.0 - by.0, point.1 - by.1);
+        }
+        let on = landing(point)?;
+        ((on.0 - seen.0).hypot(on.1 - seen.1) < CLOSE).then_some(point)
     }
 
     // ------------------------------------------------------------- masks
@@ -4570,7 +5670,8 @@ pub mod overlay {
     /// to `to` is let go, `map` taking the clip's picture to the window.
     /// None for a click (under [`DRAW_LEAST`] points both across and down),
     /// and for an outline too thin to hold an area as the document keeps it.
-    pub fn drawn(ellipse: bool, from: Pt, to: Pt, map: Affine) -> Option<Outline> {
+    pub fn drawn(ellipse: bool, from: Pt, to: Pt, map: impl Into<Projective>) -> Option<Outline> {
+        let map = map.into();
         let (a, b) = (map.apply(from), map.apply(to));
         if (a.0 - b.0).abs() < DRAW_LEAST && (a.1 - b.1).abs() < DRAW_LEAST {
             return None;

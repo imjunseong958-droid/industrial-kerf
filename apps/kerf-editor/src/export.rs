@@ -496,18 +496,15 @@ impl ExportView {
                         .flex_none()
                         .max_w(px(ASIDE_MOST))
                 }
-            }))
-            .when_some(tip, |row, tip| {
-                row.tooltip(move |_, cx| cx.new(|_| ui::Tooltip(tip.clone())).into())
-            });
-        match press {
+            }));
+        let row = match press {
             Some(press) => row
                 .cursor_pointer()
                 .hover(|style| style.bg(theme::popup_hover()))
-                .on_click(cx.listener(move |this, _, window, cx| press(this, window, cx)))
-                .into_any_element(),
-            None => row.into_any_element(),
-        }
+                .on_click(cx.listener(move |this, _, window, cx| press(this, window, cx))),
+            None => row,
+        };
+        ui::tip_on(row, tip.map(ui::Tip::new)).into_any_element()
     }
 
     /// Preflight: the last QC pass's checks, every failed one first (each

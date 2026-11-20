@@ -18,6 +18,11 @@
 //!
 //! The reading and the rule are `kerf-shots`', which an agent's tools go
 //! through too: this is the editor's end of them, its commands and events.
+//!
+//! What the server takes at each input is asked off the worker, and may come
+//! back after an edit has said the workflow again. It is then said of the
+//! workflow as last said ([`Said::late`]), never of the text it was asked
+//! of, so a late answer cannot bring back what the edit changed.
 
 use crate::Shared;
 use kerf_engine::recipe::model::Models;
@@ -25,7 +30,59 @@ use kerf_model::Project;
 use kerf_shots::workflow::{self, Set};
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::sync::mpsc::SyncSender;
+use std::sync::{Arc, Mutex, PoisonError};
+
+/// The `workflow` event last said of each step, by its media and its line: what the editor
+/// shows of it.
+#[derive(Clone, Default)]
+pub(crate) struct Said(Arc<Mutex<HashMap<(String, usize), Value>>>);
+
+/// The step a `workflow` event is of.
+fn step_of(event: &Value) -> (String, usize) {
+    (
+        event["media"].as_str().unwrap_or_default().to_owned(),
+        event["line"].as_u64().unwrap_or_default() as usize,
+    )
+}
+
+impl Said {
+    /// Say `event`, a `workflow` event, and keep it as what the editor shows of its step.
+    /// Kept and sent under one lock, so what is kept is what was sent last.
+    pub(crate) fn say(&self, tx: &SyncSender<Value>, event: Value) {
+        let mut said = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        said.insert(step_of(&event), event.clone());
+        crate::emit(tx, event);
+    }
+
+    /// Say what the server takes (`asked`), asked of the workflow as `own` says it, once it
+    /// is known. An edit may have said the workflow again meanwhile: it is said of the
+    /// workflow as last said, whose text is the newer, and not of the text it was asked of.
+    /// Nothing is said when what was last said has it already, or is of another model.
+    pub(crate) fn late(&self, tx: &SyncSender<Value>, own: Value, asked: Result<Value, String>) {
+        let mut said = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        let step = step_of(&own);
+        let mut event = match said.get(&step) {
+            Some(last) if last.get("taken").is_some() => return,
+            Some(last) if last["model"] != own["model"] || last["name"] != own["name"] => return,
+            Some(last) => {
+                let mut last = last.clone();
+                if let Some(fields) = last.as_object_mut() {
+                    fields.remove("edited");
+                }
+                last
+            }
+            None => own,
+        };
+        match asked {
+            Ok(taken) => workflow::with_taken(&mut event, &taken),
+            Err(why) => event["takenError"] = json!(why),
+        }
+        said.insert(step, event.clone());
+        crate::emit(tx, event);
+    }
+}
 
 /// A value of a workflow to set: input `input` of node `node`.
 #[derive(Clone, Debug, Deserialize)]
@@ -94,7 +151,7 @@ pub(crate) fn get(
     match said {
         Ok(event) => {
             let asked = event.get("taken").is_some();
-            crate::emit(tx, event);
+            shared.workflows.say(tx, event);
             if !asked {
                 ask_taken(shared, client, id, line, tx);
             }
@@ -106,7 +163,8 @@ pub(crate) fn get(
 /// Ask the model's program what the server takes at each input of the workflow, off this
 /// worker, and say the workflow again with it: the choices of a sampler's name, the least
 /// and most of a number. A program that cannot say leaves the workflow as it was shown,
-/// with why (`takenError`), since it is still seen and set without.
+/// with why (`takenError`), since it is still seen and set without. What it says goes on
+/// the workflow as the editor shows it by then ([`Said::late`]).
 fn ask_taken(
     shared: &Shared,
     client: &kerf_runtime::RuntimeClient,
@@ -118,6 +176,7 @@ fn ask_taken(
         return;
     };
     let (directory, id, tx) = (shared.directory.clone(), id.to_owned(), tx.clone());
+    let said = shared.workflows.clone();
     std::thread::spawn(move || {
         let Ok(models) = Models::load() else {
             return;
@@ -130,11 +189,7 @@ fn ask_taken(
             return;
         };
         event["type"] = json!("workflow");
-        match asked {
-            Ok(taken) => workflow::with_taken(&mut event, &taken),
-            Err(why) => event["takenError"] = json!(why),
-        }
-        crate::emit(&tx, event);
+        said.late(&tx, event, asked);
     });
 }
 
@@ -192,9 +247,84 @@ pub(crate) fn edit(
     match event(&project, shared, &edit.media, edit.line, &models) {
         Ok(mut event) => {
             event["edited"] = json!(true);
-            crate::emit(tx, event);
+            shared.workflows.say(tx, event);
         }
         Err(why) => failed(tx, &edit.media, why),
     }
     crate::recipes::get(shared, client, &edit.media, tx);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Said;
+    use serde_json::{json, Value};
+    use std::sync::mpsc::{sync_channel, Receiver};
+
+    fn shown(text: &str) -> Value {
+        json!({"type": "workflow", "media": "m1", "line": 2, "model": "flux", "name": "flux",
+               "text": text, "nodes": [{"id": "3", "class": "KSampler",
+               "inputs": [{"name": "steps", "value": 20}]}]})
+    }
+
+    fn taken() -> Value {
+        json!({"KSampler": {"steps": {"min": 1, "max": 150, "step": 1}}})
+    }
+
+    fn all(rx: &Receiver<Value>) -> Vec<Value> {
+        rx.try_iter().collect()
+    }
+
+    #[test]
+    fn what_the_server_takes_comes_late_on_the_workflow_an_edit_said_meanwhile() {
+        let (tx, rx) = sync_channel(16);
+        let said = Said::default();
+        // Opened, and asked what the server takes; then a value is set before it answers.
+        said.say(&tx, shown("old"));
+        let mut edited = shown("new");
+        edited["edited"] = json!(true);
+        said.say(&tx, edited);
+        // The answer read before the edit comes last: on the newer text, not the old.
+        said.late(&tx, shown("old"), Ok(taken()));
+        let events = all(&rx);
+        assert_eq!(events.len(), 3);
+        let last = &events[2];
+        assert_eq!(last["text"], "new");
+        assert_eq!(last["taken"], true);
+        assert_eq!(last["nodes"][0]["inputs"][0]["max"], 150);
+        assert!(last.get("edited").is_none());
+        // What was last said has it now: an answer after that says nothing again.
+        said.late(&tx, shown("old"), Ok(taken()));
+        assert!(all(&rx).is_empty());
+    }
+
+    #[test]
+    fn with_no_edit_the_answer_is_on_the_workflow_as_read() {
+        let (tx, rx) = sync_channel(16);
+        let said = Said::default();
+        said.say(&tx, shown("same"));
+        said.late(&tx, shown("same"), Err("no server is named".into()));
+        let events = all(&rx);
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[1]["text"], "same");
+        assert_eq!(events[1]["takenError"], "no server is named");
+        // Asked again later, it is said with what it takes.
+        said.late(&tx, shown("same"), Ok(taken()));
+        assert_eq!(all(&rx)[0]["taken"], true);
+    }
+
+    #[test]
+    fn an_answer_for_another_model_on_that_line_is_dropped() {
+        let (tx, rx) = sync_channel(16);
+        let said = Said::default();
+        said.say(&tx, shown("old"));
+        let mut other = shown("other");
+        other["model"] = json!("wan");
+        other["name"] = json!("wan");
+        said.say(&tx, other);
+        said.late(&tx, shown("old"), Ok(taken()));
+        let events = all(&rx);
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[1]["model"], "wan");
+        assert!(events[1].get("taken").is_none());
+    }
 }

@@ -8,7 +8,7 @@
 use gpui::KeyContext;
 use kerf_editor::commands::{self, menus_with_states, MenuStates};
 use kerf_editor::focus::{
-    crop_box, crop_props, ffmpeg_candidates, first_cut, focus_ops, readable_frame, shown_time,
+    crop_box, crop_props, ffmpeg_bin, first_cut, focus_ops, readable_frame, shown_time,
     track_region, typed_time, Region, NO_FRAME, TRACK_SIZE,
 };
 use kerf_editor::model::{Clip, RenderJob, Timeline};
@@ -958,26 +958,11 @@ fn focus_region_needs_a_frame_of_the_clips_media() {
 
 #[test]
 fn ffmpeg_is_looked_for_where_kerfd_looks() {
-    let beside = std::path::Path::new("/Applications/Kerf.app/Contents/MacOS");
-    let found = ffmpeg_candidates(Some("/opt/ff/ffmpeg".into()), Some(beside));
-    let exe = std::env::consts::EXE_SUFFIX;
+    // The order it is looked for in is kerf_engine's (its own tests hold
+    // it); the editor runs the very one kerfd finds.
     assert_eq!(
-        found,
-        [
-            std::path::PathBuf::from("/opt/ff/ffmpeg"),
-            beside.join(format!("ffmpeg{exe}")),
-            "/opt/homebrew/opt/ffmpeg-full/bin/ffmpeg".into(),
-            "ffmpeg".into(),
-        ]
-    );
-    // An empty KERF_FFMPEG is none.
-    let found = ffmpeg_candidates(Some("".into()), None);
-    assert_eq!(
-        found,
-        [
-            std::path::PathBuf::from("/opt/homebrew/opt/ffmpeg-full/bin/ffmpeg"),
-            "ffmpeg".into(),
-        ]
+        ffmpeg_bin(),
+        std::path::Path::new(kerf_bridge::ffmpeg_bin())
     );
 }
 

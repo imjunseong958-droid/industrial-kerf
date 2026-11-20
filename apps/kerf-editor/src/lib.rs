@@ -27,6 +27,7 @@ pub mod names;
 pub mod palette;
 pub mod prefs;
 pub mod presets;
+pub mod selectable;
 pub mod session;
 pub mod settings;
 pub mod sidebar;

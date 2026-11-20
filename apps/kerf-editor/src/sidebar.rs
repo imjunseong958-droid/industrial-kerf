@@ -377,6 +377,12 @@ pub enum Entry {
     CopyPath(PathBuf),
     /// A folder off the recent ones, its files left alone.
     Forget(PathBuf),
+    /// A new conversation in a folder: here, or in its project, opened in
+    /// place of this one.
+    NewConversation(PathBuf),
+    /// One of another folder's conversations, by its id, in its project
+    /// opened in place of this one.
+    OpenConversation(PathBuf, String),
 }
 
 /// An item of one of the sidebar's menus, as it shows.
@@ -476,19 +482,31 @@ fn folder_name(folder: &Path) -> String {
         .unwrap_or_else(|| folder.display().to_string())
 }
 
-/// The menu of the open folder's name, as Qt's: the folders (the open one
-/// ticked, each with its path as tip), Open Folder… and New Project…, then
-/// the open folder in the file manager and its path to copy.
+/// The menu of the open folder's name, as Qt's: New Conversation in it,
+/// the folders (the open one ticked, each with its path as tip), Open
+/// Folder… and New Project…, then the open folder in the file manager and
+/// its path to copy.
 pub fn folder_entries(recent: &[PathBuf], open: Option<&Path>) -> Vec<MenuEntry> {
     let folders = recent_folders(recent, open);
-    let mut entries: Vec<MenuEntry> = folders
-        .iter()
-        .map(|folder| MenuEntry {
-            checked: open.is_some_and(|open| crate::app::same_folder(open, folder)),
-            tip: Some(folder.display().to_string()),
-            ..MenuEntry::new(Entry::Open(folder.clone()), folder_name(folder)).icon(Icon::Folder)
+    let mut entries: Vec<MenuEntry> = open
+        .map(|open| {
+            MenuEntry::new(
+                Entry::NewConversation(open.to_path_buf()),
+                "New Conversation",
+            )
+            .icon(Icon::Plus)
         })
+        .into_iter()
         .collect();
+    let first_folder = entries.len();
+    entries.extend(folders.iter().map(|folder| MenuEntry {
+        checked: open.is_some_and(|open| crate::app::same_folder(open, folder)),
+        tip: Some(folder.display().to_string()),
+        ..MenuEntry::new(Entry::Open(folder.clone()), folder_name(folder)).icon(Icon::Folder)
+    }));
+    if first_folder > 0 && entries.len() > first_folder {
+        entries[first_folder].separated = true;
+    }
     let mut open_folder = MenuEntry::new(Entry::Command("file.openProject"), "Open Folder…");
     if !entries.is_empty() {
         open_folder = open_folder.separated();
@@ -508,15 +526,173 @@ pub fn folder_entries(recent: &[PathBuf], open: Option<&Path>) -> Vec<MenuEntry>
     entries
 }
 
-/// Another folder's menu: open it, show it, copy its path, or take it off
-/// the sidebar, its files left alone.
+/// Another folder's menu, as Qt's: a new conversation in it (its project
+/// opened in place of this one), open it, show it, copy its path, or take
+/// it off the sidebar, its files left alone.
 pub fn other_folder_entries(folder: &Path) -> Vec<MenuEntry> {
     vec![
+        MenuEntry::new(
+            Entry::NewConversation(folder.to_path_buf()),
+            "New Conversation",
+        )
+        .icon(Icon::Plus),
         MenuEntry::new(Entry::Open(folder.to_path_buf()), "Open Project"),
         MenuEntry::new(Entry::Reveal(folder.to_path_buf()), reveal_words()).separated(),
         MenuEntry::new(Entry::CopyPath(folder.to_path_buf()), "Copy Path"),
         MenuEntry::new(Entry::Forget(folder.to_path_buf()), "Remove from Sidebar").separated(),
     ]
+}
+
+/// Where a project folder keeps its conversations, as the bridge keeps
+/// them (`.kerf/conversations/<id>.json`).
+pub const CONVERSATIONS: &str = ".kerf/conversations";
+
+/// Another folder's conversations, read from where its project keeps them
+/// as the bridge lists them (no bridge of its own is asked): the latest
+/// first, those archived left out (they are its own to bring back, once it
+/// is open). A file that does not read, or is not a conversation's, is
+/// left out.
+pub fn folder_conversations(folder: &Path) -> Vec<ConversationSummary> {
+    let Ok(entries) = std::fs::read_dir(folder.join(CONVERSATIONS)) else {
+        return Vec::new();
+    };
+    let mut all: Vec<ConversationSummary> = entries
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "json")
+        })
+        .filter_map(|path| std::fs::read_to_string(path).ok())
+        .filter_map(|text| conversation_summary(&text))
+        .filter(|conversation| !conversation.archived)
+        .collect();
+    all.sort_by(|a, b| b.updated.cmp(&a.updated).then_with(|| b.id.cmp(&a.id)));
+    all
+}
+
+/// A conversation's file as the sidebar lists it; None for one that is
+/// not a conversation's (its id is not one the bridge makes). Its turns
+/// are only counted, not kept: a long conversation's file is large.
+pub fn conversation_summary(text: &str) -> Option<ConversationSummary> {
+    // An object, as the bridge writes it (a list would read as its fields
+    // in turn).
+    if !text.trim_start().starts_with('{') {
+        return None;
+    }
+    let file: ConversationFile = serde_json::from_str(text).ok()?;
+    let id = file.id.as_str()?;
+    let valid = id.len() <= 80
+        && id.starts_with("c-")
+        && id
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'));
+    if !valid {
+        return None;
+    }
+    let text_of = |value: &Value| value.as_str().unwrap_or_default().to_owned();
+    Some(ConversationSummary {
+        id: id.to_owned(),
+        title: text_of(&file.title),
+        created: text_of(&file.created),
+        updated: text_of(&file.updated),
+        archived: file.archived.as_bool().unwrap_or(false),
+        count: file.items.0,
+    })
+}
+
+/// What [`conversation_summary`] reads of a conversation's file: what is
+/// not text, or not there, reads as nothing, and every other field is
+/// passed over unread.
+#[derive(serde::Deserialize)]
+struct ConversationFile {
+    #[serde(default)]
+    id: Value,
+    #[serde(default)]
+    title: Value,
+    #[serde(default)]
+    created: Value,
+    #[serde(default)]
+    updated: Value,
+    #[serde(default)]
+    archived: Value,
+    #[serde(default)]
+    items: Counted,
+}
+
+/// How many things a list holds, counted as it is read and none of them
+/// kept; anything not a list holds none.
+#[derive(Default)]
+struct Counted(u32);
+
+impl<'de> serde::Deserialize<'de> for Counted {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use serde::de::{IgnoredAny, MapAccess, SeqAccess};
+        struct Count;
+        impl<'de> serde::de::Visitor<'de> for Count {
+            type Value = Counted;
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("any value")
+            }
+            fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Counted, A::Error> {
+                let mut count = 0u32;
+                while seq.next_element::<IgnoredAny>()?.is_some() {
+                    count = count.saturating_add(1);
+                }
+                Ok(Counted(count))
+            }
+            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Counted, A::Error> {
+                while map.next_entry::<IgnoredAny, IgnoredAny>()?.is_some() {}
+                Ok(Counted(0))
+            }
+            fn visit_bool<E>(self, _: bool) -> Result<Counted, E> {
+                Ok(Counted(0))
+            }
+            fn visit_i64<E>(self, _: i64) -> Result<Counted, E> {
+                Ok(Counted(0))
+            }
+            fn visit_u64<E>(self, _: u64) -> Result<Counted, E> {
+                Ok(Counted(0))
+            }
+            fn visit_f64<E>(self, _: f64) -> Result<Counted, E> {
+                Ok(Counted(0))
+            }
+            fn visit_str<E>(self, _: &str) -> Result<Counted, E> {
+                Ok(Counted(0))
+            }
+            fn visit_unit<E>(self) -> Result<Counted, E> {
+                Ok(Counted(0))
+            }
+        }
+        deserializer.deserialize_any(Count)
+    }
+}
+
+/// Opens conversation `id` (None: a new one) in the window whose project
+/// is `folder`, once what opens it there has run (`OpenRecent`, which
+/// opens the folder's project in place of this window, or brings its own
+/// window to the front).
+pub fn open_conversation_in(folder: PathBuf, id: Option<String>, cx: &mut App) {
+    cx.defer(move |cx| {
+        for handle in cx.windows() {
+            let Some(workspace) = handle.downcast::<crate::workspace::Workspace>() else {
+                continue;
+            };
+            let _ = workspace.update(cx, |workspace, _, cx| {
+                let session = workspace.session().clone();
+                session.update(cx, |session, cx| {
+                    let here = session
+                        .project
+                        .as_deref()
+                        .is_some_and(|open| crate::app::same_folder(open, &folder));
+                    if here {
+                        session.open_conversation(id.clone());
+                        cx.notify();
+                    }
+                });
+            });
+        }
+    });
 }
 
 /// The recent folders with `folder` taken off, however written.
@@ -984,7 +1160,7 @@ fn other_branches(input: &AppMenuInput) -> Vec<AppRow> {
         }
     }
     if rows.is_empty() {
-        rows.push(AppRow::note("No Other Branches"));
+        rows.push(AppRow::note(crate::finish::NO_OTHER_BRANCHES));
     }
     rows
 }
@@ -1096,6 +1272,8 @@ gpui::actions!(
         MenuDown,
         MenuChoose,
         MenuClose,
+        Unfold,
+        Fold,
     ]
 );
 
@@ -1113,6 +1291,11 @@ pub const ROW: &str = "SidebarRow";
 pub const MENU: &str = "SidebarMenu";
 /// What a conversation's row answers in: [`ITEM`] and [`ROW`] at once.
 pub const ROW_KEYS: &str = "SidebarItem SidebarRow";
+/// Another folder's row, where Right unfolds its conversations and Left
+/// folds them.
+pub const FOLDER: &str = "SidebarFolder";
+/// What another folder's row answers in: [`ITEM`] and [`FOLDER`].
+pub const FOLDER_KEYS: &str = "SidebarItem SidebarFolder";
 
 /// The sidebar's keys, as [`bind_keys`] binds them. Enter and Space on a
 /// row or button run nothing of the window's (Play, a render): GPUI
@@ -1135,6 +1318,8 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("enter", MenuChoose, Some(MENU)),
         KeyBinding::new("space", MenuChoose, Some(MENU)),
         KeyBinding::new("escape", MenuClose, Some(MENU)),
+        KeyBinding::new("right", Unfold, Some(FOLDER)),
+        KeyBinding::new("left", Fold, Some(FOLDER)),
     ]
 }
 
@@ -1227,6 +1412,11 @@ pub struct SidebarView {
     renaming: Option<String>,
     /// A long list shows all of itself.
     show_all: bool,
+    /// The other folders unfolded, and their conversations as read when
+    /// they were (None while they are being read, away from the window);
+    /// those of them showing all their conversations.
+    unfolded: HashMap<PathBuf, Option<Vec<ConversationSummary>>>,
+    others_shown_all: HashSet<PathBuf>,
     /// Every conversation the list has held, and whether it has been
     /// listed at all: what was there at first shows at once.
     seen: HashSet<String>,
@@ -1274,6 +1464,46 @@ impl SidebarView {
                     this.close_menus(cx);
                 }
             }),
+            // A letter typed in an open menu goes to its next item that
+            // starts with it, as in the kit's menus; nothing else typed
+            // there reaches the window under it.
+            {
+                let this = cx.weak_entity();
+                let focus = menu_focus.clone();
+                cx.intercept_keystrokes(move |event, window, cx| {
+                    if !focus.is_focused(window) {
+                        return;
+                    }
+                    let keystroke = &event.keystroke;
+                    let modifiers = keystroke.modifiers;
+                    if modifiers.control
+                        || modifiers.alt
+                        || modifiers.platform
+                        || modifiers.function
+                    {
+                        return;
+                    }
+                    // The menu's own keys are bound in MENU.
+                    if matches!(
+                        keystroke.key.as_str(),
+                        "up" | "down" | "enter" | "space" | "escape" | "tab"
+                    ) {
+                        return;
+                    }
+                    let open = this
+                        .update(cx, |this, cx| {
+                            let open = this.menu.is_some();
+                            if let Some(letter) = ui::typed_letter(&keystroke.key) {
+                                this.jump_in_menu(letter, cx);
+                            }
+                            open
+                        })
+                        .unwrap_or(false);
+                    if open {
+                        cx.stop_propagation();
+                    }
+                })
+            },
             cx.observe(&session, |_, _, cx| cx.notify()),
             cx.subscribe(&session, |this, _, change: &Change, cx| {
                 if *change == Change::Conversations {
@@ -1370,6 +1600,8 @@ impl SidebarView {
             rename,
             renaming: None,
             show_all: false,
+            unfolded: HashMap::new(),
+            others_shown_all: HashSet::new(),
             seen: HashSet::new(),
             listed: false,
             arrivals: HashMap::new(),
@@ -1383,6 +1615,7 @@ impl SidebarView {
             _subscriptions: subscriptions,
         };
         sidebar.note_arrivals(false, cx);
+        sidebar.unfold_as_left(cx);
         sidebar
     }
 
@@ -1516,6 +1749,21 @@ impl SidebarView {
         cx.notify();
     }
 
+    /// A letter typed in the open menu: its next item that starts with it
+    /// and can be chosen is lit.
+    fn jump_in_menu(&mut self, letter: char, cx: &mut Context<Self>) {
+        let Some(menu) = self.menu.clone() else {
+            return;
+        };
+        let entries = self.entries_of(&menu, cx);
+        let words: Vec<&str> = entries.iter().map(|entry| entry.words.as_str()).collect();
+        let enabled: Vec<bool> = entries.iter().map(|entry| !entry.disabled).collect();
+        if let Some(at) = ui::menu_letter(&words, &enabled, self.menu_chosen, letter) {
+            self.menu_chosen = Some(at);
+            cx.notify();
+        }
+    }
+
     fn choose_in_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(menu) = self.menu.clone() else {
             return;
@@ -1608,6 +1856,8 @@ impl SidebarView {
                 });
                 crate::commands::refresh_menus(project.as_deref(), cx);
             }
+            Entry::NewConversation(folder) => self.open_in(folder, None, window, cx),
+            Entry::OpenConversation(folder, id) => self.open_in(folder, Some(id), window, cx),
         }
         if self.menu_focus.is_focused(window) {
             if from_keys {
@@ -1617,6 +1867,38 @@ impl SidebarView {
             }
         }
         cx.notify();
+    }
+
+    /// Opens conversation `id` (None: a new one) of `folder`: here, at
+    /// once; another folder's project opens in place of this window first.
+    fn open_in(
+        &mut self,
+        folder: PathBuf,
+        id: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let here = self
+            .session
+            .read(cx)
+            .project
+            .as_deref()
+            .is_some_and(|open| crate::app::same_folder(open, &folder));
+        if here {
+            self.session.update(cx, |session, cx| {
+                session.open_conversation(id);
+                cx.notify();
+            });
+            cx.emit(SidebarEvent::Chosen);
+            return;
+        }
+        window.dispatch_action(
+            Box::new(OpenRecent {
+                path: folder.to_string_lossy().into_owned().into(),
+            }),
+            cx,
+        );
+        open_conversation_in(folder, id, cx);
     }
 
     /// Remembers the conversations listed (`listed`: as the bridge listed
@@ -1829,9 +2111,10 @@ impl SidebarView {
             .w(px(layout::SIDEBAR_GRIP))
             .cursor_col_resize()
             .child(line)
-            .when(!pressed, |edge| {
-                edge.tooltip(|_, cx| cx.new(|_| ui::Tooltip(EDGE_TIP.into())).into())
-            })
+            .child(ui::tip_zone(
+                "sidebar-edge-tip",
+                (!pressed).then(|| ui::Tip::new(EDGE_TIP)),
+            ))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, event: &MouseDownEvent, _, cx| this.edge_down(event, cx)),
@@ -1917,23 +2200,23 @@ impl SidebarView {
                 item.child(div().flex_1())
                     .child(Icon::Check.view(14.0, theme::ink2()))
             });
-            if let Some(tip) = entry.tip.clone() {
-                item =
-                    item.tooltip(move |_, cx| cx.new(|_| ui::Tooltip(tip.clone().into())).into());
-            }
             if !entry.disabled {
                 let run = entry.entry.clone();
                 item = item.on_click(cx.listener(move |this, _, window, cx| {
                     this.run_entry(run.clone(), false, window, cx)
                 }));
             }
-            panel = panel.child(item);
+            // A folder's path, the kit's tip.
+            panel = panel.child(ui::tip_on(item, entry.tip.clone().map(ui::Tip::new)));
         }
+        // It rises into place as it fades in, as the kit's menus do.
+        let rise = scene::MENU_RISE;
         panel
+            .relative()
             .with_animation(
                 ElementId::Name(format!("sidebar-menu-{menu:?}").into()),
                 motion::animation(scene::FADE),
-                |menu, t| menu.opacity(t),
+                move |menu, t| menu.opacity(t).top(px(rise * (1.0 - t))),
             )
             .into_any_element()
     }
@@ -2050,14 +2333,16 @@ impl SidebarView {
         .cursor_pointer()
         .when(chosen, |row| row.bg(theme::on()))
         .when(!chosen, |row| row.hover(|row| row.bg(theme::raised())))
-        .when(!editing, |row| {
-            let tip = tip.clone();
-            row.tooltip(move |_, cx| cx.new(|_| ui::Tooltip(tip.clone())).into())
-        })
         .child(words)
         .when_some(dot.filter(|_| !editing), |row, color| {
             row.child(ui::dot(color, 6.0))
         })
+        // The whole title and when it last changed, the kit's tip, under
+        // what the row holds (its ⋯ keeps its press).
+        .child(ui::tip_zone(
+            ElementId::Name(format!("conversation-tip-{id}").into()),
+            (!editing && !menu_open).then(|| ui::Tip::new(tip.clone())),
+        ))
         .when(!editing, |row| {
             row.child(
                 div()
@@ -2227,9 +2512,11 @@ impl SidebarView {
         .child(Icon::Folder.view(14.0, theme::ink3()))
         .child(ui::line(project, text::SIDE_NOTE, theme::ink3()).min_w_0())
         .child(Icon::ChevronDown.view(12.0, theme::ink3()))
-        .when(!open, |heading| {
-            heading.tooltip(|_, cx| cx.new(|_| ui::Tooltip("Folders".into())).into())
-        })
+        .relative()
+        .child(ui::tip_zone(
+            "folder-heading-tip",
+            (!open).then(|| ui::Tip::new("Folders")),
+        ))
         .on_action(cx.listener(|this, _: &OpenMenu, window, cx| {
             this.open_menu(SidebarMenu::Folder, true, window, cx)
         }))
@@ -2269,32 +2556,70 @@ impl SidebarView {
     }
 
     /// Another folder worked on here: pressed, it opens in place of this
-    /// project; its ⋯ or a right-click has its menu.
+    /// project; its ⋯ or a right-click has its menu; its chevron (Right and
+    /// Left from the keys) unfolds and folds its conversations, read from
+    /// where its project keeps them, each opening its project on it.
     fn other_folder(&self, index: usize, folder: PathBuf, cx: &mut Context<Self>) -> AnyElement {
         let name = folder_name(&folder);
         let menu = SidebarMenu::Other(folder.clone());
         let menu_open = self.menu_is(&menu);
+        let unfolded = self.unfolded.get(&folder);
+        let fold = folder.clone();
+        let chevron = div()
+            .id(ElementId::Name(format!("folder-fold-{index}").into()))
+            .flex_none()
+            .size(px(16.0))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(theme::radius::SMALL))
+            .hover(|chevron| chevron.bg(theme::hover2()))
+            .child(
+                if unfolded.is_some() {
+                    Icon::ChevronDown
+                } else {
+                    Icon::ChevronRight
+                }
+                .view(12.0, theme::ink3()),
+            )
+            // Its own press folds and unfolds; the row's opens the folder.
+            .on_mouse_down(MouseButton::Left, |_, window, cx| {
+                window.prevent_default();
+                cx.stop_propagation();
+            })
+            .on_click(cx.listener(move |this, _, _, cx| {
+                cx.stop_propagation();
+                this.fold(&fold, None, cx);
+            }));
         let row = Self::keyed(
             div().id(ElementId::Name(format!("folder-{index}").into())),
-            ITEM,
+            FOLDER_KEYS,
         )
         .group("folder-row")
+        .relative()
         .flex()
         .items_center()
         .gap(px(6.0))
         .h(px(theme::height::H28))
-        .px(px(10.0))
+        .pl(px(6.0))
+        .pr(px(10.0))
         .mx(px(8.0))
         .rounded(px(theme::radius::CONTROL))
         .cursor_pointer()
         .hover(|row| row.bg(theme::raised()))
         .when(menu_open, |row| row.bg(theme::raised()))
+        .child(chevron)
         .child(Icon::Folder.view(14.0, theme::ink3()))
         .child(
             ui::line(name, text::SIDE_NOTE, theme::ink2())
                 .flex_1()
                 .min_w_0(),
         )
+        // Its path, the kit's tip, under its ⋯ and its chevron.
+        .child(ui::tip_zone(
+            ElementId::Name(format!("folder-tip-{index}").into()),
+            (!menu_open).then(|| ui::Tip::new(folder.display().to_string())),
+        ))
         .child(
             div()
                 .invisible()
@@ -2319,10 +2644,6 @@ impl SidebarView {
                     ),
                 ),
         )
-        .tooltip({
-            let tip: SharedString = folder.display().to_string().into();
-            move |_, cx| cx.new(|_| ui::Tooltip(tip.clone())).into()
-        })
         .on_mouse_down(
             MouseButton::Right,
             cx.listener({
@@ -2337,6 +2658,14 @@ impl SidebarView {
             let menu = menu.clone();
             move |this, _: &OpenMenu, window, cx| this.open_menu(menu.clone(), true, window, cx)
         }))
+        .on_action(cx.listener({
+            let folder = folder.clone();
+            move |this, _: &Unfold, _, cx| this.fold(&folder, Some(false), cx)
+        }))
+        .on_action(cx.listener({
+            let folder = folder.clone();
+            move |this, _: &Fold, _, cx| this.fold(&folder, Some(true), cx)
+        }))
         .on_click(cx.listener({
             let folder = folder.clone();
             move |this, _, window, cx| {
@@ -2344,9 +2673,17 @@ impl SidebarView {
                 this.run_entry(Entry::Open(folder.clone()), false, window, cx)
             }
         }));
+        // Nothing under it until its conversations are read.
+        let conversations = unfolded
+            .and_then(Option::as_deref)
+            .map(|conversations| self.folder_conversation_rows(index, &folder, conversations, cx));
         div()
             .relative()
+            .flex()
+            .flex_col()
+            .gap(px(2.0))
             .child(row)
+            .children(conversations)
             .when(menu_open, |wrapper| {
                 wrapper.child(
                     deferred(
@@ -2360,6 +2697,163 @@ impl SidebarView {
                 )
             })
             .into_any_element()
+    }
+
+    /// `folder`'s conversations, read again (unfolding it, `Some(false)`),
+    /// or put away (folding it, `Some(true)`); None: the other way. They
+    /// are read away from the window (a folder can keep many long
+    /// conversations), and show once they are, unless it was folded again.
+    ///
+    /// The fold is kept as it was left, for the next launch, as Qt's
+    /// sidebar kept it (`sidebar/folded`): for the folders still listed only.
+    fn fold(&mut self, folder: &Path, fold: Option<bool>, cx: &mut Context<Self>) {
+        let folded = !self.unfolded.contains_key(folder);
+        let now_folded = fold.unwrap_or(!folded);
+        if now_folded {
+            self.unfolded.remove(folder);
+            self.others_shown_all.remove(folder);
+        } else {
+            self.unfold_reading(folder, cx);
+        }
+        self.session.update(cx, |session, _| {
+            session.prefs.fold_by_hand(folder, now_folded);
+            session.save_prefs();
+        });
+        cx.notify();
+    }
+
+    /// Unfolds `folder`, reading its conversations away from the window;
+    /// they show once they are read, unless it was folded again. What was
+    /// read before stays until the new reading is in.
+    fn unfold_reading(&mut self, folder: &Path, cx: &mut Context<Self>) {
+        self.unfolded.entry(folder.to_path_buf()).or_insert(None);
+        let folder = folder.to_path_buf();
+        let reading = cx.background_executor().spawn({
+            let folder = folder.clone();
+            async move { folder_conversations(&folder) }
+        });
+        cx.spawn(async move |this, cx| {
+            let read = reading.await;
+            let _ = this.update(cx, |this, cx| {
+                if let Some(shown) = this.unfolded.get_mut(&folder) {
+                    *shown = Some(read);
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// The other folders left unfolded by hand (here, or in the Qt editor
+    /// before it), unfolded again as the sidebar is built.
+    fn unfold_as_left(&mut self, cx: &mut Context<Self>) {
+        let session = self.session.read(cx);
+        let current = session.project.clone();
+        let unfolded: Vec<PathBuf> = session
+            .prefs
+            .recent
+            .iter()
+            .filter(|folder| {
+                !current
+                    .as_deref()
+                    .is_some_and(|current| crate::app::same_folder(current, folder))
+                    && session.prefs.folder_folded(folder) == Some(false)
+                    && folder.is_dir()
+            })
+            .cloned()
+            .collect();
+        for folder in unfolded {
+            self.unfold_reading(&folder, cx);
+        }
+    }
+
+    /// Another folder's conversations, unfolded under it: the latest first,
+    /// the first few unless the rest were asked for ("Show N more"), "No
+    /// conversations yet" with none. Each opens its project on it.
+    fn folder_conversation_rows(
+        &self,
+        index: usize,
+        folder: &Path,
+        conversations: &[ConversationSummary],
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let now = now_seconds();
+        let show_all = self.others_shown_all.contains(folder);
+        let (count, more) = shown(conversations.len(), false, show_all, None);
+        let mut list = div().flex().flex_col().gap(px(2.0));
+        if conversations.is_empty() {
+            list = list.child(div().pl(px(42.0)).py(px(4.0)).child(ui::label(
+                "No conversations yet",
+                text::SIDE_NOTE,
+                theme::ink3(),
+            )));
+        }
+        for (at, conversation) in conversations.iter().take(count).enumerate() {
+            let title: SharedString = conversation.label().to_owned().into();
+            let tip: SharedString = match parse_time(&conversation.updated) {
+                Some(when) => format!("{title} · {}", relative_time(when, now)).into(),
+                None => title.clone(),
+            };
+            let open = Entry::OpenConversation(folder.to_path_buf(), conversation.id.clone());
+            let row = Self::keyed(
+                div().id(ElementId::Name(
+                    format!("folder-{index}-conversation-{at}").into(),
+                )),
+                ITEM,
+            )
+            .relative()
+            .flex()
+            .items_center()
+            .h(px(theme::height::H28))
+            .pl(px(34.0))
+            .pr(px(10.0))
+            .mx(px(8.0))
+            .rounded(px(theme::radius::CONTROL))
+            .cursor_pointer()
+            .hover(|row| row.bg(theme::raised()))
+            .child(
+                ui::line(title, text::SIDE, theme::ink2())
+                    .flex_1()
+                    .min_w_0(),
+            )
+            .child(ui::tip_zone(
+                ElementId::Name(format!("folder-{index}-conversation-tip-{at}").into()),
+                Some(ui::Tip::new(tip)),
+            ))
+            .on_click(cx.listener(move |this, _, window, cx| {
+                this.run_entry(open.clone(), false, window, cx)
+            }));
+            list = list.child(row);
+        }
+        if let Some(more) = more {
+            let words = match more {
+                More::Show(count) => format!("Show {count} more"),
+                More::Less => "Show less".to_owned(),
+            };
+            let folder = folder.to_path_buf();
+            list = list.child(
+                Self::keyed(
+                    div().id(ElementId::Name(format!("folder-{index}-more").into())),
+                    ITEM,
+                )
+                .flex()
+                .items_center()
+                .h(px(theme::height::H28))
+                .pl(px(34.0))
+                .mx(px(8.0))
+                .rounded(px(theme::radius::CONTROL))
+                .cursor_pointer()
+                .hover(|row| row.bg(theme::raised()))
+                .child(ui::line(words, text::SIDE_NOTE, theme::ink3()))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if !this.others_shown_all.remove(&folder) {
+                        this.others_shown_all.insert(folder.clone());
+                    }
+                    cx.notify();
+                })),
+            );
+        }
+        list.into_any_element()
     }
 
     /// The account at the foot: a disc with its first letter, who chat

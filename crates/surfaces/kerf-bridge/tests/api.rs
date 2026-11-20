@@ -90,3 +90,21 @@ fn only_the_serve_argument_has_the_editor_serve_its_tools() {
     assert_eq!(serve_mcp(&args(&[SERVE_MCP])), Some(1));
     assert_eq!(serve_mcp(&args(&[SERVE_MCP, "--dir"])), Some(1));
 }
+
+#[test]
+fn the_editor_runs_the_ffmpeg_kerfd_runs() {
+    let found = kerf_bridge::ffmpeg_bin();
+    // The engine's own, found once: the very same text.
+    assert!(std::ptr::eq(
+        found,
+        kerf_engine::ffmpeg::resolve_ffmpeg_bin()
+    ));
+    // What is found runs; else it is plain `ffmpeg`, to say so as it fails.
+    let runs = std::process::Command::new(found)
+        .arg("-version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success());
+    assert!(runs || found == "ffmpeg", "{found}");
+}

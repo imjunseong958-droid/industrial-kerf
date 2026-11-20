@@ -2543,8 +2543,12 @@ pub struct Collab {
     /// What the last sync did.
     report: Option<String>,
     menu: Menu,
+    /// The kit's menu of its rows, while it shows them (not a question).
+    kit: Option<Entity<ui::Menu>>,
     /// How many times the menu has opened, so each opening fades in.
     menus_opened: u64,
+    /// Itself, for what its menu's rows do.
+    this: gpui::WeakEntity<Self>,
     /// A question's line: the message, the name, the title.
     input: Entity<TextInput>,
     /// Publish's remote.
@@ -2554,8 +2558,18 @@ pub struct Collab {
     publish_way: PublishWay,
     publish_private: bool,
     focus_handle: FocusHandle,
+    /// The chip's own Tab stop (between the format bank and Undo).
+    chip_focus: FocusHandle,
+    /// Enter or Space went down on the chip: as it comes up it opens the
+    /// menu. An Enter that chose in the menu, coming up once the keys are
+    /// back on the chip, does not.
+    chip_armed: bool,
     /// What had the keys before the menu took them, to give them back.
     previous_focus: Option<FocusHandle>,
+    /// Whether the question open was asked from a row of the menu, in its
+    /// place: Esc and Cancel go back to the menu. One asked from the
+    /// window's menus or the palette (Qt's dialogs) just closes.
+    asked_over_menu: bool,
     /// When the work under way began, for the spinner.
     busy_since: Instant,
     /// The command a person asked for (its bridge type), so its end is said.
@@ -2577,8 +2591,10 @@ impl Collab {
             cx.subscribe(&session, |this, _, event: &BridgeEvent, cx| {
                 this.apply(&event.0, cx)
             }),
-            cx.subscribe(&session, |_, _, change: &Change, cx| {
+            cx.subscribe(&session, |this, _, change: &Change, cx| {
                 if matches!(change, Change::Snapshot | Change::Connection) {
+                    // What the menu's rows can do follows the window's commands.
+                    this.refresh_menu(cx);
                     cx.notify();
                 }
             }),
@@ -2607,14 +2623,19 @@ impl Collab {
             failure: None,
             report: None,
             menu: Menu::Closed,
+            kit: None,
             menus_opened: 0,
+            this: cx.weak_entity(),
             input,
             remote,
             body,
             publish_way: PublishWay::GitHub,
             publish_private: true,
             focus_handle: cx.focus_handle(),
+            chip_focus: cx.focus_handle().tab_stop(true),
+            chip_armed: false,
             previous_focus: None,
+            asked_over_menu: false,
             busy_since: Instant::now(),
             asked: None,
             _subscriptions: subscriptions,
@@ -2635,17 +2656,25 @@ impl Collab {
         if prompt.is_none() && id != "collab.switchBranch" {
             return false;
         }
-        if self.menu == Menu::Closed {
-            self.open(window, cx);
-        }
-        match prompt {
-            Some(prompt) => self.ask(prompt, window, cx),
-            None => {
-                self.menu = Menu::Branches;
-                window.focus(&self.focus_handle);
-                cx.notify();
+        // What asked (the palette) gives the keys back as it goes, after
+        // this: the menu or its question opens once it has, and takes them.
+        cx.defer_in(window, move |this, window, cx| {
+            if this.menu == Menu::Closed {
+                this.menus_opened += 1;
+                this.previous_focus = window.focused(cx);
+                this.session.update(cx, |session, _| {
+                    session.send(json!({"type": "collab_status"}))
+                });
             }
-        }
+            // The menu open gives the question, or itself opened anew, its place.
+            if let Some(kit) = this.kit.take() {
+                kit.update(cx, |menu, cx| menu.close(window, cx));
+            }
+            match prompt {
+                Some(prompt) => this.ask(prompt, false, window, cx),
+                None => this.show_menu(true, window, cx),
+            }
+        });
         true
     }
 
@@ -2698,8 +2727,9 @@ impl Collab {
                         Some(_) => Some(summary(report)),
                         None => sync_said(report, false),
                     };
+                    // Held as Qt held it (main_window.cpp's 8 s).
                     if let Some(said) = said {
-                        self.notify(&said, false, cx);
+                        self.notify(&said, false, Some(scene::NOTICE_LONG_HOLD), cx);
                     }
                     self.report = Some(summary(report));
                 }
@@ -2713,7 +2743,7 @@ impl Collab {
                     if self.asked.take().is_some()
                         || self.failure.as_deref() != Some(message.as_str())
                     {
-                        self.notify(&format!("Sync failed: {message}"), true, cx);
+                        self.notify(&format!("Sync failed: {message}"), true, None, cx);
                         self.session
                             .update(cx, |session, _| session.activity.push("sync", &message));
                     }
@@ -2730,7 +2760,13 @@ impl Collab {
                 self.asked = None;
                 let url = event["url"].as_str().unwrap_or_default().trim().to_owned();
                 let created = event["created"].as_bool().unwrap_or(false);
-                self.notify(&pull_request_said(&url, created), false, cx);
+                // Held as Qt held it (main_window.cpp's 8 s).
+                self.notify(
+                    &pull_request_said(&url, created),
+                    false,
+                    Some(scene::NOTICE_LONG_HOLD),
+                    cx,
+                );
                 if !url.is_empty() {
                     self.session
                         .update(cx, |session, _| session.activity.push("sync", &url));
@@ -2739,6 +2775,8 @@ impl Collab {
             }
             _ => return,
         }
+        // The menu open says what git says now.
+        self.refresh_menu(cx);
         cx.notify();
     }
 
@@ -2746,10 +2784,17 @@ impl Collab {
         self.stage.is_some() || self.status.as_ref().is_some_and(|status| status.busy)
     }
 
-    /// Says `words` at the foot of the window for a while.
-    fn notify(&self, words: &str, error: bool, cx: &mut Context<Self>) {
+    /// Says `words` at the foot of the window for a while: `hold`, else
+    /// as long as a notice (or an error) stays.
+    fn notify(
+        &self,
+        words: &str,
+        error: bool,
+        hold: Option<std::time::Duration>,
+        cx: &mut Context<Self>,
+    ) {
         self.session.update(cx, |session, cx| {
-            session.state.notify(words, error);
+            session.state.notify_held(words, error, hold);
             cx.emit(Change::Notice);
             cx.notify();
         });
@@ -2773,39 +2818,102 @@ impl Collab {
     }
 
     fn open(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.menu = Menu::Open;
         self.menus_opened += 1;
-        // It takes the keys, so Esc is its own and not the window's.
+        // The keys go back here once it goes.
         self.previous_focus = window.focused(cx);
-        window.focus(&self.focus_handle);
         // What it says is as git has it now.
         self.session.update(cx, |session, _| {
             session.send(json!({"type": "collab_status"}))
         });
+        self.show_menu(false, window, cx);
+    }
+
+    /// The menu's rows, the kit's: it takes the keys (the arrows, Return,
+    /// a letter, Esc are its own) and gives them back to what had them
+    /// before it opened. `branches`: opened on Switch Branch's submenu.
+    fn show_menu(&mut self, branches: bool, window: &mut Window, cx: &mut Context<Self>) {
+        // From a question, the keys go back where they were first.
+        if let Some(previous) = self.previous_focus.clone() {
+            window.focus(&previous);
+        }
+        let items = self.items(cx);
+        let switch_at = items
+            .iter()
+            .position(|item| item.words().as_ref() == "Switch Branch");
+        let head_of = cx.entity().downgrade();
+        let kit = cx.new(|cx| {
+            let menu = ui::Menu::new(items, window, cx)
+                .width(MENU_WIDTH)
+                .head(move |_, cx| match head_of.upgrade() {
+                    Some(collab) => collab.read(cx).head_and_line(cx),
+                    None => div().into_any_element(),
+                });
+            match switch_at.filter(|_| branches) {
+                Some(at) => menu.opened(at),
+                None => menu,
+            }
+        });
+        cx.subscribe_in(&kit, window, |this, kit, _: &DismissEvent, _, cx| {
+            if this.kit.as_ref() == Some(kit) {
+                this.kit = None;
+                // A row that asks for words has the menu's place.
+                if matches!(this.menu, Menu::Open | Menu::Branches) {
+                    this.menu = Menu::Closed;
+                }
+                cx.notify();
+            }
+        })
+        .detach();
+        self.kit = Some(kit);
+        self.menu = if branches { Menu::Branches } else { Menu::Open };
         cx.notify();
+    }
+
+    /// The rows of the menu open as things stand now (git answered, a sync
+    /// began or ended, the window's commands changed).
+    fn refresh_menu(&mut self, cx: &mut Context<Self>) {
+        if let Some(kit) = self.kit.clone() {
+            let items = self.items(cx);
+            kit.update(cx, |menu, cx| menu.set_items(items, cx));
+        }
     }
 
     fn close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.menu = Menu::Closed;
+        // The kit's menu may be what chose this: it goes once that is done.
+        if let Some(kit) = self.kit.take() {
+            cx.defer_in(window, move |_, window, cx| {
+                kit.update(cx, |menu, cx| menu.close(window, cx));
+            });
+        }
         if let Some(previous) = self.previous_focus.take() {
             window.focus(&previous);
         }
         cx.notify();
     }
 
-    /// From words asked for, back to the menu; from the menu, closed.
+    /// From words asked for in the menu's place, back to the menu; from
+    /// the menu, or words asked for from the window's menus or the
+    /// palette, closed.
     fn back(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if matches!(self.menu, Menu::Prompt(_)) {
-            self.menu = Menu::Open;
-            window.focus(&self.focus_handle);
-            cx.notify();
+        if matches!(self.menu, Menu::Prompt(_)) && self.asked_over_menu {
+            self.show_menu(false, window, cx);
         } else {
             self.close(window, cx);
         }
     }
 
-    fn ask(&mut self, prompt: Prompt, window: &mut Window, cx: &mut Context<Self>) {
+    /// Asks for the words `prompt` needs, in the menu's place: from one of
+    /// its rows (`over_menu`), or from the window's menus or the palette.
+    fn ask(
+        &mut self,
+        prompt: Prompt,
+        over_menu: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.menu = Menu::Prompt(prompt);
+        self.asked_over_menu = over_menu;
         let status = self.status.clone().unwrap_or_default();
         let start = match prompt {
             Prompt::Publish => {
@@ -2912,22 +3020,52 @@ impl Collab {
         } else {
             theme::ink2()
         };
-        let mut chip = theme::type_style(div(), text::CONTROL)
-            .id("collab-chip")
-            .flex()
-            .flex_none()
-            .items_center()
-            .gap(px(theme::space::S6))
-            .h(px(height::H24))
-            .px(px(theme::space::S8))
-            .rounded(px(radius::CONTROL))
-            .border_1()
-            .border_color(theme::line())
-            .cursor_pointer()
-            .text_color(ink)
-            .when(open, |chip| chip.bg(theme::on()))
-            .when(!open, |chip| chip.hover(|style| style.bg(theme::raised())))
-            .on_click(cx.listener(|this, _, window, cx| this.toggle(window, cx)));
+        // The kit's trigger: another menu open goes on its press, and
+        // pressed again, its own menu goes rather than opening anew.
+        let mut chip = theme::type_style(
+            ui::trigger(
+                "collab-chip",
+                cx.listener(|this, _: &gpui::MouseDownEvent, window, cx| this.toggle(window, cx)),
+            ),
+            text::CONTROL,
+        )
+        .flex()
+        .flex_none()
+        .items_center()
+        .gap(px(theme::space::S6))
+        .h(px(height::H24))
+        .px(px(theme::space::S8))
+        .rounded(px(radius::CONTROL))
+        .border_1()
+        .border_color(theme::line())
+        .cursor_pointer()
+        .text_color(ink)
+        .when(open, |chip| chip.bg(theme::on()))
+        .when(!open, |chip| chip.hover(|style| style.bg(theme::raised())))
+        // A Tab stop of its own: ringed while it has the keys, Enter or
+        // Space opens its menu; a press leaves the keys where they were.
+        .relative()
+        .track_focus(&self.chip_focus)
+        .key_context(ui::CONTROL)
+        .capture_any_mouse_down(|_, window, _| window.prevent_default())
+        .on_action(|_: &ui::FocusNext, window, cx| ui::tab_to(true, window, cx))
+        .on_action(|_: &ui::FocusPrevious, window, cx| ui::tab_to(false, window, cx))
+        .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, _| {
+            let keystroke = &event.keystroke;
+            if matches!(keystroke.key.as_str(), "enter" | "space")
+                && !keystroke.modifiers.modified()
+            {
+                this.chip_armed = true;
+            }
+        }))
+        .on_click(cx.listener(|this, event: &gpui::ClickEvent, window, cx| {
+            if event.is_keyboard() && std::mem::take(&mut this.chip_armed) {
+                this.toggle(window, cx);
+            }
+        }))
+        .when(self.chip_focus.is_focused(window), |chip| {
+            chip.child(ui::ring(radius::CONTROL))
+        });
         if busy {
             chip = chip
                 .child(spinner(self.busy_since, theme::activity::kerf(), window))
@@ -2974,29 +3112,26 @@ impl Collab {
             (None, true) => "Edits not committed yet".into(),
             _ => "Sync".into(),
         };
-        // Its menu says all the tooltip would, so the tooltip waits while it is open.
-        chip.children(mark.map(|color| ui::dot(color, 6.0)))
-            .when(!open, |chip| {
-                chip.tooltip(move |_, cx| cx.new(|_| ui::Tooltip(tooltip.clone())).into())
-            })
+        // Its menu says all the tip would, so the tip waits while it is open.
+        ui::tip_on(
+            chip.children(mark.map(|color| ui::dot(color, 6.0))),
+            (!open).then(|| ui::Tip::new(tooltip)),
+        )
     }
 
-    fn menu(&self, window: &Window, cx: &Context<Self>) -> AnyElement {
-        let (body, width) = match self.menu {
-            Menu::Prompt(prompt) => (
-                self.prompt(prompt, window, cx),
-                if prompt.wide() {
-                    PROMPT_WIDTH
-                } else {
-                    MENU_WIDTH
-                },
-            ),
-            _ => (self.choices(cx), MENU_WIDTH),
+    /// A question asked in the menu's place (Commit…, New Branch…, Pull
+    /// Request…, Publish to GitHub…), rising into place as it fades in.
+    fn question(&self, prompt: Prompt, window: &Window, cx: &Context<Self>) -> AnyElement {
+        let width = if prompt.wide() {
+            PROMPT_WIDTH
+        } else {
+            MENU_WIDTH
         };
+        let rise = scene::MENU_RISE;
         div()
             .key_context(MENU_CONTEXT)
             .track_focus(&self.focus_handle)
-            .on_action(cx.listener(|this, _: &Close, window, cx| this.close(window, cx)))
+            .on_action(cx.listener(|this, _: &Close, window, cx| this.back(window, cx)))
             // A press anywhere else puts it away, and does nothing more: a
             // press on the chip closes it rather than opening it again.
             .on_mouse_down_out(cx.listener(|this, _, window, cx| {
@@ -3004,6 +3139,7 @@ impl Collab {
                 this.close(window, cx);
             }))
             .occlude()
+            .relative()
             .w(px(width))
             .flex()
             .flex_col()
@@ -3015,17 +3151,28 @@ impl Collab {
             .shadow_lg()
             .font(theme::ui_font(FontWeight::NORMAL))
             .text_color(theme::ink())
-            .child(body)
+            .child(self.prompt(prompt, window, cx))
             .with_animation(
-                ("collab-menu", self.menus_opened),
+                ("collab-question", self.menus_opened),
                 motion::animation(scene::FADE),
-                |menu, t| menu.opacity(t),
+                move |menu, t| menu.opacity(t).top(px(rise * (1.0 - t))),
             )
             .into_any_element()
     }
 
+    /// The menu's head, and the line under it.
+    fn head_and_line(&self, cx: &App) -> AnyElement {
+        let status = self.status.clone().unwrap_or_default();
+        div()
+            .flex()
+            .flex_col()
+            .child(self.head(&status, cx))
+            .child(ui::hairline(true).mb(px(theme::space::S4)))
+            .into_any_element()
+    }
+
     /// The menu's head: where the project stands, and what went wrong.
-    fn head(&self, status: &GitStatus, cx: &Context<Self>) -> impl IntoElement {
+    fn head(&self, status: &GitStatus, cx: &App) -> impl IntoElement {
         let revision = self.session.read(cx).revision();
         let (title, standing) = if status.repository {
             let mut parts = vec![format!("Revision {revision}")];
@@ -3131,226 +3278,110 @@ impl Collab {
         }
     }
 
-    fn choices(&self, cx: &Context<Self>) -> AnyElement {
+    /// The menu's rows as things stand: Sync Now, Live Sync (ticked while
+    /// on), Commit…; Switch Branch ▸ (the other branches, or No Other
+    /// Branches), New Branch…, Pull Request…, Publish to GitHub… while
+    /// there is no remote; Consolidate Media and Refresh. A project that is
+    /// no repository yet has Publish to GitHub… and Make a Repository Here.
+    /// A row that cannot run is greyed, and says why in its tip.
+    fn items(&self, cx: &App) -> Vec<ui::MenuItem> {
         let status = self.status.clone().unwrap_or_default();
         let reason = self.reasons(cx);
-        let mut items: Vec<AnyElement> = vec![
-            self.head(&status, cx).into_any_element(),
-            ui::hairline(true).into_any_element(),
-        ];
+        let this = self.this.clone();
+        let row = |words: &'static str, enabled: Result<(), SharedString>| {
+            let item = ui::MenuItem::new(words);
+            match enabled {
+                Ok(()) => item,
+                Err(why) => item.disabled(true).tip(why),
+            }
+        };
+        let asks = |prompt: Prompt| {
+            let this = this.clone();
+            move |window: &mut Window, cx: &mut App| {
+                let _ = this.update(cx, |collab, cx| collab.ask(prompt, true, window, cx));
+            }
+        };
+        let runs = |command: Value| {
+            let this = this.clone();
+            move |window: &mut Window, cx: &mut App| {
+                let _ = this.update(cx, |collab, cx| collab.run(command.clone(), window, cx));
+            }
+        };
+        let mut items: Vec<ui::MenuItem> = Vec::new();
         if !status.repository {
             items.push(
-                item(
-                    "collab-publish",
-                    "Publish to GitHub…",
-                    reason("collab.publish"),
-                    cx.listener(|this, _, window, cx| this.ask(Prompt::Publish, window, cx)),
-                )
-                .into_any_element(),
+                row("Publish to GitHub…", reason("collab.publish"))
+                    .on_choose(asks(Prompt::Publish)),
             );
             items.push(
-                item(
-                    "collab-init",
-                    "Make a Repository Here",
-                    reason("collab.publish"),
-                    cx.listener(|this, _, window, cx| {
-                        this.run(json!({"type": "collab_publish"}), window, cx);
-                    }),
-                )
-                .into_any_element(),
+                row("Make a Repository Here", reason("collab.publish"))
+                    .on_choose(runs(json!({"type": "collab_publish"}))),
             );
         } else {
             let live = status.live;
+            let set_live = this.clone();
             items.push(
-                item(
-                    "collab-sync",
-                    "Sync Now",
-                    reason("collab.sync"),
-                    cx.listener(|this, _, window, cx| {
-                        this.run(json!({"type": "collab_sync"}), window, cx)
+                row("Sync Now", reason("collab.sync"))
+                    .on_choose(runs(json!({"type": "collab_sync"}))),
+            );
+            items.push(
+                row("Live Sync", reason("collab.live"))
+                    .checked(live)
+                    .on_choose(move |_, cx| {
+                        let _ = set_live.update(cx, |collab, cx| collab.set_live(!live, cx));
                     }),
-                )
-                .into_any_element(),
+            );
+            items.push(row("Commit…", reason("collab.commit")).on_choose(asks(Prompt::Commit)));
+            // Switch Branch opens on the other branches, as Qt's did; with
+            // none it says so, and holds back only for what holds back a sync.
+            let others = other_branches(status.branch.as_deref(), &status.branches);
+            let switch = if others.is_empty() {
+                reason("collab.sync")
+            } else {
+                reason("collab.switchBranch")
+            };
+            let rows = if others.is_empty() {
+                vec![ui::MenuItem::new(NO_OTHER_BRANCHES).disabled(true)]
+            } else {
+                others
+                    .into_iter()
+                    .map(|name| {
+                        ui::MenuItem::new(name.clone()).on_choose(runs(
+                            json!({"type": "collab_branch", "name": name, "create": false}),
+                        ))
+                    })
+                    .collect()
+            };
+            items.push(row("Switch Branch", switch).separated().submenu(rows));
+            items.push(
+                row("New Branch…", reason("collab.newBranch")).on_choose(asks(Prompt::NewBranch)),
             );
             items.push(
-                item(
-                    "collab-live",
-                    "Live Sync",
-                    reason("collab.live"),
-                    cx.listener(move |this, _, _, cx| this.set_live(!live, cx)),
-                )
-                .child(div().flex_1())
-                // The row takes the press; the switch shows what it did.
-                .child(ui::switch("collab-live-switch", live, |_, _, _| {}).focusable(false))
-                .into_any_element(),
-            );
-            items.push(
-                item(
-                    "collab-commit",
-                    "Commit…",
-                    reason("collab.commit"),
-                    cx.listener(|this, _, window, cx| this.ask(Prompt::Commit, window, cx)),
-                )
-                .into_any_element(),
-            );
-            items.push(
-                ui::hairline(true)
-                    .my(px(theme::space::S4))
-                    .into_any_element(),
-            );
-            let switch = reason("collab.switchBranch");
-            let unfolded = self.menu == Menu::Branches;
-            let can_switch = switch.is_ok();
-            items.push(
-                item(
-                    "collab-switch",
-                    "Switch Branch",
-                    switch,
-                    cx.listener(move |this, _, _, cx| {
-                        this.menu = if unfolded { Menu::Open } else { Menu::Branches };
-                        cx.notify();
-                    }),
-                )
-                .child(div().flex_1())
-                .child(
-                    if unfolded {
-                        Icon::ChevronDown
-                    } else {
-                        Icon::ChevronRight
-                    }
-                    .view(
-                        14.0,
-                        if can_switch {
-                            theme::ink2()
-                        } else {
-                            theme::dis()
-                        },
-                    ),
-                )
-                .into_any_element(),
-            );
-            if unfolded && can_switch {
-                items.push(self.branches(&status, cx));
-            }
-            items.push(
-                item(
-                    "collab-new-branch",
-                    "New Branch…",
-                    reason("collab.newBranch"),
-                    cx.listener(|this, _, window, cx| this.ask(Prompt::NewBranch, window, cx)),
-                )
-                .into_any_element(),
-            );
-            items.push(
-                item(
-                    "collab-pull-request",
-                    "Pull Request…",
-                    reason("collab.pullRequest"),
-                    cx.listener(|this, _, window, cx| this.ask(Prompt::PullRequest, window, cx)),
-                )
-                .into_any_element(),
+                row("Pull Request…", reason("collab.pullRequest"))
+                    .on_choose(asks(Prompt::PullRequest)),
             );
             if status.remote.is_none() {
                 items.push(
-                    item(
-                        "collab-publish",
-                        "Publish to GitHub…",
-                        reason("collab.publish"),
-                        cx.listener(|this, _, window, cx| this.ask(Prompt::Publish, window, cx)),
-                    )
-                    .into_any_element(),
+                    row("Publish to GitHub…", reason("collab.publish"))
+                        .on_choose(asks(Prompt::Publish)),
                 );
             }
         }
         items.push(
-            ui::hairline(true)
-                .my(px(theme::space::S4))
-                .into_any_element(),
+            row("Consolidate Media", reason("collab.consolidate"))
+                .separated()
+                .on_choose(runs(json!({"type": "collab_consolidate"}))),
         );
-        items.push(
-            item(
-                "collab-consolidate",
-                "Consolidate Media",
-                reason("collab.consolidate"),
-                cx.listener(|this, _, window, cx| {
-                    this.run(json!({"type": "collab_consolidate"}), window, cx)
-                }),
-            )
-            .into_any_element(),
-        );
-        items.push(
-            item(
-                "collab-refresh",
-                "Refresh",
-                Ok(()),
-                cx.listener(|this, _, window, cx| {
-                    this.session.update(cx, |session, _| {
-                        session.send(json!({"type": "collab_status"}))
-                    });
-                    this.close(window, cx);
-                }),
-            )
-            .into_any_element(),
-        );
-        div().flex().flex_col().children(items).into_any_element()
-    }
-
-    /// The branches, this one checked; another switches to it.
-    fn branches(&self, status: &GitStatus, cx: &Context<Self>) -> AnyElement {
-        let current = status.branch.clone();
-        let mut names: Vec<String> = current.iter().cloned().collect();
-        names.extend(
-            status
-                .branches
-                .iter()
-                .filter(|name| Some(*name) != current.as_ref())
-                .cloned(),
-        );
-        div()
-            .id("collab-branches")
-            .max_h(px(200.0))
-            .overflow_y_scroll()
-            .flex()
-            .flex_col()
-            .children(names.into_iter().enumerate().map(|(index, name)| {
-                let here = Some(&name) == current.as_ref();
-                let row = theme::type_style(div(), text::MENU_QUIET)
-                    .id(ElementId::named_usize("collab-branch", index))
-                    .flex()
-                    .items_center()
-                    .gap(px(theme::space::S8))
-                    .h(px(28.0))
-                    .pl(px(theme::space::S16 + 2.0))
-                    .pr(px(10.0))
-                    .rounded(px(radius::CONTROL))
-                    .text_color(if here { theme::ink() } else { theme::ink2() })
-                    .child(if here {
-                        Icon::Check.view(14.0, theme::ink2()).into_any_element()
-                    } else {
-                        crate::icons::spacer(14.0).into_any_element()
-                    })
-                    .child(
-                        ui::line(
-                            name.clone(),
-                            text::MENU_QUIET,
-                            if here { theme::ink() } else { theme::ink2() },
-                        )
-                        .min_w_0(),
-                    );
-                if here {
-                    return row;
-                }
-                row.cursor_pointer()
-                    .hover(|style| style.bg(theme::popup_hover()))
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.run(
-                            json!({"type": "collab_branch", "name": name, "create": false}),
-                            window,
-                            cx,
-                        );
-                    }))
-            }))
-            .into_any_element()
+        let refresh = this.clone();
+        items.push(row("Refresh", Ok(())).on_choose(move |window, cx| {
+            let _ = refresh.update(cx, |collab, cx| {
+                collab.session.update(cx, |session, _| {
+                    session.send(json!({"type": "collab_status"}))
+                });
+                collab.close(window, cx);
+            });
+        }));
+        items
     }
 
     fn set_live(&mut self, on: bool, cx: &mut Context<Self>) {
@@ -3497,12 +3528,27 @@ impl Render for Collab {
         if !session.has_project() || self.status.is_none() {
             return div().into_any_element();
         }
-        let open = self.menu != Menu::Closed;
+        // The menu bar (macOS) offers the window in front's branches.
+        if cfg!(target_os = "macos") && window.is_window_active() {
+            if let Some(status) = &self.status {
+                let others = other_branches(status.branch.as_deref(), &status.branches);
+                let blocked = self.reasons(cx)("collab.sync").is_err() || !status.repository;
+                crate::commands::set_menu_branches(
+                    crate::commands::MenuBranches { others, blocked },
+                    cx,
+                );
+            }
+        }
+        let shown = match self.menu {
+            Menu::Closed => None,
+            Menu::Prompt(prompt) => Some(self.question(prompt, window, cx)),
+            Menu::Open | Menu::Branches => self.kit.clone().map(|kit| kit.into_any_element()),
+        };
         div()
             .relative()
             .flex_none()
             .child(self.chip(window, cx))
-            .when(open, |wrapper| {
+            .when_some(shown, |wrapper, shown| {
                 wrapper.child(
                     // Under the chip, its right edge on the chip's, over everything.
                     div().absolute().top_full().right_0().child(
@@ -3511,7 +3557,7 @@ impl Render for Collab {
                                 .anchor(Corner::TopRight)
                                 .offset(point(px(0.0), px(theme::space::S4)))
                                 .snap_to_window_with_margin(Edges::all(px(theme::space::S8)))
-                                .child(self.menu(window, cx)),
+                                .child(shown),
                         )
                         .with_priority(1),
                     ),
@@ -3547,37 +3593,19 @@ fn area(input: &Entity<TextInput>, window: &Window, cx: &App) -> gpui::Div {
         .child(input.clone())
 }
 
-/// A row of the chip's menu; `enabled` is Ok, or why it cannot run now.
-fn item(
-    id: &'static str,
-    words: &'static str,
-    enabled: Result<(), SharedString>,
-    on_click: impl Fn(&gpui::ClickEvent, &mut Window, &mut App) + 'static,
-) -> gpui::Stateful<gpui::Div> {
-    let row = theme::type_style(div(), text::MENU_ITEM)
-        .id(id)
-        .flex()
-        .items_center()
-        .gap(px(theme::space::S8))
-        .h(px(30.0))
-        .px(px(10.0))
-        .rounded(px(radius::CONTROL))
-        .text_color(if enabled.is_ok() {
-            theme::ink()
-        } else {
-            theme::dis()
-        })
-        .child(words);
-    match enabled {
-        Ok(()) => row
-            .cursor_pointer()
-            .hover(|style| style.bg(theme::popup_hover()))
-            .on_click(on_click),
-        Err(reason) => row
-            .tooltip(move |_, cx| cx.new(|_| ui::Tooltip(reason.clone())).into())
-            // A row that cannot run takes the press, so nothing under it does.
-            .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation()),
+/// What Switch Branch's submenu says with no branch but this one, as Qt's.
+pub const NO_OTHER_BRANCHES: &str = "No Other Branches";
+
+/// The branches to switch to from `current`: the others, each once, in
+/// the order git lists them.
+pub fn other_branches(current: Option<&str>, branches: &[String]) -> Vec<String> {
+    let mut others: Vec<String> = Vec::new();
+    for branch in branches {
+        if !branch.is_empty() && Some(branch.as_str()) != current && !others.contains(branch) {
+            others.push(branch.clone());
+        }
     }
+    others
 }
 
 /// What a sync is doing, as a person says it.

@@ -21,8 +21,7 @@ use crate::theme::{self, height, text};
 use crate::ui;
 use gpui::{
     div, prelude::*, px, App, Context, DismissEvent, ElementId, Entity, EventEmitter, FocusHandle,
-    Focusable, FontWeight, KeyBinding, MouseButton, PathPromptOptions, SharedString, Subscription,
-    Window,
+    Focusable, FontWeight, KeyBinding, MouseButton, PathPromptOptions, Subscription, Window,
 };
 use serde_json::{json, Value};
 use std::path::Path;
@@ -556,10 +555,6 @@ impl Render for CastView {
             .map(|(index, row)| self.row(index, row, window, cx).into_any_element())
             .collect();
         let header = |words: &'static str| ui::line(words, text::META_STRONG, theme::ink3());
-        let tip = |words: &'static str| {
-            let words: SharedString = words.into();
-            move |_: &mut Window, cx: &mut App| cx.new(|_| ui::Tooltip(words.clone())).into()
-        };
         let state_line = match self.stage {
             Stage::Reading => "Reading the cast…".to_owned(),
             Stage::Saving => "Saving…".to_owned(),
@@ -626,58 +621,38 @@ impl Render for CastView {
                     .items_center()
                     .gap(px(theme::space::S8))
                     .child(
-                        div()
-                            .id("cast-add-tip")
-                            .tooltip(tip("Someone or something a shot shows: a person, a place, a prop"))
-                            .child(
-                                ui::button("cast-add", "Add Cast")
-                                    .small()
-                                    .disabled(!editing)
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.added("cast", window, cx)
-                                    })),
-                            ),
+                        ui::button("cast-add", "Add Cast")
+                            .tooltip("Someone or something a shot shows: a person, a place, a prop")
+                            .small()
+                            .disabled(!editing)
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.added("cast", window, cx)
+                            })),
                     )
                     .child(
-                        div()
-                            .id("cast-add-style-tip")
-                            .tooltip(tip("How a shot looks: its stock, its grade, its light"))
-                            .child(
-                                ui::button("cast-add-style", "Add Style")
-                                    .small()
-                                    .disabled(!editing)
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.added("style", window, cx)
-                                    })),
-                            ),
+                        ui::button("cast-add-style", "Add Style")
+                            .tooltip("How a shot looks: its stock, its grade, its light")
+                            .small()
+                            .disabled(!editing)
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.added("style", window, cx)
+                            })),
                     )
                     .child(
-                        div()
-                            .id("cast-picture-tip")
-                            .tooltip(tip(
-                                "A picture of the chosen row; one outside the project is copied into its refs folder",
-                            ))
-                            .child(
-                                ui::button("cast-picture", "Add Picture…")
-                                    .small()
-                                    .disabled(!editing || !has_row)
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.add_picture(window, cx)
-                                    })),
-                            ),
+                        ui::button("cast-picture", "Add Picture…")
+                            .tooltip("A picture of the chosen row; one outside the project is copied into its refs folder")
+                            .small()
+                            .disabled(!editing || !has_row)
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.add_picture(window, cx)
+                            })),
                     )
                     .child(
-                        div()
-                            .id("cast-remove-tip")
-                            .tooltip(tip(
-                                "Take the chosen row out; a recipe that names it cannot run until it names another",
-                            ))
-                            .child(
-                                ui::button("cast-remove", "Remove")
-                                    .small()
-                                    .disabled(!editing || !has_row)
-                                    .on_click(cx.listener(|this, _, _, cx| this.remove(cx))),
-                            ),
+                        ui::button("cast-remove", "Remove")
+                            .tooltip("Take the chosen row out; a recipe that names it cannot run until it names another")
+                            .small()
+                            .disabled(!editing || !has_row)
+                            .on_click(cx.listener(|this, _, _, cx| this.remove(cx))),
                     ),
             )
             .child(ui::label(state_line, text::CONTROL, theme::ink3()))

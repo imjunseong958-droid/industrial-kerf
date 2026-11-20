@@ -204,14 +204,13 @@ impl AskView {
                         this.scope_menu = !this.scope_menu;
                         cx.notify();
                     }))
-            })
-            .tooltip(ui::tooltip(ui::Tip::new("What Kerf looks at")));
+            });
         div()
             .flex()
             .items_center()
             .gap(px(8.0))
             .child(ui::label("Scope", text::CONTROL, theme::ink2()))
-            .child(button)
+            .child(ui::tip_on(button, Some(ui::Tip::new("What Kerf looks at"))))
     }
 
     /// The Scope menu, laid over the card under its button: inside the
@@ -263,10 +262,14 @@ impl AskView {
                 .shadow_lg()
                 .occlude()
                 .children(rows)
+                // It rises into place under its button as it fades in.
                 .with_animation(
                     "ask-scope-menu",
                     crate::motion::animation(scene::FADE),
-                    |menu, t| menu.opacity(t),
+                    |menu, t| {
+                        menu.opacity(t)
+                            .top(px(SCOPE_MENU_AT.1 + scene::MENU_RISE * (1.0 - t)))
+                    },
                 ),
         )
     }
@@ -342,10 +345,11 @@ impl Render for AskView {
                     ),
             )
             .children(menu)
+            // It rises into place as it fades in, as Qt's popovers did.
             .with_animation(
                 "ask-popover-open",
                 crate::motion::animation(scene::FADE),
-                |card, t| card.opacity(t),
+                |card, t| card.opacity(t).top(px(scene::MENU_RISE * (1.0 - t))),
             );
         deferred(
             anchored()

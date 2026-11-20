@@ -31,6 +31,7 @@ use crate::input::{InputEvent, TextInput};
 use crate::model::{self, Proposal, Speaker, Timeline, Turn};
 use crate::motion::{self, Tween};
 use crate::prefs::{Permissions, Provider};
+use crate::selectable::{self, Selections};
 use crate::session::{BridgeEvent, Session};
 use crate::store::{Change, Connection, ContextLevel, ContextUse, StepState};
 use crate::theme::{self, layout, motion as scene, text};
@@ -39,8 +40,8 @@ use gpui::RenderImage;
 use gpui::{
     anchored, deferred, div, linear_color_stop, linear_gradient, point, prelude::*, px, radians,
     AnimationExt, AnyElement, App, ClipboardItem, Context, Corner, DismissEvent, Edges, ElementId,
-    Entity, FocusHandle, Focusable, FontWeight, InteractiveText, Rgba, ScrollHandle, SharedString,
-    StyledText, Subscription, Task, TextRun, Transformation, Window,
+    Entity, EventEmitter, FocusHandle, Focusable, FontWeight, Rgba, ScrollHandle, SharedString,
+    Subscription, Task, TextRun, Transformation, Window,
 };
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
@@ -55,6 +56,14 @@ pub const COMPOSER_MOST: f32 = 110.0;
 pub const COMPOSER_CONTEXT: &str = "Composer";
 
 gpui::actions!(chat, [CyclePermissions]);
+
+/// What the conversation asks of the window.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ChatEvent {
+    /// A cut's card was pressed: its picture grows out of the card into the
+    /// stage (`proposal` names the cut).
+    GrowPicture { proposal: String },
+}
 
 /// The mode after `permissions`, as Shift-Tab goes round them.
 pub fn next_permissions(permissions: Permissions) -> Permissions {
@@ -1602,6 +1611,8 @@ pub struct ChatView {
     ask: Option<Entity<crate::ask::AskView>>,
     /// The cut whose picture went to the stage from its card.
     stage_proposal: Option<String>,
+    /// Whether the picture showed as last seen.
+    picture_seen: Option<bool>,
     /// A cut's picture under the pointer: the proposal, and how far across.
     scrub: Option<(String, f32)>,
     /// Where each cut's picture was last laid out, by proposal id, for the
@@ -1628,9 +1639,19 @@ pub struct ChatView {
     started_at: Instant,
     /// How far the conversation sits back while a change reel plays.
     behind: Tween,
+    /// What is chosen of the requests' and answers' words.
+    selections: selectable::Shared,
+    /// Where each footage tile was last laid out, by its media, for what
+    /// goes on from it to fly from; and the tiles that have gone on.
+    tiles: std::rc::Rc<std::cell::RefCell<HashMap<String, gpui::Bounds<gpui::Pixels>>>>,
+    taken: HashSet<String>,
+    /// Where the composer was last laid out.
+    composer_at: std::rc::Rc<std::cell::Cell<Option<gpui::Bounds<gpui::Pixels>>>>,
     focus_handle: FocusHandle,
     _subscriptions: Vec<Subscription>,
 }
+
+impl EventEmitter<ChatEvent> for ChatView {}
 
 const PLACEHOLDER: &str = "Ask Kerf to cut, trim, find, or make…";
 
@@ -1642,6 +1663,7 @@ impl ChatView {
                 .max_height(px(COMPOSER_MOST))
         });
         let composer_focus = composer.read(cx).focus_handle(cx);
+        let selections = Selections::shared();
         let subscriptions = vec![
             cx.observe(&session, |this, _, cx| {
                 this.refresh_placeholder(cx);
@@ -1708,6 +1730,39 @@ impl ChatView {
                     InputEvent::Changed => cx.notify(),
                 },
             ),
+            // ⌘C (Ctrl+C) copies the words chosen in the conversation,
+            // wherever the keys are: a press anywhere else would have let
+            // them go, and so does any other key a field takes (what is
+            // typed or chosen there is then what is copied).
+            {
+                let chosen = selections.clone();
+                let handle = window.window_handle();
+                cx.intercept_keystrokes(move |event, window, cx| {
+                    if window.window_handle() != handle {
+                        return;
+                    }
+                    let keystroke = &event.keystroke;
+                    let copy = keystroke.key == "c"
+                        && keystroke.modifiers.secondary()
+                        && !keystroke.modifiers.shift
+                        && !keystroke.modifiers.alt;
+                    if !copy {
+                        let in_a_field = event
+                            .context_stack
+                            .iter()
+                            .any(|context| context.contains(crate::input::CONTEXT));
+                        if in_a_field && chosen.borrow_mut().clear() {
+                            window.refresh();
+                        }
+                        return;
+                    }
+                    let Some(words) = chosen.borrow().copied() else {
+                        return;
+                    };
+                    cx.write_to_clipboard(ClipboardItem::new_string(words));
+                    cx.stop_propagation();
+                })
+            },
             // Esc puts a menu of the conversation away wherever the keys
             // are (a press on its chip leaves them where they were), before
             // the box or the window has it.
@@ -1769,6 +1824,7 @@ impl ChatView {
             keys: None,
             ask: None,
             stage_proposal: None,
+            picture_seen: None,
             scrub: None,
             pictures: Default::default(),
             building: None,
@@ -1780,6 +1836,10 @@ impl ChatView {
             turn_seen: None,
             started_at: Instant::now(),
             behind: Tween::at(1.0),
+            selections,
+            tiles: Default::default(),
+            taken: HashSet::new(),
+            composer_at: Default::default(),
             focus_handle: cx.focus_handle(),
             _subscriptions: subscriptions,
         };
@@ -2191,7 +2251,13 @@ impl ChatView {
         let turn = &turns[index];
         let id = SharedString::from(format!("turn-{}", turn.id));
         let body = match turn.kind {
-            Speaker::You => self.you(&turn.text, turn.timecode, &turn.id, cx),
+            // A request can be copied, as an answer can.
+            Speaker::You => {
+                let copy = (!turn.text.trim().is_empty()).then(|| turn.text.clone());
+                let actions = self.turn_actions(&turn.id, copy, None, cx);
+                self.you(&turn.text, turn.timecode, &turn.id, cx)
+                    .child(actions)
+            }
             Speaker::Kerf => {
                 let mut column = div().flex().flex_col().gap(px(10.0));
                 if !turn.steps.is_empty() || turn.seconds.is_some() {
@@ -2295,7 +2361,8 @@ impl ChatView {
     }
 
     /// Your request, set off on the right, with the playhead time it was
-    /// asked at over it, which goes there.
+    /// asked at over it, which goes there. Its words can be chosen with
+    /// the pointer.
     fn you(
         &self,
         words: &str,
@@ -2338,7 +2405,13 @@ impl ChatView {
                     .rounded(px(theme::radius::PANEL))
                     .bg(theme::raised())
                     .text_color(theme::ink())
-                    .child(words.to_owned()),
+                    .child(selectable::selectable(
+                        &self.selections,
+                        ElementId::Name(format!("you-words-{key}").into()),
+                        format!("you-{key}"),
+                        0,
+                        words.to_owned(),
+                    )),
             )
     }
 
@@ -2397,29 +2470,27 @@ impl ChatView {
 
     /// What Kerf said, set for reading: paragraphs (their line breaks kept),
     /// lists, headings and code, with bold, code and timecode links inline.
+    /// Its words can be chosen with the pointer as one run, `key`'s.
     fn prose(&self, words: &str, key: &str, ink: Rgba, cx: &App) -> gpui::Div {
         let mut column = div().flex().flex_col().gap(px(8.0));
         let mut code: Option<Vec<String>> = None;
         let mut paragraph: Vec<String> = Vec::new();
-        let mut pieces = 0usize;
-        let flush = |paragraph: &mut Vec<String>, column: gpui::Div, pieces: &mut usize| {
-            if paragraph.is_empty() {
-                return column;
-            }
-            let text = paragraph.join("\n");
-            paragraph.clear();
-            *pieces += 1;
-            column.child(self.rich(format!("{key}-{pieces}"), &text, ink, cx))
-        };
+        // The pieces so far, and whether the last was a list's item.
+        let mut piece = 0usize;
+        let mut listing = false;
         for line in words.lines() {
             if line.trim_start().starts_with("```") {
                 match code.take() {
-                    Some(lines) => column = column.child(code_block(lines)),
+                    Some(lines) => {
+                        column = column.child(self.code_block(key, piece, lines));
+                        piece += 1;
+                    }
                     None => {
-                        column = flush(&mut paragraph, column, &mut pieces);
+                        column = self.flush(column, key, &mut piece, &mut paragraph, ink, cx);
                         code = Some(Vec::new());
                     }
                 }
+                listing = false;
                 continue;
             }
             if let Some(lines) = code.as_mut() {
@@ -2428,27 +2499,30 @@ impl ChatView {
             }
             let trimmed = line.trim();
             if trimmed.is_empty() {
-                column = flush(&mut paragraph, column, &mut pieces);
+                column = self.flush(column, key, &mut piece, &mut paragraph, ink, cx);
+                listing = false;
             } else if let Some(item) = trimmed
                 .strip_prefix("- ")
                 .or_else(|| trimmed.strip_prefix("* "))
             {
-                column = flush(&mut paragraph, column, &mut pieces);
-                pieces += 1;
+                column = self.flush(column, key, &mut piece, &mut paragraph, ink, cx);
+                let before = if listing { "\n" } else { "\n\n" };
                 column = column.child(
                     div()
                         .flex()
                         .gap(px(8.0))
                         .child(theme::reading(div()).text_color(theme::ink3()).child("•"))
-                        .child(div().flex_1().min_w_0().child(self.rich(
-                            format!("{key}-{pieces}"),
-                            item,
-                            ink,
-                            cx,
-                        ))),
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .child(self.rich(key, piece, before, item, ink, cx)),
+                        ),
                 );
+                piece += 1;
+                listing = true;
             } else if let Some(heading) = trimmed.strip_prefix('#') {
-                column = flush(&mut paragraph, column, &mut pieces);
+                column = self.flush(column, key, &mut piece, &mut paragraph, ink, cx);
                 let words: String = spans(heading.trim_start_matches('#').trim())
                     .into_iter()
                     .map(|span| match span {
@@ -2458,21 +2532,67 @@ impl ChatView {
                         | Span::Timecode(words) => words,
                     })
                     .collect();
-                column = column.child(ui::label(words, text::TITLE, theme::ink()));
+                column = column.child(
+                    theme::type_style(div(), text::TITLE)
+                        .text_color(theme::ink())
+                        .child(selectable::selectable(
+                            &self.selections,
+                            ElementId::Name(format!("{key}-{piece}").into()),
+                            key.to_owned(),
+                            piece,
+                            words,
+                        )),
+                );
+                piece += 1;
+                listing = false;
             } else {
+                if listing {
+                    column = self.flush(column, key, &mut piece, &mut paragraph, ink, cx);
+                }
                 paragraph.push(trimmed.to_owned());
+                listing = false;
             }
         }
         if let Some(lines) = code {
-            column = column.child(code_block(lines));
+            column = column.child(self.code_block(key, piece, lines));
+            piece += 1;
         }
-        flush(&mut paragraph, column, &mut pieces)
+        self.flush(column, key, &mut piece, &mut paragraph, ink, cx)
     }
 
-    /// A paragraph of what Kerf wrote: bold in the medium face, code in mono,
-    /// and each timecode a mono link in accent ink that moves the playhead
-    /// there and brings the picture in.
-    fn rich(&self, id: String, words: &str, ink: Rgba, cx: &App) -> AnyElement {
+    /// The paragraph gathered so far, as a piece of `key`'s run.
+    fn flush(
+        &self,
+        column: gpui::Div,
+        key: &str,
+        piece: &mut usize,
+        paragraph: &mut Vec<String>,
+        ink: Rgba,
+        cx: &App,
+    ) -> gpui::Div {
+        if paragraph.is_empty() {
+            return column;
+        }
+        let text = paragraph.join("\n");
+        paragraph.clear();
+        let element = self.rich(key, *piece, "\n\n", &text, ink, cx);
+        *piece += 1;
+        column.child(element)
+    }
+
+    /// A paragraph of what Kerf wrote, piece `piece` of `key`'s run (after
+    /// `before` when copied with the one before): bold in the medium face,
+    /// code in mono, and each timecode a mono link in accent ink that moves
+    /// the playhead there and brings the picture in. Its words can be chosen.
+    fn rich(
+        &self,
+        key: &str,
+        piece: usize,
+        before: &'static str,
+        words: &str,
+        ink: Rgba,
+        cx: &App,
+    ) -> AnyElement {
         let timeline = self.session.read(cx).timeline();
         let plain = theme::prose_font(FontWeight::NORMAL);
         let strong = theme::prose_font(FontWeight::MEDIUM);
@@ -2508,32 +2628,20 @@ impl ChatView {
                 strikethrough: None,
             });
         }
-        let styled = StyledText::new(shown).with_runs(runs);
-        let paragraph = theme::reading(div()).text_color(ink);
-        if links.is_empty() {
-            return paragraph.child(styled).into_any_element();
-        }
-        // The paragraph takes the press, down and up on one frame, and finds
-        // the link under it in the words as they were laid out; the words
-        // themselves only show the hand over a link.
-        let laid_out = styled.layout().clone();
-        let session = self.session.clone();
-        let ranges = links.clone();
-        paragraph
-            .id(ElementId::Name(format!("{id}-press").into()))
-            .child(
-                InteractiveText::new(ElementId::Name(id.into()), styled)
-                    .on_click(links, |_, _, _| {}),
-            )
-            .on_click(move |event, window, cx| {
-                let Ok(index) = laid_out.index_for_position(event.position()) else {
-                    return;
-                };
-                let Some(at) = ranges
-                    .iter()
-                    .position(|range| range.contains(&index))
-                    .and_then(|link| moments.get(link).copied())
-                else {
+        let mut words = selectable::selectable(
+            &self.selections,
+            ElementId::Name(format!("{key}-{piece}").into()),
+            key.to_owned(),
+            piece,
+            shown,
+        )
+        .runs(runs)
+        .before(before);
+        if !links.is_empty() {
+            // A press on a link that does not drag goes there.
+            let session = self.session.clone();
+            words = words.links(links, move |link, window, cx| {
+                let Some(at) = moments.get(link).copied() else {
                     return;
                 };
                 session.update(cx, |session, cx| {
@@ -2541,8 +2649,28 @@ impl ChatView {
                     cx.notify();
                 });
                 window.dispatch_action(Box::new(RevealPicture), cx);
-            })
+            });
+        }
+        theme::reading(div())
+            .text_color(ink)
+            .child(words)
             .into_any_element()
+    }
+
+    /// Code Kerf wrote, in mono on the well: piece `piece` of `key`'s run.
+    fn code_block(&self, key: &str, piece: usize, lines: Vec<String>) -> gpui::Div {
+        theme::type_style(div(), text::TIMECODE)
+            .p(px(10.0))
+            .rounded(px(theme::radius::CONTROL))
+            .bg(theme::well())
+            .text_color(theme::ink2())
+            .child(selectable::selectable(
+                &self.selections,
+                ElementId::Name(format!("{key}-{piece}").into()),
+                key.to_owned(),
+                piece,
+                lines.join("\n"),
+            ))
     }
 
     // ------------------------------------------------------------ proposals
@@ -3219,6 +3347,7 @@ impl ChatView {
         if started != self.turn_seen {
             self.turn_seen = started;
             self.footage = None;
+            self.taken.clear();
             let timeline = session.timeline();
             self.footage_wanted = started.is_some()
                 && !motion::reduced()
@@ -3255,10 +3384,13 @@ impl ChatView {
         {
             self.built = None;
         }
-        // The picture went back from the stage: the card has it again.
-        if session.picture_open == Some(false) {
+        // The picture went back from the stage: the card has it again. (A
+        // card just pressed, the picture not yet in, keeps it.)
+        let open = session.picture_open;
+        if self.picture_seen == Some(true) && open == Some(false) {
             self.stage_proposal = None;
         }
+        self.picture_seen = open;
     }
 
     /// The card of the first cut Kerf is making: its picture at work, its
@@ -3385,12 +3517,16 @@ impl ChatView {
             let delay = scene::POP_STAGGER.as_secs_f32() * index as f32;
             let pop = scene::POP.as_secs_f32();
             let whole = Duration::from_secs_f32(delay + pop);
+            // Gone on from here to become a clip, its place stays.
+            let taken = self.taken.contains(id);
+            let (tiles, key) = (self.tiles.clone(), id.clone());
             Some(
                 div()
                     .flex()
                     .flex_col()
                     .gap(px(4.0))
                     .w(px(FOOTAGE_TILE.0))
+                    .when(taken, |tile| tile.invisible())
                     .child(
                         div()
                             .relative()
@@ -3399,7 +3535,18 @@ impl ChatView {
                             .rounded(px(theme::radius::SMALL))
                             .overflow_hidden()
                             .bg(theme::well())
-                            .child(poster_layer(poster, theme::radius::SMALL)),
+                            .child(poster_layer(poster, theme::radius::SMALL))
+                            // Where it is, for what goes on from it.
+                            .child(
+                                gpui::canvas(
+                                    move |bounds, _, _| {
+                                        tiles.borrow_mut().insert(key.clone(), bounds);
+                                    },
+                                    |_, _, _, _| {},
+                                )
+                                .absolute()
+                                .inset_0(),
+                            ),
                     )
                     .child(ui::line(name, text::META, theme::ink2()))
                     .with_animation(
@@ -3444,7 +3591,8 @@ impl ChatView {
                     continue;
                 }
             }
-            if entry.separated {
+            // No line over the card's first row.
+            if entry.separated && !folder_rows.is_empty() {
                 folder_rows.push(
                     div()
                         .my(px(4.0))
@@ -3461,9 +3609,6 @@ impl ChatView {
                 entry.words,
                 chosen,
             )
-            .when_some(entry.tip, |row, tip| {
-                row.tooltip(ui::tooltip(ui::Tip::new(tip)))
-            })
             .on_click(cx.listener(move |_, _, window, cx| match &run {
                 Entry::Open(folder) if !chosen => window.dispatch_action(
                     Box::new(crate::commands::OpenRecent {
@@ -3474,7 +3619,15 @@ impl ChatView {
                 Entry::Command(id) => window.dispatch_action(Box::new(RunCommand::new(id)), cx),
                 _ => {}
             }));
-            folder_rows.push(row.into_any_element());
+            folder_rows.push(match entry.tip {
+                Some(tip) => ui::tipped(
+                    ElementId::Name(format!("welcome-folder-tip-{index}").into()),
+                    ui::Tip::new(tip),
+                    row.w_full(),
+                )
+                .into_any_element(),
+                None => row.into_any_element(),
+            });
         }
         let recent: Vec<(String, String)> = recent_conversations(
             &session.state.conversations,
@@ -3507,20 +3660,25 @@ impl ChatView {
                 .into_iter()
                 .map(|(id, title)| {
                     let open = id.clone();
-                    welcome_row(
+                    let row = welcome_row(
                         ElementId::Name(format!("welcome-conversation-{id}").into()),
                         None,
                         title.clone(),
                         false,
                     )
-                    .tooltip(ui::tooltip(ui::Tip::new(title)))
+                    .w_full()
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.session.update(cx, |session, cx| {
                             session.open_conversation(Some(open.clone()));
                             cx.notify();
                         });
                         this.focus_composer(window, cx);
-                    }))
+                    }));
+                    ui::tipped(
+                        ElementId::Name(format!("welcome-conversation-tip-{id}").into()),
+                        ui::Tip::new(title),
+                        row,
+                    )
                     .into_any_element()
                 })
                 .collect()
@@ -3590,10 +3748,15 @@ impl ChatView {
                 .cursor_pointer()
                 .hover(|chip| chip.bg(theme::hover2()).text_color(theme::ink2()))
                 .child(Icon::ChevronDown.view(12.0, theme::ink3()))
-                .when(!open, |chip| chip.tooltip(ui::tooltip(tip)))
                 .on_click(cx.listener(move |this, _, window, cx| {
                     this.toggle_menu(toggle.clone(), window, cx)
                 }));
+        // Its menu says all the tip would, so the tip waits while it is open.
+        let chip = if open {
+            chip.into_any_element()
+        } else {
+            ui::tipped(ElementId::Name(format!("{id}-tip").into()), tip, chip).into_any_element()
+        };
         let mut wrapper = div().relative().flex_none().child(chip);
         if let Some(body) = self.kit_menu.clone().filter(|_| open) {
             wrapper = wrapper.child(
@@ -3627,12 +3790,15 @@ impl ChatView {
             .cursor_pointer()
             .hover(|meter| meter.bg(theme::hover2()))
             .child(context_ring(fraction, color))
-            .when(!open, |meter| {
-                meter.tooltip(ui::tooltip(ui::Tip::new(context.describe())))
-            })
             .on_click(
                 cx.listener(|this, _, window, cx| this.toggle_menu(Menu::Context, window, cx)),
             );
+        let meter = if open {
+            meter.into_any_element()
+        } else {
+            ui::tipped("context-meter-tip", ui::Tip::new(context.describe()), meter)
+                .into_any_element()
+        };
         let mut wrapper = div().relative().flex_none().child(meter);
         if open {
             let card = menu_frame(px(260.0), cx)
@@ -4011,18 +4177,20 @@ impl ChatView {
                     .bg(theme::raised())
                     .border_1()
                     .border_color(theme::line2())
-                    .child(
+                    .child({
                         // Refused, a hover over the words says why.
-                        div()
+                        let field = div()
                             .id("composer-field")
                             .w_full()
-                            .when_some(refused.clone(), |field, reason| {
-                                field.tooltip(move |_, cx| {
-                                    cx.new(|_| ui::Tooltip(reason.clone().into())).into()
-                                })
-                            })
-                            .child(self.composer.clone()),
-                    )
+                            .child(self.composer.clone());
+                        match refused.clone() {
+                            Some(reason) => {
+                                ui::tipped("composer-field-tip", ui::Tip::new(reason), field)
+                                    .into_any_element()
+                            }
+                            None => field.into_any_element(),
+                        }
+                    })
                     .child(
                         div()
                             .flex()
@@ -4067,9 +4235,8 @@ impl ChatView {
                                     Some(reason) => ui::Tip::new(reason),
                                     None => ui::Tip::new("Send").key("↩"),
                                 };
-                                div()
+                                let send = div()
                                     .id("send")
-                                    .tooltip(ui::tooltip(tip))
                                     .size(px(28.0))
                                     .flex()
                                     .items_center()
@@ -4090,8 +4257,8 @@ impl ChatView {
                                     ))
                                     .on_click(
                                         cx.listener(|this, _, window, cx| this.send(window, cx)),
-                                    )
-                                    .into_any_element()
+                                    );
+                                ui::tipped("send-tip", tip, send).into_any_element()
                             }),
                     ),
             )
@@ -4238,7 +4405,7 @@ pub fn reel_strip(session: &Entity<Session>, cx: &App) -> Option<AnyElement> {
 /// The stamp: the request goes without the playhead's time, which shows
 /// struck through; pressed, the time goes with requests again.
 fn stamp_chip(timecode: String, cx: &Context<ChatView>) -> AnyElement {
-    theme::type_style(div(), text::TIMECODE)
+    let chip = theme::type_style(div(), text::TIMECODE)
         .id("composer-stamp")
         .flex()
         .flex_none()
@@ -4252,7 +4419,6 @@ fn stamp_chip(timecode: String, cx: &Context<ChatView>) -> AnyElement {
         .hover(|chip| chip.bg(theme::hover2()))
         .child(Icon::Clock.view(12.0, theme::ink3()))
         .child(div().line_through().child(timecode))
-        .tooltip(ui::tooltip(ui::Tip::new("Time not sent · click to send")))
         .on_click(cx.listener(|this, _, _, cx| {
             this.session.update(cx, |session, cx| {
                 session.prefs.send_playhead = true;
@@ -4260,8 +4426,13 @@ fn stamp_chip(timecode: String, cx: &Context<ChatView>) -> AnyElement {
                 cx.notify();
             });
             cx.notify();
-        }))
-        .into_any_element()
+        }));
+    ui::tipped(
+        "composer-stamp-tip",
+        ui::Tip::new("Time not sent · click to send"),
+        chip,
+    )
+    .into_any_element()
 }
 
 /// The context ring: a 14 pt circle filled clockwise from the top as the
@@ -4343,22 +4514,14 @@ fn menu_frame(width: gpui::Pixels, cx: &Context<ChatView>) -> gpui::Div {
         .on_mouse_down_out(cx.listener(|this, _, _, cx| this.close_menu(cx)))
 }
 
-/// What opens from a press, fading in where it is over `FADE`.
+/// What opens from a press, fading in over `FADE` as it rises
+/// `MENU_RISE` into place, as the kit's menus do.
 fn fade_in(body: impl IntoElement, id: String) -> impl IntoElement {
-    div().child(body).with_animation(
+    div().relative().child(body).with_animation(
         ElementId::Name(id.into()),
         motion::animation(scene::FADE),
-        |menu, t| menu.opacity(t),
+        |menu, t| menu.opacity(t).top(px(scene::MENU_RISE * (1.0 - t))),
     )
-}
-
-fn code_block(lines: Vec<String>) -> gpui::Div {
-    theme::type_style(div(), text::TIMECODE)
-        .p(px(10.0))
-        .rounded(px(theme::radius::CONTROL))
-        .bg(theme::well())
-        .text_color(theme::ink2())
-        .child(lines.join("\n"))
 }
 
 /// A proposal's changed lines, its additions sage and removals brick.
@@ -4901,10 +5064,11 @@ impl ChatView {
         let leave_id = id.to_owned();
         let open_id = id.to_owned();
         let interactive = !state.working;
-        let picture = picture.when(interactive && !state.on_stage, |picture| {
+        let tipped = interactive && !state.on_stage;
+        let tip_id = ElementId::Name(format!("cut-picture-tip-{id}").into());
+        let picture = picture.when(tipped, |picture| {
             picture
                 .cursor_pointer()
-                .tooltip(ui::tooltip(ui::Tip::new("Open on the stage")))
                 .on_mouse_move(
                     cx.listener(move |this, event: &gpui::MouseMoveEvent, _, cx| {
                         let Some(bounds) = this.pictures.borrow().get(&scrub_id).copied() else {
@@ -4994,15 +5158,21 @@ impl ChatView {
             .flex_col()
             .p(px(CARD_PICTURE_RING))
             .pb(px(CARD_PICTURE_RING + 4.0))
-            .child(picture)
+            .child(if tipped {
+                ui::tipped(tip_id, ui::Tip::new("Open on the stage"), picture).into_any_element()
+            } else {
+                picture.into_any_element()
+            })
             .children(line)
             .child(rim)
             .into_any_element()
     }
 
     /// The picture of cut `id` comes in from its card: the stage shows it
-    /// (rendered when it is not yet), and the card says it is there.
-    fn open_cut(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
+    /// (rendered when it is not yet), growing out of the card's picture
+    /// (the window's [`ChatEvent::GrowPicture`]), and the card says it is
+    /// there.
+    fn open_cut(&mut self, id: String, _window: &mut Window, cx: &mut Context<Self>) {
         self.stage_proposal = Some(id.clone());
         self.scrub = None;
         self.session.update(cx, |session, cx| {
@@ -5013,10 +5183,120 @@ impl ChatView {
             }
             cx.notify();
         });
-        window.dispatch_action(Box::new(RevealPicture), cx);
+        cx.emit(ChatEvent::GrowPicture { proposal: id });
         cx.notify();
     }
+
+    /// The cut whose picture went to the stage from its card, while it is there.
+    pub fn stage_proposal(&self) -> Option<&str> {
+        self.stage_proposal.as_deref()
+    }
+
+    /// Where the visible part of the conversation was last laid out.
+    fn in_sight(&self, bounds: gpui::Bounds<gpui::Pixels>) -> bool {
+        let view = self.scroll.bounds();
+        view.size.width > px(0.0) && in_sight(bounds, view)
+    }
+
+    /// Where cut `proposal`'s card shows its picture in the window, as last
+    /// laid out, while it is in sight: what the stage grows out of, and
+    /// what it goes back into.
+    pub fn cut_picture_bounds(&self, proposal: &str) -> Option<gpui::Bounds<gpui::Pixels>> {
+        let pictures = self.pictures.borrow();
+        let bounds = pictures.get(proposal).copied().or_else(|| {
+            pictures
+                .iter()
+                .find(|(id, _)| self.book.same(id, proposal))
+                .map(|(_, bounds)| *bounds)
+        })?;
+        self.in_sight(bounds).then_some(bounds)
+    }
+
+    /// The poster cut `proposal`'s card shows now (the clip under the
+    /// pointer, else its first), to stand in as its picture grows.
+    pub fn cut_poster(&self, proposal: &str, cx: &App) -> Option<Arc<RenderImage>> {
+        let session = self.session.read(cx);
+        let (shown, cut) = session.first_cut()?;
+        if !self.book.same(&shown.proposal_id, proposal) {
+            return None;
+        }
+        let (frames, duration) = cut_frames(cut);
+        let posters: Vec<Option<Arc<RenderImage>>> = frames
+            .iter()
+            .map(|(_, source)| session.artwork.poster(source))
+            .collect();
+        let scrub = self
+            .scrub
+            .as_ref()
+            .filter(|(over, _)| self.book.same(over, proposal))
+            .map(|(_, across)| *across);
+        let shown = shown_frame(
+            &frames
+                .iter()
+                .zip(&posters)
+                .map(|((at, _), poster)| (*at, poster.is_some()))
+                .collect::<Vec<_>>(),
+            duration,
+            scrub,
+            false,
+        )?;
+        posters.get(shown).cloned().flatten()
+    }
+
+    /// Where media `source`'s footage tile shows in the window, as last
+    /// laid out, while it is in sight and has not gone on.
+    pub fn footage_tile_bounds(&self, source: &str) -> Option<gpui::Bounds<gpui::Pixels>> {
+        if self.taken.contains(source) {
+            return None;
+        }
+        let bounds = self.tiles.borrow().get(source).copied()?;
+        self.in_sight(bounds).then_some(bounds)
+    }
+
+    /// Footage `source` has gone on from its tile (to become a clip): its
+    /// place stays, empty, until the sheet goes.
+    pub fn take_footage(&mut self, source: &str, cx: &mut Context<Self>) {
+        if self.taken.insert(source.to_owned()) {
+            cx.notify();
+        }
+    }
+
+    /// Where what comes from the conversation with no tile of its own
+    /// leaves from: a poster's room over the composer's middle, as Qt's.
+    pub fn over_composer(&self) -> Option<gpui::Bounds<gpui::Pixels>> {
+        self.composer_at.get().map(over_composer)
+    }
 }
+
+/// Whether `bounds` lies whole inside the conversation's visible part
+/// `view` (a point either way spared): only then does a picture go into it
+/// or come out of it, as Qt's.
+pub fn in_sight(bounds: gpui::Bounds<gpui::Pixels>, view: gpui::Bounds<gpui::Pixels>) -> bool {
+    let spare = px(1.0);
+    bounds.left() >= view.left() - spare
+        && bounds.right() <= view.right() + spare
+        && bounds.top() >= view.top() - spare
+        && bounds.bottom() <= view.bottom() + spare
+}
+
+/// Where what comes from the conversation with no tile of its own leaves
+/// from, over a composer laid out at `composer`: a poster's room,
+/// `OVER_COMPOSER` big, centred over it and `OVER_COMPOSER_RISE` above its
+/// top, as Qt's flightStart.
+pub fn over_composer(composer: gpui::Bounds<gpui::Pixels>) -> gpui::Bounds<gpui::Pixels> {
+    let (width, height) = OVER_COMPOSER;
+    gpui::Bounds::new(
+        point(
+            composer.center().x - px(width / 2.0),
+            composer.top() - px(OVER_COMPOSER_RISE),
+        ),
+        gpui::size(px(width), px(height)),
+    )
+}
+
+/// The room over the composer a flight leaves from, and how far above the
+/// composer's top it starts.
+pub use crate::theme::layout::{OVER_COMPOSER, OVER_COMPOSER_RISE};
 
 /// A poster filling the picture's box, cut to its shape.
 fn poster_layer(poster: Arc<RenderImage>, radius: f32) -> impl IntoElement {
@@ -5038,6 +5318,10 @@ impl Render for ChatView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.refresh_keys(cx);
         self.follow_turn(cx);
+        // What is laid out this frame says again where it is.
+        self.selections.borrow_mut().begin_frame();
+        self.pictures.borrow_mut().clear();
+        self.tiles.borrow_mut().clear();
         let session = self.session.read(cx);
         let turns = session
             .state
@@ -5180,10 +5464,21 @@ impl Render for ChatView {
                     .pb(px(16.0))
                     .child(
                         div()
+                            .relative()
                             .w_full()
                             .min_w_0()
                             .max_w(px(layout::CONVERSATION_COLUMN))
-                            .child(composer),
+                            .child(composer)
+                            // Where it is, for what comes from over it.
+                            .child({
+                                let at = self.composer_at.clone();
+                                gpui::canvas(
+                                    move |bounds, _, _| at.set(Some(bounds)),
+                                    |_, _, _, _| {},
+                                )
+                                .absolute()
+                                .inset_0()
+                            }),
                     ),
             )
     }

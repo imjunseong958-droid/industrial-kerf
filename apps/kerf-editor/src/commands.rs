@@ -50,7 +50,65 @@ gpui::actions!(kerf, [ClearRecent, RecentMissing, NoRecent]);
 
 // Unavailable: a menu bar row of the registry's that cannot run now (see
 // [`MenuStates`]). Nothing carries it out, so the menu bar greys it.
-gpui::actions!(kerf, [Unavailable]);
+// NoOtherBranches: Collaborate ▸ Switch Branch's row when there is no
+// branch but this one; greyed the same way.
+gpui::actions!(kerf, [Unavailable, NoOtherBranches]);
+
+/// Collaborate ▸ Switch Branch in the menu bar: the branches of the
+/// window in front other than the one it is on, and whether switching is
+/// held back now (as a sync is: kerfd away, project.kerf changed on disk,
+/// no repository). The window's sync chip sets it as it draws
+/// ([`set_menu_branches`]).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct MenuBranches {
+    pub others: Vec<String>,
+    pub blocked: bool,
+}
+
+impl gpui::Global for MenuBranches {}
+
+/// Sets the menu bar again when the branches of the window in front have
+/// changed since they were last set.
+pub fn set_menu_branches(branches: MenuBranches, cx: &mut App) {
+    if cx.try_global::<MenuBranches>() == Some(&branches) {
+        return;
+    }
+    cx.set_global(branches);
+    let current = cx.default_global::<ShownStates>().current.clone();
+    refresh_menus(current.as_deref(), cx);
+}
+
+/// Collaborate ▸ Switch Branch as a submenu, as Qt's buildBranchMenu made
+/// it: each other branch, switching to it; "No Other Branches" (greyed)
+/// when there is none. Held back, each branch is greyed.
+pub fn branch_menu(branches: &MenuBranches) -> gpui::Menu {
+    let mut items: Vec<gpui::MenuItem> = branches
+        .others
+        .iter()
+        .map(|branch| {
+            if branches.blocked {
+                gpui::MenuItem::action(branch.clone(), Unavailable)
+            } else {
+                gpui::MenuItem::action(
+                    branch.clone(),
+                    crate::sidebar::SwitchBranch {
+                        name: branch.clone().into(),
+                    },
+                )
+            }
+        })
+        .collect();
+    if items.is_empty() {
+        items.push(gpui::MenuItem::action(
+            crate::finish::NO_OTHER_BRANCHES,
+            NoOtherBranches,
+        ));
+    }
+    gpui::Menu {
+        name: "Switch Branch".into(),
+        items,
+    }
+}
 
 /// How the registry's commands stand in the window in front, for the menu
 /// bar: those that cannot run now (greyed), and the switches that are on
@@ -171,11 +229,13 @@ pub fn recent_menu(recent: &[PathBuf], current: Option<&Path>) -> gpui::Menu {
 pub fn refresh_menus(current: Option<&Path>, cx: &mut App) {
     let prefs = crate::prefs::Prefs::load();
     let states = cx.default_global::<ShownStates>().states.clone();
-    cx.set_menus(menus_with_states(
+    let branches = cx.default_global::<MenuBranches>().clone();
+    cx.set_menus(menus_with_branches(
         prefs.keymap.wire(),
         &prefs.recent,
         current,
         &states,
+        &branches,
     ));
 }
 
@@ -465,6 +525,18 @@ pub fn menus_with_states(
     current: Option<&Path>,
     states: &MenuStates,
 ) -> Vec<gpui::Menu> {
+    menus_with_branches(keymap, recent, current, states, &MenuBranches::default())
+}
+
+/// [`menus_with_states`], Collaborate ▸ Switch Branch a submenu of
+/// `branches` ([`branch_menu`]).
+pub fn menus_with_branches(
+    keymap: &str,
+    recent: &[PathBuf],
+    current: Option<&Path>,
+    states: &MenuStates,
+    branches: &MenuBranches,
+) -> Vec<gpui::Menu> {
     let commands = catalog(keymap);
     let order: Vec<String> = kerf_bridge::commands_catalog(keymap)["menus"]
         .as_array()
@@ -500,6 +572,11 @@ pub fn menus_with_states(
                 items.push(gpui::MenuItem::separator());
             }
             group = Some(command.group);
+            // Switch Branch needs a branch: it opens on the others.
+            if command.id == "collab.switchBranch" {
+                items.push(gpui::MenuItem::submenu(branch_menu(branches)));
+                continue;
+            }
             let label = menu_label(command, states.checked.contains(&command.id));
             items.push(if states.unavailable.contains(&command.id) {
                 gpui::MenuItem::action(label, Unavailable)

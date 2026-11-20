@@ -565,16 +565,42 @@ pub mod motion {
     pub const FLIGHT_LAND: Duration = ms(240);
     /// Between tiles flying one after another.
     pub const FLIGHT_STAGGER: Duration = ms(160);
+    /// How long before the picture has grown the timeline starts to come
+    /// in (Qt's timelineLead).
+    pub const TIMELINE_LEAD: Duration = ms(150);
+    /// How long what stood in for the picture takes to fade once the
+    /// picture has grown (Qt's standInRelease).
+    pub const STAND_IN_RELEASE: Duration = ms(260);
+    /// The most the picture's stand-in holds where it landed while its
+    /// picture is coming.
+    pub const STAND_IN_MOST: Duration = ms(6000);
+    /// How long a clip a cut placed waits for the timeline to draw it
+    /// before it is let go without flying.
+    pub const FLIGHT_WAIT: Duration = ms(6000);
     /// How long a press waits to learn it was the first of a double-click
     /// (the sidebar's edge: one press puts it away, two reset its width).
     pub const DOUBLE_CLICK: Duration = ms(400);
     /// How often the bridge is asked for events and frames.
     pub const POLL: Duration = ms(16);
+    /// How long `--screenshot` waits, once the run's time is up, for the
+    /// window to draw a frame before it reads back what is there.
+    pub const CAPTURE_FRAME_WAIT: Duration = ms(3000);
+    /// While it waits, how often a window that waits for an event to draw
+    /// (an X server with no window manager) is woken again: one wake can
+    /// go unheard.
+    pub const CAPTURE_REWAKE: Duration = ms(500);
+    /// And, when it had drawn nothing before (woken for the capture), how
+    /// long what comes in is given to be in place: the longest a scene
+    /// takes to come in (`STAGE`), with room.
+    pub const CAPTURE_SETTLE: Duration = ms(1200);
     /// How long a notice stays at the conversation's foot (Qt's 6 s).
     pub const NOTICE_HOLD: Duration = ms(6000);
     /// And one saying what went wrong, which takes longer to read (a
     /// failed push's ssh and git lines, an import's refusal).
     pub const NOTICE_ERROR_HOLD: Duration = ms(12000);
+    /// What a sync brought and sent ("Synced: 2 commits in, pushed"), a
+    /// pull request's line, and a cast saved, as Qt held them (8 s).
+    pub const NOTICE_LONG_HOLD: Duration = ms(8000);
 
     /// Where a flight lands in a row, as Qt landed it: in from the row's
     /// left and top (and as far up from its bottom), and how wide.
@@ -687,6 +713,18 @@ pub mod layout {
     pub const AUDIO_LANE: f32 = 36.0;
     pub const SUBTITLE_LANE: f32 = 26.0;
     pub const TRANSPORT: f32 = 40.0;
+    /// With the picture pane closed, the transport in the timeline's strip:
+    /// from its last button to the timecode (Qt's kTransportGap), and from
+    /// the strip's edge to its first (Qt's kStripEdge, the first button's
+    /// middle 16 in).
+    pub const STRIP_TRANSPORT_GAP: f32 = 28.0;
+    pub const STRIP_EDGE: f32 = 4.0;
+    /// Between the strip transport's buttons.
+    pub const STRIP_TRANSPORT_SPACING: f32 = 4.0;
+    /// Room past what it needs before a strip that let go of some of its
+    /// pieces (`timeline::StripFit`) shows them again, so a width on the
+    /// edge does not show and hide them by turns.
+    pub const STRIP_REGROW: f32 = 2.0;
     /// The chosen clip's inspector, beside the picture.
     pub const INSPECTOR: f32 = 300.0;
     /// The tallest the composer grows with its lines before it scrolls.
@@ -734,9 +772,17 @@ pub mod layout {
     pub const TIP_EDGE: f32 = 8.0;
     pub const TIP_FLIP_BELOW: f32 = 540.0;
     pub const TIP_FLIP_ABOVE: f32 = 100.0;
+    /// The widest a tip's words are set before they wrap.
+    pub const TIP_MOST: f32 = 420.0;
     /// A menu's row, and how wide a menu is at least.
     pub const MENU_ROW: f32 = 30.0;
     pub const MENU_LEAST: f32 = 180.0;
+    /// A menu's padding inside its edge, and the height a line between its
+    /// groups takes.
+    pub const MENU_PAD: f32 = 4.0;
+    pub const MENU_SEPARATOR: f32 = 9.0;
+    /// How wide a Media tile's menu is.
+    pub const MEDIA_MENU_WIDTH: f32 = 272.0;
     /// A cut's picture on its card: at most this wide, an upright one at
     /// most this tall; the room round it for the light; the play mark.
     pub const CARD_PICTURE_WIDEST: f32 = 440.0;
@@ -745,6 +791,20 @@ pub mod layout {
     pub const CARD_PLAY_MARK: f32 = 40.0;
     /// A footage tile under a request.
     pub const FOOTAGE_TILE: (f32, f32) = (112.0, 63.0);
+    /// The room over the composer a flight leaves from when it has no tile
+    /// to leave from, and how far above the composer's top it starts (Qt's
+    /// flightStart).
+    pub const OVER_COMPOSER: (f32, f32) = (128.0, 72.0);
+    pub const OVER_COMPOSER_RISE: f32 = 84.0;
+    /// A clip in flight to the timeline: how wide its ring is, and how tall
+    /// it must be to carry its name.
+    pub const CLIP_FLIGHT_RING: f32 = 2.0;
+    pub const CLIP_FLIGHT_NAMED: f32 = 24.0;
+    /// The widest the chip over the picture is: what a making last said is
+    /// cut short past it, and said whole in its tip.
+    pub const CHIP_MOST: f32 = 420.0;
+    /// Points the chip stands in from the picture's top left.
+    pub const CHIP_IN: f32 = 12.0;
     /// How wide a new conversation's column of folders and conversations is.
     pub const WELCOME_COLUMN: f32 = 384.0;
     /// The Ask popover: its width, about its height, how far it keeps from

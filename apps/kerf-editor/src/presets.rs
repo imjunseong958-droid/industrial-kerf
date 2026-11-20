@@ -18,9 +18,9 @@ use crate::store::Change;
 use crate::theme::{self, radius, text};
 use crate::ui;
 use gpui::{
-    div, prelude::*, px, AnyView, App, ClickEvent, Context, DismissEvent, ElementId, Entity,
-    EventEmitter, FocusHandle, Focusable, FontWeight, KeyBinding, PathPromptOptions, SharedString,
-    Subscription, Window,
+    div, prelude::*, px, App, ClickEvent, Context, DismissEvent, ElementId, Entity, EventEmitter,
+    FocusHandle, Focusable, FontWeight, KeyBinding, PathPromptOptions, SharedString, Subscription,
+    Window,
 };
 use serde_json::{json, Map, Value};
 use std::io::Write as _;
@@ -549,11 +549,6 @@ fn bind_keys(cx: &mut App) {
             KeyBinding::new("enter", AcceptDialog, Some(CONTEXT)),
         ]);
     }
-}
-
-fn tip(words: impl Into<SharedString>) -> impl Fn(&mut Window, &mut App) -> AnyView + 'static {
-    let words: SharedString = words.into();
-    move |_, cx| cx.new(|_| ui::Tooltip(words.clone())).into()
 }
 
 /// File ▸ Import Editing Preset…: asks for a `.kerfpreset` file, then hands
@@ -1272,13 +1267,15 @@ impl Render for ApplyPreset {
                                 .children(made.iter().enumerate().map(|(index, entry)| {
                                     let id = entry["id"].as_str().unwrap_or_default();
                                     let steps: Vec<&str> = strings(&entry["steps"]).collect();
-                                    ui::label(
-                                        format!("{id}, {}", made_kind(entry)),
-                                        text::CONTROL,
-                                        theme::ink(),
+                                    ui::tip_on(
+                                        ui::label(
+                                            format!("{id}, {}", made_kind(entry)),
+                                            text::CONTROL,
+                                            theme::ink(),
+                                        )
+                                        .id(("preset-made", index)),
+                                        Some(ui::Tip::new(steps.join("\n"))),
                                     )
-                                    .id(("preset-made", index))
-                                    .tooltip(tip(steps.join("\n")))
                                 }))
                                 .child(ui::label(
                                     "Made after applying, with Make… in the bin. They need no file.",
@@ -1289,19 +1286,21 @@ impl Render for ApplyPreset {
                 );
             }
             body = body.children(self.texts.iter().enumerate().map(|(index, text_slot)| {
-                div()
-                    .id(("preset-text", index))
-                    .flex()
-                    .items_center()
-                    .gap(px(theme::space::S12))
-                    .py(px(theme::space::S6))
-                    .tooltip(tip(text_slot.clip.clone()))
-                    .child(
-                        ui::label(format!("Text {}", index + 1), text::CONTROL, theme::ink2())
-                            .w(px(120.0))
-                            .flex_none(),
-                    )
-                    .child(field(&text_slot.input, window, cx).flex_1())
+                ui::tip_on(
+                    div()
+                        .id(("preset-text", index))
+                        .flex()
+                        .items_center()
+                        .gap(px(theme::space::S12))
+                        .py(px(theme::space::S6))
+                        .child(
+                            ui::label(format!("Text {}", index + 1), text::CONTROL, theme::ink2())
+                                .w(px(120.0))
+                                .flex_none(),
+                        )
+                        .child(field(&text_slot.input, window, cx).flex_1()),
+                    Some(ui::Tip::new(text_slot.clip.clone())),
+                )
             }));
         } else if self.problem.is_none() {
             body = body.child(ui::label("Reading the preset…", text::BODY, theme::ink3()));
@@ -1359,15 +1358,15 @@ impl Render for ApplyPreset {
                         })),
                 )
             });
-        let create = div()
-            .id("preset-create-wrap")
-            .when_some(waiting, |wrap, why| wrap.tooltip(tip(why)))
-            .child(
-                ui::button("preset-create", "Create Proposal")
-                    .primary()
-                    .disabled(waiting.is_some())
-                    .on_click(cx.listener(|this, _, _, cx| this.accept(cx))),
-            );
+        // Greyed, its tip says what it waits for.
+        let create = ui::button("preset-create", "Create Proposal")
+            .primary()
+            .disabled(waiting.is_some())
+            .on_click(cx.listener(|this, _, _, cx| this.accept(cx)));
+        let create = match waiting {
+            Some(why) => create.reason(why),
+            None => create,
+        };
         div()
             .key_context(CONTEXT)
             .track_focus(&self.focus)

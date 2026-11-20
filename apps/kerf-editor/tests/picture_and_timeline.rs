@@ -223,10 +223,15 @@ fn a_fitted_picture_fills_the_canvas_and_a_moved_one_goes_where_it_is_moved() {
     close(start.1, 0.5, 1e-9, "path down");
     assert_eq!(moved.clip_time, 1.0);
 
-    // What draws no picture, and what is in depth, has nothing to place.
-    for id in ["s", "c", "deep", "nowhere"] {
+    // What draws no picture has nothing to place.
+    for id in ["s", "c", "nowhere"] {
         assert!(placement(&timeline, id, 1.0).is_none(), "{id}");
     }
+    // In depth and at rest, the camera sees it as it is flat.
+    let deep = placement(&timeline, "deep", 1.0).expect("in depth, at rest");
+    let corner = deep.picture.apply((1.0, 1.0));
+    close(corner.0, 1920.0, 1e-6, "in depth, right");
+    close(corner.1, 1080.0, 1e-6, "in depth, bottom");
 }
 
 #[test]
@@ -249,9 +254,12 @@ fn a_motion_path_starts_from_the_clip_towards_the_middle_of_the_canvas() {
         Some(json!({"op": "set", "clip": "right", "props": {"path": "0,0 -0.25,0"}}))
     );
     // One with a path has its path; what draws no picture has none to start.
-    for id in ["b", "s", "c", "deep"] {
+    for id in ["b", "s", "c"] {
         assert_eq!(start_path(&timeline, id, 1.0), None, "{id}");
     }
+    // One in depth starts its path on the plane it is on.
+    let deep = start_path(&timeline, "deep", 7.0).expect("a path in depth");
+    assert_eq!(deep["props"]["path"], "0,0 0.25,0");
 }
 
 #[test]

@@ -1771,7 +1771,7 @@ impl InspectorView {
             tip.push_str("Double-click to reset.");
         }
         let (clip_id, key) = (clip.id.clone(), field.clone());
-        div()
+        let label = div()
             .id(field.id("label"))
             .w(px(LABEL))
             .flex_none()
@@ -1781,10 +1781,6 @@ impl InspectorView {
                 text::CONTROL,
                 theme::ink2(),
             ))
-            .when(!tip.is_empty(), |label| {
-                let tip: SharedString = tip.into();
-                label.tooltip(move |_, cx| cx.new(|_| ui::Tooltip(tip.clone())).into())
-            })
             .when(resettable, |label| {
                 label.on_mouse_down(
                     MouseButton::Left,
@@ -1794,8 +1790,8 @@ impl InspectorView {
                         }
                     }),
                 )
-            })
-            .into_any_element()
+            });
+        ui::tip_on(label, (!tip.is_empty()).then(|| ui::Tip::new(tip))).into_any_element()
     }
 
     fn number_row(
@@ -2737,8 +2733,20 @@ const FORMATS: [(&str, &str, u32, u32); 4] = [
     ("Portrait", "4:5", 1080, 1350),
 ];
 
-/// Which of [`FORMATS`] a sequence `width` × `height` is.
-fn format_index(width: u32, height: u32) -> Option<usize> {
+/// The format beside `chosen` in the toolbar's bank (Right: `forward`,
+/// else Left): the next one, none past either end; from a size of its own
+/// (None), the first or the last.
+pub fn format_beside(chosen: Option<usize>, forward: bool) -> Option<usize> {
+    match chosen {
+        Some(at) if forward => (at + 1 < FORMATS.len()).then_some(at + 1),
+        Some(at) => at.checked_sub(1).filter(|before| *before < FORMATS.len()),
+        None if forward => Some(0),
+        None => Some(FORMATS.len() - 1),
+    }
+}
+
+/// Which of the bank's formats a sequence `width` × `height` is.
+pub fn format_index(width: u32, height: u32) -> Option<usize> {
     FORMATS
         .iter()
         .position(|(_, _, w, h)| *w == width && *h == height)
@@ -2746,14 +2754,32 @@ fn format_index(width: u32, height: u32) -> Option<usize> {
 
 /// The sequence's shape, chosen from a few (16:9, 9:16, 1:1, 4:5), in the toolbar.
 /// The one the snapshot has is filled; another size fills none and says so.
+///
+/// It is one Tab stop, between the title and the sync chip: ringed while it
+/// has the keys, Left and Right choose the format beside the one it is.
 pub struct FormatBank {
     session: Entity<Session>,
+    focus: gpui::FocusHandle,
 }
 
 impl FormatBank {
     pub fn new(session: Entity<Session>, _window: &mut Window, cx: &mut Context<Self>) -> Self {
         cx.observe(&session, |_, _, cx| cx.notify()).detach();
-        Self { session }
+        Self {
+            session,
+            focus: cx.focus_handle().tab_stop(true),
+        }
+    }
+
+    /// Left (`forward` false) or Right from the format it is: the one
+    /// beside it, none past either end; from a size of its own, the first
+    /// or the last.
+    fn step(&mut self, forward: bool, cx: &mut Context<Self>) {
+        let timeline = self.session.read(cx).timeline();
+        let chosen = format_index(timeline.width, timeline.height);
+        if let Some(next) = format_beside(chosen, forward) {
+            self.choose(next, cx);
+        }
     }
 
     /// The sequence becomes format `index` (Landscape 16:9, Vertical 9:16,
@@ -2779,28 +2805,36 @@ impl FormatBank {
 }
 
 impl Render for FormatBank {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let session = self.session.read(cx);
         let timeline = session.timeline();
         let (width, height) = (timeline.width, timeline.height);
         if !session.has_project() || !session.state.has_snapshot || width == 0 || height == 0 {
             return div().into_any_element();
         }
+        let focused = self.focus.is_focused(window);
+        let noted = self.focus.clone();
         let chosen = format_index(width, height);
         let custom: Option<SharedString> = chosen
             .is_none()
             .then(|| format!("Custom · {width} × {height}").into());
-        div()
+        let bank = div()
             .id("format-bank")
+            .relative()
+            .track_focus(&self.focus)
+            .key_context(ui::CONTROL_SEGMENTED)
+            // The pointer leaves the keys where they were: the ring is the keyboard's.
+            .capture_any_mouse_down(|_, window, _| window.prevent_default())
+            .on_action(|_: &ui::FocusNext, window, cx| ui::tab_to(true, window, cx))
+            .on_action(|_: &ui::FocusPrevious, window, cx| ui::tab_to(false, window, cx))
+            .on_action(cx.listener(|this, _: &ui::SegmentNext, _, cx| this.step(true, cx)))
+            .on_action(cx.listener(|this, _: &ui::SegmentPrevious, _, cx| this.step(false, cx)))
             .flex()
             .flex_none()
             .p(px(space::S2))
             .gap(px(space::S2))
             .rounded(px(radius::CONTROL + 1.0))
             .bg(theme::raised())
-            .when_some(custom, |bank, tip| {
-                bank.tooltip(move |_, cx| cx.new(|_| ui::Tooltip(tip.clone())).into())
-            })
             .children(
                 FORMATS
                     .iter()
@@ -2808,7 +2842,7 @@ impl Render for FormatBank {
                     .map(|(index, (name, ratio, w, h))| {
                         let selected = chosen == Some(index);
                         let tip: SharedString = format!("{name} {ratio} · {w}×{h}").into();
-                        theme::type_style(
+                        let segment = theme::type_style(
                             div(),
                             if selected {
                                 text::CONTROL_STRONG
@@ -2832,14 +2866,28 @@ impl Render for FormatBank {
                         .when(!selected, |segment| {
                             segment.hover(|style| style.text_color(theme::ink()))
                         })
-                        .tooltip(move |_, cx| cx.new(|_| ui::Tooltip(tip.clone())).into())
+                        // Over a segment, its own tip and not the bank's.
+                        .block_mouse_except_scroll()
                         .child(*ratio)
                         .on_click(
                             cx.listener(move |this, _: &ClickEvent, _, cx| this.choose(index, cx)),
-                        )
+                        );
+                        ui::tip_on(segment, Some(ui::Tip::new(tip)))
                     }),
             )
-            .into_any_element()
+            .when(focused, |bank| bank.child(ui::ring(radius::CONTROL + 1.0)))
+            // Folded away to nothing (the toolbar too narrow), Tab passes it over.
+            .child(
+                canvas(
+                    move |bounds, window, _| ui::note_shown(&noted, bounds, window),
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full(),
+            );
+        ui::tip_on(bank, custom.map(ui::Tip::new)).into_any_element()
     }
 }
 

@@ -22,7 +22,7 @@ use crate::settings::{Page, SettingsEvent, SettingsView};
 use crate::theme::{self, height, radius, text};
 use crate::ui::{self, icon_button};
 use gpui::{
-    div, img, prelude::*, px, AnimationExt, AnyView, App, Context, ElementId, Entity, EventEmitter,
+    div, img, prelude::*, px, AnimationExt, App, Context, ElementId, Entity, EventEmitter,
     FocusHandle, Focusable, FontWeight, KeyBinding, Keystroke, MouseButton, PathPromptOptions,
     PromptButton, PromptLevel, SharedString, Subscription, Task, Window,
 };
@@ -2091,7 +2091,11 @@ impl LauncherView {
                 })
                 .cursor_pointer()
                 .hover(|style| style.bg(theme::card()))
-                .tooltip(tip(choice.path.display().to_string()))
+                .relative()
+                .child(ui::tip_zone(
+                    ElementId::named_usize("launcher-preset-tip", index),
+                    Some(ui::Tip::new(choice.path.display().to_string())),
+                ))
                 .child(ui::line(choice.name.clone(), text::BODY_NAME, theme::ink()))
                 .child(ui::line(
                     format!("from {}", choice.project),
@@ -2200,8 +2204,12 @@ impl LauncherView {
                         .id(ElementId::named_usize("launcher-slot-status", index))
                         .w(px(150.0))
                         .flex_none()
-                        .when_some(file_tip, |status, file| status.tooltip(tip(file)))
-                        .child(ui::line(status, text::CONTROL, ink)),
+                        .relative()
+                        .child(ui::line(status, text::CONTROL, ink))
+                        .child(ui::tip_zone(
+                            ElementId::named_usize("launcher-slot-status-tip", index),
+                            file_tip.map(ui::Tip::new),
+                        )),
                 )
                 .child(
                     div()
@@ -2262,7 +2270,11 @@ impl LauncherView {
                     .py(px(theme::space::S6))
                     .border_t_1()
                     .border_color(theme::line())
-                    .tooltip(tip(steps))
+                    .relative()
+                    .child(ui::tip_zone(
+                        ElementId::named_usize("launcher-made-tip", index),
+                        Some(ui::Tip::new(steps)),
+                    ))
                     .child(
                         div()
                             .flex_1()
@@ -2304,14 +2316,16 @@ impl LauncherView {
                 .into_any_element(),
             );
             rows.extend(page.texts.iter().enumerate().map(|(index, text_slot)| {
-                div()
-                    .id(ElementId::named_usize("launcher-text", index))
-                    .tooltip(tip(text_slot.clip.clone()))
-                    .child(form_row_owned(
-                        format!("Text {}", index + 1),
-                        field(&text_slot.input, window, cx).flex_1(),
-                    ))
-                    .into_any_element()
+                ui::tip_on(
+                    div()
+                        .id(ElementId::named_usize("launcher-text", index))
+                        .child(form_row_owned(
+                            format!("Text {}", index + 1),
+                            field(&text_slot.input, window, cx).flex_1(),
+                        )),
+                    Some(ui::Tip::new(text_slot.clip.clone())),
+                )
+                .into_any_element()
             }));
         }
         rows.push(
@@ -2394,19 +2408,18 @@ impl LauncherView {
             Some(problem) => (problem.clone(), theme::warn()),
             None => (destination, theme::ink3()),
         };
+        // Greyed by what is typed, its tip says why.
+        let act_button = ui::button(act_id, act_words)
+            .primary()
+            .disabled(!idle || problem.is_some())
+            .on_click(cx.listener(|this, _, window, cx| this.choose(window, cx)));
+        let act_button = match problem.clone() {
+            Some(why) => act_button.reason(why),
+            None => act_button,
+        };
         let act = div()
             .id("launcher-act-why")
-            .when_some(problem.clone(), |act, why| act.tooltip(tip(why)))
-            .child(
-                self.ring(
-                    Stop::Act,
-                    window,
-                    ui::button(act_id, act_words)
-                        .primary()
-                        .disabled(!idle || problem.is_some())
-                        .on_click(cx.listener(|this, _, window, cx| this.choose(window, cx))),
-                ),
-            );
+            .child(self.ring(Stop::Act, window, act_button));
         div()
             .mt(px(theme::space::S12))
             .flex()
@@ -2496,7 +2509,11 @@ impl LauncherView {
                     theme::with_alpha(theme::accent(), 0.0)
                 })
                 .when(chosen, |row| row.bg(theme::chrome()))
-                .tooltip(tip(recent.path.display().to_string()))
+                .relative()
+                .child(ui::tip_zone(
+                    ElementId::named_usize("launcher-recent-tip", index),
+                    Some(ui::Tip::new(recent.path.display().to_string())),
+                ))
                 .when(open, |row| {
                     row.cursor_pointer()
                         .hover(|style| style.bg(theme::chrome()))
@@ -2728,11 +2745,6 @@ impl Render for LauncherView {
 }
 
 // ---------------------------------------------------------------- pieces
-
-fn tip(words: impl Into<SharedString>) -> impl Fn(&mut Window, &mut App) -> AnyView + 'static {
-    let words: SharedString = words.into();
-    move |_, cx| cx.new(|_| ui::Tooltip(words.clone())).into()
-}
 
 /// A form's row: what it asks, and the control that answers.
 fn form_row(label: &'static str, control: impl IntoElement) -> gpui::AnyElement {

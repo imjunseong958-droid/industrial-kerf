@@ -9,15 +9,16 @@
 //! For captures and test runs: `--quit-after-ms <ms>` quits after that
 //! long; `--settings-dir <dir>` keeps the settings in a folder of their
 //! own, and keys out of the system's keychain; `--window-size WxH` opens
-//! the window at that size rather than edge to edge; `--render-preview`
-//! renders the project's preview once it is open; `--graph <media>` opens
-//! that shot's graph once the project has it, on `--graph-node <id>` if
-//! given. A smoke run (one that
-//! quits on its own, or asks for `--screenshot`) opens no project it was
-//! not given; neither it nor a preview says anything on its own at
-//! launch. `--screenshot <file>` is taken but writes nothing: a GPUI
-//! window cannot be read back from inside the editor, so capture it with
-//! the system's tools.
+//! the first window at that size rather than edge to edge (the windows
+//! after it open as they would); `--render-preview` renders the project's
+//! preview once it is open; `--graph <media>` opens that shot's graph once
+//! the project has it, on `--graph-node <id>` if given. A smoke run (one
+//! that quits on its own, or asks for `--screenshot`) opens no project it
+//! was not given; neither it nor a preview says anything on its own at
+//! launch. `--screenshot <file>` writes a PNG of the first window as the
+//! run quits (after `--quit-after-ms`, else half a second, once the window
+//! has drawn): read back from the X server on X11, by `screencapture` on
+//! macOS; on Wayland and Windows it says on stderr that it cannot.
 //!
 //! A kerf:// link may come anywhere among the arguments. Off macOS, an
 //! editor started for links alone hands them to the editor already open
@@ -165,12 +166,6 @@ fn main() {
         }
     };
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
-    if let Some(file) = &arguments.screenshot {
-        eprintln!(
-            "--screenshot {}: nothing is written; the editor's GPUI window cannot be read back from inside it. Capture it with the system's tools (as `import -window`).",
-            file.display()
-        );
-    }
     kerf_bridge::crash_install();
     motion::init_from_env();
     // Before anything reads them: the Qt editor's settings, the first time.
@@ -248,6 +243,7 @@ fn main() {
     let kerfd = arguments.kerfd;
     let window_size = arguments.window_size;
     let quit_after = arguments.quit_after;
+    let screenshot = arguments.screenshot;
     application.run(move |cx| {
         if let Err(error) = cx.text_system().add_fonts(theme::bundled_fonts()) {
             log::warn!("bundled fonts did not load: {error}");
@@ -261,7 +257,8 @@ fn main() {
             }
         })
         .detach();
-        // Every window opened later keeps the kerfd and the size given here.
+        // Every window opened later keeps the kerfd given here; the first
+        // alone takes the size.
         app::set_kerfd(kerfd.clone(), cx);
         app::set_window_size(window_size, cx);
         match link {
@@ -299,13 +296,18 @@ fn main() {
         .detach();
         cx.activate(true);
         if smoke {
-            // A capture with no time of its own quits as the Qt editor's did.
+            // A capture with no time of its own quits as the Qt editor's did,
+            // its window grabbed as it does.
             let after = quit_after.unwrap_or(Duration::from_millis(500));
-            cx.spawn(async move |cx| {
-                cx.background_executor().timer(after).await;
-                let _ = cx.update(|cx| cx.quit());
-            })
-            .detach();
+            match screenshot {
+                Some(file) => app::screenshot_then_quit(file, after, cx),
+                None => cx
+                    .spawn(async move |cx| {
+                        cx.background_executor().timer(after).await;
+                        let _ = cx.update(|cx| cx.quit());
+                    })
+                    .detach(),
+            }
         }
     });
 }

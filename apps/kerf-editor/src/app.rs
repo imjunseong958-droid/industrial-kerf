@@ -22,15 +22,23 @@ use gpui::{
     Window, WindowBounds, WindowHandle, WindowOptions,
 };
 use serde_json::Value;
+use std::cell::Cell;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 
 /// The options every editor window opens with (a project's, the
 /// launcher's, New Project's launcher): the screen edge to edge, titled
-/// `title`; or, given `--window-size` ([`set_window_size`]), that size in
-/// the middle of the screen.
+/// `title`; or, for the first window of a run given `--window-size`
+/// ([`set_window_size`]), that size in the middle of the screen. The size
+/// is the first window's alone, as the Qt editor resized only the window it
+/// opened at launch: every window after it opens edge to edge.
 pub fn options(title: &str, cx: &mut App) -> WindowOptions {
-    let asked = cx.try_global::<WindowSize>().map(|asked| asked.0);
+    let asked = cx.try_global::<WindowSize>().and_then(|asked| asked.0);
+    if asked.is_some() {
+        cx.set_global(WindowSize(None));
+    }
     let (width, height) = asked.unwrap_or((1600.0, 1000.0));
     let bounds = Bounds::centered(None, size(px(width), px(height)), cx);
     WindowOptions {
@@ -49,16 +57,18 @@ pub fn options(title: &str, cx: &mut App) -> WindowOptions {
     }
 }
 
-/// The size `--window-size` asked every window to open at.
-struct WindowSize((f32, f32));
+/// The size `--window-size` asked the first window to open at, until
+/// that window takes it.
+struct WindowSize(Option<(f32, f32)>);
 
 impl Global for WindowSize {}
 
-/// Opens every window at `size` (points) rather than edge to edge, for a
-/// capture. `main` calls it with `--window-size`.
+/// Opens the next window (the run's first, as `main` calls it) at `size`
+/// (points) rather than edge to edge, for a capture; the windows after it
+/// open as they would. `main` calls it with `--window-size`.
 pub fn set_window_size(size: Option<(f32, f32)>, cx: &mut App) {
     if let Some(size) = size {
-        cx.set_global(WindowSize(size));
+        cx.set_global(WindowSize(Some(size)));
     }
 }
 
@@ -100,6 +110,477 @@ pub fn path_with_tool_folders(path: &str, home: &Path) -> String {
         }
     }
     folders.join(":")
+}
+
+// ---------------------------------------------------------------- --screenshot
+
+/// `--screenshot <file>`: once `after` has passed (`--quit-after-ms`, else
+/// half a second), and the first window has drawn a frame since, writes a
+/// PNG of that window to `file` and quits, as the Qt editor grabbed its
+/// window as the run quit. On X11 the window is read back from the X
+/// server; on macOS `screencapture` takes it; elsewhere (Wayland, Windows)
+/// it says on stderr that it cannot, and quits. A window that has drawn
+/// nothing by then (an X server with no window manager, where GPUI waits
+/// for an event to draw) is woken (again each `CAPTURE_REWAKE` while no
+/// frame comes), and given `CAPTURE_SETTLE` for what comes in to be in
+/// place.
+pub fn screenshot_then_quit(file: PathBuf, after: Duration, cx: &mut App) {
+    let window = cx.windows().first().copied();
+    // Whether the first window has begun a frame since it opened.
+    let began = Rc::new(Cell::new(false));
+    if let Some(window) = window {
+        let began = began.clone();
+        let _ = window.update(cx, move |_, window, _| {
+            window.on_next_frame(move |_, _| began.set(true));
+        });
+    }
+    cx.spawn(async move |cx| {
+        cx.background_executor().timer(after).await;
+        let target = cx
+            .update(|cx| match window {
+                Some(window) => capture_target(window, cx),
+                None => Err("no window is open".to_owned()),
+            })
+            .unwrap_or_else(|_| Err("the editor ended first".to_owned()));
+        // A window that has begun no frame waits for an event to draw: it
+        // is woken, as each frame is asked of it.
+        let woken = !began.get();
+        let wake = target.as_ref().ok().filter(|_| woken).cloned();
+        // A frame drawn now, then (when the window was woken) another once
+        // what came in has settled.
+        let mut drawn = window.is_some() && frame_drawn(window, wake.clone(), cx).await;
+        if drawn && woken {
+            cx.background_executor()
+                .timer(theme::motion::CAPTURE_SETTLE)
+                .await;
+            drawn = frame_drawn(window, wake, cx).await;
+        }
+        if window.is_some() && !drawn {
+            log::warn!("--screenshot: the window drew no frame in time; reading what is there");
+        }
+        let written = match target {
+            Ok(target) => {
+                let file = file.clone();
+                cx.background_executor()
+                    .spawn(async move { capture(target, &file) })
+                    .await
+            }
+            Err(message) => Err(message),
+        };
+        match written {
+            Ok(()) => log::info!("--screenshot: wrote {}", file.display()),
+            Err(message) => eprintln!("--screenshot {}: {message}", file.display()),
+        }
+        let _ = cx.update(|cx| cx.quit());
+    })
+    .detach();
+}
+
+/// Asks `window` for a frame and waits until it is on the screen (one
+/// frame begun, and the next), at most `CAPTURE_FRAME_WAIT`; whether it
+/// came. With `wake`, the window is woken once it has been asked, and again
+/// each `CAPTURE_REWAKE` while no frame comes: a wake can go unheard.
+async fn frame_drawn(
+    window: Option<gpui::AnyWindowHandle>,
+    wake: Option<CaptureTarget>,
+    cx: &mut gpui::AsyncApp,
+) -> bool {
+    let drawn = Rc::new(Cell::new(false));
+    let asked = window.and_then(|window| {
+        let drawn = drawn.clone();
+        cx.update(|cx| {
+            window.update(cx, move |_, window, _| {
+                window.refresh();
+                window.on_next_frame(move |window, _| {
+                    window.on_next_frame(move |_, _| drawn.set(true));
+                });
+            })
+        })
+        .ok()?
+        .ok()
+    });
+    if asked.is_none() {
+        return false;
+    }
+    let since = Instant::now();
+    let mut woken_at: Option<Instant> = None;
+    while !drawn.get() && since.elapsed() < theme::motion::CAPTURE_FRAME_WAIT {
+        if let Some(target) = wake.clone() {
+            if woken_at.is_none_or(|at| at.elapsed() >= theme::motion::CAPTURE_REWAKE) {
+                woken_at = Some(Instant::now());
+                cx.background_executor()
+                    .spawn(async move { self::wake(&target) })
+                    .await;
+            }
+        }
+        cx.background_executor().timer(theme::motion::POLL).await;
+    }
+    drawn.get()
+}
+
+/// Wakes `target`'s window to draw where it waits for an event to (an X
+/// server with no window manager); elsewhere nothing.
+fn wake(target: &CaptureTarget) {
+    match *target {
+        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+        CaptureTarget::X11 { pid, size } => {
+            if let Err(message) = x11::wake(pid, size) {
+                log::warn!("--screenshot: {message}");
+            }
+        }
+        #[cfg(target_os = "macos")]
+        CaptureTarget::Mac(_) => {}
+    }
+}
+
+/// How a window is read back (none: it cannot be, here).
+#[derive(Clone)]
+enum CaptureTarget {
+    /// From the X server: the window of this process that shows, `size`
+    /// pixels (the first made, if several do).
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    X11 { pid: u32, size: (u32, u32) },
+    /// By `screencapture`, by its window number.
+    #[cfg(target_os = "macos")]
+    Mac(isize),
+}
+
+/// How `window` is read back here, or why it cannot be.
+fn capture_target(window: gpui::AnyWindowHandle, cx: &mut App) -> Result<CaptureTarget, String> {
+    #[cfg(target_os = "macos")]
+    {
+        window
+            .update(cx, |_, window, _| macos::window_number(window))
+            .ok()
+            .flatten()
+            .map(CaptureTarget::Mac)
+            .ok_or_else(|| "the window has no number to capture it by".to_owned())
+    }
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    {
+        match gpui::guess_compositor() {
+            "X11" => {
+                let size = window
+                    .update(cx, |_, window, _| {
+                        let size = window.viewport_size();
+                        let scale = window.scale_factor();
+                        (
+                            (f32::from(size.width) * scale).round() as u32,
+                            (f32::from(size.height) * scale).round() as u32,
+                        )
+                    })
+                    .map_err(|_| "the window closed".to_owned())?;
+                Ok(CaptureTarget::X11 {
+                    pid: std::process::id(),
+                    size,
+                })
+            }
+            "Wayland" => Err(
+                "not supported on Wayland; capture the window with the system's tools".to_owned(),
+            ),
+            other => Err(format!(
+                "not supported here ({other}); capture the window with the system's tools"
+            )),
+        }
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "freebsd")))]
+    {
+        let _ = (window, cx);
+        Err("not supported on Windows; capture the window with the system's tools".to_owned())
+    }
+}
+
+/// Reads `target` back and writes it to `file` as a PNG.
+fn capture(target: CaptureTarget, file: &Path) -> Result<(), String> {
+    let _ = file;
+    match target {
+        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+        CaptureTarget::X11 { pid, size } => x11::read_window(pid, size)?
+            .save_with_format(file, image::ImageFormat::Png)
+            .map_err(|error| error.to_string()),
+        #[cfg(target_os = "macos")]
+        CaptureTarget::Mac(number) => {
+            let status = std::process::Command::new("screencapture")
+                .args(["-x", "-o", "-l", &number.to_string()])
+                .arg(file)
+                .status()
+                .map_err(|error| format!("screencapture did not run: {error}"))?;
+            if status.success() && file.is_file() {
+                Ok(())
+            } else {
+                Err(format!("screencapture wrote nothing ({status})"))
+            }
+        }
+    }
+}
+
+/// How an X server lays out a picture's pixels (`GetImage` in Z format):
+/// bits a pixel and the bits a row is padded to (the pixmap format of its
+/// depth), where red, green and blue are in a pixel (its visual), and
+/// whether a pixel's bytes come most significant first.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct X11Pixels {
+    pub bits_per_pixel: u8,
+    pub scanline_pad: u8,
+    pub red_mask: u32,
+    pub green_mask: u32,
+    pub blue_mask: u32,
+    pub msb_first: bool,
+}
+
+/// `data`, `width` × `height` pixels as an X server gave them (`format`),
+/// as opaque RGBA; None for a layout it cannot be (a pixel of other than
+/// 16, 24 or 32 bits, or too few bytes).
+pub fn x11_rgba(
+    data: &[u8],
+    width: u32,
+    height: u32,
+    format: X11Pixels,
+) -> Option<image::RgbaImage> {
+    let bytes = match format.bits_per_pixel {
+        16 => 2,
+        24 => 3,
+        32 => 4,
+        _ => return None,
+    };
+    let pad = u64::from(format.scanline_pad.max(8));
+    let row_bits = u64::from(width) * u64::from(format.bits_per_pixel);
+    let stride = usize::try_from(row_bits.div_ceil(pad) * pad / 8).ok()?;
+    let needed = stride.checked_mul(height as usize)?;
+    if data.len() < needed || width == 0 || height == 0 {
+        return None;
+    }
+    // A channel's mask, as 0..255.
+    let channel = |pixel: u32, mask: u32| -> u8 {
+        if mask == 0 {
+            return 0;
+        }
+        let shift = mask.trailing_zeros();
+        let most = u64::from(mask >> shift);
+        let value = u64::from((pixel & mask) >> shift);
+        ((value * 255 + most / 2) / most) as u8
+    };
+    let mut picture = image::RgbaImage::new(width, height);
+    for (y, row) in data.chunks(stride).take(height as usize).enumerate() {
+        for x in 0..width as usize {
+            let at = &row[x * bytes..x * bytes + bytes];
+            let pixel = if format.msb_first {
+                at.iter()
+                    .fold(0u32, |pixel, byte| pixel << 8 | u32::from(*byte))
+            } else {
+                at.iter()
+                    .rev()
+                    .fold(0u32, |pixel, byte| pixel << 8 | u32::from(*byte))
+            };
+            picture.put_pixel(
+                x as u32,
+                y as u32,
+                image::Rgba([
+                    channel(pixel, format.red_mask),
+                    channel(pixel, format.green_mask),
+                    channel(pixel, format.blue_mask),
+                    255,
+                ]),
+            );
+        }
+    }
+    Some(picture)
+}
+
+/// Reading a window back from the X server (a GPUI window on X11 gives
+/// no raw handle of its own): the one of this process that shows, found by
+/// its `_NET_WM_PID`.
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+mod x11 {
+    use super::{x11_rgba, X11Pixels};
+    use x11rb::connection::Connection;
+    use x11rb::protocol::xproto::{
+        AtomEnum, ConnectionExt, EventMask, ExposeEvent, ImageFormat, ImageOrder, MapState, Window,
+        EXPOSE_EVENT,
+    };
+
+    fn said(error: impl std::fmt::Display) -> String {
+        format!("the X server: {error}")
+    }
+
+    /// The window of process `pid` that shows (the one `size` pixels
+    /// large, else the first made), and its size.
+    fn find(
+        connection: &impl Connection,
+        root: Window,
+        pid: u32,
+        size: (u32, u32),
+    ) -> Result<(Window, (u32, u32)), String> {
+        let pid_atom = connection
+            .intern_atom(true, b"_NET_WM_PID")
+            .map_err(said)?
+            .reply()
+            .map_err(said)?
+            .atom;
+        // Every window that shows, top-level or under a window manager's
+        // frame, whose process is this one.
+        let mut found: Vec<(Window, (u32, u32))> = Vec::new();
+        let mut parents = vec![root];
+        while let Some(parent) = parents.pop() {
+            let Ok(tree) = connection.query_tree(parent).map_err(said)?.reply() else {
+                continue;
+            };
+            for window in tree.children {
+                let Ok(attributes) = connection
+                    .get_window_attributes(window)
+                    .map_err(said)?
+                    .reply()
+                else {
+                    continue;
+                };
+                if attributes.map_state != MapState::VIEWABLE {
+                    continue;
+                }
+                parents.push(window);
+                let owner = connection
+                    .get_property(false, window, pid_atom, AtomEnum::CARDINAL, 0, 1)
+                    .map_err(said)?
+                    .reply()
+                    .ok()
+                    .and_then(|property| property.value32().and_then(|mut values| values.next()));
+                if owner != Some(pid) {
+                    continue;
+                }
+                if let Ok(geometry) = connection.get_geometry(window).map_err(said)?.reply() {
+                    found.push((
+                        window,
+                        (u32::from(geometry.width), u32::from(geometry.height)),
+                    ));
+                }
+            }
+        }
+        found.sort_by_key(|(window, _)| *window);
+        found
+            .iter()
+            .find(|(_, found)| *found == size)
+            .or_else(|| found.first())
+            .copied()
+            .ok_or_else(|| "no window of the editor shows on the X server".to_owned())
+    }
+
+    /// Sends the window of process `pid` an Expose, so a GPUI that waits
+    /// for an event before it draws (no window manager to send one) draws.
+    pub(super) fn wake(pid: u32, size: (u32, u32)) -> Result<(), String> {
+        let (connection, screen) = x11rb::connect(None).map_err(said)?;
+        let root = connection
+            .setup()
+            .roots
+            .get(screen)
+            .ok_or_else(|| "the X server has no such screen".to_owned())?
+            .root;
+        let (window, (width, height)) = find(&connection, root, pid, size)?;
+        let expose = ExposeEvent {
+            response_type: EXPOSE_EVENT,
+            sequence: 0,
+            window,
+            x: 0,
+            y: 0,
+            width: width as u16,
+            height: height as u16,
+            count: 0,
+        };
+        // No mask: to the client that made the window, the editor.
+        connection
+            .send_event(false, window, EventMask::NO_EVENT, expose)
+            .map_err(said)?;
+        connection.flush().map_err(said)
+    }
+
+    /// The window of process `pid` that shows (the one `size` pixels
+    /// large, else the first made), as RGBA.
+    pub(super) fn read_window(pid: u32, size: (u32, u32)) -> Result<image::RgbaImage, String> {
+        let (connection, screen) = x11rb::connect(None).map_err(said)?;
+        let setup = connection.setup();
+        let root = setup
+            .roots
+            .get(screen)
+            .ok_or_else(|| "the X server has no such screen".to_owned())?
+            .root;
+        let (window, (width, height)) = find(&connection, root, pid, size)?;
+        // The window itself; where it is partly off the screen (which X
+        // cannot read), what of it is on the screen, from the root.
+        let (picture, width, height) = match connection
+            .get_image(
+                ImageFormat::Z_PIXMAP,
+                window,
+                0,
+                0,
+                width as u16,
+                height as u16,
+                !0,
+            )
+            .map_err(said)?
+            .reply()
+        {
+            Ok(picture) => (picture, width, height),
+            Err(_) => {
+                let screen = &setup.roots[screen];
+                let at = connection
+                    .translate_coordinates(window, root, 0, 0)
+                    .map_err(said)?
+                    .reply()
+                    .map_err(said)?;
+                let left = at.dst_x.max(0);
+                let top = at.dst_y.max(0);
+                let right =
+                    (i32::from(at.dst_x) + width as i32).min(i32::from(screen.width_in_pixels));
+                let bottom =
+                    (i32::from(at.dst_y) + height as i32).min(i32::from(screen.height_in_pixels));
+                let (width, height) = (
+                    (right - i32::from(left)).max(0) as u32,
+                    (bottom - i32::from(top)).max(0) as u32,
+                );
+                if width == 0 || height == 0 {
+                    return Err("the window is off the screen".to_owned());
+                }
+                let picture = connection
+                    .get_image(
+                        ImageFormat::Z_PIXMAP,
+                        root,
+                        left,
+                        top,
+                        width as u16,
+                        height as u16,
+                        !0,
+                    )
+                    .map_err(said)?
+                    .reply()
+                    .map_err(said)?;
+                (picture, width, height)
+            }
+        };
+        let format = setup
+            .pixmap_formats
+            .iter()
+            .find(|format| format.depth == picture.depth)
+            .ok_or_else(|| format!("no pixel format for depth {}", picture.depth))?;
+        let visual = setup
+            .roots
+            .iter()
+            .flat_map(|screen| &screen.allowed_depths)
+            .flat_map(|depth| &depth.visuals)
+            .find(|visual| visual.visual_id == picture.visual)
+            .ok_or_else(|| "the window's visual is not the server's".to_owned())?;
+        let pixels = X11Pixels {
+            bits_per_pixel: format.bits_per_pixel,
+            scanline_pad: format.scanline_pad,
+            red_mask: visual.red_mask,
+            green_mask: visual.green_mask,
+            blue_mask: visual.blue_mask,
+            msb_first: setup.image_byte_order == ImageOrder::MSB_FIRST,
+        };
+        x11_rgba(&picture.data, width, height, pixels).ok_or_else(|| {
+            format!(
+                "pixels of {} bits at depth {} cannot be read",
+                format.bits_per_pixel, picture.depth
+            )
+        })
+    }
 }
 
 // ---------------------------------------------------------------- windows
@@ -301,28 +782,23 @@ pub fn represent_project(window: &Window, project: &Path) {
 mod macos {
     use objc2::rc::Retained;
     use objc2::MainThreadMarker;
-    use objc2_app_kit::{NSApplication, NSView};
+    use objc2_app_kit::{NSApplication, NSView, NSWindow};
     use objc2_foundation::NSString;
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
     use std::ffi::c_void;
     use std::path::Path;
 
-    /// Has the NSWindow that holds `window`'s view (GPUI's, in its content
-    /// view) represent `file`.
-    pub(super) fn represent(window: &impl HasWindowHandle, file: &Path) {
-        let Ok(handle) = window.window_handle() else {
-            return;
-        };
+    /// The NSWindow that holds `window`'s view (GPUI's, in its content view).
+    fn ns_window(window: &impl HasWindowHandle) -> Option<Retained<NSWindow>> {
+        let handle = window.window_handle().ok()?;
         let RawWindowHandle::AppKit(appkit) = handle.as_raw() else {
-            return;
+            return None;
         };
-        let Some(main) = MainThreadMarker::new() else {
-            return;
-        };
+        let main = MainThreadMarker::new()?;
         let view = appkit.ns_view.as_ptr().cast_const();
         let is_view =
             |candidate: &Retained<NSView>| Retained::as_ptr(candidate).cast::<c_void>() == view;
-        let found = NSApplication::sharedApplication(main)
+        NSApplication::sharedApplication(main)
             .windows()
             .to_vec()
             .into_iter()
@@ -330,10 +806,22 @@ mod macos {
                 ns_window.contentView().is_some_and(|content| {
                     is_view(&content) || content.subviews().to_vec().iter().any(&is_view)
                 })
-            });
-        if let Some(ns_window) = found {
+            })
+    }
+
+    /// Has the NSWindow that holds `window`'s view represent `file`.
+    pub(super) fn represent(window: &impl HasWindowHandle, file: &Path) {
+        if let Some(ns_window) = ns_window(window) {
             ns_window.setRepresentedFilename(&NSString::from_str(&file.to_string_lossy()));
         }
+    }
+
+    /// The window server's number for `window`'s NSWindow (what
+    /// `screencapture -l` takes).
+    pub(super) fn window_number(window: &impl HasWindowHandle) -> Option<isize> {
+        ns_window(window)
+            .map(|ns_window| ns_window.windowNumber())
+            .filter(|number| *number > 0)
     }
 }
 

@@ -30,7 +30,6 @@ use gpui::{
 };
 use serde_json::{json, Value};
 use std::cell::Cell;
-use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::rc::Rc;
@@ -412,50 +411,15 @@ pub fn target(session: &Session) -> Result<Target, &'static str> {
     })
 }
 
-/// Where FFmpeg is looked for, in order, as kerfd looks for it
-/// (`kerf_engine::ffmpeg::resolve_ffmpeg_bin`): `configured`
-/// (`KERF_FFMPEG`); `beside` the editor, where each package puts it (the
-/// macOS app's Contents/MacOS); Homebrew's ffmpeg-full; then `ffmpeg` on
-/// the PATH.
-pub fn ffmpeg_candidates(configured: Option<OsString>, beside: Option<&Path>) -> Vec<PathBuf> {
-    let mut candidates: Vec<PathBuf> = Vec::new();
-    candidates.extend(
-        configured
-            .filter(|value| !value.is_empty())
-            .map(PathBuf::from),
-    );
-    if let Some(folder) = beside {
-        candidates.push(folder.join(format!("ffmpeg{}", std::env::consts::EXE_SUFFIX)));
-    }
-    candidates.push(PathBuf::from("/opt/homebrew/opt/ffmpeg-full/bin/ffmpeg"));
-    candidates.push(PathBuf::from("ffmpeg"));
-    candidates
-}
-
-/// The FFmpeg the editor runs: the first of [`ffmpeg_candidates`] that
-/// runs, found once (off the window's thread, the first time a frame is
-/// read); `ffmpeg` when none does, to say so as it fails. Focus Region,
-/// the artwork (posters, filmstrips, peaks) and a shot's graph's pictures
-/// read with it.
+/// The FFmpeg the editor runs: the one kerfd runs
+/// ([`kerf_bridge::ffmpeg_bin`]: `KERF_FFMPEG`, beside the editor, where
+/// each package puts it, Homebrew's ffmpeg-full, then the PATH), found
+/// once (off the window's thread, the first time a frame is read);
+/// `ffmpeg` when none runs, to say so as it fails. Focus Region, the
+/// artwork (posters, filmstrips, peaks) and a shot's graph's pictures read
+/// with it.
 pub fn ffmpeg_bin() -> &'static Path {
-    static BIN: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
-    BIN.get_or_init(|| {
-        let program = std::env::current_exe().ok();
-        let beside = program.as_deref().and_then(Path::parent);
-        ffmpeg_candidates(std::env::var_os("KERF_FFMPEG"), beside)
-            .into_iter()
-            .find(|candidate| {
-                let mut command = Command::new(candidate);
-                command
-                    .arg("-version")
-                    .stdin(Stdio::null())
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null());
-                no_window(&mut command);
-                command.status().is_ok_and(|status| status.success())
-            })
-            .unwrap_or_else(|| PathBuf::from("ffmpeg"))
-    })
+    Path::new(kerf_bridge::ffmpeg_bin())
 }
 
 /// On Windows a console tool the editor starts opens no window of its own.

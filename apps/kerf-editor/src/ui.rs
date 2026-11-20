@@ -11,22 +11,26 @@
 //! the ring shows only for the keyboard. A button's hover fades in and out
 //! over `HOVER`. A control's tip names it
 //! and its key (in mono, dimmer); a greyed one says why it cannot be
-//! pressed. A tip shows after `TIP_DELAY`, fading in over `FADE`; once one
-//! has shown, the next one under the pointer shows at once. Under Reduce
-//! Motion all of it is simply there.
+//! pressed. A tip shows after `TIP_DELAY`, fading in over `FADE`, and fades
+//! out as it goes; once one has shown (the kit's or GPUI's own), the next
+//! one under the pointer shows at once. It says what its control says as
+//! it is drawn, is drawn over everything (a menu's rows' tips too), and
+//! goes at once when a panel opens over its control. Under Reduce Motion
+//! all of it is simply there.
 
 use crate::icons::Icon;
 use crate::motion::{self, Tween};
 use crate::theme::{self, height, layout, motion as scene, radius, text, TypeStyle};
 use gpui::{
-    actions, canvas, deferred, div, linear_color_stop, linear_gradient, point, prelude::*, px,
-    size, AnimationExt, AnyElement, AnyView, App, Bounds, ClickEvent, Component, Context,
-    DismissEvent, Div, ElementId, Entity, EventEmitter, FocusHandle, Focusable, Hsla, IntoElement,
-    KeyBinding, KeyContext, KeyDownEvent, Keymap, Keystroke, MouseButton, MouseDownEvent, NoAction,
-    Pixels, Point, Rgba, ScrollHandle, SharedString, Size, Stateful, Subscription, Task, TextRun,
-    WeakFocusHandle, Window,
+    actions, canvas, div, linear_color_stop, linear_gradient, point, prelude::*, px, size,
+    AnimationExt, AnyElement, AnyTooltip, App, Bounds, ClickEvent, Component, Context,
+    DismissEvent, Div, ElementId, Entity, EventEmitter, FocusHandle, Focusable, HitboxBehavior,
+    Hsla, IntoElement, KeyBinding, KeyContext, KeyDownEvent, Keymap, Keystroke, MouseButton,
+    MouseDownEvent, NoAction, Pixels, Point, Rgba, ScrollHandle, SharedString, Size, Stateful,
+    Subscription, Task, TextRun, WeakFocusHandle, Window,
 };
 use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::rc::Rc;
 use std::time::Instant;
 
@@ -332,12 +336,141 @@ pub fn label(words: impl Into<SharedString>, style: TypeStyle, color: Rgba) -> g
         .child(words.into())
 }
 
-/// Words that keep to one line, cut with an ellipsis.
+/// Words that keep to one line, cut with an ellipsis where the room they
+/// are given ends ([`cut_line`]).
 pub fn line(words: impl Into<SharedString>, style: TypeStyle, color: Rgba) -> gpui::Div {
-    label(words, style, color)
+    theme::type_style(div(), style)
+        .text_color(color)
         .whitespace_nowrap()
         .overflow_hidden()
-        .text_ellipsis()
+        .child(cut_line(words))
+}
+
+/// One line of words in the type and colour of what holds it, as wide as
+/// they are, cut with "…" where the room it is laid out in ends (and set
+/// in it as its `text_align` says). GPUI's own `text_ellipsis` keeps the
+/// size it measured first, with no room given, and so never cuts.
+pub fn cut_line(words: impl Into<SharedString>) -> CutLine {
+    let words: SharedString = words.into();
+    CutLine(if words.contains('\n') {
+        words.replace('\n', " ").into()
+    } else {
+        words
+    })
+}
+
+/// See [`cut_line`].
+pub struct CutLine(SharedString);
+
+impl IntoElement for CutLine {
+    type Element = Self;
+
+    fn into_element(self) -> Self::Element {
+        self
+    }
+}
+
+/// The type of what holds a [`CutLine`]: its size, its line's height and
+/// the run of its words.
+fn cut_line_type(words: &str, window: &Window) -> (Pixels, Pixels, TextRun, gpui::Font) {
+    let style = window.text_style();
+    let font_size = style.font_size.to_pixels(window.rem_size());
+    let line_height = style
+        .line_height
+        .to_pixels(font_size.into(), window.rem_size());
+    (
+        font_size,
+        line_height,
+        style.to_run(words.len()),
+        style.font(),
+    )
+}
+
+impl gpui::Element for CutLine {
+    type RequestLayoutState = ();
+    type PrepaintState = Option<(gpui::ShapedLine, Pixels)>;
+
+    fn id(&self) -> Option<ElementId> {
+        None
+    }
+
+    fn source_location(&self) -> Option<&'static std::panic::Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        _: Option<&gpui::GlobalElementId>,
+        _: Option<&gpui::InspectorElementId>,
+        window: &mut Window,
+        _: &mut App,
+    ) -> (gpui::LayoutId, ()) {
+        let (font_size, line_height, run, _) = cut_line_type(&self.0, window);
+        let width = window
+            .text_system()
+            .shape_line(self.0.clone(), font_size, &[run], None)
+            .width
+            .ceil();
+        // As wide as its words unless given less; a flex item can be
+        // given none.
+        let mut style = gpui::Style::default();
+        style.min_size.width = px(0.0).into();
+        let layout = window.request_measured_layout(style, move |known, _, _, _| {
+            size(
+                known.width.unwrap_or(width),
+                known.height.unwrap_or(line_height),
+            )
+        });
+        (layout, ())
+    }
+
+    fn prepaint(
+        &mut self,
+        _: Option<&gpui::GlobalElementId>,
+        _: Option<&gpui::InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        _: &mut (),
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Self::PrepaintState {
+        let (font_size, line_height, run, font) = cut_line_type(&self.0, window);
+        let mut runs = vec![run];
+        let words = cx
+            .text_system()
+            .line_wrapper(font, font_size)
+            .truncate_line(self.0.clone(), bounds.size.width, "…", &mut runs);
+        let shaped = window
+            .text_system()
+            .shape_line(words, font_size, &runs, None);
+        Some((shaped, line_height))
+    }
+
+    fn paint(
+        &mut self,
+        _: Option<&gpui::GlobalElementId>,
+        _: Option<&gpui::InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        _: &mut (),
+        shaped: &mut Self::PrepaintState,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let Some((shaped, line_height)) = shaped.as_ref() else {
+            return;
+        };
+        let room = (bounds.size.width - shaped.width).max(Pixels::ZERO);
+        let left = match window.text_style().text_align {
+            gpui::TextAlign::Left => Pixels::ZERO,
+            gpui::TextAlign::Center => room / 2.0,
+            gpui::TextAlign::Right => room,
+        };
+        let _ = shaped.paint(
+            point(bounds.origin.x + left, bounds.origin.y),
+            *line_height,
+            window,
+            cx,
+        );
+    }
 }
 
 /// A hairline, across or down.
@@ -379,19 +512,26 @@ impl Tip {
         self
     }
 
-    /// One line of it: a tip does not wrap.
-    fn one_line(&self) -> Self {
-        let flat = |words: &SharedString| -> SharedString {
-            if words.contains('\n') {
-                words.replace('\n', " ").into()
-            } else {
-                words.clone()
-            }
-        };
-        Self {
-            words: flat(&self.words),
-            key: self.key.as_ref().map(flat),
+    /// Its words line by line (a tile's says its name, its file and what a
+    /// double-click does, a line each); its key keeps to one line.
+    fn lines(&self) -> Vec<SharedString> {
+        if !self.words.contains('\n') {
+            return vec![self.words.clone()];
         }
+        self.words
+            .split('\n')
+            .map(|line| SharedString::from(line.to_owned()))
+            .collect()
+    }
+
+    fn flat_key(&self) -> Option<SharedString> {
+        self.key.as_ref().map(|key| {
+            if key.contains('\n') {
+                key.replace('\n', " ").into()
+            } else {
+                key.clone()
+            }
+        })
     }
 }
 
@@ -407,14 +547,12 @@ pub fn tip_for(
     Some(Tip::new(words.clone()).maybe_key(key.cloned()))
 }
 
-/// The card a tip is drawn on, `width` wide (or as wide as its words).
+/// The card a tip is drawn on, `width` wide (or as wide as its words): one
+/// line, its key after its words; or its lines one under another (wrapped
+/// past `TIP_MOST`), the key after the first.
 fn tip_card(tip: &Tip, width: Option<f32>) -> Div {
-    theme::type_style(div(), text::CONTROL)
-        .flex()
+    let card = theme::type_style(div(), text::CONTROL)
         .flex_none()
-        .items_center()
-        .gap(px(theme::space::S8))
-        .h(px(layout::TIP_HEIGHT))
         .px(px(theme::space::S8))
         .when_some(width, |card, width| card.w(px(width)))
         .rounded(px(radius::CONTROL))
@@ -422,12 +560,35 @@ fn tip_card(tip: &Tip, width: Option<f32>) -> Div {
         .border_1()
         .border_color(theme::line2())
         .text_color(theme::ink())
-        .whitespace_nowrap()
-        .shadow_md()
-        .child(tip.words.clone())
-        .when_some(tip.key.clone(), |card, key| {
-            card.child(label(key, text::MONO_SMALL, theme::ink3()))
-        })
+        .shadow_md();
+    let key = tip
+        .flat_key()
+        .map(|key| label(key, text::MONO_SMALL, theme::ink3()).flex_none());
+    let lines = tip.lines();
+    let wraps = width.is_some_and(|width| width >= layout::TIP_MOST);
+    if lines.len() == 1 && !wraps {
+        return card
+            .flex()
+            .items_center()
+            .gap(px(theme::space::S8))
+            .h(px(layout::TIP_HEIGHT))
+            .whitespace_nowrap()
+            .child(tip.words.clone())
+            .children(key);
+    }
+    let pad = (layout::TIP_HEIGHT - text::CONTROL.line) / 2.0;
+    let mut lines = lines.into_iter();
+    let first = div()
+        .flex()
+        .items_start()
+        .gap(px(theme::space::S8))
+        .child(div().flex_1().min_w_0().children(lines.next()))
+        .children(key);
+    card.flex()
+        .flex_col()
+        .py(px(pad))
+        .child(first)
+        .children(lines.map(|line| div().child(line)))
 }
 
 /// How wide `words` are set in `style`.
@@ -454,13 +615,68 @@ fn measure(words: &SharedString, style: TypeStyle, window: &Window) -> f32 {
     f32::from(line.width).ceil()
 }
 
-/// How big `tip`'s card is.
+/// How many rows `words` take set in `style` within `wide`.
+fn rows_within(words: &SharedString, style: TypeStyle, wide: f32, window: &Window) -> usize {
+    let font = if style.mono {
+        theme::mono_font(style.weight)
+    } else {
+        theme::ui_font(style.weight)
+    };
+    let run = TextRun {
+        len: words.len(),
+        font,
+        color: Hsla::default(),
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    };
+    window
+        .text_system()
+        .shape_text(words.clone(), px(style.px), &[run], Some(px(wide)), None)
+        .ok()
+        .and_then(|lines| lines.first().map(|line| line.wrap_boundaries().len() + 1))
+        .unwrap_or(1)
+}
+
+/// How big `tip`'s card is: as wide as its widest line (at most
+/// `TIP_MOST`, wrapping past it), a row of `CONTROL` type for each line.
 fn tip_size(tip: &Tip, window: &Window) -> Size<Pixels> {
-    let mut width = theme::space::S8 * 2.0 + measure(&tip.words, text::CONTROL, window) + 2.0;
-    if let Some(key) = &tip.key {
-        width += theme::space::S8 + measure(key, text::MONO_SMALL, window);
+    let pad = theme::space::S8 * 2.0 + 2.0;
+    let key = tip.flat_key().map_or(0.0, |key| {
+        theme::space::S8 + measure(&key, text::MONO_SMALL, window)
+    });
+    let lines = tip.lines();
+    let widths: Vec<f32> = lines
+        .iter()
+        .enumerate()
+        .map(|(at, line)| measure(line, text::CONTROL, window) + if at == 0 { key } else { 0.0 })
+        .collect();
+    let widest = widths.iter().copied().fold(0.0, f32::max);
+    let width = (pad + widest).min(layout::TIP_MOST);
+    if lines.len() == 1 && pad + widest <= layout::TIP_MOST {
+        return size(px(width), px(layout::TIP_HEIGHT));
     }
-    size(px(width), px(layout::TIP_HEIGHT))
+    let inner = width - pad;
+    let rows: usize = lines
+        .iter()
+        .zip(&widths)
+        .enumerate()
+        .map(|(at, (line, wide))| {
+            if *wide <= inner {
+                1
+            } else {
+                let room = if at == 0 { inner - key } else { inner };
+                rows_within(line, text::CONTROL, room.max(1.0), window)
+            }
+        })
+        .sum();
+    size(px(width), px(tip_height(rows)))
+}
+
+/// How tall a tip of `rows` rows is: `TIP_HEIGHT` for one, a row of
+/// `CONTROL` type more for each after it.
+pub fn tip_height(rows: usize) -> f32 {
+    layout::TIP_HEIGHT + text::CONTROL.line * rows.saturating_sub(1) as f32
 }
 
 /// Where a tip `tip` big goes for a control at `control` in a window
@@ -478,14 +694,40 @@ pub fn tip_origin(
     let left = centred
         .min(f32::from(window.width) - edge - width)
         .max(edge);
-    let above = f32::from(control.bottom()) > layout::TIP_FLIP_BELOW
-        && f32::from(control.top()) > layout::TIP_FLIP_ABOVE;
+    let tall = f32::from(tip.height);
+    let over = f32::from(control.top()) - layout::TIP_GAP - tall;
+    let under = f32::from(control.bottom()) + layout::TIP_GAP;
+    // Low in the window it goes over its control, as it does where one of
+    // several lines would run past the window's foot and there is room over.
+    let above = (f32::from(control.bottom()) > layout::TIP_FLIP_BELOW
+        && f32::from(control.top()) > layout::TIP_FLIP_ABOVE)
+        || (under + tall > f32::from(window.height) - edge && over >= edge);
     let top = if above {
         f32::from(control.top()) - layout::TIP_GAP - f32::from(tip.height)
     } else {
         f32::from(control.bottom()) + layout::TIP_GAP
     };
     point(px(left), px(top.round()))
+}
+
+/// What a tip stands by for a control at `control`, the pointer at
+/// `pointer`, in a window `window` big: the control; or, for one as tall as
+/// half the window or more (the sidebar's edge), the row of it the
+/// pointer is on, so the tip shows by the pointer rather than off the
+/// window's foot.
+pub fn tip_anchor(
+    control: Bounds<Pixels>,
+    pointer: Point<Pixels>,
+    window: Size<Pixels>,
+) -> Bounds<Pixels> {
+    if control.size.height * 2.0 < window.height {
+        return control;
+    }
+    let tall = px(layout::TIP_HEIGHT);
+    let top = (pointer.y - tall / 2.0)
+        .max(control.top())
+        .min(control.bottom() - tall);
+    Bounds::new(point(control.left(), top), size(control.size.width, tall))
 }
 
 /// Whether a tip asked for now shows at once: one shows still
@@ -496,8 +738,32 @@ pub fn tip_is_quick(showing: usize, last_hidden: Option<Instant>, now: Instant) 
 }
 
 thread_local! {
-    /// How many tips show now, and when the last one went.
+    /// How many tips show now, and when the last one went: one warm-up for
+    /// the whole app, shared by the kit's tips and GPUI's own, so the next
+    /// tip after any other shows at once.
     static TIPS: Cell<(usize, Option<Instant>)> = const { Cell::new((0, None)) };
+}
+
+/// A tip shows: the next asked for shows at once.
+fn tip_shown() {
+    TIPS.with(|tips| {
+        let (showing, last) = tips.get();
+        tips.set((showing + 1, last));
+    });
+}
+
+/// A tip went at `now`: the next asked for within `TIP_QUICK` shows at once.
+fn tip_gone(now: Instant) {
+    TIPS.with(|tips| {
+        let (showing, _) = tips.get();
+        tips.set((showing.saturating_sub(1), Some(now)));
+    });
+}
+
+/// Whether a tip asked for now shows at once, as the app's tips stand.
+fn tips_are_warm(now: Instant) -> bool {
+    let (showing, last) = TIPS.with(Cell::get);
+    tip_is_quick(showing, last, now)
 }
 
 /// What a control keeps while it shows: its keys, its hover, its tip.
@@ -545,8 +811,7 @@ impl Control {
             return;
         }
         let now = Instant::now();
-        let (showing, last) = TIPS.with(Cell::get);
-        if tip_is_quick(showing, last, now) {
+        if tips_are_warm(now) {
             self.show_tip(false, now);
             return;
         }
@@ -565,10 +830,7 @@ impl Control {
         self.tip.waiting = None;
         self.tip.hiding = None;
         self.tip.shown = Some((now, fade));
-        TIPS.with(|tips| {
-            let (showing, last) = tips.get();
-            tips.set((showing + 1, last));
-        });
+        tip_shown();
     }
 
     fn hide_tip(&mut self) {
@@ -576,11 +838,18 @@ impl Control {
         if self.tip.shown.take().is_some() {
             let now = Instant::now();
             self.tip.hiding = Some(now);
-            TIPS.with(|tips| {
-                let (showing, _) = tips.get();
-                tips.set((showing.saturating_sub(1), Some(now)));
-            });
+            tip_gone(now);
         }
+    }
+
+    /// Something came over the control without the pointer moving (a
+    /// panel opened over the window, its scrim over it): the tip goes at
+    /// once, with no fade, and does not come back until the pointer is
+    /// over the control again.
+    fn cover(&mut self) {
+        self.tip.hovered = false;
+        self.hide_tip();
+        self.tip.hiding = None;
     }
 }
 
@@ -605,22 +874,31 @@ fn faded(since: Instant, now: Instant) -> f32 {
     motion::ease(t.clamp(0.0, 1.0))
 }
 
+/// What else the pointer coming over an element or leaving it does, beside
+/// its hover and tip (a menu's row is lit).
+type HoverAlso = Rc<dyn Fn(bool, &mut Window, &mut App)>;
+
 /// `element` with its hover followed in `state` (for its fade) and its tip
-/// `tip` shown where the pointer rests on it.
+/// `tip` shown where the pointer rests on it. The pointer coming over it or
+/// leaving it also does `also`.
 fn hovered(
     element: Stateful<Div>,
     state: &Entity<Control>,
     tip: Option<Tip>,
+    also: Option<HoverAlso>,
     window: &mut Window,
     cx: &mut App,
 ) -> Stateful<Div> {
     let tipped = tip.is_some();
     let hover_state = state.clone();
-    let mut element = element.on_hover(move |hovered, _, cx| {
+    let mut element = element.on_hover(move |hovered, window, cx| {
         hover_state.update(cx, |control, cx| {
             control.set_hovered(*hovered, tipped, cx);
             cx.notify();
-        })
+        });
+        if let Some(also) = &also {
+            also(*hovered, window, cx);
+        }
     });
     let Some(tip) = tip else {
         return element;
@@ -633,14 +911,27 @@ fn hovered(
             cx.notify();
         })
     });
-    // Where the control is, for the tip to stand by.
+    // Where the control is, for the tip to stand by; and whether the
+    // pointer is still over it as this frame has things, for a panel that
+    // opened over it (its scrim) takes it away from under a still pointer.
     let bounds_state = state.clone();
+    let cover_state = state.clone();
     element = element.child(
         canvas(
-            move |bounds, _, cx| {
-                bounds_state.update(cx, |control, _| control.tip.bounds = Some(bounds))
+            move |bounds, window, cx| {
+                bounds_state.update(cx, |control, _| control.tip.bounds = Some(bounds));
+                window.insert_hitbox(bounds, HitboxBehavior::Normal)
             },
-            |_, _, _, _| {},
+            move |_, hitbox, window, cx| {
+                let tip = &cover_state.read(cx).tip;
+                let asked = tip.hovered && (tip.shown.is_some() || tip.waiting.is_some());
+                if asked && !hitbox.is_hovered(window) {
+                    cover_state.update(cx, |control, cx| {
+                        control.cover();
+                        cx.notify();
+                    });
+                }
+            },
         )
         .absolute()
         .top_0()
@@ -653,7 +944,11 @@ fn hovered(
     }
 }
 
-/// The tip over everything, while it shows or fades out.
+/// The tip over everything, while it shows or fades out. It is drawn as
+/// the window draws GPUI's own tooltips, after everything else (menus and
+/// panels drawn on top of the window among them), so a control inside a
+/// menu or a popover has its tip over it too; it stands where
+/// [`tip_origin`] puts it, not by the pointer.
 fn tip_layer(
     state: &Entity<Control>,
     tip: &Tip,
@@ -670,7 +965,10 @@ fn tip_layer(
         (Some((_, false)), _) => 1.0,
         (None, Some(since)) => {
             let gone = faded(since, now);
-            if gone >= 1.0 {
+            // The window draws one tip: one going gives way at once to
+            // one that shows (the pointer went on to another control).
+            let another = TIPS.with(Cell::get).0 > 0;
+            if gone >= 1.0 || another {
                 state.update(cx, |control, _| control.tip.hiding = None);
                 return None;
             }
@@ -681,18 +979,49 @@ fn tip_layer(
     if opacity < 1.0 || hiding.is_some() {
         window.request_animation_frame();
     }
-    let tip = tip.one_line();
-    let tip_size = tip_size(&tip, window);
-    let origin = tip_origin(bounds?, tip_size, window.viewport_size());
+    let tip_size = tip_size(tip, window);
+    let origin = tip_origin(
+        tip_anchor(bounds?, window.mouse_position(), window.viewport_size()),
+        tip_size,
+        window.viewport_size(),
+    );
+    let tip = tip.clone();
+    let width = f32::from(tip_size.width);
     Some(
-        deferred(
-            gpui::anchored()
-                .position(origin)
-                .child(tip_card(&tip, Some(f32::from(tip_size.width))).opacity(opacity)),
+        canvas(
+            move |_, window, cx| {
+                let view = cx.new(|_| TipCard {
+                    tip,
+                    width,
+                    opacity,
+                });
+                // The window sets a tooltip one point past where it is told.
+                window.set_tooltip(AnyTooltip {
+                    view: view.into(),
+                    mouse_position: origin - point(px(1.0), px(1.0)),
+                    check_visible_and_update: Rc::new(|_, _, _| true),
+                });
+            },
+            |_, _, _, _| {},
         )
-        .with_priority(3)
+        .absolute()
+        .size_0()
         .into_any_element(),
     )
+}
+
+/// A kit's tip as the window draws it over everything: its card, `width`
+/// wide, at `opacity`.
+struct TipCard {
+    tip: Tip,
+    width: f32,
+    opacity: f32,
+}
+
+impl Render for TipCard {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        tip_card(&self.tip, Some(self.width)).opacity(self.opacity)
+    }
 }
 
 /// `child` with a tip: its name and key, shown as a control of the kit's
@@ -723,40 +1052,69 @@ impl RenderOnce for Tipped {
             .flex_none()
             .items_center()
             .child(self.child);
-        hovered(element, &state, Some(self.tip), window, cx)
+        hovered(element, &state, Some(self.tip), None, window, cx)
     }
 }
 
-/// What a control says when the pointer rests on it, as GPUI's own
-/// `tooltip` shows it (after its own wait): its words, fading in.
-pub struct Tooltip(pub SharedString);
+/// `element` itself with the kit's tip `tip` (none: no tip), shown as a
+/// control's is: after a rest, or at once after another tip; fading in and
+/// out; its key in mono; gone when a panel opens over it. Its words are
+/// read each time it is drawn, so a tip that shows says what the element
+/// says now. In place of GPUI's own `tooltip`, with no box round it: the
+/// element keeps its own place and size. It takes the element's hover
+/// (`on_hover`), which must have none of its own.
+pub fn tip_on(element: Stateful<Div>, tip: Option<Tip>) -> TipOn {
+    TipOn { element, tip }
+}
 
-impl Render for Tooltip {
-    fn render(&mut self, _window: &mut Window, _cx: &mut gpui::Context<Self>) -> impl IntoElement {
-        fading_card(Tip::new(self.0.clone()))
+#[derive(IntoElement)]
+pub struct TipOn {
+    element: Stateful<Div>,
+    tip: Option<Tip>,
+}
+
+impl RenderOnce for TipOn {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let mut element = self.element;
+        let Some(tip) = self.tip else {
+            return element;
+        };
+        let Some(id) = element.interactivity().element_id.clone() else {
+            return element;
+        };
+        let state = control(&id, window, cx);
+        hovered(element, &state, Some(tip), None, window, cx)
     }
 }
 
-/// A tip with its key, as GPUI's own `tooltip` shows it: see [`tooltip`].
-pub struct TipView(pub Tip);
+/// The kit's tip `tip` over the whole of the element it is a child of (it
+/// fills it, `absolute`, and takes no press from it), shown as
+/// [`tip_on`]'s is. For an element that keeps a hover of its own, or whose
+/// end is far from where its tip is known. None: no tip.
+pub fn tip_zone(id: impl Into<ElementId>, tip: Option<Tip>) -> TipZone {
+    TipZone { id: id.into(), tip }
+}
 
-impl Render for TipView {
-    fn render(&mut self, _window: &mut Window, _cx: &mut gpui::Context<Self>) -> impl IntoElement {
-        fading_card(self.0.clone())
+#[derive(IntoElement)]
+pub struct TipZone {
+    id: ElementId,
+    tip: Option<Tip>,
+}
+
+impl RenderOnce for TipZone {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let zone = div()
+            .id(self.id.clone())
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full();
+        let Some(tip) = self.tip else {
+            return zone;
+        };
+        let state = control(&self.id, window, cx);
+        hovered(zone, &state, Some(tip), None, window, cx)
     }
-}
-
-fn fading_card(tip: Tip) -> impl IntoElement {
-    tip_card(&tip.one_line(), None).with_animation(
-        "kit-tip",
-        motion::animation(scene::FADE),
-        |card, t| card.opacity(t),
-    )
-}
-
-/// What to give an element's `tooltip` for `tip`: its words and its key.
-pub fn tooltip(tip: Tip) -> impl Fn(&mut Window, &mut App) -> AnyView + 'static {
-    move |_, cx| cx.new(|_| TipView(tip.clone())).into()
 }
 
 // ---------------------------------------------------------------- keys on a control
@@ -1068,7 +1426,7 @@ impl RenderOnce for Button {
             cx,
             self.on_click,
         );
-        hovered(button, &state, tip, window, cx)
+        hovered(button, &state, tip, None, window, cx)
     }
 }
 
@@ -1214,7 +1572,7 @@ impl RenderOnce for IconButton {
             cx,
             self.on_click,
         );
-        hovered(button, &state, tip, window, cx)
+        hovered(button, &state, tip, None, window, cx)
     }
 }
 
@@ -1338,7 +1696,7 @@ impl RenderOnce for Switch {
             )),
         );
         let tip = self.tooltip.map(Tip::new);
-        hovered(element, &state, tip, window, cx)
+        hovered(element, &state, tip, None, window, cx)
     }
 }
 
@@ -1568,7 +1926,7 @@ impl<T: Copy + PartialEq + 'static> RenderOnce for Segmented<T> {
                     .on_click(move |_, window, cx| choose(value, window, cx))
             });
             let tip = self.tips.get(index).cloned().flatten().map(Tip::new);
-            track = track.child(hovered(segment, &segment_state, tip, window, cx));
+            track = track.child(hovered(segment, &segment_state, tip, None, window, cx));
         }
         let (forward, back) = (self.choose.clone(), self.choose.clone());
         let values: Rc<Vec<T>> = Rc::new(self.options.iter().map(|(value, _)| *value).collect());
@@ -1704,6 +2062,11 @@ impl MenuItem {
     pub fn enabled(&self) -> bool {
         !self.disabled
     }
+
+    /// The rows of its submenu (none for a row that does something).
+    pub fn rows(&self) -> &[MenuItem] {
+        &self.submenu
+    }
 }
 
 /// The next row of `enabled` from `from` (none lit: the first or last),
@@ -1752,14 +2115,64 @@ pub fn menu_letter(
     })
 }
 
+/// How tall a menu's panel of `items` is: its rows (`MENU_ROW` each), the
+/// lines between their groups, its padding and its edge.
+pub fn menu_height(items: &[MenuItem]) -> f32 {
+    let separators = items.iter().filter(|item| item.separated).count() as f32;
+    layout::MENU_PAD * 2.0
+        + 2.0
+        + items.len() as f32 * layout::MENU_ROW
+        + separators * layout::MENU_SEPARATOR
+}
+
+/// Which way a submenu opens from its row.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SubmenuPlace {
+    /// To the left of the menu, where it would run past the window's right.
+    pub left: bool,
+    /// Upward, its foot level with the row's, where it would run past the
+    /// window's foot.
+    pub up: bool,
+}
+
+/// Which way a submenu `sub` big opens beside its row at `row`, the menu's
+/// panel at `panel`, in a window `window` big: to the right and down, its
+/// first row level with the row; to the left where the right has no room
+/// (and the left has more); upward, its last row level with the row, where
+/// down runs past the window's foot (and up has more room).
+pub fn submenu_place(
+    row: Bounds<Pixels>,
+    panel: Bounds<Pixels>,
+    sub: Size<Pixels>,
+    window: Size<Pixels>,
+) -> SubmenuPlace {
+    let edge = layout::TIP_EDGE;
+    let (wide, tall) = (f32::from(sub.width), f32::from(sub.height));
+    let right_room = f32::from(window.width) - edge - (f32::from(panel.right()) - 1.0);
+    let left_room = f32::from(panel.left()) + 1.0 - edge;
+    let below = f32::from(window.height) - edge - (f32::from(row.top()) - layout::MENU_PAD - 1.0);
+    let above = f32::from(row.bottom()) + layout::MENU_PAD + 1.0 - edge;
+    SubmenuPlace {
+        left: wide > right_room && left_room > right_room,
+        up: tall > below && above > below,
+    }
+}
+
 static MENU_SERIAL: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// What a menu shows over its rows, drawn afresh each time it is (the sync
+/// chip's: where the project stands).
+type MenuHead = Rc<dyn Fn(&mut Window, &mut App) -> AnyElement>;
 
 /// A menu: rows of words to choose from, with keys, submenus and ticks. It
 /// takes the keys as it opens and gives them back as it goes; the arrows
 /// light a row at once, Enter or Space chooses it, a letter goes to the
 /// next row starting with it, Right opens a submenu and Left or Esc closes
 /// it, and Esc (or a press outside) closes the menu and does nothing else.
-/// It fades in over `FADE`, rising `MENU_RISE`.
+/// It fades in over `FADE`, rising `MENU_RISE`. A submenu opens beside its
+/// row, to the left where the window ends on the right, and upward (its
+/// foot level with the row's) where it would run past the window's foot. A
+/// row's tip (what it does, or why it cannot) is the kit's.
 ///
 /// Whoever opens it holds the entity, places it (in a `deferred`
 /// `anchored`, or an absolute box), and drops it on its [`DismissEvent`].
@@ -1767,17 +2180,18 @@ pub struct Menu {
     focus: FocusHandle,
     items: Vec<MenuItem>,
     header: Option<SharedString>,
+    head: Option<MenuHead>,
     width: f32,
     /// The row lit at each level open: the menu's own, then each submenu's.
     path: Vec<Option<usize>>,
     /// What had the keys before it opened.
     back: Option<FocusHandle>,
     serial: usize,
-    /// Where it and its submenus are laid out, to know a press outside;
-    /// and where they were the frame before, to know which way a submenu
-    /// has room to open.
+    /// Where it and its submenus are laid out, to know a press outside.
     panels: Rc<RefCell<Vec<Bounds<Pixels>>>>,
-    laid: Vec<Bounds<Pixels>>,
+    /// Where each panel and each row (by its level and place) was laid out
+    /// the frame before, to know which way a submenu has room to open.
+    laid: Rc<RefCell<HashMap<(usize, Option<usize>), Bounds<Pixels>>>>,
     closed: bool,
     _letters: Subscription,
 }
@@ -1825,11 +2239,8 @@ impl Menu {
                 }
                 // A letter goes to its row; no other key typed while the menu
                 // is open reaches the window (Backspace, a command's letter).
-                let mut chars = keystroke.key.chars();
-                if let (Some(letter), None) = (chars.next(), chars.next()) {
-                    if letter.is_alphanumeric() {
-                        let _ = this.update(cx, |menu, cx| menu.jump(letter, cx));
-                    }
+                if let Some(letter) = typed_letter(&keystroke.key) {
+                    let _ = this.update(cx, |menu, cx| menu.jump(letter, cx));
                 }
                 cx.stop_propagation();
             })
@@ -1838,20 +2249,28 @@ impl Menu {
             focus,
             items,
             header: None,
+            head: None,
             width: layout::MENU_LEAST,
             path: vec![None],
             back,
             serial: MENU_SERIAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             panels: Rc::default(),
-            laid: Vec::new(),
+            laid: Rc::default(),
             closed: false,
             _letters: letters,
         }
     }
 
-    /// Quiet words over its rows (who chat runs on).
+    /// Quiet words over its rows (who chat runs on, a media's name).
     pub fn header(mut self, words: impl Into<SharedString>) -> Self {
         self.header = Some(words.into());
+        self
+    }
+
+    /// What shows over its rows, drawn afresh each time the menu is (the
+    /// sync chip's standing): in place of [`Menu::header`].
+    pub fn head(mut self, head: impl Fn(&mut Window, &mut App) -> AnyElement + 'static) -> Self {
+        self.head = Some(Rc::new(head));
         self
     }
 
@@ -1868,16 +2287,31 @@ impl Menu {
         self
     }
 
+    /// Opened on row `at`'s submenu, its first row that can be chosen lit
+    /// (Collaborate ▸ Switch Branch from the window's menus).
+    pub fn opened(mut self, at: usize) -> Self {
+        let Some(item) = self.items.get(at) else {
+            return self;
+        };
+        self.path = vec![Some(at)];
+        if !item.submenu.is_empty() && !item.disabled {
+            let enabled: Vec<bool> = item.submenu.iter().map(MenuItem::enabled).collect();
+            self.path.push(menu_step(&enabled, None, true));
+        }
+        self
+    }
+
+    /// Its rows as things stand now, while it is open (the sync chip's,
+    /// as git answers): the rows lit stay lit where they still can be.
+    pub fn set_items(&mut self, items: Vec<MenuItem>, cx: &mut Context<Self>) {
+        self.items = items;
+        self.path = kept_path(&self.items, &self.path);
+        cx.notify();
+    }
+
     /// The rows at `level`.
     fn rows(&self, level: usize) -> &[MenuItem] {
-        let mut rows = self.items.as_slice();
-        for lit in self.path.iter().take(level) {
-            match lit.and_then(|at| rows.get(at)) {
-                Some(item) => rows = item.submenu.as_slice(),
-                None => return &[],
-            }
-        }
-        rows
+        rows_at(&self.items, &self.path, level)
     }
 
     fn deepest(&self) -> usize {
@@ -2014,7 +2448,7 @@ impl Menu {
     }
 
     /// The panel of `level`'s rows.
-    fn panel(&self, level: usize, window: &Window, cx: &mut Context<Self>) -> Div {
+    fn panel(&self, level: usize, window: &mut Window, cx: &mut Context<Self>) -> Div {
         let rows = self.rows(level).to_vec();
         let lit = self.path.get(level).copied().flatten();
         let panels = self.panels.clone();
@@ -2028,24 +2462,33 @@ impl Menu {
             .left_0()
             .size_full(),
         );
+        // Which of the panel's children is which row, to keep where each was.
+        let mut kinds: Vec<Option<usize>> = vec![None];
         if level == 0 {
-            if let Some(header) = self.header.clone() {
+            if let Some(head) = self.head.clone() {
+                panel = panel.child(head(window, cx));
+                kinds.push(None);
+            } else if let Some(header) = self.header.clone() {
                 panel = panel.child(div().px(px(10.0)).pt(px(4.0)).pb(px(6.0)).child(line(
                     header,
                     text::META,
                     theme::ink3(),
                 )));
+                kinds.push(None);
             }
         }
         let viewport = window.viewport_size();
+        let laid = self.laid.borrow().clone();
         for (at, item) in rows.into_iter().enumerate() {
             if item.separated {
                 panel = panel.child(menu_separator());
+                kinds.push(None);
             }
             let is_lit = lit == Some(at);
             let open = is_lit && self.path.len() > level + 1 && !item.submenu.is_empty();
+            let row_id = ElementId::Name(format!("kit-menu-{}-{level}-{at}", self.serial).into());
             let mut row = menu_item(
-                ElementId::Name(format!("kit-menu-{}-{level}-{at}", self.serial).into()),
+                row_id.clone(),
                 item.words.clone(),
                 item.icon,
                 item.danger,
@@ -2072,53 +2515,129 @@ impl Menu {
                         theme::ink3()
                     },
                 ))
-            })
-            .on_hover(cx.listener(move |menu, hovered: &bool, _, cx| {
-                if *hovered {
-                    menu.point_at(level, at, cx);
-                }
-            }));
-            if let Some(tip) = item.tip.clone() {
-                row = row.tooltip(tooltip(Tip::new(tip)));
-            }
+            });
             if !item.disabled {
                 row = row.on_click(cx.listener(move |menu, event: &ClickEvent, window, cx| {
                     menu.choose(level, at, event.is_keyboard(), window, cx)
                 }));
             }
             if open {
-                // Beside the row, to the right unless the window ends first.
-                let room = self.laid.get(level).is_none_or(|bounds| {
-                    f32::from(bounds.right()) + self.width <= f32::from(viewport.width)
-                });
-                let sub = self.panel(level + 1, window, cx);
-                // Its first row level with this one; its edge on the menu's.
-                let beside = self.width - 6.0;
-                // Kept inside the window: one that would run past its foot
-                // is raised until it fits.
+                let sub_items = &self.rows(level + 1);
+                let sub = size(px(self.width), px(menu_height(sub_items)));
+                let place = match (laid.get(&(level, Some(at))), laid.get(&(level, None))) {
+                    (Some(row), Some(panel)) => Some(submenu_place(*row, *panel, sub, viewport)),
+                    _ => None,
+                };
+                // Until its row has been laid out (a menu opened on it), it
+                // waits a frame unseen rather than show where it will not stay.
+                let known = place.is_some();
+                let place = place.unwrap_or_default();
+                let sub_panel = self.panel(level + 1, window, cx);
+                // Beside the row: its edge on the menu's, its first row level
+                // with this one (its last, opening upward); kept inside the
+                // window all the same.
+                let beside = self.width - layout::MENU_PAD - 2.0;
+                let corner = match (place.left, place.up) {
+                    (false, false) => gpui::Corner::TopLeft,
+                    (true, false) => gpui::Corner::TopRight,
+                    (false, true) => gpui::Corner::BottomLeft,
+                    (true, true) => gpui::Corner::BottomRight,
+                };
                 row = row.child(
                     div()
                         .absolute()
-                        .top(px(-5.0))
-                        .when(room, |place| place.left(px(beside)))
-                        .when(!room, |place| place.right(px(beside)))
+                        .when(!known, |at| at.invisible())
+                        .when(!place.up, |at| at.top(px(-(layout::MENU_PAD + 1.0))))
+                        .when(place.up, |at| at.bottom(px(-(layout::MENU_PAD + 1.0))))
+                        .when(!place.left, |at| at.left(px(beside)))
+                        .when(place.left, |at| at.left(px(-(layout::MENU_PAD))))
                         .child(
                             gpui::anchored()
+                                .anchor(corner)
                                 .snap_to_window_with_margin(px(layout::TIP_EDGE))
-                                .child(sub),
+                                .child(sub_panel),
                         ),
                 );
             }
+            let also: HoverAlso = {
+                let this = cx.weak_entity();
+                Rc::new(move |hovered, _, cx| {
+                    if hovered {
+                        let _ = this.update(cx, |menu, cx| menu.point_at(level, at, cx));
+                    }
+                })
+            };
+            let state = control(&row_id, window, cx);
+            let tip = item.tip.clone().map(Tip::new);
+            row = hovered(row, &state, tip, Some(also), window, cx);
             panel = panel.child(row);
+            kinds.push(Some(at));
         }
-        panel
+        let laid = self.laid.clone();
+        let kinds = Rc::new(kinds);
+        panel.on_children_prepainted(move |bounds, _, _| {
+            let mut laid = laid.borrow_mut();
+            if let Some(whole) = bounds.first() {
+                // The panel's own canvas fills it.
+                laid.insert((level, None), *whole);
+            }
+            for (bounds, kind) in bounds.iter().zip(kinds.iter()) {
+                if let Some(at) = kind {
+                    laid.insert((level, Some(*at)), *bounds);
+                }
+            }
+        })
     }
+}
+
+/// The letter a keystroke types, if it types one (a menu's letter jump).
+pub fn typed_letter(key: &str) -> Option<char> {
+    let mut chars = key.chars();
+    match (chars.next(), chars.next()) {
+        (Some(letter), None) if letter.is_alphanumeric() => Some(letter),
+        _ => None,
+    }
+}
+
+/// The rows at `level` of `items` with `path` lit.
+fn rows_at<'a>(items: &'a [MenuItem], path: &[Option<usize>], level: usize) -> &'a [MenuItem] {
+    let mut rows = items;
+    for lit in path.iter().take(level) {
+        match lit.and_then(|at| rows.get(at)) {
+            Some(item) => rows = item.submenu.as_slice(),
+            None => return &[],
+        }
+    }
+    rows
+}
+
+/// What of `path` still holds over `items` (a menu's rows changed while it
+/// was open): each level's lit row while it is there and can be chosen,
+/// and the submenus open under it while it still has one.
+pub fn kept_path(items: &[MenuItem], path: &[Option<usize>]) -> Vec<Option<usize>> {
+    let mut kept: Vec<Option<usize>> = Vec::new();
+    let mut rows = items;
+    for (level, lit) in path.iter().enumerate() {
+        let lit = lit.filter(|at| rows.get(*at).is_some_and(MenuItem::enabled));
+        kept.push(lit);
+        let opens = lit
+            .and_then(|at| rows.get(at))
+            .filter(|item| !item.submenu.is_empty());
+        match opens {
+            Some(item) if level + 1 < path.len() => rows = item.submenu.as_slice(),
+            _ => break,
+        }
+    }
+    if kept.is_empty() {
+        kept.push(None);
+    }
+    kept
 }
 
 impl Render for Menu {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // Where the panels were, kept; they are laid out again this frame.
-        self.laid = std::mem::take(&mut *self.panels.borrow_mut());
+        // Where the panels are is laid out again this frame.
+        self.panels.borrow_mut().clear();
         let panel = self.panel(0, window, cx);
         let panels = self.panels.clone();
         let rise = scene::MENU_RISE;
@@ -2166,7 +2685,7 @@ impl Render for Menu {
 /// What opens from a press: a panel of rows a step up from what it opens over.
 pub fn menu_panel() -> Div {
     div()
-        .p(px(4.0))
+        .p(px(layout::MENU_PAD))
         .rounded(px(radius::CARD))
         .bg(theme::popup())
         .border_1()
@@ -2222,21 +2741,25 @@ pub fn menu_separator() -> Div {
     div().my(px(4.0)).mx(px(6.0)).h(px(1.0)).bg(theme::line())
 }
 
-/// A press that toggles what it opens (a menu), taken before anything under
-/// the pointer has it, so the menu it closes does not take it as a press
-/// outside and open again.
+/// A press that toggles what it opens (a menu), taken as the button goes
+/// down. Any menu open has seen it first, as a press outside, and gone (a
+/// press outside a popup closes it first, as in Qt; one that keeps the
+/// press for itself, a question asked over the window, leaves the trigger
+/// none). Then the trigger takes it, before what it sits in (a tile, the
+/// toolbar) has it. Its own menu closes on the press too, but whoever
+/// opened it still holds it until its [`DismissEvent`] arrives, after the
+/// press: so the press puts it away rather than opening it again.
 pub fn trigger(
     id: impl Into<ElementId>,
     press: impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
 ) -> Stateful<Div> {
-    div()
-        .id(id)
-        .capture_any_mouse_down(move |event: &MouseDownEvent, window, cx| {
-            if event.button == MouseButton::Left {
-                cx.stop_propagation();
-                press(event, window, cx);
-            }
-        })
+    div().id(id).on_mouse_down(
+        MouseButton::Left,
+        move |event: &MouseDownEvent, window, cx| {
+            cx.stop_propagation();
+            press(event, window, cx);
+        },
+    )
 }
 
 // ---------------------------------------------------------------- scroll fades

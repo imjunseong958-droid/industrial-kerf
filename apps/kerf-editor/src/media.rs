@@ -31,7 +31,9 @@
 //! Make… and Make Several or Stop Making, its Takes, and Show in Folder;
 //! the empty bin's has Import Media…, Consolidate Media and Cast and
 //! Styles…, which a tile's menu ends with too. Each item says in its
-//! tooltip what it does, or why it cannot.
+//! tooltip what it does, or why it cannot. They are the kit's menus: they
+//! take the keys while open (the arrows, Return, a letter, Esc are
+//! theirs, not the band's).
 
 use crate::artwork::{self, paint_waveform};
 use crate::cast::{CastView, OpenCast};
@@ -575,54 +577,45 @@ pub enum Tab {
     Index,
 }
 
-/// A menu while open: of a media, or of the empty bin, and where it was
-/// asked for.
-struct Menu {
+/// A menu while open: of a media, or of the empty bin; where it was asked
+/// for; and the kit's menu itself, which has the keys while it is open.
+struct OpenMenu {
     media: Option<String>,
     at: Point<Pixels>,
+    menu: Entity<ui::Menu>,
 }
 
-/// What a control says when the pointer rests on it, with its keys after.
-struct KeyTip {
-    words: SharedString,
-    keys: Option<SharedString>,
-}
-
-impl Render for KeyTip {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        theme::type_style(div(), text::CONTROL)
-            .flex()
-            .items_center()
-            .gap(px(8.0))
-            .max_w(px(420.0))
-            .px(px(8.0))
-            .py(px(4.0))
-            .rounded(px(theme::radius::CONTROL))
-            .bg(theme::popup())
-            .border_1()
-            .border_color(theme::line2())
-            .text_color(theme::ink())
-            .shadow_md()
-            .child(self.words.clone())
-            .when_some(self.keys.clone(), |tip, keys| {
-                tip.child(div().flex_none().text_color(theme::ink3()).child(keys))
-            })
-    }
-}
-
-fn key_tip(
-    words: impl Into<SharedString>,
-    keys: Option<String>,
-) -> impl Fn(&mut Window, &mut App) -> AnyView + 'static {
-    let words = words.into();
-    let keys: Option<SharedString> = keys.map(Into::into);
-    move |_, cx| {
-        cx.new(|_| KeyTip {
-            words: words.clone(),
-            keys: keys.clone(),
+/// Make Several ▸ (Qt's): two, three or four takes of the same shot to
+/// choose among, each with every seed of its steps one on from the last.
+fn several(media: &str, connected: bool) -> ui::MenuItem {
+    let rows = [2u32, 3, 4]
+        .into_iter()
+        .map(|rolls| {
+            let media: SharedString = media.to_owned().into();
+            ui::MenuItem::new(format!("{rolls} Takes…"))
+                .tip(format!(
+                    "Make {rolls} takes of {media}, each with every seed of its steps one on from the last; the command is shown first"
+                ))
+                .on_choose(move |window, cx| {
+                    window.dispatch_action(
+                        Box::new(MakeMedia {
+                            media: media.clone(),
+                            rolls,
+                        }),
+                        cx,
+                    );
+                })
         })
-        .into()
-    }
+        .collect();
+    ui::MenuItem::new("Make Several")
+        .icon(Icon::Sparkle)
+        .disabled(!connected)
+        .tip(if connected {
+            "Several takes of the same shot to choose among"
+        } else {
+            "Kerf is not connected"
+        })
+        .submenu(rows)
 }
 
 /// The key context the band's tiles answer in.
@@ -651,9 +644,7 @@ fn bind_keys(cx: &mut App) {
 pub struct MediaBand {
     session: Entity<Session>,
     focus: FocusHandle,
-    menu: Option<Menu>,
-    /// How many menus have opened, so each fades in as a new one.
-    menus: u64,
+    menu: Option<OpenMenu>,
     tab: Tab,
     /// The segmented control's fill: 0 under Media, 1 under Index.
     tab_fill: Tween,
@@ -665,6 +656,8 @@ pub struct MediaBand {
     /// workspace does not take [`OpenCast`] or [`EditRoles`].
     hosted: Option<(AnyView, u64)>,
     hosts: u64,
+    /// Roles' column, for its fades.
+    roles_scroll: gpui::ScrollHandle,
     /// Each command's first key in the keymap they were read for.
     keys: (String, HashMap<String, String>),
     _subscriptions: Vec<Subscription>,
@@ -697,7 +690,6 @@ impl MediaBand {
             session,
             focus: cx.focus_handle().tab_stop(true),
             menu: None,
-            menus: 0,
             tab: Tab::Media,
             tab_fill: Tween::at(0.0),
             list: false,
@@ -706,6 +698,7 @@ impl MediaBand {
             query: String::new(),
             hosted: None,
             hosts: 0,
+            roles_scroll: gpui::ScrollHandle::new(),
             keys: (String::new(), HashMap::new()),
             _subscriptions: subscriptions,
         }
@@ -805,6 +798,8 @@ impl MediaBand {
                 files: true,
                 directories: false,
                 multiple: false,
+                // Qt asked "Replace m2" with a filter of media files and in
+                // the media's own folder; GPUI's chooser takes neither.
                 prompt: Some(format!("Replace {media}").into()),
             },
         );
@@ -826,6 +821,8 @@ impl MediaBand {
                     }
                     crate::presets::Picked::Nothing => None,
                 };
+                // Any file, as Qt's "All files (*)": kerfd reads it and
+                // refuses, in its own words, one that is no media.
                 if let Some(path) = path {
                     session.send(json!({"type": "media_replace", "media": media, "path": path.to_string_lossy()}));
                 }
@@ -844,17 +841,46 @@ impl MediaBand {
         });
     }
 
-    fn open_menu(&mut self, media: Option<&str>, at: Point<Pixels>, cx: &mut Context<Self>) {
-        self.menus += 1;
-        self.menu = Some(Menu {
+    /// Opens the menu of `media` (None: the bin's own) where it was asked
+    /// for, the kit's: it takes the keys from the band, so the band's own
+    /// (the arrows, Return) do nothing under it, and gives them back as it
+    /// goes.
+    fn open_menu(
+        &mut self,
+        media: Option<&str>,
+        at: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some((title, items)) = self.menu_items(media, cx) else {
+            return;
+        };
+        let menu = cx.new(|cx| {
+            let menu = ui::Menu::new(items, window, cx).width(theme::layout::MEDIA_MENU_WIDTH);
+            match title {
+                Some(title) => menu.header(title),
+                None => menu,
+            }
+        });
+        cx.subscribe_in(&menu, window, |this, menu, _: &DismissEvent, _, cx| {
+            if this.menu.as_ref().is_some_and(|open| &open.menu == menu) {
+                this.menu = None;
+                cx.notify();
+            }
+        })
+        .detach();
+        self.menu = Some(OpenMenu {
             media: media.map(str::to_owned),
             at,
+            menu,
         });
         cx.notify();
     }
 
-    fn close_menu(&mut self, cx: &mut Context<Self>) {
-        if self.menu.take().is_some() {
+    /// The menu open goes, the keys back where they were.
+    fn close_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(open) = self.menu.take() {
+            open.menu.update(cx, |menu, cx| menu.close(window, cx));
             cx.notify();
         }
     }
@@ -904,10 +930,11 @@ impl MediaBand {
             },
         )
         .detach();
+        // The menu that asked for it goes first (it gave the keys back).
+        self.menu = None;
         window.focus(&view.focus_handle(cx));
         self.hosts += 1;
         self.hosted = Some((view.into(), self.hosts));
-        self.menu = None;
         cx.notify();
     }
 
@@ -954,10 +981,11 @@ impl MediaBand {
         }
     }
 
-    /// Esc: the band's menu goes, else its search; else the window's Esc.
+    /// Esc: the band's menu goes (the menu has the keys while open, and
+    /// takes its own Esc), else its search; else the window's Esc.
     fn put_away(&mut self, _: &PutAway, window: &mut Window, cx: &mut Context<Self>) {
         if self.menu.is_some() {
-            self.close_menu(cx);
+            self.close_menu(window, cx);
         } else if self.searching {
             self.close_search(window, cx);
         } else {
@@ -965,81 +993,50 @@ impl MediaBand {
         }
     }
 
-    fn menu_item(
-        key: &str,
-        words: &str,
-        icon: Option<Icon>,
-        enabled: bool,
-        keys: Option<String>,
-        tip: Option<String>,
-    ) -> gpui::Stateful<gpui::Div> {
-        let ink = if enabled { theme::ink() } else { theme::dis() };
-        theme::type_style(div(), text::MENU_QUIET)
-            .id(ElementId::Name(format!("media-menu-{key}").into()))
-            .flex()
-            .items_center()
-            .gap(px(8.0))
-            .h(px(28.0))
-            .px(px(10.0))
-            .rounded(px(theme::radius::CONTROL))
-            .text_color(ink)
-            .when(enabled, |item| {
-                item.cursor_pointer()
-                    .hover(|item| item.bg(theme::popup_hover()))
-            })
-            .child(div().w(px(14.0)).flex_none().children(
-                icon.map(|icon| {
-                    icon.view(14.0, if enabled { theme::ink2() } else { theme::dis() })
-                }),
-            ))
-            .child(div().flex_1().min_w_0().child(words.to_owned()))
-            .children(keys.map(|keys| div().flex_none().text_color(theme::ink3()).child(keys)))
-            .when_some(tip, |item, tip| item.tooltip(key_tip(tip, None)))
-    }
-
-    /// A registry command as a menu item: its label, its key, and why it
-    /// cannot run as its tooltip.
-    fn command_item(
+    /// A registry command as a row of the menu: its label, its key, and
+    /// what it does or why it cannot run, in its tip.
+    fn command_row(
         &mut self,
         id: &'static str,
         words: &str,
-        icon: Option<Icon>,
+        icon: Icon,
         tip: &str,
         states: &Value,
         cx: &mut Context<Self>,
-    ) -> AnyElement {
+    ) -> ui::MenuItem {
         let reason = crate::palette::unavailable(states, id).map(str::to_owned);
-        let keys = self.shown_key(id, cx);
-        let enabled = reason.is_none();
-        Self::menu_item(
-            id,
-            words,
-            icon,
-            enabled,
-            keys,
-            Some(reason.unwrap_or_else(|| tip.to_owned())),
-        )
-        .when(enabled, |item| {
-            item.on_click(cx.listener(move |this, _, window, cx| {
-                this.close_menu(cx);
-                Self::run(id, window, cx);
-            }))
-        })
-        .into_any_element()
+        let mut item = ui::MenuItem::new(words.to_owned())
+            .icon(icon)
+            .disabled(reason.is_some())
+            .tip(reason.unwrap_or_else(|| tip.to_owned()))
+            .on_choose(move |window, cx| Self::run(id, window, cx));
+        if let Some(key) = self.shown_key(id, cx) {
+            item = item.key(key);
+        }
+        item
     }
 
-    /// A menu: what can be done with its media as it stands, then what the
-    /// bin offers; the empty bin's has only the latter.
-    fn menu(&mut self, menu: &Menu, cx: &mut Context<Self>) -> Option<AnyElement> {
+    /// A menu, as the kit's rows: what can be done with `media` as it
+    /// stands (Insert, Overwrite, Replace Media…, its making and its takes,
+    /// Show in Folder), then what the bin offers; the empty bin's (None)
+    /// has only the latter. Its title is the media's name. None for a
+    /// media that is gone.
+    fn menu_items(
+        &mut self,
+        media: Option<&str>,
+        cx: &mut Context<Self>,
+    ) -> Option<(Option<String>, Vec<ui::MenuItem>)> {
+        let this = cx.entity().downgrade();
         let session = self.session.read(cx);
         let connected = session.state.connection == crate::store::Connection::Connected;
         let states = kerf_bridge::commands_states(&session.command_context());
-        let source = match &menu.media {
+        let source = match media {
             Some(media) => Some(session.timeline().source(media)?.clone()),
             None => None,
         };
-        let mut items: Vec<AnyElement> = Vec::new();
+        let mut items: Vec<ui::MenuItem> = Vec::new();
         let mut title = None;
+        let not_connected = "Kerf is not connected";
         if let Some(source) = source {
             let session = self.session.read(cx);
             let making = session.state.makings.contains_key(&source.id);
@@ -1048,49 +1045,43 @@ impl MediaBand {
             let name = session.media_name(&source.id);
             let file = self.file_of(&source, cx).filter(|file| file.exists());
             let media: SharedString = source.id.clone().into();
-            title = Some(name.clone());
-            items.push(self.command_item(
+            title = Some(name);
+            items.push(self.command_row(
                 "source.insert",
                 "Insert",
-                Some(Icon::Plus),
+                Icon::Plus,
                 "Put it in at the playhead, pushing what follows along",
                 &states,
                 cx,
             ));
-            items.push(self.command_item(
+            items.push(self.command_row(
                 "source.overwrite",
                 "Overwrite",
-                Some(Icon::Scissors),
+                Icon::Scissors,
                 "Put it in at the playhead over what is there",
                 &states,
                 cx,
             ));
-            items.push(ui::hairline(true).my(px(4.0)).into_any_element());
             let replace_reason = crate::palette::unavailable(&states, "media.replace")
                 .map(str::to_owned)
                 .or_else(|| making.then(|| format!("{} is being made", source.id)));
             let replace = source.id.clone();
+            let band = this.clone();
             items.push(
-                Self::menu_item(
-                    "replace",
-                    "Replace Media…",
-                    Some(Icon::Import),
-                    replace_reason.is_none(),
-                    None,
-                    Some(replace_reason.clone().unwrap_or_else(|| {
+                ui::MenuItem::new("Replace Media…")
+                    .icon(Icon::Import)
+                    .separated()
+                    .disabled(replace_reason.is_some())
+                    .tip(replace_reason.unwrap_or_else(|| {
                         format!(
                             "Swap the file behind {} for everyone; its clips keep their timing",
                             source.id
                         )
-                    })),
-                )
-                .when(replace_reason.is_none(), |item| {
-                    item.on_click(cx.listener(move |this, _, window, cx| {
-                        this.close_menu(cx);
-                        this.replace(replace.clone(), window, cx);
                     }))
-                })
-                .into_any_element(),
+                    .on_choose(move |window, cx| {
+                        let _ =
+                            band.update(cx, |band, cx| band.replace(replace.clone(), window, cx));
+                    }),
             );
             if carry {
                 // Its steps are still in the recipe file it names: what
@@ -1099,21 +1090,15 @@ impl MediaBand {
                 let able = connected && !making;
                 let recipe = source.recipe.clone().unwrap_or_default();
                 items.push(
-                    Self::menu_item(
-                        "carry",
-                        "Carry Steps into the Document…",
-                        Some(Icon::Import),
-                        able,
-                        None,
-                        Some(if connected {
+                    ui::MenuItem::new("Carry Steps into the Document…")
+                        .icon(Icon::Import)
+                        .disabled(!able)
+                        .tip(if connected {
                             format!("Write the steps of {recipe} under {}'s line in the document, as one edit undo takes back; what would be written is shown first, its takes are kept, and {recipe} is left where it is", source.id)
                         } else {
-                            "Kerf is not connected".to_owned()
-                        }),
-                    )
-                    .when(able, |item| {
-                        item.on_click(cx.listener(move |this, _, window, cx| {
-                            this.close_menu(cx);
+                            not_connected.to_owned()
+                        })
+                        .on_choose(move |window, cx| {
                             window.dispatch_action(
                                 Box::new(MakeMedia {
                                     media: carried.clone(),
@@ -1121,58 +1106,44 @@ impl MediaBand {
                                 }),
                                 cx,
                             );
-                        }))
-                    })
-                    .into_any_element(),
+                        }),
                 );
             }
             if steps {
                 let graph = media.clone();
                 items.push(
-                    Self::menu_item(
-                        "graph",
-                        "Open Graph",
-                        Some(Icon::Media),
-                        true,
-                        None,
-                        Some(format!("See how {} is made and set it: its steps in the document and what they read, as a graph", source.id)),
-                    )
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.close_menu(cx);
-                        window.dispatch_action(
-                            Box::new(OpenShotGraph {
-                                media: graph.clone(),
-                            }),
-                            cx,
-                        );
-                    }))
-                    .into_any_element(),
+                    ui::MenuItem::new("Open Graph")
+                        .icon(Icon::Media)
+                        .tip(format!("See how {} is made and set it: its steps in the document and what they read, as a graph", source.id))
+                        .on_choose(move |window, cx| {
+                            window.dispatch_action(
+                                Box::new(OpenShotGraph {
+                                    media: graph.clone(),
+                                }),
+                                cx,
+                            );
+                        }),
                 );
             }
             if making {
                 let stop = source.id.clone();
+                let band = this.clone();
                 items.push(
-                    Self::menu_item(
-                        "stop",
-                        "Stop Making",
-                        Some(Icon::Stop),
-                        connected,
-                        None,
-                        Some(if connected {
+                    ui::MenuItem::new("Stop Making")
+                        .icon(Icon::Stop)
+                        .disabled(!connected)
+                        .tip(if connected {
                             format!("Stop making {0}: its step is asked to end, no take is kept, and {0} stays as it is", source.id)
                         } else {
-                            "Kerf is not connected".to_owned()
-                        }),
-                    )
-                    .when(connected, |item| {
-                        item.on_click(cx.listener(move |this, _, _, cx| {
-                            this.close_menu(cx);
-                            this.session.update(cx, |session, _| {
-                                session.send(json!({"type": "media_make_cancel", "media": stop}));
+                            not_connected.to_owned()
+                        })
+                        .on_choose(move |_, cx| {
+                            let _ = band.update(cx, |band, cx| {
+                                band.session.update(cx, |session, _| {
+                                    session.send(json!({"type": "media_make_cancel", "media": stop}));
+                                });
                             });
-                        }))
-                    })
-                    .into_any_element(),
+                        }),
                 );
             } else if steps {
                 let make = media.clone();
@@ -1182,21 +1153,15 @@ impl MediaBand {
                     format!("; it shows {}", source.shows.join(", "))
                 };
                 items.push(
-                    Self::menu_item(
-                        "make",
-                        "Make…",
-                        Some(Icon::Sparkle),
-                        connected,
-                        None,
-                        Some(if connected {
+                    ui::MenuItem::new("Make…")
+                        .icon(Icon::Sparkle)
+                        .disabled(!connected)
+                        .tip(if connected {
                             format!("Make {}'s file again by running its steps in the document; the command is shown first{shows}", source.id)
                         } else {
-                            "Kerf is not connected".to_owned()
-                        }),
-                    )
-                    .when(connected, |item| {
-                        item.on_click(cx.listener(move |this, _, window, cx| {
-                            this.close_menu(cx);
+                            not_connected.to_owned()
+                        })
+                        .on_choose(move |window, cx| {
                             window.dispatch_action(
                                 Box::new(MakeMedia {
                                     media: make.clone(),
@@ -1204,165 +1169,62 @@ impl MediaBand {
                                 }),
                                 cx,
                             );
-                        }))
-                    })
-                    .into_any_element(),
+                        }),
                 );
-                items.push(self.several(&source.id, connected, cx));
+                items.push(several(&source.id, connected));
             }
             if !source.takes.is_empty() {
                 items.push(self.takes(&source, making, &states, cx));
             }
             let reveal = file.clone();
             items.push(
-                Self::menu_item(
-                    "reveal",
-                    "Show in Folder",
-                    Some(Icon::Folder),
-                    file.is_some(),
-                    None,
-                    Some(if file.is_some() {
-                        "Show its file in the system's file manager".to_owned()
+                ui::MenuItem::new("Show in Folder")
+                    .icon(Icon::Folder)
+                    .disabled(file.is_none())
+                    .tip(if file.is_some() {
+                        "Show its file in the system's file manager"
                     } else {
-                        "Its file is not on this computer".to_owned()
+                        "Its file is not on this computer"
+                    })
+                    .on_choose(move |_, cx| {
+                        if let Some(file) = &reveal {
+                            cx.reveal_path(file);
+                        }
                     }),
-                )
-                .when_some(reveal, |item, file| {
-                    item.on_click(cx.listener(move |this, _, _, cx| {
-                        this.close_menu(cx);
-                        cx.reveal_path(&file);
-                    }))
-                })
-                .into_any_element(),
             );
-            items.push(ui::hairline(true).my(px(4.0)).into_any_element());
         }
-        items.push(self.command_item(
+        let mut import = self.command_row(
             "file.import",
             "Import Media…",
-            Some(Icon::Import),
+            Icon::Import,
             "Bring files into the project's media",
             &states,
             cx,
-        ));
-        items.push(self.command_item(
+        );
+        if media.is_some() {
+            import = import.separated();
+        }
+        items.push(import);
+        items.push(self.command_row(
             "collab.consolidate",
             "Consolidate Media",
-            Some(Icon::Folder),
+            Icon::Folder,
             "Copy the media outside the project folder into media/ and point the project at the copies",
             &states,
             cx,
         ));
         items.push(
-            Self::menu_item(
-                "cast",
-                "Cast and Styles…",
-                Some(Icon::Sparkle),
-                true,
-                None,
-                Some("Who and what this project's shots show, and how they look, said once for every recipe".to_owned()),
-            )
-            .on_click(cx.listener(|this, _, window, cx| {
-                this.close_menu(cx);
-                this.show_cast(window, cx);
-            }))
-            .into_any_element(),
+            ui::MenuItem::new("Cast and Styles…")
+                .icon(Icon::Sparkle)
+                .tip("Who and what this project's shots show, and how they look, said once for every recipe")
+                .on_choose(move |window, cx| {
+                    let _ = this.update(cx, |band, cx| band.show_cast(window, cx));
+                }),
         );
-        let key = self.menus;
-        Some(
-            deferred(
-                anchored()
-                    .position(menu.at)
-                    .snap_to_window_with_margin(px(8.0))
-                    .child(
-                        div()
-                            .id("media-menu")
-                            .w(px(272.0))
-                            .p(px(4.0))
-                            .rounded(px(theme::radius::CARD))
-                            .bg(theme::popup())
-                            .border_1()
-                            .border_color(theme::line2())
-                            .shadow_lg()
-                            .occlude()
-                            .on_mouse_down_out(cx.listener(|this, _, _, cx| this.close_menu(cx)))
-                            .children(title.map(|title| {
-                                div().px(px(10.0)).py(px(4.0)).child(ui::line(
-                                    title,
-                                    text::META,
-                                    theme::ink3(),
-                                ))
-                            }))
-                            .children(items)
-                            .with_animation(
-                                ("media-menu", key),
-                                motion::animation(scene::FADE),
-                                |menu, t| menu.opacity(t),
-                            ),
-                    ),
-            )
-            .with_priority(1)
-            .into_any_element(),
-        )
+        Some((title, items))
     }
 
-    /// Make Several: several takes of the same shot to choose among, each
-    /// with its seeds one on.
-    fn several(&self, media: &str, connected: bool, cx: &mut Context<Self>) -> AnyElement {
-        let ink = if connected {
-            theme::ink()
-        } else {
-            theme::dis()
-        };
-        theme::type_style(div(), text::MENU_QUIET)
-            .flex()
-            .items_center()
-            .gap(px(8.0))
-            .h(px(28.0))
-            .pl(px(10.0))
-            .pr(px(4.0))
-            .text_color(ink)
-            .child(div().w(px(14.0)).flex_none().child(Icon::Sparkle.view(
-                14.0,
-                if connected { theme::ink2() } else { theme::dis() },
-            )))
-            .child(div().flex_1().child("Make Several"))
-            .children([2u32, 4, 8].into_iter().map(|rolls| {
-                let media: SharedString = media.to_owned().into();
-                let tip = format!(
-                    "Make {rolls} takes of {media}, each with every seed of its steps one on from the last; the command is shown first"
-                );
-                theme::type_style(div(), text::MONO_SMALL)
-                    .id(ElementId::Name(format!("media-menu-make-{rolls}").into()))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .w(px(26.0))
-                    .h(px(22.0))
-                    .rounded(px(theme::radius::SMALL))
-                    .bg(theme::raised())
-                    .text_color(ink)
-                    .child(format!("{rolls}"))
-                    .when(connected, |chip| {
-                        chip.cursor_pointer()
-                            .hover(|chip| chip.bg(theme::popup_hover()))
-                            .tooltip(key_tip(tip, None))
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.close_menu(cx);
-                                window.dispatch_action(
-                                    Box::new(MakeMedia {
-                                        media: media.clone(),
-                                        rolls,
-                                    }),
-                                    cx,
-                                );
-                            }))
-                    })
-            }))
-            .into_any_element()
-    }
-
-    /// Takes: every take is kept; the one the media is now is ticked, and
+    /// Takes ▸: every take is kept; the one the media is now is ticked, and
     /// choosing another has the media be that take again (one undoable
     /// replace). Not while it is being made.
     fn takes(
@@ -1371,68 +1233,42 @@ impl MediaBand {
         making: bool,
         states: &Value,
         cx: &mut Context<Self>,
-    ) -> AnyElement {
+    ) -> ui::MenuItem {
+        let this = cx.entity().downgrade();
         let replace_reason =
             crate::palette::unavailable(states, "media.replace").map(str::to_owned);
         let can = replace_reason.is_none() && !making;
-        let rows = source.takes.iter().map(|take| {
-            let chosen = take.chosen;
-            let enabled = can && !chosen;
-            let tip = if chosen {
-                format!("{} is this take", source.id)
-            } else if can {
-                format!(
-                    "Have {} be {} again; its clips keep their timing, and it is undone as any edit",
-                    source.id, take.path
-                )
-            } else if making {
-                format!("{} is being made", source.id)
-            } else {
-                replace_reason.clone().unwrap_or_default()
-            };
-            let media = source.id.clone();
-            let path = take.path.clone();
-            theme::type_style(div(), text::MENU_QUIET)
-                .id(ElementId::Name(format!("media-take-{}", take.number).into()))
-                .flex()
-                .items_center()
-                .gap(px(8.0))
-                .h(px(24.0))
-                .pl(px(10.0))
-                .pr(px(10.0))
-                .rounded(px(theme::radius::CONTROL))
-                .text_color(if enabled || chosen {
-                    theme::ink()
+        let rows = source
+            .takes
+            .iter()
+            .map(|take| {
+                let chosen = take.chosen;
+                let enabled = can && !chosen;
+                let tip = if chosen {
+                    format!("{} is this take", source.id)
+                } else if can {
+                    format!(
+                        "Have {} be {} again; its clips keep their timing, and it is undone as any edit",
+                        source.id, take.path
+                    )
+                } else if making {
+                    format!("{} is being made", source.id)
                 } else {
-                    theme::dis()
-                })
-                .child(
-                    div()
-                        .w(px(14.0))
-                        .flex_none()
-                        .when(chosen, |tick| tick.child(Icon::Check.view(14.0, theme::ink()))),
-                )
-                .child(format!("Take {}", take.number))
-                .tooltip(key_tip(tip, None))
-                .when(enabled, |row| {
-                    row.cursor_pointer()
-                        .hover(|row| row.bg(theme::popup_hover()))
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.close_menu(cx);
-                            this.use_take(&media, &path, cx);
-                        }))
-                })
-        });
-        div()
-            .flex()
-            .flex_col()
-            .child(div().px(px(10.0)).pt(px(4.0)).child(ui::line(
-                "Takes",
-                text::META,
-                theme::ink3(),
-            )))
-            .children(rows)
-            .into_any_element()
+                    replace_reason.clone().unwrap_or_default()
+                };
+                let media = source.id.clone();
+                let path = take.path.clone();
+                let band = this.clone();
+                ui::MenuItem::new(format!("Take {}", take.number))
+                    .checked(chosen)
+                    .disabled(!enabled)
+                    .tip(tip)
+                    .on_choose(move |_, cx| {
+                        let _ = band.update(cx, |band, cx| band.use_take(&media, &path, cx));
+                    })
+            })
+            .collect();
+        ui::MenuItem::new("Takes").submenu(rows)
     }
 
     /// A tile's thumb: what its media looks or sounds like, and how it
@@ -1670,31 +1506,36 @@ impl MediaBand {
                     })
                     .when(menu_open, |more| more.visible())
                     .child(
-                        icon_button(
-                            ElementId::Name(format!("media-more-{id}").into()),
-                            Icon::More,
-                        )
-                        .size(20.0)
-                        .tooltip("More")
-                        .on_click(cx.listener(
-                            move |this, event: &gpui::ClickEvent, window, cx| {
-                                cx.stop_propagation();
-                                window.focus(&this.focus);
-                                if this.menu.as_ref().is_some_and(|menu| {
-                                    menu.media.as_deref() == Some(more.as_str())
+                        // The kit's trigger: another menu open goes on its
+                        // press, and pressed again, its own menu goes.
+                        ui::trigger(
+                            ElementId::Name(format!("media-more-press-{id}").into()),
+                            cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                                if this.menu.as_ref().is_some_and(|open| {
+                                    open.media.as_deref() == Some(more.as_str())
                                 }) {
-                                    this.close_menu(cx);
+                                    this.close_menu(window, cx);
                                 } else {
+                                    this.close_menu(window, cx);
+                                    window.focus(&this.focus);
                                     this.choose(&more, cx);
-                                    this.open_menu(Some(&more), event.position(), cx);
+                                    this.open_menu(Some(&more), event.position, window, cx);
                                 }
-                            },
-                        )),
+                            }),
+                        )
+                        .child(
+                            icon_button(
+                                ElementId::Name(format!("media-more-{id}").into()),
+                                Icon::More,
+                            )
+                            .size(20.0)
+                            .tooltip("More"),
+                        ),
                     ),
             );
         let choose = id.clone();
         let right_click = id.clone();
-        div()
+        let tile = div()
             .id(ElementId::Name(format!("media-{id}").into()))
             .group(SharedString::from(format!("tile-{id}")))
             .flex_none()
@@ -1713,14 +1554,14 @@ impl MediaBand {
                 .h(px(LINE)),
             )
             .child(ui::line(status, text::META, ink).h(px(LINE)))
-            .when(self.menu.is_none(), |tile| tile.tooltip(key_tip(tip, None)))
             .on_mouse_down(
                 MouseButton::Right,
                 cx.listener(move |this, event: &MouseDownEvent, window, cx| {
                     cx.stop_propagation();
+                    this.close_menu(window, cx);
                     window.focus(&this.focus);
                     this.choose(&right_click, cx);
-                    this.open_menu(Some(&right_click), event.position, cx);
+                    this.open_menu(Some(&right_click), event.position, window, cx);
                 }),
             )
             .on_click(
@@ -1732,7 +1573,12 @@ impl MediaBand {
                         Self::run("source.insert", window, cx);
                     }
                 }),
-            )
+            );
+        // Its tip waits while a menu is open.
+        let tip = self.menu.is_none().then(|| ui::Tip::new(tip));
+        div()
+            .flex_none()
+            .child(ui::tip_on(tile, tip))
             .with_animation(
                 ElementId::Name(format!("media-pop-{id}").into()),
                 motion::animation(scene::POP),
@@ -1766,7 +1612,7 @@ impl MediaBand {
         let tip = tile_tip(name, source, fps, &status, badge);
         let choose = source.id.clone();
         let right_click = source.id.clone();
-        div()
+        let row = div()
             .id(ElementId::Name(format!("media-row-{}", source.id).into()))
             .h(px(LIST_ROW))
             .flex_none()
@@ -1801,14 +1647,14 @@ impl MediaBand {
                     ),
             )
             .cursor_pointer()
-            .when(self.menu.is_none(), |row| row.tooltip(key_tip(tip, None)))
             .on_mouse_down(
                 MouseButton::Right,
                 cx.listener(move |this, event: &MouseDownEvent, window, cx| {
                     cx.stop_propagation();
+                    this.close_menu(window, cx);
                     window.focus(&this.focus);
                     this.choose(&right_click, cx);
-                    this.open_menu(Some(&right_click), event.position, cx);
+                    this.open_menu(Some(&right_click), event.position, window, cx);
                 }),
             )
             .on_click(
@@ -1819,8 +1665,10 @@ impl MediaBand {
                         Self::run("source.insert", window, cx);
                     }
                 }),
-            )
-            .into_any_element()
+            );
+        // Its tip waits while a menu is open.
+        let tip = self.menu.is_none().then(|| ui::Tip::new(tip));
+        ui::tip_on(row, tip).into_any_element()
     }
 
     /// The strip's segmented "Media N | Index": the fill slides from one
@@ -1920,9 +1768,14 @@ impl MediaBand {
         let import_key = self.shown_key("file.import", cx);
         let close_key = self.shown_key("window.project", cx);
         let tabs = self.tabs(count, window, cx);
-        let button = |id: &'static str, icon: Icon| icon_button(id, icon).size(24.0);
-        let tipped = |id: &'static str, words: String, keys: Option<String>| {
-            div().id(id).flex_none().tooltip(key_tip(words, keys))
+        // Each button's tip says its name and key, or why it cannot be
+        // pressed; it says what the button says now (the view it offers).
+        let button = |id: &'static str, icon: Icon, words: &'static str, key: Option<String>| {
+            let button = icon_button(id, icon).size(24.0).tooltip(words);
+            match key {
+                Some(key) => button.key(key),
+                None => button,
+            }
         };
         div()
             .h(px(theme::layout::STRIP))
@@ -1937,52 +1790,38 @@ impl MediaBand {
             .child(tabs)
             .child(div().flex_1())
             .child(
-                tipped("media-search-tip", "Search media".into(), search_key).child(
-                    button("media-search", Icon::Search)
-                        .on(self.searching)
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            if this.searching {
-                                this.close_search(window, cx);
-                            } else {
-                                this.focus_search(window, cx);
-                            }
-                        })),
-                ),
+                button("media-search", Icon::Search, "Search media", search_key)
+                    .on(self.searching)
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        if this.searching {
+                            this.close_search(window, cx);
+                        } else {
+                            this.focus_search(window, cx);
+                        }
+                    })),
             )
             .child(
-                tipped(
-                    "media-view-tip",
-                    if self.list { "Grid view" } else { "List view" }.into(),
+                // The button offers the other view.
+                button(
+                    "media-view",
+                    if self.list { Icon::Grid } else { Icon::List },
+                    if self.list { "Grid view" } else { "List view" },
                     view_key,
                 )
-                .child(
-                    // The button offers the other view.
-                    button(
-                        "media-view",
-                        if self.list { Icon::Grid } else { Icon::List },
-                    )
-                    .on_click(cx.listener(|this, _, _, cx| this.toggle_view(cx))),
-                ),
+                .on_click(cx.listener(|this, _, _, cx| this.toggle_view(cx))),
             )
+            .child({
+                let import = button("import-media", Icon::Import, "Import media", import_key)
+                    .disabled(import_reason.is_some())
+                    .on_click(|_, window, cx| Self::run("file.import", window, cx));
+                match import_reason {
+                    Some(reason) => import.reason(reason),
+                    None => import,
+                }
+            })
             .child(
-                tipped(
-                    "media-import-tip",
-                    import_reason
-                        .clone()
-                        .unwrap_or_else(|| "Import media".into()),
-                    import_key,
-                )
-                .child(
-                    button("import-media", Icon::Import)
-                        .disabled(import_reason.is_some())
-                        .on_click(|_, window, cx| Self::run("file.import", window, cx)),
-                ),
-            )
-            .child(
-                tipped("media-close-tip", "Close Media".into(), close_key).child(
-                    button("media-close", Icon::Close)
-                        .on_click(|_, window, cx| Self::run("window.project", window, cx)),
-                ),
+                button("media-close", Icon::Close, "Close Media", close_key)
+                    .on_click(|_, window, cx| Self::run("window.project", window, cx)),
             )
             .into_any_element()
     }
@@ -2014,8 +1853,9 @@ impl MediaBand {
         let well = div().id("media-tiles").size_full().on_mouse_down(
             MouseButton::Right,
             cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                this.close_menu(window, cx);
                 window.focus(&this.focus);
-                this.open_menu(None, event.position, cx);
+                this.open_menu(None, event.position, window, cx);
             }),
         );
         let well = if self.list {
@@ -2106,7 +1946,7 @@ impl MediaBand {
                     IndexRow::Row { name, meta, at } => {
                         let media = media.clone();
                         let start = meta.split('–').next().unwrap_or_default().to_owned();
-                        div()
+                        let row = div()
                             .id(("media-index-row", number))
                             .h(px(INDEX_ROW))
                             .flex_none()
@@ -2116,7 +1956,6 @@ impl MediaBand {
                             .px(px(SIDE_PADDING))
                             .cursor_pointer()
                             .hover(|row| row.bg(theme::raised()))
-                            .tooltip(key_tip(start, None))
                             .child(
                                 ui::line(name, text::CONTROL, theme::ink())
                                     .flex_1()
@@ -2133,8 +1972,8 @@ impl MediaBand {
                                         cx.notify();
                                     }
                                 });
-                            }))
-                            .into_any_element()
+                            }));
+                        ui::tip_on(row, Some(ui::Tip::new(start))).into_any_element()
                     }
                 }
             }))
@@ -2170,12 +2009,11 @@ impl MediaBand {
                     .items_center()
                     .gap(px(theme::space::S8))
                     .px(px(SIDE_PADDING))
-                    .child(
+                    .child(ui::tip_on(
                         div()
                             .id(ElementId::Name(
                                 format!("media-role-check-{}", group.key).into(),
                             ))
-                            .tooltip(key_tip(tip, None))
                             .cursor_pointer()
                             .child(checkbox(on))
                             .on_click(cx.listener(move |this, _, _, cx| {
@@ -2185,7 +2023,8 @@ impl MediaBand {
                                     cx.notify();
                                 });
                             })),
-                    )
+                        Some(ui::Tip::new(tip)),
+                    ))
                     .child(
                         ui::line(group.name, text::CONTROL, theme::ink())
                             .flex_1()
@@ -2196,11 +2035,10 @@ impl MediaBand {
             })
             .collect();
         let editable = !timeline.tracks.is_empty();
-        div()
+        let column = div()
             .id("media-roles")
-            .w(px(ROLES_WIDTH))
-            .flex_none()
-            .h_full()
+            .track_scroll(&self.roles_scroll)
+            .size_full()
             .border_l_1()
             .border_color(theme::line())
             .overflow_y_scroll()
@@ -2217,7 +2055,7 @@ impl MediaBand {
                     .pr(px(theme::space::S8))
                     .child(ui::label("Roles", text::CONTROL_STRONG, theme::ink()))
                     .child(div().flex_1())
-                    .child(
+                    .child(ui::tip_on(
                         theme::type_style(div(), text::META)
                             .id("media-edit-roles")
                             .h(px(theme::height::H20))
@@ -2231,7 +2069,6 @@ impl MediaBand {
                                 theme::dis()
                             })
                             .child("Edit roles…")
-                            .tooltip(key_tip("Assign a role to each track", None))
                             .when(editable, |button| {
                                 button
                                     .cursor_pointer()
@@ -2242,9 +2079,19 @@ impl MediaBand {
                                         this.edit_roles(window, cx)
                                     }))
                             }),
-                    ),
+                        Some(ui::Tip::new("Assign a role to each track")),
+                    )),
             )
-            .children(rows)
+            .children(rows);
+        // Scrolling with no bar, it fades where a row is cut and while
+        // there is more below, in the chrome it sits on.
+        div()
+            .relative()
+            .w(px(ROLES_WIDTH))
+            .flex_none()
+            .h_full()
+            .child(column)
+            .child(ui::scroll_fade(&self.roles_scroll, theme::chrome()))
             .into_any_element()
     }
 
@@ -2368,12 +2215,13 @@ impl Render for MediaBand {
         let sources = &session.timeline().sources;
         let count = sources.len();
         // A menu of a media that is gone goes with it.
-        if self.menu.as_ref().is_some_and(|menu| {
+        let gone = self.menu.as_ref().is_some_and(|menu| {
             menu.media
                 .as_ref()
                 .is_some_and(|media| !sources.iter().any(|source| &source.id == media))
-        }) {
-            self.menu = None;
+        });
+        if gone {
+            self.close_menu(window, cx);
         }
         // The Index follows the chosen media.
         if self.tab == Tab::Index {
@@ -2385,16 +2233,15 @@ impl Render for MediaBand {
             Tab::Index => self.index_page(cx),
         };
         let roles = self.roles(cx);
-        let menu = match &self.menu {
-            Some(menu) => {
-                let menu = Menu {
-                    media: menu.media.clone(),
-                    at: menu.at,
-                };
-                self.menu(&menu, cx)
-            }
-            None => None,
-        };
+        let menu = self.menu.as_ref().map(|open| {
+            deferred(
+                anchored()
+                    .position(open.at)
+                    .snap_to_window_with_margin(px(8.0))
+                    .child(open.menu.clone()),
+            )
+            .with_priority(1)
+        });
         let search = self.searching.then(|| {
             div()
                 .h(px(SEARCH_ROW))
@@ -2450,17 +2297,19 @@ impl Render for MediaBand {
                             .child(page),
                     )
                     .child(roles),
-            )
-            .children(menu);
+            );
         // A dialog the band shows is not under the band's key context, so
         // that its Return and arrow keys are the dialog's, as one the
         // workspace shows over the window is (`deferred` keeps the
         // dispatch parent it is drawn under).
+        // Its menu is not under the band's key context either: while the
+        // menu has the keys, the band's arrows and Return do nothing.
         div()
             .size_full()
             .flex()
             .flex_col()
             .child(band)
+            .children(menu)
             .children(self.hosted(window))
     }
 }
@@ -2488,6 +2337,8 @@ pub struct RolesView {
     choices: Vec<String>,
     /// The row whose choices are shown.
     choosing: Option<usize>,
+    /// Its rows, for their fades.
+    scroll: gpui::ScrollHandle,
     /// Esc in a row's field closes the dialog.
     _subscriptions: Vec<Subscription>,
 }
@@ -2561,6 +2412,7 @@ impl RolesView {
             rows,
             choices,
             choosing: None,
+            scroll: gpui::ScrollHandle::new(),
             _subscriptions: subscriptions,
         }
     }
@@ -2681,14 +2533,22 @@ impl Render for RolesView {
                 theme::ink2(),
             ))
             .child(
+                // Scrolling with no bar, it fades where a row is cut and
+                // while there is more below.
                 div()
-                    .id("roles-rows")
-                    .max_h(px(360.0))
-                    .overflow_y_scroll()
-                    .flex()
-                    .flex_col()
-                    .gap(px(theme::space::S8))
-                    .children(rows),
+                    .relative()
+                    .child(
+                        div()
+                            .id("roles-rows")
+                            .track_scroll(&self.scroll)
+                            .max_h(px(360.0))
+                            .overflow_y_scroll()
+                            .flex()
+                            .flex_col()
+                            .gap(px(theme::space::S8))
+                            .children(rows),
+                    )
+                    .child(ui::scroll_fade(&self.scroll, theme::popup())),
             )
             .child(
                 div()

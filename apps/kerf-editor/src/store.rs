@@ -274,6 +274,20 @@ pub struct Notice {
     pub text: String,
     pub error: bool,
     pub at: Instant,
+    /// How long it stays, when it keeps a time of its own (a sync's
+    /// summary, its pull request's line and a cast saved, Qt's 8 s:
+    /// `theme::motion::NOTICE_LONG_HOLD`); None stays the window's
+    /// (`NOTICE_HOLD`, an error `NOTICE_ERROR_HOLD`).
+    pub hold: Option<Duration>,
+}
+
+impl Notice {
+    /// How long it stays: its own hold, else `hold`, or `error_hold` for
+    /// an error.
+    pub fn held_for(&self, hold: Duration, error_hold: Duration) -> Duration {
+        self.hold
+            .unwrap_or(if self.error { error_hold } else { hold })
+    }
 }
 
 /// A rendered preview's state (`preview` events).
@@ -852,8 +866,9 @@ impl EditorState {
                     .unwrap_or_default();
                 self.cast = Some(event.clone());
                 if event["saved"].as_bool() == Some(true) {
+                    // Held as Qt held it (main_window.cpp's 8 s).
                     let said = cast_saved(event);
-                    self.notify(&said, false);
+                    self.notify_held(&said, false, Some(crate::theme::motion::NOTICE_LONG_HOLD));
                     Change::Notice
                 } else {
                     Change::Other
@@ -1021,6 +1036,14 @@ impl EditorState {
     }
 
     pub fn notify(&mut self, text: &str, error: bool) {
+        self.notify_held(text, error, None);
+    }
+
+    /// Says `text` as [`EditorState::notify`] does, for `hold` when it
+    /// keeps a time of its own (None: the window's). Qt's sync summary, its
+    /// pull request's line and a cast saved stayed 8 s
+    /// (`theme::motion::NOTICE_LONG_HOLD`).
+    pub fn notify_held(&mut self, text: &str, error: bool, hold: Option<Duration>) {
         // The same words again, at once, say nothing new.
         if self
             .notices
@@ -1035,6 +1058,7 @@ impl EditorState {
             text: text.to_owned(),
             error,
             at: Instant::now(),
+            hold,
         });
         // Only the last few are worth showing.
         if self.notices.len() > 4 {
@@ -1043,12 +1067,13 @@ impl EditorState {
     }
 
     /// Drops notices that have been said for `hold`, and errors for
-    /// `error_hold` (what went wrong takes longer to read); true when any
-    /// went.
+    /// `error_hold` (what went wrong takes longer to read), each that
+    /// keeps a time of its own for that ([`Notice::held_for`]); true when
+    /// any went.
     pub fn expire_notices(&mut self, hold: Duration, error_hold: Duration) -> bool {
         let before = self.notices.len();
         self.notices
-            .retain(|notice| notice.at.elapsed() < if notice.error { error_hold } else { hold });
+            .retain(|notice| notice.at.elapsed() < notice.held_for(hold, error_hold));
         before != self.notices.len()
     }
 

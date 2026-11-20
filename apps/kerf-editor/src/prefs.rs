@@ -16,7 +16,10 @@
 //! The first time the editor starts with no file of its own, it takes up
 //! what the Qt editor kept ([`import_qt_once`]): its QSettings, read from
 //! the INI file on Linux, the plist on macOS (`defaults export`) and the
-//! registry on Windows (`reg query`).
+//! registry on Windows (`reg query`). What QSettings kept as QDataStream
+//! bytes (`@Variant(…)`, `@DateTime(…)` in INI and in the registry's
+//! `REG_BINARY`, `<data>` in a plist: a map, a point, a date and time) is
+//! read as Qt reads it ([`qt_variant`]).
 
 use crate::theme::{Face, ReadingFace};
 use serde::{Deserialize, Serialize};
@@ -289,6 +292,10 @@ pub struct Prefs {
     pub crashes_seen_ms: u64,
     pub sidebar_open: bool,
     pub sidebar_width: f32,
+    /// Which of the sidebar's folders were folded (true) or opened (false)
+    /// by hand, by folder ([`project_key`]), as the Qt editor kept them
+    /// (`sidebar/folded`); a folder not here is as the sidebar has it.
+    pub sidebar_folded: BTreeMap<String, bool>,
     /// Projects opened, newest first.
     pub recent: Vec<PathBuf>,
     /// Projects whose Live Sync was left on.
@@ -357,6 +364,7 @@ impl Default for Prefs {
             crashes_seen_ms: 0,
             sidebar_open: true,
             sidebar_width: crate::theme::layout::SIDEBAR,
+            sidebar_folded: BTreeMap::new(),
             recent: Vec::new(),
             live_sync: Vec::new(),
             follow_kerf: true,
@@ -699,10 +707,12 @@ impl Prefs {
         }
     }
 
-    /// Where the cards kept under `key` were put, by card.
+    /// Where the cards kept under `key` were put, by card: kept here, else
+    /// as the Qt editor kept them under that key ([`qt_graph_key`]).
     pub fn graph_places_of(&self, key: &str) -> std::collections::HashMap<String, (f32, f32)> {
         self.graph_places
             .get(key)
+            .or_else(|| self.graph_places.get(&qt_graph_key(key)))
             .map(|places| {
                 places
                     .iter()
@@ -713,12 +723,14 @@ impl Prefs {
             .unwrap_or_default()
     }
 
-    /// Keeps `places` under `key`; none lets the key go.
+    /// Keeps `places` under `key`; none lets the key go. What the Qt
+    /// editor kept under it goes either way: these are the cards' places now.
     pub fn keep_graph_places(
         &mut self,
         key: &str,
         places: &std::collections::HashMap<String, (f32, f32)>,
     ) {
+        self.graph_places.remove(&qt_graph_key(key));
         if places.is_empty() {
             self.graph_places.remove(key);
         } else {
@@ -729,6 +741,32 @@ impl Prefs {
                 .collect();
             self.graph_places.insert(key.to_owned(), places);
         }
+    }
+
+    /// Whether `folder`'s conversations were left folded (true) or unfolded
+    /// (false) by hand in the sidebar, here or, carried over, in the Qt
+    /// editor (`sidebar/folded`); None: never by hand, so as the sidebar
+    /// starts it.
+    pub fn folder_folded(&self, folder: &Path) -> Option<bool> {
+        self.sidebar_folded.get(&project_key(folder)).copied()
+    }
+
+    /// Keeps `folder` folded or unfolded as it was left by hand.
+    pub fn keep_folder_folded(&mut self, folder: &Path, folded: bool) {
+        self.sidebar_folded.insert(project_key(folder), folded);
+    }
+
+    /// `folder` folded or unfolded by hand in the sidebar: kept, and the
+    /// folds of folders no longer among the recent ones forgotten, as Qt's
+    /// sidebar kept them (so the map does not grow for ever).
+    pub fn fold_by_hand(&mut self, folder: &Path, folded: bool) {
+        self.keep_folder_folded(folder, folded);
+        let listed: std::collections::HashSet<String> = self
+            .recent
+            .iter()
+            .map(|folder| project_key(folder))
+            .collect();
+        self.sidebar_folded.retain(|key, _| listed.contains(key));
     }
 
     /// Remembers that the person has been told of `reports`.
@@ -968,6 +1006,41 @@ pub fn qt_legacy_master_key(project: &Path) -> Option<String> {
     key_folder(project).map(|folder| format!("qt:{folder}"))
 }
 
+/// Where [`Prefs::graph_places`] keeps what the Qt editor kept of a
+/// graph's cards under `key` (the same key: a shot's project and media,
+/// `making::placement_key`, or a workflow's under it): its settings held
+/// only `graph/placed/<16 hex of the key's SHA-1>`, so this is
+/// `qt:<those 16>`.
+pub fn qt_graph_key(key: &str) -> String {
+    let digest = sha1_smol::Sha1::from(key.as_bytes()).digest().to_string();
+    format!("qt:{}", &digest[..16])
+}
+
+/// `text` with its `%XX` taken back to what they stand for (QUrl's
+/// percent-encoding, of UTF-8).
+fn percent_decoded(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut at = 0;
+    while at < bytes.len() {
+        let hex = bytes
+            .get(at + 1..at + 3)
+            .and_then(|hex| std::str::from_utf8(hex).ok())
+            .and_then(|hex| u8::from_str_radix(hex, 16).ok());
+        match (bytes[at], hex) {
+            (b'%', Some(byte)) => {
+                out.push(byte);
+                at += 3;
+            }
+            (byte, _) => {
+                out.push(byte);
+                at += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 // ---------------------------------------------------------------- the Qt editor's settings
 
 /// The Qt editor's QSettings, by key (`agent/permissions`), each value as
@@ -1076,11 +1149,13 @@ pub fn import_qt_once(settings_dir: Option<&Path>) -> Vec<String> {
 /// Takes what the Qt editor's `settings` hold into `prefs`: who answers,
 /// the models, base URLs and API shape, keys it kept in its settings
 /// (into [`Prefs::kept_keys`]), permissions, the MCP switch, the faces and
-/// the conversation's size, update notices and the release skipped, the
-/// crashes told of, the recent projects and those with Live Sync on, the
-/// sidebar, Follow Kerf, Safe Zones, the keymap, what the launcher was
-/// left on, and each project's master output. What it cannot read is left
-/// as it is. Returns the keys it took.
+/// the conversation's size, update notices, when GitHub was last asked
+/// and the release skipped, the crashes told of, the recent projects and
+/// those with Live Sync on, the sidebar and its folders folded, Follow
+/// Kerf, Safe Zones, the keymap, what the launcher was left on, each
+/// project's master output and track heights, and where graphs' cards were
+/// dragged. What it cannot read is left as it is. Returns the keys it took
+/// (`timelineTrackHeights` once for every project's).
 pub fn import_qt(settings: &QtSettings, prefs: &mut Prefs) -> Vec<String> {
     let mut taken = Vec::new();
     let text = |key: &str| -> Option<String> {
@@ -1319,6 +1394,104 @@ pub fn import_qt(settings: &QtSettings, prefs: &mut Prefs) -> Vec<String> {
         prefs.launcher_rate = rate;
         took("projects/rate");
     }
+    // When GitHub was last asked for a newer Kerf (a QDateTime there).
+    if let Some(checked) = number("updates/checkedAt").filter(|checked| *checked > 0.0) {
+        prefs.update_checked_ms = checked as u64;
+        took("updates/checkedAt");
+    }
+    // The sidebar's folders folded or opened by hand, by their paths.
+    if let Some(Value::Object(folded)) = settings.get("sidebar/folded") {
+        prefs.sidebar_folded = folded
+            .iter()
+            .filter(|(folder, _)| Path::new(folder).is_absolute())
+            .filter_map(|(folder, value)| {
+                let folded = match value {
+                    Value::Bool(folded) => *folded,
+                    Value::String(text) => text == "true",
+                    _ => return None,
+                };
+                Some((project_key(Path::new(folder)), folded))
+            })
+            .collect();
+        took("sidebar/folded");
+    }
+    // Where a graph's cards were dragged: graph/placed/<16 hex>, each card's
+    // place by its id, kept under the same hex (qt_graph_key) until the
+    // graph is opened and moved here.
+    for (key, value) in settings {
+        let Some(hex) = key.strip_prefix("graph/placed/") else {
+            continue;
+        };
+        let Value::Object(cards) = value else {
+            continue;
+        };
+        let places: BTreeMap<String, (f32, f32)> = cards
+            .iter()
+            .filter_map(|(card, at)| {
+                let x = at.get(0)?.as_f64()? as f32;
+                let y = at.get(1)?.as_f64()? as f32;
+                (x.is_finite() && y.is_finite()).then(|| (card.clone(), (x, y)))
+            })
+            .collect();
+        if !places.is_empty() && !hex.is_empty() && !hex.contains('/') {
+            prefs.graph_places.insert(format!("qt:{hex}"), places);
+            took(key);
+        }
+    }
+    // Each project's track heights: timelineTrackHeights/<SHA-1 of its
+    // path>/path, its all-tracks height /all, and each track's own under
+    // /tracks/<its id, percent-encoded>.
+    #[derive(Default)]
+    struct QtHeights {
+        path: Option<String>,
+        all: Option<f32>,
+        tracks: BTreeMap<String, f32>,
+    }
+    let mut heights: BTreeMap<&str, QtHeights> = BTreeMap::new();
+    for (key, value) in settings {
+        let Some((group, field)) = key
+            .strip_prefix("timelineTrackHeights/")
+            .and_then(|rest| rest.split_once('/'))
+        else {
+            continue;
+        };
+        let height = match value {
+            Value::Number(number) => number.as_f64(),
+            Value::String(text) => text.trim().parse().ok(),
+            _ => None,
+        }
+        .filter(|height| *height > 0.0)
+        .map(|height| height as f32);
+        let kept = heights.entry(group).or_default();
+        match (field, field.strip_prefix("tracks/")) {
+            ("path", _) => kept.path = value.as_str().map(str::to_owned),
+            ("all", _) => kept.all = height,
+            (_, Some(track)) if !track.is_empty() => {
+                if let Some(height) = height {
+                    kept.tracks.insert(percent_decoded(track), height);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut took_heights = false;
+    for kept in heights.into_values() {
+        let Some(path) = kept.path.filter(|path| Path::new(path).is_absolute()) else {
+            continue;
+        };
+        let mut project = crate::timeline::TrackHeights::default();
+        project.set_all(kept.all);
+        for (track, height) in &kept.tracks {
+            project.set(track, Some(*height));
+        }
+        if project != crate::timeline::TrackHeights::default() {
+            prefs.keep_track_heights(Path::new(&path), project);
+            took_heights = true;
+        }
+    }
+    if took_heights {
+        took("timelineTrackHeights");
+    }
     // Each project's master output: deliver/<key>/outputs, as JSON with
     // {master: {folder?, name?, codec?}}.
     for (key, value) in settings {
@@ -1429,98 +1602,480 @@ fn ini_unescape_key(key: &str) -> String {
     out
 }
 
-/// A value as QSettings writes it in INI: text, quoted where it must be,
-/// with C escapes; several, parted by commas, are a list. `@Invalid()` is
-/// nothing; another `@Type(…)` (a date, a map) is not read.
+/// A value as QSettings writes it in INI (its `iniEscapedString` over its
+/// `variantToString`): text, quoted where it must be, with C escapes;
+/// several, parted by commas, are a list. Read back as QSettings reads it
+/// ([`ini_unescape`], then [`qt_string_value`] on the text or each item):
+/// `@Invalid()` is nothing, `@ByteArray(…)` and `@String(…)` their text,
+/// `@Variant(…)` and `@DateTime(…)` what their QDataStream bytes hold
+/// ([`qt_variant`]); one that cannot be read is not read.
 fn ini_value(raw: &str) -> Option<Value> {
-    if raw == "@Invalid()" {
-        return Some(Value::Null);
-    }
-    if raw.starts_with('@') && !raw.starts_with("@@") {
-        if let Some(bytes) = raw
-            .strip_prefix("@ByteArray(")
-            .and_then(|rest| rest.strip_suffix(')'))
-        {
-            return Some(Value::String(bytes.to_owned()));
-        }
-        return None;
-    }
-    let mut items: Vec<String> = Vec::new();
-    // Whitespace outside quotes around an item is not its own: `kept` is
-    // how much of `current` ends in what is.
-    let mut current = String::new();
-    let mut kept = 0;
-    let mut quoted = false;
-    let mut many = false;
-    let add = |current: &mut String, kept: &mut usize, ch: char, own: bool| {
-        if !own && ch.is_whitespace() {
-            if !current.is_empty() {
-                current.push(ch);
-            }
-            return;
-        }
-        current.push(ch);
-        *kept = current.len();
-    };
-    let mut chars = raw.chars().peekable();
-    while let Some(ch) = chars.next() {
-        match ch {
-            '"' => quoted = !quoted,
-            ',' if !quoted => {
-                current.truncate(kept);
-                items.push(std::mem::take(&mut current));
-                kept = 0;
-                many = true;
-            }
-            '\\' => {
-                let escaped = match chars.next() {
-                    Some('n') => '\n',
-                    Some('t') => '\t',
-                    Some('r') => '\r',
-                    Some('a') => '\u{7}',
-                    Some('b') => '\u{8}',
-                    Some('f') => '\u{c}',
-                    Some('v') => '\u{b}',
-                    Some('0') => '\0',
-                    Some('x') => {
-                        let mut digits = String::new();
-                        while let Some(digit) =
-                            chars.peek().copied().filter(char::is_ascii_hexdigit)
-                        {
-                            digits.push(digit);
-                            chars.next();
-                        }
-                        match u32::from_str_radix(&digits, 16)
-                            .ok()
-                            .and_then(char::from_u32)
-                        {
-                            Some(code) => code,
-                            None => continue,
-                        }
-                    }
-                    Some(other) => other,
-                    None => continue,
-                };
-                add(&mut current, &mut kept, escaped, true);
-            }
-            other => add(&mut current, &mut kept, other, quoted),
-        }
-    }
-    current.truncate(kept);
-    let unat = |item: String| match item.strip_prefix("@@") {
-        Some(rest) => format!("@{rest}"),
-        None => item,
-    };
+    let (items, many) = ini_unescape(raw);
     if many {
-        items.push(current);
         Some(Value::Array(
             items
                 .into_iter()
-                .map(|item| Value::String(unat(item)))
+                .map(|item| qt_string_value(&item).unwrap_or(Value::String(item)))
                 .collect(),
         ))
     } else {
-        Some(Value::String(unat(current)))
+        qt_string_value(items.first().map(String::as_str).unwrap_or_default())
+    }
+}
+
+/// QSettings' `iniUnescapedStringList`: a raw INI value's text, or its
+/// items and true when commas outside quotes part it into a list. Spaces
+/// and tabs before an item, or after one not quoted, are not its own; `\`
+/// escapes as C's (`\x` hex and `\0`… octal of any length).
+fn ini_unescape(raw: &str) -> (Vec<String>, bool) {
+    let chars: Vec<char> = raw.chars().collect();
+    let skip_spaces = |at: &mut usize| {
+        while chars.get(*at).is_some_and(|ch| *ch == ' ' || *ch == '\t') {
+            *at += 1;
+        }
+    };
+    let chop = |text: &mut String, limit: usize| {
+        while text.len() > limit && text.ends_with([' ', '\t']) {
+            text.pop();
+        }
+    };
+    let mut items = Vec::new();
+    let mut current = String::new();
+    let mut many = false;
+    let mut in_quotes = false;
+    let mut quoted = false;
+    let mut at = 0;
+    skip_spaces(&mut at);
+    // What an escape or a quote put in is never chopped as a space.
+    let mut chop_limit = 0;
+    while at < chars.len() {
+        match chars[at] {
+            '\\' => {
+                at += 1;
+                let Some(&ch) = chars.get(at) else {
+                    break;
+                };
+                at += 1;
+                let escaped = match ch {
+                    'a' => Some('\u{7}'),
+                    'b' => Some('\u{8}'),
+                    'f' => Some('\u{c}'),
+                    'n' => Some('\n'),
+                    'r' => Some('\r'),
+                    't' => Some('\t'),
+                    'v' => Some('\u{b}'),
+                    '"' | '?' | '\'' | '\\' => Some(ch),
+                    'x' if chars.get(at).is_some_and(char::is_ascii_hexdigit) => {
+                        char::from_u32(escaped_number(&chars, &mut at, 16, 0))
+                    }
+                    '0'..='7' => {
+                        char::from_u32(escaped_number(&chars, &mut at, 8, ch as u32 - '0' as u32))
+                    }
+                    // A line's end escaped (\r\n or \n\r as one).
+                    '\n' | '\r' => {
+                        if chars
+                            .get(at)
+                            .is_some_and(|next| (*next == '\n' || *next == '\r') && *next != ch)
+                        {
+                            at += 1;
+                        }
+                        None
+                    }
+                    _ => None,
+                };
+                if let Some(escaped) = escaped {
+                    current.push(escaped);
+                }
+                chop_limit = current.len();
+            }
+            '"' => {
+                at += 1;
+                quoted = true;
+                in_quotes = !in_quotes;
+                if !in_quotes {
+                    skip_spaces(&mut at);
+                    chop_limit = current.len();
+                }
+            }
+            ',' if !in_quotes => {
+                if !quoted {
+                    chop(&mut current, chop_limit);
+                }
+                many = true;
+                items.push(std::mem::take(&mut current));
+                quoted = false;
+                at += 1;
+                skip_spaces(&mut at);
+                chop_limit = 0;
+            }
+            first => {
+                current.push(first);
+                at += 1;
+                while let Some(&ch) = chars.get(at).filter(|ch| !matches!(ch, '\\' | '"' | ',')) {
+                    current.push(ch);
+                    at += 1;
+                }
+            }
+        }
+    }
+    if !quoted {
+        chop(&mut current, chop_limit);
+    }
+    items.push(current);
+    (items, many)
+}
+
+/// The digits in `radix` from `at` on, after `first`: an escape's number
+/// (`\x` hex, `\0` octal), as long as it goes.
+fn escaped_number(chars: &[char], at: &mut usize, radix: u32, first: u32) -> u32 {
+    let mut value = first;
+    while let Some(digit) = chars.get(*at).and_then(|ch| ch.to_digit(radix)) {
+        value = value.wrapping_mul(radix).wrapping_add(digit);
+        *at += 1;
+    }
+    value
+}
+
+/// QSettings' `stringToVariant`: what a value's text (unescaped) stands
+/// for. `@Invalid()` is nothing; `@ByteArray(…)` and `@String(…)` their
+/// text; `@Variant(…)` and `@DateTime(…)` what their bytes hold
+/// ([`qt_variant`], None when they cannot be read); `@Rect(x y w h)`,
+/// `@Size(w h)` and `@Point(x y)` their numbers; `@@…` text that began
+/// with `@`; anything else itself.
+pub fn qt_string_value(text: &str) -> Option<Value> {
+    if text.starts_with('@') && text.ends_with(')') {
+        let inner = |prefix: &str| {
+            text.strip_prefix(prefix)
+                .and_then(|rest| rest.strip_suffix(')'))
+        };
+        if text == "@Invalid()" {
+            return Some(Value::Null);
+        }
+        if let Some(bytes) = inner("@ByteArray(").or_else(|| inner("@String(")) {
+            return Some(Value::String(bytes.to_owned()));
+        }
+        for (prefix, version) in [
+            ("@Variant(", QDATASTREAM_4_0),
+            ("@DateTime(", QDATASTREAM_5_6),
+        ] {
+            if let Some(rest) = text.strip_prefix(prefix) {
+                // Its bytes, one a character (Qt's toLatin1, `?` for what is
+                // not Latin-1); the stream reads what it needs.
+                let bytes: Vec<u8> = rest
+                    .chars()
+                    .map(|ch| u8::try_from(u32::from(ch)).unwrap_or(b'?'))
+                    .collect();
+                return qt_variant(&bytes, version);
+            }
+        }
+        let numbers = |prefix: &str, count: usize| -> Option<Value> {
+            let numbers: Vec<i64> = inner(prefix)?
+                .split_whitespace()
+                .map(|number| number.parse().ok())
+                .collect::<Option<_>>()?;
+            (numbers.len() == count).then(|| Value::from(numbers))
+        };
+        if let Some(value) = numbers("@Rect(", 4)
+            .or_else(|| numbers("@Size(", 2))
+            .or_else(|| numbers("@Point(", 2))
+        {
+            return Some(value);
+        }
+    }
+    match text.strip_prefix("@@") {
+        Some(rest) => Some(Value::String(format!("@{rest}"))),
+        None => Some(Value::String(text.to_owned())),
+    }
+}
+
+/// QDataStream's version 4.0, which QSettings writes `@Variant(…)` in.
+pub const QDATASTREAM_4_0: u32 = 7;
+/// And 5.6, which it writes `@DateTime(…)` in.
+pub const QDATASTREAM_5_6: u32 = 17;
+const QDATASTREAM_4_2: u32 = 8;
+const QDATASTREAM_4_6: u32 = 12;
+const QDATASTREAM_5_0: u32 = 13;
+const QDATASTREAM_5_2: u32 = 15;
+
+/// The Julian day of 1970-01-01.
+const UNIX_EPOCH_JULIAN_DAY: i64 = 2_440_588;
+const DAY_MS: i64 = 86_400_000;
+
+/// A QVariant as QDataStream wrote it at stream `version`
+/// ([`QDATASTREAM_4_0`] for QSettings' `@Variant`, [`QDATASTREAM_5_6`] for
+/// its `@DateTime`), big-endian: its type, then (from 4.2) whether it is
+/// null, then its value. As JSON: a map an object, a list an array, text a
+/// string, a number a number, a point or a size `[x, y]`, a rectangle
+/// `[x, y, width, height]`, a date and time its milliseconds since 1970 in
+/// UTC (a date its midnight's, a time its milliseconds into the day; one
+/// not set null). None for a type it does not know (a user type, a colour)
+/// or bytes too few for what they say.
+pub fn qt_variant(bytes: &[u8], version: u32) -> Option<Value> {
+    QtStream {
+        bytes,
+        at: 0,
+        version,
+    }
+    .variant()
+}
+
+/// QDataStream's reader.
+struct QtStream<'a> {
+    bytes: &'a [u8],
+    at: usize,
+    version: u32,
+}
+
+impl<'a> QtStream<'a> {
+    fn take<const N: usize>(&mut self) -> Option<[u8; N]> {
+        let end = self.at.checked_add(N)?;
+        let taken = self.bytes.get(self.at..end)?.try_into().ok()?;
+        self.at = end;
+        Some(taken)
+    }
+
+    fn u8(&mut self) -> Option<u8> {
+        self.take::<1>().map(|[byte]| byte)
+    }
+
+    fn u16(&mut self) -> Option<u16> {
+        self.take().map(u16::from_be_bytes)
+    }
+
+    fn u32(&mut self) -> Option<u32> {
+        self.take().map(u32::from_be_bytes)
+    }
+
+    fn i32(&mut self) -> Option<i32> {
+        self.take().map(i32::from_be_bytes)
+    }
+
+    fn u64(&mut self) -> Option<u64> {
+        self.take().map(u64::from_be_bytes)
+    }
+
+    fn i64(&mut self) -> Option<i64> {
+        self.take().map(i64::from_be_bytes)
+    }
+
+    fn f64(&mut self) -> Option<f64> {
+        self.take().map(f64::from_be_bytes)
+    }
+
+    /// A float: four bytes before 4.6, as a double after.
+    fn float(&mut self) -> Option<f64> {
+        if self.version >= QDATASTREAM_4_6 {
+            self.f64()
+        } else {
+            self.take().map(f32::from_be_bytes).map(f64::from)
+        }
+    }
+
+    /// How many of something follow; none for the "null" marker.
+    fn count(&mut self) -> Option<usize> {
+        match self.u32()? {
+            u32::MAX => Some(0),
+            count => usize::try_from(count).ok(),
+        }
+    }
+
+    /// A QString: its length in bytes, then UTF-16; a null one is empty.
+    fn string(&mut self) -> Option<String> {
+        let length = self.count()?;
+        let end = self.at.checked_add(length)?;
+        let units: Vec<u16> = self
+            .bytes
+            .get(self.at..end)?
+            .chunks_exact(2)
+            .map(|pair| u16::from_be_bytes([pair[0], pair[1]]))
+            .collect();
+        self.at = end;
+        Some(String::from_utf16_lossy(&units))
+    }
+
+    /// A QByteArray's bytes: its length, then them; a null one is empty.
+    fn bytes(&mut self) -> Option<&'a [u8]> {
+        let length = self.count()?;
+        let end = self.at.checked_add(length)?;
+        let bytes = self.bytes.get(self.at..end)?;
+        self.at = end;
+        Some(bytes)
+    }
+
+    /// A QByteArray, its bytes one a character.
+    fn byte_array(&mut self) -> Option<String> {
+        Some(self.bytes()?.iter().map(|byte| char::from(*byte)).collect())
+    }
+
+    fn number(value: f64) -> Value {
+        serde_json::Number::from_f64(value)
+            .map(Value::Number)
+            .unwrap_or(Value::Null)
+    }
+
+    /// A QDate as milliseconds since 1970 at its midnight (None: not set,
+    /// or a day further than milliseconds since 1970 can count).
+    fn date(&mut self) -> Option<Option<i64>> {
+        let day = if self.version < QDATASTREAM_5_0 {
+            match self.u32()? {
+                0 => None,
+                day => Some(i64::from(day)),
+            }
+        } else {
+            match self.i64()? {
+                i64::MIN => None,
+                day => Some(day),
+            }
+        };
+        Some(day.and_then(|day| day.checked_sub(UNIX_EPOCH_JULIAN_DAY)?.checked_mul(DAY_MS)))
+    }
+
+    /// A QTime as milliseconds into the day (None: not set, or past the
+    /// day's end, which Qt does not take either).
+    fn time(&mut self) -> Option<Option<i64>> {
+        let ms = self.u32()?;
+        Some((i64::from(ms) < DAY_MS).then_some(i64::from(ms)))
+    }
+
+    /// A QDateTime as milliseconds since 1970 in UTC. Its date and time
+    /// are as its clock read them: one at an offset from UTC is taken back
+    /// by it; a local time, or one in a named zone, is taken as UTC (what
+    /// that zone was then is not known here).
+    fn date_time(&mut self) -> Option<Value> {
+        let date = self.date()?;
+        let time = self.time()?;
+        let spec = self.u8()?;
+        let mut offset_ms = 0;
+        if self.version >= QDATASTREAM_5_2 {
+            match spec {
+                // Qt::OffsetFromUTC, then its seconds ahead of UTC.
+                2 => offset_ms = i64::from(self.i32()?) * 1000,
+                // Qt::TimeZone, then the zone.
+                3 => offset_ms = self.zone_offset()? * 1000,
+                _ => {}
+            }
+        }
+        // A date with no time is at its midnight, as Qt takes it; one
+        // further than milliseconds since 1970 can count is not set.
+        let ms = date.and_then(|date| date.checked_add(time.unwrap_or(0))?.checked_sub(offset_ms));
+        Some(ms.map(Value::from).unwrap_or(Value::Null))
+    }
+
+    /// A QTimeZone, as its seconds ahead of UTC where it says them (Qt's
+    /// own UTC and offset zones), else 0 (a named zone, which is its id).
+    fn zone_offset(&mut self) -> Option<i64> {
+        Some(match self.string()?.as_str() {
+            // QUtcTimeZonePrivate: id, territory, name, abbreviation,
+            // offset, comment.
+            "OffsetFromUtc" => {
+                self.string()?;
+                self.i32()?;
+                self.string()?;
+                self.string()?;
+                let offset = self.i32()?;
+                self.string()?;
+                i64::from(offset)
+            }
+            "AheadOfUtcBy" => i64::from(self.i32()?),
+            _ => 0,
+        })
+    }
+
+    fn variant(&mut self) -> Option<Value> {
+        let mut kind = self.u32()?;
+        if self.version >= QDATASTREAM_4_2 {
+            self.u8()?;
+        }
+        if self.version < QDATASTREAM_5_0 {
+            match kind {
+                // Qt 4's user type, named: not known here.
+                127 => return None,
+                // Qt 4 numbered these 97 higher (Long … SChar).
+                129..=137 => kind -= 97,
+                // An invalid one: a null QString follows.
+                0 => {
+                    self.string()?;
+                    return Some(Value::Null);
+                }
+                _ => {}
+            }
+        }
+        self.value(kind)
+    }
+
+    fn value(&mut self, kind: u32) -> Option<Value> {
+        Some(match kind {
+            0 => Value::Null,
+            1 => Value::Bool(self.u8()? != 0),
+            2 => Value::from(self.i32()?),
+            3 => Value::from(self.u32()?),
+            4 | 32 => Value::from(self.i64()?),
+            5 | 35 => Value::from(self.u64()?),
+            6 => Self::number(self.f64()?),
+            7 => Value::String(char::from_u32(u32::from(self.u16()?))?.to_string()),
+            // QVariantMap and QVariantHash: how many, then each key and value.
+            8 | 28 => {
+                let count = self.count()?;
+                let mut map = Map::new();
+                for _ in 0..count {
+                    let key = self.string()?;
+                    let value = self.variant()?;
+                    map.insert(key, value);
+                }
+                Value::Object(map)
+            }
+            9 => {
+                let count = self.count()?;
+                let mut items = Vec::new();
+                for _ in 0..count {
+                    items.push(self.variant()?);
+                }
+                Value::Array(items)
+            }
+            10 => Value::String(self.string()?),
+            // A QUrl: its encoded form, a QByteArray.
+            17 => Value::String(String::from_utf8_lossy(self.bytes()?).into_owned()),
+            11 => {
+                let count = self.count()?;
+                let mut items = Vec::new();
+                for _ in 0..count {
+                    items.push(Value::String(self.string()?));
+                }
+                Value::Array(items)
+            }
+            12 => Value::String(self.byte_array()?),
+            14 => self.date()?.map(Value::from).unwrap_or(Value::Null),
+            15 => self.time()?.map(Value::from).unwrap_or(Value::Null),
+            16 => self.date_time()?,
+            // QRect: its corners, as x, y, width and height.
+            19 => {
+                let (left, top, right, bottom) =
+                    (self.i32()?, self.i32()?, self.i32()?, self.i32()?);
+                Value::from(vec![
+                    i64::from(left),
+                    i64::from(top),
+                    i64::from(right) - i64::from(left) + 1,
+                    i64::from(bottom) - i64::from(top) + 1,
+                ])
+            }
+            // QRectF, QLineF: four doubles; QSizeF, QPointF: two.
+            20 | 24 => Value::Array(vec![
+                Self::number(self.f64()?),
+                Self::number(self.f64()?),
+                Self::number(self.f64()?),
+                Self::number(self.f64()?),
+            ]),
+            22 | 26 => Value::Array(vec![Self::number(self.f64()?), Self::number(self.f64()?)]),
+            // QLine: four ints; QSize, QPoint: two.
+            23 => Value::from(vec![self.i32()?, self.i32()?, self.i32()?, self.i32()?]),
+            21 | 25 => Value::from(vec![self.i32()?, self.i32()?]),
+            33 => Value::from(self.u16()? as i16),
+            34 | 40 => Value::from(self.u8()? as i8),
+            36 => Value::from(self.u16()?),
+            37 => Value::from(self.u8()?),
+            38 => Self::number(self.float()?),
+            _ => return None,
+        })
     }
 }
 
@@ -1616,7 +2171,25 @@ impl<'a> Plist<'a> {
             "true" => Value::Bool(true),
             "false" => Value::Bool(false),
             _ if empty => Value::Null,
-            "string" | "date" | "data" => Value::String(self.text(&tag)),
+            "string" => Value::String(self.text(&tag)),
+            // A CFDate (a QDateTime in local time): its milliseconds since 1970.
+            "date" => {
+                let text = self.text("date");
+                plist_date_ms(&text)
+                    .map(Value::from)
+                    .unwrap_or(Value::String(text))
+            }
+            // CFData: what QSettings could not keep as text (a QVariant's
+            // bytes, a QDateTime in UTC), its UTF-8 read as QSettings reads it.
+            "data" => {
+                let text = self.text("data");
+                match base64_decoded(&text) {
+                    Some(bytes) => {
+                        qt_string_value(&String::from_utf8_lossy(&bytes)).unwrap_or(Value::Null)
+                    }
+                    None => Value::String(text),
+                }
+            }
             "integer" => {
                 let text = self.text("integer");
                 text.trim()
@@ -1653,6 +2226,63 @@ impl<'a> Plist<'a> {
             _ => Value::Null,
         })
     }
+}
+
+/// A plist's `<date>` (`2026-03-04T05:06:07Z`, UTC) as milliseconds
+/// since 1970.
+fn plist_date_ms(text: &str) -> Option<i64> {
+    let text = text.trim().strip_suffix('Z')?;
+    let (date, time) = text.split_once('T')?;
+    let mut date = date.splitn(3, '-').map(|part| part.parse::<i64>().ok());
+    let (year, month, day) = (date.next()??, date.next()??, date.next()??);
+    let mut time = time.splitn(3, ':').map(|part| part.parse::<f64>().ok());
+    let (hour, minute, second) = (time.next()??, time.next()??, time.next()??);
+    if !(1..=12).contains(&month)
+        || !(1..=31).contains(&day)
+        || !(0.0..=24.0).contains(&hour)
+        || !(0.0..60.0).contains(&minute)
+        || !(0.0..61.0).contains(&second)
+    {
+        return None;
+    }
+    // Days from 1970-01-01 (Howard Hinnant's days_from_civil), wide enough
+    // for any year written; one further than milliseconds since 1970 can
+    // count is no date.
+    let (year, month, day) = (i128::from(year), i128::from(month), i128::from(day));
+    let year = if month <= 2 { year - 1 } else { year };
+    let era = year.div_euclid(400);
+    let of_era = year - era * 400;
+    let of_year = (153 * ((month + 9) % 12) + 2) / 5 + day - 1;
+    let of_era_days = of_era * 365 + of_era / 4 - of_era / 100 + of_year;
+    let days = era * 146_097 + of_era_days - 719_468;
+    let time = ((hour * 3600.0 + minute * 60.0 + second) * 1000.0).round() as i128;
+    i64::try_from(days * i128::from(DAY_MS) + time).ok()
+}
+
+/// Base64 (a plist's `<data>`, its lines and indents let be), decoded.
+fn base64_decoded(text: &str) -> Option<Vec<u8>> {
+    let mut out = Vec::new();
+    let mut bits = 0u32;
+    let mut count = 0;
+    for byte in text.bytes().filter(|byte| !byte.is_ascii_whitespace()) {
+        let value = match byte {
+            b'A'..=b'Z' => byte - b'A',
+            b'a'..=b'z' => byte - b'a' + 26,
+            b'0'..=b'9' => byte - b'0' + 52,
+            b'+' => 62,
+            b'/' => 63,
+            b'=' => break,
+            _ => return None,
+        };
+        bits = bits << 6 | u32::from(value);
+        count += 6;
+        if count >= 8 {
+            count -= 8;
+            out.push((bits >> count) as u8);
+            bits &= (1 << count) - 1;
+        }
+    }
+    Some(out)
 }
 
 fn xml_unescape(text: &str) -> String {
@@ -1693,8 +2323,12 @@ fn xml_unescape(text: &str) -> String {
 }
 
 /// The QSettings `reg query <key> /s` lists on Windows: each subkey's
-/// values, a subkey a group of the key; a `REG_MULTI_SZ` a list (its
-/// items parted by `\0`), a `REG_DWORD` a number.
+/// values, a subkey a group of the key, each read back as QSettings'
+/// registry reads it: a `REG_SZ` its text ([`qt_string_value`]); a
+/// `REG_BINARY` (what held a `\0`: each `@Variant(…)` and `@DateTime(…)`,
+/// a list with an empty item) the UTF-16 of its text, `reg` showing its
+/// bytes in hex; a `REG_MULTI_SZ` a list (its items parted by `\0`), each
+/// item read as text; a `REG_DWORD` or `REG_QWORD` a number.
 pub fn qt_settings_reg(text: &str) -> QtSettings {
     let mut settings = QtSettings::new();
     let root = QT_WINDOWS_KEY.trim_start_matches(r"HKCU\");
@@ -1714,34 +2348,60 @@ pub fn qt_settings_reg(text: &str) -> QtSettings {
         let Some(group) = group.as_ref() else {
             continue;
         };
-        let parts: Vec<&str> = line.trim().splitn(3, "    ").collect();
-        let [name, kind, value] = parts.as_slice() else {
+        // name    REG_SZ    value; an empty value ends with its kind.
+        let mut parts = line.trim_start().splitn(3, "    ");
+        let (Some(name), Some(kind)) = (parts.next(), parts.next()) else {
             continue;
         };
+        let value = parts.next().unwrap_or_default();
         let key = if group.is_empty() {
-            (*name).to_owned()
+            name.to_owned()
         } else {
             format!("{group}/{name}")
         };
-        let value = match *kind {
-            "REG_SZ" | "REG_EXPAND_SZ" => Value::String((*value).to_owned()),
-            "REG_MULTI_SZ" => Value::Array(
+        let value = match kind.trim() {
+            "REG_SZ" | "REG_EXPAND_SZ" => qt_string_value(value),
+            "REG_NONE" | "REG_BINARY" => hex_bytes(value).and_then(|bytes| {
+                let units: Vec<u16> = bytes
+                    .chunks_exact(2)
+                    .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+                    .collect();
+                qt_string_value(&String::from_utf16_lossy(&units))
+            }),
+            // QSettings' stringListToVariantList: an item read as text,
+            // `@@…` its `@…`, as one in INI.
+            "REG_MULTI_SZ" => Some(Value::Array(
                 value
                     .split("\\0")
                     .filter(|item| !item.is_empty())
-                    .map(|item| Value::String(item.to_owned()))
+                    .map(|item| qt_string_value(item).unwrap_or(Value::String(item.to_owned())))
                     .collect(),
-            ),
+            )),
             "REG_DWORD" | "REG_QWORD" => {
                 let digits = value.trim().trim_start_matches("0x");
-                match i64::from_str_radix(digits, 16) {
-                    Ok(number) => Value::from(number),
-                    Err(_) => continue,
-                }
+                i64::from_str_radix(digits, 16).ok().map(Value::from)
             }
-            _ => continue,
+            _ => None,
         };
-        settings.insert(key, value);
+        if let Some(value) = value {
+            settings.insert(key, value);
+        }
     }
     settings
+}
+
+/// The bytes `reg query` shows in hex for a `REG_BINARY`; None when they
+/// are not hex.
+fn hex_bytes(text: &str) -> Option<Vec<u8>> {
+    let digits: Vec<u8> = text
+        .bytes()
+        .filter(|byte| !byte.is_ascii_whitespace())
+        .map(|byte| char::from(byte).to_digit(16).map(|digit| digit as u8))
+        .collect::<Option<_>>()?;
+    Some(
+        digits
+            .chunks_exact(2)
+            .map(|pair| pair[0] << 4 | pair[1])
+            .collect(),
+    )
 }

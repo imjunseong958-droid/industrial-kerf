@@ -353,7 +353,11 @@
 //! - `takes_read {media}` holds a media's takes to its guide by where its subjects are: a
 //!   `take_read` for each as it is read, then `takes_read`.
 //! - `workflow_get {media, line}` answers `workflow`, every node and input of the workflow a
-//!   `generate` step's model is run with, where its program is kerf-comfy.
+//!   `generate` step's model is run with, where its program is kerf-comfy. What the server
+//!   takes at each input (`taken: true`, each input's `choices` or `min`, `max` and `step`,
+//!   or `takenError` with why it could not be asked) comes in a second `workflow` once the
+//!   model's program has said it. That one is always the step's workflow as last sent: an
+//!   edit sent meanwhile is not undone by it, and none comes when the last one has it.
 //! - `workflow_edit {media, line, was, node, input, value?, link?: [node, output]}` sets a
 //!   value of that workflow in the shot's own copy of it beside its recipe: `workflow`, then
 //!   `recipe`.
@@ -486,6 +490,8 @@
 //!   [`commands_run`].
 //! - The catalog: [`fx_catalog`], [`fx_catalog_all`], [`clip_properties`].
 //! - [`about`]; [`update_check`], which asks the network: call it off the UI thread.
+//! - [`ffmpeg_bin`]: the FFmpeg kerfd runs, for the editor's own pictures (found once, by
+//!   running the candidates: call it off the UI thread the first time).
 //! - Crash reports: [`crash_install`], [`crash_fatal`], [`crash_reports`].
 //! - The system keychain: [`secret`].
 //! - The project launcher, local: [`project_inspect`], [`preset_inspect`] (which probes files
@@ -1062,6 +1068,8 @@ struct Shared {
     renders: queue::Queue,
     /// Loudness, media info and media index work.
     analysis: analysis::Analysis,
+    /// The workflow last said of each step a graph has open.
+    workflows: workflows::Said,
 }
 
 /// One project open in the editor: commands in through [`Bridge::send`], events out through
@@ -3121,6 +3129,7 @@ impl Bridge {
             others_makings: Mutex::new(std::collections::BTreeMap::new()),
             renders: queue::Queue::default(),
             analysis: analysis::Analysis::default(),
+            workflows: Default::default(),
         });
         {
             let directory = directory.clone();
@@ -3483,6 +3492,17 @@ pub fn about() -> Value {
 /// 10 s, so call it off the UI thread.
 pub fn update_check() -> Value {
     updates::check()
+}
+
+// ---- FFmpeg -----------------------------------------------------------------------
+
+/// The FFmpeg Kerf runs, as kerfd finds it (`kerf_engine::ffmpeg::resolve_ffmpeg_bin`): the
+/// first that runs of `KERF_FFMPEG`, the one beside the program (where each package puts it,
+/// the macOS app's Contents/MacOS among them), Homebrew's ffmpeg-full, then `ffmpeg` on the
+/// PATH; `ffmpeg` when none runs, to say so as it fails. Found once, by running each with
+/// `-version`, so call it off the UI thread the first time.
+pub fn ffmpeg_bin() -> &'static str {
+    kerf_engine::ffmpeg::resolve_ffmpeg_bin()
 }
 
 // ---- Kerf's tools, served by the editor ------------------------------------------

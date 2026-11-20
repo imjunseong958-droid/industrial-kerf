@@ -36,6 +36,7 @@ pub(crate) fn shared(directory: &Path) -> Shared {
         others_makings: Default::default(),
         renders: Default::default(),
         analysis: Default::default(),
+        workflows: Default::default(),
     }
 }
 

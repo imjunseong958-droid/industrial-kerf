@@ -18,7 +18,7 @@
 //! buttons are greyed with the reason (and their keys) in their tooltips.
 //! Another project, new, chosen or recent, opens in place of this window.
 
-use crate::chat::ChatView;
+use crate::chat::{ChatEvent, ChatView};
 use crate::commands::{ClearRecent, OpenRecent, RunCommand, WORKSPACE};
 use crate::export::{ExportEvent, ExportView, Quality};
 use crate::icons::Icon;
@@ -111,10 +111,31 @@ pub struct Workspace {
     activity_open: bool,
     /// The renders this window queued, by job: one that finishes flies home.
     queued_here: HashSet<String>,
-    /// A frame of the picture on its way to the project's row (Manual export).
-    flight: Option<Flight>,
-    /// Where the stage was laid out last, in the window.
+    /// What travels over the window: a frame going home (Manual export,
+    /// Going home), the clips of a cut being built, the picture growing
+    /// out of what it came from or going back into its card.
+    flights: Vec<Flight>,
+    /// The clips a cut being built placed, waiting for the timeline to
+    /// draw them (and for the picture to have grown) before they fly.
+    pending_clips: Vec<PendingClip>,
+    /// What the cut being built had placed when last seen ("clip@end").
+    live_seen: HashSet<String>,
+    /// The picture growing out of what it came from, since when, and the
+    /// clip it stood in for (which does not fly again).
+    grow: Option<(Instant, Option<String>)>,
+    /// What was called off before it landed (a stand-in a new one takes
+    /// over from, one yet to leave as its pane went): it leaves the window
+    /// as it next draws, a frame it carried with it ([`Workspace::flights_now`]).
+    called_off: Vec<Flight>,
+    /// The picture going back into its card, or its stand-in let go as the
+    /// picture went before it had grown, since when: the stage is not drawn
+    /// meanwhile.
+    going_back: Option<Instant>,
+    /// Where the stage was laid out last, in the window (None: it was not).
     stage_slot: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// Where the panel's left edge was drawn last frame, and where it was
+    /// to come to rest.
+    panel_left: (f32, f32),
     /// Each command's keys in the keymap they were read for, as the system
     /// writes them, for the toolbar's tooltips.
     keys: (String, HashMap<String, Vec<String>>),
@@ -144,16 +165,106 @@ pub struct Workspace {
     _subscriptions: Vec<Subscription>,
 }
 
-/// A frame of the picture flying from the stage to the project's row in
-/// the sidebar once an export this window started is done.
+/// Something travelling over the window, from where it leaves to where it
+/// lands, an `img` over everything ([`Workspace::flights_now`]).
 struct Flight {
     image: Arc<RenderImage>,
+    /// `image` is a frame of the picture (the stage's own), which leaves
+    /// the atlas once it has landed unless the stage still shows it or
+    /// another flight carries it; else a poster, the artwork's, which stays.
+    frame: bool,
     from: Bounds<Pixels>,
     to: Bounds<Pixels>,
+    /// When it leaves: later than it was asked for when it is staggered.
     started: Instant,
+    kind: FlightKind,
+}
+
+/// What goes from the panel: all of it, or one of its two.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PaneGoes {
+    Panel,
+    Picture,
+    Timeline,
+}
+
+/// What a flight is, which says how it goes and how it is drawn.
+#[derive(Clone, Debug, PartialEq)]
+pub enum FlightKind {
+    /// Manual export: a frame of the picture, fading as it goes
+    /// ([`export_flight_at`]).
+    Export,
     /// Going home: the picture itself, whole and clear until it lands
-    /// ([`home_flight_at`]), not a fading frame of it.
-    home: bool,
+    /// ([`home_flight_at`]).
+    Home,
+    /// A clip of a cut being built, from its footage tile (or over the
+    /// composer) to where the timeline draws it, ringed and named
+    /// ([`clip_flight_at`]); it lands where the clip is drawn now.
+    Clip { clip: String, name: SharedString },
+    /// The picture's stand-in growing out of what it came from into the
+    /// picture, whole on black ([`grow_flight_at`]); it lands where the
+    /// picture is to be, and holds there while a picture is coming, until
+    /// it comes (the frame shown is no longer `frame`), a clip lands over
+    /// it, or nothing is coming: then, `released`, it fades.
+    Grow {
+        frame: Option<usize>,
+        released: Option<Instant>,
+    },
+    /// The picture going back into cut `proposal`'s card, whole on black
+    /// ([`back_flight_at`]); it lands where the card's picture is drawn.
+    Back { proposal: String },
+    /// A flight (`was`, drawn as it was) whose landing went away before
+    /// it got there, a pane going: it holds where it had got to and fades
+    /// there from how clear it was ([`let_go_flight_at`]).
+    LetGo { was: Box<FlightKind>, clear: f32 },
+}
+
+impl FlightKind {
+    /// Where it is `elapsed` after it left: how far along and how clear;
+    /// None once it has gone.
+    pub fn at(&self, elapsed: Duration) -> Option<(f32, f32)> {
+        match self {
+            FlightKind::Export => export_flight_at(elapsed),
+            FlightKind::Home => home_flight_at(elapsed),
+            FlightKind::Clip { .. } => clip_flight_at(elapsed),
+            FlightKind::Grow { released, .. } => grow_flight_at(
+                elapsed,
+                released.map(|at| elapsed.saturating_sub(at.elapsed())),
+            ),
+            FlightKind::Back { .. } => back_flight_at(elapsed),
+            FlightKind::LetGo { clear, .. } => let_go_flight_at(elapsed, *clear),
+        }
+    }
+
+    /// Whether it flies on as `goes` goes from the panel: a clip lands in
+    /// the timeline and the picture's stand-in in the picture, so each is
+    /// let go when that goes; the rest land outside the panel (a frame
+    /// going home, the picture going back into its card) or are let go.
+    pub fn flies_on(&self, goes: PaneGoes) -> bool {
+        match self {
+            FlightKind::Clip { .. } => goes == PaneGoes::Picture,
+            FlightKind::Grow { .. } => goes == PaneGoes::Timeline,
+            FlightKind::Export
+            | FlightKind::Home
+            | FlightKind::Back { .. }
+            | FlightKind::LetGo { .. } => true,
+        }
+    }
+}
+
+/// A clip a cut being built placed, waiting to fly to where the timeline
+/// draws it.
+struct PendingClip {
+    placed: PlacedClip,
+    asked: Instant,
+}
+
+/// What is drawn of a flight this frame.
+struct Drawn {
+    bounds: Bounds<Pixels>,
+    opacity: f32,
+    image: Arc<RenderImage>,
+    kind: FlightKind,
 }
 
 impl Workspace {
@@ -238,6 +349,16 @@ impl Workspace {
                     }
                 },
             ),
+            // A cut's card pressed: its picture grows out of the card.
+            cx.subscribe_in(
+                &chat,
+                window,
+                |this, _, event: &ChatEvent, window, cx| match event {
+                    ChatEvent::GrowPicture { proposal } => {
+                        this.grow_from_card(proposal, window, cx)
+                    }
+                },
+            ),
             // The lanes draw the version of a proposal the pinned card shows.
             cx.observe(&chat, |this, chat, cx| {
                 let shown = chat.read(cx).pinned_proposal(cx);
@@ -304,6 +425,21 @@ impl Workspace {
                     {
                         return;
                     }
+                    // The app menu or the title's, while it has the keys,
+                    // takes Esc itself: its deepest submenu goes first,
+                    // then the menu.
+                    let menu_has_keys = this
+                        .read_with(cx, |this, cx| {
+                            this.app_menu.as_ref().is_some_and(|(menu, _)| {
+                                menu.focus_handle(cx).contains_focused(window, cx)
+                            }) || this.title_menu.as_ref().is_some_and(|menu| {
+                                menu.focus_handle(cx).contains_focused(window, cx)
+                            })
+                        })
+                        .unwrap_or(false);
+                    if menu_has_keys {
+                        return;
+                    }
                     if this
                         .update(cx, |this, cx| this.close_menus(window, cx))
                         .unwrap_or(false)
@@ -356,8 +492,14 @@ impl Workspace {
             window_title: String::new(),
             activity_open: false,
             queued_here: HashSet::new(),
-            flight: None,
+            flights: Vec::new(),
+            pending_clips: Vec::new(),
+            live_seen: HashSet::new(),
+            grow: None,
+            called_off: Vec::new(),
+            going_back: None,
             stage_slot: Rc::new(Cell::new(None)),
+            panel_left: (0.0, 0.0),
             keys: (String::new(), HashMap::new()),
             focus_settled: false,
             settle_soon: false,
@@ -503,12 +645,15 @@ impl Workspace {
                 self.window_title = title;
             }
             if has_clips && !self.panel_open && !self.panel_by_hand {
-                self.open_panel(true, true, scene::STAGE, cx);
+                // The picture grows out of what it came from.
+                self.grow_for_cut(cx);
                 window.refresh();
                 // The timeline is in view: the keys go to it, unless
                 // someone is typing.
                 self.settle_focus(window, cx);
             }
+            // What a cut being built placed flies to where it lands.
+            self.follow_cut_build(cx);
             // The first snapshot puts the keys where they belong: on the
             // timeline with a cut, else in the composer to ask Kerf, unless
             // something holds them already.
@@ -547,6 +692,15 @@ impl Workspace {
                 let session = self.session.read(cx);
                 let work = &session.state.work;
                 if work.busy() {
+                    // A turn starts: what its cut has placed already is not new.
+                    if self.working_in.is_none() {
+                        self.live_seen = session
+                            .live_cut()
+                            .map(|(_, cut)| {
+                                placed_since(session.timeline(), cut, &HashSet::new()).1
+                            })
+                            .unwrap_or_default();
+                    }
                     self.working_in = work
                         .conversation
                         .clone()
@@ -557,6 +711,7 @@ impl Workspace {
             // in the back leaves its dot too, until the window comes to the
             // front on it.
             Change::TurnEnded => {
+                self.live_seen.clear();
                 if std::mem::take(&mut self.turn_rendered) {
                     self.go_home(cx);
                 }
@@ -710,12 +865,13 @@ impl Workspace {
             .project_row_bounds()
             .map(landing_in)
             .unwrap_or_else(project_row);
-        self.flight = Some(Flight {
+        self.flights.push(Flight {
             image: picture.image.clone(),
+            frame: true,
             from,
             to,
             started: Instant::now(),
-            home: false,
+            kind: FlightKind::Export,
         });
         cx.notify();
     }
@@ -749,13 +905,17 @@ impl Workspace {
         }) else {
             return;
         };
-        self.flight = Some(Flight {
+        let flight = Flight {
             image: picture.image.clone(),
+            frame: true,
             from,
             to: landing_in(row),
             started: Instant::now(),
-            home: true,
-        });
+            kind: FlightKind::Home,
+        };
+        // What flew into the panel has nowhere to land now.
+        self.let_flights_go(PaneGoes::Panel);
+        self.flights.push(flight);
         // The panel goes as the picture does, and stays gone: the snapshot
         // the turn's end brings (and any after it) does not open it again,
         // as Qt's panes followed what came only once. Asked for, it comes.
@@ -769,43 +929,443 @@ impl Workspace {
         self.settle_soon(cx);
     }
 
-    /// Where the flight is this frame, and how clear: None once it has
-    /// landed and faded, when what it carried leaves the atlas (unless the
-    /// stage still shows it).
-    fn flight_now(
+    /// What flies this frame: each flight where it has got to and how
+    /// clear, `to` following what it lands on (a clip where the timeline
+    /// draws it now, the picture where it is to be, a card where the
+    /// conversation lays it). One that has landed and faded goes; a frame
+    /// it carried leaves the atlas unless the stage still shows it. Frames
+    /// are asked for while any flies.
+    fn flights_now(
         &mut self,
+        picture_home: Option<Bounds<Pixels>>,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> Option<(Bounds<Pixels>, f32, Arc<RenderImage>)> {
-        let flight = self.flight.as_ref()?;
-        let at = if flight.home {
-            home_flight_at(flight.started.elapsed())
-        } else {
-            export_flight_at(flight.started.elapsed())
-        };
-        match at {
-            Some((along, opacity)) => {
-                window.request_animation_frame();
-                Some((
-                    lerp_bounds(flight.from, flight.to, along),
-                    opacity,
-                    flight.image.clone(),
-                ))
+    ) -> Vec<Drawn> {
+        let now = Instant::now();
+        let mut drawn = Vec::new();
+        // What was called off goes as what has landed does.
+        let mut landed = std::mem::take(&mut self.called_off);
+        // A clip of the cut has landed over the picture's stand-in.
+        let covered = self.flights.iter().any(|flight| {
+            matches!(flight.kind, FlightKind::Clip { .. })
+                && now.saturating_duration_since(flight.started) >= scene::FLIGHT
+        });
+        for flight in std::mem::take(&mut self.flights) {
+            // Where it lands, as that is now.
+            let to = match &flight.kind {
+                FlightKind::Clip { clip, .. } => self.timeline.read(cx).clip_bounds(clip),
+                FlightKind::Grow { .. } => picture_home,
+                FlightKind::Back { proposal } => self.chat.read(cx).cut_picture_bounds(proposal),
+                FlightKind::Export | FlightKind::Home | FlightKind::LetGo { .. } => None,
             }
-            None => {
-                let flight = self.flight.take()?;
-                let shown = self
-                    .session
-                    .read(cx)
-                    .picture
-                    .as_ref()
-                    .is_some_and(|picture| Arc::ptr_eq(&picture.image, &flight.image));
-                if !shown {
-                    cx.drop_image(flight.image, Some(window));
+            .unwrap_or(flight.to);
+            let mut flight = Flight { to, ..flight };
+            self.hold_or_release(&mut flight, covered, cx);
+            let Some(elapsed) = now.checked_duration_since(flight.started) else {
+                // Not left yet: it waits its turn, unseen.
+                window.request_animation_frame();
+                self.flights.push(flight);
+                continue;
+            };
+            match flight.kind.at(elapsed) {
+                Some((along, opacity)) => {
+                    window.request_animation_frame();
+                    drawn.push(Drawn {
+                        bounds: lerp_bounds(flight.from, flight.to, along),
+                        opacity,
+                        image: flight.image.clone(),
+                        kind: flight.kind.clone(),
+                    });
+                    self.flights.push(flight);
                 }
-                None
+                None => landed.push(flight),
             }
         }
+        for flight in landed {
+            if !flight.frame {
+                continue;
+            }
+            let shown = self
+                .session
+                .read(cx)
+                .picture
+                .as_ref()
+                .is_some_and(|picture| Arc::ptr_eq(&picture.image, &flight.image));
+            let flying = self
+                .flights
+                .iter()
+                .any(|other| Arc::ptr_eq(&other.image, &flight.image));
+            if !shown && !flying {
+                cx.drop_image(flight.image, Some(window));
+            }
+        }
+        drawn
+    }
+
+    /// The picture's stand-in, landed, is let go once its picture comes
+    /// (the frame shown changed), a clip of the cut lands over it, nothing
+    /// is coming any more (no render, Kerf not at work), or it has held for
+    /// [`STAND_IN_MOST`].
+    fn hold_or_release(&self, flight: &mut Flight, covered: bool, cx: &App) {
+        let FlightKind::Grow { frame, released } = &mut flight.kind else {
+            return;
+        };
+        if released.is_some() {
+            return;
+        }
+        let elapsed = flight.started.elapsed();
+        if elapsed < scene::STAGE {
+            return;
+        }
+        let session = self.session.read(cx);
+        let shown = session
+            .picture
+            .as_ref()
+            .map(|picture| Arc::as_ptr(&picture.image) as usize);
+        let came = shown.is_some() && shown != *frame;
+        let coming = session.state.preview.rendering() || session.state.work.busy();
+        if came || !coming || covered || elapsed >= scene::STAGE + STAND_IN_MOST {
+            *released = Some(Instant::now());
+        }
+    }
+
+    /// Where the picture is to be once the panel has come to rest: where
+    /// the stage placed it last frame, moved by as far as the panel has
+    /// still to come, else where the stage would place it in its slot.
+    fn picture_home(
+        &self,
+        stage: Option<Bounds<Pixels>>,
+        slot: Bounds<Pixels>,
+        cx: &App,
+    ) -> Bounds<Pixels> {
+        let session = self.session.read(cx);
+        let placed = stage.and(self.stage.read(cx).picture_bounds());
+        let (drawn, rest) = self.panel_left;
+        match placed {
+            Some(picture) => Bounds::new(
+                point(picture.origin.x + px(rest - drawn), picture.origin.y),
+                picture.size,
+            ),
+            None => picture_in(slot, crate::stage::shown_aspect(session)),
+        }
+    }
+
+    /// The picture comes in growing out of `origin` (a cut's card, a
+    /// footage tile, over the composer), its stand-in `poster` flying from
+    /// there to where the picture will be over `STAGE` as the panel comes
+    /// in under it, unseen, and the conversation gives way; the timeline
+    /// comes in after it. With nowhere to grow from, nothing to stand in,
+    /// or under Reduce Motion, the panel simply comes in over `STAGE`.
+    fn grow_picture(
+        &mut self,
+        origin: Option<Bounds<Pixels>>,
+        poster: Option<Arc<RenderImage>>,
+        stands_for: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
+        let open = self.panel_open && self.picture_shown.target() > 0.5;
+        if open {
+            self.open_panel(true, true, scene::PANEL, cx);
+            return;
+        }
+        let duration = if self.panel_open {
+            scene::PANEL
+        } else {
+            scene::STAGE
+        };
+        self.open_panel(true, !self.panel_open, duration, cx);
+        let (Some(origin), Some(poster), false) = (origin, poster, motion::reduced()) else {
+            return;
+        };
+        let now = Instant::now();
+        self.going_back = None;
+        self.call_off_picture();
+        let shown = self
+            .session
+            .read(cx)
+            .picture
+            .as_ref()
+            .map(|picture| picture.image.clone());
+        let frame = shown.as_ref().map(|image| Arc::as_ptr(image) as usize);
+        // The stand-in is the frame shown when there was no poster for it.
+        let is_frame = shown.is_some_and(|image| Arc::ptr_eq(&image, &poster));
+        self.flights.push(Flight {
+            image: poster,
+            frame: is_frame,
+            from: origin,
+            // Where the picture will be follows as it is laid out.
+            to: origin,
+            started: now,
+            kind: FlightKind::Grow {
+                frame,
+                released: None,
+            },
+        });
+        self.grow = Some((now, stands_for));
+        cx.notify();
+    }
+
+    /// A cut's card was pressed: the picture grows out of its picture.
+    fn grow_from_card(&mut self, proposal: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let chat = self.chat.read(cx);
+        let origin = chat.cut_picture_bounds(proposal);
+        let poster = chat.cut_poster(proposal, cx).or_else(|| {
+            self.session
+                .read(cx)
+                .picture
+                .as_ref()
+                .map(|picture| picture.image.clone())
+        });
+        self.grow_picture(origin, poster, None, cx);
+        window.refresh();
+    }
+
+    /// A cut arrived with the panel closed: the picture grows out of what
+    /// its first clip came from, its card where it shows, else its
+    /// footage's tile (which it takes), else over the composer.
+    fn grow_for_cut(&mut self, cx: &mut Context<Self>) {
+        let session = self.session.read(cx);
+        let cut = session.live_cut();
+        let first = cut
+            .map(|(_, cut)| cut)
+            .into_iter()
+            .chain(std::iter::once(session.timeline()))
+            .find_map(first_picture_clip);
+        let card = cut.and_then(|(proposal, _)| {
+            let chat = self.chat.read(cx);
+            chat.cut_picture_bounds(&proposal.proposal_id)
+                .map(|bounds| (bounds, chat.cut_poster(&proposal.proposal_id, cx)))
+        });
+        let (origin, poster, stands_for) = match (card, first) {
+            (Some((bounds, poster)), _) => (Some(bounds), poster, None),
+            (None, Some((clip, source))) => {
+                let poster = session.artwork.poster(&source);
+                let tile = self.chat.read(cx).footage_tile_bounds(&source);
+                let origin = tile.or_else(|| self.chat.read(cx).over_composer());
+                if tile.is_some() {
+                    self.chat
+                        .update(cx, |chat, cx| chat.take_footage(&source, cx));
+                }
+                (origin, poster, Some(clip))
+            }
+            (None, None) => (None, None, None),
+        };
+        self.grow_picture(origin, poster, stands_for, cx);
+    }
+
+    /// The picture is put away while its cut's card is in sight: it goes
+    /// back into the card's picture over `PANEL` as the panel goes, the
+    /// stage not drawn meanwhile. Not under Reduce Motion.
+    fn send_picture_back(&mut self, cx: &mut Context<Self>) {
+        if motion::reduced() || !self.panel_open || self.picture_shown.target() < 0.5 {
+            return;
+        }
+        let chat = self.chat.read(cx);
+        let Some(proposal) = chat.stage_proposal().map(str::to_owned) else {
+            return;
+        };
+        let Some(card) = chat.cut_picture_bounds(&proposal) else {
+            return;
+        };
+        let poster = chat.cut_poster(&proposal, cx);
+        let session = self.session.read(cx);
+        let image = match (session.picture.as_ref(), poster) {
+            (Some(picture), _) => Some((picture.image.clone(), true)),
+            (None, poster) => poster.map(|poster| (poster, false)),
+        };
+        let (Some((image, frame)), Some(from)) = (image, self.stage.read(cx).picture_bounds())
+        else {
+            return;
+        };
+        let now = Instant::now();
+        self.call_off_picture();
+        self.grow = None;
+        self.flights.push(Flight {
+            image,
+            frame,
+            from,
+            to: card,
+            started: now,
+            kind: FlightKind::Back { proposal },
+        });
+        self.going_back = Some(now);
+        cx.notify();
+    }
+
+    /// The picture's stand-in and the picture going back into its card
+    /// are called off, for another to take over.
+    fn call_off_picture(&mut self) {
+        let (off, on): (Vec<Flight>, Vec<Flight>) = std::mem::take(&mut self.flights)
+            .into_iter()
+            .partition(|flight| {
+                matches!(
+                    flight.kind,
+                    FlightKind::Grow { .. } | FlightKind::Back { .. }
+                )
+            });
+        self.flights = on;
+        self.called_off.extend(off);
+    }
+
+    /// As `goes` goes from the panel, what was flying into it (a clip into
+    /// the timeline, the picture's stand-in into the picture) has nowhere
+    /// to land: each is let go where it has got to, fading there
+    /// ([`let_go_flight_at`]), and one yet to leave does not. The picture
+    /// going before it had grown, the stage is not drawn as it goes (the
+    /// timeline still comes in as it was to).
+    fn let_flights_go(&mut self, goes: PaneGoes) {
+        let now = Instant::now();
+        let mut stand_in = false;
+        for flight in std::mem::take(&mut self.flights) {
+            if flight.kind.flies_on(goes) {
+                self.flights.push(flight);
+                continue;
+            }
+            stand_in |= matches!(flight.kind, FlightKind::Grow { .. });
+            let Some(elapsed) = now.checked_duration_since(flight.started) else {
+                self.called_off.push(flight);
+                continue;
+            };
+            match flight.kind.at(elapsed) {
+                Some((along, clear)) => {
+                    let here = lerp_bounds(flight.from, flight.to, along);
+                    let was = Box::new(flight.kind.clone());
+                    self.flights.push(Flight {
+                        from: here,
+                        to: here,
+                        started: now,
+                        kind: FlightKind::LetGo { was, clear },
+                        ..flight
+                    });
+                }
+                None => self.called_off.push(flight),
+            }
+        }
+        if stand_in {
+            self.going_back = Some(now);
+        }
+        if goes != PaneGoes::Picture {
+            self.pending_clips.clear();
+        }
+    }
+
+    /// As Kerf builds a cut, what it placed since it was last seen waits
+    /// to fly from its footage tile to its clip ([`placed_since`]). What
+    /// was there as the turn began is not new.
+    fn follow_cut_build(&mut self, cx: &mut Context<Self>) {
+        let session = self.session.read(cx);
+        if !session.state.work.busy() {
+            return;
+        }
+        let Some((_, cut)) = session.live_cut() else {
+            return;
+        };
+        let (placed, seen) = placed_since(session.timeline(), cut, &self.live_seen);
+        self.live_seen = seen;
+        let now = Instant::now();
+        let grown = self.grow.as_ref().and_then(|(_, clip)| clip.clone());
+        self.pending_clips.extend(
+            placed
+                .into_iter()
+                .filter(|placed| Some(&placed.clip) != grown.as_ref())
+                .map(|placed| PendingClip { placed, asked: now }),
+        );
+    }
+
+    /// The clips waiting to fly leave once the picture has grown and the
+    /// timeline draws them, one after another `FLIGHT_STAGGER` apart: from
+    /// the footage's tile (which they take), else over the composer. Ones
+    /// the timeline does not draw in time, or with no poster, do not fly.
+    fn launch_clips(&mut self, cx: &mut Context<Self>) {
+        if self.pending_clips.is_empty() {
+            return;
+        }
+        let growing = self
+            .grow
+            .as_ref()
+            .is_some_and(|(since, _)| since.elapsed() < scene::STAGE);
+        let in_view = self.panel_open
+            && self.timeline_shown.target() > 0.5
+            && self.panel_shown.target() > 0.5
+            && !motion::reduced();
+        if !in_view {
+            self.pending_clips.clear();
+            return;
+        }
+        if growing {
+            return;
+        }
+        let now = Instant::now();
+        let busy = self.session.read(cx).state.work.busy();
+        let mut leaving = 0u32;
+        for pending in std::mem::take(&mut self.pending_clips) {
+            let placed = &pending.placed;
+            let lane = self.timeline.read(cx).clip_bounds(&placed.clip);
+            let poster = placed
+                .source
+                .as_deref()
+                .and_then(|source| self.session.read(cx).artwork.poster(source));
+            match (lane, poster) {
+                (Some(lane), Some(poster)) => {
+                    let tile = placed
+                        .source
+                        .as_deref()
+                        .and_then(|source| self.chat.read(cx).footage_tile_bounds(source));
+                    let Some(from) = tile.or_else(|| self.chat.read(cx).over_composer()) else {
+                        continue;
+                    };
+                    if let (Some(source), true) = (placed.source.clone(), tile.is_some()) {
+                        self.chat
+                            .update(cx, |chat, cx| chat.take_footage(&source, cx));
+                    }
+                    self.flights.push(Flight {
+                        image: poster,
+                        frame: false,
+                        from,
+                        to: lane,
+                        started: now + scene::FLIGHT_STAGGER * leaving,
+                        kind: FlightKind::Clip {
+                            clip: placed.clip.clone(),
+                            name: placed.name.clone().into(),
+                        },
+                    });
+                    leaving += 1;
+                }
+                // The timeline has yet to draw it: it waits while Kerf
+                // works, and a little after.
+                (None, Some(_)) if busy || pending.asked.elapsed() < scene::FLIGHT_WAIT => {
+                    self.pending_clips.push(pending);
+                }
+                _ => {}
+            }
+        }
+        if leaving > 0 || !self.pending_clips.is_empty() {
+            cx.notify();
+        }
+    }
+
+    /// How much of the stage and of the timeline is drawn now: both whole,
+    /// but while the picture grows ([`grow_shows`]) or goes back into its
+    /// card (the stage not at all, as the panel goes).
+    fn panel_shows(&mut self) -> (f32, f32) {
+        let growing = match &self.grow {
+            Some((since, _))
+                if since.elapsed() < scene::STAGE + scene::FLIGHT_LAND.max(scene::SETTLE) =>
+            {
+                Some(grow_shows(since.elapsed()))
+            }
+            _ => {
+                self.grow = None;
+                None
+            }
+        };
+        if let Some(since) = self.going_back {
+            if since.elapsed() < scene::PANEL {
+                return (0.0, growing.map_or(1.0, |(_, lanes)| lanes));
+            }
+            self.going_back = None;
+        }
+        growing.unwrap_or((1.0, 1.0))
     }
 
     /// Whether Kerf works in conversation `id` now.
@@ -957,6 +1517,10 @@ impl Workspace {
             self.open_panel(true, true, scene::PANEL, cx);
             return;
         }
+        // The picture goes back into its cut's card, while that is in sight;
+        // what else flew into the panel is let go where it is.
+        self.send_picture_back(cx);
+        self.let_flights_go(PaneGoes::Panel);
         self.panel_open = false;
         self.panel_by_hand = true;
         self.panel_shown.go(0.0, scene::PANEL);
@@ -983,6 +1547,11 @@ impl Workspace {
         );
         let (show_picture, show_timeline) =
             panes_opening(self.panel_open, shown, (picture, timeline));
+        if !self.panel_open {
+            // Coming in anew, nothing in it is growing or going back.
+            self.grow = None;
+            self.going_back = None;
+        }
         for (tween, show, was) in [
             (&mut self.picture_shown, show_picture, shown.0),
             (&mut self.timeline_shown, show_timeline, shown.1),
@@ -1053,9 +1622,9 @@ impl Workspace {
             return;
         }
         let (this, other) = if picture {
-            (&mut self.picture_shown, &self.timeline_shown)
+            (&self.picture_shown, &self.timeline_shown)
         } else {
-            (&mut self.timeline_shown, &self.picture_shown)
+            (&self.timeline_shown, &self.picture_shown)
         };
         let showing = this.target() > 0.5;
         if showing && other.target() < 0.5 {
@@ -1063,6 +1632,21 @@ impl Workspace {
             self.set_panel(false, cx);
             return;
         }
+        if picture && showing {
+            self.send_picture_back(cx);
+        }
+        if showing {
+            self.let_flights_go(if picture {
+                PaneGoes::Picture
+            } else {
+                PaneGoes::Timeline
+            });
+        }
+        let this = if picture {
+            &mut self.picture_shown
+        } else {
+            &mut self.timeline_shown
+        };
         this.go(if showing { 0.0 } else { 1.0 }, scene::PANEL);
         // The timeline gone gives the keys back; come, it takes them.
         self.settle_soon(cx);
@@ -2023,7 +2607,7 @@ impl Workspace {
                     } else {
                         // Pressed, what can be done with the conversation;
                         // pressed twice, its name becomes a field.
-                        toolbar_stop(
+                        let title = toolbar_stop(
                             sidebar::trigger(
                                 "toolbar-title",
                                 cx.listener(|this, event: &MouseDownEvent, window, cx| {
@@ -2065,13 +2649,22 @@ impl Workspace {
                         .cursor_pointer()
                         .when(title_menu, |title| title.bg(theme::raised()))
                         .hover(|title| title.bg(theme::raised()))
-                        .when(!title_menu && !title_tip.is_empty(), |title| {
-                            let tip: SharedString = title_tip.clone().into();
-                            title.tooltip(move |_, cx| cx.new(|_| ui::Tooltip(tip.clone())).into())
-                        })
                         .child(ui::line(title, text::TITLE, theme::ink()))
-                        .child(Icon::ChevronDown.view(14.0, theme::ink3()))
-                        .into_any_element()
+                        .child(Icon::ChevronDown.view(14.0, theme::ink3()));
+                        // Its tip, over all of it, so that it still gives way
+                        // in a narrow window; its menu says all the tip
+                        // would, so the tip waits while it is open.
+                        title
+                            .when(!title_menu && !title_tip.is_empty(), |title| {
+                                title.child(div().absolute().inset_0().flex().flex_col().child(
+                                    ui::tipped(
+                                        "toolbar-title-tip",
+                                        ui::Tip::new(title_tip.clone()),
+                                        div().w_full().h(px(theme::height::H28)),
+                                    ),
+                                ))
+                            })
+                            .into_any_element()
                     })
                     .when_some(subtitle, |row, (words, color)| {
                         row.child(ui::line(words, text::CONTROL, color).min_w_0())
@@ -2211,8 +2804,18 @@ impl Workspace {
         .when(open, |chevron| chevron.bg(theme::on()))
         .hover(|chevron| chevron.bg(theme::hover2()))
         .child(Icon::ChevronDown.view(14.0, theme::ink2()))
-        .tooltip(|_, cx| cx.new(|_| ui::Tooltip("Export options".into())).into())
         .on_click(cx.listener(|this, _, window, cx| this.toggle_export(window, cx)));
+        // Its menu says all the tip would: the tip waits while it is open.
+        let chevron = if open {
+            chevron.into_any_element()
+        } else {
+            ui::tipped(
+                "export-options-tip",
+                ui::Tip::new("Export options"),
+                chevron,
+            )
+            .into_any_element()
+        };
         div()
             .flex()
             .flex_none()
@@ -2432,8 +3035,9 @@ impl Workspace {
                             .min_w_0(),
                     )
             }))
+            .relative()
             .with_animation("activity", motion::animation(scene::FADE), |panel, t| {
-                panel.opacity(t)
+                panel.opacity(t).top(px(scene::MENU_RISE * (1.0 - t)))
             })
     }
 
@@ -2517,26 +3121,26 @@ impl Workspace {
         bars
     }
 
+    /// The panel, `width` × `height`: the picture (and the inspector), the
+    /// Media band, the timeline. `shows` is how much of the stage and of
+    /// the timeline is drawn (both whole, but while the picture grows or
+    /// goes back into its card).
     fn panel(
         &self,
         width: f32,
         height: f32,
         inspecting: bool,
         aspect: f32,
+        shows: (f32, f32),
         window: &Window,
     ) -> AnyElement {
         let picture = self.picture_shown.sample(window);
         let timeline = self.timeline_shown.sample(window);
         let media = self.media_shown.sample(window);
-        let band = layout::MEDIA_BAND * media;
-        // The timeline's share follows the picture's shape; the picture
-        // takes the rest. One of the two alone has all of it.
-        let timeline_full = (height - band).max(0.0);
         let stage_width = width - if inspecting { layout::INSPECTOR } else { 0.0 };
-        let timeline_tall = timeline_split(height, band, stage_width, aspect);
-        let timeline_height = timeline_tall + (timeline_full - timeline_tall) * (1.0 - picture);
-        let timeline_height = timeline_height * timeline;
-        let picture_height = (height - band - timeline_height).max(0.0);
+        let (picture_height, band, timeline_height) =
+            panel_heights(height, stage_width, aspect, (picture, timeline, media));
+        let (stage_shows, timeline_shows) = shows;
         div()
             .w(px(width))
             .h(px(height))
@@ -2550,6 +3154,7 @@ impl Workspace {
                     .flex_none()
                     .flex()
                     .overflow_hidden()
+                    .when(stage_shows < 1.0, |row| row.opacity(stage_shows))
                     .child(
                         div()
                             .flex_1()
@@ -2605,6 +3210,7 @@ impl Workspace {
                     .overflow_hidden()
                     .border_t_1()
                     .border_color(theme::line())
+                    .when(timeline_shows < 1.0, |lanes| lanes.opacity(timeline_shows))
                     .child(self.timeline.clone()),
             )
             .into_any_element()
@@ -2830,7 +3436,9 @@ impl Focusable for Workspace {
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.refresh_keys(cx);
-        let flight = self.flight_now(window, cx);
+        // Where the stage was laid out last frame, if it was: this frame
+        // lays it out again, or not.
+        let stage_drawn = self.stage_slot.take();
         let viewport = window.viewport_size();
         let (window_width, window_height) = (f32::from(viewport.width), f32::from(viewport.height));
         let sidebar_width = self.sidebar_width(self.session.read(cx));
@@ -2907,6 +3515,40 @@ impl Render for Workspace {
         let aspect = crate::stage::shown_aspect(self.session.read(cx));
         // Where the title starts, for its menu to open under it.
         let title_left = main_left + if leading { 84.0 } else { 16.0 };
+        // Where the panel's left edge is drawn, and where it comes to rest;
+        // where the picture will be there, for what grows into it.
+        let panel_left = main_left + conversation_width - reach;
+        let rest_left = main_left + main_width - panel_width;
+        let picture_home = {
+            let stage_width = panel_width - 8.0 - if inspecting { layout::INSPECTOR } else { 0.0 };
+            let shown = |tween: &Tween| tween.target().clamp(0.0, 1.0);
+            let (picture_height, _, _) = panel_heights(
+                content_height - 8.0,
+                stage_width,
+                aspect,
+                (
+                    shown(&self.picture_shown),
+                    shown(&self.timeline_shown),
+                    shown(&self.media_shown),
+                ),
+            );
+            let slot = Bounds::new(
+                point(px(rest_left), px(layout::TOOLBAR + bars_height)),
+                size(px(stage_width.max(1.0)), px(picture_height)),
+            );
+            self.picture_home(stage_drawn, slot, cx)
+        };
+        self.panel_left = (panel_left, rest_left);
+        // What a cut being built placed flies once the timeline draws it.
+        self.launch_clips(cx);
+        if !self.pending_clips.is_empty() {
+            window.request_animation_frame();
+        }
+        let flights = self.flights_now(Some(picture_home), window, cx);
+        // While the picture grows the stage is not drawn until its
+        // stand-in lands, and the timeline comes in after it; going back
+        // into its card, the stage is not drawn.
+        let shows = self.panel_shows();
 
         div()
             .key_context(WORKSPACE)
@@ -3133,11 +3775,15 @@ impl Render for Workspace {
                                         .w(px(panel_width + reach))
                                         .pr(px(8.0))
                                         .pb(px(8.0))
+                                        // Reaching over the conversation, the
+                                        // words under it take no press.
+                                        .occlude()
                                         .child(self.panel(
                                             panel_width + reach - 8.0,
                                             content_height - 8.0,
                                             inspecting,
                                             aspect,
+                                            shows,
                                             window,
                                         )),
                                 )
@@ -3154,7 +3800,7 @@ impl Render for Workspace {
                         .with_animation(
                             "export-pop",
                             motion::animation(scene::FADE),
-                            |popover, t| popover.opacity(t).mt(px(4.0 * (1.0 - t))),
+                            |popover, t| popover.opacity(t).mt(px(scene::MENU_RISE * (1.0 - t))),
                         ),
                 )
             })
@@ -3260,27 +3906,9 @@ impl Render for Workspace {
                         .child(placed),
                 )
             })
-            // Manual export: a frame of the picture on its way to the project's row.
-            .when_some(flight, |root, (bounds, opacity, image)| {
-                root.child(
-                    div()
-                        .absolute()
-                        .left(bounds.origin.x)
-                        .top(bounds.origin.y)
-                        .w(bounds.size.width)
-                        .h(bounds.size.height)
-                        .opacity(opacity)
-                        // Covering its box, and cut to it.
-                        .overflow_hidden()
-                        .rounded(px(theme::radius::CARD))
-                        .child(
-                            img(image)
-                                .size_full()
-                                .rounded(px(theme::radius::CARD))
-                                .object_fit(ObjectFit::Cover),
-                        ),
-                )
-            })
+            // What travels over the window: frames going home, clips
+            // flying to the timeline, the picture growing or going back.
+            .children(flights.into_iter().map(flown))
             .children(self.modal(window, cx))
             // Notices sit over the conversation, above what is open over the window.
             .child(
@@ -3292,6 +3920,80 @@ impl Render for Workspace {
                     .w(px(conversation_width))
                     .child(self.notices(cx)),
             )
+    }
+}
+
+/// A flight as it is drawn this frame: a frame going home covers its box,
+/// rounded as the picture is; a clip's poster covers its box with a ring of
+/// Kerf's ink round it and its name at its foot, as Qt's; the picture
+/// growing or going back is shown whole on black, as the stage shows it.
+fn flown(drawn: Drawn) -> AnyElement {
+    let Drawn {
+        bounds,
+        opacity,
+        image,
+        kind,
+    } = drawn;
+    // Let go, it is drawn as it was flying.
+    let kind = match kind {
+        FlightKind::LetGo { was, .. } => *was,
+        kind => kind,
+    };
+    let (radius, whole) = match &kind {
+        FlightKind::Clip { .. } => (theme::radius::SMALL, false),
+        FlightKind::Grow { .. } | FlightKind::Back { .. } => (theme::radius::CARD, true),
+        FlightKind::Export | FlightKind::Home | FlightKind::LetGo { .. } => {
+            (theme::radius::CARD, false)
+        }
+    };
+    let fit = if whole {
+        ObjectFit::Contain
+    } else {
+        ObjectFit::Cover
+    };
+    let flight = div()
+        .absolute()
+        .left(bounds.origin.x)
+        .top(bounds.origin.y)
+        .w(bounds.size.width)
+        .h(bounds.size.height)
+        .opacity(opacity)
+        // Cut to its box.
+        .overflow_hidden()
+        .rounded(px(radius))
+        .when(whole, |flight| flight.bg(gpui::black()))
+        .child(img(image).size_full().rounded(px(radius)).object_fit(fit));
+    match kind {
+        FlightKind::Clip { name, .. } => flight
+            .when(
+                f32::from(bounds.size.height) >= layout::CLIP_FLIGHT_NAMED,
+                |flight| {
+                    flight.child(
+                        div()
+                            .absolute()
+                            .left(px(theme::space::S4))
+                            .bottom(px(theme::space::S4))
+                            .max_w(bounds.size.width - px(theme::space::S8))
+                            .h(px(17.0))
+                            .px(px(theme::space::S4))
+                            .flex()
+                            .items_center()
+                            .rounded(px(theme::radius::SMALL))
+                            .bg(gpui::rgba(0x00000099))
+                            .child(ui::line(name, text::META, gpui::white().into())),
+                    )
+                },
+            )
+            .child(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .rounded(px(radius))
+                    .border(px(layout::CLIP_FLIGHT_RING))
+                    .border_color(theme::accent_ink()),
+            )
+            .into_any_element(),
+        _ => flight.into_any_element(),
     }
 }
 
@@ -3551,11 +4253,10 @@ fn bar(
     buttons: Vec<AnyElement>,
     tip: Option<SharedString>,
 ) -> AnyElement {
-    div()
+    let tip_id = SharedString::from(format!("{id}-tip"));
+    let bar = div()
         .id(id.clone())
-        .when_some(tip, |bar, tip| {
-            bar.tooltip(move |_, cx| cx.new(|_| ui::Tooltip(tip.clone())).into())
-        })
+        .w_full()
         .h(px(BAR))
         .flex_none()
         .flex()
@@ -3587,8 +4288,12 @@ fn bar(
                 }),
         )
         .children(buttons)
-        .with_animation(id, motion::animation(scene::FADE), |bar, t| bar.opacity(t))
-        .into_any_element()
+        .with_animation(id, motion::animation(scene::FADE), |bar, t| bar.opacity(t));
+    // The whole of what it says, where its line cuts it.
+    match tip {
+        Some(tip) => ui::tipped(tip_id, ui::Tip::new(tip), bar).into_any_element(),
+        None => bar.into_any_element(),
+    }
 }
 
 /// The paths a file chooser gave; None, with a notice in `session`'s window
@@ -3850,6 +4555,146 @@ pub fn home_flight_at(elapsed: Duration) -> Option<(f32, f32)> {
 const FLIGHT_FROM: f32 = 0.9;
 const FLIGHT_TO: f32 = 0.2;
 
+/// How long before the picture has grown the timeline starts to come in,
+/// and how long its stand-in takes to fade (kept here for the tests and
+/// views that name them so).
+pub use crate::theme::motion::{STAND_IN_MOST, STAND_IN_RELEASE, TIMELINE_LEAD};
+
+/// Where a clip of a cut being built is at `elapsed` on its way from its
+/// footage to the timeline: how far along (eased, over [`scene::FLIGHT`])
+/// and how clear (whole, then fading over [`scene::FLIGHT_LAND`] where it
+/// landed, over what it became). None once it has gone.
+pub fn clip_flight_at(elapsed: Duration) -> Option<(f32, f32)> {
+    travel_then_fade(elapsed, scene::FLIGHT, scene::FLIGHT_LAND)
+}
+
+/// Where the picture's stand-in is at `elapsed` as the picture grows out
+/// of what it came from: how far along (eased, over [`scene::STAGE`]),
+/// whole, holding where it landed until it is let go (`released`, that
+/// long after it left; None: not yet), then fading over
+/// [`STAND_IN_RELEASE`] over the picture. None once it has gone.
+pub fn grow_flight_at(elapsed: Duration, released: Option<Duration>) -> Option<(f32, f32)> {
+    let Some(released) = released else {
+        let t = elapsed.as_secs_f32() / scene::STAGE.as_secs_f32();
+        return Some((motion::ease(t.clamp(0.0, 1.0)), 1.0));
+    };
+    let fades_from = released.max(scene::STAGE);
+    if elapsed >= fades_from + STAND_IN_RELEASE {
+        return None;
+    }
+    let t = elapsed.as_secs_f32() / scene::STAGE.as_secs_f32();
+    let fading =
+        (elapsed.as_secs_f32() - fades_from.as_secs_f32()) / STAND_IN_RELEASE.as_secs_f32();
+    Some((
+        motion::ease(t.clamp(0.0, 1.0)),
+        1.0 - fading.clamp(0.0, 1.0),
+    ))
+}
+
+/// Where the picture is at `elapsed` as it goes back into its card: how
+/// far along (eased, over [`scene::PANEL`], as the panel goes), whole,
+/// then fading over [`scene::FLIGHT_LAND`] over the card's own.
+pub fn back_flight_at(elapsed: Duration) -> Option<(f32, f32)> {
+    travel_then_fade(elapsed, scene::PANEL, scene::FLIGHT_LAND)
+}
+
+/// What flew, let go where it had got to as its landing went away, `clear`
+/// as it was then: there (all along), fading from `clear` over
+/// [`scene::FLIGHT_LAND`], as one that has landed. None once it has gone.
+pub fn let_go_flight_at(elapsed: Duration, clear: f32) -> Option<(f32, f32)> {
+    if elapsed >= scene::FLIGHT_LAND {
+        return None;
+    }
+    let fading = elapsed.as_secs_f32() / scene::FLIGHT_LAND.as_secs_f32();
+    Some((1.0, clear.clamp(0.0, 1.0) * (1.0 - fading)))
+}
+
+/// Eased along over `travel`, whole; then fading over `land`. Under
+/// Reduce Motion nothing flies, so this is never asked then.
+fn travel_then_fade(elapsed: Duration, travel: Duration, land: Duration) -> Option<(f32, f32)> {
+    if elapsed >= travel + land {
+        return None;
+    }
+    let t = elapsed.as_secs_f32() / travel.as_secs_f32().max(f32::EPSILON);
+    let fading =
+        (elapsed.as_secs_f32() - travel.as_secs_f32()) / land.as_secs_f32().max(f32::EPSILON);
+    Some((
+        motion::ease(t.clamp(0.0, 1.0)),
+        1.0 - fading.clamp(0.0, 1.0),
+    ))
+}
+
+/// How much of the stage and of the timeline shows `elapsed` after the
+/// picture began to grow: the stage once its stand-in has landed, over
+/// [`scene::FLIGHT_LAND`]; the timeline after it, from
+/// [`TIMELINE_LEAD`] before the picture has grown, over
+/// [`scene::SETTLE`], as Qt's veil lifted.
+pub fn grow_shows(elapsed: Duration) -> (f32, f32) {
+    let after = |start: Duration, over: Duration| {
+        let t = (elapsed.as_secs_f32() - start.as_secs_f32()) / over.as_secs_f32();
+        motion::ease(t.clamp(0.0, 1.0))
+    };
+    (
+        after(scene::STAGE, scene::FLIGHT_LAND),
+        after(scene::STAGE.saturating_sub(TIMELINE_LEAD), scene::SETTLE),
+    )
+}
+
+/// A clip a cut being built placed: its id, the footage it plays (whose
+/// tile and poster it flies with), its name, and where it starts.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PlacedClip {
+    pub clip: String,
+    pub source: Option<String>,
+    pub name: String,
+    pub start: f64,
+}
+
+/// What `cut` (a proposal over `program`) placed that `seen` (each clip
+/// as "id@end") had not: each picture clip added or moved since, not one
+/// taken out and none on a sound track (its sound comes with it), in the
+/// order they play; and what is seen now.
+pub fn placed_since(
+    program: &crate::model::Timeline,
+    cut: &crate::model::Timeline,
+    seen: &HashSet<String>,
+) -> (Vec<PlacedClip>, HashSet<String>) {
+    let changes = crate::chat::clip_changes(program, cut);
+    let key = |change: &crate::chat::ClipChange| format!("{}@{:.4}", change.clip, change.new_end);
+    let now: HashSet<String> = changes.iter().map(key).collect();
+    let mut placed: Vec<PlacedClip> = changes
+        .iter()
+        .filter(|change| !change.removed && !change.transition && !seen.contains(&key(change)))
+        .filter_map(|change| {
+            let (track, clip) = cut.clip(&change.clip)?;
+            (track.kind == crate::model::TrackKind::Video).then(|| PlacedClip {
+                clip: change.clip.clone(),
+                source: clip.source_id.clone(),
+                name: change.name.clone(),
+                start: change.new_start,
+            })
+        })
+        .collect();
+    placed.sort_by(|a, b| a.start.total_cmp(&b.start));
+    (placed, now)
+}
+
+/// The first clip of `timeline`'s first picture track that has one, and
+/// the footage it plays: what the picture grows out of.
+fn first_picture_clip(timeline: &crate::model::Timeline) -> Option<(String, String)> {
+    timeline
+        .tracks
+        .iter()
+        .filter(|track| track.kind == crate::model::TrackKind::Video)
+        .find_map(|track| {
+            let clip = track
+                .clips
+                .iter()
+                .min_by(|a, b| a.timeline_start.total_cmp(&b.timeline_start))?;
+            Some((clip.id.clone(), clip.source_id.clone()?))
+        })
+}
+
 /// The rect `along` (0..1) of the way from `from` to `to`.
 pub fn lerp_bounds(from: Bounds<Pixels>, to: Bounds<Pixels>, along: f32) -> Bounds<Pixels> {
     let mix = |a: Pixels, b: Pixels| a + (b - a) * along;
@@ -3869,14 +4714,24 @@ pub fn lerp_bounds(from: Bounds<Pixels>, to: Bounds<Pixels>, along: f32) -> Boun
 /// stage, its transport under it): in its room, inset as the stage insets
 /// its device, at its own aspect, centred.
 pub fn picture_within(slot: Bounds<Pixels>, width: u32, height: u32) -> Bounds<Pixels> {
-    let area_height = (f32::from(slot.size.height) - layout::TRANSPORT).max(1.0);
-    let inset = STAGE_MARGIN + STAGE_BEZEL;
-    let room_width = (f32::from(slot.size.width) - inset * 2.0).max(1.0);
-    let room_height = (area_height - inset * 2.0).max(1.0);
     let aspect = if width == 0 || height == 0 {
         16.0 / 9.0
     } else {
         width as f32 / height as f32
+    };
+    picture_in(slot, aspect)
+}
+
+/// [`picture_within`] for a picture `aspect` wide to its height.
+pub fn picture_in(slot: Bounds<Pixels>, aspect: f32) -> Bounds<Pixels> {
+    let area_height = (f32::from(slot.size.height) - layout::TRANSPORT).max(1.0);
+    let inset = STAGE_MARGIN + STAGE_BEZEL;
+    let room_width = (f32::from(slot.size.width) - inset * 2.0).max(1.0);
+    let room_height = (area_height - inset * 2.0).max(1.0);
+    let aspect = if aspect.is_finite() && aspect > 0.0 {
+        aspect
+    } else {
+        16.0 / 9.0
     };
     let (shown_width, shown_height) = if room_width / room_height > aspect {
         (room_height * aspect, room_height)
@@ -3926,6 +4781,28 @@ pub fn timeline_split(height: f32, band: f32, width: f32, aspect: f32) -> f32 {
     }
     let picture = (slot.max(0.0) + layout::TRANSPORT).min(height - band);
     (height - band - picture).max(0.0)
+}
+
+/// How a panel `height` tall, its stage `stage_width` wide showing a
+/// picture `aspect` wide to its height, is shared with the picture, the
+/// timeline and the Media band shown `(picture, timeline, media)` (each
+/// 0..1, as far as they have come): the picture's height, the band's and
+/// the timeline's. The timeline's share follows the picture's shape
+/// ([`timeline_split`]); the picture takes the rest; one of the two alone
+/// has all of it.
+pub fn panel_heights(
+    height: f32,
+    stage_width: f32,
+    aspect: f32,
+    (picture, timeline, media): (f32, f32, f32),
+) -> (f32, f32, f32) {
+    let band = layout::MEDIA_BAND * media;
+    let timeline_full = (height - band).max(0.0);
+    let timeline_tall = timeline_split(height, band, stage_width, aspect);
+    let timeline_height = timeline_tall + (timeline_full - timeline_tall) * (1.0 - picture);
+    let timeline_height = timeline_height * timeline;
+    let picture_height = (height - band - timeline_height).max(0.0);
+    (picture_height, band, timeline_height)
 }
 
 /// The stage's air round its device, and the device's bezel.

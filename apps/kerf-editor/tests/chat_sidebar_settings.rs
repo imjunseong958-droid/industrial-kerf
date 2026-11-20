@@ -355,6 +355,7 @@ fn the_folders_menu_lists_the_open_one_first_then_the_ways_to_another() {
     assert_eq!(
         words,
         [
+            "New Conversation",
             "harbour",
             "trailer",
             "Open Folder…",
@@ -363,12 +364,13 @@ fn the_folders_menu_lists_the_open_one_first_then_the_ways_to_another() {
             "Copy Path"
         ]
     );
-    assert!(entries[0].checked && !entries[1].checked);
-    assert_eq!(entries[1].tip.as_deref(), Some(other.to_str().unwrap()));
-    assert_eq!(entries[2].entry, Entry::Command("file.openProject"));
-    assert_eq!(entries[3].entry, Entry::Command("file.newProject"));
-    assert_eq!(entries[4].entry, Entry::Reveal(open.clone()));
-    assert_eq!(entries[5].entry, Entry::CopyPath(open.clone()));
+    assert_eq!(entries[0].entry, Entry::NewConversation(open.clone()));
+    assert!(entries[1].checked && !entries[2].checked);
+    assert_eq!(entries[2].tip.as_deref(), Some(other.to_str().unwrap()));
+    assert_eq!(entries[3].entry, Entry::Command("file.openProject"));
+    assert_eq!(entries[4].entry, Entry::Command("file.newProject"));
+    assert_eq!(entries[5].entry, Entry::Reveal(open.clone()));
+    assert_eq!(entries[6].entry, Entry::CopyPath(open.clone()));
     // With no folder open, only the ways to one.
     let none: Vec<String> = folder_entries(&[], None)
         .into_iter()

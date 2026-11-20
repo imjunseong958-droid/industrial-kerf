@@ -1,7 +1,8 @@
 //! The timeline: the program's tracks and clips, its ruler and playhead.
 //!
 //! A strip along the top says where the playhead is (or, in ink2, where the
-//! pointer skims), and holds the editing tools, snap and zoom (− slider +);
+//! pointer skims), and holds the editing tools, snap and zoom (− slider +),
+//! and, while the window shows no picture, the transport first;
 //! under it the track heads stand at the left, and the ruler and the lanes
 //! are drawn on one canvas from [`Lanes`], a compact copy of the snapshot's
 //! timeline rebuilt only when a snapshot comes. Subtitle lanes stack on
@@ -56,11 +57,11 @@ use crate::theme::{self, layout, radius, text, TypeStyle};
 use crate::ui;
 use gpui::{
     anchored, canvas, deferred, div, fill, linear_color_stop, linear_gradient, pattern_slash,
-    point, prelude::*, px, quad, size, App, BorderStyle, Bounds, ContentMask, Context, Corners,
-    CursorStyle, DismissEvent, DispatchPhase, ElementId, Entity, EventEmitter, FocusHandle,
-    Focusable, Font, FontWeight, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent,
-    MouseUpEvent, PathBuilder, Pixels, Point, Rgba, ScrollDelta, ScrollWheelEvent, ShapedLine,
-    SharedString, Subscription, Task, TextRun, TouchPhase, WeakEntity, Window,
+    point, prelude::*, px, quad, size, AnimationExt, App, BorderStyle, Bounds, ContentMask,
+    Context, Corners, CursorStyle, DismissEvent, DispatchPhase, ElementId, Entity, EventEmitter,
+    FocusHandle, Focusable, Font, FontWeight, KeyDownEvent, MouseButton, MouseDownEvent,
+    MouseMoveEvent, MouseUpEvent, PathBuilder, Pixels, Point, Rgba, ScrollDelta, ScrollWheelEvent,
+    ShapedLine, SharedString, Subscription, Task, TextRun, TouchPhase, WeakEntity, Window,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -71,6 +72,14 @@ use std::time::{Duration, Instant};
 
 /// Points before time zero, so the playhead's head shows whole at the start.
 const PAD: f32 = 10.0;
+/// Points between what the strip holds.
+const STRIP_GAP: f32 = 8.0;
+/// Points before the strip's tools, past the cut's length.
+const TOOLS_SPACE: f32 = 8.0;
+/// Points from the strip's last control to its edge, and to its first
+/// without the transport.
+const STRIP_END: f32 = 6.0;
+const STRIP_START: f32 = 12.0;
 /// Points inside a clip's edge that take a trim.
 const GRAB: f32 = 6.0;
 /// Points within which a drag snaps to an edge, a marker or the playhead.
@@ -1406,6 +1415,9 @@ pub struct TimelineView {
     qc: HashSet<String>,
     /// The proposal playing as a preview, as the preview's events say.
     previewing: Option<String>,
+    /// The cut Kerf builds, while it does, as the lanes were last built:
+    /// they show its newest version.
+    building: Option<String>,
     /// The version of its proposal the pinned card shows, as the window
     /// last said ([`TimelineView::show_version`]).
     shown_version: Option<String>,
@@ -1426,6 +1438,15 @@ pub struct TimelineView {
     wheel: f32,
     /// The pointer over the add-track row.
     add_hover: bool,
+    /// Why each of the strip's transport controls cannot run, for the
+    /// command context it was asked of (the playhead left out).
+    transport_asked: Option<(Value, HashMap<&'static str, String>)>,
+    /// Whether the strip carried the transport when last drawn, and how
+    /// many times it has come: each time it fades in anew.
+    strip_transport: (bool, u64),
+    /// What the strip showed when last drawn, and how wide it was laid out.
+    strip_fit: StripFit,
+    strip_widths: StripWidths,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -1464,6 +1485,7 @@ impl TimelineView {
             solo: Vec::new(),
             qc: HashSet::new(),
             previewing: None,
+            building: None,
             shown_version: None,
             kerf_at: None,
             live_changes: HashSet::new(),
@@ -1475,6 +1497,10 @@ impl TimelineView {
             keys: (String::new(), HashMap::new()),
             wheel: 0.0,
             add_hover: false,
+            transport_asked: None,
+            strip_transport: (false, 0),
+            strip_fit: StripFit::ALL,
+            strip_widths: StripWidths::default(),
             _subscriptions: subscriptions,
         };
         view.rebuild(cx);
@@ -1651,12 +1677,20 @@ impl TimelineView {
                     .iter()
                     .any(|version| version.proposal_id == id)
         };
-        // A proposal shows the version playing as its preview, else the
-        // version its pinned card shows, else its own.
+        // While Kerf builds a cut, the cut it builds shows its newest
+        // version, so what it places is in the lanes as it is placed (and
+        // its flight has somewhere to land) before that version's preview
+        // plays. Else a proposal shows the version playing as its preview,
+        // else the version its pinned card shows, else its own.
+        let building = session
+            .state
+            .work
+            .busy()
+            .then(|| session.live_cut())
+            .flatten()
+            .map(|(proposal, _)| proposal.proposal_id.clone());
         let shown_of = |proposal: &model::Proposal| {
-            previewing
-                .filter(|id| is_of(proposal, id))
-                .or(pin.filter(|id| is_of(proposal, id)))
+            shown_version(proposal, building.as_deref(), previewing, pin)
         };
         let first_cut = if current.has_clips() {
             None
@@ -1686,7 +1720,7 @@ impl TimelineView {
                 .proposals
                 .iter()
                 .find(|proposal| proposal.is_pending() && is_of(proposal, id))?;
-            let timeline = snapshot.timeline_of(proposal, Some(id))?;
+            let timeline = snapshot.timeline_of(proposal, shown_of(proposal).or(Some(id)))?;
             Some((proposal.proposal_id.as_str(), timeline))
         });
         let lanes = Lanes::build(Build {
@@ -1698,6 +1732,7 @@ impl TimelineView {
             qc: &self.qc,
         });
         self.lanes = Rc::new(lanes);
+        self.building = building;
     }
 
     /// The rows laid out again at the heights now.
@@ -1832,12 +1867,25 @@ impl TimelineView {
                     self.send_solo(cx);
                 }
             }
-            Change::Work | Change::TurnEnded
-                if !self.session.read(cx).state.work.busy() && self.kerf_at.is_some() =>
-            {
-                self.kerf_at = None;
-                self.live_changes.clear();
-                cx.notify();
+            Change::Work | Change::TurnEnded => {
+                // A cut Kerf builds shows its newest version while it does.
+                let session = self.session.read(cx);
+                let building = session
+                    .state
+                    .work
+                    .busy()
+                    .then(|| session.live_cut())
+                    .flatten()
+                    .map(|(proposal, _)| proposal.proposal_id.as_str());
+                if building != self.building.as_deref() {
+                    self.rebuild(cx);
+                    cx.notify();
+                }
+                if !self.session.read(cx).state.work.busy() && self.kerf_at.is_some() {
+                    self.kerf_at = None;
+                    self.live_changes.clear();
+                    cx.notify();
+                }
             }
             _ => {}
         }
@@ -3348,8 +3396,243 @@ pub fn extend(selection: &mut Vec<String>, id: &str, toggle: bool) {
 
 // ------------------------------------------------------------ strip, heads
 
+/// Whether the timeline's strip carries the transport: while the window
+/// shows no picture (View ▸ Picture off, `Session::picture_open` false),
+/// as Qt's strip carried it while its viewer was hidden. Until the window
+/// says (None) the stage has it.
+pub fn strip_has_transport(picture_open: Option<bool>) -> bool {
+    picture_open == Some(false)
+}
+
+/// What the timeline's strip shows of what it can let go. Too narrow for
+/// all of it (a narrow window, the transport in it), it lets go first of
+/// the zoom slider (− and + stay), then of the transport's Go to start and
+/// Go to end (Home and End still reach them) and the transport's wide gap,
+/// then of the cut's length and the space before the tools. What still
+/// does not fit is cut off at the tools' end: Snap, − and +, and Fit stay
+/// whole, as in Qt's strip, which held its window wide enough for them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StripFit {
+    pub slider: bool,
+    pub transport_ends: bool,
+    pub length: bool,
+}
+
+impl StripFit {
+    pub const ALL: StripFit = StripFit {
+        slider: true,
+        transport_ends: true,
+        length: true,
+    };
+
+    /// Each step, from all of it, as they are let go.
+    pub const STEPS: [StripFit; 4] = [
+        StripFit::ALL,
+        StripFit {
+            slider: false,
+            ..StripFit::ALL
+        },
+        StripFit {
+            slider: false,
+            transport_ends: false,
+            length: true,
+        },
+        StripFit {
+            slider: false,
+            transport_ends: false,
+            length: false,
+        },
+    ];
+
+    /// How much wider the strip is with this shown than with all of it let
+    /// go: `transport`, whether it carries the transport (three buttons
+    /// always, five with its ends); `length`, how wide the cut's length is
+    /// set.
+    pub fn width(self, transport: bool, length: f32) -> f32 {
+        let button = theme::height::H24 + layout::STRIP_TRANSPORT_SPACING;
+        let mut width = 0.0;
+        if transport {
+            width += 3.0 * button - layout::STRIP_TRANSPORT_SPACING + STRIP_GAP;
+            if self.transport_ends {
+                width += 2.0 * button + layout::STRIP_TRANSPORT_GAP - STRIP_GAP;
+            }
+        }
+        if self.slider {
+            width += SLIDER + STRIP_GAP;
+        }
+        if self.length {
+            width += length + STRIP_GAP + TOOLS_SPACE + STRIP_GAP;
+        }
+        width
+    }
+
+    /// What fits in `room`, from what it shows now: the most of it whose
+    /// width, over `rest` (what the strip needs with all of it let go),
+    /// fits; showing more than now only with [`layout::STRIP_REGROW`] to
+    /// spare. With none fitting, all of it let go.
+    pub fn within(self, room: f32, rest: f32, transport: bool, length: f32) -> StripFit {
+        let now = Self::STEPS
+            .iter()
+            .position(|step| *step == self)
+            .unwrap_or(0);
+        Self::STEPS
+            .into_iter()
+            .enumerate()
+            .find(|(step, fit)| {
+                let spare = if *step < now {
+                    layout::STRIP_REGROW
+                } else {
+                    0.0
+                };
+                rest + fit.width(transport, length) + spare <= room
+            })
+            .map_or(Self::STEPS[3], |(_, fit)| fit)
+    }
+}
+
+/// How wide the strip, what it holds on its left and on its right (each
+/// as wide as its pieces would be, cut off or not), and the cut's length
+/// were last laid out.
+#[derive(Clone, Default)]
+struct StripWidths {
+    room: Rc<Cell<f32>>,
+    left: Rc<Cell<f32>>,
+    right: Rc<Cell<f32>>,
+    length: Rc<Cell<f32>>,
+}
+
+/// Over its parent, a canvas that keeps the parent's width in `cell`; a
+/// new width draws the strip again with it.
+fn width_canvas(cell: Rc<Cell<f32>>) -> impl IntoElement {
+    canvas(
+        move |bounds, window, _| {
+            let width = f32::from(bounds.size.width);
+            if (cell.get() - width).abs() > 0.1 {
+                cell.set(width);
+                window.request_animation_frame();
+            }
+        },
+        |_, _, _, _| {},
+    )
+    .absolute()
+    .top_0()
+    .left_0()
+    .size_full()
+}
+
 impl TimelineView {
+    /// The transport, in the strip while the picture pane is closed: Go to
+    /// start, Previous frame, Play (Pause while playing), Next frame, Go to
+    /// end, each its command ([`stage::TRANSPORT`]), its key in its tip,
+    /// greyed with the registry's reason while it cannot run
+    /// ([`stage::transport_reasons`], [`stage::transport_tip`]), as the
+    /// stage's are. It fades in over `FADE` each time it comes. Without
+    /// `ends` (a narrow strip, [`StripFit`]) it has no Go to start and Go
+    /// to end, and the strip's own gap to the timecode.
+    fn strip_transport(&mut self, ends: bool, cx: &mut Context<Self>) -> impl IntoElement {
+        // Asked of the registry again only when what it is asked about
+        // changes, not on every frame played.
+        let mut context = self.session.read(cx).command_context();
+        if let Some(context) = context.as_object_mut() {
+            context.remove("playheadFrame");
+        }
+        if self
+            .transport_asked
+            .as_ref()
+            .is_none_or(|(asked, _)| *asked != context)
+        {
+            let reasons = stage::transport_reasons(&context);
+            self.transport_asked = Some((context, reasons));
+        }
+        let reasons = self
+            .transport_asked
+            .as_ref()
+            .map(|(_, reasons)| reasons.clone())
+            .unwrap_or_default();
+        let playing = self.session.read(cx).state.playing;
+        let buttons: Vec<_> = stage::TRANSPORT
+            .into_iter()
+            .filter(|(id, _, _)| ends || !matches!(*id, "playback.goToStart" | "playback.goToEnd"))
+            .map(|(id, name, icon)| {
+                let play = id == "playback.toggle";
+                let (name, icon) = if play && playing {
+                    ("Pause", Icon::Pause)
+                } else {
+                    (name, icon)
+                };
+                let reason = reasons.get(id).cloned();
+                let mut button = ui::icon_button(
+                    ElementId::Name(format!("timeline-transport-{id}").into()),
+                    icon,
+                )
+                .size(theme::height::H24)
+                .tooltip(name)
+                .disabled(reason.is_some())
+                .focusable(false)
+                .on_click(move |_, window, cx| {
+                    window.dispatch_action(Box::new(RunCommand { id: id.into() }), cx);
+                });
+                // Play in ink at rest, as Qt's was.
+                if play {
+                    button = button.color(theme::ink());
+                }
+                if let Some(key) = self.keys_of(id, cx) {
+                    button = button.key(key);
+                }
+                if let Some(reason) = reason {
+                    button = button.reason(stage::transport_tip(name, Some(&reason)));
+                }
+                button
+            })
+            .collect();
+        div()
+            .flex()
+            .flex_none()
+            .items_center()
+            .gap(px(layout::STRIP_TRANSPORT_SPACING))
+            // To the timecode, Qt's gap, the strip's own gap counted in.
+            .when(ends, |transport| {
+                transport.pr(px(layout::STRIP_TRANSPORT_GAP - STRIP_GAP))
+            })
+            .children(buttons)
+            .with_animation(
+                ("timeline-transport", self.strip_transport.1),
+                motion::animation(theme::motion::FADE),
+                |transport, t| transport.opacity(t),
+            )
+    }
+
+    /// The strip over the lanes: the transport (while the picture pane is
+    /// closed), the timecode where the playhead is and the cut's length,
+    /// the tools; at its right Snap and the zoom. As much shows as fits
+    /// ([`StripFit`]), from how wide it and its pieces were last laid out.
     fn strip(&mut self, shown: f64, skimming: bool, cx: &mut Context<Self>) -> impl IntoElement {
+        let has_transport = strip_has_transport(self.session.read(cx).picture_open);
+        let widths = self.strip_widths.clone();
+        let length_width = widths.length.get();
+        let room = widths.room.get();
+        // Its pieces as last laid out, less those that come and go then.
+        let rest = widths.left.get() + widths.right.get()
+            - self.strip_fit.width(self.strip_transport.0, length_width);
+        if room > 0.0 {
+            let start = if has_transport {
+                layout::STRIP_EDGE
+            } else {
+                STRIP_START
+            };
+            let room = room - start - STRIP_END - 2.0 * STRIP_GAP;
+            self.strip_fit = self
+                .strip_fit
+                .within(room, rest, has_transport, length_width);
+        }
+        let shows = self.strip_fit;
+        if has_transport != self.strip_transport.0 {
+            self.strip_transport.0 = has_transport;
+            if has_transport {
+                self.strip_transport.1 += 1;
+            }
+        }
+        let transport = has_transport.then(|| self.strip_transport(shows.transport_ends, cx));
         let lanes = self.lanes.clone();
         let this = cx.entity().downgrade();
         let tips: Vec<String> = [Tool::Selection, Tool::Razor]
@@ -3372,22 +3655,22 @@ impl TimelineView {
         .focusable(false);
         let other_tool = !matches!(self.tool, Tool::Selection | Tool::Razor);
         let tool_key = self.keys_of(self.tool.command(), cx);
+        let snap_key = self.keys_of("sequence.snap", cx);
         let zoom_in = crate::commands::shown_keys("Ctrl+=");
         let zoom_out = crate::commands::shown_keys("Ctrl+-");
         let (fit, most) = self.zoom_range();
         let share = zoom_share(self.view.pps, fit, most);
-        div()
-            .h(px(layout::STRIP))
-            .flex_none()
+        // With the picture pane closed, the transport first; then where
+        // the playhead is (in ink2 where the pointer skims), the cut's
+        // length, the tools. Cut off at the tools' end where it must be.
+        let left = div()
+            .relative()
             .flex()
+            .flex_none()
             .items_center()
-            .gap(px(8.0))
-            .pl(px(12.0))
-            .pr(px(6.0))
-            .bg(theme::chrome())
-            .border_b_1()
-            .border_color(theme::line())
-            // Where the playhead is, or in ink2 where the pointer skims.
+            .gap(px(STRIP_GAP))
+            .child(width_canvas(widths.left.clone()))
+            .children(transport)
             .child(ui::label(
                 model::timecode(shown, lanes.fps),
                 text::TIMECODE_STRONG,
@@ -3397,32 +3680,50 @@ impl TimelineView {
                     theme::ink()
                 },
             ))
-            .child(ui::label(
-                model::timecode(lanes.end, lanes.fps),
-                text::TIMECODE,
-                theme::ink3(),
-            ))
-            .when(lanes.proposed, |strip| {
-                strip.child(ui::chip("Proposed cut", theme::pos()))
+            .when(shows.length, |left| {
+                left.child(
+                    ui::label(
+                        model::timecode(lanes.end, lanes.fps),
+                        text::TIMECODE,
+                        theme::ink3(),
+                    )
+                    .relative()
+                    .flex_none()
+                    .child(width_canvas(widths.length.clone())),
+                )
             })
-            .child(div().w(px(8.0)).flex_none())
+            .when(lanes.proposed, |left| {
+                left.child(ui::chip("Proposed cut", theme::pos()))
+            })
+            .when(shows.length, |left| {
+                left.child(div().w(px(TOOLS_SPACE)).flex_none())
+            })
             .child(tools)
-            .when(other_tool, |strip| {
-                strip.child(ui::tipped(
+            .when(other_tool, |left| {
+                left.child(ui::tipped(
                     "timeline-tool-other",
                     ui::Tip::new(format!("{} tool", self.tool.name())).maybe_key(tool_key),
                     ui::chip(self.tool.name(), theme::accent_ink()),
                 ))
-            })
-            .child(div().flex_1())
-            .child(
+            });
+        let right = div()
+            .relative()
+            .flex()
+            .flex_none()
+            .items_center()
+            .gap(px(STRIP_GAP))
+            .child(width_canvas(widths.right.clone()))
+            // Its name and key in a kit tip, as Qt's strip said them.
+            .child(ui::tipped(
+                "timeline-snap-tip",
+                ui::Tip::new("Snap").maybe_key(snap_key),
                 strip_button("timeline-snap", "Snap", self.snap).on_click(cx.listener(
                     |this, _, _, cx| {
                         this.snap = !this.snap;
                         cx.notify();
                     },
                 )),
-            )
+            ))
             .child(ui::hairline(false).h(px(14.0)))
             .child(ui::tipped(
                 "timeline-zoom-out-tip",
@@ -3434,11 +3735,13 @@ impl TimelineView {
                     },
                 )),
             ))
-            .child(ui::tipped(
-                "timeline-zoom-slider-tip",
-                ui::Tip::new("Timeline zoom"),
-                self.slider(share, cx),
-            ))
+            .when(shows.slider, |right| {
+                right.child(ui::tipped(
+                    "timeline-zoom-slider-tip",
+                    ui::Tip::new("Timeline zoom"),
+                    self.slider(share, cx),
+                ))
+            })
             .child(ui::tipped(
                 "timeline-zoom-in-tip",
                 ui::Tip::new("Zoom in").key(zoom_in),
@@ -3457,7 +3760,34 @@ impl TimelineView {
                         cx.notify();
                     },
                 )),
+            );
+        div()
+            .h(px(layout::STRIP))
+            .flex_none()
+            .relative()
+            .flex()
+            .items_center()
+            .gap(px(STRIP_GAP))
+            .pl(px(if has_transport {
+                layout::STRIP_EDGE
+            } else {
+                STRIP_START
+            }))
+            .pr(px(STRIP_END))
+            .bg(theme::chrome())
+            .border_b_1()
+            .border_color(theme::line())
+            .child(width_canvas(widths.room.clone()))
+            .child(
+                div()
+                    .flex()
+                    .flex_shrink()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .child(left),
             )
+            .child(div().flex_1())
+            .child(right)
     }
 
     /// The zoom's slider: a rail, its fill to the knob, the knob; pressed
@@ -5447,6 +5777,30 @@ fn paint_playhead(
     if let Ok(path) = head.build() {
         window.paint_path(path, color);
     }
+}
+
+/// Which version of `proposal` the lanes show (None: its own): the cut Kerf
+/// is `building`, while it builds one, so what it places is drawn as it is
+/// placed; else the version `previewing` (playing as its preview); else the
+/// one its `pinned` card shows. An id that is no version of `proposal` is
+/// passed over.
+pub fn shown_version<'a>(
+    proposal: &model::Proposal,
+    building: Option<&'a str>,
+    previewing: Option<&'a str>,
+    pinned: Option<&'a str>,
+) -> Option<&'a str> {
+    let is_of = |id: &&str| {
+        proposal.proposal_id == *id
+            || proposal
+                .versions
+                .iter()
+                .any(|version| version.proposal_id == *id)
+    };
+    building
+        .filter(is_of)
+        .or(previewing.filter(is_of))
+        .or(pinned.filter(is_of))
 }
 
 #[cfg(test)]
