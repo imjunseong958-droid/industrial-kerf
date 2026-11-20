@@ -14,7 +14,9 @@
 //! waits over the composer ("Next: …") and goes when the turn ends.
 //!
 //! Proposal cards say what each proposal does and the clips it changes, with
-//! its versions; the open one nearest the playhead is pinned.
+//! its versions; the open one nearest the playhead is pinned. A proposal has
+//! one card, under the newest turn that names it; an earlier one that named
+//! it says so in a line. Esc puts a menu of the conversation away first.
 
 use crate::commands::{RevealPicture, RunCommand};
 use crate::icons::Icon;
@@ -38,6 +40,21 @@ use std::time::{Duration, Instant};
 
 /// The most the composer's text grows to before it scrolls, in points.
 pub const COMPOSER_MOST: f32 = 110.0;
+
+/// The key context of the composer's box, where Shift-Tab changes what
+/// Kerf does without asking.
+pub const COMPOSER_CONTEXT: &str = "Composer";
+
+gpui::actions!(chat, [CyclePermissions]);
+
+/// The mode after `permissions`, as Shift-Tab goes round them.
+pub fn next_permissions(permissions: Permissions) -> Permissions {
+    match permissions {
+        Permissions::Ask => Permissions::AcceptEdits,
+        Permissions::AcceptEdits => Permissions::Auto,
+        Permissions::Auto => Permissions::Ask,
+    }
+}
 
 // ---------------------------------------------------------------- what Kerf wrote
 
@@ -137,23 +154,63 @@ fn is_timecode(bytes: &[u8]) -> bool {
         })
 }
 
-/// The seconds a timecode Kerf wrote names at `fps`: whole frames of the
-/// rounded rate, as [`model::timecode`] writes them. None for one that
-/// does not read.
-pub fn timecode_seconds(timecode: &str, fps: f64) -> Option<f64> {
+/// The frame a timecode names at `fps`, counted from 00:00:00:00: whole
+/// frames of the rounded rate, as [`model::timecode`] writes them. At 29.97
+/// or 59.94 with `;` before the frames it is drop-frame, as Kerf writes
+/// them: the frame numbers skipped at each minute but every tenth (two a
+/// minute, four at 59.94) are not counted.
+fn timecode_frames(timecode: &str, fps: f64) -> Option<i64> {
     if !is_timecode(timecode.as_bytes()) {
         return None;
     }
-    let fps = if fps.is_finite() && fps > 0.0 {
+    let base = fps.round().max(1.0) as i64;
+    let part = |range: std::ops::Range<usize>| timecode[range].parse::<i64>().ok();
+    let (hours, minutes, seconds, frames) = (part(0..2)?, part(3..5)?, part(6..8)?, part(9..11)?);
+    let total_minutes = hours * 60 + minutes;
+    let mut total = (total_minutes * 60 + seconds) * base + frames;
+    let drop_frame = timecode.as_bytes()[8] == b';'
+        && matches!(base, 30 | 60)
+        && (fps - base as f64).abs() > 1e-3;
+    if drop_frame {
+        total -= base / 15 * (total_minutes - total_minutes / 10);
+    }
+    Some(total)
+}
+
+fn usable_rate(fps: f64) -> f64 {
+    if fps.is_finite() && fps > 0.0 {
         fps
     } else {
         30.0
+    }
+}
+
+/// The seconds a timecode names at `fps`, from 00:00:00:00: whole frames of
+/// the rounded rate, drop-frame where it says so (`;` at 29.97 or 59.94).
+/// None for one that does not read.
+pub fn timecode_seconds(timecode: &str, fps: f64) -> Option<f64> {
+    let fps = usable_rate(fps);
+    timecode_frames(timecode, fps).map(|frames| frames as f64 / fps)
+}
+
+/// Where on the program a timecode Kerf wrote lies, in seconds. Kerf writes
+/// the sequence's own timecode, which starts at the sequence's start (often
+/// 01:00:00:00); one before that start is read as the editor writes them,
+/// from the program's first frame. None for one that does not read.
+pub fn timecode_position(timecode: &str, timeline: &Timeline) -> Option<f64> {
+    let fps = usable_rate(timeline.rate());
+    let frames = timecode_frames(timecode, fps)?;
+    let start = if timeline.start.is_finite() {
+        (timeline.start.max(0.0) * fps).round() as i64
+    } else {
+        0
     };
-    let part = |range: std::ops::Range<usize>| timecode[range].parse::<i64>().ok();
-    let (hours, minutes, seconds, frames) = (part(0..2)?, part(3..5)?, part(6..8)?, part(9..11)?);
-    let whole = hours * 3600 + minutes * 60 + seconds;
-    let total = whole * (fps.round().max(1.0) as i64) + frames;
-    Some(total as f64 / fps)
+    let into = if frames >= start {
+        frames - start
+    } else {
+        frames
+    };
+    Some(into as f64 / fps)
 }
 
 /// A request written while Kerf works, joined to the one already waiting.
@@ -189,6 +246,30 @@ pub fn request_before(turns: &[Turn], index: usize) -> Option<&str> {
         .find(|turn| turn.kind == Speaker::You)
         .map(|turn| turn.text.as_str())
         .filter(|text| !text.trim().is_empty())
+}
+
+/// Which turn holds each proposal's card, by the proposal's current id: the
+/// newest of Kerf's turns that names it by any of its ids. An earlier turn
+/// that names it says so in a line instead, so a proposal has one card.
+pub fn card_turns(
+    turns: &[Turn],
+    proposals: &[Proposal],
+    book: &ProposalBook,
+) -> HashMap<String, usize> {
+    let mut holders = HashMap::new();
+    for (index, turn) in turns.iter().enumerate() {
+        if turn.kind != Speaker::Kerf {
+            continue;
+        }
+        if let Some(proposal) = turn
+            .proposal
+            .as_deref()
+            .and_then(|id| book.find(proposals, id))
+        {
+            holders.insert(proposal.proposal_id.clone(), index);
+        }
+    }
+    holders
 }
 
 /// What the permission chip says, and its line in the chip's menu.
@@ -614,7 +695,8 @@ pub struct ChatView {
     book: ProposalBook,
     /// A request written while Kerf worked, to go when the turn ends.
     queued: Option<String>,
-    /// Stop was asked for and the turn has not ended yet.
+    /// The turn under way was stopped, here or from a menu or the palette,
+    /// and has not ended yet.
     stopping: bool,
     /// The answer just copied, which says so for a moment.
     copied: Option<String>,
@@ -658,6 +740,12 @@ impl ChatView {
                 if event.0["type"] == "state" {
                     this.book = ProposalBook::read(&event.0["snapshot"]);
                     cx.notify();
+                } else if event.0["type"] == "agent_state" && event.0["state"] == "aborted" {
+                    // Stopped from anywhere (here, a menu, the palette). The
+                    // turn says "completed" after this, so it is kept here
+                    // until the turn ends, which only a turn under way says.
+                    this.stopping = true;
+                    cx.notify();
                 }
             }),
             cx.subscribe_in(
@@ -676,6 +764,34 @@ impl ChatView {
                     InputEvent::Changed => cx.notify(),
                 },
             ),
+            // Esc puts a menu of the conversation away wherever the keys
+            // are (a press on its chip leaves them where they were), before
+            // the box or the window has it.
+            {
+                let this = cx.weak_entity();
+                let handle = window.window_handle();
+                cx.intercept_keystrokes(move |event, window, cx| {
+                    let keystroke = &event.keystroke;
+                    if window.window_handle() != handle
+                        || keystroke.key != "escape"
+                        || keystroke.modifiers.modified()
+                    {
+                        return;
+                    }
+                    let closed = this
+                        .update(cx, |this, cx| {
+                            let open = this.menu.take().is_some();
+                            if open {
+                                cx.notify();
+                            }
+                            open
+                        })
+                        .unwrap_or(false);
+                    if closed {
+                        cx.stop_propagation();
+                    }
+                })
+            },
         ];
         let makings = cx.new(|cx| crate::making::Makings::new(session.clone(), window, cx));
         Self {
@@ -708,9 +824,8 @@ impl ChatView {
         self.queued.as_deref()
     }
 
-    /// The version id the pinned proposal's card shows: what Accept and
-    /// Reject from the keyboard should act on.
-    pub fn pinned_proposal(&self, cx: &App) -> Option<String> {
+    /// The pinned proposal's id, and the id of the version its card shows.
+    fn pinned(&self, cx: &App) -> Option<(String, String)> {
         let session = self.session.read(cx);
         let snapshot = &session.state.snapshot;
         let pinned = pin_order(
@@ -722,7 +837,39 @@ impl ChatView {
         )
         .into_iter()
         .next()?;
-        Some(self.shown.get(&pinned).cloned().unwrap_or(pinned))
+        let shown = snapshot
+            .proposals
+            .iter()
+            .find(|proposal| proposal.proposal_id == pinned)
+            .and_then(|proposal| {
+                let shown = self.shown.get(&pinned)?;
+                self.book
+                    .versions_of(proposal)
+                    .iter()
+                    .any(|version| &version.proposal_id == shown)
+                    .then(|| shown.clone())
+            })
+            .unwrap_or_else(|| pinned.clone());
+        Some((pinned, shown))
+    }
+
+    /// The version id the pinned proposal's card shows: what its Accept, and
+    /// Accept from the keyboard, takes.
+    pub fn pinned_proposal(&self, cx: &App) -> Option<String> {
+        self.pinned(cx).map(|(_, shown)| shown)
+    }
+
+    /// The proposal id the registry's `proposal.accept`, `proposal.reject`
+    /// or `proposal.forward` acts on, as the pinned card's own buttons do:
+    /// Accept takes the version the card shows, Reject and Bring forward the
+    /// proposal. None with no open proposal, or for another command.
+    pub fn proposal_target(&self, command: &str, cx: &App) -> Option<String> {
+        let (proposal, shown) = self.pinned(cx)?;
+        match command {
+            "proposal.accept" => Some(shown),
+            "proposal.reject" | "proposal.forward" => Some(proposal),
+            _ => None,
+        }
     }
 
     fn near_bottom(&self) -> bool {
@@ -795,8 +942,12 @@ impl ChatView {
         cx.notify();
     }
 
-    fn stop(&mut self, cx: &mut Context<Self>) {
-        self.stopping = true;
+    /// Stops Kerf's turn: the work row says "Stopping…" until it ends, and
+    /// what waits goes back in the composer then.
+    pub fn stop(&mut self, cx: &mut Context<Self>) {
+        if self.session.read(cx).state.work.busy() {
+            self.stopping = true;
+        }
         self.session.update(cx, |session, _| session.stop());
         cx.notify();
     }
@@ -809,6 +960,7 @@ impl ChatView {
             cx.notify();
             return;
         };
+        // A stopped turn says "completed" once it ends: `stopping` keeps it.
         let troubled = {
             let session = self.session.read(cx);
             stopped
@@ -902,6 +1054,7 @@ impl ChatView {
         index: usize,
         turns: &[Turn],
         proposals: &[Proposal],
+        holders: &HashMap<String, usize>,
         pinned: Option<&str>,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -933,13 +1086,18 @@ impl ChatView {
                     };
                     column = column.child(self.prose(&turn.text, &turn.id, ink, cx));
                 }
-                if let Some(proposal) = turn
-                    .proposal
-                    .as_deref()
-                    .and_then(|id| self.book.find(proposals, id))
-                {
-                    let pinned = pinned == Some(proposal.proposal_id.as_str());
-                    column = column.child(self.proposal_card(proposal, pinned, window, cx));
+                if let Some((named, proposal)) = turn.proposal.as_deref().and_then(|named| {
+                    self.book
+                        .find(proposals, named)
+                        .map(|proposal| (named, proposal))
+                }) {
+                    // The newest turn that names it holds its card.
+                    if holders.get(&proposal.proposal_id) == Some(&index) {
+                        let pinned = pinned == Some(proposal.proposal_id.as_str());
+                        column = column.child(self.proposal_card(proposal, pinned, window, cx));
+                    } else {
+                        column = column.child(self.proposal_named(proposal, named));
+                    }
                 }
                 let again = troubled
                     .then(|| request_before(turns, index))
@@ -1179,8 +1337,7 @@ impl ChatView {
     /// and each timecode a mono link in accent ink that moves the playhead
     /// there and brings the picture in.
     fn rich(&self, id: String, words: &str, ink: Rgba, cx: &App) -> AnyElement {
-        let session = self.session.read(cx);
-        let fps = session.timeline().rate();
+        let timeline = self.session.read(cx).timeline();
         let plain = theme::prose_font(FontWeight::NORMAL);
         let strong = theme::prose_font(FontWeight::MEDIUM);
         let mono = theme::mono_font(FontWeight::NORMAL);
@@ -1201,7 +1358,7 @@ impl ChatView {
             let start = shown.len();
             shown.push_str(words);
             if let Span::Timecode(timecode) = &span {
-                if let Some(seconds) = timecode_seconds(timecode, fps) {
+                if let Some(seconds) = timecode_position(timecode, timeline) {
                     links.push(start..shown.len());
                     moments.push(seconds);
                 }
@@ -1254,6 +1411,43 @@ impl ChatView {
 
     // ------------------------------------------------------------ proposals
 
+    /// A proposal a later turn holds the card of, where an earlier turn
+    /// named it: the version it named, in a line ("v1, revised below").
+    fn proposal_named(&self, proposal: &Proposal, named: &str) -> AnyElement {
+        let versions = self.book.versions_of(proposal);
+        let newest = versions
+            .iter()
+            .map(|version| version.version)
+            .max()
+            .unwrap_or(proposal.version);
+        let (script, number) = versions
+            .iter()
+            .find(|version| version.proposal_id == named)
+            .map_or((proposal.script.as_str(), proposal.version), |version| {
+                (version.script.as_str(), version.version)
+            });
+        let words = if number < newest {
+            format!("v{}, revised below", number.max(1))
+        } else {
+            "Shown below".to_owned()
+        };
+        div()
+            .w_full()
+            .min_w_0()
+            .flex()
+            .items_center()
+            .gap(px(6.0))
+            .child(Icon::Film.view(12.0, theme::ink3()))
+            .child(
+                ui::line(script_summary(script, number), text::CONTROL, theme::ink2())
+                    .flex_shrink()
+                    .min_w_0(),
+            )
+            .child(ui::label("·", text::CONTROL, theme::ink3()).flex_none())
+            .child(ui::label(words, text::CONTROL, theme::ink3()).flex_none())
+            .into_any_element()
+    }
+
     fn proposal_card(
         &self,
         proposal: &Proposal,
@@ -1279,17 +1473,23 @@ impl ChatView {
                 (Icon::Close, theme::ink2())
             };
             return div()
+                .w_full()
+                .min_w_0()
                 .flex()
                 .items_center()
                 .gap(px(6.0))
                 .child(icon.view(12.0, color))
-                .child(ui::line(
-                    script_summary(&proposal.script, proposal.version),
-                    text::CONTROL,
-                    theme::ink2(),
-                ))
-                .child(ui::label("·", text::CONTROL, theme::ink3()))
-                .child(ui::label(words, text::CONTROL, color))
+                .child(
+                    ui::line(
+                        script_summary(&proposal.script, proposal.version),
+                        text::CONTROL,
+                        theme::ink2(),
+                    )
+                    .flex_shrink()
+                    .min_w_0(),
+                )
+                .child(ui::label("·", text::CONTROL, theme::ink3()).flex_none())
+                .child(ui::label(words, text::CONTROL, color).flex_none())
                 .into_any_element();
         }
         let versions = self.book.versions_of(proposal);
@@ -1912,24 +2112,27 @@ impl ChatView {
         let session = self.session.read(cx);
         let provider = session.prefs.provider;
         let configured = session.prefs.model().to_owned();
-        let choices = model_choices(provider, &configured);
         let current = if configured.is_empty() {
             "default".to_owned()
         } else {
-            configured
+            configured.clone()
         };
+        // A key's model is the one typed in Settings. Claude Code's aliases
+        // can be offered only once the editor's settings keep one for it;
+        // until then the model in use is said, and not offered as a choice.
+        let choices: Vec<String> = model_choices(provider, &configured)
+            .into_iter()
+            .filter(|model| *model == current)
+            .collect();
         let stamped = session.prefs.send_playhead;
         menu_frame(px(240.0), cx)
             .child(menu_header(provider.label()))
             .children(choices.into_iter().map(|model| {
-                let chosen = model == current;
-                // Only Claude Code's aliases are chosen here; a key's model
-                // is the one typed in Settings.
-                menu_item(
+                menu_row(
                     ElementId::Name(format!("model-{model}").into()),
                     model_label(&model),
                     None,
-                    chosen,
+                    true,
                 )
             }))
             .child(div().my(px(4.0)).child(ui::hairline(true)))
@@ -1950,6 +2153,7 @@ impl ChatView {
                     stamped,
                 )
                 .on_click(cx.listener(|this, _, _, cx| {
+                    this.menu = None;
                     this.session.update(cx, |session, cx| {
                         session.prefs.send_playhead = !session.prefs.send_playhead;
                         session.save_prefs();
@@ -2036,6 +2240,15 @@ impl ChatView {
             })
             .child(
                 div()
+                    .key_context(COMPOSER_CONTEXT)
+                    .on_action(cx.listener(|this, _: &CyclePermissions, _, cx| {
+                        this.session.update(cx, |session, cx| {
+                            session.prefs.permissions = next_permissions(session.prefs.permissions);
+                            session.save_prefs();
+                            cx.notify();
+                        });
+                        cx.notify();
+                    }))
                     .flex()
                     .flex_col()
                     .gap(px(8.0))
@@ -2181,6 +2394,18 @@ fn menu_item(
     line: Option<&'static str>,
     checked: bool,
 ) -> gpui::Stateful<gpui::Div> {
+    menu_row(id, words, line, checked)
+        .cursor_pointer()
+        .hover(|item| item.bg(theme::popup_hover()))
+}
+
+/// A row of a menu that says something and does nothing when pressed.
+fn menu_row(
+    id: impl Into<ElementId>,
+    words: String,
+    line: Option<&'static str>,
+    checked: bool,
+) -> gpui::Stateful<gpui::Div> {
     div()
         .id(id.into())
         .flex()
@@ -2189,8 +2414,6 @@ fn menu_item(
         .px(px(10.0))
         .py(px(5.0))
         .rounded(px(theme::radius::CONTROL))
-        .cursor_pointer()
-        .hover(|item| item.bg(theme::popup_hover()))
         .child(div().pt(px(3.0)).child(if checked {
             Icon::Check.view(14.0, theme::ink()).into_any_element()
         } else {
@@ -2268,15 +2491,10 @@ impl Render for ChatView {
         );
         let pinned = pins.first().cloned();
         // An open proposal no turn shows yet shows at the end, the pinned first.
-        let attached: HashSet<String> = turns
-            .iter()
-            .filter_map(|turn| turn.proposal.as_deref())
-            .filter_map(|id| self.book.find(&proposals, id))
-            .map(|proposal| proposal.proposal_id.clone())
-            .collect();
+        let holders = card_turns(&turns, &proposals, &self.book);
         let loose: Vec<Proposal> = pins
             .iter()
-            .filter(|id| !attached.contains(*id))
+            .filter(|id| !holders.contains_key(*id))
             .filter_map(|id| {
                 proposals
                     .iter()
@@ -2296,7 +2514,15 @@ impl Render for ChatView {
             list = list.child(self.empty(cx));
         }
         for index in 0..turns.len() {
-            list = list.child(self.turn(index, &turns, &proposals, pinned.as_deref(), window, cx));
+            list = list.child(self.turn(
+                index,
+                &turns,
+                &proposals,
+                &holders,
+                pinned.as_deref(),
+                window,
+                cx,
+            ));
         }
         if let Some(request) = request.filter(|_| showing_this) {
             list = list.child(self.you(&request, None, "live", cx).with_animation(
@@ -2345,8 +2571,11 @@ impl Render for ChatView {
                     .track_scroll(&self.scroll)
                     .child(
                         div().w_full().flex().justify_center().px(px(24.0)).child(
+                            // Its words wrap to the column: what they would be
+                            // on one line never widens it.
                             div()
                                 .w_full()
+                                .min_w_0()
                                 .max_w(px(layout::CONVERSATION_COLUMN))
                                 .child(list),
                         ),
@@ -2363,6 +2592,7 @@ impl Render for ChatView {
                     .child(
                         div()
                             .w_full()
+                            .min_w_0()
                             .max_w(px(layout::CONVERSATION_COLUMN))
                             .child(composer),
                     ),

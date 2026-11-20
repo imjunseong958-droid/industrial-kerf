@@ -23,9 +23,12 @@ pub struct Link {
     pub branch: Option<String>,
 }
 
-/// Whether `text` is a kerf:// link at all.
+/// Whether `text` is a kerf:// link at all. Any text may be asked about,
+/// a folder named in any script among them.
 pub fn is_link(text: &str) -> bool {
-    text.len() >= 7 && text[..7].eq_ignore_ascii_case("kerf://")
+    text.as_bytes()
+        .get(..7)
+        .is_some_and(|head| head.eq_ignore_ascii_case(b"kerf://"))
 }
 
 /// Reads a link; the error says why it is not one, in words for a person.
@@ -33,7 +36,8 @@ pub fn parse(text: &str) -> Result<Link, String> {
     if !is_link(text) {
         return Err("Not a kerf:// link".into());
     }
-    let rest = &text[7..];
+    // A fragment (`#…`, as a browser may add one) says nothing here.
+    let rest = text[7..].split('#').next().unwrap_or_default();
     let (rest, query) = match rest.split_once('?') {
         Some((rest, query)) => (rest, Some(query)),
         None => (rest, None),
@@ -137,6 +141,23 @@ pub fn resolve(link: &Link, candidates: &[PathBuf]) -> Result<PathBuf, String> {
             "More than one project here is called “{}”.",
             link.project
         )),
+    }
+}
+
+/// Whether the project `resolve` found can be opened: its folder is still
+/// there and holds its project.kerf. The error says so to the person.
+pub fn openable(project: &Path) -> Result<(), String> {
+    let name = project
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| project.display().to_string());
+    if project.join("project.kerf").is_file() {
+        Ok(())
+    } else {
+        Err(format!(
+            "The project “{name}” is no longer at {}.",
+            project.display()
+        ))
     }
 }
 

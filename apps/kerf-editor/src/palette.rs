@@ -1,6 +1,7 @@
 //! The command palette: every command of the registry, found by typing a
 //! few letters of it, with its shortcut. On macOS the menu bar holds the
-//! same commands; elsewhere the palette is where they all are.
+//! same commands; elsewhere the palette is where they all are. One that
+//! cannot run now is greyed, says why, and does nothing when chosen.
 
 use crate::commands::{self, RunCommand};
 use crate::input::{InputEvent, TextInput};
@@ -11,8 +12,12 @@ use gpui::{
     actions, div, prelude::*, px, Context, DismissEvent, ElementId, Entity, EventEmitter,
     FocusHandle, Focusable, ScrollHandle, SharedString, Subscription, Window,
 };
+use serde_json::Value;
 
 actions!(palette, [OpenPalette, Previous, Next]);
+
+/// The widest a command's reason (or menu) is before it is cut.
+const REASON_MOST: f32 = 280.0;
 
 /// The key context the palette's list keys answer in.
 pub const CONTEXT: &str = "CommandPalette";
@@ -20,6 +25,9 @@ pub const CONTEXT: &str = "CommandPalette";
 pub struct CommandPalette {
     query: Entity<TextInput>,
     commands: Vec<commands::Command>,
+    /// Each command's id with why it cannot run now, or null when it can,
+    /// as the palette opened.
+    states: Value,
     chosen: usize,
     scroll: ScrollHandle,
     _subscriptions: Vec<Subscription>,
@@ -38,8 +46,13 @@ pub fn matches(command: &commands::Command, query: &str) -> bool {
 
 impl CommandPalette {
     pub fn new(session: Entity<Session>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        // What another window chose since (a provider, a key kept in the
+        // settings file), so Ask is said to be available as it is.
+        session.update(cx, |session, _| session.prefs.refresh());
         let keymap = session.read(cx).prefs.keymap.wire();
         let commands = commands::catalog(keymap);
+        let cloud = crate::app::cloud(cx).cloned();
+        let states = session.read(cx).command_states(cloud.as_ref());
         let query = cx.new(|cx| TextInput::new(cx, "Find a command…").with_style(text::MENU_ITEM));
         query.read(cx).focus(window);
         let subscriptions =
@@ -58,6 +71,7 @@ impl CommandPalette {
         Self {
             query,
             commands,
+            states,
             chosen: 0,
             scroll: ScrollHandle::new(),
             _subscriptions: subscriptions,
@@ -84,6 +98,10 @@ impl CommandPalette {
     }
 
     fn run_id(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
+        // One that cannot run now says why in its row, and stays.
+        if unavailable(&self.states, &id).is_some() {
+            return;
+        }
         // Dispatched from here, where the workspace hears it, before giving the window back.
         window.dispatch_action(Box::new(RunCommand { id: id.into() }), cx);
         cx.emit(DismissEvent);
@@ -100,6 +118,12 @@ impl CommandPalette {
     }
 }
 
+/// Why `id` cannot run, as `states` (`kerf_bridge::commands_states`) says;
+/// None when it can, or when the registry says nothing of it.
+pub fn unavailable<'a>(states: &'a Value, id: &str) -> Option<&'a str> {
+    states.get(id).and_then(Value::as_str)
+}
+
 impl Focusable for CommandPalette {
     fn focus_handle(&self, cx: &gpui::App) -> FocusHandle {
         self.query.read(cx).focus_handle(cx)
@@ -108,7 +132,7 @@ impl Focusable for CommandPalette {
 
 impl Render for CommandPalette {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let found: Vec<(String, String, String, Vec<String>)> = self
+        let found: Vec<(String, String, String, Vec<String>, Option<String>)> = self
             .found(cx)
             .into_iter()
             .map(|command| {
@@ -117,6 +141,7 @@ impl Render for CommandPalette {
                     command.label.clone(),
                     command.menu.clone(),
                     command.keys.clone(),
+                    unavailable(&self.states, &command.id).map(str::to_owned),
                 )
             })
             .collect();
@@ -158,9 +183,10 @@ impl Render for CommandPalette {
                         )))
                     })
                     .children(found.into_iter().enumerate().map(
-                        |(index, (id, label, menu, keys))| {
+                        |(index, (id, label, menu, keys, reason))| {
                             let shortcut: SharedString =
                                 keys.first().cloned().unwrap_or_default().into();
+                            let able = reason.is_none();
                             div()
                                 .id(ElementId::Name(format!("palette-{id}").into()))
                                 .flex()
@@ -169,19 +195,38 @@ impl Render for CommandPalette {
                                 .h(px(32.0))
                                 .px(px(10.0))
                                 .rounded(px(theme::radius::CONTROL))
-                                .cursor_pointer()
+                                .when(able, |row| row.cursor_pointer())
                                 .when(index == chosen, |row| row.bg(theme::popup_hover()))
-                                .hover(|row| row.bg(theme::popup_hover()))
+                                .when(able, |row| row.hover(|row| row.bg(theme::popup_hover())))
                                 .child(
-                                    ui::line(label, text::MENU_ITEM, theme::ink())
-                                        .flex_1()
-                                        .min_w_0(),
+                                    ui::line(
+                                        label,
+                                        text::MENU_ITEM,
+                                        if able { theme::ink() } else { theme::dis() },
+                                    )
+                                    .flex_1()
+                                    .min_w_0(),
                                 )
-                                .child(ui::label(menu, text::MENU_QUIET, theme::ink3()))
-                                .child(ui::label(shortcut, text::MONO_SMALL, theme::ink2()))
-                                .on_click(cx.listener(move |this, _, window, cx| {
-                                    this.run_id(id.clone(), window, cx)
-                                }))
+                                .child(
+                                    // Why it cannot run, where its menu is said otherwise.
+                                    ui::line(
+                                        reason.unwrap_or(menu),
+                                        text::MENU_QUIET,
+                                        theme::ink3(),
+                                    )
+                                    .flex_none()
+                                    .max_w(px(REASON_MOST)),
+                                )
+                                .child(ui::label(
+                                    shortcut,
+                                    text::MONO_SMALL,
+                                    if able { theme::ink2() } else { theme::dis() },
+                                ))
+                                .when(able, |row| {
+                                    row.on_click(cx.listener(move |this, _, window, cx| {
+                                        this.run_id(id.clone(), window, cx)
+                                    }))
+                                })
                         },
                     )),
             )

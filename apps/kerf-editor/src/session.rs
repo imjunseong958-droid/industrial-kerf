@@ -9,11 +9,21 @@ use crate::store::{Change, EditorState};
 use crate::theme::motion;
 use gpui::{App, AppContext, Context, Entity, EventEmitter, RenderImage, Task, Window};
 use serde_json::{json, Value};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 /// Where Finish's deliveries go, inside the project.
 pub const DELIVERIES: &str = "deliveries/";
+
+/// What the system's keychain answered for each key, for every window of
+/// this editor: asked once, written when a key is saved in any window, and
+/// asked again when Settings opens (a key changed outside Kerf).
+static KEYCHAIN: Mutex<BTreeMap<&'static str, Option<String>>> = Mutex::new(BTreeMap::new());
+
+fn keychain() -> MutexGuard<'static, BTreeMap<&'static str, Option<String>>> {
+    KEYCHAIN.lock().unwrap_or_else(PoisonError::into_inner)
+}
 
 /// Where a key was kept.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -43,7 +53,6 @@ pub struct Session {
     pub selection: Vec<String>,
     /// The media chosen in the band.
     pub chosen_media: Option<String>,
-    keys: std::collections::HashMap<Provider, Option<String>>,
     _on_quit: gpui::Subscription,
     /// A kerf:// link followed to this project, carried out once it is connected.
     link: Option<crate::links::Link>,
@@ -87,7 +96,6 @@ impl Session {
                 conversation: None,
                 selection: Vec::new(),
                 chosen_media: None,
-                keys: Default::default(),
                 // Quitting closes the bridge as closing the window does: the
                 // render running stops, the queued ones are cancelled.
                 _on_quit: cx.on_app_quit(|session: &mut Session, _| {
@@ -470,15 +478,17 @@ impl Session {
         if text.is_empty() || self.state.work.busy() {
             return false;
         }
-        let provider = self.prefs.provider;
+        // What another window chose since, as the person last left it.
+        self.prefs.refresh();
         let mut command = json!({
             "type": "agent",
             "text": text,
-            "provider": provider.wire(),
-
             "permissions": self.prefs.permissions.wire(),
-            "mcpEnabled": self.prefs.mcp_enabled,
         });
+        let settings = self.agent_settings();
+        if let (Some(command), Value::Object(settings)) = (command.as_object_mut(), settings) {
+            command.extend(settings);
+        }
         if let Some(conversation) = &self.conversation {
             command["conversation"] = json!(conversation);
         }
@@ -487,15 +497,6 @@ impl Session {
         }
         if let Some(focus) = self.focus() {
             command["focus"] = focus;
-        }
-        if !self.prefs.model().is_empty() {
-            command["model"] = json!(self.prefs.model());
-        }
-        if provider == Provider::Openai && !self.prefs.openai_base_url.is_empty() {
-            command["baseUrl"] = json!(self.prefs.openai_base_url);
-        }
-        if let Some(key) = self.api_key(provider) {
-            command["apiKey"] = json!(key);
         }
         let sent = self.send(command);
         if sent {
@@ -616,24 +617,24 @@ impl Session {
 
     /// The key for `provider`: the keychain's, else the one kept in the
     /// editor's settings where the keychain could not be reached, else its
-    /// environment variable.
-    pub fn api_key(&mut self, provider: Provider) -> Option<String> {
-        if let Some(known) = self.keys.get(&provider) {
-            return known.clone();
-        }
+    /// environment variable. The keychain is asked once for every window;
+    /// the settings are this window's as last refreshed.
+    pub fn api_key(&self, provider: Provider) -> Option<String> {
         let stored = provider.secret_name().and_then(|name| {
-            let answer = kerf_bridge::secret(&json!({"op": "get", "name": name}));
-            answer["value"]
-                .as_str()
-                .map(str::to_owned)
-                .or_else(|| self.prefs.kept_keys.get(name).cloned())
+            let in_keychain = keychain()
+                .entry(name)
+                .or_insert_with(|| {
+                    kerf_bridge::secret(&json!({"op": "get", "name": name}))["value"]
+                        .as_str()
+                        .map(str::to_owned)
+                })
+                .clone();
+            in_keychain.or_else(|| self.prefs.kept_keys.get(name).cloned())
         });
-        let key = stored
+        stored
             .filter(|key| !key.is_empty())
             .or_else(|| provider.key_env().and_then(|name| std::env::var(name).ok()))
-            .filter(|key| !key.trim().is_empty());
-        self.keys.insert(provider, key.clone());
-        key
+            .filter(|key| !key.trim().is_empty())
     }
 
     /// Keeps `key` for `provider` (empty forgets it): in the system's
@@ -665,19 +666,106 @@ impl Session {
                 } else {
                     self.prefs.kept_keys.insert(name.to_owned(), key.to_owned());
                 }
-                self.prefs
-                    .save_checked()
-                    .map_err(|written| format!("{error}; nor could it be written to the settings file: {written}"))?;
+                self.prefs.save_checked().map_err(|written| {
+                    format!("{error}; nor could it be written to the settings file: {written}")
+                })?;
                 KeyKept::SettingsFile
             }
         };
-        self.keys
-            .insert(provider, (!key.is_empty()).then(|| key.to_owned()));
+        // Every window's next request takes it.
+        let in_keychain = (kept == KeyKept::Keychain && !key.is_empty()).then(|| key.to_owned());
+        keychain().insert(name, in_keychain);
         Ok(kept)
     }
 
     pub fn save_prefs(&self) {
         self.prefs.save();
+    }
+
+    /// What a request runs on, as the agent command takes it: Kerf's
+    /// hosted model (`cloud`), Claude Code and its model, or a provider
+    /// with its key, model, base URL and (OpenAI) API shape. The MCP
+    /// servers' switch and how many times their file was saved go with each.
+    pub fn agent_settings(&self) -> Value {
+        let prefs = &self.prefs;
+        let provider = prefs.provider;
+        let mut settings = json!({
+            "mcpEnabled": prefs.mcp_enabled,
+            "mcpConfigVersion": prefs.mcp_config_version,
+        });
+        if provider == Provider::Cloud {
+            // The service picks the model.
+            settings["cloud"] = json!(true);
+            return settings;
+        }
+        settings["provider"] = json!(provider.wire());
+        if !prefs.model().is_empty() {
+            settings["model"] = json!(prefs.model());
+        }
+        if !prefs.base_url().is_empty() {
+            settings["baseUrl"] = json!(prefs.base_url());
+        }
+        if provider == Provider::Openai {
+            settings["apiMode"] = json!(prefs.openai_api_mode.wire());
+        }
+        if let Some(key) = self.api_key(provider) {
+            settings["apiKey"] = json!(key);
+        }
+        settings
+    }
+
+    /// Why the connection chosen cannot take requests, as the command
+    /// registry's `aiAccess` names it: `noKey` for a provider with no key
+    /// kept and none in the environment, Kerf's account standing (`cloud`,
+    /// the last `cloud` event's `access`, `unavailable` until one is
+    /// heard). None when it can.
+    pub fn ai_access(&self, cloud: Option<&Value>) -> Option<String> {
+        match self.prefs.provider {
+            Provider::ClaudeCode => None,
+            Provider::Cloud => {
+                let access = cloud
+                    .and_then(|cloud| cloud["access"].as_str())
+                    .unwrap_or("unavailable");
+                (access != "ready").then(|| access.to_owned())
+            }
+            provider => self.api_key(provider).is_none().then(|| "noKey".into()),
+        }
+    }
+
+    /// Each registry command's id with why it is unavailable now, or null
+    /// when it is (`kerf_bridge::commands_states`). `cloud` is the last
+    /// `cloud` event heard, for Ask's reason.
+    pub fn command_states(&self, cloud: Option<&Value>) -> Value {
+        let mut context = self.command_context();
+        if let Some(access) = self.ai_access(cloud) {
+            context["aiAccess"] = json!(access);
+        }
+        kerf_bridge::commands_states(&context)
+    }
+
+    /// Asks the bridge for what has to be known again: Kerf's account
+    /// (`cloud_refresh`), the person's models (`models`). False without a
+    /// project.
+    pub fn ask_bridge(&mut self, kind: &str) -> bool {
+        self.bridge.is_some() && self.send(json!({"type": kind}))
+    }
+
+    /// Signs in to Kerf with `token` (`cloud_sign_in`), or out with None
+    /// (`cloud_sign_out`); a `cloud` event answers. False without a project.
+    pub fn cloud_sign(&mut self, token: Option<&str>) -> bool {
+        if self.bridge.is_none() {
+            return false;
+        }
+        match token.map(str::trim).filter(|token| !token.is_empty()) {
+            Some(token) => self.send(json!({"type": "cloud_sign_in", "token": token})),
+            None => self.send(json!({"type": "cloud_sign_out"})),
+        }
+    }
+
+    /// Forgets what the keychain answered, so the next request in any
+    /// window asks it again (a key changed outside Kerf).
+    pub fn forget_keys(&self) {
+        keychain().clear();
     }
 }
 

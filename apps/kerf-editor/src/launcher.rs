@@ -2,11 +2,16 @@
 //! question, the ways to begin (a new project, a folder, a clone from
 //! GitHub), and the projects opened before. Making and cloning run as the
 //! bridge's project tasks, on a thread of their own, polled until they end.
+//! Settings opens over it as over a project's window, with no project: what
+//! answers in the conversation, its key, how the editor looks, its keys.
 
+use crate::commands::{RunCommand, WORKSPACE};
 use crate::icons::Icon;
 use crate::input::{InputEvent, TextInput};
 use crate::motion;
 use crate::prefs::{self, Prefs};
+use crate::session::Session;
+use crate::settings::{Page, SettingsEvent, SettingsView};
 use crate::theme::{self, height, radius, text};
 use crate::ui::{self, icon_button};
 use gpui::{
@@ -141,6 +146,12 @@ pub struct LauncherView {
     busy: Option<SharedString>,
     /// Why the last thing asked could not be done.
     problem: Option<SharedString>,
+    /// Settings while open over the launcher, and how many times it has
+    /// been opened.
+    settings: Option<(Entity<SettingsView>, u64)>,
+    settings_opened: u64,
+    /// What Settings works on here: a session with no project.
+    session: Option<Entity<Session>>,
     _task: Option<Task<()>>,
     _subscriptions: Vec<Subscription>,
 }
@@ -211,9 +222,109 @@ impl LauncherView {
             recent,
             busy: None,
             problem: None,
+            settings: None,
+            settings_opened: 0,
+            session: None,
             _task: None,
             _subscriptions: subscriptions,
         }
+    }
+
+    /// Says why something asked of the launcher could not be done (a
+    /// kerf:// link that could not be followed).
+    pub fn say(&mut self, problem: impl Into<SharedString>, cx: &mut Context<Self>) {
+        self.problem = Some(problem.into());
+        cx.notify();
+    }
+
+    /// Opens Settings over the launcher on `page`, or goes to `page` in it.
+    pub fn show_settings(&mut self, page: Page, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some((settings, _)) = &self.settings {
+            settings.update(cx, |settings, cx| settings.show_page(page, cx));
+            return;
+        }
+        let session = match &self.session {
+            Some(session) => session.clone(),
+            None => {
+                let session = Session::open(None, None, self.prefs.clone(), window, cx);
+                self.session = Some(session.clone());
+                session
+            }
+        };
+        let settings = cx.new(|cx| SettingsView::new_at(session, page, window, cx));
+        cx.subscribe_in(
+            &settings,
+            window,
+            |this, _, event: &SettingsEvent, window, cx| match event {
+                SettingsEvent::Dismiss => this.close_settings(window, cx),
+            },
+        )
+        .detach();
+        window.focus(&settings.focus_handle(cx));
+        self.settings_opened += 1;
+        self.settings = Some((settings, self.settings_opened));
+        cx.notify();
+    }
+
+    fn close_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.settings = None;
+        // What Settings saved, for the projects listed here.
+        self.prefs.refresh();
+        window.focus(&self.focus_handle);
+        cx.notify();
+    }
+
+    /// The window's commands that mean something with no project.
+    fn command(&mut self, action: &RunCommand, window: &mut Window, cx: &mut Context<Self>) {
+        match action.id.as_ref() {
+            "app.preferences" if self.settings.is_some() => self.close_settings(window, cx),
+            "app.preferences" => self.show_settings(Page::Chat, window, cx),
+            "app.account" => self.show_settings(Page::Account, window, cx),
+            "help.about" => self.show_settings(Page::About, window, cx),
+            "app.quit" => cx.quit(),
+            "file.openProject" => self.open_folder(window, cx),
+            "file.newProject" if self.mode != Some(Mode::New) => {
+                self.choose_mode(Mode::New, window, cx)
+            }
+            _ => {}
+        }
+    }
+
+    /// Settings over the dimmed launcher, rising into its middle as it
+    /// does over a project's window.
+    fn settings_over(&self) -> Option<gpui::AnyElement> {
+        let (settings, opened) = self.settings.as_ref()?;
+        Some(
+            div()
+                .id("launcher-scrim")
+                .absolute()
+                .inset_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .bg(theme::with_alpha(gpui::rgb(0x000000), theme::motion::SCRIM))
+                .occlude()
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .child(
+                    div()
+                        .relative()
+                        .rounded(px(radius::PANEL))
+                        .overflow_hidden()
+                        .border_1()
+                        .border_color(theme::line2())
+                        .shadow_2xl()
+                        .child(settings.clone())
+                        .with_animation(
+                            ("launcher-settings-rise", *opened),
+                            motion::animation(theme::motion::PAGE),
+                            |body, t| {
+                                body.top(px(theme::motion::PAGE_RISE * (1.0 - t)))
+                                    .opacity(0.2 + 0.8 * t)
+                            },
+                        ),
+                )
+                .into_any_element(),
+        )
     }
 
     fn input_event(
@@ -803,9 +914,9 @@ impl LauncherView {
 impl Render for LauncherView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let mode = self.mode;
-        div()
+        let settings = self.settings_over();
+        let column = div()
             .id("launcher")
-            .track_focus(&self.focus_handle)
             .size_full()
             .overflow_y_scroll()
             .bg(theme::surround())
@@ -823,7 +934,21 @@ impl Render for LauncherView {
                     .pb(px(48.0))
                     .flex()
                     .flex_col()
-                    .child(img(app_icon()).size(px(56.0)).flex_none())
+                    .child(
+                        div()
+                            .flex()
+                            .items_start()
+                            .child(img(app_icon()).size(px(56.0)).flex_none())
+                            .child(div().flex_1())
+                            .child(
+                                ui::button("launcher-settings", "Settings…")
+                                    .ghost()
+                                    .icon(Icon::Gear)
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.show_settings(Page::Chat, window, cx)
+                                    })),
+                            ),
+                    )
                     .child(ui::label("What are we making?", text::DISPLAY, theme::ink()).mt(px(20.0)))
                     .child(
                         ui::label(
@@ -849,7 +974,16 @@ impl Render for LauncherView {
                     .with_animation("launcher-rise", motion::animation(theme::motion::RISE), |column, t| {
                         column.opacity(t).relative().top(px(theme::motion::PAGE_RISE * (1.0 - t)))
                     }),
-            )
+            );
+        // The window's commands answer here too: ⌘, opens Settings.
+        div()
+            .key_context(WORKSPACE)
+            .track_focus(&self.focus_handle)
+            .on_action(cx.listener(Self::command))
+            .relative()
+            .size_full()
+            .child(column)
+            .children(settings)
     }
 }
 

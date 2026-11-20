@@ -36,6 +36,8 @@ pub enum SidebarEvent {
     Delete(String),
     /// A field the sidebar had the keys in is done: the window takes them back.
     Done,
+    /// One of its menus opened: the window puts its own away.
+    MenuOpened,
 }
 
 impl EventEmitter<SidebarEvent> for SidebarView {}
@@ -339,10 +341,10 @@ pub fn app_menu(header: SharedString, close: Rc<dyn Fn(&mut Window, &mut App)>) 
     let items: [(&'static str, &'static str, Option<Icon>); 6] = [
         ("app.preferences", "Settings…", Some(Icon::Gear)),
         ("app.account", "Account…", Some(Icon::Lock)),
-        ("help.guide", "User Guide", Some(Icon::Search)),
+        ("help.guide", "User Guide", None),
         ("help.crashReports", "Crash Reports", Some(Icon::Folder)),
-        ("help.about", "About", Some(Icon::Sparkle)),
-        ("app.quit", "Quit", Some(Icon::Close)),
+        ("help.about", "About", None),
+        ("app.quit", "Quit", None),
     ];
     let mut menu = menu_panel().w(px(220.0)).child(
         div().px(px(10.0)).pt(px(4.0)).pb(px(6.0)).child(ui::line(
@@ -418,6 +420,8 @@ pub struct SidebarView {
     listed: bool,
     /// Conversations new to the list, and when they came.
     arrivals: HashMap<String, Instant>,
+    /// The sidebar is in the window: put away, its titles' light rests.
+    shown: bool,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -431,7 +435,7 @@ impl SidebarView {
             cx.observe(&session, |_, _, cx| cx.notify()),
             cx.subscribe(&session, |this, _, change: &Change, cx| {
                 if *change == Change::Conversations {
-                    this.note_arrivals(cx);
+                    this.note_arrivals(true, cx);
                 }
             }),
             cx.subscribe_in(&search, window, |this, field, event: &InputEvent, _, cx| {
@@ -482,15 +486,40 @@ impl SidebarView {
             seen: HashSet::new(),
             listed: false,
             arrivals: HashMap::new(),
+            shown: true,
             _subscriptions: subscriptions,
         };
-        sidebar.note_arrivals(cx);
+        sidebar.note_arrivals(false, cx);
         sidebar
     }
 
-    /// Remembers the conversations listed; those new to a list already
-    /// shown fade in.
-    fn note_arrivals(&mut self, cx: &mut Context<Self>) {
+    /// Whether the sidebar is in the window; put away, it asks for no
+    /// frames of its own.
+    pub fn set_shown(&mut self, shown: bool, cx: &mut Context<Self>) {
+        if self.shown != shown {
+            self.shown = shown;
+            // Put away, it takes its menus with it.
+            if !shown {
+                self.close_menus(cx);
+            }
+            cx.notify();
+        }
+    }
+
+    /// Puts away the account's menu and a row's menu; whether one was open.
+    pub fn close_menus(&mut self, cx: &mut Context<Self>) -> bool {
+        let open = self.app_menu || self.menu.is_some();
+        if open {
+            self.app_menu = false;
+            self.menu = None;
+            cx.notify();
+        }
+        open
+    }
+
+    /// Remembers the conversations listed (`listed`: as the bridge listed
+    /// them); those new to a list already shown fade in.
+    fn note_arrivals(&mut self, listed: bool, cx: &mut Context<Self>) {
         let ids: Vec<String> = self
             .session
             .read(cx)
@@ -506,7 +535,7 @@ impl SidebarView {
                 self.arrivals.insert(id, now);
             }
         }
-        if self.session.read(cx).state.has_snapshot || !self.seen.is_empty() {
+        if listed || !self.seen.is_empty() {
             self.listed = true;
         }
     }
@@ -520,12 +549,28 @@ impl SidebarView {
             .conversations
             .iter()
             .find(|conversation| conversation.id == id)
-            .map(|conversation| conversation.title.clone())
+            .map(|conversation| {
+                (
+                    conversation.title.clone(),
+                    conversation.label().to_owned(),
+                    conversation.archived,
+                )
+            })
         else {
             return;
         };
+        let (title, label, archived) = title;
         if self.renaming.is_some() {
             self.finish_rename(true, false, cx);
+        }
+        // Its row comes into sight to be renamed in: unfolded, unfiltered.
+        if archived && !self.archived_open {
+            self.archived_open = true;
+            self.unfoldings += 1;
+        }
+        if !matches(&label, &self.query) {
+            self.search.update(cx, |field, cx| field.clear(cx));
+            self.query.clear();
         }
         self.menu = None;
         self.renaming = Some(id.to_owned());
@@ -617,7 +662,7 @@ impl SidebarView {
         )
         .flex_1()
         .min_w_0();
-        if working && !motion::reduced() {
+        if working && !motion::reduced() && self.shown {
             // A band of light passing over the title, then resting.
             let phase = motion::phase(self.shimmer_since, scene::TITLE_SHIMMER);
             window.request_animation_frame();
@@ -711,9 +756,11 @@ impl SidebarView {
                                 cx.listener({
                                     let id = id.clone();
                                     move |this, _: &MouseDownEvent, _, cx| {
+                                        this.app_menu = false;
                                         this.menu = if this.menu.as_deref() == Some(id.as_str()) {
                                             None
                                         } else {
+                                            cx.emit(SidebarEvent::MenuOpened);
                                             Some(id.clone())
                                         };
                                         cx.notify();
@@ -737,7 +784,9 @@ impl SidebarView {
                     let id = id.clone();
                     move |this, _, _, cx| {
                         cx.stop_propagation();
+                        this.app_menu = false;
                         this.menu = Some(id.clone());
+                        cx.emit(SidebarEvent::MenuOpened);
                         cx.notify();
                     }
                 }),
@@ -979,6 +1028,7 @@ impl Render for SidebarView {
             crate::store::Connection::Failed(message) => (theme::neg(), message.clone()),
         };
         let app_menu_open = self.app_menu;
+        let header: SharedString = provider.into();
         let close_app_menu: Rc<dyn Fn(&mut Window, &mut App)> = {
             let this = cx.entity().downgrade();
             Rc::new(move |_, cx| {
@@ -1167,27 +1217,6 @@ impl Render for SidebarView {
                         .children(archived_rows)
                     }),
             )
-            // The account's menu, over the list just above the foot; drawn
-            // before the foot, so a press on the foot is the foot's.
-            .when(app_menu_open, |sidebar| {
-                sidebar.child(
-                    div()
-                        .absolute()
-                        .left(px(8.0))
-                        .bottom(px(layout::SIDEBAR_FOOT + 4.0))
-                        .child(
-                            app_menu(provider.into(), close_app_menu.clone()).on_mouse_down_out(
-                                cx.listener(|this, _, _, cx| {
-                                    this.app_menu = false;
-                                    cx.notify();
-                                }),
-                            ),
-                        )
-                        .with_animation("app-menu", motion::animation(scene::FADE), |menu, t| {
-                            menu.opacity(t)
-                        }),
-                )
-            })
             .child(
                 div()
                     .h(px(layout::SIDEBAR_FOOT))
@@ -1203,7 +1232,11 @@ impl Render for SidebarView {
                         trigger(
                             "account",
                             cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                                this.menu = None;
                                 this.app_menu = !this.app_menu;
+                                if this.app_menu {
+                                    cx.emit(SidebarEvent::MenuOpened);
+                                }
                                 cx.notify();
                             }),
                         )
@@ -1235,6 +1268,28 @@ impl Render for SidebarView {
                             .on_click(cx.listener(|_, _, _, cx| cx.emit(SidebarEvent::Settings))),
                     ),
             )
+            // The account's menu, just above the foot. Drawn after it, so the
+            // account's press is taken before the menu hears a press outside
+            // it: pressed again, the account puts the menu away.
+            .when(app_menu_open, |sidebar| {
+                sidebar.child(
+                    div()
+                        .absolute()
+                        .left(px(8.0))
+                        .bottom(px(layout::SIDEBAR_FOOT + 4.0))
+                        .child(
+                            app_menu(header, close_app_menu).on_mouse_down_out(cx.listener(
+                                |this, _, _, cx| {
+                                    this.app_menu = false;
+                                    cx.notify();
+                                },
+                            )),
+                        )
+                        .with_animation("app-menu", motion::animation(scene::FADE), |menu, t| {
+                            menu.opacity(t)
+                        }),
+                )
+            })
             .on_mouse_down(MouseButton::Right, |_, _, _| {})
     }
 }

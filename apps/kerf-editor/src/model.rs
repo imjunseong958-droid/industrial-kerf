@@ -265,7 +265,12 @@ impl Proposal {
         self.script
             .lines()
             .map(str::trim)
-            .find(|line| !line.is_empty() && !line.starts_with('#') && !line.starts_with("//") && !line.starts_with("use "))
+            .find(|line| {
+                !line.is_empty()
+                    && !line.starts_with('#')
+                    && !line.starts_with("//")
+                    && !line.starts_with("use ")
+            })
             .map(str::to_owned)
             .unwrap_or_else(|| "Proposal".to_owned())
     }
@@ -328,7 +333,10 @@ impl Snapshot {
             duration: value["duration"].as_f64().unwrap_or(0.0),
             proposals,
             proposal_timeline,
-            projection_status: value["projectionStatus"].as_str().unwrap_or("current").to_owned(),
+            projection_status: value["projectionStatus"]
+                .as_str()
+                .unwrap_or("current")
+                .to_owned(),
             import_warnings: value["importWarnings"]
                 .as_array()
                 .map(|items| {

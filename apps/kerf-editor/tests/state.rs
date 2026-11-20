@@ -325,7 +325,10 @@ fn only_the_chosen_conversation_shows() {
     state.apply(&json!({"type": "conversation", "id": "mine", "items": [{"id": "1", "kind": "you", "text": "a"}]}));
     // Another window's turn in another conversation changes nothing here.
     state.apply(&json!({"type": "conversation", "id": "theirs", "items": [{"id": "2", "kind": "you", "text": "b"}]}));
-    assert_eq!(state.open_conversation.as_ref().map(|c| c.id.as_str()), Some("mine"));
+    assert_eq!(
+        state.open_conversation.as_ref().map(|c| c.id.as_str()),
+        Some("mine")
+    );
     // A new conversation shows nothing until the request sent in it starts one.
     state.choose(None);
     assert!(state.open_conversation.is_none());
@@ -334,9 +337,15 @@ fn only_the_chosen_conversation_shows() {
     state.apply(&json!({"type": "agent_busy", "busy": true}));
     state.apply(&json!({"type": "conversation", "id": "started", "items": [{"id": "3", "kind": "you", "text": "c"}]}));
     assert_eq!(state.chosen.as_deref(), Some("started"));
-    assert_eq!(state.open_conversation.as_ref().map(|c| c.id.as_str()), Some("started"));
+    assert_eq!(
+        state.open_conversation.as_ref().map(|c| c.id.as_str()),
+        Some("started")
+    );
     state.apply(&json!({"type": "agent_busy", "busy": false}));
-    assert!(state.work.conversation.is_none(), "a turn that ended is no longer under way anywhere");
+    assert!(
+        state.work.conversation.is_none(),
+        "a turn that ended is no longer under way anywhere"
+    );
     assert!(state.settled.is_empty(), "it ended where you were looking");
 }
 

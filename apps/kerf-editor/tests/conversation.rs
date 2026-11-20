@@ -4,9 +4,9 @@
 //! snapshot, the clips each changes, and which one is pinned.
 
 use kerf_editor::chat::{
-    clip_changes, join_queued, model_choices, model_label, permission_words, pin_order,
-    request_before, script_summary, signed_frames, spans, timecode_seconds, worked_headline,
-    ProposalBook, Span,
+    clip_changes, join_queued, model_choices, model_label, next_permissions, permission_words,
+    pin_order, request_before, script_summary, signed_frames, spans, timecode_seconds,
+    worked_headline, ProposalBook, Span,
 };
 use kerf_editor::input::scroll_to_show;
 use kerf_editor::model::{timecode, Snapshot, Speaker, Timeline, Turn};
@@ -43,7 +43,10 @@ fn timecodes_kerf_writes_are_links_and_marks_read_as_bold_and_code() {
         ]
     );
     // A mark with no partner stays as written.
-    assert_eq!(spans("2 ** 3 and a ` tick"), vec![plain("2 ** 3 and a ` tick")]);
+    assert_eq!(
+        spans("2 ** 3 and a ` tick"),
+        vec![plain("2 ** 3 and a ` tick")]
+    );
     assert_eq!(spans(""), Vec::<Span>::new());
 }
 
@@ -108,7 +111,10 @@ fn a_second_request_joins_the_one_waiting() {
 
 #[test]
 fn a_finished_turn_says_how_long_it_worked_and_its_steps() {
-    assert_eq!(worked_headline(Some(72.4), 6), "Worked for 1m 12s · 6 steps");
+    assert_eq!(
+        worked_headline(Some(72.4), 6),
+        "Worked for 1m 12s · 6 steps"
+    );
     assert_eq!(worked_headline(Some(41.0), 1), "Worked for 41s · 1 step");
     assert_eq!(worked_headline(Some(3.0), 0), "Worked for 3s");
     assert_eq!(worked_headline(None, 0), "Worked for 0s");
@@ -137,6 +143,16 @@ fn the_composer_chips_say_the_mode_and_offer_the_models() {
     assert_eq!(permission_words(Permissions::Ask).0, "Ask before edits");
     assert_eq!(permission_words(Permissions::AcceptEdits).0, "Accept edits");
     assert_eq!(permission_words(Permissions::Auto).0, "Auto");
+    // Shift-Tab goes round the three and back.
+    let mut mode = Permissions::Ask;
+    for expected in [
+        Permissions::AcceptEdits,
+        Permissions::Auto,
+        Permissions::Ask,
+    ] {
+        mode = next_permissions(mode);
+        assert_eq!(mode, expected);
+    }
     assert_eq!(
         model_choices(Provider::ClaudeCode, ""),
         ["default", "opus", "sonnet", "haiku"]

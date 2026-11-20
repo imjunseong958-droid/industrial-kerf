@@ -41,12 +41,24 @@ actions!(
     ]
 );
 
-/// The key context the field's bindings answer in.
+/// The key context of a field. The window's keymap binds each plain key
+/// of its commands (Esc, Backspace, Left, a letter) to nothing here, so
+/// typing it in a field never runs the command.
 pub const CONTEXT: &str = "TextInput";
 
+/// The key context the field's own keys are bound in: one inside
+/// [`CONTEXT`], so they come before what the keymap unbinds there, and
+/// Backspace, the arrows and Esc still do what they do in a field.
+pub const KEYS: &str = "TextInputKeys";
+
 pub fn bind_keys(cx: &mut App) {
-    let context = Some(CONTEXT);
-    cx.bind_keys([
+    cx.bind_keys(key_bindings());
+}
+
+/// The field's keys, as [`bind_keys`] binds them.
+pub fn key_bindings() -> Vec<KeyBinding> {
+    let context = Some(KEYS);
+    vec![
         KeyBinding::new("backspace", Backspace, context),
         KeyBinding::new("delete", Delete, context),
         KeyBinding::new("left", Left, context),
@@ -70,7 +82,13 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("alt-backspace", DeleteWordLeft, context),
         KeyBinding::new("ctrl-backspace", DeleteWordLeft, context),
         KeyBinding::new("escape", Cancel, context),
-    ]);
+        // In the composer, what Kerf does without asking goes round.
+        KeyBinding::new(
+            "shift-tab",
+            crate::chat::CyclePermissions,
+            Some(format!("{} > {KEYS}", crate::chat::COMPOSER_CONTEXT).as_str()),
+        ),
+    ]
 }
 
 /// What the field says to whoever holds it.
@@ -1073,10 +1091,12 @@ impl Element for TextElement {
 
 impl Render for TextInput {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        div()
+        // The field's own keys answer inside it, below what the keymap
+        // leaves unbound in fields.
+        let keys = div()
             .flex()
             .w_full()
-            .key_context(CONTEXT)
+            .key_context(KEYS)
             .track_focus(&self.focus_handle(cx))
             .cursor(CursorStyle::IBeam)
             .on_action(cx.listener(Self::backspace))
@@ -1107,7 +1127,8 @@ impl Render for TextInput {
             .child(TextElement {
                 input: cx.entity(),
                 color: theme::ink(),
-            })
+            });
+        div().flex().w_full().key_context(CONTEXT).child(keys)
     }
 }
 

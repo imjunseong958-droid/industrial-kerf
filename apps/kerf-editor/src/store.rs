@@ -494,7 +494,9 @@ impl EditorState {
 
     fn end_turn(&mut self) {
         if let Some(conversation) = self.work.conversation.take() {
-            if self.chosen.as_deref() != Some(conversation.as_str()) && !self.settled.contains(&conversation) {
+            if self.chosen.as_deref() != Some(conversation.as_str())
+                && !self.settled.contains(&conversation)
+            {
                 self.settled.push(conversation);
             }
         }

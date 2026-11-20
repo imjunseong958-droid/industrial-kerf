@@ -20,6 +20,10 @@
 //! change, and an edit under it would leave it stale; the conversation has
 //! its card to accept or reject it. Seeking still works.
 //!
+//! The program's in and out marks stand on the ruler, the range between
+//! them shaded. While the pointer skims the picture a skimmer stands at the
+//! time it shows, and the playhead stays where it was.
+//!
 //! While Kerf works, its cursor stands at the first time it looks at and
 //! rings the clips it looks at. Clips whose media is being made carry moving
 //! amber stripes (still under Reduce Motion), and the view asks for frames
@@ -1349,7 +1353,11 @@ impl Render for TimelineView {
         let lanes = self.lanes.clone();
         let session = self.session.read(cx);
         let state = &session.state;
+        // Skimming the picture moves what it shows, not the playhead: the
+        // picture keeps the window's playhead where it was.
+        let skim = crate::stage::skim(&self.session, cx);
         let position = state.position;
+        let (mark_in, mark_out, _) = session.marks();
         let selection = if lanes.proposed {
             Vec::new()
         } else {
@@ -1419,6 +1427,8 @@ impl Render for TimelineView {
             lanes: lanes.clone(),
             view,
             playhead: position,
+            skimmer: skim,
+            marks: (mark_in, mark_out),
             selection,
             hover: self.hover.clone(),
             ghost,
@@ -1484,7 +1494,7 @@ impl Render for TimelineView {
             .flex_col()
             .overflow_hidden()
             .bg(theme::well())
-            .child(self.strip(position, cx))
+            .child(self.strip(skim.unwrap_or(position), cx))
             .child(body)
     }
 }
@@ -1496,6 +1506,10 @@ struct Frame {
     lanes: Rc<Lanes>,
     view: Viewport,
     playhead: f64,
+    /// Where the pointer skims the picture, while it does.
+    skimmer: Option<f64>,
+    /// The program's in and out marks.
+    marks: (Option<f64>, Option<f64>),
     selection: Vec<String>,
     hover: Option<Hover>,
     ghost: Option<Ghost>,
@@ -1597,6 +1611,12 @@ fn paint(frame: &Frame, bounds: Bounds<Pixels>, window: &mut Window, cx: &mut Ap
         paint_kerf(view, *time, pen, width, height, &fonts, window, cx);
     }
     paint_playhead(view, frame.playhead, pen, width, height, window);
+    if let Some(time) = frame.skimmer {
+        let x = view.x(time).floor();
+        if (0.0..width).contains(&x) {
+            window.paint_quad(fill(pen.rect(x, 0.0, 1.0, height), theme::ink2()));
+        }
+    }
 }
 
 /// While the canvas shows, a drag follows the pointer anywhere in the
@@ -2175,7 +2195,38 @@ fn paint_ruler(
                 }
             }
         }
+        paint_marks(view, frame.marks, lanes.end, pen, width, window);
     });
+}
+
+/// The program's in and out marks: the range between them along the
+/// ruler's foot, and each mark's line.
+fn paint_marks(
+    view: &Viewport,
+    (mark_in, mark_out): (Option<f64>, Option<f64>),
+    end: f64,
+    pen: Pen,
+    width: f32,
+    window: &mut Window,
+) {
+    if mark_in.is_none() && mark_out.is_none() {
+        return;
+    }
+    let from = view.x(mark_in.unwrap_or(0.0)).round();
+    let to = view.x(mark_out.unwrap_or(end)).round();
+    let (left, right) = (from.max(-1.0), to.min(width + 1.0));
+    if right > left {
+        let range = pen.rect(left, 0.0, right - left, layout::RULER - 1.0);
+        window.paint_quad(fill(range, theme::with_alpha(theme::ink(), 0.06)));
+        let foot = pen.rect(left, layout::RULER - 4.0, right - left, 3.0);
+        window.paint_quad(fill(foot, theme::with_alpha(theme::ink(), 0.2)));
+    }
+    for (mark, x) in [(mark_in, from), (mark_out, to)] {
+        if mark.is_some() && (-1.0..width + 1.0).contains(&x) {
+            let line = pen.rect(x, layout::RULER - 11.0, 1.0, 10.0);
+            window.paint_quad(fill(line, theme::ink()));
+        }
+    }
 }
 
 /// Kerf's cursor: a line in its blue with its light either side, and its name.

@@ -89,6 +89,7 @@ pub struct Workspace {
     errors: u64,
     /// A folder that was no project yet: its media comes in once kerfd has it.
     start_media: Option<PathBuf>,
+    window_title: String,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -104,6 +105,7 @@ impl Workspace {
         let formats = cx.new(|cx| crate::inspector::FormatBank::new(session.clone(), window, cx));
         let collab = cx.new(|cx| crate::finish::Collab::new(session.clone(), window, cx));
         let sidebar_open = session.read(cx).prefs.sidebar_open;
+        sidebar.update(cx, |sidebar, cx| sidebar.set_shown(sidebar_open, cx));
         let title_field =
             cx.new(|cx| TextInput::new(cx, "Conversation title").with_style(text::TITLE));
         let title_focus = title_field.read(cx).focus_handle(cx);
@@ -125,6 +127,11 @@ impl Workspace {
                             window.focus(&this.focus_handle);
                         }
                     }
+                    SidebarEvent::MenuOpened => {
+                        this.title_menu = false;
+                        this.app_menu = false;
+                        cx.notify();
+                    }
                 },
             ),
             cx.subscribe_in(
@@ -142,6 +149,28 @@ impl Workspace {
             cx.on_blur(&title_focus, window, |this, _, cx| {
                 this.finish_title_rename(true, cx)
             }),
+            // Esc puts an open menu away wherever the keys are: before the
+            // timeline's Esc (Reject Proposal) or a field's has it. A menu's
+            // press leaves the keys where they were.
+            {
+                let this = cx.weak_entity();
+                let handle = window.window_handle();
+                cx.intercept_keystrokes(move |event, window, cx| {
+                    let keystroke = &event.keystroke;
+                    if window.window_handle() != handle
+                        || keystroke.key != "escape"
+                        || keystroke.modifiers.modified()
+                    {
+                        return;
+                    }
+                    if this
+                        .update(cx, |this, cx| this.close_menus(cx))
+                        .unwrap_or(false)
+                    {
+                        cx.stop_propagation();
+                    }
+                })
+            },
         ];
         let focus_handle = cx.focus_handle();
         window.focus(&focus_handle);
@@ -176,6 +205,7 @@ impl Workspace {
             error: None,
             errors: 0,
             start_media: None,
+            window_title: String::new(),
             _subscriptions: subscriptions,
         }
     }
@@ -202,6 +232,15 @@ impl Workspace {
                     .snapshot
                     .proposal_timeline
                     .is_some();
+            // The window's title follows the project and its sequence.
+            let title = {
+                let session = self.session.read(cx);
+                window_title(&session.project_name(), session.timeline())
+            };
+            if title != self.window_title {
+                window.set_window_title(&title);
+                self.window_title = title;
+            }
             if has_clips && !self.panel_open && !self.panel_by_hand {
                 self.panel_open = true;
                 self.panel_shown.go(1.0, scene::STAGE);
@@ -391,6 +430,9 @@ impl Workspace {
 
     fn set_sidebar(&mut self, open: bool, cx: &mut Context<Self>) {
         self.sidebar_open = open;
+        self.app_menu = false;
+        self.sidebar
+            .update(cx, |sidebar, cx| sidebar.set_shown(open, cx));
         self.sidebar_shown
             .go(if open { 1.0 } else { 0.0 }, scene::PANEL);
         self.session.update(cx, |session, _| {
@@ -487,6 +529,7 @@ impl Workspace {
     }
 
     fn put_modal(&mut self, view: AnyView, cx: &mut Context<Self>) {
+        self.close_menus(cx);
         self.modals_opened += 1;
         self.modal = Some((view, self.modals_opened));
         cx.notify();
@@ -712,18 +755,32 @@ impl Workspace {
     /// open over the window): stops a preview rendering, else puts the
     /// Media band away.
     fn escape(&mut self, cx: &mut Context<Self>) {
+        if self.close_menus(cx) {
+            return;
+        }
         let rendering = self.session.read(cx).state.preview.rendering();
-        if self.title_menu || self.app_menu {
-            self.title_menu = false;
-            self.app_menu = false;
-            cx.notify();
-        } else if rendering {
+        if rendering {
             self.session.update(cx, |session, _| {
                 session.send(serde_json::json!({"type": "preview_stop"}));
             });
         } else if self.media_open {
             self.set_media(false, cx);
         }
+    }
+
+    /// Puts away whichever menu is open: the title's, the toolbar's app
+    /// menu, the sidebar's. Whether one was.
+    fn close_menus(&mut self, cx: &mut Context<Self>) -> bool {
+        let mine = self.title_menu || self.app_menu;
+        if mine {
+            self.title_menu = false;
+            self.app_menu = false;
+            cx.notify();
+        }
+        let sidebar = self
+            .sidebar
+            .update(cx, |sidebar, cx| sidebar.close_menus(cx));
+        mine || sidebar
     }
 
     fn sidebar_width(&self, session: &Session) -> f32 {
@@ -812,6 +869,8 @@ impl Workspace {
                         cx.listener(|this, _: &MouseDownEvent, _, cx| {
                             this.app_menu = !this.app_menu;
                             this.title_menu = false;
+                            this.sidebar
+                                .update(cx, |sidebar, cx| sidebar.close_menus(cx));
                             cx.notify();
                         }),
                     )
@@ -860,6 +919,8 @@ impl Workspace {
                             "toolbar-title",
                             cx.listener(|this, event: &MouseDownEvent, window, cx| {
                                 this.app_menu = false;
+                                this.sidebar
+                                    .update(cx, |sidebar, cx| sidebar.close_menus(cx));
                                 if event.click_count >= 2 {
                                     this.title_menu = false;
                                     this.begin_title_rename(window, cx);
@@ -1719,6 +1780,24 @@ pub fn folder_media(folder: &Path) -> Vec<PathBuf> {
         .collect();
     files.sort();
     files
+}
+
+/// The window's title: the project, and its sequence when that is named
+/// otherwise ("Atlas · 30 s spot v7").
+pub fn window_title(project: &str, timeline: &crate::model::Timeline) -> String {
+    let sequence = timeline
+        .sequence
+        .as_deref()
+        .and_then(|id| timeline.sequences.iter().find(|sequence| sequence.id == id))
+        .map(|sequence| sequence.name.trim())
+        .unwrap_or_default();
+    if sequence.is_empty() || sequence == project {
+        project.to_owned()
+    } else if project.is_empty() {
+        sequence.to_owned()
+    } else {
+        format!("{project} · {sequence}")
+    }
 }
 
 /// Whether `folder` is no project yet: it has no project.kerf.

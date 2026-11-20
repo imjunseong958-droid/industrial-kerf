@@ -1,28 +1,32 @@
-//! Settings: what answers in the conversation, its key, how the editor
-//! looks and moves, its shortcuts, and about Kerf.
+//! Settings: Kerf's account, what answers in the conversation and its key,
+//! the person's shot models, how the editor looks and moves, its shortcuts,
+//! MCP both ways, and about Kerf.
 //!
-//! A panel over the dimmed window (the workspace draws the dim and the
-//! panel's rise): its pages named down its side, each page rows of a
-//! setting's name and what it does, its control at the row's end, a
-//! hairline between one and the next. A page chosen fades in over the last.
-//! Esc, its close, or a press on the dim gives the window back.
+//! A panel over the dimmed window (the workspace, or the launcher with no
+//! project, draws the dim and the panel's rise): its pages named down its
+//! side, each page rows of a setting's name and what it does, its control
+//! at the row's end, a hairline between one and the next. A page chosen
+//! fades in over the last. Esc, its close, or a press on the dim gives the
+//! window back. With no project (from the launcher) what reaches Kerf
+//! through a project, the account and the models, says so.
 
 use crate::commands::{self, RunCommand};
 use crate::icons::Icon;
 use crate::input::{InputEvent, TextInput};
 use crate::launcher::{ago, app_icon, field, home_relative};
 use crate::motion;
-use crate::prefs::{Keymap, Permissions, Provider};
-use crate::session::Session;
+use crate::prefs::{ApiMode, Keymap, Permissions, Provider, CLAUDE_CODE_MODELS};
+use crate::session::{BridgeEvent, Session};
 use crate::theme::{self, height, radius, text, Face};
 use crate::ui::{self, icon_button};
 use gpui::{
-    actions, div, img, prelude::*, px, Action, AnimationExt, AnyElement, App, Context, ElementId,
-    Entity, EventEmitter, FocusHandle, Focusable, FontWeight, KeyBinding, Keystroke, ScrollHandle,
-    SharedString, Subscription, Task, Window,
+    actions, div, img, prelude::*, px, Action, AnimationExt, AnyElement, App, ClipboardItem,
+    Context, ElementId, Entity, EntityInputHandler, EventEmitter, FocusHandle, Focusable,
+    FontWeight, KeyBinding, Keystroke, MouseButton, ScrollHandle, SharedString, Subscription, Task,
+    Window,
 };
-use serde_json::Value;
-use std::path::PathBuf;
+use serde_json::{json, Value};
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 actions!(settings, [Close]);
@@ -38,46 +42,103 @@ const HEAD: f32 = 48.0;
 const NAV: f32 = 184.0;
 /// A field at a row's end: a key or a URL is long.
 const FIELD: f32 = 280.0;
+/// The sign-in token's field, beside its button.
+const TOKEN_FIELD: f32 = 220.0;
 /// A page's edges, and the air between a row's words and its control.
 const PAGE_SIDE: f32 = 24.0;
 const PAGE_TOP: f32 = 20.0;
 const ROW_GAP: f32 = 24.0;
+/// The MCP servers' editor, and Kerf's own config shown under it.
+const SERVERS_HEIGHT: f32 = 160.0;
+const CONFIG_HEIGHT: f32 = 132.0;
+
+/// What the project's servers file holds before it is written.
+const NO_SERVERS: &str = "{\n  \"mcpServers\": {}\n}\n";
 
 pub enum SettingsEvent {
     Dismiss,
 }
 
+/// Settings' pages, down its side in this order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Page {
-    Kerf,
+pub enum Page {
+    Account,
+    Chat,
+    Models,
     Appearance,
     Shortcuts,
+    Mcp,
     About,
 }
 
 impl Page {
-    const ALL: [Page; 4] = [Page::Kerf, Page::Appearance, Page::Shortcuts, Page::About];
+    pub const ALL: [Page; 7] = [
+        Page::Account,
+        Page::Chat,
+        Page::Models,
+        Page::Appearance,
+        Page::Shortcuts,
+        Page::Mcp,
+        Page::About,
+    ];
 
-    fn label(self) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
-            Page::Kerf => "Kerf",
+            Page::Account => "Account",
+            Page::Chat => "Chat",
+            Page::Models => "Models",
             Page::Appearance => "Appearance",
             Page::Shortcuts => "Shortcuts",
+            Page::Mcp => "MCP",
             Page::About => "About",
         }
     }
 
     fn icon(self) -> Icon {
         match self {
-            Page::Kerf => Icon::Sparkle,
+            Page::Account => Icon::Lock,
+            Page::Chat => Icon::Chat,
+            Page::Models => Icon::Sparkle,
             Page::Appearance => Icon::Eye,
             Page::Shortcuts => Icon::Media,
+            Page::Mcp => Icon::Gear,
             Page::About => Icon::Film,
         }
     }
 
     fn index(self) -> usize {
         Page::ALL.iter().position(|page| *page == self).unwrap_or(0)
+    }
+}
+
+/// The client Kerf's MCP config is shown for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum McpClient {
+    Cursor,
+    Claude,
+    Codex,
+}
+
+impl McpClient {
+    pub const ALL: [McpClient; 3] = [McpClient::Cursor, McpClient::Claude, McpClient::Codex];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            McpClient::Cursor => "Cursor",
+            McpClient::Claude => "Claude",
+            McpClient::Codex => "Codex",
+        }
+    }
+
+    /// Where the client keeps it.
+    fn place(self) -> &'static str {
+        match self {
+            McpClient::Cursor => "Goes in Cursor's MCP settings, or the project's .cursor/mcp.json",
+            McpClient::Claude => {
+                "Goes in Claude Desktop's claude_desktop_config.json, or a project's .mcp.json for Claude Code"
+            }
+            McpClient::Codex => "Goes in ~/.codex/config.toml",
+        }
     }
 }
 
@@ -98,7 +159,7 @@ pub struct SettingsView {
     /// The page left, which the chosen one fades in over, and when.
     previous: Option<(Page, Instant)>,
     /// Each page keeps where it was scrolled to.
-    scroll: [ScrollHandle; 4],
+    scroll: [ScrollHandle; 7],
     model: Entity<TextInput>,
     key: Entity<TextInput>,
     base_url: Entity<TextInput>,
@@ -106,6 +167,19 @@ pub struct SettingsView {
     key_kept: String,
     /// What saving the key came to, and whether it failed.
     key_status: Option<(SharedString, bool)>,
+    /// Kerf's sign-in token, while it is typed.
+    token: Entity<TextInput>,
+    /// A sign-in or out sent, its `cloud` answer awaited.
+    signing: bool,
+    /// The last `models` event: the person's models file and what it names.
+    models: Option<Value>,
+    /// The project's `.kerf/mcp.json`, as edited here.
+    servers: Entity<TextInput>,
+    /// What loading or saving the servers came to, and whether it failed.
+    servers_status: Option<(SharedString, bool)>,
+    client: McpClient,
+    /// "Copied" shows on the copy button until this ends.
+    copied: Option<Task<()>>,
     /// The registry's commands in the keymap chosen.
     catalog: (Keymap, Vec<commands::Command>),
     update: Update,
@@ -118,14 +192,31 @@ impl EventEmitter<SettingsEvent> for SettingsView {}
 
 impl SettingsView {
     pub fn new(session: Entity<Session>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        Self::new_at(session, Page::Chat, window, cx)
+    }
+
+    /// Settings open on `page`.
+    pub fn new_at(
+        session: Entity<Session>,
+        page: Page,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         bind_close(cx);
-        let (provider, model_text, base_url_text, keymap) = {
-            let prefs = &session.read(cx).prefs;
+        // What another window chose since this one read the settings.
+        session.update(cx, |session, _| {
+            session.prefs.refresh();
+            session.forget_keys();
+        });
+        let (provider, model_text, base_url_text, keymap, project) = {
+            let session = session.read(cx);
+            let prefs = &session.prefs;
             (
                 prefs.provider,
                 prefs.model().to_owned(),
-                prefs.openai_base_url.clone(),
+                prefs.base_url().to_owned(),
                 prefs.keymap,
+                session.project.clone(),
             )
         };
         let key_text = session
@@ -142,14 +233,28 @@ impl SettingsView {
             input
         });
         let base_url = cx.new(|cx| {
-            let mut input = TextInput::new(cx, "https://api.openai.com/v1");
+            let mut input = TextInput::new(cx, base_url_placeholder(provider));
             input.set_text(base_url_text, cx);
+            input
+        });
+        let token = cx.new(|cx| TextInput::new(cx, "Sign-in token").secret());
+        let (servers_text, servers_status) = project_servers(project.as_deref());
+        let servers = cx.new(|cx| {
+            let mut input = TextInput::new(cx, NO_SERVERS.trim())
+                .multiline()
+                .max_height(px(SERVERS_HEIGHT));
+            input.set_text(servers_text, cx);
             input
         });
         let mut subscriptions = vec![
             cx.subscribe_in(&model, window, Self::model_event),
             cx.subscribe_in(&key, window, Self::key_event),
             cx.subscribe_in(&base_url, window, Self::base_url_event),
+            cx.subscribe_in(&token, window, Self::token_event),
+            cx.subscribe_in(&servers, window, Self::servers_event),
+            cx.subscribe(&session, |this, _, event: &BridgeEvent, cx| {
+                this.bridge_event(&event.0, cx)
+            }),
         ];
         // A field shows its ring while it is typed in, and what was typed is
         // kept when it is left.
@@ -162,10 +267,15 @@ impl SettingsView {
                 cx.notify();
             }));
         }
-        Self {
+        for input in [&token, &servers] {
+            let handle = input.read(cx).focus_handle(cx);
+            subscriptions.push(cx.on_focus(&handle, window, |_, _, cx| cx.notify()));
+            subscriptions.push(cx.on_blur(&handle, window, |_, _, cx| cx.notify()));
+        }
+        let mut view = Self {
             session,
             focus_handle: cx.focus_handle(),
-            page: Page::Kerf,
+            page,
             previous: None,
             scroll: Default::default(),
             model,
@@ -173,12 +283,21 @@ impl SettingsView {
             base_url,
             key_kept: key_text.trim().to_owned(),
             key_status: None,
+            token,
+            signing: false,
+            models: None,
+            servers,
+            servers_status,
+            client: McpClient::Cursor,
+            copied: None,
             catalog: (keymap, commands::catalog(keymap.wire())),
             update: Update::Idle,
             crashes: kerf_bridge::crash_reports(),
             about: kerf_bridge::about(),
             _subscriptions: subscriptions,
-        }
+        };
+        view.entered(page, cx);
+        view
     }
 
     /// Keeps what is typed and gives the window back.
@@ -194,20 +313,53 @@ impl SettingsView {
         match action.id.as_ref() {
             "app.quit" => cx.propagate(),
             "app.preferences" => self.dismiss(cx),
+            "help.about" => self.show_page(Page::About, cx),
+            "app.account" => self.show_page(Page::Account, cx),
             _ => {}
         }
     }
 
-    fn show(&mut self, page: Page, cx: &mut Context<Self>) {
+    /// Goes to `page`, which fades in over the one left.
+    pub fn show_page(&mut self, page: Page, cx: &mut Context<Self>) {
         if page == self.page {
             return;
         }
-        if page == Page::About {
-            self.crashes = kerf_bridge::crash_reports();
-        }
         self.previous = Some((self.page, Instant::now()));
         self.page = page;
+        self.entered(page, cx);
         cx.notify();
+    }
+
+    /// What a page asks for as it shows: Kerf's account, the person's
+    /// models, the crash reports kept, as they are now.
+    fn entered(&mut self, page: Page, cx: &mut Context<Self>) {
+        match page {
+            Page::Account | Page::Chat => {
+                self.session
+                    .update(cx, |session, _| session.ask_bridge("cloud_refresh"));
+            }
+            Page::Models => {
+                self.session
+                    .update(cx, |session, _| session.ask_bridge("models"));
+            }
+            Page::About => self.crashes = kerf_bridge::crash_reports(),
+            Page::Appearance | Page::Shortcuts | Page::Mcp => {}
+        }
+    }
+
+    fn bridge_event(&mut self, event: &Value, cx: &mut Context<Self>) {
+        match event["type"].as_str() {
+            Some("cloud") => {
+                crate::app::hear_cloud(event, cx);
+                self.signing = false;
+                cx.notify();
+            }
+            Some("models") => {
+                self.models = Some(event.clone());
+                cx.notify();
+            }
+            _ => {}
+        }
     }
 
     /// A segmented control's or a switch's choice, carried to `this`.
@@ -222,7 +374,123 @@ impl SettingsView {
         }
     }
 
-    // ------------------------------------------------------------ Kerf
+    // ------------------------------------------------------------ Account
+
+    fn token_event(
+        &mut self,
+        _: &Entity<TextInput>,
+        event: &InputEvent,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            InputEvent::Changed => {}
+            InputEvent::Submit => self.sign_in(cx),
+            InputEvent::Cancel => self.dismiss(cx),
+        }
+    }
+
+    fn sign_in(&mut self, cx: &mut Context<Self>) {
+        let token = self.token.read(cx).text().trim().to_owned();
+        if token.is_empty() {
+            return;
+        }
+        let sent = self
+            .session
+            .update(cx, |session, _| session.cloud_sign(Some(&token)));
+        if sent {
+            self.signing = true;
+            self.token.update(cx, |input, cx| input.clear(cx));
+        }
+        cx.notify();
+    }
+
+    fn sign_out(&mut self, cx: &mut Context<Self>) {
+        if self
+            .session
+            .update(cx, |session, _| session.cloud_sign(None))
+        {
+            self.signing = true;
+        }
+        cx.notify();
+    }
+
+    fn use_kerf(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.set_provider(Provider::Cloud, window, cx);
+    }
+
+    fn account_page(&self, window: &Window, cx: &Context<Self>) -> Vec<AnyElement> {
+        let session = self.session.read(cx);
+        let connected = session.has_project();
+        let provider = session.prefs.provider;
+        let cloud = crate::app::cloud(cx);
+        let status = account_status(cloud);
+        let words: SharedString = if self.signing {
+            "Asking Kerf…".into()
+        } else if cloud.is_some() {
+            status.words.into()
+        } else if connected {
+            "Asking Kerf…".into()
+        } else {
+            "Kerf reaches your account through an open project. Open one to sign in".into()
+        };
+        let controls = div()
+            .flex()
+            .flex_none()
+            .items_center()
+            .gap(px(theme::space::S8))
+            .when(connected && status.sign_in && !self.signing, |controls| {
+                controls
+                    .child(
+                        field(&self.token, window, cx)
+                            .w(px(TOKEN_FIELD))
+                            .flex_none(),
+                    )
+                    .child(
+                        ui::button("settings-sign-in", "Sign In")
+                            .primary()
+                            .on_click(cx.listener(|this, _, _, cx| this.sign_in(cx))),
+                    )
+            })
+            .when(connected && status.sign_out && !self.signing, |controls| {
+                controls.child(
+                    ui::button("settings-sign-out", "Sign Out")
+                        .on_click(cx.listener(|this, _, _, cx| this.sign_out(cx))),
+                )
+            });
+        let chat: AnyElement = if provider == Provider::Cloud {
+            ui::chip("In use", theme::pos()).into_any_element()
+        } else {
+            ui::button("settings-use-kerf", "Use Kerf")
+                .on_click(cx.listener(|this, _, window, cx| this.use_kerf(window, cx)))
+                .into_any_element()
+        };
+        let chat_hint = if provider == Provider::Cloud {
+            "Kerf's hosted model answers in the conversation, on your account".to_owned()
+        } else {
+            format!(
+                "{} answers in the conversation now. Use Kerf to have your account's model answer",
+                provider.label()
+            )
+        };
+        vec![group(vec![
+            row(
+                "Kerf account",
+                Some(words),
+                Some(controls.into_any_element()),
+                Vec::new(),
+            ),
+            row(
+                "Chat on Kerf",
+                Some(chat_hint.into()),
+                Some(chat),
+                Vec::new(),
+            ),
+        ])
+        .into_any_element()]
+    }
+
+    // ------------------------------------------------------------ Chat
 
     fn model_event(
         &mut self,
@@ -238,7 +506,7 @@ impl SettingsView {
                     .update(cx, |session, _| match session.prefs.provider {
                         Provider::Anthropic => session.prefs.anthropic_model = text,
                         Provider::Openai => session.prefs.openai_model = text,
-                        Provider::ClaudeCode => {}
+                        Provider::ClaudeCode | Provider::Cloud => {}
                     });
             }
             InputEvent::Submit => self.session.read(cx).save_prefs(),
@@ -257,7 +525,11 @@ impl SettingsView {
             InputEvent::Changed => {
                 let text = input.read(cx).text().trim().to_owned();
                 self.session
-                    .update(cx, |session, _| session.prefs.openai_base_url = text);
+                    .update(cx, |session, _| match session.prefs.provider {
+                        Provider::Anthropic => session.prefs.anthropic_base_url = text,
+                        Provider::Openai => session.prefs.openai_base_url = text,
+                        Provider::ClaudeCode | Provider::Cloud => {}
+                    });
             }
             InputEvent::Submit => self.session.read(cx).save_prefs(),
             InputEvent::Cancel => self.dismiss(cx),
@@ -314,7 +586,10 @@ impl SettingsView {
             session.prefs.provider = provider;
             session.save_prefs();
         });
-        let model = self.session.read(cx).prefs.model().to_owned();
+        let (model, base_url) = {
+            let prefs = &self.session.read(cx).prefs;
+            (prefs.model().to_owned(), prefs.base_url().to_owned())
+        };
         let key = self
             .session
             .update(cx, |session, _| session.api_key(provider))
@@ -326,6 +601,39 @@ impl SettingsView {
             input.set_text(key, cx);
         });
         self.model.update(cx, |input, cx| input.set_text(model, cx));
+        self.base_url.update(cx, |input, cx| {
+            input.set_placeholder(base_url_placeholder(provider), cx);
+            input.set_text(base_url, cx);
+        });
+        if provider == Provider::Cloud {
+            self.session
+                .update(cx, |session, _| session.ask_bridge("cloud_refresh"));
+        }
+        cx.notify();
+    }
+
+    fn set_api_mode(&mut self, mode: ApiMode, _: &mut Window, cx: &mut Context<Self>) {
+        self.session.update(cx, |session, _| {
+            session.prefs.openai_api_mode = mode;
+            session.save_prefs();
+        });
+        cx.notify();
+    }
+
+    fn set_claude_code_model(
+        &mut self,
+        model: &'static str,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.session.update(cx, |session, _| {
+            session.prefs.claude_code_model = if model == "default" {
+                String::new()
+            } else {
+                model.to_owned()
+            };
+            session.save_prefs();
+        });
         cx.notify();
     }
 
@@ -342,15 +650,7 @@ impl SettingsView {
         cx.notify();
     }
 
-    fn set_mcp(&mut self, on: bool, _: &mut Window, cx: &mut Context<Self>) {
-        self.session.update(cx, |session, _| {
-            session.prefs.mcp_enabled = on;
-            session.save_prefs();
-        });
-        cx.notify();
-    }
-
-    fn kerf_page(&self, window: &Window, cx: &Context<Self>) -> Vec<AnyElement> {
+    fn chat_page(&self, window: &Window, cx: &Context<Self>) -> Vec<AnyElement> {
         let session = self.session.read(cx);
         let prefs = &session.prefs;
         let provider = prefs.provider;
@@ -370,59 +670,122 @@ impl SettingsView {
             ),
             Vec::new(),
         )];
-        if let Some(env) = provider.key_env() {
-            let status = self.key_status.clone().map(|(said, failed)| {
-                ui::label(
-                    said,
-                    text::CONTROL,
-                    if failed { theme::neg() } else { theme::pos() },
-                )
-                .into_any_element()
-            });
-            rows.push(row(
-                "API key",
+        let text_row = |label: &'static str, hint: SharedString, input: &Entity<TextInput>| {
+            row(
+                label,
+                Some(hint),
                 Some(
-                    format!("Kept in your system keychain; {env} is used when none is kept").into(),
-                ),
-                Some(
-                    field(&self.key, window, cx)
-                        .w(px(FIELD))
-                        .flex_none()
-                        .into_any_element(),
-                ),
-                status.into_iter().collect(),
-            ));
-            rows.push(row(
-                "Model",
-                Some("Empty for the service's default".into()),
-                Some(
-                    field(&self.model, window, cx)
+                    field(input, window, cx)
                         .w(px(FIELD))
                         .flex_none()
                         .into_any_element(),
                 ),
                 Vec::new(),
-            ));
-            if provider == Provider::Openai {
+            )
+        };
+        match provider {
+            Provider::Cloud => {
+                let words = if session.has_project() || crate::app::cloud(cx).is_some() {
+                    account_status(crate::app::cloud(cx)).words
+                } else {
+                    "Your Kerf account is read with a project open".to_owned()
+                };
                 rows.push(row(
-                    "Base URL",
-                    Some("Any service that speaks the OpenAI API; empty for OpenAI's own".into()),
+                    "Kerf account",
+                    Some(words.into()),
                     Some(
-                        field(&self.base_url, window, cx)
-                            .w(px(FIELD))
-                            .flex_none()
+                        ui::button("settings-account", "Account…")
+                            .on_click(
+                                cx.listener(|this, _, _, cx| this.show_page(Page::Account, cx)),
+                            )
                             .into_any_element(),
                     ),
                     Vec::new(),
                 ));
             }
-        } else {
-            rows.push(row(
-                "API key",
-                Some("Claude Code keeps its own sign-in, so Kerf needs no key for it".into()),
-                Some(ui::chip("Not needed", theme::ink2()).into_any_element()),
-                Vec::new(),
-            ));
+            Provider::Anthropic | Provider::Openai => {
+                let env = provider.key_env().unwrap_or_default();
+                let status = self.key_status.clone().map(|(said, failed)| {
+                    ui::label(
+                        said,
+                        text::CONTROL,
+                        if failed { theme::neg() } else { theme::pos() },
+                    )
+                    .into_any_element()
+                });
+                rows.push(row(
+                    "API key",
+                    Some(
+                        format!("Kept in your system keychain; {env} is used when none is kept")
+                            .into(),
+                    ),
+                    Some(
+                        field(&self.key, window, cx)
+                            .w(px(FIELD))
+                            .flex_none()
+                            .into_any_element(),
+                    ),
+                    status.into_iter().collect(),
+                ));
+                let base_hint = if provider == Provider::Openai {
+                    "Any service that speaks the OpenAI API; empty for OpenAI's own"
+                } else {
+                    "A proxy or gateway that speaks Anthropic's API; empty for Anthropic's own"
+                };
+                rows.push(text_row("Base URL", base_hint.into(), &self.base_url));
+                rows.push(text_row(
+                    "Model",
+                    "Empty for the service's default".into(),
+                    &self.model,
+                ));
+                if provider == Provider::Openai {
+                    let modes = ApiMode::ALL.map(|mode| (mode, mode.label()));
+                    rows.push(row(
+                        "API shape",
+                        Some("What the service serves: /chat/completions or /responses".into()),
+                        Some(
+                            ui::segmented(
+                                "settings-api-mode",
+                                &modes,
+                                prefs.openai_api_mode,
+                                Self::chooser(cx, Self::set_api_mode),
+                            )
+                            .into_any_element(),
+                        ),
+                        Vec::new(),
+                    ));
+                }
+            }
+            Provider::ClaudeCode => {
+                rows.push(row(
+                    "API key",
+                    Some(
+                        "Claude Code keeps its own sign-in, so Kerf needs no key for it. Sign in once by running claude in a terminal"
+                            .into(),
+                    ),
+                    Some(ui::chip("Not needed", theme::ink2()).into_any_element()),
+                    Vec::new(),
+                ));
+                let models = CLAUDE_CODE_MODELS.map(|model| (model, claude_code_label(model)));
+                let chosen = CLAUDE_CODE_MODELS
+                    .into_iter()
+                    .find(|model| *model == prefs.claude_code_model)
+                    .unwrap_or("default");
+                rows.push(row(
+                    "Model",
+                    Some("Default leaves the choice to Claude Code".into()),
+                    Some(
+                        ui::segmented(
+                            "settings-claude-code-model",
+                            &models,
+                            chosen,
+                            Self::chooser(cx, Self::set_claude_code_model),
+                        )
+                        .into_any_element(),
+                    ),
+                    Vec::new(),
+                ));
+            }
         }
         rows.push(row(
             "Permissions",
@@ -438,23 +801,383 @@ impl SettingsView {
             ),
             Vec::new(),
         ));
-        let project_servers = session
-            .project
-            .as_ref()
-            .map(|project| home_relative(&project.join(".kerf").join("mcp.json")))
-            .unwrap_or_else(|| "<project>/.kerf/mcp.json".into());
-        rows.push(row(
-            "External MCP tools",
-            Some("Lets Kerf call local MCP servers, over stdio. The servers in these files are attached; they may hold credentials".into()),
-            Some(ui::switch("settings-mcp", prefs.mcp_enabled, Self::chooser(cx, Self::set_mcp)).into_any_element()),
-            vec![div()
+        vec![group(rows).into_any_element()]
+    }
+
+    // ------------------------------------------------------------ Models
+
+    fn reload_models(&mut self, cx: &mut Context<Self>) {
+        self.session
+            .update(cx, |session, _| session.ask_bridge("models"));
+    }
+
+    fn models_page(&self, cx: &Context<Self>) -> Vec<AnyElement> {
+        let connected = self.session.read(cx).has_project();
+        let event = self.models.as_ref();
+        let file = event
+            .and_then(|event| event["file"].as_str())
+            .filter(|file| !file.is_empty())
+            .map(PathBuf::from)
+            .unwrap_or_else(models_file);
+        let exists = event
+            .and_then(|event| event["exists"].as_bool())
+            .unwrap_or_else(|| file.is_file());
+        let listed: Vec<Value> = event
+            .and_then(|event| event["models"].as_array())
+            .cloned()
+            .unwrap_or_default();
+        let error = event.and_then(|event| event["error"].as_str());
+        let mut below: Vec<AnyElement> = Vec::new();
+        let note: Option<(String, bool)> = if let Some(error) = error {
+            Some((format!("The models file does not read: {error}"), true))
+        } else if !listed.is_empty() {
+            None
+        } else if !connected {
+            Some(("Models are read with a project open".to_owned(), false))
+        } else if event.is_none() {
+            Some(("Reading…".to_owned(), false))
+        } else if exists {
+            Some(("Your models file names no model yet".to_owned(), false))
+        } else {
+            Some((
+                "No model is set up: there is no models file yet".to_owned(),
+                false,
+            ))
+        };
+        if let Some((note, failed)) = note {
+            below.push(
+                ui::label(
+                    note,
+                    text::CONTROL,
+                    if failed { theme::neg() } else { theme::ink3() },
+                )
+                .into_any_element(),
+            );
+        }
+        below.extend(listed.iter().map(|model| {
+            let name = model["name"].as_str().unwrap_or("model").to_owned();
+            div()
                 .flex()
                 .flex_col()
-                .child(ui::line("~/.kerf/mcp.json", text::MONO_SMALL, theme::ink3()))
-                .child(ui::line(project_servers, text::MONO_SMALL, theme::ink3()))
-                .into_any_element()],
-        ));
-        vec![group(rows).into_any_element()]
+                .gap(px(theme::space::S2))
+                .py(px(theme::space::S4))
+                .child(
+                    div()
+                        .flex()
+                        .items_baseline()
+                        .gap(px(theme::space::S8))
+                        .child(ui::label(name, text::BODY_NAME, theme::ink()))
+                        .child(ui::label(
+                            model_summary(model),
+                            text::CONTROL,
+                            theme::ink2(),
+                        )),
+                )
+                .when_some(
+                    model["about"].as_str().filter(|about| !about.is_empty()),
+                    |column, about| {
+                        column.child(ui::label(about.to_owned(), text::CONTROL, theme::ink3()))
+                    },
+                )
+                .when_some(
+                    model["guide"].as_str().filter(|guide| !guide.is_empty()),
+                    |column, guide| {
+                        column.child(ui::label(
+                            format!("Guide: {guide}"),
+                            text::MONO_SMALL,
+                            theme::ink3(),
+                        ))
+                    },
+                )
+                .into_any_element()
+        }));
+        below.push(
+            ui::label(
+                format!(
+                    "{}{}",
+                    home_relative(&file),
+                    if exists { "" } else { " (not there yet)" }
+                ),
+                text::MONO_SMALL,
+                theme::ink3(),
+            )
+            .into_any_element(),
+        );
+        let shown = file.clone();
+        let buttons = div()
+            .flex()
+            .flex_none()
+            .gap(px(theme::space::S8))
+            .child(
+                ui::button("settings-models-show", "Show in Folder").on_click(move |_, _, cx| {
+                    if shown.is_file() {
+                        cx.reveal_path(&shown);
+                    } else if let Some(folder) = shown.parent() {
+                        // Not there yet: its folder, to put it in.
+                        let _ = std::fs::create_dir_all(folder);
+                        cx.reveal_path(folder);
+                    }
+                }),
+            )
+            .child(
+                ui::button("settings-models-reload", "Reload")
+                    .disabled(!connected)
+                    .on_click(cx.listener(|this, _, _, cx| this.reload_models(cx))),
+            );
+        vec![group(vec![
+            row(
+                "Shot models",
+                Some("Video and image models your recipes can name, from your models file".into()),
+                Some(buttons.into_any_element()),
+                below,
+            ),
+            row(
+                "File format",
+                Some("Each entry names a program to run with {request} and, under takes, the size, rate, longest shot and files (guide, first, last, ref) its model accepts".into()),
+                None,
+                Vec::new(),
+            ),
+            row(
+                "Built in",
+                Some("Scene cuts, speech, tracking and cut-outs run on this computer, with no setup".into()),
+                None,
+                Vec::new(),
+            ),
+        ])
+        .into_any_element()]
+    }
+
+    // ------------------------------------------------------------ MCP
+
+    fn set_mcp(&mut self, on: bool, _: &mut Window, cx: &mut Context<Self>) {
+        self.session.update(cx, |session, _| {
+            session.prefs.mcp_enabled = on;
+            session.save_prefs();
+        });
+        let said = if on {
+            "On from the next request"
+        } else {
+            "Off from the next request"
+        };
+        self.servers_status = Some((said.into(), false));
+        cx.notify();
+    }
+
+    fn servers_event(
+        &mut self,
+        input: &Entity<TextInput>,
+        event: &InputEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            InputEvent::Changed => {}
+            // Return starts a new line: saving is Save and Apply's.
+            InputEvent::Submit => input.update(cx, |input, cx| {
+                input.replace_text_in_range(None, "\n", window, cx)
+            }),
+            InputEvent::Cancel => self.dismiss(cx),
+        }
+    }
+
+    /// Checks the servers typed and writes them to the project's
+    /// `.kerf/mcp.json`; the next request takes them.
+    fn save_servers(&mut self, cx: &mut Context<Self>) {
+        let Some(project) = self.session.read(cx).project.clone() else {
+            return;
+        };
+        let text = self.servers.read(cx).text().to_owned();
+        let saved =
+            validate_mcp_config(&text).and_then(|()| write_project_servers(&project, &text));
+        self.servers_status = Some(match saved {
+            Ok(()) => {
+                self.session.update(cx, |session, _| {
+                    session.prefs.mcp_config_version += 1;
+                    session.save_prefs();
+                });
+                let said = if self.session.read(cx).prefs.mcp_enabled {
+                    "Saved the project's .kerf/mcp.json. It applies from the next request"
+                } else {
+                    "Saved the project's .kerf/mcp.json. It applies once External MCP tools is on"
+                };
+                (said.into(), false)
+            }
+            Err(error) => (error.into(), true),
+        });
+        cx.notify();
+    }
+
+    /// Puts the file at `path` in the editor; `imported` when it is another
+    /// client's, which is saved only by Save and Apply.
+    fn load_servers(&mut self, path: &Path, imported: bool, cx: &mut Context<Self>) {
+        let shown = home_relative(path);
+        self.servers_status = Some(match std::fs::read_to_string(path) {
+            Err(error) => (format!("Could not read {shown}: {error}").into(), true),
+            Ok(text) => {
+                let checked = validate_mcp_config(&text);
+                self.servers
+                    .update(cx, |input, cx| input.set_text(text, cx));
+                match (checked, imported) {
+                    (Err(error), _) => (format!("Loaded {shown}. {error}").into(), true),
+                    (Ok(()), true) => (
+                        format!(
+                            "Loaded {shown} into the editor only. Review it, then Save and Apply"
+                        )
+                        .into(),
+                        false,
+                    ),
+                    (Ok(()), false) => (
+                        "Loaded the project's servers. Changes apply from the next request".into(),
+                        false,
+                    ),
+                }
+            }
+        });
+        cx.notify();
+    }
+
+    fn copy_config(&mut self, config: String, cx: &mut Context<Self>) {
+        cx.write_to_clipboard(ClipboardItem::new_string(config));
+        // It says so for a moment, however motion is set.
+        self.copied = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(theme::motion::DONE_HOLD)
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.copied = None;
+                cx.notify();
+            });
+        }));
+        cx.notify();
+    }
+
+    fn set_client(&mut self, client: McpClient, _: &mut Window, cx: &mut Context<Self>) {
+        self.client = client;
+        cx.notify();
+    }
+
+    fn mcp_page(&self, window: &Window, cx: &Context<Self>) -> Vec<AnyElement> {
+        let session = self.session.read(cx);
+        let prefs = &session.prefs;
+        let project = session.project.clone();
+        let switch_row = row(
+            "External MCP tools",
+            Some("Lets Kerf chat call local MCP servers, over stdio".into()),
+            Some(
+                ui::switch(
+                    "settings-mcp",
+                    prefs.mcp_enabled,
+                    Self::chooser(cx, Self::set_mcp),
+                )
+                .into_any_element(),
+            ),
+            Vec::new(),
+        );
+        let servers_row = match &project {
+            Some(project) => {
+                let file = project.join(".kerf").join("mcp.json");
+                let cursor = cursor_config(Some(project));
+                let status = self.servers_status.clone().map(|(said, failed)| {
+                    ui::label(
+                        said,
+                        text::CONTROL,
+                        if failed { theme::neg() } else { theme::ink3() },
+                    )
+                    .into_any_element()
+                });
+                let reload = file.clone();
+                let buttons = div()
+                    .flex()
+                    .flex_wrap()
+                    .gap(px(theme::space::S8))
+                    .child(
+                        ui::button("settings-mcp-save", "Save and Apply")
+                            .primary()
+                            .on_click(cx.listener(|this, _, _, cx| this.save_servers(cx))),
+                    )
+                    .child(
+                        ui::button("settings-mcp-load", "Load from Project")
+                            .disabled(!file.is_file())
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.load_servers(&reload, false, cx)
+                            })),
+                    )
+                    .when_some(cursor, |buttons, cursor| {
+                        buttons.child(
+                            ui::button("settings-mcp-cursor", "Import from Cursor").on_click(
+                                cx.listener(move |this, _, _, cx| {
+                                    this.load_servers(&cursor, true, cx)
+                                }),
+                            ),
+                        )
+                    });
+                let mut below = vec![
+                    code_well(&self.servers, SERVERS_HEIGHT, window, cx).into_any_element(),
+                    buttons.into_any_element(),
+                ];
+                below.extend(status);
+                row(
+                    "Servers",
+                    Some(
+                        "This project's .kerf/mcp.json, then ~/.kerf/mcp.json. They may hold credentials"
+                            .into(),
+                    ),
+                    None,
+                    below,
+                )
+            }
+            None => row(
+                "Servers",
+                Some("A project's .kerf/mcp.json, then ~/.kerf/mcp.json. Open a project to edit its servers here".into()),
+                None,
+                Vec::new(),
+            ),
+        };
+        let folder = project
+            .clone()
+            .unwrap_or_else(|| PathBuf::from("/path/to/project"));
+        let (command, args) = mcp_server_command(&folder);
+        let config = mcp_server_config(self.client, &command, &args);
+        let clients = McpClient::ALL.map(|client| (client, client.label()));
+        let copied = self.copied.is_some();
+        let copy = config.clone();
+        let place = if project.is_some() {
+            self.client.place().to_owned()
+        } else {
+            format!(
+                "{}. Open a project to fill in its folder",
+                self.client.place()
+            )
+        };
+        let server_row = row(
+            "Use Kerf from Cursor, Claude or Codex",
+            Some("Add this to the client's MCP settings".into()),
+            Some(
+                ui::button(
+                    "settings-mcp-copy",
+                    if copied { "Copied" } else { "Copy Config" },
+                )
+                .on_click(cx.listener(move |this, _, _, cx| this.copy_config(copy.clone(), cx)))
+                .into_any_element(),
+            ),
+            vec![
+                div()
+                    .flex()
+                    .child(ui::segmented(
+                        "settings-mcp-client",
+                        &clients,
+                        self.client,
+                        Self::chooser(cx, Self::set_client),
+                    ))
+                    .into_any_element(),
+                config_well(config).into_any_element(),
+                ui::label(place, text::CONTROL, theme::ink3()).into_any_element(),
+            ],
+        );
+        vec![
+            titled("Tools in Kerf chat", group(vec![switch_row, servers_row])),
+            titled("Kerf as an MCP server", group(vec![server_row])),
+        ]
     }
 
     // ------------------------------------------------------------ Appearance
@@ -788,7 +1511,9 @@ impl SettingsView {
             .iter()
             .take(3)
             .map(|report| {
-                let component = report["component"].as_str().unwrap_or("kerf");
+                let component = capitalized(crate::app::component_name(
+                    report["component"].as_str().unwrap_or("editor"),
+                ));
                 let when = report["atMs"]
                     .as_f64()
                     .map(
@@ -819,7 +1544,7 @@ impl SettingsView {
             group(vec![
                 row(
                     "Update notices",
-                    Some("Checks GitHub once a day. Never downloads or installs".into()),
+                    Some("At launch, at most once a day, asks GitHub for a newer Kerf. Never downloads or installs".into()),
                     Some(
                         ui::switch(
                             "settings-updates",
@@ -917,15 +1642,18 @@ impl SettingsView {
                         if on { text::BODY_NAME } else { text::BODY },
                         ink,
                     ))
-                    .on_click(cx.listener(move |this, _, _, cx| this.show(page, cx)))
+                    .on_click(cx.listener(move |this, _, _, cx| this.show_page(page, cx)))
             }))
     }
 
     fn page_body(&self, page: Page, window: &Window, cx: &Context<Self>) -> impl IntoElement {
         let content = match page {
-            Page::Kerf => self.kerf_page(window, cx),
+            Page::Account => self.account_page(window, cx),
+            Page::Chat => self.chat_page(window, cx),
+            Page::Models => self.models_page(cx),
             Page::Appearance => self.appearance_page(cx),
             Page::Shortcuts => self.shortcuts_page(cx),
+            Page::Mcp => self.mcp_page(window, cx),
             Page::About => self.about_page(cx),
         };
         div()
@@ -1164,12 +1892,31 @@ fn key_placeholder(provider: Provider) -> &'static str {
     match provider {
         Provider::Anthropic => "sk-ant-…",
         Provider::Openai => "sk-…",
-        Provider::ClaudeCode => "",
+        Provider::ClaudeCode | Provider::Cloud => "",
+    }
+}
+
+fn base_url_placeholder(provider: Provider) -> &'static str {
+    match provider {
+        Provider::Anthropic => "https://api.anthropic.com/v1",
+        Provider::Openai => "https://api.openai.com/v1",
+        Provider::ClaudeCode | Provider::Cloud => "",
+    }
+}
+
+/// Claude Code's model as the choice names it.
+fn claude_code_label(model: &str) -> &'static str {
+    match model {
+        "opus" => "Opus",
+        "sonnet" => "Sonnet",
+        "haiku" => "Haiku",
+        _ => "Default",
     }
 }
 
 fn provider_hint(provider: Provider) -> SharedString {
     match provider {
+        Provider::Cloud => "Kerf's hosted model, on your Kerf account: no key of your own".into(),
         Provider::Anthropic => "Claude, through Anthropic's API, with your own key".into(),
         Provider::Openai => "OpenAI, or any service that speaks its API, with your own key".into(),
         Provider::ClaudeCode => {
@@ -1257,5 +2004,325 @@ pub(crate) fn escape_bound(cx: &App, action: &dyn Action) -> bool {
 pub(crate) fn bind_close(cx: &mut App) {
     if !escape_bound(cx, &Close) {
         cx.bind_keys([KeyBinding::new("escape", Close, Some(CONTEXT))]);
+    }
+}
+
+/// A group of rows under its name.
+fn titled(title: &'static str, rows: gpui::Div) -> AnyElement {
+    div()
+        .flex()
+        .flex_col()
+        .pt(px(theme::space::S16))
+        .child(ui::label(title, text::META_STRONG, theme::ink3()).pb(px(theme::space::S4)))
+        .child(rows)
+        .into_any_element()
+}
+
+/// A field of several lines in its well, `height` tall at least, ringed in
+/// the accent while typed in. A press anywhere in the well types in it.
+fn code_well(input: &Entity<TextInput>, height: f32, window: &Window, cx: &App) -> gpui::Div {
+    let handle = input.read(cx).focus_handle(cx);
+    let focused = handle.is_focused(window);
+    div()
+        .w_full()
+        .min_h(px(height))
+        .p(px(theme::space::S8))
+        .rounded(px(radius::CONTROL))
+        .bg(theme::well())
+        .border_1()
+        .border_color(if focused {
+            theme::accent()
+        } else {
+            theme::line2()
+        })
+        .cursor_text()
+        .on_mouse_down(MouseButton::Left, move |_, window, _| {
+            window.focus(&handle);
+            // Settings' own focus would take it back.
+            window.prevent_default();
+        })
+        .child(input.clone())
+}
+
+/// Words to read and copy, in mono, in a well.
+fn config_well(config: String) -> gpui::Div {
+    div()
+        .w_full()
+        .min_h(px(CONFIG_HEIGHT))
+        .p(px(theme::space::S8))
+        .rounded(px(radius::CONTROL))
+        .bg(theme::well())
+        .border_1()
+        .border_color(theme::line())
+        .flex()
+        .flex_col()
+        .children(config.lines().map(|line| {
+            theme::type_style(div(), text::MONO_SMALL)
+                .text_color(theme::ink2())
+                .whitespace_nowrap()
+                .child(if line.is_empty() {
+                    " ".to_owned()
+                } else {
+                    line.to_owned()
+                })
+        }))
+}
+
+/// Where Kerf's account stands, in words, and what is offered: signing in
+/// (a token field and Sign In) or out.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AccountStatus {
+    pub words: String,
+    pub sign_in: bool,
+    pub sign_out: bool,
+}
+
+/// What the last `cloud {access, account?, message?}` event says of the
+/// account; None before one is heard.
+pub fn account_status(cloud: Option<&Value>) -> AccountStatus {
+    let access = cloud
+        .and_then(|cloud| cloud["access"].as_str())
+        .unwrap_or("");
+    let account = cloud.map(|cloud| &cloud["account"]);
+    let email = account
+        .and_then(|account| account["email"].as_str())
+        .unwrap_or("");
+    let available = !access.is_empty() && access != "unavailable";
+    let signed_in = available && !email.is_empty() && access != "signedOut";
+    let mut words = if !available {
+        "Not available yet. Chat can run on your own API key or Claude Code".to_owned()
+    } else if !signed_in {
+        if access == "unreachable" {
+            "Kerf can't be reached right now".to_owned()
+        } else {
+            "Signed out. Paste your Kerf sign-in token to sign in".to_owned()
+        }
+    } else {
+        let plan = account
+            .and_then(|account| account["plan"].as_str())
+            .filter(|plan| !plan.is_empty())
+            .unwrap_or("Kerf");
+        let mut words = format!("Signed in as {email} · {plan} plan");
+        if let Some(credits) = account.and_then(|account| account["credits"].as_u64()) {
+            words.push_str(&format!(
+                " · {credits} request{} left",
+                if credits == 1 { "" } else { "s" }
+            ));
+        }
+        match access {
+            "notIncluded" => words.push_str("\nThis plan doesn't include requests to Kerf"),
+            "outOfCredits" => words.push_str("\nYou've used this period's requests"),
+            _ => {}
+        }
+        words
+    };
+    if let Some(message) = cloud
+        .and_then(|cloud| cloud["message"].as_str())
+        .filter(|message| !message.trim().is_empty())
+    {
+        words.push('\n');
+        words.push_str(message.trim());
+    }
+    AccountStatus {
+        words,
+        sign_in: available && !signed_in,
+        sign_out: signed_in,
+    }
+}
+
+/// A model of the models event in a line: "832x480 · 16 fps · up to 5 s ·
+/// reads guide, ref".
+pub fn model_summary(model: &Value) -> String {
+    let number = |value: f64| {
+        let text = format!("{value:.3}");
+        text.trim_end_matches('0').trim_end_matches('.').to_owned()
+    };
+    let mut said = Vec::new();
+    if let Some(size) = model["size"].as_str().filter(|size| !size.is_empty()) {
+        said.push(size.to_owned());
+    }
+    if let Some(rate) = model["rate"].as_f64().filter(|rate| *rate > 0.0) {
+        said.push(format!("{} fps", number(rate)));
+    }
+    if let Some(seconds) = model["seconds"].as_f64().filter(|seconds| *seconds > 0.0) {
+        said.push(format!("up to {} s", number(seconds)));
+    }
+    let reads: Vec<&str> = model["reads"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect();
+    if !reads.is_empty() {
+        said.push(format!("reads {}", reads.join(", ")));
+    }
+    if said.is_empty() {
+        "says nothing of what it takes".to_owned()
+    } else {
+        said.join(" · ")
+    }
+}
+
+/// The person's models file, as kerf-engine finds it: `KERF_MODELS`, else
+/// `~/.kerf/models.json`.
+pub fn models_file() -> PathBuf {
+    std::env::var_os("KERF_MODELS")
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| crate::prefs::home().map(|home| home.join(".kerf").join("models.json")))
+        .unwrap_or_else(|| PathBuf::from("models.json"))
+}
+
+/// The project's `.kerf/mcp.json` to edit, and what loading it came to.
+fn project_servers(project: Option<&Path>) -> (String, Option<(SharedString, bool)>) {
+    let Some(file) = project.map(|project| project.join(".kerf").join("mcp.json")) else {
+        return (NO_SERVERS.to_owned(), None);
+    };
+    match std::fs::read_to_string(&file) {
+        Ok(text) => {
+            let status = match validate_mcp_config(&text) {
+                Ok(()) => (
+                    "Loaded the project's servers. Changes apply from the next request".into(),
+                    false,
+                ),
+                Err(error) => (error.into(), true),
+            };
+            (text, Some(status))
+        }
+        Err(_) => (
+            NO_SERVERS.to_owned(),
+            Some(("No project servers yet".into(), false)),
+        ),
+    }
+}
+
+/// Writes `text` as the project's `.kerf/mcp.json`, through a temporary
+/// file.
+fn write_project_servers(project: &Path, text: &str) -> Result<(), String> {
+    let folder = project.join(".kerf");
+    std::fs::create_dir_all(&folder)
+        .map_err(|error| format!("Could not make the project's .kerf folder: {error}"))?;
+    let file = folder.join("mcp.json");
+    let temporary = folder.join("mcp.json.tmp");
+    std::fs::write(&temporary, text)
+        .and_then(|()| std::fs::rename(&temporary, &file))
+        .map_err(|error| format!("Could not save the servers: {error}"))
+}
+
+/// Cursor's MCP servers to import: the project's `.cursor/mcp.json`, else
+/// the person's `~/.cursor/mcp.json`, whichever is there.
+pub fn cursor_config(project: Option<&Path>) -> Option<PathBuf> {
+    let in_project = project.map(|project| project.join(".cursor").join("mcp.json"));
+    let at_home = crate::prefs::home().map(|home| home.join(".cursor").join("mcp.json"));
+    in_project
+        .into_iter()
+        .chain(at_home)
+        .find(|path| path.is_file())
+}
+
+/// Whether `text` is an MCP servers file Kerf chat can use: an object whose
+/// `mcpServers` names servers, each run by a local command, with `args`
+/// and `tools` lists of words and `env` words by name. The error says what
+/// to mend.
+pub fn validate_mcp_config(text: &str) -> Result<(), String> {
+    let document: Value =
+        serde_json::from_str(text).map_err(|error| format!("Invalid JSON: {error}"))?;
+    let Some(document) = document.as_object() else {
+        return Err("The JSON root must be an object.".into());
+    };
+    let Some(servers) = document.get("mcpServers").and_then(Value::as_object) else {
+        return Err("mcpServers must be an object.".into());
+    };
+    for server in servers.values() {
+        let Some(server) = server.as_object() else {
+            return Err("Each server must be an object.".into());
+        };
+        if !server
+            .get("command")
+            .and_then(Value::as_str)
+            .is_some_and(|command| !command.trim().is_empty())
+        {
+            return Err("Each server needs a nonempty local command string. URL-only remote servers are not supported in Kerf chat.".into());
+        }
+        for field in ["args", "tools"] {
+            match server.get(field) {
+                None => {}
+                Some(Value::Null) if field == "tools" => {}
+                Some(Value::Array(items)) => {
+                    if !items.iter().all(Value::is_string) {
+                        return Err(format!("{field} must contain only strings."));
+                    }
+                }
+                Some(_) => return Err(format!("{field} must be an array of strings.")),
+            }
+        }
+        match server.get("env") {
+            None => {}
+            Some(Value::Object(env)) => {
+                if !env.values().all(Value::is_string) {
+                    return Err("env must contain only string values.".into());
+                }
+            }
+            Some(_) => return Err("env must be an object of string values.".into()),
+        }
+    }
+    Ok(())
+}
+
+/// What another client runs to reach Kerf's tools on `project`: kerf-mcp
+/// (`KERF_MCP_BIN`, beside the editor, else the checkout's build) with
+/// `--dir`, else the editor itself serving them (`--serve-mcp`).
+pub fn mcp_server_command(project: &Path) -> (String, Vec<String>) {
+    let project = project.display().to_string();
+    let name = if cfg!(windows) {
+        "kerf-mcp.exe"
+    } else {
+        "kerf-mcp"
+    };
+    let exe = std::env::current_exe().ok();
+    let found = std::env::var_os("KERF_MCP_BIN")
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| {
+            let beside = exe
+                .as_ref()
+                .and_then(|exe| exe.parent().map(|folder| folder.join(name)));
+            let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+            let built =
+                ["debug", "release"].map(|profile| root.join("target").join(profile).join(name));
+            beside
+                .into_iter()
+                .chain(built)
+                .find(|path| path.is_file())
+                .map(|path| path.canonicalize().unwrap_or(path))
+        });
+    match (found, exe) {
+        (Some(mcp), _) => (mcp.display().to_string(), vec!["--dir".into(), project]),
+        (None, Some(exe)) => (
+            exe.display().to_string(),
+            vec!["--serve-mcp".into(), "--dir".into(), project],
+        ),
+        (None, None) => (name.to_owned(), vec!["--dir".into(), project]),
+    }
+}
+
+/// Kerf's MCP server as `client` writes it: JSON `mcpServers` for Cursor
+/// and Claude, a TOML table for Codex.
+pub fn mcp_server_config(client: McpClient, command: &str, args: &[String]) -> String {
+    match client {
+        McpClient::Cursor | McpClient::Claude => {
+            let config = json!({"mcpServers": {"kerf": {"command": command, "args": args}}});
+            serde_json::to_string_pretty(&config).unwrap_or_default()
+        }
+        McpClient::Codex => {
+            // A JSON string is a TOML basic string.
+            let quoted = |text: &str| serde_json::to_string(text).unwrap_or_default();
+            let args: Vec<String> = args.iter().map(|arg| quoted(arg)).collect();
+            format!(
+                "[mcp_servers.kerf]\ncommand = {}\nargs = [{}]",
+                quoted(command),
+                args.join(", ")
+            )
+        }
     }
 }
