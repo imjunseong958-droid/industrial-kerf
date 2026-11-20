@@ -53,6 +53,12 @@ pub struct Session {
     pub selection: Vec<String>,
     /// The media chosen in the band.
     pub chosen_media: Option<String>,
+    /// The mask chosen on the picture or in the inspector, by its id on
+    /// the chosen clip, so both choose the same one.
+    pub chosen_mask: Option<String>,
+    /// The kerfd this window was started with, if one was given; a project
+    /// opened from it keeps it.
+    kerfd: Option<PathBuf>,
     _on_quit: gpui::Subscription,
     /// A kerf:// link followed to this project, carried out once it is connected.
     link: Option<crate::links::Link>,
@@ -96,6 +102,8 @@ impl Session {
                 conversation: None,
                 selection: Vec::new(),
                 chosen_media: None,
+                chosen_mask: None,
+                kerfd: kerfd.clone(),
                 // Quitting closes the bridge as closing the window does: the
                 // render running stops, the queued ones are cancelled.
                 _on_quit: cx.on_app_quit(|session: &mut Session, _| {
@@ -471,9 +479,21 @@ impl Session {
         self.send(json!({"type": "conversations", "action": "rename", "id": id, "title": title}));
     }
 
+    /// The kerfd this window was started with; None finds one as at launch.
+    pub fn kerfd(&self) -> Option<&Path> {
+        self.kerfd.as_deref()
+    }
+
     /// Asks Kerf, in the conversation open (or a new one), about what is
     /// chosen on the timeline if anything is.
     pub fn ask(&mut self, text: &str) -> bool {
+        let at = self.state.position;
+        self.ask_at(text, at)
+    }
+
+    /// As [`Session::ask`], with the playhead time the request was written
+    /// at (a request queued while Kerf worked keeps its own time).
+    pub fn ask_at(&mut self, text: &str, at: f64) -> bool {
         let text = text.trim();
         if text.is_empty() || self.state.work.busy() {
             return false;
@@ -493,7 +513,7 @@ impl Session {
             command["conversation"] = json!(conversation);
         }
         if self.prefs.send_playhead {
-            command["at"] = json!(self.state.position);
+            command["at"] = json!(at);
         }
         if let Some(focus) = self.focus() {
             command["focus"] = focus;

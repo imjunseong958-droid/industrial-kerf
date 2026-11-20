@@ -145,6 +145,14 @@ pub mod activity {
     pub fn chip() -> Rgba {
         rgba(0x0000008c)
     }
+    /// A conversation where something waits for you to look at it.
+    pub fn review() -> Rgba {
+        super::accent_ink()
+    }
+    /// A conversation that stopped on an error.
+    pub fn failed() -> Rgba {
+        super::neg()
+    }
 }
 
 /// A colour with its alpha replaced by `alpha` (0..1).
@@ -354,6 +362,15 @@ pub mod motion {
     pub const WORK_PULSE: Duration = ms(1200);
     /// Done: how long a finished render or cut says so.
     pub const DONE_HOLD: Duration = ms(2400);
+    /// A picture or tile flying to where it lands (an export going home).
+    pub const FLIGHT: Duration = ms(720);
+    /// Its fade once landed, over what it became.
+    pub const FLIGHT_LAND: Duration = ms(240);
+    /// Between tiles flying one after another.
+    pub const FLIGHT_STAGGER: Duration = ms(160);
+    /// How long a press waits to learn it was the first of a double-click
+    /// (the sidebar's edge: one press puts it away, two reset its width).
+    pub const DOUBLE_CLICK: Duration = ms(400);
     /// How often the bridge is asked for events and frames.
     pub const POLL: Duration = ms(16);
 
@@ -402,6 +419,10 @@ pub mod layout {
     pub const TRANSPORT: f32 = 40.0;
     /// The chosen clip's inspector, beside the picture.
     pub const INSPECTOR: f32 = 300.0;
+    /// The tallest the composer grows with its lines before it scrolls.
+    pub const COMPOSER: f32 = 110.0;
+    /// A bar under the toolbar (kerfd gone, the file changed, an error).
+    pub const BAR: f32 = 40.0;
 
     /// The widest a drag leaves the sidebar in a window `window` wide.
     pub fn sidebar_most(window: f32) -> f32 {

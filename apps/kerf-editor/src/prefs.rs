@@ -177,7 +177,7 @@ impl Permissions {
 
     pub fn label(self) -> &'static str {
         match self {
-            Permissions::Ask => "Ask first",
+            Permissions::Ask => "Ask before edits",
             Permissions::AcceptEdits => "Accept edits",
             Permissions::Auto => "Auto",
         }
@@ -270,6 +270,13 @@ pub struct Prefs {
     /// API keys kept here because the system's keychain could not be
     /// reached, by their keychain name. Empty wherever the keychain works.
     pub kept_keys: std::collections::BTreeMap<String, String>,
+    /// What the launcher was left on: its way ("new", "clone", "preset"),
+    /// the template ("standard", "short", …), the frame rate, and whether
+    /// Details was open. Empty or false: the launcher's own first choice.
+    pub launcher_way: String,
+    pub launcher_format: String,
+    pub launcher_rate: String,
+    pub launcher_details: bool,
     /// What this copy last read from or wrote to the file: bookkeeping,
     /// public only so prefs can be built field by field elsewhere
     /// (`..Prefs::default()`).
@@ -307,6 +314,10 @@ impl Default for Prefs {
             safe_zones: false,
             send_playhead: true,
             kept_keys: Default::default(),
+            launcher_way: String::new(),
+            launcher_format: String::new(),
+            launcher_rate: String::new(),
+            launcher_details: false,
             known: Known::default(),
         }
     }

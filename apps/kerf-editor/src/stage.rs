@@ -852,8 +852,9 @@ impl StageView {
         cx.notify();
     }
 
-    /// The pointer left the picture: the playhead's frame again.
-    fn end_skim(&mut self, cx: &mut Context<Self>) {
+    /// The pointer left the picture (or a key is about to act from the
+    /// playhead): the playhead's frame again.
+    pub fn end_skim(&mut self, cx: &mut Context<Self>) {
         self.follow_playhead(cx);
         if self.skim.take().is_none() {
             return;
