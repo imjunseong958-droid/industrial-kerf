@@ -58,10 +58,28 @@ beside itself, in the installed app on macOS, or in `target/debug` and `target/r
 (`KERF_EDITOR_BIN` names another), and passes it kerfd through `KERFD_BIN`.
 
 - `--quit-after-ms <ms>` quits after that long, for a smoke run; the package checks start
-  the editor so and need it to exit cleanly.
+  the editor so and need it to exit cleanly. A smoke run (one that quits on its own, or
+  asks for `--screenshot`) opens no project it was not given, and says nothing on its own
+  at launch.
+- `--settings-dir <dir>` keeps the editor's settings in that folder (`editor.json`), and
+  keys out of the system's keychain; `KERF_EDITOR_PREFS` names the file itself.
+- `--window-size WxH` (as `1600x1000`) opens each window of the run at that size rather
+  than edge to edge.
+- `--render-preview` renders the project's preview once it is open, saying nothing else
+  at launch.
+- `--screenshot <file>` is accepted, as the Qt editor's was, and writes nothing: take the
+  picture from outside (below).
+- `--graph <media>` opens that shot's graph once the project has it, with
+  `--graph-node <id>` chosen in it.
 - `--serve-mcp --dir <project>` opens no window: it serves Kerf's tools over MCP on stdin
   and stdout, as `kerf-mcp` does. Claude Code, as the editor's chat provider, is given the
   editor to run this way where no `kerf-mcp` is found (`kerf-bridge`'s `claude_code.rs`).
+
+Off macOS, an editor started for `kerf://` links alone hands them to the editor already
+open, through a link inbox (a socket in the runtime folder, else a port named in the
+settings folder), and ends. The first time it runs, the editor takes up the Qt editor's
+settings (its provider, models, faces, keymap, recent projects and each project's master
+output), once.
 
 The editor cannot read back its own window, so a picture of it is taken from outside.
 On Linux with no display, on a virtual X server, which needs the Composite extension or

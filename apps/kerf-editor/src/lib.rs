@@ -7,11 +7,13 @@
 
 pub mod app;
 pub mod artwork;
+pub mod ask;
 pub mod cast;
 pub mod chat;
 pub mod commands;
 pub mod export;
 pub mod finish;
+pub mod focus;
 pub mod icons;
 pub mod input;
 pub mod inspector;

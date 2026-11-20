@@ -24,7 +24,7 @@ use crate::icons::Icon;
 use crate::input::{InputEvent, TextInput};
 use crate::model::{Conversation, ConversationSummary, Proposal, Speaker};
 use crate::motion;
-use crate::prefs::Provider;
+use crate::prefs::{Keymap, Provider};
 use crate::session::{BridgeEvent, Session};
 use crate::store::Change;
 use crate::theme::{self, layout, motion as scene, text};
@@ -52,6 +52,15 @@ pub enum SidebarEvent {
     Done,
     /// One of its menus opened: the window puts its own away.
     MenuOpened,
+    /// The account was pressed (`from_keys`: with Enter, Space, Shift+F10
+    /// or the Menu key): the window opens the app's menu above it, or puts
+    /// it away when it is open.
+    AppMenu {
+        from_keys: bool,
+    },
+    /// A conversation was chosen, or New conversation: the window gives
+    /// the composer the keys, as Qt's did.
+    Chosen,
 }
 
 impl EventEmitter<SidebarEvent> for SidebarView {}
@@ -433,24 +442,6 @@ pub fn row_entries(id: &str, archived: bool, working: bool) -> Vec<MenuEntry> {
     ]
 }
 
-/// The app's menu under the account: Settings, the account, the help,
-/// Sign Out while signed in to Kerf, and Quit.
-pub fn account_entries(signed_in: bool) -> Vec<MenuEntry> {
-    let mut entries = vec![
-        MenuEntry::new(Entry::Command("app.preferences"), "Settings…").icon(Icon::Gear),
-        MenuEntry::new(Entry::Command("app.account"), "Account…").icon(Icon::Lock),
-        MenuEntry::new(Entry::Command("help.guide"), "User Guide"),
-        MenuEntry::new(Entry::Command("help.crashReports"), "Crash Reports").icon(Icon::Folder),
-        MenuEntry::new(Entry::Command("help.about"), "About"),
-    ];
-    if signed_in {
-        entries.push(MenuEntry::new(Entry::SignOut, "Sign Out").separated());
-    }
-    let quit = MenuEntry::new(Entry::Command("app.quit"), "Quit");
-    entries.push(if signed_in { quit } else { quit.separated() });
-    entries
-}
-
 /// What the system's file manager is called here.
 pub fn reveal_words() -> &'static str {
     if cfg!(target_os = "macos") {
@@ -598,32 +589,465 @@ pub fn account_line(
     }
 }
 
-/// The app's menu, as the toolbar's ⋯ opens it while the sidebar is away:
-/// whose account it is, then Settings, the account, the help, and Quit.
-/// Each runs its command; `close` puts the menu away first. (The sidebar's
-/// own, under the account, adds Sign Out while signed in: see
-/// [`account_menu`].)
-pub fn app_menu(header: SharedString, close: Rc<dyn Fn(&mut Window, &mut App)>) -> Div {
-    app_menu_with(header, None, close)
+// ------------------------------------------------------------ the app's menu
+
+/// Choose the keymap the editor answers to (the app's menu, View ▸ Keyboard).
+#[derive(Clone, Debug, PartialEq, gpui::Action)]
+#[action(namespace = kerf, no_json)]
+pub struct ChooseKeymap {
+    pub keymap: Keymap,
 }
 
-/// The app's menu for `session`'s window: headed by who chat runs on
-/// ([`account_of`]), with Sign Out while signed in to Kerf, which signs
-/// `session` out. For the toolbar's ⋯ while the sidebar is away
-/// (`Workspace::render`), so it says what the sidebar's own says.
-pub fn account_menu(
-    session: &Entity<Session>,
-    close: Rc<dyn Fn(&mut Window, &mut App)>,
-    cx: &App,
-) -> Div {
-    let (title, _, signed_in) = account_of(session.read(cx), cx);
-    let sign_out: Option<Rc<dyn Fn(&mut Window, &mut App)>> = signed_in.then(|| {
-        let session = session.downgrade();
-        Rc::new(move |_: &mut Window, cx: &mut App| {
-            let _ = session.update(cx, |session, _| session.cloud_sign(None));
-        }) as Rc<dyn Fn(&mut Window, &mut App)>
+/// Switch to another branch of the project's repository (View ▸ Sync).
+#[derive(Clone, Debug, PartialEq, gpui::Action)]
+#[action(namespace = kerf, no_json)]
+pub struct SwitchBranch {
+    pub name: SharedString,
+}
+
+// SignOut: out of the Kerf account (the app's menu, while signed in).
+gpui::actions!(kerf, [SignOut]);
+
+/// What a row of the app's menu does, chosen.
+#[derive(Clone, Debug, PartialEq)]
+pub enum AppDoes {
+    /// Nothing: words that say how something stands.
+    Nothing,
+    /// The registry's command (or one the window carries out) by its id.
+    Command(String),
+    SignOut,
+    /// A mask tool on the picture.
+    Mask(crate::stage::MaskTool),
+    /// The viewer's zoom, a percent of the frame's own pixels; 0 fits it.
+    Zoom(u32),
+    Keymap(Keymap),
+    Branch(String),
+    /// A recent project, in place of this one.
+    Recent(PathBuf),
+    ClearRecent,
+}
+
+impl AppDoes {
+    /// The action it dispatches from where the keys are (the window).
+    pub fn action(&self) -> Option<Box<dyn gpui::Action>> {
+        Some(match self {
+            AppDoes::Nothing => return None,
+            AppDoes::Command(id) => Box::new(RunCommand {
+                id: id.clone().into(),
+            }),
+            AppDoes::SignOut => Box::new(SignOut),
+            AppDoes::Mask(tool) => match tool {
+                crate::stage::MaskTool::Rectangle => Box::new(crate::stage::RectangleMask),
+                crate::stage::MaskTool::Ellipse => Box::new(crate::stage::EllipseMask),
+                crate::stage::MaskTool::Pen => Box::new(crate::stage::PenMask),
+            },
+            AppDoes::Zoom(percent) => Box::new(crate::stage::SetZoom { percent: *percent }),
+            AppDoes::Keymap(keymap) => Box::new(ChooseKeymap { keymap: *keymap }),
+            AppDoes::Branch(name) => Box::new(SwitchBranch {
+                name: name.clone().into(),
+            }),
+            AppDoes::Recent(path) => Box::new(OpenRecent {
+                path: path.to_string_lossy().into_owned().into(),
+            }),
+            AppDoes::ClearRecent => Box::new(crate::commands::ClearRecent),
+        })
+    }
+}
+
+/// A row of the app's menu, as it shows: its words, icon and key, whether
+/// it is ticked or greyed (with why in its tip), and the rows it opens.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AppRow {
+    pub words: String,
+    pub icon: Option<Icon>,
+    pub key: Option<String>,
+    pub checked: bool,
+    pub disabled: bool,
+    pub tip: Option<String>,
+    /// A line goes before it.
+    pub separated: bool,
+    pub does: AppDoes,
+    /// A submenu's rows.
+    pub rows: Vec<AppRow>,
+}
+
+impl AppRow {
+    fn new(words: impl Into<String>, does: AppDoes) -> Self {
+        Self {
+            words: words.into(),
+            icon: None,
+            key: None,
+            checked: false,
+            disabled: false,
+            tip: None,
+            separated: false,
+            does,
+            rows: Vec::new(),
+        }
+    }
+
+    fn icon(mut self, icon: Icon) -> Self {
+        self.icon = Some(icon);
+        self
+    }
+
+    fn separated(mut self) -> Self {
+        self.separated = true;
+        self
+    }
+
+    fn submenu(words: impl Into<String>, rows: Vec<AppRow>) -> Self {
+        Self {
+            rows,
+            ..Self::new(words, AppDoes::Nothing)
+        }
+    }
+
+    /// Words that say how something stands: greyed, chosen by nothing.
+    fn note(words: impl Into<String>) -> Self {
+        Self {
+            disabled: true,
+            ..Self::new(words, AppDoes::Nothing)
+        }
+    }
+}
+
+/// What the app's menu is built from: how the window and its commands
+/// stand ([`app_rows`]).
+pub struct AppMenuInput<'a> {
+    /// Signed in to Kerf: Sign Out is offered.
+    pub signed_in: bool,
+    pub keymap: Keymap,
+    /// The registry's commands in the keymap in use ([`crate::commands::catalog`]),
+    /// and its menus in order.
+    pub commands: &'a [crate::commands::Command],
+    pub menus: &'a [String],
+    /// Why each command cannot run now (`kerf_bridge::commands_states`).
+    pub states: &'a Value,
+    /// The checkable commands that are on.
+    pub checked: &'a std::collections::BTreeSet<String>,
+    /// The viewer's zoom (0 fits).
+    pub zoom: f32,
+    /// The project's Git standing (the last `collab` event's `status`).
+    pub collab: Option<&'a Value>,
+    pub revision: u64,
+    /// The system draws the registry's menus in a menu bar (macOS):
+    /// they are not repeated here.
+    pub menu_bar: bool,
+    pub recent: &'a [PathBuf],
+    pub current: Option<&'a Path>,
+}
+
+/// The row for the registry's command `id`, in `words` (its own label
+/// when None): its key, ticked while on, greyed with why while it cannot
+/// run.
+fn command_row(input: &AppMenuInput, id: &str, words: Option<&str>) -> AppRow {
+    let command = input.commands.iter().find(|command| command.id == id);
+    let reason = crate::palette::unavailable(input.states, id).map(str::to_owned);
+    AppRow {
+        key: command
+            .and_then(|command| command.keys.first())
+            .map(|key| crate::commands::shown_keys(key)),
+        checked: command.is_some_and(|command| command.checkable) && input.checked.contains(id),
+        disabled: reason.is_some(),
+        tip: reason,
+        ..AppRow::new(
+            words
+                .map(str::to_owned)
+                .or_else(|| command.map(|command| command.label.clone()))
+                .unwrap_or_else(|| id.to_owned()),
+            AppDoes::Command(id.to_owned()),
+        )
+    }
+}
+
+/// The app's menu, as Qt's account menu had it: Settings…, Account…, User
+/// Guide; Media and Import…; View ▸ (the panes, Follow Kerf, the mask
+/// tools, Safe Zones, Viewer Zoom ▸, Keyboard ▸, Sync ▸); where there is no
+/// menu bar, the registry's menus (File ▸ … Help ▸); Sign Out while signed
+/// in to Kerf.
+pub fn app_rows(input: &AppMenuInput) -> Vec<AppRow> {
+    let mut rows = vec![
+        command_row(input, "app.preferences", Some("Settings…")).icon(Icon::Gear),
+        AppRow::new("Account…", AppDoes::Command("app.account".into())).icon(Icon::Lock),
+        command_row(input, "help.guide", Some("User Guide")),
+        command_row(input, "window.project", Some("Media"))
+            .icon(Icon::Media)
+            .separated(),
+        command_row(input, "file.import", Some("Import…")).icon(Icon::Import),
+        AppRow::submenu("View", view_rows(input)).icon(Icon::Eye),
+    ];
+    if !input.menu_bar {
+        let mut first = true;
+        for menu in input.menus {
+            let menu_rows = registry_rows(input, menu);
+            if menu_rows.is_empty() {
+                continue;
+            }
+            let mut row = AppRow::submenu(menu.clone(), menu_rows);
+            row.separated = std::mem::take(&mut first);
+            rows.push(row);
+        }
+    }
+    if input.signed_in {
+        rows.push(AppRow::new("Sign Out", AppDoes::SignOut).separated());
+    }
+    rows
+}
+
+/// View ▸: the panes and Follow Kerf, the mask tools, Safe Zones and the
+/// zoom, the keyboard's choice and the sync.
+fn view_rows(input: &AppMenuInput) -> Vec<AppRow> {
+    let mut rows = vec![
+        command_row(input, "view.sidebar", Some("Sidebar")),
+        command_row(input, "view.picture", Some("Picture")),
+        command_row(input, "view.timeline", Some("Timeline")),
+        command_row(input, "view.followKerf", Some("Follow Kerf")),
+    ];
+    for (index, tool) in crate::stage::MaskTool::ALL.into_iter().enumerate() {
+        let mut row = AppRow {
+            key: Some(crate::commands::shown_keys(tool.shortcut())),
+            ..AppRow::new(tool.label(), AppDoes::Mask(tool)).icon(tool.icon())
+        };
+        row.separated = index == 0;
+        rows.push(row);
+    }
+    rows.push(command_row(input, "view.safeZones", Some("Safe Zones")).separated());
+    let zooms = crate::stage::ZOOMS
+        .into_iter()
+        .map(|zoom| AppRow {
+            checked: (zoom - input.zoom).abs() < 1e-3,
+            ..AppRow::new(
+                crate::stage::zoom_words(zoom),
+                AppDoes::Zoom((zoom * 100.0).round() as u32),
+            )
+        })
+        .collect();
+    rows.push(AppRow::submenu("Viewer Zoom", zooms));
+    let keymaps = Keymap::ALL
+        .into_iter()
+        .map(|keymap| AppRow {
+            checked: keymap == input.keymap,
+            ..AppRow::new(keymap.label(), AppDoes::Keymap(keymap))
+        })
+        .collect();
+    rows.push(AppRow::submenu("Keyboard", keymaps).separated());
+    rows.push(AppRow::submenu("Sync", sync_rows(input)));
+    rows
+}
+
+/// What a sync's standing says over its rows, as Qt's: the revision, then
+/// how far it is from its upstream ("Revision 22 · 1 commit to pull").
+pub fn sync_summary(collab: Option<&Value>, revision: u64) -> String {
+    let revision = format!("Revision {revision}");
+    let Some(status) = collab.filter(|status| status["repository"].as_bool() == Some(true)) else {
+        return format!("{revision} · not shared yet");
+    };
+    let count = |name: &str| status[name].as_i64().unwrap_or(0).max(0);
+    let (behind, ahead) = (count("behind"), count("ahead"));
+    let mut parts = vec![revision];
+    let plural = |n: i64, one: &str, many: &str| {
+        if n == 1 {
+            one.to_owned()
+        } else {
+            many.replace("{}", &n.to_string())
+        }
+    };
+    if behind > 0 {
+        parts.push(plural(behind, "1 commit to pull", "{} commits to pull"));
+    }
+    if ahead > 0 {
+        parts.push(plural(ahead, "1 commit to push", "{} commits to push"));
+    }
+    if behind == 0 && ahead == 0 {
+        parts.push("up to date".into());
+    }
+    parts.join(" · ")
+}
+
+/// View ▸ Sync: how it stands; the branches (this one ticked; another
+/// switches to it) and New Branch…; Sync Now, Live Sync, Commit… and Pull
+/// Request…. A project that is no repository yet offers Publish only.
+fn sync_rows(input: &AppMenuInput) -> Vec<AppRow> {
+    let mut rows = vec![AppRow::note(sync_summary(input.collab, input.revision))];
+    let status = input
+        .collab
+        .filter(|status| status["repository"].as_bool() == Some(true));
+    if input
+        .collab
+        .is_some_and(|status| status["conflicted"].as_bool() == Some(true))
+    {
+        rows.push(AppRow {
+            icon: Some(Icon::Dot),
+            ..AppRow::note("A merge is unfinished; finish it with git")
+        });
+    }
+    let Some(status) = status else {
+        rows.push(command_row(input, "collab.publish", None).separated());
+        return rows;
+    };
+    let current = status["branch"].as_str().unwrap_or_default().to_owned();
+    let mut branches: Vec<String> = Vec::new();
+    if !current.is_empty() {
+        branches.push(current.clone());
+    }
+    for branch in status["branches"].as_array().into_iter().flatten() {
+        if let Some(branch) = branch.as_str().filter(|branch| !branch.is_empty()) {
+            if !branches.iter().any(|known| known == branch) {
+                branches.push(branch.to_owned());
+            }
+        }
+    }
+    let switch_reason =
+        crate::palette::unavailable(input.states, "collab.switchBranch").map(str::to_owned);
+    for (index, branch) in branches.into_iter().enumerate() {
+        let here = branch == current;
+        rows.push(AppRow {
+            checked: here,
+            disabled: !here && switch_reason.is_some(),
+            tip: (!here).then(|| switch_reason.clone()).flatten(),
+            separated: index == 0,
+            ..AppRow::new(
+                branch.clone(),
+                if here {
+                    AppDoes::Nothing
+                } else {
+                    AppDoes::Branch(branch)
+                },
+            )
+        });
+    }
+    rows.push(command_row(input, "collab.newBranch", None));
+    rows.push(command_row(input, "collab.sync", None).separated());
+    rows.push(command_row(input, "collab.live", None));
+    rows.push(command_row(input, "collab.commit", None));
+    rows.push(command_row(input, "collab.pullRequest", None));
+    rows
+}
+
+/// The registry's menu `menu` as rows, a line between its groups; File ▸
+/// Open Recent after Open Project, and the mask tools at View's end, as the
+/// menu bar has them.
+fn registry_rows(input: &AppMenuInput, menu: &str) -> Vec<AppRow> {
+    let mut rows = Vec::new();
+    let mut group = None;
+    for command in input.commands.iter().filter(|command| command.menu == menu) {
+        let mut row = command_row(input, &command.id, None);
+        // Switch Branch needs a branch: it opens on the others, as Qt's
+        // did, greyed with why while there are none to go to.
+        if command.id == "collab.switchBranch" {
+            row = AppRow {
+                rows: other_branches(input),
+                does: AppDoes::Nothing,
+                ..row
+            };
+        }
+        row.separated = group.is_some_and(|group| group != command.group);
+        group = Some(command.group);
+        rows.push(row);
+        if command.id == "file.openProject" {
+            rows.push(AppRow::submenu("Open Recent", recent_rows(input)));
+        }
+    }
+    if menu == "View" && !rows.is_empty() {
+        for (index, tool) in crate::stage::MaskTool::ALL.into_iter().enumerate() {
+            let mut row = AppRow {
+                key: Some(crate::commands::shown_keys(tool.shortcut())),
+                ..AppRow::new(tool.label(), AppDoes::Mask(tool))
+            };
+            row.separated = index == 0;
+            rows.push(row);
+        }
+    }
+    rows
+}
+
+/// Collaborate ▸ Switch Branch: the project's branches other than the one
+/// it is on, each switching to it (Qt's buildBranchMenu); "No Other
+/// Branches" when there are none.
+fn other_branches(input: &AppMenuInput) -> Vec<AppRow> {
+    let current = input
+        .collab
+        .and_then(|status| status["branch"].as_str())
+        .unwrap_or_default();
+    let mut rows: Vec<AppRow> = Vec::new();
+    for branch in input
+        .collab
+        .and_then(|status| status["branches"].as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .filter(|branch| !branch.is_empty() && *branch != current)
+    {
+        if !rows.iter().any(|row| row.words == branch) {
+            rows.push(AppRow::new(branch, AppDoes::Branch(branch.to_owned())));
+        }
+    }
+    if rows.is_empty() {
+        rows.push(AppRow::note("No Other Branches"));
+    }
+    rows
+}
+
+/// File ▸ Open Recent: each recent project (the one open here ticked, one
+/// whose folder is gone greyed), "No Recent Projects" when there are none,
+/// then Clear Menu.
+fn recent_rows(input: &AppMenuInput) -> Vec<AppRow> {
+    let recent = crate::commands::recent_rows(input.recent, input.current);
+    let mut rows: Vec<AppRow> = recent
+        .iter()
+        .map(|row| AppRow {
+            checked: row.current,
+            disabled: row.missing,
+            tip: Some(if row.missing {
+                crate::palette::RECENT_GONE.to_owned()
+            } else {
+                row.path.display().to_string()
+            }),
+            ..AppRow::new(row.name.clone(), AppDoes::Recent(row.path.clone()))
+        })
+        .collect();
+    if rows.is_empty() {
+        rows.push(AppRow::note("No Recent Projects"));
+    }
+    rows.push(AppRow {
+        disabled: recent.is_empty(),
+        ..AppRow::new("Clear Menu", AppDoes::ClearRecent).separated()
     });
-    app_menu_with(title.into(), sign_out, close)
+    rows
+}
+
+/// `rows` as the kit's menu rows: each, chosen, dispatches what it does
+/// from where the keys go back to once the menu has gone.
+pub fn app_menu_items(rows: &[AppRow]) -> Vec<ui::MenuItem> {
+    rows.iter()
+        .map(|row| {
+            let mut item = ui::MenuItem::new(row.words.clone())
+                .checked(row.checked)
+                .disabled(row.disabled);
+            if let Some(icon) = row.icon {
+                item = item.icon(icon);
+            }
+            if let Some(key) = &row.key {
+                item = item.key(key.clone());
+            }
+            if let Some(tip) = &row.tip {
+                item = item.tip(tip.clone());
+            }
+            if row.separated {
+                item = item.separated();
+            }
+            if !row.rows.is_empty() {
+                item = item.submenu(app_menu_items(&row.rows));
+            }
+            let does = row.does.clone();
+            item.on_choose(move |window, cx| {
+                if let Some(action) = does.action() {
+                    window.dispatch_action(action, cx);
+                }
+            })
+        })
+        .collect()
 }
 
 /// Who chat runs on in `session`'s window, as the account at the foot says
@@ -639,53 +1063,6 @@ pub fn account_of(session: &Session, cx: &App) -> (String, String, bool) {
     );
     let signed_in = crate::settings::account_status(cloud).sign_out;
     (title, below, signed_in)
-}
-
-/// The app's menu under `header`, with Sign Out (running `sign_out`) where
-/// one is given.
-fn app_menu_with(
-    header: SharedString,
-    sign_out: Option<Rc<dyn Fn(&mut Window, &mut App)>>,
-    close: Rc<dyn Fn(&mut Window, &mut App)>,
-) -> Div {
-    let mut menu = menu_panel().w(px(220.0)).child(
-        div().px(px(10.0)).pt(px(4.0)).pb(px(6.0)).child(ui::line(
-            header,
-            text::META,
-            theme::ink3(),
-        )),
-    );
-    for (index, entry) in account_entries(sign_out.is_some()).into_iter().enumerate() {
-        if entry.separated {
-            menu = menu.child(menu_separator());
-        }
-        let close = close.clone();
-        let item = menu_item(
-            ElementId::Name(format!("app-menu-{index}").into()),
-            entry.words,
-            entry.icon,
-            false,
-            false,
-        );
-        let item = match entry.entry {
-            Entry::Command(id) => item.on_click(move |_, window, cx| {
-                close(window, cx);
-                window.dispatch_action(Box::new(RunCommand { id: id.into() }), cx);
-            }),
-            Entry::SignOut => {
-                let sign_out = sign_out.clone();
-                item.on_click(move |_, window, cx| {
-                    close(window, cx);
-                    if let Some(sign_out) = &sign_out {
-                        sign_out(window, cx);
-                    }
-                })
-            }
-            _ => continue,
-        };
-        menu = menu.child(item);
-    }
-    menu
 }
 
 /// A press that toggles what it opens, taken before anything under the
@@ -783,6 +1160,16 @@ pub fn is_second_press(last_click: Option<Instant>, now: Instant, click_count: u
         || last_click.is_some_and(|at| now.saturating_duration_since(at) < scene::DOUBLE_CLICK)
 }
 
+/// How many times the light over a working title is drawn in a pass
+/// (Qt's titleShimmerSteps: 30 a second, the title alone).
+pub use crate::theme::motion::TITLE_SHIMMER_STEPS;
+
+/// `phase` (0..1 of a pass) held to the step it is in.
+pub fn shimmer_step(phase: f32) -> f32 {
+    let steps = TITLE_SHIMMER_STEPS as f32;
+    (phase.clamp(0.0, 1.0) * steps).floor().min(steps - 1.0) / steps
+}
+
 /// What the sidebar's edge's tooltip says.
 pub const EDGE_TIP: &str = "Drag to resize · click to hide · double-click to reset";
 
@@ -793,8 +1180,6 @@ pub const EDGE_TIP: &str = "Drag to resize · click to hide · double-click to r
 pub enum SidebarMenu {
     /// A conversation's, by its id.
     Row(String),
-    /// The account's: the app's menu.
-    Account,
     /// The open folder's name: the folders, and the ways to another.
     Folder,
     /// Another folder's, by its path.
@@ -812,6 +1197,8 @@ struct EdgePress {
 
 pub struct SidebarView {
     session: Entity<Session>,
+    /// The conversations' list, for its fades.
+    list_scroll: gpui::ScrollHandle,
     archived_open: bool,
     /// How many times the archived ones were unfolded: each unfolding
     /// staggers them in afresh.
@@ -848,6 +1235,11 @@ pub struct SidebarView {
     arrivals: HashMap<String, Instant>,
     /// The sidebar is in the window: put away, its titles' light rests.
     shown: bool,
+    /// The app's menu is open above the account, which stays held.
+    app_menu_open: bool,
+    /// Draws the working titles' light again, a step at a time, while one
+    /// shows.
+    shimmer_tick: Option<Task<()>>,
     /// A press held on the edge; the last press on it let go where it was,
     /// and the wait before that press puts the sidebar away (dropped when
     /// a second press comes).
@@ -962,6 +1354,7 @@ impl SidebarView {
         ];
         let mut sidebar = Self {
             session,
+            list_scroll: gpui::ScrollHandle::new(),
             archived_open: false,
             unfoldings: 0,
             menu: None,
@@ -981,6 +1374,8 @@ impl SidebarView {
             listed: false,
             arrivals: HashMap::new(),
             shown: true,
+            app_menu_open: false,
+            shimmer_tick: None,
             edge_press: None,
             edge_clicked: None,
             edge_hide: None,
@@ -1011,8 +1406,17 @@ impl SidebarView {
         }
     }
 
-    /// Puts away whichever of its menus is open (the account's, a row's, a
-    /// folder's); whether one was. The keys go back to what had them.
+    /// Whether the app's menu is open above the account (the window holds
+    /// it): the account stays held meanwhile.
+    pub fn set_app_menu_open(&mut self, open: bool, cx: &mut Context<Self>) {
+        if self.app_menu_open != open {
+            self.app_menu_open = open;
+            cx.notify();
+        }
+    }
+
+    /// Puts away whichever of its menus is open (a row's, a folder's);
+    /// whether one was. The keys go back to what had them.
     pub fn close_menus(&mut self, cx: &mut Context<Self>) -> bool {
         let open = self.menu.take().is_some();
         if open {
@@ -1096,9 +1500,6 @@ impl SidebarView {
                             && session.conversation.as_deref() == Some(id.as_str())));
                 row_entries(id, archived, working)
             }
-            SidebarMenu::Account => {
-                account_entries(crate::settings::account_status(crate::app::cloud(cx)).sign_out)
-            }
             SidebarMenu::Folder => {
                 folder_entries(&session.prefs.recent, session.project.as_deref())
             }
@@ -1177,10 +1578,7 @@ impl SidebarView {
             Entry::Command(id) => {
                 window.dispatch_action(Box::new(RunCommand { id: id.into() }), cx)
             }
-            Entry::SignOut => {
-                self.session
-                    .update(cx, |session, _| session.cloud_sign(None));
-            }
+            Entry::SignOut => window.dispatch_action(Box::new(SignOut), cx),
             Entry::Open(folder) => {
                 let here = self
                     .session
@@ -1560,7 +1958,6 @@ impl SidebarView {
         index: usize,
         state: RowState,
         now: i64,
-        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let session = self.session.read(cx);
@@ -1586,9 +1983,9 @@ impl SidebarView {
         .flex_1()
         .min_w_0();
         if working && !motion::reduced() && self.shown {
-            // A band of light passing over the title, then resting.
-            let phase = motion::phase(self.shimmer_since, scene::TITLE_SHIMMER);
-            window.request_animation_frame();
+            // A band of light passing over the title, then resting; drawn
+            // again TITLE_SHIMMER_STEPS times a pass, not every frame.
+            let phase = shimmer_step(motion::phase(self.shimmer_since, scene::TITLE_SHIMMER));
             if let Some(at) = motion::shimmer_at(phase, scene::TITLE_CROSS) {
                 let light = theme::ink();
                 let rest = theme::with_alpha(theme::ink2(), 0.0);
@@ -1727,6 +2124,7 @@ impl SidebarView {
                     session.open_conversation(Some(id.clone()));
                     cx.notify();
                 });
+                cx.emit(SidebarEvent::Chosen);
             }
         }));
         let with_menu = div().relative().child(row).when(menu_open, |wrapper| {
@@ -1968,7 +2366,7 @@ impl SidebarView {
     /// runs on, and under it the plan or the model. Pressed, the app's menu
     /// opens above it.
     fn account(&self, title: String, below: String, cx: &mut Context<Self>) -> impl IntoElement {
-        let open = self.menu_is(&SidebarMenu::Account);
+        let open = self.app_menu_open;
         let letter = title
             .chars()
             .find(|ch| ch.is_alphanumeric())
@@ -1977,8 +2375,9 @@ impl SidebarView {
         Self::keyed(
             trigger(
                 "account",
-                cx.listener(|this, _: &MouseDownEvent, window, cx| {
-                    this.toggle_menu(SidebarMenu::Account, false, window, cx)
+                cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                    this.close_menus(cx);
+                    cx.emit(SidebarEvent::AppMenu { from_keys: false });
                 }),
             ),
             ITEM,
@@ -2015,12 +2414,14 @@ impl SidebarView {
                 .child(ui::line(title, text::CONTROL_STRONG, theme::ink2()))
                 .child(ui::line(below, text::META, theme::ink3())),
         )
-        .on_action(cx.listener(|this, _: &OpenMenu, window, cx| {
-            this.open_menu(SidebarMenu::Account, true, window, cx)
+        .on_action(cx.listener(|this, _: &OpenMenu, _, cx| {
+            this.close_menus(cx);
+            cx.emit(SidebarEvent::AppMenu { from_keys: true });
         }))
-        .on_click(cx.listener(|this, event: &ClickEvent, window, cx| {
+        .on_click(cx.listener(|this, event: &ClickEvent, _, cx| {
             if event.is_keyboard() {
-                this.toggle_menu(SidebarMenu::Account, true, window, cx);
+                this.close_menus(cx);
+                cx.emit(SidebarEvent::AppMenu { from_keys: true });
             }
         }))
     }
@@ -2063,6 +2464,20 @@ impl Render for SidebarView {
             .partition(|c| !c.archived);
         let busy = session.state.work.busy();
         let working_in = session.state.work.conversation.clone();
+        // The light over a working title steps on while the sidebar shows.
+        let shimmering = busy && self.shown && !motion::reduced();
+        if shimmering && self.shimmer_tick.is_none() {
+            self.shimmer_tick = Some(cx.spawn(async move |this, cx| loop {
+                cx.background_executor()
+                    .timer(scene::TITLE_SHIMMER / TITLE_SHIMMER_STEPS)
+                    .await;
+                if this.update(cx, |_, cx| cx.notify()).is_err() {
+                    break;
+                }
+            }));
+        } else if !shimmering {
+            self.shimmer_tick = None;
+        }
         let open_conversation = session.state.open_conversation.clone();
         let proposals = session.state.snapshot.proposals.clone();
         let settled = session.state.settled.clone();
@@ -2109,7 +2524,7 @@ impl Render for SidebarView {
             .enumerate()
             .map(|(index, conversation)| {
                 let state = state_of(conversation);
-                self.row(conversation, index, state, now, window, cx)
+                self.row(conversation, index, state, now, cx)
                     .into_any_element()
             })
             .collect();
@@ -2119,7 +2534,7 @@ impl Render for SidebarView {
                 .enumerate()
                 .map(|(index, conversation)| {
                     let state = state_of(conversation);
-                    self.row(conversation, index, state, now, window, cx)
+                    self.row(conversation, index, state, now, cx)
                         .into_any_element()
                 })
                 .collect()
@@ -2128,8 +2543,6 @@ impl Render for SidebarView {
         };
         let archived_count = archived.len();
         let nothing_found = !query.is_empty() && open.is_empty() && archived.is_empty();
-        let account_open = self.menu_is(&SidebarMenu::Account);
-        let header: SharedString = account_title.clone().into();
         let heading = self.folder_heading(project, cx);
         let other_rows: Vec<AnyElement> = if query.is_empty() {
             others
@@ -2141,8 +2554,6 @@ impl Render for SidebarView {
             Vec::new()
         };
         let account = self.account(account_title, account_below, cx);
-        let account_menu =
-            account_open.then(|| self.menu_view(&SidebarMenu::Account, Some(header), 220.0, cx));
         let edge = self.edge(cx);
 
         div()
@@ -2197,6 +2608,7 @@ impl Render for SidebarView {
                                     session.open_conversation(None);
                                     cx.notify();
                                 });
+                                cx.emit(SidebarEvent::Chosen);
                             })),
                     )
                     .child(self.search_row(cx)),
@@ -2205,6 +2617,7 @@ impl Render for SidebarView {
             .child(
                 div()
                     .id("conversations")
+                    .track_scroll(&self.list_scroll)
                     .flex_1()
                     .min_h_0()
                     .pt(px(4.0))
@@ -2292,6 +2705,9 @@ impl Render for SidebarView {
                         .children(archived_rows)
                     }),
             )
+            // Over the list: a fade where a row is cut at its top, and at
+            // its foot while there is more.
+            .child(ui::scroll_fade(&self.list_scroll, theme::sidebar()))
             .child(
                 div()
                     .h(px(layout::SIDEBAR_FOOT))
@@ -2303,35 +2719,14 @@ impl Render for SidebarView {
                     .border_t_1()
                     .border_color(theme::line())
                     .child(account)
+                    // A Tab stop of the kit's itself, with its ring.
                     .child(
-                        Self::keyed(div().id("settings-keys"), ITEM)
-                            .rounded(px(theme::radius::CONTROL))
-                            .child(
-                                icon_button("settings", Icon::Gear)
-                                    .tooltip("Settings")
-                                    .on_click(
-                                        cx.listener(|_, _, _, cx| cx.emit(SidebarEvent::Settings)),
-                                    ),
-                            )
-                            .on_click(cx.listener(|_, event: &ClickEvent, _, cx| {
-                                if event.is_keyboard() {
-                                    cx.emit(SidebarEvent::Settings);
-                                }
-                            })),
+                        icon_button("settings", Icon::Gear)
+                            .tooltip("Settings")
+                            .key(crate::commands::shown_keys("Ctrl+,"))
+                            .on_click(cx.listener(|_, _, _, cx| cx.emit(SidebarEvent::Settings))),
                     ),
             )
-            // The account's menu, just above the foot. Drawn after it, so the
-            // account's press is taken before the menu hears a press outside
-            // it: pressed again, the account puts the menu away.
-            .when_some(account_menu, |sidebar, menu| {
-                sidebar.child(
-                    div()
-                        .absolute()
-                        .left(px(8.0))
-                        .bottom(px(layout::SIDEBAR_FOOT + 4.0))
-                        .child(menu),
-                )
-            })
             .child(edge)
             .on_mouse_down(MouseButton::Right, |_, _, _| {})
     }

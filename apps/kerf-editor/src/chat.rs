@@ -32,17 +32,19 @@ use crate::model::{self, Proposal, Speaker, Timeline, Turn};
 use crate::motion::{self, Tween};
 use crate::prefs::{Permissions, Provider};
 use crate::session::{BridgeEvent, Session};
-use crate::store::{Change, Connection, StepState};
+use crate::store::{Change, Connection, ContextLevel, ContextUse, StepState};
 use crate::theme::{self, layout, motion as scene, text};
 use crate::ui::{self, icon_button};
+use gpui::RenderImage;
 use gpui::{
     anchored, deferred, div, linear_color_stop, linear_gradient, point, prelude::*, px, radians,
-    AnimationExt, AnyElement, App, ClipboardItem, Context, Corner, Edges, ElementId, Entity,
-    FocusHandle, Focusable, FontWeight, InteractiveText, Rgba, ScrollHandle, SharedString,
+    AnimationExt, AnyElement, App, ClipboardItem, Context, Corner, DismissEvent, Edges, ElementId,
+    Entity, FocusHandle, Focusable, FontWeight, InteractiveText, Rgba, ScrollHandle, SharedString,
     StyledText, Subscription, Task, TextRun, Transformation, Window,
 };
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// The most the composer's text grows to before it scrolls, in points.
@@ -264,14 +266,133 @@ impl Queued {
     }
 }
 
+/// How long Copy under an answer says "Copied", and the drafting dots'
+/// beat (`theme::motion`).
+pub use crate::theme::motion::{COPIED_HOLD, DRAFT_BEAT};
+
+/// How long a turn worked, as its fold says it: "41s", "1m 12s", "1h 4m";
+/// never less than a second.
+pub fn work_length(seconds: f64) -> String {
+    let whole = if seconds.is_finite() {
+        seconds.max(0.0).round().max(1.0) as u64
+    } else {
+        1
+    };
+    if whole < 60 {
+        format!("{whole}s")
+    } else if whole < 3600 {
+        format!("{}m {}s", whole / 60, whole % 60)
+    } else {
+        format!("{}h {}m", whole / 3600, (whole % 3600) / 60)
+    }
+}
+
+/// The clock beside "Working": minutes and seconds so far, "0:07", "12:40".
+pub fn work_clock(seconds: f64) -> String {
+    let whole = if seconds.is_finite() {
+        seconds.max(0.0).floor() as u64
+    } else {
+        0
+    };
+    format!("{}:{:02}", whole / 60, whole % 60)
+}
+
+/// Which of the three drafting dots is lit `elapsed` into the pulse; None
+/// under Reduce Motion, when all three hold still.
+pub fn draft_dot(elapsed: Duration, reduced: bool) -> Option<usize> {
+    if reduced {
+        return None;
+    }
+    Some((elapsed.as_millis() / DRAFT_BEAT.as_millis().max(1)) as usize % 3)
+}
+
+/// How long ago something was settled here, as a card says it: "now",
+/// "4 min", "2 h", then "N d".
+pub fn settled_age(ago: Duration) -> String {
+    let seconds = ago.as_secs();
+    if seconds < 60 {
+        "now".to_owned()
+    } else if seconds < 3600 {
+        format!("{} min", seconds / 60)
+    } else if seconds < 86_400 {
+        format!("{} h", seconds / 3600)
+    } else {
+        format!("{} d", seconds / 86_400)
+    }
+}
+
+/// What a settled card says: "Accepted in rev 23 · now", "Accepted",
+/// "Rejected · 4 min". The age only for one settled in this window.
+pub fn settled_words(accepted: bool, revision: Option<u64>, ago: Option<Duration>) -> String {
+    let words = match (accepted, revision) {
+        (true, Some(revision)) => format!("Accepted in rev {revision}"),
+        (true, None) => "Accepted".to_owned(),
+        (false, _) => "Rejected".to_owned(),
+    };
+    match ago {
+        Some(ago) => format!("{words} · {}", settled_age(ago)),
+        None => words,
+    }
+}
+
+/// The line over proposals that no turn of this conversation staged: who
+/// proposed the one over MCP when an agent did (the runtime's author kind
+/// `mcp`, Qt's `Author::isAgent`), else how many there are.
+pub fn strays_note(strays: &[Proposal]) -> String {
+    if let [only] = strays {
+        let agent = only.author["kind"].as_str() == Some("mcp");
+        let name = only.author["name"]
+            .as_str()
+            .map(str::trim)
+            .unwrap_or_default();
+        if agent && !name.is_empty() {
+            return format!("{name} proposed this over MCP.");
+        }
+        return "Proposed outside this conversation.".to_owned();
+    }
+    format!("{} proposals made outside this conversation.", strays.len())
+}
+
+/// The latest conversations a new one offers to go back to: those not
+/// archived and not `open`, newest first, at most `most`.
+pub fn recent_conversations<'a>(
+    conversations: &'a [model::ConversationSummary],
+    open: Option<&str>,
+    most: usize,
+) -> Vec<&'a model::ConversationSummary> {
+    let mut recent: Vec<&model::ConversationSummary> = conversations
+        .iter()
+        .filter(|summary| !summary.archived && Some(summary.id.as_str()) != open)
+        .collect();
+    recent.sort_by(|a, b| b.updated.cmp(&a.updated));
+    recent.truncate(most);
+    recent
+}
+
+/// What a new conversation offers to ask: Kerf's next steps, else the
+/// first requests Qt offered; at most four.
+pub fn try_asking(next_steps: &[String]) -> Vec<String> {
+    let offered: Vec<String> = next_steps
+        .iter()
+        .map(|step| step.trim().to_owned())
+        .filter(|step| !step.is_empty())
+        .take(4)
+        .collect();
+    if !offered.is_empty() {
+        return offered;
+    }
+    [
+        "Make a 30-second cut from the best takes",
+        "Tighten the pauses in the interview",
+        "Add captions to the whole sequence",
+    ]
+    .map(str::to_owned)
+    .to_vec()
+}
+
 /// "Worked for 1m 12s · 6 steps": what a finished turn folds to.
 pub fn worked_headline(seconds: Option<f64>, steps: usize) -> String {
-    let seconds = seconds.unwrap_or(0.0).max(0.0).round() as u64;
-    let length = if seconds >= 60 {
-        format!("{}m {}s", seconds / 60, seconds % 60)
-    } else {
-        format!("{seconds}s")
-    };
+    let length = work_length(seconds.unwrap_or(0.0));
     match steps {
         0 => format!("Worked for {length}"),
         1 => format!("Worked for {length} · 1 step"),
@@ -509,6 +630,22 @@ impl ProposalBook {
                 .is_some_and(|versions| versions.iter().any(|version| version.proposal_id == id))
     }
 
+    /// Whether ids `a` and `b` name one proposal: the same id, or two of
+    /// the ids it has gone by (its versions, what it replaced).
+    pub fn same(&self, a: &str, b: &str) -> bool {
+        if a == b {
+            return true;
+        }
+        self.versions.iter().any(|(current, versions)| {
+            let names = |id: &str| {
+                current == id
+                    || self.supersedes.get(current).map(String::as_str) == Some(id)
+                    || versions.iter().any(|version| version.proposal_id == id)
+            };
+            names(a) && names(b)
+        })
+    }
+
     /// The proposal among `proposals` that `id` names, by any of its ids.
     pub fn find<'a>(&self, proposals: &'a [Proposal], id: &str) -> Option<&'a Proposal> {
         proposals
@@ -532,7 +669,10 @@ impl ProposalBook {
 /// A clip a proposal changes, from its timeline against the program's.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ClipChange {
+    /// The clip's id, or the transition's.
     pub clip: String,
+    /// A transition between clips, not a clip.
+    pub transition: bool,
     /// What the clip is called.
     pub name: String,
     /// The track it ends up on (or was on, removed), as it is called.
@@ -574,10 +714,15 @@ impl ClipChange {
     /// Its row on a card: the clip and its track, where it goes, and by
     /// how much ("Logo · V2", "→ 00:00:26:12", "+17f").
     pub fn row(&self, fps: f64) -> (String, String, String) {
-        let name = if self.track.is_empty() {
-            self.name.clone()
+        let name = if self.transition {
+            "Transition"
         } else {
-            format!("{} · {}", self.name, self.track)
+            &self.name
+        };
+        let name = if self.track.is_empty() {
+            name.to_owned()
+        } else {
+            format!("{name} · {}", self.track)
         };
         let frames = |seconds: f64| (seconds * fps).round() as i64;
         let (target, shift) = if self.removed {
@@ -615,6 +760,123 @@ impl ClipChange {
         };
         (name, target, shift)
     }
+}
+
+/// One stretch of a change reel: where it plays on the program as it is
+/// (`before`) and on what the proposal makes (`after`), and what it is.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Segment {
+    pub before: f64,
+    pub before_end: f64,
+    pub after: f64,
+    pub after_end: f64,
+    pub title: String,
+}
+
+impl Segment {
+    pub fn length(&self) -> f64 {
+        self.after_end - self.after
+    }
+}
+
+/// What a change does, in words: "Trim sea", "Add title", "Transition".
+pub fn change_title(change: &ClipChange) -> String {
+    let name = if change.name.is_empty() {
+        &change.clip
+    } else {
+        &change.name
+    };
+    if change.transition {
+        "Transition".to_owned()
+    } else if change.added {
+        format!("Add {name}")
+    } else if change.removed {
+        format!("Remove {name}")
+    } else if change.trimmed {
+        format!("Trim {name}")
+    } else if change.moved || change.retracked {
+        format!("Move {name}")
+    } else if change.effects {
+        format!("Effects on {name}")
+    } else {
+        format!("Change {name}")
+    }
+}
+
+/// The change reel of `changes`: each change with `handle` seconds either
+/// side, in order on the proposal, those that touch merged ("Trim sea and
+/// 2 more"), each side's ends kept to its length (`before_length` the
+/// program's, `after_length` the proposal's). What a clamp leaves nothing
+/// of goes.
+pub fn reel_plan(
+    changes: &[ClipChange],
+    before_length: f64,
+    after_length: f64,
+    handle: f64,
+) -> Vec<Segment> {
+    let mut raw: Vec<Segment> = changes
+        .iter()
+        .map(|change| Segment {
+            // What is gone has no place on the proposal but where it was,
+            // and what is new none on the program but where it lands.
+            after: if change.removed {
+                change.old_start
+            } else {
+                change.new_start
+            },
+            after_end: if change.removed {
+                change.old_start
+            } else {
+                change.new_end
+            },
+            before: if change.added {
+                change.new_start
+            } else {
+                change.old_start
+            },
+            before_end: if change.added {
+                change.new_start
+            } else {
+                change.old_end
+            },
+            title: change_title(change),
+        })
+        .collect();
+    raw.sort_by(|a, b| a.after.total_cmp(&b.after));
+    let mut out: Vec<Segment> = Vec::new();
+    let mut merged = 0;
+    let close = |out: &mut Vec<Segment>, merged: &mut usize| {
+        if let (Some(last), true) = (out.last_mut(), *merged > 0) {
+            last.title = format!("{} and {} more", last.title, merged);
+        }
+        *merged = 0;
+    };
+    for mut segment in raw {
+        segment.after = (segment.after - handle).max(0.0);
+        segment.after_end = (segment.after_end + handle).min(after_length.max(0.0));
+        segment.before = (segment.before - handle).max(0.0);
+        segment.before_end = (segment.before_end + handle).min(before_length.max(0.0));
+        if let Some(last) = out
+            .last_mut()
+            .filter(|last| segment.after <= last.after_end)
+        {
+            last.after_end = last.after_end.max(segment.after_end);
+            last.before = last.before.min(segment.before);
+            last.before_end = last.before_end.max(segment.before_end);
+            merged += 1;
+            continue;
+        }
+        close(&mut out, &mut merged);
+        out.push(segment);
+    }
+    close(&mut out, &mut merged);
+    out.retain(|segment| segment.length() > 0.0);
+    out
+}
+
+/// How long a reel takes to watch, in seconds.
+pub fn reel_total(segments: &[Segment]) -> f64 {
+    segments.iter().map(Segment::length).sum()
 }
 
 /// Frames as a shift: "+17f", "−3f", "0f".
@@ -661,6 +923,7 @@ pub fn clip_changes(program: &Timeline, proposed: &Timeline) -> Vec<ClipChange> 
         change.trimmed = (clip.duration - was.duration).abs() > NEAR;
         change.effects = clip.effects != was.effects;
         change.properties = clip.text != was.text
+            || clip.props != was.props
             || clip.fx != was.fx
             || clip.name != was.name
             || clip.source_id != was.source_id
@@ -695,6 +958,66 @@ pub fn clip_changes(program: &Timeline, proposed: &Timeline) -> Vec<ClipChange> 
             removed: true,
             old_start: clip.timeline_start,
             old_end: clip.end(),
+            ..ClipChange::default()
+        });
+    }
+    changes.extend(transition_changes(program, proposed));
+    changes
+}
+
+/// The transitions `proposed` adds, moves, cuts, restyles or takes off
+/// against `program`, by id: a crossfade is a change as a clip is.
+fn transition_changes(program: &Timeline, proposed: &Timeline) -> Vec<ClipChange> {
+    const NEAR: f64 = 1e-4;
+    fn fades(timeline: &Timeline) -> Vec<(&model::Track, &model::Transition)> {
+        let mut seen = HashSet::new();
+        timeline
+            .tracks
+            .iter()
+            .flat_map(|track| track.transitions.iter().map(move |fade| (track, fade)))
+            .filter(|(_, fade)| !fade.id.is_empty() && seen.insert(fade.id.clone()))
+            .collect()
+    }
+    let before = fades(program);
+    let after = fades(proposed);
+    let mut changes = Vec::new();
+    for (track, fade) in &after {
+        let mut change = ClipChange {
+            clip: fade.id.clone(),
+            transition: true,
+            name: "Transition".to_owned(),
+            track: track.label().to_owned(),
+            new_start: fade.start,
+            new_end: fade.end,
+            ..ClipChange::default()
+        };
+        let Some((was_track, was)) = before.iter().find(|(_, was)| was.id == fade.id) else {
+            change.added = true;
+            changes.push(change);
+            continue;
+        };
+        change.old_start = was.start;
+        change.old_end = was.end;
+        change.moved = (fade.start - was.start).abs() > NEAR;
+        change.trimmed = ((fade.end - fade.start) - (was.end - was.start)).abs() > NEAR;
+        change.properties = fade.from != was.from || fade.to != was.to || fade.fx != was.fx;
+        change.retracked = track.id != was_track.id;
+        if change.moved || change.trimmed || change.properties || change.retracked {
+            changes.push(change);
+        }
+    }
+    for (track, fade) in &before {
+        if after.iter().any(|(_, now)| now.id == fade.id) {
+            continue;
+        }
+        changes.push(ClipChange {
+            clip: fade.id.clone(),
+            transition: true,
+            name: "Transition".to_owned(),
+            track: track.label().to_owned(),
+            removed: true,
+            old_start: fade.start,
+            old_end: fade.end,
             ..ClipChange::default()
         });
     }
@@ -772,7 +1095,7 @@ pub fn colour_change(
     let [change] = changes else {
         return None;
     };
-    if !change.effects || change.added || change.removed {
+    if !change.effects || change.transition || change.added || change.removed {
         return None;
     }
     let before = program
@@ -894,6 +1217,312 @@ pub fn pin_order(
     open.into_iter().map(|(_, id)| id).collect()
 }
 
+/// A script line's words, a quoted phrase ("A lower third") one word.
+pub fn script_words(line: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    let mut word = String::new();
+    let mut quoted = false;
+    for c in line.chars() {
+        if c == '"' {
+            quoted = !quoted;
+        }
+        if c.is_whitespace() && !quoted {
+            if !word.is_empty() {
+                words.push(std::mem::take(&mut word));
+            }
+            continue;
+        }
+        word.push(c);
+    }
+    if !word.is_empty() {
+        words.push(word);
+    }
+    words
+}
+
+/// The value of `key=` among a line's words, unquoted; empty for none.
+fn script_value(words: &[String], key: &str) -> String {
+    let prefix = format!("{key}=");
+    words
+        .iter()
+        .find_map(|word| word.strip_prefix(&prefix))
+        .map(|value| {
+            value
+                .strip_prefix('"')
+                .and_then(|value| value.strip_suffix('"'))
+                .unwrap_or(value)
+                .to_owned()
+        })
+        .unwrap_or_default()
+}
+
+/// Seconds in a script's amount or position ("-36f", "+1.5s", "96f",
+/// "00:00:12:00"); None for anything else (an anchor).
+pub fn script_seconds(text: &str, fps: f64) -> Option<f64> {
+    let fps = fps.max(1.0);
+    let text = text.trim();
+    let (sign, text) = match text.strip_prefix('-') {
+        Some(rest) => (-1.0, rest),
+        None => (1.0, text.strip_prefix('+').unwrap_or(text)),
+    };
+    let value = if let Some(frames) = text.strip_suffix('f') {
+        frames.parse::<f64>().ok()? / fps
+    } else if let Some(seconds) = text.strip_suffix('s') {
+        seconds.parse::<f64>().ok()?
+    } else {
+        let parts: Vec<f64> = text
+            .split([':', ';'])
+            .map(|part| part.parse::<f64>().ok())
+            .collect::<Option<_>>()?;
+        let [hours, minutes, seconds, frames] = parts.as_slice() else {
+            return None;
+        };
+        hours * 3600.0 + minutes * 60.0 + seconds + frames / fps
+    };
+    value.is_finite().then_some(sign * value)
+}
+
+/// A name with a media file's own extension taken off ("sea.mov" is
+/// "sea"); any other dot stays ("clip.v2").
+pub fn media_stem(name: &str) -> &str {
+    const MEDIA: [&str; 20] = [
+        "mov", "mp4", "m4v", "mkv", "webm", "avi", "mxf", "wav", "mp3", "m4a", "aac", "aif",
+        "aiff", "flac", "png", "jpg", "jpeg", "gif", "tif", "tiff",
+    ];
+    match name.rfind('.') {
+        Some(at)
+            if at > 0
+                && MEDIA
+                    .iter()
+                    .any(|suffix| name[at + 1..].eq_ignore_ascii_case(suffix)) =>
+        {
+            &name[..at]
+        }
+        _ => name,
+    }
+}
+
+/// "0:12", "1:04:30": a position as a reader says it.
+pub fn clock_time(seconds: f64) -> String {
+    let whole = seconds.max(0.0).round() as u64;
+    let (hours, minutes, rest) = (whole / 3600, (whole / 60) % 60, whole % 60);
+    if hours > 0 {
+        format!("{hours}:{minutes:02}:{rest:02}")
+    } else {
+        format!("{minutes}:{rest:02}")
+    }
+}
+
+/// "−1.5 s", "+12 s": an amount, its sign always shown (a true minus).
+pub fn signed_seconds(seconds: f64) -> String {
+    let magnitude = seconds.abs();
+    let text = if magnitude < 10.0 {
+        format!("{magnitude:.1}")
+    } else {
+        format!("{magnitude:.0}")
+    };
+    let text = text.strip_suffix(".0").unwrap_or(&text).to_owned();
+    format!("{}{text} s", if seconds < 0.0 { "−" } else { "+" })
+}
+
+/// A script line as a change a reader follows (Qt's describeScriptLine):
+/// what it does, to which clip by its name, and how much or where ("Trim
+/// fisher-close", "end −1.5 s"). A line not known here reads as itself.
+/// `program` names the clips and media; `proposed` names what it adds.
+pub fn describe_script_line(
+    line: &str,
+    program: &Timeline,
+    proposed: Option<&Timeline>,
+) -> (String, String) {
+    let line = line.trim();
+    let mut chars = line.chars();
+    let as_written = chars
+        .next()
+        .map(|first| first.to_uppercase().chain(chars).collect())
+        .unwrap_or_default();
+    let words = script_words(line);
+    let Some(verb) = words.first().map(String::as_str) else {
+        return (as_written, String::new());
+    };
+    let fps = program.rate();
+    let word = |index: usize| words.get(index).cloned().unwrap_or_default();
+    let clip_name = |id: &str| {
+        program
+            .clip(id)
+            .or_else(|| proposed.and_then(|cut| cut.clip(id)))
+            .map(|(_, clip)| media_stem(clip.label()).to_owned())
+            .unwrap_or_else(|| id.to_owned())
+    };
+    let span = |id: &str| {
+        program.clip(id).map(|(_, clip)| {
+            format!(
+                "{}\u{2009}–\u{2009}{}",
+                clock_time(clip.timeline_start),
+                clock_time(clip.end())
+            )
+        })
+    };
+    let at = |value: String| match script_seconds(&value, fps) {
+        Some(seconds) => clock_time(seconds),
+        None => value,
+    };
+    let subject = word(1);
+    let (description, detail) = match verb {
+        "trim" if words.len() >= 3 => {
+            let edge = if word(2) == "out" { "end" } else { "start" };
+            let detail = match script_seconds(&word(3), fps) {
+                Some(amount) => format!("{edge} {}", signed_seconds(amount)),
+                None if !script_value(&words, "to").is_empty() => {
+                    format!("{edge} to {}", at(script_value(&words, "to")))
+                }
+                None => edge.to_owned(),
+            };
+            (format!("Trim {}", clip_name(&subject)), detail)
+        }
+        "remove" | "delete" | "ripple-delete" | "extract" => (
+            format!("Remove {}", clip_name(&subject)),
+            span(&subject).unwrap_or_default(),
+        ),
+        "add" if words.len() >= 2 => {
+            let kind = word(1);
+            let mut text = script_value(&words, "text");
+            if text.is_empty() {
+                text = proposed
+                    .and_then(|cut| cut.clip(&word(2)))
+                    .and_then(|(_, clip)| clip.name.clone())
+                    .unwrap_or_default();
+            }
+            let description = if text.is_empty() {
+                format!("Add a {kind}")
+            } else {
+                format!("Add {kind} “{text}”")
+            };
+            let place = match words.iter().position(|word| word == "at") {
+                Some(index) => word(index + 1),
+                None => script_value(&words, "at"),
+            };
+            let detail = if place.is_empty() {
+                String::new()
+            } else {
+                format!("at {}", at(place))
+            };
+            (description, detail)
+        }
+        "insert" | "overwrite" => {
+            let media = script_value(&words, "media");
+            let name = if program.source(&media).is_some() {
+                media_stem(&program.media_name(&media)).to_owned()
+            } else {
+                media
+            };
+            let verb = if verb == "insert" {
+                "Insert"
+            } else {
+                "Overwrite with"
+            };
+            let place = script_value(&words, "at");
+            let detail = if place.is_empty() {
+                String::new()
+            } else {
+                format!("at {}", at(place))
+            };
+            (format!("{verb} {name}"), detail)
+        }
+        "move" | "roll" | "slide" | "slip" if words.len() >= 2 => {
+            let mut title = verb.chars();
+            let title: String = title
+                .next()
+                .map(|first| first.to_uppercase().chain(title).collect())
+                .unwrap_or_default();
+            let detail = match script_seconds(&word(2), fps) {
+                Some(amount) => signed_seconds(amount),
+                None if !script_value(&words, "at").is_empty() => {
+                    format!("to {}", at(script_value(&words, "at")))
+                }
+                None if !script_value(&words, "to").is_empty() => {
+                    format!("to {}", at(script_value(&words, "to")))
+                }
+                None => String::new(),
+            };
+            (format!("{title} {}", clip_name(&subject)), detail)
+        }
+        "split" if words.len() >= 2 => {
+            let place = script_value(&words, "at");
+            let detail = if place.is_empty() {
+                String::new()
+            } else {
+                format!("at {}", at(place))
+            };
+            (format!("Split {}", clip_name(&subject)), detail)
+        }
+        "set" if words.len() >= 3 => {
+            let keys: Vec<&str> = words[2..]
+                .iter()
+                .map(|word| word.split('=').next().unwrap_or_default())
+                .collect();
+            let gain = script_value(&words, "gain");
+            if !gain.is_empty() || keys.contains(&"volume") {
+                let detail = gain
+                    .parse::<f64>()
+                    .ok()
+                    .map(|db| {
+                        let sign = if db < 0.0 { "−" } else { "" };
+                        let value = param_value(&serde_json::json!(db.abs())).unwrap_or_default();
+                        format!("{sign}{value} dB")
+                    })
+                    .unwrap_or_default();
+                (format!("Change {}’s level", clip_name(&subject)), detail)
+            } else {
+                (
+                    format!("Change {}’s {}", clip_name(&subject), keys.join(", ")),
+                    String::new(),
+                )
+            }
+        }
+        "fx" if words.len() >= 3 => {
+            let effect = word(3).rsplit('.').next().unwrap_or_default().to_owned();
+            let name = clip_name(&subject);
+            let description = match word(2).as_str() {
+                "add" => format!("Add {effect} to {name}"),
+                "remove" => format!("Remove an effect from {name}"),
+                _ => format!("Change the effects on {name}"),
+            };
+            (description, String::new())
+        }
+        "mask" if words.len() >= 3 => {
+            let name = clip_name(&subject);
+            let description = if word(2) == "add" {
+                format!("Add a mask to {name}")
+            } else {
+                format!("Change the masks on {name}")
+            };
+            (description, String::new())
+        }
+        "transition" => {
+            let kind = script_value(&words, "fx");
+            let kind = kind.rsplit('.').next().unwrap_or_default();
+            let description = if kind.is_empty() {
+                "Add a transition".to_owned()
+            } else {
+                format!("Add a {kind}")
+            };
+            let detail = script_seconds(&script_value(&words, "dur"), fps)
+                .map(|length| {
+                    signed_seconds(length)
+                        .trim_start_matches(['+', '−'])
+                        .to_owned()
+                })
+                .unwrap_or_default();
+            (description, detail)
+        }
+        "captions" if words.len() >= 2 => {
+            (format!("Caption {}", clip_name(&subject)), String::new())
+        }
+        _ => (as_written, String::new()),
+    };
+    (description, detail)
+}
+
 /// What a script does, in a line: its first line that says something,
 /// else "Proposal vN".
 pub fn script_summary(script: &str, version: u32) -> String {
@@ -921,6 +1550,8 @@ enum Menu {
     Folder,
     /// A card's versions, by the proposal's id.
     Versions(String),
+    /// The context meter's card.
+    Context,
 }
 
 pub struct ChatView {
@@ -946,6 +1577,8 @@ pub struct ChatView {
     /// The answer just copied, which says so for a moment.
     copied: Option<String>,
     menu: Option<Menu>,
+    /// The open menu's rows, as the kit's menu (all but the context card's).
+    kit_menu: Option<Entity<ui::Menu>>,
     /// The menu a press outside it closed, and when: that press on its own
     /// chip does not open it again.
     menu_closed: Option<(Menu, Instant)>,
@@ -962,6 +1595,39 @@ pub struct ChatView {
     /// What the last check found failing, as requests to fill the composer
     /// with: the words shown, and the request.
     fixes: Vec<(String, String)>,
+    /// The keys a card's Accept and Reject name, as the keymap they were
+    /// read from has them.
+    keys: Option<(String, HashMap<&'static str, String>)>,
+    /// The Ask popover, while it is open.
+    ask: Option<Entity<crate::ask::AskView>>,
+    /// The cut whose picture went to the stage from its card.
+    stage_proposal: Option<String>,
+    /// A cut's picture under the pointer: the proposal, and how far across.
+    scrub: Option<(String, f32)>,
+    /// Where each cut's picture was last laid out, by proposal id, for the
+    /// pointer's place over it.
+    pictures: std::rc::Rc<std::cell::RefCell<HashMap<String, gpui::Bounds<gpui::Pixels>>>>,
+    /// The first cut Kerf is making, while it does; and the one it just
+    /// finished, and when, which says Done for a moment.
+    building: Option<String>,
+    built: Option<(String, Instant)>,
+    /// The poster a building cut showed before its newest clip, and when
+    /// the newest began to show over it.
+    turning: Option<(String, Instant)>,
+    /// The media of the newest clip a building cut's picture shows.
+    newest: Option<String>,
+    /// The footage gathered as Kerf starts on a project with no cut, and
+    /// when it gathered.
+    footage: Option<(Vec<String>, Instant)>,
+    /// Whether footage is to gather for the turn under way, once its
+    /// posters have come.
+    footage_wanted: bool,
+    /// The turn last seen starting.
+    turn_seen: Option<Instant>,
+    /// When the view began: what repeats goes on from here.
+    started_at: Instant,
+    /// How far the conversation sits back while a change reel plays.
+    behind: Tween,
     focus_handle: FocusHandle,
     _subscriptions: Vec<Subscription>,
 }
@@ -1026,11 +1692,16 @@ impl ChatView {
                 window,
                 |this, _, event: &InputEvent, window, cx| match event {
                     InputEvent::Submit => this.send(window, cx),
-                    // Esc stops Kerf while it works; else leaves the box.
+                    // Esc stops Kerf while it works; else leaves the box and
+                    // puts away what the window has open (the Media band, a
+                    // preview rendering), as it would outside the box.
                     InputEvent::Cancel => {
                         if this.session.read(cx).state.work.busy() {
                             this.stop(cx);
                         } else {
+                            // From the box, so it reaches the window, before
+                            // the box lets the keys go.
+                            window.dispatch_action(Box::new(crate::commands::Escape), cx);
                             window.blur();
                         }
                     }
@@ -1055,6 +1726,9 @@ impl ChatView {
                         .update(cx, |this, cx| {
                             let open = this.menu.take().is_some();
                             if open {
+                                if let Some(menu) = this.kit_menu.take() {
+                                    menu.update(cx, |menu, cx| menu.close(window, cx));
+                                }
                                 cx.notify();
                             }
                             open
@@ -1067,6 +1741,9 @@ impl ChatView {
             },
         ];
         let makings = cx.new(|cx| crate::making::Makings::new(session.clone(), window, cx));
+        // Each turn draws the cards of what it asked to have made; the list's
+        // foot only those heard as Kerf works, no turn holding them yet.
+        makings.update(cx, |makings, cx| makings.set_cards_in_turns(true, cx));
         let mut view = Self {
             session,
             composer,
@@ -1081,6 +1758,7 @@ impl ChatView {
             stopping: false,
             copied: None,
             menu: None,
+            kit_menu: None,
             menu_closed: None,
             placeholder: PLACEHOLDER.into(),
             refusal: None,
@@ -1088,6 +1766,20 @@ impl ChatView {
             ask_reason: None,
             clock: None,
             fixes: Vec::new(),
+            keys: None,
+            ask: None,
+            stage_proposal: None,
+            scrub: None,
+            pictures: Default::default(),
+            building: None,
+            built: None,
+            turning: None,
+            newest: None,
+            footage: None,
+            footage_wanted: false,
+            turn_seen: None,
+            started_at: Instant::now(),
+            behind: Tween::at(1.0),
             focus_handle: cx.focus_handle(),
             _subscriptions: subscriptions,
         };
@@ -1097,6 +1789,78 @@ impl ChatView {
 
     pub fn focus_composer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.composer.read(cx).focus(window);
+    }
+
+    /// Opens the Ask popover over `anchor` (in the window: the chosen clip
+    /// on the timeline, else the timeline at the playhead), with the
+    /// playhead's time as its title; its request goes about the chosen
+    /// clip or the whole sequence ([`crate::ask::AskView`]). The window
+    /// calls it for Ask Kerf… (`ai.ask`, ⌘J). A second call while it is
+    /// open moves it.
+    pub fn open_ask(
+        &mut self,
+        anchor: gpui::Bounds<gpui::Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let session = self.session.clone();
+        let ask = cx.new(|cx| crate::ask::AskView::new(session, anchor, window, cx));
+        cx.subscribe(&ask, |this, ask, _: &gpui::DismissEvent, cx| {
+            if this.ask.as_ref() == Some(&ask) {
+                this.ask = None;
+                cx.notify();
+            }
+        })
+        .detach();
+        ask.read(cx).focus(window, cx);
+        self.ask = Some(ask);
+        cx.notify();
+    }
+
+    /// Whether the Ask popover is open.
+    pub fn asking(&self) -> bool {
+        self.ask.is_some()
+    }
+
+    /// What Kerf does without asking, chosen here (the chip's menu or
+    /// Shift-Tab): kept, and said in the status line with what it means.
+    fn set_permissions(&mut self, permissions: Permissions, cx: &mut Context<Self>) {
+        let (label, line) = permission_words(permissions);
+        self.session.update(cx, |session, cx| {
+            session.prefs.permissions = permissions;
+            session.save_prefs();
+            session.state.notify(&format!("{label} · {line}"), false);
+            cx.notify();
+        });
+        cx.notify();
+    }
+
+    /// The keys a card's actions name, read again when the keymap changes.
+    fn refresh_keys(&mut self, cx: &App) {
+        let keymap = self.session.read(cx).prefs.keymap.wire().to_owned();
+        if self.keys.as_ref().is_some_and(|(read, _)| *read == keymap) {
+            return;
+        }
+        let catalog = crate::commands::catalog(&keymap);
+        let keys = [
+            "proposal.accept",
+            "proposal.reject",
+            "proposal.forward",
+            "ai.stop",
+        ]
+        .into_iter()
+        .filter_map(|id| {
+            let command = catalog.iter().find(|command| command.id == id)?;
+            let shown = crate::palette::shortcut(command);
+            (!shown.is_empty()).then_some((id, shown))
+        })
+        .collect();
+        self.keys = Some((keymap, keys));
+    }
+
+    /// The key command `id` has in the keymap, as a tip names it.
+    fn key_of(&self, id: &str) -> Option<String> {
+        self.keys.as_ref()?.1.get(id).cloned()
     }
 
     /// The request waiting for Kerf to finish, if one is.
@@ -1297,7 +2061,9 @@ impl ChatView {
     }
 
     /// A suggestion fills the composer, to be changed before it is sent.
-    fn fill(&mut self, words: String, window: &mut Window, cx: &mut Context<Self>) {
+    /// Puts `words` in the composer and gives it the keys, to be sent or
+    /// changed first (a suggestion, Finish's and Export's Ask Kerf).
+    pub fn fill(&mut self, words: String, window: &mut Window, cx: &mut Context<Self>) {
         self.composer
             .update(cx, |composer, cx| composer.set_text(words, cx));
         self.focus_composer(window, cx);
@@ -1330,13 +2096,20 @@ impl ChatView {
             .with_transformation(Transformation::rotate(radians(std::f32::consts::PI * turn)))
     }
 
-    fn toggle_menu(&mut self, menu: Menu, cx: &mut Context<Self>) {
+    fn toggle_menu(&mut self, menu: Menu, window: &mut Window, cx: &mut Context<Self>) {
         let closed_by_this_press = self.menu_closed.take().is_some_and(|(closed, at)| {
             closed == menu && at.elapsed() < Duration::from_millis(500)
         });
         if self.menu.as_ref() == Some(&menu) {
             self.menu = None;
+            if let Some(kit) = self.kit_menu.take() {
+                kit.update(cx, |kit, cx| kit.close(window, cx));
+            }
         } else if !closed_by_this_press {
+            if let Some(kit) = self.kit_menu.take() {
+                kit.update(cx, |kit, cx| kit.close(window, cx));
+            }
+            self.open_kit_menu(&menu, window, cx);
             self.menu = Some(menu);
         }
         cx.notify();
@@ -1346,14 +2119,52 @@ impl ChatView {
         if let Some(menu) = self.menu.take() {
             self.menu_closed = Some((menu, Instant::now()));
         }
+        self.kit_menu = None;
         cx.notify();
+    }
+
+    /// The kit's menu for `menu` (all but the context card, which is a
+    /// card): its keys, its letters, Esc and a press outside close it.
+    fn open_kit_menu(&mut self, menu: &Menu, window: &mut Window, cx: &mut Context<Self>) {
+        let (items, header, width): (Vec<ui::MenuItem>, Option<&'static str>, f32) = match menu {
+            Menu::Context => return,
+            Menu::Folder => (self.folder_items(cx), None, 240.0),
+            Menu::Permissions => (
+                self.permissions_items(cx),
+                Some("What Kerf does without asking"),
+                280.0,
+            ),
+            Menu::Model => {
+                let provider = self.session.read(cx).prefs.provider;
+                (self.model_items(cx), Some(provider.label()), 240.0)
+            }
+            Menu::Versions(id) => (self.version_items(id, cx), None, 260.0),
+        };
+        let kit = cx.new(|cx| {
+            let kit = ui::Menu::new(items, window, cx).width(width);
+            match header {
+                Some(header) => kit.header(header),
+                None => kit,
+            }
+        });
+        let open = menu.clone();
+        cx.subscribe(&kit, move |this, kit, _: &DismissEvent, cx| {
+            if this.kit_menu.as_ref() == Some(&kit) {
+                this.kit_menu = None;
+                if this.menu.as_ref() == Some(&open) {
+                    this.close_menu(cx);
+                }
+            }
+        })
+        .detach();
+        self.kit_menu = Some(kit);
     }
 
     fn copy(&mut self, turn: String, words: String, cx: &mut Context<Self>) {
         cx.write_to_clipboard(ClipboardItem::new_string(words.trim().to_owned()));
         self.copied = Some(turn.clone());
         cx.spawn(async move |this, cx| {
-            cx.background_executor().timer(scene::DONE_HOLD).await;
+            cx.background_executor().timer(COPIED_HOLD).await;
             let _ = this.update(cx, |this, cx| {
                 if this.copied.as_deref() == Some(turn.as_str()) {
                     this.copied = None;
@@ -1416,6 +2227,13 @@ impl ChatView {
                     } else {
                         column = column.child(self.proposal_named(proposal, named));
                     }
+                }
+                // What it asked to have made, a card each, under its answer.
+                if !turn.asks.is_empty() {
+                    let cards = self
+                        .makings
+                        .update(cx, |makings, cx| makings.cards_for(&turn.asks, cx));
+                    column = column.children(cards);
                 }
                 let again = troubled
                     .then(|| request_before(turns, index))
@@ -1778,13 +2596,12 @@ impl ChatView {
         let fps = session.timeline().rate();
         let connected = session.state.connection == Connection::Connected;
         if !proposal.is_pending() {
-            // Settled, it keeps to one line.
+            // Settled, it keeps to one line; settled here, it says when.
             let accepted = proposal.status == "accepted";
-            let words = match (accepted, self.book.applied.get(&id)) {
-                (true, Some(revision)) => format!("Accepted in rev {revision}"),
-                (true, None) => "Accepted".to_owned(),
-                (false, _) => "Rejected".to_owned(),
-            };
+            let ago = session
+                .settled_at(|sent| self.book.is(proposal, sent))
+                .map(|at| at.elapsed());
+            let words = settled_words(accepted, self.book.applied.get(&id).copied(), ago);
             let (icon, color) = if accepted {
                 (Icon::Check, theme::accent_ink())
             } else {
@@ -1845,7 +2662,7 @@ impl ChatView {
         let colour =
             timeline.and_then(|proposed| colour_change(session.timeline(), proposed, &changes));
         let rows: Vec<(String, String, String)> = if changes.is_empty() {
-            // Without its timeline, the script's lines say what it does.
+            // Without its timeline, the script's lines say what it does, in words.
             version
                 .script
                 .lines()
@@ -1853,7 +2670,10 @@ impl ChatView {
                 .filter(|line| {
                     !line.is_empty() && !line.starts_with('#') && !line.starts_with("use ")
                 })
-                .map(|line| (line.to_owned(), String::new(), String::new()))
+                .map(|line| {
+                    let (said, detail) = describe_script_line(line, session.timeline(), timeline);
+                    (said, detail, String::new())
+                })
                 .collect()
         } else {
             changes.iter().map(|change| change.row(fps)).collect()
@@ -1876,15 +2696,26 @@ impl ChatView {
         }
         let preview_shown = session.state.preview.proposal.as_deref() == Some(shown_id.as_str())
             && previewing(&session.state.preview.status);
-        // Only what it changes, with a little either side; the bridge renders
-        // at most two minutes of a preview.
-        let watch = timeline
-            .filter(|_| !stale)
-            .and_then(|proposed| model::changed_span(session.timeline(), proposed, 1.0, 120.0));
+        // Only what it changes, two seconds either side, one stretch after
+        // another.
+        let watch = timeline.filter(|_| !stale).and_then(|proposed| {
+            let program = session.timeline();
+            let segments = reel_plan(
+                &changes,
+                session.state.program_length().max(program.duration),
+                proposed.duration.max(cut_frames(proposed).1),
+                2.0,
+            );
+            (!segments.is_empty()).then_some(segments)
+        });
         let changes_key = format!("changes-{id}");
         let changes_open = self.is_open(&changes_key);
         let script_open = self.scripts.contains(&id);
         let count = rows.len();
+        // A first cut has its picture at the card's top.
+        let first_cut = timeline
+            .filter(|cut| !session.timeline().has_clips() && cut.has_clips())
+            .cloned();
 
         let mut card = div()
             .relative()
@@ -1900,6 +2731,10 @@ impl ChatView {
             } else {
                 theme::with_alpha(theme::pos(), 0.45)
             });
+        if let Some(cut) = &first_cut {
+            let state = self.picture_state(&id, cx);
+            card = card.child(self.cut_picture(&id, cut, state, window, cx));
+        }
         if pinned {
             card = card
                 .child(
@@ -1914,6 +2749,7 @@ impl ChatView {
                 )
                 .child(ui::label("Pinned proposal", text::META, theme::ink3()));
         }
+        let toggle_title = changes_key.clone();
         card = card.child(
             div()
                 .flex()
@@ -1921,13 +2757,20 @@ impl ChatView {
                 .gap(px(8.0))
                 .child(div().pt(px(2.0)).child(Icon::Film.view(16.0, theme::pos())))
                 .child(
+                    // Pressed, the title opens or closes the card's changes.
                     ui::label(
                         script_summary(&version.script, version.version),
                         text::BODY_NAME,
                         theme::ink(),
                     )
+                    .id(ElementId::Name(format!("title-{id}").into()))
                     .flex_1()
-                    .min_w_0(),
+                    .min_w_0()
+                    .when(count > 0, |title| {
+                        title.cursor_pointer().on_click(
+                            cx.listener(move |this, _, _, cx| this.toggle_fold(&toggle_title, cx)),
+                        )
+                    }),
                 )
                 .when(stale, |row| {
                     row.child(ui::chip("Out of date", theme::warn()))
@@ -1981,7 +2824,7 @@ impl ChatView {
                 })
                 .child(div().flex_1())
                 .when(versions.len() > 1, |row| {
-                    row.child(self.versions_button(&id, &shown_id, &versions, fps, cx))
+                    row.child(self.versions_button(&id, &shown_id, &versions, cx))
                 }),
         );
         if changes_open && count > 0 {
@@ -2045,17 +2888,20 @@ impl ChatView {
                 .flex_wrap()
                 .gap(px(8.0))
                 .when(!stale, |row| {
-                    let button =
+                    let mut button =
                         ui::button(ElementId::Name(format!("accept-{id}").into()), "Accept")
                             .small()
                             .icon(Icon::Check)
-                            .disabled(!connected)
-                            .on_click({
-                                let session = self.session.clone();
-                                move |_, _, cx| {
-                                    session.update(cx, |session, _| session.accept(&accept))
-                                }
-                            });
+                            .tooltip("Accept")
+                            .reason("Connect to start editing")
+                            .disabled(!connected);
+                    if let Some(key) = self.key_of("proposal.accept") {
+                        button = button.key(key);
+                    }
+                    let button = button.on_click({
+                        let session = self.session.clone();
+                        move |_, _, cx| session.update(cx, |session, _| session.accept(&accept))
+                    });
                     row.child(if pinned { button.primary() } else { button })
                 })
                 .when(stale, |row| {
@@ -2064,6 +2910,8 @@ impl ChatView {
                         "Bring forward",
                     )
                     .small()
+                    .tooltip("Out of date · run it again on the edit as it is…")
+                    .reason("Connect to start editing")
                     .disabled(!connected)
                     .on_click({
                         let session = self.session.clone();
@@ -2071,24 +2919,24 @@ impl ChatView {
                     });
                     row.child(if pinned { button.primary() } else { button })
                 })
-                .when_some(watch, |row, (start, end)| {
+                .when_some(watch, |row, segments| {
                     let session = self.session.clone();
                     let proposal = shown_id.clone();
+                    let seconds = reel_total(&segments).ceil() as i64;
                     row.child(
                         ui::button(
                             ElementId::Name(format!("watch-{id}").into()),
-                            "Watch the change",
+                            format!("Watch what changed · {seconds} s"),
                         )
                         .small()
                         .icon(Icon::Eye)
+                        .tooltip("Plays only what this proposal changes")
+                        .reason("Connect to start editing")
                         .disabled(!connected)
                         .on_click(move |_, window, cx| {
-                            session.update(cx, |session, _| {
-                                session.send(serde_json::json!({
-                                    "type": "preview", "proposalId": proposal,
-                                    "start": start, "duration": end - start,
-                                }));
-                                session.seek(start, false);
+                            session.update(cx, |session, cx| {
+                                session.watch_changes(&proposal, segments.clone());
+                                cx.notify();
                             });
                             window.dispatch_action(Box::new(RevealPicture), cx);
                         }),
@@ -2131,6 +2979,12 @@ impl ChatView {
                     ui::button(ElementId::Name(format!("reject-{id}").into()), "Reject")
                         .small()
                         .ghost()
+                        .tooltip("Reject")
+                        .key(
+                            self.key_of("proposal.reject")
+                                .unwrap_or_else(|| "Esc".to_owned()),
+                        )
+                        .reason("Connect to start editing")
                         .disabled(!connected)
                         .on_click({
                             let session = self.session.clone();
@@ -2148,7 +3002,6 @@ impl ChatView {
         id: &str,
         shown_id: &str,
         versions: &[Version],
-        fps: f64,
         cx: &Context<Self>,
     ) -> AnyElement {
         let menu = Menu::Versions(id.to_owned());
@@ -2157,69 +3010,27 @@ impl ChatView {
             .iter()
             .find(|version| version.proposal_id == shown_id)
             .map_or(1, |version| version.version);
-        let program = self.session.read(cx).timeline().clone();
         let toggle = menu.clone();
-        let button = theme::type_style(div(), text::MONO_SMALL)
-            .id(ElementId::Name(format!("versions-{id}").into()))
-            .flex()
-            .items_center()
-            .gap(px(2.0))
-            .h(px(20.0))
-            .pl(px(6.0))
-            .pr(px(2.0))
-            .rounded(px(theme::radius::SMALL))
-            .text_color(if open { theme::ink() } else { theme::ink3() })
-            .cursor_pointer()
-            .hover(|button| button.bg(theme::hover2()).text_color(theme::ink()))
-            .child(format!("v{shown}"))
-            .child(Icon::ChevronDown.view(14.0, theme::ink3()))
-            .on_click(cx.listener(move |this, _, _, cx| this.toggle_menu(toggle.clone(), cx)));
-        let mut wrapper = div().relative().flex_none().child(button);
-        if open {
-            let items = versions.iter().map(|version| {
-                let label = self
-                    .book
-                    .timelines
-                    .get(&version.proposal_id)
-                    .and_then(|timeline| {
-                        clip_changes(&program, timeline)
-                            .into_iter()
-                            .find(|change| change.moved)
-                    })
-                    .map(|change| {
-                        let shift = ((change.new_start - change.old_start) * fps).round() as i64;
-                        let shift = signed_frames(shift);
-                        format!(
-                            "v{} {} · {} fr",
-                            version.version,
-                            model::timecode(change.new_start, fps),
-                            shift.trim_end_matches('f')
-                        )
-                    })
-                    .unwrap_or_else(|| format!("v{}", version.version));
-                let proposal = id.to_owned();
-                let chosen = version.proposal_id.clone();
-                menu_item(
-                    ElementId::Name(format!("version-{}", version.proposal_id).into()),
-                    label,
-                    None,
-                    version.proposal_id == shown_id,
-                )
+        let button =
+            theme::type_style(div(), text::MONO_SMALL)
+                .id(ElementId::Name(format!("versions-{id}").into()))
+                .flex()
+                .items_center()
+                .gap(px(2.0))
+                .h(px(20.0))
+                .pl(px(6.0))
+                .pr(px(2.0))
+                .rounded(px(theme::radius::SMALL))
+                .text_color(if open { theme::ink() } else { theme::ink3() })
+                .cursor_pointer()
+                .hover(|button| button.bg(theme::hover2()).text_color(theme::ink()))
+                .child(format!("v{shown}"))
+                .child(Icon::ChevronDown.view(14.0, theme::ink3()))
                 .on_click(cx.listener(move |this, _, window, cx| {
-                    if chosen == proposal {
-                        this.shown.remove(&proposal);
-                    } else {
-                        this.shown.insert(proposal.clone(), chosen.clone());
-                    }
-                    this.menu = None;
-                    let chosen = chosen.clone();
-                    this.session
-                        .update(cx, |session, _| session.preview(Some(&chosen)));
-                    window.dispatch_action(Box::new(RevealPicture), cx);
-                    cx.notify();
-                }))
-            });
-            let body = menu_frame(px(260.0), cx).children(items);
+                    this.toggle_menu(toggle.clone(), window, cx)
+                }));
+        let mut wrapper = div().relative().flex_none().child(button);
+        if let Some(body) = self.kit_menu.clone().filter(|_| open) {
             wrapper = wrapper.child(
                 div().absolute().top_full().right_0().child(
                     deferred(
@@ -2227,7 +3038,7 @@ impl ChatView {
                             .anchor(Corner::TopRight)
                             .offset(point(px(0.0), px(theme::space::S4)))
                             .snap_to_window_with_margin(Edges::all(px(theme::space::S8)))
-                            .child(fade_in(body, format!("versions-menu-{id}"))),
+                            .child(body),
                     )
                     .with_priority(1),
                 ),
@@ -2264,7 +3075,10 @@ impl ChatView {
         }));
     }
 
-    /// What Kerf is doing now, under your request.
+    /// What Kerf is doing now, under your request: "Working", the time so
+    /// far and the step it is on; its last steps; the first cut it is
+    /// making, as a card at work; the footage it starts on; three dots
+    /// until it says anything; and its answer as it streams.
     fn working(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         let started = self.session.read(cx).state.work.started?;
         // The clock goes on once a second; the light 30 times a second while it shows.
@@ -2275,17 +3089,27 @@ impl ChatView {
         }
         let session = self.session.read(cx);
         let work = &session.state.work;
-        let elapsed = started.elapsed().as_secs();
-        let clock = format!("{}:{:02}", elapsed / 60, elapsed % 60);
+        let clock = format!(" · {}", work_clock(started.elapsed().as_secs_f64()));
         let phase = motion::phase(started, scene::WORK_SHIMMER);
         let status = if self.stopping {
             "Stopping…".to_owned()
         } else {
             work.status.clone()
         };
-        let mut label =
-            ui::label(SharedString::from(status), text::BODY_NAME, theme::ink2()).relative();
+        let mut label = ui::label("Working", text::CONTROL_STRONG, theme::ink2())
+            .relative()
+            .flex_none()
+            .overflow_hidden();
         if let Some(at) = motion::shimmer_at(phase, 1.0).filter(|_| !motion::reduced()) {
+            // A band of light, brightest at its middle, passing over the word.
+            let half = |rising: bool| {
+                let (from, to) = if rising { (0.0, 0.28) } else { (0.28, 0.0) };
+                div().h_full().w(gpui::relative(0.5)).bg(linear_gradient(
+                    90.0,
+                    linear_color_stop(theme::with_alpha(theme::ink(), from), 0.0),
+                    linear_color_stop(theme::with_alpha(theme::ink(), to), 1.0),
+                ))
+            };
             label = label.child(
                 div()
                     .absolute()
@@ -2293,11 +3117,9 @@ impl ChatView {
                     .bottom_0()
                     .left(gpui::relative(at - 0.2))
                     .w(gpui::relative(0.4))
-                    .bg(linear_gradient(
-                        90.0,
-                        linear_color_stop(theme::with_alpha(theme::ink(), 0.0), 0.0),
-                        linear_color_stop(theme::with_alpha(theme::ink(), 0.28), 0.5),
-                    )),
+                    .flex()
+                    .child(half(true))
+                    .child(half(false)),
             );
         }
         let steps = work
@@ -2313,11 +3135,20 @@ impl ChatView {
             div()
                 .flex()
                 .items_center()
-                .gap(px(8.0))
+                .min_w_0()
                 .child(label)
-                .child(ui::label(clock, text::TIMECODE, theme::ink3())),
+                .child(ui::label(clock, text::MONO_SMALL, theme::ink3()).flex_none())
+                .when(!status.trim().is_empty(), |row| {
+                    row.child(
+                        ui::line(status, text::CONTROL, theme::ink3())
+                            .ml(px(theme::space::S8))
+                            .flex_1()
+                            .min_w_0(),
+                    )
+                }),
         );
         if !steps.is_empty() {
+            let latest = steps.len() - 1;
             column = column.child(
                 div()
                     .flex()
@@ -2326,63 +3157,398 @@ impl ChatView {
                     .pl(px(10.0))
                     .border_l_1()
                     .border_color(theme::line2())
-                    .children(steps.into_iter().map(|step| {
+                    .children(steps.into_iter().enumerate().map(|(index, step)| {
                         let (icon, color) = match step.state {
                             StepState::Running => (Icon::Dot, theme::activity::kerf()),
                             StepState::Done => (Icon::Check, theme::ink3()),
                             StepState::Failed => (Icon::Close, theme::neg()),
+                        };
+                        let ink = match step.state {
+                            StepState::Failed => theme::neg(),
+                            _ if index == latest => theme::ink(),
+                            _ => theme::ink2(),
                         };
                         div()
                             .flex()
                             .items_center()
                             .gap(px(6.0))
                             .child(icon.view(12.0, color))
-                            .child(ui::line(step.text, text::CONTROL, theme::ink2()))
+                            .child(ui::line(step.text, text::CONTROL, ink))
                     })),
             );
         }
-        if !answer.trim().is_empty() {
+        // The first cut it is making: its card, at work.
+        if let Some(card) = self.building_card(window, cx) {
+            column = column.child(card);
+        }
+        // The footage it will choose from.
+        if let Some(tiles) = self.footage_sheet(cx) {
+            column = column.child(tiles);
+        }
+        if answer.trim().is_empty() {
+            // Before it has said anything, three dots in turn.
+            let lit = draft_dot(started.elapsed(), motion::reduced());
+            column = column.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(3.0))
+                    .h(px(16.0))
+                    .pl(px(2.0))
+                    .children((0..3).map(|dot| {
+                        let full = lit.is_none_or(|lit| lit == dot);
+                        div()
+                            .size(px(3.0))
+                            .rounded_full()
+                            .bg(theme::ink3())
+                            .opacity(if full { 1.0 } else { 0.45 })
+                    })),
+            );
+        } else {
             column = column.child(self.prose(&answer, "live", theme::ink(), cx));
         }
         Some(column.into_any_element())
     }
 
-    fn empty(&self, cx: &mut Context<Self>) -> AnyElement {
+    /// Follows the turn and the first cut it makes: footage is wanted as
+    /// a turn starts on footage with no cut, and goes when it ends; the
+    /// cut being made is followed, and when it is done it says so.
+    fn follow_turn(&mut self, cx: &mut Context<Self>) {
         let session = self.session.read(cx);
-        let has_cut = session.timeline().has_clips();
-        let suggestions: &[&str] = if has_cut {
-            &[
-                "Tighten the cut",
-                "Find the best take of each line",
-                "Add captions",
-            ]
+        let started = session.state.work.started;
+        if started != self.turn_seen {
+            self.turn_seen = started;
+            self.footage = None;
+            let timeline = session.timeline();
+            self.footage_wanted = started.is_some()
+                && !motion::reduced()
+                && session.picture_open != Some(true)
+                && !timeline.has_clips()
+                && !timeline.sources.is_empty();
+        }
+        if started.is_none() {
+            self.footage = None;
+            self.footage_wanted = false;
+        }
+        let cutting = session
+            .cutting()
+            .then(|| {
+                session
+                    .first_cut()
+                    .map(|(proposal, _)| proposal.proposal_id.clone())
+            })
+            .flatten();
+        match cutting {
+            Some(id) => self.building = Some(id),
+            None => {
+                if let Some(was) = self.building.take() {
+                    self.built = Some((was, Instant::now()));
+                    self.newest = None;
+                    self.turning = None;
+                }
+            }
+        }
+        if self
+            .built
+            .as_ref()
+            .is_some_and(|(_, at)| at.elapsed() >= CARD_DONE)
+        {
+            self.built = None;
+        }
+        // The picture went back from the stage: the card has it again.
+        if session.picture_open == Some(false) {
+            self.stage_proposal = None;
+        }
+    }
+
+    /// The card of the first cut Kerf is making: its picture at work, its
+    /// title, and nothing to do with it yet.
+    fn building_card(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let id = self.building.clone()?;
+        let (title, cut) = {
+            let session = self.session.read(cx);
+            let (proposal, cut) = session.first_cut()?;
+            (
+                script_summary(&proposal.script, proposal.version),
+                cut.clone(),
+            )
+        };
+        let state = self.building_state(&id, &cut, cx);
+        let picture = self.cut_picture(&id, &cut, state, window, cx);
+        Some(
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(8.0))
+                .p(px(10.0))
+                .rounded(px(theme::radius::CARD))
+                .bg(theme::raised())
+                .border_1()
+                .border_color(theme::line())
+                .child(picture)
+                .child(
+                    div()
+                        .px(px(4.0))
+                        .child(ui::line(title, text::BODY_NAME, theme::ink())),
+                )
+                .with_animation(
+                    "building-card",
+                    motion::animation(scene::APPEAR),
+                    |card, t| card.opacity(t),
+                )
+                .into_any_element(),
+        )
+    }
+
+    /// How cut `id`'s picture stands now: just done, on the stage, under
+    /// the pointer.
+    fn picture_state(&self, id: &str, cx: &App) -> PictureState {
+        let session = self.session.read(cx);
+        PictureState {
+            on_stage: session.picture_open == Some(true)
+                && self
+                    .stage_proposal
+                    .as_deref()
+                    .is_some_and(|shown| self.book.same(shown, id)),
+            scrub: self
+                .scrub
+                .as_ref()
+                .filter(|(over, _)| over == id)
+                .map(|(_, across)| *across),
+            finished: self
+                .built
+                .as_ref()
+                .filter(|(built, _)| self.book.same(built, id))
+                .map(|(_, at)| at.elapsed()),
+            ..PictureState::default()
+        }
+    }
+
+    /// How a building cut's picture stands: at work, the newest clip
+    /// placed turning in over the last.
+    fn building_state(&mut self, id: &str, cut: &Timeline, cx: &App) -> PictureState {
+        let mut state = PictureState {
+            working: true,
+            finished: None,
+            ..self.picture_state(id, cx)
+        };
+        let session = self.session.read(cx);
+        let (frames, _) = cut_frames(cut);
+        let newest = frames
+            .iter()
+            .rev()
+            .find(|(_, source)| session.artwork.poster(source).is_some())
+            .map(|(_, source)| source.clone());
+        if newest != self.newest {
+            if let (Some(old), false) = (self.newest.take(), motion::reduced()) {
+                self.turning = Some((old, Instant::now()));
+            }
+            self.newest = newest;
+        }
+        if let Some((before, at)) = &self.turning {
+            let t = at.elapsed().as_secs_f32() / CARD_CROSSFADE.as_secs_f32();
+            match session.artwork.poster(before).filter(|_| t < 1.0) {
+                Some(poster) => state.before = Some((poster, motion::ease(t))),
+                None => self.turning = None,
+            }
+        }
+        state
+    }
+
+    /// The footage Kerf starts on, as named poster tiles popping in one
+    /// after another; it goes when the turn ends.
+    fn footage_sheet(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let session = self.session.read(cx);
+        let timeline = session.timeline();
+        if self.footage_wanted && self.footage.is_none() {
+            let posters: Vec<String> = timeline
+                .sources
+                .iter()
+                .filter(|source| session.artwork.poster(&source.id).is_some())
+                .take(FOOTAGE_MOST)
+                .map(|source| source.id.clone())
+                .collect();
+            // A folder just brought in has its posters still to come.
+            if !timeline.sources.is_empty()
+                && posters.len() >= timeline.sources.len().min(FOOTAGE_MOST)
+            {
+                self.footage = Some((posters, Instant::now()));
+                self.footage_wanted = false;
+            }
+        }
+        let (ids, _) = self.footage.as_ref()?;
+        let session = self.session.read(cx);
+        let timeline = session.timeline();
+        let tiles = ids.iter().enumerate().filter_map(|(index, id)| {
+            let poster = session.artwork.poster(id)?;
+            let name = timeline.media_name(id);
+            let delay = scene::POP_STAGGER.as_secs_f32() * index as f32;
+            let pop = scene::POP.as_secs_f32();
+            let whole = Duration::from_secs_f32(delay + pop);
+            Some(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(4.0))
+                    .w(px(FOOTAGE_TILE.0))
+                    .child(
+                        div()
+                            .relative()
+                            .w(px(FOOTAGE_TILE.0))
+                            .h(px(FOOTAGE_TILE.1))
+                            .rounded(px(theme::radius::SMALL))
+                            .overflow_hidden()
+                            .bg(theme::well())
+                            .child(poster_layer(poster, theme::radius::SMALL)),
+                    )
+                    .child(ui::line(name, text::META, theme::ink2()))
+                    .with_animation(
+                        ElementId::Name(format!("footage-{id}").into()),
+                        gpui::Animation::new(motion::duration(whole).max(Duration::from_millis(1))),
+                        move |tile, t| {
+                            let local = ((t * (delay + pop) - delay) / pop).clamp(0.0, 1.0);
+                            let eased = motion::ease(local);
+                            tile.opacity(eased)
+                                .mt(px(scene::FOOTAGE_RISE * (1.0 - eased)))
+                        },
+                    ),
+            )
+        });
+        Some(
+            div()
+                .flex()
+                .flex_wrap()
+                .gap(px(theme::space::S12))
+                .children(tiles)
+                .into_any_element(),
+        )
+    }
+
+    /// A conversation not yet begun: where to work (the folders, the open
+    /// one ticked, Open Folder… and New Project…), then the latest other
+    /// conversations here, or with none, things to ask.
+    fn empty(&self, cx: &mut Context<Self>) -> AnyElement {
+        use crate::sidebar::Entry;
+        let session = self.session.read(cx);
+        let folders: Vec<_> =
+            crate::sidebar::folder_entries(&session.prefs.recent, session.project.as_deref())
+                .into_iter()
+                .filter(|entry| matches!(entry.entry, Entry::Open(_) | Entry::Command(_)))
+                .collect();
+        let mut shown_folders = 0;
+        let mut folder_rows = Vec::new();
+        for (index, entry) in folders.into_iter().enumerate() {
+            if matches!(entry.entry, Entry::Open(_)) {
+                shown_folders += 1;
+                if shown_folders > 4 {
+                    continue;
+                }
+            }
+            if entry.separated {
+                folder_rows.push(
+                    div()
+                        .my(px(4.0))
+                        .child(ui::hairline(true))
+                        .into_any_element(),
+                );
+            }
+            let chosen = entry.checked;
+            let run = entry.entry.clone();
+            let icon = entry.icon;
+            let row = welcome_row(
+                ElementId::Name(format!("welcome-folder-{index}").into()),
+                icon,
+                entry.words,
+                chosen,
+            )
+            .when_some(entry.tip, |row, tip| {
+                row.tooltip(ui::tooltip(ui::Tip::new(tip)))
+            })
+            .on_click(cx.listener(move |_, _, window, cx| match &run {
+                Entry::Open(folder) if !chosen => window.dispatch_action(
+                    Box::new(crate::commands::OpenRecent {
+                        path: folder.to_string_lossy().into_owned().into(),
+                    }),
+                    cx,
+                ),
+                Entry::Command(id) => window.dispatch_action(Box::new(RunCommand::new(id)), cx),
+                _ => {}
+            }));
+            folder_rows.push(row.into_any_element());
+        }
+        let recent: Vec<(String, String)> = recent_conversations(
+            &session.state.conversations,
+            session.conversation.as_deref(),
+            3,
+        )
+        .into_iter()
+        .map(|summary| (summary.id.clone(), summary.label().to_owned()))
+        .collect();
+        let second: Vec<AnyElement> = if recent.is_empty() {
+            try_asking(&session.state.next_steps)
+                .into_iter()
+                .enumerate()
+                .map(|(index, words)| {
+                    let request = words.clone();
+                    welcome_row(
+                        ElementId::Name(format!("suggest-{index}").into()),
+                        Some(Icon::Sparkle),
+                        words,
+                        false,
+                    )
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.fill(request.clone(), window, cx)
+                    }))
+                    .into_any_element()
+                })
+                .collect()
         } else {
-            &[
-                "Make a first cut from my footage",
-                "Find the strongest moments",
-                "Cut a 30-second short",
-            ]
+            recent
+                .into_iter()
+                .map(|(id, title)| {
+                    let open = id.clone();
+                    welcome_row(
+                        ElementId::Name(format!("welcome-conversation-{id}").into()),
+                        None,
+                        title.clone(),
+                        false,
+                    )
+                    .tooltip(ui::tooltip(ui::Tip::new(title)))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.session.update(cx, |session, cx| {
+                            session.open_conversation(Some(open.clone()));
+                            cx.notify();
+                        });
+                        this.focus_composer(window, cx);
+                    }))
+                    .into_any_element()
+                })
+                .collect()
+        };
+        let card = |rows: Vec<AnyElement>| {
+            div()
+                .flex()
+                .flex_col()
+                .p(px(theme::space::S4))
+                .rounded(px(theme::radius::PANEL))
+                .bg(theme::card())
+                .border_1()
+                .border_color(theme::line())
+                .children(rows)
         };
         div()
             .flex()
-            .flex_col()
-            .items_center()
-            .gap(px(18.0))
-            .pt(px(120.0))
-            .child(ui::label("What are we making?", text::DISPLAY, theme::ink()))
-            .child(ui::label(
-                "Kerf cuts in the project with you. Ask, and look at what it proposes before it is yours.",
-                text::BODY,
-                theme::ink3(),
-            ))
+            .justify_center()
+            .pt(px(96.0))
             .child(
-                div().flex().flex_wrap().justify_center().gap(px(8.0)).children(suggestions.iter().enumerate().map(
-                    |(index, words)| {
-                        let words = (*words).to_owned();
-                        ui::button(ElementId::Name(format!("suggest-{index}").into()), words.clone())
-                            .on_click(cx.listener(move |this, _, window, cx| this.fill(words.clone(), window, cx)))
-                    },
-                )),
+                div()
+                    .w(px(WELCOME_COLUMN))
+                    .max_w_full()
+                    .flex()
+                    .flex_col()
+                    .gap(px(theme::space::S12))
+                    .child(card(folder_rows))
+                    .child(card(second)),
             )
             .with_animation("empty-rise", motion::animation(scene::RISE), |empty, t| {
                 empty.opacity(t).mt(px(scene::PAGE_RISE * (1.0 - t)))
@@ -2398,39 +3564,38 @@ impl ChatView {
         &self,
         menu: Menu,
         id: &'static str,
-        (icon, words, tip): (Option<Icon>, String, String),
-        body: impl FnOnce(&Self, &Context<Self>) -> AnyElement,
+        (icon, words, tip): (Option<Icon>, String, ui::Tip),
         cx: &Context<Self>,
     ) -> AnyElement {
         let open = self.menu.as_ref() == Some(&menu);
         let toggle = menu.clone();
         let ink = if open { theme::ink() } else { theme::ink3() };
-        let chip = theme::type_style(div(), text::META)
-            .flex()
-            .flex_none()
-            .items_center()
-            .gap(px(4.0))
-            .h(px(20.0))
-            .pl(px(8.0))
-            .rounded(px(10.0))
-            .bg(theme::raised())
-            .text_color(ink)
-            .when_some(icon, |chip, icon| {
-                chip.child(icon.view(12.0, theme::ink3()))
-            })
-            .child(words)
-            .id(id)
-            .pr(px(4.0))
-            .cursor_pointer()
-            .hover(|chip| chip.bg(theme::hover2()).text_color(theme::ink2()))
-            .child(Icon::ChevronDown.view(12.0, theme::ink3()))
-            .when(!open, |chip| {
-                chip.tooltip(move |_, cx| cx.new(|_| ui::Tooltip(tip.clone().into())).into())
-            })
-            .on_click(cx.listener(move |this, _, _, cx| this.toggle_menu(toggle.clone(), cx)));
+        let chip =
+            theme::type_style(div(), text::META)
+                .flex()
+                .flex_none()
+                .items_center()
+                .gap(px(4.0))
+                .h(px(20.0))
+                .pl(px(8.0))
+                .rounded(px(10.0))
+                .bg(theme::raised())
+                .text_color(ink)
+                .when_some(icon, |chip, icon| {
+                    chip.child(icon.view(12.0, theme::ink3()))
+                })
+                .child(words)
+                .id(id)
+                .pr(px(4.0))
+                .cursor_pointer()
+                .hover(|chip| chip.bg(theme::hover2()).text_color(theme::ink2()))
+                .child(Icon::ChevronDown.view(12.0, theme::ink3()))
+                .when(!open, |chip| chip.tooltip(ui::tooltip(tip)))
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.toggle_menu(toggle.clone(), window, cx)
+                }));
         let mut wrapper = div().relative().flex_none().child(chip);
-        if open {
-            let body = body(self, cx);
+        if let Some(body) = self.kit_menu.clone().filter(|_| open) {
             wrapper = wrapper.child(
                 // Over the chip, its left edge on the chip's, over everything.
                 div().absolute().bottom_full().left_0().child(
@@ -2439,7 +3604,79 @@ impl ChatView {
                             .anchor(Corner::BottomLeft)
                             .offset(point(px(0.0), px(-theme::space::S4)))
                             .snap_to_window_with_margin(Edges::all(px(theme::space::S8)))
-                            .child(fade_in(body, format!("{id}-menu"))),
+                            .child(body),
+                    )
+                    .with_priority(1),
+                ),
+            );
+        }
+        wrapper.into_any_element()
+    }
+
+    /// How full Kerf's context is, beside Send: its ring, and pressed, its
+    /// card ("Context 34%", a bar, what that is of) over it.
+    fn context_meter(&self, context: ContextUse, cx: &Context<Self>) -> AnyElement {
+        let open = self.menu.as_ref() == Some(&Menu::Context);
+        let color = context_color(context.level());
+        let fraction = context.fraction() as f32;
+        let meter = div()
+            .id("context-meter")
+            .size(px(24.0))
+            .flex_none()
+            .rounded(px(theme::radius::CONTROL))
+            .cursor_pointer()
+            .hover(|meter| meter.bg(theme::hover2()))
+            .child(context_ring(fraction, color))
+            .when(!open, |meter| {
+                meter.tooltip(ui::tooltip(ui::Tip::new(context.describe())))
+            })
+            .on_click(
+                cx.listener(|this, _, window, cx| this.toggle_menu(Menu::Context, window, cx)),
+            );
+        let mut wrapper = div().relative().flex_none().child(meter);
+        if open {
+            let card = menu_frame(px(260.0), cx)
+                .p(px(theme::space::S12))
+                .gap(px(theme::space::S8))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .child(ui::label("Context", text::MENU_ITEM, theme::ink()).flex_1())
+                        .child(ui::label(
+                            format!("{}%", context.percent()),
+                            text::MENU_QUIET,
+                            theme::ink3(),
+                        )),
+                )
+                .child(
+                    div()
+                        .h(px(4.0))
+                        .w_full()
+                        .rounded_full()
+                        .bg(theme::track())
+                        .child(
+                            div()
+                                .h_full()
+                                .min_w(px(4.0))
+                                .w(gpui::relative(fraction))
+                                .rounded_full()
+                                .bg(color),
+                        ),
+                )
+                .child(
+                    theme::type_style(div(), text::MENU_QUIET)
+                        .text_color(theme::ink3())
+                        .child(context.note()),
+                );
+            wrapper = wrapper.child(
+                div().absolute().bottom_full().right_0().child(
+                    deferred(
+                        anchored()
+                            .anchor(Corner::BottomRight)
+                            .offset(point(px(0.0), px(-theme::space::S4)))
+                            .snap_to_window_with_margin(Edges::all(px(theme::space::S8)))
+                            .child(fade_in(card, "context-card".to_owned())),
                     )
                     .with_priority(1),
                 ),
@@ -2450,84 +3687,67 @@ impl ChatView {
 
     /// The folder chip's menu: the folders (the open one ticked), Open
     /// Folder… and New Project…. Another folder opens in place of this one.
-    fn folder_menu(&self, cx: &Context<Self>) -> AnyElement {
+    fn folder_items(&self, cx: &App) -> Vec<ui::MenuItem> {
         use crate::sidebar::Entry;
         let session = self.session.read(cx);
         let entries =
             crate::sidebar::folder_entries(&session.prefs.recent, session.project.as_deref());
-        let mut frame = menu_frame(px(240.0), cx);
-        for (index, entry) in entries
+        entries
             .into_iter()
             .filter(|entry| matches!(entry.entry, Entry::Open(_) | Entry::Command(_)))
-            .enumerate()
-        {
-            if entry.separated {
-                frame = frame.child(div().my(px(4.0)).child(ui::hairline(true)));
-            }
-            let tip = entry.tip.clone();
-            let chosen = entry.checked;
-            let run = entry.entry.clone();
-            frame = frame.child(
-                menu_item(
-                    ElementId::Name(format!("folder-{index}").into()),
-                    entry.words,
-                    None,
-                    chosen,
-                )
-                .when_some(tip, |item, tip| {
-                    item.tooltip(move |_, cx| cx.new(|_| ui::Tooltip(tip.clone().into())).into())
-                })
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    this.menu = None;
-                    match &run {
-                        Entry::Open(folder) if !chosen => window.dispatch_action(
-                            Box::new(crate::commands::OpenRecent {
-                                path: folder.to_string_lossy().into_owned().into(),
-                            }),
-                            cx,
-                        ),
-                        Entry::Command(id) => {
-                            window.dispatch_action(Box::new(RunCommand::new(id)), cx)
-                        }
-                        _ => {}
-                    }
-                    cx.notify();
-                })),
-            );
-        }
-        frame.into_any_element()
+            .map(|entry| {
+                let chosen = entry.checked;
+                let run = entry.entry.clone();
+                let mut item =
+                    ui::MenuItem::new(entry.words)
+                        .checked(chosen)
+                        .on_choose(move |window, cx| match &run {
+                            Entry::Open(folder) if !chosen => window.dispatch_action(
+                                Box::new(crate::commands::OpenRecent {
+                                    path: folder.to_string_lossy().into_owned().into(),
+                                }),
+                                cx,
+                            ),
+                            Entry::Command(id) => {
+                                window.dispatch_action(Box::new(RunCommand::new(id)), cx)
+                            }
+                            _ => {}
+                        });
+                if entry.separated {
+                    item = item.separated();
+                }
+                if let Some(tip) = entry.tip {
+                    item = item.tip(tip);
+                }
+                item
+            })
+            .collect()
     }
 
-    /// "What Kerf does without asking": the three modes, each with its line.
-    fn permissions_menu(&self, cx: &Context<Self>) -> AnyElement {
+    /// "What Kerf does without asking": the three modes, each with what it
+    /// means in its tip.
+    fn permissions_items(&self, cx: &mut Context<Self>) -> Vec<ui::MenuItem> {
         let current = self.session.read(cx).prefs.permissions;
-        menu_frame(px(280.0), cx)
-            .child(menu_header("What Kerf does without asking"))
-            .children(Permissions::ALL.iter().map(|permissions| {
+        let this = cx.entity().downgrade();
+        Permissions::ALL
+            .iter()
+            .map(|permissions| {
                 let permissions = *permissions;
                 let (label, line) = permission_words(permissions);
-                menu_item(
-                    ElementId::Name(format!("permissions-{}", permissions.wire()).into()),
-                    label.to_owned(),
-                    Some(line),
-                    permissions == current,
-                )
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.menu = None;
-                    this.session.update(cx, |session, cx| {
-                        session.prefs.permissions = permissions;
-                        session.save_prefs();
-                        cx.notify();
-                    });
-                    cx.notify();
-                }))
-            }))
-            .into_any_element()
+                let this = this.clone();
+                ui::MenuItem::new(label)
+                    .checked(permissions == current)
+                    .tip(line)
+                    .on_choose(move |_, cx| {
+                        let _ = this.update(cx, |this, cx| this.set_permissions(permissions, cx));
+                    })
+            })
+            .collect()
     }
 
     /// The models that can be chosen, Agent settings…, and whether a request
     /// carries the playhead time.
-    fn model_menu(&self, cx: &Context<Self>) -> AnyElement {
+    fn model_items(&self, cx: &App) -> Vec<ui::MenuItem> {
         let session = self.session.read(cx);
         let provider = session.prefs.provider;
         let configured = session.prefs.model().to_owned();
@@ -2539,24 +3759,19 @@ impl ChatView {
         // Claude Code's aliases are chosen here. A key's model is the one
         // typed in Settings: it is said, and not offered as a choice.
         let choosable = provider == Provider::ClaudeCode;
-        let choices: Vec<String> = model_choices(provider, &configured)
+        let stamped = session.prefs.send_playhead;
+        let mut items: Vec<ui::MenuItem> = model_choices(provider, &configured)
             .into_iter()
             .filter(|model| choosable || *model == current)
-            .collect();
-        let stamped = session.prefs.send_playhead;
-        menu_frame(px(240.0), cx)
-            .child(menu_header(provider.label()))
-            .children(choices.into_iter().map(|model| {
-                let id = ElementId::Name(format!("model-{model}").into());
+            .map(|model| {
                 let chosen = model == current;
-                if !choosable {
-                    return menu_row(id, model_label(&model), None, chosen);
-                }
-                menu_item(id, model_label(&model), None, chosen).on_click(cx.listener(
-                    move |this, _, _, cx| {
-                        this.menu = None;
+                let session = self.session.clone();
+                ui::MenuItem::new(model_label(&model))
+                    .checked(chosen)
+                    .disabled(!choosable)
+                    .on_choose(move |_, cx| {
                         let model = model.clone();
-                        this.session.update(cx, |session, cx| {
+                        session.update(cx, |session, cx| {
                             session.prefs.claude_code_model = if model == "default" {
                                 String::new()
                             } else {
@@ -2565,38 +3780,89 @@ impl ChatView {
                             session.save_prefs();
                             cx.notify();
                         });
-                        cx.notify();
-                    },
-                ))
-            }))
-            .child(div().my(px(4.0)).child(ui::hairline(true)))
-            .child(
-                menu_item("agent-settings", "Agent settings…".to_owned(), None, false).on_click(
-                    cx.listener(|this, _, window, cx| {
-                        this.menu = None;
-                        window.dispatch_action(Box::new(RunCommand::new("app.preferences")), cx);
-                        cx.notify();
-                    }),
-                ),
-            )
-            .child(
-                menu_item(
-                    "send-playhead",
-                    "Send playhead time".to_owned(),
-                    Some("A request says where the playhead is"),
-                    stamped,
-                )
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.menu = None;
-                    this.session.update(cx, |session, cx| {
+                    })
+            })
+            .collect();
+        items.push(
+            ui::MenuItem::new("Agent settings…")
+                .separated()
+                .on_choose(|window, cx| {
+                    window.dispatch_action(Box::new(RunCommand::new("app.preferences")), cx)
+                }),
+        );
+        let session = self.session.clone();
+        items.push(
+            ui::MenuItem::new("Send playhead time")
+                .checked(stamped)
+                .tip("A request says where the playhead is")
+                .on_choose(move |_, cx| {
+                    session.update(cx, |session, cx| {
                         session.prefs.send_playhead = !session.prefs.send_playhead;
                         session.save_prefs();
                         cx.notify();
                     });
-                    cx.notify();
-                })),
-            )
-            .into_any_element()
+                }),
+        );
+        items
+    }
+
+    /// A card's versions ("v2 00:00:04:12 · +6 fr"), the one shown ticked:
+    /// one chosen is shown on the card, previewed, and the picture comes in.
+    fn version_items(&self, id: &str, cx: &mut Context<Self>) -> Vec<ui::MenuItem> {
+        let session = self.session.read(cx);
+        let snapshot = &session.state.snapshot;
+        let Some(proposal) = self.book.find(&snapshot.proposals, id) else {
+            return Vec::new();
+        };
+        let versions = self.book.versions_of(proposal);
+        let shown_id = self.shown.get(id).cloned().unwrap_or_else(|| id.to_owned());
+        let program = session.timeline().clone();
+        let fps = program.rate();
+        let this = cx.entity().downgrade();
+        versions
+            .iter()
+            .map(|version| {
+                let label = self
+                    .book
+                    .timelines
+                    .get(&version.proposal_id)
+                    .and_then(|timeline| {
+                        clip_changes(&program, timeline)
+                            .into_iter()
+                            .find(|change| change.moved)
+                    })
+                    .map(|change| {
+                        let shift = ((change.new_start - change.old_start) * fps).round() as i64;
+                        let shift = signed_frames(shift);
+                        format!(
+                            "v{} {} · {} fr",
+                            version.version,
+                            model::timecode(change.new_start, fps),
+                            shift.trim_end_matches('f')
+                        )
+                    })
+                    .unwrap_or_else(|| format!("v{}", version.version));
+                let proposal = id.to_owned();
+                let chosen = version.proposal_id.clone();
+                let this = this.clone();
+                ui::MenuItem::new(label)
+                    .checked(version.proposal_id == shown_id)
+                    .on_choose(move |window, cx| {
+                        let _ = this.update(cx, |this, cx| {
+                            if chosen == proposal {
+                                this.shown.remove(&proposal);
+                            } else {
+                                this.shown.insert(proposal.clone(), chosen.clone());
+                            }
+                            let chosen = chosen.clone();
+                            this.session
+                                .update(cx, |session, _| session.preview(Some(&chosen)));
+                            cx.notify();
+                        });
+                        window.dispatch_action(Box::new(RevealPicture), cx);
+                    })
+            })
+            .collect()
     }
 
     fn composer(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
@@ -2609,7 +3875,7 @@ impl ChatView {
         let provider = session.prefs.provider;
         let model = session.prefs.model().to_owned();
         let permissions = session.prefs.permissions;
-        let context = session.state.context;
+        let context = session.state.context_shown().cloned();
         // What to ask next: Kerf's next steps, then what the last check found
         // failing; each fills the composer to be changed before it is sent.
         let mut next: Vec<(String, String)> = session
@@ -2621,11 +3887,10 @@ impl ChatView {
         next.extend(self.fixes.iter().cloned());
         // Run QC is offered while the box waits empty for words.
         let offer_qc = typing_in && empty && refused_now.is_none();
-        let focus = session
-            .selection
-            .first()
-            .and_then(|id| session.timeline().clip(id))
-            .map(|(_, clip)| clip.label().to_owned());
+        // With the stamp taken off (and a picture to stamp), its chip says so
+        // with the live time, struck through; pressed, the time goes again.
+        let unstamped = (!session.prefs.send_playhead && session.picture_open != Some(false))
+            .then(|| model::timecode(session.state.position, session.timeline().rate()));
         let model_words = if model.is_empty() {
             provider.label().to_owned()
         } else {
@@ -2652,7 +3917,7 @@ impl ChatView {
             None => ("No folder".to_owned(), "Open a folder".to_owned()),
         };
         let (mode_words, mode_line) = permission_words(permissions);
-        let mode_tip = format!("{mode_words} · {mode_line}");
+        let mode_tip = ui::Tip::new(format!("{mode_words} · {mode_line}")).key("⇧Tab");
         let queued = self.queued.text().map(str::to_owned);
         let stopping = self.stopping;
         div()
@@ -2735,12 +4000,8 @@ impl ChatView {
                 div()
                     .key_context(COMPOSER_CONTEXT)
                     .on_action(cx.listener(|this, _: &CyclePermissions, _, cx| {
-                        this.session.update(cx, |session, cx| {
-                            session.prefs.permissions = next_permissions(session.prefs.permissions);
-                            session.save_prefs();
-                            cx.notify();
-                        });
-                        cx.notify();
+                        let next = next_permissions(this.session.read(cx).prefs.permissions);
+                        this.set_permissions(next, cx);
                     }))
                     .flex()
                     .flex_col()
@@ -2750,9 +4011,6 @@ impl ChatView {
                     .bg(theme::raised())
                     .border_1()
                     .border_color(theme::line2())
-                    .when_some(focus, |box_, clip| {
-                        box_.child(ui::chip(format!("@{clip}"), theme::accent_ink()))
-                    })
                     .child(
                         // Refused, a hover over the words says why.
                         div()
@@ -2773,60 +4031,45 @@ impl ChatView {
                             .child(self.menu_chip(
                                 Menu::Folder,
                                 "folder-chip",
-                                (Some(Icon::Folder), folder_words, folder_tip),
-                                |this, cx| this.folder_menu(cx),
+                                (Some(Icon::Folder), folder_words, ui::Tip::new(folder_tip)),
                                 cx,
                             ))
+                            .when_some(unstamped, |row, timecode| {
+                                row.child(stamp_chip(timecode, cx))
+                            })
                             .child(self.menu_chip(
                                 Menu::Model,
                                 "model-chip",
-                                (None, model_words, model_tip),
-                                |this, cx| this.model_menu(cx),
+                                (None, model_words, ui::Tip::new(model_tip)),
                                 cx,
                             ))
                             .child(self.menu_chip(
                                 Menu::Permissions,
                                 "permissions-chip",
                                 (None, mode_words.to_owned(), mode_tip),
-                                |this, cx| this.permissions_menu(cx),
                                 cx,
                             ))
-                            .when_some(context, |row, (used, limit)| {
-                                let share = if limit > 0.0 {
-                                    (used / limit).clamp(0.0, 1.0)
-                                } else {
-                                    0.0
-                                };
-                                let color = if share > 0.85 {
-                                    theme::warn()
-                                } else {
-                                    theme::ink3()
-                                };
-                                row.child(ui::label(
-                                    format!("{:.0}% context", share * 100.0),
-                                    text::META,
-                                    color,
-                                ))
-                            })
                             .child(div().flex_1())
+                            .when_some(context, |row, context| {
+                                row.child(self.context_meter(context, cx))
+                            })
                             .child(if busy {
                                 icon_button("stop", Icon::Stop)
                                     .tooltip(if stopping { "Stopping…" } else { "Stop Kerf" })
+                                    .key("Esc")
                                     .color(theme::ink())
                                     .disabled(stopping)
                                     .on_click(cx.listener(|this, _, _, cx| this.stop(cx)))
                                     .into_any_element()
                             } else {
                                 let live = !empty && refused.is_none();
-                                let tip: SharedString = refused
-                                    .clone()
-                                    .unwrap_or_else(|| "Send · Return".to_owned())
-                                    .into();
+                                let tip = match refused.clone() {
+                                    Some(reason) => ui::Tip::new(reason),
+                                    None => ui::Tip::new("Send").key("↩"),
+                                };
                                 div()
                                     .id("send")
-                                    .tooltip(move |_, cx| {
-                                        cx.new(|_| ui::Tooltip(tip.clone())).into()
-                                    })
+                                    .tooltip(ui::tooltip(tip))
                                     .size(px(28.0))
                                     .flex()
                                     .items_center()
@@ -2853,6 +4096,220 @@ impl ChatView {
                     ),
             )
             .into_any_element()
+    }
+}
+
+/// How wide a new conversation's column of folders and conversations is.
+pub use crate::theme::layout::WELCOME_COLUMN;
+
+/// A row of a new conversation's cards: an icon where it has one, its
+/// words, a tick where it is the one open.
+fn welcome_row(
+    id: ElementId,
+    icon: Option<Icon>,
+    words: String,
+    ticked: bool,
+) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(id)
+        .flex()
+        .items_center()
+        .gap(px(8.0))
+        .h(px(32.0))
+        .px(px(10.0))
+        .rounded(px(theme::radius::CONTROL))
+        .cursor_pointer()
+        .hover(|row| row.bg(theme::hover2()))
+        .when_some(icon, |row, icon| row.child(icon.view(14.0, theme::ink3())))
+        .child(
+            ui::line(words, text::MENU_QUIET, theme::ink())
+                .flex_1()
+                .min_w_0(),
+        )
+        .when(ticked, |row| {
+            row.child(Icon::Check.view(14.0, theme::ink2()))
+        })
+}
+
+/// The conversation while what a proposal changed is watched: it falls
+/// back, the picture looked at (Qt's `chatBehind`).
+pub use crate::theme::motion::CHAT_BEHIND;
+
+/// The change reel's strip, to float over the picture while it plays:
+/// "2 / 5", what the segment is with the seconds left ("· getting the
+/// picture" while it waits, "Watched every change" at its end), previous
+/// and next, Before|After, and Exit. None while no reel plays. The window
+/// places it over the picture's foot (`StageView`).
+pub fn reel_strip(session: &Entity<Session>, cx: &App) -> Option<AnyElement> {
+    let reel = session.read(cx).reel()?;
+    let playhead = session.read(cx).state.position;
+    let count = reel.segments.len();
+    let index = reel.index;
+    let side = reel.side;
+    let words = reel.words(playhead);
+    let step = |forward: bool| {
+        let session = session.clone();
+        move |_: &gpui::ClickEvent, _: &mut Window, cx: &mut App| {
+            session.update(cx, |session, cx| {
+                session.reel_step(forward);
+                cx.notify();
+            })
+        }
+    };
+    let sides = {
+        let session = session.clone();
+        ui::segmented(
+            "reel-sides",
+            &[
+                (crate::session::ReelSide::Before, "Before"),
+                (crate::session::ReelSide::After, "After"),
+            ],
+            side,
+            move |side, _, cx| {
+                session.update(cx, |session, cx| {
+                    session.reel_side(side);
+                    cx.notify();
+                })
+            },
+        )
+        .tips(&["The program as it is", "What the proposal makes"])
+    };
+    let exit = {
+        let session = session.clone();
+        move |_: &gpui::ClickEvent, _: &mut Window, cx: &mut App| {
+            session.update(cx, |session, cx| {
+                session.reel_stop();
+                cx.notify();
+            })
+        }
+    };
+    Some(
+        div()
+            .id("change-reel")
+            .h(px(40.0))
+            .pl(px(theme::space::S12))
+            .pr(px(theme::space::S8))
+            .flex()
+            .items_center()
+            .gap(px(theme::space::S8))
+            .rounded(px(theme::radius::PANEL))
+            .bg(theme::with_alpha(theme::chrome(), 0.94))
+            .border_1()
+            .border_color(theme::line2())
+            .occlude()
+            .child(ui::label(
+                format!("{} / {count}", index + 1),
+                text::TIMECODE,
+                theme::accent_ink(),
+            ))
+            .child(
+                ui::line(words, text::CONTROL, theme::ink2())
+                    .flex_1()
+                    .min_w_0(),
+            )
+            .child(
+                icon_button("reel-previous", Icon::ChevronLeft)
+                    .tooltip("Previous change")
+                    .disabled(index == 0)
+                    .on_click(step(false)),
+            )
+            .child(
+                icon_button("reel-next", Icon::ChevronRight)
+                    .tooltip("Next change")
+                    .disabled(index + 1 >= count)
+                    .on_click(step(true)),
+            )
+            .child(sides)
+            .child(
+                ui::button("reel-exit", "Exit")
+                    .small()
+                    .ghost()
+                    .on_click(exit),
+            )
+            .with_animation(
+                "change-reel-in",
+                motion::animation(scene::FADE),
+                |strip, t| strip.opacity(t),
+            )
+            .into_any_element(),
+    )
+}
+
+/// The stamp: the request goes without the playhead's time, which shows
+/// struck through; pressed, the time goes with requests again.
+fn stamp_chip(timecode: String, cx: &Context<ChatView>) -> AnyElement {
+    theme::type_style(div(), text::TIMECODE)
+        .id("composer-stamp")
+        .flex()
+        .flex_none()
+        .items_center()
+        .gap(px(4.0))
+        .h(px(20.0))
+        .px(px(6.0))
+        .rounded(px(theme::radius::CONTROL))
+        .text_color(theme::ink3())
+        .cursor_pointer()
+        .hover(|chip| chip.bg(theme::hover2()))
+        .child(Icon::Clock.view(12.0, theme::ink3()))
+        .child(div().line_through().child(timecode))
+        .tooltip(ui::tooltip(ui::Tip::new("Time not sent · click to send")))
+        .on_click(cx.listener(|this, _, _, cx| {
+            this.session.update(cx, |session, cx| {
+                session.prefs.send_playhead = true;
+                session.save_prefs();
+                cx.notify();
+            });
+            cx.notify();
+        }))
+        .into_any_element()
+}
+
+/// The context ring: a 14 pt circle filled clockwise from the top as the
+/// conversation fills what a request can hold, in `color`.
+fn context_ring(fraction: f32, color: Rgba) -> impl IntoElement {
+    gpui::canvas(
+        |_, _, _| {},
+        move |bounds, _, window, _| {
+            let across = 14.0;
+            let stroke = 2.0;
+            let center = bounds.center();
+            let radius = (across - stroke) / 2.0;
+            let ring = |from: f32, to: f32| {
+                let steps = ((to - from) * 72.0).ceil().max(2.0) as usize;
+                (0..=steps)
+                    .map(|step| {
+                        let turn = from + (to - from) * step as f32 / steps as f32;
+                        let angle = turn * std::f32::consts::TAU - std::f32::consts::FRAC_PI_2;
+                        point(
+                            center.x + px(radius * angle.cos()),
+                            center.y + px(radius * angle.sin()),
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            };
+            let mut track = gpui::PathBuilder::stroke(px(stroke));
+            track.add_polygon(&ring(0.0, 1.0), true);
+            if let Ok(path) = track.build() {
+                window.paint_path(path, theme::track());
+            }
+            if fraction > 0.0 {
+                let mut arc = gpui::PathBuilder::stroke(px(stroke));
+                arc.add_polygon(&ring(0.0, fraction.max(0.03)), false);
+                if let Ok(path) = arc.build() {
+                    window.paint_path(path, color);
+                }
+            }
+        },
+    )
+    .size(px(24.0))
+}
+
+/// The ring's colour for how full the context is.
+fn context_color(level: ContextLevel) -> Rgba {
+    match level {
+        ContextLevel::Room => theme::ink2(),
+        ContextLevel::Filling => theme::warn(),
+        ContextLevel::Full => theme::neg(),
     }
 }
 
@@ -2895,57 +4352,6 @@ fn fade_in(body: impl IntoElement, id: String) -> impl IntoElement {
     )
 }
 
-fn menu_header(words: &'static str) -> gpui::Div {
-    ui::label(words, text::META, theme::ink3())
-        .px(px(10.0))
-        .pt(px(6.0))
-        .pb(px(4.0))
-}
-
-/// A row of a menu: a check where it is the one chosen, its words, and a
-/// line under them when it has one.
-fn menu_item(
-    id: impl Into<ElementId>,
-    words: String,
-    line: Option<&'static str>,
-    checked: bool,
-) -> gpui::Stateful<gpui::Div> {
-    menu_row(id, words, line, checked)
-        .cursor_pointer()
-        .hover(|item| item.bg(theme::popup_hover()))
-}
-
-/// A row of a menu that says something and does nothing when pressed.
-fn menu_row(
-    id: impl Into<ElementId>,
-    words: String,
-    line: Option<&'static str>,
-    checked: bool,
-) -> gpui::Stateful<gpui::Div> {
-    div()
-        .id(id.into())
-        .flex()
-        .items_start()
-        .gap(px(8.0))
-        .px(px(10.0))
-        .py(px(5.0))
-        .rounded(px(theme::radius::CONTROL))
-        .child(div().pt(px(3.0)).child(if checked {
-            Icon::Check.view(14.0, theme::ink()).into_any_element()
-        } else {
-            crate::icons::spacer(14.0).into_any_element()
-        }))
-        .child(
-            div()
-                .flex()
-                .flex_col()
-                .child(ui::label(words, text::MENU_ITEM, theme::ink()))
-                .when_some(line, |column, line| {
-                    column.child(ui::label(line, text::META, theme::ink3()))
-                }),
-        )
-}
-
 fn code_block(lines: Vec<String>) -> gpui::Div {
     theme::type_style(div(), text::TIMECODE)
         .p(px(10.0))
@@ -2978,6 +4384,650 @@ fn diff(lines: &[String], id: &str) -> impl IntoElement {
         }))
 }
 
+// ---------------------------------------------------------------- a cut's picture
+
+/// A cut card's timings (Qt's cardTurn, cardCrossfade, cardRing, cardDone)
+/// and sizes, kept in the theme.
+pub use crate::theme::layout::{
+    CARD_PICTURE_RING, CARD_PICTURE_TALLEST, CARD_PICTURE_WIDEST, CARD_PLAY_MARK, FOOTAGE_TILE,
+};
+pub use crate::theme::motion::{
+    CARD_CROSSFADE, CARD_DONE, CARD_DONE_FADE, CARD_MARKS_AFTER, CARD_MARKS_FADE, CARD_RING,
+    CARD_TURN,
+};
+/// The most footage tiles that gather.
+pub const FOOTAGE_MOST: usize = 8;
+
+/// A first cut's clips, in time order, on its first picture track that
+/// has any: where each starts and the media it shows; and how long the
+/// whole cut is, every track counted.
+pub fn cut_frames(cut: &Timeline) -> (Vec<(f64, String)>, f64) {
+    let duration = cut
+        .tracks
+        .iter()
+        .flat_map(|track| track.clips.iter())
+        .map(|clip| clip.end())
+        .fold(0.0, f64::max);
+    let mut frames: Vec<(f64, String)> = cut
+        .tracks
+        .iter()
+        .find(|track| track.kind == model::TrackKind::Video && !track.clips.is_empty())
+        .map(|track| {
+            track
+                .clips
+                .iter()
+                .map(|clip| {
+                    (
+                        clip.timeline_start,
+                        clip.source_id.clone().unwrap_or_default(),
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    frames.sort_by(|a, b| a.0.total_cmp(&b.0));
+    (frames, duration)
+}
+
+/// Which of a cut's frames (in time order, each with whether its poster
+/// has come) its picture shows: while Kerf works, the newest with a
+/// poster; else the one under the pointer (`scrub`, 0..1 across), or the
+/// first. None until a poster has come.
+pub fn shown_frame(
+    frames: &[(f64, bool)],
+    duration: f64,
+    scrub: Option<f32>,
+    working: bool,
+) -> Option<usize> {
+    if working {
+        return frames.iter().rposition(|(_, poster)| *poster);
+    }
+    if !frames.iter().any(|(_, poster)| *poster) {
+        return None;
+    }
+    let at = scrub.map_or(0.0, |scrub| f64::from(scrub.clamp(0.0, 0.999)) * duration);
+    let mut shown = 0;
+    for (index, (start, poster)) in frames.iter().enumerate() {
+        if *start <= at && *poster {
+            shown = index;
+        }
+    }
+    Some(shown)
+}
+
+/// The length badge on a cut's picture: "0:42", "12:05".
+pub fn length_badge(seconds: f64) -> String {
+    let whole = seconds.max(0.0).round() as u64;
+    format!("{}:{:02}", whole / 60, whole % 60)
+}
+
+/// How a finished cut's picture stands `since` it was done: how much it
+/// is still at work (its shade and ring going out over `CARD_RING`), the
+/// ring's light, Done's opacity (gone over the last `CARD_DONE_FADE`), and
+/// the length and play mark's (coming after `CARD_MARKS_AFTER`). Past
+/// `CARD_DONE` it simply stands, its marks on. As drawn, see
+/// [`finish_drawn`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Finish {
+    pub work: f32,
+    pub ring: f32,
+    pub chip: f32,
+    pub marks: f32,
+}
+
+pub fn finishing(since: Duration) -> Finish {
+    let ramp = |from: Duration, length: Duration| {
+        if length.is_zero() {
+            return if since >= from { 1.0 } else { 0.0 };
+        }
+        (since.saturating_sub(from).as_secs_f32() / length.as_secs_f32()).clamp(0.0, 1.0)
+    };
+    if since >= CARD_DONE {
+        return Finish {
+            work: 0.0,
+            ring: 0.0,
+            chip: 0.0,
+            marks: 1.0,
+        };
+    }
+    let out = ramp(Duration::ZERO, CARD_RING);
+    Finish {
+        work: 1.0 - out,
+        ring: 1.0 - out,
+        chip: 1.0 - ramp(CARD_DONE - CARD_DONE_FADE, CARD_DONE_FADE),
+        marks: ramp(CARD_MARKS_AFTER, CARD_MARKS_FADE),
+    }
+}
+
+/// How a finished cut's picture is drawn `since` it was done: as
+/// [`finishing`] has it, or under Reduce Motion (`reduced`) simply as it
+/// stands at the end, at once, with no frames to wait for (Qt's `still`).
+pub fn finish_drawn(since: Duration, reduced: bool) -> Finish {
+    finishing(if reduced { CARD_DONE } else { since })
+}
+
+/// The picture's box on its card: as wide as it may be at its shape, an
+/// upright one held to the tallest.
+pub fn card_picture_size(aspect: f32) -> (f32, f32) {
+    let aspect = if aspect.is_finite() && aspect > 0.0 {
+        aspect
+    } else {
+        16.0 / 9.0
+    };
+    let mut width = CARD_PICTURE_WIDEST;
+    let mut height = width / aspect;
+    if height > CARD_PICTURE_TALLEST {
+        height = CARD_PICTURE_TALLEST;
+        width = height * aspect;
+    }
+    (width, height)
+}
+
+/// The point `t` (0..1) of the way round a rounded rectangle, clockwise
+/// from the middle of its top edge.
+pub fn rim_point(
+    bounds: gpui::Bounds<gpui::Pixels>,
+    radius: f32,
+    t: f32,
+) -> gpui::Point<gpui::Pixels> {
+    let (x, y) = (f32::from(bounds.origin.x), f32::from(bounds.origin.y));
+    let (w, h) = (f32::from(bounds.size.width), f32::from(bounds.size.height));
+    let r = radius.min(w / 2.0).min(h / 2.0).max(0.0);
+    let (straight_w, straight_h) = (w - 2.0 * r, h - 2.0 * r);
+    let arc = std::f32::consts::FRAC_PI_2 * r;
+    let total = 2.0 * (straight_w + straight_h) + 4.0 * arc;
+    if total <= 0.0 {
+        return bounds.origin;
+    }
+    let mut left = t.rem_euclid(1.0) * total;
+    // The legs, clockwise from the top's middle: each a line or a quarter arc.
+    let legs: [(f32, u8); 9] = [
+        (straight_w / 2.0, 0),
+        (arc, 1),
+        (straight_h, 2),
+        (arc, 3),
+        (straight_w, 4),
+        (arc, 5),
+        (straight_h, 6),
+        (arc, 7),
+        (straight_w / 2.0, 8),
+    ];
+    for (length, leg) in legs {
+        if left > length && leg != 8 {
+            left -= length;
+            continue;
+        }
+        let along = if length > 0.0 { left / length } else { 0.0 };
+        let corner = |cx: f32, cy: f32, from: f32| {
+            let angle = from + along * std::f32::consts::FRAC_PI_2;
+            (cx + r * angle.cos(), cy + r * angle.sin())
+        };
+        let (px_, py_) = match leg {
+            0 => (x + w / 2.0 + left, y),
+            1 => corner(x + w - r, y + r, -std::f32::consts::FRAC_PI_2),
+            2 => (x + w, y + r + left),
+            3 => corner(x + w - r, y + h - r, 0.0),
+            4 => (x + w - r - left, y + h),
+            5 => corner(x + r, y + h - r, std::f32::consts::FRAC_PI_2),
+            6 => (x, y + h - r - left),
+            7 => corner(x + r, y + r, std::f32::consts::PI),
+            _ => (x + r + left, y),
+        };
+        return point(px(px_), px(py_));
+    }
+    bounds.origin
+}
+
+/// The light running round a cut's picture while Kerf makes it: a head of
+/// white going into the accent's blue, `tail` of the way round behind it,
+/// at `turn` (0..1). Under Reduce Motion, a still ring.
+fn paint_rim(
+    bounds: gpui::Bounds<gpui::Pixels>,
+    radius: f32,
+    turn: Option<f32>,
+    window: &mut Window,
+) {
+    const RUNS: usize = 18;
+    const TAIL: f32 = scene::CARD_TAIL;
+    const POINTS: usize = 6;
+    let blue = gpui::Rgba {
+        r: 143.0 / 255.0,
+        g: 176.0 / 255.0,
+        b: 1.0,
+        a: 1.0,
+    };
+    let Some(turn) = turn else {
+        let mut ring = gpui::PathBuilder::stroke(px(2.0));
+        let points: Vec<_> = (0..=96)
+            .map(|step| rim_point(bounds, radius, step as f32 / 96.0))
+            .collect();
+        ring.add_polygon(&points, true);
+        if let Ok(path) = ring.build() {
+            window.paint_path(path, theme::with_alpha(blue, 0.6));
+        }
+        return;
+    };
+    for run in 0..RUNS {
+        let fade = 1.0 - run as f32 / RUNS as f32;
+        let mix = (run as f32 / 3.0).min(1.0);
+        let shade = gpui::Rgba {
+            r: 1.0 + (blue.r - 1.0) * mix,
+            g: 1.0 + (blue.g - 1.0) * mix,
+            b: 1.0,
+            a: 0.95 * fade * fade,
+        };
+        let head = turn - run as f32 * TAIL / RUNS as f32;
+        let points: Vec<_> = (0..=POINTS)
+            .map(|step| {
+                let at = head - step as f32 * TAIL / RUNS as f32 / POINTS as f32;
+                rim_point(bounds, radius, at)
+            })
+            .collect();
+        let mut line = gpui::PathBuilder::stroke(px(2.0));
+        line.add_polygon(&points, false);
+        if let Ok(path) = line.build() {
+            window.paint_path(path, shade);
+        }
+    }
+}
+
+/// A ring round a cut's picture lit once as it is done, going out.
+fn paint_ring(bounds: gpui::Bounds<gpui::Pixels>, radius: f32, light: f32, window: &mut Window) {
+    if light <= 0.0 {
+        return;
+    }
+    let points: Vec<_> = (0..=96)
+        .map(|step| rim_point(bounds, radius, step as f32 / 96.0))
+        .collect();
+    let mut ring = gpui::PathBuilder::stroke(px(2.0));
+    ring.add_polygon(&points, true);
+    if let Ok(path) = ring.build() {
+        window.paint_path(path, theme::with_alpha(gpui::white().into(), 0.94 * light));
+    }
+}
+
+/// How a cut's picture is drawn now.
+#[derive(Clone, Debug, Default)]
+struct PictureState {
+    /// Kerf is making it.
+    working: bool,
+    /// It finished this long ago (Done, then its marks).
+    finished: Option<Duration>,
+    /// Its picture is on the stage, from here.
+    on_stage: bool,
+    /// The pointer's place across it.
+    scrub: Option<f32>,
+    /// The poster it showed before the newest clip, and how far the
+    /// newest has come over it (0..1).
+    before: Option<(Arc<RenderImage>, f32)>,
+}
+
+impl ChatView {
+    /// A first cut's picture (`cut` is its timeline), for its card: the
+    /// poster of the clip it shows, how long it is and a play mark; while
+    /// Kerf makes it, light round it and "Cutting"; just done, "Done".
+    /// Moving over it runs through its clips; pressing it brings the
+    /// picture in.
+    fn cut_picture(
+        &self,
+        id: &str,
+        cut: &Timeline,
+        state: PictureState,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let session = self.session.read(cx);
+        let artwork = &session.artwork;
+        let (frames, duration) = cut_frames(cut);
+        let posters: Vec<Option<Arc<RenderImage>>> = frames
+            .iter()
+            .map(|(_, source)| artwork.poster(source))
+            .collect();
+        let shown = shown_frame(
+            &frames
+                .iter()
+                .zip(&posters)
+                .map(|((at, _), poster)| (*at, poster.is_some()))
+                .collect::<Vec<_>>(),
+            duration,
+            state.scrub,
+            state.working,
+        )
+        .and_then(|index| posters.get(index).cloned().flatten());
+        let (width, height) = card_picture_size(cut.aspect());
+        let reduced = motion::reduced();
+        let finish = state.finished.map(|since| finish_drawn(since, reduced));
+        let work = if state.working {
+            1.0
+        } else {
+            finish.map_or(0.0, |finish| finish.work)
+        };
+        let moving = !reduced
+            && (state.working
+                || finish.is_some_and(|finish| finish.chip > 0.0 || finish.marks < 1.0));
+        if moving || state.before.is_some() {
+            window.request_animation_frame();
+        }
+        let chip = if state.working {
+            1.0
+        } else {
+            finish.map_or(0.0, |finish| finish.chip)
+        };
+        let marks = if state.working {
+            0.0
+        } else {
+            finish.map_or(1.0, |finish| finish.marks)
+        };
+        let radius = theme::radius::CARD;
+        let mut sized = div().w(px(width)).max_w_full();
+        // Its height follows its width at the cut's shape, narrowed or not.
+        sized.style().aspect_ratio = Some(width / height.max(1.0));
+        let mut picture = sized
+            .id(ElementId::Name(format!("cut-picture-{id}").into()))
+            .relative()
+            .rounded(px(radius))
+            .overflow_hidden()
+            .bg(theme::overlay_screen());
+        // The picture: the poster it shows (the one before fading under the
+        // newest while a clip turns), else a wash in the room's greys and the
+        // accent, never black.
+        match (&shown, &state.before) {
+            (Some(poster), Some((before, t))) => {
+                picture = picture.child(poster_layer(before.clone(), radius)).child(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .opacity(*t)
+                        .child(poster_layer(poster.clone(), radius)),
+                );
+            }
+            (Some(poster), None) => picture = picture.child(poster_layer(poster.clone(), radius)),
+            (None, _) => {
+                picture = picture.child(div().absolute().inset_0().bg(gpui::rgb(0x141720)).child(
+                    div().absolute().inset_0().bg(linear_gradient(
+                        135.0,
+                        linear_color_stop(gpui::rgba(0x8fb0ff46), 0.0),
+                        linear_color_stop(gpui::rgba(0xb4aaff00), 1.0),
+                    )),
+                ))
+            }
+        }
+        // The pointer's place, a line at its foot.
+        if let Some(scrub) = state.scrub.filter(|_| !state.working && !state.on_stage) {
+            picture = picture.child(
+                div()
+                    .absolute()
+                    .left_0()
+                    .bottom_0()
+                    .h(px(2.0))
+                    .w(gpui::relative(scrub))
+                    .bg(gpui::rgba(0xffffffe6)),
+            );
+        }
+        // At work the picture sits a little back.
+        if work > 0.0 {
+            picture = picture.child(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .bg(theme::with_alpha(gpui::black().into(), 0.22 * work)),
+            );
+        }
+        if state.on_stage {
+            // It is on the stage now: what is left here says so.
+            picture = picture.child(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .bg(gpui::rgba(0x121212c7))
+                    .child(ui::label("On the stage", text::CONTROL, theme::ink2())),
+            );
+        } else if marks > 0.0 {
+            // How long it is, at its foot, and that it plays.
+            picture = picture
+                .child(
+                    div()
+                        .absolute()
+                        .right(px(6.0))
+                        .bottom(px(6.0))
+                        .h(px(18.0))
+                        .px(px(5.0))
+                        .flex()
+                        .items_center()
+                        .rounded(px(theme::radius::SMALL))
+                        .bg(gpui::rgba(0x000000a8))
+                        .opacity(marks)
+                        .child(ui::label(
+                            length_badge(duration),
+                            text::MONO_SMALL,
+                            gpui::white().into(),
+                        )),
+                )
+                .child(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .opacity(marks)
+                        .child(
+                            div()
+                                .size(px(CARD_PLAY_MARK))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .rounded_full()
+                                .bg(gpui::rgba(0x00000080))
+                                .child(Icon::Play.view(16.0, gpui::white().into())),
+                        ),
+                );
+        }
+        // What Kerf is doing, at its top left: hopping dots and Cutting, then
+        // a tick and Done.
+        if chip > 0.0 && !state.on_stage {
+            let since = self.started_at.elapsed();
+            let dots = (0..3).map(|dot| {
+                let t = if reduced {
+                    0.0
+                } else {
+                    ((since.as_secs_f32() / scene::CHIP_HOP.as_secs_f32())
+                        - dot as f32 * scene::CHIP_HOP_STAGGER
+                        + 1.0)
+                        .rem_euclid(1.0)
+                };
+                let hop = if t < 0.6 {
+                    (t / 0.6 * std::f32::consts::PI).sin()
+                } else {
+                    0.0
+                };
+                div()
+                    .size(px(4.0))
+                    .mt(px(-scene::CHIP_HOP_RISE * hop))
+                    .rounded_full()
+                    .bg(theme::accent_ink())
+                    .opacity(0.5 + 0.5 * hop)
+            });
+            picture = picture.child(
+                div()
+                    .absolute()
+                    .left(px(8.0))
+                    .top(px(8.0))
+                    .h(px(22.0))
+                    .pl(px(8.0))
+                    .pr(px(9.0))
+                    .flex()
+                    .items_center()
+                    .gap(px(6.0))
+                    .rounded_full()
+                    .bg(gpui::rgba(0x0a0c129e))
+                    .opacity(chip)
+                    .child(if state.working {
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(2.0))
+                            .children(dots)
+                            .into_any_element()
+                    } else {
+                        Icon::Check
+                            .view(12.0, theme::accent_ink())
+                            .into_any_element()
+                    })
+                    .child(ui::label(
+                        if state.working { "Cutting" } else { "Done" },
+                        text::META,
+                        gpui::white().into(),
+                    )),
+            );
+        }
+        // Where it was laid out, for the pointer's place over it.
+        let pictures = self.pictures.clone();
+        let key = id.to_owned();
+        picture = picture.child(
+            gpui::canvas(
+                move |bounds, _, _| {
+                    pictures.borrow_mut().insert(key.clone(), bounds);
+                },
+                |_, _, _, _| {},
+            )
+            .absolute()
+            .inset_0(),
+        );
+        let scrub_id = id.to_owned();
+        let leave_id = id.to_owned();
+        let open_id = id.to_owned();
+        let interactive = !state.working;
+        let picture = picture.when(interactive && !state.on_stage, |picture| {
+            picture
+                .cursor_pointer()
+                .tooltip(ui::tooltip(ui::Tip::new("Open on the stage")))
+                .on_mouse_move(
+                    cx.listener(move |this, event: &gpui::MouseMoveEvent, _, cx| {
+                        let Some(bounds) = this.pictures.borrow().get(&scrub_id).copied() else {
+                            return;
+                        };
+                        let width = f32::from(bounds.size.width);
+                        let across = if width > 0.0 && bounds.contains(&event.position) {
+                            Some(
+                                ((f32::from(event.position.x - bounds.origin.x)) / width)
+                                    .clamp(0.0, 0.999),
+                            )
+                        } else {
+                            None
+                        };
+                        let now = across.map(|across| (scrub_id.clone(), across));
+                        if this.scrub != now {
+                            this.scrub = now;
+                            cx.notify();
+                        }
+                    }),
+                )
+                .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+                    if !*hovered && this.scrub.as_ref().is_some_and(|(id, _)| *id == leave_id) {
+                        this.scrub = None;
+                        cx.notify();
+                    }
+                }))
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.open_cut(open_id.clone(), window, cx)
+                }))
+        });
+        // Round it, the light: running while Kerf works, lit once and going
+        // out as it is done; under it, a line of light runs while it works.
+        let ring = finish.map_or(0.0, |finish| finish.ring);
+        let working = state.working;
+        let started = self.started_at;
+        let rim = gpui::canvas(
+            |_, _, _| {},
+            move |bounds, _, window, _| {
+                let inner = gpui::Bounds {
+                    origin: point(
+                        bounds.origin.x + px(CARD_PICTURE_RING / 2.0),
+                        bounds.origin.y + px(CARD_PICTURE_RING / 2.0),
+                    ),
+                    size: gpui::size(
+                        bounds.size.width - px(CARD_PICTURE_RING),
+                        bounds.size.height - px(CARD_PICTURE_RING + 7.0),
+                    ),
+                };
+                let radius = theme::radius::CARD + CARD_PICTURE_RING / 2.0;
+                if working {
+                    let turn = (!reduced).then(|| motion::phase(started, CARD_TURN));
+                    paint_rim(inner, radius, turn, window);
+                } else {
+                    paint_ring(inner, radius, ring, window);
+                }
+            },
+        )
+        .absolute()
+        .inset_0();
+        let line = (work > 0.0 && !reduced).then(|| {
+            let at = motion::phase(self.started_at, scene::WORK_SHIMMER);
+            div()
+                .relative()
+                .h(px(2.0))
+                .mt(px(3.0))
+                .mx(px(CARD_PICTURE_RING))
+                .overflow_hidden()
+                .opacity(work)
+                .child(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .bottom_0()
+                        .left(gpui::relative(at * 1.4 - 0.4))
+                        .w(gpui::relative(0.4))
+                        .bg(linear_gradient(
+                            90.0,
+                            linear_color_stop(gpui::rgba(0x8fb0ff00), 0.0),
+                            linear_color_stop(gpui::rgba(0x8fb0ffcc), 1.0),
+                        )),
+                )
+        });
+        div()
+            .relative()
+            .flex()
+            .flex_col()
+            .p(px(CARD_PICTURE_RING))
+            .pb(px(CARD_PICTURE_RING + 4.0))
+            .child(picture)
+            .children(line)
+            .child(rim)
+            .into_any_element()
+    }
+
+    /// The picture of cut `id` comes in from its card: the stage shows it
+    /// (rendered when it is not yet), and the card says it is there.
+    fn open_cut(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
+        self.stage_proposal = Some(id.clone());
+        self.scrub = None;
+        self.session.update(cx, |session, cx| {
+            let showing = session.state.preview.proposal.as_deref() == Some(id.as_str())
+                && previewing(&session.state.preview.status);
+            if !showing {
+                session.preview(Some(&id));
+            }
+            cx.notify();
+        });
+        window.dispatch_action(Box::new(RevealPicture), cx);
+        cx.notify();
+    }
+}
+
+/// A poster filling the picture's box, cut to its shape.
+fn poster_layer(poster: Arc<RenderImage>, radius: f32) -> impl IntoElement {
+    gpui::img(poster)
+        .absolute()
+        .inset_0()
+        .size_full()
+        .object_fit(gpui::ObjectFit::Cover)
+        .rounded(px(radius))
+}
+
 impl Focusable for ChatView {
     fn focus_handle(&self, _cx: &gpui::App) -> FocusHandle {
         self.focus_handle.clone()
@@ -2986,6 +5036,8 @@ impl Focusable for ChatView {
 
 impl Render for ChatView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.refresh_keys(cx);
+        self.follow_turn(cx);
         let session = self.session.read(cx);
         let turns = session
             .state
@@ -2996,8 +5048,13 @@ impl Render for ChatView {
         let proposals = session.state.snapshot.proposals.clone();
         let request = session.state.work.request.clone();
         let busy = session.state.work.busy();
-        let showing_this = session.conversation.is_none()
-            || session.state.work.conversation == session.conversation;
+        // The turn under way shows in its own conversation only (a request
+        // sent with none open goes on in the new one it starts).
+        let showing_this = session.state.work.conversation == session.conversation;
+        // A conversation chosen whose turns have not come yet: its title is
+        // in the toolbar, and nothing here says it is empty.
+        let loading = session.state.chosen.is_some() && session.state.open_conversation.is_none();
+        let building = self.building.clone();
         let pins = pin_order(
             &proposals,
             &self.book,
@@ -3011,6 +5068,12 @@ impl Render for ChatView {
         let loose: Vec<Proposal> = pins
             .iter()
             .filter(|id| !holders.contains_key(*id))
+            // The cut Kerf is making is its card at work, in the live answer.
+            .filter(|id| {
+                building
+                    .as_deref()
+                    .is_none_or(|building| !self.book.same(building, id))
+            })
             .filter_map(|id| {
                 proposals
                     .iter()
@@ -3018,7 +5081,9 @@ impl Render for ChatView {
             })
             .cloned()
             .collect();
-        let nothing = turns.is_empty() && request.is_none() && !busy && loose.is_empty();
+        // A turn under way elsewhere leaves a new conversation as it is.
+        let live_here = showing_this && (busy || request.is_some());
+        let nothing = !loading && turns.is_empty() && !live_here && loose.is_empty();
 
         let mut list = div()
             .flex()
@@ -3054,13 +5119,8 @@ impl Render for ChatView {
         }
         if !loose.is_empty() {
             // While a turn runs, what it stages has no turn yet to sit under.
-            if !busy && !turns.is_empty() {
-                let note = if loose.len() == 1 {
-                    "Proposed outside this conversation.".to_owned()
-                } else {
-                    format!("{} proposals made outside this conversation.", loose.len())
-                };
-                list = list.child(ui::label(note, text::BODY, theme::ink3()));
+            if !busy {
+                list = list.child(ui::label(strays_note(&loose), text::BODY, theme::ink3()));
             }
             for proposal in &loose {
                 let pinned = pinned.as_deref() == Some(proposal.proposal_id.as_str());
@@ -3073,11 +5133,21 @@ impl Render for ChatView {
             self.follow = false;
         }
         let composer = self.composer(window, cx);
+        let ask = self.ask.clone();
+        // While what a proposal changed plays, the conversation falls back.
+        let watching = self.session.read(cx).reel().is_some();
+        let behind = if watching { CHAT_BEHIND } else { 1.0 };
+        if (self.behind.target() - behind).abs() > f32::EPSILON {
+            self.behind.go(behind, scene::SETTLE);
+        }
+        let opacity = self.behind.sample(window);
 
         div()
             .size_full()
             .flex()
             .flex_col()
+            .opacity(opacity)
+            .children(ask)
             .child(
                 div()
                     .id("conversation")
@@ -3097,6 +5167,9 @@ impl Render for ChatView {
                         ),
                     ),
             )
+            // Its fades: where an answer is cut at the top, and at the foot
+            // while there is more below.
+            .child(ui::scroll_fade(&self.scroll, theme::surround()))
             .child(
                 div()
                     .flex_none()

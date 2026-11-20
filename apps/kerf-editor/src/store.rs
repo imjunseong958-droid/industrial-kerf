@@ -182,6 +182,90 @@ impl MediaActivity {
     }
 }
 
+/// How full Kerf's context is, as a turn last said it (`agent_context`):
+/// of which conversation (None while the turn's conversation has no id
+/// yet), how much is taken of how much, and whether that is counted in the
+/// model's tokens or in Kerf's own measure.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ContextUse {
+    pub conversation: Option<String>,
+    pub used: f64,
+    pub limit: f64,
+    pub tokens: bool,
+}
+
+/// How full the context is, as its ring is coloured: ink2, the warning's
+/// amber from three quarters, red from nine tenths.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ContextLevel {
+    Room,
+    Filling,
+    Full,
+}
+
+impl ContextUse {
+    /// How much is taken, 0..1.
+    pub fn fraction(&self) -> f64 {
+        if self.limit > 0.0 && self.used.is_finite() {
+            (self.used / self.limit).clamp(0.0, 1.0)
+        } else {
+            0.0
+        }
+    }
+
+    /// The share taken, in whole percent.
+    pub fn percent(&self) -> u32 {
+        (self.fraction() * 100.0).round() as u32
+    }
+
+    pub fn level(&self) -> ContextLevel {
+        let full = self.fraction();
+        if full >= 0.9 {
+            ContextLevel::Full
+        } else if full >= 0.75 {
+            ContextLevel::Filling
+        } else {
+            ContextLevel::Room
+        }
+    }
+
+    /// What it is of: "68k of 200k tokens", or, in Kerf's own measure,
+    /// what Kerf does as it fills.
+    pub fn note(&self) -> String {
+        if self.tokens {
+            format!(
+                "{} of {} tokens",
+                short_count(self.used),
+                short_count(self.limit)
+            )
+        } else {
+            "Kerf puts older steps away as it fills".to_owned()
+        }
+    }
+
+    /// "Context 34% full · 68k of 200k tokens": its tip.
+    pub fn describe(&self) -> String {
+        format!("Context {}% full · {}", self.percent(), self.note())
+    }
+}
+
+/// A count as a reader takes it in: "950", "68k", "1.2M", "12M".
+pub fn short_count(count: f64) -> String {
+    let count = count.max(0.0).round();
+    if count >= 1_000_000.0 {
+        let millions = count / 1_000_000.0;
+        if count >= 10_000_000.0 {
+            format!("{:.0}M", millions)
+        } else {
+            format!("{:.1}M", millions)
+        }
+    } else if count >= 1000.0 {
+        format!("{:.0}k", (count / 1000.0).round())
+    } else {
+        format!("{count:.0}")
+    }
+}
+
 /// A note the window shows for a while: an error, or what finished.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Notice {
@@ -252,8 +336,9 @@ pub struct EditorState {
     /// Clips and times Kerf is looking at, for its cursor.
     pub agent_focus: Vec<f64>,
     pub agent_clips: Vec<String>,
-    /// How full Kerf's context is: used, limit.
-    pub context: Option<(f64, f64)>,
+    /// How full Kerf's context is, as the last turn said; shown only in
+    /// the conversation it is of ([`EditorState::context_shown`]).
+    pub context: Option<ContextUse>,
     /// The caption under the playhead.
     pub caption: String,
     /// Peak level, left and right, dBFS.
@@ -302,6 +387,22 @@ fn answered_in_place(command: &str) -> bool {
     ) || command.starts_with("recipe")
         || command.starts_with("shot_")
         || command.starts_with("workflow")
+}
+
+/// The first line of a request as a title says it: no list mark, no bold
+/// or code marks.
+pub fn title_line(body: &str) -> String {
+    let line = body.lines().next().unwrap_or_default().trim_start();
+    let line = line
+        .strip_prefix("- ")
+        .or_else(|| line.strip_prefix("* "))
+        .unwrap_or(line);
+    line.replace("**", "").replace('`', "").trim().to_owned()
+}
+
+/// Words on one line: runs of white space as one space, none at the ends.
+pub fn simplified(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// What saving the cast says: which shots want making for it now.
@@ -430,6 +531,12 @@ impl EditorState {
                 if started {
                     self.chosen = Some(id.clone());
                     self.work.conversation = Some(id.clone());
+                    // A reading said before the conversation had its id is of it.
+                    if let Some(context) =
+                        self.context.as_mut().filter(|c| c.conversation.is_none())
+                    {
+                        context.conversation = Some(id.clone());
+                    }
                 }
                 // Only the chosen conversation shows: another window's turns
                 // in other conversations change the sidebar's list, not this.
@@ -453,7 +560,7 @@ impl EditorState {
                         self.work.started = Some(Instant::now());
                         self.work.answer.clear();
                         self.work.steps.clear();
-                        self.work.status = "Working".into();
+                        self.work.status.clear();
                         self.work.state = "running".into();
                         self.work.message = None;
                         self.next_steps.clear();
@@ -486,7 +593,7 @@ impl EditorState {
                 let text = event["text"].as_str().unwrap_or_default();
                 match event["kind"].as_str().unwrap_or_default() {
                     "delta" => self.work.answer.push_str(text),
-                    "status" => self.work.status = text.to_owned(),
+                    "status" => self.work.status = simplified(text),
                     "done" => {
                         if !text.is_empty() {
                             self.work.answer = text.to_owned();
@@ -499,6 +606,11 @@ impl EditorState {
                             Some("failed") => StepState::Failed,
                             _ => StepState::Running,
                         };
+                        // The step it is on is what the work row says beside "Working".
+                        let said = simplified(text);
+                        if !said.is_empty() {
+                            self.work.status = said;
+                        }
                         match self.work.steps.iter_mut().find(|step| step.id == id) {
                             Some(step) => {
                                 step.text = text.to_owned();
@@ -529,9 +641,18 @@ impl EditorState {
                 Change::Work
             }
             "agent_focus" => {
+                // Seconds, or a time as a tool wrote it ("01:00:04:12", "96f").
+                let timeline = &self.snapshot.timeline;
                 self.agent_focus = event["times"]
                     .as_array()
-                    .map(|times| times.iter().filter_map(Value::as_f64).collect())
+                    .map(|times| {
+                        times
+                            .iter()
+                            .filter_map(|time| {
+                                crate::model::focus_seconds(time, timeline.rate(), timeline.start)
+                            })
+                            .collect()
+                    })
                     .unwrap_or_default();
                 self.agent_clips = event["clips"]
                     .as_array()
@@ -548,7 +669,18 @@ impl EditorState {
             "agent_context" => {
                 if let (Some(used), Some(limit)) = (event["used"].as_f64(), event["limit"].as_f64())
                 {
-                    self.context = Some((used, limit));
+                    // Of the conversation it names, else of the turn's own.
+                    let conversation = event["conversation"]
+                        .as_str()
+                        .filter(|id| !id.is_empty())
+                        .map(str::to_owned)
+                        .or_else(|| self.work.conversation.clone().filter(|_| self.work.busy()));
+                    self.context = Some(ContextUse {
+                        conversation,
+                        used: used.max(0.0),
+                        limit: limit.max(0.0),
+                        tokens: event["unit"].as_str() == Some("tokens"),
+                    });
                 }
                 Change::Work
             }
@@ -813,6 +945,25 @@ impl EditorState {
         MediaActivity::Ready
     }
 
+    /// How full Kerf's context is, when that reading is of the conversation
+    /// shown: the one it names, or (named by none yet) the turn under way in
+    /// a conversation just started. None elsewhere, and before any turn
+    /// has said.
+    pub fn context_shown(&self) -> Option<&ContextUse> {
+        let context = self
+            .context
+            .as_ref()
+            .filter(|context| context.limit > 0.0)?;
+        let here = match (&context.conversation, &self.chosen) {
+            (Some(of), Some(chosen)) => of == chosen,
+            (None, chosen) => {
+                self.work.busy() && chosen.as_ref() == self.work.conversation.as_ref()
+            }
+            (Some(_), None) => false,
+        };
+        here.then_some(context)
+    }
+
     /// Chooses the conversation to show; None is a new one.
     pub fn choose(&mut self, conversation: Option<String>) {
         if conversation != self.chosen {
@@ -836,6 +987,37 @@ impl EditorState {
         self.work.request = None;
         self.agent_focus.clear();
         self.agent_clips.clear();
+    }
+
+    /// The conversation shown, as its title says it: the one chosen, by its
+    /// title; else, for a new one, the first line of the request running
+    /// in it; else "New conversation".
+    pub fn conversation_title(&self) -> String {
+        let titled = |title: &str| Some(title.trim().to_owned()).filter(|title| !title.is_empty());
+        if let Some(chosen) = &self.chosen {
+            let title = self
+                .conversations
+                .iter()
+                .find(|known| &known.id == chosen)
+                .and_then(|known| titled(&known.title))
+                .or_else(|| {
+                    self.open_conversation
+                        .as_ref()
+                        .filter(|open| &open.id == chosen)
+                        .and_then(|open| titled(&open.title))
+                });
+            if let Some(title) = title {
+                return title;
+            }
+        }
+        let live = self
+            .work
+            .request
+            .as_deref()
+            .filter(|_| self.work.conversation == self.chosen)
+            .map(title_line)
+            .filter(|line| !line.is_empty());
+        live.unwrap_or_else(|| "New conversation".to_owned())
     }
 
     pub fn notify(&mut self, text: &str, error: bool) {

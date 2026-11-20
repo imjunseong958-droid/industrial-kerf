@@ -10,8 +10,8 @@
 //! relink, a replace or a new take makes it again, and media taken out of
 //! the project lets go of its artwork. A file that is missing or cannot be
 //! decoded has none, and the view draws its stand-in; nothing here panics
-//! on what a file holds. `KERF_FFMPEG` names the FFmpeg to run, as for the
-//! engine.
+//! on what a file holds. FFmpeg is looked for where kerfd looks
+//! ([`crate::focus::ffmpeg_bin`]: `KERF_FFMPEG`, beside the editor, the PATH).
 //!
 //! [`crate::session::Session`] holds one [`Artwork`] (`session.artwork`),
 //! tells it the project's media on each snapshot, and redraws the window
@@ -766,7 +766,6 @@ struct Shared {
     changed: AtomicBool,
     /// Set when the artwork is dropped: workers end, and FFmpegs are stopped.
     stop: Arc<AtomicBool>,
-    ffmpeg: PathBuf,
 }
 
 impl Shared {
@@ -808,16 +807,12 @@ impl Artwork {
     /// Artwork for the project in `directory` (None: nothing to read).
     /// Its workers start with its first job.
     pub fn new(directory: Option<PathBuf>) -> Self {
-        let ffmpeg = std::env::var_os("KERF_FFMPEG")
-            .filter(|path| !path.is_empty())
-            .map_or_else(|| PathBuf::from("ffmpeg"), PathBuf::from);
         Self {
             shared: Arc::new(Shared {
                 state: Mutex::new(State::default()),
                 wake: Condvar::new(),
                 changed: AtomicBool::new(false),
                 stop: Arc::new(AtomicBool::new(false)),
-                ffmpeg,
             }),
             directory,
         }
@@ -1267,7 +1262,9 @@ pub fn fill_gaps<T: Clone>(frames: Vec<Option<T>>) -> Option<Vec<T>> {
 /// true when it ended well. It is stopped after `limit`, or when the
 /// artwork is dropped.
 fn run(shared: &Shared, args: &[String], limit: Duration, mut sink: impl FnMut(&[u8])) -> bool {
-    let mut command = Command::new(&shared.ffmpeg);
+    // The FFmpeg kerfd would run (`KERF_FFMPEG`, beside the editor, the
+    // PATH), found once off the window's thread.
+    let mut command = Command::new(crate::focus::ffmpeg_bin());
     command
         .args(args)
         .stdin(Stdio::null())

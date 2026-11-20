@@ -67,7 +67,8 @@ fn a_working_turn_keeps_its_steps_and_streams_its_answer() {
         ],
     );
     assert!(state.work.busy());
-    assert_eq!(state.work.status, "Planning next step…");
+    // Beside "Working", the step it is on: the last tool call's words.
+    assert_eq!(state.work.status, "Render failed");
     assert_eq!(state.work.answer, "I trimmed the first clip.");
     let steps: Vec<_> = state
         .work

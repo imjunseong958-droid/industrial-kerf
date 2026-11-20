@@ -27,12 +27,18 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 /// The options every editor window opens with (a project's, the
 /// launcher's, New Project's launcher): the screen edge to edge, titled
-/// `title`.
+/// `title`; or, given `--window-size` ([`set_window_size`]), that size in
+/// the middle of the screen.
 pub fn options(title: &str, cx: &mut App) -> WindowOptions {
-    let bounds = Bounds::centered(None, size(px(1600.0), px(1000.0)), cx);
+    let asked = cx.try_global::<WindowSize>().map(|asked| asked.0);
+    let (width, height) = asked.unwrap_or((1600.0, 1000.0));
+    let bounds = Bounds::centered(None, size(px(width), px(height)), cx);
     WindowOptions {
-        // The editor fills the screen edge to edge.
-        window_bounds: Some(WindowBounds::Maximized(bounds)),
+        // The editor fills the screen edge to edge, unless a size was asked for.
+        window_bounds: Some(match asked {
+            Some(_) => WindowBounds::Windowed(bounds),
+            None => WindowBounds::Maximized(bounds),
+        }),
         titlebar: Some(TitlebarOptions {
             title: Some(title.to_owned().into()),
             ..Default::default()
@@ -41,6 +47,59 @@ pub fn options(title: &str, cx: &mut App) -> WindowOptions {
         window_min_size: Some(size(px(720.0), px(480.0))),
         ..Default::default()
     }
+}
+
+/// The size `--window-size` asked every window to open at.
+struct WindowSize((f32, f32));
+
+impl Global for WindowSize {}
+
+/// Opens every window at `size` (points) rather than edge to edge, for a
+/// capture. `main` calls it with `--window-size`.
+pub fn set_window_size(size: Option<(f32, f32)>, cx: &mut App) {
+    if let Some(size) = size {
+        cx.set_global(WindowSize(size));
+    }
+}
+
+/// `--window-size`'s WxH ("1600x1000"): both sides at least 1.
+pub fn parse_window_size(text: &str) -> Option<(f32, f32)> {
+    let (width, height) = text.trim().split_once(['x', 'X'])?;
+    let side = |text: &str| {
+        text.trim()
+            .parse::<u32>()
+            .ok()
+            .filter(|side| (1..=16384).contains(side))
+    };
+    Some((side(width)? as f32, side(height)? as f32))
+}
+
+/// `path` (PATH, `:` between folders) with the folders Homebrew and
+/// `~/.local` keep tools in after it, each once: an app opened from Finder
+/// or the Dock is given no shell PATH, and so would not find git, gh or
+/// git-lfs. `main` sets it on macOS before anything runs a tool.
+pub fn path_with_tool_folders(path: &str, home: &Path) -> String {
+    let mut folders: Vec<String> = path
+        .split(':')
+        .filter(|folder| !folder.is_empty())
+        .map(str::to_owned)
+        .collect();
+    let local = home
+        .join(".local")
+        .join("bin")
+        .to_string_lossy()
+        .into_owned();
+    for folder in [
+        "/opt/homebrew/bin",
+        "/opt/homebrew/sbin",
+        "/usr/local/bin",
+        local.as_str(),
+    ] {
+        if !folders.iter().any(|known| known == folder) {
+            folders.push(folder.to_owned());
+        }
+    }
+    folders.join(":")
 }
 
 // ---------------------------------------------------------------- windows
@@ -193,6 +252,7 @@ fn open_at(
     let options = options(&title, cx);
     let mut made = None;
     let window = cx.open_window(options, |window, cx| {
+        represent_project(window, &project);
         let session = Session::open(Some(project.clone()), kerfd, prefs, window, cx);
         // The account is the person's, whichever window heard of it.
         cx.subscribe(&session, |_, event: &BridgeEvent, cx| {
@@ -216,6 +276,64 @@ fn open_at(
         }),
         (Err(error), _) => log::error!("could not open the editor: {error}"),
         (Ok(_), None) => {}
+    }
+}
+
+/// The file a project's window represents: its project.kerf, as the Qt
+/// editor's setWindowFilePath had it.
+pub fn represented_file(project: &Path) -> PathBuf {
+    project.join("project.kerf")
+}
+
+/// On macOS, has `window` represent `project`'s [`represented_file`], so
+/// its title bar carries the file's proxy icon and the Window menu the
+/// file, as the Qt editor's did; elsewhere nothing. A project's window
+/// calls it as it opens: a window keeps its project.
+pub fn represent_project(window: &Window, project: &Path) {
+    #[cfg(target_os = "macos")]
+    macos::represent(window, &represented_file(project));
+    #[cfg(not(target_os = "macos"))]
+    let _ = (window, project);
+}
+
+/// AppKit, through its safe bindings.
+#[cfg(target_os = "macos")]
+mod macos {
+    use objc2::rc::Retained;
+    use objc2::MainThreadMarker;
+    use objc2_app_kit::{NSApplication, NSView};
+    use objc2_foundation::NSString;
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    use std::ffi::c_void;
+    use std::path::Path;
+
+    /// Has the NSWindow that holds `window`'s view (GPUI's, in its content
+    /// view) represent `file`.
+    pub(super) fn represent(window: &impl HasWindowHandle, file: &Path) {
+        let Ok(handle) = window.window_handle() else {
+            return;
+        };
+        let RawWindowHandle::AppKit(appkit) = handle.as_raw() else {
+            return;
+        };
+        let Some(main) = MainThreadMarker::new() else {
+            return;
+        };
+        let view = appkit.ns_view.as_ptr().cast_const();
+        let is_view =
+            |candidate: &Retained<NSView>| Retained::as_ptr(candidate).cast::<c_void>() == view;
+        let found = NSApplication::sharedApplication(main)
+            .windows()
+            .to_vec()
+            .into_iter()
+            .find(|ns_window| {
+                ns_window.contentView().is_some_and(|content| {
+                    is_view(&content) || content.subviews().to_vec().iter().any(&is_view)
+                })
+            });
+        if let Some(ns_window) = found {
+            ns_window.setRepresentedFilename(&NSString::from_str(&file.to_string_lossy()));
+        }
     }
 }
 
@@ -245,6 +363,64 @@ fn open_launcher(problem: Option<String>, kerfd: Option<PathBuf>, cx: &mut App) 
     if let Err(error) = window {
         log::error!("could not open the launcher: {error}");
     }
+}
+
+/// Renders the preview of the first project open once kerfd has it
+/// (`--render-preview`): the registry's `sequence.renderPreview`, as View ▸
+/// Render Preview runs it.
+pub fn render_preview_when_up(cx: &mut App) {
+    let Some(session) = cx
+        .try_global::<Opened>()
+        .and_then(|opened| opened.0.first())
+        .and_then(|open| open.session.upgrade())
+    else {
+        return;
+    };
+    fn render(session: &Entity<Session>, cx: &mut App) {
+        session.update(cx, |session, cx| {
+            session.run_command("sequence.renderPreview", serde_json::json!({}));
+            cx.notify();
+        });
+    }
+    if session.read(cx).state.opened_or_failed() {
+        render(&session, cx);
+        return;
+    }
+    let mut waiting = true;
+    cx.subscribe(&session, move |session, _: &Change, cx| {
+        if waiting && session.read(cx).state.opened_or_failed() {
+            waiting = false;
+            render(&session, cx);
+        }
+    })
+    .detach();
+}
+
+/// Opens the shot's graph `start` names (`--graph`, `--graph-node`) in the
+/// first project's window, once its project has said that media
+/// ([`crate::making::open_when_ready`]).
+pub fn open_graph_when_up(start: crate::making::GraphStart, cx: &mut App) {
+    let Some(open) = cx
+        .try_global::<Opened>()
+        .and_then(|opened| opened.0.first())
+        .cloned()
+    else {
+        return;
+    };
+    let Some(session) = open.session.upgrade() else {
+        return;
+    };
+    let window = open.window;
+    crate::making::open_when_ready(
+        start,
+        &session,
+        move |media, cx| {
+            let _ = window.update(cx, |workspace, window, cx| {
+                workspace.open_shot_graph(media, window, cx)
+            });
+        },
+        cx,
+    );
 }
 
 /// What making or cloning a project warned of, until its window is open.

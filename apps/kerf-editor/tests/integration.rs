@@ -200,3 +200,78 @@ proptest! {
         prop_assert!(landing.origin.y + landing.size.height <= row.origin.y + row.size.height + px(1e-3));
     }
 }
+
+// ------------------------------------------------- kept with the editor's settings
+
+proptest! {
+    /// Each project's track heights read back from the editor's settings
+    /// file as they were left, by its folder; another window keeping its
+    /// own project's heights loses neither; a project left at each kind's
+    /// own heights keeps nothing.
+    #[test]
+    fn track_heights_are_kept_for_each_project(
+        tracks in prop::collection::btree_map(
+            "[VAS][1-4]",
+            kerf_editor::timeline::TRACK_LEAST..kerf_editor::timeline::TRACK_MOST,
+            0..4,
+        ),
+        all in prop::option::of(
+            kerf_editor::timeline::TRACK_LEAST..kerf_editor::timeline::TRACK_MOST,
+        ),
+    ) {
+        use kerf_editor::prefs::Prefs;
+        use kerf_editor::timeline::TrackHeights;
+        use std::path::Path;
+        let tracks = tracks
+            .into_iter()
+            .map(|(id, height)| (id, height.round()))
+            .collect();
+        let heights = TrackHeights { all: all.map(f32::round), tracks };
+        let folder = tempfile::tempdir().unwrap();
+        let file = folder.path().join("editor.json");
+        let court = Path::new("/projects/court");
+        let harbour = Path::new("/projects/harbour");
+        let mut one = Prefs::load_from(&file);
+        let mut two = Prefs::load_from(&file);
+        one.keep_track_heights(court, heights.clone());
+        one.save_to(&file).unwrap();
+        let mut tall = TrackHeights::default();
+        tall.set("V1", Some(80.0));
+        two.keep_track_heights(harbour, tall.clone());
+        two.save_to(&file).unwrap();
+        let read = Prefs::load_from(&file);
+        prop_assert_eq!(read.track_heights_of(court), heights.clone());
+        prop_assert_eq!(read.track_heights_of(harbour), tall);
+        prop_assert_eq!(
+            read.track_heights_of(Path::new("/projects/elsewhere")),
+            TrackHeights::default()
+        );
+        let mut reset = read;
+        reset.keep_track_heights(court, TrackHeights::default());
+        prop_assert_eq!(reset.track_heights.len(), 1);
+    }
+}
+
+/// Every icon the views draw is served to GPUI under a name of its own.
+#[test]
+fn every_icon_is_served_under_its_own_name() {
+    use gpui::AssetSource;
+    use kerf_editor::icons::{Assets, Icon};
+    let mut names = std::collections::HashSet::new();
+    for icon in Icon::ALL {
+        assert!(names.insert(icon.name()), "{} twice", icon.name());
+        let served = Assets.load(&icon.path()).unwrap().expect("served");
+        let svg = String::from_utf8(served.into_owned()).unwrap();
+        assert!(svg.starts_with("<svg") && svg.ends_with("</svg>"));
+    }
+    for icon in [
+        Icon::List,
+        Icon::Grid,
+        Icon::Audio,
+        Icon::Dice,
+        Icon::ZoomIn,
+        Icon::ZoomOut,
+    ] {
+        assert!(Icon::ALL.contains(&icon), "{} is not served", icon.name());
+    }
+}

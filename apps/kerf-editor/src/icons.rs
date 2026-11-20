@@ -47,6 +47,16 @@ pub enum Icon {
     MaskRectangle,
     MaskEllipse,
     Pen,
+    /// The Media band's two ways of showing its media: rows, or tiles.
+    List,
+    Grid,
+    /// A sound: a speaker and its waves (a sound tile before its waveform).
+    Audio,
+    /// Another seed, at random: a die's face.
+    Dice,
+    /// Closer and further: a shot's graph's zoom.
+    ZoomIn,
+    ZoomOut,
 }
 
 impl Icon {
@@ -90,6 +100,12 @@ impl Icon {
             Icon::MaskRectangle => "mask-rectangle",
             Icon::MaskEllipse => "mask-ellipse",
             Icon::Pen => "pen",
+            Icon::List => "list",
+            Icon::Grid => "grid",
+            Icon::Audio => "audio",
+            Icon::Dice => "dice",
+            Icon::ZoomIn => "zoom-in",
+            Icon::ZoomOut => "zoom-out",
         }
     }
 
@@ -197,6 +213,24 @@ impl Icon {
             Icon::Pen => {
                 r#"<path d="M5.6 10.4l7-7"/><path d="M3 13l1.3-3.6 2.3 2.3z" fill="black"/>"#
             }
+            Icon::List => {
+                r#"<path d="M5.5 4h8M5.5 8h8M5.5 12h8"/><circle cx="2.75" cy="4" r=".85" fill="black" stroke="none"/><circle cx="2.75" cy="8" r=".85" fill="black" stroke="none"/><circle cx="2.75" cy="12" r=".85" fill="black" stroke="none"/>"#
+            }
+            Icon::Grid => {
+                r#"<rect x="2" y="2" width="5" height="5" rx=".75"/><rect x="9" y="2" width="5" height="5" rx=".75"/><rect x="2" y="9" width="5" height="5" rx=".75"/><rect x="9" y="9" width="5" height="5" rx=".75"/>"#
+            }
+            Icon::Audio => {
+                r#"<path d="M2.25 6.25H4.5L7.5 3.5v9L4.5 9.75H2.25z"/><path d="M10 5.75a3 3 0 0 1 0 4.5M11.9 3.9a5.6 5.6 0 0 1 0 8.2"/>"#
+            }
+            Icon::Dice => {
+                r#"<rect x="2.25" y="2.25" width="11.5" height="11.5" rx="2.25"/><circle cx="5.5" cy="5.5" r=".95" fill="black" stroke="none"/><circle cx="8" cy="8" r=".95" fill="black" stroke="none"/><circle cx="10.5" cy="10.5" r=".95" fill="black" stroke="none"/>"#
+            }
+            Icon::ZoomIn => {
+                r#"<circle cx="7" cy="7" r="4.25"/><path d="M10.25 10.25l3.5 3.5M5 7h4M7 5v4"/>"#
+            }
+            Icon::ZoomOut => {
+                r#"<circle cx="7" cy="7" r="4.25"/><path d="M10.25 10.25l3.5 3.5M5 7h4"/>"#
+            }
         }
     }
 
@@ -207,7 +241,7 @@ impl Icon {
         )
     }
 
-    pub const ALL: [Icon; 38] = [
+    pub const ALL: [Icon; 44] = [
         Icon::Sidebar,
         Icon::Panel,
         Icon::Play,
@@ -246,6 +280,12 @@ impl Icon {
         Icon::MaskRectangle,
         Icon::MaskEllipse,
         Icon::Pen,
+        Icon::List,
+        Icon::Grid,
+        Icon::Audio,
+        Icon::Dice,
+        Icon::ZoomIn,
+        Icon::ZoomOut,
     ];
 }
 

@@ -56,9 +56,13 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Instant;
 
-/// A tile's thumb, as Qt drew it, and the gap between tiles.
-pub const THUMB: (f32, f32) = (112.0, 63.0);
-const TILE_GAP: f32 = 12.0;
+/// A tile's thumb, as Qt drew it, and the gap between tiles; the search
+/// row under the strip; Roles' column; a row of the list, and of the Index.
+pub use crate::theme::layout::MEDIA_THUMB as THUMB;
+use crate::theme::layout::{
+    MEDIA_INDEX_ROW as INDEX_ROW, MEDIA_LIST_ROW as LIST_ROW, MEDIA_ROLES_WIDTH as ROLES_WIDTH,
+    MEDIA_SEARCH_ROW as SEARCH_ROW, MEDIA_TILE_GAP as TILE_GAP,
+};
 /// From the thumb to its name, and the name's and the status's lines.
 const NAME_TOP: f32 = 4.0;
 const LINE: f32 = 16.0;
@@ -66,14 +70,8 @@ const LINE: f32 = 16.0;
 /// search row takes the room).
 const SIDE_PADDING: f32 = 16.0;
 const TOP_PADDING: f32 = 12.0;
-/// The search row under the strip.
-const SEARCH_ROW: f32 = 24.0;
-/// Roles: its rows, in a column this wide.
+/// Roles: its rows.
 const ROLE_ROW: f32 = 20.0;
-const ROLES_WIDTH: f32 = 216.0;
-/// A row of the list, and of the Index.
-const LIST_ROW: f32 = 24.0;
-const INDEX_ROW: f32 = 20.0;
 /// The checkerboard under a picture with alpha.
 const CHECKER: f32 = 8.0;
 
@@ -1493,8 +1491,8 @@ impl MediaBand {
                                     &peaks,
                                     0.0,
                                     duration,
-                                    theme::with_alpha(theme::ink3(), 0.45),
-                                    theme::with_alpha(theme::ink2(), 0.8),
+                                    theme::waveform::peak(),
+                                    theme::waveform::rms(),
                                     1.0,
                                 );
                             },
@@ -1503,7 +1501,7 @@ impl MediaBand {
                         .inset_0(),
                     )
                 }
-                None => thumb = thumb.child(Icon::Mute.view(16.0, theme::ink3())),
+                None => thumb = thumb.child(Icon::Audio.view(16.0, theme::ink3())),
             }
         } else {
             thumb = thumb.bg(theme::overlay_screen());
@@ -1961,7 +1959,7 @@ impl MediaBand {
                     // The button offers the other view.
                     button(
                         "media-view",
-                        if self.list { Icon::Media } else { Icon::Panel },
+                        if self.list { Icon::Grid } else { Icon::List },
                     )
                     .on_click(cx.listener(|this, _, _, cx| this.toggle_view(cx))),
                 ),

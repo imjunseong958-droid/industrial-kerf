@@ -41,9 +41,9 @@ actions!(finish, [Close]);
 const CONTEXT: &str = "Finish";
 const MENU_CONTEXT: &str = "CollabMenu";
 
-/// The panel's size; the workspace rounds its corners.
-const WIDTH: f32 = 860.0;
-const HEIGHT: f32 = 600.0;
+/// The panel at its largest; the workspace places it ([`crate::ui::modal_bounds`])
+/// and rounds its corners, and it fills that.
+pub const MOST: (f32, f32) = (860.0, 600.0);
 /// Its title row, and the column of sections down its side.
 const HEAD: f32 = 48.0;
 const NAV: f32 = 196.0;
@@ -67,8 +67,12 @@ const TARGET: f64 = -23.0;
 const PEAK_LIMIT: f64 = -1.0;
 /// Where the master and the review copy go (master_output's rule).
 use crate::session::DELIVERIES;
-/// The chip's menu.
+/// The chip's menu, and its questions that hold more than a line.
 const MENU_WIDTH: f32 = 284.0;
+const PROMPT_WIDTH: f32 = 380.0;
+/// A pull request's description: its least height, and the most it grows to.
+const BODY_LEAST: f32 = 72.0;
+const BODY_MOST: f32 = 144.0;
 
 // ------------------------------------------------------------ what is kept
 
@@ -78,6 +82,8 @@ struct Report {
     revision: u64,
     valid: bool,
     summary: Summary,
+    /// The summary as the bridge sent it, for Export's Preflight.
+    summary_value: Value,
     findings: Vec<Finding>,
 }
 
@@ -171,6 +177,7 @@ impl Report {
             revision,
             valid: event["valid"].as_bool().unwrap_or(summary.blocking == 0),
             summary,
+            summary_value: event["summary"].clone(),
             findings,
         }
     }
@@ -405,6 +412,215 @@ impl Finishing {
     }
 }
 
+// ------------------------------------------------------------------ preflight
+
+/// Fills the conversation's composer with `words`, to be changed before it
+/// is sent (Qt's askPrefill): a failed check's Ask Kerf, in Export's
+/// Preflight and in Finish's QC. The window's root is to hand it to the
+/// conversation; until something on the way to the keys takes it
+/// ([`can_ask`]), neither offers Ask Kerf.
+#[derive(Clone, Debug, Default, PartialEq, gpui::Action)]
+#[action(namespace = kerf, no_json)]
+pub struct AskKerf {
+    pub words: SharedString,
+}
+
+/// What Deliver says under its title: where the master and the review copy
+/// go in `project`, the master where the project keeps it to go
+/// ([`crate::export::master_request`], `kept`): "The master and a review
+/// copy go to deliveries/ in the project, numbered when one is there
+/// already.", or "The master goes to masters/ and a review copy to
+/// deliveries/ in the project, each numbered when one is there already."
+pub fn deliver_said(project: Option<&Path>, kept: Option<&crate::prefs::MasterOutput>) -> String {
+    /// Where a request sends its file: the folder as people read it, and
+    /// whether it is in the project; None where kerfd puts renders.
+    fn place(command: &Value) -> Option<(String, bool)> {
+        command["output"].as_str().map(|folder| {
+            (
+                crate::export::shown_folder(folder),
+                !Path::new(folder).is_absolute(),
+            )
+        })
+    }
+    /// "to deliveries/", "to deliveries/ in the project" (`said_in`), or
+    /// "where Kerf puts renders".
+    fn goes(place: &Option<(String, bool)>, said_in: bool) -> String {
+        match place {
+            Some((folder, inside)) if *inside && said_in => {
+                format!("to {folder} in the project")
+            }
+            Some((folder, _)) => format!("to {folder}"),
+            None => "where Kerf puts renders".to_owned(),
+        }
+    }
+    let master = place(&crate::export::master_request(project, kept));
+    let review = place(&crate::session::export_request(project, "review"));
+    if master == review {
+        return format!(
+            "The master and a review copy go {}, numbered when one is there already.",
+            goes(&master, true)
+        );
+    }
+    // Both in the project: said once, at the end.
+    let both_inside = matches!((&master, &review), (Some((_, true)), Some((_, true))));
+    format!(
+        "The master goes {} and a review copy {}, each numbered when one is there already.",
+        goes(&master, !both_inside),
+        goes(&review, true)
+    )
+}
+
+/// Whether [`AskKerf`] is heard in `window`: something on the way from the
+/// keys to the window's root takes it. Export's Preflight and Finish's QC
+/// ask as they draw, and offer Ask Kerf only then.
+pub fn can_ask(window: &Window, cx: &mut App) -> bool {
+    window.is_action_available(&AskKerf::default(), cx)
+}
+
+/// How many rows Preflight shows: every failed one up to the most, then
+/// passed ones up to the least in all.
+pub const PREFLIGHT_LEAST: usize = 4;
+pub const PREFLIGHT_MOST: usize = 6;
+
+/// One row of Export's Preflight: a check of the last QC pass.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PreflightRow {
+    pub code: String,
+    /// Its name and what it found: "True peak · −0.4 dBTP".
+    pub label: String,
+    pub passed: bool,
+    /// What a passed check allows, said at its end.
+    pub limit: Option<String>,
+    /// What Ask Kerf fills the composer with, for one that failed.
+    pub ask: Option<String>,
+}
+
+/// The rows Preflight shows of a check's `summary` (`{rows: [{code, name,
+/// passed, value, limit}]}`): every failed one up to `most`, then passed
+/// ones up to `least` in all, in the summary's order. A row that does not
+/// say passed it.
+pub fn preflight_rows(summary: &Value, least: usize, most: usize) -> Vec<PreflightRow> {
+    let rows = summary["rows"].as_array().cloned().unwrap_or_default();
+    let passed = |row: &Value| row["passed"].as_bool().unwrap_or(true);
+    let mut chosen: Vec<usize> = (0..rows.len())
+        .filter(|index| !passed(&rows[*index]))
+        .take(most)
+        .collect();
+    for index in 0..rows.len() {
+        if chosen.len() >= least {
+            break;
+        }
+        if passed(&rows[index]) && !chosen.contains(&index) {
+            chosen.push(index);
+        }
+    }
+    chosen.sort_unstable();
+    chosen
+        .into_iter()
+        .map(|index| {
+            let row = &rows[index];
+            let code = row["code"].as_str().unwrap_or_default().to_owned();
+            let name = row["name"].as_str().unwrap_or(&code).to_owned();
+            let value = row["value"].as_str().unwrap_or_default();
+            let ok = passed(row);
+            PreflightRow {
+                label: if value.is_empty() {
+                    name
+                } else {
+                    format!("{name} · {value}")
+                },
+                passed: ok,
+                limit: row["limit"]
+                    .as_str()
+                    .filter(|limit| ok && !limit.is_empty())
+                    .map(str::to_owned),
+                ask: (!ok).then(|| ask_text(row)),
+                code,
+            }
+        })
+        .collect()
+}
+
+/// The failed rows Preflight leaves out of `summary`'s.
+pub fn preflight_hidden(summary: &Value, most: usize) -> usize {
+    let failed = summary["rows"]
+        .as_array()
+        .map(|rows| {
+            rows.iter()
+                .filter(|row| !row["passed"].as_bool().unwrap_or(true))
+                .count()
+        })
+        .unwrap_or(0);
+    failed.saturating_sub(most)
+}
+
+/// What Ask Kerf asks of a failed check (`{name, value, limit}`): "Bring
+/// true peak to ≤ −1 dBTP (now −0.4 dBTP)", or, with no limit, "Fix the
+/// flash (3 frames)".
+pub fn ask_text(row: &Value) -> String {
+    let name = row["name"]
+        .as_str()
+        .or_else(|| row["code"].as_str())
+        .unwrap_or_default();
+    let name = lower_first(name);
+    let value = row["value"].as_str().unwrap_or_default();
+    let limit = row["limit"].as_str().unwrap_or_default();
+    match (limit.is_empty(), value.is_empty()) {
+        (false, true) => format!("Bring {name} to {limit}"),
+        (false, false) => format!("Bring {name} to {limit} (now {value})"),
+        (true, true) => format!("Fix the {name}"),
+        (true, false) => format!("Fix the {name} ({value})"),
+    }
+}
+
+/// `text` with its first letter lower, unless the second is a capital (an
+/// initialism: "LUFS").
+fn lower_first(text: &str) -> String {
+    let mut chars = text.chars();
+    let (Some(first), Some(second)) = (chars.next(), chars.next()) else {
+        return text.to_owned();
+    };
+    if second.is_uppercase() {
+        return text.to_owned();
+    }
+    first.to_lowercase().chain(text.chars().skip(1)).collect()
+}
+
+/// What Export's Preflight shows of the project's last QC pass, as Finish
+/// keeps it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Preflight {
+    /// A check's progress while it runs.
+    pub checking: Option<f64>,
+    /// Why the last check failed.
+    pub failed: Option<String>,
+    /// A check has finished since the project opened.
+    pub checked: bool,
+    pub rows: Vec<PreflightRow>,
+    /// Failed checks left out of the rows.
+    pub hidden: usize,
+}
+
+/// The project's last QC pass for Export's Preflight. Export calls it as
+/// it draws, and draws again on each `check` event.
+pub fn preflight(session: &Entity<Session>, cx: &mut App) -> Preflight {
+    let finishing = finishing(session, cx);
+    let finishing = finishing.read(cx);
+    let summary = finishing
+        .report
+        .as_ref()
+        .map(|report| &report.summary_value);
+    Preflight {
+        checking: finishing.checking,
+        failed: finishing.check_failed.clone(),
+        checked: summary.is_some(),
+        rows: summary
+            .map(|summary| preflight_rows(summary, PREFLIGHT_LEAST, PREFLIGHT_MOST))
+            .unwrap_or_default(),
+        hidden: summary.map_or(0, |summary| preflight_hidden(summary, PREFLIGHT_MOST)),
+    }
+}
+
 // ------------------------------------------------------------------ Finish
 
 /// Open Finish (and run QC when asked to).
@@ -454,6 +670,9 @@ pub struct FinishView {
     finishing: Entity<Finishing>,
     focus_handle: FocusHandle,
     section: Section,
+    /// Whether the window fills the composer from a failed check's Ask
+    /// Kerf ([`can_ask`]), as it was when last drawn.
+    can_ask: bool,
     /// Where the chart was drawn, to read the pointer against.
     chart_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// The share of the way across the chart the pointer is.
@@ -486,6 +705,7 @@ impl FinishView {
             finishing,
             focus_handle: cx.focus_handle(),
             section: Section::Qc,
+            can_ask: false,
             chart_bounds: Rc::new(Cell::new(None)),
             hover: None,
             _subscriptions: subscriptions,
@@ -583,11 +803,17 @@ impl FinishView {
             .filter(|name| !name.trim().is_empty())
     }
 
-    /// Renders the master (`master`) or a review copy (`review`) into
-    /// deliveries/, named after the project, as master_output's rule has it.
+    /// Renders the master (`master`) where the project keeps it to go
+    /// (deliveries/ unless its settings say otherwise), or a review copy
+    /// (`review`) into deliveries/, named after the project.
     fn deliver(&mut self, quality: &'static str, cx: &mut Context<Self>) {
-        self.session
-            .update(cx, |session, _| session.deliver(quality));
+        self.session.update(cx, |session, _| {
+            if quality == "master" {
+                crate::export::render_master(session);
+            } else {
+                session.deliver(quality);
+            }
+        });
     }
 
     fn captions(&mut self, format: &'static str, cx: &mut Context<Self>) {
@@ -616,7 +842,8 @@ impl FinishView {
             )
             .child(
                 icon_button("finish-close", Icon::Close)
-                    .tooltip("Close · Esc")
+                    .tooltip("Close")
+                    .key("Esc")
                     .on_click(cx.listener(|this, _, _, cx| this.dismiss(cx))),
             )
     }
@@ -767,7 +994,7 @@ impl FinishView {
     fn title(
         &self,
         words: &'static str,
-        says: &'static str,
+        says: impl Into<SharedString>,
         action: Option<AnyElement>,
     ) -> AnyElement {
         div()
@@ -782,7 +1009,7 @@ impl FinishView {
                     .flex_col()
                     .gap(px(theme::space::S2))
                     .child(ui::label(words, text::SIDE_NAME, theme::ink()))
-                    .child(ui::label(says, text::CONTROL, theme::ink3())),
+                    .child(ui::label(says.into(), text::CONTROL, theme::ink3())),
             )
             .children(action)
             .into_any_element()
@@ -794,7 +1021,21 @@ impl FinishView {
         let finishing = self.finishing.read(cx);
         let running = finishing.checking;
         let revision = self.session.read(cx).revision();
-        let run = ui::button(
+        // Greyed, it says why: what the registry says of Run QC (kerfd
+        // gone), else that a check runs.
+        let reason = if running.is_some() {
+            Some("A check is running".to_owned())
+        } else if !self.connected(cx) {
+            let states = kerf_bridge::commands_states(&self.session.read(cx).command_context());
+            Some(
+                crate::palette::unavailable(&states, "qc.run")
+                    .unwrap_or("Kerf is not connected")
+                    .to_owned(),
+            )
+        } else {
+            None
+        };
+        let mut run = ui::button(
             "finish-run-qc",
             if finishing.report.is_some() {
                 "Run QC Again"
@@ -803,9 +1044,12 @@ impl FinishView {
             },
         )
         .primary()
-        .disabled(running.is_some() || !self.connected(cx))
-        .on_click(cx.listener(|this, _, _, cx| this.run_check(cx)))
-        .into_any_element();
+        .disabled(reason.is_some())
+        .on_click(cx.listener(|this, _, _, cx| this.run_check(cx)));
+        if let Some(reason) = reason {
+            run = run.tooltip("Run QC").reason(reason);
+        }
+        let run = run.into_any_element();
         let mut out = vec![self.title(
             "QC",
             "The checks a delivery needs: loudness, true peak, gamut, title safe, caption overlap and timing, \
@@ -900,6 +1144,31 @@ impl FinishView {
                         .into_any_element()
                 };
                 let seek = row.at.filter(|_| !row.passed);
+                let ask = (!row.passed && self.can_ask).then(|| {
+                    let words: SharedString = ask_text(&json!({
+                        "name": row.name(),
+                        "value": row.value,
+                        "limit": row.limit,
+                    }))
+                    .into();
+                    ui::button(ElementId::named_usize("finish-row-ask", index), "Ask Kerf")
+                        .small()
+                        .ghost()
+                        .tooltip(words.clone())
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            // The row's own press (to its time) is not this one.
+                            cx.stop_propagation();
+                            // Put away first, so the window takes the keys
+                            // back before the composer has them.
+                            this.dismiss(cx);
+                            window.dispatch_action(
+                                Box::new(AskKerf {
+                                    words: words.clone(),
+                                }),
+                                cx,
+                            );
+                        }))
+                });
                 div()
                     .id(ElementId::named_usize("finish-row", index))
                     .h(px(height::H32))
@@ -924,6 +1193,7 @@ impl FinishView {
                                 .min_w(px(72.0)),
                         )
                     })
+                    .children(ask)
                     .when_some(seek, |line, at| {
                         line.cursor_pointer()
                             .hover(|style| style.bg(theme::raised()))
@@ -1196,11 +1466,12 @@ impl FinishView {
             None => format!("{suffix}.{extension}"),
         };
         let latest = |quality: &str| jobs.iter().find(|job| job.quality == quality).cloned();
-        let mut out = vec![self.title(
-            "Deliver",
-            "The master and a review copy go to deliveries/ in the project, numbered when one is there already.",
-            None,
-        )];
+        let kept = folder
+            .as_deref()
+            .and_then(|project| session.prefs.master_output(project));
+        let (master_goes, master_makes) = crate::export::master_goes(folder.as_deref(), kept);
+        let heading = deliver_said(folder.as_deref(), kept);
+        let mut out = vec![self.title("Deliver", heading, None)];
         if let Some(report) = finishing
             .report
             .as_ref()
@@ -1297,8 +1568,8 @@ impl FinishView {
             .child(
                 Deliverable {
                     name: "Master",
-                    makes: "ProRes 422 HQ in QuickTime, with 24-bit sound",
-                    goes: named("master", "mov"),
+                    makes: master_makes,
+                    goes: master_goes,
                     newest: latest("master"),
                     problem: finishing.export_failed.clone(),
                 }
@@ -1307,7 +1578,7 @@ impl FinishView {
             .child(
                 Deliverable {
                     name: "Review copy",
-                    makes: "H.264 at 12 Mb/s, full size, to send round",
+                    makes: "H.264 at 12 Mb/s, full size, to send round".into(),
                     goes: named("draft", "mp4"),
                     newest: latest("review"),
                     problem: None,
@@ -1455,7 +1726,8 @@ impl Focusable for FinishView {
 }
 
 impl Render for FinishView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.can_ask = can_ask(window, cx);
         div()
             .key_context(CONTEXT)
             .track_focus(&self.focus_handle)
@@ -1463,8 +1735,7 @@ impl Render for FinishView {
             .on_action(cx.listener(Self::command))
             // A press on the dim around the panel gives the window back.
             .on_mouse_down_out(cx.listener(|this, _, _, cx| this.dismiss(cx)))
-            .w(px(WIDTH))
-            .h(px(HEIGHT))
+            .size_full()
             .flex()
             .flex_col()
             .bg(theme::chrome())
@@ -1475,7 +1746,8 @@ impl Render for FinishView {
             .child(
                 div()
                     .flex()
-                    .h(px(HEIGHT - HEAD - 1.0))
+                    .flex_1()
+                    .min_h_0()
                     .child(self.nav(cx))
                     .child(self.page(cx)),
             )
@@ -1761,7 +2033,7 @@ fn paint_chart(
 /// newest render, and why the last one did not go.
 struct Deliverable {
     name: &'static str,
-    makes: &'static str,
+    makes: String,
     goes: String,
     newest: Option<RenderJob>,
     problem: Option<String>,
@@ -1994,6 +2266,17 @@ enum Prompt {
 }
 
 impl Prompt {
+    /// The one the registry's command `id` asks with.
+    fn of_command(id: &str) -> Option<Prompt> {
+        match id {
+            "collab.publish" => Some(Prompt::Publish),
+            "collab.commit" => Some(Prompt::Commit),
+            "collab.newBranch" => Some(Prompt::NewBranch),
+            "collab.pullRequest" => Some(Prompt::PullRequest),
+            _ => None,
+        }
+    }
+
     fn title(self) -> &'static str {
         match self {
             Prompt::Publish => "Publish to GitHub",
@@ -2006,18 +2289,22 @@ impl Prompt {
     fn placeholder(self) -> &'static str {
         match self {
             Prompt::Publish => "Repository name",
-            Prompt::Commit => "What changed",
-            Prompt::NewBranch => "Branch name",
+            Prompt::Commit => "Describe the change",
+            Prompt::NewBranch => "Name",
             Prompt::PullRequest => "Title",
         }
     }
 
-    fn says(self) -> &'static str {
+    /// What it does, said over its fields; `branch` is the one checked out.
+    fn says(self, branch: Option<&str>) -> String {
         match self {
-            Prompt::Publish => "A private repository on GitHub, made with gh. Left empty, it is named after the project's folder.",
-            Prompt::Commit => "Commits your edits without syncing. Left empty, the message describes them.",
-            Prompt::NewBranch => "Commits your edits, then makes a branch from here and switches to it. The next sync publishes it.",
-            Prompt::PullRequest => "Pushes the branch and opens a pull request on it. Left empty, the title is the branch's name.",
+            Prompt::Publish => "Makes the project a Git repository if it is not one yet, then pushes it so collaborators can clone it, sync, and open pull requests.".into(),
+            Prompt::Commit => "Commits your edits without syncing. Left empty, the message describes them.".into(),
+            Prompt::NewBranch => "Commits your edits, then starts a branch from them. The next sync publishes it.".into(),
+            Prompt::PullRequest => format!(
+                "Pushes {} and opens a pull request on GitHub. Reviewers read the change as Kerf code.",
+                branch.filter(|branch| !branch.is_empty()).unwrap_or("this branch")
+            ),
         }
     }
 
@@ -2026,13 +2313,226 @@ impl Prompt {
             Prompt::Publish => "Publish",
             Prompt::Commit => "Commit",
             Prompt::NewBranch => "Create Branch",
-            Prompt::PullRequest => "Open",
+            Prompt::PullRequest => "Open Pull Request",
+        }
+    }
+
+    /// Its panel is wider than the menu: it holds more than a line.
+    fn wide(self) -> bool {
+        matches!(self, Prompt::Publish | Prompt::PullRequest)
+    }
+}
+
+/// How Publish shares the project.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PublishWay {
+    /// A new repository on GitHub, made with the GitHub CLI.
+    GitHub,
+    /// A remote the person already has (GitHub, GitLab, their own server).
+    Remote,
+    /// A repository on this computer only.
+    Local,
+}
+
+impl PublishWay {
+    pub const ALL: [PublishWay; 3] = [PublishWay::GitHub, PublishWay::Remote, PublishWay::Local];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            PublishWay::GitHub => "GitHub",
+            PublishWay::Remote => "Remote",
+            PublishWay::Local => "This computer",
+        }
+    }
+
+    /// What choosing it does, in the Qt editor's words.
+    pub fn says(self) -> &'static str {
+        match self {
+            PublishWay::GitHub => "Create a GitHub repository",
+            PublishWay::Remote => "Push to a remote I already have",
+            PublishWay::Local => "Only make it a repository on this computer",
         }
     }
 }
 
+/// Why GitHub cannot be chosen without its command-line tool.
+pub const NEEDS_GH: &str = "Install the GitHub CLI and sign in with `gh auth login`";
+
+/// The repository name Publish starts with: the project's folder name,
+/// each run of anything but letters, digits, `.`, `_` and `-` one `-`.
+pub fn publish_name(folder: &str) -> String {
+    let mut name = String::new();
+    let mut gap = false;
+    for ch in folder.chars() {
+        if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-') {
+            if gap {
+                name.push('-');
+            }
+            gap = false;
+            name.push(ch);
+        } else {
+            gap = true;
+        }
+    }
+    if gap {
+        name.push('-');
+    }
+    name
+}
+
+/// The title Open Pull Request starts with: the branch's name, its dashes
+/// and underscores as spaces, its first letter a capital.
+pub fn pull_request_title(branch: &str) -> String {
+    let words = branch.replace(['-', '_'], " ");
+    let mut chars = words.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+        None => String::new(),
+    }
+}
+
+/// What Publish sends for `way`: a GitHub repository named `name` (the
+/// folder's when empty), private or not; a push to `remote`; or a
+/// repository here only. None while the remote is not given.
+pub fn publish_command(way: PublishWay, name: &str, private: bool, remote: &str) -> Option<Value> {
+    match way {
+        PublishWay::GitHub => {
+            let mut github = json!({"private": private});
+            if !name.trim().is_empty() {
+                github["name"] = json!(name.trim());
+            }
+            Some(json!({"type": "collab_publish", "github": github}))
+        }
+        PublishWay::Remote => {
+            let remote = remote.trim();
+            (!remote.is_empty()).then(|| json!({"type": "collab_publish", "remote": remote}))
+        }
+        PublishWay::Local => Some(json!({"type": "collab_publish"})),
+    }
+}
+
+/// What Open Pull Request sends: its title, and its description when one
+/// is written (left out, the bridge lists the branch's commits). None
+/// without a title.
+pub fn pull_request_command(title: &str, body: &str) -> Option<Value> {
+    let title = title.trim();
+    if title.is_empty() {
+        return None;
+    }
+    let mut command = json!({"type": "collab_pull_request", "title": title});
+    if !body.trim().is_empty() {
+        command["body"] = json!(body);
+    }
+    Some(command)
+}
+
+/// What the window says of a pull request the bridge answered for
+/// (`collab_pull_request {url, created}`): one opened; GitHub's page for
+/// starting one (without the GitHub CLI the bridge opens a `/compare` page);
+/// or the one the branch has already.
+pub fn pull_request_said(url: &str, created: bool) -> String {
+    let compare = url
+        .split_once("://")
+        .map_or(url, |(_, rest)| rest)
+        .split(['?', '#'])
+        .next()
+        .unwrap_or_default()
+        .split('/')
+        .nth(3)
+        == Some("compare");
+    let words = if created {
+        "Opened a pull request"
+    } else if compare {
+        "Opened GitHub's page for a new pull request"
+    } else {
+        "This branch already has a pull request"
+    };
+    if url.trim().is_empty() {
+        words.to_owned()
+    } else {
+        format!("{words}: {url}")
+    }
+}
+
+/// The lines a finished sync's `report` leaves in Activity: each commit it
+/// brought in ("jun · Trimmed c3"), each conflict it settled ("Kept yours ·
+/// project.kerf: what"), each clip renumbered ("Renumbered · c4 → c7").
+pub fn sync_lines(report: &Value) -> Vec<String> {
+    let mut lines = Vec::new();
+    for commit in report["incoming"].as_array().into_iter().flatten() {
+        lines.push(format!(
+            "{} · {}",
+            commit["author"].as_str().unwrap_or_default(),
+            commit["subject"].as_str().unwrap_or_default()
+        ));
+    }
+    for conflict in report["conflicts"].as_array().into_iter().flatten() {
+        let kept = if conflict["kept"] == "theirs" {
+            "Kept theirs"
+        } else {
+            "Kept yours"
+        };
+        let path = conflict["path"].as_str().unwrap_or_default();
+        let what = conflict["what"].as_str().unwrap_or_default();
+        let said = if path.is_empty() {
+            what.to_owned()
+        } else {
+            format!("{path}: {what}")
+        };
+        lines.push(format!("{kept} · {said}"));
+    }
+    for pair in report["renamed"].as_array().into_iter().flatten() {
+        let side = |index: usize| pair[index].as_str().unwrap_or_default().to_owned();
+        lines.push(format!("Renumbered · {} → {}", side(0), side(1)));
+    }
+    lines
+}
+
+/// What the window says of a finished sync: "Synced: 2 commits in, pushed,
+/// 1 change kept yours" whenever it brought anything (a Live Sync cycle
+/// too), "Synced: up to date" when it brought nothing but was `asked` for;
+/// None for a quiet Live Sync cycle.
+pub fn sync_said(report: &Value, asked: bool) -> Option<String> {
+    let incoming = report["incoming"].as_array().map_or(0, Vec::len);
+    let conflicts = report["conflicts"]
+        .as_array()
+        .map_or(&[][..], Vec::as_slice);
+    let theirs = conflicts
+        .iter()
+        .filter(|conflict| conflict["kept"] == "theirs")
+        .count();
+    let yours = conflicts.len() - theirs;
+    let mut parts = Vec::new();
+    if incoming > 0 {
+        parts.push(plural(incoming, "1 commit in", "{} commits in"));
+    }
+    if report["pushed"].as_bool() == Some(true) {
+        parts.push("pushed".to_owned());
+    }
+    if yours > 0 {
+        parts.push(plural(
+            yours,
+            "1 change kept yours",
+            "{} changes kept yours",
+        ));
+    }
+    if theirs > 0 {
+        parts.push(plural(
+            theirs,
+            "1 change kept theirs",
+            "{} changes kept theirs",
+        ));
+    }
+    if parts.is_empty() {
+        asked.then(|| "Synced: up to date".to_owned())
+    } else {
+        Some(format!("Synced: {}", parts.join(", ")))
+    }
+}
+
 /// The project's standing against its Git repository, in the toolbar, with
-/// Sync and the rest of sharing in its menu.
+/// Sync and the rest of sharing in its menu. The window's menus and the
+/// palette reach its questions too ([`Collab::open_command`]).
 pub struct Collab {
     session: Entity<Session>,
     status: Option<GitStatus>,
@@ -2042,19 +2542,24 @@ pub struct Collab {
     failure: Option<String>,
     /// What the last sync did.
     report: Option<String>,
-    /// Media outside the project folder, as the bridge last said.
-    external: Option<usize>,
     menu: Menu,
     /// How many times the menu has opened, so each opening fades in.
     menus_opened: u64,
+    /// A question's line: the message, the name, the title.
     input: Entity<TextInput>,
+    /// Publish's remote.
+    remote: Entity<TextInput>,
+    /// A pull request's description.
+    body: Entity<TextInput>,
+    publish_way: PublishWay,
+    publish_private: bool,
     focus_handle: FocusHandle,
     /// What had the keys before the menu took them, to give them back.
     previous_focus: Option<FocusHandle>,
     /// When the work under way began, for the spinner.
     busy_since: Instant,
-    /// A person asked for the work under way, so its end is said.
-    asked: bool,
+    /// The command a person asked for (its bridge type), so its end is said.
+    asked: Option<String>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -2062,24 +2567,33 @@ impl Collab {
     pub fn new(session: Entity<Session>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         bind_close(cx);
         let input = cx.new(|cx| TextInput::new(cx, ""));
-        let subscriptions =
-            vec![
-                cx.subscribe(&session, |this, _, event: &BridgeEvent, cx| {
-                    this.apply(&event.0, cx)
-                }),
-                cx.subscribe(&session, |_, _, change: &Change, cx| {
-                    if matches!(change, Change::Snapshot | Change::Connection) {
-                        cx.notify();
-                    }
-                }),
-                cx.subscribe_in(&input, window, |this, _, event: &InputEvent, window, cx| {
-                    match event {
-                        InputEvent::Submit => this.submit(window, cx),
-                        InputEvent::Cancel => this.back(window, cx),
-                        InputEvent::Changed => cx.notify(),
-                    }
-                }),
-            ];
+        let remote = cx.new(|cx| TextInput::new(cx, "git@github.com:you/film.git"));
+        let body = cx.new(|cx| {
+            TextInput::new(cx, "Leave empty to list this branch's commits")
+                .multiline()
+                .max_height(px(BODY_MOST))
+        });
+        let mut subscriptions = vec![
+            cx.subscribe(&session, |this, _, event: &BridgeEvent, cx| {
+                this.apply(&event.0, cx)
+            }),
+            cx.subscribe(&session, |_, _, change: &Change, cx| {
+                if matches!(change, Change::Snapshot | Change::Connection) {
+                    cx.notify();
+                }
+            }),
+        ];
+        for field in [&input, &remote, &body] {
+            subscriptions.push(cx.subscribe_in(
+                field,
+                window,
+                |this, _, event: &InputEvent, window, cx| match event {
+                    InputEvent::Submit => this.submit(window, cx),
+                    InputEvent::Cancel => this.back(window, cx),
+                    InputEvent::Changed => cx.notify(),
+                },
+            ));
+        }
         // What Finish keeps listens from the start, so a check started with
         // Finish closed is not missed.
         finishing(&session, cx);
@@ -2092,16 +2606,62 @@ impl Collab {
             stage: None,
             failure: None,
             report: None,
-            external: None,
             menu: Menu::Closed,
             menus_opened: 0,
             input,
+            remote,
+            body,
+            publish_way: PublishWay::GitHub,
+            publish_private: true,
             focus_handle: cx.focus_handle(),
             previous_focus: None,
             busy_since: Instant::now(),
-            asked: false,
+            asked: None,
             _subscriptions: subscriptions,
         }
+    }
+
+    /// Carries out the registry's collaboration command `id` from the
+    /// window's menus or the palette, as the chip's menu does: Commit…, New
+    /// Branch…, Open Pull Request… and Publish to GitHub… open the menu on
+    /// their question; Switch Branch opens it on the branches. False for a
+    /// command it does not ask for, or while the project's Git standing is
+    /// not known yet. The workspace calls it (its `run_command`).
+    pub fn open_command(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if self.status.is_none() || !self.session.read(cx).has_project() {
+            return false;
+        }
+        let prompt = Prompt::of_command(id);
+        if prompt.is_none() && id != "collab.switchBranch" {
+            return false;
+        }
+        if self.menu == Menu::Closed {
+            self.open(window, cx);
+        }
+        match prompt {
+            Some(prompt) => self.ask(prompt, window, cx),
+            None => {
+                self.menu = Menu::Branches;
+                window.focus(&self.focus_handle);
+                cx.notify();
+            }
+        }
+        true
+    }
+
+    /// Sync Now from the window's menus or the palette: as the chip's, its
+    /// end is said. The workspace calls it for `collab.sync`.
+    pub fn sync_now(&mut self, cx: &mut Context<Self>) {
+        self.send(json!({"type": "collab_sync"}), cx);
+        cx.notify();
+    }
+
+    /// Live Sync from the window's menus or the palette: turned the other
+    /// way and remembered for the project. The workspace calls it for
+    /// `collab.live`.
+    pub fn toggle_live(&mut self, cx: &mut Context<Self>) {
+        let live = self.status.as_ref().is_some_and(|status| status.live);
+        self.set_live(!live, cx);
     }
 
     fn apply(&mut self, event: &Value, cx: &mut Context<Self>) {
@@ -2122,23 +2682,40 @@ impl Collab {
                 "done" => {
                     self.stage = None;
                     self.failure = None;
-                    let summary = summary(&event["report"]);
-                    if std::mem::take(&mut self.asked) {
-                        self.notify(&summary, false, cx);
+                    let report = &event["report"];
+                    let lines = sync_lines(report);
+                    if !lines.is_empty() {
+                        self.session.update(cx, |session, _| {
+                            for line in &lines {
+                                session.activity.push("sync", line);
+                            }
+                        });
                     }
-                    self.report = Some(summary);
+                    // A sync is said as the Qt editor said it; what else a
+                    // person asked for (a commit, a branch) as it went.
+                    let said = match self.asked.take().as_deref() {
+                        Some("collab_sync") => sync_said(report, true),
+                        Some(_) => Some(summary(report)),
+                        None => sync_said(report, false),
+                    };
+                    if let Some(said) = said {
+                        self.notify(&said, false, cx);
+                    }
+                    self.report = Some(summary(report));
                 }
                 "failed" => {
                     self.stage = None;
                     let message = event["message"]
                         .as_str()
-                        .unwrap_or("The sync failed")
+                        .unwrap_or("The sync did not finish.")
                         .to_owned();
                     // Live sync says a failure once; a person asking hears it again.
-                    if std::mem::take(&mut self.asked)
+                    if self.asked.take().is_some()
                         || self.failure.as_deref() != Some(message.as_str())
                     {
                         self.notify(&format!("Sync failed: {message}"), true, cx);
+                        self.session
+                            .update(cx, |session, _| session.activity.push("sync", &message));
                     }
                     self.failure = Some(message);
                 }
@@ -2150,19 +2727,15 @@ impl Collab {
                 }
             },
             "collab_pull_request" => {
-                if let Some(url) = event["url"].as_str().filter(|url| !url.is_empty()) {
-                    cx.open_url(url);
-                }
+                self.asked = None;
+                let url = event["url"].as_str().unwrap_or_default().trim().to_owned();
                 let created = event["created"].as_bool().unwrap_or(false);
-                let words = if created {
-                    "Opened a pull request"
-                } else {
-                    "The pull request is open on GitHub"
-                };
-                self.notify(words, false, cx);
-            }
-            "media_status" => {
-                self.external = event["external"].as_array().map(Vec::len);
+                self.notify(&pull_request_said(&url, created), false, cx);
+                if !url.is_empty() {
+                    self.session
+                        .update(cx, |session, _| session.activity.push("sync", &url));
+                    cx.open_url(&url);
+                }
             }
             _ => return,
         }
@@ -2177,14 +2750,16 @@ impl Collab {
     fn notify(&self, words: &str, error: bool, cx: &mut Context<Self>) {
         self.session.update(cx, |session, cx| {
             session.state.notify(words, error);
+            cx.emit(Change::Notice);
             cx.notify();
         });
     }
 
     /// Sends one collaboration command a person asked for.
     fn send(&mut self, command: Value, cx: &mut Context<Self>) {
+        let kind = command["type"].as_str().map(str::to_owned);
         if self.session.update(cx, |session, _| session.send(command)) {
-            self.asked = true;
+            self.asked = kind;
             self.busy_since = Instant::now();
         }
     }
@@ -2192,8 +2767,12 @@ impl Collab {
     fn toggle(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.menu != Menu::Closed {
             self.close(window, cx);
-            return;
+        } else {
+            self.open(window, cx);
         }
+    }
+
+    fn open(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.menu = Menu::Open;
         self.menus_opened += 1;
         // It takes the keys, so Esc is its own and not the window's.
@@ -2227,36 +2806,89 @@ impl Collab {
 
     fn ask(&mut self, prompt: Prompt, window: &mut Window, cx: &mut Context<Self>) {
         self.menu = Menu::Prompt(prompt);
+        let status = self.status.clone().unwrap_or_default();
+        let start = match prompt {
+            Prompt::Publish => {
+                // The folder's name, as the Qt editor took it; one with no
+                // letter GitHub takes (a Hangul name) gives the project's title.
+                let session = self.session.read(cx);
+                let folder = session
+                    .project
+                    .as_deref()
+                    .and_then(std::path::Path::file_name)
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                [folder, session.project_name()]
+                    .iter()
+                    .map(|name| publish_name(name))
+                    .find(|name| name.chars().any(|ch| ch.is_ascii_alphanumeric()))
+                    .unwrap_or_default()
+            }
+            Prompt::PullRequest => pull_request_title(status.branch.as_deref().unwrap_or_default()),
+            Prompt::Commit | Prompt::NewBranch => String::new(),
+        };
         self.input.update(cx, |input, cx| {
-            input.clear(cx);
+            input.set_text(start, cx);
             input.set_placeholder(prompt.placeholder(), cx);
         });
-        self.input.read(cx).focus(window);
+        self.remote.update(cx, |input, cx| input.clear(cx));
+        self.body.update(cx, |input, cx| input.clear(cx));
+        self.publish_private = true;
+        // GitHub when its command-line tool is there, else a remote of one's own.
+        self.publish_way = if status.gh {
+            PublishWay::GitHub
+        } else {
+            PublishWay::Remote
+        };
+        self.focus_field(window, cx);
         cx.notify();
+    }
+
+    /// The keys to the field the question is waiting on.
+    fn focus_field(&self, window: &mut Window, cx: &mut Context<Self>) {
+        let field = match (self.menu, self.publish_way) {
+            (Menu::Prompt(Prompt::Publish), PublishWay::Remote) => &self.remote,
+            (Menu::Prompt(Prompt::Publish), PublishWay::Local) => {
+                window.focus(&self.focus_handle);
+                return;
+            }
+            _ => &self.input,
+        };
+        field.read(cx).focus(window);
+    }
+
+    fn choose_way(&mut self, way: PublishWay, window: &mut Window, cx: &mut Context<Self>) {
+        self.publish_way = way;
+        self.focus_field(window, cx);
+        cx.notify();
+    }
+
+    /// What the question sends as it stands; None while it cannot be sent.
+    fn command(&self, prompt: Prompt, cx: &App) -> Option<Value> {
+        let words = self.input.read(cx).text().trim().to_owned();
+        match prompt {
+            Prompt::Publish => publish_command(
+                self.publish_way,
+                &words,
+                self.publish_private,
+                self.remote.read(cx).text(),
+            ),
+            Prompt::Commit => Some(json!({"type": "collab_commit", "message": words})),
+            Prompt::NewBranch => {
+                let name = branch_name(&words);
+                (!name.is_empty())
+                    .then(|| json!({"type": "collab_branch", "name": name, "create": true}))
+            }
+            Prompt::PullRequest => pull_request_command(&words, self.body.read(cx).text()),
+        }
     }
 
     fn submit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Menu::Prompt(prompt) = self.menu else {
             return;
         };
-        let words = self.input.read(cx).text().trim().to_owned();
-        let command = match prompt {
-            Prompt::Publish => {
-                let mut github = json!({"private": true});
-                if !words.is_empty() {
-                    github["name"] = json!(words);
-                }
-                json!({"type": "collab_publish", "github": github})
-            }
-            Prompt::Commit => json!({"type": "collab_commit", "message": words}),
-            Prompt::NewBranch => {
-                let name = branch_name(&words);
-                if name.is_empty() {
-                    return;
-                }
-                json!({"type": "collab_branch", "name": name, "create": true})
-            }
-            Prompt::PullRequest => json!({"type": "collab_pull_request", "title": words}),
+        let Some(command) = self.command(prompt, cx) else {
+            return;
         };
         self.send(command, cx);
         self.close(window, cx);
@@ -2350,9 +2982,16 @@ impl Collab {
     }
 
     fn menu(&self, window: &Window, cx: &Context<Self>) -> AnyElement {
-        let body = match self.menu {
-            Menu::Prompt(prompt) => self.prompt(prompt, window, cx),
-            _ => self.choices(cx),
+        let (body, width) = match self.menu {
+            Menu::Prompt(prompt) => (
+                self.prompt(prompt, window, cx),
+                if prompt.wide() {
+                    PROMPT_WIDTH
+                } else {
+                    MENU_WIDTH
+                },
+            ),
+            _ => (self.choices(cx), MENU_WIDTH),
         };
         div()
             .key_context(MENU_CONTEXT)
@@ -2365,7 +3004,7 @@ impl Collab {
                 this.close(window, cx);
             }))
             .occlude()
-            .w(px(MENU_WIDTH))
+            .w(px(width))
             .flex()
             .flex_col()
             .p(px(theme::space::S4))
@@ -2475,23 +3114,26 @@ impl Collab {
             })
     }
 
+    /// Why each of the menu's commands cannot run now, as the registry says
+    /// it for the whole window (a project.kerf changed on disk holds back
+    /// Sync and the branches); while a sync runs, that.
+    fn reasons(&self, cx: &App) -> impl Fn(&str) -> Result<(), SharedString> {
+        let states = kerf_bridge::commands_states(&self.session.read(cx).command_context());
+        let busy = self.busy();
+        move |id: &str| {
+            if busy && id != "collab.live" {
+                return Err("A sync is running".into());
+            }
+            match crate::palette::unavailable(&states, id) {
+                Some(reason) => Err(reason.to_owned().into()),
+                None => Ok(()),
+            }
+        }
+    }
+
     fn choices(&self, cx: &Context<Self>) -> AnyElement {
         let status = self.status.clone().unwrap_or_default();
-        let busy = self.busy();
-        let idle = if busy {
-            Err("A sync is running")
-        } else if status.conflicted {
-            Err("Finish the merge in progress with git first")
-        } else {
-            Ok(())
-        };
-        let publish_reason = if busy {
-            Err("A sync is running")
-        } else if !status.gh {
-            Err("Needs the GitHub CLI, signed in (gh auth login)")
-        } else {
-            Ok(())
-        };
+        let reason = self.reasons(cx);
         let mut items: Vec<AnyElement> = vec![
             self.head(&status, cx).into_any_element(),
             ui::hairline(true).into_any_element(),
@@ -2501,7 +3143,7 @@ impl Collab {
                 item(
                     "collab-publish",
                     "Publish to GitHub…",
-                    publish_reason,
+                    reason("collab.publish"),
                     cx.listener(|this, _, window, cx| this.ask(Prompt::Publish, window, cx)),
                 )
                 .into_any_element(),
@@ -2510,11 +3152,7 @@ impl Collab {
                 item(
                     "collab-init",
                     "Make a Repository Here",
-                    if busy {
-                        Err("A sync is running")
-                    } else {
-                        Ok(())
-                    },
+                    reason("collab.publish"),
                     cx.listener(|this, _, window, cx| {
                         this.run(json!({"type": "collab_publish"}), window, cx);
                     }),
@@ -2527,7 +3165,7 @@ impl Collab {
                 item(
                     "collab-sync",
                     "Sync Now",
-                    idle,
+                    reason("collab.sync"),
                     cx.listener(|this, _, window, cx| {
                         this.run(json!({"type": "collab_sync"}), window, cx)
                     }),
@@ -2538,24 +3176,19 @@ impl Collab {
                 item(
                     "collab-live",
                     "Live Sync",
-                    Ok(()),
+                    reason("collab.live"),
                     cx.listener(move |this, _, _, cx| this.set_live(!live, cx)),
                 )
                 .child(div().flex_1())
                 // The row takes the press; the switch shows what it did.
-                .child(ui::switch("collab-live-switch", live, |_, _, _| {}))
+                .child(ui::switch("collab-live-switch", live, |_, _, _| {}).focusable(false))
                 .into_any_element(),
             );
-            let commit = idle.and(if status.changed {
-                Ok(())
-            } else {
-                Err("Nothing to commit")
-            });
             items.push(
                 item(
                     "collab-commit",
                     "Commit…",
-                    commit,
+                    reason("collab.commit"),
                     cx.listener(|this, _, window, cx| this.ask(Prompt::Commit, window, cx)),
                 )
                 .into_any_element(),
@@ -2565,17 +3198,9 @@ impl Collab {
                     .my(px(theme::space::S4))
                     .into_any_element(),
             );
-            let current = status.branch.clone();
-            let others = status
-                .branches
-                .iter()
-                .any(|branch| Some(branch) != current.as_ref());
-            let switch = idle.and(if others {
-                Ok(())
-            } else {
-                Err("There are no other branches")
-            });
+            let switch = reason("collab.switchBranch");
             let unfolded = self.menu == Menu::Branches;
+            let can_switch = switch.is_ok();
             items.push(
                 item(
                     "collab-switch",
@@ -2595,7 +3220,7 @@ impl Collab {
                     }
                     .view(
                         14.0,
-                        if switch.is_ok() {
+                        if can_switch {
                             theme::ink2()
                         } else {
                             theme::dis()
@@ -2604,28 +3229,23 @@ impl Collab {
                 )
                 .into_any_element(),
             );
-            if unfolded && switch.is_ok() {
+            if unfolded && can_switch {
                 items.push(self.branches(&status, cx));
             }
             items.push(
                 item(
                     "collab-new-branch",
                     "New Branch…",
-                    idle,
+                    reason("collab.newBranch"),
                     cx.listener(|this, _, window, cx| this.ask(Prompt::NewBranch, window, cx)),
                 )
                 .into_any_element(),
             );
-            let pull = idle.and(if status.remote.is_some() {
-                Ok(())
-            } else {
-                Err("Publish the project to GitHub first")
-            });
             items.push(
                 item(
                     "collab-pull-request",
                     "Pull Request…",
-                    pull,
+                    reason("collab.pullRequest"),
                     cx.listener(|this, _, window, cx| this.ask(Prompt::PullRequest, window, cx)),
                 )
                 .into_any_element(),
@@ -2635,7 +3255,7 @@ impl Collab {
                     item(
                         "collab-publish",
                         "Publish to GitHub…",
-                        publish_reason,
+                        reason("collab.publish"),
                         cx.listener(|this, _, window, cx| this.ask(Prompt::Publish, window, cx)),
                     )
                     .into_any_element(),
@@ -2647,18 +3267,11 @@ impl Collab {
                 .my(px(theme::space::S4))
                 .into_any_element(),
         );
-        let consolidate = if busy {
-            Err("A sync is running")
-        } else if self.external == Some(0) {
-            Err("All media is inside the project folder")
-        } else {
-            Ok(())
-        };
         items.push(
             item(
                 "collab-consolidate",
                 "Consolidate Media",
-                consolidate,
+                reason("collab.consolidate"),
                 cx.listener(|this, _, window, cx| {
                     this.run(json!({"type": "collab_consolidate"}), window, cx)
                 }),
@@ -2750,17 +3363,111 @@ impl Collab {
         cx.notify();
     }
 
+    /// Publish's three ways, and the fields of the one chosen.
+    fn publish_fields(&self, window: &Window, cx: &Context<Self>) -> AnyElement {
+        let status = self.status.clone().unwrap_or_default();
+        let this = cx.entity().downgrade();
+        let ways = PublishWay::ALL.map(|way| (way, way.label()));
+        let mut chooser = ui::segmented(
+            "collab-publish-way",
+            &ways,
+            self.publish_way,
+            move |way, window, cx| {
+                let _ = this.update(cx, |this, cx| this.choose_way(way, window, cx));
+            },
+        )
+        .tips(&[
+            if status.gh { "" } else { NEEDS_GH },
+            "",
+            if status.repository {
+                "The project is a repository already"
+            } else {
+                ""
+            },
+        ]);
+        if !status.gh {
+            chooser = chooser.disabled(PublishWay::GitHub);
+        }
+        if status.repository {
+            chooser = chooser.disabled(PublishWay::Local);
+        }
+        let this = cx.entity().downgrade();
+        let fields = match self.publish_way {
+            PublishWay::GitHub => div()
+                .flex()
+                .items_center()
+                .gap(px(theme::space::S8))
+                .child(
+                    crate::launcher::field(&self.input, window, cx)
+                        .flex_1()
+                        .min_w_0(),
+                )
+                .child(ui::label("Private", text::CONTROL, theme::ink2()))
+                .child(ui::switch(
+                    "collab-publish-private",
+                    self.publish_private,
+                    move |on, _, cx| {
+                        let _ = this.update(cx, |this, cx| {
+                            this.publish_private = on;
+                            cx.notify();
+                        });
+                    },
+                ))
+                .into_any_element(),
+            PublishWay::Remote => {
+                crate::launcher::field(&self.remote, window, cx).into_any_element()
+            }
+            PublishWay::Local => div().into_any_element(),
+        };
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(theme::space::S8))
+            .child(div().flex().child(chooser))
+            .child(ui::label(self.publish_way.says(), text::CONTROL, theme::ink2()))
+            .child(fields)
+            .when_some(status.enclosing.filter(|enclosing| !enclosing.is_empty()), |column, enclosing| {
+                column.child(ui::label(
+                    format!("This folder is inside another repository ({enclosing}); the project gets a repository of its own."),
+                    text::META,
+                    theme::ink3(),
+                ))
+            })
+            .into_any_element()
+    }
+
     fn prompt(&self, prompt: Prompt, window: &Window, cx: &Context<Self>) -> AnyElement {
-        let empty = self.input.read(cx).text().trim().is_empty();
-        let ready = !(prompt == Prompt::NewBranch && empty);
+        let ready = self.command(prompt, cx).is_some();
+        let branch = self
+            .status
+            .as_ref()
+            .and_then(|status| status.branch.clone());
+        let fields = match prompt {
+            Prompt::Publish => self.publish_fields(window, cx),
+            Prompt::PullRequest => div()
+                .flex()
+                .flex_col()
+                .gap(px(theme::space::S6))
+                .child(crate::launcher::field(&self.input, window, cx))
+                .child(ui::label("Description", text::META_STRONG, theme::ink3()))
+                .child(area(&self.body, window, cx))
+                .into_any_element(),
+            Prompt::Commit | Prompt::NewBranch => {
+                crate::launcher::field(&self.input, window, cx).into_any_element()
+            }
+        };
         div()
             .p(px(theme::space::S8))
             .flex()
             .flex_col()
             .gap(px(theme::space::S8))
             .child(ui::label(prompt.title(), text::TITLE, theme::ink()))
-            .child(ui::label(prompt.says(), text::META, theme::ink3()))
-            .child(crate::launcher::field(&self.input, window, cx))
+            .child(ui::label(
+                prompt.says(branch.as_deref()),
+                text::META,
+                theme::ink3(),
+            ))
+            .child(fields)
             .child(
                 div()
                     .flex()
@@ -2816,11 +3523,35 @@ impl Render for Collab {
 
 // ---------------------------------------------------------- Collab's pieces
 
+/// A field of several lines (a pull request's description), as the
+/// launcher's one-line field looks.
+fn area(input: &Entity<TextInput>, window: &Window, cx: &App) -> gpui::Div {
+    let handle = input.read(cx).focus_handle(cx);
+    let focused = handle.is_focused(window);
+    div()
+        .min_h(px(BODY_LEAST))
+        .px(px(theme::space::S8))
+        .py(px(theme::space::S6))
+        .rounded(px(radius::CONTROL))
+        .bg(theme::well())
+        .border_1()
+        .border_color(if focused {
+            theme::accent()
+        } else {
+            theme::line2()
+        })
+        .on_mouse_down(gpui::MouseButton::Left, move |_, window, _| {
+            window.focus(&handle);
+            window.prevent_default();
+        })
+        .child(input.clone())
+}
+
 /// A row of the chip's menu; `enabled` is Ok, or why it cannot run now.
 fn item(
     id: &'static str,
     words: &'static str,
-    enabled: Result<(), &'static str>,
+    enabled: Result<(), SharedString>,
     on_click: impl Fn(&gpui::ClickEvent, &mut Window, &mut App) + 'static,
 ) -> gpui::Stateful<gpui::Div> {
     let row = theme::type_style(div(), text::MENU_ITEM)
@@ -2843,7 +3574,7 @@ fn item(
             .hover(|style| style.bg(theme::popup_hover()))
             .on_click(on_click),
         Err(reason) => row
-            .tooltip(move |_, cx| cx.new(|_| ui::Tooltip(reason.into())).into())
+            .tooltip(move |_, cx| cx.new(|_| ui::Tooltip(reason.clone())).into())
             // A row that cannot run takes the press, so nothing under it does.
             .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation()),
     }

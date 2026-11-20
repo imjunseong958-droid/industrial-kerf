@@ -9,9 +9,20 @@ use crate::store::{Change, EditorState};
 use crate::theme::motion;
 use gpui::{App, AppContext, Context, Entity, EventEmitter, RenderImage, Task, Window};
 use serde_json::{json, Value};
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::time::Instant;
+
+/// How long Kerf's edits to a first cut are quiet before the cut renders
+/// by itself (Qt's `cutSettle`); on a change reel's Before side, how long
+/// the seek has to land on the program just reopened before it plays, and
+/// how long the reel waits to hear that playback has reopened the program
+/// before it takes up the segment anyway.
+pub use crate::theme::motion::{CUT_SETTLE, REEL_PROGRAM_WAIT, REEL_SEEK_LANDS};
+
+/// What Reconnect says when the bridge would not take it.
+pub const RECONNECT_REFUSED: &str = "Reconnect could not be queued. Try again.";
 
 /// Where Finish's deliveries go, inside the project.
 pub const DELIVERIES: &str = "deliveries/";
@@ -77,7 +88,194 @@ pub struct Session {
     /// Each media's poster, filmstrip and peaks, made off the window's
     /// thread as the project's media come and change ([`crate::artwork`]).
     pub artwork: crate::artwork::Artwork,
+    /// Whether the window shows its picture: a request is stamped with the
+    /// playhead only while there is a picture to play (and the stamp is on,
+    /// `prefs.send_playhead`), and a cut's card says "On the stage" only
+    /// while it is. The window sets it (`Some`) as its picture pane opens
+    /// and closes; until it does (None), a request is stamped.
+    pub picture_open: Option<bool>,
+    /// The tracks a source's picture and sound go on (Insert, Overwrite),
+    /// as the timeline's target chips left them (`TimelineEvent::Targets`,
+    /// which the window keeps here); None follows the first unlocked track
+    /// of each kind.
+    pub source_targets: Option<Vec<String>>,
+    /// Proposals accepted or rejected from this window, by the id sent,
+    /// and when: a settled card says how long ago.
+    settled_here: HashMap<String, Instant>,
+    /// A first cut rendering by itself once Kerf's edits settle.
+    cut: CutRender,
+    /// The live proposal's changes already followed while Kerf works
+    /// ("clip@end"), so the playhead goes to the newest.
+    live_changes: HashSet<String>,
+    /// Watching what a proposal changed, while it plays.
+    reel: Option<Reel>,
     _poll: Option<Task<()>>,
+}
+
+/// Which side of a change reel plays: what the proposal makes, or the
+/// program as it is.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ReelSide {
+    #[default]
+    After,
+    Before,
+}
+
+/// Watching what a proposal changes (Qt's ChangeReel): its segments played
+/// one after another, from the proposal's preview (After) or the program
+/// (Before), each waiting for its picture first.
+#[derive(Clone, Debug, Default)]
+pub struct Reel {
+    pub proposal: String,
+    pub segments: Vec<crate::chat::Segment>,
+    pub index: usize,
+    pub side: ReelSide,
+    /// Waiting for the picture of the side and segment shown.
+    pub waiting: bool,
+    /// Past the last segment's end: every change watched.
+    pub finished: bool,
+    rendered: bool,
+    previewing: bool,
+    rendered_span: (f64, f64),
+    segment_end: f64,
+    limit: f64,
+    /// What waits on time: playing once a seek has landed on the program
+    /// reopened, or taking up the Before side when no word came of it.
+    due: Option<(Instant, ReelWait)>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ReelWait {
+    Play,
+    Enter,
+}
+
+impl Reel {
+    /// Seconds left to watch, the playhead at `playhead`.
+    pub fn remaining(&self, playhead: f64) -> f64 {
+        if self.finished {
+            return 0.0;
+        }
+        let mut left = if self.waiting {
+            self.segments[self.index].length()
+        } else {
+            (self.segment_end - playhead).max(0.0)
+        };
+        left += self.segments[self.index + 1..]
+            .iter()
+            .map(crate::chat::Segment::length)
+            .sum::<f64>();
+        left
+    }
+
+    /// What the reel's strip says: "Trim sea · 18 s left", "… · getting
+    /// the picture", "Watched every change".
+    pub fn words(&self, playhead: f64) -> String {
+        let title = &self.segments[self.index].title;
+        if self.finished {
+            "Watched every change".to_owned()
+        } else if self.waiting {
+            format!("{title} · getting the picture")
+        } else {
+            format!(
+                "{title} · {} s left",
+                self.remaining(playhead).ceil() as i64
+            )
+        }
+    }
+}
+
+/// The most a preview renders at once, in seconds.
+pub const REEL_MOST_RENDERED: f64 = 120.0;
+
+/// A first cut rendering by itself (Qt's `m_cutPreview` and
+/// `m_previewedCut`): the proposal last asked to render, when Kerf's edits
+/// will have been quiet long enough, and whether a render is under way
+/// (one at a time; the newest after). [`Session`] drives it from the
+/// bridge's events; each step takes the first cut shown (`cut`, its
+/// proposal's id; None once the program has a cut) and the time.
+#[derive(Clone, Debug, Default)]
+pub struct CutRender {
+    previewed: Option<String>,
+    due: Option<Instant>,
+    rendering: bool,
+}
+
+impl CutRender {
+    /// The first cut shown changed: once Kerf's edits have been quiet for
+    /// [`CUT_SETTLE`] it renders, under Follow Kerf and while no reel
+    /// plays, unless it is the one rendered last. A cut no longer shown
+    /// forgets what it rendered.
+    pub fn follow(&mut self, cut: Option<&str>, follow_kerf: bool, reel: bool, now: Instant) {
+        let Some(id) = cut else {
+            self.due = None;
+            self.previewed = None;
+            return;
+        };
+        if follow_kerf && !reel && self.previewed.as_deref() != Some(id) {
+            self.due = Some(now + CUT_SETTLE);
+        }
+    }
+
+    /// The cut to render now: the one shown, once it is due, unless a
+    /// render is under way (the newest follows it) or a reel plays. It is
+    /// then the one rendered last.
+    pub fn take_due(&mut self, cut: Option<&str>, reel: bool, now: Instant) -> Option<String> {
+        let due = self.due?;
+        if now < due || self.rendering || reel {
+            return None;
+        }
+        self.due = None;
+        let id = cut?.to_owned();
+        self.previewed = Some(id.clone());
+        Some(id)
+    }
+
+    /// Whether the render [`CutRender::take_due`] gave is under way (the
+    /// bridge took it).
+    pub fn set_rendering(&mut self, rendering: bool) {
+        self.rendering = rendering;
+    }
+
+    /// A preview stopped running (`still`: another still renders): the
+    /// next settled cut may render, and the cut shown, changed while it
+    /// rendered, is due under Follow Kerf.
+    pub fn rendered(&mut self, cut: Option<&str>, still: bool, follow_kerf: bool, now: Instant) {
+        if !self.rendering || still {
+            return;
+        }
+        self.rendering = false;
+        if follow_kerf && cut.is_some_and(|id| self.previewed.as_deref() != Some(id)) {
+            self.due = Some(now + CUT_SETTLE);
+        }
+    }
+
+    /// A change reel ended over the first cut shown: the picture was the
+    /// reel's, and the program (with no cut) came back under it, so the
+    /// cut renders again once [`CUT_SETTLE`] has passed (Qt clears
+    /// `m_previewedCut` and starts `m_cutPreview` as the reel ends).
+    pub fn reel_ended(&mut self, cut: Option<&str>, now: Instant) {
+        if cut.is_none() {
+            return;
+        }
+        self.previewed = None;
+        self.due = Some(now + CUT_SETTLE);
+    }
+
+    /// When the cut shown renders, if it is waiting to.
+    pub fn due(&self) -> Option<Instant> {
+        self.due
+    }
+
+    /// The proposal last asked to render.
+    pub fn previewed(&self) -> Option<&str> {
+        self.previewed.as_deref()
+    }
+
+    /// Whether a render it asked for is under way.
+    pub fn rendering(&self) -> bool {
+        self.rendering
+    }
 }
 
 impl EventEmitter<Change> for Session {}
@@ -131,6 +329,12 @@ impl Session {
                 pinned_proposal: None,
                 activity: ActivityLog::default(),
                 artwork,
+                picture_open: None,
+                source_targets: None,
+                settled_here: HashMap::new(),
+                cut: CutRender::default(),
+                live_changes: HashSet::new(),
+                reel: None,
                 _poll: poll,
             };
             session.send(json!({"type": "conversations", "action": "list"}));
@@ -178,11 +382,17 @@ impl Session {
                 self.activity.push("project", "Project connected");
             }
             cx.emit(BridgeEvent(event.clone()));
+            if event["type"] == "preview" {
+                self.reel_follow_preview(&event);
+            }
             match &change {
                 Change::Snapshot => {
                     self.follow_link();
                     self.follow_media();
+                    self.follow_live_proposal();
+                    self.follow_cut();
                 }
+                Change::Preview => self.cut_rendered(),
                 Change::Connection
                     if self.state.connection == crate::store::Connection::Connected =>
                 {
@@ -197,8 +407,12 @@ impl Session {
                 }
                 Change::ViewerReset => self.drop_picture(window, cx),
                 Change::Work if event["type"] == "agent_focus" => self.follow_kerf(),
-                Change::Clock => self.keep_to_marks(),
+                Change::Clock => {
+                    self.keep_to_marks();
+                    self.reel_follow_playhead();
+                }
                 Change::TurnEnded => {
+                    self.live_changes.clear();
                     // The conversation as it is kept now, with Kerf's answer.
                     if let Some(id) = self.conversation.clone() {
                         self.send(json!({"type": "conversations", "action": "open", "id": id}));
@@ -212,6 +426,9 @@ impl Session {
             cx.emit(change);
         }
         let mut changed = heard;
+        if self.render_settled_cut() || self.reel_due() {
+            changed = true;
+        }
         // Artwork made since: drawn now; what it let go of leaves the atlas.
         for image in self.artwork.take_dropped() {
             let _ = window.drop_image(image);
@@ -409,12 +626,29 @@ impl Session {
 
     pub fn accept(&mut self, proposal: &str) {
         let revision = self.revision();
-        self.send(json!({"type": "accept", "proposalId": proposal, "revision": revision}));
+        if self.send(json!({"type": "accept", "proposalId": proposal, "revision": revision})) {
+            self.settled_here
+                .insert(proposal.to_owned(), Instant::now());
+        }
     }
 
     pub fn reject(&mut self, proposal: &str) {
         let revision = self.revision();
-        self.send(json!({"type": "reject", "proposalId": proposal, "revision": revision}));
+        if self.send(json!({"type": "reject", "proposalId": proposal, "revision": revision})) {
+            self.settled_here
+                .insert(proposal.to_owned(), Instant::now());
+        }
+    }
+
+    /// When a proposal was settled from this window, by the id its Accept
+    /// or Reject sent: `is` says whether an id is the proposal's (any of
+    /// its versions). None for one settled elsewhere, or before.
+    pub fn settled_at(&self, is: impl Fn(&str) -> bool) -> Option<Instant> {
+        self.settled_here
+            .iter()
+            .filter(|(id, _)| is(id))
+            .map(|(_, at)| *at)
+            .max()
     }
 
     pub fn forward(&mut self, proposal: &str) {
@@ -443,11 +677,12 @@ impl Session {
         }
     }
 
-    /// Queues a render of `quality` as [`export_request`] makes it: a
-    /// master or a review copy goes into the project's deliveries/, as ⌘E
-    /// and the toolbar's Export send it. False when it was not sent.
+    /// Queues a render of `quality` as [`crate::export::request`] makes it:
+    /// a master goes where the project keeps it (its master output, else
+    /// deliveries/), a review copy into deliveries/, as ⌘E and the
+    /// toolbar's Export send them. False when it was not sent.
     pub fn export(&mut self, quality: &str) -> bool {
-        let command = export_request(self.project.as_deref(), quality);
+        let command = crate::export::request(self.project.as_deref(), &self.prefs, quality);
         let sent = self.send(command);
         if sent {
             let name = match quality {
@@ -495,21 +730,412 @@ impl Session {
         }
     }
 
-    /// Asks the bridge to reach kerfd again after it went away.
+    /// Asks the bridge to reach kerfd again after it went away: connecting
+    /// once the bridge has taken it; else still disconnected, saying so, so
+    /// Reconnect stays to be pressed again.
     pub fn reconnect(&mut self) {
-        self.state.connection = crate::store::Connection::Connecting;
-        self.send(json!({"type": "reconnect"}));
+        let sent = self
+            .bridge
+            .as_mut()
+            .is_some_and(|bridge| bridge.send(&json!({"type": "reconnect"})));
+        self.state.connection = if sent {
+            crate::store::Connection::Connecting
+        } else {
+            crate::store::Connection::Failed(RECONNECT_REFUSED.to_owned())
+        };
     }
 
     /// While Kerf works, the playhead goes where it is looking (Follow
-    /// Kerf, View ▸ Follow Kerf), unless the program is playing.
+    /// Kerf, View ▸ Follow Kerf): the first time it names, else the start
+    /// of the first clip it names (in the program, else in the cut it
+    /// proposes).
     fn follow_kerf(&mut self) {
-        if !self.prefs.follow_kerf || self.state.playing {
+        let at = self.state.agent_focus.first().copied().or_else(|| {
+            let clip = self.state.agent_clips.first()?;
+            let start =
+                |timeline: &Timeline| timeline.clip(clip).map(|(_, clip)| clip.timeline_start);
+            start(self.timeline()).or_else(|| self.live_cut().and_then(|(_, cut)| start(cut)))
+        });
+        if let Some(at) = at {
+            self.show_agent_at(at);
+        }
+    }
+
+    /// The playhead goes to `at`, where Kerf is at work, under Follow Kerf,
+    /// unless something is playing or there is nothing to play.
+    fn show_agent_at(&mut self, at: f64) {
+        if !self.prefs.follow_kerf
+            || self.state.playing
+            || self.reel.is_some()
+            || !at.is_finite()
+            || at < 0.0
+        {
             return;
         }
-        if let Some(at) = self.state.agent_focus.first().copied() {
-            self.seek(at, false);
+        let proposed = self.live_cut().map_or(0.0, |(_, cut)| timeline_end(cut));
+        let length = self.state.program_length().max(proposed);
+        if length <= 0.0 {
+            return;
         }
+        let at = at.min(length);
+        self.state.position = at;
+        self.send(json!({"type": "seek", "position": at, "scrub": false}));
+    }
+
+    /// The open proposal the window's keys act on (the pinned card's), else
+    /// the newest, with the timeline it would leave.
+    pub fn live_cut(&self) -> Option<(&crate::model::Proposal, &Timeline)> {
+        let snapshot = &self.state.snapshot;
+        let proposal = self
+            .pinned_proposal
+            .as_deref()
+            .and_then(|pinned| {
+                snapshot
+                    .proposals
+                    .iter()
+                    .find(|proposal| proposal.proposal_id == pinned && proposal.is_pending())
+            })
+            .or_else(|| snapshot.pending())?;
+        let timeline = snapshot
+            .proposal_timelines
+            .get(&proposal.proposal_id)
+            .or_else(|| {
+                snapshot
+                    .pending()
+                    .filter(|pending| pending.proposal_id == proposal.proposal_id)
+                    .and(snapshot.proposal_timeline.as_ref())
+            })?;
+        Some((proposal, timeline))
+    }
+
+    /// The first cut Kerf proposes on a program with no clips yet, and the
+    /// timeline it would leave: what the picture and the timeline show
+    /// until it is accepted. None once the program has a cut.
+    pub fn first_cut(&self) -> Option<(&crate::model::Proposal, &Timeline)> {
+        if self.timeline().has_clips() {
+            return None;
+        }
+        self.live_cut()
+            .filter(|(_, cut)| cut.has_clips() && timeline_end(cut) > 0.0)
+    }
+
+    /// Whether Kerf is making a first cut now: its card is at work.
+    pub fn cutting(&self) -> bool {
+        self.state.work.busy() && self.first_cut().is_some()
+    }
+
+    /// While Kerf works, the playhead goes to the newest change in the cut
+    /// it proposes (where a trim cuts, else where the clip now starts), and
+    /// a first cut's turn says how many clips it has placed.
+    fn follow_live_proposal(&mut self) {
+        if !self.state.work.busy() {
+            return;
+        }
+        let Some((_, cut)) = self.live_cut() else {
+            return;
+        };
+        let changes = crate::chat::clip_changes(self.timeline(), cut);
+        let first = !self.timeline().has_clips();
+        let placed = changes
+            .iter()
+            .filter(|change| !change.removed)
+            .filter(|change| {
+                cut.clip(&change.clip)
+                    .is_some_and(|(track, _)| track.kind != crate::model::TrackKind::Audio)
+            })
+            .count();
+        let (keys, newest) = newest_change(&changes, &self.live_changes);
+        let moved = keys != self.live_changes;
+        self.live_changes = keys;
+        if first && moved {
+            self.state.work.status = cutting_status(placed);
+        }
+        if let Some(at) = newest {
+            self.show_agent_at(at);
+        }
+    }
+
+    /// A first cut changed: once Kerf's edits have been quiet for
+    /// [`CUT_SETTLE`] it renders by itself, under Follow Kerf. A cut no
+    /// longer shown forgets what it rendered.
+    fn follow_cut(&mut self) {
+        let cut = self.first_cut_id();
+        self.cut.follow(
+            cut.as_deref(),
+            self.prefs.follow_kerf,
+            self.reel.is_some(),
+            Instant::now(),
+        );
+    }
+
+    /// The id of the first cut shown ([`Session::first_cut`]).
+    fn first_cut_id(&self) -> Option<String> {
+        self.first_cut()
+            .map(|(proposal, _)| proposal.proposal_id.clone())
+    }
+
+    /// The settled cut renders, unless one renders already (the newest
+    /// follows it). True when a render was asked for.
+    fn render_settled_cut(&mut self) -> bool {
+        if self.cut.due().is_none() {
+            return false;
+        }
+        let cut = self.first_cut_id();
+        let Some(id) = self
+            .cut
+            .take_due(cut.as_deref(), self.reel.is_some(), Instant::now())
+        else {
+            return false;
+        };
+        let asked = self.send(json!({"type": "preview", "proposalId": id}));
+        self.cut.set_rendering(asked);
+        asked
+    }
+
+    /// A preview stopped running: the next settled cut may render, and one
+    /// changed while it rendered does.
+    fn cut_rendered(&mut self) {
+        let cut = self.first_cut_id();
+        self.cut.rendered(
+            cut.as_deref(),
+            self.state.preview.rendering(),
+            self.prefs.follow_kerf,
+            Instant::now(),
+        );
+    }
+
+    /// The change reel, while one plays.
+    pub fn reel(&self) -> Option<&Reel> {
+        self.reel.as_ref()
+    }
+
+    /// Watches what `proposal` changes: `segments` one after another, from
+    /// its preview. False with nothing to watch.
+    pub fn watch_changes(&mut self, proposal: &str, segments: Vec<crate::chat::Segment>) -> bool {
+        if segments.is_empty() {
+            self.state
+                .notify("This proposal changes nothing on the timeline", false);
+            return false;
+        }
+        let same = self
+            .reel
+            .as_ref()
+            .is_some_and(|reel| reel.previewing && reel.proposal == proposal);
+        let limit = segments
+            .iter()
+            .map(|segment| segment.after_end.max(segment.before_end))
+            .fold(0.0, f64::max);
+        self.reel = Some(Reel {
+            proposal: proposal.to_owned(),
+            segments,
+            rendered: same,
+            previewing: same,
+            limit,
+            ..Reel::default()
+        });
+        self.reel_show();
+        true
+    }
+
+    /// Stops watching: playback stops, and the program shows again; over
+    /// a first cut, the cut renders again once settled, the picture
+    /// having been the reel's.
+    pub fn reel_stop(&mut self) {
+        let Some(reel) = self.reel.take() else {
+            return;
+        };
+        self.send(json!({"type": "pause"}));
+        if reel.previewing {
+            self.send(json!({"type": "preview_exit"}));
+        }
+        let cut = self.first_cut_id();
+        self.cut.reel_ended(cut.as_deref(), Instant::now());
+    }
+
+    /// The next segment, or the one before.
+    pub fn reel_step(&mut self, forward: bool) {
+        let Some(reel) = self.reel.as_mut() else {
+            return;
+        };
+        let count = reel.segments.len();
+        if forward && reel.index + 1 < count {
+            reel.index += 1;
+        } else if !forward && reel.index > 0 {
+            reel.index -= 1;
+        } else {
+            return;
+        }
+        reel.finished = false;
+        self.reel_show();
+    }
+
+    /// Plays the program as it is (Before) or what the proposal makes.
+    pub fn reel_side(&mut self, side: ReelSide) {
+        let Some(reel) = self.reel.as_mut().filter(|reel| reel.side != side) else {
+            return;
+        };
+        reel.side = side;
+        reel.finished = false;
+        self.reel_show();
+    }
+
+    fn reel_show(&mut self) {
+        let Some(reel) = self.reel.as_mut() else {
+            return;
+        };
+        reel.due = None;
+        let segment = reel.segments[reel.index].clone();
+        if reel.side == ReelSide::Before {
+            if reel.previewing {
+                // The program comes back once playback has reopened it.
+                reel.previewing = false;
+                reel.rendered = false;
+                reel.waiting = true;
+                self.send(json!({"type": "pause"}));
+                self.send(json!({"type": "preview_exit"}));
+                return;
+            }
+            self.reel_enter();
+            return;
+        }
+        if reel.rendered
+            && segment.after >= reel.rendered_span.0
+            && segment.after_end <= reel.rendered_span.1
+        {
+            self.reel_enter();
+            return;
+        }
+        // All the segments when they fit in one render, else this one.
+        let first = reel.segments[0].after;
+        let last = reel.segments[reel.segments.len() - 1].after_end;
+        reel.rendered_span = if last - first <= REEL_MOST_RENDERED {
+            (first, last)
+        } else {
+            (
+                segment.after,
+                segment.after_end.min(segment.after + REEL_MOST_RENDERED),
+            )
+        };
+        reel.rendered = false;
+        reel.waiting = true;
+        let (start, end) = reel.rendered_span;
+        let proposal = reel.proposal.clone();
+        self.send(json!({"type": "pause"}));
+        let asked = self.send(json!({
+            "type": "preview", "proposalId": proposal, "start": start, "duration": end - start,
+        }));
+        if !asked {
+            self.reel_stop();
+        }
+    }
+
+    fn reel_enter(&mut self) {
+        let Some(reel) = self.reel.as_mut() else {
+            return;
+        };
+        reel.waiting = false;
+        let segment = &reel.segments[reel.index];
+        let after = reel.side == ReelSide::After;
+        reel.segment_end = if after {
+            segment.after_end
+        } else {
+            segment.before_end
+        };
+        let at = if after { segment.after } else { segment.before };
+        let limit = reel.limit.max(self.state.program_length());
+        if !after {
+            // The program has only just reopened: the seek lands first.
+            reel.due = Some((Instant::now() + REEL_SEEK_LANDS, ReelWait::Play));
+        }
+        let at = at.clamp(0.0, limit);
+        self.state.position = at;
+        self.send(json!({"type": "seek", "position": at, "scrub": false}));
+        if after {
+            self.send(json!({"type": "play"}));
+        }
+    }
+
+    /// What waits on time is done when it is due. True when anything was.
+    fn reel_due(&mut self) -> bool {
+        let Some((at, wait)) = self.reel.as_ref().and_then(|reel| reel.due) else {
+            return false;
+        };
+        if Instant::now() < at {
+            return false;
+        }
+        if let Some(reel) = self.reel.as_mut() {
+            reel.due = None;
+        }
+        match wait {
+            ReelWait::Play => {
+                self.send(json!({"type": "play"}));
+            }
+            ReelWait::Enter => {
+                if self.reel.as_ref().is_some_and(|reel| reel.waiting) {
+                    self.reel_enter();
+                }
+            }
+        }
+        true
+    }
+
+    /// The bridge's `preview` events: a render ready starts the segment,
+    /// the program reopened starts the Before side, one gone or failed
+    /// ends the reel.
+    fn reel_follow_preview(&mut self, event: &Value) {
+        let Some(reel) = self.reel.as_mut() else {
+            return;
+        };
+        let status = event["status"].as_str().unwrap_or_default();
+        let named = event["proposalId"]
+            .as_str()
+            .is_some_and(|id| !id.is_empty());
+        match status {
+            "running" => {}
+            "ready" | "live" => {
+                if reel.side == ReelSide::After && reel.waiting && named {
+                    reel.previewing = true;
+                    reel.rendered = true;
+                    self.reel_enter();
+                } else if reel.side == ReelSide::Before && reel.waiting && !named {
+                    self.reel_enter();
+                }
+            }
+            "exited" => {
+                // Exit preview, from outside: watching a preview that is gone ends.
+                if reel.side == ReelSide::After && !reel.waiting {
+                    reel.previewing = false;
+                    self.reel_stop();
+                    return;
+                }
+                reel.previewing = false;
+                reel.rendered = false;
+                if reel.side == ReelSide::Before && reel.waiting {
+                    reel.due = Some((Instant::now() + REEL_PROGRAM_WAIT, ReelWait::Enter));
+                }
+            }
+            "failed" | "stopped" => self.reel_stop(),
+            _ => {}
+        }
+    }
+
+    /// Past a segment's end, the next one plays; past the last, it stops,
+    /// every change watched.
+    fn reel_follow_playhead(&mut self) {
+        let position = self.state.position;
+        let Some(reel) = self.reel.as_mut() else {
+            return;
+        };
+        if reel.waiting || reel.finished || position + 1e-3 < reel.segment_end {
+            return;
+        }
+        if reel.index + 1 >= reel.segments.len() {
+            reel.finished = true;
+            self.send(json!({"type": "pause"}));
+            return;
+        }
+        reel.index += 1;
+        self.reel_show();
     }
 
     /// The program's in and out marks, and whether playback loops between
@@ -579,16 +1205,53 @@ impl Session {
         self.kerfd.as_deref()
     }
 
-    /// Asks Kerf, in the conversation open (or a new one), about what is
-    /// chosen on the timeline if anything is.
+    /// Asks Kerf, in the conversation open (or a new one), about the
+    /// sequence at the playhead, as the composer does.
     pub fn ask(&mut self, text: &str) -> bool {
         let at = self.state.position;
         self.ask_at(text, at)
     }
 
     /// As [`Session::ask`], with the playhead time the request was written
-    /// at (a request queued while Kerf worked keeps its own time).
+    /// at (a request queued while Kerf worked keeps its own time). It goes
+    /// stamped with that time while the picture is open and the stamp is on.
     pub fn ask_at(&mut self, text: &str, at: f64) -> bool {
+        let timeline = self.timeline();
+        let focus = ask_focus(timeline, None, AskScope::Sequence, at);
+        let label = format!(
+            "Sequence at {}",
+            crate::model::timecode(at, timeline.rate())
+        );
+        let stamp = self.stamps().then_some(at);
+        self.ask_with(text, focus, &label, stamp)
+    }
+
+    /// Whether a request from the composer goes with the playhead time: the
+    /// stamp is on and there is a picture to play.
+    pub fn stamps(&self) -> bool {
+        self.prefs.send_playhead && self.picture_open != Some(false)
+    }
+
+    /// Asks Kerf from the Ask popover: about the chosen clip (`Clip`) or the
+    /// whole sequence around it (`Sequence`), else the sequence at the
+    /// playhead; stamped at the start of what it is about.
+    pub fn ask_about(&mut self, text: &str, scope: AskScope) -> bool {
+        let timeline = self.timeline();
+        let clip = self
+            .selection
+            .first()
+            .and_then(|id| timeline.clip(id))
+            .map(|(_, clip)| clip.id.clone());
+        let at = self.state.position;
+        let focus = ask_focus(timeline, clip.as_deref(), scope, at);
+        let label = ask_label(timeline, clip.as_deref(), scope, at);
+        let from = focus["fromFrame"].as_f64().unwrap_or(0.0) / timeline.rate();
+        self.ask_with(text, focus, &label, Some(from))
+    }
+
+    /// Sends an agent turn about `focus`, stamped `stamp`; the work row says
+    /// `label` until Kerf says what it is doing.
+    fn ask_with(&mut self, text: &str, focus: Value, label: &str, stamp: Option<f64>) -> bool {
         let text = text.trim();
         if text.is_empty() || self.state.work.busy() {
             return false;
@@ -607,12 +1270,10 @@ impl Session {
         if let Some(conversation) = &self.conversation {
             command["conversation"] = json!(conversation);
         }
-        if self.prefs.send_playhead {
+        if let Some(at) = stamp.filter(|at| at.is_finite()) {
             command["at"] = json!(at);
         }
-        if let Some(focus) = self.focus() {
-            command["focus"] = focus;
-        }
+        command["focus"] = focus;
         let sent = self.send(command);
         if sent {
             self.state.work.request = Some(text.to_owned());
@@ -621,10 +1282,12 @@ impl Session {
                 .work
                 .started
                 .get_or_insert_with(std::time::Instant::now);
-            self.state.work.status = "Working".into();
+            self.state.work.status = label.to_owned();
             self.state.work.answer.clear();
             self.state.work.steps.clear();
             self.state.next_steps.clear();
+            self.live_changes.clear();
+            self.activity.push("agent", "Request sent");
         }
         sent
     }
@@ -698,21 +1361,11 @@ impl Session {
         {
             let frames = (source.duration * timeline.rate()).round() as i64;
             context["source"] = json!({"media": source.id, "inFrame": 0, "durationFrames": frames});
-            let first = |kind| {
-                timeline
-                    .tracks
-                    .iter()
-                    .find(|track| track.kind == kind && !track.locked)
-                    .map(|track| track.id.clone())
-            };
-            let mut targets = Vec::new();
-            if source.width.is_some() {
-                targets.extend(first(crate::model::TrackKind::Video));
-            }
-            if source.has_audio {
-                targets.extend(first(crate::model::TrackKind::Audio));
-            }
-            context["sourceTargets"] = json!(targets);
+            context["sourceTargets"] = json!(crate::model::source_targets(
+                timeline,
+                source,
+                self.source_targets.as_deref()
+            ));
         }
         context
     }
@@ -753,18 +1406,6 @@ impl Session {
             self.activity
                 .push("export", &format!("Export started ({})", quality.name()));
         }
-    }
-
-    /// What the request is about: the chosen clip, else nothing.
-    fn focus(&self) -> Option<Value> {
-        let clip = self.selection.first()?;
-        let (_, clip) = self.timeline().clip(clip)?;
-        Some(json!({
-            "scope": "clip",
-            "clip": clip.id,
-            "fromFrame": clip.start_frame,
-            "toFrame": clip.end_frame(),
-        }))
     }
 
     /// The key for `provider`: the keychain's, else the one kept in the
@@ -921,6 +1562,101 @@ impl Session {
     }
 }
 
+/// What a request from the Ask popover is about: the chosen clip itself,
+/// or the whole sequence (around the chosen clip, or at the playhead).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum AskScope {
+    Clip,
+    #[default]
+    Sequence,
+}
+
+impl AskScope {
+    pub fn wire(self) -> &'static str {
+        match self {
+            AskScope::Clip => "clip",
+            AskScope::Sequence => "sequence",
+        }
+    }
+}
+
+/// A request's `focus`: with `clip` (one on `timeline`), its span, as the
+/// clip (`Clip`) or the sequence around it (`Sequence`); without, the
+/// sequence at `playhead`, which `Clip` cannot be.
+pub fn ask_focus(timeline: &Timeline, clip: Option<&str>, scope: AskScope, playhead: f64) -> Value {
+    if let Some((_, clip)) = clip.and_then(|id| timeline.clip(id)) {
+        return json!({
+            "scope": scope.wire(),
+            "clip": clip.id,
+            "fromFrame": clip.start_frame,
+            "toFrame": clip.end_frame(),
+        });
+    }
+    let frame = timeline.frame_at(playhead.max(0.0));
+    json!({"scope": "sequence", "fromFrame": frame, "toFrame": frame})
+}
+
+/// What the work row says a request is about until Kerf says what it is
+/// doing: the clip's name, "Sequence around <clip>", or "Sequence at <tc>".
+pub fn ask_label(
+    timeline: &Timeline,
+    clip: Option<&str>,
+    scope: AskScope,
+    playhead: f64,
+) -> String {
+    match clip.and_then(|id| timeline.clip(id)) {
+        Some((_, clip)) if scope == AskScope::Clip => clip.label().to_owned(),
+        Some((_, clip)) => format!("Sequence around {}", clip.label()),
+        None => format!(
+            "Sequence at {}",
+            crate::model::timecode(playhead.max(0.0), timeline.rate())
+        ),
+    }
+}
+
+/// "Cutting · 3 clips": what a first cut's turn says as clips are placed.
+pub fn cutting_status(placed: usize) -> String {
+    if placed == 1 {
+        "Cutting · 1 clip".to_owned()
+    } else {
+        format!("Cutting · {placed} clips")
+    }
+}
+
+/// The keys of `changes` ("clip@end"), and where the newest of them not
+/// among `seen` is to be looked at: where a trim cuts, else where the clip
+/// now starts (the latest start among the new ones). Removed clips are
+/// nothing to look at.
+pub fn newest_change(
+    changes: &[crate::chat::ClipChange],
+    seen: &HashSet<String>,
+) -> (HashSet<String>, Option<f64>) {
+    let key = |change: &crate::chat::ClipChange| format!("{}@{:.4}", change.clip, change.new_end);
+    let keys: HashSet<String> = changes.iter().map(key).collect();
+    let newest = changes
+        .iter()
+        .filter(|change| !change.removed && !seen.contains(&key(change)))
+        .max_by(|a, b| a.new_start.total_cmp(&b.new_start))
+        .map(|change| {
+            if change.trimmed && !change.moved {
+                change.new_end
+            } else {
+                change.new_start
+            }
+        });
+    (keys, newest)
+}
+
+/// Where a timeline's last clip ends, in seconds.
+fn timeline_end(timeline: &Timeline) -> f64 {
+    timeline
+        .tracks
+        .iter()
+        .flat_map(|track| track.clips.iter())
+        .map(|clip| clip.end())
+        .fold(0.0, f64::max)
+}
+
 /// What the command registry is told of the proposal its commands act on
 /// (kerf-commands' `ProposalState`): its id, and `blocked: "stale"` once
 /// the edit has changed under it, so Accept says to bring it forward and
@@ -1002,9 +1738,30 @@ impl ActivityLog {
 
 /// The Activity line a bridge event leaves, if any: an export that ended
 /// (the file it made, or how it ended), an analysis made in the
-/// background, a preview that could not render.
+/// background, a preview that could not render, and what Kerf did: each
+/// tool call that ended, each status line, any other note (at most 120
+/// characters of each).
 pub fn activity_of(event: &Value) -> Option<(&'static str, String)> {
     match event["type"].as_str()? {
+        "agent" => {
+            let text: String = event["text"]
+                .as_str()
+                .unwrap_or_default()
+                .trim()
+                .chars()
+                .take(120)
+                .collect();
+            if text.is_empty() {
+                return None;
+            }
+            match event["kind"].as_str().unwrap_or("agent") {
+                "delta" | "done" => None,
+                "tool" if event["state"].as_str() == Some("running") => None,
+                "tool" => Some(("tool", text)),
+                "status" => Some(("status", text)),
+                _ => Some(("agent", text)),
+            }
+        }
         "export" => {
             let status = event["status"].as_str().unwrap_or_default();
             let path = event["path"].as_str().unwrap_or_default();

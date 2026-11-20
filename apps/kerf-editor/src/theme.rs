@@ -233,6 +233,41 @@ pub mod activity {
     }
 }
 
+/// A sound's waveform, as Qt drew it: its peaks light, its loudness (RMS)
+/// stronger; darker on a room-tone track.
+pub mod waveform {
+    use gpui::{rgba, Rgba};
+    pub fn peak() -> Rgba {
+        rgba(0x90909069)
+    }
+    pub fn rms() -> Rgba {
+        rgba(0x909090bf)
+    }
+    pub fn room_peak() -> Rgba {
+        rgba(0x6a6a6a69)
+    }
+    pub fn room_rms() -> Rgba {
+        rgba(0x6a6a6abf)
+    }
+}
+
+/// What the timeline's lanes draw over their clips (Qt's overlay tokens).
+pub mod lane {
+    use gpui::{rgb, rgba, Rgba};
+    /// A sound clip's level, drawn across it.
+    pub fn rubber_band() -> Rgba {
+        rgb(0xa8a8a8)
+    }
+    /// A key on the rubber band.
+    pub fn keyframe() -> Rgba {
+        rgb(0xededed)
+    }
+    /// The dark bar a name stands on over a filmstrip (black, 55%).
+    pub fn name_bar() -> Rgba {
+        rgba(0x0000008c)
+    }
+}
+
 /// A colour with its alpha replaced by `alpha` (0..1).
 pub fn with_alpha(color: Rgba, alpha: f32) -> Rgba {
     Rgba {
@@ -577,6 +612,55 @@ pub mod motion {
     /// the editor starts.
     pub const SYSTEM_FIRST_WAIT: Duration = ms(300);
 
+    /// The light once round a cut's card while Kerf makes it (Qt's
+    /// cardTurn), and its tail, a share of the way round.
+    pub const CARD_TURN: Duration = ms(2200);
+    pub const CARD_TAIL: f32 = 0.3;
+    /// A cut card's picture becoming the newest clip placed (cardCrossfade).
+    pub const CARD_CROSSFADE: Duration = ms(600);
+    /// Done: the ring going out and the picture lightening (cardRing).
+    pub const CARD_RING: Duration = ms(900);
+    /// Done: how long a finished cut's card says so (cardDone).
+    pub const CARD_DONE: Duration = ms(2400);
+    /// Done: when its length and play mark come and how long they take;
+    /// how long Done takes to go, at its end.
+    pub const CARD_MARKS_AFTER: Duration = ms(900);
+    pub const CARD_MARKS_FADE: Duration = ms(300);
+    pub const CARD_DONE_FADE: Duration = ms(1000);
+    /// The Cutting chip's dots: one hop, the share of it between one dot
+    /// and the next, and how high (points).
+    pub const CHIP_HOP: Duration = ms(1100);
+    pub const CHIP_HOP_STAGGER: f32 = 0.14;
+    pub const CHIP_HOP_RISE: f32 = 3.0;
+    /// Kerf's edits to a first cut being quiet before it renders (cutSettle).
+    pub const CUT_SETTLE: Duration = ms(500);
+    /// The change reel's Before side: the seek landing on the program just
+    /// reopened before it plays; how long it waits to hear the program
+    /// reopened.
+    pub const REEL_SEEK_LANDS: Duration = ms(300);
+    pub const REEL_PROGRAM_WAIT: Duration = ms(1500);
+    /// How long Copy says Copied (Qt's 1.5 s).
+    pub const COPIED_HOLD: Duration = ms(1500);
+    /// The drafting dots' beat: each in turn, before Kerf has said anything.
+    pub const DRAFT_BEAT: Duration = ms(320);
+    /// The conversation while what a proposal changed is watched (chatBehind).
+    pub const CHAT_BEHIND: f32 = 0.28;
+    /// How far a footage tile rises as it pops in.
+    pub const FOOTAGE_RISE: f32 = 12.0;
+    /// The Before|After line's sweep there and back while a change reel
+    /// shows After, and where it turns, as shares of the picture's width
+    /// (Qt's compareSweep, compareFrom, compareTo).
+    pub const COMPARE_SWEEP: Duration = ms(6800);
+    pub const COMPARE_FROM: f32 = 0.28;
+    pub const COMPARE_TO: f32 = 0.78;
+    /// Points of glow either side of the line.
+    pub const COMPARE_GLOW: f32 = 8.0;
+    /// Points the stage reaches over the conversation while a change reel plays.
+    pub const REEL_REACH: f32 = 120.0;
+    /// How many times a pass of the light over a working conversation's
+    /// title is drawn: it moves in steps, not every frame.
+    pub const TITLE_SHIMMER_STEPS: u32 = 66;
+
     /// The one easing curve: cubic-bezier(.22, 1, .36, 1).
     pub const EASE: (f32, f32, f32, f32) = (0.22, 1.0, 0.36, 1.0);
 }
@@ -653,6 +737,35 @@ pub mod layout {
     /// A menu's row, and how wide a menu is at least.
     pub const MENU_ROW: f32 = 30.0;
     pub const MENU_LEAST: f32 = 180.0;
+    /// A cut's picture on its card: at most this wide, an upright one at
+    /// most this tall; the room round it for the light; the play mark.
+    pub const CARD_PICTURE_WIDEST: f32 = 440.0;
+    pub const CARD_PICTURE_TALLEST: f32 = 320.0;
+    pub const CARD_PICTURE_RING: f32 = 3.0;
+    pub const CARD_PLAY_MARK: f32 = 40.0;
+    /// A footage tile under a request.
+    pub const FOOTAGE_TILE: (f32, f32) = (112.0, 63.0);
+    /// How wide a new conversation's column of folders and conversations is.
+    pub const WELCOME_COLUMN: f32 = 384.0;
+    /// The Ask popover: its width, about its height, how far it keeps from
+    /// its anchor and the window's edges, and where its Scope menu opens.
+    pub const ASK_WIDTH: f32 = 380.0;
+    pub const ASK_HEIGHT: f32 = 176.0;
+    pub const ASK_GAP: f32 = 8.0;
+    pub const ASK_SCOPE_MENU_AT: (f32, f32) = (52.0, 68.0);
+    /// Points the Before/After tags and the reel's strip keep in from the
+    /// picture's edges, and the widest the strip is.
+    pub const COMPARE_TAG_IN: f32 = 12.0;
+    pub const REEL_STRIP_IN: f32 = 12.0;
+    pub const REEL_STRIP_MOST: f32 = 460.0;
+    /// The Media band: a tile's picture, the room between tiles, the Roles
+    /// column, a list row, an index row and the search row.
+    pub const MEDIA_THUMB: (f32, f32) = (112.0, 63.0);
+    pub const MEDIA_TILE_GAP: f32 = 12.0;
+    pub const MEDIA_ROLES_WIDTH: f32 = 216.0;
+    pub const MEDIA_LIST_ROW: f32 = 24.0;
+    pub const MEDIA_INDEX_ROW: f32 = 20.0;
+    pub const MEDIA_SEARCH_ROW: f32 = 24.0;
 
     /// The widest a drag leaves the sidebar in a window `window` wide.
     pub fn sidebar_most(window: f32) -> f32 {

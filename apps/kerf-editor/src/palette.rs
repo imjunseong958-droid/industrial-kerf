@@ -13,6 +13,7 @@ use gpui::{
     FocusHandle, Focusable, ScrollHandle, SharedString, Subscription, Window,
 };
 use serde_json::Value;
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 actions!(palette, [OpenPalette, Previous, Next]);
@@ -51,6 +52,7 @@ pub fn recent_commands(
                     group: 0,
                     scope: "window".to_owned(),
                     keys: Vec::new(),
+                    checkable: false,
                 },
                 row.missing,
             )
@@ -78,6 +80,9 @@ pub struct CommandPalette {
     states: Value,
     chosen: usize,
     scroll: ScrollHandle,
+    /// The switches on, and the tool in use, as the window has them: their
+    /// rows are ticked ([`CommandPalette::with_checked`]).
+    checked: BTreeSet<String>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -136,8 +141,17 @@ impl CommandPalette {
             states,
             chosen: 0,
             scroll: ScrollHandle::new(),
+            checked: BTreeSet::new(),
             _subscriptions: subscriptions,
         }
+    }
+
+    /// Ticks the rows of `checked`, the registry's checkable commands that
+    /// are on in the window (Safe Zones, Follow Kerf, the tool in use). The
+    /// workspace gives them as it opens the palette.
+    pub fn with_checked(mut self, checked: BTreeSet<String>) -> Self {
+        self.checked = checked;
+        self
     }
 
     fn found(&self, cx: &gpui::App) -> Vec<&commands::Command> {
@@ -213,7 +227,7 @@ impl Focusable for CommandPalette {
 
 impl Render for CommandPalette {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let found: Vec<(String, String, String, String, Option<String>)> = self
+        let found: Vec<(String, String, String, String, Option<String>, bool)> = self
             .found(cx)
             .into_iter()
             .map(|command| {
@@ -223,6 +237,7 @@ impl Render for CommandPalette {
                     command.menu.clone(),
                     shortcut(command),
                     unavailable(&self.states, &command.id).map(str::to_owned),
+                    command.checkable && self.checked.contains(&command.id),
                 )
             })
             .collect();
@@ -270,7 +285,7 @@ impl Render for CommandPalette {
                         )))
                     })
                     .children(found.into_iter().enumerate().map(
-                        |(index, (id, label, menu, shortcut, reason))| {
+                        |(index, (id, label, menu, shortcut, reason, checked))| {
                             let shortcut: SharedString = shortcut.into();
                             let able = reason.is_none();
                             div()
@@ -293,6 +308,13 @@ impl Render for CommandPalette {
                                     .flex_1()
                                     .min_w_0(),
                                 )
+                                // On: ticked, as its menu row is.
+                                .when(checked, |row| {
+                                    row.child(crate::icons::Icon::Check.view(
+                                        14.0,
+                                        if able { theme::ink2() } else { theme::dis() },
+                                    ))
+                                })
                                 .child(
                                     // Why it cannot run, where its menu is said otherwise.
                                     ui::line(

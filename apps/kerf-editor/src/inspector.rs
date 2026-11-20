@@ -2626,6 +2626,7 @@ impl Render for InspectorView {
                     .child(section)
             }));
         root.child(body)
+            .child(ui::scroll_fade(&self.scroll, theme::chrome()))
             .children(self.drag_listener(cx))
             .children(self.adding_list(&clip, window, cx))
             .into_any_element()
@@ -2755,7 +2756,10 @@ impl FormatBank {
         Self { session }
     }
 
-    fn choose(&mut self, index: usize, cx: &mut Context<Self>) {
+    /// The sequence becomes format `index` (Landscape 16:9, Vertical 9:16,
+    /// Square, Portrait): its segment pressed, or the registry's
+    /// `sequence.setFormat.169`/`.916` (⌥1, ⌥2), which the workspace runs.
+    pub fn choose(&mut self, index: usize, cx: &mut Context<Self>) {
         let Some((_, _, width, height)) = FORMATS.get(index).copied() else {
             return;
         };

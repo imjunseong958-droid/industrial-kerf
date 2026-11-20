@@ -46,8 +46,24 @@ image = { version = "0.25", default-features = false }
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
 unicode-segmentation = "1"
+# kerf:// links: a project named outside ASCII, as a browser's punycode
+# (xn--) or as NFD text, still finds its folder.
+idna = "1"
+unicode-normalization = "0.1"
+# The Qt editor kept a project's master output under a SHA-1 of its path.
+sha1_smol = "1"
 env_logger = "0.11"
 log = "0.4"
+
+# On macOS a project's window represents its project.kerf (the title bar's
+# proxy icon), as the Qt editor's setWindowFilePath had it: AppKit through
+# its safe bindings, at the versions gpui already brings, and the window's
+# view through raw-window-handle.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSString"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSResponder", "NSView", "NSWindow"] }
+raw-window-handle = "0.6"
 
 [build-dependencies]
 embed-resource = "3"

@@ -6,6 +6,7 @@
 
 use gpui::{App, KeyBinding, NoAction, SharedString};
 use serde_json::Value;
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 /// Run the registry's command `id`.
@@ -46,6 +47,51 @@ pub struct OpenRecent {
 // folder that is gone; "No Recent Projects"). Nothing carries them out, so
 // a menu bar shows them greyed.
 gpui::actions!(kerf, [ClearRecent, RecentMissing, NoRecent]);
+
+// Unavailable: a menu bar row of the registry's that cannot run now (see
+// [`MenuStates`]). Nothing carries it out, so the menu bar greys it.
+gpui::actions!(kerf, [Unavailable]);
+
+/// How the registry's commands stand in the window in front, for the menu
+/// bar: those that cannot run now (greyed), and the switches that are on
+/// (ticked). The window works them out as it draws ([`set_menu_states`]).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct MenuStates {
+    pub unavailable: BTreeSet<String>,
+    pub checked: BTreeSet<String>,
+}
+
+/// The menu bar's states as last set, and the project then in front.
+#[derive(Default)]
+struct ShownStates {
+    states: MenuStates,
+    current: Option<PathBuf>,
+}
+
+impl gpui::Global for ShownStates {}
+
+/// Sets the menu bar again when how its commands stand (`states`) or the
+/// project in front (`current`) has changed since it was last set. The
+/// window in front calls it as it draws.
+pub fn set_menu_states(states: MenuStates, current: Option<&Path>, cx: &mut App) {
+    let shown = cx.default_global::<ShownStates>();
+    if shown.states == states && shown.current.as_deref() == current {
+        return;
+    }
+    shown.states = states;
+    shown.current = current.map(Path::to_path_buf);
+    refresh_menus(current, cx);
+}
+
+/// What a menu row of a command says: its label, ticked ("✓ ") while it
+/// is on, since a menu bar's rows here carry no tick of their own.
+pub fn menu_label(command: &Command, checked: bool) -> String {
+    if command.checkable && checked {
+        format!("✓ {}", command.label)
+    } else {
+        command.label.clone()
+    }
+}
 
 /// One row of File ▸ Open Recent.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -124,7 +170,13 @@ pub fn recent_menu(recent: &[PathBuf], current: Option<&Path>) -> gpui::Menu {
 /// to the front, and after Open Recent ▸ Clear Menu.
 pub fn refresh_menus(current: Option<&Path>, cx: &mut App) {
     let prefs = crate::prefs::Prefs::load();
-    cx.set_menus(menus_with(prefs.keymap.wire(), &prefs.recent, current));
+    let states = cx.default_global::<ShownStates>().states.clone();
+    cx.set_menus(menus_with_states(
+        prefs.keymap.wire(),
+        &prefs.recent,
+        current,
+        &states,
+    ));
 }
 
 /// A registry shortcut ("Ctrl+Shift+E") as the system writes it: on macOS
@@ -211,6 +263,9 @@ pub struct Command {
     /// timeline has them, so typing or Esc elsewhere never runs it.
     pub scope: String,
     pub keys: Vec<String>,
+    /// A switch or one of a choice (Safe Zones, Follow Kerf, a tool): its
+    /// menu row and its palette row are ticked while it is on.
+    pub checkable: bool,
 }
 
 /// The registry in `keymap` (`kerf`, `premiere`, `fcp`).
@@ -227,6 +282,7 @@ pub fn catalog(keymap: &str) -> Vec<Command> {
                     menu: command["menu"].as_str().unwrap_or_default().to_owned(),
                     group: command["group"].as_i64().unwrap_or(0),
                     scope: command["scope"].as_str().unwrap_or("window").to_owned(),
+                    checkable: command["checkable"].as_bool().unwrap_or(false),
                     keys: command["keys"]
                         .as_array()
                         .map(|keys| {
@@ -381,6 +437,9 @@ pub fn bind(keymap: &str, cx: &mut App) {
     // (Reject Proposal) has it: their contexts are the deeper ones.
     crate::settings::bind_close(cx);
     crate::export::bind_close(cx);
+    // A shot's graph's Esc and its canvas's keys, should a keymap be bound
+    // while one is open.
+    crate::making::bind_keys(cx);
     let recent = crate::prefs::Prefs::load().recent;
     cx.set_menus(menus_with(keymap, &recent, None));
 }
@@ -395,6 +454,17 @@ pub fn menus(keymap: &str) -> Vec<gpui::Menu> {
 /// [`menus`], File ▸ Open Recent following Open Project with `recent`
 /// ([`recent_menu`], `current` checked).
 pub fn menus_with(keymap: &str, recent: &[PathBuf], current: Option<&Path>) -> Vec<gpui::Menu> {
+    menus_with_states(keymap, recent, current, &MenuStates::default())
+}
+
+/// [`menus_with`], each row of the registry's greyed while it cannot run
+/// and ticked while it is on, as `states` says ([`menu_label`]).
+pub fn menus_with_states(
+    keymap: &str,
+    recent: &[PathBuf],
+    current: Option<&Path>,
+    states: &MenuStates,
+) -> Vec<gpui::Menu> {
     let commands = catalog(keymap);
     let order: Vec<String> = kerf_bridge::commands_catalog(keymap)["menus"]
         .as_array()
@@ -430,12 +500,17 @@ pub fn menus_with(keymap: &str, recent: &[PathBuf], current: Option<&Path>) -> V
                 items.push(gpui::MenuItem::separator());
             }
             group = Some(command.group);
-            items.push(gpui::MenuItem::action(
-                command.label.clone(),
-                RunCommand {
-                    id: command.id.clone().into(),
-                },
-            ));
+            let label = menu_label(command, states.checked.contains(&command.id));
+            items.push(if states.unavailable.contains(&command.id) {
+                gpui::MenuItem::action(label, Unavailable)
+            } else {
+                gpui::MenuItem::action(
+                    label,
+                    RunCommand {
+                        id: command.id.clone().into(),
+                    },
+                )
+            });
             if command.id == "file.openProject" {
                 items.push(gpui::MenuItem::submenu(recent_menu(recent, current)));
             }

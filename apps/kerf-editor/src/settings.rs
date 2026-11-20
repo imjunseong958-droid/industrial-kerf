@@ -17,7 +17,7 @@ use crate::launcher::{ago, app_icon, field, home_relative};
 use crate::motion;
 use crate::prefs::{ApiMode, Keymap, Permissions, Provider, CLAUDE_CODE_MODELS};
 use crate::session::{BridgeEvent, Session};
-use crate::theme::{self, height, radius, text, Face};
+use crate::theme::{self, height, radius, text, Face, ReadingFace};
 use crate::ui::{self, icon_button};
 use gpui::{
     actions, div, img, prelude::*, px, Action, AnimationExt, AnyElement, App, ClipboardItem,
@@ -33,9 +33,9 @@ actions!(settings, [Close]);
 /// The key context Settings answers in.
 const CONTEXT: &str = "Settings";
 
-/// The panel's size; the workspace rounds its corners.
-const WIDTH: f32 = 760.0;
-const HEIGHT: f32 = 540.0;
+/// The panel at its largest: where it goes is the window's to say
+/// ([`crate::ui::modal_bounds`]), and it fills that.
+pub const MOST: (f32, f32) = (760.0, 540.0);
 /// Its title row, and the column of pages down its side.
 const HEAD: f32 = 48.0;
 const NAV: f32 = 184.0;
@@ -798,6 +798,8 @@ impl SettingsView {
                     prefs.permissions,
                     Self::chooser(cx, Self::set_permissions),
                 )
+                // Each mode's tip says what it lets Kerf do (Qt's).
+                .tips(&Permissions::ALL.map(permission_hint))
                 .into_any_element(),
             ),
             Vec::new(),
@@ -1182,25 +1184,37 @@ impl SettingsView {
 
     // ------------------------------------------------------------ Appearance
 
-    fn set_face(&mut self, face: Face, window: &mut Window, cx: &mut Context<Self>) {
-        let step = self.session.update(cx, |session, _| {
-            session.prefs.face = face;
-            session.save_prefs();
-            session.prefs.prose_step
-        });
-        theme::set_face(face, step);
+    /// Puts the faces and the conversation's size this window's settings
+    /// hold in force.
+    fn apply_faces(&self, window: &mut Window, cx: &mut Context<Self>) {
+        let prefs = &self.session.read(cx).prefs;
+        theme::set_faces(prefs.face, prefs.reading_face, prefs.prose_step);
         window.refresh();
     }
 
+    fn set_face(&mut self, face: Face, window: &mut Window, cx: &mut Context<Self>) {
+        self.session.update(cx, |session, _| {
+            session.prefs.choose_face(face);
+            session.save_prefs();
+        });
+        self.apply_faces(window, cx);
+    }
+
+    fn set_reading_face(&mut self, face: ReadingFace, window: &mut Window, cx: &mut Context<Self>) {
+        self.session.update(cx, |session, _| {
+            session.prefs.choose_reading_face(face);
+            session.save_prefs();
+        });
+        self.apply_faces(window, cx);
+    }
+
     fn step_prose(&mut self, by: i32, window: &mut Window, cx: &mut Context<Self>) {
-        let (face, step) = self.session.update(cx, |session, _| {
+        self.session.update(cx, |session, _| {
             session.prefs.prose_step =
                 (session.prefs.prose_step + by).clamp(PROSE_LEAST, PROSE_MOST);
             session.save_prefs();
-            (session.prefs.face, session.prefs.prose_step)
         });
-        theme::set_face(face, step);
-        window.refresh();
+        self.apply_faces(window, cx);
     }
 
     fn set_reduce_motion(&mut self, on: bool, window: &mut Window, cx: &mut Context<Self>) {
@@ -1214,49 +1228,48 @@ impl SettingsView {
 
     fn appearance_page(&self, cx: &Context<Self>) -> Vec<AnyElement> {
         let prefs = &self.session.read(cx).prefs;
-        let chosen = prefs.face;
+        let (chosen, reading) = prefs.faces();
         let step = prefs.prose_step;
-        let faces =
-            div()
-                .flex()
-                .gap(px(theme::space::S8))
-                .children(Face::ALL.iter().enumerate().map(|(index, face)| {
-                    let face = *face;
-                    let on = face == chosen;
-                    let choose = Self::chooser(cx, Self::set_face);
-                    div()
-                        .id(ElementId::named_usize("settings-face", index))
-                        .flex_1()
-                        .min_w_0()
-                        .flex()
-                        .flex_col()
-                        .gap(px(theme::space::S4))
-                        .p(px(theme::space::S12))
-                        .rounded(px(radius::CARD))
-                        .border_1()
-                        .border_color(if on { theme::accent() } else { theme::line2() })
-                        .bg(if on {
-                            theme::accent_wash()
-                        } else {
-                            theme::well()
-                        })
-                        .cursor_pointer()
-                        .when(!on, |tile| {
-                            tile.hover(|style| style.border_color(theme::lineh()))
-                        })
-                        .child(
-                            in_face(div(), face, text::DISPLAY)
-                                .text_color(theme::ink())
-                                .child("Aa 가"),
-                        )
-                        .child(
-                            in_face(div(), face, text::CONTROL)
-                                .text_color(if on { theme::ink() } else { theme::ink2() })
-                                .whitespace_nowrap()
-                                .child(face.label()),
-                        )
-                        .on_click(move |_, window, cx| choose(face, window, cx))
-                }));
+        let readings = ReadingFace::ALL.map(|face| (face, face.label()));
+        let faces = div().flex().gap(px(theme::space::S8)).children(
+            Face::INTERFACE.iter().enumerate().map(|(index, face)| {
+                let face = *face;
+                let on = face == chosen;
+                let choose = Self::chooser(cx, Self::set_face);
+                div()
+                    .id(ElementId::named_usize("settings-face", index))
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .gap(px(theme::space::S4))
+                    .p(px(theme::space::S12))
+                    .rounded(px(radius::CARD))
+                    .border_1()
+                    .border_color(if on { theme::accent() } else { theme::line2() })
+                    .bg(if on {
+                        theme::accent_wash()
+                    } else {
+                        theme::well()
+                    })
+                    .cursor_pointer()
+                    .when(!on, |tile| {
+                        tile.hover(|style| style.border_color(theme::lineh()))
+                    })
+                    .child(
+                        in_face(div(), face.ui(), text::DISPLAY)
+                            .text_color(theme::ink())
+                            .child("Aa 가"),
+                    )
+                    .child(
+                        in_face(div(), face.ui(), text::CONTROL)
+                            .text_color(if on { theme::ink() } else { theme::ink2() })
+                            .whitespace_nowrap()
+                            .child(face.label()),
+                    )
+                    .on_click(move |_, window, cx| choose(face, window, cx))
+            }),
+        );
         let size = div()
             .flex()
             .items_center()
@@ -1293,21 +1306,42 @@ impl SettingsView {
             .child("가장 좋은 테이크로 30초 컷을 만들고, 와이드 숏으로 시작해 줘.");
         vec![group(vec![
             row(
-                "Font",
-                Some("IBM Plex and Inter bring a Korean face of their own. Serif sets the conversation in Noto Serif".into()),
+                "Interface font",
+                Some("IBM Plex and Inter bring a Korean face of their own".into()),
                 None,
                 vec![faces.into_any_element()],
             ),
             row(
-                "Conversation text size",
+                "Conversation font",
                 Some("For what you ask and what Kerf answers".into()),
+                Some(
+                    ui::segmented(
+                        "settings-reading-face",
+                        &readings,
+                        reading,
+                        Self::chooser(cx, Self::set_reading_face),
+                    )
+                    .into_any_element(),
+                ),
+                Vec::new(),
+            ),
+            row(
+                "Conversation text size",
+                None,
                 Some(size.into_any_element()),
                 vec![sample.into_any_element()],
             ),
             row(
                 "Reduce Motion",
                 Some("Panes, pages and lights are simply there, with no motion".into()),
-                Some(ui::switch("settings-reduce-motion", prefs.reduce_motion, Self::chooser(cx, Self::set_reduce_motion)).into_any_element()),
+                Some(
+                    ui::switch(
+                        "settings-reduce-motion",
+                        prefs.reduce_motion,
+                        Self::chooser(cx, Self::set_reduce_motion),
+                    )
+                    .into_any_element(),
+                ),
                 Vec::new(),
             ),
         ])
@@ -1602,7 +1636,8 @@ impl SettingsView {
             .child(div().flex_1())
             .child(
                 icon_button("settings-close", Icon::Close)
-                    .tooltip("Close · Esc")
+                    .tooltip("Close")
+                    .key("Esc")
                     .on_click(cx.listener(|this, _, _, cx| this.dismiss(cx))),
             )
     }
@@ -1625,6 +1660,17 @@ impl SettingsView {
                 let ink = if on { theme::ink() } else { theme::ink2() };
                 div()
                     .id(ElementId::named_usize("settings-nav", page.index()))
+                    // A Tab stop: its ring while it has the keys, Space or
+                    // Enter shows its page; a press of the pointer leaves
+                    // the keys where they were.
+                    .tab_index(0)
+                    .key_context(ui::CONTROL)
+                    .on_action(|_: &ui::FocusNext, window, cx| ui::tab_to(true, window, cx))
+                    .on_action(|_: &ui::FocusPrevious, window, cx| ui::tab_to(false, window, cx))
+                    .capture_any_mouse_down(|_, window, _| window.prevent_default())
+                    .border(px(theme::layout::FOCUS_RING))
+                    .border_color(theme::with_alpha(theme::accent(), 0.0))
+                    .focus(|row| row.border_color(theme::accent()))
                     .h(px(height::H32))
                     .px(px(theme::space::S8))
                     .flex()
@@ -1733,8 +1779,7 @@ impl Render for SettingsView {
                 cx.stop_propagation();
                 this.dismiss(cx);
             }))
-            .w(px(WIDTH))
-            .h(px(HEIGHT))
+            .size_full()
             .flex()
             .flex_col()
             .bg(theme::chrome())
@@ -1745,7 +1790,8 @@ impl Render for SettingsView {
             .child(
                 div()
                     .flex()
-                    .h(px(HEIGHT - HEAD - 1.0))
+                    .flex_1()
+                    .min_h_0()
                     .child(self.nav(cx))
                     .child(pages),
             )
@@ -1806,25 +1852,11 @@ fn group(rows: Vec<AnyElement>) -> gpui::Div {
     column
 }
 
-/// `element`'s type in `style`, set in `face`'s family for reading.
-fn in_face<E: Styled>(element: E, face: Face, style: theme::TypeStyle) -> E {
-    let family = face.prose();
-    let hangul = if family == theme::SERIF_FAMILY {
-        theme::SERIF_HANGUL_FAMILY
-    } else {
-        theme::PLEX_HANGUL_FAMILY
-    };
+/// `element`'s type in `style`, set in `family` as the editor sets it
+/// (its Hangul partner, tabular figures).
+fn in_face<E: Styled>(element: E, family: &'static str, style: theme::TypeStyle) -> E {
     element
-        .font(gpui::Font {
-            family: family.into(),
-            features: gpui::FontFeatures::default(),
-            fallbacks: Some(gpui::FontFallbacks::from_fonts(vec![
-                hangul.to_owned(),
-                theme::PRETENDARD_FAMILY.to_owned(),
-            ])),
-            weight: style.weight,
-            style: gpui::FontStyle::Normal,
-        })
+        .font(theme::font(family, style.weight, false))
         .text_size(px(style.px))
         .line_height(px(style.line))
 }

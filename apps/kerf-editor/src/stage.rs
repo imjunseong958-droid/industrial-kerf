@@ -28,8 +28,8 @@ use crate::store::Change;
 use crate::theme::{self, layout, motion as scene, over_picture, text};
 use crate::ui::{self, icon_button};
 use gpui::{
-    canvas, div, fill, point, prelude::*, px, quad, size, AnimationExt, App, BorderStyle, Bounds,
-    ContentMask, Context, Corners, CursorStyle, DispatchPhase, ElementId, Entity, EntityId,
+    canvas, div, fill, point, prelude::*, px, quad, size, App, BorderStyle, Bounds, ContentMask,
+    Context, Corners, CursorStyle, DismissEvent, DispatchPhase, ElementId, Entity, EntityId,
     FocusHandle, FontWeight, Global, KeyBinding, KeyContext, MouseButton, MouseDownEvent,
     MouseMoveEvent, MouseUpEvent, PathBuilder, Pixels, Point, Rgba, SharedString, Subscription,
     Task, TextRun, WeakEntity, Window,
@@ -77,10 +77,18 @@ gpui::actions!(
         EllipseMask,
         PenMask,
         CancelDrawing,
-        FinishPen,
-        CloseZoomMenu
+        FinishPen
     ]
 );
+
+/// The viewer's zoom chosen from a menu (the app's View ▸ Viewer Zoom): a
+/// percent of the frame's own pixels, 0 to fit it. The window carries it
+/// out, bringing the picture in for it.
+#[derive(Clone, Debug, PartialEq, gpui::Action)]
+#[action(namespace = kerf, no_json)]
+pub struct SetZoom {
+    pub percent: u32,
+}
 
 /// The picture's key context, there while the stage has the focus.
 pub const CONTEXT: &str = "Stage";
@@ -92,8 +100,6 @@ const DELETES: &str = "deletes";
 const DRAWS: &str = "draws";
 /// With it while the pen has two corners or more: Return leaves it open.
 const PEN_OPEN: &str = "pen_open";
-/// With it while the zoom's menu is open: Esc closes it.
-const ZOOM_MENU: &str = "zoom_menu";
 
 /// A tool that draws a new mask on the chosen picture clip.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -185,8 +191,6 @@ pub fn bind_keys(cx: &mut App) {
     bindings.push(KeyBinding::new("escape", CancelDrawing, Some(&draws)));
     let open = format!("{CONTEXT} && {PEN_OPEN}");
     bindings.push(KeyBinding::new("enter", FinishPen, Some(&open)));
-    let menu = format!("{CONTEXT} && {ZOOM_MENU}");
-    bindings.push(KeyBinding::new("escape", CloseZoomMenu, Some(&menu)));
     cx.bind_keys(bindings);
 }
 
@@ -721,8 +725,9 @@ pub struct StageView {
     /// The viewer's zoom: 0 fits the frame to the picture; else the share
     /// of its own pixels it is drawn at.
     zoom: f32,
-    /// Whether the zoom's menu is open.
-    zoom_menu: bool,
+    /// The zoom's menu while it is open (the kit's: its keys, Esc and a
+    /// press outside close it), and what drops it as it closes.
+    zoom_menu: Option<(Entity<ui::Menu>, Subscription)>,
     hue: Option<Hue>,
     /// The light's hue as it fades out.
     last_hue: Hue,
@@ -772,7 +777,214 @@ pub struct StageView {
     /// snapshot (the revision it was sent at) says where it is.
     held: Option<(Drag, u64, Instant)>,
     cursor: Option<CursorStyle>,
+    /// The transport's commands' keys in the keymap they were read for, as
+    /// the system writes them.
+    keys: (String, HashMap<String, String>),
+    /// Why each transport control cannot run, and the command context
+    /// (less the playhead) it was asked for: asked again only when that
+    /// changes, not on every frame played.
+    transport_asked: Option<(Value, HashMap<&'static str, String>)>,
+    /// The clips of a cut Kerf builds that have been seen placed, and the
+    /// media of the newest: the picture stands in as that clip until its
+    /// render comes (Cut builds).
+    cut_seen: std::collections::HashSet<String>,
+    cut_newest: Option<String>,
+    /// The poster standing in for the picture, and the one before it as it
+    /// crossfades over APPEAR.
+    stand_in_poster: Option<(String, Instant)>,
+    stand_in_before: Option<String>,
+    /// Watching what a proposal changed: the segment whose Before still
+    /// is asked for or shown ("proposal/index"), the still and since when
+    /// its line sweeps; the side last seen, the frame showing as the side
+    /// changed (it wipes away once the next frame comes), the wipe, and
+    /// the frame last drawn.
+    compare_key: Option<String>,
+    compare: Option<(std::sync::Arc<gpui::RenderImage>, Instant)>,
+    reel_side: Option<crate::session::ReelSide>,
+    wipe_armed: Option<std::sync::Arc<gpui::RenderImage>>,
+    wipe: Option<(std::sync::Arc<gpui::RenderImage>, Instant)>,
+    last_frame: Option<std::sync::Arc<gpui::RenderImage>>,
+    /// Pictures let go of, for the atlas to drop as the stage next draws.
+    retired: Vec<std::sync::Arc<gpui::RenderImage>>,
     _subscriptions: Vec<Subscription>,
+}
+
+/// The media whose poster stands in for the picture at `at` of
+/// `timeline` until a frame comes: the topmost picture clip there with
+/// media of its own (a title or a solid has none), else the first clip of
+/// footage on the timeline. None with no footage.
+pub fn poster_source(timeline: &model::Timeline, at: f64) -> Option<String> {
+    let pictures = || {
+        timeline
+            .tracks
+            .iter()
+            .rev()
+            .filter(|track| track.kind == model::TrackKind::Video)
+    };
+    pictures()
+        .flat_map(|track| track.clips.iter())
+        .find(|clip| clip.timeline_start <= at && at < clip.end() && clip.source_id.is_some())
+        .or_else(|| {
+            pictures()
+                .flat_map(|track| track.clips.iter())
+                .filter(|clip| clip.source_id.is_some())
+                .min_by(|a, b| a.timeline_start.total_cmp(&b.timeline_start))
+        })
+        .and_then(|clip| clip.source_id.clone())
+}
+
+/// Of `timeline`'s picture clips with media, those not in `seen`, in the
+/// order they lie (as a cut builds, each newly placed clip): their ids
+/// and media.
+pub fn placed_clips(
+    seen: &std::collections::HashSet<String>,
+    timeline: &model::Timeline,
+) -> Vec<(String, String)> {
+    let mut placed: Vec<(f64, String, String)> = timeline
+        .tracks
+        .iter()
+        .filter(|track| track.kind == model::TrackKind::Video)
+        .flat_map(|track| track.clips.iter())
+        .filter(|clip| !seen.contains(&clip.id))
+        .filter_map(|clip| {
+            Some((
+                clip.timeline_start,
+                clip.id.clone(),
+                clip.source_id.clone()?,
+            ))
+        })
+        .collect();
+    placed.sort_by(|a, b| a.0.total_cmp(&b.0));
+    placed
+        .into_iter()
+        .map(|(_, clip, source)| (clip, source))
+        .collect()
+}
+
+/// Where the Before|After line is across the picture (a share of its
+/// width), `elapsed` into the sweep: from `COMPARE_FROM` to `COMPARE_TO`
+/// and back, evenly, once each `COMPARE_SWEEP`; held at `COMPARE_FROM`
+/// under Reduce Motion (`still`).
+pub fn compare_at(elapsed: Duration, still: bool) -> f32 {
+    if still {
+        return COMPARE_FROM;
+    }
+    let period = COMPARE_SWEEP.as_secs_f32();
+    let phase = (elapsed.as_secs_f32() / period).fract();
+    let there = 1.0 - (phase * 2.0 - 1.0).abs();
+    COMPARE_FROM + (COMPARE_TO - COMPARE_FROM) * there
+}
+
+/// The bytes of standard base64 `text` (padding optional, no line
+/// breaks); None when it does not read.
+pub fn base64_decode(text: &str) -> Option<Vec<u8>> {
+    let value = |byte: u8| -> Option<u32> {
+        Some(match byte {
+            b'A'..=b'Z' => byte - b'A',
+            b'a'..=b'z' => byte - b'a' + 26,
+            b'0'..=b'9' => byte - b'0' + 52,
+            b'+' => 62,
+            b'/' => 63,
+            _ => return None,
+        } as u32)
+    };
+    let text = text.trim_end_matches('=').as_bytes();
+    if text.len() % 4 == 1 {
+        return None;
+    }
+    let mut out = Vec::with_capacity(text.len() * 3 / 4);
+    for chunk in text.chunks(4) {
+        let mut bits = 0u32;
+        for (at, byte) in chunk.iter().enumerate() {
+            bits |= value(*byte)? << (18 - 6 * at);
+        }
+        out.push((bits >> 16) as u8);
+        if chunk.len() > 2 {
+            out.push((bits >> 8) as u8);
+        }
+        if chunk.len() > 3 {
+            out.push(bits as u8);
+        }
+    }
+    Some(out)
+}
+
+/// The Before|After line's sweep, there and back, and how far across the
+/// picture it goes (Qt's compareSweep, compareFrom, compareTo); the glow
+/// either side of it, the tags at the picture's foot, and the change
+/// reel's strip over the picture's top, at most so wide.
+use crate::theme::layout::{COMPARE_TAG_IN, REEL_STRIP_IN, REEL_STRIP_MOST};
+use crate::theme::motion::{COMPARE_FROM, COMPARE_GLOW, COMPARE_SWEEP, COMPARE_TO};
+/// How far into a segment its Before still is taken, and how wide.
+const COMPARE_IN: f64 = 0.04;
+const COMPARE_WIDE: u32 = 960;
+
+/// Whether a bridge event releases the poster standing in for a cut Kerf
+/// builds: a `preview` of `first_cut` (the cut shown on the empty program)
+/// that has stopped running, so its render is what the picture shows (Qt
+/// let go of the stand-in as that preview ended, `releaseStaying`).
+pub fn releases_cover(event: &Value, first_cut: Option<&str>) -> bool {
+    event["type"] == "preview"
+        && event["status"]
+            .as_str()
+            .is_some_and(|status| !status.is_empty() && status != "running")
+        && first_cut.is_some_and(|cut| event["proposalId"].as_str() == Some(cut))
+}
+
+/// Why each transport control cannot run in `context` (the registry's
+/// command context, `Session::command_context`), by its command: no
+/// kerfd, or a timeline that plays only once a preview is rendered.
+pub fn transport_reasons(context: &Value) -> HashMap<&'static str, String> {
+    let states = kerf_bridge::commands_states(context);
+    TRANSPORT
+        .iter()
+        .filter_map(|(id, _, _)| {
+            let reason = crate::palette::unavailable(&states, id)?;
+            Some((*id, reason.to_owned()))
+        })
+        .collect()
+}
+
+/// Whether the chip says Kerf is cutting rather than looking (Qt's
+/// `work.cutting`): Kerf works (`busy`) on a cut it proposes for an empty
+/// program (no clips of its own, a proposed timeline there).
+pub fn kerf_cutting(busy: bool, program_has_clips: bool, proposal_timeline: bool) -> bool {
+    busy && !program_has_clips && proposal_timeline
+}
+
+/// How clear the working chip's dot is `phase` (0..1) of the way through
+/// a pulse (`WORK_PULSE`), as Qt drew it: full at either end, down to 35%
+/// half way.
+pub fn pulse_level(phase: f32) -> f32 {
+    let phase = if phase.is_finite() {
+        phase.clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    1.0 - 0.65 * (1.0 - (phase * 2.0 - 1.0).abs())
+}
+
+/// The transport's controls: Go to start, Previous frame, Play, Next
+/// frame, Go to end; each its command, name and icon.
+pub const TRANSPORT: [(&str, &str, Icon); 5] = [
+    ("playback.goToStart", "Go to start", Icon::StepBack),
+    (
+        "playback.previousFrame",
+        "Previous frame",
+        Icon::ChevronLeft,
+    ),
+    ("playback.toggle", "Play", Icon::Play),
+    ("playback.nextFrame", "Next frame", Icon::ChevronRight),
+    ("playback.goToEnd", "Go to end", Icon::StepForward),
+];
+
+/// What a transport control's tip says: its name while it can be pressed;
+/// greyed, its name and why not (Qt's tipWithReason).
+pub fn transport_tip(name: &str, reason: Option<&str>) -> String {
+    match reason.filter(|reason| !reason.is_empty()) {
+        Some(reason) => format!("{name} · {reason}"),
+        None => name.to_owned(),
+    }
 }
 
 impl StageView {
@@ -795,6 +1007,7 @@ impl StageView {
                         );
                         this.follow_chosen_point(&before, cx);
                         this.book = Rc::new(crate::chat::ProposalBook::read(&event.0["snapshot"]));
+                        this.follow_cut(cx);
                     }
                     // The last finished check's findings; one running keeps them.
                     Some("check") if event.0["status"] == "done" => {
@@ -809,12 +1022,26 @@ impl StageView {
                         if !running || this.stopped.as_deref() != Some(proposal) {
                             this.stopped = None;
                         }
+                        // The render of the cut Kerf builds has come: it is
+                        // the picture now, and the poster standing in goes
+                        // (until Kerf places another clip).
+                        let cut = this
+                            .session
+                            .read(cx)
+                            .first_cut()
+                            .map(|(proposal, _)| proposal.proposal_id.clone());
+                        if releases_cover(&event.0, cut.as_deref()) && this.cut_newest.is_some() {
+                            this.cut_newest = None;
+                            cx.notify();
+                        }
                     }
                     Some("clock") => {
                         if let Some(at) = event.0["position"].as_f64() {
                             this.hear_clock(at, cx);
                         }
                     }
+                    // The Before still of the segment watched.
+                    Some("effect_preview") => this.hear_compare(&event.0, cx),
                     _ => {}
                 }
             }),
@@ -869,7 +1096,7 @@ impl StageView {
             picture: Rc::new(Cell::new(None)),
             canvas: Rc::new(Cell::new(None)),
             zoom: 0.0,
-            zoom_menu: false,
+            zoom_menu: None,
             hue: None,
             last_hue: Hue::Kerf,
             edge: Tween::at(0.0),
@@ -894,6 +1121,19 @@ impl StageView {
             drag: None,
             held: None,
             cursor: None,
+            keys: (String::new(), HashMap::new()),
+            cut_seen: std::collections::HashSet::new(),
+            cut_newest: None,
+            transport_asked: None,
+            stand_in_poster: None,
+            stand_in_before: None,
+            compare_key: None,
+            compare: None,
+            reel_side: None,
+            wipe_armed: None,
+            wipe: None,
+            last_frame: None,
+            retired: Vec::new(),
             _subscriptions: subscriptions,
         }
     }
@@ -904,14 +1144,12 @@ impl StageView {
         let session = self.session.read(cx);
         let state = &session.state;
         if !state.makings.is_empty() {
-            let timeline = session.timeline();
             let makings: Vec<(String, String, u64)> = state
                 .makings
                 .iter()
                 .map(|(media, making)| {
-                    let name = timeline
-                        .source(media)
-                        .map(|source| chip::stem(source.file_name()).to_owned())
+                    // As the band names it: no content hash, a shot by its name.
+                    let name = Some(session.media_name(media))
                         .filter(|name| !name.is_empty())
                         .unwrap_or_else(|| media.clone());
                     (name, making.line.clone(), making.since.elapsed().as_secs())
@@ -919,18 +1157,166 @@ impl StageView {
                 .collect();
             return (Some(Hue::Computer), chip::makings(&makings));
         }
-        if let Some(rendering) = state.rendering() {
+        // A change reel's previews and a first cut's are the reel's and the
+        // cut card's to say (Qt's quietenCutPreview); an export still is.
+        let quiet = state.preview.rendering() && (session.reel().is_some() || session.cutting());
+        if let Some(rendering) = state.rendering().filter(|_| !quiet) {
             return (Some(Hue::Computer), Some(rendering));
         }
         if state.work.busy() {
-            let words = if state.agent_clips.is_empty() {
-                "Kerf is looking"
-            } else {
+            let cutting = kerf_cutting(
+                true,
+                session.timeline().has_clips(),
+                state.snapshot.proposal_timeline.is_some(),
+            );
+            let words = if cutting {
                 "Kerf is cutting"
+            } else {
+                "Kerf is looking"
             };
             return (Some(Hue::Kerf), Some(words.to_owned()));
         }
         (None, None)
+    }
+
+    /// Follows the change reel (`Session::reel`): watching the After side,
+    /// the program as it was at the segment's start is asked for, to
+    /// sweep over the picture (Before|After); a change of side wipes the
+    /// frame that was showing away once the next comes.
+    fn follow_reel(&mut self, cx: &mut Context<Self>) {
+        let session = self.session.read(cx);
+        let frame = session
+            .picture
+            .as_ref()
+            .map(|picture| picture.image.clone());
+        let Some(reel) = session.reel().cloned() else {
+            self.reel_side = None;
+            self.wipe_armed = None;
+            self.compare_key = None;
+            if let Some((still, _)) = self.compare.take() {
+                self.retired.push(still);
+            }
+            if frame.is_some() {
+                self.last_frame = frame;
+            }
+            return;
+        };
+        // What was last shown wipes away (the picture may have gone as
+        // the side changed: the last frame drawn, not none).
+        if self.reel_side.is_some_and(|side| side != reel.side) {
+            self.wipe_armed = self.last_frame.clone().or_else(|| frame.clone());
+        }
+        self.reel_side = Some(reel.side);
+        // A new frame after the side changed starts the wipe.
+        let new_frame = match (&frame, &self.last_frame) {
+            (Some(now), Some(was)) => !std::sync::Arc::ptr_eq(now, was),
+            (Some(_), None) => true,
+            _ => false,
+        };
+        if new_frame && !motion::reduced() {
+            if let Some(from) = self.wipe_armed.take() {
+                if let Some((old, _)) = self.wipe.replace((from, Instant::now())) {
+                    self.retired.push(old);
+                }
+            }
+        }
+        if frame.is_some() {
+            self.last_frame = frame;
+        }
+        if reel.side != crate::session::ReelSide::After {
+            self.compare_key = None;
+            if let Some((still, _)) = self.compare.take() {
+                self.retired.push(still);
+            }
+            return;
+        }
+        let key = format!("{}/{}", reel.proposal, reel.index);
+        if self.compare_key.as_deref() == Some(key.as_str()) {
+            return;
+        }
+        self.compare_key = Some(key.clone());
+        if let Some((still, _)) = self.compare.take() {
+            self.retired.push(still);
+        }
+        // The program's picture clip there; a part that is new has nothing
+        // to compare with.
+        let Some(segment) = reel.segments.get(reel.index) else {
+            return;
+        };
+        let at = segment.before.max(0.0) + COMPARE_IN;
+        let clip = session
+            .timeline()
+            .tracks
+            .iter()
+            .filter(|track| track.kind == model::TrackKind::Video)
+            .flat_map(|track| track.clips.iter())
+            .find(|clip| clip.timeline_start <= at && at < clip.end())
+            .map(|clip| clip.id.clone());
+        if let Some(clip) = clip {
+            self.session.update(cx, |session, _| {
+                session.send(json!({
+                    "type": "effect_previews",
+                    "clip": clip,
+                    "at": at,
+                    "effects": [{"fx": "color.basic", "key": format!("reel-before:{key}")}],
+                    "width": COMPARE_WIDE,
+                    "key": "reel",
+                }));
+            });
+        }
+    }
+
+    /// An `effect_preview` that is the Before still asked for: it sweeps
+    /// over the picture from now.
+    fn hear_compare(&mut self, event: &Value, cx: &mut Context<Self>) {
+        let Some(key) = self.compare_key.as_deref() else {
+            return;
+        };
+        if event["key"].as_str() != Some(format!("reel-before:{key}").as_str()) {
+            return;
+        }
+        let (Some(width), Some(height)) = (event["width"].as_u64(), event["height"].as_u64())
+        else {
+            return;
+        };
+        let Some(rgba) = event["rgba"].as_str().and_then(base64_decode) else {
+            return;
+        };
+        if let Some(still) = crate::session::render_image(&rgba, width as u32, height as u32) {
+            if let Some((old, _)) = self.compare.replace((still, Instant::now())) {
+                self.retired.push(old);
+            }
+            cx.notify();
+        }
+    }
+
+    /// As Kerf builds a cut on an empty program, the newest clip it placed:
+    /// the picture stands in as it until the render comes. The clips of a
+    /// proposal already there when it is first seen are not new.
+    fn follow_cut(&mut self, cx: &mut Context<Self>) {
+        let session = self.session.read(cx);
+        let state = &session.state;
+        let proposed = state
+            .snapshot
+            .proposal_timeline
+            .as_ref()
+            .filter(|_| !session.timeline().has_clips());
+        let Some(proposed) = proposed else {
+            self.cut_seen.clear();
+            self.cut_newest = None;
+            return;
+        };
+        let placed = placed_clips(&self.cut_seen, proposed);
+        let first_sight = self.cut_seen.is_empty();
+        for (clip, _) in &placed {
+            self.cut_seen.insert(clip.clone());
+        }
+        if state.work.busy() && !first_sight {
+            if let Some((_, source)) = placed.last() {
+                self.cut_newest = Some(source.clone());
+                cx.notify();
+            }
+        }
     }
 
     /// The chip's clock goes on once a second while a making runs, even
@@ -1220,7 +1606,7 @@ impl StageView {
     /// zoom's menu.
     pub fn set_zoom(&mut self, zoom: f32, cx: &mut Context<Self>) {
         self.zoom = zoom.max(0.0);
-        self.zoom_menu = false;
+        self.zoom_menu = None;
         cx.notify();
     }
 
@@ -1228,62 +1614,47 @@ impl StageView {
     /// closes it: View ▸ Viewer Zoom… (`viewer.zoom`, ⇧Z) calls it, and the
     /// transport's zoom. Open, the picture takes Esc to close it.
     pub fn toggle_zoom_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.zoom_menu = !self.zoom_menu;
-        if self.zoom_menu {
-            ensure_keys(cx);
-            window.focus(&self.focus_handle);
+        if self.zoom_menu.take().is_some() {
+            cx.notify();
+            return;
         }
+        let this = cx.entity().downgrade();
+        let items = ZOOMS
+            .map(|zoom| {
+                let this = this.clone();
+                let item = ui::MenuItem::new(zoom_words(zoom))
+                    .checked((zoom - self.zoom).abs() < f32::EPSILON)
+                    .on_choose(move |_, cx| {
+                        let _ = this.update(cx, |stage, cx| stage.set_zoom(zoom, cx));
+                    });
+                if zoom <= 0.0 {
+                    item.key(crate::commands::shown_keys("Shift+Z"))
+                } else {
+                    item
+                }
+            })
+            .to_vec();
+        // Its first row is lit at once, so the arrows and Return work from
+        // the keys (⇧Z) as from the pointer.
+        let menu = cx.new(|cx| ui::Menu::new(items, window, cx).width(168.0).from_keys());
+        let dismissed = cx.subscribe(&menu, |this, _, _: &DismissEvent, cx| {
+            this.zoom_menu = None;
+            cx.notify();
+        });
+        self.zoom_menu = Some((menu, dismissed));
         cx.notify();
     }
 
-    /// The zoom's menu: each zoom, the one in use checked; Fit says its key.
-    fn zoom_menu(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let rows = ZOOMS.map(|zoom| {
-            let chosen = (zoom - self.zoom).abs() < f32::EPSILON;
-            crate::sidebar::menu_item(
-                ElementId::Name(format!("viewer-zoom-{}", zoom_words(zoom)).into()),
-                zoom_words(zoom),
-                chosen.then_some(Icon::Check),
-                false,
-                false,
-            )
-            .when(zoom <= 0.0, |row| {
-                row.child(div().flex_1()).child(ui::label(
-                    crate::commands::shown_keys("Shift+Z"),
-                    text::META,
-                    theme::ink3(),
-                ))
-            })
-            .on_click(cx.listener(move |this, _, _, cx| this.set_zoom(zoom, cx)))
-        });
-        div()
-            .absolute()
-            .bottom(px(layout::TRANSPORT - 4.0))
-            .left(px(0.0))
-            .child(
-                crate::sidebar::menu_panel()
-                    .id("viewer-zoom-menu")
-                    .w(px(168.0))
-                    .on_mouse_down_out(cx.listener(|this, event: &MouseDownEvent, _, cx| {
-                        // A press on the picture closes it there, and does
-                        // nothing else (it would play).
-                        if this
-                            .area
-                            .get()
-                            .is_some_and(|area| area.contains(&event.position))
-                        {
-                            return;
-                        }
-                        this.zoom_menu = false;
-                        cx.notify();
-                    }))
-                    .children(rows)
-                    .with_animation(
-                        "viewer-zoom-menu",
-                        motion::animation(scene::FADE),
-                        |menu, delta| menu.opacity(delta),
-                    ),
-            )
+    /// The zoom's menu, over the transport's zoom.
+    fn zoom_menu(&self) -> Option<impl IntoElement> {
+        let (menu, _) = self.zoom_menu.as_ref()?;
+        Some(
+            div()
+                .absolute()
+                .bottom(px(layout::TRANSPORT - 4.0))
+                .left(px(0.0))
+                .child(menu.clone()),
+        )
     }
 
     /// Esc: lets go of what is being drawn, else puts the tool down; with
@@ -1312,9 +1683,9 @@ impl StageView {
         let (Some(picture), Some(canvas)) = (self.picture.get(), self.canvas.get()) else {
             return;
         };
-        if self.zoom_menu {
-            // A press outside the zoom menu closes it, and does nothing else.
-            self.zoom_menu = false;
+        if self.zoom_menu.take().is_some() {
+            // A press on the picture closes the zoom's menu (as a press
+            // outside it), and does nothing else: it would play.
             cx.notify();
             return;
         }
@@ -1504,6 +1875,46 @@ impl StageView {
             return;
         }
         let time = share * length;
+        self.skim = Some(time);
+        self.kept
+            .get_or_insert_with(|| Kept::new(position))
+            .show(time);
+        cx.default_global::<Skims>()
+            .0
+            .insert(self.session.entity_id(), time);
+        self.session.update(cx, |session, _| {
+            session.send(json!({"type": "seek", "position": time, "scrub": true}));
+        });
+        cx.notify();
+    }
+
+    /// The timeline's skim (`TimelineEvent::Skim`, which the window passes
+    /// on): the picture shows the program at `time` without moving the
+    /// playhead, as skimming the picture itself does; None shows the
+    /// playhead's frame again.
+    pub fn skim_at(&mut self, time: Option<f64>, cx: &mut Context<Self>) {
+        self.follow_playhead(cx);
+        let Some(time) = time else {
+            self.end_skim(cx);
+            return;
+        };
+        let (playing, length, held, position) = {
+            let state = &self.session.read(cx).state;
+            (
+                state.playing,
+                state.program_length(),
+                state.preview.status == "required",
+                state.position,
+            )
+        };
+        if playing || length <= 0.0 || held || !time.is_finite() {
+            self.end_skim(cx);
+            return;
+        }
+        let time = time.clamp(0.0, length);
+        if self.skim.is_some_and(|known| (known - time).abs() < 1e-6) {
+            return;
+        }
         self.skim = Some(time);
         self.kept
             .get_or_insert_with(|| Kept::new(position))
@@ -1950,6 +2361,10 @@ impl StageView {
         if state.work.busy() && state.snapshot.proposal_timeline.is_some() {
             return None;
         }
+        // A change reel renders what it plays: its strip says so.
+        if session.reel().is_some() || session.cutting() {
+            return None;
+        }
         let proposal = self.book.find(&state.snapshot.proposals, &proposal_id);
         let version = proposal.map_or(0, |proposal| {
             self.book
@@ -1973,8 +2388,45 @@ impl StageView {
         Some((hud::title(version), detail, preview.progress.unwrap_or(0.0)))
     }
 
-    fn transport(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn transport(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        // The transport's keys, read again when the keymap has changed.
+        let keymap = self.session.read(cx).prefs.keymap.wire();
+        if self.keys.0 != keymap {
+            let keys = crate::commands::catalog(keymap)
+                .into_iter()
+                .filter(|command| TRANSPORT.iter().any(|(id, _, _)| *id == command.id))
+                .filter_map(|command| {
+                    let key = command
+                        .keys
+                        .first()
+                        .map(|key| crate::commands::shown_keys(key))?;
+                    Some((command.id, key))
+                })
+                .collect();
+            self.keys = (keymap.to_owned(), keys);
+        }
+        let keys = self.keys.1.clone();
         let session = self.session.read(cx);
+        // Why each cannot run now (no kerfd; a preview to render first):
+        // asked of the registry again only when what it is asked about
+        // changes, not on every frame played.
+        let mut context = session.command_context();
+        if let Some(context) = context.as_object_mut() {
+            context.remove("playheadFrame");
+        }
+        if self
+            .transport_asked
+            .as_ref()
+            .is_none_or(|(asked, _)| *asked != context)
+        {
+            let reasons = transport_reasons(&context);
+            self.transport_asked = Some((context, reasons));
+        }
+        let reasons = self
+            .transport_asked
+            .as_ref()
+            .map(|(_, reasons)| reasons.clone())
+            .unwrap_or_default();
         let fps = session.timeline().rate();
         let position = model::timecode(session.state.position, fps);
         let length = model::timecode(session.state.program_length(), fps);
@@ -2025,35 +2477,37 @@ impl StageView {
             .items_center()
             .gap(px(4.0))
             .px(px(12.0))
-            .child(
-                icon_button("previous-frame", Icon::StepBack)
-                    .tooltip("Previous frame")
-                    .on_click(cx.listener(|_, _, window, cx| {
-                        window.dispatch_action(
-                            Box::new(crate::commands::RunCommand::new("playback.previousFrame")),
-                            cx,
-                        );
-                    })),
-            )
-            .child(
-                icon_button("play", if playing { Icon::Pause } else { Icon::Play })
-                    .tooltip(if playing { "Pause" } else { "Play" })
-                    .color(theme::ink())
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.session
-                            .update(cx, |session, _| session.toggle_playback())
-                    })),
-            )
-            .child(
-                icon_button("next-frame", Icon::StepForward)
-                    .tooltip("Next frame")
-                    .on_click(cx.listener(|_, _, window, cx| {
-                        window.dispatch_action(
-                            Box::new(crate::commands::RunCommand::new("playback.nextFrame")),
-                            cx,
-                        );
-                    })),
-            )
+            // Go to start, Previous frame, Play, Next frame, Go to end: each
+            // its command, its key in its tip, greyed with why while it
+            // cannot run.
+            .children(TRANSPORT.map(|(id, name, icon)| {
+                let play = id == "playback.toggle";
+                let (name, icon) = match (play, playing) {
+                    (true, true) => ("Pause", Icon::Pause),
+                    _ => (name, icon),
+                };
+                let reason = reasons.get(id).cloned();
+                let mut button =
+                    icon_button(ElementId::Name(format!("transport-{id}").into()), icon)
+                        .tooltip(name)
+                        .disabled(reason.is_some())
+                        .on_click(move |_, window, cx| {
+                            window.dispatch_action(
+                                Box::new(crate::commands::RunCommand { id: id.into() }),
+                                cx,
+                            );
+                        });
+                if play {
+                    button = button.color(theme::ink());
+                }
+                if let Some(key) = keys.get(id) {
+                    button = button.key(key.clone());
+                }
+                if let Some(reason) = reason {
+                    button = button.reason(transport_tip(name, Some(&reason)));
+                }
+                button
+            }))
             .child(
                 div()
                     .flex()
@@ -2102,17 +2556,22 @@ impl StageView {
                         .px(px(7.0))
                         .rounded(px(theme::radius::CONTROL))
                         .cursor_pointer()
-                        .text_color(if self.zoom_menu || self.zoom > 0.0 {
+                        .text_color(if self.zoom_menu.is_some() || self.zoom > 0.0 {
                             theme::ink()
                         } else {
                             theme::ink3()
                         })
-                        .when(self.zoom_menu, |button| button.bg(theme::on()))
+                        .when(self.zoom_menu.is_some(), |button| button.bg(theme::on()))
                         .hover(|style| style.bg(theme::raised()).text_color(theme::ink()))
-                        .tooltip(|_, cx| cx.new(|_| ui::Tooltip("Viewer zoom".into())).into())
+                        // Its menu says all the tip would: none while it is open.
+                        .when(self.zoom_menu.is_none(), |button| {
+                            button.tooltip(|_, cx| {
+                                cx.new(|_| ui::Tooltip("Viewer zoom".into())).into()
+                            })
+                        })
                         .child(zoom_words(self.zoom)),
                     )
-                    .when(self.zoom_menu, |anchor| anchor.child(self.zoom_menu(cx))),
+                    .children(self.zoom_menu()),
             )
             .child(ui::hairline(false).h(px(16.0)).mx(px(6.0)))
             .children(MaskTool::ALL.map(|tool| {
@@ -2149,6 +2608,41 @@ impl Render for StageView {
         ensure_keys(cx);
         let session = self.session.clone();
         self.follow_selection(&session, cx);
+        self.follow_reel(cx);
+        for image in std::mem::take(&mut self.retired) {
+            cx.drop_image(image, Some(window));
+        }
+        // The Before still sweeping, and the wipe of a side changed.
+        let still_motion = motion::reduced();
+        let compare = self.compare.as_ref().map(|(still, since)| {
+            if !still_motion {
+                window.request_animation_frame();
+            }
+            (still.clone(), compare_at(since.elapsed(), still_motion))
+        });
+        let comparing = compare.is_some();
+        let wipe = match &self.wipe {
+            Some((from, since)) if *since + scene::STAGE > Instant::now() => {
+                window.request_animation_frame();
+                let t = since.elapsed().as_secs_f32() / scene::STAGE.as_secs_f32();
+                Some((from.clone(), motion::ease(t.clamp(0.0, 1.0))))
+            }
+            Some(_) => {
+                if let Some((from, _)) = self.wipe.take() {
+                    let showing = self
+                        .session
+                        .read(cx)
+                        .picture
+                        .as_ref()
+                        .is_some_and(|picture| std::sync::Arc::ptr_eq(&picture.image, &from));
+                    if !showing {
+                        cx.drop_image(from, Some(window));
+                    }
+                }
+                None
+            }
+            None => None,
+        };
         let (hue, chip) = self.activity(cx);
         // The chip keeps what it said while it fades out.
         if chip.is_some() {
@@ -2196,7 +2690,65 @@ impl Render for StageView {
         };
         let safe_zones = session.prefs.safe_zones;
         let caption = session.state.caption.clone();
-        let stand_in: Option<SharedString> = if picture.is_some() {
+        // Never a blank while a picture is coming: as Kerf builds a cut the
+        // newest clip it placed stands in for it; with no frame yet, the
+        // poster of the clip at the playhead; else words.
+        let cutting = kerf_cutting(
+            session.state.work.busy(),
+            timeline.has_clips(),
+            session.state.snapshot.proposal_timeline.is_some(),
+        );
+        let poster_media = if cutting {
+            self.cut_newest.clone()
+        } else if picture.is_none() {
+            let shown = if timeline.has_clips() {
+                Some(timeline)
+            } else {
+                session.state.snapshot.proposal_timeline.as_ref()
+            };
+            shown.and_then(|shown| poster_source(shown, session.state.position))
+        } else {
+            None
+        };
+        let poster_media = poster_media.filter(|media| session.artwork.poster(media).is_some());
+        if poster_media.as_deref()
+            != self
+                .stand_in_poster
+                .as_ref()
+                .map(|(media, _)| media.as_str())
+        {
+            self.stand_in_before = self.stand_in_poster.take().map(|(media, _)| media);
+            self.stand_in_poster = poster_media.clone().map(|media| (media, Instant::now()));
+        }
+        // The newest crossfades in over the one before, over APPEAR.
+        let poster_in = self.stand_in_poster.as_ref().map_or(1.0, |(_, since)| {
+            if motion::reduced() {
+                return 1.0;
+            }
+            let t = (since.elapsed().as_secs_f32() / scene::APPEAR.as_secs_f32()).min(1.0);
+            if t < 1.0 {
+                window.request_animation_frame();
+            }
+            motion::ease(t)
+        });
+        let posters: Vec<(std::sync::Arc<gpui::RenderImage>, f32)> = [
+            (poster_in < 1.0)
+                .then_some(self.stand_in_before.as_deref())
+                .flatten()
+                .and_then(|media| session.artwork.poster(media))
+                .map(|image| (image, 1.0)),
+            self.stand_in_poster
+                .as_ref()
+                .and_then(|(media, _)| session.artwork.poster(media))
+                .map(|image| (image, poster_in)),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        // The frame shows under the first poster as it fades in; once one
+        // covers it whole it is not drawn.
+        let covering = posters.iter().any(|(_, level)| *level >= 1.0);
+        let stand_in: Option<SharedString> = if picture.is_some() || !posters.is_empty() {
             None
         } else if !session.state.has_snapshot {
             Some("Connecting to kerfd…".into())
@@ -2237,9 +2789,6 @@ impl Render for StageView {
         }
         if self.pen.len() >= 2 {
             context.add(PEN_OPEN);
-        }
-        if self.zoom_menu {
-            context.add(ZOOM_MENU);
         }
 
         // Overlays sit on the picture as it was placed last frame.
@@ -2295,7 +2844,9 @@ impl Render for StageView {
                     theme::line(),
                     BorderStyle::Solid,
                 ));
-                if let Some((image, width, height)) = frame {
+                // A poster standing in: under the cut Kerf builds it covers
+                // the frame; with none, it is the picture until one comes.
+                if let (Some((image, width, height)), false) = (frame.clone(), covering) {
                     // Whole, at its own shape; zoomed, cut to the picture.
                     if zoom > 0.0 {
                         window.with_content_mask(
@@ -2313,13 +2864,50 @@ impl Render for StageView {
                             },
                         );
                     } else {
+                        let card = contain(placement.picture, width, height);
                         let _ = window.paint_image(
-                            contain(placement.picture, width, height),
+                            card,
                             Corners::all(placement.picture_radius),
                             image,
                             0,
                             false,
                         );
+                        // What was showing as the side changed, wiping away
+                        // to the right as what shows now comes in.
+                        if let Some((from, t)) = &wipe {
+                            let edge = card.left() + card.size.width * *t;
+                            let kept =
+                                Bounds::from_corners(point(edge, card.top()), card.bottom_right());
+                            window.with_content_mask(
+                                Some(ContentMask { bounds: kept }),
+                                |window| {
+                                    let _ = window.paint_image(
+                                        card,
+                                        Corners::all(placement.picture_radius),
+                                        from.clone(),
+                                        0,
+                                        false,
+                                    );
+                                },
+                            );
+                            window.paint_quad(fill(
+                                Bounds::new(
+                                    point(edge - px(1.0), card.top()),
+                                    size(px(2.0), card.size.height),
+                                ),
+                                over_picture::line(),
+                            ));
+                        }
+                        // What it was, left of the moving line; what it is, right of it.
+                        if let Some((still, at)) = &compare {
+                            paint_compare(
+                                window,
+                                card,
+                                placement.picture_radius,
+                                still.clone(),
+                                *at,
+                            );
+                        }
                     }
                 }
                 if placement.phone {
@@ -2389,6 +2977,15 @@ impl Render for StageView {
                 .filter(|_| edge > 0.001 && !card_says)
             {
                 let color = self.last_hue.color();
+                // Its dot pulses once each WORK_PULSE; held still under
+                // Reduce Motion. The light round the picture asks for the
+                // frames meanwhile.
+                let dot = if motion::reduced() {
+                    1.0
+                } else {
+                    window.request_animation_frame();
+                    pulse_level(motion::phase(self.edge_since, scene::WORK_PULSE))
+                };
                 overlays = overlays.child(
                     div()
                         .absolute()
@@ -2404,10 +3001,89 @@ impl Render for StageView {
                                 .rounded(px(12.0))
                                 .bg(theme::activity::chip())
                                 .text_color(theme::ink())
-                                .child(ui::dot(color, 6.0))
+                                .child(ui::dot(color, 6.0).opacity(dot))
                                 .child(chip),
                         )
                         .opacity(edge.max(0.0)),
+                );
+            }
+            // Before and After, at the picture's foot, while the still sweeps.
+            if comparing && framed {
+                let tag = |words: &'static str, ground: Rgba| {
+                    theme::type_style(div(), text::META)
+                        .h(px(22.0))
+                        .px(px(8.0))
+                        .flex()
+                        .items_center()
+                        .rounded(px(6.0))
+                        .bg(ground)
+                        .text_color(over_picture::tag_ink())
+                        .child(words)
+                };
+                let foot = top + picture.size.height - px(COMPARE_TAG_IN + 22.0);
+                overlays = overlays
+                    .child(
+                        div()
+                            .absolute()
+                            .left(left + px(COMPARE_TAG_IN))
+                            .top(foot)
+                            .child(tag("Before", over_picture::tag())),
+                    )
+                    .child(
+                        div()
+                            .absolute()
+                            .right(px(f32::from(
+                                self.area.get().map_or(Pixels::ZERO, |area| area.size.width)
+                                    - (left + picture.size.width),
+                            ) + COMPARE_TAG_IN))
+                            .top(foot)
+                            .child(tag("After", theme::accent())),
+                    );
+            }
+            // The change reel's strip over the picture's top, at its corner.
+            if let Some(strip) = crate::chat::reel_strip(&self.session, cx) {
+                let room = self
+                    .area
+                    .get()
+                    .map_or(0.0, |area| f32::from(area.size.width));
+                let wide = REEL_STRIP_MOST.min(room - 2.0 * REEL_STRIP_IN).max(0.0);
+                let shown = f32::from(picture.size.width);
+                let at = if shown >= wide + 2.0 * REEL_STRIP_IN {
+                    f32::from(left) + REEL_STRIP_IN
+                } else {
+                    f32::from(left) + shown / 2.0 - wide / 2.0
+                };
+                let at = at.clamp(
+                    REEL_STRIP_IN,
+                    (room - REEL_STRIP_IN - wide).max(REEL_STRIP_IN),
+                );
+                overlays = overlays.child(
+                    div()
+                        .absolute()
+                        .left(px(at))
+                        .top(top + px(REEL_STRIP_IN))
+                        .w(px(wide))
+                        .child(strip),
+                );
+            }
+            // The posters standing in, the newest fading in over the last.
+            for (index, (poster, level)) in posters.iter().enumerate() {
+                overlays = overlays.child(
+                    div()
+                        .absolute()
+                        .left(left)
+                        .top(top)
+                        .w(picture.size.width)
+                        .h(picture.size.height)
+                        .rounded(px(theme::radius::CARD))
+                        .overflow_hidden()
+                        .opacity(*level)
+                        .child(
+                            gpui::img(poster.clone())
+                                .id(("stand-in", index))
+                                .size_full()
+                                .object_fit(gpui::ObjectFit::Cover),
+                        ),
                 );
             }
             if let Some(stand_in) = stand_in {
@@ -2657,10 +3333,6 @@ impl Render for StageView {
                     .on_action(cx.listener(Self::remove_chosen))
                     .on_action(cx.listener(Self::cancel_drawing))
                     .on_action(cx.listener(Self::finish_pen_open))
-                    .on_action(cx.listener(|this, _: &CloseZoomMenu, _, cx| {
-                        this.zoom_menu = false;
-                        cx.notify();
-                    }))
                     .on_action(cx.listener(|this, _: &RectangleMask, window, cx| {
                         this.toggle_tool(MaskTool::Rectangle, window, cx);
                     }))
@@ -2687,6 +3359,50 @@ impl Render for StageView {
             )
             .child(self.transport(cx))
     }
+}
+
+/// The change reel's Before still over the picture `card`, left of the
+/// line `at` of its width, with a soft glow either side of the line and
+/// the line itself in white.
+fn paint_compare(
+    window: &mut Window,
+    card: Bounds<Pixels>,
+    radius: Pixels,
+    still: std::sync::Arc<gpui::RenderImage>,
+    at: f32,
+) {
+    let edge = card.left() + card.size.width * at;
+    let before = Bounds::from_corners(card.origin, point(edge, card.bottom()));
+    let placed = crate::artwork::fitted(card, crate::artwork::image_size(&still), false);
+    window.with_content_mask(Some(ContentMask { bounds: before }), |window| {
+        let _ = window.paint_image(placed, Corners::all(radius), still, 0, false);
+    });
+    let glow = px(COMPARE_GLOW);
+    let clear = theme::with_alpha(over_picture::line(), 0.0);
+    let lit = theme::with_alpha(over_picture::line(), 0.32);
+    window.paint_quad(fill(
+        Bounds::new(point(edge - glow, card.top()), size(glow, card.size.height)),
+        gpui::linear_gradient(
+            90.0,
+            gpui::linear_color_stop(clear, 0.0),
+            gpui::linear_color_stop(lit, 1.0),
+        ),
+    ));
+    window.paint_quad(fill(
+        Bounds::new(point(edge, card.top()), size(glow, card.size.height)),
+        gpui::linear_gradient(
+            90.0,
+            gpui::linear_color_stop(lit, 0.0),
+            gpui::linear_color_stop(clear, 1.0),
+        ),
+    ));
+    window.paint_quad(fill(
+        Bounds::new(
+            point(edge - px(1.0), card.top()),
+            size(px(2.0), card.size.height),
+        ),
+        over_picture::line(),
+    ));
 }
 
 /// While a drag holds the pointer, it follows it anywhere in the window and
@@ -2858,8 +3574,9 @@ fn top_left(line: &[Point<Pixels>]) -> Option<Point<Pixels>> {
 }
 
 /// An outline over the picture: a dark rule, then a white line on it, which
-/// reads on any picture; dashed for a path only.
-fn stroke_over(
+/// reads on any picture; dashed for a path only. Focus Region's box is
+/// drawn with it too (`focus::FocusRegion`).
+pub fn stroke_over(
     window: &mut Window,
     line: &[Point<Pixels>],
     closed: bool,

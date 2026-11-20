@@ -796,35 +796,45 @@ impl LauncherView {
 
     /// Settings over the dimmed launcher, rising into its middle as it
     /// does over a project's window.
-    fn settings_over(&self) -> Option<gpui::AnyElement> {
+    /// Settings over the launcher, placed as the workspace places it
+    /// ([`ui::modal_bounds`]): at most its size, else the window less a margin.
+    fn settings_over(&self, window: &Window) -> Option<gpui::AnyElement> {
         let (settings, opened) = self.settings.as_ref()?;
+        let (width, height) = crate::settings::MOST;
+        let placed = ui::modal_bounds(gpui::size(px(width), px(height)), window.viewport_size());
         Some(
             div()
                 .id("launcher-scrim")
                 .absolute()
                 .inset_0()
-                .flex()
-                .items_center()
-                .justify_center()
                 .bg(theme::with_alpha(gpui::rgb(0x000000), theme::motion::SCRIM))
                 .occlude()
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .child(
                     div()
-                        .relative()
-                        .rounded(px(radius::PANEL))
-                        .overflow_hidden()
-                        .border_1()
-                        .border_color(theme::line2())
-                        .shadow_2xl()
-                        .child(settings.clone())
-                        .with_animation(
-                            ("launcher-settings-rise", *opened),
-                            motion::animation(theme::motion::PAGE),
-                            |body, t| {
-                                body.top(px(theme::motion::PAGE_RISE * (1.0 - t)))
-                                    .opacity(0.2 + 0.8 * t)
-                            },
+                        .absolute()
+                        .left(placed.origin.x)
+                        .top(placed.origin.y)
+                        .w(placed.size.width)
+                        .h(placed.size.height)
+                        .child(
+                            div()
+                                .relative()
+                                .size_full()
+                                .rounded(px(radius::PANEL))
+                                .overflow_hidden()
+                                .border_1()
+                                .border_color(theme::line2())
+                                .shadow_2xl()
+                                .child(settings.clone())
+                                .with_animation(
+                                    ("launcher-settings-rise", *opened),
+                                    motion::animation(theme::motion::PAGE),
+                                    |body, t| {
+                                        body.top(px(theme::motion::PAGE_RISE * (1.0 - t)))
+                                            .opacity(0.2 + 0.8 * t)
+                                    },
+                                ),
                         ),
                 )
                 .into_any_element(),
@@ -2615,7 +2625,7 @@ impl Render for LauncherView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.arrange(cx);
         let mode = self.mode;
-        let settings = self.settings_over();
+        let settings = self.settings_over(window);
         let form = mode.map(|mode| self.form(mode, window, cx));
         let column = div()
             .id("launcher")

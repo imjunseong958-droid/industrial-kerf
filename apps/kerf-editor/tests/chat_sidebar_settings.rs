@@ -15,7 +15,7 @@ use kerf_editor::input::{self, Submit, SubmitCode};
 use kerf_editor::model::Timeline;
 use kerf_editor::prefs::Provider;
 use kerf_editor::sidebar::{
-    self, account_entries, account_line, folder_entries, forget_folder, is_second_press, menu_step,
+    self, account_line, app_rows, folder_entries, forget_folder, is_second_press, menu_step,
     other_folder_entries, recent_folders, reveal_words, row_entries, DeleteRow, Entry, MenuChoose,
     MenuDown, MenuEntry, MenuUp, OpenMenu, RenameRow,
 };
@@ -278,28 +278,44 @@ fn the_account_says_who_chat_runs_on() {
 
 #[test]
 fn the_app_menu_offers_sign_out_only_while_signed_in() {
-    let words = |entries: Vec<MenuEntry>| -> Vec<String> {
-        entries.into_iter().map(|entry| entry.words).collect()
+    let commands = catalog("kerf");
+    let states = json!({});
+    let checked = Default::default();
+    let rows = |signed_in: bool| {
+        app_rows(&sidebar::AppMenuInput {
+            signed_in,
+            keymap: kerf_editor::prefs::Keymap::Kerf,
+            commands: &commands,
+            menus: &[],
+            states: &states,
+            checked: &checked,
+            zoom: 0.0,
+            collab: None,
+            revision: 3,
+            menu_bar: true,
+            recent: &[],
+            current: None,
+        })
+    };
+    let words = |rows: Vec<sidebar::AppRow>| -> Vec<String> {
+        rows.into_iter().map(|row| row.words).collect()
     };
     assert_eq!(
-        words(account_entries(false)),
+        words(rows(false)),
         [
             "Settings…",
             "Account…",
             "User Guide",
-            "Crash Reports",
-            "About",
-            "Quit"
+            "Media",
+            "Import…",
+            "View"
         ]
     );
-    let signed_in = account_entries(true);
-    let sign_out = signed_in
-        .iter()
-        .position(|entry| entry.entry == Entry::SignOut)
-        .unwrap();
-    assert_eq!(signed_in[sign_out].words, "Sign Out");
-    assert!(signed_in[sign_out].separated);
-    assert_eq!(signed_in[sign_out + 1].entry, Entry::Command("app.quit"));
+    let signed_in = rows(true);
+    let sign_out = signed_in.last().unwrap();
+    assert_eq!(sign_out.words, "Sign Out");
+    assert_eq!(sign_out.does, sidebar::AppDoes::SignOut);
+    assert!(sign_out.separated);
 }
 
 // ------------------------------------------------------------ the sidebar's menus

@@ -4,8 +4,8 @@
 //! newer kerfd never breaks the window.
 
 use serde::Deserialize;
-use serde_json::Value;
-use std::collections::HashMap;
+use serde_json::{json, Value};
+use std::collections::{BTreeMap, HashMap};
 
 /// The timeline view of a snapshot (kerf-runtime's `timeline_json`).
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -196,6 +196,14 @@ impl Track {
             .filter(|name| !name.is_empty())
             .unwrap_or(&self.id)
     }
+
+    /// A track of room tone: its role holds "room", or its name says
+    /// "room tone". Its waveforms are drawn darker (Qt's `isRoomTone`).
+    pub fn is_room_tone(&self) -> bool {
+        let role = self.role.as_deref().unwrap_or_default().to_lowercase();
+        let name = self.name.as_deref().unwrap_or_default().to_lowercase();
+        role.contains("room") || name.contains("room tone")
+    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -224,6 +232,9 @@ pub struct Clip {
     pub effects: Vec<Value>,
     /// Its properties as the snapshot carries them (`gain` in dB, `opacity`…).
     pub props: Value,
+    /// A signal generator's number over the clip, 0..1, as kerfd samples
+    /// it (at most a few hundred values, spread evenly across the clip).
+    pub signal: Vec<f64>,
     /// Its media's readable name, for a clip of media with a file: what it
     /// goes by when it has no name of its own ([`Timeline::name_clips`]).
     #[serde(skip)]
@@ -258,6 +269,93 @@ impl Clip {
         self.props["gain"].as_f64().unwrap_or(0.0)
     }
 
+    /// Its gain as keys, in time order, and whether they are keys: a
+    /// keyed gain's own (`props.gain` an array of `{at, frame, value,
+    /// interp}`, `at` in seconds from the clip's start, `frame` counted
+    /// from its first frame), else one key at its start holding its level.
+    pub fn gain_keys(&self, fps: f64) -> (Vec<GainKey>, bool) {
+        let fps = if fps.is_finite() && fps > 0.0 {
+            fps
+        } else {
+            30.0
+        };
+        let gain = &self.props["gain"];
+        let mut keys: Vec<GainKey> = gain
+            .as_array()
+            .map(|keys| {
+                keys.iter()
+                    .filter(|key| key.is_object())
+                    .map(|key| {
+                        let frame = key["frame"].as_f64().map(|frame| frame.round() as i64);
+                        let at = key["at"]
+                            .as_f64()
+                            .unwrap_or_else(|| frame.unwrap_or(0) as f64 / fps);
+                        GainKey {
+                            at,
+                            frame: frame.unwrap_or_else(|| (at * fps).round() as i64),
+                            value: key["value"].as_f64().unwrap_or(0.0),
+                            interp: key["interp"].as_str().unwrap_or("linear").to_owned(),
+                        }
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        keys.sort_by_key(|key| key.frame);
+        if keys.is_empty() {
+            return (
+                vec![GainKey {
+                    at: 0.0,
+                    frame: 0,
+                    value: gain.as_f64().unwrap_or(0.0),
+                    interp: "linear".into(),
+                }],
+                false,
+            );
+        }
+        (keys, true)
+    }
+
+    /// What its name bar says after its name (Qt's `clipSecondary`): for
+    /// a generated picture, its text when that is not its name, its blend
+    /// when not normal and its opacity under 100%; for any other clip its
+    /// speed when not 100%.
+    pub fn secondary(&self) -> String {
+        if self.kind == "generator" {
+            let mut parts = Vec::new();
+            let text = self.props["text"]
+                .as_str()
+                .unwrap_or_default()
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ");
+            let name = self
+                .label()
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ");
+            if !text.is_empty() && text != name {
+                parts.push(text);
+            }
+            if let Some(blend) = self.props["blend"]
+                .as_str()
+                .filter(|blend| !blend.is_empty() && *blend != "normal")
+            {
+                let mut letters = blend.chars();
+                let first = letters.next().map(|c| c.to_uppercase().collect::<String>());
+                parts.push(format!("{}{}", first.unwrap_or_default(), letters.as_str()));
+            }
+            if let Some(opacity) = self.props["opacity"].as_f64().filter(|o| *o < 0.9995) {
+                parts.push(format!("{}%", (opacity * 100.0).round() as i64));
+            }
+            return parts.join(" · ");
+        }
+        let speed = self.speed.unwrap_or(1.0);
+        if (speed - 1.0).abs() > 0.0005 && speed.is_finite() {
+            return format!("{}%", (speed.abs() * 100.0).round() as i64);
+        }
+        String::new()
+    }
+
     /// The second of its source shown `offset` seconds into the clip: from
     /// its in point towards its out (which allow for its speed), or back
     /// from its out point when it plays in reverse. None for a clip with no
@@ -279,6 +377,16 @@ impl Clip {
             source_in + offset * rate
         })
     }
+}
+
+/// One key of a clip's gain: when (seconds and frames from its start),
+/// the level in dB, and how it eases to the next.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GainKey {
+    pub at: f64,
+    pub frame: i64,
+    pub value: f64,
+    pub interp: String,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -393,6 +501,17 @@ pub struct Proposal {
     pub version: u32,
     pub staged: Option<String>,
     pub author: Value,
+    /// Every version of it, oldest first, the current one among them.
+    pub versions: Vec<ProposalVersion>,
+}
+
+/// One version of a proposal, as its versions menu lists it.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ProposalVersion {
+    pub version: u32,
+    pub proposal_id: String,
+    pub base_revision: u64,
 }
 
 impl Proposal {
@@ -464,6 +583,9 @@ pub struct Snapshot {
     pub proposals: Vec<Proposal>,
     /// The proposal's timeline, when one is pending and the bridge drew it.
     pub proposal_timeline: Option<Timeline>,
+    /// Every open proposal's timeline by its id, and its earlier versions'
+    /// made on this revision (`proposalTimelines`).
+    pub proposal_timelines: HashMap<String, Timeline>,
     pub import_warnings: Vec<String>,
     /// `current`, or `diverged` when project.kerf changed on disk since the
     /// editor last wrote it: kerfd then refuses edits until one is chosen.
@@ -486,6 +608,16 @@ impl Snapshot {
             .map(|key| &value[*key])
             .find(|timeline| timeline.is_object())
             .map(Timeline::from_value);
+        let proposal_timelines = value["proposalTimelines"]
+            .as_object()
+            .map(|timelines| {
+                timelines
+                    .iter()
+                    .filter(|(_, timeline)| timeline.is_object())
+                    .map(|(id, timeline)| (id.clone(), Timeline::from_value(timeline)))
+                    .collect()
+            })
+            .unwrap_or_default();
         Self {
             document: value["document"].as_str().unwrap_or_default().to_owned(),
             timeline: Timeline::from_value(&value["timeline"]),
@@ -495,6 +627,7 @@ impl Snapshot {
             duration: value["duration"].as_f64().unwrap_or(0.0),
             proposals,
             proposal_timeline,
+            proposal_timelines,
             projection_status: value["projectionStatus"]
                 .as_str()
                 .unwrap_or("current")
@@ -515,6 +648,28 @@ impl Snapshot {
     /// The newest open proposal.
     pub fn pending(&self) -> Option<&Proposal> {
         self.proposals.iter().find(|proposal| proposal.is_pending())
+    }
+
+    /// The timeline `proposal` would leave, as the timeline shows it: the
+    /// version `shown` names when it is one of its versions and kerfd drew
+    /// it (the pinned card's shown version), else its own; the pending
+    /// proposal's `proposalTimeline` when nothing else has one.
+    pub fn timeline_of(&self, proposal: &Proposal, shown: Option<&str>) -> Option<&Timeline> {
+        let version = shown.filter(|shown| {
+            proposal.proposal_id == *shown
+                || proposal
+                    .versions
+                    .iter()
+                    .any(|version| version.proposal_id == *shown)
+        });
+        version
+            .and_then(|id| self.proposal_timelines.get(id))
+            .or_else(|| self.proposal_timelines.get(&proposal.proposal_id))
+            .or_else(|| {
+                self.pending()
+                    .filter(|pending| pending.proposal_id == proposal.proposal_id)
+                    .and(self.proposal_timeline.as_ref())
+            })
     }
 }
 
@@ -689,6 +844,327 @@ pub fn changed_span(
     let start = (start - pad).max(0.0);
     let end = (end + pad).min(length.max(start));
     Some((start, end.min(start + most).max(start)))
+}
+
+/// What a proposal does to one clip of the program: where it was and
+/// where it would be, in seconds, on which track.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ClipChange {
+    pub clip: String,
+    /// The track it is on in the proposal (its old one when removed).
+    pub track: String,
+    /// The track it was on, when it was in the program.
+    pub old_track: Option<String>,
+    pub old: Option<(f64, f64)>,
+    pub new: Option<(f64, f64)>,
+    pub moved: bool,
+    pub trimmed: bool,
+    pub retracked: bool,
+}
+
+impl ClipChange {
+    pub fn added(&self) -> bool {
+        self.old.is_none()
+    }
+
+    pub fn removed(&self) -> bool {
+        self.new.is_none()
+    }
+
+    /// Where the change reaches, from its earliest edge to its latest.
+    pub fn span(&self) -> (f64, f64) {
+        let edges = [self.old, self.new];
+        let mut spans = edges.iter().flatten();
+        let first = spans.next().copied().unwrap_or((0.0, 0.0));
+        spans.fold(first, |(low, high), (start, end)| {
+            (low.min(*start), high.max(*end))
+        })
+    }
+
+    /// Whether the clip it changes stands somewhere else, or no longer
+    /// stands, in the program: where it is now shows as a ghost while the
+    /// proposal plays.
+    pub fn leaves_ghost(&self) -> bool {
+        !self.added() && (self.moved || self.trimmed || self.removed() || self.retracked)
+    }
+}
+
+/// The clips `proposed` adds, takes out or changes against `current`
+/// (Qt's `ProposalModel::diffTimelines`), in the proposal's track order
+/// with the clips it takes out after.
+pub fn proposal_changes(current: &Timeline, proposed: &Timeline) -> Vec<ClipChange> {
+    let mut changes = Vec::new();
+    for track in &proposed.tracks {
+        for clip in &track.clips {
+            let new = Some((clip.timeline_start, clip.end()));
+            match current.clip(&clip.id) {
+                None => changes.push(ClipChange {
+                    clip: clip.id.clone(),
+                    track: track.id.clone(),
+                    old_track: None,
+                    old: None,
+                    new,
+                    moved: false,
+                    trimmed: false,
+                    retracked: false,
+                }),
+                Some((was_on, was)) => {
+                    let moved = was.start_frame != clip.start_frame;
+                    let trimmed = was.duration_frames != clip.duration_frames
+                        || was.source_in != clip.source_in
+                        || was.source_out != clip.source_out;
+                    let retracked = was_on.id != track.id;
+                    let other = was.speed != clip.speed
+                        || was.reverse != clip.reverse
+                        || was.enabled != clip.enabled
+                        || was.source_id != clip.source_id
+                        || was.fx != clip.fx
+                        || was.name != clip.name
+                        || was.text != clip.text
+                        || was.effects != clip.effects
+                        || was.props != clip.props;
+                    if moved || trimmed || retracked || other {
+                        changes.push(ClipChange {
+                            clip: clip.id.clone(),
+                            track: track.id.clone(),
+                            old_track: Some(was_on.id.clone()),
+                            old: Some((was.timeline_start, was.end())),
+                            new,
+                            moved,
+                            trimmed,
+                            retracked,
+                        });
+                    }
+                }
+            }
+        }
+    }
+    for track in &current.tracks {
+        for clip in &track.clips {
+            if proposed.clip(&clip.id).is_none() {
+                changes.push(ClipChange {
+                    clip: clip.id.clone(),
+                    track: track.id.clone(),
+                    old_track: Some(track.id.clone()),
+                    old: Some((clip.timeline_start, clip.end())),
+                    new: None,
+                    moved: false,
+                    trimmed: false,
+                    retracked: false,
+                });
+            }
+        }
+    }
+    changes
+}
+
+/// An open proposal as the timeline shows it over the program: a band on
+/// the ruler from its earliest change to its latest, a veil over the
+/// tracks it changes, its clips outlined, and the ghosts a preview of it
+/// leaves where the clips it moves, trims or takes out are now.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ProposalBand {
+    pub id: String,
+    pub author: String,
+    pub start: f64,
+    pub end: f64,
+    pub tracks: Vec<String>,
+    pub clips: Vec<String>,
+    /// Track, start and end of where each clip it changes is now.
+    pub ghosts: Vec<(String, f64, f64)>,
+}
+
+impl ProposalBand {
+    /// The band of proposal `id` by `author` that would turn `current`
+    /// into `proposed`; None when it changes no clip.
+    pub fn of(id: &str, author: &str, current: &Timeline, proposed: &Timeline) -> Option<Self> {
+        let changes = proposal_changes(current, proposed);
+        let mut band = ProposalBand {
+            id: id.to_owned(),
+            author: author.to_owned(),
+            ..Default::default()
+        };
+        let mut ranged = false;
+        for change in &changes {
+            let (start, end) = change.span();
+            if ranged {
+                band.start = band.start.min(start);
+                band.end = band.end.max(end);
+            } else {
+                (band.start, band.end) = (start, end);
+                ranged = true;
+            }
+            for track in std::iter::once(&change.track).chain(change.old_track.as_ref()) {
+                if !band.tracks.contains(track) {
+                    band.tracks.push(track.clone());
+                }
+            }
+            band.clips.push(change.clip.clone());
+            if change.leaves_ghost() {
+                if let Some((start, end)) = change.old {
+                    let track = change
+                        .old_track
+                        .clone()
+                        .unwrap_or_else(|| change.track.clone());
+                    band.ghosts.push((track, start, end));
+                }
+            }
+        }
+        ranged.then_some(band)
+    }
+}
+
+/// A time Kerf names, in seconds of the program (Qt's `reel::parseTime`):
+/// a number of seconds, "4.5s" or "4.5", "12f" in frames at `fps`, or a
+/// timecode "HH:MM:SS:FF" (or "MM:SS:FF") less the sequence's `start`.
+/// None for anything else, or a time before the program.
+pub fn focus_seconds(value: &Value, fps: f64, start: f64) -> Option<f64> {
+    let fps = if fps.is_finite() && fps > 0.0 {
+        fps
+    } else {
+        30.0
+    };
+    let seconds = match value {
+        Value::Number(number) => number.as_f64()?,
+        Value::String(text) => {
+            let text = text.trim();
+            if let Some(frames) = text.strip_suffix('f') {
+                frames.trim().parse::<f64>().ok()? / fps
+            } else if let Some(seconds) = text.strip_suffix('s') {
+                seconds.trim().parse::<f64>().ok()?
+            } else if text.contains(':') {
+                let parts: Vec<&str> = text.split([':', ';']).collect();
+                if parts.len() < 3 || parts.len() > 4 {
+                    return None;
+                }
+                let numbers: Vec<f64> = parts
+                    .iter()
+                    .map(|part| part.trim().parse::<f64>().ok())
+                    .collect::<Option<_>>()?;
+                let (hours, minutes, secs, frames) = match numbers.as_slice() {
+                    [h, m, s, f] => (*h, *m, *s, *f),
+                    [m, s, f] => (0.0, *m, *s, *f),
+                    _ => return None,
+                };
+                hours * 3600.0 + minutes * 60.0 + secs + frames / fps - start.max(0.0)
+            } else {
+                text.parse::<f64>().ok()?
+            }
+        }
+        _ => return None,
+    };
+    (seconds.is_finite() && seconds >= 0.0).then_some(seconds)
+}
+
+/// Keys for a number drawn by hand, a value 0..1 at each frame (Qt's
+/// `signalcurve::keys`): the first frame, the last, and between them only
+/// the frames where the line from the last key kept would pass a frame
+/// between by more than `within`. Each `{at: frame, value, interp: linear}`,
+/// values to three places.
+pub fn signal_keys(drawn: &BTreeMap<i64, f64>, within: f64) -> Vec<Value> {
+    let frames: Vec<i64> = drawn.keys().copied().collect();
+    let Some(&first) = frames.first() else {
+        return Vec::new();
+    };
+    let value = |frame: i64| drawn.get(&frame).copied().unwrap_or(0.0);
+    let key = |frame: i64| {
+        json!({
+            "at": frame,
+            "value": (value(frame) * 1000.0).round() / 1000.0,
+            "interp": "linear",
+        })
+    };
+    let mut keys = vec![key(first)];
+    let mut kept = 0;
+    for next in 2..frames.len() {
+        let (a, b) = (value(frames[kept]), value(frames[next]));
+        let span = (frames[next] - frames[kept]) as f64;
+        let misses = (kept + 1..next).any(|between| {
+            let on = a + (b - a) * (frames[between] - frames[kept]) as f64 / span;
+            (on - value(frames[between])).abs() > within
+        });
+        if misses {
+            kept = next - 1;
+            keys.push(key(frames[kept]));
+        }
+    }
+    if frames.len() > 1 {
+        keys.push(key(*frames.last().unwrap_or(&first)));
+    }
+    keys
+}
+
+/// Where a source's picture and sound land when it is put in (Insert,
+/// Overwrite; Qt's `sourceTargets`): of each kind the source has, one
+/// track, never a locked one. When the person has chosen targets it is the
+/// first of that kind they targeted, and a kind with none targeted is left
+/// out; else it is the first unlocked track of that kind.
+pub fn source_targets(
+    timeline: &Timeline,
+    source: &Source,
+    chosen: Option<&[String]>,
+) -> Vec<String> {
+    let kinds = [
+        (TrackKind::Video, source.width.is_some()),
+        (TrackKind::Audio, source.has_audio),
+    ];
+    let mut targets = Vec::new();
+    for (kind, has) in kinds {
+        if !has {
+            continue;
+        }
+        let first = timeline.tracks.iter().find(|track| {
+            track.kind == kind
+                && !track.locked
+                && chosen.is_none_or(|chosen| chosen.contains(&track.id))
+        });
+        targets.extend(first.map(|track| track.id.clone()));
+    }
+    targets
+}
+
+/// The tracks targeted before the person chooses any: the first unlocked
+/// picture track and the first unlocked sound track.
+pub fn default_targets(timeline: &Timeline) -> Vec<String> {
+    [TrackKind::Video, TrackKind::Audio]
+        .into_iter()
+        .filter_map(|kind| {
+            timeline
+                .tracks
+                .iter()
+                .find(|track| track.kind == kind && !track.locked)
+                .map(|track| track.id.clone())
+        })
+        .collect()
+}
+
+/// `targets` with track `id`'s target chip pressed. A source's picture
+/// and sound each go on one track, so targeting a track takes its kind's
+/// target from whichever track of that kind had it; pressing a targeted
+/// track lets it go, and nothing of its kind is put in.
+pub fn toggle_target(timeline: &Timeline, targets: &[String], id: &str) -> Vec<String> {
+    if targets.iter().any(|known| known == id) {
+        return targets
+            .iter()
+            .filter(|known| *known != id)
+            .cloned()
+            .collect();
+    }
+    let kind_of = |track: &str| {
+        timeline
+            .tracks
+            .iter()
+            .find(|known| known.id == track)
+            .map(|known| known.kind)
+    };
+    let kind = kind_of(id);
+    let mut toggled: Vec<String> = targets
+        .iter()
+        .filter(|known| kind.is_none() || kind_of(known) != kind)
+        .cloned()
+        .collect();
+    toggled.push(id.to_owned());
+    toggled
 }
 
 /// `h:mm:ss:ff` at `fps`, the way the editor writes a time.

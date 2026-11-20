@@ -2094,13 +2094,19 @@ impl Menu {
                 let sub = self.panel(level + 1, window, cx);
                 // Its first row level with this one; its edge on the menu's.
                 let beside = self.width - 6.0;
+                // Kept inside the window: one that would run past its foot
+                // is raised until it fits.
                 row = row.child(
                     div()
                         .absolute()
                         .top(px(-5.0))
                         .when(room, |place| place.left(px(beside)))
                         .when(!room, |place| place.right(px(beside)))
-                        .child(sub),
+                        .child(
+                            gpui::anchored()
+                                .snap_to_window_with_margin(px(layout::TIP_EDGE))
+                                .child(sub),
+                        ),
                 );
             }
             panel = panel.child(row);
