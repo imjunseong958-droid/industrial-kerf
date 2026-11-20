@@ -127,6 +127,84 @@ pub fn warn() -> Rgba {
     rgb(0xc8a264)
 }
 
+/// The colours a marker on the ruler can be: the nine names a document
+/// gives its markers, each its own colour, every one reading at 3:1 or
+/// more on the ruler and the lanes ([`contrast`]). A marker with no colour,
+/// or one of no name here, is green, as Qt drew it.
+pub mod marker {
+    use gpui::{rgb, Rgba};
+
+    /// The names, in the order a menu would offer them.
+    pub const NAMES: [&str; 9] = [
+        "red", "orange", "yellow", "green", "cyan", "blue", "purple", "pink", "white",
+    ];
+
+    pub fn red() -> Rgba {
+        super::neg()
+    }
+    pub fn orange() -> Rgba {
+        rgb(0xe0904a)
+    }
+    pub fn yellow() -> Rgba {
+        super::warn()
+    }
+    pub fn green() -> Rgba {
+        super::pos()
+    }
+    pub fn cyan() -> Rgba {
+        rgb(0x5cb8c4)
+    }
+    pub fn blue() -> Rgba {
+        super::accent_ink()
+    }
+    pub fn purple() -> Rgba {
+        rgb(0xb48ce6)
+    }
+    pub fn pink() -> Rgba {
+        rgb(0xe07ab0)
+    }
+    pub fn white() -> Rgba {
+        super::ink()
+    }
+
+    /// The colour of a marker named `name` (any case, spaces round it
+    /// ignored); none, or a name not of the nine, is green.
+    pub fn named(name: Option<&str>) -> Rgba {
+        match name.map(|name| name.trim().to_ascii_lowercase()).as_deref() {
+            Some("red") => red(),
+            Some("orange") => orange(),
+            Some("yellow") => yellow(),
+            Some("cyan") => cyan(),
+            Some("blue") => blue(),
+            Some("purple") => purple(),
+            Some("pink") => pink(),
+            Some("white") => white(),
+            _ => green(),
+        }
+    }
+}
+
+/// The WCAG contrast ratio of two opaque colours, 1..21.
+pub fn contrast(a: Rgba, b: Rgba) -> f32 {
+    fn channel(value: f32) -> f32 {
+        if value <= 0.03928 {
+            value / 12.92
+        } else {
+            ((value + 0.055) / 1.055).powf(2.4)
+        }
+    }
+    let luminance = |c: Rgba| 0.2126 * channel(c.r) + 0.7152 * channel(c.g) + 0.0722 * channel(c.b);
+    let (light, dark) = {
+        let (x, y) = (luminance(a), luminance(b));
+        if x > y {
+            (x, y)
+        } else {
+            (y, x)
+        }
+    };
+    (light + 0.05) / (dark + 0.05)
+}
+
 /// What the editor is doing, in two hues only.
 pub mod activity {
     use gpui::{rgb, rgba, Rgba};
@@ -232,9 +310,12 @@ pub const PLEX_HANGUL_FAMILY: &str = "IBM Plex Sans KR";
 pub const SERIF_FAMILY: &str = "Noto Serif";
 pub const SERIF_HANGUL_FAMILY: &str = "NanumMyeongjo";
 
-/// The faces the editor can be set in (Settings ▸ Appearance), each with
-/// its interface family and the family what is said in the conversation
-/// reads in.
+/// The faces the interface can be set in (Settings ▸ Appearance ▸
+/// Interface font), each with the mono it brings. `Serif` is the one face
+/// kept from when a single choice held both: it is IBM Plex for the
+/// interface with the serif for reading, and what a saved `"serif"` reads
+/// as; [`Face::INTERFACE`] are the faces to choose from now, with the
+/// conversation's own in [`ReadingFace`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Face {
@@ -243,10 +324,22 @@ pub enum Face {
     Inter,
     Pretendard,
     Serif,
+    /// The computer's own interface face, with the bundled ones for what
+    /// it lacks (Hangul from Pretendard).
+    System,
 }
 
 impl Face {
-    pub const ALL: [Face; 4] = [Face::Plex, Face::Inter, Face::Pretendard, Face::Serif];
+    pub const ALL: [Face; 5] = [
+        Face::Plex,
+        Face::Inter,
+        Face::Pretendard,
+        Face::Serif,
+        Face::System,
+    ];
+
+    /// The interface's faces, as Qt's Interface font offered them.
+    pub const INTERFACE: [Face; 4] = [Face::Plex, Face::Inter, Face::Pretendard, Face::System];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -254,6 +347,7 @@ impl Face {
             Face::Inter => "Inter",
             Face::Pretendard => "Pretendard",
             Face::Serif => "Serif for reading",
+            Face::System => "System",
         }
     }
 
@@ -263,10 +357,13 @@ impl Face {
             Face::Plex | Face::Serif => UI_FAMILY,
             Face::Inter => INTER_FAMILY,
             Face::Pretendard => PRETENDARD_FAMILY,
+            Face::System => system_family(),
         }
     }
 
-    /// The family what is said in the conversation reads in.
+    /// The family what is said in the conversation reads in, when it reads
+    /// in the interface's face ([`ReadingFace::Same`]); `Serif` keeps its
+    /// serif.
     pub fn prose(self) -> &'static str {
         match self {
             Face::Serif => SERIF_FAMILY,
@@ -274,12 +371,77 @@ impl Face {
         }
     }
 
+    /// Only IBM Plex has a mono of its own; the rest are set with the design's.
     pub fn mono(self) -> &'static str {
         match self {
             Face::Plex | Face::Serif => MONO_FAMILY,
-            Face::Inter | Face::Pretendard => JETBRAINS_FAMILY,
+            Face::Inter | Face::Pretendard | Face::System => JETBRAINS_FAMILY,
         }
     }
+
+    /// The interface face and the reading face a face saved alone stands
+    /// for: `Serif` is IBM Plex with the serif for reading.
+    pub fn split(self) -> (Face, ReadingFace) {
+        match self {
+            Face::Serif => (Face::Plex, ReadingFace::Serif),
+            other => (other, ReadingFace::Same),
+        }
+    }
+}
+
+/// What is said in the conversation reads in (Settings ▸ Appearance ▸
+/// Conversation font, "For what you ask and what Kerf answers"): the
+/// interface's face, or the serif.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ReadingFace {
+    #[default]
+    Same,
+    Serif,
+}
+
+impl ReadingFace {
+    pub const ALL: [ReadingFace; 2] = [ReadingFace::Same, ReadingFace::Serif];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            ReadingFace::Same => "Same as interface",
+            ReadingFace::Serif => "Serif",
+        }
+    }
+
+    /// The family it reads in under the interface face `ui`.
+    pub fn family(self, ui: Face) -> &'static str {
+        match self {
+            ReadingFace::Serif => SERIF_FAMILY,
+            ReadingFace::Same => ui.prose(),
+        }
+    }
+}
+
+/// The family GPUI calls the system's interface face, on macOS and Windows.
+const SYSTEM_UI: &str = ".SystemUIFont";
+
+/// The computer's own interface face: GPUI's name for it on macOS and
+/// Windows; on Linux, what fontconfig gives for `sans-serif` (GPUI's own
+/// name for it there is IBM Plex). Looked up once.
+pub fn system_family() -> &'static str {
+    static FAMILY: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
+    FAMILY.get_or_init(|| {
+        if !cfg!(target_os = "linux") {
+            return SYSTEM_UI;
+        }
+        std::process::Command::new("fc-match")
+            .args(["-f", "%{family[0]}", "sans-serif"])
+            .stderr(std::process::Stdio::null())
+            .output()
+            .ok()
+            .filter(|output| output.status.success())
+            .and_then(|output| String::from_utf8(output.stdout).ok())
+            .map(|family| family.trim().to_owned())
+            .filter(|family| !family.is_empty())
+            .map_or(SYSTEM_UI, |family| Box::leak(family.into_boxed_str()))
+    })
 }
 
 // ---------------------------------------------------------- radii and spacing
@@ -401,6 +563,19 @@ pub mod motion {
     pub const STRIPE_SPACE: f32 = 10.0;
     /// The conversation while a modal covers it.
     pub const SCRIM: f32 = 0.55;
+    /// Points a menu or a popover rises as it fades in over `FADE`.
+    pub const MENU_RISE: f32 = 4.0;
+    /// How long the pointer rests on a control before its tip shows.
+    pub const TIP_DELAY: Duration = ms(400);
+    /// A tip hidden this recently (or one still showing) makes the next one
+    /// show at once, with no fade.
+    pub const TIP_QUICK: Duration = ms(300);
+    /// The system's Reduce motion setting is read again when a motion
+    /// starts and the last read is older than this, as Qt read it.
+    pub const SYSTEM_POLL: Duration = ms(1000);
+    /// The most the first motion waits for the first read of it, made as
+    /// the editor starts.
+    pub const SYSTEM_FIRST_WAIT: Duration = ms(300);
 
     /// The one easing curve: cubic-bezier(.22, 1, .36, 1).
     pub const EASE: (f32, f32, f32, f32) = (0.22, 1.0, 0.36, 1.0);
@@ -452,6 +627,33 @@ pub mod layout {
     /// picture gives way.
     pub const MEDIA_BAND_TIMELINE_LEAST: f32 = 200.0;
 
+    /// Points wide the ring round what has the keys, just inside its edge.
+    pub const FOCUS_RING: f32 = 2.0;
+    /// On what is filled with the accent (a primary button), where a ring
+    /// inside would not show, it goes round it outside, this far out, as
+    /// the design drew every ring.
+    pub const FOCUS_RING_OUT: f32 = 1.0;
+    /// What a panel one goes into (Settings, Finish) leaves of the window
+    /// round it at least, and the share of the height to spare above it.
+    pub const MODAL_MARGIN: f32 = 48.0;
+    pub const MODAL_ABOVE: f32 = 0.25;
+    /// A list that scrolls with no bar: the fade at its top while a row is
+    /// cut there, and at its foot while there is more below.
+    pub const TOP_FADE: f32 = 12.0;
+    pub const BOTTOM_FADE: f32 = 32.0;
+    /// A tip: its height, its gap from the control, how far it keeps from
+    /// the window's sides, and where a control is low enough to have its
+    /// tip above (its bottom past `TIP_FLIP_BELOW`, its top past
+    /// `TIP_FLIP_ABOVE`).
+    pub const TIP_HEIGHT: f32 = 24.0;
+    pub const TIP_GAP: f32 = 6.0;
+    pub const TIP_EDGE: f32 = 8.0;
+    pub const TIP_FLIP_BELOW: f32 = 540.0;
+    pub const TIP_FLIP_ABOVE: f32 = 100.0;
+    /// A menu's row, and how wide a menu is at least.
+    pub const MENU_ROW: f32 = 30.0;
+    pub const MENU_LEAST: f32 = 180.0;
+
     /// The widest a drag leaves the sidebar in a window `window` wide.
     pub fn sidebar_most(window: f32) -> f32 {
         (window - SIDEBAR_LEAVES).max(SIDEBAR_LEAST)
@@ -461,19 +663,48 @@ pub mod layout {
 // ---------------------------------------------------------------- faces in use
 
 static FACE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+static READING: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
 static PROSE_STEP: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
 
-/// The face chosen in Settings.
+/// The interface's face, as chosen in Settings.
 pub fn face() -> Face {
     Face::ALL[FACE.load(std::sync::atomic::Ordering::Relaxed) as usize % Face::ALL.len()]
 }
 
+/// What the conversation reads in, as chosen in Settings.
+pub fn reading_face() -> ReadingFace {
+    ReadingFace::ALL
+        [READING.load(std::sync::atomic::Ordering::Relaxed) as usize % ReadingFace::ALL.len()]
+}
+
+/// Puts a face saved alone in force: `Serif` is IBM Plex with the serif
+/// for reading ([`Face::split`]), any other reads in itself.
 pub fn set_face(face: Face, prose_step: i32) {
-    let index = Face::ALL
-        .iter()
-        .position(|known| *known == face)
-        .unwrap_or(0);
-    FACE.store(index as u8, std::sync::atomic::Ordering::Relaxed);
+    let (ui, reading) = face.split();
+    set_faces(ui, reading, prose_step);
+}
+
+/// Puts the interface's face, the conversation's, and the points added to
+/// the conversation's size in force. Views draw in them from their next
+/// frame (`Window::refresh`).
+pub fn set_faces(ui: Face, reading: ReadingFace, prose_step: i32) {
+    let (ui, reading) = match (ui, reading) {
+        // Serif named as the interface's is the old single choice.
+        (Face::Serif, _) => (Face::Plex, ReadingFace::Serif),
+        other => other,
+    };
+    let index = |all: &[Face], face: Face| all.iter().position(|known| *known == face);
+    FACE.store(
+        index(&Face::ALL, ui).unwrap_or(0) as u8,
+        std::sync::atomic::Ordering::Relaxed,
+    );
+    READING.store(
+        ReadingFace::ALL
+            .iter()
+            .position(|known| *known == reading)
+            .unwrap_or(0) as u8,
+        std::sync::atomic::Ordering::Relaxed,
+    );
     PROSE_STEP.store(
         prose_step.clamp(-2, 6),
         std::sync::atomic::Ordering::Relaxed,
@@ -487,26 +718,32 @@ pub fn prose_step() -> f32 {
 
 /// The interface's font: the chosen face, with Hangul from its partner.
 pub fn ui_font(weight: FontWeight) -> gpui::Font {
-    font(face().ui(), weight)
+    font(face().ui(), weight, false)
 }
 
 pub fn prose_font(weight: FontWeight) -> gpui::Font {
-    font(face().prose(), weight)
+    font(reading_face().family(face()), weight, false)
 }
 
 pub fn mono_font(weight: FontWeight) -> gpui::Font {
-    font(face().mono(), weight)
+    font(face().mono(), weight, true)
 }
 
-fn font(family: &'static str, weight: FontWeight) -> gpui::Font {
+/// A font in `family` as the editor sets it: Hangul and what else the
+/// family lacks from the bundled faces, and tabular figures (and, in mono,
+/// the plain zero) so counts and times do not shift as they tick. Settings'
+/// samples of each face are set with it.
+pub fn font(family: &'static str, weight: FontWeight, mono: bool) -> gpui::Font {
     let hangul = if family == SERIF_FAMILY {
         SERIF_HANGUL_FAMILY
+    } else if family == system_family() || family == INTER_FAMILY {
+        PRETENDARD_FAMILY
     } else {
         PLEX_HANGUL_FAMILY
     };
     gpui::Font {
         family: family.into(),
-        features: gpui::FontFeatures::default(),
+        features: font_features(mono),
         fallbacks: Some(gpui::FontFallbacks::from_fonts(vec![
             hangul.to_owned(),
             PRETENDARD_FAMILY.to_owned(),
@@ -514,6 +751,25 @@ fn font(family: &'static str, weight: FontWeight) -> gpui::Font {
         ])),
         weight,
         style: gpui::FontStyle::Normal,
+    }
+}
+
+/// The OpenType features every face is set with: `tnum` (tabular
+/// figures), and in mono `zero` off (the plain zero), as Qt set them.
+pub fn font_features(mono: bool) -> gpui::FontFeatures {
+    static TEXT: std::sync::OnceLock<gpui::FontFeatures> = std::sync::OnceLock::new();
+    static MONO: std::sync::OnceLock<gpui::FontFeatures> = std::sync::OnceLock::new();
+    let make = |mono: bool| {
+        let mut tags = vec![("tnum".to_owned(), 1)];
+        if mono {
+            tags.push(("zero".to_owned(), 0));
+        }
+        gpui::FontFeatures(std::sync::Arc::new(tags))
+    };
+    if mono {
+        MONO.get_or_init(|| make(true)).clone()
+    } else {
+        TEXT.get_or_init(|| make(false)).clone()
     }
 }
 

@@ -5,6 +5,7 @@
 
 use serde::Deserialize;
 use serde_json::Value;
+use std::collections::HashMap;
 
 /// The timeline view of a snapshot (kerf-runtime's `timeline_json`).
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -23,11 +24,98 @@ pub struct Timeline {
     pub markers: Vec<Marker>,
     pub sources: Vec<Source>,
     pub sequences: Vec<SequenceInfo>,
+    /// Each media's readable name, by id ([`crate::names::source_names`]),
+    /// as [`Timeline::name_clips`] last made them.
+    #[serde(skip)]
+    pub media_names: HashMap<String, String>,
 }
 
 impl Timeline {
+    /// Reads a snapshot's timeline, its media named and each clip of media
+    /// that has no name of its own given its media's ([`Timeline::name_clips`]).
     pub fn from_value(value: &Value) -> Self {
-        serde_json::from_value(value.clone()).unwrap_or_default()
+        let mut timeline: Self = serde_json::from_value(value.clone()).unwrap_or_default();
+        timeline.name_clips();
+        timeline
+    }
+
+    /// Names the media ([`crate::names::source_names`]) and gives each clip
+    /// of media with a file its media's name to go by when it has none of
+    /// its own (Qt's `withClipNames`): [`Clip::label`] then says it on the
+    /// timeline, in a proposal's change rows and wherever else a clip is
+    /// named. The clip's own `name` is left as the document has it.
+    pub fn name_clips(&mut self) {
+        self.media_names = crate::names::source_names(&self.sources);
+        let named: HashMap<&str, &str> = self
+            .sources
+            .iter()
+            .filter(|source| !source.path.is_empty())
+            .filter_map(|source| {
+                self.media_names
+                    .get(&source.id)
+                    .map(|name| (source.id.as_str(), name.as_str()))
+            })
+            .collect();
+        for track in &mut self.tracks {
+            for clip in &mut track.clips {
+                clip.media_name = clip
+                    .source_id
+                    .as_deref()
+                    .and_then(|source| named.get(source))
+                    .map(|name| (*name).to_owned());
+            }
+        }
+    }
+
+    /// The readable name of media `id` ([`crate::names::source_names`]);
+    /// the id itself for media the timeline does not have.
+    pub fn media_name(&self, id: &str) -> String {
+        if let Some(name) = self.media_names.get(id) {
+            return name.clone();
+        }
+        crate::names::source_names(&self.sources)
+            .remove(id)
+            .unwrap_or_else(|| id.to_owned())
+    }
+
+    /// A track's badge as its head and the Media band say it: "V1", "A2",
+    /// counting picture tracks (captions among them) and sound tracks apart,
+    /// in the timeline's order. The id itself for a track it does not have.
+    pub fn track_badge(&self, id: &str) -> String {
+        let (mut picture, mut sound) = (0, 0);
+        for track in &self.tracks {
+            let audio = track.kind == TrackKind::Audio;
+            let number = if audio {
+                sound += 1;
+                sound
+            } else {
+                picture += 1;
+                picture
+            };
+            if track.id == id {
+                return format!("{}{number}", if audio { 'A' } else { 'V' });
+            }
+        }
+        id.to_owned()
+    }
+
+    /// The badges of the tracks each media's clips are on, by media id, in
+    /// the timeline's order ("V1", "A1"): where it is used.
+    pub fn used_on(&self) -> HashMap<String, Vec<String>> {
+        let mut used: HashMap<String, Vec<String>> = HashMap::new();
+        for track in &self.tracks {
+            let badge = self.track_badge(&track.id);
+            for clip in &track.clips {
+                let Some(source) = clip.source_id.as_deref().filter(|id| !id.is_empty()) else {
+                    continue;
+                };
+                let on = used.entry(source.to_owned()).or_default();
+                if !on.contains(&badge) {
+                    on.push(badge.clone());
+                }
+            }
+        }
+        used
     }
 
     /// Frames a second, never zero.
@@ -91,7 +179,10 @@ pub struct Track {
     pub enabled: bool,
     pub locked: bool,
     pub muted: bool,
+    /// Its role, or its kind's default when none is assigned.
     pub role: Option<String>,
+    /// Whether the role is the track's own, not its kind's default.
+    pub role_assigned: bool,
     pub sync_locked: bool,
     pub clips: Vec<Clip>,
     pub transitions: Vec<Transition>,
@@ -125,10 +216,18 @@ pub struct Clip {
     #[serde(rename = "out")]
     pub source_out: Option<f64>,
     pub speed: Option<f64>,
+    /// It plays its source backwards (the speed's size is in `speed`).
+    pub reverse: bool,
     pub link: Option<String>,
     pub fx: Option<String>,
     pub text: Option<String>,
     pub effects: Vec<Value>,
+    /// Its properties as the snapshot carries them (`gain` in dB, `opacity`…).
+    pub props: Value,
+    /// Its media's readable name, for a clip of media with a file: what it
+    /// goes by when it has no name of its own ([`Timeline::name_clips`]).
+    #[serde(skip)]
+    pub media_name: Option<String>,
 }
 
 impl Clip {
@@ -140,13 +239,45 @@ impl Clip {
         self.start_frame + self.duration_frames
     }
 
-    /// What the clip is called: its name, its text, else its id.
+    /// What the clip is called: its name, its media's name, its text,
+    /// else its id.
     pub fn label(&self) -> &str {
-        self.name
-            .as_deref()
-            .or(self.text.as_deref())
-            .filter(|name| !name.is_empty())
-            .unwrap_or(&self.id)
+        [
+            self.name.as_deref(),
+            self.media_name.as_deref(),
+            self.text.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        .find(|name| !name.is_empty())
+        .unwrap_or(&self.id)
+    }
+
+    /// Its gain in dB (`props.gain`), 0 when it has none.
+    pub fn gain_db(&self) -> f64 {
+        self.props["gain"].as_f64().unwrap_or(0.0)
+    }
+
+    /// The second of its source shown `offset` seconds into the clip: from
+    /// its in point towards its out (which allow for its speed), or back
+    /// from its out point when it plays in reverse. None for a clip with no
+    /// source range (a title, a generator).
+    pub fn source_at(&self, offset: f64) -> Option<f64> {
+        let source_in = self.source_in?;
+        let speed = self.speed.unwrap_or(1.0);
+        let out = self
+            .source_out
+            .unwrap_or(source_in + self.duration * speed.abs());
+        let rate = if self.duration > 0.0 {
+            (out - source_in) / self.duration
+        } else {
+            speed.abs()
+        };
+        Some(if self.reverse || speed < 0.0 {
+            out - offset * rate
+        } else {
+            source_in + offset * rate
+        })
     }
 }
 
@@ -186,6 +317,8 @@ pub struct Source {
     pub recipe: Option<String>,
     pub steps: Option<u32>,
     pub takes: Vec<Take>,
+    /// The project's cast and styles its steps name.
+    pub shows: Vec<String>,
 }
 
 impl Source {
@@ -194,8 +327,37 @@ impl Source {
         self.path.rsplit(['/', '\\']).next().unwrap_or(&self.path)
     }
 
+    /// Made from steps: in the document, or in the recipe file it names.
     pub fn is_made(&self) -> bool {
         self.steps.is_some_and(|steps| steps > 0) || self.recipe.is_some()
+    }
+
+    /// Made by steps written under its line in the document.
+    pub fn steps_in_document(&self) -> bool {
+        self.recipe.as_deref().is_none_or(str::is_empty)
+            && self.steps.is_some_and(|steps| steps > 0)
+    }
+
+    /// Its steps are still in the recipe file it names: carried into the
+    /// document before it is made.
+    pub fn uncarried(&self) -> bool {
+        self.recipe
+            .as_deref()
+            .is_some_and(|recipe| !recipe.is_empty())
+            && !self.steps.is_some_and(|steps| steps > 0)
+    }
+
+    /// It has a picture (a video or a still), not only sound.
+    pub fn is_picture(&self) -> bool {
+        self.width.is_some()
+    }
+
+    /// The take it is now, by number, when it has takes.
+    pub fn chosen_take(&self) -> Option<u32> {
+        self.takes
+            .iter()
+            .find(|take| take.chosen)
+            .map(|take| take.number)
     }
 }
 

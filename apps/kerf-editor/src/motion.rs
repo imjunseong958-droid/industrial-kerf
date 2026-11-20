@@ -1,30 +1,246 @@
 //! How the editor moves. Motion never decides anything: state changes at
 //! once and motion follows it, so a stopped animation leaves nothing wrong.
-//! Under Reduce Motion everything is simply there.
+//! Under Reduce Motion everything is simply there: the editor's own switch,
+//! the system's, or `KERF_REDUCE_MOTION` over both. The system's is read
+//! as Qt read it: as the editor starts, then again as a motion starts (a
+//! [`Tween`] set going) when the last read is more than `SYSTEM_POLL` old,
+//! so an editor where nothing moves reads nothing, however often it draws.
 //!
 //! [`Tween`] carries one animated value; a view samples it while rendering
 //! and asks for the next frame while it runs ([`Tween::sample`]). Fades and
 //! rises of whole elements use GPUI's `with_animation` with [`ease`].
 
 use crate::theme::motion;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
+use std::sync::{mpsc, Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-static REDUCE_MOTION: AtomicBool = AtomicBool::new(false);
+/// The editor's own Reduce Motion (Settings ▸ Appearance).
+static SETTING: AtomicBool = AtomicBool::new(false);
+/// The system's (macOS ▸ Accessibility ▸ Reduce motion; GNOME's
+/// animations off), as last read.
+static SYSTEM: AtomicBool = AtomicBool::new(false);
+/// `KERF_REDUCE_MOTION`: 0 unset, 1 motion on, 2 motion off.
+static ENV: AtomicU8 = AtomicU8::new(0);
 
-/// Whether motion is off: `KERF_REDUCE_MOTION=1`, or the setting.
+/// Whether motion is off: `KERF_REDUCE_MOTION` if it is set, else the
+/// editor's own setting or the system's ([`resolve`]), as last read.
 pub fn reduced() -> bool {
-    REDUCE_MOTION.load(Ordering::Relaxed)
+    let env = match ENV.load(Ordering::Relaxed) {
+        1 => Some(false),
+        2 => Some(true),
+        _ => None,
+    };
+    if env.is_none() {
+        if let Some(reader) = READER.get() {
+            reader.wait_first();
+        }
+    }
+    resolve(
+        env,
+        SETTING.load(Ordering::Relaxed),
+        SYSTEM.load(Ordering::Relaxed),
+    )
 }
 
+/// Whether motion is off, from `KERF_REDUCE_MOTION` (`env`: Some when it
+/// is set), the editor's setting and the system's. The variable decides
+/// either way; else either switch on turns motion off.
+pub fn resolve(env: Option<bool>, setting: bool, system: bool) -> bool {
+    env.unwrap_or(setting || system)
+}
+
+/// The editor's own Reduce Motion, from Settings or its saved choice.
 pub fn set_reduced(reduced: bool) {
-    REDUCE_MOTION.store(reduced, Ordering::Relaxed);
+    SETTING.store(reduced, Ordering::Relaxed);
 }
 
-/// Reads `KERF_REDUCE_MOTION` once at start.
+/// Reads `KERF_REDUCE_MOTION` once at start (`1` turns motion off, `0` on,
+/// whatever the system says), and begins following the system's setting.
 pub fn init_from_env() {
-    if std::env::var("KERF_REDUCE_MOTION").is_ok_and(|value| !value.is_empty() && value != "0") {
-        set_reduced(true);
+    let env = env_override(std::env::var("KERF_REDUCE_MOTION").ok().as_deref());
+    ENV.store(
+        match env {
+            None => 0,
+            Some(false) => 1,
+            Some(true) => 2,
+        },
+        Ordering::Relaxed,
+    );
+    if env.is_none() {
+        follow_system();
+    }
+}
+
+/// What `KERF_REDUCE_MOTION` says: unset or empty says nothing, `0` keeps
+/// motion, anything else turns it off.
+pub fn env_override(value: Option<&str>) -> Option<bool> {
+    let value = value?.trim();
+    (!value.is_empty()).then(|| value != "0")
+}
+
+/// What `defaults read com.apple.universalaccess reduceMotion` printed:
+/// `1` is on. Anything else (the key unset prints nothing) is off.
+pub fn parse_macos(output: &str) -> bool {
+    matches!(output.trim(), "1" | "true" | "YES")
+}
+
+/// What `gsettings get org.gnome.desktop.interface enable-animations`
+/// printed, as Reduce motion: animations off is motion reduced. None for
+/// anything else.
+pub fn parse_gnome(output: &str) -> Option<bool> {
+    match output.trim() {
+        "false" => Some(true),
+        "true" => Some(false),
+        _ => None,
+    }
+}
+
+/// Whether the system's setting is to be read again now: none is being
+/// read, and the last read (`last`, None before the first) is
+/// [`motion::SYSTEM_POLL`] old or more at `now`.
+pub fn system_read_due(last: Option<Instant>, now: Instant, reading: bool) -> bool {
+    !reading && last.is_none_or(|at| now.saturating_duration_since(at) >= motion::SYSTEM_POLL)
+}
+
+/// What reads the system's setting, off the window's thread, when asked.
+struct Reader {
+    ask: mpsc::Sender<()>,
+    /// A read is asked for or under way.
+    reading: AtomicBool,
+    /// When the last read was done, in milliseconds from `since`.
+    read_at: AtomicU64,
+    since: Instant,
+    /// Whether the first read is done (it ends the wait for it).
+    first: Mutex<bool>,
+    first_read: Condvar,
+    first_seen: AtomicBool,
+}
+
+static READER: OnceLock<Reader> = OnceLock::new();
+
+impl Reader {
+    /// The first read, made as the editor starts: the first motion waits
+    /// for it (at most [`motion::SYSTEM_FIRST_WAIT`]), so a system with
+    /// motion off never shows one.
+    fn wait_first(&self) {
+        if self.first_seen.load(Ordering::Acquire) {
+            return;
+        }
+        if let Ok(first) = self.first.lock() {
+            let _ = self
+                .first_read
+                .wait_timeout_while(first, motion::SYSTEM_FIRST_WAIT, |done| !*done);
+        }
+        self.first_seen.store(true, Ordering::Release);
+    }
+
+    /// A read is done: the next is due `SYSTEM_POLL` from now.
+    fn done(&self) {
+        let millis = u64::try_from(self.since.elapsed().as_millis()).unwrap_or(u64::MAX);
+        self.read_at.store(millis, Ordering::Relaxed);
+        self.reading.store(false, Ordering::Release);
+    }
+
+    /// The first read is done (or could not be made): no motion waits.
+    fn first_done(&self) {
+        if let Ok(mut done) = self.first.lock() {
+            *done = true;
+        }
+        self.first_read.notify_all();
+    }
+}
+
+/// A motion starts: the system's setting is read again, off the window's
+/// thread, if its last read is old ([`system_read_due`]); this motion has
+/// the last read, and the next the new one.
+fn ask_system() {
+    let Some(reader) = READER.get() else {
+        return;
+    };
+    reader.wait_first();
+    let now = Instant::now();
+    let last = reader.since + Duration::from_millis(reader.read_at.load(Ordering::Relaxed));
+    if !system_read_due(Some(last), now, reader.reading.load(Ordering::Acquire)) {
+        return;
+    }
+    if reader.reading.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    // The reader gone (the system's setting cannot be read), `reading`
+    // stays set and nothing is asked again.
+    let _ = reader.ask.send(());
+}
+
+/// Begins following the system's Reduce motion: macOS's Accessibility
+/// switch, or GNOME's animations where `gsettings` has them. A thread
+/// reads it at once, then waits until a motion starts ([`ask_system`]).
+/// Where neither can be read, nothing is followed.
+fn follow_system() {
+    let read: fn() -> Option<bool> = if cfg!(target_os = "macos") {
+        || {
+            let output = std::process::Command::new("defaults")
+                .args(["read", "com.apple.universalaccess", "reduceMotion"])
+                .stderr(std::process::Stdio::null())
+                .output()
+                .ok()?;
+            // The key unset (never switched) fails, and is off.
+            Some(output.status.success() && parse_macos(&String::from_utf8_lossy(&output.stdout)))
+        }
+    } else if cfg!(target_os = "linux") {
+        || {
+            let output = std::process::Command::new("gsettings")
+                .args(["get", "org.gnome.desktop.interface", "enable-animations"])
+                .stderr(std::process::Stdio::null())
+                .output()
+                .ok()
+                .filter(|output| output.status.success())?;
+            parse_gnome(&String::from_utf8_lossy(&output.stdout))
+        }
+    } else {
+        return;
+    };
+    let (ask, asked) = mpsc::channel();
+    let reader = Reader {
+        ask,
+        reading: AtomicBool::new(true),
+        read_at: AtomicU64::new(0),
+        since: Instant::now(),
+        first: Mutex::new(false),
+        first_read: Condvar::new(),
+        first_seen: AtomicBool::new(false),
+    };
+    if READER.set(reader).is_err() {
+        return;
+    }
+    let spawned = std::thread::Builder::new()
+        .name("reduce-motion".into())
+        .spawn(move || {
+            let Some(reader) = READER.get() else {
+                return;
+            };
+            let mut first = true;
+            loop {
+                let value = read();
+                if let Some(reduced) = value {
+                    SYSTEM.store(reduced, Ordering::Relaxed);
+                    reader.done();
+                }
+                if first {
+                    reader.first_done();
+                    first = false;
+                }
+                // Unreadable, nothing more is asked: `reading` stays set.
+                if value.is_none() || asked.recv().is_err() {
+                    return;
+                }
+            }
+        });
+    if spawned.is_err() {
+        // No reader: the first motion does not wait for one.
+        if let Some(reader) = READER.get() {
+            reader.first_seen.store(true, Ordering::Release);
+        }
     }
 }
 
@@ -124,6 +340,8 @@ impl Tween {
         if (to - self.to).abs() < f32::EPSILON && !self.running_at(now) {
             return;
         }
+        // As Qt's animations did on each start.
+        ask_system();
         self.from = self.value_at(now);
         self.to = to;
         self.start = now;

@@ -4,7 +4,15 @@
 //! they are written. Enter submits; Shift+Enter starts a new line where the
 //! field has several. In code, Enter starts a new line and ⌘↩ / Ctrl+Enter
 //! submits. A field of several lines given a most height grows with its
-//! lines up to it, then scrolls, keeping the cursor in view.
+//! lines up to it, then scrolls, keeping the cursor in view; one line
+//! longer than its field scrolls sideways to keep the cursor in view.
+//!
+//! It keeps its own typing to take back: ⌘Z / Ctrl+Z undoes it, ⌘⇧Z /
+//! Ctrl+Shift+Z and Ctrl+Y redo it, and while a field has the keys they
+//! never reach the project's Undo. Tab and Shift-Tab leave it for the next
+//! or the one before, as everything in the kit does; in code, as in Qt's
+//! text boxes, Tab indents (Shift-Tab takes it back) and Ctrl+Tab and
+//! Ctrl+Shift+Tab leave it.
 
 use crate::theme::{self, TypeStyle};
 use gpui::{
@@ -40,7 +48,25 @@ actions!(
         WordLeft,
         WordRight,
         DeleteWordLeft,
+        DeleteWordRight,
+        DeleteToLineStart,
+        SelectUp,
+        SelectDown,
+        SelectHome,
+        SelectEnd,
+        SelectWordLeft,
+        SelectWordRight,
+        TextStart,
+        TextEnd,
+        SelectTextStart,
+        SelectTextEnd,
+        Undo,
+        Redo,
+        FocusNext,
+        FocusPrevious,
         Cancel,
+        Indent,
+        Outdent,
     ]
 );
 
@@ -55,20 +81,36 @@ pub const CONTEXT: &str = "TextInput";
 pub const KEYS: &str = "TextInputKeys";
 
 /// The key context a code field adds to [`KEYS`], where ⌘↩ / Ctrl+Enter
-/// submits (Enter there starts a new line).
+/// submits (Enter there starts a new line), Tab indents, Shift-Tab takes
+/// an indent back, and Ctrl+Tab and Ctrl+Shift+Tab leave the field.
 pub const CODE: &str = "CodeInput";
+
+/// What Tab types in code: the indent of the JSON Settings writes.
+pub const INDENT: &str = "  ";
 
 /// What a code field's own keys answer in: [`KEYS`] and [`CODE`] at once.
 pub const CODE_KEYS: &str = "TextInputKeys CodeInput";
 
+/// Binds the field's keys and the kit's ([`crate::ui::key_bindings`]),
+/// and has Tab go into a panel from the panel itself
+/// ([`crate::ui::follow_tab`]): `commands::bind` calls this first whenever
+/// it binds a keymap.
 pub fn bind_keys(cx: &mut App) {
     cx.bind_keys(key_bindings());
+    cx.bind_keys(crate::ui::key_bindings());
+    crate::ui::follow_tab(cx);
 }
 
-/// The field's keys, as [`bind_keys`] binds them.
+/// The field's keys, as [`bind_keys`] binds them. ⌘ arrows and ⌘⌫ are
+/// macOS's; Ctrl+Home and Ctrl+End the text's ends elsewhere.
 pub fn key_bindings() -> Vec<KeyBinding> {
+    key_bindings_for(cfg!(target_os = "macos"))
+}
+
+/// The field's keys on macOS (`mac`) or elsewhere.
+pub fn key_bindings_for(mac: bool) -> Vec<KeyBinding> {
     let context = Some(KEYS);
-    vec![
+    let mut bindings = vec![
         KeyBinding::new("backspace", Backspace, context),
         KeyBinding::new("delete", Delete, context),
         KeyBinding::new("left", Left, context),
@@ -77,30 +119,77 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("down", Down, context),
         KeyBinding::new("shift-left", SelectLeft, context),
         KeyBinding::new("shift-right", SelectRight, context),
+        KeyBinding::new("shift-up", SelectUp, context),
+        KeyBinding::new("shift-down", SelectDown, context),
         KeyBinding::new("secondary-a", SelectAll, context),
         KeyBinding::new("secondary-v", Paste, context),
         KeyBinding::new("secondary-c", Copy, context),
         KeyBinding::new("secondary-x", Cut, context),
         KeyBinding::new("home", Home, context),
         KeyBinding::new("end", End, context),
+        KeyBinding::new("shift-home", SelectHome, context),
+        KeyBinding::new("shift-end", SelectEnd, context),
         KeyBinding::new("enter", Submit, context),
         KeyBinding::new("shift-enter", Newline, context),
         KeyBinding::new("alt-left", WordLeft, context),
         KeyBinding::new("alt-right", WordRight, context),
         KeyBinding::new("ctrl-left", WordLeft, context),
         KeyBinding::new("ctrl-right", WordRight, context),
+        KeyBinding::new("shift-alt-left", SelectWordLeft, context),
+        KeyBinding::new("shift-alt-right", SelectWordRight, context),
+        KeyBinding::new("shift-ctrl-left", SelectWordLeft, context),
+        KeyBinding::new("shift-ctrl-right", SelectWordRight, context),
         KeyBinding::new("alt-backspace", DeleteWordLeft, context),
         KeyBinding::new("ctrl-backspace", DeleteWordLeft, context),
+        KeyBinding::new("alt-delete", DeleteWordRight, context),
+        KeyBinding::new("ctrl-delete", DeleteWordRight, context),
+        // The typing's own undo, before the project's (the registry's
+        // Ctrl+Z, Ctrl+Shift+Z and Ctrl+Y).
+        KeyBinding::new("secondary-z", Undo, context),
+        KeyBinding::new("secondary-shift-z", Redo, context),
+        KeyBinding::new("secondary-y", Redo, context),
         KeyBinding::new("escape", Cancel, context),
+        KeyBinding::new("tab", FocusNext, context),
+        KeyBinding::new("shift-tab", FocusPrevious, context),
+    ];
+    if mac {
+        bindings.extend([
+            KeyBinding::new("cmd-left", Home, context),
+            KeyBinding::new("cmd-right", End, context),
+            KeyBinding::new("cmd-up", TextStart, context),
+            KeyBinding::new("cmd-down", TextEnd, context),
+            KeyBinding::new("shift-cmd-left", SelectHome, context),
+            KeyBinding::new("shift-cmd-right", SelectEnd, context),
+            KeyBinding::new("shift-cmd-up", SelectTextStart, context),
+            KeyBinding::new("shift-cmd-down", SelectTextEnd, context),
+            KeyBinding::new("cmd-backspace", DeleteToLineStart, context),
+        ]);
+    } else {
+        bindings.extend([
+            KeyBinding::new("ctrl-home", TextStart, context),
+            KeyBinding::new("ctrl-end", TextEnd, context),
+            KeyBinding::new("shift-ctrl-home", SelectTextStart, context),
+            KeyBinding::new("shift-ctrl-end", SelectTextEnd, context),
+        ]);
+    }
+    bindings.extend([
         // In code, Enter is a new line, and this is what sends it.
         KeyBinding::new("secondary-enter", SubmitCode, Some(CODE)),
-        // In the composer, what Kerf does without asking goes round.
+        // In code Tab is typed, as Qt's settings typed it in their JSON;
+        // Ctrl+Tab is the way out.
+        KeyBinding::new("tab", Indent, Some(CODE)),
+        KeyBinding::new("shift-tab", Outdent, Some(CODE)),
+        KeyBinding::new("ctrl-tab", FocusNext, Some(CODE)),
+        KeyBinding::new("ctrl-shift-tab", FocusPrevious, Some(CODE)),
+        // In the composer, what Kerf does without asking goes round
+        // (after the field's own Shift-Tab, so it comes first there).
         KeyBinding::new(
             "shift-tab",
             crate::chat::CyclePermissions,
             Some(format!("{} > {KEYS}", crate::chat::COMPOSER_CONTEXT).as_str()),
         ),
-    ]
+    ]);
+    bindings
 }
 
 /// What the field says to whoever holds it.
@@ -110,6 +199,234 @@ pub enum InputEvent {
     Submit,
     Cancel,
 }
+
+/// What a field held at one moment, to go back to.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Snapshot {
+    pub text: String,
+    pub selection: Range<usize>,
+    pub reversed: bool,
+}
+
+/// What an edit was, for keeping a run of them as one step back.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EditKind {
+    /// Letters typed (or composed) where the cursor was; typed over a
+    /// selection, they start a run of their own.
+    Typing,
+    /// Backspace, Delete, or a word or a line taken.
+    Deleting,
+    /// A paste, a cut, a new line: a step of its own.
+    Other,
+}
+
+/// A field's own undo and redo. Typing in a run (each letter where the
+/// last left the cursor) is one step back, and so is deleting in a run;
+/// moving the cursor ([`History::break_run`]) or any other edit starts a
+/// new step. A new edit forgets what was undone.
+#[derive(Clone, Debug, Default)]
+pub struct History {
+    undo: Vec<Snapshot>,
+    redo: Vec<Snapshot>,
+    /// The run open now: its kind and where its last edit left the cursor.
+    run: Option<(EditKind, usize)>,
+}
+
+impl History {
+    /// The most steps kept back.
+    pub const MOST: usize = 200;
+
+    /// An edit of `kind` is about to change `before`, leaving the cursor
+    /// at `cursor`.
+    pub fn record(&mut self, before: Snapshot, kind: EditKind, cursor: usize) {
+        let joins = match (self.run, kind) {
+            (Some((EditKind::Typing, at)), EditKind::Typing) => {
+                before.selection.is_empty() && before.selection.start == at
+            }
+            (Some((EditKind::Deleting, at)), EditKind::Deleting) => {
+                before.selection.start == at || before.selection.end == at
+            }
+            _ => false,
+        };
+        if !joins {
+            self.undo.push(before);
+            if self.undo.len() > Self::MOST {
+                self.undo.remove(0);
+            }
+        }
+        self.redo.clear();
+        self.run = (kind != EditKind::Other).then_some((kind, cursor));
+    }
+
+    /// The cursor moved: the next edit is a step of its own.
+    pub fn break_run(&mut self) {
+        self.run = None;
+    }
+
+    /// What to go back to from `current`, if anything was done.
+    pub fn undo(&mut self, current: Snapshot) -> Option<Snapshot> {
+        let back = self.undo.pop()?;
+        self.redo.push(current);
+        self.run = None;
+        Some(back)
+    }
+
+    /// What was undone last, to do again from `current`.
+    pub fn redo(&mut self, current: Snapshot) -> Option<Snapshot> {
+        let again = self.redo.pop()?;
+        self.undo.push(current);
+        self.run = None;
+        Some(again)
+    }
+
+    pub fn can_undo(&self) -> bool {
+        !self.undo.is_empty()
+    }
+
+    pub fn can_redo(&self) -> bool {
+        !self.redo.is_empty()
+    }
+
+    pub fn clear(&mut self) {
+        *self = Self::default();
+    }
+}
+
+/// The kind of an edit that puts `new_text` in place of `replaced` (a
+/// range `replaced` long): a letter or two typed (over a selection too,
+/// which starts a run of its own), a deletion, or anything else.
+pub fn edit_kind(replaced: usize, new_text: &str) -> EditKind {
+    if new_text.is_empty() {
+        if replaced == 0 {
+            EditKind::Other
+        } else {
+            EditKind::Deleting
+        }
+    } else if !new_text.contains('\n') && new_text.chars().count() <= 2 {
+        EditKind::Typing
+    } else {
+        EditKind::Other
+    }
+}
+
+/// What a press selects by, and a drag after it extends by: letters, or
+/// (after a double-click) words, or (a triple-click) lines.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum Unit {
+    #[default]
+    Letter,
+    Word,
+    Line,
+}
+
+impl Unit {
+    pub fn of_clicks(count: usize) -> Unit {
+        match count {
+            0 | 1 => Unit::Letter,
+            2 => Unit::Word,
+            _ => Unit::Line,
+        }
+    }
+}
+
+/// The word, the run of spaces or the mark at `offset` in `text`, as a
+/// double-click chooses it: what is just after the offset, or at the end
+/// what is just before it.
+pub fn word_at(text: &str, offset: usize) -> Range<usize> {
+    let offset = offset.min(text.len());
+    let mut last = 0..0;
+    for (at, part) in text.split_word_bound_indices() {
+        let range = at..at + part.len();
+        if part == "\n" {
+            if offset == at && last.end == at && !last.is_empty() {
+                return last;
+            }
+            last = range;
+            continue;
+        }
+        if range.contains(&offset) {
+            return range;
+        }
+        last = range;
+    }
+    if last.end == offset && text[last.clone()] != *"\n" {
+        last
+    } else {
+        offset..offset
+    }
+}
+
+/// The line `offset` is on in `text`, without its line break, as a
+/// triple-click chooses it.
+pub fn line_at(text: &str, offset: usize) -> Range<usize> {
+    let offset = offset.min(text.len());
+    let start = text[..offset].rfind('\n').map_or(0, |at| at + 1);
+    let end = text[offset..]
+        .find('\n')
+        .map_or(text.len(), |at| offset + at);
+    start..end
+}
+
+/// What Shift-Tab takes back in code with the cursor at `cursor`: up to
+/// an [`INDENT`] of the spaces its line starts with. None when the line
+/// starts with none.
+pub fn outdent_range(text: &str, cursor: usize) -> Option<Range<usize>> {
+    let start = line_at(text, cursor).start;
+    let spaces = text[start..]
+        .bytes()
+        .take(INDENT.len())
+        .take_while(|byte| *byte == b' ')
+        .count();
+    (spaces > 0).then(|| start..start + spaces)
+}
+
+/// The unit of `text` at `offset`.
+pub fn unit_at(text: &str, offset: usize, unit: Unit) -> Range<usize> {
+    match unit {
+        Unit::Letter => {
+            let offset = offset.min(text.len());
+            offset..offset
+        }
+        Unit::Word => word_at(text, offset),
+        Unit::Line => line_at(text, offset),
+    }
+}
+
+/// A drag from a press that chose `anchor` (by `unit`) to `offset`: the
+/// range from the anchor to the whole unit at the pointer, and whether the
+/// cursor is at its start (the drag went back).
+pub fn extend_by(
+    text: &str,
+    anchor: Range<usize>,
+    offset: usize,
+    unit: Unit,
+) -> (Range<usize>, bool) {
+    let here = unit_at(text, offset, unit);
+    if here.start < anchor.start {
+        (here.start..anchor.end, true)
+    } else {
+        (anchor.start..here.end.max(anchor.end), false)
+    }
+}
+
+/// Where a one-line field `visible` wide, scrolled `scroll` sideways,
+/// goes to show the cursor at `cursor` in text `width` wide: no further
+/// than it must, never past the text's end, never before its start.
+pub fn scroll_x_to_show(scroll: f32, cursor: f32, width: f32, visible: f32) -> f32 {
+    let caret = CURSOR_WIDTH;
+    let most = (width + caret - visible).max(0.0);
+    let scroll = if cursor < scroll {
+        cursor
+    } else if cursor + caret > scroll + visible {
+        cursor + caret - visible
+    } else {
+        scroll
+    };
+    scroll.clamp(0.0, most)
+}
+
+/// Points wide the cursor is drawn.
+const CURSOR_WIDTH: f32 = 1.5;
 
 pub struct TextInput {
     focus_handle: FocusHandle,
@@ -130,9 +447,19 @@ pub struct TextInput {
     max_height: Option<Pixels>,
     /// How far its text is scrolled up, past its top.
     scroll: Pixels,
+    /// How far one line is scrolled sideways, past its start.
+    scroll_x: Pixels,
     /// The cursor moved or the text changed: the next drawing scrolls to
     /// keep the cursor in view. A wheel scrolls away from it.
     reveal: bool,
+    /// Its own typing, to take back and do again.
+    history: History,
+    /// What the press that is held chose, and by what, so a drag after a
+    /// double-click goes by words.
+    press: Option<(Range<usize>, Unit)>,
+    /// The kind of the edit the next change is (a paste, a cut), when it
+    /// is not what the change itself says.
+    next_kind: Option<EditKind>,
 }
 
 /// Where the text was drawn last, to find the index under the pointer.
@@ -142,8 +469,9 @@ struct Layout {
     line_height: Pixels,
     /// The field's own bounds: what of the text shows.
     bounds: Bounds<Pixels>,
-    /// How far the text was scrolled up in them.
+    /// How far the text was scrolled up in them, and sideways.
     scroll: Pixels,
+    scroll_x: Pixels,
     /// The height of all its lines.
     height: Pixels,
 }
@@ -153,7 +481,8 @@ impl EventEmitter<InputEvent> for TextInput {}
 impl TextInput {
     pub fn new(cx: &mut Context<Self>, placeholder: impl Into<SharedString>) -> Self {
         Self {
-            focus_handle: cx.focus_handle(),
+            // Tab reaches every field.
+            focus_handle: cx.focus_handle().tab_stop(true),
             content: String::new(),
             placeholder: placeholder.into(),
             multiline: false,
@@ -168,7 +497,11 @@ impl TextInput {
             is_selecting: false,
             max_height: None,
             scroll: Pixels::ZERO,
+            scroll_x: Pixels::ZERO,
             reveal: false,
+            history: History::default(),
+            press: None,
+            next_kind: None,
         }
     }
 
@@ -226,8 +559,19 @@ impl TextInput {
         self.selected_range = end..end;
         self.marked_range = None;
         self.reveal = true;
+        // Text put in from outside starts the field's history afresh.
+        self.history.clear();
         cx.emit(InputEvent::Changed);
         cx.notify();
+    }
+
+    /// Whether the field has typing to take back, and to do again.
+    pub fn can_undo(&self) -> bool {
+        self.history.can_undo()
+    }
+
+    pub fn can_redo(&self) -> bool {
+        self.history.can_redo()
     }
 
     pub fn set_placeholder(
@@ -281,22 +625,191 @@ impl TextInput {
     }
 
     fn move_vertically(&mut self, direction: f32, cx: &mut Context<Self>) {
-        let Some(layout) = self.layout.clone() else {
-            return;
-        };
-        let Some(position) = self.position_for_index(&layout, self.cursor_offset()) else {
-            return;
-        };
+        if let Some(offset) = self.vertical_target(direction) {
+            self.move_to(offset, cx);
+        }
+    }
+
+    /// Where the cursor goes a line up (`direction` -1) or down (1).
+    fn vertical_target(&self, direction: f32) -> Option<usize> {
+        let layout = self.layout.clone()?;
+        let position = self.position_for_index(&layout, self.cursor_offset())?;
         let target = point(
             position.x,
             position.y + layout.line_height * direction + layout.line_height / 2.0,
         );
-        let offset = if target.y < Pixels::ZERO {
+        Some(if target.y < Pixels::ZERO {
             0
         } else {
             self.index_for_local(&layout, target)
+        })
+    }
+
+    /// Shift+Up: a line up, choosing; in one line, to its start.
+    fn select_up(&mut self, _: &SelectUp, _: &mut Window, cx: &mut Context<Self>) {
+        let target = if self.multiline {
+            self.vertical_target(-1.0).unwrap_or(0)
+        } else {
+            0
         };
-        self.move_to(offset, cx);
+        self.select_to(target, cx);
+    }
+
+    /// Shift+Down: a line down, choosing; in one line, to its end.
+    fn select_down(&mut self, _: &SelectDown, _: &mut Window, cx: &mut Context<Self>) {
+        let target = if self.multiline {
+            self.vertical_target(1.0).unwrap_or(self.content.len())
+        } else {
+            self.content.len()
+        };
+        self.select_to(target, cx);
+    }
+
+    fn line_start(&self) -> usize {
+        line_at(&self.content, self.cursor_offset()).start
+    }
+
+    fn line_end(&self) -> usize {
+        line_at(&self.content, self.cursor_offset()).end
+    }
+
+    fn select_home(&mut self, _: &SelectHome, _: &mut Window, cx: &mut Context<Self>) {
+        self.select_to(self.line_start(), cx);
+    }
+
+    fn select_end(&mut self, _: &SelectEnd, _: &mut Window, cx: &mut Context<Self>) {
+        self.select_to(self.line_end(), cx);
+    }
+
+    fn text_start(&mut self, _: &TextStart, _: &mut Window, cx: &mut Context<Self>) {
+        self.move_to(0, cx);
+    }
+
+    fn text_end(&mut self, _: &TextEnd, _: &mut Window, cx: &mut Context<Self>) {
+        self.move_to(self.content.len(), cx);
+    }
+
+    fn select_text_start(&mut self, _: &SelectTextStart, _: &mut Window, cx: &mut Context<Self>) {
+        self.select_to(0, cx);
+    }
+
+    fn select_text_end(&mut self, _: &SelectTextEnd, _: &mut Window, cx: &mut Context<Self>) {
+        self.select_to(self.content.len(), cx);
+    }
+
+    fn select_word_left(&mut self, _: &SelectWordLeft, _: &mut Window, cx: &mut Context<Self>) {
+        self.select_to(self.previous_word(self.cursor_offset()), cx);
+    }
+
+    fn select_word_right(&mut self, _: &SelectWordRight, _: &mut Window, cx: &mut Context<Self>) {
+        self.select_to(self.next_word(self.cursor_offset()), cx);
+    }
+
+    fn delete_word_right(
+        &mut self,
+        _: &DeleteWordRight,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.selected_range.is_empty() {
+            self.extend_to(self.next_word(self.cursor_offset()), cx)
+        }
+        self.replace_text_in_range(None, "", window, cx)
+    }
+
+    /// ⌘⌫: what is before the cursor on its line goes.
+    fn delete_to_line_start(
+        &mut self,
+        _: &DeleteToLineStart,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.selected_range.is_empty() {
+            self.extend_to(self.line_start(), cx)
+        }
+        self.replace_text_in_range(None, "", window, cx)
+    }
+
+    /// What the field holds now, to come back to.
+    fn snapshot(&self) -> Snapshot {
+        Snapshot {
+            text: self.content.clone(),
+            selection: self.selected_range.clone(),
+            reversed: self.selection_reversed,
+        }
+    }
+
+    fn restore(&mut self, snapshot: Snapshot, cx: &mut Context<Self>) {
+        self.content = snapshot.text;
+        let len = self.content.len();
+        self.selected_range = snapshot.selection.start.min(len)..snapshot.selection.end.min(len);
+        self.selection_reversed = snapshot.reversed;
+        self.marked_range = None;
+        self.reveal = true;
+        cx.emit(InputEvent::Changed);
+        cx.notify();
+    }
+
+    /// Takes back the field's last step of typing. With nothing to take
+    /// back it does nothing, and the project's Undo still does not run.
+    fn undo(&mut self, _: &Undo, _: &mut Window, cx: &mut Context<Self>) {
+        if self.marked_range.is_some() {
+            return;
+        }
+        let current = self.snapshot();
+        if let Some(back) = self.history.undo(current) {
+            self.restore(back, cx);
+        }
+    }
+
+    fn redo(&mut self, _: &Redo, _: &mut Window, cx: &mut Context<Self>) {
+        if self.marked_range.is_some() {
+            return;
+        }
+        let current = self.snapshot();
+        if let Some(again) = self.history.redo(current) {
+            self.restore(again, cx);
+        }
+    }
+
+    /// Tab leaves the field for what comes next, unless what holds it
+    /// takes Tab itself (the launcher's own stops).
+    fn focus_next(&mut self, _: &FocusNext, window: &mut Window, cx: &mut Context<Self>) {
+        crate::ui::tab_to(true, window, cx);
+    }
+
+    fn focus_previous(&mut self, _: &FocusPrevious, window: &mut Window, cx: &mut Context<Self>) {
+        crate::ui::tab_to(false, window, cx);
+    }
+
+    /// Tab in code: the indent is typed where the cursor is.
+    fn indent(&mut self, _: &Indent, window: &mut Window, cx: &mut Context<Self>) {
+        if self.marked_range.is_some() {
+            return;
+        }
+        self.replace_text_in_range(None, INDENT, window, cx);
+    }
+
+    /// Shift-Tab in code: the cursor's line gives back an indent.
+    fn outdent(&mut self, _: &Outdent, window: &mut Window, cx: &mut Context<Self>) {
+        if self.marked_range.is_some() {
+            return;
+        }
+        let Some(taken) = outdent_range(&self.content, self.cursor_offset()) else {
+            return;
+        };
+        let keep = |offset: usize| {
+            if offset >= taken.end {
+                offset - taken.len()
+            } else {
+                offset.min(taken.start)
+            }
+        };
+        let (chosen, reversed) = (self.selected_range.clone(), self.selection_reversed);
+        self.next_kind = Some(EditKind::Other);
+        self.replace_text_in_range(Some(self.range_to_utf16(&taken)), "", window, cx);
+        self.selected_range = keep(chosen.start)..keep(chosen.end);
+        self.selection_reversed = reversed && !self.selected_range.is_empty();
     }
 
     fn word_left(&mut self, _: &WordLeft, _: &mut Window, cx: &mut Context<Self>) {
@@ -314,7 +827,7 @@ impl TextInput {
         cx: &mut Context<Self>,
     ) {
         if self.selected_range.is_empty() {
-            self.select_to(self.previous_word(self.cursor_offset()), cx)
+            self.extend_to(self.previous_word(self.cursor_offset()), cx)
         }
         self.replace_text_in_range(None, "", window, cx)
     }
@@ -355,14 +868,14 @@ impl TextInput {
 
     fn backspace(&mut self, _: &Backspace, window: &mut Window, cx: &mut Context<Self>) {
         if self.selected_range.is_empty() {
-            self.select_to(self.previous_boundary(self.cursor_offset()), cx)
+            self.extend_to(self.previous_boundary(self.cursor_offset()), cx)
         }
         self.replace_text_in_range(None, "", window, cx)
     }
 
     fn delete(&mut self, _: &Delete, window: &mut Window, cx: &mut Context<Self>) {
         if self.selected_range.is_empty() {
-            self.select_to(self.next_boundary(self.cursor_offset()), cx)
+            self.extend_to(self.next_boundary(self.cursor_offset()), cx)
         }
         self.replace_text_in_range(None, "", window, cx)
     }
@@ -407,11 +920,20 @@ impl TextInput {
         window.focus(&self.focus_handle);
         self.is_selecting = true;
         let offset = self.index_for_mouse_position(event.position);
-        if event.click_count >= 2 {
-            self.selected_range = self.previous_word(offset)..self.next_word(offset);
+        let unit = Unit::of_clicks(event.click_count);
+        if unit != Unit::Letter {
+            // A double-click chooses the word, a triple-click the line;
+            // dragging on goes by them.
+            let chosen = unit_at(&self.content, offset, unit);
+            self.selected_range = chosen.clone();
+            self.selection_reversed = false;
+            self.press = Some((chosen, unit));
+            self.history.break_run();
+            self.reveal = true;
             cx.notify();
             return;
         }
+        self.press = None;
         if event.modifiers.shift {
             self.select_to(offset, cx);
         } else {
@@ -421,11 +943,23 @@ impl TextInput {
 
     fn on_mouse_up(&mut self, _: &MouseUpEvent, _window: &mut Window, _: &mut Context<Self>) {
         self.is_selecting = false;
+        self.press = None;
     }
 
     fn on_mouse_move(&mut self, event: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
-        if self.is_selecting {
-            self.select_to(self.index_for_mouse_position(event.position), cx);
+        if !self.is_selecting {
+            return;
+        }
+        let offset = self.index_for_mouse_position(event.position);
+        match self.press.clone() {
+            Some((anchor, unit)) => {
+                let (range, reversed) = extend_by(&self.content, anchor, offset, unit);
+                self.selected_range = range;
+                self.selection_reversed = reversed;
+                self.reveal = true;
+                cx.notify();
+            }
+            None => self.select_to(offset, cx),
         }
     }
 
@@ -462,6 +996,7 @@ impl TextInput {
             } else {
                 text.replace('\n', " ")
             };
+            self.next_kind = Some(EditKind::Other);
             self.replace_text_in_range(None, &text, window, cx);
         }
     }
@@ -479,6 +1014,7 @@ impl TextInput {
             cx.write_to_clipboard(ClipboardItem::new_string(
                 self.content[self.selected_range.clone()].to_string(),
             ));
+            self.next_kind = Some(EditKind::Other);
             self.replace_text_in_range(None, "", window, cx)
         }
     }
@@ -488,6 +1024,7 @@ impl TextInput {
         self.selected_range = offset..offset;
         self.selection_reversed = false;
         self.reveal = true;
+        self.history.break_run();
         cx.notify()
     }
 
@@ -499,7 +1036,18 @@ impl TextInput {
         }
     }
 
+    /// Shift with a move, or a drag: the selection's moving end goes to
+    /// `offset`, and the next edit is a step of its own, as after any move
+    /// of the cursor (deleting what was chosen never joins the Backspaces
+    /// before it).
     fn select_to(&mut self, offset: usize, cx: &mut Context<Self>) {
+        self.history.break_run();
+        self.extend_to(offset, cx);
+    }
+
+    /// The selection's moving end goes to `offset`, leaving the run of
+    /// edits open: Backspace and Delete choose what they take this way.
+    fn extend_to(&mut self, offset: usize, cx: &mut Context<Self>) {
         let offset = offset.min(self.content.len());
         if self.selection_reversed {
             self.selected_range.start = offset
@@ -551,7 +1099,7 @@ impl TextInput {
         if self.content.is_empty() {
             return 0;
         }
-        let local = position - layout.bounds.origin + point(Pixels::ZERO, layout.scroll);
+        let local = position - layout.bounds.origin + point(layout.scroll_x, layout.scroll);
         if local.y < Pixels::ZERO {
             return 0;
         }
@@ -742,6 +1290,16 @@ impl EntityInputHandler for TextInput {
             .or(self.marked_range.clone())
             .unwrap_or(self.selected_range.clone());
         let range = range.start.min(self.content.len())..range.end.min(self.content.len());
+        let kind = self
+            .next_kind
+            .take()
+            .unwrap_or_else(|| edit_kind(range.len(), &new_text));
+        // What ends a composition was kept as it began.
+        if self.marked_range.is_none() && !(range.is_empty() && new_text.is_empty()) {
+            let before = self.snapshot();
+            self.history
+                .record(before, kind, range.start + new_text.len());
+        }
         self.content =
             self.content[0..range.start].to_owned() + &new_text + &self.content[range.end..];
         self.selected_range = range.start + new_text.len()..range.start + new_text.len();
@@ -766,6 +1324,17 @@ impl EntityInputHandler for TextInput {
             .or(self.marked_range.clone())
             .unwrap_or(self.selected_range.clone());
         let range = range.start.min(self.content.len())..range.end.min(self.content.len());
+        // A composition is typing, kept as it begins.
+        if self.marked_range.is_none() {
+            let before = self.snapshot();
+            let kind = if range.is_empty() {
+                EditKind::Typing
+            } else {
+                EditKind::Other
+            };
+            self.history
+                .record(before, kind, range.start + new_text.len());
+        }
         self.content =
             self.content[0..range.start].to_owned() + new_text + &self.content[range.end..];
         self.marked_range =
@@ -806,7 +1375,7 @@ impl EntityInputHandler for TextInput {
         let range = self.range_from_utf16(&range_utf16);
         let start = self.position_for_index(&layout, range.start)?;
         let end = self.position_for_index(&layout, range.end).unwrap_or(start);
-        let origin = bounds.origin - point(Pixels::ZERO, layout.scroll);
+        let origin = bounds.origin - point(layout.scroll_x, layout.scroll);
         Some(Bounds::from_corners(
             origin + start,
             origin + point(end.x.max(start.x + px(1.0)), end.y + layout.line_height),
@@ -820,7 +1389,7 @@ impl EntityInputHandler for TextInput {
         _cx: &mut Context<Self>,
     ) -> Option<usize> {
         let layout = self.layout.clone()?;
-        let local = point - layout.bounds.origin + gpui::point(Pixels::ZERO, layout.scroll);
+        let local = point - layout.bounds.origin + gpui::point(layout.scroll_x, layout.scroll);
         Some(self.offset_to_utf16(self.index_for_local(&layout, local)))
     }
 }
@@ -835,8 +1404,10 @@ struct Prepaint {
     lines: Vec<WrappedLine>,
     quads: Vec<PaintQuad>,
     cursor: Option<PaintQuad>,
-    /// How far the text is scrolled up, and the height of all its lines.
+    /// How far the text is scrolled up and sideways, and the height of
+    /// all its lines.
     scroll: Pixels,
+    scroll_x: Pixels,
     height: Pixels,
 }
 
@@ -966,6 +1537,8 @@ impl Element for TextElement {
         cx: &mut App,
     ) -> Self::PrepaintState {
         let input = self.input.read(cx);
+        // Folded away to nothing, Tab passes it over.
+        crate::ui::note_shown(&input.focus_handle, bounds, window);
         let line_height = input.line_height();
         let empty = input.content.is_empty();
         let (text, color) = if empty {
@@ -997,18 +1570,41 @@ impl Element for TextElement {
             line_height,
             bounds,
             scroll: Pixels::ZERO,
+            scroll_x: Pixels::ZERO,
             height,
         };
         // Taller than the field: scrolled, and to the cursor when it moved.
         let most = (height - bounds.size.height).max(Pixels::ZERO);
         let mut scroll = input.scroll;
+        let cursor_at = input.position_for_index(&layout, input.cursor_offset());
         if input.reveal {
-            if let Some(at) = input.position_for_index(&layout, input.cursor_offset()) {
+            if let Some(at) = cursor_at {
                 scroll = scroll_to_show(scroll, at.y, line_height, bounds.size.height);
             }
         }
         let scroll = scroll.clamp(Pixels::ZERO, most);
-        let origin = bounds.origin - point(Pixels::ZERO, scroll);
+        // One line wider than the field: sideways, to the cursor when it
+        // moved, and never past the text's end.
+        let scroll_x = if input.multiline || empty {
+            Pixels::ZERO
+        } else {
+            let width = lines
+                .first()
+                .map_or(Pixels::ZERO, |line| line.size(line_height).width);
+            // Not revealing, it is held where it was, inside what the text
+            // allows now.
+            let shown = match cursor_at {
+                Some(at) if input.reveal => at.x,
+                _ => input.scroll_x,
+            };
+            px(scroll_x_to_show(
+                f32::from(input.scroll_x),
+                f32::from(shown),
+                f32::from(width),
+                f32::from(bounds.size.width),
+            ))
+        };
+        let origin = bounds.origin - point(scroll_x, scroll);
         let mut quads = Vec::new();
         let mut cursor = None;
         let selection = input.selected_range.clone();
@@ -1069,6 +1665,7 @@ impl Element for TextElement {
             quads,
             cursor,
             scroll,
+            scroll_x,
             height,
         }
     }
@@ -1097,16 +1694,26 @@ impl Element for TextElement {
             cx,
         );
         let scroll = prepaint.scroll;
-        // What scrolls past a field of several lines is not drawn.
-        let mask = multiline.then_some(ContentMask { bounds });
-        window.with_content_mask(mask, |window| {
+        let scroll_x = prepaint.scroll_x;
+        // What scrolls past the field is not drawn: above and below a field
+        // of several lines, beside one line (its glyphs keep their room
+        // above and below).
+        let mask = if multiline {
+            bounds
+        } else {
+            Bounds::from_corners(
+                point(bounds.left(), bounds.top() - line_height),
+                point(bounds.right(), bounds.bottom() + line_height),
+            )
+        };
+        window.with_content_mask(Some(ContentMask { bounds: mask }), |window| {
             for quad in prepaint.quads.drain(..) {
                 window.paint_quad(quad);
             }
             let mut top = bounds.origin.y - scroll;
             for line in &prepaint.lines {
                 let _ = line.paint(
-                    point(bounds.origin.x, top),
+                    point(bounds.origin.x - scroll_x, top),
                     line_height,
                     TextAlign::Left,
                     None,
@@ -1125,12 +1732,14 @@ impl Element for TextElement {
         let height = prepaint.height;
         self.input.update(cx, |input, _cx| {
             input.scroll = scroll;
+            input.scroll_x = scroll_x;
             input.reveal = false;
             input.layout = Some(Layout {
                 lines,
                 line_height,
                 bounds,
                 scroll,
+                scroll_x,
                 height,
             });
         });
@@ -1168,6 +1777,24 @@ impl Render for TextInput {
             .on_action(cx.listener(Self::submit_code))
             .on_action(cx.listener(Self::newline))
             .on_action(cx.listener(Self::cancel))
+            .on_action(cx.listener(Self::select_up))
+            .on_action(cx.listener(Self::select_down))
+            .on_action(cx.listener(Self::select_home))
+            .on_action(cx.listener(Self::select_end))
+            .on_action(cx.listener(Self::select_word_left))
+            .on_action(cx.listener(Self::select_word_right))
+            .on_action(cx.listener(Self::delete_word_right))
+            .on_action(cx.listener(Self::delete_to_line_start))
+            .on_action(cx.listener(Self::text_start))
+            .on_action(cx.listener(Self::text_end))
+            .on_action(cx.listener(Self::select_text_start))
+            .on_action(cx.listener(Self::select_text_end))
+            .on_action(cx.listener(Self::undo))
+            .on_action(cx.listener(Self::redo))
+            .on_action(cx.listener(Self::focus_next))
+            .on_action(cx.listener(Self::focus_previous))
+            .on_action(cx.listener(Self::indent))
+            .on_action(cx.listener(Self::outdent))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up))

@@ -5,7 +5,7 @@
 
 use crate::model::{Conversation, ConversationSummary, RenderJob, Snapshot};
 use serde_json::Value;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, Instant};
 
 /// The connection to kerfd.
@@ -63,6 +63,123 @@ pub struct Making {
     pub take: u32,
     pub line: String,
     pub since: Instant,
+}
+
+/// What a making's words say while it runs, as Qt's status bar said them:
+/// "Making take 2 of m4 from its steps…" before any step has spoken, then
+/// "Making m4: <what the step last said>". `name` is the media's name.
+pub fn making_status(name: &str, making: &Making) -> String {
+    if making.line.trim().is_empty() {
+        format!("Making take {} of {name} from its steps…", making.take)
+    } else {
+        format!("Making {name}: {}", making.line.trim())
+    }
+}
+
+/// What a media's file is short of, from `media_status`: its badge on a
+/// tile, and what its tooltip says to do.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Badge {
+    /// The file is missing.
+    Offline,
+    /// A Git LFS file not downloaded yet.
+    NotDownloaded,
+    /// Outside the project folder, or ignored by Git there.
+    External,
+}
+
+impl Badge {
+    pub fn words(self) -> &'static str {
+        match self {
+            Badge::Offline => "Offline",
+            Badge::NotDownloaded => "Not downloaded",
+            Badge::External => "External",
+        }
+    }
+
+    /// What it means, and what to do about it.
+    pub fn tip(self) -> &'static str {
+        match self {
+            Badge::Offline => {
+                "Offline: the file is missing. Replace Media… points this slot at another file."
+            }
+            Badge::NotDownloaded => "Not downloaded: a Git LFS file that a sync downloads.",
+            Badge::External => {
+                "Outside the project folder, or ignored by Git there, so collaborators do not have it. Consolidate Media copies it into media/."
+            }
+        }
+    }
+}
+
+/// The last `media_status`: media whose file is missing, Git LFS files not
+/// downloaded, and media outside the project folder, by id.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct MediaStatus {
+    pub missing: BTreeSet<String>,
+    pub pointers: BTreeSet<String>,
+    pub external: BTreeSet<String>,
+}
+
+impl MediaStatus {
+    pub fn from_value(event: &Value) -> Self {
+        let ids = |key: &str| {
+            event[key]
+                .as_array()
+                .map(|ids| {
+                    ids.iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_owned)
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        Self {
+            missing: ids("missing"),
+            pointers: ids("pointers"),
+            external: ids("external"),
+        }
+    }
+
+    /// Media `id`'s badge: a missing file outranks the rest, as it cannot
+    /// be downloaded or consolidated.
+    pub fn badge(&self, id: &str) -> Option<Badge> {
+        if self.missing.contains(id) {
+            Some(Badge::Offline)
+        } else if self.pointers.contains(id) {
+            Some(Badge::NotDownloaded)
+        } else if self.external.contains(id) {
+            Some(Badge::External)
+        } else {
+            None
+        }
+    }
+}
+
+/// What a media is doing, for its tile and its clips.
+#[derive(Clone, Debug, PartialEq)]
+pub enum MediaActivity {
+    Ready,
+    /// Being made: its take and when it began.
+    Making {
+        take: u32,
+        since: Instant,
+    },
+    /// Waiting its turn on the server ("asked…", "waiting, 2 ahead"): no
+    /// stripes and no clock, a dashed amber outline.
+    Queued {
+        ahead: Option<u32>,
+    },
+    /// A shot its recipe or steps have not made yet: a dashed hole.
+    NotMade,
+    /// Its file is gone.
+    Offline,
+}
+
+impl MediaActivity {
+    /// With no file to show: a hole in its lane, a dashed tile.
+    pub fn absent(&self) -> bool {
+        matches!(self, MediaActivity::NotMade | MediaActivity::Offline)
+    }
 }
 
 /// A note the window shows for a while: an error, or what finished.
@@ -154,16 +271,55 @@ pub struct EditorState {
     /// The preset file last read (`preset_inspect`): its path, and what it
     /// holds.
     pub inspected_preset: Option<(String, Value)>,
+    /// The last `media_status`.
+    pub media_status: MediaStatus,
+    /// What `media_info` said of each media (`pixFmt`, `codec`…), merged
+    /// as it comes, and the media it has been asked about since connecting.
+    pub media_info: BTreeMap<String, Value>,
+    pub info_asked: BTreeSet<String>,
+    /// Each media's `media_index` (its shots, silences and loudest
+    /// moments), what refused one, and those asked for and not come yet.
+    /// One goes when its media's file changes.
+    pub media_indexes: BTreeMap<String, Value>,
+    pub media_index_errors: BTreeMap<String, String>,
+    pub index_asked: BTreeSet<String>,
+    /// The shots the last `cast` event said want making as the cast
+    /// stands, each with why; one made since is taken off.
+    pub wants_making: BTreeMap<String, String>,
+    /// The last `cast` event: the project's cast and styles.
+    pub cast: Option<Value>,
     /// How many notices there have been.
     noticed: u64,
 }
 
-/// Commands whose refusals the view that sent them shows in place.
+/// Commands whose refusals the view that sent them shows in place: a
+/// making's plan, a shot's graph, the Index page, the Cast dialog, a
+/// media's description.
 fn answered_in_place(command: &str) -> bool {
-    matches!(command, "media_make" | "media_carry" | "takes_read")
-        || command.starts_with("recipe")
+    matches!(
+        command,
+        "media_make" | "media_carry" | "takes_read" | "media_index" | "media_info" | "cast"
+    ) || command.starts_with("recipe")
         || command.starts_with("shot_")
         || command.starts_with("workflow")
+}
+
+/// What saving the cast says: which shots want making for it now.
+pub fn cast_saved(event: &Value) -> String {
+    let wanting: Vec<&str> = event["toMake"]
+        .as_array()
+        .map(|shots| {
+            shots
+                .iter()
+                .filter_map(|shot| shot["media"].as_str())
+                .collect()
+        })
+        .unwrap_or_default();
+    match wanting.len() {
+        0 => "Saved the cast; no shot wants making for it".to_owned(),
+        1 => format!("Saved the cast; {} wants making again", wanting[0]),
+        _ => format!("Saved the cast; {} want making again", wanting.join(", ")),
+    }
 }
 
 impl EditorState {
@@ -181,7 +337,9 @@ impl EditorState {
         let kind = event["type"].as_str().unwrap_or_default();
         match kind {
             "state" => {
-                self.snapshot = Snapshot::from_value(&event["snapshot"]);
+                let snapshot = Snapshot::from_value(&event["snapshot"]);
+                self.forget_relinked(&snapshot);
+                self.snapshot = snapshot;
                 self.has_snapshot = true;
                 if self.duration <= 0.0 {
                     self.duration = self.snapshot.duration;
@@ -202,6 +360,9 @@ impl EditorState {
                     }
                     _ => Connection::Connecting,
                 };
+                // A new connection knows nothing of what was asked before.
+                self.info_asked.clear();
+                self.index_asked.clear();
                 Change::Connection
             }
             "error" => {
@@ -211,6 +372,16 @@ impl EditorState {
                     if let Some(media) = event["media"].as_str() {
                         self.makings.remove(media);
                     }
+                }
+                // The Index page says why its media could not be indexed.
+                if command == "media_index" {
+                    let media = event["media"].as_str().unwrap_or_default().to_owned();
+                    let message = event["message"]
+                        .as_str()
+                        .unwrap_or("This media could not be indexed")
+                        .to_owned();
+                    self.index_asked.remove(&media);
+                    self.media_index_errors.insert(media, message);
                 }
                 // What a shot's graph or a making's plan asked for is answered
                 // where it was asked, not again over the conversation.
@@ -497,10 +668,64 @@ impl EditorState {
                 Change::Making
             }
             "media_made" | "media_make_cancelled" => {
-                if let Some(media) = event["media"].as_str() {
-                    self.makings.remove(media);
+                let media = event["media"].as_str().unwrap_or_default();
+                self.makings.remove(media);
+                if media.is_empty() {
+                    return Change::Making;
+                }
+                if kind == "media_made" {
+                    // Made again, it no longer wants making.
+                    self.wants_making.remove(media);
+                    let name = self.snapshot.timeline.media_name(media);
+                    let take = event["take"].as_u64().unwrap_or(1);
+                    self.notify(&format!("Made take {take} of {name} from its steps"), false);
+                } else {
+                    self.notify(&format!("Stopped making {media}; it is as it was"), false);
                 }
                 Change::Making
+            }
+            "media_status" => {
+                self.media_status = MediaStatus::from_value(event);
+                Change::Other
+            }
+            "media_info" => {
+                if let Some(media) = event["media"].as_object() {
+                    for (id, info) in media {
+                        self.media_info.insert(id.clone(), info.clone());
+                    }
+                }
+                Change::Other
+            }
+            "media_index" => {
+                if let Some(media) = event["media"].as_str().filter(|media| !media.is_empty()) {
+                    self.index_asked.remove(media);
+                    self.media_index_errors.remove(media);
+                    self.media_indexes.insert(media.to_owned(), event.clone());
+                }
+                Change::Other
+            }
+            "cast" => {
+                self.wants_making = event["toMake"]
+                    .as_array()
+                    .map(|shots| {
+                        shots
+                            .iter()
+                            .filter_map(|shot| {
+                                let media = shot["media"].as_str()?;
+                                let why = shot["why"].as_str().unwrap_or_default();
+                                Some((media.to_owned(), why.to_owned()))
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                self.cast = Some(event.clone());
+                if event["saved"].as_bool() == Some(true) {
+                    let said = cast_saved(event);
+                    self.notify(&said, false);
+                    Change::Notice
+                } else {
+                    Change::Other
+                }
             }
             "preset_inspect" => {
                 let path = event["path"].as_str().unwrap_or_default().to_owned();
@@ -533,6 +758,59 @@ impl EditorState {
             }
             _ => Change::Other,
         }
+    }
+
+    /// Lets go of what was learned of a media whose file another snapshot
+    /// names otherwise, or that it no longer has: an index belongs to the
+    /// file it was made of.
+    fn forget_relinked(&mut self, next: &Snapshot) {
+        let before = &self.snapshot.timeline.sources;
+        let gone: Vec<String> = before
+            .iter()
+            .filter(|old| {
+                next.timeline
+                    .source(&old.id)
+                    .is_none_or(|new| new.path != old.path)
+            })
+            .map(|old| old.id.clone())
+            .collect();
+        for id in gone {
+            self.media_indexes.remove(&id);
+            self.media_index_errors.remove(&id);
+            self.index_asked.remove(&id);
+            self.media_info.remove(&id);
+            self.info_asked.remove(&id);
+        }
+    }
+
+    /// What media `id` is doing: being made or waiting its turn (as its
+    /// making's line says, `stage::chip::phase`), else not made yet or
+    /// offline when its file is missing (a shot made from steps, or a file
+    /// that is gone), else ready.
+    pub fn media_activity(&self, id: &str) -> MediaActivity {
+        if let Some(making) = self.makings.get(id) {
+            return match crate::stage::chip::phase(&making.line) {
+                crate::stage::chip::Phase::Waiting { ahead } => MediaActivity::Queued { ahead },
+                phase if phase.queued() => MediaActivity::Queued { ahead: None },
+                _ => MediaActivity::Making {
+                    take: making.take,
+                    since: making.since,
+                },
+            };
+        }
+        if self.media_status.missing.contains(id) {
+            let made = self
+                .snapshot
+                .timeline
+                .source(id)
+                .is_some_and(crate::model::Source::is_made);
+            return if made {
+                MediaActivity::NotMade
+            } else {
+                MediaActivity::Offline
+            };
+        }
+        MediaActivity::Ready
     }
 
     /// Chooses the conversation to show; None is a new one.

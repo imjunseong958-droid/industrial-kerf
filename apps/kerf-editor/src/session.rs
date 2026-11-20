@@ -74,6 +74,9 @@ pub struct Session {
     pub pinned_proposal: Option<String>,
     /// What the window and Kerf did, a line each (Activity, in the title's menu).
     pub activity: ActivityLog,
+    /// Each media's poster, filmstrip and peaks, made off the window's
+    /// thread as the project's media come and change ([`crate::artwork`]).
+    pub artwork: crate::artwork::Artwork,
     _poll: Option<Task<()>>,
 }
 
@@ -102,6 +105,7 @@ impl Session {
                 kerf_bridge::Bridge::open(project, &kerfd)
             });
             let poll = bridge.is_some().then(|| Self::poll_forever(window, cx));
+            let artwork = crate::artwork::Artwork::new(project.clone());
             let mut session = Self {
                 project,
                 bridge,
@@ -126,6 +130,7 @@ impl Session {
                 export_quality: crate::export::Quality::default(),
                 pinned_proposal: None,
                 activity: ActivityLog::default(),
+                artwork,
                 _poll: poll,
             };
             session.send(json!({"type": "conversations", "action": "list"}));
@@ -174,7 +179,10 @@ impl Session {
             }
             cx.emit(BridgeEvent(event.clone()));
             match &change {
-                Change::Snapshot => self.follow_link(),
+                Change::Snapshot => {
+                    self.follow_link();
+                    self.follow_media();
+                }
                 Change::Connection
                     if self.state.connection == crate::store::Connection::Connected =>
                 {
@@ -204,6 +212,13 @@ impl Session {
             cx.emit(change);
         }
         let mut changed = heard;
+        // Artwork made since: drawn now; what it let go of leaves the atlas.
+        for image in self.artwork.take_dropped() {
+            let _ = window.drop_image(image);
+        }
+        if self.artwork.take_changed() {
+            changed = true;
+        }
         if let Some(frame) = frame {
             self.show_frame(frame, window, cx);
             cx.emit(Change::Clock);
@@ -246,6 +261,55 @@ impl Session {
         }
     }
 
+    /// Follows the project's media as a snapshot has it: its artwork is
+    /// made for media new or changed, and kerfd is asked to describe media
+    /// it has not been asked about since connecting (`media_info`: the
+    /// pixel format a tile's alpha checkerboard follows).
+    fn follow_media(&mut self) {
+        let sources = &self.state.snapshot.timeline.sources;
+        self.artwork.sync(sources);
+        if self.state.connection != crate::store::Connection::Connected {
+            return;
+        }
+        let fresh: Vec<String> = sources
+            .iter()
+            .map(|source| source.id.clone())
+            .filter(|id| !id.is_empty() && !self.state.info_asked.contains(id))
+            .collect();
+        if fresh.is_empty() {
+            return;
+        }
+        let mut request = json!({"type": "media_info"});
+        if let [only] = fresh.as_slice() {
+            request["media"] = json!(only);
+        }
+        if self.send(request) {
+            self.state.info_asked.extend(fresh);
+        }
+    }
+
+    /// Asks for media `media`'s index (its shots, silences and loudest
+    /// moments) unless it is known, refused or asked for already. The
+    /// Media band's Index page calls it for the chosen media.
+    pub fn ask_media_index(&mut self, media: &str) {
+        let state = &self.state;
+        if media.is_empty()
+            || state.media_indexes.contains_key(media)
+            || state.media_index_errors.contains_key(media)
+            || state.index_asked.contains(media)
+        {
+            return;
+        }
+        if self.send(json!({"type": "media_index", "media": media})) {
+            self.state.index_asked.insert(media.to_owned());
+        }
+    }
+
+    /// Media `id`'s readable name ([`crate::names`]).
+    pub fn media_name(&self, id: &str) -> String {
+        self.timeline().media_name(id)
+    }
+
     /// Follows `link` once the project is connected: seeks to its moment,
     /// and says so when it names another revision.
     pub fn follow(&mut self, link: crate::links::Link) {
@@ -285,6 +349,8 @@ impl Session {
         if !sent {
             self.state
                 .notify("Kerf is busy; that was not sent. Try again.", true);
+        } else if let Some((kind, text)) = activity_of_command(&command, self.timeline()) {
+            self.activity.push(kind, &text);
         }
         sent
     }
@@ -606,6 +672,8 @@ impl Session {
         }
         if let Some(collab) = &self.state.collab {
             context["collab"] = collab.clone();
+            // Consolidate Media follows the media outside the project folder.
+            context["collab"]["externalMedia"] = json!(self.state.media_status.external.len());
         }
         // The pinned card's proposal, else (none pinned, or one gone since)
         // the newest pending one.
@@ -967,6 +1035,53 @@ pub fn activity_of(event: &Value) -> Option<(&'static str, String)> {
                 .unwrap_or("Native preview unavailable")
                 .to_owned(),
         )),
+        _ => None,
+    }
+}
+
+/// The Activity line a command sent leaves, if any: a making a person said
+/// yes to ("Making m4 from its steps in the document", "Making 3 takes of
+/// m4 …"), steps carried into the document, a take chosen ("Using take 1
+/// of m5"), a file put behind a media ("Replacing m2 with b.mov").
+pub fn activity_of_command(command: &Value, timeline: &Timeline) -> Option<(&'static str, String)> {
+    let media = command["media"].as_str().unwrap_or_default();
+    let source = timeline.source(media);
+    match command["type"].as_str()? {
+        "media_make" if command["confirmed"] == true => {
+            let from = source
+                .filter(|source| source.steps_in_document())
+                .map(|_| " from its steps in the document")
+                .unwrap_or_default();
+            let rolls = command["rolls"].as_u64().unwrap_or(1);
+            Some((
+                "import",
+                if rolls > 1 {
+                    format!("Making {rolls} takes of {media}{from}")
+                } else {
+                    format!("Making {media}{from}")
+                },
+            ))
+        }
+        "media_carry" if command["confirmed"] == true => Some((
+            "import",
+            format!("Carrying the steps of {media} into the document"),
+        )),
+        "media_replace" => {
+            let path = command["path"].as_str().unwrap_or_default();
+            let take = source.and_then(|source| {
+                source
+                    .takes
+                    .iter()
+                    .find(|take| !take.path.is_empty() && take.path == path)
+            });
+            Some((
+                "import",
+                match take {
+                    Some(take) => format!("Using take {} of {media}", take.number),
+                    None => format!("Replacing {media} with {}", crate::names::file_name(path)),
+                },
+            ))
+        }
         _ => None,
     }
 }

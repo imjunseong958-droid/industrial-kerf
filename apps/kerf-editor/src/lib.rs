@@ -6,6 +6,8 @@
 //! window draws from that state and sends edits back as typed operations.
 
 pub mod app;
+pub mod artwork;
+pub mod cast;
 pub mod chat;
 pub mod commands;
 pub mod export;
@@ -19,6 +21,7 @@ pub mod making;
 pub mod media;
 pub mod model;
 pub mod motion;
+pub mod names;
 pub mod palette;
 pub mod prefs;
 pub mod presets;
