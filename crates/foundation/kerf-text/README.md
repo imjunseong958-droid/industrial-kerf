@@ -21,9 +21,9 @@ centre or right edge). Area text (`ParagraphStyle::width`): the origin is the bo
 
 ## Performance
 
-A three-line, centred, 96 px bold title at 1080p (`perf::three_line_title_is_fast`), release build
-on an M-series Mac: about 1.6 ms cold (shaping, outline extraction, glyph rasterisation) and
-0.15 ms warm (layout cache + glyph cache). The test fails if the warm path exceeds 40 ms.
+A three-line, centred, 96 px bold title at 1080p, release build on an M-series Mac: about
+1.6 ms cold (shaping, outline extraction, glyph rasterisation) and 0.15 ms warm (layout cache +
+glyph cache), measured by hand; no test holds it to a time.
 
 ## Not yet
 

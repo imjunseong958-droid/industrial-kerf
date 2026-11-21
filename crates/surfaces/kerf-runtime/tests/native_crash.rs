@@ -19,7 +19,7 @@ fn crash_on_purpose() {
     match how.as_str() {
         // SAFETY: none; this is the crash. Address 16 is never mapped.
         "segfault" => unsafe { std::ptr::write_volatile(std::ptr::without_provenance_mut::<u8>(16), 1) },
-        // SAFETY: abort takes nothing; it is what Qt and std::terminate end a process with.
+        // SAFETY: abort takes nothing; it is what C++'s std::terminate ends a process with.
         "abort" => unsafe { libc::abort() },
         "fatal" => {
             crash::fatal("QWidget: Must construct a QApplication before a QWidget");
@@ -142,7 +142,7 @@ fn an_abort_leaves_a_report_with_a_backtrace() {
     assert!(names_this_binary(backtrace(&text)), "{text}");
 }
 
-// Qt's qFatal: the editor reports the message, and the abort that follows adds nothing.
+// A fatal error reported before an abort: its message is the report, and the abort adds nothing.
 #[test]
 fn a_fatal_error_is_reported_once_with_its_message() {
     let crashed = crash("fatal");

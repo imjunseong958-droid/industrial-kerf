@@ -26,8 +26,7 @@
 //! small frame, so it reads to about a hundredth of the frame. Every clip that
 //! draws is read, whichever track it is on. That is a frame drawn for each,
 //! and they are drawn side by side, as many at once as there are cores, so a
-//! scene of some tens of clips is read in a fraction of a second
-//! (`what_reading_a_frame_costs` in `tests/shows.rs` measures one).
+//! scene of some tens of clips is read in a fraction of a second.
 
 use crate::error::Result;
 use kerf_compose::{ComposeOptions, Compositor, Frame, Pass};

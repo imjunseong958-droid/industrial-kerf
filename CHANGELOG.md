@@ -6,6 +6,30 @@ on `main`; its section here becomes the release's notes on GitHub
 
 ## Unreleased
 
+- The editor is a Rust app drawn with GPUI, in place of the Qt6/C++ editor.
+  It is one program, `kerf-editor` (`kerf-editor.exe` on Windows, inside
+  `Industrial Kerf.app` on macOS), that carries no toolkit: the packages no
+  longer hold Qt, its plugins or ICU. It draws with Metal on macOS, DirectX 11
+  on Windows, and Vulkan on Linux, natively on X11 or Wayland, so a Linux
+  system needs a Vulkan driver (Mesa's, on most), which the `.deb` and `.rpm`
+  now depend on. `kerf` opens it as before, beside itself, in the installed
+  app on macOS, or from a checkout's `target/debug` and `target/release`;
+  `KERF_EDITOR_BIN` names another, in place of `KERF_QT_BIN`, and
+  `scripts/install-kerf-local.sh editor` installs it, in place of `qt`
+  ([apps/kerf-editor/README.md](apps/kerf-editor/README.md)).
+- The editor is a Cargo workspace of its own, built with
+  `cargo build --manifest-path apps/kerf-editor/Cargo.toml` into the same
+  `target`: GPUI turns on serde_json's `preserve_order`, and as a member of
+  the repository's workspace that would have changed how kerfd, `kerf` and
+  `kerf-mcp` order JSON whenever they were built beside the editor.
+- The editor reaches kerfd through the `kerf-bridge` crate, a Rust API it
+  links, in place of the C ABI (`kerf-qt-bridge`, `bridge.h`) the Qt editor
+  called. Its tests drive a real kerfd as the editor does
+  (`cargo test -p kerf-bridge`).
+- The Qt editor's test suite went with it, as did tests that checked nothing
+  of Kerf's own, `scripts/run-kerf-qt.sh` and `scripts/test-kerf-qt-bridge.py`.
+  The package checks start the editor and need it to draw and quit on its
+  own, where they took a screenshot.
 - A shape or a title in depth draws all of its outline. It was drawn on a
   picture the size of the frame and then placed in depth, so whatever of it
   lay past the frame was lost, and the cut showed as a hard edge once the

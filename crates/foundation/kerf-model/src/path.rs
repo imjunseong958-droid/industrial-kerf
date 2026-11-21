@@ -193,8 +193,7 @@ mod tests {
         }
     }
 
-    /// `pathsAreTheCompositorsPaths` in the Qt editor's `graph_test.cpp` holds the curve the
-    /// picture draws to this same table.
+    /// A path reads the table the curve the picture draws is held to.
     #[test]
     fn paths_read_the_table_the_picture_is_held_to() {
         const WIDE: f64 = 16.0 / 9.0;

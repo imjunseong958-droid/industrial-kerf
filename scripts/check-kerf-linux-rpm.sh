@@ -4,7 +4,8 @@
 # whole. It asks of the .rpm what scripts/check-kerf-linux-deb.sh asks of the .deb.
 #
 # dnf installs it without its Recommends, so its Requires alone have to bring every library
-# its binaries name: before anything else is installed, the loader has to find each (ldd).
+# its binaries name: before anything else is installed, the loader has to find each (ldd),
+# and a Vulkan loader and driver, which the editor opens rather than names.
 # In a bare container (fedora), where package.yml runs this, that is what shows the
 # Requires to be whole. Then it installs what the checks themselves need and runs
 # scripts/check-kerf-linux.sh on /opt/industrial-kerf, the folder as installed; then what an
@@ -51,7 +52,7 @@ installed=true
 dnf install -y -q --setopt=install_weak_deps=False --nogpgcheck "$scratch/industrial-kerf.rpm" > "$scratch/dnf.log" 2>&1 ||
     { cat "$scratch/dnf.log" >&2; echo "dnf could not install $rpm" >&2; exit 1; }
 [ "$(rpm -q --queryformat '%{VERSION}' industrial-kerf)" = "$version" ] || { echo "dnf installed another version than $version" >&2; exit 1; }
-[ -x "$prefix/bin/kerf-qt" ] || { echo "The package installed no $prefix/bin/kerf-qt" >&2; exit 1; }
+[ -x "$prefix/bin/kerf-editor" ] || { echo "The package installed no $prefix/bin/kerf-editor" >&2; exit 1; }
 
 # With only what dnf brought for it: every library a binary names is found.
 unfound="$(while IFS= read -r -d '' file; do
@@ -75,13 +76,12 @@ dnf install -y -q --setopt=install_weak_deps=False xorg-x11-server-Xvfb xorg-x11
 home="$scratch/home"
 mkdir -p "$home"
 as_user() {
-    env -u LD_LIBRARY_PATH -u LD_PRELOAD -u QT_PLUGIN_PATH -u QT_QPA_PLATFORM_PLUGIN_PATH \
-        -u QML2_IMPORT_PATH -u QML_IMPORT_PATH -u QT_QPA_PLATFORM -u XDG_DATA_HOME -u XDG_CONFIG_HOME \
-        -u XDG_DATA_DIRS HOME="$home" XDG_RUNTIME_DIR="$scratch" "$@"
+    env -u LD_LIBRARY_PATH -u LD_PRELOAD -u XDG_DATA_HOME -u XDG_CONFIG_HOME \
+        -u XDG_DATA_DIRS -u WAYLAND_DISPLAY HOME="$home" XDG_RUNTIME_DIR="$scratch" "$@"
 }
 
 # On PATH, each through its link in /usr/bin.
-for tool in kerf-qt kerf kerfd kerf-mcp; do
+for tool in kerf-editor kerf kerfd kerf-mcp; do
     [ "$(readlink -f "$(as_user bash -c 'command -v "$1"' which "$tool")")" = "$prefix/bin/$tool" ] ||
         { echo "$tool on PATH is not $prefix/bin/$tool" >&2; exit 1; }
 done
@@ -97,16 +97,15 @@ if ! grep -q 'rate=25 dur=00:00:02:00 video=320x240' "$scratch/import.json"; the
     grep -o 'rate=[^ ]* dur=[^ ]* video=[0-9x]*' "$scratch/import.json" >&2 || grep '"id":"import"' "$scratch/import.json" >&2
     exit 1
 fi
-as_user xvfb-run -a -s "-screen 0 1600x1200x24" \
-    kerf-qt --settings-dir "$scratch/settings" --screenshot "$scratch/start.png" --quit-after-ms 3000
-[ -s "$scratch/start.png" ] || { echo "The editor, started through /usr/bin, made no screenshot" >&2; exit 1; }
+as_user xvfb-run -a -s "-screen 0 1600x1000x24 +extension Composite" timeout 120 kerf-editor --quit-after-ms 3000 ||
+    { echo "The editor, started through /usr/bin, did not open and quit on its own" >&2; exit 1; }
 
 # Among the applications, under its own icon, and opening kerf:// links.
-kerf_check_entry "$entry" "$prefix/bin/kerf-qt"
+kerf_check_entry "$entry" "$prefix/bin/kerf-editor"
 [ -f /usr/share/icons/hicolor/index.theme ] || { echo "No hicolor theme for the icon to be found in: the package requires hicolor-icon-theme" >&2; exit 1; }
 kerf_check_icons /usr/share/icons/hicolor
 kerf_takes_links as_user
-kerf_follow_link "$prefix/bin/kerf-qt" as_user
+kerf_follow_link "$prefix/bin/kerf-editor" as_user
 
 # Removed, it leaves nothing: none of its files, its folder, nor its claim on kerf://.
 rpm -ql industrial-kerf > "$scratch/files.txt"

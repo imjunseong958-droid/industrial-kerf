@@ -209,7 +209,7 @@ otherwise. Nothing else has to be kept in step with it.
 | 2 | `vfx` | Following what moves in a picture and cutting it out; keys and mattes are in `effects` for now | `kerf-track` |
 | 2 | `motion` | Motion graphics drawn from numbers | `kerf-motion` |
 | 3 | `engine` | Sequences into frames and files | `kerf-core`, `kerf-compose`, `kerf-playback`, `kerf-engine` |
-| 4 | `surfaces` | What people and agents touch | `kerf-runtime`, `kerf-agent`, `kerf-mcp`, `kerf-skills`, `kerf-commands`, `kerf-cli`, `kerf-qt-bridge`, `kerf-cloud`, `kerf-fetcher`, `kerf-workflow`, `kerf-shots` |
+| 4 | `surfaces` | What people and agents touch | `kerf-runtime`, `kerf-agent`, `kerf-mcp`, `kerf-skills`, `kerf-commands`, `kerf-cli`, `kerf-bridge`, `kerf-cloud`, `kerf-fetcher`, `kerf-workflow`, `kerf-shots` |
 
 The areas in layer 2 may not depend on each other. What two of them need moves
 down to `render` or `foundation`. Only `engine` and `surfaces` see them all.
@@ -572,7 +572,7 @@ What is built for it, in this order, each measured before the next:
    it. That street's frame, read at 384 by 216 on four cores with no GPU,
    took about 390 ms for the 32 and takes about 200 for all 55, where one
    after another they took about 520; on one core it takes 560, and on two
-   325 (`what_reading_a_frame_costs`). As tasks of the pool the frames' own
+   325. As tasks of the pool the frames' own
    loops share it took 180, but there a thread that waits on a loop takes up
    another frame with the one it is in half drawn, and waits for good on a
    lock that one holds; on plain threads, every loop handed to that pool,
@@ -835,8 +835,9 @@ What is built for it, in this order, each measured before the next:
    on a parent in depth that it stays on the frame; it had said that a
    light over nothing but meshes falls on nothing, which was wrong. The
    editor's overlays, a mask's outline and a motion path on the picture,
-   go through the same motion (`editor_common.cpp`, `carriedBy`), held to
-   the compositor by the rows the two tables share.
+   went through the same motion in the Qt editor (`carriedBy`), held to
+   the compositor by the rows the two tables share; the GPUI editor
+   (`apps/kerf-editor`) has to be held to them again.
 5. **A making that streams**, last. Models that answer in under a second
    are reported, on data-center cards and at small sizes for now. A making writes
    files in steps, and a draft that is not kept wants a way of its own: the
@@ -1924,7 +1925,7 @@ agent the numbers (`scopes: true`), so that it can grade by measuring: levels, c
 tonal zones, a histogram, the cast, saturation, the skin tone line, and the densest colors. In an HDR
 sequence they are of its signal, with `hdr` giving peak and mean cd/m², the share over SDR white, and the share past BT.709.
 Comparing `proposal` with the project shows what a grade did. A person reads the same frame in the
-Finish tray: a waveform, a vectorscope, and an RGB parade (`apps/kerf-qt/ui/scopes.h`), in an HDR sequence of its signal.
+Finish tray: a waveform, a vectorscope, and an RGB parade, drawn by the editor (`apps/kerf-editor`), in an HDR sequence of its signal.
 
 The 18 grades (`look.grade.*`, `crates/foundation/kerf-model/looks`) are FilmCraft's Lumetri presets
 as looks, each behind an `amount`, so 0 leaves the picture alone and `fx c1 flatten 1` opens one up for

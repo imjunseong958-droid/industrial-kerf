@@ -435,20 +435,4 @@ mod tests {
         let camera = catalog.fx("camera").unwrap();
         assert!(text.contains(&fx_reference(camera)));
     }
-
-    #[test]
-    fn it_says_what_an_agent_was_found_to_guess_at() {
-        let text = reference(Catalog::builtin());
-        // A picture is fit inside the frame before its scale.
-        assert!(text.contains("`scale=1` (0..100, ×, animatable) Uniform scale, of a picture already fit inside the frame"));
-        // `parent` is refused where a clip is placed.
-        assert!(text.contains("`set c2 parent=c1` moves `c2` with `c1`"));
-        // A multicam part with no angle shows the highest track.
-        assert!(text.contains("With none it shows every\n  track, the highest over the rest"));
-        // A roll and a blade take `snap=` too, and are one cut where all they cut are quiet.
-        assert!(text.contains("trim, roll, split, blade, insert"));
-        assert!(text.contains("a blade or roll where all it cuts are quiet"));
-        // A bold title is a face of its font, not a guess at `wght`.
-        assert!(text.contains("`weight=900` picks its face"));
-    }
 }

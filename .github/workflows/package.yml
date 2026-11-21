@@ -36,11 +36,12 @@ on:
       - "scripts/check-kerf-linux-rpm.sh"
       - "scripts/kerf-linux-desktop.sh"
       - "scripts/collect-kerf-linux-sources.sh"
+      - "scripts/bundle-kerf-macos.sh"
       - "tools/kerf-guide/**"
-      - "apps/kerf-qt/packaging/**"
-      - "apps/kerf-qt/resources/icon/**"
-      - "apps/kerf-qt/Info.plist.in"
-      - "apps/kerf-qt/CMakeLists.txt"
+      - "apps/kerf-editor/packaging/**"
+      - "apps/kerf-editor/assets/icon/**"
+      - "apps/kerf-editor/Cargo.toml"
+      - "apps/kerf-editor/build.rs"
       - ".github/workflows/package.yml"
   push:
     tags: ["v*"]
@@ -62,11 +63,12 @@ on:
       - "scripts/check-kerf-linux-rpm.sh"
       - "scripts/kerf-linux-desktop.sh"
       - "scripts/collect-kerf-linux-sources.sh"
+      - "scripts/bundle-kerf-macos.sh"
       - "tools/kerf-guide/**"
-      - "apps/kerf-qt/packaging/**"
-      - "apps/kerf-qt/resources/icon/**"
-      - "apps/kerf-qt/Info.plist.in"
-      - "apps/kerf-qt/CMakeLists.txt"
+      - "apps/kerf-editor/packaging/**"
+      - "apps/kerf-editor/assets/icon/**"
+      - "apps/kerf-editor/Cargo.toml"
+      - "apps/kerf-editor/build.rs"
       - ".github/workflows/package.yml"
 
 # A newer push supersedes the builds still running for the one before it, on a
@@ -82,8 +84,8 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  # The FFmpeg and Qt in the package. BtbN's builds, as they pin the commit of each
-  # library they build, which its source needs; see rust-runtime.yml.
+  # The FFmpeg in the package. BtbN's builds, as they pin the commit of each library
+  # they build, which its source needs; see rust-runtime.yml.
   FFMPEG_BUILDS_TAG: autobuild-2026-09-30-13-08
   FFMPEG_BUILDS_COMMIT: 6c9aec5fc9a72ec3abedd1fa84db141fa18cf52b
   FFMPEG_NAME: ffmpeg-n9.0.2-17-g2a571b6068-win64-gpl-shared-9.0
@@ -92,7 +94,6 @@ env:
   # The same FFmpeg, built for Linux.
   LINUX_FFMPEG_NAME: ffmpeg-n9.0.2-17-g2a571b6068-linux64-gpl-shared-9.0
   LINUX_FFMPEG_SHA256: 01a9764d0b5364b66cfeb4617557c64321b0e232e172ec73f0a701c5f7694326
-  QT_VERSION: 6.10.3
 
 jobs:
   package:
@@ -122,11 +123,6 @@ jobs:
           $llvm = 'C:\Program Files\LLVM\bin'
           if (-not (Test-Path "$llvm\libclang.dll")) { throw "libclang.dll not found in $llvm" }
           "LIBCLANG_PATH=$llvm" >> $env:GITHUB_ENV
-      - uses: jurplel/install-qt-action@v4
-        with:
-          version: ${{ env.QT_VERSION }}
-          arch: win64_msvc2022_64
-          cache: true
       - name: Install Inno Setup
         shell: pwsh
         run: |
@@ -150,7 +146,7 @@ jobs:
           $stage = (Resolve-Path "target/package/Industrial-Kerf-$version-windows-x64").Path
           $out = Join-Path $env:RUNNER_TEMP 'without-links'
           # Compiled as the real one is, but for the links.
-          $compiled = & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DSource=$stage" /DVersion=0.0.0 "/DOutputDir=$out" /DOutputName=without-links /DWithoutLinks apps/kerf-qt/packaging/windows/kerf.iss
+          $compiled = & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DSource=$stage" /DVersion=0.0.0 "/DOutputDir=$out" /DOutputName=without-links /DWithoutLinks apps/kerf-editor/packaging/windows/kerf.iss
           if ($LASTEXITCODE -ne 0) { $compiled | Write-Host; throw "ISCC failed with exit code $LASTEXITCODE" }
           $files = @($compiled | Where-Object { $_ -match 'Compressing' }).Count
           if ($files -eq 0) { $compiled | Write-Host; throw "ISCC put no files from $stage in the installer" }
@@ -203,9 +199,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Install Qt, FFmpeg and the build tools
+      - name: Install FFmpeg and the build tools
         run: |
-          brew install ffmpeg qt pkg-config cmake
+          brew install ffmpeg pkg-config
           ffmpeg_prefix="$(brew --prefix ffmpeg)"
           echo "FFMPEG_DIR=$ffmpeg_prefix" >> "$GITHUB_ENV"
           echo "PKG_CONFIG_PATH=$ffmpeg_prefix/lib/pkgconfig" >> "$GITHUB_ENV"
@@ -215,7 +211,7 @@ jobs:
       - name: Build, bundle and run the app
         run: scripts/package-kerf-macos.sh
       # The check holds the app to the macOS its Info.plist names: a copy that says macOS
-      # 11, older than its Qt and Homebrew libraries need, has to fail it, and for that.
+      # 11, older than its Homebrew libraries need, has to fail it, and for that.
       - name: The check fails an app that needs a newer macOS than it says
         run: |
           older="$RUNNER_TEMP/older/Industrial Kerf.app"
@@ -284,27 +280,19 @@ jobs:
           echo "$LINUX_FFMPEG_SHA256  $archive" | sha256sum -c -
           tar -xJf "$archive" -C "$RUNNER_TEMP"
           echo "FFMPEG_DIR=$RUNNER_TEMP/$LINUX_FFMPEG_NAME" >> "$GITHUB_ENV"
-      # The build's tools; what Qt's xcb plugin loads, which the package carries; Xvfb
-      # to run it; GLib's gio and desktop-file-validate, to check its desktop entry and
-      # follow a kerf:// link; and apt's source lines, for the source of what it carries.
-      - name: Install the build tools and Qt's X11 libraries
+      # The build's tools and what GPUI, which draws the editor, builds against; Xvfb and
+      # Mesa's Vulkan drivers (lavapipe) to run it with no display or GPU; GLib's gio and
+      # desktop-file-validate, to check its desktop entry and follow a kerf:// link; and
+      # apt's source lines, for the source of what it carries.
+      - name: Install the build tools and GPUI's libraries
         run: |
           sudo sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/ubuntu.sources
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             libclang-dev libasound2-dev pkg-config patchelf xvfb xauth dpkg-dev rpm \
-            libgl-dev libegl-dev libvulkan-dev libxkbcommon-dev libxkbcommon-x11-0 \
-            libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 \
-            libxcb-render-util0 libxcb-shape0 libxcb-xinerama0 libxcb-xkb1 libxcb-xinput0 \
-            libxcb-sync1 libxcb-xfixes0 libxcb-shm0 libxcb-render0 libxcb-glx0 libxcb-util1 \
-            libfontconfig1 libdbus-1-3 fonts-dejavu-core libglib2.0-bin desktop-file-utils
-      - uses: jurplel/install-qt-action@v4
-        with:
-          version: ${{ env.QT_VERSION }}
-          host: linux
-          target: desktop
-          arch: linux_gcc_64
-          cache: true
+            libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libxcb1-dev libx11-xcb-dev \
+            libfontconfig-dev libfreetype-dev libvulkan1 libvulkan-dev mesa-vulkan-drivers \
+            fonts-dejavu-core libglib2.0-bin desktop-file-utils
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -329,19 +317,19 @@ jobs:
           deb="$(readlink -f target/package-linux/*.deb)"
           short="$RUNNER_TEMP/short"
           dpkg-deb -R "$deb" "$short"
-          sed -i '/^Depends:/ s/libopengl0, //' "$short/DEBIAN/control"
-          if grep -q '^Depends:.*libopengl0' "$short/DEBIAN/control"; then
-            echo "libopengl0 is still in the Depends" >&2
+          sed -i '/^Depends:/ s/libxkbcommon-x11-0\( ([^)]*)\)\?, //' "$short/DEBIAN/control"
+          if grep -q '^Depends:.*libxkbcommon-x11-0' "$short/DEBIAN/control"; then
+            echo "libxkbcommon-x11-0 is still in the Depends" >&2
             exit 1
           fi
           # Packed fast: it is installed once and thrown away.
           dpkg-deb --root-owner-group -Zxz -z1 --build "$short" "$RUNNER_TEMP/short.deb" > /dev/null
           if docker run --rm -v "$PWD/scripts:/scripts:ro" -v "$RUNNER_TEMP/short.deb:/industrial-kerf.deb:ro" debian:trixie \
             /scripts/check-kerf-linux-deb.sh /industrial-kerf.deb 2> "$RUNNER_TEMP/short.log"; then
-            echo "The check passed a .deb that does not depend on libopengl0" >&2
+            echo "The check passed a .deb that does not depend on libxkbcommon-x11-0" >&2
             exit 1
           fi
-          grep -q 'libOpenGL.so.0' "$RUNNER_TEMP/short.log" || { cat "$RUNNER_TEMP/short.log" >&2; exit 1; }
+          grep -q 'libxkbcommon-x11.so.0' "$RUNNER_TEMP/short.log" || { cat "$RUNNER_TEMP/short.log" >&2; exit 1; }
           echo "Failed, as it should: $(tail -n 1 "$RUNNER_TEMP/short.log")"
           rm -rf "$short" "$RUNNER_TEMP/short.deb"
       # The .rpm likewise, where dnf has to bring all it needs from its Requires alone.
@@ -352,7 +340,7 @@ jobs:
             /scripts/check-kerf-linux-rpm.sh /industrial-kerf.rpm
       # The source takes several GB; the build's own are no longer needed.
       - name: Free the build's space
-        run: rm -rf target/release target/qt-linux
+        run: rm -rf target/release
       - name: Collect the source of the package
         run: scripts/collect-kerf-linux-sources.sh
       - uses: actions/upload-artifact@v4
@@ -446,8 +434,8 @@ jobs:
           case "$VERSION" in 0.*) prerelease="--prerelease" ;; esac
           gh release create "$TAG" dist/* --target "$GITHUB_SHA" --title "Industrial Kerf $VERSION" --notes-file notes.md $prerelease
 
-  # The release as someone gets it: downloaded onto fresh runners, with no FFmpeg or
-  # Qt there, unpacked and run.
+  # The release as someone gets it: downloaded onto fresh runners, with no FFmpeg
+  # there, unpacked and run.
   verify:
     needs: release
     uses: ./.github/workflows/verify-release.yml

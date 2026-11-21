@@ -1,0 +1,25 @@
+What this package carries, and on what terms. SOURCE.txt says where the source of
+all of it is.
+
+Industrial Kerf's own code
+  MIT (LICENSE.txt). The package as a whole is under the GNU GPL version 3, as it
+  joins that code with the GPL build of FFmpeg below (COPYING-GPLv3.txt).
+
+FFmpeg (ffmpeg.exe, ffprobe.exe, and the av*, sw* and postproc DLLs)
+  This build is GPL version 3, with libx264 and the other libraries built into it.
+  FFmpeg-BUILD.txt lists how it was configured.
+
+Rust crates (compiled into kerf-editor.exe, kerfd.exe, kerf.exe and kerf-mcp.exe)
+  The programs are written in Rust and statically link the crates their Cargo.lock
+  names, among them GPUI (Apache-2.0), which draws the editor. Each crate's licence,
+  most of them MIT or Apache-2.0, is in its source, in the vendor folder of the source
+  archive (SOURCE.txt).
+
+Microsoft Visual C++ Runtime (msvcp140*.dll, vcruntime140*.dll, concrt140.dll)
+  Redistributable under the Visual Studio licence terms.
+
+Inter, JetBrains Mono, Pretendard, IBM Plex, Noto Serif and Nanum Myeongjo (compiled into kerf-editor.exe)
+  SIL OFL 1.1. See fonts\.
+
+Code from ArtCraft's EffectCraft and FilmCraft, and the fonts of its text engine
+  See licenses\NOTICE.

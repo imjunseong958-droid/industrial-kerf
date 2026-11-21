@@ -915,33 +915,3 @@ fn what_the_scenes_of_solids_stand_on_is_what_was_found_of_them() {
     rests(&reads("rocket"), "ship", "pad");
     rests(&reads("donut"), "ring_cake", "plate");
 }
-
-#[test]
-#[ignore = "a measurement, not a check: cargo test -p kerf-engine --test stands --release -- --ignored --nocapture"]
-fn what_reading_a_scene_costs() {
-    let car = fixture("car");
-    let rate = Rate::new(24, 1).expect("a rate");
-    let three = [rate.time_of(0), rate.time_of(48), rate.time_of(95)];
-    let time = |run: &dyn Fn()| {
-        run();
-        let started = std::time::Instant::now();
-        for _ in 0..20 {
-            run();
-        }
-        started.elapsed().as_secs_f64() * 1000.0 / 20.0
-    };
-    let few = time(&|| drop(standing(&car, Some("s2"), &three).expect("reads")));
-    let all = time(&|| drop(standing(&car, Some("s2"), &[]).expect("reads")));
-    println!("the car on a road, s2: 3 frames in {few:.2} ms, all 96 in {all:.2} ms");
-    // A mesh of some size on the road beside the car: a ball's 2,200 triangles.
-    let ball = "\n  track V6 video\n    clip ball gen=mesh@1 at=0f dur=96f\n      set kind=ball width=0.3 height=0.3 length=0.3 x=0.3 y=0.8 z=2\n";
-    let text = std::fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../fixtures/shots/car/project.kerf"),
-    )
-    .expect("the fixture")
-    .replace("\nsequence s3", &format!("{ball}sequence s3"));
-    let with = parse_document(&text, Catalog::builtin()).expect("reads").project;
-    let few = time(&|| drop(standing(&with, Some("s2"), &three).expect("reads")));
-    let all = time(&|| drop(standing(&with, Some("s2"), &[]).expect("reads")));
-    println!("with a ball of 2,208 triangles: 3 frames in {few:.2} ms, all 96 in {all:.2} ms");
-}
