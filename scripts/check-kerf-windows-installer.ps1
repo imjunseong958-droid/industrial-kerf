@@ -33,7 +33,7 @@ $ErrorActionPreference = 'Stop'
 $Installer = (Resolve-Path $Installer).Path
 . (Join-Path $PSScriptRoot 'kerf-windows-icon.ps1')
 
-# The installer's AppId (apps/kerf-qt/packaging/windows/kerf.iss), as Inno Setup names its
+# The installer's AppId (apps/kerf-editor/packaging/windows/kerf.iss), as Inno Setup names its
 # uninstall entry.
 $uninstallKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\{2226F529-6D3C-47F0-9585-839485B795C2}_is1'
 $schemeKey = 'HKCU:\Software\Classes\kerf'
@@ -80,11 +80,11 @@ try {
         '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART',
         "/DIR=`"$target`"", "/LOG=`"$log`"")
     $installed = $true
-    $editor = Join-Path $target 'kerf-qt.exe'
+    $editor = Join-Path $target 'kerf-editor.exe'
     if ($setup.ExitCode -ne 0 -or -not (Test-Path $editor)) {
         Get-Content $log -ErrorAction SilentlyContinue | Select-Object -Last 40 | Write-Host
         if ($setup.ExitCode -ne 0) { throw "The installer failed with exit code $($setup.ExitCode)" }
-        throw "The installer put no kerf-qt.exe in $target"
+        throw "The installer put no kerf-editor.exe in $target"
     }
     if (-not (Test-Path $uninstallKey)) { throw 'The installer left no uninstall entry' }
 
@@ -122,12 +122,12 @@ try {
     $deadline = (Get-Date).AddSeconds(60)
     $opened = $null
     while (-not $opened -and (Get-Date) -lt $deadline) {
-        $opened = Get-CimInstance Win32_Process -Filter "Name = 'kerf-qt.exe'" |
+        $opened = Get-CimInstance Win32_Process -Filter "Name = 'kerf-editor.exe'" |
             Where-Object { $_.ExecutablePath -eq $editor -and $_.CommandLine -like "*$review*" } |
             Select-Object -First 1
         if (-not $opened) { Start-Sleep -Milliseconds 500 }
     }
-    if (-not $opened) { throw "Following $review started no installed kerf-qt.exe with the link" }
+    if (-not $opened) { throw "Following $review started no installed kerf-editor.exe with the link" }
     # It says the project is not on this computer, and waits for an answer nobody gives.
     Stop-Process -Id $opened.ProcessId -Force
     Wait-Process -Id $opened.ProcessId -Timeout 30 -ErrorAction SilentlyContinue
@@ -142,7 +142,7 @@ try {
     while (((Test-Path $uninstallKey) -or (Test-Path $editor)) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 500 }
     $installed = $false
     $left = @()
-    if (Test-Path $editor) { $left += "kerf-qt.exe in $target" }
+    if (Test-Path $editor) { $left += "kerf-editor.exe in $target" }
     if (Test-Path $uninstallKey) { $left += 'the uninstall entry' }
     if (Test-Path $shortcut) { $left += 'the Start menu entry' }
     if (Test-Path $schemeKey) { $left += 'the kerf:// registration' }
@@ -153,6 +153,6 @@ try {
     if ($installed -and (Test-Path (Join-Path $target 'unins000.exe'))) {
         Start-Process -FilePath (Join-Path $target 'unins000.exe') -Wait -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART') -ErrorAction SilentlyContinue
     }
-    Get-Process kerf-qt -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "$target*" } | Stop-Process -Force -ErrorAction SilentlyContinue
+    Get-Process kerf-editor -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "$target*" } | Stop-Process -Force -ErrorAction SilentlyContinue
     Remove-Item $scratch -Recurse -Force -ErrorAction SilentlyContinue
 }

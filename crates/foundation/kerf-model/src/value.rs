@@ -372,7 +372,7 @@ impl Param {
 
 #[cfg(test)]
 mod tests {
-    /// The same table holds the graph editor to these curves, in `apps/kerf-qt/tests/graph_test.cpp`.
+    /// Each interpolation reads the table the graph editor's curves are drawn to.
     #[test]
     fn curves_read_the_table_the_graph_editor_is_held_to() {
         for (interp, t, wanted) in [

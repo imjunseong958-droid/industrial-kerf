@@ -24,7 +24,7 @@ The public surface is intentionally small:
   lookup for adapters and focused tests.
 
 Video frames are decoded in-process with libavformat/libavcodec/libavfilter
-to packed RGBA and delivered by `crates/surfaces/kerf-qt-bridge` to the Qt6 viewer.
+to packed RGBA and delivered by `crates/surfaces/kerf-bridge` to the editor's viewer.
 Audio uses cpal when a default output device is available and otherwise uses a
 monotonic clock fallback, still mixing (and metering) the program in real
 time, level with the clock. The clock waits while the device opens, so playing

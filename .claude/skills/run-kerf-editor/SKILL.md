@@ -1,27 +1,30 @@
 ---
 name: run-kerf-editor
-description: Launch and drive the real Kerf Qt editor (apps/kerf-qt) on a project, to see a UI or drawing change in its window rather than in the offscreen tests. Use when asked to open, run, or screenshot the editor, or to check the Inspector, the picture's overlays, or the Finish tray for real.
+description: Launch and drive the real Kerf editor (apps/kerf-editor, the Rust app drawn with GPUI) on a project, to see a UI or drawing change in its window rather than in tests. Use when asked to open, run, or screenshot the editor, or to check the Inspector, the picture's overlays, or the Finish tray for real.
 ---
 
 # Run the Kerf editor
 
-The offscreen tests check strings and state, not what a window looks like at its real size, so
-use this when the question is what a person sees. Written from a session on an M1 Mac with 8 GB.
-On Linux without a display, see "Linux, offscreen" below: tried on Ubuntu 24.04 with Qt 6.4.2.
+Tests check state, not what a window looks like at its real size, so use this when the question
+is what a person sees. The editor is one Rust binary, `kerf-editor`, drawn with GPUI: Metal on
+macOS, Vulkan on Linux. It cannot read back its own window, so a picture of it is always taken
+from outside (there is no `--screenshot`).
 
 ## Build
 
-Each as its own command, with nothing heavy alongside on 8 GB:
+Each as its own command, with nothing heavy alongside on a small machine:
 
 ```bash
-export RUSTC_WRAPPER=
-cargo build -q --release -p kerf-qt-bridge
-cargo build -q --release -p kerf-runtime --bin kerfd
-cmake -S apps/kerf-qt -B target/qt -DKERF_QT_BUILD_TESTS=ON -DKERF_BRIDGE_LIBRARY=$PWD/target/release/libkerf_qt_bridge.dylib
-cmake --build target/qt --target kerf-qt --parallel
+cargo build -q --manifest-path apps/kerf-editor/Cargo.toml
+cargo build -q -p kerf-runtime --bin kerfd
 ```
 
-Rebuild the bridge after any change to the engine, or the editor runs the old drawing code.
+Use `--release` for both to judge playback: the live preview draws its frames in `kerf-bridge`,
+which the editor links, so a change to the engine needs the editor rebuilt, not only kerfd. On
+Linux GPUI needs `libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libxcb1-dev
+libx11-xcb-dev libfontconfig-dev libfreetype-dev libvulkan1` to build, and a Vulkan driver to
+run: with no GPU, Mesa's lavapipe (`mesa-vulkan-drivers`). The FFmpeg it links is found as
+kerfd's is (`FFMPEG_DIR`, with `LD_LIBRARY_PATH` on its `lib` on Linux).
 
 ## A project to open
 
@@ -30,7 +33,7 @@ editor's edits to `project.kerf` touch nothing real. This one has clips in depth
 soft shadow, an aperture, a sampled path, and a title off the frame's edge:
 
 ```bash
-P=$TMPDIR/kerf-run/project; mkdir -p $P/media
+P=${TMPDIR:-/tmp}/kerf-run/project; mkdir -p $P/media
 ffmpeg -hide_banner -loglevel error -y -f lavfi -i testsrc2=s=3840x2160:r=24:d=4 -pix_fmt yuv420p $P/media/clip.mp4
 cat > $P/project.kerf <<'KERF'
 kerf 1
@@ -63,65 +66,70 @@ KERF
 
 ## Launch
 
-Run the bundle's binary directly, in the background and with the Bash sandbox off, since the sandbox
-blocks both Metal and `open`. `KERFD_BIN` says which daemon to start:
+`kerf-editor [project-dir] [kerfd-binary]`; `KERF_PROJECT_DIR` and `KERFD_BIN` do the same.
+Without a project it shows the launcher. Point `KERF_EDITOR_PREFS` at a scratch file, so the run
+does not add the project to the person's recent list in `~/.kerf/editor.json`:
 
 ```bash
-KERFD_BIN=$PWD/target/release/kerfd ./target/qt/kerf-qt.app/Contents/MacOS/kerf-qt "$P" > "$TMPDIR/kerf-run/editor.log" 2>&1
+KERF_EDITOR_PREFS=${TMPDIR:-/tmp}/kerf-run/editor.json KERFD_BIN=$PWD/target/debug/kerfd \
+  target/debug/kerf-editor "$P" > "${TMPDIR:-/tmp}/kerf-run/editor.log" 2>&1 &
 ```
 
-It takes about six seconds to show the picture. A blank picture is a failed launch: read the log.
+`--quit-after-ms <ms>` makes it quit on its own after that long. On macOS run it in the
+background with the Bash sandbox off, since the sandbox blocks Metal. It takes a few seconds to
+show the picture. A black or empty window is a failed launch: read the log (`RUST_LOG=info`
+says which GPU adapter it took).
 
-## Drive it
+## Linux, with no display
 
-With the computer-use tools, the app's bundle identifier is `com.industrial-kerf.editor`. Look at
+Run it on a virtual X server. Xvfb needs the Composite extension, or the editor's Vulkan frames
+come out black. Take the picture of its window with ImageMagick's `import`, found by `xdotool`:
+
+```bash
+xvfb-run -a -s "-screen 0 1600x1000x24 +extension Composite" sh -c '
+    KERF_EDITOR_PREFS=${TMPDIR:-/tmp}/kerf-run/editor.json KERFD_BIN=$PWD/target/debug/kerfd \
+        target/debug/kerf-editor "'"$P"'" & E=$!
+    sleep 3; xdotool mousemove 800 500; sleep 6
+    xdotool mousemove_relative 1 0; sleep 0.5
+    import -window "$(xdotool search --pid $E | tail -1)" /tmp/kerf.png
+    kill $E'
+```
+
+With no window manager GPUI draws a frame only after an input event, so move the pointer
+before each picture (as above): without it the first picture is black, and a later one shows
+the window as it was at the last event.
+
+Then look at `/tmp/kerf.png` with the Read tool. If Vulkan finds no driver, or takes one that
+draws nothing, point it at lavapipe:
+`VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json`. The run needs `xvfb`, `imagemagick`,
+`xdotool` and `mesa-vulkan-drivers`. `xdotool` can also click and type into the window
+(`xdotool mousemove --window <id> X Y click 1`, `xdotool type`), so a state that needs a click can
+be reached; take a new picture after each.
+
+## Drive it on a desktop
+
+With the computer-use tools on macOS, the bundled app's identifier is
+`com.industrial-kerf.editor` (`scripts/bundle-kerf-macos.sh` makes `Industrial Kerf.app` around a
+built `kerf-editor`); a plain `target/debug/kerf-editor` runs too, without the bundle. Look at
 every screenshot. Launching proves little.
 
-- **Media:** Window → Media (⌘1). It opens as a column between the conversation and the picture. Double-click a clip there to insert
-  it at the playhead; the title bar goes to "Edited just now", and `project.kerf` is rewritten a few
+- **Media:** place a clip from the media at the playhead; `project.kerf` is rewritten a few
   seconds later, so read it back to check.
 - **A path:** select its clip. The curve and its handles lie on the picture, and the handles drag.
 
-Things that look like faults and are not:
-
-- Hovering over the picture skims: the time follows the pointer across the picture, with a grey line
-  on the timeline, unless masks or a path can be dragged.
-- A click refused with "Could not verify which document this window is editing" comes from a tooltip's
-  window. Move the pointer away, take a new screenshot, and click again.
-
-## Linux, offscreen
-
-With no display, the editor still draws its window to a file. Build as CI's `linux-editor` job does
-(the debug bridge and `kerfd`, then CMake), with `FFMPEG_DIR` and `LD_LIBRARY_PATH` on the pinned
-FFmpeg 9. Then, with `$P` a project as above and `$D` an empty folder for the run's settings, so the
-user's recent projects are left alone:
-
-```bash
-QT_QPA_PLATFORM=offscreen KERFD_BIN=$PWD/target/debug/kerfd target/qt/kerf-qt "$P" \
-  --settings-dir "$D" --window-size 1600x1000 --screenshot /tmp/editor.png --quit-after-ms 9000
-pkill -f "debug/kerfd"
-```
-
-Without a project it captures the editor with no folder open (a capture never opens the last
-project, which a run with no flags does). This shows the layout, the conversation, the
-timeline and a CPU-drawn picture. It cannot be clicked: for a state that needs a click, use a test's
-gallery (`KERF_SCREENSHOT_DIR`), and say that no pointer was tried.
-
 ## Leave things as they were
 
-Closing the editor does not stop its daemon, and opening a project adds it to the recent list:
+Closing the editor does not stop its daemon:
 
 ```bash
-pkill -f "target/qt/kerf-qt.app/Contents/MacOS/kerf-qt"
-pkill -f "release/kerfd --dir .*kerf-run/project"
-defaults read "com.industrial-kerf.Industrial Kerf" projects.recent
+pkill -f "target/debug/kerf-editor"
+pkill -f "kerfd --dir .*kerf-run/project"
 ```
 
-Take the temporary project off that list and leave every other entry as it is, by writing the same
-list back without it: `defaults write "com.industrial-kerf.Industrial Kerf" projects.recent -array "<each other path>"`.
-Then remove `$TMPDIR/kerf-run`.
+Then remove `${TMPDIR:-/tmp}/kerf-run`. If the run went without `KERF_EDITOR_PREFS`, take the
+temporary project out of `recent` in `~/.kerf/editor.json` and leave every other entry as it is.
 
 ## Say what was not checked
 
-Name what the window could not show: an HDR display, sound when the scene has none, an export, any
-other machine.
+Name what the window could not show: an HDR display, sound when the scene has none, an export, a
+real GPU when it ran on lavapipe, any other machine.

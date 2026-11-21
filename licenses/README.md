@@ -49,7 +49,7 @@ embeds them with `include_bytes!`.
 | `NotoSerif-Regular.ttf` | The Noto Project Authors | https://github.com/notofonts/latin-greek-cyrillic | OFL-1.1 (`OFL-NotoSerif.txt`) |
 | `JetBrainsMono-Regular.ttf` | The JetBrains Mono Project Authors | https://github.com/JetBrains/JetBrainsMono | OFL-1.1 (`OFL-JetBrainsMono.txt`) |
 
-`apps/kerf-qt/resources/fonts` holds the faces the editor's own interface is set
+`apps/kerf-editor/assets/fonts` holds the faces the editor's own interface is set
 in, unmodified, each with its license beside it (`<Font>-LICENSE.txt`). The editor
 compiles them in, and every package carries the licenses in its `fonts` folder.
 
@@ -64,11 +64,11 @@ compiles them in, and every package carries the licenses in its `fonts` folder.
 
 ## The photographs in the icon
 
-Kerf's icon (`apps/kerf-qt/resources/icon/industrial-kerf.svg`, and the PNG, `.ico` and
+Kerf's icon (`apps/kerf-editor/assets/icon/industrial-kerf.svg`, and the PNG, `.ico` and
 `.icns` files made from it, which the editor and every package carry) holds five
 photographs of Hong Kong, Tokyo and New York at night, cropped, scaled down and tinted.
 Their authors dedicated each to the public domain on Wikimedia Commons (CC0 1.0), so
-they come with no condition; `apps/kerf-qt/resources/icon/README.md` names each, its
+they come with no condition; `apps/kerf-editor/assets/icon/README.md` names each, its
 author and its page.
 
 ## Footage the measurements run on

@@ -20,7 +20,7 @@ set), the same file keeps it as `token`, written atomically with mode 0600. A
 token in the file while a keychain can be reached, as older versions kept every
 token, moves into the keychain the first time the editor reads it, and the file
 keeps the rest. It is never stored in a project
-(`kerf-qt-bridge/src/cloud_session.rs`).
+(`kerf-bridge/src/cloud_session.rs`).
 
 ```json
 { "url": "https://cloud.example.com" }

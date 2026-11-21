@@ -1,7 +1,7 @@
 //! The timeline that editor snapshots carry.
 //!
 //! A read-only JSON view of the first sequence of the model for clients that
-//! draw a timeline (the Qt app). Times are exact seconds of the model, with
+//! draw a timeline (the editor). Times are exact seconds of the model, with
 //! frame counts on the sequence rate beside them; clips appear at their own
 //! spans, and transitions are listed separately with the region they cover.
 //! Edits go back as typed operations (`EditOp`), never by patching this.

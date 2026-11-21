@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # The complete source of what scripts/package-kerf-windows.ps1 packs, as one tar to
 # publish beside the package: the package carries a GPL build of FFmpeg, so it has to
-# be offered with the source of all of it. Kerf at this commit with its Rust crates,
-# FFmpeg and each library built into it, the scripts that built those, and Qt.
+# be offered with the source of all of it. Kerf at this commit with its Rust crates
+# (GPUI, which draws the editor, among them), FFmpeg and each library built into it, and
+# the scripts that built those.
 #
 # Runs on Linux with git, cargo, curl and docker. What to collect is pinned in
 # .github/workflows/package.yml, with the build the package is made from.
@@ -14,7 +15,6 @@ set -euo pipefail
 : "${FFMPEG_BUILDS_TAG:?the FFmpeg-Builds release the package uses}"
 : "${FFMPEG_BUILDS_COMMIT:?the commit of FFmpeg-Builds that made it}"
 : "${FFMPEG_COMMIT:?the commit of FFmpeg it was built from}"
-: "${QT_VERSION:?the Qt version the package uses}"
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
 version="$(sed -n 's/^version = "\(.*\)"$/\1/p' "$root/Cargo.toml" | head -n 1)"
@@ -29,7 +29,7 @@ stage="$out/$name"
 work="$(mktemp -d)"
 trap 'rm -rf -- "$work"' EXIT
 rm -rf "$out"
-mkdir -p "$stage/ffmpeg-libraries" "$stage/qt"
+mkdir -p "$stage/ffmpeg-libraries"
 
 # Kerf, and the crates its Cargo.lock names.
 git -C "$root" archive --format=tar --prefix=kerf/ HEAD | tar -x -C "$stage"
@@ -52,12 +52,6 @@ git -C "$work/builds" archive --format=tar --prefix=FFmpeg-Builds/ HEAD | tar -x
 # The files, not the links to them download.sh leaves beside them.
 find "$work/builds/.cache/downloads" -type f -name '*.tar.xz' -exec cp {} "$stage/ffmpeg-libraries/" \;
 
-# Qt's modules, of the version in the package.
-for module in qtbase qtsvg; do
-    curl -fsSL -o "$stage/qt/$module-everywhere-src-$QT_VERSION.tar.xz" \
-        "https://download.qt.io/archive/qt/${QT_VERSION%.*}/$QT_VERSION/submodules/$module-everywhere-src-$QT_VERSION.tar.xz"
-done
-
 # What else this package's source holds, such as the Ubuntu packages the Linux one carries.
 extra=""
 if [ -n "${KERF_EXTRA_SOURCES:-}" ]; then
@@ -78,7 +72,6 @@ ffmpeg-$FFMPEG_COMMIT.tar.gz
 FFmpeg-Builds/      The scripts that built it ($FFMPEG_BUILDS_TAG of
                     https://github.com/BtbN/FFmpeg-Builds), for $variant-gpl-shared-9.0.
 ffmpeg-libraries/   Each library those scripts build, at the commit they pin.
-qt/                 Qt $QT_VERSION's modules.
 $extra
 TEXT
 

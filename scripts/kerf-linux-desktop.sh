@@ -72,6 +72,6 @@ kerf_follow_link() {
             sleep 0.5
         done
         exit 1'
-    "$@" xvfb-run -a -s "-screen 0 1280x800x24" bash -c "$follow" follow "$link" "$editor" ||
+    "$@" xvfb-run -a -s "-screen 0 1280x800x24 +extension Composite" bash -c "$follow" follow "$link" "$editor" ||
         { echo "Following $link through GLib started no $editor with it" >&2; return 1; }
 }

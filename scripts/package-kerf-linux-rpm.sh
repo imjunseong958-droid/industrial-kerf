@@ -4,7 +4,7 @@
 # .deb, in /opt/industrial-kerf, which dnf installs for every user and removes again.
 #
 # It adds what the .deb adds (scripts/package-kerf-linux-deb.sh): the desktop entry in
-# /usr/share/applications, the icon in the hicolor theme, and kerf-qt, kerf, kerfd and
+# /usr/share/applications, the icon in the hicolor theme, and kerf-editor, kerf, kerfd and
 # kerf-mcp on PATH as links into /opt/industrial-kerf/bin.
 #
 # Its Requires are what the folder takes from the system, read out of the binaries: each
@@ -13,8 +13,9 @@
 # version of the C library's symbols any of them asks for (libc.so.6(GLIBC_2.39)(64bit)), so
 # that dnf brings what a bare system lacks and refuses one whose C library is too old.
 # rpm's own reading of the binaries is turned off: it would name what lib/ carries as
-# needed from the system, and offer the package's Qt to everything else installed. What is
-# loaded only when first used is in Recommends: OpenSSL for Qt's TLS and the Vulkan loader.
+# needed from the system, and offer the package's FFmpeg to everything else installed. What
+# the editor opens as it starts rather than names is added: the Vulkan loader and Mesa's
+# Vulkan drivers, which it draws with, and the Wayland client library.
 #
 # Runs on the Ubuntu machine that made the folder, with rpm (apt install rpm) and binutils.
 # It has no scriptlets: the desktop's own triggers read the entry and the icons.
@@ -27,7 +28,7 @@ set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 stage="$(cd "$1" && pwd -P)"
 rpm="${2:-$stage.rpm}"
-packaging="$root/apps/kerf-qt/packaging/linux"
+packaging="$root/apps/kerf-editor/packaging/linux"
 version="$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' "$root/Cargo.toml")"
 prefix=/opt/industrial-kerf
 . "$root/scripts/kerf-linux-desktop.sh"
@@ -35,7 +36,7 @@ prefix=/opt/industrial-kerf
 for tool in rpmbuild objdump; do
     command -v "$tool" > /dev/null || { echo "$tool is needed (apt install rpm binutils)" >&2; exit 1; }
 done
-[ -x "$stage/bin/kerf-qt" ] || { echo "No bin/kerf-qt in $stage" >&2; exit 1; }
+[ -x "$stage/bin/kerf-editor" ] || { echo "No bin/kerf-editor in $stage" >&2; exit 1; }
 [ -d "$stage/icons" ] || { echo "No icons in $stage" >&2; exit 1; }
 
 work="$(mktemp -d)"
@@ -49,8 +50,8 @@ rm -rf "$tree$prefix/install-desktop-entry.sh" "$tree$prefix/icons" "$tree$prefi
 cat > "$tree$prefix/README.txt" <<README
 Industrial Kerf $version for Linux, as its .rpm installs it.
 
-It is among your applications, opens kerf:// project links, and has kerf-qt, kerf, kerfd
-and kerf-mcp on PATH. This folder carries its own Qt and FFmpeg; what it takes from the
+It is among your applications, opens kerf:// project links, and has kerf-editor, kerf,
+kerfd and kerf-mcp on PATH. This folder carries its own FFmpeg; what it takes from the
 system (system-libraries.txt) the package's Requires name.
 
   sudo dnf remove industrial-kerf
@@ -58,12 +59,12 @@ system (system-libraries.txt) the package's Requires name.
 takes all of it away. Your projects and settings are yours and stay.
 README
 
-for tool in kerf-qt kerf kerfd kerf-mcp; do
+for tool in kerf-editor kerf kerfd kerf-mcp; do
     [ -x "$tree$prefix/bin/$tool" ] || { echo "No bin/$tool in $stage" >&2; exit 1; }
     ln -s "$prefix/bin/$tool" "$tree/usr/bin/$tool"
 done
 install -m 644 "$packaging/industrial-kerf.desktop" "$tree/usr/share/applications/industrial-kerf.desktop"
-kerf_check_entry "$tree/usr/share/applications/industrial-kerf.desktop" "$prefix/bin/kerf-qt"
+kerf_check_entry "$tree/usr/share/applications/industrial-kerf.desktop" "$prefix/bin/kerf-editor"
 for size in $kerf_icon_sizes; do
     install -D -m 644 "$stage/icons/industrial-kerf-$size.png" \
         "$tree/usr/share/icons/hicolor/${size}x${size}/apps/industrial-kerf.png"
@@ -88,6 +89,8 @@ grep -q '^libc\.so\.6()(64bit)$' <<< "$requires" || { echo "The binaries name no
 glibc="$(sort -u -V "$work/glibc" | tail -n 1)"
 [ -n "$glibc" ] || { echo "The binaries ask for no version of the C library's symbols" >&2; exit 1; }
 requires+=$'\n'"libc.so.6($glibc)(64bit)"
+# Opened as the editor starts, not named, so not among what the binaries name.
+requires+=$'\n'"libvulkan.so.1()(64bit)"$'\n'"mesa-vulkan-drivers"$'\n'"libwayland-client.so.0()(64bit)"
 
 spec="$work/industrial-kerf.spec"
 {
@@ -96,13 +99,11 @@ Name: industrial-kerf
 Version: ${version//-/\~}
 Release: 1
 Summary: Video editor, with an agent editing beside you
-License: GPL-3.0-only AND MIT AND LGPL-3.0-only
+License: GPL-3.0-only AND MIT AND Apache-2.0
 URL: https://github.com/imjunseong958-droid/industrial-kerf
 BuildArch: x86_64
 AutoReqProv: no
 Requires: hicolor-icon-theme
-Recommends: libssl.so.3()(64bit)
-Recommends: libvulkan.so.1()(64bit)
 SPEC
     sed 's/^/Requires: /' <<< "$requires"
     cat <<SPEC
@@ -117,11 +118,10 @@ Industrial Kerf is a native video editor whose project is a text document. An
 agent edits it beside you, through proposals you take or refuse, and people
 share it through Git.
 
-This package carries its own Qt and a GPL build of FFmpeg, in
-$prefix, and takes the C library, X11, OpenGL, fontconfig,
-D-Bus, GLib and ALSA from the system. It adds Kerf to the applications, opens
-kerf:// project links in it, and puts kerf-qt, kerf, kerfd and kerf-mcp on
-PATH.
+This package carries a GPL build of FFmpeg, in $prefix, and
+takes the C library, X11 or Wayland, xkbcommon, a Vulkan driver and ALSA from
+the system. It adds Kerf to the applications, opens kerf:// project links in
+it, and puts kerf-editor, kerf, kerfd and kerf-mcp on PATH.
 
 %install
 # What was laid out above, whole: rpmbuild clears its build root before this.
@@ -130,7 +130,7 @@ cp -a "$tree/." "%{buildroot}/"
 %files
 %defattr(-,root,root,-)
 $prefix
-/usr/bin/kerf-qt
+/usr/bin/kerf-editor
 /usr/bin/kerf
 /usr/bin/kerfd
 /usr/bin/kerf-mcp

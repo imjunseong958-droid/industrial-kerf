@@ -1398,17 +1398,17 @@ fn run_gui(args: &Args, directory: Option<&Path>) -> Result<()> {
         println!("imported {}", path.display());
     }
 
-    let qt = discover_kerf_qt()?;
+    let editor = discover_editor()?;
     let kerfd = args
         .kerfd
         .clone()
         .or_else(discover_kerfd)
         .unwrap_or_else(|| PathBuf::from(binary_name("kerfd")));
-    let status = editor_command(&qt, directory, &kerfd)
+    let status = editor_command(&editor, directory, &kerfd)
         .status()
-        .with_context(|| format!("could not launch {}", qt.display()))?;
+        .with_context(|| format!("could not launch {}", editor.display()))?;
     if !status.success() {
-        bail!("Qt editor exited with {status}");
+        bail!("editor exited with {status}");
     }
     Ok(())
 }
@@ -1416,8 +1416,8 @@ fn run_gui(args: &Args, directory: Option<&Path>) -> Result<()> {
 /// The editor's command line: the project, when there is one, as its only
 /// argument, and kerfd through `KERFD_BIN`, so that without a project the
 /// kerfd path is never read as one and the editor shows its launcher.
-fn editor_command(qt: &Path, project: Option<&Path>, kerfd: &Path) -> std::process::Command {
-    let mut command = std::process::Command::new(qt);
+fn editor_command(editor: &Path, project: Option<&Path>, kerfd: &Path) -> std::process::Command {
+    let mut command = std::process::Command::new(editor);
     // The editor has no terminal for git to prompt in.
     command
         .env("KERFD_BIN", kerfd)
@@ -1591,12 +1591,12 @@ fn discover_kerfd() -> Option<PathBuf> {
     candidates.into_iter().find(|path| path.is_file())
 }
 
-fn discover_kerf_qt() -> Result<PathBuf> {
-    if let Some(path) = env::var_os("KERF_QT_BIN").map(PathBuf::from) {
+fn discover_editor() -> Result<PathBuf> {
+    if let Some(path) = env::var_os("KERF_EDITOR_BIN").map(PathBuf::from) {
         if path.is_file() {
             return Ok(path);
         }
-        bail!("configured Qt editor does not exist: {}", path.display());
+        bail!("configured editor does not exist: {}", path.display());
     }
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .ancestors()
@@ -1608,35 +1608,33 @@ fn discover_kerf_qt() -> Result<PathBuf> {
         .into_iter()
         .find(|path| path.is_file())
         .ok_or_else(|| {
-            anyhow!("Qt editor not found; build it with scripts/run-kerf-qt.sh or set KERF_QT_BIN")
+            anyhow!(
+                "editor not found; build it with `cargo build --manifest-path apps/kerf-editor/Cargo.toml` or set KERF_EDITOR_BIN"
+            )
         })
 }
 
 /// Where the editor may be, in the order tried: beside `kerf`; on macOS the
 /// installed app (the install's only editor there); and the build in the
-/// checkout (on macOS its bundle, before a plain `target/qt/kerf-qt` an
-/// older build may have left). A `kerf` run from the checkout itself tries
-/// the checkout's build before the installed app.
+/// checkout (`target/debug`, then `target/release`). A `kerf` run from the
+/// checkout itself tries the checkout's build before the installed app.
 fn editor_candidates(current: Option<&Path>, root: &Path, home: Option<&Path>) -> Vec<PathBuf> {
     let mut beside = Vec::new();
     if let Some(parent) = current.and_then(Path::parent) {
-        beside.push(parent.join(binary_name("kerf-qt")));
+        beside.push(parent.join(binary_name("kerf-editor")));
     }
     let mut installed = Vec::new();
     if cfg!(target_os = "macos") {
-        const APP: &str = "Industrial Kerf.app/Contents/MacOS/kerf-qt";
+        const APP: &str = "Industrial Kerf.app/Contents/MacOS/kerf-editor";
         if let Some(home) = home {
             installed.push(home.join("Applications").join(APP));
         }
         installed.push(Path::new("/Applications").join(APP));
     }
-    let mut built = Vec::new();
-    if cfg!(target_os = "macos") {
-        built.push(root.join("target/qt/kerf-qt.app/Contents/MacOS/kerf-qt"));
-    }
-    built.push(root.join("target/qt").join(binary_name("kerf-qt")));
-    built.push(root.join("target/debug").join(binary_name("kerf-qt")));
-    built.push(root.join("target/release").join(binary_name("kerf-qt")));
+    let built = [
+        root.join("target/debug").join(binary_name("kerf-editor")),
+        root.join("target/release").join(binary_name("kerf-editor")),
+    ];
     let from_checkout = current.is_some_and(|path| path.starts_with(root));
     if from_checkout {
         beside.into_iter().chain(built).chain(installed).collect()
@@ -1838,8 +1836,9 @@ mod tests {
     fn kerf_finds_the_installed_app_or_the_checkout_build_first() {
         let root = Path::new("/src/kerf");
         let home = Path::new("/Users/me");
-        let app = home.join("Applications/Industrial Kerf.app/Contents/MacOS/kerf-qt");
-        let bundle = root.join("target/qt/kerf-qt.app/Contents/MacOS/kerf-qt");
+        let app = home.join("Applications/Industrial Kerf.app/Contents/MacOS/kerf-editor");
+        let debug = root.join("target/debug").join(binary_name("kerf-editor"));
+        let release = root.join("target/release").join(binary_name("kerf-editor"));
         let position = |candidates: &[PathBuf], path: &Path| {
             candidates.iter().position(|candidate| candidate == path)
         };
@@ -1851,19 +1850,18 @@ mod tests {
         );
         assert_eq!(
             installed[0],
-            Path::new("/Users/me/.local/bin").join(binary_name("kerf-qt"))
+            Path::new("/Users/me/.local/bin").join(binary_name("kerf-editor"))
         );
-        let plain = root.join("target/qt").join(binary_name("kerf-qt"));
+        assert!(position(&installed, &debug) < position(&installed, &release));
         if cfg!(target_os = "macos") {
-            assert!(position(&installed, &app) < position(&installed, &bundle));
-            assert!(position(&installed, &bundle) < position(&installed, &plain));
+            assert!(position(&installed, &app) < position(&installed, &debug));
             // The checkout's own kerf: its build before the app.
             let checkout =
                 editor_candidates(Some(&root.join("target/release/kerf")), root, Some(home));
-            assert!(position(&checkout, &bundle) < position(&checkout, &app));
+            assert!(position(&checkout, &debug) < position(&checkout, &app));
         } else {
             assert_eq!(position(&installed, &app), None);
-            assert!(position(&installed, &plain).is_some());
+            assert!(position(&installed, &debug).is_some());
         }
     }
 
@@ -1913,13 +1911,13 @@ mod tests {
     #[test]
     fn the_editor_gets_kerfd_from_the_environment_and_a_project_only_when_there_is_one() {
         let kerfd = Path::new("/opt/kerf/kerfd");
-        let launcher = editor_command(Path::new("kerf-qt"), None, kerfd);
+        let launcher = editor_command(Path::new("kerf-editor"), None, kerfd);
         assert_eq!(launcher.get_args().count(), 0);
         let environment: Vec<_> = launcher.get_envs().collect();
         assert!(environment.contains(&("KERFD_BIN".as_ref(), Some(kerfd.as_os_str()))));
         assert!(environment.contains(&("KERF_PROJECT_DIR".as_ref(), None)));
 
-        let project = editor_command(Path::new("kerf-qt"), Some(Path::new("/films/a")), kerfd);
+        let project = editor_command(Path::new("kerf-editor"), Some(Path::new("/films/a")), kerfd);
         let arguments: Vec<_> = project.get_args().collect();
         assert_eq!(arguments, ["/films/a"]);
         assert!(project

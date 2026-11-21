@@ -20,6 +20,6 @@ Inter font (crates/foundation/kerf-text/fonts/Inter-*.ttf) — OFL-1.1. See OFL-
 Noto Serif font (crates/foundation/kerf-text/fonts/NotoSerif-Regular.ttf) — OFL-1.1. See OFL-NotoSerif.txt.
 JetBrains Mono font (crates/foundation/kerf-text/fonts/JetBrainsMono-Regular.ttf) — OFL-1.1. See OFL-JetBrainsMono.txt.
 
-The editor's interface fonts (apps/kerf-qt/resources/fonts): Inter, JetBrains Mono, Pretendard
+The editor's interface fonts (apps/kerf-editor/assets/fonts): Inter, JetBrains Mono, Pretendard
 (Copyright (c) 2021 Kil Hyung-jin), Noto Serif and Nanum Myeongjo (Copyright (c) 2010 NHN
 Corporation) — OFL-1.1. Each has its license beside it there, as <Font>-LICENSE.txt.

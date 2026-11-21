@@ -1,7 +1,7 @@
 //! kerf-icon [--check]
 //!
 //! Writes the PNG, .ico and .icns files of Kerf's icon beside its SVG, in
-//! `apps/kerf-qt/resources/icon`. With `--check` it writes nothing and fails if any of
+//! `apps/kerf-editor/assets/icon`. With `--check` it writes nothing and fails if any of
 //! them is missing or no longer what the SVG makes.
 
 use std::process::ExitCode;

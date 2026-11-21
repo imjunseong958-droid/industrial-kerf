@@ -32,8 +32,14 @@
 5. Do not add `#[ignore]` to get past a failing test.
 <!-- END Lim_claude -->
 
+## Editor
+
+`apps/kerf-editor` is a Cargo workspace of its own (its manifest says why), so the
+workspace-wide commands above leave it out: check, test and lint it with
+`--manifest-path apps/kerf-editor/Cargo.toml`.
+
 ## Motion UI
 
-Before adding or changing UI animation in `apps/kerf-qt`, read
-`apps/kerf-qt/MOTION_UI.md`. Keep its scenes table current in the same change,
-and put new durations and distances in `tokens::motion`.
+Before adding or changing UI animation in `apps/kerf-editor`, read
+`apps/kerf-editor/MOTION_UI.md`. Keep its scenes table current in the same change,
+and put new durations and distances in `theme::motion` (`apps/kerf-editor/src/theme.rs`).

@@ -21,7 +21,7 @@ pub const URL_ENV: &str = "KERF_CLOUD_URL";
 
 /// The service URL and session, in `~/.kerf/cloud.json`, outside projects. The editor keeps
 /// the token in the system's keychain instead, and here only where it has none
-/// (kerf-qt-bridge's `cloud_session.rs`).
+/// (kerf-bridge's `cloud_session.rs`).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Store {
     #[serde(default, skip_serializing_if = "Option::is_none")]

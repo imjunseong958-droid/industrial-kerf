@@ -8,6 +8,12 @@ Kerf is a video editor you can talk to. You ask for an edit in words, Kerf
 proposes it on the timeline, and nothing changes until you accept it. Everything
 you do by hand is an ordinary edit too, and both are undone the same way.
 
+Where this guide names a menu (File ▸ Import Media…), that is the menu bar on a
+Mac. On Windows and Linux the same commands are in the command palette: press
+Ctrl+Shift+P (⌘⇧P on a Mac too), type a few letters of the command, and press
+Return. Each shows its shortcut there, and ⌘ in this guide is Ctrl on Windows
+and Linux.
+
 ## Get Kerf
 
 Kerf runs on:
@@ -16,7 +22,8 @@ Kerf runs on:
   not supported.
 - **Windows 10 or 11, x64.** Windows 11 on Arm can run it through Windows' own
   emulation of x64 programs; that has not been tried.
-- **Linux, x86-64**, with X11 or XWayland and a system as new as Ubuntu 24.04
+- **Linux, x86-64**, with X11 or Wayland, a Vulkan driver (Mesa's, which most
+  systems have, or your graphics card's), and a system as new as Ubuntu 24.04
   (Ubuntu 24.04 or later, Debian 13 or later).
 
 Download the latest release from
@@ -24,7 +31,7 @@ Download the latest release from
 Windows, run the installer (`…-windows-x64-setup.exe`): it installs Kerf for you
 alone, with no administrator, adds it to the Start menu, and opens `kerf://`
 project links in it; Settings ▸ Apps uninstalls it. Or unpack the zip anywhere and
-run `kerf-qt.exe`, which does not open links. For a Mac with Apple silicon, unpack
+run `kerf-editor.exe`, which does not open links. For a Mac with Apple silicon, unpack
 the zip and move Industrial Kerf to Applications. For Debian 13, Ubuntu 24.04 and what
 comes from them, `sudo apt install ./Industrial-Kerf-…-linux-x64.deb` in the folder you
 downloaded it to installs Kerf with what it needs from the system, adds it to your
@@ -33,7 +40,7 @@ on your `PATH`; `sudo apt remove industrial-kerf` takes it away. For Fedora,
 `sudo dnf install ./Industrial-Kerf-…-linux-x64.rpm` does the same, and
 `sudo dnf remove industrial-kerf` takes it away. On any other Linux
 (x86-64, as new as Ubuntu 24.04), or to keep it in a folder of your own,
-unpack the `.tar.xz` anywhere and run `bin/kerf-qt`; it carries what it needs
+unpack the `.tar.xz` anywhere and run `bin/kerf-editor`; it carries what it needs
 beyond what every desktop has, which `system-libraries.txt` beside it lists. Run
 `./install-desktop-entry.sh` in the folder once to have Kerf among your applications and
 open `kerf://` project links in it, for you alone; run it again after moving the folder,
@@ -313,7 +320,7 @@ left alone, and nothing is changed for you.
 
 - **Kerf stopped unexpectedly.** Each crash of Kerf's project service (kerfd),
   the editor, or the `kerf` command leaves a report on this computer, whether it
-  was in Kerf's own code, in Qt, or in FFmpeg; nothing is sent anywhere. The next time Kerf opens it says so, and Help ▸ Show Crash
+  was in Kerf's own code, in FFmpeg, or in a graphics driver; nothing is sent anywhere. The next time Kerf opens it says so, and Help ▸ Show Crash
   Reports opens the folder. Attaching a report to a bug report shows where it
   happened.
 - **Reconnect.** If the connection to the project drops, the banner offers

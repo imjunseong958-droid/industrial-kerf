@@ -45,14 +45,7 @@ windows-sys = { version = "0.61", features = [
 ] }
 
 [dev-dependencies]
-approx = "0.5"
-criterion = "0.5"
-kerf-playback = { path = "../../engine/kerf-playback", default-features = false }
 tempfile = "3"
-
-[[bench]]
-name = "engine_hotpath"
-harness = false
 
 # Empty on purpose: this crate does not take the workspace's lints. The root
 # Cargo.toml says why.

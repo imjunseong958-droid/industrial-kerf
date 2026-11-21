@@ -1,6 +1,6 @@
 //! Kerf's icon, from the one place it is drawn to the files that carry it.
 //!
-//! `apps/kerf-qt/resources/icon/industrial-kerf.svg` is the icon. [`files`] renders it
+//! `apps/kerf-editor/assets/icon/industrial-kerf.svg` is the icon. [`files`] renders it
 //! to what sits beside it: a PNG for each size a desktop asks for, `industrial-kerf.ico`
 //! for Windows and `industrial-kerf.icns` for macOS. Those files are in the repository,
 //! so that building the editor needs no renderer; `cargo run -p kerf-icon` writes them
@@ -13,7 +13,7 @@ use resvg::tiny_skia::{Pixmap, Transform};
 use resvg::usvg;
 
 /// The icon as drawn.
-const SVG: &[u8] = include_bytes!("../../../apps/kerf-qt/resources/icon/industrial-kerf.svg");
+const SVG: &[u8] = include_bytes!("../../../apps/kerf-editor/assets/icon/industrial-kerf.svg");
 
 /// The side of the SVG's canvas, in its units.
 const CANVAS: f32 = 1024.0;
@@ -44,9 +44,9 @@ pub const ICNS_ENTRIES: [(&[u8; 4], u32); 10] = [
 /// SVG's tile is 896 for Windows and Linux, which leave no such margin.
 pub const MACOS_SCALE: f32 = 824.0 / 896.0;
 
-/// The folder the files are in, `apps/kerf-qt/resources/icon`.
+/// The folder the files are in, `apps/kerf-editor/assets/icon`.
 pub fn folder() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../apps/kerf-qt/resources/icon")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../apps/kerf-editor/assets/icon")
 }
 
 /// A square picture, eight bits each of red, green, blue and alpha, not premultiplied.

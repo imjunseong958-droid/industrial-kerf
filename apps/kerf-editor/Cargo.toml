@@ -1,0 +1,107 @@
+# The editor is a workspace of its own, not a member of the repository's.
+# GPUI turns on serde_json's `preserve_order`, and Cargo gives a feature to
+# every crate built in the same run: in the repository's workspace it would
+# change how kerfd, kerf and kerf-mcp order every JSON object whenever they
+# were built beside the editor, and kerfd checksums its journal over JSON it
+# writes again. Here the editor's features stay its own. It builds into the
+# repository's `target` (`.cargo/config.toml`), so `target/debug/kerf-editor`
+# is where `kerf` looks:
+#
+#   cargo build --manifest-path apps/kerf-editor/Cargo.toml
+#
+# Its version is the repository's (`tests/version.rs` holds them together),
+# and its profiles and lints are the repository's own, repeated here.
+[workspace]
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+too_many_arguments = "allow"
+needless_range_loop = "allow"
+type_complexity = "allow"
+
+[package]
+name = "kerf-editor"
+version = "0.1.4"
+edition = "2021"
+license = "MIT"
+description = "Industrial Kerf's native editor, drawn with GPUI"
+
+[lib]
+name = "kerf_editor"
+path = "src/lib.rs"
+
+[[bin]]
+name = "kerf-editor"
+path = "src/main.rs"
+
+[dependencies]
+kerf-bridge = { path = "../../crates/surfaces/kerf-bridge" }
+gpui = "0.2.2"
+# The version gpui draws pictures with: its RenderImage holds these frames
+# (and `--screenshot` writes its PNG with it).
+image = { version = "0.25", default-features = false, features = ["png"] }
+serde = { version = "1", features = ["derive", "rc"] }
+serde_json = "1"
+unicode-segmentation = "1"
+# kerf:// links: a project named outside ASCII, as a browser's punycode
+# (xn--) or as NFD text, still finds its folder.
+idna = "1"
+unicode-normalization = "0.1"
+# The Qt editor kept a project's master output under a SHA-1 of its path.
+sha1_smol = "1"
+env_logger = "0.11"
+log = "0.4"
+# "Edited … ago" counts days on the person's own calendar, as Qt's
+# toLocalTime did: the system's time zone (its zoneinfo on Unix; on
+# Windows the zone's rules come bundled).
+jiff = { version = "0.2", default-features = false, features = ["std", "tz-system", "tzdb-zoneinfo", "tzdb-bundle-platform"] }
+
+# On macOS a project's window represents its project.kerf (the title bar's
+# proxy icon), as the Qt editor's setWindowFilePath had it, and a drag on
+# the toolbar (the title bar there) moves the window: AppKit through its
+# safe bindings, at the versions gpui already brings, and the window's view
+# through raw-window-handle.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSString"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSEvent", "NSResponder", "NSView", "NSWindow"] }
+raw-window-handle = "0.6"
+
+# `--screenshot` reads the window back from the X server (a GPUI window
+# on X11 gives no raw handle of its own), with the x11rb gpui already brings.
+[target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies]
+x11rb = "0.13"
+
+[build-dependencies]
+embed-resource = "3"
+
+[dev-dependencies]
+proptest = "1"
+tempfile = "3"
+
+[lints]
+workspace = true
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = "debuginfo"
+
+[profile.dev]
+opt-level = 0
+debug = 1
+incremental = true
+
+[profile.dev.package.kerf-raster]
+opt-level = 3
+
+[profile.dev.package.kerf-raster-fx]
+opt-level = 3
+
+[profile.dev.package.kerf-track]
+opt-level = 3

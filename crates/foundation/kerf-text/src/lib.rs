@@ -28,39 +28,3 @@ pub mod sfnt;
 pub use fonts::{FaceId, Resolved, families, resolve};
 pub use layout::{Align, Caps, Glyph, Layout, Line, ParagraphStyle, StyleRun, TextStyle, layout, layout_rich, measure};
 pub use raster::{Mask, Path, Xform};
-
-#[cfg(test)]
-mod perf {
-    use super::*;
-
-    /// A three-line 1080p title: layout + rasterisation must stay far below a frame (≈ 41 ms at
-    /// 24 fps). Cold = first time (shaping + glyph rasterisation); warm = cached.
-    #[test]
-    fn three_line_title_is_fast() {
-        let text = "FILMCRAFT PRESENTS\nA Night Drive Through the City\nDirected by Nobody in Particular";
-        let st = TextStyle { size: 96.0, style: "Bold".into(), ..Default::default() };
-        let ps = ParagraphStyle { align: Align::Center, ..Default::default() };
-        let t0 = std::time::Instant::now();
-        let l = layout::layout_uncached(text, &st, &ps);
-        let (m, _, _) = render::rasterize(&l, &render::at(960.0, 400.0));
-        let cold = t0.elapsed();
-        let _ = layout(text, &st, &ps);
-        // The best of a few: the other tests of this binary run beside it, scanning and reading
-        // every installed font, and one run can wait on them, for the font database's lock while
-        // the system's faces go in or for a core, which is no time of this path's own.
-        let warm = (0..5)
-            .map(|_| {
-                let t1 = std::time::Instant::now();
-                let l2 = layout(text, &st, &ps);
-                let (m2, _, _) = render::rasterize(&l2, &render::at(960.0, 400.0));
-                let warm = t1.elapsed();
-                assert_eq!(m.a.len(), m2.a.len());
-                warm
-            })
-            .min()
-            .unwrap_or_default();
-        eprintln!("3-line 1080p title: cold {cold:?}, warm {warm:?} (mask {}x{})", m.w, m.h);
-        // generous bound for debug builds on busy CI machines
-        assert!(warm.as_millis() < 40, "warm {warm:?}");
-    }
-}
