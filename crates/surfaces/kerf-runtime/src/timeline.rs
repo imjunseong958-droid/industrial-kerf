@@ -1,403 +1,379 @@
-//! The timeline that editor snapshots carry.
-//!
-//! A read-only JSON view of the first sequence of the model for clients that
-//! draw a timeline (the editor). Times are exact seconds of the model, with
-//! frame counts on the sequence rate beside them; clips appear at their own
-//! spans, and transitions are listed separately with the region they cover.
-//! Edits go back as typed operations (`EditOp`), never by patching this.
-//!
-//! `properties` carries the catalog's intrinsic clip property definitions once
-//! per snapshot, keyed by track type, and `generators` the parameter
-//! definitions of each generator. Each clip's `props` holds only the
-//! properties and generator parameters it sets: a static value, or a keyframe
-//! list when animated, each key with its clip-relative `at` in seconds, the
-//! same offset as a whole `frame` on the sequence rate (what a typed op's
-//! `{"keys": [...]}` takes back), its `value` and its `interp`. Anything
-//! absent is at its default. Its `effects` list
-//! the effect stack in order, each with the parameters it sets the same way;
-//! their definitions are [`fx_catalog_json`]. Its `masks` list a picture
-//! clip's masks in order: each one's outline as the language writes it
-//! (`rect`, `ellipse`, or `points` and `closed`), its mode and inversion, and
-//! the properties it sets, which `maskProperties` defines; `maskModes` lists
-//! the modes. The sequence's `dropFrame` and `sampleRate`, and each
-//! source's `channels` and `sampleRate`, describe the formats an inspector
-//! shows. Each track carries its `role` (the one it was given, or its kind's:
-//! `video` for picture, `dialogue` for sound, none for subtitles),
-//! `roleAssigned` (whether it was given one), and `syncLocked` (whether ripple
-//! edits on other tracks move it).
+//! Building the timeline view ([`TimelineView`]) editor snapshots carry, and
+//! the catalog of effects in the same terms: parameter definitions and values
+//! as JSON.
 
+use crate::view::{
+    TimelineView, ViewClip, ViewEffect, ViewMarker, ViewMask, ViewOutline, ViewOutlineKey,
+    ViewSequence, ViewSource, ViewTake, ViewTrack, ViewTrackKind, ViewTransition,
+};
 use kerf_model::{
-    Catalog, Clip, Content, Domain, FxKind, Mask, MaskMode, MaskShape, Param, ParamDef, ParamType,
-    Project, Rate, Sequence, Time, Track, Value,
+    Catalog, Clip, Content, Domain, FxKind, Mask, MaskMode, MaskShape, Media, Param, ParamDef,
+    ParamType, Params, Project, Rate, Sequence, Time, Track, TrackKind, Value,
 };
 use serde_json::{json, Map, Value as Json};
 
-/// [`timeline_json`] with, on each source its recipe has made takes of, `takes`: each one's
-/// `number`, its `path` as the document would name it, and whether it is the one the
-/// source is (`chosen`), for an editor to offer them; and on each whose recipe names any of
-/// the project's cast or styles, `shows`: their names.
-pub(crate) fn timeline_with_takes(project: &Project, directory: &std::path::Path) -> Json {
-    let mut value = timeline_json(project);
-    let sources = value["sources"].as_array_mut().into_iter().flatten();
-    for (source, media) in sources.zip(&project.media) {
-        let takes = kerf_engine::recipe::takes::listed(directory, media);
-        if !takes.is_empty() {
-            source["takes"] = takes
-                .into_iter()
-                .map(|(number, path, chosen)| json!({"number": number, "path": path, "chosen": chosen}))
-                .collect();
-        }
+/// The view as the JSON a snapshot carries.
+pub(crate) fn to_json(view: &TimelineView) -> Json {
+    serde_json::to_value(view).unwrap_or_default()
+}
+
+/// [`timeline_view`] with each source's takes and the cast and styles it shows.
+pub(crate) fn timeline_with_takes(project: &Project, directory: &std::path::Path) -> TimelineView {
+    let mut view = timeline_view(project);
+    for (source, media) in view.sources.iter_mut().zip(&project.media) {
+        source.takes = kerf_engine::recipe::takes::listed(directory, media)
+            .into_iter()
+            .map(|(number, path, chosen)| ViewTake {
+                number,
+                path,
+                chosen,
+            })
+            .collect();
         let (cast, styles) = kerf_engine::recipe::cast::named_by(media);
-        if !cast.is_empty() || !styles.is_empty() {
-            source["shows"] = json!([cast, styles].concat());
-        }
+        source.shows = [cast, styles].concat();
     }
-    value
+    view
 }
 
 /// The most points a signal's curve is sent as: a long clip is read every few frames.
 const SIGNAL_POINTS: usize = 512;
 
-pub(crate) fn timeline_json(project: &Project) -> Json {
-    let mut value = json!({
-        "name": project.name,
-        "sources": project.media.iter().map(|media| {
-            let mut source = json!({
-                "id": media.id.as_str(),
-                "path": media.path,
-                "duration": media.duration.seconds(),
-                "rate": media.rate.to_string(),
-                "fps": media.rate.fps(),
-                "hasAudio": media.audio.is_some(),
-            });
-            if let Some(video) = media.video {
-                source["width"] = json!(video.width);
-                source["height"] = json!(video.height);
-            }
-            if let Some(audio) = media.audio {
-                source["channels"] = json!(audio.channels);
-                source["sampleRate"] = json!(audio.sample_rate);
-            }
-            if let Some(recipe) = &media.recipe {
-                source["recipe"] = json!(recipe);
-            }
-            // How many steps the document has under it: a media those make.
-            if !media.steps.is_empty() {
-                source["steps"] = json!(media.steps.len());
-            }
-            source
-        }).collect::<Vec<_>>(),
-        "sequences": project.sequences.iter().map(|sequence| {
-            json!({
-                "id": sequence.id.as_str(),
-                "name": sequence.name,
-                "width": sequence.width,
-                "height": sequence.height,
-                "rate": sequence.rate.to_string(),
-                "fps": sequence.rate.fps(),
-                "dropFrame": sequence.drop_frame,
-                "duration": sequence.duration().seconds(),
-                "color": sequence.color.id(),
-            })
-        }).collect::<Vec<_>>(),
-        "properties": properties_json(),
-        "maskProperties": Catalog::builtin().mask_props().iter().map(param_def_json).collect::<Vec<_>>(),
-        "maskModes": MaskMode::ALL.map(MaskMode::name),
-        "generators": Catalog::builtin()
+/// The timeline view of `project`, without takes.
+pub(crate) fn timeline_view(project: &Project) -> TimelineView {
+    let mut view = TimelineView {
+        name: project.name.clone(),
+        sources: project.media.iter().map(source_view).collect(),
+        sequences: project.sequences.iter().map(sequence_view).collect(),
+        properties: properties(),
+        mask_properties: Catalog::builtin()
+            .mask_props()
+            .iter()
+            .map(param_def_json)
+            .collect(),
+        mask_modes: MaskMode::ALL.map(|mode| mode.name().to_owned()).into(),
+        generators: Catalog::builtin()
             .all()
             .filter(|def| def.kind == FxKind::Generator)
-            .map(|def| (def.id.to_string(), def.params.iter().map(param_def_json).collect()))
-            .collect::<Map<String, Json>>(),
-        "tracks": [],
-        "markers": [],
-    });
+            .map(|def| {
+                let params = def.params.iter().map(param_def_json).collect();
+                (def.id.to_string(), params)
+            })
+            .collect(),
+        fps: 30.0,
+        ..TimelineView::default()
+    };
     let Some(sequence) = project.sequences.first() else {
-        value["fps"] = json!(30.0);
-        value["duration"] = json!(0.0);
-        return value;
+        return view;
     };
     let rate = sequence.rate;
-    value["sequence"] = json!(sequence.id.as_str());
-    value["fps"] = json!(rate.fps());
-    value["rate"] = json!(rate.to_string());
-    value["dropFrame"] = json!(sequence.drop_frame);
-    value["sampleRate"] = json!(sequence.sample_rate);
-    value["width"] = json!(sequence.width);
-    value["height"] = json!(sequence.height);
-    value["start"] = json!(sequence.start.seconds());
-    value["duration"] = json!(sequence.duration().seconds());
-    value["tracks"] = sequence
+    view.sequence = Some(sequence.id.as_str().to_owned());
+    view.fps = rate.fps();
+    view.rate = Some(rate.to_string());
+    view.drop_frame = Some(sequence.drop_frame);
+    view.sample_rate = Some(sequence.sample_rate);
+    view.width = Some(sequence.width);
+    view.height = Some(sequence.height);
+    view.start = Some(sequence.start.seconds());
+    view.duration = sequence.duration().seconds();
+    view.tracks = sequence
         .tracks
         .iter()
-        .map(|track| track_json(project, sequence, track))
+        .map(|track| track_view(project, sequence, track))
         .collect();
-    value["markers"] = sequence
+    view.markers = sequence
         .markers
         .iter()
-        .map(|marker| {
-            let mut value = json!({
-                "id": marker.id.as_str(),
-                "time": marker.at.seconds(),
-                "frame": frames(rate, marker.at),
-                "duration": marker.duration.seconds(),
-            });
-            if let Some(name) = &marker.name {
-                value["label"] = json!(name);
-            }
-            if let Some(color) = marker.color {
-                value["color"] = json!(color.name());
-            }
-            if let Some(note) = &marker.note {
-                value["note"] = json!(note);
-            }
-            value
+        .map(|marker| ViewMarker {
+            id: marker.id.as_str().to_owned(),
+            time: marker.at.seconds(),
+            frame: frames(rate, marker.at),
+            duration: marker.duration.seconds(),
+            label: marker.name.clone(),
+            color: marker.color.map(|color| color.name().to_owned()),
+            note: marker.note.clone(),
         })
         .collect();
-    value
+    view
+}
+
+fn source_view(media: &Media) -> ViewSource {
+    ViewSource {
+        id: media.id.as_str().to_owned(),
+        path: media.path.clone(),
+        duration: media.duration.seconds(),
+        rate: media.rate.to_string(),
+        fps: media.rate.fps(),
+        has_audio: media.audio.is_some(),
+        width: media.video.map(|video| video.width),
+        height: media.video.map(|video| video.height),
+        channels: media.audio.map(|audio| audio.channels),
+        sample_rate: media.audio.map(|audio| audio.sample_rate),
+        recipe: media.recipe.clone(),
+        steps: media.steps.len(),
+        takes: Vec::new(),
+        shows: Vec::new(),
+    }
+}
+
+fn sequence_view(sequence: &Sequence) -> ViewSequence {
+    ViewSequence {
+        id: sequence.id.as_str().to_owned(),
+        name: sequence.name.clone(),
+        width: sequence.width,
+        height: sequence.height,
+        rate: sequence.rate.to_string(),
+        fps: sequence.rate.fps(),
+        drop_frame: sequence.drop_frame,
+        duration: sequence.duration().seconds(),
+        color: sequence.color.id().to_owned(),
+    }
 }
 
 /// The properties a clip has by its track's type, `{video: [...], audio: [...]}`, as a timeline's
 /// `properties` carries them.
 pub fn properties_json() -> Json {
+    properties().into()
+}
+
+fn properties() -> Map<String, Json> {
     [Domain::Video, Domain::Audio]
         .into_iter()
         .map(|domain| {
             let defs = Catalog::builtin().props(domain).iter();
             (domain.name().to_owned(), defs.map(param_def_json).collect())
         })
-        .collect::<Map<String, Json>>()
-        .into()
+        .collect()
 }
 
 fn frames(rate: Rate, time: Time) -> i64 {
     rate.frames_round(time)
 }
 
-fn track_json(project: &Project, sequence: &Sequence, track: &Track) -> Json {
+fn track_view(project: &Project, sequence: &Sequence, track: &Track) -> ViewTrack {
     let rate = sequence.rate;
-    let mut value = json!({
-        "id": track.id.as_str(),
-        "type": track.kind.name(),
-        "enabled": track.enabled,
-        "locked": track.locked,
-        "muted": track.muted,
-        "role": track.role_or_default(),
-        "roleAssigned": track.role.is_some(),
-        "syncLocked": track.sync_locked,
-        "bus": track.bus.as_ref().map(|bus| bus.as_str()),
-        "clips": track.clips.iter().map(|clip| clip_json(project, rate, clip)).collect::<Vec<_>>(),
-        "transitions": track.transitions.iter().map(|transition| {
-            let cut = track.clip(transition.from.as_str()).map_or(Time::ZERO, Clip::end);
-            let (before, after) = transition.split_at_cut(rate);
-            json!({
-                "id": transition.id.as_str(),
-                "from": transition.from.as_str(),
-                "to": transition.to.as_str(),
-                "fx": transition.fx.as_str(),
-                "version": transition.version,
-                "align": transition.align.name(),
-                "start": (cut - before).seconds(),
-                "end": (cut + after).seconds(),
-                "duration": transition.duration.seconds(),
+    ViewTrack {
+        id: track.id.as_str().to_owned(),
+        kind: match track.kind {
+            TrackKind::Video => ViewTrackKind::Video,
+            TrackKind::Audio => ViewTrackKind::Audio,
+            TrackKind::Subtitle => ViewTrackKind::Subtitle,
+        },
+        enabled: track.enabled,
+        locked: track.locked,
+        muted: track.muted,
+        role: track.role_or_default().map(str::to_owned),
+        role_assigned: track.role.is_some(),
+        sync_locked: track.sync_locked,
+        bus: track.bus.as_ref().map(|bus| bus.as_str().to_owned()),
+        clips: track
+            .clips
+            .iter()
+            .map(|clip| clip_view(project, rate, clip))
+            .collect(),
+        transitions: track
+            .transitions
+            .iter()
+            .map(|transition| {
+                let cut = track
+                    .clip(transition.from.as_str())
+                    .map_or(Time::ZERO, Clip::end);
+                let (before, after) = transition.split_at_cut(rate);
+                ViewTransition {
+                    id: transition.id.as_str().to_owned(),
+                    from: transition.from.as_str().to_owned(),
+                    to: transition.to.as_str().to_owned(),
+                    fx: transition.fx.as_str().to_owned(),
+                    version: transition.version,
+                    align: transition.align.name().to_owned(),
+                    start: (cut - before).seconds(),
+                    end: (cut + after).seconds(),
+                    duration: transition.duration.seconds(),
+                }
             })
-        }).collect::<Vec<_>>(),
-    });
-    if let Some(name) = &track.name {
-        value["name"] = json!(name);
+            .collect(),
+        name: track.name.clone(),
     }
-    value
 }
 
-fn clip_json(project: &Project, rate: Rate, clip: &Clip) -> Json {
-    let mut value = json!({
-        "id": clip.id.as_str(),
-        "timelineStart": clip.start.seconds(),
-        "duration": clip.duration.seconds(),
-        "startFrame": frames(rate, clip.start),
-        "durationFrames": frames(rate, clip.duration),
-        "enabled": clip.enabled,
-    });
-    let object = value.as_object_mut().expect("object");
-    if let Some(name) = &clip.name {
-        object.insert("name".into(), json!(name));
-    }
-    if let Some(link) = &clip.link {
-        object.insert("link".into(), json!(link.as_str()));
-    }
-    if let Some(parent) = &clip.parent {
-        object.insert("parent".into(), json!(parent.as_str()));
-    }
+fn clip_view(project: &Project, rate: Rate, clip: &Clip) -> ViewClip {
+    let mut view = ViewClip {
+        id: clip.id.as_str().to_owned(),
+        timeline_start: clip.start.seconds(),
+        duration: clip.duration.seconds(),
+        start_frame: frames(rate, clip.start),
+        duration_frames: frames(rate, clip.duration),
+        enabled: clip.enabled,
+        name: clip.name.clone(),
+        link: clip.link.as_ref().map(|link| link.as_str().to_owned()),
+        parent: clip
+            .parent
+            .as_ref()
+            .map(|parent| parent.as_str().to_owned()),
+        ..ViewClip::default()
+    };
     if let Some((source_in, source_out)) = clip.source_range() {
-        object.insert("in".into(), json!(source_in.seconds()));
-        object.insert("out".into(), json!(source_out.seconds()));
         let speed = clip.speed();
-        object.insert("speed".into(), json!(speed.average(clip.duration)));
-        object.insert("speedRatio".into(), json!(speed.to_string()));
-        if speed.is_reverse() {
-            object.insert("reverse".into(), json!(true));
-        }
+        view.source_in = Some(source_in.seconds());
+        view.source_out = Some(source_out.seconds());
+        view.speed = Some(speed.average(clip.duration));
+        view.speed_ratio = Some(speed.to_string());
+        view.reverse = speed.is_reverse();
     }
+    let mut params = None;
     match &clip.content {
         Content::Media { media, .. } => {
-            object.insert("kind".into(), json!("media"));
-            object.insert("sourceId".into(), json!(media.as_str()));
-            if let Some(media) = project.media(media.as_str()) {
-                object.insert("sourceRate".into(), json!(media.rate.to_string()));
-            }
+            view.kind = "media".into();
+            view.source_id = Some(media.as_str().to_owned());
+            view.source_rate = project
+                .media(media.as_str())
+                .map(|media| media.rate.to_string());
         }
         Content::Sequence { sequence, .. } => {
-            object.insert("kind".into(), json!("sequence"));
-            object.insert("sequenceId".into(), json!(sequence.as_str()));
+            view.kind = "sequence".into();
+            view.sequence_id = Some(sequence.as_str().to_owned());
             // By the name it goes by, or its id with none.
-            object.entry("name").or_insert_with(|| {
+            view.name = view.name.take().or_else(|| {
                 let nested = project
                     .sequences
                     .iter()
                     .find(|nested| nested.id == *sequence);
-                json!(nested
+                let name = nested
                     .map(|nested| nested.name.trim())
-                    .filter(|name| !name.is_empty())
-                    .unwrap_or(sequence.as_str()))
+                    .filter(|name| !name.is_empty());
+                Some(name.unwrap_or(sequence.as_str()).to_owned())
             });
         }
         Content::Generator {
             fx,
             version,
-            params,
+            params: generator,
         } => {
-            object.insert("kind".into(), json!("generator"));
-            object.insert("fx".into(), json!(fx.as_str()));
-            object.insert("version".into(), json!(version));
-            let name = match params.get("text") {
-                Some(Param::Static(Value::Text(text))) => text.clone(),
-                _ => fx.to_string(),
-            };
-            object.entry("name").or_insert_with(|| json!(name));
+            view.kind = "generator".into();
+            view.fx = Some(fx.as_str().to_owned());
+            view.version = Some(*version);
+            view.name = view.name.take().or_else(|| match generator.get("text") {
+                Some(Param::Static(Value::Text(text))) => Some(text.clone()),
+                _ => Some(fx.to_string()),
+            });
             // A signal draws nothing, so what there is to show of it is its number: what
             // it comes to along the clip, for an editor to draw as a curve.
             if fx.as_str() == kerf_model::SIGNAL {
-                let length = frames(rate, clip.duration).max(1);
-                let step = (length as usize).div_ceil(SIGNAL_POINTS).max(1);
-                let read = |frame: i64| match params
-                    .get(kerf_model::SIGNAL_VALUE)
-                    .map(|value| value.value_at(rate.time_of(frame)))
-                {
-                    Some(Value::Number(number)) if number.is_finite() => {
-                        (number.clamp(0.0, 1.0) * 1e4).round() / 1e4
-                    }
-                    _ => 0.0,
-                };
-                let mut values: Vec<f64> = (0..length).step_by(step).map(read).collect();
-                // Its last frame too, so that the curve ends where the clip does.
-                if (length - 1) % step as i64 != 0 {
-                    values.push(read(length - 1));
-                }
-                object.insert("signal".into(), json!(values));
+                view.signal = signal(generator, rate, clip);
             }
+            params = Some(generator);
         }
         Content::Caption { text } => {
-            object.insert("kind".into(), json!("caption"));
-            object.insert("text".into(), json!(text));
-            object.entry("name").or_insert_with(|| json!(text));
+            view.kind = "caption".into();
+            view.text = Some(text.clone());
+            view.name = view.name.take().or_else(|| Some(text.clone()));
         }
     }
-    let params = match &clip.content {
-        Content::Generator { params, .. } => Some(params),
-        _ => None,
-    };
-    let props: Map<String, Json> = clip
+    view.props = clip
         .props
         .iter()
         .chain(params.into_iter().flatten())
         .map(|(name, param)| (name.clone(), param_json(param, rate)))
         .collect();
-    if !props.is_empty() {
-        object.insert("props".into(), Json::Object(props));
-    }
-    if !clip.effects.is_empty() {
-        object.insert(
-            "effects".into(),
-            clip.effects
-                .iter()
-                .map(|effect| {
-                    let params: Map<String, Json> = effect
-                        .params
-                        .iter()
-                        .map(|(name, param)| (name.clone(), param_json(param, rate)))
-                        .collect();
-                    json!({
-                        "fx": effect.fx.as_str(),
-                        "version": effect.version,
-                        "enabled": effect.enabled,
-                        "doc": Catalog::builtin().fx(effect.fx.as_str()).map(|def| def.doc.as_str()),
-                        "params": params,
-                    })
-                })
-                .collect(),
-        );
-    }
-    if !clip.masks.is_empty() {
-        object.insert(
-            "masks".into(),
-            clip.masks
-                .iter()
-                .map(|mask| mask_json(mask, rate))
-                .collect(),
-        );
-    }
-    value
+    view.effects = clip
+        .effects
+        .iter()
+        .map(|effect| ViewEffect {
+            fx: effect.fx.as_str().to_owned(),
+            version: effect.version,
+            enabled: effect.enabled,
+            doc: Catalog::builtin()
+                .fx(effect.fx.as_str())
+                .map(|def| def.doc.clone()),
+            params: params_json(&effect.params, rate),
+        })
+        .collect();
+    view.masks = clip
+        .masks
+        .iter()
+        .map(|mask| mask_view(mask, rate))
+        .collect();
+    view
 }
 
-fn mask_json(mask: &Mask, rate: Rate) -> Json {
-    let mut value = json!({
-        "name": mask.name.as_str(),
-        "mode": mask.mode.name(),
-        "inverted": mask.inverted,
-        "params": mask
-            .params
-            .iter()
-            .map(|(name, param)| (name.clone(), param_json(param, rate)))
-            .collect::<Map<String, Json>>(),
-    });
-    shape_json(&mut value, &mask.shape);
-    if let MaskShape::Moving(keys) = &mask.shape {
-        // Where it starts, as a still outline reads, and its keyframes.
-        if let Some(first) = keys.first() {
-            shape_json(&mut value, &first.shape);
+/// A signal's number on frames along the clip, at most [`SIGNAL_POINTS`] and its last frame.
+fn signal(params: &Params, rate: Rate, clip: &Clip) -> Vec<f64> {
+    let length = frames(rate, clip.duration).max(1);
+    let step = (length as usize).div_ceil(SIGNAL_POINTS).max(1);
+    let read = |frame: i64| match params
+        .get(kerf_model::SIGNAL_VALUE)
+        .map(|value| value.value_at(rate.time_of(frame)))
+    {
+        Some(Value::Number(number)) if number.is_finite() => {
+            (number.clamp(0.0, 1.0) * 1e4).round() / 1e4
         }
-        value["keys"] = keys
-            .iter()
-            .map(|key| {
-                let mut entry = json!({
-                    "at": key.at.seconds(),
-                    "frame": frames(rate, key.at),
-                    "interp": key.interp.name(),
-                });
-                shape_json(&mut entry, &key.shape);
-                entry
-            })
-            .collect();
+        _ => 0.0,
+    };
+    let mut values: Vec<f64> = (0..length).step_by(step).map(read).collect();
+    // Its last frame too, so that the curve ends where the clip does.
+    if (length - 1) % step as i64 != 0 {
+        values.push(read(length - 1));
     }
-    value
+    values
 }
 
-fn shape_json(value: &mut Json, shape: &MaskShape) {
+fn mask_view(mask: &Mask, rate: Rate) -> ViewMask {
+    let (outline, keys) = match &mask.shape {
+        // Where it starts, as a still outline reads, and its keyframes.
+        MaskShape::Moving(keys) => (
+            keys.first()
+                .map_or_else(ViewOutline::default, |first| outline_view(&first.shape)),
+            Some(
+                keys.iter()
+                    .map(|key| ViewOutlineKey {
+                        at: key.at.seconds(),
+                        frame: frames(rate, key.at),
+                        interp: key.interp.name().into_owned(),
+                        outline: outline_view(&key.shape),
+                    })
+                    .collect(),
+            ),
+        ),
+        still => (outline_view(still), None),
+    };
+    ViewMask {
+        name: mask.name.as_str().to_owned(),
+        mode: mask.mode.name().to_owned(),
+        inverted: mask.inverted,
+        params: params_json(&mask.params, rate),
+        outline,
+        keys,
+    }
+}
+
+fn outline_view(shape: &MaskShape) -> ViewOutline {
     match shape {
-        MaskShape::Rect(rect) => value["rect"] = json!(rect),
-        MaskShape::Ellipse(ellipse) => value["ellipse"] = json!(ellipse),
+        MaskShape::Rect(rect) => ViewOutline {
+            rect: Some(*rect),
+            ..ViewOutline::default()
+        },
+        MaskShape::Ellipse(ellipse) => ViewOutline {
+            ellipse: Some(*ellipse),
+            ..ViewOutline::default()
+        },
         MaskShape::Polygon {
             points,
             closed,
             soft,
-        } => {
-            value["points"] = json!(points);
-            value["closed"] = json!(closed);
-            if !soft.is_empty() {
-                value["soft"] = json!(soft);
-            }
-        }
-        MaskShape::Moving(_) => {}
+        } => ViewOutline {
+            points: Some(points.clone()),
+            closed: Some(*closed),
+            soft: soft.clone(),
+            ..ViewOutline::default()
+        },
+        MaskShape::Moving(_) => ViewOutline::default(),
     }
+}
+
+fn params_json(params: &Params, rate: Rate) -> Map<String, Json> {
+    params
+        .iter()
+        .map(|(name, param)| (name.clone(), param_json(param, rate)))
+        .collect()
 }
 
 /// The picture effects and transitions an editor offers, by category, each

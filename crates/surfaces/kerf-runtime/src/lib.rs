@@ -23,6 +23,7 @@ mod render;
 mod runtime;
 mod store;
 mod timeline;
+mod view;
 
 pub use author::Author;
 pub use ipc::{
@@ -35,6 +36,10 @@ pub use kernel::{
 };
 pub use render::{render_cancel_path, run_render_job, RENDER_CODECS, RENDER_QUALITIES};
 pub use timeline::{fx_catalog_all_json, fx_catalog_json, properties_json};
+pub use view::{
+    TimelineView, ViewClip, ViewEffect, ViewMarker, ViewMask, ViewOutline, ViewOutlineKey,
+    ViewSequence, ViewSource, ViewTake, ViewTrack, ViewTrackKind, ViewTransition,
+};
 
 use kerf_model::Project;
 use runtime::runtime_actor;
@@ -63,10 +68,12 @@ fn default_projection_status() -> String {
 pub const MAX_PROPOSALS: usize = 8;
 
 /// What clients see of the runtime. `document` is the canonical `.kerf`
-/// text and `timeline` a JSON view of its first sequence for editors.
+/// text and `timeline` a [`TimelineView`] of it for editors.
 ///
 /// The fields after `import_warnings` are left out while empty, so the
-/// receipts older journals keep still read back byte for byte.
+/// receipts older journals keep still read back byte for byte. For the same
+/// reason `timeline` stays the JSON it was written as: a receipt's snapshot
+/// is checksummed as stored.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StateSnapshot {
@@ -784,13 +791,19 @@ pub fn parse_document(text: &str) -> Result<Project, RuntimeError> {
 }
 
 /// The timeline view of `document` as a proposal's `script` would leave it,
-/// in the same shape as a snapshot's `timeline`, so an editor can show a
-/// proposal in place before it is accepted.
-pub fn proposal_timeline(document: &str, script: &str) -> Result<Value, RuntimeError> {
+/// so an editor can show a proposal in place before it is accepted. It has
+/// no takes and no cast or styles shown.
+pub fn proposal_timeline_view(document: &str, script: &str) -> Result<TimelineView, RuntimeError> {
     let project = kernel::parse(document)?;
     let edited = kernel::Edit::Script {
         script: script.to_string(),
     }
     .run(&project, &kerf_lang::NoFacts)?;
-    Ok(timeline::timeline_json(&edited.project))
+    Ok(timeline::timeline_view(&edited.project))
+}
+
+/// [`proposal_timeline_view`] as JSON, in the same shape as a snapshot's
+/// `timeline`.
+pub fn proposal_timeline(document: &str, script: &str) -> Result<Value, RuntimeError> {
+    proposal_timeline_view(document, script).map(|view| timeline::to_json(&view))
 }
