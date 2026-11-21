@@ -1013,7 +1013,9 @@ impl Project {
                 return true;
             }
             let next = self.media(id.as_str());
-            on = next.and_then(|next| next.sync.as_ref()).map(|sync| &sync.with);
+            on = next
+                .and_then(|next| next.sync.as_ref())
+                .map(|sync| &sync.with);
         }
         // Others go round among themselves, and never reach it.
         false

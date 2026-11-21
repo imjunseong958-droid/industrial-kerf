@@ -92,10 +92,22 @@ fn clip(track: u32, id: &str, generator: &str, parent: &str, set: &str) -> Strin
 /// that casts, and a wall behind.
 fn stage() -> String {
     [
-        clip(1, "wall", "solid", "", "color=#506070 three_d=true z=3 scale=4"),
+        clip(
+            1,
+            "wall",
+            "solid",
+            "",
+            "color=#506070 three_d=true z=3 scale=4",
+        ),
         clip(20, "lamp", "light", "", "x=-0.3 y=-0.4 z=-0.5 shadow=0.7"),
         clip(21, "fill", "light", "", "kind=ambient intensity=0.3"),
-        clip(22, "cam", "camera", "", "x=0.1 y=-0.1 z=-0.4 pan=-6 tilt=-5"),
+        clip(
+            22,
+            "cam",
+            "camera",
+            "",
+            "x=0.1 y=-0.1 z=-0.4 pan=-6 tilt=-5",
+        ),
     ]
     .concat()
 }
@@ -113,8 +125,16 @@ fn turned([x, y, z]: [f64; 3], pitch: f64, yaw: f64) -> [f64; 3] {
 /// middle of the frame, and the parent's middle `about`, turned by `pitch` and `yaw` and moved
 /// `back` frame heights.
 fn taken(at: [f64; 3], about: [f64; 3], (pitch, yaw): (f64, f64), back: f64) -> [f64; 3] {
-    let off = turned([at[0] - about[0], at[1] - about[1], at[2] - about[2]], pitch, yaw);
-    [about[0] + off[0], about[1] + off[1], about[2] + off[2] + back * TALL]
+    let off = turned(
+        [at[0] - about[0], at[1] - about[1], at[2] - about[2]],
+        pitch,
+        yaw,
+    );
+    [
+        about[0] + off[0],
+        about[1] + off[1],
+        about[2] + off[2] + back * TALL,
+    ]
 }
 
 /// A place in the world's pixels as a clip's own `x`, `y`, and `z` say it.
@@ -129,9 +149,36 @@ fn a_null_moved_back_takes_its_children_as_their_own_z_would() {
     let parts = |parent: &str, back: [&str; 3]| {
         [
             stage(),
-            clip(3, "body", "mesh", parent, &format!("kind=box width=0.3 height=0.4 length=0.2 color=#c04020 y=0.1 z={}", back[0])),
-            clip(4, "head", "mesh", parent, &format!("kind=ball width=0.2 height=0.2 length=0.2 color=#e0c020 y=-0.22 z={}", back[1])),
-            clip(5, "plate", "solid", parent, &format!("color=#20c060 three_d=true scale=0.25 x=0.25 rotate_y=30 depth=0.05 z={}", back[2])),
+            clip(
+                3,
+                "body",
+                "mesh",
+                parent,
+                &format!(
+                    "kind=box width=0.3 height=0.4 length=0.2 color=#c04020 y=0.1 z={}",
+                    back[0]
+                ),
+            ),
+            clip(
+                4,
+                "head",
+                "mesh",
+                parent,
+                &format!(
+                    "kind=ball width=0.2 height=0.2 length=0.2 color=#e0c020 y=-0.22 z={}",
+                    back[1]
+                ),
+            ),
+            clip(
+                5,
+                "plate",
+                "solid",
+                parent,
+                &format!(
+                    "color=#20c060 three_d=true scale=0.25 x=0.25 rotate_y=30 depth=0.05 z={}",
+                    back[2]
+                ),
+            ),
         ]
         .concat()
     };
@@ -143,12 +190,23 @@ fn a_null_moved_back_takes_its_children_as_their_own_z_would() {
     // The same parts with the null's keys on each, and a null that does nothing.
     let by_hand = [
         clip(2, "bot", "null", "", "x=0"),
-        parts("bot", ["{0f:1.5 23f:0.25}", "{0f:1.55 23f:0.3}", "{0f:1.4 23f:0.15}"]),
+        parts(
+            "bot",
+            [
+                "{0f:1.5 23f:0.25}",
+                "{0f:1.55 23f:0.3}",
+                "{0f:1.4 23f:0.15}",
+            ],
+        ),
     ]
     .concat();
     same("moved back", &rigged, &by_hand, &[0, 11, 23]);
     // And it is not where it would be with no null: the null's `z` is not nothing.
-    let unmoved = [clip(2, "bot", "null", "", "x=0"), parts("bot", ["0", "0.05", "-0.1"])].concat();
+    let unmoved = [
+        clip(2, "bot", "null", "", "x=0"),
+        parts("bot", ["0", "0.05", "-0.1"]),
+    ]
+    .concat();
     differs("moved back", &rigged, &unmoved, 0);
     // A null needs no `three_d` to be somewhere in depth, and one that says it is no other.
     let saying = [
@@ -168,9 +226,24 @@ fn a_null_turned_swings_its_children_round_its_middle() {
     let rig = format!("x=0.1 y=0.05 rotate_x={pitch} rotate_y={yaw} z={back}");
     // Each part by where it is from the middle of the frame with the null at rest, in pixels.
     let parts = [
-        ("body", "mesh", "kind=box width=0.3 height=0.4 length=0.2 color=#c04020", [0.0, 0.1 * TALL, 0.0]),
-        ("arm", "mesh", "kind=cylinder width=0.1 height=0.4 length=0.1 color=#2040c0", [0.3 * WIDE, 0.0, 0.2 * TALL]),
-        ("plate", "solid", "color=#20c060 three_d=true scale=0.25 depth=0.05", [-0.25 * WIDE, -0.2 * TALL, -0.1 * TALL]),
+        (
+            "body",
+            "mesh",
+            "kind=box width=0.3 height=0.4 length=0.2 color=#c04020",
+            [0.0, 0.1 * TALL, 0.0],
+        ),
+        (
+            "arm",
+            "mesh",
+            "kind=cylinder width=0.1 height=0.4 length=0.1 color=#2040c0",
+            [0.3 * WIDE, 0.0, 0.2 * TALL],
+        ),
+        (
+            "plate",
+            "solid",
+            "color=#20c060 three_d=true scale=0.25 depth=0.05",
+            [-0.25 * WIDE, -0.2 * TALL, -0.1 * TALL],
+        ),
     ];
     let mut rigged = vec![stage(), clip(2, "bot", "null", "", &rig)];
     let mut by_hand = vec![stage(), clip(2, "bot", "null", "", "x=0")];
@@ -178,7 +251,13 @@ fn a_null_turned_swings_its_children_round_its_middle() {
         let track = track as u32 + 3;
         // Its own place is from the null's, which the null's `x` and `y` move it with.
         let own = [at[0] + about[0], at[1] + about[1], at[2]];
-        rigged.push(clip(track, id, generator, "bot", &format!("{set} {}", said(at))));
+        rigged.push(clip(
+            track,
+            id,
+            generator,
+            "bot",
+            &format!("{set} {}", said(at)),
+        ));
         let there = taken(own, about, (pitch, yaw), back);
         let set = format!("{set} {} rotate_x={pitch} rotate_y={yaw}", said(there));
         by_hand.push(clip(track, id, generator, "bot", &set));
@@ -190,14 +269,26 @@ fn a_null_turned_swings_its_children_round_its_middle() {
     let rigged = [
         stage(),
         clip(2, "bot", "null", "", "rotate_y={0f:0 20f:100}"),
-        clip(3, "body", "mesh", "bot", &format!("{child} x=0.2 rotate_x=15 rotate_y=10")),
+        clip(
+            3,
+            "body",
+            "mesh",
+            "bot",
+            &format!("{child} x=0.2 rotate_x=15 rotate_y=10"),
+        ),
     ]
     .concat();
     let there = turned([0.2 * WIDE, 0.0, 0.0], 0.0, 50.0);
     let by_hand = [
         stage(),
         clip(2, "bot", "null", "", "x=0"),
-        clip(3, "body", "mesh", "bot", &format!("{child} {} rotate_x=15 rotate_y=60", said(there))),
+        clip(
+            3,
+            "body",
+            "mesh",
+            "bot",
+            &format!("{child} {} rotate_x=15 rotate_y=60", said(there)),
+        ),
     ]
     .concat();
     same("turned about the upright", &rigged, &by_hand, &[10]);
@@ -226,12 +317,23 @@ fn parents_chain_in_depth_from_the_one_a_clip_names_outward() {
         stage(),
         clip(2, "body", "null", "", "x=0"),
         clip(3, "arm", "null", "body", "x=0"),
-        clip(4, "hand", "mesh", "arm", &format!("{child} {} rotate_y=-15", said(by_body))),
+        clip(
+            4,
+            "hand",
+            "mesh",
+            "arm",
+            &format!("{child} {} rotate_y=-15", said(by_body)),
+        ),
     ]
     .concat();
     same("chained", &rigged, &by_hand, &[3]);
     // The other way round it is somewhere else: the one it names is first.
-    let other = taken(taken(hand, [0.0, down, 0.0], (0.0, 25.0), 0.8), arm, (0.0, -40.0), 0.3);
+    let other = taken(
+        taken(hand, [0.0, down, 0.0], (0.0, 25.0), 0.8),
+        arm,
+        (0.0, -40.0),
+        0.3,
+    );
     let wrong = by_hand.replace(&said(by_body), &said(other));
     differs("chained", &rigged, &wrong, 3);
 }
@@ -243,7 +345,13 @@ fn a_clip_in_depth_that_draws_takes_its_children_with_it() {
     let body = "kind=box width=0.3 height=0.4 length=0.2 color=#c04020";
     let rigged = [
         stage(),
-        clip(2, "body", "mesh", "", &format!("{body} x=0.1 y=0.1 z={{0f:2 20f:0.5}} rotate_y={{0f:0 20f:90}}")),
+        clip(
+            2,
+            "body",
+            "mesh",
+            "",
+            &format!("{body} x=0.1 y=0.1 z={{0f:2 20f:0.5}} rotate_y={{0f:0 20f:90}}"),
+        ),
         clip(3, "head", "mesh", "body", &format!("{head} x=0.1 y=-0.25")),
     ]
     .concat();
@@ -254,8 +362,20 @@ fn a_clip_in_depth_that_draws_takes_its_children_with_it() {
     let there = taken([0.2 * WIDE, -0.15 * TALL, 0.0], about, (0.0, 45.0), 1.25);
     let by_hand = [
         stage(),
-        clip(2, "body", "mesh", "", &format!("{body} x=0.1 y=0.1 z=1.25 rotate_y=45")),
-        clip(3, "head", "mesh", "still", &format!("{head} {} rotate_y=45", said(there))),
+        clip(
+            2,
+            "body",
+            "mesh",
+            "",
+            &format!("{body} x=0.1 y=0.1 z=1.25 rotate_y=45"),
+        ),
+        clip(
+            3,
+            "head",
+            "mesh",
+            "still",
+            &format!("{head} {} rotate_y=45", said(there)),
+        ),
         clip(4, "still", "null", "", "x=0"),
     ]
     .concat();
@@ -288,8 +408,20 @@ fn only_a_child_in_depth_follows_and_only_a_parent_in_depth_leads() {
     // to what moves with it.
     let led = |parent: &str| {
         [
-            clip(1, "card", "solid", "", &format!("color=#c04020 scale=0.3 x=-0.2 {parent}")),
-            clip(2, "part", "mesh", "card", "kind=box width=0.2 height=0.2 length=0.2 color=#e0c020 x=0.2"),
+            clip(
+                1,
+                "card",
+                "solid",
+                "",
+                &format!("color=#c04020 scale=0.3 x=-0.2 {parent}"),
+            ),
+            clip(
+                2,
+                "part",
+                "mesh",
+                "card",
+                "kind=box width=0.2 height=0.2 length=0.2 color=#e0c020 x=0.2",
+            ),
         ]
         .concat()
     };
@@ -298,7 +430,12 @@ fn only_a_child_in_depth_follows_and_only_a_parent_in_depth_leads() {
         frame(&led("z=2 rotate_y=50"), Pass::Picture, 0).rgba
     );
     // In depth, the same card leads.
-    differs("a card in depth", &led("three_d=true"), &led("three_d=true z=2 rotate_y=50"), 0);
+    differs(
+        "a card in depth",
+        &led("three_d=true"),
+        &led("three_d=true z=2 rotate_y=50"),
+        0,
+    );
 }
 
 /// A scene all of which moves with one null: things that stand, a floor, what lights them, and
@@ -306,18 +443,70 @@ fn only_a_child_in_depth_follows_and_only_a_parent_in_depth_leads() {
 fn all_on(rig: &str, turns: bool) -> String {
     // With a parent turned on the frame, a part's own turns are about the frame's own lines
     // still, so that it does not go with the parent as one thing: those parts stand square.
-    let (tip, turn) = if turns { ("rotate_x=-75", "rotate_y=35") } else { ("", "") };
+    let (tip, turn) = if turns {
+        ("rotate_x=-75", "rotate_y=35")
+    } else {
+        ("", "")
+    };
     [
         clip(1, "rig", "null", "", rig),
-        clip(2, "floor", "solid", "rig", &format!("color=#506070 three_d=true {tip} y=0.35 z=1 scale=2")),
-        clip(3, "wall", "solid", "rig", "color=#705060 three_d=true z=2 scale=3"),
-        clip(4, "body", "mesh", "rig", &format!("kind=box width=0.3 height=0.4 length=0.3 color=#c04020 y=0.1 z=0.8 {turn}")),
-        clip(5, "head", "mesh", "rig", "kind=ball width=0.2 height=0.2 length=0.2 color=#e0c020 y=-0.2 z=0.8"),
-        clip(6, "sign", "title", "rig", &format!("text=\"HI\" size=0.2 three_d=true depth=0.05 x=-0.25 z=0.5 {turn}")),
-        clip(7, "lamp", "light", "rig", "x=0.3 y=-0.5 z=-0.2 shadow=0.7 size=0.1"),
-        clip(8, "sun", "light", "rig", "kind=directional x=-0.4 y=0.6 z=1 intensity=0.5 shadow=0.5"),
+        clip(
+            2,
+            "floor",
+            "solid",
+            "rig",
+            &format!("color=#506070 three_d=true {tip} y=0.35 z=1 scale=2"),
+        ),
+        clip(
+            3,
+            "wall",
+            "solid",
+            "rig",
+            "color=#705060 three_d=true z=2 scale=3",
+        ),
+        clip(
+            4,
+            "body",
+            "mesh",
+            "rig",
+            &format!("kind=box width=0.3 height=0.4 length=0.3 color=#c04020 y=0.1 z=0.8 {turn}"),
+        ),
+        clip(
+            5,
+            "head",
+            "mesh",
+            "rig",
+            "kind=ball width=0.2 height=0.2 length=0.2 color=#e0c020 y=-0.2 z=0.8",
+        ),
+        clip(
+            6,
+            "sign",
+            "title",
+            "rig",
+            &format!("text=\"HI\" size=0.2 three_d=true depth=0.05 x=-0.25 z=0.5 {turn}"),
+        ),
+        clip(
+            7,
+            "lamp",
+            "light",
+            "rig",
+            "x=0.3 y=-0.5 z=-0.2 shadow=0.7 size=0.1",
+        ),
+        clip(
+            8,
+            "sun",
+            "light",
+            "rig",
+            "kind=directional x=-0.4 y=0.6 z=1 intensity=0.5 shadow=0.5",
+        ),
         clip(9, "fill", "light", "rig", "kind=ambient intensity=0.2"),
-        clip(10, "cam", "camera", "rig", "x=0.15 y=-0.2 z=-0.3 pan=-8 tilt=-10 roll=4 fov=50"),
+        clip(
+            10,
+            "cam",
+            "camera",
+            "rig",
+            "x=0.15 y=-0.2 z=-0.3 pan=-8 tilt=-10 roll=4 fov=50",
+        ),
     ]
     .concat()
 }
@@ -331,7 +520,11 @@ fn a_camera_and_its_lights_move_with_a_parent_as_the_clips_do() {
         ("moved", "x=0.3 y=-0.2 z=1.5", true),
         ("turned about its upright", "rotate_y=70 z=0.4", true),
         ("tipped", "x=-0.1 rotate_x=-40 rotate_y=25 z=-0.3", true),
-        ("turned on the frame", "x=0.2 rotation=30 z=0.5 rotate_y=-50", false),
+        (
+            "turned on the frame",
+            "x=0.2 rotation=30 z=0.5 rotate_y=-50",
+            false,
+        ),
     ] {
         let (still, moved) = (all_on("x=0", turns), all_on(rig, turns));
         for pass in PASSES {
@@ -344,16 +537,28 @@ fn a_camera_and_its_lights_move_with_a_parent_as_the_clips_do() {
             );
         }
         // With the camera let go, the scene has gone and it has not.
-        let alone = moved.replace(" parent=rig\n      set x=0.15 y=-0.2 z=-0.3 pan", "\n      set x=0.15 y=-0.2 z=-0.3 pan");
+        let alone = moved.replace(
+            " parent=rig\n      set x=0.15 y=-0.2 z=-0.3 pan",
+            "\n      set x=0.15 y=-0.2 z=-0.3 pan",
+        );
         assert_ne!(alone, moved);
         differs(name, &moved, &alone, 0);
     }
     // A light let go stays where it was while the rest turns away from it.
     let moved = all_on("rotate_y=70 z=0.4", true);
-    let alone = moved.replace(" parent=rig\n      set x=0.3 y=-0.5 z=-0.2 shadow", "\n      set x=0.3 y=-0.5 z=-0.2 shadow");
+    let alone = moved.replace(
+        " parent=rig\n      set x=0.3 y=-0.5 z=-0.2 shadow",
+        "\n      set x=0.3 y=-0.5 z=-0.2 shadow",
+    );
     assert_ne!(alone, moved);
-    let (most, off) = apart(&frame(&moved, Pass::Picture, 0), &frame(&alone, Pass::Picture, 0));
-    assert!(most > 16 && off > 0.002, "a light let go: {most} over {off}");
+    let (most, off) = apart(
+        &frame(&moved, Pass::Picture, 0),
+        &frame(&alone, Pass::Picture, 0),
+    );
+    assert!(
+        most > 16 && off > 0.002,
+        "a light let go: {most} over {off}"
+    );
 }
 
 #[test]
@@ -362,7 +567,13 @@ fn a_parents_place_in_depth_is_in_the_number_a_frame_is_kept_by() {
         [
             clip(1, "ground", "solid", "", "color=#336699"),
             clip(2, "bot", "null", "", rig),
-            clip(3, "body", "mesh", "bot", "kind=box width=0.3 height=0.4 length=0.2 color=#c04020"),
+            clip(
+                3,
+                "body",
+                "mesh",
+                "bot",
+                "kind=box width=0.3 height=0.4 length=0.2 color=#c04020",
+            ),
         ]
         .concat()
     };

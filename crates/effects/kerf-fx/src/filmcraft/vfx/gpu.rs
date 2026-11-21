@@ -859,7 +859,10 @@ impl Kernel {
                     across / 2.0 + f64::from(f(e, id, cx)) / 100.0 * across / 2.0
                 };
                 Kernel::Lens {
-                    center: [off("h_decentering", w) as f32, off("v_decentering", h) as f32],
+                    center: [
+                        off("h_decentering", w) as f32,
+                        off("v_decentering", h) as f32,
+                    ],
                     reach: (w / 2.0).hypot(h / 2.0) as f32,
                     curvature: (f64::from(f(e, "curvature", cx)) / 100.0) as f32,
                 }
@@ -1715,12 +1718,7 @@ impl Kernel {
                     None,
                     &U {
                         a: [*way, 0, 0, 0],
-                        p0: [
-                            told.black,
-                            told.white,
-                            told.black_inside,
-                            told.white_inside,
-                        ],
+                        p0: [told.black, told.white, told.black_inside, told.white_inside],
                         p1: [told.gamma, told.rolloff, told.offset, 0.0],
                         ..U::default()
                     },
@@ -2146,16 +2144,25 @@ mod tests {
             // Corners left where they are.
             ("corner_pin", vec![]),
             // Seen from the side, as a tracked surface is.
-            ("corner_pin", corners([(10.0, 6.0), (80.0, 2.0), (90.0, 50.0), (4.0, 44.0)])),
+            (
+                "corner_pin",
+                corners([(10.0, 6.0), (80.0, 2.0), (90.0, 50.0), (4.0, 44.0)]),
+            ),
             // Small in the middle, where most of the picture is left clear.
-            ("corner_pin", corners([(30.0, 15.0), (60.0, 18.0), (58.0, 40.0), (28.0, 36.0)])),
+            (
+                "corner_pin",
+                corners([(30.0, 15.0), (60.0, 18.0), (58.0, 40.0), (28.0, 36.0)]),
+            ),
             // Past every edge.
             (
                 "corner_pin",
                 corners([(-20.0, -10.0), (110.0, -5.0), (120.0, 60.0), (-10.0, 70.0)]),
             ),
             // Turned over, left for right.
-            ("corner_pin", corners([(90.0, 5.0), (5.0, 5.0), (5.0, 50.0), (90.0, 50.0)])),
+            (
+                "corner_pin",
+                corners([(90.0, 5.0), (5.0, 5.0), (5.0, 50.0), (90.0, 50.0)]),
+            ),
             // One corner alone, the others where the catalog starts them.
             ("corner_pin", vec![("lower_right", pt(70.0, 30.0))]),
         ];
@@ -2356,7 +2363,11 @@ mod tests {
             ),
             (
                 "magnify",
-                vec![("size", fl(22.0)), ("mode", ParamValue::Choice(2)), ("feather", fl(3.0))],
+                vec![
+                    ("size", fl(22.0)),
+                    ("mode", ParamValue::Choice(2)),
+                    ("feather", fl(3.0)),
+                ],
             ),
             (
                 "magnify",
@@ -2364,7 +2375,11 @@ mod tests {
             ),
             (
                 "magnify",
-                vec![("size", fl(22.0)), ("mode", ParamValue::Choice(4)), ("opacity", fl(60.0))],
+                vec![
+                    ("size", fl(22.0)),
+                    ("mode", ParamValue::Choice(4)),
+                    ("opacity", fl(60.0)),
+                ],
             ),
             // What is generated: four colors, a grid, a ramp, a gradient, a checkerboard.
             ("four_color_gradient", vec![]),
@@ -2453,19 +2468,35 @@ mod tests {
             ),
             (
                 "checkerboard",
-                vec![("width", fl(11.0)), ("mode", ParamValue::Choice(2)), ("color", color(0.3, 0.2, 0.6))],
+                vec![
+                    ("width", fl(11.0)),
+                    ("mode", ParamValue::Choice(2)),
+                    ("color", color(0.3, 0.2, 0.6)),
+                ],
             ),
             (
                 "checkerboard",
-                vec![("width", fl(11.0)), ("mode", ParamValue::Choice(3)), ("color", color(0.3, 0.2, 0.6))],
+                vec![
+                    ("width", fl(11.0)),
+                    ("mode", ParamValue::Choice(3)),
+                    ("color", color(0.3, 0.2, 0.6)),
+                ],
             ),
             (
                 "checkerboard",
-                vec![("width", fl(11.0)), ("mode", ParamValue::Choice(4)), ("feather", fl(2.0))],
+                vec![
+                    ("width", fl(11.0)),
+                    ("mode", ParamValue::Choice(4)),
+                    ("feather", fl(2.0)),
+                ],
             ),
             (
                 "checkerboard",
-                vec![("width", fl(11.0)), ("mode", ParamValue::Choice(5)), ("color", color(0.7, 0.6, 0.2))],
+                vec![
+                    ("width", fl(11.0)),
+                    ("mode", ParamValue::Choice(5)),
+                    ("color", color(0.7, 0.6, 0.2)),
+                ],
             ),
             // The Cineon Converter, each way it goes.
             ("cineon_converter", vec![]),
@@ -2488,7 +2519,10 @@ mod tests {
             ),
             (
                 "cineon_converter",
-                vec![("conversion", ParamValue::Choice(2)), ("black10", fl(120.0))],
+                vec![
+                    ("conversion", ParamValue::Choice(2)),
+                    ("black10", fl(120.0)),
+                ],
             ),
         ]
     }
@@ -2539,9 +2573,9 @@ mod tests {
                 each(image, &|p, x, y| kerf_kernel::four_colors(p, x, y, told))
             }
             // A grid counts in whole pixels, where the others go by a pixel's middle.
-            Kernel::Grid(told) => {
-                each(image, &|p, x, y| kerf_kernel::grid(p, x - 0.5, y - 0.5, told))
-            }
+            Kernel::Grid(told) => each(image, &|p, x, y| {
+                kerf_kernel::grid(p, x - 0.5, y - 0.5, told)
+            }),
             _ => return None,
         })
     }

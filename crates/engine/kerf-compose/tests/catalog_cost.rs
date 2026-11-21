@@ -23,18 +23,27 @@ fn footage(dir: &Path) -> String {
         .arg(&path)
         .output()
         .expect("ffmpeg runs");
-    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     path.display().to_string()
 }
 
 /// Why the CPU draws the middle of `body`, after `media`; none where the GPU does.
 fn why(media: &str, body: &str) -> Result<Vec<String>, String> {
     let document = format!("{media}{body}");
-    let project = parse_document(&document, Catalog::builtin()).map_err(|errors| format!("{errors:?}"))?.project;
+    let project = parse_document(&document, Catalog::builtin())
+        .map_err(|errors| format!("{errors:?}"))?
+        .project;
     let compositor = Compositor::new(
         &project,
         Catalog::builtin(),
-        &ComposeOptions { accel: Accel::Always, ..ComposeOptions::default() },
+        &ComposeOptions {
+            accel: Accel::Always,
+            ..ComposeOptions::default()
+        },
     )
     .map_err(|error| error.to_string())?;
     Ok(compositor.why_on_cpu(Rate::FPS_24.time_of(11), 1.0))
@@ -50,11 +59,18 @@ fn what_the_catalog_sends_to_the_cpu() {
         "kerf 1\nproject name=\"t\"\nmedia m path=\"{}\" rate=24 dur=24f video=320x180\nsequence s1 rate=24 size=640x360 audio=48000\n",
         footage(dir.path())
     );
-    let probe = why(&media, &format!("{CLIP}      fx color.basic exposure=0.3\n")).expect("a frame");
+    let probe = why(
+        &media,
+        &format!("{CLIP}      fx color.basic exposure=0.3\n"),
+    )
+    .expect("a frame");
     if probe.iter().any(|line| line == "no GPU on this machine") {
         // Asked for llvmpipe, as CI is, a missing driver is a failure, not a pass.
         let software = std::env::var_os("KERF_GPU").is_some_and(|value| value == "software");
-        assert!(!software, "KERF_GPU=software, but no GPU or software driver was found");
+        assert!(
+            !software,
+            "KERF_GPU=software, but no GPU or software driver was found"
+        );
         eprintln!("no GPU on this machine");
         return;
     }
@@ -113,18 +129,33 @@ fn what_the_catalog_sends_to_the_cpu() {
             }
         }
     }
-    let video = catalog.all().filter(|def| def.domain == Domain::Video).count();
+    let video = catalog
+        .all()
+        .filter(|def| def.domain == Domain::Video)
+        .count();
     println!("{} of {video} video effects, generators, and transitions send a frame to the CPU at their defaults:", on_cpu.len());
     for (id, why) in &on_cpu {
         let (looks, grades) = reached.get(id).cloned().unwrap_or_default();
-        println!("  {id}: reached by {} looks {looks:?}, {} grades {grades:?}; {why}", looks.len(), grades.len());
+        println!(
+            "  {id}: reached by {} looks {looks:?}, {} grades {grades:?}; {why}",
+            looks.len(),
+            grades.len()
+        );
     }
-    println!("{} of {} looks and grades go to the CPU: {looks_on_cpu:?}", looks_on_cpu.len(), catalog.looks().count());
+    println!(
+        "{} of {} looks and grades go to the CPU: {looks_on_cpu:?}",
+        looks_on_cpu.len(),
+        catalog.looks().count()
+    );
     assert!(unread.is_empty(), "{}", unread.join("\n"));
     assert!(looks_on_cpu.is_empty(), "{}", looks_on_cpu.join("\n"));
     let transitions: Vec<&String> = on_cpu
         .keys()
-        .filter(|id| catalog.all().any(|def| def.kind == FxKind::Transition && def.id.as_str() == id.as_str()))
+        .filter(|id| {
+            catalog
+                .all()
+                .any(|def| def.kind == FxKind::Transition && def.id.as_str() == id.as_str())
+        })
         .collect();
     assert_eq!(transitions, ["morph-cut"], "transitions on the CPU");
     assert!(reached.is_empty(), "looks reach the CPU: {reached:?}");

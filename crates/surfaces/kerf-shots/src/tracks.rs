@@ -68,8 +68,10 @@ pub struct Outline {
 /// for [`point_keys`]; `pixels` is how wide the picture the mask goes on is, which how soft an
 /// edge is is said in, and said only of an object that has one.
 pub fn outline(followed: &FollowedObject, offset: i64, width: f64, pixels: f64) -> Outline {
-    let followed = followed
-        .with_corners(&kerf_track::simplified_corners(followed, POINT_TOLERANCE / width));
+    let followed = followed.with_corners(&kerf_track::simplified_corners(
+        followed,
+        POINT_TOLERANCE / width,
+    ));
     let kept = kerf_track::simplified_object(&followed, OUTLINE_TOLERANCE / width);
     let rounded = |value: f64| (value * 10_000.0).round() / 10_000.0;
     let softly =
@@ -243,7 +245,11 @@ pub fn picture(project: &Project, clip: &str, what: For) -> Result<Frame, String
 }
 
 fn within(points: &[[f64; 2]]) -> Result<(), String> {
-    if points.iter().flatten().all(|value| (0.0..=1.0).contains(value)) {
+    if points
+        .iter()
+        .flatten()
+        .all(|value| (0.0..=1.0).contains(value))
+    {
         Ok(())
     } else {
         Err("a point runs 0 to 1 across the frame and down it".to_owned())
@@ -360,7 +366,12 @@ pub fn matte(
             "nothing was cut out at those points on the first frame of `{clip}`: point at the thing itself, and off it at what is taken for it"
         ));
     }
-    let cut = outline(&followed, 0, seen.width(project), picture_width(project, seen.at));
+    let cut = outline(
+        &followed,
+        0,
+        seen.width(project),
+        picture_width(project, seen.at),
+    );
     // The mask it has from a cut before is set anew; any other mask of the clip stays.
     let verb = if project
         .clip_at(seen.at)

@@ -365,7 +365,11 @@ fn black_ranges(black: &[bool], rate: Rate) -> Vec<QcRange> {
         while index < black.len() && black[index] {
             index += 1;
         }
-        let end = if index < black.len() { index } else { index - 1 };
+        let end = if index < black.len() {
+            index
+        } else {
+            index - 1
+        };
         if end - start >= least {
             ranges.push(QcRange {
                 start: at(start),

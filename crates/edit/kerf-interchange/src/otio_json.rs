@@ -102,7 +102,12 @@ impl Json {
 }
 
 /// An OpenTimelineIO object: its schema, its metadata and name, then `rest`.
-fn object(schema: &'static str, kerf: Vec<(&'static str, Json)>, name: &str, rest: Vec<(&'static str, Json)>) -> Json {
+fn object(
+    schema: &'static str,
+    kerf: Vec<(&'static str, Json)>,
+    name: &str,
+    rest: Vec<(&'static str, Json)>,
+) -> Json {
     let metadata = if kerf.is_empty() {
         Json::Object(Vec::new())
     } else {
@@ -164,9 +169,18 @@ fn marker(marker: &WireMarker, rate: f64) -> Json {
         kerf,
         marker.name.as_deref().unwrap_or_default(),
         vec![
-            ("color", Json::text(color.as_deref().unwrap_or(DEFAULT_MARKER_COLOR))),
-            ("marked_range", range(marker.at as f64, marker.duration as f64, rate)),
-            ("comment", Json::text(marker.note.as_deref().unwrap_or_default())),
+            (
+                "color",
+                Json::text(color.as_deref().unwrap_or(DEFAULT_MARKER_COLOR)),
+            ),
+            (
+                "marked_range",
+                range(marker.at as f64, marker.duration as f64, rate),
+            ),
+            (
+                "comment",
+                Json::text(marker.note.as_deref().unwrap_or_default()),
+            ),
         ],
     )
 }
@@ -304,7 +318,13 @@ pub fn write(timeline: &Timeline) -> Result<String, InterchangeError> {
         ("effects", Json::List(Vec::new())),
         (
             "markers",
-            Json::List(timeline.markers.iter().map(|wire| marker(wire, rate)).collect()),
+            Json::List(
+                timeline
+                    .markers
+                    .iter()
+                    .map(|wire| marker(wire, rate))
+                    .collect(),
+            ),
         ),
         ("enabled", Json::Bool(true)),
     ];
@@ -404,7 +424,10 @@ fn text<'a>(value: &'a Value, field: &str) -> Option<&'a str> {
 
 /// `metadata["kerf"]` of an object.
 fn kerf(value: &Value) -> Option<&Value> {
-    value.get("metadata")?.get("kerf").filter(|kerf| kerf.is_object())
+    value
+        .get("metadata")?
+        .get("kerf")
+        .filter(|kerf| kerf.is_object())
 }
 
 fn kerf_id(value: &Value) -> Option<String> {
@@ -435,7 +458,9 @@ fn length(item: &Value, rate: f64) -> f64 {
     if let Some(span) = item.get("source_range").and_then(span) {
         return span.duration.at(rate);
     }
-    let children = list(item, "children").iter().map(|child| length(child, rate));
+    let children = list(item, "children")
+        .iter()
+        .map(|child| length(child, rate));
     match schema(item) {
         "Clip" => clip_span(item).map_or(0.0, |span| span.duration.at(rate)),
         "Track" => children.sum(),
@@ -605,7 +630,8 @@ pub fn read(text_of_file: &str) -> Result<(Timeline, Vec<InterchangeIssue>), Int
                         continue;
                     };
                     let reference = active_reference(child);
-                    let mut target = path_from_url(text(reference, "target_url").unwrap_or_default());
+                    let mut target =
+                        path_from_url(text(reference, "target_url").unwrap_or_default());
                     if target.is_empty() {
                         loss(
                             "missing_media_reference",
@@ -646,7 +672,10 @@ pub fn read(text_of_file: &str) -> Result<(Timeline, Vec<InterchangeIssue>), Int
                     let mut speed = None;
                     let mut other_effects = false;
                     for effect in list(child, "effects") {
-                        match (schema(effect), effect.get("time_scalar").and_then(Value::as_f64)) {
+                        match (
+                            schema(effect),
+                            effect.get("time_scalar").and_then(Value::as_f64),
+                        ) {
                             ("LinearTimeWarp", Some(scalar)) if scalar > 0.0 => {
                                 speed = (scalar != 1.0).then_some(scalar);
                             }
@@ -710,7 +739,10 @@ pub fn read(text_of_file: &str) -> Result<(Timeline, Vec<InterchangeIssue>), Int
                 other => {
                     loss(
                         "item_not_imported",
-                        format!("{} items are not imported", if other.is_empty() { "unknown" } else { other }),
+                        format!(
+                            "{} items are not imported",
+                            if other.is_empty() { "unknown" } else { other }
+                        ),
                         &child_path,
                     );
                     position += length(child, rate);
@@ -768,10 +800,22 @@ mod tests {
         assert_eq!(path_from_url("/media/a.mov"), "/media/a.mov");
         assert_eq!(path_from_url("media/a b.mov"), "media/a b.mov");
         assert_eq!(path_from_url("file:///media/a%20b.mov"), "/media/a b.mov");
-        assert_eq!(path_from_url("FILE://localhost/media/a.mov"), "/media/a.mov");
-        assert_eq!(path_from_url("file://server/share/a.mov"), "//server/share/a.mov");
-        assert_eq!(path_from_url("file:///C:/footage/a.mov"), "C:/footage/a.mov");
-        assert_eq!(path_from_url("file:///media/%EC%98%81%EC%83%81.mov"), "/media/영상.mov");
+        assert_eq!(
+            path_from_url("FILE://localhost/media/a.mov"),
+            "/media/a.mov"
+        );
+        assert_eq!(
+            path_from_url("file://server/share/a.mov"),
+            "//server/share/a.mov"
+        );
+        assert_eq!(
+            path_from_url("file:///C:/footage/a.mov"),
+            "C:/footage/a.mov"
+        );
+        assert_eq!(
+            path_from_url("file:///media/%EC%98%81%EC%83%81.mov"),
+            "/media/영상.mov"
+        );
         assert_eq!(path_from_url("file:///media/100%.mov"), "/media/100%.mov");
     }
 }

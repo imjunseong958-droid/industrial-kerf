@@ -80,7 +80,10 @@ fn a_take_with_its_subject_elsewhere_is_off_on_that_clip() {
     // one has there the road behind it, which is farther.
     let (car, lost) = (clip(&right, "car"), clip(&wrong, "car"));
     assert!(car.off < 0.01, "{car:?}");
-    assert!(lost.off > 10.0 * car.off.max(0.005), "{lost:?} beside {car:?}");
+    assert!(
+        lost.off > 10.0 * car.off.max(0.005),
+        "{lost:?} beside {car:?}"
+    );
     assert!(lost.farther > 0.0, "{lost:?}");
     assert!(lost.off > 3.0 * clip(&wrong, "road").off, "{wrong:?}");
     // It is worst where the two cars are furthest apart, at an end, and least where they

@@ -14,8 +14,7 @@ use std::time::SystemTime;
 use crate::derivatives::DerivativeCache;
 use crate::error::{EngineError, Result};
 use crate::ffmpeg::{
-    resolve_ffmpeg_bin, resolve_ffprobe_bin, run, run_allow_failure, run_in,
-    video_decode_prefix,
+    resolve_ffmpeg_bin, resolve_ffprobe_bin, run, run_allow_failure, run_in, video_decode_prefix,
 };
 use crate::resources::extract_job_count;
 

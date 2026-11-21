@@ -6,11 +6,25 @@ use crate::Value;
 use kerf_raster::gaussian_blur;
 use rayon::prelude::*;
 
-use crate::util::{Plane, gauss_plane, premul, unpremul};
-use crate::{Buf, EffectCtx, EffectSpec, col, num, p, popup, slider};
+use crate::util::{gauss_plane, premul, unpremul, Plane};
+use crate::{col, num, p, popup, slider, Buf, EffectCtx, EffectSpec};
 
-fn spec(id: &'static str, name: &'static str, category: &'static str, params: Vec<crate::ParamSpec>, render: crate::RenderFn) -> EffectSpec {
-    EffectSpec { id, name, category, params, render, gpu: false, float: true }
+fn spec(
+    id: &'static str,
+    name: &'static str,
+    category: &'static str,
+    params: Vec<crate::ParamSpec>,
+    render: crate::RenderFn,
+) -> EffectSpec {
+    EffectSpec {
+        id,
+        name,
+        category,
+        params,
+        render,
+        gpu: false,
+        float: true,
+    }
 }
 
 fn pct() -> ParamUi {
@@ -58,7 +72,11 @@ fn advanced_spill(ctx: &EffectCtx, mut b: Buf) -> Buf {
             .par_iter()
             .map(|px| {
                 let (c, a) = unpremul(*px);
-                [(c[0] - c[1].max(c[2])).max(0.0) * a, (c[1] - c[0].max(c[2])).max(0.0) * a, (c[2] - c[0].max(c[1])).max(0.0) * a]
+                [
+                    (c[0] - c[1].max(c[2])).max(0.0) * a,
+                    (c[1] - c[0].max(c[2])).max(0.0) * a,
+                    (c[2] - c[0].max(c[1])).max(0.0) * a,
+                ]
             })
             .reduce(|| [0.0; 3], |x, y| [x[0] + y[0], x[1] + y[1], x[2] + y[2]]);
         if ex[1] >= ex[0] && ex[1] >= ex[2] {
@@ -82,9 +100,25 @@ fn advanced_spill(ctx: &EffectCtx, mut b: Buf) -> Buf {
     // neutral light (so suppressed areas keep their brightness without the cast).
     let key = ctx.params.color("ultraSettings/keyColor");
     let key_hue = kerf_color::rgb_to_hsl(key[0], key[1], key[2])[0];
-    let tol = if ultra { ctx.params.get("ultraSettings/tolerance").map(Value::as_f64).unwrap_or(100.0) as f32 / 100.0 } else { 1.0 };
-    let desat = if ultra { ctx.params.f("ultraSettings/desaturate") as f32 / 100.0 } else { 0.0 };
-    let neutral = if ultra { ctx.params.f("ultraSettings/spillColorCorrection") as f32 / 100.0 } else { 0.0 };
+    let tol = if ultra {
+        ctx.params
+            .get("ultraSettings/tolerance")
+            .map(Value::as_f64)
+            .unwrap_or(100.0) as f32
+            / 100.0
+    } else {
+        1.0
+    };
+    let desat = if ultra {
+        ctx.params.f("ultraSettings/desaturate") as f32 / 100.0
+    } else {
+        0.0
+    };
+    let neutral = if ultra {
+        ctx.params.f("ultraSettings/spillColorCorrection") as f32 / 100.0
+    } else {
+        0.0
+    };
     b.img.map_straight(|mut c| {
         let w = if tol < 1.0 {
             let h = kerf_color::rgb_to_hsl(c[0], c[1], c[2])[0];
@@ -121,23 +155,32 @@ fn key_cleaner(ctx: &EffectCtx, mut b: Buf) -> Buf {
     if ctx.params.b("reduceChatter") {
         a = gauss_plane(&a, 1.0, 1.0).map(|v| ((v - 0.5) * 1.5 + 0.5).clamp(0.0, 1.0));
     }
-    let est = if r > 0.0 && strength > 0.0 { Some(gaussian_blur(&b.img, r * 0.5, r * 0.5, true)) } else { None };
-    b.img.data.par_iter_mut().zip(a.data.par_iter()).enumerate().for_each(|(i, (px, &na))| {
-        let (mut c, a0) = unpremul(*px);
-        if let Some(e) = &est
-            && a0 > 1e-4
-            && a0 < 0.999
-        {
-            let (ec, ea) = unpremul(e.data[i]);
-            if ea > 1e-4 {
-                let t = strength * (1.0 - a0);
-                c = [0, 1, 2].map(|k| c[k] + (ec[k] - c[k]) * t);
+    let est = if r > 0.0 && strength > 0.0 {
+        Some(gaussian_blur(&b.img, r * 0.5, r * 0.5, true))
+    } else {
+        None
+    };
+    b.img
+        .data
+        .par_iter_mut()
+        .zip(a.data.par_iter())
+        .enumerate()
+        .for_each(|(i, (px, &na))| {
+            let (mut c, a0) = unpremul(*px);
+            if let Some(e) = &est
+                && a0 > 1e-4
+                && a0 < 0.999
+            {
+                let (ec, ea) = unpremul(e.data[i]);
+                if ea > 1e-4 {
+                    let t = strength * (1.0 - a0);
+                    c = [0, 1, 2].map(|k| c[k] + (ec[k] - c[k]) * t);
+                }
             }
-        }
-        let na = ((na - 0.5) * contrast + 0.5).clamp(0.0, 1.0);
-        let na = if a0 <= 1e-6 { 0.0 } else { na };
-        *px = premul(c, na);
-    });
+            let na = ((na - 0.5) * contrast + 0.5).clamp(0.0, 1.0);
+            let na = if a0 <= 1e-6 { 0.0 } else { na };
+            *px = premul(c, na);
+        });
     b
 }
 
@@ -148,14 +191,39 @@ pub fn specs() -> Vec<EffectSpec> {
             "Advanced Spill Suppressor",
             "Keying",
             vec![
-                p("method", "Method", Value::Enum(0), popup(&["Standard", "Ultra"])),
-                p("suppression", "Suppression", num(100.0), slider(0.0, 200.0, 0.0, 100.0, 0)),
-                p("ultraSettings/keyColor", "Key Color", col(0.0, 1.0, 0.0), ParamUi::Color),
+                p(
+                    "method",
+                    "Method",
+                    Value::Enum(0),
+                    popup(&["Standard", "Ultra"]),
+                ),
+                p(
+                    "suppression",
+                    "Suppression",
+                    num(100.0),
+                    slider(0.0, 200.0, 0.0, 100.0, 0),
+                ),
+                p(
+                    "ultraSettings/keyColor",
+                    "Key Color",
+                    col(0.0, 1.0, 0.0),
+                    ParamUi::Color,
+                ),
                 p("ultraSettings/tolerance", "Tolerance", num(50.0), pct()),
                 p("ultraSettings/desaturate", "Desaturate", num(0.0), pct()),
                 p("ultraSettings/spillRange", "Spill Range", num(50.0), pct()),
-                p("ultraSettings/spillColorCorrection", "Spill Color Correction", num(0.0), pct()),
-                p("ultraSettings/lumaCorrection", "Luma Correction", num(0.0), pct()),
+                p(
+                    "ultraSettings/spillColorCorrection",
+                    "Spill Color Correction",
+                    num(0.0),
+                    pct(),
+                ),
+                p(
+                    "ultraSettings/lumaCorrection",
+                    "Luma Correction",
+                    num(0.0),
+                    pct(),
+                ),
             ],
             advanced_spill,
         ),
@@ -164,9 +232,24 @@ pub fn specs() -> Vec<EffectSpec> {
             "Key Cleaner",
             "Keying",
             vec![
-                p("additionalEdgeRadius", "Additional Edge Radius", num(3.0), slider(0.0, 100.0, 0.0, 20.0, 1)),
-                p("reduceChatter", "Reduce Chatter", Value::Bool(false), ParamUi::Checkbox),
-                p("alphaContrast", "Alpha Contrast", num(100.0), slider(100.0, 500.0, 100.0, 300.0, 0)),
+                p(
+                    "additionalEdgeRadius",
+                    "Additional Edge Radius",
+                    num(3.0),
+                    slider(0.0, 100.0, 0.0, 20.0, 1),
+                ),
+                p(
+                    "reduceChatter",
+                    "Reduce Chatter",
+                    Value::Bool(false),
+                    ParamUi::Checkbox,
+                ),
+                p(
+                    "alphaContrast",
+                    "Alpha Contrast",
+                    num(100.0),
+                    slider(100.0, 500.0, 100.0, 300.0, 0),
+                ),
                 p("strength", "Strength", num(100.0), pct()),
             ],
             key_cleaner,

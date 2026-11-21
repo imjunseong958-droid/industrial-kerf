@@ -536,7 +536,12 @@ fn masked_clips_play_live_as_the_compositor_draws_them() {
     // The largest and the mean difference between two frames' colors.
     let difference = |left: &[u8], right: &[u8]| {
         let (mut most, mut total) = (0u8, 0u64);
-        for (left, right) in left.as_chunks::<4>().0.iter().zip(right.as_chunks::<4>().0.iter()) {
+        for (left, right) in left
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(right.as_chunks::<4>().0.iter())
+        {
             for channel in 0..3 {
                 let difference = left[channel].abs_diff(right[channel]);
                 most = most.max(difference);
@@ -573,7 +578,9 @@ fn masked_clips_play_live_as_the_compositor_draws_them() {
         let whole = drawn(&project("", effects), 1.0);
         let cut = whole
             .rgba
-            .as_chunks::<4>().0.iter()
+            .as_chunks::<4>()
+            .0
+            .iter()
             .zip(drawn(&masked, 1.0).rgba.as_chunks::<4>().0.iter())
             .filter(|(whole, masked)| (0..3).any(|c| whole[c].abs_diff(masked[c]) > 32))
             .count();

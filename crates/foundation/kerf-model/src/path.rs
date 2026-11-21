@@ -226,5 +226,4 @@ mod tests {
             close(point.heading, *heading, 1e-3);
         }
     }
-
 }

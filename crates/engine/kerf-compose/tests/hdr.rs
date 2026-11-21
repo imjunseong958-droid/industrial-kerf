@@ -130,7 +130,13 @@ fn the_gpu_and_the_cpu_finish_an_hdr_frame_alike() {
         let at = Rate::FPS_24.time_of(1);
         let (g, c) = (gpu.frame16(at, 1.0), cpu.frame16(at, 1.0));
         assert_eq!(g.rgba.len(), c.rgba.len());
-        for (g, c) in g.rgba.as_chunks::<2>().0.iter().zip(c.rgba.as_chunks::<2>().0.iter()) {
+        for (g, c) in g
+            .rgba
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .zip(c.rgba.as_chunks::<2>().0.iter())
+        {
             let g = u16::from_le_bytes([g[0], g[1]]);
             let c = u16::from_le_bytes([c[0], c[1]]);
             assert!(g.abs_diff(c) <= 64, "{g} against {c} in{color}");
@@ -412,7 +418,6 @@ fn an_sdr_picture_in_an_hdr_sequence_is_held_by_nothing() {
     }
 }
 
-
 /// A flat HLG picture of those code values, in BT.2020.
 fn flat_hlg_footage(dir: &Path, name: &str, rgb: &str) -> String {
     let path = dir.join(format!("{name}.mov"));
@@ -533,9 +538,6 @@ fn the_gpu_holds_an_hlg_picture_for_effects_as_the_cpu_does() {
     }
 }
 
-
-
-
 /// A picture that moves, in SDR or as an HLG signal in BT.2020.
 fn moving_footage(dir: &Path, hlg: bool) -> String {
     let path = dir.join(if hlg { "moving-hlg.mov" } else { "moving.mov" });
@@ -546,7 +548,15 @@ fn moving_footage(dir: &Path, hlg: bool) -> String {
         "format=yuv422p10le"
     };
     let output = Command::new(program)
-        .args(["-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i"])
+        .args([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+        ])
         .arg("testsrc2=s=128x72:r=24:d=1")
         .args(["-vf", filter, "-c:v", "prores_ks"])
         .arg(&path)
@@ -660,13 +670,19 @@ fn the_gpu_draws_an_hdr_picture_through_an_effect_as_the_cpu_does() {
     let over_white = plain.rgba.as_chunks::<8>().0.iter();
     let over_white = over_white.filter(|pixel| u16::from_le_bytes([pixel[2], pixel[3]]) > 52000);
     // SDR white is at 0.75 of the signal, 49151 of 65535.
-    assert!(over_white.count() > 200, "the footage should go over SDR white");
+    assert!(
+        over_white.count() > 200,
+        "the footage should go over SDR white"
+    );
     // What the two are apart before any effect, from decoding and finishing alone, which an effect
     // carries along and may spread. With one it may be twice that and a little, where an effect that
     // lost what the picture holds over 1 would be many times as far.
     let alone = compositor(&hlg_document(&hlg, ""), Accel::Always).frame16(at, 1.0);
     let (alone, alone_off) = codes_apart(&alone, &plain);
-    eprintln!("no effect: mean {alone:.1} of 65535, {:.3}% off", alone_off * 100.0);
+    eprintln!(
+        "no effect: mean {alone:.1} of 65535, {:.3}% off",
+        alone_off * 100.0
+    );
     for lines in EXACT_EFFECTS {
         let fx = lines.lines().last().unwrap_or(lines).trim();
         let document = format!("{}{lines}", hlg_document(&hlg, ""));
@@ -688,7 +704,10 @@ fn the_gpu_draws_an_hdr_picture_through_an_effect_as_the_cpu_does() {
             .map(|line| format!("{line}\n"))
             .collect();
         let without = format!("{}{without}", hlg_document(&hlg, ""));
-        let (moved, _) = codes_apart(&on_cpu, &compositor(&without, Accel::Never).frame16(at, 1.0));
+        let (moved, _) = codes_apart(
+            &on_cpu,
+            &compositor(&without, Accel::Never).frame16(at, 1.0),
+        );
         assert!(moved > 300.0, "{fx} does nothing to this picture: {moved}");
         // A device that failed has the CPU draw, which would pass for a match.
         assert!(gpu.draws_on_gpu(at, 1.0), "{fx} failed the device");

@@ -90,37 +90,62 @@ fn a_guide_is_drawn_from_a_sequence_and_handed_to_a_model_by_steps_in_the_docume
         plan.steps[0],
         format!(
             "Kerf renders the depth of sequence s2 at 160x90, 12 frames a second to {}",
-            directory.join("shots/depth.takes/001.work/guide.mp4").display()
+            directory
+                .join("shots/depth.takes/001.work/guide.mp4")
+                .display()
         )
     );
     assert!(plan.notes.is_empty(), "{:?}", plan.notes);
     let mut said = Vec::new();
-    let made = recipe::make(&project, directory, &plan, &models, &CancellationToken::new(), |line| {
-        said.push(line.to_owned());
-    })
+    let made = recipe::make(
+        &project,
+        directory,
+        &plan,
+        &models,
+        &CancellationToken::new(),
+        |line| {
+            said.push(line.to_owned());
+        },
+    )
     .expect("a take");
     assert_eq!(made.stored, "shots/depth.takes/001.mp4");
-    assert!(said.iter().any(|line| line.starts_with("rendering s2:")), "{said:?}");
+    assert!(
+        said.iter().any(|line| line.starts_with("rendering s2:")),
+        "{said:?}"
+    );
     // The take is the guide, as the step said it is drawn: half a second at 12 a second.
-    for file in ["shots/depth.takes/001.mp4", "shots/depth.takes/001.work/guide.mp4"] {
+    for file in [
+        "shots/depth.takes/001.mp4",
+        "shots/depth.takes/001.work/guide.mp4",
+    ] {
         let info = kerf_engine::info(&directory.join(file).to_string_lossy()).expect("media");
         assert_eq!((info.width, info.height), (Some(160), Some(90)), "{file}");
         assert!((info.fps.expect("a rate") - 12.0).abs() < 0.01, "{file}");
-        assert!((info.duration.expect("a length") - 0.5).abs() < 0.1, "{file}");
+        assert!(
+            (info.duration.expect("a length") - 0.5).abs() < 0.1,
+            "{file}"
+        );
     }
     // Once the media is the take, it is made; the scene its guide is drawn from changing
     // asks for it again, and says which sequence.
     let taken = |document: &str| {
         parse_document(
-            &document.replace("path=\"shots/depth.mp4\"", "path=\"shots/depth.takes/001.mp4\""),
+            &document.replace(
+                "path=\"shots/depth.mp4\"",
+                "path=\"shots/depth.takes/001.mp4\"",
+            ),
             Catalog::builtin(),
         )
         .unwrap_or_else(|errors| panic!("{errors:?}"))
         .project
     };
     let wants = |project: &kerf_model::Project| {
-        recipe::unmade(project, directory, project.media("depth").expect("the media"))
-            .map(|unmade| unmade.reason())
+        recipe::unmade(
+            project,
+            directory,
+            project.media("depth").expect("the media"),
+        )
+        .map(|unmade| unmade.reason())
     };
     assert_eq!(wants(&taken(document)), None);
     assert_eq!(

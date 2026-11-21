@@ -2,9 +2,9 @@
 //! receipts, proposals, and render jobs, and commits each change through
 //! the journal before publishing `project.kerf`.
 
+use crate::author::timestamp;
 use crate::kernel::{self, CachedFacts, Edit, Edited};
 use crate::render::{render_cancel_path, render_name, render_output, Encoding};
-use crate::author::timestamp;
 use crate::store::{
     append_journal_record, inspect_projection, load_checkpoint, load_journal,
     preserve_previous_state, projection_digest, projection_matches, seal_journal_record,
@@ -1810,8 +1810,13 @@ impl Runtime {
                 path,
                 media_only,
             } => {
-                let (state, media_id, clip_id) =
-                    self.import_request(&actor, &idempotency_key, &path, base_revision, media_only)?;
+                let (state, media_id, clip_id) = self.import_request(
+                    &actor,
+                    &idempotency_key,
+                    &path,
+                    base_revision,
+                    media_only,
+                )?;
                 Ok(RuntimeResponse::Import {
                     state,
                     media_id,

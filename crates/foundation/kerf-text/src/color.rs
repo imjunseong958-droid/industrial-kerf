@@ -12,14 +12,17 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use skrifa::bitmap::{BitmapData, BitmapStrikes, Origin};
-use skrifa::color::{Brush, ColorGlyphCollection, ColorPainter, ColorPalettes, ColorStop, CompositeMode, Extend, Transform};
+use skrifa::color::{
+    Brush, ColorGlyphCollection, ColorPainter, ColorPalettes, ColorStop, CompositeMode, Extend,
+    Transform,
+};
 use skrifa::instance::{LocationRef, Size};
 use skrifa::raw::types::BoundingBox;
 use skrifa::GlyphId;
 
 use crate::fonts::{self, FaceId};
 use crate::layout::Glyph;
-use crate::raster::{Mask, Path, Xform, apply, compose, fill_into, xform_scale};
+use crate::raster::{apply, compose, fill_into, xform_scale, Mask, Path, Xform};
 
 /// A colour picture: RGBA, premultiplied, sRGB-encoded, 0 to 1, row by row.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -31,7 +34,11 @@ pub struct ColorImage {
 
 impl ColorImage {
     pub fn new(w: usize, h: usize) -> Self {
-        Self { w, h, px: vec![[0.0; 4]; w * h] }
+        Self {
+            w,
+            h,
+            px: vec![[0.0; 4]; w * h],
+        }
     }
     /// Draw `src`, its top-left at (`ox`, `oy`), over this (source over).
     pub fn over(&mut self, src: &ColorImage, ox: i32, oy: i32) {
@@ -46,7 +53,10 @@ impl ColorImage {
                 continue;
             }
             let d0 = ty as usize * self.w + (ox + x0 as i32) as usize;
-            for (d, s) in self.px[d0..d0 + (x1 - x0)].iter_mut().zip(&src.px[y * src.w + x0..y * src.w + x1]) {
+            for (d, s) in self.px[d0..d0 + (x1 - x0)]
+                .iter_mut()
+                .zip(&src.px[y * src.w + x0..y * src.w + x1])
+            {
                 let keep = 1.0 - s[3];
                 for k in 0..4 {
                     d[k] = s[k] + d[k] * keep;
@@ -56,7 +66,11 @@ impl ColorImage {
     }
     /// How much of each pixel is covered: its alpha, as a mask.
     pub fn alpha(&self) -> Mask {
-        Mask { w: self.w, h: self.h, a: self.px.iter().map(|p| p[3]).collect() }
+        Mask {
+            w: self.w,
+            h: self.h,
+            a: self.px.iter().map(|p| p[3]).collect(),
+        }
     }
 }
 
@@ -71,14 +85,30 @@ enum Kind {
 fn kind(face: FaceId, gid: u32) -> Kind {
     static C: OnceLock<Mutex<HashMap<(FaceId, u32), Kind>>> = OnceLock::new();
     let c = C.get_or_init(Default::default);
-    if let Some(k) = c.lock().unwrap_or_else(|e| e.into_inner()).get(&(face, gid)) {
+    if let Some(k) = c
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&(face, gid))
+    {
         return *k;
     }
     let f = fonts::face(face);
     let k = match f.font().filter(|_| f.info.color) {
         None => Kind::Outline,
-        Some(font) if ColorGlyphCollection::new(&font).get(GlyphId::new(gid)).is_some() => Kind::Colr,
-        Some(font) if BitmapStrikes::new(&font).iter().any(|strike| strike.get(GlyphId::new(gid)).is_some()) => Kind::Bitmap,
+        Some(font)
+            if ColorGlyphCollection::new(&font)
+                .get(GlyphId::new(gid))
+                .is_some() =>
+        {
+            Kind::Colr
+        }
+        Some(font)
+            if BitmapStrikes::new(&font)
+                .iter()
+                .any(|strike| strike.get(GlyphId::new(gid)).is_some()) =>
+        {
+            Kind::Bitmap
+        }
         Some(_) => Kind::Outline,
     };
     let mut m = c.lock().unwrap_or_else(|e| e.into_inner());
@@ -101,7 +131,12 @@ const MAX_PIXELS: usize = 4 << 20;
 /// over the part of its bounds inside `clip` (`[x0, y0, x1, y1]`, device pixels). Returns the
 /// picture and the device pixel of its top-left; None for a glyph not drawn in colour, or one
 /// with nothing inside `clip`.
-pub fn paint(g: &Glyph, m: &Xform, clip: [i32; 4], foreground: [f32; 4]) -> Option<(ColorImage, i32, i32)> {
+pub fn paint(
+    g: &Glyph,
+    m: &Xform,
+    clip: [i32; 4],
+    foreground: [f32; 4],
+) -> Option<(ColorImage, i32, i32)> {
     let f = fonts::face(g.face);
     let font = f.font()?;
     let k = g.size / f.units_per_em();
@@ -112,13 +147,26 @@ pub fn paint(g: &Glyph, m: &Xform, clip: [i32; 4], foreground: [f32; 4]) -> Opti
         Kind::Colr => {
             let glyph = ColorGlyphCollection::new(&font).get(GlyphId::new(g.id))?;
             let location = fonts::location_of(g.instance);
-            let at = location.as_deref().map_or(LocationRef::default(), LocationRef::from);
-            let mut bounds = Bounds { face: g.face, instance: g.instance, transforms: vec![to_device], area: None, boxes: None };
+            let at = location
+                .as_deref()
+                .map_or(LocationRef::default(), LocationRef::from);
+            let mut bounds = Bounds {
+                face: g.face,
+                instance: g.instance,
+                transforms: vec![to_device],
+                area: None,
+                boxes: None,
+            };
             glyph.paint(at, &mut bounds).ok()?;
             let (x, y, w, h) = region(bounds.area.or(bounds.boxes)?, clip)?;
             let palette: Vec<[f32; 4]> = ColorPalettes::new(&font)
                 .get(0)
-                .map(|p| p.colors().iter().map(|c| [c.red, c.green, c.blue, c.alpha].map(|v| f32::from(v) / 255.0)).collect())
+                .map(|p| {
+                    p.colors()
+                        .iter()
+                        .map(|c| [c.red, c.green, c.blue, c.alpha].map(|v| f32::from(v) / 255.0))
+                        .collect()
+                })
                 .unwrap_or_default();
             let start = compose(&[1.0, 0.0, 0.0, 1.0, -x as f32, -y as f32], &to_device);
             let mut painter = Painter {
@@ -149,7 +197,10 @@ fn region(area: [f32; 4], clip: [i32; 4]) -> Option<(i32, i32, usize, usize)> {
     let y0 = (area[1].floor() as i32 - 1).max(clip[1]);
     let x1 = (area[2].ceil() as i32 + 1).min(clip[2]);
     let y1 = (area[3].ceil() as i32 + 1).min(clip[3]);
-    let (w, h) = (usize::try_from(x1 - x0).ok()?, usize::try_from(y1 - y0).ok()?);
+    let (w, h) = (
+        usize::try_from(x1 - x0).ok()?,
+        usize::try_from(y1 - y0).ok()?,
+    );
     (w > 0 && h > 0 && w.checked_mul(h)? <= MAX_PIXELS).then_some((x0, y0, w, h))
 }
 
@@ -167,7 +218,14 @@ fn invert(m: &Xform) -> Option<Xform> {
 }
 
 fn union(a: Option<[f32; 4]>, b: [f32; 4]) -> [f32; 4] {
-    a.map_or(b, |a| [a[0].min(b[0]), a[1].min(b[1]), a[2].max(b[2]), a[3].max(b[3])])
+    a.map_or(b, |a| {
+        [
+            a[0].min(b[0]),
+            a[1].min(b[1]),
+            a[2].max(b[2]),
+            a[3].max(b[3]),
+        ]
+    })
 }
 
 fn path_area(p: &Path) -> Option<[f32; 4]> {
@@ -189,7 +247,10 @@ struct Bounds {
 
 impl Bounds {
     fn current(&self) -> Xform {
-        self.transforms.last().copied().unwrap_or(crate::raster::IDENTITY)
+        self.transforms
+            .last()
+            .copied()
+            .unwrap_or(crate::raster::IDENTITY)
     }
 }
 
@@ -202,7 +263,13 @@ impl ColorPainter for Bounds {
         self.transforms.pop();
     }
     fn push_clip_glyph(&mut self, glyph: GlyphId) {
-        let p = crate::render::outline_path(self.face, glyph.to_u32(), self.instance, &self.current(), 1.0);
+        let p = crate::render::outline_path(
+            self.face,
+            glyph.to_u32(),
+            self.instance,
+            &self.current(),
+            1.0,
+        );
         if let Some(b) = path_area(&p) {
             self.area = Some(union(self.area, b));
         }
@@ -234,7 +301,10 @@ struct Painter {
 
 impl Painter {
     fn current(&self) -> Xform {
-        self.transforms.last().copied().unwrap_or(crate::raster::IDENTITY)
+        self.transforms
+            .last()
+            .copied()
+            .unwrap_or(crate::raster::IDENTITY)
     }
     fn push_clip_path(&mut self, p: &Path) {
         let mut mask = Mask::new(self.w, self.h);
@@ -248,23 +318,39 @@ impl Painter {
     }
     /// A palette entry with `alpha` applied, premultiplied.
     fn color(&self, index: u16, alpha: f32) -> [f32; 4] {
-        let c = if index == 0xFFFF { self.foreground } else { self.palette.get(usize::from(index)).copied().unwrap_or([0.0; 4]) };
+        let c = if index == 0xFFFF {
+            self.foreground
+        } else {
+            self.palette
+                .get(usize::from(index))
+                .copied()
+                .unwrap_or([0.0; 4])
+        };
         let a = (c[3] * alpha).clamp(0.0, 1.0);
         [c[0] * a, c[1] * a, c[2] * a, a]
     }
     fn stops(&self, stops: &[ColorStop]) -> Vec<(f32, [f32; 4])> {
-        stops.iter().map(|s| (s.offset, self.color(s.palette_index, s.alpha))).collect()
+        stops
+            .iter()
+            .map(|s| (s.offset, self.color(s.palette_index, s.alpha)))
+            .collect()
     }
 }
 
 /// The colour a colour line has at `t`.
 fn along(stops: &[(f32, [f32; 4])], t: f32, extend: Extend) -> [f32; 4] {
-    let (Some(first), Some(last)) = (stops.first(), stops.last()) else { return [0.0; 4] };
+    let (Some(first), Some(last)) = (stops.first(), stops.last()) else {
+        return [0.0; 4];
+    };
     let t = match extend {
         Extend::Repeat => t - t.floor(),
         Extend::Reflect => {
             let u = t.rem_euclid(2.0);
-            if u > 1.0 { 2.0 - u } else { u }
+            if u > 1.0 {
+                2.0 - u
+            } else {
+                u
+            }
         }
         _ => t,
     };
@@ -274,7 +360,9 @@ fn along(stops: &[(f32, [f32; 4])], t: f32, extend: Extend) -> [f32; 4] {
     if t >= last.0 {
         return last.1;
     }
-    let i = stops.partition_point(|s| s.0 <= t).clamp(1, stops.len() - 1);
+    let i = stops
+        .partition_point(|s| s.0 <= t)
+        .clamp(1, stops.len() - 1);
     let (a, b) = (stops[i - 1], stops[i]);
     let span = b.0 - a.0;
     let f = if span > 1e-9 { (t - a.0) / span } else { 1.0 };
@@ -322,7 +410,13 @@ impl ColorPainter for Painter {
         self.transforms.pop();
     }
     fn push_clip_glyph(&mut self, glyph: GlyphId) {
-        let p = crate::render::outline_path(self.face, glyph.to_u32(), self.instance, &self.current(), 1.0);
+        let p = crate::render::outline_path(
+            self.face,
+            glyph.to_u32(),
+            self.instance,
+            &self.current(),
+            1.0,
+        );
         self.push_clip_path(&p);
     }
     fn push_clip_box(&mut self, clip: BoundingBox<f32>) {
@@ -337,41 +431,81 @@ impl ColorPainter for Painter {
         let inverse = invert(&self.current());
         // The colour at a pixel centre, by where it falls in the brush's space (font units).
         let shade: Box<dyn Fn(f32, f32) -> [f32; 4]> = match brush {
-            Brush::Solid { palette_index, alpha } => {
+            Brush::Solid {
+                palette_index,
+                alpha,
+            } => {
                 let c = self.color(palette_index, alpha);
                 Box::new(move |_, _| c)
             }
-            Brush::LinearGradient { p0, p1, color_stops, extend } => {
-                let (stops, Some(inv)) = (self.stops(color_stops), inverse) else { return };
+            Brush::LinearGradient {
+                p0,
+                p1,
+                color_stops,
+                extend,
+            } => {
+                let (stops, Some(inv)) = (self.stops(color_stops), inverse) else {
+                    return;
+                };
                 let (dx, dy) = (p1.x - p0.x, p1.y - p0.y);
                 let len = dx * dx + dy * dy;
                 Box::new(move |x, y| {
                     let (fx, fy) = apply(&inv, x, y);
-                    let t = if len > 1e-9 { ((fx - p0.x) * dx + (fy - p0.y) * dy) / len } else { 0.0 };
+                    let t = if len > 1e-9 {
+                        ((fx - p0.x) * dx + (fy - p0.y) * dy) / len
+                    } else {
+                        0.0
+                    };
                     along(&stops, t, extend)
                 })
             }
-            Brush::RadialGradient { c0, r0, c1, r1, color_stops, extend } => {
-                let (stops, Some(inv)) = (self.stops(color_stops), inverse) else { return };
+            Brush::RadialGradient {
+                c0,
+                r0,
+                c1,
+                r1,
+                color_stops,
+                extend,
+            } => {
+                let (stops, Some(inv)) = (self.stops(color_stops), inverse) else {
+                    return;
+                };
                 Box::new(move |x, y| {
                     let p = apply(&inv, x, y);
-                    conical(p, (c0.x, c0.y), r0, (c1.x, c1.y), r1).map_or([0.0; 4], |t| along(&stops, t, extend))
+                    conical(p, (c0.x, c0.y), r0, (c1.x, c1.y), r1)
+                        .map_or([0.0; 4], |t| along(&stops, t, extend))
                 })
             }
-            Brush::SweepGradient { c0, start_angle, end_angle, color_stops, extend } => {
-                let (stops, Some(inv)) = (self.stops(color_stops), inverse) else { return };
+            Brush::SweepGradient {
+                c0,
+                start_angle,
+                end_angle,
+                color_stops,
+                extend,
+            } => {
+                let (stops, Some(inv)) = (self.stops(color_stops), inverse) else {
+                    return;
+                };
                 let span = end_angle - start_angle;
                 Box::new(move |x, y| {
                     let (fx, fy) = apply(&inv, x, y);
                     // Clockwise, as skrifa gives the angles, from the x axis of the design grid.
-                    let angle = (-(fy - c0.y).atan2(fx - c0.x)).to_degrees().rem_euclid(360.0);
-                    let t = if span.abs() > 1e-6 { (angle - start_angle) / span } else { 0.0 };
+                    let angle = (-(fy - c0.y).atan2(fx - c0.x))
+                        .to_degrees()
+                        .rem_euclid(360.0);
+                    let t = if span.abs() > 1e-6 {
+                        (angle - start_angle) / span
+                    } else {
+                        0.0
+                    };
                     along(&stops, t, extend)
                 })
             }
         };
         let clip = self.clips.last();
-        let Some(layer) = self.layers.last_mut() else { return };
+        let Some(layer) = self.layers.last_mut() else {
+            return;
+        };
         for (i, px) in layer.iter_mut().enumerate() {
             let cover = clip.map_or(1.0, |c| c.a[i]);
             if cover <= 0.0 {
@@ -392,7 +526,9 @@ impl ColorPainter for Painter {
             return;
         }
         let Some(src) = self.layers.pop() else { return };
-        let Some(dst) = self.layers.last_mut() else { return };
+        let Some(dst) = self.layers.last_mut() else {
+            return;
+        };
         for (d, s) in dst.iter_mut().zip(&src) {
             *d = composite(*s, *d, mode);
         }
@@ -406,7 +542,10 @@ fn composite(s: [f32; 4], d: [f32; 4], mode: CompositeMode) -> [f32; 4] {
     let blend = |f: fn(f32, f32) -> f32| {
         let mut out = [0.0; 4];
         for k in 0..3 {
-            let (cs, cd) = (if sa > 0.0 { s[k] / sa } else { 0.0 }, if da > 0.0 { d[k] / da } else { 0.0 });
+            let (cs, cd) = (
+                if sa > 0.0 { s[k] / sa } else { 0.0 },
+                if da > 0.0 { d[k] / da } else { 0.0 },
+            );
             out[k] = s[k] * (1.0 - da) + d[k] * (1.0 - sa) + sa * da * f(cs, cd);
         }
         out[3] = sa + da - sa * da;
@@ -427,17 +566,49 @@ fn composite(s: [f32; 4], d: [f32; 4], mode: CompositeMode) -> [f32; 4] {
         CompositeMode::Plus => [0, 1, 2, 3].map(|k| (s[k] + d[k]).min(1.0)),
         CompositeMode::Multiply => blend(|s, d| s * d),
         CompositeMode::Screen => blend(|s, d| s + d - s * d),
-        CompositeMode::Overlay => blend(|s, d| if d <= 0.5 { 2.0 * s * d } else { 1.0 - 2.0 * (1.0 - s) * (1.0 - d) }),
+        CompositeMode::Overlay => blend(|s, d| {
+            if d <= 0.5 {
+                2.0 * s * d
+            } else {
+                1.0 - 2.0 * (1.0 - s) * (1.0 - d)
+            }
+        }),
         CompositeMode::Darken => blend(f32::min),
         CompositeMode::Lighten => blend(f32::max),
-        CompositeMode::ColorDodge => blend(|s, d| if d <= 0.0 { 0.0 } else if s >= 1.0 { 1.0 } else { (d / (1.0 - s)).min(1.0) }),
-        CompositeMode::ColorBurn => blend(|s, d| if d >= 1.0 { 1.0 } else if s <= 0.0 { 0.0 } else { 1.0 - ((1.0 - d) / s).min(1.0) }),
-        CompositeMode::HardLight => blend(|s, d| if s <= 0.5 { 2.0 * s * d } else { 1.0 - 2.0 * (1.0 - s) * (1.0 - d) }),
+        CompositeMode::ColorDodge => blend(|s, d| {
+            if d <= 0.0 {
+                0.0
+            } else if s >= 1.0 {
+                1.0
+            } else {
+                (d / (1.0 - s)).min(1.0)
+            }
+        }),
+        CompositeMode::ColorBurn => blend(|s, d| {
+            if d >= 1.0 {
+                1.0
+            } else if s <= 0.0 {
+                0.0
+            } else {
+                1.0 - ((1.0 - d) / s).min(1.0)
+            }
+        }),
+        CompositeMode::HardLight => blend(|s, d| {
+            if s <= 0.5 {
+                2.0 * s * d
+            } else {
+                1.0 - 2.0 * (1.0 - s) * (1.0 - d)
+            }
+        }),
         CompositeMode::SoftLight => blend(|s, d| {
             if s <= 0.5 {
                 d - (1.0 - 2.0 * s) * d * (1.0 - d)
             } else {
-                let g = if d <= 0.25 { ((16.0 * d - 12.0) * d + 4.0) * d } else { d.sqrt() };
+                let g = if d <= 0.25 {
+                    ((16.0 * d - 12.0) * d + 4.0) * d
+                } else {
+                    d.sqrt()
+                };
                 d + (2.0 * s - 1.0) * (g - d)
             }
         }),
@@ -454,12 +625,22 @@ struct Pyramid {
 }
 
 /// The decoded bitmaps of glyphs, by face, glyph and strike.
-fn decoded(face: FaceId, gid: u32, ppem: u32, decode: impl FnOnce() -> Option<ColorImage>) -> Option<Arc<Pyramid>> {
+fn decoded(
+    face: FaceId,
+    gid: u32,
+    ppem: u32,
+    decode: impl FnOnce() -> Option<ColorImage>,
+) -> Option<Arc<Pyramid>> {
     type Cache = Mutex<(usize, HashMap<(FaceId, u32, u32), Option<Arc<Pyramid>>>)>;
     static C: OnceLock<Cache> = OnceLock::new();
     const MAX_BYTES: usize = 64 << 20;
     let c = C.get_or_init(Default::default);
-    if let Some(v) = c.lock().unwrap_or_else(|e| e.into_inner()).1.get(&(face, gid, ppem)) {
+    if let Some(v) = c
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .1
+        .get(&(face, gid, ppem))
+    {
         return v.clone();
     }
     let v = decode().map(|image| {
@@ -470,7 +651,9 @@ fn decoded(face: FaceId, gid: u32, ppem: u32, decode: impl FnOnce() -> Option<Co
         }
         Arc::new(Pyramid { levels })
     });
-    let bytes = v.as_ref().map_or(0, |p| p.levels.iter().map(|l| l.px.len() * 16).sum());
+    let bytes = v
+        .as_ref()
+        .map_or(0, |p| p.levels.iter().map(|l| l.px.len() * 16).sum());
     let mut m = c.lock().unwrap_or_else(|e| e.into_inner());
     if m.0 + bytes > MAX_BYTES || m.1.len() > 4096 {
         *m = (0, HashMap::new());
@@ -502,7 +685,8 @@ fn halve(src: &ColorImage) -> ColorImage {
 /// A PNG as a premultiplied picture; None for one that does not decode, or is over 4096 pixels on
 /// a side.
 fn decode_png(data: &[u8]) -> Option<ColorImage> {
-    let mut decoder = png::Decoder::new_with_limits(std::io::Cursor::new(data), png::Limits { bytes: 64 << 20 });
+    let mut decoder =
+        png::Decoder::new_with_limits(std::io::Cursor::new(data), png::Limits { bytes: 64 << 20 });
     decoder.set_transformations(png::Transformations::normalize_to_color8());
     let mut reader = decoder.read_info().ok()?;
     let (w, h) = (reader.info().width as usize, reader.info().height as usize);
@@ -532,7 +716,13 @@ fn decode_png(data: &[u8]) -> Option<ColorImage> {
 }
 
 /// A bitmap glyph resampled under `m`.
-fn bitmap(g: &Glyph, font: &skrifa::FontRef, m: &Xform, clip: [i32; 4], foreground: [f32; 4]) -> Option<(ColorImage, i32, i32)> {
+fn bitmap(
+    g: &Glyph,
+    font: &skrifa::FontRef,
+    m: &Xform,
+    clip: [i32; 4],
+    foreground: [f32; 4],
+) -> Option<(ColorImage, i32, i32)> {
     let strikes = BitmapStrikes::new(font);
     let ppem = (g.size * xform_scale(m)).max(1.0);
     let glyph = strikes.glyph_for_size(Size::new(ppem), GlyphId::new(g.id))?;
@@ -551,7 +741,8 @@ fn bitmap(g: &Glyph, font: &skrifa::FontRef, m: &Xform, clip: [i32; 4], foregrou
         }
         BitmapData::Mask(mask) => {
             let mut alpha = vec![0u8; bw * bh];
-            mask.decode_to_slice(glyph.width, glyph.height, &mut alpha).ok()?;
+            mask.decode_to_slice(glyph.width, glyph.height, &mut alpha)
+                .ok()?;
             let mut out = ColorImage::new(bw, bh);
             for (px, a) in out.px.iter_mut().zip(alpha) {
                 let a = f32::from(a) / 255.0;
@@ -566,7 +757,10 @@ fn bitmap(g: &Glyph, font: &skrifa::FontRef, m: &Xform, clip: [i32; 4], foregrou
     let (sx, sy) = (g.size / glyph.ppem_x, g.size / glyph.ppem_y);
     let upem = fonts::face(g.face).units_per_em();
     let (x0, y0) = match glyph.placement_origin {
-        Origin::TopLeft => (glyph.bearing_x * g.size / upem + glyph.inner_bearing_x * sx, -(glyph.bearing_y * g.size / upem + glyph.inner_bearing_y * sy)),
+        Origin::TopLeft => (
+            glyph.bearing_x * g.size / upem + glyph.inner_bearing_x * sx,
+            -(glyph.bearing_y * g.size / upem + glyph.inner_bearing_y * sy),
+        ),
         Origin::BottomLeft => {
             let x = glyph.bearing_x * g.size / upem + glyph.inner_bearing_x * sx;
             let bottom = -(glyph.bearing_y * g.size / upem + glyph.inner_bearing_y * sy);
@@ -574,8 +768,18 @@ fn bitmap(g: &Glyph, font: &skrifa::FontRef, m: &Xform, clip: [i32; 4], foregrou
         }
     };
     let to_device = compose(m, &[sx, 0.0, 0.0, sy, x0, y0]);
-    let corners = [(0.0, 0.0), (base.w as f32, 0.0), (0.0, base.h as f32), (base.w as f32, base.h as f32)].map(|(x, y)| apply(&to_device, x, y));
-    let area = corners.iter().fold([f32::MAX, f32::MAX, f32::MIN, f32::MIN], |a, p| [a[0].min(p.0), a[1].min(p.1), a[2].max(p.0), a[3].max(p.1)]);
+    let corners = [
+        (0.0, 0.0),
+        (base.w as f32, 0.0),
+        (0.0, base.h as f32),
+        (base.w as f32, base.h as f32),
+    ]
+    .map(|(x, y)| apply(&to_device, x, y));
+    let area = corners
+        .iter()
+        .fold([f32::MAX, f32::MAX, f32::MIN, f32::MIN], |a, p| {
+            [a[0].min(p.0), a[1].min(p.1), a[2].max(p.0), a[3].max(p.1)]
+        });
     let (x, y, w, h) = region(area, clip)?;
     let inverse = invert(&to_device)?;
     // The level whose pixels are at least half a device pixel across.
@@ -588,13 +792,21 @@ fn bitmap(g: &Glyph, font: &skrifa::FontRef, m: &Xform, clip: [i32; 4], foregrou
     let src = &pyramid.levels[level];
     let shrink = (base.w as f32 / src.w as f32, base.h as f32 / src.h as f32);
     // Inside, the nearest pixels blend; at the bitmap's edge, the pixel takes what of it is inside.
-    let at = |ix: i64, iy: i64| -> [f32; 4] { src.px[iy.clamp(0, src.h as i64 - 1) as usize * src.w + ix.clamp(0, src.w as i64 - 1) as usize] };
+    let at = |ix: i64, iy: i64| -> [f32; 4] {
+        src.px[iy.clamp(0, src.h as i64 - 1) as usize * src.w
+            + ix.clamp(0, src.w as i64 - 1) as usize]
+    };
     let device_per_pixel = xform_scale(&to_device);
     let mut out = ColorImage::new(w, h);
     for py in 0..h {
         for px in 0..w {
-            let (u, v) = apply(&inverse, (x + px as i32) as f32 + 0.5, (y + py as i32) as f32 + 0.5);
-            let inside = u.min(base.w as f32 - u).min(v).min(base.h as f32 - v) * device_per_pixel + 0.5;
+            let (u, v) = apply(
+                &inverse,
+                (x + px as i32) as f32 + 0.5,
+                (y + py as i32) as f32 + 0.5,
+            );
+            let inside =
+                u.min(base.w as f32 - u).min(v).min(base.h as f32 - v) * device_per_pixel + 0.5;
             if inside <= 0.0 {
                 continue;
             }
@@ -602,11 +814,18 @@ fn bitmap(g: &Glyph, font: &skrifa::FontRef, m: &Xform, clip: [i32; 4], foregrou
             let (fu, fv) = (u.floor(), v.floor());
             let (tu, tv) = (u - fu, v - fv);
             let (iu, iv) = (fu as i64, fv as i64);
-            let (a, b, c, d) = (at(iu, iv), at(iu + 1, iv), at(iu, iv + 1), at(iu + 1, iv + 1));
+            let (a, b, c, d) = (
+                at(iu, iv),
+                at(iu + 1, iv),
+                at(iu, iv + 1),
+                at(iu + 1, iv + 1),
+            );
             let mut p = [0.0; 4];
             let edge = inside.min(1.0);
             for k in 0..4 {
-                p[k] = ((a[k] * (1.0 - tu) + b[k] * tu) * (1.0 - tv) + (c[k] * (1.0 - tu) + d[k] * tu) * tv) * edge;
+                p[k] = ((a[k] * (1.0 - tu) + b[k] * tu) * (1.0 - tv)
+                    + (c[k] * (1.0 - tu) + d[k] * tu) * tv)
+                    * edge;
             }
             if mono {
                 let a = p[3] * foreground[3];

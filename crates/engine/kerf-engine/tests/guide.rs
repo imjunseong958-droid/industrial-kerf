@@ -51,7 +51,8 @@ fn pixel(file: &Path, x: u32, y: u32) -> [u8; 3] {
 #[cfg(unix)]
 fn copy(directory: &Path) -> Models {
     let file = directory.join("models.json");
-    std::fs::write(&file, r#"{"copy": {"run": ["cp", "{guide}", "{out}"]}}"#).expect("a models file");
+    std::fs::write(&file, r#"{"copy": {"run": ["cp", "{guide}", "{out}"]}}"#)
+        .expect("a models file");
     Models::read(&file).expect("models")
 }
 
@@ -287,7 +288,15 @@ fn a_pass_is_written_with_no_loss_and_each_pixel_of_an_ids_pass_is_one_clips() {
     .project;
     let copy = copy(directory);
     let planned = plan(&project, directory, "m1", &copy).expect("a plan");
-    make(&project, directory, &planned, &copy, &CancellationToken::new(), |_| {}).expect("made");
+    make(
+        &project,
+        directory,
+        &planned,
+        &copy,
+        &CancellationToken::new(),
+        |_| {},
+    )
+    .expect("made");
     let work = directory.join("shots/open.takes/001.work");
     let drawn = |pass: Pass, hard_edges: bool| {
         Compositor::new(
@@ -329,11 +338,17 @@ fn a_pass_is_written_with_no_loss_and_each_pixel_of_an_ids_pass_is_one_clips() {
             .count()
     };
     // Drawn soft, as `look` reads how much of each clip shows, many pixels are of no clip.
-    let between: usize = times.iter().map(|at| unread(&rgb(&soft.frame(*at, 1.0).rgba))).sum();
+    let between: usize = times
+        .iter()
+        .map(|at| unread(&rgb(&soft.frame(*at, 1.0).rgba)))
+        .sum();
     assert!(between > 1000, "only {between} pixels between clips");
     // Written, every pixel of every frame is one clip's or black, and is what was drawn.
     let hard = drawn(Pass::Ids, true);
-    let wanted: Vec<u8> = times.iter().flat_map(|at| rgb(&hard.frame(*at, 1.0).rgba)).collect();
+    let wanted: Vec<u8> = times
+        .iter()
+        .flat_map(|at| rgb(&hard.frame(*at, 1.0).rgba))
+        .collect();
     assert_eq!(unread(&wanted), 0);
     for file in ["ids.mp4", "ids.mkv"] {
         let pixels = decoded(&work.join(file), "rgb24");
@@ -345,7 +360,12 @@ fn a_pass_is_written_with_no_loss_and_each_pixel_of_an_ids_pass_is_one_clips() {
     // in from where its feather starts, and the matte of it is white there and nowhere else.
     let matte = decoded(&work.join("screen.mp4"), "rgb24");
     let screen = colors[3];
-    for (pixel, its) in matte.as_chunks::<3>().0.iter().zip(wanted.as_chunks::<3>().0) {
+    for (pixel, its) in matte
+        .as_chunks::<3>()
+        .0
+        .iter()
+        .zip(wanted.as_chunks::<3>().0)
+    {
         let white = *its == screen;
         assert_eq!(*pixel, if white { [255; 3] } else { [0; 3] });
     }
@@ -374,7 +394,10 @@ fn a_pass_is_written_with_no_loss_and_each_pixel_of_an_ids_pass_is_one_clips() {
                 .collect::<Vec<_>>()
         })
         .collect();
-    assert!(greys("depth.mkv") == deep, "depth.mkv is not the pass as it was drawn");
+    assert!(
+        greys("depth.mkv") == deep,
+        "depth.mkv is not the pass as it was drawn"
+    );
     let ten = greys("depth.mp4");
     assert_eq!(ten.len(), deep.len());
     // Rounded to 10 bits, as the file is read back at 16.
@@ -382,8 +405,16 @@ fn a_pass_is_written_with_no_loss_and_each_pixel_of_an_ids_pass_is_one_clips() {
         let ten = (u32::from(deep) * 1023 + 32_767) / 65_535;
         (ten << 6 | ten >> 4) as u16
     };
-    assert!(ten.iter().zip(&deep).all(|(ten, deep)| *ten == ten_of(*deep)));
-    let distinct = |greys: &[u16]| greys.iter().collect::<std::collections::BTreeSet<_>>().len();
+    assert!(ten
+        .iter()
+        .zip(&deep)
+        .all(|(ten, deep)| *ten == ten_of(*deep)));
+    let distinct = |greys: &[u16]| {
+        greys
+            .iter()
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
+    };
     assert!(distinct(&ten) > 256, "{} greys", distinct(&ten));
     assert!(distinct(&deep) > distinct(&ten));
     // Relative depth too: its farthest a 255th of white, above black at any depth.

@@ -24,9 +24,9 @@
 
 use crate::log::signal_from_normalized;
 #[cfg(test)]
-use crate::log::{Domain, normalized_from_signal};
-use crate::spaces::{ColorPipeline, ColorSpace, Curve, Gamut, gamut_matrix, to_f32};
-use crate::{Range, hlg_inverse_oetf, pq_eotf, pq_inverse_eotf, srgb_to_linear};
+use crate::log::{normalized_from_signal, Domain};
+use crate::spaces::{gamut_matrix, to_f32, ColorPipeline, ColorSpace, Curve, Gamut};
+use crate::{hlg_inverse_oetf, pq_eotf, pq_inverse_eotf, srgb_to_linear, Range};
 #[cfg(test)]
 use crate::{hlg_oetf, linear_to_srgb};
 
@@ -87,7 +87,9 @@ pub struct DecodeTable {
 
 impl DecodeTable {
     pub fn new(lo: f32, hi: f32, n: usize, f: impl Fn(f64) -> f64) -> Self {
-        let values = (0..n).map(|i| f(lo as f64 + (hi - lo) as f64 * i as f64 / (n - 1) as f64) as f32).collect();
+        let values = (0..n)
+            .map(|i| f(lo as f64 + (hi - lo) as f64 * i as f64 / (n - 1) as f64) as f32)
+            .collect();
         DecodeTable { lo, hi, values }
     }
     /// The decode table for a colour space's curve.
@@ -123,7 +125,9 @@ pub fn bt2390_eetf(nits: f64, src_peak: f64, dst_peak: f64) -> f64 {
     } else {
         let t = (e1 - ks) / (1.0 - ks);
         let (t2, t3) = (t * t, t * t * t);
-        (2.0 * t3 - 3.0 * t2 + 1.0) * ks + (t3 - 2.0 * t2 + t) * (1.0 - ks) + (-2.0 * t3 + 3.0 * t2) * max_lum
+        (2.0 * t3 - 3.0 * t2 + 1.0) * ks
+            + (t3 - 2.0 * t2 + t) * (1.0 - ks)
+            + (-2.0 * t3 + 3.0 * t2) * max_lum
     };
     pq_eotf((e2 * smax) as f32) as f64 * 10_000.0
 }
@@ -143,9 +147,17 @@ impl ToneMap {
         // sample on a PQ-encoded axis so the shadows get enough resolution
         let table = DecodeTable::new(0.0, 1.0, 4096, |e| {
             let nits = pq_eotf(e as f32) as f64 * 10_000.0;
-            if nits <= 1e-6 { 1.0 } else { bt2390_eetf(nits, s, d) / nits }
+            if nits <= 1e-6 {
+                1.0
+            } else {
+                bt2390_eetf(nits, s, d) / nits
+            }
         });
-        ToneMap { src_peak_nits, dst_peak_nits, table }
+        ToneMap {
+            src_peak_nits,
+            dst_peak_nits,
+            table,
+        }
     }
     /// The scale factor by max(R,G,B), PQ-encoded.
     pub fn table(&self) -> &DecodeTable {
@@ -211,29 +223,51 @@ pub struct InputTransform {
 
 impl InputTransform {
     /// `src_peak_nits` is the mastering/content peak of PQ media when the file signals it.
-    pub fn new(src: ColorSpace, range: Range, pipe: &ColorPipeline, src_peak_nits: Option<f64>) -> Self {
+    pub fn new(
+        src: ColorSpace,
+        range: Range,
+        pipe: &ColorPipeline,
+        src_peak_nits: Option<f64>,
+    ) -> Self {
         let curve = src.curve();
         let wg = pipe.working_gamut();
         let m = gamut_matrix(src.gamut(), wg);
         let identity_matrix = src.gamut() == wg;
         let hlg = (curve == Curve::Hlg).then(|| {
             let l = Gamut::Bt2020.luma();
-            ([l[0] as f32, l[1] as f32, l[2] as f32], (HDR_PEAK_NITS / REFERENCE_WHITE_NITS) as f32)
+            (
+                [l[0] as f32, l[1] as f32, l[2] as f32],
+                (HDR_PEAK_NITS / REFERENCE_WHITE_NITS) as f32,
+            )
         });
         let peak = match curve {
-            Curve::Pq => src_peak_nits.unwrap_or(HDR_PEAK_NITS).clamp(REFERENCE_WHITE_NITS, 10_000.0),
+            Curve::Pq => src_peak_nits
+                .unwrap_or(HDR_PEAK_NITS)
+                .clamp(REFERENCE_WHITE_NITS, 10_000.0),
             Curve::Hlg => HDR_PEAK_NITS,
-            Curve::Log(c) => (c.peak_linear() * REFERENCE_WHITE_NITS).clamp(REFERENCE_WHITE_NITS, LOG_PEAK_NITS),
+            Curve::Log(c) => {
+                (c.peak_linear() * REFERENCE_WHITE_NITS).clamp(REFERENCE_WHITE_NITS, LOG_PEAK_NITS)
+            }
             _ => REFERENCE_WHITE_NITS,
         };
-        let tone = (src.is_hdr() && !pipe.working.is_hdr() && pipe.auto_tone_map).then(|| ToneMap::new(peak, REFERENCE_WHITE_NITS));
+        let tone = (src.is_hdr() && !pipe.working.is_hdr() && pipe.auto_tone_map)
+            .then(|| ToneMap::new(peak, REFERENCE_WHITE_NITS));
         let wider = !identity_matrix && !gamut_within(src.gamut(), wg);
         // camera gamuts (log media) get the soft compression; display gamuts keep their in-gamut
         // colours exactly (BT.709 content in a BT.2020 file comes back unchanged)
         let compress = wider && src.is_log();
         let l = wg.luma();
         let desaturate = (wider && !src.is_log()).then(|| [l[0] as f32, l[1] as f32, l[2] as f32]);
-        InputTransform { source: src, table: DecodeTable::for_curve(curve, range), matrix: to_f32(&m), identity_matrix, hlg, tone, compress, desaturate }
+        InputTransform {
+            source: src,
+            table: DecodeTable::for_curve(curve, range),
+            matrix: to_f32(&m),
+            identity_matrix,
+            hlg,
+            tone,
+            compress,
+            desaturate,
+        }
     }
 
     /// Source → the working picture of an HDR sequence: BT.709 primaries, as everywhere, with what
@@ -244,11 +278,15 @@ impl InputTransform {
         let matrix = gamut_matrix(src.gamut(), Gamut::Bt709);
         let hlg = (curve == Curve::Hlg).then(|| {
             let l = Gamut::Bt2020.luma();
-            ([l[0] as f32, l[1] as f32, l[2] as f32], (HDR_PEAK_NITS / REFERENCE_WHITE_NITS) as f32)
+            (
+                [l[0] as f32, l[1] as f32, l[2] as f32],
+                (HDR_PEAK_NITS / REFERENCE_WHITE_NITS) as f32,
+            )
         });
         let tone = match curve {
             Curve::Log(log) => {
-                let peak = (log.peak_linear() * REFERENCE_WHITE_NITS).clamp(REFERENCE_WHITE_NITS, LOG_PEAK_NITS);
+                let peak = (log.peak_linear() * REFERENCE_WHITE_NITS)
+                    .clamp(REFERENCE_WHITE_NITS, LOG_PEAK_NITS);
                 (peak > HDR_PEAK_NITS).then(|| ToneMap::new(peak, HDR_PEAK_NITS))
             }
             _ => None,
@@ -423,7 +461,11 @@ mod tests {
     use crate::spaces::WorkingSpace;
 
     fn hdr(w: WorkingSpace) -> ColorPipeline {
-        ColorPipeline { working: w, wide_gamut: false, auto_tone_map: true }
+        ColorPipeline {
+            working: w,
+            wide_gamut: false,
+            auto_tone_map: true,
+        }
     }
 
     #[test]
@@ -437,7 +479,10 @@ mod tests {
                     }
                     let l = decode_channel(v, cs.curve(), range);
                     let back = encode_channel(l, cs.curve(), range);
-                    assert!((back - v).abs() < 2e-4, "{cs:?} {range:?}: {v} → {l} → {back}");
+                    assert!(
+                        (back - v).abs() < 2e-4,
+                        "{cs:?} {range:?}: {v} → {l} → {back}"
+                    );
                 }
             }
         }
@@ -450,7 +495,12 @@ mod tests {
         assert!((pq203 - 0.58).abs() < 0.002, "{pq203}");
         assert!((decode_channel(pq203, Curve::Pq, Range::Full) - 1.0).abs() < 1e-3);
         // HLG 75 % on a 1000 cd/m² display ≈ 203 cd/m² (BT.2408) → ≈ 1.0 working
-        let t = InputTransform::new(ColorSpace::Rec2100Hlg, Range::Full, &hdr(WorkingSpace::Rec2100Hlg), None);
+        let t = InputTransform::new(
+            ColorSpace::Rec2100Hlg,
+            Range::Full,
+            &hdr(WorkingSpace::Rec2100Hlg),
+            None,
+        );
         let w = t.convert([0.75, 0.75, 0.75]);
         assert!((w[0] - 1.0).abs() < 0.01, "{w:?}");
     }
@@ -478,10 +528,18 @@ mod tests {
         for space in [ColorSpace::Rec2100Pq, ColorSpace::Rec2100Hlg] {
             let input = InputTransform::extended(space, Range::Full);
             let output = HdrOutput::new(space).expect("HDR");
-            for c in [[1.0, 1.0, 1.0], [0.2, 0.5, 0.1], [4.0, 3.0, 2.0], [0.02, 0.02, 0.03]] {
+            for c in [
+                [1.0, 1.0, 1.0],
+                [0.2, 0.5, 0.1],
+                [4.0, 3.0, 2.0],
+                [0.02, 0.02, 0.03],
+            ] {
                 let back = input.convert(output.signal(c));
                 for k in 0..3 {
-                    assert!((back[k] - c[k]).abs() < 2e-2 * (1.0 + c[k]), "{space:?} {c:?} came back {back:?}");
+                    assert!(
+                        (back[k] - c[k]).abs() < 2e-2 * (1.0 + c[k]),
+                        "{space:?} {c:?} came back {back:?}"
+                    );
                 }
             }
         }

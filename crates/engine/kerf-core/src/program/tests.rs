@@ -74,7 +74,10 @@ fn crossfades_use_handles_and_fade_both_sides() {
         graph.contains("[gap4][piece5]concat=n=2:v=0:a=1[lane6]"),
         "{graph}"
     );
-    assert!(graph.contains("[bed0][piece3][lane6]amix=inputs=3"), "{graph}");
+    assert!(
+        graph.contains("[bed0][piece3][lane6]amix=inputs=3"),
+        "{graph}"
+    );
 }
 
 #[test]

@@ -70,18 +70,33 @@ fn beta(img: &[[f32; 3]], free: &[bool], w: usize, h: usize) -> f64 {
                 let (nx, ny) = (x + dx, y + dy);
                 if nx < w && ny < h {
                     let q = img[ny * w + nx];
-                    s += ((c[0] - q[0]).powi(2) + (c[1] - q[1]).powi(2) + (c[2] - q[2]).powi(2)) as f64;
+                    s += ((c[0] - q[0]).powi(2) + (c[1] - q[1]).powi(2) + (c[2] - q[2]).powi(2))
+                        as f64;
                     n += 1.0;
                 }
             }
         }
     }
-    if s <= 1e-12 { 1.0 } else { n / (2.0 * s) }
+    if s <= 1e-12 {
+        1.0
+    } else {
+        n / (2.0 * s)
+    }
 }
 
 /// One min-cut over the `free` pixels; others keep `labels`. `prior`: P(foreground) per pixel
 /// and how much it weighs against the colour models.
-fn cut(img: &[[f32; 3]], w: usize, h: usize, labels: &mut [u8], free: &[bool], hard: &[u8], fg: &Gmm, bg: &Gmm, prior: Option<(&[f32], f64)>) {
+fn cut(
+    img: &[[f32; 3]],
+    w: usize,
+    h: usize,
+    labels: &mut [u8],
+    free: &[bool],
+    hard: &[u8],
+    fg: &Gmm,
+    bg: &Gmm,
+    prior: Option<(&[f32], f64)>,
+) {
     let mut idx = vec![u32::MAX; w * h];
     let mut nodes = vec![];
     for i in 0..w * h {
@@ -128,7 +143,11 @@ fn cut(img: &[[f32; 3]], w: usize, h: usize, labels: &mut [u8], free: &[bool], h
             let j = ny as usize * w + nx as usize;
             let q = img[j];
             let d2 = ((c[0] - q[0]).powi(2) + (c[1] - q[1]).powi(2) + (c[2] - q[2]).powi(2)) as f64;
-            let dist = if dx != 0 && dy != 0 { std::f64::consts::SQRT_2 } else { 1.0 };
+            let dist = if dx != 0 && dy != 0 {
+                std::f64::consts::SQRT_2
+            } else {
+                1.0
+            };
             let wt = ((GAMMA / dist * (-b * d2).exp()) * K).round() as i32;
             if wt <= 0 {
                 continue;
@@ -153,13 +172,20 @@ fn cut(img: &[[f32; 3]], w: usize, h: usize, labels: &mut [u8], free: &[bool], h
 
 /// Colour samples of the pixels where `sel` holds.
 fn samples(img: &[[f32; 3]], sel: impl Fn(usize) -> bool) -> Vec<[f32; 3]> {
-    img.iter().enumerate().filter(|(i, _)| sel(*i)).map(|(_, c)| *c).collect()
+    img.iter()
+        .enumerate()
+        .filter(|(i, _)| sel(*i))
+        .map(|(_, c)| *c)
+        .collect()
 }
 
 fn fit_models(img: &[[f32; 3]], labels: &[u8]) -> (Gmm, Gmm) {
     let fg = samples(img, |i| labels[i] != 0);
     let bg = samples(img, |i| labels[i] == 0);
-    (Gmm::fit(&fg, COMPONENTS, MAX_SAMPLES), Gmm::fit(&bg, COMPONENTS, MAX_SAMPLES))
+    (
+        Gmm::fit(&fg, COMPONENTS, MAX_SAMPLES),
+        Gmm::fit(&bg, COMPONENTS, MAX_SAMPLES),
+    )
 }
 
 /// Keep the foreground components (8-connected) that touch `seeds`; fill small background
@@ -178,7 +204,11 @@ fn clean(labels: &mut [u8], seeds: &[bool], bg_seeds: &[bool], w: usize, h: usiz
         return clean_all(labels, seeds, bg_seeds, w, h);
     }
     let (cw, ch) = (x1 - x0, y1 - y0);
-    fn within<T: Copy>(all: &[T], w: usize, (x0, y0, x1, y1): (usize, usize, usize, usize)) -> Vec<T> {
+    fn within<T: Copy>(
+        all: &[T],
+        w: usize,
+        (x0, y0, x1, y1): (usize, usize, usize, usize),
+    ) -> Vec<T> {
         let mut out = Vec::with_capacity((x1 - x0) * (y1 - y0));
         for y in y0..y1 {
             out.extend_from_slice(&all[y * w + x0..y * w + x1]);
@@ -187,7 +217,13 @@ fn clean(labels: &mut [u8], seeds: &[bool], bg_seeds: &[bool], w: usize, h: usiz
     }
     let around = (x0, y0, x1, y1);
     let mut inner = within(labels, w, around);
-    clean_all(&mut inner, &within(seeds, w, around), &within(bg_seeds, w, around), cw, ch);
+    clean_all(
+        &mut inner,
+        &within(seeds, w, around),
+        &within(bg_seeds, w, around),
+        cw,
+        ch,
+    );
     for (row, y) in inner.chunks_exact(cw).zip(y0..y1) {
         labels[y * w + x0..y * w + x1].copy_from_slice(row);
     }
@@ -324,7 +360,9 @@ struct Picture {
 impl Picture {
     fn of(width: usize, height: usize, rgba: &[u8]) -> Self {
         let rgb: Vec<[f32; 3]> = rgba
-            .as_chunks::<4>().0.iter()
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|p| [p[0], p[1], p[2]].map(|v| f32::from(v) / 255.0))
             .collect();
         let image = Image {
@@ -518,9 +556,7 @@ fn moved_by(previous: &Picture, matte: &[u8], next: &Picture) -> [i64; 2] {
                 }
                 let a = from[*y as usize * sw + *x as usize];
                 let b = to[ny as usize * sw + nx as usize];
-                sum += f64::from(
-                    (a[0] - b[0]).abs() + (a[1] - b[1]).abs() + (a[2] - b[2]).abs(),
-                );
+                sum += f64::from((a[0] - b[0]).abs() + (a[1] - b[1]).abs() + (a[2] - b[2]).abs());
                 count += 1;
             }
             // Mostly out of the frame says nothing.
@@ -637,33 +673,50 @@ fn warped_by(flow: &Flow, matte: &[u8], (w, h): (usize, usize), moved: [i64; 2])
     let Some((left, top, right, bottom)) = matting::box_of(matte, w, h) else {
         return out;
     };
-    let furthest = flow.v.iter().flatten().fold(0.0f32, |most, v| most.max(v.abs()));
+    let furthest = flow
+        .v
+        .iter()
+        .flatten()
+        .fold(0.0f32, |most, v| most.max(v.abs()));
     let margin = f64::from(furthest).ceil() as i64 + 2;
     let within = |low: usize, high: usize, by: i64, most: usize| {
         let from = (low as i64 + by - margin).clamp(0, most as i64) as usize;
         let to = (high as i64 + by + margin).clamp(0, most as i64) as usize;
         (from, to.max(from))
     };
-    let ((x0, x1), (y0, y1)) = (within(left, right, moved[0], w), within(top, bottom, moved[1], h));
+    let ((x0, x1), (y0, y1)) = (
+        within(left, right, moved[0], w),
+        within(top, bottom, moved[1], h),
+    );
     let source: Vec<f32> = matte.iter().map(|v| f32::from(*v)).collect();
     // With the picture moved to where the subject went, what stayed behind has moved by that much, and
     // a block on the subject's edge may go with that rather than with the subject. Going by such a block
     // reads the matte from where the subject was, which drags it further than a cut in a band can bring
     // it back, so what is nearer to that than to the subject says nothing.
     let (went_x, went_y) = (moved[0] as f64, moved[1] as f64);
-    out.par_chunks_mut(w.max(1)).enumerate().skip(y0).take(y1 - y0).for_each(|(row, values)| {
-        for (column, value) in values.iter_mut().enumerate().skip(x0).take(x1 - x0) {
-            let (x, y) = (column as f64 + 0.5, row as f64 + 0.5);
-            let v = flow.at(x, y);
-            let (vx, vy) = (f64::from(v[0]), f64::from(v[1]));
-            let (vx, vy) = if vx.hypot(vy) > (vx - went_x).hypot(vy - went_y) {
-                (0.0, 0.0)
-            } else {
-                (vx, vy)
-            };
-            *value = matting::sample(&source, w, h, x + vx - moved[0] as f64, y + vy - moved[1] as f64);
-        }
-    });
+    out.par_chunks_mut(w.max(1))
+        .enumerate()
+        .skip(y0)
+        .take(y1 - y0)
+        .for_each(|(row, values)| {
+            for (column, value) in values.iter_mut().enumerate().skip(x0).take(x1 - x0) {
+                let (x, y) = (column as f64 + 0.5, row as f64 + 0.5);
+                let v = flow.at(x, y);
+                let (vx, vy) = (f64::from(v[0]), f64::from(v[1]));
+                let (vx, vy) = if vx.hypot(vy) > (vx - went_x).hypot(vy - went_y) {
+                    (0.0, 0.0)
+                } else {
+                    (vx, vy)
+                };
+                *value = matting::sample(
+                    &source,
+                    w,
+                    h,
+                    x + vx - moved[0] as f64,
+                    y + vy - moved[1] as f64,
+                );
+            }
+        });
     out
 }
 
@@ -725,7 +778,17 @@ fn next_matte(
     let seeds = core_of(&labels, &signed, reach);
     let hard = vec![0u8; w * h];
     let prior = (blurred.as_slice(), PRIOR);
-    cut(&next.rgb, w, h, &mut labels, &free, &hard, fg, bg, Some(prior));
+    cut(
+        &next.rgb,
+        w,
+        h,
+        &mut labels,
+        &free,
+        &hard,
+        fg,
+        bg,
+        Some(prior),
+    );
     clean(&mut labels, &seeds, &vec![false; w * h], w, h);
     (labels, moved)
 }
@@ -861,16 +924,27 @@ impl<'e> Edge<'e> {
             let (a, b) = (smooth[i], smooth[(i + 1) % n]);
             lengths.push(lengths[i] + (b[0] - a[0]).hypot(b[1] - a[1]));
         }
-        (lengths[n] > 0.0).then_some(Self { traced: edge, smooth, lengths })
+        (lengths[n] > 0.0).then_some(Self {
+            traced: edge,
+            smooth,
+            lengths,
+        })
     }
 
     /// The smoothed edge `around` of the way along it.
     fn at(&self, around: f64) -> [f64; 2] {
         let n = self.traced.len();
         let at = around.rem_euclid(1.0) * self.lengths[n];
-        let after = self.lengths.partition_point(|length| *length <= at).clamp(1, n);
+        let after = self
+            .lengths
+            .partition_point(|length| *length <= at)
+            .clamp(1, n);
         let (from, to) = (self.lengths[after - 1], self.lengths[after]);
-        let along = if to > from { (at - from) / (to - from) } else { 0.0 };
+        let along = if to > from {
+            (at - from) / (to - from)
+        } else {
+            0.0
+        };
         let (a, b) = (self.smooth[after - 1], self.smooth[after % n]);
         [a[0] + (b[0] - a[0]) * along, a[1] + (b[1] - a[1]) * along]
     }
@@ -890,11 +964,23 @@ impl<'e> Edge<'e> {
             return Vec::new();
         }
         let turn = |i: usize| {
-            let (before, here, after) = (self.traced[(i + n - arm) % n], self.traced[i], self.traced[(i + arm) % n]);
-            let (a, b) = ([here[0] - before[0], here[1] - before[1]], [after[0] - here[0], after[1] - here[1]]);
-            (a[0] * b[1] - a[1] * b[0]).atan2(a[0] * b[0] + a[1] * b[1]).abs()
+            let (before, here, after) = (
+                self.traced[(i + n - arm) % n],
+                self.traced[i],
+                self.traced[(i + arm) % n],
+            );
+            let (a, b) = (
+                [here[0] - before[0], here[1] - before[1]],
+                [after[0] - here[0], after[1] - here[1]],
+            );
+            (a[0] * b[1] - a[1] * b[0])
+                .atan2(a[0] * b[0] + a[1] * b[1])
+                .abs()
         };
-        let mut turns: Vec<(f64, usize)> = (0..n).map(|i| (turn(i), i)).filter(|(turn, _)| *turn >= SHARP_TURN).collect();
+        let mut turns: Vec<(f64, usize)> = (0..n)
+            .map(|i| (turn(i), i))
+            .filter(|(turn, _)| *turn >= SHARP_TURN)
+            .collect();
         // The sharpest first, and none within an arm of one already taken: a corner is one place.
         turns.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)));
         let mut taken: Vec<usize> = Vec::new();
@@ -908,7 +994,10 @@ impl<'e> Edge<'e> {
             }
         }
         taken.sort_unstable();
-        taken.into_iter().map(|i| (self.lengths[i] / self.lengths[n], self.traced[i])).collect()
+        taken
+            .into_iter()
+            .map(|i| (self.lengths[i] / self.lengths[n], self.traced[i]))
+            .collect()
     }
 }
 
@@ -929,13 +1018,25 @@ impl Places {
     fn of(edge: &Edge, count: usize) -> Self {
         let found = edge.sharp(count);
         if found.is_empty() {
-            return Self { count, sharp: Vec::new() };
+            return Self {
+                count,
+                sharp: Vec::new(),
+            };
         }
         // What is left of `count` goes to the stretches by their length, the largest remainders first.
         let spare = count - found.len();
-        let stretch = |index: usize| (found[(index + 1) % found.len()].0 - found[index].0).rem_euclid(1.0);
-        let stretch = |index: usize| if found.len() == 1 { 1.0 } else { stretch(index) };
-        let mut between: Vec<usize> = (0..found.len()).map(|index| (stretch(index) * spare as f64) as usize).collect();
+        let stretch =
+            |index: usize| (found[(index + 1) % found.len()].0 - found[index].0).rem_euclid(1.0);
+        let stretch = |index: usize| {
+            if found.len() == 1 {
+                1.0
+            } else {
+                stretch(index)
+            }
+        };
+        let mut between: Vec<usize> = (0..found.len())
+            .map(|index| (stretch(index) * spare as f64) as usize)
+            .collect();
         let mut order: Vec<usize> = (0..found.len()).collect();
         order.sort_by(|a, b| {
             let rest = |index: usize| (stretch(index) * spare as f64).fract();
@@ -962,16 +1063,23 @@ impl Places {
     /// point), the others evenly between; or all of them evenly from `start` where none is sharp.
     fn corners(&self, edge: &Edge, sharp: &[(f64, [f64; 2])], start: f64) -> Vec<[f64; 2]> {
         if self.sharp.is_empty() {
-            return (0..self.count).map(|k| edge.at(start + k as f64 / self.count as f64)).collect();
+            return (0..self.count)
+                .map(|k| edge.at(start + k as f64 / self.count as f64))
+                .collect();
         }
         let mut corners = vec![[0.0; 2]; self.count];
         for (index, ((place, _), (around, point))) in self.sharp.iter().zip(sharp).enumerate() {
             let next = (index + 1) % self.sharp.len();
             let between = (self.sharp[next].0 + self.count - place - 1) % self.count;
-            let stretch = if self.sharp.len() == 1 { 1.0 } else { (sharp[next].0 - around).rem_euclid(1.0) };
+            let stretch = if self.sharp.len() == 1 {
+                1.0
+            } else {
+                (sharp[next].0 - around).rem_euclid(1.0)
+            };
             corners[*place] = *point;
             for step in 1..=between {
-                corners[(place + step) % self.count] = edge.at(around + stretch * step as f64 / (between + 1) as f64);
+                corners[(place + step) % self.count] =
+                    edge.at(around + stretch * step as f64 / (between + 1) as f64);
             }
         }
         corners
@@ -993,7 +1101,10 @@ impl Places {
         let tries = self.count * 4;
         // The sharp ones as the frame before spaced them, turned around the edge by `start`.
         let turned = |start: f64| -> Vec<(f64, [f64; 2])> {
-            self.sharp.iter().map(|(_, around)| (around + start, edge.at(around + start))).collect()
+            self.sharp
+                .iter()
+                .map(|(_, around)| (around + start, edge.at(around + start)))
+                .collect()
         };
         let mut best = (f64::INFINITY, 0.0);
         for attempt in 0..tries {
@@ -1029,7 +1140,8 @@ impl Places {
             let nearest = found
                 .iter()
                 .min_by(|a, b| apart(a.0, sharp[index].0).total_cmp(&apart(b.0, sharp[index].0)));
-            if let Some(nearest) = nearest.filter(|nearest| apart(nearest.0, sharp[index].0) < room) {
+            if let Some(nearest) = nearest.filter(|nearest| apart(nearest.0, sharp[index].0) < room)
+            {
                 sharp[index] = *nearest;
             }
         }
@@ -1073,7 +1185,10 @@ impl Traced {
     }
 
     fn fraction(&self, corners: &[[f64; 2]]) -> Vec<[f64; 2]> {
-        corners.iter().map(|c| [c[0] / self.width as f64, c[1] / self.height as f64]).collect()
+        corners
+            .iter()
+            .map(|c| [c[0] / self.width as f64, c[1] / self.height as f64])
+            .collect()
     }
 
     /// An edge's middle is where the fall-off says, which a cut through a soft edge only comes near.
@@ -1086,9 +1201,12 @@ impl Traced {
                 .map(|((at, out), edge)| [at[0] + out[0] * edge.out, at[1] + out[1] * edge.out])
                 .collect();
             self.followed.outlines.push(self.fraction(&moved));
-            self.followed
-                .soft
-                .push(across.iter().map(|edge| edge.wide / self.width as f64).collect());
+            self.followed.soft.push(
+                across
+                    .iter()
+                    .map(|edge| edge.wide / self.width as f64)
+                    .collect(),
+            );
         }
         self.followed
     }
@@ -1096,13 +1214,28 @@ impl Traced {
     /// An edge's middle is where a shutter puts it, given how far the cut was from there.
     fn under_a_shutter(mut self, shutter: shutter::Shutter) -> FollowedObject {
         let (width, height) = (self.width, self.height);
-        for ((corners, go), measured) in self.raw.iter().zip(shutter::going(&self.raw)).zip(&self.across) {
+        for ((corners, go), measured) in self
+            .raw
+            .iter()
+            .zip(shutter::going(&self.raw))
+            .zip(&self.across)
+        {
             let frame = shutter.frame(corners, measured, go);
             let half = shutter.half_covered(corners, &frame, width, height);
             let moved = self.places.aligned(&edge_of(&half, width, height), corners);
             // Nothing is left where a blur is longer than the subject is wide: it stays as it was cut.
-            let moved = if moved.is_empty() { corners.clone() } else { moved };
-            self.followed.soft.push(shutter.widths(&moved, &frame).iter().map(|wide| wide / width as f64).collect());
+            let moved = if moved.is_empty() {
+                corners.clone()
+            } else {
+                moved
+            };
+            self.followed.soft.push(
+                shutter
+                    .widths(&moved, &frame)
+                    .iter()
+                    .map(|wide| wide / width as f64)
+                    .collect(),
+            );
             self.followed.outlines.push(self.fraction(&moved));
         }
         self.followed
@@ -1139,7 +1272,9 @@ fn trace(
     // Where its corners sit is settled on the first frame: on the corners its edge turns, and evenly
     // between them.
     let edge = edge_of(&matte, width, height);
-    let Some(places) = Edge::of(&edge, OUTLINE_CORNERS).map(|edge| (Places::of(&edge, OUTLINE_CORNERS), edge)) else {
+    let Some(places) =
+        Edge::of(&edge, OUTLINE_CORNERS).map(|edge| (Places::of(&edge, OUTLINE_CORNERS), edge))
+    else {
         followed.lost_at = Some(0);
         return nothing(followed);
     };
@@ -1184,7 +1319,14 @@ fn trace(
         followed.areas.push(area);
     }
     followed.lost_at = lost_at;
-    Traced { followed, raw, across, places, width, height }
+    Traced {
+        followed,
+        raw,
+        across,
+        places,
+        width,
+        height,
+    }
 }
 
 /// The frames of a followed outline that shape its way, within `tolerance` of the frame's width:

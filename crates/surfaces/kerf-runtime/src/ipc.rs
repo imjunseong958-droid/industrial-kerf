@@ -2,9 +2,9 @@
 //! listens on, the request-scoped client, and the JSONL server.
 
 use crate::{
-    io_error, kernel, unique_id, Author, EditOp, RenderJob,
-    RenderRange, RequestEnvelope, RuntimeError, RuntimeHandle, RuntimeRequest,
-    RuntimeResponse, StartRenderOptions, StateSnapshot,
+    io_error, kernel, unique_id, Author, EditOp, RenderJob, RenderRange, RequestEnvelope,
+    RuntimeError, RuntimeHandle, RuntimeRequest, RuntimeResponse, StartRenderOptions,
+    StateSnapshot,
 };
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};

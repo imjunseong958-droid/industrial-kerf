@@ -496,7 +496,13 @@ pub fn showing(project: &Project, sequence: Option<&str>, at: Time) -> Result<Sh
     {
         let area: f64 = alone.cover.iter().map(|cover| f64::from(*cover)).sum();
         let share = |count: f64| rounded(count / pixels as f64);
-        let of_it = |count: f64| if area > 0.0 { rounded(count / area) } else { 0.0 };
+        let of_it = |count: f64| {
+            if area > 0.0 {
+                rounded(count / area)
+            } else {
+                0.0
+            }
+        };
         let mut by: Vec<(String, f64)> = hidden_by
             .iter()
             .enumerate()

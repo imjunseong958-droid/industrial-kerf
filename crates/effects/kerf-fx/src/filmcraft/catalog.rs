@@ -94,9 +94,7 @@ pub(crate) const CARRIED: &[(&str, &str, u32, &str)] = &[
 ];
 
 /// Point parameters that are offsets in pixels rather than places across the picture.
-const OFFSETS: &[(&str, &str)] = &[
-    ("auto_reframe", "offset"),
-];
+const OFFSETS: &[(&str, &str)] = &[("auto_reframe", "offset")];
 
 /// Field names an effect line takes itself, which a parameter cannot be.
 const FIELDS: &[&str] = &["at", "enabled", "reset"];
@@ -119,20 +117,49 @@ pub enum Headroom {
 /// each number moved a tenth of its range, on footage above SDR white and past BT.709.
 pub fn headroom(id: &str) -> Headroom {
     match id {
-        "blur.bilateral" | "blur.radialzoom" | "distort.opticscompensation"
-        | "distort.rollingshutterrepair" | "distort.upscale" | "image.fill"
-        | "matte.simplechoker" | "noise.addgrain" | "noise.dustscratches" | "noise.removegrain" => {
-            Headroom::Whole
-        }
+        "blur.bilateral"
+        | "blur.radialzoom"
+        | "distort.opticscompensation"
+        | "distort.rollingshutterrepair"
+        | "distort.upscale"
+        | "image.fill"
+        | "matte.simplechoker"
+        | "noise.addgrain"
+        | "noise.dustscratches"
+        | "noise.removegrain" => Headroom::Whole,
         "blur.sharpen" | "blur.unsharp" | "color.lumetri" | "vr.sharpen" => Headroom::Gamut,
-        "channel.invert" | "color.asccdl" | "color.autocolor" | "color.autocontrast" | "color.basic"
-        | "color.autolevels" | "color.brightnesscontrast" | "color.changetocolor"
-        | "color.channelmixer" | "color.colorbalance" | "color.curves" | "color.gamma"
-        | "color.huesaturation" | "color.levels" | "color.photofilter" | "color.procamp"
-        | "color.selectivecolor" | "color.shadowhighlight" | "color.tint" | "key.advancedspill"
-        | "key.color" | "key.extract" | "key.keycleaner" | "key.logocutout" | "key.ultra"
-        | "key.unmult" | "look.film" | "look.flash" | "look.noir" | "noise.noise"
-        | "stylize.vignette" | "utility.cineon" => Headroom::PerPixel,
+        "channel.invert"
+        | "color.asccdl"
+        | "color.autocolor"
+        | "color.autocontrast"
+        | "color.basic"
+        | "color.autolevels"
+        | "color.brightnesscontrast"
+        | "color.changetocolor"
+        | "color.channelmixer"
+        | "color.colorbalance"
+        | "color.curves"
+        | "color.gamma"
+        | "color.huesaturation"
+        | "color.levels"
+        | "color.photofilter"
+        | "color.procamp"
+        | "color.selectivecolor"
+        | "color.shadowhighlight"
+        | "color.tint"
+        | "key.advancedspill"
+        | "key.color"
+        | "key.extract"
+        | "key.keycleaner"
+        | "key.logocutout"
+        | "key.ultra"
+        | "key.unmult"
+        | "look.film"
+        | "look.flash"
+        | "look.noir"
+        | "noise.noise"
+        | "stylize.vignette"
+        | "utility.cineon" => Headroom::PerPixel,
         _ => Headroom::Keeps,
     }
 }

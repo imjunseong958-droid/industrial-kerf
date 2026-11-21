@@ -170,7 +170,7 @@ fn patience() -> Patience {
     Patience {
         most: Duration::from_secs(30),
         pause: Duration::from_millis(5),
-            listen: false,
+        listen: false,
     }
 }
 

@@ -124,7 +124,12 @@ pub struct Restored {
 ///
 /// What a take was made from beside its recipe, the sequences its guides were drawn from
 /// and its signals, is the project's, and comes back by undoing in the project, not here.
-pub fn restored(project: &Project, directory: &Path, id: &str, take: u32) -> Result<Restored, String> {
+pub fn restored(
+    project: &Project,
+    directory: &Path,
+    id: &str,
+    take: u32,
+) -> Result<Restored, String> {
     use kerf_engine::recipe::text::{self, Change};
     let media = project
         .media(id)
@@ -136,8 +141,8 @@ pub fn restored(project: &Project, directory: &Path, id: &str, take: u32) -> Res
     let mut now = kept.recipe.clone();
     let mut files = Vec::new();
     for (named, held) in &kept.files {
-        let (file, stored) =
-            kerf_engine::recipe::beside(project, directory, id, named).map_err(|error| error.to_string())?;
+        let (file, stored) = kerf_engine::recipe::beside(project, directory, id, named)
+            .map_err(|error| error.to_string())?;
         match std::fs::read_to_string(&file) {
             Ok(there) if there == *held => {}
             Err(_) => files.push((file, stored, held.clone())),
@@ -145,14 +150,17 @@ pub fn restored(project: &Project, directory: &Path, id: &str, take: u32) -> Res
                 // The file there now is another's: the take's own goes beside it.
                 let (stem, extension) = named
                     .split_once('.')
-                    .map_or((named.as_str(), String::new()), |(stem, rest)| (stem, format!(".{rest}")));
+                    .map_or((named.as_str(), String::new()), |(stem, rest)| {
+                        (stem, format!(".{rest}"))
+                    });
                 let (own, file, stored) = (1..)
                     .map(|number| match number {
                         1 => format!("{stem}.take{take}{extension}"),
                         more => format!("{stem}.take{take}-{more}{extension}"),
                     })
                     .find_map(|own| {
-                        let (file, stored) = kerf_engine::recipe::beside(project, directory, id, &own).ok()?;
+                        let (file, stored) =
+                            kerf_engine::recipe::beside(project, directory, id, &own).ok()?;
                         let free = match std::fs::read_to_string(&file) {
                             Ok(there) => there == *held,
                             Err(_) => true,
@@ -164,7 +172,9 @@ pub fn restored(project: &Project, directory: &Path, id: &str, take: u32) -> Res
                     files.push((file, stored, held.clone()));
                 }
                 // Each line that named it names the take's own.
-                let steps = Recipe::parse(&now).map_err(|error| error.to_string())?.steps;
+                let steps = Recipe::parse(&now)
+                    .map_err(|error| error.to_string())?
+                    .steps;
                 for (line, step) in text::step_lines(&now.clone()).into_iter().zip(steps) {
                     let names_it = matches!(
                         &step,
@@ -174,7 +184,11 @@ pub fn restored(project: &Project, directory: &Path, id: &str, take: u32) -> Res
                         now = text::changed(
                             &now,
                             line,
-                            Change::Set { key: kerf_engine::recipe::model::WORKFLOW, nth: 0, value: &own },
+                            Change::Set {
+                                key: kerf_engine::recipe::model::WORKFLOW,
+                                nth: 0,
+                                value: &own,
+                            },
                         )
                         .map_err(|error| error.to_string())?;
                     }
@@ -190,7 +204,11 @@ pub fn restored(project: &Project, directory: &Path, id: &str, take: u32) -> Res
 pub fn summary(guide: &Guide, readings: &[Value]) -> Value {
     let best = readings
         .iter()
-        .filter(|reading| reading["overlap"].as_f64().is_some_and(|overlap| overlap > 0.0))
+        .filter(|reading| {
+            reading["overlap"]
+                .as_f64()
+                .is_some_and(|overlap| overlap > 0.0)
+        })
         .max_by(|a, b| {
             let of = |reading: &Value| reading["overlap"].as_f64().unwrap_or(0.0);
             of(a).total_cmp(&of(b))

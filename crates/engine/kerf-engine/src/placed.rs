@@ -220,10 +220,8 @@ impl Placing {
         // picture and then the other.
         let follow = |pictures: &[Vec<u8>]| {
             let mut found: Vec<Option<Box>> = vec![None; pictures.len()];
-            let ways: [Vec<usize>; 2] = [
-                (from..pictures.len()).collect(),
-                (0..=from).rev().collect(),
-            ];
+            let ways: [Vec<usize>; 2] =
+                [(from..pictures.len()).collect(), (0..=from).rev().collect()];
             for frames in ways {
                 let followed = kerf_track::follow_object(frames.len(), &hints, |index| {
                     Some((width, height, pictures[*frames.get(index)?].clone()))

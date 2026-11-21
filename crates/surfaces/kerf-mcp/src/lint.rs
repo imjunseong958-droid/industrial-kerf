@@ -12,7 +12,8 @@ use crate::qc::{Finding, Severity};
 use crate::text_lint;
 use kerf_lang::{Breaks, Clock, Facts};
 use kerf_model::{
-    Catalog, Clip, Content, Id, Media, Param, Project, Rate, Sequence, Time, Track, TrackKind, Value,
+    Catalog, Clip, Content, Id, Media, Param, Project, Rate, Sequence, Time, Track, TrackKind,
+    Value,
 };
 use std::collections::{BTreeMap, HashMap};
 
@@ -149,7 +150,8 @@ fn does_nothing(sequence: &Sequence, findings: &mut Vec<Finding>) {
         // take for a rig that does not work. An adjustment layer is nowhere to be taken from.
         if !draws_nothing && !clip.in_depth() && fx != Some("adjustment") {
             let led = parents(clip).find(|parent| {
-                leads_in_depth(parent) && IN_DEPTH.iter().any(|name| parent.props.contains_key(*name))
+                leads_in_depth(parent)
+                    && IN_DEPTH.iter().any(|name| parent.props.contains_key(*name))
             });
             if let Some(parent) = led {
                 let set: Vec<String> = IN_DEPTH
@@ -211,7 +213,9 @@ fn does_nothing(sequence: &Sequence, findings: &mut Vec<Finding>) {
             "title" => {
                 if let Some(Param::Static(Value::Text(features))) = params.get("features") {
                     let font = match params.get("font") {
-                        Some(Param::Static(Value::Text(font))) if !font.trim().is_empty() => font.as_str(),
+                        Some(Param::Static(Value::Text(font))) if !font.trim().is_empty() => {
+                            font.as_str()
+                        }
                         _ => "sans-serif",
                     };
                     let style = match params.get("style") {
@@ -223,7 +227,8 @@ fn does_nothing(sequence: &Sequence, findings: &mut Vec<Finding>) {
                         _ => 0.0,
                     };
                     let style = kerf_model::title_face(style, weight);
-                    let (family, unread) = crate::text_lint::features_unread(font, &style, features);
+                    let (family, unread) =
+                        crate::text_lint::features_unread(font, &style, features);
                     for tag in unread {
                         says(format!("`features`: {family} has no `{tag}`, which draws nothing (`look` `font` names the ones it has)"));
                     }
@@ -1285,9 +1290,12 @@ fn cuts_within<'a>(
 fn plays_on(clip: &Clip, next: &Clip) -> bool {
     let same = match (&clip.content, &next.content) {
         (Content::Media { media, .. }, Content::Media { media: other, .. }) => media == other,
-        (Content::Sequence { sequence, .. }, Content::Sequence { sequence: other, .. }) => {
-            sequence == other && clip.angle == next.angle
-        }
+        (
+            Content::Sequence { sequence, .. },
+            Content::Sequence {
+                sequence: other, ..
+            },
+        ) => sequence == other && clip.angle == next.angle,
         _ => false,
     };
     let (Some((low, high)), Some((next_low, next_high))) =
@@ -1373,21 +1381,26 @@ fn out_of_step(project: &Project, sequence: &Sequence, findings: &mut Vec<Findin
         // To a tenth, and never the one frame that is let pass.
         let frames = ((frames * 10.0).round() / 10.0).max(1.1);
         let apart = format!("{frames} frames");
-        let way = if late.is_positive() { "later" } else { "earlier" };
+        let way = if late.is_positive() {
+            "later"
+        } else {
+            "earlier"
+        };
         // Other source frames in the same place undo it, or the same frames in another place.
         let by = sequence.rate.frames_round(late);
         let back = format!("`slip {id} {by:+}f` or `move {id} by={:+}f`", -by);
-        let message = if slipped.media == held_to.media {
-            format!(
-                "clip `{id}` plays `{}` {apart} {way} than `{other}`, which it is linked to: \
+        let message =
+            if slipped.media == held_to.media {
+                format!(
+                    "clip `{id}` plays `{}` {apart} {way} than `{other}`, which it is linked to: \
                  they are out of step. Linked clips slip and move together, so `unlink {id}` \
                  first; then {back} brings it back, to link again",
-                slipped.media,
-            )
-        } else {
-            let into = (slipped.begins - held_to.begins).seconds();
-            let into = (into * 1000.0).round() / 1000.0;
-            format!(
+                    slipped.media,
+                )
+            } else {
+                let into = (slipped.begins - held_to.begins).seconds();
+                let into = (into * 1000.0).round() / 1000.0;
+                format!(
                 "clip `{id}` plays {apart} {way} than `{other}`, which {}: `{}` begins {} s {} \
                  `{}` (`sync=`), and they play what both recorded that far out of step. {} {back} \
                  brings it back",
@@ -1402,7 +1415,7 @@ fn out_of_step(project: &Project, sequence: &Sequence, findings: &mut Vec<Findin
                     "Either of".to_owned()
                 },
             ) + if linked { ", to link again" } else { "" }
-        };
+            };
         // Said where both play.
         let (from, to) = (
             slipped.clip.start.max(held_to.clip.start),
@@ -1419,8 +1432,8 @@ fn out_of_step(project: &Project, sequence: &Sequence, findings: &mut Vec<Findin
     let mut said: Vec<&Id> = Vec::new();
     for (index, later) in plays.iter().enumerate() {
         let out_with = plays[..index].iter().find(|earlier| {
-            let shared = later.clip.end().min(earlier.clip.end())
-                - later.clip.start.max(earlier.clip.start);
+            let shared =
+                later.clip.end().min(earlier.clip.end()) - later.clip.start.max(earlier.clip.start);
             let apart = (later.zero - earlier.zero).abs();
             let belong = if earlier.media == later.media {
                 linked(earlier, later) && earlier.picture != later.picture
@@ -1750,17 +1763,13 @@ fn leftovers(
     // A phrase taken again a moment later, the same way: each across a cut by itself, since
     // the cut may have left both takes in, and the rest, which were said so, counted in one.
     let restarts = cuts::restarts(&words);
-    let (at_cuts, said): (Vec<_>, Vec<_>) =
-        restarts.iter().partition(|restart| restart.at_cut());
+    let (at_cuts, said): (Vec<_>, Vec<_>) = restarts.iter().partition(|restart| restart.at_cut());
     let quoted = |words: &[cuts::Played<'_>]| {
         let said: Vec<&str> = words.iter().map(|word| word.text).collect();
         said.join(" ")
     };
     for restart in at_cuts {
-        let (first, last) = (
-            &restart.first[0],
-            &restart.second[restart.second.len() - 1],
-        );
+        let (first, last) = (&restart.first[0], &restart.second[restart.second.len() - 1]);
         findings.push(
             Finding::new(
                 Severity::Info,
@@ -1825,10 +1834,16 @@ fn leftovers(
         let (out, into) = (&join.more.out, &join.more.into);
         let ends: Vec<String> = [
             out.as_ref().map(|took| {
-                format!("\"{took}\" with it, the end of what `{}` was saying", join.from.id)
+                format!(
+                    "\"{took}\" with it, the end of what `{}` was saying",
+                    join.from.id
+                )
             }),
             into.as_ref().map(|took| {
-                format!("\"{took}\", the start of the take `{}` goes on with", join.to.id)
+                format!(
+                    "\"{took}\", the start of the take `{}` goes on with",
+                    join.to.id
+                )
             }),
         ]
         .into_iter()
@@ -1842,7 +1857,12 @@ fn leftovers(
             (Some(_), None) => format!("`{}` out", join.from.id),
             _ => format!("`{}` in", join.to.id),
         };
-        let one = out.iter().chain(into).flat_map(|took| took.split(' ')).count() == 1;
+        let one = out
+            .iter()
+            .chain(into)
+            .flat_map(|took| took.split(' '))
+            .count()
+            == 1;
         let it = if one { "it" } else { "them" };
         findings.push(
             Finding::new(
@@ -1883,7 +1903,8 @@ fn speech_unheard(
     facts: &dyn Facts,
     findings: &mut Vec<Finding>,
 ) {
-    let mut known: std::collections::HashMap<Id, Vec<(f64, f64)>> = std::collections::HashMap::new();
+    let mut known: std::collections::HashMap<Id, Vec<(f64, f64)>> =
+        std::collections::HashMap::new();
     let clock = Clock::of_sequence(sequence);
     for track in sequence
         .tracks
@@ -1912,7 +1933,9 @@ fn speech_unheard(
                 }
                 let at = |seconds: f64| {
                     let source = Time::from_seconds(seconds).unwrap_or(source_in);
-                    sequence.rate.round(clip.played_at(source).unwrap_or(clip.start))
+                    sequence
+                        .rate
+                        .round(clip.played_at(source).unwrap_or(clip.start))
                 };
                 let (start, end) = (at(from), at(to));
                 let mut finding = Finding::new(
@@ -2166,7 +2189,10 @@ sequence s1 rate=24 size=1920x1080
         };
         let report = cuts_of(&known, &cuts::Asked::default());
         for list in ["pauses", "repeats", "restarts", "joins"] {
-            assert!(report[list]["count"].as_u64() > Some(0), "{list}: {report:#}");
+            assert!(
+                report[list]["count"].as_u64() > Some(0),
+                "{list}: {report:#}"
+            );
         }
         assert_eq!(report["restarts"]["atCuts"], 1, "{report:#}");
         assert!(!report["cuts"].as_array().unwrap().is_empty(), "{report:#}");

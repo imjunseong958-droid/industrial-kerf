@@ -67,7 +67,9 @@ fn mixed(dir: &Path, media: &[(&str, &str)], body: &str) -> Vec<f32> {
     ffmpeg(&args);
     std::fs::read(&out)
         .expect("the mix")
-        .as_chunks::<8>().0.iter()
+        .as_chunks::<8>()
+        .0
+        .iter()
         .map(|bytes| f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
         .collect()
 }
@@ -245,7 +247,10 @@ fn buses_add_up_and_their_gains_stack() {
         &media,
         &format!("  bus b gain={{0f:0 96f:-12}}\n  track A1 audio bus=b\n{CLIP}"),
     );
-    let (early, late) = (rms(seconds(&moving, 0.0, 0.2)), rms(seconds(&moving, 1.9, 2.1)));
+    let (early, late) = (
+        rms(seconds(&moving, 0.0, 0.2)),
+        rms(seconds(&moving, 1.9, 2.1)),
+    );
     assert!((early / plain - 0.93).abs() < 0.1, "{plain} {early}");
     assert!((late / plain - 0.25).abs() < 0.03, "{plain} {late}");
 }

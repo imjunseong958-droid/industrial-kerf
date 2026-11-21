@@ -53,7 +53,10 @@ pub fn bring_forward(
     let mut was = Steps::new(base, catalog);
     let mut now = Steps::new(current, catalog);
     let mut names = Names::default();
-    let mut before = (parts(was.project(), &names), parts(now.project(), &Names::default()));
+    let mut before = (
+        parts(was.project(), &names),
+        parts(now.project(), &Names::default()),
+    );
     let mut ops = Vec::new();
     for (line, line_ops) in &lines {
         let at = |diagnostic: Diagnostic| vec![diagnostic.at(*line, 1)];
@@ -76,7 +79,10 @@ pub fn bring_forward(
             was.step(op).map_err(rejected)?;
             now.step(&carried).map_err(rejected)?;
             names.learn(op, (&ids.0, was.project()), (&ids.1, now.project()));
-            let after = (parts(was.project(), &names), parts(now.project(), &Names::default()));
+            let after = (
+                parts(was.project(), &names),
+                parts(now.project(), &Names::default()),
+            );
             same_change((&before.0, &after.0), (&before.1, &after.1)).map_err(at)?;
             before = after;
             ops.push(carried);
@@ -585,7 +591,11 @@ impl Place<'_> {
         let carried = (self.place(sequence, from)?, self.place(sequence, to)?);
         if carried.1 <= carried.0 {
             let clock = self.was.sequence(sequence.as_str()).map(Clock::of_sequence);
-            let said = |time: Time| clock.as_ref().map_or_else(String::new, |clock| clock.print_position(time));
+            let said = |time: Time| {
+                clock
+                    .as_ref()
+                    .map_or_else(String::new, |clock| clock.print_position(time))
+            };
             return Err(Diagnostic::error(
                 "forward.place",
                 format!(
@@ -620,7 +630,10 @@ impl Key {
     /// operation makes or removes has from that operation or from the clip
     /// it was cut from. Where such a clip plays is what is compared.
     fn is_look(&self) -> bool {
-        matches!(self, Self::Properties(_) | Self::Effects(_) | Self::Masks(_))
+        matches!(
+            self,
+            Self::Properties(_) | Self::Effects(_) | Self::Masks(_)
+        )
     }
 
     fn what(&self) -> String {
@@ -813,7 +826,10 @@ fn parts(project: &Project, names: &Names) -> Parts {
                         caption,
                     },
                 );
-                parts.insert(Key::Effects(id.clone()), Part::Effects(clip.effects.clone()));
+                parts.insert(
+                    Key::Effects(id.clone()),
+                    Part::Effects(clip.effects.clone()),
+                );
                 parts.insert(Key::Masks(id), Part::Masks(clip.masks.clone()));
             }
         }

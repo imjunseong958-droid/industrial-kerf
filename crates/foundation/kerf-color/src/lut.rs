@@ -32,7 +32,9 @@ impl Lut1d {
         let n = self.data.len() - 1;
         let mut o = [0.0; 3];
         for c in 0..3 {
-            let t = ((rgb[c] - self.domain_min[c]) / (self.domain_max[c] - self.domain_min[c])).clamp(0.0, 1.0) * n as f32;
+            let t = ((rgb[c] - self.domain_min[c]) / (self.domain_max[c] - self.domain_min[c]))
+                .clamp(0.0, 1.0)
+                * n as f32;
             let i = (t as usize).min(n.saturating_sub(1));
             let f = t - i as f32;
             o[c] = self.data[i][c] + (self.data[(i + 1).min(n)][c] - self.data[i][c]) * f;
@@ -68,7 +70,13 @@ impl Lut3d {
                 }
             }
         }
-        Lut3d { title: String::new(), size, domain_min: [0.0; 3], domain_max: [1.0; 3], data }
+        Lut3d {
+            title: String::new(),
+            size,
+            domain_min: [0.0; 3],
+            domain_max: [1.0; 3],
+            data,
+        }
     }
 
     #[inline]
@@ -90,20 +98,34 @@ impl Lut3d {
 
     #[cfg(test)]
     pub fn to_cube(&self) -> String {
-        Lut { title: self.title.clone(), shaper: None, cube: Some(self.clone()) }.to_cube()
+        Lut {
+            title: self.title.clone(),
+            shaper: None,
+            cube: Some(self.clone()),
+        }
+        .to_cube()
     }
 
     /// Normalised grid coordinate (0..size-1) of an input value.
     #[inline]
     fn coord(&self, v: f32, c: usize) -> f32 {
-        ((v - self.domain_min[c]) / (self.domain_max[c] - self.domain_min[c])).clamp(0.0, 1.0) * (self.size - 1) as f32
+        ((v - self.domain_min[c]) / (self.domain_max[c] - self.domain_min[c])).clamp(0.0, 1.0)
+            * (self.size - 1) as f32
     }
 
     /// Tetrahedral interpolation.
     pub fn apply(&self, rgb: [f32; 3]) -> [f32; 3] {
         let n = self.size;
-        let (x, y, z) = (self.coord(rgb[0], 0), self.coord(rgb[1], 1), self.coord(rgb[2], 2));
-        let (r0, g0, b0) = ((x as usize).min(n - 2), (y as usize).min(n - 2), (z as usize).min(n - 2));
+        let (x, y, z) = (
+            self.coord(rgb[0], 0),
+            self.coord(rgb[1], 1),
+            self.coord(rgb[2], 2),
+        );
+        let (r0, g0, b0) = (
+            (x as usize).min(n - 2),
+            (y as usize).min(n - 2),
+            (z as usize).min(n - 2),
+        );
         let (fr, fg, fb) = (x - r0 as f32, y - g0 as f32, z - b0 as f32);
         let c = |dr: usize, dg: usize, db: usize| self.at(r0 + dr, g0 + dg, b0 + db);
         let c000 = c(0, 0, 0);
@@ -135,8 +157,16 @@ impl Lut3d {
     /// Trilinear interpolation (kept for comparison; LUTs render tetrahedrally).
     pub fn apply_trilinear(&self, rgb: [f32; 3]) -> [f32; 3] {
         let n = self.size;
-        let (x, y, z) = (self.coord(rgb[0], 0), self.coord(rgb[1], 1), self.coord(rgb[2], 2));
-        let (r0, g0, b0) = ((x as usize).min(n - 2), (y as usize).min(n - 2), (z as usize).min(n - 2));
+        let (x, y, z) = (
+            self.coord(rgb[0], 0),
+            self.coord(rgb[1], 1),
+            self.coord(rgb[2], 2),
+        );
+        let (r0, g0, b0) = (
+            (x as usize).min(n - 2),
+            (y as usize).min(n - 2),
+            (z as usize).min(n - 2),
+        );
         let (fr, fg, fb) = (x - r0 as f32, y - g0 as f32, z - b0 as f32);
         let mut out = [0f32; 3];
         for (k, o) in out.iter_mut().enumerate() {
@@ -180,12 +210,23 @@ impl LutFormat {
 }
 
 fn floats(line: &str) -> Result<Vec<f32>, String> {
-    line.split_whitespace().map(|x| x.parse::<f32>().ok().filter(|v| v.is_finite()).ok_or_else(|| format!("not a finite number: {x:?}"))).collect()
+    line.split_whitespace()
+        .map(|x| {
+            x.parse::<f32>()
+                .ok()
+                .filter(|v| v.is_finite())
+                .ok_or_else(|| format!("not a finite number: {x:?}"))
+        })
+        .collect()
 }
 
 impl Lut {
     pub fn from_cube(cube: Lut3d) -> Self {
-        Lut { title: cube.title.clone(), shaper: None, cube: Some(cube) }
+        Lut {
+            title: cube.title.clone(),
+            shaper: None,
+            cube: Some(cube),
+        }
     }
 
     /// Parse by format (sniffs `LUT_*_SIZE` for `.cube` when the format is unknown).
@@ -193,7 +234,9 @@ impl Lut {
         match format {
             Some(LutFormat::Cube) => Lut::parse_cube(text),
             Some(LutFormat::ThreeDl) => Lut::parse_3dl(text),
-            None if text.contains("LUT_3D_SIZE") || text.contains("LUT_1D_SIZE") => Lut::parse_cube(text),
+            None if text.contains("LUT_3D_SIZE") || text.contains("LUT_1D_SIZE") => {
+                Lut::parse_cube(text)
+            }
             None => Lut::parse_3dl(text),
         }
     }
@@ -222,13 +265,19 @@ impl Lut {
                 match key {
                     "TITLE" => title = line[5..].trim().trim_matches('"').to_string(),
                     "LUT_1D_SIZE" => {
-                        size1 = it.next().and_then(|v| v.parse().ok()).ok_or_else(|| err("bad LUT_1D_SIZE"))?;
+                        size1 = it
+                            .next()
+                            .and_then(|v| v.parse().ok())
+                            .ok_or_else(|| err("bad LUT_1D_SIZE"))?;
                         if !(2..=65536).contains(&size1) {
                             return Err(err("LUT_1D_SIZE must be 2–65536"));
                         }
                     }
                     "LUT_3D_SIZE" => {
-                        size3 = it.next().and_then(|v| v.parse().ok()).ok_or_else(|| err("bad LUT_3D_SIZE"))?;
+                        size3 = it
+                            .next()
+                            .and_then(|v| v.parse().ok())
+                            .ok_or_else(|| err("bad LUT_3D_SIZE"))?;
                         if !(2..=256).contains(&size3) {
                             return Err(err("LUT_3D_SIZE must be 2–256"));
                         }
@@ -238,7 +287,11 @@ impl Lut {
                         if v.len() != 3 {
                             return Err(err(&format!("{key} needs 3 values")));
                         }
-                        let t = if key == "DOMAIN_MIN" { &mut dmin } else { &mut dmax };
+                        let t = if key == "DOMAIN_MIN" {
+                            &mut dmin
+                        } else {
+                            &mut dmax
+                        };
                         t.copy_from_slice(&v);
                     }
                     "LUT_1D_INPUT_RANGE" | "LUT_3D_INPUT_RANGE" => {
@@ -250,7 +303,11 @@ impl Lut {
                             return Err(err(&format!("{key} maximum must exceed its minimum")));
                         }
                         let r = Some([v[0], v[1]]);
-                        if key == "LUT_1D_INPUT_RANGE" { range1 = r } else { range3 = r }
+                        if key == "LUT_1D_INPUT_RANGE" {
+                            range1 = r
+                        } else {
+                            range3 = r
+                        }
                     }
                     // unknown keywords (vendor extensions) are ignored, as the spec allows
                     _ => {}
@@ -283,14 +340,28 @@ impl Lut {
         };
         let shaper = (size1 > 0).then(|| {
             let (lo, hi) = dom(range1, true);
-            Lut1d { domain_min: lo, domain_max: hi, data: rows[..size1].to_vec() }
+            Lut1d {
+                domain_min: lo,
+                domain_max: hi,
+                data: rows[..size1].to_vec(),
+            }
         });
         let cube = (size3 > 0).then(|| {
             // with a shaper in front, the cube sees the shaper's output (0..1 unless stated)
             let (lo, hi) = dom(range3, !both);
-            Lut3d { title: title.clone(), size: size3, domain_min: lo, domain_max: hi, data: rows[size1..].to_vec() }
+            Lut3d {
+                title: title.clone(),
+                size: size3,
+                domain_min: lo,
+                domain_max: hi,
+                data: rows[size1..].to_vec(),
+            }
         });
-        Ok(Lut { title, shaper, cube })
+        Ok(Lut {
+            title,
+            shaper,
+            cube,
+        })
     }
 
     pub fn to_cube(&self) -> String {
@@ -302,12 +373,17 @@ impl Lut {
         if let Some(sh) = &self.shaper {
             let _ = writeln!(s, "LUT_1D_SIZE {}", sh.size());
             if both {
-                let uniform = sh.domain_min.iter().all(|v| *v == sh.domain_min[0]) && sh.domain_max.iter().all(|v| *v == sh.domain_max[0]);
+                let uniform = sh.domain_min.iter().all(|v| *v == sh.domain_min[0])
+                    && sh.domain_max.iter().all(|v| *v == sh.domain_max[0]);
                 if !uniform {
                     // with both tables, DOMAIN_MIN/DOMAIN_MAX belong to the shaper
                     write_domain(&mut s, sh.domain_min, sh.domain_max);
                 } else if sh.domain_min != [0.0; 3] || sh.domain_max != [1.0; 3] {
-                    let _ = writeln!(s, "LUT_1D_INPUT_RANGE {} {}", sh.domain_min[0], sh.domain_max[0]);
+                    let _ = writeln!(
+                        s,
+                        "LUT_1D_INPUT_RANGE {} {}",
+                        sh.domain_min[0], sh.domain_max[0]
+                    );
                 }
             } else {
                 write_domain(&mut s, sh.domain_min, sh.domain_max);
@@ -317,13 +393,22 @@ impl Lut {
             let _ = writeln!(s, "LUT_3D_SIZE {}", c.size);
             if both {
                 if c.domain_min != [0.0; 3] || c.domain_max != [1.0; 3] {
-                    let _ = writeln!(s, "LUT_3D_INPUT_RANGE {} {}", c.domain_min[0], c.domain_max[0]);
+                    let _ = writeln!(
+                        s,
+                        "LUT_3D_INPUT_RANGE {} {}",
+                        c.domain_min[0], c.domain_max[0]
+                    );
                 }
             } else {
                 write_domain(&mut s, c.domain_min, c.domain_max);
             }
         }
-        for d in self.shaper.iter().flat_map(|l| &l.data).chain(self.cube.iter().flat_map(|l| &l.data)) {
+        for d in self
+            .shaper
+            .iter()
+            .flat_map(|l| &l.data)
+            .chain(self.cube.iter().flat_map(|l| &l.data))
+        {
             let _ = writeln!(s, "{} {} {}", fmt6(d[0]), fmt6(d[1]), fmt6(d[2]));
         }
         s
@@ -341,11 +426,18 @@ impl Lut {
             }
             let err = |m: &str| format!("line {}: {m}", ln + 1);
             let first = line.split_whitespace().next().unwrap_or("");
-            if first.eq_ignore_ascii_case("3DMESH") || first.eq_ignore_ascii_case("LUT8") || first.eq_ignore_ascii_case("GAMMA") {
+            if first.eq_ignore_ascii_case("3DMESH")
+                || first.eq_ignore_ascii_case("LUT8")
+                || first.eq_ignore_ascii_case("GAMMA")
+            {
                 continue;
             }
             if first.eq_ignore_ascii_case("Mesh") {
-                let v: Vec<u32> = line.split_whitespace().skip(1).filter_map(|x| x.parse().ok()).collect();
+                let v: Vec<u32> = line
+                    .split_whitespace()
+                    .skip(1)
+                    .filter_map(|x| x.parse().ok())
+                    .collect();
                 if v.len() == 2 {
                     out_bits = Some(v[1]);
                 }
@@ -370,13 +462,21 @@ impl Lut {
             return Err(format!("input mesh must have 2–256 values, found {n}"));
         }
         if rows.len() != n * n * n {
-            return Err(format!("expected {}³ = {} rows, found {}", n, n * n * n, rows.len()));
+            return Err(format!(
+                "expected {}³ = {} rows, found {}",
+                n,
+                n * n * n,
+                rows.len()
+            ));
         }
         if mesh.windows(2).any(|w| w[1] <= w[0]) {
             return Err("input mesh must increase".into());
         }
         let in_max = bit_max(mesh[n - 1]);
-        let peak = rows.iter().flat_map(|r| r.iter()).fold(0f32, |a, b| a.max(*b));
+        let peak = rows
+            .iter()
+            .flat_map(|r| r.iter())
+            .fold(0f32, |a, b| a.max(*b));
         let out_max = match out_bits {
             Some(b) if (8..=16).contains(&b) => ((1u32 << b) - 1) as f32,
             _ => bit_max(peak),
@@ -389,22 +489,46 @@ impl Lut {
         }
         let lo = mesh[0] / in_max;
         let hi = mesh[n - 1] / in_max;
-        let uniform = mesh.iter().enumerate().all(|(i, m)| (m - (mesh[0] + (mesh[n - 1] - mesh[0]) * i as f32 / (n - 1) as f32)).abs() <= 1.0);
+        let uniform = mesh.iter().enumerate().all(|(i, m)| {
+            (m - (mesh[0] + (mesh[n - 1] - mesh[0]) * i as f32 / (n - 1) as f32)).abs() <= 1.0
+        });
         let shaper = (!uniform).then(|| {
             // piecewise-linear map from input value to the mesh index, as a 1D shaper
             let size = 4096;
             let data = (0..size)
                 .map(|k| {
                     let x = k as f32 / (size - 1) as f32 * in_max;
-                    let j = mesh.iter().position(|m| *m > x).unwrap_or(n).clamp(1, n - 1);
+                    let j = mesh
+                        .iter()
+                        .position(|m| *m > x)
+                        .unwrap_or(n)
+                        .clamp(1, n - 1);
                     let t = ((x - mesh[j - 1]) / (mesh[j] - mesh[j - 1])).clamp(0.0, 1.0);
                     [((j - 1) as f32 + t) / (n - 1) as f32; 3]
                 })
                 .collect();
-            Lut1d { domain_min: [0.0; 3], domain_max: [1.0; 3], data }
+            Lut1d {
+                domain_min: [0.0; 3],
+                domain_max: [1.0; 3],
+                data,
+            }
         });
-        let (dmin, dmax) = if uniform { ([lo; 3], [hi; 3]) } else { ([0.0; 3], [1.0; 3]) };
-        Ok(Lut { title: String::new(), shaper, cube: Some(Lut3d { title: String::new(), size: n, domain_min: dmin, domain_max: dmax, data }) })
+        let (dmin, dmax) = if uniform {
+            ([lo; 3], [hi; 3])
+        } else {
+            ([0.0; 3], [1.0; 3])
+        };
+        Ok(Lut {
+            title: String::new(),
+            shaper,
+            cube: Some(Lut3d {
+                title: String::new(),
+                size: n,
+                domain_min: dmin,
+                domain_max: dmax,
+                data,
+            }),
+        })
     }
 
     #[cfg(test)]
@@ -416,7 +540,9 @@ impl Lut {
         if !self.title.is_empty() {
             let _ = writeln!(s, "# {}", self.title);
         }
-        let mesh: Vec<String> = (0..n).map(|i| ((i as f64 * 1023.0 / (n - 1) as f64).round() as u32).to_string()).collect();
+        let mesh: Vec<String> = (0..n)
+            .map(|i| ((i as f64 * 1023.0 / (n - 1) as f64).round() as u32).to_string())
+            .collect();
         let _ = writeln!(s, "{}", mesh.join(" "));
         let q = |v: f32| (v.clamp(0.0, 1.0) * 4095.0).round() as u32;
         for r in 0..n {
@@ -434,9 +560,14 @@ impl Lut {
     /// The LUT as a single cube over 0..1 (resampled when there is a shaper or a non-unit domain).
     pub fn baked_cube(&self, size: usize) -> Result<Lut3d, String> {
         match (&self.shaper, &self.cube) {
-            (None, Some(c)) if c.domain_min == [0.0; 3] && c.domain_max == [1.0; 3] => Ok(c.clone()),
+            (None, Some(c)) if c.domain_min == [0.0; 3] && c.domain_max == [1.0; 3] => {
+                Ok(c.clone())
+            }
             (None, None) => Err("empty LUT".into()),
-            _ => Ok(Lut3d { title: self.title.clone(), ..Lut3d::from_fn(size, |c| self.apply(c)) }),
+            _ => Ok(Lut3d {
+                title: self.title.clone(),
+                ..Lut3d::from_fn(size, |c| self.apply(c))
+            }),
         }
     }
 
@@ -462,12 +593,19 @@ fn write_domain(s: &mut String, lo: [f32; 3], hi: [f32; 3]) {
 
 fn fmt6(v: f32) -> String {
     let s = format!("{v:.6}");
-    if s == "-0.000000" { "0.000000".into() } else { s }
+    if s == "-0.000000" {
+        "0.000000".into()
+    } else {
+        s
+    }
 }
 
 /// Full-scale value of the smallest common integer depth that holds `v`.
 fn bit_max(v: f32) -> f32 {
-    [255.0, 1023.0, 4095.0, 16383.0, 65535.0].into_iter().find(|m| v <= *m).unwrap_or(65535.0)
+    [255.0, 1023.0, 4095.0, 16383.0, 65535.0]
+        .into_iter()
+        .find(|m| v <= *m)
+        .unwrap_or(65535.0)
 }
 
 #[cfg(test)]
@@ -478,10 +616,27 @@ mod tests {
     /// cell diagonal) whose barycentric coordinates are all ≥ 0, by solving a 3×3 system for each.
     fn brute_tetra(l: &Lut3d, rgb: [f32; 3]) -> [f32; 3] {
         let n = l.size;
-        let g: Vec<f64> = (0..3).map(|c| ((rgb[c] - l.domain_min[c]) / (l.domain_max[c] - l.domain_min[c])).clamp(0.0, 1.0) as f64 * (n - 1) as f64).collect();
+        let g: Vec<f64> = (0..3)
+            .map(|c| {
+                ((rgb[c] - l.domain_min[c]) / (l.domain_max[c] - l.domain_min[c])).clamp(0.0, 1.0)
+                    as f64
+                    * (n - 1) as f64
+            })
+            .collect();
         let base: Vec<usize> = g.iter().map(|v| (*v as usize).min(n - 2)).collect();
-        let f = [g[0] - base[0] as f64, g[1] - base[1] as f64, g[2] - base[2] as f64];
-        let perms = [[0, 1, 2], [0, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1], [2, 1, 0]];
+        let f = [
+            g[0] - base[0] as f64,
+            g[1] - base[1] as f64,
+            g[2] - base[2] as f64,
+        ];
+        let perms = [
+            [0, 1, 2],
+            [0, 2, 1],
+            [1, 0, 2],
+            [1, 2, 0],
+            [2, 0, 1],
+            [2, 1, 0],
+        ];
         for p in perms {
             // vertices: 0, e_p0, e_p0+e_p1, 1
             let mut v = [[0usize; 3]; 4];
@@ -514,7 +669,13 @@ mod tests {
 
     fn wild(size: usize) -> Lut3d {
         // a non-linear, non-separable LUT
-        Lut3d::from_fn(size, |c| [(c[0] * c[1] + c[2].powi(2)).sin(), c[1].powf(0.45) * (1.0 - 0.3 * c[0]), (c[0] - c[2]).abs() + 0.1 * c[1]])
+        Lut3d::from_fn(size, |c| {
+            [
+                (c[0] * c[1] + c[2].powi(2)).sin(),
+                c[1].powf(0.45) * (1.0 - 0.3 * c[0]),
+                (c[0] - c[2]).abs() + 0.1 * c[1],
+            ]
+        })
     }
 
     #[test]
@@ -533,7 +694,10 @@ mod tests {
                 let a = l.apply(c);
                 let b = brute_tetra(&l, c);
                 for k in 0..3 {
-                    assert!((a[k] - b[k]).abs() < 1e-5, "size {size} {c:?}: {a:?} vs {b:?}");
+                    assert!(
+                        (a[k] - b[k]).abs() < 1e-5,
+                        "size {size} {c:?}: {a:?} vs {b:?}"
+                    );
                 }
             }
         }
@@ -551,19 +715,36 @@ mod tests {
         let back = Lut::parse_cube(&text).unwrap();
         assert_eq!(back.title, "wild");
         let (a, b) = (lut.cube.as_ref().unwrap(), back.cube.as_ref().unwrap());
-        assert_eq!((a.size, a.domain_min, a.domain_max), (b.size, b.domain_min, b.domain_max));
-        assert!(a.data.iter().zip(&b.data).all(|(x, y)| (0..3).all(|k| (x[k] - y[k]).abs() < 1e-6)));
+        assert_eq!(
+            (a.size, a.domain_min, a.domain_max),
+            (b.size, b.domain_min, b.domain_max)
+        );
+        assert!(a
+            .data
+            .iter()
+            .zip(&b.data)
+            .all(|(x, y)| (0..3).all(|k| (x[k] - y[k]).abs() < 1e-6)));
         // 1D only
         let one = Lut {
             title: String::new(),
-            shaper: Some(Lut1d { domain_min: [0.0; 3], domain_max: [1.0; 3], data: (0..1024).map(|i| [(i as f32 / 1023.0).powf(2.2); 3]).collect() }),
+            shaper: Some(Lut1d {
+                domain_min: [0.0; 3],
+                domain_max: [1.0; 3],
+                data: (0..1024)
+                    .map(|i| [(i as f32 / 1023.0).powf(2.2); 3])
+                    .collect(),
+            }),
             cube: None,
         };
         let back = Lut::parse_cube(&one.to_cube()).unwrap();
         assert_eq!(back.shaper.as_ref().unwrap().size(), 1024);
         assert!((back.apply([0.5; 3])[0] - 0.5f32.powf(2.2)).abs() < 1e-4);
         // shaper + cube
-        let both = Lut { title: "s".into(), shaper: one.shaper.clone(), cube: Some(Lut3d::identity(9)) };
+        let both = Lut {
+            title: "s".into(),
+            shaper: one.shaper.clone(),
+            cube: Some(Lut3d::identity(9)),
+        };
         let back = Lut::parse_cube(&both.to_cube()).unwrap();
         assert!(back.shaper.is_some() && back.cube.is_some());
         assert!((back.apply([0.5; 3])[1] - 0.5f32.powf(2.2)).abs() < 1e-3);
@@ -578,15 +759,31 @@ mod tests {
         let back = Lut::parse_3dl(&text).unwrap();
         for c in [[0.1, 0.2, 0.9], [0.8, 0.5, 0.3]] {
             let (a, b) = (swap.apply(c), back.apply(c));
-            assert!((0..3).all(|k| (a[k] - b[k]).abs() < 1.0 / 4095.0 + 1e-4), "{a:?} vs {b:?}");
+            assert!(
+                (0..3).all(|k| (a[k] - b[k]).abs() < 1.0 / 4095.0 + 1e-4),
+                "{a:?} vs {b:?}"
+            );
         }
         // hand-written 2-point Lustre file, blue fastest, 12-bit output
         let lustre = "3DMESH\nMesh 1 12\n0 1023\n0 0 0\n0 0 4095\n0 4095 0\n0 4095 4095\n4095 0 0\n4095 0 4095\n4095 4095 0\n4095 4095 4095\n";
         let l = Lut::parse_3dl(lustre).unwrap();
         let v = l.apply([0.2, 0.4, 0.6]);
-        assert!((v[0] - 0.2).abs() < 1e-4 && (v[1] - 0.4).abs() < 1e-4 && (v[2] - 0.6).abs() < 1e-4, "{v:?}");
+        assert!(
+            (v[0] - 0.2).abs() < 1e-4 && (v[1] - 0.4).abs() < 1e-4 && (v[2] - 0.6).abs() < 1e-4,
+            "{v:?}"
+        );
         // non-uniform mesh → shaper
-        let nu = "0 100 1023\n".to_string() + &(0..27).map(|i| format!("{} {} {}\n", (i / 9) * 2047, ((i / 3) % 3) * 2047, (i % 3) * 2047)).collect::<String>();
+        let nu = "0 100 1023\n".to_string()
+            + &(0..27)
+                .map(|i| {
+                    format!(
+                        "{} {} {}\n",
+                        (i / 9) * 2047,
+                        ((i / 3) % 3) * 2047,
+                        (i % 3) * 2047
+                    )
+                })
+                .collect::<String>();
         let l = Lut::parse_3dl(&nu).unwrap();
         assert!(l.shaper.is_some());
         let v = l.apply([100.0 / 1023.0, 0.0, 1.0]);
@@ -600,10 +797,21 @@ mod tests {
 
     #[test]
     fn huge_3dl_mesh_is_rejected() {
-        let text = (0..1u32 << 22).map(|i| i.to_string()).collect::<Vec<_>>().join(" ") + "\n";
+        let text = (0..1u32 << 22)
+            .map(|i| i.to_string())
+            .collect::<Vec<_>>()
+            .join(" ")
+            + "\n";
         let r = std::panic::catch_unwind(|| Lut::parse_3dl(&text).map(|l| l.apply([0.5; 3])));
-        assert!(matches!(r, Ok(Err(_))), "huge mesh must be rejected without panicking");
-        let mesh257 = (0..257).map(|i| i.to_string()).collect::<Vec<_>>().join(" ") + "\n";
+        assert!(
+            matches!(r, Ok(Err(_))),
+            "huge mesh must be rejected without panicking"
+        );
+        let mesh257 = (0..257)
+            .map(|i| i.to_string())
+            .collect::<Vec<_>>()
+            .join(" ")
+            + "\n";
         assert!(Lut::parse_3dl(&mesh257).is_err());
     }
 }

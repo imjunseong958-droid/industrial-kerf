@@ -146,7 +146,9 @@ fn at_once<T: Sync, R: Send>(
             });
         }
     });
-    let done = done.into_inner().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let done = done
+        .into_inner()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let mut results = Vec::with_capacity(items.len());
     let mut stopped = false;
     for result in done {
@@ -191,14 +193,9 @@ fn clip_name(input: &SoundInput) -> Result<String> {
 
 /// Each input's sound decoded, in the inputs' order: the kept file, or one
 /// made now and kept.
-fn clips(
-    mix: &Mix,
-    kept: &Kept,
-    cancellation: &CancellationToken,
-) -> Result<Vec<PathBuf>> {
+fn clips(mix: &Mix, kept: &Kept, cancellation: &CancellationToken) -> Result<Vec<PathBuf>> {
     let names: Vec<String> = mix.inputs.iter().map(clip_name).collect::<Result<_>>()?;
-    let mut files: Vec<Option<PathBuf>> =
-        names.iter().map(|name| kept.find(name, "f32")).collect();
+    let mut files: Vec<Option<PathBuf>> = names.iter().map(|name| kept.find(name, "f32")).collect();
     let missing: Vec<usize> = (0..files.len()).filter(|at| files[*at].is_none()).collect();
     sections::count_sound_clips(files.len() - missing.len(), missing.len());
     let decoded = at_once(&missing, cancellation, |at| {
@@ -325,7 +322,9 @@ pub(crate) fn make(
     ffmpeg(&wrap, cancellation)?;
     // A sound a frame late is 21 ms out with its picture: the file is read back.
     if !timed(&file, frames.len(), rest) {
-        return Err(EngineError::msg("the sound's frames are not at their times"));
+        return Err(EngineError::msg(
+            "the sound's frames are not at their times",
+        ));
     }
     scratch.0.pop();
     Ok(Made { file, used })
@@ -427,7 +426,8 @@ fn window(frame: &[u8]) -> Option<(u8, u8)> {
             Some(bits << 1 | usize::from(bit))
         })
     };
-    let pair = |sequence: usize, shape: usize| Some((take(sequence, 2)? as u8, take(shape, 1)? as u8));
+    let pair =
+        |sequence: usize, shape: usize| Some((take(sequence, 2)? as u8, take(shape, 1)? as u8));
     let mut at = 0;
     loop {
         // An element says what it is in three bits and which in four.
@@ -474,8 +474,16 @@ fn joined(pieces: &[Packets]) -> Option<Vec<&[u8]>> {
             Some(next) => seam(piece, next)?,
             None => 0,
         };
-        frames.extend(piece.lead[piece.lead.len() - back..].iter().map(Vec::as_slice));
-        frames.extend(piece.body[..piece.body.len() - next].iter().map(Vec::as_slice));
+        frames.extend(
+            piece.lead[piece.lead.len() - back..]
+                .iter()
+                .map(Vec::as_slice),
+        );
+        frames.extend(
+            piece.body[..piece.body.len() - next]
+                .iter()
+                .map(Vec::as_slice),
+        );
         back = next;
     }
     Some(frames)
@@ -499,9 +507,7 @@ fn read(bytes: &[u8], piece: &Piece) -> Option<Packets> {
         Some(u32::from_le_bytes(bytes.get(at..at + 4)?.try_into().ok()?) as usize)
     };
     let (lead, body) = (count(8)?, count(12)?);
-    if bytes.get(..8)? != MAGIC
-        || lead as u64 != piece.lead
-        || body as u64 != piece.to - piece.from
+    if bytes.get(..8)? != MAGIC || lead as u64 != piece.lead || body as u64 != piece.to - piece.from
     {
         return None;
     }
@@ -715,7 +721,10 @@ mod tests {
     fn pieces_join_where_the_frame_before_has_the_same_window_in_both() {
         let piece = |lead: Vec<Vec<u8>>, body: Vec<Vec<u8>>| Packets { lead, body };
         // The frame before the second piece's first is a long window in both.
-        let first = piece(vec![], vec![shared(0, 1, 1), shared(0, 1, 2), shared(0, 1, 3)]);
+        let first = piece(
+            vec![],
+            vec![shared(0, 1, 1), shared(0, 1, 2), shared(0, 1, 3)],
+        );
         let second = piece(
             vec![shared(2, 0, 10), shared(3, 1, 11), shared(0, 1, 12)],
             vec![shared(0, 1, 13), shared(0, 1, 14)],
@@ -743,8 +752,14 @@ mod tests {
         );
         // An encoder just started has short windows where the other has long ones, and
         // the windows' shapes differ where the sequences agree: no join.
-        let first = piece(vec![], vec![shared(0, 1, 1), shared(0, 1, 2), shared(0, 1, 3)]);
-        let second = piece(vec![shared(0, 0, 11), shared(2, 1, 12)], vec![shared(3, 1, 13)]);
+        let first = piece(
+            vec![],
+            vec![shared(0, 1, 1), shared(0, 1, 2), shared(0, 1, 3)],
+        );
+        let second = piece(
+            vec![shared(0, 0, 11), shared(2, 1, 12)],
+            vec![shared(3, 1, 13)],
+        );
         assert_eq!(seam(&first, &second), None);
         assert!(joined(&[first, second]).is_none());
         // The same frame is the same window, read or not: one encoder's frames cut in two.
@@ -788,7 +803,11 @@ mod tests {
 
     #[test]
     fn an_encoder_started_before_a_piece_joins_and_one_started_at_it_does_not() {
-        if hidden_command(resolve_ffmpeg_bin()).arg("-version").output().is_err() {
+        if hidden_command(resolve_ffmpeg_bin())
+            .arg("-version")
+            .output()
+            .is_err()
+        {
             eprintln!("skipping: ffmpeg is not installed");
             return;
         }
@@ -811,7 +830,14 @@ mod tests {
         assert_eq!(total, 2814);
         let plan = pieces(total);
         assert_eq!(plan.len(), 3);
-        let whole = encoder.encode(&Piece { from: 0, to: total, lead: 0 }).unwrap().body;
+        let whole = encoder
+            .encode(&Piece {
+                from: 0,
+                to: total,
+                lead: 0,
+            })
+            .unwrap()
+            .body;
         assert_eq!(whole.len() as u64, total);
         // The pieces one encoder's frames are, each with the frames before it as its lead.
         let cut = |piece: &Piece| Packets {
@@ -822,12 +848,20 @@ mod tests {
         // and the third as they are.
         let own = encoder.encode(&plan[1]).unwrap();
         assert_eq!((own.lead.len(), own.body.len()), (16, 1024));
-        assert!(own.body != cut(&plan[1]).body, "an encoder just started is the one running");
+        assert!(
+            own.body != cut(&plan[1]).body,
+            "an encoder just started is the one running"
+        );
         let mixed = [cut(&plan[0]), own, cut(&plan[2])];
         assert_eq!(joined(&mixed).expect("the pieces join").len() as u64, total);
         // Started two frames before the piece, its frame before the piece is the short
         // windows an encoder starts with, where the running encoder has a long one.
-        let late = encoder.encode(&Piece { lead: 2, ..plan[1].clone() }).unwrap();
+        let late = encoder
+            .encode(&Piece {
+                lead: 2,
+                ..plan[1].clone()
+            })
+            .unwrap();
         assert_eq!(late.lead.len(), 2);
         assert_eq!(seam(&mixed[0], &late), None);
         assert!(joined(&[cut(&plan[0]), late]).is_none());
@@ -845,7 +879,9 @@ mod tests {
         sound[from..to].fill(0);
         std::fs::write(&pcm, &sound).unwrap();
         let (names, before) = (plan.iter().map(|piece| encoder.name(piece).unwrap()), files);
-        let found: Vec<bool> = names.map(|name| kept.find(&name, "aacs").is_some()).collect();
+        let found: Vec<bool> = names
+            .map(|name| kept.find(&name, "aacs").is_some())
+            .collect();
         assert_eq!(found, [true, false, true]);
         let (edited, files) = encoder.frames(false).unwrap();
         assert_eq!(edited.len(), whole.len());

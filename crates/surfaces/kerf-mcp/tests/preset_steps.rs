@@ -74,7 +74,10 @@ fn ok(router: &KerfMcpRouter, name: &str, arguments: Value) -> Value {
 fn refused(router: &KerfMcpRouter, name: &str, arguments: Value) -> String {
     let response = router.call(name, arguments);
     assert_eq!(response["ok"], false, "{name}: {response}");
-    response["error"]["message"].as_str().unwrap_or_default().to_owned()
+    response["error"]["message"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned()
 }
 
 fn footage(path: &Path, source: &str) {
@@ -82,7 +85,14 @@ fn footage(path: &Path, source: &str) {
     let made = Command::new("ffmpeg")
         .args(["-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi"])
         .args(["-i", source])
-        .args(["-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p"])
+        .args([
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-pix_fmt",
+            "yuv420p",
+        ])
         .arg(path)
         .status()
         .expect("ffmpeg");
@@ -125,8 +135,10 @@ fn request(dir: &Path, media: &str) -> Value {
         .collect();
     steps.sort();
     let file = steps.pop().unwrap_or_else(|| work.join("request.json"));
-    serde_json::from_slice(&std::fs::read(&file).unwrap_or_else(|e| panic!("{}: {e}", file.display())))
-        .unwrap()
+    serde_json::from_slice(
+        &std::fs::read(&file).unwrap_or_else(|e| panic!("{}: {e}", file.display())),
+    )
+    .unwrap()
 }
 
 fn router(dir: &Path) -> KerfMcpRouter {
@@ -147,9 +159,18 @@ fn a_preset_carries_how_its_media_are_made_and_they_are_made_where_it_is_applied
         return;
     }
     let folders = tempfile::tempdir().unwrap();
-    let (source, elsewhere) = (folders.path().join("source"), folders.path().join("elsewhere"));
-    footage(&source.join("footage/walk.mp4"), "testsrc=size=160x90:rate=16:duration=1");
-    footage(&elsewhere.join("footage/other.mp4"), "testsrc2=size=160x90:rate=16:duration=2");
+    let (source, elsewhere) = (
+        folders.path().join("source"),
+        folders.path().join("elsewhere"),
+    );
+    footage(
+        &source.join("footage/walk.mp4"),
+        "testsrc=size=160x90:rate=16:duration=1",
+    );
+    footage(
+        &elsewhere.join("footage/other.mp4"),
+        "testsrc2=size=160x90:rate=16:duration=2",
+    );
     std::fs::write(source.join("project.kerf"), SOURCE).unwrap();
     std::fs::write(elsewhere.join("project.kerf"), ELSEWHERE).unwrap();
     let models = folders.path().join("models.json");
@@ -166,14 +187,36 @@ fn a_preset_carries_how_its_media_are_made_and_they_are_made_where_it_is_applied
 
     // ---- Saved where the pattern was made: each a preset of its own.
     let author = router(&source);
-    let saved = ok(&author, "edit", json!({"savePreset": "layers.kerfpreset", "sequence": "s2", "name": "Moved"}));
-    assert_eq!((saved["slots"].as_u64(), saved["made"].as_u64()), (Some(1), Some(2)), "{saved}");
-    let saved = ok(&author, "edit", json!({"savePreset": "car.kerfpreset", "sequence": "s1", "name": "Car"}));
-    assert_eq!((saved["slots"].as_u64(), saved["made"].as_u64()), (Some(0), Some(1)), "{saved}");
-    let layers = source.join("layers.kerfpreset").to_string_lossy().into_owned();
+    let saved = ok(
+        &author,
+        "edit",
+        json!({"savePreset": "layers.kerfpreset", "sequence": "s2", "name": "Moved"}),
+    );
+    assert_eq!(
+        (saved["slots"].as_u64(), saved["made"].as_u64()),
+        (Some(1), Some(2)),
+        "{saved}"
+    );
+    let saved = ok(
+        &author,
+        "edit",
+        json!({"savePreset": "car.kerfpreset", "sequence": "s1", "name": "Car"}),
+    );
+    assert_eq!(
+        (saved["slots"].as_u64(), saved["made"].as_u64()),
+        (Some(0), Some(1)),
+        "{saved}"
+    );
+    let layers = source
+        .join("layers.kerfpreset")
+        .to_string_lossy()
+        .into_owned();
     let car = source.join("car.kerfpreset").to_string_lossy().into_owned();
     let text = std::fs::read_to_string(&layers).unwrap();
-    assert!(text.contains("guide=slot:slot1") && !text.contains("footage/walk.mp4"), "{text}");
+    assert!(
+        text.contains("guide=slot:slot1") && !text.contains("footage/walk.mp4"),
+        "{text}"
+    );
 
     // ---- Looked at where it is applied: one slot, which the makings read, and the media
     // the preset makes apart from it, with their steps.
@@ -187,7 +230,10 @@ fn a_preset_carries_how_its_media_are_made_and_they_are_made_where_it_is_applied
     assert_eq!(made.len(), 2, "{looked}");
     assert_eq!(made[0]["id"], "man");
     assert_eq!(made[0]["of"], "slot1");
-    assert_eq!(made[0]["steps"], json!(["generate model=matte prompt=\"man\" guide=slot:slot1"]));
+    assert_eq!(
+        made[0]["steps"],
+        json!(["generate model=matte prompt=\"man\" guide=slot:slot1"])
+    );
     // A made media takes no binding.
     let wrong = refused(
         &applier,
@@ -205,7 +251,10 @@ fn a_preset_carries_how_its_media_are_made_and_they_are_made_where_it_is_applied
     assert_eq!(applied["status"], "accepted", "{applied}");
     let ids = applied["ids"].clone();
     assert_eq!(ids["slot1"], "other");
-    let (man, gone) = (ids["man"].as_str().unwrap().to_owned(), ids["gone"].as_str().unwrap().to_owned());
+    let (man, gone) = (
+        ids["man"].as_str().unwrap().to_owned(),
+        ids["gone"].as_str().unwrap().to_owned(),
+    );
     let now = project(&applier);
     let matte = now.media(&man).unwrap();
     assert_eq!(matte.path, format!("shots/{man}.mp4"));
@@ -217,12 +266,23 @@ fn a_preset_carries_how_its_media_are_made_and_they_are_made_where_it_is_applied
     );
     // The layers as in the pattern, each of them from the binding's start.
     let from = Time::from_seconds(0.25).unwrap();
-    for (clip, media) in [("mover", "other"), ("moves", man.as_str()), ("plate", gone.as_str())] {
-        assert_eq!(plays(&now, ids[clip].as_str().unwrap()), (media.to_owned(), from), "{clip}");
+    for (clip, media) in [
+        ("mover", "other"),
+        ("moves", man.as_str()),
+        ("plate", gone.as_str()),
+    ] {
+        assert_eq!(
+            plays(&now, ids[clip].as_str().unwrap()),
+            (media.to_owned(), from),
+            "{clip}"
+        );
     }
     let main = now.sequence("main").unwrap();
     assert!(!main.tracks[2].enabled);
-    assert_eq!(main.tracks[1].clips[0].effects[0].fx.as_str(), "key.trackmatte");
+    assert_eq!(
+        main.tracks[1].clips[0].effects[0].fx.as_str(),
+        "key.trackmatte"
+    );
 
     // Made there: each model is handed the other footage.
     for media in [&man, &gone] {
@@ -230,7 +290,13 @@ fn a_preset_carries_how_its_media_are_made_and_they_are_made_where_it_is_applied
         assert_eq!(take["status"], "made", "{take}");
         assert_eq!(take["path"], format!("shots/{media}.takes/001.mp4"));
         let asked = request(&elsewhere, media);
-        assert!(asked["guide"].as_str().unwrap().ends_with("/footage/other.mp4"), "{asked}");
+        assert!(
+            asked["guide"]
+                .as_str()
+                .unwrap()
+                .ends_with("/footage/other.mp4"),
+            "{asked}"
+        );
     }
     assert!(request(&elsewhere, &gone)["guides"]["mask"]
         .as_str()
@@ -241,7 +307,10 @@ fn a_preset_carries_how_its_media_are_made_and_they_are_made_where_it_is_applied
     let applied = ok(&applier, "edit", json!({"preset": car, "sequence": "car"}));
     assert_eq!(applied["status"], "accepted", "{applied}");
     let ids = applied["ids"].clone();
-    let (depth, scene) = (ids["depth"].as_str().unwrap().to_owned(), ids["s3"].as_str().unwrap().to_owned());
+    let (depth, scene) = (
+        ids["depth"].as_str().unwrap().to_owned(),
+        ids["s3"].as_str().unwrap().to_owned(),
+    );
     assert_ne!(scene, "s3");
     let now = project(&applier);
     assert_eq!(now.sequence(&scene).unwrap().tracks.len(), 1);
@@ -259,6 +328,12 @@ fn a_preset_carries_how_its_media_are_made_and_they_are_made_where_it_is_applied
     let take = ok(&applier, "make", json!({"media": depth, "wait": true}));
     assert_eq!(take["status"], "made", "{take}");
     let asked = request(&elsewhere, &depth);
-    assert_eq!((asked["prompt"].as_str(), asked["seed"].as_u64()), (Some("a blue car on a dry road"), Some(9)), "{asked}");
-    assert!(elsewhere.join(format!("shots/{depth}.takes/001.work/guide.mp4")).is_file());
+    assert_eq!(
+        (asked["prompt"].as_str(), asked["seed"].as_u64()),
+        (Some("a blue car on a dry road"), Some(9)),
+        "{asked}"
+    );
+    assert!(elsewhere
+        .join(format!("shots/{depth}.takes/001.work/guide.mp4"))
+        .is_file());
 }

@@ -337,14 +337,13 @@ impl Building<'_> {
                     // What it comes to along its clip, a number a frame, as the document
                     // would have a model handed it.
                     let step = (frames as usize).div_ceil(POINTS).max(1);
-                    let at_frame = |frame: i64| match value
-                        .map(|value| value.value_at(rate.time_of(frame)))
-                    {
-                        Some(Value::Number(number)) if number.is_finite() => {
-                            (number.clamp(0.0, 1.0) * 1e4).round() / 1e4
-                        }
-                        _ => 0.0,
-                    };
+                    let at_frame =
+                        |frame: i64| match value.map(|value| value.value_at(rate.time_of(frame))) {
+                            Some(Value::Number(number)) if number.is_finite() => {
+                                (number.clamp(0.0, 1.0) * 1e4).round() / 1e4
+                            }
+                            _ => 0.0,
+                        };
                     let mut values: Vec<f64> = (0..frames).step_by(step).map(at_frame).collect();
                     if (frames - 1) % step as i64 != 0 {
                         values.push(at_frame(frames - 1));
@@ -369,7 +368,8 @@ impl Building<'_> {
                             .tracks
                             .iter()
                             .find(|track| track.clips.iter().any(|clip| clip.id == heard.id));
-                        let on_sound = track_of.is_some_and(|track| track.kind == kerf_model::TrackKind::Audio);
+                        let on_sound = track_of
+                            .is_some_and(|track| track.kind == kerf_model::TrackKind::Audio);
                         if plays && on_sound {
                             sounds.push(json!({
                                 "clip": heard.id.as_str(),
@@ -447,7 +447,12 @@ impl Building<'_> {
     }
 
     /// The node of one of the project's cast or styles.
-    fn cast(&mut self, kind: super::cast::Kind, name: &str, cast: Option<&super::cast::Cast>) -> String {
+    fn cast(
+        &mut self,
+        kind: super::cast::Kind,
+        name: &str,
+        cast: Option<&super::cast::Cast>,
+    ) -> String {
         let word = kind.word();
         self.read(format!("{word}:{name}"), |_| {
             let entry = cast.and_then(|cast| cast.of(kind).find(|(named, _)| *named == name));
@@ -517,7 +522,9 @@ impl Building<'_> {
                     .more
                     .iter()
                     .filter(|(name, _)| !ask.more.contains_key(*name))
-                    .map(|(name, default)| json!({"name": name, "value": null, "default": default})),
+                    .map(
+                        |(name, default)| json!({"name": name, "value": null, "default": default}),
+                    ),
             );
             if let Some(about) = &takes.about {
                 holds.insert("about".to_owned(), json!(about));
@@ -665,7 +672,11 @@ pub fn graph(project: &Project, directory: &Path, id: &str, models: &Models) -> 
                 holds.insert("makes".to_owned(), json!(to));
                 holds.insert(
                     "pass".to_owned(),
-                    json!(if *pass == Pass::Picture { "picture" } else { pass.name() }),
+                    json!(if *pass == Pass::Picture {
+                        "picture"
+                    } else {
+                        pass.name()
+                    }),
                 );
                 holds.insert(
                     "size".to_owned(),
@@ -715,8 +726,14 @@ pub fn graph(project: &Project, directory: &Path, id: &str, models: &Models) -> 
                     title: "Join".to_owned(),
                     detail: match lap {
                         0 => format!("{} parts, end to end", parts.len()),
-                        1 => format!("{} parts, each going on from the last frame of the one before", parts.len()),
-                        lap => format!("{} parts, each {lap} frames into the one before", parts.len()),
+                        1 => format!(
+                            "{} parts, each going on from the last frame of the one before",
+                            parts.len()
+                        ),
+                        lap => format!(
+                            "{} parts, each {lap} frames into the one before",
+                            parts.len()
+                        ),
                     },
                     gives: Gives::Video,
                     line: Some(line),
@@ -749,7 +766,8 @@ pub fn graph(project: &Project, directory: &Path, id: &str, models: &Models) -> 
                 .filter(|makes| *makes != super::OUT)
                 .and_then(|makes| super::takes::step_file(directory, media, shown, makes));
             if let Some(file) = file {
-                node.holds.insert("made".to_owned(), json!({"take": shown, "path": file}));
+                node.holds
+                    .insert("made".to_owned(), json!({"take": shown, "path": file}));
             }
         }
     }

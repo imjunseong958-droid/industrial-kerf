@@ -168,7 +168,10 @@ fn a_mesh_is_read_as_any_clip_is() {
     // of the frame's height.
     assert!(left < 0.5 - 0.1125 && left > 0.34, "{there:?}");
     assert!(right > 0.5 + 0.1125 && right < 0.66, "{there:?}");
-    assert!(top < 0.4 && top > 0.34 && bottom > 0.6 && bottom < 0.66, "{there:?}");
+    assert!(
+        top < 0.4 && top > 0.34 && bottom > 0.6 && bottom < 0.66,
+        "{there:?}"
+    );
     assert!(there.hidden < 0.03 && there.by.is_empty(), "{there:?}");
     // The fault a guide once had, with a mesh for the car: a floor above its foot hides it.
     let shown = read(&car("rotate_x=-80 y=0.1 z=0 scale=3", "y=0.2 z=0.5"));
@@ -199,7 +202,10 @@ fn a_clip_a_parent_takes_into_depth_is_read_where_it_is_drawn() {
     };
     let at = |body: &str| {
         let shown = read(body);
-        (clip(&shown, "box").at.expect("it is in the frame"), clip(&shown, "box").area)
+        (
+            clip(&shown, "box").at.expect("it is in the frame"),
+            clip(&shown, "box").area,
+        )
     };
     let (near, near_area) = at(&rigged("x=0", ""));
     // Moved back with its null it is as small as its own `z` would have it, and smaller
@@ -207,12 +213,18 @@ fn a_clip_a_parent_takes_into_depth_is_read_where_it_is_drawn() {
     let (far, far_area) = at(&rigged("z=2", ""));
     assert_eq!((far, far_area), at(&rigged("x=0", "z=2")));
     assert!(far_area < near_area / 4.0, "{far_area} of {near_area}");
-    assert!(far[2] - far[0] < (near[2] - near[0]) / 2.0, "{far:?} of {near:?}");
+    assert!(
+        far[2] - far[0] < (near[2] - near[0]) / 2.0,
+        "{far:?} of {near:?}"
+    );
     // Swung a quarter round its null from the right of it, it is in the middle of the
     // frame and further off; the other way, it has come past the camera and is not read.
     let (swung, _) = at(&rigged("rotate_y=-90", "x=0.5625"));
     assert!((swung[0] + swung[2] - 1.0).abs() < 0.02, "{swung:?}");
-    assert!(swung[2] - swung[0] < near[2] - near[0], "{swung:?} of {near:?}");
+    assert!(
+        swung[2] - swung[0] < near[2] - near[0],
+        "{swung:?} of {near:?}"
+    );
     let shown = read(&rigged("rotate_y=90", "x=1.125"));
     assert!(clip(&shown, "box").at.is_none(), "{shown:?}");
 }
@@ -283,9 +295,8 @@ fn with((id, clip): (String, String), more: &str) -> (String, String) {
 /// A cart of thirteen solids, named `<name>_…`: a bed, two sides, two shafts, two ends, and
 /// two axles with four wheels.
 fn cart(name: &str, x: f64, z: f64) -> Vec<(String, String)> {
-    let wood = |part: &str, size, place| {
-        solid(&format!("{name}_{part}"), "box", size, place, "#906838")
-    };
+    let wood =
+        |part: &str, size, place| solid(&format!("{name}_{part}"), "box", size, place, "#906838");
     let round = |part: &str, size, place, color| {
         let part = solid(&format!("{name}_{part}"), "cylinder", size, place, color);
         with(part, " rotate_x=90")
@@ -299,11 +310,31 @@ fn cart(name: &str, x: f64, z: f64) -> Vec<(String, String)> {
         wood("end1", [0.02, 0.1, 0.3], [x - 0.24, 0.27, z]),
         wood("end2", [0.02, 0.1, 0.3], [x + 0.24, 0.27, z]),
         round("axle1", [0.03, 0.36, 0.03], [x - 0.17, 0.38, z], "#403020"),
-        round("wheel1", [0.24, 0.03, 0.24], [x - 0.17, 0.38, z - 0.17], "#604020"),
-        round("wheel2", [0.24, 0.03, 0.24], [x - 0.17, 0.38, z + 0.17], "#604020"),
+        round(
+            "wheel1",
+            [0.24, 0.03, 0.24],
+            [x - 0.17, 0.38, z - 0.17],
+            "#604020",
+        ),
+        round(
+            "wheel2",
+            [0.24, 0.03, 0.24],
+            [x - 0.17, 0.38, z + 0.17],
+            "#604020",
+        ),
         round("axle2", [0.03, 0.36, 0.03], [x + 0.17, 0.38, z], "#403020"),
-        round("wheel3", [0.24, 0.03, 0.24], [x + 0.17, 0.38, z - 0.17], "#604020"),
-        round("wheel4", [0.24, 0.03, 0.24], [x + 0.17, 0.38, z + 0.17], "#604020"),
+        round(
+            "wheel3",
+            [0.24, 0.03, 0.24],
+            [x + 0.17, 0.38, z - 0.17],
+            "#604020",
+        ),
+        round(
+            "wheel4",
+            [0.24, 0.03, 0.24],
+            [x + 0.17, 0.38, z + 0.17],
+            "#604020",
+        ),
     ]
 }
 
@@ -318,7 +349,10 @@ fn street(size: &str) -> Project {
     };
     let mut clips = vec![
         flat("sky", "color=#88aaff"),
-        flat("ground", "color=#a09880 three_d=true rotate_x=-90 y=0.5 z=4 scale=16"),
+        flat(
+            "ground",
+            "color=#a09880 three_d=true rotate_x=-90 y=0.5 z=4 scale=16",
+        ),
     ];
     let houses = [
         (-1.15, 0.4, "#c8b090"),
@@ -331,15 +365,49 @@ fn street(size: &str) -> Project {
     ];
     for (at, (x, z, color)) in houses.into_iter().enumerate() {
         let door = [x + if x < 0.0 { 0.47 } else { -0.47 }, 0.3, z];
-        let roof = solid(&format!("roof{at}"), "box", [0.64, 0.64, 0.9], [x, -0.3, z], "#804030");
-        clips.push(solid(&format!("house{at}"), "box", [0.9, 0.8, 0.9], [x, 0.1, z], color));
+        let roof = solid(
+            &format!("roof{at}"),
+            "box",
+            [0.64, 0.64, 0.9],
+            [x, -0.3, z],
+            "#804030",
+        );
+        clips.push(solid(
+            &format!("house{at}"),
+            "box",
+            [0.9, 0.8, 0.9],
+            [x, 0.1, z],
+            color,
+        ));
         clips.push(with(roof, " rotation=45"));
-        clips.push(solid(&format!("door{at}"), "box", [0.04, 0.4, 0.2], door, "#503020"));
+        clips.push(solid(
+            &format!("door{at}"),
+            "box",
+            [0.04, 0.4, 0.2],
+            door,
+            "#503020",
+        ));
     }
-    let people = [(0.25, 0.7, "#3050a0"), (-0.2, 1.9, "#a03040"), (0.1, 3.2, "#308050")];
+    let people = [
+        (0.25, 0.7, "#3050a0"),
+        (-0.2, 1.9, "#a03040"),
+        (0.1, 3.2, "#308050"),
+    ];
     for (at, (x, z, color)) in people.into_iter().enumerate() {
-        clips.push(solid(&format!("body{at}"), "cylinder", [0.12, 0.3, 0.12], [x, 0.35, z], color));
-        clips.push(solid(&format!("head{at}"), "ball", [0.11; 3], [x, 0.145, z], "#e0b090"));
+        clips.push(solid(
+            &format!("body{at}"),
+            "cylinder",
+            [0.12, 0.3, 0.12],
+            [x, 0.35, z],
+            color,
+        ));
+        clips.push(solid(
+            &format!("head{at}"),
+            "ball",
+            [0.11; 3],
+            [x, 0.145, z],
+            "#e0b090",
+        ));
     }
     clips.extend(cart("parked", 0.35, 2.5));
     clips.extend(cart("cart", -0.3, 1.1));
@@ -403,9 +471,15 @@ fn of_more_clips_than_a_frame_tells_apart_the_lowest_are_left_out_and_named() {
     // More boxes than are read on one frame, side by side in rows, each on a track of its
     // own, and on the lowest track a wall nearer than them all, before the last of them.
     let boxes = MOST_CLIPS + 2;
-    let place = |at: usize| ((at % 24) as f64 / 24.0 - 0.48, (at / 24) as f64 / 12.0 - 0.45);
+    let place = |at: usize| {
+        (
+            (at % 24) as f64 / 24.0 - 0.48,
+            (at / 24) as f64 / 12.0 - 0.45,
+        )
+    };
     let clip = |track: usize, id: &str, side: f64, (x, y): (f64, f64), more: &str| {
-        let set = format!("kind=box width={side} height={side} length=0.02 x={x:.3} y={y:.3}{more}");
+        let set =
+            format!("kind=box width={side} height={side} length=0.02 x={x:.3} y={y:.3}{more}");
         format!("  track V{track} video\n    clip {id} gen=mesh@1 at=0f dur=24f\n      set {set}\n")
     };
     let mut text =

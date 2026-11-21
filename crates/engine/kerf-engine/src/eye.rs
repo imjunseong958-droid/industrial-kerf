@@ -314,11 +314,7 @@ fn in_place(id: &str) -> bool {
 
 /// Where the subject's box `of`, in shares of the take's picture, is on the program's
 /// frame, as `landing` puts the picture down.
-fn on_frame(
-    landing: &Landing,
-    shot: &Shot,
-    of: [f64; 4],
-) -> std::result::Result<[f64; 4], String> {
+fn on_frame(landing: &Landing, shot: &Shot, of: [f64; 4]) -> std::result::Result<[f64; 4], String> {
     const EDGE: f64 = 1e-9;
     let kept = landing.kept;
     if of[0] < kept[0] - EDGE
@@ -333,7 +329,12 @@ fn on_frame(
     }
     // A picture that is turned has its box's corners elsewhere: the box around them.
     let mut around = [f64::MAX, f64::MAX, f64::MIN, f64::MIN];
-    for corner in [[of[0], of[1]], [of[2], of[1]], [of[2], of[3]], [of[0], of[3]]] {
+    for corner in [
+        [of[0], of[1]],
+        [of[2], of[1]],
+        [of[2], of[3]],
+        [of[0], of[3]],
+    ] {
         let [x, y] = landing.on_frame(corner);
         around = [
             around[0].min(x),
@@ -396,8 +397,10 @@ fn taken(shot: &Shot, spot: &Spot, pictures: &Beside) -> std::result::Result<[f6
     }
     let guide = spot.in_take;
     let middle = [
-        (guide[0] + guide[2]) / 2.0 + ((there[0] + there[2]) - (asked[0] + asked[2])) / 2.0 / size.0,
-        (guide[1] + guide[3]) / 2.0 + ((there[1] + there[3]) - (asked[1] + asked[3])) / 2.0 / size.1,
+        (guide[0] + guide[2]) / 2.0
+            + ((there[0] + there[2]) - (asked[0] + asked[2])) / 2.0 / size.0,
+        (guide[1] + guide[3]) / 2.0
+            + ((there[1] + there[3]) - (asked[1] + asked[3])) / 2.0 / size.1,
     ];
     let half = [
         (guide[2] - guide[0]) / 2.0 * (there[2] - there[0]) / (asked[2] - asked[0]),
@@ -473,7 +476,9 @@ impl<'a> Reader<'a> {
                 ))
             }
             Content::Generator { fx, .. } => {
-                return Err(format!("`{id}` is a `gen={fx}` clip, not a shot with a guide"))
+                return Err(format!(
+                    "`{id}` is a `gen={fx}` clip, not a shot with a guide"
+                ))
             }
             Content::Caption { .. } => return Err(format!("`{id}` is a caption")),
         };
@@ -530,7 +535,9 @@ impl<'a> Reader<'a> {
                 "`{subject}` is a clip of `{sequence}`, which no `render` step of `{name}` draws"
             ));
         };
-        let from = of_it().map(|drawn| drawn.from).fold(f64::INFINITY, f64::min);
+        let from = of_it()
+            .map(|drawn| drawn.from)
+            .fold(f64::INFINITY, f64::min);
         let from = Time::from_seconds(from).unwrap_or(Time::ZERO);
         let Some(video) = media.video else {
             return Err(format!("`{name}`, which `{id}` plays, has no picture"));
@@ -576,7 +583,9 @@ impl<'a> Reader<'a> {
             .lands(clip, at)
             .map_err(|why| format!("where `{clip}` puts its picture is not read: {why}"))?;
         if landing.opacity <= 0.0 {
-            return Err(format!("`{clip}` is clear where it {end}, and shows nothing"));
+            return Err(format!(
+                "`{clip}` is clear where it {end}, and shows nothing"
+            ));
         }
         if landing.masked {
             return Err(format!("`{clip}` has a mask, which may cut `{subject}`"));
@@ -605,13 +614,18 @@ impl<'a> Reader<'a> {
         };
         let across = |x: f64| 0.5 + (x / wide - 0.5) * shot.grown.0;
         let down = |y: f64| 0.5 + (y / tall - 0.5) * shot.grown.1;
-        let in_take = within([across(seen[0]), down(seen[1]), across(seen[2]), down(seen[3])])
-            .ok_or_else(|| {
-                format!(
-                    "`{}` is another shape than its guide `{}`, and `{subject}` is in what was cut off",
-                    shot.media.id, shot.sequence
-                )
-            })?;
+        let in_take = within([
+            across(seen[0]),
+            down(seen[1]),
+            across(seen[2]),
+            down(seen[3]),
+        ])
+        .ok_or_else(|| {
+            format!(
+                "`{}` is another shape than its guide `{}`, and `{subject}` is in what was cut off",
+                shot.media.id, shot.sequence
+            )
+        })?;
         let on_frame = on_frame(&landing, shot, in_take)?;
         Ok(Spot {
             landing,
@@ -632,9 +646,8 @@ impl<'a> Reader<'a> {
     ) -> Option<std::result::Result<Beside, String>> {
         let (wide, tall) = (spot.ids.width as usize, spot.ids.height as usize);
         // The part of the guide's frame the take's picture is of.
-        let part = |whole: usize, grown: f64| {
-            ((whole as f64 / grown).round() as usize).clamp(1, whole)
-        };
+        let part =
+            |whole: usize, grown: f64| ((whole as f64 / grown).round() as usize).clamp(1, whole);
         let (w, h) = (part(wide, shot.grown.0), part(tall, shot.grown.1));
         let take = match takes(shot.media, spot.landing.frame, (w as u32, h as u32)) {
             Ok(Some(take)) => take,
@@ -685,8 +698,8 @@ impl<'a> Reader<'a> {
                 shot.sequence
             ));
         }
-        let (seed, _) = box_of(&part(&spot.ids.rgba), w, shot.color)
-            .ok_or_else(|| nothing_to_follow(shot))?;
+        let (seed, _) =
+            box_of(&part(&spot.ids.rgba), w, shot.color).ok_or_else(|| nothing_to_follow(shot))?;
         Ok(Beside {
             size: (w, h),
             seed,

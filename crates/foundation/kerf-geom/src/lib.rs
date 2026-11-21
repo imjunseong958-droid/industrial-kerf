@@ -4,7 +4,17 @@
 //!
 //! y grows downwards and angles are degrees clockwise on screen.
 
-#![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable))]
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        clippy::unimplemented,
+        clippy::todo,
+        clippy::unreachable
+    )
+)]
 
 use serde::{Deserialize, Serialize};
 use std::ops::{Add, AddAssign, Div, Mul, Neg, Sub};
@@ -105,17 +115,39 @@ impl Default for Affine {
 }
 
 impl Affine {
-    pub const IDENTITY: Affine = Affine { a: 1.0, b: 0.0, c: 0.0, d: 1.0, e: 0.0, f: 0.0 };
+    pub const IDENTITY: Affine = Affine {
+        a: 1.0,
+        b: 0.0,
+        c: 0.0,
+        d: 1.0,
+        e: 0.0,
+        f: 0.0,
+    };
     pub fn translate(x: f64, y: f64) -> Self {
-        Affine { e: x, f: y, ..Self::IDENTITY }
+        Affine {
+            e: x,
+            f: y,
+            ..Self::IDENTITY
+        }
     }
     pub fn scale(sx: f64, sy: f64) -> Self {
-        Affine { a: sx, d: sy, ..Self::IDENTITY }
+        Affine {
+            a: sx,
+            d: sy,
+            ..Self::IDENTITY
+        }
     }
     /// Rotation by `deg` degrees, clockwise on screen (y down), matching Premiere's Rotation.
     pub fn rotate_deg(deg: f64) -> Self {
         let (s, c) = deg.to_radians().sin_cos();
-        Affine { a: c, b: s, c: -s, d: c, e: 0.0, f: 0.0 }
+        Affine {
+            a: c,
+            b: s,
+            c: -s,
+            d: c,
+            e: 0.0,
+            f: 0.0,
+        }
     }
     /// `self * o`: apply `o` first, then `self`.
     pub fn then_apply(&self, o: &Affine) -> Affine {
@@ -130,7 +162,10 @@ impl Affine {
         }
     }
     pub fn apply(&self, p: Vec2) -> Vec2 {
-        Vec2::new(self.a * p.x + self.c * p.y + self.e, self.b * p.x + self.d * p.y + self.f)
+        Vec2::new(
+            self.a * p.x + self.c * p.y + self.e,
+            self.b * p.x + self.d * p.y + self.f,
+        )
     }
     pub fn determinant(&self) -> f64 {
         self.a * self.d - self.b * self.c
@@ -145,14 +180,27 @@ impl Affine {
         let b = -self.b * inv;
         let c = -self.c * inv;
         let d = self.a * inv;
-        Some(Affine { a, b, c, d, e: -(a * self.e + c * self.f), f: -(b * self.e + d * self.f) })
+        Some(Affine {
+            a,
+            b,
+            c,
+            d,
+            e: -(a * self.e + c * self.f),
+            f: -(b * self.e + d * self.f),
+        })
     }
     pub fn is_identity(&self) -> bool {
         *self == Self::IDENTITY
     }
     /// Bounding box of a transformed rect.
     pub fn bounds(&self, r: &Rect) -> Rect {
-        let pts = [Vec2::new(r.x, r.y), Vec2::new(r.right(), r.y), Vec2::new(r.x, r.bottom()), Vec2::new(r.right(), r.bottom())].map(|p| self.apply(p));
+        let pts = [
+            Vec2::new(r.x, r.y),
+            Vec2::new(r.right(), r.y),
+            Vec2::new(r.x, r.bottom()),
+            Vec2::new(r.right(), r.bottom()),
+        ]
+        .map(|p| self.apply(p));
         let x0 = pts.iter().map(|p| p.x).fold(f64::INFINITY, f64::min);
         let y0 = pts.iter().map(|p| p.y).fold(f64::INFINITY, f64::min);
         let x1 = pts.iter().map(|p| p.x).fold(f64::NEG_INFINITY, f64::max);
@@ -181,18 +229,33 @@ pub struct Bounds {
 }
 
 impl Bounds {
-    pub const EMPTY: Bounds = Bounds { x0: f64::INFINITY, y0: f64::INFINITY, x1: f64::NEG_INFINITY, y1: f64::NEG_INFINITY };
+    pub const EMPTY: Bounds = Bounds {
+        x0: f64::INFINITY,
+        y0: f64::INFINITY,
+        x1: f64::NEG_INFINITY,
+        y1: f64::NEG_INFINITY,
+    };
     pub fn new(x0: f64, y0: f64, x1: f64, y1: f64) -> Bounds {
         Bounds { x0, y0, x1, y1 }
     }
     pub fn from_size(w: f64, h: f64) -> Bounds {
-        Bounds { x0: 0.0, y0: 0.0, x1: w, y1: h }
+        Bounds {
+            x0: 0.0,
+            y0: 0.0,
+            x1: w,
+            y1: h,
+        }
     }
     pub fn is_empty(&self) -> bool {
         !(self.x1 > self.x0 && self.y1 > self.y0)
     }
     pub fn intersect(&self, o: &Bounds) -> Bounds {
-        Bounds { x0: self.x0.max(o.x0), y0: self.y0.max(o.y0), x1: self.x1.min(o.x1), y1: self.y1.min(o.y1) }
+        Bounds {
+            x0: self.x0.max(o.x0),
+            y0: self.y0.max(o.y0),
+            x1: self.x1.min(o.x1),
+            y1: self.y1.min(o.y1),
+        }
     }
     pub fn include(&mut self, p: Vec2) {
         self.x0 = self.x0.min(p.x);
@@ -201,14 +264,29 @@ impl Bounds {
         self.y1 = self.y1.max(p.y);
     }
     pub fn inflate(&self, d: f64) -> Bounds {
-        Bounds { x0: self.x0 - d, y0: self.y0 - d, x1: self.x1 + d, y1: self.y1 + d }
+        Bounds {
+            x0: self.x0 - d,
+            y0: self.y0 - d,
+            x1: self.x1 + d,
+            y1: self.y1 + d,
+        }
     }
     pub fn corners(&self) -> [Vec2; 4] {
-        [vec2(self.x0, self.y0), vec2(self.x1, self.y0), vec2(self.x1, self.y1), vec2(self.x0, self.y1)]
+        [
+            vec2(self.x0, self.y0),
+            vec2(self.x1, self.y0),
+            vec2(self.x1, self.y1),
+            vec2(self.x0, self.y1),
+        ]
     }
     /// Smallest integer rect covering this one.
     pub fn round_out(&self) -> Bounds {
-        Bounds { x0: self.x0.floor(), y0: self.y0.floor(), x1: self.x1.ceil(), y1: self.y1.ceil() }
+        Bounds {
+            x0: self.x0.floor(),
+            y0: self.y0.floor(),
+            x1: self.x1.ceil(),
+            y1: self.y1.ceil(),
+        }
     }
 }
 
@@ -239,14 +317,21 @@ impl Mat3 {
     /// The After Effects 2D layer transform: layer space → parent space.
     /// `p' = position + R(rotation) · S(scale/100) · (p - anchor)`.
     pub fn layer_2d(anchor: Vec2, position: Vec2, scale_pct: Vec2, rotation_deg: f64) -> Mat3 {
-        Mat3::translate(position) * Mat3::rotate_deg(rotation_deg) * Mat3::scale(scale_pct / 100.0) * Mat3::translate(-anchor)
+        Mat3::translate(position)
+            * Mat3::rotate_deg(rotation_deg)
+            * Mat3::scale(scale_pct / 100.0)
+            * Mat3::translate(-anchor)
     }
     pub fn apply(&self, p: Vec2) -> Vec2 {
         let m = &self.0;
         let x = m[0][0] * p.x + m[0][1] * p.y + m[0][2];
         let y = m[1][0] * p.x + m[1][1] * p.y + m[1][2];
         let w = m[2][0] * p.x + m[2][1] * p.y + m[2][2];
-        if w != 1.0 && w != 0.0 { vec2(x / w, y / w) } else { vec2(x, y) }
+        if w != 1.0 && w != 0.0 {
+            vec2(x / w, y / w)
+        } else {
+            vec2(x, y)
+        }
     }
     /// Apply to a direction (ignores translation; affine only).
     pub fn apply_vec(&self, v: Vec2) -> Vec2 {
@@ -258,7 +343,8 @@ impl Mat3 {
     }
     pub fn determinant(&self) -> f64 {
         let m = &self.0;
-        m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
+        m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1])
+            - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
             + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0])
     }
     pub fn inverse(&self) -> Option<Mat3> {
@@ -268,9 +354,21 @@ impl Mat3 {
         }
         let m = &self.0;
         let inv = [
-            [(m[1][1] * m[2][2] - m[1][2] * m[2][1]) / d, (m[0][2] * m[2][1] - m[0][1] * m[2][2]) / d, (m[0][1] * m[1][2] - m[0][2] * m[1][1]) / d],
-            [(m[1][2] * m[2][0] - m[1][0] * m[2][2]) / d, (m[0][0] * m[2][2] - m[0][2] * m[2][0]) / d, (m[0][2] * m[1][0] - m[0][0] * m[1][2]) / d],
-            [(m[1][0] * m[2][1] - m[1][1] * m[2][0]) / d, (m[0][1] * m[2][0] - m[0][0] * m[2][1]) / d, (m[0][0] * m[1][1] - m[0][1] * m[1][0]) / d],
+            [
+                (m[1][1] * m[2][2] - m[1][2] * m[2][1]) / d,
+                (m[0][2] * m[2][1] - m[0][1] * m[2][2]) / d,
+                (m[0][1] * m[1][2] - m[0][2] * m[1][1]) / d,
+            ],
+            [
+                (m[1][2] * m[2][0] - m[1][0] * m[2][2]) / d,
+                (m[0][0] * m[2][2] - m[0][2] * m[2][0]) / d,
+                (m[0][2] * m[1][0] - m[0][0] * m[1][2]) / d,
+            ],
+            [
+                (m[1][0] * m[2][1] - m[1][1] * m[2][0]) / d,
+                (m[0][1] * m[2][0] - m[0][0] * m[2][1]) / d,
+                (m[0][0] * m[1][1] - m[0][1] * m[1][0]) / d,
+            ],
         ];
         Some(Mat3(inv))
     }
@@ -288,7 +386,9 @@ impl Mat3 {
     }
     /// Projective transform mapping the unit square corners to `q` (in order (0,0),(1,0),(1,1),(0,1)).
     pub fn square_to_quad(q: [Vec2; 4]) -> Mat3 {
-        let (x0, y0, x1, y1, x2, y2, x3, y3) = (q[0].x, q[0].y, q[1].x, q[1].y, q[2].x, q[2].y, q[3].x, q[3].y);
+        let (x0, y0, x1, y1, x2, y2, x3, y3) = (
+            q[0].x, q[0].y, q[1].x, q[1].y, q[2].x, q[2].y, q[3].x, q[3].y,
+        );
         let dx1 = x1 - x2;
         let dx2 = x3 - x2;
         let dy1 = y1 - y2;
@@ -296,12 +396,20 @@ impl Mat3 {
         let sx = x0 - x1 + x2 - x3;
         let sy = y0 - y1 + y2 - y3;
         if sx.abs() < 1e-12 && sy.abs() < 1e-12 {
-            return Mat3([[x1 - x0, x3 - x0, x0], [y1 - y0, y3 - y0, y0], [0.0, 0.0, 1.0]]);
+            return Mat3([
+                [x1 - x0, x3 - x0, x0],
+                [y1 - y0, y3 - y0, y0],
+                [0.0, 0.0, 1.0],
+            ]);
         }
         let den = dx1 * dy2 - dx2 * dy1;
         let g = (sx * dy2 - dx2 * sy) / den;
         let h = (dx1 * sy - sx * dy1) / den;
-        Mat3([[x1 - x0 + g * x1, x3 - x0 + h * x3, x0], [y1 - y0 + g * y1, y3 - y0 + h * y3, y0], [g, h, 1.0]])
+        Mat3([
+            [x1 - x0 + g * x1, x3 - x0 + h * x3, x0],
+            [y1 - y0 + g * y1, y3 - y0 + h * y3, y0],
+            [g, h, 1.0],
+        ])
     }
 }
 
@@ -324,7 +432,12 @@ mod tests {
 
     #[test]
     fn inverse_roundtrip() {
-        let m = Affine::motion(Vec2::new(960.0, 540.0), Vec2::new(1.5, 0.75), 33.0, Vec2::new(100.0, 50.0));
+        let m = Affine::motion(
+            Vec2::new(960.0, 540.0),
+            Vec2::new(1.5, 0.75),
+            33.0,
+            Vec2::new(100.0, 50.0),
+        );
         let inv = m.inverse().unwrap();
         let p = Vec2::new(12.0, -7.0);
         let q = inv.apply(m.apply(p));

@@ -71,7 +71,11 @@ fn every_sample_of_a_mix_is_the_one_the_document_puts_there() {
     let dir = tempfile::tempdir().unwrap();
     let source = dir.path().join("told.wav");
     write_wav(&source, 40);
-    if Command::new(resolve_ffmpeg_bin()).arg("-version").output().is_err() {
+    if Command::new(resolve_ffmpeg_bin())
+        .arg("-version")
+        .output()
+        .is_err()
+    {
         eprintln!("skipping: ffmpeg is not installed");
         return;
     }
@@ -98,14 +102,25 @@ fn every_sample_of_a_mix_is_the_one_the_document_puts_there() {
         .unwrap_or_else(|errors| panic!("{errors:?}"))
         .project;
     let out = dir.path().join("mix.wav");
-    render_sound(&project, None, None, RATE as u32, &out, &CancellationToken::new())
-        .expect("mixes");
+    render_sound(
+        &project,
+        None,
+        None,
+        RATE as u32,
+        &out,
+        &CancellationToken::new(),
+    )
+    .expect("mixes");
     let mixed = samples(&out);
     if let Some(keep) = std::env::var_os("KERF_KEEP_MIX") {
         std::fs::copy(&out, keep).unwrap();
     }
     let total = sample_of(220);
-    assert!((mixed.len() as i64 - total).abs() <= 1, "{} of {total}", mixed.len());
+    assert!(
+        (mixed.len() as i64 - total).abs() <= 1,
+        "{} of {total}",
+        mixed.len()
+    );
 
     // What each clip plays at each sample of the sequence, with its media a sample either way,
     // since a place in a file that falls between two samples is read from one of them. A clip
@@ -130,13 +145,17 @@ fn every_sample_of_a_mix_is_the_one_the_document_puts_there() {
             // Where every other clip that plays is known, clear of every clip's ends.
             let judged: Vec<i64> = (from + 2..to - 2)
                 .filter(|sample| {
-                    clips.iter().zip(&slips).enumerate().all(|(other, (clip, slip))| {
-                        let (start, end) = span(clip);
-                        other == index
-                            || *sample < start - 2
-                            || *sample >= end + 2
-                            || (slip.is_some() && *sample >= start + 2 && *sample < end - 2)
-                    })
+                    clips
+                        .iter()
+                        .zip(&slips)
+                        .enumerate()
+                        .all(|(other, (clip, slip))| {
+                            let (start, end) = span(clip);
+                            other == index
+                                || *sample < start - 2
+                                || *sample >= end + 2
+                                || (slip.is_some() && *sample >= start + 2 && *sample < end - 2)
+                        })
                 })
                 .collect();
             if judged.len() < 1000 {
@@ -151,11 +170,15 @@ fn every_sample_of_a_mix_is_the_one_the_document_puts_there() {
                         .filter(|(other, _)| *other != index)
                         .map(|(_, (clip, slip))| plays(clip, slip.unwrap_or(0), *sample))
                         .sum();
-                    (mixed[*sample as usize] - others - plays(&clips[index], *slip, *sample)).abs() <= 2
+                    (mixed[*sample as usize] - others - plays(&clips[index], *slip, *sample)).abs()
+                        <= 2
                 })
             });
             slips[index] = Some(found.unwrap_or_else(|| {
-                panic!("the clip at frame {} does not play its media", clips[index].1)
+                panic!(
+                    "the clip at frame {} does not play its media",
+                    clips[index].1
+                )
             }));
         }
     }

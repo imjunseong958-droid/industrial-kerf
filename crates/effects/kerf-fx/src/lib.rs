@@ -344,7 +344,12 @@ impl RasterStack {
             kerf_draw::mask::coverage(&flat, width as usize, height as usize)
         };
         let mut image = Image::new(width, height);
-        for (index, (pixel, bytes)) in image.data.iter_mut().zip(rgba.as_chunks::<4>().0.iter()).enumerate() {
+        for (index, (pixel, bytes)) in image
+            .data
+            .iter_mut()
+            .zip(rgba.as_chunks::<4>().0.iter())
+            .enumerate()
+        {
             let cover = covered.as_ref().map_or(1.0, |covered| covered[index]);
             let alpha = f32::from(bytes[3]) / 255.0 * cover;
             let channel = |value: u8| f32::from(value) / 255.0 * alpha;

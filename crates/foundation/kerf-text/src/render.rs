@@ -23,7 +23,7 @@ use skrifa::{GlyphId, MetadataProvider};
 use crate::color::{self, ColorImage};
 use crate::fonts::{self, FaceId};
 use crate::layout::{Glyph, Layout};
-use crate::raster::{IDENTITY, Mask, Path, Xform, apply, compose, fill, fill_into, xform_scale};
+use crate::raster::{apply, compose, fill, fill_into, xform_scale, Mask, Path, Xform, IDENTITY};
 
 /// Slant of synthetic italic (tan 12°).
 pub const SYNTH_ITALIC_SLANT: f32 = 0.2126;
@@ -63,7 +63,11 @@ impl OutlinePen for Rec {
 fn outline(face: FaceId, gid: u32, instance: u32) -> Option<Arc<Vec<Cmd>>> {
     static C: OnceLock<Mutex<HashMap<(FaceId, u32, u32), Option<Arc<Vec<Cmd>>>>>> = OnceLock::new();
     let c = C.get_or_init(Default::default);
-    if let Some(v) = c.lock().unwrap_or_else(|e| e.into_inner()).get(&(face, gid, instance)) {
+    if let Some(v) = c
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&(face, gid, instance))
+    {
         return v.clone();
     }
     let f = fonts::face(face);
@@ -71,8 +75,11 @@ fn outline(face: FaceId, gid: u32, instance: u32) -> Option<Arc<Vec<Cmd>>> {
     let v = f.font().and_then(|font| {
         let g = font.outline_glyphs().get(GlyphId::new(gid))?;
         let mut rec = Rec(Vec::new());
-        let at = location.as_deref().map_or(LocationRef::default(), LocationRef::from);
-        g.draw(DrawSettings::unhinted(Size::unscaled(), at), &mut rec).ok()?;
+        let at = location
+            .as_deref()
+            .map_or(LocationRef::default(), LocationRef::from);
+        g.draw(DrawSettings::unhinted(Size::unscaled(), at), &mut rec)
+            .ok()?;
         Some(Arc::new(rec.0))
     });
     let mut m = c.lock().unwrap_or_else(|e| e.into_inner());
@@ -87,10 +94,20 @@ fn outline(face: FaceId, gid: u32, instance: u32) -> Option<Arc<Vec<Cmd>>> {
 /// at the glyph's size) to the output.
 pub fn glyph_path(g: &Glyph, m: &Xform) -> Path {
     let k = g.size / fonts::face(g.face).units_per_em();
-    let slant = if g.synth_italic { SYNTH_ITALIC_SLANT } else { 0.0 };
+    let slant = if g.synth_italic {
+        SYNTH_ITALIC_SLANT
+    } else {
+        0.0
+    };
     // font units (y up) → glyph px (y down), slanted
     let local: Xform = [k, 0.0, slant * k, -k, 0.0, 0.0];
-    let mut p = outline_path(g.face, g.id, g.instance, &compose(m, &local), xform_scale(m).max(0.05));
+    let mut p = outline_path(
+        g.face,
+        g.id,
+        g.instance,
+        &compose(m, &local),
+        xform_scale(m).max(0.05),
+    );
     if g.synth_bold && !p.is_empty() {
         p.embolden(g.size * SYNTH_BOLD * xform_scale(m));
     }
@@ -102,7 +119,9 @@ pub fn glyph_path(g: &Glyph, m: &Xform) -> Path {
 pub(crate) fn outline_path(face: FaceId, gid: u32, instance: u32, t: &Xform, detail: f32) -> Path {
     let mut p = Path::new();
     p.detail = detail;
-    let Some(cmds) = outline(face, gid, instance) else { return p };
+    let Some(cmds) = outline(face, gid, instance) else {
+        return p;
+    };
     let pt = |x: f32, y: f32| apply(t, x, y);
     for c in cmds.iter() {
         match *c {
@@ -163,10 +182,19 @@ fn glyph_cache() -> &'static Mutex<GlyphCache> {
 
 fn glyph_mask_bounds(path: &Path) -> Option<(i32, i32, usize, usize)> {
     let (x0, y0, x1, y1) = path.bounds()?;
-    let (left, top, right, bottom) = (x0.floor() as i64, y0.floor() as i64, x1.ceil() as i64, y1.ceil() as i64);
+    let (left, top, right, bottom) = (
+        x0.floor() as i64,
+        y0.floor() as i64,
+        x1.ceil() as i64,
+        y1.ceil() as i64,
+    );
     let (left, top) = (i32::try_from(left).ok()?, i32::try_from(top).ok()?);
-    let w = usize::try_from(right.saturating_sub(i64::from(left))).ok()?.max(1);
-    let h = usize::try_from(bottom.saturating_sub(i64::from(top))).ok()?.max(1);
+    let w = usize::try_from(right.saturating_sub(i64::from(left)))
+        .ok()?
+        .max(1);
+    let h = usize::try_from(bottom.saturating_sub(i64::from(top)))
+        .ok()?
+        .max(1);
     let bytes = w.checked_mul(h)?.checked_mul(std::mem::size_of::<f32>())?;
     (bytes <= MAX_GLYPH_MASK_BYTES).then_some((left, top, w, h))
 }
@@ -175,28 +203,57 @@ fn glyph_mask_bounds(path: &Path) -> Option<(i32, i32, usize, usize)> {
 pub fn glyph_mask(g: &Glyph, px: f32, frac: f32) -> Option<Arc<GlyphMask>> {
     let size_q = (px * 8.0).round().max(1.0) as u32;
     let frac_q = ((frac.rem_euclid(1.0) * 4.0).round() as u8) % 4;
-    let key = (g.face, g.id, g.instance, size_q, frac_q, g.synth_bold, g.synth_italic);
-    if let Some(v) = glyph_cache().lock().unwrap_or_else(|e| e.into_inner()).entries.get(&key) {
+    let key = (
+        g.face,
+        g.id,
+        g.instance,
+        size_q,
+        frac_q,
+        g.synth_bold,
+        g.synth_italic,
+    );
+    if let Some(v) = glyph_cache()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .entries
+        .get(&key)
+    {
         return v.clone();
     }
     let px = size_q as f32 / 8.0;
     let fq = frac_q as f32 / 4.0;
-    let gg = Glyph { x: 0.0, y: 0.0, size: px, ..*g };
+    let gg = Glyph {
+        x: 0.0,
+        y: 0.0,
+        size: px,
+        ..*g
+    };
     let path = glyph_path(&gg, &[1.0, 0.0, 0.0, 1.0, fq, 0.0]);
     let Some((left, top, w, h)) = glyph_mask_bounds(&path) else {
         // Do not cache an oversized rejection: callers render it directly into their bounded
         // output, and retaining attacker-selected keys would itself become a cache DoS.
         return None;
     };
-    let v = Some(Arc::new(GlyphMask { mask: fill(&path, w, h, -left as f32, -top as f32), left, top }));
+    let v = Some(Arc::new(GlyphMask {
+        mask: fill(&path, w, h, -left as f32, -top as f32),
+        left,
+        top,
+    }));
     let bytes = w * h * std::mem::size_of::<f32>();
     let mut m = glyph_cache().lock().unwrap_or_else(|e| e.into_inner());
-    if m.entries.len() > 16_384 || m.bytes.checked_add(bytes).is_none_or(|n| n > MAX_GLYPH_CACHE_BYTES) {
+    if m.entries.len() > 16_384
+        || m.bytes
+            .checked_add(bytes)
+            .is_none_or(|n| n > MAX_GLYPH_CACHE_BYTES)
+    {
         m.entries.clear();
         m.bytes = 0;
     }
     if let Some(old) = m.entries.insert(key, v.clone()) {
-        m.bytes = m.bytes.saturating_sub(old.as_ref().map_or(0, |g| g.mask.a.len() * std::mem::size_of::<f32>()));
+        m.bytes = m.bytes.saturating_sub(
+            old.as_ref()
+                .map_or(0, |g| g.mask.a.len() * std::mem::size_of::<f32>()),
+        );
     }
     m.bytes = m.bytes.saturating_add(bytes);
     v
@@ -204,7 +261,10 @@ pub fn glyph_mask(g: &Glyph, px: f32, frac: f32) -> Option<Arc<GlyphMask>> {
 
 /// Whether `m` is a uniform positive scale plus translation (the glyph-cache path applies).
 pub fn is_axis_uniform(m: &Xform) -> bool {
-    m[1].abs() < 1e-6 && m[2].abs() < 1e-6 && m[0] > 0.0 && (m[0] - m[3]).abs() < 1e-4 * m[0].max(1.0)
+    m[1].abs() < 1e-6
+        && m[2].abs() < 1e-6
+        && m[0] > 0.0
+        && (m[0] - m[3]).abs() < 1e-4 * m[0].max(1.0)
 }
 
 /// The glyphs and underlines set in style `run` (all with None) as one device-space path.
@@ -226,7 +286,12 @@ pub fn layout_path_run(l: &Layout, m: &Xform, run: Option<u16>) -> Path {
 pub fn device_bounds(l: &Layout, m: &Xform) -> [f32; 4] {
     let b = l.bounds;
     let pad = l.glyphs.iter().map(|g| g.size).fold(0.0f32, f32::max) * 0.35;
-    let pts = [(b[0] - pad, b[1] - pad), (b[2] + pad, b[1] - pad), (b[0] - pad, b[3] + pad), (b[2] + pad, b[3] + pad)];
+    let pts = [
+        (b[0] - pad, b[1] - pad),
+        (b[2] + pad, b[1] - pad),
+        (b[0] - pad, b[3] + pad),
+        (b[2] + pad, b[3] + pad),
+    ];
     let mut o = [f32::MAX, f32::MAX, f32::MIN, f32::MIN];
     for (x, y) in pts {
         let (a, c) = apply(m, x, y);
@@ -247,14 +312,22 @@ pub fn draw_run(l: &Layout, m: &Xform, out: &mut Mask, origin: (i32, i32), run: 
     let (ox, oy) = origin;
     let keep = |r: u16| run.is_none_or(|x| x == r);
     // Colour glyphs cover what their colours do.
-    for g in l.glyphs.iter().filter(|g| keep(g.run) && color::is_color(g.face, g.id)) {
+    for g in l
+        .glyphs
+        .iter()
+        .filter(|g| keep(g.run) && color::is_color(g.face, g.id))
+    {
         if let Some((image, x, y)) = color_glyph(g, m, out.w, out.h, origin, [1.0; 4]) {
             out.add(&image.alpha(), x - ox, y - oy);
         }
     }
     if is_axis_uniform(m) {
         let s = m[0];
-        for g in l.glyphs.iter().filter(|g| keep(g.run) && !color::is_color(g.face, g.id)) {
+        for g in l
+            .glyphs
+            .iter()
+            .filter(|g| keep(g.run) && !color::is_color(g.face, g.id))
+        {
             let (x, y) = apply(m, g.x, g.y);
             let px = g.size * s;
             if px < 0.5 {
@@ -262,7 +335,11 @@ pub fn draw_run(l: &Layout, m: &Xform, out: &mut Mask, origin: (i32, i32), run: 
             }
             let xi = x.floor();
             if let Some(gm) = glyph_mask(g, px, x - xi) {
-                out.add(&gm.mask, xi as i32 + gm.left - ox, y.round() as i32 + gm.top - oy);
+                out.add(
+                    &gm.mask,
+                    xi as i32 + gm.left - ox,
+                    y.round() as i32 + gm.top - oy,
+                );
             } else {
                 // A huge glyph's mask would be mostly clipped away. Rasterise its outline straight
                 // into `out`, whose allocation is already bounded by the caller's canvas.
@@ -284,7 +361,11 @@ pub fn draw_run(l: &Layout, m: &Xform, out: &mut Mask, origin: (i32, i32), run: 
         }
     } else {
         let mut p = Path::new();
-        for g in l.glyphs.iter().filter(|g| keep(g.run) && !color::is_color(g.face, g.id)) {
+        for g in l
+            .glyphs
+            .iter()
+            .filter(|g| keep(g.run) && !color::is_color(g.face, g.id))
+        {
             p.extend(&glyph_path(g, &compose(m, &[1.0, 0.0, 0.0, 1.0, g.x, g.y])));
         }
         for (i, u) in l.underlines.iter().enumerate() {
@@ -298,7 +379,14 @@ pub fn draw_run(l: &Layout, m: &Xform, out: &mut Mask, origin: (i32, i32), run: 
 
 /// Colour glyph `g` of a layout drawn under `m`, within a `w` × `h` area whose top-left is device
 /// pixel `origin`: its picture and the device pixel of its top-left.
-fn color_glyph(g: &Glyph, m: &Xform, w: usize, h: usize, origin: (i32, i32), foreground: [f32; 4]) -> Option<(ColorImage, i32, i32)> {
+fn color_glyph(
+    g: &Glyph,
+    m: &Xform,
+    w: usize,
+    h: usize,
+    origin: (i32, i32),
+    foreground: [f32; 4],
+) -> Option<(ColorImage, i32, i32)> {
     let gm = compose(m, &[1.0, 0.0, 0.0, 1.0, g.x, g.y]);
     if g.size * xform_scale(m) < 0.5 {
         return None;
@@ -315,9 +403,20 @@ pub fn has_color(l: &Layout) -> bool {
 /// Paint the colour glyphs of layout `l` (those set in style `run`; None for all) under `m` over
 /// `out`, whose pixel (0,0) is device pixel `origin`. `foreground` (straight sRGB RGBA) is what a
 /// glyph that asks for the text's colour takes. Returns whether any was painted.
-pub fn draw_color(l: &Layout, m: &Xform, out: &mut ColorImage, origin: (i32, i32), run: Option<u16>, foreground: [f32; 4]) -> bool {
+pub fn draw_color(
+    l: &Layout,
+    m: &Xform,
+    out: &mut ColorImage,
+    origin: (i32, i32),
+    run: Option<u16>,
+    foreground: [f32; 4],
+) -> bool {
     let mut painted = false;
-    for g in l.glyphs.iter().filter(|g| run.is_none_or(|r| g.run == r) && color::is_color(g.face, g.id)) {
+    for g in l
+        .glyphs
+        .iter()
+        .filter(|g| run.is_none_or(|r| g.run == r) && color::is_color(g.face, g.id))
+    {
         if let Some((image, x, y)) = color_glyph(g, m, out.w, out.h, origin, foreground) {
             out.over(&image, x - origin.0, y - origin.1);
             painted = true;
@@ -328,7 +427,11 @@ pub fn draw_color(l: &Layout, m: &Xform, out: &mut ColorImage, origin: (i32, i32
 
 /// The colour glyphs of a layout as [`rasterize`] places its mask: the same size and position.
 /// None when it has none.
-pub fn rasterize_color(l: &Layout, m: &Xform, foreground: [f32; 4]) -> Option<(ColorImage, i32, i32)> {
+pub fn rasterize_color(
+    l: &Layout,
+    m: &Xform,
+    foreground: [f32; 4],
+) -> Option<(ColorImage, i32, i32)> {
     if !has_color(l) {
         return None;
     }
@@ -349,7 +452,10 @@ pub fn rasterize(l: &Layout, m: &Xform) -> (Mask, i32, i32) {
 fn raster_area(l: &Layout, m: &Xform) -> (i32, i32, usize, usize) {
     let b = device_bounds(l, m);
     let (x0, y0) = (b[0].floor() as i32 - 1, b[1].floor() as i32 - 1);
-    let (w, h) = ((b[2].ceil() as i32 + 1 - x0).max(1) as usize, (b[3].ceil() as i32 + 1 - y0).max(1) as usize);
+    let (w, h) = (
+        (b[2].ceil() as i32 + 1 - x0).max(1) as usize,
+        (b[3].ceil() as i32 + 1 - y0).max(1) as usize,
+    );
     (x0, y0, w, h)
 }
 
@@ -364,7 +470,7 @@ pub fn at(x: f32, y: f32) -> Xform {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::layout::{ParagraphStyle, TextStyle, layout};
+    use crate::layout::{layout, ParagraphStyle, TextStyle};
 
     fn ink(m: &Mask) -> f32 {
         m.a.iter().sum()
@@ -378,7 +484,14 @@ mod tests {
 
     #[test]
     fn cached_and_outline_paths_agree() {
-        let l = layout("Title 42", &TextStyle { size: 48.0, ..Default::default() }, &ParagraphStyle::default());
+        let l = layout(
+            "Title 42",
+            &TextStyle {
+                size: 48.0,
+                ..Default::default()
+            },
+            &ParagraphStyle::default(),
+        );
         let fast = rasterize(&l, &at(20.25, 60.0));
         // a tiny rotation forces the outline path
         let a = 1e-4f32;

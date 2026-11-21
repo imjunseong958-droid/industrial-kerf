@@ -96,7 +96,12 @@ fn a_project_written_and_read_back_is_the_same_project() {
     assert_eq!(written.adapter, NATIVE_OTIO);
     // The frame size is in the file for Kerf alone: another editor still
     // does not get it, and that is all this project loses.
-    let codes: Vec<&str> = written.report.losses.iter().map(|i| i.code.as_str()).collect();
+    let codes: Vec<&str> = written
+        .report
+        .losses
+        .iter()
+        .map(|i| i.code.as_str())
+        .collect();
     assert_eq!(codes, ["canvas_not_exported"]);
 
     let read = import_otio(&path).unwrap();
@@ -104,7 +109,12 @@ fn a_project_written_and_read_back_is_the_same_project() {
     assert_eq!(read.project, original);
     // Nothing was lost on the way in, and the canvas was not guessed.
     assert!(read.report.losses.is_empty(), "{:#?}", read.report.losses);
-    let warnings: Vec<&str> = read.report.warnings.iter().map(|i| i.code.as_str()).collect();
+    let warnings: Vec<&str> = read
+        .report
+        .warnings
+        .iter()
+        .map(|i| i.code.as_str())
+        .collect();
     assert_eq!(warnings, ["media_assumed"]);
 }
 
@@ -118,7 +128,11 @@ fn the_adapter_writes_and_reads_otio_files_without_python() {
     .unwrap();
     let original = project(CARRIED);
     let folder = tempfile::tempdir().unwrap();
-    for (name, format) in [("a.otio", None), ("b.json", Some("otio")), ("c", Some("json"))] {
+    for (name, format) in [
+        ("a.otio", None),
+        ("b.json", Some("otio")),
+        ("c", Some("json")),
+    ] {
         let path = folder.path().join(name);
         let written = adapter.export(&original, &path, format).unwrap();
         assert_eq!(written.adapter, NATIVE_OTIO);
@@ -174,8 +188,14 @@ fn a_program_matches_the_golden_otio_file_and_lists_what_it_leaves_out() {
         let issue = issues.iter().find(|issue| issue.code == code).unwrap();
         issue.message.as_str()
     };
-    assert_eq!(said("transition_not_exported"), "`wipe` was exported as a dissolve");
-    assert_eq!(said("properties_not_exported"), "not exported: properties (opacity)");
+    assert_eq!(
+        said("transition_not_exported"),
+        "`wipe` was exported as a dissolve"
+    );
+    assert_eq!(
+        said("properties_not_exported"),
+        "not exported: properties (opacity)"
+    );
     assert!(said("content_not_exported").contains("`title` generator"));
     assert!(said("captions_not_exported").contains(".srt"));
 
@@ -209,7 +229,9 @@ fn collect_schemas(value: &Value, into: &mut Vec<String>) {
             if let Some(Value::String(schema)) = fields.get("OTIO_SCHEMA") {
                 into.push(schema.clone());
             }
-            fields.values().for_each(|value| collect_schemas(value, into));
+            fields
+                .values()
+                .for_each(|value| collect_schemas(value, into));
         }
         Value::Array(items) => items.iter().for_each(|value| collect_schemas(value, into)),
         _ => {}
@@ -225,7 +247,10 @@ fn clips_of_another_rate_keep_their_cuts() {
     let (read, issues) = otio_json::read(&otio_json::write(&timeline).unwrap()).unwrap();
     assert_eq!(read, timeline);
     assert!(issues.is_empty(), "{issues:#?}");
-    let Item::Clip { start, duration, .. } = read.tracks[0].items[2] else {
+    let Item::Clip {
+        start, duration, ..
+    } = read.tracks[0].items[2]
+    else {
         panic!("{:?}", read.tracks[0].items[2]);
     };
     assert_eq!((start, duration), (156, 96));
@@ -267,12 +292,24 @@ sequence s2 name="Other" rate=29.97 size=1920x1080
     // clips that play them, so one nothing plays is not its to list.
     assert_eq!(
         codes(Format::Fcpxml),
-        ["sequences_not_exported", "color_space_not_exported", "speed_ramp_not_exported"]
+        [
+            "sequences_not_exported",
+            "color_space_not_exported",
+            "speed_ramp_not_exported"
+        ]
     );
     // A ramp from 1 to 3 plays as fast as 2 overall, and the file says 2.
     let (timeline, _) = otio::sequence_timeline(&project, &project.sequences[0]);
-    assert!(matches!(timeline.tracks[0].items[0], Item::Clip { speed: Some(speed), .. } if speed == 2.0));
-    assert_eq!(timeline.sequence.as_ref().map(|sequence| sequence.drop_frame), Some(true));
+    assert!(
+        matches!(timeline.tracks[0].items[0], Item::Clip { speed: Some(speed), .. } if speed == 2.0)
+    );
+    assert_eq!(
+        timeline
+            .sequence
+            .as_ref()
+            .map(|sequence| sequence.drop_frame),
+        Some(true)
+    );
     // The second sequence is written when it is the one asked for.
     let (timeline, _) = otio::sequence_timeline(&project, &project.sequences[1]);
     assert_eq!(timeline.sequence.unwrap().name.as_deref(), Some("Other"));
@@ -355,14 +392,20 @@ const FOREIGN: &str = r#"{
 fn a_file_from_another_editor_is_read_with_what_it_loses() {
     let (timeline, issues) = otio_json::read(FOREIGN).unwrap();
     // With no start time it counts at the rate of the first thing on it.
-    assert_eq!((timeline.name.as_str(), timeline.rate, timeline.start), ("Conform", 25.0, 0));
+    assert_eq!(
+        (timeline.name.as_str(), timeline.rate, timeline.start),
+        ("Conform", 25.0, 0)
+    );
     assert_eq!(timeline.sequence, None);
     assert_eq!(timeline.media.len(), 2);
     assert_eq!(timeline.media[0].path, "/shoot/Day 1/A002.mov");
     assert_eq!(timeline.media[0].duration, Some(1500));
     assert_eq!(timeline.media[1].path, "missing-2");
     let track = &timeline.tracks[0];
-    assert_eq!((track.kind, track.name.as_deref()), (WireKind::Video, Some("Video 1")));
+    assert_eq!(
+        (track.kind, track.name.as_deref()),
+        (WireKind::Video, Some("Video 1"))
+    );
     assert_eq!(
         track.items,
         [
@@ -377,7 +420,11 @@ fn a_file_from_another_editor_is_read_with_what_it_loses() {
                 speed: Some(0.5),
                 enabled: true,
             },
-            Item::Transition { id: None, before: 5, after: 5 },
+            Item::Transition {
+                id: None,
+                before: 5,
+                after: 5
+            },
             Item::Clip {
                 id: None,
                 name: Some("Closer".into()),
@@ -405,7 +452,15 @@ fn a_file_from_another_editor_is_read_with_what_it_loses() {
     let markers: Vec<_> = timeline
         .markers
         .iter()
-        .map(|m| (m.at, m.duration, m.name.as_deref(), m.color.as_deref(), m.note.as_deref()))
+        .map(|m| {
+            (
+                m.at,
+                m.duration,
+                m.name.as_deref(),
+                m.color.as_deref(),
+                m.note.as_deref(),
+            )
+        })
         .collect();
     assert_eq!(
         markers,
@@ -431,7 +486,10 @@ fn a_file_from_another_editor_is_read_with_what_it_loses() {
     // And as a project: 25 fps, the canvas assumed, the half speed kept.
     let (project, issues) = otio::from_timeline(&timeline).unwrap();
     let text = printed(&project);
-    assert!(text.contains("sequence s1 name=\"Conform\" rate=25 size=1920x1080"), "{text}");
+    assert!(
+        text.contains("sequence s1 name=\"Conform\" rate=25 size=1920x1080"),
+        "{text}"
+    );
     assert!(text.contains("speed=0.5"), "{text}");
     assert!(text.contains("fx=dissolve@1 dur=00:00:00:10"), "{text}");
     assert!(issues.iter().any(|issue| issue.code == "canvas_assumed"));
@@ -496,22 +554,40 @@ fn the_bridge_reads_what_is_written_here_and_writes_what_is_read_here() {
         std::fs::write(&native, otio_json::write(&timeline).unwrap()).unwrap();
         let answer = bridge(
             &python,
-            &["import", "--input", native.to_str().unwrap(), "--adapter", "otio_json"],
+            &[
+                "import",
+                "--input",
+                native.to_str().unwrap(),
+                "--adapter",
+                "otio_json",
+            ],
             None,
         );
         let through: Timeline = serde_json::from_value(answer["timeline"].clone()).unwrap();
-        assert_eq!(through, timeline, "{name}: the bridge read another timeline");
+        assert_eq!(
+            through, timeline,
+            "{name}: the bridge read another timeline"
+        );
         assert_eq!(answer["report"]["issues"], serde_json::json!([]), "{name}");
 
         // Written by OpenTimelineIO, read here: the same timeline.
         let bridged = folder.path().join(format!("{name}-bridge.otio"));
         bridge(
             &python,
-            &["export", "--output", bridged.to_str().unwrap(), "--adapter", "otio_json"],
+            &[
+                "export",
+                "--output",
+                bridged.to_str().unwrap(),
+                "--adapter",
+                "otio_json",
+            ],
             Some(&serde_json::json!({ "timeline": timeline }).to_string()),
         );
         let (read, issues) = otio_json::read(&std::fs::read_to_string(&bridged).unwrap()).unwrap();
-        assert_eq!(read, timeline, "{name}: read another timeline than the bridge wrote");
+        assert_eq!(
+            read, timeline,
+            "{name}: read another timeline than the bridge wrote"
+        );
         assert!(issues.is_empty(), "{name}: {issues:#?}");
 
         // And OpenTimelineIO holds the two files to be the same timeline.
@@ -525,7 +601,10 @@ fn the_bridge_reads_what_is_written_here_and_writes_what_is_read_here() {
             .args([&native, &bridged])
             .status()
             .unwrap();
-        assert!(same.success(), "{name}: OpenTimelineIO reads the two files differently");
+        assert!(
+            same.success(),
+            "{name}: OpenTimelineIO reads the two files differently"
+        );
     }
 
     // A file another editor wrote reads the same either way. Its `Marker.3`
@@ -540,7 +619,13 @@ fn the_bridge_reads_what_is_written_here_and_writes_what_is_read_here() {
     std::fs::write(&foreign, released).unwrap();
     let answer = bridge(
         &python,
-        &["import", "--input", foreign.to_str().unwrap(), "--adapter", "otio_json"],
+        &[
+            "import",
+            "--input",
+            foreign.to_str().unwrap(),
+            "--adapter",
+            "otio_json",
+        ],
         None,
     );
     let through: Timeline = serde_json::from_value(answer["timeline"].clone()).unwrap();
@@ -551,7 +636,13 @@ fn the_bridge_reads_what_is_written_here_and_writes_what_is_read_here() {
             .as_array()
             .unwrap()
             .iter()
-            .map(|issue| format!("{} {}", issue["code"].as_str().unwrap(), issue["path"].as_str().unwrap()))
+            .map(|issue| {
+                format!(
+                    "{} {}",
+                    issue["code"].as_str().unwrap(),
+                    issue["path"].as_str().unwrap()
+                )
+            })
             .collect();
         codes.sort();
         codes

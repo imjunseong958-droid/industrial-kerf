@@ -18,12 +18,7 @@ const TURN: f64 = 0.01;
 /// where it holds still and as keyframes where it does not, and `fov`. With whether
 /// any of them moves. A key's line comes within `coarse` times [`PLACE`] and [`TURN`] of what
 /// it stands for: 1 for a camera a file holds.
-pub(crate) fn params(
-    places: &[CameraPlace],
-    first: i64,
-    fov: f64,
-    coarse: f64,
-) -> (String, bool) {
+pub(crate) fn params(places: &[CameraPlace], first: i64, fov: f64, coarse: f64) -> (String, bool) {
     let mut words = Vec::new();
     let mut moves = false;
     let mut word = |name: &str, values: Vec<f64>, tolerance: f64, digits: i32| {

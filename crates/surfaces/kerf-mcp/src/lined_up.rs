@@ -68,11 +68,14 @@ fn lined(alignment: &Alignment, frame: f64) -> Lined {
         row["within"] = json!(milliseconds(spread));
     }
     // What a drift comes to, from the first stretch placed to the last.
-    let drift = course.ends().filter(|_| course.drifts()).map(|(first, last)| {
-        let a_minute = course.drift * 60_000.0;
-        let minutes = (last.middle() - first.middle()) / 60.0;
-        (a_minute, minutes, first.offset, last.offset)
-    });
+    let drift = course
+        .ends()
+        .filter(|_| course.drifts())
+        .map(|(first, last)| {
+            let a_minute = course.drift * 60_000.0;
+            let minutes = (last.middle() - first.middle()) / 60.0;
+            (a_minute, minutes, first.offset, last.offset)
+        });
     if let Some((a_minute, minutes, from, to)) = drift {
         row["drift"] = json!({
             "msPerMinute": (a_minute * 10.0).round() / 10.0,
@@ -133,7 +136,9 @@ fn lined(alignment: &Alignment, frame: f64) -> Lined {
                 steps.join(", and ")
             ))
         }
-        (Holds::Drift, Some((_, spread)), Some((a_minute, minutes, ..))) if spread > frame / 2.0 => {
+        (Holds::Drift, Some((_, spread)), Some((a_minute, minutes, ..)))
+            if spread > frame / 2.0 =>
+        {
             Some(format!(
                 "its offset drifts {:.1} ms a minute, one clock running faster than the other: \
                  over the {:.1} minutes read the nearest one offset is {:.0} ms out at each end, \

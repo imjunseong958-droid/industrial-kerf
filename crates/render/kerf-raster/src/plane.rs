@@ -15,7 +15,12 @@ pub struct Plane {
 
 impl Plane {
     pub fn new(w: usize, h: usize, ch: usize) -> Plane {
-        Plane { w, h, ch, data: vec![0.0; w * h * ch] }
+        Plane {
+            w,
+            h,
+            ch,
+            data: vec![0.0; w * h * ch],
+        }
     }
 
     #[inline]
@@ -74,7 +79,10 @@ impl Plane {
             for x in 0..w {
                 for c in 0..self.ch {
                     let (sx, sy) = (2 * x as isize, 2 * y as isize);
-                    let v = self.at(sx, sy, c) + self.at(sx + 1, sy, c) + self.at(sx, sy + 1, c) + self.at(sx + 1, sy + 1, c);
+                    let v = self.at(sx, sy, c)
+                        + self.at(sx + 1, sy, c)
+                        + self.at(sx, sy + 1, c)
+                        + self.at(sx + 1, sy + 1, c);
                     let i = out.idx(x, y) + c;
                     out.data[i] = v * 0.25;
                 }

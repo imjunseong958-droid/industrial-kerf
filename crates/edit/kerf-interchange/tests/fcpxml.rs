@@ -64,7 +64,9 @@ struct Seconds(i128, i128);
 
 impl Seconds {
     fn parse(text: &str) -> Self {
-        let body = text.strip_suffix('s').unwrap_or_else(|| panic!("`{text}` is no time"));
+        let body = text
+            .strip_suffix('s')
+            .unwrap_or_else(|| panic!("`{text}` is no time"));
         let (num, den) = body.split_once('/').unwrap_or((body, "1"));
         Self(num.parse().unwrap(), den.parse().unwrap()).reduced()
     }
@@ -146,12 +148,27 @@ fn a_program_matches_the_golden_fcpxml_file_and_lists_what_it_leaves_out() {
         "{issues:#?}"
     );
     let said = |path: &str| {
-        let issue = issues.iter().find(|issue| issue.path.as_deref() == Some(path)).unwrap();
+        let issue = issues
+            .iter()
+            .find(|issue| issue.path.as_deref() == Some(path))
+            .unwrap();
         issue.message.as_str()
     };
-    assert!(said("t3").contains("off the primary storyline"), "{}", said("t3"));
-    assert!(said("t2").contains("joins a clip that was not exported"), "{}", said("t2"));
-    assert!(said("t8").contains("`title` generator became a gap"), "{}", said("t8"));
+    assert!(
+        said("t3").contains("off the primary storyline"),
+        "{}",
+        said("t3")
+    );
+    assert!(
+        said("t2").contains("joins a clip that was not exported"),
+        "{}",
+        said("t2")
+    );
+    assert!(
+        said("t8").contains("`title` generator became a gap"),
+        "{}",
+        said("t8")
+    );
 }
 
 #[test]
@@ -167,7 +184,10 @@ fn the_document_is_what_an_importer_expects() {
     )
     .unwrap();
     let root = document.root_element();
-    assert_eq!((root.tag_name().name(), root.attribute("version")), ("fcpxml", Some(VERSION)));
+    assert_eq!(
+        (root.tag_name().name(), root.attribute("version")),
+        ("fcpxml", Some(VERSION))
+    );
     let top: Vec<&str> = elements(root).map(|node| node.tag_name().name()).collect();
     assert_eq!(top, ["resources", "library"]);
 
@@ -176,7 +196,10 @@ fn the_document_is_what_an_importer_expects() {
     let mut kinds: HashMap<&str, &str> = HashMap::new();
     for resource in elements(elements(root).next().unwrap()) {
         let id = resource.attribute("id").unwrap();
-        assert!(kinds.insert(id, resource.tag_name().name()).is_none(), "{id} twice");
+        assert!(
+            kinds.insert(id, resource.tag_name().name()).is_none(),
+            "{id} twice"
+        );
     }
     let named = |tag: &str, attribute: &str, kind: &str| {
         for node in find(&document, tag) {
@@ -189,7 +212,9 @@ fn the_document_is_what_an_importer_expects() {
     named("sequence", "format", "format");
     named("asset-clip", "ref", "asset");
     named("filter-video", "ref", "effect");
-    assert!(find(&document, "asset-clip").iter().all(|clip| clip.attribute("ref").is_some()));
+    assert!(find(&document, "asset-clip")
+        .iter()
+        .all(|clip| clip.attribute("ref").is_some()));
 
     // The files, as URLs, each once.
     let sources: Vec<&str> = find(&document, "media-rep")
@@ -226,10 +251,16 @@ fn the_document_is_what_an_importer_expects() {
     let score = find(&document, "asset")[2];
     assert_eq!(score.attribute("hasVideo"), None);
     assert_eq!(score.attribute("format"), None);
-    assert_eq!((score.attribute("hasAudio"), score.attribute("audioRate")), (Some("1"), Some("48000")));
+    assert_eq!(
+        (score.attribute("hasAudio"), score.attribute("audioRate")),
+        (Some("1"), Some("48000"))
+    );
     // The footage's own timecode: 14:22:31:05 at 23.976.
     let footage = find(&document, "asset")[0];
-    assert_eq!(time(footage, "start").frames(), ((14 * 60 + 22) * 60 + 31) * 24 + 5);
+    assert_eq!(
+        time(footage, "start").frames(),
+        ((14 * 60 + 22) * 60 + 31) * 24 + 5
+    );
     assert_eq!(time(footage, "duration").frames(), (4 * 60 + 12) * 24);
 
     let sequence = find(&document, "sequence")[0];
@@ -247,8 +278,22 @@ fn the_document_is_what_an_importer_expects() {
     let storyline: Vec<Node> = elements(spine)
         .filter(|node| !node.has_tag_name("transition"))
         .collect();
-    let tags: Vec<&str> = storyline.iter().map(|node| node.tag_name().name()).collect();
-    assert_eq!(tags, ["asset-clip", "asset-clip", "asset-clip", "gap", "asset-clip", "gap", "gap"]);
+    let tags: Vec<&str> = storyline
+        .iter()
+        .map(|node| node.tag_name().name())
+        .collect();
+    assert_eq!(
+        tags,
+        [
+            "asset-clip",
+            "asset-clip",
+            "asset-clip",
+            "gap",
+            "asset-clip",
+            "gap",
+            "gap"
+        ]
+    );
     let mut at = origin;
     for item in &storyline {
         assert_eq!(time(*item, "offset"), at, "{item:?}");
@@ -257,12 +302,18 @@ fn the_document_is_what_an_importer_expects() {
         at = at.plus(time(*item, "duration"));
     }
     assert_eq!(at, origin.plus(time(sequence, "duration")));
-    let lengths: Vec<i128> = storyline.iter().map(|item| time(*item, "duration").frames()).collect();
+    let lengths: Vec<i128> = storyline
+        .iter()
+        .map(|item| time(*item, "duration").frames())
+        .collect();
     assert_eq!(lengths, [156, 96, 48, 24, 48, 24, 325]);
 
     // A clip reads its media from where the document says, on the media's
     // own timecode: 14:22:35:00, and 10 seconds past ten hours at 25.
-    assert_eq!(time(storyline[0], "start").frames(), ((14 * 60 + 22) * 60 + 35) * 24);
+    assert_eq!(
+        time(storyline[0], "start").frames(),
+        ((14 * 60 + 22) * 60 + 35) * 24
+    );
     assert_eq!(time(storyline[1], "start"), Seconds(36_010, 1));
     assert_eq!(storyline[1].attribute("name"), Some("Wide"));
     assert_eq!(storyline[0].attribute("name"), Some("A001_C003.mov"));
@@ -284,10 +335,17 @@ fn the_document_is_what_an_importer_expects() {
     // each at its own frame of the sequence on the clock of what it hangs on.
     let mut connected: Vec<(&str, i32, i128, i128)> = Vec::new();
     for parent in &storyline {
-        let children: Vec<&str> = elements(*parent).map(|node| node.tag_name().name()).collect();
+        let children: Vec<&str> = elements(*parent)
+            .map(|node| node.tag_name().name())
+            .collect();
         let mut sorted = children.clone();
         // Inside an item: its time map, what is connected, then its markers.
-        sorted.sort_by_key(|tag| ["timeMap", "asset-clip", "marker"].iter().position(|t| t == tag).unwrap());
+        sorted.sort_by_key(|tag| {
+            ["timeMap", "asset-clip", "marker"]
+                .iter()
+                .position(|t| t == tag)
+                .unwrap()
+        });
         assert_eq!(children, sorted);
         for clip in elements(*parent).filter(|node| node.has_tag_name("asset-clip")) {
             let lane: i32 = clip.attribute("lane").unwrap().parse().unwrap();
@@ -317,15 +375,29 @@ fn the_document_is_what_an_importer_expects() {
     let by_name = |name: &str, lane: &str| {
         *find(&document, "asset-clip")
             .iter()
-            .find(|clip| clip.attribute("name") == Some(name) && clip.attribute("lane") == Some(lane))
+            .find(|clip| {
+                clip.attribute("name") == Some(name) && clip.attribute("lane") == Some(lane)
+            })
             .unwrap()
     };
     // Sound alone on a sound track; off where its clip or its track is.
-    assert_eq!(by_name("A001_C003.mov", "-1").attribute("srcEnable"), Some("audio"));
+    assert_eq!(
+        by_name("A001_C003.mov", "-1").attribute("srcEnable"),
+        Some("audio")
+    );
     assert_eq!(by_name("A001_C003.mov", "-1").attribute("enabled"), None);
-    assert_eq!(by_name("Score Final.wav", "-2").attribute("enabled"), Some("0"));
-    assert_eq!(by_name("Score Final.wav", "-2").attribute("srcEnable"), None);
-    assert_eq!(by_name("B002_C010-graded.mov", "1").attribute("enabled"), Some("0"));
+    assert_eq!(
+        by_name("Score Final.wav", "-2").attribute("enabled"),
+        Some("0")
+    );
+    assert_eq!(
+        by_name("Score Final.wav", "-2").attribute("srcEnable"),
+        None
+    );
+    assert_eq!(
+        by_name("B002_C010-graded.mov", "1").attribute("enabled"),
+        Some("0")
+    );
 
     // Markers, on the storyline item at their time.
     let markers: Vec<(&str, Option<&str>, i128)> = storyline
@@ -345,7 +417,10 @@ fn the_document_is_what_an_importer_expects() {
         .collect();
     assert_eq!(
         markers,
-        [("pickup needed", Some("ADR line 4"), 120), ("Marker", None, 720)]
+        [
+            ("pickup needed", Some("ADR line 4"), 120),
+            ("Marker", None, 720)
+        ]
     );
     let ids: HashSet<&str> = kinds.keys().copied().collect();
     assert_eq!(ids.len(), 7, "{ids:?}");
@@ -366,7 +441,10 @@ sequence s1 name="Speeds" rate=24 size=1920x1080
     let (text, issues) = written(text);
     let document = Document::parse_with_options(
         &text,
-        roxmltree::ParsingOptions { allow_dtd: true, ..Default::default() },
+        roxmltree::ParsingOptions {
+            allow_dtd: true,
+            ..Default::default()
+        },
     )
     .unwrap();
     let clip = |name: &str| {
@@ -388,21 +466,40 @@ sequence s1 name="Speeds" rate=24 size=1920x1080
             })
             .collect()
     };
-    let points = |pairs: [(&str, &str); 2]| pairs.map(|(time, value)| (time.to_owned(), value.to_owned())).to_vec();
+    let points = |pairs: [(&str, &str); 2]| {
+        pairs
+            .map(|(time, value)| (time.to_owned(), value.to_owned()))
+            .to_vec()
+    };
     // Twice as fast: its clock reads half the media's, and the map turns the
     // 35 seconds the media lasts on it back into the media's 70.
     let fast = clip("fast");
-    assert_eq!((fast.attribute("start"), fast.attribute("duration")), (Some("10s"), Some("2s")));
+    assert_eq!(
+        (fast.attribute("start"), fast.attribute("duration")),
+        (Some("10s"), Some("2s"))
+    );
     assert_eq!(map(fast), points([("0s", "0s"), ("35s", "70s")]));
-    assert_eq!(elements(fast).next().unwrap().attribute("frameSampling"), Some("frame-blending"));
+    assert_eq!(
+        elements(fast).next().unwrap().attribute("frameSampling"),
+        Some("frame-blending")
+    );
     // Half as fast: twice the media's.
     let slow = clip("slow");
-    assert_eq!((slow.attribute("start"), slow.attribute("duration")), (Some("60s"), Some("4s")));
+    assert_eq!(
+        (slow.attribute("start"), slow.attribute("duration")),
+        (Some("60s"), Some("4s"))
+    );
     assert_eq!(map(slow), points([("0s", "0s"), ("140s", "70s")]));
-    assert_eq!(elements(slow).next().unwrap().attribute("frameSampling"), Some("optical-flow"));
+    assert_eq!(
+        elements(slow).next().unwrap().attribute("frameSampling"),
+        Some("optical-flow")
+    );
     // Reverse plays the same second forward, and says so.
     let back = clip("back");
-    assert_eq!((back.attribute("start"), back.attribute("duration")), (Some("40s"), Some("1s")));
+    assert_eq!(
+        (back.attribute("start"), back.attribute("duration")),
+        (Some("40s"), Some("1s"))
+    );
     assert_eq!(elements(back).count(), 0);
     // A ramp from 1 to 3 over two seconds plays four seconds of media: twice
     // as fast overall.
@@ -420,7 +517,11 @@ sequence s1 name="Speeds" rate=24 size=1920x1080
             ("speed_ramp_not_exported", Some("ramp")),
         ]
     );
-    assert!(issues[1].message.ends_with("its speed overall, 2"), "{}", issues[1].message);
+    assert!(
+        issues[1].message.ends_with("its speed overall, 2"),
+        "{}",
+        issues[1].message
+    );
 }
 
 #[test]
@@ -443,11 +544,19 @@ fn rates_drop_frame_and_sound_alone_are_written_as_they_are() {
              \x20   clip c1 media=m1 src=00:00:00:00 at=00:00:00:00 dur=00:00:01:00\n"
         );
         let (text, issues) = written(&text);
-        assert!(text.contains(&format!("<format id=\"r1\" frameDuration=\"{frame}\" width=\"64\" height=\"36\"/>")), "{text}");
+        assert!(
+            text.contains(&format!(
+                "<format id=\"r1\" frameDuration=\"{frame}\" width=\"64\" height=\"36\"/>"
+            )),
+            "{text}"
+        );
         // One format serves the sequence and the file, and a clip from the
         // media's first frame has no `start`.
         assert_eq!(text.matches("<format ").count(), 1);
-        assert!(text.contains("<asset-clip ref=\"r2\" offset=\"0s\" name=\"a.mov\" duration="), "{text}");
+        assert!(
+            text.contains("<asset-clip ref=\"r2\" offset=\"0s\" name=\"a.mov\" duration="),
+            "{text}"
+        );
         assert!(issues.is_empty(), "{issues:#?}");
     }
 
@@ -461,12 +570,23 @@ sequence s1 name=\"Broadcast\" rate=29.97 size=1920x1080 audio=44100 start=00:00
     clip a1 media=m1 src=00:00:01:00 at=00:01:00;02 dur=00:00:02:00
 ";
     let (text, issues) = written(text);
-    assert!(text.contains("tcFormat=\"DF\" audioLayout=\"stereo\" audioRate=\"44.1k\""), "{text}");
+    assert!(
+        text.contains("tcFormat=\"DF\" audioLayout=\"stereo\" audioRate=\"44.1k\""),
+        "{text}"
+    );
     assert!(text.contains("src=\"file:///C:/Audio/vo.wav\""), "{text}");
-    assert!(text.contains("audioChannels=\"1\" audioRate=\"44100\""), "{text}");
+    assert!(
+        text.contains("audioChannels=\"1\" audioRate=\"44100\""),
+        "{text}"
+    );
     // 00:00:59;00 is frame 1770, and the clip starts 30 frames on, connected
     // 30 frames into the gap's hour.
-    assert!(text.contains("<gap name=\"Gap\" offset=\"59059/1000s\" start=\"3600s\" duration=\"3003/1000s\">"), "{text}");
+    assert!(
+        text.contains(
+            "<gap name=\"Gap\" offset=\"59059/1000s\" start=\"3600s\" duration=\"3003/1000s\">"
+        ),
+        "{text}"
+    );
     assert!(text.contains("<asset-clip ref=\"r2\" lane=\"-1\" offset=\"3601001/1000s\" name=\"vo.wav\" start=\"1001/1000s\" duration=\"1001/500s\" tcFormat=\"NDF\"/>"), "{text}");
     assert!(issues.is_empty(), "{issues:#?}");
 }
@@ -482,11 +602,18 @@ sequence s1 name=\"<Cut>\" rate=24 size=1920x1080
 ";
     let (text, issues) = written(text);
     assert!(text.contains("src=\"footage/a b.mov\""), "{text}");
-    assert!(text.contains("<event name=\"Tom &amp; &quot;Jerry&quot;\">"), "{text}");
+    assert!(
+        text.contains("<event name=\"Tom &amp; &quot;Jerry&quot;\">"),
+        "{text}"
+    );
     assert!(text.contains("<project name=\"&lt;Cut&gt;\">"), "{text}");
     assert_eq!(issues.len(), 1);
     assert_eq!(
-        (issues[0].code.as_str(), issues[0].severity, issues[0].path.as_deref()),
+        (
+            issues[0].code.as_str(),
+            issues[0].severity,
+            issues[0].path.as_deref()
+        ),
         ("media_path_relative", IssueSeverity::Warning, Some("m1"))
     );
 }

@@ -48,10 +48,17 @@ pub struct Path {
 
 impl Path {
     pub fn new() -> Self {
-        Self { detail: 1.0, ..Default::default() }
+        Self {
+            detail: 1.0,
+            ..Default::default()
+        }
     }
     fn tol(&self) -> f32 {
-        if self.detail > 0.0 { self.detail } else { 1.0 }
+        if self.detail > 0.0 {
+            self.detail
+        } else {
+            1.0
+        }
     }
     pub fn move_to(&mut self, x: f32, y: f32) {
         self.close();
@@ -77,19 +84,29 @@ impl Path {
         for i in 1..=n {
             let t = i as f32 / n as f32;
             let u = 1.0 - t;
-            self.line_to(u * u * x0 + 2.0 * u * t * cx + t * t * x, u * u * y0 + 2.0 * u * t * cy + t * t * y);
+            self.line_to(
+                u * u * x0 + 2.0 * u * t * cx + t * t * x,
+                u * u * y0 + 2.0 * u * t * cy + t * t * y,
+            );
         }
     }
     pub fn cubic_to(&mut self, c1x: f32, c1y: f32, c2x: f32, c2y: f32, x: f32, y: f32) {
         let (x0, y0) = self.cur;
-        let dd =
-            ((x0 - 2.0 * c1x + c2x).abs() + (y0 - 2.0 * c1y + c2y).abs() + (c1x - 2.0 * c2x + x).abs() + (c1y - 2.0 * c2y + y).abs()).max(0.01) * self.tol();
+        let dd = ((x0 - 2.0 * c1x + c2x).abs()
+            + (y0 - 2.0 * c1y + c2y).abs()
+            + (c1x - 2.0 * c2x + x).abs()
+            + (c1y - 2.0 * c2y + y).abs())
+        .max(0.01)
+            * self.tol();
         let n = ((dd * 3.0).sqrt().ceil() as usize).clamp(1, 96);
         for i in 1..=n {
             let t = i as f32 / n as f32;
             let u = 1.0 - t;
             let (a, b, c, d) = (u * u * u, 3.0 * u * u * t, 3.0 * u * t * t, t * t * t);
-            self.line_to(a * x0 + b * c1x + c * c2x + d * x, a * y0 + b * c1y + c * c2y + d * y);
+            self.line_to(
+                a * x0 + b * c1x + c * c2x + d * x,
+                a * y0 + b * c1y + c * c2y + d * y,
+            );
         }
     }
     /// Close the current contour (contours are always filled as closed polygons).
@@ -186,7 +203,10 @@ impl Path {
     #[cfg(test)]
     /// Rectangle with rounded corners of radius `r` (clamped to half the shorter side).
     pub fn round_rect(x0: f32, y0: f32, x1: f32, y1: f32, r: f32) -> Path {
-        let r = r.min((x1 - x0).abs() / 2.0).min((y1 - y0).abs() / 2.0).max(0.0);
+        let r = r
+            .min((x1 - x0).abs() / 2.0)
+            .min((y1 - y0).abs() / 2.0)
+            .max(0.0);
         if r < 0.01 {
             return Path::rect(x0, y0, x1, y1);
         }
@@ -263,7 +283,11 @@ pub struct Mask {
 
 impl Mask {
     pub fn new(w: usize, h: usize) -> Self {
-        Self { w, h, a: vec![0.0; w * h] }
+        Self {
+            w,
+            h,
+            a: vec![0.0; w * h],
+        }
     }
     #[cfg(test)]
     pub fn get(&self, x: usize, y: usize) -> f32 {
@@ -325,11 +349,21 @@ pub fn fill_into(path: &Path, m: &mut Mask, dx: f32, dy: f32) {
             if y0 == y1 || !(x0.is_finite() && y0.is_finite() && x1.is_finite() && y1.is_finite()) {
                 continue;
             }
-            let (dir, xa, ya, xb, yb) = if y0 < y1 { (1, x0, y0, x1, y1) } else { (-1, x1, y1, x0, y0) };
+            let (dir, xa, ya, xb, yb) = if y0 < y1 {
+                (1, x0, y0, x1, y1)
+            } else {
+                (-1, x1, y1, x0, y0)
+            };
             if yb <= 0.0 || ya >= h as f32 {
                 continue;
             }
-            edges.push(Edge { ytop: ya, ybot: yb, x: xa, slope: (xb - xa) / (yb - ya), dir });
+            edges.push(Edge {
+                ytop: ya,
+                ybot: yb,
+                x: xa,
+                slope: (xb - xa) / (yb - ya),
+                dir,
+            });
         }
     }
     if edges.is_empty() {
@@ -337,7 +371,13 @@ pub fn fill_into(path: &Path, m: &mut Mask, dx: f32, dy: f32) {
     }
     edges.sort_by(|a, b| a.ytop.total_cmp(&b.ytop));
     let ymin = edges[0].ytop.floor().max(0.0) as usize;
-    let ymax = (edges.iter().map(|e| e.ybot).fold(f32::MIN, f32::max).ceil().max(0.0) as usize).min(h);
+    let ymax = (edges
+        .iter()
+        .map(|e| e.ybot)
+        .fold(f32::MIN, f32::max)
+        .ceil()
+        .max(0.0) as usize)
+        .min(h);
     let mut next = 0usize;
     let mut active: Vec<usize> = Vec::new();
     let mut xs: Vec<(f32, i32)> = Vec::new();

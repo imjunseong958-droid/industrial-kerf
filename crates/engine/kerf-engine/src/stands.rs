@@ -261,7 +261,10 @@ fn comes_to(from: [f64; 3], inward: [f64; 3], other: &Body) -> Option<(f64, [f64
         return Some(first);
     }
     let past = first.0 + PAST;
-    let (along, facing) = other.of.meets([from[0], from[1] + past, from[2]], DOWN, f64::INFINITY)?;
+    let (along, facing) =
+        other
+            .of
+            .meets([from[0], from[1] + past, from[2]], DOWN, f64::INFINITY)?;
     Some((past + along, facing))
 }
 
@@ -287,9 +290,9 @@ impl<'a> Body<'a> {
         body.feet = body.find_feet();
         if of.convex && body.feet.len() > 1 {
             let count = body.feet.len() as f64;
-            body.middle = Some([0, 1, 2].map(|axis| {
-                body.feet.iter().map(|foot| foot[axis]).sum::<f64>() / count
-            }));
+            body.middle = Some(
+                [0, 1, 2].map(|axis| body.feet.iter().map(|foot| foot[axis]).sum::<f64>() / count),
+            );
         }
         Some(body)
     }
@@ -310,7 +313,11 @@ impl<'a> Body<'a> {
             .filter(|corner| corner[1] >= from)
             .collect();
         // A corner is told again for each side it is a corner of.
-        low.sort_by(|a, b| a[0].total_cmp(&b[0]).then(a[2].total_cmp(&b[2])).then(a[1].total_cmp(&b[1])));
+        low.sort_by(|a, b| {
+            a[0].total_cmp(&b[0])
+                .then(a[2].total_cmp(&b[2]))
+                .then(a[1].total_cmp(&b[1]))
+        });
         low.dedup();
         if low.len() <= MOST_FEET {
             return low;
@@ -346,7 +353,8 @@ impl<'a> Body<'a> {
     /// Whether the boxes around the two are in each other by more than a touch.
     fn near(&self, other: &Body) -> bool {
         (0..3).all(|axis| {
-            self.least[axis] < other.most[axis] - TOUCH && other.least[axis] < self.most[axis] - TOUCH
+            self.least[axis] < other.most[axis] - TOUCH
+                && other.least[axis] < self.most[axis] - TOUCH
         })
     }
 }
@@ -366,7 +374,10 @@ fn read(world: &World) -> Read {
         bodies
             .iter()
             .enumerate()
-            .map(|(index, body)| body.as_ref().map(|body| stand(index, body, &bodies, ground)))
+            .map(|(index, body)| {
+                body.as_ref()
+                    .map(|body| stand(index, body, &bodies, ground))
+            })
             .collect()
     };
     let mut stands = all(None);
@@ -383,7 +394,11 @@ fn read(world: &World) -> Read {
         .max_by(|(_, a), (_, b)| a.area().total_cmp(&b.area()))
         .map(|(index, _)| index);
     // Under the ground is in it, however deep: read again, now that it is known which it is.
-    if ground.is_some_and(|ground| bodies[ground].as_ref().is_some_and(|body| body.of.form != Form::Mesh)) {
+    if ground.is_some_and(|ground| {
+        bodies[ground]
+            .as_ref()
+            .is_some_and(|body| body.of.form != Form::Mesh)
+    }) {
         stands = all(ground);
     }
     if let Some(stand) = ground.and_then(|ground| stands[ground].as_mut()) {
@@ -487,7 +502,11 @@ fn stand_by(
             let Some(other) = other.as_ref().filter(|_| other_index != index) else {
                 continue;
             };
-            let lift = if ground == Some(other_index) { FAR } else { lift };
+            let lift = if ground == Some(other_index) {
+                FAR
+            } else {
+                lift
+            };
             let from = [foot[0], foot[1] - lift, foot[2]];
             let beside = [0, 2]
                 .into_iter()
@@ -495,7 +514,11 @@ fn stand_by(
             if beside || other.most[1] < from[1] {
                 continue;
             }
-            let inward = [from[0] + toward[0] * hair, from[1], from[2] + toward[1] * hair];
+            let inward = [
+                from[0] + toward[0] * hair,
+                from[1],
+                from[2] + toward[1] * hair,
+            ];
             if let Some((along, facing)) = comes_to(from, inward, other) {
                 let gap = along - lift;
                 // The others are asked from the lowest track up, and one as near is no nearer.
@@ -876,7 +899,10 @@ fn set_down(
             .zip(&rests)
             .max_by(|a, b| a.0 .1.how.off().total_cmp(&b.0 .1.how.off()))
             .map_or(rests[0], |(_, rest)| *rest);
-        return (Some(format!("set {} y={}", clip.id, plain(worst, places))), None);
+        return (
+            Some(format!("set {} y={}", clip.id, plain(worst, places))),
+            None,
+        );
     }
     if !evenly {
         return (
@@ -896,7 +922,13 @@ fn set_down(
     let first = rate.frames_round(clip.start);
     let keys: Vec<String> = kerf_track::simplified(&points, near)
         .into_iter()
-        .map(|index| format!("{}f:{}", stands[index].0 - first, plain(rests[index], places)))
+        .map(|index| {
+            format!(
+                "{}f:{}",
+                stands[index].0 - first,
+                plain(rests[index], places)
+            )
+        })
         .collect();
     (
         Some(format!("set {} y={{{}}}", clip.id, keys.join(" "))),
@@ -915,7 +947,10 @@ mod tests {
         // of one that moves to be a quarter of a touch off as well: a touch is six times
         // that half thousandth.
         let written = 0.5 * 10f64.powi(-PLACES);
-        assert!(TOUCH >= 4.0 * written && written + TOUCH / 4.0 < TOUCH, "{TOUCH} {written}");
+        assert!(
+            TOUCH >= 4.0 * written && written + TOUCH / 4.0 < TOUCH,
+            "{TOUCH} {written}"
+        );
         // What is said to float can be seen to: a touch is over a pixel of the smallest
         // guide a model here is handed, 480 high, and under two.
         assert!((1.0..2.0).contains(&(TOUCH * 480.0)));
@@ -923,7 +958,10 @@ mod tests {
         // frame height nearer, 1.0 where `z` is 1.6. It is 0.1051 lower, so 1.0022 there,
         // and a foot put down by that rule is on the floor.
         let floor = 0.75 + (4.0 - 1.6) * 6f64.to_radians().tan();
-        assert!((floor - 1.0).abs() < TOUCH && (floor - 1.0).abs() > 0.002, "{floor}");
+        assert!(
+            (floor - 1.0).abs() < TOUCH && (floor - 1.0).abs() > 0.002,
+            "{floor}"
+        );
         assert_eq!(plain(0.41249, PLACES), "0.412");
         assert_eq!(plain(-0.0001, PLACES), "0");
         assert_eq!(plain(1.0, PLACES), "1");

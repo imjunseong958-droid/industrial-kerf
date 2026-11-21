@@ -652,7 +652,10 @@ pub fn parse(document: &str, catalog: &Catalog) -> Result<Preset, String> {
             .any(|c| matches!(&c.content, Content::Media { media: id, .. } if *id == media.id));
         if !played && !read.contains(media.path.as_str()) {
             return Err(match is_made(media) {
-                true => format!("unused made media `{}`: no clip plays it and no step reads it", media.id),
+                true => format!(
+                    "unused made media `{}`: no clip plays it and no step reads it",
+                    media.id
+                ),
                 false => format!("unused slot `{}`", media.id),
             });
         }
@@ -670,7 +673,12 @@ pub fn parse(document: &str, catalog: &Catalog) -> Result<Preset, String> {
 /// Where a pattern's sequences are reached from: its first, and each a step
 /// of a media it makes draws or holds a clip a step names.
 fn roots(pattern: &Project) -> Vec<Id> {
-    let mut roots: Vec<Id> = pattern.sequences.first().map(|s| s.id.clone()).into_iter().collect();
+    let mut roots: Vec<Id> = pattern
+        .sequences
+        .first()
+        .map(|s| s.id.clone())
+        .into_iter()
+        .collect();
     for (named, name) in made(pattern).flat_map(|m| &m.steps).flat_map(Step::names) {
         let found = match named {
             Named::Sequence => pattern.sequence(name).map(|s| s.id.clone()),
@@ -724,10 +732,7 @@ fn made_media(pattern: &Project, media: &Media) -> Result<(), String> {
             Named::Sequence => pattern.sequence(name).is_none().then_some("sequence"),
             Named::Clip => (!has_clip(name)).then_some("clip"),
             Named::File => match (name.strip_prefix(SLOT), name.strip_prefix(MADE)) {
-                (Some(slot), _) => pattern
-                    .media(slot)
-                    .is_none_or(is_made)
-                    .then_some("slot"),
+                (Some(slot), _) => pattern.media(slot).is_none_or(is_made).then_some("slot"),
                 (_, Some(_)) => (!made(pattern).any(|m| m.path == name)).then_some("made media"),
                 // A file of the project it is applied to, which its making reads there.
                 _ => None,
@@ -911,7 +916,9 @@ pub fn instantiate_with_ids(
         placed.path.clone_from(&made_paths[&media.path]);
         if let Some(slot) = footage_of(media) {
             let binding = &bindings[slot.as_str()];
-            let bound = project.media(binding.media.as_str()).expect("checked binding");
+            let bound = project
+                .media(binding.media.as_str())
+                .expect("checked binding");
             placed.rate = bound.rate;
             placed.drop_frame = bound.drop_frame;
             placed.duration = bound.duration;
@@ -920,9 +927,10 @@ pub fn instantiate_with_ids(
         }
         for step in &mut placed.steps {
             step.rename(|named, name| match named {
-                Named::Sequence | Named::Clip => {
-                    Id::new(name).ok().and_then(|id| ids.get(&id)).map(Id::to_string)
-                }
+                Named::Sequence | Named::Clip => Id::new(name)
+                    .ok()
+                    .and_then(|id| ids.get(&id))
+                    .map(Id::to_string),
                 Named::File => match name.strip_prefix(SLOT) {
                     Some(slot) => bindings
                         .get(slot)

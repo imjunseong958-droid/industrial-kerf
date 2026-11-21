@@ -772,9 +772,10 @@ fn run_export(
     let mut project = kerf_runtime::parse_document(&state.document).map_err(runtime_error)?;
     // Another editor finds a file by where it is, not by where the project is.
     kerf_runtime::resolve_media_paths(&mut project, runtime.directory());
-    let output = std::path::absolute(file).with_context(|| format!("resolve {}", file.display()))?;
-    let written =
-        kerf_interchange::export(&project, sequence, &output, format).map_err(|error| anyhow!(error))?;
+    let output =
+        std::path::absolute(file).with_context(|| format!("resolve {}", file.display()))?;
+    let written = kerf_interchange::export(&project, sequence, &output, format)
+        .map_err(|error| anyhow!(error))?;
     print!("{}", export_report(&written));
     Ok(())
 }
@@ -1009,7 +1010,13 @@ fn run_shots(directory: &Path, kerfd: Option<&Path>) -> Result<()> {
 /// document: what would be written is shown first, and a person says yes. It is one edit,
 /// which undo takes back, and the takes each recipe made are then held to the steps it
 /// became, so that none is asked for again for being carried.
-fn run_carry(directory: &Path, kerfd: Option<&Path>, ids: &[String], all: bool, yes: bool) -> Result<()> {
+fn run_carry(
+    directory: &Path,
+    kerfd: Option<&Path>,
+    ids: &[String],
+    all: bool,
+    yes: bool,
+) -> Result<()> {
     let runtime = runtime_for(directory, kerfd)?;
     let state = runtime.get_state().map_err(runtime_error)?;
     in_step(&state)?;
@@ -1058,7 +1065,12 @@ fn run_carry(directory: &Path, kerfd: Option<&Path>, ids: &[String], all: bool, 
         bail!("not carried: say yes at the terminal, or pass --yes");
     }
     let state = runtime
-        .apply_script_request("ui", &operation_key("carry"), &script.join("\n"), state.revision)
+        .apply_script_request(
+            "ui",
+            &operation_key("carry"),
+            &script.join("\n"),
+            state.revision,
+        )
         .map_err(runtime_error)?;
     let after = kerf_runtime::parse_document(&state.document).map_err(runtime_error)?;
     for (id, recipe) in &carried {
@@ -1818,11 +1830,7 @@ fn operation_key(kind: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        create_project,
-        in_step,
-        run_sync, Args, Command,
-    };
+    use super::{create_project, in_step, run_sync, Args, Command};
     use clap::Parser;
 
     use serde_json::json;

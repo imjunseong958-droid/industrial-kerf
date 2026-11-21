@@ -7,10 +7,23 @@ use crate::Value;
 use rayon::prelude::*;
 
 use crate::util::{premul, unpremul};
-use crate::{Buf, EffectCtx, EffectSpec, num, p, popup, slider};
+use crate::{num, p, popup, slider, Buf, EffectCtx, EffectSpec};
 
-fn spec(id: &'static str, name: &'static str, params: Vec<crate::ParamSpec>, render: crate::RenderFn) -> EffectSpec {
-    EffectSpec { id, name, category: "Keying", params, render, gpu: false, float: true }
+fn spec(
+    id: &'static str,
+    name: &'static str,
+    params: Vec<crate::ParamSpec>,
+    render: crate::RenderFn,
+) -> EffectSpec {
+    EffectSpec {
+        id,
+        name,
+        category: "Keying",
+        params,
+        render,
+        gpu: false,
+        float: true,
+    }
 }
 
 fn pct() -> ParamUi {
@@ -32,14 +45,24 @@ fn pct() -> ParamUi {
 fn unmult(ctx: &EffectCtx, mut b: Buf) -> Buf {
     let pr = ctx.params;
     let white = pr.e("backgroundColor") == 1;
-    let level = if white { pr.f("whiteLevel") } else { pr.f("blackLevel") }.clamp(0.0, 100.0) as f32 / 100.0;
+    let level = if white {
+        pr.f("whiteLevel")
+    } else {
+        pr.f("blackLevel")
+    }
+    .clamp(0.0, 100.0) as f32
+        / 100.0;
     let soft = pr.f("softness").clamp(0.0, 100.0) as f32 / 100.0;
     let decon = pr.b("removeColorMatting");
     let clip = pr.b("clipHdrResults");
     b.img.data.par_iter_mut().for_each(|px| {
         let (c, a0) = unpremul(*px);
         // Distance from the background colour, and where the ramp starts on that scale.
-        let (d, start) = if white { (1.0 - c[0].min(c[1]).min(c[2]), 1.0 - level) } else { (c[0].max(c[1]).max(c[2]), level) };
+        let (d, start) = if white {
+            (1.0 - c[0].min(c[1]).min(c[2]), 1.0 - level)
+        } else {
+            (c[0].max(c[1]).max(c[2]), level)
+        };
         let d = d.clamp(0.0, 1.0);
         let width = soft * (1.0 - start);
         let m = if width > 1e-6 {
@@ -54,7 +77,11 @@ fn unmult(ctx: &EffectCtx, mut b: Buf) -> Buf {
             return;
         }
         let bg = if white { 1.0 } else { 0.0 };
-        let mut out = if decon { c.map(|v| (v - bg * (1.0 - m)) / m) } else { c };
+        let mut out = if decon {
+            c.map(|v| (v - bg * (1.0 - m)) / m)
+        } else {
+            c
+        };
         if clip {
             out = out.map(|v| v.clamp(0.0, 1.0));
         }
@@ -70,12 +97,27 @@ pub fn specs() -> Vec<EffectSpec> {
         "ec.key.unmult",
         "Unmult",
         vec![
-            p("backgroundColor", "Background Color", Value::Enum(0), popup(&["Black", "White"])),
+            p(
+                "backgroundColor",
+                "Background Color",
+                Value::Enum(0),
+                popup(&["Black", "White"]),
+            ),
             p("blackLevel", "Black Level", num(0.0), pct()),
             p("whiteLevel", "White Level", num(100.0), pct()),
             p("softness", "Softness", num(100.0), pct()),
-            p("removeColorMatting", "Remove Color Matting", Value::Bool(true), ParamUi::Checkbox),
-            p("clipHdrResults", "Clip HDR Results", Value::Bool(true), ParamUi::Checkbox),
+            p(
+                "removeColorMatting",
+                "Remove Color Matting",
+                Value::Bool(true),
+                ParamUi::Checkbox,
+            ),
+            p(
+                "clipHdrResults",
+                "Clip HDR Results",
+                Value::Bool(true),
+                ParamUi::Checkbox,
+            ),
         ],
         unmult,
     )]

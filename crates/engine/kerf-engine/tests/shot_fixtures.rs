@@ -40,9 +40,11 @@ fn read(name: &str) -> Project {
 /// The models the fixtures name, none of which is run here.
 fn models(folder: &Path) -> Models {
     let file = folder.join("models.json");
-    let named = ["shot", "depth", "cameras", "matte", "shown", "into", "plate", "directed", "led", "still"]
-        .map(|name| format!(r#""{name}": {{"run": ["no-such-program", "{{request}}"]}}"#))
-        .join(", ");
+    let named = [
+        "shot", "depth", "cameras", "matte", "shown", "into", "plate", "directed", "led", "still",
+    ]
+    .map(|name| format!(r#""{name}": {{"run": ["no-such-program", "{{request}}"]}}"#))
+    .join(", ");
     std::fs::write(&file, format!("{{{named}}}")).expect("a models file");
     Models::read(&file).expect("models")
 }
@@ -53,11 +55,19 @@ fn the_car_on_a_road_is_made_by_steps_in_its_document() {
     let folder = tempfile::tempdir().expect("a folder");
     let models = models(folder.path());
     for media in &project.media {
-        assert!(!media.steps.is_empty() && recipe::uncarried(media).is_none(), "{}", media.id);
+        assert!(
+            !media.steps.is_empty() && recipe::uncarried(media).is_none(),
+            "{}",
+            media.id
+        );
         let plan = recipe::plan(&project, folder.path(), media.id.as_str(), &models)
             .unwrap_or_else(|error| panic!("{}: {error}", media.id));
         assert_eq!(plan.steps.len(), media.steps.len(), "{}", media.id);
-        assert!(plan.steps[0].starts_with("Kerf renders "), "{}", plan.steps[0]);
+        assert!(
+            plan.steps[0].starts_with("Kerf renders "),
+            "{}",
+            plan.steps[0]
+        );
         assert!(plan.notes.is_empty(), "{}: {:?}", media.id, plan.notes);
     }
     // The depth shot: the guide is the depth of `s2`, at the model's size and rate, and
@@ -65,12 +75,22 @@ fn the_car_on_a_road_is_made_by_steps_in_its_document() {
     let depth = recipe::plan(&project, folder.path(), "depth", &models).expect("a plan");
     assert_eq!(depth.steps.len(), 2);
     assert!(
-        depth.steps[0].starts_with("Kerf renders the depth of sequence s2 at 832x480, 16 frames a second to "),
+        depth.steps[0].starts_with(
+            "Kerf renders the depth of sequence s2 at 832x480, 16 frames a second to "
+        ),
         "{}",
         depth.steps[0]
     );
-    assert!(depth.steps[1].contains("asks model `shot` for prompt \"a red sports car drives"), "{}", depth.steps[1]);
-    assert!(depth.steps[1].ends_with("guide {guide.mp4}, 4 s, seed 7"), "{}", depth.steps[1]);
+    assert!(
+        depth.steps[1].contains("asks model `shot` for prompt \"a red sports car drives"),
+        "{}",
+        depth.steps[1]
+    );
+    assert!(
+        depth.steps[1].ends_with("guide {guide.mp4}, 4 s, seed 7"),
+        "{}",
+        depth.steps[1]
+    );
     assert_eq!(depth.stored, "shots/depth.takes/001.mp4");
 }
 
@@ -99,14 +119,35 @@ fn a_walk_in_layers_is_made_by_steps_in_its_document() {
     // The man taken out: his matte first, by his name, and the plate that reads it.
     let gone = recipe::plan(&project, directory, "gone", &models).expect("a plan");
     assert_eq!(gone.steps.len(), 2);
-    assert!(gone.steps[0].contains("asks model `matte` for prompt \"man\", guide footage/walk.mp4"), "{}", gone.steps[0]);
-    assert!(gone.steps[1].contains("asks model `plate`"), "{}", gone.steps[1]);
-    assert!(gone.steps[1].contains("guide_mask {man.mp4}"), "{}", gone.steps[1]);
-    assert!(gone.steps[1].ends_with("seed 7, reach 72"), "{}", gone.steps[1]);
+    assert!(
+        gone.steps[0].contains("asks model `matte` for prompt \"man\", guide footage/walk.mp4"),
+        "{}",
+        gone.steps[0]
+    );
+    assert!(
+        gone.steps[1].contains("asks model `plate`"),
+        "{}",
+        gone.steps[1]
+    );
+    assert!(
+        gone.steps[1].contains("guide_mask {man.mp4}"),
+        "{}",
+        gone.steps[1]
+    );
+    assert!(
+        gone.steps[1].ends_with("seed 7, reach 72"),
+        "{}",
+        gone.steps[1]
+    );
     // Without the footage, that is what is missing, named from the project's folder.
     let empty = tempfile::tempdir().expect("a folder");
-    let missing = recipe::plan(&project, empty.path(), "gone", &models).unwrap_err().to_string();
-    assert_eq!(missing, "the steps need `footage/walk.mp4`, which is not there");
+    let missing = recipe::plan(&project, empty.path(), "gone", &models)
+        .unwrap_err()
+        .to_string();
+    assert_eq!(
+        missing,
+        "the steps need `footage/walk.mp4`, which is not there"
+    );
 }
 
 #[test]
@@ -117,8 +158,14 @@ fn scenes_of_solids_are_made_by_steps_in_their_document() {
     let folder = tempfile::tempdir().expect("a folder");
     let directory = folder.path();
     std::fs::create_dir(directory.join("models")).expect("a folder");
-    for file in ["models/rocket.glb", "models/donut.glb", "models/saucer.glb", "cast.kerfcast"] {
-        std::fs::copy(fixture("solids").join(file), directory.join(file)).expect("the fixture's file");
+    for file in [
+        "models/rocket.glb",
+        "models/donut.glb",
+        "models/saucer.glb",
+        "cast.kerfcast",
+    ] {
+        std::fs::copy(fixture("solids").join(file), directory.join(file))
+            .expect("the fixture's file");
     }
     for take in ["shots/snowman.takes/001.mp4", "shots/robot.takes/001.mp4"] {
         let file = directory.join(take);
@@ -137,32 +184,87 @@ fn scenes_of_solids_are_made_by_steps_in_their_document() {
     for id in &made {
         let plan = recipe::plan(&project, directory, id, &models)
             .unwrap_or_else(|error| panic!("{id}: {error}"));
-        assert_eq!(plan.steps.len(), project.media(id).expect("it").steps.len(), "{id}");
+        assert_eq!(
+            plan.steps.len(),
+            project.media(id).expect("it").steps.len(),
+            "{id}"
+        );
     }
-    let plan = |id: &str| recipe::plan(&project, directory, id, &models).expect("a plan").steps;
+    let plan = |id: &str| {
+        recipe::plan(&project, directory, id, &models)
+            .expect("a plan")
+            .steps
+    };
     // A shot one model makes has its request in its take's working folder.
     assert!(plan("rocket_shot")[1].contains("/shots/rocket.takes/001.work/request.json"));
     // All four directions on one line: a depth guide, when the ball lands, and where it goes.
     let strike = plan("bowling_shot");
     assert!(strike[1].contains("asks model `directed`"), "{}", strike[1]);
-    assert!(strike[1].ends_with("guide {guide.mp4}, seed 7, signal strike, moves ball"), "{}", strike[1]);
+    assert!(
+        strike[1].ends_with("guide {guide.mp4}, seed 7, signal strike, moves ball"),
+        "{}",
+        strike[1]
+    );
     // A still for the shot to look like, and the shot: two models, a request each.
     let donut = plan("donut_shot");
-    assert!(donut[0].contains("/001.work/step1/request.json") && donut[0].contains("asks model `still`"), "{}", donut[0]);
-    assert!(donut[2].contains("/001.work/step3/request.json") && donut[2].contains("ref {donut.png}"), "{}", donut[2]);
+    assert!(
+        donut[0].contains("/001.work/step1/request.json")
+            && donut[0].contains("asks model `still`"),
+        "{}",
+        donut[0]
+    );
+    assert!(
+        donut[2].contains("/001.work/step3/request.json") && donut[2].contains("ref {donut.png}"),
+        "{}",
+        donut[2]
+    );
     // A longer shot in two parts, the second going on from the first, and the two joined.
     let long = plan("city_long");
-    assert!(long[1].contains(", 2.5625 s of it from 2.5 s"), "{}", long[1]);
-    assert!(long[3].contains("first {a.mp4}") && long[3].contains("/step4/request.json"), "{}", long[3]);
-    assert!(long[4].starts_with("Kerf joins {a.mp4}, {b.mp4} end to end into "), "{}", long[4]);
-    assert!(long[4].ends_with("each part after the first without its first frame"), "{}", long[4]);
+    assert!(
+        long[1].contains(", 2.5625 s of it from 2.5 s"),
+        "{}",
+        long[1]
+    );
+    assert!(
+        long[3].contains("first {a.mp4}") && long[3].contains("/step4/request.json"),
+        "{}",
+        long[3]
+    );
+    assert!(
+        long[4].starts_with("Kerf joins {a.mp4}, {b.mp4} end to end into "),
+        "{}",
+        long[4]
+    );
+    assert!(
+        long[4].ends_with("each part after the first without its first frame"),
+        "{}",
+        long[4]
+    );
     // A film's shot is asked with who is in it and how it looks, from the cast's file.
     let moon = plan("f6");
-    assert!(moon[1].contains("Bolt: a chunky retro tin toy robot"), "{}", moon[1]);
-    assert!(moon[1].contains("rocket: a white retro rocket ship"), "{}", moon[1]);
-    assert!(moon[1].contains("1950s pulp science fiction film"), "{}", moon[1]);
+    assert!(
+        moon[1].contains("Bolt: a chunky retro tin toy robot"),
+        "{}",
+        moon[1]
+    );
+    assert!(
+        moon[1].contains("rocket: a white retro rocket ship"),
+        "{}",
+        moon[1]
+    );
+    assert!(
+        moon[1].contains("1950s pulp science fiction film"),
+        "{}",
+        moon[1]
+    );
     // A pass alone is a media Kerf draws, with no model asked.
     let ids = plan("pass_ids");
     assert_eq!(ids.len(), 1);
-    assert!(ids[0].starts_with("Kerf renders the ids of sequence saucer at 832x480, 16 frames a second to "), "{}", ids[0]);
+    assert!(
+        ids[0].starts_with(
+            "Kerf renders the ids of sequence saucer at 832x480, 16 frames a second to "
+        ),
+        "{}",
+        ids[0]
+    );
 }

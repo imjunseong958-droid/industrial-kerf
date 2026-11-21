@@ -165,7 +165,9 @@ pub(crate) fn command_for(
         let size = |at: usize| asked["size"].get(at).and_then(Value::as_u64);
         match name {
             "request" => Some(request.to_string_lossy().into_owned()),
-            "out" | "prompt" | "guide" | "first" | "last" | "seconds" | "seed" => text(&asked[name]),
+            "out" | "prompt" | "guide" | "first" | "last" | "seconds" | "seed" => {
+                text(&asked[name])
+            }
             "size" => Some(format!("{}x{}", size(0)?, size(1)?)),
             "width" => size(0).map(|side| side.to_string()),
             "height" => size(1).map(|side| side.to_string()),
@@ -174,7 +176,11 @@ pub(crate) fn command_for(
                 if let Some(count) = other.strip_prefix("ref") {
                     let at = match count {
                         "" => Some(0),
-                        number => number.parse::<usize>().ok().filter(|at| *at >= 2).map(|at| at - 1),
+                        number => number
+                            .parse::<usize>()
+                            .ok()
+                            .filter(|at| *at >= 2)
+                            .map(|at| at - 1),
                     };
                     if let Some(at) = at {
                         return asked["references"].get(at).and_then(text);
@@ -401,7 +407,10 @@ impl Models {
                         "model `{name}` has no `run`, a program and its arguments as a list"
                     ))
                 })?;
-            if !command.iter().any(|word| word.contains(REQUEST) || word.contains(OUT)) {
+            if !command
+                .iter()
+                .any(|word| word.contains(REQUEST) || word.contains(OUT))
+            {
                 return Err(wrong(format!(
                     "model `{name}`'s `run` names neither `{REQUEST}` nor `{OUT}`, so its program is never told what is asked or where its file goes"
                 )));

@@ -17,7 +17,10 @@
 
 use kerf_raster::Image;
 use kerf_raster_fx::Value;
-use kerf_raster_fx::{Buf, EffectCtx, EffectEnv, EffectHost, LayerPixels, MaskShape, Params, apply, default_value, find};
+use kerf_raster_fx::{
+    apply, default_value, find, Buf, EffectCtx, EffectEnv, EffectHost, LayerPixels, MaskShape,
+    Params,
+};
 
 const W: u32 = 64;
 const H: u32 = 48;
@@ -39,7 +42,11 @@ fn layer(hdr: bool) -> Image {
                 1.0
             };
             let gain = if hdr && x < 20 { 1.6 } else { 1.0 };
-            let c = [u * gain, v * gain, (0.3 + 0.4 * (u * 9.0).sin().abs()) * gain];
+            let c = [
+                u * gain,
+                v * gain,
+                (0.3 + 0.4 * (u * 9.0).sin().abs()) * gain,
+            ];
             img.set(x, y, [c[0] * a, c[1] * a, c[2] * a, a]);
         }
     }
@@ -61,7 +68,14 @@ fn map() -> Image {
 struct Host;
 impl EffectHost for Host {
     fn layer(&self, _: u64, _: bool) -> Option<LayerPixels> {
-        Some(LayerPixels { buf: Buf { img: map(), offset: [0.0; 2], scale: 1.0 }, size: [W as f64, H as f64] })
+        Some(LayerPixels {
+            buf: Buf {
+                img: map(),
+                offset: [0.0; 2],
+                scale: 1.0,
+            },
+            size: [W as f64, H as f64],
+        })
     }
     fn audio(&self, _: u64, start: f64, frames: usize, rate: u32) -> Option<Vec<f32>> {
         // Two tones plus a chirp, stereo interleaved.
@@ -69,7 +83,8 @@ impl EffectHost for Host {
             (0..frames)
                 .flat_map(|i| {
                     let t = start + i as f64 / rate as f64;
-                    let l = 0.5 * (t * 440.0 * std::f64::consts::TAU).sin() + 0.2 * (t * 1300.0 * std::f64::consts::TAU).sin();
+                    let l = 0.5 * (t * 440.0 * std::f64::consts::TAU).sin()
+                        + 0.2 * (t * 1300.0 * std::f64::consts::TAU).sin();
                     let r = 0.4 * (t * (200.0 + 300.0 * t) * std::f64::consts::TAU).sin();
                     [l as f32, r as f32]
                 })
@@ -87,9 +102,30 @@ fn masks() -> Vec<MaskShape> {
         })
         .collect();
     vec![
-        MaskShape { name: "Mask 1".into(), points: pent, closed: true, inverted: false },
-        MaskShape { name: "Mask 2".into(), points: vec![[6.3, 5.1], [58.2, 7.7], [55.4, 43.6], [9.1, 40.2]], closed: true, inverted: false },
-        MaskShape { name: "Mask 3".into(), points: vec![[4.2, 30.3], [18.7, 12.4], [33.1, 28.9], [47.6, 9.8], [60.2, 25.5]], closed: false, inverted: false },
+        MaskShape {
+            name: "Mask 1".into(),
+            points: pent,
+            closed: true,
+            inverted: false,
+        },
+        MaskShape {
+            name: "Mask 2".into(),
+            points: vec![[6.3, 5.1], [58.2, 7.7], [55.4, 43.6], [9.1, 40.2]],
+            closed: true,
+            inverted: false,
+        },
+        MaskShape {
+            name: "Mask 3".into(),
+            points: vec![
+                [4.2, 30.3],
+                [18.7, 12.4],
+                [33.1, 28.9],
+                [47.6, 9.8],
+                [60.2, 25.5],
+            ],
+            closed: false,
+            inverted: false,
+        },
     ]
 }
 
@@ -112,16 +148,36 @@ fn cases() -> Vec<(&'static str, Vec<Set>)> {
             "ec.generate.audiospectrum",
             vec![
                 vec![("audioLayer", Value::Layer(Some(MAP)))],
-                vec![("audioLayer", Value::Layer(Some(MAP))), ("displayOptions", e(1)), ("sideOptions", e(2)), ("compositeOnOriginal", b(true))],
-                vec![("audioLayer", Value::Layer(Some(MAP))), ("displayOptions", e(2)), ("path", n(3.0)), ("usePolarPath", b(false))],
+                vec![
+                    ("audioLayer", Value::Layer(Some(MAP))),
+                    ("displayOptions", e(1)),
+                    ("sideOptions", e(2)),
+                    ("compositeOnOriginal", b(true)),
+                ],
+                vec![
+                    ("audioLayer", Value::Layer(Some(MAP))),
+                    ("displayOptions", e(2)),
+                    ("path", n(3.0)),
+                    ("usePolarPath", b(false)),
+                ],
             ],
         ),
         (
             "ec.generate.audiowaveform",
             vec![
                 vec![("audioLayer", Value::Layer(Some(MAP)))],
-                vec![("audioLayer", Value::Layer(Some(MAP))), ("displayOptions", e(0)), ("waveformOptions", e(2)), ("usePolarPath", b(true))],
-                vec![("audioLayer", Value::Layer(Some(MAP))), ("displayOptions", e(2)), ("path", n(1.0)), ("compositeOnOriginal", b(true))],
+                vec![
+                    ("audioLayer", Value::Layer(Some(MAP))),
+                    ("displayOptions", e(0)),
+                    ("waveformOptions", e(2)),
+                    ("usePolarPath", b(true)),
+                ],
+                vec![
+                    ("audioLayer", Value::Layer(Some(MAP))),
+                    ("displayOptions", e(2)),
+                    ("path", n(1.0)),
+                    ("compositeOnOriginal", b(true)),
+                ],
             ],
         ),
     ]
@@ -148,7 +204,13 @@ fn fnv(img: &Image) -> u64 {
 fn render(id: &str, set: &Set, time: f64, bpc8: bool, half: bool) -> Image {
     let spec = find(id).unwrap_or_else(|| panic!("no effect {id}"));
     let size = [W as f64, H as f64];
-    let mut params = Params { values: spec.params.iter().map(|p| (p.id.to_string(), default_value(p, size))).collect() };
+    let mut params = Params {
+        values: spec
+            .params
+            .iter()
+            .map(|p| (p.id.to_string(), default_value(p, size)))
+            .collect(),
+    };
     for (k, v) in set {
         assert!(params.values.contains_key(*k), "{id}: unknown param {k}");
         params.values.insert(k.to_string(), v.clone());
@@ -158,23 +220,49 @@ fn render(id: &str, set: &Set, time: f64, bpc8: bool, half: bool) -> Image {
         img.clamp01();
         img.quantize(255.0);
     }
-    let mut buf = Buf { img, offset: [0.0; 2], scale: 1.0 };
+    let mut buf = Buf {
+        img,
+        offset: [0.0; 2],
+        scale: 1.0,
+    };
     if half {
         // A half-resolution preview buffer padded by 3 px.
         let (w2, h2) = (W / 2, H / 2);
         let mut small = Image::new(w2, h2);
         for y in 0..h2 {
             for x in 0..w2 {
-                small.set(x, y, buf.img.sample_bilinear(x as f64 * 2.0 + 1.0, y as f64 * 2.0 + 1.0));
+                small.set(
+                    x,
+                    y,
+                    buf.img
+                        .sample_bilinear(x as f64 * 2.0 + 1.0, y as f64 * 2.0 + 1.0),
+                );
             }
         }
-        buf = Buf { img: small, offset: [0.0; 2], scale: 0.5 };
+        buf = Buf {
+            img: small,
+            offset: [0.0; 2],
+            scale: 0.5,
+        };
         buf.pad(3);
     }
     let host = Host;
     let masks = masks();
-    let env = EffectEnv { host: Some(&host), masks: &masks, frame_rate: 30.0, comp_time: time, ..Default::default() };
-    let ctx = EffectCtx { params: &params, time, layer_size: size, seed: 1, adjustment: false, env };
+    let env = EffectEnv {
+        host: Some(&host),
+        masks: &masks,
+        frame_rate: 30.0,
+        comp_time: time,
+        ..Default::default()
+    };
+    let ctx = EffectCtx {
+        params: &params,
+        time,
+        layer_size: size,
+        seed: 1,
+        adjustment: false,
+        env,
+    };
     let mut out = apply(spec, &ctx, buf).img;
     if bpc8 {
         out.clamp01();
@@ -191,7 +279,11 @@ fn hashes() -> Vec<(String, u64)> {
             for (bpc8, half) in [(true, false), (false, false), (false, true)] {
                 for t in TIMES {
                     let img = render(id, set, t, bpc8, half);
-                    let name = format!("{id}/{si}/{}{}/t{t}", if bpc8 { "8bpc" } else { "32bpc" }, if half { "/half" } else { "" });
+                    let name = format!(
+                        "{id}/{si}/{}{}/t{t}",
+                        if bpc8 { "8bpc" } else { "32bpc" },
+                        if half { "/half" } else { "" }
+                    );
                     v.push((name, fnv(&img)));
                 }
             }
@@ -230,36 +322,72 @@ const GOLDEN: &[(&str, u64)] = &[
     ("ec.generate.audiospectrum/0/8bpc/t1.3", 0xc0109e19c3958517),
     ("ec.generate.audiospectrum/0/32bpc/t0.4", 0x24fe2e48cc432c1f),
     ("ec.generate.audiospectrum/0/32bpc/t1.3", 0x9bdbf835e7d42f78),
-    ("ec.generate.audiospectrum/0/32bpc/half/t0.4", 0x445e16a81e313a40),
-    ("ec.generate.audiospectrum/0/32bpc/half/t1.3", 0x88849fde30e6b048),
+    (
+        "ec.generate.audiospectrum/0/32bpc/half/t0.4",
+        0x445e16a81e313a40,
+    ),
+    (
+        "ec.generate.audiospectrum/0/32bpc/half/t1.3",
+        0x88849fde30e6b048,
+    ),
     ("ec.generate.audiospectrum/1/8bpc/t0.4", 0xf95a769e610688cc),
     ("ec.generate.audiospectrum/1/8bpc/t1.3", 0x7df3a63a59a10c38),
     ("ec.generate.audiospectrum/1/32bpc/t0.4", 0x53f3e442e240599b),
     ("ec.generate.audiospectrum/1/32bpc/t1.3", 0x213066492a32f6a8),
-    ("ec.generate.audiospectrum/1/32bpc/half/t0.4", 0x38ceb79d523c7402),
-    ("ec.generate.audiospectrum/1/32bpc/half/t1.3", 0x7d63c37d260eb112),
+    (
+        "ec.generate.audiospectrum/1/32bpc/half/t0.4",
+        0x38ceb79d523c7402,
+    ),
+    (
+        "ec.generate.audiospectrum/1/32bpc/half/t1.3",
+        0x7d63c37d260eb112,
+    ),
     ("ec.generate.audiospectrum/2/8bpc/t0.4", 0x73c15c41ad557cec),
     ("ec.generate.audiospectrum/2/8bpc/t1.3", 0x0bb38170a3fbb6fd),
     ("ec.generate.audiospectrum/2/32bpc/t0.4", 0x2ac65e1ca97db691),
     ("ec.generate.audiospectrum/2/32bpc/t1.3", 0xa8be6d0571415ab0),
-    ("ec.generate.audiospectrum/2/32bpc/half/t0.4", 0x318b82f955d58300),
-    ("ec.generate.audiospectrum/2/32bpc/half/t1.3", 0x4775b23a8cc7c6c6),
+    (
+        "ec.generate.audiospectrum/2/32bpc/half/t0.4",
+        0x318b82f955d58300,
+    ),
+    (
+        "ec.generate.audiospectrum/2/32bpc/half/t1.3",
+        0x4775b23a8cc7c6c6,
+    ),
     ("ec.generate.audiowaveform/0/8bpc/t0.4", 0x68a7733a023bc9f1),
     ("ec.generate.audiowaveform/0/8bpc/t1.3", 0x57e13a1aaa458b14),
     ("ec.generate.audiowaveform/0/32bpc/t0.4", 0xb78e946d794b5ade),
     ("ec.generate.audiowaveform/0/32bpc/t1.3", 0x2acdbc2a2558c847),
-    ("ec.generate.audiowaveform/0/32bpc/half/t0.4", 0x99da8b92d697e171),
-    ("ec.generate.audiowaveform/0/32bpc/half/t1.3", 0xdfe01c4d3368ea92),
+    (
+        "ec.generate.audiowaveform/0/32bpc/half/t0.4",
+        0x99da8b92d697e171,
+    ),
+    (
+        "ec.generate.audiowaveform/0/32bpc/half/t1.3",
+        0xdfe01c4d3368ea92,
+    ),
     ("ec.generate.audiowaveform/1/8bpc/t0.4", 0x5f463552fd80eda6),
     ("ec.generate.audiowaveform/1/8bpc/t1.3", 0x4e724e55141cb0e2),
     ("ec.generate.audiowaveform/1/32bpc/t0.4", 0xcba797b9142cc9bc),
     ("ec.generate.audiowaveform/1/32bpc/t1.3", 0x1efc192f83ff114f),
-    ("ec.generate.audiowaveform/1/32bpc/half/t0.4", 0x5f81670776ddb569),
-    ("ec.generate.audiowaveform/1/32bpc/half/t1.3", 0xf56e5d8f8445125f),
+    (
+        "ec.generate.audiowaveform/1/32bpc/half/t0.4",
+        0x5f81670776ddb569,
+    ),
+    (
+        "ec.generate.audiowaveform/1/32bpc/half/t1.3",
+        0xf56e5d8f8445125f,
+    ),
     ("ec.generate.audiowaveform/2/8bpc/t0.4", 0xb9fb312b8553ee47),
     ("ec.generate.audiowaveform/2/8bpc/t1.3", 0x08640b88a8496eb1),
     ("ec.generate.audiowaveform/2/32bpc/t0.4", 0x12a7502643511c69),
     ("ec.generate.audiowaveform/2/32bpc/t1.3", 0xc5f3b7bc698f6328),
-    ("ec.generate.audiowaveform/2/32bpc/half/t0.4", 0x2409e86ae0f5e841),
-    ("ec.generate.audiowaveform/2/32bpc/half/t1.3", 0x5518084e651af2c6),
+    (
+        "ec.generate.audiowaveform/2/32bpc/half/t0.4",
+        0x2409e86ae0f5e841,
+    ),
+    (
+        "ec.generate.audiowaveform/2/32bpc/half/t1.3",
+        0x5518084e651af2c6,
+    ),
 ];

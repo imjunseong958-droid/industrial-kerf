@@ -90,7 +90,9 @@ pub fn resolve_ffprobe_bin() -> &'static str {
 /// The ffprobe that comes with the ffmpeg at `ffmpeg`, when that is a path.
 fn ffprobe_beside(ffmpeg: &str) -> Option<String> {
     let path = Path::new(ffmpeg);
-    let parent = path.parent().filter(|parent| !parent.as_os_str().is_empty())?;
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())?;
     (path.file_stem()? == "ffmpeg").then(|| {
         parent
             .join(format!("ffprobe{}", std::env::consts::EXE_SUFFIX))
@@ -391,8 +393,14 @@ mod tests {
     fn videotoolbox_is_chosen_on_a_mac_that_is_not_a_guest() {
         let never_tried = |_: &str| -> bool { panic!("no device is tried on macOS") };
         assert_eq!(
-            chosen_hwaccel(None, "macos", |name| name == "videotoolbox", || false, never_tried)
-                .as_deref(),
+            chosen_hwaccel(
+                None,
+                "macos",
+                |name| name == "videotoolbox",
+                || false,
+                never_tried
+            )
+            .as_deref(),
             Some("videotoolbox")
         );
         assert_eq!(chosen_by_itself("macos", true, true), None);

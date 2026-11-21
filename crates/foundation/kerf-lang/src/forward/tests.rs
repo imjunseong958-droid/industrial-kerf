@@ -75,7 +75,10 @@ fn a_line_is_refused_for_a_clip_that_was_cut_moved_or_removed() {
         &edited("slip c4 +6f"),
         "trim c2 out -12f ripple\ntrim c4 out -12f",
     );
-    assert_eq!(second.message, "clip `c4` was slipped since this was proposed");
+    assert_eq!(
+        second.message,
+        "clip `c4` was slipped since this was proposed"
+    );
     assert_eq!(second.span.map(|span| span.line), Some(2));
     assert_eq!(second.entity.as_ref().map(Id::as_str), Some("c4"));
 }

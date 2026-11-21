@@ -5,8 +5,8 @@ use kerf_core::program::{
     compile_program, program_sequence, program_sound, ProgramError, ProgramOptions, ProgramSound,
 };
 use kerf_model::{
-    Catalog, Clip, Content, Domain, Effect, Id, Mask, Param, ParamType, Project, Sequence,
-    Time, TrackKind, Value,
+    Catalog, Clip, Content, Domain, Effect, Id, Mask, Param, ParamType, Project, Sequence, Time,
+    TrackKind, Value,
 };
 use std::collections::HashMap;
 use std::path::PathBuf;

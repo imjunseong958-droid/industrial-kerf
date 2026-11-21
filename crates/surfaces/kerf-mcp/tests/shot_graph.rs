@@ -56,7 +56,10 @@ fn ok(router: &KerfMcpRouter, name: &str, arguments: Value) -> Value {
 fn refused(router: &KerfMcpRouter, name: &str, arguments: Value) -> String {
     let response = router.call(name, arguments);
     assert_eq!(response["ok"], false, "{name}: {response}");
-    response["error"]["message"].as_str().unwrap_or_default().to_owned()
+    response["error"]["message"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned()
 }
 
 fn read(file: &Path) -> String {
@@ -130,24 +133,56 @@ fn an_agent_reads_a_shots_graph_and_sets_what_a_person_sets_there() {
     // each node by its step's number.
     let graph = ok(&router, "look", json!({"graph": "shot"}));
     assert_eq!(graph["text"], STEPS);
-    assert!(graph.get("recipe").is_none() && graph.get("document").is_none(), "{graph}");
-    assert_eq!((graph["media"].as_str(), graph["name"].as_str()), (Some("shot"), Some("shot")));
+    assert!(
+        graph.get("recipe").is_none() && graph.get("document").is_none(),
+        "{graph}"
+    );
+    assert_eq!(
+        (graph["media"].as_str(), graph["name"].as_str()),
+        (Some("shot"), Some("shot"))
+    );
     let video = node(&graph, |node| node["model"] == "video");
-    let (line, made) = (video["line"].as_u64().unwrap(), video["id"].as_str().unwrap().to_owned());
+    let (line, made) = (
+        video["line"].as_u64().unwrap(),
+        video["id"].as_str().unwrap().to_owned(),
+    );
     assert_eq!(line, 3);
-    assert_eq!(node(&graph, |node| node["id"] == "made:depth.mp4")["line"], 1);
-    assert_eq!(video["runner"], json!({"kind": "comfy", "workflow": "shot"}));
-    assert!(node(&graph, |node| node["model"] == "still").get("runner").is_none());
+    assert_eq!(
+        node(&graph, |node| node["id"] == "made:depth.mp4")["line"],
+        1
+    );
+    assert_eq!(
+        video["runner"],
+        json!({"kind": "comfy", "workflow": "shot"})
+    );
+    assert!(node(&graph, |node| node["model"] == "still")
+        .get("runner")
+        .is_none());
     assert!(wired(&graph, "signal:bounce", &made, "signal"), "{graph}");
     assert!(wired(&graph, "moves:ball", &made, "moves"), "{graph}");
-    assert!(wired(&graph, "sequence:court", "made:depth.mp4", "sequence"), "{graph}");
-    assert!(graph["change"].as_str().unwrap().contains("step shot set <n>"), "{graph}");
-    assert!(graph["takes"]["made"].as_array().is_some_and(Vec::is_empty), "{graph}");
+    assert!(
+        wired(&graph, "sequence:court", "made:depth.mp4", "sequence"),
+        "{graph}"
+    );
+    assert!(
+        graph["change"]
+            .as_str()
+            .unwrap()
+            .contains("step shot set <n>"),
+        "{graph}"
+    );
+    assert!(
+        graph["takes"]["made"].as_array().is_some_and(Vec::is_empty),
+        "{graph}"
+    );
 
     // Its takes held to its guide, as the graph's takes card holds them: the clip the step
     // says goes somewhere, in the sequence that has it. None is made yet.
     let held = ok(&router, "look", json!({"takes": "shot"}));
-    assert_eq!((held["sequence"].as_str(), held["clips"][0].as_str()), (Some("court"), Some("ball")));
+    assert_eq!(
+        (held["sequence"].as_str(), held["clips"][0].as_str()),
+        (Some("court"), Some("ball"))
+    );
     assert_eq!(held["takes"], json!([]));
     assert_eq!(held["best"], Value::Null);
 
@@ -155,7 +190,11 @@ fn an_agent_reads_a_shots_graph_and_sets_what_a_person_sets_there() {
     // and no file written.
     let files = || std::fs::read_dir(dir.join("shots")).unwrap().count();
     let before = files();
-    let seeded = ok(&router, "edit", json!({"script": format!("step shot set {line} seed=8")}));
+    let seeded = ok(
+        &router,
+        "edit",
+        json!({"script": format!("step shot set {line} seed=8")}),
+    );
     assert_eq!(seeded["status"], "awaiting_review", "{seeded}");
     assert!(seeded.get("recipes").is_none(), "{seeded}");
     assert_eq!(
@@ -165,14 +204,26 @@ fn an_agent_reads_a_shots_graph_and_sets_what_a_person_sets_there() {
     assert_eq!(files(), before);
 
     // On top of it: one input let go, another wired in, and a value of the model's workflow.
-    let workflow = ok(&router, "look", json!({"workflow": {"media": "shot", "line": line}}));
-    assert_eq!((workflow["name"].as_str(), workflow["origin"].as_str()), (Some("shot"), Some("bundled")));
+    let workflow = ok(
+        &router,
+        "look",
+        json!({"workflow": {"media": "shot", "line": line}}),
+    );
+    assert_eq!(
+        (workflow["name"].as_str(), workflow["origin"].as_str()),
+        (Some("shot"), Some("bundled"))
+    );
     assert!(workflow.get("text").is_none(), "the nodes say it");
     // With no server named, none was asked: the workflow is read without, and says why.
-    assert!(workflow.get("taken").is_none() && workflow["takenError"].is_string(), "{workflow}");
+    assert!(
+        workflow.get("taken").is_none() && workflow["takenError"].is_string(),
+        "{workflow}"
+    );
     assert_eq!(workflow["blanks"]["seed"]["given"], "7");
     let loader = node(&workflow, |node| {
-        node["inputs"].as_array().is_some_and(|inputs| inputs.iter().any(|input| input["name"] == "weight_dtype"))
+        node["inputs"]
+            .as_array()
+            .is_some_and(|inputs| inputs.iter().any(|input| input["name"] == "weight_dtype"))
     })["id"]
         .as_str()
         .unwrap()
@@ -198,7 +249,9 @@ fn an_agent_reads_a_shots_graph_and_sets_what_a_person_sets_there() {
             "signal=hit moves=ball seconds=4 seed=8 workflow=shots/shot.video.comfy.json strength=0.8"
         )
     );
-    assert!(read(&dir.join("shots/shot.video.comfy.json")).contains("\"weight_dtype\": \"fp8_e4m3fn\""));
+    assert!(
+        read(&dir.join("shots/shot.video.comfy.json")).contains("\"weight_dtype\": \"fp8_e4m3fn\"")
+    );
     // The person reviewing it reads what was set, in the proposal's script.
     let state = router.runtime().get_state().unwrap();
     let script = &state.proposals[0].source;
@@ -210,16 +263,26 @@ fn an_agent_reads_a_shots_graph_and_sets_what_a_person_sets_there() {
     );
 
     // What the proposal would make of the graph, and of the workflow.
-    let shown = ok(&router, "look", json!({"graph": "shot", "proposal": wired_again["proposal"]}));
+    let shown = ok(
+        &router,
+        "look",
+        json!({"graph": "shot", "proposal": wired_again["proposal"]}),
+    );
     assert!(!wired(&shown, "signal:bounce", &made, "signal"), "{shown}");
     assert!(wired(&shown, "signal:hit", &made, "signal"), "{shown}");
-    assert_eq!(node(&shown, |node| node["model"] == "video")["workflow"], "shots/shot.video.comfy.json");
+    assert_eq!(
+        node(&shown, |node| node["model"] == "video")["workflow"],
+        "shots/shot.video.comfy.json"
+    );
     let own = ok(
         &router,
         "look",
         json!({"workflow": {"media": "shot", "line": line}, "proposal": wired_again["proposal"]}),
     );
-    assert_eq!((own["origin"].as_str(), own["file"].as_str()), (Some("own"), Some("shots/shot.video.comfy.json")));
+    assert_eq!(
+        (own["origin"].as_str(), own["file"].as_str()),
+        (Some("own"), Some("shots/shot.video.comfy.json"))
+    );
     assert_eq!(own["blanks"]["seed"]["given"], "8");
     // The project itself is as it was until the person says yes.
     let project = ok(&router, "look", json!({"graph": "shot"}));
@@ -228,7 +291,12 @@ fn an_agent_reads_a_shots_graph_and_sets_what_a_person_sets_there() {
     let revision = router.runtime().get_state().unwrap().revision;
     router
         .runtime()
-        .accept_proposal(wired_again["proposal"].as_str().unwrap(), "ui", "accept-wired", revision)
+        .accept_proposal(
+            wired_again["proposal"].as_str().unwrap(),
+            "ui",
+            "accept-wired",
+            revision,
+        )
         .unwrap();
 
     // A value set again is another copy: the one the steps before name is not written over.
@@ -238,8 +306,17 @@ fn an_agent_reads_a_shots_graph_and_sets_what_a_person_sets_there() {
         "edit",
         json!({"workflowSet": [{"media": "shot", "line": line, "node": loader, "input": "weight_dtype", "value": "default"}]}),
     );
-    assert_eq!(again["workflows"][0]["keptAs"], "shots/shot.video-2.comfy.json", "{again}");
-    assert!(again["script"].as_str().unwrap().contains("workflow=shots/shot.video-2.comfy.json"), "{again}");
+    assert_eq!(
+        again["workflows"][0]["keptAs"], "shots/shot.video-2.comfy.json",
+        "{again}"
+    );
+    assert!(
+        again["script"]
+            .as_str()
+            .unwrap()
+            .contains("workflow=shots/shot.video-2.comfy.json"),
+        "{again}"
+    );
     assert_eq!(read(&dir.join("shots/shot.video.comfy.json")), first_copy);
     // Back to the workflow as it comes: the word taken off the step.
     let back = ok(
@@ -247,7 +324,10 @@ fn an_agent_reads_a_shots_graph_and_sets_what_a_person_sets_there() {
         "edit",
         json!({"revise": again["proposal"], "script": format!("step shot set {line} workflow=\"\"")}),
     );
-    assert!(!steps_in(&proposed(&router, &back["proposal"]), "shot")[2].contains("workflow="), "{back}");
+    assert!(
+        !steps_in(&proposed(&router, &back["proposal"]), "shot")[2].contains("workflow="),
+        "{back}"
+    );
 
     // A step added and one taken out, as a person does in the graph. Later lines count steps
     // as the earlier ones left them.
@@ -260,12 +340,26 @@ fn an_agent_reads_a_shots_graph_and_sets_what_a_person_sets_there() {
         )}),
     );
     let now = steps_in(&proposed(&router, &stepped["proposal"]), "shot");
-    assert_eq!(now[1], "render court {ids.mp4} pass=ids size=832x480 rate=16", "{now:?}");
+    assert_eq!(
+        now[1], "render court {ids.mp4} pass=ids size=832x480 rate=16",
+        "{now:?}"
+    );
     assert!(now[3].contains("guide_ids={ids.mp4}"), "{now:?}");
-    let shown = ok(&router, "look", json!({"graph": "shot", "proposal": stepped["proposal"]}));
+    let shown = ok(
+        &router,
+        "look",
+        json!({"graph": "shot", "proposal": stepped["proposal"]}),
+    );
     assert!(wired(&shown, "made:ids.mp4", &made, "guide_ids"), "{shown}");
-    assert_eq!(node(&shown, |node| node["model"] == "video")["line"], line + 1);
-    let said = refused(&router, "edit", json!({"extend": stepped["proposal"], "script": "step shot remove 1"}));
+    assert_eq!(
+        node(&shown, |node| node["model"] == "video")["line"],
+        line + 1
+    );
+    let said = refused(
+        &router,
+        "edit",
+        json!({"extend": stepped["proposal"], "script": "step shot remove 1"}),
+    );
     assert!(said.contains("{depth.mp4}"), "{said}");
     let back = ok(
         &router,
@@ -287,15 +381,26 @@ fn an_agent_reads_a_shots_graph_and_sets_what_a_person_sets_there() {
         json!({"revise": back["proposal"], "workflowSet": [{"media": "shot", "line": line, "node": loader, "input": "unet_name", "value": "other"}]}),
     );
     assert!(said.contains("which the step fills"), "{said}");
-    let said = refused(&router, "look", json!({"workflow": {"media": "shot", "line": line - 1}}));
-    assert!(said.contains("model `still` is not run by kerf-comfy"), "{said}");
+    let said = refused(
+        &router,
+        "look",
+        json!({"workflow": {"media": "shot", "line": line - 1}}),
+    );
+    assert!(
+        said.contains("model `still` is not run by kerf-comfy"),
+        "{said}"
+    );
     // A shot that says where nothing goes has nothing to hold its takes to.
     let alone = ok(
         &router,
         "edit",
         json!({"revise": back["proposal"], "script": "media add m7 path=\"shots/still.png\" rate=24 dur=1f video=512x512\nstep m7 add generate model=still prompt=\"a ball\""}),
     );
-    let said = refused(&router, "look", json!({"takes": "m7", "proposal": alone["proposal"]}));
+    let said = refused(
+        &router,
+        "look",
+        json!({"takes": "m7", "proposal": alone["proposal"]}),
+    );
     assert!(said.contains("moves=<clip>"), "{said}");
     let said = refused(&router, "look", json!({"graph": "nothing"}));
     assert!(said.contains("no media `nothing`"), "{said}");
@@ -307,7 +412,15 @@ fn an_agent_reads_a_shots_graph_and_sets_what_a_person_sets_there() {
     let project = kerf_runtime::parse_document(&document).unwrap();
     let none = kerf_engine::recipe::model::Models::default();
     let planned = kerf_engine::recipe::plan(&project, dir, "card", &none).unwrap();
-    kerf_engine::recipe::make(&project, dir, &planned, &none, &kerf_engine::CancellationToken::new(), |_| {}).unwrap();
+    kerf_engine::recipe::make(
+        &project,
+        dir,
+        &planned,
+        &none,
+        &kerf_engine::CancellationToken::new(),
+        |_| {},
+    )
+    .unwrap();
     let larger = ok(
         &router,
         "edit",
@@ -316,16 +429,38 @@ fn an_agent_reads_a_shots_graph_and_sets_what_a_person_sets_there() {
     let revision = router.runtime().get_state().unwrap().revision;
     router
         .runtime()
-        .accept_proposal(larger["proposal"].as_str().unwrap(), "ui", "accept-larger", revision)
+        .accept_proposal(
+            larger["proposal"].as_str().unwrap(),
+            "ui",
+            "accept-larger",
+            revision,
+        )
         .unwrap();
     let listed = ok(&router, "look", json!({"graph": "card"}));
     assert!(listed.get("recipe").is_none(), "{listed}");
     assert_eq!(listed["text"], "render tiny {out} size=160x90\n");
     assert_eq!(listed["takes"]["made"][0]["kept"], true, "{listed}");
-    let back = ok(&router, "edit", json!({"restoreTake": {"media": "card", "take": 1}}));
+    let back = ok(
+        &router,
+        "edit",
+        json!({"restoreTake": {"media": "card", "take": 1}}),
+    );
     assert!(back.get("recipes").is_none(), "{back}");
-    assert!(back["script"].as_str().unwrap().contains("step card set 1 render tiny {out} size=96x54"), "{back}");
-    assert_eq!(steps_in(&proposed(&router, &back["proposal"]), "card"), ["render tiny {out} size=96x54"]);
-    let said = refused(&router, "edit", json!({"revise": back["proposal"], "restoreTake": {"media": "card", "take": 5}}));
+    assert!(
+        back["script"]
+            .as_str()
+            .unwrap()
+            .contains("step card set 1 render tiny {out} size=96x54"),
+        "{back}"
+    );
+    assert_eq!(
+        steps_in(&proposed(&router, &back["proposal"]), "card"),
+        ["render tiny {out} size=96x54"]
+    );
+    let said = refused(
+        &router,
+        "edit",
+        json!({"revise": back["proposal"], "restoreTake": {"media": "card", "take": 5}}),
+    );
     assert!(said.contains("take 5 keeps nothing of"), "{said}");
 }

@@ -19,12 +19,25 @@
 
 use crate::ParamUi;
 use crate::Value;
-use crate::{Buf, EffectCtx, EffectSpec, num, p, popup, slider};
+use crate::{num, p, popup, slider, Buf, EffectCtx, EffectSpec};
 use kerf_raster::Image;
 use rayon::prelude::*;
 
-fn spec(id: &'static str, name: &'static str, params: Vec<crate::ParamSpec>, render: crate::RenderFn) -> EffectSpec {
-    EffectSpec { id, name, category: "Distort", params, render, gpu: false, float: true }
+fn spec(
+    id: &'static str,
+    name: &'static str,
+    params: Vec<crate::ParamSpec>,
+    render: crate::RenderFn,
+) -> EffectSpec {
+    EffectSpec {
+        id,
+        name,
+        category: "Distort",
+        params,
+        render,
+        gpu: false,
+        float: true,
+    }
 }
 
 // ---------------------------------------------------------------- CC Flo Motion
@@ -49,7 +62,8 @@ impl Flow {
         let (x1, y1) = ((x0 + 1).min(self.nx - 1), (y0 + 1).min(self.ny - 1));
         let (tx, ty) = (fx - x0 as f64, fy - y0 as f64);
         let g = |i: usize, j: usize| self.v[j * self.nx + i];
-        let l = |a: [f64; 2], b: [f64; 2], t: f64| [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+        let l =
+            |a: [f64; 2], b: [f64; 2], t: f64| [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
         l(l(g(x0, y0), g(x1, y0), tx), l(g(x0, y1), g(x1, y1), tx), ty)
     }
 }
@@ -63,26 +77,62 @@ fn median(v: &mut [f64]) -> f64 {
 /// buffer grid). `per_row`: Warp method (one velocity per scanline band).
 /// `detail` (Pixel Motion Detail, 0..1; 0.2 = the standard grid) scales the number of motion
 /// vectors the Pixel Motion method measures: more vectors follow finer local motion.
-fn measure(cur: &Image, prev: Option<&Image>, next: Option<&Image>, scale: f64, detailed: bool, per_row: bool, detail: f64) -> Option<Flow> {
-    use kerf_raster::klt::{GrayPyramid, LkOpts, analysis_factor, track};
+fn measure(
+    cur: &Image,
+    prev: Option<&Image>,
+    next: Option<&Image>,
+    scale: f64,
+    detailed: bool,
+    per_row: bool,
+    detail: f64,
+) -> Option<Flow> {
+    use kerf_raster::klt::{analysis_factor, track, GrayPyramid, LkOpts};
     let factor = analysis_factor(cur.width, cur.height, if detailed { 640 } else { 320 });
     let pc = GrayPyramid::from_image(cur, factor, 4);
     let (w, h) = (pc.width(), pc.height());
     let base = if detailed { 24.0 } else { 12.0 };
-    let n = if per_row { base as usize } else { (base * (0.5 + detail.clamp(0.0, 1.0) * 2.5)).round().clamp(4.0, 96.0) as usize };
+    let n = if per_row {
+        base as usize
+    } else {
+        (base * (0.5 + detail.clamp(0.0, 1.0) * 2.5))
+            .round()
+            .clamp(4.0, 96.0) as usize
+    };
     let cell_w = w as f64 / n as f64;
     let rows = ((n as f64) * h as f64 / w.max(1) as f64).round().max(2.0) as usize;
     let cell_h = h as f64 / rows as f64;
-    let pts: Vec<[f64; 2]> = (0..rows).flat_map(|j| (0..n).map(move |i| [(i as f64 + 0.5) * cell_w, (j as f64 + 0.5) * cell_h])).collect();
-    let o = LkOpts { radius: 4, fb_max: 1.0, ..Default::default() };
-    let go = |other: Option<&Image>| other.map(|img| track(&pc, &GrayPyramid::from_image(img, factor, 4), &pts, None, &o));
+    let pts: Vec<[f64; 2]> = (0..rows)
+        .flat_map(|j| (0..n).map(move |i| [(i as f64 + 0.5) * cell_w, (j as f64 + 0.5) * cell_h]))
+        .collect();
+    let o = LkOpts {
+        radius: 4,
+        fb_max: 1.0,
+        ..Default::default()
+    };
+    let go = |other: Option<&Image>| {
+        other.map(|img| {
+            track(
+                &pc,
+                &GrayPyramid::from_image(img, factor, 4),
+                &pts,
+                None,
+                &o,
+            )
+        })
+    };
     let (tn, tp) = (go(next), go(prev));
     // Velocity in plane pixels per frame.
     let vel: Vec<Option<[f64; 2]>> = (0..pts.len())
         .map(|i| {
             let p = pts[i];
-            let fw = tn.as_ref().and_then(|t| t[i]).map(|q| [q[0] - p[0], q[1] - p[1]]);
-            let bw = tp.as_ref().and_then(|t| t[i]).map(|q| [p[0] - q[0], p[1] - q[1]]);
+            let fw = tn
+                .as_ref()
+                .and_then(|t| t[i])
+                .map(|q| [q[0] - p[0], q[1] - p[1]]);
+            let bw = tp
+                .as_ref()
+                .and_then(|t| t[i])
+                .map(|q| [p[0] - q[0], p[1] - q[1]]);
             match (fw, bw) {
                 (Some(a), Some(b)) => Some([(a[0] + b[0]) * 0.5, (a[1] + b[1]) * 0.5]),
                 (a, b) => a.or(b),
@@ -113,7 +163,12 @@ fn measure(cur: &Image, prev: Option<&Image>, next: Option<&Image>, scale: f64, 
                 row_med
             } else {
                 match vel[j * n + i] {
-                    Some(q) if (q[0] - row_med[0]).abs() + (q[1] - row_med[1]).abs() < 3.0 + 0.5 * (row_med[0].abs() + row_med[1].abs()) => q,
+                    Some(q)
+                        if (q[0] - row_med[0]).abs() + (q[1] - row_med[1]).abs()
+                            < 3.0 + 0.5 * (row_med[0].abs() + row_med[1].abs()) =>
+                    {
+                        q
+                    }
                     _ => row_med,
                 }
             };
@@ -121,11 +176,20 @@ fn measure(cur: &Image, prev: Option<&Image>, next: Option<&Image>, scale: f64, 
         }
     }
     // Cell size in layer pixels (grid is uniform in plane pixels; assume square plane pixels).
-    Some(Flow { nx: n, ny: rows, cell: cell_w * k, v })
+    Some(Flow {
+        nx: n,
+        ny: rows,
+        cell: cell_w * k,
+        v,
+    })
 }
 
 fn same_grid(nb: Buf, b: &Buf) -> Image {
-    if nb.img.width == b.img.width && nb.img.height == b.img.height && nb.offset == b.offset && nb.scale == b.scale {
+    if nb.img.width == b.img.width
+        && nb.img.height == b.img.height
+        && nb.offset == b.offset
+        && nb.scale == b.scale
+    {
         return nb.img;
     }
     let k = nb.scale / b.scale.max(1e-9);
@@ -143,8 +207,12 @@ fn rolling_shutter(ctx: &EffectCtx, mut b: Buf) -> Buf {
     }
     let Some(host) = ctx.env.host else { return b };
     let fps = ctx.fps();
-    let prev = host.self_at(ctx.time - 1.0 / fps, ctx.env.effect_index).map(|nb| same_grid(nb, &b));
-    let next = host.self_at(ctx.time + 1.0 / fps, ctx.env.effect_index).map(|nb| same_grid(nb, &b));
+    let prev = host
+        .self_at(ctx.time - 1.0 / fps, ctx.env.effect_index)
+        .map(|nb| same_grid(nb, &b));
+    let next = host
+        .self_at(ctx.time + 1.0 / fps, ctx.env.effect_index)
+        .map(|nb| same_grid(nb, &b));
     if prev.is_none() && next.is_none() {
         return b;
     }
@@ -185,11 +253,41 @@ pub fn specs() -> Vec<EffectSpec> {
         "ec.distort.rollingshutterrepair",
         "Rolling Shutter Repair",
         vec![
-            p("rollingShutterRate", "Rolling Shutter Rate", num(50.0), slider(0.0, 100.0, 0.0, 100.0, 1)),
-            p("scanDirection", "Scan Direction", Value::Enum(0), popup(&["Top → Bottom", "Bottom → Top", "Left → Right", "Right → Left"])),
-            p("advanced/method", "Method", Value::Enum(0), popup(&["Warp", "Pixel Motion"])),
-            p("advanced/detailedAnalysis", "Detailed Analysis", Value::Bool(false), ParamUi::Checkbox),
-            p("advanced/pixelMotionDetail", "Pixel Motion Detail", num(20.0), slider(0.0, 100.0, 0.0, 100.0, 1)),
+            p(
+                "rollingShutterRate",
+                "Rolling Shutter Rate",
+                num(50.0),
+                slider(0.0, 100.0, 0.0, 100.0, 1),
+            ),
+            p(
+                "scanDirection",
+                "Scan Direction",
+                Value::Enum(0),
+                popup(&[
+                    "Top → Bottom",
+                    "Bottom → Top",
+                    "Left → Right",
+                    "Right → Left",
+                ]),
+            ),
+            p(
+                "advanced/method",
+                "Method",
+                Value::Enum(0),
+                popup(&["Warp", "Pixel Motion"]),
+            ),
+            p(
+                "advanced/detailedAnalysis",
+                "Detailed Analysis",
+                Value::Bool(false),
+                ParamUi::Checkbox,
+            ),
+            p(
+                "advanced/pixelMotionDetail",
+                "Pixel Motion Detail",
+                num(20.0),
+                slider(0.0, 100.0, 0.0, 100.0, 1),
+            ),
         ],
         rolling_shutter,
     )]
@@ -198,7 +296,7 @@ pub fn specs() -> Vec<EffectSpec> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{EffectEnv, EffectHost, LayerPixels, run_fx};
+    use crate::{run_fx, EffectEnv, EffectHost, LayerPixels};
 
     /// A textured frame panning right at 3 px per frame, captured with a rolling shutter: row
     /// `y` is exposed `(y / h − ½)` frames late (rate 100 %).
@@ -209,7 +307,11 @@ mod tests {
     fn rs_frame(f: f64, shutter: bool) -> Image {
         let (w, h) = (96u32, 64u32);
         crate::util::gen_image(w, h, |x, y| {
-            let tau = if shutter { (y as f64 + 0.5) / h as f64 - 0.5 } else { 0.0 };
+            let tau = if shutter {
+                (y as f64 + 0.5) / h as f64 - 0.5
+            } else {
+                0.0
+            };
             let shift = 3.0 * (f + tau);
             let v = texture(x as f64 + 0.5 - shift, y as f64 + 0.5);
             [v, v, v, 1.0]
@@ -224,14 +326,22 @@ mod tests {
             None
         }
         fn self_at(&self, t: f64, _: usize) -> Option<Buf> {
-            Some(Buf { img: rs_frame(t * 24.0, true), offset: [0.0; 2], scale: 1.0 })
+            Some(Buf {
+                img: rs_frame(t * 24.0, true),
+                offset: [0.0; 2],
+                scale: 1.0,
+            })
         }
     }
 
     #[test]
     fn rolling_shutter_repair_unskews_a_pan() {
         let host = Pan;
-        let env = EffectEnv { host: Some(&host), frame_rate: 24.0, ..Default::default() };
+        let env = EffectEnv {
+            host: Some(&host),
+            frame_rate: 24.0,
+            ..Default::default()
+        };
         let t = 5.0 / 24.0;
         let skewed = rs_frame(5.0, true);
         let truth = rs_frame(5.0, false);
@@ -249,15 +359,26 @@ mod tests {
         for method in [0u32, 1] {
             let out = run_fx(
                 "ec.distort.rollingshutterrepair",
-                &[("rollingShutterRate", num(100.0)), ("advanced/method", Value::Enum(method))],
+                &[
+                    ("rollingShutterRate", num(100.0)),
+                    ("advanced/method", Value::Enum(method)),
+                ],
                 skewed.clone(),
                 t,
                 env,
             );
-            assert!(err(&out.img) < err(&skewed) * 0.4, "method {method}: {} vs {}", err(&out.img), err(&skewed));
+            assert!(
+                err(&out.img) < err(&skewed) * 0.4,
+                "method {method}: {} vs {}",
+                err(&out.img),
+                err(&skewed)
+            );
             let again = run_fx(
                 "ec.distort.rollingshutterrepair",
-                &[("rollingShutterRate", num(100.0)), ("advanced/method", Value::Enum(method))],
+                &[
+                    ("rollingShutterRate", num(100.0)),
+                    ("advanced/method", Value::Enum(method)),
+                ],
                 skewed.clone(),
                 t,
                 env,
@@ -268,7 +389,11 @@ mod tests {
         let detail = |d: f64| {
             run_fx(
                 "ec.distort.rollingshutterrepair",
-                &[("rollingShutterRate", num(100.0)), ("advanced/method", Value::Enum(1)), ("advanced/pixelMotionDetail", num(d))],
+                &[
+                    ("rollingShutterRate", num(100.0)),
+                    ("advanced/method", Value::Enum(1)),
+                    ("advanced/pixelMotionDetail", num(d)),
+                ],
                 skewed.clone(),
                 t,
                 env,
@@ -278,7 +403,13 @@ mod tests {
         let (fine, coarse) = (detail(100.0), detail(0.0));
         assert_ne!(fine.data, coarse.data);
         assert!(err(&fine) < err(&skewed) * 0.5 && err(&coarse) < err(&skewed) * 0.5);
-        let none = run_fx("ec.distort.rollingshutterrepair", &[], skewed.clone(), t, EffectEnv::default());
+        let none = run_fx(
+            "ec.distort.rollingshutterrepair",
+            &[],
+            skewed.clone(),
+            t,
+            EffectEnv::default(),
+        );
         assert_eq!(none.img.data, skewed.data);
     }
 }

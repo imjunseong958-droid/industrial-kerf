@@ -2,8 +2,7 @@
 
 use kerf_engine::derivatives::DerivativeCache;
 use kerf_engine::{
-    cached_media_sound, cached_proxy, info, make_proxy, media_index, CancellationToken,
-    PROXY_WIDTH,
+    cached_media_sound, cached_proxy, info, make_proxy, media_index, CancellationToken, PROXY_WIDTH,
 };
 use std::path::Path;
 use std::process::Command;
@@ -76,7 +75,11 @@ fn one_pass_finds_cuts_pauses_onsets_and_tempo_and_a_proxy_is_made() {
     // The levels the pauses were read from are kept, a hundredth of a second
     // at a time, and read the same pauses again.
     let sound = cached_media_sound(&path, &cache).expect("an index keeps the levels");
-    assert!((sound.duration() - 10.0).abs() < 0.05, "{}", sound.duration());
+    assert!(
+        (sound.duration() - 10.0).abs() < 0.05,
+        "{}",
+        sound.duration()
+    );
     assert_eq!(sound.quiet(0.35), index.pauses);
 
     assert!(cached_proxy(&path, &cache).is_none());

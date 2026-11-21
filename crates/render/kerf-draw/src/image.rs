@@ -49,7 +49,12 @@ impl Image {
             .enumerate()
             .for_each(|(y, row)| {
                 let line = &rgba[y * stride..y * stride + w * 8];
-                for (pixel, bytes) in row.as_chunks_mut::<4>().0.iter_mut().zip(line.as_chunks::<8>().0.iter()) {
+                for (pixel, bytes) in row
+                    .as_chunks_mut::<4>()
+                    .0
+                    .iter_mut()
+                    .zip(line.as_chunks::<8>().0.iter())
+                {
                     let code = |at: usize| {
                         f32::from(u16::from_le_bytes([bytes[at], bytes[at + 1]])) / 65535.0
                     };
@@ -72,7 +77,12 @@ impl Image {
             .enumerate()
             .for_each(|(y, row)| {
                 let line = &rgba[y * stride..y * stride + w * 4];
-                for (pixel, bytes) in row.as_chunks_mut::<4>().0.iter_mut().zip(line.as_chunks::<4>().0.iter()) {
+                for (pixel, bytes) in row
+                    .as_chunks_mut::<4>()
+                    .0
+                    .iter_mut()
+                    .zip(line.as_chunks::<4>().0.iter())
+                {
                     let a = if alpha {
                         f32::from(bytes[3]) / 255.0
                     } else {
@@ -93,7 +103,12 @@ impl Image {
         out.par_chunks_mut(self.w * 4)
             .zip(self.px.par_chunks(self.w * 4))
             .for_each(|(out, row)| {
-                for (bytes, pixel) in out.as_chunks_mut::<4>().0.iter_mut().zip(row.as_chunks::<4>().0.iter()) {
+                for (bytes, pixel) in out
+                    .as_chunks_mut::<4>()
+                    .0
+                    .iter_mut()
+                    .zip(row.as_chunks::<4>().0.iter())
+                {
                     bytes[0] = color::encode(pixel[0]);
                     bytes[1] = color::encode(pixel[1]);
                     bytes[2] = color::encode(pixel[2]);
@@ -213,7 +228,12 @@ impl Image {
         out.par_chunks_mut(self.w * 8)
             .zip(self.px.par_chunks(self.w * 4))
             .for_each(|(out, row)| {
-                for (bytes, pixel) in out.as_chunks_mut::<8>().0.iter_mut().zip(row.as_chunks::<4>().0.iter()) {
+                for (bytes, pixel) in out
+                    .as_chunks_mut::<8>()
+                    .0
+                    .iter_mut()
+                    .zip(row.as_chunks::<4>().0.iter())
+                {
                     let clean = |v: f32| if v.is_nan() { 0.0 } else { v };
                     let codes = signal([clean(pixel[0]), clean(pixel[1]), clean(pixel[2])]);
                     for (channel, value) in codes.into_iter().enumerate() {
@@ -233,7 +253,12 @@ impl Image {
         out.par_chunks_mut(self.w * 8)
             .zip(self.px.par_chunks(self.w * 4))
             .for_each(|(out, row)| {
-                for (bytes, pixel) in out.as_chunks_mut::<8>().0.iter_mut().zip(row.as_chunks::<4>().0.iter()) {
+                for (bytes, pixel) in out
+                    .as_chunks_mut::<8>()
+                    .0
+                    .iter_mut()
+                    .zip(row.as_chunks::<4>().0.iter())
+                {
                     for channel in 0..3 {
                         let value = if pixel[channel].is_nan() {
                             0.0

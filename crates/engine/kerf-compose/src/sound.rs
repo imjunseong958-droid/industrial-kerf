@@ -221,7 +221,9 @@ fn drain(graph: &mut filter::Graph, samples: &mut Vec<f32>) -> Result<(), String
         let bytes = &out.data(0)[..out.samples() * 2 * 4];
         samples.extend(
             bytes
-                .as_chunks::<4>().0.iter()
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .map(|b| f32::from_ne_bytes([b[0], b[1], b[2], b[3]])),
         );
     }

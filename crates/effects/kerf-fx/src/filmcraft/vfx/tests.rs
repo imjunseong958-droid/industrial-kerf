@@ -309,15 +309,6 @@ fn neutral_parameters_are_identity() {
     }
 }
 
-
-
-
-
-
-
-
-
-
 /// A clip environment over a synthetic moving picture (for the analysis effects).
 struct ClipEnv {
     w: usize,
@@ -531,4 +522,3 @@ fn transform_shutter_uses_the_sequence_frame_rate_without_env() {
         assert!(delta(frame) > 1e-3, "frame {frame} moves but is sharp");
     }
 }
-

@@ -105,7 +105,10 @@ pub fn cached_media_index(src: &Path, cache: &DerivativeCache) -> Option<MediaIn
         return None;
     }
     let mut index: MediaIndex = entry.read_json("index.json").ok()?;
-    if let Some(levels) = fs::read(entry.path(LEVELS)).ok().filter(|levels| !levels.is_empty()) {
+    if let Some(levels) = fs::read(entry.path(LEVELS))
+        .ok()
+        .filter(|levels| !levels.is_empty())
+    {
         index.pauses = sound(&levels).quiet(PAUSE_SECONDS);
     }
     Some(index)
@@ -482,16 +485,28 @@ mod tests {
             "#!/bin/sh\ni=0\nwhile [ $i -lt 4000 ]; do echo \"hardware accelerator failed to decode picture $i\" >&2; i=$((i+1)); done\nprintf '0123456789abcdef'\n",
         )
         .expect("the fake");
-        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).expect("executable");
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755))
+            .expect("executable");
         let (send, receive) = std::sync::mpsc::channel();
         let ffmpeg = fake.to_string_lossy().into_owned();
         std::thread::spawn(move || {
             let mut frames = 0;
-            let result = frames_with(&ffmpeg, Path::new("in.mp4"), 2, (4, 2), ("gray", 1), |_, _| frames += 1);
+            let result = frames_with(
+                &ffmpeg,
+                Path::new("in.mp4"),
+                2,
+                (4, 2),
+                ("gray", 1),
+                |_, _| frames += 1,
+            );
             let _ = send.send((result.is_ok(), frames));
         });
         let finished = receive.recv_timeout(std::time::Duration::from_secs(20));
-        assert_eq!(finished, Ok((true, 2)), "the read never finished, or lost frames");
+        assert_eq!(
+            finished,
+            Ok((true, 2)),
+            "the read never finished, or lost frames"
+        );
     }
     use super::*;
 

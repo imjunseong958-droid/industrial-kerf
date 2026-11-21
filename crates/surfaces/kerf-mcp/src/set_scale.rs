@@ -63,9 +63,10 @@ impl Seen<'_> {
             .flat_map(|track| &track.clips)
             .find(|clip| clip.id.as_str() == self.clip)?
             .clone();
-        let model = sequence.tracks.iter().find(|track| {
-            track.clips.iter().any(|clip| clip.id.as_str() == self.clip)
-        })?;
+        let model = sequence
+            .tracks
+            .iter()
+            .find(|track| track.clips.iter().any(|clip| clip.id.as_str() == self.clip))?;
         let track = |id: &str, clip: Clip| Track {
             id: Id::new(id).expect("a track's name"),
             clips: vec![clip],
@@ -151,7 +152,12 @@ impl Seen<'_> {
 fn apart(drawn: &[u8], footage: &[u8]) -> Option<f64> {
     let (mut sum, mut covered) = (0.0, 0usize);
     let pixels = drawn.len() / 4;
-    for (one, other) in drawn.as_chunks::<4>().0.iter().zip(footage.as_chunks::<4>().0) {
+    for (one, other) in drawn
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(footage.as_chunks::<4>().0)
+    {
         // What the set does not cover is drawn as nothing, which is black to the last bit.
         if one[..3] == [0, 0, 0] {
             continue;
@@ -385,9 +391,8 @@ pub(crate) fn beside(
         }
     }
     let wanted = |project: &Project, id: &str| {
-        file_in_sequence(project, sequence, id).ok_or(format!(
-            "`{id}`: it is no `gen=mesh@1` clip with a `file`"
-        ))
+        file_in_sequence(project, sequence, id)
+            .ok_or(format!("`{id}`: it is no `gen=mesh@1` clip with a `file`"))
     };
     let (to, unit) = wanted(&project, other)?;
     let (_, own) = wanted(&project, clip)?;

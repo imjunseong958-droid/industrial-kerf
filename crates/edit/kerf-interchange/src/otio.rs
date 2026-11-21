@@ -358,7 +358,9 @@ pub(crate) fn content_lost(clip: &Clip) -> InterchangeIssue {
         Content::Generator { fx, .. } => format!("the `{fx}` generator"),
         Content::Sequence { sequence, .. } => format!("the nested sequence `{sequence}`"),
         Content::Caption { .. } => "a caption".to_owned(),
-        Content::Media { media, .. } => format!("media `{media}`, which the project does not have,"),
+        Content::Media { media, .. } => {
+            format!("media `{media}`, which the project does not have,")
+        }
     };
     lost(
         "content_not_exported",
@@ -375,7 +377,11 @@ pub(crate) fn clip_losses(clip: &Clip, issues: &mut Vec<InterchangeIssue>) {
         parts.push(format!("properties ({})", names.join(", ")));
     }
     if !clip.effects.is_empty() {
-        let names: Vec<&str> = clip.effects.iter().map(|effect| effect.fx.as_str()).collect();
+        let names: Vec<&str> = clip
+            .effects
+            .iter()
+            .map(|effect| effect.fx.as_str())
+            .collect();
         parts.push(format!("effects ({})", names.join(", ")));
     }
     if !clip.masks.is_empty() {

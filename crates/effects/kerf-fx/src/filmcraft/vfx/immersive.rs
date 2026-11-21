@@ -112,7 +112,10 @@ pub(super) fn turn_of(e: &EffectInstance, cx: &FxCtx) -> Option<([[f32; 3]; 3], 
     }
     let rt = transpose(r);
     let ky = if stretch { (fov / 180.0).min(1.0) } else { 1.0 };
-    Some((rt.map(|row| row.map(|v| v as f32)), [(fov / 360.0) as f32, ky as f32]))
+    Some((
+        rt.map(|row| row.map(|v| v as f32)),
+        [(fov / 360.0) as f32, ky as f32],
+    ))
 }
 
 /// Where a flat picture is put on a 360° frame, for the GPU's kernel: the matrix a direction on

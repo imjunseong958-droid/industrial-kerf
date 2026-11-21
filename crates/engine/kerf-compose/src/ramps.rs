@@ -175,7 +175,9 @@ fn reverse_frames(samples: &mut [f32]) {
 /// plays at each frame of the output.
 pub(crate) fn stretch(input: &[f32], frames: usize, position: impl Fn(usize) -> f64) -> Vec<f32> {
     let mono: Vec<f32> = input
-        .as_chunks::<2>().0.iter()
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|frame| (frame[0] + frame[1]) / 2.0)
         .collect();
     let window: Vec<f32> = (0..WINDOW)

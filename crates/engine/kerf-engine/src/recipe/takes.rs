@@ -126,7 +126,10 @@ impl Place {
 
     /// The folder the takes' folder is in, from the project's.
     pub(crate) fn beside(&self) -> PathBuf {
-        self.takes.parent().map(Path::to_path_buf).unwrap_or_default()
+        self.takes
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_default()
     }
 
     fn name(&self, take: u32) -> String {
@@ -231,7 +234,9 @@ impl Record {
     /// from, or, for one a recipe's file made, what that came to when it was carried.
     fn held(&self) -> &BTreeMap<String, String> {
         match &self.carried {
-            Some(Carried { from: Some(from), .. }) => from,
+            Some(Carried {
+                from: Some(from), ..
+            }) => from,
             _ => &self.from,
         }
     }
@@ -293,7 +298,12 @@ pub(crate) fn record(
 /// held to the steps now.
 ///
 /// A record gains this and loses nothing.
-pub fn mark_carried(before: &Project, after: &Project, directory: &Path, id: &str) -> Result<usize> {
+pub fn mark_carried(
+    before: &Project,
+    after: &Project,
+    directory: &Path,
+    id: &str,
+) -> Result<usize> {
     let no_media = || EngineError::msg(format!("no media `{id}` in this project"));
     let (was, now) = (
         before.media(id).ok_or_else(no_media)?,
@@ -490,7 +500,10 @@ pub(crate) fn from(
     from.insert(STEPS.to_owned(), hex_of(hasher));
     // A sequence a step draws reads the files its mesh clips name, and nothing of the
     // document says when one changes: a take is held to them, found from the clips.
-    for file in recipe.sequences().flat_map(|sequence| mesh_files(project, sequence)) {
+    for file in recipe
+        .sequences()
+        .flat_map(|sequence| mesh_files(project, sequence))
+    {
         if let Ok(inside) = within(Path::new(""), &file, "mesh") {
             from.insert(
                 format!("file {}", stored(&inside)),
@@ -767,10 +780,20 @@ pub(crate) fn keep(
         };
         if let (Some(seed), true) = (ask.seed, roll > 0) {
             let rolled = seed.wrapping_add(u64::from(roll)).to_string();
-            kept = changed(&kept, line, Change::Set { key: "seed", nth: 0, value: &rolled })?;
+            kept = changed(
+                &kept,
+                line,
+                Change::Set {
+                    key: "seed",
+                    nth: 0,
+                    value: &rolled,
+                },
+            )?;
         }
         if let Some(super::model::Source::File(named)) = &ask.workflow {
-            let own = Path::new(named).file_name().map(|name| name.to_string_lossy().into_owned());
+            let own = Path::new(named)
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned());
             if let (Some(own), Some(held)) = (own, read(named)) {
                 std::fs::write(working.join(format!("{KEPT_FILE}{own}")), held)?;
             }
@@ -809,7 +832,10 @@ pub fn kept(directory: &Path, media: &Media, take: u32) -> Option<Kept> {
             _ => None,
         })
         .filter_map(|named| {
-            let own = Path::new(&named).file_name()?.to_string_lossy().into_owned();
+            let own = Path::new(&named)
+                .file_name()?
+                .to_string_lossy()
+                .into_owned();
             let held = std::fs::read_to_string(working.join(format!("{KEPT_FILE}{own}"))).ok()?;
             Some((named, held))
         })

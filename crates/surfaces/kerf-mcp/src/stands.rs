@@ -186,9 +186,17 @@ pub(crate) fn note(
             How::Sunk { deep, .. } => Some(*deep),
             _ => None,
         }) {
-            found.push(format!("`{}` is sunk {} in `{on}`", stood.clip, place(deep)));
+            found.push(format!(
+                "`{}` is sunk {} in `{on}`",
+                stood.clip,
+                place(deep)
+            ));
         }
-        let mut through: Vec<&str> = stood.through.iter().map(|through| through.clip.as_str()).collect();
+        let mut through: Vec<&str> = stood
+            .through
+            .iter()
+            .map(|through| through.clip.as_str())
+            .collect();
         through.dedup();
         for other in through {
             found.push(format!("`{}` goes through `{other}`", stood.clip));

@@ -15,7 +15,17 @@
 //! - [`mask`]: strokes (outer/centre/inner via a Euclidean distance transform), blur, offsets.
 //! - [`color`]: colour glyphs (emoji): `COLR` v0/v1 layers and `CBDT`/`sbix` PNG bitmaps.
 
-#![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable))]
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        clippy::unimplemented,
+        clippy::todo,
+        clippy::unreachable
+    )
+)]
 
 pub mod color;
 pub mod fonts;
@@ -25,6 +35,9 @@ pub mod raster;
 pub mod render;
 pub mod sfnt;
 
-pub use fonts::{FaceId, Resolved, families, resolve};
-pub use layout::{Align, Caps, Glyph, Layout, Line, ParagraphStyle, StyleRun, TextStyle, layout, layout_rich, measure};
+pub use fonts::{families, resolve, FaceId, Resolved};
+pub use layout::{
+    layout, layout_rich, measure, Align, Caps, Glyph, Layout, Line, ParagraphStyle, StyleRun,
+    TextStyle,
+};
 pub use raster::{Mask, Path, Xform};

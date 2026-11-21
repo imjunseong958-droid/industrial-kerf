@@ -207,9 +207,21 @@ fn lit(mut solids: Vec<String>, light: &str) -> String {
 /// A box, a ball, and a cylinder standing beside each other.
 fn few() -> Vec<String> {
     vec![
-        solid("box", [0.5, 0.5, 0.5], [-0.75, 0.25, 1.0], "#c04030", " rotate_y=30"),
+        solid(
+            "box",
+            [0.5, 0.5, 0.5],
+            [-0.75, 0.25, 1.0],
+            "#c04030",
+            " rotate_y=30",
+        ),
         solid("ball", [0.5, 0.5, 0.5], [0.0, 0.25, 0.8], "#3060c0", ""),
-        solid("cylinder", [0.35, 0.6, 0.35], [0.7, 0.2, 1.1], "#40a050", ""),
+        solid(
+            "cylinder",
+            [0.35, 0.6, 0.35],
+            [0.7, 0.2, 1.1],
+            "#40a050",
+            "",
+        ),
     ]
 }
 
@@ -230,7 +242,13 @@ fn street() -> Vec<String> {
     for (x, z, color) in houses {
         let toward_street = if x < 0.0 { 1.0 } else { -1.0 };
         solids.push(solid("box", [0.9, 0.8, 0.9], [x, 0.1, z], color, ""));
-        solids.push(solid("box", [0.64, 0.64, 0.9], [x, -0.3, z], "#804030", " rotation=45"));
+        solids.push(solid(
+            "box",
+            [0.64, 0.64, 0.9],
+            [x, -0.3, z],
+            "#804030",
+            " rotation=45",
+        ));
         let door = [x + toward_street * 0.47, 0.3, z];
         solids.push(solid("box", [0.04, 0.4, 0.2], door, "#503020", ""));
     }
@@ -238,24 +256,64 @@ fn street() -> Vec<String> {
         let wood = "#906838";
         solids.push(solid("box", [0.5, 0.04, 0.3], [x, 0.34, z], wood, ""));
         for side in [-0.14, 0.14] {
-            solids.push(solid("box", [0.5, 0.1, 0.02], [x, 0.27, z + side], wood, ""));
-            solids.push(solid("box", [0.3, 0.02, 0.02], [x + 0.4, 0.34, z + side * 0.7], wood, ""));
+            solids.push(solid(
+                "box",
+                [0.5, 0.1, 0.02],
+                [x, 0.27, z + side],
+                wood,
+                "",
+            ));
+            solids.push(solid(
+                "box",
+                [0.3, 0.02, 0.02],
+                [x + 0.4, 0.34, z + side * 0.7],
+                wood,
+                "",
+            ));
         }
         for end in [-0.24, 0.24] {
             solids.push(solid("box", [0.02, 0.1, 0.3], [x + end, 0.27, z], wood, ""));
         }
         for axle in [-0.17, 0.17] {
             let turned = " rotate_x=90";
-            solids.push(solid("cylinder", [0.03, 0.36, 0.03], [x + axle, 0.38, z], "#403020", turned));
+            solids.push(solid(
+                "cylinder",
+                [0.03, 0.36, 0.03],
+                [x + axle, 0.38, z],
+                "#403020",
+                turned,
+            ));
             for wheel in [-0.17, 0.17] {
                 let place = [x + axle, 0.38, z + wheel];
-                solids.push(solid("cylinder", [0.24, 0.03, 0.24], place, "#604020", turned));
+                solids.push(solid(
+                    "cylinder",
+                    [0.24, 0.03, 0.24],
+                    place,
+                    "#604020",
+                    turned,
+                ));
             }
         }
     }
-    for (x, z, color) in [(0.25, 0.7, "#3050a0"), (-0.2, 1.9, "#a03040"), (0.1, 3.2, "#308050")] {
-        solids.push(solid("cylinder", [0.12, 0.3, 0.12], [x, 0.35, z], color, ""));
-        solids.push(solid("ball", [0.11, 0.11, 0.11], [x, 0.145, z], "#e0b090", ""));
+    for (x, z, color) in [
+        (0.25, 0.7, "#3050a0"),
+        (-0.2, 1.9, "#a03040"),
+        (0.1, 3.2, "#308050"),
+    ] {
+        solids.push(solid(
+            "cylinder",
+            [0.12, 0.3, 0.12],
+            [x, 0.35, z],
+            color,
+            "",
+        ));
+        solids.push(solid(
+            "ball",
+            [0.11, 0.11, 0.11],
+            [x, 0.145, z],
+            "#e0b090",
+            "",
+        ));
     }
     solids
 }
@@ -294,7 +352,11 @@ fn main() {
     let scenes = SCENES
         .iter()
         .map(|(name, clip)| (*name, *clip))
-        .chain(meshes.iter().map(|(name, clip)| (name.as_str(), clip.as_str())))
+        .chain(
+            meshes
+                .iter()
+                .map(|(name, clip)| (name.as_str(), clip.as_str())),
+        )
         .chain(masks.iter().map(|(name, clip)| (*name, clip.as_str())));
     for (name, clip) in scenes.filter(|(name, _)| name.contains(&wanted)) {
         let mut line = format!("{name:<18}");

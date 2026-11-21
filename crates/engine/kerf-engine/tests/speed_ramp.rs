@@ -87,7 +87,9 @@ fn sound(path: &Path) -> Vec<f32> {
         "f32le",
         "-",
     ])
-    .as_chunks::<4>().0.iter()
+    .as_chunks::<4>()
+    .0
+    .iter()
     .map(|bytes| f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
     .collect()
 }
@@ -104,7 +106,9 @@ fn brightness(path: &Path) -> Vec<u8> {
         "gray",
         "-",
     ])
-    .as_chunks::<{ 64 * 36 }>().0.iter()
+    .as_chunks::<{ 64 * 36 }>()
+    .0
+    .iter()
     .map(|frame| frame[18 * 64 + 32])
     .collect()
 }

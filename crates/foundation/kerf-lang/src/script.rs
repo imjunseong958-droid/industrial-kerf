@@ -23,9 +23,9 @@ use crate::doc::{
     take_role, take_sync, word_or_quote,
 };
 use crate::facts::{airs, clear, Barred, Breaks, Facts, NoFacts, Place, Snap, Snaps, Speech, BEAT};
-use crate::sound::Heard;
 use crate::lex::{lex, Arg, Atom, Line};
 use crate::making::print_step;
+use crate::sound::Heard;
 use crate::text::{
     parse_fx_ref, parse_param, parse_speed, print_fx_ref, print_speed, quote, Clock, Fields,
 };
@@ -684,7 +684,9 @@ impl Script<'_> {
                 }
                 Op::RemoveStep { media: id, index }
             }
-            _ => return Err(line.error(column(2), format!("expected add, set, or remove: {SHAPE}"))),
+            _ => {
+                return Err(line.error(column(2), format!("expected add, set, or remove: {SHAPE}")))
+            }
         };
         Ok(vec![op])
     }
@@ -1315,68 +1317,67 @@ impl Script<'_> {
             let from = fields.take_with("from", |t| positions.position(t))?;
             let to = fields.take_with("to", |t| positions.position(t))?;
             let leave = fields.take_with("leave", |t| clock.duration(t))?;
-            let range = match (said, pause, from, to) {
-                (Some(_), Some(_), ..) => {
-                    return Err(line.error(1, "give said= or pause=, not both"))
-                }
-                (Some(arg), None, None, None) | (None, Some(arg), None, None) => {
-                    if pause.is_some() && !close {
-                        return Err(fields.error(arg, "pause= closes a pause up: use extract"));
+            let range =
+                match (said, pause, from, to) {
+                    (Some(_), Some(_), ..) => {
+                        return Err(line.error(1, "give said= or pause=, not both"))
                     }
-                    let within = fields
-                        .take_with("within", |text| clock.duration(text))?
-                        .unwrap_or_else(|| Time::from_flicks(FLICKS_PER_SECOND / 2));
-                    let cut = Said {
-                        phrase: fields.text(arg)?,
-                        pause: pause.is_some(),
-                        leave: leave.map_or(BEAT, Time::seconds),
-                        within,
-                    };
-                    self.said(found, clock, &cut)
-                        .map_err(|m| fields.error(arg, m))?
-                }
-                (None, None, Some(from), Some(to)) => {
-                    if leave.is_some() {
-                        return Err(line.error(1, "leave= goes with said= or pause="));
+                    (Some(arg), None, None, None) | (None, Some(arg), None, None) => {
+                        if pause.is_some() && !close {
+                            return Err(fields.error(arg, "pause= closes a pause up: use extract"));
+                        }
+                        let within = fields
+                            .take_with("within", |text| clock.duration(text))?
+                            .unwrap_or_else(|| Time::from_flicks(FLICKS_PER_SECOND / 2));
+                        let cut = Said {
+                            phrase: fields.text(arg)?,
+                            pause: pause.is_some(),
+                            leave: leave.map_or(BEAT, Time::seconds),
+                            within,
+                        };
+                        self.said(found, clock, &cut)
+                            .map_err(|m| fields.error(arg, m))?
                     }
-                    let snap = take_snap(&mut fields, clock)?.ok_or_else(|| {
-                        line.error(
-                            1,
-                            format!(
+                    (None, None, Some(from), Some(to)) => {
+                        if leave.is_some() {
+                            return Err(line.error(1, "leave= goes with said= or pause="));
+                        }
+                        let snap = take_snap(&mut fields, clock)?.ok_or_else(|| {
+                            line.error(
+                                1,
+                                format!(
                                 "naming `{clip}` puts the edges by its sound: add snap=pause or \
                                  snap=cut, or leave the clip out"
                             ),
-                        )
-                    })?;
-                    for (key, at) in [("from", from), ("to", to)] {
-                        if at < found.start || at > found.end() {
-                            return Err(line.error(
-                                1,
-                                format!(
-                                    "{key}= is not in `{clip}`, which plays from {} to {}",
-                                    clock.print_position(found.start),
-                                    clock.print_position(found.end())
-                                ),
-                            ));
+                            )
+                        })?;
+                        for (key, at) in [("from", from), ("to", to)] {
+                            if at < found.start || at > found.end() {
+                                return Err(line.error(
+                                    1,
+                                    format!(
+                                        "{key}= is not in `{clip}`, which plays from {} to {}",
+                                        clock.print_position(found.start),
+                                        clock.print_position(found.end())
+                                    ),
+                                ));
+                            }
                         }
+                        let rate = clock.rate;
+                        let starts = |at: Time| found.start <= at && at < found.end();
+                        let ends = |at: Time| found.start < at && at <= found.end();
+                        (
+                            self.snap_edge(found, from, snap, rate, starts, "from=")
+                                .map_err(|m| line.error(1, m))?,
+                            self.snap_edge(found, to, snap, rate, ends, "to=")
+                                .map_err(|m| line.error(1, m))?,
+                        )
                     }
-                    let rate = clock.rate;
-                    let starts = |at: Time| found.start <= at && at < found.end();
-                    let ends = |at: Time| found.start < at && at <= found.end();
-                    (
-                        self.snap_edge(found, from, snap, rate, starts, "from=")
-                            .map_err(|m| line.error(1, m))?,
-                        self.snap_edge(found, to, snap, rate, ends, "to=")
-                            .map_err(|m| line.error(1, m))?,
-                    )
-                }
-                _ => {
-                    return Err(line.error(
+                    _ => return Err(line.error(
                         1,
                         "with a clip, give said=\"…\", pause=\"…\", or from= and to= with snap=",
-                    ))
-                }
-            };
+                    )),
+                };
             let at = self.project.locate(clip.as_str());
             (at.expect("the clip was found").sequence, range.0, range.1)
         } else {
@@ -1579,7 +1580,10 @@ impl Script<'_> {
                     cut.leave
                 )
             } else {
-                format!("nothing of \"{phrase}\" is left to take out of `{}`", clip.id)
+                format!(
+                    "nothing of \"{phrase}\" is left to take out of `{}`",
+                    clip.id
+                )
             });
         }
         // What is said of it: where, what it leaves, and between which words.
@@ -1842,7 +1846,11 @@ impl Script<'_> {
         // The tracks it cuts, as the kernel takes them: one that is missing
         // or locked is the kernel's to refuse.
         let cut_tracks: Vec<&Track> = match tracks {
-            None => sequence.tracks.iter().filter(|track| !track.locked).collect(),
+            None => sequence
+                .tracks
+                .iter()
+                .filter(|track| !track.locked)
+                .collect(),
             Some(ids) => {
                 let named: Vec<&Track> = ids
                     .iter()
@@ -2112,7 +2120,8 @@ impl Script<'_> {
                     .filter(|(to, ..)| span.holds(*to))
                     .min_by_key(|(to, ..)| (*to - at).abs())
                     .ok_or_else(|| {
-                        let none: Vec<String> = bladed.iter().map(|one| one.nowhere(snap)).collect();
+                        let none: Vec<String> =
+                            bladed.iter().map(|one| one.nowhere(snap)).collect();
                         none.join("; ")
                     })?;
                 let place = place_said(one.media, (snap, place), &one.speech);
@@ -2603,7 +2612,11 @@ struct Said<'a> {
 fn beside<'w>(words: &[&'w Word], from: f64, to: f64) -> (Option<&'w Word>, Option<&'w Word>) {
     let middle = |word: &Word| (word.start + word.end) / 2.0;
     (
-        words.iter().rev().find(|word| middle(word) <= from).copied(),
+        words
+            .iter()
+            .rev()
+            .find(|word| middle(word) <= from)
+            .copied(),
         words.iter().find(|word| middle(word) > to).copied(),
     )
 }
@@ -2635,7 +2648,13 @@ impl Bladed<'_> {
     }
 
     fn nowhere(&self, snap: Snap) -> String {
-        nothing_near(self.media, self.source, snap, self.reach, &self.found.barred)
+        nothing_near(
+            self.media,
+            self.source,
+            snap,
+            self.reach,
+            &self.found.barred,
+        )
     }
 
     /// What of this clip is in the way of a blade at `to` on its sequence,
@@ -2840,9 +2859,8 @@ fn quiet_together(
 /// A place of `media` that `snap` put an edge in, as it is said of the edge:
 /// the cut, or the pause or gap and the words either side of it.
 fn place_said(media: &Media, (snap, place): (Snap, &Place), speech: &Speech) -> String {
-    let position = |seconds: f64| {
-        Clock::of_media(media).print_position(media.rate.round(media_time(seconds)))
-    };
+    let position =
+        |seconds: f64| Clock::of_media(media).print_position(media.rate.round(media_time(seconds)));
     let (start, end) = place.quiet;
     match snap {
         Snap::Cut => format!("the cut of `{}` at {}", media.id, position(start)),

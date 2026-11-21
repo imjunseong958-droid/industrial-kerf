@@ -16,10 +16,23 @@ use crate::Value;
 use std::f64::consts::FRAC_PI_2;
 
 use crate::util::{layer_rect, remap};
-use crate::{Buf, EffectCtx, EffectSpec, num, p, popup, slider};
+use crate::{num, p, popup, slider, Buf, EffectCtx, EffectSpec};
 
-fn spec(id: &'static str, name: &'static str, params: Vec<crate::ParamSpec>, render: crate::RenderFn) -> EffectSpec {
-    EffectSpec { id, name, category: "Distort", params, render, gpu: false, float: true }
+fn spec(
+    id: &'static str,
+    name: &'static str,
+    params: Vec<crate::ParamSpec>,
+    render: crate::RenderFn,
+) -> EffectSpec {
+    EffectSpec {
+        id,
+        name,
+        category: "Distort",
+        params,
+        render,
+        gpu: false,
+        float: true,
+    }
 }
 
 fn pt(x: f64, y: f64) -> Value {
@@ -55,17 +68,25 @@ fn optics_compensation(ctx: &EffectCtx, mut b: Buf) -> Buf {
     let resize = if optimal { 0 } else { ctx.params.e("resize") };
     if reverse && resize > 0 && !ctx.adjustment {
         let c = b.to_px(ctx.params.v2("viewCenter"));
-        let rc =
-            [(lx, ly), (lx + lw, ly), (lx, ly + lh), (lx + lw, ly + lh)].iter().map(|p| ((p.0 - c.0).powi(2) + (p.1 - c.1).powi(2)).sqrt()).fold(0.0, f64::max);
+        let rc = [(lx, ly), (lx + lw, ly), (lx, ly + lh), (lx + lw, ly + lh)]
+            .iter()
+            .map(|p| ((p.0 - c.0).powi(2) + (p.1 - c.1).powi(2)).sqrt())
+            .fold(0.0, f64::max);
         let th = rc / r_ref * half;
         let cap = lw.max(lh) * [0.0, 0.5, 1.5, 3.5][resize.min(3) as usize];
-        let grow = if th < FRAC_PI_2 - 1e-3 { (f * th.tan() - rc).max(0.0) } else { cap };
+        let grow = if th < FRAC_PI_2 - 1e-3 {
+            (f * th.tan() - rc).max(0.0)
+        } else {
+            cap
+        };
         b.pad(grow.min(cap).min(4096.0).ceil() as u32);
     }
     let c = b.to_px(ctx.params.v2("viewCenter"));
     let fit = if optimal {
-        let rc =
-            [(lx, ly), (lx + lw, ly), (lx, ly + lh), (lx + lw, ly + lh)].iter().map(|p| ((p.0 - c.0).powi(2) + (p.1 - c.1).powi(2)).sqrt()).fold(1.0, f64::max);
+        let rc = [(lx, ly), (lx + lw, ly), (lx, ly + lh), (lx + lw, ly + lh)]
+            .iter()
+            .map(|p| ((p.0 - c.0).powi(2) + (p.1 - c.1).powi(2)).sqrt())
+            .fold(1.0, f64::max);
         if reverse {
             let th = (rc / r_ref * half).min(FRAC_PI_2 - 1e-3);
             (f * th.tan() / rc).max(1.0)
@@ -115,12 +136,37 @@ pub fn specs() -> Vec<EffectSpec> {
         "ec.distort.opticscompensation",
         "Optics Compensation",
         vec![
-            p("fieldOfView", "Field Of View (FOV)", num(0.0), slider(0.0, 180.0, 0.0, 180.0, 1)),
-            p("reverseLensDistortion", "Reverse Lens Distortion", Value::Bool(false), ParamUi::Checkbox),
-            p("fovOrientation", "FOV Orientation", Value::Enum(0), popup(&["Horizontal", "Vertical", "Diagonal"])),
+            p(
+                "fieldOfView",
+                "Field Of View (FOV)",
+                num(0.0),
+                slider(0.0, 180.0, 0.0, 180.0, 1),
+            ),
+            p(
+                "reverseLensDistortion",
+                "Reverse Lens Distortion",
+                Value::Bool(false),
+                ParamUi::Checkbox,
+            ),
+            p(
+                "fovOrientation",
+                "FOV Orientation",
+                Value::Enum(0),
+                popup(&["Horizontal", "Vertical", "Diagonal"]),
+            ),
             p("viewCenter", "View Center", pt(0.5, 0.5), ParamUi::Point),
-            p("optimalPixels", "Optimal Pixels (Invalidates Resize)", Value::Bool(false), ParamUi::Checkbox),
-            p("resize", "Resize", Value::Enum(0), popup(&["Off", "Max 2X", "Max 4X", "Unlimited"])),
+            p(
+                "optimalPixels",
+                "Optimal Pixels (Invalidates Resize)",
+                Value::Bool(false),
+                ParamUi::Checkbox,
+            ),
+            p(
+                "resize",
+                "Resize",
+                Value::Enum(0),
+                popup(&["Off", "Max 2X", "Max 4X", "Unlimited"]),
+            ),
         ],
         optics_compensation,
     )]

@@ -255,7 +255,12 @@ pub struct MasteringDisplay {
 impl MasteringDisplay {
     /// Display P3 with a D65 white, as most HDR is graded on, at 1000 nits.
     pub const P3_1000: Self = Self {
-        primaries: [[0.265, 0.690], [0.150, 0.060], [0.680, 0.320], [0.3127, 0.3290]],
+        primaries: [
+            [0.265, 0.690],
+            [0.150, 0.060],
+            [0.680, 0.320],
+            [0.3127, 0.3290],
+        ],
         peak: 1000.0,
         black: 0.0001,
     };
@@ -420,7 +425,11 @@ pub(crate) struct PassCodec {
 
 /// Whether a render of `pass`, or of a matte, is of greys: how near each pixel is.
 pub(crate) fn pass_of_greys(pass: kerf_compose::Pass, matte: bool) -> bool {
-    !matte && matches!(pass, kerf_compose::Pass::Depth | kerf_compose::Pass::Relative)
+    !matte
+        && matches!(
+            pass,
+            kerf_compose::Pass::Depth | kerf_compose::Pass::Relative
+        )
 }
 
 /// How a pass is written to `file`, of greys or of colors ([`pass_of_greys`]). No container
@@ -437,8 +446,15 @@ pub(crate) fn pass_codec(file: &Path, greys: bool) -> Result<PassCodec> {
         .to_ascii_lowercase();
     let video = |args: &[&str]| -> Vec<String> {
         // Greys are of the whole range, as a depth pass is drawn.
-        let range = if greys { &["-color_range", "pc"][..] } else { &[] };
-        args.iter().chain(range).map(|arg| (*arg).to_owned()).collect()
+        let range = if greys {
+            &["-color_range", "pc"][..]
+        } else {
+            &[]
+        };
+        args.iter()
+            .chain(range)
+            .map(|arg| (*arg).to_owned())
+            .collect()
     };
     match extension.as_str() {
         "mp4" | "mov" | "m4v" => Ok(PassCodec {
@@ -470,7 +486,11 @@ fn pass_encoding(opts: &RenderOptions) -> Result<Encoding> {
     if opts.draft || opts.preset != RenderPreset::Standard {
         return Err(EngineError::msg(format!(
             "a pass is written with no loss; it cannot be a {} render",
-            if opts.draft { "draft" } else { opts.preset.label() }
+            if opts.draft {
+                "draft"
+            } else {
+                opts.preset.label()
+            }
         )));
     }
     let greys = pass_of_greys(opts.pass, opts.matte.is_some());
@@ -1104,10 +1124,7 @@ fn composited_render(
         encode.extend(filters.iter().cloned());
         args.extend(filters);
     }
-    let encoded = [
-        "-pix_fmt".to_owned(),
-        encoding.pix_fmt.to_owned(),
-    ];
+    let encoded = ["-pix_fmt".to_owned(), encoding.pix_fmt.to_owned()];
     encode.extend(encoded.iter().cloned());
     encode.extend(encoding.output.iter().cloned());
     encode.extend(["-r".to_owned(), crate::program::rate_arg(rate)]);
@@ -1403,8 +1420,8 @@ fn render_in_sections(
                         let file = kept.making(&sections.extension);
                         let mut command = crate::ffmpeg::hidden_command(resolve_ffmpeg_bin());
                         command.args(args).arg(&file);
-                        let mixed = sidecar::run(command, cancellation, |_| {})
-                            .and_then(finished_well);
+                        let mixed =
+                            sidecar::run(command, cancellation, |_| {}).and_then(finished_well);
                         if mixed.is_err() {
                             let _ = std::fs::remove_file(&file);
                         }
@@ -1511,7 +1528,11 @@ fn render_in_sections(
     });
     compositor.flush_frames();
     if made.is_err() {
-        scratch.extend(sound_made.into_inner().unwrap_or_else(PoisonError::into_inner));
+        scratch.extend(
+            sound_made
+                .into_inner()
+                .unwrap_or_else(PoisonError::into_inner),
+        );
     }
     for file in scratch {
         let _ = std::fs::remove_file(file);

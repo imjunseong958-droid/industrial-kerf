@@ -50,7 +50,6 @@ pub use proxy::{cached_proxy, create_proxy_cache_key, make_proxy, proxy_ffmpeg_a
 pub use qc::{picture_qc, PictureCheck, PictureQc, QcRange};
 pub use resources::{budget, budget_for_cpus, HardwareEncodePolicy, ResourceBudget};
 pub use sidecar::CancellationToken;
-pub use unheard::{unheard_speech, Unheard};
 pub use transcription::{
     cached_transcripts, listen_cached, parse_whisper_json, transcribe_cached,
     transcription_available, TimeRange, Transcript, TranscriptCue, TranscriptWord,
@@ -58,3 +57,4 @@ pub use transcription::{
     TranscriptionStage, MAX_LISTEN_RANGE_SECONDS, MAX_TRANSCRIPTION_RANGE_SECONDS,
     TRANSCRIPTION_SAMPLE_RATE, TRANSCRIPTION_SCHEMA_VERSION,
 };
+pub use unheard::{unheard_speech, Unheard};

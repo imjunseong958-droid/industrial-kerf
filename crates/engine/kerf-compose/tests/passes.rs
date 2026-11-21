@@ -145,7 +145,8 @@ fn a_relative_depth_pass_is_stretched_to_its_frames_own_nearest_and_farthest() {
     assert_eq!(grey(&relative, 10, 5), 0);
     let places = [(160, 90), (118, 90), (160, 150), (160, 175)];
     for pair in places.windows(2) {
-        let nearer = |frame: &Frame| grey(frame, pair[0].0, pair[0].1) > grey(frame, pair[1].0, pair[1].1);
+        let nearer =
+            |frame: &Frame| grey(frame, pair[0].0, pair[0].1) > grey(frame, pair[1].0, pair[1].1);
         assert_eq!(nearer(&depth), nearer(&relative), "{pair:?}");
     }
     // It is a pass of its own, by name and by number.
@@ -161,11 +162,22 @@ fn a_normals_pass_says_which_way_each_pixel_faces() {
     let near = |a: [u8; 3], b: [u8; 3]| a.iter().zip(b).all(|(a, b)| a.abs_diff(b) <= 3);
     let frame = frame(SCENE, Pass::Normals);
     // The box and the wall face the camera: no way across or up, and all of it toward.
-    assert!(near(pixel(&frame, 160, 90), [128, 128, 255]), "{:?}", pixel(&frame, 160, 90));
-    assert!(near(pixel(&frame, 118, 90), [128, 128, 255]), "{:?}", pixel(&frame, 118, 90));
+    assert!(
+        near(pixel(&frame, 160, 90), [128, 128, 255]),
+        "{:?}",
+        pixel(&frame, 160, 90)
+    );
+    assert!(
+        near(pixel(&frame, 118, 90), [128, 128, 255]),
+        "{:?}",
+        pixel(&frame, 118, 90)
+    );
     // The floor is tipped back, so it faces up more than it faces the camera.
     let [across, up, toward] = pixel(&frame, 160, 170);
-    assert!(across.abs_diff(128) <= 3 && up > 230 && toward > 128 && toward < 180, "{across} {up} {toward}");
+    assert!(
+        across.abs_diff(128) <= 3 && up > 230 && toward > 128 && toward < 180,
+        "{across} {up} {toward}"
+    );
     // What is not in depth faces no way.
     assert_eq!(pixel(&frame, 10, 5), [0, 0, 0]);
     // A clip turned to its right shows red for it, and one turned the other way the less.
@@ -176,7 +188,10 @@ fn a_normals_pass_says_which_way_each_pixel_faces() {
         pixel(&self::frame(&body, Pass::Normals), 160, 90)
     };
     let (one, other) = (turned(40), turned(-40));
-    assert!(one[0].abs_diff(128) > 60 && other[0].abs_diff(128) > 60, "{one:?} {other:?}");
+    assert!(
+        one[0].abs_diff(128) > 60 && other[0].abs_diff(128) > 60,
+        "{one:?} {other:?}"
+    );
     assert!((one[0] > 128) != (other[0] > 128), "{one:?} {other:?}");
     assert!(one[1].abs_diff(128) <= 3 && one[2] > 200, "{one:?}");
     assert_eq!(Pass::parse("normals"), Some(Pass::Normals));
@@ -186,7 +201,9 @@ fn a_normals_pass_says_which_way_each_pixel_faces() {
 fn a_matte_is_one_clip_in_white_with_what_stands_before_it_cut_out() {
     let matte = |clip: &str| {
         let project = parse_document(
-            &format!("kerf 1\nproject name=\"t\"\nsequence s1 rate=24 size=320x180 audio=48000\n{SCENE}"),
+            &format!(
+                "kerf 1\nproject name=\"t\"\nsequence s1 rate=24 size=320x180 audio=48000\n{SCENE}"
+            ),
             Catalog::builtin(),
         )
         .unwrap()
@@ -200,14 +217,23 @@ fn a_matte_is_one_clip_in_white_with_what_stands_before_it_cut_out() {
             },
         )
     };
-    let wall = matte("wall").expect("a wall").frame(Rate::FPS_24.time_of(3), 1.0);
+    let wall = matte("wall")
+        .expect("a wall")
+        .frame(Rate::FPS_24.time_of(3), 1.0);
     // The wall is white where it shows, and the box before it is a hole in it.
     assert_eq!(pixel(&wall, 118, 90), [255, 255, 255]);
     assert_eq!(pixel(&wall, 160, 90), [0, 0, 0]);
     assert_eq!(pixel(&wall, 10, 5), [0, 0, 0]);
     // Every pixel is one or the other.
-    assert!(wall.rgba.as_chunks::<4>().0.iter().all(|p| p[0] == 0 || p[0] == 255));
-    let box_ = matte("box").expect("a box").frame(Rate::FPS_24.time_of(3), 1.0);
+    assert!(wall
+        .rgba
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .all(|p| p[0] == 0 || p[0] == 255));
+    let box_ = matte("box")
+        .expect("a box")
+        .frame(Rate::FPS_24.time_of(3), 1.0);
     assert_eq!(pixel(&box_, 160, 90), [255, 255, 255]);
     assert_eq!(pixel(&box_, 118, 90), [0, 0, 0]);
     // A clip that draws nothing has no matte, and neither has one that is not there.
@@ -224,9 +250,12 @@ fn a_matte_has_none_of_a_clip_told_long_after_its_own() {
     for after in 0..143 {
         body += &format!("    clip c{after} gen=solid@1 at={}f dur=1f\n", 24 + after);
     }
-    body += "  track V2 video\n    clip right gen=solid@1 at=0f dur=24f\n      set scale=0.4 x=0.25\n";
+    body +=
+        "  track V2 video\n    clip right gen=solid@1 at=0f dur=24f\n      set scale=0.4 x=0.25\n";
     let project = parse_document(
-        &format!("kerf 1\nproject name=\"t\"\nsequence s1 rate=24 size=320x180 audio=48000\n{body}"),
+        &format!(
+            "kerf 1\nproject name=\"t\"\nsequence s1 rate=24 size=320x180 audio=48000\n{body}"
+        ),
         Catalog::builtin(),
     )
     .unwrap_or_else(|errors| panic!("{errors:?}"))
@@ -247,13 +276,21 @@ fn a_matte_has_none_of_a_clip_told_long_after_its_own() {
     let (on_left, on_right) = ((80, 90), (240, 90));
     let ids = drawn(Pass::Ids, None);
     let colors = ids.ids();
-    assert_eq!((colors[0].0.as_str(), colors[144].0.as_str()), ("left", "right"));
+    assert_eq!(
+        (colors[0].0.as_str(), colors[144].0.as_str()),
+        ("left", "right")
+    );
     // Each is its own color in the pass, further from the other's than a reader takes for it.
     let frame = ids.frame(at, 1.0);
     assert!(same(pixel(&frame, on_left.0, on_left.1), colors[0].1));
     assert!(same(pixel(&frame, on_right.0, on_right.1), colors[144].1));
     let apart = |a: [u8; 3], b: [u8; 3]| a.iter().zip(b).map(|(a, b)| a.abs_diff(b)).max().unwrap();
-    assert!(apart(colors[0].1, colors[144].1) > 6, "{:?} {:?}", colors[0].1, colors[144].1);
+    assert!(
+        apart(colors[0].1, colors[144].1) > 6,
+        "{:?} {:?}",
+        colors[0].1,
+        colors[144].1
+    );
     // So a matte of either is white on it and black on the other.
     for (clip, its, others) in [("left", on_left, on_right), ("right", on_right, on_left)] {
         let matte = drawn(Pass::Picture, Some(clip)).frame(at, 1.0);
@@ -334,7 +371,9 @@ fn an_ids_pass_drawn_hard_gives_every_pixel_to_one_clip() {
         "  track V6 video\n    clip shot seq=s1 src=0f at=0f dur=24f\n      set x=0.3 y=-0.2\n",
     );
     let project = parse_document(
-        &format!("kerf 1\nproject name=\"t\"\nsequence s1 rate=24 size=320x180 audio=48000\n{body}"),
+        &format!(
+            "kerf 1\nproject name=\"t\"\nsequence s1 rate=24 size=320x180 audio=48000\n{body}"
+        ),
         Catalog::builtin(),
     )
     .unwrap_or_else(|errors| panic!("{errors:?}"))
@@ -384,7 +423,10 @@ fn an_ids_pass_drawn_hard_gives_every_pixel_to_one_clip() {
         // A pass drawn hard is a frame of its own, kept apart from one drawn soft.
         assert_ne!(soft.frame_key(at, 1.0), hard.frame_key(at, 1.0));
     }
-    assert!(between > 1000, "only {between} pixels are between two clips drawn soft");
+    assert!(
+        between > 1000,
+        "only {between} pixels are between two clips drawn soft"
+    );
     assert_eq!(drawn_hard, 0);
     // The square, at 0.8 of full opacity over the wall, is between the two drawn soft all over,
     // and drawn hard is its own color wherever it covers half a pixel or more: its feathered
@@ -392,7 +434,9 @@ fn an_ids_pass_drawn_hard_gives_every_pixel_to_one_clip() {
     let at = Rate::FPS_24.time_of(4);
     let (soft_frame, frame) = (soft.frame(at, 1.0), hard.frame(at, 1.0));
     let (wall, square) = (colors[2], colors[3]);
-    assert!(!colors.iter().any(|color| same(pixel(&soft_frame, 160, 90), *color)));
+    assert!(!colors
+        .iter()
+        .any(|color| same(pixel(&soft_frame, 160, 90), *color)));
     assert_eq!(pixel(&frame, 160, 90), square);
     assert_eq!(pixel(&frame, 160, 66), square);
     assert_eq!(pixel(&frame, 160, 60), wall);

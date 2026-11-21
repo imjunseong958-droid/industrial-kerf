@@ -423,8 +423,7 @@ fn hesitation(said: &str) -> bool {
 /// not a transcriber's note of a sound, such as `[MUSIC]`, and not a
 /// [`hesitation`].
 fn needed(text: &str) -> Option<String> {
-    Some(plain(text))
-        .filter(|said| !said.is_empty() && !is_a_sound_note(text) && !hesitation(said))
+    Some(plain(text)).filter(|said| !said.is_empty() && !is_a_sound_note(text) && !hesitation(said))
 }
 
 /// Whether `text` ends a sentence: "…it. It…" ends one and starts the next.
@@ -775,8 +774,7 @@ fn took_more(before: &[Played<'_>], took: &[String], after: &[Played<'_>]) -> To
         .filter_map(|word| needed(word.text))
         .take(AGAIN_WORDS)
         .collect();
-    let again =
-        |word: &String| before.iter().any(|(_, said)| said == word) || after.contains(word);
+    let again = |word: &String| before.iter().any(|(_, said)| said == word) || after.contains(word);
     let text = |words: &[(&str, String)]| {
         let texts: Vec<&str> = words.iter().map(|(text, _)| *text).collect();
         texts.join(" ")

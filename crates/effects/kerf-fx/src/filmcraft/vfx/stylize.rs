@@ -154,7 +154,6 @@ pub fn gradient(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
     });
 }
 
-
 /// Checkerboard (obsolete): a checkerboard of Color and transparency.
 pub fn checkerboard(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
     let a = pv(e, "anchor", cx, img);
@@ -284,4 +283,3 @@ pub fn paint_bucket(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
             }
         });
 }
-

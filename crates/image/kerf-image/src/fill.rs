@@ -940,9 +940,15 @@ mod tests {
             .expect("ffmpeg");
         assert!(decoded.status.success(), "{}", path.display());
         let header = std::fs::read(&path).expect("the frame");
-        let size = |at: usize| u32::from_be_bytes([header[at], header[at + 1], header[at + 2], header[at + 3]]);
+        let size = |at: usize| {
+            u32::from_be_bytes([header[at], header[at + 1], header[at + 2], header[at + 3]])
+        };
         let mut img = Image::new(size(16), size(20));
-        for (px, rgb) in img.data.iter_mut().zip(decoded.stdout.as_chunks::<6>().0.iter()) {
+        for (px, rgb) in img
+            .data
+            .iter_mut()
+            .zip(decoded.stdout.as_chunks::<6>().0.iter())
+        {
             let channel = |c: usize| f32::from(u16::from_le_bytes([rgb[c], rgb[c + 1]])) / 65535.0;
             *px = [channel(0), channel(2), channel(4), 1.0];
         }
@@ -956,7 +962,9 @@ mod tests {
     #[test]
     #[ignore = "needs scripts/fetch-real-footage.sh"]
     fn real_footage_fill() {
-        let search_everywhere = |_: usize, _: usize, _: usize, rounds: usize, sweeps: usize| Effort::Search { rounds, sweeps };
+        let search_everywhere = |_: usize, _: usize, _: usize, rounds: usize, sweeps: usize| {
+            Effort::Search { rounds, sweeps }
+        };
         for size in ["1080", "4k"] {
             let Some(truth) = footage(&format!("traffic/{size}/2874.png")) else {
                 eprintln!("KERF_REAL_FOOTAGE is not set");
@@ -986,7 +994,8 @@ mod tests {
                 let kerf = patch_fill(&cut_out, &hole, None, 7, 1);
                 let took = start.elapsed().as_secs_f64();
                 let searched = patch_fill_by(&cut_out, &hole, None, 7, 1, search_everywhere);
-                let detail = |img: &Image| fine_detail(img, |i| hole[i]) / fine_detail(&truth, around);
+                let detail =
+                    |img: &Image| fine_detail(img, |i| hole[i]) / fine_detail(&truth, around);
                 println!(
                     "fill {size} {name}: {:.2} dB ({took:.1} s), searched {:.2} dB; detail {:.0}% of around, \
                      searched {:.0}%, truth {:.0}%; {}",
@@ -998,7 +1007,10 @@ mod tests {
                     if kerf.data == searched.data { "the same bytes" } else { "copied below the search" },
                 );
                 // As close as the search, and keeping at least what it keeps.
-                assert!(psnr(&kerf, &truth, Some(&hole)) > psnr(&searched, &truth, Some(&hole)) - 0.1, "{size} {name}");
+                assert!(
+                    psnr(&kerf, &truth, Some(&hole)) > psnr(&searched, &truth, Some(&hole)) - 0.1,
+                    "{size} {name}"
+                );
                 assert!(detail(&kerf) >= detail(&searched) * 0.95, "{size} {name}");
             }
         }

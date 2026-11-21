@@ -430,7 +430,7 @@ fn rejected_error(rejected: Rejected) -> RuntimeError {
 pub(crate) fn empty_project() -> Project {
     let mut project = Project::new("Untitled project");
     project.sequences.push(Sequence {
-            buses: Vec::new(),
+        buses: Vec::new(),
         id: Id::new("s1").expect("valid id"),
         name: project.name.clone(),
         rate: Rate::FPS_30,

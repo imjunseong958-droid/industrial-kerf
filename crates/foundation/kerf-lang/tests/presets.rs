@@ -88,7 +88,10 @@ fn a_preset_leaves_behind_what_its_footage_was_recorded_beside() {
     )
     .unwrap();
     // A slot is whatever footage a project gives it, and the pattern has no recorder.
-    assert!(!document.contains("sync=rec") && !document.contains("recorder"), "{document}");
+    assert!(
+        !document.contains("sync=rec") && !document.contains("recorder"),
+        "{document}"
+    );
     preset::parse(&document, Catalog::builtin()).unwrap();
 }
 
@@ -607,7 +610,12 @@ fn car() -> Project {
 }
 
 fn export_of(project: &Project, sequence: &str) -> Result<String, String> {
-    preset::export(project, Catalog::builtin(), &Id::new(sequence).unwrap(), "Pattern")
+    preset::export(
+        project,
+        Catalog::builtin(),
+        &Id::new(sequence).unwrap(),
+        "Pattern",
+    )
 }
 
 /// A project with other footage, of another rate and size, than the walk's.
@@ -656,9 +664,14 @@ fn a_moved_layer_travels_with_the_matte_and_plate_it_is_made_of() {
         assert!(document.contains(line), "{line}\n{document}");
     }
     // `moved` draws `s2`, but nothing of `s2` plays it.
-    assert!(!document.contains("moved") && !document.contains("sequence s1"), "{document}");
+    assert!(
+        !document.contains("moved") && !document.contains("sequence s1"),
+        "{document}"
+    );
     let read = preset::parse(&document, Catalog::builtin()).unwrap();
-    let slots: Vec<_> = preset::slots(&read.pattern).map(|m| m.id.as_str()).collect();
+    let slots: Vec<_> = preset::slots(&read.pattern)
+        .map(|m| m.id.as_str())
+        .collect();
     let made: Vec<_> = preset::made(&read.pattern).map(|m| m.id.as_str()).collect();
     assert_eq!((slots, made), (vec!["slot1"], vec!["man", "gone"]));
     let man = read.pattern.media("man").unwrap();
@@ -687,12 +700,15 @@ fn a_moved_layer_travels_with_the_matte_and_plate_it_is_made_of() {
     let (man, gone) = (&ids["man"], &ids["gone"]);
     // Each is a new media of the project, of the footage bound, frame for frame: its
     // rate, its length and its size.
-    let added = format!("media add {man} path=\"shots/{man}.mp4\" rate=24 dur=00:00:04:04 video=640x360\n");
+    let added =
+        format!("media add {man} path=\"shots/{man}.mp4\" rate=24 dur=00:00:04:04 video=640x360\n");
     assert!(script.contains(&added), "{script}");
     let step = format!("step {gone} add generate model=plate prompt=\"an empty dirt path below a dry grassy hillside, bushes and trees, daylight\" guide=footage/run.mp4 guide_mask={{man.mp4}} seed=7 reach=72");
     assert!(script.contains(&step), "{script}");
     assert!(script.find(&added) < script.find(&step), "{script}");
-    let applied = apply_script(&project, Catalog::builtin(), &script).unwrap().project;
+    let applied = apply_script(&project, Catalog::builtin(), &script)
+        .unwrap()
+        .project;
     let made = applied.media(man).unwrap();
     assert_eq!(made.path, format!("shots/{man}.mp4"));
     assert_eq!(
@@ -708,7 +724,10 @@ fn a_moved_layer_travels_with_the_matte_and_plate_it_is_made_of() {
     let target = applied.sequence("main").unwrap();
     assert_eq!(target.tracks.len(), 3);
     assert!(!target.tracks[2].enabled);
-    assert_eq!(target.tracks[1].clips[0].effects[0].fx.as_str(), "key.trackmatte");
+    assert_eq!(
+        target.tracks[1].clips[0].effects[0].fx.as_str(),
+        "key.trackmatte"
+    );
 
     // A made media takes no binding.
     let mut wrong = bound.clone();
@@ -750,11 +769,16 @@ fn a_blocked_scene_travels_with_the_shot_its_guide_is_drawn_from() {
     .unwrap();
     let (depth, scene, body) = (&ids["depth"], &ids["s2"], &ids["body"]);
     assert_ne!(scene, "s2");
-    let applied = apply_script(&project, Catalog::builtin(), &script).unwrap().project;
+    let applied = apply_script(&project, Catalog::builtin(), &script)
+        .unwrap()
+        .project;
     // The shot keeps the pattern's line, and its steps draw the scene that came with it
     // and hand the model where its body goes.
     let made = applied.media(depth).unwrap();
-    assert_eq!((made.rate.to_string().as_str(), made.duration), ("16", Time::from_seconds(65.0 / 16.0).unwrap()));
+    assert_eq!(
+        (made.rate.to_string().as_str(), made.duration),
+        ("16", Time::from_seconds(65.0 / 16.0).unwrap())
+    );
     assert_eq!(made.path, format!("shots/{depth}.mp4"));
     assert_eq!(
         made.steps.iter().map(kerf_lang::print_step).collect::<Vec<_>>(),
@@ -767,7 +791,11 @@ fn a_blocked_scene_travels_with_the_shot_its_guide_is_drawn_from() {
     assert!(applied.sequence("s2").is_none());
     assert_eq!(media_of(&applied, &ids["shot"]).0, depth.as_str());
     // The steps are written once the scene is there.
-    assert!(script.find(&format!("sequence add {scene}")) < script.find(&format!("step {depth} add render")), "{script}");
+    assert!(
+        script.find(&format!("sequence add {scene}"))
+            < script.find(&format!("step {depth} add render")),
+        "{script}"
+    );
 }
 
 #[test]
@@ -785,7 +813,11 @@ fn what_a_preset_cannot_make_is_refused() {
             ),
     );
     let refused = export_of(&recipe, "s1").unwrap_err();
-    assert!(refused.contains("recipe file `shots/open.kerfrecipe`") && refused.contains("carry them into the document first (`kerf carry open`"), "{refused}");
+    assert!(
+        refused.contains("recipe file `shots/open.kerfrecipe`")
+            && refused.contains("carry them into the document first (`kerf carry open`"),
+        "{refused}"
+    );
 
     let walk = export_of(&walk(), "s2").unwrap();
     let car = export_of(&car(), "s1").unwrap();
@@ -797,8 +829,14 @@ fn what_a_preset_cannot_make_is_refused() {
         walk.replace("media man ", "media spare path=\"made:spare.mp4\" rate=16 dur=1s video=832x480\n  generate model=matte prompt=\"tree\"\nmedia man "),
         "unused made media `spare`",
     );
-    wrong(walk.replacen("guide=slot:slot1", "guide=slot:slot9", 1), "slot `slot:slot9`");
-    wrong(walk.replace("made:man.mp4", "made:woman.mp4"), "has the path `made:man`");
+    wrong(
+        walk.replacen("guide=slot:slot1", "guide=slot:slot9", 1),
+        "slot `slot:slot9`",
+    );
+    wrong(
+        walk.replace("made:man.mp4", "made:woman.mp4"),
+        "has the path `made:man`",
+    );
     wrong(
         walk.replace("media slot1 path=\"slot:slot1\" rate=16 dur=00:00:02:08 video=832x480\n", "media slot1 path=\"slot:slot1\" rate=16 dur=00:00:02:08 video=832x480\n  generate model=matte prompt=\"man\"\n"),
         "slot `slot1` has steps under it",
@@ -810,7 +848,11 @@ fn what_a_preset_cannot_make_is_refused() {
         "outside its pattern",
     );
     // Steps are held to their order.
-    assert!(preset::parse(&car.replace("guide={guide.mp4}", "guide={nothing.mp4}"), Catalog::builtin()).is_err());
+    assert!(preset::parse(
+        &car.replace("guide={guide.mp4}", "guide={nothing.mp4}"),
+        Catalog::builtin()
+    )
+    .is_err());
     // A slot a step reads and no clip plays is used.
     let plate_only = walk
         .replace("    clip mover media=slot1 src=00:00:00:00 at=00:00:00:00 dur=00:00:02:08\n      set x=0.25 scale=1.5\n      fx key.trackmatte@1 matte=V3 composite=matte-luma\n", "");

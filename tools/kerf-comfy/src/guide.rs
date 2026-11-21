@@ -231,7 +231,14 @@ impl Tools {
         let mut child = Command::new(&self.ffmpeg)
             .args(["-hide_banner", "-loglevel", "error", "-y"])
             .args(["-f", "rawvideo", "-pix_fmt", "gray", "-color_range", "pc"])
-            .args(["-s", &format!("{width}x{height}"), "-r", &fps.to_string(), "-i", "-"])
+            .args([
+                "-s",
+                &format!("{width}x{height}"),
+                "-r",
+                &fps.to_string(),
+                "-i",
+                "-",
+            ])
             .args(["-c:v", "libx264", "-crf", "10", "-pix_fmt", "yuv420p"])
             .arg(to)
             .stdin(std::process::Stdio::piped())

@@ -7,8 +7,8 @@
 use crate::color;
 use crate::image::Image;
 use kerf_model::Rgba;
-use kerf_text::mask::{stroke, StrokeKind};
 use kerf_text::color::ColorImage;
+use kerf_text::mask::{stroke, StrokeKind};
 use kerf_text::raster::Mask;
 use kerf_text::{layout, render, Align, ParagraphStyle, TextStyle};
 use rayon::prelude::*;
@@ -121,7 +121,12 @@ pub fn extent(text: &Text, at: [f32; 2], place: f32) -> Option<[f32; 4]> {
     let laid = laid(text)?;
     let [left, top, right, bottom] = laid.bounds;
     let baseline = at[1] - (top + (bottom - top) * place);
-    Some([at[0] + left, baseline + top, at[0] + right, baseline + bottom])
+    Some([
+        at[0] + left,
+        baseline + top,
+        at[0] + right,
+        baseline + bottom,
+    ])
 }
 
 /// Fill the glyphs of `laid`, whose coverage `glyphs` is placed at `at`, in `color`, and draw
@@ -340,7 +345,13 @@ mod tests {
     }
 
     fn ink(image: &Image) -> f32 {
-        image.px.as_chunks::<4>().0.iter().map(|pixel| pixel[3]).sum()
+        image
+            .px
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|pixel| pixel[3])
+            .sum()
     }
 
     #[test]

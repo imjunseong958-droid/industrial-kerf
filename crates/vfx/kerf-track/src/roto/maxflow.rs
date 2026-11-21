@@ -58,7 +58,18 @@ pub enum Segment {
 impl Graph {
     pub fn new(nodes: usize, edges_hint: usize) -> Graph {
         Graph {
-            nodes: vec![Node { first: NONE, parent: NONE, tr_cap: 0, is_sink: false, active: false, ts: 0, dist: 0 }; nodes],
+            nodes: vec![
+                Node {
+                    first: NONE,
+                    parent: NONE,
+                    tr_cap: 0,
+                    is_sink: false,
+                    active: false,
+                    ts: 0,
+                    dist: 0
+                };
+                nodes
+            ],
             arcs: Vec::with_capacity(edges_hint * 2),
             flow: 0,
             time: 0,
@@ -79,7 +90,11 @@ impl Graph {
     pub fn add_tweights(&mut self, i: usize, source: i64, sink: i64) {
         let n = &mut self.nodes[i];
         let d = n.tr_cap;
-        let (s, t) = if d > 0 { (source + d, sink) } else { (source, sink - d) };
+        let (s, t) = if d > 0 {
+            (source + d, sink)
+        } else {
+            (source, sink - d)
+        };
         self.flow += s.min(t);
         n.tr_cap = s - t;
     }
@@ -88,9 +103,17 @@ impl Graph {
     pub fn add_edge(&mut self, i: usize, j: usize, cap: i32, rev: i32) {
         debug_assert!(i != j);
         let a = self.arcs.len() as u32;
-        self.arcs.push(Arc { head: j as u32, next: self.nodes[i].first, r_cap: cap });
+        self.arcs.push(Arc {
+            head: j as u32,
+            next: self.nodes[i].first,
+            r_cap: cap,
+        });
         self.nodes[i].first = a;
-        self.arcs.push(Arc { head: i as u32, next: self.nodes[j].first, r_cap: rev });
+        self.arcs.push(Arc {
+            head: i as u32,
+            next: self.nodes[j].first,
+            r_cap: rev,
+        });
         self.nodes[j].first = a + 1;
     }
 
@@ -120,7 +143,9 @@ impl Graph {
             let i = match current.take() {
                 Some(i) if self.nodes[i as usize].parent != NONE => i,
                 _ => loop {
-                    let Some(i) = self.queue.pop_front() else { return self.flow };
+                    let Some(i) = self.queue.pop_front() else {
+                        return self.flow;
+                    };
                     self.nodes[i as usize].active = false;
                     if self.nodes[i as usize].parent != NONE {
                         break i;
@@ -311,7 +336,11 @@ impl Graph {
                 let arc = self.arcs[a as usize];
                 // S orphan: the parent must push flow into i (residual on j→i = sister of i→j).
                 // T orphan: i must push flow into the parent (residual on i→j).
-                let cap = if sink { arc.r_cap } else { self.arcs[(a ^ 1) as usize].r_cap };
+                let cap = if sink {
+                    arc.r_cap
+                } else {
+                    self.arcs[(a ^ 1) as usize].r_cap
+                };
                 if cap > 0 {
                     let j = arc.head;
                     let nj = self.nodes[j as usize];
@@ -342,7 +371,11 @@ impl Graph {
                 let j = arc.head;
                 let nj = self.nodes[j as usize];
                 if nj.is_sink == sink && nj.parent != NONE {
-                    let cap = if sink { arc.r_cap } else { self.arcs[(a ^ 1) as usize].r_cap };
+                    let cap = if sink {
+                        arc.r_cap
+                    } else {
+                        self.arcs[(a ^ 1) as usize].r_cap
+                    };
                     if cap > 0 {
                         self.set_active(j);
                     }
@@ -360,7 +393,11 @@ impl Graph {
     /// The side of node `i` after [`Graph::maxflow`] (free nodes go to the sink).
     pub fn segment(&self, i: usize) -> Segment {
         let n = &self.nodes[i];
-        if n.parent != NONE && !n.is_sink { Segment::Source } else { Segment::Sink }
+        if n.parent != NONE && !n.is_sink {
+            Segment::Source
+        } else {
+            Segment::Sink
+        }
     }
 }
 

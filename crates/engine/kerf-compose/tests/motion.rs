@@ -44,7 +44,9 @@ fn pixel(frame: &Frame, x: u32, y: u32) -> [u8; 3] {
 fn lit(frame: &Frame) -> usize {
     frame
         .rgba
-        .as_chunks::<4>().0.iter()
+        .as_chunks::<4>()
+        .0
+        .iter()
         .filter(|pixel| pixel[0] > 128)
         .count()
 }
@@ -144,7 +146,9 @@ fn shape_with(set: &str, outlines: &str) -> String {
 fn covered(frame: &Frame) -> f64 {
     frame
         .rgba
-        .as_chunks::<4>().0.iter()
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|pixel| kerf_color_share(pixel[0]))
         .sum()
 }
@@ -501,18 +505,35 @@ fn lit_span(frame: &Frame) -> u32 {
 
 #[test]
 fn a_titles_features_change_what_its_font_draws() {
-    let of = |text: &str, set: &str| frame(&clip("title", &format!(r#"text="{text}" size=0.2 {set}"#)), 3);
+    let of = |text: &str, set: &str| {
+        frame(
+            &clip("title", &format!(r#"text="{text}" size=0.2 {set}"#)),
+            3,
+        )
+    };
     // Inter's 1 is narrower than its 0, until figures are tabular.
     let (ones, zeros) = (lit_span(&of("1111", "")), lit_span(&of("0000", "")));
     assert!(ones + 20 < zeros, "{ones} against {zeros}");
-    let (tabular, zeros) = (lit_span(&of("1111", "features=tnum")), lit_span(&of("0000", "features=tnum")));
-    assert!(tabular.abs_diff(zeros) < 6 && tabular > ones + 15, "{tabular} against {zeros}, from {ones}");
+    let (tabular, zeros) = (
+        lit_span(&of("1111", "features=tnum")),
+        lit_span(&of("0000", "features=tnum")),
+    );
+    assert!(
+        tabular.abs_diff(zeros) < 6 && tabular > ones + 15,
+        "{tabular} against {zeros}, from {ones}"
+    );
     // A feature takes the font's other glyph, and one turned off undoes what the font does by itself.
     assert_ne!(of("0", "").rgba, of("0", "features=zero").rgba);
     assert_ne!(of("->", "").rgba, of("->", "features=-calt").rgba);
     // As it comes in, where each piece is drawn on its own.
-    assert_eq!(of("0", "features=zero").rgba, of("0", "features=zero reveal=1").rgba);
-    assert_ne!(of("0", "reveal=1").rgba, of("0", "features=zero reveal=1").rgba);
+    assert_eq!(
+        of("0", "features=zero").rgba,
+        of("0", "features=zero reveal=1").rgba
+    );
+    assert_ne!(
+        of("0", "reveal=1").rgba,
+        of("0", "features=zero reveal=1").rgba
+    );
     // None named, or one the font has not, draws as it did.
     assert_eq!(of("Hello 0", "").rgba, of("Hello 0", r#"features="""#).rgba);
     assert_eq!(of("Hello 0", "").rgba, of("Hello 0", "features=smcp").rgba);

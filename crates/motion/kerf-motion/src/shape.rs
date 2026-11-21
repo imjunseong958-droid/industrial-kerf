@@ -586,7 +586,13 @@ mod tests {
     }
 
     fn area(image: &Image) -> f32 {
-        image.px.as_chunks::<4>().0.iter().map(|pixel| pixel[3]).sum()
+        image
+            .px
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|pixel| pixel[3])
+            .sum()
     }
 
     #[test]

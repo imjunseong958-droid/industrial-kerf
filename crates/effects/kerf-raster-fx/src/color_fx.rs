@@ -4,14 +4,31 @@ use crate::ParamUi;
 use crate::Value;
 use kerf_color::{hsl_to_rgb, luma709, rgb_to_hsl};
 
-use crate::{Buf, EffectCtx, EffectSpec, col, num, p, popup, slider};
+use crate::{col, num, p, popup, slider, Buf, EffectCtx, EffectSpec};
 
-fn spec(id: &'static str, name: &'static str, params: Vec<crate::ParamSpec>, render: crate::RenderFn) -> EffectSpec {
-    EffectSpec { id, name, category: "Color Correction", params, render, gpu: false, float: true }
+fn spec(
+    id: &'static str,
+    name: &'static str,
+    params: Vec<crate::ParamSpec>,
+    render: crate::RenderFn,
+) -> EffectSpec {
+    EffectSpec {
+        id,
+        name,
+        category: "Color Correction",
+        params,
+        render,
+        gpu: false,
+        float: true,
+    }
 }
 
 fn mix(a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {
-    [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t]
+    [
+        a[0] + (b[0] - a[0]) * t,
+        a[1] + (b[1] - a[1]) * t,
+        a[2] + (b[2] - a[2]) * t,
+    ]
 }
 
 /// Hue/Saturation's colour ranges (Channel Control entries after Master): id prefix, display
@@ -26,7 +43,9 @@ pub const HUESAT_RANGES: [(&str, &str, f64); 6] = [
 ];
 
 /// Hue/Saturation's Channel Control popup.
-pub const HUESAT_CHANNELS: [&str; 7] = ["Master", "Reds", "Yellows", "Greens", "Cyans", "Blues", "Magentas"];
+pub const HUESAT_CHANNELS: [&str; 7] = [
+    "Master", "Reds", "Yellows", "Greens", "Cyans", "Blues", "Magentas",
+];
 
 /// One colour range of Hue/Saturation: the hues it covers fully (`start..end`, degrees, may
 /// wrap), the fall-off widths either side, and its hue / saturation / lightness adjustments.
@@ -51,8 +70,16 @@ impl HueRange {
         }
         let after = d - width;
         let before = 360.0 - d;
-        let wa = if self.fall_end > 0.0 { 1.0 - after / self.fall_end } else { 0.0 };
-        let wb = if self.fall_start > 0.0 { 1.0 - before / self.fall_start } else { 0.0 };
+        let wa = if self.fall_end > 0.0 {
+            1.0 - after / self.fall_end
+        } else {
+            0.0
+        };
+        let wb = if self.fall_start > 0.0 {
+            1.0 - before / self.fall_start
+        } else {
+            0.0
+        };
         wa.max(wb).clamp(0.0, 1.0)
     }
 }
@@ -76,11 +103,19 @@ pub fn huesat_ranges(ctx: &EffectCtx) -> Vec<HueRange> {
 }
 
 fn adjust_sat(s: f32, sat: f32) -> f32 {
-    if sat >= 0.0 { s + (1.0 - s) * sat * s.min(1.0) } else { s * (1.0 + sat) }
+    if sat >= 0.0 {
+        s + (1.0 - s) * sat * s.min(1.0)
+    } else {
+        s * (1.0 + sat)
+    }
 }
 
 fn adjust_light(l: f32, light: f32) -> f32 {
-    if light >= 0.0 { l + (1.0 - l) * light } else { l * (1.0 + light) }
+    if light >= 0.0 {
+        l + (1.0 - l) * light
+    } else {
+        l * (1.0 + light)
+    }
 }
 
 /// Hue/Saturation. Master adjusts every pixel; each colour range (Reds … Magentas, chosen in
@@ -99,7 +134,11 @@ fn hue_saturation(ctx: &EffectCtx, mut b: Buf) -> Buf {
     b.img.map_straight(|c| {
         let [h, s, l] = rgb_to_hsl(c[0], c[1], c[2]);
         let (h, s, l) = if colorize {
-            (ch, cs, (l + cl * if cl > 0.0 { 1.0 - l } else { l }).clamp(0.0, 1.0))
+            (
+                ch,
+                cs,
+                (l + cl * if cl > 0.0 { 1.0 - l } else { l }).clamp(0.0, 1.0),
+            )
         } else {
             let mut s2 = adjust_sat(s, sat);
             let mut l2 = adjust_light(l, light);
@@ -178,12 +217,32 @@ fn photo_filter(ctx: &EffectCtx, mut b: Buf) -> Buf {
 
 pub fn specs() -> Vec<EffectSpec> {
     let pct = || slider(-100.0, 100.0, -100.0, 100.0, 1);
-    let mut gpg = vec![p("blackStretch", "Black Stretch", num(0.0), slider(0.0, 4.0, 0.0, 4.0, 2))];
+    let mut gpg = vec![p(
+        "blackStretch",
+        "Black Stretch",
+        num(0.0),
+        slider(0.0, 4.0, 0.0, 4.0, 2),
+    )];
     for (n, label) in [("red", "Red"), ("green", "Green"), ("blue", "Blue")] {
         let leak = |s: String| -> &'static str { Box::leak(s.into_boxed_str()) };
-        gpg.push(p(leak(format!("{n}Gamma")), leak(format!("{label} Gamma")), num(1.0), slider(0.1, 10.0, 0.1, 4.0, 2)));
-        gpg.push(p(leak(format!("{n}Pedestal")), leak(format!("{label} Pedestal")), num(0.0), slider(-2.0, 2.0, -1.0, 1.0, 2)));
-        gpg.push(p(leak(format!("{n}Gain")), leak(format!("{label} Gain")), num(1.0), slider(0.0, 4.0, 0.0, 2.0, 2)));
+        gpg.push(p(
+            leak(format!("{n}Gamma")),
+            leak(format!("{label} Gamma")),
+            num(1.0),
+            slider(0.1, 10.0, 0.1, 4.0, 2),
+        ));
+        gpg.push(p(
+            leak(format!("{n}Pedestal")),
+            leak(format!("{label} Pedestal")),
+            num(0.0),
+            slider(-2.0, 2.0, -1.0, 1.0, 2),
+        ));
+        gpg.push(p(
+            leak(format!("{n}Gain")),
+            leak(format!("{label} Gain")),
+            num(1.0),
+            slider(0.0, 4.0, 0.0, 2.0, 2),
+        ));
     }
     vec![
         spec(
@@ -191,7 +250,12 @@ pub fn specs() -> Vec<EffectSpec> {
             "Hue/Saturation",
             {
                 let mut v = vec![
-                    p("channelControl", "Channel Control", Value::Enum(0), popup(&HUESAT_CHANNELS)),
+                    p(
+                        "channelControl",
+                        "Channel Control",
+                        Value::Enum(0),
+                        popup(&HUESAT_CHANNELS),
+                    ),
                     p("hue", "Master Hue", num(0.0), ParamUi::Angle),
                     p("saturation", "Master Saturation", num(0.0), pct()),
                     p("lightness", "Master Lightness", num(0.0), pct()),
@@ -199,18 +263,63 @@ pub fn specs() -> Vec<EffectSpec> {
                 let leak = |s: String| -> &'static str { Box::leak(s.into_boxed_str()) };
                 for (r, name, c) in HUESAT_RANGES {
                     let single = name.trim_end_matches('s');
-                    v.push(p(leak(format!("{r}Hue")), leak(format!("{single} Hue")), num(0.0), ParamUi::Angle));
-                    v.push(p(leak(format!("{r}Saturation")), leak(format!("{single} Saturation")), num(0.0), pct()));
-                    v.push(p(leak(format!("{r}Lightness")), leak(format!("{single} Lightness")), num(0.0), pct()));
-                    v.push(p(leak(format!("{r}RangeStart")), leak(format!("{single} Range Start")), num(c - 15.0), slider(-360.0, 720.0, -180.0, 360.0, 0)));
-                    v.push(p(leak(format!("{r}RangeEnd")), leak(format!("{single} Range End")), num(c + 15.0), slider(-360.0, 720.0, -180.0, 360.0, 0)));
-                    v.push(p(leak(format!("{r}StartFalloff")), leak(format!("{single} Start Falloff")), num(30.0), slider(0.0, 180.0, 0.0, 90.0, 0)));
-                    v.push(p(leak(format!("{r}EndFalloff")), leak(format!("{single} End Falloff")), num(30.0), slider(0.0, 180.0, 0.0, 90.0, 0)));
+                    v.push(p(
+                        leak(format!("{r}Hue")),
+                        leak(format!("{single} Hue")),
+                        num(0.0),
+                        ParamUi::Angle,
+                    ));
+                    v.push(p(
+                        leak(format!("{r}Saturation")),
+                        leak(format!("{single} Saturation")),
+                        num(0.0),
+                        pct(),
+                    ));
+                    v.push(p(
+                        leak(format!("{r}Lightness")),
+                        leak(format!("{single} Lightness")),
+                        num(0.0),
+                        pct(),
+                    ));
+                    v.push(p(
+                        leak(format!("{r}RangeStart")),
+                        leak(format!("{single} Range Start")),
+                        num(c - 15.0),
+                        slider(-360.0, 720.0, -180.0, 360.0, 0),
+                    ));
+                    v.push(p(
+                        leak(format!("{r}RangeEnd")),
+                        leak(format!("{single} Range End")),
+                        num(c + 15.0),
+                        slider(-360.0, 720.0, -180.0, 360.0, 0),
+                    ));
+                    v.push(p(
+                        leak(format!("{r}StartFalloff")),
+                        leak(format!("{single} Start Falloff")),
+                        num(30.0),
+                        slider(0.0, 180.0, 0.0, 90.0, 0),
+                    ));
+                    v.push(p(
+                        leak(format!("{r}EndFalloff")),
+                        leak(format!("{single} End Falloff")),
+                        num(30.0),
+                        slider(0.0, 180.0, 0.0, 90.0, 0),
+                    ));
                 }
                 v.extend([
-                    p("colorize", "Colorize", Value::Bool(false), ParamUi::Checkbox),
+                    p(
+                        "colorize",
+                        "Colorize",
+                        Value::Bool(false),
+                        ParamUi::Checkbox,
+                    ),
                     p("colorizeHue", "Colorize Hue", num(0.0), ParamUi::Angle),
-                    p("colorizeSaturation", "Colorize Saturation", num(25.0), slider(0.0, 100.0, 0.0, 100.0, 0)),
+                    p(
+                        "colorizeSaturation",
+                        "Colorize Saturation",
+                        num(25.0),
+                        slider(0.0, 100.0, 0.0, 100.0, 0),
+                    ),
                     p("colorizeLightness", "Colorize Lightness", num(0.0), pct()),
                 ]);
                 v
@@ -221,10 +330,25 @@ pub fn specs() -> Vec<EffectSpec> {
             "ec.color.photofilter",
             "Photo Filter",
             vec![
-                p("filter", "Filter", Value::Enum(0), popup(&PHOTO_FILTERS.map(|f| f.0))),
+                p(
+                    "filter",
+                    "Filter",
+                    Value::Enum(0),
+                    popup(&PHOTO_FILTERS.map(|f| f.0)),
+                ),
                 p("color", "Color", col(0.93, 0.54, 0.09), ParamUi::Color),
-                p("density", "Density", num(25.0), slider(0.0, 100.0, 0.0, 100.0, 1)),
-                p("preserveLuminosity", "Preserve Luminosity", Value::Bool(true), ParamUi::Checkbox),
+                p(
+                    "density",
+                    "Density",
+                    num(25.0),
+                    slider(0.0, 100.0, 0.0, 100.0, 1),
+                ),
+                p(
+                    "preserveLuminosity",
+                    "Preserve Luminosity",
+                    Value::Bool(true),
+                    ParamUi::Checkbox,
+                ),
             ],
             photo_filter,
         ),

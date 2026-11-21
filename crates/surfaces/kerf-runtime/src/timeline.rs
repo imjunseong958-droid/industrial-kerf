@@ -278,16 +278,14 @@ fn clip_json(project: &Project, rate: Rate, clip: &Clip) -> Json {
             if fx.as_str() == kerf_model::SIGNAL {
                 let length = frames(rate, clip.duration).max(1);
                 let step = (length as usize).div_ceil(SIGNAL_POINTS).max(1);
-                let read = |frame: i64| {
-                    match params
-                        .get(kerf_model::SIGNAL_VALUE)
-                        .map(|value| value.value_at(rate.time_of(frame)))
-                    {
-                        Some(Value::Number(number)) if number.is_finite() => {
-                            (number.clamp(0.0, 1.0) * 1e4).round() / 1e4
-                        }
-                        _ => 0.0,
+                let read = |frame: i64| match params
+                    .get(kerf_model::SIGNAL_VALUE)
+                    .map(|value| value.value_at(rate.time_of(frame)))
+                {
+                    Some(Value::Number(number)) if number.is_finite() => {
+                        (number.clamp(0.0, 1.0) * 1e4).round() / 1e4
                     }
+                    _ => 0.0,
                 };
                 let mut values: Vec<f64> = (0..length).step_by(step).map(read).collect();
                 // Its last frame too, so that the curve ends where the clip does.

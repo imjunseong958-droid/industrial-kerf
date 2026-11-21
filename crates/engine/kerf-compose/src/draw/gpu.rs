@@ -544,8 +544,7 @@ impl Drawing {
                     .position(|track| track.id == id)
                     .map(|place| place + 1)
             };
-            let timecode =
-                format_timecode(sequence.start + at, sequence.rate, sequence.drop_frame);
+            let timecode = format_timecode(sequence.start + at, sequence.rate, sequence.drop_frame);
             let run = kerf_fx::picture::KernelRun {
                 at: time,
                 timecode: &timecode,
@@ -763,13 +762,21 @@ impl Drawing {
                 scale,
                 scene: depth.as_deref().map(|depth| &depth.scene),
             };
-            let Some(mesh) = self.mesh(sequence, shown, &moment, (size.0 as usize, size.1 as usize))
+            let Some(mesh) =
+                self.mesh(sequence, shown, &moment, (size.0 as usize, size.1 as usize))
             else {
                 return Some(canvas);
             };
             let drawn = frame.image(&mesh.picture);
             let whole = Rect::new(0.0, 0.0, f64::from(size.0), f64::from(size.1));
-            let over = frame.composite(canvas, &drawn, &Affine::IDENTITY, whole, mesh.opacity, blend);
+            let over = frame.composite(
+                canvas,
+                &drawn,
+                &Affine::IDENTITY,
+                whole,
+                mesh.opacity,
+                blend,
+            );
             frame.release(drawn);
             return Some(over);
         }
@@ -1060,7 +1067,8 @@ impl Drawing {
                     scale,
                     scene: Some(&depth.scene),
                 };
-                let Some(mesh) = self.mesh(sequence, shown, &moment, (size.0 as usize, size.1 as usize))
+                let Some(mesh) =
+                    self.mesh(sequence, shown, &moment, (size.0 as usize, size.1 as usize))
                 else {
                     continue;
                 };

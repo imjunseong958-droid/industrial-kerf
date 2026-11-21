@@ -147,9 +147,11 @@ impl Following {
             let farther = of_guide[index] - of_take[index];
             whole += farther.abs();
             let color = &ids.rgba[pixel * 4..pixel * 4 + 3];
-            let Some(clip) = self.colors.iter().position(|(_, own)| {
-                own.iter().zip(color).all(|(a, b)| a.abs_diff(*b) <= NEAR)
-            }) else {
+            let Some(clip) = self
+                .colors
+                .iter()
+                .position(|(_, own)| own.iter().zip(color).all(|(a, b)| a.abs_diff(*b) <= NEAR))
+            else {
                 continue;
             };
             sums[clip].0 += 1;
@@ -241,7 +243,10 @@ fn places(values: impl Iterator<Item = u8>) -> Vec<f64> {
         place[value] = (under as f64 + *count as f64 / 2.0) / values.len() as f64;
         under += count;
     }
-    values.iter().map(|value| place[usize::from(*value)]).collect()
+    values
+        .iter()
+        .map(|value| place[usize::from(*value)])
+        .collect()
 }
 
 /// How alike two orders are: 1 the same, -1 turned about, 0 where one says nothing of the

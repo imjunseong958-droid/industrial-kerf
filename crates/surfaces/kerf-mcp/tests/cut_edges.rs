@@ -1025,7 +1025,11 @@ impl Landed {
             .iter()
             .find(|word| word.body.0 + HOP < at && at < word.body.1 - HOP);
         match inside {
-            Some(word) if word.closure.is_some_and(|(from, to)| from <= at && at <= to) => {
+            Some(word)
+                if word
+                    .closure
+                    .is_some_and(|(from, to)| from <= at && at <= to) =>
+            {
                 self.closure += 1
             }
             Some(word) if word.voiced.0 < at && at < word.voiced.1 => self.voice += 1,
@@ -1067,7 +1071,9 @@ fn ways() -> Vec<Way> {
         way("the lowest of both, Scarlet's levels", |ask| {
             ask.lowest(0.0).filter(|dip| ask.scarlets(dip))
         }),
-        way("within 0.06 s of the parting, 6 dB", |ask| ask.near(0.06, 6.0)),
+        way("within 0.06 s of the parting, 6 dB", |ask| {
+            ask.near(0.06, 6.0)
+        }),
         way("within 0.06 s, 10 dB", |ask| ask.near(0.06, 10.0)),
         way("within 0.06 s, 20 dB", |ask| ask.near(0.06, 20.0)),
         way("within 0.06 s, Scarlet's levels", |ask| {

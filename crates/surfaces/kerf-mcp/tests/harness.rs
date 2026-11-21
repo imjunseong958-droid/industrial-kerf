@@ -356,10 +356,16 @@ fn look_says_what_axes_a_font_has_on_its_own_scale() {
     // Each face names the OpenType features it has, by tag: Inter has tabular figures and no
     // small capitals, and the test font has none at all.
     let has = |font: &Value, tag: &str| {
-        let features = font["faces"][0]["features"].as_array().expect("features").clone();
+        let features = font["faces"][0]["features"]
+            .as_array()
+            .expect("features")
+            .clone();
         features.contains(&json!(tag))
     };
-    assert!(has(&plain, "tnum") && has(&plain, "kern") && !has(&plain, "smcp"), "{plain}");
+    assert!(
+        has(&plain, "tnum") && has(&plain, "kern") && !has(&plain, "smcp"),
+        "{plain}"
+    );
     assert!(has(&ok(&router, "look", json!({"font":"serif"})), "smcp"));
     assert_eq!(font["faces"][0]["features"], json!([]));
     // A name no font has: the families that contain it, and for nothing, all of them.
@@ -417,7 +423,10 @@ fn look_shows_the_document_media_index_and_frames() {
     // One that does not read is said, and the rest of the look is as it was.
     std::fs::write(_directory.path().join("cast.kerfcast"), "cast Ada\n").unwrap();
     let unread = ok(&router, "look", json!({}));
-    assert!(unread["castError"].as_str().unwrap().contains("starts with `kerf-cast 1`"));
+    assert!(unread["castError"]
+        .as_str()
+        .unwrap()
+        .contains("starts with `kerf-cast 1`"));
     assert!(unread["document"].is_string());
     std::fs::remove_file(_directory.path().join("cast.kerfcast")).unwrap();
     std::fs::remove_file(_directory.path().join("brand.kerfbrand")).unwrap();
@@ -678,41 +687,85 @@ fn render_hands_the_sequence_to_another_editor_and_says_what_is_left_out() {
     // An `.fcpxml`, written at once: no job, and no Python.
     let handed = ok(&router, "render", json!({"handoff": "fcpxml"}));
     assert_eq!(handed["job"], Value::Null, "{handed}");
-    assert_eq!((handed["handoff"].as_str(), handed["sequence"].as_str()), (Some("fcpxml"), Some("s1")));
+    assert_eq!(
+        (handed["handoff"].as_str(), handed["sequence"].as_str()),
+        (Some("fcpxml"), Some("s1"))
+    );
     let output = Path::new(handed["output"].as_str().unwrap());
     // In the project's deliveries, and an unnamed sequence's file takes its id.
     assert_eq!(
         output.canonicalize().unwrap(),
-        directory.path().join("deliveries/s1.fcpxml").canonicalize().unwrap()
+        directory
+            .path()
+            .join("deliveries/s1.fcpxml")
+            .canonicalize()
+            .unwrap()
     );
     let text = std::fs::read_to_string(output).unwrap();
     assert!(text.contains("<fcpxml version=\"1.9\">"), "{text}");
     // The media is named by where its file is, not by where the project is.
-    let source = text.split("src=\"").nth(1).unwrap().split('"').next().unwrap();
-    assert!(source.starts_with("file:///") && source.ends_with("/shot.mp4"), "{source}");
+    let source = text
+        .split("src=\"")
+        .nth(1)
+        .unwrap()
+        .split('"')
+        .next()
+        .unwrap();
+    assert!(
+        source.starts_with("file:///") && source.ends_with("/shot.mp4"),
+        "{source}"
+    );
     // What the file leaves out, and what arrives in another form.
     let codes = |list: &Value| -> Vec<String> {
         list.as_array()
             .unwrap()
             .iter()
-            .map(|issue| format!("{} {}", issue["code"].as_str().unwrap(), issue["at"].as_str().unwrap()))
+            .map(|issue| {
+                format!(
+                    "{} {}",
+                    issue["code"].as_str().unwrap(),
+                    issue["at"].as_str().unwrap()
+                )
+            })
             .collect()
     };
-    assert_eq!(codes(&handed["notCarried"]), ["links_not_exported s1"], "{handed}");
+    assert_eq!(
+        codes(&handed["notCarried"]),
+        ["links_not_exported s1"],
+        "{handed}"
+    );
     assert_eq!(codes(&handed["check"]), ["tracks_as_lanes s1"], "{handed}");
-    assert!(handed["notCarried"][0]["what"].as_str().unwrap().contains("separate clips"));
+    assert!(handed["notCarried"][0]["what"]
+        .as_str()
+        .unwrap()
+        .contains("separate clips"));
 
     // An `.otio` of what a proposal would make, which the project is not yet.
-    let proposed = ok(&router, "edit", json!({"script": "set c1 opacity=0.5\nmarker add at=1s name=\"here\""}));
+    let proposed = ok(
+        &router,
+        "edit",
+        json!({"script": "set c1 opacity=0.5\nmarker add at=1s name=\"here\""}),
+    );
     let id = proposed["proposal"].as_str().unwrap();
-    let handed = ok(&router, "render", json!({"handoff": "otio", "proposal": id}));
+    let handed = ok(
+        &router,
+        "render",
+        json!({"handoff": "otio", "proposal": id}),
+    );
     assert_eq!(handed["proposal"], id);
     let text = std::fs::read_to_string(handed["output"].as_str().unwrap()).unwrap();
-    assert!(text.starts_with("{\n    \"OTIO_SCHEMA\": \"Timeline.1\","), "{text}");
+    assert!(
+        text.starts_with("{\n    \"OTIO_SCHEMA\": \"Timeline.1\","),
+        "{text}"
+    );
     assert!(text.contains("\"name\": \"here\""), "{text}");
     assert_eq!(
         codes(&handed["notCarried"]),
-        ["canvas_not_exported s1", "links_not_exported s1", "properties_not_exported c1"],
+        [
+            "canvas_not_exported s1",
+            "links_not_exported s1",
+            "properties_not_exported c1"
+        ],
         "{handed}"
     );
     router.runtime().reject_proposal(id).unwrap();
@@ -727,7 +780,10 @@ fn render_hands_the_sequence_to_another_editor_and_says_what_is_left_out() {
         json!({"handoff": "json"}),
     ] {
         let refused = error(&router, "render", arguments.clone());
-        assert_eq!(refused["code"], "INVALID_ARGUMENTS", "{arguments}: {refused}");
+        assert_eq!(
+            refused["code"], "INVALID_ARGUMENTS",
+            "{arguments}: {refused}"
+        );
     }
     assert_eq!(router.running_renders(), 0);
 }
@@ -1425,7 +1481,11 @@ fn a_stale_proposal_is_brought_forward_as_its_next_version() {
         return;
     };
     // A cut three seconds into the one clip.
-    let staged = ok(&router, "edit", json!({"script": "split c1 at=00:00:03:00"}));
+    let staged = ok(
+        &router,
+        "edit",
+        json!({"script": "split c1 at=00:00:03:00"}),
+    );
     let id = staged["proposal"].as_str().unwrap().to_owned();
     // On the revision it was made on there is nowhere to bring it.
     let current = error(&router, "edit", json!({"forward": id}));
@@ -1481,11 +1541,20 @@ fn a_stale_proposal_is_brought_forward_as_its_next_version() {
     );
     let context = kerf_mcp::harness::context(router.runtime()).unwrap();
     assert!(
-        context.contains(&format!("Proposal {v2} (v2, by Kerf, from revision {})", revision + 1)),
+        context.contains(&format!(
+            "Proposal {v2} (v2, by Kerf, from revision {})",
+            revision + 1
+        )),
         "{context}"
     );
-    assert!(context.contains(&format!("Earlier versions: v1 {id}.")), "{context}");
-    assert!(!context.contains("The project has changed since"), "{context}");
+    assert!(
+        context.contains(&format!("Earlier versions: v1 {id}.")),
+        "{context}"
+    );
+    assert!(
+        !context.contains("The project has changed since"),
+        "{context}"
+    );
     // What it would make can be looked at again before it is accepted.
     let shown = ok(&router, "look", json!({"proposal": v2}));
     let text = shown["document"].as_str().unwrap();
@@ -1505,7 +1574,9 @@ fn a_stale_proposal_is_brought_forward_as_its_next_version() {
         "{message}"
     );
     assert!(
-        message.contains(&format!("proposal {v2} waits as it was; pass it as `revise`")),
+        message.contains(&format!(
+            "proposal {v2} waits as it was; pass it as `revise`"
+        )),
         "{message}"
     );
     let state = router.runtime().get_state().unwrap();
@@ -2335,7 +2406,9 @@ fn write_claps(path: &Path, seconds: f64, moment: impl Fn(f64) -> f64, seed: u32
         let t = moment(f64::from(frame) / f64::from(RATE));
         let mut value = (next(&mut noise) - 0.5) * 0.01;
         let last = claps.partition_point(|clap| *clap <= t);
-        let since = last.checked_sub(1).map_or(f64::INFINITY, |clap| t - claps[clap]);
+        let since = last
+            .checked_sub(1)
+            .map_or(f64::INFINITY, |clap| t - claps[clap]);
         if since < 0.15 {
             value += (since * 900.0 * std::f64::consts::TAU).sin() * (-since * 30.0).exp() * 0.6;
         }
@@ -2356,7 +2429,12 @@ fn look_says_when_no_one_offset_lines_two_recordings_up() {
     // Its clock is slow by one part in 2000: 30 ms a minute.
     write_claps(&file("drifts.wav"), 150.0, |t| t * 1.0005 + 3.0, 37);
     // Lost half a second of what happened at 70 s of itself.
-    write_claps(&file("jumps.wav"), 150.0, |t| if t < 70.0 { t + 5.0 } else { t + 5.5 }, 41);
+    write_claps(
+        &file("jumps.wav"),
+        150.0,
+        |t| if t < 70.0 { t + 5.0 } else { t + 5.5 },
+        41,
+    );
     let added = ok(
         &router,
         "edit",
@@ -2377,7 +2455,11 @@ fn look_says_when_no_one_offset_lines_two_recordings_up() {
     let steady = &rows[1];
     assert_eq!(steady["course"], "steady", "{found}");
     assert!((number(&steady["offset"]) - 7.25).abs() < 0.003, "{found}");
-    assert_eq!((&steady["read"], &steady["of"]), (&json!(4), &json!(4)), "{found}");
+    assert_eq!(
+        (&steady["read"], &steady["of"]),
+        (&json!(4), &json!(4)),
+        "{found}"
+    );
     assert!(number(&steady["within"]) < 0.003, "{found}");
     // 7.25 s is frame 217.5 at 30 a second, and it goes on a frame beside that.
     assert!(steady["at"] == "217f" || steady["at"] == "218f", "{found}");
@@ -2386,30 +2468,76 @@ fn look_says_when_no_one_offset_lines_two_recordings_up() {
     let drifts = &rows[2];
     assert_eq!(drifts["course"], "drift", "{found}");
     // Two minutes is little to tell a rate by: it is told to a tenth or so.
-    assert!((number(&drifts["drift"]["msPerMinute"]) - 30.0).abs() < 4.0, "{found}");
-    assert!((number(&drifts["drift"]["from"]) - 3.009).abs() < 0.004, "{found}");
-    assert!((number(&drifts["drift"]["to"]) - 3.066).abs() < 0.004, "{found}");
+    assert!(
+        (number(&drifts["drift"]["msPerMinute"]) - 30.0).abs() < 4.0,
+        "{found}"
+    );
+    assert!(
+        (number(&drifts["drift"]["from"]) - 3.009).abs() < 0.004,
+        "{found}"
+    );
+    assert!(
+        (number(&drifts["drift"]["to"]) - 3.066).abs() < 0.004,
+        "{found}"
+    );
     // 28 ms either side of the nearest offset is more than half a frame of 33 ms.
-    let why = drifts["notPlaced"].as_str().unwrap_or_else(|| panic!("{found}"));
-    assert!(why.starts_with("its offset drifts ") && why.contains(" ms a minute"), "{why}");
+    let why = drifts["notPlaced"]
+        .as_str()
+        .unwrap_or_else(|| panic!("{found}"));
+    assert!(
+        why.starts_with("its offset drifts ") && why.contains(" ms a minute"),
+        "{why}"
+    );
     assert!(drifts.get("at").is_none(), "{found}");
 
     let jumps = &rows[3];
     assert_eq!(jumps["course"], "jump", "{found}");
     let jump = &jumps["jumps"][0];
-    assert!(number(&jump["after"]) <= 70.0 && number(&jump["before"]) >= 70.0, "{found}");
-    assert!(number(&jump["before"]) - number(&jump["after"]) < 10.0, "{found}");
-    assert!((number(&jump["to"]) - number(&jump["from"]) - 0.5).abs() < 0.003, "{found}");
-    let why = jumps["notPlaced"].as_str().unwrap_or_else(|| panic!("{found}"));
-    assert!(why.starts_with("its offset steps by 0.5 s between "), "{why}");
+    assert!(
+        number(&jump["after"]) <= 70.0 && number(&jump["before"]) >= 70.0,
+        "{found}"
+    );
+    assert!(
+        number(&jump["before"]) - number(&jump["after"]) < 10.0,
+        "{found}"
+    );
+    assert!(
+        (number(&jump["to"]) - number(&jump["from"]) - 0.5).abs() < 0.003,
+        "{found}"
+    );
+    let why = jumps["notPlaced"]
+        .as_str()
+        .unwrap_or_else(|| panic!("{found}"));
+    assert!(
+        why.starts_with("its offset steps by 0.5 s between "),
+        "{why}"
+    );
 
     // The script places the two that one offset fits, and neither of the others.
-    let script = found["script"].as_str().unwrap_or_else(|| panic!("{found}"));
-    assert!(script.contains("overwrite media=first src=0f at=0f "), "{script}");
-    assert!(script.contains("overwrite media=steady src=0f at=21"), "{script}");
-    assert!(script.contains("media sync steady with=first@7.2"), "{script}");
-    assert!(!script.contains("drifts") && !script.contains("jumps"), "{script}");
-    let built = ok(&router, "edit", json!({"extend": proposal, "script": script}));
+    let script = found["script"]
+        .as_str()
+        .unwrap_or_else(|| panic!("{found}"));
+    assert!(
+        script.contains("overwrite media=first src=0f at=0f "),
+        "{script}"
+    );
+    assert!(
+        script.contains("overwrite media=steady src=0f at=21"),
+        "{script}"
+    );
+    assert!(
+        script.contains("media sync steady with=first@7.2"),
+        "{script}"
+    );
+    assert!(
+        !script.contains("drifts") && !script.contains("jumps"),
+        "{script}"
+    );
+    let built = ok(
+        &router,
+        "edit",
+        json!({"extend": proposal, "script": script}),
+    );
     assert!(built.get("proposal").is_some(), "{built}");
 
     // With none that one offset fits beside the first, there is nothing to build.
@@ -2418,7 +2546,10 @@ fn look_says_when_no_one_offset_lines_two_recordings_up() {
         "look",
         json!({"sync": ["first", "jumps"], "proposal": proposal}),
     );
-    assert!(found.get("script").is_none() && found.get("sequence").is_none(), "{found}");
+    assert!(
+        found.get("script").is_none() && found.get("sequence").is_none(),
+        "{found}"
+    );
     assert_eq!(found["recordings"][1]["course"], "jump", "{found}");
 }
 
@@ -2459,7 +2590,10 @@ fn raster_effects_are_looked_up_checked_and_previewed() {
     assert_eq!(retro["effects"][0]["id"], "tv-power", "{retro}");
     // An effect EffectCraft had says what replaced it.
     let gone = error(&router, "look", json!({"effect": "stylize.glow"}));
-    assert!(gone.to_string().contains("the prompt and references"), "{gone}");
+    assert!(
+        gone.to_string().contains("the prompt and references"),
+        "{gone}"
+    );
     // A video editor's transitions are found by the moment too.
     let whip = ok(&router, "look", json!({"effects": "whip pan travel"}));
     assert_eq!(whip["effects"][0]["id"], "whip", "{whip}");
@@ -3025,10 +3159,7 @@ fn a_media_whose_steps_are_in_a_recipe_file_is_named_for_carrying() {
         "unavailable: `shots/open.mp4` is not made yet, and its steps are in the recipe file `shots/open.kerfrecipe`: `edit` with `carry: [\"m1\"]` writes them under the media, and `make` then makes it"
     );
     let refused = error(&router, "make", json!({"media": "m1"}));
-    assert!(
-        message(&refused).contains("`carry: [\"m1\"]`"),
-        "{refused}"
-    );
+    assert!(message(&refused).contains("`carry: [\"m1\"]`"), "{refused}");
     // Carried, it is made from its steps, and a person is asked to.
     let carried = ok(&router, "edit", json!({"carry": ["m1"]}));
     let to_make = &carried["toMake"][0];
@@ -3217,7 +3348,11 @@ fn what_would_refuse_a_making_is_said_before_anyone_is_asked_to_make_it() {
         )
         .unwrap();
     let step = |line: &str| {
-        let staged = ok(&router, "edit", json!({"script": format!("step m9 set 1 {line}")}));
+        let staged = ok(
+            &router,
+            "edit",
+            json!({"script": format!("step m9 set 1 {line}")}),
+        );
         let revision = router.runtime().get_state().unwrap().revision;
         router
             .runtime()
@@ -3479,15 +3614,27 @@ fn the_check_warns_of_text_no_font_draws() {
     assert_eq!(found[0]["severity"], "warning");
     assert_eq!(found[0]["entity"], "t1");
     let message = found[0]["message"].as_str().unwrap_or_default();
-    assert!(message.contains("U+10FFFD") && message.contains("`font`"), "{message}");
-    let found = missing("track add S1 subtitle\ninsert caption=\"oh \u{10FFFD}\" at=0f dur=30f on=S1 as=cap");
+    assert!(
+        message.contains("U+10FFFD") && message.contains("`font`"),
+        "{message}"
+    );
+    let found = missing(
+        "track add S1 subtitle\ninsert caption=\"oh \u{10FFFD}\" at=0f dur=30f on=S1 as=cap",
+    );
     assert_eq!(found.len(), 1, "{found:?}");
     // Letters any font has, and an emoji that a font here draws or one that does not: only what
     // nothing draws is said.
-    assert!(missing("track add V2 video\noverwrite gen=title at=0f dur=30f on=V2 text=\"Day One\" as=t1").is_empty());
+    assert!(missing(
+        "track add V2 video\noverwrite gen=title at=0f dur=30f on=V2 text=\"Day One\" as=t1"
+    )
+    .is_empty());
     kerf_text::fonts::scan_system();
-    let emoji_drawn = kerf_text::fonts::all_faces().iter().any(|face| face.covers('\u{1F480}'));
-    let found = missing("track add V2 video\noverwrite gen=title at=0f dur=30f on=V2 text=\"\u{1F480}\" as=t1");
+    let emoji_drawn = kerf_text::fonts::all_faces()
+        .iter()
+        .any(|face| face.covers('\u{1F480}'));
+    let found = missing(
+        "track add V2 video\noverwrite gen=title at=0f dur=30f on=V2 text=\"\u{1F480}\" as=t1",
+    );
     assert_eq!(found.is_empty(), emoji_drawn, "{found:?}");
 }
 
@@ -3505,7 +3652,10 @@ fn look_finds_a_font_by_the_name_of_a_face() {
     let black = ok(&router, "look", json!({"font":"Inter Black"}));
     assert_eq!(black["found"], true, "{black}");
     assert_eq!(black["font"], "Inter");
-    assert!(matches!(black["style"].as_str(), Some("Black" | "Bold")), "{black}");
+    assert!(
+        matches!(black["style"].as_str(), Some("Black" | "Bold")),
+        "{black}"
+    );
     assert!(black["faces"]
         .as_array()
         .unwrap()
@@ -3599,9 +3749,18 @@ fn the_check_says_what_does_nothing() {
     // else: alone, and with a flat clip, which is told that it stays on the frame.
     let rig = "track add V3 video\noverwrite gen=null at=0f dur=30f on=V3 as=rig\n";
     says(&format!("{rig}set rig z=0.5"), "`z` on a null");
-    says(&format!("{rig}set rig rotate_y={{0f:0 20f:90}}"), "`rotate_y` on a null");
-    says(&format!("{rig}set rig three_d=true"), "`three_d` does nothing on a null");
-    says(&format!("{rig}set rig z=0.5\nset s1a parent=rig"), "`z` on a null");
+    says(
+        &format!("{rig}set rig rotate_y={{0f:0 20f:90}}"),
+        "`rotate_y` on a null",
+    );
+    says(
+        &format!("{rig}set rig three_d=true"),
+        "`three_d` does nothing on a null",
+    );
+    says(
+        &format!("{rig}set rig z=0.5\nset s1a parent=rig"),
+        "`z` on a null",
+    );
     says(
         &format!("{rig}set rig z=0.5 rotate_y=20\nset s1a parent=rig"),
         "`s1a`: the `z`, `rotate_y` of `rig`, which it moves with, does nothing to it",
@@ -3625,12 +3784,17 @@ fn the_check_says_what_does_nothing() {
             .collect();
         assert!(said.is_empty(), "`{script}` should say nothing: {said:?}");
     };
-    unsaid(&format!("{rig}set rig z=0.5 rotate_x=5 rotate_y=20\nset s1a three_d=true parent=rig"));
+    unsaid(&format!(
+        "{rig}set rig z=0.5 rotate_x=5 rotate_y=20\nset s1a three_d=true parent=rig"
+    ));
     // Through a flat clip, which is told that it stays behind, to one in depth, which does not.
     let through = format!("{rig}set rig z=0.5\nset s1a parent=rig\nset c1 three_d=true parent=s1a");
     says(&through, "`s1a`: the `z` of `rig`");
     let findings = run(&through)["check"]["findings"].to_string();
-    assert!(!findings.contains("on a null") && !findings.contains("`c1`: the `z`"), "{findings}");
+    assert!(
+        !findings.contains("on a null") && !findings.contains("`c1`: the `z`"),
+        "{findings}"
+    );
     unsaid("set c1 three_d=true z=0.5 rotate_y=20\nset s1a three_d=true parent=c1");
     unsaid(&format!("{rig}set rig rotate_y=20\ntrack add V4 video\noverwrite gen=camera at=0f dur=30f on=V4 as=lens\nset lens parent=rig\nset c1 three_d=true"));
     // A mesh is in depth without saying so: a light falls on it, and a parent takes it.
@@ -3800,39 +3964,87 @@ fn look_says_what_stands_on_what_and_its_line_sets_a_clip_down() {
     let said = read(json!({"stands": true}));
     assert_eq!(said["sequence"], "s1", "{said}");
     let stands = &said["stands"];
-    assert_eq!((&stands["frames"], &stands["ground"]), (&json!(60), &json!("road")), "{stands}");
+    assert_eq!(
+        (&stands["frames"], &stands["ground"]),
+        (&json!(60), &json!("road")),
+        "{stands}"
+    );
     let clips = stands["clips"].as_array().unwrap();
     let of = |id: &str| -> Vec<&Value> { clips.iter().filter(|clip| clip["clip"] == id).collect() };
     // A camera, a light, the sky out of depth, and the ground have no entry.
     assert_eq!(
-        clips.iter().map(|clip| clip["clip"].as_str().unwrap()).collect::<Vec<_>>(),
+        clips
+            .iter()
+            .map(|clip| clip["clip"].as_str().unwrap())
+            .collect::<Vec<_>>(),
         ["crate", "post", "ball", "wall", "sign"],
         "{stands}"
     );
     // The crate hangs over the road, which leans; the post's foot is all in it.
     let crate_ = of("crate")[0];
-    assert_eq!((&crate_["on"], &crate_["floats"], &crate_["slope"]), (&json!("road"), &json!(0.009), &json!(6.0)), "{crate_}");
-    assert_eq!((&crate_["frames"], &crate_["script"]), (&json!([0, 59]), &json!("set crate y=0.839")), "{crate_}");
+    assert_eq!(
+        (&crate_["on"], &crate_["floats"], &crate_["slope"]),
+        (&json!("road"), &json!(0.009), &json!(6.0)),
+        "{crate_}"
+    );
+    assert_eq!(
+        (&crate_["frames"], &crate_["script"]),
+        (&json!([0, 59]), &json!("set crate y=0.839")),
+        "{crate_}"
+    );
     let post = of("post")[0];
-    assert_eq!((&post["sunk"], &post["share"], &post["script"]), (&json!(0.042), &json!(1.0), &json!("set post y=0.758")), "{post}");
+    assert_eq!(
+        (&post["sunk"], &post["share"], &post["script"]),
+        (&json!(0.042), &json!(1.0), &json!("set post y=0.758")),
+        "{post}"
+    );
     // The ball is in the air over the road, and no line brings it down.
     let ball = of("ball")[0];
-    assert_eq!((&ball["air"], &ball["over"]), (&json!(true), &json!("road")), "{ball}");
-    assert!(ball.get("script").is_none() && ball.get("frames").is_none(), "{ball}");
+    assert_eq!(
+        (&ball["air"], &ball["over"]),
+        (&json!(true), &json!("road")),
+        "{ball}"
+    );
+    assert!(
+        ball.get("script").is_none() && ball.get("frames").is_none(),
+        "{ball}"
+    );
     // The wall rests, and the sign goes through it: the wall's own edges pass the sign by.
-    assert_eq!(of("wall")[0], &json!({"clip": "wall", "on": "road", "slope": 6.0}));
+    assert_eq!(
+        of("wall")[0],
+        &json!({"clip": "wall", "on": "road", "slope": 6.0})
+    );
     let through = &of("sign")[0]["through"][0];
-    assert_eq!((&through["clip"], &through["share"]), (&json!("wall"), &json!(0.5)), "{through}");
-    assert_eq!(stands["notMeasured"], json!(["`sky`, out of depth: it is nowhere in the scene"]));
+    assert_eq!(
+        (&through["clip"], &through["share"]),
+        (&json!("wall"), &json!(0.5)),
+        "{through}"
+    );
+    assert_eq!(
+        stands["notMeasured"],
+        json!(["`sky`, out of depth: it is nowhere in the scene"])
+    );
 
     // The lines, run as one edit, set both down: the proposal reads as resting.
-    let script = format!("{}\n{}", crate_["script"].as_str().unwrap(), post["script"].as_str().unwrap());
+    let script = format!(
+        "{}\n{}",
+        crate_["script"].as_str().unwrap(),
+        post["script"].as_str().unwrap()
+    );
     let proposal = ok(&router, "edit", json!({"script": script}));
     let id = proposal["proposal"].as_str().unwrap();
     let after = read(json!({"stands": true, "proposal": id}));
     let clips = after["stands"]["clips"].as_array().unwrap();
-    assert_eq!(clips[0], json!({"clip": "crate", "on": "road", "slope": 6.0, "gap": 0.042}), "{after}");
-    assert_eq!(clips[1], json!({"clip": "post", "on": "road", "slope": 6.0, "gap": 0.005}), "{after}");
+    assert_eq!(
+        clips[0],
+        json!({"clip": "crate", "on": "road", "slope": 6.0, "gap": 0.042}),
+        "{after}"
+    );
+    assert_eq!(
+        clips[1],
+        json!({"clip": "post", "on": "road", "slope": 6.0, "gap": 0.005}),
+        "{after}"
+    );
     // A media whose steps draw the sequence is told of it before it is made: what floats,
     // is sunk, or goes through, and not the ball, which is in the air.
     let staged = ok(
@@ -3840,7 +4052,9 @@ fn look_says_what_stands_on_what_and_its_line_sets_a_clip_down() {
         "edit",
         json!({"script": "media add m9 path=\"shots/open.mp4\" rate=30 dur=2s video=320x180\nstep m9 add render s1 {out}"}),
     );
-    let notes = staged["toMake"][0]["notes"].as_array().unwrap_or_else(|| panic!("{staged}"));
+    let notes = staged["toMake"][0]["notes"]
+        .as_array()
+        .unwrap_or_else(|| panic!("{staged}"));
     assert_eq!(notes.len(), 1, "{staged}");
     let note = notes[0].as_str().unwrap();
     assert!(
@@ -3852,11 +4066,23 @@ fn look_says_what_stands_on_what_and_its_line_sets_a_clip_down() {
     let both = read(json!({"stands": true, "shows": true, "at": ["0f", "30f"]}));
     assert_eq!(both["stands"]["frames"], 2, "{both}");
     assert_eq!(both["frames"].as_array().map(Vec::len), Some(2), "{both}");
-    assert_eq!(both["stands"]["clips"][0]["frames"], json!([0, 30]), "{both}");
+    assert_eq!(
+        both["stands"]["clips"][0]["frames"],
+        json!([0, 30]),
+        "{both}"
+    );
     // Where it is not asked for sensibly, it says how.
-    let on_media = message(&error(&router, "look", json!({"stands": true, "media": "m1"})));
+    let on_media = message(&error(
+        &router,
+        "look",
+        json!({"stands": true, "media": "m1"}),
+    ));
     assert!(on_media.contains("in depth"), "{on_media}");
-    let outside = message(&error(&router, "look", json!({"stands": true, "at": ["600f"]})));
+    let outside = message(&error(
+        &router,
+        "look",
+        json!({"stands": true, "at": ["600f"]}),
+    ));
     assert!(outside.contains("outside sequence"), "{outside}");
 }
 
@@ -3910,7 +4136,12 @@ fn look_says_where_the_eye_is_either_side_of_a_cut() {
     let router = router_on(directory.path(), Some(&kerfd));
     let read = |arguments: Value| ok(&router, "look", arguments);
     let near = |value: &Value, wanted: &[f64], by: f64| {
-        let given: Vec<f64> = value.as_array().unwrap().iter().map(|n| n.as_f64().unwrap()).collect();
+        let given: Vec<f64> = value
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|n| n.as_f64().unwrap())
+            .collect();
         given.len() == wanted.len() && given.iter().zip(wanted).all(|(a, b)| (a - b).abs() <= by)
     };
 
@@ -3926,7 +4157,12 @@ fn look_says_where_the_eye_is_either_side_of_a_cut() {
     let cut = &eye["cuts"][0];
     assert_eq!(
         (&cut["at"], &cut["from"], &cut["to"], &cut["on"]),
-        (&json!("00:00:02:00"), &json!("c1"), &json!("c2"), &json!(["box1", "box2"])),
+        (
+            &json!("00:00:02:00"),
+            &json!("c1"),
+            &json!("c2"),
+            &json!(["box1", "box2"])
+        ),
         "{cut}"
     );
     assert_eq!(
@@ -3934,7 +4170,10 @@ fn look_says_where_the_eye_is_either_side_of_a_cut() {
         json!({"out": [0.4, 0.4, 0.6, 0.6], "in": [0.4, 0.4, 0.6, 0.6], "jump": 0.0, "across": 0.0, "down": 0.0, "size": 1.0, "going": ["still", "still"]}),
         "{cut}"
     );
-    assert!(cut.get("take").is_none() && cut.get("notMeasured").is_none(), "{cut}");
+    assert!(
+        cut.get("take").is_none() && cut.get("notMeasured").is_none(),
+        "{cut}"
+    );
 
     // The shots are made. The first take has the box where its guide does, and the second
     // has it a tenth of the frame's width to the right: the guides hold, and the takes jump.
@@ -3948,7 +4187,10 @@ fn look_says_where_the_eye_is_either_side_of_a_cut() {
     assert!(near(&take["out"], &[0.4, 0.4, 0.6, 0.6], 0.02), "{take}");
     assert!(near(&take["in"], &[0.5, 0.4, 0.7, 0.6], 0.02), "{take}");
     let across = take["across"].as_f64().unwrap();
-    assert!((across - 0.1 * 16.0 / 9.0).abs() < 0.03 && take["jump"].as_f64().unwrap() > 0.1, "{take}");
+    assert!(
+        (across - 0.1 * 16.0 / 9.0).abs() < 0.03 && take["jump"].as_f64().unwrap() > 0.1,
+        "{take}"
+    );
 
     // A proposal that moves the second guide's box to where its take has it reads as its
     // take does, before it is accepted.
@@ -3956,13 +4198,23 @@ fn look_says_where_the_eye_is_either_side_of_a_cut() {
     let id = proposal["proposal"].as_str().unwrap();
     let moved = read(json!({"eye": true, "proposal": id}));
     let cut = &moved["eye"]["cuts"][0];
-    assert!(near(&cut["guide"]["in"], &[0.5, 0.4, 0.7, 0.6], 0.005), "{cut}");
-    assert!(near(&cut["take"]["in"], &[0.5, 0.4, 0.7, 0.6], 0.02), "{cut}");
+    assert!(
+        near(&cut["guide"]["in"], &[0.5, 0.4, 0.7, 0.6], 0.005),
+        "{cut}"
+    );
+    assert!(
+        near(&cut["take"]["in"], &[0.5, 0.4, 0.7, 0.6], 0.02),
+        "{cut}"
+    );
     assert_eq!(moved["eye"]["summary"]["jumps"], 1, "{moved}");
 
     // What the eye is on can be named, and a clip the shot's guide is not drawn from says so.
     let named = read(json!({"eye": {"subjects": {"m2": "ground_g2"}}}));
-    assert_eq!(named["eye"]["cuts"][0]["on"], json!(["box1", "ground_g2"]), "{named}");
+    assert_eq!(
+        named["eye"]["cuts"][0]["on"],
+        json!(["box1", "ground_g2"]),
+        "{named}"
+    );
     let elsewhere = read(json!({"eye": {"subjects": {"m2": "box1"}}}));
     assert_eq!(
         elsewhere["eye"]["cuts"][0]["notMeasured"],
@@ -3978,9 +4230,20 @@ fn look_says_where_the_eye_is_either_side_of_a_cut() {
     // Where it is not asked for sensibly, it says how.
     let on_media = message(&error(&router, "look", json!({"eye": true, "media": "m1"})));
     assert!(on_media.contains("used alone"), "{on_media}");
-    let with_shows = message(&error(&router, "look", json!({"eye": true, "shows": true, "at": ["0f"]})));
-    assert!(with_shows.contains("`eye`") && with_shows.contains("used alone"), "{with_shows}");
-    let no_media = message(&error(&router, "look", json!({"eye": {"subjects": {"m9": "box1"}}})));
+    let with_shows = message(&error(
+        &router,
+        "look",
+        json!({"eye": true, "shows": true, "at": ["0f"]}),
+    ));
+    assert!(
+        with_shows.contains("`eye`") && with_shows.contains("used alone"),
+        "{with_shows}"
+    );
+    let no_media = message(&error(
+        &router,
+        "look",
+        json!({"eye": {"subjects": {"m9": "box1"}}}),
+    ));
     assert!(no_media.contains("`m9`"), "{no_media}");
     let misnamed = message(&error(&router, "look", json!({"eye": {"clips": ["box1"]}})));
     assert!(misnamed.contains("`eye` is `true`"), "{misnamed}");
@@ -4056,7 +4319,10 @@ fn look_holds_a_takes_depth_to_its_guide_by_the_clip() {
     assert_eq!(held["sequence"], "s1", "{held}");
     assert_eq!(held["frames"], 60, "{held}");
     let clips = held["clips"].as_array().unwrap();
-    let names: Vec<&str> = clips.iter().map(|clip| clip["clip"].as_str().unwrap()).collect();
+    let names: Vec<&str> = clips
+        .iter()
+        .map(|clip| clip["clip"].as_str().unwrap())
+        .collect();
     assert_eq!(names, ["road", "car"], "{held}");
     for clip in clips {
         assert_eq!(clip["frames"], 60, "{clip}");
@@ -4105,7 +4371,11 @@ fn look_says_where_a_take_has_a_clips_subject() {
     }
     // Both readings at once, of the clips named as subjects: the car is held by its depth
     // and its place, from 0 to 1, with one number for the take.
-    let held = ok(&router, "look", json!({"held": {"take": "m1", "depth": "m1", "clips": ["car"]}}));
+    let held = ok(
+        &router,
+        "look",
+        json!({"held": {"take": "m1", "depth": "m1", "clips": ["car"]}}),
+    );
     assert_eq!(held["frames"], 60, "{held}");
     let subjects = held["clips"].as_array().unwrap();
     assert_eq!(subjects.len(), 1, "{held}");
@@ -4113,8 +4383,14 @@ fn look_says_where_a_take_has_a_clips_subject() {
     let one = subjects[0]["held"].as_f64().unwrap();
     assert!((0.0..=1.0).contains(&one), "{held}");
     assert_eq!(held["held"].as_f64().unwrap(), one, "{held}");
-    assert!(subjects[0]["depth"]["off"].as_f64().unwrap() > 0.0, "{held}");
-    assert!(subjects[0]["place"]["overlap"].as_f64().unwrap() <= 1.0, "{held}");
+    assert!(
+        subjects[0]["depth"]["off"].as_f64().unwrap() > 0.0,
+        "{held}"
+    );
+    assert!(
+        subjects[0]["place"]["overlap"].as_f64().unwrap() <= 1.0,
+        "{held}"
+    );
     let said = |input: Value| message(&error(&router, "look", input));
     let no_depth = said(json!({"held": {"take": "m1", "depth": "depths", "clips": ["car"]}}));
     assert!(no_depth.contains("no media `depths`"), "{no_depth}");
@@ -4145,9 +4421,16 @@ fn look_writes_a_camera_from_a_file_that_says_where_it_was() {
     // A lens alone is the camera a set was seen by: at its file's origin, which is half a
     // unit under the middle of this one, a quarter of the frame's height.
     std::fs::write(directory.path().join("lens.txt"), "40\n").unwrap();
-    let lens = ok(&router, "look", json!({"mesh": {"clip": "set", "from": "lens.txt"}}));
+    let lens = ok(
+        &router,
+        "look",
+        json!({"mesh": {"clip": "set", "from": "lens.txt"}}),
+    );
     assert_eq!(lens["moves"], false, "{lens}");
-    assert_eq!(lens["from"], json!({"frames": 1, "placed": 1, "fov": [40.0, 40.0]}));
+    assert_eq!(
+        lens["from"],
+        json!({"frames": 1, "placed": 1, "fov": [40.0, 40.0]})
+    );
     assert_eq!(
         lens["script"],
         "track add V2 video\noverwrite gen=camera@1 at=30f dur=60f on=V2 as=camera1\nset camera1 x=0 y=0.25 z=1.37374 pan=0 tilt=0 roll=0 fov=40"
@@ -4155,7 +4438,10 @@ fn look_writes_a_camera_from_a_file_that_says_where_it_was() {
     // A path: three frames, the camera going a unit to its right and then a unit back. At
     // 15 frames a second each is two of the sequence's, and it holds still after.
     let row = |x: f64, z: f64| {
-        format!("[[1., 0., 0., {}], [0., 1., 0., 0.], [0., 0., 1., {}]]", -x, -z)
+        format!(
+            "[[1., 0., 0., {}], [0., 1., 0., 0.], [0., 0., 1., {}]]",
+            -x, -z
+        )
     };
     std::fs::write(
         directory.path().join("cameras.txt"),
@@ -4176,10 +4462,19 @@ fn look_writes_a_camera_from_a_file_that_says_where_it_was() {
     assert_eq!(path["moves"], true, "{path}");
     assert_eq!(path["from"]["frames"], 3);
     assert_eq!(path["from"]["placed"], 5);
-    assert!(path["note"].as_str().unwrap().contains("5 of the 60"), "{path}");
+    assert!(
+        path["note"].as_str().unwrap().contains("5 of the 60"),
+        "{path}"
+    );
     let script = path["script"].as_str().unwrap();
-    assert!(script.contains(" x={0f:0 2f:0.28125 4f:0.28125} "), "{script}");
-    assert!(script.contains(" z={0f:1.37374 2f:1.37374 4f:0.87374} "), "{script}");
+    assert!(
+        script.contains(" x={0f:0 2f:0.28125 4f:0.28125} "),
+        "{script}"
+    );
+    assert!(
+        script.contains(" z={0f:1.37374 2f:1.37374 4f:0.87374} "),
+        "{script}"
+    );
     assert!(script.ends_with(" fov=53.13"), "{script}");
     ok(&router, "edit", json!({"script": script}));
     // The set as the second frame saw it has that frame's camera at the origin, and twice
@@ -4194,9 +4489,15 @@ fn look_writes_a_camera_from_a_file_that_says_where_it_was() {
     // The path counts its places from its first frame, which is said, and said again where
     // another frame is asked for: a set of the same reading is in the first one's space.
     assert_eq!(path["from"]["anchor"], 0, "{path}");
-    assert!(!path["note"].as_str().unwrap().contains("counts its places"), "{path}");
+    assert!(
+        !path["note"].as_str().unwrap().contains("counts its places"),
+        "{path}"
+    );
     let note = second["note"].as_str().unwrap();
-    assert!(note.contains("counts its places from frame 0, and `frame` is 1"), "{note}");
+    assert!(
+        note.contains("counts its places from frame 0, and `frame` is 1"),
+        "{note}"
+    );
     assert!(note.contains("holds still after"), "{note}");
     // What cannot be done says why.
     let said = |input: Value| message(&error(&router, "look", input));
@@ -4211,22 +4512,37 @@ fn look_writes_a_camera_from_a_file_that_says_where_it_was() {
     assert!(far.contains("no frame 7"), "{far}");
     // A size is given, or found from the footage the path is of, and not both; and there is
     // none to find for a camera that stands still.
-    let both = said(json!({"mesh": {"clip": "set", "from": "cameras.txt", "scale": 2, "fits": "m1"}}));
+    let both =
+        said(json!({"mesh": {"clip": "set", "from": "cameras.txt", "scale": 2, "fits": "m1"}}));
     assert!(both.contains("give one"), "{both}");
     let none = said(json!({"mesh": {"clip": "set", "from": "cameras.txt", "fits": "footage"}}));
     assert!(none.contains("no media `footage`"), "{none}");
     let still = said(json!({"mesh": {"clip": "set", "from": "lens.txt", "fits": "m1"}}));
-    assert!(still.contains("no `extrinsics`") || still.contains("does not move"), "{still}");
+    assert!(
+        still.contains("no `extrinsics`") || still.contains("does not move"),
+        "{still}"
+    );
     let wide = said(json!({"mesh": {"clip": "set", "from": "lens.txt", "lens": 200}}));
     assert!(wide.contains("between 0 and 180"), "{wide}");
     // `beside` is of two meshes, and is not asked with a camera.
     let alone = said(json!({"mesh": {"clip": "set", "beside": "set", "from": "lens.txt"}}));
     assert!(alone.contains("ask for one"), "{alone}");
-    let same = ok(&router, "look", json!({"mesh": {"clip": "set", "beside": "set"}}));
+    let same = ok(
+        &router,
+        "look",
+        json!({"mesh": {"clip": "set", "beside": "set"}}),
+    );
     assert_eq!(same["script"], "set set height=0.5 x=0 y=0 z=0", "{same}");
     // A lens given is the camera's, whatever the file's is.
-    let lens = ok(&router, "look", json!({"mesh": {"clip": "set", "from": "lens.txt", "lens": 25}}));
-    assert!(lens["script"].as_str().unwrap().ends_with(" fov=25"), "{lens}");
+    let lens = ok(
+        &router,
+        "look",
+        json!({"mesh": {"clip": "set", "from": "lens.txt", "lens": 25}}),
+    );
+    assert!(
+        lens["script"].as_str().unwrap().ends_with(" fov=25"),
+        "{lens}"
+    );
 }
 
 /// Where a project has more than one sequence, the lines `look` writes for a new camera say
@@ -4253,7 +4569,11 @@ sequence s2 rate=30 size=320x180
     };
     set_with_a_camera(directory.path());
     std::fs::write(directory.path().join("lens.txt"), "40\n").unwrap();
-    let lens = ok(&router, "look", json!({"mesh": {"clip": "set", "from": "lens.txt"}}));
+    let lens = ok(
+        &router,
+        "look",
+        json!({"mesh": {"clip": "set", "from": "lens.txt"}}),
+    );
     // The first track free in the set's sequence, and the first camera free in the project.
     let placed = "x=0 y=0.25 z=1.37374 pan=0 tilt=0 roll=0 fov=40";
     assert_eq!(
@@ -4281,7 +4601,11 @@ sequence s2 rate=30 size=320x180
         ),
     )
     .unwrap();
-    let path = ok(&router, "look", json!({"mesh": {"clip": "set", "from": "cameras.txt"}}));
+    let path = ok(
+        &router,
+        "look",
+        json!({"mesh": {"clip": "set", "from": "cameras.txt"}}),
+    );
     let script = path["script"].as_str().unwrap();
     assert!(
         script.starts_with("use s2\ntrack add V3 video\noverwrite gen=camera@1 at=30f dur=60f on=V3 as=camera3\nset camera3 x={0f:0 1f:0.28125} "),
@@ -4329,7 +4653,11 @@ fn look_says_what_a_meshes_file_holds_and_writes_its_camera() {
     // A unit of the file is half the frame's height here, 0.28125 of its width: the camera
     // goes 2 of them to the right over the animation's second, and starts again. It is 5 of
     // them before the mesh, less how far back a sequence's own camera stands.
-    let shot = ok(&router, "look", json!({"mesh": {"clip": "set", "camera": "shot"}}));
+    let shot = ok(
+        &router,
+        "look",
+        json!({"mesh": {"clip": "set", "camera": "shot"}}),
+    );
     assert_eq!(shot["moves"], true, "{shot}");
     assert_eq!(
         shot["script"],
@@ -4352,10 +4680,23 @@ fn look_says_what_a_meshes_file_holds_and_writes_its_camera() {
     ok(&router, "edit", json!({"script": shot["script"]}));
     ok(&router, "edit", json!({"script": onto["script"]}));
     // A clip that plays no animation has its camera at rest, and is told how to have it move.
-    let rest = ok(&router, "look", json!({"mesh": {"clip": "still", "camera": "shot"}}));
+    let rest = ok(
+        &router,
+        "look",
+        json!({"mesh": {"clip": "still", "camera": "shot"}}),
+    );
     assert_eq!(rest["moves"], false, "{rest}");
-    assert!(rest["script"].as_str().unwrap().contains(" x=0 y=0 z=-1.12626 "), "{rest}");
-    assert!(rest["note"].as_str().unwrap().contains("animation="), "{rest}");
+    assert!(
+        rest["script"]
+            .as_str()
+            .unwrap()
+            .contains(" x=0 y=0 z=-1.12626 "),
+        "{rest}"
+    );
+    assert!(
+        rest["note"].as_str().unwrap().contains("animation="),
+        "{rest}"
+    );
     // What cannot be done is said.
     let said = |arguments: Value| message(&error(&router, "look", arguments));
     let none = said(json!({"mesh": {"clip": "set", "camera": "crane"}}));
@@ -4510,10 +4851,7 @@ fn a_making_is_asked_for_or_runs_as_the_persons_permissions_say() {
     // What the person is asked comes back for the agent to say.
     let ask = asked["ask"].as_str().unwrap();
     assert!(ask.starts_with("Asks to make m9, as take 1"), "{ask}");
-    assert!(
-        ask.contains("the first take\n1. Kerf renders"),
-        "{ask}"
-    );
+    assert!(ask.contains("the first take\n1. Kerf renders"), "{ask}");
     assert!(!dir.join("shots/open.takes/001.mp4").exists());
 
     // Let through: it runs, and the media is the take once it is made. Whoever watches the
@@ -4624,7 +4962,11 @@ fn a_making_is_asked_for_or_runs_as_the_persons_permissions_say() {
             && !line.contains("recipe=")),
         "{looked}"
     );
-    assert_eq!(first["steps"], json!(["render s1 {out} size=160x90"]), "{looked}");
+    assert_eq!(
+        first["steps"],
+        json!(["render s1 {out} size=160x90"]),
+        "{looked}"
+    );
     let revision = router.runtime().get_state().unwrap().revision;
     let state = router
         .runtime()
@@ -4644,11 +4986,14 @@ fn a_making_is_asked_for_or_runs_as_the_persons_permissions_say() {
     );
     let looked = ok(&router, "look", json!({}));
     assert_eq!(
-        looked["toMake"][0]["why"],
-        "its steps changed after its file was made",
+        looked["toMake"][0]["why"], "its steps changed after its file was made",
         "{looked}"
     );
-    let back = ok(&router, "edit", json!({"restoreTake": {"media": "m9", "take": 1}}));
+    let back = ok(
+        &router,
+        "edit",
+        json!({"restoreTake": {"media": "m9", "take": 1}}),
+    );
     assert_eq!(back["status"], "accepted", "{back}");
     assert!(ok(&router, "look", json!({})).get("toMake").is_none());
 

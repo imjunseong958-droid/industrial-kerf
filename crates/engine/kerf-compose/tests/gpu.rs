@@ -51,7 +51,13 @@ fn compositor(document: &str, accel: Accel, captions: bool) -> Compositor {
 fn difference(a: &Frame, b: &Frame, allowed: u8) -> (f64, f64) {
     assert_eq!((a.width, a.height), (b.width, b.height));
     let (mut sum, mut off) = (0u64, 0u64);
-    for (a, b) in a.rgba.as_chunks::<4>().0.iter().zip(b.rgba.as_chunks::<4>().0.iter()) {
+    for (a, b) in a
+        .rgba
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(b.rgba.as_chunks::<4>().0.iter())
+    {
         let worst = (0..3).map(|k| a[k].abs_diff(b[k])).max().unwrap_or(0);
         sum += u64::from(worst);
         off += u64::from(worst > allowed);
@@ -194,11 +200,7 @@ fn scenes() -> Vec<(&'static str, String)> {
         ("cineon to linear", clip("      fx utility.cineon gamma=2 rolloff=30\n")),
         ("cineon to log", clip("      fx utility.cineon conversion=linear-to-log\n")),
     ]);
-    for look in [
-        "look.noir",
-        "look.shake",
-        "look.flash",
-    ] {
+    for look in ["look.noir", "look.shake", "look.flash"] {
         scenes.push((look, clip(&format!("      fx {look}\n"))));
     }
     for look in ["look.whip", "look.flash-cut", "look.zoom-through"] {
@@ -454,7 +456,12 @@ fn a_kept_title_draws_what_it_drew() {
         assert!(compositor.draws_on_gpu(time, 1.0), "{name}");
         let drawn = compositor.frame(time, 1.0);
         assert!(
-            drawn.rgba.as_chunks::<4>().0.iter().any(|pixel| pixel[0] > 40),
+            drawn
+                .rgba
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .any(|pixel| pixel[0] > 40),
             "{name} draws nothing"
         );
         // Made, then made and kept, then read back twice.

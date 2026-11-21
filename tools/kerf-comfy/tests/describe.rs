@@ -17,14 +17,21 @@ fn describe_alone_is_an_entry_for_every_workflow_that_comes_with_it() {
             .stdin(Stdio::null())
             .output()
             .expect("kerf-comfy starts");
-        assert!(ran.status.success(), "{arguments:?}: {}", String::from_utf8_lossy(&ran.stderr));
+        assert!(
+            ran.status.success(),
+            "{arguments:?}: {}",
+            String::from_utf8_lossy(&ran.stderr)
+        );
         String::from_utf8(ran.stdout).unwrap()
     };
     let listed: Vec<String> = run(&["--list"])
         .lines()
         .filter_map(|line| line.split_whitespace().next().map(str::to_owned))
         .collect();
-    assert!(listed.iter().any(|name| name == "shot") && listed.len() > 5, "{listed:?}");
+    assert!(
+        listed.iter().any(|name| name == "shot") && listed.len() > 5,
+        "{listed:?}"
+    );
     let models: serde_json::Value = serde_json::from_str(&run(&["--describe"])).expect("JSON");
     let models = models.as_object().expect("an entry a name");
     let mut named: Vec<&String> = models.keys().collect();

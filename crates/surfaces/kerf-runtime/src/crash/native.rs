@@ -74,9 +74,19 @@ pub(super) fn install(component: &str, folder: &Path) {
         unix: unix::Previous::read(),
     };
     #[cfg(windows)]
-    let setup = Setup { folder, component: component.to_owned(), header, main_thread: windows::thread_id() };
+    let setup = Setup {
+        folder,
+        component: component.to_owned(),
+        header,
+        main_thread: windows::thread_id(),
+    };
     #[cfg(not(any(unix, windows)))]
-    let setup = Setup { folder, component: component.to_owned(), header, main_thread: 0 };
+    let setup = Setup {
+        folder,
+        component: component.to_owned(),
+        header,
+        main_thread: 0,
+    };
     if SETUP.set(setup).is_err() {
         return;
     }
@@ -101,7 +111,9 @@ fn folder_for_handler(folder: &Path) -> Option<Folder> {
 fn folder_for_handler(folder: &Path) -> Option<Folder> {
     use std::os::windows::ffi::OsStrExt;
     let mut wide: Vec<u16> = folder.as_os_str().encode_wide().collect();
-    while wide.len() > 3 && matches!(wide.last(), Some(&c) if c == u16::from(b'\\') || c == u16::from(b'/')) {
+    while wide.len() > 3
+        && matches!(wide.last(), Some(&c) if c == u16::from(b'\\') || c == u16::from(b'/'))
+    {
         wide.pop();
     }
     (!wide.is_empty() && !wide.contains(&0)).then_some(wide)
@@ -127,7 +139,9 @@ pub(super) fn fatal(message: &str) -> Option<std::path::PathBuf> {
     }
     let at_ms = now_ms();
     let thread = std::thread::current();
-    let thread = thread.name().map_or_else(|| format!("{}", current_thread()), str::to_owned);
+    let thread = thread
+        .name()
+        .map_or_else(|| format!("{}", current_thread()), str::to_owned);
     let backtrace = std::backtrace::Backtrace::force_capture().to_string();
     let text = format!(
         "{}at_ms: {at_ms}\nthread: {thread}\nlocation: unknown\nmessage: {}\n\n{message}\n\nbacktrace:\n{backtrace}\n",
@@ -136,7 +150,11 @@ pub(super) fn fatal(message: &str) -> Option<std::path::PathBuf> {
     );
     let folder = folder_path(setup);
     std::fs::create_dir_all(&folder).ok()?;
-    let path = folder.join(format!("{}-{at_ms}-{}.txt", setup.component, std::process::id()));
+    let path = folder.join(format!(
+        "{}-{at_ms}-{}.txt",
+        setup.component,
+        std::process::id()
+    ));
     std::fs::write(&path, text).ok()?;
     Some(path)
 }
@@ -170,7 +188,8 @@ fn current_thread() -> u64 {
 /// Whether a report should be written now, for a crash of this kind: once per process, and an
 /// abort right after a panic's report is that panic's.
 fn first_report(abort: bool) -> bool {
-    let after_panic = abort && now_ms().saturating_sub(LAST_PANIC_MS.load(Ordering::SeqCst)) < PANIC_THEN_ABORT_MS;
+    let after_panic = abort
+        && now_ms().saturating_sub(LAST_PANIC_MS.load(Ordering::SeqCst)) < PANIC_THEN_ABORT_MS;
     !after_panic && !REPORTED.swap(true, Ordering::SeqCst)
 }
 
@@ -178,7 +197,10 @@ fn first_report(abort: bool) -> bool {
 fn now_ms() -> u64 {
     #[cfg(unix)]
     {
-        let mut now = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+        let mut now = libc::timespec {
+            tv_sec: 0,
+            tv_nsec: 0,
+        };
         // SAFETY: clock_gettime writes the timespec it is given, and is async-signal-safe.
         unsafe { libc::clock_gettime(libc::CLOCK_REALTIME, &mut now) };
         (now.tv_sec as u64) * 1000 + (now.tv_nsec as u64) / 1_000_000
@@ -202,7 +224,10 @@ struct Text<const N: usize> {
 
 impl<const N: usize> Text<N> {
     fn new() -> Self {
-        Self { bytes: [0; N], len: 0 }
+        Self {
+            bytes: [0; N],
+            len: 0,
+        }
     }
 
     fn bytes(&mut self, bytes: &[u8]) -> &mut Self {
@@ -262,7 +287,10 @@ fn report_head<const N: usize>(
     location: &dyn Fn(&mut Text<N>),
     message: &[u8],
 ) {
-    text.str(&setup.header).str("at_ms: ").dec(at_ms).str("\nthread: ");
+    text.str(&setup.header)
+        .str("at_ms: ")
+        .dec(at_ms)
+        .str("\nthread: ");
     let thread = current_thread();
     if thread == setup.main_thread {
         text.str("main");
@@ -271,7 +299,11 @@ fn report_head<const N: usize>(
     }
     text.str("\nlocation: ");
     location(text);
-    text.str("\nmessage: ").bytes(message).str("\n\n").bytes(message).str("\n\nbacktrace:\n");
+    text.str("\nmessage: ")
+        .bytes(message)
+        .str("\n\n")
+        .bytes(message)
+        .str("\n\nbacktrace:\n");
 }
 
 #[cfg(unix)]
@@ -280,8 +312,14 @@ mod unix {
     use libc::{c_int, c_void};
 
     /// The signals a crash in native code dies of.
-    const SIGNALS: [c_int; 6] =
-        [libc::SIGSEGV, libc::SIGBUS, libc::SIGILL, libc::SIGFPE, libc::SIGABRT, libc::SIGTRAP];
+    const SIGNALS: [c_int; 6] = [
+        libc::SIGSEGV,
+        libc::SIGBUS,
+        libc::SIGILL,
+        libc::SIGFPE,
+        libc::SIGABRT,
+        libc::SIGTRAP,
+    ];
 
     /// The actions in place before the handler, put back once it has written its report.
     pub(super) struct Previous([libc::sigaction; SIGNALS.len()]);
@@ -298,7 +336,10 @@ mod unix {
         }
 
         fn of(&self, signal: c_int) -> Option<&libc::sigaction> {
-            SIGNALS.iter().position(|&s| s == signal).map(|at| &self.0[at])
+            SIGNALS
+                .iter()
+                .position(|&s| s == signal)
+                .map(|at| &self.0[at])
         }
     }
 
@@ -334,7 +375,8 @@ mod unix {
             libc::sigaltstack(std::ptr::null(), &mut current);
             // Rust gives its threads a small one, and a thread from C none.
             if current.ss_flags & libc::SS_DISABLE != 0 || current.ss_size < ALTERNATE_STACK_SIZE {
-                let stack: &'static mut [u8] = Box::leak(vec![0u8; ALTERNATE_STACK_SIZE].into_boxed_slice());
+                let stack: &'static mut [u8] =
+                    Box::leak(vec![0u8; ALTERNATE_STACK_SIZE].into_boxed_slice());
                 let ours = libc::stack_t {
                     ss_sp: stack.as_mut_ptr().cast(),
                     ss_size: stack.len(),
@@ -351,7 +393,8 @@ mod unix {
             }
             for signal in SIGNALS {
                 let mut action: libc::sigaction = std::mem::zeroed();
-                action.sa_sigaction = on_signal as extern "C" fn(c_int, *mut libc::siginfo_t, *mut c_void) as usize;
+                action.sa_sigaction =
+                    on_signal as extern "C" fn(c_int, *mut libc::siginfo_t, *mut c_void) as usize;
                 action.sa_flags = libc::SA_SIGINFO | libc::SA_ONSTACK;
                 libc::sigemptyset(&mut action.sa_mask);
                 libc::sigaction(signal, &action, std::ptr::null_mut());
@@ -394,10 +437,20 @@ mod unix {
 
     /// # Safety
     /// From the signal handler, with what the kernel gave it.
-    unsafe fn write_report(setup: &Setup, signal: c_int, info: *mut libc::siginfo_t, context: *mut c_void) {
+    unsafe fn write_report(
+        setup: &Setup,
+        signal: c_int,
+        info: *mut libc::siginfo_t,
+        context: *mut c_void,
+    ) {
         let at_ms = now_ms();
         let mut path = Text::<1024>::new();
-        path.bytes(setup.folder.as_bytes()).str("/").str(&setup.component).str("-").dec(at_ms).str("-");
+        path.bytes(setup.folder.as_bytes())
+            .str("/")
+            .str(&setup.component)
+            .str("-")
+            .dec(at_ms)
+            .str("-");
         path.dec(libc::getpid() as u64).str(".txt").bytes(&[0]);
         if !path.whole() {
             return;
@@ -418,7 +471,12 @@ mod unix {
             } else {
                 // SAFETY: the kernel's siginfo for a fault names its address.
                 let address = unsafe { (*info).si_addr() } as u64;
-                text.str(if matches!(signal, libc::SIGSEGV | libc::SIGBUS) { "address " } else { "at " }).hex(address);
+                text.str(if matches!(signal, libc::SIGSEGV | libc::SIGBUS) {
+                    "address "
+                } else {
+                    "at "
+                })
+                .hex(address);
             }
         };
         report_head(&mut head, setup, at_ms, &location, name(signal).as_bytes());
@@ -474,7 +532,12 @@ mod unix {
             count = 1;
             let start = fp;
             let mut previous = 0u64;
-            while count < frames.len() && fp != 0 && fp.is_multiple_of(8) && fp > previous && fp - start < (64 << 20) {
+            while count < frames.len()
+                && fp != 0
+                && fp.is_multiple_of(8)
+                && fp > previous
+                && fp - start < (64 << 20)
+            {
                 let next = *(fp as *const u64);
                 let returned = strip(*((fp + 8) as *const u64));
                 if returned == 0 {
@@ -569,10 +632,15 @@ mod unix {
 mod windows {
     use super::{first_report, report_head, Setup, Text, SETUP};
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use windows_sys::Win32::Foundation::{CloseHandle, FILETIME, GENERIC_WRITE, HMODULE, INVALID_HANDLE_VALUE};
-    use windows_sys::Win32::Storage::FileSystem::{CreateDirectoryW, CreateFileW, WriteFile, CREATE_NEW, FILE_ATTRIBUTE_NORMAL};
+    use windows_sys::Win32::Foundation::{
+        CloseHandle, FILETIME, GENERIC_WRITE, HMODULE, INVALID_HANDLE_VALUE,
+    };
+    use windows_sys::Win32::Storage::FileSystem::{
+        CreateDirectoryW, CreateFileW, WriteFile, CREATE_NEW, FILE_ATTRIBUTE_NORMAL,
+    };
     use windows_sys::Win32::System::Diagnostics::Debug::{
-        RtlCaptureStackBackTrace, SetUnhandledExceptionFilter, EXCEPTION_POINTERS, LPTOP_LEVEL_EXCEPTION_FILTER,
+        RtlCaptureStackBackTrace, SetUnhandledExceptionFilter, EXCEPTION_POINTERS,
+        LPTOP_LEVEL_EXCEPTION_FILTER,
     };
     use windows_sys::Win32::System::LibraryLoader::{
         GetModuleFileNameW, GetModuleHandleExW, GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
@@ -591,7 +659,10 @@ mod windows {
     }
 
     pub(super) fn now_ms() -> u64 {
-        let mut now = FILETIME { dwLowDateTime: 0, dwHighDateTime: 0 };
+        let mut now = FILETIME {
+            dwLowDateTime: 0,
+            dwHighDateTime: 0,
+        };
         // SAFETY: writes the FILETIME it is given.
         unsafe { GetSystemTimeAsFileTime(&mut now) };
         let ticks = (u64::from(now.dwHighDateTime) << 32) | u64::from(now.dwLowDateTime);
@@ -604,20 +675,31 @@ mod windows {
         // as the process.
         unsafe {
             let previous = SetUnhandledExceptionFilter(Some(on_exception));
-            PREVIOUS_FILTER.store(previous.map_or(0, |filter| filter as usize), Ordering::SeqCst);
+            PREVIOUS_FILTER.store(
+                previous.map_or(0, |filter| filter as usize),
+                Ordering::SeqCst,
+            );
             // abort(), std::terminate and so a C++ exception nothing caught: the C runtime raises
             // SIGABRT before it ends the process.
-            libc::signal(libc::SIGABRT, on_abort as extern "C" fn(libc::c_int) as libc::sighandler_t);
+            libc::signal(
+                libc::SIGABRT,
+                on_abort as extern "C" fn(libc::c_int) as libc::sighandler_t,
+            );
         }
     }
 
     unsafe extern "system" fn on_exception(pointers: *const EXCEPTION_POINTERS) -> i32 {
         if let Some(setup) = SETUP.get() {
-            if !pointers.is_null() && !(*pointers).ExceptionRecord.is_null() && first_report(false) {
+            if !pointers.is_null() && !(*pointers).ExceptionRecord.is_null() && first_report(false)
+            {
                 let record = &*(*pointers).ExceptionRecord;
                 let code = record.ExceptionCode as u32;
                 let mut message = Text::<96>::new();
-                message.str(exception_name(code)).str(" (exception ").hex(u64::from(code)).str(")");
+                message
+                    .str(exception_name(code))
+                    .str(" (exception ")
+                    .hex(u64::from(code))
+                    .str(")");
                 let location = |text: &mut Text<2048>| {
                     module_and_offset(text, record.ExceptionAddress as usize);
                     // An access violation says what it tried, and where.
@@ -686,7 +768,13 @@ mod windows {
             }
         };
         let mut name = Text::<96>::new();
-        name.str("\\").str(&setup.component).str("-").dec(at_ms).str("-").dec(u64::from(GetCurrentProcessId())).str(".txt");
+        name.str("\\")
+            .str(&setup.component)
+            .str("-")
+            .dec(at_ms)
+            .str("-")
+            .dec(u64::from(GetCurrentProcessId()))
+            .str(".txt");
         push(&mut setup.folder.iter().copied());
         push(&mut name.as_bytes().iter().map(|&byte| u16::from(byte)));
         if !name.whole() || length + 1 >= path.len() {
@@ -709,7 +797,12 @@ mod windows {
         report_head(&mut head, setup, at_ms, location, message);
         write_all(file, head.as_bytes());
         let mut frames = [std::ptr::null_mut::<core::ffi::c_void>(); 62];
-        let count = RtlCaptureStackBackTrace(0, frames.len() as u32, frames.as_mut_ptr(), std::ptr::null_mut());
+        let count = RtlCaptureStackBackTrace(
+            0,
+            frames.len() as u32,
+            frames.as_mut_ptr(),
+            std::ptr::null_mut(),
+        );
         for (index, &frame) in frames[..usize::from(count)].iter().enumerate() {
             let mut line = Text::<640>::new();
             line.dec(index as u64).str(": ");
@@ -747,16 +840,27 @@ mod windows {
             &mut module,
         ) != 0;
         let mut name = [0u16; 520];
-        let length = if found { GetModuleFileNameW(module, name.as_mut_ptr(), name.len() as u32) as usize } else { 0 };
+        let length = if found {
+            GetModuleFileNameW(module, name.as_mut_ptr(), name.len() as u32) as usize
+        } else {
+            0
+        };
         if length == 0 {
             text.hex(address as u64);
             return;
         }
         let name = &name[..length.min(name.len())];
-        let base = name.iter().rposition(|&unit| unit == u16::from(b'\\') || unit == u16::from(b'/')).map_or(0, |at| at + 1);
+        let base = name
+            .iter()
+            .rposition(|&unit| unit == u16::from(b'\\') || unit == u16::from(b'/'))
+            .map_or(0, |at| at + 1);
         for decoded in char::decode_utf16(name[base..].iter().copied()) {
             let mut utf8 = [0u8; 4];
-            text.str(decoded.unwrap_or(char::REPLACEMENT_CHARACTER).encode_utf8(&mut utf8));
+            text.str(
+                decoded
+                    .unwrap_or(char::REPLACEMENT_CHARACTER)
+                    .encode_utf8(&mut utf8),
+            );
         }
         text.str("+").hex((address - module as usize) as u64);
     }
@@ -764,7 +868,15 @@ mod windows {
     unsafe fn write_all(file: windows_sys::Win32::Foundation::HANDLE, mut bytes: &[u8]) {
         while !bytes.is_empty() {
             let mut written = 0u32;
-            if WriteFile(file, bytes.as_ptr(), bytes.len() as u32, &mut written, std::ptr::null_mut()) == 0 || written == 0 {
+            if WriteFile(
+                file,
+                bytes.as_ptr(),
+                bytes.len() as u32,
+                &mut written,
+                std::ptr::null_mut(),
+            ) == 0
+                || written == 0
+            {
                 return;
             }
             bytes = &bytes[written as usize..];
@@ -779,7 +891,14 @@ mod tests {
     #[test]
     fn text_is_made_without_allocating_and_cut_where_it_does_not_fit() {
         let mut text = Text::<32>::new();
-        text.str("at ").dec(0).str(" ").dec(1_762_600_000_123).str(" ").hex(0x10).str(" ").hex(0);
+        text.str("at ")
+            .dec(0)
+            .str(" ")
+            .dec(1_762_600_000_123)
+            .str(" ")
+            .hex(0x10)
+            .str(" ")
+            .hex(0);
         assert_eq!(text.as_bytes(), b"at 0 1762600000123 0x10 0x0");
         assert!(text.whole());
         text.str("and more than fits");

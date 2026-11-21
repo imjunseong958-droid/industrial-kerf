@@ -95,11 +95,23 @@ pub struct LkOpts {
 
 impl Default for LkOpts {
     fn default() -> Self {
-        LkOpts { radius: 5, iterations: 20, epsilon: 0.01, min_eigen: 1e-5, fb_max: 1.0 }
+        LkOpts {
+            radius: 5,
+            iterations: 20,
+            epsilon: 0.01,
+            min_eigen: 1e-5,
+            fb_max: 1.0,
+        }
     }
 }
 
-fn lk_point(a: &GrayPyramid, b: &GrayPyramid, p: [f64; 2], guess: [f64; 2], o: &LkOpts) -> Option<[f64; 2]> {
+fn lk_point(
+    a: &GrayPyramid,
+    b: &GrayPyramid,
+    p: [f64; 2],
+    guess: [f64; 2],
+    o: &LkOpts,
+) -> Option<[f64; 2]> {
     let top = a.levels.len().min(b.levels.len()).checked_sub(1)?;
     let r = o.radius;
     let n = ((2 * r + 1) * (2 * r + 1)) as f64;
@@ -147,7 +159,11 @@ fn lk_point(a: &GrayPyramid, b: &GrayPyramid, p: [f64; 2], guess: [f64; 2], o: &
             let mut k = 0;
             for dy in -r..=r {
                 for dx in -r..=r {
-                    ib.sample(c[0] + g[0] + v[0] + dx as f64, c[1] + g[1] + v[1] + dy as f64, &mut v1);
+                    ib.sample(
+                        c[0] + g[0] + v[0] + dx as f64,
+                        c[1] + g[1] + v[1] + dy as f64,
+                        &mut v1,
+                    );
                     let diff = (win[k] - v1[0]) as f64;
                     bx += diff * wgx[k] as f64;
                     by += diff * wgy[k] as f64;
@@ -182,7 +198,13 @@ fn lk_point(a: &GrayPyramid, b: &GrayPyramid, p: [f64; 2], guess: [f64; 2], o: &
 /// Track level-0 points from pyramid `a` to pyramid `b` (with optional per-point initial
 /// displacement guesses). `None` for lost points (untrackable window, left the frame, or failed
 /// the forward–backward check).
-pub fn track(a: &GrayPyramid, b: &GrayPyramid, pts: &[[f64; 2]], guesses: Option<&[[f64; 2]]>, o: &LkOpts) -> Vec<Option<[f64; 2]>> {
+pub fn track(
+    a: &GrayPyramid,
+    b: &GrayPyramid,
+    pts: &[[f64; 2]],
+    guesses: Option<&[[f64; 2]]>,
+    o: &LkOpts,
+) -> Vec<Option<[f64; 2]>> {
     pts.par_iter()
         .enumerate()
         .map(|(i, p)| {

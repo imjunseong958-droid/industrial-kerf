@@ -66,7 +66,8 @@ impl Told {
     /// Whether it says it is being made and has not said so for too long:
     /// the program making it has gone without saying how it ended.
     pub fn gone(&self) -> bool {
-        self.going == Going::Making && now_ms().saturating_sub(self.at_ms) > GONE_AFTER.as_millis() as u64
+        self.going == Going::Making
+            && now_ms().saturating_sub(self.at_ms) > GONE_AFTER.as_millis() as u64
     }
 }
 
@@ -81,16 +82,26 @@ fn now_ms() -> u64 {
 fn named(media: &str) -> String {
     media
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect()
 }
 
 fn file_of(directory: &Path, media: &str) -> PathBuf {
-    directory.join(FOLDER).join(format!("{}.json", named(media)))
+    directory
+        .join(FOLDER)
+        .join(format!("{}.json", named(media)))
 }
 
 fn stop_of(directory: &Path, media: &str) -> PathBuf {
-    directory.join(FOLDER).join(format!("{}.stop", named(media)))
+    directory
+        .join(FOLDER)
+        .join(format!("{}.stop", named(media)))
 }
 
 /// Write `told` whole or not at all. A making goes on whether or not it can.
@@ -145,8 +156,12 @@ impl Telling {
         write(&file, &told.lock().unwrap_or_else(PoisonError::into_inner));
         let ended = Arc::new(AtomicBool::new(false));
         let beat = {
-            let (file, told, ended, cancellation) =
-                (file.clone(), told.clone(), ended.clone(), cancellation.clone());
+            let (file, told, ended, cancellation) = (
+                file.clone(),
+                told.clone(),
+                ended.clone(),
+                cancellation.clone(),
+            );
             thread::spawn(move || {
                 let step = Duration::from_millis(50);
                 let mut waited = Duration::ZERO;
@@ -223,7 +238,11 @@ impl Drop for Telling {
     fn drop(&mut self) {
         // One let go of without a word ended somehow other than well.
         if !self.ended.load(Ordering::SeqCst) {
-            self.finish(Going::Failed, None, Some("the making ended without saying how".into()));
+            self.finish(
+                Going::Failed,
+                None,
+                Some("the making ended without saying how".into()),
+            );
         }
     }
 }
@@ -247,7 +266,10 @@ pub fn told(directory: &Path) -> Vec<Told> {
     let mut all: Vec<Told> = entries
         .flatten()
         .map(|entry| entry.path())
-        .filter(|path| path.extension().is_some_and(|extension| extension == "json"))
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "json")
+        })
         .filter_map(|path| serde_json::from_slice(&std::fs::read(path).ok()?).ok())
         .collect();
     all.sort_by(|a, b| a.media.cmp(&b.media));

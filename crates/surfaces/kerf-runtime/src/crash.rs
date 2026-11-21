@@ -40,7 +40,11 @@ pub fn folder() -> Option<PathBuf> {
     if let Some(value) = std::env::var_os("KERF_CRASH_DIR").filter(|value| !value.is_empty()) {
         return Some(PathBuf::from(value));
     }
-    let var = |name: &str| std::env::var_os(name).filter(|v| !v.is_empty()).map(PathBuf::from);
+    let var = |name: &str| {
+        std::env::var_os(name)
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from)
+    };
     if cfg!(target_os = "windows") {
         var("LOCALAPPDATA").map(|folder| folder.join("Kerf").join("crashes"))
     } else if cfg!(target_os = "macos") {

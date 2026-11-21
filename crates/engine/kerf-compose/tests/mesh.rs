@@ -315,11 +315,26 @@ fn a_normals_pass_has_a_mesh_by_the_way_each_place_faces() {
         Pass::Normals,
     );
     let [across, up, toward] = pixel(&ball, 160, 90);
-    assert!(across.abs_diff(128) <= 6 && up.abs_diff(128) <= 6 && toward > 245, "{across} {up} {toward}");
+    assert!(
+        across.abs_diff(128) <= 6 && up.abs_diff(128) <= 6 && toward > 245,
+        "{across} {up} {toward}"
+    );
     assert!(pixel(&ball, 115, 90)[0] < 40, "{:?}", pixel(&ball, 115, 90));
-    assert!(pixel(&ball, 205, 90)[0] > 215, "{:?}", pixel(&ball, 205, 90));
-    assert!(pixel(&ball, 160, 45)[1] > 215, "{:?}", pixel(&ball, 160, 45));
-    assert!(pixel(&ball, 160, 135)[1] < 40, "{:?}", pixel(&ball, 160, 135));
+    assert!(
+        pixel(&ball, 205, 90)[0] > 215,
+        "{:?}",
+        pixel(&ball, 205, 90)
+    );
+    assert!(
+        pixel(&ball, 160, 45)[1] > 215,
+        "{:?}",
+        pixel(&ball, 160, 45)
+    );
+    assert!(
+        pixel(&ball, 160, 135)[1] < 40,
+        "{:?}",
+        pixel(&ball, 160, 135)
+    );
     assert_eq!(pixel(&ball, 20, 20), [0, 0, 0]);
 }
 
@@ -384,7 +399,11 @@ fn a_mesh_casts_its_shadow_on_a_mesh_and_on_a_clip_in_depth() {
                 "      set kind=directional x=1 y=0 z=0 shadow={} {}\n",
             ),
             receiver,
-            mesh("post", 2, "kind=box width=0.1 height=0.8 length=0.4 x=-0.3 color=#ffffff"),
+            mesh(
+                "post",
+                2,
+                "kind=box width=0.1 height=0.8 length=0.4 x=-0.3 color=#ffffff"
+            ),
             shadow,
             soft
         )
@@ -398,11 +417,21 @@ fn a_mesh_casts_its_shadow_on_a_mesh_and_on_a_clip_in_depth() {
     for (receiver, x) in [(boxed.as_str(), 140), (wall, 150)] {
         let lit = pixel(&frame(&scene(receiver, "0", ""), Pass::Picture), x, 90)[0];
         let shadowed = pixel(&frame(&scene(receiver, "1", ""), Pass::Picture), x, 90)[0];
-        assert!(lit > 150 && shadowed < 20, "{lit} lit, {shadowed} in shadow at {x}");
+        assert!(
+            lit > 150 && shadowed < 20,
+            "{lit} lit, {shadowed} in shadow at {x}"
+        );
         // Half a shadow lets half the light by, and a light with a size is still stopped.
         let half = pixel(&frame(&scene(receiver, "0.5", ""), Pass::Picture), x, 90)[0];
-        assert!(half > shadowed + 40 && half < lit - 20, "{half} between {shadowed} and {lit}");
-        let soft = pixel(&frame(&scene(receiver, "1", "size=2"), Pass::Picture), x, 90)[0];
+        assert!(
+            half > shadowed + 40 && half < lit - 20,
+            "{half} between {shadowed} and {lit}"
+        );
+        let soft = pixel(
+            &frame(&scene(receiver, "1", "size=2"), Pass::Picture),
+            x,
+            90,
+        )[0];
         assert!(soft < 20, "{soft} under a light with a size");
     }
 }
@@ -412,17 +441,18 @@ fn a_mesh_takes_effects_and_masks_on_its_picture_as_the_camera_sees_it() {
     let thing = |more: &str| {
         format!(
             "{}{more}",
-            mesh("thing", 1, "kind=box width=0.5 height=0.5 length=0.1 color=#ff0000")
+            mesh(
+                "thing",
+                1,
+                "kind=box width=0.5 height=0.5 length=0.1 color=#ff0000"
+            )
         )
     };
     let plain = frame(&thing(""), Pass::Picture);
     let [red, ..] = pixel(&plain, 160, 90);
     assert!(red > 150, "{red}");
     // An effect is done to what is drawn of it: its colors inverted, and not the black about it.
-    let turned = frame(
-        &thing("      fx channel.invert@2\n"),
-        Pass::Picture,
-    );
+    let turned = frame(&thing("      fx channel.invert@2\n"), Pass::Picture);
     let [r, g, _] = pixel(&turned, 160, 90);
     assert!(g > r, "{r} {g}");
     assert_eq!(pixel(&turned, 10, 10), [0, 0, 0]);
@@ -443,7 +473,11 @@ fn a_mesh_takes_effects_and_masks_on_its_picture_as_the_camera_sees_it() {
             "  track V2 video\n    clip wall gen=solid@1 at=0f dur=24f\n      set color=#0000ff three_d=true scale=0.3 z=-0.2\n"
         )
     };
-    let [.., blue] = pixel(&frame(&behind("      fx channel.invert@2\n"), Pass::Picture), 160, 90);
+    let [.., blue] = pixel(
+        &frame(&behind("      fx channel.invert@2\n"), Pass::Picture),
+        160,
+        90,
+    );
     assert!(blue > 150, "{blue}");
 }
 
@@ -680,12 +714,18 @@ impl Writing {
 
     /// `values` as an accessor of floats, `across` to an element, and which accessor it is.
     fn floats(&mut self, across: usize, values: &[f32]) -> usize {
-        let bytes: Vec<u8> = values.iter().flat_map(|value| value.to_le_bytes()).collect();
+        let bytes: Vec<u8> = values
+            .iter()
+            .flat_map(|value| value.to_le_bytes())
+            .collect();
         self.accessor(&bytes, 5126, across, "")
     }
 
     fn shorts(&mut self, values: &[u16]) -> usize {
-        let bytes: Vec<u8> = values.iter().flat_map(|value| value.to_le_bytes()).collect();
+        let bytes: Vec<u8> = values
+            .iter()
+            .flat_map(|value| value.to_le_bytes())
+            .collect();
         self.accessor(&bytes, 5123, 1, "")
     }
 
@@ -874,7 +914,11 @@ fn a_part_with_a_picture_is_drawn_in_it_with_no_light() {
 
     // 180 across and 90 down about the middle, each quarter of the picture where it was laid.
     let frame = sheet_of(folder.path(), "pictured.glb", "", Pass::Picture);
-    assert!(reaches(reach(&frame), [70, 45, 250, 135]), "{:?}", reach(&frame));
+    assert!(
+        reaches(reach(&frame), [70, 45, 250, 135]),
+        "{:?}",
+        reach(&frame)
+    );
     assert_eq!(pixel(&frame, 115, 67), [255, 0, 0]);
     assert_eq!(pixel(&frame, 205, 67), [0, 255, 0]);
     assert_eq!(pixel(&frame, 115, 112), [0, 0, 255]);
@@ -883,8 +927,19 @@ fn a_part_with_a_picture_is_drawn_in_it_with_no_light() {
     let lit = sheet_of(folder.path(), "pictured.glb", SUN, Pass::Picture);
     assert!(lit == frame);
     let plain_lit = sheet_of(folder.path(), "plain.glb", SUN, Pass::Picture);
-    assert_eq!(pixel(&sheet_of(folder.path(), "plain.glb", "", Pass::Picture), 115, 67), [255; 3]);
-    assert!(pixel(&plain_lit, 115, 67)[0] < 200, "{:?}", pixel(&plain_lit, 115, 67));
+    assert_eq!(
+        pixel(
+            &sheet_of(folder.path(), "plain.glb", "", Pass::Picture),
+            115,
+            67
+        ),
+        [255; 3]
+    );
+    assert!(
+        pixel(&plain_lit, 115, 67)[0] < 200,
+        "{:?}",
+        pixel(&plain_lit, 115, 67)
+    );
     // In its passes it is the shape it is, whatever is laid over it.
     for pass in [Pass::Ids, Pass::Depth] {
         let with = sheet_of(folder.path(), "pictured.glb", "", pass);
@@ -918,7 +973,10 @@ fn a_picture_beside_the_file_is_read_and_one_far_off_is_read_small() {
     // Squares of black and white, a texel each: from far off they are an even grey.
     let checks = png(256, 256, |x, y| [if (x + y) % 2 == 0 { 255 } else { 0 }; 3]);
     std::fs::write(folder.path().join("checks.png"), checks).unwrap();
-    for (picture, name) in [("an%20orange.jpg", "orange.gltf"), ("checks.png", "checks.gltf")] {
+    for (picture, name) in [
+        ("an%20orange.jpg", "orange.gltf"),
+        ("checks.png", "checks.gltf"),
+    ] {
         let mut file = Writing::default();
         let (points, indices) = file.sheet();
         // With no normals told, and the picture laid twice across and twice down: it starts
@@ -1001,7 +1059,8 @@ fn corners_given_colors_are_drawn_in_them_with_no_light() {
 
 /// Where the sheet of `name` reaches at `frame`, with `set` said of its clip.
 fn reach_at(folder: &std::path::Path, name: &str, set: &str, frame: i64) -> [u32; 4] {
-    let drawn = posed(folder, name, set, "", Pass::Picture).unwrap_or_else(|error| panic!("{error}"));
+    let drawn =
+        posed(folder, name, set, "", Pass::Picture).unwrap_or_else(|error| panic!("{error}"));
     reach(&drawn.frame(Rate::FPS_24.time_of(frame), 1.0))
 }
 
@@ -1038,7 +1097,11 @@ fn a_files_animation_moves_its_nodes_as_the_clip_runs_or_as_its_seconds_say() {
     // Named, or numbered, it is as far into it as the clip has run: its own size is the one it
     // has at rest, so half its width is 90 pixels.
     assert!(reaches(at("animation=\"slide\"", 0), rest));
-    assert!(reaches(at("animation=\"slide\"", 12), by(45)), "{:?}", at("animation=\"slide\"", 12));
+    assert!(
+        reaches(at("animation=\"slide\"", 12), by(45)),
+        "{:?}",
+        at("animation=\"slide\"", 12)
+    );
     assert!(reaches(at("animation=\"1\"", 18), by(67)));
     // Past its end it starts again, or stays at its end.
     assert!(reaches(at("animation=\"slide\"", 36), by(45)));
@@ -1049,8 +1112,14 @@ fn a_files_animation_moves_its_nodes_as_the_clip_runs_or_as_its_seconds_say() {
     // and either way.
     assert!(reaches(at("animation=\"slide\" seconds=0.5", 0), by(45)));
     assert!(reaches(at("animation=\"slide\" seconds=0.5", 30), by(45)));
-    assert!(reaches(at("animation=\"slide\" seconds={0f:0 48f:1}", 12), by(22)));
-    assert!(reaches(at("animation=\"slide\" seconds={0f:1 24f:0}", 6), by(67)));
+    assert!(reaches(
+        at("animation=\"slide\" seconds={0f:0 48f:1}", 12),
+        by(22)
+    ));
+    assert!(reaches(
+        at("animation=\"slide\" seconds={0f:1 24f:0}", 6),
+        by(67)
+    ));
     // In its passes it is where it is in the picture.
     for pass in [Pass::Ids, Pass::Depth] {
         let drawn = posed(folder.path(), "slides.glb", "animation=\"slide\"", "", pass).unwrap();
@@ -1058,10 +1127,19 @@ fn a_files_animation_moves_its_nodes_as_the_clip_runs_or_as_its_seconds_say() {
         assert!(reaches(there, by(45)), "{there:?}");
     }
     // An animation the file has none of is said, with those it has.
-    let said = posed(folder.path(), "slides.glb", "animation=\"walk\"", "", Pass::Picture)
-        .err()
-        .expect("no such animation");
-    assert!(said.contains("has no animation `walk`: it has `0`, `slide`"), "{said}");
+    let said = posed(
+        folder.path(),
+        "slides.glb",
+        "animation=\"walk\"",
+        "",
+        Pass::Picture,
+    )
+    .err()
+    .expect("no such animation");
+    assert!(
+        said.contains("has no animation `walk`: it has `0`, `slide`"),
+        "{said}"
+    );
 }
 
 #[test]
@@ -1071,7 +1149,12 @@ fn a_skin_bends_a_mesh_with_its_bones() {
     // goes up by the sheet's height in a second. Its corners go round from the top left.
     let mut file = Writing::default();
     let (points, indices) = file.sheet();
-    let joints = file.accessor(&[0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0], 5121, 4, "");
+    let joints = file.accessor(
+        &[0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0],
+        5121,
+        4,
+        "",
+    );
     let weights = file.floats(4, &[1.0, 0.0, 0.0, 0.0].repeat(4));
     let times = file.floats(1, &[0.0, 1.0]);
     let places = file.floats(3, &[0.0, 0.0, 0.0, 0.0, 1.0, 0.0]);
@@ -1093,10 +1176,18 @@ fn a_skin_bends_a_mesh_with_its_bones() {
         let drawn = posed(folder.path(), "bends.glb", "animation=\"lift\"", "", pass).unwrap();
         // At rest it is the sheet: 180 across and 90 down about the middle.
         let rest = drawn.frame(Rate::FPS_24.time_of(0), 1.0);
-        assert!(reaches(reach(&rest), [70, 45, 250, 135]), "{:?}", reach(&rest));
+        assert!(
+            reaches(reach(&rest), [70, 45, 250, 135]),
+            "{:?}",
+            reach(&rest)
+        );
         // A second in, its right side is its own height higher and its left where it was.
         let bent = drawn.frame(Rate::FPS_24.time_of(24), 1.0);
-        assert!(reaches(reach(&bent), [70, 0, 250, 135]), "{:?}", reach(&bent));
+        assert!(
+            reaches(reach(&bent), [70, 0, 250, 135]),
+            "{:?}",
+            reach(&bent)
+        );
         assert!(lit(&bent, 245, 20) && !lit(&bent, 245, 60));
         assert!(lit(&bent, 75, 120) && !lit(&bent, 75, 30));
     }
@@ -1148,22 +1239,46 @@ fn a_morph_target_reshapes_a_mesh_by_its_weight() {
     for pass in [Pass::Picture, Pass::Ids, Pass::Depth] {
         let drawn = posed(folder.path(), "morph.glb", "animation=\"lift\"", "", pass).unwrap();
         let rest = drawn.frame(Rate::FPS_24.time_of(0), 1.0);
-        assert!(reaches(reach(&rest), [70, 45, 250, 135]), "{:?}", reach(&rest));
+        assert!(
+            reaches(reach(&rest), [70, 45, 250, 135]),
+            "{:?}",
+            reach(&rest)
+        );
         let lifted = drawn.frame(Rate::FPS_24.time_of(24), 1.0);
-        assert!(reaches(reach(&lifted), [70, 0, 250, 135]), "{:?}", reach(&lifted));
+        assert!(
+            reaches(reach(&lifted), [70, 0, 250, 135]),
+            "{:?}",
+            reach(&lifted)
+        );
         assert!(lit(&lifted, 245, 20) && !lit(&lifted, 245, 60));
         // Half a second in it is half way.
         let half = drawn.frame(Rate::FPS_24.time_of(12), 1.0);
-        assert!(lit(&half, 245, 60) && !lit(&half, 245, 100), "{:?}", reach(&half));
+        assert!(
+            lit(&half, 245, 60) && !lit(&half, 245, 100),
+            "{:?}",
+            reach(&half)
+        );
     }
     // With no animation named it is as its mesh's own weights have it: half way.
     let still = posed(folder.path(), "half.glb", "", "", Pass::Ids).unwrap();
     let frame = still.frame(Rate::FPS_24.time_of(0), 1.0);
     // It is half as tall again at rest, and is fitted to its clip as it is at rest: its
     // right side up, its left side down.
-    assert!(reaches(reach(&frame), [100, 45, 220, 135]), "{:?}", reach(&frame));
-    assert!(lit(&frame, 215, 60) && !lit(&frame, 215, 120), "{:?}", reach(&frame));
-    assert!(lit(&frame, 105, 120) && !lit(&frame, 105, 60), "{:?}", reach(&frame));
+    assert!(
+        reaches(reach(&frame), [100, 45, 220, 135]),
+        "{:?}",
+        reach(&frame)
+    );
+    assert!(
+        lit(&frame, 215, 60) && !lit(&frame, 215, 120),
+        "{:?}",
+        reach(&frame)
+    );
+    assert!(
+        lit(&frame, 105, 120) && !lit(&frame, 105, 60),
+        "{:?}",
+        reach(&frame)
+    );
 }
 
 #[test]
@@ -1207,7 +1322,11 @@ fn a_files_camera_sees_the_mesh_as_the_file_has_it_wherever_the_clip_is() {
         assert_eq!(held.animations, [("move".to_owned(), 1.0)]);
         assert_eq!(held.playing, Some(0));
         assert_eq!(held.size, [2.0, 1.0, 0.0]);
-        let names: Vec<&str> = held.cameras.iter().map(|camera| camera.name.as_str()).collect();
+        let names: Vec<&str> = held
+            .cameras
+            .iter()
+            .map(|camera| camera.name.as_str())
+            .collect();
         assert_eq!(names, ["main", "main"]);
         let seen = |camera: usize, frame: i64| {
             let at = Rate::FPS_24.time_of(frame);
@@ -1224,7 +1343,10 @@ fn a_files_camera_sees_the_mesh_as_the_file_has_it_wherever_the_clip_is() {
         // From the right, the sheet's near end is larger and its middle is the frame's: where
         // the file's own numbers put its corners, by hand.
         let from_right = seen(0, 0);
-        assert!(reaches(from_right, [110, 50, 224, 130]), "{set}: {from_right:?}");
+        assert!(
+            reaches(from_right, [110, 50, 224, 130]),
+            "{set}: {from_right:?}"
+        );
         // Straight on from 5 away through a lens of half a radian, it is 141 across and 70.5
         // down about the middle.
         let straight = seen(0, 24);
@@ -1235,8 +1357,12 @@ fn a_files_camera_sees_the_mesh_as_the_file_has_it_wherever_the_clip_is() {
     }
     // Outside its clip, and of a camera the file has not, there is nothing to say.
     let mesh = posed(folder.path(), "seen.glb", "", "", Pass::Picture).unwrap();
-    assert!(mesh.mesh_camera("thing", 0, Rate::FPS_24.time_of(48)).is_none());
-    assert!(mesh.mesh_camera("thing", 2, Rate::FPS_24.time_of(0)).is_none());
+    assert!(mesh
+        .mesh_camera("thing", 0, Rate::FPS_24.time_of(48))
+        .is_none());
+    assert!(mesh
+        .mesh_camera("thing", 2, Rate::FPS_24.time_of(0))
+        .is_none());
     assert!(mesh.mesh_file("nothing").is_err());
 }
 
@@ -1246,8 +1372,16 @@ fn what_is_added_to_a_set_is_hidden_by_the_sets_sides_before_it() {
     // A set of two walls a unit apart, the near one half as wide, with the camera that saw
     // them from 5 before the near one.
     let mut file = Writing::default();
-    let far = file.floats(3, &[-1.0, 1.0, -1.0, 1.0, 1.0, -1.0, 1.0, 0.0, -1.0, -1.0, 0.0, -1.0]);
-    let near = file.floats(3, &[-1.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0]);
+    let far = file.floats(
+        3,
+        &[
+            -1.0, 1.0, -1.0, 1.0, 1.0, -1.0, 1.0, 0.0, -1.0, -1.0, 0.0, -1.0,
+        ],
+    );
+    let near = file.floats(
+        3,
+        &[-1.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0],
+    );
     let indices = file.shorts(&[0, 1, 2, 0, 2, 3]);
     file.glb(
         folder.path(),
@@ -1311,7 +1445,14 @@ fn what_is_added_to_a_set_is_hidden_by_the_sets_sides_before_it() {
                 "  track V3 video\n    clip cam gen=camera@1 at=0f dur=48f\n",
                 "      set x={} y={} z={} pan={} tilt={} roll={} fov={}\n",
             ),
-            z, place.x, place.y, place.z, place.pan, place.tilt, place.roll, place.fov.unwrap()
+            z,
+            place.x,
+            place.y,
+            place.z,
+            place.pan,
+            place.tilt,
+            place.roll,
+            place.fov.unwrap()
         );
         posed(folder.path(), "set.glb", "", &more, pass)
             .unwrap()

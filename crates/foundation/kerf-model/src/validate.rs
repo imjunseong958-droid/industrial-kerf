@@ -178,7 +178,11 @@ impl Validator<'_> {
                 );
             }
             if let Err(why) = crate::making::check(&media.steps) {
-                self.error("step.order", &media.id, format!("media `{}`: {why}", media.id));
+                self.error(
+                    "step.order",
+                    &media.id,
+                    format!("media `{}`: {why}", media.id),
+                );
             }
             if let (Some(recipe), false) = (&media.recipe, media.steps.is_empty()) {
                 self.error(
@@ -730,7 +734,8 @@ impl Validator<'_> {
                         &effect.params,
                     );
                     if effect.fx == crate::SHAPE_OUTLINE {
-                        if !matches!(&clip.content, Content::Generator { fx, .. } if fx == "shape") {
+                        if !matches!(&clip.content, Content::Generator { fx, .. } if fx == "shape")
+                        {
                             self.error(
                                 "shape.outline",
                                 id,
@@ -738,8 +743,12 @@ impl Validator<'_> {
                             );
                         }
                         let path = matches!(effect.params.get("kind"), Some(Param::Static(Value::Enum(kind))) if kind == "path");
-                        if let (true, Some(Param::Static(Value::Text(points)))) = (path, effect.params.get("points")) {
-                            if crate::path::parse_points(points).is_ok_and(|points| points.len() < 3) {
+                        if let (true, Some(Param::Static(Value::Text(points)))) =
+                            (path, effect.params.get("points"))
+                        {
+                            if crate::path::parse_points(points)
+                                .is_ok_and(|points| points.len() < 3)
+                            {
                                 self.error(
                                     "param.invalid",
                                     id,

@@ -16,14 +16,14 @@
 use crate::overlay::{atempo_filters, fmt};
 use kerf_model::time::FLICKS_PER_SECOND;
 use kerf_model::{
-    Bezier, Catalog, Clip, Content, Domain, Id, Interp, Param, Project, Rate,
-    Sequence, Time, Track, TrackKind, Value,
+    Bezier, Catalog, Clip, Content, Domain, Id, Interp, Param, Project, Rate, Sequence, Time,
+    Track, TrackKind, Value,
 };
 use std::collections::HashMap;
 
 mod sound;
 
-pub use sound::{program_sound, ProgramSound, SoundCut, LiveBus};
+pub use sound::{program_sound, LiveBus, ProgramSound, SoundCut};
 
 /// Output audio sample rate.
 pub const SAMPLE_RATE: u32 = 48_000;
@@ -230,7 +230,9 @@ pub fn canvas(sequence: &Sequence) -> (u32, u32) {
 enum Reveal {
     /// A picture's transition, which sound does not fade through.
     Picture,
-    Crossfade { equal_power: bool },
+    Crossfade {
+        equal_power: bool,
+    },
 }
 
 /// A clip as a track shows it: its span with transition handles and the
@@ -584,17 +586,9 @@ impl<'a> Graph<'a> {
 
     /// A clip's sound inside a window that starts at `window`, not yet placed in it; nothing
     /// for a clip with no sound, or less than a sample of it.
-    fn sound(
-        &mut self,
-        item: &Shown,
-        portion: &Portion,
-        window: Time,
-    ) -> Result<Option<Sounding>> {
+    fn sound(&mut self, item: &Shown, portion: &Portion, window: Time) -> Result<Option<Sounding>> {
         let clip = item.clip;
-        let (start, end) = (
-            samples(portion.lo - window),
-            samples(portion.hi - window),
-        );
+        let (start, end) = (samples(portion.lo - window), samples(portion.hi - window));
         if end <= start {
             return Ok(None);
         }
@@ -943,7 +937,10 @@ fn audio_effects_of(
                 ));
             }
             "audio.deesser" => {
-                filters.push(format!("deesser=i={}", fmt(value("amount")?.clamp(0.0, 1.0))));
+                filters.push(format!(
+                    "deesser=i={}",
+                    fmt(value("amount")?.clamp(0.0, 1.0))
+                ));
             }
             "audio.denoise" => {
                 filters.push(format!(
@@ -983,8 +980,7 @@ fn audio_effects_of(
                     // Close reflections at times that share no factor, so that they do not ring.
                     let base = 12.0 + size * 60.0;
                     let steps = [1.0, 1.7, 2.3, 3.1, 4.3, 5.9];
-                    let delays: Vec<String> =
-                        steps.iter().map(|step| fmt(base * step)).collect();
+                    let delays: Vec<String> = steps.iter().map(|step| fmt(base * step)).collect();
                     let decays: Vec<String> = steps
                         .iter()
                         .map(|step| fmt(mix * (0.8 + size * 0.15).powf(step * 2.0)))

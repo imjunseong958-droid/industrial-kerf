@@ -145,7 +145,13 @@ mod tests {
         let center = (20 * 41 + 20) * 4;
         image.px[center..center + 4].copy_from_slice(&[1.0; 4]);
         gaussian(&mut image, 3.0, 3.0, false);
-        let total: f32 = image.px.as_chunks::<4>().0.iter().map(|pixel| pixel[3]).sum();
+        let total: f32 = image
+            .px
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|pixel| pixel[3])
+            .sum();
         assert!((total - 1.0).abs() < 1e-4, "{total}");
         assert!(image.get(20, 20)[3] < 0.1 && image.get(23, 20)[3] > 0.0);
     }

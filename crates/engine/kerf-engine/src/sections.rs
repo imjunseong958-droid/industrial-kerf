@@ -299,7 +299,12 @@ impl Kept {
     }
 
     /// Keep what an encoder wrote to `made` as `name`.
-    pub(crate) fn keep(&self, made: &Path, name: &str, extension: &str) -> std::io::Result<PathBuf> {
+    pub(crate) fn keep(
+        &self,
+        made: &Path,
+        name: &str,
+        extension: &str,
+    ) -> std::io::Result<PathBuf> {
         let path = self.path(name, extension);
         std::fs::create_dir_all(path.parent().expect("a kept file is in a folder"))?;
         std::fs::rename(made, &path)?;

@@ -128,7 +128,10 @@ pub fn export(
             format!("could not write {}: {error}", output_path.display()),
         )
     };
-    if let Some(folder) = output_path.parent().filter(|folder| !folder.as_os_str().is_empty()) {
+    if let Some(folder) = output_path
+        .parent()
+        .filter(|folder| !folder.as_os_str().is_empty())
+    {
         std::fs::create_dir_all(folder).map_err(failed)?;
     }
     std::fs::write(output_path, text).map_err(failed)?;

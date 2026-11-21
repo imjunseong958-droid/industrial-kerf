@@ -7,8 +7,7 @@ struct Project(PathBuf);
 impl Project {
     /// Four clips of four seconds, end to end.
     fn new(label: &str) -> Self {
-        let directory =
-            std::env::temp_dir().join(format!("kerf-runtime-{label}-{}", unique_id()));
+        let directory = std::env::temp_dir().join(format!("kerf-runtime-{label}-{}", unique_id()));
         fs::create_dir_all(&directory).unwrap();
         fs::write(
             directory.join(PROJECT_FILE),

@@ -13,17 +13,18 @@
 //! and the document diff. Renders and proposal previews hand renderers the
 //! document with media paths resolved.
 
+pub mod author;
 pub mod crash;
 mod ipc;
 mod kernel;
 #[cfg(windows)]
 mod named_pipe;
 mod render;
-pub mod author;
 mod runtime;
 mod store;
 mod timeline;
 
+pub use author::Author;
 pub use ipc::{
     response_value, run_ipc, run_ipc_with, run_stdio, EndpointAddress, IpcOptions, RuntimeClient,
     RuntimeLease, MAX_REQUEST_BYTES, UNIX_SOCKET_PATH_LIMIT,
@@ -33,7 +34,6 @@ pub use kernel::{
     TrimSide, RATE_NEEDS_EMPTY,
 };
 pub use render::{render_cancel_path, run_render_job, RENDER_CODECS, RENDER_QUALITIES};
-pub use author::Author;
 pub use timeline::{fx_catalog_all_json, fx_catalog_json, properties_json};
 
 use kerf_model::Project;

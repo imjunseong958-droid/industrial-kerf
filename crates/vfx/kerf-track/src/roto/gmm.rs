@@ -26,7 +26,9 @@ pub struct Gmm {
 const REG: f64 = 2e-4;
 
 fn det3(m: &[[f64; 3]; 3]) -> f64 {
-    m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0]) + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0])
+    m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1])
+        - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
+        + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0])
 }
 
 fn inv3(m: &[[f64; 3]; 3]) -> Option<[[f64; 3]; 3]> {
@@ -138,7 +140,9 @@ impl Gmm {
             let m = st[best].mean();
             let thr = axis[0] * m[0] + axis[1] * m[1] + axis[2] * m[2];
             for (x, l) in xs.iter().zip(label.iter_mut()) {
-                if *l == best && axis[0] * x[0] as f64 + axis[1] * x[1] as f64 + axis[2] * x[2] as f64 > thr {
+                if *l == best
+                    && axis[0] * x[0] as f64 + axis[1] * x[1] as f64 + axis[2] * x[2] as f64 > thr
+                {
                     *l = ncl;
                 }
             }
@@ -173,7 +177,12 @@ impl Gmm {
                 let inv = inv3(&c)?;
                 let det = det3(&c).max(1e-300);
                 let weight = s.n / total;
-                Some(Gauss { weight, mean: s.mean(), inv, log_norm: -weight.ln() + 0.5 * det.ln() })
+                Some(Gauss {
+                    weight,
+                    mean: s.mean(),
+                    inv,
+                    log_norm: -weight.ln() + 0.5 * det.ln(),
+                })
             })
             .collect();
         Gmm { comps }
@@ -181,7 +190,11 @@ impl Gmm {
 
     #[inline]
     fn comp_cost(g: &Gauss, c: [f32; 3]) -> f64 {
-        let d = [c[0] as f64 - g.mean[0], c[1] as f64 - g.mean[1], c[2] as f64 - g.mean[2]];
+        let d = [
+            c[0] as f64 - g.mean[0],
+            c[1] as f64 - g.mean[1],
+            c[2] as f64 - g.mean[2],
+        ];
         let mut q = 0.0;
         for i in 0..3 {
             q += d[i] * (g.inv[i][0] * d[0] + g.inv[i][1] * d[1] + g.inv[i][2] * d[2]);

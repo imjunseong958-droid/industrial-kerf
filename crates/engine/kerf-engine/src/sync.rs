@@ -115,7 +115,9 @@ impl Stretch {
 impl Course {
     /// The stretches that were placed.
     pub fn placed(&self) -> impl Iterator<Item = &Stretch> {
-        self.stretches.iter().filter(|stretch| stretch.offset.is_some())
+        self.stretches
+            .iter()
+            .filter(|stretch| stretch.offset.is_some())
     }
 
     pub fn holds(&self) -> Holds {
@@ -221,7 +223,9 @@ fn read_mono(path: &Path) -> Result<Vec<f32>> {
     }
     Ok(output
         .stdout
-        .as_chunks::<4>().0.iter()
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|bytes| f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
         .collect())
 }
@@ -772,7 +776,9 @@ mod tests {
                 let mut value = noise() * 0.01;
                 if let Some(t) = moment(i as f64 / READ_RATE as f64) {
                     let last = times.partition_point(|at| *at <= t);
-                    let since = last.checked_sub(1).map_or(f64::INFINITY, |at| t - times[at]);
+                    let since = last
+                        .checked_sub(1)
+                        .map_or(f64::INFINITY, |at| t - times[at]);
                     if since < 0.15 {
                         let tone = (since * 900.0 * std::f64::consts::TAU).sin();
                         value += (tone * (-since * 30.0).exp()) as f32 * 0.6;
@@ -848,7 +854,10 @@ mod tests {
         assert_eq!(course.holds(), Holds::Jump, "{course:?}");
         assert_eq!(course.jumps.len(), 1, "{course:?}");
         let jump = course.jumps[0];
-        assert!((jump.from - 5.0).abs() < 0.002 && (jump.to - 5.5).abs() < 0.002, "{jump:?}");
+        assert!(
+            (jump.from - 5.0).abs() < 0.002 && (jump.to - 5.5).abs() < 0.002,
+            "{jump:?}"
+        );
         assert!(jump.after <= 137.0 && jump.before >= 137.0, "{jump:?}");
         assert!(jump.before - jump.after < 8.0, "{jump:?}");
         // Either side of it the recording holds its offset, and the two are not one.

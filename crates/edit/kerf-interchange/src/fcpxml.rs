@@ -46,7 +46,9 @@ use crate::otio::{
 use crate::otio_json::file_name;
 use crate::{issue, InterchangeIssue, IssueSeverity};
 use kerf_model::time::FLICKS_PER_SECOND;
-use kerf_model::{Clip, Content, Id, Media, Project, Rate, Ratio, Retime, Sequence, Time, Track, TrackKind};
+use kerf_model::{
+    Clip, Content, Id, Media, Project, Rate, Ratio, Retime, Sequence, Time, Track, TrackKind,
+};
 use std::collections::HashMap;
 use std::fmt::{self, Write as _};
 
@@ -92,7 +94,10 @@ impl Seconds {
     }
 
     fn plus(self, other: Self) -> Self {
-        Self::new(self.num * other.den + other.num * self.den, self.den * other.den)
+        Self::new(
+            self.num * other.den + other.num * self.den,
+            self.den * other.den,
+        )
     }
 
     /// This long at `speed` takes this much of the source.
@@ -247,7 +252,10 @@ fn file_url(path: &str) -> Option<String> {
     };
     let path = path.as_str();
     let bytes = path.as_bytes();
-    if let Some(share) = path.strip_prefix("\\\\").or_else(|| path.strip_prefix("//")) {
+    if let Some(share) = path
+        .strip_prefix("\\\\")
+        .or_else(|| path.strip_prefix("//"))
+    {
         return Some(format!("file://{}", encoded(share)));
     }
     if path.starts_with('/') {
@@ -307,7 +315,10 @@ impl Resources {
             .map(|video| self.format(media.rate, video.width, video.height));
         let id = self.next_id();
         let name = file_name(&media.path);
-        let stem = name.rfind('.').filter(|dot| *dot > 0).map_or(name, |dot| &name[..dot]);
+        let stem = name
+            .rfind('.')
+            .filter(|dot| *dot > 0)
+            .map_or(name, |dot| &name[..dot]);
         let mut node = Node::new("asset")
             .with("id", &id)
             .with("name", stem)
@@ -458,7 +469,9 @@ impl<'a> Writer<'a> {
         node.set("offset", offset);
         node.set(
             "name",
-            clip.name.as_deref().unwrap_or_else(|| file_name(&media.path)),
+            clip.name
+                .as_deref()
+                .unwrap_or_else(|| file_name(&media.path)),
         );
         if !local.is_zero() {
             node.set("start", local);
@@ -531,10 +544,11 @@ pub fn to_fcpxml(project: &Project, sequence: &Sequence) -> (String, Vec<Interch
     let ends = (video.iter().chain(&audio))
         .flat_map(|track| &track.clips)
         .map(|clip| writer.frame(clip.end()));
-    let marked = sequence
-        .markers
-        .iter()
-        .map(|marker| writer.frame(marker.at + marker.duration).max(writer.frame(marker.at) + 1));
+    let marked = sequence.markers.iter().map(|marker| {
+        writer
+            .frame(marker.at + marker.duration)
+            .max(writer.frame(marker.at) + 1)
+    });
     let total = ends.chain(marked).max().unwrap_or(0).max(0);
 
     // The primary storyline: the first video track's clips, with a gap
@@ -585,7 +599,8 @@ pub fn to_fcpxml(project: &Project, sequence: &Sequence) -> (String, Vec<Interch
 
     // Every other track's clips, each connected to the storyline item under
     // its first frame, at that frame on the item's own clock.
-    let lanes = (video.iter().skip(1).zip(1..)).chain(audio.iter().zip((1..).map(|lane: i32| -lane)));
+    let lanes =
+        (video.iter().skip(1).zip(1..)).chain(audio.iter().zip((1..).map(|lane: i32| -lane)));
     for (track, lane) in lanes {
         for transition in &track.transitions {
             writer.issues.push(lost(
@@ -608,7 +623,9 @@ pub fn to_fcpxml(project: &Project, sequence: &Sequence) -> (String, Vec<Interch
             else {
                 continue;
             };
-            let offset = spine[index].local.plus(writer.span(from - spine[index].from));
+            let offset = spine[index]
+                .local
+                .plus(writer.span(from - spine[index].from));
             if let Some((node, _)) = writer.clip(clip, track, lane, offset, to - from) {
                 spine[index].connected.push(node);
             }
@@ -617,12 +634,18 @@ pub fn to_fcpxml(project: &Project, sequence: &Sequence) -> (String, Vec<Interch
 
     for marker in &sequence.markers {
         let at = writer.frame(marker.at).clamp(0, (total - 1).max(0));
-        let Some(item) = spine.iter_mut().find(|item| item.from <= at && at < item.to) else {
+        let Some(item) = spine
+            .iter_mut()
+            .find(|item| item.from <= at && at < item.to)
+        else {
             continue;
         };
         let length = writer.rate.frames_round(marker.duration).max(1);
         let mut node = Node::new("marker")
-            .with("start", item.local.plus(Seconds::frames(at - item.from, rate)))
+            .with(
+                "start",
+                item.local.plus(Seconds::frames(at - item.from, rate)),
+            )
             .with("duration", Seconds::frames(length, rate))
             .with("value", marker.name.as_deref().unwrap_or("Marker"));
         if let Some(note) = &marker.note {
@@ -733,7 +756,8 @@ pub fn to_fcpxml(project: &Project, sequence: &Sequence) -> (String, Vec<Interch
                     ),
             ),
         );
-    let mut text = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE fcpxml>\n\n");
+    let mut text =
+        String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE fcpxml>\n\n");
     document.print(&mut text, 0);
     (text, writer.issues)
 }

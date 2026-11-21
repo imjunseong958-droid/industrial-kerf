@@ -87,7 +87,9 @@ fn widest_step(path: &Path) -> u16 {
     assert!(output.status.success());
     let row = 320 * 90 * 2;
     let levels: std::collections::BTreeSet<u16> = output.stdout[row..row + 320 * 2]
-        .as_chunks::<2>().0.iter()
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|sample| u16::from_le_bytes([sample[0], sample[1]]))
         .collect();
     let levels: Vec<u16> = levels.into_iter().collect();

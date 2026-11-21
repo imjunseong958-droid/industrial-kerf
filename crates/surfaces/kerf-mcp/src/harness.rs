@@ -17,8 +17,8 @@ use kerf_lang::{
 };
 use kerf_model::{Catalog, Clip, Content, Media, Project, Sequence, Time};
 use kerf_runtime::{
-    CachedFacts, PendingProposal, ProposalEntry, ProposalFreshness, RenderJob,
-    RenderRange, RuntimeClient, RuntimeError, StateSnapshot,
+    CachedFacts, PendingProposal, ProposalEntry, ProposalFreshness, RenderJob, RenderRange,
+    RuntimeClient, RuntimeError, StateSnapshot,
 };
 use kerf_skills::Skill;
 use serde::Deserialize;
@@ -662,7 +662,10 @@ fn font_description(wanted: &str) -> Value {
     // Four places say all a font does, where a float says it with noise.
     let place = |value: f32| (f64::from(value) * 10000.0).round() / 10000.0;
     let named = fonts::family_named(crate::text_lint::family_of(wanted));
-    let faces = named.as_ref().map(|(family, _)| fonts::faces_of(family)).unwrap_or_default();
+    let faces = named
+        .as_ref()
+        .map(|(family, _)| fonts::faces_of(family))
+        .unwrap_or_default();
     if faces.is_empty() {
         fonts::scan_system();
         let words = wanted.trim().to_lowercase();
@@ -890,11 +893,7 @@ fn position(clock: &Clock, text: &str) -> Result<Time, McpError> {
 
 /// A position of `sequence`, read as `edit` reads one: timecode, frames or
 /// seconds, or an anchor such as `c3.end-1f`, `beat1` or `end`.
-fn program_position(
-    project: &Project,
-    sequence: &Sequence,
-    text: &str,
-) -> Result<Time, McpError> {
+fn program_position(project: &Project, sequence: &Sequence, text: &str) -> Result<Time, McpError> {
     kerf_lang::sequence_position(project, sequence, text)
         .map_err(|error| McpError::new("INVALID_ARGUMENTS", error))
 }
@@ -978,7 +977,6 @@ impl KerfMcpRouter {
             _ => Err(not_pending(id)),
         }
     }
-
 
     /// The current revision and the project, or what the pending
     /// `proposal` would make of it.
@@ -1465,13 +1463,19 @@ impl KerfMcpRouter {
         let mut shown = kerf_shots::graph::shown(project, &self.dir, media, &models)
             .map_err(|why| self.no_shot(media, why))?;
         if let Some(cannot) = shown["cannot"].as_str().map(str::to_owned) {
-            shown["cannot"] = json!(cannot_said(cannot, models_error.is_none().then_some(&models)));
+            shown["cannot"] = json!(cannot_said(
+                cannot,
+                models_error.is_none().then_some(&models)
+            ));
         }
         if let Some(error) = models_error {
             shown["modelsError"] = json!(error);
         }
         // A person chooses among the takes in the graph's last node: here, by each one's line.
-        if let Some(takes) = project.media(media).and_then(|media| self.takes(project, media)) {
+        if let Some(takes) = project
+            .media(media)
+            .and_then(|media| self.takes(project, media))
+        {
             shown["takes"] = takes;
         }
         // Steps the document holds are counted as the document has them: a node's `line` is
@@ -1481,7 +1485,10 @@ impl KerfMcpRouter {
                 node["line"] = json!(line.saturating_sub(1));
             }
         }
-        if let Some(steps) = shown["text"].as_str().and_then(|text| text.split_once('\n')) {
+        if let Some(steps) = shown["text"]
+            .as_str()
+            .and_then(|text| text.split_once('\n'))
+        {
             shown["text"] = json!(steps.1);
         }
         if let Some(shown) = shown.as_object_mut() {
@@ -1506,8 +1513,9 @@ impl KerfMcpRouter {
         let models = kerf_engine::recipe::model::Models::load()
             .map_err(|error| invalid(format!("the person's models file does not read: {error}")))?;
         // A step is named by its number, which is a line on in the text of its steps.
-        let read = kerf_shots::workflow::read(project, &self.dir, &step.media, step.line + 1, &models)
-            .map_err(|why| invalid(cannot_said(why, Some(&models))))?;
+        let read =
+            kerf_shots::workflow::read(project, &self.dir, &step.media, step.line + 1, &models)
+                .map_err(|why| invalid(cannot_said(why, Some(&models))))?;
         let mut shown =
             kerf_shots::workflow::shown(&step.media, step.line, &read).map_err(invalid)?;
         // What each input takes on the server the model is run on, as its program says:
@@ -1566,7 +1574,9 @@ impl KerfMcpRouter {
         let invalid = |why: String| McpError::new("INVALID_STEPS", why);
         // The steps of each media named, as text: as they were, and as this edit has them.
         let mut texts: BTreeMap<String, (String, String)> = BTreeMap::new();
-        let read = |texts: &mut BTreeMap<String, (String, String)>, id: &str| -> Result<(), McpError> {
+        let read = |texts: &mut BTreeMap<String, (String, String)>,
+                    id: &str|
+         -> Result<(), McpError> {
             if !texts.contains_key(id) {
                 let text = kerf_shots::graph::written(project, id)
                     .map_err(|why| invalid(format!("{why}{}", self.in_pending(id, "extend"))))?;
@@ -1583,8 +1593,14 @@ impl KerfMcpRouter {
                     "`restoreTake` writes every step as the take had it: change them in an edit after this one",
                 ));
             }
-            let restored = kerf_shots::takes::restored(project, &self.dir, &restore.media, restore.take)
-                .map_err(|why| invalid(format!("{why}{}", self.in_pending(&restore.media, "extend"))))?;
+            let restored =
+                kerf_shots::takes::restored(project, &self.dir, &restore.media, restore.take)
+                    .map_err(|why| {
+                        invalid(format!(
+                            "{why}{}",
+                            self.in_pending(&restore.media, "extend")
+                        ))
+                    })?;
             read(&mut texts, &restore.media)?;
             for (file, stored, text) in restored.files {
                 kept.push(WorkflowKept {
@@ -1607,33 +1623,49 @@ impl KerfMcpRouter {
         // Every value set in one step's workflow goes into the one copy.
         let mut steps: Vec<(&str, usize, Vec<&WorkflowSetInput>)> = Vec::new();
         for set in &input.workflow_set {
-            match steps.iter_mut().find(|(media, line, _)| *media == set.media && *line == set.line) {
+            match steps
+                .iter_mut()
+                .find(|(media, line, _)| *media == set.media && *line == set.line)
+            {
                 Some((_, _, sets)) => sets.push(set),
                 None => steps.push((&set.media, set.line, vec![set])),
             }
         }
         if !steps.is_empty() {
-            let models = kerf_engine::recipe::model::Models::load()
-                .map_err(|error| invalid(format!("the person's models file does not read: {error}")))?;
+            let models = kerf_engine::recipe::model::Models::load().map_err(|error| {
+                invalid(format!("the person's models file does not read: {error}"))
+            })?;
             for (media, step, sets) in steps {
                 read(&mut texts, media)?;
                 // A step is named by its number, which is a line on in the text of its steps.
                 let line = step + 1;
-                let read = kerf_shots::workflow::read_of(project, &self.dir, media, line, &models, texts[media].1.clone())
-                    .map_err(|why| invalid(cannot_said(why, Some(&models))))?;
+                let read = kerf_shots::workflow::read_of(
+                    project,
+                    &self.dir,
+                    media,
+                    line,
+                    &models,
+                    texts[media].1.clone(),
+                )
+                .map_err(|why| invalid(cannot_said(why, Some(&models))))?;
                 let values: Vec<kerf_shots::workflow::Set> = sets
                     .iter()
                     .map(|set| match &set.link {
-                        Some((from, output)) => kerf_shots::workflow::Set::link(&set.node, &set.input, from, *output),
+                        Some((from, output)) => {
+                            kerf_shots::workflow::Set::link(&set.node, &set.input, from, *output)
+                        }
                         None => kerf_shots::workflow::Set::value(&set.node, &set.input, &set.value),
                     })
                     .collect();
                 // Held to what the server takes there, where a `look` has asked.
                 let asked = kerf_shots::workflow::taken_before(&models, &read);
-                let now = kerf_shots::workflow::with(&read, &values, asked.as_ref()).map_err(invalid)?;
+                let now =
+                    kerf_shots::workflow::with(&read, &values, asked.as_ref()).map_err(invalid)?;
                 let taken: Vec<PathBuf> = kept.iter().map(|kept| kept.copy.file.clone()).collect();
-                let copy = kerf_shots::workflow::copied(project, &self.dir, media, line, &read, &now, &taken)
-                    .map_err(invalid)?;
+                let copy = kerf_shots::workflow::copied(
+                    project, &self.dir, media, line, &read, &now, &taken,
+                )
+                .map_err(invalid)?;
                 if let Some(held) = texts.get_mut(media) {
                     held.1.clone_from(&copy.recipe);
                 }
@@ -1644,8 +1676,12 @@ impl KerfMcpRouter {
                     set: sets
                         .iter()
                         .map(|set| match &set.link {
-                            Some(link) => json!({"node": set.node, "input": set.input, "link": link}),
-                            None => json!({"node": set.node, "input": set.input, "value": set.value}),
+                            Some(link) => {
+                                json!({"node": set.node, "input": set.input, "link": link})
+                            }
+                            None => {
+                                json!({"node": set.node, "input": set.input, "value": set.value})
+                            }
                         })
                         .collect(),
                     copy,
@@ -1674,15 +1710,16 @@ impl KerfMcpRouter {
         input: &SignalInput,
     ) -> Result<Value, McpError> {
         // The reading a person asks for in the signal's card of a shot's graph.
-        let read = kerf_shots::signals::from_sound(project, &self.dir, &input.of, &input.clip, input.hold)
-            .map_err(|why| {
-                let hint = if why.starts_with("no clip") {
-                    self.any_pending("proposal")
-                } else {
-                    String::new()
-                };
-                McpError::new("INVALID_ARGUMENTS", format!("{why}{hint}"))
-            })?;
+        let read =
+            kerf_shots::signals::from_sound(project, &self.dir, &input.of, &input.clip, input.hold)
+                .map_err(|why| {
+                    let hint = if why.starts_with("no clip") {
+                        self.any_pending("proposal")
+                    } else {
+                        String::new()
+                    };
+                    McpError::new("INVALID_ARGUMENTS", format!("{why}{hint}"))
+                })?;
         Ok(json!({
             "revision": revision,
             "clip": input.clip,
@@ -2201,7 +2238,8 @@ impl KerfMcpRouter {
         let target = match &input.onto {
             Some(id) => {
                 let target = project.clip_at(located(id)?);
-                if !matches!(&target.content, Content::Generator { fx, .. } if fx.as_str() == "camera") {
+                if !matches!(&target.content, Content::Generator { fx, .. } if fx.as_str() == "camera")
+                {
                     return Err(invalid(format!(
                         "`{id}` is not a camera: `as` is a `gen=camera@1` clip, or leave it out for a new one"
                     )));
@@ -2214,8 +2252,7 @@ impl KerfMcpRouter {
         let origin = target.map_or(first, |target| rate.frames_round(target.start));
         // What a model found of a camera is not as fine as what a file says of its own.
         let fine = if input.from.is_some() { 10.0 } else { 1.0 };
-        let (params, moves) =
-            crate::mesh_camera::params(&places, first - origin, fov, fine);
+        let (params, moves) = crate::mesh_camera::params(&places, first - origin, fov, fine);
         let script = match target {
             Some(target) => format!("set {} {params}", target.id),
             None => {
@@ -2375,7 +2412,10 @@ impl KerfMcpRouter {
                 Some(text) => program_position(project, sequence, text),
                 None => Ok(otherwise),
             };
-            Some((at(&input.from, Time::ZERO)?, at(&input.to, sequence.duration())?))
+            Some((
+                at(&input.from, Time::ZERO)?,
+                at(&input.to, sequence.duration())?,
+            ))
         } else {
             None
         };
@@ -2399,9 +2439,12 @@ impl KerfMcpRouter {
     pub(super) fn look(&self, arguments: Value) -> Result<Value, McpError> {
         let preset_only = arguments.as_object().is_some_and(|o| o.len() == 1);
         let beside_eye = arguments.as_object().is_some_and(|given| {
-            given
-                .keys()
-                .all(|name| matches!(name.as_str(), "eye" | "sequence" | "proposal" | "from" | "to"))
+            given.keys().all(|name| {
+                matches!(
+                    name.as_str(),
+                    "eye" | "sequence" | "proposal" | "from" | "to"
+                )
+            })
         });
         let only_area_beside = arguments.as_object().is_some_and(|o| o.len() == 2);
         let input: LookInput = input(arguments)?;
@@ -2577,10 +2620,14 @@ impl KerfMcpRouter {
             return self.take_placed(&project, input.sequence.as_deref(), revision, placed);
         }
         if input.graph.is_some() || input.workflow.is_some() || input.takes.is_some() {
-            if [input.graph.is_some(), input.workflow.is_some(), input.takes.is_some()]
-                .into_iter()
-                .filter(|given| *given)
-                .count()
+            if [
+                input.graph.is_some(),
+                input.workflow.is_some(),
+                input.takes.is_some(),
+            ]
+            .into_iter()
+            .filter(|given| *given)
+            .count()
                 > 1
                 || input.media.is_some()
                 || !input.at.is_empty()
@@ -3614,7 +3661,10 @@ impl KerfMcpRouter {
         kerf_runtime::resolve_media_paths(&mut resolved, &self.dir);
         // The clip that will follow a point is not drawn while the point is followed, or what
         // was followed would be the clip.
-        if let (Some(_), Some(at)) = (point, target.and_then(|clip| project.locate(clip.id.as_str()))) {
+        if let (Some(_), Some(at)) = (
+            point,
+            target.and_then(|clip| project.locate(clip.id.as_str())),
+        ) {
             resolved.clip_at_mut(at).enabled = false;
         }
         let scale = (SCOPE_WIDTH / f64::from(sequence.width.max(1))).min(1.0);
@@ -4185,7 +4235,9 @@ impl KerfMcpRouter {
         }
         // A recipe carried is read as it stands: what else this edit would write of one,
         // it writes after, as lines of a script that set the steps it became.
-        if !input.carry.is_empty() && (!input.workflow_set.is_empty() || input.restore_take.is_some()) {
+        if !input.carry.is_empty()
+            && (!input.workflow_set.is_empty() || input.restore_take.is_some())
+        {
             return Err(McpError::new(
                 "INVALID_ARGUMENTS",
                 "`carry` writes a recipe's steps under its media as they are: change them in the script of the same edit (`step <media> set <n> …`), or in an edit after it",
@@ -4397,8 +4449,9 @@ impl KerfMcpRouter {
         // as they did: a media that names its recipe goes by what the recipe's take recorded.
         let mut carried_said = Vec::new();
         for (id, carry) in &carried {
-            let held = kerf_engine::recipe::takes::mark_carried(&before, &applied.project, &self.dir, id)
-                .map_err(engine_error)?;
+            let held =
+                kerf_engine::recipe::takes::mark_carried(&before, &applied.project, &self.dir, id)
+                    .map_err(engine_error)?;
             let mut said = json!({"media": id, "recipe": carry.recipe, "takesHeld": held});
             if !carry.notes.is_empty() {
                 said["notes"] = json!(carry.notes);
@@ -4407,7 +4460,8 @@ impl KerfMcpRouter {
         }
         // And each workflow a recipe of it names: a new file, beside the ones before it.
         for workflow in &workflows {
-            if let Err(why) = kerf_shots::workflow::write(&workflow.copy.file, &workflow.copy.text) {
+            if let Err(why) = kerf_shots::workflow::write(&workflow.copy.file, &workflow.copy.text)
+            {
                 let _ = self.runtime.reject_proposal(&proposal_id);
                 return Err(McpError::new("INVALID_RECIPE", why));
             }
@@ -4418,7 +4472,8 @@ impl KerfMcpRouter {
             result["snapped"] = json!(applied.snapped);
         }
         if !workflows.is_empty() {
-            result["workflows"] = json!(workflows.iter().map(WorkflowKept::json).collect::<Vec<_>>());
+            result["workflows"] =
+                json!(workflows.iter().map(WorkflowKept::json).collect::<Vec<_>>());
         }
         if !carried_said.is_empty() {
             result["carried"] = json!(carried_said);
@@ -4676,9 +4731,11 @@ impl KerfMcpRouter {
         // Another editor finds a file by where it is, not by where the project is.
         let directory = self.runtime.directory();
         kerf_runtime::resolve_media_paths(&mut project, directory);
-        let output = directory
-            .join("deliveries")
-            .join(format!("{}.{}", file_stem(&name, &id), format.name()));
+        let output = directory.join("deliveries").join(format!(
+            "{}.{}",
+            file_stem(&name, &id),
+            format.name()
+        ));
         let written = kerf_interchange::export(&project, Some(&id), &output, format)
             .map_err(|error| McpError::new("HANDLER_FAILED", error.to_string()))?;
         let listed = |issues: &[kerf_interchange::InterchangeIssue]| -> Vec<Value> {

@@ -82,7 +82,11 @@ impl Moves {
                 let (width, height) = (drawn.width as usize, drawn.height as usize);
                 let (mut left, mut top, mut right, mut bottom) = (width, height, 0, 0);
                 for (index, pixel) in drawn.rgba.as_chunks::<4>().0.iter().enumerate() {
-                    if color.iter().zip(pixel).all(|(own, is)| own.abs_diff(*is) <= NEAR) {
+                    if color
+                        .iter()
+                        .zip(pixel)
+                        .all(|(own, is)| own.abs_diff(*is) <= NEAR)
+                    {
                         let (x, y) = (index % width, index / width);
                         (left, top) = (left.min(x), top.min(y));
                         (right, bottom) = (right.max(x + 1), bottom.max(y + 1));

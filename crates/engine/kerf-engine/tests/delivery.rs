@@ -248,7 +248,10 @@ fn a_later_pass_measures_only_what_changed_and_finds_the_same() {
     assert_eq!(progress.len(), 49, "{progress:?}");
     let fresh = tempfile::tempdir().expect("temp directory");
     let (measured, _) = pass(&after, fresh.path());
-    assert_eq!(edited, measured, "as a pass that measures every frame finds");
+    assert_eq!(
+        edited, measured,
+        "as a pass that measures every frame finds"
+    );
     assert_ne!(edited, first);
     // The black now runs from where the second clip starts.
     assert_eq!(first.black.ranges[0].start, 4.0, "{:?}", first.black);

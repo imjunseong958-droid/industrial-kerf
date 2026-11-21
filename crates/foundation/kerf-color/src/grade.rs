@@ -19,7 +19,10 @@
 //! working spaces, as in [`crate::transform`].
 
 use crate::spaces::{Gamut, WorkingSpace};
-use crate::{REFERENCE_WHITE_NITS, hlg_inverse_oetf, hlg_oetf, linear_to_srgb, pq_eotf, pq_inverse_eotf, srgb_to_linear};
+use crate::{
+    hlg_inverse_oetf, hlg_oetf, linear_to_srgb, pq_eotf, pq_inverse_eotf, srgb_to_linear,
+    REFERENCE_WHITE_NITS,
+};
 
 /// The signal a grading operation works on.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -38,8 +41,14 @@ impl GradeSpace {
         let white = white_nits.clamp(100.0, 10_000.0);
         match working {
             WorkingSpace::Rec709 => GradeSpace::Sdr,
-            WorkingSpace::Rec2100Pq => GradeSpace::Pq { white, norm: pq_inverse_eotf(white / 10_000.0) },
-            WorkingSpace::Rec2100Hlg => GradeSpace::Hlg { white, gamma: 1.2 + 0.42 * (white / 1000.0).log10() },
+            WorkingSpace::Rec2100Pq => GradeSpace::Pq {
+                white,
+                norm: pq_inverse_eotf(white / 10_000.0),
+            },
+            WorkingSpace::Rec2100Hlg => GradeSpace::Hlg {
+                white,
+                gamma: 1.2 + 0.42 * (white / 1000.0).log10(),
+            },
         }
     }
 
@@ -61,7 +70,10 @@ impl GradeSpace {
     pub fn encode(&self, c: [f32; 3]) -> [f32; 3] {
         match *self {
             GradeSpace::Sdr => c.map(|v| linear_to_srgb(v.max(0.0))),
-            GradeSpace::Pq { norm, .. } => c.map(|v| pq_inverse_eotf((v.max(0.0) * REFERENCE_WHITE_NITS as f32 / 10_000.0).min(1.0)) / norm),
+            GradeSpace::Pq { norm, .. } => c.map(|v| {
+                pq_inverse_eotf((v.max(0.0) * REFERENCE_WHITE_NITS as f32 / 10_000.0).min(1.0))
+                    / norm
+            }),
             GradeSpace::Hlg { white, gamma } => {
                 // display light normalised to the peak, inverse OOTF (scene light), OETF
                 let fd = c.map(|v| v.max(0.0) * REFERENCE_WHITE_NITS as f32 / white);
@@ -82,7 +94,9 @@ impl GradeSpace {
     pub fn decode(&self, v: [f32; 3]) -> [f32; 3] {
         match *self {
             GradeSpace::Sdr => v.map(|q| srgb_to_linear(q.clamp(0.0, 1.0))),
-            GradeSpace::Pq { norm, .. } => v.map(|q| pq_eotf((q * norm).clamp(0.0, 1.0)) * 10_000.0 / REFERENCE_WHITE_NITS as f32),
+            GradeSpace::Pq { norm, .. } => v.map(|q| {
+                pq_eotf((q * norm).clamp(0.0, 1.0)) * 10_000.0 / REFERENCE_WHITE_NITS as f32
+            }),
             GradeSpace::Hlg { white, gamma } => {
                 // graded highlights may go past signal 1.0 (the display peak); keep them up to
                 // 1.5 (≈ 28× the peak) instead of clipping
@@ -140,7 +154,9 @@ mod tests {
         let s = g.signal_of_nits(4000.0);
         assert!(s > 1.1);
         assert!((g.nits_of_signal(s) - 4000.0).abs() < 4.0);
-        for n in [0.05f32, 1.0, 26.0, 100.0, 203.0, 600.0, 1000.0, 2500.0, 10_000.0] {
+        for n in [
+            0.05f32, 1.0, 26.0, 100.0, 203.0, 600.0, 1000.0, 2500.0, 10_000.0,
+        ] {
             let back = g.decode(g.encode(grey(n)))[0] * REFERENCE_WHITE_NITS as f32;
             assert!((back - n).abs() <= n * 2e-3 + 1e-3, "{n} → {back}");
         }
@@ -150,16 +166,32 @@ mod tests {
     fn hlg_known_nit_values() {
         // a 1000 cd/m² HLG display: reference white 203 cd/m² = 75 % (BT.2408), the peak = 100 %
         let g = GradeSpace::new(WorkingSpace::Rec2100Hlg, 1000.0);
-        assert!((g.signal_of_nits(203.0) - 0.75).abs() < 2e-3, "{}", g.signal_of_nits(203.0));
+        assert!(
+            (g.signal_of_nits(203.0) - 0.75).abs() < 2e-3,
+            "{}",
+            g.signal_of_nits(203.0)
+        );
         assert!((g.signal_of_nits(1000.0) - 1.0).abs() < 1e-3);
         // 18 % grey card (≈ 26 cd/m² on that display, BT.2408 table) ≈ 38 %
-        assert!((g.signal_of_nits(26.0) - 0.38).abs() < 0.01, "{}", g.signal_of_nits(26.0));
+        assert!(
+            (g.signal_of_nits(26.0) - 0.38).abs() < 0.01,
+            "{}",
+            g.signal_of_nits(26.0)
+        );
         // colour round trip (the inverse OOTF depends on luminance)
         let c = [2.0f32, 0.5, 0.25];
         let back = g.decode(g.encode(c));
-        assert!(c.iter().zip(back).all(|(a, b)| (a - b).abs() < 1e-3 * a.max(1.0)), "{back:?}");
+        assert!(
+            c.iter()
+                .zip(back)
+                .all(|(a, b)| (a - b).abs() < 1e-3 * a.max(1.0)),
+            "{back:?}"
+        );
         // a brighter display has a higher system gamma (BT.2100: 1.2 + 0.42 log10(Lw / 1000))
-        let GradeSpace::Hlg { gamma, .. } = GradeSpace::new(WorkingSpace::Rec2100Hlg, 2000.0) else { panic!() };
+        let GradeSpace::Hlg { gamma, .. } = GradeSpace::new(WorkingSpace::Rec2100Hlg, 2000.0)
+        else {
+            panic!()
+        };
         assert!((gamma - 1.2 - 0.42 * 2f32.log10()).abs() < 1e-5);
     }
 }

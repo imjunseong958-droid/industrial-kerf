@@ -84,7 +84,9 @@ fn write(file: &Path, prefix: &str, bytes: &[u8]) {
             && path
                 .file_name()
                 .is_some_and(|name| name.to_string_lossy().starts_with(prefix))
-            && path.extension().is_none_or(|extension| extension != "partial");
+            && path
+                .extension()
+                .is_none_or(|extension| extension != "partial");
         if stale {
             let _ = fs::remove_file(path);
         }

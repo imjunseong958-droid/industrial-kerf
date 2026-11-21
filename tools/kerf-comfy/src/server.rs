@@ -134,12 +134,19 @@ const PLAIN: [&str; 5] = ["INT", "FLOAT", "STRING", "BOOLEAN", "COMBO"];
 pub fn taken(input: &serde_json::Map<String, Value>) -> serde_json::Map<String, Value> {
     let mut taken = serde_json::Map::new();
     for group in ["required", "optional"] {
-        for (name, said) in input.get(group).and_then(Value::as_object).into_iter().flatten() {
+        for (name, said) in input
+            .get(group)
+            .and_then(Value::as_object)
+            .into_iter()
+            .flatten()
+        {
             let (kind, more) = (&said[0], &said[1]);
             // A list of values to choose among, as a list or as a COMBO with its options.
-            let choices = kind
-                .as_array()
-                .or_else(|| (kind == "COMBO").then(|| more["options"].as_array()).flatten());
+            let choices = kind.as_array().or_else(|| {
+                (kind == "COMBO")
+                    .then(|| more["options"].as_array())
+                    .flatten()
+            });
             if let Some(choices) = choices {
                 taken.insert(name.clone(), serde_json::json!({"choices": choices}));
             } else if let Some(linked) = kind.as_str().filter(|kind| !PLAIN.contains(kind)) {
@@ -190,7 +197,11 @@ impl Server {
                 .duration_since(std::time::UNIX_EPOCH)
                 .map_or(0, |since| since.as_millis())
         );
-        Self { agent, address, client }
+        Self {
+            agent,
+            address,
+            client,
+        }
     }
 
     /// What the server says of this run's jobs while they run, where it can be listened to.
@@ -198,7 +209,8 @@ impl Server {
         let key = self.address.key_header();
         crate::progress::follow(
             self.url(),
-            key.as_ref().map(|(name, value)| (name.as_str(), value.as_str())),
+            key.as_ref()
+                .map(|(name, value)| (name.as_str(), value.as_str())),
             &self.client,
         )
     }

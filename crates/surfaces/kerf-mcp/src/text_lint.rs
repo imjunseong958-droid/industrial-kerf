@@ -166,7 +166,8 @@ fn axes_keyed(clip: &Clip) -> bool {
 /// draw nothing. One turned off is not among them, as nothing was asked of the font.
 pub(crate) fn features_unread(font: &str, style: &str, features: &str) -> (String, Vec<String>) {
     let family = family_of(font);
-    let face = fonts::face(fonts::resolve(if family.is_empty() { "Inter" } else { family }, style).face);
+    let face =
+        fonts::face(fonts::resolve(if family.is_empty() { "Inter" } else { family }, style).face);
     let has = face.features();
     let mut unread: Vec<String> = kerf_model::parse_features(features)
         .unwrap_or_default()
@@ -661,7 +662,9 @@ fn crop_cuts(whole: &Drawn, cropped: &Drawn) -> bool {
     let ink = |drawn: &Drawn| {
         drawn
             .2
-            .as_chunks::<4>().0.iter()
+            .as_chunks::<4>()
+            .0
+            .iter()
             .filter(|pixel| f64::from(pixel[0]) / 255.0 >= GLYPH)
             .count() as f64
     };
@@ -978,7 +981,10 @@ fn title_font(clip: &Clip) -> (String, String) {
         _ => 0.0,
     };
     let style = kerf_model::title_face(text("style").as_deref().unwrap_or(""), weight);
-    (text("font").unwrap_or_else(|| "sans-serif".to_owned()), style)
+    (
+        text("font").unwrap_or_else(|| "sans-serif".to_owned()),
+        style,
+    )
 }
 
 /// Characters that only join or vary others, which no font needs to draw.
@@ -1007,12 +1013,19 @@ pub(crate) fn missing_glyphs(text: &str, font: &str, style: &str) -> Vec<char> {
     starts.dedup();
     let mut missing: Vec<char> = Vec::new();
     for glyph in laid.glyphs.iter().filter(|glyph| glyph.id == 0) {
-        let end = starts.iter().find(|start| **start > glyph.cluster).copied().unwrap_or(text.len());
+        let end = starts
+            .iter()
+            .find(|start| **start > glyph.cluster)
+            .copied()
+            .unwrap_or(text.len());
         let Some(piece) = text.get(glyph.cluster..end) else {
             continue;
         };
         let face = fonts::face(glyph.face);
-        let mut lacking: Vec<char> = piece.chars().filter(|c| !joins(*c) && !face.covers(*c)).collect();
+        let mut lacking: Vec<char> = piece
+            .chars()
+            .filter(|c| !joins(*c) && !face.covers(*c))
+            .collect();
         if lacking.is_empty() {
             lacking.extend(piece.chars().find(|c| !joins(*c)));
         }
@@ -1038,8 +1051,11 @@ pub(crate) fn undrawable(sequence: &Sequence, findings: &mut Vec<Finding>) {
         if missing.is_empty() {
             continue;
         }
-        let mut listed: Vec<String> =
-            missing.iter().take(LISTED).map(|c| format!("\"{c}\" (U+{:04X})", *c as u32)).collect();
+        let mut listed: Vec<String> = missing
+            .iter()
+            .take(LISTED)
+            .map(|c| format!("\"{c}\" (U+{:04X})", *c as u32))
+            .collect();
         if missing.len() > LISTED {
             listed.push(format!("{} more", missing.len() - LISTED));
         }

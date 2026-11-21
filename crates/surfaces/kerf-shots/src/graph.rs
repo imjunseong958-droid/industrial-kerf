@@ -11,9 +11,14 @@ use std::path::Path;
 /// (`notes`), as [`kerf_engine::recipe::graph`] lays it out. A model its
 /// entry runs with a program whose workflow can be opened says so under
 /// `runner`: which program, and which workflow.
-pub fn shown(project: &Project, directory: &Path, id: &str, models: &Models) -> Result<Value, String> {
-    let graph =
-        kerf_engine::recipe::graph(project, directory, id, models).map_err(|error| error.to_string())?;
+pub fn shown(
+    project: &Project,
+    directory: &Path,
+    id: &str,
+    models: &Models,
+) -> Result<Value, String> {
+    let graph = kerf_engine::recipe::graph(project, directory, id, models)
+        .map_err(|error| error.to_string())?;
     let mut shown = serde_json::to_value(&graph).map_err(|error| error.to_string())?;
     // Which workflow a model is run with is the person's own models file's to say.
     for node in shown["nodes"].as_array_mut().into_iter().flatten() {
@@ -107,9 +112,17 @@ pub fn step(
                 .sequences()
                 .next()
                 .map(str::to_owned)
-                .or_else(|| project.sequences.first().map(|sequence| sequence.id.to_string()))
+                .or_else(|| {
+                    project
+                        .sequences
+                        .first()
+                        .map(|sequence| sequence.id.to_string())
+                })
                 .ok_or("the project has no sequence to draw a guide from")?;
-            Ok((before_last, format!("render {sequence} {{{}}} pass=depth", fresh("guide", "mp4"))))
+            Ok((
+                before_last,
+                format!("render {sequence} {{{}}} pass=depth", fresh("guide", "mp4")),
+            ))
         }
         "model" => {
             let asked = read.steps.iter().rev().find_map(|step| match step {
@@ -138,7 +151,9 @@ pub fn step(
                     Step::Generate(ask) => Some(&ask.out),
                     _ => None,
                 })
-                .filter(|name| name.ends_with(".mp4") || name.ends_with(".mov") || name.ends_with(".webm"))
+                .filter(|name| {
+                    name.ends_with(".mp4") || name.ends_with(".mov") || name.ends_with(".webm")
+                })
                 .collect();
             if parts.len() < 2 {
                 return Err("a join sets two or more pictures in motion that models made end to end, and the steps make fewer: add the parts first, each a model with `out={name.mp4}`".to_owned());
@@ -149,7 +164,9 @@ pub fn step(
                 format!("join {} {{{}}}", named.join(" "), fresh("joined", "mp4")),
             ))
         }
-        other => Err(format!("`{other}` is not a step to add: a guide, a model, or a join")),
+        other => Err(format!(
+            "`{other}` is not a step to add: a guide, a model, or a join"
+        )),
     }
 }
 

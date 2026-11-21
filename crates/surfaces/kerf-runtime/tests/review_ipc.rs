@@ -225,7 +225,10 @@ fn a_stale_proposal_is_brought_forward_by_either_client_or_refused_by_name() {
     let seen = mcp.get_state().unwrap();
     assert_eq!(seen.proposals, forwarded.proposals);
     let v2 = &seen.proposals[0];
-    assert_eq!((v2.version, v2.supersedes.as_deref()), (2, Some(theirs.as_str())));
+    assert_eq!(
+        (v2.version, v2.supersedes.as_deref()),
+        (2, Some(theirs.as_str()))
+    );
     assert_eq!(v2.freshness, kerf_runtime::ProposalFreshness::Current);
     assert_eq!(v2.author, agent());
     assert!(v2.script.contains("at=00:00:03:00"), "{}", v2.script);

@@ -89,7 +89,13 @@ impl BusStream {
         );
         frame.set_rate(SAMPLE_RATE);
         frame.set_pts(Some(at));
-        for (out, sample) in frame.data_mut(0).as_chunks_mut::<4>().0.iter_mut().zip(input) {
+        for (out, sample) in frame
+            .data_mut(0)
+            .as_chunks_mut::<4>()
+            .0
+            .iter_mut()
+            .zip(input)
+        {
             out.copy_from_slice(&sample.to_ne_bytes());
         }
         let added = graph
@@ -543,7 +549,13 @@ impl Resampler {
         frame.set_rate(SAMPLE_RATE);
         frame.set_pts(Some(self.pts));
         self.pts += frames as i64;
-        for (bytes, sample) in frame.data_mut(0).as_chunks_mut::<4>().0.iter_mut().zip(mixed) {
+        for (bytes, sample) in frame
+            .data_mut(0)
+            .as_chunks_mut::<4>()
+            .0
+            .iter_mut()
+            .zip(mixed)
+        {
             bytes.copy_from_slice(&sample.to_ne_bytes());
         }
         self.graph
@@ -638,7 +650,9 @@ mod tests {
         run(ffmpeg, &args);
         std::fs::read(out)
             .expect("rendered sound")
-            .as_chunks::<4>().0.iter()
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|bytes| f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
             .collect()
     }

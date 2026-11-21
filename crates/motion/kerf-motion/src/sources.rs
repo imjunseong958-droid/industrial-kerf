@@ -33,7 +33,8 @@ impl PictureSource for ShapeSource {
         let (shape, across) = shape_of(clip, run);
         let (contours, closed) = shape.contours();
         // What `Shape::draw` puts down: a fill inside a closed outline, and a stroke along it.
-        let fills = shape.fill[3] > 0.0 && closed && contours.iter().any(|contour| contour.len() >= 3);
+        let fills =
+            shape.fill[3] > 0.0 && closed && contours.iter().any(|contour| contour.len() >= 3);
         let strokes = shape.stroke[3] > 0.0 && shape.stroke_width > 0.0;
         if !fills && !strokes {
             return None;

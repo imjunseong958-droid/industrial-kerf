@@ -40,7 +40,10 @@ fn ok(router: &KerfMcpRouter, name: &str, arguments: Value) -> Value {
 fn refused(router: &KerfMcpRouter, name: &str, arguments: Value) -> String {
     let response = router.call(name, arguments);
     assert_eq!(response["ok"], false, "{name}: {response}");
-    response["error"]["message"].as_str().unwrap_or_default().to_owned()
+    response["error"]["message"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned()
 }
 
 /// A ComfyUI that says what each kind of node takes, and keeps what it was asked. Its
@@ -126,11 +129,19 @@ fn a_blank_is_the_steps_to_fill_whatever_the_server_lists_for_its_input() {
 
     // The workflow, with what the server said each input takes beside it: a blank's input
     // and a value's alike.
-    let workflow = ok(&router, "look", json!({"workflow": {"media": "shot", "line": 1}}));
+    let workflow = ok(
+        &router,
+        "look",
+        json!({"workflow": {"media": "shot", "line": 1}}),
+    );
     assert_eq!(workflow["taken"], true, "{workflow}");
     assert!(workflow.get("takenError").is_none(), "{workflow}");
     assert!(
-        asked.lock().unwrap().iter().any(|line| line == "GET /object_info/UNETLoader"),
+        asked
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|line| line == "GET /object_info/UNETLoader"),
         "the server named in KERF_COMFY was not the one asked: {asked:?}"
     );
     let loader = workflow["nodes"]
@@ -148,12 +159,16 @@ fn a_blank_is_the_steps_to_fill_whatever_the_server_lists_for_its_input() {
             .unwrap_or_else(|| panic!("no input `{name}` in {loader}"))
     };
     assert_eq!(input("unet_name")["blanks"], json!(["unet"]));
-    assert_eq!(input("unet_name")["choices"], json!(["a.safetensors", "b.safetensors"]));
-    assert_eq!(input("weight_dtype")["choices"], json!(["default", "fp8_e4m3fn"]));
+    assert_eq!(
+        input("unet_name")["choices"],
+        json!(["a.safetensors", "b.safetensors"])
+    );
+    assert_eq!(
+        input("weight_dtype")["choices"],
+        json!(["default", "fp8_e4m3fn"])
+    );
     let loader = loader["id"].as_str().unwrap().to_owned();
-    let set = |input: &str, value: &str| {
-        json!({"workflowSet": [{"media": "shot", "line": 1, "node": loader, "input": input, "value": value}]})
-    };
+    let set = |input: &str, value: &str| json!({"workflowSet": [{"media": "shot", "line": 1, "node": loader, "input": input, "value": value}]});
 
     // A value for the blank's input is refused as the step's to fill, with where it is
     // set, and not for being off the server's list: one that is on it is refused the same.
@@ -167,8 +182,14 @@ fn a_blank_is_the_steps_to_fill_whatever_the_server_lists_for_its_input() {
     }
     // A value that is the workflow's own is held to the server's list.
     let said = refused(&router, "edit", set("weight_dtype", "fp64"));
-    assert!(said.contains("takes one of default, fp8_e4m3fn, not \"fp64\""), "{said}");
+    assert!(
+        said.contains("takes one of default, fp8_e4m3fn, not \"fp64\""),
+        "{said}"
+    );
     assert_eq!(files(), 0, "nothing is kept of what was refused");
     let kept = ok(&router, "edit", set("weight_dtype", "fp8_e4m3fn"));
-    assert_eq!(kept["workflows"][0]["keptAs"], "shots/shot.video.comfy.json", "{kept}");
+    assert_eq!(
+        kept["workflows"][0]["keptAs"], "shots/shot.video.comfy.json",
+        "{kept}"
+    );
 }

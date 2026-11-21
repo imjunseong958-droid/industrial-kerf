@@ -542,9 +542,7 @@ impl Recipe {
             .steps
             .into_iter()
             .map(|step| match step {
-                Step::Generate(ask) => {
-                    Ok(Step::Generate(Box::new(told(&ask, &cast, directory)?)))
-                }
+                Step::Generate(ask) => Ok(Step::Generate(Box::new(told(&ask, &cast, directory)?))),
                 other => Ok(other),
             })
             .collect::<Result<Vec<_>>>()?;

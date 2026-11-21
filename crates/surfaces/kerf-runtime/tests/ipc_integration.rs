@@ -4,8 +4,8 @@
 #![cfg(any(unix, windows))]
 
 use kerf_runtime::{
-    EndpointAddress, RuntimeClient, RuntimeLease,
-    StartRenderOptions, StateSnapshot, MAX_REQUEST_BYTES,
+    EndpointAddress, RuntimeClient, RuntimeLease, StartRenderOptions, StateSnapshot,
+    MAX_REQUEST_BYTES,
 };
 use std::fs;
 use std::io::{Read, Write};

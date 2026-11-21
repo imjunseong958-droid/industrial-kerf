@@ -18,7 +18,15 @@ const BOX: [f64; 4] = [0.625, 0.25, 0.875, 0.5];
 fn boxed(dir: &Path) -> String {
     let path = dir.join("boxed.mp4");
     let output = Command::new(ffmpeg())
-        .args(["-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i"])
+        .args([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+        ])
         .arg("color=c=black:s=160x120:r=24:d=1,drawbox=x=100:y=30:w=40:h=30:color=white:t=fill")
         .args(["-c:v", "libx264", "-pix_fmt", "yuv420p"])
         .arg(&path)
@@ -67,7 +75,12 @@ fn said(compositor: &Compositor, frame: i64) -> [f64; 4] {
         .lands("c1", Rate::FPS_24.time_of(frame))
         .expect("it lands");
     let mut around = [f64::MAX, f64::MAX, f64::MIN, f64::MIN];
-    for corner in [[BOX[0], BOX[1]], [BOX[2], BOX[1]], [BOX[2], BOX[3]], [BOX[0], BOX[3]]] {
+    for corner in [
+        [BOX[0], BOX[1]],
+        [BOX[2], BOX[1]],
+        [BOX[2], BOX[3]],
+        [BOX[0], BOX[3]],
+    ] {
         let [x, y] = landing.on_frame(corner);
         around = [
             around[0].min(x * 320.0),
@@ -135,12 +148,27 @@ fn a_landing_says_which_frame_shows_and_what_is_done_to_it() {
     let later = compositor.lands("c1", at(5)).unwrap();
     assert_eq!(later.frame, 16);
     assert_eq!(later.kept, [0.1, 0.0, 1.0, 0.75]);
-    assert!((later.opacity - 0.5).abs() < 1e-9 && later.masked, "{later:?}");
+    assert!(
+        (later.opacity - 0.5).abs() < 1e-9 && later.masked,
+        "{later:?}"
+    );
     // A look is the effects it stands for.
     assert_eq!(later.effects, ["color.basic", "blur.directional"]);
     // What does not show then, what a camera places, and what is no footage are refused.
-    assert!(compositor.lands("c1", at(6)).unwrap_err().contains("does not show then"));
-    assert!(compositor.lands("c2", at(6)).unwrap_err().contains("in depth"));
-    assert!(compositor.lands("c3", at(12)).unwrap_err().contains("plays no footage"));
-    assert!(compositor.lands("c9", at(0)).unwrap_err().contains("no clip of this sequence"));
+    assert!(compositor
+        .lands("c1", at(6))
+        .unwrap_err()
+        .contains("does not show then"));
+    assert!(compositor
+        .lands("c2", at(6))
+        .unwrap_err()
+        .contains("in depth"));
+    assert!(compositor
+        .lands("c3", at(12))
+        .unwrap_err()
+        .contains("plays no footage"));
+    assert!(compositor
+        .lands("c9", at(0))
+        .unwrap_err()
+        .contains("no clip of this sequence"));
 }

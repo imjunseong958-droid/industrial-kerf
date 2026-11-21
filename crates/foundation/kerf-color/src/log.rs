@@ -138,7 +138,11 @@ pub fn normalized_from_signal(s: f64, range: Range, d: Domain) -> f64 {
 
 #[cfg(test)]
 pub fn slog3_encode(x: f64) -> f64 {
-    if x >= 0.011_25 { (420.0 + ((x + 0.01) / (0.18 + 0.01)).log10() * 261.5) / 1023.0 } else { (x * (171.210_294_692_9 - 95.0) / 0.011_25 + 95.0) / 1023.0 }
+    if x >= 0.011_25 {
+        (420.0 + ((x + 0.01) / (0.18 + 0.01)).log10() * 261.5) / 1023.0
+    } else {
+        (x * (171.210_294_692_9 - 95.0) / 0.011_25 + 95.0) / 1023.0
+    }
 }
 pub fn slog3_decode(y: f64) -> f64 {
     if y >= 171.210_294_692_9 / 1023.0 {
@@ -157,10 +161,18 @@ const VLOG_D: f64 = 0.598_206;
 
 #[cfg(test)]
 pub fn vlog_encode(x: f64) -> f64 {
-    if x < 0.01 { 5.6 * x + 0.125 } else { VLOG_C * (x + VLOG_B).log10() + VLOG_D }
+    if x < 0.01 {
+        5.6 * x + 0.125
+    } else {
+        VLOG_C * (x + VLOG_B).log10() + VLOG_D
+    }
 }
 pub fn vlog_decode(y: f64) -> f64 {
-    if y < 0.181 { (y - 0.125) / 5.6 } else { 10f64.powf((y - VLOG_D) / VLOG_C) - VLOG_B }
+    if y < 0.181 {
+        (y - 0.125) / 5.6
+    } else {
+        10f64.powf((y - VLOG_D) / VLOG_C) - VLOG_B
+    }
 }
 
 // ---------------------------------------------------------------- Canon Log 2 / 3
@@ -170,7 +182,11 @@ pub fn vlog_decode(y: f64) -> f64 {
 #[cfg(test)]
 pub fn clog2_encode(r: f64) -> f64 {
     let x = r / 0.9;
-    if x < 0.0 { -0.241_360_77 * (-x * 87.099_375_46 + 1.0).log10() + 0.092_864_125 } else { 0.241_360_77 * (x * 87.099_375_46 + 1.0).log10() + 0.092_864_125 }
+    if x < 0.0 {
+        -0.241_360_77 * (-x * 87.099_375_46 + 1.0).log10() + 0.092_864_125
+    } else {
+        0.241_360_77 * (x * 87.099_375_46 + 1.0).log10() + 0.092_864_125
+    }
 }
 pub fn clog2_decode(y: f64) -> f64 {
     let x = if y < 0.092_864_125 {
@@ -206,16 +222,26 @@ pub fn clog3_decode(y: f64) -> f64 {
 // ---------------------------------------------------------------- ARRI LogC3 (EI 800)
 // ARRI, "ALEXA Log C Curve — Usage in VFX" (2017), table for EI 800, scene-linear variant.
 
-const LOGC3: (f64, f64, f64, f64, f64, f64, f64) = (0.010_591, 5.555_556, 0.052_272, 0.247_190, 0.385_537, 5.367_655, 0.092_809);
+const LOGC3: (f64, f64, f64, f64, f64, f64, f64) = (
+    0.010_591, 5.555_556, 0.052_272, 0.247_190, 0.385_537, 5.367_655, 0.092_809,
+);
 
 #[cfg(test)]
 pub fn logc3_encode(x: f64) -> f64 {
     let (cut, a, b, c, d, e, f) = LOGC3;
-    if x > cut { c * (a * x + b).log10() + d } else { e * x + f }
+    if x > cut {
+        c * (a * x + b).log10() + d
+    } else {
+        e * x + f
+    }
 }
 pub fn logc3_decode(t: f64) -> f64 {
     let (cut, a, b, c, d, e, f) = LOGC3;
-    if t > e * cut + f { (10f64.powf((t - d) / c) - b) / a } else { (t - f) / e }
+    if t > e * cut + f {
+        (10f64.powf((t - d) / c) - b) / a
+    } else {
+        (t - f) / e
+    }
 }
 
 // ---------------------------------------------------------------- ARRI LogC4
@@ -232,17 +258,32 @@ fn logc4_consts() -> (f64, f64, f64, f64, f64) {
 #[cfg(test)]
 pub fn logc4_encode(x: f64) -> f64 {
     let (a, b, c, s, t) = logc4_consts();
-    if x >= t { ((a * x + 64.0).log2() - 6.0) / 14.0 * b + c } else { (x - t) / s }
+    if x >= t {
+        ((a * x + 64.0).log2() - 6.0) / 14.0 * b + c
+    } else {
+        (x - t) / s
+    }
 }
 pub fn logc4_decode(y: f64) -> f64 {
     let (a, b, c, s, t) = logc4_consts();
-    if y >= 0.0 { (2f64.powf(14.0 * (y - c) / b + 6.0) - 64.0) / a } else { y * s + t }
+    if y >= 0.0 {
+        (2f64.powf(14.0 * (y - c) / b + 6.0) - 64.0) / a
+    } else {
+        y * s + t
+    }
 }
 
 // ---------------------------------------------------------------- Apple Log
 // Apple, "Apple Log Profile" white paper (2023).
 
-const APPLE: (f64, f64, f64, f64, f64, f64) = (-0.056_410_88, 0.01, 47.287_112_36, 0.009_640_52, 0.085_504_79, 0.693_369_45);
+const APPLE: (f64, f64, f64, f64, f64, f64) = (
+    -0.056_410_88,
+    0.01,
+    47.287_112_36,
+    0.009_640_52,
+    0.085_504_79,
+    0.693_369_45,
+);
 
 #[cfg(test)]
 pub fn apple_log_encode(r: f64) -> f64 {
@@ -272,10 +313,18 @@ pub fn apple_log_decode(p: f64) -> f64 {
 
 #[cfg(test)]
 pub fn dlog_encode(x: f64) -> f64 {
-    if x <= 0.0078 { 6.025 * x + 0.0929 } else { (x * 0.9892 + 0.0108).log10() * 0.256_663 + 0.584_555 }
+    if x <= 0.0078 {
+        6.025 * x + 0.0929
+    } else {
+        (x * 0.9892 + 0.0108).log10() * 0.256_663 + 0.584_555
+    }
 }
 pub fn dlog_decode(y: f64) -> f64 {
-    if y <= 0.14 { (y - 0.0929) / 6.025 } else { (10f64.powf(3.896_16 * y - 2.277_52) - 0.0108) / 0.9892 }
+    if y <= 0.14 {
+        (y - 0.0929) / 6.025
+    } else {
+        (10f64.powf(3.896_16 * y - 2.277_52) - 0.0108) / 0.9892
+    }
 }
 
 // ---------------------------------------------------------------- Fujifilm F-Log / F-Log2
@@ -321,10 +370,18 @@ const FLOG2: Fujifilm = Fujifilm {
 
 #[cfg(test)]
 fn fujifilm_encode(k: &Fujifilm, x: f64) -> f64 {
-    if x >= k.cut1 { k.c * (k.a * x + k.b).log10() + k.d } else { k.e * x + k.f }
+    if x >= k.cut1 {
+        k.c * (k.a * x + k.b).log10() + k.d
+    } else {
+        k.e * x + k.f
+    }
 }
 fn fujifilm_decode(k: &Fujifilm, y: f64) -> f64 {
-    if y >= k.cut2 { 10f64.powf((y - k.d) / k.c) / k.a - k.b / k.a } else { (y - k.f) / k.e }
+    if y >= k.cut2 {
+        10f64.powf((y - k.d) / k.c) / k.a - k.b / k.a
+    } else {
+        (y - k.f) / k.e
+    }
 }
 
 #[cfg(test)]
@@ -339,7 +396,10 @@ mod tests {
                 let x = -0.01 + (i as f64 / 400.0).powi(3) * 8.0;
                 let y = c.encode(x);
                 let back = c.decode(y);
-                assert!((back - x).abs() <= 1e-6 * x.abs().max(1.0) + 1e-9, "{c:?}: {x} → {y} → {back}");
+                assert!(
+                    (back - x).abs() <= 1e-6 * x.abs().max(1.0) + 1e-9,
+                    "{c:?}: {x} → {y} → {back}"
+                );
             }
             // monotone signal
             let mut prev = f64::NEG_INFINITY;
@@ -358,7 +418,9 @@ mod tests {
             Domain::CodeValue => c.encode(x) * 1023.0,
             Domain::Ire => 64.0 + c.encode(x) * 876.0,
         };
-        let close = |a: f64, b: f64, tol: f64, what: &str| assert!((a - b).abs() <= tol, "{what}: {a} vs {b}");
+        let close = |a: f64, b: f64, tol: f64, what: &str| {
+            assert!((a - b).abs() <= tol, "{what}: {a} vs {b}")
+        };
         // Sony: 0 % → 95, 18 % → 420, 90 % → 598 (Technical Summary, table 1).
         close(cv(LogCurve::SLog3, 0.0), 95.0, 0.01, "S-Log3 0%");
         close(cv(LogCurve::SLog3, 0.18), 420.0, 0.01, "S-Log3 18%");
@@ -374,11 +436,31 @@ mod tests {
         close(LogCurve::LogC4.encode(0.18), 0.278_4, 0.0005, "LogC4 18%");
         close(LogCurve::LogC4.encode(0.0), 95.0 / 1023.0, 1e-9, "LogC4 0");
         // Canon: 18 % grey → 39.2 % IRE (Log 2, ±0.7) and 34.3 % IRE (Log 3).
-        close(LogCurve::CLog2.encode(0.18) * 100.0, 39.2, 0.7, "C-Log2 18%");
-        close(LogCurve::CLog3.encode(0.18) * 100.0, 34.3, 0.2, "C-Log3 18%");
+        close(
+            LogCurve::CLog2.encode(0.18) * 100.0,
+            39.2,
+            0.7,
+            "C-Log2 18%",
+        );
+        close(
+            LogCurve::CLog3.encode(0.18) * 100.0,
+            34.3,
+            0.2,
+            "C-Log3 18%",
+        );
         // Apple Log: 18 % grey → 0.488 (white paper figure), black 0 → R0 floor.
-        close(LogCurve::AppleLog.encode(0.18), 0.488, 0.001, "Apple Log 18%");
-        close(LogCurve::AppleLog.encode(-0.056_410_88), 0.0, 1e-12, "Apple Log R0");
+        close(
+            LogCurve::AppleLog.encode(0.18),
+            0.488,
+            0.001,
+            "Apple Log 18%",
+        );
+        close(
+            LogCurve::AppleLog.encode(-0.056_410_88),
+            0.0,
+            1e-12,
+            "Apple Log R0",
+        );
         // DJI D-Log: 0 → 0.0929, 18 % → 0.398 (white paper).
         close(LogCurve::DLog.encode(0.0), 0.0929, 1e-9, "D-Log 0");
         close(LogCurve::DLog.encode(0.18), 0.398, 0.002, "D-Log 18%");
@@ -390,8 +472,18 @@ mod tests {
         close(cv(LogCurve::FLog2, 0.18), 400.0, 0.5, "F-Log2 18%");
         close(cv(LogCurve::FLog2, 0.9), 570.0, 0.5, "F-Log2 90%");
         // the decoding cut is where the encoding's two pieces meet (within the published rounding)
-        close(LogCurve::FLog.encode(0.000_89), 0.100_537_775_223_865, 2e-4, "F-Log cut");
-        close(LogCurve::FLog2.encode(0.000_889), 0.100_686_685_370_811, 2e-4, "F-Log2 cut");
+        close(
+            LogCurve::FLog.encode(0.000_89),
+            0.100_537_775_223_865,
+            2e-4,
+            "F-Log cut",
+        );
+        close(
+            LogCurve::FLog2.encode(0.000_889),
+            0.100_686_685_370_811,
+            2e-4,
+            "F-Log2 cut",
+        );
     }
 
     #[test]
@@ -399,7 +491,10 @@ mod tests {
         for r in [Range::Limited, Range::Full] {
             for d in [Domain::CodeValue, Domain::Ire] {
                 for v in [0.0, 0.25, 0.8, 1.0] {
-                    assert!((normalized_from_signal(signal_from_normalized(v, r, d), r, d) - v).abs() < 1e-12);
+                    assert!(
+                        (normalized_from_signal(signal_from_normalized(v, r, d), r, d) - v).abs()
+                            < 1e-12
+                    );
                 }
             }
         }

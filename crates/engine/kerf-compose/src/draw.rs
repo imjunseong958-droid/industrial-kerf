@@ -44,9 +44,9 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
+mod bevel;
 mod focus;
 mod gpu;
-mod bevel;
 mod three_d;
 
 pub use three_d::world::{Form, InDepth, World};
@@ -608,8 +608,14 @@ impl Drawing {
 
     /// A clear picture of `w` by `h`: one kept, or a new one.
     fn clear_picture(&self, w: usize, h: usize) -> Image {
-        let mut kept = self.clear.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        match kept.iter().position(|picture| (picture.w, picture.h) == (w, h)) {
+        let mut kept = self
+            .clear
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        match kept
+            .iter()
+            .position(|picture| (picture.w, picture.h) == (w, h))
+        {
             Some(at) => kept.swap_remove(at),
             None => Image::new(w, h),
         }
@@ -617,7 +623,10 @@ impl Drawing {
 
     /// Keep `picture`, clear again, for [`Self::clear_picture`]: as many as are drawn on at once.
     fn keep_clear(&self, picture: Image) {
-        let mut kept = self.clear.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut kept = self
+            .clear
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if kept.len() < 16 {
             kept.push(picture);
         }
@@ -839,7 +848,10 @@ impl Drawing {
         }
         if let Some(color) = self.matte {
             rgba.par_chunks_mut(4).for_each(|pixel| {
-                let its = color.iter().zip(pixel.iter()).all(|(a, b)| a.abs_diff(*b) <= NEAR);
+                let its = color
+                    .iter()
+                    .zip(pixel.iter())
+                    .all(|(a, b)| a.abs_diff(*b) <= NEAR);
                 pixel[..3].fill(if its { u8::MAX } else { 0 });
             });
         }
@@ -924,8 +936,14 @@ impl Drawing {
                 // Where in its own pixels its picture is, where its numbers say: all of what
                 // its crop leaves of a picture that is opaque, and a shape's own outline.
                 let whole = (f64::from(plan.size.0), f64::from(plan.size.1));
-                let crop = crop_rect(plan, time, whole, 1.0, (plan.size.0 as usize, plan.size.1 as usize))
-                    .unwrap_or_else(|| Rect::new(0.0, 0.0, whole.0, whole.1));
+                let crop = crop_rect(
+                    plan,
+                    time,
+                    whole,
+                    1.0,
+                    (plan.size.0 as usize, plan.size.1 as usize),
+                )
+                .unwrap_or_else(|| Rect::new(0.0, 0.0, whole.0, whole.1));
                 let held = match &plan.source {
                     _ if !plan.clip.masks.is_empty() => None,
                     Source::Mesh => Some(None),
@@ -936,12 +954,14 @@ impl Drawing {
                     Source::Drawn(source) => {
                         let size = (plan.size.0 as usize, plan.size.1 as usize);
                         let frame = Rect::new(0.0, 0.0, whole.0, whole.1);
-                        source.extent(&plan.clip, &SourceRun::new(time, size)).and_then(|extent| {
-                            let drawn = extent.rect;
-                            let within = crop_past(plan, time, frame, drawn).unwrap_or(drawn);
-                            let some = within.w > 0.0 && within.h > 0.0;
-                            some.then_some(Some((within, extent.filled)))
-                        })
+                        source
+                            .extent(&plan.clip, &SourceRun::new(time, size))
+                            .and_then(|extent| {
+                                let drawn = extent.rect;
+                                let within = crop_past(plan, time, frame, drawn).unwrap_or(drawn);
+                                let some = within.w > 0.0 && within.h > 0.0;
+                                some.then_some(Some((within, extent.filled)))
+                            })
                     }
                     _ => None,
                 };
@@ -961,9 +981,9 @@ impl Drawing {
                     .then_some(moved.d)
                     .and_then(|fall| scene.falls(plan, fall));
                 let to_output = moved.then_apply(&own);
-                world
-                    .clips
-                    .push(three_d::world::of(&scene, plan, &to_output, time, held, fall));
+                world.clips.push(three_d::world::of(
+                    &scene, plan, &to_output, time, held, fall,
+                ));
             }
         }
         world
@@ -1302,8 +1322,11 @@ impl Drawing {
                     let time = at - shown.plan.clip.start;
                     let opacity = number(&param(&shown.plan.clip, "opacity").value_at(time)) as f32;
                     (opacity > 0.0).then(|| {
-                        let to_output = Affine::scale(scale, scale)
-                            .then_apply(&self.geometry(plan, &shown.plan, time));
+                        let to_output = Affine::scale(scale, scale).then_apply(&self.geometry(
+                            plan,
+                            &shown.plan,
+                            time,
+                        ));
                         three_d::mesh::Standing::of(&scene, &shown.plan, &to_output, time, opacity)
                     })
                 })
@@ -1732,7 +1755,10 @@ impl Drawing {
                 0.0
             }
         };
-        let beyond = (past(kept.x, kept.right(), w), past(kept.y, kept.bottom(), h));
+        let beyond = (
+            past(kept.x, kept.right(), w),
+            past(kept.y, kept.bottom(), h),
+        );
         if beyond == (0.0, 0.0) {
             return None;
         }
@@ -1864,7 +1890,10 @@ impl Drawing {
             }
         } else {
             let (x, y) = frame.map_or((0.0, 0.0), |frame| (frame.x, frame.y));
-            let masks = past_frame(mask::prepare(&plan.clip.masks, size, per_source, time), (x, y));
+            let masks = past_frame(
+                mask::prepare(&plan.clip.masks, size, per_source, time),
+                (x, y),
+            );
             if let Some(covered) = mask::coverage(&masks, picture.w, picture.h) {
                 Arc::make_mut(&mut picture).mul_coverage(&covered);
             }
@@ -2076,13 +2105,17 @@ impl Drawing {
         let opacity = number(&param(&plan.clip, "opacity").value_at(time)) as f32;
         let weight: Vec<f32> = frame
             .px
-            .as_chunks::<4>().0.iter()
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|pixel| pixel[3] * opacity)
             .collect();
         if plan.blend == Blend::Normal {
             for ((pixel, adjusted), weight) in canvas
                 .px
-                .as_chunks_mut::<4>().0.iter_mut()
+                .as_chunks_mut::<4>()
+                .0
+                .iter_mut()
                 .zip(adjusted.px.as_chunks::<4>().0.iter())
                 .zip(&weight)
             {
@@ -2102,7 +2135,8 @@ impl Drawing {
 fn clip_digest(clip: &Clip, catalog: &Catalog, media: Option<&Media>) -> Option<u64> {
     // A light wrapped from another track depends on what that track draws, hidden or not.
     if let Content::Generator { fx, params, .. } = &clip.content {
-        let wraps = |param: &Param| !matches!(param, Param::Static(Value::Text(track)) if track.is_empty());
+        let wraps =
+            |param: &Param| !matches!(param, Param::Static(Value::Text(track)) if track.is_empty());
         if fx.as_str() == "light" && params.get("image").is_some_and(wraps) {
             return None;
         }
@@ -2236,7 +2270,10 @@ fn title_extent(title: &TitlePlan, (w, h): (usize, usize), time: Time) -> Option
     let mut around = em / 2.0;
     if let Some(reveal) = &title.reveal {
         let read = |param: &Param| number(&param.value_at(time));
-        let (x, y) = (read(&reveal.from[0]) * h as f64, read(&reveal.from[1]) * h as f64);
+        let (x, y) = (
+            read(&reveal.from[0]) * h as f64,
+            read(&reveal.from[1]) * h as f64,
+        );
         (left, right) = (left + x.min(0.0), right + x.max(0.0));
         (top, bottom) = (top + y.min(0.0), bottom + y.max(0.0));
         around += em * read(&reveal.scale).abs().max(1.0);
@@ -2374,7 +2411,12 @@ fn stretch_to_its_own(rgba: &mut [u8]) {
 fn stretch_to_its_own16(rgba: &mut [u8]) {
     let grey = |pixel: &[u8]| u16::from_le_bytes([pixel[0], pixel[1]]);
     let (mut least, mut most) = (u16::MAX, 0u16);
-    for pixel in rgba.as_chunks::<8>().0.iter().filter(|pixel| grey(&pixel[..]) > 0) {
+    for pixel in rgba
+        .as_chunks::<8>()
+        .0
+        .iter()
+        .filter(|pixel| grey(&pixel[..]) > 0)
+    {
         (least, most) = (least.min(grey(pixel)), most.max(grey(pixel)));
     }
     if most == 0 {
@@ -3118,9 +3160,7 @@ impl<'a> Builder<'a> {
         };
         let animated = clip.parent.is_some()
             || !matches!(param(clip, "path"), Param::Static(Value::Text(text)) if text.is_empty())
-            || GEOMETRY
-                .iter()
-                .any(|name| param(clip, name).varies());
+            || GEOMETRY.iter().any(|name| param(clip, name).varies());
         // A mesh is in depth whether it says so or not.
         let three_d = matches!(param(clip, "three_d"), Param::Static(Value::Bool(true)))
             || matches!(source, Source::Mesh);
@@ -3274,10 +3314,9 @@ impl<'a> Builder<'a> {
             },
             reveal: {
                 let raw = |name: &str| {
-                    params
-                        .get(name)
-                        .cloned()
-                        .unwrap_or_else(|| Param::Static(def.find(name).expect("title parameter").default.clone()))
+                    params.get(name).cloned().unwrap_or_else(|| {
+                        Param::Static(def.find(name).expect("title parameter").default.clone())
+                    })
                 };
                 // Left at rest, it draws as plain text does.
                 params.contains_key("reveal").then(|| Box::new(Reveals {
@@ -3412,8 +3451,16 @@ fn crop_past(plan: &ClipPlan, time: Time, frame: Rect, whole: Rect) -> Option<Re
     if l == 0.0 && r == 0.0 && t == 0.0 && b == 0.0 {
         return None;
     }
-    let left = if l > 0.0 { (frame.x + l * frame.w).max(whole.x) } else { whole.x };
-    let top = if t > 0.0 { (frame.y + t * frame.h).max(whole.y) } else { whole.y };
+    let left = if l > 0.0 {
+        (frame.x + l * frame.w).max(whole.x)
+    } else {
+        whole.x
+    };
+    let top = if t > 0.0 {
+        (frame.y + t * frame.h).max(whole.y)
+    } else {
+        whole.y
+    };
     let right = if r > 0.0 {
         (frame.right() - r * frame.w).min(whole.right())
     } else {
@@ -3424,7 +3471,12 @@ fn crop_past(plan: &ClipPlan, time: Time, frame: Rect, whole: Rect) -> Option<Re
     } else {
         whole.bottom()
     };
-    Some(Rect::new(left, top, (right - left).max(0.0), (bottom - top).max(0.0)))
+    Some(Rect::new(
+        left,
+        top,
+        (right - left).max(0.0),
+        (bottom - top).max(0.0),
+    ))
 }
 
 /// Where the canvas is in the picture a generator draws on `run`, in its pixels.

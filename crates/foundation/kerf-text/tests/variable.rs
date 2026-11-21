@@ -36,7 +36,12 @@ const OPSZ: [u8; 4] = *b"opsz";
 const SLNT: [u8; 4] = *b"slnt";
 fn styled(family: &str, axes: &[Axis]) -> TextStyle {
     fonts::add_source(&TestFont);
-    TextStyle { family: family.into(), size: 100.0, axes: axes.to_vec(), ..TextStyle::default() }
+    TextStyle {
+        family: family.into(),
+        size: 100.0,
+        axes: axes.to_vec(),
+        ..TextStyle::default()
+    }
 }
 
 /// How much ink a capital I has, in pixels at 100 pixels to the em.
@@ -52,7 +57,10 @@ fn advance(family: &str, axes: &[Axis]) -> f32 {
 }
 
 fn close(found: f32, wanted: f32) {
-    assert!((found - wanted).abs() < wanted * 0.02, "{found} against {wanted}");
+    assert!(
+        (found - wanted).abs() < wanted * 0.02,
+        "{found} against {wanted}"
+    );
 }
 
 #[test]
@@ -64,18 +72,31 @@ fn an_axis_the_face_lacks_or_its_default_is_the_font_as_it_comes() {
     assert_eq!(fonts::instance(face, &[(*b"GRAD", 50.0)]), 0);
     assert_ne!(fonts::instance(face, &[(WGHT, 500.0)]), 0);
     // The same setting is the same instance, and another is another.
-    assert_eq!(fonts::instance(face, &[(WGHT, 500.0)]), fonts::instance(face, &[(WGHT, 500.001)]));
-    assert_ne!(fonts::instance(face, &[(WGHT, 500.0)]), fonts::instance(face, &[(WGHT, 600.0)]));
+    assert_eq!(
+        fonts::instance(face, &[(WGHT, 500.0)]),
+        fonts::instance(face, &[(WGHT, 500.001)])
+    );
+    assert_ne!(
+        fonts::instance(face, &[(WGHT, 500.0)]),
+        fonts::instance(face, &[(WGHT, 600.0)])
+    );
     // A face with no axes is drawn as it was, whatever it is told.
     let inter = kerf_text::resolve("Inter", "Regular").face;
     assert_eq!(fonts::instance(inter, &[(WGHT, 900.0)]), 0);
     let plain = layout("Words", &styled("Inter", &[]), &ParagraphStyle::default());
-    let told = layout("Words", &styled("Inter", &[(WGHT, 900.0)]), &ParagraphStyle::default());
+    let told = layout(
+        "Words",
+        &styled("Inter", &[(WGHT, 900.0)]),
+        &ParagraphStyle::default(),
+    );
     assert_eq!(plain.glyphs.len(), told.glyphs.len());
     for (a, b) in plain.glyphs.iter().zip(&told.glyphs) {
         assert_eq!((a.id, a.x, a.instance), (b.id, b.x, b.instance));
     }
-    assert_eq!(render::rasterize(&plain, &render::at(0.0, 100.0)).0.a, render::rasterize(&told, &render::at(0.0, 100.0)).0.a);
+    assert_eq!(
+        render::rasterize(&plain, &render::at(0.0, 100.0)).0.a,
+        render::rasterize(&told, &render::at(0.0, 100.0)).0.a
+    );
 }
 
 #[test]
@@ -88,7 +109,10 @@ fn a_real_font_grows_and_widens_with_its_weight() {
         return;
     }
     fonts::scan_system();
-    let (light, heavy) = (ink("Skia", "Weight", &[(WGHT, 0.5)]), ink("Skia", "Weight", &[(WGHT, 2.5)]));
+    let (light, heavy) = (
+        ink("Skia", "Weight", &[(WGHT, 0.5)]),
+        ink("Skia", "Weight", &[(WGHT, 2.5)]),
+    );
     assert!(heavy > light * 1.3, "{light} {heavy}");
     assert!(advance("Skia", &[(WGHT, 2.5)]) != advance("Skia", &[(WGHT, 0.5)]));
 }
@@ -101,10 +125,17 @@ fn lean(family: &str, axes: &[Axis]) -> f32 {
     let (width, height) = (mask.w, mask.h);
     let row = |y: usize| &mask.a[y * width..(y + 1) * width];
     let middle = |y: usize| {
-        let (sum, total) = row(y).iter().enumerate().fold((0.0, 0.0), |(sum, total), (x, a)| (sum + x as f32 * a, total + a));
+        let (sum, total) = row(y)
+            .iter()
+            .enumerate()
+            .fold((0.0, 0.0), |(sum, total), (x, a)| {
+                (sum + x as f32 * a, total + a)
+            });
         sum / total
     };
-    let rows: Vec<usize> = (0..height).filter(|y| row(*y).iter().sum::<f32>() > 1.0).collect();
+    let rows: Vec<usize> = (0..height)
+        .filter(|y| row(*y).iter().sum::<f32>() > 1.0)
+        .collect();
     let (top, foot) = (rows[2], rows[rows.len() - 3]);
     (middle(top) - middle(foot)) * 70.0 / (foot - top) as f32
 }
@@ -126,7 +157,12 @@ fn a_cff2_font_draws_and_shapes_at_its_axes() {
     assert!(!face.missing);
     assert_eq!(
         fonts::face(face.face).axes(),
-        [fonts::AxisRange { tag: WGHT, min: 100.0, default: 400.0, max: 900.0 }]
+        [fonts::AxisRange {
+            tag: WGHT,
+            min: 100.0,
+            default: 400.0,
+            max: 900.0
+        }]
     );
     close(ink(CFF2, "I", &[]), 700.0);
     close(ink(CFF2, "I", &[(WGHT, 900.0)]), 30.0 * 70.0);
@@ -145,7 +181,12 @@ fn a_cff2_font_draws_and_shapes_at_its_axes() {
 fn the_test_font_says_what_axes_it_has() {
     fonts::add_source(&TestFont);
     let face = fonts::face(kerf_text::resolve(FAMILY, "Regular").face);
-    let axis = |tag: &[u8; 4], min, default, max| fonts::AxisRange { tag: *tag, min, default, max };
+    let axis = |tag: &[u8; 4], min, default, max| fonts::AxisRange {
+        tag: *tag,
+        min,
+        default,
+        max,
+    };
     assert_eq!(
         face.axes(),
         [
@@ -156,7 +197,9 @@ fn the_test_font_says_what_axes_it_has() {
             axis(b"ital", 0.0, 0.0, 1.0),
         ]
     );
-    assert!(fonts::faces_of("Inter").iter().all(|inter| inter.axes().is_empty()));
+    assert!(fonts::faces_of("Inter")
+        .iter()
+        .all(|inter| inter.axes().is_empty()));
     assert!(fonts::faces_of("No Such Font Family 123").is_empty());
 }
 
@@ -180,7 +223,10 @@ fn system_face(path: &str, tag: [u8; 4], text: &str) -> Option<std::sync::Arc<fo
 
 fn across(family: &str, text: &str, axes: &[Axis]) -> f32 {
     let laid = layout(text, &styled(family, axes), &ParagraphStyle::default());
-    assert!(!laid.missing_font && laid.glyphs.iter().all(|glyph| glyph.id != 0), "{family}");
+    assert!(
+        !laid.missing_font && laid.glyphs.iter().all(|glyph| glyph.id != 0),
+        "{family}"
+    );
     laid.bounds[2] - laid.bounds[0]
 }
 
@@ -188,14 +234,29 @@ fn across(family: &str, text: &str, axes: &[Axis]) -> f32 {
 /// comes from its own tables, at a default that is its far end.
 #[test]
 fn a_real_font_changes_with_its_optical_size() {
-    let Some(face) = system_face("/System/Library/Fonts/NewYork.ttf", OPSZ, "Words") else { return };
+    let Some(face) = system_face("/System/Library/Fonts/NewYork.ttf", OPSZ, "Words") else {
+        return;
+    };
     let family = face.info.family.clone();
-    let opsz = face.axes().into_iter().find(|axis| axis.tag == OPSZ).unwrap();
+    let opsz = face
+        .axes()
+        .into_iter()
+        .find(|axis| axis.tag == OPSZ)
+        .unwrap();
     assert!(opsz.min < opsz.max, "{opsz:?}");
-    let (small, large) = (ink(&family, "Words", &[(OPSZ, opsz.min)]), ink(&family, "Words", &[(OPSZ, opsz.max)]));
-    assert!((small - large).abs() > large * 0.02, "{family}: {small} {large}");
+    let (small, large) = (
+        ink(&family, "Words", &[(OPSZ, opsz.min)]),
+        ink(&family, "Words", &[(OPSZ, opsz.max)]),
+    );
+    assert!(
+        (small - large).abs() > large * 0.02,
+        "{family}: {small} {large}"
+    );
     // Small text is set wider than display text.
-    let (wide, narrow) = (across(&family, "Words", &[(OPSZ, opsz.min)]), across(&family, "Words", &[(OPSZ, opsz.max)]));
+    let (wide, narrow) = (
+        across(&family, "Words", &[(OPSZ, opsz.min)]),
+        across(&family, "Words", &[(OPSZ, opsz.max)]),
+    );
     assert!(wide > narrow * 1.02, "{family}: {wide} {narrow}");
 }
 
@@ -204,13 +265,25 @@ fn a_real_font_changes_with_its_optical_size() {
 fn a_real_cff2_font_draws_and_shapes_at_its_axes() {
     // Devanagari, which one of its faces covers.
     let text = "\u{0915}\u{0916}\u{0917}";
-    let Some(face) = system_face("/System/Library/Fonts/SFIndia.ttc", WGHT, text) else { return };
+    let Some(face) = system_face("/System/Library/Fonts/SFIndia.ttc", WGHT, text) else {
+        return;
+    };
     let family = face.info.family.clone();
-    let wght = face.axes().into_iter().find(|axis| axis.tag == WGHT).unwrap();
+    let wght = face
+        .axes()
+        .into_iter()
+        .find(|axis| axis.tag == WGHT)
+        .unwrap();
     let (light, heavy) = (wght.min + 99.0, wght.max);
-    let (thin, thick) = (ink(&family, text, &[(WGHT, light)]), ink(&family, text, &[(WGHT, heavy)]));
+    let (thin, thick) = (
+        ink(&family, text, &[(WGHT, light)]),
+        ink(&family, text, &[(WGHT, heavy)]),
+    );
     assert!(thick > thin * 1.5, "{family}: {thin} {thick}");
-    let (narrow, wide) = (across(&family, text, &[(WGHT, light)]), across(&family, text, &[(WGHT, heavy)]));
+    let (narrow, wide) = (
+        across(&family, text, &[(WGHT, light)]),
+        across(&family, text, &[(WGHT, heavy)]),
+    );
     assert!(wide > narrow, "{family}: {narrow} {wide}");
     eprintln!("{family}: ink {thin} to {thick}, across {narrow} to {wide}");
 }
@@ -219,7 +292,14 @@ fn a_real_cff2_font_draws_and_shapes_at_its_axes() {
 fn a_style_that_names_a_weight_sets_a_variable_face_there() {
     fonts::add_source(&TestFont);
     let ink_in = |style: &str, axes: &[Axis]| {
-        let laid = layout("I", &TextStyle { style: style.into(), ..styled(FAMILY, axes) }, &ParagraphStyle::default());
+        let laid = layout(
+            "I",
+            &TextStyle {
+                style: style.into(),
+                ..styled(FAMILY, axes)
+            },
+            &ParagraphStyle::default(),
+        );
         let (mask, _, _) = render::rasterize(&laid, &render::at(200.0, 200.0));
         mask.a.iter().sum::<f32>()
     };

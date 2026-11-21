@@ -65,10 +65,7 @@ pub trait FxEnv: Sync {
 
 /// Effects that read other frames (skipped when rendering another frame for one of them).
 pub fn is_temporal(id: &str) -> bool {
-    matches!(
-        id,
-        "posterize_time" | "warp_stabilizer" | "auto_reframe"
-    )
+    matches!(id, "posterize_time" | "warp_stabilizer" | "auto_reframe")
 }
 
 // ------------------------------------------------------------------ parameters
@@ -208,7 +205,6 @@ pub(crate) fn over(dst: &mut [f32], src: [f32; 4]) {
     }
 }
 
-
 // ------------------------------------------------------------------ noise
 
 #[inline]
@@ -244,7 +240,6 @@ pub(crate) fn blur_plane(plane: &[f32], w: usize, h: usize, sigma: f32) -> Vec<f
     crate::filmcraft::effects::gaussian(&mut im, sigma, sigma, false);
     im.px.as_chunks::<4>().0.iter().map(|p| p[0]).collect()
 }
-
 
 /// Fill an image from a per-pixel premultiplied colour function (x, y at pixel centres).
 pub(crate) fn generate(img: &mut Image, f: impl Fn(f32, f32, [f32; 4]) -> [f32; 4] + Sync) {

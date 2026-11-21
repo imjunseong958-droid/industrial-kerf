@@ -16,11 +16,19 @@ pub struct Plane {
 
 impl Plane {
     pub fn new(w: usize, h: usize) -> Plane {
-        Plane { w, h, data: vec![0.0; w * h] }
+        Plane {
+            w,
+            h,
+            data: vec![0.0; w * h],
+        }
     }
     /// Build from an image by mapping every (premultiplied) pixel.
     pub fn from_image(img: &Image, f: impl Fn(Px) -> f32 + Sync) -> Plane {
-        Plane { w: img.width as usize, h: img.height as usize, data: img.data.par_iter().map(|&p| f(p)).collect() }
+        Plane {
+            w: img.width as usize,
+            h: img.height as usize,
+            data: img.data.par_iter().map(|&p| f(p)).collect(),
+        }
     }
     pub fn alpha(img: &Image) -> Plane {
         Plane::from_image(img, |p| p[3])
@@ -35,11 +43,14 @@ impl Plane {
     pub fn transpose(&self) -> Plane {
         let (w, h) = (self.w, self.h);
         let mut out = Plane::new(h, w);
-        out.data.par_chunks_mut(h.max(1)).enumerate().for_each(|(x, col)| {
-            for y in 0..h {
-                col[y] = self.data[y * w + x];
-            }
-        });
+        out.data
+            .par_chunks_mut(h.max(1))
+            .enumerate()
+            .for_each(|(x, col)| {
+                for y in 0..h {
+                    col[y] = self.data[y * w + x];
+                }
+            });
         out
     }
     /// Apply `f(src_row, dst_row)` to every row in parallel.
@@ -48,15 +59,31 @@ impl Plane {
         if self.w == 0 {
             return out;
         }
-        out.data.par_chunks_mut(self.w).zip(self.data.par_chunks(self.w)).for_each(|(o, s)| f(s, o));
+        out.data
+            .par_chunks_mut(self.w)
+            .zip(self.data.par_chunks(self.w))
+            .for_each(|(o, s)| f(s, o));
         out
     }
     /// Element-wise combination with another plane of the same size.
     pub fn zip_map(&self, other: &Plane, f: impl Fn(f32, f32) -> f32 + Sync) -> Plane {
-        Plane { w: self.w, h: self.h, data: self.data.par_iter().zip(other.data.par_iter()).map(|(&a, &b)| f(a, b)).collect() }
+        Plane {
+            w: self.w,
+            h: self.h,
+            data: self
+                .data
+                .par_iter()
+                .zip(other.data.par_iter())
+                .map(|(&a, &b)| f(a, b))
+                .collect(),
+        }
     }
     pub fn map(&self, f: impl Fn(f32) -> f32 + Sync) -> Plane {
-        Plane { w: self.w, h: self.h, data: self.data.par_iter().map(|&a| f(a)).collect() }
+        Plane {
+            w: self.w,
+            h: self.h,
+            data: self.data.par_iter().map(|&a| f(a)).collect(),
+        }
     }
 }
 
@@ -84,9 +111,16 @@ fn box_row(src: &[f32], dst: &mut [f32], r: usize) {
 
 /// Separable box mean with radii `rx`, `ry` (edges repeated).
 pub fn box_plane(p: &Plane, rx: usize, ry: usize) -> Plane {
-    let mut cur = if rx > 0 { p.map_rows(|s, d| box_row(s, d, rx)) } else { p.clone() };
+    let mut cur = if rx > 0 {
+        p.map_rows(|s, d| box_row(s, d, rx))
+    } else {
+        p.clone()
+    };
     if ry > 0 {
-        cur = cur.transpose().map_rows(|s, d| box_row(s, d, ry)).transpose();
+        cur = cur
+            .transpose()
+            .map_rows(|s, d| box_row(s, d, ry))
+            .transpose();
     }
     cur
 }
@@ -102,9 +136,15 @@ pub fn box_radii(sigma: f64, n: usize) -> Vec<usize> {
         wl -= 1;
     }
     let wu = wl + 2;
-    let m_ideal = (12.0 * sigma * sigma - (n as i64 * wl * wl) as f64 - 4.0 * n as f64 * wl as f64 - 3.0 * n as f64) / (-4.0 * wl as f64 - 4.0);
+    let m_ideal = (12.0 * sigma * sigma
+        - (n as i64 * wl * wl) as f64
+        - 4.0 * n as f64 * wl as f64
+        - 3.0 * n as f64)
+        / (-4.0 * wl as f64 - 4.0);
     let m = m_ideal.round() as i64;
-    (0..n as i64).map(|i| (((if i < m { wl } else { wu }) - 1) / 2).max(0) as usize).collect()
+    (0..n as i64)
+        .map(|i| (((if i < m { wl } else { wu }) - 1) / 2).max(0) as usize)
+        .collect()
 }
 
 /// Approximate Gaussian blur of a plane (3 box passes per axis, edges repeated).
@@ -148,7 +188,11 @@ pub fn minmax_row(src: &[f32], dst: &mut [f32], r: usize, max: bool) {
     }
     for i in (0..len).rev() {
         let v = get(i);
-        hh[i] = if i == len - 1 || (i + 1) % k == 0 { v } else { op(hh[i + 1], v) };
+        hh[i] = if i == len - 1 || (i + 1) % k == 0 {
+            v
+        } else {
+            op(hh[i + 1], v)
+        };
     }
     for x in 0..n {
         dst[x] = op(hh[x], g[x + k - 1]);
@@ -157,9 +201,16 @@ pub fn minmax_row(src: &[f32], dst: &mut [f32], r: usize, max: bool) {
 
 /// Grey-scale erosion (`max = false`) or dilation (`max = true`) with a (2rx+1)×(2ry+1) box.
 pub fn morph_plane(p: &Plane, rx: usize, ry: usize, max: bool) -> Plane {
-    let mut cur = if rx > 0 { p.map_rows(|s, d| minmax_row(s, d, rx, max)) } else { p.clone() };
+    let mut cur = if rx > 0 {
+        p.map_rows(|s, d| minmax_row(s, d, rx, max))
+    } else {
+        p.clone()
+    };
     if ry > 0 {
-        cur = cur.transpose().map_rows(|s, d| minmax_row(s, d, ry, max)).transpose();
+        cur = cur
+            .transpose()
+            .map_rows(|s, d| minmax_row(s, d, ry, max))
+            .transpose();
     }
     cur
 }
@@ -196,7 +247,12 @@ impl<'a> Guide<'a> {
     pub fn new(plane: &'a Plane, r: usize) -> Guide<'a> {
         let mean = box_plane(plane, r, r);
         let corr = box_plane(&plane.map(|a| a * a), r, r);
-        Guide { plane, r, mean, corr }
+        Guide {
+            plane,
+            r,
+            mean,
+            corr,
+        }
     }
 
     /// `p` smoothed but for the edges of the guide.
@@ -209,19 +265,30 @@ impl<'a> Guide<'a> {
         let n = g.data.len();
         let mut a = Plane::new(g.w, g.h);
         let mut b = Plane::new(g.w, g.h);
-        a.data.par_iter_mut().zip(b.data.par_iter_mut()).enumerate().for_each(|(i, (av, bv))| {
-            let var = corr_gg.data[i] - mean_g.data[i] * mean_g.data[i];
-            let cov = corr_gp.data[i] - mean_g.data[i] * mean_p.data[i];
-            *av = cov / (var + eps);
-            *bv = mean_p.data[i] - *av * mean_g.data[i];
-        });
+        a.data
+            .par_iter_mut()
+            .zip(b.data.par_iter_mut())
+            .enumerate()
+            .for_each(|(i, (av, bv))| {
+                let var = corr_gg.data[i] - mean_g.data[i] * mean_g.data[i];
+                let cov = corr_gp.data[i] - mean_g.data[i] * mean_p.data[i];
+                *av = cov / (var + eps);
+                *bv = mean_p.data[i] - *av * mean_g.data[i];
+            });
         debug_assert_eq!(n, a.data.len());
         drop((mean_p, corr_gp));
         let ma = box_plane(&a, r, r);
         drop(a);
         let mb = box_plane(&b, r, r);
         drop(b);
-        Plane { w: g.w, h: g.h, data: (0..n).into_par_iter().map(|i| ma.data[i] * g.data[i] + mb.data[i]).collect() }
+        Plane {
+            w: g.w,
+            h: g.h,
+            data: (0..n)
+                .into_par_iter()
+                .map(|i| ma.data[i] * g.data[i] + mb.data[i])
+                .collect(),
+        }
     }
 }
 
@@ -263,7 +330,11 @@ pub fn lerp(a: f32, b: f32, t: f32) -> f32 {
 
 #[inline]
 pub fn lerp3(a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {
-    [lerp(a[0], b[0], t), lerp(a[1], b[1], t), lerp(a[2], b[2], t)]
+    [
+        lerp(a[0], b[0], t),
+        lerp(a[1], b[1], t),
+        lerp(a[2], b[2], t),
+    ]
 }
 
 #[inline]
@@ -294,25 +365,33 @@ pub fn gen_image(w: u32, h: u32, f: impl Fn(usize, usize) -> Px + Sync) -> Image
 /// Replace the alpha of `img` with `new_a`, keeping straight colour. Pixels that were (nearly)
 /// transparent take their colour from a small blur of the surroundings.
 pub fn set_alpha(img: &mut Image, new_a: &Plane) {
-    let needs_fill = img.data.par_iter().zip(new_a.data.par_iter()).any(|(p, &a)| p[3] <= 1e-4 && a > 1e-4);
+    let needs_fill = img
+        .data
+        .par_iter()
+        .zip(new_a.data.par_iter())
+        .any(|(p, &a)| p[3] <= 1e-4 && a > 1e-4);
     let fill = if needs_fill {
         let blurred = kerf_raster::gaussian_blur(img, 3.0, 3.0, true);
         Some(blurred)
     } else {
         None
     };
-    img.data.par_iter_mut().zip(new_a.data.par_iter()).enumerate().for_each(|(i, (p, &na))| {
-        let na = na.clamp(0.0, 1.0);
-        let (c, a) = unpremul(*p);
-        let c = if a > 1e-4 {
-            c
-        } else if let Some(f) = &fill {
-            unpremul(f.data[i]).0
-        } else {
-            c
-        };
-        *p = premul(c, na);
-    });
+    img.data
+        .par_iter_mut()
+        .zip(new_a.data.par_iter())
+        .enumerate()
+        .for_each(|(i, (p, &na))| {
+            let na = na.clamp(0.0, 1.0);
+            let (c, a) = unpremul(*p);
+            let c = if a > 1e-4 {
+                c
+            } else if let Some(f) = &fill {
+                unpremul(f.data[i]).0
+            } else {
+                c
+            };
+            *p = premul(c, na);
+        });
 }
 
 /// Normalised kernel-free resampling helper: sample an image with bilinear filtering, either
@@ -348,7 +427,12 @@ pub fn layer_rect(ctx: &crate::EffectCtx, b: &crate::Buf) -> (f64, f64, f64, f64
 /// [`layer_rect`] in the pixels of a buffer with `offset` and `scale` (see [`crate::Buf`];
 /// GPU buffers): the layer bounds start at effect-space (0, 0).
 pub fn layer_rect_at(ctx: &crate::EffectCtx, offset: [f64; 2], scale: f64) -> (f64, f64, f64, f64) {
-    (offset[0], offset[1], ctx.layer_size[0] * scale, ctx.layer_size[1] * scale)
+    (
+        offset[0],
+        offset[1],
+        ctx.layer_size[0] * scale,
+        ctx.layer_size[1] * scale,
+    )
 }
 
 /// Total length of a polyline.
@@ -382,7 +466,11 @@ pub fn poly_point_at(pts: &[[f64; 2]], closed: bool, s: f64) -> ([f64; 2], [f64;
         let l = ((b[0] - a[0]).powi(2) + (b[1] - a[1]).powi(2)).sqrt();
         if rem <= l || i == segs - 1 {
             let t = if l > 0.0 { (rem / l).min(1.0) } else { 0.0 };
-            let d = if l > 0.0 { [(b[0] - a[0]) / l, (b[1] - a[1]) / l] } else { [1.0, 0.0] };
+            let d = if l > 0.0 {
+                [(b[0] - a[0]) / l, (b[1] - a[1]) / l]
+            } else {
+                [1.0, 0.0]
+            };
             return ([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t], d);
         }
         rem -= l;

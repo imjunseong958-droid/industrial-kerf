@@ -71,7 +71,9 @@ fn raster(picture: &Picture) -> kerf_raster::Image {
         height: picture.h as u32,
         data: picture
             .px
-            .as_chunks::<4>().0.iter()
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|pixel| [pixel[0], pixel[1], pixel[2], pixel[3]])
             .collect(),
     }

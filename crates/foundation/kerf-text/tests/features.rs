@@ -13,11 +13,19 @@ const KERN: [u8; 4] = *b"kern";
 const SMCP: [u8; 4] = *b"smcp";
 
 fn styled(features: &[Feature]) -> TextStyle {
-    TextStyle { size: 100.0, features: features.to_vec(), ..TextStyle::default() }
+    TextStyle {
+        size: 100.0,
+        features: features.to_vec(),
+        ..TextStyle::default()
+    }
 }
 
 fn glyphs(text: &str, style: &TextStyle) -> Vec<u32> {
-    layout(text, style, &ParagraphStyle::default()).glyphs.iter().map(|glyph| glyph.id).collect()
+    layout(text, style, &ParagraphStyle::default())
+        .glyphs
+        .iter()
+        .map(|glyph| glyph.id)
+        .collect()
 }
 
 fn width(text: &str, style: &TextStyle) -> f32 {
@@ -40,11 +48,20 @@ fn a_face_names_the_features_it_has() {
     let inter = fonts::faces_of("Inter");
     let has = inter.first().expect("Inter is bundled").features();
     for tag in [TNUM, ZERO, FRAC, CALT, KERN] {
-        assert!(has.contains(&tag), "{} in {:?}", String::from_utf8_lossy(&tag), has.len());
+        assert!(
+            has.contains(&tag),
+            "{} in {:?}",
+            String::from_utf8_lossy(&tag),
+            has.len()
+        );
     }
     assert!(!has.contains(&SMCP));
     // Each once, though substitutions and positioning both list some, and in order.
     assert!(has.windows(2).all(|pair| pair[0] < pair[1]));
     let serif = fonts::faces_of("Noto Serif");
-    assert!(serif.first().expect("Noto Serif is bundled").features().contains(&SMCP));
+    assert!(serif
+        .first()
+        .expect("Noto Serif is bundled")
+        .features()
+        .contains(&SMCP));
 }

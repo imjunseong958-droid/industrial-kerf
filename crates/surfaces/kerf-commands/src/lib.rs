@@ -1073,19 +1073,35 @@ pub static COMMANDS: &[Command] = &[
     menu(command("qc.run", "Run QC", connected), Menu::Sequence, 3),
     // The window's panes: the folders, and the panel beside the conversation.
     checkable(keys(
-        frontend(menu(command("view.sidebar", "Sidebar", always), Menu::View, 0)),
+        frontend(menu(
+            command("view.sidebar", "Sidebar", always),
+            Menu::View,
+            0,
+        )),
         &["Ctrl+Alt+S"],
     )),
     checkable(keys(
-        frontend(menu(command("view.picture", "Picture", always), Menu::View, 0)),
+        frontend(menu(
+            command("view.picture", "Picture", always),
+            Menu::View,
+            0,
+        )),
         &["Ctrl+Alt+P"],
     )),
     checkable(keys(
-        frontend(menu(command("view.timeline", "Timeline", always), Menu::View, 0)),
+        frontend(menu(
+            command("view.timeline", "Timeline", always),
+            Menu::View,
+            0,
+        )),
         &["Ctrl+Alt+T"],
     )),
     checkable(keys(
-        frontend(menu(command("view.followKerf", "Follow Kerf", always), Menu::View, 0)),
+        frontend(menu(
+            command("view.followKerf", "Follow Kerf", always),
+            Menu::View,
+            0,
+        )),
         &["Ctrl+Alt+F"],
     )),
     // The program viewer's switches.
@@ -1215,7 +1231,11 @@ pub static COMMANDS: &[Command] = &[
         Menu::Help,
         0,
     )),
-    frontend(menu(command("help.about", "About Kerf", always), Menu::Help, 1)),
+    frontend(menu(
+        command("help.about", "About Kerf", always),
+        Menu::Help,
+        1,
+    )),
 ];
 
 /// A keyboard layout: the Kerf keys, with the commands it binds differently.

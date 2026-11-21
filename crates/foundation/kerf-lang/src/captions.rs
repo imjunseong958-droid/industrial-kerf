@@ -85,8 +85,7 @@ impl Made<'_> {
 }
 
 fn ends_a_sentence(text: &str) -> bool {
-    text.trim_end()
-        .ends_with(['.', '?', '!', '。', '？', '！'])
+    text.trim_end().ends_with(['.', '?', '!', '。', '？', '！'])
 }
 
 /// Whether `text` is a transcriber's note of a sound, such as whisper's
@@ -209,7 +208,8 @@ pub fn caption_script(
         .collect();
     // No caption outlasts the clip whose speech it is.
     let last_frame = rate.round(found.end());
-    let until = |made: &[Made], index: usize| made.get(index + 1).map_or(last_frame, |next| next.start);
+    let until =
+        |made: &[Made], index: usize| made.get(index + 1).map_or(last_frame, |next| next.start);
     // Two that follow each other in one breath can be one caption of two
     // lines.
     let joins = |made: &[Made], first: usize| {
