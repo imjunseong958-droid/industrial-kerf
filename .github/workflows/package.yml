@@ -42,6 +42,7 @@ on:
       - "apps/kerf-editor/assets/icon/**"
       - "apps/kerf-editor/Cargo.toml"
       - "apps/kerf-editor/build.rs"
+      - "rust-toolchain.toml"
       - ".github/workflows/package.yml"
   push:
     tags: ["v*"]
@@ -68,6 +69,7 @@ on:
       - "apps/kerf-editor/assets/icon/**"
       - "apps/kerf-editor/Cargo.toml"
       - "apps/kerf-editor/build.rs"
+      - "rust-toolchain.toml"
       - ".github/workflows/package.yml"
 
 # A newer push supersedes the builds still running for the one before it, on a
@@ -100,7 +102,9 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      # The release rust-toolchain.toml names, with clippy and rustfmt.
+      - name: Install the pinned Rust toolchain
+        run: rustup toolchain install
       # GitHub's release downloads have answered 504 for an hour at a time, so the
       # pinned archive is kept in the Actions cache and fetched, with retries over
       # several minutes, only when it is not there.
@@ -173,7 +177,9 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      # The release rust-toolchain.toml names, with clippy and rustfmt.
+      - name: Install the pinned Rust toolchain
+        run: rustup toolchain install
       - name: Collect the source of the package
         run: scripts/collect-kerf-windows-sources.sh
       - uses: actions/upload-artifact@v4
@@ -197,7 +203,9 @@ jobs:
       HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK: "1"
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      # The release rust-toolchain.toml names, with clippy and rustfmt.
+      - name: Install the pinned Rust toolchain
+        run: rustup toolchain install
       - name: Install FFmpeg and the build tools
         run: |
           brew install ffmpeg pkg-config
@@ -265,7 +273,9 @@ jobs:
     timeout-minutes: 150
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      # The release rust-toolchain.toml names, with clippy and rustfmt.
+      - name: Install the pinned Rust toolchain
+        run: rustup toolchain install
       - uses: actions/cache@v4
         with:
           path: ${{ runner.temp }}/ffmpeg-archive

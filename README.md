@@ -459,11 +459,16 @@ which needs an environment with `opentimelineio` and the adapter asked for.
 ## Verification
 
 ```bash
-cargo test --workspace
+cargo fmt --all --check
+cargo fmt --manifest-path apps/kerf-editor/Cargo.toml --all --check
 cargo clippy --workspace --all-targets --no-deps -- -D warnings
-cargo test --manifest-path apps/kerf-editor/Cargo.toml
+cargo test --workspace
 cargo clippy --manifest-path apps/kerf-editor/Cargo.toml --all-targets -- -D warnings
+cargo test --manifest-path apps/kerf-editor/Cargo.toml
 ```
+
+`.claude/verify.sh` runs these in this order, and CI runs them on Linux. The Rust
+release is the one `rust-toolchain.toml` names, which rustup installs on first use.
 
 The release gate also includes a manual window check: open a project, edit
 it, restart it, enter Korean text, play/seek media, verify captions/mute, and

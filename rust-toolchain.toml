@@ -1,0 +1,7 @@
+# The Rust release every build, check and CI job here uses. A newer stable
+# brings new clippy lints, which once turned CI red with no change to the code
+# (1.100's chunks_exact_to_as_chunks); moving to one is a change of its own.
+[toolchain]
+channel = "1.100.0"
+components = ["clippy", "rustfmt"]
+profile = "minimal"
