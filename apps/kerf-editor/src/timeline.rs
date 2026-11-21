@@ -317,13 +317,11 @@ impl TrackHeights {
     }
 }
 
-/// A kind's own height when nothing else is set.
-pub fn default_height(kind: TrackKind) -> f32 {
-    match kind {
-        TrackKind::Video => layout::VIDEO_LANE,
-        TrackKind::Audio => layout::AUDIO_LANE,
-        TrackKind::Subtitle => layout::SUBTITLE_LANE,
-    }
+/// A track's height when nothing else is set: one roomy height for every
+/// kind ([`layout::TRACK_LANE`]), none larger than another for what it
+/// is, as the Qt editor's window drew them (Medium and Reset go back to it).
+pub fn default_height(_kind: TrackKind) -> f32 {
+    layout::TRACK_LANE
 }
 
 /// `height` moved `steps` along [`TRACK_STEPS`] (up when positive), from
@@ -343,6 +341,161 @@ pub fn stepped_height(height: f32, steps: i32) -> f32 {
         }
     }
     height
+}
+
+// ------------------------------------------------------- watching changes
+
+/// The clips a change reel watches (Qt's watchChanges, as it gave them to
+/// setFocusClips): every clip proposal `id` (or the version of it `id`
+/// names, as the reel plays it) adds, takes out or changes against the
+/// program, as its card lists them. None when the snapshot has no timeline
+/// of it.
+pub fn watched_clips(snapshot: &model::Snapshot, id: &str) -> HashSet<String> {
+    let proposed = snapshot
+        .proposals
+        .iter()
+        .find(|proposal| {
+            proposal.proposal_id == id
+                || proposal
+                    .versions
+                    .iter()
+                    .any(|version| version.proposal_id == id)
+        })
+        .and_then(|proposal| snapshot.timeline_of(proposal, Some(id)))
+        .or_else(|| snapshot.proposal_timelines.get(id));
+    proposed
+        .map(|proposed| {
+            crate::chat::clip_changes(&snapshot.timeline, proposed)
+                .into_iter()
+                .filter(|change| !change.transition)
+                .map(|change| change.clip)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// How a clip is drawn while a change reel watches: how far it has risen
+/// off its lane (points), and how strong its ring, the glow under it and
+/// the cover over it are (0..1).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct WatchLook {
+    pub lift: f32,
+    pub ring: f32,
+    pub glow: f32,
+    pub dim: f32,
+}
+
+/// A clip `amount` of the way into a change reel (0 at rest, 1 watching),
+/// as Qt's timeline drew it: one the reel `watched` rises `CLIP_LIFT` off
+/// its lane over a soft glow, ringed in the accent's ink (a sound clip
+/// stays on its lane, ringed); every other clip falls back under a cover.
+pub fn watch_look(amount: f32, watched: bool, audio: bool) -> WatchLook {
+    let amount = amount.clamp(0.0, 1.0);
+    match (watched, audio) {
+        (true, false) => WatchLook {
+            lift: theme::motion::CLIP_LIFT * amount,
+            ring: amount,
+            glow: amount,
+            dim: 0.0,
+        },
+        (true, true) => WatchLook {
+            ring: amount,
+            ..WatchLook::default()
+        },
+        (false, _) => WatchLook {
+            dim: amount,
+            ..WatchLook::default()
+        },
+    }
+}
+
+/// The clips a change reel watches as the timeline shows them: rising off
+/// their lanes as it starts, settling back as it ends.
+#[derive(Clone, Debug)]
+pub struct ClipWatch {
+    /// The reel's proposal and the revision its clips were found at.
+    key: Option<(String, u64)>,
+    clips: Rc<HashSet<String>>,
+    /// How far into watching, 0..1.
+    amount: motion::Tween,
+}
+
+impl Default for ClipWatch {
+    fn default() -> Self {
+        Self {
+            key: None,
+            clips: Rc::default(),
+            amount: motion::Tween::at(0.0),
+        }
+    }
+}
+
+impl ClipWatch {
+    /// Follows the reel at `now`: `reel` is its proposal and the snapshot's
+    /// revision while one plays, None once it has ended; `find` gives the
+    /// clips it watches ([`watched_clips`]), asked only when either changes.
+    /// Clips the timeline was not lifting rise from their lanes over
+    /// `STAGE`, eased; as the reel ends they settle back the same way, and
+    /// are let go once they have. Under Reduce Motion (`reduced`) at once.
+    pub fn follow_at(
+        &mut self,
+        reel: Option<(&str, u64)>,
+        find: impl FnOnce() -> HashSet<String>,
+        reduced: bool,
+        now: Instant,
+    ) {
+        let scene = if reduced {
+            Duration::ZERO
+        } else {
+            theme::motion::STAGE
+        };
+        let Some((proposal, revision)) = reel else {
+            if self.key.take().is_some() {
+                self.amount.go_at(0.0, scene, now);
+            }
+            if !self.amount.running_at(now) && self.amount.target() == 0.0 {
+                self.clips = Rc::default();
+            }
+            return;
+        };
+        let same = self
+            .key
+            .as_ref()
+            .is_some_and(|(known, at)| known == proposal && *at == revision);
+        if same {
+            return;
+        }
+        self.key = Some((proposal.to_owned(), revision));
+        let clips = find();
+        if *self.clips != clips {
+            // Other clips rise from their lanes anew, as Qt's setFocusClips.
+            self.clips = Rc::new(clips);
+            self.amount.set(0.0);
+        }
+        self.amount.go_at(1.0, scene, now);
+    }
+
+    /// How far into watching it is at `now`, 0..1.
+    pub fn amount_at(&self, now: Instant) -> f32 {
+        self.amount.value_at(now)
+    }
+
+    /// Whether it is still rising or settling at `now`.
+    pub fn running_at(&self, now: Instant) -> bool {
+        self.amount.running_at(now)
+    }
+
+    /// The clips it lifts (still, while they settle back).
+    pub fn clips(&self) -> &HashSet<String> {
+        &self.clips
+    }
+
+    /// What the canvas draws at `now`: the clips and how far into watching,
+    /// while anything shows.
+    fn shown_at(&self, now: Instant) -> Option<(Rc<HashSet<String>>, f32)> {
+        let amount = self.amount_at(now);
+        (amount > 0.0 && !self.clips.is_empty()).then(|| (self.clips.clone(), amount))
+    }
 }
 
 /// Where a sound clip's rubber band stands for `db` in a clip `tall`
@@ -1425,6 +1578,8 @@ pub struct TimelineView {
     /// live proposal it has stood on.
     kerf_at: Option<f64>,
     live_changes: HashSet<String>,
+    /// The clips a change reel watches, risen off their lanes while it plays.
+    watch: ClipWatch,
     /// Where the pointer skims the lanes.
     skim: Option<f64>,
     /// A signal drawn, or a band's values let go, shown until kerfd answers.
@@ -1489,6 +1644,7 @@ impl TimelineView {
             shown_version: None,
             kerf_at: None,
             live_changes: HashSet::new(),
+            watch: ClipWatch::default(),
             skim: None,
             drawn: None,
             held_gain: None,
@@ -4323,6 +4479,26 @@ impl Render for TimelineView {
         if activities.iter().any(Activity::making) && !motion::reduced() {
             window.request_animation_frame();
         }
+        // While a change reel plays, what it watches rises off the lanes.
+        let now = Instant::now();
+        let session = self.session.read(cx);
+        let reel = session.reel().map(|reel| reel.proposal.clone());
+        let snapshot = &session.state.snapshot;
+        self.watch.follow_at(
+            reel.as_deref()
+                .map(|proposal| (proposal, snapshot.revision)),
+            || {
+                reel.as_deref()
+                    .map(|proposal| watched_clips(snapshot, proposal))
+                    .unwrap_or_default()
+            },
+            motion::reduced(),
+            now,
+        );
+        if self.watch.running_at(now) {
+            window.request_animation_frame();
+        }
+        let watch = self.watch.shown_at(now);
 
         let frame = Frame {
             lanes: lanes.clone(),
@@ -4342,6 +4518,7 @@ impl Render for TimelineView {
             readout,
             gain,
             signal,
+            watch,
             session: self.session.clone(),
             this: cx.entity().downgrade(),
         };
@@ -4476,11 +4653,22 @@ struct Frame {
     gain: Option<GainShown>,
     /// A signal as it is drawn, or as it was drawn until kerfd has it.
     signal: Option<(String, BTreeMap<i64, f64>)>,
+    /// While a change reel plays (and as it settles back): the clips it
+    /// watches, and how far into watching, 0..1.
+    watch: Option<(Rc<HashSet<String>>, f32)>,
     session: Entity<Session>,
     this: WeakEntity<TimelineView>,
 }
 
 impl Frame {
+    /// How `clip` on `row` is drawn while a change reel watches.
+    fn watch_look(&self, row: &Row, clip: &ClipBox) -> WatchLook {
+        self.watch
+            .as_ref()
+            .map(|(clips, amount)| watch_look(*amount, clips.contains(&clip.id), row.audio()))
+            .unwrap_or_default()
+    }
+
     fn activity(&self, clip: &ClipBox) -> Option<&Activity> {
         if clip.card() {
             return None;
@@ -4693,20 +4881,25 @@ fn paint_lanes(
                     outline_clip(view, pen, width, row, y, clip.start, clip.end(), window)
                 }
                 Some(_) => {}
-                None => paint_clip(
-                    frame,
-                    pen,
-                    width,
-                    row,
-                    y,
-                    clip,
-                    (clip.start, clip.duration),
-                    None,
-                    0.0,
-                    fonts,
-                    window,
-                    cx,
-                ),
+                None => {
+                    let look = frame.watch_look(row, clip);
+                    paint_watched(view, pen, width, row, y, clip, look, false, window);
+                    paint_clip(
+                        frame,
+                        pen,
+                        width,
+                        row,
+                        y - look.lift,
+                        clip,
+                        (clip.start, clip.duration),
+                        None,
+                        0.0,
+                        fonts,
+                        window,
+                        cx,
+                    );
+                    paint_watched(view, pen, width, row, y, clip, look, true, window);
+                }
             }
         }
         for &(start, end) in &row.transitions {
@@ -4828,6 +5021,63 @@ fn paint_readout(
         window,
         cx,
     );
+}
+
+/// What a change reel draws round `clip` on `row` (at `y`), as `look`
+/// says: under it (`over` false), the glow it rises over; over it, the
+/// cover on a clip it does not watch, or the accent's ring round one it
+/// does, where it has risen to (Qt's timeline, while watching changes).
+fn paint_watched(
+    view: &Viewport,
+    pen: Pen,
+    width: f32,
+    row: &Row,
+    y: f32,
+    clip: &ClipBox,
+    look: WatchLook,
+    over: bool,
+    window: &mut Window,
+) {
+    if look == WatchLook::default() {
+        return;
+    }
+    let Some((left, top, across, tall)) = clip_box(view, width, row, y, clip.start, clip.end())
+    else {
+        return;
+    };
+    let top = top - look.lift;
+    if !over {
+        if look.glow > 0.0 {
+            let glow = theme::lane::watch_glow();
+            window.paint_quad(quad(
+                pen.rect(left - 4.0, top - 2.0, across + 8.0, tall + 10.0),
+                px(radius::SMALL + 2.0),
+                theme::with_alpha(glow, glow.a * look.glow),
+                px(0.0),
+                gpui::transparent_black(),
+                BorderStyle::Solid,
+            ));
+        }
+        return;
+    }
+    if look.dim > 0.0 {
+        let dim = theme::lane::watch_dim();
+        window.paint_quad(fill(
+            pen.rect(left, top, across, tall),
+            theme::with_alpha(dim, dim.a * look.dim),
+        ));
+    }
+    if look.ring > 0.0 {
+        // Just outside it, as Qt's 2-point line round it was.
+        window.paint_quad(quad(
+            pen.rect(left - 2.0, top - 2.0, across + 4.0, tall + 4.0),
+            px(radius::SMALL + 2.0),
+            gpui::transparent_black(),
+            px(2.0),
+            theme::with_alpha(theme::accent_ink(), look.ring),
+            BorderStyle::Solid,
+        ));
+    }
 }
 
 /// The box a clip from `start` to `end` takes on `row` drawn at `y`, kept
@@ -5850,11 +6100,9 @@ mod tests {
         let order: Vec<_> = lanes.rows.iter().map(|row| row.id.as_str()).collect();
         assert_eq!(order, ["S1", "V2", "V1", "A1"]);
         let tops: Vec<_> = lanes.rows.iter().map(|row| row.top).collect();
-        assert_eq!(tops[1], layout::SUBTITLE_LANE);
-        assert_eq!(
-            lanes.height,
-            layout::SUBTITLE_LANE + 2.0 * layout::VIDEO_LANE + layout::AUDIO_LANE
-        );
+        // Every track one roomy height, as the Qt editor's window drew them.
+        assert_eq!(tops[1], layout::TRACK_LANE);
+        assert_eq!(lanes.height, 4.0 * layout::TRACK_LANE);
     }
 
     // Changed with #58: the program stays on the timeline under an open

@@ -17,7 +17,7 @@ use crate::ui;
 use crate::workspace::Workspace;
 use gpui::{
     actions, div, prelude::*, px, size, AnimationExt, App, AppContext, Bounds, Context, Entity,
-    EventEmitter, FocusHandle, Focusable, FontWeight, Global, KeyBinding, PromptButton,
+    EventEmitter, FocusHandle, Focusable, FontWeight, Global, KeyBinding, Pixels, PromptButton,
     PromptHandle, PromptLevel, PromptResponse, RenderablePromptHandle, TitlebarOptions, WeakEntity,
     Window, WindowBounds, WindowHandle, WindowOptions,
 };
@@ -25,36 +25,203 @@ use serde_json::Value;
 use std::cell::Cell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-/// The options every editor window opens with (a project's, the
-/// launcher's, New Project's launcher): the screen edge to edge, titled
-/// `title`; or, for the first window of a run given `--window-size`
-/// ([`set_window_size`]), that size in the middle of the screen. The size
-/// is the first window's alone, as the Qt editor resized only the window it
-/// opened at launch: every window after it opens edge to edge.
+/// The options a project's window opens with, titled `title`: at the
+/// Qt editor's 1500 × 940 in the middle of the screen, as its MainWindow
+/// resized itself (`layout::WINDOW`), or filling a screen too small for
+/// that; or, for the first window of a run given `--window-size`
+/// ([`set_window_size`]), that size there. The size asked is the first
+/// window's alone, as the Qt editor resized only the window it opened at
+/// launch. A window that takes another's place opens where that one was
+/// instead ([`options_at`]). See [`window_place`].
 pub fn options(title: &str, cx: &mut App) -> WindowOptions {
+    options_at(title, None, cx)
+}
+
+/// [`options`], in `place` when the window takes the place of another
+/// (the window it follows, as `window.window_bounds()` gave it): where
+/// that one was, at its size, maximized or full screen if it was, as the
+/// Qt editor's openEditor gave the next window the last one's geometry.
+pub fn options_at(title: &str, place: Option<WindowBounds>, cx: &mut App) -> WindowOptions {
+    opening(titlebar(title), place, cx)
+}
+
+/// The launcher's window options ([`options_at`]'s, in `place`), with
+/// the system's title bar on macOS too: the launcher has no toolbar to be
+/// its title bar, nor a stretch of one to move the window by.
+pub fn launcher_options(place: Option<WindowBounds>, cx: &mut App) -> WindowOptions {
+    let titlebar = TitlebarOptions {
+        title: Some("Industrial Kerf".into()),
+        ..Default::default()
+    };
+    opening(titlebar, place, cx)
+}
+
+/// A window's options with `titlebar`, where [`window_place`] puts it
+/// on the primary display (the one a window opens on): in `place`, else
+/// at the size `--window-size` asked for the run's first window, else at
+/// `layout::WINDOW`.
+fn opening(titlebar: TitlebarOptions, place: Option<WindowBounds>, cx: &mut App) -> WindowOptions {
     let asked = cx.try_global::<WindowSize>().and_then(|asked| asked.0);
     if asked.is_some() {
         cx.set_global(WindowSize(None));
     }
-    let (width, height) = asked.unwrap_or((1600.0, 1000.0));
-    let bounds = Bounds::centered(None, size(px(width), px(height)), cx);
+    let asked = asked.map(|(width, height)| size(px(width), px(height)));
+    let screen = cx.primary_display().map(|display| display.bounds());
+    let (least_width, least_height) = theme::layout::WINDOW_LEAST;
     WindowOptions {
-        // The editor fills the screen edge to edge, unless a size was asked for.
-        window_bounds: Some(match asked {
-            Some(_) => WindowBounds::Windowed(bounds),
-            None => WindowBounds::Maximized(bounds),
-        }),
-        titlebar: Some(TitlebarOptions {
-            title: Some(title.to_owned().into()),
-            ..Default::default()
-        }),
+        window_bounds: Some(window_place(place, asked, screen)),
+        titlebar: Some(titlebar),
         app_id: Some("industrial-kerf".into()),
-        window_min_size: Some(size(px(720.0), px(480.0))),
+        window_min_size: Some(size(px(least_width), px(least_height))),
         ..Default::default()
     }
+}
+
+/// Where a window opens, on a screen whose bounds are `screen`:
+///
+/// - in `place` when it takes another window's place: where that one
+///   was, at its size, maximized or full screen as it was;
+/// - at `asked` (`--window-size`), windowed, in the screen's middle; one
+///   bigger than the screen starts at its top left corner, never past it,
+///   so that the toolbar is on the screen;
+/// - else at `layout::WINDOW`, windowed in the screen's middle when it
+///   fits there with what the screen keeps around a window
+///   (`layout::SCREEN_KEPT`: its title bar, the menu bar, the Dock or a
+///   taskbar). On a smaller screen it fills the screen (maximized), and
+///   put back it is the most of `layout::WINDOW` that fits there, in its
+///   middle (the Qt editor centred its window only where it fitted).
+///
+/// With no screen known, windowed at the screen's origin.
+pub fn window_place(
+    place: Option<WindowBounds>,
+    asked: Option<gpui::Size<Pixels>>,
+    screen: Option<Bounds<Pixels>>,
+) -> WindowBounds {
+    use theme::layout::{SCREEN_KEPT, WINDOW, WINDOW_LEAST};
+    if let Some(place) = place {
+        return place;
+    }
+    let wanted = asked.unwrap_or_else(|| size(px(WINDOW.0), px(WINDOW.1)));
+    let Some(screen) = screen else {
+        return WindowBounds::Windowed(Bounds::new(gpui::point(px(0.0), px(0.0)), wanted));
+    };
+    let (screen_width, screen_height) =
+        (f32::from(screen.size.width), f32::from(screen.size.height));
+    // In the screen's middle, its top left corner never past the screen's.
+    let middle = |width: f32, height: f32| {
+        let left = f32::from(screen.origin.x) + ((screen_width - width) / 2.0).max(0.0);
+        let top = f32::from(screen.origin.y) + ((screen_height - height) / 2.0).max(0.0);
+        Bounds::new(gpui::point(px(left), px(top)), size(px(width), px(height)))
+    };
+    let (width, height) = (f32::from(wanted.width), f32::from(wanted.height));
+    if asked.is_some() {
+        return WindowBounds::Windowed(middle(width, height));
+    }
+    let room = (screen_width - SCREEN_KEPT.0, screen_height - SCREEN_KEPT.1);
+    if width <= room.0 && height <= room.1 {
+        WindowBounds::Windowed(middle(width, height))
+    } else {
+        WindowBounds::Maximized(middle(
+            width.min(room.0).max(WINDOW_LEAST.0),
+            height.min(room.1).max(WINDOW_LEAST.1),
+        ))
+    }
+}
+
+/// A window's title bar, titled `title`. On macOS the toolbar is the title
+/// bar, as in the Qt editor (its KERF_EDITOR_OWN_TITLE_BAR): the window
+/// runs up under a transparent title bar with no title, and the window
+/// buttons stand on the toolbar's line at its leading end
+/// ([`window_buttons_at`]). Elsewhere the system's title bar stays.
+pub fn titlebar(title: &str) -> TitlebarOptions {
+    TitlebarOptions {
+        title: Some(title.to_owned().into()),
+        appears_transparent: cfg!(target_os = "macos"),
+        traffic_light_position: cfg!(target_os = "macos").then(window_buttons_at),
+    }
+}
+
+/// Where macOS's window buttons stand, from the window's top left: their
+/// first one's left edge at `WINDOW_BUTTONS_LEFT`, on the middle of the
+/// toolbar's height.
+pub fn window_buttons_at() -> gpui::Point<Pixels> {
+    use theme::layout::{TOOLBAR, WINDOW_BUTTON, WINDOW_BUTTONS_LEFT};
+    gpui::point(px(WINDOW_BUTTONS_LEFT), px((TOOLBAR - WINDOW_BUTTON) / 2.0))
+}
+
+/// What a bar along the window's top at its leading end (the sidebar's
+/// top; the toolbar with the sidebar away) leaves for macOS's window
+/// buttons in `window` (`WINDOW_BUTTONS_ROOM`, where its first control
+/// starts); none elsewhere, or in full screen, where there are none
+/// beside it. See [`title_bar_lead`].
+pub fn window_buttons_room(window: &Window) -> f32 {
+    if cfg!(target_os = "macos") && !window.is_fullscreen() {
+        theme::layout::WINDOW_BUTTONS_ROOM
+    } else {
+        0.0
+    }
+}
+
+/// Where the first control of a bar along the window's top edge at its
+/// leading end starts (the sidebar's top; the toolbar with the sidebar
+/// away): past macOS's window buttons ([`window_buttons_room`]), else 8 in.
+pub fn title_bar_lead(window: &Window) -> f32 {
+    lead_past(window_buttons_room(window))
+}
+
+/// A leading bar's first control's place, past `room` for the window
+/// buttons and never nearer the edge than the bars' own 8.
+pub fn lead_past(room: f32) -> f32 {
+    room.max(8.0)
+}
+
+/// A press on a title bar's empty stretch, its drag still to come (macOS).
+static TITLE_PRESSED: AtomicBool = AtomicBool::new(false);
+
+/// `stretch`, an empty stretch of the toolbar or the sidebar's top (the
+/// title bar on macOS): there, a press then a drag on it moves the window
+/// and a double-click does what the system has a title bar's do (zoom, as
+/// a rule), as the Qt editor's toolbar did. Elsewhere, where the system's
+/// title bar does that, it is left as it is.
+pub fn title_bar_stretch(stretch: gpui::Div) -> gpui::Div {
+    if !cfg!(target_os = "macos") {
+        return stretch;
+    }
+    stretch
+        .on_mouse_down(
+            gpui::MouseButton::Left,
+            |event: &gpui::MouseDownEvent, window, _| {
+                TITLE_PRESSED.store(event.click_count < 2, Ordering::Relaxed);
+                if event.click_count == 2 {
+                    window.titlebar_double_click();
+                }
+            },
+        )
+        .on_mouse_up(gpui::MouseButton::Left, |_, _, _| {
+            TITLE_PRESSED.store(false, Ordering::Relaxed)
+        })
+        .on_mouse_move(|event: &gpui::MouseMoveEvent, window, _| {
+            if event.pressed_button == Some(gpui::MouseButton::Left)
+                && TITLE_PRESSED.swap(false, Ordering::Relaxed)
+            {
+                drag_window(window);
+            }
+        })
+}
+
+/// On macOS, hands a press on the title bar's empty stretch over to the
+/// window server, which moves the window as the pointer drags (AppKit's
+/// performWindowDragWithEvent with the event being handled, as Qt's
+/// startSystemMove did); gpui 0.2.2's own `start_window_move` does nothing
+/// there. Elsewhere nothing: the system's title bar moves the window.
+pub fn drag_window(window: &Window) {
+    #[cfg(target_os = "macos")]
+    macos::drag(window);
+    #[cfg(not(target_os = "macos"))]
+    let _ = window;
 }
 
 /// The size `--window-size` asked the first window to open at, until
@@ -644,7 +811,21 @@ fn raise(open: &OpenProject, link: Option<crate::links::Link>, cx: &mut App) {
 /// already has its window raised. With no `kerfd`, the one the editor was
 /// started with ([`set_kerfd`]) is kept.
 pub fn open(project: Option<PathBuf>, kerfd: Option<PathBuf>, cx: &mut App) {
-    open_at(project, kerfd, None, cx);
+    open_at(project, kerfd, None, None, cx);
+}
+
+/// [`open`], in the place of a window `place` gives (its bounds, as
+/// `window.window_bounds()` gave them): another project opened from a
+/// window opens where that window was, at its size, maximized if it was,
+/// as the Qt editor's openEditor did. A project open already is raised
+/// where it is.
+pub fn open_in_place(
+    project: PathBuf,
+    kerfd: Option<PathBuf>,
+    place: Option<WindowBounds>,
+    cx: &mut App,
+) {
+    open_at(Some(project), kerfd, None, place, cx);
 }
 
 /// The kerfd the editor was started with (its argument, or `KERFD_BIN`).
@@ -676,7 +857,7 @@ pub fn follow(text: &str, kerfd: Option<PathBuf>, cx: &mut App) {
         Ok((project, link))
     });
     match found {
-        Ok((project, link)) => open_at(Some(project), kerfd, Some(link), cx),
+        Ok((project, link)) => open_at(Some(project), kerfd, Some(link), None, cx),
         Err(message) => {
             log::warn!("{text}: {message}");
             explain_link(text, &message, cx);
@@ -711,6 +892,7 @@ fn open_at(
     project: Option<PathBuf>,
     kerfd: Option<PathBuf>,
     link: Option<crate::links::Link>,
+    place: Option<WindowBounds>,
     cx: &mut App,
 ) {
     let kerfd = kerfd.or_else(|| started_kerfd(cx));
@@ -730,7 +912,7 @@ fn open_at(
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_else(|| "Industrial Kerf".into());
-    let options = options(&title, cx);
+    let options = options_at(&title, place, cx);
     let mut made = None;
     let window = cx.open_window(options, |window, cx| {
         represent_project(window, &project);
@@ -816,6 +998,20 @@ mod macos {
         }
     }
 
+    /// Hands the press being handled to the window server, which moves the
+    /// NSWindow that holds `window`'s view as the pointer drags.
+    pub(super) fn drag(window: &impl HasWindowHandle) {
+        let Some(main) = MainThreadMarker::new() else {
+            return;
+        };
+        let Some(event) = NSApplication::sharedApplication(main).currentEvent() else {
+            return;
+        };
+        if let Some(ns_window) = ns_window(window) {
+            ns_window.performWindowDragWithEvent(&event);
+        }
+    }
+
     /// The window server's number for `window`'s NSWindow (what
     /// `screencapture -l` takes).
     pub(super) fn window_number(window: &impl HasWindowHandle) -> Option<isize> {
@@ -831,7 +1027,7 @@ mod macos {
 /// the launcher opens keeps it.
 fn open_launcher(problem: Option<String>, kerfd: Option<PathBuf>, cx: &mut App) {
     let prefs = Prefs::load();
-    let options = options("Industrial Kerf", cx);
+    let options = launcher_options(None, cx);
     let window = cx.open_window(options, |window, cx| {
         let launcher = cx.new(|cx| LauncherView::new(prefs, window, cx).with_kerfd(kerfd.clone()));
         if let Some(problem) = problem {
@@ -840,8 +1036,18 @@ fn open_launcher(problem: Option<String>, kerfd: Option<PathBuf>, cx: &mut App) 
         let handle = window.window_handle();
         cx.subscribe(&launcher, move |_, event: &LauncherEvent, cx| match event {
             LauncherEvent::Open { project, starts } => {
-                // A folder that was no project yet brings its media in.
-                crate::workspace::open_folder_with(project.clone(), *starts, kerfd.clone(), cx);
+                // A folder that was no project yet brings its media in; its
+                // window takes the launcher's place.
+                let place = handle
+                    .update(cx, |_, window, _| window.window_bounds())
+                    .ok();
+                crate::workspace::open_folder_in(
+                    project.clone(),
+                    *starts,
+                    kerfd.clone(),
+                    place,
+                    cx,
+                );
                 let _ = handle.update(cx, |_, window, _| window.remove_window());
             }
         })

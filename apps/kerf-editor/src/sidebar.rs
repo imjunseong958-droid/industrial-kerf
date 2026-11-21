@@ -3068,14 +3068,19 @@ impl Render for SidebarView {
                     .flex_none()
                     .flex()
                     .items_center()
-                    .px(px(8.0))
+                    // On macOS outside full screen the window buttons sit
+                    // here, over the sidebar (Qt's toolbar_wiring), so
+                    // Hide sidebar starts past them, and the row's empty
+                    // stretch moves and zooms the window.
+                    .pl(px(crate::app::title_bar_lead(window)))
+                    .pr(px(8.0))
                     .gap(px(4.0))
                     .child(
                         icon_button("hide-sidebar", Icon::Sidebar)
                             .tooltip("Hide sidebar")
                             .on_click(cx.listener(|_, _, _, cx| cx.emit(SidebarEvent::Hide))),
                     )
-                    .child(div().flex_1()),
+                    .child(crate::app::title_bar_stretch(div().flex_1().h_full())),
             )
             .child(
                 div()

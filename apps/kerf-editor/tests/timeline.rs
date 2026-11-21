@@ -416,7 +416,7 @@ fn every_track_steps_and_new_ones_follow() {
     heights.step(&rows, 1);
     assert_eq!(heights.height("A1", TrackKind::Audio), 24.0);
     let video = heights.height("V1", TrackKind::Video);
-    assert!(video > kerf_editor::theme::layout::VIDEO_LANE);
+    assert!(video > kerf_editor::theme::layout::TRACK_LANE);
     // A track added since takes the height the rest stepped to.
     assert_eq!(heights.height("V9", TrackKind::Video), video);
     heights.set_all(Some(500.0));
@@ -424,7 +424,7 @@ fn every_track_steps_and_new_ones_follow() {
     heights.set_all(None);
     assert_eq!(
         heights.height("A1", TrackKind::Audio),
-        kerf_editor::theme::layout::AUDIO_LANE
+        kerf_editor::theme::layout::TRACK_LANE
     );
     // Kept with the project's settings as JSON.
     let kept = serde_json::to_value(&heights).unwrap();

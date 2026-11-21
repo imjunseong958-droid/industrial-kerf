@@ -38,6 +38,7 @@ use gpui::{
     ClickEvent, Context, DismissEvent, DispatchPhase, Entity, EventEmitter, FocusHandle, Focusable,
     KeyBinding, KeyDownEvent, MouseButton, MouseDownEvent, ObjectFit, PathPromptOptions, Pixels,
     RenderImage, Rgba, ScrollWheelEvent, SharedString, Stateful, Subscription, Window,
+    WindowBounds,
 };
 use std::cell::Cell;
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -1845,7 +1846,7 @@ impl Workspace {
             return;
         }
         let kerfd = session.kerfd().map(Path::to_path_buf);
-        open_folder_with(project, starts, kerfd, cx);
+        open_folder_in(project, starts, kerfd, Some(window.window_bounds()), cx);
         window.remove_window();
     }
 
@@ -1858,7 +1859,8 @@ impl Workspace {
         let current = session.project.clone();
         let replaced = window.window_handle();
         let prefs = crate::prefs::Prefs::load();
-        let options = crate::app::options("Industrial Kerf", cx);
+        // Over this window, where it is; what it opens takes this window's place.
+        let options = crate::app::launcher_options(Some(window.window_bounds()), cx);
         let opened = cx.open_window(options, move |launcher_window, cx| {
             // What it makes from a preset brings its media in with this kerfd too.
             let launcher = cx.new(|cx| {
@@ -1874,7 +1876,10 @@ impl Workspace {
                             .as_deref()
                             .is_some_and(|current| crate::app::same_folder(current, project));
                         if !here {
-                            open_folder_with(project.clone(), *starts, kerfd.clone(), cx);
+                            let place = replaced
+                                .update(cx, |_, window, _| window.window_bounds())
+                                .ok();
+                            open_folder_in(project.clone(), *starts, kerfd.clone(), place, cx);
                             let _ = replaced.update(cx, |_, window, _| window.remove_window());
                         } else {
                             let _ = replaced.update(cx, |_, window, _| window.activate_window());
@@ -1910,7 +1915,7 @@ impl Workspace {
                 false,
                 true,
                 move |window, cx| {
-                    open_folder_with(project, true, kerfd, cx);
+                    open_folder_in(project, true, kerfd, Some(window.window_bounds()), cx);
                     window.remove_window();
                 },
             )
@@ -2543,13 +2548,16 @@ impl Workspace {
         let app_menu_open = self.app_menu.as_ref().is_some_and(|(_, account)| !account);
         let renaming = self.renaming_title.is_some();
         let title_menu = self.title_menu.is_some();
+        // At the window's leading edge on macOS, the window buttons' room.
+        let lead = toolbar_places(leading, crate::app::window_buttons_room(window)).lead;
         div()
             .h(px(layout::TOOLBAR))
             .flex_none()
             .flex()
             .items_center()
             .gap(px(4.0))
-            .px(px(8.0))
+            .pl(px(lead))
+            .pr(px(8.0))
             .when(leading, |bar| {
                 bar.child(
                     with_key(
@@ -2670,7 +2678,9 @@ impl Workspace {
                         row.child(ui::line(words, text::CONTROL, color).min_w_0())
                     }),
             )
-            .child(div().flex_1())
+            // Its empty stretch: on macOS, where the toolbar is the title
+            // bar, it moves the window and zooms it.
+            .child(crate::app::title_bar_stretch(div().flex_1().h_full()))
             .child(self.formats.clone())
             .child(self.collab.clone())
             .when_some(rendering, |bar, rendering| {
@@ -3216,15 +3226,19 @@ impl Workspace {
             .into_any_element()
     }
 
-    fn notices(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn notices(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let mut notices = self.session.read(cx).state.notices.clone();
         // What the error bar holds is said there, not again here.
         if let Some(error) = &self.error {
             notices.retain(|notice| !(notice.error && notice.text == error.raw));
         }
+        let bottom = notice_bottom(
+            f32::from(window.viewport_size().height),
+            self.chat.read(cx).composer_top(),
+        );
         div()
             .absolute()
-            .bottom(px(120.0))
+            .bottom(px(bottom))
             .left_0()
             .right_0()
             .px(px(24.0))
@@ -3513,8 +3527,9 @@ impl Render for Workspace {
             !self.session.read(cx).selection.is_empty() && panel_width > layout::INSPECTOR * 2.2;
         // The picture's shape, which splits the panel.
         let aspect = crate::stage::shown_aspect(self.session.read(cx));
-        // Where the title starts, for its menu to open under it.
-        let title_left = main_left + if leading { 84.0 } else { 16.0 };
+        // Where the title and ⋯ are, for their menus to open under them.
+        let places = toolbar_places(leading, crate::app::window_buttons_room(window));
+        let title_left = main_left + places.title;
         // Where the panel's left edge is drawn, and where it comes to rest;
         // where the picture will be there, for what grows into it.
         let panel_left = main_left + conversation_width - reach;
@@ -3834,7 +3849,7 @@ impl Render for Workspace {
                 let left = if above_account {
                     main_left - sidebar_width + 8.0
                 } else {
-                    main_left + 40.0
+                    main_left + places.app_menu
                 };
                 let (top, room) = app_menu_room(above_account, window_height);
                 let tall = self.app_menu_tall.get();
@@ -3918,7 +3933,7 @@ impl Render for Workspace {
                     .bottom_0()
                     .left(px(main_left))
                     .w(px(conversation_width))
-                    .child(self.notices(cx)),
+                    .child(self.notices(window, cx)),
             )
     }
 }
@@ -4002,6 +4017,18 @@ pub fn points(value: Pixels) -> f32 {
     f32::from(value)
 }
 
+/// How far up from the window's foot (a window `height` points tall) the
+/// notices stand: `NOTICE_GAP` above the composer with what stands over it
+/// (its top at `composer_top`, as last laid out), so that they never cover
+/// Kerf's next steps or what waits to be asked; `NOTICE_FOOT` before the
+/// composer has been laid out.
+pub fn notice_bottom(height: f32, composer_top: Option<f32>) -> f32 {
+    match composer_top {
+        Some(top) => (height - top).max(0.0) + layout::NOTICE_GAP,
+        None => layout::NOTICE_FOOT,
+    }
+}
+
 /// Seconds since 1970, now.
 fn now_seconds() -> i64 {
     std::time::SystemTime::now()
@@ -4012,9 +4039,15 @@ fn now_seconds() -> i64 {
 
 /// How long ago `then` was at `now` (seconds since 1970), as Qt's
 /// editedAgo said it: "just now", "4 min ago", "2 h ago" the same day,
-/// "yesterday", "3 days ago", then the date ("4 Mar 2026"). Days are
-/// counted in UTC.
+/// "yesterday", "3 days ago", then the date ("4 Mar 2026"). Days, and the
+/// date, are the person's own: on the calendar of the system's time zone,
+/// as Qt's toLocalTime had them ([`edited_ago_in`]).
 pub fn edited_ago(then: i64, now: i64) -> String {
+    edited_ago_in(then, now, &jiff::tz::TimeZone::system())
+}
+
+/// [`edited_ago`] on the calendar of `zone`.
+pub fn edited_ago_in(then: i64, now: i64, zone: &jiff::tz::TimeZone) -> String {
     const MONTHS: [&str; 12] = [
         "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
     ];
@@ -4027,7 +4060,7 @@ pub fn edited_ago(then: i64, now: i64) -> String {
         return format!("{minutes} min ago");
     }
     let hours = minutes / 60;
-    let days = now.div_euclid(86_400) - then.div_euclid(86_400);
+    let days = local_day(now, zone) - local_day(then, zone);
     if hours < 24 && days == 0 {
         return format!("{hours} h ago");
     }
@@ -4037,8 +4070,18 @@ pub fn edited_ago(then: i64, now: i64) -> String {
     if days < 7 {
         return format!("{days} days ago");
     }
-    let (year, month, day) = civil(then.div_euclid(86_400));
+    let (year, month, day) = civil(local_day(then, zone));
     format!("{day} {} {year}", MONTHS[(month - 1).clamp(0, 11) as usize])
+}
+
+/// The day (since 1970-01-01) that `seconds` since 1970 falls on in
+/// `zone`: on its calendar, its offset from UTC then (summer time or not)
+/// counted in. A time out of the calendar's reach counts as UTC.
+pub fn local_day(seconds: i64, zone: &jiff::tz::TimeZone) -> i64 {
+    let offset = jiff::Timestamp::from_second(seconds)
+        .map(|at| zone.to_offset(at).seconds())
+        .unwrap_or(0);
+    (seconds + i64::from(offset)).div_euclid(86_400)
 }
 
 /// The date of a day since 1970-01-01: year, month, day.
@@ -4234,6 +4277,44 @@ pub fn app_menu_place(above_account: bool, room: f32, tall: f32) -> (f32, bool) 
         (0.0, false)
     }
 }
+
+/// Where the toolbar's controls start, and the popups they open, from
+/// the main column's left edge.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ToolbarPlaces {
+    /// Its first control (its leading padding).
+    pub lead: f32,
+    /// The title's menu and Activity, under the title.
+    pub title: f32,
+    /// The app's menu, under the toolbar's ⋯ (the sidebar away).
+    pub app_menu: f32,
+}
+
+/// [`ToolbarPlaces`] for a toolbar at the window's leading edge or not
+/// (`leading`: the sidebar away), with `room` what macOS's window buttons
+/// need there ([`crate::app::window_buttons_room`]). At that edge the
+/// toolbar starts past the buttons, Sidebar and ⋯ first, and its popups
+/// move on with the controls that open them.
+pub fn toolbar_places(leading: bool, room: f32) -> ToolbarPlaces {
+    let pad = 8.0;
+    if !leading {
+        // The title first, past its row's own 8.
+        return ToolbarPlaces {
+            lead: pad,
+            title: pad + 8.0,
+            app_menu: pad + TOOLBAR_STEP,
+        };
+    }
+    let lead = crate::app::lead_past(room);
+    ToolbarPlaces {
+        lead,
+        // Sidebar, then ⋯, then the title's row, 8 in, and 4 past it.
+        title: lead + 2.0 * TOOLBAR_STEP + 8.0 + 4.0,
+        app_menu: lead + TOOLBAR_STEP,
+    }
+}
+/// A toolbar button and the gap after it.
+const TOOLBAR_STEP: f32 = theme::height::H28 + 4.0;
 /// How far the stage grows over the conversation while changes are
 /// watched (Qt's reelReach).
 use crate::theme::motion::REEL_REACH;
@@ -4447,7 +4528,20 @@ pub fn open_folder(project: PathBuf, starts: bool, cx: &mut App) {
 /// [`open_folder`] with the kerfd the project is opened with (None finds
 /// one as at launch): a window opening another project keeps its own.
 pub fn open_folder_with(project: PathBuf, starts: bool, kerfd: Option<PathBuf>, cx: &mut App) {
-    crate::app::open(Some(project.clone()), kerfd, cx);
+    open_folder_in(project, starts, kerfd, None, cx);
+}
+
+/// [`open_folder_with`], in `place`: the bounds of the window it takes
+/// the place of (`window.window_bounds()`), so it opens where that one
+/// was, at its size, maximized if it was, as Qt's openEditor did.
+pub fn open_folder_in(
+    project: PathBuf,
+    starts: bool,
+    kerfd: Option<PathBuf>,
+    place: Option<WindowBounds>,
+    cx: &mut App,
+) {
+    crate::app::open_in_place(project.clone(), kerfd, place, cx);
     if !starts {
         return;
     }

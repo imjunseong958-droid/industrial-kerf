@@ -15,6 +15,11 @@
 //! in the whole sequence around it; without one it is about the sequence
 //! at the playhead. The request is stamped at the start of what it is
 //! about ([`Session::ask_about`]). It fades in over `FADE`, as a menu does.
+//!
+//! Scope is the kit's menu ([`ui::Menu`], Qt's QMenu): Up and Down, a
+//! letter to its row, Return or Space to choose; Esc closes only the menu,
+//! and what was typed stays. Its button is a Tab stop (Tab goes round the
+//! field, Scope and Ask only) that opens it with Return or Space.
 
 use crate::icons::Icon;
 use crate::input::{InputEvent, TextInput};
@@ -22,9 +27,9 @@ use crate::session::{AskScope, Session};
 use crate::theme::{self, motion as scene, text};
 use crate::ui;
 use gpui::{
-    anchored, deferred, div, point, prelude::*, px, AnimationExt, App, Bounds, Context,
-    DismissEvent, Entity, EventEmitter, FocusHandle, Focusable, Pixels, Point, Size, Subscription,
-    Window,
+    anchored, deferred, div, point, prelude::*, px, AnimationExt, App, Bounds, ClickEvent, Context,
+    DismissEvent, Entity, EventEmitter, FocusHandle, Focusable, KeyDownEvent, MouseDownEvent,
+    Pixels, Point, Size, Subscription, Window,
 };
 
 /// How wide the card is, and about how tall: it opens above what it is
@@ -54,12 +59,26 @@ pub fn place(anchor: Bounds<Pixels>, window: Size<Pixels>) -> Point<Pixels> {
     point(px(x), px(y))
 }
 
+/// How wide the Scope menu is.
+pub use crate::theme::layout::ASK_SCOPE_MENU_WIDTH as SCOPE_MENU_WIDTH;
+
 /// What the Scope button says: "This clip · <name>" or "Whole sequence".
 pub fn scope_words(scope: AskScope, clip: Option<&str>) -> String {
     match (scope, clip) {
         (AskScope::Clip, Some(clip)) => format!("This clip · {clip}"),
         _ => "Whole sequence".to_owned(),
     }
+}
+
+/// The Scope menu's rows, as Qt's had them: "This clip · <name>" while a
+/// clip is chosen, then "Whole sequence".
+pub fn scope_choices(clip: Option<&str>) -> Vec<(AskScope, String)> {
+    let mut choices = Vec::new();
+    if let Some(clip) = clip {
+        choices.push((AskScope::Clip, scope_words(AskScope::Clip, Some(clip))));
+    }
+    choices.push((AskScope::Sequence, scope_words(AskScope::Sequence, clip)));
+    choices
 }
 
 pub struct AskView {
@@ -70,7 +89,13 @@ pub struct AskView {
     /// The chosen clip's name, when one is chosen.
     clip: Option<String>,
     scope: AskScope,
-    scope_menu: bool,
+    /// The Scope menu, while it is open.
+    scope_menu: Option<Entity<ui::Menu>>,
+    /// The Scope button's, a Tab stop.
+    scope_focus: FocusHandle,
+    /// Return or Space went down on the Scope button: as it comes up, the
+    /// menu opens.
+    scope_armed: bool,
     input: Entity<TextInput>,
     focus_handle: FocusHandle,
     _subscriptions: Vec<Subscription>,
@@ -131,7 +156,9 @@ impl AskView {
                 AskScope::Sequence
             },
             clip,
-            scope_menu: false,
+            scope_menu: None,
+            scope_focus: cx.focus_handle().tab_stop(true),
+            scope_armed: false,
             input,
             focus_handle: cx.focus_handle(),
             _subscriptions: subscriptions,
@@ -165,23 +192,105 @@ impl AskView {
         }
     }
 
-    fn set_scope(&mut self, scope: AskScope, window: &mut Window, cx: &mut Context<Self>) {
+    /// The scope chosen; the menu has gone, and the keys are back where
+    /// they were before it opened (the field, or the Scope button).
+    fn set_scope(&mut self, scope: AskScope, cx: &mut Context<Self>) {
         self.scope = if self.clip.is_some() {
             scope
         } else {
             AskScope::Sequence
         };
-        self.scope_menu = false;
-        // Back to what is being written.
-        self.input.read(cx).focus(window);
         cx.notify();
     }
 
-    fn scope_row(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    /// Opens the Scope menu (from the keys: its first row lit), or puts it
+    /// away when it is open. Without a clip there is nothing to choose.
+    fn toggle_scope_menu(&mut self, keys: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(menu) = self.scope_menu.take() {
+            menu.update(cx, |menu, cx| menu.close(window, cx));
+            cx.notify();
+            return;
+        }
+        if self.clip.is_none() {
+            return;
+        }
+        let this = cx.weak_entity();
+        let items: Vec<ui::MenuItem> = scope_choices(self.clip.as_deref())
+            .into_iter()
+            .map(|(scope, words)| {
+                let this = this.clone();
+                ui::MenuItem::new(words)
+                    .checked(scope == self.scope)
+                    .on_choose(move |_, cx| {
+                        let _ = this.update(cx, |this, cx| this.set_scope(scope, cx));
+                    })
+            })
+            .collect();
+        let menu = cx.new(|cx| {
+            let menu = ui::Menu::new(items, window, cx).width(SCOPE_MENU_WIDTH);
+            if keys {
+                menu.from_keys()
+            } else {
+                menu
+            }
+        });
+        cx.subscribe(&menu, |this, menu, _: &DismissEvent, cx| {
+            if this.scope_menu.as_ref() == Some(&menu) {
+                this.scope_menu = None;
+                cx.notify();
+            }
+        })
+        .detach();
+        self.scope_menu = Some(menu);
+        cx.notify();
+    }
+
+    fn scope_row(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let words = scope_words(self.scope, self.clip.as_deref());
         let choosable = self.clip.is_some();
-        let button = theme::type_style(div(), text::CONTROL)
-            .id("ask-scope")
+        let open = self.scope_menu.is_some();
+        let button = if choosable {
+            // The kit's trigger: pressed again, its own menu goes rather
+            // than opening anew. A Tab stop of its own, ringed while it has
+            // the keys; Return or Space opens the menu; a press leaves the
+            // keys where they were.
+            ui::trigger(
+                "ask-scope",
+                cx.listener(|this, _: &MouseDownEvent, window, cx| {
+                    this.toggle_scope_menu(false, window, cx)
+                }),
+            )
+            .relative()
+            .track_focus(&self.scope_focus)
+            .key_context(ui::CONTROL)
+            .capture_any_mouse_down(|_, window, _| window.prevent_default())
+            .on_action(|_: &ui::FocusNext, window, cx| ui::tab_to(true, window, cx))
+            .on_action(|_: &ui::FocusPrevious, window, cx| ui::tab_to(false, window, cx))
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, _| {
+                let keystroke = &event.keystroke;
+                if matches!(keystroke.key.as_str(), "enter" | "space")
+                    && !keystroke.modifiers.modified()
+                {
+                    this.scope_armed = true;
+                }
+            }))
+            .on_click(cx.listener(|this, event: &ClickEvent, window, cx| {
+                if event.is_keyboard() && std::mem::take(&mut this.scope_armed) {
+                    this.toggle_scope_menu(true, window, cx);
+                }
+            }))
+            .cursor_pointer()
+            .when(open, |button| button.bg(theme::on()))
+            .when(!open, |button| {
+                button.hover(|button| button.bg(theme::hover2()))
+            })
+            .when(self.scope_focus.is_focused(window), |button| {
+                button.child(ui::ring(theme::radius::CONTROL))
+            })
+        } else {
+            div().id("ask-scope")
+        };
+        let button = theme::type_style(button, text::CONTROL)
             .flex()
             .items_center()
             .gap(px(2.0))
@@ -196,81 +305,29 @@ impl AskView {
             })
             .child(words)
             .when(choosable, |button| {
-                button
-                    .cursor_pointer()
-                    .hover(|button| button.bg(theme::hover2()))
-                    .child(Icon::ChevronDown.view(12.0, theme::ink3()))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.scope_menu = !this.scope_menu;
-                        cx.notify();
-                    }))
+                button.child(Icon::ChevronDown.view(12.0, theme::ink3()))
             });
+        // Its menu says all the tip would, so the tip waits while it is open.
+        let tip = (!open).then(|| ui::Tip::new("What Kerf looks at"));
         div()
             .flex()
             .items_center()
             .gap(px(8.0))
             .child(ui::label("Scope", text::CONTROL, theme::ink2()))
-            .child(ui::tip_on(button, Some(ui::Tip::new("What Kerf looks at"))))
+            .child(ui::tip_on(button, tip))
     }
 
     /// The Scope menu, laid over the card under its button: inside the
     /// card, so a press on it is no press elsewhere, and over the field.
-    fn scope_menu(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
-        if !self.scope_menu {
-            return None;
-        }
-        let clip = self.clip.clone().unwrap_or_default();
-        let choices = [
-            (AskScope::Clip, format!("This clip · {clip}")),
-            (AskScope::Sequence, "Whole sequence".to_owned()),
-        ];
-        let rows = choices.into_iter().map(|(scope, words)| {
-            let chosen = scope == self.scope;
-            div()
-                .id(gpui::ElementId::Name(
-                    format!("ask-scope-{}", scope.wire()).into(),
-                ))
-                .flex()
-                .items_center()
-                .gap(px(8.0))
-                .h(px(30.0))
-                .px(px(10.0))
-                .rounded(px(theme::radius::CONTROL))
-                .cursor_pointer()
-                .hover(|row| row.bg(theme::popup_hover()))
-                .child(ui::label(words, text::MENU_ITEM, theme::ink()).flex_1())
-                .child(if chosen {
-                    Icon::Check.view(14.0, theme::ink()).into_any_element()
-                } else {
-                    crate::icons::spacer(14.0).into_any_element()
-                })
-                .on_click(cx.listener(move |this, _, window, cx| this.set_scope(scope, window, cx)))
-        });
+    /// The kit's menu fades in over `FADE`, rising `MENU_RISE`.
+    fn scope_menu(&self) -> Option<impl IntoElement> {
+        let menu = self.scope_menu.clone()?;
         Some(
             div()
                 .absolute()
                 .left(px(SCOPE_MENU_AT.0))
                 .top(px(SCOPE_MENU_AT.1))
-                .w(px(280.0))
-                .p(px(4.0))
-                .flex()
-                .flex_col()
-                .rounded(px(theme::radius::CARD))
-                .bg(theme::popup())
-                .border_1()
-                .border_color(theme::line2())
-                .shadow_lg()
-                .occlude()
-                .children(rows)
-                // It rises into place under its button as it fades in.
-                .with_animation(
-                    "ask-scope-menu",
-                    crate::motion::animation(scene::FADE),
-                    |menu, t| {
-                        menu.opacity(t)
-                            .top(px(SCOPE_MENU_AT.1 + scene::MENU_RISE * (1.0 - t)))
-                    },
-                ),
+                .child(menu),
         )
     }
 }
@@ -281,10 +338,15 @@ impl Render for AskView {
         let typing = self.input.read(cx).focus_handle(cx).is_focused(window);
         let empty = self.input.read(cx).text().trim().is_empty();
         let busy = self.session.read(cx).state.work.busy();
-        let menu = self.scope_menu(cx);
+        let menu = self.scope_menu();
         let card = div()
             .id("ask-popover")
             .track_focus(&self.focus_handle)
+            // Tab goes round what is in it only: the field, Scope, Ask.
+            .key_context(ui::PANEL)
+            // Esc on Scope or Ask closes it, as it does from the field (an
+            // open Scope menu takes Esc itself, and only it goes).
+            .on_action(cx.listener(|_, _: &crate::commands::Escape, _, cx| cx.emit(DismissEvent)))
             .relative()
             .w(px(WIDTH))
             .p(px(12.0))
@@ -303,7 +365,7 @@ impl Render for AskView {
             }))
             .on_mouse_down_out(cx.listener(|_, _, _, cx| cx.emit(DismissEvent)))
             .child(ui::label(self.title.clone(), text::BODY_NAME, theme::ink()))
-            .child(self.scope_row(cx))
+            .child(self.scope_row(window, cx))
             .child(
                 div()
                     .h(px(56.0))

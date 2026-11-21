@@ -55,15 +55,20 @@ unicode-normalization = "0.1"
 sha1_smol = "1"
 env_logger = "0.11"
 log = "0.4"
+# "Edited … ago" counts days on the person's own calendar, as Qt's
+# toLocalTime did: the system's time zone (its zoneinfo on Unix; on
+# Windows the zone's rules come bundled).
+jiff = { version = "0.2", default-features = false, features = ["std", "tz-system", "tzdb-zoneinfo", "tzdb-bundle-platform"] }
 
 # On macOS a project's window represents its project.kerf (the title bar's
-# proxy icon), as the Qt editor's setWindowFilePath had it: AppKit through
-# its safe bindings, at the versions gpui already brings, and the window's
-# view through raw-window-handle.
+# proxy icon), as the Qt editor's setWindowFilePath had it, and a drag on
+# the toolbar (the title bar there) moves the window: AppKit through its
+# safe bindings, at the versions gpui already brings, and the window's view
+# through raw-window-handle.
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSString"] }
-objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSResponder", "NSView", "NSWindow"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSEvent", "NSResponder", "NSView", "NSWindow"] }
 raw-window-handle = "0.6"
 
 # `--screenshot` reads the window back from the X server (a GPUI window

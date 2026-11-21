@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc b81bb3c9da42ee61d3030ed90e18bbc14abbe3ccd6ef25c4e96cb4132bfa10ae # shrinks to steps = [Written("Tighten it", 0.0), Again("", 0.0, false)]

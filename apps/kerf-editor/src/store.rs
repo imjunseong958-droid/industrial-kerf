@@ -299,10 +299,117 @@ pub struct Preview {
     pub proposal: Option<String>,
 }
 
+/// What a preview needing a render says when the bridge gives no reason
+/// (Qt's words).
+pub const PREVIEW_REQUIRED: &str = "Rendered preview required";
+
+/// How long "Preview ready" and "Live preview: …" stay, as Qt's status bar
+/// held them (4 s).
+pub use crate::theme::motion::NOTICE_SHORT_HOLD as PREVIEW_NOTICE_HOLD;
+
 impl Preview {
     pub fn rendering(&self) -> bool {
         self.status == "running"
     }
+
+    /// Why the picture needs a rendered preview, while it does (`required`,
+    /// or `unavailable`): the bridge's reason (what the live picture cannot
+    /// show yet, or why the last render failed), else "Rendered preview
+    /// required". What the stage's Render preview button says over it.
+    pub fn reason(&self) -> Option<String> {
+        matches!(self.status.as_str(), "required" | "unavailable").then(|| {
+            self.message
+                .as_deref()
+                .map(str::trim)
+                .filter(|message| !message.is_empty())
+                .unwrap_or(PREVIEW_REQUIRED)
+                .to_owned()
+        })
+    }
+}
+
+/// What a `preview` event says, as Qt's status bar said it, and for how
+/// long (None: the window's `NOTICE_HOLD`, Qt's 6 s): why a rendered
+/// preview is needed ([`Preview::reason`]), "Preview ready", or "Live
+/// preview: <what it cannot match yet>" ([`PREVIEW_NOTICE_HOLD`]). A render
+/// running, one stopped or left, and one that failed (an error notice of
+/// its own, which the reason the bridge gives next takes the place of)
+/// say nothing here.
+pub fn preview_notice(event: &Value) -> Option<(String, Option<Duration>)> {
+    let message = event["message"]
+        .as_str()
+        .map(str::trim)
+        .filter(|message| !message.is_empty());
+    match event["status"].as_str()? {
+        "required" | "unavailable" => Some((message.unwrap_or(PREVIEW_REQUIRED).to_owned(), None)),
+        "ready" => Some(("Preview ready".to_owned(), Some(PREVIEW_NOTICE_HOLD))),
+        "live" => Some((
+            match message {
+                Some(note) => format!("Live preview: {note}"),
+                None => "Live preview".to_owned(),
+            },
+            Some(PREVIEW_NOTICE_HOLD),
+        )),
+        _ => None,
+    }
+}
+
+/// A next step Kerf offers (`agent_next`): the button's few words, and the
+/// request pressing it puts in the composer, in the person's words.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct NextStep {
+    pub label: String,
+    pub request: String,
+}
+
+impl NextStep {
+    /// A step whose button says `label` and that asks `request`.
+    pub fn new(label: impl Into<String>, request: impl Into<String>) -> Self {
+        Self {
+            label: label.into(),
+            request: request.into(),
+        }
+    }
+
+    /// One of `agent_next`'s steps: `{label, request}` as the bridge sends
+    /// them, or plain words, both the label and the request (as Qt read
+    /// either). A step with no label is none; one with no request asks its
+    /// label.
+    pub fn read(value: &Value) -> Option<Self> {
+        let (label, request) = match value {
+            Value::String(words) => (words.as_str(), words.as_str()),
+            Value::Object(step) => (
+                step.get("label")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
+                step.get("request")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
+            ),
+            _ => return None,
+        };
+        let label = label.trim();
+        if label.is_empty() {
+            return None;
+        }
+        let request = Some(request.trim()).filter(|request| !request.is_empty());
+        Some(Self::new(label, request.unwrap_or(label)))
+    }
+}
+
+impl From<&str> for NextStep {
+    /// Words that are both the step's label and its request.
+    fn from(words: &str) -> Self {
+        Self::new(words, words)
+    }
+}
+
+/// The steps an `agent_next` event offers, in its order.
+pub fn next_steps(event: &Value) -> Vec<NextStep> {
+    event["steps"]
+        .as_array()
+        .map(|steps| steps.iter().filter_map(NextStep::read).collect())
+        .unwrap_or_default()
 }
 
 /// What a change of state means for the window, so views can follow it.
@@ -337,8 +444,9 @@ pub struct EditorState {
     /// The chosen conversation, as kept beside the project.
     pub open_conversation: Option<Conversation>,
     pub work: Work,
-    /// Next steps Kerf offers as buttons.
-    pub next_steps: Vec<String>,
+    /// Next steps Kerf offers as buttons (the composer's, and an empty
+    /// conversation's Try asking), until the next request goes.
+    pub next_steps: Vec<NextStep>,
     pub position: f64,
     pub duration: f64,
     pub dropped: u64,
@@ -389,6 +497,9 @@ pub struct EditorState {
     pub cast: Option<Value>,
     /// How many notices there have been.
     noticed: u64,
+    /// The notice the last `preview` event left: the next one takes its
+    /// place, as a line of Qt's status bar took the last one's.
+    preview_said: Option<u64>,
 }
 
 /// Commands whose refusals the view that sent them shows in place: a
@@ -642,16 +753,7 @@ impl EditorState {
                 Change::Work
             }
             "agent_next" => {
-                self.next_steps = event["steps"]
-                    .as_array()
-                    .map(|steps| {
-                        steps
-                            .iter()
-                            .filter_map(Value::as_str)
-                            .map(str::to_owned)
-                            .collect()
-                    })
-                    .unwrap_or_default();
+                self.next_steps = next_steps(event);
                 Change::Work
             }
             "agent_focus" => {
@@ -742,7 +844,20 @@ impl EditorState {
                         .message
                         .clone()
                         .unwrap_or_else(|| "The preview could not render".into());
-                    self.notify(&message, true);
+                    self.say_of_preview(&message, true, None);
+                } else if let Some((said, hold)) = preview_notice(event) {
+                    // Why a render is needed, said just as one failed, is
+                    // the failure said in the bridge's words: still an
+                    // error, for Qt's 6 s.
+                    let failure =
+                        matches!(self.preview.status.as_str(), "required" | "unavailable")
+                            && self.preview_line().is_some_and(|line| line.error);
+                    let hold = if failure {
+                        Some(crate::theme::motion::NOTICE_HOLD)
+                    } else {
+                        hold
+                    };
+                    self.say_of_preview(&said, failure, hold);
                 }
                 Change::Preview
             }
@@ -1033,6 +1148,38 @@ impl EditorState {
             .map(title_line)
             .filter(|line| !line.is_empty());
         live.unwrap_or_else(|| "New conversation".to_owned())
+    }
+
+    /// Says what a `preview` event says ([`preview_notice`]) in place of
+    /// what the last one said, as a line of Qt's status bar took the last
+    /// one's place: the same words again stay where they are, held afresh.
+    fn say_of_preview(&mut self, said: &str, error: bool, hold: Option<Duration>) {
+        let shown = self
+            .preview_said
+            .and_then(|id| self.notices.iter().position(|notice| notice.id == id));
+        match shown {
+            Some(at) if self.notices[at].text == said && self.notices[at].error == error => {
+                self.notices[at].at = Instant::now();
+                self.notices[at].hold = hold;
+            }
+            _ => {
+                if let Some(at) = shown {
+                    self.notices.remove(at);
+                }
+                self.notify_held(said, error, hold);
+                self.preview_said = self
+                    .notices
+                    .last()
+                    .filter(|notice| notice.text == said)
+                    .map(|notice| notice.id);
+            }
+        }
+    }
+
+    /// The notice the last `preview` event left, while it shows.
+    pub fn preview_line(&self) -> Option<&Notice> {
+        let id = self.preview_said?;
+        self.notices.iter().find(|notice| notice.id == id)
     }
 
     pub fn notify(&mut self, text: &str, error: bool) {

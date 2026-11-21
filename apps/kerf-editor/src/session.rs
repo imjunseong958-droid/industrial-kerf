@@ -109,6 +109,8 @@ pub struct Session {
     live_changes: HashSet<String>,
     /// Watching what a proposal changed, while it plays.
     reel: Option<Reel>,
+    /// What each request sent from here was about, for Ask again.
+    asked: FocusBook,
     _poll: Option<Task<()>>,
 }
 
@@ -335,6 +337,7 @@ impl Session {
                 cut: CutRender::default(),
                 live_changes: HashSet::new(),
                 reel: None,
+                asked: FocusBook::default(),
                 _poll: poll,
             };
             session.send(json!({"type": "conversations", "action": "list"}));
@@ -656,11 +659,10 @@ impl Session {
         self.send(json!({"type": "forward", "proposalId": proposal, "revision": revision}));
     }
 
+    /// Renders the preview of `proposal` (any of its versions' ids), over
+    /// the stretch it changes ([`preview_request`]), or of the program.
     pub fn preview(&mut self, proposal: Option<&str>) {
-        let mut command = json!({"type": "preview"});
-        if let Some(proposal) = proposal {
-            command["proposalId"] = json!(proposal);
-        }
+        let command = preview_request(&self.state.snapshot, proposal);
         self.send(command);
     }
 
@@ -887,7 +889,8 @@ impl Session {
         else {
             return false;
         };
-        let asked = self.send(json!({"type": "preview", "proposalId": id}));
+        let command = preview_request(&self.state.snapshot, Some(&id));
+        let asked = self.send(command);
         self.cut.set_rendering(asked);
         asked
     }
@@ -1180,13 +1183,12 @@ impl Session {
         }
     }
 
+    /// Archives conversation `id` (or brings it back). The one open stays
+    /// open, as Qt's did: its menu then offers Unarchive.
     pub fn archive_conversation(&mut self, id: &str, archived: bool) {
         self.send(
             json!({"type": "conversations", "action": "archive", "id": id, "archived": archived}),
         );
-        if archived && self.conversation.as_deref() == Some(id) {
-            self.open_conversation(None);
-        }
     }
 
     pub fn delete_conversation(&mut self, id: &str) {
@@ -1249,6 +1251,32 @@ impl Session {
         self.ask_with(text, focus, &label, Some(from))
     }
 
+    /// Asks `text` again (Ask again, under an answer that failed or was
+    /// stopped) about what it was asked about the first time from this
+    /// window: the Ask popover's clip or scope, or the sequence frame the
+    /// composer sent, with the same words in the work row and the same
+    /// stamp ([`FocusBook`], Qt's `m_lastFocus` and `m_lastFocusLabel`).
+    /// Words this window did not send go about the sequence at the
+    /// playhead, as the composer's do.
+    pub fn ask_again(&mut self, text: &str) -> bool {
+        match self.asked.of(text).cloned() {
+            Some(asked) => self.ask_as(text, asked),
+            None => self.ask(text),
+        }
+    }
+
+    /// Asks `text` about what `about` went about, with its words in the
+    /// work row and its stamp: an Ask again that waited for the turn under
+    /// way goes about what it was pressed about.
+    pub fn ask_as(&mut self, text: &str, about: Focused) -> bool {
+        self.ask_with(text, about.focus, &about.label, about.stamp)
+    }
+
+    /// What each request sent from this window was about.
+    pub fn asked(&self) -> &FocusBook {
+        &self.asked
+    }
+
     /// Sends an agent turn about `focus`, stamped `stamp`; the work row says
     /// `label` until Kerf says what it is doing.
     fn ask_with(&mut self, text: &str, focus: Value, label: &str, stamp: Option<f64>) -> bool {
@@ -1273,9 +1301,17 @@ impl Session {
         if let Some(at) = stamp.filter(|at| at.is_finite()) {
             command["at"] = json!(at);
         }
-        command["focus"] = focus;
+        command["focus"] = focus.clone();
         let sent = self.send(command);
         if sent {
+            self.asked.remember(
+                text,
+                Focused {
+                    focus,
+                    label: label.to_owned(),
+                    stamp,
+                },
+            );
             self.state.work.request = Some(text.to_owned());
             self.state.work.conversation = self.conversation.clone();
             self.state
@@ -1614,6 +1650,130 @@ pub fn ask_label(
     }
 }
 
+/// What a request went about: its `focus` as sent, the words the work row
+/// said until Kerf said what it was doing (Qt's `m_lastFocusLabel`), and
+/// the playhead time it was stamped with.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Focused {
+    pub focus: Value,
+    pub label: String,
+    pub stamp: Option<f64>,
+}
+
+/// What each request sent from a window was about, by its words, the
+/// newest kept last (Qt kept the last request's, `m_lastFocus`): Ask again
+/// under a turn that failed or was stopped asks about what that turn's
+/// request was about. The newest [`FocusBook::KEPT`] are kept.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct FocusBook {
+    sent: VecDeque<(String, Focused)>,
+}
+
+impl FocusBook {
+    pub const KEPT: usize = 32;
+
+    /// `text` went about `focused`.
+    pub fn remember(&mut self, text: &str, focused: Focused) {
+        let text = text.trim();
+        if text.is_empty() {
+            return;
+        }
+        self.sent.retain(|(sent, _)| sent != text);
+        self.sent.push_back((text.to_owned(), focused));
+        while self.sent.len() > Self::KEPT {
+            self.sent.pop_front();
+        }
+    }
+
+    /// What `text` went about when it was last sent, if it was.
+    pub fn of(&self, text: &str) -> Option<&Focused> {
+        let text = text.trim();
+        self.sent
+            .iter()
+            .rev()
+            .find(|(sent, _)| sent == text)
+            .map(|(_, focused)| focused)
+    }
+
+    /// What the last request sent went about.
+    pub fn last(&self) -> Option<&Focused> {
+        self.sent.back().map(|(_, focused)| focused)
+    }
+
+    pub fn len(&self) -> usize {
+        self.sent.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.sent.is_empty()
+    }
+}
+
+/// The stretch of the program a proposal's preview renders, as Qt's
+/// `ChatWiring::preview` asked for it: from the earliest clip or
+/// transition `proposed` changes against `program` to the latest
+/// (`ProposalModel`'s range), as (start, duration) in seconds, the
+/// duration held to one frame at least and [`REEL_MOST_RENDERED`] at most.
+/// It never runs past `proposed`'s latest clip end: kerfd renders a
+/// proposal no further than its own length, and one that takes out, trims
+/// or pulls in the last clips ends sooner than the program, though what it
+/// changes reaches the program's old end. None when it changes nothing
+/// there, or nothing of what it changes lies within the proposal, a frame
+/// at least (the whole program renders).
+pub fn preview_span(program: &Timeline, proposed: &Timeline) -> Option<(f64, f64)> {
+    let (start, end) = crate::chat::clip_changes(program, proposed)
+        .iter()
+        .map(crate::chat::ClipChange::span)
+        .filter(|(start, end)| start.is_finite() && end.is_finite())
+        .reduce(|(low, high), (start, end)| (low.min(start), high.max(end)))?;
+    let start = start.max(0.0);
+    let frame = 1.0 / program.rate().max(1.0);
+    let last = timeline_end(proposed);
+    if last - start < frame {
+        return None;
+    }
+    Some((
+        start,
+        (end.min(last) - start).clamp(frame, REEL_MOST_RENDERED),
+    ))
+}
+
+/// The `preview` request for `proposal` (any of its versions' ids; None
+/// renders the program): over the stretch it changes ([`preview_span`]),
+/// measured on the timeline of the version named when kerfd drew it, else
+/// of the proposal's newest version that has one; the whole of it when
+/// none is known, or nothing it changes lies within the proposal.
+pub fn preview_request(snapshot: &crate::model::Snapshot, proposal: Option<&str>) -> Value {
+    let mut command = json!({"type": "preview"});
+    let Some(id) = proposal else {
+        return command;
+    };
+    command["proposalId"] = json!(id);
+    let named = snapshot.proposals.iter().find(|known| {
+        known.proposal_id == id
+            || known
+                .versions
+                .iter()
+                .any(|version| version.proposal_id == id)
+    });
+    let proposed = named.and_then(|proposal| {
+        snapshot.timeline_of(proposal, Some(id)).or_else(|| {
+            proposal
+                .versions
+                .iter()
+                .rev()
+                .find_map(|version| snapshot.proposal_timelines.get(&version.proposal_id))
+        })
+    });
+    if let Some((start, duration)) =
+        proposed.and_then(|proposed| preview_span(&snapshot.timeline, proposed))
+    {
+        command["start"] = json!(start);
+        command["duration"] = json!(duration);
+    }
+    command
+}
+
 /// "Cutting · 3 clips": what a first cut's turn says as clips are placed.
 pub fn cutting_status(placed: usize) -> String {
     if placed == 1 {
@@ -1738,9 +1898,11 @@ impl ActivityLog {
 
 /// The Activity line a bridge event leaves, if any: an export that ended
 /// (the file it made, or how it ended), an analysis made in the
-/// background, a preview that could not render, and what Kerf did: each
-/// tool call that ended, each status line, any other note (at most 120
-/// characters of each).
+/// background, why the picture needs a rendered preview (the bridge's
+/// reason, a render that failed among them, else "Native preview
+/// unavailable", as Qt kept it), and what Kerf did: each tool call that
+/// ended, each status line, any other note (at most 120 characters of
+/// each).
 pub fn activity_of(event: &Value) -> Option<(&'static str, String)> {
     match event["type"].as_str()? {
         "agent" => {
@@ -1784,7 +1946,9 @@ pub fn activity_of(event: &Value) -> Option<(&'static str, String)> {
             .as_str()
             .filter(|message| !message.trim().is_empty())
             .map(|message| ("analysis", message.to_owned())),
-        "preview" if event["status"] == "failed" || event["status"] == "unavailable" => Some((
+        // A render that failed says why next (`required`, with the
+        // bridge's reason), which is the line kept, as Qt kept it.
+        "preview" if event["status"] == "unavailable" || event["status"] == "required" => Some((
             "preview",
             event["message"]
                 .as_str()

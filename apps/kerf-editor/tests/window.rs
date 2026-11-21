@@ -20,7 +20,7 @@ use kerf_editor::stage::{
 };
 use kerf_editor::store::Preview;
 use kerf_editor::workspace::{
-    app_menu_place, app_menu_room, edited_ago, file_url, holds_keys_itself, home_flight_at,
+    app_menu_place, app_menu_room, edited_ago_in, file_url, holds_keys_itself, home_flight_at,
     panes_opening, running_words, settle_keys, sync_params, sync_question, title_tip,
     user_guide_in, Holder, KeysGo,
 };
@@ -417,6 +417,9 @@ proptest! {
 
 #[test]
 fn the_title_says_when_it_was_edited_and_at_which_revision() {
+    // Days are on a calendar: this one keeps to UTC's, whatever the
+    // machine's zone (edited_ago itself counts the system's).
+    let edited_ago = |then, now| edited_ago_in(then, now, &jiff::tz::TimeZone::UTC);
     let now = 1_800_000_000;
     assert_eq!(edited_ago(now - 20, now), "just now");
     assert_eq!(edited_ago(now - 120, now), "2 min ago");

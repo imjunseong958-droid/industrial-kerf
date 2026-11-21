@@ -266,6 +266,15 @@ pub mod lane {
     pub fn name_bar() -> Rgba {
         rgba(0x0000008c)
     }
+    /// While a change reel plays: the soft glow under a clip it watches
+    /// (its ring is the accent's ink), and what covers every other clip
+    /// (Qt's rgba(51, 102, 230, 70) and rgba(12, 12, 12, 170)).
+    pub fn watch_glow() -> Rgba {
+        rgba(0x3366e646)
+    }
+    pub fn watch_dim() -> Rgba {
+        rgba(0x0c0c0caa)
+    }
 }
 
 /// A colour with its alpha replaced by `alpha` (0..1).
@@ -601,6 +610,8 @@ pub mod motion {
     /// What a sync brought and sent ("Synced: 2 commits in, pushed"), a
     /// pull request's line, and a cast saved, as Qt held them (8 s).
     pub const NOTICE_LONG_HOLD: Duration = ms(8000);
+    /// "Preview ready" and "Live preview: …", as Qt's status bar held them (4 s).
+    pub const NOTICE_SHORT_HOLD: Duration = ms(4000);
 
     /// Where a flight lands in a row, as Qt landed it: in from the row's
     /// left and top (and as far up from its bottom), and how wide.
@@ -683,6 +694,9 @@ pub mod motion {
     pub const COMPARE_GLOW: f32 = 8.0;
     /// Points the stage reaches over the conversation while a change reel plays.
     pub const REEL_REACH: f32 = 120.0;
+    /// Points a clip a change reel watches rises off its lane, over `STAGE`
+    /// (Qt's clipLift).
+    pub const CLIP_LIFT: f32 = 8.0;
     /// How many times a pass of the light over a working conversation's
     /// title is drawn: it moves in steps, not every frame.
     pub const TITLE_SHIMMER_STEPS: u32 = 66;
@@ -695,6 +709,25 @@ pub mod motion {
 
 pub mod layout {
     pub const TOOLBAR: f32 = 40.0;
+    /// The size a window opens at when no other window gives it one, as
+    /// the Qt editor's MainWindow resized itself (1500 × 940).
+    pub const WINDOW: (f32, f32) = (1500.0, 940.0);
+    /// The least a window shrinks to.
+    pub const WINDOW_LEAST: (f32, f32) = (720.0, 480.0);
+    /// What a screen keeps around a window opened in its middle, across
+    /// and down: the window's title bar, the menu bar, the Dock or a
+    /// taskbar. A window opens at `WINDOW` only where that and this fit on
+    /// the screen; on a smaller one it fills the screen.
+    pub const SCREEN_KEPT: (f32, f32) = (48.0, 120.0);
+    /// On macOS, where the toolbar is the title bar: the window buttons'
+    /// first left edge (their middle 16 in, as Qt's kWindowButtonsLeft), and
+    /// where the toolbar's first control starts after them (Qt's
+    /// kFirstControlAfterWindowButtons). The buttons stand on the middle of
+    /// the toolbar's height.
+    pub const WINDOW_BUTTONS_LEFT: f32 = 9.0;
+    pub const WINDOW_BUTTONS_ROOM: f32 = 76.0;
+    /// The window buttons' height, to stand them on the toolbar's middle.
+    pub const WINDOW_BUTTON: f32 = 14.0;
     pub const STRIP: f32 = 28.0;
     pub const MEDIA_BAND: f32 = 152.0;
     pub const SIDEBAR: f32 = 280.0;
@@ -709,9 +742,10 @@ pub mod layout {
     pub const TIMELINE: f32 = 260.0;
     pub const TRACK_HEADER: f32 = 120.0;
     pub const RULER: f32 = 24.0;
-    pub const VIDEO_LANE: f32 = 44.0;
-    pub const AUDIO_LANE: f32 = 36.0;
-    pub const SUBTITLE_LANE: f32 = 26.0;
+    /// A track's height when none is set: one roomy height for every
+    /// track, picture, sound and subtitles alike, as the Qt editor's window
+    /// drew them (its setRoomyLanes, kRoomyTrackHeight).
+    pub const TRACK_LANE: f32 = 40.0;
     pub const TRANSPORT: f32 = 40.0;
     /// With the picture pane closed, the transport in the timeline's strip:
     /// from its last button to the timecode (Qt's kTransportGap), and from
@@ -725,6 +759,9 @@ pub mod layout {
     /// pieces (`timeline::StripFit`) shows them again, so a width on the
     /// edge does not show and hide them by turns.
     pub const STRIP_REGROW: f32 = 2.0;
+    /// The widest why a rendered preview is needed is said before the
+    /// stage's Render preview button; the rest in its tip.
+    pub const PREVIEW_REASON_MOST: f32 = 320.0;
     /// The chosen clip's inspector, beside the picture.
     pub const INSPECTOR: f32 = 300.0;
     /// The tallest the composer grows with its lines before it scrolls.
@@ -735,6 +772,11 @@ pub mod layout {
     pub const DRAG_START: f32 = 4.0;
     /// The widest a notice is, at the conversation's foot; longer words wrap.
     pub const NOTICE_MOST: f32 = 560.0;
+    /// How far notices stand above the composer and what stands over it
+    /// (Kerf's next steps, what waits to be asked), and, before the
+    /// composer has been laid out, up from the window's foot.
+    pub const NOTICE_GAP: f32 = 8.0;
+    pub const NOTICE_FOOT: f32 = 120.0;
     /// Width over height from which a picture is wide (Qt's isWide).
     pub const WIDE: f32 = 1.2;
     /// The timeline's share of the panel's height under a wide picture,
@@ -813,6 +855,10 @@ pub mod layout {
     pub const ASK_HEIGHT: f32 = 176.0;
     pub const ASK_GAP: f32 = 8.0;
     pub const ASK_SCOPE_MENU_AT: (f32, f32) = (52.0, 68.0);
+    /// How wide the Ask popover's Scope menu is.
+    pub const ASK_SCOPE_MENU_WIDTH: f32 = 280.0;
+    /// The widest the composer's folder chip grows before its name is cut.
+    pub const COMPOSER_FOLDER_MOST: f32 = 160.0;
     /// Points the Before/After tags and the reel's strip keep in from the
     /// picture's edges, and the widest the strip is.
     pub const COMPARE_TAG_IN: f32 = 12.0;

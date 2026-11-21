@@ -20,7 +20,8 @@
 //! line. Esc puts a menu of the conversation away first.
 //!
 //! The composer's chips name the folder, the model (Claude Code's chosen
-//! there) and what Kerf does without asking. Where nothing can be asked (no
+//! there) and what Kerf does without asking, that one with its mode's icon
+//! and tone ([`permission_look`]). Where nothing can be asked (no
 //! folder, kerfd gone, no key or no Kerf account) its placeholder says so in
 //! Qt's words, a hover says why, and Send is off. A request written while
 //! Kerf works keeps the playhead time it was written at.
@@ -32,8 +33,8 @@ use crate::model::{self, Proposal, Speaker, Timeline, Turn};
 use crate::motion::{self, Tween};
 use crate::prefs::{Permissions, Provider};
 use crate::selectable::{self, Selections};
-use crate::session::{BridgeEvent, Session};
-use crate::store::{Change, Connection, ContextLevel, ContextUse, StepState};
+use crate::session::{BridgeEvent, Focused, Session};
+use crate::store::{Change, Connection, ContextLevel, ContextUse, NextStep, StepState};
 use crate::theme::{self, layout, motion as scene, text};
 use crate::ui::{self, icon_button};
 use gpui::RenderImage;
@@ -50,6 +51,9 @@ use std::time::{Duration, Instant};
 
 /// The most the composer's text grows to before it scrolls, in points.
 pub const COMPOSER_MOST: f32 = 110.0;
+
+/// The widest the composer's folder chip grows before its name is cut.
+pub use crate::theme::layout::COMPOSER_FOLDER_MOST as FOLDER_CHIP_MOST;
 
 /// The key context of the composer's box, where Shift-Tab changes what
 /// Kerf does without asking.
@@ -243,30 +247,74 @@ pub fn join_queued(waiting: Option<&str>, text: &str) -> String {
 
 /// What waits for Kerf to finish: the requests written while it works,
 /// joined as one, and the playhead time the latest of them was written at
-/// (Qt's queue took the time again with each request).
+/// (Qt's queue took the time again with each request); while all that
+/// waits is one Ask again, also what that request went about the first
+/// time ([`Queued::push_again`]).
 #[derive(Clone, Debug, Default, PartialEq)]
-pub struct Queued(Option<(String, f64)>);
+pub struct Queued(Option<Waiting>);
+
+#[derive(Clone, Debug, PartialEq)]
+struct Waiting {
+    text: String,
+    at: f64,
+    about: Option<Focused>,
+}
 
 impl Queued {
     /// `text`, written with the playhead at `at`, joins what waits, and the
-    /// whole goes with `at`; nothing written leaves the queue as it is.
+    /// whole goes with `at`, about the sequence there as the composer's
+    /// requests go; nothing written leaves the queue as it is.
     pub fn push(&mut self, text: &str, at: f64) {
         if text.trim().is_empty() {
             return;
         }
-        let waiting = self.0.as_ref().map(|(waiting, _)| waiting.as_str());
-        self.0 = Some((join_queued(waiting, text), at));
+        let text = join_queued(self.text(), text);
+        self.0 = Some(Waiting {
+            text,
+            at,
+            about: None,
+        });
+    }
+
+    /// Ask again pressed while Kerf works, with the playhead at `at`: `text`
+    /// waits, and while it is all that waits it goes about `about` when the
+    /// turn ends (what it went about when this window first sent it, the
+    /// Ask popover's clip or scope), else as [`Queued::push`]'s requests
+    /// go. Joined with another request, it goes as they do; pressed again
+    /// while the same words wait, nothing changes.
+    pub fn push_again(&mut self, text: &str, at: f64, about: Option<Focused>) {
+        let text = text.trim();
+        if text.is_empty() {
+            return;
+        }
+        match &self.0 {
+            None => {
+                self.0 = Some(Waiting {
+                    text: text.to_owned(),
+                    at,
+                    about,
+                })
+            }
+            Some(waiting) if waiting.text == text => {}
+            Some(_) => self.push(text, at),
+        }
     }
 
     /// The request waiting, if one is.
     pub fn text(&self) -> Option<&str> {
-        self.0.as_ref().map(|(text, _)| text.as_str())
+        self.0.as_ref().map(|waiting| waiting.text.as_str())
+    }
+
+    /// What the request waiting goes about, when it is one Ask again of
+    /// words this window sent before; None for the sequence at its time.
+    pub fn about(&self) -> Option<&Focused> {
+        self.0.as_ref().and_then(|waiting| waiting.about.as_ref())
     }
 
     /// The request waiting and its playhead time, taken to be sent: nothing
     /// waits after.
     pub fn take(&mut self) -> Option<(String, f64)> {
-        self.0.take()
+        self.0.take().map(|waiting| (waiting.text, waiting.at))
     }
 
     /// Nothing waits any more (Cancel).
@@ -378,13 +426,18 @@ pub fn recent_conversations<'a>(
     recent
 }
 
-/// What a new conversation offers to ask: Kerf's next steps, else the
-/// first requests Qt offered; at most four.
-pub fn try_asking(next_steps: &[String]) -> Vec<String> {
-    let offered: Vec<String> = next_steps
+/// What a new conversation offers to ask, as Qt's welcome did: Kerf's next
+/// steps (each shows its label and fills the composer with its request),
+/// else the first requests Qt offered; at most four.
+pub fn try_asking(next_steps: &[NextStep]) -> Vec<NextStep> {
+    let offered: Vec<NextStep> = next_steps
         .iter()
-        .map(|step| step.trim().to_owned())
-        .filter(|step| !step.is_empty())
+        .filter_map(|step| {
+            let label = step.label.trim();
+            let request = step.request.trim();
+            (!label.is_empty())
+                .then(|| NextStep::new(label, if request.is_empty() { label } else { request }))
+        })
         .take(4)
         .collect();
     if !offered.is_empty() {
@@ -395,7 +448,7 @@ pub fn try_asking(next_steps: &[String]) -> Vec<String> {
         "Tighten the pauses in the interview",
         "Add captions to the whole sequence",
     ]
-    .map(str::to_owned)
+    .map(NextStep::from)
     .to_vec()
 }
 
@@ -449,6 +502,19 @@ pub fn permission_words(permissions: Permissions) -> (&'static str, &'static str
         Permissions::Ask => ("Ask before edits", "Each edit waits for you"),
         Permissions::AcceptEdits => ("Accept edits", "Edits apply as Kerf makes them"),
         Permissions::Auto => ("Auto", "Edits apply, and Kerf makes its shots"),
+    }
+}
+
+/// How the permission chip looks, as Qt's did (`modeIcon`, `modeTone`): a
+/// lock while each edit waits, a check while edits apply, Kerf's own mark
+/// under Auto; drawn in the accent's ink for Accept edits and the GPU's
+/// colour for Auto, so the modes where Kerf does more on its own stand
+/// out. None draws it as the other chips are drawn.
+pub fn permission_look(permissions: Permissions) -> (Icon, Option<Rgba>) {
+    match permissions {
+        Permissions::Ask => (Icon::Lock, None),
+        Permissions::AcceptEdits => (Icon::Check, Some(theme::accent_ink())),
+        Permissions::Auto => (Icon::Kerf, Some(theme::activity::gpu())),
     }
 }
 
@@ -2071,14 +2137,38 @@ impl ChatView {
         sent
     }
 
-    /// Sends `text` again: at once, or after the turn under way.
+    /// Asks Kerf `text` about what `about` went about ([`Session::ask_as`]).
+    fn ask_as(&mut self, text: &str, about: Focused, cx: &mut Context<Self>) -> bool {
+        let sent = self.session.update(cx, |session, cx| {
+            let sent = session.ask_as(text, about);
+            cx.notify();
+            sent
+        });
+        if sent {
+            self.follow = true;
+        }
+        sent
+    }
+
+    /// Sends `text` again about what it was about the first time (the Ask
+    /// popover's clip or scope, or the sequence frame it was asked at,
+    /// [`Session::ask_again`]): at once, or once the turn under way ends,
+    /// still about that ([`Queued::push_again`]).
     fn ask_again(&mut self, text: String, cx: &mut Context<Self>) {
         let session = self.session.read(cx);
         if session.state.work.busy() {
             let at = session.state.position;
-            self.queued.push(&text, at);
+            let about = session.asked().of(&text).cloned();
+            self.queued.push_again(&text, at, about);
         } else {
-            self.ask(&text, None, cx);
+            let sent = self.session.update(cx, |session, cx| {
+                let sent = session.ask_again(&text);
+                cx.notify();
+                sent
+            });
+            if sent {
+                self.follow = true;
+            }
         }
         cx.notify();
     }
@@ -2098,6 +2188,7 @@ impl ChatView {
     fn turn_ended(&mut self, cx: &mut Context<Self>) {
         let stopped = std::mem::take(&mut self.stopping);
         self.clock = None;
+        let about = self.queued.about().cloned();
         let Some((text, at)) = self.queued.take() else {
             cx.notify();
             return;
@@ -2109,7 +2200,13 @@ impl ChatView {
                 || matches!(session.state.work.state.as_str(), "aborted" | "failed")
                 || session.state.connection != Connection::Connected
         };
-        if !troubled && self.ask(&text, Some(at), cx) {
+        // An Ask again that waited alone goes about what it went about.
+        let sent = !troubled
+            && match about {
+                Some(about) => self.ask_as(&text, about, cx),
+                None => self.ask(&text, Some(at), cx),
+            };
+        if sent {
             cx.notify();
             return;
         }
@@ -3641,12 +3738,12 @@ impl ChatView {
             try_asking(&session.state.next_steps)
                 .into_iter()
                 .enumerate()
-                .map(|(index, words)| {
-                    let request = words.clone();
+                .map(|(index, step)| {
+                    let request = step.request;
                     welcome_row(
                         ElementId::Name(format!("suggest-{index}").into()),
                         Some(Icon::Sparkle),
-                        words,
+                        step.label,
                         false,
                     )
                     .on_click(cx.listener(move |this, _, window, cx| {
@@ -3723,15 +3820,26 @@ impl ChatView {
         menu: Menu,
         id: &'static str,
         (icon, words, tip): (Option<Icon>, String, ui::Tip),
+        tone: Option<Rgba>,
         cx: &Context<Self>,
     ) -> AnyElement {
         let open = self.menu.as_ref() == Some(&menu);
         let toggle = menu.clone();
-        let ink = if open { theme::ink() } else { theme::ink3() };
+        // A chip with a tone of its own (the permission mode's) keeps it,
+        // open or not, its icon too, as Qt's ComposerChip painted it.
+        let ink = match tone {
+            Some(tone) => tone,
+            None if open => theme::ink(),
+            None => theme::ink3(),
+        };
+        // Where the row is short of room the model's words are cut
+        // ("OpenAI · fake-mo…"), as Qt elided its chips'; the folder's are
+        // cut only past `FOLDER_CHIP_MOST`, and the mode is said whole.
+        let shrink = if menu == Menu::Model { 1.0 } else { 0.0 };
         let chip =
             theme::type_style(div(), text::META)
                 .flex()
-                .flex_none()
+                .min_w_0()
                 .items_center()
                 .gap(px(4.0))
                 .h(px(20.0))
@@ -3740,24 +3848,48 @@ impl ChatView {
                 .bg(theme::raised())
                 .text_color(ink)
                 .when_some(icon, |chip, icon| {
-                    chip.child(icon.view(12.0, theme::ink3()))
+                    chip.child(
+                        div()
+                            .flex_none()
+                            .child(icon.view(12.0, tone.unwrap_or(theme::ink3()))),
+                    )
                 })
-                .child(words)
+                .child(
+                    div()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .whitespace_nowrap()
+                        .child(ui::cut_line(words)),
+                )
                 .id(id)
                 .pr(px(4.0))
                 .cursor_pointer()
-                .hover(|chip| chip.bg(theme::hover2()).text_color(theme::ink2()))
-                .child(Icon::ChevronDown.view(12.0, theme::ink3()))
+                .hover(move |chip| {
+                    let chip = chip.bg(theme::hover2());
+                    if tone.is_some() {
+                        chip
+                    } else {
+                        chip.text_color(theme::ink2())
+                    }
+                })
+                .child(
+                    div()
+                        .flex_none()
+                        .child(Icon::ChevronDown.view(12.0, theme::ink3())),
+                )
                 .on_click(cx.listener(move |this, _, window, cx| {
                     this.toggle_menu(toggle.clone(), window, cx)
                 }));
         // Its menu says all the tip would, so the tip waits while it is open.
-        let chip = if open {
-            chip.into_any_element()
-        } else {
-            ui::tipped(ElementId::Name(format!("{id}-tip").into()), tip, chip).into_any_element()
-        };
-        let mut wrapper = div().relative().flex_none().child(chip);
+        let chip = ui::tip_on(chip, (!open).then_some(tip));
+        let mut wrapper = div()
+            .relative()
+            .min_w_0()
+            .when(menu == Menu::Folder, |wrapper| {
+                wrapper.max_w(px(FOLDER_CHIP_MOST))
+            })
+            .child(chip);
+        wrapper.style().flex_shrink = Some(shrink);
         if let Some(body) = self.kit_menu.clone().filter(|_| open) {
             wrapper = wrapper.child(
                 // Over the chip, its left edge on the chip's, over everything.
@@ -4048,7 +4180,7 @@ impl ChatView {
             .state
             .next_steps
             .iter()
-            .map(|step| (step.clone(), step.clone()))
+            .map(|step| (step.label.clone(), step.request.clone()))
             .collect();
         next.extend(self.fixes.iter().cloned());
         // Run QC is offered while the box waits empty for words.
@@ -4083,6 +4215,7 @@ impl ChatView {
             None => ("No folder".to_owned(), "Open a folder".to_owned()),
         };
         let (mode_words, mode_line) = permission_words(permissions);
+        let (mode_icon, mode_tone) = permission_look(permissions);
         let mode_tip = ui::Tip::new(format!("{mode_words} · {mode_line}")).key("⇧Tab");
         let queued = self.queued.text().map(str::to_owned);
         let stopping = self.stopping;
@@ -4200,6 +4333,7 @@ impl ChatView {
                                 Menu::Folder,
                                 "folder-chip",
                                 (Some(Icon::Folder), folder_words, ui::Tip::new(folder_tip)),
+                                None,
                                 cx,
                             ))
                             .when_some(unstamped, |row, timecode| {
@@ -4209,12 +4343,14 @@ impl ChatView {
                                 Menu::Model,
                                 "model-chip",
                                 (None, model_words, ui::Tip::new(model_tip)),
+                                None,
                                 cx,
                             ))
                             .child(self.menu_chip(
                                 Menu::Permissions,
                                 "permissions-chip",
-                                (None, mode_words.to_owned(), mode_tip),
+                                (Some(mode_icon), mode_words.to_owned(), mode_tip),
+                                mode_tone,
                                 cx,
                             ))
                             .child(div().flex_1())
@@ -5265,6 +5401,15 @@ impl ChatView {
     /// leaves from: a poster's room over the composer's middle, as Qt's.
     pub fn over_composer(&self) -> Option<gpui::Bounds<gpui::Pixels>> {
         self.composer_at.get().map(over_composer)
+    }
+
+    /// The top of the composer with what stands over it (Kerf's next steps,
+    /// Run QC, what waits to be asked), as last laid out: the window's
+    /// notices sit above it rather than over them.
+    pub fn composer_top(&self) -> Option<f32> {
+        self.composer_at
+            .get()
+            .map(|bounds| f32::from(bounds.origin.y))
     }
 }
 

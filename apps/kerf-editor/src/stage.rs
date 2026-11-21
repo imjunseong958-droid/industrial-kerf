@@ -1133,6 +1133,37 @@ pub fn transport_tip(name: &str, reason: Option<&str>) -> String {
     }
 }
 
+/// The version of the proposal the preview plays (`id`, the preview's
+/// proposal) among the snapshot's `proposals`, as Qt's PreviewChip found
+/// it: the version's own number when `id` is one of a proposal's versions,
+/// else that proposal's. None when no proposal is `id`, or it has no number.
+pub fn previewed_version(proposals: &[model::Proposal], id: &str) -> Option<u32> {
+    let mut version = 0;
+    for proposal in proposals {
+        let mut matches = proposal.proposal_id == id;
+        for listed in &proposal.versions {
+            if listed.proposal_id == id {
+                matches = true;
+                version = listed.version;
+            }
+        }
+        if matches && version == 0 {
+            version = proposal.version;
+        }
+    }
+    (version > 0).then_some(version)
+}
+
+/// What the chip over the picture says while a proposal's preview plays,
+/// as Qt's did: "Previewing proposal v2", or "Previewing proposal" with no
+/// version known.
+pub fn preview_chip_words(version: Option<u32>) -> String {
+    match version {
+        Some(version) => format!("Previewing proposal v{version}"),
+        None => "Previewing proposal".to_owned(),
+    }
+}
+
 impl StageView {
     pub fn new(session: Entity<Session>, _window: &mut Window, cx: &mut Context<Self>) -> Self {
         let id = session.entity_id();
@@ -2653,25 +2684,57 @@ impl StageView {
             .overlays(session)
             .is_some_and(|shown| shown.placement.picture.shows());
         let preview = session.state.preview.clone();
+        // The chip keeps quiet while a change reel plays (its strip says
+        // what plays) or Kerf is cutting the first cut, as Qt's did.
+        let chip_quiet = session.reel().is_some() || session.cutting();
+        // Which version of its proposal plays, as the chip says it.
+        let previewing = preview
+            .proposal
+            .as_deref()
+            .map(|id| preview_chip_words(previewed_version(&session.state.snapshot.proposals, id)));
         let preview_control = match preview.status.as_str() {
-            "required" => Some(
-                ui::button("render-preview", "Render preview")
-                    .small()
-                    .icon(Icon::Sparkle)
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.session.update(cx, |session, _| session.preview(None))
-                    }))
-                    .into_any_element(),
-            ),
+            // Why the picture needs it rendered (what the live picture cannot
+            // show yet), cut short before the button and whole in the tips.
+            "required" => {
+                let reason = preview
+                    .reason()
+                    .unwrap_or_else(|| crate::store::PREVIEW_REQUIRED.to_owned());
+                Some(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(8.0))
+                        .min_w_0()
+                        .flex_shrink()
+                        .child(ui::tip_on(
+                            ui::line(reason.clone(), text::CONTROL, theme::ink3())
+                                .id("render-preview-reason")
+                                .min_w_0()
+                                .flex_shrink()
+                                .max_w(px(layout::PREVIEW_REASON_MOST)),
+                            Some(ui::Tip::new(reason.clone())),
+                        ))
+                        .child(
+                            ui::button("render-preview", "Render preview")
+                                .small()
+                                .icon(Icon::Sparkle)
+                                .tooltip(reason)
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.session.update(cx, |session, _| session.preview(None))
+                                })),
+                        )
+                        .into_any_element(),
+                )
+            }
             // While it renders, its card over the picture says so, with Stop.
-            "ready" | "live" if preview.proposal.is_some() => Some(
+            "ready" | "live" if preview.proposal.is_some() && !chip_quiet => Some(
                 div()
                     .flex()
                     .items_center()
                     .gap(px(6.0))
-                    .child(ui::chip("Previewing the proposal", theme::pos()))
+                    .child(ui::chip(previewing.unwrap_or_default(), theme::pos()))
                     .child(
-                        ui::button("exit-preview", "Back to the cut")
+                        ui::button("exit-preview", "Exit preview")
                             .small()
                             .ghost()
                             .on_click(cx.listener(|this, _, _, cx| {

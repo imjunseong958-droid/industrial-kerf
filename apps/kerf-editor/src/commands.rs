@@ -110,6 +110,30 @@ pub fn branch_menu(branches: &MenuBranches) -> gpui::Menu {
     }
 }
 
+/// Edit ▸ Keyboard Shortcuts in the menu bar, as Qt's had it: one row
+/// for each keymap, by the name Settings gives it, the one in use (`keymap`,
+/// as the registry names it) ticked ("✓ ", since a menu bar's rows here
+/// carry no tick of their own). Choosing one saves it, as Settings does
+/// (`sidebar::ChooseKeymap`, which the window carries out), and the menus
+/// are set again with it.
+pub fn keymap_menu(keymap: &str) -> gpui::Menu {
+    let items = crate::prefs::Keymap::ALL
+        .into_iter()
+        .map(|choice| {
+            let name = if choice.wire() == keymap {
+                format!("✓ {}", choice.label())
+            } else {
+                choice.label().to_owned()
+            };
+            gpui::MenuItem::action(name, crate::sidebar::ChooseKeymap { keymap: choice })
+        })
+        .collect();
+    gpui::Menu {
+        name: "Keyboard Shortcuts".into(),
+        items,
+    }
+}
+
 /// How the registry's commands stand in the window in front, for the menu
 /// bar: those that cannot run now (greyed), and the switches that are on
 /// (ticked). The window works them out as it draws ([`set_menu_states`]).
@@ -591,6 +615,11 @@ pub fn menus_with_branches(
             if command.id == "file.openProject" {
                 items.push(gpui::MenuItem::submenu(recent_menu(recent, current)));
             }
+        }
+        // The keymaps to choose from, at Edit's foot, as Qt's menu bar had them.
+        if menu == "Edit" && !items.is_empty() {
+            items.push(gpui::MenuItem::separator());
+            items.push(gpui::MenuItem::submenu(keymap_menu(keymap)));
         }
         // The picture's mask tools, which the registry does not carry, where
         // Qt's View menu had them (their keys, ⇧R ⇧E ⇧P, the stage binds).

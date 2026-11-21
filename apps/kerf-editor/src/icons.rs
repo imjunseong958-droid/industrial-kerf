@@ -57,6 +57,8 @@ pub enum Icon {
     /// Closer and further: a shot's graph's zoom.
     ZoomIn,
     ZoomOut,
+    /// Kerf's own mark (Qt's g-kerf): the Auto mode's chip.
+    Kerf,
 }
 
 impl Icon {
@@ -106,6 +108,7 @@ impl Icon {
             Icon::Dice => "dice",
             Icon::ZoomIn => "zoom-in",
             Icon::ZoomOut => "zoom-out",
+            Icon::Kerf => "kerf",
         }
     }
 
@@ -231,6 +234,7 @@ impl Icon {
             Icon::ZoomOut => {
                 r#"<circle cx="7" cy="7" r="4.25"/><path d="M10.25 10.25l3.5 3.5M5 7h4"/>"#
             }
+            Icon::Kerf => r#"<path d="M3 3.5h4v5.5h2V3.5h4v9H3z" fill="black" stroke="none"/>"#,
         }
     }
 
@@ -241,7 +245,7 @@ impl Icon {
         )
     }
 
-    pub const ALL: [Icon; 44] = [
+    pub const ALL: [Icon; 45] = [
         Icon::Sidebar,
         Icon::Panel,
         Icon::Play,
@@ -286,6 +290,7 @@ impl Icon {
         Icon::Dice,
         Icon::ZoomIn,
         Icon::ZoomOut,
+        Icon::Kerf,
     ];
 }
 

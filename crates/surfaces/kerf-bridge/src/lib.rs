@@ -407,7 +407,8 @@
 //!   command.
 //! - `agent {kind: delta|status|tool|done|..., text}`; `agent_busy {busy}`; `agent_state
 //!   {state: running|awaiting_review|aborted|completed|failed, message?}`; `agent_next
-//!   {steps: [text]}` (next steps to offer as buttons); `agent_focus {tool, times, clips}`
+//!   {steps: [{label, request}]}` (next steps to offer as buttons: the words on each and
+//!   what pressing it asks); `agent_focus {tool, times, clips}`
 //!   (where a tool call is working, for the timeline and picture to follow); `agent_context
 //!   {used, limit, unit, conversation}` (how full the agent's context is); `agent_ask {media,
 //!   rolls, take, text, conversation}` (a making the person is asked to run); `agent_version`

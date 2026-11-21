@@ -689,7 +689,10 @@ fn a_new_conversation_offers_the_latest_others_or_things_to_ask() {
         .map(|summary| summary.id.as_str())
         .collect();
     assert_eq!(recent, ["d", "b", "a"]);
-    assert_eq!(try_asking(&["Tighten".into(), " ".into()]), ["Tighten"]);
+    assert_eq!(
+        try_asking(&["Tighten".into(), " ".into()]),
+        [kerf_editor::store::NextStep::from("Tighten")]
+    );
     assert_eq!(try_asking(&[]).len(), 3);
 }
 
@@ -1047,5 +1050,684 @@ proptest! {
                 prop_assert!(due <= now + CUT_SETTLE);
             }
         }
+    }
+}
+
+// ---------------------------------------------------------------- wave five
+
+use kerf_editor::ask::scope_choices;
+use kerf_editor::chat::permission_look;
+use kerf_editor::session::{preview_request, preview_span, FocusBook, Focused, REEL_MOST_RENDERED};
+use kerf_editor::store::{
+    next_steps, preview_notice, NextStep, Preview, PREVIEW_NOTICE_HOLD, PREVIEW_REQUIRED,
+};
+
+/// A step as the bridge sends it, or as plain words.
+#[derive(Clone, Debug)]
+enum Shape {
+    Object(String, String),
+    Words(String),
+}
+
+fn shape() -> impl Strategy<Value = Shape> {
+    let words = "[ a-zA-Z]{0,12}";
+    prop_oneof![
+        (words, words).prop_map(|(label, request)| Shape::Object(label, request)),
+        words.prop_map(Shape::Words),
+    ]
+}
+
+fn as_value(shape: &Shape) -> Value {
+    match shape {
+        Shape::Object(label, request) => json!({"label": label, "request": request}),
+        Shape::Words(words) => json!(words),
+    }
+}
+
+/// What Qt read of a step: the words as label and request, or the object's
+/// label and request (its label when it has none); none without a label.
+fn as_qt_read(shape: &Shape) -> Option<NextStep> {
+    let (label, request) = match shape {
+        Shape::Object(label, request) => (label.trim(), request.trim()),
+        Shape::Words(words) => (words.trim(), words.trim()),
+    };
+    (!label.is_empty())
+        .then(|| NextStep::new(label, if request.is_empty() { label } else { request }))
+}
+
+proptest! {
+    /// Kerf's next steps read in either shape: `{label, request}` as the
+    /// bridge sends them, or plain words as both; a step with no label is
+    /// left out, the rest kept in their order.
+    #[test]
+    fn next_steps_read_in_either_shape(shapes in proptest::collection::vec(shape(), 0..6)) {
+        let event = json!({"type": "agent_next", "steps": shapes.iter().map(as_value).collect::<Vec<_>>()});
+        let expected: Vec<NextStep> = shapes.iter().filter_map(as_qt_read).collect();
+        prop_assert_eq!(&next_steps(&event), &expected);
+        for step in &expected {
+            prop_assert!(!step.label.is_empty() && !step.request.is_empty());
+            prop_assert_eq!(step.label.trim(), step.label.as_str());
+        }
+        let mut state = EditorState::default();
+        state.apply(&event);
+        prop_assert_eq!(&state.next_steps, &expected);
+        // Try asking shows at most four of them, else the first requests.
+        let offered = try_asking(&state.next_steps);
+        if expected.is_empty() {
+            prop_assert_eq!(offered.len(), 3);
+        } else {
+            prop_assert_eq!(&offered[..], &expected[..expected.len().min(4)]);
+        }
+    }
+}
+
+#[test]
+fn kerf_s_next_steps_show_their_label_and_ask_their_request() {
+    let mut state = EditorState::default();
+    state.apply(&json!({"type": "agent_next", "steps": [
+        {"label": "Stronger glow", "request": "Make the glow on the title stronger"},
+        "Tighten the pauses",
+        {"label": "  ", "request": "nothing to press"},
+        {"label": "Captions"},
+        42
+    ]}));
+    assert_eq!(
+        state.next_steps,
+        [
+            NextStep::new("Stronger glow", "Make the glow on the title stronger"),
+            NextStep::new("Tighten the pauses", "Tighten the pauses"),
+            NextStep::new("Captions", "Captions"),
+        ]
+    );
+    // An empty conversation's Try asking offers them, label and request.
+    assert_eq!(try_asking(&state.next_steps), state.next_steps);
+    // A new turn takes them away until Kerf offers more.
+    state.apply(&json!({"type": "agent_busy", "busy": true}));
+    assert!(state.next_steps.is_empty());
+    assert_eq!(
+        try_asking(&state.next_steps)[0].label,
+        "Make a 30-second cut from the best takes"
+    );
+}
+
+#[test]
+fn what_the_bridge_says_of_the_preview_is_said_as_qt_said_it() {
+    let said = |event: Value| preview_notice(&event);
+    let reason = "A title needs a render";
+    assert_eq!(
+        said(json!({"type": "preview", "status": "required", "message": reason})),
+        Some((reason.to_owned(), None))
+    );
+    assert_eq!(
+        said(json!({"type": "preview", "status": "required", "message": ""})),
+        Some((PREVIEW_REQUIRED.to_owned(), None))
+    );
+    assert_eq!(
+        said(json!({"type": "preview", "status": "unavailable", "message": "No GPU"})),
+        Some(("No GPU".to_owned(), None))
+    );
+    assert_eq!(
+        said(json!({"type": "preview", "status": "ready", "proposalId": "p1"})),
+        Some(("Preview ready".to_owned(), Some(PREVIEW_NOTICE_HOLD)))
+    );
+    assert_eq!(
+        said(json!({"type": "preview", "status": "live", "message": "masks are drawn soft"})),
+        Some((
+            "Live preview: masks are drawn soft".to_owned(),
+            Some(PREVIEW_NOTICE_HOLD)
+        ))
+    );
+    assert_eq!(
+        said(json!({"type": "preview", "status": "live"})),
+        Some(("Live preview".to_owned(), Some(PREVIEW_NOTICE_HOLD)))
+    );
+    for quiet in ["running", "stopped", "exited", "failed", ""] {
+        assert_eq!(
+            said(json!({"type": "preview", "status": quiet})),
+            None,
+            "{quiet}"
+        );
+    }
+    assert_eq!(PREVIEW_NOTICE_HOLD, Duration::from_millis(4000));
+    // Activity keeps why a render is needed, in Qt's words without one.
+    assert_eq!(
+        activity_of(&json!({"type": "preview", "status": "required", "message": reason})),
+        Some(("preview", reason.to_owned()))
+    );
+    assert_eq!(
+        activity_of(&json!({"type": "preview", "status": "required"})),
+        Some(("preview", "Native preview unavailable".to_owned()))
+    );
+    assert_eq!(
+        activity_of(&json!({"type": "preview", "status": "ready"})),
+        None
+    );
+    // A render that failed is kept in the words of the `required` after it.
+    assert_eq!(
+        activity_of(&json!({"type": "preview", "status": "failed", "proposalId": "p1"})),
+        None
+    );
+}
+
+#[test]
+fn the_preview_s_words_take_the_last_ones_place() {
+    let mut state = EditorState::default();
+    state.notify("Exported cut.mov", false);
+    state.apply(
+        &json!({"type": "preview", "status": "required", "message": "A title needs a render"}),
+    );
+    let texts = |state: &EditorState| -> Vec<String> {
+        state
+            .notices
+            .iter()
+            .map(|notice| notice.text.clone())
+            .collect()
+    };
+    assert_eq!(
+        texts(&state),
+        ["Exported cut.mov", "A title needs a render"]
+    );
+    assert_eq!(state.notices[1].hold, None, "the window's 6 s");
+    assert!(!state.notices[1].error);
+    // Rendered: "Preview ready" in its place, for 4 s.
+    state.apply(&json!({"type": "preview", "status": "running", "progress": 0.5}));
+    state.apply(&json!({"type": "preview", "status": "ready", "proposalId": "p1"}));
+    assert_eq!(texts(&state), ["Exported cut.mov", "Preview ready"]);
+    assert_eq!(state.notices[1].hold, Some(PREVIEW_NOTICE_HOLD));
+    // The same words again stay where they are, held afresh.
+    let id = state.notices[1].id;
+    state.apply(&json!({"type": "preview", "status": "ready"}));
+    assert_eq!(texts(&state), ["Exported cut.mov", "Preview ready"]);
+    assert_eq!(state.notices[1].id, id);
+    state.apply(&json!({"type": "preview", "status": "live", "message": "masks are soft"}));
+    assert_eq!(
+        texts(&state),
+        ["Exported cut.mov", "Live preview: masks are soft"]
+    );
+    // It keeps its own 4 s, past the window's hold.
+    state.expire_notices(Duration::ZERO, Duration::ZERO);
+    assert_eq!(texts(&state), ["Live preview: masks are soft"]);
+    // Gone, what the preview says next is said anew.
+    state.notices.clear();
+    state.apply(&json!({"type": "preview", "status": "ready"}));
+    assert_eq!(texts(&state), ["Preview ready"]);
+}
+
+#[test]
+fn a_failed_render_is_said_once_in_the_bridge_s_words() {
+    let mut state = EditorState::default();
+    // As the bridge says a render that failed: failed, then why a render
+    // is still needed.
+    state.apply(&json!({"type": "preview", "status": "failed", "proposalId": "p1"}));
+    state.apply(
+        &json!({"type": "preview", "status": "required", "proposalId": "p1",
+        "message": "Preview render failed. Retry after fixing the reported error."}),
+    );
+    let lines: Vec<(String, bool, Option<Duration>)> = state
+        .notices
+        .iter()
+        .map(|notice| (notice.text.clone(), notice.error, notice.hold))
+        .collect();
+    assert_eq!(
+        lines,
+        [(
+            "Preview render failed. Retry after fixing the reported error.".to_owned(),
+            true,
+            Some(kerf_editor::theme::motion::NOTICE_HOLD)
+        )]
+    );
+    assert_eq!(
+        state.preview.reason().as_deref(),
+        Some("Preview render failed. Retry after fixing the reported error.")
+    );
+    // Rendered again: ready in its place.
+    state.apply(&json!({"type": "preview", "status": "running", "proposalId": "p1"}));
+    state.apply(&json!({"type": "preview", "status": "ready", "proposalId": "p1"}));
+    assert_eq!(state.notices.len(), 1);
+    assert_eq!(state.notices[0].text, "Preview ready");
+    assert!(!state.notices[0].error);
+    assert!(state.preview_line().is_some());
+}
+
+#[test]
+fn the_render_preview_button_says_why_a_render_is_needed() {
+    let preview = |status: &str, message: Option<&str>| Preview {
+        status: status.to_owned(),
+        message: message.map(str::to_owned),
+        ..Preview::default()
+    };
+    assert_eq!(
+        preview("required", Some("Effects need a render"))
+            .reason()
+            .as_deref(),
+        Some("Effects need a render")
+    );
+    assert_eq!(
+        preview("required", Some("  ")).reason().as_deref(),
+        Some("Rendered preview required")
+    );
+    assert_eq!(
+        preview("unavailable", None).reason().as_deref(),
+        Some("Rendered preview required")
+    );
+    for status in ["ready", "live", "running", "stopped", ""] {
+        assert_eq!(preview(status, Some("x")).reason(), None, "{status}");
+    }
+    // As the store keeps it from the bridge's event.
+    let mut state = EditorState::default();
+    state.apply(
+        &json!({"type": "preview", "status": "required", "message": "Effects need a render"}),
+    );
+    assert_eq!(
+        state.preview.reason().as_deref(),
+        Some("Effects need a render")
+    );
+}
+
+#[test]
+fn a_card_s_preview_renders_only_what_the_proposal_changes() {
+    let snapshot = Snapshot::from_value(&snapshot());
+    // p-far trims a at 3.52 s: from a's start to its old end.
+    assert_eq!(
+        preview_request(&snapshot, Some("p-far")),
+        json!({"type": "preview", "proposalId": "p-far", "start": 0.0, "duration": 4.0})
+    );
+    // An earlier version renders what it changes itself.
+    assert_eq!(
+        preview_request(&snapshot, Some("p-near-1")),
+        json!({"type": "preview", "proposalId": "p-near-1", "start": 20.0, "duration": 4.5})
+    );
+    assert_eq!(
+        preview_request(&snapshot, Some("p-near-2")),
+        json!({"type": "preview", "proposalId": "p-near-2", "start": 20.0, "duration": 5.0})
+    );
+    // One with no timeline known renders whole; so does the program.
+    assert_eq!(
+        preview_request(&snapshot, Some("p-done")),
+        json!({"type": "preview", "proposalId": "p-done"})
+    );
+    assert_eq!(preview_request(&snapshot, None), json!({"type": "preview"}));
+    assert_eq!(
+        preview_request(&snapshot, Some("unknown")),
+        json!({"type": "preview", "proposalId": "unknown"})
+    );
+}
+
+#[test]
+fn a_preview_s_stretch_is_held_to_a_frame_and_to_two_minutes() {
+    let program = Timeline::from_value(&timeline(&[
+        clip("a", 0.0, 4.0),
+        clip("b", 300.0, 4.0),
+        clip("c", 400.0, 4.0),
+    ]));
+    // Moved far: from where it was to where it goes, at most 120 s.
+    let moved = Timeline::from_value(&timeline(&[
+        clip("a", 0.0, 4.0),
+        clip("b", 10.0, 4.0),
+        clip("c", 400.0, 4.0),
+    ]));
+    assert_eq!(
+        preview_span(&program, &moved),
+        Some((10.0, REEL_MOST_RENDERED))
+    );
+    let program = Timeline::from_value(&timeline(&[clip("a", 0.0, 4.0), clip("b", 300.0, 4.0)]));
+    // A clip added with no length still renders a frame (25 fps).
+    let added = Timeline::from_value(&timeline(&[
+        clip("a", 0.0, 4.0),
+        clip("b", 300.0, 4.0),
+        clip("c", 7.0, 0.0),
+    ]));
+    assert_eq!(preview_span(&program, &added), Some((7.0, 1.0 / 25.0)));
+    assert_eq!(preview_span(&program, &program), None);
+}
+
+proptest! {
+    /// Whatever a proposal moves, its preview starts where the earliest
+    /// change does, never before the program, lasts a frame to 120 s, and
+    /// ends where the change does or, sooner, where the proposal does.
+    #[test]
+    fn a_preview_s_stretch_covers_the_earliest_change(
+        from in 0.0f64..400.0,
+        to in 0.0f64..400.0,
+        length in 0.05f64..60.0,
+    ) {
+        let program = Timeline::from_value(&timeline(&[clip("a", from, length)]));
+        let proposed = Timeline::from_value(&timeline(&[clip("a", to, length)]));
+        let span = preview_span(&program, &proposed);
+        if (from - to).abs() <= 1e-4 {
+            prop_assert_eq!(span, None);
+        } else {
+            let (start, duration) = span.expect("a stretch");
+            prop_assert!((start - from.min(to)).abs() < 1e-9);
+            prop_assert!(start >= 0.0);
+            prop_assert!((1.0 / 25.0 - 1e-12..=REEL_MOST_RENDERED).contains(&duration));
+            // Moved later, it renders from where it was to its new end;
+            // moved earlier, the proposal ends with it.
+            let end = to + length;
+            prop_assert!((duration - (end - start).min(REEL_MOST_RENDERED)).abs() < 1e-9);
+            prop_assert!(start + duration <= end + 1e-9);
+        }
+    }
+}
+
+fn focused(clip: &str, label: &str, stamp: f64) -> Focused {
+    Focused {
+        focus: json!({"scope": "clip", "clip": clip, "fromFrame": 0, "toFrame": 24}),
+        label: label.to_owned(),
+        stamp: Some(stamp),
+    }
+}
+
+#[test]
+fn ask_again_goes_about_what_the_request_was_about() {
+    let mut book = FocusBook::default();
+    assert!(book.is_empty() && book.last().is_none());
+    book.remember("Tighten it", focused("c1", "A019_C001", 2.0));
+    book.remember(" Brighter ", focused("c2", "Sequence around B", 5.0));
+    // By its words, as the conversation keeps them.
+    assert_eq!(
+        book.of("Tighten it"),
+        Some(&focused("c1", "A019_C001", 2.0))
+    );
+    assert_eq!(
+        book.of("Brighter"),
+        Some(&focused("c2", "Sequence around B", 5.0))
+    );
+    assert_eq!(book.last(), Some(&focused("c2", "Sequence around B", 5.0)));
+    assert_eq!(book.of("Something else"), None);
+    // Asked again about something else, the newest is what it went about.
+    book.remember("Tighten it", focused("c3", "Sequence at 00:00:01:00", 1.0));
+    assert_eq!(
+        book.of("Tighten it"),
+        Some(&focused("c3", "Sequence at 00:00:01:00", 1.0))
+    );
+    assert_eq!(book.len(), 2);
+    book.remember("   ", focused("c4", "x", 0.0));
+    assert_eq!(book.len(), 2);
+    // Only the newest are kept.
+    for index in 0..FocusBook::KEPT + 5 {
+        book.remember(&format!("request {index}"), focused("c", "x", 0.0));
+    }
+    assert_eq!(book.len(), FocusBook::KEPT);
+    assert_eq!(book.of("Tighten it"), None);
+    assert!(book
+        .of(&format!("request {}", FocusBook::KEPT + 4))
+        .is_some());
+}
+
+#[test]
+fn the_permission_chip_carries_its_mode_s_icon_and_tone() {
+    use kerf_editor::icons::Icon;
+    use kerf_editor::theme;
+    assert_eq!(permission_look(Permissions::Ask), (Icon::Lock, None));
+    assert_eq!(
+        permission_look(Permissions::AcceptEdits),
+        (Icon::Check, Some(theme::accent_ink()))
+    );
+    let (_, auto) = permission_look(Permissions::Auto);
+    assert_eq!(auto, Some(theme::activity::gpu()));
+}
+
+#[test]
+fn the_scope_menu_offers_the_clip_then_the_sequence_and_jumps_by_letter() {
+    assert_eq!(
+        scope_choices(Some("A019_C001")),
+        [
+            (AskScope::Clip, "This clip · A019_C001".to_owned()),
+            (AskScope::Sequence, "Whole sequence".to_owned()),
+        ]
+    );
+    assert_eq!(
+        scope_choices(None),
+        [(AskScope::Sequence, "Whole sequence".to_owned())]
+    );
+    let choices = scope_choices(Some("A019_C001"));
+    let words: Vec<&str> = choices.iter().map(|(_, words)| words.as_str()).collect();
+    let enabled = [true, true];
+    assert_eq!(
+        kerf_editor::ui::menu_letter(&words, &enabled, Some(0), 'w'),
+        Some(1)
+    );
+    assert_eq!(
+        kerf_editor::ui::menu_letter(&words, &enabled, Some(1), 'T'),
+        Some(0)
+    );
+    assert_eq!(
+        kerf_editor::ui::menu_letter(&words, &enabled, None, 'x'),
+        None
+    );
+}
+
+#[test]
+fn an_archived_conversation_stays_open() {
+    let mut state = EditorState::default();
+    state.choose(Some("c1".into()));
+    state.apply(&json!({"type": "conversation", "id": "c1", "title": "Trim", "archived": true, "items": []}));
+    state.apply(&json!({"type": "conversations", "items": [
+        {"id": "c1", "title": "Trim", "archived": true, "count": 2},
+        {"id": "c2", "title": "Other", "archived": false, "count": 1}
+    ]}));
+    assert_eq!(state.chosen.as_deref(), Some("c1"));
+    assert!(state
+        .open_conversation
+        .as_ref()
+        .is_some_and(|open| open.archived));
+    assert!(state.conversations[0].archived);
+    // Deleted, it goes.
+    state.apply(&json!({"type": "conversations", "items": [
+        {"id": "c2", "title": "Other", "archived": false, "count": 1}
+    ]}));
+    assert_eq!(state.chosen, None);
+}
+
+// ------------------------------------------------- wave five review fixes
+
+/// Where a timeline's last clip ends: how long kerfd lets a render of it run.
+fn last_end(timeline: &Timeline) -> f64 {
+    timeline
+        .tracks
+        .iter()
+        .flat_map(|track| track.clips.iter())
+        .map(|clip| clip.end())
+        .fold(0.0, f64::max)
+}
+
+#[test]
+fn a_preview_of_a_shorter_programme_ends_where_the_proposal_does() {
+    // Tighten the pauses: b and c come earlier, the programme ends at 12.
+    let program = Timeline::from_value(&timeline(&[
+        clip("a", 0.0, 4.0),
+        clip("b", 5.0, 4.0),
+        clip("c", 10.0, 4.0),
+    ]));
+    let tightened = Timeline::from_value(&timeline(&[
+        clip("a", 0.0, 4.0),
+        clip("b", 4.0, 4.0),
+        clip("c", 8.0, 4.0),
+    ]));
+    assert_eq!(preview_span(&program, &tightened), Some((4.0, 8.0)));
+    // The last clip trimmed: from where it starts to its new end.
+    let trimmed = Timeline::from_value(&timeline(&[
+        clip("a", 0.0, 4.0),
+        clip("b", 5.0, 4.0),
+        clip("c", 10.0, 1.5),
+    ]));
+    assert_eq!(preview_span(&program, &trimmed), Some((10.0, 1.5)));
+    // The last clip taken out: nothing it changes lies within the
+    // proposal, which renders whole.
+    let cut = Timeline::from_value(&timeline(&[clip("a", 0.0, 4.0), clip("b", 5.0, 4.0)]));
+    assert_eq!(preview_span(&program, &cut), None);
+    // The card's request says the same.
+    let mut value = snapshot();
+    value["timeline"] = timeline(&[clip("a", 0.0, 4.0), clip("b", 4.0, 3.0)]);
+    value["proposalTimelines"]["p-far"] = timeline(&[clip("a", 0.0, 4.0)]);
+    value["proposalTimelines"]["p-near-2"] = timeline(&[clip("a", 0.0, 3.0), clip("b", 3.0, 3.0)]);
+    let snapshot = Snapshot::from_value(&value);
+    assert_eq!(
+        preview_request(&snapshot, Some("p-far")),
+        json!({"type": "preview", "proposalId": "p-far"})
+    );
+    assert_eq!(
+        preview_request(&snapshot, Some("p-near-2")),
+        json!({"type": "preview", "proposalId": "p-near-2", "start": 0.0, "duration": 6.0})
+    );
+}
+
+/// What a proposal does to one clip of a cut.
+#[derive(Clone, Debug)]
+enum Edit {
+    Keep,
+    Remove,
+    Trim(f64),
+    Shift(f64),
+}
+
+fn edit() -> impl Strategy<Value = Edit> {
+    prop_oneof![
+        Just(Edit::Keep),
+        Just(Edit::Remove),
+        (0.04f64..1.0).prop_map(Edit::Trim),
+        (-30.0f64..30.0).prop_map(Edit::Shift),
+    ]
+}
+
+proptest! {
+    /// Whatever a proposal takes out, trims or moves, kerfd takes the
+    /// stretch its preview asks for: it starts at the program's start or
+    /// later, lasts a frame to 120 s, and ends within the proposal; and it
+    /// starts where the earliest change does whenever it is asked for.
+    #[test]
+    fn kerfd_takes_every_preview_stretch_a_proposal_asks_for(
+        cut in proptest::collection::vec((0.0f64..20.0, 0.5f64..40.0, edit()), 1..6),
+    ) {
+        let mut at = 0.0;
+        let mut before = Vec::new();
+        let mut after = Vec::new();
+        for (index, (gap, length, edit)) in cut.iter().enumerate() {
+            let id = format!("c{index}");
+            let start = at + gap;
+            at = start + length;
+            before.push(clip(&id, start, *length));
+            match edit {
+                Edit::Keep => after.push(clip(&id, start, *length)),
+                Edit::Remove => {}
+                Edit::Trim(part) => after.push(clip(&id, start, length * part)),
+                Edit::Shift(by) => after.push(clip(&id, (start + by).max(0.0), *length)),
+            }
+        }
+        let program = Timeline::from_value(&timeline(&before));
+        let proposed = Timeline::from_value(&timeline(&after));
+        let frame = 1.0 / 25.0;
+        let changes = clip_changes(&program, &proposed);
+        if let Some((start, duration)) = preview_span(&program, &proposed) {
+            prop_assert!(start >= 0.0);
+            prop_assert!((frame - 1e-12..=REEL_MOST_RENDERED).contains(&duration));
+            prop_assert!(start + duration <= last_end(&proposed) + 1e-9);
+            let earliest = changes
+                .iter()
+                .map(|change| change.span().0)
+                .fold(f64::INFINITY, f64::min);
+            prop_assert!((start - earliest.max(0.0)).abs() < 1e-9);
+        } else {
+            // Nothing changed, or nothing of it a frame inside the proposal.
+            let earliest = changes
+                .iter()
+                .map(|change| change.span().0.max(0.0))
+                .fold(f64::INFINITY, f64::min);
+            prop_assert!(changes.is_empty() || last_end(&proposed) - earliest < frame);
+        }
+    }
+}
+
+use kerf_editor::chat::Queued;
+
+#[test]
+fn ask_again_pressed_while_kerf_works_keeps_what_it_was_about() {
+    let about = focused("c1", "A019_C001", 2.0);
+    let mut queued = Queued::default();
+    queued.push_again(" Tighten it ", 9.0, Some(about.clone()));
+    assert_eq!(queued.text(), Some("Tighten it"));
+    assert_eq!(queued.about(), Some(&about));
+    // Pressed again, nothing doubles and it is still about the clip.
+    queued.push_again("Tighten it", 11.0, Some(focused("c9", "x", 0.0)));
+    assert_eq!(queued.text(), Some("Tighten it"));
+    assert_eq!(queued.about(), Some(&about));
+    queued.push_again("   ", 12.0, None);
+    assert_eq!(queued.about(), Some(&about));
+    assert_eq!(queued.take(), Some(("Tighten it".to_owned(), 9.0)));
+    assert_eq!(queued.about(), None);
+    // Words this window never sent go as the composer's do.
+    queued.push_again("Brighter", 3.0, None);
+    assert_eq!(queued.about(), None);
+    assert_eq!(queued.take(), Some(("Brighter".to_owned(), 3.0)));
+    // Joined with a request written meanwhile, it goes as that does: about
+    // the sequence at the latest one's time.
+    queued.push_again("Tighten it", 9.0, Some(about.clone()));
+    queued.push("and add a title", 14.0);
+    assert_eq!(queued.about(), None);
+    assert_eq!(
+        queued.take(),
+        Some(("Tighten it\n\nand add a title".to_owned(), 14.0))
+    );
+    queued.push("trim this", 2.0);
+    queued.push_again("Tighten it", 5.0, Some(about));
+    assert_eq!(queued.about(), None);
+    assert_eq!(queued.text(), Some("trim this\n\nTighten it"));
+}
+
+/// Something pressed or written while Kerf works.
+#[derive(Clone, Debug)]
+enum Waits {
+    Written(String, f64),
+    Again(String, f64, bool),
+}
+
+fn waits() -> impl Strategy<Value = Waits> {
+    let words = prop_oneof![Just("Tighten it".to_owned()), "[ a-c]{0,4}"];
+    prop_oneof![
+        (words.clone(), 0.0f64..60.0).prop_map(|(text, at)| Waits::Written(text, at)),
+        (words, 0.0f64..60.0, any::<bool>())
+            .prop_map(|(text, at, sent)| Waits::Again(text, at, sent)),
+    ]
+}
+
+proptest! {
+    /// What waits keeps an Ask again's focus only while that request is
+    /// all that waits; its words never double from being pressed twice.
+    #[test]
+    fn an_ask_again_s_focus_waits_only_while_it_waits_alone(
+        steps in proptest::collection::vec(waits(), 0..8),
+    ) {
+        let mut queued = Queued::default();
+        // The words that wait, their time, and the focus they go about.
+        let mut model: Option<(String, f64, Option<Focused>)> = None;
+        for step in &steps {
+            match step {
+                Waits::Written(text, at) => {
+                    queued.push(text, *at);
+                    if !text.trim().is_empty() {
+                        let waiting = model.as_ref().map(|(text, _, _)| text.as_str());
+                        model = Some((join_queued(waiting, text), *at, None));
+                    }
+                }
+                Waits::Again(text, at, sent) => {
+                    let about = sent.then(|| focused("c1", text.trim(), *at));
+                    queued.push_again(text, *at, about.clone());
+                    let text = text.trim();
+                    model = match model.take() {
+                        waiting if text.is_empty() => waiting,
+                        None => Some((text.to_owned(), *at, about)),
+                        Some(waiting) if waiting.0 == text => Some(waiting),
+                        Some((waiting, _, _)) => {
+                            Some((join_queued(Some(&waiting), text), *at, None))
+                        }
+                    };
+                }
+            }
+            prop_assert_eq!(queued.text(), model.as_ref().map(|(text, _, _)| text.as_str()));
+            prop_assert_eq!(queued.about(), model.as_ref().and_then(|(_, _, about)| about.as_ref()));
+        }
+        prop_assert_eq!(queued.take(), model.map(|(text, at, _)| (text, at)));
+        prop_assert_eq!(queued.about(), None);
     }
 }
