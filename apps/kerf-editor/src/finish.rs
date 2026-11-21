@@ -2530,6 +2530,61 @@ pub fn sync_said(report: &Value, asked: bool) -> Option<String> {
     }
 }
 
+/// A sync's failure as the window keeps it (Qt's `m_syncFailure`): why the
+/// last sync failed, until one succeeds (the chip's dot and tip, its menu,
+/// View ▸ Sync), and whether it stands, no sync having started since (the
+/// window's error bar and the toolbar's red line). What it last said is
+/// remembered too: Live Sync says a failure that repeats only once; one a
+/// person asked for is said each time.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SyncFailure {
+    last: Option<String>,
+    standing: bool,
+}
+
+impl SyncFailure {
+    /// A sync started (a stage of it came): the failure stands no longer.
+    pub fn started(&mut self) {
+        self.standing = false;
+    }
+
+    /// A sync failed, saying `message`; `asked` when a person asked for it.
+    /// Whether it is to be said: always when asked, else only when it is
+    /// not the failure said last.
+    pub fn failed(&mut self, message: &str, asked: bool) -> bool {
+        let said = asked || self.last.as_deref() != Some(message);
+        self.last = Some(message.to_owned());
+        self.standing = true;
+        said
+    }
+
+    /// A sync succeeded: no failure is kept.
+    pub fn done(&mut self) {
+        self.last = None;
+        self.standing = false;
+    }
+
+    /// Why the last sync failed, until one succeeds.
+    pub fn last(&self) -> Option<&str> {
+        self.last.as_deref()
+    }
+
+    /// Why the last sync failed, while no sync has started since.
+    pub fn standing(&self) -> Option<&str> {
+        self.last.as_deref().filter(|_| self.standing)
+    }
+}
+
+/// What the Git chip tells the window.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CollabEvent {
+    /// A sync failed: why, and whether it is to be said (the window's
+    /// error bar, "Sync failed: <why>"), by [`SyncFailure::failed`].
+    SyncFailed { why: String, said: bool },
+    /// A sync started or succeeded: the failure stands no longer.
+    SyncCleared,
+}
+
 /// The project's standing against its Git repository, in the toolbar, with
 /// Sync and the rest of sharing in its menu. The window's menus and the
 /// palette reach its questions too ([`Collab::open_command`]).
@@ -2538,8 +2593,8 @@ pub struct Collab {
     status: Option<GitStatus>,
     /// The step a sync is at (committing, fetching…) while it runs.
     stage: Option<String>,
-    /// Why the last sync failed, until one succeeds.
-    failure: Option<String>,
+    /// Why the last sync failed, until one succeeds, and whether it stands.
+    failure: SyncFailure,
     /// What the last sync did.
     report: Option<String>,
     menu: Menu,
@@ -2620,7 +2675,7 @@ impl Collab {
             session,
             status: None,
             stage: None,
-            failure: None,
+            failure: SyncFailure::default(),
             report: None,
             menu: Menu::Closed,
             kit: None,
@@ -2688,7 +2743,18 @@ impl Collab {
     /// Why the last sync failed, until one succeeds (the app's menu's
     /// View ▸ Sync says it, as the chip's own menu does).
     pub fn failure(&self) -> Option<&str> {
-        self.failure.as_deref()
+        self.failure.last()
+    }
+
+    /// Why the last sync failed, while no sync has started since: the
+    /// toolbar's red line says it (Qt's standingProblem).
+    pub fn standing_failure(&self) -> Option<&str> {
+        self.failure.standing()
+    }
+
+    /// Whether a merge is unfinished, to be finished with git.
+    pub fn conflicted(&self) -> bool {
+        self.status.as_ref().is_some_and(|status| status.conflicted)
     }
 
     /// Whether one of its questions (Commit…, New Branch…, Pull Request…,
@@ -2726,7 +2792,10 @@ impl Collab {
             "collab_sync" => match event["stage"].as_str().unwrap_or_default() {
                 "done" => {
                     self.stage = None;
-                    self.failure = None;
+                    if self.failure.last().is_some() {
+                        cx.emit(CollabEvent::SyncCleared);
+                    }
+                    self.failure.done();
                     let report = &event["report"];
                     let lines = sync_lines(report);
                     if !lines.is_empty() {
@@ -2755,21 +2824,26 @@ impl Collab {
                         .as_str()
                         .unwrap_or("The sync did not finish.")
                         .to_owned();
-                    // Live sync says a failure once; a person asking hears it again.
-                    if self.asked.take().is_some()
-                        || self.failure.as_deref() != Some(message.as_str())
-                    {
-                        self.notify(&format!("Sync failed: {message}"), true, None, cx);
+                    // Live sync says a failure once; a person asking hears it
+                    // again. It is said in the window's error bar, which
+                    // stays until it is dismissed (Qt's showError).
+                    let asked = self.asked.take().is_some();
+                    let said = self.failure.failed(&message, asked);
+                    if said {
                         self.session
                             .update(cx, |session, _| session.activity.push("sync", &message));
                     }
-                    self.failure = Some(message);
+                    cx.emit(CollabEvent::SyncFailed { why: message, said });
                 }
                 stage => {
                     if self.stage.is_none() {
                         self.busy_since = Instant::now();
                     }
                     self.stage = Some(stage.to_owned());
+                    if self.failure.standing().is_some() {
+                        cx.emit(CollabEvent::SyncCleared);
+                    }
+                    self.failure.started();
                 }
             },
             "collab_pull_request" => {
@@ -3115,14 +3189,14 @@ impl Collab {
                     chip.child(ui::label("Merge unfinished", text::CONTROL, theme::neg()))
                 });
         }
-        let mark = if self.failure.is_some() && !busy {
+        let mark = if self.failure.last().is_some() && !busy {
             Some(theme::neg())
         } else if status.changed && !busy && !conflicted {
             Some(theme::ink2())
         } else {
             None
         };
-        let tooltip: SharedString = match (&self.failure, status.changed) {
+        let tooltip: SharedString = match (self.failure.last(), status.changed) {
             (Some(failure), _) => format!("Sync failed: {failure}").into(),
             _ if conflicted => "A merge is unfinished; finish it with git".into(),
             (None, true) => "Edits not committed yet".into(),
@@ -3226,7 +3300,7 @@ impl Collab {
             Some(format!("Inside the repository at {enclosing}; publish it as its own repository to share it"))
         } else {
             self.failure
-                .as_ref()
+                .last()
                 .map(|failure| format!("Sync failed: {failure}"))
         };
         let note = if self.busy() {
@@ -3537,6 +3611,8 @@ impl Collab {
             .into_any_element()
     }
 }
+
+impl EventEmitter<CollabEvent> for Collab {}
 
 impl Render for Collab {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {

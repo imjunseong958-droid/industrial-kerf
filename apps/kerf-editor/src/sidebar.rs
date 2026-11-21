@@ -1436,6 +1436,10 @@ pub struct SidebarView {
     /// (`menu_return`) when it closes from the keys or by a choice.
     menu_focus: FocusHandle,
     menu_return: Option<FocusHandle>,
+    /// Where a right-click opened the menu open, in the window: it opens
+    /// at the pointer there, as Qt's did. None: anchored under its row
+    /// (its ⋯ button, the keys).
+    menu_at: Option<Point<Pixels>>,
     /// Keys to give back once the menu that had them is gone.
     refocus: Option<FocusHandle>,
     /// An item was chosen from the keys: the menu, gone, holds them until
@@ -1633,6 +1637,7 @@ impl SidebarView {
             menu_chosen: None,
             menu_focus,
             menu_return: None,
+            menu_at: None,
             refocus: None,
             give_back_on_key_up: None,
             shimmer_since: Instant::now(),
@@ -1723,6 +1728,7 @@ impl SidebarView {
     ) {
         let entries = self.entries_of(&menu, cx);
         self.menu = Some(menu);
+        self.menu_at = None;
         self.menu_chosen = if keyboard {
             menu_step(&entries, None, true)
         } else {
@@ -1740,6 +1746,32 @@ impl SidebarView {
         window.focus(&self.menu_focus);
         cx.emit(SidebarEvent::MenuOpened);
         cx.notify();
+    }
+
+    /// A row's open `menu`, `width` wide: at the pointer where a
+    /// right-click opened it (kept `S8` inside the window), else
+    /// under the row's right end, `top` below the row's top.
+    fn placed_menu(
+        &self,
+        menu: &SidebarMenu,
+        top: f32,
+        width: f32,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let view = self.menu_view(menu, None, width, cx);
+        match self.menu_at {
+            Some(at) => deferred(
+                gpui::anchored()
+                    .position(at)
+                    .snap_to_window_with_margin(px(theme::space::S8))
+                    .child(view),
+            )
+            .with_priority(1)
+            .into_any_element(),
+            None => deferred(div().absolute().top(px(top)).right(px(8.0)).child(view))
+                .with_priority(1)
+                .into_any_element(),
+        }
     }
 
     /// `menu` opens, or closes when it is the one open.
@@ -2422,9 +2454,11 @@ impl SidebarView {
             MouseButton::Right,
             cx.listener({
                 let menu = menu.clone();
-                move |this, _, window, cx| {
+                move |this, event: &MouseDownEvent, window, cx| {
                     cx.stop_propagation();
                     this.open_menu(menu.clone(), false, window, cx);
+                    // At the pointer, kept inside the window.
+                    this.menu_at = Some(event.position);
                 }
             }),
         )
@@ -2461,16 +2495,7 @@ impl SidebarView {
         }));
         let with_menu = div().relative().child(row).when(menu_open, |wrapper| {
             // Over the rows after it, and past the list's edge.
-            wrapper.child(
-                deferred(
-                    div()
-                        .absolute()
-                        .top(px(30.0))
-                        .right(px(8.0))
-                        .child(self.menu_view(&menu, None, 180.0, cx)),
-                )
-                .with_priority(1),
-            )
+            wrapper.child(self.placed_menu(&menu, 30.0, 180.0, cx))
         });
         let arrived = self
             .arrivals
@@ -2695,9 +2720,11 @@ impl SidebarView {
             MouseButton::Right,
             cx.listener({
                 let menu = menu.clone();
-                move |this, _, window, cx| {
+                move |this, event: &MouseDownEvent, window, cx| {
                     cx.stop_propagation();
                     this.open_menu(menu.clone(), false, window, cx);
+                    // At the pointer, kept inside the window.
+                    this.menu_at = Some(event.position);
                 }
             }),
         )
@@ -2732,16 +2759,7 @@ impl SidebarView {
             .child(row)
             .children(conversations)
             .when(menu_open, |wrapper| {
-                wrapper.child(
-                    deferred(
-                        div()
-                            .absolute()
-                            .top(px(28.0))
-                            .right(px(8.0))
-                            .child(self.menu_view(&menu, None, 200.0, cx)),
-                    )
-                    .with_priority(1),
-                )
+                wrapper.child(self.placed_menu(&menu, 28.0, 200.0, cx))
             })
             .into_any_element()
     }

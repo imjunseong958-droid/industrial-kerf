@@ -906,20 +906,21 @@ impl SettingsView {
             )
             .into_any_element(),
         );
+        let (open_words, _) = models_opener(&file, exists);
         let shown = file.clone();
         let buttons = div()
             .flex()
             .flex_none()
             .gap(px(theme::space::S8))
             .child(
-                ui::button("settings-models-show", "Show in Folder").on_click(move |_, _, cx| {
-                    if shown.is_file() {
-                        cx.reveal_path(&shown);
-                    } else if let Some(folder) = shown.parent() {
-                        // Not there yet: its folder, to put it in.
-                        let _ = std::fs::create_dir_all(folder);
-                        cx.reveal_path(folder);
+                // The file itself, in the app that opens it, to be edited;
+                // not there yet, its folder (made), to put it in (Qt's).
+                ui::button("settings-models-open", open_words).on_click(move |_, _, cx| {
+                    let (_, opened) = models_opener(&shown, shown.is_file());
+                    if !shown.is_file() {
+                        let _ = std::fs::create_dir_all(&opened);
                     }
+                    cx.open_with_system(&opened);
                 }),
             )
             .child(
@@ -1014,7 +1015,7 @@ impl SettingsView {
     fn load_servers(&mut self, path: &Path, imported: bool, cx: &mut Context<Self>) {
         let shown = home_relative(path);
         self.servers_status = Some(match std::fs::read_to_string(path) {
-            Err(error) => (format!("Could not read {shown}: {error}").into(), true),
+            Err(error) => (read_failure(&shown, &error).into(), true),
             Ok(text) => {
                 let checked = validate_mcp_config(&text);
                 self.servers
@@ -1078,7 +1079,8 @@ impl SettingsView {
         let servers_row = match &project {
             Some(project) => {
                 let file = project.join(".kerf").join("mcp.json");
-                let cursor = cursor_config(Some(project));
+                let home = crate::prefs::home();
+                let imports = cursor_imports(project, home.as_deref());
                 let status = self.servers_status.clone().map(|(said, failed)| {
                     ui::label(
                         said,
@@ -1104,15 +1106,15 @@ impl SettingsView {
                                 this.load_servers(&reload, false, cx)
                             })),
                     )
-                    .when_some(cursor, |buttons, cursor| {
-                        buttons.child(
-                            ui::button("settings-mcp-cursor", "Import from Cursor").on_click(
-                                cx.listener(move |this, _, _, cx| {
-                                    this.load_servers(&cursor, true, cx)
-                                }),
-                            ),
-                        )
-                    });
+                    // Cursor's, the project's and the person's, always
+                    // offered; each one's tip is its file (Qt's).
+                    .children(imports.into_iter().enumerate().map(|(at, (words, path))| {
+                        ui::button(("settings-mcp-cursor", at), words)
+                            .tooltip(home_relative(&path))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.load_servers(&path, true, cx)
+                            }))
+                    }));
                 let mut below = vec![
                     code_well(&self.servers, SERVERS_HEIGHT, window, cx).into_any_element(),
                     buttons.into_any_element(),
@@ -1479,6 +1481,8 @@ impl SettingsView {
             .unwrap_or(kerf_bridge::REPOSITORY)
             .to_owned();
         let link = repository.clone();
+        let releases = releases_url(&repository);
+        let releases_link = releases.clone();
         let head = div()
             .flex()
             .items_center()
@@ -1492,6 +1496,7 @@ impl SettingsView {
                     .flex_col()
                     .min_w_0()
                     .child(ui::label(name, text::TITLE, theme::ink()))
+                    .child(ui::label(TAGLINE, text::CONTROL, theme::ink2()))
                     .child(ui::label(
                         format!("Version {version}"),
                         text::CONTROL,
@@ -1514,7 +1519,21 @@ impl SettingsView {
                         .cursor_pointer()
                         .hover(|style| style.underline())
                         .on_click(move |_, _, cx| cx.open_url(&link)),
-                    ),
+                    )
+                    // What changed in each release (Qt's about box), the
+                    // page itself in its tip.
+                    .child(ui::tip_on(
+                        ui::line(
+                            "Releases and what changed in each",
+                            text::CONTROL,
+                            theme::accent_ink(),
+                        )
+                        .id("settings-releases")
+                        .cursor_pointer()
+                        .hover(|style| style.underline())
+                        .on_click(move |_, _, cx| cx.open_url(&releases_link)),
+                        Some(ui::Tip::new(releases)),
+                    )),
             );
 
         let checking = matches!(self.update, Update::Checking { .. });
@@ -2213,15 +2232,53 @@ fn write_project_servers(project: &Path, text: &str) -> Result<(), String> {
         .map_err(|error| format!("Could not save the servers: {error}"))
 }
 
-/// Cursor's MCP servers to import: the project's `.cursor/mcp.json`, else
-/// the person's `~/.cursor/mcp.json`, whichever is there.
-pub fn cursor_config(project: Option<&Path>) -> Option<PathBuf> {
-    let in_project = project.map(|project| project.join(".cursor").join("mcp.json"));
-    let at_home = crate::prefs::home().map(|home| home.join(".cursor").join("mcp.json"));
-    in_project
-        .into_iter()
-        .chain(at_home)
-        .find(|path| path.is_file())
+/// Settings ▸ Models' button for the models file at `file`: its words and
+/// what it opens in the system's app for it. The file itself while it is
+/// there ("Open Models File"); else its folder, which the press makes
+/// ("Open Its Folder"), to put the file in (Qt's main_window_settings.cpp).
+pub fn models_opener(file: &Path, exists: bool) -> (&'static str, PathBuf) {
+    match file.parent().filter(|_| !exists) {
+        Some(folder) => ("Open Its Folder", folder.to_path_buf()),
+        None => ("Open Models File", file.to_path_buf()),
+    }
+}
+
+/// Cursor's MCP servers files that Settings ▸ MCP imports from, each
+/// with its button's words: the project's `.cursor/mcp.json`, then the
+/// person's `~/.cursor/mcp.json`. Both are offered whether there or not
+/// (Qt's); one that is not says so as it is loaded ([`read_failure`]).
+pub fn cursor_imports(project: &Path, home: Option<&Path>) -> Vec<(&'static str, PathBuf)> {
+    let mut imports = vec![(
+        "Load from Project's Cursor",
+        project.join(".cursor").join("mcp.json"),
+    )];
+    if let Some(home) = home {
+        imports.push((
+            "Load from Home Cursor",
+            home.join(".cursor").join("mcp.json"),
+        ));
+    }
+    imports
+}
+
+/// "Could not read <path>: <why>", Qt's words for a servers file that did
+/// not open, `why` as the system says it without its number.
+pub fn read_failure(shown: &str, error: &std::io::Error) -> String {
+    let said = error.to_string();
+    let why = match said.rfind(" (os error ") {
+        Some(at) if said.ends_with(')') => &said[..at],
+        _ => said.as_str(),
+    };
+    format!("Could not read {shown}: {why}")
+}
+
+/// About's line under Kerf's name (Qt's about box).
+pub const TAGLINE: &str = "A video editor you can talk to.";
+
+/// Where Kerf's releases are listed, and what changed in each: the
+/// repository's `/releases` page.
+pub fn releases_url(repository: &str) -> String {
+    format!("{}/releases", repository.trim().trim_end_matches('/'))
 }
 
 /// Whether `text` is an MCP servers file Kerf chat can use: an object whose

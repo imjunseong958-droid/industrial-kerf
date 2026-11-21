@@ -174,7 +174,13 @@ pub struct Selections {
     /// Where a press went down, for one that does not drag to be a link's.
     pressed: Option<(SharedString, Spot)>,
     laid: Vec<Laid>,
+    /// What a right-click on words opens: the view's menu of them (Copy,
+    /// Select All), at the pointer, for the run pressed.
+    on_menu: Option<MenuOpener>,
 }
+
+/// Opens the words' menu for a run, at a place in the window.
+pub type MenuOpener = Rc<dyn Fn(SharedString, gpui::Point<Pixels>, &mut Window, &mut App)>;
 
 /// The selections a view's pieces share.
 pub type Shared = Rc<RefCell<Selections>>;
@@ -182,6 +188,46 @@ pub type Shared = Rc<RefCell<Selections>>;
 impl Selections {
     pub fn shared() -> Shared {
         Rc::new(RefCell::new(Self::default()))
+    }
+
+    /// What a right-click on its words opens ([`MenuOpener`]).
+    pub fn on_menu(&mut self, open: MenuOpener) {
+        self.on_menu = Some(open);
+    }
+
+    /// Chooses all the words of `run` as they are laid out now (Select
+    /// All on its menu); whether there were any.
+    pub fn choose_all(&mut self, run: &SharedString) -> bool {
+        let mut pieces = self.laid.iter().filter(|laid| &laid.run == run);
+        let Some(first) = pieces.next() else {
+            return false;
+        };
+        let (mut low, mut high) = (first, first);
+        for laid in pieces {
+            if laid.piece < low.piece {
+                low = laid;
+            }
+            if laid.piece > high.piece {
+                high = laid;
+            }
+        }
+        let span = (
+            Spot::new(low.piece, 0),
+            Spot::new(high.piece, high.words.len()),
+        );
+        if span.0 == span.1 {
+            return false;
+        }
+        self.chosen = Some(Chosen {
+            run: run.clone(),
+            anchor: span.0,
+            head: span.1,
+            unit: Unit::Letter,
+            first: span,
+        });
+        self.dragging = false;
+        self.pressed = None;
+        true
     }
 
     /// The view draws again: its pieces say again where they are.
@@ -453,6 +499,23 @@ impl Selectable {
             }
             selections.dragging = true;
             window.refresh();
+        });
+        // A right-click on it: the view's menu of its words, at the
+        // pointer; what is chosen stays chosen.
+        let (shared, run) = (self.shared.clone(), self.run.clone());
+        let menu_hitbox = hitbox.clone();
+        window.on_mouse_event(move |event: &MouseDownEvent, phase, window, cx| {
+            if phase != DispatchPhase::Bubble
+                || event.button != MouseButton::Right
+                || !menu_hitbox.is_hovered(window)
+            {
+                return;
+            }
+            let open = shared.borrow().on_menu.clone();
+            if let Some(open) = open {
+                cx.stop_propagation();
+                open(run.clone(), event.position, window, cx);
+            }
         });
         // A drag: the piece the pointer reaches takes the head there.
         let (shared, run, piece, words) = (

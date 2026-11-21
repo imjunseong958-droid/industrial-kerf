@@ -1372,10 +1372,9 @@ impl Render for ApplyPreset {
             .track_focus(&self.focus)
             .on_action(cx.listener(|_, _: &CloseDialog, _, cx| cx.emit(DismissEvent)))
             .on_action(cx.listener(|this, _: &AcceptDialog, _, cx| this.accept(cx)))
-            .on_mouse_down_out(cx.listener(|_, _, _, cx| {
-                cx.stop_propagation();
-                cx.emit(DismissEvent);
-            }))
+            // A press on the dim around it does nothing (Qt's was modal):
+            // the media chosen for its slots stay until Esc or its own
+            // buttons close it.
             .w(px(APPLY_WIDTH))
             .p(px(20.0))
             .flex()

@@ -24,6 +24,11 @@ pub use crate::theme::motion::{CUT_SETTLE, REEL_PROGRAM_WAIT, REEL_SEEK_LANDS};
 /// What Reconnect says when the bridge would not take it.
 pub const RECONNECT_REFUSED: &str = "Reconnect could not be queued. Try again.";
 
+/// How long the pointer rests before the frame under it is asked for
+/// exactly: the rough seeks while it moves show the nearest picture kerfd
+/// can give at once.
+pub use crate::theme::motion::SCRUB_SETTLE;
+
 /// Where Finish's deliveries go, inside the project.
 pub const DELIVERIES: &str = "deliveries/";
 
@@ -96,6 +101,14 @@ pub struct Session {
     mark_in: Option<f64>,
     mark_out: Option<f64>,
     looping: bool,
+    /// Loop Playback has sent playback back to the loop's start since the
+    /// playhead last played short of its end (Qt's `m_wrapped`), so the
+    /// clocks still on their way from before that seek do not send it back
+    /// again.
+    wrapped: bool,
+    /// Where the pointer last sent the picture while it moves, and when
+    /// that frame is asked for exactly ([`PointerSeek`]).
+    pointer: Option<PointerSeek>,
     /// What the toolbar's Export renders in one press, as its menu was
     /// last left in this window: the master or a draft.
     pub export_quality: crate::export::Quality,
@@ -347,6 +360,8 @@ impl Session {
                 mark_in: None,
                 mark_out: None,
                 looping: false,
+                wrapped: false,
+                pointer: None,
                 export_quality: crate::export::Quality::default(),
                 pinned_proposal: None,
                 activity: ActivityLog::default(),
@@ -397,6 +412,7 @@ impl Session {
             if event["type"] != "clock" && event["type"] != "meter" {
                 log::debug!("bridge event: {}", truncate(&event.to_string(), 400));
             }
+            let was_playing = self.state.playing;
             let change = self.state.apply(&event);
             if let Some((kind, text)) = activity_of(&event) {
                 self.activity.push(kind, &text);
@@ -443,6 +459,10 @@ impl Session {
                         self.send(json!({"type": "collab_live", "enabled": true}));
                     }
                 }
+                // Gone, or only connecting: nothing plays, and the picture
+                // and its caption go, as Qt's viewer was cleared.
+                Change::Connection => self.lose_picture(window, cx),
+                Change::Playback => self.follow_playing(was_playing),
                 Change::ViewerReset => self.viewer_reset(window, cx),
                 Change::Work if event["type"] == "agent_focus" => self.follow_kerf(),
                 Change::Clock => {
@@ -467,6 +487,7 @@ impl Session {
         if self.render_settled_cut() || self.reel_due() {
             changed = true;
         }
+        self.settle_pointer();
         // Artwork made since: drawn now; what it let go of leaves the atlas.
         for image in self.artwork.take_dropped() {
             let _ = window.drop_image(image);
@@ -498,6 +519,23 @@ impl Session {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // kerfd gone: what is left of its playback is not shown.
+        if matches!(self.state.connection, crate::store::Connection::Failed(_)) {
+            return;
+        }
+        if let Some(pointer) = self.pointer {
+            let fps = self.timeline().rate();
+            let shown = self.picture.as_ref().map(|picture| picture.time);
+            if !nearer_frame(shown, frame.time, pointer.target, fps) {
+                return;
+            }
+            // The frame the pointer let go on (or rested on) has come: what
+            // comes after shows as it comes.
+            if pointer.settle.is_none() && (frame.time - pointer.target).abs() <= 1.0 / fps.max(1.0)
+            {
+                self.pointer = None;
+            }
+        }
         let Some(image) = render_image(&frame.pixels, frame.width, frame.height) else {
             return;
         };
@@ -536,6 +574,19 @@ impl Session {
         } else {
             self.drop_picture(window, cx);
         }
+        self.state.caption.clear();
+        // The program the pointer was skimming is no longer the one shown.
+        self.pointer = None;
+    }
+
+    /// kerfd is gone, or only connecting: nothing plays, and the picture
+    /// and its caption go, with the pointer's seeks, as Qt's
+    /// `setConnection` stopped playback and cleared its viewer.
+    fn lose_picture(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.state.playing = false;
+        self.pointer = None;
+        self.wrapped = false;
+        self.drop_picture(window, cx);
         self.state.caption.clear();
     }
 
@@ -619,10 +670,29 @@ impl Session {
 
     /// Sends one command; false when the bridge refused it (its queue is
     /// full), which the window says rather than dropping an edit unseen.
+    ///
+    /// While kerfd is connecting or gone, what waits on it (edits, renders,
+    /// playback and seeks) is not sent, as Qt's `sendSimple` sent nothing
+    /// then ([`sent_unconnected`]): the window says it is disconnected
+    /// once, and an edit refused for it would only say so again. False then.
     pub fn send(&mut self, command: Value) -> bool {
+        let connected = self.connected();
         let Some(bridge) = self.bridge.as_mut() else {
             return false;
         };
+        if !connected && !sent_unconnected(&command) {
+            return false;
+        }
+        // A seek or playback from anywhere but the pointer takes the
+        // picture from it ([`Session::skim`]).
+        if matches!(command["type"].as_str(), Some("seek" | "play" | "pause")) {
+            self.pointer = None;
+        }
+        // Paused from here: a stop that follows is not Loop Playback's to
+        // play on from.
+        if command["type"] == "pause" {
+            self.wrapped = false;
+        }
         let sent = bridge.send(&command);
         if !sent {
             self.state
@@ -635,6 +705,13 @@ impl Session {
 
     pub fn has_project(&self) -> bool {
         self.bridge.is_some()
+    }
+
+    /// Whether kerfd is connected: until it is, and once it is gone, the
+    /// timeline and the format bank take no edits and nothing that waits
+    /// on it is sent (Qt's `m_connected`).
+    pub fn connected(&self) -> bool {
+        self.state.connection == crate::store::Connection::Connected
     }
 
     pub fn timeline(&self) -> &Timeline {
@@ -674,10 +751,77 @@ impl Session {
         self.send(json!({"type": "redo", "revision": revision}));
     }
 
+    /// Moves the playhead to `seconds`. `scrub`: the pointer is dragging
+    /// it, and the seek is rough while it moves (unless the frame is just
+    /// ahead of the one shown, [`scrubs_from`]), then exact once it rests
+    /// ([`SCRUB_SETTLE`]); let go (`scrub` false after a drag), until the
+    /// frame there comes none farther from it shows. Nothing moves while
+    /// kerfd is not connected (Qt's `queueSeek`).
     pub fn seek(&mut self, seconds: f64, scrub: bool) {
+        if !self.connected() {
+            return;
+        }
         let seconds = seconds.clamp(0.0, self.state.program_length().max(0.0));
         self.state.position = seconds;
-        self.send(json!({"type": "seek", "position": seconds, "scrub": scrub}));
+        if scrub {
+            self.pointer_seek(seconds);
+            return;
+        }
+        let pointed = self.pointer.is_some();
+        if self.send(json!({"type": "seek", "position": seconds, "scrub": false})) && pointed {
+            self.pointer = Some(PointerSeek {
+                target: seconds,
+                settle: None,
+            });
+        }
+    }
+
+    /// The pointer skims the picture or the lanes to `seconds`, the
+    /// playhead staying where it is: kerfd shows the program there, roughly
+    /// while the pointer moves and exactly once it rests
+    /// ([`SCRUB_SETTLE`]), as Qt's `queueHoverSeek` and
+    /// `settlePointerSeek` did. Nothing while kerfd is not connected.
+    pub fn skim(&mut self, seconds: f64) {
+        if !self.connected() || !seconds.is_finite() {
+            return;
+        }
+        let seconds = seconds.clamp(0.0, self.state.program_length().max(0.0));
+        self.pointer_seek(seconds);
+    }
+
+    /// Where the pointer has sent the picture while it moves, and when
+    /// that frame is asked for exactly ([`PointerSeek`]).
+    pub fn pointer(&self) -> Option<PointerSeek> {
+        self.pointer
+    }
+
+    /// Seeks for the pointer to `seconds`: rough unless the frame is just
+    /// ahead of the one shown, and then exact once the pointer has rested.
+    fn pointer_seek(&mut self, seconds: f64) {
+        let shown = self.picture.as_ref().map(|picture| picture.time);
+        let scrub = scrubs_from(shown, seconds, self.timeline().rate());
+        if self.send(json!({"type": "seek", "position": seconds, "scrub": scrub})) {
+            self.pointer = Some(PointerSeek {
+                target: seconds,
+                settle: scrub.then(|| Instant::now() + SCRUB_SETTLE),
+            });
+        }
+    }
+
+    /// The pointer has rested since its last rough seek: the frame under
+    /// it is asked for exactly, once.
+    fn settle_pointer(&mut self) {
+        let Some(pointer) = self.pointer else {
+            return;
+        };
+        if pointer.settle.is_none_or(|at| Instant::now() < at) {
+            return;
+        }
+        let sent = self.send(json!({"type": "seek", "position": pointer.target, "scrub": false}));
+        self.pointer = Some(PointerSeek {
+            target: pointer.target,
+            settle: if sent { None } else { pointer.settle },
+        });
     }
 
     /// Pauses what plays, always (kerfd plays on through a render started
@@ -726,9 +870,10 @@ impl Session {
 
     /// Renders the preview of `proposal` (any of its versions' ids), over
     /// the stretch it changes ([`preview_request`]), or of the program.
-    pub fn preview(&mut self, proposal: Option<&str>) {
+    /// True when it was sent (not while kerfd is not connected).
+    pub fn preview(&mut self, proposal: Option<&str>) -> bool {
         let command = preview_request(&self.state.snapshot, proposal);
-        self.send(command);
+        self.send(command)
     }
 
     pub fn import(&mut self, path: &Path, media_only: bool) {
@@ -1213,6 +1358,7 @@ impl Session {
     }
 
     pub fn set_mark_in(&mut self, at: Option<f64>) {
+        self.wrapped = false;
         self.mark_in = at;
         if let (Some(start), Some(end)) = (self.mark_in, self.mark_out) {
             if end <= start {
@@ -1222,6 +1368,7 @@ impl Session {
     }
 
     pub fn set_mark_out(&mut self, at: Option<f64>) {
+        self.wrapped = false;
         self.mark_out = at;
         if let (Some(start), Some(end)) = (self.mark_in, self.mark_out) {
             if end <= start {
@@ -1232,19 +1379,56 @@ impl Session {
 
     pub fn toggle_loop(&mut self) {
         self.looping = !self.looping;
+        self.wrapped = false;
     }
 
-    /// Looping, playback that passes the out mark (or the end) goes back
-    /// to the in mark (or the start).
+    /// What Loop Playback plays over now ([`LoopSpan`]).
+    pub fn loop_span(&self) -> LoopSpan {
+        LoopSpan::new(
+            self.mark_in,
+            self.mark_out,
+            self.state.program_length(),
+            self.timeline().rate(),
+        )
+    }
+
+    /// Looping, playback that passes the out mark goes back to the in mark
+    /// (or the start), still playing; one that comes within a frame of the
+    /// program's end goes back before kerfd stops there
+    /// ([`LoopSpan::clock`]). A change reel plays its own segments.
     fn keep_to_marks(&mut self) {
-        if !self.looping || !self.state.playing {
+        if !self.looping || !self.state.playing || self.reel.is_some() {
             return;
         }
-        let end = self.mark_out.unwrap_or_else(|| self.state.program_length());
-        let start = self.mark_in.unwrap_or(0.0);
-        let frame = 1.0 / self.timeline().rate();
-        if end > start && self.state.position >= end - frame {
+        let span = self.loop_span();
+        if let Some(start) = span.clock(self.state.position, &mut self.wrapped) {
             self.seek(start, false);
+        }
+    }
+
+    /// Playback started or stopped (`was_playing`, before). Started, the
+    /// picture is playback's, not the pointer's. Stopped at the loop's end
+    /// with Loop Playback on (kerfd stops by itself at the program's end):
+    /// back to the loop's start, and playing again, as Qt's
+    /// `followPlaying` did ([`LoopSpan::stopped`]).
+    fn follow_playing(&mut self, was_playing: bool) {
+        if self.state.playing {
+            self.pointer = None;
+            return;
+        }
+        if !was_playing || !self.looping || self.reel.is_some() || !self.state.playable() {
+            return;
+        }
+        let span = self.loop_span();
+        if let Some(start) = span.stopped(self.state.position) {
+            self.wrapped = true;
+            self.seek(start, false);
+            self.send(json!({"type": "play"}));
+        } else if self.wrapped && span.just_wrapped(self.state.position) {
+            // kerfd's last clock at the end came just before it stopped
+            // there, and has sent the playhead back already: play on from
+            // there. A pause sent from here clears `wrapped` first.
+            self.send(json!({"type": "play"}));
         }
     }
 
@@ -1661,6 +1845,173 @@ impl Session {
     pub fn forget_keys(&self) {
         keychain().clear();
     }
+}
+
+/// Where Loop Playback plays (Qt's `loopStart` and `loopEnd`): from the in
+/// mark, else the start, to the out mark held to the program's length (an
+/// out mark past a program that got shorter ends at its end), else the
+/// program's end. `length` is the program's seconds, `fps` its rate.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LoopSpan {
+    pub start: f64,
+    pub end: f64,
+    pub length: f64,
+    pub fps: f64,
+}
+
+impl LoopSpan {
+    pub fn new(mark_in: Option<f64>, mark_out: Option<f64>, length: f64, fps: f64) -> Self {
+        let length = if length.is_finite() {
+            length.max(0.0)
+        } else {
+            0.0
+        };
+        let start = mark_in.unwrap_or(0.0).clamp(0.0, length);
+        let end = mark_out.map_or(length, |out| out.min(length)).max(0.0);
+        let fps = if fps.is_finite() { fps.max(1.0) } else { 1.0 };
+        Self {
+            start,
+            end,
+            length,
+            fps,
+        }
+    }
+
+    fn frame(&self) -> f64 {
+        1.0 / self.fps
+    }
+
+    /// Whether there is a frame at least between its start and its end.
+    pub fn loops(&self) -> bool {
+        self.end - self.start >= self.frame()
+    }
+
+    /// A clock at `position` while playing: the time to go back to now,
+    /// if any. Past an out mark short of the program's end (by half a
+    /// frame, Qt's `followPlayhead`) it goes back; within a frame of the
+    /// program's end it goes back before kerfd stops there (the stop itself
+    /// is [`LoopSpan::stopped`]). `wrapped` says it has gone back since the
+    /// playhead last played short of the end, so the clocks still on their
+    /// way from before that seek do not send it back again; one short of
+    /// the end clears it.
+    pub fn clock(&self, position: f64, wrapped: &mut bool) -> Option<f64> {
+        let frame = self.frame();
+        let at_program_end = self.end >= self.length - frame;
+        let reach = if at_program_end {
+            self.end - frame
+        } else {
+            self.end - frame / 2.0
+        };
+        if position < reach {
+            *wrapped = false;
+            return None;
+        }
+        if *wrapped || !self.loops() {
+            return None;
+        }
+        *wrapped = true;
+        Some(self.start)
+    }
+
+    /// Whether the playhead at `position` is where Loop Playback just sent
+    /// it back to: within the larger of two frames and [`LOOP_SLACK`] after
+    /// its start (a frame before it too).
+    pub fn just_wrapped(&self, position: f64) -> bool {
+        let slack = (2.0 * self.frame()).max(LOOP_SLACK);
+        self.loops() && position >= self.start - self.frame() && position <= self.start + slack
+    }
+
+    /// Playback stopped with the playhead at `position`: the time to go
+    /// back to and play again from, when it stopped within the larger of
+    /// two frames and [`LOOP_SLACK`] of the loop's end, as Qt's
+    /// `followPlaying` had it. kerfd stops by itself at the program's end,
+    /// its last clock before it up to 50 ms short.
+    pub fn stopped(&self, position: f64) -> Option<f64> {
+        let slack = (2.0 * self.frame()).max(LOOP_SLACK);
+        (self.loops() && position >= self.end - slack).then_some(self.start)
+    }
+}
+
+/// The least a stop may fall short of the loop's end and still loop
+/// (Qt's 0.1 s), in seconds.
+pub const LOOP_SLACK: f64 = 0.1;
+
+/// How far ahead of the frame shown, in seconds, the pointer's seek still
+/// decodes on to the frame exactly rather than showing the nearest picture
+/// at once (Qt's 0.40 s in `scrubFromShownFrame`).
+pub const SCRUB_AHEAD: f64 = 0.4;
+
+/// Where the pointer sent the picture while it moves (skimming the picture
+/// or the lanes, dragging the playhead), and when the frame there is asked
+/// for exactly: [`SCRUB_SETTLE`] after its last rough seek, None once that
+/// seek has gone (or the seek was exact). Until the frame there comes, a
+/// frame farther from it than the one shown is not shown
+/// ([`nearer_frame`]), so a late rough picture does not jump back over a
+/// nearer one (Qt's `m_pointerOwnsPlayhead`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PointerSeek {
+    pub target: f64,
+    pub settle: Option<Instant>,
+}
+
+/// Whether the pointer's seek to `target` is rough (`scrub`), the frame
+/// shown being at `shown` (None before any), the sequence at `fps`: when
+/// it lies more than a frame behind the frame shown or more than
+/// [`SCRUB_AHEAD`] ahead of it, as Qt's `scrubFromShownFrame` had it. Just
+/// ahead, decoding on to it exactly costs little.
+pub fn scrubs_from(shown: Option<f64>, target: f64, fps: f64) -> bool {
+    let Some(shown) = shown else {
+        return true;
+    };
+    let delta = target - shown;
+    delta < -(1.0 / fps.max(1.0)) || delta > SCRUB_AHEAD
+}
+
+/// Whether a frame at `frame` may take the place of the one shown at
+/// `shown` (None: nothing shown) while the pointer has sent the picture to
+/// `target`: when it is no farther from it, within half a frame at `fps`
+/// (Qt's `nearerScrubFrame`).
+pub fn nearer_frame(shown: Option<f64>, frame: f64, target: f64, fps: f64) -> bool {
+    let Some(shown) = shown else {
+        return true;
+    };
+    let slack = 0.5 / fps.max(1.0);
+    (frame - target).abs() <= (shown - target).abs() + slack
+}
+
+/// Whether `command` goes to the bridge while kerfd is connecting or gone:
+/// what the bridge answers by itself (the conversations kept beside the
+/// project, Git, Kerf's account and models, the media's own analyses, the
+/// checks, a making stopped, a preview stopped or left, the volume and the
+/// tracks heard alone), Reconnect and Stop, and a request to Kerf (the
+/// composer says whether it can ask). Edits, renders and the rest of what
+/// kerfd answers, and playback and seeks, wait for it: Qt's `sendSimple`
+/// sent nothing but Reconnect and Stop.
+pub fn sent_unconnected(command: &Value) -> bool {
+    let kind = command["type"].as_str().unwrap_or_default();
+    kind.starts_with("collab_")
+        || kind.starts_with("cloud_")
+        || matches!(
+            kind,
+            "reconnect"
+                | "abort"
+                | "conversations"
+                | "agent"
+                | "agent_versions"
+                | "models"
+                | "media_info"
+                | "media_index"
+                | "media_make_cancel"
+                | "check"
+                | "loudness"
+                | "scope_signal"
+                | "effect_previews"
+                | "preset_library"
+                | "preview_stop"
+                | "preview_exit"
+                | "volume"
+                | "solo"
+        )
 }
 
 /// What a request from the Ask popover is about: the chosen clip itself,

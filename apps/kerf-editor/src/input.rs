@@ -70,6 +70,78 @@ actions!(
     ]
 );
 
+/// A row of a field's edit menu (Qt's QLineEdit and QTextEdit menu), in
+/// its order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EditRow {
+    Undo,
+    Redo,
+    Cut,
+    Copy,
+    Paste,
+    Delete,
+    SelectAll,
+}
+
+impl EditRow {
+    pub fn words(self) -> &'static str {
+        match self {
+            EditRow::Undo => "Undo",
+            EditRow::Redo => "Redo",
+            EditRow::Cut => "Cut",
+            EditRow::Copy => "Copy",
+            EditRow::Paste => "Paste",
+            EditRow::Delete => "Delete",
+            EditRow::SelectAll => "Select All",
+        }
+    }
+
+    /// Its key as the registry writes one (shown in the system's signs by
+    /// `commands::shown_keys`); Delete shows none, as Qt's did not.
+    pub fn keys(self) -> Option<&'static str> {
+        match self {
+            EditRow::Undo => Some("Ctrl+Z"),
+            EditRow::Redo => Some("Ctrl+Shift+Z"),
+            EditRow::Cut => Some("Ctrl+X"),
+            EditRow::Copy => Some("Ctrl+C"),
+            EditRow::Paste => Some("Ctrl+V"),
+            EditRow::Delete => None,
+            EditRow::SelectAll => Some("Ctrl+A"),
+        }
+    }
+}
+
+/// What a field can do as its edit menu opens.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct EditCan {
+    pub undo: bool,
+    pub redo: bool,
+    /// Some of its words are chosen.
+    pub chosen: bool,
+    /// A secret's words are never cut or copied.
+    pub secret: bool,
+    /// The clipboard holds words.
+    pub paste: bool,
+    /// It holds no words.
+    pub empty: bool,
+    /// All its words are chosen.
+    pub all_chosen: bool,
+}
+
+/// A field's edit menu: each row, and whether it can be chosen now.
+pub fn edit_rows(can: EditCan) -> Vec<(EditRow, bool)> {
+    let copyable = can.chosen && !can.secret;
+    vec![
+        (EditRow::Undo, can.undo),
+        (EditRow::Redo, can.redo),
+        (EditRow::Cut, copyable),
+        (EditRow::Copy, copyable),
+        (EditRow::Paste, can.paste),
+        (EditRow::Delete, can.chosen),
+        (EditRow::SelectAll, !can.empty && !can.all_chosen),
+    ]
+}
+
 /// The key context of a field. The window's keymap binds each plain key
 /// of its commands (Esc, Backspace, Left, a letter) to nothing here, so
 /// typing it in a field never runs the command.
@@ -460,6 +532,9 @@ pub struct TextInput {
     /// The kind of the edit the next change is (a paste, a cut), when it
     /// is not what the change itself says.
     next_kind: Option<EditKind>,
+    /// Its edit menu while open (a right-click), and where: the kit's,
+    /// which holds the keys and gives them back to the field.
+    edit_menu: Option<(Entity<crate::ui::Menu>, Point<Pixels>)>,
 }
 
 /// Where the text was drawn last, to find the index under the pointer.
@@ -502,6 +577,7 @@ impl TextInput {
             history: History::default(),
             press: None,
             next_kind: None,
+            edit_menu: None,
         }
     }
 
@@ -841,7 +917,8 @@ impl TextInput {
     }
 
     fn select_all(&mut self, _: &SelectAll, _: &mut Window, cx: &mut Context<Self>) {
-        self.choose_all(cx)
+        self.choose_all(cx);
+        self.share_primary(cx);
     }
 
     /// Chooses all the text, as Select All does, without the field needing
@@ -941,9 +1018,136 @@ impl TextInput {
         }
     }
 
-    fn on_mouse_up(&mut self, _: &MouseUpEvent, _window: &mut Window, _: &mut Context<Self>) {
+    fn on_mouse_up(&mut self, _: &MouseUpEvent, _window: &mut Window, cx: &mut Context<Self>) {
+        let chose = self.is_selecting;
         self.is_selecting = false;
         self.press = None;
+        if chose {
+            self.share_primary(cx);
+        }
+    }
+
+    /// On Linux, what the pointer chose is the primary selection, which a
+    /// middle-click pastes elsewhere (as Qt's text boxes did); never a
+    /// secret's.
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    fn share_primary(&self, cx: &mut Context<Self>) {
+        if self.secret || self.selected_range.is_empty() {
+            return;
+        }
+        if let Some(words) = self.content.get(self.selected_range.clone()) {
+            cx.write_to_primary(ClipboardItem::new_string(words.to_owned()));
+        }
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
+    fn share_primary(&self, _: &mut Context<Self>) {}
+
+    /// A middle-click on Linux pastes the primary selection where it
+    /// went down, as Qt's text boxes did.
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    fn on_middle_down(
+        &mut self,
+        event: &MouseDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(text) = cx.read_from_primary().and_then(|item| item.text()) else {
+            return;
+        };
+        window.focus(&self.focus_handle);
+        let offset = self.index_for_mouse_position(event.position);
+        self.move_to(offset, cx);
+        let text = if self.multiline {
+            text
+        } else {
+            text.replace('\n', " ")
+        };
+        self.next_kind = Some(EditKind::Other);
+        self.replace_text_in_range(None, &text, window, cx);
+        cx.stop_propagation();
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
+    fn on_middle_down(&mut self, _: &MouseDownEvent, _: &mut Window, _: &mut Context<Self>) {}
+
+    /// A right-click: the field takes the keys, a press outside what is
+    /// chosen puts the cursor there (inside it keeps it), and its edit
+    /// menu opens at the pointer ([`edit_rows`]), as Qt's text boxes had.
+    fn on_right_down(
+        &mut self,
+        event: &MouseDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        window.focus(&self.focus_handle);
+        let offset = self.index_for_mouse_position(event.position);
+        let range = &self.selected_range;
+        if range.is_empty() || offset < range.start || offset > range.end {
+            self.move_to(offset, cx);
+        }
+        let can = EditCan {
+            undo: self.history.can_undo(),
+            redo: self.history.can_redo(),
+            chosen: !self.selected_range.is_empty(),
+            secret: self.secret,
+            paste: cx
+                .read_from_clipboard()
+                .and_then(|item| item.text())
+                .is_some_and(|text| !text.is_empty()),
+            empty: self.content.is_empty(),
+            all_chosen: self.selected_range == (0..self.content.len()),
+        };
+        let field = cx.entity().downgrade();
+        let items: Vec<crate::ui::MenuItem> = edit_rows(can)
+            .into_iter()
+            .map(|(row, enabled)| {
+                let field = field.clone();
+                let mut item = crate::ui::MenuItem::new(row.words()).disabled(!enabled);
+                if let Some(keys) = row.keys() {
+                    item = item.key(crate::commands::shown_keys(keys));
+                }
+                if matches!(row, EditRow::Cut | EditRow::SelectAll) {
+                    item = item.separated();
+                }
+                item.on_choose(move |window, cx| {
+                    let _ = field.update(cx, |field, cx| field.run_edit(row, window, cx));
+                })
+            })
+            .collect();
+        let menu = cx.new(|cx| crate::ui::Menu::new(items, window, cx));
+        cx.subscribe(&menu, |this, menu, _: &gpui::DismissEvent, cx| {
+            if this
+                .edit_menu
+                .as_ref()
+                .is_some_and(|(open, _)| *open == menu)
+            {
+                this.edit_menu = None;
+                cx.notify();
+            }
+        })
+        .detach();
+        self.edit_menu = Some((menu, event.position));
+        cx.stop_propagation();
+        cx.notify();
+    }
+
+    /// What a row of the edit menu does, as its key would.
+    fn run_edit(&mut self, row: EditRow, window: &mut Window, cx: &mut Context<Self>) {
+        match row {
+            EditRow::Undo => self.undo(&Undo, window, cx),
+            EditRow::Redo => self.redo(&Redo, window, cx),
+            EditRow::Cut => self.cut(&Cut, window, cx),
+            EditRow::Copy => self.copy(&Copy, window, cx),
+            EditRow::Paste => self.paste(&Paste, window, cx),
+            EditRow::Delete => {
+                if !self.selected_range.is_empty() {
+                    self.next_kind = Some(EditKind::Other);
+                    self.replace_text_in_range(None, "", window, cx);
+                }
+            }
+            EditRow::SelectAll => self.select_all(&SelectAll, window, cx),
+        }
     }
 
     fn on_mouse_move(&mut self, event: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
@@ -1796,6 +2000,8 @@ impl Render for TextInput {
             .on_action(cx.listener(Self::indent))
             .on_action(cx.listener(Self::outdent))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
+            .on_mouse_down(MouseButton::Right, cx.listener(Self::on_right_down))
+            .on_mouse_down(MouseButton::Middle, cx.listener(Self::on_middle_down))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .on_mouse_move(cx.listener(Self::on_mouse_move))
@@ -1804,7 +2010,22 @@ impl Render for TextInput {
                 input: cx.entity(),
                 color: theme::ink(),
             });
-        div().flex().w_full().key_context(CONTEXT).child(keys)
+        // The edit menu at the pointer, kept inside the window; beside the
+        // field's keys, not under them, so its own keys come first.
+        let menu = self.edit_menu.as_ref().map(|(menu, at)| {
+            gpui::deferred(
+                gpui::anchored()
+                    .position(*at)
+                    .snap_to_window_with_margin(px(theme::space::S8))
+                    .child(menu.clone()),
+            )
+            .with_priority(2)
+        });
+        div()
+            .flex()
+            .w_full()
+            .child(div().flex().w_full().key_context(CONTEXT).child(keys))
+            .children(menu)
     }
 }
 

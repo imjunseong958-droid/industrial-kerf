@@ -14,6 +14,7 @@ use crate::icons::Icon;
 use crate::input::{InputEvent, TextInput};
 use crate::model::{Ask, Source};
 use crate::motion;
+use crate::selectable;
 use crate::session::{BridgeEvent, Session};
 use crate::store::Making;
 use crate::theme::{self, motion as scene, radius, text};
@@ -222,8 +223,42 @@ fn clock(since: std::time::Instant) -> String {
     format!("{}:{:02}", elapsed / 60, elapsed % 60)
 }
 
+/// Where a make card's words can be chosen and copied, as the
+/// conversation's can (Qt's plan was selectable): the conversation's
+/// selections, and the run the words are pieces of. None: plain labels.
+type Choose<'a> = Option<(&'a selectable::Shared, SharedString)>;
+
+/// `words` in `style` and `color`, piece `piece` of `choose`'s run where
+/// they can be chosen, else a label.
+fn words_piece(
+    choose: &Choose,
+    piece: usize,
+    words: String,
+    style: theme::TypeStyle,
+    color: Rgba,
+) -> gpui::Div {
+    match choose {
+        Some((shared, run)) => theme::type_style(div(), style).text_color(color).child(
+            selectable::selectable(
+                shared,
+                ElementId::Name(format!("{run}-{piece}").into()),
+                run.clone(),
+                piece,
+                words,
+            )
+            .before("\n"),
+        ),
+        None => ui::label(words, style, color),
+    }
+}
+
 /// The steps a plan runs, a line each, in mono on the well.
 fn steps_block(steps: &[String]) -> gpui::Div {
+    steps_block_in(steps, &None)
+}
+
+/// [`steps_block`], its steps chosen and copied by `choose`.
+fn steps_block_in(steps: &[String], choose: &Choose) -> gpui::Div {
     div()
         .flex()
         .flex_col()
@@ -242,7 +277,7 @@ fn steps_block(steps: &[String]) -> gpui::Div {
                         .flex_none(),
                 )
                 .child(
-                    ui::label(step.clone(), text::MONO_SMALL, theme::ink2())
+                    words_piece(choose, index, step.clone(), text::MONO_SMALL, theme::ink2())
                         .flex_1()
                         .min_w_0(),
                 )
@@ -251,6 +286,11 @@ fn steps_block(steps: &[String]) -> gpui::Div {
 
 /// What a model has said it does not take, each worth mending before a making.
 fn notes_block(heading: &str, notes: &[String]) -> Option<gpui::Div> {
+    notes_block_in(heading, notes, &None)
+}
+
+/// [`notes_block`], its notes chosen and copied by `choose`.
+fn notes_block_in(heading: &str, notes: &[String], choose: &Choose) -> Option<gpui::Div> {
     if notes.is_empty() {
         return None;
     }
@@ -264,13 +304,13 @@ fn notes_block(heading: &str, notes: &[String]) -> Option<gpui::Div> {
                 text::META_STRONG,
                 theme::ink3(),
             ))
-            .children(notes.iter().map(|note| {
+            .children(notes.iter().enumerate().map(|(index, note)| {
                 div()
                     .flex()
                     .gap(px(6.0))
                     .child(ui::label("•", text::CONTROL, theme::warn()).flex_none())
                     .child(
-                        ui::label(note.clone(), text::CONTROL, theme::warn())
+                        words_piece(choose, index, note.clone(), text::CONTROL, theme::warn())
                             .flex_1()
                             .min_w_0(),
                     )
@@ -411,6 +451,9 @@ pub struct Makings {
     folded: HashSet<String>,
     /// Whether the conversation draws each turn's cards ([`Makings::cards_for`]).
     cards_in_turns: bool,
+    /// The conversation's selections, which its cards' plans join so their
+    /// words can be chosen and copied ([`Makings::share_selections`]).
+    selections: Option<selectable::Shared>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -432,6 +475,7 @@ impl Makings {
             unfolded: HashSet::new(),
             folded: HashSet::new(),
             cards_in_turns: false,
+            selections: None,
             _subscriptions: subscriptions,
         };
         makings.ask_plans(cx);
@@ -696,18 +740,34 @@ impl Makings {
         };
 
         let mut body = div().flex().flex_col().gap(px(10.0));
+        // In the conversation, the plan's words can be chosen and copied.
+        let choose = |part: &str| -> Choose {
+            self.selections
+                .as_ref()
+                .map(|shared| (shared, format!("plan-{card_key}-{part}").into()))
+        };
         if plan_open {
             if !words.why.is_empty() {
-                body = body.child(
-                    theme::reading(div())
-                        .text_color(theme::ink2())
-                        .child(words.why.join(" ")),
-                );
+                let why = words.why.join(" ");
+                body = body.child(match choose("why") {
+                    Some((shared, run)) => theme::reading(div()).text_color(theme::ink2()).child(
+                        selectable::selectable(
+                            shared,
+                            ElementId::Name(format!("{run}-0").into()),
+                            run,
+                            0,
+                            why,
+                        ),
+                    ),
+                    None => theme::reading(div()).text_color(theme::ink2()).child(why),
+                });
             }
             match &plan {
                 Some(Ok(plan)) => {
-                    body = body.child(steps_block(&plan.steps));
-                    if let Some(notes) = notes_block("Before you run it", &plan.notes) {
+                    body = body.child(steps_block_in(&plan.steps, &choose("steps")));
+                    if let Some(notes) =
+                        notes_block_in("Before you run it", &plan.notes, &choose("notes"))
+                    {
                         body = body.child(notes);
                     }
                     if !plan.file.is_empty() {
@@ -720,7 +780,7 @@ impl Makings {
                 }
                 Some(Err(why)) => {
                     if !words.steps.is_empty() {
-                        body = body.child(steps_block(&words.steps));
+                        body = body.child(steps_block_in(&words.steps, &choose("steps")));
                     }
                     body = body.child(ui::label(
                         format!("It cannot be made as things stand: {why}"),
@@ -730,9 +790,11 @@ impl Makings {
                 }
                 None => {
                     if !words.steps.is_empty() {
-                        body = body.child(steps_block(&words.steps));
+                        body = body.child(steps_block_in(&words.steps, &choose("steps")));
                     }
-                    if let Some(notes) = notes_block("Before you run it", &words.notes) {
+                    if let Some(notes) =
+                        notes_block_in("Before you run it", &words.notes, &choose("notes"))
+                    {
                         body = body.child(notes);
                     }
                     if asked {
@@ -935,6 +997,12 @@ impl Makings {
             }
         }
         self.cards(unique, cx)
+    }
+
+    /// The conversation's selections: its cards' plans can be chosen and
+    /// copied with its words (Copy, ⌘C), as Qt's plan text could.
+    pub fn share_selections(&mut self, shared: selectable::Shared) {
+        self.selections = Some(shared);
     }
 
     /// Whether the conversation draws each turn's cards itself
@@ -3049,11 +3117,13 @@ fn bind_graph_keys(cx: &mut App) {
 /// A drag under way on the canvas.
 enum Drag {
     None,
-    /// The canvas, panned from where it was.
+    /// The canvas, panned from where it was; `middle`: by the middle
+    /// button, from anywhere, cards too (Qt's graph view).
     Canvas {
         from: Point<Pixels>,
         offset: (f32, f32),
         moved: bool,
+        middle: bool,
     },
     /// A card, moved from where it was.
     Card {
@@ -4045,8 +4115,38 @@ impl ShotGraph {
             from: event.position,
             offset: self.camera.offset,
             moved: false,
+            middle: false,
         };
         cx.notify();
+    }
+
+    /// The middle button pressed anywhere on the canvas, over a card too:
+    /// a drag pans it, as Qt's graph view did; let go, nothing is chosen.
+    fn press_middle(
+        &mut self,
+        event: &MouseDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if event.button != MouseButton::Middle || !matches!(self.drag, Drag::None) {
+            return;
+        }
+        window.focus(&self.canvas_focus);
+        self.drag = Drag::Canvas {
+            from: event.position,
+            offset: self.camera.offset,
+            moved: false,
+            middle: true,
+        };
+        cx.notify();
+    }
+
+    /// The middle button let go: its pan ends.
+    fn middle_up(&mut self, _: &MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if matches!(self.drag, Drag::Canvas { middle: true, .. }) {
+            self.drag = Drag::None;
+            cx.notify();
+        }
     }
 
     fn press_card(
@@ -4116,7 +4216,12 @@ impl ShotGraph {
         if matches!(self.drag, Drag::None) {
             return;
         }
-        if event.pressed_button != Some(MouseButton::Left) {
+        let held = if matches!(self.drag, Drag::Canvas { middle: true, .. }) {
+            MouseButton::Middle
+        } else {
+            MouseButton::Left
+        };
+        if event.pressed_button != Some(held) {
             self.drag = Drag::None;
             if let Some(drawing) = self.drawing.as_mut() {
                 drawing.held = false;
@@ -4148,6 +4253,7 @@ impl ShotGraph {
                 from,
                 offset,
                 moved,
+                ..
             } => {
                 let (dx, dy) = (
                     f32::from(event.position.x - from.x),
@@ -4193,7 +4299,11 @@ impl ShotGraph {
         match std::mem::replace(&mut self.drag, Drag::None) {
             Drag::None => return,
             // A press on the canvas that did not pan it chooses nothing: the shot itself.
-            Drag::Canvas { moved: false, .. } => self.select(None, window, cx),
+            Drag::Canvas {
+                moved: false,
+                middle: false,
+                ..
+            } => self.select(None, window, cx),
             Drag::Canvas { .. } => {}
             Drag::Card { moved: true, .. } => {
                 save_places(&self.session, &self.places_key(), &self.placed, cx)
@@ -5040,6 +5150,10 @@ impl ShotGraph {
                         this.press_canvas(event, window, cx)
                     }),
                 )
+                // Ahead of the cards: a middle drag pans from over one too.
+                .capture_any_mouse_down(cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                    this.press_middle(event, window, cx)
+                }))
                 .on_scroll_wheel(
                     cx.listener(|this, event: &ScrollWheelEvent, _, cx| this.wheel(event, cx)),
                 );
@@ -7496,6 +7610,8 @@ impl Render for ShotGraph {
             .on_mouse_move(cx.listener(Self::on_move))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::on_up))
             .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_up))
+            .on_mouse_up(MouseButton::Middle, cx.listener(Self::middle_up))
+            .on_mouse_up_out(MouseButton::Middle, cx.listener(Self::middle_up))
             .w(px(width))
             .h(px(height))
             .flex()

@@ -1682,6 +1682,13 @@ pub struct ChatView {
     menu: Option<Menu>,
     /// The open menu's rows, as the kit's menu (all but the context card's).
     kit_menu: Option<Entity<ui::Menu>>,
+    /// Esc just put a menu of the conversation away: that Esc is the
+    /// menu's alone, and the window's own Esc order takes it as a menu's
+    /// ([`ChatView::take_escape`]), not as a render's to stop.
+    escape_took_menu: bool,
+    /// The menu of the conversation's words (Copy, Select All) a
+    /// right-click on them opened, and where, while it is open.
+    words_menu: Option<(Entity<ui::Menu>, gpui::Point<gpui::Pixels>)>,
     /// The menu a press outside it closed, and when: that press on its own
     /// chip does not open it again.
     menu_closed: Option<(Menu, Instant)>,
@@ -1750,6 +1757,61 @@ impl EventEmitter<ChatEvent> for ChatView {}
 const PLACEHOLDER: &str = "Ask Kerf to cut, trim, find, or make…";
 
 impl ChatView {
+    /// Whether a menu of the conversation is open (a composer chip's, a
+    /// card's versions, the context card).
+    pub fn menu_open(&self) -> bool {
+        self.menu.is_some()
+    }
+
+    /// The menu of the conversation's words at `at`, from a right-click on
+    /// run `run`: Copy what is chosen (greyed with nothing chosen) and
+    /// Select All of the run, as Qt's selectable labels had.
+    fn open_words_menu(
+        &mut self,
+        run: SharedString,
+        at: gpui::Point<gpui::Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let copied = self.selections.borrow().copied();
+        let shared = self.selections.clone();
+        let items = vec![
+            ui::MenuItem::new("Copy")
+                .key(crate::commands::shown_keys("Ctrl+C"))
+                .disabled(copied.is_none())
+                .on_choose(move |_, cx| {
+                    if let Some(words) = copied.clone() {
+                        cx.write_to_clipboard(ClipboardItem::new_string(words));
+                    }
+                }),
+            ui::MenuItem::new("Select All").on_choose(move |window, _| {
+                if shared.borrow_mut().choose_all(&run) {
+                    window.refresh();
+                }
+            }),
+        ];
+        let menu = cx.new(|cx| ui::Menu::new(items, window, cx));
+        cx.subscribe(&menu, |this, menu, _: &DismissEvent, cx| {
+            if this
+                .words_menu
+                .as_ref()
+                .is_some_and(|(open, _)| *open == menu)
+            {
+                this.words_menu = None;
+                cx.notify();
+            }
+        })
+        .detach();
+        self.words_menu = Some((menu, at));
+        cx.notify();
+    }
+
+    /// Whether the Esc being handled put a menu of the conversation away
+    /// (its own keystroke intercept runs before the window's), once.
+    pub fn take_escape(&mut self) -> bool {
+        std::mem::take(&mut self.escape_took_menu)
+    }
+
     pub fn new(session: Entity<Session>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let composer = cx.new(|cx| {
             TextInput::new(cx, PLACEHOLDER)
@@ -1875,6 +1937,7 @@ impl ChatView {
                         .update(cx, |this, cx| {
                             let open = this.menu.take().is_some();
                             if open {
+                                this.escape_took_menu = true;
                                 if let Some(menu) = this.kit_menu.take() {
                                     menu.update(cx, |menu, cx| menu.close(window, cx));
                                 }
@@ -1889,10 +1952,23 @@ impl ChatView {
                 })
             },
         ];
+        // A right-click on the conversation's words opens their menu.
+        {
+            let this = cx.weak_entity();
+            selections
+                .borrow_mut()
+                .on_menu(std::rc::Rc::new(move |run, at, window, cx| {
+                    let _ = this.update(cx, |chat, cx| chat.open_words_menu(run, at, window, cx));
+                }));
+        }
         let makings = cx.new(|cx| crate::making::Makings::new(session.clone(), window, cx));
         // Each turn draws the cards of what it asked to have made; the list's
         // foot only those heard as Kerf works, no turn holding them yet.
-        makings.update(cx, |makings, cx| makings.set_cards_in_turns(true, cx));
+        makings.update(cx, |makings, cx| {
+            makings.set_cards_in_turns(true, cx);
+            // Their plans' words are chosen and copied with the conversation's.
+            makings.share_selections(selections.clone());
+        });
         let mut view = Self {
             session,
             composer,
@@ -1907,6 +1983,8 @@ impl ChatView {
             stopping: false,
             copied: None,
             menu: None,
+            escape_took_menu: false,
+            words_menu: None,
             kit_menu: None,
             menu_closed: None,
             placeholder: PLACEHOLDER.into(),
@@ -2095,7 +2173,9 @@ impl ChatView {
         }
         self.refusal = refusal(
             session.has_project(),
-            matches!(session.state.connection, Connection::Failed(_)),
+            // Connecting counts as not connected, as Qt's composer was
+            // disabled until kerfd was ready.
+            session.state.connection != Connection::Connected,
             busy,
             self.ask_reason.as_deref(),
         );
@@ -3133,7 +3213,7 @@ impl ChatView {
             );
         }
         if script_open && !script.is_empty() {
-            card = card.child(diff(&script, &id));
+            card = card.child(diff(&script, &id, &self.selections));
         }
         // What to do with it.
         let accept = shown_id.clone();
@@ -4697,8 +4777,11 @@ fn fade_in(body: impl IntoElement, id: String) -> impl IntoElement {
     )
 }
 
-/// A proposal's changed lines, its additions sage and removals brick.
-fn diff(lines: &[String], id: &str) -> impl IntoElement {
+/// A proposal's changed lines, its additions sage and removals brick;
+/// they can be chosen and copied as the conversation's words can (Qt's
+/// script was selectable), one line after another.
+fn diff(lines: &[String], id: &str, shared: &selectable::Shared) -> impl IntoElement {
+    let run: SharedString = format!("diff-{id}").into();
     div()
         .id(ElementId::Name(format!("diff-{id}").into()))
         .max_h(px(260.0))
@@ -4706,7 +4789,7 @@ fn diff(lines: &[String], id: &str) -> impl IntoElement {
         .p(px(8.0))
         .rounded(px(theme::radius::CONTROL))
         .bg(theme::well())
-        .children(lines.iter().take(400).map(|line| {
+        .children(lines.iter().take(400).enumerate().map(|(index, line)| {
             let color = if line.starts_with('+') {
                 theme::pos()
             } else if line.starts_with('-') {
@@ -4716,7 +4799,18 @@ fn diff(lines: &[String], id: &str) -> impl IntoElement {
             } else {
                 theme::ink2()
             };
-            ui::line(line.clone(), text::MONO_SMALL, color)
+            theme::type_style(div(), text::MONO_SMALL)
+                .text_color(color)
+                .child(
+                    selectable::selectable(
+                        shared,
+                        ElementId::Name(format!("{run}-{index}").into()),
+                        run.clone(),
+                        index,
+                        line.clone(),
+                    )
+                    .before("\n"),
+                )
         }))
 }
 
@@ -5663,5 +5757,14 @@ impl Render for ChatView {
                             }),
                     ),
             )
+            .children(self.words_menu.as_ref().map(|(menu, at)| {
+                deferred(
+                    anchored()
+                        .position(*at)
+                        .snap_to_window_with_margin(px(theme::space::S8))
+                        .child(menu.clone()),
+                )
+                .with_priority(2)
+            }))
     }
 }

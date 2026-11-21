@@ -615,6 +615,14 @@ pub mod motion {
     /// A mode chosen in the composer, said briefly in its place: Qt's
     /// status line held it 3 s.
     pub const NOTICE_BRIEF_HOLD: Duration = ms(3000);
+    /// How long the pointer rests, skimming the picture or the lanes or
+    /// dragging the playhead, before the frame under it is asked for
+    /// exactly (Qt's 50 ms `m_exactSeekTimer`).
+    pub const SCRUB_SETTLE: Duration = ms(50);
+    /// The timeline's − or + held down zooms again after this, then every
+    /// `ZOOM_REPEAT` (Qt's QToolButton autoRepeat: 300 ms, 100 ms).
+    pub const ZOOM_REPEAT_DELAY: Duration = ms(300);
+    pub const ZOOM_REPEAT: Duration = ms(100);
 
     /// Where a flight lands in a row, as Qt landed it: in from the row's
     /// left and top (and as far up from its bottom), and how wide.

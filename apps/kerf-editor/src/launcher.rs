@@ -9,7 +9,9 @@
 //! It works from the keyboard as well: Tab and Shift-Tab go from control to
 //! control, Up and Down choose among the recent projects, Return does what
 //! the page is for (Create, Clone, or opening the project chosen), Esc
-//! puts the form away.
+//! puts the form away. Opened from an editor (New Project…), it can be
+//! given up as Qt's modal launcher could: its Cancel, or Esc with no form
+//! open, closes it and the editor comes back.
 
 use crate::commands::{RunCommand, WORKSPACE};
 use crate::icons::Icon;
@@ -37,6 +39,33 @@ pub enum LauncherEvent {
     /// media comes in with it. What making or cloning it warned of is said
     /// in its window once it is open ([`crate::app::warn_when_open`]).
     Open { project: PathBuf, starts: bool },
+    /// Given up (its Cancel, or Esc with no form open), when it was opened
+    /// from an editor ([`LauncherView::over_editor`]): its window goes and
+    /// the editor's comes back, as Qt's modal launcher's reject did.
+    Cancel,
+}
+
+/// What Esc does in the launcher.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LauncherEscape {
+    /// The form open goes, and the keys are on the launcher again.
+    PutFormAway,
+    /// The launcher is given up and the editor behind it comes back.
+    GiveBack,
+    /// Nothing: a form whose task runs stays, and the launcher the editor
+    /// started with (no editor behind it) stays.
+    Nothing,
+}
+
+/// What Esc does with a form open or not, a task of the form running or
+/// not, and an editor behind the launcher (New Project… from it) or not.
+pub fn launcher_escape(form_open: bool, busy: bool, over_editor: bool) -> LauncherEscape {
+    match (form_open, busy, over_editor) {
+        (true, false, _) => LauncherEscape::PutFormAway,
+        (true, true, _) => LauncherEscape::Nothing,
+        (false, _, true) => LauncherEscape::GiveBack,
+        (false, _, false) => LauncherEscape::Nothing,
+    }
 }
 
 gpui::actions!(
@@ -364,6 +393,8 @@ enum Field {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum Stop {
     Settings,
+    /// Cancel, with an editor behind the launcher.
+    Cancel,
     /// A way to begin; None opens a folder.
     Way(Option<Mode>),
     Field(Field),
@@ -570,6 +601,9 @@ pub struct LauncherView {
     settings_opened: u64,
     /// What Settings works on here: a session with no project.
     session: Option<Entity<Session>>,
+    /// Opened from an editor (New Project…): it can be given up, by its
+    /// Cancel or Esc, and the editor comes back.
+    over_editor: bool,
     /// The controls the keyboard goes to, each with its own focus.
     stops: HashMap<Stop, FocusHandle>,
     /// Their order as last drawn.
@@ -708,6 +742,7 @@ impl LauncherView {
             settings: None,
             settings_opened: 0,
             session: None,
+            over_editor: false,
             stops: HashMap::new(),
             order: Vec::new(),
             _task: None,
@@ -724,6 +759,22 @@ impl LauncherView {
             self.kerfd = kerfd;
         }
         self
+    }
+
+    /// Opened from an editor (New Project…), as Qt's modal launcher was:
+    /// it has Cancel, and Esc with no form open gives it up too
+    /// ([`LauncherEvent::Cancel`]). The launcher the editor starts with
+    /// has neither.
+    pub fn over_editor(mut self) -> Self {
+        self.over_editor = true;
+        self
+    }
+
+    /// Gives the launcher up, back to the editor behind it.
+    fn cancel(&mut self, cx: &mut Context<Self>) {
+        if self.over_editor {
+            cx.emit(LauncherEvent::Cancel);
+        }
     }
 
     /// The kerfd it was given.
@@ -858,11 +909,17 @@ impl LauncherView {
         }
     }
 
-    /// Esc: the form goes, and the keyboard is on the launcher again.
+    /// Esc: the form goes, and the keyboard is on the launcher again; with
+    /// none open, a launcher opened from an editor gives it back
+    /// ([`launcher_escape`]).
     fn back(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.busy.is_none() && self.mode.is_some() {
-            self.mode = None;
-            self.problem = None;
+        match launcher_escape(self.mode.is_some(), self.busy.is_some(), self.over_editor) {
+            LauncherEscape::PutFormAway => {
+                self.mode = None;
+                self.problem = None;
+            }
+            LauncherEscape::GiveBack => return self.cancel(cx),
+            LauncherEscape::Nothing => {}
         }
         window.focus(&self.focus_handle);
         cx.notify();
@@ -1474,13 +1531,16 @@ impl LauncherView {
 
     /// The controls on screen, in the order Tab goes.
     fn stop_order(&self) -> Vec<Stop> {
-        let mut order = vec![
-            Stop::Settings,
+        let mut order = vec![Stop::Settings];
+        if self.over_editor {
+            order.push(Stop::Cancel);
+        }
+        order.extend([
             Stop::Way(Some(Mode::New)),
             Stop::Way(Some(Mode::Preset)),
             Stop::Way(None),
             Stop::Way(Some(Mode::Clone)),
-        ];
+        ]);
         let details = |order: &mut Vec<Stop>| {
             order.extend([
                 Stop::Field(Field::Name),
@@ -1648,6 +1708,7 @@ impl LauncherView {
         };
         match stop {
             Stop::Settings => self.show_settings(Page::Chat, window, cx),
+            Stop::Cancel => self.cancel(cx),
             // A way is pressed by its own click, which GPUI gives a focused
             // element on Space and Return.
             Stop::Way(_) => {}
@@ -2678,7 +2739,19 @@ impl Render for LauncherView {
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.show_settings(Page::Chat, window, cx)
                                     })),
-                            )),
+                            ))
+                            // From an editor it can be given up, as Qt's
+                            // modal launcher could.
+                            .when(self.over_editor, |head| {
+                                head.child(self.ring(
+                                    Stop::Cancel,
+                                    window,
+                                    ui::button("launcher-cancel", "Cancel")
+                                        .tooltip("Back to the project")
+                                        .key("Esc")
+                                        .on_click(cx.listener(|this, _, _, cx| this.cancel(cx))),
+                                ))
+                            }),
                     )
                     .child(ui::label("What are we making?", text::DISPLAY, theme::ink()).mt(px(20.0)))
                     .child(

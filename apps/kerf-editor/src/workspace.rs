@@ -55,6 +55,9 @@ struct ErrorBar {
     text: String,
     /// A failed turn's: the next turn takes it away.
     from_agent: bool,
+    /// A failed sync's ("Sync failed: <why>"): a later sync, started or
+    /// done, takes it away.
+    from_sync: bool,
     /// Its place among the errors, so a new one fades in afresh.
     key: u64,
 }
@@ -306,6 +309,13 @@ impl Workspace {
             cx.subscribe(&session, |this, _, event: &BridgeEvent, cx| {
                 this.bridge_event(&event.0, cx)
             }),
+            // A failed sync is said in the error bar until it is dismissed
+            // or a later sync starts or succeeds; the toolbar's line says
+            // it meanwhile, and after a Dismiss until then (Qt's).
+            cx.subscribe(
+                &collab,
+                |this, _, event: &crate::finish::CollabEvent, cx| this.collab_event(event, cx),
+            ),
             cx.subscribe_in(
                 &sidebar,
                 window,
@@ -441,7 +451,12 @@ impl Workspace {
                     }
                     let taken = this
                         .update(cx, |this, cx| {
-                            match escape_goes(this.escape_at(&event.context_stack, cx)) {
+                            let mut at = this.escape_at(&event.context_stack, cx);
+                            // The conversation's own intercept may have put
+                            // its menu away on this Esc already: it was the
+                            // menu's, not a render's or the band's.
+                            at.menu_open |= this.chat.update(cx, |chat, _| chat.take_escape());
+                            match escape_goes(at) {
                                 EscapeGoes::On => false,
                                 EscapeGoes::CloseMenus => this.close_menus(window, cx),
                                 EscapeGoes::StopRender => {
@@ -848,11 +863,25 @@ impl Workspace {
                 } else {
                     readable
                 };
+                // A command sent while kerfd could not be reached: the
+                // disconnected bar (or "Connecting…") says so already, so
+                // no bar stacks under it, nor a notice over the conversation.
+                if !bar_takes_error(&raw, &self.session.read(cx).state.connection) {
+                    self.session.update(cx, |session, cx| {
+                        session
+                            .state
+                            .notices
+                            .retain(|notice| !(notice.error && notice.text == raw));
+                        cx.notify();
+                    });
+                    return;
+                }
                 self.errors += 1;
                 self.error = Some(ErrorBar {
                     raw,
                     text,
                     from_agent: command == "agent",
+                    from_sync: false,
                     key: self.errors,
                 });
                 cx.notify();
@@ -1555,19 +1584,42 @@ impl Workspace {
         cx.notify();
     }
 
-    /// What stands in the way, as the toolbar's line says it in red.
-    fn standing_problem(&self, session: &Session) -> Option<String> {
-        if !session.has_project() {
-            return None;
+    /// What stands in the way, as the toolbar's line says it in red
+    /// ([`standing_problem`]).
+    fn standing_problem(&self, session: &Session, cx: &App) -> Option<String> {
+        let collab = self.collab.read(cx);
+        standing_problem(&StandingInput {
+            has_project: session.has_project(),
+            connection: &session.state.connection,
+            error: self.error.as_ref().map(|error| error.text.as_str()),
+            conflicted: collab.conflicted(),
+            sync_failure: collab.standing_failure(),
+        })
+    }
+
+    /// The Git chip's news: a failed sync goes into the error bar, which a
+    /// later sync, started or done, takes away.
+    fn collab_event(&mut self, event: &crate::finish::CollabEvent, cx: &mut Context<Self>) {
+        match event {
+            crate::finish::CollabEvent::SyncFailed { why, said: true } => {
+                self.errors += 1;
+                self.error = Some(ErrorBar {
+                    raw: why.clone(),
+                    text: sync_failed(why),
+                    from_agent: false,
+                    from_sync: true,
+                    key: self.errors,
+                });
+            }
+            crate::finish::CollabEvent::SyncFailed { said: false, .. } => {}
+            crate::finish::CollabEvent::SyncCleared => {
+                if self.error.as_ref().is_some_and(|error| error.from_sync) {
+                    self.error = None;
+                }
+            }
         }
-        match &session.state.connection {
-            Connection::Failed(_) => Some("Offline".into()),
-            Connection::Connecting => Some("Connecting…".into()),
-            Connection::Connected => self
-                .error
-                .as_ref()
-                .map(|error| first_line(&error.text).to_owned()),
-        }
+        // The toolbar's line follows either way.
+        cx.notify();
     }
 
     fn set_sidebar(&mut self, open: bool, cx: &mut Context<Self>) {
@@ -1945,6 +1997,7 @@ impl Workspace {
             let launcher = cx.new(|cx| {
                 crate::launcher::LauncherView::new(prefs, launcher_window, cx)
                     .with_kerfd(kerfd.clone())
+                    .over_editor()
             });
             let handle = launcher_window.window_handle();
             cx.subscribe(
@@ -1964,6 +2017,18 @@ impl Workspace {
                             let _ = replaced.update(cx, |_, window, _| window.activate_window());
                         }
                         let _ = handle.update(cx, |_, window, _| window.remove_window());
+                    }
+                    // Given up: this window comes back and the launcher's
+                    // goes, as Qt's modal launcher's reject did. With this
+                    // window closed meanwhile, the launcher stays, the only
+                    // window left.
+                    crate::launcher::LauncherEvent::Cancel => {
+                        if replaced
+                            .update(cx, |_, window, _| window.activate_window())
+                            .is_ok()
+                        {
+                            let _ = handle.update(cx, |_, window, _| window.remove_window());
+                        }
                     }
                 },
             )
@@ -2434,7 +2499,8 @@ impl Workspace {
             menu_open: self.title_menu.is_some()
                 || self.app_menu.is_some()
                 || self.activity_open
-                || self.sidebar.read(cx).menu_open(),
+                || self.sidebar.read(cx).menu_open()
+                || self.chat.read(cx).menu_open(),
             in_field: has(crate::input::CONTEXT),
             // The chip's questions were Qt's modal dialogs: their own Close
             // has Esc, keys in them or not.
@@ -2620,7 +2686,7 @@ impl Workspace {
                 })
         });
         let title = conversation.unwrap_or_else(|| session.state.conversation_title());
-        let subtitle: Option<(String, Rgba)> = match self.standing_problem(session) {
+        let subtitle: Option<(String, Rgba)> = match self.standing_problem(session, cx) {
             Some(problem) => Some((problem, theme::neg())),
             None => Some((project.clone(), theme::ink3())),
         };
@@ -4424,6 +4490,60 @@ pub fn conversation_error(message: &str) -> String {
 
 /// What the bridge answers a command sent while kerfd cannot be reached.
 const DISCONNECTED: &str = "Runtime is disconnected; reconnect to continue";
+
+/// Whether the error bar takes the error `raw` with kerfd's connection as
+/// it is: not "Runtime is disconnected" (the bridge's answer to a command
+/// sent while kerfd could not be reached) while it cannot be, since the
+/// disconnected bar ("Project disconnected", Reconnect) or the toolbar's
+/// "Connecting…" says so already.
+pub fn bar_takes_error(raw: &str, connection: &Connection) -> bool {
+    raw != DISCONNECTED || matches!(connection, Connection::Connected)
+}
+
+/// A failed sync as its bar and the toolbar's line say it (Qt's words).
+pub fn sync_failed(why: &str) -> String {
+    format!("Sync failed: {}", readable_error(why))
+}
+
+/// What the toolbar's red line weighs.
+pub struct StandingInput<'a> {
+    pub has_project: bool,
+    pub connection: &'a Connection,
+    /// The error bar's words, while it shows.
+    pub error: Option<&'a str>,
+    /// A merge is unfinished.
+    pub conflicted: bool,
+    /// Why the last sync failed, while no sync has started since.
+    pub sync_failure: Option<&'a str>,
+}
+
+/// What stands in the way, as the toolbar's line says it in red, in Qt's
+/// order (toolbar_wiring.cpp's standingProblem): kerfd gone ("Offline") or
+/// coming ("Connecting…"); the error bar's first line; an unfinished
+/// merge; a failed sync, after its bar is dismissed, until a later sync
+/// starts or succeeds. None with no project, or nothing in the way.
+pub fn standing_problem(input: &StandingInput) -> Option<String> {
+    if !input.has_project {
+        return None;
+    }
+    match input.connection {
+        Connection::Failed(_) => Some("Offline".into()),
+        Connection::Connecting => Some("Connecting…".into()),
+        Connection::Connected => input
+            .error
+            .map(|error| first_line(error).to_owned())
+            .or_else(|| {
+                input
+                    .conflicted
+                    .then(|| "A merge is unfinished; finish it with git".to_owned())
+            })
+            .or_else(|| {
+                input
+                    .sync_failure
+                    .map(|why| first_line(&sync_failed(why)).to_owned())
+            }),
+    }
+}
 
 /// A bar's height under the toolbar.
 const BAR: f32 = theme::height::H40;

@@ -1070,10 +1070,9 @@ impl Render for FocusRegion {
             .track_focus(&self.focus)
             .on_action(cx.listener(|_, _: &CloseFocus, _, cx| cx.emit(DismissEvent)))
             .on_action(cx.listener(|this, _: &ApplyFocus, window, cx| this.apply(window, cx)))
-            .on_mouse_down_out(cx.listener(|_, _, _, cx| {
-                cx.stop_propagation();
-                cx.emit(DismissEvent);
-            }))
+            // A press on the dim around it does nothing (Qt's was modal):
+            // the box drawn and the range typed stay until Esc or its own
+            // buttons close it.
             .w(px(DIALOG_WIDE))
             .p(px(20.0))
             .flex()

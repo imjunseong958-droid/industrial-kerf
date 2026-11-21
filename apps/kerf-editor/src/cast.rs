@@ -14,6 +14,8 @@
 //! "Wants making · why"); what is wrong with a row is said here, and the
 //! file is as it was. A file that does not read is said here too, with
 //! nothing to change or save, so that Save never writes over what it holds.
+//! Return is Save, the default button, once no field is typed in; in a
+//! field it ends the cell, as Qt's table did ([`cast_return`]).
 
 use crate::launcher::field;
 use crate::session::{BridgeEvent, Session};
@@ -31,7 +33,7 @@ use crate::input::{InputEvent, TextInput};
 // OpenCast: Cast and Styles… from the Media band's menus and a shot's
 // graph; the workspace opens a [`CastView`] over the window.
 gpui::actions!(kerf, [OpenCast]);
-gpui::actions!(cast_dialog, [CloseCast]);
+gpui::actions!(cast_dialog, [CloseCast, SaveCast]);
 
 /// The key context the dialog answers in.
 const CONTEXT: &str = "CastDialog";
@@ -46,10 +48,33 @@ const PICTURES_COLUMN: f32 = 230.0;
 const UNREADABLE: &str =
     "cast.kerfcast does not read, so it cannot be changed here. Mend it, then open Cast and Styles… again.";
 
-/// Esc closes the dialog before the window's own Esc has it.
+/// Esc closes the dialog before the window's own Esc has it; Return,
+/// with no field typed in, is Save, the dialog's default button (Qt's).
 fn bind_keys(cx: &mut App) {
     if !crate::settings::escape_bound(cx, &CloseCast) {
-        cx.bind_keys([KeyBinding::new("escape", CloseCast, Some(CONTEXT))]);
+        cx.bind_keys([
+            KeyBinding::new("escape", CloseCast, Some(CONTEXT)),
+            KeyBinding::new("enter", SaveCast, Some(CONTEXT)),
+        ]);
+    }
+}
+
+/// What Return does in Cast and Styles, a field typed in (`in_field`) or
+/// not: Qt's table took the first Return as the end of the cell being
+/// typed in, and only one with no cell being typed in pressed Save.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CastReturn {
+    /// The cell is done: the keys go back to the dialog, the row chosen.
+    EndCell,
+    /// Save, as its button.
+    Save,
+}
+
+pub fn cast_return(in_field: bool) -> CastReturn {
+    if in_field {
+        CastReturn::EndCell
+    } else {
+        CastReturn::Save
     }
 }
 
@@ -267,7 +292,7 @@ struct Row {
     name: Entity<TextInput>,
     words: Entity<TextInput>,
     pictures: Entity<TextInput>,
-    /// Esc in its fields closes the dialog.
+    /// Esc in its fields closes the dialog; Return ends the cell.
     _subscriptions: Vec<Subscription>,
 }
 
@@ -295,11 +320,13 @@ impl Focusable for CastView {
 
 impl CastView {
     /// The dialog, asking kerfd for the cast as the file holds it now.
-    pub fn new(session: Entity<Session>, _window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(session: Entity<Session>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         bind_keys(cx);
-        let subscriptions = vec![cx.subscribe(&session, |this, _, event: &BridgeEvent, cx| {
-            this.heard(&event.0, cx)
-        })];
+        let subscriptions = vec![cx.subscribe_in(
+            &session,
+            window,
+            |this, _, event: &BridgeEvent, window, cx| this.heard(&event.0, window, cx),
+        )];
         session.update(cx, |session, _| {
             session.send(json!({"type": "cast_get"}));
         });
@@ -315,7 +342,7 @@ impl CastView {
         }
     }
 
-    fn heard(&mut self, event: &Value, cx: &mut Context<Self>) {
+    fn heard(&mut self, event: &Value, window: &mut Window, cx: &mut Context<Self>) {
         if event["type"] == "cast" {
             self.to_make = to_make_of(event);
         }
@@ -327,7 +354,7 @@ impl CastView {
             }
             Heard::Read(entries) => {
                 for entry in entries {
-                    self.add_row(entry, cx);
+                    self.add_row(entry, window, cx);
                 }
                 self.stage = Stage::Editing;
             }
@@ -340,7 +367,7 @@ impl CastView {
         cx.notify();
     }
 
-    fn add_row(&mut self, entry: Entry, cx: &mut Context<Self>) -> usize {
+    fn add_row(&mut self, entry: Entry, window: &mut Window, cx: &mut Context<Self>) -> usize {
         let input = |placeholder: &'static str, value: String, cx: &mut Context<Self>| {
             cx.new(|cx| {
                 let mut input = TextInput::new(cx, placeholder).with_style(text::CONTROL);
@@ -351,17 +378,22 @@ impl CastView {
         let name = input("Name", entry.name, cx);
         let words = input("What it looks like, in words", entry.words, cx);
         let pictures = input("refs/face.png, …", entry.refs.join(", "), cx);
-        // A field keeps its own Esc: it is said here, where it closes the dialog.
-        let subscriptions = [&name, &words, &pictures]
-            .into_iter()
-            .map(|field| {
-                cx.subscribe(field, |this, _, event: &InputEvent, cx| {
-                    if matches!(event, InputEvent::Cancel) {
-                        this.cancel(cx);
-                    }
+        // A field keeps its own Esc and Return: they are said here, where
+        // Esc closes the dialog and Return ends the cell, the keys back on
+        // the dialog for a Return that saves ([`cast_return`]).
+        let subscriptions =
+            [&name, &words, &pictures]
+                .into_iter()
+                .map(|field| {
+                    cx.subscribe_in(field, window, |this, _, event: &InputEvent, window, cx| {
+                        match event {
+                            InputEvent::Cancel => this.cancel(cx),
+                            InputEvent::Submit => this.returned(true, window, cx),
+                            InputEvent::Changed => {}
+                        }
+                    })
                 })
-            })
-            .collect();
+                .collect();
         let row = Row {
             kind: entry.kind,
             name,
@@ -383,6 +415,7 @@ impl CastView {
                 kind: kind.to_owned(),
                 ..Entry::default()
             },
+            window,
             cx,
         );
         self.chosen = Some(at);
@@ -503,6 +536,17 @@ impl CastView {
         cx.emit(DismissEvent);
     }
 
+    /// Return, from a field (`in_field`) or with the keys on the dialog.
+    fn returned(&mut self, in_field: bool, window: &mut Window, cx: &mut Context<Self>) {
+        match cast_return(in_field) {
+            CastReturn::EndCell => {
+                window.focus(&self.focus);
+                cx.notify();
+            }
+            CastReturn::Save => self.save(cx),
+        }
+    }
+
     fn row(
         &self,
         index: usize,
@@ -565,6 +609,7 @@ impl Render for CastView {
             .key_context(CONTEXT)
             .track_focus(&self.focus)
             .on_action(cx.listener(|this, _: &CloseCast, _, cx| this.cancel(cx)))
+            .on_action(cx.listener(|this, _: &SaveCast, window, cx| this.returned(false, window, cx)))
             .w(px(WIDTH))
             .p(px(20.0))
             .flex()

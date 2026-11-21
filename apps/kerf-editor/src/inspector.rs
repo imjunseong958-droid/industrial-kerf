@@ -3212,10 +3212,15 @@ impl FormatBank {
     /// The sequence becomes format `index` (Landscape 16:9, Vertical 9:16,
     /// Square, Portrait): its segment pressed, or the registry's
     /// `sequence.setFormat.169`/`.916` (⌥1, ⌥2), which the workspace runs.
+    /// Nothing while kerfd is connecting or gone: the bank shows disabled
+    /// then, as Qt's was (`setEnabled(false)`).
     pub fn choose(&mut self, index: usize, cx: &mut Context<Self>) {
         let Some((_, _, width, height)) = FORMATS.get(index).copied() else {
             return;
         };
+        if !self.session.read(cx).connected() {
+            return;
+        }
         self.session.update(cx, |session, cx| {
             let timeline = session.timeline();
             if timeline.width == width && timeline.height == height {
@@ -3242,6 +3247,8 @@ impl Render for FormatBank {
         let focused = self.focus.is_focused(window);
         let noted = self.focus.clone();
         let chosen = format_index(width, height);
+        // kerfd connecting or gone: the bank takes no presses and shows so.
+        let enabled = session.connected();
         let custom: Option<SharedString> = chosen
             .is_none()
             .then(|| format!("Custom · {width} × {height}").into());
@@ -3283,22 +3290,33 @@ impl Render for FormatBank {
                         .flex()
                         .items_center()
                         .rounded(px(radius::SMALL + 1.0))
-                        .cursor_pointer()
-                        .text_color(if selected {
+                        .text_color(if !enabled {
+                            theme::dis()
+                        } else if selected {
                             theme::ink()
                         } else {
                             theme::ink2()
                         })
-                        .when(selected, |segment| segment.bg(theme::on()))
-                        .when(!selected, |segment| {
+                        .when(selected, |segment| {
+                            // Disabled, the chosen fill is a step off the
+                            // track (Qt's raised, lighter).
+                            segment.bg(if enabled {
+                                theme::on()
+                            } else {
+                                theme::mix(theme::raised(), theme::on(), 0.3)
+                            })
+                        })
+                        .when(!selected && enabled, |segment| {
                             segment.hover(|style| style.text_color(theme::ink()))
                         })
                         // Over a segment, its own tip and not the bank's.
                         .block_mouse_except_scroll()
                         .child(*ratio)
-                        .on_click(
-                            cx.listener(move |this, _: &ClickEvent, _, cx| this.choose(index, cx)),
-                        );
+                        .when(enabled, |segment| {
+                            segment.cursor_pointer().on_click(cx.listener(
+                                move |this, _: &ClickEvent, _, cx| this.choose(index, cx),
+                            ))
+                        });
                         ui::tip_on(segment, Some(ui::Tip::new(tip)))
                     }),
             )

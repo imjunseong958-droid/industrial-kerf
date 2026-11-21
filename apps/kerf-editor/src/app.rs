@@ -1050,6 +1050,8 @@ fn open_launcher(problem: Option<String>, kerfd: Option<PathBuf>, cx: &mut App) 
                 );
                 let _ = handle.update(cx, |_, window, _| window.remove_window());
             }
+            // The launcher the editor starts with has no editor to give back.
+            LauncherEvent::Cancel => {}
         })
         .detach();
         launcher

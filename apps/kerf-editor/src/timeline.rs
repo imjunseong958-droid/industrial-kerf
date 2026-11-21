@@ -94,6 +94,10 @@ const EDGE_PAN: f32 = 16.0;
 const MOST_FRAME: f32 = 48.0;
 /// What one press of − or + zooms by.
 const ZOOM_STEP: f32 = 1.5;
+/// − or + held down zooms again after this, and then every
+/// [`ZOOM_REPEAT`], until it is let go or the pointer leaves it (Qt's
+/// QToolButton autoRepeat).
+pub use crate::theme::motion::{ZOOM_REPEAT, ZOOM_REPEAT_DELAY};
 /// Points between a lane's edge and its clips.
 const CLIP_INSET: f32 = 2.0;
 /// Points of the colour edge along a clip's top.
@@ -1555,6 +1559,8 @@ pub struct TimelineView {
     last_position: f64,
     /// Ticks a making's clock once a second while one runs.
     clock: Option<Task<()>>,
+    /// − or + held down: zooming again while it is ([`ZOOM_REPEAT`]).
+    zoom_held: Option<Task<()>>,
     heights: TrackHeights,
     /// The tracks a source's picture and sound go on; None: the first
     /// unlocked track of each kind.
@@ -1632,6 +1638,7 @@ impl TimelineView {
             pending: None,
             last_position: 0.0,
             clock: None,
+            zoom_held: None,
             heights: TrackHeights::default(),
             targets: None,
             solo: Vec::new(),
@@ -2014,10 +2021,18 @@ impl TimelineView {
             }
             Change::Connection => {
                 // Solo is monitoring kerfd keeps for the session: sent again.
-                let connected =
-                    self.session.read(cx).state.connection == crate::store::Connection::Connected;
+                let connected = self.session.read(cx).connected();
                 if connected && !self.solo.is_empty() {
                     self.send_solo(cx);
+                }
+                // Gone or only connecting: what was in hand is let go
+                // unsent, and nothing is pointed at.
+                if !connected {
+                    self.gesture = None;
+                    self.hover = None;
+                    self.tip = None;
+                    self.end_skim(cx);
+                    cx.notify();
                 }
             }
             Change::Work | Change::TurnEnded => {
@@ -2420,10 +2435,16 @@ fn line_y(points: &[(f32, f32)], x: f32) -> Option<f32> {
 
 impl TimelineView {
     fn press(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        window.focus(&self.focus_handle);
         // The skim ends here, so the picture goes back to the playhead's frame.
         self.end_skim(cx);
         self.tip = None;
+        // kerfd connecting or gone: the lanes take nothing (Qt's timeline
+        // was disabled then).
+        if self.offline(cx) {
+            self.gesture = None;
+            return;
+        }
+        window.focus(&self.focus_handle);
         if self.gesture.is_some() {
             // Its button came up where it was not seen.
             self.release(event.position, cx);
@@ -2610,6 +2631,13 @@ impl TimelineView {
             extend(&mut session.selection, id, toggle);
             cx.notify();
         });
+    }
+
+    /// Whether kerfd is connecting or gone: the lanes and the heads take
+    /// no presses, drags or switches then, and show none of what a press
+    /// would take, as Qt's timeline was disabled (`setEnabled(false)`).
+    pub fn offline(&self, cx: &App) -> bool {
+        !self.session.read(cx).connected()
     }
 
     fn seek(&mut self, time: f64, scrub: bool, cx: &mut Context<Self>) {
@@ -2829,6 +2857,17 @@ impl TimelineView {
         if self.gesture.is_some() {
             return;
         }
+        // Nothing to point at while kerfd is not connected: no trim edges,
+        // no tips, no skim.
+        if self.offline(cx) {
+            if self.hover.is_some() || self.tip.is_some() {
+                self.hover = None;
+                self.tip = None;
+                cx.notify();
+            }
+            self.end_skim(cx);
+            return;
+        }
         let (x, y) = self.local(event.position);
         let lanes = self.lanes.clone();
         let hover = match self.hit(x, y) {
@@ -2954,9 +2993,12 @@ impl TimelineView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        window.focus(&self.focus_handle);
         self.end_skim(cx);
         self.tip = None;
+        if self.offline(cx) {
+            return;
+        }
+        window.focus(&self.focus_handle);
         let (x, y) = self.local(event.position);
         if self.lanes.proposed {
             return;
@@ -3158,7 +3200,7 @@ impl TimelineView {
     /// Switches a track's `switch` (`locked`, `muted`, `enabled`,
     /// `syncLocked`) to `value`.
     fn set_track(&mut self, track: &str, switch: &str, value: bool, cx: &mut Context<Self>) {
-        if self.lanes.proposed {
+        if self.lanes.proposed || self.offline(cx) {
             return;
         }
         let mut op = json!({"op": "set-track", "track": track});
@@ -3363,6 +3405,9 @@ impl TimelineView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.offline(cx) {
+            return;
+        }
         let lanes = self.lanes.clone();
         let Some(lane) = lanes.rows.get(row) else {
             return;
@@ -3881,12 +3926,7 @@ impl TimelineView {
             .child(ui::tipped(
                 "timeline-zoom-out-tip",
                 ui::Tip::new("Zoom out").key(zoom_out),
-                strip_button("timeline-zoom-out", "\u{2212}", false).on_click(cx.listener(
-                    |this, _, _, cx| {
-                        this.zoom_by(1.0 / ZOOM_STEP, None);
-                        cx.notify();
-                    },
-                )),
+                self.zoom_button("timeline-zoom-out", "\u{2212}", 1.0 / ZOOM_STEP, cx),
             ))
             .when(shows.slider, |right| {
                 right.child(ui::tipped(
@@ -3898,12 +3938,7 @@ impl TimelineView {
             .child(ui::tipped(
                 "timeline-zoom-in-tip",
                 ui::Tip::new("Zoom in").key(zoom_in),
-                strip_button("timeline-zoom-in", "+", false).on_click(cx.listener(
-                    |this, _, _, cx| {
-                        this.zoom_by(ZOOM_STEP, None);
-                        cx.notify();
-                    },
-                )),
+                self.zoom_button("timeline-zoom-in", "+", ZOOM_STEP, cx),
             ))
             .child(
                 strip_button("timeline-fit", "Fit", self.zoom.is_none()).on_click(cx.listener(
@@ -3941,6 +3976,61 @@ impl TimelineView {
             )
             .child(div().flex_1())
             .child(right)
+    }
+
+    /// The strip's − or +: one step of zoom by `factor` a click (on its
+    /// release), and held down, a step after [`ZOOM_REPEAT_DELAY`] and
+    /// every [`ZOOM_REPEAT`] after it until it is let go or the pointer
+    /// leaves it, as Qt's autoRepeat buttons did.
+    fn zoom_button(
+        &self,
+        id: &'static str,
+        words: &'static str,
+        factor: f32,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        strip_button(id, words, false)
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, _: &MouseDownEvent, _, cx| this.hold_zoom(factor, cx)),
+            )
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _: &MouseUpEvent, _, _| this.zoom_held = None),
+            )
+            .on_mouse_up_out(
+                MouseButton::Left,
+                cx.listener(|this, _: &MouseUpEvent, _, _| this.zoom_held = None),
+            )
+            .on_hover(cx.listener(|this, hovered: &bool, _, _| {
+                if !*hovered {
+                    this.zoom_held = None;
+                }
+            }))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.zoom_held = None;
+                this.zoom_by(factor, None);
+                cx.notify();
+            }))
+    }
+
+    /// − or + pressed: while it is held, a step of zoom after
+    /// [`ZOOM_REPEAT_DELAY`] and every [`ZOOM_REPEAT`] after that. Letting
+    /// go (or leaving it) drops the task, which stops it.
+    fn hold_zoom(&mut self, factor: f32, cx: &mut Context<Self>) {
+        self.zoom_held = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(ZOOM_REPEAT_DELAY).await;
+            loop {
+                let held = this.update(cx, |this, cx| {
+                    this.zoom_by(factor, None);
+                    cx.notify();
+                });
+                if held.is_err() {
+                    break;
+                }
+                cx.background_executor().timer(ZOOM_REPEAT).await;
+            }
+        }));
     }
 
     /// The zoom's slider: a rail, its fill to the knob, the knob; pressed
@@ -4013,11 +4103,12 @@ impl TimelineView {
             format!("{rate:.2} fps")
         };
         let targets = self.targets_now(cx);
+        let read_only = lanes.proposed || self.offline(cx);
         let rows: Vec<_> = lanes
             .rows
             .iter()
             .enumerate()
-            .map(|(index, row)| self.head(index, row, scroll_y, lanes.proposed, &targets, cx))
+            .map(|(index, row)| self.head(index, row, scroll_y, read_only, &targets, cx))
             .collect();
         let add_top = lanes.height - scroll_y;
         let add_hover = self.add_hover;
@@ -4055,7 +4146,7 @@ impl TimelineView {
                     .overflow_hidden()
                     .children(rows)
                     // Under the last track: a row whose + adds one.
-                    .when(!lanes.proposed, |heads| {
+                    .when(!read_only, |heads| {
                         heads.child(
                             div()
                                 .id("timeline-add-row")
@@ -4173,22 +4264,39 @@ impl TimelineView {
                 cx.listener(move |this, _, _, cx| this.set_track(&track, "enabled", !enabled, cx)),
             )
         };
-        // Solo, for sound: what playback hears alone, for this session.
+        // Solo, for sound: what playback hears alone, for this session;
+        // nothing to hear while kerfd is not connected.
+        let offline = self.offline(cx);
         let solo = row.audio().then(|| {
             let track = row.id.clone();
             let on = self.solo.contains(&row.id);
             ui::tipped(
                 ElementId::Name(format!("track-solo-tip-{}", row.id).into()),
                 ui::Tip::new("Solo (monitoring only)"),
-                strip_button_owned(
-                    ElementId::Name(format!("track-solo-{}", row.id).into()),
-                    "S",
-                    on,
-                )
-                .h(px(control))
-                .min_w(px(control))
-                .px(px(0.0))
-                .on_click(cx.listener(move |this, _, _, cx| this.toggle_solo(&track, cx))),
+                if offline {
+                    // Greyed, with no hover and nothing to press.
+                    theme::type_style(div(), text::CONTROL)
+                        .id(ElementId::Name(format!("track-solo-{}", row.id).into()))
+                        .flex()
+                        .flex_none()
+                        .items_center()
+                        .justify_center()
+                        .h(px(control))
+                        .min_w(px(control))
+                        .rounded(px(radius::CONTROL))
+                        .text_color(theme::dis())
+                        .child("S")
+                } else {
+                    strip_button_owned(
+                        ElementId::Name(format!("track-solo-{}", row.id).into()),
+                        "S",
+                        on,
+                    )
+                    .h(px(control))
+                    .min_w(px(control))
+                    .px(px(0.0))
+                    .on_click(cx.listener(move |this, _, _, cx| this.toggle_solo(&track, cx)))
+                },
             )
         });
         // The kind chip, a target for picture and sound: where source edits land.

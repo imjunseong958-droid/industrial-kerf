@@ -613,6 +613,12 @@ impl EditorState {
                 // A new connection knows nothing of what was asked before.
                 self.info_asked.clear();
                 self.index_asked.clear();
+                // Not connected, nothing plays and the caption goes with the
+                // picture (the session drops the frame).
+                if self.connection != Connection::Connected {
+                    self.playing = false;
+                    self.caption.clear();
+                }
                 Change::Connection
             }
             "error" => {
@@ -834,12 +840,20 @@ impl EditorState {
                 self.dropped = event["dropped"].as_u64().unwrap_or(self.dropped);
                 Change::Clock
             }
+            // With kerfd gone, nothing plays and no caption shows (Qt's
+            // `m_playing = m_connected && playing`, its caption cleared):
+            // what is left of its playback says nothing more.
             "playback" => {
-                self.playing = event["playing"].as_bool().unwrap_or(false);
+                let gone = matches!(self.connection, Connection::Failed(_));
+                self.playing = !gone && event["playing"].as_bool().unwrap_or(false);
                 Change::Playback
             }
             "caption" => {
-                self.caption = event["text"].as_str().unwrap_or_default().to_owned();
+                self.caption = if matches!(self.connection, Connection::Failed(_)) {
+                    String::new()
+                } else {
+                    event["text"].as_str().unwrap_or_default().to_owned()
+                };
                 Change::Clock
             }
             "meter" => {

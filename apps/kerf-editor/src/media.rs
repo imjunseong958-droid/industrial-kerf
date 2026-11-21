@@ -2339,7 +2339,7 @@ pub struct RolesView {
     choosing: Option<usize>,
     /// Its rows, for their fades.
     scroll: gpui::ScrollHandle,
-    /// Esc in a row's field closes the dialog.
+    /// Esc in a row's field closes the dialog; Return is Apply.
     _subscriptions: Vec<Subscription>,
 }
 
@@ -2351,17 +2351,17 @@ impl Focusable for RolesView {
     }
 }
 
-gpui::actions!(roles_dialog, [CloseRoles]);
+gpui::actions!(roles_dialog, [CloseRoles, ApplyRoles]);
 const ROLES_CONTEXT: &str = "RolesDialog";
 
 impl RolesView {
     pub fn new(session: Entity<Session>, _window: &mut Window, cx: &mut Context<Self>) -> Self {
+        // Return is Apply, the dialog's default button (Qt's).
         if !crate::settings::escape_bound(cx, &CloseRoles) {
-            cx.bind_keys([gpui::KeyBinding::new(
-                "escape",
-                CloseRoles,
-                Some(ROLES_CONTEXT),
-            )]);
+            cx.bind_keys([
+                gpui::KeyBinding::new("escape", CloseRoles, Some(ROLES_CONTEXT)),
+                gpui::KeyBinding::new("enter", ApplyRoles, Some(ROLES_CONTEXT)),
+            ]);
         }
         let timeline = session.read(cx).timeline().clone();
         let choices = role_choices(&timeline.tracks);
@@ -2395,14 +2395,16 @@ impl RolesView {
                 }
             })
             .collect::<Vec<RoleRow>>();
-        // A field keeps its own Esc: it is said here, where it closes the dialog.
+        // A field keeps its own Esc and Return: they are said here, where
+        // Esc closes the dialog and Return is Apply (Qt's editable boxes
+        // left Return to the dialog's default button).
         let subscriptions = rows
             .iter()
             .map(|row| {
-                cx.subscribe(&row.field, |_, _, event: &InputEvent, cx| {
-                    if matches!(event, InputEvent::Cancel) {
-                        cx.emit(DismissEvent);
-                    }
+                cx.subscribe(&row.field, |this, _, event: &InputEvent, cx| match event {
+                    InputEvent::Cancel => cx.emit(DismissEvent),
+                    InputEvent::Submit => this.apply(cx),
+                    InputEvent::Changed => {}
                 })
             })
             .collect();
@@ -2519,6 +2521,7 @@ impl Render for RolesView {
             .key_context(ROLES_CONTEXT)
             .track_focus(&self.focus)
             .on_action(cx.listener(|_, _: &CloseRoles, _, cx| cx.emit(DismissEvent)))
+            .on_action(cx.listener(|this, _: &ApplyRoles, _, cx| this.apply(cx)))
             .w(px(440.0))
             .p(px(20.0))
             .flex()

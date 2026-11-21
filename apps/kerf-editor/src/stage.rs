@@ -387,8 +387,19 @@ struct Placement {
     phone: bool,
 }
 
+/// Whether a picture of `aspect` (width over height) is wide: framed as a
+/// laptop, its caption one line. Below it (vertical, square and near
+/// square) it is framed as a phone and its caption wraps over balanced
+/// lines, as Qt's `stage::isWide` drew both.
+pub fn wide(aspect: f32) -> bool {
+    aspect >= WIDE_FROM
+}
+
+/// Where a picture's aspect starts to be wide (Qt's 1.2).
+pub const WIDE_FROM: f32 = 1.2;
+
 fn place(area: Bounds<Pixels>, aspect: f32) -> Placement {
-    let phone = aspect < 1.2;
+    let phone = !wide(aspect);
     let margin = px(24.0);
     let bezel = if phone { px(9.0) } else { px(8.0) };
     let room = size(
@@ -1251,6 +1262,17 @@ impl StageView {
                         }
                         cx.notify();
                     }
+                    // kerfd gone or only connecting: the picture is cleared,
+                    // and the pointer skims nothing until it is back.
+                    Change::Connection
+                        if state.connection != crate::store::Connection::Connected =>
+                    {
+                        if this.skim.take().is_some() {
+                            forget_skim(session.entity_id(), cx);
+                        }
+                        this.kept = None;
+                        cx.notify();
+                    }
                     // An edit kerfd refused says so: what was dropped goes back.
                     Change::Notice => {
                         let refused = this.held.as_ref().is_some_and(|(_, _, at)| {
@@ -2097,16 +2119,18 @@ impl StageView {
     /// moving the playhead; off the picture, the playhead's frame again.
     fn skim_to(&mut self, picture: Bounds<Pixels>, at: Pt, cx: &mut Context<Self>) {
         self.follow_playhead(cx);
-        let (playing, length, held, position) = {
-            let state = &self.session.read(cx).state;
+        let (playing, length, held, position, connected) = {
+            let session = self.session.read(cx);
+            let state = &session.state;
             (
                 state.playing,
                 state.program_length(),
                 state.preview_required,
                 state.position,
+                session.connected(),
             )
         };
-        if playing || length <= 0.0 || held || !picture.contains(&to_point(at)) {
+        if playing || length <= 0.0 || held || !connected || !picture.contains(&to_point(at)) {
             self.end_skim(cx);
             return;
         }
@@ -2127,9 +2151,8 @@ impl StageView {
         cx.default_global::<Skims>()
             .0
             .insert(self.session.entity_id(), time);
-        self.session.update(cx, |session, _| {
-            session.send(json!({"type": "seek", "position": time, "scrub": true}));
-        });
+        // Rough while the pointer moves, exact once it rests.
+        self.session.update(cx, |session, _| session.skim(time));
         cx.notify();
     }
 
@@ -2143,16 +2166,18 @@ impl StageView {
             self.end_skim(cx);
             return;
         };
-        let (playing, length, held, position) = {
-            let state = &self.session.read(cx).state;
+        let (playing, length, held, position, connected) = {
+            let session = self.session.read(cx);
+            let state = &session.state;
             (
                 state.playing,
                 state.program_length(),
                 state.preview_required,
                 state.position,
+                session.connected(),
             )
         };
-        if playing || length <= 0.0 || held || !time.is_finite() {
+        if playing || length <= 0.0 || held || !connected || !time.is_finite() {
             self.end_skim(cx);
             return;
         }
@@ -2167,9 +2192,7 @@ impl StageView {
         cx.default_global::<Skims>()
             .0
             .insert(self.session.entity_id(), time);
-        self.session.update(cx, |session, _| {
-            session.send(json!({"type": "seek", "position": time, "scrub": true}));
-        });
+        self.session.update(cx, |session, _| session.skim(time));
         cx.notify();
     }
 
@@ -2523,9 +2546,9 @@ impl StageView {
 
     /// Where the caption at the playhead sits over `picture` (in the
     /// stage's own points): centred, its foot on title safe. On a wide
-    /// picture it is one line cut at title safe; on a vertical one it wraps
-    /// within title safe, balanced: the narrowest width that keeps the
-    /// lines the widest needs.
+    /// picture it is one line cut at title safe; on a vertical, square or
+    /// near-square one ([`wide`]) it wraps within title safe, balanced: the
+    /// narrowest width that keeps the lines the widest needs.
     fn caption_box(
         &mut self,
         window: &Window,
@@ -2767,7 +2790,9 @@ impl StageView {
                                 .icon(Icon::Sparkle)
                                 .tooltip(reason)
                                 .on_click(cx.listener(|this, _, _, cx| {
-                                    this.session.update(cx, |session, _| session.preview(None))
+                                    this.session.update(cx, |session, _| {
+                                        session.preview(None);
+                                    })
                                 })),
                         )
                         .into_any_element(),
@@ -3494,7 +3519,7 @@ impl Render for StageView {
                 .join(" ")
                 .into();
             let caption_box = (!words.is_empty())
-                .then(|| self.caption_box(window, picture, aspect < 1.0, words.clone()));
+                .then(|| self.caption_box(window, picture, !wide(aspect), words.clone()));
             if let Some(shown) = caption_box {
                 on_frame = on_frame.child(
                     div()
@@ -3512,7 +3537,7 @@ impl Render for StageView {
                                 .text_center()
                                 .text_color(over_picture::caption_ink())
                                 .map(|line| {
-                                    if aspect >= 1.0 {
+                                    if wide(aspect) {
                                         line.whitespace_nowrap()
                                             .overflow_hidden()
                                             .child(ui::cut_line(words))
