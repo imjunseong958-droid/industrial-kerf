@@ -7,11 +7,11 @@
 //! answers the editor: `take_read` as each is read, then `takes_read`.
 
 use crate::event::{ErrorEvent, Event, TakeRead, TakesRead};
+use crate::wake::Outbox;
 use crate::Shared;
-use std::sync::mpsc::SyncSender;
 use std::sync::Arc;
 
-fn failed(tx: &SyncSender<Event>, id: &str, why: String) {
+fn failed(tx: &Outbox, id: &str, why: String) {
     crate::emit(
         tx,
         Event::Error(ErrorEvent {
@@ -28,7 +28,7 @@ pub(crate) fn read(
     shared: &Arc<Shared>,
     client: &kerf_runtime::RuntimeClient,
     id: String,
-    tx: &SyncSender<Event>,
+    tx: &Outbox,
 ) {
     let directory = shared.directory.clone();
     let asked = client

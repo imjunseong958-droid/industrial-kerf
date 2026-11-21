@@ -384,6 +384,18 @@ pub fn settled_age(ago: Duration) -> String {
     }
 }
 
+/// How long after `ago` what [`settled_age`] says changes: at the next
+/// minute, hour or day it counts.
+pub fn settled_age_changes(ago: Duration) -> Duration {
+    let seconds = ago.as_secs();
+    let unit = match seconds {
+        0..3600 => 60,
+        3600..86_400 => 3600,
+        _ => 86_400,
+    };
+    Duration::from_secs((seconds / unit + 1) * unit).saturating_sub(ago)
+}
+
 /// What a settled card says: "Accepted in rev 23 · now", "Accepted",
 /// "Rejected · 4 min". The age only for one settled in this window.
 pub fn settled_words(accepted: bool, revision: Option<u64>, ago: Option<Duration>) -> String {
@@ -1738,6 +1750,8 @@ pub struct ChatView {
     /// Where the composer was last laid out.
     composer_at: std::rc::Rc<std::cell::Cell<Option<gpui::Bounds<gpui::Pixels>>>>,
     focus_handle: FocusHandle,
+    /// Drawn again as a settled card's age ("· 4 min") turns over.
+    ages: crate::motion::Redraw,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -1809,7 +1823,11 @@ impl ChatView {
         });
         let composer_focus = composer.read(cx).focus_handle(cx);
         let selections = Selections::shared();
+        let playhead = session.read(cx).playhead.clone();
         let subscriptions = vec![
+            // The card pinned is the one nearest the playhead, and the
+            // composer's struck-through stamp says its time.
+            cx.observe(&playhead, |_, _, cx| cx.notify()),
             cx.observe(&session, |this, _, cx| {
                 this.refresh_placeholder(cx);
                 cx.notify()
@@ -1831,7 +1849,7 @@ impl ChatView {
                 }
             }),
             cx.subscribe(&session, |this, _, event: &BridgeEvent, cx| {
-                match &event.0 {
+                match &*event.0 {
                     Event::State { snapshot } => {
                         this.book = ProposalBook::read(snapshot);
                         cx.notify();
@@ -2014,6 +2032,7 @@ impl ChatView {
             taken: HashSet::new(),
             composer_at: Default::default(),
             focus_handle: cx.focus_handle(),
+            ages: crate::motion::Redraw::default(),
             _subscriptions: subscriptions,
         };
         view.refresh_placeholder(cx);
@@ -2941,6 +2960,9 @@ impl ChatView {
             let ago = session
                 .settled_at(|sent| self.book.is(proposal, sent))
                 .map(|at| at.elapsed());
+            if let Some(ago) = ago {
+                self.ages.at(Instant::now() + settled_age_changes(ago), cx);
+            }
             let words = settled_words(accepted, self.book.applied.get(&id).copied(), ago);
             let (icon, color) = if accepted {
                 (Icon::Check, theme::accent_ink())

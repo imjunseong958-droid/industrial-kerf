@@ -3,7 +3,8 @@
 //!
 //! kerf-editor opens a project with [`Bridge::open`], sends it [`Command`]s with
 //! [`Bridge::send`], and takes its [`Event`]s with [`Bridge::poll`] and its pictures with
-//! [`Bridge::frame`] and [`Bridge::signal`]. Every call returns at once and never waits on
+//! [`Bridge::frame`] and [`Bridge::signal`], waiting for them on [`Bridge::wake`]. Every
+//! call returns at once and never waits on
 //! project I/O: canonical edits stay in kerfd, and runtime, media, agent, render and
 //! collaboration work run on Rust workers. Media frames travel through a latest-frame slot
 //! rather than an event or an accumulating queue. All text is UTF-8.
@@ -93,6 +94,7 @@ mod tasks;
 mod tests_support;
 mod tracks;
 mod updates;
+mod wake;
 mod workflows;
 
 pub use claude_code::SERVE_MCP;
@@ -109,6 +111,7 @@ pub use queue::ExportRequest;
 pub use recipes::Edit as RecipeEdit;
 pub use tasks::Task;
 pub use tracks::{Follow as ShotFollow, Of as ShotOf};
+pub use wake::Wake;
 pub use workflows::Edit as WorkflowEdit;
 
 use event::{
@@ -134,6 +137,7 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
+use wake::Outbox;
 
 /// The agent behind a chat: Kerf's own loop on a model API, with the router
 /// its tools run on, or Claude Code.
@@ -292,7 +296,7 @@ struct Shared {
 pub struct Bridge {
     /// The project folder, where its conversations are kept.
     directory: PathBuf,
-    events_tx: SyncSender<Event>,
+    events_tx: Outbox,
     commands: SyncSender<Command>,
     media: SyncSender<Command>,
     collab: SyncSender<Command>,
@@ -317,11 +321,11 @@ struct AgentRequest {
     permissions: Option<Mode>,
 }
 
-fn emit(tx: &SyncSender<Event>, event: Event) {
+fn emit(tx: &Outbox, event: Event) {
     let _ = tx.send(event);
 }
 
-fn error(tx: &SyncSender<Event>, value: impl std::fmt::Display) {
+fn error(tx: &Outbox, value: impl std::fmt::Display) {
     emit(
         tx,
         Event::Error(ErrorEvent {
@@ -344,19 +348,14 @@ fn key() -> String {
     )
 }
 
-fn publish(
-    state: StateSnapshot,
-    shared: &Arc<Shared>,
-    tx: &SyncSender<Event>,
-    previous: &mut Option<Value>,
-) {
+fn publish(state: StateSnapshot, shared: &Arc<Shared>, tx: &Outbox, previous: &mut Option<Value>) {
     publish_snapshot(state, shared, tx, previous, false);
 }
 
 fn publish_force(
     state: StateSnapshot,
     shared: &Arc<Shared>,
-    tx: &SyncSender<Event>,
+    tx: &Outbox,
     previous: &mut Option<Value>,
 ) {
     publish_snapshot(state, shared, tx, previous, true);
@@ -365,7 +364,7 @@ fn publish_force(
 fn publish_snapshot(
     state: StateSnapshot,
     shared: &Arc<Shared>,
-    tx: &SyncSender<Event>,
+    tx: &Outbox,
     previous: &mut Option<Value>,
     force: bool,
 ) {
@@ -458,7 +457,7 @@ fn snapshot_of(state: &StateSnapshot) -> Snapshot {
     }
 }
 
-fn connection_event(tx: &SyncSender<Event>, status: ConnectionStatus, message: Option<&str>) {
+fn connection_event(tx: &Outbox, status: ConnectionStatus, message: Option<&str>) {
     emit(
         tx,
         Event::Connection {
@@ -471,7 +470,7 @@ fn connection_event(tx: &SyncSender<Event>, status: ConnectionStatus, message: O
 fn connect_runtime(
     directory: &std::path::Path,
     binary: &std::path::Path,
-    tx: &SyncSender<Event>,
+    tx: &Outbox,
     shared: &Arc<Shared>,
     previous: &mut Option<Value>,
 ) -> Option<RuntimeClient> {
@@ -513,7 +512,7 @@ fn runtime_worker(
     rx: Receiver<Command>,
     commands: SyncSender<Command>,
     media: SyncSender<Command>,
-    tx: SyncSender<Event>,
+    tx: Outbox,
     shared: Arc<Shared>,
 ) {
     let mut previous = None;
@@ -955,7 +954,7 @@ fn runtime_worker(
 
 /// A preview that ends before any render of it began: refused, or stopped
 /// on its way here. One asked to stop says so, which answers the stop.
-fn preview_unstarted(shared: &Shared, tx: &SyncSender<Event>, turn: u64, proposal: Option<String>) {
+fn preview_unstarted(shared: &Shared, tx: &Outbox, turn: u64, proposal: Option<String>) {
     if shared.preview_turns.over(turn) {
         emit(
             tx,
@@ -976,7 +975,7 @@ fn spawn_render(
     request: RenderRequest,
     turn: u64,
     client: &RuntimeClient,
-    tx: &SyncSender<Event>,
+    tx: &Outbox,
     shared: &Arc<Shared>,
 ) {
     if shared.preview_turns.stopped(turn) {
@@ -1063,7 +1062,7 @@ fn export(
     client: &RuntimeClient,
     request: &RenderRequest,
     turn: u64,
-    tx: &SyncSender<Event>,
+    tx: &Outbox,
     shared: &Shared,
 ) -> Result<(String, String), kerf_runtime::RuntimeError> {
     let preview = request.preview;
@@ -1142,7 +1141,7 @@ fn export(
 /// Which previews it stops is settled where the stop is sent, as that is
 /// what orders it among them; the rest runs on a thread of its own, since
 /// the events queue may be full while the editor is sending.
-fn stop_preview(shared: &Arc<Shared>, tx: &SyncSender<Event>) {
+fn stop_preview(shared: &Arc<Shared>, tx: &Outbox) {
     let answered = shared.preview_turns.stop();
     let shared = shared.clone();
     let tx = tx.clone();
@@ -1151,7 +1150,7 @@ fn stop_preview(shared: &Arc<Shared>, tx: &SyncSender<Event>) {
 
 /// What follows a stop: the render running is told, and a stop that no
 /// preview answers for (`answered`) answers itself.
-fn stopped_preview(shared: &Shared, answered: bool, tx: &SyncSender<Event>) {
+fn stopped_preview(shared: &Shared, answered: bool, tx: &Outbox) {
     cancel_preview(shared);
     if !answered {
         emit(
@@ -1167,7 +1166,7 @@ fn stopped_preview(shared: &Shared, answered: bool, tx: &SyncSender<Event>) {
 /// `preview_exit`: stop every preview sent before it, as `preview_stop`
 /// does, and play the program again in place of a rendered preview, which
 /// the media worker announces with `viewer_reset`.
-fn exit_preview(shared: &Arc<Shared>, tx: &SyncSender<Event>) {
+fn exit_preview(shared: &Arc<Shared>, tx: &Outbox) {
     shared.preview_turns.stop();
     let shared = shared.clone();
     let tx = tx.clone();
@@ -1175,7 +1174,7 @@ fn exit_preview(shared: &Arc<Shared>, tx: &SyncSender<Event>) {
 }
 
 /// What follows an exit, once its previews are asked to stop.
-fn exited_preview(shared: &Shared, tx: &SyncSender<Event>) {
+fn exited_preview(shared: &Shared, tx: &Outbox) {
     cancel_preview(shared);
     let model = shared.model.lock().ok().and_then(|model| model.clone());
     if let (Some(model), Ok(mut slot)) = (model, shared.project.lock()) {
@@ -1402,7 +1401,7 @@ impl PlaybackStats {
     }
 }
 
-fn media_worker(rx: Receiver<Command>, tx: SyncSender<Event>, shared: Arc<Shared>) {
+fn media_worker(rx: Receiver<Command>, tx: Outbox, shared: Arc<Shared>) {
     let mut stats = PlaybackStats::new();
     let mut session: Option<PlaybackSession> = None;
     let mut position = 0.0_f64;
@@ -1588,6 +1587,7 @@ fn media_worker(rx: Receiver<Command>, tx: SyncSender<Event>, shared: Arc<Shared
                         if let Ok(mut slot) = shared.frame.lock() {
                             *slot = Some(frame);
                         }
+                        tx.ring();
                     }
                     PlaybackEvent::Clock(clock) => {
                         stats.clock(clock.dropped);
@@ -1651,7 +1651,7 @@ fn new_agent(
     directory: &std::path::Path,
     binary: &std::path::Path,
     settings: &AgentSettings,
-    tx: &SyncSender<Event>,
+    tx: &Outbox,
 ) -> Result<Agent, String> {
     if !settings.cloud && settings.provider == Some(ChatProvider::ClaudeCode) {
         return claude_code::ClaudeCodeSession::new(directory, binary, settings.model.clone())
@@ -1666,7 +1666,7 @@ fn native_agent(
     directory: &std::path::Path,
     binary: &std::path::Path,
     settings: &AgentSettings,
-    tx: &SyncSender<Event>,
+    tx: &Outbox,
 ) -> Result<(AgentSession, KerfMcpRouter), String> {
     // Kerf Cloud speaks the Anthropic Messages protocol with the account token.
     let cloud = if settings.cloud {
@@ -1908,7 +1908,7 @@ fn staged_proposal(summary: &kerf_agent::ToolResultSummary) -> bool {
 
 /// Carry out a Kerf Cloud command, if any, then report the account:
 /// `{type: "cloud", access, account?, message?}`.
-fn cloud_status(tx: &SyncSender<Event>, command: Option<Command>) {
+fn cloud_status(tx: &Outbox, command: Option<Command>) {
     let Some(path) = kerf_cloud::Store::default_path() else {
         emit(
             tx,
@@ -1977,7 +1977,7 @@ fn run_versions(
     directory: &std::path::Path,
     binary: &std::path::Path,
     request: &AgentRequest,
-    tx: &SyncSender<Event>,
+    tx: &Outbox,
     commands: &SyncSender<Command>,
     shared: &Arc<Shared>,
 ) {
@@ -2002,7 +2002,7 @@ fn run_version(
     request: &AgentRequest,
     index: usize,
     count: usize,
-    tx: &SyncSender<Event>,
+    tx: &Outbox,
     commands: &SyncSender<Command>,
     shared: &Arc<Shared>,
 ) {
@@ -2131,7 +2131,7 @@ fn agent_worker(
     binary: PathBuf,
     rx: Receiver<AgentRequest>,
     commands: SyncSender<Command>,
-    tx: SyncSender<Event>,
+    tx: Outbox,
     shared: Arc<Shared>,
 ) {
     // A session for each conversation, kept beside it as each turn ends, so
@@ -2310,7 +2310,7 @@ const RESTORED_FAILED: &str = "\u{0}restored: ";
 /// What a turn's events go to: the editor, the conversation that keeps the
 /// turn, and the tool calls under way, by id.
 struct TurnEvents<'a> {
-    tx: &'a SyncSender<Event>,
+    tx: &'a Outbox,
     commands: &'a SyncSender<Command>,
     conversation: Option<String>,
     turn: Option<&'a mut conversations::Turn>,
@@ -2502,7 +2502,7 @@ impl Bridge {
         let (prompts, prompt_rx) = mpsc::sync_channel(1);
         let (collab, collab_rx) = mpsc::sync_channel(16);
         let (conversations, conversations_rx) = mpsc::sync_channel(64);
-        let (emit, events) = mpsc::sync_channel(256);
+        let (emit, events) = wake::outbox(256);
         let shared = Arc::new(Shared {
             directory: directory.clone(),
             media_status: Mutex::new(media::MediaStatus::default()),
@@ -2783,6 +2783,13 @@ impl Bridge {
     /// Never blocks.
     pub fn poll(&mut self) -> Option<Event> {
         self.events.try_recv().ok()
+    }
+
+    /// What rings when an event, a new playback frame or a new signal frame is waiting:
+    /// await [`Wake::wait`], then take them with [`Bridge::poll`], [`Bridge::frame`] and
+    /// [`Bridge::signal`].
+    pub fn wake(&self) -> Wake {
+        self.events_tx.wake()
     }
 
     /// The newest playback frame not taken yet, without copying its pixels; `None` when no
@@ -3207,7 +3214,7 @@ mod tests {
     #[test]
     fn stopping_with_no_preview_running_answers_at_once() {
         let shared = Arc::new(shared());
-        let (tx, rx) = mpsc::sync_channel(4);
+        let (tx, rx) = crate::wake::outbox(4);
         super::stop_preview(&shared, &tx);
         assert_eq!(next(&rx), json!({"type": "preview", "status": "stopped"}));
 
@@ -3236,7 +3243,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let shared = Arc::new(crate::tests_support::shared(directory.path()));
         let client = kerf_runtime::RuntimeClient::new(directory.path()).unwrap();
-        let (tx, rx) = mpsc::sync_channel(8);
+        let (tx, rx) = crate::wake::outbox(8);
         assert!(shared.preview_turns.send(|| true));
         super::stop_preview(&shared, &tx);
         let turn = shared.preview_turns.take();

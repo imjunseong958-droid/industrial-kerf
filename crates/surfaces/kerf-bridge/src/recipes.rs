@@ -12,13 +12,13 @@
 //! would run and asks first.
 
 use crate::event::{ErrorEvent, Event, Recipe};
+use crate::wake::Outbox;
 use crate::Shared;
 use kerf_engine::recipe::model::Models;
 use kerf_model::Project;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::path::Path;
-use std::sync::mpsc::SyncSender;
 
 /// A change to a media's recipe: one name on one line, or with `text` the
 /// whole of it.
@@ -203,7 +203,7 @@ pub(crate) fn carry(
     client: &kerf_runtime::RuntimeClient,
     id: &str,
     confirmed: bool,
-    tx: &SyncSender<Event>,
+    tx: &Outbox,
 ) {
     let directory = shared.directory.as_path();
     let answered = project(client).and_then(|before| {
@@ -240,7 +240,7 @@ fn project(client: &kerf_runtime::RuntimeClient) -> Result<Project, String> {
 
 /// What cannot be shown or changed of media `id`'s recipe: an `error` that
 /// names the media, so that what shows its graph can say so there.
-fn failed(tx: &SyncSender<Event>, id: &str, why: String) {
+fn failed(tx: &Outbox, id: &str, why: String) {
     crate::emit(
         tx,
         Event::Error(ErrorEvent {
@@ -253,12 +253,7 @@ fn failed(tx: &SyncSender<Event>, id: &str, why: String) {
 }
 
 /// Answer `recipe` for media `id`: how it is made, as a graph.
-pub(crate) fn get(
-    shared: &Shared,
-    client: &kerf_runtime::RuntimeClient,
-    id: &str,
-    tx: &SyncSender<Event>,
-) {
+pub(crate) fn get(shared: &Shared, client: &kerf_runtime::RuntimeClient, id: &str, tx: &Outbox) {
     let (models, models_error) = models();
     match project(client)
         .and_then(|project| event(&project, &shared.directory, id, &models, models_error))
@@ -275,7 +270,7 @@ pub(crate) fn edit(
     shared: &Shared,
     client: &kerf_runtime::RuntimeClient,
     edit: &Edit,
-    tx: &SyncSender<Event>,
+    tx: &Outbox,
 ) {
     let project = match project(client) {
         Ok(project) => project,

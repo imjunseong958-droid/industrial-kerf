@@ -1141,8 +1141,11 @@ impl InspectorView {
         let number = cx.new(|cx| TextInput::new(cx, "").with_style(text::TIMECODE));
         let name_focus = name.focus_handle(cx);
         let number_focus = number.focus_handle(cx);
+        let playhead = session.read(cx).playhead.clone();
         let subscriptions = vec![
             cx.observe(&session, Self::session_notified),
+            // What the clip is at the playhead.
+            cx.observe(&playhead, |_, _, cx| cx.notify()),
             cx.subscribe(&session, Self::bridge_event),
             cx.subscribe_in(
                 &name,
@@ -1212,7 +1215,7 @@ impl InspectorView {
     }
 
     fn bridge_event(&mut self, _: Entity<Session>, event: &BridgeEvent, cx: &mut Context<Self>) {
-        match &event.0 {
+        match &*event.0 {
             Event::State { snapshot } => {
                 let revision = snapshot.revision;
                 self.timeline = Some(snapshot.timeline.clone());

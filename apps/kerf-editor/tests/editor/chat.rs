@@ -10,9 +10,9 @@ use kerf_editor::chat::{
     join_queued, length_badge, media_stem, model_choices, model_label, next_permissions,
     permission_look, permission_words, pin_order, previewing, recent_conversations, refusal,
     request_before, rim_point, say_permissions, script_seconds, script_summary, script_words,
-    settled_age, settled_words, shown_frame, signed_frames, signed_seconds, spans, strays_note,
-    timecode_position, timecode_seconds, try_asking, work_clock, work_length, worked_headline,
-    ProposalBook, Queued, Span, CARD_DONE, CARD_MARKS_AFTER, CARD_PICTURE_TALLEST,
+    settled_age, settled_age_changes, settled_words, shown_frame, signed_frames, signed_seconds,
+    spans, strays_note, timecode_position, timecode_seconds, try_asking, work_clock, work_length,
+    worked_headline, ProposalBook, Queued, Span, CARD_DONE, CARD_MARKS_AFTER, CARD_PICTURE_TALLEST,
     CARD_PICTURE_WIDEST, DRAFT_BEAT, MODE_HOLD,
 };
 use kerf_editor::model::{
@@ -611,6 +611,22 @@ proptest! {
         } else {
             prop_assert!(f32::from(at.y) > y);
         }
+    }
+}
+
+proptest! {
+    /// A settled card's age says the same until the moment it is said to
+    /// change, and something else from then.
+    #[test]
+    fn a_settled_age_changes_when_it_is_said_to(
+        seconds in prop_oneof![0u64..3600, 3600u64..86_400, 86_400u64..10_000_000],
+        nanos in 0u32..1_000_000_000,
+    ) {
+        let ago = Duration::new(seconds, nanos);
+        let until = settled_age_changes(ago);
+        prop_assert!(until > Duration::ZERO);
+        prop_assert_eq!(settled_age(ago + until - Duration::from_nanos(1)), settled_age(ago));
+        prop_assert_ne!(settled_age(ago + until), settled_age(ago));
     }
 }
 

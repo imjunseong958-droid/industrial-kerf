@@ -182,6 +182,11 @@ laying out, not in pixels:
 
 - **Nothing holding still draws frames.** Ask for the next frame only while something
   moves: a `Tween` running, a light round the picture, stripes over what is made.
+- **Playback wakes only what draws it.** The session drains the bridge when it rings
+  (`Bridge::wake`), not on a timer. The playhead, the picture and its caption notify
+  `Session::playhead`, which only the stage, the timeline, the conversation and the
+  inspector observe; a view that draws them observes it too. A clock, caption or
+  meter reading the same as the last notifies nothing (`EditorState::leaves_as_is`).
 - **One motion per property.** A new `go` takes over from where the last got to.
 - **Draw what moves with `canvas`, not with elements**, when there are many pieces:
   the light round the picture and the stripes are painted paths, not a div each.

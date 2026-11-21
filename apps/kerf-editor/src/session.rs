@@ -1,7 +1,9 @@
 //! The project the window has open: the bridge to kerfd, the state its
 //! events leave, and the picture playback last drew. One entity, observed
 //! by every region of the window, so what kerfd says shows everywhere at
-//! once. Without a project (the launcher) there is no bridge.
+//! once; what playback moves many times a second is told only to the
+//! regions that draw it ([`Playhead`]). Without a project (the launcher)
+//! there is no bridge.
 
 use crate::model::{ClipShow, SourceShow, Timeline, TimelineShow};
 use crate::prefs::{Prefs, Provider};
@@ -12,8 +14,11 @@ use kerf_bridge::event::{AgentUpdate, Export, ExportStatus, PreviewStatus};
 use kerf_bridge::{AgentSettings, ChatProvider, Command, ConversationsRequest, Event};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::future::{self, Future};
 use std::path::{Path, PathBuf};
+use std::pin::{pin, Pin};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::task::Poll;
 use std::time::Instant;
 
 /// How long Kerf's edits to a first cut are quiet before the cut renders
@@ -79,12 +84,24 @@ pub fn stands_in(shown: (u32, u32), canvas: (u32, u32), duration: f64) -> bool {
     same_shape && duration > 0.0
 }
 
+/// What playback moves many times a second: the playhead (`state.position`,
+/// with the length and frames dropped its clocks say), the picture and its
+/// caption. Notified, rather than the whole session, when only these change,
+/// so only the views that draw them (the stage, the timeline, the
+/// conversation and the inspector) draw again.
+pub struct Playhead;
+
 pub struct Session {
     pub project: Option<PathBuf>,
     bridge: Option<kerf_bridge::Bridge>,
     pub state: EditorState,
     pub prefs: Prefs,
     pub picture: Option<Picture>,
+    /// Notified when the playhead, the picture or the caption change ([`Playhead`]).
+    pub playhead: Entity<Playhead>,
+    /// The playhead was moved here (a seek) rather than by a clock: the
+    /// next drain notifies [`Session::playhead`].
+    moved: bool,
     /// The conversation the composer speaks in; None starts one.
     pub conversation: Option<String>,
     /// Clips chosen on the timeline.
@@ -146,7 +163,21 @@ pub struct Session {
     reel: Option<Reel>,
     /// What each request sent from here was about, for Ask again.
     asked: FocusBook,
-    _poll: Option<Task<()>>,
+    /// What wakes the pump ([`Session::pump`]): the bridge rings it with
+    /// events and frames, the artwork with what it has made, the state with
+    /// each notice said, and the session itself when something is due
+    /// sooner than the pump waits for.
+    wake: Option<kerf_bridge::Wake>,
+    /// When the pump wakes by itself next, for what is due then (None: only
+    /// when rung).
+    pump_due: Option<Instant>,
+    /// When a making's clock next says another second, so the window draws
+    /// it ([`EditorState::making_second`]).
+    making_second: Option<Instant>,
+    /// How many notices there had been when the window last drew them.
+    noticed: u64,
+    _pump: Option<Task<()>>,
+    _due_sooner: gpui::Subscription,
 }
 
 /// Which side of a change reel plays: what the proposal makes, or the
@@ -317,11 +348,53 @@ impl CutRender {
 
 impl EventEmitter<Change> for Session {}
 
+/// The most events one drain takes, so the window keeps drawing between them.
+const DRAIN_MOST: usize = 256;
+
+/// What the pump does after a drain.
+enum Pump {
+    /// Events are left over: drain again on the next turn, without waiting.
+    Again,
+    /// Wait to be rung, or until what waits on time is due.
+    Wait(Option<Instant>),
+}
+
+/// Lets the window's other work run, then goes on.
+async fn next_turn() {
+    let mut yielded = false;
+    future::poll_fn(|cx| {
+        if yielded {
+            return Poll::Ready(());
+        }
+        yielded = true;
+        cx.waker().wake_by_ref();
+        Poll::Pending
+    })
+    .await;
+}
+
+/// Waits until `wake` rings or `timer` (if any) ends, whichever is first;
+/// true when the timer ended.
+async fn first_of(wake: impl Future<Output = ()>, timer: Option<&mut Task<()>>) -> bool {
+    let mut wake = pin!(wake);
+    let mut timer = timer;
+    future::poll_fn(|cx| {
+        if wake.as_mut().poll(cx).is_ready() {
+            return Poll::Ready(false);
+        }
+        match timer.as_deref_mut() {
+            Some(timer) => Pin::new(timer).poll(cx).map(|()| true),
+            None => Poll::Pending,
+        }
+    })
+    .await
+}
+
 /// Every event the bridge sends, as it sent it, for a region that keeps
 /// state of its own (a check's findings, a making's plan) rather than in
-/// [`EditorState`].
+/// [`EditorState`]. One event, shared by every region that hears it.
 #[derive(Clone, Debug)]
-pub struct BridgeEvent(pub Event);
+pub struct BridgeEvent(pub Arc<Event>);
 
 impl EventEmitter<BridgeEvent> for Session {}
 
@@ -339,14 +412,20 @@ impl Session {
                 let kerfd = kerfd.clone().unwrap_or_else(discover_kerfd);
                 kerf_bridge::Bridge::open(project, &kerfd)
             });
-            let poll = bridge.is_some().then(|| Self::poll_forever(window, cx));
+            let wake = bridge.as_ref().map(kerf_bridge::Bridge::wake);
+            let pump = wake.clone().map(|wake| Self::pump(wake, window, cx));
             let artwork = crate::artwork::Artwork::new(project.clone());
+            if let Some(wake) = wake.clone() {
+                artwork.wake_with(move || wake.ring());
+            }
             let mut session = Self {
                 project,
                 bridge,
                 state: EditorState::default(),
                 prefs,
                 picture: None,
+                playhead: cx.new(|_| Playhead),
+                moved: false,
                 conversation: None,
                 selection: Vec::new(),
                 chosen_media: None,
@@ -375,46 +454,135 @@ impl Session {
                 live_changes: HashSet::new(),
                 reel: None,
                 asked: FocusBook::default(),
-                _poll: poll,
+                wake,
+                pump_due: None,
+                making_second: None,
+                noticed: 0,
+                _pump: pump,
+                // A seek or a reel's wait set from the window: the pump wakes
+                // for it if it is due sooner than it waits for.
+                _due_sooner: cx.observe_self(|session, _| session.wake_if_due_sooner()),
             };
             // The render queue is asked for once kerfd is connected
             // (`drain`), never before: asked of a runtime that is not there
             // it would be refused, and the refusal left standing.
+            // A notice said from anywhere wakes the pump to draw it.
+            session.state.wake = session.wake.clone();
             session.send(Command::Conversations(ConversationsRequest::List));
             session
         })
     }
 
-    fn poll_forever(window: &mut Window, cx: &mut Context<Self>) -> Task<()> {
-        cx.spawn_in(window, async move |this, cx| loop {
-            cx.background_executor().timer(motion::POLL).await;
-            let alive = this.update_in(cx, |session, window, cx| session.drain(window, cx));
-            if alive.is_err() {
-                break;
+    /// Drains the bridge each time `wake` rings, and when what waits on time
+    /// is due; at once again while events are left over from a full drain.
+    fn pump(wake: kerf_bridge::Wake, window: &mut Window, cx: &mut Context<Self>) -> Task<()> {
+        cx.spawn_in(window, async move |this, cx| {
+            // The timer for what is due next, kept while that stays the same.
+            let mut timer: Option<(Instant, Task<()>)> = None;
+            loop {
+                let Ok(next) = this.update_in(cx, |session, window, cx| session.drain(window, cx))
+                else {
+                    break;
+                };
+                let due = match next {
+                    Pump::Again => {
+                        next_turn().await;
+                        continue;
+                    }
+                    Pump::Wait(due) => due,
+                };
+                if timer.as_ref().map(|(at, _)| *at) != due {
+                    timer = due.map(|due| {
+                        let wait = due.saturating_duration_since(Instant::now());
+                        // Due already, and not done (a seek the bridge would
+                        // not take yet): tried again shortly.
+                        let wait = if wait.is_zero() { motion::POLL } else { wait };
+                        (due, cx.background_executor().timer(wait))
+                    });
+                }
+                if first_of(wake.wait(), timer.as_mut().map(|(_, timer)| timer)).await {
+                    timer = None;
+                }
             }
         })
     }
 
-    /// Takes every event the bridge has, and its newest picture.
-    fn drain(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(bridge) = self.bridge.as_mut() else {
+    /// What waits on time here, soonest first: the pointer's exact seek, a
+    /// first cut that renders once settled, a change reel's wait, a notice
+    /// going, a making's clock saying another second.
+    fn next_due(&self) -> Option<Instant> {
+        let pointer = self.pointer.and_then(|pointer| pointer.settle);
+        // A cut waits for the render under way, or the reel, to end: an event
+        // says when.
+        let cut = self
+            .cut
+            .due()
+            .filter(|_| !self.cut.rendering() && self.reel.is_none());
+        let reel = self
+            .reel
+            .as_ref()
+            .and_then(|reel| reel.due)
+            .map(|(at, _)| at);
+        let notice = self
+            .state
+            .notices_due(motion::NOTICE_HOLD, motion::NOTICE_ERROR_HOLD);
+        [pointer, cut, reel, notice, self.making_second]
+            .into_iter()
+            .flatten()
+            .min()
+    }
+
+    /// The playhead was moved from here: the pump drains at once and tells
+    /// the views that draw it, as a clock would have.
+    fn playhead_moved(&mut self) {
+        self.moved = true;
+        if let Some(wake) = &self.wake {
+            wake.ring();
+        }
+    }
+
+    /// Wakes the pump when something is due sooner than it waits for.
+    fn wake_if_due_sooner(&self) {
+        let Some(due) = self.next_due() else {
             return;
+        };
+        if self.pump_due.is_none_or(|waits| due < waits) {
+            if let Some(wake) = &self.wake {
+                wake.ring();
+            }
+        }
+    }
+
+    /// Takes every event the bridge has (at most a frame's worth), and its
+    /// newest picture; what the pump does next.
+    fn drain(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Pump {
+        let Some(bridge) = self.bridge.as_mut() else {
+            return Pump::Wait(None);
         };
         let mut events = Vec::new();
         // Never more than a frame's worth at once, so the window keeps drawing.
-        while events.len() < 256 {
+        let mut more = false;
+        while !more {
             match bridge.poll() {
                 Some(event) => events.push(event),
                 None => break,
             }
+            more = events.len() >= DRAIN_MOST;
         }
         let frame = bridge.frame();
-        let heard = !events.is_empty();
+        // What any view may draw changed; only the playhead, the picture or
+        // the caption did.
+        let mut changed = false;
+        let mut ticked = false;
         for event in events {
-            if !matches!(event, Event::Clock { .. } | Event::Meter(_)) {
+            if log::log_enabled!(log::Level::Debug)
+                && !matches!(event, Event::Clock { .. } | Event::Meter(_))
+            {
                 let json = serde_json::to_value(&event).unwrap_or_default();
                 log::debug!("bridge event: {}", truncate(&json.to_string(), 400));
             }
+            // A clock, caption or meter reading the same as the last.
+            let same = self.state.leaves_as_is(&event);
             let was_playing = self.state.playing;
             let change = self.state.apply(&event);
             if let Some((kind, text)) = activity_of(&event) {
@@ -428,8 +596,9 @@ impl Session {
             {
                 self.activity.push("project", "Project connected");
             }
+            let event = Arc::new(event);
             cx.emit(BridgeEvent(event.clone()));
-            if let Event::Preview(preview) = &event {
+            if let Event::Preview(preview) = &*event {
                 self.reel_follow_preview(preview.status, preview.proposal_id.as_deref());
             }
             match &change {
@@ -442,7 +611,7 @@ impl Session {
                 Change::Preview => {
                     // A picture that needs a render shows none until it is
                     // rendered, as Qt cleared its viewer.
-                    if let Event::Preview(preview) = &event {
+                    if let Event::Preview(preview) = &*event {
                         if matches!(
                             preview.status,
                             PreviewStatus::Required | PreviewStatus::Unavailable
@@ -475,10 +644,13 @@ impl Session {
                 Change::Connection => self.lose_picture(window, cx),
                 Change::Playback => self.follow_playing(was_playing),
                 Change::ViewerReset => self.viewer_reset(window, cx),
-                Change::Work if matches!(event, Event::AgentFocus { .. }) => self.follow_kerf(),
+                Change::Work if matches!(*event, Event::AgentFocus { .. }) => self.follow_kerf(),
                 Change::Clock => {
-                    self.keep_to_marks();
-                    self.reel_follow_playhead();
+                    // Going round the loop, or on through a change reel,
+                    // changes more than the playhead.
+                    let looped = self.keep_to_marks();
+                    let reeled = self.reel_follow_playhead();
+                    changed |= looped || reeled;
                 }
                 Change::TurnEnded => {
                     self.live_changes.clear();
@@ -492,9 +664,20 @@ impl Session {
             // The conversation shown is the state's choice (a request sent
             // with none chosen starts one; a deleted one leaves none).
             self.conversation = self.state.chosen.clone();
+            if same {
+                continue;
+            }
+            match change {
+                Change::Clock => ticked = true,
+                // No view draws the meter.
+                _ if matches!(*event, Event::Meter(_)) => {}
+                // Playing, or not, as it was (each seek while paused says
+                // so): heard, and nothing drawn again.
+                Change::Playback if self.state.playing == was_playing => {}
+                _ => changed = true,
+            }
             cx.emit(change);
         }
-        let mut changed = heard;
         if self.render_settled_cut() || self.reel_due() {
             changed = true;
         }
@@ -507,9 +690,10 @@ impl Session {
             changed = true;
         }
         if let Some(frame) = frame {
-            self.show_frame(frame, window, cx);
-            cx.emit(Change::Clock);
-            changed = true;
+            if self.show_frame(frame, window, cx) {
+                cx.emit(Change::Clock);
+                ticked = true;
+            }
         }
         if self
             .state
@@ -518,27 +702,49 @@ impl Session {
             cx.emit(Change::Notice);
             changed = true;
         }
+        // A notice said from anywhere (the state rang for it), drawn now.
+        if self.state.noticed() != self.noticed {
+            self.noticed = self.state.noticed();
+            changed = true;
+        }
+        // A making's clock says another second ("0:41"), wherever it shows.
+        let now = Instant::now();
+        if self.making_second.is_some_and(|second| second <= now) {
+            changed = true;
+        }
+        self.making_second = self.state.making_second(now);
         // Nothing heard, nothing drawn: the window holds still between events.
         if changed {
             cx.notify();
         }
+        // Only the views that draw the playhead, the picture and the caption.
+        ticked |= std::mem::take(&mut self.moved);
+        if ticked {
+            self.playhead.update(cx, |_, cx| cx.notify());
+        }
+        if more {
+            return Pump::Again;
+        }
+        self.pump_due = self.next_due();
+        Pump::Wait(self.pump_due)
     }
 
+    /// Shows `frame` as the picture; whether it did.
     fn show_frame(
         &mut self,
         frame: kerf_bridge::Frame,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) {
+    ) -> bool {
         // kerfd gone: what is left of its playback is not shown.
         if matches!(self.state.connection, crate::store::Connection::Failed(_)) {
-            return;
+            return false;
         }
         if let Some(pointer) = self.pointer {
             let fps = self.timeline().rate();
             let shown = self.picture.as_ref().map(|picture| picture.time);
             if !nearer_frame(shown, frame.time, pointer.target, fps) {
-                return;
+                return false;
             }
             // The frame the pointer let go on (or rested on) has come: what
             // comes after shows as it comes.
@@ -548,7 +754,7 @@ impl Session {
             }
         }
         let Some(image) = render_image(&frame.pixels, frame.width, frame.height) else {
-            return;
+            return false;
         };
         self.drop_picture(window, cx);
         self.picture = Some(Picture {
@@ -558,6 +764,7 @@ impl Session {
             time: frame.time,
             standing_in: false,
         });
+        true
     }
 
     fn drop_picture(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -800,6 +1007,7 @@ impl Session {
         }
         let seconds = seconds.clamp(0.0, self.state.program_length().max(0.0));
         self.state.position = seconds;
+        self.playhead_moved();
         if scrub {
             self.pointer_seek(seconds);
             return;
@@ -849,6 +1057,7 @@ impl Session {
                 target: seconds,
                 settle: scrub.then(|| Instant::now() + SCRUB_SETTLE),
             });
+            self.wake_if_due_sooner();
         }
     }
 
@@ -1054,6 +1263,7 @@ impl Session {
         }
         let at = at.min(length);
         self.state.position = at;
+        self.playhead_moved();
         self.send(Command::Seek {
             position: at,
             scrub: false,
@@ -1229,6 +1439,7 @@ impl Session {
         }
         let cut = self.first_cut_id();
         self.cut.reel_ended(cut.as_deref(), Instant::now());
+        self.wake_if_due_sooner();
     }
 
     /// The next segment, or the one before.
@@ -1327,9 +1538,11 @@ impl Session {
         if !after {
             // The program has only just reopened: the seek lands first.
             reel.due = Some((Instant::now() + REEL_SEEK_LANDS, ReelWait::Play));
+            self.wake_if_due_sooner();
         }
         let at = at.clamp(0.0, limit);
         self.state.position = at;
+        self.playhead_moved();
         self.send(Command::Seek {
             position: at,
             scrub: false,
@@ -1401,22 +1614,23 @@ impl Session {
     }
 
     /// Past a segment's end, the next one plays; past the last, it stops,
-    /// every change watched.
-    fn reel_follow_playhead(&mut self) {
+    /// every change watched. Whether it did either.
+    fn reel_follow_playhead(&mut self) -> bool {
         let position = self.state.position;
         let Some(reel) = self.reel.as_mut() else {
-            return;
+            return false;
         };
         if reel.waiting || reel.finished || position + 1e-3 < reel.segment_end {
-            return;
+            return false;
         }
         if reel.index + 1 >= reel.segments.len() {
             reel.finished = true;
             self.send(Command::Pause);
-            return;
+            return true;
         }
         reel.index += 1;
         self.reel_show();
+        true
     }
 
     /// The program's in and out marks, and whether playback loops between
@@ -1463,15 +1677,18 @@ impl Session {
     /// Looping, playback that passes the out mark goes back to the in mark
     /// (or the start), still playing; one that comes within a frame of the
     /// program's end goes back before kerfd stops there
-    /// ([`LoopSpan::clock`]). A change reel plays its own segments.
-    fn keep_to_marks(&mut self) {
+    /// ([`LoopSpan::clock`]). A change reel plays its own segments. Whether
+    /// it went back.
+    fn keep_to_marks(&mut self) -> bool {
         if !self.looping || !self.state.playing || self.reel.is_some() {
-            return;
+            return false;
         }
         let span = self.loop_span();
-        if let Some(start) = span.clock(self.state.position, &mut self.wrapped) {
-            self.seek(start, false);
-        }
+        let Some(start) = span.clock(self.state.position, &mut self.wrapped) else {
+            return false;
+        };
+        self.seek(start, false);
+        true
     }
 
     /// Playback started or stopped (`was_playing`, before). Started, the

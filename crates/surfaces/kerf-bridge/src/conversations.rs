@@ -12,10 +12,10 @@
 
 use crate::emit;
 use crate::event::{ConversationSummary, ErrorEvent, Event};
+use crate::wake::Outbox;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::SyncSender;
 use std::time::Instant;
 
 /// Where conversations are kept, relative to the project folder.
@@ -280,7 +280,7 @@ fn title_of(request: &str) -> String {
 
 /// The list the sidebar shows: `conversations {items: [{id, title, created,
 /// updated, archived, count}]}`.
-pub(crate) fn emit_list(store: &Store, tx: &SyncSender<Event>) {
+pub(crate) fn emit_list(store: &Store, tx: &Outbox) {
     let items = store
         .list()
         .into_iter()
@@ -297,7 +297,7 @@ pub(crate) fn emit_list(store: &Store, tx: &SyncSender<Event>) {
 }
 
 /// One conversation whole, without what is only the file's (Claude Code's session).
-pub(crate) fn emit_one(conversation: &Conversation, tx: &SyncSender<Event>) {
+pub(crate) fn emit_one(conversation: &Conversation, tx: &Outbox) {
     emit(tx, Event::Conversation(conversation.into()));
 }
 
@@ -347,7 +347,7 @@ fn yes() -> bool {
 }
 
 /// Carry out `request`, then send what changed.
-pub(crate) fn command(store: &Store, request: Request, tx: &SyncSender<Event>) {
+pub(crate) fn command(store: &Store, request: Request, tx: &Outbox) {
     let changed = match request {
         Request::List => Ok(None),
         Request::Open { id } => match store.load(&id) {
@@ -406,7 +406,7 @@ impl Turn {
         id: Option<&str>,
         prompt: &str,
         timecode: Option<f64>,
-        tx: &SyncSender<Event>,
+        tx: &Outbox,
     ) -> Result<Self, String> {
         let mut conversation = id
             .and_then(|id| store.load(id))
@@ -519,7 +519,7 @@ impl Turn {
         outcome: Outcome,
         proposal: Option<String>,
         claude_session: Option<String>,
-        tx: &SyncSender<Event>,
+        tx: &Outbox,
     ) -> Result<(), String> {
         let (text, failed) = match outcome {
             Outcome::Failed(message) => (message, true),

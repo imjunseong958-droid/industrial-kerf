@@ -287,6 +287,24 @@ pub fn relative_time(when: i64, now: i64) -> String {
     }
 }
 
+/// When (seconds since 1970) what [`relative_time`] says of `when` at `now`
+/// changes next: at the next minute, hour or day it counts, then as the
+/// year turns ("Mar 4" becomes "Mar 2025"); None once it names a year.
+pub fn relative_time_changes(when: i64, now: i64) -> Option<i64> {
+    let seconds = (now - when).max(0);
+    let unit = match seconds {
+        0..3600 => 60,
+        3600..86_400 => 3600,
+        86_400..604_800 => 86_400,
+        _ => {
+            let (year, _, _) = civil_from_days(now.div_euclid(86_400));
+            let (then, _, _) = civil_from_days(when.div_euclid(86_400));
+            return (then == year).then(|| days_from_civil(year + 1, 1, 1) * 86_400);
+        }
+    };
+    Some(when + (seconds / unit + 1) * unit)
+}
+
 fn now_seconds() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1483,6 +1501,8 @@ pub struct SidebarView {
     edge_hide: Option<Task<()>>,
     /// Where the open folder's heading was laid out last, in the window.
     heading_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// Drawn again as a conversation's age in its tip ("4m") turns over.
+    ages: crate::motion::Redraw,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -1558,7 +1578,7 @@ impl SidebarView {
             }),
             // Kerf's account, as the foot says it.
             cx.subscribe(&session, |_, _, event: &BridgeEvent, cx| {
-                if let Event::Cloud { .. } = &event.0 {
+                if let Event::Cloud { .. } = &*event.0 {
                     crate::app::hear_cloud(&serde_json::to_value(&event.0).unwrap_or_default(), cx);
                     cx.notify();
                 }
@@ -1659,6 +1679,7 @@ impl SidebarView {
             edge_clicked: None,
             edge_hide: None,
             heading_bounds: Rc::new(Cell::new(None)),
+            ages: crate::motion::Redraw::default(),
             _subscriptions: subscriptions,
         };
         sidebar.note_arrivals(false, cx);
@@ -2835,6 +2856,25 @@ impl SidebarView {
     /// Another folder's conversations, unfolded under it: the latest first,
     /// the first few unless the rest were asked for ("Show N more"), "No
     /// conversations yet" with none. Each opens its project on it.
+    /// Draws the sidebar again when the age a tip gives any of
+    /// `conversations` ([`relative_time`]) turns over.
+    fn follow_ages<'a>(
+        &self,
+        conversations: impl IntoIterator<Item = &'a ConversationSummary>,
+        now: i64,
+        cx: &Context<Self>,
+    ) {
+        let next = conversations
+            .into_iter()
+            .filter_map(|conversation| parse_time(&conversation.updated))
+            .filter_map(|when| relative_time_changes(when, now))
+            .min();
+        if let Some(next) = next {
+            let wait = std::time::Duration::from_secs(u64::try_from(next - now).unwrap_or(0));
+            self.ages.at(Instant::now() + wait, cx);
+        }
+    }
+
     fn folder_conversation_rows(
         &self,
         index: usize,
@@ -2845,6 +2885,7 @@ impl SidebarView {
         let now = now_seconds();
         let show_all = self.others_shown_all.contains(folder);
         let (count, more) = shown(conversations.len(), false, show_all, None);
+        self.follow_ages(conversations.iter().take(count), now, cx);
         let mut list = div().flex().flex_col().gap(px(2.0));
         if conversations.is_empty() {
             list = list.child(div().pl(px(42.0)).py(px(4.0)).child(ui::label(
@@ -3072,6 +3113,8 @@ impl Render for SidebarView {
             )
         };
         let now = now_seconds();
+        let archived_shown = archived.iter().filter(|_| self.archived_open);
+        self.follow_ages(open.iter().chain(archived_shown), now, cx);
 
         let open_at = open
             .iter()

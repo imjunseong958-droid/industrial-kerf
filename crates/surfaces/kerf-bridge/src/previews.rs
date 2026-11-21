@@ -12,6 +12,7 @@
 //! for generators, Kerf's compositor draws the picture, as playback does.
 
 use crate::event::{EffectPreview, Event};
+use crate::wake::Outbox;
 use crate::{emit, Shared};
 use kerf_compose::{ComposeOptions, Compositor};
 use kerf_model::{
@@ -21,7 +22,6 @@ use kerf_model::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value as Json};
 use std::sync::atomic::Ordering;
-use std::sync::mpsc::SyncSender;
 
 /// One entry of `effects`: an id, or an id with parameters and the key
 /// its preview echoes.
@@ -453,7 +453,7 @@ pub(crate) fn run(
     shared: &Shared,
     generation: u64,
     request: &Request,
-    tx: &SyncSender<Event>,
+    tx: &Outbox,
 ) -> Result<(), String> {
     let project = shared
         .model
@@ -521,7 +521,7 @@ mod tests {
         let shared = crate::tests_support::shared(&std::env::temp_dir());
         *shared.model.lock().unwrap() = Some(kerf_model::Project::default());
         shared.previews.store(2, Ordering::SeqCst);
-        let (tx, rx) = std::sync::mpsc::sync_channel(8);
+        let (tx, rx) = crate::wake::outbox(8);
         let request = Request {
             clip: String::new(),
             at: 0.0,

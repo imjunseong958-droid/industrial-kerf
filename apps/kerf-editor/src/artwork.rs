@@ -37,7 +37,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Arc, Condvar, Mutex, MutexGuard, PoisonError};
+use std::sync::{mpsc, Arc, Condvar, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::time::{Duration, UNIX_EPOCH};
 
 /// A poster covers a Media band tile at twice its size, so it is sharp
@@ -768,6 +768,8 @@ struct Shared {
     state: Mutex<State>,
     wake: Condvar,
     changed: AtomicBool,
+    /// Tells the window that something has come ([`Artwork::wake_with`]).
+    on_change: OnceLock<Box<dyn Fn() + Send + Sync>>,
     /// Set when the artwork is dropped: workers end, and FFmpegs are stopped.
     stop: Arc<AtomicBool>,
 }
@@ -816,6 +818,7 @@ impl Artwork {
                 state: Mutex::new(State::default()),
                 wake: Condvar::new(),
                 changed: AtomicBool::new(false),
+                on_change: OnceLock::new(),
                 stop: Arc::new(AtomicBool::new(false)),
             }),
             directory,
@@ -978,6 +981,13 @@ impl Artwork {
         poster
     }
 
+    /// Has `on_change` called from the thread that made it each time
+    /// something comes, for the window to ask [`Artwork::take_changed`]
+    /// then. Only the first one given is kept.
+    pub fn wake_with(&self, on_change: impl Fn() + Send + Sync + 'static) {
+        let _ = self.shared.on_change.set(Box::new(on_change));
+    }
+
     /// Whether anything has come or gone since this was last asked: the
     /// window draws again.
     pub fn take_changed(&self) -> bool {
@@ -1073,6 +1083,10 @@ fn keep(shared: &Shared, job: &Job, store: impl FnOnce(&mut Entry)) {
     {
         store(entry);
         shared.changed.store(true, Ordering::Relaxed);
+        drop(state);
+        if let Some(on_change) = shared.on_change.get() {
+            on_change();
+        }
     }
 }
 

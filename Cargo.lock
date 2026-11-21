@@ -1621,6 +1621,7 @@ dependencies = [
 name = "kerf-bridge"
 version = "0.1.5"
 dependencies = [
+ "async-channel",
  "base64",
  "kerf-agent",
  "kerf-cloud",

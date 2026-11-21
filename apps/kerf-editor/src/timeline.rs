@@ -1612,6 +1612,8 @@ pub struct TimelineView {
     /// What the strip showed when last drawn, and how wide it was laid out.
     strip_fit: StripFit,
     strip_widths: StripWidths,
+    /// Drawn again as an edit waiting on kerfd runs out (`PENDING`).
+    pending_ends: crate::motion::Redraw,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -1619,8 +1621,11 @@ impl EventEmitter<TimelineEvent> for TimelineView {}
 
 impl TimelineView {
     pub fn new(session: Entity<Session>, _window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let playhead = session.read(cx).playhead.clone();
         let subscriptions = vec![
             cx.observe(&session, |_, _, cx| cx.notify()),
+            // The playhead, and the timecodes that say where it is.
+            cx.observe(&playhead, |_, _, cx| cx.notify()),
             cx.subscribe(&session, |this, _, change: &Change, cx| {
                 this.session_changed(change, cx)
             }),
@@ -1668,6 +1673,7 @@ impl TimelineView {
             strip_transport: (false, 0),
             strip_fit: StripFit::ALL,
             strip_widths: StripWidths::default(),
+            pending_ends: crate::motion::Redraw::default(),
             _subscriptions: subscriptions,
         };
         view.rebuild(cx);
@@ -4475,6 +4481,10 @@ impl Render for TimelineView {
             .is_some_and(|pending| pending.at.elapsed() > PENDING)
         {
             self.pending = None;
+        }
+        // An edit kerfd has not answered goes back by itself once waited for long enough.
+        if let Some(pending) = &self.pending {
+            self.pending_ends.at(pending.at + PENDING, cx);
         }
         let lanes = self.lanes.clone();
         let session = self.session.read(cx);

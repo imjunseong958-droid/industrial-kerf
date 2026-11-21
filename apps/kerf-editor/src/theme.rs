@@ -589,7 +589,10 @@ pub mod motion {
     /// How long a press waits to learn it was the first of a double-click
     /// (the sidebar's edge: one press puts it away, two reset its width).
     pub const DOUBLE_CLICK: Duration = ms(400);
-    /// How often the bridge is asked for events and frames.
+    /// How soon what was due and could not be done is tried again (an
+    /// exact seek the bridge would not take yet), and how often
+    /// `--screenshot` looks whether the window has drawn. Events and frames
+    /// wake the editor as they come.
     pub const POLL: Duration = ms(16);
     /// How long `--screenshot` waits, once the run's time is up, for the
     /// window to draw a frame before it reads back what is there.

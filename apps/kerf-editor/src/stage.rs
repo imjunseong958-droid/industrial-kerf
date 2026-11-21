@@ -966,6 +966,8 @@ pub struct StageView {
     last_frame: Option<std::sync::Arc<gpui::RenderImage>>,
     /// Pictures let go of, for the atlas to drop as the stage next draws.
     retired: Vec<std::sync::Arc<gpui::RenderImage>>,
+    /// Drawn again as a drop held for kerfd's answer runs out (`HOLD`).
+    hold_ends: crate::motion::Redraw,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -1202,13 +1204,16 @@ impl StageView {
         let this = cx.weak_entity();
         cx.default_global::<Stages>().0.insert(id, this);
         ensure_keys(cx);
+        let playhead = session.read(cx).playhead.clone();
         let subscriptions = vec![
             cx.observe(&session, |this, session, cx| {
                 this.follow_selection(&session, cx);
                 cx.notify();
             }),
+            // The picture, its caption and the transport's time.
+            cx.observe(&playhead, |_, _, cx| cx.notify()),
             cx.subscribe(&session, |this, _, event: &BridgeEvent, cx| {
-                match &event.0 {
+                match &*event.0 {
                     Event::State { snapshot } => {
                         let before = std::mem::replace(
                             &mut this.program,
@@ -1353,6 +1358,7 @@ impl StageView {
             wipe: None,
             last_frame: None,
             retired: Vec::new(),
+            hold_ends: crate::motion::Redraw::default(),
             _subscriptions: subscriptions,
         }
     }
@@ -3029,6 +3035,10 @@ impl Render for StageView {
             .is_some_and(|(_, sent_at, at)| *sent_at != revision || at.elapsed() > HOLD)
         {
             self.held = None;
+        }
+        // A drop kerfd has not answered goes back by itself once held long enough.
+        if let Some((_, _, at)) = &self.held {
+            self.hold_ends.at(*at + HOLD, cx);
         }
         let session = self.session.read(cx);
         // Once a frame, for what is drawn and what the pointer hits.

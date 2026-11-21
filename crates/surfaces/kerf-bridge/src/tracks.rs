@@ -10,10 +10,10 @@
 //! once it is in, or `error`.
 
 use crate::event::{ErrorEvent, Event};
+use crate::wake::Outbox;
 use crate::Shared;
 use kerf_shots::tracks::For;
 use serde::{Deserialize, Serialize};
-use std::sync::mpsc::SyncSender;
 use std::sync::Arc;
 
 /// What to read a clip from footage for, as the editor names it.
@@ -51,7 +51,7 @@ pub struct Follow {
     pub outside: Vec<[f64; 2]>,
 }
 
-fn failed(tx: &SyncSender<Event>, command: &str, clip: &str, of: Of, why: String) {
+fn failed(tx: &Outbox, command: &str, clip: &str, of: Of, why: String) {
     crate::emit(
         tx,
         Event::Error(ErrorEvent {
@@ -81,7 +81,7 @@ pub(crate) fn picture(
     client: &kerf_runtime::RuntimeClient,
     clip: String,
     of: Of,
-    tx: &SyncSender<Event>,
+    tx: &Outbox,
 ) {
     let (shared, client, tx) = (shared.clone(), client.clone(), tx.clone());
     std::thread::spawn(move || {
@@ -114,7 +114,7 @@ pub(crate) fn follow(
     shared: &Arc<Shared>,
     client: &kerf_runtime::RuntimeClient,
     asked: Follow,
-    tx: &SyncSender<Event>,
+    tx: &Outbox,
 ) {
     let (shared, client, tx) = (shared.clone(), client.clone(), tx.clone());
     std::thread::spawn(move || {

@@ -7,8 +7,8 @@
 //! only [`Meter`] and polls it on its loop.
 
 use crate::event::{Event, MeterReading};
+use crate::wake::Outbox;
 use kerf_playback::Levels;
-use std::sync::mpsc::SyncSender;
 use std::time::{Duration, Instant};
 
 /// How often the meter is read while playing: 20 Hz.
@@ -72,7 +72,7 @@ impl Meter {
         now: Instant,
         playing: bool,
         levels: impl FnOnce() -> Option<Levels>,
-        tx: &SyncSender<Event>,
+        tx: &Outbox,
     ) {
         if !playing {
             if self.live {
@@ -107,8 +107,6 @@ impl Meter {
 mod tests {
     use super::*;
 
-    use std::sync::mpsc;
-
     fn levels(peak: f32, at: f64) -> Levels {
         Levels {
             peak: [peak, peak - 6.0],
@@ -121,7 +119,7 @@ mod tests {
 
     #[test]
     fn a_full_queue_never_holds_the_media_worker_up() {
-        let (tx, _rx) = mpsc::sync_channel(1);
+        let (tx, _rx) = crate::wake::outbox(1);
         tx.send(Event::ViewerReset).unwrap();
         let mut meter = Meter::default();
         let start = Instant::now();

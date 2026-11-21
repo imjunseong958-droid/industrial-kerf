@@ -171,6 +171,8 @@ pub struct Workspace {
     reel_reach: Tween,
     /// The picture's mask tool out when last seen, for the menu bar's tick.
     mask_tool_seen: Option<crate::stage::MaskTool>,
+    /// Drawn again as the title tip's "Edited 2 min ago" turns over.
+    ages: crate::motion::Redraw,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -542,6 +544,7 @@ impl Workspace {
             turn_rendered: false,
             reel_reach: Tween::at(0.0),
             mask_tool_seen: None,
+            ages: crate::motion::Redraw::default(),
             _subscriptions: subscriptions,
         }
     }
@@ -2702,13 +2705,22 @@ impl Workspace {
         let rendering = running_words(&session.state.renders, &session.state.preview);
         // The title's tip: the project and its sequence after a
         // conversation's name, when it was edited and at which revision.
+        let now = now_seconds();
         let title_tip = title_tip(
             &self.window_title,
             true,
             session.revision(),
             self.revision_time,
-            now_seconds(),
+            now,
         );
+        // Its "Edited 2 min ago" turns over by itself.
+        if let Some(next) = self
+            .revision_time
+            .and_then(|then| edited_ago_changes(then, now))
+        {
+            let wait = Duration::from_secs(u64::try_from(next - now).unwrap_or(0));
+            self.ages.at(Instant::now() + wait, cx);
+        }
         let quality = session.export_quality;
         // What can be done now, as the registry says it (none of these is
         // Ask, so the keychain is not asked).
@@ -4194,6 +4206,35 @@ pub fn edited_ago_in(then: i64, now: i64, zone: &jiff::tz::TimeZone) -> String {
     }
     let (year, month, day) = civil(local_day(then, zone));
     format!("{day} {} {year}", MONTHS[(month - 1).clamp(0, 11) as usize])
+}
+
+/// When (seconds since 1970) what [`edited_ago`] says of `then` at `now`
+/// changes next: at the next minute or hour it counts, or at the next
+/// midnight on the system's calendar; None once it names the date.
+pub fn edited_ago_changes(then: i64, now: i64) -> Option<i64> {
+    edited_ago_changes_in(then, now, &jiff::tz::TimeZone::system())
+}
+
+/// [`edited_ago_changes`] on the calendar of `zone`.
+pub fn edited_ago_changes_in(then: i64, now: i64, zone: &jiff::tz::TimeZone) -> Option<i64> {
+    let seconds = (now - then).max(0);
+    if seconds < 3600 {
+        return Some(then + (seconds / 60 + 1) * 60);
+    }
+    let days = local_day(now, zone) - local_day(then, zone);
+    if days >= 7 {
+        return None;
+    }
+    let midnight = jiff::Timestamp::from_second(now)
+        .ok()
+        .and_then(|at| at.to_zoned(zone.clone()).tomorrow().ok())
+        .and_then(|tomorrow| tomorrow.start_of_day().ok())
+        .map(|midnight| midnight.timestamp().as_second());
+    let hour = (days == 0 && seconds < 86_400).then(|| then + (seconds / 3600 + 1) * 3600);
+    match (hour, midnight) {
+        (Some(hour), Some(midnight)) => Some(hour.min(midnight)),
+        (hour, midnight) => hour.or(midnight),
+    }
 }
 
 /// The day (since 1970-01-01) that `seconds` since 1970 falls on in

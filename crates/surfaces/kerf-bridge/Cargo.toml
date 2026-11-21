@@ -27,6 +27,9 @@ kerf-engine = { path = "../../engine/kerf-engine" }
 # never linked: it is asked over HTTP by kerf-comfy when a shot is made.
 kerf-shots = { path = "../../surfaces/kerf-shots" }
 kerf-fx = { path = "../../effects/kerf-fx" }
+# The editor waits on the bridge for events and frames (`Wake`) rather than
+# asking on a timer.
+async-channel.workspace = true
 base64.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true

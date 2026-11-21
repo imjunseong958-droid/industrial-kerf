@@ -621,7 +621,7 @@ impl FocusRegion {
             &session,
             window,
             |this, _, event: &BridgeEvent, window, cx| {
-                let indexed = match &event.0 {
+                let indexed = match &*event.0 {
                     Event::MediaIndex(_) => true,
                     Event::Error(error) => error.command.as_deref() == Some("media_index"),
                     _ => false,

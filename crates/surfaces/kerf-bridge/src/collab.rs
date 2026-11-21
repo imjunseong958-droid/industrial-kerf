@@ -5,6 +5,7 @@
 //! kerfd. Live sync runs on the same worker between commands.
 
 use crate::event::{CollabStatus, CollabSync, Event};
+use crate::wake::Outbox;
 use crate::{emit, key, media, tasks, Command, Shared};
 use kerf_collab::git::{self, CollabError};
 use kerf_collab::scaffold::{self, GitHubRepository, MEDIA_DIR, PRESETS_DIR};
@@ -163,7 +164,7 @@ pub(crate) fn program_path(program: &Path, paths: Option<&OsStr>) -> Option<Path
 struct Collab {
     directory: PathBuf,
     driver: Option<PathBuf>,
-    tx: SyncSender<Event>,
+    tx: Outbox,
     /// The runtime worker, asked to republish after the project changed.
     runtime: SyncSender<Command>,
     shared: Arc<Shared>,
@@ -196,7 +197,7 @@ pub(crate) fn run(
     binary: PathBuf,
     rx: Receiver<Command>,
     runtime: SyncSender<Command>,
-    tx: SyncSender<Event>,
+    tx: Outbox,
     shared: Arc<Shared>,
 ) {
     let mut collab = Collab::new(directory, &binary, runtime, tx, shared);
@@ -224,7 +225,7 @@ impl Collab {
         directory: PathBuf,
         binary: &Path,
         runtime: SyncSender<Command>,
-        tx: SyncSender<Event>,
+        tx: Outbox,
         shared: Arc<Shared>,
     ) -> Self {
         Self {

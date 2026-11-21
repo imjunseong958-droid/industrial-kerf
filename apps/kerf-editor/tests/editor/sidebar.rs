@@ -17,6 +17,30 @@ use serde_json::json;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+// ------------------------------------------------------------ ages
+
+proptest! {
+    /// A conversation's age in its tip says the same until the moment it is
+    /// said to change, and something else from then; once it names a year,
+    /// it stays.
+    #[test]
+    fn a_tips_age_changes_when_it_is_said_to(
+        when in 0i64..4_000_000_000,
+        back in prop_oneof![-1_000i64..3600, 3600i64..86_400, 86_400i64..700_000, 700_000i64..100_000_000],
+    ) {
+        let now = when + back;
+        let said = sidebar::relative_time(when, now);
+        match sidebar::relative_time_changes(when, now) {
+            Some(next) => {
+                prop_assert!(next > now);
+                prop_assert_eq!(sidebar::relative_time(when, next - 1), said.clone());
+                prop_assert_ne!(sidebar::relative_time(when, next), said);
+            }
+            None => prop_assert_eq!(sidebar::relative_time(when, now + 400 * 86_400), said),
+        }
+    }
+}
+
 // ------------------------------------------------------------ the sidebar's foot
 
 #[test]

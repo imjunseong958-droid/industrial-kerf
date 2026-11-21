@@ -17,6 +17,7 @@
 
 use crate::emit;
 use crate::event::{ErrorEvent, Event};
+use crate::wake::Outbox;
 use kerf_model::look::{self, Look, On};
 use kerf_model::{Catalog, Clip, Domain, Engine, FxKind, Interp, Param, ParamType, Project, Value};
 use kerf_runtime::EditOp;
@@ -25,14 +26,13 @@ use std::fmt::Write as _;
 use std::fs;
 use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::SyncSender;
 
 /// Where saved effects presets go, relative to the project.
 pub(crate) const LOOKS_DIR: &str = "presets/looks";
 const EXTENSION: &str = "kerflook";
 
 /// A refused look command: `error {command, message}`.
-pub(crate) fn refused(tx: &SyncSender<Event>, command: &str, message: &str) {
+pub(crate) fn refused(tx: &Outbox, command: &str, message: &str) {
     emit(
         tx,
         Event::Error(ErrorEvent {
@@ -282,7 +282,7 @@ pub(crate) fn save_from(
     clip: &str,
     name: &str,
     replace: bool,
-    tx: &SyncSender<Event>,
+    tx: &Outbox,
 ) -> Result<(), kerf_runtime::RuntimeError> {
     let (_, document) = client.get_document(false)?;
     let saved = kerf_runtime::parse_document(&document)

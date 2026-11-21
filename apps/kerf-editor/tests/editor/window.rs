@@ -26,10 +26,10 @@ use kerf_editor::ui::{
     modal_bounds, tip_anchor, tip_for, tip_height, tip_is_quick, tip_origin, Tip,
 };
 use kerf_editor::workspace::{
-    app_menu_place, app_menu_room, bar_takes_error, edited_ago_in, first_line, frame_step,
-    kept_in_bar, local_day, panel_heights, panes_opening, picture_in, picture_within,
-    readable_error, running_words, standing_problem, sync_failed, sync_params, sync_question,
-    timeline_split, title_tip, toolbar_places, StandingInput, ToolbarPlaces,
+    app_menu_place, app_menu_room, bar_takes_error, edited_ago_changes_in, edited_ago_in,
+    first_line, frame_step, kept_in_bar, local_day, panel_heights, panes_opening, picture_in,
+    picture_within, readable_error, running_words, standing_problem, sync_failed, sync_params,
+    sync_question, timeline_split, title_tip, toolbar_places, StandingInput, ToolbarPlaces,
 };
 use kerf_editor::{commands, sidebar, theme};
 use proptest::prelude::*;
@@ -1713,6 +1713,33 @@ proptest! {
 /// Seconds since 1970 of `text` (RFC 3339).
 fn at(text: &str) -> i64 {
     text.parse::<jiff::Timestamp>().unwrap().as_second()
+}
+
+proptest! {
+    /// "Edited … ago" says the same until the moment it is said to change,
+    /// summer time or not, and in UTC something else from then; once it
+    /// names the date, it stays.
+    #[test]
+    fn edited_ago_changes_when_it_is_said_to(
+        then in 1_600_000_000i64..1_900_000_000,
+        back in prop_oneof![-100i64..3600, 3600i64..86_400, 86_400i64..700_000, 700_000i64..2_000_000],
+    ) {
+        let now = then + back;
+        let california = TimeZone::posix("PST8PDT,M3.2.0,M11.1.0").unwrap();
+        for (zone, exact) in [(TimeZone::UTC, true), (california, false)] {
+            let said = edited_ago_in(then, now, &zone);
+            match edited_ago_changes_in(then, now, &zone) {
+                Some(next) => {
+                    prop_assert!(next > now);
+                    prop_assert_eq!(edited_ago_in(then, next - 1, &zone), said.clone());
+                    if exact {
+                        prop_assert_ne!(edited_ago_in(then, next, &zone), said);
+                    }
+                }
+                None => prop_assert_eq!(edited_ago_in(then, now + 400 * 86_400, &zone), said),
+            }
+        }
+    }
 }
 
 #[test]

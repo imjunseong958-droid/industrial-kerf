@@ -16,13 +16,13 @@
 //! status; progress in between comes on `export {status: running}`.
 
 use crate::event::{ErrorEvent, Event, Export, ExportStatus, QueuedRender, RenderExport};
+use crate::wake::Outbox;
 use crate::{emit, Shared};
 use kerf_engine::render::RenderPreset;
 use kerf_runtime::{RenderJob, RuntimeClient, RuntimeError, StartRenderOptions};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashSet, VecDeque};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::SyncSender;
 use std::sync::{Arc, Condvar, Mutex};
 
 /// `export {quality: preview|full|review|master, codec?: h264|hevc|
@@ -178,7 +178,7 @@ impl Queue {
 }
 
 /// An `error` event naming the refused command.
-pub(crate) fn refused(tx: &SyncSender<Event>, command: &str, error: &RuntimeError) -> Event {
+pub(crate) fn refused(tx: &Outbox, command: &str, error: &RuntimeError) -> Event {
     let event = Event::Error(ErrorEvent {
         message: error.message.clone(),
         code: Some(error.code.clone()),
@@ -231,7 +231,7 @@ pub(crate) fn submit(
     shared: &Shared,
     renders: Arc<dyn Renders>,
     request: &ExportRequest,
-    tx: &SyncSender<Event>,
+    tx: &Outbox,
 ) -> Result<(), RuntimeError> {
     let (job, document, output) = renders.start(&request.options())?;
     emit(
@@ -262,7 +262,7 @@ pub(crate) fn cancel(
     shared: &Shared,
     renders: &dyn Renders,
     job_id: &str,
-    tx: &SyncSender<Event>,
+    tx: &Outbox,
 ) -> Result<(), RuntimeError> {
     let job = renders.cancel(job_id)?;
     if job.status == "cancelled" {
@@ -288,7 +288,7 @@ pub(crate) fn cancel(
 pub(crate) fn publish(
     shared: &Shared,
     renders: &dyn Renders,
-    tx: &SyncSender<Event>,
+    tx: &Outbox,
 ) -> Result<(), RuntimeError> {
     let jobs = renders.list()?;
     emit(tx, queue_event(shared, &jobs));
@@ -341,7 +341,7 @@ pub(crate) fn queue_event(shared: &Shared, jobs: &[RenderJob]) -> Event {
 /// The render thread: take the oldest queued job, render it, report it,
 /// and wait for the next. Once the bridge closes, what still waits is
 /// cancelled with kerfd, so no job stays queued with nobody to render it.
-pub(crate) fn worker(shared: Arc<Shared>, tx: SyncSender<Event>) {
+pub(crate) fn worker(shared: Arc<Shared>, tx: Outbox) {
     loop {
         let next = {
             let mut state = shared.renders.lock();
@@ -376,7 +376,7 @@ pub(crate) fn worker(shared: Arc<Shared>, tx: SyncSender<Event>) {
 
 /// Render one job: `export {status: running}` with its progress, then
 /// `completed`, `failed` or `cancelled`.
-fn render(shared: &Shared, queued: &Queued, tx: &SyncSender<Event>) {
+fn render(shared: &Shared, queued: &Queued, tx: &Outbox) {
     let job = &queued.job;
     emit(
         tx,
@@ -456,7 +456,7 @@ fn render(shared: &Shared, queued: &Queued, tx: &SyncSender<Event>) {
 pub(crate) mod tests {
     use super::*;
     use serde_json::{json, Value};
-    use std::sync::mpsc::{self, Receiver};
+    use std::sync::mpsc::{self, Receiver, SyncSender};
     use std::time::Duration;
 
     /// kerfd's render jobs in memory: renders finish when the test lets
@@ -621,7 +621,7 @@ pub(crate) mod tests {
     #[test]
     fn cancelling_takes_a_queued_job_out_and_stops_the_running_one() {
         let shared = shared();
-        let (tx, rx) = mpsc::sync_channel(256);
+        let (tx, rx) = crate::wake::outbox(256);
         let (fake, open) = Fake::gated();
         let worker = {
             let (shared, tx) = (shared.clone(), tx.clone());
@@ -686,7 +686,7 @@ pub(crate) mod tests {
     #[test]
     fn refused_exports_queue_nothing() {
         let shared = shared();
-        let (tx, _rx) = mpsc::sync_channel(16);
+        let (tx, _rx) = crate::wake::outbox(16);
         let fake = Arc::new(Fake::default());
         let error = submit(&shared, fake.clone(), &request("nope", None), &tx).unwrap_err();
         assert_eq!(error.code, "INVALID_RENDER_QUALITY");

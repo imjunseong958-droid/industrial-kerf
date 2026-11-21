@@ -413,3 +413,30 @@ pub fn shimmer_at(phase: f32, cross: f32) -> Option<f32> {
 pub fn animation(scene: Duration) -> gpui::Animation {
     gpui::Animation::new(duration(scene).max(Duration::from_millis(1))).with_easing(ease)
 }
+
+/// A view drawn again by itself at the moment something it draws from the
+/// clock changes (an age such as "4 min ago" turning over, a hold running
+/// out), as the window draws only when something changes: one timer, for the
+/// soonest moment asked for. A view asks each time it draws such a thing;
+/// asking for a later moment keeps the sooner one.
+#[derive(Default)]
+pub struct Redraw(std::cell::RefCell<Option<(Instant, gpui::Task<()>)>>);
+
+impl Redraw {
+    /// Draws the view of `cx` again at `at`, unless it is to be sooner.
+    pub fn at<V: 'static>(&self, at: Instant, cx: &gpui::Context<V>) {
+        let mut due = self.0.borrow_mut();
+        if due
+            .as_ref()
+            .is_some_and(|(due, _)| *due > Instant::now() && *due <= at)
+        {
+            return;
+        }
+        let timer = cx.spawn(async move |view, cx| {
+            let wait = at.saturating_duration_since(Instant::now());
+            cx.background_executor().timer(wait).await;
+            let _ = view.update(cx, |_, cx| cx.notify());
+        });
+        *due = Some((at, timer));
+    }
+}

@@ -60,6 +60,7 @@ license = "MIT"
 # takes it with `x.workspace = true` and names its own features.
 [workspace.dependencies]
 anyhow = "1"
+async-channel = "2"
 base64 = "0.23"
 clap = "4"
 ffmpeg-next = { version = "9.0", default-features = false }

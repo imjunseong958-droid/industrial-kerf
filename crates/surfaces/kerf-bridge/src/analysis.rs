@@ -24,6 +24,7 @@ use crate::event::{
     ErrorEvent, Event, IndexRange, LoudnessEvent, LoudnessReady, MediaIndexEvent, MediaInfo,
     SignalStatus,
 };
+use crate::wake::Outbox;
 use crate::{emit, Shared};
 use kerf_engine::derivatives::DerivativeCache;
 use kerf_engine::{CancellationToken, EngineError, MediaIndex};
@@ -31,7 +32,6 @@ use kerf_model::Project;
 use kerf_runtime::RuntimeClient;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
-use std::sync::mpsc::SyncSender;
 use std::sync::{Arc, Mutex};
 
 /// The analysis state the bridge's workers share.
@@ -101,12 +101,7 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 const SIGNAL_WIDTH: f64 = 480.0;
 
 /// `scope_signal {time, sequence?}`.
-pub(crate) fn scope_signal(
-    shared: Arc<Shared>,
-    tx: SyncSender<Event>,
-    time: f64,
-    sequence: Option<String>,
-) {
+pub(crate) fn scope_signal(shared: Arc<Shared>, tx: Outbox, time: f64, sequence: Option<String>) {
     {
         let mut state = lock(&shared.analysis.signal);
         if state.busy {
@@ -146,7 +141,7 @@ fn signal_curve(project: &Project, sequence: Option<&str>) -> Option<u32> {
     }
 }
 
-fn draw_signal(shared: &Shared, tx: &SyncSender<Event>, time: f64, sequence: Option<&str>) {
+fn draw_signal(shared: &Shared, tx: &Outbox, time: f64, sequence: Option<&str>) {
     let Some(project) = lock(&shared.model).clone() else {
         return;
     };
@@ -201,13 +196,14 @@ fn draw_signal(shared: &Shared, tx: &SyncSender<Event>, time: f64, sequence: Opt
         time,
         curve,
     });
+    tx.ring();
     lock(&shared.analysis.signal).drawing = Some(drawing);
 }
 
 // ---------------------------------------------------------------- loudness
 
 /// `loudness {sequence?}`.
-pub(crate) fn loudness(shared: Arc<Shared>, tx: SyncSender<Event>, sequence: Option<String>) {
+pub(crate) fn loudness(shared: Arc<Shared>, tx: Outbox, sequence: Option<String>) {
     {
         let mut state = lock(&shared.analysis.loudness);
         if state.busy {
@@ -237,7 +233,7 @@ pub(crate) fn loudness(shared: Arc<Shared>, tx: SyncSender<Event>, sequence: Opt
 
 /// Measure the project kerfd has now, or answer with the measurement kept
 /// for its revision.
-fn measure(shared: &Shared, tx: &SyncSender<Event>, sequence: Option<&str>) -> Event {
+fn measure(shared: &Shared, tx: &Outbox, sequence: Option<&str>) -> Event {
     let failed = |message: &str, revision: Option<u64>| {
         Event::Loudness(LoudnessEvent::Failed {
             message: message.to_owned(),
@@ -335,7 +331,7 @@ fn probe(path: &str) -> Result<MediaInfo, String> {
 /// `media_info {media?}`: every media of the project, or the one asked
 /// for. Files that cannot be read are named in `errors`; the one media asked
 /// for that cannot be read is an `error {command: media_info, media}`.
-pub(crate) fn media_info(shared: Arc<Shared>, tx: SyncSender<Event>, media: Option<String>) {
+pub(crate) fn media_info(shared: Arc<Shared>, tx: Outbox, media: Option<String>) {
     std::thread::spawn(move || {
         let refuse = |message: &str| {
             emit(
@@ -394,7 +390,7 @@ pub(crate) fn media_info(shared: Arc<Shared>, tx: SyncSender<Event>, media: Opti
 /// name), and send what they say as `media_info`. Files that cannot be
 /// read now (offline, not downloaded) are tried again with the next
 /// change.
-pub(crate) fn media_changed(shared: &Arc<Shared>, tx: &SyncSender<Event>, project: &Project) {
+pub(crate) fn media_changed(shared: &Arc<Shared>, tx: &Outbox, project: &Project) {
     let fresh: Vec<(String, String)> = {
         let probed = lock(&shared.analysis.probed);
         project
@@ -476,7 +472,7 @@ pub(crate) fn index_event(media: &str, duration: f64, index: &MediaIndex) -> Eve
 
 /// `media_index {media}`: from the project's cache, else made now. A
 /// refusal is `error {command: media_index, media, message}`.
-pub(crate) fn media_index(shared: Arc<Shared>, tx: SyncSender<Event>, media: String) {
+pub(crate) fn media_index(shared: Arc<Shared>, tx: Outbox, media: String) {
     if !lock(&shared.analysis.indexing).insert(media.clone()) {
         // The one running answers.
         return;

@@ -4,6 +4,7 @@
 //! not carried by the project's repository.
 
 use crate::event::{CastToMake, ErrorEvent, Event, MediaMakePlan};
+use crate::wake::Outbox;
 use crate::{emit, Command, Shared};
 use kerf_collab::git::is_lfs_pointer;
 use kerf_collab::media::{absolute, external, relative_to};
@@ -27,7 +28,7 @@ pub(crate) fn copy_then(
     shared: &Arc<Shared>,
     path: &str,
     commands: &SyncSender<Command>,
-    tx: &SyncSender<Event>,
+    tx: &Outbox,
     probe: impl FnOnce(&Path) -> Result<(), String> + Send + 'static,
     then: impl FnOnce(String) -> Command + Send + 'static,
 ) {
@@ -68,7 +69,7 @@ pub(crate) fn make(
     confirmed: bool,
     rolls: u32,
     commands: &SyncSender<Command>,
-    tx: &SyncSender<Event>,
+    tx: &Outbox,
 ) {
     let directory = shared.directory.as_path();
     let planned = client
@@ -219,7 +220,7 @@ pub(crate) fn cast(
     shared: &Arc<Shared>,
     client: &kerf_runtime::RuntimeClient,
     set: Option<Vec<CastEntry>>,
-    tx: &SyncSender<Event>,
+    tx: &Outbox,
 ) {
     use kerf_engine::recipe::cast::{Cast, Entry, Kind};
     let directory = shared.directory.as_path();
@@ -304,7 +305,7 @@ pub(crate) fn cast(
 /// Who shows the makings an agent's session runs on its own, where the person lets it: the
 /// events a person's making sends, so the toolbar says what is being made and the bin can
 /// stop it. The session's router places the take itself, so nothing is replaced here.
-pub(crate) fn agent_makings(shared: Arc<Shared>, tx: SyncSender<Event>) -> kerf_mcp::MakingWatcher {
+pub(crate) fn agent_makings(shared: Arc<Shared>, tx: Outbox) -> kerf_mcp::MakingWatcher {
     use kerf_mcp::MakingEvent;
     let ended = |shared: &Shared, media: &str| {
         if let Ok(mut makings) = shared.makings.lock() {
@@ -346,7 +347,7 @@ fn making(id: &str, take: u32, line: &str) -> Event {
 
 /// A making of media `id` that did not end with a take: an `error` that names the media,
 /// so that what shows it being made stops.
-fn make_failed(tx: &SyncSender<Event>, id: &str, why: impl std::fmt::Display) {
+fn make_failed(tx: &Outbox, id: &str, why: impl std::fmt::Display) {
     crate::emit(
         tx,
         Event::Error(ErrorEvent {
@@ -364,7 +365,7 @@ fn make_failed(tx: &SyncSender<Event>, id: &str, why: impl std::fmt::Display) {
 /// the media. Each says what it is doing in the project's folder
 /// (`kerf_engine::recipe::told`); the ones `this_program` runs show by themselves. One that
 /// ended before it was ever shown is not news.
-pub(crate) fn follow_others_makings(shared: &Shared, this_program: u32, tx: &SyncSender<Event>) {
+pub(crate) fn follow_others_makings(shared: &Shared, this_program: u32, tx: &Outbox) {
     use kerf_engine::recipe::Going;
     let told: Vec<kerf_engine::recipe::Told> = kerf_engine::recipe::told(&shared.directory)
         .into_iter()
@@ -423,7 +424,7 @@ pub(crate) fn follow_others_makings(shared: &Shared, this_program: u32, tx: &Syn
 /// `media_make_cancelled` once it has. One another program is making is asked through the
 /// project's folder, and shows as stopped when that program says it has. One that is not
 /// being made is an `error`.
-pub(crate) fn cancel_make(shared: &Shared, id: &str, tx: &SyncSender<Event>) {
+pub(crate) fn cancel_make(shared: &Shared, id: &str, tx: &Outbox) {
     let running = shared
         .makings
         .lock()
@@ -502,7 +503,7 @@ pub(crate) fn status(project: &Project, directory: &Path) -> MediaStatus {
 
 /// Emit `media_status` for `project` when it differs from the last one the
 /// bridge emitted.
-pub(crate) fn publish_status(shared: &Shared, tx: &SyncSender<Event>, project: &Project) {
+pub(crate) fn publish_status(shared: &Shared, tx: &Outbox, project: &Project) {
     let status = status(project, &shared.directory);
     let Ok(mut last) = shared.media_status.lock() else {
         return;
@@ -640,7 +641,7 @@ mod tests {
         let source = root.path().join("notes.txt");
         fs::write(&source, b"my secret notes").unwrap();
         let (commands, imports) = mpsc::sync_channel(1);
-        let (tx, events) = mpsc::sync_channel(4);
+        let (tx, events) = crate::wake::outbox(4);
         copy_then(
             &shared,
             &source.to_string_lossy(),

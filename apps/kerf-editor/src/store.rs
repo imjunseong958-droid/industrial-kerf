@@ -493,6 +493,9 @@ pub struct EditorState {
     pub picture_status: String,
     /// How many notices there have been.
     noticed: u64,
+    /// Rung as a notice is said, from wherever it is said, so the window
+    /// draws it at once (the session's pump; none without a project).
+    pub wake: Option<kerf_bridge::Wake>,
     /// The notice each kind of line last left ([`StatusLine`]): the next of
     /// its kind takes its place, as a line of Qt's status bar took the
     /// last one's.
@@ -568,6 +571,33 @@ impl EditorState {
     }
 
     /// Folds one bridge event into the state.
+    /// Whether `event` would leave this state as it is: a clock, a caption
+    /// or a meter reading the same as the last ([`EditorState::apply`]).
+    /// Any other event may change it.
+    pub fn leaves_as_is(&self, event: &Event) -> bool {
+        let same = |a: f64, b: f64| a.to_bits() == b.to_bits();
+        match event {
+            Event::Clock {
+                position,
+                duration,
+                dropped,
+            } => {
+                same(self.position, *position)
+                    && same(self.duration, *duration)
+                    && self.dropped == *dropped
+            }
+            Event::Caption { text } => {
+                let gone = matches!(self.connection, Connection::Failed(_));
+                self.caption == if gone { "" } else { text.as_str() }
+            }
+            Event::Meter(reading) => match (self.meter, reading.peak) {
+                (Some(a), Some(b)) => a.iter().zip(b).all(|(a, b)| same(*a, b)),
+                (a, b) => a.is_none() && b.is_none(),
+            },
+            _ => false,
+        }
+    }
+
     pub fn apply(&mut self, event: &Event) -> Change {
         match event {
             Event::State { snapshot } => {
@@ -1312,6 +1342,28 @@ impl EditorState {
         if self.notices.len() > 4 {
             self.notices.remove(0);
         }
+        if let Some(wake) = &self.wake {
+            wake.ring();
+        }
+    }
+
+    /// How many notices there have been: more than when the window last
+    /// drew, and there is a new one to draw.
+    pub fn noticed(&self) -> u64 {
+        self.noticed
+    }
+
+    /// When the clock of a making that runs ("Making take 2 · 0:41") next
+    /// says another second, after `now`; None while none runs.
+    pub fn making_second(&self, now: Instant) -> Option<Instant> {
+        self.makings
+            .iter()
+            .filter(|(id, _)| matches!(self.media_activity(id), MediaActivity::Making { .. }))
+            .map(|(_, making)| {
+                let elapsed = now.saturating_duration_since(making.since).as_secs();
+                making.since + Duration::from_secs(elapsed + 1)
+            })
+            .min()
     }
 
     /// Drops notices that have been said for `hold`, and errors for
@@ -1323,6 +1375,15 @@ impl EditorState {
         self.notices
             .retain(|notice| notice.at.elapsed() < notice.held_for(hold, error_hold));
         before != self.notices.len()
+    }
+
+    /// When the first notice still shown goes, as [`EditorState::expire_notices`]
+    /// lets them go with `hold` and `error_hold`; None with none shown.
+    pub fn notices_due(&self, hold: Duration, error_hold: Duration) -> Option<Instant> {
+        self.notices
+            .iter()
+            .map(|notice| notice.at + notice.held_for(hold, error_hold))
+            .min()
     }
 
     /// Whether anything renders: a preview or a job in the queue.

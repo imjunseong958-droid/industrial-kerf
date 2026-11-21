@@ -11,13 +11,13 @@
 
 use crate::emit;
 use crate::event::{CaptionsExport, ErrorEvent, Event, Export, ExportStatus};
+use crate::wake::Outbox;
 use kerf_model::{Project, Sequence};
 use kerf_runtime::{RenderJob, RuntimeClient, RuntimeError};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::SyncSender;
 
 /// The folder paperwork goes in when no master was rendered yet.
 pub(crate) const DELIVERIES: &str = "deliveries";
@@ -42,7 +42,7 @@ pub struct CaptionsRequest {
 
 /// A paperwork export that failed: `export {status: failed, kind, format,
 /// message}`, and the error naming the command.
-fn failed(tx: &SyncSender<Event>, command: &str, kind: &str, format: &str, message: &str) {
+fn failed(tx: &Outbox, command: &str, kind: &str, format: &str, message: &str) {
     emit(
         tx,
         Event::Export(Export::Captions(CaptionsExport {
@@ -212,7 +212,7 @@ pub(crate) fn export_captions(
     client: &RuntimeClient,
     directory: &Path,
     request: &CaptionsRequest,
-    tx: &SyncSender<Event>,
+    tx: &Outbox,
 ) -> Result<(), RuntimeError> {
     let format = request.format.as_str();
     let project = project(client)?;

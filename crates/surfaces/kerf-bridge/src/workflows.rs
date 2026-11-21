@@ -25,6 +25,7 @@
 //! of, so a late answer cannot bring back what the edit changed.
 
 use crate::event::{ErrorEvent, Event};
+use crate::wake::Outbox;
 use crate::Shared;
 use kerf_engine::recipe::model::Models;
 use kerf_model::Project;
@@ -32,7 +33,6 @@ use kerf_shots::workflow::{self, Set};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
-use std::sync::mpsc::SyncSender;
 use std::sync::{Arc, Mutex, PoisonError};
 
 /// The `workflow` event last said of each step, by its media and its line: what the editor
@@ -51,7 +51,7 @@ fn step_of(event: &Value) -> (String, usize) {
 impl Said {
     /// Say `event`, a `workflow` event, and keep it as what the editor shows of its step.
     /// Kept and sent under one lock, so what is kept is what was sent last.
-    pub(crate) fn say(&self, tx: &SyncSender<Event>, event: Value) {
+    pub(crate) fn say(&self, tx: &Outbox, event: Value) {
         let mut said = self.0.lock().unwrap_or_else(PoisonError::into_inner);
         said.insert(step_of(&event), event.clone());
         crate::emit(tx, workflow_event(event));
@@ -61,7 +61,7 @@ impl Said {
     /// is known. An edit may have said the workflow again meanwhile: it is said of the
     /// workflow as last said, whose text is the newer, and not of the text it was asked of.
     /// Nothing is said when what was last said has it already, or is of another model.
-    pub(crate) fn late(&self, tx: &SyncSender<Event>, own: Value, asked: Result<Value, String>) {
+    pub(crate) fn late(&self, tx: &Outbox, own: Value, asked: Result<Value, String>) {
         let mut said = self.0.lock().unwrap_or_else(PoisonError::into_inner);
         let step = step_of(&own);
         let mut event = match said.get(&step) {
@@ -138,7 +138,7 @@ fn project(client: &kerf_runtime::RuntimeClient) -> Result<Project, String> {
         .map_err(|error| error.message)
 }
 
-fn failed(tx: &SyncSender<Event>, id: &str, why: String) {
+fn failed(tx: &Outbox, id: &str, why: String) {
     crate::emit(
         tx,
         Event::Error(ErrorEvent {
@@ -156,7 +156,7 @@ pub(crate) fn get(
     client: &kerf_runtime::RuntimeClient,
     id: &str,
     line: usize,
-    tx: &SyncSender<Event>,
+    tx: &Outbox,
 ) {
     let said = Models::load()
         .map_err(|error| error.to_string())
@@ -186,7 +186,7 @@ fn ask_taken(
     client: &kerf_runtime::RuntimeClient,
     id: &str,
     line: usize,
-    tx: &SyncSender<Event>,
+    tx: &Outbox,
 ) {
     let Ok(project) = project(client) else {
         return;
@@ -215,7 +215,7 @@ pub(crate) fn edit(
     shared: &Shared,
     client: &kerf_runtime::RuntimeClient,
     edit: &Edit,
-    tx: &SyncSender<Event>,
+    tx: &Outbox,
 ) {
     let models = match Models::load() {
         Ok(models) => models,
@@ -274,7 +274,7 @@ mod tests {
     use super::Said;
     use crate::event::Event;
     use serde_json::{json, Value};
-    use std::sync::mpsc::{sync_channel, Receiver};
+    use std::sync::mpsc::Receiver;
 
     fn shown(text: &str) -> Value {
         json!({"type": "workflow", "media": "m1", "line": 2, "model": "flux", "name": "flux",
@@ -294,7 +294,7 @@ mod tests {
 
     #[test]
     fn what_the_server_takes_comes_late_on_the_workflow_an_edit_said_meanwhile() {
-        let (tx, rx) = sync_channel(16);
+        let (tx, rx) = crate::wake::outbox(16);
         let said = Said::default();
         // Opened, and asked what the server takes; then a value is set before it answers.
         said.say(&tx, shown("old"));

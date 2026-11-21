@@ -4,18 +4,18 @@
 //! editor's Preflight as rows and findings.
 
 use crate::event::{Check, ErrorEvent, Event};
+use crate::wake::Outbox;
 use crate::{emit, Shared};
 use kerf_engine::{CancellationToken, EngineError};
 use kerf_mcp::{CheckReport, QcLimits, FULL_ROWS};
 use kerf_runtime::{RuntimeClient, RuntimeError};
 use std::sync::atomic::Ordering;
-use std::sync::mpsc::SyncSender;
 use std::sync::Arc;
 
 /// Run the check on its own thread, one at a time: `check {status:
 /// "running", progress}` as it goes, then `done` or `failed`. Closing the
 /// bridge cancels it.
-pub(crate) fn spawn(shared: Arc<Shared>, tx: SyncSender<Event>, sequence: Option<String>) {
+pub(crate) fn spawn(shared: Arc<Shared>, tx: Outbox, sequence: Option<String>) {
     if shared.check_busy.swap(true, Ordering::SeqCst) {
         // Said from a thread of its own: the caller's empties the event queue.
         std::thread::spawn(move || {
@@ -80,7 +80,7 @@ fn failed(sequence: Option<&str>, message: &str) -> Event {
 fn run(
     client: &RuntimeClient,
     shared: &Shared,
-    tx: &SyncSender<Event>,
+    tx: &Outbox,
     sequence: Option<&str>,
     cancel: &CancellationToken,
 ) -> Result<Event, RuntimeError> {

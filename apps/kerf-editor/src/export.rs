@@ -308,7 +308,7 @@ type PreflightPress = Box<dyn Fn(&mut ExportView, &mut Window, &mut Context<Expo
 impl ExportView {
     pub fn new(session: Entity<Session>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         bind_close(cx);
-        // Only what the queue and the checks say is drawn again, not every poll.
+        // Only what the queue and the checks say is drawn again, not every event.
         let subscriptions = vec![
             cx.subscribe(&session, |_, _, change: &Change, cx| {
                 if matches!(change, Change::Renders | Change::Connection) {
@@ -316,7 +316,7 @@ impl ExportView {
                 }
             }),
             cx.subscribe(&session, |_, _, event: &BridgeEvent, cx| {
-                if matches!(event.0, Event::Check(_)) {
+                if matches!(*event.0, Event::Check(_)) {
                     cx.notify();
                 }
             }),

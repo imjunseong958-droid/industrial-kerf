@@ -2053,6 +2053,45 @@ proptest! {
             prop_assert!(state.agent_clips.is_empty());
         }
     }
+
+    /// A clock, caption or meter reading leaves the state as it is exactly
+    /// when folding it in changes nothing it sets; anything else may change it.
+    #[test]
+    fn a_reading_leaves_the_state_as_it_is_only_when_it_changes_nothing(
+        kinds in proptest::collection::vec(0usize..5, 1..40),
+        numbers in proptest::collection::vec(prop_oneof![Just(0.0), Just(2.5), -1.0f64..30.0], 40),
+        drops in proptest::collection::vec(0u64..2, 40),
+    ) {
+        let mut state = EditorState::default();
+        let readings = |state: &EditorState| {
+            (
+                state.position.to_bits(),
+                state.duration.to_bits(),
+                state.dropped,
+                state.caption.clone(),
+                state.meter.map(|peak| peak.map(f64::to_bits)),
+            )
+        };
+        for (index, kind) in kinds.iter().enumerate() {
+            let number = numbers[index % numbers.len()];
+            let value = match kind {
+                0 => json!({"type": "clock", "position": number, "duration": 20.0, "dropped": drops[index % drops.len()]}),
+                1 => json!({"type": "caption", "text": if number > 10.0 { "World" } else { "Hello" }}),
+                2 => json!({"type": "meter", "peak": [number, number - 6.0]}),
+                3 => json!({"type": "meter", "peak": null}),
+                _ => json!({"type": "connection", "status": if number > 15.0 { "disconnected" } else { "ready" }}),
+            };
+            let event = event(value);
+            let before = readings(&state);
+            let said = state.leaves_as_is(&event);
+            state.apply(&event);
+            if *kind == 4 {
+                prop_assert!(!said);
+            } else {
+                prop_assert_eq!(said, before == readings(&state));
+            }
+        }
+    }
 }
 
 fn timeline(clips: &[(&str, &str, i64, i64)]) -> kerf_editor::model::Timeline {
