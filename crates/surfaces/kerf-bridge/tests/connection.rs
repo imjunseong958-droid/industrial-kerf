@@ -102,6 +102,7 @@ fn markers(snapshot: &Value) -> Vec<Value> {
 /// once read an audio DLL Windows had unloaded; that was only sometimes
 /// fatal, but it showed every time.
 #[cfg(windows)]
+#[allow(unsafe_code)]
 fn count_access_violations() -> &'static std::sync::atomic::AtomicUsize {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use windows_sys::Win32::Foundation::EXCEPTION_ACCESS_VIOLATION;
@@ -111,6 +112,8 @@ fn count_access_violations() -> &'static std::sync::atomic::AtomicUsize {
 
     static VIOLATIONS: AtomicUsize = AtomicUsize::new(0);
 
+    // SAFETY: unsafe because it dereferences `info`; only Windows calls it, as a
+    // vectored exception handler, with live exception pointers.
     unsafe extern "system" fn count(info: *mut EXCEPTION_POINTERS) -> i32 {
         // SAFETY: Windows passes a live exception record for this call.
         let record = unsafe { &*(*info).ExceptionRecord };

@@ -16,6 +16,5 @@ kerf-lang = { path = "../../foundation/kerf-lang" }
 roxmltree = "0.21"
 tempfile = "3"
 
-# Empty on purpose: this crate does not take the workspace's lints. The root
-# Cargo.toml says why.
 [lints]
+workspace = true

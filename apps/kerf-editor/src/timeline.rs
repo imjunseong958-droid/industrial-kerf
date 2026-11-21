@@ -1087,6 +1087,8 @@ struct ClipDrag {
 }
 
 impl ClipDrag {
+    // A drag starts from what its press found: the clip, where and when, the tool, the playhead.
+    #[allow(clippy::too_many_arguments)]
     fn new(
         lanes: &Lanes,
         row: usize,
@@ -2383,6 +2385,8 @@ pub fn add_gain_key(
 /// through each key (`at` seconds in, at `pps`) at its value in `values`,
 /// flat to its end at the last; and whether it is keyed (a diamond on each
 /// point but the ends).
+// The band takes its keys, their values and each measure of the clip it crosses.
+#[allow(clippy::too_many_arguments)]
 pub fn band_line(
     keys: &[GainKey],
     values: &[f64],
@@ -2486,6 +2490,8 @@ impl TimelineView {
     }
 
     /// A press on clip `index` of `row`: what the tool and the keys held make of it.
+    // Each argument is a distinct part of the press: its event, which clip, where and when.
+    #[allow(clippy::too_many_arguments)]
     fn press_clip(
         &mut self,
         event: &MouseDownEvent,
@@ -5080,6 +5086,8 @@ fn paint_lanes(
 
 /// By a dragged edge: its new timecode and how far it moved,
 /// "00:00:12:04  +00:00:01:02".
+// Painting takes the window, where the canvas is and each measure it draws with.
+#[allow(clippy::too_many_arguments)]
 fn paint_readout(
     view: &Viewport,
     edge: f64,
@@ -5132,6 +5140,8 @@ fn paint_readout(
 /// says: under it (`over` false), the glow it rises over; over it, the
 /// cover on a clip it does not watch, or the accent's ring round one it
 /// does, where it has risen to (Qt's timeline, while watching changes).
+// Painting takes the window, where the canvas is and each measure it draws with.
+#[allow(clippy::too_many_arguments)]
 fn paint_watched(
     view: &Viewport,
     pen: Pen,
@@ -5218,6 +5228,8 @@ enum Art {
     Wave,
 }
 
+// Painting takes the window, where the canvas is and each measure it draws with.
+#[allow(clippy::too_many_arguments)]
 fn paint_clip(
     frame: &Frame,
     pen: Pen,
@@ -5463,6 +5475,8 @@ fn paint_clip(
 /// has effects. Over a filmstrip it stands on a dark bar; over a waveform
 /// it is shadowed; a caption's is in its middle; with nothing under it,
 /// its length goes under it in a tall clip.
+// Painting takes the window, where the canvas is and each measure it draws with.
+#[allow(clippy::too_many_arguments)]
 fn paint_name(
     frame: &Frame,
     pen: Pen,
@@ -5596,6 +5610,8 @@ fn paint_name(
 
 /// What a clip's media is doing, in a pill at its foot: the making's
 /// clock, "Queued", "Not made" (ink2), "Offline" (brick).
+// Painting takes the window, where the canvas is and each measure it draws with.
+#[allow(clippy::too_many_arguments)]
 fn paint_activity(
     activity: &Activity,
     pen: Pen,
@@ -5763,6 +5779,8 @@ fn paint_drawn(
 }
 
 /// Where a dragged clip was.
+// Painting takes the window, where the canvas is and each measure it draws with.
+#[allow(clippy::too_many_arguments)]
 fn outline_clip(
     view: &Viewport,
     pen: Pen,
@@ -5788,6 +5806,8 @@ fn outline_clip(
 }
 
 /// A transition: a small hatched mark over its cut.
+// Painting takes the window, where the canvas is and each measure it draws with.
+#[allow(clippy::too_many_arguments)]
 fn paint_transition(
     view: &Viewport,
     pen: Pen,
@@ -6042,6 +6062,8 @@ fn paint_marks(
 }
 
 /// Kerf's cursor: a line in its blue with its light either side, and its name.
+// Painting takes the window, where the canvas is and each measure it draws with.
+#[allow(clippy::too_many_arguments)]
 fn paint_kerf(
     view: &Viewport,
     time: f64,

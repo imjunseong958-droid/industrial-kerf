@@ -5182,6 +5182,9 @@ fn bind_confirm(cx: &mut App) {
     }
 }
 
+/// What a [`Confirm`] does, once, when what it asks is chosen.
+type ConfirmHandler = Box<dyn FnOnce(&mut Window, &mut App)>;
+
 /// A question over the window, before what cannot be undone or what
 /// changes the window: Cancel, or what it asks. Esc, or a press on the dim
 /// around it, cancels; Enter does the default (Cancel, unless said).
@@ -5194,7 +5197,7 @@ pub struct Confirm {
     danger: bool,
     /// Enter does what it asks rather than cancelling.
     act_by_default: bool,
-    on_confirm: Option<Box<dyn FnOnce(&mut Window, &mut App)>>,
+    on_confirm: Option<ConfirmHandler>,
 }
 
 impl EventEmitter<DismissEvent> for Confirm {}
@@ -5393,6 +5396,9 @@ pub fn sync_params(id: &str, words: &str) -> serde_json::Value {
     }
 }
 
+/// What an [`AskWords`] does, once, with the field's words when it is run.
+type AcceptHandler = Box<dyn FnOnce(&str, &mut App)>;
+
 /// Asks over the window for a line of words a command needs, as Qt's
 /// input dialogs did: its title, what it is for, the field, Cancel and the
 /// button that runs it (not while the field is empty). Esc or a press on
@@ -5401,7 +5407,7 @@ pub struct AskWords {
     focus_handle: FocusHandle,
     asked: WordsAsked,
     field: Entity<TextInput>,
-    on_accept: Option<Box<dyn FnOnce(&str, &mut App)>>,
+    on_accept: Option<AcceptHandler>,
     _subscription: Subscription,
 }
 

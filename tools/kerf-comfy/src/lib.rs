@@ -148,6 +148,8 @@ fn stopped_within(stop: &AtomicBool, pause: Duration) -> bool {
 /// sent is kept. Each thing worth telling goes to `say` as a line. `stop`
 /// is set when this program is asked to end: a job queued by then is taken
 /// back from the server, and nothing is queued after.
+// Each argument is a distinct thing one run needs, and none of them belong together.
+#[allow(clippy::too_many_arguments)]
 pub fn make(
     request: &Request,
     work: &Path,

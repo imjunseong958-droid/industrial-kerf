@@ -1125,6 +1125,8 @@ impl RenderOnce for TipZone {
 /// and `on_click` runs on a press of the pointer or the keys. A press of
 /// the pointer leaves the keys where they were. On a control `filled`
 /// with the accent the ring goes round it outside ([`ring_around`]).
+// Each control of the kit gives its own key context, Tab stop, corner, fill and press.
+#[allow(clippy::too_many_arguments)]
 fn keyed(
     element: Stateful<Div>,
     state: &Entity<Control>,
@@ -1597,6 +1599,9 @@ pub fn switch(
     }
 }
 
+/// What pressing a [`Switch`] does, given whether it is to be on.
+type ToggleHandler = Rc<dyn Fn(bool, &mut Window, &mut App)>;
+
 #[derive(IntoElement)]
 pub struct Switch {
     id: SharedString,
@@ -1604,7 +1609,7 @@ pub struct Switch {
     disabled: bool,
     focusable: bool,
     tooltip: Option<SharedString>,
-    toggle: Rc<dyn Fn(bool, &mut Window, &mut App)>,
+    toggle: ToggleHandler,
 }
 
 impl Switch {
@@ -1727,11 +1732,14 @@ pub fn segmented<T: Copy + PartialEq + 'static>(
     }
 }
 
+/// What choosing a segment of a [`Segmented`] does, given its value.
+type ChooseHandler<T> = Rc<dyn Fn(T, &mut Window, &mut App)>;
+
 pub struct Segmented<T> {
     id: SharedString,
     options: Vec<(T, SharedString)>,
     chosen: T,
-    choose: Rc<dyn Fn(T, &mut Window, &mut App)>,
+    choose: ChooseHandler<T>,
     tips: Vec<Option<SharedString>>,
     disabled: Vec<T>,
     focusable: bool,
@@ -1970,6 +1978,9 @@ impl<T: Copy + PartialEq + 'static> RenderOnce for Segmented<T> {
 
 // ---------------------------------------------------------------- menu
 
+/// What choosing a row of a [`Menu`] does ([`MenuItem::on_choose`]).
+type MenuHandler = Rc<dyn Fn(&mut Window, &mut App)>;
+
 /// One row of a [`Menu`]: its words, and what it does chosen; or a
 /// submenu of rows that opens beside it.
 #[derive(Clone)]
@@ -1983,7 +1994,7 @@ pub struct MenuItem {
     separated: bool,
     tip: Option<SharedString>,
     submenu: Vec<MenuItem>,
-    run: Option<Rc<dyn Fn(&mut Window, &mut App)>>,
+    run: Option<MenuHandler>,
 }
 
 impl MenuItem {
@@ -2164,6 +2175,10 @@ static MENU_SERIAL: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUs
 /// chip's: where the project stands).
 type MenuHead = Rc<dyn Fn(&mut Window, &mut App) -> AnyElement>;
 
+/// Where each of a menu's panels (by its level) and each of its rows (by
+/// its level and place) was laid out.
+type MenuLayout = Rc<RefCell<HashMap<(usize, Option<usize>), Bounds<Pixels>>>>;
+
 /// A menu: rows of words to choose from, with keys, submenus and ticks. It
 /// takes the keys as it opens and gives them back as it goes; the arrows
 /// light a row at once, Enter or Space chooses it, a letter goes to the
@@ -2193,7 +2208,7 @@ pub struct Menu {
     panels: Rc<RefCell<Vec<Bounds<Pixels>>>>,
     /// Where each panel and each row (by its level and place) was laid out
     /// the frame before, to know which way a submenu has room to open.
-    laid: Rc<RefCell<HashMap<(usize, Option<usize>), Bounds<Pixels>>>>,
+    laid: MenuLayout,
     closed: bool,
     _letters: Subscription,
 }

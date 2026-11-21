@@ -355,6 +355,8 @@ const COLUMNS_PER_PATH: usize = 2048;
 /// content mask lets it show: the envelope of the extremes in `peak`, the
 /// RMS inside it in `body`, either side of the centre line, at clip gain
 /// `gain` (linear; 1 for none). `to` before `from` draws it reversed.
+// Painting takes the window, the bounds and each measure it draws with.
+#[allow(clippy::too_many_arguments)]
 pub fn paint_waveform(
     window: &mut Window,
     bounds: Bounds<Pixels>,

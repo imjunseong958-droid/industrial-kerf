@@ -258,10 +258,13 @@ fn fill_run(
     here_pixels
 }
 
+/// Fills kept, each with the key it was made for ([`fill_key`]).
+type KeptFills = Vec<(u64, Arc<Vec<[f32; 4]>>)>;
+
 /// What the fills made and may be asked for again, newest last. A still, or
 /// a stretch of identical frames, fills once rather than once a frame: filling
 /// a large area takes over a second.
-static FILLS: Mutex<Vec<(u64, Arc<Vec<[f32; 4]>>)>> = Mutex::new(Vec::new());
+static FILLS: Mutex<KeptFills> = Mutex::new(Vec::new());
 
 /// The most pixels [`FILLS`] keeps: 512 MB of them.
 const MOST_KEPT_PIXELS: usize = 512 << 20 >> 4;

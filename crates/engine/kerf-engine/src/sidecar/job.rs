@@ -1,6 +1,9 @@
 //! Windows job objects: a sidecar and whatever it starts end together, when
 //! it is cancelled and when the process that ran it ends, however it ends.
 
+// Job objects are reachable only through Win32 FFI, and this module is mostly those calls.
+#![allow(unsafe_code)]
+
 use std::io;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::process::Child;

@@ -506,11 +506,11 @@ pub fn preflight_rows(summary: &Value, least: usize, most: usize) -> Vec<Preflig
         .filter(|index| !passed(&rows[*index]))
         .take(most)
         .collect();
-    for index in 0..rows.len() {
+    for (index, row) in rows.iter().enumerate() {
         if chosen.len() >= least {
             break;
         }
-        if passed(&rows[index]) && !chosen.contains(&index) {
+        if passed(row) && !chosen.contains(&index) {
             chosen.push(index);
         }
     }

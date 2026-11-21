@@ -304,6 +304,9 @@ pub fn selectable(
     }
 }
 
+/// What a press on one of a piece's links does, given the link's number.
+type LinkHandler = Rc<dyn Fn(usize, &mut Window, &mut App)>;
+
 pub struct Selectable {
     id: ElementId,
     run: SharedString,
@@ -312,7 +315,7 @@ pub struct Selectable {
     words: SharedString,
     text: StyledText,
     links: Vec<Range<usize>>,
-    on_link: Option<Rc<dyn Fn(usize, &mut Window, &mut App)>>,
+    on_link: Option<LinkHandler>,
     shared: Shared,
 }
 

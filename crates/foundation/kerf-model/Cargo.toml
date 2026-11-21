@@ -8,6 +8,5 @@ description = "Exact-time editing kernel for Kerf: model, catalog, validation, a
 [dependencies]
 kerf-color = { path = "../kerf-color" }
 
-# Empty on purpose: this crate does not take the workspace's lints. The root
-# Cargo.toml says why.
 [lints]
+workspace = true

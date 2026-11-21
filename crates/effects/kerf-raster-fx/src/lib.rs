@@ -14,6 +14,8 @@
     clippy::todo,
     clippy::unreachable
 )]
+// Carried from EffectCraft, whose pixel loops index several buffers by position.
+#![allow(clippy::needless_range_loop)]
 
 mod blur2;
 mod blur3;

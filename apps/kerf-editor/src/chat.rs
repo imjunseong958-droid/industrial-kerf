@@ -2443,6 +2443,8 @@ impl ChatView {
 
     // ------------------------------------------------------------ turns
 
+    // Every turn reads the turns, proposals, holders and pin the view gathers once.
+    #[allow(clippy::too_many_arguments)]
     fn turn(
         &self,
         index: usize,

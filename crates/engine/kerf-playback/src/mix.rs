@@ -334,6 +334,7 @@ impl Source {
         // As FFmpeg's `-ss` reads it: the source time past the file's own
         // start, in microseconds.
         // SAFETY: `input` owns a valid, opened format context.
+        #[allow(unsafe_code)]
         let first = unsafe { (*input.as_ptr()).start_time };
         let start = micros(cut.source.0)
             + if first == ffmpeg::ffi::AV_NOPTS_VALUE {

@@ -46,10 +46,13 @@ fn scene(camera: Value, rig: Value, props: Value, size: Pt, fit: bool, canvas: P
     })
 }
 
-/// The Qt editor's table, which the compositor is held to: a camera, a
-/// parent, a clip, its picture's size and whether it is fitted, the canvas;
-/// a point of the picture and where on the canvas it lands, or none.
-fn table() -> Vec<(Value, Value, Value, Pt, bool, Pt, Pt, Option<Pt>)> {
+/// One row of [`table`]: a camera, a parent, a clip, its picture's size and
+/// whether it is fitted, the canvas; a point of the picture and where on the
+/// canvas it lands, or none.
+type TableRow = (Value, Value, Value, Pt, bool, Pt, Pt, Option<Pt>);
+
+/// The Qt editor's table, which the compositor is held to.
+fn table() -> Vec<TableRow> {
     let wide = (1920.0, 1080.0);
     let path = "0,0 0.2,0.3 0.5,-0.1";
     vec![

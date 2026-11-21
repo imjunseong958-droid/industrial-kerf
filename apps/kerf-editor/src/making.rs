@@ -3292,6 +3292,10 @@ struct EdgeLine {
     dashed: bool,
 }
 
+/// Where an edge leaves and where it arrives, in the view, and its color:
+/// the rings drawn there over the cards' edges.
+type EdgeEnds = ((f32, f32), (f32, f32), Rgba);
+
 /// A shot's graph, over the window: its steps and what they read, wired
 /// left to right on a dotted canvas, a chosen node's settings at the right,
 /// and its making and takes. A model run with kerf-comfy opens into its
@@ -5218,7 +5222,7 @@ impl ShotGraph {
             })
             .collect();
         // Where each edge leaves and arrives, over the cards' edges.
-        let ends: Vec<((f32, f32), (f32, f32), Rgba)> = graph
+        let ends: Vec<EdgeEnds> = graph
             .edges
             .iter()
             .filter_map(|edge| {

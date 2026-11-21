@@ -32,6 +32,5 @@ kerf-lang = { path = "../../foundation/kerf-lang" }
 kerf-model = { path = "../../foundation/kerf-model" }
 tempfile = "3"
 
-# Empty on purpose: this crate does not take the workspace's lints. The root
-# Cargo.toml says why.
 [lints]
+workspace = true

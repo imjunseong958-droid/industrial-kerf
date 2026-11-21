@@ -203,9 +203,10 @@ fn user_runtime_directory() -> PathBuf {
 }
 
 #[cfg(all(unix, not(target_os = "macos")))]
+#[allow(unsafe_code)]
 fn current_user_id() -> Option<u32> {
-    // `geteuid` has no Rust wrapper on the supported Unix targets and does not
-    // dereference pointers or depend on process-owned state.
+    // SAFETY: `geteuid` has no Rust wrapper on the supported Unix targets and
+    // does not dereference pointers or depend on process-owned state.
     Some(unsafe { libc::geteuid() })
 }
 
@@ -1818,8 +1819,9 @@ fn wait_for_connection(listener: &UnixListener, timeout: Duration) -> Result<boo
         revents: 0,
     };
     let timeout = libc::c_int::try_from(timeout.as_millis()).unwrap_or(libc::c_int::MAX);
-    // The single `pollfd` is valid for this synchronous call, and the socket
-    // descriptor is borrowed from `listener`.
+    #[allow(unsafe_code)]
+    // SAFETY: the single `pollfd` is valid for this synchronous call, and the
+    // socket descriptor is borrowed from `listener`.
     let ready = unsafe { libc::poll(&mut descriptor, 1, timeout) };
     if ready < 0 {
         let error = std::io::Error::last_os_error();
@@ -2057,6 +2059,7 @@ fn write_ipc_response<W: Write>(
 }
 
 #[cfg(unix)]
+#[allow(unsafe_code)]
 fn verify_unix_peer(stream: &UnixStream) -> Result<(), RuntimeError> {
     #[cfg(target_os = "linux")]
     {
@@ -2066,8 +2069,8 @@ fn verify_unix_peer(stream: &UnixStream) -> Result<(), RuntimeError> {
             gid: 0,
         };
         let mut length = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
-        // The buffer and length are valid for this synchronous libc call, and
-        // the socket descriptor is borrowed from `stream`.
+        // SAFETY: the buffer and length are valid for this synchronous libc
+        // call, and the socket descriptor is borrowed from `stream`.
         let result = unsafe {
             libc::getsockopt(
                 stream.as_raw_fd(),
@@ -2080,7 +2083,7 @@ fn verify_unix_peer(stream: &UnixStream) -> Result<(), RuntimeError> {
         if result != 0 {
             return Err(ipc_error(std::io::Error::last_os_error()));
         }
-        // `geteuid` is a side-effect-free libc query with no pointer argument.
+        // SAFETY: `geteuid` is a side-effect-free libc query with no pointer argument.
         if credentials.uid != unsafe { libc::geteuid() } {
             return Err(RuntimeError::new(
                 "IPC_UNAUTHORIZED_PEER",
@@ -2093,14 +2096,14 @@ fn verify_unix_peer(stream: &UnixStream) -> Result<(), RuntimeError> {
     {
         let mut effective_uid = 0;
         let mut effective_gid = 0;
-        // `getpeereid` writes only to the two local uid/gid values and uses the
-        // borrowed socket descriptor for the duration of this call.
+        // SAFETY: `getpeereid` writes only to the two local uid/gid values and
+        // uses the borrowed socket descriptor for the duration of this call.
         let result =
             unsafe { libc::getpeereid(stream.as_raw_fd(), &mut effective_uid, &mut effective_gid) };
         if result != 0 {
             return Err(ipc_error(std::io::Error::last_os_error()));
         }
-        // `geteuid` is a side-effect-free libc query with no pointer argument.
+        // SAFETY: `geteuid` is a side-effect-free libc query with no pointer argument.
         if effective_uid != unsafe { libc::geteuid() } {
             return Err(RuntimeError::new(
                 "IPC_UNAUTHORIZED_PEER",

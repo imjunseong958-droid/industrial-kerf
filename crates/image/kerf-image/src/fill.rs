@@ -15,6 +15,13 @@
 //!   al. 2019 and Huang et al. 2016): each missing pixel follows the optical flow, completed inside
 //!   the hole from the motion around it, to a frame where that point of the scene shows.
 
+// Carried from EffectCraft: loops index by position, tracing takes many inputs, matches nest types.
+#![allow(
+    clippy::needless_range_loop,
+    clippy::too_many_arguments,
+    clippy::type_complexity
+)]
+
 use kerf_raster::flow::{block_flow, Flow};
 use kerf_raster::Image;
 use rayon::prelude::*;

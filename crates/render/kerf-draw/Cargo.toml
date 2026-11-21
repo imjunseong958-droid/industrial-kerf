@@ -13,6 +13,5 @@ kerf-geom = { path = "../../foundation/kerf-geom" }
 kerf-text = { path = "../../foundation/kerf-text" }
 rayon = "1"
 
-# Empty on purpose: this crate does not take the workspace's lints. The root
-# Cargo.toml says why.
 [lints]
+workspace = true

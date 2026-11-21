@@ -295,6 +295,9 @@ pub struct ExportView {
 
 impl EventEmitter<ExportEvent> for ExportView {}
 
+/// What a press on a Preflight row does (Run QC, or Ask Kerf).
+type PreflightPress = Box<dyn Fn(&mut ExportView, &mut Window, &mut Context<ExportView>)>;
+
 impl ExportView {
     pub fn new(session: Entity<Session>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         bind_close(cx);
@@ -349,6 +352,8 @@ impl ExportView {
     /// One row of the menu: its words, what it makes or why it cannot be
     /// done now, a check where it is the one chosen. `press` runs on a
     /// press while it can be done.
+    // Each argument is a distinct part of the row.
+    #[allow(clippy::too_many_arguments)]
     fn row(
         &self,
         id: impl Into<ElementId>,
@@ -458,6 +463,8 @@ impl ExportView {
 
     /// One row of Preflight: its dot, its words, and at its end what a
     /// passed check allows or, accented, what a press does.
+    // Each argument is a distinct part of the row.
+    #[allow(clippy::too_many_arguments)]
     fn preflight_row(
         &self,
         id: impl Into<ElementId>,
@@ -466,7 +473,7 @@ impl ExportView {
         ink: Rgba,
         aside: Option<(SharedString, bool)>,
         tip: Option<SharedString>,
-        press: Option<Box<dyn Fn(&mut Self, &mut Window, &mut Context<Self>)>>,
+        press: Option<PreflightPress>,
         cx: &Context<Self>,
     ) -> AnyElement {
         let row = div()

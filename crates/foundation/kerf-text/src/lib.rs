@@ -26,6 +26,12 @@
         clippy::unreachable
     )
 )]
+// Carried from FilmCraft: loops index by position, shaping takes many inputs, caches nest types.
+#![allow(
+    clippy::needless_range_loop,
+    clippy::too_many_arguments,
+    clippy::type_complexity
+)]
 
 pub mod color;
 pub mod fonts;

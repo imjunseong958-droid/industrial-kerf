@@ -46,9 +46,12 @@ fn asked(stream: &mut TcpStream) -> (String, Vec<u8>) {
     (line, bytes[end..end + length].to_vec())
 }
 
+/// Each request the server was asked, its line and its body, in the order asked.
+type Requests = Arc<Mutex<Vec<(String, Vec<u8>)>>>;
+
 /// A ComfyUI that queues a job and runs it for as long as it is asked after,
 /// keeping what it was asked.
-fn comfy() -> (String, Arc<Mutex<Vec<(String, Vec<u8>)>>>) {
+fn comfy() -> (String, Requests) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     let kept = Arc::new(Mutex::new(Vec::new()));

@@ -14,6 +14,9 @@
 //! module and offset. After writing, the signal goes on as it would have without the handler, so
 //! the process still dies of it and the system's own crash reporting still sees it.
 
+// Unsafe throughout: a signal handler and an exception filter that call libc and Win32 directly.
+#![allow(unsafe_code)]
+
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::OnceLock;
@@ -435,8 +438,7 @@ mod unix {
         }
     }
 
-    /// # Safety
-    /// From the signal handler, with what the kernel gave it.
+    // SAFETY: call it from the signal handler, with the `info` and `context` the kernel gave it.
     unsafe fn write_report(
         setup: &Setup,
         signal: c_int,
@@ -488,6 +490,8 @@ mod unix {
     }
 
     /// The crash folder and the folders above it, made as `mkdir -p` would.
+    // SAFETY: asks nothing of the caller: `mkdir` is given only NUL-terminated paths in a buffer
+    // on this stack.
     unsafe fn make_folder(setup: &Setup) {
         let folder = setup.folder.as_bytes();
         let mut path = Text::<1024>::new();
@@ -503,6 +507,7 @@ mod unix {
         }
     }
 
+    // SAFETY: `fd` must be a descriptor the caller opened; `write` only reads `bytes`.
     unsafe fn write_all(fd: c_int, mut bytes: &[u8]) {
         while !bytes.is_empty() {
             let written = libc::write(fd, bytes.as_ptr().cast(), bytes.len());
@@ -514,6 +519,8 @@ mod unix {
     }
 
     #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    // SAFETY: `fd` must be a descriptor the caller opened. `backtrace` fills at most the frames
+    // array on this stack, and `backtrace_symbols_fd` reads only the `count` it filled.
     unsafe fn backtrace(fd: c_int, _context: *mut c_void) {
         let mut frames = [std::ptr::null_mut::<c_void>(); 64];
         let count = libc::backtrace(frames.as_mut_ptr(), frames.len() as c_int);
@@ -523,6 +530,9 @@ mod unix {
     /// The interrupted code's frames, from its frame pointer: Apple's ABIs keep one in every
     /// frame, and backtrace() from the alternate stack would find none of them.
     #[cfg(target_vendor = "apple")]
+    // SAFETY: `fd` must be a descriptor the caller opened, and `context` null or the ucontext the
+    // kernel gave the signal handler. The walk trusts the interrupted code's frame pointers past
+    // the checks below; a bad one faults, which is why the report's head is written first.
     unsafe fn backtrace(fd: c_int, context: *mut c_void) {
         let mut frames = [std::ptr::null_mut::<c_void>(); 64];
         let mut count = 0;
@@ -614,6 +624,8 @@ mod unix {
 
     /// The interrupted code's program counter, frame pointer and link register.
     #[cfg(target_vendor = "apple")]
+    // SAFETY: `context` must be the non-null ucontext the kernel gave the signal handler; this
+    // reads its machine context's thread state.
     unsafe fn registers(context: *mut c_void) -> (u64, u64, u64) {
         let state = &(*(*context.cast::<DarwinContext>()).mcontext).thread;
         #[cfg(target_arch = "aarch64")]
@@ -623,6 +635,7 @@ mod unix {
     }
 
     #[cfg(not(any(all(target_os = "linux", target_env = "gnu"), target_vendor = "apple")))]
+    // SAFETY: `fd` must be a descriptor the caller opened, as for `write_all`.
     unsafe fn backtrace(fd: c_int, _context: *mut c_void) {
         write_all(fd, b"(this platform gives none)\n");
     }
@@ -688,6 +701,9 @@ mod windows {
         }
     }
 
+    // SAFETY: only Windows calls this, as the unhandled-exception filter, with `pointers` null or
+    // valid for the call. `PREVIOUS_FILTER` holds 0 or the filter `SetUnhandledExceptionFilter`
+    // returned, so the transmute below gives back the function it was.
     unsafe extern "system" fn on_exception(pointers: *const EXCEPTION_POINTERS) -> i32 {
         if let Some(setup) = SETUP.get() {
             if !pointers.is_null() && !(*pointers).ExceptionRecord.is_null() && first_report(false)
@@ -755,6 +771,8 @@ mod windows {
         }
     }
 
+    // SAFETY: asks nothing of the caller: each buffer it gives Windows is on this stack and
+    // outlives the call, the path NUL-terminated, and the file it opens is closed once.
     unsafe fn write_report(setup: &Setup, location: &dyn Fn(&mut Text<2048>), message: &[u8]) {
         let at_ms = now_ms();
         let mut path = [0u16; 1024];
@@ -815,6 +833,8 @@ mod windows {
     }
 
     /// The crash folder and the folders above it.
+    // SAFETY: asks nothing of the caller: `CreateDirectoryW` is given only NUL-terminated paths in
+    // a buffer on this stack, and the folder has no NUL of its own (`folder_for_handler`).
     unsafe fn make_folder(setup: &Setup) {
         let folder = &setup.folder;
         let mut path = [0u16; 1024];
@@ -832,6 +852,8 @@ mod windows {
     }
 
     /// `kerf-editor.exe+0x1a2b`, or the bare address outside any module.
+    // SAFETY: asks nothing of the caller: `address` is only looked up among the loaded modules,
+    // never read, and `GetModuleFileNameW` is given a buffer on this stack and its length.
     unsafe fn module_and_offset<const N: usize>(text: &mut Text<N>, address: usize) {
         let mut module: HMODULE = std::ptr::null_mut();
         let found = GetModuleHandleExW(
@@ -865,6 +887,8 @@ mod windows {
         text.str("+").hex((address - module as usize) as u64);
     }
 
+    // SAFETY: `file` must be a handle the caller opened for synchronous writes; `WriteFile` only
+    // reads `bytes`.
     unsafe fn write_all(file: windows_sys::Win32::Foundation::HANDLE, mut bytes: &[u8]) {
         while !bytes.is_empty() {
             let mut written = 0u32;

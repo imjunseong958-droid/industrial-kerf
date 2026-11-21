@@ -274,6 +274,7 @@ fn ask_to_end(child: &Child) {
 /// nothing was asked of it there is nothing to wait for.
 fn has_ended(child: &Child) -> bool {
     #[cfg(unix)]
+    #[allow(unsafe_code)]
     {
         // SAFETY: `info` is zeroed, which waitid reads as no child having changed, and is
         // written only by waitid. WNOWAIT leaves the child to be reaped later.
@@ -319,6 +320,7 @@ fn kill(child: &mut Child) {
 /// Send `signal` to the process group `leader` leads. Callers hold the
 /// running lock and have not reaped `leader`, so the group is a sidecar's.
 #[cfg(unix)]
+#[allow(unsafe_code)]
 fn signal_group(leader: u32, signal: libc::c_int) {
     // SAFETY: killpg takes no pointers and has no memory effects here.
     unsafe {
@@ -663,6 +665,7 @@ mod windows_tests {
     }
 
     /// Whether process `pid` ends within `limit`.
+    #[allow(unsafe_code)]
     fn ends_within(pid: u32, limit: Duration) -> bool {
         // SAFETY: opens the process only to wait on it, and closes it.
         unsafe {

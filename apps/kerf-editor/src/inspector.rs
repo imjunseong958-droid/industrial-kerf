@@ -1971,6 +1971,8 @@ impl InspectorView {
     /// The rows of `params` in their groups, a group's head opening or
     /// closing it. A group is open at first when it says so or when any
     /// of its parameters is set.
+    // Each section hands over its own name, parameters and groups, and where they are set.
+    #[allow(clippy::too_many_arguments)]
     fn group_rows(
         &self,
         section: &str,
@@ -2180,6 +2182,8 @@ impl InspectorView {
         ui::tip_on(label, (!tip.is_empty()).then(|| ui::Tip::new(tip))).into_any_element()
     }
 
+    // Each argument is a distinct part of the row: its label, what it sets and the value held.
+    #[allow(clippy::too_many_arguments)]
     fn number_row(
         &self,
         row: gpui::Div,
@@ -2373,6 +2377,8 @@ impl InspectorView {
             .into_any_element()
     }
 
+    // Each argument is a distinct part of the row: its label, what it sets and the value held.
+    #[allow(clippy::too_many_arguments)]
     fn choice_row(
         &self,
         row: gpui::Div,
