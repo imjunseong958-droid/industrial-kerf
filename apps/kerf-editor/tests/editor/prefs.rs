@@ -30,8 +30,7 @@ proptest! {
             kerf_editor::timeline::TRACK_LEAST..kerf_editor::timeline::TRACK_MOST,
         ),
     ) {
-        use kerf_editor::prefs::Prefs;
-        use kerf_editor::timeline::TrackHeights;
+        use kerf_editor::prefs::{Prefs, TrackHeights};
         use std::path::Path;
         let tracks = tracks
             .into_iter()

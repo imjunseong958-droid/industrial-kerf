@@ -4,22 +4,27 @@ use crate::support::{bounds, rect, window};
 use gpui::{point, px, size, Action, Bounds, MenuItem, WindowBounds};
 use jiff::tz::TimeZone;
 use kerf_editor::app::{
-    component_name, crash_notice_text, lead_past, parse_window_size, path_with_tool_folders,
-    titlebar, window_buttons_at, window_place, x11_rgba, X11Pixels,
+    crash_notice_text, parse_window_size, path_with_tool_folders, titlebar, window_buttons_at,
+    window_place, x11_rgba, X11Pixels,
 };
+use kerf_editor::chrome::lead_past;
 use kerf_editor::commands::{
-    app_menu, app_menu_bindings, branch_menu, mask_tool_id, menus_with, menus_with_branches,
-    menus_with_states, recent_menu, recent_rows, HideApp, HideOtherApps, MenuBranches, MenuStates,
-    NoOtherBranches, RecentRow, ShowAllApps, Unavailable, NO_MASK_CLIP,
+    recent_rows, HideApp, HideOtherApps, MenuBranches, MenuStates, NoOtherBranches, RecentRow,
+    ShowAllApps, Unavailable, NO_MASK_CLIP,
 };
 use kerf_editor::finish::NO_OTHER_BRANCHES;
+use kerf_editor::keymap::{
+    app_menu, app_menu_bindings, branch_menu, menus_with, menus_with_branches, menus_with_states,
+    recent_menu,
+};
 use kerf_editor::model::RenderJob;
 use kerf_editor::prefs::Prefs;
+use kerf_editor::settings::component_name;
 use kerf_editor::sidebar::{
     app_rows, sync_problem, with_sync_failure, AppDoes, AppMenuInput, AppRow, SwitchBranch,
     SYNC_FAILURE,
 };
-use kerf_editor::stage::MaskTool;
+use kerf_editor::stage::{mask_tool_id, MaskTool};
 use kerf_editor::store::{Connection, Preview};
 use kerf_editor::theme::{layout, text};
 use kerf_editor::ui::{
@@ -31,7 +36,7 @@ use kerf_editor::workspace::{
     picture_within, readable_error, running_words, standing_problem, sync_failed, sync_params,
     sync_question, timeline_split, title_tip, toolbar_places, StandingInput, ToolbarPlaces,
 };
-use kerf_editor::{commands, sidebar, theme};
+use kerf_editor::{commands, keymap, sidebar, theme};
 use proptest::prelude::*;
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
@@ -462,7 +467,7 @@ fn the_application_menu_has_services_hide_hide_others_and_show_all() {
     assert!(action_of("Hide Others").partial_eq(&HideOtherApps));
     assert!(action_of("Show All").partial_eq(&ShowAllApps));
     // The menu bar leads with it.
-    let menus = commands::menus("kerf");
+    let menus = keymap::menus("kerf");
     assert_eq!(action_names(&menus[0].items), action_names(&menu.items));
     // ⌘H and ⌥⌘H, on macOS only: elsewhere there is no such menu.
     let keys: Vec<String> = app_menu_bindings()
@@ -888,7 +893,7 @@ fn a_crash_is_told_of_once() {
 
 #[test]
 fn every_menu_is_one_of_the_registrys() {
-    let menus = kerf_editor::commands::menus("kerf");
+    let menus = kerf_editor::keymap::menus("kerf");
     assert_eq!(menus[0].name.as_ref(), "Industrial Kerf");
     let names: Vec<&str> = menus.iter().map(|menu| menu.name.as_ref()).collect();
     for expected in ["File", "Edit", "Playback", "View", "Help"] {

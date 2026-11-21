@@ -5,13 +5,14 @@ use kerf_editor::model::{
     GainKey, Proposal, ProposalBand, ProposalVersion, Snapshot, SnapshotShow, Timeline,
     TimelineShow, TrackKind, TrackShow,
 };
+use kerf_editor::prefs::TrackHeights;
 use kerf_editor::store::MediaActivity;
 use kerf_editor::theme::{layout, motion};
 use kerf_editor::timeline::{
     activity_label, add_gain_key, band_line, extend, gain_at, gain_y, shown_version, signal_at,
     signal_points, stepped_height, strip_has_transport, watch_look, watched_clips, zoom_of_share,
-    zoom_share, ClipWatch, StripFit, Tool, TrackHeights, WatchLook, GAIN_CEILING, GAIN_FLOOR,
-    TRACK_LEAST, TRACK_MOST, TRACK_STEPS,
+    zoom_share, ClipWatch, StripFit, Tool, WatchLook, GAIN_CEILING, GAIN_FLOOR, TRACK_LEAST,
+    TRACK_MOST, TRACK_STEPS,
 };
 use proptest::prelude::*;
 use serde_json::json;

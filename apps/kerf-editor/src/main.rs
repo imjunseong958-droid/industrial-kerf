@@ -24,7 +24,7 @@
 //! editor started for links alone hands them to the editor already open
 //! (its link inbox) and ends.
 
-use kerf_editor::{app, commands, icons, links, motion, prefs, prefs::Prefs, theme};
+use kerf_editor::{app, icons, keymap, links, motion, prefs, prefs::Prefs, session, theme};
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -249,7 +249,7 @@ fn main() {
             log::warn!("bundled fonts did not load: {error}");
         }
         app::install_prompts(cx);
-        commands::bind(prefs.keymap.wire(), cx);
+        keymap::bind(prefs.keymap.wire(), cx);
         // The editor is its windows: the last one closed, it quits.
         cx.on_window_closed(|cx| {
             if cx.windows().is_empty() {
@@ -259,7 +259,7 @@ fn main() {
         .detach();
         // Every window opened later keeps the kerfd given here; the first
         // alone takes the size.
-        app::set_kerfd(kerfd.clone(), cx);
+        session::set_kerfd(kerfd.clone(), cx);
         app::set_window_size(window_size, cx);
         match link {
             Some(link) => app::follow(&link, kerfd.clone(), cx),

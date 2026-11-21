@@ -5,9 +5,10 @@ use kerf_editor::artwork::{
     fill_gaps, frame_index, parse_pam_stream, pixel_format_has_alpha, strip_frame_count,
     strip_height, waveform_columns, waveform_raise, Artwork, Bucket, PeakReducer, Peaks,
 };
-use kerf_editor::export::{
-    export_into, export_tip, master_goes, master_makes, master_request, request, Quality,
+use kerf_editor::delivery::{
+    export_request, master_goes, master_makes, master_request, request, Quality, DELIVERIES,
 };
+use kerf_editor::export::{export_into, export_tip};
 use kerf_editor::finish::{
     deliver_said, other_branches, preflight_hidden, preflight_rows, publish_command, publish_name,
     pull_request_command, pull_request_said, pull_request_title, sync_lines, sync_said, PublishWay,
@@ -23,7 +24,6 @@ use kerf_editor::media::{
 };
 use kerf_editor::model::{Source, Timeline, TimelineShow};
 use kerf_editor::prefs::{MasterOutput, Prefs};
-use kerf_editor::session::{export_request, DELIVERIES};
 use kerf_editor::store::{Badge, MediaActivity};
 use kerf_editor::theme::{layout, space};
 use kerf_editor::ui::menu_letter;
@@ -1064,7 +1064,7 @@ fn every_way_of_exporting_the_master_sends_where_the_project_keeps_it() {
     // Nothing kept: deliveries/, as the toolbar sent it before.
     assert_eq!(
         request(Some(project), &prefs, "master"),
-        kerf_editor::session::export_request(Some(project), "master")
+        kerf_editor::delivery::export_request(Some(project), "master")
     );
     prefs.master_outputs.insert(
         kerf_editor::prefs::project_key(project),
@@ -1080,7 +1080,7 @@ fn every_way_of_exporting_the_master_sends_where_the_project_keeps_it() {
     for quality in ["review", "full", "preview"] {
         assert_eq!(
             request(Some(project), &prefs, quality),
-            kerf_editor::session::export_request(Some(project), quality)
+            kerf_editor::delivery::export_request(Some(project), quality)
         );
     }
     // Another project keeps nothing.
@@ -1197,7 +1197,7 @@ proptest! {
         // With nothing kept, the toolbar's request is the master's.
         prop_assert_eq!(
             master_request(Some(&path), None),
-            kerf_editor::session::export_request(Some(&path), "master")
+            kerf_editor::delivery::export_request(Some(&path), "master")
         );
     }
 }

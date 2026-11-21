@@ -7,10 +7,11 @@
 //! is open raises its window. What answers questions over a window
 //! (`Window::prompt`) is drawn in Kerf's own look off macOS ([`install_prompts`]).
 
+use crate::folders::same_folder;
 use crate::launcher::{LauncherEvent, LauncherView};
 use crate::motion;
 use crate::prefs::Prefs;
-use crate::session::{BridgeEvent, Session};
+use crate::session::{hear_cloud, started_kerfd, BridgeEvent, Session};
 use crate::store::Change;
 use crate::theme::{self, radius, text};
 use crate::ui;
@@ -26,7 +27,7 @@ use serde_json::Value;
 use std::cell::Cell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 /// The options a project's window opens with, titled `title`: at the
@@ -151,78 +152,6 @@ pub fn titlebar(title: &str) -> TitlebarOptions {
 pub fn window_buttons_at() -> gpui::Point<Pixels> {
     use theme::layout::{TOOLBAR, WINDOW_BUTTON, WINDOW_BUTTONS_LEFT};
     gpui::point(px(WINDOW_BUTTONS_LEFT), px((TOOLBAR - WINDOW_BUTTON) / 2.0))
-}
-
-/// What a bar along the window's top at its leading end (the sidebar's
-/// top; the toolbar with the sidebar away) leaves for macOS's window
-/// buttons in `window` (`WINDOW_BUTTONS_ROOM`, where its first control
-/// starts); none elsewhere, or in full screen, where there are none
-/// beside it. See [`title_bar_lead`].
-pub fn window_buttons_room(window: &Window) -> f32 {
-    if cfg!(target_os = "macos") && !window.is_fullscreen() {
-        theme::layout::WINDOW_BUTTONS_ROOM
-    } else {
-        0.0
-    }
-}
-
-/// Where the first control of a bar along the window's top edge at its
-/// leading end starts (the sidebar's top; the toolbar with the sidebar
-/// away): past macOS's window buttons ([`window_buttons_room`]), else 8 in.
-pub fn title_bar_lead(window: &Window) -> f32 {
-    lead_past(window_buttons_room(window))
-}
-
-/// A leading bar's first control's place, past `room` for the window
-/// buttons and never nearer the edge than the bars' own 8.
-pub fn lead_past(room: f32) -> f32 {
-    room.max(8.0)
-}
-
-/// A press on a title bar's empty stretch, its drag still to come (macOS).
-static TITLE_PRESSED: AtomicBool = AtomicBool::new(false);
-
-/// `stretch`, an empty stretch of the toolbar or the sidebar's top (the
-/// title bar on macOS): there, a press then a drag on it moves the window
-/// and a double-click does what the system has a title bar's do (zoom, as
-/// a rule), as the Qt editor's toolbar did. Elsewhere, where the system's
-/// title bar does that, it is left as it is.
-pub fn title_bar_stretch(stretch: gpui::Div) -> gpui::Div {
-    if !cfg!(target_os = "macos") {
-        return stretch;
-    }
-    stretch
-        .on_mouse_down(
-            gpui::MouseButton::Left,
-            |event: &gpui::MouseDownEvent, window, _| {
-                TITLE_PRESSED.store(event.click_count < 2, Ordering::Relaxed);
-                if event.click_count == 2 {
-                    window.titlebar_double_click();
-                }
-            },
-        )
-        .on_mouse_up(gpui::MouseButton::Left, |_, _, _| {
-            TITLE_PRESSED.store(false, Ordering::Relaxed)
-        })
-        .on_mouse_move(|event: &gpui::MouseMoveEvent, window, _| {
-            if event.pressed_button == Some(gpui::MouseButton::Left)
-                && TITLE_PRESSED.swap(false, Ordering::Relaxed)
-            {
-                drag_window(window);
-            }
-        })
-}
-
-/// On macOS, hands a press on the title bar's empty stretch over to the
-/// window server, which moves the window as the pointer drags (AppKit's
-/// performWindowDragWithEvent with the event being handled, as Qt's
-/// startSystemMove did); gpui 0.2.2's own `start_window_move` does nothing
-/// there. Elsewhere nothing: the system's title bar moves the window.
-pub fn drag_window(window: &Window) {
-    #[cfg(target_os = "macos")]
-    macos::drag(window);
-    #[cfg(not(target_os = "macos"))]
-    let _ = window;
 }
 
 /// The size `--window-size` asked the first window to open at, until
@@ -418,7 +347,9 @@ fn capture_target(window: gpui::AnyWindowHandle, cx: &mut App) -> Result<Capture
     #[cfg(target_os = "macos")]
     {
         window
-            .update(cx, |_, window, _| macos::window_number(window))
+            .update(cx, |_, window, _| {
+                crate::chrome::macos::window_number(window)
+            })
             .ok()
             .flatten()
             .map(CaptureTarget::Mac)
@@ -785,14 +716,6 @@ fn find_open(project: &Path, cx: &mut App) -> Option<OpenProject> {
         .cloned()
 }
 
-/// Whether `a` and `b` are one folder, however written.
-pub fn same_folder(a: &Path, b: &Path) -> bool {
-    match (a.canonicalize(), b.canonicalize()) {
-        (Ok(a), Ok(b)) => a == b,
-        _ => a == b,
-    }
-}
-
 /// Brings `open`'s window to the front, following `link` there.
 fn raise(open: &OpenProject, link: Option<crate::links::Link>, cx: &mut App) {
     let _ = open
@@ -810,7 +733,7 @@ fn raise(open: &OpenProject, link: Option<crate::links::Link>, cx: &mut App) {
 
 /// Opens `project` in a window, or the launcher with none. A project open
 /// already has its window raised. With no `kerfd`, the one the editor was
-/// started with ([`set_kerfd`]) is kept.
+/// started with ([`crate::session::set_kerfd`]) is kept.
 pub fn open(project: Option<PathBuf>, kerfd: Option<PathBuf>, cx: &mut App) {
     open_at(project, kerfd, None, None, cx);
 }
@@ -827,25 +750,6 @@ pub fn open_in_place(
     cx: &mut App,
 ) {
     open_at(Some(project), kerfd, None, place, cx);
-}
-
-/// The kerfd the editor was started with (its argument, or `KERFD_BIN`).
-struct StartedKerfd(PathBuf);
-
-impl Global for StartedKerfd {}
-
-/// Keeps the kerfd the editor was started with, so every window opened
-/// later (a project from the launcher, New and Open Project, a link) uses
-/// it too. `main` calls it once, before the first window.
-pub fn set_kerfd(kerfd: Option<PathBuf>, cx: &mut App) {
-    if let Some(kerfd) = kerfd.filter(|kerfd| !kerfd.as_os_str().is_empty()) {
-        cx.set_global(StartedKerfd(kerfd));
-    }
-}
-
-/// The kerfd the editor was started with, if one was given.
-pub fn started_kerfd(cx: &App) -> Option<PathBuf> {
-    cx.try_global::<StartedKerfd>().map(|kerfd| kerfd.0.clone())
 }
 
 /// Follows a kerf:// link: the recent project it names, at its moment, in
@@ -955,71 +859,9 @@ pub fn represented_file(project: &Path) -> PathBuf {
 /// calls it as it opens: a window keeps its project.
 pub fn represent_project(window: &Window, project: &Path) {
     #[cfg(target_os = "macos")]
-    macos::represent(window, &represented_file(project));
+    crate::chrome::macos::represent(window, &represented_file(project));
     #[cfg(not(target_os = "macos"))]
     let _ = (window, project);
-}
-
-/// AppKit, through its safe bindings.
-#[cfg(target_os = "macos")]
-mod macos {
-    use objc2::rc::Retained;
-    use objc2::MainThreadMarker;
-    use objc2_app_kit::{NSApplication, NSView, NSWindow};
-    use objc2_foundation::NSString;
-    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-    use std::ffi::c_void;
-    use std::path::Path;
-
-    /// The NSWindow that holds `window`'s view (GPUI's, in its content view).
-    fn ns_window(window: &impl HasWindowHandle) -> Option<Retained<NSWindow>> {
-        let handle = window.window_handle().ok()?;
-        let RawWindowHandle::AppKit(appkit) = handle.as_raw() else {
-            return None;
-        };
-        let main = MainThreadMarker::new()?;
-        let view = appkit.ns_view.as_ptr().cast_const();
-        let is_view =
-            |candidate: &Retained<NSView>| Retained::as_ptr(candidate).cast::<c_void>() == view;
-        NSApplication::sharedApplication(main)
-            .windows()
-            .to_vec()
-            .into_iter()
-            .find(|ns_window| {
-                ns_window.contentView().is_some_and(|content| {
-                    is_view(&content) || content.subviews().to_vec().iter().any(&is_view)
-                })
-            })
-    }
-
-    /// Has the NSWindow that holds `window`'s view represent `file`.
-    pub(super) fn represent(window: &impl HasWindowHandle, file: &Path) {
-        if let Some(ns_window) = ns_window(window) {
-            ns_window.setRepresentedFilename(&NSString::from_str(&file.to_string_lossy()));
-        }
-    }
-
-    /// Hands the press being handled to the window server, which moves the
-    /// NSWindow that holds `window`'s view as the pointer drags.
-    pub(super) fn drag(window: &impl HasWindowHandle) {
-        let Some(main) = MainThreadMarker::new() else {
-            return;
-        };
-        let Some(event) = NSApplication::sharedApplication(main).currentEvent() else {
-            return;
-        };
-        if let Some(ns_window) = ns_window(window) {
-            ns_window.performWindowDragWithEvent(&event);
-        }
-    }
-
-    /// The window server's number for `window`'s NSWindow (what
-    /// `screencapture -l` takes).
-    pub(super) fn window_number(window: &impl HasWindowHandle) -> Option<isize> {
-        ns_window(window)
-            .map(|ns_window| ns_window.windowNumber())
-            .filter(|number| *number > 0)
-    }
 }
 
 /// Opens the launcher, saying `problem` when there is one (a link that
@@ -1036,7 +878,12 @@ fn open_launcher(problem: Option<String>, kerfd: Option<PathBuf>, cx: &mut App) 
         }
         let handle = window.window_handle();
         cx.subscribe(&launcher, move |_, event: &LauncherEvent, cx| match event {
-            LauncherEvent::Open { project, starts } => {
+            LauncherEvent::Open {
+                project,
+                starts,
+                warnings,
+            } => {
+                warn_when_open(project, warnings.clone(), cx);
                 // A folder that was no project yet brings its media in; its
                 // window takes the launcher's place.
                 let place = handle
@@ -1128,8 +975,9 @@ impl Global for Warnings {}
 
 /// Says `warnings` (from making or cloning `project`: Git LFS missing, a
 /// push that failed) at the foot of its window once kerfd has it open, so
-/// they are there to be read. The launcher calls it as it opens the
-/// project; the window opened for it, now or next, takes them.
+/// they are there to be read. What opens the project the launcher chose
+/// calls it first ([`LauncherEvent::Open`]); the window opened for it, now
+/// or next, takes them.
 pub fn warn_when_open(project: &Path, warnings: Vec<String>, cx: &mut App) {
     if warnings.is_empty() {
         return;
@@ -1199,41 +1047,15 @@ fn say_when_up(session: &Entity<Session>, warnings: Vec<String>, cx: &mut App) {
     .detach();
 }
 
-// ---------------------------------------------------------------- Kerf's account
-
-/// The last `cloud` event any window heard: the person's Kerf account.
-struct Cloud(Value);
-
-impl Global for Cloud {}
-
-/// What was last heard of the person's Kerf account (`cloud {access,
-/// account?, message?}`); None before anything is.
-pub fn cloud(cx: &App) -> Option<&Value> {
-    cx.try_global::<Cloud>().map(|cloud| &cloud.0)
-}
-
-/// Keeps a `cloud` event for every window.
-pub fn hear_cloud(event: &Value, cx: &mut App) {
-    cx.set_global(Cloud(event.clone()));
-}
-
 // ---------------------------------------------------------------- at launch
-
-/// Which part of Kerf a crash report is of, as a person says it.
-pub fn component_name(component: &str) -> &'static str {
-    match component {
-        "kerfd" => "Kerf's project service (kerfd)",
-        "kerf" => "the kerf command",
-        _ => "the editor",
-    }
-}
 
 /// What the crash notice says of `reports` (unseen, newest first).
 pub fn crash_notice_text(reports: &[Value]) -> String {
     let Some(latest) = reports.first() else {
         return String::new();
     };
-    let component = component_name(latest["component"].as_str().unwrap_or("editor"));
+    let component =
+        crate::settings::component_name(latest["component"].as_str().unwrap_or("editor"));
     let mut text = if reports.len() == 1 {
         format!("Kerf stopped unexpectedly: {component} hit an error it could not recover from.")
     } else {

@@ -6,6 +6,7 @@ mod chat;
 mod components;
 mod keys;
 mod launcher;
+mod layers;
 mod links;
 mod making;
 mod media;

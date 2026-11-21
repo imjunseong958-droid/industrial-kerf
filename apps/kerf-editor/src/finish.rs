@@ -70,7 +70,7 @@ const TOLERANCE: f64 = 1.0;
 const TARGET: f64 = -23.0;
 const PEAK_LIMIT: f64 = -1.0;
 /// Where the master and the review copy go (master_output's rule).
-use crate::session::DELIVERIES;
+use crate::delivery::DELIVERIES;
 /// The chip's menu, and its questions that hold more than a line.
 const MENU_WIDTH: f32 = 284.0;
 const PROMPT_WIDTH: f32 = 380.0;
@@ -413,7 +413,7 @@ pub struct AskKerf {
 
 /// What Deliver says under its title: where the master and the review copy
 /// go in `project`, the master where the project keeps it to go
-/// ([`crate::export::master_request`], `kept`): "The master and a review
+/// ([`crate::delivery::master_request`], `kept`): "The master and a review
 /// copy go to deliveries/ in the project, numbered when one is there
 /// already.", or "The master goes to masters/ and a review copy to
 /// deliveries/ in the project, each numbered when one is there already."
@@ -421,11 +421,11 @@ pub fn deliver_said(project: Option<&Path>, kept: Option<&crate::prefs::MasterOu
     /// Where a request sends its file: the folder as people read it, and
     /// whether it is in the project; None where kerfd puts renders.
     fn place(command: &Command) -> Option<(String, bool)> {
-        crate::export::export_of(command)
+        crate::delivery::export_of(command)
             .and_then(|request| request.output.as_deref())
             .map(|folder| {
                 (
-                    crate::export::shown_folder(folder),
+                    crate::delivery::shown_folder(folder),
                     !Path::new(folder).is_absolute(),
                 )
             })
@@ -441,8 +441,8 @@ pub fn deliver_said(project: Option<&Path>, kept: Option<&crate::prefs::MasterOu
             None => "where Kerf puts renders".to_owned(),
         }
     }
-    let master = place(&crate::export::master_request(project, kept));
-    let review = place(&crate::session::export_request(project, "review"));
+    let master = place(&crate::delivery::master_request(project, kept));
+    let review = place(&crate::delivery::export_request(project, "review"));
     if master == review {
         return format!(
             "The master and a review copy go {}, numbered when one is there already.",
@@ -1464,7 +1464,7 @@ impl FinishView {
         let kept = folder
             .as_deref()
             .and_then(|project| session.prefs.master_output(project));
-        let (master_goes, master_makes) = crate::export::master_goes(folder.as_deref(), kept);
+        let (master_goes, master_makes) = crate::delivery::master_goes(folder.as_deref(), kept);
         let heading = deliver_said(folder.as_deref(), kept);
         let mut out = vec![self.title("Deliver", heading, None)];
         if let Some(report) = finishing

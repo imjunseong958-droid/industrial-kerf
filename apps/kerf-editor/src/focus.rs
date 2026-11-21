@@ -17,6 +17,7 @@
 //!
 //! [`Workspace::open_modal`]: crate::workspace::Workspace::open_modal
 
+use crate::artwork::ffmpeg_bin;
 use crate::input::{InputEvent, TextInput};
 use crate::model::{self, Clip, ClipShow, TrackKind};
 use crate::session::{BridgeEvent, Session};
@@ -410,17 +411,6 @@ pub fn target(session: &Session) -> Result<Target, &'static str> {
         at,
         seconds,
     })
-}
-
-/// The FFmpeg the editor runs: the one kerfd runs
-/// ([`kerf_bridge::ffmpeg_bin`]: `KERF_FFMPEG`, beside the editor, where
-/// each package puts it, Homebrew's ffmpeg-full, then the PATH), found
-/// once (off the window's thread, the first time a frame is read);
-/// `ffmpeg` when none runs, to say so as it fails. Focus Region, the
-/// artwork (posters, filmstrips, peaks) and a shot's graph's pictures read
-/// with it.
-pub fn ffmpeg_bin() -> &'static Path {
-    Path::new(kerf_bridge::ffmpeg_bin())
 }
 
 /// On Windows a console tool the editor starts opens no window of its own.

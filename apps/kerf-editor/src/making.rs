@@ -68,7 +68,7 @@ fn bind_close(cx: &mut App) {
 /// The plan's and the graph's own keys: Esc, which gives the window back,
 /// and the canvas's fit, zoom and arrows. Binding a keymap clears them, so
 /// each is bound again where it is missing: as a plan or a graph opens, as
-/// what was over the graph closes, and by `commands::bind` after a keymap.
+/// what was over the graph closes, and by `keymap::bind` after a keymap.
 pub fn bind_keys(cx: &mut App) {
     bind_close(cx);
     bind_graph_keys(cx);
@@ -3056,7 +3056,7 @@ pub fn output_within(
 /// motion by a frame that stands for it. None for a file FFmpeg cannot
 /// read, or does not read within [`STILL_LIMIT`].
 fn decode_still(path: &Path) -> Option<Arc<RenderImage>> {
-    let ffmpeg = crate::focus::ffmpeg_bin();
+    let ffmpeg = crate::artwork::ffmpeg_bin();
     let extension = path
         .extension()
         .map(|extension| extension.to_string_lossy().to_ascii_lowercase())

@@ -36,9 +36,14 @@ use std::time::{Duration, SystemTime};
 
 pub enum LauncherEvent {
     /// Open `project`; `starts` when the folder was no project yet, so its
-    /// media comes in with it. What making or cloning it warned of is said
-    /// in its window once it is open ([`crate::app::warn_when_open`]).
-    Open { project: PathBuf, starts: bool },
+    /// media comes in with it. `warnings` are what making or cloning it
+    /// warned of, said in its window once it is open: what opens it hands
+    /// them to [`crate::app::warn_when_open`] first.
+    Open {
+        project: PathBuf,
+        starts: bool,
+        warnings: Vec<String>,
+    },
     /// Given up (its Cancel, or Esc with no form open), when it was opened
     /// from an editor ([`LauncherView::over_editor`]): its window goes and
     /// the editor's comes back, as Qt's modal launcher's reject did.
@@ -618,10 +623,10 @@ impl EventEmitter<LauncherEvent> for LauncherView {}
 impl LauncherView {
     /// The launcher, as it was left (its way, template, frame rate and
     /// Details, from `prefs`), with the kerfd the editor was started with
-    /// ([`crate::app::started_kerfd`]) unless [`Self::with_kerfd`] says
+    /// ([`crate::session::started_kerfd`]) unless [`Self::with_kerfd`] says
     /// another.
     pub fn new(prefs: Prefs, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let kerfd = crate::app::started_kerfd(cx);
+        let kerfd = crate::session::started_kerfd(cx);
         bind_keys(cx);
         let location = default_location(&prefs);
         let untitled = untitled(&location);
@@ -984,9 +989,12 @@ impl LauncherView {
         warnings: Vec<String>,
         cx: &mut Context<Self>,
     ) {
-        let starts = starts.unwrap_or_else(|| crate::workspace::needs_start(&project));
-        crate::app::warn_when_open(&project, warnings, cx);
-        cx.emit(LauncherEvent::Open { project, starts });
+        let starts = starts.unwrap_or_else(|| crate::folders::needs_start(&project));
+        cx.emit(LauncherEvent::Open {
+            project,
+            starts,
+            warnings,
+        });
     }
 
     fn open_chosen(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1064,7 +1072,7 @@ impl LauncherView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<impl std::future::Future<Output = Result<usize, impl Sized>>> {
-        if !crate::workspace::needs_start(&folder) {
+        if !crate::folders::needs_start(&folder) {
             return None;
         }
         Some(window.prompt(

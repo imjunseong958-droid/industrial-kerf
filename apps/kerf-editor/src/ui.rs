@@ -69,8 +69,8 @@ pub const CONTROL_SEGMENTED: &str = "KitControl KitSegmented";
 /// Space chooses, Esc closes it and nothing else.
 pub const MENU: &str = "KitMenu";
 
-/// The kit's keys. `input::bind_keys` binds them with the field's, which
-/// `commands::bind` binds first whenever it binds a keymap.
+/// The kit's keys. `keymap::bind` binds them with the field's, first
+/// whenever it binds a keymap.
 pub fn key_bindings() -> Vec<KeyBinding> {
     vec![
         KeyBinding::new("enter", NoAction, Some(CONTROL)),
@@ -161,13 +161,14 @@ thread_local! {
 /// kit ([`tab_to`]): into a panel open over the window from the panel
 /// itself (Settings, Finish, a question, the export popover open with the
 /// keys on their own box), and on from a region's own box (the Media
-/// band's) rather than stopping there. Once is enough:
-/// [`crate::input::bind_keys`] calls it each time a keymap is bound.
-pub fn follow_tab(cx: &mut App) {
+/// band's) rather than stopping there. `window_context` is the key context
+/// of the window's own box, where it is left alone ([`tab_goes_on_from`]).
+/// Once is enough: `keymap::bind` calls it each time it binds a keymap.
+pub fn follow_tab(window_context: &'static str, cx: &mut App) {
     if FOLLOWING_TAB.with(|following| following.replace(true)) {
         return;
     }
-    cx.intercept_keystrokes(|event, window, cx| {
+    cx.intercept_keystrokes(move |event, window, cx| {
         let keystroke = &event.keystroke;
         let modifiers = keystroke.modifiers;
         if keystroke.key != "tab"
@@ -182,7 +183,7 @@ pub fn follow_tab(cx: &mut App) {
         let goes_on = {
             let keymap = cx.key_bindings();
             let keymap = keymap.borrow();
-            tab_goes_on_from(&keymap, &event.context_stack, forward)
+            tab_goes_on_from(&keymap, &event.context_stack, forward, window_context)
         };
         if goes_on {
             tab_to(forward, window, cx);
@@ -195,11 +196,16 @@ pub fn follow_tab(cx: &mut App) {
 /// Whether Tab (or Shift-Tab, not `forward`) from what holds the keys
 /// with `stack` goes on as from a control of the kit ([`follow_tab`]):
 /// nothing binds it there ([`tab_is_unbound`]), and it is not the window's
-/// own box, from where the sidebar takes it.
-pub fn tab_goes_on_from(keymap: &Keymap, stack: &[KeyContext], forward: bool) -> bool {
+/// own box (key context `window_context`), from where the sidebar takes it.
+pub fn tab_goes_on_from(
+    keymap: &Keymap,
+    stack: &[KeyContext],
+    forward: bool,
+    window_context: &str,
+) -> bool {
     let at_window = stack
         .last()
-        .is_none_or(|context| context.contains(crate::commands::WORKSPACE));
+        .is_none_or(|context| context.contains(window_context));
     !at_window && tab_is_unbound(keymap, stack, forward)
 }
 
@@ -320,8 +326,6 @@ pub fn tab_is_taken(keymap: &Keymap, stack: &[KeyContext], forward: bool) -> boo
         let action = binding.action();
         !(action.partial_eq(&FocusNext)
             || action.partial_eq(&FocusPrevious)
-            || action.partial_eq(&crate::input::FocusNext)
-            || action.partial_eq(&crate::input::FocusPrevious)
             || action.partial_eq(&crate::input::Indent)
             || action.partial_eq(&crate::input::Outdent))
     })

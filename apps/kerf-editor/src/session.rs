@@ -9,7 +9,7 @@ use crate::model::{ClipShow, SourceShow, Timeline, TimelineShow};
 use crate::prefs::{Prefs, Provider};
 use crate::store::{Change, EditorState};
 use crate::theme::motion;
-use gpui::{App, AppContext, Context, Entity, EventEmitter, RenderImage, Task, Window};
+use gpui::{App, AppContext, Context, Entity, EventEmitter, Global, RenderImage, Task, Window};
 use kerf_bridge::event::{AgentUpdate, Export, ExportStatus, PreviewStatus};
 use kerf_bridge::{AgentSettings, ChatProvider, Command, ConversationsRequest, Event};
 use serde_json::{json, Value};
@@ -35,9 +35,6 @@ pub const RECONNECT_REFUSED: &str = "Reconnect could not be queued. Try again.";
 /// exactly: the rough seeks while it moves show the nearest picture kerfd
 /// can give at once.
 pub use crate::theme::motion::SCRUB_SETTLE;
-
-/// Where Finish's deliveries go, inside the project.
-pub const DELIVERIES: &str = "deliveries/";
 
 /// What the system's keychain answered for each key, for every window of
 /// this editor: asked once, written when a key is saved in any window, and
@@ -130,7 +127,7 @@ pub struct Session {
     pointer: Option<PointerSeek>,
     /// What the toolbar's Export renders in one press, as its menu was
     /// last left in this window: the master or a draft.
-    pub export_quality: crate::export::Quality,
+    pub export_quality: crate::delivery::Quality,
     /// The open proposal the window's keys and menus act on: the pinned
     /// card's, set by the window (`ChatView::proposal_target`) before it
     /// asks what can run. None takes the newest pending one.
@@ -195,7 +192,7 @@ pub enum ReelSide {
 #[derive(Clone, Debug, Default)]
 pub struct Reel {
     pub proposal: String,
-    pub segments: Vec<crate::chat::Segment>,
+    pub segments: Vec<crate::changes::Segment>,
     pub index: usize,
     pub side: ReelSide,
     /// Waiting for the picture of the side and segment shown.
@@ -231,7 +228,7 @@ impl Reel {
         };
         left += self.segments[self.index + 1..]
             .iter()
-            .map(crate::chat::Segment::length)
+            .map(crate::changes::Segment::length)
             .sum::<f64>();
         left
     }
@@ -443,7 +440,7 @@ impl Session {
                 looping: false,
                 wrapped: false,
                 pointer: None,
-                export_quality: crate::export::Quality::default(),
+                export_quality: crate::delivery::Quality::default(),
                 pinned_proposal: None,
                 activity: ActivityLog::default(),
                 artwork,
@@ -1156,12 +1153,12 @@ impl Session {
         }
     }
 
-    /// Queues a render of `quality` as [`crate::export::request`] makes it:
+    /// Queues a render of `quality` as [`crate::delivery::request`] makes it:
     /// a master goes where the project keeps it (its master output, else
     /// deliveries/), a review copy into deliveries/, as ⌘E and the
     /// toolbar's Export send them. False when it was not sent.
     pub fn export(&mut self, quality: &str) -> bool {
-        let command = crate::export::request(self.project.as_deref(), &self.prefs, quality);
+        let command = crate::delivery::request(self.project.as_deref(), &self.prefs, quality);
         let sent = self.send(command);
         if sent {
             let name = match quality {
@@ -1322,7 +1319,7 @@ impl Session {
         let Some((_, cut)) = self.live_cut() else {
             return;
         };
-        let changes = crate::chat::clip_changes(self.timeline(), cut);
+        let changes = crate::changes::clip_changes(self.timeline(), cut);
         let first = !self.timeline().has_clips();
         let placed = changes
             .iter()
@@ -1400,7 +1397,11 @@ impl Session {
 
     /// Watches what `proposal` changes: `segments` one after another, from
     /// its preview. False with nothing to watch.
-    pub fn watch_changes(&mut self, proposal: &str, segments: Vec<crate::chat::Segment>) -> bool {
+    pub fn watch_changes(
+        &mut self,
+        proposal: &str,
+        segments: Vec<crate::changes::Segment>,
+    ) -> bool {
         if segments.is_empty() {
             self.state
                 .notify("This proposal changes nothing on the timeline", false);
@@ -2443,9 +2444,9 @@ impl FocusBook {
 /// there, or nothing of what it changes lies within the proposal, a frame
 /// at least (the whole program renders).
 pub fn preview_span(program: &Timeline, proposed: &Timeline) -> Option<(f64, f64)> {
-    let (start, end) = crate::chat::clip_changes(program, proposed)
+    let (start, end) = crate::changes::clip_changes(program, proposed)
         .iter()
-        .map(crate::chat::ClipChange::span)
+        .map(crate::changes::ClipChange::span)
         .filter(|(start, end)| start.is_finite() && end.is_finite())
         .reduce(|(low, high), (start, end)| (low.min(start), high.max(end)))?;
     let start = start.max(0.0);
@@ -2511,10 +2512,11 @@ pub fn cutting_status(placed: usize) -> String {
 /// now starts (the latest start among the new ones). Removed clips are
 /// nothing to look at.
 pub fn newest_change(
-    changes: &[crate::chat::ClipChange],
+    changes: &[crate::changes::ClipChange],
     seen: &HashSet<String>,
 ) -> (HashSet<String>, Option<f64>) {
-    let key = |change: &crate::chat::ClipChange| format!("{}@{:.4}", change.clip, change.new_end);
+    let key =
+        |change: &crate::changes::ClipChange| format!("{}@{:.4}", change.clip, change.new_end);
     let keys: HashSet<String> = changes.iter().map(key).collect();
     let newest = changes
         .iter()
@@ -2558,33 +2560,6 @@ pub fn proposal_context(proposal: &crate::model::Proposal) -> Value {
         "id": proposal.proposal_id,
         "blocked": proposal.is_stale().then_some("stale"),
     })
-}
-
-/// The `export` request for `quality` in `project`. A master (`master`)
-/// or a review copy (`review`, H.264) goes into the project's deliveries/,
-/// named after its folder: `<folder>_master`, `<folder>_draft`. Another
-/// quality (`full`, `preview`), or a project with no folder name, goes
-/// where kerfd puts it, under its own name.
-pub fn export_request(project: Option<&Path>, quality: &str) -> Command {
-    let folder = project
-        .and_then(Path::file_name)
-        .map(|name| name.to_string_lossy().into_owned())
-        .filter(|name| !name.trim().is_empty());
-    let mut request = kerf_bridge::ExportRequest {
-        quality: quality.to_owned(),
-        codec: (quality == "review").then(|| "h264".to_owned()),
-        ..kerf_bridge::ExportRequest::default()
-    };
-    if let (Some(folder), true) = (folder, matches!(quality, "master" | "review")) {
-        let suffix = if quality == "master" {
-            "master"
-        } else {
-            "draft"
-        };
-        request.output = Some(DELIVERIES.to_owned());
-        request.name = Some(format!("{folder}_{suffix}"));
-    }
-    Command::Export(request)
 }
 
 /// How many lines Activity keeps, and how many it shows.
@@ -2809,6 +2784,41 @@ pub fn discover_kerfd() -> PathBuf {
         }
     }
     PathBuf::from(name)
+}
+
+/// The kerfd the editor was started with (its argument, or `KERFD_BIN`).
+struct StartedKerfd(PathBuf);
+
+impl Global for StartedKerfd {}
+
+/// Keeps the kerfd the editor was started with, so every window opened
+/// later (a project from the launcher, New and Open Project, a link) uses
+/// it too. `main` calls it once, before the first window.
+pub fn set_kerfd(kerfd: Option<PathBuf>, cx: &mut App) {
+    if let Some(kerfd) = kerfd.filter(|kerfd| !kerfd.as_os_str().is_empty()) {
+        cx.set_global(StartedKerfd(kerfd));
+    }
+}
+
+/// The kerfd the editor was started with, if one was given.
+pub fn started_kerfd(cx: &App) -> Option<PathBuf> {
+    cx.try_global::<StartedKerfd>().map(|kerfd| kerfd.0.clone())
+}
+
+/// The last `cloud` event any window heard: the person's Kerf account.
+struct Cloud(Value);
+
+impl Global for Cloud {}
+
+/// What was last heard of the person's Kerf account (`cloud {access,
+/// account?, message?}`); None before anything is.
+pub fn cloud(cx: &App) -> Option<&Value> {
+    cx.try_global::<Cloud>().map(|cloud| &cloud.0)
+}
+
+/// Keeps a `cloud` event for every window.
+pub fn hear_cloud(event: &Value, cx: &mut App) {
+    cx.set_global(Cloud(event.clone()));
 }
 
 /// At most `most` bytes of `text`, cut at a character boundary.

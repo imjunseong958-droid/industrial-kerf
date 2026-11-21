@@ -352,7 +352,7 @@ impl SettingsView {
     fn bridge_event(&mut self, event: &Event, cx: &mut Context<Self>) {
         match event {
             Event::Cloud { .. } => {
-                crate::app::hear_cloud(&serde_json::to_value(event).unwrap_or_default(), cx);
+                crate::session::hear_cloud(&serde_json::to_value(event).unwrap_or_default(), cx);
                 self.signing = false;
                 cx.notify();
             }
@@ -425,7 +425,7 @@ impl SettingsView {
         let session = self.session.read(cx);
         let connected = session.has_project();
         let provider = session.prefs.provider;
-        let cloud = crate::app::cloud(cx);
+        let cloud = crate::session::cloud(cx);
         let status = account_status(cloud);
         let words: SharedString = if self.signing {
             "Asking Kerf…".into()
@@ -687,8 +687,8 @@ impl SettingsView {
         };
         match provider {
             Provider::Cloud => {
-                let words = if session.has_project() || crate::app::cloud(cx).is_some() {
-                    account_status(crate::app::cloud(cx)).words
+                let words = if session.has_project() || crate::session::cloud(cx).is_some() {
+                    account_status(crate::session::cloud(cx)).words
                 } else {
                     "Your Kerf account is read with a project open".to_owned()
                 };
@@ -1368,7 +1368,7 @@ impl SettingsView {
             session.save_prefs();
         });
         // Binding the keymap clears every binding; it binds the views' own again.
-        commands::bind(keymap.wire(), cx);
+        commands::rebind(keymap.wire(), cx);
         self.catalog = (keymap, commands::catalog(keymap.wire()));
         cx.notify();
     }
@@ -1572,7 +1572,7 @@ impl SettingsView {
             .iter()
             .take(3)
             .map(|report| {
-                let component = capitalized(crate::app::component_name(
+                let component = capitalized(component_name(
                     report["component"].as_str().unwrap_or("editor"),
                 ));
                 let when = report["atMs"]
@@ -1908,7 +1908,7 @@ fn keycaps(shortcut: &str) -> impl IntoElement {
                 .border_color(theme::line2())
                 .text_color(theme::ink2())
                 .whitespace_nowrap()
-                .child(commands::shown_keys(chord))
+                .child(crate::shortcuts::shown_keys(chord))
         }))
 }
 
@@ -2289,6 +2289,15 @@ pub const TAGLINE: &str = "A video editor you can talk to.";
 /// repository's `/releases` page.
 pub fn releases_url(repository: &str) -> String {
     format!("{}/releases", repository.trim().trim_end_matches('/'))
+}
+
+/// Which part of Kerf a crash report is of, as a person says it.
+pub fn component_name(component: &str) -> &'static str {
+    match component {
+        "kerfd" => "Kerf's project service (kerfd)",
+        "kerf" => "the kerf command",
+        _ => "the editor",
+    }
 }
 
 /// Whether `text` is an MCP servers file Kerf chat can use: an object whose

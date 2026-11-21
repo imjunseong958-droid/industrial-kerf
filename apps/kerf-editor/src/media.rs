@@ -150,8 +150,7 @@ pub fn status_text(
     };
     match activity {
         MediaActivity::Making { take, since } => {
-            let clock =
-                crate::stage::chip::elapsed(now.saturating_duration_since(*since).as_secs());
+            let clock = crate::chip::elapsed(now.saturating_duration_since(*since).as_secs());
             return if *take > 0 {
                 format!("Making take {take} · {clock}")
             } else {
@@ -776,7 +775,7 @@ impl MediaBand {
                 .into_iter()
                 .filter_map(|command| {
                     let first = command.keys.first()?.clone();
-                    Some((command.id, crate::commands::shown_keys(&first)))
+                    Some((command.id, crate::shortcuts::shown_keys(&first)))
                 })
                 .collect();
             self.keys = (keymap.to_owned(), keys);

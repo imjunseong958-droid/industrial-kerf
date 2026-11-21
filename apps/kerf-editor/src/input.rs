@@ -15,6 +15,7 @@
 //! Ctrl+Shift+Tab leave it.
 
 use crate::theme::{self, TypeStyle};
+use crate::ui::{FocusNext, FocusPrevious};
 use gpui::{
     actions, div, fill, point, prelude::*, px, size, App, AvailableSpace, Bounds, ClipboardItem,
     ContentMask, Context, CursorStyle, ElementId, ElementInputHandler, Entity, EntityInputHandler,
@@ -62,8 +63,6 @@ actions!(
         SelectTextEnd,
         Undo,
         Redo,
-        FocusNext,
-        FocusPrevious,
         Cancel,
         Indent,
         Outdent,
@@ -97,7 +96,7 @@ impl EditRow {
     }
 
     /// Its key as the registry writes one (shown in the system's signs by
-    /// `commands::shown_keys`); Delete shows none, as Qt's did not.
+    /// `shortcuts::shown_keys`); Delete shows none, as Qt's did not.
     pub fn keys(self) -> Option<&'static str> {
         match self {
             EditRow::Undo => Some("Ctrl+Z"),
@@ -163,18 +162,9 @@ pub const INDENT: &str = "  ";
 /// What a code field's own keys answer in: [`KEYS`] and [`CODE`] at once.
 pub const CODE_KEYS: &str = "TextInputKeys CodeInput";
 
-/// Binds the field's keys and the kit's ([`crate::ui::key_bindings`]),
-/// and has Tab go into a panel from the panel itself
-/// ([`crate::ui::follow_tab`]): `commands::bind` calls this first whenever
-/// it binds a keymap.
-pub fn bind_keys(cx: &mut App) {
-    cx.bind_keys(key_bindings());
-    cx.bind_keys(crate::ui::key_bindings());
-    crate::ui::follow_tab(cx);
-}
-
-/// The field's keys, as [`bind_keys`] binds them. ⌘ arrows and ⌘⌫ are
-/// macOS's; Ctrl+Home and Ctrl+End the text's ends elsewhere.
+/// The field's keys, as `keymap::bind` binds them first whenever it
+/// binds a keymap. ⌘ arrows and ⌘⌫ are macOS's; Ctrl+Home and Ctrl+End
+/// the text's ends elsewhere.
 pub fn key_bindings() -> Vec<KeyBinding> {
     key_bindings_for(cfg!(target_os = "macos"))
 }
@@ -253,13 +243,6 @@ pub fn key_bindings_for(mac: bool) -> Vec<KeyBinding> {
         KeyBinding::new("shift-tab", Outdent, Some(CODE)),
         KeyBinding::new("ctrl-tab", FocusNext, Some(CODE)),
         KeyBinding::new("ctrl-shift-tab", FocusPrevious, Some(CODE)),
-        // In the composer, what Kerf does without asking goes round
-        // (after the field's own Shift-Tab, so it comes first there).
-        KeyBinding::new(
-            "shift-tab",
-            crate::chat::CyclePermissions,
-            Some(format!("{} > {KEYS}", crate::chat::COMPOSER_CONTEXT).as_str()),
-        ),
     ]);
     bindings
 }
@@ -1105,7 +1088,7 @@ impl TextInput {
                 let field = field.clone();
                 let mut item = crate::ui::MenuItem::new(row.words()).disabled(!enabled);
                 if let Some(keys) = row.keys() {
-                    item = item.key(crate::commands::shown_keys(keys));
+                    item = item.key(crate::shortcuts::shown_keys(keys));
                 }
                 if matches!(row, EditRow::Cut | EditRow::SelectAll) {
                     item = item.separated();

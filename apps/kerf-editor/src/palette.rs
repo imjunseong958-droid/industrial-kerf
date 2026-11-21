@@ -104,7 +104,7 @@ impl CommandPalette {
         session.update(cx, |session, _| session.prefs.refresh());
         let keymap = session.read(cx).prefs.keymap.wire();
         let mut commands = commands::catalog(keymap);
-        let cloud = crate::app::cloud(cx).cloned();
+        let cloud = crate::session::cloud(cx).cloned();
         let mut states = session.read(cx).command_states(cloud.as_ref());
         // The recent projects, as File ▸ Open Recent lists them; one whose
         // folder is gone says so.
@@ -209,7 +209,7 @@ pub fn shortcut(command: &commands::Command) -> String {
     command
         .keys
         .first()
-        .map(|keys| commands::shown_keys(keys))
+        .map(|keys| crate::shortcuts::shown_keys(keys))
         .unwrap_or_default()
 }
 

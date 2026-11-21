@@ -4,7 +4,8 @@ use crate::support::{
     apply, clip, command, event, preview, snapshot, snapshot_timeline, source, texts,
     timeline_value, EXISTS,
 };
-use kerf_editor::chat::{clip_changes, try_asking};
+use kerf_editor::changes::clip_changes;
+use kerf_editor::chat::try_asking;
 use kerf_editor::model::{
     focus_seconds, timecode, Clip, ClipShow, RenderJobShow, Snapshot, SnapshotShow, Source,
     SourceShow, Speaker, Timeline, TimelineShow, TurnShow, STILL_SECONDS,

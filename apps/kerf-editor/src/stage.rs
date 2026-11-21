@@ -159,13 +159,25 @@ impl MaskTool {
     }
 }
 
+/// How the picture's mask tools stand among a menu's
+/// [`crate::commands::MenuStates`] and the app menu's states and ticks:
+/// each by an id of its own, as if it were a command of the registry's
+/// (which does not carry them).
+pub fn mask_tool_id(tool: MaskTool) -> &'static str {
+    match tool {
+        MaskTool::Rectangle => "mask.rectangle",
+        MaskTool::Ellipse => "mask.ellipse",
+        MaskTool::Pen => "mask.pen",
+    }
+}
+
 /// Binds the picture's keys. ⇧R ⇧E ⇧P take out (or put down) a mask tool
 /// wherever the window has the keys, as Qt's View menu did (typing in a
 /// field types them); Delete and Backspace, Esc and Return act on what the
 /// picture has chosen or is drawing, ahead of the window's own keys, only
 /// while it has something to act on.
 ///
-/// `commands::bind` calls it after the registry's keys, since binding a
+/// `keymap::bind` calls it after the registry's keys, since binding a
 /// keymap clears these; the stage binds them again whenever it draws and
 /// finds them gone.
 pub fn bind_keys(cx: &mut App) {
@@ -1380,7 +1392,7 @@ impl StageView {
                     (name, making.clone())
                 })
                 .collect();
-            let said = chip::following(&makings).map(|following| Said {
+            let said = crate::chip::following(&makings).map(|following| Said {
                 words: following.said,
                 stands: Some(following.stands),
                 tip: Some(following.tip),
@@ -1889,7 +1901,7 @@ impl StageView {
                         let _ = this.update(cx, |stage, cx| stage.set_zoom(zoom, cx));
                     });
                 if zoom <= 0.0 {
-                    item.key(crate::commands::shown_keys("Shift+Z"))
+                    item.key(crate::shortcuts::shown_keys("Shift+Z"))
                 } else {
                     item
                 }
@@ -2704,7 +2716,7 @@ impl StageView {
         let timeline = session.timeline();
         let changes = proposal
             .and_then(|proposal| self.book.timeline_of(proposal, &proposal_id))
-            .map(|proposed| crate::chat::clip_changes(timeline, proposed))
+            .map(|proposed| crate::changes::clip_changes(timeline, proposed))
             .unwrap_or_default();
         let summary = proposal.map(ProposalShow::summary).unwrap_or_default();
         let detail = hud::detail(
@@ -2730,7 +2742,7 @@ impl StageView {
                     let key = command
                         .keys
                         .first()
-                        .map(|key| crate::commands::shown_keys(key))?;
+                        .map(|key| crate::shortcuts::shown_keys(key))?;
                     Some((command.id, key))
                 })
                 .collect();
@@ -2947,7 +2959,7 @@ impl StageView {
                     .on(self.tool == Some(tool))
                     .disabled(!drawable)
                     .tooltip(tool.label())
-                    .key(crate::commands::shown_keys(tool.shortcut()))
+                    .key(crate::shortcuts::shown_keys(tool.shortcut()))
                     .reason(transport_tip(
                         tool.label(),
                         Some("Choose a picture clip to draw on"),
@@ -4215,187 +4227,6 @@ fn paint_edge_light(
     }
 }
 
-/// What the chip over the picture says of what is being made: pure, so
-/// that it can be held to what Qt's said.
-pub mod chip {
-    /// How a making's line says it stands (`asked`, `waiting … 2 ahead`,
-    /// `running 12s`, `rendering 40%`, `made 31s`).
-    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-    pub enum Phase {
-        Asked,
-        /// Its turn on the server not yet come, with how many are ahead.
-        Waiting {
-            ahead: Option<u32>,
-        },
-        Running,
-        Rendering,
-        Made,
-        Other,
-    }
-
-    impl Phase {
-        /// Waiting its turn: queued, not yet making.
-        pub fn queued(self) -> bool {
-            matches!(self, Phase::Asked | Phase::Waiting { .. })
-        }
-    }
-
-    /// The first word of `line`, taken whole. The line is whatever the
-    /// making's program printed, in any script: it is cut only where a
-    /// character ends.
-    fn starts_with_word(line: &str, word: &str) -> bool {
-        let (Some(head), Some(rest)) = (line.get(..word.len()), line.get(word.len()..)) else {
-            return false;
-        };
-        head.eq_ignore_ascii_case(word)
-            && !rest
-                .chars()
-                .next()
-                .is_some_and(|next| next.is_alphanumeric() || next == '_')
-    }
-
-    /// How the making's `line` says it stands.
-    pub fn phase(line: &str) -> Phase {
-        let said = line.trim();
-        if starts_with_word(said, "asked") {
-            return Phase::Asked;
-        }
-        if starts_with_word(said, "waiting") {
-            // The number just before "ahead".
-            let words: Vec<&str> = said.split_whitespace().collect();
-            let bare = |word: &str| word.trim_matches(|c: char| !c.is_alphanumeric()).to_owned();
-            let ahead = words
-                .windows(2)
-                .find(|pair| bare(pair[1]).eq_ignore_ascii_case("ahead"))
-                .and_then(|pair| bare(pair[0]).parse().ok());
-            return Phase::Waiting { ahead };
-        }
-        for (word, phase) in [
-            ("running", Phase::Running),
-            ("rendering", Phase::Rendering),
-            ("made", Phase::Made),
-        ] {
-            if starts_with_word(said, word) {
-                return phase;
-            }
-        }
-        Phase::Other
-    }
-
-    /// Seconds as a clock: `1:05`, or `1:02:05` past the hour.
-    pub fn elapsed(seconds: u64) -> String {
-        let (hours, minutes, rest) = (seconds / 3600, (seconds / 60) % 60, seconds % 60);
-        if hours > 0 {
-            format!("{hours}:{minutes:02}:{rest:02}")
-        } else {
-            format!("{minutes}:{rest:02}")
-        }
-    }
-
-    /// A file's name without its extension.
-    pub fn stem(file: &str) -> &str {
-        match file.rfind('.') {
-            Some(at) if at > 0 => &file[..at],
-            _ => file,
-        }
-    }
-
-    /// The chip for the makings, each its media's name, its line and the
-    /// seconds since it began, in the window's order: the one making ahead
-    /// of those waiting their turn, "queued, N ahead" while it waits, its
-    /// clock while it makes, and " +N" for the others. None with none.
-    pub fn makings(makings: &[(String, String, u64)]) -> Option<String> {
-        let shown = makings
-            .iter()
-            .find(|(_, line, _)| !phase(line).queued())
-            .or_else(|| makings.first())?;
-        let (name, line, seconds) = shown;
-        let mut chip = format!("Making {name} · {}", stands(line, *seconds));
-        if makings.len() > 1 {
-            chip.push_str(&format!(" +{}", makings.len() - 1));
-        }
-        Some(chip)
-    }
-
-    /// How a making stands, by its `line` and the `seconds` since it
-    /// began: "queued, 2 ahead" or "queued" while it waits its turn, else
-    /// its clock.
-    fn stands(line: &str, seconds: u64) -> String {
-        match phase(line) {
-            Phase::Waiting { ahead: Some(ahead) } if ahead > 0 => format!("queued, {ahead} ahead"),
-            other if other.queued() => "queued".to_owned(),
-            _ => elapsed(seconds),
-        }
-    }
-
-    /// What the chip says of the makings while they run, followed in words
-    /// as Qt's toolbar status followed them.
-    #[derive(Clone, Debug, PartialEq, Eq)]
-    pub struct Following {
-        /// What the one shown last said, as `store::making_status` puts it
-        /// ("Making m4: <line>", "Making take 2 of m4 from its steps…"):
-        /// cut short on the chip where it has no room.
-        pub said: String,
-        /// After it, never cut: how it stands ("0:41", "queued, 2 ahead")
-        /// and " +N" for the others.
-        pub stands: String,
-        /// Its tip: each making's words whole and how it stands, a line
-        /// each, the one shown first.
-        pub tip: String,
-    }
-
-    /// The chip for the makings, each its media's name, its take, its line
-    /// and the seconds since it began, in the window's order: the one
-    /// making ahead of those waiting their turn, as `makings` chooses.
-    /// None with none.
-    pub fn following(makings: &[(String, crate::store::Making)]) -> Option<Following> {
-        following_at(makings, std::time::Instant::now())
-    }
-
-    /// The chip for the makings as it stands at `now`: `following`, with
-    /// each clock counted from when its making began to `now` (none for
-    /// one that begins after it).
-    pub fn following_at(
-        makings: &[(String, crate::store::Making)],
-        now: std::time::Instant,
-    ) -> Option<Following> {
-        let seconds =
-            |making: &crate::store::Making| now.saturating_duration_since(making.since).as_secs();
-        let first = makings
-            .iter()
-            .position(|(_, making)| !phase(&making.line).queued())
-            .unwrap_or(0);
-        let (name, shown) = makings.get(first)?;
-        let mut stands = stands(&shown.line, seconds(shown));
-        if makings.len() > 1 {
-            stands.push_str(&format!(" +{}", makings.len() - 1));
-        }
-        let line = |(name, making): &(String, crate::store::Making)| {
-            format!(
-                "{} · {}",
-                crate::store::making_status(name, making),
-                self::stands(&making.line, seconds(making))
-            )
-        };
-        let tip = std::iter::once(&makings[first])
-            .chain(
-                makings
-                    .iter()
-                    .enumerate()
-                    .filter(|(index, _)| *index != first)
-                    .map(|(_, making)| making),
-            )
-            .map(line)
-            .collect::<Vec<_>>()
-            .join("\n");
-        Some(Following {
-            said: crate::store::making_status(name, shown),
-            stands,
-            tip,
-        })
-    }
-}
-
 /// What the preview render's card over the picture stands on, for
 /// [`render_card_shows`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -4441,7 +4272,7 @@ pub fn render_stop_holds(stopped: Option<&str>, event: &Event) -> bool {
 /// What the preview render's card over the picture says: pure, so that it
 /// can be held to what Qt's said.
 pub mod hud {
-    use crate::chat::ClipChange;
+    use crate::changes::ClipChange;
     use crate::model;
 
     /// Stop's tip and its key, as Qt's had them: Esc stops the render

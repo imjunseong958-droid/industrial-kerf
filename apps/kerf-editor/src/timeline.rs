@@ -53,6 +53,7 @@ use crate::model::{
     TrackKind, TrackShow,
 };
 use crate::motion;
+use crate::prefs::TrackHeights;
 use crate::session::{BridgeEvent, Session};
 use crate::stage::{self, MaskTool};
 use crate::store::{Change, MediaActivity};
@@ -68,7 +69,6 @@ use gpui::{
 };
 use kerf_bridge::event::{Check, Severity};
 use kerf_bridge::{Command, Event};
-use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::cell::Cell;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -262,15 +262,6 @@ pub enum TimelineEvent {
 
 // ---------------------------------------------------------- track heights
 
-/// How tall each track is drawn: one height for every track when set,
-/// a track's own over that, else each kind's own.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct TrackHeights {
-    pub all: Option<f32>,
-    pub tracks: BTreeMap<String, f32>,
-}
-
 impl TrackHeights {
     /// The height of track `id` of `kind`.
     pub fn height(&self, id: &str, kind: TrackKind) -> f32 {
@@ -371,7 +362,7 @@ pub fn watched_clips(snapshot: &model::Snapshot, id: &str) -> HashSet<String> {
         .or_else(|| snapshot.proposal_timelines.get(id));
     proposed
         .map(|proposed| {
-            crate::chat::clip_changes(&snapshot.timeline, proposed)
+            crate::changes::clip_changes(&snapshot.timeline, proposed)
                 .into_iter()
                 .filter(|change| !change.transition)
                 .map(|change| change.clip)
@@ -3275,7 +3266,7 @@ impl TimelineView {
             .1
             .get(id)
             .and_then(|keys| keys.first())
-            .map(|key| crate::commands::shown_keys(key))
+            .map(|key| crate::shortcuts::shown_keys(key))
     }
 
     // --------------------------------------------------------------- menus
@@ -3346,7 +3337,10 @@ impl TimelineView {
         let clip = &lane.clips[index];
         // Ask's state with Kerf's access too (no key, signed out), as the
         // window's menus have it: greyed with why, its key shown.
-        let states = self.session.read(cx).command_states(crate::app::cloud(cx));
+        let states = self
+            .session
+            .read(cx)
+            .command_states(crate::session::cloud(cx));
         let mut items = vec![self
             .command_item("ai.ask", "Ask Kerf…", &states, cx)
             .icon(Icon::Sparkle)];
@@ -3869,8 +3863,8 @@ impl TimelineView {
         let other_tool = !matches!(self.tool, Tool::Selection | Tool::Razor);
         let tool_key = self.keys_of(self.tool.command(), cx);
         let snap_key = self.keys_of("sequence.snap", cx);
-        let zoom_in = crate::commands::shown_keys("Ctrl+=");
-        let zoom_out = crate::commands::shown_keys("Ctrl+-");
+        let zoom_in = crate::shortcuts::shown_keys("Ctrl+=");
+        let zoom_out = crate::shortcuts::shown_keys("Ctrl+-");
         let (fit, most) = self.zoom_range();
         let share = zoom_share(self.view.pps, fit, most);
         // With the picture pane closed, the transport first; then where

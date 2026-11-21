@@ -3,17 +3,17 @@
 use crate::support::key;
 use gpui::{point, px, size, Action, Bounds, KeyBinding, KeyContext, Keymap, Keystroke, NoAction};
 use kerf_editor::chat::{CyclePermissions, COMPOSER_CONTEXT};
-use kerf_editor::commands::{
-    catalog, keymap_menu, keystroke, menus_with, shown_keys, RunCommand, WORKSPACE,
-};
+use kerf_editor::commands::{catalog, RunCommand, WORKSPACE};
 use kerf_editor::input::{
     edit_kind, edit_rows, extend_by, line_at, outdent_range, scroll_to_show, scroll_x_to_show,
     word_at, Backspace, Cancel, EditCan, EditKind, EditRow, End, History, Home, Left, Right,
     Snapshot, Submit, SubmitCode, Unit, INDENT,
 };
+use kerf_editor::keymap::{keymap_menu, menus_with};
 use kerf_editor::palette::{
     matches, recent_commands, recent_path, shortcut, unavailable, RECENT_MENU,
 };
+use kerf_editor::shortcuts::{keystroke, shown_keys};
 use kerf_editor::sidebar::{
     ChooseKeymap, DeleteRow, MenuChoose, MenuDown, MenuUp, OpenMenu, RenameRow,
 };
@@ -24,15 +24,16 @@ use kerf_editor::workspace::{
     escape_goes, holds_keys_itself, render_card_shows, settle_keys, EscapeAt, EscapeGoes, Holder,
     KeysGo, RenderCard,
 };
-use kerf_editor::{input, sidebar, ui};
+use kerf_editor::{chat, input, sidebar, ui};
 use proptest::prelude::*;
 use serde_json::json;
 
 // ------------------------------------------------------------ keys
 
-/// The window's keymap as `commands::bind` and the sidebar make it.
+/// The window's keymap as `keymap::bind` and the sidebar make it.
 fn window_keymap_with_sidebar(keymap: &str) -> Keymap {
     let mut bindings = input::key_bindings();
+    bindings.extend(chat::key_bindings());
     for command in catalog(keymap) {
         for shortcut in &command.keys {
             let Some(keys) = keystroke(shortcut) else {
@@ -154,11 +155,12 @@ fn tab_in_an_open_sidebar_menu_moves_in_it_as_in_qts_menus() {
 
 // ------------------------------------------------------------ keys
 
-/// The window's keymap as `commands::bind` makes it: the field's and the
+/// The window's keymap as `keymap::bind` makes it: the field's and the
 /// kit's keys first, then every registry shortcut, each plain one unbound
 /// in fields.
 fn window_keymap_with_kit(keymap: &str, extra: Vec<KeyBinding>) -> Keymap {
     let mut bindings = input::key_bindings();
+    bindings.extend(chat::key_bindings());
     bindings.extend(ui::key_bindings());
     for command in catalog(keymap) {
         for shortcut in &command.keys {
@@ -247,15 +249,15 @@ fn the_usual_editing_keys_are_the_fields() {
         ("shift-ctrl-right", &input::SelectWordRight),
         ("alt-delete", &input::DeleteWordRight),
         ("ctrl-delete", &input::DeleteWordRight),
-        ("tab", &input::FocusNext),
-        ("shift-tab", &input::FocusPrevious),
+        ("tab", &ui::FocusNext),
+        ("shift-tab", &ui::FocusPrevious),
     ] {
         assert!(first_is(&keymap, &FIELD, key, action), "{key}");
     }
     // In the composer, Shift-Tab still goes round the permissions; Tab leaves.
     let composer = [WORKSPACE, COMPOSER_CONTEXT, input::CONTEXT, input::KEYS];
     assert!(first_is(&keymap, &composer, "shift-tab", &CyclePermissions));
-    assert!(first_is(&keymap, &composer, "tab", &input::FocusNext));
+    assert!(first_is(&keymap, &composer, "tab", &ui::FocusNext));
 }
 
 #[test]
@@ -389,32 +391,50 @@ fn tab_from_a_panel_itself_goes_into_it() {
     for panel in ui::PANELS {
         let open = [WORKSPACE, panel];
         assert!(tab_is_unbound(&keymap, &stack(&open), true), "{panel}");
-        assert!(tab_goes_on_from(&keymap, &stack(&open), true), "{panel}");
-        assert!(tab_goes_on_from(&keymap, &stack(&open), false), "{panel}");
+        assert!(
+            tab_goes_on_from(&keymap, &stack(&open), true, WORKSPACE),
+            "{panel}"
+        );
+        assert!(
+            tab_goes_on_from(&keymap, &stack(&open), false, WORKSPACE),
+            "{panel}"
+        );
         assert_eq!(ui::panel_of(&stack(&open)), Some(panel));
     }
     // A region's own box (the Media band's) does not keep Tab either.
     assert!(tab_goes_on_from(
         &keymap,
         &stack(&[WORKSPACE, "MediaBand"]),
-        true
+        true,
+        WORKSPACE
     ));
     // From a field or a control in a panel, the field's or the control's
     // Tab has it.
     let field = [WORKSPACE, "Settings", input::CONTEXT, input::KEYS];
     assert!(!tab_is_unbound(&keymap, &stack(&field), true));
-    assert!(!tab_goes_on_from(&keymap, &stack(&field), true));
+    assert!(!tab_goes_on_from(&keymap, &stack(&field), true, WORKSPACE));
     let control = [WORKSPACE, "Finish", ui::CONTROL];
-    assert!(!tab_goes_on_from(&keymap, &stack(&control), false));
+    assert!(!tab_goes_on_from(
+        &keymap,
+        &stack(&control),
+        false,
+        WORKSPACE
+    ));
     // Over the launcher, the launcher's own stops have it.
     assert!(!tab_goes_on_from(
         &keymap,
         &stack(&["Launcher", "Settings"]),
-        true
+        true,
+        WORKSPACE
     ));
     // From the window's own box the sidebar takes it.
-    assert!(!tab_goes_on_from(&keymap, &stack(&[WORKSPACE]), true));
-    assert!(!tab_goes_on_from(&keymap, &[], true));
+    assert!(!tab_goes_on_from(
+        &keymap,
+        &stack(&[WORKSPACE]),
+        true,
+        WORKSPACE
+    ));
+    assert!(!tab_goes_on_from(&keymap, &[], true, WORKSPACE));
     assert_eq!(ui::panel_of(&stack(&[WORKSPACE])), None);
 }
 
@@ -425,25 +445,20 @@ fn in_code_tab_indents_and_ctrl_tab_leaves() {
         let keymap = window_keymap_with_kit(name, Vec::new());
         assert!(first_is(&keymap, &code, "tab", &input::Indent), "{name}");
         assert!(first_is(&keymap, &code, "shift-tab", &input::Outdent));
-        assert!(first_is(&keymap, &code, "ctrl-tab", &input::FocusNext));
+        assert!(first_is(&keymap, &code, "ctrl-tab", &ui::FocusNext));
         assert!(first_is(
             &keymap,
             &code,
             "ctrl-shift-tab",
-            &input::FocusPrevious
+            &ui::FocusPrevious
         ));
         // Ctrl+Tab goes on to the next stop: the field's own Tab is no
         // view's.
         assert!(!tab_is_taken(&keymap, &stack(&code), true));
         assert!(!tab_is_taken(&keymap, &stack(&code), false));
         // Any other field leaves on Tab, as the composer did in Qt.
-        assert!(first_is(&keymap, &FIELD, "tab", &input::FocusNext));
-        assert!(first_is(
-            &keymap,
-            &FIELD,
-            "shift-tab",
-            &input::FocusPrevious
-        ));
+        assert!(first_is(&keymap, &FIELD, "tab", &ui::FocusNext));
+        assert!(first_is(&keymap, &FIELD, "shift-tab", &ui::FocusPrevious));
     }
 }
 
@@ -750,10 +765,11 @@ proptest! {
     }
 }
 
-/// The window's keymap as `commands::bind` makes it: the field's keys first,
+/// The window's keymap as `keymap::bind` makes it: the field's keys first,
 /// then every registry shortcut, each plain one unbound in fields.
 fn window_keymap(keymap: &str) -> Keymap {
     let mut bindings = input::key_bindings();
+    bindings.extend(chat::key_bindings());
     for command in catalog(keymap) {
         for shortcut in &command.keys {
             let Some(keys) = keystroke(shortcut) else {

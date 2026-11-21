@@ -11,7 +11,7 @@
 //! the project lets go of its artwork. A file that is missing or cannot be
 //! decoded has none, and the view draws its stand-in; nothing here panics
 //! on what a file holds. FFmpeg is looked for where kerfd looks
-//! ([`crate::focus::ffmpeg_bin`]: `KERF_FFMPEG`, beside the editor, the PATH).
+//! ([`ffmpeg_bin`]: `KERF_FFMPEG`, beside the editor, the PATH).
 //!
 //! [`crate::session::Session`] holds one [`Artwork`] (`session.artwork`),
 //! tells it the project's media on each snapshot, and redraws the window
@@ -1276,13 +1276,24 @@ pub fn fill_gaps<T: Clone>(frames: Vec<Option<T>>) -> Option<Vec<T>> {
     )
 }
 
+/// The FFmpeg the editor runs: the one kerfd runs
+/// ([`kerf_bridge::ffmpeg_bin`]: `KERF_FFMPEG`, beside the editor, where
+/// each package puts it, Homebrew's ffmpeg-full, then the PATH), found
+/// once (off the window's thread, the first time a frame is read);
+/// `ffmpeg` when none runs, to say so as it fails. Focus Region, the
+/// artwork (posters, filmstrips, peaks) and a shot's graph's pictures read
+/// with it.
+pub fn ffmpeg_bin() -> &'static Path {
+    Path::new(kerf_bridge::ffmpeg_bin())
+}
+
 /// Runs FFmpeg with `args`, handing what it writes to `sink` as it comes;
 /// true when it ended well. It is stopped after `limit`, or when the
 /// artwork is dropped.
 fn run(shared: &Shared, args: &[String], limit: Duration, mut sink: impl FnMut(&[u8])) -> bool {
     // The FFmpeg kerfd would run (`KERF_FFMPEG`, beside the editor, the
     // PATH), found once off the window's thread.
-    let mut command = Command::new(crate::focus::ffmpeg_bin());
+    let mut command = Command::new(ffmpeg_bin());
     command
         .args(args)
         .stdin(Stdio::null())

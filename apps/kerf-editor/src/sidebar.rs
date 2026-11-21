@@ -62,6 +62,14 @@ pub enum SidebarEvent {
     /// A conversation was chosen, or New conversation: the window gives
     /// the composer the keys, as Qt's did.
     Chosen,
+    /// Another folder's conversation `id` (None: a new one) was chosen: the
+    /// window has it opened in `folder`'s window once `OpenRecent`,
+    /// dispatched right after, has run
+    /// ([`crate::workspace::open_conversation_in`]).
+    OpenConversationIn {
+        folder: PathBuf,
+        id: Option<String>,
+    },
 }
 
 impl EventEmitter<SidebarEvent> for SidebarView {}
@@ -486,7 +494,7 @@ pub fn recent_folders(recent: &[PathBuf], open: Option<&Path>) -> Vec<PathBuf> {
         if folder.is_dir()
             && !folders
                 .iter()
-                .any(|known| crate::app::same_folder(known, folder))
+                .any(|known| crate::folders::same_folder(known, folder))
         {
             folders.push(folder.clone());
         }
@@ -519,7 +527,7 @@ pub fn folder_entries(recent: &[PathBuf], open: Option<&Path>) -> Vec<MenuEntry>
         .collect();
     let first_folder = entries.len();
     entries.extend(folders.iter().map(|folder| MenuEntry {
-        checked: open.is_some_and(|open| crate::app::same_folder(open, folder)),
+        checked: open.is_some_and(|open| crate::folders::same_folder(open, folder)),
         tip: Some(folder.display().to_string()),
         ..MenuEntry::new(Entry::Open(folder.clone()), folder_name(folder)).icon(Icon::Folder)
     }));
@@ -687,38 +695,11 @@ impl<'de> serde::Deserialize<'de> for Counted {
     }
 }
 
-/// Opens conversation `id` (None: a new one) in the window whose project
-/// is `folder`, once what opens it there has run (`OpenRecent`, which
-/// opens the folder's project in place of this window, or brings its own
-/// window to the front).
-pub fn open_conversation_in(folder: PathBuf, id: Option<String>, cx: &mut App) {
-    cx.defer(move |cx| {
-        for handle in cx.windows() {
-            let Some(workspace) = handle.downcast::<crate::workspace::Workspace>() else {
-                continue;
-            };
-            let _ = workspace.update(cx, |workspace, _, cx| {
-                let session = workspace.session().clone();
-                session.update(cx, |session, cx| {
-                    let here = session
-                        .project
-                        .as_deref()
-                        .is_some_and(|open| crate::app::same_folder(open, &folder));
-                    if here {
-                        session.open_conversation(id.clone());
-                        cx.notify();
-                    }
-                });
-            });
-        }
-    });
-}
-
 /// The recent folders with `folder` taken off, however written.
 pub fn forget_folder(recent: &[PathBuf], folder: &Path) -> Vec<PathBuf> {
     recent
         .iter()
-        .filter(|known| !crate::app::same_folder(known, folder))
+        .filter(|known| !crate::folders::same_folder(known, folder))
         .cloned()
         .collect()
 }
@@ -943,7 +924,7 @@ fn command_row(input: &AppMenuInput, id: &str, words: Option<&str>) -> AppRow {
     AppRow {
         key: command
             .and_then(|command| command.keys.first())
-            .map(|key| crate::commands::shown_keys(key)),
+            .map(|key| crate::shortcuts::shown_keys(key)),
         checked: command.is_some_and(|command| command.checkable) && input.checked.contains(id),
         disabled: reason.is_some(),
         tip: reason,
@@ -960,12 +941,12 @@ fn command_row(input: &AppMenuInput, id: &str, words: Option<&str>) -> AppRow {
 /// The row for the picture's mask tool `tool`, with its key: ticked while
 /// it is out, greyed with why while none can be (no picture clip chosen
 /// that the picture can place), as the states and ticks say by its own id
-/// ([`crate::commands::mask_tool_id`]).
+/// ([`crate::stage::mask_tool_id`]).
 fn mask_row(input: &AppMenuInput, tool: crate::stage::MaskTool) -> AppRow {
-    let id = crate::commands::mask_tool_id(tool);
+    let id = crate::stage::mask_tool_id(tool);
     let reason = crate::palette::unavailable(input.states, id).map(str::to_owned);
     AppRow {
-        key: Some(crate::commands::shown_keys(tool.shortcut())),
+        key: Some(crate::shortcuts::shown_keys(tool.shortcut())),
         checked: input.checked.contains(id),
         disabled: reason.is_some(),
         tip: reason,
@@ -1288,7 +1269,7 @@ pub fn app_menu_items(rows: &[AppRow]) -> Vec<ui::MenuItem> {
 /// Who chat runs on in `session`'s window, as the account at the foot says
 /// it ([`account_line`]), and whether it is signed in to Kerf.
 pub fn account_of(session: &Session, cx: &App) -> (String, String, bool) {
-    let cloud = crate::app::cloud(cx);
+    let cloud = crate::session::cloud(cx);
     let has_key = session.ai_access(cloud).as_deref() != Some("noKey");
     let (title, below) = account_line(
         session.prefs.provider,
@@ -1579,7 +1560,10 @@ impl SidebarView {
             // Kerf's account, as the foot says it.
             cx.subscribe(&session, |_, _, event: &BridgeEvent, cx| {
                 if let Event::Cloud { .. } = &*event.0 {
-                    crate::app::hear_cloud(&serde_json::to_value(&event.0).unwrap_or_default(), cx);
+                    crate::session::hear_cloud(
+                        &serde_json::to_value(&event.0).unwrap_or_default(),
+                        cx,
+                    );
                     cx.notify();
                 }
             }),
@@ -1933,7 +1917,7 @@ impl SidebarView {
                     .read(cx)
                     .project
                     .as_deref()
-                    .is_some_and(|open| crate::app::same_folder(open, &folder));
+                    .is_some_and(|open| crate::folders::same_folder(open, &folder));
                 if !here {
                     window.dispatch_action(
                         Box::new(OpenRecent {
@@ -1983,7 +1967,7 @@ impl SidebarView {
             .read(cx)
             .project
             .as_deref()
-            .is_some_and(|open| crate::app::same_folder(open, &folder));
+            .is_some_and(|open| crate::folders::same_folder(open, &folder));
         if here {
             self.session.update(cx, |session, cx| {
                 session.open_conversation(id);
@@ -1992,13 +1976,16 @@ impl SidebarView {
             cx.emit(SidebarEvent::Chosen);
             return;
         }
+        cx.emit(SidebarEvent::OpenConversationIn {
+            folder: folder.clone(),
+            id,
+        });
         window.dispatch_action(
             Box::new(OpenRecent {
                 path: folder.to_string_lossy().into_owned().into(),
             }),
             cx,
         );
-        open_conversation_in(folder, id, cx);
     }
 
     /// Remembers the conversations listed (`listed`: as the bridge listed
@@ -2842,7 +2829,7 @@ impl SidebarView {
             .filter(|folder| {
                 !current
                     .as_deref()
-                    .is_some_and(|current| crate::app::same_folder(current, folder))
+                    .is_some_and(|current| crate::folders::same_folder(current, folder))
                     && session.prefs.folder_folded(folder) == Some(false)
                     && folder.is_dir()
             })
@@ -3092,7 +3079,7 @@ impl Render for SidebarView {
             .filter(|project| {
                 !current
                     .as_deref()
-                    .is_some_and(|current| crate::app::same_folder(current, project))
+                    .is_some_and(|current| crate::folders::same_folder(current, project))
                     && project.is_dir()
             })
             .take(6)
@@ -3180,7 +3167,7 @@ impl Render for SidebarView {
                     // here, over the sidebar (Qt's toolbar_wiring), so
                     // Hide sidebar starts past them, and the row's empty
                     // stretch moves and zooms the window.
-                    .pl(px(crate::app::title_bar_lead(window)))
+                    .pl(px(crate::chrome::title_bar_lead(window)))
                     .pr(px(8.0))
                     .gap(px(4.0))
                     .child(
@@ -3188,7 +3175,7 @@ impl Render for SidebarView {
                             .tooltip("Hide sidebar")
                             .on_click(cx.listener(|_, _, _, cx| cx.emit(SidebarEvent::Hide))),
                     )
-                    .child(crate::app::title_bar_stretch(div().flex_1().h_full())),
+                    .child(crate::chrome::title_bar_stretch(div().flex_1().h_full())),
             )
             .child(
                 div()
@@ -3330,7 +3317,7 @@ impl Render for SidebarView {
                     .child(
                         icon_button("settings", Icon::Gear)
                             .tooltip("Settings")
-                            .key(crate::commands::shown_keys("Ctrl+,"))
+                            .key(crate::shortcuts::shown_keys("Ctrl+,"))
                             .on_click(cx.listener(|_, _, _, cx| cx.emit(SidebarEvent::Settings))),
                     ),
             )

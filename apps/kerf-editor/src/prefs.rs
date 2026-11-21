@@ -327,7 +327,7 @@ pub struct Prefs {
     /// How tall each project's tracks are drawn, as the person left them
     /// (a head's edge dragged, View ▸ Fit Tracks to Panel), by the
     /// project's absolute folder ([`project_key`]).
-    pub track_heights: BTreeMap<String, crate::timeline::TrackHeights>,
+    pub track_heights: BTreeMap<String, TrackHeights>,
     /// Where a shot's graph's cards were dragged, each card's place by its
     /// id, under its project and shot (`making::placement_key`, or a
     /// model's workflow under its shot, `making::workflow_key`).
@@ -690,7 +690,7 @@ impl Prefs {
     }
 
     /// The track heights kept for `project`, or each kind's own.
-    pub fn track_heights_of(&self, project: &Path) -> crate::timeline::TrackHeights {
+    pub fn track_heights_of(&self, project: &Path) -> TrackHeights {
         self.track_heights
             .get(&project_key(project))
             .cloned()
@@ -698,9 +698,9 @@ impl Prefs {
     }
 
     /// Keeps `heights` for `project`; each kind's own heights keep nothing.
-    pub fn keep_track_heights(&mut self, project: &Path, heights: crate::timeline::TrackHeights) {
+    pub fn keep_track_heights(&mut self, project: &Path, heights: TrackHeights) {
         let key = project_key(project);
-        if heights == crate::timeline::TrackHeights::default() {
+        if heights == TrackHeights::default() {
             self.track_heights.remove(&key);
         } else {
             self.track_heights.insert(key, heights);
@@ -930,6 +930,18 @@ pub fn random_id() -> String {
         hasher.finish()
     };
     format!("{:016x}{:016x}", half(1), half(2))
+}
+
+// ---------------------------------------------------------------- track heights
+
+/// How tall each track is drawn: one height for every track when set,
+/// a track's own over that, else each kind's own. The timeline works a
+/// track's height out ([`TrackHeights::height`], in timeline.rs).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TrackHeights {
+    pub all: Option<f32>,
+    pub tracks: BTreeMap<String, f32>,
 }
 
 // ---------------------------------------------------------------- the master
@@ -1479,12 +1491,12 @@ pub fn import_qt(settings: &QtSettings, prefs: &mut Prefs) -> Vec<String> {
         let Some(path) = kept.path.filter(|path| Path::new(path).is_absolute()) else {
             continue;
         };
-        let mut project = crate::timeline::TrackHeights::default();
+        let mut project = TrackHeights::default();
         project.set_all(kept.all);
         for (track, height) in &kept.tracks {
             project.set(track, Some(*height));
         }
-        if project != crate::timeline::TrackHeights::default() {
+        if project != TrackHeights::default() {
             prefs.keep_track_heights(Path::new(&path), project);
             took_heights = true;
         }

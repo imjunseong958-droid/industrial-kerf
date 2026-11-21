@@ -20,7 +20,8 @@
 
 use crate::chat::{ChatEvent, ChatView};
 use crate::commands::{ClearRecent, OpenRecent, RunCommand, WORKSPACE};
-use crate::export::{ExportEvent, ExportView, Quality};
+use crate::delivery::Quality;
+use crate::export::{ExportEvent, ExportView};
 use crate::icons::Icon;
 use crate::input::{InputEvent, TextInput};
 use crate::media::MediaBand;
@@ -348,6 +349,9 @@ impl Workspace {
                                 .update(cx, |chat, cx| chat.focus_composer(window, cx));
                         }
                     }
+                    SidebarEvent::OpenConversationIn { folder, id } => {
+                        open_conversation_in(folder.clone(), id.clone(), cx)
+                    }
                 },
             ),
             // What the timeline cannot reach itself: the picture follows its
@@ -617,12 +621,12 @@ impl Workspace {
         .into_iter()
         .filter(|(_, on)| *on)
         .map(|(id, _)| id)
-        // The mask tool out, by its own id ([`crate::commands::mask_tool_id`]).
+        // The mask tool out, by its own id ([`crate::stage::mask_tool_id`]).
         .chain(
             self.stage
                 .read(cx)
                 .mask_tool()
-                .map(crate::commands::mask_tool_id),
+                .map(crate::stage::mask_tool_id),
         )
         .map(str::to_owned)
         .collect()
@@ -651,12 +655,15 @@ impl Workspace {
     /// Why each of the registry's commands cannot run now (null: it can),
     /// as every menu that lists them greys them: Ask Kerf… with Kerf's
     /// access too (no key, signed out), and the picture's mask tools by
-    /// their own ids ([`crate::commands::mask_tool_id`]).
+    /// their own ids ([`crate::stage::mask_tool_id`]).
     fn command_states(&self, cx: &App) -> serde_json::Value {
-        let mut states = self.session.read(cx).command_states(crate::app::cloud(cx));
+        let mut states = self
+            .session
+            .read(cx)
+            .command_states(crate::session::cloud(cx));
         let reason = self.mask_reason(cx);
         for tool in crate::stage::MaskTool::ALL {
-            states[crate::commands::mask_tool_id(tool)] =
+            states[crate::stage::mask_tool_id(tool)] =
                 reason.map_or(serde_json::Value::Null, serde_json::Value::from);
         }
         states
@@ -827,7 +834,7 @@ impl Workspace {
                 let raw = error.message.clone();
                 // Saving over a preset of that name: the Save dialog asks
                 // about it itself (the store kept the question).
-                if crate::presets::existing_preset(&raw).is_some()
+                if crate::preset_file::existing_preset(&raw).is_some()
                     && self.session.read(cx).state.preset_exists.is_some()
                 {
                     return;
@@ -1949,7 +1956,7 @@ impl Workspace {
             };
             if current
                 .as_deref()
-                .is_some_and(|current| crate::app::same_folder(current, &project))
+                .is_some_and(|current| crate::folders::same_folder(current, &project))
             {
                 return;
             }
@@ -1961,7 +1968,7 @@ impl Workspace {
     /// Opens `project` in place of this window: one that is not a project
     /// yet is asked about first; this window's own project stays as it is.
     fn open_chosen(&mut self, project: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
-        if needs_start(&project) {
+        if crate::folders::needs_start(&project) {
             self.ask_to_start(project, window, cx);
         } else {
             self.replace_with(project, false, window, cx);
@@ -1982,7 +1989,7 @@ impl Workspace {
         if session
             .project
             .as_deref()
-            .is_some_and(|current| crate::app::same_folder(current, &project))
+            .is_some_and(|current| crate::folders::same_folder(current, &project))
         {
             window.activate_window();
             return;
@@ -2014,10 +2021,15 @@ impl Workspace {
             cx.subscribe(
                 &launcher,
                 move |_, event: &crate::launcher::LauncherEvent, cx| match event {
-                    crate::launcher::LauncherEvent::Open { project, starts } => {
+                    crate::launcher::LauncherEvent::Open {
+                        project,
+                        starts,
+                        warnings,
+                    } => {
+                        crate::app::warn_when_open(project, warnings.clone(), cx);
                         let here = current
                             .as_deref()
-                            .is_some_and(|current| crate::app::same_folder(current, project));
+                            .is_some_and(|current| crate::folders::same_folder(current, project));
                         if !here {
                             let place = replaced
                                 .update(cx, |_, window, _| window.window_bounds())
@@ -2191,7 +2203,7 @@ impl Workspace {
         self.pin_proposal(cx);
         let session = self.session.read(cx);
         let states = if id == "ai.ask" {
-            let cloud = crate::app::cloud(cx).cloned();
+            let cloud = crate::session::cloud(cx).cloned();
             session.command_states(cloud.as_ref())
         } else {
             kerf_bridge::commands_states(&session.command_context())
@@ -2452,7 +2464,7 @@ impl Workspace {
     fn bound_to_escape(&self, id: &str) -> bool {
         self.keys.1.get(id).is_some_and(|keys| {
             keys.iter()
-                .any(|key| crate::commands::keystroke(key).as_deref() == Some("escape"))
+                .any(|key| crate::shortcuts::keystroke(key).as_deref() == Some("escape"))
         })
     }
 
@@ -2475,7 +2487,7 @@ impl Workspace {
             .1
             .get(id)
             .and_then(|keys| keys.first())
-            .map(|key| crate::commands::shown_keys(key))
+            .map(|key| crate::shortcuts::shown_keys(key))
     }
 
     /// Esc in the window (outside a field, the timeline, and whatever is
@@ -2641,7 +2653,7 @@ impl Workspace {
             cx.notify();
         });
         // Binding the keymap clears every binding; it binds the views' own again.
-        crate::commands::bind(keymap.wire(), cx);
+        crate::keymap::bind(keymap.wire(), cx);
         let project = self.session.read(cx).project.clone();
         crate::commands::refresh_menus(project.as_deref(), cx);
         self.refresh_keys(cx);
@@ -2754,7 +2766,7 @@ impl Workspace {
         let renaming = self.renaming_title.is_some();
         let title_menu = self.title_menu.is_some();
         // At the window's leading edge on macOS, the window buttons' room.
-        let lead = toolbar_places(leading, crate::app::window_buttons_room(window)).lead;
+        let lead = toolbar_places(leading, crate::chrome::window_buttons_room(window)).lead;
         div()
             .h(px(layout::TOOLBAR))
             .flex_none()
@@ -2885,7 +2897,7 @@ impl Workspace {
             )
             // Its empty stretch: on macOS, where the toolbar is the title
             // bar, it moves the window and zooms it.
-            .child(crate::app::title_bar_stretch(div().flex_1().h_full()))
+            .child(crate::chrome::title_bar_stretch(div().flex_1().h_full()))
             .child(self.formats.clone())
             .child(self.collab.clone())
             .when_some(rendering, |bar, rendering| {
@@ -3662,7 +3674,7 @@ impl Render for Workspace {
         // The picture's shape, which splits the panel.
         let aspect = crate::stage::shown_aspect(self.session.read(cx));
         // Where the title and ⋯ are, for their menus to open under them.
-        let places = toolbar_places(leading, crate::app::window_buttons_room(window));
+        let places = toolbar_places(leading, crate::chrome::window_buttons_room(window));
         let title_left = main_left + places.title;
         // Where the panel's left edge is drawn, and where it comes to rest;
         // where the picture will be there, for what grows into it.
@@ -4583,7 +4595,7 @@ pub struct ToolbarPlaces {
 
 /// [`ToolbarPlaces`] for a toolbar at the window's leading edge or not
 /// (`leading`: the sidebar away), with `room` what macOS's window buttons
-/// need there ([`crate::app::window_buttons_room`]). At that edge the
+/// need there ([`crate::chrome::window_buttons_room`]). At that edge the
 /// toolbar starts past the buttons, Sidebar and ⋯ first, and its popups
 /// move on with the controls that open them.
 pub fn toolbar_places(leading: bool, room: f32) -> ToolbarPlaces {
@@ -4596,7 +4608,7 @@ pub fn toolbar_places(leading: bool, room: f32) -> ToolbarPlaces {
             app_menu: pad + TOOLBAR_STEP,
         };
     }
-    let lead = crate::app::lead_past(room);
+    let lead = crate::chrome::lead_past(room);
     ToolbarPlaces {
         lead,
         // Sidebar, then ⋯, then the title's row, 8 in, and 4 past it.
@@ -4804,11 +4816,6 @@ pub fn window_title(project: &str, timeline: &crate::model::Timeline) -> String 
     }
 }
 
-/// Whether `folder` is no project yet: it has no project.kerf.
-pub fn needs_start(folder: &Path) -> bool {
-    !folder.join("project.kerf").exists()
-}
-
 /// Opens `project` in a window of its own. `starts` when it was no project
 /// yet: once kerfd has it, its folder's media comes in (the launcher's
 /// `LauncherEvent::Open { starts }` means the same).
@@ -4847,12 +4854,39 @@ pub fn open_folder_in(
             let here = session
                 .project
                 .as_deref()
-                .is_some_and(|open| crate::app::same_folder(open, &project));
+                .is_some_and(|open| crate::folders::same_folder(open, &project));
             if fresh && here && workspace.start_media.is_none() {
                 workspace.start_media = Some(project.clone());
             }
         });
     }
+}
+
+/// Opens conversation `id` (None: a new one) in the window whose project
+/// is `folder`, once what opens it there has run (`OpenRecent`, which
+/// opens the folder's project in place of this window, or brings its own
+/// window to the front).
+pub fn open_conversation_in(folder: PathBuf, id: Option<String>, cx: &mut App) {
+    cx.defer(move |cx| {
+        for handle in cx.windows() {
+            let Some(workspace) = handle.downcast::<Workspace>() else {
+                continue;
+            };
+            let _ = workspace.update(cx, |workspace, _, cx| {
+                let session = workspace.session().clone();
+                session.update(cx, |session, cx| {
+                    let here = session
+                        .project
+                        .as_deref()
+                        .is_some_and(|open| crate::folders::same_folder(open, &folder));
+                    if here {
+                        session.open_conversation(id.clone());
+                        cx.notify();
+                    }
+                });
+            });
+        }
+    });
 }
 
 /// `button` with its key after its name in its tip, when it has one.
@@ -5045,8 +5079,9 @@ pub fn placed_since(
     cut: &crate::model::Timeline,
     seen: &HashSet<String>,
 ) -> (Vec<PlacedClip>, HashSet<String>) {
-    let changes = crate::chat::clip_changes(program, cut);
-    let key = |change: &crate::chat::ClipChange| format!("{}@{:.4}", change.clip, change.new_end);
+    let changes = crate::changes::clip_changes(program, cut);
+    let key =
+        |change: &crate::changes::ClipChange| format!("{}@{:.4}", change.clip, change.new_end);
     let now: HashSet<String> = changes.iter().map(key).collect();
     let mut placed: Vec<PlacedClip> = changes
         .iter()

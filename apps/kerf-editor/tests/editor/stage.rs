@@ -4,10 +4,12 @@ use crate::support::event;
 use gpui::{point, px, size, Bounds};
 use kerf_bridge::event::{Check, Finding};
 use kerf_bridge::Event;
-use kerf_editor::chat::ClipChange;
+use kerf_editor::artwork::ffmpeg_bin;
+use kerf_editor::changes::ClipChange;
+use kerf_editor::chip;
 use kerf_editor::focus::{
-    crop_box, crop_props, ffmpeg_bin, first_cut, focus_ops, readable_frame, shown_time,
-    track_region, typed_time, Region, NO_FRAME, TRACK_SIZE,
+    crop_box, crop_props, first_cut, focus_ops, readable_frame, shown_time, track_region,
+    typed_time, Region, NO_FRAME, TRACK_SIZE,
 };
 use kerf_editor::model::{Clip, Snapshot, SnapshotShow, Timeline};
 use kerf_editor::stage::overlay::{
@@ -17,7 +19,7 @@ use kerf_editor::stage::overlay::{
     MotionPath, Outline, Overlap, Projective, Pt, DRAW_LEAST, SAMPLED_STEPS,
 };
 use kerf_editor::stage::{
-    base64_decode, chip, hud, kerf_cutting, placed_clips, poster_source, preview_chip_words,
+    base64_decode, hud, kerf_cutting, placed_clips, poster_source, preview_chip_words,
     previewed_version, releases_cover, shows_program, transport_reasons, transport_tip, wide,
     zoom_words, zoomed, Heard, Kept, TRANSPORT, WIDE_FROM, ZOOMS,
 };

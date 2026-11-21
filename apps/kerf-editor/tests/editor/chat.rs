@@ -4,15 +4,16 @@ use crate::support::{apply, clip, event, preview, snapshot, texts, timeline_valu
 use kerf_bridge::event::{Check, CheckSummary};
 use kerf_bridge::Event;
 use kerf_editor::ask::{place, scope_choices, scope_words, GAP, HEIGHT, WIDTH};
+use kerf_editor::changes::{clip_changes, signed_frames};
 use kerf_editor::chat::{
-    access_reason, card_picture_size, card_turns, check_suggestions, clip_changes, clock_time,
-    colour_change, cut_frames, describe_script_line, draft_dot, effect_label, finishing,
-    join_queued, length_badge, media_stem, model_choices, model_label, next_permissions,
-    permission_look, permission_words, pin_order, previewing, recent_conversations, refusal,
-    request_before, rim_point, say_permissions, script_seconds, script_summary, script_words,
-    settled_age, settled_age_changes, settled_words, shown_frame, signed_frames, signed_seconds,
-    spans, strays_note, timecode_position, timecode_seconds, try_asking, work_clock, work_length,
-    worked_headline, ProposalBook, Queued, Span, CARD_DONE, CARD_MARKS_AFTER, CARD_PICTURE_TALLEST,
+    access_reason, card_picture_size, card_turns, check_suggestions, clock_time, colour_change,
+    cut_frames, describe_script_line, draft_dot, effect_label, finishing, join_queued,
+    length_badge, media_stem, model_choices, model_label, next_permissions, permission_look,
+    permission_words, pin_order, previewing, recent_conversations, refusal, request_before,
+    rim_point, say_permissions, script_seconds, script_summary, script_words, settled_age,
+    settled_age_changes, settled_words, shown_frame, signed_seconds, spans, strays_note,
+    timecode_position, timecode_seconds, try_asking, work_clock, work_length, worked_headline,
+    ProposalBook, Queued, Span, CARD_DONE, CARD_MARKS_AFTER, CARD_PICTURE_TALLEST,
     CARD_PICTURE_WIDEST, DRAFT_BEAT, MODE_HOLD,
 };
 use kerf_editor::model::{
@@ -887,7 +888,7 @@ proptest! {
 
 #[test]
 fn a_reel_plays_only_what_changed_two_seconds_either_side() {
-    use kerf_editor::chat::{reel_plan, reel_total};
+    use kerf_editor::changes::{reel_plan, reel_total};
     let program = Timeline::from_value(&timeline_value(&[
         clip("a", 0.0, 4.0),
         clip("b", 4.0, 4.0),

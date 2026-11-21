@@ -655,7 +655,7 @@ impl EditorState {
                 let message = error.message.as_str();
                 // Saving over a preset of that name is asked about, not refused.
                 if self.saving_preset.is_some() {
-                    if let Some(path) = crate::presets::existing_preset(message) {
+                    if let Some(path) = crate::preset_file::existing_preset(message) {
                         self.preset_exists = Some(path.to_owned());
                         return Change::Other;
                     }
@@ -1059,7 +1059,7 @@ impl EditorState {
             }
             // The bridge hands back the document; the editor writes it.
             Event::PresetExport { path, document } => {
-                match crate::presets::write_document(std::path::Path::new(path), document) {
+                match crate::preset_file::write_document(std::path::Path::new(path), document) {
                     Ok(()) => {
                         let name = path.rsplit(['/', '\\']).next().unwrap_or(path);
                         self.notify(&format!("Preset exported: {name}"), false);
@@ -1104,13 +1104,13 @@ impl EditorState {
     }
 
     /// What media `id` is doing: being made or waiting its turn (as its
-    /// making's line says, `stage::chip::phase`), else not made yet or
+    /// making's line says, `chip::phase`), else not made yet or
     /// offline when its file is missing (a shot made from steps, or a file
     /// that is gone), else ready.
     pub fn media_activity(&self, id: &str) -> MediaActivity {
         if let Some(making) = self.makings.get(id) {
-            return match crate::stage::chip::phase(&making.line) {
-                crate::stage::chip::Phase::Waiting { ahead } => MediaActivity::Queued { ahead },
+            return match crate::chip::phase(&making.line) {
+                crate::chip::Phase::Waiting { ahead } => MediaActivity::Queued { ahead },
                 phase if phase.queued() => MediaActivity::Queued { ahead: None },
                 _ => MediaActivity::Making {
                     take: making.take,

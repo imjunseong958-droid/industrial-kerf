@@ -14,6 +14,7 @@ use crate::icons::Icon;
 use crate::input::{InputEvent, TextInput};
 use crate::launcher::field;
 use crate::model::SourceShow;
+use crate::preset_file::existing_preset;
 use crate::session::{BridgeEvent, Session};
 use crate::store::Change;
 use crate::theme::{self, radius, text};
@@ -25,29 +26,15 @@ use gpui::{
 };
 use kerf_bridge::{Command, Event};
 use serde_json::{json, Map, Value};
-use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
 /// A preset file's extension.
 pub const EXTENSION: &str = "kerfpreset";
 
-/// How the bridge ends its refusal to save over a preset of that name,
-/// after the preset's path.
-const EXISTS: &str = " already exists; choose another name or replace it";
-
 /// What Export Editing Preset suggests, in the project's folder.
 pub const EXPORT_NAME: &str = "editing.kerfpreset";
 
 // ---------------------------------------------------------------- words
-
-/// The preset a refusal of `preset_save` names when a preset of that name
-/// is there already (`presets/Intro.kerfpreset`); None for any other
-/// message.
-pub fn existing_preset(message: &str) -> Option<&str> {
-    message
-        .strip_suffix(EXISTS)
-        .filter(|path| !path.trim().is_empty())
-}
 
 /// Whether `path` is a preset file by its name.
 pub fn is_preset_file(path: &Path) -> bool {
@@ -398,35 +385,6 @@ pub fn presets_in(projects: &[PathBuf]) -> Vec<PresetChoice> {
         }));
     }
     found
-}
-
-/// Writes `document` to `path` whole: into a file beside it, then put in
-/// its place, so a reader never finds half of it. The bridge hands back an
-/// exported preset (`preset_export {path, document}`) for the editor to
-/// write; [`crate::store::EditorState`] calls this when it comes.
-pub fn write_document(path: &Path, document: &str) -> std::io::Result<()> {
-    let name = path.file_name().ok_or_else(|| {
-        std::io::Error::new(std::io::ErrorKind::InvalidInput, "the path names no file")
-    })?;
-    let folder = path
-        .parent()
-        .filter(|folder| !folder.as_os_str().is_empty())
-        .unwrap_or(Path::new("."));
-    let temporary = folder.join(format!(
-        ".{}.{}.part",
-        name.to_string_lossy(),
-        std::process::id()
-    ));
-    let written = std::fs::File::create(&temporary)
-        .and_then(|mut file| {
-            file.write_all(document.as_bytes())?;
-            file.sync_all()
-        })
-        .and_then(|_| std::fs::rename(&temporary, path));
-    if written.is_err() {
-        let _ = std::fs::remove_file(&temporary);
-    }
-    written
 }
 
 fn strings(value: &Value) -> impl Iterator<Item = &str> {
