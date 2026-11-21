@@ -49,8 +49,13 @@ while read -r formula formula_version; do
         cp "$cached" "$stage/homebrew/$formula-$formula_version/"
     fi
     rb="$stage/homebrew/$formula-$formula_version/$formula.rb"
+    # homebrew-core files a formula under its first letter, but one named lib* under lib/.
+    case "$formula" in
+        lib*) shelf=lib ;;
+        *) shelf="${formula:0:1}" ;;
+    esac
     brew cat "$formula" > "$rb" 2>/dev/null ||
-        curl -fsSL --retry 5 -o "$rb" "https://raw.githubusercontent.com/Homebrew/homebrew-core/HEAD/Formula/${formula:0:1}/$formula.rb"
+        curl -fsSL --retry 5 -o "$rb" "https://raw.githubusercontent.com/Homebrew/homebrew-core/HEAD/Formula/$shelf/$formula.rb"
 done < "$formulae"
 cp "$formulae" "$stage/homebrew/bundled-formulae.txt"
 
