@@ -251,8 +251,10 @@ impl PeakReducer {
         rest.extend_from_slice(bytes);
         let whole = rest.len() / 4 * 4;
         let samples: Vec<f32> = rest[..whole]
-            .chunks_exact(4)
-            .map(|four| f32::from_le_bytes([four[0], four[1], four[2], four[3]]))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|four| f32::from_le_bytes(*four))
             .collect();
         self.add(&samples);
         rest.drain(..whole);

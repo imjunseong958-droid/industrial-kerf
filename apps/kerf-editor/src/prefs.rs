@@ -1886,8 +1886,10 @@ impl<'a> QtStream<'a> {
         let units: Vec<u16> = self
             .bytes
             .get(self.at..end)?
-            .chunks_exact(2)
-            .map(|pair| u16::from_be_bytes([pair[0], pair[1]]))
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|pair| u16::from_be_bytes(*pair))
             .collect();
         self.at = end;
         Some(String::from_utf16_lossy(&units))
@@ -2363,8 +2365,10 @@ pub fn qt_settings_reg(text: &str) -> QtSettings {
             "REG_SZ" | "REG_EXPAND_SZ" => qt_string_value(value),
             "REG_NONE" | "REG_BINARY" => hex_bytes(value).and_then(|bytes| {
                 let units: Vec<u16> = bytes
-                    .chunks_exact(2)
-                    .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .map(|pair| u16::from_le_bytes(*pair))
                     .collect();
                 qt_string_value(&String::from_utf16_lossy(&units))
             }),
@@ -2400,7 +2404,9 @@ fn hex_bytes(text: &str) -> Option<Vec<u8>> {
         .collect::<Option<_>>()?;
     Some(
         digits
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|pair| pair[0] << 4 | pair[1])
             .collect(),
     )

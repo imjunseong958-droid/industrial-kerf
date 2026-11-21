@@ -134,7 +134,9 @@ run "$macos/kerf-editor" --settings-dir "$scratch/settings" --quit-after-ms 3000
 
 # The editor draws with Metal, which dyld loads with it: without Metal among what it
 # named for the editor, dyld did not say what it loaded, and the list proves nothing.
-tail -n "+$((before + 1))" "$loaded" | grep -q '/Metal.framework/' || {
+# grep reads to the end: grep -q stopping at the first match would break tail's pipe,
+# and with pipefail the check.
+tail -n "+$((before + 1))" "$loaded" | grep '/Metal.framework/' > /dev/null || {
     echo "dyld named no Metal for the editor: DYLD_PRINT_LIBRARIES had no effect" >&2
     exit 1
 }

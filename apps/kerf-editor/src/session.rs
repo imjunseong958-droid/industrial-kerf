@@ -2442,7 +2442,7 @@ pub fn render_image(pixels: &[u8], width: u32, height: u32) -> Option<Arc<Render
         return None;
     }
     let mut bgra = pixels.to_vec();
-    for pixel in bgra.chunks_exact_mut(4) {
+    for pixel in bgra.as_chunks_mut::<4>().0 {
         pixel.swap(0, 2);
     }
     let buffer = image::RgbaImage::from_raw(width, height, bgra)?;
