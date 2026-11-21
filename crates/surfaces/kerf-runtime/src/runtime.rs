@@ -1109,6 +1109,12 @@ impl Runtime {
     /// `reject_proposal` method above intentionally remains available to the
     /// desktop adapter, but clients that supply an actor/key/base revision
     /// receive the same durable receipt guarantees as apply/undo/redo.
+    ///
+    /// `base_revision` is the revision the client is at, as for any other
+    /// request: it must be the project's, and it is what the receipt keeps.
+    /// It need not be the one the proposal was made on. Rejecting changes
+    /// nothing in the project, so a stale proposal is rejected as a current
+    /// one is.
     pub fn reject_proposal_request(
         &mut self,
         proposal_id: &str,
@@ -1145,14 +1151,6 @@ impl Runtime {
                 ..
             } => {
                 self.check_revision(Some(base_revision))?;
-                if base_revision != proposal_revision {
-                    return Err(RuntimeError::new(
-                        "PROPOSAL_BASE_MISMATCH",
-                        format!(
-                            "proposal was created at revision {proposal_revision}, not {base_revision}"
-                        ),
-                    ));
-                }
 
                 let mut candidate = self.state.clone();
                 candidate.proposals[index] = ProposalRecord {
@@ -4155,6 +4153,81 @@ mod tests {
             .reject_proposal_request(&proposal_id, "ui", "reject-other", 0)
             .unwrap_err();
         assert_eq!(error.code, "IDEMPOTENCY_CONFLICT");
+    }
+
+    #[test]
+    fn a_stale_proposal_is_rejected_at_the_revision_the_client_is_at() {
+        let directory =
+            std::env::temp_dir().join(format!("kerf-runtime-reject-stale-{}", unique_id()));
+        let mut runtime = Runtime::open(&directory).unwrap();
+        let staged = runtime
+            .stage_script_proposal(
+                "agent-reject-stale",
+                0,
+                "marker add at=0f as=proposed",
+                None,
+            )
+            .unwrap();
+        let proposal_id = pending_id(&staged);
+        let later = edit(&mut runtime, "marker add at=0f as=later", 0).unwrap();
+        assert_eq!(later.revision, 1);
+        assert!(matches!(
+            later.pending_proposal,
+            Some(PendingProposal::Pending {
+                freshness: ProposalFreshness::Stale,
+                ..
+            })
+        ));
+        assert!(runtime.state.bases.contains_key(&0));
+
+        // The revision asked about is the client's, which is out of date
+        // at the one the proposal was made on.
+        let error = runtime
+            .reject_proposal_request(&proposal_id, "ui", "reject-made-on", 0)
+            .unwrap_err();
+        assert_eq!(error.code, "REVISION_CONFLICT");
+        assert_eq!(error.actual_revision, Some(1));
+
+        let rejected = runtime
+            .reject_proposal_request(&proposal_id, "ui", "reject-stale", 1)
+            .unwrap();
+        assert_eq!(rejected.revision, later.revision);
+        assert_eq!(rejected.document, later.document);
+        assert_eq!(rejected.can_undo, later.can_undo);
+        assert_eq!(rejected.proposals[0].proposal_id, proposal_id);
+        assert_eq!(rejected.proposals[0].status, "rejected");
+        // No open proposal was made on revision 0 now: its project goes.
+        assert!(runtime.state.bases.is_empty());
+
+        // A retry converges on the receipt; the key cannot be reused, and a
+        // rejected proposal is not accepted.
+        let replay = runtime
+            .reject_proposal_request(&proposal_id, "ui", "reject-stale", 1)
+            .unwrap();
+        assert_eq!(replay.revision, rejected.revision);
+        assert_eq!(replay.document, rejected.document);
+        assert_eq!(replay.proposals[0].status, "rejected");
+        let error = runtime
+            .reject_proposal_request(&proposal_id, "ui", "reject-again", 1)
+            .unwrap_err();
+        assert_eq!(error.code, "IDEMPOTENCY_CONFLICT");
+        let error = runtime
+            .accept_proposal(&proposal_id, "ui", "accept-rejected", 1)
+            .unwrap_err();
+        assert_eq!(error.code, "PROPOSAL_REJECTED");
+
+        // The journal keeps the rejection and its receipt.
+        drop(runtime);
+        let mut reopened = Runtime::open(&directory).unwrap();
+        let state = reopened.snapshot();
+        assert_eq!(state.revision, 1);
+        assert_eq!(state.proposals[0].status, "rejected");
+        let replay = reopened
+            .reject_proposal_request(&proposal_id, "ui", "reject-stale", 1)
+            .unwrap();
+        assert_eq!(replay.document, rejected.document);
+        drop(reopened);
+        let _ = fs::remove_dir_all(directory);
     }
 
     #[test]

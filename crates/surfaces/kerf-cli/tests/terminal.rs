@@ -2,7 +2,7 @@
 //! `project.kerf` changed by hand, and `kerf proposals`, `kerf accept` and
 //! `kerf reject` answer what was proposed. Run against a real kerfd.
 
-use kerf_runtime::RuntimeClient;
+use kerf_runtime::{ProposalFreshness, RuntimeClient};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -131,6 +131,40 @@ fn proposals_are_listed_accepted_and_rejected_from_a_terminal() {
     let file = std::fs::read_to_string(directory.join("project.kerf")).unwrap();
     assert!(file.contains("scale=0.5"), "{file}");
     assert!(!file.contains("opacity=0.25"), "{file}");
+}
+
+#[test]
+fn a_proposal_made_before_the_project_changed_is_rejected_from_a_terminal() {
+    let Some(kerfd) = kerfd() else {
+        return;
+    };
+    let folder = tempfile::tempdir().unwrap();
+    let directory = folder.path();
+    std::fs::write(directory.join("project.kerf"), DOCUMENT).unwrap();
+    let runtime = RuntimeClient::connect_or_spawn(directory, Some(&kerfd)).unwrap();
+    let _held = runtime.hold();
+
+    let staged = runtime
+        .stage_script_proposal("stale", 0, "set c1 opacity=0.5", None)
+        .unwrap();
+    let id = staged.proposals[0].proposal_id.clone();
+    runtime
+        .apply_script_request("ui", "later", "set c1 scale=0.5", 0)
+        .unwrap();
+    let before = runtime.get_state().unwrap();
+    assert_eq!(before.revision, 1);
+    assert_eq!(before.proposals[0].freshness, ProposalFreshness::Stale);
+
+    let (rejected, said, ok) = kerf(directory, &kerfd, &["reject", &id]);
+    assert!(ok, "{said}");
+    assert_eq!(
+        rejected,
+        format!("rejected {id}; the project is as it was (revision 1)\n")
+    );
+    let after = runtime.get_state().unwrap();
+    assert_eq!(after.revision, 1);
+    assert_eq!(after.document, before.document);
+    assert_eq!(after.proposals[0].status, "rejected");
 }
 
 #[test]

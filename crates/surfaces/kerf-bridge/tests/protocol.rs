@@ -647,6 +647,42 @@ fn a_stale_proposal_is_brought_forward_or_refused_by_the_clip_that_changed() {
     assert_eq!(after.proposals[0].version, 2);
 }
 
+/// The card's Reject, and Esc on the timeline, send the revision the editor
+/// is at; a proposal made before it is rejected all the same, and nothing in
+/// the program changes.
+#[test]
+fn a_stale_proposal_is_rejected_at_the_revision_the_editor_is_at() {
+    let project = Project::new("reject");
+    let mut editor = Editor::open(&project.0);
+    ready(&mut editor);
+    let client = RuntimeClient::new(&project.0).unwrap();
+    let base = client.get_state().unwrap().revision;
+    let staged = client
+        .stage_script_proposal("agent-1", base, "marker add at=0f name=\"proposed\"", None)
+        .unwrap();
+    let id = staged.proposals[0].proposal_id.clone();
+    client
+        .apply_script_request("ui", "later", "marker add at=0f name=\"later\"", base)
+        .unwrap();
+    let stale = editor.state("the proposal gone stale", |snapshot| {
+        proposal(snapshot, &id).is_some_and(|entry| entry["freshness"] == "stale")
+    });
+    assert_ne!(stale["revision"], base);
+    editor.forget("error");
+    editor.send(json!({"type": "reject", "proposalId": id, "revision": stale["revision"]}));
+    let answer = editor.expect("the rejection", |event| {
+        event["type"] == "error"
+            || event["type"] == "state"
+                && proposal(&event["snapshot"], &id)
+                    .is_some_and(|entry| entry["status"] == "rejected")
+    });
+    assert_eq!(answer["type"], "state", "{answer}");
+    let rejected = &answer["snapshot"];
+    assert_eq!(rejected["revision"], stale["revision"]);
+    assert_eq!(rejected["document"], stale["document"]);
+    assert_eq!(pending(rejected), 0);
+}
+
 /// What the viewer says when it opens something to play: a preview shown,
 /// or the program again.
 fn opened(event: &Value) -> bool {
