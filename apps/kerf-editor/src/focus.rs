@@ -18,7 +18,7 @@
 //! [`Workspace::open_modal`]: crate::workspace::Workspace::open_modal
 
 use crate::input::{InputEvent, TextInput};
-use crate::model::{self, Clip, TrackKind};
+use crate::model::{self, Clip, ClipShow, TrackKind};
 use crate::session::{BridgeEvent, Session};
 use crate::store::Change;
 use crate::theme::{self, over_picture, text};
@@ -28,6 +28,7 @@ use gpui::{
     FocusHandle, Focusable, KeyBinding, MouseButton, MouseDownEvent, MouseMoveEvent, Pixels,
     RenderImage, SharedString, Subscription, Task, Window,
 };
+use kerf_bridge::Event;
 use serde_json::{json, Value};
 use std::cell::Cell;
 use std::path::{Path, PathBuf};
@@ -570,7 +571,7 @@ impl FocusRegion {
     ) -> Self {
         bind_keys(cx);
         let clip = &target.clip;
-        let old_crop = crop_box(&clip.props);
+        let old_crop = crop_box(&Value::Object(clip.props.clone()));
         let start_at = if old_crop.is_none() {
             target.at
         } else {
@@ -620,11 +621,12 @@ impl FocusRegion {
             &session,
             window,
             |this, _, event: &BridgeEvent, window, cx| {
-                let kind = event.0["type"].as_str().unwrap_or_default();
-                if this.stage == Stage::Checking
-                    && (kind == "media_index"
-                        || (kind == "error" && event.0["command"] == "media_index"))
-                {
+                let indexed = match &event.0 {
+                    Event::MediaIndex(_) => true,
+                    Event::Error(error) => error.command.as_deref() == Some("media_index"),
+                    _ => false,
+                };
+                if this.stage == Stage::Checking && indexed {
                     this.apply(window, cx);
                 }
             },

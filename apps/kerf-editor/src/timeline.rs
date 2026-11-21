@@ -48,7 +48,10 @@
 
 use crate::commands::RunCommand;
 use crate::icons::Icon;
-use crate::model::{self, Clip, GainKey, ProposalBand, Timeline, Track, TrackKind};
+use crate::model::{
+    self, Clip, ClipShow, GainKey, ProposalBand, ProposalShow, Timeline, TimelineShow, Track,
+    TrackKind, TrackShow,
+};
 use crate::motion;
 use crate::session::{BridgeEvent, Session};
 use crate::stage::{self, MaskTool};
@@ -63,6 +66,8 @@ use gpui::{
     MouseMoveEvent, MouseUpEvent, PathBuilder, Pixels, Point, Rgba, ScrollDelta, ScrollWheelEvent,
     ShapedLine, SharedString, Subscription, Task, TextRun, TouchPhase, WeakEntity, Window,
 };
+use kerf_bridge::event::{Check, Severity};
+use kerf_bridge::{Command, Event};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::cell::Cell;
@@ -2096,37 +2101,33 @@ impl TimelineView {
 
     /// What the bridge says that the timeline keeps itself: the last
     /// check's findings, and where Kerf looks.
-    fn bridge_event(&mut self, event: &Value, cx: &mut Context<Self>) {
-        match event["type"].as_str().unwrap_or_default() {
-            "check" if event["status"] == "done" => {
-                let qc: HashSet<String> = event["findings"]
-                    .as_array()
-                    .map(|findings| {
-                        findings
-                            .iter()
-                            .filter(|finding| finding["severity"] != "info")
-                            .filter_map(|finding| finding["entity"].as_str())
-                            .filter(|entity| !entity.is_empty())
-                            .map(str::to_owned)
-                            .collect()
-                    })
-                    .unwrap_or_default();
+    fn bridge_event(&mut self, event: &Event, cx: &mut Context<Self>) {
+        match event {
+            Event::Check(Check::Done { findings, .. }) => {
+                let qc: HashSet<String> = findings
+                    .iter()
+                    .filter(|finding| finding.severity != Severity::Info)
+                    .filter_map(|finding| finding.entity.as_deref())
+                    .filter(|entity| !entity.is_empty())
+                    .map(str::to_owned)
+                    .collect();
                 if qc != self.qc {
                     self.qc = qc;
                     self.rebuild(cx);
                     cx.notify();
                 }
             }
-            "agent_focus" => {
+            Event::AgentFocus { times, clips, .. } => {
                 let session = self.session.read(cx);
                 let snapshot = &session.state.snapshot;
                 let timeline = &snapshot.timeline;
-                let at = event["times"]
-                    .as_array()
-                    .and_then(|times| times.first())
-                    .and_then(|time| model::focus_seconds(time, timeline.rate(), timeline.start))
+                let at = times
+                    .first()
+                    .and_then(|time| {
+                        model::focus_time(time, timeline.rate(), timeline.start.unwrap_or(0.0))
+                    })
                     .or_else(|| {
-                        let clip = event["clips"].as_array()?.first()?.as_str()?;
+                        let clip = clips.first()?;
                         let named = |timeline: &Timeline| {
                             timeline.clip(clip).map(|(_, clip)| clip.timeline_start)
                         };
@@ -3250,7 +3251,7 @@ impl TimelineView {
     fn send_solo(&mut self, cx: &mut Context<Self>) {
         let tracks = self.solo.clone();
         self.session.update(cx, |session, _| {
-            session.send(json!({"type": "solo", "tracks": tracks}));
+            session.send(Command::Solo { tracks });
         });
     }
 
@@ -3354,7 +3355,9 @@ impl TimelineView {
             self.command_item("clip.focusRegion", "Focus Region…", &states, cx)
                 .separated(),
         );
-        let path = clip.clip.props["path"]
+        let path = clip
+            .clip
+            .prop("path")
             .as_str()
             .is_some_and(|path| !path.trim().is_empty());
         if lane.kind == TrackKind::Video && clip.kind != ClipKind::Caption && !path {

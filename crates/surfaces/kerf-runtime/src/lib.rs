@@ -112,7 +112,7 @@ fn is_zero(value: &u64) -> bool {
 }
 
 /// One version of a proposal: v1, and each `revise` after it.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProposalVersion {
     pub version: u32,
@@ -127,7 +127,7 @@ pub struct ProposalVersion {
 /// A proposal as clients list it: its lifecycle, who made it, and its
 /// versions. A settled one keeps the script and diff of the version that
 /// was accepted or rejected.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProposalEntry {
     /// The current version's id; for an accepted proposal, the version
@@ -156,6 +156,36 @@ pub struct ProposalEntry {
     pub staged: Option<String>,
 }
 
+impl ProposalEntry {
+    /// Still open: neither accepted nor rejected.
+    pub fn is_pending(&self) -> bool {
+        self.status == "pending"
+    }
+
+    /// Made on a revision the project has moved on from.
+    pub fn is_stale(&self) -> bool {
+        self.freshness == ProposalFreshness::Stale
+    }
+
+    /// The lines its document diff adds and removes, without the diff's
+    /// headers.
+    pub fn diff_counts(&self) -> (usize, usize) {
+        let mut added = 0;
+        let mut removed = 0;
+        for line in self.document_diff.lines() {
+            if line.starts_with("+++") || line.starts_with("---") {
+                continue;
+            }
+            if line.starts_with('+') {
+                added += 1;
+            } else if line.starts_with('-') {
+                removed += 1;
+            }
+        }
+        (added, removed)
+    }
+}
+
 /// Whether a pending proposal still targets the canonical project revision.
 ///
 /// Older checkpoints omit this field and therefore deserialize as `Current`.
@@ -178,7 +208,7 @@ impl ProposalFreshness {
 /// Proposal lifecycle owned by the canonical runtime.  Terminal states stay
 /// in memory so repeating an accept/reject request converges without another
 /// project mutation; only `Pending` exposes the proposed script and diff.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "camelCase")]
 pub enum PendingProposal {
     Pending {

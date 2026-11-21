@@ -18,6 +18,20 @@ use std::process::Command;
 use std::sync::Once;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+/// Send `command` as the editor writes it, in JSON. One that does not read as a command is
+/// refused, as one the bridge cannot take is.
+fn send(bridge: &mut Bridge, command: &Value) -> bool {
+    serde_json::from_value::<kerf_bridge::Command>(command.clone())
+        .is_ok_and(|command| bridge.send(command))
+}
+
+/// The next event, in JSON, as the editor reads it.
+fn poll(bridge: &mut Bridge) -> Option<Value> {
+    bridge
+        .poll()
+        .map(|event| serde_json::to_value(event).expect("an event writes as JSON"))
+}
+
 fn kerfd() -> PathBuf {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../target/debug/kerfd");
     assert!(
@@ -132,11 +146,11 @@ impl Editor {
     }
 
     fn send(&mut self, command: Value) {
-        assert!(self.bridge.send(&command), "refused {command}");
+        assert!(send(&mut self.bridge, &command), "refused {command}");
     }
 
     fn drain(&mut self) {
-        while let Some(event) = self.bridge.poll() {
+        while let Some(event) = poll(&mut self.bridge) {
             self.events.push(event);
         }
     }

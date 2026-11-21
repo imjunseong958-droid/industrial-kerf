@@ -11,8 +11,8 @@
 //! kerfd keeps, and an item only names the proposal its turn staged.
 
 use crate::emit;
+use crate::event::{ConversationSummary, ErrorEvent, Event};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::SyncSender;
@@ -88,6 +88,49 @@ pub(crate) struct Ask {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub take: Option<u32>,
     pub text: String,
+}
+
+/// A conversation as the editor gets it: its file without Claude Code's session.
+impl From<&Conversation> for crate::event::Conversation {
+    fn from(conversation: &Conversation) -> Self {
+        Self {
+            id: conversation.id.clone(),
+            title: conversation.title.clone(),
+            created: conversation.created.clone(),
+            updated: conversation.updated.clone(),
+            archived: conversation.archived,
+            items: conversation.items.iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<&Item> for crate::event::ConversationItem {
+    fn from(item: &Item) -> Self {
+        Self {
+            id: item.id.clone(),
+            kind: item.kind.clone(),
+            text: item.text.clone(),
+            at: item.at.clone(),
+            timecode: item.timecode,
+            steps: item.steps.clone(),
+            seconds: item.seconds,
+            error: item.error,
+            stopped: item.stopped,
+            proposal: item.proposal.clone(),
+            asks: item.asks.iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<&Ask> for crate::event::ConversationAsk {
+    fn from(ask: &Ask) -> Self {
+        Self {
+            media: ask.media.clone(),
+            rolls: ask.rolls,
+            take: ask.take,
+            text: ask.text.clone(),
+        }
+    }
 }
 
 /// The most of the earlier conversation a new session hears, in bytes.
@@ -237,38 +280,31 @@ fn title_of(request: &str) -> String {
 
 /// The list the sidebar shows: `conversations {items: [{id, title, created,
 /// updated, archived, count}]}`.
-pub(crate) fn emit_list(store: &Store, tx: &SyncSender<Value>) {
-    let items: Vec<Value> = store
+pub(crate) fn emit_list(store: &Store, tx: &SyncSender<Event>) {
+    let items = store
         .list()
         .into_iter()
-        .map(|conversation| {
-            json!({
-                "id": conversation.id,
-                "title": conversation.title,
-                "created": conversation.created,
-                "updated": conversation.updated,
-                "archived": conversation.archived,
-                "count": conversation.items.len(),
-            })
+        .map(|conversation| ConversationSummary {
+            count: conversation.items.len(),
+            id: conversation.id,
+            title: conversation.title,
+            created: conversation.created,
+            updated: conversation.updated,
+            archived: conversation.archived,
         })
         .collect();
-    emit(tx, json!({"type": "conversations", "items": items}));
+    emit(tx, Event::Conversations { items });
 }
 
-/// One conversation whole: `conversation {id, title, …, items}`.
-pub(crate) fn emit_one(conversation: &Conversation, tx: &SyncSender<Value>) {
-    let mut event = serde_json::to_value(conversation).unwrap_or_else(|_| json!({}));
-    if let Some(event) = event.as_object_mut() {
-        event.remove("claudeSession");
-    }
-    event["type"] = json!("conversation");
-    emit(tx, event);
+/// One conversation whole, without what is only the file's (Claude Code's session).
+pub(crate) fn emit_one(conversation: &Conversation, tx: &SyncSender<Event>) {
+    emit(tx, Event::Conversation(conversation.into()));
 }
 
 /// The conversation commands the editor sends, as the bridge reads them.
-#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "action", rename_all = "snake_case")]
-pub(crate) enum Request {
+pub enum Request {
     /// Every conversation: `conversations`.
     List,
     /// One conversation: `conversation`.
@@ -311,7 +347,7 @@ fn yes() -> bool {
 }
 
 /// Carry out `request`, then send what changed.
-pub(crate) fn command(store: &Store, request: Request, tx: &SyncSender<Value>) {
+pub(crate) fn command(store: &Store, request: Request, tx: &SyncSender<Event>) {
     let changed = match request {
         Request::List => Ok(None),
         Request::Open { id } => match store.load(&id) {
@@ -334,7 +370,11 @@ pub(crate) fn command(store: &Store, request: Request, tx: &SyncSender<Value>) {
         }
         Err(message) => emit(
             tx,
-            json!({"type": "error", "command": "conversation", "message": message}),
+            Event::Error(ErrorEvent {
+                message,
+                command: Some("conversation".to_owned()),
+                ..ErrorEvent::default()
+            }),
         ),
     }
 }
@@ -366,7 +406,7 @@ impl Turn {
         id: Option<&str>,
         prompt: &str,
         timecode: Option<f64>,
-        tx: &SyncSender<Value>,
+        tx: &SyncSender<Event>,
     ) -> Result<Self, String> {
         let mut conversation = id
             .and_then(|id| store.load(id))
@@ -479,7 +519,7 @@ impl Turn {
         outcome: Outcome,
         proposal: Option<String>,
         claude_session: Option<String>,
-        tx: &SyncSender<Value>,
+        tx: &SyncSender<Event>,
     ) -> Result<(), String> {
         let (text, failed) = match outcome {
             Outcome::Failed(message) => (message, true),

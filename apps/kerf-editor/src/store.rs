@@ -3,7 +3,10 @@
 //! draws from it; nothing here keeps a second editable copy of the
 //! project, which only kerfd owns.
 
-use crate::model::{Conversation, ConversationSummary, RenderJob, Snapshot};
+use crate::model::{
+    Conversation, ConversationSummary, RenderJob, Snapshot, SnapshotShow, TimelineShow, TurnShow,
+};
+use kerf_bridge::event::{self, AgentUpdate, ConnectionStatus, Event, Export, ToolState};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, Instant};
@@ -120,26 +123,18 @@ pub struct MediaStatus {
     pub external: BTreeSet<String>,
 }
 
-impl MediaStatus {
-    pub fn from_value(event: &Value) -> Self {
-        let ids = |key: &str| {
-            event[key]
-                .as_array()
-                .map(|ids| {
-                    ids.iter()
-                        .filter_map(Value::as_str)
-                        .map(str::to_owned)
-                        .collect()
-                })
-                .unwrap_or_default()
-        };
+impl From<&event::MediaStatus> for MediaStatus {
+    fn from(status: &event::MediaStatus) -> Self {
+        let ids = |ids: &[String]| ids.iter().cloned().collect();
         Self {
-            missing: ids("missing"),
-            pointers: ids("pointers"),
-            external: ids("external"),
+            missing: ids(&status.missing),
+            pointers: ids(&status.pointers),
+            external: ids(&status.external),
         }
     }
+}
 
+impl MediaStatus {
     /// Media `id`'s badge: a missing file outranks the rest, as it cannot
     /// be downloaded or consolidated.
     pub fn badge(&self, id: &str) -> Option<Badge> {
@@ -335,12 +330,13 @@ impl Preview {
 /// running, one stopped or left, and one that failed (an error notice of
 /// its own, which the reason the bridge gives next takes the place of)
 /// say nothing here.
-pub fn preview_notice(event: &Value) -> Option<(String, Option<Duration>)> {
-    let message = event["message"]
-        .as_str()
+pub fn preview_notice(preview: &event::Preview) -> Option<(String, Option<Duration>)> {
+    let message = preview
+        .message
+        .as_deref()
         .map(str::trim)
         .filter(|message| !message.is_empty());
-    match event["status"].as_str()? {
+    match preview.status.as_str() {
         "required" | "unavailable" => Some((message.unwrap_or(PREVIEW_REQUIRED).to_owned(), None)),
         "ready" => Some(("Preview ready".to_owned(), Some(PREVIEW_NOTICE_HOLD))),
         "live" => Some((
@@ -371,23 +367,11 @@ impl NextStep {
         }
     }
 
-    /// One of `agent_next`'s steps: `{label, request}` as the bridge sends
-    /// them, or plain words, both the label and the request (as Qt read
-    /// either). A step with no label is none; one with no request asks its
-    /// label.
-    pub fn read(value: &Value) -> Option<Self> {
-        let (label, request) = match value {
-            Value::String(words) => (words.as_str(), words.as_str()),
-            Value::Object(step) => (
-                step.get("label")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default(),
-                step.get("request")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default(),
-            ),
-            _ => return None,
-        };
+    /// One of `agent_next`'s steps, `{label, request}` (plain words read as
+    /// both, as Qt read either): a step with no label is none; one with no
+    /// request asks its label.
+    pub fn offered(step: &event::NextStep) -> Option<Self> {
+        let (label, request) = (step.label.as_str(), step.request.as_str());
         let label = label.trim();
         if label.is_empty() {
             return None;
@@ -404,12 +388,13 @@ impl From<&str> for NextStep {
     }
 }
 
-/// The steps an `agent_next` event offers, in its order.
-pub fn next_steps(event: &Value) -> Vec<NextStep> {
-    event["steps"]
-        .as_array()
-        .map(|steps| steps.iter().filter_map(NextStep::read).collect())
-        .unwrap_or_default()
+/// The steps an `agent_next` event offers, in its order; none for any
+/// other event.
+pub fn next_steps(event: &Event) -> Vec<NextStep> {
+    match event {
+        Event::AgentNext { steps } => steps.iter().filter_map(NextStep::offered).collect(),
+        _ => Vec::new(),
+    }
 }
 
 /// What a change of state means for the window, so views can follow it.
@@ -494,7 +479,7 @@ pub struct EditorState {
     /// stands, each with why; one made since is taken off.
     pub wants_making: BTreeMap<String, String>,
     /// The last `cast` event: the project's cast and styles.
-    pub cast: Option<Value>,
+    pub cast: Option<event::Cast>,
     /// Whether the picture waits on a rendered preview: from the moment
     /// one is needed (`required`, `unavailable`) or runs (`running`) until
     /// it plays again (`ready`, `live`), as Qt's `m_previewRequired` had
@@ -554,17 +539,17 @@ pub fn simplified(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// What saving the cast says: which shots want making for it now.
-pub fn cast_saved(event: &Value) -> String {
-    let wanting: Vec<&str> = event["toMake"]
-        .as_array()
-        .map(|shots| {
-            shots
-                .iter()
-                .filter_map(|shot| shot["media"].as_str())
-                .collect()
-        })
-        .unwrap_or_default();
+/// What saving the cast (a `cast` event) says: which shots want making for
+/// it now.
+pub fn cast_saved(event: &Event) -> String {
+    let wanting: Vec<&str> = match event {
+        Event::Cast(cast) => cast
+            .to_make
+            .iter()
+            .map(|shot| shot.media.as_str())
+            .collect(),
+        _ => Vec::new(),
+    };
     match wanting.len() {
         0 => "Saved the cast; no shot wants making for it".to_owned(),
         1 => format!("Saved the cast; {} wants making again", wanting[0]),
@@ -583,11 +568,11 @@ impl EditorState {
     }
 
     /// Folds one bridge event into the state.
-    pub fn apply(&mut self, event: &Value) -> Change {
-        let kind = event["type"].as_str().unwrap_or_default();
-        match kind {
-            "state" => {
-                let snapshot = Snapshot::from_value(&event["snapshot"]);
+    pub fn apply(&mut self, event: &Event) -> Change {
+        match event {
+            Event::State { snapshot } => {
+                let mut snapshot = Snapshot::clone(snapshot);
+                snapshot.name_clips();
                 self.forget_relinked(&snapshot);
                 self.snapshot = snapshot;
                 self.has_snapshot = true;
@@ -596,19 +581,16 @@ impl EditorState {
                 }
                 Change::Snapshot
             }
-            "connection" => {
-                let status = event["status"].as_str().unwrap_or_default();
-                let message = event["message"].as_str().unwrap_or_default().to_owned();
+            Event::Connection { status, message } => {
+                let message = message.clone().unwrap_or_default();
                 self.connection = match status {
-                    "connected" | "ready" => Connection::Connected,
-                    "failed" | "error" | "disconnected" => {
-                        Connection::Failed(if message.is_empty() {
-                            "kerfd is not running".into()
-                        } else {
-                            message
-                        })
-                    }
-                    _ => Connection::Connecting,
+                    ConnectionStatus::Ready => Connection::Connected,
+                    ConnectionStatus::Disconnected => Connection::Failed(if message.is_empty() {
+                        "kerfd is not running".into()
+                    } else {
+                        message
+                    }),
+                    ConnectionStatus::Connecting => Connection::Connecting,
                 };
                 // A new connection knows nothing of what was asked before.
                 self.info_asked.clear();
@@ -621,30 +603,26 @@ impl EditorState {
                 }
                 Change::Connection
             }
-            "error" => {
-                let command = event["command"].as_str().unwrap_or_default();
+            Event::Error(error) => {
+                let command = error.command.as_deref().unwrap_or_default();
                 // A making that failed is over: its stripes and its Stop go.
                 if command == "media_make" {
-                    if let Some(media) = event["media"].as_str() {
+                    if let Some(media) = &error.media {
                         self.makings.remove(media);
                     }
                 }
                 // The Index page says why its media could not be indexed.
                 if command == "media_index" {
-                    let media = event["media"].as_str().unwrap_or_default().to_owned();
-                    let message = event["message"]
-                        .as_str()
-                        .unwrap_or("This media could not be indexed")
-                        .to_owned();
+                    let media = error.media.clone().unwrap_or_default();
                     self.index_asked.remove(&media);
-                    self.media_index_errors.insert(media, message);
+                    self.media_index_errors.insert(media, error.message.clone());
                 }
                 // What a shot's graph or a making's plan asked for is answered
                 // where it was asked, not again over the conversation.
                 if answered_in_place(command) {
                     return Change::Making;
                 }
-                let message = event["message"].as_str().unwrap_or("Something went wrong");
+                let message = error.message.as_str();
                 // Saving over a preset of that name is asked about, not refused.
                 if self.saving_preset.is_some() {
                     if let Some(path) = crate::presets::existing_preset(message) {
@@ -655,16 +633,8 @@ impl EditorState {
                 self.notify(message, true);
                 Change::Notice
             }
-            "conversations" => {
-                self.conversations = event["items"]
-                    .as_array()
-                    .map(|items| {
-                        items
-                            .iter()
-                            .filter_map(|item| serde_json::from_value(item.clone()).ok())
-                            .collect()
-                    })
-                    .unwrap_or_default();
+            Event::Conversations { items } => {
+                self.conversations = items.clone();
                 // The chosen one deleted (here or in another window): a new one.
                 if let Some(chosen) = self.chosen.clone() {
                     if !self.conversations.iter().any(|known| known.id == chosen) {
@@ -673,10 +643,14 @@ impl EditorState {
                 }
                 Change::Conversations
             }
-            "conversation" => {
-                let Some(conversation) = Conversation::from_value(event) else {
+            Event::Conversation(conversation) => {
+                // One without an id is none; a turn of someone the editor does
+                // not know is left out rather than losing the conversation.
+                if conversation.id.is_empty() {
                     return Change::Other;
-                };
+                }
+                let mut conversation = conversation.clone();
+                conversation.items.retain(TurnShow::is_shown);
                 let id = conversation.id.clone();
                 // A request sent with no conversation chosen starts one: that
                 // one becomes the chosen, and its turn goes on in it.
@@ -708,9 +682,8 @@ impl EditorState {
                 }
                 Change::Conversation(id)
             }
-            "agent_busy" => {
-                let busy = event["busy"].as_bool().unwrap_or(false);
-                if busy {
+            Event::AgentBusy { busy } => {
+                if *busy {
                     if !self.work.busy() {
                         self.work.started = Some(Instant::now());
                         self.work.answer.clear();
@@ -731,9 +704,9 @@ impl EditorState {
                     }
                 }
             }
-            "agent_state" => {
-                self.work.state = event["state"].as_str().unwrap_or_default().to_owned();
-                self.work.message = event["message"].as_str().map(str::to_owned);
+            Event::AgentState { state, message } => {
+                self.work.state = state.as_str().to_owned();
+                self.work.message = message.clone();
                 if self.work.state == "failed" {
                     let message = self
                         .work
@@ -744,137 +717,122 @@ impl EditorState {
                 }
                 Change::Work
             }
-            "agent" => {
-                let text = event["text"].as_str().unwrap_or_default();
-                match event["kind"].as_str().unwrap_or_default() {
-                    "delta" => self.work.answer.push_str(text),
-                    "status" => self.work.status = simplified(text),
-                    "done" => {
+            Event::Agent(update) => {
+                match update {
+                    AgentUpdate::Delta { text } => self.work.answer.push_str(text),
+                    AgentUpdate::Status { text } => self.work.status = simplified(text),
+                    AgentUpdate::Done { text } => {
                         if !text.is_empty() {
-                            self.work.answer = text.to_owned();
+                            self.work.answer = text.clone();
                         }
                     }
-                    "tool" => {
-                        let id = event["id"].as_str().unwrap_or_default().to_owned();
-                        let state = match event["state"].as_str() {
-                            Some("done") => StepState::Done,
-                            Some("failed") => StepState::Failed,
-                            _ => StepState::Running,
+                    AgentUpdate::Tool {
+                        id, state, text, ..
+                    } => {
+                        let state = match state {
+                            ToolState::Done => StepState::Done,
+                            ToolState::Failed => StepState::Failed,
+                            ToolState::Running => StepState::Running,
                         };
                         // The step it is on is what the work row says beside "Working".
                         let said = simplified(text);
                         if !said.is_empty() {
                             self.work.status = said;
                         }
-                        match self.work.steps.iter_mut().find(|step| step.id == id) {
+                        match self.work.steps.iter_mut().find(|step| step.id == *id) {
                             Some(step) => {
-                                step.text = text.to_owned();
+                                step.text = text.clone();
                                 step.state = state;
                             }
                             None => self.work.steps.push(Step {
-                                id,
-                                text: text.to_owned(),
+                                id: id.clone(),
+                                text: text.clone(),
                                 state,
                             }),
                         }
                     }
-                    _ => {}
+                    AgentUpdate::Other { .. } => {}
                 }
                 Change::Work
             }
-            "agent_next" => {
+            Event::AgentNext { .. } => {
                 self.next_steps = next_steps(event);
                 Change::Work
             }
-            "agent_focus" => {
+            Event::AgentFocus { times, clips, .. } => {
                 // Seconds, or a time as a tool wrote it ("01:00:04:12", "96f").
                 let timeline = &self.snapshot.timeline;
-                self.agent_focus = event["times"]
-                    .as_array()
-                    .map(|times| {
-                        times
-                            .iter()
-                            .filter_map(|time| {
-                                crate::model::focus_seconds(time, timeline.rate(), timeline.start)
-                            })
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                self.agent_clips = event["clips"]
-                    .as_array()
-                    .map(|clips| {
-                        clips
-                            .iter()
-                            .filter_map(Value::as_str)
-                            .map(str::to_owned)
-                            .collect()
-                    })
-                    .unwrap_or_default();
+                let (rate, start) = (timeline.rate(), timeline.start.unwrap_or(0.0));
+                self.agent_focus = times
+                    .iter()
+                    .filter_map(|time| crate::model::focus_time(time, rate, start))
+                    .collect();
+                self.agent_clips = clips.clone();
                 Change::Work
             }
-            "agent_context" => {
-                if let (Some(used), Some(limit)) = (event["used"].as_f64(), event["limit"].as_f64())
-                {
-                    // Of the conversation it names, else of the turn's own.
-                    let conversation = event["conversation"]
-                        .as_str()
-                        .filter(|id| !id.is_empty())
-                        .map(str::to_owned)
-                        .or_else(|| self.work.conversation.clone().filter(|_| self.work.busy()));
-                    self.context = Some(ContextUse {
-                        conversation,
-                        used: used.max(0.0),
-                        limit: limit.max(0.0),
-                        tokens: event["unit"].as_str() == Some("tokens"),
-                    });
-                }
+            Event::AgentContext {
+                used,
+                limit,
+                unit,
+                conversation,
+            } => {
+                // Of the conversation it names, else of the turn's own.
+                let conversation = conversation
+                    .as_deref()
+                    .filter(|id| !id.is_empty())
+                    .map(str::to_owned)
+                    .or_else(|| self.work.conversation.clone().filter(|_| self.work.busy()));
+                self.context = Some(ContextUse {
+                    conversation,
+                    used: (*used as f64).max(0.0),
+                    limit: (*limit as f64).max(0.0),
+                    tokens: unit == "tokens",
+                });
                 Change::Work
             }
-            "clock" => {
-                if let Some(position) = event["position"].as_f64() {
-                    self.position = position;
-                }
-                if let Some(duration) = event["duration"].as_f64() {
-                    self.duration = duration;
-                }
-                self.dropped = event["dropped"].as_u64().unwrap_or(self.dropped);
+            Event::Clock {
+                position,
+                duration,
+                dropped,
+            } => {
+                self.position = *position;
+                self.duration = *duration;
+                self.dropped = *dropped;
                 Change::Clock
             }
             // With kerfd gone, nothing plays and no caption shows (Qt's
             // `m_playing = m_connected && playing`, its caption cleared):
             // what is left of its playback says nothing more.
-            "playback" => {
+            Event::Playback { playing } => {
                 let gone = matches!(self.connection, Connection::Failed(_));
-                self.playing = !gone && event["playing"].as_bool().unwrap_or(false);
+                self.playing = !gone && *playing;
                 Change::Playback
             }
-            "caption" => {
+            Event::Caption { text } => {
                 self.caption = if matches!(self.connection, Connection::Failed(_)) {
                     String::new()
                 } else {
-                    event["text"].as_str().unwrap_or_default().to_owned()
+                    text.clone()
                 };
                 Change::Clock
             }
-            "meter" => {
-                self.meter = event["peak"]
-                    .as_array()
-                    .and_then(|peak| Some([peak.first()?.as_f64()?, peak.get(1)?.as_f64()?]));
+            Event::Meter(reading) => {
+                self.meter = reading.peak;
                 Change::Other
             }
-            "viewer_reset" => Change::ViewerReset,
-            "collab" => {
-                if event["status"].is_object() {
-                    self.collab = Some(event["status"].clone());
+            Event::ViewerReset => Change::ViewerReset,
+            Event::Collab { status } => {
+                if let Ok(status @ Value::Object(_)) = serde_json::to_value(status) {
+                    self.collab = Some(status);
                 }
                 Change::Other
             }
-            "preview" => {
+            Event::Preview(preview) => {
                 self.preview = Preview {
-                    status: event["status"].as_str().unwrap_or_default().to_owned(),
-                    progress: event["progress"].as_f64(),
-                    message: event["message"].as_str().map(str::to_owned),
-                    proposal: event["proposalId"].as_str().map(str::to_owned),
+                    status: preview.status.as_str().to_owned(),
+                    progress: preview.progress,
+                    message: preview.message.clone(),
+                    proposal: preview.proposal_id.clone(),
                 };
                 // Play waits from the moment a render is needed or runs
                 // until the picture plays again (Qt's `m_previewRequired`).
@@ -905,7 +863,7 @@ impl EditorState {
                         .clone()
                         .unwrap_or_else(|| "The preview could not render".into());
                     self.say_in_place(StatusLine::Preview, &message, true, None);
-                } else if let Some((said, hold)) = preview_notice(event) {
+                } else if let Some((said, hold)) = preview_notice(preview) {
                     // Why a render is needed, said just as one failed, is
                     // the failure said in the bridge's words: still an
                     // error, for Qt's 6 s.
@@ -921,66 +879,77 @@ impl EditorState {
                 }
                 Change::Preview
             }
-            "render_queue" => {
-                self.renders = event["jobs"]
-                    .as_array()
-                    .map(|jobs| {
-                        jobs.iter()
-                            .filter_map(|job| serde_json::from_value(job.clone()).ok())
-                            .collect()
+            Event::RenderQueue { jobs } => {
+                // A job kerfd lists with no quality, codec or output (one an
+                // older kerfd kept) is left out, as the queue has always shown it.
+                self.renders = jobs
+                    .iter()
+                    .filter(|job| {
+                        job.quality.is_some() && job.codec.is_some() && job.output_path.is_some()
                     })
-                    .unwrap_or_default();
+                    .cloned()
+                    .collect();
                 Change::Renders
             }
-            "export" => {
-                let status = event["status"].as_str().unwrap_or_default();
-                if let Some(job) = event["jobId"].as_str() {
-                    let entry = match self.renders.iter_mut().find(|known| known.job_id == job) {
+            Event::Export(export) => {
+                let (status, path, message) = match export {
+                    Export::Render(render) => (
+                        render.status,
+                        render.path.as_deref(),
+                        render.message.as_deref(),
+                    ),
+                    Export::Captions(captions) => (
+                        captions.status,
+                        captions.path.as_deref(),
+                        captions.message.as_deref(),
+                    ),
+                };
+                let status = status.as_str();
+                if let Export::Render(render) = export {
+                    let job = &render.job_id;
+                    let entry = match self.renders.iter_mut().find(|known| known.job_id == *job) {
                         Some(entry) => entry,
                         None => {
                             self.renders.push(RenderJob {
-                                job_id: job.to_owned(),
+                                job_id: job.clone(),
                                 ..RenderJob::default()
                             });
                             self.renders.last_mut().expect("just pushed")
                         }
                     };
                     entry.status = status.to_owned();
-                    if let Some(progress) = event["progress"].as_f64() {
-                        entry.progress = progress;
+                    entry.progress = render.progress;
+                    // A name the event does not say keeps the one known.
+                    if !render.name.is_empty() {
+                        entry.name = render.name.clone();
                     }
-                    if let Some(name) = event["name"].as_str() {
-                        entry.name = name.to_owned();
+                    if let Some(path) = path {
+                        entry.output_path = Some(path.to_owned());
                     }
-                    if let Some(path) = event["path"].as_str() {
-                        entry.output_path = path.to_owned();
-                    }
-                    if let Some(quality) = event["quality"].as_str() {
-                        entry.quality = quality.to_owned();
+                    if let Some(quality) = &render.quality {
+                        entry.quality = Some(quality.clone());
                     }
                 }
                 match status {
                     "completed" => {
-                        let path = event["path"].as_str().unwrap_or_default();
+                        let path = path.unwrap_or_default();
                         let name = path.rsplit(['/', '\\']).next().unwrap_or(path);
                         self.notify(&format!("Exported {name}"), false);
                     }
                     "failed" => {
-                        let message = event["message"].as_str().unwrap_or("The export failed");
+                        let message = message.unwrap_or("The export failed");
                         self.notify(message, true);
                     }
                     _ => {}
                 }
                 Change::Renders
             }
-            "media_making" => {
-                let media = event["media"].as_str().unwrap_or_default().to_owned();
-                let take = event["take"].as_u64().unwrap_or(1) as u32;
-                let line = event["line"].as_str().unwrap_or_default().to_owned();
+            Event::MediaMaking { media, take, line } => {
+                let take = *take;
                 // Its clock starts as its take does: a new take of a making
                 // of several starts afresh, with no line yet. Each event says
                 // the step's line as it is now, an empty one among them.
-                let entry = self.makings.entry(media).or_insert_with(|| Making {
+                let entry = self.makings.entry(media.clone()).or_insert_with(|| Making {
                     take,
                     line: String::new(),
                     since: Instant::now(),
@@ -989,62 +958,59 @@ impl EditorState {
                     entry.take = take;
                     entry.since = Instant::now();
                 }
-                entry.line = line;
+                entry.line = line.clone();
                 Change::Making
             }
-            "media_made" | "media_make_cancelled" => {
-                let media = event["media"].as_str().unwrap_or_default();
+            Event::MediaMade { media, take } => {
                 self.makings.remove(media);
                 if media.is_empty() {
                     return Change::Making;
                 }
-                if kind == "media_made" {
-                    // Made again, it no longer wants making.
-                    self.wants_making.remove(media);
-                    let name = self.snapshot.timeline.media_name(media);
-                    let take = event["take"].as_u64().unwrap_or(1);
-                    self.notify(&format!("Made take {take} of {name} from its steps"), false);
-                } else {
-                    self.notify(&format!("Stopped making {media}; it is as it was"), false);
-                }
+                // Made again, it no longer wants making.
+                self.wants_making.remove(media);
+                let name = self.snapshot.timeline.media_name(media);
+                self.notify(&format!("Made take {take} of {name} from its steps"), false);
                 Change::Making
             }
-            "media_status" => {
-                self.media_status = MediaStatus::from_value(event);
+            Event::MediaMakeCancelled { media } => {
+                self.makings.remove(media);
+                if media.is_empty() {
+                    return Change::Making;
+                }
+                self.notify(&format!("Stopped making {media}; it is as it was"), false);
+                Change::Making
+            }
+            Event::MediaStatus(status) => {
+                self.media_status = MediaStatus::from(status);
                 Change::Other
             }
-            "media_info" => {
-                if let Some(media) = event["media"].as_object() {
-                    for (id, info) in media {
-                        self.media_info.insert(id.clone(), info.clone());
-                    }
+            Event::MediaInfo { media, .. } => {
+                for (id, info) in media {
+                    self.media_info
+                        .insert(id.clone(), serde_json::to_value(info).unwrap_or_default());
                 }
                 Change::Other
             }
-            "media_index" => {
-                if let Some(media) = event["media"].as_str().filter(|media| !media.is_empty()) {
+            Event::MediaIndex(index) => {
+                let media = &index.media;
+                if !media.is_empty() {
                     self.index_asked.remove(media);
                     self.media_index_errors.remove(media);
-                    self.media_indexes.insert(media.to_owned(), event.clone());
+                    self.media_indexes.insert(
+                        media.clone(),
+                        serde_json::to_value(event).unwrap_or_default(),
+                    );
                 }
                 Change::Other
             }
-            "cast" => {
-                self.wants_making = event["toMake"]
-                    .as_array()
-                    .map(|shots| {
-                        shots
-                            .iter()
-                            .filter_map(|shot| {
-                                let media = shot["media"].as_str()?;
-                                let why = shot["why"].as_str().unwrap_or_default();
-                                Some((media.to_owned(), why.to_owned()))
-                            })
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                self.cast = Some(event.clone());
-                if event["saved"].as_bool() == Some(true) {
+            Event::Cast(cast) => {
+                self.wants_making = cast
+                    .to_make
+                    .iter()
+                    .map(|shot| (shot.media.clone(), shot.why.clone()))
+                    .collect();
+                self.cast = Some(cast.clone());
+                if cast.saved {
                     // Held as Qt held it (main_window.cpp's 8 s).
                     let said = cast_saved(event);
                     self.notify_held(&said, false, Some(crate::theme::motion::NOTICE_LONG_HOLD));
@@ -1053,19 +1019,16 @@ impl EditorState {
                     Change::Other
                 }
             }
-            "preset_inspect" => {
-                let path = event["path"].as_str().unwrap_or_default().to_owned();
-                self.inspected_preset = Some((path, event["preset"].clone()));
+            Event::PresetInspect { path, preset } => {
+                self.inspected_preset = Some((path.clone(), preset.clone()));
                 Change::Other
             }
-            "preset_applied" => {
+            Event::PresetApplied { .. } => {
                 self.notify("Preset proposal ready for review", false);
                 Change::Notice
             }
             // The bridge hands back the document; the editor writes it.
-            "preset_export" => {
-                let path = event["path"].as_str().unwrap_or_default();
-                let document = event["document"].as_str().unwrap_or_default();
+            Event::PresetExport { path, document } => {
                 match crate::presets::write_document(std::path::Path::new(path), document) {
                     Ok(()) => {
                         let name = path.rsplit(['/', '\\']).next().unwrap_or(path);
@@ -1076,10 +1039,9 @@ impl EditorState {
                 }
                 Change::Notice
             }
-            "preset_saved" => {
+            Event::PresetSaved { path } => {
                 self.saving_preset = None;
                 self.preset_exists = None;
-                let path = event["path"].as_str().unwrap_or_default();
                 self.notify(&format!("Saved preset {path}"), false);
                 self.log("preset", path);
                 Change::Notice

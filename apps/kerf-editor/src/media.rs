@@ -41,7 +41,7 @@ use crate::commands::RunCommand;
 use crate::icons::Icon;
 use crate::input::{InputEvent, TextInput};
 use crate::making::{MakeMedia, OpenShotGraph};
-use crate::model::{self, Source, Track, TrackKind};
+use crate::model::{self, Source, TimelineShow, Track, TrackKind};
 use crate::motion::{self, Tween};
 use crate::session::Session;
 use crate::store::{Badge, MediaActivity};
@@ -53,6 +53,7 @@ use gpui::{
     EventEmitter, FocusHandle, Focusable, FontWeight, MouseButton, MouseDownEvent, ObjectFit,
     PathBuilder, PathPromptOptions, Pixels, Point, SharedString, Subscription, TextRun, Window,
 };
+use kerf_bridge::Command;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -824,7 +825,10 @@ impl MediaBand {
                 // Any file, as Qt's "All files (*)": kerfd reads it and
                 // refuses, in its own words, one that is no media.
                 if let Some(path) = path {
-                    session.send(json!({"type": "media_replace", "media": media, "path": path.to_string_lossy()}));
+                    session.send(Command::MediaReplace {
+                        media: media.clone(),
+                        path: path.to_string_lossy().into_owned(),
+                    });
                 }
                 cx.notify();
             });
@@ -834,7 +838,10 @@ impl MediaBand {
 
     /// Has media `media` be its take `path` again: one undoable replace.
     fn use_take(&mut self, media: &str, path: &str, cx: &mut Context<Self>) {
-        let command = json!({"type": "media_replace", "media": media, "path": path});
+        let command = Command::MediaReplace {
+            media: media.to_owned(),
+            path: path.to_owned(),
+        };
         self.session.update(cx, |session, cx| {
             session.send(command);
             cx.notify();
@@ -1140,7 +1147,9 @@ impl MediaBand {
                         .on_choose(move |_, cx| {
                             let _ = band.update(cx, |band, cx| {
                                 band.session.update(cx, |session, _| {
-                                    session.send(json!({"type": "media_make_cancel", "media": stop}));
+                                    session.send(Command::MediaMakeCancel {
+                                        media: stop.clone(),
+                                    });
                                 });
                             });
                         }),

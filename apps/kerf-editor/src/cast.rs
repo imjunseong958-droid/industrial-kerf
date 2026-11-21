@@ -25,7 +25,8 @@ use gpui::{
     div, prelude::*, px, App, Context, DismissEvent, ElementId, Entity, EventEmitter, FocusHandle,
     Focusable, FontWeight, KeyBinding, MouseButton, PathPromptOptions, Subscription, Window,
 };
-use serde_json::{json, Value};
+use kerf_bridge::event::CastToMake;
+use kerf_bridge::{Command, Event};
 use std::path::Path;
 
 use crate::input::{InputEvent, TextInput};
@@ -78,41 +79,18 @@ pub fn cast_return(in_field: bool) -> CastReturn {
     }
 }
 
-/// One of the cast or a style, as the file holds it.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct Entry {
-    /// `cast` or `style`.
-    pub kind: String,
-    pub name: String,
-    pub words: String,
-    /// Pictures of it, each a path from the project's folder.
-    pub refs: Vec<String>,
-}
+/// One of the cast or a style, as the file holds it: its kind (`cast` or
+/// `style`), name, words, and pictures, each a path from the project's
+/// folder. The bridge's own entry, which `cast` and `cast_set` carry.
+pub use kerf_bridge::CastEntry as Entry;
 
-/// The entries a `cast` event holds, in the file's order.
-pub fn entries_of(event: &Value) -> Vec<Entry> {
-    event["entries"]
-        .as_array()
-        .map(|entries| {
-            entries
-                .iter()
-                .map(|entry| Entry {
-                    kind: entry["kind"].as_str().unwrap_or("cast").to_owned(),
-                    name: entry["name"].as_str().unwrap_or_default().to_owned(),
-                    words: entry["words"].as_str().unwrap_or_default().to_owned(),
-                    refs: entry["refs"]
-                        .as_array()
-                        .map(|refs| {
-                            refs.iter()
-                                .filter_map(Value::as_str)
-                                .map(str::to_owned)
-                                .collect()
-                        })
-                        .unwrap_or_default(),
-                })
-                .collect()
-        })
-        .unwrap_or_default()
+/// The entries a `cast` event holds, in the file's order; none for
+/// another event.
+pub fn entries_of(event: &Event) -> Vec<Entry> {
+    match event {
+        Event::Cast(cast) => cast.entries.clone(),
+        _ => Vec::new(),
+    }
 }
 
 /// Pictures as a person writes them, a comma between them: each path
@@ -127,29 +105,27 @@ pub fn split_pictures(text: &str) -> Vec<String> {
 
 /// The `cast_set` command for `entries`: names trimmed, words on one line
 /// with single spaces, as the file is read.
-pub fn cast_set(entries: &[Entry]) -> Value {
-    let entries: Vec<Value> = entries
+pub fn cast_set(entries: &[Entry]) -> Command {
+    let entries = entries
         .iter()
-        .map(|entry| {
-            json!({
-                "kind": entry.kind,
-                "name": entry.name.trim(),
-                "words": entry.words.split_whitespace().collect::<Vec<_>>().join(" "),
-                "refs": entry.refs,
-            })
+        .map(|entry| Entry {
+            kind: entry.kind.clone(),
+            name: entry.name.trim().to_owned(),
+            words: entry.words.split_whitespace().collect::<Vec<_>>().join(" "),
+            refs: entry.refs.clone(),
         })
         .collect();
-    json!({"type": "cast_set", "entries": entries})
+    Command::CastSet { entries }
 }
 
 /// What wants making as the cast stands, in a line.
-pub fn wants_line(to_make: &[(String, String)]) -> String {
+pub fn wants_line(to_make: &[CastToMake]) -> String {
     if to_make.is_empty() {
         return "No shot wants making as the cast stands.".to_owned();
     }
     let shots: Vec<String> = to_make
         .iter()
-        .map(|(media, why)| {
+        .map(|CastToMake { media, why }| {
             if why.is_empty() {
                 media.clone()
             } else {
@@ -160,22 +136,13 @@ pub fn wants_line(to_make: &[(String, String)]) -> String {
     format!("Wants making now: {}", shots.join("; "))
 }
 
-/// The shots a `cast` event says want making, each with why.
-pub fn to_make_of(event: &Value) -> Vec<(String, String)> {
-    event["toMake"]
-        .as_array()
-        .map(|shots| {
-            shots
-                .iter()
-                .filter_map(|shot| {
-                    Some((
-                        shot["media"].as_str()?.to_owned(),
-                        shot["why"].as_str().unwrap_or_default().to_owned(),
-                    ))
-                })
-                .collect()
-        })
-        .unwrap_or_default()
+/// The shots a `cast` event says want making, each with why; none for
+/// another event.
+pub fn to_make_of(event: &Event) -> Vec<CastToMake> {
+    match event {
+        Event::Cast(cast) => cast.to_make.clone(),
+        _ => Vec::new(),
+    }
 }
 
 /// Where a picture of the cast is named from: a picture inside the
@@ -238,7 +205,7 @@ impl Stage {
 }
 
 /// What the dialog does with a bridge event.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Heard {
     /// Not the dialog's to answer.
     Nothing,
@@ -258,29 +225,31 @@ pub enum Heard {
 /// dialog opened only on a `cast` event; here it is open while kerfd
 /// reads, and a read that fails leaves it [`Stage::Unreadable`] rather
 /// than empty and ready to save over the file.
-pub fn heard(stage: Stage, event: &Value) -> Heard {
-    match event["type"].as_str().unwrap_or_default() {
-        "cast" => {
-            if event["saved"].as_bool() == Some(true) && stage == Stage::Saving {
+pub fn heard(stage: Stage, event: &Event) -> Heard {
+    match event {
+        Event::Cast(cast) => {
+            if cast.saved && stage == Stage::Saving {
                 Heard::Saved
             } else if stage == Stage::Reading {
-                Heard::Read(entries_of(event))
+                Heard::Read(cast.entries.clone())
             } else {
                 Heard::ToMake
             }
         }
-        "error" if event["command"] == "cast" => {
-            let said = event["message"].as_str();
+        Event::Error(error) if error.command.as_deref() == Some("cast") => {
             let (fallback, stage) = match stage {
                 Stage::Reading | Stage::Unreadable => {
                     ("The cast could not be read", Stage::Unreadable)
                 }
                 Stage::Editing | Stage::Saving => ("The cast could not be written", Stage::Editing),
             };
-            Heard::Failed {
-                message: said.unwrap_or(fallback).to_owned(),
-                stage,
-            }
+            // A message left out reads as empty: the fallback says it then.
+            let message = if error.message.is_empty() {
+                fallback.to_owned()
+            } else {
+                error.message.clone()
+            };
+            Heard::Failed { message, stage }
         }
         _ => Heard::Nothing,
     }
@@ -304,7 +273,7 @@ pub struct CastView {
     rows: Vec<Row>,
     chosen: Option<usize>,
     stage: Stage,
-    to_make: Vec<(String, String)>,
+    to_make: Vec<CastToMake>,
     /// What kerfd said was wrong, or a picture that could not be copied.
     error: Option<String>,
     _subscriptions: Vec<Subscription>,
@@ -328,7 +297,7 @@ impl CastView {
             |this, _, event: &BridgeEvent, window, cx| this.heard(&event.0, window, cx),
         )];
         session.update(cx, |session, _| {
-            session.send(json!({"type": "cast_get"}));
+            session.send(Command::CastGet);
         });
         Self {
             session,
@@ -342,9 +311,9 @@ impl CastView {
         }
     }
 
-    fn heard(&mut self, event: &Value, window: &mut Window, cx: &mut Context<Self>) {
-        if event["type"] == "cast" {
-            self.to_make = to_make_of(event);
+    fn heard(&mut self, event: &Event, window: &mut Window, cx: &mut Context<Self>) {
+        if let Event::Cast(cast) = event {
+            self.to_make = cast.to_make.clone();
         }
         match heard(self.stage, event) {
             Heard::Nothing => return,

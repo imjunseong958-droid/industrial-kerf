@@ -1,5 +1,6 @@
 //! Shot graphs, recipes and takes: how a shot is made.
 
+use crate::support::{command, event};
 use kerf_editor::cast;
 use kerf_editor::cast::Entry;
 use kerf_editor::making::{
@@ -23,10 +24,10 @@ use std::time::{Duration, Instant};
 
 #[test]
 fn the_cast_is_read_and_written_as_the_file_reads() {
-    let event = json!({"type": "cast", "entries": [
+    let event = event(json!({"type": "cast", "entries": [
         {"kind": "cast", "name": "Maya", "words": "a woman", "refs": ["refs/maya.png"]},
         {"kind": "style", "name": "Dusk", "words": "", "refs": []}
-    ], "toMake": [{"media": "m3", "why": "cast Maya changed"}]});
+    ], "toMake": [{"media": "m3", "why": "cast Maya changed"}]}));
     let entries = cast::entries_of(&event);
     assert_eq!(entries.len(), 2);
     assert_eq!(entries[0].refs, vec!["refs/maya.png".to_owned()]);
@@ -46,17 +47,17 @@ fn the_cast_is_read_and_written_as_the_file_reads() {
     }];
     assert_eq!(
         cast::cast_set(&typed),
-        json!({"type": "cast_set", "entries": [
+        command(json!({"type": "cast_set", "entries": [
             {"kind": "cast", "name": "Maya", "words": "a woman in red", "refs": ["refs/a.png", "refs/b.png"]}
-        ]})
+        ]}))
     );
 }
 
 #[test]
 fn a_cast_that_does_not_read_cannot_be_saved_over() {
     use cast::{heard, Heard, Stage};
-    let unreadable = json!({"type": "error", "command": "cast",
-        "message": "cast.kerfcast:4: `csat` is not `cast` or `style`"});
+    let unreadable = event(json!({"type": "error", "command": "cast",
+        "message": "cast.kerfcast:4: `csat` is not `cast` or `style`"}));
     // Asked for and not read: nothing to show, and nothing to save over the file.
     assert_eq!(
         heard(Stage::Reading, &unreadable),
@@ -68,7 +69,9 @@ fn a_cast_that_does_not_read_cannot_be_saved_over() {
     assert!(!Stage::Unreadable.can_save());
     assert!(!Stage::Reading.can_save() && !Stage::Saving.can_save());
     // A save refused leaves the rows as typed, to be mended and saved again.
-    let refused = json!({"type": "error", "command": "cast", "message": "cannot save the cast: two named Ada"});
+    let refused = event(
+        json!({"type": "error", "command": "cast", "message": "cannot save the cast: two named Ada"}),
+    );
     assert_eq!(
         heard(Stage::Saving, &refused),
         Heard::Failed {
@@ -78,19 +81,21 @@ fn a_cast_that_does_not_read_cannot_be_saved_over() {
     );
     assert!(Stage::Editing.can_save());
     // Read, the rows come in; saved, the window goes back.
-    let read = json!({"type": "cast", "entries": [{"kind": "cast", "name": "mara", "words": "", "refs": []}],
-        "toMake": [], "saved": false});
+    let read = event(
+        json!({"type": "cast", "entries": [{"kind": "cast", "name": "mara", "words": "", "refs": []}],
+        "toMake": [], "saved": false}),
+    );
     assert!(matches!(heard(Stage::Reading, &read), Heard::Read(entries) if entries.len() == 1));
-    let saved = json!({"type": "cast", "entries": [], "toMake": [], "saved": true});
+    let saved = event(json!({"type": "cast", "entries": [], "toMake": [], "saved": true}));
     assert_eq!(heard(Stage::Saving, &saved), Heard::Saved);
     assert_eq!(heard(Stage::Editing, &saved), Heard::ToMake);
     // Another command's error is not the dialog's.
-    let other = json!({"type": "error", "command": "media_make", "message": "no"});
+    let other = event(json!({"type": "error", "command": "media_make", "message": "no"}));
     assert_eq!(heard(Stage::Reading, &other), Heard::Nothing);
 }
 
 /// The dialog's stage after each event, as `CastView::heard` moves it.
-fn cast_stage_after(stage: cast::Stage, event: &Value) -> cast::Stage {
+fn cast_stage_after(stage: cast::Stage, event: &kerf_bridge::Event) -> cast::Stage {
     match cast::heard(stage, event) {
         cast::Heard::Read(_) => cast::Stage::Editing,
         cast::Heard::Failed { stage, .. } => stage,
@@ -110,7 +115,8 @@ proptest! {
             json!({"type": "cast", "entries": [], "toMake": [], "saved": true}),
             json!({"type": "snapshot"}),
             json!({"type": "cast", "entries": [], "toMake": [], "saved": false}),
-        ];
+        ]
+        .map(crate::support::event);
         let mut stage = cast::Stage::Reading;
         let mut read = false;
         for event in events {
@@ -586,7 +592,7 @@ fn a_models_workflow_reads_as_a_graph_of_its_nodes() {
             {"class": "Nameless"}
         ]
     });
-    let workflow = Workflow::read(&event);
+    let workflow = Workflow::read(event.as_object().unwrap());
     assert_eq!((workflow.line, workflow.model.as_str()), (3, "video"));
     assert!(!workflow.is_own());
     let graph = &workflow.graph;
@@ -669,10 +675,13 @@ fn a_number_set_in_a_workflow_is_held_to_what_the_server_takes() {
 
 #[test]
 fn a_take_says_how_it_holds_beside_its_guide_on_hovering() {
-    let reading = json!({"type": "take_read", "take": 2, "overlap": 0.7, "clips": [
-        {"clip": "ball", "overlap": 0.82, "frames": 40, "shown": 48},
-        {"clip": "lamp", "note": "the take has nothing of it"}
-    ]});
+    let reading: kerf_bridge::event::TakeRead = serde_json::from_value(
+        json!({"type": "take_read", "take": 2, "overlap": 0.7, "clips": [
+            {"clip": "ball", "overlap": 0.82, "frames": 40, "shown": 48},
+            {"clip": "lamp", "note": "the take has nothing of it"}
+        ]}),
+    )
+    .unwrap();
     assert_eq!(
         reading_lines(&reading),
         [
@@ -826,11 +835,11 @@ fn a_make_card_made_already_stays_made() {
 
 #[test]
 fn a_recipe_leaves_out_an_edge_to_what_is_not_there() {
-    let recipe = Recipe::read(&json!({
+    let recipe = Recipe::read(&serde_json::from_value(json!({
         "type": "recipe", "media": "shot",
         "nodes": [{"id": "a", "kind": "render"}, {"id": "b", "kind": "model"}],
         "edges": [{"from": "a", "to": "b", "port": "guide"}, {"from": "a", "to": "gone", "port": "x"}]
-    }));
+    })).unwrap());
     assert_eq!(recipe.edges.len(), 1);
     assert!(!recipe.parts && recipe.reads());
     assert!(extent(&recipe, &arrange(&recipe)).is_some());

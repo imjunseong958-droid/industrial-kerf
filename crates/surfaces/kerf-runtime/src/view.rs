@@ -16,6 +16,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use std::collections::HashMap;
 
 /// A project as a timeline shows it: its media, its sequences, the first
 /// sequence's tracks and markers, and the catalog definitions its clips'
@@ -61,6 +62,47 @@ pub struct TimelineView {
     pub start: Option<f64>,
     /// Where its last clip ends.
     pub duration: f64,
+    /// Each media's readable name, by id: filled by a reader that names
+    /// media for display (the editor), never read from or written to JSON.
+    #[serde(skip)]
+    pub media_names: HashMap<String, String>,
+}
+
+impl TimelineView {
+    /// Frames a second: `fps`, or 30 where it is not a positive number.
+    pub fn rate(&self) -> f64 {
+        if self.fps.is_finite() && self.fps > 0.0 {
+            self.fps
+        } else {
+            30.0
+        }
+    }
+
+    /// Clip `id` of the first sequence, and the track it is on.
+    pub fn clip(&self, id: &str) -> Option<(&ViewTrack, &ViewClip)> {
+        self.tracks.iter().find_map(|track| {
+            track
+                .clips
+                .iter()
+                .find(|clip| clip.id == id)
+                .map(|clip| (track, clip))
+        })
+    }
+
+    /// Media `id`.
+    pub fn source(&self, id: &str) -> Option<&ViewSource> {
+        self.sources.iter().find(|source| source.id == id)
+    }
+
+    /// Whether any track of the first sequence has a clip.
+    pub fn has_clips(&self) -> bool {
+        self.tracks.iter().any(|track| !track.clips.is_empty())
+    }
+
+    /// The whole frame nearest `seconds`, at [`TimelineView::rate`].
+    pub fn frame_at(&self, seconds: f64) -> i64 {
+        (seconds * self.rate()).round() as i64
+    }
 }
 
 /// A media of the project.
@@ -101,6 +143,40 @@ pub struct ViewSource {
     /// first (a name can be in both). Only a snapshot's own timeline has them.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub shows: Vec<String>,
+}
+
+impl ViewSource {
+    /// Made from steps: steps in the document, or the recipe file it names.
+    pub fn is_made(&self) -> bool {
+        self.steps > 0 || self.recipe.is_some()
+    }
+
+    /// Made by steps written under its line in the document.
+    pub fn steps_in_document(&self) -> bool {
+        self.recipe.as_deref().is_none_or(str::is_empty) && self.steps > 0
+    }
+
+    /// Its steps are still in the recipe file it names: they are carried
+    /// into the document before it is made.
+    pub fn uncarried(&self) -> bool {
+        self.recipe
+            .as_deref()
+            .is_some_and(|recipe| !recipe.is_empty())
+            && self.steps == 0
+    }
+
+    /// It has a picture (a video or a still), not only sound.
+    pub fn is_picture(&self) -> bool {
+        self.width.is_some()
+    }
+
+    /// The take it is now, by number, when it has takes.
+    pub fn chosen_take(&self) -> Option<u32> {
+        self.takes
+            .iter()
+            .find(|take| take.chosen)
+            .map(|take| take.number)
+    }
 }
 
 /// A file a media's recipe has made.
@@ -239,6 +315,45 @@ pub struct ViewClip {
     /// A picture clip's masks, in order.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub masks: Vec<ViewMask>,
+    /// Its media's readable name, for a clip of media with a file: filled
+    /// by a reader that names media for display (the editor), never read
+    /// from or written to JSON.
+    #[serde(skip)]
+    pub media_name: Option<String>,
+}
+
+impl ViewClip {
+    /// Where it ends, in seconds.
+    pub fn end(&self) -> f64 {
+        self.timeline_start + self.duration
+    }
+
+    /// The frame after its last.
+    pub fn end_frame(&self) -> i64 {
+        self.start_frame + self.duration_frames
+    }
+
+    /// The second of its source shown `offset` seconds into the clip: from
+    /// its in point towards its out (which allow for its speed), or back
+    /// from its out point when it plays in reverse. None for a clip with no
+    /// source range (a title, a generator).
+    pub fn source_at(&self, offset: f64) -> Option<f64> {
+        let source_in = self.source_in?;
+        let speed = self.speed.unwrap_or(1.0);
+        let out = self
+            .source_out
+            .unwrap_or(source_in + self.duration * speed.abs());
+        let rate = if self.duration > 0.0 {
+            (out - source_in) / self.duration
+        } else {
+            speed.abs()
+        };
+        Some(if self.reverse || speed < 0.0 {
+            out - offset * rate
+        } else {
+            source_in + offset * rate
+        })
+    }
 }
 
 /// An effect on a clip.

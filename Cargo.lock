@@ -1638,6 +1638,7 @@ dependencies = [
  "kerf-runtime",
  "kerf-shots",
  "keyring",
+ "proptest",
  "serde",
  "serde_json",
  "tempfile",

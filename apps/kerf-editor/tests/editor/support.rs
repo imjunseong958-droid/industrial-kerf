@@ -2,6 +2,7 @@
 //! snapshots as the bridge sends them, the editor state they leave, keys, and window bounds.
 
 use gpui::{point, px, size, Bounds, Keystroke, Pixels, Size};
+use kerf_bridge::{Command, Event};
 use kerf_editor::model::Source;
 use kerf_editor::store::EditorState;
 use kerf_editor::ui::{menu_key, MenuKey};
@@ -76,9 +77,25 @@ pub(crate) fn snapshot() -> Value {
     })
 }
 
+/// An event as the bridge sends it, read from its JSON as the bridge reads one.
+pub(crate) fn event(value: Value) -> Event {
+    match serde_json::from_value(value.clone()) {
+        Ok(event) => event,
+        Err(error) => panic!("{value} does not read as an event: {error}"),
+    }
+}
+
+/// A command as the editor sends it, read from its JSON as the bridge reads one.
+pub(crate) fn command(value: Value) -> Command {
+    match serde_json::from_value(value.clone()) {
+        Ok(command) => command,
+        Err(error) => panic!("{value} does not read as a command: {error}"),
+    }
+}
+
 pub(crate) fn apply(state: &mut EditorState, events: &[Value]) {
-    for event in events {
-        state.apply(event);
+    for value in events {
+        state.apply(&event(value.clone()));
     }
 }
 
@@ -112,6 +129,6 @@ pub(crate) fn texts(state: &EditorState) -> Vec<String> {
 
 // ------------------------------------------------------------ the preview's hold
 
-pub(crate) fn preview(status: &str) -> Value {
-    json!({"type": "preview", "status": status})
+pub(crate) fn preview(status: &str) -> Event {
+    event(json!({"type": "preview", "status": status}))
 }

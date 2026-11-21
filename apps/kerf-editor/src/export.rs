@@ -18,7 +18,7 @@
 use crate::commands::RunCommand;
 use crate::finish::{AskKerf, Preflight};
 use crate::icons::Icon;
-use crate::model::RenderJob;
+use crate::model::{RenderJob, RenderJobShow};
 use crate::prefs::{MasterOutput, Prefs};
 use crate::session::{export_request, BridgeEvent, Session, DELIVERIES};
 use crate::store::Change;
@@ -28,7 +28,8 @@ use gpui::{
     actions, div, prelude::*, px, AnyElement, App, Context, ElementId, Entity, EventEmitter,
     FocusHandle, FontWeight, KeyBinding, Rgba, SharedString, Subscription, Window,
 };
-use serde_json::{json, Value};
+use kerf_bridge::{CaptionsRequest, Command, Event, ExportRequest};
+use serde_json::Value;
 use std::path::Path;
 
 actions!(export, [Close, ExportChosen]);
@@ -105,7 +106,7 @@ impl Quality {
 /// deliveries/ as `<project>_master` unless `kept` (the project's
 /// [`MasterOutput`]) names another folder (empty: where kerfd puts it) or
 /// file name; its codec when it is not ProRes 422 HQ, a master's own.
-pub fn master_request(project: Option<&Path>, kept: Option<&MasterOutput>) -> Value {
+pub fn master_request(project: Option<&Path>, kept: Option<&MasterOutput>) -> Command {
     let folder_name = project
         .and_then(Path::file_name)
         .map(|name| name.to_string_lossy().into_owned())
@@ -131,21 +132,26 @@ pub fn master_request(project: Option<&Path>, kept: Option<&MasterOutput>) -> Va
             name = own.to_owned();
         }
     }
-    let mut command = json!({"type": "export", "quality": "master"});
-    if let Some(codec) = kept
+    let codec = kept
         .and_then(|kept| kept.codec.as_deref())
         .map(str::trim)
         .filter(|codec| !codec.is_empty() && *codec != MASTER_CODEC)
-    {
-        command["codec"] = json!(codec);
+        .map(str::to_owned);
+    Command::Export(ExportRequest {
+        quality: "master".to_owned(),
+        codec,
+        sequence: None,
+        output: (!folder.is_empty()).then_some(folder),
+        name: (!name.is_empty()).then_some(name),
+    })
+}
+
+/// What an `export` command asks for; None for any other command.
+pub(crate) fn export_of(command: &Command) -> Option<&ExportRequest> {
+    match command {
+        Command::Export(request) => Some(request),
+        _ => None,
     }
-    if !folder.is_empty() {
-        command["output"] = json!(folder);
-    }
-    if !name.is_empty() {
-        command["name"] = json!(name);
-    }
-    command
 }
 
 /// The `export` request the toolbar's Export, ⌘E (`export.master`) and
@@ -154,7 +160,7 @@ pub fn master_request(project: Option<&Path>, kept: Option<&MasterOutput>) -> Va
 /// keep for the project; anything else as
 /// [`crate::session::export_request`] makes it. [`render_master`] sends
 /// it, and `Session::export` is to.
-pub fn request(project: Option<&Path>, prefs: &Prefs, quality: &str) -> Value {
+pub fn request(project: Option<&Path>, prefs: &Prefs, quality: &str) -> Command {
     if quality == Quality::Master.wire() {
         let kept = project.and_then(|project| prefs.master_output(project));
         master_request(project, kept)
@@ -193,8 +199,9 @@ fn master_codec(codec: &str) -> Option<(&'static str, &'static str, &'static str
 /// another codec ("HEVC 10-bit HDR"). One kerfd does not render a master
 /// in is named as it was kept.
 pub fn master_makes(kept: Option<&MasterOutput>) -> String {
-    let codec = master_request(None, kept)["codec"]
-        .as_str()
+    let command = master_request(None, kept);
+    let codec = export_of(&command)
+        .and_then(|request| request.codec.as_deref())
         .unwrap_or(MASTER_CODEC)
         .to_owned();
     master_codec(&codec).map_or(codec, |(short, _, _)| short.to_owned())
@@ -205,22 +212,22 @@ pub fn master_makes(kept: Option<&MasterOutput>) -> String {
 /// it goes where kerfd puts renders.
 pub fn master_goes(project: Option<&Path>, kept: Option<&MasterOutput>) -> (String, String) {
     let command = master_request(project, kept);
-    let codec = command["codec"].as_str().unwrap_or(MASTER_CODEC);
+    let request = export_of(&command);
+    let codec = request
+        .and_then(|request| request.codec.as_deref())
+        .unwrap_or(MASTER_CODEC);
+    let name = request
+        .and_then(|request| request.name.as_deref())
+        .unwrap_or("master");
     let (file, makes) = match master_codec(codec) {
-        Some((_, extension, makes)) => (
-            format!(
-                "{}.{extension}",
-                command["name"].as_str().unwrap_or("master")
-            ),
-            makes.to_owned(),
-        ),
+        Some((_, extension, makes)) => (format!("{name}.{extension}"), makes.to_owned()),
         // kerfd turns it down, so there is no file to name.
         None => (
-            command["name"].as_str().unwrap_or("master").to_owned(),
+            name.to_owned(),
             format!("{codec}, which Kerf renders no master in"),
         ),
     };
-    let goes = match command["output"].as_str() {
+    let goes = match request.and_then(|request| request.output.as_deref()) {
         Some(folder) => format!("{}{file}", shown_folder(folder)),
         None => file,
     };
@@ -250,8 +257,8 @@ pub fn export_into(
         Quality::Master => master_request(project, kept),
         Quality::Draft => export_request(project, quality.wire()),
     };
-    command["output"]
-        .as_str()
+    export_of(&command)
+        .and_then(|request| request.output.as_deref())
         .filter(|folder| !folder.is_empty())
         .map(|folder| format!("Into {}", shown_folder(folder)))
 }
@@ -309,7 +316,7 @@ impl ExportView {
                 }
             }),
             cx.subscribe(&session, |_, _, event: &BridgeEvent, cx| {
-                if event.0["type"] == "check" {
+                if matches!(event.0, Event::Check(_)) {
                     cx.notify();
                 }
             }),
@@ -438,7 +445,10 @@ impl ExportView {
                 .disabled(!enabled)
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.session.update(cx, |session, _| {
-                        session.send(json!({"type": "export_captions", "format": format}));
+                        session.send(Command::ExportCaptions(CaptionsRequest {
+                            format: format.to_owned(),
+                            ..CaptionsRequest::default()
+                        }));
                     });
                 }))
         };
@@ -653,7 +663,7 @@ impl ExportView {
     fn job(&self, index: usize, job: &RenderJob, cx: &Context<Self>) -> impl IntoElement {
         let (said, color) = job_status(job);
         let running = job.status == "running";
-        let file = Path::new(&job.output_path)
+        let file = Path::new(job.output_path.as_deref().unwrap_or_default())
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_default();
@@ -669,8 +679,13 @@ impl ExportView {
                     }))
                     .into_any_element(),
             )
-        } else if job.status == "completed" && !job.output_path.is_empty() {
-            let path = job.output_path.clone();
+        } else if job.status == "completed"
+            && job
+                .output_path
+                .as_deref()
+                .is_some_and(|path| !path.is_empty())
+        {
+            let path = job.output_path.clone().unwrap_or_default();
             Some(
                 ui::button(
                     ElementId::named_usize("export-reveal", index),
@@ -900,7 +915,7 @@ fn job_name(job: &RenderJob) -> SharedString {
     if !job.name.trim().is_empty() {
         return job.name.clone().into();
     }
-    match job.quality.as_str() {
+    match job.quality.as_deref().unwrap_or_default() {
         "master" => "Master",
         "review" => "Review copy",
         "full" => "Full render",

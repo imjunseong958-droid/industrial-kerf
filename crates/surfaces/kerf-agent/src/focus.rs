@@ -3,9 +3,9 @@
 //! request with that scope stated, in sequence frames the edit language
 //! reads directly.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum FocusScope {
     /// The selected clip; the clips around it follow by ripple.
@@ -16,7 +16,7 @@ pub enum FocusScope {
     Sequence,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct Focus {
     pub scope: FocusScope,

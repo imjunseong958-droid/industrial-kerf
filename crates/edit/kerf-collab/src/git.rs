@@ -56,8 +56,8 @@ pub struct Tools {
 }
 
 /// Where a project stands against its repository.
-#[derive(Debug, Clone, Default, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
 pub struct Status {
     pub repository: bool,
     pub branch: Option<String>,

@@ -1,6 +1,6 @@
 //! The launcher: new projects, presets, recent projects.
 
-use crate::support::EXISTS;
+use crate::support::{event, EXISTS};
 use kerf_editor::launcher::{
     clone_problem, details_problem, git_address, github_account, launcher_escape, tools_hint,
     LauncherEscape, Mode, Plan,
@@ -478,26 +478,30 @@ proptest! {
 #[test]
 fn an_import_refused_is_said_under_its_slot() {
     assert_eq!(
-        import_refusal(&json!({"type": "error",
-            "message": "cannot import: not a media file\nffprobe: invalid data"}))
+        import_refusal(&event(json!({"type": "error",
+            "message": "cannot import: not a media file\nffprobe: invalid data"})))
         .as_deref(),
         Some("cannot import: not a media file")
     );
     assert_eq!(
-        import_refusal(&json!({"type": "error", "message": ""})).as_deref(),
+        import_refusal(&event(json!({"type": "error", "message": ""}))).as_deref(),
         Some("The file could not be imported")
     );
     // Kerf's own errors, a refused render, and other events are not it.
     assert_eq!(
-        import_refusal(&json!({"type": "error", "command": "agent", "message": "x"})),
+        import_refusal(&event(
+            json!({"type": "error", "command": "agent", "message": "x"})
+        )),
         None
     );
     assert_eq!(
-        import_refusal(&json!({"type": "error", "command": "export", "message": "x"})),
+        import_refusal(&event(
+            json!({"type": "error", "command": "export", "message": "x"})
+        )),
         None
     );
     assert_eq!(
-        import_refusal(&json!({"type": "state", "snapshot": {}})),
+        import_refusal(&event(json!({"type": "state", "snapshot": {}}))),
         None
     );
 }

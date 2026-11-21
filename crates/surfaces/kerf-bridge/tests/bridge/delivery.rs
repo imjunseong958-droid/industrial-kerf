@@ -63,7 +63,7 @@ impl Editor {
     }
 
     fn send(&mut self, command: Value) -> bool {
-        self.bridge.send(&command)
+        crate::send(&mut self.bridge, &command)
     }
 
     /// The next event that `matches`, among those not yet taken.
@@ -73,7 +73,7 @@ impl Editor {
         }
         let deadline = Instant::now() + Duration::from_secs(90);
         while Instant::now() < deadline {
-            let Some(event) = self.bridge.poll() else {
+            let Some(event) = crate::poll(&mut self.bridge) else {
                 std::thread::sleep(Duration::from_millis(20));
                 continue;
             };

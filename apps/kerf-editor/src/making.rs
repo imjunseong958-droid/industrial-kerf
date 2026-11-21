@@ -26,7 +26,9 @@ use gpui::{
     PathBuilder, Pixels, Point, RenderImage, Rgba, ScrollDelta, ScrollWheelEvent, SharedString,
     Subscription, Window,
 };
-use serde_json::{json, Value};
+use kerf_bridge::event::{MediaMakePlan, Recipe as RecipeEvent, TakeRead};
+use kerf_bridge::{Command, Event, RecipeEdit, ShotFollow, ShotOf, WorkflowEdit};
+use serde_json::{json, Map, Value};
 use std::cell::Cell;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -90,29 +92,20 @@ pub struct Plan {
 }
 
 impl Plan {
-    /// Reads a `media_make_plan` event; None for any other.
-    pub fn from_event(event: &Value) -> Option<Self> {
-        if event["type"] != "media_make_plan" {
-            return None;
-        }
-        let media = event["media"].as_str()?.to_owned();
-        let mut steps = strings(&event["steps"]);
+    /// Reads the plan of a `media_make_plan` event.
+    pub fn from_event(plan: &MediaMakePlan) -> Self {
+        let mut steps = plan.steps.clone();
         if steps.is_empty() {
-            steps = event["command"]
-                .as_str()
-                .unwrap_or_default()
-                .lines()
-                .map(str::to_owned)
-                .collect();
+            steps = plan.command.lines().map(str::to_owned).collect();
         }
-        Some(Self {
-            media,
+        Self {
+            media: plan.media.clone(),
             steps,
-            notes: strings(&event["notes"]),
-            take: number(&event["take"]),
-            file: event["file"].as_str().unwrap_or_default().to_owned(),
-            rolls: number(&event["rolls"]).max(1),
-        })
+            notes: plan.notes.clone(),
+            take: plan.take,
+            file: plan.file.clone(),
+            rolls: plan.rolls.max(1),
+        }
     }
 
     /// "take 3", or "takes 3–6" for several.
@@ -334,7 +327,7 @@ fn refusal(message: &str, media: &str) -> String {
 
 /// A media whose steps are still in the recipe file it names.
 fn uncarried(source: &Source) -> bool {
-    source.recipe.is_some() && source.steps.unwrap_or(0) == 0
+    source.recipe.is_some() && source.steps == 0
 }
 
 // ------------------------------------------------------- makings in the conversation
@@ -482,61 +475,58 @@ impl Makings {
         makings
     }
 
-    fn heard(&mut self, event: &Value, cx: &mut Context<Self>) {
-        let kind = event["type"].as_str().unwrap_or_default();
-        let media = event["media"].as_str().unwrap_or_default().to_owned();
-        match kind {
-            "agent_ask" => {
+    fn heard(&mut self, event: &Event, cx: &mut Context<Self>) {
+        match event {
+            Event::AgentAsk {
+                media,
+                rolls,
+                take,
+                text,
+                conversation,
+            } => {
                 let ask = Ask {
-                    media,
-                    rolls: event["rolls"]
-                        .as_u64()
-                        .map(|rolls| rolls as u32)
-                        .filter(|rolls| *rolls > 1),
-                    take: event["take"].as_u64().map(|take| take as u32),
-                    text: event["text"].as_str().unwrap_or_default().to_owned(),
+                    media: media.clone(),
+                    rolls: rolls.filter(|rolls| *rolls > 1),
+                    take: *take,
+                    text: text.clone(),
                 };
-                let conversation = event["conversation"].as_str().map(str::to_owned);
                 if !ask.media.is_empty()
                     && !self.live.iter().any(|(_, known)| key(known) == key(&ask))
                 {
-                    self.live.push((conversation, ask));
+                    self.live.push((conversation.clone(), ask));
                 }
             }
-            "media_make_plan" => {
-                if let Some(plan) = Plan::from_event(event) {
-                    let wanted = (plan.media.clone(), plan.rolls);
-                    self.asked.remove(&wanted);
-                    self.plans.insert(wanted, Ok(plan));
-                }
+            Event::MediaMakePlan(plan) => {
+                let plan = Plan::from_event(plan);
+                let wanted = (plan.media.clone(), plan.rolls);
+                self.asked.remove(&wanted);
+                self.plans.insert(wanted, Ok(plan));
             }
-            "media_making" => {
-                let line = event["line"].as_str().unwrap_or_default().to_owned();
-                let take = number(&event["take"]);
+            Event::MediaMaking { media, take, line } => {
                 self.progress.insert(
-                    media,
+                    media.clone(),
                     Progress {
                         state: CardState::Making,
-                        detail: line,
-                        take,
+                        detail: line.clone(),
+                        take: *take,
                     },
                 );
             }
-            "media_made" => {
+            Event::MediaMade { media, take } => {
                 self.progress.insert(
-                    media,
+                    media.clone(),
                     Progress {
                         state: CardState::Made,
                         detail: String::new(),
-                        take: number(&event["take"]),
+                        take: *take,
                     },
                 );
             }
-            "media_make_cancelled" => {
+            Event::MediaMakeCancelled { media } => {
                 // The take it was of, so that a card made already is not this.
-                let take = self.progress.get(&media).map_or(0, |known| known.take);
+                let take = self.progress.get(media).map_or(0, |known| known.take);
                 self.progress.insert(
-                    media,
+                    media.clone(),
                     Progress {
                         state: CardState::Stopped,
                         detail: String::new(),
@@ -544,22 +534,24 @@ impl Makings {
                     },
                 );
             }
-            "error" if event["command"] == "media_make" && !media.is_empty() => {
-                let message = event["message"]
-                    .as_str()
-                    .unwrap_or("The making failed")
-                    .to_owned();
+            Event::Error(error)
+                if error.command.as_deref() == Some("media_make")
+                    && !error.media.as_deref().unwrap_or_default().is_empty() =>
+            {
+                let media = error.media.clone().unwrap_or_default();
+                let message = error.message.as_str();
                 let making = self
                     .progress
                     .get(&media)
                     .filter(|known| known.state == CardState::Making)
                     .map(|known| known.take);
                 if let Some(take) = making {
+                    let detail = refusal(message, &media);
                     self.progress.insert(
                         media,
                         Progress {
                             state: CardState::Failed,
-                            detail: refusal(&message, event["media"].as_str().unwrap_or_default()),
+                            detail,
                             take,
                         },
                     );
@@ -573,13 +565,19 @@ impl Makings {
                         .collect();
                     for wanted in waiting {
                         self.asked.remove(&wanted);
-                        self.plans.insert(wanted, Err(refusal(&message, &media)));
+                        self.plans.insert(wanted, Err(refusal(message, &media)));
                     }
                 }
             }
             _ => {}
         }
-        if matches!(kind, "agent_ask" | "conversation" | "connection" | "state") {
+        if matches!(
+            event,
+            Event::AgentAsk { .. }
+                | Event::Conversation(_)
+                | Event::Connection { .. }
+                | Event::State { .. }
+        ) {
             self.ask_plans(cx);
         }
     }
@@ -634,11 +632,11 @@ impl Makings {
         }
         self.session.update(cx, |session, _| {
             for (media, rolls) in &wanted {
-                let mut command = json!({"type": "media_make", "media": media});
-                if *rolls > 1 {
-                    command["rolls"] = json!(rolls);
-                }
-                session.send(command);
+                session.send(Command::MediaMake {
+                    media: media.clone(),
+                    confirmed: false,
+                    rolls: (*rolls > 1).then_some(*rolls),
+                });
             }
         });
         self.asked.extend(wanted);
@@ -666,11 +664,11 @@ impl Makings {
         let rolls = ask.rolls.unwrap_or(1).max(1);
         let media = ask.media.clone();
         self.session.update(cx, |session, cx| {
-            let mut command = json!({"type": "media_make", "media": media, "confirmed": true});
-            if rolls > 1 {
-                command["rolls"] = json!(rolls);
-            }
-            session.send(command);
+            session.send(Command::MediaMake {
+                media,
+                confirmed: true,
+                rolls: (rolls > 1).then_some(rolls),
+            });
             cx.notify();
         });
         // Shown at once; the bridge's media_making takes it from here.
@@ -871,7 +869,9 @@ impl Makings {
                     .icon(Icon::Stop)
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.session.update(cx, |session, _| {
-                            session.send(json!({"type": "media_make_cancel", "media": stop}));
+                            session.send(Command::MediaMakeCancel {
+                                media: stop.clone(),
+                            });
                         });
                     })),
             );
@@ -1136,10 +1136,11 @@ impl MakePlan {
     }
 
     fn ask_plan(&mut self, cx: &mut Context<Self>) {
-        let mut command = json!({"type": "media_make", "media": self.media.as_ref()});
-        if self.rolls > 1 {
-            command["rolls"] = json!(self.rolls);
-        }
+        let command = Command::MediaMake {
+            media: self.media.to_string(),
+            confirmed: false,
+            rolls: (self.rolls > 1).then_some(self.rolls),
+        };
         self.stage = Stage::Asking;
         let sent = self.session.update(cx, |session, _| session.send(command));
         if !sent {
@@ -1149,7 +1150,10 @@ impl MakePlan {
     }
 
     fn ask_carry(&mut self, cx: &mut Context<Self>) {
-        let command = json!({"type": "media_carry", "media": self.media.as_ref()});
+        let command = Command::MediaCarry {
+            media: self.media.to_string(),
+            confirmed: false,
+        };
         self.stage = Stage::Carrying;
         let sent = self.session.update(cx, |session, _| session.send(command));
         if !sent {
@@ -1158,38 +1162,46 @@ impl MakePlan {
         cx.notify();
     }
 
-    fn heard(&mut self, event: &Value, cx: &mut Context<Self>) {
-        if event["media"].as_str() != Some(self.media.as_ref()) {
+    fn heard(&mut self, event: &Event, cx: &mut Context<Self>) {
+        // Only what is said of its own media.
+        let media = match event {
+            Event::MediaMakePlan(plan) => Some(plan.media.as_str()),
+            Event::Error(error) => error.media.as_deref(),
+            Event::MediaCarryPlan { media, .. } | Event::MediaCarried { media, .. } => {
+                Some(media.as_str())
+            }
+            _ => None,
+        };
+        if media != Some(self.media.as_str()) {
             return;
         }
-        let message = || {
-            event["message"]
-                .as_str()
-                .unwrap_or("It was refused")
-                .to_owned()
-        };
-        match event["type"].as_str().unwrap_or_default() {
-            "media_make_plan" if matches!(self.stage, Stage::Asking) => {
-                if let Some(plan) = Plan::from_event(event) {
-                    self.stage = Stage::Plan(plan);
-                }
+        match event {
+            Event::MediaMakePlan(plan) if matches!(self.stage, Stage::Asking) => {
+                self.stage = Stage::Plan(Plan::from_event(plan));
             }
-            "error" if event["command"] == "media_make" && matches!(self.stage, Stage::Asking) => {
-                self.stage = Stage::Refused(refusal(&message(), &self.media));
+            Event::Error(error)
+                if error.command.as_deref() == Some("media_make")
+                    && matches!(self.stage, Stage::Asking) =>
+            {
+                self.stage = Stage::Refused(refusal(&error.message, &self.media));
             }
-            "media_carry_plan" if matches!(self.stage, Stage::Carrying) => {
+            Event::MediaCarryPlan {
+                recipe,
+                script,
+                notes,
+                ..
+            } if matches!(self.stage, Stage::Carrying) => {
                 self.stage = Stage::CarryPlan {
-                    recipe: event["recipe"].as_str().unwrap_or_default().to_owned(),
-                    script: strings(&event["script"]),
-                    notes: strings(&event["notes"]),
+                    recipe: recipe.clone(),
+                    script: script.clone(),
+                    notes: notes.clone(),
                 };
             }
-            "error" if event["command"] == "media_carry" => {
-                self.stage = Stage::CarryRefused(refusal(&message(), &self.media));
+            Event::Error(error) if error.command.as_deref() == Some("media_carry") => {
+                self.stage = Stage::CarryRefused(refusal(&error.message, &self.media));
             }
-            "media_carried" => {
-                let held = number(&event["held"]);
-                let recipe = event["recipe"].as_str().unwrap_or_default();
+            Event::MediaCarried { recipe, held, .. } => {
+                let held = *held;
                 let takes = if held == 1 {
                     "1 of its takes is".to_owned()
                 } else {
@@ -1212,11 +1224,11 @@ impl MakePlan {
     }
 
     fn make(&mut self, cx: &mut Context<Self>) {
-        let mut command =
-            json!({"type": "media_make", "media": self.media.as_ref(), "confirmed": true});
-        if self.rolls > 1 {
-            command["rolls"] = json!(self.rolls);
-        }
+        let command = Command::MediaMake {
+            media: self.media.to_string(),
+            confirmed: true,
+            rolls: (self.rolls > 1).then_some(self.rolls),
+        };
         let sent = self.session.update(cx, |session, cx| {
             let sent = session.send(command);
             cx.notify();
@@ -1229,8 +1241,10 @@ impl MakePlan {
     }
 
     fn carry(&mut self, cx: &mut Context<Self>) {
-        let command =
-            json!({"type": "media_carry", "media": self.media.as_ref(), "confirmed": true});
+        let command = Command::MediaCarry {
+            media: self.media.to_string(),
+            confirmed: true,
+        };
         let sent = self.session.update(cx, |session, _| session.send(command));
         if sent {
             self.stage = Stage::Carrying;
@@ -1530,17 +1544,18 @@ pub struct Recipe {
 }
 
 impl Recipe {
-    /// Reads a `recipe` event, leniently. An edge to or from what is not
-    /// there is left out.
-    pub fn read(event: &Value) -> Self {
-        let words = |key: &str| event[key].as_str().unwrap_or_default().to_owned();
+    /// Reads a `recipe` event's graph, leniently. An edge to or from what is
+    /// not there is left out.
+    pub fn read(event: &RecipeEvent) -> Self {
+        let field = |key: &str| event.graph.get(key).unwrap_or(&Value::Null);
+        let words = |key: &str| field(key).as_str().unwrap_or_default().to_owned();
         let said = |key: &str| {
-            event[key]
+            field(key)
                 .as_str()
                 .filter(|said| !said.is_empty())
                 .map(str::to_owned)
         };
-        let nodes: Vec<GraphNode> = event["nodes"]
+        let nodes: Vec<GraphNode> = field("nodes")
             .as_array()
             .map(|nodes| {
                 nodes
@@ -1559,7 +1574,7 @@ impl Recipe {
             })
             .unwrap_or_default();
         let there = |id: &str| nodes.iter().any(|node| node.id == id);
-        let edges = event["edges"]
+        let edges = field("edges")
             .as_array()
             .map(|edges| {
                 edges
@@ -1578,15 +1593,15 @@ impl Recipe {
         Self {
             media: words("media"),
             recipe: words("recipe"),
-            document: event["document"].as_bool().unwrap_or(false),
+            document: field("document").as_bool().unwrap_or(false),
             name: words("name"),
             text: words("text"),
             nodes,
             edges,
             error: said("error"),
             cannot: said("cannot"),
-            notes: strings(&event["notes"]),
-            models_error: said("modelsError"),
+            notes: strings(field("notes")),
+            models_error: event.models_error.clone().filter(|said| !said.is_empty()),
             parts: false,
         }
     }
@@ -1634,9 +1649,10 @@ pub fn part_id(id: &str) -> String {
 }
 
 impl Workflow {
-    /// Reads a `workflow` event, leniently.
-    pub fn read(event: &Value) -> Self {
-        let words = |key: &str| event[key].as_str().unwrap_or_default().to_owned();
+    /// Reads a `workflow` event's fields, leniently.
+    pub fn read(event: &Map<String, Value>) -> Self {
+        let field = |key: &str| event.get(key).unwrap_or(&Value::Null);
+        let words = |key: &str| field(key).as_str().unwrap_or_default().to_owned();
         let (media, model, name, origin, file) = (
             words("media"),
             words("model"),
@@ -1656,7 +1672,7 @@ impl Workflow {
             parts: true,
             ..Recipe::default()
         };
-        for node in event["nodes"].as_array().into_iter().flatten() {
+        for node in field("nodes").as_array().into_iter().flatten() {
             let id = value_text(&node["id"]);
             if id.is_empty() {
                 continue;
@@ -1699,14 +1715,14 @@ impl Workflow {
         graph.edges = edges;
         Self {
             media,
-            line: event["line"].as_u64().unwrap_or(0) as usize,
+            line: field("line").as_u64().unwrap_or(0) as usize,
             model,
             name,
             origin,
             file,
             about: words("about"),
             text: words("text"),
-            blanks: event["blanks"].as_object().cloned().unwrap_or_default(),
+            blanks: field("blanks").as_object().cloned().unwrap_or_default(),
             graph,
         }
     }
@@ -2539,11 +2555,10 @@ fn save_places(
 /// What a take's reading beside its guide says of each subject: how much of
 /// where it was asked for it has, and on how many frames it was followed;
 /// or the clip's note.
-pub fn reading_lines(reading: &Value) -> Vec<String> {
-    reading["clips"]
-        .as_array()
-        .into_iter()
-        .flatten()
+pub fn reading_lines(reading: &TakeRead) -> Vec<String> {
+    reading
+        .clips
+        .iter()
         .map(|clip| {
             let name = clip["clip"].as_str().unwrap_or_default();
             match clip["note"].as_str() {
@@ -2560,7 +2575,7 @@ pub fn reading_lines(reading: &Value) -> Vec<String> {
 }
 
 /// A take row's tip: what pressing it does, then each subject's reading.
-pub fn take_tip(number: u32, chosen: bool, reading: Option<&Value>) -> String {
+pub fn take_tip(number: u32, chosen: bool, reading: Option<&TakeRead>) -> String {
     let mut lines = vec![if chosen {
         "The shot is this take".to_owned()
     } else {
@@ -3164,7 +3179,7 @@ enum PointStage {
 #[derive(Clone, Debug, Default)]
 struct Pointing {
     clip: String,
-    of: String,
+    of: Option<ShotOf>,
     stage: PointStage,
     picture: Option<PathBuf>,
     on: Vec<(f64, f64)>,
@@ -3339,7 +3354,7 @@ pub struct ShotGraph {
     typing_in: Option<String>,
     menu: Option<GraphMenu>,
     /// Each take's reading beside its guide, the whole of what was said.
-    readings: HashMap<u32, Value>,
+    readings: HashMap<u32, TakeRead>,
     best: Option<u32>,
     reading: Holding,
     pointing: Pointing,
@@ -3438,7 +3453,7 @@ impl ShotGraph {
     fn request(&mut self, cx: &mut Context<Self>) {
         let media = self.media.to_string();
         let revision = self.session.update(cx, |session, _| {
-            session.send(json!({"type": "recipe_get", "media": media}));
+            session.send(Command::RecipeGet { media });
             session.revision()
         });
         self.asked = Some(revision);
@@ -3448,84 +3463,99 @@ impl ShotGraph {
         if self.workflow_line == 0 {
             return;
         }
-        let command = json!({"type": "workflow_get", "media": self.media.as_ref(), "line": self.workflow_line});
+        let command = Command::WorkflowGet {
+            media: self.media.to_string(),
+            line: self.workflow_line,
+        };
         self.session.update(cx, |session, _| session.send(command));
     }
 
-    fn heard(&mut self, event: &Value, window: &mut Window, cx: &mut Context<Self>) {
-        let kind = event["type"].as_str().unwrap_or_default();
-        let ours = event["media"].as_str() == Some(self.media.as_ref());
-        let command = event["command"].as_str().unwrap_or_default();
-        let message = event["message"].as_str().unwrap_or_default().to_owned();
-        match kind {
-            "recipe" if ours => self.set_recipe(event, window, cx),
-            "workflow" if ours => {
-                let line = event["line"].as_u64().unwrap_or(0) as usize;
+    fn heard(&mut self, event: &Event, window: &mut Window, cx: &mut Context<Self>) {
+        // What is said of this shot's media; a recipe and a workflow say it among their fields.
+        let media = match event {
+            Event::Recipe(recipe) => recipe.graph.get("media").and_then(Value::as_str),
+            Event::Workflow(fields) => fields.get("media").and_then(Value::as_str),
+            Event::Error(error) => error.media.as_deref(),
+            Event::TakeRead(read) => Some(read.media.as_str()),
+            Event::TakesRead(read) => Some(read.media.as_str()),
+            Event::MediaMade { media, .. } | Event::MediaMakeCancelled { media } => {
+                Some(media.as_str())
+            }
+            _ => None,
+        };
+        let ours = media == Some(self.media.as_str());
+        match event {
+            Event::Recipe(recipe) if ours => self.set_recipe(recipe, window, cx),
+            Event::Workflow(fields) if ours => {
+                let line = fields.get("line").and_then(Value::as_u64).unwrap_or(0) as usize;
                 if line > 0 && line == self.workflow_line {
-                    self.set_workflow(Workflow::read(event), window, cx);
+                    self.set_workflow(Workflow::read(fields), window, cx);
                 }
             }
-            "error" if ours && command == "workflow" => {
-                self.said = Some(message);
-                // Asked for and refused: the shot's graph stays, and its
-                // model's Open workflow asks again.
-                if self.workflow.is_none() {
-                    self.workflow_line = 0;
+            Event::Error(error) => {
+                let command = error.command.as_deref().unwrap_or_default();
+                let message = error.message.clone();
+                match command {
+                    "workflow" if ours => {
+                        self.said = Some(message);
+                        // Asked for and refused: the shot's graph stays, and its
+                        // model's Open workflow asks again.
+                        if self.workflow.is_none() {
+                            self.workflow_line = 0;
+                        }
+                    }
+                    "recipe" if ours => {
+                        if self.recipe.is_some() {
+                            self.said = Some(message);
+                        } else {
+                            self.refused = Some(message);
+                        }
+                    }
+                    "takes_read" if ours => self.reading = Holding::Failed(message),
+                    _ if command.starts_with("shot_") => {
+                        self.followed(error.clip.as_deref(), error.of, message, true)
+                    }
+                    "media_make" if ours => self.request(cx),
+                    _ => return,
                 }
             }
-            "error" if ours && command == "recipe" => {
-                if self.recipe.is_some() {
-                    self.said = Some(message);
-                } else {
-                    self.refused = Some(message);
-                }
+            Event::TakeRead(read) if ours => {
+                self.readings.insert(read.take, read.clone());
             }
-            "error" if ours && command == "takes_read" => self.reading = Holding::Failed(message),
-            "take_read" if ours => {
-                if let Some(take) = event["take"].as_u64() {
-                    self.readings.insert(take as u32, event.clone());
-                }
-            }
-            "takes_read" if ours => {
-                self.best = event["best"]
-                    .as_u64()
-                    .map(|best| best as u32)
-                    .filter(|best| *best > 0);
+            Event::TakesRead(read) if ours => {
+                self.best = read.best.filter(|best| *best > 0);
                 self.reading = Holding::Read;
             }
             // A clip read from footage: the card that asked knows its clip.
-            "shot_picture" => {
+            Event::ShotPicture { clip, of, path, .. } => {
                 let pointing = &mut self.pointing;
-                let asked = event["clip"] == pointing.clip.as_str()
-                    && event["of"] == pointing.of.as_str()
+                let asked = *clip == pointing.clip
+                    && pointing.of == Some(*of)
                     && pointing.stage == PointStage::Drawing;
                 if !asked {
                     return;
                 }
-                pointing.picture = event["path"].as_str().map(PathBuf::from);
+                pointing.picture = Some(path.clone());
                 pointing.stage = PointStage::Pointing;
                 self.want_pictures(cx);
             }
-            "shot_followed" => {
-                let says = event["says"].as_str().unwrap_or_default().to_owned();
-                self.followed(event, says, false);
+            Event::ShotFollowed { clip, of, says, .. } => {
+                self.followed(Some(clip.as_str()), Some(*of), says.clone(), false);
             }
-            "error" if command.starts_with("shot_") => self.followed(event, message, true),
             // Its takes are other than they were.
-            "media_made" | "media_make_cancelled" if ours => self.request(cx),
-            "error" if ours && command == "media_make" => self.request(cx),
+            Event::MediaMade { .. } | Event::MediaMakeCancelled { .. } if ours => self.request(cx),
             // The project changed: a signal's keys, a clip's way, a take chosen.
-            "state" => {
-                let revision = event["snapshot"]["revision"].as_u64();
-                if revision.is_some() && revision != self.asked {
+            Event::State { snapshot } => {
+                let revision = Some(snapshot.revision);
+                if revision != self.asked {
                     self.request(cx);
                     if self.workflow.is_some() {
                         self.request_workflow(cx);
                     }
                 }
             }
-            "models" | "cast" => self.request(cx),
-            "connection" if self.recipe.is_none() => self.request(cx),
+            Event::Models { .. } | Event::Cast(_) => self.request(cx),
+            Event::Connection { .. } if self.recipe.is_none() => self.request(cx),
             _ => return,
         }
         cx.notify();
@@ -3533,11 +3563,12 @@ impl ShotGraph {
 
     /// What the bridge said of following a clip, or why it could not: a
     /// picture that could not be drawn leaves nothing to point on; a thing
-    /// that could not be followed leaves the picture, to point again.
-    fn followed(&mut self, event: &Value, says: String, failed: bool) {
+    /// that could not be followed leaves the picture, to point again. The
+    /// clip and what it was read for are as the bridge named them, if it did.
+    fn followed(&mut self, clip: Option<&str>, of: Option<ShotOf>, says: String, failed: bool) {
         let pointing = &mut self.pointing;
-        let named = event["clip"].as_str().is_some();
-        let ours = event["clip"] == pointing.clip.as_str() && event["of"] == pointing.of.as_str();
+        let named = clip.is_some();
+        let ours = clip == Some(pointing.clip.as_str()) && of.is_some() && of == pointing.of;
         let waiting = matches!(pointing.stage, PointStage::Drawing | PointStage::Following);
         if !(ours || (!named && waiting)) {
             return;
@@ -3609,7 +3640,7 @@ impl ShotGraph {
         (f32::from(at.x - origin.x), f32::from(at.y - origin.y))
     }
 
-    fn set_recipe(&mut self, event: &Value, window: &mut Window, cx: &mut Context<Self>) {
+    fn set_recipe(&mut self, event: &RecipeEvent, window: &mut Window, cx: &mut Context<Self>) {
         let recipe = Recipe::read(event);
         let ids = |recipe: &Recipe| -> Vec<String> {
             recipe.nodes.iter().map(|node| node.id.clone()).collect()
@@ -3621,14 +3652,10 @@ impl ShotGraph {
             .recipe
             .as_ref()
             .is_none_or(|old| old.media != recipe.media || old.name != recipe.name);
-        let edited = event["edited"].as_bool().unwrap_or(false);
+        let edited = event.edited;
         // A step just added is the one to set next.
-        if let Some(line) = event["added"].as_u64() {
-            if let Some(node) = recipe
-                .nodes
-                .iter()
-                .find(|node| node.line == Some(line as usize))
-            {
+        if let Some(line) = event.added {
+            if let Some(node) = recipe.nodes.iter().find(|node| node.line == Some(line)) {
                 self.selected = Some(node.id.clone());
             }
         }
@@ -3757,29 +3784,35 @@ impl ShotGraph {
     }
 
     /// A change to the steps, as they read when the graph was drawn.
-    fn edit(&mut self, mut change: Value, cx: &mut Context<Self>) {
+    fn edit(&mut self, change: RecipeEdit, cx: &mut Context<Self>) {
         let Some(recipe) = &self.recipe else {
             return;
         };
-        change["type"] = json!("recipe_edit");
-        change["media"] = json!(self.media.as_ref());
-        change["was"] = json!(recipe.text);
+        let change = RecipeEdit {
+            media: self.media.to_string(),
+            was: recipe.text.clone(),
+            ..change
+        };
         self.said = None;
-        self.session.update(cx, |session, _| session.send(change));
+        self.session
+            .update(cx, |session, _| session.send(Command::RecipeEdit(change)));
         cx.notify();
     }
 
     /// A change to the model's workflow, kept in the shot's own copy of it.
-    fn edit_workflow(&mut self, mut change: Value, cx: &mut Context<Self>) {
+    fn edit_workflow(&mut self, change: WorkflowEdit, cx: &mut Context<Self>) {
         let Some(workflow) = &self.workflow else {
             return;
         };
-        change["type"] = json!("workflow_edit");
-        change["media"] = json!(self.media.as_ref());
-        change["line"] = json!(workflow.line);
-        change["was"] = json!(workflow.text);
+        let change = WorkflowEdit {
+            media: self.media.to_string(),
+            line: workflow.line,
+            was: workflow.text.clone(),
+            ..change
+        };
         self.said = None;
-        self.session.update(cx, |session, _| session.send(change));
+        self.session
+            .update(cx, |session, _| session.send(Command::WorkflowEdit(change)));
         cx.notify();
     }
 
@@ -4049,17 +4082,37 @@ impl ShotGraph {
             Commit::Line { line, key, value } => {
                 // The picture is what a guide draws when its line names no pass.
                 if value.is_empty() {
-                    self.edit(json!({"line": line, "key": key, "nth": 0}), cx);
+                    self.edit(
+                        RecipeEdit {
+                            line,
+                            key,
+                            nth: 0,
+                            ..RecipeEdit::default()
+                        },
+                        cx,
+                    );
                 } else {
                     self.edit(
-                        json!({"line": line, "key": key, "nth": 0, "value": value}),
+                        RecipeEdit {
+                            line,
+                            key,
+                            nth: 0,
+                            value: Some(value),
+                            ..RecipeEdit::default()
+                        },
                         cx,
                     );
                 }
             }
-            Commit::Part { node, input, value } => {
-                self.edit_workflow(json!({"node": node, "input": input, "value": value}), cx)
-            }
+            Commit::Part { node, input, value } => self.edit_workflow(
+                WorkflowEdit {
+                    node,
+                    input,
+                    value,
+                    ..WorkflowEdit::default()
+                },
+                cx,
+            ),
             Commit::Revert(was) => {
                 if let Some(field) = self.field(key) {
                     field.input.update(cx, |input, cx| input.set_text(was, cx));
@@ -4410,7 +4463,13 @@ impl ShotGraph {
         };
         let nth = wire_nth(recipe, to, port);
         self.edit(
-            json!({"line": line, "key": port, "nth": nth, "value": value}),
+            RecipeEdit {
+                line,
+                key: port.to_owned(),
+                nth,
+                value: Some(value.to_owned()),
+                ..RecipeEdit::default()
+            },
             cx,
         );
     }
@@ -4422,7 +4481,12 @@ impl ShotGraph {
         let node = value_text(&to.holds["id"]);
         let source = value_text(&from.holds["id"]);
         self.edit_workflow(
-            json!({"node": node, "input": input, "link": [source, output]}),
+            WorkflowEdit {
+                node,
+                input: input.to_owned(),
+                link: Some((source, output as u64)),
+                ..WorkflowEdit::default()
+            },
             cx,
         );
     }
@@ -4504,7 +4568,15 @@ impl ShotGraph {
                 .map(|(kind, words)| {
                     let this = this.clone();
                     ui::MenuItem::new(words).on_choose(move |_, cx| {
-                        let _ = this.update(cx, |graph, cx| graph.edit(json!({"add": kind}), cx));
+                        let _ = this.update(cx, |graph, cx| {
+                            graph.edit(
+                                RecipeEdit {
+                                    add: Some(kind.to_owned()),
+                                    ..RecipeEdit::default()
+                                },
+                                cx,
+                            )
+                        });
                     })
                 })
                 .collect(),
@@ -4680,15 +4752,15 @@ impl ShotGraph {
 
     // ------------------------------------------------------------ reading a clip from footage
 
-    fn ask_picture(&mut self, clip: String, of: &str, cx: &mut Context<Self>) {
+    fn ask_picture(&mut self, clip: String, of: ShotOf, cx: &mut Context<Self>) {
         self.pointing = Pointing {
             clip: clip.clone(),
-            of: of.to_owned(),
+            of: Some(of),
             stage: PointStage::Drawing,
             ..Pointing::default()
         };
         self.session.update(cx, |session, _| {
-            session.send(json!({"type": "shot_picture", "clip": clip, "of": of}))
+            session.send(Command::ShotPicture { clip, of })
         });
         cx.notify();
     }
@@ -4721,7 +4793,7 @@ impl ShotGraph {
         };
         let right = event.button == MouseButton::Right;
         let pointing = &mut self.pointing;
-        if pointing.of == "moves" {
+        if pointing.of == Some(ShotOf::Moves) {
             // One point: pressed, it is followed at once.
             if right {
                 return;
@@ -4743,18 +4815,21 @@ impl ShotGraph {
         if pointing.on.is_empty() {
             return;
         }
+        // Points are only pressed on a picture asked for one way or the other.
+        let Some(of) = pointing.of else {
+            return;
+        };
         pointing.stage = PointStage::Following;
         pointing.says.clear();
         pointing.failed = false;
-        let points = |points: &[(f64, f64)]| -> Vec<Value> {
-            points.iter().map(|(x, y)| json!([x, y])).collect()
+        let points = |points: &[(f64, f64)]| -> Vec<[f64; 2]> {
+            points.iter().map(|(x, y)| [*x, *y]).collect()
         };
-        let command = json!({
-            "type": "shot_follow",
-            "clip": pointing.clip,
-            "of": pointing.of,
-            "points": points(&pointing.on),
-            "outside": points(&pointing.off),
+        let command = Command::ShotFollow(ShotFollow {
+            clip: pointing.clip.clone(),
+            of,
+            points: points(&pointing.on),
+            outside: points(&pointing.off),
         });
         self.session.update(cx, |session, _| session.send(command));
         cx.notify();
@@ -5033,7 +5108,7 @@ impl ShotGraph {
                     .on_click(cx.listener(move |this, _, _, cx| {
                         let media = this.media.to_string();
                         this.session.update(cx, |session, _| {
-                            session.send(json!({"type": "media_make_cancel", "media": media}));
+                            session.send(Command::MediaMakeCancel { media });
                         });
                     })),
             );
@@ -5939,7 +6014,14 @@ impl ShotGraph {
                                     "Take line {line} out of the shot's steps. A step whose file a later one reads, and the last, stay until that is changed"
                                 ))
                                 .on_click(cx.listener(move |this, _, window, cx| {
-                                    this.edit(json!({"line": line, "remove": true}), cx);
+                                    this.edit(
+                                        RecipeEdit {
+                                            line,
+                                            remove: true,
+                                            ..RecipeEdit::default()
+                                        },
+                                        cx,
+                                    );
                                     this.select(None, window, cx);
                                 })),
                         ),
@@ -6063,7 +6145,15 @@ impl ShotGraph {
                         .ghost()
                         .tooltip("Take workflow= off the line; the copy stays in the project")
                         .on_click(cx.listener(move |this, _, _, cx| {
-                            this.edit(json!({"line": line, "key": "workflow", "nth": 0}), cx)
+                            this.edit(
+                                RecipeEdit {
+                                    line,
+                                    key: "workflow".to_owned(),
+                                    nth: 0,
+                                    ..RecipeEdit::default()
+                                },
+                                cx,
+                            )
                         })),
                 ),
             );
@@ -6124,7 +6214,7 @@ impl ShotGraph {
                     .children(self.fields_named(&["size", "rate", "matte", "from", "seconds"]));
                 // A matte is one clip in white on black: of footage, as much of it as a mask cuts out.
                 if let Some(matte) = holds["matte"].as_str().filter(|matte| !matte.is_empty()) {
-                    column = column.child(self.pointing(matte, "matte", cx));
+                    column = column.child(self.pointing(matte, ShotOf::Matte, cx));
                 }
                 // The guide as it was drawn for the take that shows: what the model was handed.
                 let made = &holds["made"];
@@ -6203,7 +6293,7 @@ impl ShotGraph {
                 ));
                 if !missing {
                     let clip = holds["clip"].as_str().unwrap_or_default();
-                    column = column.child(self.pointing(clip, "moves", cx));
+                    column = column.child(self.pointing(clip, ShotOf::Moves, cx));
                 }
             }
             "cast" | "style" => {
@@ -6353,14 +6443,17 @@ impl ShotGraph {
                                 }
                                 let _ = this.update(cx, |graph, cx| {
                                     // The picture is what a line draws when it names no pass.
-                                    if id == "picture" {
-                                        graph.edit(json!({"line": line, "key": "pass", "nth": 0}), cx)
-                                    } else {
-                                        graph.edit(
-                                            json!({"line": line, "key": "pass", "nth": 0, "value": id}),
-                                            cx,
-                                        )
-                                    }
+                                    let value = (id != "picture").then(|| id.to_owned());
+                                    graph.edit(
+                                        RecipeEdit {
+                                            line,
+                                            key: "pass".to_owned(),
+                                            nth: 0,
+                                            value,
+                                            ..RecipeEdit::default()
+                                        },
+                                        cx,
+                                    )
                                 });
                             })
                     })
@@ -6369,7 +6462,12 @@ impl ShotGraph {
                 this.open_menu(MenuKind::Pass, items, None, at, window, cx);
             }),
         )
-        .child(ui::button("graph-pass", shown).ghost().small().icon(Icon::ChevronDown));
+        .child(
+            ui::button("graph-pass", shown)
+                .ghost()
+                .small()
+                .icon(Icon::ChevronDown),
+        );
         div()
             .flex()
             .items_center()
@@ -6479,8 +6577,10 @@ impl ShotGraph {
                             .map_or_else(|| of.clone(), str::to_owned);
                         let (this, clip) = (this_entity.clone(), clip.clone());
                         ui::MenuItem::new(name).on_choose(move |_, cx| {
-                            let command =
-                                json!({"type": "signal_from_sound", "clip": clip, "of": of});
+                            let command = Command::SignalFromSound {
+                                clip: clip.clone(),
+                                of: of.clone(),
+                            };
                             let _ = this.update(cx, |graph, cx| {
                                 graph.session.update(cx, |session, _| session.send(command))
                             });
@@ -6511,9 +6611,9 @@ impl ShotGraph {
 
     /// Reading `clip` from footage, for its way (`moves`) or its matte
     /// (`matte`): its first frame drawn, pointed on, and followed.
-    fn pointing(&self, clip: &str, of: &str, cx: &mut Context<Self>) -> gpui::Div {
-        let moves = of == "moves";
-        let mine = self.pointing.clip == clip && self.pointing.of == of;
+    fn pointing(&self, clip: &str, of: ShotOf, cx: &mut Context<Self>) -> gpui::Div {
+        let moves = of == ShotOf::Moves;
+        let mine = self.pointing.clip == clip && self.pointing.of == Some(of);
         let stage = if mine {
             self.pointing.stage
         } else {
@@ -6582,7 +6682,7 @@ impl ShotGraph {
                 ));
             }
             PointStage::Idle | PointStage::Said => {
-                let (clip, of_word) = (clip.to_owned(), of.to_owned());
+                let clip = clip.to_owned();
                 column = column.child(
                     div().flex().child(
                         ui::button(
@@ -6604,7 +6704,7 @@ impl ShotGraph {
                             "Point at a thing this clip shows, and mask the clip to it as it moves and changes shape: the matte is then that thing"
                         })
                         .on_click(cx.listener(move |this, _, _, cx| {
-                            this.ask_picture(clip.clone(), &of_word, cx)
+                            this.ask_picture(clip.clone(), of, cx)
                         })),
                     ),
                 );
@@ -6780,8 +6880,12 @@ impl ShotGraph {
                                 SharedString::from(format!("graph-switch-{index}")),
                                 on,
                                 move |on, _, cx| {
-                                    let change =
-                                        json!({"node": part, "input": input_name, "value": on});
+                                    let change = WorkflowEdit {
+                                        node: part.clone(),
+                                        input: input_name.clone(),
+                                        value: Value::Bool(on),
+                                        ..WorkflowEdit::default()
+                                    };
                                     let _ = this
                                         .update(cx, |graph, cx| graph.edit_workflow(change, cx));
                                 },
@@ -6826,7 +6930,12 @@ impl ShotGraph {
                                                 if chosen {
                                                     return;
                                                 }
-                                                let change = json!({"node": part, "input": input_name, "value": choice});
+                                                let change = WorkflowEdit {
+                                                    node: part.clone(),
+                                                    input: input_name.clone(),
+                                                    value: choice.clone(),
+                                                    ..WorkflowEdit::default()
+                                                };
                                                 let _ = this.update(cx, |graph, cx| {
                                                     graph.edit_workflow(change, cx)
                                                 });
@@ -6904,7 +7013,15 @@ impl ShotGraph {
                             .tooltip(format!("Take {port} off the line"))
                             .on_click(cx.listener(
                                 move |this, _, _, cx| {
-                                    this.edit(json!({"line": line, "key": port, "nth": nth}), cx);
+                                    this.edit(
+                                        RecipeEdit {
+                                            line,
+                                            key: port.clone(),
+                                            nth,
+                                            ..RecipeEdit::default()
+                                        },
+                                        cx,
+                                    );
                                 },
                             )),
                         )
@@ -6944,7 +7061,11 @@ impl ShotGraph {
             // What there is to say of it: how it holds beside its guide once
             // that is read, what has changed since it was made, or which roll it is.
             let mut says = Vec::new();
-            if let Some(overlap) = reading.and_then(|reading| reading["overlap"].as_f64()) {
+            // An overlap that is not a number was said as none.
+            if let Some(overlap) = reading
+                .map(|reading| reading.overlap)
+                .filter(|overlap| overlap.is_finite())
+            {
                 let closest = if self.best == Some(number_of) {
                     ", the closest"
                 } else {
@@ -7039,8 +7160,10 @@ impl ShotGraph {
                     .hover(|row| row.bg(theme::raised()))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         // A take is a file of the project already: the media's line names it.
-                        let command =
-                            json!({"type": "media_replace", "media": media, "path": path});
+                        let command = Command::MediaReplace {
+                            media: media.clone(),
+                            path: path.clone(),
+                        };
                         this.session.update(cx, |session, _| session.send(command));
                     }))
             } else {
@@ -7064,7 +7187,13 @@ impl ShotGraph {
                             "Write the shot's steps back as take {restore} was made from them: its words, its seeds, and the workflow it named. The sequences and signals it was made from are the project's, and come back by undoing there"
                         ))
                         .on_click(cx.listener(move |this, _, _, cx| {
-                            this.edit(json!({"restore": restore}), cx)
+                            this.edit(
+                                RecipeEdit {
+                                    restore: Some(restore),
+                                    ..RecipeEdit::default()
+                                },
+                                cx,
+                            )
                         })),
                 ),
             );
@@ -7084,9 +7213,8 @@ impl ShotGraph {
                     .tooltip("Read where each take has the shot's subject beside where its guide asked for it. No model is run")
                     .on_click(cx.listener(|this, _, _, cx| {
                         let media = this.media.to_string();
-                        this.session.update(cx, |session, _| {
-                            session.send(json!({"type": "takes_read", "media": media}))
-                        });
+                        this.session
+                            .update(cx, |session, _| session.send(Command::TakesRead { media }));
                         this.readings.clear();
                         this.best = None;
                         this.reading = Holding::Under;

@@ -4,7 +4,7 @@
 use crate::git::{self, CollabError, Result};
 use kerf_lang::{print_document, PrintOptions};
 use kerf_model::{Catalog, Id, Project, Rate, Sequence, Time};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -83,7 +83,7 @@ impl Template {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GitHubRepository {
     #[serde(default)]

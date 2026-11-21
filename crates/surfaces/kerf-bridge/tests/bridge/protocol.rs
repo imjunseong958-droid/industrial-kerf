@@ -98,11 +98,11 @@ impl Editor {
     }
 
     fn send(&mut self, command: Value) {
-        assert!(self.bridge.send(&command), "{command}");
+        assert!(crate::send(&mut self.bridge, &command), "{command}");
     }
 
     fn poll(&mut self) -> Option<Value> {
-        self.bridge.poll()
+        crate::poll(&mut self.bridge)
     }
 
     /// The next event that `matches`, among those not yet taken.

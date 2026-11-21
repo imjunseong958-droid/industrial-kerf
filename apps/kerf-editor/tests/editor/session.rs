@@ -1,11 +1,13 @@
 //! The session: the bridge's events applied to the editor's state, the commands it sends, and what the model reads.
 
 use crate::support::{
-    apply, clip, preview, snapshot, snapshot_timeline, source, texts, timeline_value, EXISTS,
+    apply, clip, command, event, preview, snapshot, snapshot_timeline, source, texts,
+    timeline_value, EXISTS,
 };
 use kerf_editor::chat::{clip_changes, try_asking};
 use kerf_editor::model::{
-    focus_seconds, timecode, Clip, Snapshot, Source, Speaker, Timeline, STILL_SECONDS,
+    focus_seconds, timecode, Clip, ClipShow, RenderJobShow, Snapshot, SnapshotShow, Source,
+    SourceShow, Speaker, Timeline, TimelineShow, TurnShow, STILL_SECONDS,
 };
 use kerf_editor::names;
 use kerf_editor::names::{source_names, without_content_hash};
@@ -67,7 +69,7 @@ proptest! {
 #[test]
 fn media_read_alike_only_where_they_must() {
     let mut made = source("m4", "shots/m4.takes/001.mp4");
-    made.steps = Some(2);
+    made.steps = 2;
     let mut recipe = source("m5", "shots/boat.takes/003.mp4");
     recipe.recipe = Some("shots/boat@2.kerfrecipe".into());
     let sources = vec![
@@ -176,14 +178,16 @@ fn state_with_media() -> EditorState {
         .as_array_mut()
         .unwrap()
         .push(json!({"id": "shot", "path": "shots/shot.mp4", "duration": 2.0, "width": 1920, "height": 1080, "steps": 1}));
-    state.apply(&json!({"type": "state", "snapshot": {"timeline": timeline}}));
+    state.apply(&event(
+        json!({"type": "state", "snapshot": {"timeline": timeline}}),
+    ));
     state
 }
 
 #[test]
 fn media_status_badges_with_missing_first() {
     let mut state = state_with_media();
-    state.apply(&json!({"type": "media_status", "missing": ["a", "shot"], "pointers": ["a", "t"], "external": ["t", "gone"]}));
+    state.apply(&event(json!({"type": "media_status", "missing": ["a", "shot"], "pointers": ["a", "t"], "external": ["t", "gone"]})));
     let status = &state.media_status;
     assert_eq!(status.badge("a"), Some(Badge::Offline));
     assert_eq!(status.badge("t"), Some(Badge::NotDownloaded));
@@ -198,19 +202,19 @@ fn media_status_badges_with_missing_first() {
 #[test]
 fn a_making_waiting_its_turn_is_queued_until_it_runs() {
     let mut state = state_with_media();
-    state.apply(&json!({"type": "media_making", "media": "shot", "take": 1, "line": "asked the server for 48 frames: job 7"}));
+    state.apply(&event(json!({"type": "media_making", "media": "shot", "take": 1, "line": "asked the server for 48 frames: job 7"})));
     assert_eq!(
         state.media_activity("shot"),
         MediaActivity::Queued { ahead: None }
     );
-    state.apply(&json!({"type": "media_making", "media": "shot", "take": 1, "line": "waiting, 2 ahead, 4 s"}));
+    state.apply(&event(json!({"type": "media_making", "media": "shot", "take": 1, "line": "waiting, 2 ahead, 4 s"})));
     assert_eq!(
         state.media_activity("shot"),
         MediaActivity::Queued { ahead: Some(2) }
     );
-    state.apply(
-        &json!({"type": "media_making", "media": "shot", "take": 1, "line": "running, 2 s"}),
-    );
+    state.apply(&event(
+        json!({"type": "media_making", "media": "shot", "take": 1, "line": "running, 2 s"}),
+    ));
     assert!(matches!(
         state.media_activity("shot"),
         MediaActivity::Making { take: 1, .. }
@@ -225,14 +229,20 @@ fn a_making_waiting_its_turn_is_queued_until_it_runs() {
         making_status("shot", &starting),
         "Making take 1 of shot from its steps…"
     );
-    state.apply(&json!({"type": "media_made", "media": "shot", "take": 1}));
+    state.apply(&event(
+        json!({"type": "media_made", "media": "shot", "take": 1}),
+    ));
     assert_eq!(
         state.notices.last().unwrap().text,
         "Made take 1 of shot from its steps"
     );
     assert!(!state.notices.last().unwrap().error);
-    state.apply(&json!({"type": "media_making", "media": "a", "take": 1, "line": ""}));
-    state.apply(&json!({"type": "media_make_cancelled", "media": "a"}));
+    state.apply(&event(
+        json!({"type": "media_making", "media": "a", "take": 1, "line": ""}),
+    ));
+    state.apply(&event(
+        json!({"type": "media_make_cancelled", "media": "a"}),
+    ));
     assert_eq!(
         state.notices.last().unwrap().text,
         "Stopped making a; it is as it was"
@@ -243,26 +253,36 @@ fn a_making_waiting_its_turn_is_queued_until_it_runs() {
 #[test]
 fn media_info_and_indexes_are_kept_and_go_with_a_relink() {
     let mut state = state_with_media();
-    state.apply(&json!({"type": "media_info", "media": {"a": {"pixFmt": "yuva420p"}}}));
-    state.apply(&json!({"type": "media_info", "media": {"t": {"codec": "pcm"}}}));
+    state.apply(&event(
+        json!({"type": "media_info", "media": {"a": {"pixFmt": "yuva420p"}}}),
+    ));
+    state.apply(&event(
+        json!({"type": "media_info", "media": {"t": {"codec": "pcm"}}}),
+    ));
     assert_eq!(state.media_info["a"]["pixFmt"], "yuva420p");
     assert_eq!(state.media_info.len(), 2);
     state.index_asked.insert("a".into());
-    state.apply(&json!({"type": "media_index", "media": "a", "cuts": [1.0]}));
+    state.apply(&event(
+        json!({"type": "media_index", "media": "a", "cuts": [1.0]}),
+    ));
     assert!(state.media_indexes.contains_key("a") && state.index_asked.is_empty());
     // A refusal is said on the Index page, not over the window.
     let notices = state.notices.len();
-    state.apply(
-        &json!({"type": "error", "command": "media_index", "media": "t", "message": "No sound"}),
-    );
+    state.apply(&event(
+        json!({"type": "error", "command": "media_index", "media": "t", "message": "No sound"}),
+    ));
     assert_eq!(state.media_index_errors["t"], "No sound");
     assert_eq!(state.notices.len(), notices);
     // The same file again keeps them; another file lets them go.
     let mut timeline = snapshot_timeline();
-    state.apply(&json!({"type": "state", "snapshot": {"timeline": timeline.clone()}}));
+    state.apply(&event(
+        json!({"type": "state", "snapshot": {"timeline": timeline.clone()}}),
+    ));
     assert!(state.media_indexes.contains_key("a"));
     timeline["sources"][0]["path"] = json!("media/other.mov");
-    state.apply(&json!({"type": "state", "snapshot": {"timeline": timeline}}));
+    state.apply(&event(
+        json!({"type": "state", "snapshot": {"timeline": timeline}}),
+    ));
     assert!(!state.media_indexes.contains_key("a"));
     assert!(!state.media_info.contains_key("a"));
     assert!(state.media_index_errors.contains_key("t"));
@@ -273,26 +293,30 @@ fn a_cast_says_what_wants_making_and_saving_says_so() {
     let mut state = state_with_media();
     let cast = json!({"type": "cast", "saved": false, "entries": [],
                       "toMake": [{"media": "shot", "why": "cast Maya changed"}]});
-    state.apply(&cast);
+    state.apply(&event(cast.clone()));
     assert_eq!(state.wants_making["shot"], "cast Maya changed");
     assert!(state.notices.is_empty());
     let saved = json!({"type": "cast", "saved": true, "entries": [],
                        "toMake": [{"media": "shot", "why": "x"}, {"media": "m9", "why": "y"}]});
-    state.apply(&saved);
+    state.apply(&event(saved.clone()));
     assert_eq!(
         state.notices.last().unwrap().text,
         "Saved the cast; shot, m9 want making again"
     );
-    state.apply(&json!({"type": "media_made", "media": "shot", "take": 2}));
+    state.apply(&event(
+        json!({"type": "media_made", "media": "shot", "take": 2}),
+    ));
     assert!(!state.wants_making.contains_key("shot"));
     let none = json!({"type": "cast", "saved": true, "toMake": []});
     assert_eq!(
-        kerf_editor::store::cast_saved(&none),
+        kerf_editor::store::cast_saved(&event(none.clone())),
         "Saved the cast; no shot wants making for it"
     );
     // What is wrong with a cast is said in its dialog.
     let notices = state.notices.len();
-    state.apply(&json!({"type": "error", "command": "cast", "message": "line 2: no name"}));
+    state.apply(&event(
+        json!({"type": "error", "command": "cast", "message": "line 2: no name"}),
+    ));
     assert_eq!(state.notices.len(), notices);
 }
 
@@ -301,7 +325,7 @@ fn a_new_connection_asks_again() {
     let mut state = state_with_media();
     state.info_asked.insert("a".into());
     state.index_asked.insert("a".into());
-    state.apply(&json!({"type": "connection", "status": "connected"}));
+    state.apply(&event(json!({"type": "connection", "status": "connected"})));
     assert!(state.info_asked.is_empty() && state.index_asked.is_empty());
 }
 
@@ -311,14 +335,14 @@ fn a_new_connection_asks_again() {
 fn makings_takes_and_carries_leave_activity_lines() {
     let mut timeline = Timeline::from_value(&snapshot_timeline());
     let mut shot = source("m4", "shots/m4.takes/002.mp4");
-    shot.steps = Some(2);
+    shot.steps = 2;
     shot.takes = vec![kerf_editor::model::Take {
         number: 1,
         path: "shots/m4.takes/001.mp4".into(),
         chosen: false,
     }];
     timeline.sources.push(shot);
-    let line = |command: Value| activity_of_command(&command, &timeline).map(|(_, text)| text);
+    let line = |value: Value| activity_of_command(&command(value), &timeline).map(|(_, text)| text);
     assert_eq!(
         line(json!({"type": "media_make", "media": "m4", "confirmed": true})).as_deref(),
         Some("Making m4 from its steps in the document")
@@ -384,7 +408,7 @@ fn the_work_row_says_the_step_kerf_is_on_beside_working() {
 
 #[test]
 fn activity_keeps_what_kerf_did() {
-    let line = |event: Value| activity_of(&event);
+    let line = |event: Value| activity_of(&crate::support::event(event.clone()));
     assert_eq!(
         line(json!({"type": "agent", "kind": "tool", "state": "done", "text": "Trimmed two"})),
         Some(("tool", "Trimmed two".to_owned()))
@@ -686,13 +710,13 @@ proptest! {
     fn next_steps_read_in_either_shape(shapes in proptest::collection::vec(shape(), 0..6)) {
         let event = json!({"type": "agent_next", "steps": shapes.iter().map(as_value).collect::<Vec<_>>()});
         let expected: Vec<NextStep> = shapes.iter().filter_map(as_qt_read).collect();
-        prop_assert_eq!(&next_steps(&event), &expected);
+        prop_assert_eq!(&next_steps(&crate::support::event(event.clone())), &expected);
         for step in &expected {
             prop_assert!(!step.label.is_empty() && !step.request.is_empty());
             prop_assert_eq!(step.label.trim(), step.label.as_str());
         }
         let mut state = EditorState::default();
-        state.apply(&event);
+        state.apply(&crate::support::event(event.clone()));
         prop_assert_eq!(&state.next_steps, &expected);
         // Try asking shows at most four of them, else the first requests.
         let offered = try_asking(&state.next_steps);
@@ -707,13 +731,13 @@ proptest! {
 #[test]
 fn kerf_s_next_steps_show_their_label_and_ask_their_request() {
     let mut state = EditorState::default();
-    state.apply(&json!({"type": "agent_next", "steps": [
+    state.apply(&event(json!({"type": "agent_next", "steps": [
         {"label": "Stronger glow", "request": "Make the glow on the title stronger"},
         "Tighten the pauses",
         {"label": "  ", "request": "nothing to press"},
         {"label": "Captions"},
         42
-    ]}));
+    ]})));
     assert_eq!(
         state.next_steps,
         [
@@ -725,7 +749,7 @@ fn kerf_s_next_steps_show_their_label_and_ask_their_request() {
     // An empty conversation's Try asking offers them, label and request.
     assert_eq!(try_asking(&state.next_steps), state.next_steps);
     // A new turn takes them away until Kerf offers more.
-    state.apply(&json!({"type": "agent_busy", "busy": true}));
+    state.apply(&event(json!({"type": "agent_busy", "busy": true})));
     assert!(state.next_steps.is_empty());
     assert_eq!(
         try_asking(&state.next_steps)[0].label,
@@ -737,9 +761,9 @@ fn kerf_s_next_steps_show_their_label_and_ask_their_request() {
 fn the_preview_s_words_take_the_last_ones_place() {
     let mut state = EditorState::default();
     state.notify("Exported cut.mov", false);
-    state.apply(
-        &json!({"type": "preview", "status": "required", "message": "A title needs a render"}),
-    );
+    state.apply(&event(
+        json!({"type": "preview", "status": "required", "message": "A title needs a render"}),
+    ));
     let texts = |state: &EditorState| -> Vec<String> {
         state
             .notices
@@ -754,16 +778,22 @@ fn the_preview_s_words_take_the_last_ones_place() {
     assert_eq!(state.notices[1].hold, None, "the window's 6 s");
     assert!(!state.notices[1].error);
     // Rendered: "Preview ready" in its place, for 4 s.
-    state.apply(&json!({"type": "preview", "status": "running", "progress": 0.5}));
-    state.apply(&json!({"type": "preview", "status": "ready", "proposalId": "p1"}));
+    state.apply(&event(
+        json!({"type": "preview", "status": "running", "progress": 0.5}),
+    ));
+    state.apply(&event(
+        json!({"type": "preview", "status": "ready", "proposalId": "p1"}),
+    ));
     assert_eq!(texts(&state), ["Exported cut.mov", "Preview ready"]);
     assert_eq!(state.notices[1].hold, Some(PREVIEW_NOTICE_HOLD));
     // The same words again stay where they are, held afresh.
     let id = state.notices[1].id;
-    state.apply(&json!({"type": "preview", "status": "ready"}));
+    state.apply(&event(json!({"type": "preview", "status": "ready"})));
     assert_eq!(texts(&state), ["Exported cut.mov", "Preview ready"]);
     assert_eq!(state.notices[1].id, id);
-    state.apply(&json!({"type": "preview", "status": "live", "message": "masks are soft"}));
+    state.apply(&event(
+        json!({"type": "preview", "status": "live", "message": "masks are soft"}),
+    ));
     assert_eq!(
         texts(&state),
         ["Exported cut.mov", "Live preview: masks are soft"]
@@ -773,7 +803,7 @@ fn the_preview_s_words_take_the_last_ones_place() {
     assert_eq!(texts(&state), ["Live preview: masks are soft"]);
     // Gone, what the preview says next is said anew.
     state.notices.clear();
-    state.apply(&json!({"type": "preview", "status": "ready"}));
+    state.apply(&event(json!({"type": "preview", "status": "ready"})));
     assert_eq!(texts(&state), ["Preview ready"]);
 }
 
@@ -782,11 +812,13 @@ fn a_failed_render_is_said_once_in_the_bridge_s_words() {
     let mut state = EditorState::default();
     // As the bridge says a render that failed: failed, then why a render
     // is still needed.
-    state.apply(&json!({"type": "preview", "status": "failed", "proposalId": "p1"}));
-    state.apply(
-        &json!({"type": "preview", "status": "required", "proposalId": "p1",
+    state.apply(&event(
+        json!({"type": "preview", "status": "failed", "proposalId": "p1"}),
+    ));
+    state.apply(&event(
+        json!({"type": "preview", "status": "required", "proposalId": "p1",
         "message": "Preview render failed. Retry after fixing the reported error."}),
-    );
+    ));
     let lines: Vec<(String, bool, Option<Duration>)> = state
         .notices
         .iter()
@@ -805,8 +837,12 @@ fn a_failed_render_is_said_once_in_the_bridge_s_words() {
         Some("Preview render failed. Retry after fixing the reported error.")
     );
     // Rendered again: ready in its place.
-    state.apply(&json!({"type": "preview", "status": "running", "proposalId": "p1"}));
-    state.apply(&json!({"type": "preview", "status": "ready", "proposalId": "p1"}));
+    state.apply(&event(
+        json!({"type": "preview", "status": "running", "proposalId": "p1"}),
+    ));
+    state.apply(&event(
+        json!({"type": "preview", "status": "ready", "proposalId": "p1"}),
+    ));
     assert_eq!(state.notices.len(), 1);
     assert_eq!(state.notices[0].text, "Preview ready");
     assert!(!state.notices[0].error);
@@ -819,26 +855,33 @@ fn a_card_s_preview_renders_only_what_the_proposal_changes() {
     // p-far trims a at 3.52 s: from a's start to its old end.
     assert_eq!(
         preview_request(&snapshot, Some("p-far")),
-        json!({"type": "preview", "proposalId": "p-far", "start": 0.0, "duration": 4.0})
+        command(json!({"type": "preview", "proposalId": "p-far", "start": 0.0, "duration": 4.0}))
     );
     // An earlier version renders what it changes itself.
     assert_eq!(
         preview_request(&snapshot, Some("p-near-1")),
-        json!({"type": "preview", "proposalId": "p-near-1", "start": 20.0, "duration": 4.5})
+        command(
+            json!({"type": "preview", "proposalId": "p-near-1", "start": 20.0, "duration": 4.5})
+        )
     );
     assert_eq!(
         preview_request(&snapshot, Some("p-near-2")),
-        json!({"type": "preview", "proposalId": "p-near-2", "start": 20.0, "duration": 5.0})
+        command(
+            json!({"type": "preview", "proposalId": "p-near-2", "start": 20.0, "duration": 5.0})
+        )
     );
     // One with no timeline known renders whole; so does the program.
     assert_eq!(
         preview_request(&snapshot, Some("p-done")),
-        json!({"type": "preview", "proposalId": "p-done"})
+        command(json!({"type": "preview", "proposalId": "p-done"}))
     );
-    assert_eq!(preview_request(&snapshot, None), json!({"type": "preview"}));
+    assert_eq!(
+        preview_request(&snapshot, None),
+        command(json!({"type": "preview"}))
+    );
     assert_eq!(
         preview_request(&snapshot, Some("unknown")),
-        json!({"type": "preview", "proposalId": "unknown"})
+        command(json!({"type": "preview", "proposalId": "unknown"}))
     );
 }
 
@@ -906,11 +949,13 @@ proptest! {
 fn an_archived_conversation_stays_open() {
     let mut state = EditorState::default();
     state.choose(Some("c1".into()));
-    state.apply(&json!({"type": "conversation", "id": "c1", "title": "Trim", "archived": true, "items": []}));
-    state.apply(&json!({"type": "conversations", "items": [
+    state.apply(&event(
+        json!({"type": "conversation", "id": "c1", "title": "Trim", "archived": true, "items": []}),
+    ));
+    state.apply(&event(json!({"type": "conversations", "items": [
         {"id": "c1", "title": "Trim", "archived": true, "count": 2},
         {"id": "c2", "title": "Other", "archived": false, "count": 1}
-    ]}));
+    ]})));
     assert_eq!(state.chosen.as_deref(), Some("c1"));
     assert!(state
         .open_conversation
@@ -918,9 +963,9 @@ fn an_archived_conversation_stays_open() {
         .is_some_and(|open| open.archived));
     assert!(state.conversations[0].archived);
     // Deleted, it goes.
-    state.apply(&json!({"type": "conversations", "items": [
+    state.apply(&event(json!({"type": "conversations", "items": [
         {"id": "c2", "title": "Other", "archived": false, "count": 1}
-    ]}));
+    ]})));
     assert_eq!(state.chosen, None);
 }
 
@@ -970,11 +1015,13 @@ fn a_preview_of_a_shorter_programme_ends_where_the_proposal_does() {
     let snapshot = Snapshot::from_value(&value);
     assert_eq!(
         preview_request(&snapshot, Some("p-far")),
-        json!({"type": "preview", "proposalId": "p-far"})
+        command(json!({"type": "preview", "proposalId": "p-far"}))
     );
     assert_eq!(
         preview_request(&snapshot, Some("p-near-2")),
-        json!({"type": "preview", "proposalId": "p-near-2", "start": 0.0, "duration": 6.0})
+        command(
+            json!({"type": "preview", "proposalId": "p-near-2", "start": 0.0, "duration": 6.0})
+        )
     );
 }
 
@@ -1081,8 +1128,9 @@ fn the_store_routes_preset_answers_as_qt_did() {
     let mut state = EditorState::default();
     let preset = json!({"name": "Intro", "slots": []});
     assert_eq!(
-        state
-            .apply(&json!({"type": "preset_inspect", "path": "/p/a.kerfpreset", "preset": preset})),
+        state.apply(&event(
+            json!({"type": "preset_inspect", "path": "/p/a.kerfpreset", "preset": preset})
+        )),
         Change::Other
     );
     assert_eq!(
@@ -1090,13 +1138,16 @@ fn the_store_routes_preset_answers_as_qt_did() {
         Some(("/p/a.kerfpreset".to_owned(), preset))
     );
     assert_eq!(
-        state
-            .apply(&json!({"type": "preset_applied", "path": "/p/a.kerfpreset", "proposal": "p1"})),
+        state.apply(&event(
+            json!({"type": "preset_applied", "path": "/p/a.kerfpreset", "proposal": "p1"})
+        )),
         Change::Notice
     );
     state.saving_preset = Some("Intro".into());
     assert_eq!(
-        state.apply(&json!({"type": "preset_saved", "path": "presets/Intro.kerfpreset"})),
+        state.apply(&event(
+            json!({"type": "preset_saved", "path": "presets/Intro.kerfpreset"})
+        )),
         Change::Notice
     );
     assert_eq!(state.saving_preset, None);
@@ -1115,7 +1166,7 @@ fn saving_over_a_preset_is_asked_about_not_refused() {
         "message": format!("presets/Intro.kerfpreset{EXISTS}")});
     let mut saving = EditorState::default();
     saving.saving_preset = Some("Intro".into());
-    assert_eq!(saving.apply(&refusal), Change::Other);
+    assert_eq!(saving.apply(&event(refusal.clone())), Change::Other);
     assert!(
         saving.notices.is_empty(),
         "the question says it, not a notice"
@@ -1126,7 +1177,7 @@ fn saving_over_a_preset_is_asked_about_not_refused() {
     );
     // Not saving, the same words are an error like any other.
     let mut idle = EditorState::default();
-    assert_eq!(idle.apply(&refusal), Change::Notice);
+    assert_eq!(idle.apply(&event(refusal.clone())), Change::Notice);
     assert_eq!(notices(&idle).len(), 1);
     assert_eq!(idle.preset_exists, None);
 }
@@ -1136,8 +1187,8 @@ fn an_exported_preset_is_written_where_the_bridge_says() {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("editing.kerfpreset");
     let mut state = EditorState::default();
-    let change = state.apply(&json!({"type": "preset_export", "path": path,
-        "document": "kerf 1\nproject name=\"Harbour\"\n"}));
+    let change = state.apply(&event(json!({"type": "preset_export", "path": path,
+        "document": "kerf 1\nproject name=\"Harbour\"\n"})));
     assert_eq!(change, Change::Notice);
     assert_eq!(
         std::fs::read_to_string(&path).unwrap(),
@@ -1148,7 +1199,9 @@ fn an_exported_preset_is_written_where_the_bridge_says() {
         [("Preset exported: editing.kerfpreset".to_owned(), false)]
     );
     let nowhere = root.path().join("missing/editing.kerfpreset");
-    state.apply(&json!({"type": "preset_export", "path": nowhere, "document": "x"}));
+    state.apply(&event(
+        json!({"type": "preset_export", "path": nowhere, "document": "x"}),
+    ));
     let (text, error) = notices(&state).pop().unwrap();
     assert!(text.starts_with("Could not export preset: "), "{text}");
     assert!(error);
@@ -1160,23 +1213,29 @@ fn project_warnings_wait_for_the_project_not_the_connecting() {
     assert!(!state.opened_or_failed());
     // The bridge's first word is that it is connecting: not yet.
     assert_eq!(
-        state.apply(&json!({"type": "connection", "status": "connecting"})),
+        state.apply(&event(
+            json!({"type": "connection", "status": "connecting"})
+        )),
         Change::Connection
     );
     assert!(!state.opened_or_failed());
     // The project's first snapshot: up.
     assert_eq!(
-        state.apply(&json!({"type": "state", "snapshot": {}})),
+        state.apply(&event(json!({"type": "state", "snapshot": {}}))),
         Change::Snapshot
     );
     assert!(state.opened_or_failed());
-    state.apply(&json!({"type": "connection", "status": "ready"}));
+    state.apply(&event(json!({"type": "connection", "status": "ready"})));
     assert!(state.opened_or_failed());
     // kerfd could not be reached: said then, since nothing else will come.
     let mut failed = EditorState::default();
-    failed.apply(&json!({"type": "connection", "status": "connecting"}));
-    failed.apply(&json!({"type": "connection", "status": "disconnected",
-        "message": "cannot start kerfd"}));
+    failed.apply(&event(
+        json!({"type": "connection", "status": "connecting"}),
+    ));
+    failed.apply(&event(
+        json!({"type": "connection", "status": "disconnected",
+        "message": "cannot start kerfd"}),
+    ));
     assert!(failed.opened_or_failed());
 }
 
@@ -1298,10 +1357,7 @@ fn while_kerfd_is_away_edits_and_playback_wait_and_reconnect_goes() {
         "undo",
         "render_queue",
     ] {
-        assert!(
-            !sent_unconnected(&json!({"type": waits})),
-            "{waits} should wait"
-        );
+        assert!(!sent_unconnected(waits), "{waits} should wait");
     }
     for goes in [
         "reconnect",
@@ -1312,10 +1368,10 @@ fn while_kerfd_is_away_edits_and_playback_wait_and_reconnect_goes() {
         "collab_sync",
         "cloud_status",
     ] {
-        assert!(sent_unconnected(&json!({"type": goes})), "{goes} should go");
+        assert!(sent_unconnected(goes), "{goes} should go");
     }
     // Something with no type is never sent unconnected.
-    assert!(!sent_unconnected(&json!({})));
+    assert!(!sent_unconnected(""));
 }
 
 // ------------------------------------------------------------ the picture
@@ -1384,17 +1440,17 @@ proptest! {
 fn each_take_of_a_making_starts_its_clock_afresh_with_no_line_yet() {
     let mut state = EditorState::default();
     let making = |take: u32, line: &str| json!({"type": "media_making", "media": "m4", "take": take, "line": line});
-    state.apply(&making(1, ""));
+    state.apply(&event(making(1, "")));
     let first = state.makings["m4"].since;
     std::thread::sleep(Duration::from_millis(5));
-    state.apply(&making(1, "rendering the guide, 40%"));
+    state.apply(&event(making(1, "rendering the guide, 40%")));
     assert_eq!(
         state.makings["m4"].since, first,
         "the same take keeps its clock"
     );
     assert_eq!(state.makings["m4"].line, "rendering the guide, 40%");
     // The second of several takes begins: a clock of its own, no line yet.
-    state.apply(&making(2, ""));
+    state.apply(&event(making(2, "")));
     let second = &state.makings["m4"];
     assert_eq!(second.take, 2);
     assert!(second.since > first, "its clock starts as its take does");
@@ -1408,8 +1464,8 @@ fn each_take_of_a_making_starts_its_clock_afresh_with_no_line_yet() {
     );
     let since = second.since;
     // Each event says the line as it is now, an empty one among them.
-    state.apply(&making(2, "asked the server"));
-    state.apply(&making(2, ""));
+    state.apply(&event(making(2, "asked the server")));
+    state.apply(&event(making(2, "")));
     assert_eq!(state.makings["m4"].line, "");
     assert_eq!(state.makings["m4"].since, since);
 }
@@ -1420,7 +1476,9 @@ fn each_take_of_a_making_starts_its_clock_afresh_with_no_line_yet() {
 fn a_preset_exported_or_saved_is_kept_in_activity_by_its_path() {
     let mut state = EditorState::default();
     assert!(state.take_logged().is_empty());
-    state.apply(&json!({"type": "preset_saved", "path": "presets/Intro.kerfpreset"}));
+    state.apply(&event(
+        json!({"type": "preset_saved", "path": "presets/Intro.kerfpreset"}),
+    ));
     assert_eq!(
         state.take_logged(),
         vec![("preset", "presets/Intro.kerfpreset".to_owned())]
@@ -1432,15 +1490,17 @@ fn a_preset_exported_or_saved_is_kept_in_activity_by_its_path() {
     let folder = tempfile::tempdir().unwrap();
     let path = folder.path().join("Intro.kerfpreset");
     let path = path.to_string_lossy().into_owned();
-    state.apply(&json!({"type": "preset_export", "path": path, "document": "kerf-preset 1\n"}));
+    state.apply(&event(
+        json!({"type": "preset_export", "path": path, "document": "kerf-preset 1\n"}),
+    ));
     assert_eq!(state.take_logged(), vec![("preset", path.clone())]);
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "kerf-preset 1\n");
 
     // One that could not be written is said, and not kept as done.
     let nowhere = folder.path().join("missing/Intro.kerfpreset");
-    state.apply(
-        &json!({"type": "preset_export", "path": nowhere.to_string_lossy(), "document": "x"}),
-    );
+    state.apply(&event(
+        json!({"type": "preset_export", "path": nowhere.to_string_lossy(), "document": "x"}),
+    ));
     assert!(state.take_logged().is_empty());
     let last = state.notices.last().unwrap();
     assert!(last.error && last.text.starts_with("Could not export preset"));
@@ -1463,7 +1523,7 @@ fn reasons(state: &EditorState) -> (Value, Value) {
 #[test]
 fn render_preview_waits_for_a_picture_that_needs_one_or_plays_live() {
     let mut state = EditorState::default();
-    state.apply(&json!({"type": "connection", "status": "ready"}));
+    state.apply(&event(json!({"type": "connection", "status": "ready"})));
     // Before the bridge has said: nothing to render.
     assert!(!state.preview_renderable());
     assert_eq!(
@@ -1496,8 +1556,10 @@ fn render_preview_waits_for_a_picture_that_needs_one_or_plays_live() {
 #[test]
 fn play_waits_from_a_render_needed_or_running_until_the_picture_plays_again() {
     let mut state = EditorState::default();
-    state.apply(&json!({"type": "connection", "status": "ready"}));
-    state.apply(&json!({"type": "clock", "position": 0.0, "duration": 7.0}));
+    state.apply(&event(json!({"type": "connection", "status": "ready"})));
+    state.apply(&event(
+        json!({"type": "clock", "position": 0.0, "duration": 7.0}),
+    ));
     assert!(state.playable());
     assert!(reasons(&state).1.is_null());
     for (status, waits) in [
@@ -1529,19 +1591,27 @@ fn play_waits_from_a_render_needed_or_running_until_the_picture_plays_again() {
         );
     }
     // Nothing to play, or kerfd gone: Play does not run either.
-    state.apply(&json!({"type": "clock", "position": 0.0, "duration": 0.0}));
+    state.apply(&event(
+        json!({"type": "clock", "position": 0.0, "duration": 0.0}),
+    ));
     state.snapshot.duration = 0.0;
     assert!(!state.playable());
-    state.apply(&json!({"type": "clock", "position": 0.0, "duration": 7.0}));
-    state.apply(&json!({"type": "connection", "status": "disconnected"}));
+    state.apply(&event(
+        json!({"type": "clock", "position": 0.0, "duration": 7.0}),
+    ));
+    state.apply(&event(
+        json!({"type": "connection", "status": "disconnected"}),
+    ));
     assert!(!state.playable());
 }
 
 #[test]
 fn a_render_that_ends_unshown_leaves_play_and_render_preview_as_they_were() {
     let mut state = EditorState::default();
-    state.apply(&json!({"type": "connection", "status": "ready"}));
-    state.apply(&json!({"type": "clock", "position": 0.0, "duration": 7.0}));
+    state.apply(&event(json!({"type": "connection", "status": "ready"})));
+    state.apply(&event(
+        json!({"type": "clock", "position": 0.0, "duration": 7.0}),
+    ));
     // A program kerfd plays live, rendered and stopped (Esc, the card's
     // Stop: only `stopped` answers), or left before it showed (`exited`
     // alone, no `viewer_reset`): it plays, and renders, as before.
@@ -1573,7 +1643,7 @@ fn a_render_that_ends_unshown_leaves_play_and_render_preview_as_they_were() {
     state.apply(&preview("exited"));
     assert!(state.playable());
     assert!(!state.preview_renderable());
-    state.apply(&json!({"type": "viewer_reset"}));
+    state.apply(&event(json!({"type": "viewer_reset"})));
     state.apply(&preview("required"));
     assert!(!state.playable());
     assert!(state.preview_renderable());
@@ -1591,11 +1661,13 @@ fn a_render_that_ends_unshown_leaves_play_and_render_preview_as_they_were() {
 #[test]
 fn what_plays_can_always_be_paused_even_as_a_render_runs() {
     let mut state = EditorState::default();
-    state.apply(&json!({"type": "connection", "status": "ready"}));
-    state.apply(&json!({"type": "clock", "position": 0.0, "duration": 7.0}));
+    state.apply(&event(json!({"type": "connection", "status": "ready"})));
+    state.apply(&event(
+        json!({"type": "clock", "position": 0.0, "duration": 7.0}),
+    ));
     state.apply(&preview("live"));
     assert_eq!(state.playback_toggle(), Some("play"));
-    state.apply(&json!({"type": "playback", "playing": true}));
+    state.apply(&event(json!({"type": "playback", "playing": true})));
     assert_eq!(state.playback_toggle(), Some("pause"));
     // Render Preview while it plays: kerfd plays on, and Pause still goes.
     state.apply(&preview("running"));
@@ -1604,7 +1676,7 @@ fn what_plays_can_always_be_paused_even_as_a_render_runs() {
     assert_eq!(state.playback_toggle(), Some("pause"));
     assert!(reasons(&state).1.is_null());
     // Paused, it does not play again until the render is over.
-    state.apply(&json!({"type": "playback", "playing": false}));
+    state.apply(&event(json!({"type": "playback", "playing": false})));
     assert!(state.play_waits());
     assert_eq!(state.playback_toggle(), None);
     assert_eq!(
@@ -1614,7 +1686,9 @@ fn what_plays_can_always_be_paused_even_as_a_render_runs() {
     state.apply(&preview("ready"));
     assert_eq!(state.playback_toggle(), Some("play"));
     // Nothing plays and kerfd is gone: nothing to send.
-    state.apply(&json!({"type": "connection", "status": "disconnected"}));
+    state.apply(&event(
+        json!({"type": "connection", "status": "disconnected"}),
+    ));
     assert_eq!(state.playback_toggle(), None);
 }
 
@@ -1634,14 +1708,14 @@ proptest! {
             "required", "unavailable", "running", "ready", "live", "failed", "stopped", "exited", "",
         ];
         let mut state = EditorState::default();
-        state.apply(&json!({"type": "connection", "status": "ready"}));
-        state.apply(&json!({"type": "clock", "position": 0.0, "duration": 3.0}));
+        state.apply(&event(json!({"type": "connection", "status": "ready"})));
+        state.apply(&event(json!({"type": "clock", "position": 0.0, "duration": 3.0})));
         let mut picture = "";
         let mut waits = false;
         for (index, playing) in statuses {
             let status = ALL[index];
             state.apply(&preview(status));
-            state.apply(&json!({"type": "playback", "playing": playing}));
+            state.apply(&event(json!({"type": "playback", "playing": playing})));
             match status {
                 "required" | "unavailable" => {
                     picture = status;
@@ -1728,7 +1802,10 @@ fn a_still_chosen_in_the_bin_is_placed_for_five_seconds() {
 }
 
 fn apply_all(state: &mut EditorState, events: &[Value]) -> Vec<Change> {
-    events.iter().map(|event| state.apply(event)).collect()
+    events
+        .iter()
+        .map(|value| state.apply(&event(value.clone())))
+        .collect()
 }
 
 /// The events a turn that fails at once sends, in the order the bridge
@@ -1759,7 +1836,7 @@ fn a_turn_shows_in_its_conversation_and_its_error_is_said_once() {
         .expect("the conversation the turn went on in shows");
     assert_eq!(conversation.id, "c-1");
     assert_eq!(conversation.items.len(), 2);
-    assert_eq!(conversation.items[0].kind, Speaker::You);
+    assert_eq!(conversation.items[0].speaker(), Speaker::You);
     assert_eq!(conversation.items[0].timecode, Some(0.0));
     assert!(conversation.items[1].error);
     assert_eq!(conversation.items[1].text, "Add an API key in Settings");
@@ -1805,7 +1882,7 @@ fn a_working_turn_keeps_its_steps_and_streams_its_answer() {
         ]
     );
     assert_eq!(state.agent_clips, ["one"]);
-    state.apply(&json!({"type": "agent_busy", "busy": false}));
+    state.apply(&event(json!({"type": "agent_busy", "busy": false})));
     assert!(!state.work.busy());
     assert!(
         state.agent_clips.is_empty(),
@@ -1816,10 +1893,12 @@ fn a_working_turn_keeps_its_steps_and_streams_its_answer() {
 #[test]
 fn a_turn_that_ends_in_a_conversation_not_looked_at_leaves_a_dot() {
     let mut state = EditorState::default();
-    state.apply(&json!({"type": "conversation", "id": "seen", "items": []}));
-    state.apply(&json!({"type": "agent_busy", "busy": true}));
+    state.apply(&event(
+        json!({"type": "conversation", "id": "seen", "items": []}),
+    ));
+    state.apply(&event(json!({"type": "agent_busy", "busy": true})));
     state.work.conversation = Some("elsewhere".into());
-    state.apply(&json!({"type": "agent_busy", "busy": false}));
+    state.apply(&event(json!({"type": "agent_busy", "busy": false})));
     assert_eq!(state.settled, ["elsewhere"]);
     state.looked_at("elsewhere");
     assert!(state.settled.is_empty());
@@ -1829,20 +1908,23 @@ fn a_turn_that_ends_in_a_conversation_not_looked_at_leaves_a_dot() {
 fn the_connection_follows_what_kerfd_says() {
     let mut state = EditorState::default();
     assert_eq!(state.connection, Connection::Connecting);
-    state.apply(&json!({"type": "connection", "status": "ready"}));
+    state.apply(&event(json!({"type": "connection", "status": "ready"})));
     assert_eq!(state.connection, Connection::Connected);
-    state
-        .apply(&json!({"type": "connection", "status": "disconnected", "message": "kerfd exited"}));
+    state.apply(&event(
+        json!({"type": "connection", "status": "disconnected", "message": "kerfd exited"}),
+    ));
     assert_eq!(state.connection, Connection::Failed("kerfd exited".into()));
 }
 
 #[test]
 fn a_render_job_is_followed_from_queued_to_done() {
     let mut state = EditorState::default();
-    state.apply(&json!({"type": "export", "status": "queued", "jobId": "j1", "name": "Master", "path": "deliveries/Master.mov", "progress": 0.0, "quality": "master"}));
-    state.apply(&json!({"type": "export", "status": "running", "jobId": "j1", "progress": 0.5}));
+    state.apply(&event(json!({"type": "export", "status": "queued", "jobId": "j1", "name": "Master", "path": "deliveries/Master.mov", "progress": 0.0, "quality": "master"})));
+    state.apply(&event(
+        json!({"type": "export", "status": "running", "jobId": "j1", "progress": 0.5}),
+    ));
     assert_eq!(state.rendering().as_deref(), Some("Rendering Master 50%"));
-    state.apply(&json!({"type": "export", "status": "completed", "jobId": "j1", "path": "deliveries/Master.mov", "progress": 1.0}));
+    state.apply(&event(json!({"type": "export", "status": "completed", "jobId": "j1", "path": "deliveries/Master.mov", "progress": 1.0})));
     assert_eq!(state.renders.len(), 1);
     assert_eq!(state.renders[0].status, "completed");
     assert!(state.rendering().is_none());
@@ -1851,19 +1933,40 @@ fn a_render_job_is_followed_from_queued_to_done() {
         Some("Exported Master.mov")
     );
     // The queue as kerfd lists it replaces what was followed.
-    state.apply(&json!({"type": "render_queue", "jobs": [{"jobId": "j2", "name": "Review copy", "status": "queued", "progress": 0.0}]}));
+    state.apply(&event(json!({"type": "render_queue", "jobs": [{"jobId": "j2", "name": "Review copy", "status": "queued", "progress": 0.0}]})));
     assert_eq!(state.renders.len(), 1);
     assert!(state.renders[0].is_active());
 }
 
 #[test]
+fn a_job_kerfd_kept_without_its_quality_is_left_out_of_the_queue() {
+    let mut state = EditorState::default();
+    state.apply(&event(json!({"type": "render_queue", "jobs": [
+        {"jobId": "old", "name": "Before qualities", "quality": null, "codec": null, "status": "completed", "progress": 1.0, "outputPath": "deliveries/Old.mp4"},
+        {"jobId": "new", "name": "Master", "quality": "master", "codec": "prores_hq", "status": "completed", "progress": 1.0, "outputPath": "deliveries/Master.mov"},
+    ]})));
+    let jobs: Vec<&str> = state
+        .renders
+        .iter()
+        .map(|job| job.job_id.as_str())
+        .collect();
+    assert_eq!(jobs, ["new"]);
+}
+
+#[test]
 fn a_making_is_shown_until_it_is_made_or_stopped() {
     let mut state = EditorState::default();
-    state.apply(&json!({"type": "media_making", "media": "m4", "take": 2, "line": ""}));
-    state.apply(&json!({"type": "media_making", "media": "m4", "take": 2, "line": "half way"}));
+    state.apply(&event(
+        json!({"type": "media_making", "media": "m4", "take": 2, "line": ""}),
+    ));
+    state.apply(&event(
+        json!({"type": "media_making", "media": "m4", "take": 2, "line": "half way"}),
+    ));
     assert_eq!(state.makings["m4"].line, "half way");
     assert!(state.making_label().unwrap().starts_with("Making m4 · "));
-    state.apply(&json!({"type": "media_made", "media": "m4", "take": 2}));
+    state.apply(&event(
+        json!({"type": "media_made", "media": "m4", "take": 2}),
+    ));
     assert!(state.makings.is_empty());
 }
 
@@ -1909,7 +2012,7 @@ fn a_newer_kerfd_saying_more_breaks_nothing() {
         json!({"type": "clock"}),
         json!({}),
     ] {
-        state.apply(&event);
+        state.apply(&crate::support::event(event.clone()));
     }
     assert!(state.has_snapshot);
     let conversation = state.open_conversation.unwrap();
@@ -1942,7 +2045,7 @@ proptest! {
                 10 => json!({"type": "playback", "playing": number > 5.0}),
                 _ => json!({"type": "agent_state", "state": "failed"}),
             };
-            state.apply(&event);
+            state.apply(&crate::support::event(event.clone()));
             prop_assert!(state.notices.len() <= 4);
         }
         if !state.work.busy() {
@@ -2007,8 +2110,10 @@ fn watching_a_change_plays_only_what_it_changes() {
 #[test]
 fn a_making_that_fails_stops_showing_and_is_said_where_it_was_asked() {
     let mut state = EditorState::default();
-    state.apply(&json!({"type": "media_making", "media": "m4", "take": 2, "line": ""}));
-    let change = state.apply(&json!({"type": "error", "command": "media_make", "media": "m4", "message": "no model `shot` is set up"}));
+    state.apply(&event(
+        json!({"type": "media_making", "media": "m4", "take": 2, "line": ""}),
+    ));
+    let change = state.apply(&event(json!({"type": "error", "command": "media_make", "media": "m4", "message": "no model `shot` is set up"})));
     assert!(state.makings.is_empty(), "its stripes and its Stop go");
     assert_eq!(change, Change::Making);
     assert!(
@@ -2022,13 +2127,15 @@ fn a_making_that_fails_stops_showing_and_is_said_where_it_was_asked() {
         "takes_read",
         "media_carry",
     ] {
-        state.apply(&json!({"type": "error", "command": command, "message": "refused"}));
+        state.apply(&event(
+            json!({"type": "error", "command": command, "message": "refused"}),
+        ));
     }
     assert!(state.notices.is_empty());
     // Anything else is said over the conversation.
-    state.apply(
-        &json!({"type": "error", "command": "export", "message": "The output folder must exist"}),
-    );
+    state.apply(&event(
+        json!({"type": "error", "command": "export", "message": "The output folder must exist"}),
+    ));
     assert_eq!(state.notices.len(), 1);
 }
 
@@ -2036,9 +2143,9 @@ fn a_making_that_fails_stops_showing_and_is_said_where_it_was_asked() {
 fn only_the_chosen_conversation_shows() {
     let mut state = EditorState::default();
     state.choose(Some("mine".into()));
-    state.apply(&json!({"type": "conversation", "id": "mine", "items": [{"id": "1", "kind": "you", "text": "a"}]}));
+    state.apply(&event(json!({"type": "conversation", "id": "mine", "items": [{"id": "1", "kind": "you", "text": "a"}]})));
     // Another window's turn in another conversation changes nothing here.
-    state.apply(&json!({"type": "conversation", "id": "theirs", "items": [{"id": "2", "kind": "you", "text": "b"}]}));
+    state.apply(&event(json!({"type": "conversation", "id": "theirs", "items": [{"id": "2", "kind": "you", "text": "b"}]})));
     assert_eq!(
         state.open_conversation.as_ref().map(|c| c.id.as_str()),
         Some("mine")
@@ -2046,16 +2153,18 @@ fn only_the_chosen_conversation_shows() {
     // A new conversation shows nothing until the request sent in it starts one.
     state.choose(None);
     assert!(state.open_conversation.is_none());
-    state.apply(&json!({"type": "conversation", "id": "theirs", "items": []}));
+    state.apply(&event(
+        json!({"type": "conversation", "id": "theirs", "items": []}),
+    ));
     assert!(state.open_conversation.is_none());
-    state.apply(&json!({"type": "agent_busy", "busy": true}));
-    state.apply(&json!({"type": "conversation", "id": "started", "items": [{"id": "3", "kind": "you", "text": "c"}]}));
+    state.apply(&event(json!({"type": "agent_busy", "busy": true})));
+    state.apply(&event(json!({"type": "conversation", "id": "started", "items": [{"id": "3", "kind": "you", "text": "c"}]})));
     assert_eq!(state.chosen.as_deref(), Some("started"));
     assert_eq!(
         state.open_conversation.as_ref().map(|c| c.id.as_str()),
         Some("started")
     );
-    state.apply(&json!({"type": "agent_busy", "busy": false}));
+    state.apply(&event(json!({"type": "agent_busy", "busy": false})));
     assert!(
         state.work.conversation.is_none(),
         "a turn that ended is no longer under way anywhere"
@@ -2066,10 +2175,14 @@ fn only_the_chosen_conversation_shows() {
 #[test]
 fn a_chosen_conversation_deleted_elsewhere_leaves_a_new_one() {
     let mut state = EditorState::default();
-    state.apply(&json!({"type": "conversations", "items": [{"id": "a", "title": "A"}, {"id": "b", "title": "B"}]}));
+    state.apply(&event(json!({"type": "conversations", "items": [{"id": "a", "title": "A"}, {"id": "b", "title": "B"}]})));
     state.choose(Some("b".into()));
-    state.apply(&json!({"type": "conversation", "id": "b", "items": []}));
-    state.apply(&json!({"type": "conversations", "items": [{"id": "a", "title": "A"}]}));
+    state.apply(&event(
+        json!({"type": "conversation", "id": "b", "items": []}),
+    ));
+    state.apply(&event(
+        json!({"type": "conversations", "items": [{"id": "a", "title": "A"}]}),
+    ));
     assert!(state.chosen.is_none());
     assert!(state.open_conversation.is_none());
 }
@@ -2173,7 +2286,9 @@ fn a_notice_without_a_hold_keeps_the_windows() {
 #[test]
 fn a_cast_saved_is_held_as_qt_held_it() {
     let mut state = EditorState::default();
-    state.apply(&json!({"type": "cast", "saved": true, "toMake": [{"media": "shot-2"}]}));
+    state.apply(&event(
+        json!({"type": "cast", "saved": true, "toMake": [{"media": "shot-2"}]}),
+    ));
     let notice = state.notices.last().expect("a notice");
     assert_eq!(notice.text, "Saved the cast; shot-2 wants making again");
     assert_eq!(notice.hold, Some(motion::NOTICE_LONG_HOLD));
@@ -2202,29 +2317,35 @@ fn activity_says_what_an_export_made_and_keeps_nothing_empty() {
     log.push("import", "   ");
     assert!(log.is_empty());
     assert_eq!(
-        activity_of(
-            &json!({"type": "export", "status": "completed", "jobId": "j1",
+        activity_of(&event(
+            json!({"type": "export", "status": "completed", "jobId": "j1",
             "path": "/films/Atlas/deliveries/Atlas_master.mov"})
-        ),
+        )),
         Some((
             "export",
             "/films/Atlas/deliveries/Atlas_master.mov".to_owned()
         ))
     );
     assert_eq!(
-        activity_of(&json!({"type": "export", "status": "failed", "message": "disk full"})),
+        activity_of(&event(
+            json!({"type": "export", "status": "failed", "message": "disk full"})
+        )),
         Some(("export", "Export failed: disk full".to_owned()))
     );
     assert_eq!(
-        activity_of(&json!({"type": "export", "status": "running", "progress": 0.4})),
+        activity_of(&event(
+            json!({"type": "export", "status": "running", "progress": 0.4})
+        )),
         None
     );
     assert_eq!(
-        activity_of(&json!({"type": "analysis", "message": "Analysed motion for clip 2"})),
+        activity_of(&event(
+            json!({"type": "analysis", "message": "Analysed motion for clip 2"})
+        )),
         Some(("analysis", "Analysed motion for clip 2".to_owned()))
     );
     assert_eq!(
-        activity_of(&json!({"type": "clock", "position": 2.0})),
+        activity_of(&event(json!({"type": "clock", "position": 2.0}))),
         None
     );
 }

@@ -1,481 +1,28 @@
-//! The editor's bridge to Kerf: JSON commands in, JSON events out, over kerfd and Rust
+//! The editor's bridge to Kerf: [`Command`]s in, [`Event`]s out, over kerfd and Rust
 //! workers.
 //!
-//! kerf-editor opens a project with [`Bridge::open`], sends it commands with [`Bridge::send`],
-//! and takes its events with [`Bridge::poll`] and its pictures with [`Bridge::frame`] and
-//! [`Bridge::signal`]. Every call returns at once and never waits on project I/O: canonical
-//! edits stay in kerfd, and runtime, media, agent, render and collaboration work run on Rust
-//! workers. Media frames travel through a latest-frame slot rather than JSON or an
-//! accumulating queue. Dropping the bridge closes it: the workers are told to stop, and
-//! nothing waits for them. All text is UTF-8.
-//!
-//! This page is the protocol's reference: the commands [`Bridge::send`] takes and the events
-//! [`Bridge::poll`] gives, then the functions that need no bridge. A command or an event is a
-//! JSON object whose `type` names it, such as `{"type": "seek", "position": 2.5}`. Below,
-//! `seek {position, scrub?}` stands for that object, a `?` marking a field that may be left
-//! out and `a|b` the values a field takes.
-//!
-//! # Commands
-//!
-//! [`Bridge::send`] returns `false` when a command is refused: it does not read as one, it
-//! cannot be taken as it is (a seek before 0, an agent turn while one runs), or its bounded
-//! queue is full. Show an error then; never silently drop edits.
-//!
-//! ## Project, edits and playback
-//!
-//! - `refresh`; `reconnect`.
-//! - `import {path, mediaOnly?}`; `edit {ops, revision}`; `undo {revision}`; `redo
-//!   {revision}`; `accept {proposalId, revision}`; `reject {proposalId, revision}`; `forward
-//!   {proposalId, revision}` (see Proposals).
-//! - `abort` stops the agent's turn, and every version running.
-//! - `play`; `pause`; `seek {position, scrub?}` (with `scrub`, the pointer is still moving:
-//!   the nearest picture shows at once, and a later seek without it is exact); `volume
-//!   {value}`; `solo {tracks: [trackId]}` hears only those audio tracks (`[]` hears all). Solo
-//!   is monitoring only: the project never changes, and it holds across edits and a reconnect
-//!   to kerfd until changed, so sending it again is harmless. No event answers it.
-//!
-//! Edit ops beyond moves and trims:
-//!
-//! - `set {clip, props}` and the generator parameters; `fx-add {clip, fx, params?, index?}`
-//!   (at the end of the stack unless `index`); `fx-set {clip, index, enabled?, params}`;
-//!   `mask-add` and `mask-set {clip, name, params}`. A parameter takes a static value or
-//!   keyframes `{keys: [{at: frame, value, interp?: linear|hold|ease|ease-in|ease-out}]}`, `at`
-//!   in whole frames from the clip's first frame, which the timeline sends back as it got
-//!   them (each key's frame). Keys on pan and on sound-effect parameters are refused
-//!   (playback and renders follow keyframes on gain only).
-//! - `insert` and `overwrite {media, sourceIn (media frames) | generator: {fx (title, solid,
-//!   adjustment), params?}, at, frames, tracks, ids?, sequence?, mode?: insert|overwrite (in
-//!   place of the op's own)}` place media or a generated picture on each of `tracks`; insert
-//!   pushes what follows, overwrite covers it.
-//! - `add-track {kind: video|audio|subtitle, id?, name?, sequence?}` adds an empty track
-//!   after the others of its kind.
-//! - `set-sequence {width?, height? (together), name?, rate?: {num, den} | "29.97" | 25,
-//!   start? (timecode text, ';' before the frames for drop frame), sequence?}` changes what
-//!   it names. A new rate is taken only while the sequence has no clips or markers; else the
-//!   edit is refused with "Frame rate can change only while the sequence is empty".
-//! - `set-marker {marker, at?: frame, frames?, name?, note?, color?}` moves, renames or
-//!   recolours a marker (`""` clears a field).
-//! - `set-track {track, sequence?, enabled?, locked?, muted?, role?, syncLocked?}` (`""` role
-//!   gives back the kind's default; ripple edits move only sync-locked tracks).
-//!
-//! ## Agent
-//!
-//! `agent {text, focus?, provider?, apiMode?, apiKey?, baseUrl?, model?, mcpEnabled?,
-//! mcpConfigVersion?, cloud?, conversation?, at?, permissions?}`:
-//!
-//! - `focus: {scope: clip|range|sequence, clip?, fromFrame, toFrame}` is what the request is
-//!   about, in sequence frames.
-//! - `provider: anthropic|openai|claude-code`. `claude-code` is the installed Claude Code,
-//!   signed in on its own, with this project's kerf-mcp as its only tools, and needs no key.
-//!   `cloud` uses Kerf Cloud's hosted model.
-//! - `conversation` is the one the turn goes on in (none starts one), and `at` the playhead
-//!   it was asked at, in seconds (see Conversations).
-//! - `permissions: ask|accept-edits|auto` is what Kerf may do without asking, as chosen in
-//!   the editor; none is the person's own file's say. A name that is none of them asks.
-//!
-//! Agent settings are request-scoped, so switching providers never changes the project or
-//! leaks credentials into its state. One turn runs at a time: an agent command while one
-//! runs, or with empty text, is refused.
-//!
-//! `agent_versions {text, count?, ...settings}` has several agents (3 when `count` is left
-//! out, at most 3) make the same request at once, each staging its own proposal in a
-//! conversation of its own: `agent_version {key: A|B|C, state: running|done|failed|stopped,
-//! title?, conversation?, status?, proposalId?, message?}` follows each.
-//!
-//! `models` answers `models {file, exists, models, error?}`: the person's models (from their
-//! own models file) that a recipe's `generate` can name.
-//!
-//! ## Conversations
-//!
-//! Conversations are kept in `.kerf/conversations/<id>.json` beside the project, never in
-//! the document or undo. `conversations {action: list}` answers `conversations`; `{action:
-//! open, id}` answers `conversation`; `{action: archive, id, archived? (true when absent)}`,
-//! `{action: rename, id, title}` and `{action: delete, id}` change one and answer
-//! `conversation` (but delete) and `conversations`. A refusal is `error {message, command:
-//! conversation}`.
-//!
-//! An agent turn keeps the request in its conversation before the agent runs, then Kerf's
-//! answer (its steps, how long it worked, the proposal it staged, whether it failed or was
-//! stopped), sending `conversation` and `conversations` each time. A session new to a
-//! conversation hears its earlier turns. The agent's stream events are unchanged.
-//!
-//! ## Effect previews
-//!
-//! `effect_previews {clip, at, effects: [fxId | {fx, params?, key?}], width, key?}` answers
-//! one `effect_preview` per entry that has a picture, `width` wide (at most 640, even).
-//!
-//! - An id shows the effect added after the clip's own, at its defaults.
-//! - `{fx, params}` shows those static parameters (numbers kept in range, unknown names
-//!   ignored), in place of the clip's own effect of that id when it has one, so a look
-//!   before and after a change can be compared.
-//! - A generator id (title, solid) draws the generator alone on black on a canvas shaped
-//!   like the clip's sequence (a title with no text says "Title"); `clip` may then be `""`.
-//!
-//! Effects run on the decoded picture of a clip of footage, in the order of the stack; on a
-//! clip with no file of its own (a title, a nested sequence) and for generators, Kerf's
-//! compositor draws the picture. Sound effects, looks and the adjustment generator have no
-//! preview. A newer request stops an older one.
-//!
-//! ## QC
-//!
-//! `check {sequence?}` runs Kerf's full QC pass on the project kerfd has: the document
-//! checks, plus the sound measured to EBU R128 and every frame measured for gamut, luma
-//! levels, flashing and black, on the sequence or else the first one (about as long as a
-//! draft render). It answers `check {status: running, progress (0..1), sequence?}` as it
-//! goes, then one of:
-//!
-//! - `check {status: done, sequence?, valid (nothing blocks), findings, summary}`, with
-//!   `findings: [{severity: error|warning|info, code, entity, message, sequence?, at?,
-//!   duration?, timecode?, rect?: {x, y, w, h} (0..1 of the frame), value?, limit?, unit?}]`
-//!   and `summary: {passed, total, blocking, rows: [{code, name, passed, value, limit?, at?,
-//!   count, blocking}]}`. With a sequence, findings on other sequences are left out and the
-//!   rows counted again.
-//! - `check {status: failed, message}`, also when it is cancelled, which closing the bridge
-//!   does.
-//!
-//! One check runs at a time; another meanwhile is `error {command: check}`.
-//!
-//! ## Proposals
-//!
-//! Several can wait at once (at most 8, newest first in the snapshot's `proposals`);
-//! accepting one makes the others stale. A stale one is not accepted: `forward {proposalId,
-//! revision}` brings it onto the project as it is, its operations run again with each place
-//! they name moved with the clips that held it, as its next version (a new `proposalId`,
-//! freshness current) to be reviewed again. It answers with `error {command: forward, code,
-//! message}`, the proposal left as it was, where a clip a line names or a place was on has
-//! been cut, moved or removed since: the message names the clip, and the proposal needs a
-//! revise. An earlier version's `proposalId` accepts that version.
-//!
-//! ## Viewer previews
-//!
-//! `preview {proposalId?, start?, duration?}` renders the program, or what that pending
-//! proposal would make of it, over `start..start + duration` seconds when given (both or
-//! neither, at most 120 s), and plays it in place of the program. `preview_stop` stops every
-//! preview sent before it, the one rendering and one not begun alike, each of which answers
-//! `preview {status: stopped}` (with none to stop, the stop answers so at once).
-//! `preview_exit` stops them too and plays the program again (`preview {status: exited}`,
-//! then `viewer_reset` and the program's own preview status when a preview was showing).
-//! One viewer preview renders at a time; it is not an output and never shows in the render
-//! queue.
-//!
-//! ## Render queue
-//!
-//! `export {quality, codec?, sequence?, output?, name?}` queues a render with kerfd at once:
-//!
-//! - `quality: preview|full|review|master` and `codec?: h264|hevc|prores_hq`. A master is
-//!   ProRes 422 HQ in QuickTime with 24-bit PCM unless `codec` says otherwise; a review copy
-//!   is full-size H.264 at 12 Mb/s; a preview is a draft from proxies.
-//! - `sequence` is the first when absent.
-//! - `output` is a folder (ending in `/`, or existing) or a file whose extension the codec
-//!   takes: `.mov` for ProRes, else `.mp4`. Relative ones are read against the project and
-//!   must stay inside it; an absolute folder must exist.
-//! - `name` is the job's name, and the file's in a folder.
-//!
-//! It answers `export {status: queued, jobId, name, path, progress: 0, quality, codec,
-//! sequence?}`, `path` being the file it will write (a folder takes the next free name,
-//! "Master 2.mov"). A refusal is `error {message, code, command: export}` with `code` one of
-//! `INVALID_RENDER_QUALITY`, `INVALID_RENDER_CODEC`, `INVALID_RENDER_OUTPUT`,
-//! `INVALID_RENDER_NAME`, `RENDER_OUTPUT_BUSY`, `RENDER_OUTPUT_EXISTS` and others, and
-//! nothing is queued.
-//!
-//! Jobs render one at a time, oldest first, from the document as it was when queued: `export
-//! {status: running, jobId, name, path, progress (0..1)}`, then `completed` (`path`,
-//! `progress` 1), `failed` (`message`; also `error {command: export, jobId}`) or `cancelled`.
-//! `export_cancel {jobId}` takes a queued job out, or stops the one rendering (`export
-//! {status: cancelled}`); a finished job stays as it is.
-//!
-//! `render_queue` answers `render_queue {jobs: [{jobId, name, quality, codec, sequence,
-//! status: queued|running|completed|failed|cancelled, progress, outputPath, error?}]}`, `name`
-//! being the job's or what it renders (Master, Review copy, Full render, Preview). The jobs
-//! are kerfd's queued, running and newest finished ones (it keeps the newest 50 finished),
-//! from any client, oldest first. It is also sent after every change of status. Closing the
-//! bridge stops the job rendering and cancels the queued ones.
-//!
-//! ## Captions
-//!
-//! `export_captions {format: srt|vtt, path?, sequence? (the program when absent), track?
-//! (every enabled subtitle track when absent)}`. The file goes to `path` (a file, or a folder
-//! for the default name; relative to the project), else beside the newest finished master
-//! (`<master>.srt|vtt`), else in `deliveries/` named after the project. It is written whole
-//! (through a temporary file) and replaces an earlier file of that name. The answer is
-//! `export {status: completed, kind: captions, format, path}`, or `export {status: failed,
-//! kind, format, message}` with `error {message, command: export_captions, format}`.
-//!
-//! ## Analysis
-//!
-//! `loudness {sequence?}` measures the programme (or that sequence) to EBU R128 off the UI
-//! thread: `loudness {status: running, progress, revision, sequence?}`, then `loudness
-//! {status: ready, integrated (LUFS), lra (LU), truePeak: [l, r] (dBTP), truePeakMax,
-//! shortTermMax, momentaryMax, shortTermMaxAt, momentaryMaxAt (s), series: [[t, momentary,
-//! shortTerm]] every 0.1 s, duration, target: -23, limit: -1, revision (the document
-//! revision measured), sequence?}` with silence as null, or `loudness {status: failed,
-//! message, revision?, sequence?}`. A measurement is kept for its revision, so asking again
-//! before an edit answers ready at once; a request while one runs is taken when it ends.
-//!
-//! `media_info {media?}` answers `media_info {media: {mediaId: {codec, profile?, pixFmt,
-//! bitDepth, colorSpace?, transfer?, primaries?, colorRange?, camera?, lens?, reel?,
-//! timecode?, audioCodec?, audioSampleFmt?, audioBitDepth?, audioChannels?,
-//! audioSampleRate?}}, errors?: {mediaId: message}}` (fields the file does not say are left
-//! out) for every media of the project, or only the one named. It is also sent on its own
-//! for media new to the editor (on opening, after an import, a replace or a merge), naming
-//! only those, so the editor merges each answer into what it has. The one media asked for
-//! that cannot be read is `error {command: media_info, media, message}`. It is never written
-//! into the document.
-//!
-//! `media_index {media}` answers `media_index {media, duration, cuts: [s], ranges: [{start,
-//! end}] (the shots the cuts make), silences: [[start, end]], loudest: [s] (in time order),
-//! peaks: [{at, level (dBFS)}], onsets: [s], tempo: {bpm, first, confidence} or null}`, in
-//! seconds from the media's first frame, from the project's cache when kerfd's import made
-//! it, else made now. A refusal is `error {command: media_index, media, message}`.
-//!
-//! `scope_signal {time, sequence?}` draws an HDR sequence's frame at `time` as the signal its
-//! master gets, small, for the Finish tray's scopes to take with [`Bridge::signal`]. Only the
-//! newest request waits for one that runs. `scope_signal {status}` says when it starts or
-//! stops being a sequence with one; an SDR sequence draws nothing.
-//!
-//! ## Effects presets (looks)
-//!
-//! `look_save {clip, name, replace?}` keeps the clip's enabled picture effects (settings and
-//! keyframes) as a look in `presets/looks/<name>.kerflook`, refusing an existing file unless
-//! `replace`: `look_saved {path (relative to the project), id (look.<name>), version, effects
-//! (how many), skipped: [what a look cannot carry: looks, sound effects, parameters naming a
-//! mask or a track]}`.
-//!
-//! `look_apply {clip, path}` keeps the look in the project's
-//! `.kerf/looks/<id>@<version>.kerflook` (a look that differs from one of that id already
-//! there becomes its next version) and adds it to the clip as one effect: the state, then
-//! `look_applied {path, clip, fx, version}`. A refusal is `error {message, command:
-//! look_save|look_apply}`.
-//!
-//! ## Kerf Cloud
-//!
-//! `cloud_sign_in {token}` keeps a token and reads its account, `cloud_sign_out` forgets it,
-//! and `cloud_refresh` reads the account again; each is answered by a `cloud` event.
-//!
-//! ## Presets
-//!
-//! - `preset_export {path}` answers `preset_export {path, document}`: the program as a
-//!   `.kerfpreset` document for the editor to write.
-//! - `preset_inspect {path}` answers `preset_inspect {path, preset}`.
-//! - `preset_apply {path, bindings, texts, revision}` stages the preset as a proposal and
-//!   answers `preset_applied {path, proposal}`.
-//! - `preset_library` lists the project's preset library (`presets/`, then `.kerf/presets`
-//!   and the project folder).
-//! - `preset_save {name, replace?}` saves the program sequence as
-//!   `presets/<name>.kerfpreset` (the name cleaned up as project folders are: `/`, `\` and
-//!   `:` become `-`, surrounding dots and spaces trimmed), refusing an existing file, by
-//!   path, unless `replace`: `preset_saved {path}`.
-//!
-//! ## Media
-//!
-//! `import` copies the file into the project's `media/` folder first when the project has
-//! one (named `<stem>-<8 hex of its SHA-256>.<ext>`, so every collaborator's copy of one file
-//! has one name), and stores the path relative to the project. With `mediaOnly` it is added
-//! to the project's media without being cut into the program.
-//!
-//! `media_replace {media, path}` swaps the file behind a media id (every clip that uses it
-//! keeps its timing; a file too short or without the streams the clips need is refused,
-//! naming them), copying it into `media/` the same way.
-//!
-//! ### Making
-//!
-//! `media_make {media, confirmed?, rolls?}` makes a take of a media from the steps the
-//! document holds under its media line (a source says `steps`, how many; the editor offers
-//! it as Make… and Make Several).
-//!
-//! - Without `confirmed` it runs nothing and answers `media_make_plan {media, recipe,
-//!   command, steps, notes, take, file}`: `recipe` is the empty string (no file says how a
-//!   media is made), `steps` are as they would be run (`command` holds them a line each),
-//!   `notes` what its model has said it does not take (none when the steps ask only what it
-//!   takes), and the number and file of the take they would write, for a person to read.
-//!   Steps that could not run, such as ones asking a model that is not set up, are an `error
-//!   {message}` instead; so is a media whose steps are still in the recipe file it names,
-//!   with how to carry them (`media_carry`).
-//! - With `rolls: N` (2 to 16) it is N takes, one after another, each with the steps' seeds
-//!   one on from the last: the plan says `rolls` and the first take, each take answers a
-//!   `media_making` of its own as it begins, and `media_made` names the last, which the media
-//!   then is. A take that fails leaves the ones before it, the media being the last made.
-//! - With `confirmed: true`, which only a person's yes to that plan may send, it runs the
-//!   steps off the UI thread and answers `media_made {media, take}` and then the state of the
-//!   replace that has the media be that take, or `error {message, command: "media_make",
-//!   media}` with the media as it was. While it runs it answers `media_making {media, take,
-//!   line}`: first with an empty `line`, to say that it began, then with each line its steps
-//!   say as they say it (a rendering's share done, a model's program's words).
-//!
-//! `media_make_cancel {media}` stops a making under way: its step is asked to end, so that a
-//! model's program can take its job back, and is ended if it has not within a few seconds.
-//! It answers `media_make_cancelled {media}`, with no take and the media as it was. Closing
-//! the bridge stops every making the same way.
-//!
-//! A making another program runs on the project, `kerf make` or an agent's own kerf-mcp,
-//! answers the same `media_making`, `media_made`, `media_make_cancelled` and `error` as it
-//! goes, though nothing asked the bridge for it, and `media_make_cancel {media}` stops it
-//! too. Closing the bridge leaves it running.
-//!
-//! ### Carrying a recipe into the document
-//!
-//! `media_carry {media, confirmed?}` carries the steps of a media that names a recipe file
-//! (`recipe=` on its media line and no steps under it; a source says `recipe` and no steps,
-//! and the editor offers Carry Steps into the Document…) into the document.
-//!
-//! - Without `confirmed` it writes nothing and answers `media_carry_plan {media, recipe,
-//!   script, notes}`: the recipe file as the document names it, the lines of the edit (the
-//!   media's line without `recipe=`, then a step line for each step, its files named from
-//!   the project's folder), and what does not come with them, a line each.
-//! - With `confirmed: true`, which only a person's yes to that plan may send, kerfd applies
-//!   the lines as one edit of the person's own, which undo takes back (the state follows),
-//!   the takes made from the recipe are held to the steps it became, and it answers
-//!   `media_carried {media, recipe, held}`: how many takes are held to the steps now. The
-//!   recipe file is left where it is.
-//!
-//! A media that cannot be carried (a recipe with a run line, a media whose steps are in the
-//! document already) is `error {message, command: "media_carry", media}`, with the document
-//! as it was.
-//!
-//! ### Recipes, shots and workflows
-//!
-//! - `recipe_get {media}` answers `recipe`: how a media is made, as a graph of its steps and
-//!   what they read. Nothing is run.
-//! - `recipe_edit {media, was, text?, line?, key?, nth?, value?, add?, remove?, restore?}`
-//!   changes a media's steps, where they still read as the editor read them (`was`): the
-//!   `nth` word of name `key` on `line` (from 1) set to `value`, or taken off the line with
-//!   no value; or the whole `text`; or a step added by its kind (`add: guide|model|join`),
-//!   the step on `line` taken out (`remove`), or the steps a take was made from restored
-//!   (`restore: take`). It is applied as one edit, then `recipe` as they now read.
-//! - `signal_from_sound {clip, of}` sets a signal clip's keys from the onsets of the sound
-//!   clip `of` (of its sequence) plays: one edit of the project, as drawing its curve is.
-//! - `shot_picture {clip, of: moves|matte}` draws the picture a person points on to read a
-//!   clip from footage: `shot_picture {clip, of, path (a PNG), width, height, revision}`.
-//! - `shot_follow {clip, of: moves|matte, points: [[x, y]], outside?: [[x, y]]}` has the clip
-//!   follow the one point pointed at (`moves`), or cuts out of it what the points are on and
-//!   not what the `outside` ones are on (`matte`): one edit of the project, then
-//!   `shot_followed {clip, of, frames, keyframes, lostAt, says}`.
-//! - `takes_read {media}` holds a media's takes to its guide by where its subjects are: a
-//!   `take_read` for each as it is read, then `takes_read`.
-//! - `workflow_get {media, line}` answers `workflow`, every node and input of the workflow a
-//!   `generate` step's model is run with, where its program is kerf-comfy. What the server
-//!   takes at each input (`taken: true`, each input's `choices` or `min`, `max` and `step`,
-//!   or `takenError` with why it could not be asked) comes in a second `workflow` once the
-//!   model's program has said it. That one is always the step's workflow as last sent: an
-//!   edit sent meanwhile is not undone by it, and none comes when the last one has it.
-//! - `workflow_edit {media, line, was, node, input, value?, link?: [node, output]}` sets a
-//!   value of that workflow in the shot's own copy of it beside its recipe: `workflow`, then
-//!   `recipe`.
-//!
-//! A refusal of any of these is an `error {message, command, ...}` naming what it was about.
-//!
-//! ### Cast
-//!
-//! `cast_get` answers `cast {entries, toMake, saved: false}`: the project's `cast.kerfcast`
-//! as `entries` `{kind: "cast"|"style", name, words, refs}`, in the file's order, and the
-//! media whose shots want making as things stand, each `{media, why}`. `cast_set {entries}`
-//! writes those as the file, in place of the one there (its comments are not kept), and
-//! answers the same with `saved: true`; entries that would not read as a cast file are an
-//! `error {message, command: "cast"}` and the file is as it was.
-//!
-//! ## Projection
-//!
-//! `projection_import` loads a `project.kerf` changed outside Kerf (a git pull in a
-//! terminal, a text editor) as one revision; `projection_repair` writes the editor's project
-//! over it.
-//!
-//! ## Collaboration over Git
-//!
-//! All asynchronous, and answered by collab events:
-//!
-//! - `collab_status`.
-//! - `collab_sync {message?}` commits local edits, pulls and merges the upstream branch, and
-//!   pushes.
-//! - `collab_live {enabled, interval?}` syncs every `interval` seconds (default 10), and a few
-//!   seconds after each edit, while enabled.
-//! - `collab_commit {message}`.
-//! - `collab_branch {name, create}` commits local edits, then switches (or creates and
-//!   switches).
-//! - `collab_pull_request {title, body?}`.
-//! - `collab_publish {remote?, github?: {name?, private}}` makes the project a repository if
-//!   it is not one, adds the remote or creates the GitHub repository with gh, then pushes.
-//!   With neither, it only makes the project a repository on this computer, and an existing
-//!   repository without a remote is refused.
-//! - `collab_consolidate` copies media from outside the project into `media/` and relinks it.
-//!
-//! # Events
-//!
-//! [`Bridge::poll`] gives one event at a time, and `None` when none is waiting.
-//!
-//! - `state {snapshot}` (see The state snapshot); `connection {status, message}`.
-//! - `error {message, code?, command?, id?}`: `code`, `command` and `id` name a refused
-//!   command.
-//! - `agent {kind: delta|status|tool|done|..., text}`; `agent_busy {busy}`; `agent_state
-//!   {state: running|awaiting_review|aborted|completed|failed, message?}`; `agent_next
-//!   {steps: [{label, request}]}` (next steps to offer as buttons: the words on each and
-//!   what pressing it asks); `agent_focus {tool, times, clips}`
-//!   (where a tool call is working, for the timeline and picture to follow); `agent_context
-//!   {used, limit, unit, conversation}` (how full the agent's context is); `agent_ask {media,
-//!   rolls, take, text, conversation}` (a making the person is asked to run); `agent_version`
-//!   (see Agent).
-//! - `clock {position, duration, dropped}`, `dropped` being the frames the presenter skipped
-//!   as late since the program was opened or moved; `playback {playing}`; `caption {text}`.
-//! - `meter {peak: [l, r], rms: [l, r] (dBFS, at least -120), momentary, shortTerm (BS.1770
-//!   LUFS, null until 400 ms / 3 s were heard), at (the program time the reading reaches)}`
-//!   about 20 times a second while playing, and once with every value null when playback
-//!   stops (a pause or the end of the program).
-//! - `conversations {items: [{id, title, created, updated, archived, count}]}` (newest
-//!   first); `conversation {id, title, created, updated, archived, items: [{id, kind:
-//!   you|kerf, text, at, timecode?, steps?, seconds?, error?, stopped?, proposal?}]}`.
-//! - `viewer_reset`.
-//! - `preview {status: running|ready|live|required|unavailable|failed|stopped|exited,
-//!   progress?, message?, proposalId? (the proposal a rendered preview shows)}`.
-//! - `export` (see Render queue and Captions: `{status: queued|running|completed|failed|
-//!   cancelled, jobId, name, path, progress, quality, codec, sequence?}` for renders, `{status,
-//!   kind: captions, format, path|message}` for captions); `render_queue {jobs}`.
-//! - `loudness`, `media_info`, `media_index`, `scope_signal` (see Analysis); `look_saved`,
-//!   `look_applied` (see Effects presets).
-//! - `cloud {access: ready|unavailable|signedOut|unreachable|notIncluded|outOfCredits,
-//!   account?, message?}`.
-//! - `effect_preview {clip, fx, key? (the entry's key, else the request's), width, height,
-//!   rgba (base64)}`.
-//! - `check` (see QC).
-//! - `media_status {missing: [mediaId], pointers: [mediaId] (Git LFS files not downloaded),
-//!   external: [mediaId] (outside the project folder, or ignored by Git there)}`.
-//! - `preset_library {directory, presets: [{path (relative to the project), name, slots:
-//!   [{id, seconds, video, audio, clips}], texts: {clipId: text}, author?, updated? (ISO 8601,
-//!   from the last commit that touched it), error?}], looks: [{path, name, id, version,
-//!   effects, author?, updated?} or {path, name, error}] (the effects presets in
-//!   presets/looks/)}`; `preset_saved {path}`.
-//! - `collab {status: {repository, enclosing?, branch, upstream, remote, ahead, behind,
-//!   changed, conflicted, branches, lfs, gh (installed and signed in), live, busy, user:
-//!   {name, email} or null (who commits here are by, also outside a repository: "You"), head
-//!   (the commit checked out, or null)}}`.
-//! - `collab_sync {stage: committing|fetching|merging|pushing|downloading|done|failed,
-//!   message?, report?: {committed?, incoming: [{commit, author, subject}], fastForward,
-//!   pushed, conflicts: [{path, what, kept}], renamed: [[from, to]], summary: [line],
-//!   branch?}}`; `collab_pull_request {url, created}`.
-//! - The answers named with their commands above: `models`, `cast`, `recipe`, `workflow`,
-//!   `shot_picture`, `shot_followed`, `take_read`, `takes_read`, `media_make_plan`,
-//!   `media_making`, `media_made`, `media_make_cancelled`, `media_carry_plan`,
-//!   `media_carried`, `preset_export`, `preset_inspect`, `preset_applied`.
-//!
-//! ## The state snapshot
-//!
-//! `{document, timeline, revision, canUndo, canRedo, duration, sourceVersion,
-//! projectionStatus, importWarnings?, pendingProposal, proposalTimeline, proposals,
-//! proposalTimelines, revisionTime?}`:
-//!
-//! - `pendingProposal` is the first open proposal, else the newest settled one: `{status:
-//!   pending|accepted|rejected, proposalId, baseRevision, script?, source?, documentDiff?,
-//!   freshness?: stale, appliedRevision?}`; `proposalTimeline` is its timeline.
-//! - `proposals: [{proposalId, status: pending|accepted|rejected, freshness: current|stale,
-//!   baseRevision, appliedRevision?, script, source, documentDiff, author: {kind:
-//!   kerf|mcp|person|qc, name, id?, role?}, version, supersedes (the proposalId this version
-//!   replaced, or null), versions: [{version, proposalId, baseRevision, script, source?,
-//!   documentDiff}] (oldest first, the current one included), staged? (ISO 8601)}]`.
-//! - `proposalTimelines: {proposalId: timeline}`: every open proposal's, and its earlier
-//!   versions' made on this revision.
-//! - `revisionTime` is the ISO 8601 time of the current revision.
-//! - `timeline.sequences` lists every sequence: `[{id, name, width, height, rate, fps,
-//!   dropFrame, duration}]`; `timeline.tracks[]` carry `role` (the track's role or its kind's
-//!   default), `roleAssigned` and `syncLocked`; each keyframe carries `frame`
-//!   (clip-relative, as edits send it back) beside `at` (seconds), `value` and `interp`.
+//! kerf-editor opens a project with [`Bridge::open`], sends it [`Command`]s with
+//! [`Bridge::send`], and takes its [`Event`]s with [`Bridge::poll`] and its pictures with
+//! [`Bridge::frame`] and [`Bridge::signal`]. Every call returns at once and never waits on
+//! project I/O: canonical edits stay in kerfd, and runtime, media, agent, render and
+//! collaboration work run on Rust workers. Media frames travel through a latest-frame slot
+//! rather than an event or an accumulating queue. All text is UTF-8.
+//!
+//! Dropping the bridge closes it without waiting for its workers: the agent's turn, the
+//! viewer preview rendering, the QC check, the makings it started and the render queue's
+//! jobs are stopped. A making another program runs on the project goes on.
+//!
+//! # Commands and events
+//!
+//! [`Command`] and [`Event`] are the protocol: each variant says what it asks or tells,
+//! what answers a command, and when one is refused. On the wire each is one JSON object
+//! whose `type` names it, such as `{"type": "seek", "position": 2.5}`; [`commands_run`]
+//! gives commands in that form. An event of a type this build does not know reads as
+//! [`Event::Unknown`], so a newer bridge never breaks an older window.
+//!
+//! [`Bridge::send`] returns `false` when a command is refused: it cannot be taken as it is
+//! (a seek before 0, an agent turn while one runs), or its bounded queue is full. Show an
+//! error then; never silently drop edits.
 //!
 //! # Pictures
 //!
@@ -524,7 +71,9 @@ mod analysis;
 mod claude_code;
 mod cloud_session;
 mod collab;
+mod command;
 mod conversations;
+pub mod event;
 mod looks;
 mod media;
 mod meter;
@@ -547,11 +96,27 @@ mod updates;
 mod workflows;
 
 pub use claude_code::SERVE_MCP;
+pub use command::{AgentSettings, ChatProvider, Command};
+pub use conversations::Request as ConversationsRequest;
+pub use event::{Event, Snapshot};
+pub use kerf_agent::{Focus, FocusScope, OpenAiApiMode};
+pub use kerf_collab::scaffold::GitHubRepository;
+pub use kerf_runtime::{EditOp, GeneratorSpec, MaskOutline, RateSpec, TrimSide};
+pub use media::CastEntry;
+pub use paperwork::CaptionsRequest;
+pub use previews::{PreviewEffect, Request as EffectPreviewsRequest};
+pub use queue::ExportRequest;
+pub use recipes::Edit as RecipeEdit;
 pub use tasks::Task;
+pub use tracks::{Follow as ShotFollow, Of as ShotOf};
+pub use workflows::Edit as WorkflowEdit;
 
+use event::{
+    AgentState, AgentUpdate, AgentVersion, CloudAccess, ConnectionStatus, ErrorEvent, NextStep,
+    Preview, PreviewStatus, ToolState, VersionState,
+};
 use kerf_agent::{
-    AgentEvent, AgentSession, AgentSessionOptions, AgentTool, OpenAiApiMode, ProviderName,
-    ReasoningEffort,
+    AgentEvent, AgentSession, AgentSessionOptions, AgentTool, ProviderName, ReasoningEffort,
 };
 use kerf_mcp::inbound;
 use kerf_mcp::permissions::{Mode, Permissions};
@@ -562,7 +127,6 @@ use kerf_model::{
 };
 use kerf_playback::{PlaybackConfig, PlaybackEvent, PlaybackFrame, PlaybackSession, PlaybackState};
 use kerf_runtime::{RuntimeClient, StateSnapshot};
-use serde::Deserialize;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
@@ -570,47 +134,6 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
-
-#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
-struct AgentSettings {
-    #[serde(default)]
-    provider: Option<ChatProvider>,
-    #[serde(rename = "apiMode", default)]
-    api_mode: Option<OpenAiApiMode>,
-    #[serde(rename = "apiKey", default)]
-    api_key: Option<String>,
-    #[serde(rename = "baseUrl", default)]
-    base_url: Option<String>,
-    #[serde(default)]
-    model: Option<String>,
-    #[serde(rename = "mcpEnabled", default)]
-    mcp_enabled: bool,
-    #[serde(rename = "mcpConfigVersion", default)]
-    mcp_config_version: u64,
-    /// Use Kerf Cloud, the hosted model, instead of a key of one's own.
-    #[serde(default)]
-    cloud: bool,
-}
-
-/// Who answers in Kerf chat: a model API with a key, or the person's own
-/// Claude Code, signed in to their Claude account.
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "kebab-case")]
-enum ChatProvider {
-    Anthropic,
-    Openai,
-    ClaudeCode,
-}
-
-impl ChatProvider {
-    fn api(self) -> Option<ProviderName> {
-        match self {
-            Self::Anthropic => Some(ProviderName::Anthropic),
-            Self::Openai => Some(ProviderName::Openai),
-            Self::ClaudeCode => None,
-        }
-    }
-}
 
 /// The agent behind a chat: Kerf's own loop on a model API, with the router
 /// its tools run on, or Claude Code.
@@ -673,315 +196,6 @@ fn permission_mode(name: Option<&str>) -> Option<Mode> {
     name.map(|name| Mode::named(name).unwrap_or(Mode::Ask))
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-enum Command {
-    Refresh,
-    Reconnect,
-    /// Render a preview of the program, or of what the pending proposal
-    /// `proposalId` would make of it, over `start`..`start + duration` when
-    /// given, and play it in place of the program.
-    Preview {
-        #[serde(rename = "proposalId", default)]
-        proposal_id: Option<String>,
-        #[serde(default)]
-        start: Option<f64>,
-        #[serde(default)]
-        duration: Option<f64>,
-    },
-    /// Stop the preview render running: `preview{status:"stopped"}`.
-    PreviewStop,
-    /// Stop any preview render and play the program again:
-    /// `preview{status:"exited"}`, then `viewer_reset`.
-    PreviewExit,
-    Import {
-        path: String,
-        /// Add it to the project's media without cutting it into the program.
-        #[serde(default, rename = "mediaOnly")]
-        media_only: bool,
-    },
-    /// Typed edits on the model, applied atomically.
-    Edit {
-        ops: Vec<kerf_runtime::EditOp>,
-        revision: u64,
-    },
-    Undo {
-        revision: u64,
-    },
-    Redo {
-        revision: u64,
-    },
-    Accept {
-        #[serde(rename = "proposalId")]
-        proposal_id: String,
-        revision: u64,
-    },
-    Reject {
-        #[serde(rename = "proposalId")]
-        proposal_id: String,
-        revision: u64,
-    },
-    /// Bring a stale proposal onto the project as it is, as its next
-    /// version.
-    Forward {
-        #[serde(rename = "proposalId")]
-        proposal_id: String,
-        revision: u64,
-    },
-    Agent {
-        text: String,
-        /// The clip, range, or playhead the request is about.
-        #[serde(default)]
-        focus: Option<kerf_agent::Focus>,
-        /// The conversation the turn goes on in; none starts a new one.
-        #[serde(default)]
-        conversation: Option<String>,
-        /// Where the playhead was when it was asked, in seconds.
-        #[serde(default)]
-        at: Option<f64>,
-        /// What Kerf may do without asking, as chosen in the editor: `ask`,
-        /// `accept-edits` or `auto`. None is the person's own file's say.
-        #[serde(default)]
-        permissions: Option<String>,
-        #[serde(flatten)]
-        settings: AgentSettings,
-    },
-    /// The same request made by several agents at once, each staging its own
-    /// proposal in its own thread: `agent_version` events follow each one.
-    AgentVersions {
-        text: String,
-        #[serde(default = "default_versions")]
-        count: usize,
-        #[serde(flatten)]
-        settings: AgentSettings,
-    },
-    Abort,
-    Play,
-    Pause,
-    Seek {
-        position: f64,
-        /// Pointer is still moving. The playback worker shows the nearest
-        /// picture immediately; a later seek without this flag is exact.
-        #[serde(default)]
-        scrub: bool,
-    },
-    Volume {
-        value: f32,
-    },
-    /// Queue a render: `export {status: queued, jobId, …}`, then its
-    /// turn on the render queue's thread.
-    Export(queue::ExportRequest),
-    /// Take a queued render out of the queue, or stop the one rendering.
-    ExportCancel {
-        #[serde(rename = "jobId")]
-        job_id: String,
-    },
-    /// The render jobs kerfd keeps: `render_queue`.
-    RenderQueue,
-    /// The captions as SRT or WebVTT.
-    ExportCaptions(paperwork::CaptionsRequest),
-    /// The programme measured to EBU R128: `loudness`.
-    Loudness {
-        #[serde(default)]
-        sequence: Option<String>,
-    },
-    /// An HDR sequence's frame for the Finish tray's scopes: `scope_signal`.
-    ScopeSignal {
-        time: f64,
-        #[serde(default)]
-        sequence: Option<String>,
-    },
-    /// What the media files say of themselves: `media_info`.
-    MediaInfo {
-        #[serde(default)]
-        media: Option<String>,
-    },
-    /// Where a media file cuts, pauses and is loudest: `media_index`.
-    MediaIndex {
-        media: String,
-    },
-    /// Keep a clip's picture effects as an effects preset: `look_saved`.
-    LookSave {
-        clip: String,
-        name: String,
-        #[serde(default)]
-        replace: bool,
-    },
-    /// Put an effects preset on a clip, as one edit.
-    LookApply {
-        clip: String,
-        path: String,
-    },
-    PresetExport {
-        path: String,
-    },
-    PresetInspect {
-        path: String,
-    },
-    PresetApply {
-        path: String,
-        bindings: Value,
-        texts: Value,
-        revision: u64,
-    },
-    /// List the project's preset library: `preset_library`.
-    PresetLibrary,
-    /// Save the program as `presets/<name>.kerfpreset`: `preset_saved`.
-    PresetSave {
-        name: String,
-        #[serde(default)]
-        replace: bool,
-    },
-    /// Swap the file behind a media id, keeping every clip's timing. A
-    /// shared project copies the file into `media/` first.
-    MediaReplace {
-        media: String,
-        path: String,
-    },
-    /// Make a media's file from its steps: `media_make_plan` and nothing
-    /// run unless `confirmed`, which a person's yes to that plan sends.
-    MediaMake {
-        media: String,
-        #[serde(default)]
-        confirmed: bool,
-        /// How many takes to make, each with its seeds one on from the last: one where it
-        /// is not said.
-        #[serde(default)]
-        rolls: Option<u32>,
-    },
-    /// Read the project's cast file: `cast`.
-    CastGet,
-    /// Write `entries` as the project's cast file, in place of the one there: `cast`, with
-    /// the shots that want making for it.
-    CastSet {
-        entries: Vec<media::CastEntry>,
-    },
-    /// Carry the steps of a media that names a recipe file into the document, under its
-    /// line: `media_carry_plan` and nothing written unless `confirmed`, which a person's yes
-    /// to that plan sends; then one edit and `media_carried`.
-    MediaCarry {
-        media: String,
-        #[serde(default)]
-        confirmed: bool,
-    },
-    /// Stop the making of a media that is running: `media_make_cancelled`.
-    MediaMakeCancel {
-        media: String,
-    },
-    /// How a media is made, as a graph of its steps and what they read:
-    /// `recipe`. Nothing is run.
-    RecipeGet {
-        media: String,
-    },
-    /// Change a media's steps, where they still read as the editor read them:
-    /// one name on one line, or the whole text, as `step` lines applied as one
-    /// edit. `recipe` then, as they now read.
-    RecipeEdit(recipes::Edit),
-    /// Set a signal clip's keys from the onsets of the sound another clip of
-    /// its sequence plays ([`kerf_shots::signals::from_sound`]): one edit of
-    /// the project, as drawing its curve is.
-    SignalFromSound {
-        clip: String,
-        of: String,
-    },
-    /// Draw the picture a person points on to read a clip from footage
-    /// ([`kerf_shots::tracks`]): its sequence on the clip's first frame, as a
-    /// `shot_picture` naming the file.
-    ShotPicture {
-        clip: String,
-        of: tracks::Of,
-    },
-    /// Have a clip follow the point pointed at (`moves`), or cut out of it
-    /// what the points are on (`matte`): one edit of the project, then
-    /// `shot_followed`, or `error`.
-    ShotFollow(tracks::Follow),
-    /// Hold a media's takes to its guide by where its subjects are: a
-    /// `take_read` for each as it is read, then `takes_read`, or `error`.
-    TakesRead {
-        media: String,
-    },
-    /// The workflow a `generate` step's model is run with, where its program
-    /// is kerf-comfy: `workflow`, every node and input of it.
-    WorkflowGet {
-        media: String,
-        line: usize,
-    },
-    /// Set a value of that workflow, in the shot's own copy of it beside its
-    /// recipe: `workflow`, then `recipe`.
-    WorkflowEdit(workflows::Edit),
-    /// The person's models a recipe's `generate` can name, from their own
-    /// models file: `models {file, exists, models, error?}`.
-    Models,
-    /// Load a `project.kerf` changed outside Kerf as one revision.
-    ProjectionImport,
-    /// Write the editor's project over a `project.kerf` changed outside Kerf.
-    ProjectionRepair,
-    // Collaboration over Git, run by the collaboration worker.
-    CollabStatus,
-    CollabSync {
-        #[serde(default)]
-        message: Option<String>,
-    },
-    CollabLive {
-        enabled: bool,
-        /// Seconds between syncs.
-        #[serde(default)]
-        interval: Option<f64>,
-    },
-    CollabCommit {
-        #[serde(default)]
-        message: String,
-    },
-    CollabBranch {
-        name: String,
-        #[serde(default)]
-        create: bool,
-    },
-    CollabPullRequest {
-        title: String,
-        #[serde(default)]
-        body: Option<String>,
-    },
-    CollabPublish {
-        #[serde(default)]
-        remote: Option<String>,
-        #[serde(default)]
-        github: Option<kerf_collab::scaffold::GitHubRepository>,
-    },
-    CollabConsolidate,
-    /// Republish the state with the viewer's media reopened: files changed
-    /// on disk under an unchanged document. Sent by the bridge's own
-    /// workers only.
-    #[serde(skip)]
-    Reload,
-    /// How `effects` would look on `clip`, on its picture at sequence time
-    /// `at`, or a generator alone on black: an `effect_preview` event per
-    /// entry that has a picture, `width` pixels wide. A newer request
-    /// supersedes it.
-    EffectPreviews(previews::Request),
-    /// The conversations kept beside the project: list, open, archive,
-    /// rename or delete one (`conversations`, `conversation`).
-    Conversations(conversations::Request),
-    /// Kerf's QC pass over a sequence: `check`, whose failing rows the
-    /// conversation offers as things to ask Kerf.
-    Check {
-        #[serde(default)]
-        sequence: Option<String>,
-    },
-    /// Hear only these audio tracks; empty hears them all. Monitoring
-    /// only: the project never changes.
-    Solo {
-        #[serde(default)]
-        tracks: Vec<String>,
-    },
-    /// Keep a Kerf Cloud token and read its account.
-    CloudSignIn {
-        token: String,
-    },
-    CloudSignOut,
-    CloudRefresh,
-}
-
 /// What the viewer plays: the project itself, or a rendered preview of it,
 /// the file that preview plays, and the proposal it previews. Both have
 /// their media paths resolved.
@@ -1002,16 +216,14 @@ struct RenderRequest {
 }
 
 impl RenderRequest {
-    /// A `preview` or `export` event about this render.
-    fn event(&self, status: &str) -> Value {
-        let mut event = json!({
-            "type": if self.preview { "preview" } else { "export" },
-            "status": status,
-        });
-        if let Some(proposal) = &self.proposal {
-            event["proposalId"] = json!(proposal);
+    /// A `preview` event about this render. Every render the bridge runs here is a viewer
+    /// preview (`preview` is always true); the render queue's exports are `queue.rs`'s.
+    fn event(&self, status: PreviewStatus) -> Preview {
+        Preview {
+            status,
+            proposal_id: self.proposal.clone(),
+            ..Preview::default()
         }
-        event
     }
 }
 
@@ -1080,7 +292,7 @@ struct Shared {
 pub struct Bridge {
     /// The project folder, where its conversations are kept.
     directory: PathBuf,
-    events_tx: SyncSender<Value>,
+    events_tx: SyncSender<Event>,
     commands: SyncSender<Command>,
     media: SyncSender<Command>,
     collab: SyncSender<Command>,
@@ -1088,7 +300,7 @@ pub struct Bridge {
     /// The conversations' own worker: their files are read and written off
     /// the caller's thread, in the order asked.
     conversations: SyncSender<conversations::Request>,
-    events: Receiver<Value>,
+    events: Receiver<Event>,
     shared: Arc<Shared>,
 }
 
@@ -1105,12 +317,18 @@ struct AgentRequest {
     permissions: Option<Mode>,
 }
 
-fn emit(tx: &SyncSender<Value>, value: Value) {
-    let _ = tx.send(value);
+fn emit(tx: &SyncSender<Event>, event: Event) {
+    let _ = tx.send(event);
 }
 
-fn error(tx: &SyncSender<Value>, value: impl std::fmt::Display) {
-    emit(tx, json!({"type":"error", "message":value.to_string()}));
+fn error(tx: &SyncSender<Event>, value: impl std::fmt::Display) {
+    emit(
+        tx,
+        Event::Error(ErrorEvent {
+            message: value.to_string(),
+            ..ErrorEvent::default()
+        }),
+    );
 }
 
 fn key() -> String {
@@ -1129,7 +347,7 @@ fn key() -> String {
 fn publish(
     state: StateSnapshot,
     shared: &Arc<Shared>,
-    tx: &SyncSender<Value>,
+    tx: &SyncSender<Event>,
     previous: &mut Option<Value>,
 ) {
     publish_snapshot(state, shared, tx, previous, false);
@@ -1138,7 +356,7 @@ fn publish(
 fn publish_force(
     state: StateSnapshot,
     shared: &Arc<Shared>,
-    tx: &SyncSender<Value>,
+    tx: &SyncSender<Event>,
     previous: &mut Option<Value>,
 ) {
     publish_snapshot(state, shared, tx, previous, true);
@@ -1147,7 +365,7 @@ fn publish_force(
 fn publish_snapshot(
     state: StateSnapshot,
     shared: &Arc<Shared>,
-    tx: &SyncSender<Value>,
+    tx: &SyncSender<Event>,
     previous: &mut Option<Value>,
     force: bool,
 ) {
@@ -1182,26 +400,28 @@ fn publish_snapshot(
             Err(err) => error(tx, err.message),
         }
     }
-    *previous = Some(snapshot.clone());
+    *previous = Some(snapshot);
     emit(
         tx,
-        json!({"type":"state", "snapshot":with_proposal_timeline(snapshot, &state)}),
+        Event::State {
+            snapshot: Box::new(snapshot_of(&state)),
+        },
     );
 }
 
-/// Each open proposal's timeline beside the current one, so the editor can
-/// show proposals on the timeline before they are accepted:
-/// `proposalTimelines` by proposal id (an open proposal's earlier versions
-/// too, while they were made on this revision), and `proposalTimeline` for
-/// the pending proposal. The list fields a snapshot leaves out while empty
-/// are filled in, so the editor always reads the same shape.
-fn with_proposal_timeline(mut snapshot: Value, state: &StateSnapshot) -> Value {
-    if let Some(kerf_runtime::PendingProposal::Pending { script, .. }) = &state.pending_proposal {
-        if let Ok(timeline) = kerf_runtime::proposal_timeline(&state.document, script) {
-            snapshot["proposalTimeline"] = timeline;
+/// The `state` event's snapshot: the state, and each open proposal's timeline beside the
+/// current one, so the editor can show proposals on the timeline before they are
+/// accepted: `proposalTimelines` by proposal id (an open proposal's earlier versions too,
+/// while they were made on this revision), and `proposalTimeline` for the pending
+/// proposal. The lists a state leaves out while empty are always there.
+fn snapshot_of(state: &StateSnapshot) -> Snapshot {
+    let proposal_timeline = match &state.pending_proposal {
+        Some(kerf_runtime::PendingProposal::Pending { script, .. }) => {
+            kerf_runtime::proposal_timeline_view(&state.document, script).ok()
         }
-    }
-    let mut timelines = serde_json::Map::new();
+        _ => None,
+    };
+    let mut proposal_timelines = std::collections::BTreeMap::new();
     for entry in state
         .proposals
         .iter()
@@ -1213,45 +433,60 @@ fn with_proposal_timeline(mut snapshot: Value, state: &StateSnapshot) -> Value {
         let scripts = std::iter::once((&entry.proposal_id, &entry.script))
             .chain(earlier.map(|version| (&version.proposal_id, &version.script)));
         for (id, script) in scripts {
-            if let Ok(timeline) = kerf_runtime::proposal_timeline(&state.document, script) {
-                timelines.insert(id.clone(), timeline);
+            if let Ok(timeline) = kerf_runtime::proposal_timeline_view(&state.document, script) {
+                proposal_timelines.insert(id.clone(), timeline);
             }
         }
     }
-    snapshot["proposalTimelines"] = Value::Object(timelines);
-    if snapshot.get("proposals").is_none() {
-        snapshot["proposals"] = json!([]);
+    Snapshot {
+        document: state.document.clone(),
+        // kerfd's timeline view, as its own TimelineView wrote it.
+        timeline: serde_json::from_value(state.timeline.clone()).unwrap_or_default(),
+        revision: state.revision,
+        can_undo: state.can_undo,
+        can_redo: state.can_redo,
+        duration: state.duration,
+        pending_proposal: state.pending_proposal.clone(),
+        source_version: state.source_version,
+        projection_status: state.projection_status.clone(),
+        import_warnings: state.import_warnings.clone(),
+        proposals: state.proposals.clone(),
+        review_revision: state.review_revision,
+        revision_time: state.revision_time.clone(),
+        proposal_timeline,
+        proposal_timelines,
     }
-    snapshot
 }
 
-fn connection_event(tx: &SyncSender<Value>, status: &str, message: Option<&str>) {
-    let mut event = json!({"type":"connection", "status":status});
-    if let Some(message) = message {
-        event["message"] = Value::String(message.to_owned());
-    }
-    emit(tx, event);
+fn connection_event(tx: &SyncSender<Event>, status: ConnectionStatus, message: Option<&str>) {
+    emit(
+        tx,
+        Event::Connection {
+            status,
+            message: message.map(str::to_owned),
+        },
+    );
 }
 
 fn connect_runtime(
     directory: &std::path::Path,
     binary: &std::path::Path,
-    tx: &SyncSender<Value>,
+    tx: &SyncSender<Event>,
     shared: &Arc<Shared>,
     previous: &mut Option<Value>,
 ) -> Option<RuntimeClient> {
-    connection_event(tx, "connecting", None);
+    connection_event(tx, ConnectionStatus::Connecting, None);
     let bootstrap = match RuntimeClient::connect_or_spawn(directory, Some(binary)) {
         Ok(client) => client,
         Err(error) => {
-            connection_event(tx, "disconnected", Some(&error.message));
+            connection_event(tx, ConnectionStatus::Disconnected, Some(&error.message));
             return None;
         }
     };
     let state = match bootstrap.get_state() {
         Ok(state) => state,
         Err(error) => {
-            connection_event(tx, "disconnected", Some(&error.message));
+            connection_event(tx, ConnectionStatus::Disconnected, Some(&error.message));
             return None;
         }
     };
@@ -1260,7 +495,7 @@ fn connect_runtime(
     let client = match RuntimeClient::new(directory) {
         Ok(client) => client,
         Err(error) => {
-            connection_event(tx, "disconnected", Some(&error.message));
+            connection_event(tx, ConnectionStatus::Disconnected, Some(&error.message));
             return None;
         }
     };
@@ -1268,7 +503,7 @@ fn connect_runtime(
     // did not change while the transport was down.
     *previous = None;
     publish(state, shared, tx, previous);
-    connection_event(tx, "ready", None);
+    connection_event(tx, ConnectionStatus::Ready, None);
     Some(client)
 }
 
@@ -1278,7 +513,7 @@ fn runtime_worker(
     rx: Receiver<Command>,
     commands: SyncSender<Command>,
     media: SyncSender<Command>,
-    tx: SyncSender<Value>,
+    tx: SyncSender<Event>,
     shared: Arc<Shared>,
 ) {
     let mut previous = None;
@@ -1300,7 +535,11 @@ fn runtime_worker(
                         Ok(state) => publish(state, &shared, &tx, &mut previous),
                         Err(error) if error.is_transport() => {
                             let _ = media.try_send(Command::Pause);
-                            connection_event(&tx, "disconnected", Some(&error.message));
+                            connection_event(
+                                &tx,
+                                ConnectionStatus::Disconnected,
+                                Some(&error.message),
+                            );
                             client = None;
                         }
                         Err(_) => {}
@@ -1367,7 +606,7 @@ fn runtime_worker(
                     Ok(()) => {}
                     Err(error) if error.is_transport() => {
                         let _ = media.try_send(Command::Pause);
-                        connection_event(&tx, "disconnected", Some(&error.message));
+                        connection_event(&tx, ConnectionStatus::Disconnected, Some(&error.message));
                         client = None;
                     }
                     Err(error) => {
@@ -1378,7 +617,7 @@ fn runtime_worker(
             }
         };
         // What follows a command's state, and the command a refusal names.
-        let mut then: Option<Value> = None;
+        let mut then: Option<Event> = None;
         let mut refusal: Option<&'static str> = None;
         let result = match command {
             Command::Refresh => active_client.get_state(),
@@ -1528,7 +767,7 @@ fn runtime_worker(
                     .and_then(|project| presets::export_program(&project, Some(&name)))
                     .and_then(|document| presets::save(&directory, &name, &document, replace));
                 match saved {
-                    Ok(path) => emit(&tx, json!({"type":"preset_saved", "path":path})),
+                    Ok(path) => emit(&tx, Event::PresetSaved { path }),
                     Err(message) => error(&tx, message),
                 }
                 continue;
@@ -1560,10 +799,7 @@ fn runtime_worker(
                     .and_then(|(_, text)| kerf_runtime::parse_document(&text))
                 {
                     Ok(project) => match presets::export_program(&project, None) {
-                        Ok(document) => emit(
-                            &tx,
-                            json!({"type":"preset_export", "path":path, "document":document}),
-                        ),
+                        Ok(document) => emit(&tx, Event::PresetExport { path, document }),
                         Err(message) => error(&tx, message),
                     },
                     Err(err) => error(&tx, err.message),
@@ -1577,7 +813,10 @@ fn runtime_worker(
                         if response["ok"] == true {
                             emit(
                                 &tx,
-                                json!({"type":"preset_inspect", "path":path, "preset":response["result"]}),
+                                Event::PresetInspect {
+                                    path,
+                                    preset: response["result"].clone(),
+                                },
                             );
                         } else {
                             error(
@@ -1609,7 +848,10 @@ fn runtime_worker(
                                 if response["ok"] == true {
                                     emit(
                                         &tx,
-                                        json!({"type":"preset_applied", "path":path, "proposal":response["result"]["proposal"]}),
+                                        Event::PresetApplied {
+                                            path,
+                                            proposal: response["result"]["proposal"].clone(),
+                                        },
                                     );
                                 } else {
                                     error(
@@ -1685,7 +927,7 @@ fn runtime_worker(
             }
             Err(error) if error.is_transport() => {
                 let _ = media.try_send(Command::Pause);
-                connection_event(&tx, "disconnected", Some(&error.message));
+                connection_event(&tx, ConnectionStatus::Disconnected, Some(&error.message));
                 client = None;
             }
             Err(runtime_error) => {
@@ -1699,7 +941,11 @@ fn runtime_worker(
                     publish_force(state, &shared, &tx, &mut previous);
                 } else {
                     let _ = media.try_send(Command::Pause);
-                    connection_event(&tx, "disconnected", Some("runtime became unavailable"));
+                    connection_event(
+                        &tx,
+                        ConnectionStatus::Disconnected,
+                        Some("runtime became unavailable"),
+                    );
                     client = None;
                 }
             }
@@ -1709,13 +955,16 @@ fn runtime_worker(
 
 /// A preview that ends before any render of it began: refused, or stopped
 /// on its way here. One asked to stop says so, which answers the stop.
-fn preview_unstarted(shared: &Shared, tx: &SyncSender<Value>, turn: u64, proposal: Option<String>) {
+fn preview_unstarted(shared: &Shared, tx: &SyncSender<Event>, turn: u64, proposal: Option<String>) {
     if shared.preview_turns.over(turn) {
-        let mut event = json!({"type":"preview","status":"stopped"});
-        if let Some(proposal) = proposal {
-            event["proposalId"] = json!(proposal);
-        }
-        emit(tx, event);
+        emit(
+            tx,
+            Event::Preview(Preview {
+                status: PreviewStatus::Stopped,
+                proposal_id: proposal,
+                ..Preview::default()
+            }),
+        );
     }
 }
 
@@ -1727,7 +976,7 @@ fn spawn_render(
     request: RenderRequest,
     turn: u64,
     client: &RuntimeClient,
-    tx: &SyncSender<Value>,
+    tx: &SyncSender<Event>,
     shared: &Arc<Shared>,
 ) {
     if shared.preview_turns.stopped(turn) {
@@ -1787,15 +1036,21 @@ fn spawn_render(
             Err(err) if stopped && err.code == "CANCELLED" => {}
             Err(err) => {
                 error(&tx, err.message);
-                let mut event = request.event("required");
-                event["message"] =
-                    json!("Preview render failed. Retry after fixing the reported error.");
-                emit(&tx, event);
+                emit(
+                    &tx,
+                    Event::Preview(Preview {
+                        message: Some(
+                            "Preview render failed. Retry after fixing the reported error."
+                                .to_owned(),
+                        ),
+                        ..request.event(PreviewStatus::Required)
+                    }),
+                );
             }
         }
         // The answer to the stop, however the render ended.
         if stopped {
-            emit(&tx, request.event("stopped"));
+            emit(&tx, Event::Preview(request.event(PreviewStatus::Stopped)));
         }
         shared.preview_busy.store(false, Ordering::SeqCst);
     });
@@ -1808,7 +1063,7 @@ fn export(
     client: &RuntimeClient,
     request: &RenderRequest,
     turn: u64,
-    tx: &SyncSender<Value>,
+    tx: &SyncSender<Event>,
     shared: &Shared,
 ) -> Result<(String, String), kerf_runtime::RuntimeError> {
     let preview = request.preview;
@@ -1831,9 +1086,9 @@ fn export(
             cancel_preview(shared);
         }
     }
-    let mut running = request.event("running");
-    running["progress"] = json!(0.0);
-    emit(tx, running.clone());
+    let mut running = request.event(PreviewStatus::Running);
+    running.progress = Some(0.0);
+    emit(tx, Event::Preview(running.clone()));
     let result = kerf_runtime::run_render_job(
         client,
         &job,
@@ -1842,8 +1097,8 @@ fn export(
         request.quality == "preview",
         |progress| {
             // Progress is replaceable; never stall rendering behind a busy GUI.
-            running["progress"] = json!(progress);
-            let _ = tx.try_send(running.clone());
+            running.progress = Some(progress);
+            let _ = tx.try_send(Event::Preview(running.clone()));
         },
     );
     if preview {
@@ -1857,10 +1112,14 @@ fn export(
         Ok(()) => {
             let path = output.to_string_lossy().into_owned();
             if !preview {
-                let mut event = request.event("completed");
-                event["path"] = json!(path);
-                event["progress"] = json!(1.0);
-                emit(tx, event);
+                emit(
+                    tx,
+                    Event::Preview(Preview {
+                        path: Some(path.clone()),
+                        progress: Some(1.0),
+                        ..request.event(PreviewStatus::Completed)
+                    }),
+                );
             }
             Ok((path, document))
         }
@@ -1869,7 +1128,7 @@ fn export(
                 discard_preview(shared, output);
             }
             if !(err.code == "CANCELLED" && shared.preview_turns.stopped(turn)) {
-                emit(tx, request.event("failed"));
+                emit(tx, Event::Preview(request.event(PreviewStatus::Failed)));
             }
             Err(err)
         }
@@ -1883,7 +1142,7 @@ fn export(
 /// Which previews it stops is settled where the stop is sent, as that is
 /// what orders it among them; the rest runs on a thread of its own, since
 /// the events queue may be full while the editor is sending.
-fn stop_preview(shared: &Arc<Shared>, tx: &SyncSender<Value>) {
+fn stop_preview(shared: &Arc<Shared>, tx: &SyncSender<Event>) {
     let answered = shared.preview_turns.stop();
     let shared = shared.clone();
     let tx = tx.clone();
@@ -1892,17 +1151,23 @@ fn stop_preview(shared: &Arc<Shared>, tx: &SyncSender<Value>) {
 
 /// What follows a stop: the render running is told, and a stop that no
 /// preview answers for (`answered`) answers itself.
-fn stopped_preview(shared: &Shared, answered: bool, tx: &SyncSender<Value>) {
+fn stopped_preview(shared: &Shared, answered: bool, tx: &SyncSender<Event>) {
     cancel_preview(shared);
     if !answered {
-        emit(tx, json!({"type":"preview","status":"stopped"}));
+        emit(
+            tx,
+            Event::Preview(Preview {
+                status: PreviewStatus::Stopped,
+                ..Preview::default()
+            }),
+        );
     }
 }
 
 /// `preview_exit`: stop every preview sent before it, as `preview_stop`
 /// does, and play the program again in place of a rendered preview, which
 /// the media worker announces with `viewer_reset`.
-fn exit_preview(shared: &Arc<Shared>, tx: &SyncSender<Value>) {
+fn exit_preview(shared: &Arc<Shared>, tx: &SyncSender<Event>) {
     shared.preview_turns.stop();
     let shared = shared.clone();
     let tx = tx.clone();
@@ -1910,7 +1175,7 @@ fn exit_preview(shared: &Arc<Shared>, tx: &SyncSender<Value>) {
 }
 
 /// What follows an exit, once its previews are asked to stop.
-fn exited_preview(shared: &Shared, tx: &SyncSender<Value>) {
+fn exited_preview(shared: &Shared, tx: &SyncSender<Event>) {
     cancel_preview(shared);
     let model = shared.model.lock().ok().and_then(|model| model.clone());
     if let (Some(model), Ok(mut slot)) = (model, shared.project.lock()) {
@@ -1928,7 +1193,13 @@ fn exited_preview(shared: &Shared, tx: &SyncSender<Value>) {
             install_project(shared, &mut slot, MediaProject::Native(model));
         }
     }
-    emit(tx, json!({"type":"preview","status":"exited"}));
+    emit(
+        tx,
+        Event::Preview(Preview {
+            status: PreviewStatus::Exited,
+            ..Preview::default()
+        }),
+    );
 }
 
 /// Stop the preview render running, if there is one.
@@ -2131,7 +1402,7 @@ impl PlaybackStats {
     }
 }
 
-fn media_worker(rx: Receiver<Command>, tx: SyncSender<Value>, shared: Arc<Shared>) {
+fn media_worker(rx: Receiver<Command>, tx: SyncSender<Event>, shared: Arc<Shared>) {
     let mut stats = PlaybackStats::new();
     let mut session: Option<PlaybackSession> = None;
     let mut position = 0.0_f64;
@@ -2200,8 +1471,13 @@ fn media_worker(rx: Receiver<Command>, tx: SyncSender<Value>, shared: Arc<Shared
             if let Ok(mut frame) = shared.frame.lock() {
                 *frame = None;
             }
-            emit(&tx, json!({"type":"viewer_reset"}));
-            emit(&tx, json!({"type":"caption","text":""}));
+            emit(&tx, Event::ViewerReset);
+            emit(
+                &tx,
+                Event::Caption {
+                    text: String::new(),
+                },
+            );
             let plan = kerf_playback::preview_plan(&project);
             let message = plan
                 .reasons
@@ -2213,10 +1489,18 @@ fn media_worker(rx: Receiver<Command>, tx: SyncSender<Value>, shared: Arc<Shared
             if !rendered && !plan.native_exact() && !composited {
                 session = None;
                 playing = false;
-                emit(&tx, json!({"type":"playback","playing":false}));
+                emit(&tx, Event::Playback { playing: false });
                 emit(
                     &tx,
-                    json!({"type":"preview","status":if plan.unavailable() { "unavailable" } else { "required" }, "message":message}),
+                    Event::Preview(Preview {
+                        status: if plan.unavailable() {
+                            PreviewStatus::Unavailable
+                        } else {
+                            PreviewStatus::Required
+                        },
+                        message: Some(message),
+                        ..Preview::default()
+                    }),
                 );
                 thread::sleep(Duration::from_millis(4));
                 continue;
@@ -2225,13 +1509,24 @@ fn media_worker(rx: Receiver<Command>, tx: SyncSender<Value>, shared: Arc<Shared
             // or an export does not match yet comes along as a note.
             emit(
                 &tx,
-                if composited {
-                    json!({"type":"preview","status":"live","message":message})
+                Event::Preview(if composited {
+                    Preview {
+                        status: PreviewStatus::Live,
+                        message: Some(message),
+                        ..Preview::default()
+                    }
                 } else if let Some(proposal) = &shown_proposal {
-                    json!({"type":"preview","status":"ready","proposalId":proposal})
+                    Preview {
+                        status: PreviewStatus::Ready,
+                        proposal_id: Some(proposal.clone()),
+                        ..Preview::default()
+                    }
                 } else {
-                    json!({"type":"preview","status":"ready"})
-                },
+                    Preview {
+                        status: PreviewStatus::Ready,
+                        ..Preview::default()
+                    }
+                }),
             );
             let size = preview_frame_size(&project);
             // A new worker prevents old-project frames from resurfacing after an edit.
@@ -2289,7 +1584,7 @@ fn media_worker(rx: Receiver<Command>, tx: SyncSender<Value>, shared: Arc<Shared
                             .map(|cue| cue.text.as_str())
                             .collect::<Vec<_>>()
                             .join("\n");
-                        let _ = tx.try_send(json!({"type":"caption","text":caption}));
+                        let _ = tx.try_send(Event::Caption { text: caption });
                         if let Ok(mut slot) = shared.frame.lock() {
                             *slot = Some(frame);
                         }
@@ -2297,24 +1592,27 @@ fn media_worker(rx: Receiver<Command>, tx: SyncSender<Value>, shared: Arc<Shared
                     PlaybackEvent::Clock(clock) => {
                         stats.clock(clock.dropped);
                         position = clock.position;
-                        let _ = tx.try_send(json!({
-                            "type": "clock",
-                            "position": clock.position,
-                            "duration": clock.duration,
-                            "dropped": clock.dropped,
-                        }));
+                        let _ = tx.try_send(Event::Clock {
+                            position: clock.position,
+                            duration: clock.duration,
+                            dropped: clock.dropped,
+                        });
                     }
                     PlaybackEvent::StateChanged(state) => {
                         playing = state == PlaybackState::Playing;
-                        emit(&tx, json!({"type":"playback","playing":playing}));
+                        emit(&tx, Event::Playback { playing });
                     }
                     PlaybackEvent::Error(err) => error(&tx, err),
-                    PlaybackEvent::Ended => emit(&tx, json!({"type":"playback","playing":false})),
+                    PlaybackEvent::Ended => emit(&tx, Event::Playback { playing: false }),
                     PlaybackEvent::Opened { duration, .. } => {
                         position = position.min(duration);
                         emit(
                             &tx,
-                            json!({"type":"clock","position":position,"duration":duration,"dropped":0}),
+                            Event::Clock {
+                                position,
+                                duration,
+                                dropped: 0,
+                            },
                         );
                     }
                 }
@@ -2353,7 +1651,7 @@ fn new_agent(
     directory: &std::path::Path,
     binary: &std::path::Path,
     settings: &AgentSettings,
-    tx: &SyncSender<Value>,
+    tx: &SyncSender<Event>,
 ) -> Result<Agent, String> {
     if !settings.cloud && settings.provider == Some(ChatProvider::ClaudeCode) {
         return claude_code::ClaudeCodeSession::new(directory, binary, settings.model.clone())
@@ -2368,7 +1666,7 @@ fn native_agent(
     directory: &std::path::Path,
     binary: &std::path::Path,
     settings: &AgentSettings,
-    tx: &SyncSender<Value>,
+    tx: &SyncSender<Event>,
 ) -> Result<(AgentSession, KerfMcpRouter), String> {
     // Kerf Cloud speaks the Anthropic Messages protocol with the account token.
     let cloud = if settings.cloud {
@@ -2438,7 +1736,9 @@ fn native_agent(
         // Never forward raw names, paths, or error details to chat activity.
         emit(
             tx,
-            json!({"type":"agent","kind":"status","text":mcp_connection_status(&line)}),
+            Event::Agent(AgentUpdate::Status {
+                text: mcp_connection_status(&line).to_owned(),
+            }),
         );
     })
     .map_err(|_| {
@@ -2469,15 +1769,16 @@ fn native_agent(
                 }}
             }),
             move |input| {
-                let steps: Vec<Value> = input["steps"]
+                let steps: Vec<NextStep> = input["steps"]
                     .as_array()
                     .into_iter()
                     .flatten()
                     .filter_map(|step| {
                         let label = step["label"].as_str()?.trim();
                         let request = step["request"].as_str()?.trim();
-                        (!label.is_empty() && !request.is_empty()).then(|| {
-                            json!({"label": label.chars().take(40).collect::<String>(), "request": request})
+                        (!label.is_empty() && !request.is_empty()).then(|| NextStep {
+                            label: label.chars().take(40).collect(),
+                            request: request.to_owned(),
                         })
                     })
                     .take(MAX_NEXT_STEPS)
@@ -2485,8 +1786,9 @@ fn native_agent(
                 if steps.is_empty() {
                     return Err("give one to three steps, each with a label and a request".into());
                 }
-                emit(&next, json!({"type": "agent_next", "steps": steps}));
-                Ok(json!({"shown": steps.len()}))
+                let shown = steps.len();
+                emit(&next, Event::AgentNext { steps });
+                Ok(json!({"shown": shown}))
             },
         ),
     );
@@ -2525,7 +1827,7 @@ fn native_agent(
 
 /// The models event: where the person's models file is, whether it is
 /// there, and each model it names as `look` lists them. Nothing is run.
-fn models_event() -> Value {
+fn models_event() -> Event {
     use kerf_engine::recipe::model::Models;
     let file = Models::default_file();
     models_value(Models::read(&file), &file)
@@ -2534,19 +1836,18 @@ fn models_event() -> Value {
 fn models_value(
     read: kerf_engine::error::Result<kerf_engine::recipe::model::Models>,
     file: &Path,
-) -> Value {
-    let mut event = json!({
-        "type": "models",
-        "file": file.display().to_string(),
-        "exists": file.is_file(),
-        "models": [],
-    });
-    match read {
-        Ok(models) => event["models"] = json!(kerf_mcp::harness::models_listed(&models)),
+) -> Event {
+    let (models, error) = match read {
+        Ok(models) => (kerf_mcp::harness::models_listed(&models), None),
         // A file that does not read: said, and what to mend.
-        Err(error) => event["error"] = json!(error.to_string()),
+        Err(error) => (Vec::new(), Some(error.to_string())),
+    };
+    Event::Models {
+        file: file.display().to_string(),
+        exists: file.is_file(),
+        models,
+        error,
     }
-    event
 }
 
 /// The most next steps the editor shows at once.
@@ -2570,10 +1871,6 @@ Asked for a vertical or square cut, set the format first in the same proposal \
 (`sequence set s1 size=1080x1920`) and frame footage of another shape to fill it; \
 the picture takes the proposal's format as it grows.";
 
-fn default_versions() -> usize {
-    3
-}
-
 /// The most versions of a request made at once.
 const MAX_VERSIONS: usize = 3;
 const VERSION_KEYS: [&str; MAX_VERSIONS] = ["A", "B", "C"];
@@ -2596,14 +1893,11 @@ fn version_prompt(text: &str, index: usize, count: usize) -> String {
 }
 
 /// Where a tool call is working, for the timeline and picture to follow.
-fn focus_event(name: &str, targets: &kerf_agent::AgentTargetSummary) -> Option<Value> {
-    (!targets.times.is_empty() || !targets.clips.is_empty()).then(|| {
-        json!({
-            "type": "agent_focus",
-            "tool": name,
-            "times": targets.times,
-            "clips": targets.clips,
-        })
+fn focus_event(name: &str, targets: &kerf_agent::AgentTargetSummary) -> Option<Event> {
+    (!targets.times.is_empty() || !targets.clips.is_empty()).then(|| Event::AgentFocus {
+        tool: name.to_owned(),
+        times: targets.times.clone(),
+        clips: targets.clips.clone(),
     })
 }
 
@@ -2614,9 +1908,16 @@ fn staged_proposal(summary: &kerf_agent::ToolResultSummary) -> bool {
 
 /// Carry out a Kerf Cloud command, if any, then report the account:
 /// `{type: "cloud", access, account?, message?}`.
-fn cloud_status(tx: &SyncSender<Value>, command: Option<Command>) {
+fn cloud_status(tx: &SyncSender<Event>, command: Option<Command>) {
     let Some(path) = kerf_cloud::Store::default_path() else {
-        emit(tx, json!({"type":"cloud","access":"unavailable"}));
+        emit(
+            tx,
+            Event::Cloud {
+                access: CloudAccess::Unavailable,
+                account: None,
+                message: None,
+            },
+        );
         return;
     };
     // The token in the system's keychain, else in the file (cloud_session.rs).
@@ -2633,32 +1934,31 @@ fn cloud_status(tx: &SyncSender<Value>, command: Option<Command>) {
         message = Some(error.to_string());
     }
     let store = cloud_session::load(&path, &keychain);
-    let event = match (store.service_url(), store.token()) {
-        (None, _) => json!({"type":"cloud","access":"unavailable"}),
-        (Some(_), None) => json!({"type":"cloud","access":"signedOut"}),
+    let (access, account) = match (store.service_url(), store.token()) {
+        (None, _) => (CloudAccess::Unavailable, None),
+        (Some(_), None) => (CloudAccess::SignedOut, None),
         (Some(url), Some(token)) => match kerf_cloud::fetch_account(&url, token) {
-            Ok(account) => json!({
-                "type":"cloud",
-                "access": kerf_cloud::Access::of(&account),
-                "account": account,
-            }),
+            Ok(account) => (kerf_cloud::Access::of(&account), Some(account)),
             Err(kerf_cloud::CloudError::Unauthorized) => {
                 let _ = cloud_session::keep_token(&path, &keychain, None);
                 message = Some(kerf_cloud::CloudError::Unauthorized.to_string());
-                json!({"type":"cloud","access":"signedOut"})
+                (CloudAccess::SignedOut, None)
             }
             // Keep the session; the service may be briefly unreachable.
             Err(error) => {
                 message = Some(error.to_string());
-                json!({"type":"cloud","access":"unreachable"})
+                (CloudAccess::Unreachable, None)
             }
         },
     };
-    let mut event = event;
-    if let Some(message) = message {
-        event["message"] = json!(message);
-    }
-    emit(tx, event);
+    emit(
+        tx,
+        Event::Cloud {
+            access,
+            account,
+            message,
+        },
+    );
 }
 
 fn mcp_connection_status(line: &str) -> &'static str {
@@ -2677,7 +1977,7 @@ fn run_versions(
     directory: &std::path::Path,
     binary: &std::path::Path,
     request: &AgentRequest,
-    tx: &SyncSender<Value>,
+    tx: &SyncSender<Event>,
     commands: &SyncSender<Command>,
     shared: &Arc<Shared>,
 ) {
@@ -2702,7 +2002,7 @@ fn run_version(
     request: &AgentRequest,
     index: usize,
     count: usize,
-    tx: &SyncSender<Value>,
+    tx: &SyncSender<Event>,
     commands: &SyncSender<Command>,
     shared: &Arc<Shared>,
 ) {
@@ -2710,14 +2010,21 @@ fn run_version(
     let title = format!("Version {key}: {}", request.text.trim());
     emit(
         tx,
-        json!({"type":"agent_version","key":key,"state":"running","title":title}),
+        Event::AgentVersion(AgentVersion {
+            key: key.to_owned(),
+            state: VersionState::Running {
+                title: Some(title.clone()),
+                conversation: None,
+                status: None,
+            },
+        }),
     );
-    let finish = |state: &str, proposal: Option<&str>, message: Option<&str>| {
+    let finish = |state: VersionState| {
         emit(
             tx,
-            json!({
-                "type": "agent_version", "key": key, "state": state,
-                "proposalId": proposal, "message": message,
+            Event::AgentVersion(AgentVersion {
+                key: key.to_owned(),
+                state,
             }),
         );
     };
@@ -2726,13 +2033,23 @@ fn run_version(
     let mut turn = match conversations::Turn::begin(&store, None, &title, None, tx) {
         Ok(turn) => turn,
         Err(err) => {
-            finish("failed", None, Some(&err));
+            finish(VersionState::Failed {
+                proposal_id: None,
+                message: Some(err),
+            });
             return;
         }
     };
     emit(
         tx,
-        json!({"type":"agent_version","key":key,"state":"running","conversation":turn.id()}),
+        Event::AgentVersion(AgentVersion {
+            key: key.to_owned(),
+            state: VersionState::Running {
+                title: None,
+                conversation: Some(turn.id().to_owned()),
+                status: None,
+            },
+        }),
     );
     let mut proposal: Option<String> = None;
     let mut stopped = false;
@@ -2746,7 +2063,14 @@ fn run_version(
             |event| match event {
                 AgentEvent::ToolCallStarted { name, .. } => emit(
                     tx,
-                    json!({"type":"agent_version","key":key,"state":"running","status":name}),
+                    Event::AgentVersion(AgentVersion {
+                        key: key.to_owned(),
+                        state: VersionState::Running {
+                            title: None,
+                            conversation: None,
+                            status: Some(name),
+                        },
+                    }),
                 ),
                 AgentEvent::ToolCallFinished {
                     name, ok, summary, ..
@@ -2787,9 +2111,18 @@ fn run_version(
         error(tx, format!("Kerf's reply was not kept: {err}"));
     }
     match result {
-        Err(err) => finish("failed", proposal.as_deref(), Some(&err)),
-        Ok(()) if stopped => finish("stopped", proposal.as_deref(), None),
-        Ok(()) => finish("done", proposal.as_deref(), None),
+        Err(err) => finish(VersionState::Failed {
+            proposal_id: proposal,
+            message: Some(err),
+        }),
+        Ok(()) if stopped => finish(VersionState::Stopped {
+            proposal_id: proposal,
+            message: None,
+        }),
+        Ok(()) => finish(VersionState::Done {
+            proposal_id: proposal,
+            message: None,
+        }),
     }
 }
 
@@ -2798,7 +2131,7 @@ fn agent_worker(
     binary: PathBuf,
     rx: Receiver<AgentRequest>,
     commands: SyncSender<Command>,
-    tx: SyncSender<Value>,
+    tx: SyncSender<Event>,
     shared: Arc<Shared>,
 ) {
     // A session for each conversation, kept beside it as each turn ends, so
@@ -2811,16 +2144,28 @@ fn agent_worker(
         if shared.closed.load(Ordering::Relaxed) {
             break;
         }
-        emit(&tx, json!({"type":"agent_busy","busy":true}));
-        emit(&tx, json!({"type":"agent_state","state":"running"}));
+        emit(&tx, Event::AgentBusy { busy: true });
+        emit(
+            &tx,
+            Event::AgentState {
+                state: AgentState::Running,
+                message: None,
+            },
+        );
         if request.versions > 0 {
             run_versions(&directory, &binary, &request, &tx, &commands, &shared);
             if let Ok(mut aborts) = shared.version_aborts.lock() {
                 aborts.clear();
             }
-            emit(&tx, json!({"type":"agent_state","state":"completed"}));
+            emit(
+                &tx,
+                Event::AgentState {
+                    state: AgentState::Completed,
+                    message: None,
+                },
+            );
             shared.agent_busy.store(false, Ordering::SeqCst);
-            emit(&tx, json!({"type":"agent_busy","busy":false}));
+            emit(&tx, Event::AgentBusy { busy: false });
             let _ = commands.send(Command::Refresh);
             continue;
         }
@@ -2923,10 +2268,20 @@ fn agent_worker(
         if let Err(err) = result {
             emit(
                 &tx,
-                json!({"type":"agent_state","state":"failed","message":err}),
+                Event::AgentState {
+                    state: AgentState::Failed,
+                    message: Some(err.clone()),
+                },
             );
             // Named as the turn's, so the editor clears it when the next turn starts.
-            emit(&tx, json!({"type":"error","command":"agent","message":err}));
+            emit(
+                &tx,
+                Event::Error(ErrorEvent {
+                    message: err,
+                    command: Some("agent".to_owned()),
+                    ..ErrorEvent::default()
+                }),
+            );
         }
         // What the session knows, kept for the next launch.
         let claude_session = conversation.as_deref().and_then(|id| sessions.kept(id));
@@ -2943,7 +2298,7 @@ fn agent_worker(
             *abort = None;
         }
         shared.agent_busy.store(false, Ordering::SeqCst);
-        emit(&tx, json!({"type":"agent_busy","busy":false}));
+        emit(&tx, Event::AgentBusy { busy: false });
         let _ = commands.send(Command::Refresh);
     }
 }
@@ -2955,7 +2310,7 @@ const RESTORED_FAILED: &str = "\u{0}restored: ";
 /// What a turn's events go to: the editor, the conversation that keeps the
 /// turn, and the tool calls under way, by id.
 struct TurnEvents<'a> {
-    tx: &'a SyncSender<Value>,
+    tx: &'a SyncSender<Event>,
     commands: &'a SyncSender<Command>,
     conversation: Option<String>,
     turn: Option<&'a mut conversations::Turn>,
@@ -2974,17 +2329,21 @@ impl TurnEvents<'_> {
             // How full Kerf's context is, for the composer's meter.
             AgentEvent::Context { used, limit } => emit(
                 tx,
-                json!({
-                    "type": "agent_context", "used": used, "limit": limit,
-                    "unit": unit, "conversation": self.conversation,
-                }),
+                Event::AgentContext {
+                    used,
+                    limit,
+                    unit: unit.to_owned(),
+                    conversation: self.conversation.clone(),
+                },
             ),
             AgentEvent::TextDelta(text) => {
-                emit(tx, json!({"type":"agent","kind":"delta","text":text}));
+                emit(tx, Event::Agent(AgentUpdate::Delta { text }));
             }
             AgentEvent::TurnStarted { .. } => emit(
                 tx,
-                json!({"type":"agent","kind":"status","text":"Planning next step…"}),
+                Event::Agent(AgentUpdate::Status {
+                    text: "Planning next step…".to_owned(),
+                }),
             ),
             // A tool call is one row of the work log: said as it starts, and
             // again in its place once it ends.
@@ -2996,7 +2355,12 @@ impl TurnEvents<'_> {
                 self.running.insert(id.clone(), targets);
                 emit(
                     tx,
-                    json!({"type":"agent","kind":"tool","id":id,"state":"running","text":text}),
+                    Event::Agent(AgentUpdate::Tool {
+                        id,
+                        state: ToolState::Running,
+                        text,
+                        rendered: None,
+                    }),
                 );
             }
             AgentEvent::ToolCallFinished {
@@ -3006,7 +2370,13 @@ impl TurnEvents<'_> {
                 summary,
             } => {
                 if summary.status.as_deref() == Some("awaiting_review") {
-                    emit(tx, json!({"type":"agent_state","state":"awaiting_review"}));
+                    emit(
+                        tx,
+                        Event::AgentState {
+                            state: AgentState::AwaitingReview,
+                            message: None,
+                        },
+                    );
                 }
                 // The proposal shows on the timeline as it grows.
                 if staged_proposal(&summary) {
@@ -3018,10 +2388,15 @@ impl TurnEvents<'_> {
                 let rendered = ok && steps::tool_name(&name) == "render" && summary.deliverable;
                 emit(
                     tx,
-                    json!({
-                        "type": "agent", "kind": "tool", "id": id,
-                        "state": if ok { "done" } else { "failed" },
-                        "text": text, "rendered": rendered,
+                    Event::Agent(AgentUpdate::Tool {
+                        id,
+                        state: if ok {
+                            ToolState::Done
+                        } else {
+                            ToolState::Failed
+                        },
+                        text: text.clone(),
+                        rendered: Some(rendered),
                     }),
                 );
                 if let Some(turn) = self.turn.as_deref_mut() {
@@ -3039,11 +2414,13 @@ impl TurnEvents<'_> {
                     };
                     emit(
                         tx,
-                        json!({
-                            "type": "agent_ask", "media": ask.media, "rolls": ask.rolls,
-                            "take": ask.take, "text": ask.text,
-                            "conversation": self.conversation,
-                        }),
+                        Event::AgentAsk {
+                            media: ask.media.clone(),
+                            rolls: ask.rolls,
+                            take: ask.take,
+                            text: ask.text.clone(),
+                            conversation: self.conversation.clone(),
+                        },
                     );
                     if let Some(turn) = self.turn.as_deref_mut() {
                         turn.ask(ask);
@@ -3054,14 +2431,25 @@ impl TurnEvents<'_> {
                 if let Some(turn) = self.turn.as_deref_mut() {
                     turn.done(&text);
                 }
-                emit(tx, json!({"type":"agent","kind":"done","text":text}));
+                emit(tx, Event::Agent(AgentUpdate::Done { text }));
             }
             AgentEvent::Aborted => {
                 if let Some(turn) = self.turn.as_deref_mut() {
                     turn.stopped();
                 }
-                emit(tx, json!({"type":"agent_state","state":"aborted"}));
-                emit(tx, json!({"type":"agent","kind":"status","text":"Stopped"}));
+                emit(
+                    tx,
+                    Event::AgentState {
+                        state: AgentState::Aborted,
+                        message: None,
+                    },
+                );
+                emit(
+                    tx,
+                    Event::Agent(AgentUpdate::Status {
+                        text: "Stopped".to_owned(),
+                    }),
+                );
             }
         }
     }
@@ -3087,7 +2475,13 @@ fn run_turn(
     }
     let unit = agent.context_unit();
     agent.run_with_events(&text, |event| events.hear(event, unit))?;
-    emit(events.tx, json!({"type":"agent_state","state":"completed"}));
+    emit(
+        events.tx,
+        Event::AgentState {
+            state: AgentState::Completed,
+            message: None,
+        },
+    );
     Ok(())
 }
 
@@ -3199,13 +2593,10 @@ impl Bridge {
         }
     }
 
-    /// Queue a command (see the crate docs for every command). `false` means it was refused:
-    /// it does not read as a command, cannot be taken as it is, or its bounded queue is full.
-    /// Show an error then; an edit is never dropped silently. Never blocks.
-    pub fn send(&mut self, command: &Value) -> bool {
-        let Ok(command) = Command::deserialize(command) else {
-            return false;
-        };
+    /// Queue a command (see [`Command`] for every command). `false` means it was refused: it
+    /// cannot be taken as it is, or its bounded queue is full. Show an error then; an edit is
+    /// never dropped silently. Never blocks.
+    pub fn send(&mut self, command: Command) -> bool {
         match command {
             Command::Seek { position, scrub } => {
                 if !position.is_finite() || position < 0.0 {
@@ -3388,9 +2779,9 @@ impl Bridge {
         }
     }
 
-    /// The next event (see the crate docs for every event), or `None` when none is waiting.
+    /// The next event (see [`Event`] for every event), or `None` when none is waiting.
     /// Never blocks.
-    pub fn poll(&mut self) -> Option<Value> {
+    pub fn poll(&mut self) -> Option<Event> {
         self.events.try_recv().ok()
     }
 
@@ -3798,9 +3189,9 @@ mod tests {
         assert!(shared.project.lock().unwrap().is_none());
     }
 
-    /// The next event, from a thread that may not have run yet.
-    fn next(rx: &mpsc::Receiver<serde_json::Value>) -> serde_json::Value {
-        rx.recv_timeout(Duration::from_secs(10)).unwrap()
+    /// The next event as JSON, from a thread that may not have run yet.
+    fn next(rx: &mpsc::Receiver<super::Event>) -> serde_json::Value {
+        serde_json::to_value(rx.recv_timeout(Duration::from_secs(10)).unwrap()).unwrap()
     }
 
     fn preview_request(proposal: &str) -> super::RenderRequest {

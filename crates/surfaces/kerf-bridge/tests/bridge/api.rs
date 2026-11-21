@@ -3,6 +3,7 @@
 //!
 //! Needs kerfd built beside this test: `cargo build -p kerf-runtime --bin kerfd`.
 
+use crate::{poll, send};
 use kerf_bridge::{serve_mcp, Bridge, SERVE_MCP};
 use serde_json::json;
 use std::fs;
@@ -54,16 +55,19 @@ fn what_is_no_command_or_cannot_be_taken_is_refused_and_the_rest_goes_on() {
         json!({"type": "agent", "text": "   "}),
         json!({"type": "agent_versions", "text": "Tighten the open", "count": 0}),
     ] {
-        assert!(!bridge.send(&refused), "took {refused}");
+        assert!(!send(&mut bridge, &refused), "took {refused}");
     }
-    assert!(bridge.send(&json!({"type": "refresh"})));
-    assert!(bridge.send(&json!({"type": "seek", "position": 0.5, "scrub": true})));
+    assert!(send(&mut bridge, &json!({"type": "refresh"})));
+    assert!(send(
+        &mut bridge,
+        &json!({"type": "seek", "position": 0.5, "scrub": true})
+    ));
 
     // The bridge still reaches kerfd.
     let deadline = Instant::now() + Duration::from_secs(20);
     let mut events = Vec::new();
     let state = loop {
-        if let Some(event) = bridge.poll() {
+        if let Some(event) = poll(&mut bridge) {
             if event["type"] == "state" {
                 break event;
             }
@@ -121,8 +125,11 @@ fn what_is_answered_at_once_never_holds_the_caller_while_the_events_wait() {
     std::thread::spawn(move || {
         let mut bridge = bridge;
         for _ in 0..300 {
-            bridge.send(&json!({"type": "models"}));
-            bridge.send(&json!({"type": "conversations", "action": "list"}));
+            send(&mut bridge, &json!({"type": "models"}));
+            send(
+                &mut bridge,
+                &json!({"type": "conversations", "action": "list"}),
+            );
         }
         let _ = done.send(bridge);
     });
@@ -133,7 +140,7 @@ fn what_is_answered_at_once_never_holds_the_caller_while_the_events_wait() {
     let mut models = 0;
     let deadline = Instant::now() + Duration::from_secs(60);
     while models < 300 && Instant::now() < deadline {
-        match bridge.poll() {
+        match poll(&mut bridge) {
             Some(event) if event["type"] == "models" => models += 1,
             Some(_) => {}
             None => std::thread::sleep(Duration::from_millis(5)),

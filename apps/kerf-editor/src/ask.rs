@@ -23,6 +23,7 @@
 
 use crate::icons::Icon;
 use crate::input::{InputEvent, TextInput};
+use crate::model::ClipShow;
 use crate::session::{AskScope, Session};
 use crate::theme::{self, motion as scene, text};
 use crate::ui;

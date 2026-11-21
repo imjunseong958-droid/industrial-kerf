@@ -1,7 +1,7 @@
 //! The sidebar: the project's conversations, their folders and search.
 
 use kerf_editor::commands::catalog;
-use kerf_editor::model::{Conversation, Proposal, Speaker, Turn};
+use kerf_editor::model::{Conversation, Proposal, Speaker, SummaryShow, Turn};
 use kerf_editor::prefs::Provider;
 use kerf_editor::sidebar;
 use kerf_editor::sidebar::{
@@ -419,7 +419,7 @@ proptest! {
             whole.to_string()
         };
         let read = conversation_summary(&text).map(|summary| {
-            (summary.id, summary.title, summary.created, summary.updated, summary.archived, summary.count)
+            (summary.id, summary.title, summary.created, summary.updated, summary.archived, summary.count as u32)
         });
         prop_assert_eq!(read, summary_as_read_whole(&text), "{}", text);
     }
@@ -427,7 +427,7 @@ proptest! {
 
 fn turn(kind: Speaker, error: bool, proposal: Option<&str>) -> Turn {
     Turn {
-        kind,
+        kind: kind.wire().into(),
         error,
         proposal: proposal.map(str::to_owned),
         ..Turn::default()

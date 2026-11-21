@@ -24,6 +24,7 @@ use gpui::{
     Context, ElementId, Entity, EventEmitter, FocusHandle, Focusable, FontWeight, KeyBinding,
     Keystroke, MouseButton, ScrollHandle, SharedString, Subscription, Task, Window,
 };
+use kerf_bridge::{Command, Event};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -171,7 +172,7 @@ pub struct SettingsView {
     /// A sign-in or out sent, its `cloud` answer awaited.
     signing: bool,
     /// The last `models` event: the person's models file and what it names.
-    models: Option<Value>,
+    models: Option<Event>,
     /// The project's `.kerf/mcp.json`, as edited here.
     servers: Entity<TextInput>,
     /// What loading or saving the servers came to, and whether it failed.
@@ -337,25 +338,25 @@ impl SettingsView {
         match page {
             Page::Account | Page::Chat => {
                 self.session
-                    .update(cx, |session, _| session.ask_bridge("cloud_refresh"));
+                    .update(cx, |session, _| session.ask_bridge(Command::CloudRefresh));
             }
             Page::Models => {
                 self.session
-                    .update(cx, |session, _| session.ask_bridge("models"));
+                    .update(cx, |session, _| session.ask_bridge(Command::Models));
             }
             Page::About => self.crashes = kerf_bridge::crash_reports(),
             Page::Appearance | Page::Shortcuts | Page::Mcp => {}
         }
     }
 
-    fn bridge_event(&mut self, event: &Value, cx: &mut Context<Self>) {
-        match event["type"].as_str() {
-            Some("cloud") => {
-                crate::app::hear_cloud(event, cx);
+    fn bridge_event(&mut self, event: &Event, cx: &mut Context<Self>) {
+        match event {
+            Event::Cloud { .. } => {
+                crate::app::hear_cloud(&serde_json::to_value(event).unwrap_or_default(), cx);
                 self.signing = false;
                 cx.notify();
             }
-            Some("models") => {
+            Event::Models { .. } => {
                 self.models = Some(event.clone());
                 cx.notify();
             }
@@ -608,7 +609,7 @@ impl SettingsView {
         });
         if provider == Provider::Cloud {
             self.session
-                .update(cx, |session, _| session.ask_bridge("cloud_refresh"));
+                .update(cx, |session, _| session.ask_bridge(Command::CloudRefresh));
         }
         cx.notify();
     }
@@ -811,25 +812,34 @@ impl SettingsView {
 
     fn reload_models(&mut self, cx: &mut Context<Self>) {
         self.session
-            .update(cx, |session, _| session.ask_bridge("models"));
+            .update(cx, |session, _| session.ask_bridge(Command::Models));
     }
 
     fn models_page(&self, cx: &Context<Self>) -> Vec<AnyElement> {
         let connected = self.session.read(cx).has_project();
-        let event = self.models.as_ref();
-        let file = event
-            .and_then(|event| event["file"].as_str())
+        // The person's models file, whether it is there, the models it names
+        // (each as `look` lists it), and why it does not read.
+        let heard = match &self.models {
+            Some(Event::Models {
+                file,
+                exists,
+                models,
+                error,
+            }) => Some((file.as_str(), *exists, models.as_slice(), error.as_deref())),
+            _ => None,
+        };
+        let file = heard
+            .map(|(file, ..)| file)
             .filter(|file| !file.is_empty())
             .map(PathBuf::from)
             .unwrap_or_else(models_file);
-        let exists = event
-            .and_then(|event| event["exists"].as_bool())
+        let exists = heard
+            .map(|(_, exists, ..)| exists)
             .unwrap_or_else(|| file.is_file());
-        let listed: Vec<Value> = event
-            .and_then(|event| event["models"].as_array())
-            .cloned()
+        let listed: Vec<Value> = heard
+            .map(|(_, _, models, _)| models.to_vec())
             .unwrap_or_default();
-        let error = event.and_then(|event| event["error"].as_str());
+        let error = heard.and_then(|(.., error)| error);
         let mut below: Vec<AnyElement> = Vec::new();
         let note: Option<(String, bool)> = if let Some(error) = error {
             Some((format!("The models file does not read: {error}"), true))
@@ -837,7 +847,7 @@ impl SettingsView {
             None
         } else if !connected {
             Some(("Models are read with a project open".to_owned(), false))
-        } else if event.is_none() {
+        } else if heard.is_none() {
             Some(("Reading…".to_owned(), false))
         } else if exists {
             Some(("Your models file names no model yet".to_owned(), false))

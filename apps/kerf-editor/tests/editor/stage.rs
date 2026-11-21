@@ -1,12 +1,15 @@
 //! The picture: the viewer and what is drawn over it, the transport, the picture tools, and where the compositor puts things.
 
+use crate::support::event;
 use gpui::{point, px, size, Bounds};
+use kerf_bridge::event::{Check, Finding};
+use kerf_bridge::Event;
 use kerf_editor::chat::ClipChange;
 use kerf_editor::focus::{
     crop_box, crop_props, ffmpeg_bin, first_cut, focus_ops, readable_frame, shown_time,
     track_region, typed_time, Region, NO_FRAME, TRACK_SIZE,
 };
-use kerf_editor::model::{Clip, Snapshot, Timeline};
+use kerf_editor::model::{Clip, Snapshot, SnapshotShow, Timeline};
 use kerf_editor::stage::overlay::{
     canvas_of, dragged, drawn, follow_point, mask_add, mask_names, mask_set, masks_of,
     new_mask_name, overlap_at, parent_motion, parse_path, path_holds, path_of, path_text,
@@ -51,9 +54,9 @@ fn the_render_preview_button_says_why_a_render_is_needed() {
     }
     // As the store keeps it from the bridge's event.
     let mut state = EditorState::default();
-    state.apply(
-        &json!({"type": "preview", "status": "required", "message": "Effects need a render"}),
-    );
+    state.apply(&event(
+        json!({"type": "preview", "status": "required", "message": "Effects need a render"}),
+    ));
     assert_eq!(
         state.preview.reason().as_deref(),
         Some("Effects need a render")
@@ -71,7 +74,7 @@ proptest! {
         status in prop::sample::select(vec!["running", "done", "stopped", "failed", "required", ""]),
         kind in prop::sample::select(vec!["preview", "state", "agent", "progress"]),
     ) {
-        let event = json!({"type": kind, "status": status, "proposalId": proposal});
+        let event = event(json!({"type": kind, "status": status, "proposalId": proposal}));
         let holds = render_stop_holds(Some(&stopped), &event);
         if kind != "preview" {
             prop_assert!(holds);
@@ -849,8 +852,11 @@ fn the_preview_card_says_what_renders() {
     assert_eq!(hud::percent(1.7), "100%");
 }
 
-fn check(findings: Value) -> Value {
-    json!({"type": "check", "status": "done", "findings": findings})
+fn check(findings: Value) -> Vec<Finding> {
+    match event(json!({"type": "check", "status": "done", "findings": findings})) {
+        Event::Check(Check::Done { findings, .. }) => findings,
+        other => panic!("{other:?} is not a finished check"),
+    }
 }
 
 #[test]
@@ -1775,7 +1781,7 @@ fn state(program_has_clips: bool, proposal_waits: bool) -> EditorState {
         snapshot["proposals"] = json!([{"proposalId": "p1", "status": "pending", "version": 1}]);
     }
     let mut state = EditorState::default();
-    state.apply(&json!({"type": "state", "snapshot": snapshot}));
+    state.apply(&event(json!({"type": "state", "snapshot": snapshot})));
     state
 }
 
@@ -1794,17 +1800,21 @@ fn a_proposal_waiting_over_a_program_leaves_the_picture_the_program_s() {
 fn a_proposal_s_preview_stands_in_while_it_renders_or_shows() {
     for status in ["running", "ready", "live"] {
         let mut shown = state(true, true);
-        shown.apply(&json!({"type": "preview", "status": status, "proposalId": "p1"}));
+        shown.apply(&event(
+            json!({"type": "preview", "status": status, "proposalId": "p1"}),
+        ));
         assert!(!shows_program(&shown, true), "{status}");
         // The program's own preview is the program.
         let mut own = state(true, false);
-        own.apply(&json!({"type": "preview", "status": status}));
+        own.apply(&event(json!({"type": "preview", "status": status})));
         assert!(shows_program(&own, true), "{status}, the program's");
     }
     // A render that ended unshown leaves the program.
     for status in ["stopped", "exited", "failed", "required"] {
         let mut ended = state(true, true);
-        ended.apply(&json!({"type": "preview", "status": status, "proposalId": "p1"}));
+        ended.apply(&event(
+            json!({"type": "preview", "status": status, "proposalId": "p1"}),
+        ));
         assert!(shows_program(&ended, true), "{status}");
     }
 }
@@ -1825,7 +1835,7 @@ proptest! {
             if of_proposal {
                 event["proposalId"] = json!("p1");
             }
-            state.apply(&event);
+            state.apply(&crate::support::event(event.clone()));
         }
         let cut = waits && !has_clips;
         let preview = !status.is_empty()
@@ -2151,7 +2161,9 @@ fn ffmpeg_is_looked_for_where_kerfd_looks() {
 
 #[test]
 fn the_cuts_render_coming_releases_the_poster_standing_in() {
-    let preview = |status: &str, proposal: &str| json!({"type": "preview", "status": status, "proposalId": proposal});
+    let preview = |status: &str, proposal: &str| {
+        event(json!({"type": "preview", "status": status, "proposalId": proposal}))
+    };
     assert!(!releases_cover(&preview("running", "p2"), Some("p2")));
     assert!(releases_cover(&preview("ready", "p2"), Some("p2")));
     assert!(releases_cover(&preview("failed", "p2"), Some("p2")));
@@ -2159,7 +2171,7 @@ fn the_cuts_render_coming_releases_the_poster_standing_in() {
     assert!(!releases_cover(&preview("ready", "p1"), Some("p2")));
     assert!(!releases_cover(&preview("ready", "p2"), None));
     assert!(!releases_cover(
-        &json!({"type": "render", "status": "complete", "proposalId": "p2"}),
+        &event(json!({"type": "render", "status": "complete", "proposalId": "p2"})),
         Some("p2")
     ));
 }

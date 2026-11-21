@@ -16,10 +16,10 @@
 //! project is kept as the next version of it.
 
 use crate::emit;
+use crate::event::{ErrorEvent, Event};
 use kerf_model::look::{self, Look, On};
 use kerf_model::{Catalog, Clip, Domain, Engine, FxKind, Interp, Param, ParamType, Project, Value};
 use kerf_runtime::EditOp;
-use serde_json::{json, Value as Json};
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::fs;
@@ -32,10 +32,14 @@ pub(crate) const LOOKS_DIR: &str = "presets/looks";
 const EXTENSION: &str = "kerflook";
 
 /// A refused look command: `error {command, message}`.
-pub(crate) fn refused(tx: &SyncSender<Json>, command: &str, message: &str) {
+pub(crate) fn refused(tx: &SyncSender<Event>, command: &str, message: &str) {
     emit(
         tx,
-        json!({"type": "error", "message": message, "command": command}),
+        Event::Error(ErrorEvent {
+            message: message.to_owned(),
+            command: Some(command.to_owned()),
+            ..ErrorEvent::default()
+        }),
     );
 }
 
@@ -256,15 +260,18 @@ pub(crate) fn save(
     clip: &str,
     name: &str,
     replace: bool,
-) -> Result<Json, String> {
+) -> Result<Event, String> {
     let found = find_clip(project, clip).ok_or_else(|| format!("no clip `{clip}`"))?;
     let saved = from_clip(found, name, Catalog::builtin())?;
     let relative = library_path(name)?;
     write(directory, &relative, &saved.text, replace)?;
-    Ok(
-        json!({"type": "look_saved", "path": relative, "id": saved.id, "version": 1,
-        "effects": saved.effects, "skipped": saved.skipped}),
-    )
+    Ok(Event::LookSaved {
+        path: relative,
+        id: saved.id,
+        version: 1,
+        effects: saved.effects,
+        skipped: saved.skipped,
+    })
 }
 
 /// `look_save` against the project kerfd has: `look_saved`, or `error
@@ -275,7 +282,7 @@ pub(crate) fn save_from(
     clip: &str,
     name: &str,
     replace: bool,
-    tx: &SyncSender<Json>,
+    tx: &SyncSender<Event>,
 ) -> Result<(), kerf_runtime::RuntimeError> {
     let (_, document) = client.get_document(false)?;
     let saved = kerf_runtime::parse_document(&document)
@@ -402,7 +409,7 @@ pub(crate) fn apply(
     project: &Project,
     clip: &str,
     path: &str,
-) -> Result<(Vec<EditOp>, Json), String> {
+) -> Result<(Vec<EditOp>, Event), String> {
     find_clip(project, clip).ok_or_else(|| format!("no clip `{clip}`"))?;
     let read = read_file(directory, path)?;
     let (fx, version) = keep(directory, read, Catalog::builtin())?;
@@ -414,7 +421,12 @@ pub(crate) fn apply(
     };
     Ok((
         vec![op],
-        json!({"type": "look_applied", "path": path, "clip": clip, "fx": fx, "version": version}),
+        Event::LookApplied {
+            path: path.to_owned(),
+            clip: clip.to_owned(),
+            fx,
+            version,
+        },
     ))
 }
 
@@ -439,7 +451,10 @@ mod tests {
     fn saving_writes_the_library_file_and_never_overwrites() {
         let directory = tempfile::tempdir().unwrap();
         let project = program();
-        let event = save(directory.path(), &project, "c1", "Harbor warm", false).unwrap();
+        let event = serde_json::to_value(
+            save(directory.path(), &project, "c1", "Harbor warm", false).unwrap(),
+        )
+        .unwrap();
         assert_eq!(event["type"], "look_saved");
         assert_eq!(event["path"], "presets/looks/Harbor warm.kerflook");
         assert_eq!(event["effects"], 2);

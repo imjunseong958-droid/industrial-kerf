@@ -1342,7 +1342,7 @@ fn the_toolbar_says_what_renders_queued_exports_too() {
     let job = |status: &str, quality: &str, name: &str, progress: f64| RenderJob {
         job_id: format!("{status}-{quality}"),
         name: name.into(),
-        quality: quality.into(),
+        quality: Some(quality.into()),
         status: status.into(),
         progress,
         ..RenderJob::default()
@@ -1819,7 +1819,7 @@ fn what_a_view_answers_in_place_stays_out_of_the_error_bar() {
 
 #[test]
 fn the_window_is_titled_by_its_project_and_a_sequence_named_otherwise() {
-    use kerf_editor::model::Timeline;
+    use kerf_editor::model::{Timeline, TimelineShow};
     use kerf_editor::workspace::window_title;
     let timeline = |name: &str| {
         Timeline::from_value(&serde_json::json!({

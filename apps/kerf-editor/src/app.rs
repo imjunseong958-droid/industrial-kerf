@@ -21,6 +21,7 @@ use gpui::{
     PromptHandle, PromptLevel, PromptResponse, RenderablePromptHandle, TitlebarOptions, WeakEntity,
     Window, WindowBounds, WindowHandle, WindowOptions,
 };
+use kerf_bridge::Event;
 use serde_json::Value;
 use std::cell::Cell;
 use std::path::{Path, PathBuf};
@@ -919,8 +920,8 @@ fn open_at(
         let session = Session::open(Some(project.clone()), kerfd, prefs, window, cx);
         // The account is the person's, whichever window heard of it.
         cx.subscribe(&session, |_, event: &BridgeEvent, cx| {
-            if event.0["type"] == "cloud" {
-                hear_cloud(&event.0, cx);
+            if let Event::Cloud { .. } = &event.0 {
+                hear_cloud(&serde_json::to_value(&event.0).unwrap_or_default(), cx);
             }
         })
         .detach();

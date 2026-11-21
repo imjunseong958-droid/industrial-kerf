@@ -3,7 +3,7 @@
 use crate::support::rect;
 use gpui::{point, px, size, Bounds};
 use kerf_editor::chat::{in_sight, over_composer, OVER_COMPOSER, OVER_COMPOSER_RISE};
-use kerf_editor::model::Timeline;
+use kerf_editor::model::{Timeline, TimelineShow};
 use kerf_editor::motion::{ease, shimmer_at, Tween};
 use kerf_editor::stage::{compare_at, pulse_level};
 use kerf_editor::theme::motion as scene;

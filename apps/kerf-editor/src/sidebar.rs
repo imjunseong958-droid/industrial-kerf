@@ -22,7 +22,7 @@
 use crate::commands::{OpenRecent, RunCommand};
 use crate::icons::Icon;
 use crate::input::{InputEvent, TextInput};
-use crate::model::{Conversation, ConversationSummary, Proposal, Speaker};
+use crate::model::{Conversation, ConversationSummary, Proposal, Speaker, SummaryShow, TurnShow};
 use crate::motion;
 use crate::prefs::{Keymap, Provider};
 use crate::session::{BridgeEvent, Session};
@@ -36,6 +36,7 @@ use gpui::{
     MouseDownEvent, MouseMoveEvent, MouseUpEvent, NoAction, Pixels, Point, SharedString, Stateful,
     Subscription, Task, Window,
 };
+use kerf_bridge::Event;
 use serde_json::Value;
 use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
@@ -113,7 +114,7 @@ pub fn row_state(
             .items
             .iter()
             .rev()
-            .find(|turn| turn.kind == Speaker::Kerf)
+            .find(|turn| turn.speaker() == Speaker::Kerf)
             .is_some_and(|turn| turn.error);
         if failed {
             return RowState::Failed;
@@ -597,7 +598,7 @@ pub fn conversation_summary(text: &str) -> Option<ConversationSummary> {
         created: text_of(&file.created),
         updated: text_of(&file.updated),
         archived: file.archived.as_bool().unwrap_or(false),
-        count: file.items.0,
+        count: file.items.0 as usize,
     })
 }
 
@@ -1557,8 +1558,8 @@ impl SidebarView {
             }),
             // Kerf's account, as the foot says it.
             cx.subscribe(&session, |_, _, event: &BridgeEvent, cx| {
-                if event.0["type"] == "cloud" {
-                    crate::app::hear_cloud(&event.0, cx);
+                if let Event::Cloud { .. } = &event.0 {
+                    crate::app::hear_cloud(&serde_json::to_value(&event.0).unwrap_or_default(), cx);
                     cx.notify();
                 }
             }),

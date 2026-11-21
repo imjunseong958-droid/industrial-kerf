@@ -3,11 +3,13 @@
 //! by every region of the window, so what kerfd says shows everywhere at
 //! once. Without a project (the launcher) there is no bridge.
 
-use crate::model::Timeline;
+use crate::model::{ClipShow, SourceShow, Timeline, TimelineShow};
 use crate::prefs::{Prefs, Provider};
 use crate::store::{Change, EditorState};
 use crate::theme::motion;
 use gpui::{App, AppContext, Context, Entity, EventEmitter, RenderImage, Task, Window};
+use kerf_bridge::event::{AgentUpdate, Export, ExportStatus, PreviewStatus};
+use kerf_bridge::{AgentSettings, ChatProvider, Command, ConversationsRequest, Event};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
@@ -319,7 +321,7 @@ impl EventEmitter<Change> for Session {}
 /// state of its own (a check's findings, a making's plan) rather than in
 /// [`EditorState`].
 #[derive(Clone, Debug)]
-pub struct BridgeEvent(pub Value);
+pub struct BridgeEvent(pub Event);
 
 impl EventEmitter<BridgeEvent> for Session {}
 
@@ -378,7 +380,7 @@ impl Session {
             // The render queue is asked for once kerfd is connected
             // (`drain`), never before: asked of a runtime that is not there
             // it would be refused, and the refusal left standing.
-            session.send(json!({"type": "conversations", "action": "list"}));
+            session.send(Command::Conversations(ConversationsRequest::List));
             session
         })
     }
@@ -409,8 +411,9 @@ impl Session {
         let frame = bridge.frame();
         let heard = !events.is_empty();
         for event in events {
-            if event["type"] != "clock" && event["type"] != "meter" {
-                log::debug!("bridge event: {}", truncate(&event.to_string(), 400));
+            if !matches!(event, Event::Clock { .. } | Event::Meter(_)) {
+                let json = serde_json::to_value(&event).unwrap_or_default();
+                log::debug!("bridge event: {}", truncate(&json.to_string(), 400));
             }
             let was_playing = self.state.playing;
             let change = self.state.apply(&event);
@@ -426,8 +429,8 @@ impl Session {
                 self.activity.push("project", "Project connected");
             }
             cx.emit(BridgeEvent(event.clone()));
-            if event["type"] == "preview" {
-                self.reel_follow_preview(&event);
+            if let Event::Preview(preview) = &event {
+                self.reel_follow_preview(preview.status, preview.proposal_id.as_deref());
             }
             match &change {
                 Change::Snapshot => {
@@ -439,8 +442,13 @@ impl Session {
                 Change::Preview => {
                     // A picture that needs a render shows none until it is
                     // rendered, as Qt cleared its viewer.
-                    if matches!(event["status"].as_str(), Some("required" | "unavailable")) {
-                        self.drop_picture(window, cx);
+                    if let Event::Preview(preview) = &event {
+                        if matches!(
+                            preview.status,
+                            PreviewStatus::Required | PreviewStatus::Unavailable
+                        ) {
+                            self.drop_picture(window, cx);
+                        }
                     }
                     self.cut_rendered();
                 }
@@ -449,14 +457,17 @@ impl Session {
                 {
                     // The jobs kerfd has, this window's or another's, finished
                     // ones among them (Finish's Deliver page, the toolbar).
-                    self.send(json!({"type": "render_queue"}));
+                    self.send(Command::RenderQueue);
                     // Live Sync as it was left for this project.
                     if self
                         .project
                         .as_ref()
                         .is_some_and(|project| self.prefs.live_sync.contains(project))
                     {
-                        self.send(json!({"type": "collab_live", "enabled": true}));
+                        self.send(Command::CollabLive {
+                            enabled: true,
+                            interval: None,
+                        });
                     }
                 }
                 // Gone, or only connecting: nothing plays, and the picture
@@ -464,7 +475,7 @@ impl Session {
                 Change::Connection => self.lose_picture(window, cx),
                 Change::Playback => self.follow_playing(was_playing),
                 Change::ViewerReset => self.viewer_reset(window, cx),
-                Change::Work if event["type"] == "agent_focus" => self.follow_kerf(),
+                Change::Work if matches!(event, Event::AgentFocus { .. }) => self.follow_kerf(),
                 Change::Clock => {
                     self.keep_to_marks();
                     self.reel_follow_playhead();
@@ -473,7 +484,7 @@ impl Session {
                     self.live_changes.clear();
                     // The conversation as it is kept now, with Kerf's answer.
                     if let Some(id) = self.conversation.clone() {
-                        self.send(json!({"type": "conversations", "action": "open", "id": id}));
+                        self.send(Command::Conversations(ConversationsRequest::Open { id }));
                     }
                 }
                 _ => {}
@@ -608,11 +619,11 @@ impl Session {
         if fresh.is_empty() {
             return;
         }
-        let mut request = json!({"type": "media_info"});
-        if let [only] = fresh.as_slice() {
-            request["media"] = json!(only);
-        }
-        if self.send(request) {
+        let media = match fresh.as_slice() {
+            [only] => Some(only.clone()),
+            _ => None,
+        };
+        if self.send(Command::MediaInfo { media }) {
             self.state.info_asked.extend(fresh);
         }
     }
@@ -629,14 +640,16 @@ impl Session {
         {
             return;
         }
-        if self.send(json!({"type": "media_index", "media": media})) {
+        if self.send(Command::MediaIndex {
+            media: media.to_owned(),
+        }) {
             self.state.index_asked.insert(media.to_owned());
         }
     }
 
     /// Media `id`'s readable name ([`crate::names`]).
     pub fn media_name(&self, id: &str) -> String {
-        self.timeline().media_name(id)
+        crate::model::TimelineShow::media_name(self.timeline(), id)
     }
 
     /// Follows `link` once the project is connected: seeks to its moment,
@@ -675,32 +688,49 @@ impl Session {
     /// playback and seeks) is not sent, as Qt's `sendSimple` sent nothing
     /// then ([`sent_unconnected`]): the window says it is disconnected
     /// once, and an edit refused for it would only say so again. False then.
-    pub fn send(&mut self, command: Value) -> bool {
-        let connected = self.connected();
+    pub fn send(&mut self, command: Command) -> bool {
+        if !self.may_send(command.kind()) {
+            return false;
+        }
+        let activity = activity_of_command(&command, self.timeline());
         let Some(bridge) = self.bridge.as_mut() else {
             return false;
         };
-        if !connected && !sent_unconnected(&command) {
+        let sent = bridge.send(command);
+        if !sent {
+            self.refused();
+        } else if let Some((kind, text)) = activity {
+            self.activity.push(kind, &text);
+        }
+        sent
+    }
+
+    /// Whether a command of `kind` goes now, as [`Session::send`] sends it:
+    /// with a bridge, and (unless it is one [`sent_unconnected`]) once kerfd
+    /// is connected. A seek or playback that goes takes the picture from the
+    /// pointer, and a pause ends Loop Playback's wrap.
+    fn may_send(&mut self, kind: &str) -> bool {
+        if self.bridge.is_none() || (!self.connected() && !sent_unconnected(kind)) {
             return false;
         }
         // A seek or playback from anywhere but the pointer takes the
         // picture from it ([`Session::skim`]).
-        if matches!(command["type"].as_str(), Some("seek" | "play" | "pause")) {
+        if matches!(kind, "seek" | "play" | "pause") {
             self.pointer = None;
         }
         // Paused from here: a stop that follows is not Loop Playback's to
         // play on from.
-        if command["type"] == "pause" {
+        if kind == "pause" {
             self.wrapped = false;
         }
-        let sent = bridge.send(&command);
-        if !sent {
-            self.state
-                .notify("Kerf is busy; that was not sent. Try again.", true);
-        } else if let Some((kind, text)) = activity_of_command(&command, self.timeline()) {
-            self.activity.push(kind, &text);
-        }
-        sent
+        true
+    }
+
+    /// The bridge would not take a command: the window says so. False.
+    fn refused(&mut self) -> bool {
+        self.state
+            .notify("Kerf is busy; that was not sent. Try again.", true);
+        false
     }
 
     pub fn has_project(&self) -> bool {
@@ -735,20 +765,27 @@ impl Session {
             .unwrap_or_else(|| "Industrial Kerf".into())
     }
 
-    /// Typed edits, in frames of the sequence.
+    /// Typed edits, in frames of the sequence, each written as JSON (an
+    /// [`kerf_bridge::EditOp`]): refused, as the bridge refused them, when
+    /// one does not read as an op.
     pub fn edit(&mut self, ops: Vec<Value>) -> bool {
         let revision = self.revision();
-        self.send(json!({"type": "edit", "ops": ops, "revision": revision}))
+        let ops: Result<Vec<kerf_bridge::EditOp>, _> =
+            ops.into_iter().map(serde_json::from_value).collect();
+        match ops {
+            Ok(ops) => self.send(Command::Edit { ops, revision }),
+            Err(_) => self.may_send("edit") && self.refused(),
+        }
     }
 
     pub fn undo(&mut self) {
         let revision = self.revision();
-        self.send(json!({"type": "undo", "revision": revision}));
+        self.send(Command::Undo { revision });
     }
 
     pub fn redo(&mut self) {
         let revision = self.revision();
-        self.send(json!({"type": "redo", "revision": revision}));
+        self.send(Command::Redo { revision });
     }
 
     /// Moves the playhead to `seconds`. `scrub`: the pointer is dragging
@@ -768,7 +805,11 @@ impl Session {
             return;
         }
         let pointed = self.pointer.is_some();
-        if self.send(json!({"type": "seek", "position": seconds, "scrub": false})) && pointed {
+        if self.send(Command::Seek {
+            position: seconds,
+            scrub: false,
+        }) && pointed
+        {
             self.pointer = Some(PointerSeek {
                 target: seconds,
                 settle: None,
@@ -800,7 +841,10 @@ impl Session {
     fn pointer_seek(&mut self, seconds: f64) {
         let shown = self.picture.as_ref().map(|picture| picture.time);
         let scrub = scrubs_from(shown, seconds, self.timeline().rate());
-        if self.send(json!({"type": "seek", "position": seconds, "scrub": scrub})) {
+        if self.send(Command::Seek {
+            position: seconds,
+            scrub,
+        }) {
             self.pointer = Some(PointerSeek {
                 target: seconds,
                 settle: scrub.then(|| Instant::now() + SCRUB_SETTLE),
@@ -817,7 +861,10 @@ impl Session {
         if pointer.settle.is_none_or(|at| Instant::now() < at) {
             return;
         }
-        let sent = self.send(json!({"type": "seek", "position": pointer.target, "scrub": false}));
+        let sent = self.send(Command::Seek {
+            position: pointer.target,
+            scrub: false,
+        });
         self.pointer = Some(PointerSeek {
             target: pointer.target,
             settle: if sent { None } else { pointer.settle },
@@ -831,14 +878,18 @@ impl Session {
     /// runs. True when it was sent.
     pub fn toggle_playback(&mut self) -> bool {
         match self.state.playback_toggle() {
-            Some(command) => self.send(json!({"type": command})),
+            Some("pause") => self.send(Command::Pause),
+            Some(_) => self.send(Command::Play),
             None => false,
         }
     }
 
     pub fn accept(&mut self, proposal: &str) {
         let revision = self.revision();
-        if self.send(json!({"type": "accept", "proposalId": proposal, "revision": revision})) {
+        if self.send(Command::Accept {
+            proposal_id: proposal.to_owned(),
+            revision,
+        }) {
             self.settled_here
                 .insert(proposal.to_owned(), Instant::now());
         }
@@ -846,7 +897,10 @@ impl Session {
 
     pub fn reject(&mut self, proposal: &str) {
         let revision = self.revision();
-        if self.send(json!({"type": "reject", "proposalId": proposal, "revision": revision})) {
+        if self.send(Command::Reject {
+            proposal_id: proposal.to_owned(),
+            revision,
+        }) {
             self.settled_here
                 .insert(proposal.to_owned(), Instant::now());
         }
@@ -865,7 +919,10 @@ impl Session {
 
     pub fn forward(&mut self, proposal: &str) {
         let revision = self.revision();
-        self.send(json!({"type": "forward", "proposalId": proposal, "revision": revision}));
+        self.send(Command::Forward {
+            proposal_id: proposal.to_owned(),
+            revision,
+        });
     }
 
     /// Renders the preview of `proposal` (any of its versions' ids), over
@@ -877,9 +934,10 @@ impl Session {
     }
 
     pub fn import(&mut self, path: &Path, media_only: bool) {
-        let sent = self.send(
-            json!({"type": "import", "path": path.to_string_lossy(), "mediaOnly": media_only}),
-        );
+        let sent = self.send(Command::Import {
+            path: path.to_string_lossy().into_owned(),
+            media_only,
+        });
         if sent {
             let name = path
                 .file_name()
@@ -919,7 +977,10 @@ impl Session {
     /// Turns Live Sync on or off for this project, and remembers it for the
     /// next time the project opens.
     pub fn set_live_sync(&mut self, on: bool) {
-        self.send(json!({"type": "collab_live", "enabled": on}));
+        self.send(Command::CollabLive {
+            enabled: on,
+            interval: None,
+        });
         if let Some(project) = self.project.clone() {
             self.prefs.live_sync.retain(|known| known != &project);
             if on {
@@ -930,7 +991,9 @@ impl Session {
     }
 
     pub fn cancel_export(&mut self, job: &str) {
-        self.send(json!({"type": "export_cancel", "jobId": job}));
+        self.send(Command::ExportCancel {
+            job_id: job.to_owned(),
+        });
     }
 
     /// Opens a conversation kept beside the project; None starts a new one.
@@ -938,7 +1001,7 @@ impl Session {
         self.state.choose(id.clone());
         self.conversation = id.clone();
         if let Some(id) = id {
-            self.send(json!({"type": "conversations", "action": "open", "id": id}));
+            self.send(Command::Conversations(ConversationsRequest::Open { id }));
         }
     }
 
@@ -949,7 +1012,7 @@ impl Session {
         let sent = self
             .bridge
             .as_mut()
-            .is_some_and(|bridge| bridge.send(&json!({"type": "reconnect"})));
+            .is_some_and(|bridge| bridge.send(Command::Reconnect));
         self.state.connection = if sent {
             crate::store::Connection::Connecting
         } else {
@@ -991,7 +1054,10 @@ impl Session {
         }
         let at = at.min(length);
         self.state.position = at;
-        self.send(json!({"type": "seek", "position": at, "scrub": false}));
+        self.send(Command::Seek {
+            position: at,
+            scrub: false,
+        });
     }
 
     /// The open proposal the window's keys act on (the pinned card's), else
@@ -1157,9 +1223,9 @@ impl Session {
         let Some(reel) = self.reel.take() else {
             return;
         };
-        self.send(json!({"type": "pause"}));
+        self.send(Command::Pause);
         if reel.previewing {
-            self.send(json!({"type": "preview_exit"}));
+            self.send(Command::PreviewExit);
         }
         let cut = self.first_cut_id();
         self.cut.reel_ended(cut.as_deref(), Instant::now());
@@ -1204,8 +1270,8 @@ impl Session {
                 reel.previewing = false;
                 reel.rendered = false;
                 reel.waiting = true;
-                self.send(json!({"type": "pause"}));
-                self.send(json!({"type": "preview_exit"}));
+                self.send(Command::Pause);
+                self.send(Command::PreviewExit);
                 return;
             }
             self.reel_enter();
@@ -1233,10 +1299,12 @@ impl Session {
         reel.waiting = true;
         let (start, end) = reel.rendered_span;
         let proposal = reel.proposal.clone();
-        self.send(json!({"type": "pause"}));
-        let asked = self.send(json!({
-            "type": "preview", "proposalId": proposal, "start": start, "duration": end - start,
-        }));
+        self.send(Command::Pause);
+        let asked = self.send(Command::Preview {
+            proposal_id: Some(proposal),
+            start: Some(start),
+            duration: Some(end - start),
+        });
         if !asked {
             self.reel_stop();
         }
@@ -1262,9 +1330,12 @@ impl Session {
         }
         let at = at.clamp(0.0, limit);
         self.state.position = at;
-        self.send(json!({"type": "seek", "position": at, "scrub": false}));
+        self.send(Command::Seek {
+            position: at,
+            scrub: false,
+        });
         if after {
-            self.send(json!({"type": "play"}));
+            self.send(Command::Play);
         }
     }
 
@@ -1281,7 +1352,7 @@ impl Session {
         }
         match wait {
             ReelWait::Play => {
-                self.send(json!({"type": "play"}));
+                self.send(Command::Play);
             }
             ReelWait::Enter => {
                 if self.reel.as_ref().is_some_and(|reel| reel.waiting) {
@@ -1295,17 +1366,14 @@ impl Session {
     /// The bridge's `preview` events: a render ready starts the segment,
     /// the program reopened starts the Before side, one gone or failed
     /// ends the reel.
-    fn reel_follow_preview(&mut self, event: &Value) {
+    fn reel_follow_preview(&mut self, status: PreviewStatus, proposal: Option<&str>) {
         let Some(reel) = self.reel.as_mut() else {
             return;
         };
-        let status = event["status"].as_str().unwrap_or_default();
-        let named = event["proposalId"]
-            .as_str()
-            .is_some_and(|id| !id.is_empty());
+        let named = proposal.is_some_and(|id| !id.is_empty());
         match status {
-            "running" => {}
-            "ready" | "live" => {
+            PreviewStatus::Running => {}
+            PreviewStatus::Ready | PreviewStatus::Live => {
                 if reel.side == ReelSide::After && reel.waiting && named {
                     reel.previewing = true;
                     reel.rendered = true;
@@ -1314,7 +1382,7 @@ impl Session {
                     self.reel_enter();
                 }
             }
-            "exited" => {
+            PreviewStatus::Exited => {
                 // Exit preview, from outside: watching a preview that is gone ends.
                 if reel.side == ReelSide::After && !reel.waiting {
                     reel.previewing = false;
@@ -1327,7 +1395,7 @@ impl Session {
                     reel.due = Some((Instant::now() + REEL_PROGRAM_WAIT, ReelWait::Enter));
                 }
             }
-            "failed" | "stopped" => self.reel_stop(),
+            PreviewStatus::Failed | PreviewStatus::Stopped => self.reel_stop(),
             _ => {}
         }
     }
@@ -1344,7 +1412,7 @@ impl Session {
         }
         if reel.index + 1 >= reel.segments.len() {
             reel.finished = true;
-            self.send(json!({"type": "pause"}));
+            self.send(Command::Pause);
             return;
         }
         reel.index += 1;
@@ -1423,32 +1491,38 @@ impl Session {
         if let Some(start) = span.stopped(self.state.position) {
             self.wrapped = true;
             self.seek(start, false);
-            self.send(json!({"type": "play"}));
+            self.send(Command::Play);
         } else if self.wrapped && span.just_wrapped(self.state.position) {
             // kerfd's last clock at the end came just before it stopped
             // there, and has sent the playhead back already: play on from
             // there. A pause sent from here clears `wrapped` first.
-            self.send(json!({"type": "play"}));
+            self.send(Command::Play);
         }
     }
 
     /// Archives conversation `id` (or brings it back). The one open stays
     /// open, as Qt's did: its menu then offers Unarchive.
     pub fn archive_conversation(&mut self, id: &str, archived: bool) {
-        self.send(
-            json!({"type": "conversations", "action": "archive", "id": id, "archived": archived}),
-        );
+        self.send(Command::Conversations(ConversationsRequest::Archive {
+            id: id.to_owned(),
+            archived,
+        }));
     }
 
     pub fn delete_conversation(&mut self, id: &str) {
-        self.send(json!({"type": "conversations", "action": "delete", "id": id}));
+        self.send(Command::Conversations(ConversationsRequest::Delete {
+            id: id.to_owned(),
+        }));
         if self.conversation.as_deref() == Some(id) {
             self.open_conversation(None);
         }
     }
 
     pub fn rename_conversation(&mut self, id: &str, title: &str) {
-        self.send(json!({"type": "conversations", "action": "rename", "id": id, "title": title}));
+        self.send(Command::Conversations(ConversationsRequest::Rename {
+            id: id.to_owned(),
+            title: title.to_owned(),
+        }));
     }
 
     /// The kerfd this window was started with; None finds one as at launch.
@@ -1535,22 +1609,19 @@ impl Session {
         }
         // What another window chose since, as the person last left it.
         self.prefs.refresh();
-        let mut command = json!({
-            "type": "agent",
-            "text": text,
-            "permissions": self.prefs.permissions.wire(),
-        });
-        let settings = self.agent_settings();
-        if let (Some(command), Value::Object(settings)) = (command.as_object_mut(), settings) {
-            command.extend(settings);
-        }
-        if let Some(conversation) = &self.conversation {
-            command["conversation"] = json!(conversation);
-        }
-        if let Some(at) = stamp.filter(|at| at.is_finite()) {
-            command["at"] = json!(at);
-        }
-        command["focus"] = focus.clone();
+        // The focus as written ([`ask_focus`]); one that does not read as a
+        // focus is refused, as the bridge refused it.
+        let Ok(read) = serde_json::from_value::<Option<kerf_bridge::Focus>>(focus.clone()) else {
+            return self.may_send("agent") && self.refused();
+        };
+        let command = Command::Agent {
+            text: text.to_owned(),
+            focus: read,
+            conversation: self.conversation.clone(),
+            at: stamp.filter(|at| at.is_finite()),
+            permissions: Some(self.prefs.permissions.wire().to_owned()),
+            settings: self.agent_settings(),
+        };
         let sent = self.send(command);
         if sent {
             self.asked.remember(
@@ -1578,7 +1649,7 @@ impl Session {
     }
 
     pub fn stop(&mut self) {
-        self.send(json!({"type": "abort"}));
+        self.send(Command::Abort);
     }
 
     /// What the command registry needs to know to say what is available
@@ -1666,12 +1737,23 @@ impl Session {
         let invocation =
             json!({"command": id, "context": self.command_context(), "params": params});
         let answer = kerf_bridge::commands_run(&invocation);
+        // The registry writes its request as JSON; one that does not read
+        // as a command is refused, as the bridge refused it.
         if let Some(request) = answer.get("request").filter(|request| request.is_object()) {
-            let sent = self.send(request.clone());
-            if sent && request["type"] == "preview" {
-                self.activity.push("preview", "Rendering preview");
+            match serde_json::from_value::<Command>(request.clone()) {
+                Ok(command) => {
+                    let preview = matches!(command, Command::Preview { .. });
+                    let sent = self.send(command);
+                    if sent && preview {
+                        self.activity.push("preview", "Rendering preview");
+                    }
+                    sent
+                }
+                Err(_) => {
+                    let kind = request["type"].as_str().unwrap_or_default();
+                    self.may_send(kind) && self.refused()
+                }
             }
-            sent
         } else {
             if let Some(error) = answer["error"].as_str() {
                 self.state.notify(error, true);
@@ -1764,31 +1846,37 @@ impl Session {
     /// hosted model (`cloud`), Claude Code and its model, or a provider
     /// with its key, model, base URL and (OpenAI) API shape. The MCP
     /// servers' switch and how many times their file was saved go with each.
-    pub fn agent_settings(&self) -> Value {
+    pub fn agent_settings(&self) -> AgentSettings {
         let prefs = &self.prefs;
         let provider = prefs.provider;
-        let mut settings = json!({
-            "mcpEnabled": prefs.mcp_enabled,
-            "mcpConfigVersion": prefs.mcp_config_version,
+        let mut settings = AgentSettings {
+            mcp_enabled: prefs.mcp_enabled,
+            mcp_config_version: prefs.mcp_config_version,
+            ..AgentSettings::default()
+        };
+        settings.provider = Some(match provider {
+            Provider::Cloud => {
+                // The service picks the model.
+                settings.cloud = true;
+                return settings;
+            }
+            Provider::Anthropic => ChatProvider::Anthropic,
+            Provider::Openai => ChatProvider::Openai,
+            Provider::ClaudeCode => ChatProvider::ClaudeCode,
         });
-        if provider == Provider::Cloud {
-            // The service picks the model.
-            settings["cloud"] = json!(true);
-            return settings;
-        }
-        settings["provider"] = json!(provider.wire());
         if !prefs.model().is_empty() {
-            settings["model"] = json!(prefs.model());
+            settings.model = Some(prefs.model().to_owned());
         }
         if !prefs.base_url().is_empty() {
-            settings["baseUrl"] = json!(prefs.base_url());
+            settings.base_url = Some(prefs.base_url().to_owned());
         }
         if provider == Provider::Openai {
-            settings["apiMode"] = json!(prefs.openai_api_mode.wire());
+            settings.api_mode = Some(match prefs.openai_api_mode {
+                crate::prefs::ApiMode::Chat => kerf_bridge::OpenAiApiMode::Chat,
+                crate::prefs::ApiMode::Responses => kerf_bridge::OpenAiApiMode::Responses,
+            });
         }
-        if let Some(key) = self.api_key(provider) {
-            settings["apiKey"] = json!(key);
-        }
+        settings.api_key = self.api_key(provider);
         settings
     }
 
@@ -1822,10 +1910,10 @@ impl Session {
     }
 
     /// Asks the bridge for what has to be known again: Kerf's account
-    /// (`cloud_refresh`), the person's models (`models`). False without a
-    /// project.
-    pub fn ask_bridge(&mut self, kind: &str) -> bool {
-        self.bridge.is_some() && self.send(json!({"type": kind}))
+    /// ([`Command::CloudRefresh`]), the person's models
+    /// ([`Command::Models`]). False without a project.
+    pub fn ask_bridge(&mut self, command: Command) -> bool {
+        self.bridge.is_some() && self.send(command)
     }
 
     /// Signs in to Kerf with `token` (`cloud_sign_in`), or out with None
@@ -1835,8 +1923,10 @@ impl Session {
             return false;
         }
         match token.map(str::trim).filter(|token| !token.is_empty()) {
-            Some(token) => self.send(json!({"type": "cloud_sign_in", "token": token})),
-            None => self.send(json!({"type": "cloud_sign_out"})),
+            Some(token) => self.send(Command::CloudSignIn {
+                token: token.to_owned(),
+            }),
+            None => self.send(Command::CloudSignOut),
         }
     }
 
@@ -1987,8 +2077,7 @@ pub fn nearer_frame(shown: Option<f64>, frame: f64, target: f64, fps: f64) -> bo
 /// composer says whether it can ask). Edits, renders and the rest of what
 /// kerfd answers, and playback and seeks, wait for it: Qt's `sendSimple`
 /// sent nothing but Reconnect and Stop.
-pub fn sent_unconnected(command: &Value) -> bool {
-    let kind = command["type"].as_str().unwrap_or_default();
+pub fn sent_unconnected(kind: &str) -> bool {
     kind.starts_with("collab_")
         || kind.starts_with("cloud_")
         || matches!(
@@ -2159,12 +2248,14 @@ pub fn preview_span(program: &Timeline, proposed: &Timeline) -> Option<(f64, f64
 /// measured on the timeline of the version named when kerfd drew it, else
 /// of the proposal's newest version that has one; the whole of it when
 /// none is known, or nothing it changes lies within the proposal.
-pub fn preview_request(snapshot: &crate::model::Snapshot, proposal: Option<&str>) -> Value {
-    let mut command = json!({"type": "preview"});
+pub fn preview_request(snapshot: &crate::model::Snapshot, proposal: Option<&str>) -> Command {
     let Some(id) = proposal else {
-        return command;
+        return Command::Preview {
+            proposal_id: None,
+            start: None,
+            duration: None,
+        };
     };
-    command["proposalId"] = json!(id);
     let named = snapshot.proposals.iter().find(|known| {
         known.proposal_id == id
             || known
@@ -2181,13 +2272,12 @@ pub fn preview_request(snapshot: &crate::model::Snapshot, proposal: Option<&str>
                 .find_map(|version| snapshot.proposal_timelines.get(&version.proposal_id))
         })
     });
-    if let Some((start, duration)) =
-        proposed.and_then(|proposed| preview_span(&snapshot.timeline, proposed))
-    {
-        command["start"] = json!(start);
-        command["duration"] = json!(duration);
+    let span = proposed.and_then(|proposed| preview_span(&snapshot.timeline, proposed));
+    Command::Preview {
+        proposal_id: Some(id.to_owned()),
+        start: span.map(|(start, _)| start),
+        duration: span.map(|(_, duration)| duration),
     }
-    command
 }
 
 /// "Cutting · 3 clips": what a first cut's turn says as clips are placed.
@@ -2258,25 +2348,26 @@ pub fn proposal_context(proposal: &crate::model::Proposal) -> Value {
 /// named after its folder: `<folder>_master`, `<folder>_draft`. Another
 /// quality (`full`, `preview`), or a project with no folder name, goes
 /// where kerfd puts it, under its own name.
-pub fn export_request(project: Option<&Path>, quality: &str) -> Value {
+pub fn export_request(project: Option<&Path>, quality: &str) -> Command {
     let folder = project
         .and_then(Path::file_name)
         .map(|name| name.to_string_lossy().into_owned())
         .filter(|name| !name.trim().is_empty());
-    let mut command = json!({"type": "export", "quality": quality});
-    if quality == "review" {
-        command["codec"] = json!("h264");
-    }
+    let mut request = kerf_bridge::ExportRequest {
+        quality: quality.to_owned(),
+        codec: (quality == "review").then(|| "h264".to_owned()),
+        ..kerf_bridge::ExportRequest::default()
+    };
     if let (Some(folder), true) = (folder, matches!(quality, "master" | "review")) {
         let suffix = if quality == "master" {
             "master"
         } else {
             "draft"
         };
-        command["output"] = json!(DELIVERIES);
-        command["name"] = json!(format!("{folder}_{suffix}"));
+        request.output = Some(DELIVERIES.to_owned());
+        request.name = Some(format!("{folder}_{suffix}"));
     }
-    command
+    Command::Export(request)
 }
 
 /// How many lines Activity keeps, and how many it shows.
@@ -2328,59 +2419,82 @@ impl ActivityLog {
 /// unavailable", as Qt kept it), and what Kerf did: each tool call that
 /// ended, each status line, any other note (at most 120 characters of
 /// each).
-pub fn activity_of(event: &Value) -> Option<(&'static str, String)> {
-    match event["type"].as_str()? {
-        "agent" => {
-            let text: String = event["text"]
-                .as_str()
-                .unwrap_or_default()
-                .trim()
-                .chars()
-                .take(120)
-                .collect();
+pub fn activity_of(event: &Event) -> Option<(&'static str, String)> {
+    match event {
+        Event::Agent(update) => {
+            let (kind, text) = match update {
+                AgentUpdate::Delta { text } => ("delta", text),
+                AgentUpdate::Status { text } => ("status", text),
+                AgentUpdate::Tool { text, .. } => ("tool", text),
+                AgentUpdate::Done { text } => ("done", text),
+                AgentUpdate::Other { kind, text } => (kind.as_str(), text),
+            };
+            let text: String = text.trim().chars().take(120).collect();
             if text.is_empty() {
                 return None;
             }
-            match event["kind"].as_str().unwrap_or("agent") {
-                "delta" | "done" => None,
-                "tool" if event["state"].as_str() == Some("running") => None,
-                "tool" => Some(("tool", text)),
-                "status" => Some(("status", text)),
+            match (kind, update) {
+                ("delta" | "done", _) => None,
+                (
+                    "tool",
+                    AgentUpdate::Tool {
+                        state: kerf_bridge::event::ToolState::Running,
+                        ..
+                    },
+                ) => None,
+                ("tool", _) => Some(("tool", text)),
+                ("status", _) => Some(("status", text)),
                 _ => Some(("agent", text)),
             }
         }
-        "export" => {
-            let status = event["status"].as_str().unwrap_or_default();
-            let path = event["path"].as_str().unwrap_or_default();
+        Event::Export(export) => {
+            let (status, path, message) = match export {
+                Export::Render(render) => (
+                    render.status,
+                    render.path.as_deref(),
+                    render.message.as_deref(),
+                ),
+                Export::Captions(captions) => (
+                    captions.status,
+                    captions.path.as_deref(),
+                    captions.message.as_deref(),
+                ),
+            };
+            let path = path.unwrap_or_default();
             match status {
-                "completed" | "complete" | "ready" if !path.is_empty() => {
-                    Some(("export", path.to_owned()))
-                }
-                "failed" => Some((
+                ExportStatus::Completed if !path.is_empty() => Some(("export", path.to_owned())),
+                ExportStatus::Failed => Some((
                     "export",
                     format!(
                         "Export failed: {}",
-                        event["message"].as_str().unwrap_or("it could not render")
+                        message.unwrap_or("it could not render")
                     ),
                 )),
-                "cancelled" | "canceled" => Some(("export", "Export cancelled".to_owned())),
+                ExportStatus::Cancelled => Some(("export", "Export cancelled".to_owned())),
                 _ => None,
             }
         }
-        "analysis" => event["message"]
-            .as_str()
+        Event::Analysis { message } => Some(message.as_str())
             .filter(|message| !message.trim().is_empty())
             .map(|message| ("analysis", message.to_owned())),
         // A render that failed says why next (`required`, with the
         // bridge's reason), which is the line kept, as Qt kept it.
-        "preview" if event["status"] == "unavailable" || event["status"] == "required" => Some((
-            "preview",
-            event["message"]
-                .as_str()
-                .filter(|message| !message.trim().is_empty())
-                .unwrap_or("Native preview unavailable")
-                .to_owned(),
-        )),
+        Event::Preview(preview)
+            if matches!(
+                preview.status,
+                PreviewStatus::Unavailable | PreviewStatus::Required
+            ) =>
+        {
+            Some((
+                "preview",
+                preview
+                    .message
+                    .as_deref()
+                    .filter(|message| !message.trim().is_empty())
+                    .unwrap_or("Native preview unavailable")
+                    .to_owned(),
+            ))
+        }
         _ => None,
     }
 }
@@ -2389,16 +2503,22 @@ pub fn activity_of(event: &Value) -> Option<(&'static str, String)> {
 /// yes to ("Making m4 from its steps in the document", "Making 3 takes of
 /// m4 …"), steps carried into the document, a take chosen ("Using take 1
 /// of m5"), a file put behind a media ("Replacing m2 with b.mov").
-pub fn activity_of_command(command: &Value, timeline: &Timeline) -> Option<(&'static str, String)> {
-    let media = command["media"].as_str().unwrap_or_default();
-    let source = timeline.source(media);
-    match command["type"].as_str()? {
-        "media_make" if command["confirmed"] == true => {
-            let from = source
+pub fn activity_of_command(
+    command: &Command,
+    timeline: &Timeline,
+) -> Option<(&'static str, String)> {
+    match command {
+        Command::MediaMake {
+            media,
+            confirmed: true,
+            rolls,
+        } => {
+            let from = timeline
+                .source(media)
                 .filter(|source| source.steps_in_document())
                 .map(|_| " from its steps in the document")
                 .unwrap_or_default();
-            let rolls = command["rolls"].as_u64().unwrap_or(1);
+            let rolls = rolls.unwrap_or(1);
             Some((
                 "import",
                 if rolls > 1 {
@@ -2408,17 +2528,19 @@ pub fn activity_of_command(command: &Value, timeline: &Timeline) -> Option<(&'st
                 },
             ))
         }
-        "media_carry" if command["confirmed"] == true => Some((
+        Command::MediaCarry {
+            media,
+            confirmed: true,
+        } => Some((
             "import",
             format!("Carrying the steps of {media} into the document"),
         )),
-        "media_replace" => {
-            let path = command["path"].as_str().unwrap_or_default();
-            let take = source.and_then(|source| {
+        Command::MediaReplace { media, path } => {
+            let take = timeline.source(media).and_then(|source| {
                 source
                     .takes
                     .iter()
-                    .find(|take| !take.path.is_empty() && take.path == path)
+                    .find(|take| !take.path.is_empty() && take.path == *path)
             });
             Some((
                 "import",

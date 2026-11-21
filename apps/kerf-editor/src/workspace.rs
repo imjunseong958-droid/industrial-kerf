@@ -24,6 +24,7 @@ use crate::export::{ExportEvent, ExportView, Quality};
 use crate::icons::Icon;
 use crate::input::{InputEvent, TextInput};
 use crate::media::MediaBand;
+use crate::model::{RenderJobShow, SummaryShow};
 use crate::motion::{self, Tween};
 use crate::session::{BridgeEvent, Session};
 use crate::settings::{Page, SettingsEvent, SettingsView};
@@ -40,6 +41,8 @@ use gpui::{
     RenderImage, Rgba, ScrollWheelEvent, SharedString, Stateful, Subscription, Window,
     WindowBounds,
 };
+use kerf_bridge::event::{AgentState, AgentUpdate, ConnectionStatus, Export, ExportStatus};
+use kerf_bridge::{Command, ConversationsRequest, Event};
 use std::cell::Cell;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -795,28 +798,30 @@ impl Workspace {
 
     /// Keeps the last error in its bar (what a view answers in place
     /// stays there); a failed turn's goes when the next turn starts.
-    fn bridge_event(&mut self, event: &serde_json::Value, cx: &mut Context<Self>) {
-        match event["type"].as_str().unwrap_or_default() {
+    fn bridge_event(&mut self, event: &Event, cx: &mut Context<Self>) {
+        match event {
             // The cut itself was rendered in this turn (not a range, a
             // draft or a proposal): it goes home when the turn ends.
-            "agent" if event["kind"] == "tool" && event["rendered"].as_bool() == Some(true) => {
+            Event::Agent(AgentUpdate::Tool {
+                rendered: Some(true),
+                ..
+            }) => {
                 self.turn_rendered = true;
             }
             // When the project was last edited, for the title's tooltip.
-            "state" => {
-                self.revision_time = event["snapshot"]["revisionTime"]
-                    .as_str()
+            Event::State { snapshot } => {
+                self.revision_time = snapshot
+                    .revision_time
+                    .as_deref()
                     .and_then(sidebar::parse_time);
             }
-            "error" => {
-                let command = event["command"].as_str().unwrap_or_default();
+            Event::Error(error) => {
+                let command = error.command.as_deref().unwrap_or_default();
                 if !kept_in_bar(command) {
                     return;
                 }
-                let raw = event["message"]
-                    .as_str()
-                    .unwrap_or("Something went wrong")
-                    .to_owned();
+                // As the store said it: a message left out reads as empty.
+                let raw = error.message.clone();
                 // Saving over a preset of that name: the Save dialog asks
                 // about it itself (the store kept the question).
                 if crate::presets::existing_preset(&raw).is_some()
@@ -852,8 +857,7 @@ impl Workspace {
                             notice.text = conversation_error(&raw);
                             notice.hold = Some(scene::NOTICE_HOLD);
                         }
-                        session
-                            .send(serde_json::json!({"type": "conversations", "action": "list"}));
+                        session.send(Command::Conversations(ConversationsRequest::List));
                         cx.notify();
                     });
                 }
@@ -888,42 +892,46 @@ impl Workspace {
             }
             // Connected again: what was refused while kerfd could not be
             // reached is not said over the new connection.
-            "connection"
-                if event["status"] == "ready"
-                    && self
-                        .error
-                        .as_ref()
-                        .is_some_and(|error| error.raw == DISCONNECTED) =>
+            Event::Connection {
+                status: ConnectionStatus::Ready,
+                ..
+            } if self
+                .error
+                .as_ref()
+                .is_some_and(|error| error.raw == DISCONNECTED) =>
             {
                 self.error = None;
                 cx.notify();
             }
-            "agent_state"
-                if event["state"] == "running"
-                    && self.error.as_ref().is_some_and(|error| error.from_agent) =>
-            {
+            Event::AgentState {
+                state: AgentState::Running,
+                ..
+            } if self.error.as_ref().is_some_and(|error| error.from_agent) => {
                 self.error = None;
                 cx.notify();
             }
             // A render this window queued is answered here first; once it
             // is done, a frame of the picture goes home to the project.
-            "export" => {
-                let Some(job) = event["jobId"].as_str() else {
+            // A captions file is no render, and names no job.
+            Event::Export(Export::Render(render)) => {
+                // A job id left out reads as empty: no job then.
+                let job = render.job_id.as_str();
+                if job.is_empty() {
                     return;
-                };
-                match event["status"].as_str().unwrap_or_default() {
-                    "queued" => {
+                }
+                match render.status {
+                    ExportStatus::Queued => {
                         self.queued_here.insert(job.to_owned());
                     }
-                    "completed" | "complete" | "ready" => {
-                        if self.queued_here.remove(job) && event["kind"] != "captions" {
+                    ExportStatus::Completed => {
+                        if self.queued_here.remove(job) {
                             self.fly_export_home(cx);
                         }
                     }
-                    "failed" | "cancelled" | "canceled" => {
+                    ExportStatus::Failed | ExportStatus::Cancelled => {
                         self.queued_here.remove(job);
                     }
-                    _ => {}
+                    ExportStatus::Running => {}
                 }
             }
             _ => {}
@@ -1878,7 +1886,7 @@ impl Workspace {
         })
         .detach();
         self.session.update(cx, |session, _| {
-            session.send(serde_json::json!({"type": "render_queue"}));
+            session.send(Command::RenderQueue);
         });
         self.export = Some(export);
         cx.notify();
@@ -2237,7 +2245,7 @@ impl Workspace {
                 session.deliver(Quality::Master.wire());
             }),
             "file.refresh" => session.update(cx, |session, _| {
-                session.send(serde_json::json!({"type": "refresh"}));
+                session.send(Command::Refresh);
             }),
             "edit.undo" => session.update(cx, |session, _| session.undo()),
             "edit.redo" => session.update(cx, |session, _| session.redo()),
@@ -3276,7 +3284,7 @@ impl Workspace {
                         .small()
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.session.update(cx, |session, _| {
-                                session.send(serde_json::json!({"type": "projection_repair"}));
+                                session.send(Command::ProjectionRepair);
                             })
                         }))
                         .into_any_element(),
@@ -3284,7 +3292,7 @@ impl Workspace {
                         .small()
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.session.update(cx, |session, _| {
-                                session.send(serde_json::json!({"type": "projection_import"}));
+                                session.send(Command::ProjectionImport);
                             })
                         }))
                         .into_any_element(),
@@ -4253,9 +4261,10 @@ pub fn running_words(
         .max_by_key(|(at, job)| (job.status == "running", *at))
         .map(|(_, job)| job);
     if let Some(job) = latest {
-        let label = if matches!(job.quality.as_str(), "review" | "preview") {
+        let quality = job.quality.as_deref().unwrap_or_default();
+        let label = if matches!(quality, "review" | "preview") {
             "Draft export".to_owned()
-        } else if job.quality == "master" && job.name.is_empty() {
+        } else if quality == "master" && job.name.is_empty() {
             "Master export".to_owned()
         } else if !job.name.is_empty() {
             job.name.clone()

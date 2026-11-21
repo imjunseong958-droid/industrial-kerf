@@ -21,7 +21,7 @@
 //! for only while the light runs.
 
 use crate::icons::Icon;
-use crate::model;
+use crate::model::{self, ProposalShow, TimelineShow};
 use crate::motion::{self, Tween};
 use crate::session::{BridgeEvent, Session};
 use crate::store::Change;
@@ -34,6 +34,8 @@ use gpui::{
     MouseMoveEvent, MouseUpEvent, PathBuilder, Pixels, Point, Rgba, SharedString, Subscription,
     Task, TextRun, WeakEntity, Window,
 };
+use kerf_bridge::event::{Check, EffectPreview, Finding, PreviewStatus};
+use kerf_bridge::{Command, EffectPreviewsRequest, Event, PreviewEffect};
 use overlay::{Affine, MotionPath, Outline, Overlap, Projective, Pt};
 use serde_json::{json, Value};
 use std::cell::Cell;
@@ -240,11 +242,15 @@ pub fn shown_aspect(session: &Session) -> f32 {
         .snapshot
         .proposal_timeline
         .as_ref()
-        .filter(|proposal| !timeline.has_clips() && proposal.width > 0 && proposal.height > 0);
+        .filter(|proposal| {
+            !timeline.has_clips()
+                && proposal.width.unwrap_or(0) > 0
+                && proposal.height.unwrap_or(0) > 0
+        });
     match (
         proposed,
         session.picture.as_ref(),
-        timeline.width > 0 && timeline.height > 0,
+        timeline.width.unwrap_or(0) > 0 && timeline.height.unwrap_or(0) > 0,
     ) {
         (Some(proposal), _, _) => proposal.aspect(),
         (None, _, true) => timeline.aspect(),
@@ -886,8 +892,8 @@ pub struct StageView {
     last_hue: Hue,
     edge: Tween,
     edge_since: Instant,
-    /// The program's timeline as the last snapshot sent it, whole: the
-    /// overlays read what the typed model leaves out (props, masks).
+    /// The program's timeline as the last snapshot sent it, whole, as its
+    /// JSON: the overlays read it so (props, parent, masks, effects).
     program: Rc<Value>,
     /// The overlays as last drawn.
     shown: Option<Rc<Shown>>,
@@ -916,8 +922,9 @@ pub struct StageView {
     /// The proposal whose preview render Stop was pressed on, hidden until
     /// that run ends.
     stopped: Option<String>,
-    /// The last finished check (`check` done), for its caption-overlap box.
-    check: Option<Rc<Value>>,
+    /// The last finished check's findings (`check` done), for its
+    /// caption-overlap box.
+    check: Option<Rc<Vec<Finding>>>,
     /// The overlap box over the picture, fading in and out, and the last
     /// one shown, kept while it fades out.
     overlap_level: Tween,
@@ -1076,12 +1083,13 @@ const COMPARE_WIDE: u32 = 960;
 /// builds: a `preview` of `first_cut` (the cut shown on the empty program)
 /// that has stopped running, so its render is what the picture shows (Qt
 /// let go of the stand-in as that preview ended, `releaseStaying`).
-pub fn releases_cover(event: &Value, first_cut: Option<&str>) -> bool {
-    event["type"] == "preview"
-        && event["status"]
-            .as_str()
-            .is_some_and(|status| !status.is_empty() && status != "running")
-        && first_cut.is_some_and(|cut| event["proposalId"].as_str() == Some(cut))
+pub fn releases_cover(event: &Event, first_cut: Option<&str>) -> bool {
+    let Event::Preview(preview) = event else {
+        return false;
+    };
+    !preview.status.as_str().is_empty()
+        && preview.status != PreviewStatus::Running
+        && first_cut.is_some_and(|cut| preview.proposal_id.as_deref() == Some(cut))
 }
 
 /// Why each transport control cannot run in `context` (the registry's
@@ -1200,24 +1208,24 @@ impl StageView {
                 cx.notify();
             }),
             cx.subscribe(&session, |this, _, event: &BridgeEvent, cx| {
-                match event.0["type"].as_str() {
-                    Some("state") => {
+                match &event.0 {
+                    Event::State { snapshot } => {
                         let before = std::mem::replace(
                             &mut this.program,
-                            Rc::new(event.0["snapshot"]["timeline"].clone()),
+                            Rc::new(serde_json::to_value(&snapshot.timeline).unwrap_or_default()),
                         );
                         this.follow_chosen_point(&before, cx);
-                        this.book = Rc::new(crate::chat::ProposalBook::read(&event.0["snapshot"]));
+                        this.book = Rc::new(crate::chat::ProposalBook::read(snapshot));
                         this.follow_cut(cx);
                     }
                     // The last finished check's findings; one running keeps them.
-                    Some("check") if event.0["status"] == "done" => {
-                        this.check = Some(Rc::new(event.0.clone()));
+                    Event::Check(Check::Done { findings, .. }) => {
+                        this.check = Some(Rc::new(findings.clone()));
                         cx.notify();
                     }
                     // A render stopped here stays hidden until its run ends,
                     // unless another proposal's render takes over.
-                    Some("preview") => {
+                    Event::Preview(_) => {
                         if !render_stop_holds(this.stopped.as_deref(), &event.0) {
                             this.stopped = None;
                         }
@@ -1234,13 +1242,14 @@ impl StageView {
                             cx.notify();
                         }
                     }
-                    Some("clock") => {
-                        if let Some(at) = event.0["position"].as_f64() {
-                            this.hear_clock(at, cx);
+                    // A position that is not finite is none (JSON's `null`).
+                    Event::Clock { position, .. } => {
+                        if position.is_finite() {
+                            this.hear_clock(*position, cx);
                         }
                     }
                     // The Before still of the segment watched.
-                    Some("effect_preview") => this.hear_compare(&event.0, cx),
+                    Event::EffectPreview(preview) => this.hear_compare(preview, cx),
                     _ => {}
                 }
             }),
@@ -1469,13 +1478,16 @@ impl StageView {
             .map(|clip| clip.id.clone());
         if let Some(clip) = clip {
             self.session.update(cx, |session, _| {
-                session.send(json!({
-                    "type": "effect_previews",
-                    "clip": clip,
-                    "at": at,
-                    "effects": [{"fx": "color.basic", "key": format!("reel-before:{key}")}],
-                    "width": COMPARE_WIDE,
-                    "key": "reel",
+                session.send(Command::EffectPreviews(EffectPreviewsRequest {
+                    clip,
+                    at,
+                    effects: vec![PreviewEffect::Params {
+                        fx: "color.basic".into(),
+                        params: serde_json::Map::new(),
+                        key: Some(format!("reel-before:{key}")),
+                    }],
+                    width: COMPARE_WIDE,
+                    key: Some("reel".into()),
                 }));
             });
         }
@@ -1483,21 +1495,17 @@ impl StageView {
 
     /// An `effect_preview` that is the Before still asked for: it sweeps
     /// over the picture from now.
-    fn hear_compare(&mut self, event: &Value, cx: &mut Context<Self>) {
+    fn hear_compare(&mut self, preview: &EffectPreview, cx: &mut Context<Self>) {
         let Some(key) = self.compare_key.as_deref() else {
             return;
         };
-        if event["key"].as_str() != Some(format!("reel-before:{key}").as_str()) {
+        if preview.key.as_deref() != Some(format!("reel-before:{key}").as_str()) {
             return;
         }
-        let (Some(width), Some(height)) = (event["width"].as_u64(), event["height"].as_u64())
-        else {
+        let Some(rgba) = base64_decode(&preview.rgba) else {
             return;
         };
-        let Some(rgba) = event["rgba"].as_str().and_then(base64_decode) else {
-            return;
-        };
-        if let Some(still) = crate::session::render_image(&rgba, width as u32, height as u32) {
+        if let Some(still) = crate::session::render_image(&rgba, preview.width, preview.height) {
             if let Some((old, _)) = self.compare.replace((still, Instant::now())) {
                 self.retired.push(old);
             }
@@ -2662,7 +2670,7 @@ impl StageView {
             .unwrap_or_default();
         self.stopped = Some(proposal);
         self.session.update(cx, |session, cx| {
-            session.send(json!({"type": "preview_stop"}));
+            session.send(Command::PreviewStop);
             cx.notify();
         });
         cx.notify();
@@ -2692,7 +2700,7 @@ impl StageView {
             .and_then(|proposal| self.book.timeline_of(proposal, &proposal_id))
             .map(|proposed| crate::chat::clip_changes(timeline, proposed))
             .unwrap_or_default();
-        let summary = proposal.map(model::Proposal::summary).unwrap_or_default();
+        let summary = proposal.map(ProposalShow::summary).unwrap_or_default();
         let detail = hud::detail(
             &changes,
             &summary,
@@ -2811,7 +2819,7 @@ impl StageView {
                             .ghost()
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.session.update(cx, |session, _| {
-                                    session.send(json!({"type": "preview_exit"}));
+                                    session.send(Command::PreviewExit);
                                 })
                             })),
                     )
@@ -3032,8 +3040,8 @@ impl Render for StageView {
             .map(|picture| (picture.image.clone(), picture.width, picture.height));
         let aspect = shown_aspect(session);
         // The frame's own pixels, for the zoom: the sequence's, else the picture's.
-        let frame_size = if timeline.width > 0 && timeline.height > 0 {
-            (timeline.width, timeline.height)
+        let frame_size = if timeline.width.unwrap_or(0) > 0 && timeline.height.unwrap_or(0) > 0 {
+            (timeline.width.unwrap_or(0), timeline.height.unwrap_or(0))
         } else {
             picture
                 .as_ref()
@@ -4409,14 +4417,15 @@ pub fn render_card_shows(card: RenderCard) -> bool {
 /// still the one running after bridge `event`, its card still done with:
 /// until its run ends (a `preview` of any other status), or another
 /// proposal's render takes over, as the stage keeps its own Stop.
-pub fn render_stop_holds(stopped: Option<&str>, event: &serde_json::Value) -> bool {
+pub fn render_stop_holds(stopped: Option<&str>, event: &Event) -> bool {
     let Some(stopped) = stopped else {
         return false;
     };
-    if event["type"] != "preview" {
+    let Event::Preview(preview) = event else {
         return true;
-    }
-    event["status"] == "running" && event["proposalId"].as_str().unwrap_or_default() == stopped
+    };
+    preview.status == PreviewStatus::Running
+        && preview.proposal_id.as_deref().unwrap_or_default() == stopped
 }
 
 /// What the preview render's card over the picture says: pure, so that it
@@ -4476,6 +4485,7 @@ pub mod hud {
 /// snapshot's timeline as the bridge sends it, so that they can be held to
 /// the compositor's own numbers.
 pub mod overlay {
+    use kerf_bridge::event::Finding;
     use serde_json::{json, Map, Value};
 
     /// A point: across, then down.
@@ -5881,37 +5891,38 @@ pub mod overlay {
         text.to_owned()
     }
 
-    /// The `text.overlap` finding of `check` (a `check` event, done) whose
-    /// frames the playhead at `playhead` is on, give or take half a frame
-    /// at `fps`: the first such with an area.
-    pub fn overlap_at(check: &Value, playhead: f64, fps: f64) -> Option<Overlap> {
+    /// The `text.overlap` finding of `findings` (a `check` event's, done)
+    /// whose frames the playhead at `playhead` is on, give or take half a
+    /// frame at `fps`: the first such with an area. A number that is not
+    /// finite is none, as JSON's `null`.
+    pub fn overlap_at(findings: &[Finding], playhead: f64, fps: f64) -> Option<Overlap> {
         let slack = 0.5 / fps.max(1.0);
-        check["findings"].as_array()?.iter().find_map(|finding| {
-            if finding["code"] != "text.overlap" {
+        let finite = |number: f64| number.is_finite().then_some(number);
+        findings.iter().find_map(|finding| {
+            if finding.code != "text.overlap" {
                 return None;
             }
-            let rect = &finding["rect"];
-            let (x, y) = (rect["x"].as_f64()?, rect["y"].as_f64()?);
-            let (w, h) = (rect["w"].as_f64()?, rect["h"].as_f64()?);
+            let rect = finding.rect?;
+            let (x, y) = (finite(rect.x)?, finite(rect.y)?);
+            let (w, h) = (finite(rect.w)?, finite(rect.h)?);
             if w <= 0.0 || h <= 0.0 {
                 return None;
             }
-            if let Some(at) = finding["at"].as_f64() {
-                let end = at + finding["duration"].as_f64().unwrap_or(0.0).max(0.0);
+            if let Some(at) = finding.at.and_then(finite) {
+                let end = at + finding.duration.and_then(finite).unwrap_or(0.0).max(0.0);
                 if playhead < at - slack || playhead > end + slack {
                     return None;
                 }
             }
-            let tag = match &finding["value"] {
-                Value::Number(number) => {
-                    let number = figures(number.as_f64().unwrap_or(0.0));
-                    match finding["unit"].as_str().filter(|unit| !unit.is_empty()) {
+            let tag = match finding.value.and_then(finite) {
+                Some(value) => {
+                    let number = figures(value);
+                    match finding.unit.as_deref().filter(|unit| !unit.is_empty()) {
                         Some(unit) => format!("{number} {unit}"),
                         None => number,
                     }
                 }
-                Value::String(text) => text.clone(),
-                _ => String::new(),
+                None => String::new(),
             };
             Some(Overlap {
                 rect: [x, y, w, h],

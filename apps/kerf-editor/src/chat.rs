@@ -29,7 +29,10 @@
 use crate::commands::{RevealPicture, RunCommand};
 use crate::icons::Icon;
 use crate::input::{InputEvent, TextInput};
-use crate::model::{self, Proposal, Speaker, Timeline, Turn};
+use crate::model::{
+    self, ClipShow, Proposal, Snapshot, Speaker, SummaryShow, Timeline, TimelineShow, TrackShow,
+    Turn, TurnShow, ViewEffect,
+};
 use crate::motion::{self, Tween};
 use crate::prefs::{Permissions, Provider};
 use crate::selectable::{self, Selections};
@@ -44,6 +47,8 @@ use gpui::{
     Entity, EventEmitter, FocusHandle, Focusable, FontWeight, Rgba, ScrollHandle, SharedString,
     Subscription, Task, TextRun, Transformation, Window,
 };
+use kerf_bridge::event::{AgentState, Check, CheckSummary};
+use kerf_bridge::{Command, Event};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -222,8 +227,9 @@ pub fn timecode_seconds(timecode: &str, fps: f64) -> Option<f64> {
 pub fn timecode_position(timecode: &str, timeline: &Timeline) -> Option<f64> {
     let fps = usable_rate(timeline.rate());
     let frames = timecode_frames(timecode, fps)?;
-    let start = if timeline.start.is_finite() {
-        (timeline.start.max(0.0) * fps).round() as i64
+    let start = timeline.start.unwrap_or(0.0);
+    let start = if start.is_finite() {
+        (start.max(0.0) * fps).round() as i64
     } else {
         0
     };
@@ -397,11 +403,8 @@ pub fn settled_words(accepted: bool, revision: Option<u64>, ago: Option<Duration
 /// `mcp`, Qt's `Author::isAgent`), else how many there are.
 pub fn strays_note(strays: &[Proposal]) -> String {
     if let [only] = strays {
-        let agent = only.author["kind"].as_str() == Some("mcp");
-        let name = only.author["name"]
-            .as_str()
-            .map(str::trim)
-            .unwrap_or_default();
+        let agent = only.author.kind == "mcp";
+        let name = only.author.name.trim();
         if agent && !name.is_empty() {
             return format!("{name} proposed this over MCP.");
         }
@@ -467,7 +470,7 @@ pub fn request_before(turns: &[Turn], index: usize) -> Option<&str> {
     turns[..index.min(turns.len())]
         .iter()
         .rev()
-        .find(|turn| turn.kind == Speaker::You)
+        .find(|turn| turn.speaker() == Speaker::You)
         .map(|turn| turn.text.as_str())
         .filter(|text| !text.trim().is_empty())
 }
@@ -482,7 +485,7 @@ pub fn card_turns(
 ) -> HashMap<String, usize> {
     let mut holders = HashMap::new();
     for (index, turn) in turns.iter().enumerate() {
-        if turn.kind != Speaker::Kerf {
+        if turn.speaker() != Speaker::Kerf {
             continue;
         }
         if let Some(proposal) = turn
@@ -658,47 +661,39 @@ pub struct ProposalBook {
 }
 
 impl ProposalBook {
-    /// Reads a `state` event's snapshot.
-    pub fn read(snapshot: &Value) -> Self {
+    /// Reads a `state` event's snapshot. Its proposals' timelines are named
+    /// ([`TimelineShow::name_clips`]) as the program's are.
+    pub fn read(snapshot: &Snapshot) -> Self {
         let mut book = Self::default();
-        for entry in snapshot["proposals"].as_array().into_iter().flatten() {
-            let Some(id) = entry["proposalId"].as_str().filter(|id| !id.is_empty()) else {
+        for entry in &snapshot.proposals {
+            let id = entry.proposal_id.as_str();
+            if id.is_empty() {
                 continue;
-            };
-            let versions: Vec<Version> = entry["versions"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(|version| {
-                    let proposal_id = version["proposalId"].as_str()?.to_owned();
-                    Some(Version {
-                        version: version["version"].as_u64().unwrap_or(1) as u32,
-                        proposal_id,
-                        script: version["script"].as_str().unwrap_or_default().to_owned(),
-                        document_diff: version["documentDiff"]
-                            .as_str()
-                            .unwrap_or_default()
-                            .to_owned(),
-                    })
+            }
+            let versions: Vec<Version> = entry
+                .versions
+                .iter()
+                .map(|version| Version {
+                    version: version.version,
+                    proposal_id: version.proposal_id.clone(),
+                    script: version.script.clone(),
+                    document_diff: version.document_diff.clone(),
                 })
                 .collect();
             if !versions.is_empty() {
                 book.versions.insert(id.to_owned(), versions);
             }
-            if let Some(replaced) = entry["supersedes"].as_str().filter(|id| !id.is_empty()) {
+            if let Some(replaced) = entry.supersedes.as_deref().filter(|id| !id.is_empty()) {
                 book.supersedes.insert(id.to_owned(), replaced.to_owned());
             }
-            if let Some(revision) = entry["appliedRevision"].as_u64() {
+            if let Some(revision) = entry.applied_revision {
                 book.applied.insert(id.to_owned(), revision);
             }
         }
-        if let Some(timelines) = snapshot["proposalTimelines"].as_object() {
-            for (id, timeline) in timelines {
-                if timeline.is_object() {
-                    book.timelines
-                        .insert(id.clone(), Timeline::from_value(timeline));
-                }
-            }
+        for (id, timeline) in &snapshot.proposal_timelines {
+            let mut timeline = timeline.clone();
+            timeline.name_clips();
+            book.timelines.insert(id.clone(), timeline);
         }
         book
     }
@@ -1207,21 +1202,17 @@ pub fn colour_change(
         .unwrap_or_default();
     let (_, now) = proposed.clip(&change.clip)?;
     // Only what holds still: keyframes are no one value.
-    let still = |effect: &Value| -> serde_json::Map<String, Value> {
-        effect["params"]
-            .as_object()
-            .map(|params| {
-                params
-                    .iter()
-                    .filter(|(_, value)| !value.is_array() && !value.is_object())
-                    .map(|(key, value)| (key.clone(), value.clone()))
-                    .collect()
-            })
-            .unwrap_or_default()
+    let still = |effect: &ViewEffect| -> serde_json::Map<String, Value> {
+        effect
+            .params
+            .iter()
+            .filter(|(_, value)| !value.is_array() && !value.is_object())
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect()
     };
     for effect in &now.effects {
-        let fx = effect["fx"].as_str().unwrap_or_default();
-        let old = before.iter().find(|old| old["fx"].as_str() == Some(fx));
+        let fx = effect.fx.as_str();
+        let old = before.iter().find(|old| old.fx == fx);
         let old_params = old.map(still).unwrap_or_default();
         let new_params = still(effect);
         if old.is_some() && old_params == new_params {
@@ -1244,31 +1235,29 @@ pub fn colour_change(
     None
 }
 
-/// What a finished check (`check {status: "done", summary: {rows}}`) offers
-/// to ask: "Fix the true peak" for each failing row with a name, with its
-/// timecode where it has one ("Fix the true peak at 00:00:04:12"): the words
-/// shown, and the request they fill the composer with.
-pub fn check_suggestions(event: &Value, fps: f64) -> Vec<(String, String)> {
-    event["summary"]["rows"]
-        .as_array()
-        .map(|rows| {
-            rows.iter()
-                .filter(|row| !row["passed"].as_bool().unwrap_or(true))
-                .filter_map(|row| {
-                    let name = row["name"].as_str().map(str::trim).unwrap_or_default();
-                    let mut chars = name.chars();
-                    let first = chars.next()?;
-                    let lowered: String = first.to_lowercase().chain(chars).collect();
-                    let label = format!("Fix the {lowered}");
-                    let request = match row["at"].as_f64() {
-                        Some(at) => format!("{label} at {}", model::timecode(at, fps)),
-                        None => label.clone(),
-                    };
-                    Some((label, request))
-                })
-                .collect()
+/// What a finished check's summary (`check {status: "done", summary:
+/// {rows}}`) offers to ask: "Fix the true peak" for each failing row with a
+/// name, with its timecode where it has one ("Fix the true peak at
+/// 00:00:04:12"): the words shown, and the request they fill the composer
+/// with. A time that is not finite is none, as JSON's `null`.
+pub fn check_suggestions(summary: &CheckSummary, fps: f64) -> Vec<(String, String)> {
+    summary
+        .rows
+        .iter()
+        .filter(|row| !row.passed)
+        .filter_map(|row| {
+            let name = row.name.trim();
+            let mut chars = name.chars();
+            let first = chars.next()?;
+            let lowered: String = first.to_lowercase().chain(chars).collect();
+            let label = format!("Fix the {lowered}");
+            let request = match row.at.filter(|at| at.is_finite()) {
+                Some(at) => format!("{label} at {}", model::timecode(at, fps)),
+                None => label.clone(),
+            };
+            Some((label, request))
         })
-        .unwrap_or_default()
+        .collect()
 }
 
 /// The stretch of the program `changes` lie in; None for none.
@@ -1842,27 +1831,39 @@ impl ChatView {
                 }
             }),
             cx.subscribe(&session, |this, _, event: &BridgeEvent, cx| {
-                if event.0["type"] == "state" {
-                    this.book = ProposalBook::read(&event.0["snapshot"]);
-                    cx.notify();
-                } else if event.0["type"] == "check" && event.0["status"] == "done" {
-                    // A check's failing rows are offered as what to ask next.
-                    let fps = this.session.read(cx).timeline().rate();
-                    this.fixes = check_suggestions(&event.0, fps);
-                    cx.notify();
-                } else if event.0["type"] == "cloud" {
-                    // Kerf's account, as every window keeps it, says whether
-                    // Kerf can be asked.
-                    crate::app::hear_cloud(&event.0, cx);
-                    this.access = None;
-                    this.refresh_placeholder(cx);
-                    cx.notify();
-                } else if event.0["type"] == "agent_state" && event.0["state"] == "aborted" {
-                    // Stopped from anywhere (here, a menu, the palette). The
-                    // turn says "completed" after this, so it is kept here
-                    // until the turn ends, which only a turn under way says.
-                    this.stopping = true;
-                    cx.notify();
+                match &event.0 {
+                    Event::State { snapshot } => {
+                        this.book = ProposalBook::read(snapshot);
+                        cx.notify();
+                    }
+                    Event::Check(Check::Done { summary, .. }) => {
+                        // A check's failing rows are offered as what to ask next.
+                        let fps = this.session.read(cx).timeline().rate();
+                        this.fixes = check_suggestions(summary, fps);
+                        cx.notify();
+                    }
+                    Event::Cloud { .. } => {
+                        // Kerf's account, as every window keeps it, says whether
+                        // Kerf can be asked.
+                        crate::app::hear_cloud(
+                            &serde_json::to_value(&event.0).unwrap_or_default(),
+                            cx,
+                        );
+                        this.access = None;
+                        this.refresh_placeholder(cx);
+                        cx.notify();
+                    }
+                    Event::AgentState {
+                        state: AgentState::Aborted,
+                        ..
+                    } => {
+                        // Stopped from anywhere (here, a menu, the palette). The
+                        // turn says "completed" after this, so it is kept here
+                        // until the turn ends, which only a turn under way says.
+                        this.stopping = true;
+                        cx.notify();
+                    }
+                    _ => {}
                 }
             }),
             cx.subscribe_in(
@@ -2457,7 +2458,7 @@ impl ChatView {
     ) -> AnyElement {
         let turn = &turns[index];
         let id = SharedString::from(format!("turn-{}", turn.id));
-        let body = match turn.kind {
+        let body = match turn.speaker() {
             // A request can be copied, as an answer can.
             Speaker::You => {
                 let copy = (!turn.text.trim().is_empty()).then(|| turn.text.clone());
@@ -3306,7 +3307,7 @@ impl ChatView {
                             // On, it shows what the proposal makes; off, the program again.
                             session.update(cx, |session, _| {
                                 if preview_shown {
-                                    session.send(serde_json::json!({"type": "preview_exit"}));
+                                    session.send(Command::PreviewExit);
                                 } else {
                                     session.preview(Some(&preview));
                                 }

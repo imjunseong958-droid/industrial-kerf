@@ -15,7 +15,7 @@
 use crate::commands::RunCommand;
 use crate::icons::Icon;
 use crate::input::{InputEvent, TextInput};
-use crate::model::{self, RenderJob};
+use crate::model::{self, RenderJob, RenderJobShow};
 use crate::motion;
 use crate::session::{BridgeEvent, Session};
 use crate::store::Change;
@@ -27,7 +27,11 @@ use gpui::{
     FocusHandle, Focusable, FontWeight, Global, KeyBinding, MouseMoveEvent, PathBuilder, Pixels,
     Rgba, SharedString, Subscription, Window,
 };
-use serde::Deserialize;
+use kerf_bridge::event::{
+    Check, CheckSummary, CollabStatus, CollabSync, Export, ExportStatus, Finding, LoudnessEvent,
+    LoudnessReady, Row, Severity,
+};
+use kerf_bridge::{CaptionsRequest, Command, Event, GitHubRepository};
 use serde_json::{json, Value};
 use std::cell::Cell;
 use std::collections::HashMap;
@@ -81,36 +85,19 @@ struct Report {
     /// The document revision checked.
     revision: u64,
     valid: bool,
-    summary: Summary,
-    /// The summary as the bridge sent it, for Export's Preflight.
+    summary: CheckSummary,
+    /// The summary as the bridge writes it, for Export's Preflight.
     summary_value: Value,
     findings: Vec<Finding>,
 }
 
-#[derive(Clone, Debug, Default, Deserialize)]
-#[serde(default)]
-struct Summary {
-    passed: usize,
-    total: usize,
-    blocking: usize,
-    rows: Vec<Row>,
+/// How a check of the summary shows.
+trait RowShow {
+    fn name(&self) -> &str;
+    fn color(&self) -> Rgba;
 }
 
-/// One check of the summary: what it found against what it allows.
-#[derive(Clone, Debug, Default, Deserialize)]
-#[serde(default)]
-struct Row {
-    code: String,
-    name: String,
-    passed: bool,
-    value: String,
-    limit: Option<String>,
-    /// Where its first failing finding starts, in seconds.
-    at: Option<f64>,
-    blocking: usize,
-}
-
-impl Row {
+impl RowShow for Row {
     fn name(&self) -> &str {
         if self.name.trim().is_empty() {
             &self.code
@@ -131,22 +118,19 @@ impl Row {
     }
 }
 
-#[derive(Clone, Debug, Default, Deserialize)]
-#[serde(default)]
-struct Finding {
-    severity: String,
-    message: String,
-    at: Option<f64>,
-    timecode: Option<String>,
+/// How a finding shows.
+trait FindingShow {
+    fn rank(&self) -> u8;
+    fn color(&self) -> Rgba;
 }
 
-impl Finding {
+impl FindingShow for Finding {
     /// Errors block delivery; warnings want a look; information is only said.
     fn rank(&self) -> u8 {
-        match self.severity.as_str() {
-            "error" => 0,
-            "warning" => 1,
-            _ => 2,
+        match self.severity {
+            Severity::Error => 0,
+            Severity::Warning => 1,
+            Severity::Info => 2,
         }
     }
 
@@ -160,24 +144,15 @@ impl Finding {
 }
 
 impl Report {
-    fn from_value(event: &Value, revision: u64) -> Self {
-        let summary: Summary = serde_json::from_value(event["summary"].clone()).unwrap_or_default();
-        let mut findings: Vec<Finding> = event["findings"]
-            .as_array()
-            .map(|findings| {
-                findings
-                    .iter()
-                    .filter_map(|finding| serde_json::from_value(finding.clone()).ok())
-                    .collect()
-            })
-            .unwrap_or_default();
+    fn new(valid: bool, findings: &[Finding], summary: &CheckSummary, revision: u64) -> Self {
+        let mut findings = findings.to_vec();
         // What blocks first, then what wants a look; each in the order found.
-        findings.sort_by_key(Finding::rank);
+        findings.sort_by_key(|finding| finding.rank());
         Self {
             revision,
-            valid: event["valid"].as_bool().unwrap_or(summary.blocking == 0),
-            summary,
-            summary_value: event["summary"].clone(),
+            valid,
+            summary: summary.clone(),
+            summary_value: serde_json::to_value(summary).unwrap_or_default(),
             findings,
         }
     }
@@ -206,41 +181,39 @@ struct ChartPoint {
     short: Option<f32>,
 }
 
+/// `value` where it is a number to show: silence (-inf), which the bridge
+/// writes as `null`, is none.
+fn finite(value: f64) -> Option<f64> {
+    value.is_finite().then_some(value)
+}
+
 impl Loudness {
-    fn from_value(event: &Value) -> Self {
-        let series: Vec<(f32, Option<f32>, Option<f32>)> = event["series"]
-            .as_array()
-            .map(|series| {
-                series
-                    .iter()
-                    .filter_map(|sample| {
-                        let sample = sample.as_array()?;
-                        let at = sample.first()?.as_f64()? as f32;
-                        let level = |index: usize| {
-                            sample.get(index).and_then(Value::as_f64).map(|v| v as f32)
-                        };
-                        Some((at, level(1), level(2)))
-                    })
-                    .collect()
+    fn of(ready: &LoudnessReady) -> Self {
+        let measured = &ready.loudness;
+        let series: Vec<(f32, Option<f32>, Option<f32>)> = measured
+            .series
+            .iter()
+            .filter_map(|&(at, momentary, short)| {
+                let level = |level: f64| finite(level).map(|level| level as f32);
+                Some((finite(at)? as f32, level(momentary), level(short)))
             })
-            .unwrap_or_default();
+            .collect();
         let last = series
             .last()
             .map(|sample| f64::from(sample.0))
             .unwrap_or(0.0);
-        let duration = event["duration"]
-            .as_f64()
+        let duration = finite(measured.duration)
             .filter(|d| *d > 0.0)
             .unwrap_or(last);
         Self {
-            integrated: event["integrated"].as_f64(),
-            lra: event["lra"].as_f64(),
-            true_peak: event["truePeakMax"].as_f64(),
-            short_term_max: event["shortTermMax"].as_f64(),
+            integrated: finite(measured.integrated),
+            lra: finite(measured.lra),
+            true_peak: finite(measured.true_peak_max),
+            short_term_max: finite(measured.short_term_max),
             duration,
-            target: event["target"].as_f64().unwrap_or(TARGET),
-            limit: event["limit"].as_f64().unwrap_or(PEAK_LIMIT),
-            revision: event["revision"].as_u64().unwrap_or(0),
+            target: finite(ready.target).unwrap_or(TARGET),
+            limit: finite(ready.limit).unwrap_or(PEAK_LIMIT),
+            revision: ready.revision,
             points: Rc::new(chart_points(&series, duration as f32)),
         }
     }
@@ -352,59 +325,72 @@ impl Finishing {
     }
 
     /// Folds one bridge event in; true when it changed anything shown.
-    fn apply(&mut self, event: &Value, revision: u64) -> bool {
-        let status = event["status"].as_str().unwrap_or_default();
-        let message = |fallback: &str| event["message"].as_str().unwrap_or(fallback).to_owned();
-        match event["type"].as_str().unwrap_or_default() {
-            "check" => match status {
-                "running" => {
+    fn apply(&mut self, event: &Event, revision: u64) -> bool {
+        match event {
+            Event::Check(check) => match check {
+                Check::Running { progress, .. } => {
                     // A check another view started reads the project as it is now.
                     self.check_revision.get_or_insert(revision);
-                    self.checking = Some(event["progress"].as_f64().unwrap_or(0.0));
+                    self.checking = Some(*progress);
                     self.check_failed = None;
                 }
-                "done" => {
+                Check::Done {
+                    valid,
+                    findings,
+                    summary,
+                    ..
+                } => {
                     let revision = self.check_revision.take().unwrap_or(revision);
                     self.checking = None;
                     self.check_failed = None;
-                    self.report = Some(Report::from_value(event, revision));
+                    self.report = Some(Report::new(*valid, findings, summary, revision));
                 }
-                "failed" => {
+                Check::Failed { message, .. } => {
                     self.checking = None;
                     self.check_revision = None;
-                    self.check_failed = Some(message("The check failed"));
+                    self.check_failed = Some(message.clone());
                 }
-                _ => return false,
             },
-            "loudness" => match status {
-                "running" => self.measuring = Some(event["progress"].as_f64().unwrap_or(0.0)),
-                "ready" => {
+            Event::Loudness(loudness) => match loudness {
+                LoudnessEvent::Running { progress, .. } => self.measuring = Some(*progress),
+                LoudnessEvent::Ready(ready) => {
                     self.measuring = None;
                     self.loudness_failed = None;
-                    self.loudness = Some(Loudness::from_value(event));
+                    self.loudness = Some(Loudness::of(ready));
                 }
-                "failed" => {
+                LoudnessEvent::Failed { message, .. } => {
                     self.measuring = None;
-                    self.loudness_failed = Some(message("The programme could not be measured"));
+                    self.loudness_failed = Some(message.clone());
                 }
-                _ => return false,
             },
-            "export" if event["kind"] == "captions" => {
-                let format = event["format"].as_str().unwrap_or_default().to_owned();
-                let outcome = match status {
-                    "completed" => Ok(event["path"].as_str().unwrap_or_default().to_owned()),
-                    "failed" => Err(message("The captions could not be written")),
+            Event::Export(Export::Captions(captions)) => {
+                let format = captions.format.clone();
+                let outcome = match captions.status {
+                    ExportStatus::Completed => Ok(captions.path.clone().unwrap_or_default()),
+                    ExportStatus::Failed => Err(captions
+                        .message
+                        .as_deref()
+                        .unwrap_or("The captions could not be written")
+                        .to_owned()),
                     _ => return false,
                 };
                 self.captions = Some(Captions { format, outcome });
             }
-            "export" => match status {
-                "queued" => self.export_failed = None,
-                "failed" => self.export_failed = Some(message("The render failed")),
+            Event::Export(Export::Render(render)) => match render.status {
+                ExportStatus::Queued => self.export_failed = None,
+                ExportStatus::Failed => {
+                    self.export_failed = Some(
+                        render
+                            .message
+                            .as_deref()
+                            .unwrap_or("The render failed")
+                            .to_owned(),
+                    )
+                }
                 _ => return false,
             },
-            "error" if event["command"] == "export" => {
-                self.export_failed = Some(message("The render was not queued"));
+            Event::Error(error) if error.command.as_deref() == Some("export") => {
+                self.export_failed = Some(error.message.clone());
             }
             _ => return false,
         }
@@ -434,13 +420,15 @@ pub struct AskKerf {
 pub fn deliver_said(project: Option<&Path>, kept: Option<&crate::prefs::MasterOutput>) -> String {
     /// Where a request sends its file: the folder as people read it, and
     /// whether it is in the project; None where kerfd puts renders.
-    fn place(command: &Value) -> Option<(String, bool)> {
-        command["output"].as_str().map(|folder| {
-            (
-                crate::export::shown_folder(folder),
-                !Path::new(folder).is_absolute(),
-            )
-        })
+    fn place(command: &Command) -> Option<(String, bool)> {
+        crate::export::export_of(command)
+            .and_then(|request| request.output.as_deref())
+            .map(|folder| {
+                (
+                    crate::export::shown_folder(folder),
+                    !Path::new(folder).is_absolute(),
+                )
+            })
     }
     /// "to deliveries/", "to deliveries/ in the project" (`said_in`), or
     /// "where Kerf puts renders".
@@ -752,9 +740,9 @@ impl FinishView {
             return;
         }
         let revision = self.session.read(cx).revision();
-        let sent = self
-            .session
-            .update(cx, |session, _| session.send(json!({"type": "check"})));
+        let sent = self.session.update(cx, |session, _| {
+            session.send(Command::Check { sequence: None })
+        });
         if sent {
             self.finishing.update(cx, |finishing, cx| {
                 finishing.checking = Some(0.0);
@@ -771,9 +759,9 @@ impl FinishView {
         if self.finishing.read(cx).measuring.is_some() {
             return;
         }
-        let sent = self
-            .session
-            .update(cx, |session, _| session.send(json!({"type": "loudness"})));
+        let sent = self.session.update(cx, |session, _| {
+            session.send(Command::Loudness { sequence: None })
+        });
         if sent {
             self.finishing.update(cx, |finishing, cx| {
                 finishing.measuring = Some(0.0);
@@ -818,7 +806,10 @@ impl FinishView {
 
     fn captions(&mut self, format: &'static str, cx: &mut Context<Self>) {
         self.session.update(cx, |session, _| {
-            session.send(json!({"type": "export_captions", "format": format}));
+            session.send(Command::ExportCaptions(CaptionsRequest {
+                format: format.to_owned(),
+                ..CaptionsRequest::default()
+            }));
         });
     }
 
@@ -1465,7 +1456,11 @@ impl FinishView {
             Some(project) => format!("{DELIVERIES}{project}_{suffix}.{extension}"),
             None => format!("{suffix}.{extension}"),
         };
-        let latest = |quality: &str| jobs.iter().find(|job| job.quality == quality).cloned();
+        let latest = |quality: &str| {
+            jobs.iter()
+                .find(|job| job.quality.as_deref().unwrap_or_default() == quality)
+                .cloned()
+        };
         let kept = folder
             .as_deref()
             .and_then(|project| session.prefs.master_output(project));
@@ -1663,8 +1658,13 @@ impl FinishView {
                             }))
                             .into_any_element(),
                     )
-                } else if job.status == "completed" && !job.output_path.is_empty() {
-                    let path = job.output_path.clone();
+                } else if job.status == "completed"
+                    && job
+                        .output_path
+                        .as_deref()
+                        .is_some_and(|path| !path.is_empty())
+                {
+                    let path = job.output_path.clone().unwrap_or_default();
                     Some(
                         ui::button(
                             ElementId::named_usize("finish-reveal", index),
@@ -1695,7 +1695,10 @@ impl FinishView {
                             .child(ui::line(job_name(job), text::BODY, theme::ink()).flex_none())
                             .child(
                                 ui::line(
-                                    shown_path(folder, &job.output_path),
+                                    shown_path(
+                                        folder,
+                                        job.output_path.as_deref().unwrap_or_default(),
+                                    ),
                                     text::MONO_SMALL,
                                     theme::ink3(),
                                 )
@@ -2058,7 +2061,7 @@ impl Deliverable {
             (
                 words,
                 color,
-                shown_path(folder, &job.output_path),
+                shown_path(folder, job.output_path.as_deref().unwrap_or_default()),
                 job.is_active(),
             )
         });
@@ -2124,7 +2127,7 @@ fn job_name(job: &RenderJob) -> String {
     if !job.name.trim().is_empty() {
         return job.name.clone();
     }
-    match job.quality.as_str() {
+    match job.quality.as_deref().unwrap_or_default() {
         "master" => "Master",
         "review" => "Review copy",
         "full" => "Full render",
@@ -2219,33 +2222,6 @@ fn bind_close(cx: &mut App) {
 }
 
 // ------------------------------------------------------------------ Collab
-
-/// Where the project stands against its repository (`collab {status}`).
-#[derive(Clone, Debug, Default, Deserialize)]
-#[serde(default)]
-struct GitStatus {
-    repository: bool,
-    /// The repository the project is inside of, without being its own.
-    enclosing: Option<String>,
-    branch: Option<String>,
-    remote: Option<String>,
-    ahead: u32,
-    behind: u32,
-    changed: bool,
-    conflicted: bool,
-    branches: Vec<String>,
-    /// The GitHub CLI is installed and signed in.
-    gh: bool,
-    live: bool,
-    busy: bool,
-    user: Option<GitUser>,
-}
-
-#[derive(Clone, Debug, Default, Deserialize)]
-#[serde(default)]
-struct GitUser {
-    name: String,
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Menu {
@@ -2394,36 +2370,49 @@ pub fn pull_request_title(branch: &str) -> String {
 /// What Publish sends for `way`: a GitHub repository named `name` (the
 /// folder's when empty), private or not; a push to `remote`; or a
 /// repository here only. None while the remote is not given.
-pub fn publish_command(way: PublishWay, name: &str, private: bool, remote: &str) -> Option<Value> {
+pub fn publish_command(
+    way: PublishWay,
+    name: &str,
+    private: bool,
+    remote: &str,
+) -> Option<Command> {
     match way {
         PublishWay::GitHub => {
-            let mut github = json!({"private": private});
-            if !name.trim().is_empty() {
-                github["name"] = json!(name.trim());
-            }
-            Some(json!({"type": "collab_publish", "github": github}))
+            let name = name.trim();
+            Some(Command::CollabPublish {
+                remote: None,
+                github: Some(GitHubRepository {
+                    name: (!name.is_empty()).then(|| name.to_owned()),
+                    private,
+                }),
+            })
         }
         PublishWay::Remote => {
             let remote = remote.trim();
-            (!remote.is_empty()).then(|| json!({"type": "collab_publish", "remote": remote}))
+            (!remote.is_empty()).then(|| Command::CollabPublish {
+                remote: Some(remote.to_owned()),
+                github: None,
+            })
         }
-        PublishWay::Local => Some(json!({"type": "collab_publish"})),
+        PublishWay::Local => Some(Command::CollabPublish {
+            remote: None,
+            github: None,
+        }),
     }
 }
 
 /// What Open Pull Request sends: its title, and its description when one
 /// is written (left out, the bridge lists the branch's commits). None
 /// without a title.
-pub fn pull_request_command(title: &str, body: &str) -> Option<Value> {
+pub fn pull_request_command(title: &str, body: &str) -> Option<Command> {
     let title = title.trim();
     if title.is_empty() {
         return None;
     }
-    let mut command = json!({"type": "collab_pull_request", "title": title});
-    if !body.trim().is_empty() {
-        command["body"] = json!(body);
-    }
-    Some(command)
+    Some(Command::CollabPullRequest {
+        title: title.to_owned(),
+        body: (!body.trim().is_empty()).then(|| body.to_owned()),
+    })
 }
 
 /// What the window says of a pull request the bridge answered for
@@ -2590,9 +2579,10 @@ pub enum CollabEvent {
 /// palette reach its questions too ([`Collab::open_command`]).
 pub struct Collab {
     session: Entity<Session>,
-    status: Option<GitStatus>,
+    /// Where the project stands against its repository (`collab {status}`).
+    status: Option<CollabStatus>,
     /// The step a sync is at (committing, fetching…) while it runs.
-    stage: Option<String>,
+    stage: Option<CollabSync>,
     /// Why the last sync failed, until one succeeds, and whether it stands.
     failure: SyncFailure,
     /// What the last sync did.
@@ -2668,9 +2658,7 @@ impl Collab {
         // What Finish keeps listens from the start, so a check started with
         // Finish closed is not missed.
         finishing(&session, cx);
-        session.update(cx, |session, _| {
-            session.send(json!({"type": "collab_status"}))
-        });
+        session.update(cx, |session, _| session.send(Command::CollabStatus));
         Self {
             session,
             status: None,
@@ -2717,9 +2705,8 @@ impl Collab {
             if this.menu == Menu::Closed {
                 this.menus_opened += 1;
                 this.previous_focus = window.focused(cx);
-                this.session.update(cx, |session, _| {
-                    session.send(json!({"type": "collab_status"}))
-                });
+                this.session
+                    .update(cx, |session, _| session.send(Command::CollabStatus));
             }
             // The menu open gives the question, or itself opened anew, its place.
             if let Some(kit) = this.kit.take() {
@@ -2736,7 +2723,7 @@ impl Collab {
     /// Sync Now from the window's menus or the palette: as the chip's, its
     /// end is said. The workspace calls it for `collab.sync`.
     pub fn sync_now(&mut self, cx: &mut Context<Self>) {
-        self.send(json!({"type": "collab_sync"}), cx);
+        self.send(Command::CollabSync { message: None }, cx);
         cx.notify();
     }
 
@@ -2754,7 +2741,9 @@ impl Collab {
 
     /// Whether a merge is unfinished, to be finished with git.
     pub fn conflicted(&self) -> bool {
-        self.status.as_ref().is_some_and(|status| status.conflicted)
+        self.status
+            .as_ref()
+            .is_some_and(|status| status.git.conflicted)
     }
 
     /// Whether one of its questions (Commit…, New Branch…, Pull Request…,
@@ -2775,28 +2764,26 @@ impl Collab {
         self.set_live(!live, cx);
     }
 
-    fn apply(&mut self, event: &Value, cx: &mut Context<Self>) {
-        match event["type"].as_str().unwrap_or_default() {
-            "collab" => {
-                let status: GitStatus =
-                    serde_json::from_value(event["status"].clone()).unwrap_or_default();
+    fn apply(&mut self, event: &Event, cx: &mut Context<Self>) {
+        match event {
+            Event::Collab { status } => {
                 let was_busy = self.busy();
                 if !status.busy {
                     self.stage = None;
                 }
-                self.status = Some(status);
+                self.status = Some(status.clone());
                 if self.busy() && !was_busy {
                     self.busy_since = Instant::now();
                 }
             }
-            "collab_sync" => match event["stage"].as_str().unwrap_or_default() {
-                "done" => {
+            Event::CollabSync(sync) => match sync {
+                CollabSync::Done { report } => {
                     self.stage = None;
                     if self.failure.last().is_some() {
                         cx.emit(CollabEvent::SyncCleared);
                     }
                     self.failure.done();
-                    let report = &event["report"];
+                    let report = &Value::Object(report.clone());
                     let lines = sync_lines(report);
                     if !lines.is_empty() {
                         self.session.update(cx, |session, _| {
@@ -2818,12 +2805,9 @@ impl Collab {
                     }
                     self.report = Some(summary(report));
                 }
-                "failed" => {
+                CollabSync::Failed { message } => {
                     self.stage = None;
-                    let message = event["message"]
-                        .as_str()
-                        .unwrap_or("The sync did not finish.")
-                        .to_owned();
+                    let message = message.clone();
                     // Live sync says a failure once; a person asking hears it
                     // again. It is said in the window's error bar, which
                     // stays until it is dismissed (Qt's showError).
@@ -2839,17 +2823,17 @@ impl Collab {
                     if self.stage.is_none() {
                         self.busy_since = Instant::now();
                     }
-                    self.stage = Some(stage.to_owned());
+                    self.stage = Some(stage.clone());
                     if self.failure.standing().is_some() {
                         cx.emit(CollabEvent::SyncCleared);
                     }
                     self.failure.started();
                 }
             },
-            "collab_pull_request" => {
+            Event::CollabPullRequest { url, created } => {
                 self.asked = None;
-                let url = event["url"].as_str().unwrap_or_default().trim().to_owned();
-                let created = event["created"].as_bool().unwrap_or(false);
+                let url = url.trim().to_owned();
+                let created = *created;
                 // Held as Qt held it (main_window.cpp's 8 s).
                 self.notify(
                     &pull_request_said(&url, created),
@@ -2891,10 +2875,10 @@ impl Collab {
     }
 
     /// Sends one collaboration command a person asked for.
-    fn send(&mut self, command: Value, cx: &mut Context<Self>) {
-        let kind = command["type"].as_str().map(str::to_owned);
+    fn send(&mut self, command: Command, cx: &mut Context<Self>) {
+        let kind = command.kind().to_owned();
         if self.session.update(cx, |session, _| session.send(command)) {
-            self.asked = kind;
+            self.asked = Some(kind);
             self.busy_since = Instant::now();
         }
     }
@@ -2912,9 +2896,8 @@ impl Collab {
         // The keys go back here once it goes.
         self.previous_focus = window.focused(cx);
         // What it says is as git has it now.
-        self.session.update(cx, |session, _| {
-            session.send(json!({"type": "collab_status"}))
-        });
+        self.session
+            .update(cx, |session, _| session.send(Command::CollabStatus));
         self.show_menu(false, window, cx);
     }
 
@@ -3022,7 +3005,9 @@ impl Collab {
                     .find(|name| name.chars().any(|ch| ch.is_ascii_alphanumeric()))
                     .unwrap_or_default()
             }
-            Prompt::PullRequest => pull_request_title(status.branch.as_deref().unwrap_or_default()),
+            Prompt::PullRequest => {
+                pull_request_title(status.git.branch.as_deref().unwrap_or_default())
+            }
             Prompt::Commit | Prompt::NewBranch => String::new(),
         };
         self.input.update(cx, |input, cx| {
@@ -3062,7 +3047,7 @@ impl Collab {
     }
 
     /// What the question sends as it stands; None while it cannot be sent.
-    fn command(&self, prompt: Prompt, cx: &App) -> Option<Value> {
+    fn command(&self, prompt: Prompt, cx: &App) -> Option<Command> {
         let words = self.input.read(cx).text().trim().to_owned();
         match prompt {
             Prompt::Publish => publish_command(
@@ -3071,11 +3056,10 @@ impl Collab {
                 self.publish_private,
                 self.remote.read(cx).text(),
             ),
-            Prompt::Commit => Some(json!({"type": "collab_commit", "message": words})),
+            Prompt::Commit => Some(Command::CollabCommit { message: words }),
             Prompt::NewBranch => {
                 let name = branch_name(&words);
-                (!name.is_empty())
-                    .then(|| json!({"type": "collab_branch", "name": name, "create": true}))
+                (!name.is_empty()).then_some(Command::CollabBranch { name, create: true })
             }
             Prompt::PullRequest => pull_request_command(&words, self.body.read(cx).text()),
         }
@@ -3093,7 +3077,7 @@ impl Collab {
     }
 
     /// Runs `command` from the menu and closes it.
-    fn run(&mut self, command: Value, window: &mut Window, cx: &mut Context<Self>) {
+    fn run(&mut self, command: Command, window: &mut Window, cx: &mut Context<Self>) {
         self.send(command, cx);
         self.close(window, cx);
     }
@@ -3104,7 +3088,7 @@ impl Collab {
         let status = self.status.clone().unwrap_or_default();
         let busy = self.busy();
         let open = self.menu != Menu::Closed;
-        let conflicted = status.conflicted;
+        let conflicted = status.git.conflicted;
         let ink = if conflicted {
             theme::neg()
         } else {
@@ -3159,8 +3143,8 @@ impl Collab {
         if busy {
             chip = chip
                 .child(spinner(self.busy_since, theme::activity::kerf(), window))
-                .child(stage_words(self.stage.as_deref()));
-        } else if !status.repository {
+                .child(stage_words(self.stage.as_ref()));
+        } else if !status.git.repository {
             chip = chip.child(branch_glyph(theme::ink3())).child(ui::label(
                 "Not shared",
                 text::CONTROL,
@@ -3173,17 +3157,29 @@ impl Collab {
                 .child(branch_glyph(glyph))
                 .child(
                     ui::line(
-                        status.branch.clone().unwrap_or_else(|| "detached".into()),
+                        status
+                            .git
+                            .branch
+                            .clone()
+                            .unwrap_or_else(|| "detached".into()),
                         text::CONTROL,
                         ink,
                     )
                     .max_w(px(140.0)),
                 )
-                .when(status.ahead > 0, |chip| {
-                    chip.child(ui::label(format!("↑{}", status.ahead), text::CONTROL, ink))
+                .when(status.git.ahead > 0, |chip| {
+                    chip.child(ui::label(
+                        format!("↑{}", status.git.ahead),
+                        text::CONTROL,
+                        ink,
+                    ))
                 })
-                .when(status.behind > 0, |chip| {
-                    chip.child(ui::label(format!("↓{}", status.behind), text::CONTROL, ink))
+                .when(status.git.behind > 0, |chip| {
+                    chip.child(ui::label(
+                        format!("↓{}", status.git.behind),
+                        text::CONTROL,
+                        ink,
+                    ))
                 })
                 .when(conflicted, |chip| {
                     chip.child(ui::label("Merge unfinished", text::CONTROL, theme::neg()))
@@ -3191,12 +3187,12 @@ impl Collab {
         }
         let mark = if self.failure.last().is_some() && !busy {
             Some(theme::neg())
-        } else if status.changed && !busy && !conflicted {
+        } else if status.git.changed && !busy && !conflicted {
             Some(theme::ink2())
         } else {
             None
         };
-        let tooltip: SharedString = match (self.failure.last(), status.changed) {
+        let tooltip: SharedString = match (self.failure.last(), status.git.changed) {
             (Some(failure), _) => format!("Sync failed: {failure}").into(),
             _ if conflicted => "A merge is unfinished; finish it with git".into(),
             (None, true) => "Edits not committed yet".into(),
@@ -3262,57 +3258,66 @@ impl Collab {
     }
 
     /// The menu's head: where the project stands, and what went wrong.
-    fn head(&self, status: &GitStatus, cx: &App) -> impl IntoElement {
+    fn head(&self, status: &CollabStatus, cx: &App) -> impl IntoElement {
         let revision = self.session.read(cx).revision();
-        let (title, standing) = if status.repository {
+        let (title, standing) = if status.git.repository {
             let mut parts = vec![format!("Revision {revision}")];
-            if status.behind > 0 {
+            if status.git.behind > 0 {
                 parts.push(plural(
-                    status.behind as usize,
+                    status.git.behind as usize,
                     "1 commit to pull",
                     "{} commits to pull",
                 ));
             }
-            if status.ahead > 0 {
+            if status.git.ahead > 0 {
                 parts.push(plural(
-                    status.ahead as usize,
+                    status.git.ahead as usize,
                     "1 commit to push",
                     "{} commits to push",
                 ));
             }
-            if status.behind == 0 && status.ahead == 0 {
-                parts.push(if status.remote.is_some() {
+            if status.git.behind == 0 && status.git.ahead == 0 {
+                parts.push(if status.git.remote.is_some() {
                     "up to date".into()
                 } else {
                     "on this computer only".into()
                 });
             }
             (
-                status.branch.clone().unwrap_or_else(|| "Detached".into()),
+                status
+                    .git
+                    .branch
+                    .clone()
+                    .unwrap_or_else(|| "Detached".into()),
                 parts.join(" · "),
             )
         } else {
             ("Not shared yet".to_owned(), format!("Revision {revision}"))
         };
-        let problem = if status.conflicted {
+        let problem = if status.git.conflicted {
             Some("A merge is unfinished; finish it with git".to_owned())
-        } else if let Some(enclosing) = status.enclosing.as_ref().filter(|_| !status.repository) {
-            Some(format!("Inside the repository at {enclosing}; publish it as its own repository to share it"))
+        } else if let Some(enclosing) = status.enclosing.as_ref().filter(|_| !status.git.repository)
+        {
+            Some(format!(
+                "Inside the repository at {}; publish it as its own repository to share it",
+                enclosing.display()
+            ))
         } else {
             self.failure
                 .last()
                 .map(|failure| format!("Sync failed: {failure}"))
         };
         let note = if self.busy() {
-            Some(stage_words(self.stage.as_deref()).to_owned())
+            Some(stage_words(self.stage.as_ref()).to_owned())
         } else {
             self.report.clone()
         };
         let who = status
+            .git
             .user
             .as_ref()
             .map(|user| format!("Commits as {}", user.name))
-            .filter(|_| status.repository);
+            .filter(|_| status.git.repository);
         div()
             .px(px(theme::space::S8))
             .pt(px(theme::space::S6))
@@ -3391,28 +3396,32 @@ impl Collab {
                 let _ = this.update(cx, |collab, cx| collab.ask(prompt, true, window, cx));
             }
         };
-        let runs = |command: Value| {
+        let runs = |command: Command| {
             let this = this.clone();
             move |window: &mut Window, cx: &mut App| {
                 let _ = this.update(cx, |collab, cx| collab.run(command.clone(), window, cx));
             }
         };
         let mut items: Vec<ui::MenuItem> = Vec::new();
-        if !status.repository {
+        if !status.git.repository {
             items.push(
                 row("Publish to GitHub…", reason("collab.publish"))
                     .on_choose(asks(Prompt::Publish)),
             );
             items.push(
-                row("Make a Repository Here", reason("collab.publish"))
-                    .on_choose(runs(json!({"type": "collab_publish"}))),
+                row("Make a Repository Here", reason("collab.publish")).on_choose(runs(
+                    Command::CollabPublish {
+                        remote: None,
+                        github: None,
+                    },
+                )),
             );
         } else {
             let live = status.live;
             let set_live = this.clone();
             items.push(
                 row("Sync Now", reason("collab.sync"))
-                    .on_choose(runs(json!({"type": "collab_sync"}))),
+                    .on_choose(runs(Command::CollabSync { message: None })),
             );
             items.push(
                 row("Live Sync", reason("collab.live"))
@@ -3424,7 +3433,7 @@ impl Collab {
             items.push(row("Commit…", reason("collab.commit")).on_choose(asks(Prompt::Commit)));
             // Switch Branch opens on the other branches, as Qt's did; with
             // none it says so, and holds back only for what holds back a sync.
-            let others = other_branches(status.branch.as_deref(), &status.branches);
+            let others = other_branches(status.git.branch.as_deref(), &status.git.branches);
             let switch = if others.is_empty() {
                 reason("collab.sync")
             } else {
@@ -3436,9 +3445,10 @@ impl Collab {
                 others
                     .into_iter()
                     .map(|name| {
-                        ui::MenuItem::new(name.clone()).on_choose(runs(
-                            json!({"type": "collab_branch", "name": name, "create": false}),
-                        ))
+                        ui::MenuItem::new(name.clone()).on_choose(runs(Command::CollabBranch {
+                            name,
+                            create: false,
+                        }))
                     })
                     .collect()
             };
@@ -3450,7 +3460,7 @@ impl Collab {
                 row("Pull Request…", reason("collab.pullRequest"))
                     .on_choose(asks(Prompt::PullRequest)),
             );
-            if status.remote.is_none() {
+            if status.git.remote.is_none() {
                 items.push(
                     row("Publish to GitHub…", reason("collab.publish"))
                         .on_choose(asks(Prompt::Publish)),
@@ -3460,14 +3470,14 @@ impl Collab {
         items.push(
             row("Consolidate Media", reason("collab.consolidate"))
                 .separated()
-                .on_choose(runs(json!({"type": "collab_consolidate"}))),
+                .on_choose(runs(Command::CollabConsolidate)),
         );
         let refresh = this.clone();
         items.push(row("Refresh", Ok(())).on_choose(move |window, cx| {
             let _ = refresh.update(cx, |collab, cx| {
-                collab.session.update(cx, |session, _| {
-                    session.send(json!({"type": "collab_status"}))
-                });
+                collab
+                    .session
+                    .update(cx, |session, _| session.send(Command::CollabStatus));
                 collab.close(window, cx);
             });
         }));
@@ -3500,7 +3510,7 @@ impl Collab {
         .tips(&[
             if status.gh { "" } else { NEEDS_GH },
             "",
-            if status.repository {
+            if status.git.repository {
                 "The project is a repository already"
             } else {
                 ""
@@ -3509,7 +3519,7 @@ impl Collab {
         if !status.gh {
             chooser = chooser.disabled(PublishWay::GitHub);
         }
-        if status.repository {
+        if status.git.repository {
             chooser = chooser.disabled(PublishWay::Local);
         }
         let this = cx.entity().downgrade();
@@ -3547,9 +3557,9 @@ impl Collab {
             .child(div().flex().child(chooser))
             .child(ui::label(self.publish_way.says(), text::CONTROL, theme::ink2()))
             .child(fields)
-            .when_some(status.enclosing.filter(|enclosing| !enclosing.is_empty()), |column, enclosing| {
+            .when_some(status.enclosing.filter(|enclosing| !enclosing.as_os_str().is_empty()), |column, enclosing| {
                 column.child(ui::label(
-                    format!("This folder is inside another repository ({enclosing}); the project gets a repository of its own."),
+                    format!("This folder is inside another repository ({}); the project gets a repository of its own.", enclosing.display()),
                     text::META,
                     theme::ink3(),
                 ))
@@ -3562,7 +3572,7 @@ impl Collab {
         let branch = self
             .status
             .as_ref()
-            .and_then(|status| status.branch.clone());
+            .and_then(|status| status.git.branch.clone());
         let fields = match prompt {
             Prompt::Publish => self.publish_fields(window, cx),
             Prompt::PullRequest => div()
@@ -3623,8 +3633,8 @@ impl Render for Collab {
         // The menu bar (macOS) offers the window in front's branches.
         if cfg!(target_os = "macos") && window.is_window_active() {
             if let Some(status) = &self.status {
-                let others = other_branches(status.branch.as_deref(), &status.branches);
-                let blocked = self.reasons(cx)("collab.sync").is_err() || !status.repository;
+                let others = other_branches(status.git.branch.as_deref(), &status.git.branches);
+                let blocked = self.reasons(cx)("collab.sync").is_err() || !status.git.repository;
                 crate::commands::set_menu_branches(
                     crate::commands::MenuBranches { others, blocked },
                     cx,
@@ -3701,13 +3711,13 @@ pub fn other_branches(current: Option<&str>, branches: &[String]) -> Vec<String>
 }
 
 /// What a sync is doing, as a person says it.
-fn stage_words(stage: Option<&str>) -> &'static str {
+fn stage_words(stage: Option<&CollabSync>) -> &'static str {
     match stage {
-        Some("committing") => "Committing…",
-        Some("fetching") => "Pulling…",
-        Some("merging") => "Merging…",
-        Some("pushing") => "Pushing…",
-        Some("downloading") => "Downloading media…",
+        Some(CollabSync::Committing) => "Committing…",
+        Some(CollabSync::Fetching) => "Pulling…",
+        Some(CollabSync::Merging) => "Merging…",
+        Some(CollabSync::Pushing) => "Pushing…",
+        Some(CollabSync::Downloading) => "Downloading media…",
         _ => "Syncing…",
     }
 }

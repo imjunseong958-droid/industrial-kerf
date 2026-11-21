@@ -1,8 +1,9 @@
 //! The timeline: tracks and clips, the ruler and zoom, selection and tools, proposal bands, and the keys drawn on a clip.
 
 use kerf_editor::model::{
-    default_targets, proposal_changes, signal_keys, source_targets, toggle_target, GainKey,
-    Proposal, ProposalBand, ProposalVersion, Snapshot, Timeline, TrackKind,
+    default_targets, proposal_changes, signal_keys, source_targets, toggle_target, ClipShow,
+    GainKey, Proposal, ProposalBand, ProposalVersion, Snapshot, SnapshotShow, Timeline,
+    TimelineShow, TrackKind, TrackShow,
 };
 use kerf_editor::store::MediaActivity;
 use kerf_editor::theme::{layout, motion};
@@ -618,6 +619,7 @@ fn proposal(id: &str, versions: &[&str]) -> Proposal {
                 version: at as u32 + 1,
                 proposal_id: (*version).to_owned(),
                 base_revision: 0,
+                ..ProposalVersion::default()
             })
             .collect(),
         ..Proposal::default()

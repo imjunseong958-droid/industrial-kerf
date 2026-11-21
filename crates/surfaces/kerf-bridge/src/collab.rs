@@ -4,11 +4,12 @@
 //! Network and staging (which hashes new media) happen here, never inside
 //! kerfd. Live sync runs on the same worker between commands.
 
+use crate::event::{CollabStatus, CollabSync, Event};
 use crate::{emit, key, media, tasks, Command, Shared};
 use kerf_collab::git::{self, CollabError};
 use kerf_collab::scaffold::{self, GitHubRepository, MEDIA_DIR, PRESETS_DIR};
 use kerf_runtime::{RuntimeClient, RuntimeError, StateSnapshot};
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -162,7 +163,7 @@ pub(crate) fn program_path(program: &Path, paths: Option<&OsStr>) -> Option<Path
 struct Collab {
     directory: PathBuf,
     driver: Option<PathBuf>,
-    tx: SyncSender<Value>,
+    tx: SyncSender<Event>,
     /// The runtime worker, asked to republish after the project changed.
     runtime: SyncSender<Command>,
     shared: Arc<Shared>,
@@ -180,7 +181,7 @@ struct Collab {
     /// taken for an edit.
     synced: Option<u64>,
     /// The last `collab` status emitted.
-    status: Option<Value>,
+    status: Option<CollabStatus>,
     /// The failure the editor shows: live sync does not repeat it, and
     /// reports `done` once a sync succeeds so the editor clears it.
     failure: Option<String>,
@@ -195,7 +196,7 @@ pub(crate) fn run(
     binary: PathBuf,
     rx: Receiver<Command>,
     runtime: SyncSender<Command>,
-    tx: SyncSender<Value>,
+    tx: SyncSender<Event>,
     shared: Arc<Shared>,
 ) {
     let mut collab = Collab::new(directory, &binary, runtime, tx, shared);
@@ -223,7 +224,7 @@ impl Collab {
         directory: PathBuf,
         binary: &Path,
         runtime: SyncSender<Command>,
-        tx: SyncSender<Value>,
+        tx: SyncSender<Event>,
         shared: Arc<Shared>,
     ) -> Self {
         Self {
@@ -361,23 +362,27 @@ impl Collab {
         self.emit_status(false);
     }
 
-    fn stage(&self, stage: &str) {
+    fn stage(&self, stage: CollabSync) {
         if !self.quiet {
-            emit(&self.tx, json!({"type": "collab_sync", "stage": stage}));
+            emit(&self.tx, Event::CollabSync(stage));
         }
     }
 
     fn done(&self, report: Value) {
-        emit(
-            &self.tx,
-            json!({"type": "collab_sync", "stage": "done", "report": report}),
-        );
+        // The report is always an object: `empty_report`'s, with kerfd's merged in.
+        let report = match report {
+            Value::Object(report) => report,
+            _ => Map::new(),
+        };
+        emit(&self.tx, Event::CollabSync(CollabSync::Done { report }));
     }
 
     fn failed(&self, message: &str) {
         emit(
             &self.tx,
-            json!({"type": "collab_sync", "stage": "failed", "message": message}),
+            Event::CollabSync(CollabSync::Failed {
+                message: message.to_owned(),
+            }),
         );
     }
 
@@ -433,7 +438,7 @@ impl Collab {
         // leaves kerfd only a quick commit.
         let mut changed = false;
         if status.changed || manual {
-            self.stage("committing");
+            self.stage(CollabSync::Committing);
             shown = true;
             changed = git::stage(&dir).map_err(text)?;
         }
@@ -441,14 +446,14 @@ impl Collab {
         let mut behind = false;
         if remote {
             if shown {
-                self.stage("fetching");
+                self.stage(CollabSync::Fetching);
             }
             git::fetch(&dir).map_err(text)?;
             behind = git::upstream(&dir).is_some() && count(&dir, "HEAD..@{upstream}") > 0;
         }
         let mut state = None;
         if manual || changed || behind {
-            self.stage("merging");
+            self.stage(CollabSync::Merging);
             shown = true;
             let client = self.client()?;
             let actor = if manual { "ui" } else { "system" };
@@ -461,7 +466,7 @@ impl Collab {
         }
         let mut pushed = false;
         if remote && unpushed(&dir) {
-            self.stage("pushing");
+            self.stage(CollabSync::Pushing);
             shown = true;
             pushed = git::push(&dir).map_err(text)?.pushed;
         }
@@ -491,7 +496,7 @@ impl Collab {
         if git_text(&self.directory, &["lfs", "ls-files", "--name-only"]).is_none() {
             return Ok(false);
         }
-        self.stage("downloading");
+        self.stage(CollabSync::Downloading);
         git::lfs_pull(&self.directory).map_err(text)
     }
 
@@ -539,7 +544,7 @@ impl Collab {
 
     fn commit(&mut self, message: &str) -> Result<Option<Value>, String> {
         self.require_repository()?;
-        self.stage("committing");
+        self.stage(CollabSync::Committing);
         let message = match message.trim() {
             "" => self.describe_changes(),
             message => message.to_owned(),
@@ -555,7 +560,7 @@ impl Collab {
 
     fn branch(&mut self, name: &str, create: bool) -> Result<Option<Value>, String> {
         self.require_repository()?;
-        self.stage("committing");
+        self.stage(CollabSync::Committing);
         git::stage(&self.directory).map_err(text)?;
         let client = self.client()?;
         let (state, switched) = client
@@ -583,12 +588,12 @@ impl Collab {
         }
         let mut report = empty_report();
         if status.changed {
-            self.stage("committing");
+            self.stage(CollabSync::Committing);
             let message = self.describe_changes();
             report["committed"] = json!(git::commit(&dir, &message).map_err(text)?);
         }
         // The pull request needs the branch on the remote.
-        self.stage("pushing");
+        self.stage(CollabSync::Pushing);
         report["pushed"] = json!(git::push(&dir).map_err(text)?.pushed);
         let body = match body.map(str::trim).filter(|body| !body.is_empty()) {
             Some(body) => body.to_owned(),
@@ -604,7 +609,10 @@ impl Collab {
         let request = git::pull_request(&dir, &title, &body).map_err(text)?;
         emit(
             &self.tx,
-            json!({"type": "collab_pull_request", "url": request.url, "created": request.created}),
+            Event::CollabPullRequest {
+                url: request.url,
+                created: request.created,
+            },
         );
         Ok(Some(report))
     }
@@ -636,7 +644,7 @@ impl Collab {
         if !first && remote.is_none() && github.is_none() && git::remote_name(&dir).is_none() {
             return Err("Name a remote URL or a GitHub repository to publish to".into());
         }
-        self.stage("committing");
+        self.stage(CollabSync::Committing);
         if first {
             let io = |error: std::io::Error| error.to_string();
             fs::create_dir_all(dir.join(MEDIA_DIR)).map_err(io)?;
@@ -653,7 +661,7 @@ impl Collab {
         let mut report = empty_report();
         report["committed"] = json!(git::commit(&dir, &message).map_err(text)?);
         if let Some(github) = github {
-            self.stage("pushing");
+            self.stage(CollabSync::Pushing);
             let slug = match github.name.as_deref().map(str::trim) {
                 Some(slug) if !slug.is_empty() => slug.to_owned(),
                 _ => scaffold::repository_slug(&name),
@@ -669,7 +677,7 @@ impl Collab {
                 // A repository on this computer only, as asked.
                 return Ok(Some(report));
             };
-            self.stage("pushing");
+            self.stage(CollabSync::Pushing);
             report["pushed"] = json!(git::push(&dir).map_err(text)?.pushed);
             report["remote"] = json!(git_text(&dir, &["remote", "get-url", &remote_name]));
         }
@@ -716,27 +724,41 @@ impl Collab {
     /// Emit the `collab` status when it changed, or always when `force`.
     fn emit_status(&mut self, force: bool) {
         let dir = &self.directory;
-        let status = git::status(dir).unwrap_or_default();
-        let mut value = serde_json::to_value(&status).unwrap_or_else(|_| json!({}));
-        if status.repository {
-            value["branches"] = json!(all_branches(dir, &status.branches));
-        } else if let Some(enclosing) = git::enclosing_repository(dir) {
-            value["enclosing"] = json!(enclosing);
+        let mut git = git::status(dir).unwrap_or_default();
+        let mut enclosing = None;
+        if git.repository {
+            git.branches = all_branches(dir, &git.branches);
+        } else {
+            enclosing = git::enclosing_repository(dir);
         }
-        value["gh"] = json!(self.gh);
-        value["live"] = json!(self.live);
-        value["busy"] = json!(false);
-        if force || self.status.as_ref() != Some(&value) {
-            emit(&self.tx, json!({"type": "collab", "status": value}));
-            self.status = Some(value);
+        let status = CollabStatus {
+            git,
+            enclosing,
+            gh: self.gh,
+            live: self.live,
+            busy: false,
+        };
+        if force || self.status.as_ref() != Some(&status) {
+            emit(
+                &self.tx,
+                Event::Collab {
+                    status: status.clone(),
+                },
+            );
+            self.status = Some(status);
         }
     }
 
     /// Show that an operation started, without asking git anything.
     fn emit_busy(&mut self) {
         if let Some(status) = &mut self.status {
-            status["busy"] = json!(true);
-            emit(&self.tx, json!({"type": "collab", "status": status}));
+            status.busy = true;
+            emit(
+                &self.tx,
+                Event::Collab {
+                    status: status.clone(),
+                },
+            );
         }
     }
 }

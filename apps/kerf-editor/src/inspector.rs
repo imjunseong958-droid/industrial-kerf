@@ -3,14 +3,15 @@
 //! parameters, and its masks. And the toolbar's format bank.
 //!
 //! Nothing here keeps an editable copy of the clip. Every field draws what
-//! the newest snapshot says (its timeline JSON, kept from the bridge's
-//! `state` event), and a change goes back to kerfd as one typed edit: `set`,
+//! the newest snapshot says (its timeline, kept from the bridge's `state`
+//! event), and a change goes back to kerfd as one typed edit: `set`,
 //! `fx-add`, `fx-set`, `fx-remove` or `set-sequence`. While a slider is
 //! dragged it shows where the pointer has it; the picture changes only when
 //! the edit comes back as a new snapshot.
 
 use crate::icons::Icon;
 use crate::input::{InputEvent, TextInput};
+use crate::model::{Timeline, TrackKind};
 use crate::motion;
 use crate::session::{BridgeEvent, Session};
 use crate::theme::{self, height, radius, space, text};
@@ -22,6 +23,8 @@ use gpui::{
     MouseMoveEvent, MouseUpEvent, Pixels, Rgba, ScrollHandle, SharedString, Subscription, TextRun,
     Window,
 };
+use kerf_bridge::event::{ViewEffect, ViewMask};
+use kerf_bridge::{Command, Event};
 use serde_json::{json, Map, Value};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -403,74 +406,71 @@ struct Inspected {
     generator: Option<String>,
     caption: Option<String>,
     props: Map<String, Value>,
-    effects: Vec<Value>,
-    masks: Vec<Value>,
+    effects: Vec<ViewEffect>,
+    masks: Vec<ViewMask>,
     /// How many more clips are chosen.
     others: usize,
 }
 
 impl Inspected {
-    /// Clip `id` of the snapshot's timeline `raw`, with the playhead at `position`.
-    fn find(raw: &Value, id: &str, position: f64, chosen: usize) -> Option<Self> {
-        let (track, clip) = raw["tracks"].as_array()?.iter().find_map(|track| {
-            track["clips"]
-                .as_array()?
+    /// Clip `id` of the snapshot's `timeline`, with the playhead at `position`.
+    fn find(timeline: &Timeline, id: &str, position: f64, chosen: usize) -> Option<Self> {
+        let (track, clip) = timeline.tracks.iter().find_map(|track| {
+            track
+                .clips
                 .iter()
-                .find(|clip| clip["id"] == id)
+                .find(|clip| clip.id == id)
                 .map(|clip| (track, clip))
         })?;
-        let track_type = track["type"].as_str().unwrap_or("video");
-        let domain = matches!(track_type, "video" | "audio").then(|| track_type.to_owned());
-        let start = clip["timelineStart"].as_f64().unwrap_or(0.0);
-        let duration = clip["duration"].as_f64().unwrap_or(0.0).max(0.0);
-        let fps = raw["fps"]
-            .as_f64()
-            .filter(|fps| fps.is_finite() && *fps > 0.0)
-            .unwrap_or(30.0);
-        let kind = match clip["kind"].as_str().unwrap_or("media") {
-            "generator" => humanize(clip["fx"].as_str().unwrap_or("generator")),
+        let domain = match track.kind {
+            TrackKind::Video => Some("video".to_owned()),
+            TrackKind::Audio => Some("audio".to_owned()),
+            TrackKind::Subtitle => None,
+        };
+        let start = clip.timeline_start;
+        let duration = clip.duration.max(0.0);
+        let fps = if timeline.fps.is_finite() && timeline.fps > 0.0 {
+            timeline.fps
+        } else {
+            30.0
+        };
+        let kind = match clip.kind.as_str() {
+            "generator" => humanize(clip.fx.as_deref().unwrap_or("generator")),
             "sequence" => "Nested sequence".to_owned(),
             "caption" => "Caption".to_owned(),
             _ => {
-                let what = if track_type == "audio" {
+                let what = if track.kind == TrackKind::Audio {
                     "Audio"
                 } else {
                     "Video"
                 };
-                let file = clip["sourceId"].as_str().and_then(|source| {
-                    raw["sources"]
-                        .as_array()?
-                        .iter()
-                        .find(|candidate| candidate["id"] == source)
-                        .and_then(|found| found["path"].as_str())
-                        .map(|path| path.rsplit(['/', '\\']).next().unwrap_or(path).to_owned())
-                });
+                let file = clip
+                    .source_id
+                    .as_deref()
+                    .and_then(|source| timeline.source(source))
+                    .map(|found| {
+                        let path = found.path.as_str();
+                        path.rsplit(['/', '\\']).next().unwrap_or(path).to_owned()
+                    });
                 file.map_or_else(|| what.to_owned(), |file| format!("{what} · {file}"))
             }
         };
-        let list = |key: &str| clip[key].as_array().cloned().unwrap_or_default();
         Some(Self {
             id: id.to_owned(),
-            name: clip["name"].as_str().unwrap_or(id).to_owned(),
+            name: clip.name.as_deref().unwrap_or(id).to_owned(),
             kind,
-            track: track["name"]
-                .as_str()
-                .or(track["id"].as_str())
-                .unwrap_or_default()
-                .to_owned(),
-            locked: track["locked"].as_bool().unwrap_or(false),
+            track: track.name.as_deref().unwrap_or(&track.id).to_owned(),
+            locked: track.locked,
             fps,
             start,
             duration,
-            at: clip_time(position, fps, clip["startFrame"].as_f64(), start, duration),
+            at: clip_time(position, fps, clip.start_frame, duration),
             domain,
-            generator: (clip["kind"] == "generator")
-                .then(|| clip["fx"].as_str().unwrap_or_default().to_owned()),
-            caption: (clip["kind"] == "caption")
-                .then(|| clip["text"].as_str().unwrap_or_default().to_owned()),
-            props: clip["props"].as_object().cloned().unwrap_or_default(),
-            effects: list("effects"),
-            masks: list("masks"),
+            generator: (clip.kind == "generator").then(|| clip.fx.clone().unwrap_or_default()),
+            caption: (clip.kind == "caption").then(|| clip.text.clone().unwrap_or_default()),
+            props: clip.props.clone(),
+            effects: clip.effects.clone(),
+            masks: clip.masks.clone(),
             others: chosen.saturating_sub(1),
         })
     }
@@ -503,11 +503,11 @@ impl Inspected {
             })
             .collect();
         for (index, effect) in self.effects.iter().enumerate() {
-            let Some(entry) = effect["fx"].as_str().and_then(|fx| catalog.fx.get(fx)) else {
+            let Some(entry) = catalog.fx.get(effect.fx.as_str()) else {
                 continue;
             };
             for param in &entry.params {
-                let set = effect["params"].get(&param.name).cloned();
+                let set = effect.params.get(&param.name).cloned();
                 fields.push((Field::new(Target::Effect(index), &param.name), param, set));
             }
         }
@@ -524,10 +524,9 @@ impl Inspected {
 }
 
 /// The playhead's whole frame, as the picture shows it, in seconds from the
-/// clip's first frame (`start_frame`, else `start` seconds), within the clip.
-fn clip_time(position: f64, fps: f64, start_frame: Option<f64>, start: f64, duration: f64) -> f64 {
-    let first = start_frame.unwrap_or_else(|| (start * fps).round());
-    (((position * fps).round() - first) / fps).clamp(0.0, duration)
+/// clip's first frame (`start_frame`), within the clip.
+fn clip_time(position: f64, fps: f64, start_frame: i64, duration: f64) -> f64 {
+    (((position * fps).round() - start_frame as f64) / fps).clamp(0.0, duration)
 }
 
 /// What a parameter holds at the playhead.
@@ -1099,7 +1098,7 @@ struct Adding {
 pub struct InspectorView {
     session: Entity<Session>,
     /// The newest snapshot's timeline, as the bridge sent it.
-    raw: Option<Value>,
+    timeline: Option<Timeline>,
     revision: u64,
     asked_for_state: bool,
     /// The clip the fields are for.
@@ -1174,7 +1173,7 @@ impl InspectorView {
         ];
         Self {
             session,
-            raw: None,
+            timeline: None,
             revision: 0,
             asked_for_state: false,
             clip: None,
@@ -1202,22 +1201,21 @@ impl InspectorView {
 
     fn session_notified(&mut self, session: Entity<Session>, cx: &mut Context<Self>) {
         // The snapshot came before this view listened: ask for it again, once.
-        let missing = self.raw.is_none() && session.read(cx).state.has_snapshot;
+        let missing = self.timeline.is_none() && session.read(cx).state.has_snapshot;
         if missing && !self.asked_for_state {
             self.asked_for_state = true;
             session.update(cx, |session, _| {
-                session.send(json!({"type": "refresh"}));
+                session.send(Command::Refresh);
             });
         }
         cx.notify();
     }
 
     fn bridge_event(&mut self, _: Entity<Session>, event: &BridgeEvent, cx: &mut Context<Self>) {
-        match event.0["type"].as_str() {
-            Some("state") => {
-                let snapshot = &event.0["snapshot"];
-                let revision = snapshot["revision"].as_u64().unwrap_or(0);
-                self.raw = Some(snapshot["timeline"].clone());
+        match &event.0 {
+            Event::State { snapshot } => {
+                let revision = snapshot.revision;
+                self.timeline = Some(snapshot.timeline.clone());
                 if revision != self.revision {
                     self.forget_sent();
                 }
@@ -1231,7 +1229,7 @@ impl InspectorView {
                 self.revision = revision;
                 cx.notify();
             }
-            Some("error") => {
+            Event::Error(_) => {
                 // A refused edit leaves the clip as it was: show it so.
                 self.pending = None;
                 self.forget_sent();
@@ -1252,7 +1250,7 @@ impl InspectorView {
         let session = self.session.read(cx);
         let id = self.clip.as_deref()?;
         Inspected::find(
-            self.raw.as_ref()?,
+            self.timeline.as_ref()?,
             id,
             session.state.position,
             session.selection.len(),
@@ -2672,14 +2670,14 @@ impl InspectorView {
         &self,
         clip: &Inspected,
         index: usize,
-        effect: &Value,
+        effect: &ViewEffect,
         window: &Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let fx = effect["fx"].as_str().unwrap_or_default();
+        let fx = effect.fx.as_str();
         let entry = catalog().fx.get(fx);
         let name = entry.map_or_else(|| fx.to_owned(), |entry| entry.name.clone());
-        let enabled = effect["enabled"].as_bool().unwrap_or(true);
+        let enabled = effect.enabled;
         let folded = self.folded.contains(&index);
         let this = cx.entity().downgrade();
         let clip_id = clip.id.clone();
@@ -2759,7 +2757,7 @@ impl InspectorView {
                 card = card.child(note("Nothing to set.".to_owned()))
             }
             Some(entry) => {
-                let values = effect["params"].as_object().cloned().unwrap_or_default();
+                let values = &effect.params;
                 for param in &entry.params {
                     let field = Field::new(Target::Effect(index), &param.name);
                     card = card.child(self.param_row(
@@ -2785,18 +2783,24 @@ impl InspectorView {
         }
         let chosen = self.session.read(cx).chosen_mask.clone();
         let rows = clip.masks.iter().enumerate().map(|(index, mask)| {
-            let name = mask["name"].as_str().unwrap_or_default().to_owned();
+            let name = mask.name.clone();
             let is_chosen = chosen.as_deref() == Some(name.as_str());
             let choose = name.clone();
-            let mode = humanize(mask["mode"].as_str().unwrap_or("add"));
-            let shape = ["rect", "ellipse", "points"]
-                .into_iter()
-                .find(|shape| !mask[*shape].is_null())
-                .map_or("Shape", |shape| match shape {
-                    "rect" => "Rectangle",
-                    "ellipse" => "Ellipse",
-                    _ => "Path",
-                });
+            let mode = humanize(if mask.mode.is_empty() {
+                "add"
+            } else {
+                mask.mode.as_str()
+            });
+            let outline = &mask.outline;
+            let shape = if outline.rect.is_some() {
+                "Rectangle"
+            } else if outline.ellipse.is_some() {
+                "Ellipse"
+            } else if outline.points.is_some() {
+                "Path"
+            } else {
+                "Shape"
+            };
             div()
                 .id(ElementId::NamedInteger(
                     "inspector-mask".into(),
@@ -2831,7 +2835,7 @@ impl InspectorView {
                         .flex_1()
                         .min_w_0(),
                 )
-                .when(mask["inverted"].as_bool().unwrap_or(false), |row| {
+                .when(mask.inverted, |row| {
                     row.child(ui::chip("Inverted", theme::ink2()))
                 })
         });
@@ -3012,7 +3016,7 @@ impl Render for InspectorView {
         let Some(clip) = self.inspected(cx) else {
             // Its clip gone, a choice's menu has no button to stay under.
             self.close_choice(window, cx);
-            let words = if self.raw.is_none() {
+            let words = if self.timeline.is_none() {
                 "Waiting for the project…"
             } else {
                 "Choose a clip on the timeline."
@@ -3209,7 +3213,7 @@ impl FormatBank {
     /// or the last.
     fn step(&mut self, forward: bool, cx: &mut Context<Self>) {
         let timeline = self.session.read(cx).timeline();
-        let chosen = format_index(timeline.width, timeline.height);
+        let chosen = format_index(timeline.width.unwrap_or(0), timeline.height.unwrap_or(0));
         if let Some(next) = format_beside(chosen, forward) {
             self.choose(next, cx);
         }
@@ -3229,7 +3233,7 @@ impl FormatBank {
         }
         self.session.update(cx, |session, cx| {
             let timeline = session.timeline();
-            if timeline.width == width && timeline.height == height {
+            if timeline.width.unwrap_or(0) == width && timeline.height.unwrap_or(0) == height {
                 return;
             }
             let mut op = json!({"op": "set-sequence", "width": width, "height": height});
@@ -3246,7 +3250,7 @@ impl Render for FormatBank {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let session = self.session.read(cx);
         let timeline = session.timeline();
-        let (width, height) = (timeline.width, timeline.height);
+        let (width, height) = (timeline.width.unwrap_or(0), timeline.height.unwrap_or(0));
         if !session.has_project() || !session.state.has_snapshot || width == 0 || height == 0 {
             return div().into_any_element();
         }

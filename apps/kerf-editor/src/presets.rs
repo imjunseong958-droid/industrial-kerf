@@ -13,6 +13,7 @@
 use crate::icons::Icon;
 use crate::input::{InputEvent, TextInput};
 use crate::launcher::field;
+use crate::model::SourceShow;
 use crate::session::{BridgeEvent, Session};
 use crate::store::Change;
 use crate::theme::{self, radius, text};
@@ -22,6 +23,7 @@ use gpui::{
     FocusHandle, Focusable, FontWeight, KeyBinding, PathPromptOptions, SharedString, Subscription,
     Window,
 };
+use kerf_bridge::{Command, Event};
 use serde_json::{json, Map, Value};
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -441,12 +443,14 @@ fn strings(value: &Value) -> impl Iterator<Item = &str> {
 /// or kerfd's own words). None for any other event, or for an error
 /// naming the command it refused (Kerf's, a queued render's). The Import
 /// Editing Preset dialog reads it while a file it asked for is coming.
-pub fn import_refusal(event: &Value) -> Option<String> {
-    if event["type"] != "error" || !event["command"].is_null() {
+pub fn import_refusal(event: &Event) -> Option<String> {
+    let Event::Error(error) = event else {
+        return None;
+    };
+    if error.command.is_some() {
         return None;
     }
-    let message = event["message"].as_str().unwrap_or_default();
-    let first = message.lines().next().unwrap_or_default().trim();
+    let first = error.message.lines().next().unwrap_or_default().trim();
     Some(if first.is_empty() {
         "The file could not be imported".to_owned()
     } else {
@@ -469,7 +473,7 @@ pub(crate) enum Picked {
     Unusable(String),
 }
 
-/// Why Kerf cannot use `path`: the bridge takes paths as text (JSON), so
+/// Why Kerf cannot use `path`: the bridge takes paths as text, so
 /// a name that is not UTF-8 cannot be sent to it. None for any other path.
 /// The file choosers refuse such a path with these words.
 pub fn path_refusal(path: &Path) -> Option<String> {
@@ -641,8 +645,9 @@ pub fn export_preset(session: Entity<Session>, window: &mut Window, cx: &mut App
                 match answer {
                     Picked::Paths(paths) => match paths.first().map(|path| export_path(path)) {
                         Some(Ok(path)) => {
-                            session.send(json!({"type": "preset_export",
-                                "path": path.to_string_lossy()}));
+                            session.send(Command::PresetExport {
+                                path: path.to_string_lossy().into_owned(),
+                            });
                         }
                         Some(Err(words)) => session.state.notify(&words, true),
                         None => {}
@@ -756,7 +761,9 @@ impl ApplyPreset {
             }),
         ];
         session.update(cx, |session, cx| {
-            session.send(json!({"type": "preset_inspect", "path": path.to_string_lossy()}));
+            session.send(Command::PresetInspect {
+                path: path.to_string_lossy().into_owned(),
+            });
             cx.notify();
         });
         Self {
@@ -781,7 +788,7 @@ impl ApplyPreset {
         self.importing.is_some()
     }
 
-    fn heard(&mut self, event: &Value, cx: &mut Context<Self>) {
+    fn heard(&mut self, event: &Event, cx: &mut Context<Self>) {
         // A file imported for a slot was refused: said under the slot, and
         // media coming in later is not taken for it.
         if let Some(refusal) = import_refusal(event).filter(|_| self.importing.is_some()) {
@@ -796,13 +803,13 @@ impl ApplyPreset {
             cx.notify();
             return;
         }
-        match event["type"].as_str() {
-            Some("preset_inspect") if event["path"].as_str().map(Path::new) == Some(&self.path) => {
-                self.load(event["preset"].clone(), cx);
+        match event {
+            Event::PresetInspect { path, preset } if Path::new(path) == self.path.as_path() => {
+                self.load(preset.clone(), cx);
             }
             // Reading it failed: said here, as well as at the window's foot.
-            Some("error") if self.preset.is_none() && event["command"].is_null() => {
-                self.problem = event["message"].as_str().map(|m| m.to_owned().into());
+            Event::Error(error) if self.preset.is_none() && error.command.is_none() => {
+                self.problem = Some(error.message.clone().into());
                 cx.notify();
             }
             _ => {}
@@ -825,7 +832,9 @@ impl ApplyPreset {
             importing.asked = true;
             let path = self.path.clone();
             session.update(cx, |session, _| {
-                session.send(json!({"type": "preset_inspect", "path": path.to_string_lossy()}));
+                session.send(Command::PresetInspect {
+                    path: path.to_string_lossy().into_owned(),
+                });
             });
         }
     }
@@ -1018,8 +1027,12 @@ impl ApplyPreset {
             .filter(|text| text.input.read(cx).text() != text.original)
             .map(|text| (text.clip.clone(), json!(text.input.read(cx).text())))
             .collect();
-        let request = json!({"type": "preset_apply", "path": self.path.to_string_lossy(), "bindings": bindings,
-            "texts": texts, "revision": revision});
+        let request = Command::PresetApply {
+            path: self.path.to_string_lossy().into_owned(),
+            bindings: Value::Object(bindings),
+            texts: Value::Object(texts),
+            revision,
+        };
         self.session.update(cx, |session, cx| {
             session.send(request);
             cx.notify();
@@ -1474,17 +1487,16 @@ impl SavePreset {
         }
     }
 
-    fn heard(&mut self, event: &Value, cx: &mut Context<Self>) {
+    fn heard(&mut self, event: &Event, cx: &mut Context<Self>) {
         if self.saving != Saving::Waiting {
             return;
         }
-        match event["type"].as_str() {
-            Some("preset_saved") => cx.emit(DismissEvent),
-            Some("error") => {
-                let message = event["message"].as_str().unwrap_or_default();
+        match event {
+            Event::PresetSaved { .. } => cx.emit(DismissEvent),
+            Event::Error(error) => {
                 // Any other refusal is said at the window's foot; the name
                 // can be changed and tried again.
-                self.saving = match existing_preset(message) {
+                self.saving = match existing_preset(&error.message) {
                     Some(path) => Saving::Asking(path.to_owned()),
                     None => Saving::Naming,
                 };
@@ -1504,7 +1516,7 @@ impl SavePreset {
         self.saving = Saving::Waiting;
         self.session.update(cx, |session, cx| {
             session.state.saving_preset = Some(name.clone());
-            session.send(json!({"type": "preset_save", "name": name, "replace": replace}));
+            session.send(Command::PresetSave { name, replace });
             cx.notify();
         });
         cx.notify();

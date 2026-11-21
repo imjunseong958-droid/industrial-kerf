@@ -11,45 +11,46 @@
 //! Nothing here runs a step. A making is `media_make`, which shows what
 //! would run and asks first.
 
+use crate::event::{ErrorEvent, Event, Recipe};
 use crate::Shared;
 use kerf_engine::recipe::model::Models;
 use kerf_model::Project;
-use serde::Deserialize;
-use serde_json::{json, Value};
+use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 use std::path::Path;
 use std::sync::mpsc::SyncSender;
 
 /// A change to a media's recipe: one name on one line, or with `text` the
 /// whole of it.
-#[derive(Clone, Debug, Deserialize)]
-pub(crate) struct Edit {
-    media: String,
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct Edit {
+    pub media: String,
     /// The recipe as the editor read it. A file that holds anything else
     /// was changed since, and is left alone.
-    was: String,
+    pub was: String,
     /// The whole recipe, in place of `was`.
-    #[serde(default)]
-    text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
     /// The line, from 1, and the name on it to set: the `nth` word of that
     /// name, to `value`, or taken off the line where there is no value.
     #[serde(default)]
-    line: usize,
+    pub line: usize,
     #[serde(default)]
-    key: String,
+    pub key: String,
     #[serde(default)]
-    nth: usize,
-    #[serde(default)]
-    value: Option<String>,
+    pub nth: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<String>,
     /// A step to add, by its kind: `guide`, `model`, or `join`
     /// ([`kerf_shots::graph::step`]).
-    #[serde(default)]
-    add: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub add: Option<String>,
     /// Take the step on `line` out.
     #[serde(default)]
-    remove: bool,
+    pub remove: bool,
     /// Go back to the steps this take was made from ([`kerf_shots::takes::restored`]).
-    #[serde(default)]
-    restore: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub restore: Option<u32>,
 }
 
 /// The person's models, and why their file does not read where it does not:
@@ -68,13 +69,17 @@ pub(crate) fn event(
     id: &str,
     models: &Models,
     models_error: Option<String>,
-) -> Result<Value, String> {
-    let mut event = kerf_shots::graph::shown(project, directory, id, models)?;
-    event["type"] = json!("recipe");
-    if let Some(error) = models_error {
-        event["modelsError"] = json!(error);
-    }
-    Ok(event)
+) -> Result<Recipe, String> {
+    let graph = match kerf_shots::graph::shown(project, directory, id, models)? {
+        Value::Object(graph) => graph,
+        _ => Map::new(),
+    };
+    Ok(Recipe {
+        graph,
+        models_error,
+        edited: false,
+        added: None,
+    })
 }
 
 /// What a change to a media's steps comes to.
@@ -158,16 +163,15 @@ pub(crate) fn apply(client: &kerf_runtime::RuntimeClient, lines: &[String]) -> R
 
 /// The `media_carry_plan` event of media `id`, whose steps are in the recipe file it names:
 /// what carrying them into the document would write. Nothing is changed.
-fn carry_plan(project: &Project, directory: &Path, id: &str) -> Result<Value, String> {
+fn carry_plan(project: &Project, directory: &Path, id: &str) -> Result<Event, String> {
     let carry =
         kerf_engine::recipe::carry(project, directory, id).map_err(|error| error.to_string())?;
-    Ok(json!({
-        "type": "media_carry_plan",
-        "media": id,
-        "recipe": carry.recipe,
-        "script": carry.script,
-        "notes": carry.notes,
-    }))
+    Ok(Event::MediaCarryPlan {
+        media: id.to_owned(),
+        recipe: carry.recipe,
+        script: carry.script,
+        notes: carry.notes,
+    })
 }
 
 /// Have the takes of media `id`, carried between `before` and `after`, held to the steps it
@@ -178,10 +182,14 @@ fn carried(
     directory: &Path,
     id: &str,
     recipe: &str,
-) -> Result<Value, String> {
+) -> Result<Event, String> {
     let held = kerf_engine::recipe::takes::mark_carried(before, after, directory, id)
         .map_err(|error| error.to_string())?;
-    Ok(json!({"type": "media_carried", "media": id, "recipe": recipe, "held": held}))
+    Ok(Event::MediaCarried {
+        media: id.to_owned(),
+        recipe: recipe.to_owned(),
+        held,
+    })
 }
 
 /// Answer `media_carry` for media `id`, whose steps are in the recipe file it names.
@@ -195,7 +203,7 @@ pub(crate) fn carry(
     client: &kerf_runtime::RuntimeClient,
     id: &str,
     confirmed: bool,
-    tx: &SyncSender<Value>,
+    tx: &SyncSender<Event>,
 ) {
     let directory = shared.directory.as_path();
     let answered = project(client).and_then(|before| {
@@ -212,8 +220,12 @@ pub(crate) fn carry(
         Ok(event) => crate::emit(tx, event),
         Err(why) => crate::emit(
             tx,
-            json!({"type": "error", "message": format!("cannot carry {id}: {why}"),
-                "command": "media_carry", "media": id}),
+            Event::Error(ErrorEvent {
+                message: format!("cannot carry {id}: {why}"),
+                command: Some("media_carry".to_owned()),
+                media: Some(id.to_owned()),
+                ..ErrorEvent::default()
+            }),
         ),
     }
 }
@@ -228,10 +240,15 @@ fn project(client: &kerf_runtime::RuntimeClient) -> Result<Project, String> {
 
 /// What cannot be shown or changed of media `id`'s recipe: an `error` that
 /// names the media, so that what shows its graph can say so there.
-fn failed(tx: &SyncSender<Value>, id: &str, why: String) {
+fn failed(tx: &SyncSender<Event>, id: &str, why: String) {
     crate::emit(
         tx,
-        json!({"type": "error", "message": why, "command": "recipe", "media": id}),
+        Event::Error(ErrorEvent {
+            message: why,
+            command: Some("recipe".to_owned()),
+            media: Some(id.to_owned()),
+            ..ErrorEvent::default()
+        }),
     );
 }
 
@@ -240,13 +257,13 @@ pub(crate) fn get(
     shared: &Shared,
     client: &kerf_runtime::RuntimeClient,
     id: &str,
-    tx: &SyncSender<Value>,
+    tx: &SyncSender<Event>,
 ) {
     let (models, models_error) = models();
     match project(client)
         .and_then(|project| event(&project, &shared.directory, id, &models, models_error))
     {
-        Ok(event) => crate::emit(tx, event),
+        Ok(event) => crate::emit(tx, Event::Recipe(event)),
         Err(why) => failed(tx, id, why),
     }
 }
@@ -258,7 +275,7 @@ pub(crate) fn edit(
     shared: &Shared,
     client: &kerf_runtime::RuntimeClient,
     edit: &Edit,
-    tx: &SyncSender<Value>,
+    tx: &SyncSender<Event>,
 ) {
     let project = match project(client) {
         Ok(project) => project,
@@ -292,12 +309,10 @@ pub(crate) fn edit(
     };
     match shown {
         Ok(mut event) => {
-            event["edited"] = json!(true);
+            event.edited = true;
             // The line of the step that was added, for what shows the graph to choose it.
-            if let Some(line) = added {
-                event["added"] = json!(line);
-            }
-            crate::emit(tx, event);
+            event.added = added;
+            crate::emit(tx, Event::Recipe(event));
         }
         Err(why) => failed(tx, &edit.media, why),
     }

@@ -1,6 +1,8 @@
 //! The conversation: what is said and asked, the composer, the proposals Kerf stages and how a turn reads.
 
-use crate::support::{apply, clip, preview, snapshot, texts, timeline_value};
+use crate::support::{apply, clip, event, preview, snapshot, texts, timeline_value};
+use kerf_bridge::event::{Check, CheckSummary};
+use kerf_bridge::Event;
 use kerf_editor::ask::{place, scope_choices, scope_words, GAP, HEIGHT, WIDTH};
 use kerf_editor::chat::{
     access_reason, card_picture_size, card_turns, check_suggestions, clip_changes, clock_time,
@@ -14,7 +16,8 @@ use kerf_editor::chat::{
     CARD_PICTURE_WIDEST, DRAFT_BEAT, MODE_HOLD,
 };
 use kerf_editor::model::{
-    timecode, ConversationSummary, Proposal, Snapshot, Speaker, Timeline, Turn,
+    timecode, ConversationSummary, Proposal, ProposalFreshness, Snapshot, SnapshotShow, Speaker,
+    Timeline, TimelineShow, Turn,
 };
 use kerf_editor::palette::unavailable;
 use kerf_editor::prefs::{Permissions, Provider};
@@ -223,14 +226,19 @@ fn only_a_lone_colour_change_is_said_so() {
 
 #[test]
 fn a_checks_failings_become_requests_to_fix_them() {
-    let event = json!({"type": "check", "status": "done", "summary": {"rows": [
-        {"name": "True peak", "passed": false, "at": 4.5},
-        {"name": "Loudness", "passed": true},
-        {"name": "", "passed": false},
-        {"name": "Black frames", "passed": false},
-    ]}});
+    let event = event(
+        json!({"type": "check", "status": "done", "summary": {"rows": [
+            {"name": "True peak", "passed": false, "at": 4.5},
+            {"name": "Loudness", "passed": true},
+            {"name": "", "passed": false},
+            {"name": "Black frames", "passed": false},
+        ]}}),
+    );
+    let Event::Check(Check::Done { summary, .. }) = &event else {
+        panic!("{event:?} is not a finished check");
+    };
     assert_eq!(
-        check_suggestions(&event, 24.0),
+        check_suggestions(summary, 24.0),
         vec![
             (
                 "Fix the true peak".to_owned(),
@@ -242,7 +250,7 @@ fn a_checks_failings_become_requests_to_fix_them() {
             ),
         ]
     );
-    assert!(check_suggestions(&json!({"type": "check"}), 24.0).is_empty());
+    assert!(check_suggestions(&CheckSummary::default(), 24.0).is_empty());
 }
 
 fn plain(words: &str) -> Span {
@@ -340,8 +348,8 @@ fn a_finished_turn_says_how_long_it_worked_and_its_steps() {
 
 #[test]
 fn ask_again_sends_the_request_the_answer_was_to() {
-    let turn = |kind, text: &str| Turn {
-        kind,
+    let turn = |kind: Speaker, text: &str| Turn {
+        kind: kind.wire().into(),
         text: text.into(),
         ..Turn::default()
     };
@@ -419,7 +427,7 @@ fn a_proposal_says_which_clips_it_adds_removes_moves_and_trims() {
 #[test]
 fn proposals_keep_their_versions_and_the_nearest_open_one_is_pinned() {
     let value = snapshot();
-    let book = ProposalBook::read(&value);
+    let book = ProposalBook::read(&Snapshot::from_value(&value));
     let snapshot = Snapshot::from_value(&value);
     let near = &snapshot.proposals[1];
     let versions = book.versions_of(near);
@@ -626,7 +634,7 @@ fn a_settled_card_says_how_long_ago_it_was_settled_here() {
 fn a_proposal_from_outside_says_who_made_it() {
     let proposal = |author: Value| Proposal {
         proposal_id: "p".into(),
-        author,
+        author: serde_json::from_value(author).unwrap_or_default(),
         ..Proposal::default()
     };
     // The author as kerf-mcp stages it (kerf-runtime's `Author::new("mcp", …)`).
@@ -1096,7 +1104,7 @@ proptest! {
 fn kerf(id: &str, proposal: Option<&str>) -> Turn {
     Turn {
         id: id.into(),
-        kind: Speaker::Kerf,
+        kind: Speaker::Kerf.wire().into(),
         text: "Done.".into(),
         proposal: proposal.map(str::to_owned),
         ..Turn::default()
@@ -1106,7 +1114,7 @@ fn kerf(id: &str, proposal: Option<&str>) -> Turn {
 fn you(id: &str) -> Turn {
     Turn {
         id: id.into(),
-        kind: Speaker::You,
+        kind: Speaker::You.wire().into(),
         text: "Tighten it".into(),
         ..Turn::default()
     }
@@ -1124,7 +1132,7 @@ fn a_proposal_has_one_card_in_the_newest_turn_that_names_it() {
              "script": "move b to 2s"}
         ]
     });
-    let book = ProposalBook::read(&value);
+    let book = ProposalBook::read(&Snapshot::from_value(&value));
     let proposals = Snapshot::from_value(&value).proposals;
     let turns = vec![
         you("1"),
@@ -1153,7 +1161,7 @@ fn a_proposal_has_one_card_in_the_newest_turn_that_names_it() {
 fn sequence(fps: f64, start: f64) -> Timeline {
     Timeline {
         fps,
-        start,
+        start: Some(start),
         ..Timeline::default()
     }
 }
@@ -1272,12 +1280,16 @@ fn each_mode_chosen_takes_the_place_of_the_mode_said_last() {
 // ------------------------------------------------------------ words on a rest
 
 fn proposal(freshness: &str) -> Proposal {
-    serde_json::from_value(json!({
-        "proposalId": "p1",
-        "status": "pending",
-        "freshness": freshness,
-    }))
-    .unwrap()
+    Proposal {
+        proposal_id: "p1".into(),
+        status: "pending".into(),
+        freshness: if freshness == "stale" {
+            ProposalFreshness::Stale
+        } else {
+            ProposalFreshness::Current
+        },
+        ..Proposal::default()
+    }
 }
 
 #[test]

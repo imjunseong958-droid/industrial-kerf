@@ -1,6 +1,6 @@
 //! Media: the media bin, waveforms and pictures of media, importing, the inspector, and Finish's checks and deliveries.
 
-use crate::support::snapshot_timeline;
+use crate::support::{command, snapshot_timeline};
 use kerf_editor::artwork::{
     fill_gaps, frame_index, parse_pam_stream, pixel_format_has_alpha, strip_frame_count,
     strip_height, waveform_columns, waveform_raise, Artwork, Bucket, PeakReducer, Peaks,
@@ -21,7 +21,7 @@ use kerf_editor::media::{
     badge_runs, badge_text, index_rows, matches_search, program_time_of, role_change, role_choices,
     role_groups, role_name, status_text, step_choice, IndexRow,
 };
-use kerf_editor::model::{Source, Timeline};
+use kerf_editor::model::{Source, Timeline, TimelineShow};
 use kerf_editor::prefs::{MasterOutput, Prefs};
 use kerf_editor::session::{export_request, DELIVERIES};
 use kerf_editor::store::{Badge, MediaActivity};
@@ -337,7 +337,7 @@ fn a_tiles_second_line_says_what_it_is_doing_or_is() {
         "Queued for making"
     );
     let mut shot = video.clone();
-    shot.steps = Some(1);
+    shot.steps = 1;
     shot.takes = vec![
         kerf_editor::model::Take {
             number: 1,
@@ -1011,7 +1011,9 @@ fn the_master_goes_to_deliveries_unless_the_project_keeps_another_place() {
     let project = Path::new("/films/atlas");
     assert_eq!(
         master_request(Some(project), None),
-        json!({"type": "export", "quality": "master", "output": "deliveries/", "name": "atlas_master"})
+        command(
+            json!({"type": "export", "quality": "master", "output": "deliveries/", "name": "atlas_master"})
+        )
     );
     let kept = MasterOutput {
         folder: Some("/Volumes/out/".into()),
@@ -1020,7 +1022,9 @@ fn the_master_goes_to_deliveries_unless_the_project_keeps_another_place() {
     };
     assert_eq!(
         master_request(Some(project), Some(&kept)),
-        json!({"type": "export", "quality": "master", "codec": "hevc", "output": "/Volumes/out/", "name": "Atlas Final"})
+        command(
+            json!({"type": "export", "quality": "master", "codec": "hevc", "output": "/Volumes/out/", "name": "Atlas Final"})
+        )
     );
     assert_eq!(
         master_goes(Some(project), Some(&kept)).0,
@@ -1035,12 +1039,12 @@ fn the_master_goes_to_deliveries_unless_the_project_keeps_another_place() {
     };
     assert_eq!(
         master_request(Some(project), Some(&own)),
-        json!({"type": "export", "quality": "master", "name": "atlas_master"})
+        command(json!({"type": "export", "quality": "master", "name": "atlas_master"}))
     );
     assert_eq!(master_goes(Some(project), Some(&own)).0, "atlas_master.mov");
     assert_eq!(
         master_request(None, None),
-        json!({"type": "export", "quality": "master"})
+        command(json!({"type": "export", "quality": "master"}))
     );
 }
 
@@ -1068,7 +1072,9 @@ fn every_way_of_exporting_the_master_sends_where_the_project_keeps_it() {
     );
     assert_eq!(
         request(Some(project), &prefs, "master"),
-        json!({"type": "export", "quality": "master", "codec": "h264", "output": "masters", "name": "Harbour final"})
+        command(
+            json!({"type": "export", "quality": "master", "codec": "h264", "output": "masters", "name": "Harbour final"})
+        )
     );
     // A review copy, a full render and a preview are not the master's.
     for quality in ["review", "full", "preview"] {
@@ -1079,7 +1085,8 @@ fn every_way_of_exporting_the_master_sends_where_the_project_keeps_it() {
     }
     // Another project keeps nothing.
     assert_eq!(
-        request(Some(Path::new("/films/atlas")), &prefs, "master")["output"],
+        serde_json::to_value(request(Some(Path::new("/films/atlas")), &prefs, "master")).unwrap()
+            ["output"],
         "deliveries/"
     );
 }
@@ -1172,7 +1179,7 @@ proptest! {
             name,
             codec: codec.map(str::to_owned),
         };
-        let command = master_request(Some(&path), Some(&kept));
+        let command = serde_json::to_value(master_request(Some(&path), Some(&kept))).unwrap();
         let (goes, _) = master_goes(Some(&path), Some(&kept));
         // The file the row names is the request's name, in the codec's container.
         let extension = match command["codec"].as_str() {
@@ -1204,20 +1211,26 @@ fn publish_starts_from_the_folders_name_and_shares_three_ways() {
     assert_eq!(publish_name("가편집"), "-");
     assert_eq!(
         publish_command(PublishWay::GitHub, " atlas ", false, ""),
-        Some(json!({"type": "collab_publish", "github": {"private": false, "name": "atlas"}}))
+        Some(command(
+            json!({"type": "collab_publish", "github": {"private": false, "name": "atlas"}})
+        ))
     );
     assert_eq!(
         publish_command(PublishWay::GitHub, "", true, ""),
-        Some(json!({"type": "collab_publish", "github": {"private": true}}))
+        Some(command(
+            json!({"type": "collab_publish", "github": {"private": true}})
+        ))
     );
     assert_eq!(publish_command(PublishWay::Remote, "x", true, "  "), None);
     assert_eq!(
         publish_command(PublishWay::Remote, "x", true, " git@gitlab.com:j/a.git "),
-        Some(json!({"type": "collab_publish", "remote": "git@gitlab.com:j/a.git"}))
+        Some(command(
+            json!({"type": "collab_publish", "remote": "git@gitlab.com:j/a.git"})
+        ))
     );
     assert_eq!(
         publish_command(PublishWay::Local, "x", true, "y"),
-        Some(json!({"type": "collab_publish"}))
+        Some(command(json!({"type": "collab_publish"})))
     );
 }
 
@@ -1228,11 +1241,15 @@ fn a_pull_request_is_titled_from_its_branch_and_said_with_its_url() {
     assert_eq!(pull_request_command("  ", "body"), None);
     assert_eq!(
         pull_request_command("Trim", "  "),
-        Some(json!({"type": "collab_pull_request", "title": "Trim"}))
+        Some(command(
+            json!({"type": "collab_pull_request", "title": "Trim"})
+        ))
     );
     assert_eq!(
         pull_request_command("Trim", "Shorter\nopening"),
-        Some(json!({"type": "collab_pull_request", "title": "Trim", "body": "Shorter\nopening"}))
+        Some(command(
+            json!({"type": "collab_pull_request", "title": "Trim", "body": "Shorter\nopening"})
+        ))
     );
     assert_eq!(
         pull_request_said("https://github.com/j/a/pull/4", true),
@@ -1350,21 +1367,25 @@ fn a_master_and_a_draft_go_into_deliveries_named_after_the_folder() {
     let project = Path::new("/films/Atlas");
     assert_eq!(
         export_request(Some(project), "master"),
-        json!({"type": "export", "quality": "master", "output": DELIVERIES, "name": "Atlas_master"})
+        command(
+            json!({"type": "export", "quality": "master", "output": DELIVERIES, "name": "Atlas_master"})
+        )
     );
     assert_eq!(
         export_request(Some(project), Quality::Draft.wire()),
-        json!({"type": "export", "quality": "review", "codec": "h264", "output": DELIVERIES,
+        command(
+            json!({"type": "export", "quality": "review", "codec": "h264", "output": DELIVERIES,
             "name": "Atlas_draft"})
+        )
     );
     // Other qualities, and a project with no folder name, go where kerfd puts them.
     assert_eq!(
         export_request(Some(project), "preview"),
-        json!({"type": "export", "quality": "preview"})
+        command(json!({"type": "export", "quality": "preview"}))
     );
     assert_eq!(
         export_request(None, "review"),
-        json!({"type": "export", "quality": "review", "codec": "h264"})
+        command(json!({"type": "export", "quality": "review", "codec": "h264"}))
     );
 }
 
@@ -1388,7 +1409,7 @@ proptest! {
         prop_assume!(!folder.trim().is_empty());
         let project = PathBuf::from("/work").join(&folder);
         for (quality, suffix) in [("master", "master"), ("review", "draft")] {
-            let request = export_request(Some(&project), quality);
+            let request = serde_json::to_value(export_request(Some(&project), quality)).unwrap();
             prop_assert_eq!(request["output"].as_str(), Some(DELIVERIES));
             let name = format!("{folder}_{suffix}");
             prop_assert_eq!(request["name"].as_str(), Some(name.as_str()));
@@ -1418,7 +1439,11 @@ fn file_export_renders_the_chosen_quality_where_kerfd_puts_it() {
         json!({"request": {"type": "export", "quality": "preview"}})
     );
     // The toolbar's Export, at the same choice, delivers a master instead.
-    let toolbar = export_request(Some(Path::new("/films/Atlas")), Quality::Master.wire());
+    let toolbar = serde_json::to_value(export_request(
+        Some(Path::new("/films/Atlas")),
+        Quality::Master.wire(),
+    ))
+    .unwrap();
     assert_eq!(toolbar["quality"], "master");
     assert_eq!(toolbar["output"], DELIVERIES);
 }

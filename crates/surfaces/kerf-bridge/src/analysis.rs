@@ -20,13 +20,16 @@
 //!   only the newest request waits for one that runs. `scope_signal {status}` says when it starts or
 //!   stops being a sequence with one. An SDR sequence draws nothing here.
 
+use crate::event::{
+    ErrorEvent, Event, IndexRange, LoudnessEvent, LoudnessReady, MediaIndexEvent, MediaInfo,
+    SignalStatus,
+};
 use crate::{emit, Shared};
 use kerf_engine::derivatives::DerivativeCache;
 use kerf_engine::{CancellationToken, EngineError, MediaIndex};
 use kerf_model::Project;
 use kerf_runtime::RuntimeClient;
-use serde_json::{json, Map, Value};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 use std::sync::mpsc::SyncSender;
 use std::sync::{Arc, Mutex};
@@ -76,7 +79,7 @@ struct LoudnessState {
     next: Option<Option<String>>,
     /// The last measurement: the revision and sequence it is of, and the
     /// `ready` event.
-    kept: Option<(u64, Option<String>, Value)>,
+    kept: Option<(u64, Option<String>, Event)>,
 }
 
 impl Analysis {
@@ -92,13 +95,6 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-fn with_sequence(mut event: Value, sequence: Option<&str>) -> Value {
-    if let Some(sequence) = sequence {
-        event["sequence"] = json!(sequence);
-    }
-    event
-}
-
 // ---------------------------------------------------------------- scopes
 
 /// How wide a frame is drawn for the scopes to read: they take a 160 by 90 grab, at most twice over.
@@ -107,7 +103,7 @@ const SIGNAL_WIDTH: f64 = 480.0;
 /// `scope_signal {time, sequence?}`.
 pub(crate) fn scope_signal(
     shared: Arc<Shared>,
-    tx: SyncSender<Value>,
+    tx: SyncSender<Event>,
     time: f64,
     sequence: Option<String>,
 ) {
@@ -150,7 +146,7 @@ fn signal_curve(project: &Project, sequence: Option<&str>) -> Option<u32> {
     }
 }
 
-fn draw_signal(shared: &Shared, tx: &SyncSender<Value>, time: f64, sequence: Option<&str>) {
+fn draw_signal(shared: &Shared, tx: &SyncSender<Event>, time: f64, sequence: Option<&str>) {
     let Some(project) = lock(&shared.model).clone() else {
         return;
     };
@@ -160,8 +156,12 @@ fn draw_signal(shared: &Shared, tx: &SyncSender<Value>, time: f64, sequence: Opt
         let mut state = lock(&shared.analysis.signal);
         if state.was_hdr != hdr {
             state.was_hdr = hdr;
-            let status = if hdr { "hdr" } else { "sdr" };
-            emit(tx, json!({"type": "scope_signal", "status": status}));
+            let status = if hdr {
+                SignalStatus::Hdr
+            } else {
+                SignalStatus::Sdr
+            };
+            emit(tx, Event::ScopeSignal { status });
         }
         state.drawing.take()
     };
@@ -207,7 +207,7 @@ fn draw_signal(shared: &Shared, tx: &SyncSender<Value>, time: f64, sequence: Opt
 // ---------------------------------------------------------------- loudness
 
 /// `loudness {sequence?}`.
-pub(crate) fn loudness(shared: Arc<Shared>, tx: SyncSender<Value>, sequence: Option<String>) {
+pub(crate) fn loudness(shared: Arc<Shared>, tx: SyncSender<Event>, sequence: Option<String>) {
     {
         let mut state = lock(&shared.analysis.loudness);
         if state.busy {
@@ -237,13 +237,13 @@ pub(crate) fn loudness(shared: Arc<Shared>, tx: SyncSender<Value>, sequence: Opt
 
 /// Measure the project kerfd has now, or answer with the measurement kept
 /// for its revision.
-fn measure(shared: &Shared, tx: &SyncSender<Value>, sequence: Option<&str>) -> Value {
+fn measure(shared: &Shared, tx: &SyncSender<Event>, sequence: Option<&str>) -> Event {
     let failed = |message: &str, revision: Option<u64>| {
-        let mut event = json!({"type": "loudness", "status": "failed", "message": message});
-        if let Some(revision) = revision {
-            event["revision"] = json!(revision);
-        }
-        with_sequence(event, sequence)
+        Event::Loudness(LoudnessEvent::Failed {
+            message: message.to_owned(),
+            revision,
+            sequence: sequence.map(str::to_owned),
+        })
     };
     let (revision, document) =
         match RuntimeClient::new(&shared.directory).and_then(|client| client.get_document(false)) {
@@ -266,11 +266,11 @@ fn measure(shared: &Shared, tx: &SyncSender<Value>, sequence: Option<&str>) -> V
     }
     kerf_runtime::resolve_media_paths(&mut project, &shared.directory);
     let running = |progress: f64| {
-        with_sequence(
-            json!({"type": "loudness", "status": "running", "progress": progress,
-                "revision": revision}),
-            sequence,
-        )
+        Event::Loudness(LoudnessEvent::Running {
+            progress,
+            revision,
+            sequence: sequence.map(str::to_owned),
+        })
     };
     emit(tx, running(0.0));
     let mut sent = 0;
@@ -300,22 +300,23 @@ fn measure(shared: &Shared, tx: &SyncSender<Value>, sequence: Option<&str>) -> V
     }
 }
 
-/// The `ready` event of a measurement: `Loudness::to_json` (integrated,
-/// lra, truePeak, truePeakMax, shortTermMax, momentaryMax, series,
-/// duration, target, limit; silence as null), plus where the loudest
-/// windows end and the revision measured.
+/// The `ready` event of a measurement: the measurement (integrated, lra, truePeak,
+/// truePeakMax, shortTermMax, momentaryMax, series, duration; silence as null), the target
+/// and limit it is held to, where the loudest windows end, and the revision measured.
 pub(crate) fn ready(
     loudness: &kerf_engine::Loudness,
     revision: u64,
     sequence: Option<&str>,
-) -> Value {
-    let mut event = loudness.to_json();
-    event["type"] = json!("loudness");
-    event["status"] = json!("ready");
-    event["revision"] = json!(revision);
-    event["shortTermMaxAt"] = json!(loudness.short_term_max_at());
-    event["momentaryMaxAt"] = json!(loudness.momentary_max_at());
-    with_sequence(event, sequence)
+) -> Event {
+    Event::Loudness(LoudnessEvent::Ready(LoudnessReady {
+        loudness: loudness.clone(),
+        target: kerf_engine::loudness::TARGET_LUFS,
+        limit: kerf_engine::loudness::TRUE_PEAK_LIMIT_DBTP,
+        revision,
+        short_term_max_at: loudness.short_term_max_at(),
+        momentary_max_at: loudness.momentary_max_at(),
+        sequence: sequence.map(str::to_owned),
+    }))
 }
 
 // -------------------------------------------------------------- media info
@@ -326,24 +327,26 @@ fn model(shared: &Shared) -> Option<Project> {
     lock(&shared.model).clone()
 }
 
-/// What `kerf_engine::media_info` says of `path`, as the event carries it.
-fn probe(path: &str) -> Result<Value, String> {
-    kerf_engine::media_info(path)
-        .map_err(|error| error.to_string())
-        .and_then(|info| serde_json::to_value(info).map_err(|error| error.to_string()))
+/// What `kerf_engine::media_info` says of `path`.
+fn probe(path: &str) -> Result<MediaInfo, String> {
+    kerf_engine::media_info(path).map_err(|error| error.to_string())
 }
 
 /// `media_info {media?}`: every media of the project, or the one asked
 /// for. Files that cannot be read are named in `errors`; the one media asked
 /// for that cannot be read is an `error {command: media_info, media}`.
-pub(crate) fn media_info(shared: Arc<Shared>, tx: SyncSender<Value>, media: Option<String>) {
+pub(crate) fn media_info(shared: Arc<Shared>, tx: SyncSender<Event>, media: Option<String>) {
     std::thread::spawn(move || {
         let refuse = |message: &str| {
-            let mut event = json!({"type": "error", "message": message, "command": "media_info"});
-            if let Some(media) = &media {
-                event["media"] = json!(media);
-            }
-            emit(&tx, event);
+            emit(
+                &tx,
+                Event::Error(ErrorEvent {
+                    message: message.to_owned(),
+                    command: Some("media_info".to_owned()),
+                    media: media.clone(),
+                    ..ErrorEvent::default()
+                }),
+            );
         };
         let Some(project) = model(&shared) else {
             refuse("The project is not open yet");
@@ -360,28 +363,30 @@ pub(crate) fn media_info(shared: Arc<Shared>, tx: SyncSender<Value>, media: Opti
                 return;
             }
         }
-        let mut infos = Map::new();
-        let mut errors = Map::new();
+        let mut infos = BTreeMap::new();
+        let mut errors = BTreeMap::new();
         for found in chosen {
             match probe(&found.path) {
                 Ok(info) => {
                     infos.insert(found.id.to_string(), info);
                 }
                 Err(message) => {
-                    errors.insert(found.id.to_string(), json!(message));
+                    errors.insert(found.id.to_string(), message);
                 }
             }
         }
         if media.is_some() && infos.is_empty() {
-            let message = errors.values().next().and_then(Value::as_str).unwrap_or("");
+            let message = errors.values().next().map_or("", String::as_str);
             refuse(message);
             return;
         }
-        let mut event = json!({"type": "media_info", "media": infos});
-        if !errors.is_empty() {
-            event["errors"] = Value::Object(errors);
-        }
-        emit(&tx, event);
+        emit(
+            &tx,
+            Event::MediaInfo {
+                media: infos,
+                errors,
+            },
+        );
     });
 }
 
@@ -389,7 +394,7 @@ pub(crate) fn media_info(shared: Arc<Shared>, tx: SyncSender<Value>, media: Opti
 /// name), and send what they say as `media_info`. Files that cannot be
 /// read now (offline, not downloaded) are tried again with the next
 /// change.
-pub(crate) fn media_changed(shared: &Arc<Shared>, tx: &SyncSender<Value>, project: &Project) {
+pub(crate) fn media_changed(shared: &Arc<Shared>, tx: &SyncSender<Event>, project: &Project) {
     let fresh: Vec<(String, String)> = {
         let probed = lock(&shared.analysis.probed);
         project
@@ -405,7 +410,7 @@ pub(crate) fn media_changed(shared: &Arc<Shared>, tx: &SyncSender<Value>, projec
     }
     let (shared, tx) = (shared.clone(), tx.clone());
     std::thread::spawn(move || {
-        let mut infos = Map::new();
+        let mut infos = BTreeMap::new();
         for (id, path) in fresh {
             if let Ok(info) = probe(&path) {
                 lock(&shared.analysis.probed).insert(id.clone(), path);
@@ -413,7 +418,13 @@ pub(crate) fn media_changed(shared: &Arc<Shared>, tx: &SyncSender<Value>, projec
             }
         }
         if !infos.is_empty() && !shared.closed.load(std::sync::atomic::Ordering::SeqCst) {
-            emit(&tx, json!({"type": "media_info", "media": infos}));
+            emit(
+                &tx,
+                Event::MediaInfo {
+                    media: infos,
+                    errors: BTreeMap::new(),
+                },
+            );
         }
     });
 }
@@ -425,7 +436,7 @@ pub(crate) fn media_changed(shared: &Arc<Shared>, tx: &SyncSender<Value>, projec
 /// cuts make, `{start, end}`), `silences` (`[start, end]` pauses),
 /// `loudest` (seconds, in time order) and `peaks` (`{at, level}` in dBFS),
 /// plus the sound's `onsets` and `tempo` when it has a steady beat.
-pub(crate) fn index_event(media: &str, duration: f64, index: &MediaIndex) -> Value {
+pub(crate) fn index_event(media: &str, duration: f64, index: &MediaIndex) -> Event {
     let mut bounds = vec![0.0];
     bounds.extend(
         index
@@ -435,42 +446,56 @@ pub(crate) fn index_event(media: &str, duration: f64, index: &MediaIndex) -> Val
             .filter(|cut| *cut > 0.0 && *cut < duration),
     );
     bounds.push(duration);
-    let ranges: Vec<Value> = bounds
+    let ranges = bounds
         .windows(2)
         .filter(|pair| pair[1] > pair[0])
-        .map(|pair| json!({"start": pair[0], "end": pair[1]}))
+        .map(|pair| IndexRange {
+            start: pair[0],
+            end: pair[1],
+        })
         .collect();
-    let silences: Vec<Value> = index
+    let silences = index
         .pauses
         .iter()
-        .map(|(start, end)| json!([start, end]))
+        .map(|(start, end)| [*start, *end])
         .collect();
     let mut loudest: Vec<f64> = index.peaks.iter().map(|peak| peak.at).collect();
     loudest.sort_by(f64::total_cmp);
-    json!({
-        "type": "media_index", "media": media, "duration": duration,
-        "cuts": index.cuts, "ranges": ranges, "silences": silences, "loudest": loudest,
-        "peaks": index.peaks, "onsets": index.onsets, "tempo": index.tempo,
+    Event::MediaIndex(MediaIndexEvent {
+        media: media.to_owned(),
+        duration,
+        cuts: index.cuts.clone(),
+        ranges,
+        silences,
+        loudest,
+        peaks: index.peaks.clone(),
+        onsets: index.onsets.clone(),
+        tempo: index.tempo.clone(),
     })
 }
 
 /// `media_index {media}`: from the project's cache, else made now. A
 /// refusal is `error {command: media_index, media, message}`.
-pub(crate) fn media_index(shared: Arc<Shared>, tx: SyncSender<Value>, media: String) {
+pub(crate) fn media_index(shared: Arc<Shared>, tx: SyncSender<Event>, media: String) {
     if !lock(&shared.analysis.indexing).insert(media.clone()) {
         // The one running answers.
         return;
     }
     std::thread::spawn(move || {
         let event = index(&shared, &media).unwrap_or_else(|message| {
-            json!({"type": "error", "message": message, "command": "media_index", "media": media})
+            Event::Error(ErrorEvent {
+                message,
+                command: Some("media_index".to_owned()),
+                media: Some(media.clone()),
+                ..ErrorEvent::default()
+            })
         });
         lock(&shared.analysis.indexing).remove(&media);
         emit(&tx, event);
     });
 }
 
-fn index(shared: &Shared, media: &str) -> Result<Value, String> {
+fn index(shared: &Shared, media: &str) -> Result<Event, String> {
     let project = model(shared).ok_or("The project is not open yet")?;
     let found = project
         .media

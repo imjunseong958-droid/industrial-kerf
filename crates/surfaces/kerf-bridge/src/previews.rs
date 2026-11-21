@@ -11,28 +11,33 @@
 //! runs; on a clip with no file of its own (a title, a nested sequence) and
 //! for generators, Kerf's compositor draws the picture, as playback does.
 
+use crate::event::{EffectPreview, Event};
 use crate::{emit, Shared};
 use kerf_compose::{ComposeOptions, Compositor};
 use kerf_model::{
     Catalog, Clip, Content, Effect, FxDef, FxKind, Id, Param, ParamType, Params, Project, Rgba,
     Sequence, Time, Track, TrackKind, Value,
 };
-use serde::Deserialize;
-use serde_json::{json, Map, Value as Json};
+use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value as Json};
 use std::sync::atomic::Ordering;
 use std::sync::mpsc::SyncSender;
 
 /// One entry of `effects`: an id, or an id with parameters and the key
 /// its preview echoes.
-#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(untagged)]
-pub(crate) enum PreviewEffect {
+pub enum PreviewEffect {
+    /// The effect added after the clip's own, at its defaults; a generator drawn alone.
     Id(String),
+    /// The effect with these static parameters (numbers kept in range, unknown names
+    /// ignored), in place of the clip's own effect of that id when it has one, and the
+    /// key its preview echoes.
     Params {
         fx: String,
         #[serde(default)]
         params: Map<String, Json>,
-        #[serde(default)]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         key: Option<String>,
     },
 }
@@ -60,16 +65,19 @@ impl PreviewEffect {
 }
 
 /// `effect_previews {clip, at, effects, width, key?}`.
-#[derive(Clone, Debug, Deserialize)]
-pub(crate) struct Request {
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct Request {
+    /// The clip; `""` for generators alone.
     #[serde(default)]
     pub clip: String,
+    /// Sequence time, in seconds.
     #[serde(default)]
     pub at: f64,
     pub effects: Vec<PreviewEffect>,
+    /// Pixels wide: at most 640, even.
     pub width: u32,
     /// Echoed on every preview of an entry that has no key of its own.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key: Option<String>,
 }
 
@@ -184,20 +192,16 @@ fn preview_event(
     width: u32,
     height: u32,
     rgba: &[u8],
-) -> Json {
+) -> Event {
     use base64::Engine as _;
-    let mut event = json!({
-        "type": "effect_preview",
-        "clip": request.clip,
-        "fx": entry.fx(),
-        "width": width,
-        "height": height,
-        "rgba": base64::engine::general_purpose::STANDARD.encode(rgba),
-    });
-    if let Some(key) = entry.key().or(request.key.as_deref()) {
-        event["key"] = json!(key);
-    }
-    event
+    Event::EffectPreview(EffectPreview {
+        clip: request.clip.clone(),
+        fx: entry.fx().to_owned(),
+        width,
+        height,
+        rgba: base64::engine::general_purpose::STANDARD.encode(rgba),
+        key: entry.key().or(request.key.as_deref()).map(str::to_owned),
+    })
 }
 
 /// The clip `id` and the sequence it is on.
@@ -449,7 +453,7 @@ pub(crate) fn run(
     shared: &Shared,
     generation: u64,
     request: &Request,
-    tx: &SyncSender<Json>,
+    tx: &SyncSender<Event>,
 ) -> Result<(), String> {
     let project = shared
         .model

@@ -3,11 +3,11 @@
 //! measured for R128 loudness and picture levels), reported to the
 //! editor's Preflight as rows and findings.
 
+use crate::event::{Check, ErrorEvent, Event};
 use crate::{emit, Shared};
 use kerf_engine::{CancellationToken, EngineError};
 use kerf_mcp::{CheckReport, QcLimits, FULL_ROWS};
 use kerf_runtime::{RuntimeClient, RuntimeError};
-use serde_json::{json, Value};
 use std::sync::atomic::Ordering;
 use std::sync::mpsc::SyncSender;
 use std::sync::Arc;
@@ -15,13 +15,17 @@ use std::sync::Arc;
 /// Run the check on its own thread, one at a time: `check {status:
 /// "running", progress}` as it goes, then `done` or `failed`. Closing the
 /// bridge cancels it.
-pub(crate) fn spawn(shared: Arc<Shared>, tx: SyncSender<Value>, sequence: Option<String>) {
+pub(crate) fn spawn(shared: Arc<Shared>, tx: SyncSender<Event>, sequence: Option<String>) {
     if shared.check_busy.swap(true, Ordering::SeqCst) {
         // Said from a thread of its own: the caller's empties the event queue.
         std::thread::spawn(move || {
             emit(
                 &tx,
-                json!({"type": "error", "message": "A check is already running", "command": "check"}),
+                Event::Error(ErrorEvent {
+                    message: "A check is already running".to_owned(),
+                    command: Some("check".to_owned()),
+                    ..ErrorEvent::default()
+                }),
             );
         });
         return;
@@ -55,20 +59,18 @@ pub(crate) fn cancel(shared: &Shared) {
     }
 }
 
-fn running(sequence: Option<&str>, progress: f64) -> Value {
-    let mut event = json!({"type": "check", "status": "running", "progress": progress});
-    if let Some(sequence) = sequence {
-        event["sequence"] = json!(sequence);
-    }
-    event
+fn running(sequence: Option<&str>, progress: f64) -> Event {
+    Event::Check(Check::Running {
+        progress,
+        sequence: sequence.map(str::to_owned),
+    })
 }
 
-fn failed(sequence: Option<&str>, message: &str) -> Value {
-    let mut event = json!({"type": "check", "status": "failed", "message": message});
-    if let Some(sequence) = sequence {
-        event["sequence"] = json!(sequence);
-    }
-    event
+fn failed(sequence: Option<&str>, message: &str) -> Event {
+    Event::Check(Check::Failed {
+        message: message.to_owned(),
+        sequence: sequence.map(str::to_owned),
+    })
 }
 
 /// Check the project kerfd has now, mirror what it found, and return the
@@ -78,10 +80,10 @@ fn failed(sequence: Option<&str>, message: &str) -> Value {
 fn run(
     client: &RuntimeClient,
     shared: &Shared,
-    tx: &SyncSender<Value>,
+    tx: &SyncSender<Event>,
     sequence: Option<&str>,
     cancel: &CancellationToken,
-) -> Result<Value, RuntimeError> {
+) -> Result<Event, RuntimeError> {
     let (_, document) = client.get_document(false)?;
     let mut project = kerf_runtime::parse_document(&document)?;
     if let Some(id) = sequence {
@@ -117,7 +119,7 @@ fn run(
 
 /// The `done` event: the report for `sequence` (findings on other
 /// sequences left out, and the summary counted again).
-pub(crate) fn done(report: &CheckReport, sequence: Option<&str>) -> Value {
+pub(crate) fn done(report: &CheckReport, sequence: Option<&str>) -> Event {
     let shown = match sequence {
         Some(id) => {
             let findings = report
@@ -138,26 +140,10 @@ pub(crate) fn done(report: &CheckReport, sequence: Option<&str>) -> Value {
         }
         None => report.clone(),
     };
-    let findings: Vec<Value> = shown
-        .findings
-        .iter()
-        .map(|finding| json!(finding))
-        .collect();
-    let rows: Vec<Value> = shown.summary.rows.iter().map(|row| json!(row)).collect();
-    let mut event = json!({
-        "type": "check",
-        "status": "done",
-        "valid": shown.valid,
-        "findings": findings,
-        "summary": {
-            "passed": shown.summary.passed,
-            "total": shown.summary.total,
-            "blocking": shown.summary.blocking,
-            "rows": rows,
-        },
-    });
-    if let Some(sequence) = sequence {
-        event["sequence"] = json!(sequence);
-    }
-    event
+    Event::Check(Check::Done {
+        valid: shown.valid,
+        findings: shown.findings,
+        summary: shown.summary,
+        sequence: sequence.map(str::to_owned),
+    })
 }

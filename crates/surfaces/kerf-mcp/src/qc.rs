@@ -15,12 +15,16 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::path::Path;
 
-/// How serious a finding is. Errors block delivery.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+/// How serious a finding is. Errors block delivery. A finding read without one is
+/// information, which blocks nothing.
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum Severity {
     Error,
     Warning,
+    #[default]
     Info,
 }
 
@@ -44,15 +48,19 @@ pub struct Rect {
     pub h: f64,
 }
 
-/// One thing a check found.
+/// One thing a check found. Read leniently, as the editor reads a check: a field left out
+/// reads as its default.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Finding {
+    #[serde(default)]
     pub severity: Severity,
     /// Stable machine-readable code, such as `text.overlap`.
+    #[serde(default)]
     pub code: String,
     /// The clip, media, or sequence the finding is about.
     pub entity: Option<String>,
+    #[serde(default)]
     pub message: String,
     /// The sequence the finding is on, when it is on one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -131,15 +139,20 @@ impl Finding {
     }
 }
 
-/// One row of the summary: a check, and whether it passed.
+/// One row of the summary: a check, and whether it passed. Read leniently, as the
+/// editor reads a check: a field left out reads as its default.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Row {
+    #[serde(default)]
     pub code: String,
     /// What the editor calls the check, such as `Title safe 90%`.
+    #[serde(default)]
     pub name: String,
+    #[serde(default)]
     pub passed: bool,
     /// What it found, for the table: `0 outside`, `1 at 00:00:17:08`.
+    #[serde(default)]
     pub value: String,
     /// What it allows, for the table: `≤ 17 cps`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -148,13 +161,17 @@ pub struct Row {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub at: Option<f64>,
     /// How many findings fail it.
+    #[serde(default)]
     pub count: usize,
     /// How many of those block delivery.
+    #[serde(default)]
     pub blocking: usize,
 }
 
-/// The checks at a glance.
+/// The checks at a glance. Read leniently, as the editor reads a check: a field left out
+/// reads as its default.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Summary {
     /// Rows that pass.
     pub passed: usize,
