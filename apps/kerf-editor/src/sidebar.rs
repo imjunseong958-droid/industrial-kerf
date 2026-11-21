@@ -954,8 +954,8 @@ fn mask_row(input: &AppMenuInput, tool: crate::stage::MaskTool) -> AppRow {
     }
 }
 
-/// The app's menu, as Qt's account menu had it: Settings…, Account…, User
-/// Guide; Media and Import…; View ▸ (the panes, Follow Kerf, the mask
+/// The app's menu, as Qt's account menu had it: Settings…, Account…; Media
+/// and Import…; View ▸ (the panes, Follow Kerf, the mask
 /// tools, Safe Zones, Viewer Zoom ▸, Keyboard ▸, Sync ▸); where there is no
 /// menu bar, the registry's menus (File ▸ … Help ▸); Sign Out while signed
 /// in to Kerf.
@@ -963,7 +963,6 @@ pub fn app_rows(input: &AppMenuInput) -> Vec<AppRow> {
     let mut rows = vec![
         command_row(input, "app.preferences", Some("Settings…")).icon(Icon::Gear),
         AppRow::new("Account…", AppDoes::Command("app.account".into())).icon(Icon::Lock),
-        command_row(input, "help.guide", Some("User Guide")),
         command_row(input, "window.project", Some("Media"))
             .icon(Icon::Media)
             .separated(),

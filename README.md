@@ -9,21 +9,17 @@ External Claude, Cursor, and Codex-like clients connect through `kerf-mcp`
 using their own agent configuration; they do not need a provider API key
 configured in Kerf.
 
-To edit with Kerf, read the [user guide](docs/user-guide.md); the rest of this README
-is for building and extending it.
-
 ## Architecture
 
 `kerfd` is the only owner of project state, revisions, history, idempotency
 receipts, proposals, and render jobs. The native editor, terminal agent, and
 MCP server are adapters over the same project-scoped IPC boundary.
 
-The canonical project is the `project.kerf` text document
-([the Kerf language](docs/kerf-language.md)). Edits are edit scripts or typed
+The canonical project is the `project.kerf` text document. Edits are edit scripts or typed
 operations; agent proposals carry their script and the diff of the document
 they would produce. Because the project is text, people share it through Git
 and GitHub: a sync commits, merges, and pushes, and `project.kerf` merges by
-the ids of what it holds ([shared projects](docs/collaboration.md)).
+the ids of what it holds.
 
 ```text
 GPUI editor (Rust) ──────────────────┐
@@ -41,11 +37,9 @@ minutes after the last request instead; `KERFD_IDLE_TIMEOUT`, in the
 environment `kerfd` starts with, sets that wait in seconds, and `0` turns it
 off. The next request starts it again.
 
-The code is split by what it does: `crates/foundation`, `render`, one folder per
-area (`edit`, `effects`, `image`, and in time `color`, `motion`, `vfx`), `engine`,
-and `surfaces`. A crate's folder says what it may depend on, and areas may not
-depend on each other, so each can be rewritten alone
-([architecture and roadmap](docs/architecture.md)).
+A crate's folder under `crates/` says what it may depend on, and the areas may
+not depend on each other, so each can be rewritten alone; `tools/kerf-layers`
+fails the tests otherwise.
 
 Renders, playback, and previews read the model. A render job and a proposal
 preview carry the `.kerf` document with media paths resolved against the
@@ -62,7 +56,7 @@ view of it; the editor sends its edits back as typed operations.
 
 A shot a renderer or a video model makes comes in as media with the steps
 that make it written under it in the document; each making is a take, and
-the document says which one the media is ([shots another program makes](docs/shots.md)). Kerf
+the document says which one the media is. Kerf
 ships no model: one is a program a person names in `~/.kerf/models.json`, and
 `tools/kerf-comfy` is such a program for a model on a ComfyUI server.
 
@@ -76,14 +70,14 @@ transitions (pushes, whips, zooms, flashes, light leaks, glitches, irises)
 and effects (Lumetri, blurs, keys and track mattes, lens and tracking fixes,
 burn-ins, 360° video) are FilmCraft's, carried into `kerf-fx`, less those that
 make a look a model makes better or do what a clip's own keyframes and depth
-already do ([what Kerf draws](docs/architecture.md#what-kerf-draws-and-what-it-leaves-to-others)). Kerf also keeps
+already do. Kerf also keeps
 22 effects from [EffectCraft](https://github.com/storytold/effectcraft)
 (MIT/Apache, in `kerf-raster-fx`) that FilmCraft has nothing like: restoration, key and matte clean-up, curves and finer color, a few
 blurs and distortions, and the audio visualizers. An effect's parameters are
 written in the catalog's terms (a point as an `_x` and a `_y` across the
 picture, a file as a path, another track by id, a mask by name), and an id
 EffectCraft had that Kerf no longer does is an error that names what to use
-instead. Playful effects are looks ([docs/looks.md](docs/looks.md)): text
+instead. Playful effects are looks: text
 files in the Kerf language that combine those effects, keyframes, and masks
 behind a few parameters, bundled with Kerf or kept in a project's
 `.kerf/looks`, and expanded when a program draws.
@@ -111,6 +105,10 @@ cargo build --release --manifest-path apps/kerf-editor/Cargo.toml
 cargo build --release -p kerf-cli --bin kerf
 cargo build --release -p kerf-mcp --bin kerf-mcp
 ```
+
+Building needs FFmpeg's development libraries (`libavcodec`, `libavformat`,
+`libavfilter`, `libswscale`, `libswresample`) where `pkg-config` finds them, or
+`FFMPEG_DIR` naming where they are.
 
 The editor is one Rust binary, `kerf-editor` (`apps/kerf-editor`), drawn with
 [GPUI](https://www.gpui.rs); it links `kerf-bridge` and FFmpeg as kerfd does,
@@ -163,8 +161,7 @@ project, with what Kerf did in it. On macOS it opens
 `kerf://<project>/rev<N>@HH:MM:SS:FF` links. See
 [the editor's README](apps/kerf-editor/README.md).
 
-Make a project and share it from a terminal (see
-[shared projects](docs/collaboration.md)):
+Make a project and share it from a terminal:
 
 ```bash
 target/release/kerf new "My Film" --location ~/Movies --vertical --github
@@ -190,8 +187,7 @@ and a media import use the current directory unless `--dir` or
 `KERF_PROJECT_DIR` names a project. So do `kerf load`, which takes a
 `project.kerf` changed outside Kerf as the project, `kerf proposals`,
 `kerf accept` and `kerf reject`, which answer what an agent proposed,
-`kerf make` and `kerf takes`
-([docs/shots.md](docs/shots.md#from-a-terminal-alone)), and `kerf export`,
+`kerf make` and `kerf takes`, and `kerf export`,
 which writes a sequence for another editor ([Interchange](#interchange)). The editor's Kerf Assistant (the chat beside the picture) uses the same provider
 configuration as the terminal agent. `--kerfd PATH` selects an explicit
 daemon; the `KERFD_BIN` environment variable does the same.
@@ -212,11 +208,9 @@ as one `.kerfpreset` file containing media slots, `.kerf` editing code, and
 the project's own looks it uses.
 **File → Import Editing Preset…** binds new media and stages the same pattern
 as a proposal. A project's `presets/` folder is its preset library, shared with
-the project's repository. See [native preset format and reuse](docs/presets.md)
-and [shared presets and media slots](docs/collaboration.md#shared-presets-and-media-slots).
+the project's repository.
 
-Agents edit the same `.kerf` document people do (see
-[the Kerf language](docs/kerf-language.md)). Their context is the language
+Agents edit the same `.kerf` document people do. Their context is the language
 reference, generated from the feature catalog, and the current document,
 annotated with each clip's end and source out. The built-in agent reads the
 document again before every model request, so it always sees the current
@@ -234,8 +228,7 @@ black stretches with nothing on screen, picture that leaves the frame's
 edges black, flash frames shorter than three frames (a clip that short, or
 a shot that shows for that long between an overlay and a cut), and sound
 cut inside a word (known from transcripts of that media already made;
-nothing is transcribed for the check). In a project with a `brand.kerfbrand`
-([the user guide](docs/user-guide.md#a-brand)), a title in a font or a color
+nothing is transcribed for the check). In a project with a `brand.kerfbrand`, a title in a font or a color
 the brand has not, and a title or a caption that says a word it avoids, are
 said as information.
 
@@ -325,8 +318,7 @@ cargo test -p kerf-bridge
 
 The editor is free. Kerf's hosted model is the paid tier: Settings →
 AI signs in to it, and the service meters requests and enforces plans. It is
-not deployed yet; [docs/cloud.md](docs/cloud.md) is the contract the editor
-follows, and `KERF_CLOUD_URL` points the editor at a service. Until then, use
+not deployed yet; `KERF_CLOUD_URL` points the editor at a service. Until then, use
 your own key under Settings → Advanced, as described below.
 
 Provider APIs are optional and only power Kerf's embedded assistant (and its
@@ -460,20 +452,11 @@ written and holds it equal to the one its own writer makes, and the
 (`crates/edit/kerf-interchange/tests`). Treat a first import as a check, and
 read the list.
 
-`kerf-interchange` holds the formats. It converts a sequence to a
-frame-exact timeline (positions in frames of the sequence, media times in
-frames of the media) and writes and reads that as OpenTimelineIO's JSON
-(`otio_json.rs`), writes FCPXML (`fcpxml.rs`) and a CMX3600 EDL
-(`edl.rs`), and reports what each conversion leaves out. Only the other
-OpenTimelineIO adapters, `otioz` and the adapter plugins, still go through
-the bundled `crates/edit/kerf-interchange/python/otio_bridge.py`, which
-needs an environment with `opentimelineio` and the adapter asked for.
+Only the other OpenTimelineIO adapters, `otioz` and the adapter plugins, go
+through the bundled `crates/edit/kerf-interchange/python/otio_bridge.py`,
+which needs an environment with `opentimelineio` and the adapter asked for.
 
 ## Verification
-
-Focused Rust tests cover the durable runtime, real FFmpeg playback, 4K/VFR/
-long-GOP media, audio clock mapping, captions, provider adapters, MCP stdio,
-skills, fetch, interchange, CLI wiring, and protocol conformance fixtures.
 
 ```bash
 cargo test --workspace

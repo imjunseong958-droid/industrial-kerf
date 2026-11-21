@@ -4,15 +4,6 @@ Colour science for Kerf's renderer and effects, carried from FilmCraft (no works
 dependencies): Y'CbCr matrices, transfer functions, camera log curves, RGB gamuts, colour-managed
 input transforms with tone and gamut mapping, LUT files, and EffectCraft's blend modes.
 
-| Module | Contents |
-|---|---|
-| `lib.rs` | `Matrix`/`Transfer`/`Primaries`/`Range`/`ColorInfo` (stream metadata), Y'CbCr↔R'G'B', sRGB, PQ (ST 2084), HLG (ARIB STD-B67), HSL, hex colours |
-| `log` | camera log curves (encode/decode), their signal domains |
-| `spaces` | gamuts and 3×3 matrices (SMPTE RP 177), `ColorSpace` (Interpret Footage choices), `WorkingSpace`, `ColorPipeline` |
-| `transform` | `InputTransform` (source → working), `HdrOutput` (working → PQ/HLG or SDR), BT.2390 tone mapping, gamut compression |
-| `lut` | `.cube` (1D, 3D, shaper + 3D) and `.3dl` parse/write, tetrahedral interpolation |
-| `blend` | EffectCraft's 38 After Effects blend modes, on premultiplied pixels |
-
 ## Working units
 
 The compositor works in linear light with **1.0 = reference white**: SDR white for SDR media, and
@@ -63,8 +54,7 @@ Gamut primaries (all D65 white, x/y):
 | ARRI Wide Gamut 4 | 0.7347, 0.2653 | 0.1424, 0.8576 | 0.0991, −0.0308 | ARRI LogC4 specification |
 | D-Gamut | 0.71, 0.31 | 0.21, 0.88 | 0.09, −0.08 | DJI white paper |
 
-Matrices are derived from the chromaticities (SMPTE RP 177 normalised primary matrix); tests check
-the result against the published BT.709 RGB→XYZ and BT.2087 BT.709→BT.2020 matrices.
+Matrices are derived from the chromaticities (SMPTE RP 177 normalised primary matrix).
 
 ## HDR transfer functions
 
@@ -130,18 +120,7 @@ else the mastering peak, clamped to 203…10 000 cd/m²; without metadata 1000 c
 * `.3dl`: optional `3DMESH` / `Mesh <in> <out>` header, the input mesh line (non-uniform meshes
   become a 1D shaper), `n³` integer rows with blue fastest; output depth from the header or the
   largest value. We write 33-point, 10-bit-mesh, 12-bit-output files.
-* 3D interpolation is **tetrahedral**. Tests compare it with a brute-force reference (barycentric
-  coordinates in each of the six Kuhn tetrahedra, solved with a 3×3 inverse) on random points for
-  sizes 2–33, check exactness on affine LUTs and at grid nodes, and round-trip both formats.
+* 3D interpolation is **tetrahedral**.
 
 Kerf ships no LUT files. Its camera conversions are generated from code (`kerf_fx`'s FilmCraft
 LUTs).
-
-## Tests
-
-`cargo test -p kerf-color`: encode∘decode round trips for every curve (−1 % to 8× and over
-the full signal range in both file ranges), published reference points (S-Log3 95/420/598, V-Log
-128/433/602, LogC3 18 % → 0.391, LogC4 18 % → 0.2784, Canon Log 2/3 18 % → 39.2 %/34.3 % IRE, Apple
-Log 18 % → 0.488, D-Log 0 → 0.0929), PQ/HLG reference white, EETF continuity/monotonicity and peak,
-hue preservation, gamut compression, BT.709/BT.2087 matrices, LUT interpolation and file round
-trips.

@@ -39,7 +39,6 @@ cargo build --release --manifest-path apps/kerf-editor/Cargo.toml
 cargo build --release -p kerf-runtime --bin kerfd
 cargo build --release -p kerf-cli --bin kerf
 cargo build --release -p kerf-mcp --bin kerf-mcp
-cargo build --release -p kerf-guide
 scripts/bundle-kerf-macos.sh target/release/kerf-editor "$app"
 mkdir -p "$frameworks"
 
@@ -190,10 +189,6 @@ fi
 cp LICENSE "$app/Contents/Resources/LICENSE.txt"
 cp -R licenses "$app/Contents/Resources/licenses"
 # The fonts' licences are in Resources/fonts already (bundle-kerf-macos.sh).
-# The user guide in Resources, where Help > Kerf User Guide opens it with no connection;
-# its links to the rest of the repository go to this commit.
-target/release/kerf-guide docs/user-guide.md "$app/Contents/Resources/user-guide.html" \
-    --version "$version" --link-base "https://github.com/imjunseong958-droid/industrial-kerf/blob/$commit/docs/"
 gpl="$(brew --prefix ffmpeg)/share/doc/ffmpeg/COPYING.GPLv3"
 [ -f "$gpl" ] || gpl="$(find "$(brew --cellar ffmpeg)" -name 'COPYING.GPLv3' | head -n 1)"
 if [ -f "$gpl" ]; then

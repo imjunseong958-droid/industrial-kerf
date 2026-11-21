@@ -1208,14 +1208,14 @@ pub static COMMANDS: &[Command] = &[
             1,
         )),
         &["Ctrl+Shift+J"],
-    ),    // The guide for someone editing (docs/user-guide.md), and the folder a
-    // crash leaves its report in.
-    frontend(menu(command("help.guide", "Kerf User Guide", always), Menu::Help, 0)),
+    ),
+    // The folder a crash leaves its report in.
     frontend(menu(
         command("help.crashReports", "Show Crash Reports", always),
         Menu::Help,
-        1,
-    )),    frontend(menu(command("help.about", "About Kerf", always), Menu::Help, 2)),
+        0,
+    )),
+    frontend(menu(command("help.about", "About Kerf", always), Menu::Help, 1)),
 ];
 
 /// A keyboard layout: the Kerf keys, with the commands it binds differently.

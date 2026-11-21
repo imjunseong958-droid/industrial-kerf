@@ -9,7 +9,8 @@ name: Package
 # their source (collect-kerf-linux-sources.sh). All carry a GPL build of FFmpeg: publish
 # each with its source. By hand (Actions > Package > Run workflow), and when what makes them
 # changes, it publishes nothing. A v<version> tag publishes all four as a GitHub
-# release, with that version's section of CHANGELOG.md as its notes; none is signed.
+# release, with the notes GitHub generates from what was merged since the last one;
+# none is signed.
 # Then verify-release.yml downloads the release onto fresh runners and runs it.
 on:
   workflow_dispatch:
@@ -37,7 +38,6 @@ on:
       - "scripts/kerf-linux-desktop.sh"
       - "scripts/collect-kerf-linux-sources.sh"
       - "scripts/bundle-kerf-macos.sh"
-      - "tools/kerf-guide/**"
       - "apps/kerf-editor/packaging/**"
       - "apps/kerf-editor/assets/icon/**"
       - "apps/kerf-editor/Cargo.toml"
@@ -64,7 +64,6 @@ on:
       - "scripts/kerf-linux-desktop.sh"
       - "scripts/collect-kerf-linux-sources.sh"
       - "scripts/bundle-kerf-macos.sh"
-      - "tools/kerf-guide/**"
       - "apps/kerf-editor/packaging/**"
       - "apps/kerf-editor/assets/icon/**"
       - "apps/kerf-editor/Cargo.toml"
@@ -378,7 +377,7 @@ jobs:
       tag: ${{ steps.version.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
-      - name: Check the tag is the workspace's version, and has notes
+      - name: Check the tag is the workspace's version
         id: version
         run: |
           version="$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml)"
@@ -391,11 +390,6 @@ jobs:
           fi
           echo "TAG=$tag" >> "$GITHUB_ENV"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          awk -v heading="## $version" '$0 == heading {found = 1; next} /^## / && found {exit} found' CHANGELOG.md > notes.md
-          if [ ! -s notes.md ]; then
-            echo "CHANGELOG.md has no section \"## $version\"" >&2
-            exit 1
-          fi
           echo "VERSION=$version" >> "$GITHUB_ENV"
       - uses: actions/download-artifact@v4
         with:
@@ -406,6 +400,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           ls -l dist
+          # GitHub writes the notes; what is added here goes before them.
+          : > notes.md
           # GitHub takes no release file of 2 GiB or more, and the Windows source is
           # over 3: such a file goes up in parts, with the whole one's sha256 and how
           # to join them in the notes.
@@ -432,7 +428,7 @@ jobs:
           # 0.x is a pre-release: GitHub does not offer it as the latest stable one.
           prerelease=""
           case "$VERSION" in 0.*) prerelease="--prerelease" ;; esac
-          gh release create "$TAG" dist/* --target "$GITHUB_SHA" --title "Industrial Kerf $VERSION" --notes-file notes.md $prerelease
+          gh release create "$TAG" dist/* --target "$GITHUB_SHA" --title "Industrial Kerf $VERSION" --generate-notes --notes-file notes.md $prerelease
 
   # The release as someone gets it: downloaded onto fresh runners, with no FFmpeg
   # there, unpacked and run.

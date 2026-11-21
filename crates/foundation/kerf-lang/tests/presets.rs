@@ -579,22 +579,6 @@ sequence target rate=30 size=1080x1920
     );
 }
 
-#[test]
-fn the_presets_in_the_docs_read() {
-    // A Windows checkout may end its lines with CRLF.
-    let docs = include_str!("../../../../docs/presets.md").replace("\r\n", "\n");
-    let examples: Vec<&str> = docs
-        .split("```text\n")
-        .skip(1)
-        .filter_map(|block| block.split("```").next())
-        .filter(|block| block.starts_with("kerf 1"))
-        .collect();
-    assert_eq!(examples.len(), 4);
-    for example in examples {
-        preset::parse(example, Catalog::builtin()).unwrap_or_else(|e| panic!("{e}\n{example}"));
-    }
-}
-
 /// A fixture's document with the line ends the tests write theirs with, whatever the
 /// checkout gave it: on Windows a file comes with `\r\n`.
 fn fixture(text: &str) -> String {

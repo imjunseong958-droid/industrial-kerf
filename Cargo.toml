@@ -44,7 +44,6 @@ members = [
     "crates/surfaces/kerf-workflow",
     # tools
     "tools/kerf-comfy",
-    "tools/kerf-guide",
     "tools/kerf-layers",
     "tools/kerf-icon",
 ]
