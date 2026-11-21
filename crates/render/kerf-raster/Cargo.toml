@@ -12,4 +12,4 @@ workspace = true
 [dependencies]
 kerf-geom = { path = "../../foundation/kerf-geom" }
 kerf-color = { path = "../../foundation/kerf-color" }
-rayon = { workspace = true }
+rayon.workspace = true

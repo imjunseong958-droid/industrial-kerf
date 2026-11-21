@@ -12,5 +12,5 @@ workspace = true
 [dependencies]
 kerf-color = { path = "../../foundation/kerf-color" }
 kerf-raster = { path = "../../render/kerf-raster" }
-rayon = { workspace = true }
+rayon.workspace = true
 

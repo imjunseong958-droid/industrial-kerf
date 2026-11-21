@@ -15,16 +15,16 @@ kerf-engine = { path = "../../engine/kerf-engine" }
 kerf-lang = { path = "../../foundation/kerf-lang" }
 kerf-model = { path = "../../foundation/kerf-model" }
 fs2 = "0.4"
-libc = "0.2"
-serde = { version = "1", features = ["derive", "rc"] }
-serde_json = { version = "1", features = ["float_roundtrip"] }
-sha2 = "0.10"
+libc.workspace = true
+serde = { workspace = true, features = ["derive", "rc"] }
+serde_json = { workspace = true, features = ["float_roundtrip"] }
+sha2.workspace = true
 
 [dev-dependencies]
-tempfile = "3"
+tempfile.workspace = true
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = [
+windows-sys = { workspace = true, features = [
     "Win32_Foundation",
     "Win32_Security",
     "Win32_Security_Authorization",

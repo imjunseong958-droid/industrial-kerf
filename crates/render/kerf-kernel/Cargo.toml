@@ -8,7 +8,7 @@ description = "One source for a kernel: runs on the CPU and writes itself out as
 [dependencies]
 
 [dev-dependencies]
-naga = { version = "30", features = ["wgsl-in"] }
+naga = { workspace = true, features = ["wgsl-in"] }
 
 [lints]
 workspace = true

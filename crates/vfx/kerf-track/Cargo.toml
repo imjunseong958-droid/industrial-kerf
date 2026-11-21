@@ -7,7 +7,7 @@ description = "Following what moves in a picture"
 
 [dependencies]
 kerf-raster = { path = "../../render/kerf-raster" }
-rayon = { workspace = true }
+rayon.workspace = true
 
 [dev-dependencies]
 kerf-draw = { path = "../../render/kerf-draw" }

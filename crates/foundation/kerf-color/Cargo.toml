@@ -10,7 +10,7 @@ rust-version = "1.95"
 workspace = true
 
 [dependencies]
-serde = { workspace = true }
+serde = { workspace = true, features = ["derive", "rc"] }
 
 [dev-dependencies]
-proptest = { workspace = true }
+proptest.workspace = true

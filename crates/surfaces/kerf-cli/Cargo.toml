@@ -10,8 +10,8 @@ name = "kerf"
 path = "src/main.rs"
 
 [dependencies]
-anyhow = "1"
-clap = { version = "4", features = ["derive"] }
+anyhow.workspace = true
+clap = { workspace = true, features = ["derive"] }
 kerf-agent = { path = "../../surfaces/kerf-agent" }
 kerf-collab = { path = "../../edit/kerf-collab" }
 kerf-engine = { path = "../../engine/kerf-engine" }
@@ -22,10 +22,10 @@ kerf-mcp = { path = "../../surfaces/kerf-mcp" }
 kerf-model = { path = "../../foundation/kerf-model" }
 kerf-runtime = { path = "../../surfaces/kerf-runtime" }
 kerf-skills = { path = "../../surfaces/kerf-skills" }
-serde_json = "1"
+serde_json.workspace = true
 
 [dev-dependencies]
-tempfile = "3"
+tempfile.workspace = true
 
 [lints]
 workspace = true

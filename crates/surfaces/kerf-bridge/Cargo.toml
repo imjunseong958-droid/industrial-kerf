@@ -27,22 +27,18 @@ kerf-engine = { path = "../../engine/kerf-engine" }
 # never linked: it is asked over HTTP by kerf-comfy when a shot is made.
 kerf-shots = { path = "../../surfaces/kerf-shots" }
 kerf-fx = { path = "../../effects/kerf-fx" }
-base64 = "0.23"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+base64.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
 # Asking GitHub for Kerf's releases (updates.rs), trusting the system's
 # certificates, so a network that inspects TLS with its own CA still works.
-ureq = { version = "3", features = ["json", "platform-verifier"] }
+ureq = { workspace = true, features = ["json", "platform-verifier"] }
 
 [dev-dependencies]
-tempfile = "3"
+tempfile.workspace = true
 
 [target.'cfg(windows)'.dev-dependencies]
-windows-sys = { version = "0.61", features = [
-    "Win32_Foundation",
-    "Win32_System_Diagnostics_Debug",
-    "Win32_System_Kernel",
-] }
+windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_System_Diagnostics_Debug", "Win32_System_Kernel"] }
 
 [lints]
 workspace = true

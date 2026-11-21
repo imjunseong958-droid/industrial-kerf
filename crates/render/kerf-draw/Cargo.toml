@@ -11,7 +11,7 @@ kerf-model = { path = "../../foundation/kerf-model" }
 kerf-color = { path = "../../foundation/kerf-color" }
 kerf-geom = { path = "../../foundation/kerf-geom" }
 kerf-text = { path = "../../foundation/kerf-text" }
-rayon = "1"
+rayon.workspace = true
 
 [lints]
 workspace = true
