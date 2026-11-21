@@ -1,0 +1,5 @@
+# Commits git blame skips: whole-repository formatting, which changes no behavior.
+# git config blame.ignoreRevsFile .git-blame-ignore-revs (GitHub reads it on its own).
+
+# Phase 1-1: cargo fmt --all under one root rustfmt.toml
+086a26ed5f0dc27d2a413b0b47bab88915623c2f
