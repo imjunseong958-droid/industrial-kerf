@@ -866,6 +866,24 @@ for line in sys.stdin:
     }
 
     #[test]
+    fn search_paginates_and_describe_returns_exact_schema_with_allowlist() {
+        let registry = registry();
+        let page = registry.search(json!({"limit": 1})).unwrap();
+        assert_eq!(page["total"], 1);
+        assert_eq!(page["items"][0]["tool"], "lookup");
+        let exhausted = registry.search(json!({"offset": usize::MAX})).unwrap();
+        assert_eq!(exhausted["items"], json!([]));
+        assert!(exhausted["nextOffset"].is_null());
+        let schema = registry
+            .describe_tool(json!({"name":"mcp_mock_lookup"}))
+            .unwrap();
+        assert_eq!(schema["inputSchema"]["required"][0], "q");
+        assert!(registry
+            .describe_tool(json!({"name":"mcp_mock_other"}))
+            .is_err());
+    }
+
+    #[test]
     fn cancellation_interrupts_a_running_external_tool() {
         let registry = registry();
         let cancelled = Arc::new(AtomicBool::new(false));

@@ -4,7 +4,7 @@
 //! comes with this program (`--list` names them) or one in a file. The
 //! server is `COMFY_URL`, with `COMFY_API_KEY` if it asks for a key, or what
 //! `~/.kerf/comfy.json` says. A `generate` step runs it once a person's
-//! `~/.kerf/models.json` names it for a model (`docs/shots.md`):
+//! `~/.kerf/models.json` names it for a model:
 //!
 //! ```json
 //! { "shot": { "run": ["kerf-comfy", "--workflow", "shot", "{request}"] } }

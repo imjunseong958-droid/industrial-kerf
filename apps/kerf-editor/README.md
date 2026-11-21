@@ -133,5 +133,4 @@ takes a window by its id.
 
 Each `THIRD-PARTY.txt` says what its package carries and on what terms. The
 `scripts/check-kerf-*` scripts run what was packed with nothing else on `PATH` and fail
-when it loads anything it should carry from outside itself; `docs/shipping.md` keeps the
-record.
+when it loads anything it should carry from outside itself.

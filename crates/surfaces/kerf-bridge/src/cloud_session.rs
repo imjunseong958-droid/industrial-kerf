@@ -1,4 +1,4 @@
-//! The Kerf Cloud session (`docs/cloud.md`): the service's URL in `~/.kerf/cloud.json`, and
+//! The Kerf Cloud session: the service's URL in `~/.kerf/cloud.json`, and
 //! the account token in the system's keychain, beside the API keys (`secrets.rs`).
 //!
 //! Where no keychain can be reached (`KERF_SECRETS=off`, or a Linux without a Secret Service)
@@ -131,6 +131,68 @@ mod tests {
 
         keep_token(&path, &keychain, None).unwrap();
         assert_eq!(keychain.get(TOKEN).unwrap(), None);
+        assert_eq!(load(&path, &keychain).token(), None);
+    }
+
+    #[test]
+    fn a_token_file_moves_into_the_keychain_once() {
+        let home = tempfile::tempdir().unwrap();
+        let path = home.path().join(".kerf/cloud.json");
+        // As an older Kerf kept it.
+        Store {
+            url: Some("https://cloud.example".into()),
+            token: Some("tok-old".into()),
+        }
+        .save(&path)
+        .unwrap();
+        let keychain = Memory::default();
+
+        assert_eq!(load(&path, &keychain).token(), Some("tok-old"));
+        assert_eq!(keychain.get(TOKEN).unwrap().as_deref(), Some("tok-old"));
+        assert_eq!(
+            on_disk(&path),
+            Some(serde_json::json!({"url": "https://cloud.example"}))
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600, "{mode:o}");
+        }
+
+        // Read again, it comes from the keychain, which is not written again.
+        assert_eq!(load(&path, &keychain).token(), Some("tok-old"));
+        assert_eq!(keychain.writes.get(), 1);
+    }
+
+    // KERF_SECRETS=off is a keychain that cannot be reached, as a Linux without a Secret
+    // Service is: the token is kept in the file, readable by its owner only, as before.
+    #[test]
+    fn without_a_keychain_the_token_stays_in_the_file() {
+        let home = tempfile::tempdir().unwrap();
+        let path = home.path().join(".kerf/cloud.json");
+        let keychain = SystemKeychain::turned_off();
+
+        keep_token(&path, &keychain, Some("tok-file")).unwrap();
+        assert_eq!(
+            on_disk(&path),
+            Some(serde_json::json!({"token": "tok-file"}))
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600, "{mode:o}");
+        }
+        // Nothing moves it, and it is still read.
+        assert_eq!(load(&path, &keychain).token(), Some("tok-file"));
+        assert_eq!(
+            on_disk(&path),
+            Some(serde_json::json!({"token": "tok-file"}))
+        );
+
+        keep_token(&path, &keychain, None).unwrap();
+        assert_eq!(on_disk(&path), Some(serde_json::json!({})));
         assert_eq!(load(&path, &keychain).token(), None);
     }
 

@@ -889,6 +889,25 @@ pub(crate) fn mosaic(img: &mut Image, bx: usize, by: usize) {
 
 #[cfg(test)]
 mod tests {
+    use super::median_radius;
+
+    /// A project file's Median radius stays within the parameter's 0–100 range (scaled to the
+    /// working image) and the image: 1e9 used to run a radius-sized window over every pixel.
+    #[test]
+    fn median_radius_stays_in_the_parameter_range() {
+        assert_eq!(median_radius(1e9, 1.0, 4096), 100);
+        assert_eq!(median_radius(1e9, 0.5, 4096), 50);
+        assert_eq!(median_radius(1e9, 1.0, 40), 40);
+        assert_eq!(
+            median_radius(12.0, 1.0, 4096),
+            12,
+            "Radius above 4 keeps its full size"
+        );
+        assert_eq!(median_radius(f32::NAN, 1.0, 4096), 0);
+        assert_eq!(median_radius(-3.0, 1.0, 4096), 0);
+        assert_eq!(median_radius(8.0, f32::INFINITY, 4096), 8);
+    }
+
     use super::*;
 
     fn cx() -> FxCtx<'static> {
@@ -1677,5 +1696,87 @@ mod lumetri_cpu_parity_tests {
             }
             eprintln!("{name}: max sample diff vs fn lumetri: {max_diff:.2e}");
         }
+    }
+
+    /// #719: positive Roundness rounds the Lumetri vignette (it used to be ignored), +100
+    /// is a circle and negative values widen the oval, on the CPU path and the GPU op alike.
+    #[test]
+    fn lumetri_vignette_roundness_shapes_the_vignette() {
+        let (w, h) = (80usize, 40usize);
+        let cx = FxCtx {
+            t: Tick::ZERO,
+            px_scale: 1.0,
+            seconds: 0.0,
+            timecode: "",
+            clip_name: "",
+            project: None,
+            env: None,
+            frame_rate: 24.0,
+            working: kerf_color::WorkingSpace::Rec709,
+        };
+        let render = |roundness: f64| {
+            let e = effect(&[
+                ("basic_on", ParamValue::Bool(false)),
+                ("creative_on", ParamValue::Bool(false)),
+                ("vignette_amount", fl(-3.0)),
+                ("vignette_roundness", fl(roundness)),
+            ]);
+            let grey = Image {
+                w,
+                h,
+                px: [0.5, 0.5, 0.5, 1.0].repeat(w * h),
+            };
+            let mut cpu = grey.clone();
+            lumetri(&mut cpu, &e, &cx);
+            let mut op_img = grey;
+            let op = FxOp::eval(&e, &cx, w, h).expect("lumetri op");
+            op.apply(&mut op_img);
+            for (a, b) in cpu.px.iter().zip(&op_img.px) {
+                assert!(
+                    (a - b).abs() <= 1e-6,
+                    "roundness {roundness}: CPU and GPU op disagree"
+                );
+            }
+            cpu
+        };
+        let red = |img: &Image, x: usize, y: usize| img.px[(y * w + x) * 4];
+        // 16 px right of and 16 px below the centre (40, 20)
+        let (right, below) = ((56, 20), (40, 36));
+
+        let ellipse = render(0.0);
+        assert!(
+            red(&ellipse, right.0, right.1) > red(&ellipse, below.0, below.1) + 0.01,
+            "0 follows the frame"
+        );
+
+        let circle = render(100.0);
+        assert_ne!(
+            circle.px, ellipse.px,
+            "positive roundness changes the vignette"
+        );
+        let (r, b) = (
+            red(&circle, right.0, right.1),
+            red(&circle, below.0, below.1),
+        );
+        assert!((r - b).abs() < 1e-4, "+100 is a circle: {r} vs {b}");
+        assert!(
+            r < red(&ellipse, right.0, right.1),
+            "+100 darkens the sides more than 0"
+        );
+        let half = render(50.0);
+        assert!(
+            red(&half, 70, 20) < red(&ellipse, 70, 20),
+            "+50 darkens the sides more than 0"
+        );
+        assert!(
+            red(&half, 70, 20) > red(&circle, 70, 20),
+            "+50 darkens the sides less than +100"
+        );
+
+        let oval = render(-100.0);
+        assert!(
+            red(&oval, 79, 20) > red(&ellipse, 79, 20),
+            "negative values widen the oval"
+        );
     }
 }

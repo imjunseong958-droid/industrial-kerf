@@ -2,7 +2,7 @@
 //! deterministic; neutral parameters are the identity; each effect has a known-value check; the
 //! frame/track environment works through the real compositor.
 
-use crate::filmcraft::project::{find_effect, ParamKind};
+use crate::filmcraft::project::{find_effect, Param, ParamKind};
 
 use super::*;
 
@@ -31,6 +31,9 @@ fn set(e: &mut EffectInstance, k: &str, v: ParamValue) {
         .get_mut(k)
         .unwrap_or_else(|| panic!("{}: no param {k}", e.effect))
         .value = v;
+}
+fn setf(e: &mut EffectInstance, k: &str, v: f64) {
+    set(e, k, ParamValue::Float(v));
 }
 
 // Noise for the test pictures.
@@ -127,6 +130,14 @@ fn run(id: &str, e: &EffectInstance, img: &Image, cx: &FxCtx) -> Image {
     crate::filmcraft::effects::apply(&mut o, e, cx);
     let _ = id;
     o
+}
+
+/// A point moving linearly from `a` at `t0` seconds to `b` at `t1`, holding outside.
+fn moving(a: Vec2, b: Vec2, t0: f64, t1: f64) -> Param {
+    Param::over_time(ParamValue::Vec2(a), move |t| {
+        let u = ((t.seconds() - t0) / (t1 - t0)).clamp(0.0, 1.0);
+        ParamValue::Vec2(Vec2::new(a.x + (b.x - a.x) * u, a.y + (b.y - a.y) * u))
+    })
 }
 
 fn max_diff(a: &Image, b: &Image) -> f32 {
@@ -480,5 +491,44 @@ fn warp_stabilizer_removes_camera_jitter() {
         false
     )
     .is_some());
+}
+
+#[test]
+fn transform_shutter_uses_the_sequence_frame_rate_without_env() {
+    // An adjustment layer has no env: the shutter must still span one 60 fps frame at 360°, so
+    // the frames just before the motion starts and just after it ends stay sharp (#1088).
+    let mut e = inst("transform");
+    set(&mut e, "shutter_override", ParamValue::Bool(true));
+    setf(&mut e, "shutter_angle", 360.0);
+    e.params.insert(
+        "position".into(),
+        moving(Vec2::new(8.0, 16.0), Vec2::new(40.0, 16.0), 1.0, 2.0),
+    );
+    let img = picture(32, 32);
+    let mut off = e.clone();
+    set(&mut off, "shutter_override", ParamValue::Bool(false));
+    let delta = |frame: i32| {
+        let s = f64::from(frame) / 60.0;
+        let cx = FxCtx {
+            t: Tick::from_seconds_f64(s),
+            seconds: s,
+            frame_rate: 60.0,
+            ..cx()
+        };
+        max_diff(
+            &run("transform", &off, &img, &cx),
+            &run("transform", &e, &img, &cx),
+        )
+    };
+    for frame in [59, 121] {
+        assert!(
+            delta(frame) < 1e-4,
+            "frame {frame} is blurred outside the motion ({})",
+            delta(frame)
+        );
+    }
+    for frame in [60, 90, 120] {
+        assert!(delta(frame) > 1e-3, "frame {frame} moves but is sharp");
+    }
 }
 

@@ -1,5 +1,5 @@
 //! What Kerf asks of a model: the request a `generate` step writes
-//! (`docs/shots.md`, `kerf-engine/src/recipe/model.rs`).
+//! (`kerf-engine/src/recipe/model.rs`).
 
 // The names a request hands things under are the workflow's to know too, and are kept with it.
 pub use kerf_workflow::names::{
@@ -394,7 +394,7 @@ impl Request {
 mod tests {
     use super::*;
 
-    /// The request `docs/shots.md` shows.
+    /// A request as a `generate` step writes it.
     const SHOWN: &str = r#"{
       "kerf-request": 1,
       "model": "dawn",

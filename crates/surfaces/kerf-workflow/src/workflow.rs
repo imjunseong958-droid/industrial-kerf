@@ -319,7 +319,7 @@ impl Workflow {
     }
 
     /// What the model this workflow runs takes, as a person's models file
-    /// says it under `takes` (`docs/shots.md`): the picture it makes, its
+    /// says it under `takes`: the picture it makes, its
     /// rate, the longest shot, the files a `generate` line gives that it
     /// reads, and the other names a line can set, each with the value it
     /// has when the line does not.
@@ -873,8 +873,8 @@ mod tests {
 
     #[test]
     fn the_files_the_workflows_load_are_the_ones_a_server_is_said_to_hold() {
-        // `docs/shots.md`, What the server holds: a workflow that loads another file, or
-        // one that no longer loads one, changes that table with this.
+        // A workflow that loads another file, or one that no longer loads one, changes this
+        // list with it.
         let mut loaded: BTreeMap<String, Vec<&str>> = BTreeMap::new();
         for (name, _) in BUNDLED {
             for value in Workflow::named(name).unwrap().set.values() {

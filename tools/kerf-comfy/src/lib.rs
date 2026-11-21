@@ -2,7 +2,7 @@
 //!
 //! Kerf has no model of its own: a `generate` step writes what is wanted
 //! as a request and runs the program a person's `~/.kerf/models.json` names
-//! for that model (`docs/shots.md`). This is such a program, for a model kept
+//! for that model. This is such a program, for a model kept
 //! on a ComfyUI server:
 //!
 //! ```json

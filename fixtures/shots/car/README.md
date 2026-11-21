@@ -44,3 +44,6 @@ those names:
 - `views`: the camera going round the parked car, with where a model
   puts the camera on each frame (`cameras.txt` in the `.work` folder) and
   the depth it agrees on across the frames, which is the media.
+
+`project.kerf` is a file Git is told to leave out; this one is added in spite of that,
+so the scene the tests read is in the repository.

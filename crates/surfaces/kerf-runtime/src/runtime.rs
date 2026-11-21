@@ -2812,7 +2812,7 @@ mod tests {
     use super::*;
     use crate::ipc::expect_state;
     use crate::store::CHECKPOINT_TEMP_FILE;
-    use crate::RuntimeHandle;
+    use crate::{run_stdio, RuntimeHandle};
     use serde_json::{json, Value};
     use std::fs::OpenOptions;
     use std::io::Write;
@@ -3055,6 +3055,69 @@ mod tests {
         let _ = fs::remove_dir_all(directory);
     }
 
+    /// A fresh project folder with a `media/` folder in it.
+    fn media_project(label: &str) -> PathBuf {
+        let directory = std::env::temp_dir().join(format!("kerf-runtime-{label}-{}", unique_id()));
+        fs::create_dir_all(directory.join("media")).unwrap();
+        directory
+    }
+
+    /// `seconds` of 64x36 picture at 24 fps, with a tone when `sound`.
+    fn media_clip(path: &Path, seconds: u32, sound: bool) {
+        let mut command = std::process::Command::new(kerf_engine::ffmpeg::resolve_ffmpeg_bin());
+        command
+            .args(["-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i"])
+            .arg(format!("color=c=gray:s=64x36:r=24:d={seconds}"));
+        if sound {
+            command
+                .args(["-f", "lavfi", "-i"])
+                .arg(format!("sine=f=440:sample_rate=48000:d={seconds}"))
+                .args(["-c:a", "aac", "-shortest"]);
+        }
+        let output = command
+            .args(["-c:v", "mpeg4", "-pix_fmt", "yuv420p", "-y"])
+            .arg(path)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    fn a_replacement_replays_from_the_journal_after_a_restart() {
+        let directory = media_project("replace-restart");
+        media_clip(&directory.join("media/a.mp4"), 2, false);
+        media_clip(&directory.join("media/b.mp4"), 3, false);
+        let (imported, replaced) = {
+            let mut runtime = Runtime::open(&directory).unwrap();
+            let (imported, media, _) = runtime
+                .import_media_request("ui", "import", "media/a.mp4", 0)
+                .unwrap();
+            let replaced = runtime
+                .replace_media_request("ui", "replace", &media, "media/b.mp4", 1)
+                .unwrap();
+            (imported, replaced)
+        };
+        assert!(directory.join(JOURNAL_FILE).is_file());
+        let mut reopened = Runtime::open(&directory).unwrap();
+        let recovered = reopened.snapshot();
+        assert_eq!(recovered.revision, 2);
+        assert_eq!(recovered.document, replaced.document);
+        assert_eq!(recovered.projection_status, "current");
+        assert!(recovered.can_undo);
+        // The receipt survived too.
+        let replay = reopened
+            .replace_media_request("ui", "replace", "m1", "media/b.mp4", 1)
+            .unwrap();
+        assert_eq!(replay.revision, 2);
+        assert_eq!(undo(&mut reopened, 2).unwrap().document, imported.document);
+        drop(reopened);
+        let _ = fs::remove_dir_all(directory);
+    }
+
     #[test]
     fn durable_journal_recovers_after_projection_failure() {
         let directory =
@@ -3239,6 +3302,99 @@ mod tests {
         let state = expect_state(handle.request(RuntimeRequest::GetState).unwrap()).unwrap();
         assert_eq!(state.revision, 1);
         drop(handle);
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn jsonl_rejects_empty_idempotency_keys_at_runtime_boundary() {
+        let directory = std::env::temp_dir().join(format!("kerf-runtime-jsonl-{}", unique_id()));
+        let requests = [
+            json!({
+                "protocolVersion":1,
+                "id":"script-empty",
+                "operation":"apply_script",
+                "actor":"ui",
+                "idempotencyKey":"",
+                "baseRevision":0,
+                "script":"marker add at=0f"
+            }),
+            json!({
+                "protocolVersion":1,
+                "id":"undo-empty",
+                "operation":"undo",
+                "actor":"ui",
+                "idempotencyKey":"   ",
+                "baseRevision":0
+            }),
+            json!({
+                "protocolVersion":1,
+                "id":"redo-empty",
+                "operation":"redo",
+                "actor":"ui",
+                "idempotencyKey":"",
+                "baseRevision":0
+            }),
+            json!({
+                "protocolVersion":1,
+                "id":"import-empty",
+                "operation":"import",
+                "actor":"ui",
+                "idempotencyKey":"",
+                "baseRevision":0,
+                "path":"/definitely/not-a-file"
+            }),
+            json!({
+                "protocolVersion":1,
+                "id":"replace-empty",
+                "operation":"replace_media",
+                "actor":"ui",
+                "idempotencyKey":"",
+                "baseRevision":0,
+                "media":"m1",
+                "path":"/definitely/not-a-file"
+            }),
+            json!({
+                "protocolVersion":1,
+                "id":"accept-empty",
+                "operation":"accept_proposal",
+                "proposalId":"proposal-missing",
+                "actor":"ui",
+                "idempotencyKey":"",
+                "baseRevision":0
+            }),
+            json!({
+                "protocolVersion":1,
+                "id":"reject-empty",
+                "operation":"reject_proposal",
+                "proposalId":"proposal-missing",
+                "actor":"ui",
+                "idempotencyKey":"",
+                "baseRevision":0
+            }),
+        ];
+        let input = requests
+            .iter()
+            .map(Value::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut output = Vec::new();
+        run_stdio(
+            &directory,
+            std::io::Cursor::new(format!("{input}\n")),
+            &mut output,
+        )
+        .unwrap();
+        let responses = String::from_utf8(output)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(responses.len(), requests.len());
+        for (response, request) in responses.iter().zip(requests.iter()) {
+            assert_eq!(response["id"], request["id"]);
+            assert_eq!(response["ok"], false);
+            assert_eq!(response["error"]["code"], "INVALID_REQUEST");
+        }
         let _ = fs::remove_dir_all(directory);
     }
 
@@ -3564,6 +3720,35 @@ mod tests {
         assert_eq!(runtime.document(false), before);
         assert_eq!(runtime.snapshot().revision, 1);
         drop(runtime);
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn history_snapshots_survive_checkpoints() {
+        let (mut runtime, directory) = kernel_runtime("history-checkpoint");
+        for index in 0..(CHECKPOINT_INTERVAL + 2) {
+            runtime
+                .apply_script_request(
+                    "ui",
+                    &format!("marker-{index}"),
+                    &format!("marker add at={index}f"),
+                    index,
+                )
+                .unwrap();
+        }
+        let expected = runtime.document(false);
+        drop(runtime);
+        let mut reopened = Runtime::open(&directory).unwrap();
+        assert_eq!(reopened.document(false), expected);
+        let revision = reopened.snapshot().revision;
+        for step in 0..(CHECKPOINT_INTERVAL + 2) {
+            undo(&mut reopened, revision + step).unwrap();
+        }
+        let undone = reopened.document(false);
+        assert!(!undone.contains("marker mk"), "{undone}");
+        // Undone markers keep their ids retired.
+        assert!(undone.contains("retired=mk1,"), "{undone}");
+        drop(reopened);
         let _ = fs::remove_dir_all(directory);
     }
 

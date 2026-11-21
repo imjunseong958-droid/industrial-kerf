@@ -2,7 +2,7 @@
 //! (M5.11): definitions in its folders (Adjust … Video), the Immersive Video (VR) set, the Legacy
 //! bin and the obsolete effects old projects still reference, plus the Effects-panel badge table.
 //! The effects that make a look a model makes better, and those a clip's own properties do, are
-//! not carried (`docs/architecture.md`).
+//! not carried.
 //!
 //! Names, folders and parameter names follow the public effect list; parameter ranges/defaults are
 //! our own where the reference does not pin them. Pixel implementations live in

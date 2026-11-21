@@ -1391,4 +1391,42 @@ mod tests {
             assert_eq!(session.messages.len(), 1);
         }
     }
+
+    #[test]
+    fn agent_events_expose_bounded_tool_summaries_without_raw_payloads() {
+        let targets = summarize_targets(&json!({
+            "command": {
+                "type": "update_clip",
+                "clipId": "clip-1",
+                "trackId": "track-1",
+            },
+            "sourceId": "source-1",
+        }));
+        assert_eq!(targets.sources, vec!["source-1"]);
+        assert_eq!(targets.clips, vec!["clip-1"]);
+        assert_eq!(targets.tracks, vec!["track-1"]);
+
+        let summary = summarize_tool_result(&json!({
+            "revision": 9,
+            "status": "completed",
+            "clipId": "clip-1",
+            "frames": [{
+                "path": "/project/.kerf/cache/derived/frame.png",
+                "imageBase64": "should-not-be-retained",
+            }],
+        }));
+        assert_eq!(summary.revision, Some(9));
+        assert_eq!(summary.status.as_deref(), Some("completed"));
+        assert_eq!(
+            summary.artifact_paths,
+            vec!["/project/.kerf/cache/derived/frame.png"]
+        );
+        assert!(!format!("{summary:?}").contains("should-not-be-retained"));
+
+        let sensitive = ToolResultSummary::from_error("authorization: bearer secret");
+        assert_eq!(
+            sensitive.error.as_deref(),
+            Some("sensitive tool error redacted")
+        );
+    }
 }

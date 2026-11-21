@@ -1405,4 +1405,30 @@ mod tests {
         assert_eq!(value(&vars, "GIT_HTTP_LOW_SPEED_LIMIT"), Some("1000"));
         assert_eq!(value(&vars, "GIT_HTTP_LOW_SPEED_TIME"), Some("60"));
     }
+
+    #[test]
+    fn local_settings_are_recognized_in_any_case_and_through_kerf_itself() {
+        for path in [
+            ".kerf/mcp.json",
+            ".kerf/config.json",
+            ".kerf/vision.json",
+            ".KERF/MCP.json",
+            ".kerf/mcp.json/inner",
+            ".kerf",
+            ".Kerf",
+            ".kerf/mcp.j\u{17f}on",
+            ".\u{212a}erf/config.json",
+            ".kerf/vi\u{17f}ion.json",
+        ] {
+            assert!(is_local_setting(path), "{path}");
+        }
+        for path in [
+            ".kerf/looks/warm.kerflook",
+            "media/.kerf/mcp.json",
+            ".kerf/mcp.json.bak",
+            "project.kerf",
+        ] {
+            assert!(!is_local_setting(path), "{path}");
+        }
+    }
 }

@@ -2275,6 +2275,25 @@ mod tests {
         remove_project(&daemon.wait_for_exit());
     }
 
+    #[test]
+    fn background_work_keeps_it_running_until_the_work_ends() {
+        let daemon = Daemon::start(
+            "work",
+            options(Duration::from_millis(200), Some(Duration::from_secs(2))),
+        );
+        let lease = daemon.client.hold();
+        wait_until_held(&lease);
+        let work = kernel::BackgroundWork::start(daemon.client.directory());
+        drop(lease);
+        thread::sleep(Duration::from_secs(5));
+        assert!(daemon.running(), "kerfd exited under its background work");
+        let finished = Instant::now();
+        drop(work);
+        let client = daemon.wait_for_exit();
+        assert!(finished.elapsed() >= Duration::from_millis(200));
+        remove_project(&client);
+    }
+
     /// What reads like a socket that a signal interrupts once before kerfd's answer.
     struct InterruptedOnce {
         interrupted: bool,

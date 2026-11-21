@@ -444,7 +444,7 @@ impl Models {
                 format!("names {}", self.names().collect::<Vec<_>>().join(", "))
             };
             EngineError::msg(format!(
-                "no model `{name}` is set up: {} {have}. A model is a program named there, as `{{\"{name}\": {{\"run\": [\"<program>\", \"{REQUEST}\"]}}}}` (docs/shots.md)",
+                "no model `{name}` is set up: {} {have}. A model is a program named there, as `{{\"{name}\": {{\"run\": [\"<program>\", \"{REQUEST}\"]}}}}`",
                 self.file.display()
             ))
         })

@@ -887,4 +887,13 @@ mod tests {
         let found = align(&first, &rise_of_loudness(&noise));
         assert!(found.confidence < 0.3, "{found:?}");
     }
+
+    #[test]
+    fn a_short_recording_late_in_a_long_one_begins_after_its_start() {
+        // 25 s from 270 s of the first's five minutes: past the middle of what the transform
+        // holds, where a lag was once read as one before the first began.
+        let found = lined_up(25.0, |t| Some(t + 270.0));
+        assert!((found.offset - 270.0).abs() < 0.002, "{found:?}");
+        assert!(found.confidence > 0.5, "{found:?}");
+    }
 }

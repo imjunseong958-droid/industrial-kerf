@@ -492,4 +492,19 @@ mod tests {
         let full = Encoding::of(&job, false).unwrap();
         assert_eq!((full.quality, full.codec), ("full", "h264"));
     }
+
+    #[test]
+    fn names_make_plain_visible_file_names() {
+        assert_eq!(file_stem("atlas_30s_v7 master"), "atlas_30s_v7 master");
+        assert_eq!(file_stem("a/b\\c:d*e?f\"g<h>i|j"), "a-b-c-d-e-f-g-h-i-j");
+        assert_eq!(file_stem("..hidden"), "hidden");
+        assert_eq!(file_stem(" . "), "");
+        assert_eq!(
+            render_name(Some("  Master  ")).unwrap().as_deref(),
+            Some("Master")
+        );
+        assert_eq!(render_name(Some("   ")).unwrap(), None);
+        assert!(render_name(Some("a\tb")).is_err());
+        assert!(render_name(Some(&"x".repeat(MAX_RENDER_NAME + 1))).is_err());
+    }
 }

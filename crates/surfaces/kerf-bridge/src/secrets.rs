@@ -68,6 +68,12 @@ impl SystemKeychain {
     pub(crate) fn new() -> Self {
         Self { enabled: !off() }
     }
+
+    /// The keychain as `KERF_SECRETS=off` leaves it: refusing everything.
+    #[cfg(test)]
+    pub(crate) fn turned_off() -> Self {
+        Self { enabled: false }
+    }
 }
 
 impl Keychain for SystemKeychain {

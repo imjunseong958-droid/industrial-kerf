@@ -1389,4 +1389,152 @@ mod tests {
             .expect("worker running");
         thread.join().expect("worker exits");
     }
+
+    /// A device that takes what it is given and plays none of it, unless
+    /// the test asks for sound in its place.
+    #[cfg(feature = "native-audio")]
+    struct SilentDevice;
+
+    #[cfg(feature = "native-audio")]
+    impl super::AudioOutput for SilentDevice {
+        fn sample_rate(&self) -> u32 {
+            48_000
+        }
+
+        fn channels(&self) -> usize {
+            2
+        }
+
+        fn push(&self, _samples: &[f32]) {}
+
+        fn queued_frames(&self) -> usize {
+            usize::MAX
+        }
+
+        fn clear(&self) {}
+
+        fn set_volume(&self, _volume: f32) {}
+
+        fn set_muted(&self, _muted: bool) {}
+
+        fn is_device(&self) -> bool {
+            true
+        }
+
+        fn describe(&self) -> String {
+            "a device that plays nothing".into()
+        }
+    }
+
+    #[cfg(feature = "native-audio")]
+    #[test]
+    fn a_device_that_goes_quiet_stops_keeping_the_time_until_it_asks_steadily_again() {
+        use super::{AudioCommand, AudioWorker, DEVICE_QUIET_AFTER, DEVICE_STEADY_FOR};
+        use crate::PlaybackTimeline;
+        use std::sync::mpsc;
+
+        let clock = AudioClock::new();
+        clock.device_heard_from();
+        clock.set_device_clock(48_000);
+        clock.play_at(1.0);
+        let (commands, receiver) = mpsc::sync_channel(4);
+        let timeline =
+            PlaybackTimeline::from_project(&kerf_model::Project::default()).expect("timeline");
+        let worker_clock = clock.clone();
+        let levels = super::LevelTap::new(clock.clone());
+        let worker = thread::spawn(move || {
+            let mut worker = AudioWorker::new(
+                timeline,
+                receiver,
+                worker_clock,
+                Box::new(SilentDevice),
+                levels,
+                false,
+            );
+            worker.playing = true;
+            worker.position = 1.0;
+            worker.run()
+        });
+        let wait_for = |source: ClockSource, within: Duration| {
+            let deadline = Instant::now() + within;
+            while clock.source() != source && Instant::now() < deadline {
+                thread::sleep(Duration::from_millis(2));
+            }
+            clock.source()
+        };
+
+        // The device asks for nothing: its clock stands still, then the
+        // monotonic one carries on from there.
+        thread::sleep(DEVICE_QUIET_AFTER / 4);
+        assert_eq!(clock.source(), ClockSource::AudioDevice, "not that soon");
+        assert_eq!(clock.now(), 1.0);
+        assert_eq!(
+            wait_for(ClockSource::MonotonicFallback, DEVICE_QUIET_AFTER * 5),
+            ClockSource::MonotonicFallback
+        );
+        let carried_on = clock.now();
+        assert!((1.0..1.2).contains(&carried_on), "{carried_on}");
+        thread::sleep(Duration::from_millis(20));
+        assert!(clock.now() > carried_on, "time runs without the device");
+
+        // It asks a few times and stops: a stutter does not bring it back.
+        for _ in 0..10 {
+            clock.record_device_call(480);
+            thread::sleep(Duration::from_millis(10));
+        }
+        thread::sleep(DEVICE_QUIET_AFTER * 2);
+        assert_eq!(clock.source(), ClockSource::MonotonicFallback);
+
+        // It takes sound at its own rate: after a second of that it keeps
+        // the time again, from where the clock is.
+        let asking = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let (device_clock, still_asking) = (clock.clone(), std::sync::Arc::clone(&asking));
+        let device = thread::spawn(move || {
+            let started = Instant::now();
+            let mut asked = 0;
+            while still_asking.load(std::sync::atomic::Ordering::Acquire) {
+                let due = (started.elapsed().as_secs_f64() * 48_000.0) as u64;
+                while asked + 480 <= due {
+                    device_clock.record_device_call(480);
+                    if device_clock.is_playing() {
+                        device_clock.record_frames(480);
+                    }
+                    asked += 480;
+                }
+                thread::sleep(Duration::from_millis(5));
+            }
+        });
+        assert_eq!(
+            wait_for(ClockSource::AudioDevice, DEVICE_STEADY_FOR * 4),
+            ClockSource::AudioDevice
+        );
+        let resumed = clock.now();
+        assert!(resumed > carried_on, "{resumed}");
+        thread::sleep(Duration::from_millis(60));
+        assert!(clock.now() > resumed, "its frames advance the clock again");
+
+        // And goes quiet once more.
+        asking.store(false, std::sync::atomic::Ordering::Release);
+        device.join().expect("device");
+        assert_eq!(
+            wait_for(ClockSource::MonotonicFallback, DEVICE_QUIET_AFTER * 5),
+            ClockSource::MonotonicFallback
+        );
+        commands
+            .send(AudioCommand::Shutdown)
+            .expect("worker running");
+        worker.join().expect("worker exits");
+    }
+
+    #[cfg(feature = "native-audio")]
+    #[test]
+    fn topping_up_the_queue_keeps_the_sound_not_played_yet() {
+        use super::{AudioBuffer, AUDIO_BUFFER_SECONDS, MIX_FRAMES};
+        let buffer = AudioBuffer::new(48_000, 2);
+        let buffered = (48_000.0 * AUDIO_BUFFER_SECONDS) as usize;
+        buffer.push(&vec![1.0; (buffered - 1) * 2]);
+        buffer.push(&vec![2.0; MIX_FRAMES * 2]);
+        assert_eq!(buffer.queued_frames(2), buffered - 1 + MIX_FRAMES);
+        assert_eq!(buffer.pop(), Some(1.0));
+    }
 }

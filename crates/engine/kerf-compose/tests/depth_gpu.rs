@@ -7,7 +7,7 @@ use kerf_lang::parse_document;
 use kerf_model::{Catalog, Rate};
 
 /// The most a scene may differ from the CPU on average over the frame, in 255ths. What each scene
-/// comes to is printed with `--nocapture`, and `docs/architecture.md` says what these hold.
+/// comes to is printed with `--nocapture`.
 const MEAN: f64 = 0.05;
 /// How far a pixel may be off, in 255ths, and what share of a frame may be off by more. Those are a
 /// solid's sides facing straight up or down, where a table of light has no one way round.

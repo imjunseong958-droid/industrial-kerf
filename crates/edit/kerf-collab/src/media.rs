@@ -471,6 +471,22 @@ mod tests {
     }
 
     #[test]
+    fn a_different_file_never_takes_a_name_that_is_held() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("clip.mp4");
+        fs::write(&source, b"mine").unwrap();
+        let hash = hex(&Sha256::digest(b"mine"));
+        // Someone else's file already holds the short name.
+        fs::create_dir_all(root.path().join("p/media")).unwrap();
+        let held = root.path().join(format!("p/media/clip-{}.mp4", &hash[..8]));
+        fs::write(&held, b"theirs").unwrap();
+        let copy = copy_into_media(&root.path().join("p"), &source).unwrap();
+        assert_eq!(copy, format!("media/clip-{}.mp4", &hash[..12]));
+        assert_eq!(fs::read(&held).unwrap(), b"theirs");
+        assert_eq!(fs::read(root.path().join("p").join(copy)).unwrap(), b"mine");
+    }
+
+    #[test]
     fn copying_a_git_lfs_pointer_is_refused() {
         let root = tempfile::tempdir().unwrap();
         let pointer = root.path().join("big.mov");

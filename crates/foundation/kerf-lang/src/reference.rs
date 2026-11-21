@@ -212,7 +212,7 @@ replaced; version 1 of it no longer reads.";
 
 const LOOKS: &str = "## Looks
 Playful effects written in the Kerf language from the effects above, behind
-a few parameters (`docs/looks.md`). A clip takes one like any effect (`fx c1
+a few parameters. A clip takes one like any effect (`fx c1
 add look.shake@1 intensity=0.7 hit=12f`), a title the Titles ones, and a cut
 the Transitions ones like any transition. A time parameter is a time in the
 clip (`12f`, `0.5s`). The document keeps the one line; `fx c1 flatten 1`

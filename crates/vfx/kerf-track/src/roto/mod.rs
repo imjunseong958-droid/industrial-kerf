@@ -9,8 +9,8 @@
 //! the flow has lost it ([`flow_lost`]), and the flow then only says what changed of it, with the band
 //! wider the further it went.
 //! It goes by colour and edges, with nothing to install. A model that finds a thing by its name and
-//! follows it is another program's, reached by a recipe: `matte`, a workflow of `kerf-comfy`
-//! (`docs/shots.md`, A thing in footage, by its name), where one is set up.
+//! follows it is another program's, reached by a recipe: `matte`, a workflow of `kerf-comfy`,
+//! where one is set up.
 //!
 //! Carried from EffectCraft's `track/src/roto`. Kerf keeps no matte of its own: what this finds is
 //! written as a mask whose outline has keyframes, which merges, reads, and edits like any other, with

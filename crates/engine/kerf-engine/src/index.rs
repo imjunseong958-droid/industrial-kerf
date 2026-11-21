@@ -467,6 +467,7 @@ fn tempo(levels: &[f64], onsets: usize) -> Option<Tempo> {
 
 #[cfg(test)]
 mod tests {
+
     /// An FFmpeg that fills its stderr before the frames it is read for: it must still be read to
     /// its end, where it once left both waiting for ever.
     #[cfg(unix)]

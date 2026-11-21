@@ -7,7 +7,7 @@
 //! the recipe, with that value changed and the rest as it was written
 //! ([`kerf_workflow::detail`]), and the step's line is given `workflow=<file>`,
 //! which has the model's program run the copy for this shot
-//! (`docs/shots.md`). The copy is a file of the project: it travels with it,
+//! The copy is a file of the project: it travels with it,
 //! a take is held to it, and taking the word off the line goes back to the
 //! workflow as it comes.
 //!

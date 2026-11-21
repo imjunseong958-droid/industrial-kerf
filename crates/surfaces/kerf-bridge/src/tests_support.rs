@@ -5,6 +5,7 @@ use crate::Shared;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize};
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 /// The state the bridge's workers share, for the project in `directory`.
 pub(crate) fn shared(directory: &Path) -> Shared {
@@ -47,3 +48,17 @@ pub(crate) const PROGRAM: &str = "kerf 1\nproject name=\"Library\"\n\
     \x20   clip c2 media=m1 src=48f at=48f dur=24f\n\
     \x20 track S1 subtitle\n\
     \x20   clip t1 caption=\"Hello\" at=0f dur=24f\n";
+
+/// Ask `check` until it answers or `timeout` passes.
+pub(crate) fn wait<T>(timeout: Duration, mut check: impl FnMut() -> Option<T>) -> Option<T> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if let Some(value) = check() {
+            return Some(value);
+        }
+        if Instant::now() >= deadline {
+            return None;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}

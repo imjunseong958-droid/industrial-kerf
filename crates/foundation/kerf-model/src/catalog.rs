@@ -300,7 +300,7 @@ impl Domain {
 }
 
 /// The part of the editor a definition belongs to, which is also where its
-/// code lives or will live: `crates/<area>` (`docs/architecture.md`).
+/// code lives or will live: `crates/<area>`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Area {
     /// Cutting: transitions, sound, and the tools around the edit.
@@ -342,7 +342,7 @@ impl Area {
 /// Where a definition's code came from, for the places that still run
 /// effects their own way: the graph, playback of plain cuts, and the editor's
 /// previews. The compositor does not ask: it finds every effect by id
-/// (`kerf_draw::effect::PictureEffect`; see `docs/architecture.md`).
+/// (`kerf_draw::effect::PictureEffect`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum Engine {
     /// Lowered into the render graph.

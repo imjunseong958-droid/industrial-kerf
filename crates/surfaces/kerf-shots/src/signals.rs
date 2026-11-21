@@ -1,5 +1,5 @@
 //! A signal's keys from what a sound does: a model is told when with a
-//! `gen=signal@1` clip (`docs/shots.md`), and where the moments are a sound's,
+//! `gen=signal@1` clip, and where the moments are a sound's,
 //! the beats of a track or a ball on a floor, they are read from it and not
 //! written by ear.
 //!

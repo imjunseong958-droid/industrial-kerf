@@ -1455,6 +1455,53 @@ pub fn cached_waveform_range(
 mod tests {
     use super::*;
 
+    // A temp folder is named for the person, and that is where a surface keeps the font:
+    // `drawtext` takes no apostrophe in a path, nor on Windows a name in hangul.
+    #[test]
+    fn a_sheets_labels_are_drawn_from_a_font_in_a_folder_of_any_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let frames = dir.path().join("frames");
+        fs::create_dir_all(&frames).unwrap();
+        let pattern = frames.join("frame-%03d.jpg").to_string_lossy().into_owned();
+        let made = [
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=320x180:rate=1:duration=2",
+            "-start_number",
+            "0",
+            pattern.as_str(),
+        ]
+        .map(String::from);
+        run(resolve_ffmpeg_bin(), &made).unwrap();
+        let paths = ["frame-000.jpg", "frame-001.jpg"]
+            .map(|name| frames.join(name).to_string_lossy().into_owned());
+        let labels = ["00:00:00:15", "00:00:01:15"].map(String::from);
+        let sheet = |folder: &str| {
+            let folder = dir.path().join(folder);
+            fs::create_dir_all(&folder).unwrap();
+            let font = folder.join("font.ttf");
+            let inter = include_bytes!("../../../foundation/kerf-text/fonts/Inter-Medium.ttf");
+            fs::write(&font, inter).unwrap();
+            let sheet = folder.join("sheet.jpg");
+            create_labelled_contact_sheet(&paths, &sheet, 2, &labels, &font).unwrap();
+            fs::read(sheet).unwrap()
+        };
+        let plain = sheet("plain");
+        assert!(
+            sheet("O'Brien \u{c784}\u{c2dc}") == plain,
+            "the labels of a font in a folder with an apostrophe and hangul are not those of the same font in a plain one"
+        );
+        let bare = dir.path().join("bare.jpg");
+        create_contact_sheet(&paths, &bare, 2).unwrap();
+        if draws_text() {
+            assert!(plain != fs::read(bare).unwrap(), "no label was drawn");
+        }
+    }
+
     #[cfg(unix)]
     #[test]
     fn waveform_stderr_is_drained_while_stdout_is_read() {

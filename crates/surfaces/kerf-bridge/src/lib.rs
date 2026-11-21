@@ -3673,7 +3673,7 @@ pub fn clip_properties() -> Value {
 
 #[cfg(test)]
 mod tests {
-    use super::{discard_previews, rendered_preview, Command, MediaProject};
+    use super::{discard_previews, rendered_preview, Command, MediaProject, Shared};
 
     use serde_json::json;
     use std::path::Path;
@@ -3745,6 +3745,10 @@ mod tests {
         }
     }
 
+    fn shared() -> Shared {
+        crate::tests_support::shared(&std::env::temp_dir())
+    }
+
     #[test]
     fn mcp_connection_activity_omits_untrusted_details() {
         assert_eq!(
@@ -3807,6 +3811,30 @@ mod tests {
             range: None,
             sequence: None,
         }
+    }
+
+    #[test]
+    fn stopping_with_no_preview_running_answers_at_once() {
+        let shared = Arc::new(shared());
+        let (tx, rx) = mpsc::sync_channel(4);
+        super::stop_preview(&shared, &tx);
+        assert_eq!(next(&rx), json!({"type": "preview", "status": "stopped"}));
+
+        // With one running, the render answers once it has stopped.
+        let directory = tempfile::tempdir().unwrap();
+        let marker = kerf_runtime::render_cancel_path(directory.path(), "job-1");
+        *shared.preview_cancel.lock().unwrap() = Some(marker.clone());
+        assert!(shared.preview_turns.send(|| true));
+        let turn = shared.preview_turns.take();
+        super::stop_preview(&shared, &tx);
+        crate::tests_support::wait(Duration::from_secs(10), || marker.exists().then_some(()))
+            .expect("the render was told to stop");
+        assert!(shared.preview_turns.stopped(turn));
+        assert!(rx.recv_timeout(Duration::from_millis(200)).is_err());
+        // It is over, stopped, and the next stop has nothing to wait for.
+        assert!(shared.preview_turns.over(turn));
+        super::stop_preview(&shared, &tx);
+        assert_eq!(next(&rx), json!({"type": "preview", "status": "stopped"}));
     }
 
     /// The editor sends `preview` and then `preview_stop`; the stop acts

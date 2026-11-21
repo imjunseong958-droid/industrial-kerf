@@ -561,4 +561,22 @@ mod tests {
         let fresh = super::arguments("{}", None, None);
         assert!(!fresh.contains(&"--resume".to_owned()) && !fresh.contains(&"--model".to_owned()));
     }
+
+    #[test]
+    fn a_chosen_mode_reaches_the_server_it_starts() {
+        let config: Value = serde_json::from_str(&mcp_config(
+            &McpProgram {
+                program: "/bin/kerf-mcp".into(),
+                args: &[],
+            },
+            Path::new("/work/film"),
+            Path::new("/bin/kerfd"),
+            Some(Mode::AcceptEdits),
+        ))
+        .unwrap();
+        assert_eq!(
+            config["mcpServers"]["kerf"]["env"][MODE_VARIABLE],
+            "accept-edits"
+        );
+    }
 }

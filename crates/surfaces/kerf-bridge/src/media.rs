@@ -598,6 +598,17 @@ mod tests {
     use std::sync::mpsc;
     use std::time::Duration;
 
+    fn project(media: &[(&str, &str)]) -> Project {
+        let mut text = String::from("kerf 1\nproject name=\"Media\"\n");
+        for (id, path) in media {
+            text.push_str(&format!(
+                "media {id} path=\"{path}\" rate=24 dur=48f video=64x64\n"
+            ));
+        }
+        text.push_str("sequence s1 rate=24 size=64x64 audio=48000\n");
+        kerf_runtime::parse_document(&text).unwrap()
+    }
+
     #[test]
     fn a_file_that_is_not_media_is_never_copied_into_media() {
         let root = tempfile::tempdir().unwrap();
@@ -624,6 +635,44 @@ mod tests {
         assert!(imports.try_recv().is_err());
         assert_eq!(fs::read_dir(project.join("media")).unwrap().count(), 0);
         assert_eq!(shared.copies.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn consolidating_never_copies_a_file_that_is_not_media() {
+        let root = tempfile::tempdir().unwrap();
+        let project_dir = root.path().join("Film");
+        fs::create_dir_all(project_dir.join("media")).unwrap();
+        // A collaborator names a secret where media belongs.
+        let secret = root.path().join("config.json");
+        fs::write(&secret, br#"{"token": "secret"}"#).unwrap();
+        let clip = root.path().join("clip.mov");
+        fs::write(&clip, b"picture").unwrap();
+        let project = project(&[
+            ("m1", &secret.to_string_lossy()),
+            ("m2", &clip.to_string_lossy()),
+        ]);
+        let probe = |file: &Path| match file.extension().and_then(|e| e.to_str()) {
+            Some("mov") => Ok(()),
+            _ => Err(format!("{} is not media", file.display())),
+        };
+        let result = consolidate(&project, &project_dir, probe);
+        assert_eq!(result.copied, 1);
+        assert_eq!(result.relinks.len(), 1);
+        assert_eq!(result.relinks[0].0.as_str(), "m2");
+        assert_eq!(result.skipped.len(), 1, "{:?}", result.skipped);
+        assert!(
+            result.skipped[0].starts_with("Skipped m1: "),
+            "{:?}",
+            result.skipped
+        );
+        let copied: Vec<_> = fs::read_dir(project_dir.join("media"))
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(copied.len(), 1, "{copied:?}");
+        assert!(copied[0].starts_with("clip-"), "{copied:?}");
+        // What the editor passes in reads a file the way an import does.
+        assert!(crate::tasks::probe(&secret).is_err());
     }
 
     #[test]

@@ -1,6 +1,6 @@
 //! Looks: the playful effects of a short-form editor written in the Kerf
 //! language, combining built-in effects, keyframes, and masks behind a few
-//! parameters (`docs/looks.md`).
+//! parameters.
 //!
 //! A look is read from a `.kerflook` file ([`read`]), listed in the catalog
 //! as an effect or a transition of its own ([`Catalog::define_look`]), and

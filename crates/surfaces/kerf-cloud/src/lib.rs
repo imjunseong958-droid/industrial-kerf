@@ -4,7 +4,7 @@
 //! open-source client is no check at all. The client only reflects them.
 //!
 //! The service is not deployed yet. This crate holds the client side of its
-//! contract (`docs/cloud.md`): where the service is, the signed-in session,
+//! contract: where the service is, the signed-in session,
 //! the account, and what the account allows. Until a service URL is
 //! configured, Kerf Cloud reports itself unavailable and people use their own
 //! API key (Settings → Chat).

@@ -994,7 +994,7 @@ fn run_shots(directory: &Path, kerfd: Option<&Path>) -> Result<()> {
     let shots = kerf_engine::recipe::shots(&project, directory);
     if shots.is_empty() {
         println!(
-            "no media has steps that make it; `step <media> add …` in an edit writes them under its line (docs/shots.md)"
+            "no media has steps that make it; `step <media> add …` in an edit writes them under its line"
         );
         return Ok(());
     }
