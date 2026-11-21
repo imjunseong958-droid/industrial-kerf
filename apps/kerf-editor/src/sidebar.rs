@@ -904,7 +904,8 @@ pub struct AppMenuInput<'a> {
     pub checked: &'a std::collections::BTreeSet<String>,
     /// The viewer's zoom (0 fits).
     pub zoom: f32,
-    /// The project's Git standing (the last `collab` event's `status`).
+    /// The project's Git standing (the last `collab` event's `status`),
+    /// with why the last sync failed under [`SYNC_FAILURE`] when it did.
     pub collab: Option<&'a Value>,
     pub revision: u64,
     /// The system draws the registry's menus in a menu bar (macOS):
@@ -934,6 +935,22 @@ fn command_row(input: &AppMenuInput, id: &str, words: Option<&str>) -> AppRow {
                 .unwrap_or_else(|| id.to_owned()),
             AppDoes::Command(id.to_owned()),
         )
+    }
+}
+
+/// The row for the picture's mask tool `tool`, with its key: ticked while
+/// it is out, greyed with why while none can be (no picture clip chosen
+/// that the picture can place), as the states and ticks say by its own id
+/// ([`crate::commands::mask_tool_id`]).
+fn mask_row(input: &AppMenuInput, tool: crate::stage::MaskTool) -> AppRow {
+    let id = crate::commands::mask_tool_id(tool);
+    let reason = crate::palette::unavailable(input.states, id).map(str::to_owned);
+    AppRow {
+        key: Some(crate::commands::shown_keys(tool.shortcut())),
+        checked: input.checked.contains(id),
+        disabled: reason.is_some(),
+        tip: reason,
+        ..AppRow::new(tool.label(), AppDoes::Mask(tool))
     }
 }
 
@@ -981,10 +998,7 @@ fn view_rows(input: &AppMenuInput) -> Vec<AppRow> {
         command_row(input, "view.followKerf", Some("Follow Kerf")),
     ];
     for (index, tool) in crate::stage::MaskTool::ALL.into_iter().enumerate() {
-        let mut row = AppRow {
-            key: Some(crate::commands::shown_keys(tool.shortcut())),
-            ..AppRow::new(tool.label(), AppDoes::Mask(tool)).icon(tool.icon())
-        };
+        let mut row = mask_row(input, tool).icon(tool.icon());
         row.separated = index == 0;
         rows.push(row);
     }
@@ -1041,6 +1055,35 @@ pub fn sync_summary(collab: Option<&Value>, revision: u64) -> String {
     parts.join(" · ")
 }
 
+/// Where the window puts why the last sync failed (until one succeeds)
+/// in the standing it gives the app's menu ([`AppMenuInput::collab`]):
+/// the Sync submenu says so ([`with_sync_failure`]).
+pub const SYNC_FAILURE: &str = "syncFailure";
+
+/// `collab` (the project's Git standing) with why the last sync failed,
+/// when it did, for the app's menu ([`SYNC_FAILURE`]).
+pub fn with_sync_failure(collab: Option<&Value>, failure: Option<&str>) -> Option<Value> {
+    let mut status = collab.cloned()?;
+    if let (Some(failure), Some(fields)) = (failure, status.as_object_mut()) {
+        fields.insert(SYNC_FAILURE.to_owned(), Value::from(failure));
+    }
+    Some(status)
+}
+
+/// What the Sync submenu warns of under its summary, as Qt's: "A merge is
+/// unfinished; finish it with git" while one is, else "Sync failed: <why>"
+/// after a sync that failed; none when nothing went wrong.
+pub fn sync_problem(collab: Option<&Value>) -> Option<String> {
+    let status = collab?;
+    if status["conflicted"].as_bool() == Some(true) {
+        return Some("A merge is unfinished; finish it with git".to_owned());
+    }
+    status[SYNC_FAILURE]
+        .as_str()
+        .filter(|failure| !failure.trim().is_empty())
+        .map(|failure| format!("Sync failed: {failure}"))
+}
+
 /// View ▸ Sync: how it stands; the branches (this one ticked; another
 /// switches to it) and New Branch…; Sync Now, Live Sync, Commit… and Pull
 /// Request…. A project that is no repository yet offers Publish only.
@@ -1049,13 +1092,14 @@ fn sync_rows(input: &AppMenuInput) -> Vec<AppRow> {
     let status = input
         .collab
         .filter(|status| status["repository"].as_bool() == Some(true));
-    if input
-        .collab
-        .is_some_and(|status| status["conflicted"].as_bool() == Some(true))
-    {
+    // What went wrong, when something did (Qt's buildSyncMenu): an
+    // unfinished merge, else why the last sync failed.
+    if let Some(problem) = sync_problem(input.collab) {
         rows.push(AppRow {
             icon: Some(Icon::Dot),
-            ..AppRow::note("A merge is unfinished; finish it with git")
+            // All of it, where the row cuts it to one line.
+            tip: Some(problem.clone()),
+            ..AppRow::note(problem)
         });
     }
     let Some(status) = status else {
@@ -1127,10 +1171,7 @@ fn registry_rows(input: &AppMenuInput, menu: &str) -> Vec<AppRow> {
     }
     if menu == "View" && !rows.is_empty() {
         for (index, tool) in crate::stage::MaskTool::ALL.into_iter().enumerate() {
-            let mut row = AppRow {
-                key: Some(crate::commands::shown_keys(tool.shortcut())),
-                ..AppRow::new(tool.label(), AppDoes::Mask(tool))
-            };
+            let mut row = mask_row(input, tool);
             row.separated = index == 0;
             rows.push(row);
         }
@@ -1474,26 +1515,27 @@ impl SidebarView {
                     if !focus.is_focused(window) {
                         return;
                     }
+                    // The menu's own keys are bound in MENU (it has no
+                    // submenus, nor Home and End); a letter goes to its item;
+                    // anything else, a window's shortcut with Ctrl, ⌘ or Alt
+                    // among them, does nothing while it is open.
                     let keystroke = &event.keystroke;
-                    let modifiers = keystroke.modifiers;
-                    if modifiers.control
-                        || modifiers.alt
-                        || modifiers.platform
-                        || modifiers.function
-                    {
-                        return;
-                    }
-                    // The menu's own keys are bound in MENU.
-                    if matches!(
-                        keystroke.key.as_str(),
-                        "up" | "down" | "enter" | "space" | "escape" | "tab"
-                    ) {
-                        return;
-                    }
+                    let key = match ui::menu_key(keystroke) {
+                        ui::MenuKey::Own
+                            if matches!(
+                                keystroke.key.as_str(),
+                                "up" | "down" | "enter" | "space" | "escape" | "tab"
+                            ) =>
+                        {
+                            return;
+                        }
+                        ui::MenuKey::Own => ui::MenuKey::Held,
+                        key => key,
+                    };
                     let open = this
                         .update(cx, |this, cx| {
                             let open = this.menu.is_some();
-                            if let Some(letter) = ui::typed_letter(&keystroke.key) {
+                            if let ui::MenuKey::Letter(letter) = key {
                                 this.jump_in_menu(letter, cx);
                             }
                             open
@@ -1646,6 +1688,11 @@ impl SidebarView {
             self.app_menu_open = open;
             cx.notify();
         }
+    }
+
+    /// Whether one of its menus is open (a conversation's, the folder's).
+    pub fn menu_open(&self) -> bool {
+        self.menu.is_some()
     }
 
     /// Puts away whichever of its menus is open (a row's, a folder's);

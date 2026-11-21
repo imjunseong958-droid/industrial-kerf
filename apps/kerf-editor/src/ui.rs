@@ -2169,10 +2169,12 @@ type MenuHead = Rc<dyn Fn(&mut Window, &mut App) -> AnyElement>;
 /// light a row at once, Enter or Space chooses it, a letter goes to the
 /// next row starting with it, Right opens a submenu and Left or Esc closes
 /// it, and Esc (or a press outside) closes the menu and does nothing else.
-/// It fades in over `FADE`, rising `MENU_RISE`. A submenu opens beside its
-/// row, to the left where the window ends on the right, and upward (its
-/// foot level with the row's) where it would run past the window's foot. A
-/// row's tip (what it does, or why it cannot) is the kit's.
+/// Any other key, a window's shortcut with Ctrl, ⌘ or Alt among them, does
+/// nothing while it is open ([`menu_key`]), as an open QMenu held the
+/// keyboard. It fades in over `FADE`, rising `MENU_RISE`. A submenu opens
+/// beside its row, to the left where the window ends on the right, and
+/// upward (its foot level with the row's) where it would run past the
+/// window's foot. A row's tip (what it does, or why it cannot) is the kit's.
 ///
 /// Whoever opens it holds the entity, places it (in a `deferred`
 /// `anchored`, or an absolute box), and drops it on its [`DismissEvent`].
@@ -2218,31 +2220,14 @@ impl Menu {
                     return;
                 }
                 let keystroke = &event.keystroke;
-                let modifiers = keystroke.modifiers;
-                if modifiers.control || modifiers.alt || modifiers.platform || modifiers.function {
-                    return;
+                match menu_key(keystroke) {
+                    MenuKey::Own => {}
+                    MenuKey::Letter(letter) => {
+                        let _ = this.update(cx, |menu, cx| menu.jump(letter, cx));
+                        cx.stop_propagation();
+                    }
+                    MenuKey::Held => cx.stop_propagation(),
                 }
-                // The menu's own keys are bound in MENU.
-                if matches!(
-                    keystroke.key.as_str(),
-                    "up" | "down"
-                        | "left"
-                        | "right"
-                        | "home"
-                        | "end"
-                        | "enter"
-                        | "space"
-                        | "escape"
-                        | "tab"
-                ) {
-                    return;
-                }
-                // A letter goes to its row; no other key typed while the menu
-                // is open reaches the window (Backspace, a command's letter).
-                if let Some(letter) = typed_letter(&keystroke.key) {
-                    let _ = this.update(cx, |menu, cx| menu.jump(letter, cx));
-                }
-                cx.stop_propagation();
             })
         };
         Self {
@@ -2590,6 +2575,39 @@ impl Menu {
     }
 }
 
+/// What a key pressed while a menu has the keys does there ([`menu_key`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MenuKey {
+    /// One of the menu's own keys (the arrows, Home, End, Return, Space,
+    /// Esc, Tab, Shift-Tab), bound in [`MENU`]: it goes on to them.
+    Own,
+    /// A letter: the next row starting with it is lit.
+    Letter(char),
+    /// Anything else, with Ctrl, ⌘ or Alt or without: held, so nothing of
+    /// the window's acts under the menu and nothing closes (as an open
+    /// QMenu held the keyboard).
+    Held,
+}
+
+/// What `keystroke`, pressed while a menu has the keys, does there.
+pub fn menu_key(keystroke: &gpui::Keystroke) -> MenuKey {
+    let modifiers = keystroke.modifiers;
+    if modifiers.control || modifiers.alt || modifiers.platform || modifiers.function {
+        return MenuKey::Held;
+    }
+    // The menu's own keys are bound in MENU.
+    if matches!(
+        keystroke.key.as_str(),
+        "up" | "down" | "left" | "right" | "home" | "end" | "enter" | "space" | "escape" | "tab"
+    ) {
+        return MenuKey::Own;
+    }
+    match typed_letter(&keystroke.key) {
+        Some(letter) => MenuKey::Letter(letter),
+        None => MenuKey::Held,
+    }
+}
+
 /// The letter a keystroke types, if it types one (a menu's letter jump).
 pub fn typed_letter(key: &str) -> Option<char> {
     let mut chars = key.chars();
@@ -2694,7 +2712,8 @@ pub fn menu_panel() -> Div {
         .occlude()
 }
 
-/// One row of a menu: its icon (or the room for one), its words. What
+/// One row of a menu: its icon (or the room for one), its words (on one
+/// line, cut with "…" where the menu is too narrow for them). What
 /// cannot be undone is in brick; what cannot be done now is in the ink of
 /// what cannot be pressed, and takes no press.
 pub fn menu_item(
@@ -2733,7 +2752,9 @@ pub fn menu_item(
             Some(icon) => icon.view(14.0, glyph).into_any_element(),
             None => div().size(px(14.0)).flex_none().into_any_element(),
         })
-        .child(words.into())
+        // Words longer than the menu is wide (a sync's failure, as git
+        // said it) are cut with "…" on one line; the row's tip has them all.
+        .child(cut_line(words))
 }
 
 /// A line between a menu's groups.

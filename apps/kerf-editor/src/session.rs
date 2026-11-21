@@ -50,6 +50,26 @@ pub struct Picture {
     pub width: u32,
     pub height: u32,
     pub time: f64,
+    /// The last frame of the playback before, standing in since playback
+    /// was opened again until the new one's first frame comes (Qt's
+    /// `m_hasShownFrame` false with a frame still up).
+    pub standing_in: bool,
+}
+
+/// Whether the frame shown (`shown`, its pixels) stands in after playback
+/// is opened again (`viewer_reset`) on a program whose canvas is `canvas`
+/// and lasts `duration` seconds: only when it has the canvas's shape (it
+/// would not be stretched) and there is something to play, so a first
+/// frame will come to take its place (Qt's `sameShape` and duration).
+pub fn stands_in(shown: (u32, u32), canvas: (u32, u32), duration: f64) -> bool {
+    let shape = |(width, height): (u32, u32)| {
+        (width > 0 && height > 0).then(|| f64::from(width) / f64::from(height))
+    };
+    let same_shape = match (shape(shown), shape(canvas)) {
+        (Some(shown), Some(canvas)) => (shown - canvas).abs() < 0.01,
+        _ => false,
+    };
+    same_shape && duration > 0.0
 }
 
 pub struct Session {
@@ -340,8 +360,10 @@ impl Session {
                 asked: FocusBook::default(),
                 _poll: poll,
             };
+            // The render queue is asked for once kerfd is connected
+            // (`drain`), never before: asked of a runtime that is not there
+            // it would be refused, and the refusal left standing.
             session.send(json!({"type": "conversations", "action": "list"}));
-            session.send(json!({"type": "render_queue"}));
             session
         })
     }
@@ -379,6 +401,9 @@ impl Session {
             if let Some((kind, text)) = activity_of(&event) {
                 self.activity.push(kind, &text);
             }
+            for (kind, text) in self.state.take_logged() {
+                self.activity.push(kind, &text);
+            }
             if change == Change::Connection
                 && self.state.connection == crate::store::Connection::Connected
             {
@@ -395,10 +420,20 @@ impl Session {
                     self.follow_live_proposal();
                     self.follow_cut();
                 }
-                Change::Preview => self.cut_rendered(),
+                Change::Preview => {
+                    // A picture that needs a render shows none until it is
+                    // rendered, as Qt cleared its viewer.
+                    if matches!(event["status"].as_str(), Some("required" | "unavailable")) {
+                        self.drop_picture(window, cx);
+                    }
+                    self.cut_rendered();
+                }
                 Change::Connection
                     if self.state.connection == crate::store::Connection::Connected =>
                 {
+                    // The jobs kerfd has, this window's or another's, finished
+                    // ones among them (Finish's Deliver page, the toolbar).
+                    self.send(json!({"type": "render_queue"}));
                     // Live Sync as it was left for this project.
                     if self
                         .project
@@ -408,7 +443,7 @@ impl Session {
                         self.send(json!({"type": "collab_live", "enabled": true}));
                     }
                 }
-                Change::ViewerReset => self.drop_picture(window, cx),
+                Change::ViewerReset => self.viewer_reset(window, cx),
                 Change::Work if event["type"] == "agent_focus" => self.follow_kerf(),
                 Change::Clock => {
                     self.keep_to_marks();
@@ -472,6 +507,7 @@ impl Session {
             width: frame.width,
             height: frame.height,
             time: frame.time,
+            standing_in: false,
         });
     }
 
@@ -479,6 +515,28 @@ impl Session {
         if let Some(old) = self.picture.take() {
             cx.drop_image(old.image, Some(window));
         }
+    }
+
+    /// Playback was opened again (an edit, a reconnect, a preview left):
+    /// the frame shown stands in until the new playback's first comes, as
+    /// Qt's did, unless the new canvas has another shape (it would be
+    /// stretched) or there is nothing to play (no first frame will come).
+    /// The caption goes either way.
+    fn viewer_reset(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let canvas = self.timeline().canvas();
+        let duration = self.state.snapshot.duration;
+        let stands = self
+            .picture
+            .as_ref()
+            .is_some_and(|picture| stands_in((picture.width, picture.height), canvas, duration));
+        if stands {
+            if let Some(picture) = self.picture.as_mut() {
+                picture.standing_in = true;
+            }
+        } else {
+            self.drop_picture(window, cx);
+        }
+        self.state.caption.clear();
     }
 
     /// Follows the project's media as a snapshot has it: its artwork is
@@ -622,9 +680,16 @@ impl Session {
         self.send(json!({"type": "seek", "position": seconds, "scrub": scrub}));
     }
 
-    pub fn toggle_playback(&mut self) {
-        let command = if self.state.playing { "pause" } else { "play" };
-        self.send(json!({"type": command}));
+    /// Pauses what plays, always (kerfd plays on through a render started
+    /// meanwhile); else plays, only while Play can run
+    /// ([`EditorState::playable`]), as Qt's `togglePlayback` returned, so a
+    /// click on the picture does not start it while a render is needed or
+    /// runs. True when it was sent.
+    pub fn toggle_playback(&mut self) -> bool {
+        match self.state.playback_toggle() {
+            Some(command) => self.send(json!({"type": command})),
+            None => false,
+        }
     }
 
     pub fn accept(&mut self, proposal: &str) {
@@ -1352,9 +1417,10 @@ impl Session {
             "videoTracks": count(crate::model::TrackKind::Video),
             "audioTracks": count(crate::model::TrackKind::Audio),
             "agentBusy": self.state.work.busy(),
-            "previewRequired": self.state.preview.status == "required",
+            // Play waits on a render, never a pause ([`EditorState::play_waits`]).
+            "previewRequired": self.state.play_waits(),
             "projectionStatus": self.state.snapshot.projection_status,
-            "previewRenderable": self.state.preview.status != "running",
+            "previewRenderable": self.state.preview_renderable(),
         });
         if let Some((track, clip)) = self.selection.first().and_then(|id| timeline.clip(id)) {
             let kind = match track.kind {
@@ -1395,8 +1461,7 @@ impl Session {
             .as_deref()
             .and_then(|id| timeline.source(id))
         {
-            let frames = (source.duration * timeline.rate()).round() as i64;
-            context["source"] = json!({"media": source.id, "inFrame": 0, "durationFrames": frames});
+            context["source"] = source_range(source, timeline.rate());
             context["sourceTargets"] = json!(crate::model::source_targets(
                 timeline,
                 source,
@@ -1815,6 +1880,15 @@ fn timeline_end(timeline: &Timeline) -> f64 {
         .flat_map(|track| track.clips.iter())
         .map(|clip| clip.end())
         .fold(0.0, f64::max)
+}
+
+/// What the command registry is told of the media chosen in the bin
+/// (kerf-commands' `SourceRange`): the whole of it, from its first frame,
+/// in frames at `rate`; a still, which has no length of its own, for
+/// [`crate::model::STILL_SECONDS`], as Qt's `commandContext` had it.
+pub fn source_range(source: &crate::model::Source, rate: f64) -> Value {
+    let frames = (source.placed_seconds() * rate).round() as i64;
+    json!({"media": source.id, "inFrame": 0, "durationFrames": frames})
 }
 
 /// What the command registry is told of the proposal its commands act on

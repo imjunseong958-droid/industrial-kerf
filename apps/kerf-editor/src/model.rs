@@ -158,7 +158,27 @@ impl Timeline {
     pub fn frame_at(&self, seconds: f64) -> i64 {
         (seconds * self.rate()).round() as i64
     }
+
+    /// The picture the program plays into, in pixels, as Qt's
+    /// `resolvedCanvasSize` read it: the sequence's own size; with none,
+    /// the largest of its media's pictures; with none of those, 1920 × 1080.
+    pub fn canvas(&self) -> (u32, u32) {
+        if self.width > 0 && self.height > 0 {
+            return (self.width.max(2), self.height.max(2));
+        }
+        self.sources
+            .iter()
+            .filter_map(|source| Some((source.width?, source.height?)))
+            .filter(|(width, height)| *width > 0 && *height > 0)
+            .max_by_key(|(width, height)| u64::from(*width) * u64::from(*height))
+            .map(|(width, height)| (width.max(2), height.max(2)))
+            .unwrap_or((1920, 1080))
+    }
 }
+
+/// How long a source edit places media that has no length of its own (a
+/// still), in seconds, as Qt's `commandContext` placed it.
+pub const STILL_SECONDS: f64 = 5.0;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -458,6 +478,17 @@ impl Source {
     /// It has a picture (a video or a still), not only sound.
     pub fn is_picture(&self) -> bool {
         self.width.is_some()
+    }
+
+    /// How long Insert, Overwrite, a double-click or Return place it for,
+    /// in seconds: the whole of it; a still, which has no length of its
+    /// own, for [`STILL_SECONDS`].
+    pub fn placed_seconds(&self) -> f64 {
+        if self.duration.is_finite() && self.duration > 0.0 {
+            self.duration
+        } else {
+            STILL_SECONDS
+        }
     }
 
     /// The take it is now, by number, when it has takes.

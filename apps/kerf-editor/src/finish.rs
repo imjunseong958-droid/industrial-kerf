@@ -2685,6 +2685,22 @@ impl Collab {
         cx.notify();
     }
 
+    /// Why the last sync failed, until one succeeds (the app's menu's
+    /// View ▸ Sync says it, as the chip's own menu does).
+    pub fn failure(&self) -> Option<&str> {
+        self.failure.as_deref()
+    }
+
+    /// Whether one of its questions (Commit…, New Branch…, Pull Request…,
+    /// Publish to GitHub…) shows, its keys in it or not: Qt asked these in
+    /// modal dialogs, so the window's Esc leaves them be and their own
+    /// Close has it (`Workspace`'s Esc intercept).
+    pub fn asking(&self, cx: &App) -> bool {
+        matches!(self.menu, Menu::Prompt(_))
+            && self.status.is_some()
+            && self.session.read(cx).has_project()
+    }
+
     /// Live Sync from the window's menus or the palette: turned the other
     /// way and remembered for the project. The workspace calls it for
     /// `collab.live`.

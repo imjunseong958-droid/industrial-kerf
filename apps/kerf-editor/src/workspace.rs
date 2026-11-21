@@ -163,6 +163,8 @@ pub struct Workspace {
     /// While what a proposal changed is watched, the stage reaches over
     /// the conversation, which falls back (`ChatView` dims itself).
     reel_reach: Tween,
+    /// The picture's mask tool out when last seen, for the menu bar's tick.
+    mask_tool_seen: Option<crate::stage::MaskTool>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -291,6 +293,15 @@ impl Workspace {
         let title_focus = title_field.read(cx).focus_handle(cx);
         let mut subscriptions = vec![
             cx.observe(&session, |_, _, cx| cx.notify()),
+            // A mask tool taken out or put down (⇧R ⇧E ⇧P, the transport):
+            // the menu bar ticks it as the window next draws.
+            cx.observe(&stage, |this, stage, cx| {
+                let tool = stage.read(cx).mask_tool();
+                if tool != this.mask_tool_seen {
+                    this.mask_tool_seen = tool;
+                    cx.notify();
+                }
+            }),
             cx.subscribe_in(&session, window, Self::session_changed),
             cx.subscribe(&session, |this, _, event: &BridgeEvent, cx| {
                 this.bridge_event(&event.0, cx)
@@ -412,9 +423,11 @@ impl Workspace {
                 window.focus(&this.focus_handle);
                 this.settle_focus(window, cx);
             }),
-            // Esc puts an open menu away wherever the keys are: before the
-            // timeline's Esc (Reject Proposal) or a field's has it. A menu's
-            // press leaves the keys where they were.
+            // Esc, before the timeline's (Reject Proposal, or letting the
+            // chosen clip go) or a field's has it ([`escape_goes`]): an open
+            // menu goes, wherever the keys are (a menu's press leaves them
+            // where they were); else the preview render its card shows
+            // stops; else the Media band is put away.
             {
                 let this = cx.weak_entity();
                 let handle = window.window_handle();
@@ -426,25 +439,23 @@ impl Workspace {
                     {
                         return;
                     }
-                    // The app menu or the title's, while it has the keys,
-                    // takes Esc itself: its deepest submenu goes first,
-                    // then the menu.
-                    let menu_has_keys = this
-                        .read_with(cx, |this, cx| {
-                            this.app_menu.as_ref().is_some_and(|(menu, _)| {
-                                menu.focus_handle(cx).contains_focused(window, cx)
-                            }) || this.title_menu.as_ref().is_some_and(|menu| {
-                                menu.focus_handle(cx).contains_focused(window, cx)
-                            })
+                    let taken = this
+                        .update(cx, |this, cx| {
+                            match escape_goes(this.escape_at(&event.context_stack, cx)) {
+                                EscapeGoes::On => false,
+                                EscapeGoes::CloseMenus => this.close_menus(window, cx),
+                                EscapeGoes::StopRender => {
+                                    this.stop_render(cx);
+                                    true
+                                }
+                                EscapeGoes::PutBandAway => {
+                                    this.set_media(false, cx);
+                                    true
+                                }
+                            }
                         })
                         .unwrap_or(false);
-                    if menu_has_keys {
-                        return;
-                    }
-                    if this
-                        .update(cx, |this, cx| this.close_menus(window, cx))
-                        .unwrap_or(false)
-                    {
+                    if taken {
                         cx.stop_propagation();
                     }
                 })
@@ -512,6 +523,7 @@ impl Workspace {
             revision_time: None,
             turn_rendered: false,
             reel_reach: Tween::at(0.0),
+            mask_tool_seen: None,
             _subscriptions: subscriptions,
         }
     }
@@ -557,8 +569,8 @@ impl Workspace {
     }
 
     /// The registry's checkable commands that are on in this window: the
-    /// panes shown, the switches on, the timeline's tool. Their rows in the
-    /// menus and the palette are ticked.
+    /// panes shown, the switches on, the timeline's tool; and the picture's
+    /// mask tool out. Their rows in the menus and the palette are ticked.
     pub fn checked_commands(&self, cx: &App) -> BTreeSet<String> {
         let session = self.session.read(cx);
         let picture = self.panel_open && self.picture_shown.target() > 0.5;
@@ -583,14 +595,22 @@ impl Workspace {
         ]
         .into_iter()
         .filter(|(_, on)| *on)
-        .map(|(id, _)| id.to_owned())
+        .map(|(id, _)| id)
+        // The mask tool out, by its own id ([`crate::commands::mask_tool_id`]).
+        .chain(
+            self.stage
+                .read(cx)
+                .mask_tool()
+                .map(crate::commands::mask_tool_id),
+        )
+        .map(str::to_owned)
         .collect()
     }
 
     /// How the registry's commands stand here, for the menu bar (greyed,
     /// ticked). Only macOS draws one.
     fn menu_states(&self, cx: &App) -> crate::commands::MenuStates {
-        let states = kerf_bridge::commands_states(&self.session.read(cx).command_context());
+        let states = self.command_states(cx);
         let unavailable = states
             .as_object()
             .map(|states| {
@@ -605,6 +625,32 @@ impl Workspace {
             unavailable,
             checked: self.checked_commands(cx),
         }
+    }
+
+    /// Why each of the registry's commands cannot run now (null: it can),
+    /// as every menu that lists them greys them: Ask Kerf… with Kerf's
+    /// access too (no key, signed out), and the picture's mask tools by
+    /// their own ids ([`crate::commands::mask_tool_id`]).
+    fn command_states(&self, cx: &App) -> serde_json::Value {
+        let mut states = self.session.read(cx).command_states(crate::app::cloud(cx));
+        let reason = self.mask_reason(cx);
+        for tool in crate::stage::MaskTool::ALL {
+            states[crate::commands::mask_tool_id(tool)] =
+                reason.map_or(serde_json::Value::Null, serde_json::Value::from);
+        }
+        states
+    }
+
+    /// Why no mask tool can be taken out now, as the picture says it; None
+    /// while one is out, or the chosen clip is a picture clip the picture
+    /// places where it can be seen, on the program shown
+    /// ([`StageView::can_draw`], Qt's invertible placement).
+    fn mask_reason(&self, cx: &App) -> Option<&'static str> {
+        let stage = self.stage.read(cx);
+        if stage.mask_tool().is_some() {
+            return None;
+        }
+        (!stage.can_draw(cx)).then_some(crate::commands::NO_MASK_CLIP)
     }
 
     /// The keys settle once this frame is drawn: what folds away now is
@@ -775,6 +821,27 @@ impl Workspace {
                     });
                     return;
                 }
+                // Changing a conversation failed (renaming, archiving,
+                // deleting, opening it): the notice says so, for Qt's 6 s,
+                // and the conversations are listed again, so what was shown
+                // at once goes back to what is kept (main_window_chat.cpp).
+                if command == "conversation" {
+                    self.session.update(cx, |session, cx| {
+                        let said = session
+                            .state
+                            .notices
+                            .iter_mut()
+                            .rev()
+                            .find(|notice| notice.error && notice.text == raw);
+                        if let Some(notice) = said {
+                            notice.text = conversation_error(&raw);
+                            notice.hold = Some(scene::NOTICE_HOLD);
+                        }
+                        session
+                            .send(serde_json::json!({"type": "conversations", "action": "list"}));
+                        cx.notify();
+                    });
+                }
                 let readable = readable_error(&raw);
                 let text = if command == "forward" {
                     format!("Not brought forward · {readable}")
@@ -788,6 +855,18 @@ impl Workspace {
                     from_agent: command == "agent",
                     key: self.errors,
                 });
+                cx.notify();
+            }
+            // Connected again: what was refused while kerfd could not be
+            // reached is not said over the new connection.
+            "connection"
+                if event["status"] == "ready"
+                    && self
+                        .error
+                        .as_ref()
+                        .is_some_and(|error| error.raw == DISCONNECTED) =>
+            {
+                self.error = None;
                 cx.notify();
             }
             "agent_state"
@@ -2325,20 +2404,57 @@ impl Workspace {
     }
 
     /// Esc in the window (outside a field, the timeline, and whatever is
-    /// open over the window): stops a preview rendering, else puts the
-    /// Media band away.
+    /// open over the window): stops the preview render its card shows,
+    /// else puts the Media band away.
     fn escape(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.close_menus(window, cx) {
             return;
         }
-        let rendering = self.session.read(cx).state.preview.rendering();
-        if rendering {
-            self.session.update(cx, |session, _| {
-                session.send(serde_json::json!({"type": "preview_stop"}));
-            });
+        if self.render_card_shows(cx) {
+            self.stop_render(cx);
         } else if self.media_open {
             self.set_media(false, cx);
         }
+    }
+
+    /// Whether the preview render's card shows over the picture: the stage
+    /// draws it ([`StageView::render_card_shown`]) and the picture is in.
+    fn render_card_shows(&self, cx: &App) -> bool {
+        self.panel_open
+            && self.picture_shown.target() > 0.5
+            && self.stage.read(cx).render_card_shown(cx)
+    }
+
+    /// Where the keys are (`stack`, their key contexts) and what stands
+    /// open, as Esc is pressed ([`escape_goes`]).
+    fn escape_at(&self, stack: &[gpui::KeyContext], cx: &App) -> EscapeAt {
+        let has = |name: &str| stack.iter().any(|context| context.contains(name));
+        EscapeAt {
+            menu_has_keys: has(ui::MENU),
+            menu_open: self.title_menu.is_some()
+                || self.app_menu.is_some()
+                || self.activity_open
+                || self.sidebar.read(cx).menu_open(),
+            in_field: has(crate::input::CONTEXT),
+            // The chip's questions were Qt's modal dialogs: their own Close
+            // has Esc, keys in them or not.
+            in_dialog: self.modal.is_some()
+                || self.export.is_some()
+                || ui::panel_of(stack).is_some()
+                || has(crate::palette::CONTEXT)
+                || has(CONFIRM)
+                || self.collab.read(cx).asking(cx),
+            on_picture: has(crate::stage::CONTEXT),
+            rendering: self.render_card_shows(cx),
+            band_open: self.media_open,
+        }
+    }
+
+    /// Stops the preview rendering as the render card's Stop does: its card
+    /// goes at once, done with until that render ends, as Qt's
+    /// `AgentHud::stop` hid it ([`StageView::stop_render`]).
+    fn stop_render(&mut self, cx: &mut Context<Self>) {
+        self.stage.update(cx, |stage, cx| stage.stop_render(cx));
     }
 
     /// The app's menu as the window stands now ([`sidebar::app_rows`]).
@@ -2356,10 +2472,14 @@ impl Workspace {
                     .collect()
             })
             .unwrap_or_default();
-        // None of these is Ask: the keychain is not asked.
-        let states = kerf_bridge::commands_states(&session.command_context());
+        let states = self.command_states(cx);
         let checked = self.checked_commands(cx);
         let (_, _, signed_in) = sidebar::account_of(session, cx);
+        // Why the last sync failed, until one succeeds: View ▸ Sync says so.
+        let collab = sidebar::with_sync_failure(
+            session.state.collab.as_ref(),
+            self.collab.read(cx).failure(),
+        );
         sidebar::app_rows(&sidebar::AppMenuInput {
             signed_in,
             keymap,
@@ -2368,7 +2488,7 @@ impl Workspace {
             states: &states,
             checked: &checked,
             zoom: self.stage.read(cx).zoom(),
-            collab: session.state.collab.as_ref(),
+            collab: collab.as_ref(),
             revision: session.revision(),
             // Only macOS draws a menu bar.
             menu_bar: cfg!(target_os = "macos"),
@@ -4232,6 +4352,79 @@ pub fn holds_keys_itself(stack: &[gpui::KeyContext]) -> bool {
             .any(|context| busy.iter().any(|name| context.contains(name)))
 }
 
+/// Where the keys are as Esc is pressed, and what stands open, for
+/// [`escape_goes`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct EscapeAt {
+    /// One of the kit's menus has the keys: it closes itself (its deepest
+    /// submenu first).
+    pub menu_has_keys: bool,
+    /// One of the window's own menus is open (the title's, Activity, the
+    /// app's, the sidebar's), whether or not it has the keys.
+    pub menu_open: bool,
+    /// A field is being typed in: its own Esc goes first.
+    pub in_field: bool,
+    /// What one goes into is over the window, with the keys or not:
+    /// Settings, the palette, a question, a shot's graph, Export's popover.
+    pub in_dialog: bool,
+    /// The picture has the keys (a mask tool out, a mask chosen).
+    pub on_picture: bool,
+    /// The preview render's card shows over the picture
+    /// ([`render_card_shows`]): Qt's filter took Esc only while the card
+    /// was active and visible.
+    pub rendering: bool,
+    /// The Media band is open.
+    pub band_open: bool,
+}
+
+/// What Esc does first, ahead of every Esc the window binds (the
+/// timeline's Reject Proposal and its letting a clip go among them).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EscapeGoes {
+    /// Nothing here: it goes on to what has the keys (a menu, a field, a
+    /// dialog, the picture), then to the window's own bindings.
+    On,
+    /// The open menus close.
+    CloseMenus,
+    /// The preview rendering stops.
+    StopRender,
+    /// The Media band is put away.
+    PutBandAway,
+}
+
+/// What Esc does first, as Qt's filters took it: an open menu goes first;
+/// then a preview rendering stops (not from a field, a menu or a dialog:
+/// agent_hud.cpp); then the Media band closes (not from a field, the
+/// picture or a dialog: stage_shell.cpp); else it goes on to whatever has
+/// the keys.
+pub fn escape_goes(at: EscapeAt) -> EscapeGoes {
+    if at.menu_has_keys {
+        return EscapeGoes::On;
+    }
+    if at.menu_open {
+        return EscapeGoes::CloseMenus;
+    }
+    if at.in_field || at.in_dialog {
+        return EscapeGoes::On;
+    }
+    if at.rendering {
+        return EscapeGoes::StopRender;
+    }
+    if at.band_open && !at.on_picture {
+        return EscapeGoes::PutBandAway;
+    }
+    EscapeGoes::On
+}
+
+/// What the window says when changing a conversation (renaming,
+/// archiving, deleting or opening it) failed, as Qt's status said it.
+pub fn conversation_error(message: &str) -> String {
+    format!("Couldn't change the conversation · {message}")
+}
+
+/// What the bridge answers a command sent while kerfd cannot be reached.
+const DISCONNECTED: &str = "Runtime is disconnected; reconnect to continue";
+
 /// A bar's height under the toolbar.
 const BAR: f32 = theme::height::H40;
 /// Export's chevron, and the height inside the button's outline.
@@ -4652,6 +4845,7 @@ const FLIGHT_TO: f32 = 0.2;
 /// How long before the picture has grown the timeline starts to come in,
 /// and how long its stand-in takes to fade (kept here for the tests and
 /// views that name them so).
+pub use crate::stage::{render_card_shows, render_stop_holds, RenderCard};
 pub use crate::theme::motion::{STAND_IN_MOST, STAND_IN_RELEASE, TIMELINE_LEAD};
 
 /// Where a clip of a cut being built is at `elapsed` on its way from its

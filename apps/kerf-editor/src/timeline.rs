@@ -119,9 +119,6 @@ pub const TRACK_MOST: f32 = 160.0;
 pub const TRACK_STEPS: [f32; 14] = [
     20.0, 24.0, 28.0, 32.0, 36.0, 42.0, 48.0, 56.0, 64.0, 72.0, 86.0, 104.0, 128.0, 160.0,
 ];
-/// The head menu's Small and Large; Medium is each track's own height.
-const TRACK_SMALL: f32 = 20.0;
-const TRACK_LARGE: f32 = 64.0;
 /// Points either side of the line under a head that take a resize.
 const GRIP: f32 = 3.0;
 /// The add-track row under the last track.
@@ -3292,12 +3289,12 @@ impl TimelineView {
         let lanes = self.lanes.clone();
         let lane = &lanes.rows[row];
         let clip = &lane.clips[index];
-        let states = kerf_bridge::commands_states(&self.session.read(cx).command_context());
-        let mut items = vec![ui::MenuItem::new("Ask Kerf…")
-            .icon(Icon::Sparkle)
-            .on_choose(|window, cx| {
-                window.dispatch_action(Box::new(RunCommand::new("ai.ask")), cx)
-            })];
+        // Ask's state with Kerf's access too (no key, signed out), as the
+        // window's menus have it: greyed with why, its key shown.
+        let states = self.session.read(cx).command_states(crate::app::cloud(cx));
+        let mut items = vec![self
+            .command_item("ai.ask", "Ask Kerf…", &states, cx)
+            .icon(Icon::Sparkle)];
         items.push(
             self.command_item("clip.split", "Split at Playhead", &states, cx)
                 .separated(),
@@ -3389,9 +3386,9 @@ impl TimelineView {
             );
         }
         let presets = [
-            ("Small", Some(TRACK_SMALL)),
+            ("Small", Some(layout::TRACK_SMALL)),
             ("Medium", None),
-            ("Large", Some(TRACK_LARGE)),
+            ("Large", Some(layout::TRACK_LARGE)),
         ];
         let own: Vec<ui::MenuItem> = presets
             .iter()

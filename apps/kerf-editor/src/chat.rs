@@ -496,6 +496,34 @@ pub fn card_turns(
     holders
 }
 
+/// What the request bubble's timecode chip says on a rest: where pressing
+/// it goes ("Go to 00:00:17:08"), as Qt's TimecodeChip said it.
+pub fn stamp_tip(timecode: &str) -> String {
+    format!("Go to {timecode}")
+}
+
+/// The proposal card's Preview, Script and version button say what they
+/// do on a rest, as Qt's card's did.
+pub const PREVIEW_TIP: &str = "Preview the proposal on the program";
+pub const SCRIPT_TIP: &str = "Show the script";
+pub const VERSIONS_TIP: &str = "Proposal versions";
+
+/// How long a mode chosen stays said: Qt's status line held it 3 s.
+pub use crate::theme::motion::NOTICE_BRIEF_HOLD as MODE_HOLD;
+
+/// Says the mode `permissions` and what it means ("Auto · Edits apply, and
+/// Kerf makes its shots") in place of the mode said last, for [`MODE_HOLD`]:
+/// choosing again and again leaves one line, the newest.
+pub fn say_permissions(state: &mut crate::store::EditorState, permissions: Permissions) {
+    let (label, line) = permission_words(permissions);
+    state.say_in_place(
+        crate::store::StatusLine::Permissions,
+        &format!("{label} · {line}"),
+        false,
+        Some(MODE_HOLD),
+    );
+}
+
 /// What the permission chip says, and its line in the chip's menu.
 pub fn permission_words(permissions: Permissions) -> (&'static str, &'static str) {
     match permissions {
@@ -1949,13 +1977,13 @@ impl ChatView {
     }
 
     /// What Kerf does without asking, chosen here (the chip's menu or
-    /// Shift-Tab): kept, and said in the status line with what it means.
+    /// Shift-Tab): kept, and said with what it means in place of the mode
+    /// said last, for [`MODE_HOLD`], as Qt said it on its one status line.
     fn set_permissions(&mut self, permissions: Permissions, cx: &mut Context<Self>) {
-        let (label, line) = permission_words(permissions);
         self.session.update(cx, |session, cx| {
             session.prefs.permissions = permissions;
             session.save_prefs();
-            session.state.notify(&format!("{label} · {line}"), false);
+            say_permissions(&mut session.state, permissions);
             cx.notify();
         });
         cx.notify();
@@ -2475,7 +2503,10 @@ impl ChatView {
             .items_end()
             .gap(px(theme::space::S4))
             .when_some(timecode.filter(|at| at.is_finite()), |column, at| {
-                column.child(
+                let timecode = model::timecode(at, fps);
+                // Its tip says where pressing it goes, as Qt's TimecodeChip's did.
+                let tip = ui::Tip::new(stamp_tip(&timecode));
+                column.child(ui::tip_on(
                     theme::type_style(div(), text::MONO_SMALL)
                         .id(ElementId::Name(format!("stamp-{key}").into()))
                         .flex()
@@ -2487,12 +2518,13 @@ impl ChatView {
                         .text_color(theme::accent_ink())
                         .cursor_pointer()
                         .hover(|chip| chip.bg(theme::hover2()))
-                        .child(model::timecode(at, fps))
+                        .child(timecode)
                         .on_click(move |_, window, cx| {
                             session.update(cx, |session, _| session.seek(at, false));
                             window.dispatch_action(Box::new(RevealPicture), cx);
                         }),
-                )
+                    Some(tip),
+                ))
             })
             .child(
                 theme::reading(div())
@@ -3033,7 +3065,7 @@ impl ChatView {
                     )
                 })
                 .when(!script.is_empty(), |row| {
-                    row.child(
+                    row.child(ui::tip_on(
                         link(
                             ElementId::Name(format!("script-{id}").into()),
                             "Script",
@@ -3045,7 +3077,8 @@ impl ChatView {
                             }
                             cx.notify();
                         })),
-                    )
+                        Some(ui::Tip::new(SCRIPT_TIP)),
+                    ))
                 })
                 .child(div().flex_1())
                 .when(versions.len() > 1, |row| {
@@ -3182,6 +3215,8 @@ impl ChatView {
                     } else {
                         Icon::Play
                     })
+                    .tooltip(PREVIEW_TIP)
+                    .reason("Connect to start editing")
                     .disabled(!connected)
                     .on_click({
                         let session = self.session.clone();
@@ -3254,6 +3289,8 @@ impl ChatView {
                 .on_click(cx.listener(move |this, _, window, cx| {
                     this.toggle_menu(toggle.clone(), window, cx)
                 }));
+        // Its menu says all the tip would, so the tip waits while it is open.
+        let button = ui::tip_on(button, (!open).then(|| ui::Tip::new(VERSIONS_TIP)));
         let mut wrapper = div().relative().flex_none().child(button);
         if let Some(body) = self.kit_menu.clone().filter(|_| open) {
             wrapper = wrapper.child(

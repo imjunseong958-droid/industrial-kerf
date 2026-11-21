@@ -495,11 +495,35 @@ pub struct EditorState {
     pub wants_making: BTreeMap<String, String>,
     /// The last `cast` event: the project's cast and styles.
     pub cast: Option<Value>,
+    /// Whether the picture waits on a rendered preview: from the moment
+    /// one is needed (`required`, `unavailable`) or runs (`running`) until
+    /// it plays again (`ready`, `live`), as Qt's `m_previewRequired` had
+    /// it; a render that ends unshown (`stopped`, `exited`, `failed`)
+    /// leaves the picture as it stood before ([`EditorState::picture_status`]).
+    /// Play is unavailable while it does; a pause never is.
+    pub preview_required: bool,
+    /// What the picture kerfd plays last said of itself: `required`,
+    /// `unavailable`, `ready` or `live` (empty before it has). A render
+    /// stopped, left or failed before it showed goes back to it.
+    pub picture_status: String,
     /// How many notices there have been.
     noticed: u64,
-    /// The notice the last `preview` event left: the next one takes its
-    /// place, as a line of Qt's status bar took the last one's.
-    preview_said: Option<u64>,
+    /// The notice each kind of line last left ([`StatusLine`]): the next of
+    /// its kind takes its place, as a line of Qt's status bar took the
+    /// last one's.
+    said_in_place: BTreeMap<StatusLine, u64>,
+    /// Activity lines that only the state knows an event leaves (a preset
+    /// written), until the session takes them ([`EditorState::take_logged`]).
+    logged: Vec<(&'static str, String)>,
+}
+
+/// A kind of notice that, as Qt said it on its one status line, takes the
+/// place of the last of its kind: what the preview says, and the mode the
+/// composer was set to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum StatusLine {
+    Preview,
+    Permissions,
 }
 
 /// Commands whose refusals the view that sent them shows in place: a
@@ -838,13 +862,35 @@ impl EditorState {
                     message: event["message"].as_str().map(str::to_owned),
                     proposal: event["proposalId"].as_str().map(str::to_owned),
                 };
+                // Play waits from the moment a render is needed or runs
+                // until the picture plays again (Qt's `m_previewRequired`).
+                // A render that ends without showing leaves the picture as
+                // it was, and Play with it: a stop answers only `stopped`,
+                // an exit with nothing shown only `exited`, and the
+                // picture says nothing new after either.
+                match self.preview.status.as_str() {
+                    status @ ("required" | "unavailable") => {
+                        self.picture_status = status.to_owned();
+                        self.preview_required = true;
+                    }
+                    status @ ("ready" | "live") => {
+                        self.picture_status = status.to_owned();
+                        self.preview_required = false;
+                    }
+                    "running" => self.preview_required = true,
+                    "stopped" | "exited" | "failed" => {
+                        self.preview_required =
+                            matches!(self.picture_status.as_str(), "required" | "unavailable");
+                    }
+                    _ => {}
+                }
                 if self.preview.status == "failed" {
                     let message = self
                         .preview
                         .message
                         .clone()
                         .unwrap_or_else(|| "The preview could not render".into());
-                    self.say_of_preview(&message, true, None);
+                    self.say_in_place(StatusLine::Preview, &message, true, None);
                 } else if let Some((said, hold)) = preview_notice(event) {
                     // Why a render is needed, said just as one failed, is
                     // the failure said in the bridge's words: still an
@@ -857,7 +903,7 @@ impl EditorState {
                     } else {
                         hold
                     };
-                    self.say_of_preview(&said, failure, hold);
+                    self.say_in_place(StatusLine::Preview, &said, failure, hold);
                 }
                 Change::Preview
             }
@@ -917,15 +963,19 @@ impl EditorState {
                 let media = event["media"].as_str().unwrap_or_default().to_owned();
                 let take = event["take"].as_u64().unwrap_or(1) as u32;
                 let line = event["line"].as_str().unwrap_or_default().to_owned();
+                // Its clock starts as its take does: a new take of a making
+                // of several starts afresh, with no line yet. Each event says
+                // the step's line as it is now, an empty one among them.
                 let entry = self.makings.entry(media).or_insert_with(|| Making {
                     take,
                     line: String::new(),
                     since: Instant::now(),
                 });
-                entry.take = take;
-                if !line.is_empty() {
-                    entry.line = line;
+                if entry.take != take {
+                    entry.take = take;
+                    entry.since = Instant::now();
                 }
+                entry.line = line;
                 Change::Making
             }
             "media_made" | "media_make_cancelled" => {
@@ -1006,6 +1056,7 @@ impl EditorState {
                     Ok(()) => {
                         let name = path.rsplit(['/', '\\']).next().unwrap_or(path);
                         self.notify(&format!("Preset exported: {name}"), false);
+                        self.log("preset", path);
                     }
                     Err(error) => self.notify(&format!("Could not export preset: {error}"), true),
                 }
@@ -1016,6 +1067,7 @@ impl EditorState {
                 self.preset_exists = None;
                 let path = event["path"].as_str().unwrap_or_default();
                 self.notify(&format!("Saved preset {path}"), false);
+                self.log("preset", path);
                 Change::Notice
             }
             _ => Change::Other,
@@ -1150,13 +1202,21 @@ impl EditorState {
         live.unwrap_or_else(|| "New conversation".to_owned())
     }
 
-    /// Says what a `preview` event says ([`preview_notice`]) in place of
-    /// what the last one said, as a line of Qt's status bar took the last
-    /// one's place: the same words again stay where they are, held afresh.
-    fn say_of_preview(&mut self, said: &str, error: bool, hold: Option<Duration>) {
+    /// Says `said` in place of what the last of its kind (`line`) said, as
+    /// a line of Qt's status bar took the last one's place: what a
+    /// `preview` event says ([`preview_notice`]), the mode the composer was
+    /// set to. The same words again stay where they are, held afresh.
+    pub fn say_in_place(
+        &mut self,
+        line: StatusLine,
+        said: &str,
+        error: bool,
+        hold: Option<Duration>,
+    ) {
         let shown = self
-            .preview_said
-            .and_then(|id| self.notices.iter().position(|notice| notice.id == id));
+            .said_in_place
+            .get(&line)
+            .and_then(|id| self.notices.iter().position(|notice| notice.id == *id));
         match shown {
             Some(at) if self.notices[at].text == said && self.notices[at].error == error => {
                 self.notices[at].at = Instant::now();
@@ -1167,19 +1227,84 @@ impl EditorState {
                     self.notices.remove(at);
                 }
                 self.notify_held(said, error, hold);
-                self.preview_said = self
-                    .notices
-                    .last()
-                    .filter(|notice| notice.text == said)
-                    .map(|notice| notice.id);
+                match self.notices.last().filter(|notice| notice.text == said) {
+                    Some(notice) => {
+                        self.said_in_place.insert(line, notice.id);
+                    }
+                    None => {
+                        self.said_in_place.remove(&line);
+                    }
+                }
             }
         }
     }
 
+    /// The notice the last of `line`'s kind left, while it shows.
+    pub fn line_shown(&self, line: StatusLine) -> Option<&Notice> {
+        let id = self.said_in_place.get(&line)?;
+        self.notices.iter().find(|notice| notice.id == *id)
+    }
+
     /// The notice the last `preview` event left, while it shows.
     pub fn preview_line(&self) -> Option<&Notice> {
-        let id = self.preview_said?;
-        self.notices.iter().find(|notice| notice.id == id)
+        self.line_shown(StatusLine::Preview)
+    }
+
+    /// Whether a preview can be rendered now (Render Preview): only while
+    /// the picture needs one (`required`) or plays live (`live`), as Qt's
+    /// `previewRenderable` had it; not before the bridge has said, nor while
+    /// one renders, nor once it is ready. A render that ended unshown
+    /// (`stopped`, `exited`, `failed`) goes by what the picture last said.
+    pub fn preview_renderable(&self) -> bool {
+        let status = match self.preview.status.as_str() {
+            "stopped" | "exited" | "failed" => self.picture_status.as_str(),
+            status => status,
+        };
+        matches!(status, "required" | "live")
+    }
+
+    /// Whether Play can run: kerfd is connected, the picture waits on no
+    /// rendered preview ([`EditorState::preview_required`]), and there is
+    /// something to play (Qt's `togglePlayback`).
+    pub fn playable(&self) -> bool {
+        self.connection == Connection::Connected
+            && !self.preview_required
+            && self.program_length() > 0.0
+    }
+
+    /// What Play / Pause sends now: `pause` whenever something plays (kerfd
+    /// plays on through a render started meanwhile), else `play` while Play
+    /// can run ([`EditorState::playable`]); None while it cannot, as Qt's
+    /// `togglePlayback` returned.
+    pub fn playback_toggle(&self) -> Option<&'static str> {
+        if self.playing {
+            Some("pause")
+        } else {
+            self.playable().then_some("play")
+        }
+    }
+
+    /// Whether Play / Pause waits on a rendered preview, as the command
+    /// registry is told (its `previewRequired`): while one is needed or
+    /// runs ([`EditorState::preview_required`]) and nothing plays. What
+    /// plays (live, as a render runs) can always be paused.
+    pub fn play_waits(&self) -> bool {
+        self.preview_required && !self.playing
+    }
+
+    /// Keeps an Activity line the session takes ([`EditorState::take_logged`]).
+    fn log(&mut self, kind: &'static str, text: &str) {
+        let text = text.trim();
+        if !text.is_empty() {
+            self.logged.push((kind, text.to_owned()));
+        }
+    }
+
+    /// The Activity lines events left that only the state knows of (a
+    /// preset exported or saved, by its path, as Qt kept them), oldest
+    /// first; taken, they are gone.
+    pub fn take_logged(&mut self) -> Vec<(&'static str, String)> {
+        std::mem::take(&mut self.logged)
     }
 
     pub fn notify(&mut self, text: &str, error: bool) {

@@ -1087,6 +1087,19 @@ pub fn transport_reasons(context: &Value) -> HashMap<&'static str, String> {
         .collect()
 }
 
+/// Whether the picture shows the program, so the clip chosen on it can be
+/// drawn over and drawn on (its masks, its path, the mask tools): not while
+/// a first cut proposed on an empty program stands in for it, nor while a
+/// proposal's preview renders or shows. A proposal waiting over a program
+/// with clips leaves the picture the program's, as kerfd plays the
+/// document, and Qt's viewer drew on it all the same (`updateViewerMasks`).
+pub fn shows_program(state: &crate::store::EditorState, program_has_clips: bool) -> bool {
+    let cut_stands_in = state.snapshot.proposal_timeline.is_some() && !program_has_clips;
+    let preview_shows = state.preview.proposal.is_some()
+        && matches!(state.preview.status.as_str(), "running" | "ready" | "live");
+    !cut_stands_in && !preview_shows
+}
+
 /// Whether the chip says Kerf is cutting rather than looking (Qt's
 /// `work.cutting`): Kerf works (`busy`) on a cut it proposes for an empty
 /// program (no clips of its own, a proposed timeline there).
@@ -1194,9 +1207,7 @@ impl StageView {
                     // A render stopped here stays hidden until its run ends,
                     // unless another proposal's render takes over.
                     Some("preview") => {
-                        let running = event.0["status"] == "running";
-                        let proposal = event.0["proposalId"].as_str().unwrap_or_default();
-                        if !running || this.stopped.as_deref() != Some(proposal) {
+                        if !render_stop_holds(this.stopped.as_deref(), &event.0) {
                             this.stopped = None;
                         }
                         // The render of the cut Kerf builds has come: it is
@@ -1524,17 +1535,15 @@ impl StageView {
     }
 
     /// The chosen clip's masks and motion path where the picture shows the
-    /// program; none while a proposal's cut or its preview stands in for it.
+    /// program ([`shows_program`]); none while a proposal's cut or its
+    /// preview stands in for it.
     /// Its path only while some of it can be seen: a path in depth no one
     /// map shows is sampled where the clip's anchor goes, its points where a
     /// drag has them; one all on or behind the camera is no path to show
     /// or edit (Qt's `setMotionPath`), unless one of its points is in hand.
     fn overlays(&self, session: &Session) -> Option<Shown> {
         let state = &session.state;
-        if state.snapshot.proposal_timeline.is_some()
-            || (state.preview.proposal.is_some()
-                && matches!(state.preview.status.as_str(), "running" | "ready" | "live"))
-        {
+        if !shows_program(state, session.timeline().has_clips()) {
             return None;
         }
         let clip = session.selection.first()?;
@@ -1624,8 +1633,12 @@ impl StageView {
     }
 
     /// Whether there is a picture clip chosen that a mask tool can draw on:
-    /// one that can be seen.
-    fn can_draw(&self, cx: &App) -> bool {
+    /// one the picture places where it can be seen, not turned edge on or
+    /// behind the camera (Qt's `updateViewerMasks`: an invertible
+    /// placement), on the program shown rather than a proposal. The mask
+    /// tools are greyed in the menus while it is false and none is out
+    /// ([`StageView::mask_tool`]).
+    pub fn can_draw(&self, cx: &App) -> bool {
         self.overlays(self.session.read(cx))
             .is_some_and(|shown| shown.placement.masks_seen())
     }
@@ -1656,9 +1669,7 @@ impl StageView {
         }
         if !self.can_draw(cx) {
             self.session.update(cx, |session, cx| {
-                session
-                    .state
-                    .notify("Choose a picture clip to draw a mask on", false);
+                session.state.notify(crate::commands::NO_MASK_CLIP, false);
                 cx.notify();
             });
             return false;
@@ -1899,7 +1910,9 @@ impl StageView {
         };
         if self.zoom_menu.take().is_some() {
             // A press on the picture closes the zoom's menu (as a press
-            // outside it), and does nothing else: it would play.
+            // outside it), and does nothing else: it would play. The keys
+            // stay where they were.
+            window.prevent_default();
             cx.notify();
             return;
         }
@@ -1924,6 +1937,12 @@ impl StageView {
                 return;
             }
         }
+        // A press that plays or pauses, or one on the black bars, leaves the
+        // keys where they were (the timeline's Space goes on playing and
+        // pausing), as Qt's viewer took focus only for what it edits: the
+        // picture's own focus is given above, when a tool or what is chosen
+        // on it needs its keys.
+        window.prevent_default();
         if !picture.contains(&event.position) {
             return;
         }
@@ -2083,7 +2102,7 @@ impl StageView {
             (
                 state.playing,
                 state.program_length(),
-                state.preview.status == "required",
+                state.preview_required,
                 state.position,
             )
         };
@@ -2129,7 +2148,7 @@ impl StageView {
             (
                 state.playing,
                 state.program_length(),
-                state.preview.status == "required",
+                state.preview_required,
                 state.position,
             )
         };
@@ -2588,27 +2607,55 @@ impl StageView {
         )
     }
 
-    /// What the preview render's card says while one runs, unless Stop was
-    /// pressed on it or Kerf is building a cut (the picture just keeps up):
-    /// its title, its line, and how far it has got.
-    fn preview_card(&self, cx: &App) -> Option<(String, String, f64)> {
+    /// Whether the preview render's card shows ([`render_card_shows`]): a
+    /// render runs, Stop was not pressed on it, Kerf is not building a cut
+    /// (the picture just keeps up) and no change reel plays. The window
+    /// asks before Esc stops the render, and adds whether the picture is in.
+    pub fn render_card_shown(&self, cx: &App) -> bool {
         let session = self.session.read(cx);
         let state = &session.state;
         let preview = &state.preview;
-        if !preview.rendering() {
+        render_card_shows(RenderCard {
+            rendering: preview.rendering(),
+            stopped: self.stopped.as_deref()
+                == Some(preview.proposal.as_deref().unwrap_or_default()),
+            kerf_building: state.work.busy() && state.snapshot.proposal_timeline.is_some(),
+            reel: session.reel().is_some() || session.cutting(),
+            picture_shown: true,
+        })
+    }
+
+    /// Stops the preview rendering (the card's Stop, or Esc while the card
+    /// shows): its card goes at once and stays away until that run ends
+    /// ([`render_stop_holds`]), as Qt's `AgentHud::stop` hid it.
+    pub fn stop_render(&mut self, cx: &mut Context<Self>) {
+        let proposal = self
+            .session
+            .read(cx)
+            .state
+            .preview
+            .proposal
+            .clone()
+            .unwrap_or_default();
+        self.stopped = Some(proposal);
+        self.session.update(cx, |session, cx| {
+            session.send(json!({"type": "preview_stop"}));
+            cx.notify();
+        });
+        cx.notify();
+    }
+
+    /// What the preview render's card says while it shows
+    /// ([`StageView::render_card_shown`]): its title, its line, and how far
+    /// it has got.
+    fn preview_card(&self, cx: &App) -> Option<(String, String, f64)> {
+        if !self.render_card_shown(cx) {
             return None;
         }
+        let session = self.session.read(cx);
+        let state = &session.state;
+        let preview = &state.preview;
         let proposal_id = preview.proposal.clone().unwrap_or_default();
-        if self.stopped.as_deref() == Some(proposal_id.as_str()) {
-            return None;
-        }
-        if state.work.busy() && state.snapshot.proposal_timeline.is_some() {
-            return None;
-        }
-        // A change reel renders what it plays: its strip says so.
-        if session.reel().is_some() || session.cutting() {
-            return None;
-        }
         let proposal = self.book.find(&state.snapshot.proposals, &proposal_id);
         let version = proposal.map_or(0, |proposal| {
             self.book
@@ -3621,24 +3668,17 @@ impl Render for StageView {
                                     theme::ink2(),
                                 ))
                                 .child(
-                                    ui::button("stop-preview", "Stop").small().ghost().on_click(
-                                        cx.listener(|this, _, _, cx| {
-                                            let proposal = this
-                                                .session
-                                                .read(cx)
-                                                .state
-                                                .preview
-                                                .proposal
-                                                .clone()
-                                                .unwrap_or_default();
-                                            this.stopped = Some(proposal);
-                                            this.session.update(cx, |session, cx| {
-                                                session.send(json!({"type": "preview_stop"}));
-                                                cx.notify();
-                                            });
-                                            cx.notify();
-                                        }),
-                                    ),
+                                    // Its tip says what it stops, and its key:
+                                    // Esc stops the render too while the card
+                                    // shows (agent_hud.cpp's setTip).
+                                    ui::button("stop-preview", "Stop")
+                                        .small()
+                                        .ghost()
+                                        .tooltip(hud::STOP_TIP)
+                                        .key(hud::STOP_KEY)
+                                        .on_click(
+                                            cx.listener(|this, _, _, cx| this.stop_render(cx)),
+                                        ),
                                 ),
                         ),
                 );
@@ -4313,11 +4353,57 @@ pub mod chip {
     }
 }
 
+/// What the preview render's card over the picture stands on, for
+/// [`render_card_shows`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RenderCard {
+    /// A preview renders.
+    pub rendering: bool,
+    /// That render was stopped here, and runs on until the bridge says it
+    /// ended ([`render_stop_holds`]).
+    pub stopped: bool,
+    /// Kerf builds its cut: the picture is its live preview, and the card
+    /// keeps out of the way (Qt quietened the HUD).
+    pub kerf_building: bool,
+    /// A change reel plays (it renders what it plays) or Kerf cuts its
+    /// first cut: its own strip says so.
+    pub reel: bool,
+    /// The picture shows: the panel is open with its pane in.
+    pub picture_shown: bool,
+}
+
+/// Whether the preview render's card shows over the picture
+/// ([`StageView::preview_card`]): Esc stops the render only then, as Qt's
+/// filter took it only while the HUD was active and visible
+/// (agent_hud.cpp).
+pub fn render_card_shows(card: RenderCard) -> bool {
+    card.rendering && !card.stopped && !card.kerf_building && !card.reel && card.picture_shown
+}
+
+/// Whether a render stopped here (the render of proposal `stopped`) is
+/// still the one running after bridge `event`, its card still done with:
+/// until its run ends (a `preview` of any other status), or another
+/// proposal's render takes over, as the stage keeps its own Stop.
+pub fn render_stop_holds(stopped: Option<&str>, event: &serde_json::Value) -> bool {
+    let Some(stopped) = stopped else {
+        return false;
+    };
+    if event["type"] != "preview" {
+        return true;
+    }
+    event["status"] == "running" && event["proposalId"].as_str().unwrap_or_default() == stopped
+}
+
 /// What the preview render's card over the picture says: pure, so that it
 /// can be held to what Qt's said.
 pub mod hud {
     use crate::chat::ClipChange;
     use crate::model;
+
+    /// Stop's tip and its key, as Qt's had them: Esc stops the render
+    /// while the card shows, ahead of what else Esc would do.
+    pub const STOP_TIP: &str = "Stop preview render";
+    pub const STOP_KEY: &str = "Esc";
 
     /// Its title: "Rendering preview · v2", with the version when known.
     pub fn title(version: u32) -> String {

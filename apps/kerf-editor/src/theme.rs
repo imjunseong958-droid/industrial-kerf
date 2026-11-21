@@ -612,6 +612,9 @@ pub mod motion {
     pub const NOTICE_LONG_HOLD: Duration = ms(8000);
     /// "Preview ready" and "Live preview: …", as Qt's status bar held them (4 s).
     pub const NOTICE_SHORT_HOLD: Duration = ms(4000);
+    /// A mode chosen in the composer, said briefly in its place: Qt's
+    /// status line held it 3 s.
+    pub const NOTICE_BRIEF_HOLD: Duration = ms(3000);
 
     /// Where a flight lands in a row, as Qt landed it: in from the row's
     /// left and top (and as far up from its bottom), and how wide.
@@ -746,6 +749,11 @@ pub mod layout {
     /// track, picture, sound and subtitles alike, as the Qt editor's window
     /// drew them (its setRoomyLanes, kRoomyTrackHeight).
     pub const TRACK_LANE: f32 = 40.0;
+    /// A track head menu's Small and Large heights, Qt's kSmallTrackHeight
+    /// and kLargeTrackHeight (kTrackHeightPresets); Medium is each track's
+    /// own height.
+    pub const TRACK_SMALL: f32 = 20.0;
+    pub const TRACK_LARGE: f32 = 48.0;
     pub const TRANSPORT: f32 = 40.0;
     /// With the picture pane closed, the transport in the timeline's strip:
     /// from its last button to the timecode (Qt's kTransportGap), and from
@@ -823,6 +831,12 @@ pub mod layout {
     /// groups takes.
     pub const MENU_PAD: f32 = 4.0;
     pub const MENU_SEPARATOR: f32 = 9.0;
+    /// What a menu takes beside a row's words: its padding and edge, the
+    /// row's own padding, the room for an icon and for a tick, and the
+    /// gaps between its pieces (the icon, the words, the room before the
+    /// tick, the tick). A menu as wide as its longest words and this cuts
+    /// none of them.
+    pub const MENU_ROW_ROOM: f32 = 2.0 * MENU_PAD + 2.0 + 2.0 * 10.0 + 14.0 + 3.0 * 8.0 + 14.0;
     /// How wide a Media tile's menu is.
     pub const MEDIA_MENU_WIDTH: f32 = 272.0;
     /// A cut's picture on its card: at most this wide, an upright one at

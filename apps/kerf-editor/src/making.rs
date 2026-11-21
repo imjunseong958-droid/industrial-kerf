@@ -1896,12 +1896,10 @@ const PAD: f32 = 12.0;
 const PORT_REACH: f32 = 9.0;
 /// A press that moves less than this is a click.
 const DRAG_FROM: f32 = 3.0;
-/// The panel at least and at most, where the window has room, and the air
-/// it leaves around it; its head; the column that says what the chosen node
-/// holds.
-const GRAPH_LEAST: (f32, f32) = (960.0, 620.0);
-const GRAPH_MOST: (f32, f32) = (1400.0, 900.0);
-const GRAPH_AIR: (f32, f32) = (120.0, 100.0);
+/// The panel at most (Qt's `graphPanelWidth` and `graphPanelHeight`),
+/// less where the window is smaller; its head; the column that says what
+/// the chosen node holds.
+const GRAPH_MOST: (f32, f32) = (1480.0, 900.0);
 const HEAD: f32 = 48.0;
 const INSPECTOR: f32 = 300.0;
 /// The legend of what the edges carry, at the canvas's foot.
@@ -1929,19 +1927,17 @@ pub const ZOOM_MOST: f32 = 2.0;
 /// are not drawn under it either.
 pub const ZOOM_READ: f32 = 0.7;
 
-/// The graph panel's size in a window `viewport` big: as much as the window
-/// has room for, between the least and the most.
+/// The graph panel's size in a window `viewport` big, as Qt's ModalScrim
+/// sized it: [`GRAPH_MOST`], less where the window is smaller, with the
+/// modal's margin all round (`ui::modal_bounds`), so the whole panel, its
+/// foot among it, shows in the box the window gives it however small the
+/// window. Its inspector column scrolls what does not fit.
 fn graph_size(viewport: (f32, f32)) -> (f32, f32) {
-    let side = |room: f32, air: f32, least: f32, most: f32| {
-        (room - air)
-            .min(most)
-            .max(least.min(room - 32.0))
-            .max(320.0)
-    };
-    (
-        side(viewport.0, GRAPH_AIR.0, GRAPH_LEAST.0, GRAPH_MOST.0),
-        side(viewport.1, GRAPH_AIR.1, GRAPH_LEAST.1, GRAPH_MOST.1),
-    )
+    let placed = ui::modal_bounds(
+        gpui::size(px(GRAPH_MOST.0), px(GRAPH_MOST.1)),
+        gpui::size(px(viewport.0), px(viewport.1)),
+    );
+    (f32::from(placed.size.width), f32::from(placed.size.height))
 }
 
 /// Whether a card draws something under its lines: a signal's number over
@@ -7621,10 +7617,11 @@ mod tests {
             "{small:?}"
         );
         assert_eq!(settle(all, (200.0, 200.0), true).zoom, ZOOM_LEAST);
-        // The panel takes the window's room, between the least and the most.
-        assert_eq!(graph_size((1600.0, 1000.0)), (1400.0, 900.0));
-        assert_eq!(graph_size((1280.0, 800.0)), (1160.0, 700.0));
-        assert_eq!(graph_size((900.0, 600.0)), (868.0, 568.0));
+        // The panel takes the window's room up to the most, the modal's
+        // margin left all round, as Qt's ModalScrim sized it.
+        assert_eq!(graph_size((1600.0, 1000.0)), (1480.0, 900.0));
+        assert_eq!(graph_size((1280.0, 800.0)), (1184.0, 704.0));
+        assert_eq!(graph_size((900.0, 600.0)), (804.0, 504.0));
     }
 
     #[test]

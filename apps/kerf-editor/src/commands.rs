@@ -54,6 +54,86 @@ gpui::actions!(kerf, [ClearRecent, RecentMissing, NoRecent]);
 // branch but this one; greyed the same way.
 gpui::actions!(kerf, [Unavailable, NoOtherBranches]);
 
+// The macOS application menu's own rows, as Qt's Cocoa menu had them:
+// HideApp hides Industrial Kerf (⌘H), HideOtherApps the other applications
+// (⌥⌘H), ShowAllApps shows them again ([`answer_app_menu`]).
+gpui::actions!(kerf, [HideApp, HideOtherApps, ShowAllApps]);
+
+/// The application menu (macOS): About Kerf; Settings…; Services ▸; Hide
+/// Industrial Kerf, Hide Others and Show All; Quit, as Qt's Cocoa menu
+/// built it around About, Preferences and Quit.
+pub fn app_menu() -> gpui::Menu {
+    gpui::Menu {
+        name: "Industrial Kerf".into(),
+        items: vec![
+            gpui::MenuItem::action("About Kerf", RunCommand::new("help.about")),
+            gpui::MenuItem::separator(),
+            gpui::MenuItem::action("Settings…", RunCommand::new("app.preferences")),
+            gpui::MenuItem::separator(),
+            gpui::MenuItem::os_submenu("Services", gpui::SystemMenuType::Services),
+            gpui::MenuItem::separator(),
+            gpui::MenuItem::action("Hide Industrial Kerf", HideApp),
+            gpui::MenuItem::action("Hide Others", HideOtherApps),
+            gpui::MenuItem::action("Show All", ShowAllApps),
+            gpui::MenuItem::separator(),
+            gpui::MenuItem::action("Quit Industrial Kerf", RunCommand::new("app.quit")),
+        ],
+    }
+}
+
+/// The keys of the application menu's own rows on macOS, whatever the
+/// keymap says: ⌘H hides the editor, ⌥⌘H the other applications. Elsewhere
+/// the system has no such rows, and none are bound.
+pub fn app_menu_bindings() -> Vec<KeyBinding> {
+    if !cfg!(target_os = "macos") {
+        return Vec::new();
+    }
+    vec![
+        KeyBinding::new("cmd-h", HideApp, None),
+        KeyBinding::new("alt-cmd-h", HideOtherApps, None),
+    ]
+}
+
+/// Whether the application menu's own rows are answered already.
+struct AppMenuAnswered;
+
+impl gpui::Global for AppMenuAnswered {}
+
+/// Answers the application menu's own rows, in every window and with none
+/// open: Hide, Hide Others and Show All, by the system. Once is enough.
+pub fn answer_app_menu(cx: &mut App) {
+    if cx.has_global::<AppMenuAnswered>() {
+        return;
+    }
+    cx.set_global(AppMenuAnswered);
+    cx.on_action(|_: &HideApp, cx| cx.hide());
+    cx.on_action(|_: &HideOtherApps, cx| cx.hide_other_apps());
+    cx.on_action(|_: &ShowAllApps, cx| cx.unhide_other_apps());
+}
+
+/// How the picture's mask tools stand among a menu's [`MenuStates`] and the
+/// app menu's states and ticks: each by an id of its own, as if it were a
+/// command of the registry's (which does not carry them).
+pub fn mask_tool_id(tool: crate::stage::MaskTool) -> &'static str {
+    match tool {
+        crate::stage::MaskTool::Rectangle => "mask.rectangle",
+        crate::stage::MaskTool::Ellipse => "mask.ellipse",
+        crate::stage::MaskTool::Pen => "mask.pen",
+    }
+}
+
+/// What takes out mask tool `tool` (or puts it down) from a menu.
+pub fn mask_tool_action(tool: crate::stage::MaskTool) -> Box<dyn gpui::Action> {
+    match tool {
+        crate::stage::MaskTool::Rectangle => Box::new(crate::stage::RectangleMask),
+        crate::stage::MaskTool::Ellipse => Box::new(crate::stage::EllipseMask),
+        crate::stage::MaskTool::Pen => Box::new(crate::stage::PenMask),
+    }
+}
+
+/// Why no mask tool can be taken out now, as the picture says it.
+pub const NO_MASK_CLIP: &str = "Choose a picture clip to draw a mask on";
+
 /// Collaborate ▸ Switch Branch in the menu bar: the branches of the
 /// window in front other than the one it is on, and whether switching is
 /// held back now (as a sync is: kerfd away, project.kerf changed on disk,
@@ -450,6 +530,7 @@ fn plain(keystroke: &str) -> bool {
 
 /// Binds every command's shortcuts in `keymap`.
 pub fn bind(keymap: &str, cx: &mut App) {
+    answer_app_menu(cx);
     cx.clear_key_bindings();
     crate::input::bind_keys(cx);
     let mut bindings = Vec::new();
@@ -501,6 +582,8 @@ pub fn bind(keymap: &str, cx: &mut App) {
         Some(WORKSPACE),
     ));
     bindings.push(KeyBinding::new("escape", Escape, Some(WORKSPACE)));
+    // The application menu's Hide and Hide Others (macOS).
+    bindings.extend(app_menu_bindings());
     bindings.push(KeyBinding::new(
         "up",
         crate::palette::Previous,
@@ -572,16 +655,7 @@ pub fn menus_with_branches(
                 .collect()
         })
         .unwrap_or_default();
-    let mut menus = vec![gpui::Menu {
-        name: "Industrial Kerf".into(),
-        items: vec![
-            gpui::MenuItem::action("About Kerf", RunCommand::new("help.about")),
-            gpui::MenuItem::separator(),
-            gpui::MenuItem::action("Settings…", RunCommand::new("app.preferences")),
-            gpui::MenuItem::separator(),
-            gpui::MenuItem::action("Quit Industrial Kerf", RunCommand::new("app.quit")),
-        ],
-    }];
+    let mut menus = vec![app_menu()];
     for menu in order {
         let mut items = Vec::new();
         let mut group = None;
@@ -622,21 +696,28 @@ pub fn menus_with_branches(
             items.push(gpui::MenuItem::submenu(keymap_menu(keymap)));
         }
         // The picture's mask tools, which the registry does not carry, where
-        // Qt's View menu had them (their keys, ⇧R ⇧E ⇧P, the stage binds).
+        // Qt's View menu had them (their keys, ⇧R ⇧E ⇧P, the stage binds):
+        // the one out ticked, all greyed until a picture clip the picture
+        // can place is chosen ([`mask_tool_id`]).
         if menu == "View" && !items.is_empty() {
             items.push(gpui::MenuItem::separator());
-            items.push(gpui::MenuItem::action(
-                crate::stage::MaskTool::Rectangle.label(),
-                crate::stage::RectangleMask,
-            ));
-            items.push(gpui::MenuItem::action(
-                crate::stage::MaskTool::Ellipse.label(),
-                crate::stage::EllipseMask,
-            ));
-            items.push(gpui::MenuItem::action(
-                crate::stage::MaskTool::Pen.label(),
-                crate::stage::PenMask,
-            ));
+            for tool in crate::stage::MaskTool::ALL {
+                let id = mask_tool_id(tool);
+                let name = if states.checked.contains(id) {
+                    format!("✓ {}", tool.label())
+                } else {
+                    tool.label().to_owned()
+                };
+                items.push(if states.unavailable.contains(id) {
+                    gpui::MenuItem::action(name, Unavailable)
+                } else {
+                    gpui::MenuItem::Action {
+                        name: name.into(),
+                        action: mask_tool_action(tool),
+                        os_action: None,
+                    }
+                });
+            }
         }
         if !items.is_empty() {
             menus.push(gpui::Menu {
