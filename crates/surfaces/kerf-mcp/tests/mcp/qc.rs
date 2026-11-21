@@ -213,7 +213,7 @@ impl kerf_text::fonts::FontSource for TestFont {
             italic: false,
             index: 0,
             data: kerf_text::fonts::FaceData::Static(include_bytes!(
-                "../../../foundation/kerf-text/testdata/KerfTestVariable.ttf"
+                "../../../../foundation/kerf-text/testdata/KerfTestVariable.ttf"
             )),
             origin: "test",
             names: Vec::new(),

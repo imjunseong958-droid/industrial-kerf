@@ -3,7 +3,7 @@
 //! looks, grades, and transitions reach. Looks, grades, and transitions all stay on the GPU but Morph
 //! Cut, which the test holds; the rest it lists.
 //!
-//! `KERF_GPU=software cargo test -p kerf-compose --test catalog_cost -- --nocapture` prints the list
+//! `KERF_GPU=software cargo test -p kerf-compose --test compose -- catalog_cost:: --nocapture` prints the list
 //! with no GPU but Mesa's llvmpipe, as CI runs it; with no GPU at all it says so and passes.
 
 use kerf_compose::{Accel, ComposeOptions, Compositor};

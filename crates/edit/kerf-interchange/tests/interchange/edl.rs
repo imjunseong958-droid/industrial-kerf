@@ -65,7 +65,7 @@ fn a_program_matches_the_golden_edl() {
     let expected = std::fs::read_to_string(&golden).unwrap_or_default();
     assert_eq!(
         edl, expected,
-        "regenerate with UPDATE_GOLDEN=1 cargo test -p kerf-interchange --test edl"
+        "regenerate with UPDATE_GOLDEN=1 cargo test -p kerf-interchange --test interchange edl::"
     );
 }
 

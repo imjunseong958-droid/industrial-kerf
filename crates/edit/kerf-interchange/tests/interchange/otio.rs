@@ -164,7 +164,7 @@ fn a_program_matches_the_golden_otio_file_and_lists_what_it_leaves_out() {
     let expected = std::fs::read_to_string(&golden).unwrap_or_default();
     assert_eq!(
         text, expected,
-        "regenerate with UPDATE_GOLDEN=1 cargo test -p kerf-interchange --test otio"
+        "regenerate with UPDATE_GOLDEN=1 cargo test -p kerf-interchange --test interchange otio::"
     );
     let left_out: Vec<(&str, Option<&str>)> = issues
         .iter()

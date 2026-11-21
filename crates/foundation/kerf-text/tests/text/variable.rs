@@ -25,8 +25,11 @@ impl FontSource for TestFont {
             color: false,
         };
         vec![
-            face(FAMILY, include_bytes!("../testdata/KerfTestVariable.ttf")),
-            face(CFF2, include_bytes!("../testdata/KerfTestCff2.otf")),
+            face(
+                FAMILY,
+                include_bytes!("../../testdata/KerfTestVariable.ttf"),
+            ),
+            face(CFF2, include_bytes!("../../testdata/KerfTestCff2.otf")),
         ]
     }
 }
