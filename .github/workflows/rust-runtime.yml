@@ -166,7 +166,9 @@ jobs:
           KERFD_BIN: ${{ github.workspace }}/target/debug/kerfd
         run: |
           xvfb-run -a -s "-screen 0 1600x1000x24 +extension Composite" \
-            target/debug/kerf-editor --quit-after-ms 5000
+            target/debug/kerf-editor --settings-dir "$RUNNER_TEMP/editor-settings" \
+            --screenshot "$RUNNER_TEMP/editor-start.png" --quit-after-ms 5000
+          test -s "$RUNNER_TEMP/editor-start.png"
       # And on a project with a cut: it starts kerfd for it, which keeps the
       # project's checkpoint, and quits cleanly.
       - name: Open a project with a cut

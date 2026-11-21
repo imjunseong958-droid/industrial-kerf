@@ -99,10 +99,13 @@ if ! xvfb-run -a -s "-screen 0 1600x1000x24 +extension Composite" timeout 120 \
     PATH=/nonexistent HOME="$scratch/editor-home" XDG_CONFIG_HOME="$scratch/editor-home/.config" \
     XDG_DATA_HOME="$scratch/editor-home/.local/share" XDG_RUNTIME_DIR="$scratch" \
     LD_DEBUG=libs LD_DEBUG_OUTPUT="$scratch/ld/trace" \
-    "$bin/kerf-editor" --quit-after-ms 3000; then
+    "$bin/kerf-editor" --screenshot "$scratch/start.png" --quit-after-ms 3000; then
     echo "The editor did not open and quit on its own: no display, or no Vulkan driver (mesa-vulkan-drivers)?" >&2
     exit 1
 fi
+# A window it could not open is only logged, and the run still quits cleanly: the picture
+# of the window it drew is the proof that it drew one.
+[ -s "$scratch/start.png" ] || { echo "kerf-editor ran and made no screenshot" >&2; exit 1; }
 
 # What each process loaded: a "calling init" line for each library.
 loaded="$(cat "$scratch"/ld/trace.* | sed -n 's/^ *[0-9]*:[[:space:]]*calling init: //p' | sort -u)"

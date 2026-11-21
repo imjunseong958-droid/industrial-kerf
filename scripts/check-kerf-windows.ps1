@@ -114,7 +114,10 @@ try {
     }
 
     # The editor, opening with no project, and quitting on its own after five seconds.
-    $editor = Start-Process -FilePath $editorExe -PassThru -ArgumentList @('--quit-after-ms', '5000')
+    # Its settings in the scratch folder: never the caller's own, nor their Qt settings taken in.
+    $editor = Start-Process -FilePath $editorExe -PassThru -ArgumentList @(
+        '--settings-dir', "`"$(Join-Path $scratch 'settings')`"",
+        '--quit-after-ms', '5000')
     # Taken now: Start-Process leaves no exit code otherwise.
     $null = $editor.Handle
     $modules = @()

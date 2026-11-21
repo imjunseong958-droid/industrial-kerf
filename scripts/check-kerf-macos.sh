@@ -129,7 +129,8 @@ if ! grep -q 'rate=25 dur=00:00:02:00 video=320x240' "$scratch/import.json"; the
 fi
 # On the Mac's own window system, as someone opening the app gets.
 before="$(wc -l < "$loaded")"
-run "$macos/kerf-editor" --quit-after-ms 3000
+# Its settings in the scratch folder: never the caller's own, nor their Qt settings taken in.
+run "$macos/kerf-editor" --settings-dir "$scratch/settings" --quit-after-ms 3000
 
 # The editor draws with Metal, which dyld loads with it: without Metal among what it
 # named for the editor, dyld did not say what it loaded, and the list proves nothing.

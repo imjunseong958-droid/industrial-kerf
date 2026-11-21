@@ -1085,6 +1085,9 @@ pub struct Bridge {
     media: SyncSender<Command>,
     collab: SyncSender<Command>,
     prompts: SyncSender<AgentRequest>,
+    /// The conversations' own worker: their files are read and written off
+    /// the caller's thread, in the order asked.
+    conversations: SyncSender<conversations::Request>,
     events: Receiver<Value>,
     shared: Arc<Shared>,
 }
@@ -3104,6 +3107,7 @@ impl Bridge {
         let (media, media_rx) = mpsc::sync_channel(32);
         let (prompts, prompt_rx) = mpsc::sync_channel(1);
         let (collab, collab_rx) = mpsc::sync_channel(16);
+        let (conversations, conversations_rx) = mpsc::sync_channel(64);
         let (emit, events) = mpsc::sync_channel(256);
         let shared = Arc::new(Shared {
             directory: directory.clone(),
@@ -3171,6 +3175,17 @@ impl Bridge {
             let tx = emit.clone();
             thread::spawn(move || cloud_status(&tx, None));
         }
+        {
+            // Their events wait for room in the event queue here, never on
+            // the caller's thread, which is the one that empties it.
+            let tx = emit.clone();
+            let store = conversations::Store::of(&project_folder);
+            thread::spawn(move || {
+                for request in conversations_rx {
+                    conversations::command(&store, request, &tx);
+                }
+            });
+        }
         Bridge {
             directory: project_folder,
             events_tx: emit,
@@ -3178,6 +3193,7 @@ impl Bridge {
             media,
             collab,
             prompts,
+            conversations,
             events,
             shared,
         }
@@ -3241,12 +3257,17 @@ impl Bridge {
                 true
             }
             // Not queued behind the runtime worker: a making is stopped when it is asked.
+            // What it says waits for room in the event queue on a thread of its own, never on
+            // the caller's, which is the one that empties it.
             Command::MediaMakeCancel { media } => {
-                media::cancel_make(&self.shared, &media, &self.events_tx);
+                let shared = self.shared.clone();
+                let tx = self.events_tx.clone();
+                thread::spawn(move || media::cancel_make(&shared, &media, &tx));
                 true
             }
             Command::Models => {
-                emit(&self.events_tx, models_event());
+                let tx = self.events_tx.clone();
+                thread::spawn(move || emit(&tx, models_event()));
                 true
             }
             Command::Loudness { sequence } => {
@@ -3362,14 +3383,7 @@ impl Bridge {
                     true
                 }
             }
-            Command::Conversations(request) => {
-                conversations::command(
-                    &conversations::Store::of(&self.directory),
-                    request,
-                    &self.events_tx,
-                );
-                true
-            }
+            Command::Conversations(request) => self.conversations.try_send(request).is_ok(),
             _ => self.commands.try_send(command).is_ok(),
         }
     }
@@ -3671,6 +3685,69 @@ mod tests {
     use std::sync::mpsc;
     use std::sync::Arc;
     use std::time::Duration;
+
+    /// The registry (kerf-commands) and the bridge agree: each request the registry sends for
+    /// an engine command reads as a bridge command, as `bridge.h` documented it once.
+    #[test]
+    fn every_engine_request_is_a_bridge_command() {
+        let context = json!({
+            "connected": true,
+            "revision": 7,
+            "playheadFrame": 48,
+            "selection": {"clip": "c1", "track": "video", "startFrame": 24, "durationFrames": 48},
+            "collab": {
+                "repository": true,
+                "branch": "main",
+                "upstream": "origin/main",
+                "remote": "git@github.com:jun/film.git",
+                "changed": true,
+                "branches": ["main", "color"],
+                "externalMedia": 1
+            }
+        });
+        let invocations = [
+            ("file.refresh", serde_json::Value::Null),
+            ("media.replace", json!({"media": "m1", "path": "a.mov"})),
+            ("media.make", json!({"media": "m1"})),
+            ("media.makeCancel", json!({"media": "m1"})),
+            ("preset.save", json!({"name": "Intro"})),
+            ("collab.status", serde_json::Value::Null),
+            ("collab.sync", serde_json::Value::Null),
+            ("collab.live", json!({"enabled": true})),
+            ("collab.commit", json!({"message": "m"})),
+            ("collab.newBranch", json!({"name": "b"})),
+            ("collab.pullRequest", json!({"title": "t"})),
+            (
+                "collab.publish",
+                json!({"remote": "git@example.com:film.git"}),
+            ),
+            ("collab.consolidate", json!({})),
+            ("qc.run", serde_json::Value::Null),
+            ("export.master", serde_json::Value::Null),
+            ("proposal.forward", json!({"proposal": "p1"})),
+        ];
+        for (id, params) in invocations {
+            let answer =
+                super::commands_run(&json!({"command": id, "context": context, "params": params}));
+            let request = &answer["request"];
+            assert!(request.is_object(), "{id} sends no request: {answer}");
+            assert!(
+                <Command as serde::Deserialize>::deserialize(request).is_ok(),
+                "the bridge does not take {request} for {id}"
+            );
+        }
+        for documented in [
+            json!({"type": "check"}),
+            json!({"type": "check", "sequence": "s1"}),
+            json!({"type": "projection_import"}),
+            json!({"type": "projection_repair"}),
+        ] {
+            assert!(
+                <Command as serde::Deserialize>::deserialize(&documented).is_ok(),
+                "the bridge does not take {documented}"
+            );
+        }
+    }
 
     #[test]
     fn the_models_file_is_listed_for_settings() {

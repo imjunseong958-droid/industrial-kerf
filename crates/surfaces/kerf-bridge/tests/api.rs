@@ -108,3 +108,36 @@ fn the_editor_runs_the_ffmpeg_kerfd_runs() {
         .is_ok_and(|status| status.success());
     assert!(runs || found == "ffmpeg", "{found}");
 }
+
+#[test]
+fn what_is_answered_at_once_never_holds_the_caller_while_the_events_wait() {
+    // The caller is the one that takes the events: an answer waiting for room in their queue
+    // on its thread would wait for ever. More answers than the queue holds are asked for here
+    // with none taken, from a thread of their own so a block fails the test instead of
+    // hanging it.
+    let project = Project::new();
+    let bridge = Bridge::open(&project.0, &kerfd());
+    let (done, finished) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut bridge = bridge;
+        for _ in 0..300 {
+            bridge.send(&json!({"type": "models"}));
+            bridge.send(&json!({"type": "conversations", "action": "list"}));
+        }
+        let _ = done.send(bridge);
+    });
+    let mut bridge = finished
+        .recv_timeout(Duration::from_secs(30))
+        .expect("a send waited while the events were not taken");
+    // Taken, every models answer still comes.
+    let mut models = 0;
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while models < 300 && Instant::now() < deadline {
+        match bridge.poll() {
+            Some(event) if event["type"] == "models" => models += 1,
+            Some(_) => {}
+            None => std::thread::sleep(Duration::from_millis(5)),
+        }
+    }
+    assert_eq!(models, 300);
+}

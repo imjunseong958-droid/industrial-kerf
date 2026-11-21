@@ -17,10 +17,13 @@ use std::sync::Arc;
 /// bridge cancels it.
 pub(crate) fn spawn(shared: Arc<Shared>, tx: SyncSender<Value>, sequence: Option<String>) {
     if shared.check_busy.swap(true, Ordering::SeqCst) {
-        emit(
-            &tx,
-            json!({"type": "error", "message": "A check is already running", "command": "check"}),
-        );
+        // Said from a thread of its own: the caller's empties the event queue.
+        std::thread::spawn(move || {
+            emit(
+                &tx,
+                json!({"type": "error", "message": "A check is already running", "command": "check"}),
+            );
+        });
         return;
     }
     let cancel = CancellationToken::new();
