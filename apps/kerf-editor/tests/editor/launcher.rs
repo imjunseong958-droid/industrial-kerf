@@ -1,22 +1,45 @@
-//! Editing presets and the launcher, through their public pieces: what a
-//! preset's slots say, how a chosen file fits one, what Export writes, how
-//! the store routes the bridge's preset answers, why the launcher's Create
-//! or Clone cannot run yet, and the create task it sends.
+//! The launcher: new projects, presets, recent projects.
 
+use crate::support::EXISTS;
 use kerf_editor::launcher::{
-    clone_problem, details_problem, git_address, github_account, tools_hint, Mode, Plan,
+    clone_problem, details_problem, git_address, github_account, launcher_escape, tools_hint,
+    LauncherEscape, Mode, Plan,
 };
 use kerf_editor::presets::{
     existing_preset, export_path, file_fit, import_refusal, made_kind, made_line, needs_line,
     path_refusal, presets_in, read_by_line, seconds, slot_read_by, start_frame, uses_line,
     write_document, Fit,
 };
-use kerf_editor::store::{Change, EditorState};
+use kerf_editor::workspace::{folder_media, needs_start};
 use proptest::prelude::*;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 
-const EXISTS: &str = " already exists; choose another name or replace it";
+// ---------------------------------------------------------------- the launcher
+
+#[test]
+fn esc_gives_a_launcher_opened_from_an_editor_back() {
+    use LauncherEscape::*;
+    // A form open goes first, wherever the launcher came from.
+    assert_eq!(launcher_escape(true, false, true), PutFormAway);
+    assert_eq!(launcher_escape(true, false, false), PutFormAway);
+    // A form whose task runs stays.
+    assert_eq!(launcher_escape(true, true, true), Nothing);
+    // No form: from an editor, it is given up; the first-run one stays.
+    assert_eq!(launcher_escape(false, false, true), GiveBack);
+    assert_eq!(launcher_escape(false, true, true), GiveBack);
+    assert_eq!(launcher_escape(false, false, false), Nothing);
+    assert_eq!(launcher_escape(false, true, false), Nothing);
+}
+
+proptest! {
+    #[test]
+    fn the_launcher_the_editor_starts_with_is_never_given_up(
+        form in proptest::bool::ANY, busy in proptest::bool::ANY,
+    ) {
+        prop_assert_ne!(launcher_escape(form, busy, false), LauncherEscape::GiveBack);
+    }
+}
 
 // ---------------------------------------------------------------- presets' words
 
@@ -256,94 +279,6 @@ fn an_exported_document_is_written_whole_and_replaces_the_old() {
     assert!(write_document(&root.path().join("missing/editing.kerfpreset"), "x").is_err());
 }
 
-// ---------------------------------------------------------------- the store
-
-fn notices(state: &EditorState) -> Vec<(String, bool)> {
-    state
-        .notices
-        .iter()
-        .map(|notice| (notice.text.clone(), notice.error))
-        .collect()
-}
-
-#[test]
-fn the_store_routes_preset_answers_as_qt_did() {
-    let mut state = EditorState::default();
-    let preset = json!({"name": "Intro", "slots": []});
-    assert_eq!(
-        state
-            .apply(&json!({"type": "preset_inspect", "path": "/p/a.kerfpreset", "preset": preset})),
-        Change::Other
-    );
-    assert_eq!(
-        state.inspected_preset,
-        Some(("/p/a.kerfpreset".to_owned(), preset))
-    );
-    assert_eq!(
-        state
-            .apply(&json!({"type": "preset_applied", "path": "/p/a.kerfpreset", "proposal": "p1"})),
-        Change::Notice
-    );
-    state.saving_preset = Some("Intro".into());
-    assert_eq!(
-        state.apply(&json!({"type": "preset_saved", "path": "presets/Intro.kerfpreset"})),
-        Change::Notice
-    );
-    assert_eq!(state.saving_preset, None);
-    assert_eq!(
-        notices(&state),
-        [
-            ("Preset proposal ready for review".to_owned(), false),
-            ("Saved preset presets/Intro.kerfpreset".to_owned(), false),
-        ]
-    );
-}
-
-#[test]
-fn saving_over_a_preset_is_asked_about_not_refused() {
-    let refusal = json!({"type": "error",
-        "message": format!("presets/Intro.kerfpreset{EXISTS}")});
-    let mut saving = EditorState::default();
-    saving.saving_preset = Some("Intro".into());
-    assert_eq!(saving.apply(&refusal), Change::Other);
-    assert!(
-        saving.notices.is_empty(),
-        "the question says it, not a notice"
-    );
-    assert_eq!(
-        saving.preset_exists.as_deref(),
-        Some("presets/Intro.kerfpreset")
-    );
-    // Not saving, the same words are an error like any other.
-    let mut idle = EditorState::default();
-    assert_eq!(idle.apply(&refusal), Change::Notice);
-    assert_eq!(notices(&idle).len(), 1);
-    assert_eq!(idle.preset_exists, None);
-}
-
-#[test]
-fn an_exported_preset_is_written_where_the_bridge_says() {
-    let root = tempfile::tempdir().unwrap();
-    let path = root.path().join("editing.kerfpreset");
-    let mut state = EditorState::default();
-    let change = state.apply(&json!({"type": "preset_export", "path": path,
-        "document": "kerf 1\nproject name=\"Harbour\"\n"}));
-    assert_eq!(change, Change::Notice);
-    assert_eq!(
-        std::fs::read_to_string(&path).unwrap(),
-        "kerf 1\nproject name=\"Harbour\"\n"
-    );
-    assert_eq!(
-        notices(&state),
-        [("Preset exported: editing.kerfpreset".to_owned(), false)]
-    );
-    let nowhere = root.path().join("missing/editing.kerfpreset");
-    state.apply(&json!({"type": "preset_export", "path": nowhere, "document": "x"}));
-    let (text, error) = notices(&state).pop().unwrap();
-    assert!(text.starts_with("Could not export preset: "), "{text}");
-    assert!(error);
-}
-
 // ---------------------------------------------------------------- the launcher
 
 #[test]
@@ -567,32 +502,6 @@ fn an_import_refused_is_said_under_its_slot() {
     );
 }
 
-#[test]
-fn project_warnings_wait_for_the_project_not_the_connecting() {
-    let mut state = EditorState::default();
-    assert!(!state.opened_or_failed());
-    // The bridge's first word is that it is connecting: not yet.
-    assert_eq!(
-        state.apply(&json!({"type": "connection", "status": "connecting"})),
-        Change::Connection
-    );
-    assert!(!state.opened_or_failed());
-    // The project's first snapshot: up.
-    assert_eq!(
-        state.apply(&json!({"type": "state", "snapshot": {}})),
-        Change::Snapshot
-    );
-    assert!(state.opened_or_failed());
-    state.apply(&json!({"type": "connection", "status": "ready"}));
-    assert!(state.opened_or_failed());
-    // kerfd could not be reached: said then, since nothing else will come.
-    let mut failed = EditorState::default();
-    failed.apply(&json!({"type": "connection", "status": "connecting"}));
-    failed.apply(&json!({"type": "connection", "status": "disconnected",
-        "message": "cannot start kerfd"}));
-    assert!(failed.opened_or_failed());
-}
-
 #[cfg(unix)]
 #[test]
 fn a_name_that_is_not_utf8_is_refused_not_sent() {
@@ -627,4 +536,22 @@ fn a_name_that_is_not_utf8_is_refused_not_sent() {
         let names: Vec<&str> = found.iter().map(|choice| choice.name.as_str()).collect();
         assert_eq!(names, ["Intro"]);
     }
+}
+
+#[test]
+fn a_folder_without_project_kerf_starts_with_its_media() {
+    let folder = tempfile::tempdir().unwrap();
+    for name in ["b.MOV", "a.mp4", "notes.txt", "song.wav"] {
+        std::fs::write(folder.path().join(name), b"").unwrap();
+    }
+    std::fs::create_dir(folder.path().join("clips.mp4")).unwrap();
+    assert!(needs_start(folder.path()));
+    let names: Vec<String> = folder_media(folder.path())
+        .iter()
+        .map(|path| path.file_name().unwrap().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(names, ["a.mp4", "b.MOV", "song.wav"]);
+
+    std::fs::write(folder.path().join("project.kerf"), "kerf 1\n").unwrap();
+    assert!(!needs_start(folder.path()));
 }

@@ -22,7 +22,7 @@ program built beside the editor, kerfd among them, whose journal is checksummed 
 it writes again. So it is built, tested and linted with `--manifest-path apps/kerf-editor/Cargo.toml`
 (`cargo test --manifest-path apps/kerf-editor/Cargo.toml`, `cargo clippy --manifest-path apps/kerf-editor/Cargo.toml --all-targets`), into the
 repository's `target` (`.cargo/config.toml`), and its version is the repository's
-(`tests/version.rs`). It links FFmpeg through the bridge, found as
+(`tests/editor/version.rs`). It links FFmpeg through the bridge, found as
 kerfd finds it (`FFMPEG_DIR`, or `pkg-config`). Build it with `--release` to judge
 playback: the live preview draws its frames in the bridge.
 

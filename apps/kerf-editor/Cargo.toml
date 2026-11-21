@@ -9,7 +9,7 @@
 #
 #   cargo build --manifest-path apps/kerf-editor/Cargo.toml
 #
-# Its version is the repository's (`tests/version.rs` holds them together),
+# Its version is the repository's (`tests/editor/version.rs` holds them together),
 # and its profiles and lints are the repository's own, repeated here.
 [workspace]
 

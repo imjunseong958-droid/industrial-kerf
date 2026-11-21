@@ -1,29 +1,161 @@
-//! A shot's graph through its public functions: which names a node could
-//! read another under, what a step's line writes for it and which word it
-//! is; how the canvas settles on a graph, zooms about a point and goes from
-//! card to card by the arrows; where an edge leaves and comes in; a signal
-//! drawn by hand and kept as keys; a point on a picture; where cards are
-//! kept per project and shot; a model's ComfyUI workflow read as a graph;
-//! `--graph`; how a make card stands; and how a graph's pictures are made,
-//! a few FFmpegs at a time, each stopped if it runs too long.
+//! Shot graphs, recipes and takes: how a shot is made.
 
+use kerf_editor::cast;
+use kerf_editor::cast::Entry;
 use kerf_editor::making::{
     another_seed, arrange, card_height, card_size, card_state, card_title, draw_signal,
     draws_curve, extent, fitted_in, graph_start, in_port, input_kind, link_output, nearest_toward,
-    one_line, out_port, output_within, part_id, part_number, placed_over, placement_key, point_on,
-    port_says, ports_for, reading_lines, reads_port, settle, shown_value, signal_keys, signal_line,
-    signal_under, take_tip, value_of, wire_nth, workflow_key, zoom_about, Camera, CardState,
-    GraphEdge, GraphNode, GraphStart, InputKind, PictureQueue, Progress, Recipe, Toward, Workflow,
-    ZOOM_LEAST, ZOOM_MOST, ZOOM_READ,
+    one_line, out_port, output_within, part_id, part_number, placed_over, point_on, port_says,
+    ports_for, reading_lines, reads_port, settle, shown_value, signal_keys, signal_line,
+    signal_under, take_tip, value_of, wire_nth, zoom_about, Camera, CardState, GraphEdge,
+    GraphNode, GraphStart, InputKind, PictureQueue, Progress, Recipe, Toward, Workflow, ZOOM_LEAST,
+    ZOOM_MOST, ZOOM_READ,
 };
 use kerf_editor::model::Ask;
-use kerf_editor::prefs::Prefs;
 use kerf_editor::store::Making;
 use proptest::prelude::*;
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
+
+// ------------------------------------------------------------------- cast
+
+#[test]
+fn the_cast_is_read_and_written_as_the_file_reads() {
+    let event = json!({"type": "cast", "entries": [
+        {"kind": "cast", "name": "Maya", "words": "a woman", "refs": ["refs/maya.png"]},
+        {"kind": "style", "name": "Dusk", "words": "", "refs": []}
+    ], "toMake": [{"media": "m3", "why": "cast Maya changed"}]});
+    let entries = cast::entries_of(&event);
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0].refs, vec!["refs/maya.png".to_owned()]);
+    assert_eq!(
+        cast::wants_line(&cast::to_make_of(&event)),
+        "Wants making now: m3 (cast Maya changed)"
+    );
+    assert_eq!(
+        cast::wants_line(&[]),
+        "No shot wants making as the cast stands."
+    );
+    let typed = vec![Entry {
+        kind: "cast".into(),
+        name: "  Maya ".into(),
+        words: " a  woman\nin   red ".into(),
+        refs: cast::split_pictures(" refs/a.png, ,refs/b.png ,"),
+    }];
+    assert_eq!(
+        cast::cast_set(&typed),
+        json!({"type": "cast_set", "entries": [
+            {"kind": "cast", "name": "Maya", "words": "a woman in red", "refs": ["refs/a.png", "refs/b.png"]}
+        ]})
+    );
+}
+
+#[test]
+fn a_cast_that_does_not_read_cannot_be_saved_over() {
+    use cast::{heard, Heard, Stage};
+    let unreadable = json!({"type": "error", "command": "cast",
+        "message": "cast.kerfcast:4: `csat` is not `cast` or `style`"});
+    // Asked for and not read: nothing to show, and nothing to save over the file.
+    assert_eq!(
+        heard(Stage::Reading, &unreadable),
+        Heard::Failed {
+            message: "cast.kerfcast:4: `csat` is not `cast` or `style`".into(),
+            stage: Stage::Unreadable,
+        }
+    );
+    assert!(!Stage::Unreadable.can_save());
+    assert!(!Stage::Reading.can_save() && !Stage::Saving.can_save());
+    // A save refused leaves the rows as typed, to be mended and saved again.
+    let refused = json!({"type": "error", "command": "cast", "message": "cannot save the cast: two named Ada"});
+    assert_eq!(
+        heard(Stage::Saving, &refused),
+        Heard::Failed {
+            message: "cannot save the cast: two named Ada".into(),
+            stage: Stage::Editing,
+        }
+    );
+    assert!(Stage::Editing.can_save());
+    // Read, the rows come in; saved, the window goes back.
+    let read = json!({"type": "cast", "entries": [{"kind": "cast", "name": "mara", "words": "", "refs": []}],
+        "toMake": [], "saved": false});
+    assert!(matches!(heard(Stage::Reading, &read), Heard::Read(entries) if entries.len() == 1));
+    let saved = json!({"type": "cast", "entries": [], "toMake": [], "saved": true});
+    assert_eq!(heard(Stage::Saving, &saved), Heard::Saved);
+    assert_eq!(heard(Stage::Editing, &saved), Heard::ToMake);
+    // Another command's error is not the dialog's.
+    let other = json!({"type": "error", "command": "media_make", "message": "no"});
+    assert_eq!(heard(Stage::Reading, &other), Heard::Nothing);
+}
+
+/// The dialog's stage after each event, as `CastView::heard` moves it.
+fn cast_stage_after(stage: cast::Stage, event: &Value) -> cast::Stage {
+    match cast::heard(stage, event) {
+        cast::Heard::Read(_) => cast::Stage::Editing,
+        cast::Heard::Failed { stage, .. } => stage,
+        _ => stage,
+    }
+}
+
+proptest! {
+    /// Save is pressed only on a cast that was read: whatever kerfd says,
+    /// in whatever order, the dialog can save only once a `cast` it asked
+    /// for came in while it was reading.
+    #[test]
+    fn save_needs_the_cast_read_first(events in proptest::collection::vec(0usize..5, 0..12)) {
+        let said = [
+            json!({"type": "error", "command": "cast", "message": "does not read"}),
+            json!({"type": "error", "command": "media_make", "message": "no"}),
+            json!({"type": "cast", "entries": [], "toMake": [], "saved": true}),
+            json!({"type": "snapshot"}),
+            json!({"type": "cast", "entries": [], "toMake": [], "saved": false}),
+        ];
+        let mut stage = cast::Stage::Reading;
+        let mut read = false;
+        for event in events {
+            // A `cast` holds the file's entries, saved by another or not.
+            if stage == cast::Stage::Reading && (event == 2 || event == 4) {
+                read = true;
+            }
+            stage = cast_stage_after(stage, &said[event]);
+            if stage.can_save() {
+                prop_assert!(read);
+            }
+        }
+    }
+}
+
+#[test]
+fn a_picture_from_outside_is_copied_into_refs_under_a_free_name() {
+    let project = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let face = outside.path().join("face.png");
+    std::fs::write(&face, b"one").unwrap();
+    assert_eq!(
+        cast::cast_picture_path(project.path(), &face).unwrap(),
+        "refs/face.png"
+    );
+    std::fs::write(&face, b"two").unwrap();
+    assert_eq!(
+        cast::cast_picture_path(project.path(), &face).unwrap(),
+        "refs/face-2.png"
+    );
+    assert_eq!(
+        std::fs::read(project.path().join("refs/face-2.png")).unwrap(),
+        b"two"
+    );
+    // One of the project's own is named as it is.
+    let inside = project.path().join("shots").join("still.png");
+    std::fs::create_dir_all(inside.parent().unwrap()).unwrap();
+    std::fs::write(&inside, b"x").unwrap();
+    assert_eq!(
+        cast::cast_picture_path(project.path(), &inside).unwrap(),
+        "shots/still.png"
+    );
+    // One that is not there cannot be copied.
+    assert!(cast::cast_picture_path(project.path(), Path::new("/nowhere/x.png")).is_err());
+}
 
 fn node(id: &str, kind: &str, gives: &str, line: Option<usize>, holds: Value) -> GraphNode {
     GraphNode {
@@ -428,63 +560,6 @@ proptest! {
         prop_assert!(point_on(frame, (frame[0] - 1.0, frame[1])).is_none());
         prop_assert!(point_on(frame, (frame[0], frame[1] + frame[3] + 1.0)).is_none());
     }
-
-    /// Places kept under a key read back as they were from the editor's
-    /// settings file; its other keys are kept; none kept lets the key go.
-    #[test]
-    fn card_places_are_kept_by_project_and_shot(
-        places in prop::collection::hash_map("[a-z:{}.]{1,12}", (-5000.0f32..5000.0, -5000.0f32..5000.0), 0..8),
-        other in prop::collection::hash_map("[a-z]{1,6}", (-10.0f32..10.0, -10.0f32..10.0), 1..4),
-    ) {
-        let places: HashMap<String, (f32, f32)> = places
-            .into_iter()
-            .map(|(id, (x, y))| (id, (x.round(), y.round())))
-            .collect();
-        let other: HashMap<String, (f32, f32)> = other
-            .into_iter()
-            .map(|(id, (x, y))| (id, (x.round(), y.round())))
-            .collect();
-        let shot = placement_key(Some(Path::new("/projects/court")), "shot");
-        let flow = workflow_key(&shot, "shot");
-        let folder = tempfile::tempdir().unwrap();
-        let file = folder.path().join("editor.json");
-        let mut prefs = Prefs::load_from(&file);
-        prefs.keep_graph_places(&flow, &other);
-        prefs.keep_graph_places(&shot, &places);
-        prefs.save_to(&file).unwrap();
-        let mut read = Prefs::load_from(&file);
-        prop_assert_eq!(read.graph_places_of(&shot), places.clone());
-        prop_assert_eq!(read.graph_places_of(&flow), other.clone());
-        read.keep_graph_places(&shot, &HashMap::new());
-        read.save_to(&file).unwrap();
-        let cleared = Prefs::load_from(&file);
-        prop_assert!(cleared.graph_places_of(&shot).is_empty());
-        prop_assert_eq!(cleared.graph_places_of(&flow), other);
-    }
-}
-
-#[test]
-fn a_shots_cards_and_its_workflows_are_kept_apart() {
-    let shot = placement_key(Some(Path::new("/p/court")), "shot");
-    assert_ne!(shot, placement_key(Some(Path::new("/p/harbour")), "shot"));
-    assert_ne!(shot, placement_key(Some(Path::new("/p/court")), "other"));
-    assert_ne!(shot, workflow_key(&shot, "shot"));
-    // Two windows each keep their own shot's cards: neither loses the other's.
-    let folder = tempfile::tempdir().unwrap();
-    let file = folder.path().join("editor.json");
-    let mut one = Prefs::load_from(&file);
-    let mut two = Prefs::load_from(&file);
-    let harbour = placement_key(Some(Path::new("/p/harbour")), "shot");
-    one.keep_graph_places(&shot, &HashMap::from([("takes".to_owned(), (3.0, 4.0))]));
-    one.save_to(&file).unwrap();
-    two.keep_graph_places(
-        &harbour,
-        &HashMap::from([("model".to_owned(), (-8.0, 2.0))]),
-    );
-    two.save_to(&file).unwrap();
-    let read = Prefs::load_from(&file);
-    assert_eq!(read.graph_places_of(&shot)["takes"], (3.0, 4.0));
-    assert_eq!(read.graph_places_of(&harbour)["model"], (-8.0, 2.0));
 }
 
 #[test]

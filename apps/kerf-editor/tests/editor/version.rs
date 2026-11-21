@@ -1,5 +1,4 @@
-//! The editor is a workspace of its own (its manifest says why), so its
-//! version is written there: it has to be the repository's.
+//! The editor's version is the repository's.
 
 #[test]
 fn the_editor_has_the_repositorys_version() {

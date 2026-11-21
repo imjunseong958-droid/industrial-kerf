@@ -1,28 +1,67 @@
-//! What travels over the window as a cut is built and its picture comes
-//! and goes, and choosing the words of the conversation.
+//! Motion: how things move, and Reduce Motion.
 
+use crate::support::rect;
 use gpui::{point, px, size, Bounds};
 use kerf_editor::chat::{in_sight, over_composer, OVER_COMPOSER, OVER_COMPOSER_RISE};
-use kerf_editor::input::Unit;
 use kerf_editor::model::Timeline;
-use kerf_editor::selectable::{copied, stretch, within, Chosen, Spot};
+use kerf_editor::motion::{ease, shimmer_at, Tween};
+use kerf_editor::stage::{compare_at, pulse_level};
 use kerf_editor::theme::motion as scene;
 use kerf_editor::workspace::{
-    back_flight_at, clip_flight_at, grow_flight_at, grow_shows, let_go_flight_at, panel_heights,
-    picture_in, picture_within, placed_since, FlightKind, PaneGoes, STAND_IN_RELEASE,
-    TIMELINE_LEAD,
+    back_flight_at, clip_flight_at, export_flight_at, grow_flight_at, grow_shows, home_flight_at,
+    landing_in, lerp_bounds, let_go_flight_at, picture_within, placed_since, FlightKind, PaneGoes,
+    STAND_IN_RELEASE, TIMELINE_LEAD,
 };
+use kerf_editor::{motion, sidebar, theme};
 use proptest::prelude::*;
 use serde_json::{json, Value};
 use std::collections::HashSet;
-use std::time::Duration;
+use std::time::{Duration, Instant};
+
+// ------------------------------------------------------------ Reduce Motion
+
+#[test]
+fn reduce_motion_follows_the_variable_then_either_switch() {
+    assert!(motion::resolve(None, false, true));
+    assert!(motion::resolve(None, true, false));
+    assert!(!motion::resolve(None, false, false));
+    // KERF_REDUCE_MOTION=0 keeps motion whatever the system says.
+    assert!(!motion::resolve(Some(false), true, true));
+    assert!(motion::resolve(Some(true), false, false));
+    assert_eq!(motion::env_override(None), None);
+    assert_eq!(motion::env_override(Some("")), None);
+    assert_eq!(motion::env_override(Some("0")), Some(false));
+    assert_eq!(motion::env_override(Some("1")), Some(true));
+}
+
+#[test]
+fn the_systems_setting_is_read_again_only_when_asked_and_old() {
+    let start = Instant::now();
+    // Never read: due.
+    assert!(motion::system_read_due(None, start, false));
+    // Just read: not again until SYSTEM_POLL has gone.
+    assert!(!motion::system_read_due(Some(start), start, false));
+    let soon = start + theme::motion::SYSTEM_POLL / 2;
+    assert!(!motion::system_read_due(Some(start), soon, false));
+    let later = start + theme::motion::SYSTEM_POLL;
+    assert!(motion::system_read_due(Some(start), later, false));
+    // One read at a time.
+    assert!(!motion::system_read_due(Some(start), later, true));
+    assert!(!motion::system_read_due(None, start, true));
+}
+
+#[test]
+fn the_systems_setting_reads_as_it_is_printed() {
+    assert!(motion::parse_macos("1\n"));
+    assert!(!motion::parse_macos("0\n"));
+    assert!(!motion::parse_macos(""));
+    assert_eq!(motion::parse_gnome("false\n"), Some(true));
+    assert_eq!(motion::parse_gnome("true\n"), Some(false));
+    assert_eq!(motion::parse_gnome("No such schema"), None);
+}
 
 fn ms(value: u64) -> Duration {
     Duration::from_millis(value)
-}
-
-fn rect(x: f32, y: f32, width: f32, height: f32) -> Bounds<gpui::Pixels> {
-    Bounds::new(point(px(x), px(y)), size(px(width), px(height)))
 }
 
 // ------------------------------------------------------------ flights
@@ -166,46 +205,6 @@ proptest! {
             prop_assert!(lanes_early > 0.0);
         }
     }
-
-    #[test]
-    fn the_panel_is_shared_out_whole(
-        height in 0.0f32..2000.0,
-        width in 1.0f32..3000.0,
-        aspect in 0.3f32..3.0,
-        picture in 0.0f32..=1.0,
-        timeline in 0.0f32..=1.0,
-        media in 0.0f32..=1.0,
-    ) {
-        let (picture_tall, band, lanes) =
-            panel_heights(height, width, aspect, (picture, timeline, media));
-        prop_assert!(picture_tall >= 0.0 && band >= 0.0 && lanes >= 0.0);
-        prop_assert!(picture_tall + band + lanes <= height.max(band) + 0.5);
-        if timeline == 0.0 {
-            prop_assert_eq!(lanes, 0.0);
-        }
-    }
-
-    #[test]
-    fn a_picture_placed_in_its_slot_keeps_its_shape(
-        width in 200.0f32..2000.0, height in 200.0f32..1500.0, aspect in 0.4f32..2.5,
-    ) {
-        let slot = rect(100.0, 50.0, width, height);
-        let placed = picture_in(slot, aspect);
-        let shape = f32::from(placed.size.width) / f32::from(placed.size.height);
-        prop_assert!((shape - aspect).abs() / aspect < 0.01);
-        prop_assert!(placed.left() >= slot.left() && placed.right() <= slot.right() + px(0.5));
-        prop_assert!(placed.top() >= slot.top() && placed.bottom() <= slot.bottom());
-    }
-}
-
-#[test]
-fn a_frame_without_a_size_is_placed_as_a_wide_picture() {
-    let slot = rect(0.0, 0.0, 1000.0, 700.0);
-    assert_eq!(picture_within(slot, 0, 0), picture_in(slot, 16.0 / 9.0));
-    assert_eq!(
-        picture_within(slot, 1080, 1920),
-        picture_in(slot, 1080.0 / 1920.0)
-    );
 }
 
 // ------------------------------------------------------------ a cut being built
@@ -298,95 +297,155 @@ fn a_card_goes_in_and_out_only_while_it_is_whole_in_sight() {
     assert!(!in_sight(rect(320.0, -400.0, 440.0, 248.0), view));
 }
 
-// ------------------------------------------------------------ choosing words
-
-#[test]
-fn a_drag_chooses_from_where_it_went_down_across_pieces() {
-    let mut chosen = Chosen::pressed("answer", 0, 2..2, Unit::Letter);
-    assert!(chosen.is_empty());
-    chosen.drag_to(Spot::new(2, 3), (Spot::new(2, 3), Spot::new(2, 3)));
-    assert_eq!(chosen.span(), (Spot::new(0, 2), Spot::new(2, 3)));
-    assert_eq!(chosen.within(0, 10), Some(2..10));
-    assert_eq!(chosen.within(1, 7), Some(0..7));
-    assert_eq!(chosen.within(2, 9), Some(0..3));
-    assert_eq!(chosen.within(3, 9), None);
-    // Dragged back before where it went down, it reaches back from there.
-    chosen.drag_to(Spot::new(0, 0), (Spot::new(0, 0), Spot::new(0, 0)));
-    assert_eq!(chosen.span(), (Spot::new(0, 0), Spot::new(0, 2)));
+proptest! {
+    #[test]
+    fn a_flight_lands_inside_the_projects_row(
+        x in 0f32..400.0,
+        y in 0f32..800.0,
+        width in 60f32..600.0,
+        height in 20f32..60.0,
+    ) {
+        let row = Bounds::new(point(px(x), px(y)), size(px(width), px(height)));
+        let landing = landing_in(row);
+        let (left, top) = kerf_editor::theme::motion::LANDING_INSET;
+        prop_assert_eq!(landing.origin, point(px(x + left), px(y + top)));
+        prop_assert_eq!(f32::from(landing.size.width), kerf_editor::theme::motion::LANDING_WIDTH);
+        prop_assert!((f32::from(landing.size.height) - (height - top * 2.0)).abs() < 1e-3);
+        // Inside the row, at its start.
+        prop_assert!(landing.origin.x + landing.size.width <= row.origin.x + row.size.width);
+        prop_assert!(landing.origin.y + landing.size.height <= row.origin.y + row.size.height + px(1e-3));
+    }
 }
 
 #[test]
-fn a_drag_after_a_double_click_goes_by_whole_words() {
-    // "Cut these together": "these" chosen, then the pointer on "Cut".
-    let mut chosen = Chosen::pressed("request", 0, 4..9, Unit::Word);
-    chosen.drag_to(Spot::new(0, 1), (Spot::new(0, 0), Spot::new(0, 3)));
-    assert_eq!(chosen.span(), (Spot::new(0, 0), Spot::new(0, 9)));
-    // On to "together": the first word stays whole.
-    chosen.drag_to(Spot::new(0, 12), (Spot::new(0, 10), Spot::new(0, 18)));
-    assert_eq!(chosen.span(), (Spot::new(0, 4), Spot::new(0, 18)));
-}
-
-#[test]
-fn what_is_copied_keeps_the_breaks_between_pieces() {
-    let pieces = [
-        (0, "I cut 3 clips together.", "\n\n"),
-        (1, "one", "\n\n"),
-        (2, "two", "\n"),
-    ];
-    assert_eq!(
-        copied(&pieces, (Spot::new(0, 6), Spot::new(2, 3))),
-        "3 clips together.\n\none\ntwo"
-    );
-    assert_eq!(copied(&pieces, (Spot::new(1, 1), Spot::new(1, 3))), "ne");
-    assert_eq!(copied(&pieces, (Spot::new(0, 3), Spot::new(0, 3))), "");
+fn the_light_over_a_title_rests_after_crossing() {
+    assert_eq!(shimmer_at(0.0, 0.7), Some(-0.3));
+    assert!(shimmer_at(0.69, 0.7).unwrap() > 1.2);
+    assert_eq!(shimmer_at(0.8, 0.7), None);
 }
 
 proptest! {
     #[test]
-    fn a_span_covers_whole_pieces_between_its_ends(
-        lens in prop::collection::vec(0usize..40, 1..6),
-        a in (0usize..6, 0usize..50),
-        b in (0usize..6, 0usize..50),
-    ) {
-        let (start, end) = {
-            let (a, b) = (Spot::new(a.0, a.1), Spot::new(b.0, b.1));
-            if a <= b { (a, b) } else { (b, a) }
-        };
-        for (piece, len) in lens.iter().enumerate() {
-            match within((start, end), piece, *len) {
-                Some(range) => {
-                    prop_assert!(range.start < range.end && range.end <= *len);
-                    if piece > start.piece && piece < end.piece {
-                        prop_assert_eq!(range, 0..*len);
-                    }
-                }
-                // A piece between the ends is covered whole, if it has words.
-                None if piece > start.piece && piece < end.piece => prop_assert_eq!(*len, 0),
-                None => {}
-            }
+    fn the_curve_only_goes_forward(a in 0.0f32..1.0, b in 0.0f32..1.0) {
+        let (low, high) = if a < b { (a, b) } else { (b, a) };
+        prop_assert!(ease(low) <= ease(high) + 1e-4);
+        prop_assert!((0.0..=1.0001).contains(&ease(a)));
+    }
+
+    #[test]
+    fn a_tween_stays_between_where_it_was_and_where_it_goes(from in -500.0f32..500.0, to in -500.0f32..500.0, ms in 0u64..2000) {
+        let start = Instant::now();
+        let mut tween = Tween::at(from);
+        tween.go_at(to, Duration::from_millis(850), start);
+        let value = tween.value_at(start + Duration::from_millis(ms));
+        let (low, high) = if from < to { (from, to) } else { (to, from) };
+        prop_assert!(value >= low - 0.5 && value <= high + 0.5);
+    }
+}
+
+#[test]
+fn the_working_dot_pulses_down_and_back() {
+    assert!((pulse_level(0.0) - 1.0).abs() < 1e-6);
+    assert!((pulse_level(1.0) - 1.0).abs() < 1e-6);
+    assert!((pulse_level(0.5) - 0.35).abs() < 1e-6);
+    for step in 0..=24 {
+        let level = pulse_level(step as f32 / 24.0);
+        assert!((0.35 - 1e-6..=1.0 + 1e-6).contains(&level));
+    }
+}
+
+#[test]
+fn going_home_travels_whole_then_fades_where_it_landed() {
+    let (start, clear) = home_flight_at(Duration::ZERO).unwrap();
+    assert_eq!((start, clear), (0.0, 1.0));
+    let stage = kerf_editor::theme::motion::STAGE;
+    let land = kerf_editor::theme::motion::FLIGHT_LAND;
+    let (there, clear) = home_flight_at(stage).unwrap();
+    assert!((there - 1.0).abs() < 1e-6 && (clear - 1.0).abs() < 1e-6);
+    let (_, fading) = home_flight_at(stage + land / 2).unwrap();
+    assert!(fading > 0.0 && fading < 1.0);
+    assert_eq!(home_flight_at(stage + land), None);
+}
+
+#[test]
+fn the_compare_line_sweeps_there_and_back_and_holds_still_without_motion() {
+    let from = compare_at(Duration::ZERO, false);
+    let half = compare_at(Duration::from_millis(3400), false);
+    let round = compare_at(Duration::from_millis(6800), false);
+    assert!((from - 0.28).abs() < 1e-4);
+    assert!((half - 0.78).abs() < 1e-4);
+    assert!((round - 0.28).abs() < 1e-4);
+    for ms in (0..13_600).step_by(170) {
+        let at = compare_at(Duration::from_millis(ms), false);
+        assert!((0.28 - 1e-4..=0.78 + 1e-4).contains(&at));
+    }
+    assert_eq!(compare_at(Duration::from_millis(1234), true), 0.28);
+}
+
+#[test]
+fn the_light_over_a_working_title_moves_in_steps() {
+    let steps = sidebar::TITLE_SHIMMER_STEPS as usize;
+    assert_eq!(sidebar::shimmer_step(0.0), 0.0);
+    assert_eq!(
+        sidebar::shimmer_step(0.001),
+        sidebar::shimmer_step(1.0 / steps as f32 - 0.001)
+    );
+    assert!(sidebar::shimmer_step(1.0) < 1.0);
+    let mut seen: Vec<f32> = (0..10_000)
+        .map(|at| sidebar::shimmer_step(at as f32 / 10_000.0))
+        .collect();
+    seen.dedup();
+    assert_eq!(seen.len(), steps);
+}
+
+#[test]
+fn a_finished_exports_frame_crosses_fading_then_fades_where_it_lands() {
+    let (along, opacity) = export_flight_at(Duration::ZERO).unwrap();
+    assert_eq!(along, 0.0);
+    assert!((opacity - 0.9).abs() < 1e-4);
+    let (along, opacity) = export_flight_at(kerf_editor::theme::motion::FLIGHT).unwrap();
+    assert!((along - 1.0).abs() < 1e-4);
+    assert!((opacity - 0.2).abs() < 1e-4);
+    let (_, opacity) = export_flight_at(
+        kerf_editor::theme::motion::FLIGHT + kerf_editor::theme::motion::FLIGHT_LAND / 2,
+    )
+    .unwrap();
+    assert!((opacity - 0.1).abs() < 1e-3);
+    assert!(export_flight_at(
+        kerf_editor::theme::motion::FLIGHT + kerf_editor::theme::motion::FLIGHT_LAND
+    )
+    .is_none());
+}
+
+proptest! {
+    #[test]
+    fn the_frame_never_brightens_and_ends_where_it_lands(ms in 0u64..1200) {
+        let now = Duration::from_millis(ms);
+        let later = now + Duration::from_millis(16);
+        if let (Some((_, now)), Some((_, later))) = (export_flight_at(now), export_flight_at(later)) {
+            prop_assert!(later <= now + 1e-6);
         }
+        let from = Bounds::new(point(px(600.0), px(200.0)), size(px(640.0), px(360.0)));
+        let to = Bounds::new(point(px(12.0), px(118.0)), size(px(44.0), px(26.0)));
+        prop_assert_eq!(lerp_bounds(from, to, 0.0), from);
+        prop_assert_eq!(lerp_bounds(from, to, 1.0), to);
     }
 
     #[test]
-    fn copying_everything_joins_every_piece(words in prop::collection::vec("[a-z ]{0,12}", 1..6)) {
-        let pieces: Vec<(usize, &str, &str)> =
-            words.iter().enumerate().map(|(at, words)| (at, words.as_str(), "\n")).collect();
-        let last = pieces.len() - 1;
-        let all = copied(&pieces, (Spot::new(0, 0), Spot::new(last, words[last].len())));
-        let expected: Vec<&str> = words.iter().map(String::as_str).filter(|words| !words.is_empty()).collect();
-        prop_assert_eq!(all, expected.join("\n"));
-    }
-
-    #[test]
-    fn a_word_drag_always_keeps_the_first_word(
-        first in (0usize..4, 0usize..20, 0usize..10),
-        here in (0usize..4, 0usize..20, 0usize..10),
+    fn the_picture_flies_from_inside_the_stage_at_its_own_shape(
+        width in 200f32..2000.0,
+        height in 200f32..1400.0,
+        frame_w in 16u32..4000,
+        frame_h in 16u32..4000,
     ) {
-        let first = (Spot::new(first.0, first.1), Spot::new(first.0, first.1 + first.2));
-        let here = (Spot::new(here.0, here.1), Spot::new(here.0, here.1 + here.2));
-        let (anchor, head) = stretch(first, here);
-        let (start, end) = if anchor <= head { (anchor, head) } else { (head, anchor) };
-        prop_assert!(start <= first.0 && end >= first.1);
-        prop_assert!(start <= here.0 || end >= here.1);
+        let slot = Bounds::new(point(px(400.0), px(80.0)), size(px(width), px(height)));
+        let picture = picture_within(slot, frame_w, frame_h);
+        let (w, h) = (f32::from(picture.size.width), f32::from(picture.size.height));
+        prop_assert!(f32::from(picture.origin.x) >= 400.0 - 0.01);
+        prop_assert!(f32::from(picture.origin.y) >= 80.0 - 0.01);
+        prop_assert!(f32::from(picture.origin.x) + w <= 400.0 + width + 0.01);
+        prop_assert!(f32::from(picture.origin.y) + h <= 80.0 + height + 0.01);
+        let aspect = frame_w as f32 / frame_h as f32;
+        prop_assert!(((w / h) - aspect).abs() / aspect < 1e-3);
     }
 }

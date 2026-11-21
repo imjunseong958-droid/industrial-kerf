@@ -1,22 +1,22 @@
-//! The timeline's own logic, through the public API: what a proposal
-//! changes and how its band reads, the times Kerf names, a hand-drawn
-//! signal's keys, track heights, the rubber band's scale, the zoom slider,
-//! the selection's lead, tools and what clips say of their media.
+//! The timeline: tracks and clips, the ruler and zoom, selection and tools, proposal bands, and the keys drawn on a clip.
 
 use kerf_editor::model::{
-    default_targets, focus_seconds, proposal_changes, signal_keys, source_targets, timecode,
-    toggle_target, GainKey, ProposalBand, Snapshot, Timeline, TrackKind,
+    default_targets, proposal_changes, signal_keys, source_targets, toggle_target, GainKey,
+    Proposal, ProposalBand, ProposalVersion, Snapshot, Timeline, TrackKind,
 };
 use kerf_editor::store::MediaActivity;
+use kerf_editor::theme::{layout, motion};
 use kerf_editor::timeline::{
-    activity_label, add_gain_key, band_line, extend, gain_at, gain_y, signal_at, signal_points,
-    stepped_height, zoom_of_share, zoom_share, Tool, TrackHeights, GAIN_CEILING, GAIN_FLOOR,
+    activity_label, add_gain_key, band_line, extend, gain_at, gain_y, shown_version, signal_at,
+    signal_points, stepped_height, strip_has_transport, watch_look, watched_clips, zoom_of_share,
+    zoom_share, ClipWatch, StripFit, Tool, TrackHeights, WatchLook, GAIN_CEILING, GAIN_FLOOR,
     TRACK_LEAST, TRACK_MOST, TRACK_STEPS,
 };
 use proptest::prelude::*;
 use serde_json::json;
-use std::collections::BTreeMap;
-use std::time::Instant;
+use std::cell::Cell;
+use std::collections::{BTreeMap, HashSet};
+use std::time::{Duration, Instant};
 
 fn timeline(value: serde_json::Value) -> Timeline {
     Timeline::from_value(&value)
@@ -89,56 +89,7 @@ fn a_proposal_reads_as_what_it_moves_trims_adds_and_takes_out() {
     assert_eq!(ProposalBand::of("p2", "Kerf", &current, &current), None);
 }
 
-#[test]
-fn a_snapshot_keeps_every_open_proposals_timeline_and_its_versions() {
-    let cut = json!({"fps": 24.0, "tracks": [{"id": "V1", "type": "video", "clips": [
-        {"id": "z", "timelineStart": 0.0, "duration": 1.0, "startFrame": 0, "durationFrames": 24}
-    ]}]});
-    let snapshot = Snapshot::from_value(&json!({
-        "timeline": {"fps": 24.0, "tracks": []},
-        "proposals": [{"proposalId": "p2", "status": "pending", "version": 2,
-            "versions": [{"version": 1, "proposalId": "p1"}, {"version": 2, "proposalId": "p2"}]}],
-        "proposalTimelines": {"p1": cut, "p2": {"fps": 24.0, "tracks": []}}
-    }));
-    let proposal = &snapshot.proposals[0];
-    assert_eq!(proposal.versions.len(), 2);
-    // The version the pinned card shows, else its own.
-    assert!(snapshot
-        .timeline_of(proposal, Some("p1"))
-        .unwrap()
-        .has_clips());
-    assert!(!snapshot.timeline_of(proposal, None).unwrap().has_clips());
-    assert!(!snapshot
-        .timeline_of(proposal, Some("elsewhere"))
-        .unwrap()
-        .has_clips());
-}
-
-#[test]
-fn kerf_names_times_in_seconds_frames_or_timecode() {
-    assert_eq!(focus_seconds(&json!(4.5), 24.0, 0.0), Some(4.5));
-    assert_eq!(focus_seconds(&json!("4.5s"), 24.0, 0.0), Some(4.5));
-    assert_eq!(focus_seconds(&json!("4.5"), 24.0, 0.0), Some(4.5));
-    assert_eq!(focus_seconds(&json!("12f"), 24.0, 0.0), Some(0.5));
-    assert_eq!(focus_seconds(&json!("00:01:02:12"), 24.0, 0.0), Some(62.5));
-    // A timecode counts from the sequence's start.
-    assert_eq!(
-        focus_seconds(&json!("01:00:02:00"), 25.0, 3600.0),
-        Some(2.0)
-    );
-    for nonsense in [json!("soon"), json!(null), json!("1:2"), json!(-3.0)] {
-        assert_eq!(focus_seconds(&nonsense, 24.0, 0.0), None, "{nonsense}");
-    }
-}
-
 proptest! {
-    /// A timecode the editor writes reads back as the frame it names.
-    #[test]
-    fn a_timecode_written_reads_back(frames in 0i64..400_000, fps in prop::sample::select(vec![24.0, 25.0, 30.0, 60.0])) {
-        let seconds = frames as f64 / fps;
-        let read = focus_seconds(&json!(timecode(seconds, fps)), fps, 0.0).unwrap();
-        prop_assert!((read - seconds).abs() < 0.5 / fps);
-    }
 
     /// The keys kept of a drawn line start and end where it does, go in
     /// order, and every frame drawn is within reach of the line through them.
@@ -559,3 +510,288 @@ fn clips_say_how_their_media_stands() {
     .unwrap();
     assert_eq!(making, "Making take 2 · 0:00");
 }
+
+// ---------------------------------------------------------------- the strip's transport
+
+#[test]
+fn the_strip_carries_the_transport_only_while_the_picture_is_closed() {
+    assert!(strip_has_transport(Some(false)));
+    assert!(!strip_has_transport(Some(true)));
+    // Until the window says, the stage has it.
+    assert!(!strip_has_transport(None));
+}
+
+/// A strip as wide as the window's at 1200 points with the picture pane
+/// closed, and its pieces: what the rest needs, the cut's length.
+const STRIP_REST: f32 = 300.0;
+
+const STRIP_LENGTH: f32 = 78.0;
+
+#[test]
+fn a_narrow_strip_lets_go_of_the_slider_then_the_ends_then_the_length() {
+    let all = StripFit::ALL;
+    let need = |fit: StripFit| STRIP_REST + fit.width(true, STRIP_LENGTH);
+    // Room for all of it: all of it.
+    assert_eq!(all.within(need(all), STRIP_REST, true, STRIP_LENGTH), all);
+    // A point short: the slider goes, − and + stay.
+    let fit = all.within(need(all) - 1.0, STRIP_REST, true, STRIP_LENGTH);
+    assert_eq!(fit, StripFit::STEPS[1]);
+    assert!(!fit.slider && fit.transport_ends && fit.length);
+    // Then the transport's ends, then the cut's length.
+    let fit = all.within(
+        need(StripFit::STEPS[1]) - 1.0,
+        STRIP_REST,
+        true,
+        STRIP_LENGTH,
+    );
+    assert_eq!(fit, StripFit::STEPS[2]);
+    let fit = all.within(
+        need(StripFit::STEPS[2]) - 1.0,
+        STRIP_REST,
+        true,
+        STRIP_LENGTH,
+    );
+    assert_eq!(fit, StripFit::STEPS[3]);
+    // Narrower than even that: all let go, and the rest is cut off.
+    assert_eq!(
+        all.within(10.0, STRIP_REST, true, STRIP_LENGTH),
+        StripFit::STEPS[3]
+    );
+    // Without the transport its ends take no room: from the slider on, the
+    // length is next.
+    assert_eq!(
+        StripFit::STEPS[1].width(false, STRIP_LENGTH),
+        StripFit::STEPS[2].width(false, STRIP_LENGTH)
+    );
+    // Back with room: shown again only with some to spare.
+    let tight = StripFit::STEPS[3].within(need(all), STRIP_REST, true, STRIP_LENGTH);
+    assert_eq!(tight, StripFit::STEPS[1]);
+    let spare = need(all) + layout::STRIP_REGROW;
+    assert_eq!(
+        StripFit::STEPS[3].within(spare, STRIP_REST, true, STRIP_LENGTH),
+        all
+    );
+}
+
+fn any_strip_fit() -> impl Strategy<Value = StripFit> {
+    (0usize..4).prop_map(|step| StripFit::STEPS[step])
+}
+
+proptest! {
+    #[test]
+    fn a_strip_settles_on_the_most_that_fits(
+        now in any_strip_fit(),
+        room in 0f32..1200.0,
+        more in 0f32..400.0,
+        rest in 0f32..900.0,
+        transport in any::<bool>(),
+        length in 0f32..120.0,
+    ) {
+        let fit = now.within(room, rest, transport, length);
+        let step = StripFit::STEPS.iter().position(|step| *step == fit).unwrap();
+        // It fits, unless nothing does and all of it is let go.
+        prop_assert!(rest + fit.width(transport, length) <= room || step == 3);
+        // Nothing more would: what it shows more than now needs the spare too.
+        let now_step = StripFit::STEPS.iter().position(|step| *step == now).unwrap();
+        for (earlier, other) in StripFit::STEPS.iter().enumerate().take(step) {
+            let spare = if earlier < now_step { layout::STRIP_REGROW } else { 0.0 };
+            prop_assert!(rest + other.width(transport, length) + spare > room);
+        }
+        // Drawn again at the same width, it stays as it is: no showing and
+        // hiding by turns.
+        prop_assert_eq!(fit.within(room, rest, transport, length), fit);
+        // More room never shows less.
+        let wider = now.within(room + more, rest, transport, length);
+        let wider_step = StripFit::STEPS.iter().position(|step| *step == wider).unwrap();
+        prop_assert!(wider_step <= step);
+    }
+}
+
+fn proposal(id: &str, versions: &[&str]) -> Proposal {
+    Proposal {
+        proposal_id: id.to_owned(),
+        status: "pending".to_owned(),
+        versions: versions
+            .iter()
+            .enumerate()
+            .map(|(at, version)| ProposalVersion {
+                version: at as u32 + 1,
+                proposal_id: (*version).to_owned(),
+                base_revision: 0,
+            })
+            .collect(),
+        ..Proposal::default()
+    }
+}
+
+#[test]
+fn the_cut_kerf_builds_shows_its_newest_version_over_the_one_previewing() {
+    // v3 is the newest; v1 plays as the preview, v2's card is pinned.
+    let cut = proposal("v3", &["v1", "v2", "v3"]);
+    assert_eq!(
+        shown_version(&cut, Some("v3"), Some("v1"), Some("v2")),
+        Some("v3")
+    );
+    // Once Kerf stops, what previews shows again, else the pinned card's.
+    assert_eq!(
+        shown_version(&cut, None, Some("v1"), Some("v2")),
+        Some("v1")
+    );
+    assert_eq!(shown_version(&cut, None, None, Some("v2")), Some("v2"));
+    assert_eq!(shown_version(&cut, None, None, None), None);
+    // Another proposal built, previewed or pinned does not move this one.
+    let other = proposal("w2", &["w1", "w2"]);
+    assert_eq!(shown_version(&other, Some("v3"), Some("v1"), None), None);
+    assert_eq!(
+        shown_version(&other, Some("v3"), Some("w1"), None),
+        Some("w1")
+    );
+}
+
+proptest! {
+    /// Whatever is asked, what is shown is a version of the proposal, and
+    /// the first of building, previewing and pinned that is one.
+    #[test]
+    fn what_shows_is_always_a_version_of_its_proposal(
+        versions in 1usize..5,
+        building in proptest::option::of(0usize..8),
+        previewing in proptest::option::of(0usize..8),
+        pinned in proptest::option::of(0usize..8),
+    ) {
+        let ids: Vec<String> = (0..8).map(|at| format!("p{at}")).collect();
+        let own: Vec<&str> = ids[..versions].iter().map(String::as_str).collect();
+        let cut = proposal(own[versions - 1], &own);
+        let pick = |at: Option<usize>| at.map(|at| ids[at].as_str());
+        let shown = shown_version(&cut, pick(building), pick(previewing), pick(pinned));
+        let first = [building, previewing, pinned]
+            .into_iter()
+            .flatten()
+            .find(|at| *at < versions)
+            .map(|at| ids[at].as_str());
+        prop_assert_eq!(shown, first);
+    }
+}
+
+// ------------------------------------------------------- watching changes
+
+fn clip(id: &str, start: f64, duration: f64) -> serde_json::Value {
+    json!({"id": id, "timelineStart": start, "duration": duration,
+           "startFrame": (start * 24.0) as i64, "durationFrames": (duration * 24.0) as i64,
+           "enabled": true})
+}
+
+fn reel_snapshot() -> Snapshot {
+    let program = json!({"fps": 24.0, "duration": 12.0, "tracks": [
+        {"id": "V1", "type": "video", "clips": [clip("a", 0.0, 4.0), clip("b", 4.0, 4.0), clip("d", 8.0, 4.0)]},
+        {"id": "A1", "type": "audio", "clips": [clip("s", 0.0, 12.0)]}
+    ]});
+    // v1 trims a; v2 also takes b out and adds c.
+    let first = json!({"fps": 24.0, "tracks": [
+        {"id": "V1", "type": "video", "clips": [clip("a", 0.0, 3.0), clip("b", 4.0, 4.0), clip("d", 8.0, 4.0)]},
+        {"id": "A1", "type": "audio", "clips": [clip("s", 0.0, 12.0)]}
+    ]});
+    let second = json!({"fps": 24.0, "tracks": [
+        {"id": "V1", "type": "video", "clips": [clip("a", 0.0, 3.0), clip("c", 4.0, 4.0), clip("d", 8.0, 4.0)]},
+        {"id": "A1", "type": "audio", "clips": [clip("s", 0.0, 12.0)]}
+    ]});
+    Snapshot::from_value(&json!({
+        "timeline": program,
+        "revision": 7,
+        "proposals": [{"proposalId": "p2", "status": "pending", "version": 2,
+            "versions": [{"version": 1, "proposalId": "p1"}, {"version": 2, "proposalId": "p2"}]}],
+        "proposalTimelines": {"p1": first, "p2": second}
+    }))
+}
+
+fn set(ids: &[&str]) -> HashSet<String> {
+    ids.iter().map(|id| (*id).to_owned()).collect()
+}
+
+#[test]
+fn a_reel_watches_the_clips_its_proposal_changes() {
+    let snapshot = reel_snapshot();
+    // What the version played changes, as its card lists it: never d or s.
+    assert_eq!(watched_clips(&snapshot, "p2"), set(&["a", "b", "c"]));
+    assert_eq!(watched_clips(&snapshot, "p1"), set(&["a"]));
+    assert!(watched_clips(&snapshot, "elsewhere").is_empty());
+}
+
+#[test]
+fn watched_clips_rise_and_the_rest_dim_then_all_settle_back() {
+    let stage = motion::STAGE;
+    let t0 = Instant::now();
+    let asked = Cell::new(0);
+    let find = || {
+        asked.set(asked.get() + 1);
+        set(&["a"])
+    };
+    let mut watch = ClipWatch::default();
+    assert_eq!(watch.amount_at(t0), 0.0);
+    watch.follow_at(Some(("p1", 7)), find, false, t0);
+    assert_eq!(watch.clips(), &set(&["a"]));
+    // From the lanes, over STAGE, eased (more than half way at half time).
+    assert_eq!(watch.amount_at(t0), 0.0);
+    let half = watch.amount_at(t0 + stage / 2);
+    assert!(half > 0.5 && half < 1.0, "{half}");
+    assert_eq!(watch.amount_at(t0 + stage), 1.0);
+    assert!(watch.running_at(t0 + stage / 2));
+    assert!(!watch.running_at(t0 + stage));
+    // The same reel at the same revision asks for its clips once.
+    let again = || {
+        asked.set(asked.get() + 1);
+        set(&["a"])
+    };
+    watch.follow_at(Some(("p1", 7)), again, false, t0 + stage);
+    assert_eq!(asked.get(), 1);
+    let look = watch_look(watch.amount_at(t0 + stage), true, false);
+    assert_eq!(look.lift, motion::CLIP_LIFT);
+    // The reel ends: back down over STAGE, the clips kept until it has.
+    let t1 = t0 + stage;
+    watch.follow_at(None, HashSet::new, false, t1);
+    assert_eq!(watch.amount_at(t1), 1.0);
+    watch.follow_at(None, HashSet::new, false, t1 + stage / 2);
+    assert!(watch.amount_at(t1 + stage / 2) < 0.5);
+    assert_eq!(watch.clips(), &set(&["a"]));
+    watch.follow_at(None, HashSet::new, false, t1 + stage);
+    assert_eq!(watch.amount_at(t1 + stage), 0.0);
+    assert!(watch.clips().is_empty());
+    // Another reel's clips rise from their lanes anew.
+    let t2 = t1 + stage * 2;
+    watch.follow_at(Some(("p2", 7)), || set(&["a", "b", "c"]), false, t2);
+    assert_eq!(watch.amount_at(t2), 0.0);
+    // Under Reduce Motion, all at once: up as it starts, down as it ends.
+    let t3 = t2 + Duration::from_millis(10);
+    let mut still = ClipWatch::default();
+    still.follow_at(Some(("p1", 7)), || set(&["a"]), true, t3);
+    assert_eq!(still.amount_at(t3), 1.0);
+    assert!(!still.running_at(t3));
+    still.follow_at(None, HashSet::new, true, t3);
+    assert_eq!(still.amount_at(t3), 0.0);
+    assert!(still.clips().is_empty());
+}
+
+proptest! {
+    #[test]
+    fn a_watched_clip_rises_at_most_its_lift_and_the_rest_only_dim(
+        amount in -0.5f32..1.5,
+        audio in any::<bool>(),
+    ) {
+        let shown = amount.clamp(0.0, 1.0);
+        let watched = watch_look(amount, true, audio);
+        let other = watch_look(amount, false, audio);
+        prop_assert!((0.0..=motion::CLIP_LIFT).contains(&watched.lift));
+        // A sound clip stays on its lane, ringed; a picture's rises over its glow.
+        if audio {
+            prop_assert_eq!(watched.lift, 0.0);
+            prop_assert_eq!(watched.glow, 0.0);
+        } else {
+            prop_assert!((watched.lift - motion::CLIP_LIFT * shown).abs() < 1e-4);
+            prop_assert_eq!(watched.glow, shown);
+        }
+        prop_assert_eq!(watched.ring, shown);
+        prop_assert_eq!(watched.dim, 0.0);
+        prop_assert_eq!(other, WatchLook { dim: shown, ..WatchLook::default() });
+    }
+}
+
+// ------------------------------------------------------------- track heights
