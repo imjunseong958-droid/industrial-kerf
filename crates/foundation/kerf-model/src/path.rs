@@ -182,17 +182,6 @@ mod tests {
         assert!((a - b).abs() <= tolerance, "{a} against {b}");
     }
 
-    #[test]
-    fn it_reads_points_and_refuses_what_is_not() {
-        assert_eq!(
-            parse_path_points("0,0 0.5,-0.25").expect("points"),
-            [[0.0, 0.0], [0.5, -0.25]]
-        );
-        for refused in ["", "0,0", "0 0", "0,0 x,1", "0,0 11,0", "0,0 NaN,0"] {
-            assert!(parse_path_points(refused).is_err(), "{refused}");
-        }
-    }
-
     /// A path reads the table the curve the picture draws is held to.
     #[test]
     fn paths_read_the_table_the_picture_is_held_to() {

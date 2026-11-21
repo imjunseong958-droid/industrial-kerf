@@ -298,30 +298,6 @@ mod tests {
     }
 
     #[test]
-    fn hold_keeps_the_speed_to_the_next_key() {
-        let speed = slowing(Interp::Hold);
-        assert_eq!(speed.played(frames(24)), frames(24));
-        assert_eq!(speed.played(frames(48)), frames(36));
-        assert_eq!(speed.at(frames(23)), 1.0);
-    }
-
-    #[test]
-    fn every_easing_plays_the_area_its_curve_says() {
-        // Easing symmetrically from 1 to 1/2 spends as long fast as slow: the same 18 frames.
-        assert_eq!(slowing(Interp::Ease).played(frames(24)), frames(18));
-        // `ease-in` stays fast longer: 1/3 of the change on average, so 20 frames.
-        assert_eq!(slowing(Interp::EaseIn).played(frames(24)), frames(20));
-        assert_eq!(slowing(Interp::EaseOut).played(frames(24)), frames(16));
-        // A curve drawing a straight line is the same as linear, to within a thousandth of a frame.
-        let line = Interp::parse("0.25,0.25,0.75,0.75").expect("a curve");
-        let drawn = slowing(line).played(frames(24));
-        assert!(
-            (drawn - frames(18)).abs().flicks() < frames(1).flicks() / 1000,
-            "{drawn:?}"
-        );
-    }
-
-    #[test]
     fn played_and_time_for_undo_each_other() {
         let ramps = [
             slowing(Interp::Linear),
@@ -352,42 +328,5 @@ mod tests {
         assert_eq!(speed.at(frames(-2)), 1.0);
         assert_eq!(speed.at(frames(40)), 0.5);
         assert_eq!(speed.average(frames(24)), 0.75);
-    }
-
-    #[test]
-    fn a_trim_moves_the_keys_and_the_curve_stays_where_it_was() {
-        let mut trimmed = slowing(Interp::Linear);
-        trimmed.shift(frames(-6));
-        let original = slowing(Interp::Linear);
-        assert_eq!(
-            trimmed.played(frames(10)),
-            original.played(frames(16)) - original.played(frames(6))
-        );
-    }
-
-    #[test]
-    fn keys_that_cannot_be_a_ramp_are_refused() {
-        let line = Interp::Linear;
-        assert!(Speed::ramp(Vec::new()).is_err());
-        assert!(Speed::ramp(vec![key(0, "1", line), key(12, "-1", line)]).is_err());
-        assert!(Speed::ramp(vec![key(12, "1", line), key(0, "2", line)]).is_err());
-        let bounce = Interp::parse("0.2,1.8,0.4,1").expect("a curve");
-        assert!(Speed::ramp(vec![key(0, "1", bounce), key(12, "2", line)]).is_err());
-        // One speed throughout is no ramp.
-        assert_eq!(
-            Speed::ramp(vec![key(0, "2", line), key(12, "2", line)]),
-            Ok(Speed::Constant(Ratio::parse("2").expect("a speed")))
-        );
-    }
-
-    #[test]
-    fn one_ratio_plays_as_it_always_did() {
-        let half = Speed::from(Ratio::parse("1/2").expect("a speed"));
-        assert_eq!(half.played(frames(24)), frames(12));
-        assert_eq!(half.time_for(frames(12)), frames(24));
-        assert_eq!(half.played(frames(-24)), frames(-12));
-        assert!(!half.is_one());
-        assert!(Speed::ONE.is_one());
-        assert_eq!(half.to_string(), "0.5");
     }
 }

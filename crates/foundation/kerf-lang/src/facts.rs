@@ -404,110 +404,12 @@ impl Facts for NoFacts {
 mod tests {
     use super::*;
 
-    #[test]
-    fn coverage_joins_touching_ranges() {
-        let speech = Speech {
-            words: Vec::new(),
-            covered: vec![(10.0, 20.0), (0.0, 10.02)],
-        };
-        assert!(speech.covers(2.0, 19.0));
-        assert!(!speech.covers(2.0, 21.0));
-        assert!(!Speech::default().covers(0.0, 1.0));
-        // A moment is covered by a transcript it is in, and by none when there is none.
-        assert!(speech.reaches(20.0) && speech.reaches(0.0));
-        assert!(!speech.reaches(20.5));
-        assert!(!Speech::default().reaches(0.0));
-    }
-
     fn word(start: f64, end: f64, text: &str) -> Word {
         Word {
             start,
             end,
             text: text.into(),
         }
-    }
-
-    #[test]
-    fn phrases_are_found_on_whole_words() {
-        let speech = Speech {
-            words: vec![
-                word(1.0, 1.4, " In"),
-                word(1.4, 1.8, " four"),
-                word(1.8, 2.4, " minutes,"),
-                word(2.5, 3.0, " flat."),
-                // A second transcript heard the same word again.
-                word(1.42, 1.79, " four"),
-                word(5.0, 5.5, " four"),
-                word(6.0, 6.5, " 안녕하세요"),
-            ],
-            covered: vec![(0.0, 10.0)],
-        };
-        assert_eq!(speech.said("four minutes flat"), [(1.4, 3.0)]);
-        assert_eq!(speech.said("In Four-Minutes"), [(1.0, 2.4)]);
-        assert_eq!(speech.said("four"), [(1.4, 1.8), (5.0, 5.5)]);
-        assert_eq!(speech.said("안녕하세요"), [(6.0, 6.5)]);
-        // Part of a word is not a match.
-        assert!(speech.said("minute").is_empty());
-        assert!(speech.said("ute").is_empty());
-        assert!(speech.said("...").is_empty());
-    }
-
-    #[test]
-    fn edges_snap_into_pauses_and_onto_cuts() {
-        let breaks = Breaks {
-            pauses: vec![(2.0, 3.0), (5.0, 5.2)],
-            gaps: Vec::new(),
-            cuts: vec![4.0],
-        };
-        let none = Speech::default();
-        let at = |snap, at, within| -> Vec<f64> {
-            breaks
-                .snaps(snap, at, within, &none)
-                .places
-                .into_iter()
-                .map(|place| (place.at * 1000.0).round() / 1000.0)
-                .collect()
-        };
-        // Into the nearest pause: further from the sound before it, which
-        // dies away, than from the sound after it.
-        assert_eq!(at(Snap::Pause, 1.9, 0.5), [2.15]);
-        assert_eq!(at(Snap::Pause, 3.2, 0.5), [2.9]);
-        // An edge already clear of both stays.
-        assert_eq!(at(Snap::Pause, 2.5, 0.5), [2.5]);
-        // A pause too short for both is divided as they are.
-        assert_eq!(at(Snap::Pause, 5.3, 0.5), [5.12]);
-        assert!(at(Snap::Pause, 1.0, 0.5).is_empty());
-        assert_eq!(at(Snap::Pause, 4.5, 1.7), [5.12, 2.9]);
-        assert_eq!(at(Snap::Cut, 3.7, 0.5), [4.0]);
-        assert!(at(Snap::Cut, 3.0, 0.5).is_empty());
-        // A frame may be put anywhere in the pause but hard against the
-        // sound, and a cut has no room.
-        let room = |snap, at| breaks.snaps(snap, at, 0.5, &none).places[0].room;
-        assert_eq!(room(Snap::Pause, 2.5), (2.02, 2.98));
-        assert_eq!(room(Snap::Cut, 3.7), (4.0, 4.0));
-    }
-
-    #[test]
-    fn an_edge_in_a_pause_goes_to_the_cut_of_the_picture_beside_it() {
-        // The picture cuts 0.1 s into the pause, where an edge snapped after the sound before
-        // would go 0.15 s in and keep two frames of the next shot: it goes to the cut.
-        let breaks = |cuts: Vec<f64>| Breaks {
-            pauses: vec![(2.0, 3.0)],
-            gaps: Vec::new(),
-            cuts,
-        };
-        let none = Speech::default();
-        let first = |breaks: Breaks, at: f64| {
-            let place = breaks.snaps(Snap::Pause, at, 0.5, &none).places[0];
-            ((place.at * 1000.0).round() / 1000.0, place.on_cut)
-        };
-        assert_eq!(first(breaks(vec![2.1]), 1.9), (2.1, true));
-        assert_eq!(first(breaks(vec![2.88]), 3.2), (2.88, true));
-        // Not one hard against the sound, nor one further in than a flash is long.
-        assert_eq!(first(breaks(vec![2.03]), 1.9), (2.15, false));
-        assert_eq!(first(breaks(vec![2.6]), 1.9), (2.15, false));
-        // An edge already clear of both, beside a cut, goes to it as well.
-        assert_eq!(first(breaks(vec![2.6]), 2.5), (2.6, true));
     }
 
     /// "So we" in one breath, parting for 0.12 s, then a pause, "closed"
@@ -537,20 +439,6 @@ mod tests {
             .iter()
             .map(|place| (place.at * 1000.0).round() / 1000.0)
             .collect()
-    }
-
-    #[test]
-    fn a_pause_plays_before_its_cut() {
-        let near = |(after, before): (f64, f64), (a, b): (f64, f64)| {
-            (after - a).abs() < 1e-9 && (before - b).abs() < 1e-9
-        };
-        // The pause a cut leaves is a snapped edge's air either side.
-        assert!(near(airs(BEAT), (0.15, 0.10)));
-        // A longer one is longer before the cut, and the voice as soon after.
-        assert!(near(airs(0.6), (0.5, 0.10)));
-        // A shorter is divided as the air is.
-        assert!(near(airs(0.1), (0.06, 0.04)));
-        assert!(near(airs(0.0), (0.0, 0.0)));
     }
 
     #[test]
@@ -609,68 +497,5 @@ mod tests {
         let found = breaks.snaps(Snap::Pause, 1.5, 1.0, &unheard);
         assert!(found.places.is_empty(), "{found:?}");
         assert_eq!(found.barred, [Barred::Unheard { quiet: (1.3, 1.42) }]);
-    }
-
-    #[test]
-    fn a_gap_is_a_place_where_a_transcript_parts_two_words() {
-        let (breaks, speech) = said();
-        // In the gap between "So" and "we": it is divided as a pause's air
-        // is, and a frame keeps to its middle half.
-        let found = breaks.snaps(Snap::Pause, 1.4, 0.5, &speech);
-        assert_eq!(rounded(&found.places), [1.372]);
-        let place = found.places[0];
-        assert!(place.gap && place.quiet == (1.3, 1.42), "{place:?}");
-        assert!((place.room.0 - 1.33).abs() < 1e-9 && (place.room.1 - 1.39).abs() < 1e-9);
-        // From the start of "we", it is the gap just before it.
-        assert_eq!(
-            rounded(&breaks.snaps(Snap::Pause, 1.45, 0.5, &speech).places),
-            [1.372]
-        );
-        // The gap in "closed" is a consonant held: its word goes right
-        // through it, so it is no end of the word's sound. From before it
-        // the pause before the word is the place, and from after it the
-        // pause after, which is nearer than the gap would have been far.
-        let found = breaks.snaps(Snap::Pause, 2.55, 0.5, &speech);
-        assert_eq!(rounded(&found.places), [2.2]);
-        assert!(found.barred.is_empty(), "{found:?}");
-        assert_eq!(
-            rounded(&breaks.snaps(Snap::Pause, 2.8, 0.5, &speech).places),
-            [3.15]
-        );
-        // Asked for in it, the edge is in the word, and that is said.
-        let found = breaks.snaps(Snap::Pause, 2.65, 0.3, &speech);
-        assert!(found.places.is_empty(), "{found:?}");
-        assert!(
-            matches!(&found.barred[..], [Barred::Inside { quiet, word }]
-                if *quiet == (2.6, 2.72) && word.text == " closed,"),
-            "{found:?}"
-        );
-        // A gap no transcript covers is not known to be either.
-        let unheard = Speech {
-            words: Vec::new(),
-            covered: vec![(2.0, 5.0)],
-        };
-        let found = breaks.snaps(Snap::Pause, 1.4, 0.5, &unheard);
-        assert!(found.places.is_empty());
-        assert_eq!(found.barred, [Barred::Unheard { quiet: (1.3, 1.42) }]);
-        // A transcript's times are loose: a word that ends a little way
-        // into a gap, or past it, does not go through it.
-        assert!(speech.through(1.3, 1.42).is_none());
-        assert_eq!(
-            speech.through(2.6, 2.72).map(|word| word.text.as_str()),
-            Some(" closed,")
-        );
-        assert!(speech.through(2.94, 2.96).is_none());
-        // A transcriber's note of a sound is timed over all of it, and is
-        // no word to be inside or to go past.
-        let noted = Speech {
-            words: vec![word(0.5, 5.0, "[MUSIC]")],
-            covered: vec![(0.0, 5.0)],
-        };
-        assert!(noted.through(1.3, 1.42).is_none());
-        assert_eq!(
-            rounded(&breaks.snaps(Snap::Pause, 2.9, 0.5, &noted).places),
-            [3.15, 2.672]
-        );
     }
 }

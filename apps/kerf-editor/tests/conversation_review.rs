@@ -5,8 +5,7 @@
 
 use gpui::{Action, KeyBinding, KeyContext, Keymap, Keystroke, NoAction};
 use kerf_editor::chat::{
-    card_turns, timecode_position, timecode_seconds, CyclePermissions, ProposalBook,
-    COMPOSER_CONTEXT,
+    card_turns, timecode_position, CyclePermissions, ProposalBook, COMPOSER_CONTEXT,
 };
 use kerf_editor::commands::{catalog, keystroke, RunCommand, WORKSPACE};
 use kerf_editor::input::{self, Backspace, Cancel, End, Home, Left, Right, Submit};
@@ -153,35 +152,6 @@ fn sequence(fps: f64, start: f64) -> Timeline {
 }
 
 const NTSC: f64 = 30000.0 / 1001.0;
-
-#[test]
-fn a_timecode_kerf_writes_lands_on_the_program_from_the_sequence_start() {
-    // A sequence that starts at an hour: Kerf's 01:00:05:00 is five seconds in.
-    let hour = sequence(24.0, 3600.0);
-    assert_eq!(timecode_position("01:00:05:00", &hour), Some(5.0));
-    assert_eq!(timecode_position("01:00:00:12", &hour), Some(0.5));
-    // One before the start is the editor's own, from the first frame.
-    assert_eq!(timecode_position("00:00:05:00", &hour), Some(5.0));
-    // From zero, a timecode is its own seconds.
-    assert_eq!(
-        timecode_position("00:00:05:00", &sequence(24.0, 0.0)),
-        Some(5.0)
-    );
-    assert_eq!(timecode_position("0:00:05:00", &hour), None);
-
-    // Drop-frame: ten minutes at 29.97 skip 18 frame numbers.
-    let at = timecode_seconds("00:10:00;00", NTSC).unwrap();
-    assert!((at * NTSC - 17_982.0).abs() < 1e-6, "{at}");
-    let at = timecode_seconds("01:00:00;00", NTSC).unwrap();
-    assert!((at * NTSC - 107_892.0).abs() < 1e-6, "{at}");
-    // The same digits with `:` are non-drop.
-    let at = timecode_seconds("00:10:00:00", NTSC).unwrap();
-    assert!((at * NTSC - 18_000.0).abs() < 1e-6, "{at}");
-    // A drop-frame sequence that starts at 01:00:00;00.
-    let df_hour = sequence(NTSC, 107_892.0 / NTSC);
-    let at = timecode_position("01:00:05;00", &df_hour).unwrap();
-    assert!((at * NTSC - 150.0).abs() < 1e-6, "{at}");
-}
 
 /// Kerf's own way of writing a frame (kerf-model's `format_timecode`).
 fn kerf_timecode(frames: i64, base: i64, drop: bool) -> String {

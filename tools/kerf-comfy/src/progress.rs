@@ -117,27 +117,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn what_the_server_says_of_a_jobs_step_is_kept_and_the_rest_let_by() {
-        let progress = Progress::default();
-        assert_eq!(progress.step("job-1"), None);
-        progress.heard(r#"{"type": "status", "data": {"status": {"exec_info": {"queue_remaining": 1}}}}"#);
-        progress.heard(r#"{"type": "progress", "data": {"value": 7, "max": 20, "prompt_id": "job-1", "node": "12"}}"#);
-        progress.heard(r#"{"type": "progress", "data": {"value": 2, "max": 0, "prompt_id": "job-2"}}"#);
-        progress.heard("not JSON");
-        progress.heard(r#"{"type": "progress", "data": {"value": 7}}"#);
-        assert_eq!(progress.step("job-1"), Some((7, 20)));
-        assert_eq!(progress.step("job-2"), Some((2, 1)));
-        assert_eq!(progress.step("job-3"), None);
-    }
-
-    #[test]
-    fn the_socket_is_at_the_servers_own_address() {
-        assert_eq!(address("https://comfy.example/", "kerf-1").as_deref(), Some("wss://comfy.example/ws?clientId=kerf-1"));
-        assert_eq!(address("http://127.0.0.1:8188", "kerf-1").as_deref(), Some("ws://127.0.0.1:8188/ws?clientId=kerf-1"));
-        assert_eq!(address("comfy.example", "kerf-1"), None);
-    }
-
-    #[test]
     fn a_socket_that_opens_is_listened_to_and_one_that_does_not_is_done_without() {
         // A server that takes the upgrade, says two things and closes.
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();

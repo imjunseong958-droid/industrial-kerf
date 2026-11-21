@@ -53,7 +53,7 @@ if ! grep -q -- --enable-gpl <<< "$buildconf" || ! grep -q -- --enable-version3 
 fi
 
 rm -rf "$out"
-mkdir -p "$stage/bin" "$stage/lib" "$stage/share/doc/industrial-kerf"
+mkdir -p "$stage/bin" "$stage/lib"
 
 # Optimized: the editor's live preview and its exports draw frames in kerf-bridge, which it
 # links. The FFmpeg in FFMPEG_DIR is the one they all link (ffmpeg-sys-next reads it).
@@ -61,7 +61,6 @@ cargo build --release --manifest-path apps/kerf-editor/Cargo.toml
 cargo build --release -p kerf-runtime --bin kerfd
 cargo build --release -p kerf-cli --bin kerf
 cargo build --release -p kerf-mcp --bin kerf-mcp
-cargo build --release -p kerf-guide
 
 # The editor looks beside itself for kerfd and kerf-mcp, and each of them for ffmpeg and
 # ffprobe (kerf-engine's ffmpeg.rs).
@@ -136,7 +135,7 @@ done < "$from_system"
 sort -u -o "$packages" "$packages"
 rm -f "$from_system"
 
-# The terms, the user guide, and where the source is.
+# The terms, and where the source is.
 cp LICENSE "$stage/LICENSE.txt"
 cp -R licenses "$stage/licenses"
 mkdir -p "$stage/fonts"
@@ -144,9 +143,6 @@ cp apps/kerf-editor/assets/fonts/*-LICENSE.txt "$stage/fonts/"
 cp "$ffmpeg/LICENSE.txt" "$stage/COPYING-GPLv3.txt"
 grep -q 'GNU GENERAL PUBLIC LICENSE' "$stage/COPYING-GPLv3.txt" || { echo "No GPL text in $ffmpeg/LICENSE.txt" >&2; exit 1; }
 printf '%s\n' "$buildconf" > "$stage/FFmpeg-BUILD.txt"
-# Help > Kerf User Guide opens it from bin/../share/doc/industrial-kerf.
-target/release/kerf-guide docs/user-guide.md "$stage/share/doc/industrial-kerf/user-guide.html" \
-    --version "$version" --link-base "https://github.com/imjunseong958-droid/industrial-kerf/blob/$commit/docs/"
 {
     cat apps/kerf-editor/packaging/linux/THIRD-PARTY.txt
     echo

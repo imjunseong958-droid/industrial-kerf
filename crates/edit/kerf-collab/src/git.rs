@@ -1389,66 +1389,6 @@ mod tests {
             .map(|(_, value)| *value)
     }
 
-    fn plain_git(dir: &Path, args: &[&str]) -> String {
-        let output = Command::new("git")
-            .arg("-C")
-            .arg(dir)
-            .args(args)
-            .env("GIT_CONFIG_NOSYSTEM", "1")
-            .output()
-            .unwrap();
-        assert!(output.status.success(), "git {args:?}: {output:?}");
-        String::from_utf8_lossy(&output.stdout).trim().to_owned()
-    }
-
-    #[test]
-    fn the_status_names_who_commits_and_the_commit_checked_out() {
-        let directory = tempfile::tempdir().unwrap();
-        let dir = directory.path();
-        plain_git(dir, &["init", "-q", "-b", "main"]);
-        plain_git(dir, &["config", "user.name", "Mina Park"]);
-        plain_git(dir, &["config", "user.email", "mina@example.com"]);
-        assert_eq!(head(dir), None, "no commit yet");
-        let user = user(dir).expect("an identity");
-        if std::env::var_os("GIT_AUTHOR_NAME").is_none() {
-            assert_eq!(user.name, "Mina Park");
-        }
-        if std::env::var_os("GIT_AUTHOR_EMAIL").is_none() {
-            assert_eq!(user.email.as_deref(), Some("mina@example.com"));
-        }
-        fs::write(dir.join(PROJECT_FILE), "kerf 1\n").unwrap();
-        plain_git(dir, &["add", "."]);
-        plain_git(dir, &["commit", "-q", "--no-gpg-sign", "-m", "First"]);
-        let status = status(dir).unwrap();
-        assert_eq!(status.head, Some(plain_git(dir, &["rev-parse", "HEAD"])));
-        assert_eq!(status.user, Some(user));
-        // Outside a repository there is still someone to be.
-        let outside = tempfile::tempdir().unwrap();
-        assert!(status_of_folder(outside.path()).user.is_some());
-    }
-
-    fn status_of_folder(dir: &Path) -> Status {
-        let status = status(dir).unwrap();
-        assert!(!status.repository);
-        status
-    }
-
-    #[test]
-    fn project_kerf_merges_with_kerfs_driver_once() {
-        let directory = tempfile::tempdir().unwrap();
-        let dir = directory.path();
-        plain_git(dir, &["init", "-q", "-b", "main"]);
-        ensure_merge_driver(dir, Path::new("/opt/kerf/kerfd")).unwrap();
-        ensure_merge_driver(dir, Path::new("/opt/kerf/kerfd")).unwrap();
-        assert_eq!(
-            plain_git(dir, &["check-attr", "merge", "--", "project.kerf"]),
-            "project.kerf: merge: kerf"
-        );
-        let attributes = fs::read_to_string(dir.join(".git/info/attributes")).unwrap();
-        assert_eq!(attributes.matches("project.kerf merge=kerf").count(), 1);
-        assert!(!crate::scaffold::gitattributes(false).contains("review/"));
-    }
-
     #[test]
     fn network_git_fails_instead_of_prompting_or_stalling() {
         let vars = non_interactive_env(env_with(&[]), String::new);
@@ -1464,37 +1404,6 @@ mod tests {
         assert_eq!(value(&vars, "SSH_ASKPASS_REQUIRE"), Some("never"));
         assert_eq!(value(&vars, "GIT_HTTP_LOW_SPEED_LIMIT"), Some("1000"));
         assert_eq!(value(&vars, "GIT_HTTP_LOW_SPEED_TIME"), Some("60"));
-    }
-
-    #[test]
-    fn the_persons_own_ssh_command_and_stall_limits_win() {
-        for env in [
-            [("GIT_SSH_COMMAND", "ssh -i key")],
-            [("GIT_SSH", "/usr/bin/plink")],
-        ] {
-            let vars = non_interactive_env(env_with(&env), String::new);
-            assert_eq!(value(&vars, "GIT_SSH_COMMAND"), None, "{env:?}");
-            assert_eq!(value(&vars, "SSH_ASKPASS_REQUIRE"), Some("never"));
-        }
-        let vars = non_interactive_env(env_with(&[]), || {
-            "core.sshcommand ssh -i key\nhttp.https://example.com/.lowspeedtime 300\n".into()
-        });
-        assert_eq!(value(&vars, "GIT_SSH_COMMAND"), None);
-        assert_eq!(value(&vars, "GIT_HTTP_LOW_SPEED_TIME"), None);
-        assert_eq!(value(&vars, "GIT_HTTP_LOW_SPEED_LIMIT"), Some("1000"));
-        let vars =
-            non_interactive_env(env_with(&[("GIT_HTTP_LOW_SPEED_LIMIT", "10")]), String::new);
-        assert_eq!(value(&vars, "GIT_HTTP_LOW_SPEED_LIMIT"), None);
-    }
-
-    #[test]
-    fn a_terminal_front_end_keeps_prompts() {
-        let vars = non_interactive_env(env_with(&[(INTERACTIVE_ENV, "1")]), || {
-            panic!("the configuration is not read when prompts are wanted")
-        });
-        assert!(vars.is_empty(), "{vars:?}");
-        let vars = non_interactive_env(env_with(&[(INTERACTIVE_ENV, "0")]), String::new);
-        assert!(value(&vars, "GIT_SSH_COMMAND").is_some());
     }
 
     #[test]

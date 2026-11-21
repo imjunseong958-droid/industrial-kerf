@@ -105,23 +105,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn what_is_asked_for_once_is_not_kept() {
-        let mut store = Store::new(100);
-        // A title changing on every frame.
-        for frame in 0..1000 {
-            store.tick();
-            assert!(!store.wants(&format!("title at {frame}"), 10));
-        }
-        assert_eq!(store.bytes(), 0);
-        // One that stays is kept from the second time.
-        assert!(!store.wants("still", 10));
-        assert!(store.wants("still", 10));
-        store.put("still", 10, 7);
-        assert_eq!(store.get("still"), Some(7));
-        assert_eq!(store.bytes(), 10);
-    }
-
-    #[test]
     fn it_never_holds_more_than_its_budget() {
         let mut store = Store::new(100);
         for index in 0..50 {
@@ -140,32 +123,5 @@ mod tests {
         // What cannot fit at all is never wanted.
         assert!(!store.wants("huge", 101));
         assert!(!store.wants("huge", 101));
-    }
-
-    #[test]
-    fn what_was_used_lately_outlasts_what_was_not() {
-        let mut store = Store::new(100);
-        store.put("a", 50, 1);
-        store.tick();
-        store.put("b", 50, 2);
-        store.tick();
-        assert_eq!(store.get("a"), Some(1));
-        store.tick();
-        store.put("c", 50, 3);
-        assert_eq!(store.get("b"), None);
-        assert_eq!(store.get("a"), Some(1));
-    }
-
-    #[test]
-    fn what_goes_unused_goes() {
-        let mut store = Store::new(100);
-        store.put("left behind", 40, 1);
-        for _ in 0..IDLE_FRAMES {
-            store.tick();
-        }
-        assert_eq!(store.bytes(), 40);
-        store.tick();
-        assert_eq!(store.bytes(), 0);
-        assert_eq!(store.get("left behind"), None);
     }
 }

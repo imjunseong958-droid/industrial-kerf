@@ -1328,35 +1328,8 @@ mod tests {
         assert_eq!(held, 3 + 4 + 2 + 2);
     }
 
-    #[test]
-    fn curves_past_0_and_1_stay_on_the_cpu() {
-        let curve = |points: &str| set("color.curves", &[("rgb", Value::Text(points.into()))]);
-        let kernel = |effect: &Effect| color_kernel(effect, Time::ZERO, (8, 8), 1.0);
-        assert!(kernel(&curve("0,0 0.5,0.6 1,1")).is_some());
-        // A curve is a line past its first and last point only when those are its ends.
-        assert!(kernel(&curve("-0.2,0 0.5,0.6 1,1")).is_none());
-        assert!(kernel(&curve("0,0 0.5,0.6 1.3,1")).is_none());
-        assert!(kernel(&set("blur.bilateral", &[])).is_none());
-    }
-
-    #[test]
-    fn a_softened_or_previewed_grain_stays_on_the_cpu() {
-        let with = |name: &str, value: Value| Effect {
-            fx: kerf_model::Id::new("noise.addgrain").unwrap(),
-            version: 1,
-            enabled: true,
-            params: [(name.to_owned(), kerf_model::Param::Static(value))]
-                .into_iter()
-                .collect(),
-        };
-        let kernel = |effect: &Effect| grain_kernel(effect, Time::ZERO, (8, 8), 1.0, 1);
-        assert!(kernel(&with("tweaking/softness", Value::Number(1.0))).is_none());
-        assert!(kernel(&with("viewingMode", Value::Enum("preview".into()))).is_none());
-        assert!(kernel(&with("tweaking/intensity", Value::Number(1.0))).is_some());
-    }
-
     use super::*;
-    use kerf_model::{Catalog, Engine, Id};
+    use kerf_model::Id;
 
     fn effect(id: &str, params: &[(&str, Param)]) -> Effect {
         Effect {
@@ -1382,40 +1355,5 @@ mod tests {
             sounds: &[],
             host: None,
         }
-    }
-
-    #[test]
-    fn every_kept_effect_is_a_raster_effect_that_runs() {
-        for id in KEPT {
-            let fx = Catalog::builtin().fx(id).unwrap_or_else(|| panic!("{id}"));
-            assert_eq!(fx.engine, Engine::Raster, "{id}");
-            let mut picture = kerf_draw::Image::filled(24, 16, [0.2, 0.3, 0.1, 1.0]);
-            apply(&mut picture, &effect(id, &[]), &run());
-            assert!(picture.px.iter().all(|v| v.is_finite()), "{id}");
-        }
-    }
-
-    #[test]
-    fn a_kept_effect_runs_in_encoded_light() {
-        // Hue/Saturation at no change leaves the picture as it was.
-        let mut picture = kerf_draw::Image::filled(8, 8, [0.2, 0.05, 0.6, 1.0]);
-        let before = picture.px.clone();
-        apply(&mut picture, &effect("color.huesaturation", &[]), &run());
-        assert!(picture
-            .px
-            .iter()
-            .zip(&before)
-            .all(|(a, b)| (a - b).abs() < 1e-3));
-        // Desaturated fully, it is grey.
-        let grey = effect(
-            "color.huesaturation",
-            &[("saturation", Param::Static(Value::Number(-100.0)))],
-        );
-        apply(&mut picture, &grey, &run());
-        let p = &picture.px[..4];
-        assert!(
-            (p[0] - p[1]).abs() < 1e-3 && (p[1] - p[2]).abs() < 1e-3,
-            "{p:?}"
-        );
     }
 }

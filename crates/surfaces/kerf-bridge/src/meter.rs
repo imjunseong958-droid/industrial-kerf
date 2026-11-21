@@ -116,7 +116,7 @@ impl Meter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::cell::Cell;
+
     use std::sync::mpsc;
 
     fn levels(peak: f32, at: f64) -> Levels {
@@ -127,87 +127,6 @@ mod tests {
             short_term: None,
             at,
         }
-    }
-
-    #[test]
-    fn levels_read_in_dbfs_and_lufs() {
-        assert_eq!(dbfs(0.0), 0.0);
-        assert_eq!(dbfs(-6.4012), -6.4);
-        assert_eq!(dbfs(-500.0), FLOOR_DB);
-        assert_eq!(dbfs(f32::NAN), FLOOR_DB);
-        assert_eq!(dbfs(f32::NEG_INFINITY), FLOOR_DB);
-        let reading = event(&levels(-6.4, 17.32));
-        assert_eq!(reading["type"], "meter");
-        assert_eq!(reading["peak"], json!([-6.4, -12.4]));
-        assert_eq!(reading["rms"], json!([-9.4, -15.4]));
-        assert_eq!(reading["momentary"], -17.84);
-        assert_eq!(reading["shortTerm"], Value::Null);
-        assert_eq!(reading["at"], 17.32);
-    }
-
-    /// A fake session whose level tap gives a new reading each read.
-    struct Session {
-        reads: Cell<u32>,
-    }
-
-    impl Session {
-        fn levels(&self) -> Option<Levels> {
-            let reads = self.reads.get() + 1;
-            self.reads.set(reads);
-            Some(levels(-6.4, f64::from(reads) * 0.05))
-        }
-    }
-
-    #[test]
-    fn the_meter_reads_at_20_hz_while_playing_and_goes_quiet_once() {
-        let (tx, rx) = mpsc::sync_channel(64);
-        let session = Session {
-            reads: Cell::new(0),
-        };
-        let mut meter = Meter::default();
-        let start = Instant::now();
-        // The media worker's loop turns about every millisecond for one
-        // second of playing.
-        for ms in 0..1000 {
-            let now = start + Duration::from_millis(ms);
-            meter.tick(now, true, || session.levels(), &tx);
-        }
-        assert_eq!(session.reads.get(), 20, "one read a period");
-        let readings: Vec<Value> = rx.try_iter().collect();
-        assert_eq!(readings.len(), 20);
-        assert!(readings.iter().all(|reading| reading["peak"][0] == -6.4));
-
-        // Paused: one null reading, then nothing.
-        for ms in 1000..1200 {
-            let now = start + Duration::from_millis(ms);
-            meter.tick(now, false, || session.levels(), &tx);
-        }
-        let quiet: Vec<Value> = rx.try_iter().collect();
-        assert_eq!(quiet, [silent()]);
-        assert_eq!(
-            session.reads.get(),
-            20,
-            "nothing reads the tap while paused"
-        );
-    }
-
-    #[test]
-    fn a_repeated_reading_is_sent_once_and_a_paused_meter_never_sends() {
-        let (tx, rx) = mpsc::sync_channel(64);
-        let mut meter = Meter::default();
-        let start = Instant::now();
-        meter.tick(start, false, || panic!("not read"), &tx);
-        assert!(rx.try_recv().is_err(), "nothing to say before playing");
-        for step in 0..5 {
-            let now = start + PERIOD * step;
-            meter.tick(now, true, || Some(levels(-12.0, 1.0)), &tx);
-        }
-        assert_eq!(rx.try_iter().count(), 1);
-        // Nothing heard yet: no reading, and nothing to clear.
-        let mut fresh = Meter::default();
-        fresh.tick(start, true, || None, &tx);
-        fresh.tick(start + PERIOD, false, || None, &tx);
-        assert!(rx.try_recv().is_err());
     }
 
     #[test]

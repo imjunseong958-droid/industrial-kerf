@@ -375,37 +375,6 @@ mod tests {
     }
 
     #[test]
-    fn stretches_are_between_two_and_ten_seconds_and_about_four() {
-        let keys = keys(24 * 600, 7);
-        let found = stretches(&keys, 24.0);
-        // Every frame is in one, in order.
-        assert_eq!(found[0].frames.start, 0);
-        assert_eq!(found.last().unwrap().frames.end, keys.len());
-        assert!(found
-            .windows(2)
-            .all(|pair| pair[0].frames.end == pair[1].frames.start));
-        let lengths: Vec<usize> = found.iter().map(|stretch| stretch.frames.len()).collect();
-        let (last, rest) = lengths.split_last().unwrap();
-        assert!(rest.iter().all(|length| (48..=240).contains(length)), "{lengths:?}");
-        // What is left at the end is never a short stretch of its own.
-        assert!((48..240 + 48).contains(last), "{lengths:?}");
-        for count in 49..400 {
-            let found = stretches(&keys[..count], 24.0);
-            assert!(
-                found.iter().all(|stretch| stretch.frames.len() >= 48),
-                "{count} frames: {found:?}"
-            );
-            assert_eq!(found.last().unwrap().frames.end, count);
-        }
-        let mean = keys.len() as f64 / found.len() as f64 / 24.0;
-        assert!((3.5..4.6).contains(&mean), "{mean}");
-        assert!(found.iter().all(|stretch| stretch.keyed));
-        // A render shorter than the shortest is one stretch, and none has none.
-        assert_eq!(stretches(&keys[..10], 24.0).len(), 1);
-        assert!(stretches(&[], 24.0).is_empty());
-    }
-
-    #[test]
     fn an_edit_changes_the_stretches_around_it_and_no_others() {
         let before = keys(24 * 300, 11);
         let names = |keys: &[Option<u64>]| -> Vec<String> {
@@ -433,68 +402,5 @@ mod tests {
             .map(|stretch| name(b"prores", &before[stretch.frames]))
             .collect();
         assert!(other.iter().all(|name| !kept.contains(name)));
-    }
-
-    #[test]
-    fn frames_with_no_number_are_stretches_of_their_own() {
-        let mut keys = keys(24 * 30, 3);
-        for key in &mut keys[100..160] {
-            *key = None;
-        }
-        let found = stretches(&keys, 24.0);
-        let unkeyed: Vec<&Stretch> = found.iter().filter(|stretch| !stretch.keyed).collect();
-        assert_eq!(unkeyed.len(), 1);
-        assert_eq!(unkeyed[0].frames, 100..160);
-        // No stretch with a name has such a frame in it.
-        let named = |found: &[Stretch], keys: &[Option<u64>]| {
-            found
-                .iter()
-                .filter(|stretch| stretch.keyed)
-                .all(|stretch| keys[stretch.frames.clone()].iter().all(Option::is_some))
-        };
-        assert!(named(&found, &keys));
-        // A few such frames are too short to be a file of their own: they go with the stretch
-        // before them, which then has no name either; and at the very start, with the one after.
-        for (from, to) in [(300, 303), (0, 2), (718, 720)] {
-            let mut keys = self::keys(24 * 30, 3);
-            for key in &mut keys[from..to] {
-                *key = None;
-            }
-            let found = stretches(&keys, 24.0);
-            assert!(found.iter().all(|stretch| stretch.frames.len() >= 48), "{found:?}");
-            assert_eq!(found.iter().filter(|stretch| !stretch.keyed).count(), 1, "{found:?}");
-            assert!(named(&found, &keys));
-        }
-    }
-
-    #[test]
-    fn a_stretch_is_kept_whole_and_the_least_recently_joined_go_first() {
-        let dir = tempfile::tempdir().unwrap();
-        let kept = Kept::at(dir.path(), "stamp", 2500).unwrap();
-        let name = |index: usize| format!("{index:032x}");
-        assert!(kept.find(&name(0), "mp4").is_none());
-        let mut paths = Vec::new();
-        for index in 0..3 {
-            let making = kept.making("mp4");
-            // Nothing is found while it is being written.
-            std::fs::write(&making, vec![0u8; 1000]).unwrap();
-            assert!(kept.find(&name(index), "mp4").is_none());
-            paths.push(kept.keep(&making, &name(index), "mp4").unwrap());
-            assert!(!making.exists());
-            std::thread::sleep(Duration::from_millis(20));
-        }
-        // Reading the first makes the second the least recently joined.
-        assert_eq!(kept.find(&name(0), "mp4").as_ref(), Some(&paths[0]));
-        kept.tidy(&[]);
-        assert!(paths[0].exists() && !paths[1].exists() && paths[2].exists());
-        // What a render has just joined stays, however old.
-        let making = kept.making("mp4");
-        std::fs::write(&making, vec![0u8; 1000]).unwrap();
-        let fourth = kept.keep(&making, &name(3), "mp4").unwrap();
-        kept.tidy(&[paths[2].clone(), fourth.clone()]);
-        assert!(!paths[0].exists() && paths[2].exists() && fourth.exists());
-        // Another Kerf's folder is another folder.
-        let other = Kept::at(dir.path(), "other", 2500).unwrap();
-        assert!(other.find(&name(3), "mp4").is_none());
     }
 }

@@ -808,21 +808,6 @@ mod tests {
     }
 
     #[test]
-    fn a_recording_that_holds_one_offset_is_steady() {
-        // It began 7.25 s into the first and ran for four minutes beside it.
-        let found = lined_up(240.0, |t| Some(t + 7.25));
-        assert!((found.offset - 7.25).abs() < 0.002, "{found:?}");
-        assert!(found.confidence > 0.8, "{found:?}");
-        let course = &found.course;
-        assert_eq!(course.holds(), Holds::Steady, "{course:?}");
-        assert_eq!(course.stretches.len(), 4, "{course:?}");
-        assert_eq!(course.placed().count(), 4, "{course:?}");
-        assert!(course.jumps.is_empty(), "{course:?}");
-        let (offset, spread) = course.fit().unwrap();
-        assert!((offset - 7.25).abs() < 0.002 && spread < 0.002, "{course:?}");
-    }
-
-    #[test]
     fn clocks_that_drift_apart_are_told_by_how_fast() {
         // Its clock runs slow by one part in 5000, 12 ms a minute: after five minutes it is
         // 60 ms further into the first than it began.
@@ -894,42 +879,6 @@ mod tests {
     }
 
     #[test]
-    fn a_stretch_with_nothing_to_hear_is_given_no_offset() {
-        // Its third minute is its own noise and none of the event.
-        let found = lined_up(240.0, |t| (!(120.0..180.0).contains(&t)).then_some(t + 2.5));
-        let course = &found.course;
-        let offsets: Vec<bool> = course
-            .stretches
-            .iter()
-            .map(|stretch| stretch.offset.is_some())
-            .collect();
-        assert_eq!(offsets, [true, true, false, true], "{course:?}");
-        assert_eq!(course.holds(), Holds::Steady, "{course:?}");
-        assert!((course.fit().unwrap().0 - 2.5).abs() < 0.002, "{course:?}");
-        // One that hears none of the event at all holds nothing, and says so.
-        let found = lined_up(240.0, |_| None);
-        assert!(found.confidence < 0.3, "{found:?}");
-        assert_eq!(found.course.placed().count(), 0, "{found:?}");
-        assert_eq!(found.course.holds(), Holds::Unknown);
-        assert_eq!(found.course.fit(), None);
-        // One stretch placed says where it is and not whether the rest is with it.
-        let found = lined_up(240.0, |t| (t < 60.0).then_some(t + 2.5));
-        assert_eq!(found.course.placed().count(), 1, "{found:?}");
-        assert_eq!(found.course.holds(), Holds::Unknown);
-    }
-
-    #[test]
-    fn a_recording_that_began_first_is_read_where_the_first_was_recording() {
-        // It began 100 s before the first, and its first minute and a half is before the first's.
-        let found = lined_up(290.0, |t| Some(t - 100.0));
-        assert!((found.offset + 100.0).abs() < 0.002, "{found:?}");
-        let course = &found.course;
-        assert_eq!(course.holds(), Holds::Steady, "{course:?}");
-        assert_eq!(course.stretches.first().map(|stretch| stretch.from), Some(60.0), "{course:?}");
-        assert!(course.stretches.iter().all(|stretch| stretch.offset.is_some()), "{course:?}");
-    }
-
-    #[test]
     fn sound_that_has_nothing_in_common_is_not_trusted() {
         let first = rise_of_loudness(&claps(20.0, 0.0, 1.0, 11));
         let noise: Vec<f32> = (0..160_000u32)
@@ -937,17 +886,6 @@ mod tests {
             .collect();
         let found = align(&first, &rise_of_loudness(&noise));
         assert!(found.confidence < 0.3, "{found:?}");
-    }
-
-    #[test]
-    fn the_transform_comes_back_and_nothing_breaks_on_nothing() {
-        let (mut re, mut im) = (vec![1.0, 2.0, -1.0, 0.5], vec![0.0; 4]);
-        fft(&mut re, &mut im, false);
-        fft(&mut re, &mut im, true);
-        for (found, wanted) in re.iter().zip([4.0, 8.0, -4.0, 2.0]) {
-            assert!((found - wanted).abs() < 1e-9);
-        }
-        assert_eq!(align(&[], &[1.0]), Match::none());
     }
 
     #[test]

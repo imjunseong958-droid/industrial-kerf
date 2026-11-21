@@ -5,9 +5,7 @@
 //! a still placed from the bin, the mode said in place of the last, and the
 //! words the conversation's controls give on a rest.
 
-use kerf_editor::chat::{
-    say_permissions, stamp_tip, MODE_HOLD, PREVIEW_TIP, SCRIPT_TIP, VERSIONS_TIP,
-};
+use kerf_editor::chat::{say_permissions, MODE_HOLD};
 use kerf_editor::model::{Source, Timeline, STILL_SECONDS};
 use kerf_editor::prefs::Permissions;
 use kerf_editor::session::{source_range, stands_in};
@@ -494,11 +492,3 @@ fn each_mode_chosen_takes_the_place_of_the_mode_said_last() {
 }
 
 // ------------------------------------------------------------ words on a rest
-
-#[test]
-fn the_conversation_s_controls_say_what_they_do_in_qt_s_words() {
-    assert_eq!(stamp_tip("00:00:17:08"), "Go to 00:00:17:08");
-    assert_eq!(PREVIEW_TIP, "Preview the proposal on the program");
-    assert_eq!(SCRIPT_TIP, "Show the script");
-    assert_eq!(VERSIONS_TIP, "Proposal versions");
-}

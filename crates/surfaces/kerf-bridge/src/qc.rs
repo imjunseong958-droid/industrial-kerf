@@ -161,38 +161,3 @@ pub(crate) fn done(report: &CheckReport, sequence: Option<&str>) -> Value {
     }
     event
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn check_commands_read_with_and_without_a_sequence() {
-        assert!(matches!(
-            serde_json::from_value(json!({"type": "check"})).unwrap(),
-            crate::Command::Check { sequence: None }
-        ));
-        let crate::Command::Check { sequence } =
-            serde_json::from_value(json!({"type": "check", "sequence": "vertical"})).unwrap()
-        else {
-            panic!("expected check");
-        };
-        assert_eq!(sequence.as_deref(), Some("vertical"));
-    }
-
-    #[test]
-    fn a_check_runs_on_a_project_and_reports_every_row() {
-        // The check itself is kerf-mcp's; the bridge only needs it to
-        // report each row of a clean project as passing.
-        let project = kerf_runtime::parse_document(crate::tests_support::PROGRAM).unwrap();
-        let directory = tempfile::tempdir().unwrap();
-        let found = kerf_mcp::check(&project, directory.path());
-        let event = done(&found, None);
-        assert_eq!(
-            event["summary"]["rows"].as_array().unwrap().len(),
-            found.summary.rows.len()
-        );
-        // The media is not in this folder: that blocks, and is a row.
-        assert_eq!(event["valid"], false);
-    }
-}

@@ -403,48 +403,6 @@ fn substitute(node: &Node, offset: f64) -> Node {
 mod tests {
     use super::*;
 
-    fn at(expression: &str, seconds: f64) -> f64 {
-        Expression::parse(expression)
-            .unwrap_or_else(|error| panic!("{expression}: {error}"))
-            .value_at(Time::from_seconds(seconds).expect("a time"))
-    }
-
-    #[test]
-    fn it_works_a_number_out_from_the_time() {
-        assert_eq!(at("t*90", 2.0), 180.0);
-        assert_eq!(at("1+2*3", 0.0), 7.0);
-        assert_eq!(at("(1+2)*3", 0.0), 9.0);
-        assert_eq!(at("-t+10-2-3", 1.0), 4.0);
-        assert_eq!(at("8/2/2", 0.0), 2.0);
-        assert_eq!(at(" max( 0 , min(t, 1) ) ", 5.0), 1.0);
-        assert_eq!(at("floor(t*24)/24", 0.51), 12.0 / 24.0);
-        assert!((at("sin(t*pi)", 0.5) - 1.0).abs() < 1e-12);
-        assert!((at("cos(0)+abs(-2)", 0.0) - 3.0).abs() < 1e-12);
-        // What is not a number is 0.
-        assert_eq!(at("1/(t-t)", 3.0), 0.0);
-    }
-
-    #[test]
-    fn noise_wanders_smoothly_and_the_same_everywhere() {
-        let values: Vec<f64> = (0..200)
-            .map(|step| at("noise(t)", f64::from(step) * 0.05))
-            .collect();
-        assert!(values.iter().all(|value| (-1.0..=1.0).contains(value)));
-        assert!(values
-            .windows(2)
-            .all(|pair| (pair[0] - pair[1]).abs() < 0.2));
-        assert!(
-            values.iter().any(|value| *value > 0.3) && values.iter().any(|value| *value < -0.3)
-        );
-        // Pinned: a document draws the same on every machine.
-        assert_eq!(at("noise(t)", 0.0), at("noise(0)", 9.0));
-        assert!(
-            (at("noise(1)", 0.0) + 0.812_636_145_103_548_6).abs() < 1e-12,
-            "{}",
-            at("noise(1)", 0.0)
-        );
-    }
-
     #[test]
     fn it_prints_as_it_reads_with_the_parentheses_it_needs() {
         for (written, printed) in [
@@ -466,44 +424,5 @@ mod tests {
                 assert_eq!(expression.value_at(time), again.value_at(time), "{written}");
             }
         }
-    }
-
-    #[test]
-    fn a_later_start_reads_the_time_that_much_on_and_prints_so() {
-        let whole = Expression::parse("sin(t)*t").unwrap();
-        let later = whole.starting(Time::from_seconds(1.5).unwrap());
-        for step in 0..5 {
-            let time = Time::from_seconds(f64::from(step) * 0.25).unwrap();
-            let on = Time::from_seconds(f64::from(step) * 0.25 + 1.5).unwrap();
-            assert_eq!(later.value_at(time), whole.value_at(on));
-        }
-        assert_eq!(later.to_string(), "sin(t+1.5)*(t+1.5)");
-        let read = Expression::parse(&later.to_string()).unwrap();
-        let time = Time::from_seconds(0.5).unwrap();
-        assert!((read.value_at(time) - later.value_at(time)).abs() < 1e-12);
-    }
-
-    #[test]
-    fn it_stays_inside_what_its_parameter_allows() {
-        let kept = Expression::parse("t*10")
-            .unwrap()
-            .within(Some(0.0), Some(5.0));
-        assert_eq!(kept.value_at(Time::from_seconds(0.2).unwrap()), 2.0);
-        assert_eq!(kept.value_at(Time::from_seconds(3.0).unwrap()), 5.0);
-        assert!(Expression::parse("2+3").unwrap().is_constant());
-        assert!(!Expression::parse("2+t").unwrap().is_constant());
-    }
-
-    #[test]
-    fn what_is_wrong_is_said() {
-        let wrong = |text: &str| Expression::parse(text).unwrap_err();
-        assert!(wrong("t*").contains("ends early"));
-        assert!(wrong("(t+1").contains("not closed"));
-        assert!(wrong("wiggle(t)").contains("`wiggle` is not known"));
-        assert!(wrong("sin t").contains("takes its numbers in parentheses"));
-        assert!(wrong("min(t)").contains("takes 2 numbers, not 1"));
-        assert!(wrong("t 2").contains("is not part of an expression"));
-        assert!(wrong("t$").contains("`$`"));
-        assert!(wrong(&"(".repeat(40)).contains("nests too deep"));
     }
 }

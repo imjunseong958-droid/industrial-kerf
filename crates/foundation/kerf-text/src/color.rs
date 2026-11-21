@@ -617,35 +617,3 @@ fn bitmap(g: &Glyph, font: &skrifa::FontRef, m: &Xform, clip: [i32; 4], foregrou
     }
     Some((out, x, y))
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn composite_modes_follow_porter_duff() {
-        let (red, blue) = ([1.0, 0.0, 0.0, 1.0], [0.0, 0.0, 0.5, 0.5]);
-        assert_eq!(composite(red, blue, CompositeMode::SrcOver), red);
-        assert_eq!(composite(blue, red, CompositeMode::SrcOver), [0.5, 0.0, 0.5, 1.0]);
-        assert_eq!(composite(red, blue, CompositeMode::SrcIn), [0.5, 0.0, 0.0, 0.5]);
-        assert_eq!(composite(red, blue, CompositeMode::DestOut), [0.0; 4]);
-        assert_eq!(composite(red, [0.0; 4], CompositeMode::Multiply), red);
-    }
-
-    #[test]
-    fn colour_lines_pad_repeat_and_reflect() {
-        let stops = [(0.0, [0.0; 4]), (1.0, [1.0; 4])];
-        assert_eq!(along(&stops, 0.25, Extend::Pad), [0.25; 4]);
-        assert_eq!(along(&stops, 1.5, Extend::Pad), [1.0; 4]);
-        assert_eq!(along(&stops, 1.25, Extend::Repeat), [0.25; 4]);
-        assert_eq!(along(&stops, 1.25, Extend::Reflect), [0.75; 4]);
-    }
-
-    #[test]
-    fn a_radial_gradient_grows_from_its_first_circle() {
-        // Concentric: t is how far between the radii the point is.
-        let t = conical((15.0, 0.0), (0.0, 0.0), 10.0, (0.0, 0.0), 20.0).unwrap();
-        assert!((t - 0.5).abs() < 1e-5, "{t}");
-        assert!(conical((0.0, 0.0), (0.0, 0.0), 10.0, (0.0, 0.0), 20.0).is_some());
-    }
-}

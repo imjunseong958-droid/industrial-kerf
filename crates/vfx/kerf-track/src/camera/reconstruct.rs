@@ -1066,19 +1066,6 @@ pub fn solve(followed: &Followed, known: Option<f64>) -> Result<Solved, Unsolved
     }
 }
 
-/// What one lens makes of the shot, as a shot that was not asked about a zoom would come out.
-#[cfg(test)]
-pub fn solve_one_lens(followed: &Followed) -> Result<Solved, Unsolved> {
-    one_lens(followed, None, None).and_then(|found| {
-        written(
-            &found.seen,
-            &found.reconstruction,
-            found.parallax,
-            found.lens_known,
-        )
-    })
-}
-
 /// A reconstruction, before it is written out.
 struct OneLens {
     seen: Seen,

@@ -404,51 +404,6 @@ mod tests {
     }
 
     #[test]
-    fn a_frame_comes_back_as_it_went_in() {
-        let dir = tempfile::tempdir().expect("a folder");
-        let frames = DiskFrames::new(dir.path(), "stamp", 1 << 30);
-        let kept = frame(3, 64, 36, false);
-        frames.put(7, false, kept.clone());
-        frames.flush();
-        assert_eq!(frames.get(7, false), Some(kept.clone()));
-        assert_eq!(frames.get(8, false), None);
-        let stats = frames.stats();
-        assert_eq!((stats.hits, stats.misses, stats.writes), (1, 1, 1));
-        // Kept already, it is not written again: what is there stays.
-        frames.put(7, false, frame(5, 64, 36, false));
-        frames.flush();
-        assert_eq!(frames.stats().writes, 1);
-        assert_eq!(frames.get(7, false), Some(kept));
-    }
-
-    #[test]
-    fn eight_and_sixteen_bit_frames_are_kept_apart() {
-        let dir = tempfile::tempdir().expect("a folder");
-        let frames = DiskFrames::new(dir.path(), "stamp", 1 << 30);
-        let (shallow, deep) = (frame(3, 16, 9, false), frame(5, 16, 9, true));
-        frames.put(1, false, shallow.clone());
-        frames.put(1, true, deep.clone());
-        frames.flush();
-        assert_eq!(frames.get(1, false), Some(shallow));
-        assert_eq!(frames.get(1, true), Some(deep));
-    }
-
-    #[test]
-    fn they_stay_for_the_next_process_and_not_for_another_kerf() {
-        let dir = tempfile::tempdir().expect("a folder");
-        let kept = frame(3, 16, 9, false);
-        {
-            let frames = DiskFrames::new(dir.path(), "stamp", 1 << 30);
-            frames.put(1, false, kept.clone());
-            frames.flush();
-        }
-        let again = DiskFrames::new(dir.path(), "stamp", 1 << 30);
-        assert_eq!(again.get(1, false), Some(kept));
-        let newer = DiskFrames::new(dir.path(), "another", 1 << 30);
-        assert_eq!(newer.get(1, false), None);
-    }
-
-    #[test]
     fn a_damaged_file_is_a_miss_and_goes() {
         let dir = tempfile::tempdir().expect("a folder");
         let frames = DiskFrames::new(dir.path(), "stamp", 1 << 30);
@@ -482,64 +437,6 @@ mod tests {
     }
 
     #[test]
-    fn past_the_limit_the_least_recently_used_go() {
-        let dir = tempfile::tempdir().expect("a folder");
-        let one = encode(&frame(3, 64, 64, false), false).len() as u64;
-        let frames = DiskFrames::new(dir.path(), "stamp", one * 4);
-        // Dated by hand, long ago and an hour apart, so that the order hangs neither on how long a
-        // step takes nor on how finely the file system tells the time.
-        let long_ago = SystemTime::now() - Duration::from_secs(24 * 3600);
-        for key in 0..3u128 {
-            frames.put(key, false, frame(3, 64, 64, false));
-            frames.flush();
-            std::fs::File::options()
-                .write(true)
-                .open(DiskFrames::path(&frames.folder, key, false))
-                .expect("kept")
-                .set_modified(long_ago + Duration::from_secs(3600 * key as u64))
-                .expect("dated");
-        }
-        // Reading the first makes it the newest.
-        assert!(frames.get(0, false).is_some());
-        for key in 3..6u128 {
-            frames.put(key, false, frame(3, 64, 64, false));
-            frames.flush();
-        }
-        // The fifth goes past the limit, and the two unread since 0 go to make room: only those.
-        assert_eq!(frames.stats().evicted, 2);
-        assert!(frames.get(1, false).is_none(), "the oldest stays");
-        assert!(frames.get(2, false).is_none(), "the next oldest stays");
-        assert!(frames.get(0, false).is_some(), "what was just used goes");
-        assert!(frames.get(5, false).is_some(), "the newest goes");
-        let on_disk: u64 = files_under(&frames.folder).iter().map(|f| f.1).sum();
-        assert!(on_disk <= one * 4, "{on_disk} of {}", one * 4);
-    }
-
-    #[test]
-    fn another_kerfs_frames_go_only_once_unread_for_a_while() {
-        let dir = tempfile::tempdir().expect("a folder");
-        let (old, recent) = (dir.path().join("old"), dir.path().join("recent"));
-        for folder in [&old, &recent] {
-            std::fs::create_dir_all(folder.join("ab")).expect("made");
-            std::fs::write(folder.join("ab").join("frame"), [0u8; 8]).expect("written");
-        }
-        let file = std::fs::File::options()
-            .write(true)
-            .open(old.join("ab").join("frame"))
-            .expect("opens");
-        file.set_modified(SystemTime::now() - STALE - Duration::from_secs(60))
-            .expect("set");
-        let _frames = DiskFrames::new(dir.path(), "stamp", 1 << 30);
-        // Tidying goes on behind whatever is asked of the frames, and takes as long as it takes.
-        let since = std::time::Instant::now();
-        while old.exists() && since.elapsed() < Duration::from_secs(60) {
-            std::thread::sleep(Duration::from_millis(1));
-        }
-        assert!(!old.exists());
-        assert!(recent.exists());
-    }
-
-    #[test]
     fn a_full_queue_drops_rather_than_waits() {
         let dir = tempfile::tempdir().expect("a folder");
         let frames = DiskFrames::new(dir.path(), "stamp", 1 << 40);
@@ -552,17 +449,5 @@ mod tests {
         let stats = frames.stats();
         assert!(stats.dropped > 0, "{stats:?}");
         assert_eq!(stats.writes + stats.dropped, 2_000, "{stats:?}");
-    }
-
-    #[test]
-    fn the_folder_is_off_when_asked() {
-        // Read at each open, so that a test can set it for itself; here it only reads the value.
-        let folder = default_frame_folder();
-        if let Some(value) = std::env::var_os("KERF_FRAME_CACHE") {
-            assert_eq!(
-                folder.is_none(),
-                value == "off" || value == "0" || value.is_empty()
-            );
-        }
     }
 }

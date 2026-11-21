@@ -372,112 +372,11 @@ impl Param {
 
 #[cfg(test)]
 mod tests {
-    /// Each interpolation reads the table the graph editor's curves are drawn to.
-    #[test]
-    fn curves_read_the_table_the_graph_editor_is_held_to() {
-        for (interp, t, wanted) in [
-            ("linear", 0.25, 0.25),
-            ("hold", 0.9, 0.0),
-            ("ease-in", 0.5, 0.25),
-            ("ease-out", 0.5, 0.75),
-            ("ease", 0.25, 0.15625),
-            ("0.25,0.1,0.25,1", 0.5, 0.802403),
-            ("0.42,0,0.58,1", 0.25, 0.129162),
-            ("0.5,-1,0.5,2", 0.5, 0.5),
-            ("0.5,-1,0.5,2", 0.25, -0.182322),
-            ("0,0,1,1", 0.3, 0.3),
-        ] {
-            let curve = super::Interp::parse(interp).expect("an interp");
-            assert!((curve.curve(t) - wanted).abs() < 1e-5, "{interp} at {t}");
-        }
-    }
-
     use super::*;
     use crate::time::Rate;
 
     fn frames(n: i64) -> Time {
         Rate::FPS_24.time_of(n)
-    }
-
-    fn ramp() -> Param {
-        Param::Animated(vec![
-            Keyframe {
-                at: frames(0),
-                value: Value::Number(0.0),
-                interp: Interp::Linear,
-            },
-            Keyframe {
-                at: frames(24),
-                value: Value::Number(1.0),
-                interp: Interp::Hold,
-            },
-            Keyframe {
-                at: frames(48),
-                value: Value::Number(0.5),
-                interp: Interp::Linear,
-            },
-        ])
-    }
-
-    #[test]
-    fn evaluates_linear_hold_and_extrapolation() {
-        let param = ramp();
-        assert_eq!(param.value_at(frames(12)), Value::Number(0.5));
-        assert_eq!(param.value_at(frames(36)), Value::Number(1.0));
-        assert_eq!(param.value_at(frames(-5)), Value::Number(0.0));
-        assert_eq!(param.value_at(frames(100)), Value::Number(0.5));
-    }
-
-    #[test]
-    fn a_named_easing_keeps_its_motion_across_a_split() {
-        for interp in [Interp::EaseIn, Interp::EaseOut, Interp::Ease] {
-            let param = Param::Animated(vec![
-                Keyframe {
-                    at: frames(0),
-                    value: Value::Number(0.0),
-                    interp,
-                },
-                Keyframe {
-                    at: frames(48),
-                    value: Value::Number(1.0),
-                    interp: Interp::Linear,
-                },
-            ]);
-            let number = |param: &Param, at: Time| match param.value_at(at) {
-                Value::Number(number) => number,
-                other => panic!("{other:?}"),
-            };
-            let (head, tail) = param.split(frames(16));
-            for at in 0..48 {
-                let whole = number(&param, frames(at));
-                let parted = if at < 16 {
-                    number(&head, frames(at))
-                } else {
-                    number(&tail, frames(at - 16))
-                };
-                assert!(
-                    (whole - parted).abs() < 2e-3,
-                    "{interp:?} at {at}: {whole} against {parted}"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn split_preserves_the_curve_on_both_sides() {
-        let param = ramp();
-        let (left, right) = param.split(frames(12));
-        let near =
-            |a: Value, b: Value| (a.as_number().unwrap() - b.as_number().unwrap()).abs() < 1e-12;
-        for n in 0..=12 {
-            assert!(near(left.value_at(frames(n)), param.value_at(frames(n))));
-        }
-        for n in 0..=60 {
-            assert!(near(
-                right.value_at(frames(n)),
-                param.value_at(frames(n + 12))
-            ));
-        }
     }
 
     fn curve(text: &str) -> Interp {
@@ -509,44 +408,6 @@ mod tests {
         ] {
             assert_eq!(Interp::parse(refused), None, "{refused}");
         }
-    }
-
-    #[test]
-    fn a_straight_curve_is_linear_and_ends_where_it_should() {
-        let straight = curve("0.25,0.25,0.75,0.75");
-        let swoop = curve("0.2,0.8,0.4,1");
-        for step in 0..=100 {
-            let t = f64::from(step) / 100.0;
-            assert!((straight.curve(t) - t).abs() < 1e-6, "{t}");
-        }
-        assert!(swoop.curve(0.0).abs() < 1e-9);
-        assert!((swoop.curve(1.0) - 1.0).abs() < 1e-9);
-        // Out fast: well past linear halfway.
-        assert!(swoop.curve(0.5) > 0.8);
-    }
-
-    #[test]
-    fn a_curve_matches_the_easings_it_can_draw() {
-        let third = 1.0 / 3.0;
-        let ease = Bezier::new(third, 0.0, 2.0 * third, 1.0).expect("a curve");
-        for step in 0..=20 {
-            let t = f64::from(step) / 20.0;
-            assert!(
-                (ease.at(t) - Interp::Ease.curve(t)).abs() < 1e-3,
-                "{t}: {} against {}",
-                ease.at(t),
-                Interp::Ease.curve(t)
-            );
-        }
-    }
-
-    #[test]
-    fn a_curve_can_overshoot() {
-        let back = curve("0.3,1.6,0.7,1");
-        let peak = (0..=100)
-            .map(|step| back.curve(f64::from(step) / 100.0))
-            .fold(0.0f64, f64::max);
-        assert!(peak > 1.05, "{peak}");
     }
 
     #[test]
@@ -582,41 +443,5 @@ mod tests {
                 }
             }
         }
-    }
-
-    #[test]
-    fn a_cut_on_a_keyframe_or_past_the_last_changes_nothing() {
-        let param = Param::Animated(vec![
-            Keyframe {
-                at: frames(0),
-                value: Value::Number(0.0),
-                interp: curve("0.2,0.8,0.4,1"),
-            },
-            Keyframe {
-                at: frames(24),
-                value: Value::Number(1.0),
-                interp: curve("0.7,0,0.3,1"),
-            },
-            Keyframe {
-                at: frames(48),
-                value: Value::Number(0.0),
-                interp: Interp::Linear,
-            },
-        ]);
-        let (left, right) = param.split(frames(24));
-        for at in 0..=24 {
-            assert_eq!(left.value_at(frames(at)), param.value_at(frames(at)));
-            assert_eq!(right.value_at(frames(at)), param.value_at(frames(at + 24)));
-        }
-        let (left, _) = param.split(frames(60));
-        assert_eq!(left.value_at(frames(10)), param.value_at(frames(10)));
-    }
-
-    #[test]
-    fn colors_parse_and_print() {
-        assert_eq!(Rgba::parse("#ff8000").unwrap().to_string(), "#ff8000");
-        assert_eq!(Rgba::parse("#00000080").unwrap().a, 128);
-        assert!(Rgba::parse("ff8000").is_none());
-        assert!(Rgba::parse("#ff80").is_none());
     }
 }

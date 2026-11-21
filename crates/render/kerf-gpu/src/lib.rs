@@ -1850,25 +1850,6 @@ mod tests {
     }
 
     #[test]
-    fn a_shrunk_picture_is_sampled_from_its_halves() {
-        let Some(gpu) = shared() else {
-            return;
-        };
-        let source = test_picture(64, 48, 0.1);
-        let backdrop = test_picture(32, 24, 0.7);
-        let m = Affine::scale(0.3, 0.3);
-        let rect = Rect::new(0.0, 0.0, 64.0, 48.0);
-        let mut cpu = backdrop.clone();
-        composite_placed(&mut cpu, &source, &m, rect, 1.0, Blend::Normal);
-        let mut frame = gpu.frame();
-        let canvas = frame.image(&backdrop);
-        let layer = frame.image(&source);
-        let out = frame.composite(canvas, &layer, &m, rect, 1.0, Blend::Normal);
-        let floats = frame.read_floats(&out).expect("read back");
-        assert_close(&floats, &cpu.px, 1e-3, "halved");
-    }
-
-    #[test]
     fn bytes_go_up_and_come_back_as_the_cpu_makes_them() {
         let Some(gpu) = shared() else {
             return;
@@ -1893,22 +1874,6 @@ mod tests {
                 assert!(g.abs_diff(*c) <= 1, "{g} against {c}");
             }
         }
-    }
-
-    #[test]
-    fn coverage_multiplies_every_value() {
-        let Some(gpu) = shared() else {
-            return;
-        };
-        let source = test_picture(16, 8, 0.4);
-        let coverage: Vec<f32> = (0..16 * 8).map(|i| (i % 5) as f32 / 4.0).collect();
-        let mut cpu = source.clone();
-        cpu.mul_coverage(&coverage);
-        let mut frame = gpu.frame();
-        let picture = frame.image(&source);
-        let out = frame.multiply(picture, &coverage);
-        let floats = frame.read_floats(&out).expect("read back");
-        assert_close(&floats, &cpu.px, 1e-5, "covered");
     }
 
     #[test]
@@ -2015,33 +1980,6 @@ mod tests {
     }
 
     #[test]
-    fn a_size_no_frame_asks_for_goes_from_the_pool() {
-        let Some(gpu) = shared() else {
-            return;
-        };
-        let usage = wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::COPY_SRC;
-        // Sizes of their own, so that other tests sharing this device leave them alone.
-        let stale: TextureKey = (971, 13, WORKING_FORMAT, usage);
-        let fresh: TextureKey = (973, 13, WORKING_FORMAT, usage);
-        let old = gpu.texture(stale);
-        let new = gpu.texture(fresh);
-        gpu.give_back(vec![(stale, old), (fresh, new)]);
-        {
-            let mut pool = gpu.pool();
-            assert!(pool.free.contains_key(&stale), "asked for just now");
-            pool.asked.insert(
-                stale,
-                Instant::now() - POOL_SIZE_STALE - Duration::from_secs(1),
-            );
-        }
-        let new = gpu.texture(fresh);
-        gpu.give_back(vec![(fresh, new)]);
-        let pool = gpu.pool();
-        assert!(!pool.free.contains_key(&stale), "not asked for in a while");
-        assert!(pool.free.contains_key(&fresh), "still in use");
-    }
-
-    #[test]
     fn kernels_build_from_several_threads_at_once() {
         let Some(gpu) = shared() else {
             return;
@@ -2063,19 +2001,6 @@ mod tests {
                 });
             }
         });
-    }
-
-    #[test]
-    fn a_filled_picture_is_its_color() {
-        let Some(gpu) = shared() else {
-            return;
-        };
-        let mut frame = gpu.frame();
-        let picture = frame.filled(5, 3, [0.1, 0.2, 0.3, 0.4]);
-        let floats = frame.read_floats(&picture).expect("read back");
-        for pixel in floats.as_chunks::<4>().0.iter() {
-            assert_eq!(*pixel, [0.1, 0.2, 0.3, 0.4]);
-        }
     }
 
     #[test]

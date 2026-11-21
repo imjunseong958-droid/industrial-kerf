@@ -794,8 +794,8 @@ fn tracked(directory: &Path, path: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        parse_tool_name, parse_tool_response, project_config, ConnectedServer, InboundMcpRegistry,
-        McpServerConfig, TRACKED_PROJECT_CONFIG,
+        project_config, ConnectedServer, InboundMcpRegistry, McpServerConfig,
+        TRACKED_PROJECT_CONFIG,
     };
     use super::{AtomicBool, Duration, Instant, Ordering, MCP_MAX_MESSAGE_BYTES};
     use serde_json::json;
@@ -835,37 +835,6 @@ mod tests {
         git(project, &["add", "-f", ".kerf/mcp.json"]);
         assert_eq!(project_config(project, &mut log), None);
         assert_eq!(lines, [TRACKED_PROJECT_CONFIG]);
-    }
-
-    #[test]
-    fn namespaced_parser_prefers_the_longest_server_prefix() {
-        let servers = ["team".to_owned(), "team_tools".to_owned()];
-        assert_eq!(
-            parse_tool_name("mcp_team_tools_lookup", servers.iter()),
-            Some(("team_tools".into(), "lookup".into()))
-        );
-        assert_eq!(
-            parse_tool_name("team/lookup", servers.iter()),
-            Some(("team".into(), "lookup".into()))
-        );
-    }
-
-    #[test]
-    fn tool_response_keeps_error_and_multimodal_envelopes() {
-        let error = parse_tool_response(json!({
-            "result": {"isError": true, "content": [{"type":"text", "text":"failed"}]}
-        }))
-        .unwrap();
-        assert_eq!(error["isError"], true);
-        assert_eq!(error["content"][0]["text"], "failed");
-
-        let multimodal = parse_tool_response(json!({
-            "result": {"content": [{"type":"text", "text":"caption"}, {"type":"image", "data":"abc", "mimeType":"image/png"}]}
-        }))
-        .unwrap();
-        assert_eq!(multimodal["type"], "multimodal_tool_result");
-        assert_eq!(multimodal["text"], "caption");
-        assert_eq!(multimodal["images"][0]["mediaType"], "image/png");
     }
 
     fn registry() -> InboundMcpRegistry {

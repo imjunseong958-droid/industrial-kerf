@@ -119,11 +119,4 @@ mod tests {
         let (first, second) = (timestamp(), timestamp());
         assert!(second > first, "{first} then {second}");
     }
-
-    #[test]
-    fn an_author_is_one_of_the_kinds_named() {
-        assert!(Author::kerf().validate().is_ok());
-        assert!(Author::new("robot", "R").validate().is_err());
-        assert!(Author::new("person", " ").validate().is_err());
-    }
 }

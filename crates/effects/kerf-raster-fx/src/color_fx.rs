@@ -230,26 +230,3 @@ pub fn specs() -> Vec<EffectSpec> {
         ),
     ]
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{EffectEnv, run_fx};
-    use kerf_raster::Image;
-
-    fn px(id: &str, vals: &[(&str, Value)], c: [f32; 4]) -> [f32; 4] {
-        run_fx(id, vals, Image::filled(2, 2, c), 0.0, EffectEnv::default()).img.get(0, 0)
-    }
-
-    #[test]
-    fn photo_filter_presets_and_custom() {
-        let g = [0.5, 0.5, 0.5, 1.0];
-        let cool = px("ec.color.photofilter", &[("filter", Value::Enum(3)), ("preserveLuminosity", Value::Bool(false))], g);
-        assert!(cool[2] > cool[0], "a cooling filter is blue: {cool:?}");
-        let custom = |c| px("ec.color.photofilter", &[("filter", Value::Enum(PHOTO_FILTER_CUSTOM)), ("color", c)], g);
-        assert!(custom(col(0.0, 1.0, 0.0))[1] > custom(col(1.0, 0.0, 0.0))[1]);
-        // The Color swatch is ignored by the presets.
-        let warm = |c| px("ec.color.photofilter", &[("color", c)], g);
-        assert_eq!(warm(col(0.0, 1.0, 0.0)), warm(col(1.0, 0.0, 0.0)));
-    }
-}

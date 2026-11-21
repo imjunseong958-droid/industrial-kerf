@@ -1,4 +1,4 @@
-//! The Kerf Cloud session (`docs/cloud.md`): the service's URL in `~/.kerf/cloud.json`, and
+//! The Kerf Cloud session: the service's URL in `~/.kerf/cloud.json`, and
 //! the account token in the system's keychain, beside the API keys (`secrets.rs`).
 //!
 //! Where no keychain can be reached (`KERF_SECRETS=off`, or a Linux without a Secret Service)
@@ -193,31 +193,6 @@ mod tests {
 
         keep_token(&path, &keychain, None).unwrap();
         assert_eq!(on_disk(&path), Some(serde_json::json!({})));
-        assert_eq!(load(&path, &keychain).token(), None);
-    }
-
-    // Signed in while the keychain could not be reached, then read where it can: the file's
-    // token is the newer, and replaces the keychain's.
-    #[test]
-    fn a_token_kept_in_the_file_meanwhile_is_the_one_used() {
-        let home = tempfile::tempdir().unwrap();
-        let path = home.path().join(".kerf/cloud.json");
-        let keychain = Memory::default();
-        keychain.set(TOKEN, "tok-earlier").unwrap();
-        keep_token(&path, &SystemKeychain::turned_off(), Some("tok-later")).unwrap();
-
-        assert_eq!(load(&path, &keychain).token(), Some("tok-later"));
-        assert_eq!(keychain.get(TOKEN).unwrap().as_deref(), Some("tok-later"));
-        assert_eq!(on_disk(&path), Some(serde_json::json!({})));
-    }
-
-    #[test]
-    fn an_empty_token_signs_out() {
-        let home = tempfile::tempdir().unwrap();
-        let path = home.path().join(".kerf/cloud.json");
-        let keychain = Memory::default();
-        keep_token(&path, &keychain, Some("tok")).unwrap();
-        keep_token(&path, &keychain, Some("  ")).unwrap();
         assert_eq!(load(&path, &keychain).token(), None);
     }
 

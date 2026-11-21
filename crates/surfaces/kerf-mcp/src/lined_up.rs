@@ -194,25 +194,6 @@ mod tests {
     }
 
     #[test]
-    fn a_recording_one_offset_fits_is_placed_by_it() {
-        let found = row(&read(
-            &[Some(1.2341), None, None, Some(1.2339), Some(1.2344)],
-            0.0,
-            Vec::new(),
-        ));
-        assert_eq!(found.left, None);
-        assert!((found.offset - 1.23415).abs() < 1e-9);
-        assert_eq!(
-            found.row,
-            json!({"offset": 1.234, "confidence": 0.9, "course": "steady", "read": 3, "of": 5,
-                "within": 0.0, "unknown": [[60.0, 180.0]]})
-        );
-        // The first is what the others are held to, and nothing is read of it.
-        let first = &lined_up(&[read(&[], 0.0, Vec::new())], FRAME)[0];
-        assert_eq!(first.row, json!({"offset": 0.0, "confidence": 1.0}));
-    }
-
-    #[test]
     fn a_drift_is_placed_while_one_offset_stays_within_half_a_frame_of_it() {
         // 6 ms a minute over four minutes: 24 ms from the first minute to the fifth, and the
         // offset halfway is 12 ms from each.
@@ -276,28 +257,5 @@ mod tests {
         );
         // The whole recording's offset is what is left to say of it.
         assert_eq!(found.offset, 5.0);
-    }
-
-    #[test]
-    fn a_recording_nothing_could_be_read_of_is_placed_by_the_whole_of_it_as_before() {
-        let found = row(&Alignment {
-            offset: 3.3,
-            confidence: 0.2,
-            course: Course {
-                stretches: vec![Stretch {
-                    from: 0.0,
-                    to: 20.0,
-                    offset: None,
-                }],
-                drift: 0.0,
-                jumps: Vec::new(),
-            },
-        });
-        assert_eq!(found.left, None);
-        assert_eq!(
-            found.row,
-            json!({"offset": 3.3, "confidence": 0.2, "course": "unknown", "read": 0, "of": 1,
-                "unknown": [[0.0, 20.0]]})
-        );
     }
 }

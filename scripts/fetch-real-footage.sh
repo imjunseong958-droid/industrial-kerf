@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Fetch the real footage the quality measurements run on (docs/architecture.md,
-# Real footage) into a folder outside the repository, and say where it went.
+# Fetch the real footage the quality measurements run on into a folder outside
+# the repository, and say where it went.
 #
 #   scripts/fetch-real-footage.sh [folder]     # default: target/real-footage
 #   KERF_REAL_FOOTAGE=target/real-footage cargo test --release -p kerf-image \

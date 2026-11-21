@@ -1608,7 +1608,7 @@ dependencies = [
 
 [[package]]
 name = "kerf-agent"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "base64",
  "kerf-skills",
@@ -1619,7 +1619,7 @@ dependencies = [
 
 [[package]]
 name = "kerf-bridge"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "base64",
  "kerf-agent",
@@ -1647,7 +1647,7 @@ dependencies = [
 
 [[package]]
 name = "kerf-cli"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "clap",
@@ -1667,7 +1667,7 @@ dependencies = [
 
 [[package]]
 name = "kerf-cloud"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "serde",
  "serde_json",
@@ -1676,7 +1676,7 @@ dependencies = [
 
 [[package]]
 name = "kerf-collab"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "kerf-lang",
  "kerf-model",
@@ -1688,7 +1688,7 @@ dependencies = [
 
 [[package]]
 name = "kerf-color"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "proptest",
  "serde",
@@ -1696,7 +1696,7 @@ dependencies = [
 
 [[package]]
 name = "kerf-comfy"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "hex",
  "kerf-workflow",
@@ -1711,7 +1711,7 @@ dependencies = [
 
 [[package]]
 name = "kerf-commands"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "kerf-cloud",
  "kerf-runtime",
@@ -1721,7 +1721,7 @@ dependencies = [
 
 [[package]]
 name = "kerf-compose"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "ffmpeg-next",
  "kerf-color",
@@ -1744,7 +1744,7 @@ dependencies = [
 
 [[package]]
 name = "kerf-core"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "kerf-lang",
  "kerf-model",
@@ -1754,7 +1754,7 @@ dependencies = [
 
 [[package]]
 name = "kerf-draw"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "kerf-color",
  "kerf-geom",
@@ -1765,7 +1765,7 @@ dependencies = [
 
 [[package]]
 name = "kerf-engine"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "clap",
@@ -1792,11 +1792,11 @@ dependencies = [
 
 [[package]]
 name = "kerf-fetcher"
-version = "0.1.4"
+version = "0.1.5"
 
 [[package]]
 name = "kerf-fx"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "kerf-color",
  "kerf-draw",
@@ -1812,7 +1812,7 @@ dependencies = [
 
 [[package]]
 name = "kerf-geom"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "proptest",
  "serde",
@@ -1820,7 +1820,7 @@ dependencies = [
 
 [[package]]
 name = "kerf-gpu"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "bytemuck",
  "kerf-color",
@@ -1830,22 +1830,15 @@ dependencies = [
 ]
 
 [[package]]
-name = "kerf-guide"
-version = "0.1.4"
-dependencies = [
- "pulldown-cmark",
-]
-
-[[package]]
 name = "kerf-icon"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "resvg",
 ]
 
 [[package]]
 name = "kerf-image"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "kerf-draw",
  "kerf-model",
@@ -1855,7 +1848,7 @@ dependencies = [
 
 [[package]]
 name = "kerf-interchange"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "kerf-lang",
  "kerf-model",
@@ -1867,25 +1860,25 @@ dependencies = [
 
 [[package]]
 name = "kerf-kernel"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "naga",
 ]
 
 [[package]]
 name = "kerf-lang"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "kerf-model",
 ]
 
 [[package]]
 name = "kerf-layers"
-version = "0.1.4"
+version = "0.1.5"
 
 [[package]]
 name = "kerf-mcp"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "base64",
  "hex",
@@ -1911,14 +1904,14 @@ dependencies = [
 
 [[package]]
 name = "kerf-model"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "kerf-color",
 ]
 
 [[package]]
 name = "kerf-motion"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "kerf-draw",
  "kerf-model",
@@ -1929,7 +1922,7 @@ dependencies = [
 
 [[package]]
 name = "kerf-playback"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "cpal",
  "ffmpeg-next",
@@ -1946,7 +1939,7 @@ dependencies = [
 
 [[package]]
 name = "kerf-raster"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "kerf-color",
  "kerf-geom",
@@ -1955,7 +1948,7 @@ dependencies = [
 
 [[package]]
 name = "kerf-raster-fx"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "kerf-color",
  "kerf-raster",
@@ -1964,7 +1957,7 @@ dependencies = [
 
 [[package]]
 name = "kerf-runtime"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "fs2",
  "kerf-collab",
@@ -1981,7 +1974,7 @@ dependencies = [
 
 [[package]]
 name = "kerf-scopes"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "kerf-color",
  "serde",
@@ -1989,7 +1982,7 @@ dependencies = [
 
 [[package]]
 name = "kerf-shots"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "kerf-engine",
  "kerf-model",
@@ -2002,14 +1995,14 @@ dependencies = [
 
 [[package]]
 name = "kerf-skills"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "tempfile",
 ]
 
 [[package]]
 name = "kerf-text"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "harfrust",
  "png",
@@ -2022,7 +2015,7 @@ dependencies = [
 
 [[package]]
 name = "kerf-track"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "kerf-draw",
  "kerf-model",
@@ -2032,7 +2025,7 @@ dependencies = [
 
 [[package]]
 name = "kerf-workflow"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "serde",
  "serde_json",
@@ -2761,24 +2754,6 @@ dependencies = [
  "tempfile",
  "unarray",
 ]
-
-[[package]]
-name = "pulldown-cmark"
-version = "0.13.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3db2be46835f013dd3f4fa7f5f7402c537787b54ebb6fe2b94bbdd7e2669bb7b"
-dependencies = [
- "bitflags 2.13.1",
- "memchr",
- "pulldown-cmark-escape",
- "unicase",
-]
-
-[[package]]
-name = "pulldown-cmark-escape"
-version = "0.11.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "007d8adb5ddab6f8e3f491ac63566a7d5002cc7ed73901f72057943fa71ae1ae"
 
 [[package]]
 name = "quick-error"
@@ -3719,12 +3694,6 @@ name = "unarray"
 version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "eaea85b334db583fe3274d12b4cd1880032beab409c0d774be044d4480ab9a94"
-
-[[package]]
-name = "unicase"
-version = "2.10.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "357cc3acc6a036009fd6c973ed009037c732d60d0b4f6c673e9041497482a28f"
 
 [[package]]
 name = "unicode-bidi"

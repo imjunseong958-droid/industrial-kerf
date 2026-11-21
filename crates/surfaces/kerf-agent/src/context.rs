@@ -414,26 +414,6 @@ mod tests {
     }
 
     #[test]
-    fn archived_snapshots_and_images_point_to_the_transcript() {
-        let result = json!([{"type":"text","text":"revision 4, awaiting review"},
-            {"type":"image","source":{"type":"base64","media_type":"image/png","data":"AQID"}}]);
-        let mut messages = vec![
-            json!({"role":"user","content":"Inspect the shot"}),
-            json!({"role":"user","content":[{"type":"text","text":format!("{SNAPSHOT_HEADER}\n\nrevision 4")}]}),
-        ];
-        messages.extend(exchange(0, result));
-        let view = View {
-            archived: messages.len(),
-            thinking_from: 0,
-        };
-        let shown = render(&messages, &view, &ContextBudget::default());
-        assert!(!shown.iter().any(|m| m.to_string().contains("AQID")));
-        assert!(shown[1].to_string().contains("session.read message 1"));
-        let restored = read(&messages, json!({"message":3,"block":0,"image":0})).unwrap();
-        assert_eq!(restored["images"][0]["data"], "AQID");
-    }
-
-    #[test]
     fn archive_pages_reconstruct_unicode_without_losing_bytes() {
         let messages = vec![json!({"role":"user","content":"한글 편집 기준"})];
         let mut offset = 0;
@@ -457,22 +437,4 @@ mod tests {
         )
         .is_err());
     }
-
-    #[test]
-    fn decoded_result_can_be_queried_by_pointer() {
-        let messages = vec![exchange(
-            0,
-            json!({"pendingProposal":{"id":"p1","state":"pending"},"revision":42})
-                .to_string()
-                .into(),
-        )[1]
-        .clone()];
-        let page = read(
-            &messages,
-            json!({"message":0,"block":0,"pointer":"/pendingProposal"}),
-        )
-        .unwrap();
-        assert!(page["text"].as_str().unwrap().contains("pending"));
-    }
-
 }

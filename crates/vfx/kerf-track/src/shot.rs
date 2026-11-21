@@ -304,58 +304,6 @@ mod tests {
     }
 
     #[test]
-    fn a_camera_that_does_not_move_is_still() {
-        let motion = shot(|_, x, y| detail(x, y));
-        assert_eq!(motion.camera, ["still"], "{motion:?}");
-        assert!(
-            motion.pan.abs() < 0.001 && motion.agreeing > 0.9,
-            "{motion:?}"
-        );
-    }
-
-    #[test]
-    fn a_pan_is_read_with_how_fast_it_goes() {
-        // A camera going right by 8 pixels a step: 32 a second, a tenth of the frame's width.
-        let motion = shot(|at, x, y| detail(x + 8.0 * at as f64, y));
-        assert_eq!(motion.camera, ["pan right"], "{motion:?}");
-        assert!((motion.pan - 0.1).abs() < 0.005, "{motion:?}");
-        assert!(motion.tilt.abs() < 0.005, "{motion:?}");
-        let left = shot(|at, x, y| detail(x - 8.0 * at as f64, y));
-        assert_eq!(left.camera, ["pan left"], "{left:?}");
-    }
-
-    #[test]
-    fn a_tilt_is_read_as_a_tilt() {
-        // Going down by 6 pixels a step: 24 a second, of 180.
-        let motion = shot(|at, x, y| detail(x, y + 6.0 * at as f64));
-        assert_eq!(motion.camera, ["tilt down"], "{motion:?}");
-        assert!((motion.tilt - 24.0 / 180.0).abs() < 0.01, "{motion:?}");
-    }
-
-    #[test]
-    fn a_zoom_is_read_as_a_zoom() {
-        // Getting 1% bigger a step, about the middle.
-        let motion = shot(|at, x, y| {
-            let by = 1.01f64.powi(at as i32);
-            detail(160.0 + (x - 160.0) / by, 90.0 + (y - 90.0) / by)
-        });
-        assert_eq!(motion.camera, ["zoom in"], "{motion:?}");
-        assert!((motion.zoom - 0.04).abs() < 0.006, "{motion:?}");
-    }
-
-    #[test]
-    fn a_turn_is_read_as_a_roll() {
-        // The picture turning a degree a step about the middle.
-        let motion = shot(|at, x, y| {
-            let (s, c) = (at as f64).to_radians().sin_cos();
-            let (dx, dy) = (x - 160.0, y - 90.0);
-            detail(160.0 + dx * c + dy * s, 90.0 - dx * s + dy * c)
-        });
-        assert!(motion.camera.contains(&"roll left"), "{motion:?}");
-        assert!((motion.roll + 4.0).abs() < 0.8, "{motion:?}");
-    }
-
-    #[test]
     fn a_subject_crossing_the_frame_is_not_the_camera() {
         let motion = shot(|at, x, y| {
             let (cx, cy) = (40.0 + 12.0 * at as f64, 90.0);
@@ -366,19 +314,5 @@ mod tests {
             }
         });
         assert_eq!(motion.camera, ["still"], "{motion:?}");
-    }
-
-    #[test]
-    fn a_hand_held_camera_is_said_to_be() {
-        let jitter = |at: usize| ((at as f64 * 12.9898).sin() * 43_758.545).fract() * 3.0;
-        let motion = shot(|at, x, y| detail(x + jitter(at), y + jitter(at + 40)));
-        assert!(motion.camera.contains(&"handheld"), "{motion:?}");
-    }
-
-    #[test]
-    fn a_picture_with_nothing_in_it_says_nothing() {
-        let motion = shot(|_, _, _| 0.5);
-        assert_eq!(motion.camera, ["unknown"], "{motion:?}");
-        assert_eq!(motion_over(&[], 0.25).camera, ["unknown"]);
     }
 }

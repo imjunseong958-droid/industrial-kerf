@@ -3,13 +3,29 @@
 
 1. Done means you ran the change and saw it work. Passing checks or unit tests alone is not done.
 2. Before committing, follow `.claude/skills/verify/SKILL.md`. In Claude Code this is the `verify` skill. If `.claude/verify.sh` exists, it holds this repo's checks.
-3. Prefer tests that go through the public interface (integration or end-to-end) over tests of internals.
-4. For parsing, encoding, or state logic, add property tests (round-trip, invariants, idempotency) where practical. For refactors meant to keep behavior, compare old and new output on the same inputs.
-5. Do not change tests, snapshots, lint settings, CI config, or `.claude/verify.sh` to make your change pass. Change a test only when the task changes the behavior it checks, and say so in the PR.
-6. Fix warnings your change introduces instead of silencing them.
-7. Flaky tests: do not rerun until green, add sleeps, raise timeouts, or skip them. Find the cause. If you can't, stop and tell the user.
-8. If a check still fails after 3 fix attempts, stop and report what fails, what you tried, and your best guess at the cause.
-9. Do not rerun a passing check without relevant changes.
+3. Do not change tests, snapshots or golden files, lint settings, CI config, or `.claude/verify.sh` to make your change pass. Change a test only when the task changes the behavior it checks, and say so in the PR.
+4. Fix warnings your change introduces instead of silencing them.
+5. Flaky tests: do not rerun until green, add sleeps, raise timeouts, or skip them. Find the cause. If you can't, stop and tell the user.
+6. If a check still fails after 3 fix attempts, stop and report what fails, what you tried, and your best guess at the cause.
+7. Do not rerun a passing check without relevant changes.
+
+## Tests
+
+1. Add a test only for behavior the task adds or changes, or to reproduce a bug you fixed. Do not add tests to raise coverage or to show work.
+2. A test you add must be able to fail. Break the behavior it checks (undo the fix or change the code under test), see the test fail, then restore the code. Delete a test that passes either way.
+3. Cover new or changed behavior with an end-to-end or golden test through the public interface (CLI, HTTP endpoint, public API) where practical, extending the existing suite. Use unit tests only for logic that is hard to reach that way.
+4. When the task changes golden or snapshot output on purpose, regenerate it, read the diff, and confirm every changed line is intended. List the changed golden files in the PR.
+5. Do not write tests that mirror the implementation, only check mocks you set up, check that a constructor stores its arguments, cover trivial getters or setters, or test the language, a framework, or a library.
+6. Add cases to existing test files before creating new ones. Do not repeat a case an existing test already covers.
+7. To check a change once, use a scratch command or program and delete it afterwards. Do not keep it as a test.
+8. For parsing, encoding, or state logic, add property tests (round-trip, invariants, idempotency) where practical. For refactors meant to keep behavior, compare old and new output on the same inputs instead of adding tests.
+
+## Docs
+
+1. Do not create new doc files (architecture overviews, design notes, summaries, plans, reports) unless the user asks for one.
+2. Write down only what the code cannot show: how to install, run, or use the project, why a non-obvious choice was made, and constraints from outside the code. Do not describe directory layout, what each module or file does, call flows, or lists of types and functions, in READMEs, AGENTS.md, or anywhere else. Agents read the code faster than such docs, and the docs go stale and mislead them.
+3. Put plans, progress notes, and verification reports in your reply or the PR description, not in files in the repo.
+4. When your change makes an existing doc wrong (usage, options, setup steps), fix that part in the same change.
 
 ## Git and PRs
 

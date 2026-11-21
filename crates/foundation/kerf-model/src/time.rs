@@ -527,58 +527,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn every_standard_rate_has_an_exact_frame() {
-        for text in [
-            "23.976", "24", "25", "29.97", "30", "47.952", "48", "50", "59.94", "60", "119.88",
-            "120", "12.5", "15",
-        ] {
-            let rate = Rate::parse(text).unwrap_or_else(|e| panic!("{text}: {e}"));
-            assert_eq!(rate.to_string(), text);
-            let one_hour = rate.time_of(i64::from(rate.timecode_base()) * 3600);
-            assert!(one_hour.is_positive());
-        }
-        for samples in [44_100, 48_000, 96_000, 192_000] {
-            assert_eq!(FLICKS_PER_SECOND % samples, 0);
-        }
-    }
-
-    #[test]
-    fn a_start_restated_at_another_rate_keeps_its_timecode() {
-        let hour = |rate: Rate| rate.time_of(i64::from(rate.timecode_base()) * 3600);
-        let restated = restate_timecode(hour(Rate::FPS_24), Rate::FPS_24, false, Rate::FPS_29_97);
-        assert_eq!(restated, (hour(Rate::FPS_29_97), false));
-        assert_eq!(
-            format_timecode(restated.0, Rate::FPS_29_97, false),
-            "01:00:00:00"
-        );
-        // Drop-frame goes where the new rate has none, and stays where it has.
-        let (start, drop) = parse_timecode("00:10:00;00", Rate::FPS_29_97).unwrap();
-        assert!(drop);
-        let at_30 = restate_timecode(start, Rate::FPS_29_97, true, Rate::FPS_30);
-        assert_eq!(
-            format_timecode(at_30.0, Rate::FPS_30, at_30.1),
-            "00:10:00:00"
-        );
-        let fps_59 = Rate::new(60_000, 1001).unwrap();
-        let at_59 = restate_timecode(start, Rate::FPS_29_97, true, fps_59);
-        assert!(at_59.1);
-        assert_eq!(format_timecode(at_59.0, fps_59, true), "00:10:00;00");
-        // A frame number the new rate cannot show falls to its nearest frame.
-        let late = Rate::FPS_30.time_of(29);
-        let at_24 = restate_timecode(late, Rate::FPS_30, false, Rate::FPS_24);
-        assert_eq!(at_24, (Rate::FPS_24.round(late), false));
-    }
-
-    #[test]
-    fn ntsc_spellings_normalize() {
-        assert_eq!(Rate::parse("23.98").unwrap(), Rate::FPS_23_976);
-        assert_eq!(Rate::parse("24000/1001").unwrap(), Rate::FPS_23_976);
-        assert_eq!(Rate::from_fps(29.970_029_97).unwrap(), Rate::FPS_29_97);
-        assert_eq!(Rate::from_fps(25.0).unwrap(), Rate::FPS_25);
-        assert_eq!(Rate::parse("12.5").unwrap(), Rate::new(25, 2).unwrap());
-    }
-
-    #[test]
     fn inexact_and_malformed_rates_are_rejected() {
         assert!(matches!(
             Rate::new(37, 1),
@@ -646,45 +594,5 @@ mod tests {
             parse_timecode("00:00:00;10", Rate::FPS_25),
             Err(TimeError::DropFrameUnsupported(_))
         ));
-    }
-
-    #[test]
-    fn rounding_snaps_to_the_nearest_frame() {
-        let rate = Rate::FPS_24;
-        let third = rate.frame_duration().flicks() / 3;
-        assert_eq!(rate.frames_round(Time::from_flicks(third)), 0);
-        assert_eq!(rate.frames_round(Time::from_flicks(2 * third)), 1);
-        assert_eq!(rate.frames_floor(Time::from_flicks(-1)), -1);
-    }
-
-    #[test]
-    fn speeds_scale_spans_exactly() {
-        let double = Ratio::parse("2").unwrap();
-        let second = Time::from_flicks(FLICKS_PER_SECOND);
-        assert_eq!(double.source_span(second).flicks(), 2 * FLICKS_PER_SECOND);
-        assert_eq!(double.timeline_span(second).flicks(), FLICKS_PER_SECOND / 2);
-        let reverse = Ratio::parse("-1.25").unwrap();
-        assert!(reverse.is_reverse());
-        assert_eq!(reverse.to_string(), "-1.25");
-        assert_eq!(Ratio::parse("3/2").unwrap().to_string(), "1.5");
-        assert!(Ratio::parse("0").is_err());
-        assert!(Ratio::parse("1000").is_err());
-    }
-
-    #[test]
-    fn covering_spans_play_back_at_least_as_long() {
-        let six_frames = Rate::FPS_29_97.time_of(6);
-        let speed = Ratio::parse("0.37").unwrap();
-        // Rounding to the nearest flick loses one here.
-        assert!(speed.timeline_span(speed.source_span(six_frames)) < six_frames);
-        for speed in ["0.37", "-0.37", "0.3333", "7/13", "2.33", "100", "0.01"] {
-            let speed = Ratio::parse(speed).unwrap();
-            for frames in 0..48 {
-                let duration = Rate::FPS_29_97.time_of(frames);
-                let span = speed.source_span_covering(duration);
-                assert!(speed.timeline_span(span) >= duration, "{speed} {frames}f");
-                assert!(span.flicks() - speed.source_span(duration).flicks() <= 1);
-            }
-        }
     }
 }

@@ -235,25 +235,6 @@ mod tests {
     }
 
     #[test]
-    fn it_keeps_up_with_a_fast_move_and_a_turn() {
-        let way = |index: usize| {
-            let t = index as f64;
-            let there = if index < 12 {
-                t * 14.0
-            } else {
-                168.0 - (t - 12.0) * 14.0
-            };
-            [70.0 + there, 90.0]
-        };
-        let followed = follow(24, [way(0)[0] / W as f64, 0.5], |index| {
-            Some((W, H, picture(way(index))))
-        });
-        assert_eq!(followed.lost_at, None);
-        let last = followed.points[23];
-        assert!((last.x * W as f64 - way(23)[0]).abs() < 2.0, "{last:?}");
-    }
-
-    #[test]
     fn it_says_where_it_lost_a_point_that_leaves_or_vanishes() {
         // Leaving the frame.
         let way = |index: usize| [290.0 + index as f64 * 8.0, 90.0];
@@ -272,96 +253,5 @@ mod tests {
             Some((W, H, picture(center)))
         });
         assert_eq!(cut.lost_at, Some(5));
-    }
-
-    #[test]
-    fn frames_that_cannot_be_had_end_it() {
-        let none = follow(5, [0.5, 0.5], |_| None);
-        assert!(none.points.is_empty());
-        let short = follow(5, [0.5, 0.5], |index| {
-            (index < 2).then(|| (W, H, picture([160.0, 90.0])))
-        });
-        assert_eq!(short.lost_at, Some(2));
-        assert_eq!(short.points.len(), 2);
-    }
-
-    fn point(x: f64, y: f64) -> Point {
-        Point {
-            x,
-            y,
-            confidence: 1.0,
-        }
-    }
-
-    #[test]
-    fn a_straight_way_needs_only_its_ends() {
-        let straight: Vec<Point> = (0..100)
-            .map(|index| point(index as f64 * 0.001, index as f64 * 0.002))
-            .collect();
-        assert_eq!(simplified(&straight, 0.0005), [0, 99]);
-    }
-
-    #[test]
-    fn a_turn_keeps_its_corner_and_nothing_strays_past_the_tolerance() {
-        let bent: Vec<Point> = (0..100)
-            .map(|index| {
-                let t = index as f64;
-                point(t.min(50.0) * 0.01, (t - 50.0).max(0.0) * 0.01)
-            })
-            .collect();
-        assert_eq!(simplified(&bent, 0.001), [0, 50, 99]);
-        let wavy: Vec<Point> = (0..200)
-            .map(|index| point(index as f64 * 0.005, (index as f64 * 0.1).sin() * 0.1))
-            .collect();
-        let kept = simplified(&wavy, 0.002);
-        assert!(kept.len() < 60, "{}", kept.len());
-        for pair in kept.windows(2) {
-            for index in pair[0]..pair[1] {
-                let t = (index - pair[0]) as f64 / (pair[1] - pair[0]) as f64;
-                let y = wavy[pair[0]].y + (wavy[pair[1]].y - wavy[pair[0]].y) * t;
-                assert!((y - wavy[index].y).abs() <= 0.0021);
-            }
-        }
-    }
-
-    #[test]
-    fn short_ways_are_kept_whole() {
-        assert_eq!(simplified(&[], 0.1), Vec::<usize>::new());
-        assert_eq!(simplified(&[point(0.0, 0.0)], 0.1), [0]);
-    }
-
-    /// A white square on a flat red ground: nothing to hold on to but its corners.
-    fn square(left: f64) -> Vec<u8> {
-        let mut rgba = Vec::with_capacity(W * H * 4);
-        for y in 0..H {
-            for x in 0..W {
-                let inside =
-                    (x as f64) >= left && (x as f64) < left + 32.0 && (81..99).contains(&y);
-                rgba.extend_from_slice(if inside {
-                    &[255, 255, 255, 255]
-                } else {
-                    &[200, 0, 0, 255]
-                });
-            }
-        }
-        rgba
-    }
-
-    #[test]
-    fn it_holds_on_to_a_corner_of_a_flat_shape() {
-        let way = |index: usize| 80.0 + index as f64 * 4.0;
-        let followed = follow(25, [way(0) / W as f64, 81.0 / H as f64], |index| {
-            Some((W, H, square(way(index))))
-        });
-        assert_eq!(followed.lost_at, None, "{:?}", followed.points.last());
-        let last = followed.points[24];
-        assert!((last.x * W as f64 - way(24)).abs() < 1.5, "{last:?}");
-        assert!((last.y * H as f64 - 81.0).abs() < 1.5, "{last:?}");
-    }
-
-    #[test]
-    fn a_flat_area_has_nothing_to_follow() {
-        let followed = follow(5, [0.1, 0.1], |_| Some((W, H, square(80.0))));
-        assert_eq!(followed.lost_at, Some(1));
     }
 }

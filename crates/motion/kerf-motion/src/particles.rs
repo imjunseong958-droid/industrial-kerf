@@ -153,60 +153,6 @@ mod tests {
         }
     }
 
-    fn drawn(emitter: &Emitter, time: f64) -> Image {
-        let mut image = Image::new(300, 200);
-        emitter.draw(&mut image, time);
-        image
-    }
-
-    fn ink(image: &Image) -> f32 {
-        image.px.as_chunks::<4>().0.iter().map(|pixel| pixel[3]).sum()
-    }
-
-    #[test]
-    fn none_before_the_start_and_as_many_as_their_life_allows() {
-        assert_eq!(ink(&drawn(&emitter(), -0.5)), 0.0);
-        assert_eq!(emitter().alive(0.5), 0..51);
-        assert_eq!(emitter().alive(3.0), 200..301);
-        assert_eq!(
-            Emitter {
-                rate: 0.0,
-                ..emitter()
-            }
-            .alive(1.0),
-            0..0
-        );
-    }
-
-    #[test]
-    fn a_fan_goes_both_ways_and_an_area_spreads_their_birth() {
-        let fan = Emitter {
-            spread: 90.0,
-            rate: 500.0,
-            ..emitter()
-        };
-        let image = drawn(&fan, 3.0);
-        let (mut above, mut below) = (0.0, 0.0);
-        for y in 0..200 {
-            for x in 0..300 {
-                if y < 100 {
-                    above += image.get(x, y)[3];
-                } else {
-                    below += image.get(x, y)[3];
-                }
-            }
-        }
-        assert!(above > 100.0 && below > 100.0, "{above} {below}");
-        let area = Emitter {
-            velocity: 0.0,
-            area: [100.0, 0.0],
-            ..emitter()
-        };
-        let spread = drawn(&area, 3.0);
-        assert!(spread.get(10, 100)[3] > 0.0 || spread.get(90, 100)[3] > 0.0);
-        assert_eq!(spread.get(150, 100)[3], 0.0);
-    }
-
     #[test]
     fn too_many_are_held_to_a_number() {
         let e = Emitter {

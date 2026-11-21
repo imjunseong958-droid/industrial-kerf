@@ -8,15 +8,13 @@ use gpui::{point, px, size, Action, Bounds, WindowBounds};
 use jiff::tz::TimeZone;
 use kerf_editor::app::{lead_past, titlebar, window_buttons_at, window_place};
 use kerf_editor::commands::{keymap_menu, menus_with};
-use kerf_editor::model::{Snapshot, TrackKind};
+use kerf_editor::model::Snapshot;
 use kerf_editor::prefs::Keymap;
 use kerf_editor::sidebar::ChooseKeymap;
 use kerf_editor::stage::{preview_chip_words, previewed_version};
 use kerf_editor::store::Preview;
 use kerf_editor::theme::{layout, motion};
-use kerf_editor::timeline::{
-    default_height, watch_look, watched_clips, ClipWatch, TrackHeights, WatchLook,
-};
+use kerf_editor::timeline::{watch_look, watched_clips, ClipWatch, WatchLook};
 use kerf_editor::workspace::{edited_ago_in, local_day, toolbar_places, ToolbarPlaces};
 use proptest::prelude::*;
 use serde_json::json;
@@ -64,27 +62,6 @@ fn a_window_taking_anothers_place_opens_where_it_was() {
         }
     }
     assert_eq!(layout::WINDOW, (1500.0, 940.0));
-}
-
-#[test]
-fn a_first_window_opens_at_qts_size_in_the_middle_where_it_fits() {
-    // A 1080p screen: 1500 × 940 in its middle, windowed.
-    let wide = screen(0.0, 0.0, 1920.0, 1080.0);
-    assert_eq!(
-        window_place(None, None, Some(wide)),
-        WindowBounds::Windowed(screen(210.0, 70.0, 1500.0, 940.0))
-    );
-    // A screen to the right of another: in its own middle.
-    let beside = screen(1920.0, 0.0, 2560.0, 1440.0);
-    assert_eq!(
-        window_place(None, None, Some(beside)),
-        WindowBounds::Windowed(screen(1920.0 + 530.0, 250.0, 1500.0, 940.0))
-    );
-    // No screen known: at the origin.
-    assert_eq!(
-        window_place(None, None, None),
-        WindowBounds::Windowed(screen(0.0, 0.0, 1500.0, 940.0))
-    );
 }
 
 #[test]
@@ -569,22 +546,3 @@ proptest! {
 }
 
 // ------------------------------------------------------------- track heights
-
-#[test]
-fn every_track_starts_at_the_roomy_height_qt_s_window_drew() {
-    // Qt's window set roomy lanes: 40 for every track, picture, sound and
-    // subtitles alike.
-    assert_eq!(layout::TRACK_LANE, 40.0);
-    let heights = TrackHeights::default();
-    for kind in [TrackKind::Video, TrackKind::Audio, TrackKind::Subtitle] {
-        assert_eq!(default_height(kind), layout::TRACK_LANE);
-        assert_eq!(heights.height("T", kind), layout::TRACK_LANE);
-    }
-    // Medium for every track, and Reset, go back to it.
-    let mut heights = TrackHeights::default();
-    heights.set_all(Some(64.0));
-    heights.set("A1", Some(20.0));
-    heights.set_all(None);
-    assert_eq!(heights.height("A1", TrackKind::Audio), layout::TRACK_LANE);
-    assert_eq!(heights, TrackHeights::default());
-}

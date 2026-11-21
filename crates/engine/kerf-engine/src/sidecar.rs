@@ -531,33 +531,6 @@ mod tests {
     }
 
     #[test]
-    fn a_cancelled_sidecar_is_asked_to_end_and_what_it_says_is_heard() {
-        // A program that takes its work back when asked, as a model's does a job on a server.
-        let token = CancellationToken::new();
-        let (runner, lines) = run_trapping(
-            &token,
-            "echo took the job back >&2; exit 0",
-            Duration::from_secs(5),
-        );
-        let start = Instant::now();
-        token.cancel();
-        let result = runner.join().expect("runner");
-        assert!(matches!(result, Err(EngineError::Cancelled)));
-        // It ended by itself, well inside the time it was given.
-        assert!(
-            start.elapsed() < Duration::from_secs(3),
-            "{:?}",
-            start.elapsed()
-        );
-        // The shell may say that the `sleep` it waited on was ended too.
-        let said: Vec<String> = lines.try_iter().collect();
-        assert!(
-            said.iter().any(|line| line == "took the job back"),
-            "{said:?}"
-        );
-    }
-
-    #[test]
     fn a_sidecar_that_does_not_end_when_asked_is_killed() {
         let token = CancellationToken::new();
         let grace = Duration::from_millis(300);

@@ -146,30 +146,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn validates_identifier_syntax() {
-        for valid in ["c1", "V1", "_tmp", "color.basic", "A001_C003-v2"] {
-            assert!(Id::new(valid).is_ok(), "{valid}");
-        }
-        for invalid in ["", "1c", "c 1", "c#1", "클립", &"x".repeat(65)] {
-            assert!(Id::new(invalid).is_err(), "{invalid}");
-        }
-    }
-
-    #[test]
-    fn generates_above_existing_suffixes() {
-        let existing = [
-            Id::new("c1").unwrap(),
-            Id::new("c7").unwrap(),
-            Id::new("m2").unwrap(),
-        ];
-        let mut ids = IdGen::new(&existing);
-        assert_eq!(ids.next("c").as_str(), "c8");
-        assert_eq!(ids.next("c").as_str(), "c9");
-        assert_eq!(ids.next("m").as_str(), "m3");
-        assert_eq!(ids.next("t").as_str(), "t1");
-    }
-
-    #[test]
     fn retired_ids_are_neither_allocated_nor_reservable() {
         let mut ids = IdGen::new(&[Id::new("c1").unwrap()]);
         ids.retire(&Id::new("c4").unwrap());

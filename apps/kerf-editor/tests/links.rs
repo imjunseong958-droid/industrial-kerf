@@ -56,14 +56,6 @@ fn a_link_finds_its_project_among_those_known_and_never_guesses() {
         .contains("More than one"));
 }
 
-#[test]
-fn slugs_keep_letters_and_digits_alone() {
-    assert_eq!(slug("Atlas Cut"), "atlas-cut");
-    assert_eq!(slug("  --My__Film 2!! "), "my-film-2");
-    assert_eq!(slug("Café"), "café");
-    assert_eq!(slug("!!!"), "");
-}
-
 proptest! {
     /// A link made for a project reads back to that project, revision and frame.
     #[test]

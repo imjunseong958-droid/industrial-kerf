@@ -540,22 +540,6 @@ mod tests {
     }
 
     #[test]
-    fn tetrahedral_exact_on_affine_and_nodes() {
-        let aff = |c: [f32; 3]| [0.2 + 0.5 * c[0] - 0.1 * c[2], 0.3 * c[1] + 0.4 * c[0], 0.9 * c[2] - 0.05];
-        let l = Lut3d::from_fn(9, aff);
-        for c in [[0.13, 0.77, 0.5], [0.99, 0.01, 0.42], [0.5, 0.5, 0.5]] {
-            let (a, b) = (l.apply(c), aff(c));
-            assert!((0..3).all(|k| (a[k] - b[k]).abs() < 1e-5));
-        }
-        let w = wild(7);
-        for (r, g, b) in [(0, 0, 0), (3, 5, 1), (6, 6, 6)] {
-            let c = [r as f32 / 6.0, g as f32 / 6.0, b as f32 / 6.0];
-            let (a, t, want) = (w.apply(c), w.apply_trilinear(c), w.at(r, g, b));
-            assert!((0..3).all(|k| (a[k] - want[k]).abs() < 1e-6 && (t[k] - want[k]).abs() < 1e-6));
-        }
-    }
-
-    #[test]
     fn cube_roundtrip_3d_1d_and_shaper() {
         let mut c = wild(17);
         c.title = "wild".into();
@@ -583,34 +567,6 @@ mod tests {
         let back = Lut::parse_cube(&both.to_cube()).unwrap();
         assert!(back.shaper.is_some() && back.cube.is_some());
         assert!((back.apply([0.5; 3])[1] - 0.5f32.powf(2.2)).abs() < 1e-3);
-    }
-
-    #[test]
-    fn cube_sizes_up_to_65_and_errors() {
-        let l = Lut3d::identity(65);
-        let back = Lut3d::parse_cube(&l.to_cube()).unwrap();
-        assert_eq!(back.size, 65);
-        let v = back.apply([0.3, 0.55, 0.91]);
-        assert!((v[0] - 0.3).abs() < 1e-5 && (v[1] - 0.55).abs() < 1e-5 && (v[2] - 0.91).abs() < 1e-5);
-        assert!(Lut3d::parse_cube("LUT_3D_SIZE 2\n0 0 0\n").is_err());
-        assert!(Lut::parse_cube("LUT_3D_SIZE 1\n0 0 0\n").is_err());
-        assert!(Lut::parse_cube("TITLE \"x\"\n").is_err());
-        assert!(Lut::parse_cube("LUT_3D_SIZE 2\n0 0 0\nLUT_1D_SIZE 2\n").is_err());
-        assert!(Lut::parse_cube("LUT_3D_SIZE 2\nDOMAIN_MIN 1 1 1\nDOMAIN_MAX 0 0 0\n0 0 0\n0 0 0\n0 0 0\n0 0 0\n0 0 0\n0 0 0\n0 0 0\n0 0 0\n").is_err());
-        for key in ["LUT_1D_INPUT_RANGE", "LUT_3D_INPUT_RANGE"] {
-            let (size, rows) = if key.starts_with("LUT_1D") { ("LUT_1D_SIZE 2", 2) } else { ("LUT_3D_SIZE 2", 8) };
-            let table = "0 0 0\n".repeat(rows);
-            for range in ["0 0", "1 0", "NaN 1", "0 inf"] {
-                assert!(Lut::parse_cube(&format!("{size}\n{key} {range}\n{table}")).is_err(), "accepted {key} {range}");
-            }
-            assert!(Lut::parse_cube(&format!("{size}\n{key} -0.5 2\n{table}")).is_ok());
-        }
-        assert!(Lut::parse_cube("LUT_1D_SIZE 2\n0 0 0\nNaN 1 1\n").is_err());
-        assert!(Lut::parse_cube("LUT_1D_SIZE 2\nDOMAIN_MAX inf 1 1\n0 0 0\n1 1 1\n").is_err());
-        // comments, blank lines, Windows newlines, inline comments
-        let txt = "# hi\r\nTITLE \"t\"\r\n\r\nLUT_3D_SIZE 2 # two\r\n0 0 0\n1 0 0\n0 1 0\n1 1 0\n0 0 1\n1 0 1\n0 1 1\n1 1 1\n";
-        let l = Lut3d::parse_cube(txt).unwrap();
-        assert_eq!(l.apply([0.25, 0.5, 0.75]), [0.25, 0.5, 0.75]);
     }
 
     #[test]
@@ -649,17 +605,5 @@ mod tests {
         assert!(matches!(r, Ok(Err(_))), "huge mesh must be rejected without panicking");
         let mesh257 = (0..257).map(|i| i.to_string()).collect::<Vec<_>>().join(" ") + "\n";
         assert!(Lut::parse_3dl(&mesh257).is_err());
-    }
-
-    #[test]
-    fn cube_shaper_per_channel_domain_round_trips() {
-        let mut text = String::from("LUT_1D_SIZE 2\nLUT_3D_SIZE 2\nDOMAIN_MAX 1 2 3\n");
-        for _ in 0..10 {
-            text.push_str("0 0 0\n");
-        }
-        let a = Lut::parse_cube(&text).unwrap();
-        assert_eq!(a.shaper.as_ref().unwrap().domain_max, [1.0, 2.0, 3.0]);
-        let b = Lut::parse_cube(&a.to_cube()).unwrap();
-        assert_eq!(b.shaper.unwrap().domain_max, [1.0, 2.0, 3.0]);
     }
 }

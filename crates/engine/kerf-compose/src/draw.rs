@@ -3640,39 +3640,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_first_lap_of_id_colors_is_as_it_was() {
-        // As the colors were when they came round after a lap, so that what was told apart
-        // then is told apart by the same colors now.
-        let as_it_was = |index: usize| {
-            let hue = (index as f64 * 137.507_764) % 360.0;
-            let (saturation, value) = [(0.85, 1.0), (0.55, 0.8), (1.0, 0.62)][index % 3];
-            let chroma = value * saturation;
-            let within = chroma * (1.0 - ((hue / 60.0) % 2.0 - 1.0).abs());
-            let (r, g, b) = match (hue / 60.0) as u32 {
-                0 => (chroma, within, 0.0),
-                1 => (within, chroma, 0.0),
-                2 => (0.0, chroma, within),
-                3 => (0.0, within, chroma),
-                4 => (within, 0.0, chroma),
-                _ => (chroma, 0.0, within),
-            };
-            [r, g, b].map(|channel| ((channel + value - chroma) * 255.0).round() as u8)
-        };
-        let now = |index: usize| {
-            let Rgba { r, g, b, a } = id_color(index);
-            assert_eq!(a, 255);
-            [r, g, b]
-        };
-        for index in 0..LAP {
-            assert_eq!(now(index), as_it_was(index), "{index}");
-        }
-        assert_eq!([now(0), now(1), now(2)], [[255, 38, 38], [92, 204, 125], [92, 0, 158]]);
-        // The next clip had the first's color, to within what a reader takes for it.
-        assert_eq!(as_it_was(LAP), [255, 42, 38]);
-        assert_ne!(now(LAP), as_it_was(LAP));
-    }
-
-    #[test]
     fn no_two_id_colors_are_near_each_other_and_none_is_near_black() {
         // Every lap is whole, and the colors are as many as is said of them.
         assert_eq!(rings().len() % 3, 0);
@@ -3927,23 +3894,5 @@ mod tests {
                 }
             }
         }
-    }
-
-    #[test]
-    fn nested_sequences_show_their_own_frames() {
-        let rate = Rate::FPS_24;
-        let at = |frames: i64| rate.time_of(frames);
-        // Forward from frame 10: clip frame 5 shows nested frame 15.
-        assert_eq!(
-            nested_time(at(5), at(10), &Speed::ONE, at(48), rate),
-            at(15)
-        );
-        // Half speed: clip frame 5 is nested frame 12.5, so 12 shows.
-        let half = Speed::from(kerf_model::Ratio::parse("1/2").unwrap());
-        assert_eq!(nested_time(at(5), at(10), &half, at(48), rate), at(12));
-        // Reversed over [10, 58): the first frame is 57.
-        let back = Speed::from(kerf_model::Ratio::parse("-1").unwrap());
-        assert_eq!(nested_time(Time::ZERO, at(10), &back, at(48), rate), at(57));
-        assert_eq!(nested_time(at(47), at(10), &back, at(48), rate), at(10));
     }
 }

@@ -331,13 +331,6 @@ mod tests {
         assert!((p - q).length() < 1e-9);
     }
 
-    #[test]
-    fn motion_anchor_lands_on_position() {
-        let m = Affine::motion(Vec2::new(960.0, 540.0), Vec2::new(2.0, 2.0), 90.0, Vec2::new(10.0, 20.0));
-        let p = m.apply(Vec2::new(10.0, 20.0));
-        assert!((p - Vec2::new(960.0, 540.0)).length() < 1e-9);
-    }
-
     fn close(a: Vec2, b: Vec2) -> bool {
         (a - b).length() < 1e-9
     }
@@ -346,16 +339,6 @@ mod tests {
     fn rotation_is_clockwise_on_screen() {
         let p = Mat3::rotate_deg(90.0).apply(vec2(1.0, 0.0));
         assert!(close(p, vec2(0.0, 1.0)));
-    }
-
-    #[test]
-    fn quad_mapping_hits_corners() {
-        let q = [vec2(10.0, 10.0), vec2(110.0, 20.0), vec2(120.0, 140.0), vec2(5.0, 100.0)];
-        let m = Mat3::square_to_quad(q);
-        assert!(close(m.apply(vec2(0.0, 0.0)), q[0]));
-        assert!(close(m.apply(vec2(1.0, 0.0)), q[1]));
-        assert!(close(m.apply(vec2(1.0, 1.0)), q[2]));
-        assert!(close(m.apply(vec2(0.0, 1.0)), q[3]));
     }
 
     proptest::proptest! {

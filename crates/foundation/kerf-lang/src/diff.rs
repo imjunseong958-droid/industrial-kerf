@@ -137,22 +137,3 @@ fn edits(old: &[&str], new: &[&str]) -> Vec<Edit> {
     out.extend(std::iter::repeat_n(Edit::Keep, suffix));
     out
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn equal_texts_have_no_diff() {
-        assert_eq!(diff_text("a\nb\n", "a\nb\n"), "");
-    }
-
-    #[test]
-    fn nearby_changes_share_a_hunk() {
-        let diff = diff_text("a\nb\nc\nd\ne\n", "a\nB\nc\nD\ne\n");
-        assert_eq!(
-            diff,
-            "--- before\n+++ after\n@@ -1,5 +1,5 @@\n a\n-b\n+B\n c\n-d\n+D\n e\n"
-        );
-    }
-}

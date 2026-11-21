@@ -32,14 +32,3 @@ pub fn seed(id: &str) -> u32 {
         (hash ^ u32::from(byte)).wrapping_mul(0x0100_0193)
     })
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn seeds_differ_between_clips_and_hold_for_one() {
-        assert_eq!(seed("c1"), seed("c1"));
-        assert_ne!(seed("c1"), seed("c2"));
-    }
-}

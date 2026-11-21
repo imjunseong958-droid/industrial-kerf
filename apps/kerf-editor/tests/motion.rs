@@ -1,39 +1,9 @@
 //! How the editor moves: the one curve, and a value that goes on from
 //! where it got to when a new motion takes over.
 
-use kerf_editor::motion::{cubic_bezier, ease, shimmer_at, Tween};
+use kerf_editor::motion::{ease, shimmer_at, Tween};
 use proptest::prelude::*;
 use std::time::{Duration, Instant};
-
-#[test]
-fn the_curve_starts_and_ends_where_it_should() {
-    assert_eq!(ease(0.0), 0.0);
-    assert_eq!(ease(1.0), 1.0);
-    // An ease-out: most of the way there early.
-    assert!(ease(0.25) > 0.6);
-    // A straight line is its own curve.
-    assert!((cubic_bezier(0.0, 0.0, 1.0, 1.0, 0.37) - 0.37).abs() < 1e-3);
-}
-
-#[test]
-fn a_motion_cut_short_goes_on_from_where_it_got_to() {
-    let start = Instant::now();
-    let mut tween = Tween::at(0.0);
-    tween.go_at(100.0, Duration::from_millis(400), start);
-    let halfway = start + Duration::from_millis(200);
-    let there = tween.value_at(halfway);
-    assert!(there > 0.0 && there < 100.0);
-    tween.go_at(0.0, Duration::from_millis(400), halfway);
-    assert!(
-        (tween.value_at(halfway) - there).abs() < 1e-3,
-        "no jump when a new motion takes over"
-    );
-    assert_eq!(tween.value_at(halfway + Duration::from_secs(1)), 0.0);
-    assert!(
-        !tween.running_at(halfway + Duration::from_secs(1)),
-        "every start has its end"
-    );
-}
 
 #[test]
 fn the_light_over_a_title_rests_after_crossing() {

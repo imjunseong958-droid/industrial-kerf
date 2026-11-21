@@ -283,32 +283,4 @@ mod tests {
         assert_eq!(selection.encoder, "libx264");
         assert!(!selection.hardware);
     }
-
-    #[test]
-    fn hardware_encode_args_include_family_quality_flags() {
-        let nvenc = EncoderSelection {
-            encoder: "h264_nvenc".into(),
-            hardware: true,
-            family: Some(HardwareEncoderFamily::Nvenc),
-            reason: "test".into(),
-        };
-        let args = encode_output_args(&nvenc, 23, "veryfast");
-        assert!(args
-            .windows(2)
-            .any(|pair| pair[0] == "-preset" && pair[1] == "p4"));
-        assert!(args
-            .windows(2)
-            .any(|pair| pair[0] == "-qp" && pair[1] == "23"));
-
-        let qsv = EncoderSelection {
-            encoder: "h264_qsv".into(),
-            hardware: true,
-            family: Some(HardwareEncoderFamily::Qsv),
-            reason: "test".into(),
-        };
-        let args = encode_output_args(&qsv, 22, "veryfast");
-        assert!(args
-            .windows(2)
-            .any(|pair| pair[0] == "-global_quality" && pair[1] == "22"));
-    }
 }

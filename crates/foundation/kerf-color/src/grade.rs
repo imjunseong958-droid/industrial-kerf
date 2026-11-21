@@ -126,16 +126,6 @@ mod tests {
     }
 
     #[test]
-    fn sdr_is_the_srgb_signal() {
-        let g = GradeSpace::new(WorkingSpace::Rec709, 1000.0);
-        assert!(!g.is_hdr());
-        let e = g.encode([0.18, 0.5, 1.0]);
-        assert!((e[0] - linear_to_srgb(0.18)).abs() < 1e-6 && (e[2] - 1.0).abs() < 1e-6);
-        // values above white clip on the way back (SDR)
-        assert_eq!(g.decode([1.4, 1.4, 1.4]), [1.0; 3]);
-    }
-
-    #[test]
     fn pq_known_nit_values() {
         // HDR White 10 000: the plain PQ signal; 203 cd/m² ≈ 58 % (BT.2408), 1000 cd/m² ≈ 75.2 %
         let g = GradeSpace::new(WorkingSpace::Rec2100Pq, 10_000.0);

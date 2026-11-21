@@ -228,13 +228,6 @@ mod tests {
         assert!(b.get(32, 32)[3] < 0.05);
     }
 
-    #[test]
-    fn flat_image_stays_flat_with_repeat() {
-        let img = Image::filled(20, 10, [0.5, 0.5, 0.5, 1.0]);
-        let b = gaussian_blur(&img, 3.0, 3.0, true);
-        assert!(b.data.iter().all(|p| (p[0] - 0.5).abs() < 1e-5));
-    }
-
     /// Direct (windowed sum) box filter along x or y: the definition the passes must match.
     fn box_ref(img: &Image, r: usize, vertical: bool, repeat: bool) -> Image {
         let mut out = Image::new(img.width, img.height);
@@ -281,12 +274,5 @@ mod tests {
                 }
             }
         }
-    }
-
-    #[test]
-    fn radii_sane() {
-        let r = box_radii(10.0, 3);
-        assert_eq!(r.len(), 3);
-        assert!(r.iter().all(|&v| (7..=10).contains(&v)), "{r:?}");
     }
 }

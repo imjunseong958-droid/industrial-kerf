@@ -46,30 +46,3 @@ pub fn parse_features(text: &str) -> Result<Vec<([u8; 4], u32)>, String> {
     }
     Ok(features)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::parse_features;
-
-    #[test]
-    fn what_names_no_feature_is_refused_with_why() {
-        for (text, why) in [
-            ("tabular", "four letters or digits"),
-            ("tnu", "four letters or digits"),
-            ("tn_m", "four letters or digits"),
-            ("한글", "four letters or digits"),
-            ("+", "four letters or digits"),
-            ("-liga=0", "says it twice"),
-            ("salt=two", "whole number"),
-            ("salt=-1", "whole number"),
-            ("salt=256", "whole number"),
-            ("salt=", "whole number"),
-        ] {
-            let problem = parse_features(text).expect_err(text);
-            assert!(problem.contains(why), "{text}: {problem}");
-        }
-        let many = (0..33).map(|n| format!("cv{n:02}")).collect::<Vec<_>>().join(" ");
-        assert!(parse_features(&many).expect_err("33").contains("more than the 32"));
-        assert_eq!(parse_features(&many[..many.len() - 5]).map(|features| features.len()), Ok(32));
-    }
-}

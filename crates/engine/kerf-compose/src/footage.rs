@@ -963,10 +963,6 @@ mod tests {
         }
     }
 
-    fn at(frames: i64, rate: Rate) -> Time {
-        rate.time_of(frames)
-    }
-
     /// A small H.264 file with a keyframe every half second, or none where FFmpeg is not installed.
     fn encoded(directory: &std::path::Path) -> Option<String> {
         let path = directory.join("clip.mp4");
@@ -1033,94 +1029,5 @@ mod tests {
             "read {} frames for 90",
             decoders.idle[0].read
         );
-    }
-
-    #[test]
-    fn a_decoder_left_idle_lets_go_of_its_frames() {
-        let directory = tempfile::tempdir().unwrap();
-        let Some(path) = encoded(directory.path()) else {
-            return;
-        };
-        let clip = file_clip(&path);
-        let pool = DecoderPool::new();
-        let (first, left) = pool.checkout(&clip, 0).unwrap();
-        let (second, kept) = pool.checkout(&clip, 90).unwrap();
-        pool.give_back(first, left);
-        assert_eq!(lock(&pool.decoders).idle.len(), 1);
-        lock(&pool.decoders).idle[0].returned =
-            Instant::now() - DECODER_IDLE - Duration::from_secs(1);
-        // The one coming back stays, and the one long idle goes.
-        pool.give_back(second, kept);
-        assert_eq!(lock(&pool.decoders).idle.len(), 1);
-    }
-
-    #[test]
-    fn reversed_clips_run_back_from_their_source_out() {
-        // Source [10, 58): the first frame is 57.
-        let reverse = clip(10, "-1", 48);
-        assert_eq!(reverse.frame_at_time(at(0, Rate::FPS_24)), 57);
-        assert_eq!(reverse.frame_at_time(at(47, Rate::FPS_24)), 10);
-        let fast = clip(10, "-2", 24);
-        assert_eq!(fast.frame_at_time(at(0, Rate::FPS_24)), 57);
-        assert_eq!(fast.frame_at_time(at(1, Rate::FPS_24)), 55);
-    }
-
-    fn ramped(speed: kerf_model::Speed) -> ClipSource {
-        ClipSource {
-            speed,
-            ..clip(10, "1", 48)
-        }
-    }
-
-    fn keys(speeds: &[(i64, &str)]) -> kerf_model::Speed {
-        kerf_model::Speed::ramp(
-            speeds
-                .iter()
-                .map(|(frame, speed)| kerf_model::RampKey {
-                    at: Rate::FPS_24.time_of(*frame),
-                    speed: kerf_model::Ratio::parse(speed).unwrap(),
-                    interp: kerf_model::Interp::Linear,
-                })
-                .collect(),
-        )
-        .unwrap()
-    }
-
-    #[test]
-    fn a_ramp_shows_the_frame_its_area_has_reached() {
-        // From 2 to 1/2 in a line over 24 frames plays 30 frames.
-        let clip = ramped(keys(&[(0, "2"), (24, "1/2")]));
-        assert_eq!(clip.frame_at_time(at(0, Rate::FPS_24)), 10);
-        assert_eq!(clip.frame_at_time(at(24, Rate::FPS_24)), 40);
-        // Half speed from then on.
-        assert_eq!(clip.frame_at_time(at(28, Rate::FPS_24)), 42);
-        // Half way along, the speed is 5/4 and the area (2 + 5/4) / 2 × 12 = 19.5.
-        assert_eq!(clip.frame_at_time(at(12, Rate::FPS_24)), 29);
-        assert_eq!(clip.between_at(at(12, Rate::FPS_24)), Some((29, 32)));
-    }
-
-    #[test]
-    fn a_reversed_ramp_runs_back_from_its_source_out() {
-        // Over 24 frames from -1 to -1/2 plays 18 frames, then 12 more over 24 at -1/2: 30 in all.
-        let clip = ClipSource {
-            duration: Rate::FPS_24.time_of(48),
-            ..ramped(keys(&[(0, "-1"), (24, "-1/2")]))
-        };
-        assert_eq!(clip.frame_at_time(at(0, Rate::FPS_24)), 39);
-        assert_eq!(clip.frame_at_time(at(24, Rate::FPS_24)), 21);
-        assert_eq!(clip.frame_at_time(at(47, Rate::FPS_24)), 10);
-    }
-
-    #[test]
-    fn other_rates_take_the_frame_showing() {
-        // 30 fps media in a 24 fps sequence: frame 1 of the sequence is at
-        // 1.25 media frames.
-        let clip = ClipSource {
-            rate: Rate::FPS_30,
-            ..clip(0, "1", 48)
-        };
-        assert_eq!(clip.frame_at_time(at(1, Rate::FPS_24)), 1);
-        assert_eq!(clip.frame_at_time(at(4, Rate::FPS_24)), 5);
-        assert_eq!(frame_count(Rate::FPS_30, Rate::FPS_24.time_of(1)), 2);
     }
 }

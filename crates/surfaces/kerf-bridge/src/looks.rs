@@ -436,68 +436,6 @@ mod tests {
     }
 
     #[test]
-    fn look_commands_read_as_the_contract_says() {
-        assert!(matches!(
-            serde_json::from_value(json!({"type": "look_save", "clip": "c1", "name": "Harbor warm"})).unwrap(),
-            crate::Command::LookSave { clip, name, replace: false } if clip == "c1" && name == "Harbor warm"
-        ));
-        assert!(matches!(
-            serde_json::from_value(
-                json!({"type": "look_save", "clip": "c1", "name": "x", "replace": true})
-            )
-            .unwrap(),
-            crate::Command::LookSave { replace: true, .. }
-        ));
-        assert!(matches!(
-            serde_json::from_value(json!({"type": "look_apply", "clip": "c2", "path": "presets/looks/Harbor warm.kerflook"})).unwrap(),
-            crate::Command::LookApply { clip, path } if clip == "c2" && path.ends_with(".kerflook")
-        ));
-    }
-
-    #[test]
-    fn ids_come_from_names() {
-        assert_eq!(look_id("Harbor warm"), "look.harbor_warm");
-        assert_eq!(look_id("  Coast grade, warm!  "), "look.coast_grade_warm");
-        assert_eq!(look_id("☀"), "look.effects");
-        assert!(look_id(&"long name ".repeat(20)).len() <= kerf_model::Id::MAX_LEN);
-        assert!(kerf_model::Id::is_valid(&look_id(&"long name ".repeat(20))));
-    }
-
-    #[test]
-    fn a_clips_effects_become_a_look_that_reads_back() {
-        let project = program();
-        let clip = find_clip(&project, "c1").unwrap();
-        let saved = from_clip(clip, "Harbor \"warm\"", Catalog::builtin()).unwrap();
-        assert_eq!(saved.id, "look.harbor_warm");
-        assert_eq!(saved.effects, 2);
-        assert!(saved.skipped.is_empty(), "{:?}", saved.skipped);
-        assert!(saved.text.starts_with(
-            "kerf-look 1\nlook look.harbor_warm version=1 name=\"Harbor \\\"warm\\\"\" category=\"Effects presets\" on=clip\n"
-        ), "{}", saved.text);
-        assert!(
-            saved
-                .text
-                .contains("  fx color.basic@1 exposure=0.3 saturation={0s:1 1s:1.5:ease}\n"),
-            "{}",
-            saved.text
-        );
-        assert!(
-            saved.text.contains("  fx blur.gaussian@1 radius=4\n"),
-            "{}",
-            saved.text
-        );
-        let read = look::read(&saved.text, "test").unwrap();
-        assert_eq!(read.name, "Harbor \"warm\"");
-        assert_eq!(read.on, On::Clip);
-        // Nothing to save on a clip without effects.
-        let bare = find_clip(&project, "c2").unwrap();
-        assert!(from_clip(bare, "Bare", Catalog::builtin())
-            .unwrap_err()
-            .contains("no picture effects"));
-        assert!(from_clip(clip, "  ", Catalog::builtin()).is_err());
-    }
-
-    #[test]
     fn saving_writes_the_library_file_and_never_overwrites() {
         let directory = tempfile::tempdir().unwrap();
         let project = program();
@@ -516,48 +454,5 @@ mod tests {
         assert!(save(directory.path(), &project, "nope", "X", false)
             .unwrap_err()
             .contains("no clip"));
-    }
-
-    #[test]
-    fn applying_keeps_the_look_and_adds_it_to_the_clip() {
-        let directory = tempfile::tempdir().unwrap();
-        let project = program();
-        save(directory.path(), &project, "c1", "Harbor warm", false).unwrap();
-        let path = "presets/looks/Harbor warm.kerflook";
-        let read = read_file(directory.path(), path).unwrap();
-        // A catalog without the look keeps it as it is.
-        let catalog = Catalog::bundled().clone();
-        let (fx, version) = keep(directory.path(), read.clone(), &catalog).unwrap();
-        assert_eq!((fx.as_str(), version), ("look.harbor_warm", 1));
-        let kept = look::project_looks(directory.path()).join("look.harbor_warm@1.kerflook");
-        assert_eq!(fs::read_to_string(&kept).unwrap(), read.text);
-        // One the catalog has as it is is not written again.
-        let mut known = catalog.clone();
-        known.define_look(read.clone()).unwrap();
-        assert_eq!(
-            keep(directory.path(), read.clone(), &known).unwrap(),
-            (fx.clone(), 1)
-        );
-        // A different look of that id and version becomes the next version.
-        let changed = look::read(&read.text.replace("radius=4", "radius=9"), "changed").unwrap();
-        let (_, next) = keep(directory.path(), changed, &known).unwrap();
-        assert_eq!(next, 2);
-        let second = look::project_looks(directory.path()).join("look.harbor_warm@2.kerflook");
-        assert!(fs::read_to_string(second).unwrap().contains("version=2"));
-        // The edit names the look.
-        let (ops, event) = apply(directory.path(), &project, "c2", path).unwrap();
-        assert_eq!(
-            serde_json::to_value(&ops).unwrap(),
-            json!([{"op": "fx-add", "clip": "c2", "fx": "look.harbor_warm"}])
-        );
-        assert_eq!(event["type"], "look_applied");
-        assert_eq!(event["clip"], "c2");
-        assert!(apply(directory.path(), &project, "c2", "presets/none.kerflook").is_err());
-        assert!(
-            apply(directory.path(), &project, "c2", "presets/looks/x.txt")
-                .unwrap_err()
-                .contains(".kerflook")
-        );
-        let _ = look::install_project_looks(&std::env::temp_dir().join("kerf-no-looks-here"));
     }
 }

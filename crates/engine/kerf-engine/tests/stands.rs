@@ -822,8 +822,7 @@ fn what_the_fixtures_scenes_stand_on_is_what_was_found_of_them() {
     // written down here and the scene is left as it is. The body's foot is level at 0.95
     // and the road leans, 0.960 under its front and 0.918 under its back: its far half is in
     // the road by 0.032, which the road hides in a depth pass, and what is drawn of a car
-    // is as tall as what shows of it (docs/architecture.md, "A floor truly higher than the
-    // car's foot").
+    // is as tall as what shows of it.
     let car = fixture("car");
     for (sequence, body, cabin, road) in [
         ("s2", "body", "cabin", "road"),

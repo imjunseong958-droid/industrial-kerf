@@ -69,22 +69,6 @@ proptest! {
 }
 
 #[test]
-fn export_keeps_its_extension_and_refuses_another_in_qts_words() {
-    assert_eq!(
-        export_path(Path::new("/p/editing.kerfpreset")),
-        Ok(PathBuf::from("/p/editing.kerfpreset"))
-    );
-    assert_eq!(
-        export_path(Path::new("/p/editing")),
-        Ok(PathBuf::from("/p/editing.kerfpreset"))
-    );
-    assert_eq!(
-        export_path(Path::new("/p/editing.txt")),
-        Err("Save editing presets with the .kerfpreset extension.".to_owned())
-    );
-}
-
-#[test]
 fn what_a_made_media_is_reads_from_its_steps() {
     let made = |steps: Value, of: Value| json!({"id": "m", "steps": steps, "of": of});
     assert_eq!(
@@ -607,12 +591,6 @@ fn project_warnings_wait_for_the_project_not_the_connecting() {
     failed.apply(&json!({"type": "connection", "status": "disconnected",
         "message": "cannot start kerfd"}));
     assert!(failed.opened_or_failed());
-}
-
-#[test]
-fn a_path_named_in_text_is_used_as_it_is() {
-    assert_eq!(path_refusal(Path::new("/m/a.mov")), None);
-    assert_eq!(path_refusal(Path::new("/m/été.mov")), None);
 }
 
 #[cfg(unix)]

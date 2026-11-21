@@ -2300,7 +2300,6 @@ impl Workspace {
                 self.stage
                     .update(cx, |stage, cx| stage.toggle_zoom_menu(window, cx));
             }
-            "help.guide" => cx.open_url(&user_guide()),
             "help.about" => self.show_settings(Some(Page::About), window, cx),
             // Where crash reports are kept, in the system's file manager.
             "help.crashReports" => match kerf_bridge::crash_reports()["folder"].as_str() {
@@ -3554,77 +3553,6 @@ fn spacer(weight: f32) -> gpui::Div {
     let mut spacer = div().flex_basis(px(0.0)).min_h_0();
     spacer.style().flex_grow = Some(weight);
     spacer
-}
-
-/// The user guide the package carries (beside the editor on Windows, in the
-/// app's Resources on macOS, in share/doc on Linux), else the one on GitHub.
-fn user_guide() -> String {
-    let beside = std::env::current_exe()
-        .ok()
-        .and_then(|exe| exe.parent().map(std::path::Path::to_path_buf));
-    beside
-        .and_then(|folder| user_guide_in(&folder))
-        .unwrap_or_else(|| format!("{}/blob/main/docs/user-guide.md", kerf_bridge::REPOSITORY))
-}
-
-/// The packaged guide for an editor in `folder`, as a `file://` URL: beside
-/// it (Windows), in the app's Resources (macOS), in share/doc (Linux). Only
-/// a guide with something in it counts. None when there is none.
-pub fn user_guide_in(folder: &Path) -> Option<String> {
-    [
-        folder.join("user-guide.html"),
-        folder.join("../Resources/user-guide.html"),
-        folder.join("../share/doc/industrial-kerf/user-guide.html"),
-    ]
-    .into_iter()
-    .filter_map(|candidate| candidate.canonicalize().ok())
-    .find(|path| {
-        std::fs::metadata(path).is_ok_and(|metadata| metadata.is_file() && metadata.len() > 0)
-    })
-    .map(|path| file_url(&path))
-}
-
-/// A local file as a `file://` URL, as QUrl::fromLocalFile writes one: a
-/// Windows path with forward slashes after a third, and every byte that
-/// may not stand in a URL's path ("Industrial Kerf.app"'s space among them)
-/// percent-encoded, so the system opens it whatever the folder is called.
-pub fn file_url(path: &Path) -> String {
-    let text = path.display().to_string();
-    let text = text.trim_start_matches(r"\\?\").replace('\\', "/");
-    let mut url = String::from(if text.starts_with('/') {
-        "file://"
-    } else {
-        "file:///"
-    });
-    for byte in text.bytes() {
-        let keep = byte.is_ascii_alphanumeric()
-            || matches!(
-                byte,
-                b'/' | b'-'
-                    | b'.'
-                    | b'_'
-                    | b'~'
-                    | b':'
-                    | b'@'
-                    | b'!'
-                    | b'$'
-                    | b'&'
-                    | b'\''
-                    | b'('
-                    | b')'
-                    | b'*'
-                    | b'+'
-                    | b','
-                    | b';'
-                    | b'='
-            );
-        if keep {
-            url.push(byte as char);
-        } else {
-            url.push_str(&format!("%{byte:02X}"));
-        }
-    }
-    url
 }
 
 impl Focusable for Workspace {

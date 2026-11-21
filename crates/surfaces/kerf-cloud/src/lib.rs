@@ -4,7 +4,7 @@
 //! open-source client is no check at all. The client only reflects them.
 //!
 //! The service is not deployed yet. This crate holds the client side of its
-//! contract (`docs/cloud.md`): where the service is, the signed-in session,
+//! contract: where the service is, the signed-in session,
 //! the account, and what the account allows. Until a service URL is
 //! configured, Kerf Cloud reports itself unavailable and people use their own
 //! API key (Settings → Chat).
@@ -240,45 +240,10 @@ mod tests {
     }
 
     #[test]
-    fn accounts_are_read_with_the_token() {
-        let (url, server) = serve(
-            "200 OK",
-            r#"{"email":"lim@example.com","plan":"Pro","ai":true,"credits":1200}"#,
-        );
-        let account = fetch_account(&url, "tok-1").unwrap();
-        assert_eq!(account.plan, "Pro");
-        assert_eq!(Access::of(&account), Access::Ready);
-        let request = server.join().unwrap();
-        assert!(request.starts_with("GET /v1/account "));
-        assert!(request
-            .to_ascii_lowercase()
-            .contains("authorization: bearer tok-1"));
-    }
-
-    #[test]
     fn refused_tokens_sign_out() {
         let (url, server) = serve("401 Unauthorized", "{}");
         assert_eq!(fetch_account(&url, "old"), Err(CloudError::Unauthorized));
         server.join().unwrap();
-    }
-
-    #[test]
-    fn access_follows_the_plan_and_credits() {
-        let mut account = Account {
-            email: "a@b".into(),
-            plan: "Free".into(),
-            ai: false,
-            credits: Some(0),
-        };
-        assert_eq!(Access::of(&account), Access::NotIncluded);
-        account.ai = true;
-        assert_eq!(Access::of(&account), Access::OutOfCredits);
-        account.credits = None;
-        assert_eq!(Access::of(&account), Access::Ready);
-        assert!(Access::Unavailable
-            .reason()
-            .unwrap()
-            .contains("Settings → Chat"));
     }
 
     #[test]

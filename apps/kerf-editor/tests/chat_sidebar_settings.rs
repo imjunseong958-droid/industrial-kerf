@@ -302,14 +302,7 @@ fn the_app_menu_offers_sign_out_only_while_signed_in() {
     };
     assert_eq!(
         words(rows(false)),
-        [
-            "Settings…",
-            "Account…",
-            "User Guide",
-            "Media",
-            "Import…",
-            "View"
-        ]
+        ["Settings…", "Account…", "Media", "Import…", "View"]
     );
     let signed_in = rows(true);
     let sign_out = signed_in.last().unwrap();

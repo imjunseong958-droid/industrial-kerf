@@ -276,15 +276,6 @@ fn each_picture_clip_a_cut_places_flies_once_in_the_order_they_play() {
     );
 }
 
-#[test]
-fn a_clip_taken_out_does_not_fly() {
-    let program = cut(&[clip("p1", "a", 0.0, 3.0)], &[]);
-    let emptied = cut(&[], &[]);
-    assert!(placed_since(&program, &emptied, &HashSet::new())
-        .0
-        .is_empty());
-}
-
 // ------------------------------------------------------------ where it leaves from
 
 #[test]

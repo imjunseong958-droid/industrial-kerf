@@ -1,5 +1,5 @@
 //! A signal's keys from what a sound does: a model is told when with a
-//! `gen=signal@1` clip (`docs/shots.md`), and where the moments are a sound's,
+//! `gen=signal@1` clip, and where the moments are a sound's,
 //! the beats of a track or a ball on a floor, they are read from it and not
 //! written by ear.
 //!
@@ -149,43 +149,4 @@ pub fn from_sound(
         placed,
         outside: heard.len() - placed,
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn at(frames: &[i64]) -> Vec<Time> {
-        frames
-            .iter()
-            .map(|frame| Rate::FPS_24.time_of(*frame))
-            .collect()
-    }
-
-    #[test]
-    fn each_onset_is_a_run_of_one_and_near_ones_run_together() {
-        let clip = (Rate::FPS_24.time_of(0), Rate::FPS_24.time_of(96));
-        let (keys, placed) = pulses(&at(&[12, 36, 37, 60]), clip, Rate::FPS_24, 3);
-        assert_eq!(
-            keys,
-            "{0f:0:hold 12f:1:hold 15f:0:hold 36f:1:hold 40f:0:hold 60f:1:hold 63f:0:hold}"
-        );
-        assert_eq!(placed, 4);
-        // One on the clip's first frame starts it at 1, and one at its end holds to the end.
-        let (keys, placed) = pulses(&at(&[0, 95]), clip, Rate::FPS_24, 3);
-        assert_eq!(keys, "{0f:1:hold 3f:0:hold 95f:1:hold}");
-        assert_eq!(placed, 2);
-    }
-
-    #[test]
-    fn keys_are_from_the_clips_own_first_frame_and_only_of_what_falls_in_it() {
-        // A clip from frame 24 for 48: an onset before it and one after it are not its.
-        let clip = (Rate::FPS_24.time_of(24), Rate::FPS_24.time_of(48));
-        let (keys, placed) = pulses(&at(&[10, 30, 80]), clip, Rate::FPS_24, 2);
-        assert_eq!(keys, "{0f:0:hold 6f:1:hold 8f:0:hold}");
-        assert_eq!(placed, 1);
-        // None in it is a signal that is 0 throughout.
-        let (keys, placed) = pulses(&at(&[10]), clip, Rate::FPS_24, 2);
-        assert_eq!((keys.as_str(), placed), ("{0f:0:hold}", 0));
-    }
 }

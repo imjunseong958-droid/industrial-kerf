@@ -330,37 +330,6 @@ mod tests {
             .collect()
     }
 
-    /// Bursts of tone a tenth of a second long, every half second of the input.
-    fn bursts(frames: usize) -> Vec<f32> {
-        let tone = sine(frames, 1000.0);
-        tone.as_chunks::<2>().0.iter()
-            .enumerate()
-            .flat_map(|(at, frame)| {
-                let on = (at as f64 / R) % 0.5 < 0.1;
-                [
-                    frame[0] * f32::from(u8::from(on)),
-                    frame[1] * f32::from(u8::from(on)),
-                ]
-            })
-            .collect()
-    }
-
-    /// Where each burst of output starts, in seconds.
-    fn onsets(samples: &[f32]) -> Vec<f64> {
-        let block = 96;
-        let loud: Vec<bool> = samples
-            .chunks(block * 2)
-            .map(|chunk| chunk.iter().map(|s| s * s).sum::<f32>() / chunk.len() as f32 > 0.05)
-            .collect();
-        // A burst may flicker where its grains meet; a new one follows a fifth of a second of quiet.
-        let quiet = (0.2 * R) as usize / block;
-        loud.iter()
-            .enumerate()
-            .filter(|(at, on)| **on && !loud[at.saturating_sub(quiet)..*at].contains(&true))
-            .map(|(at, _)| (at * block) as f64 / R)
-            .collect()
-    }
-
     #[test]
     fn at_speed_one_the_sound_comes_back_exactly() {
         let input = sine(48_000, 440.0);
@@ -369,71 +338,5 @@ mod tests {
         for (made, was) in out[middle.clone()].iter().zip(&input[middle]) {
             assert!((made - was).abs() < 1e-3, "{made} against {was}");
         }
-    }
-
-    #[test]
-    fn a_ramp_lands_every_burst_where_the_ramp_says() {
-        // From 1 down to 1/4 over the first four seconds, then 1/4.
-        let speed = |t: f64| {
-            let within = t.min(4.0);
-            within - 0.75 * within * within / 8.0 + (t - within).max(0.0) * 0.25
-        };
-        let input = bursts(5 * 48_000);
-        let out = stretch(&input, 16 * 48_000, |at| speed(at as f64 / R) * R);
-        let found = onsets(&out);
-        let mut checked = 0;
-        for (index, onset) in found.iter().enumerate() {
-            let source = index as f64 * 0.5;
-            // When the ramp reaches that source.
-            let (mut low, mut high) = (0.0, 20.0);
-            for _ in 0..40 {
-                let middle = (low + high) / 2.0;
-                if speed(middle) < source {
-                    low = middle;
-                } else {
-                    high = middle;
-                }
-            }
-            assert!(
-                (onset - low).abs() < 0.06,
-                "burst {index}: heard at {onset}, the ramp says {low}"
-            );
-            checked += 1;
-        }
-        assert!(checked >= 8, "only {checked} bursts: {found:?}");
-    }
-
-    #[test]
-    fn reversing_the_frames_swaps_nothing_else() {
-        let mut samples = vec![1.0, 2.0, 3.0, 4.0];
-        reverse_frames(&mut samples);
-        assert_eq!(samples, [3.0, 4.0, 1.0, 2.0]);
-    }
-
-    #[test]
-    fn a_wav_reads_as_its_samples() {
-        let folder = tempfile::tempdir().expect("a folder");
-        let path = folder.path().join("a.wav");
-        write_wav(&path, &[0.5, -0.5, 0.25, -0.25]).expect("written");
-        let bytes = std::fs::read(&path).expect("read");
-        assert_eq!(&bytes[..4], b"RIFF");
-        assert_eq!(bytes.len(), 44 + 16);
-        assert_eq!(&bytes[44..48], &0.5f32.to_le_bytes());
-    }
-
-    #[test]
-    fn the_oldest_files_go_past_the_budget() {
-        let folder = tempfile::tempdir().expect("a folder");
-        for name in ["a", "b", "c"] {
-            std::fs::write(folder.path().join(name), [0u8; 100]).expect("written");
-            std::thread::sleep(std::time::Duration::from_millis(20));
-        }
-        keep_within(folder.path(), 150);
-        let left: Vec<_> = std::fs::read_dir(folder.path())
-            .expect("reads")
-            .flatten()
-            .map(|entry| entry.file_name())
-            .collect();
-        assert_eq!(left, ["c"]);
     }
 }

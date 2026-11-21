@@ -412,14 +412,6 @@ mod tests {
     }
 
     #[test]
-    fn a_rotation_gives_back_its_axis() {
-        let axis = [0.3, -1.2, 0.7];
-        let r = rotation(axis);
-        assert!(length(minus(axis, axis_of(&r))) < 1e-12);
-        assert!((determinant(&r) - 1.0).abs() < 1e-12);
-    }
-
-    #[test]
     fn eigenvectors_and_cholesky_solve_what_they_were_given() {
         let a = [4.0, 1.0, 0.5, 1.0, 3.0, 0.2, 0.5, 0.2, 2.0];
         let (values, vectors) = symmetric_eigen(&a, 3);

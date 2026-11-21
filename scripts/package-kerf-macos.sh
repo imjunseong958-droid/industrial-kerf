@@ -39,7 +39,6 @@ cargo build --release --manifest-path apps/kerf-editor/Cargo.toml
 cargo build --release -p kerf-runtime --bin kerfd
 cargo build --release -p kerf-cli --bin kerf
 cargo build --release -p kerf-mcp --bin kerf-mcp
-cargo build --release -p kerf-guide
 scripts/bundle-kerf-macos.sh target/release/kerf-editor "$app"
 mkdir -p "$frameworks"
 
@@ -190,10 +189,6 @@ fi
 cp LICENSE "$app/Contents/Resources/LICENSE.txt"
 cp -R licenses "$app/Contents/Resources/licenses"
 # The fonts' licences are in Resources/fonts already (bundle-kerf-macos.sh).
-# The user guide in Resources, where Help > Kerf User Guide opens it with no connection;
-# its links to the rest of the repository go to this commit.
-target/release/kerf-guide docs/user-guide.md "$app/Contents/Resources/user-guide.html" \
-    --version "$version" --link-base "https://github.com/imjunseong958-droid/industrial-kerf/blob/$commit/docs/"
 gpl="$(brew --prefix ffmpeg)/share/doc/ffmpeg/COPYING.GPLv3"
 [ -f "$gpl" ] || gpl="$(find "$(brew --cellar ffmpeg)" -name 'COPYING.GPLv3' | head -n 1)"
 if [ -f "$gpl" ]; then
@@ -224,8 +219,10 @@ the app, FFmpeg among them, as Homebrew builds them.
 Which licence covers which part is in THIRD-PARTY.txt.
 EOF
 
-# The oldest macOS the app runs on, by decision (docs/shipping.md, Packaging), so an
-# older one says so rather than the app failing to start. Only the package says it: an
+# The oldest macOS the app runs on, so an older one says so rather than the app failing
+# to start. It is 26 because the editor, FFmpeg and the Homebrew libraries the app
+# carries come bottled for the runner's macOS 26; going lower would take an older
+# runner or building those libraries from source, which is not worth it. Only the package says it: an
 # editor built on a developer's older Mac still opens there. The runner's Homebrew bottles
 # its libraries for the runner's own macOS, so a newer runner needs a newer macOS, and
 # check-kerf-macos.sh then fails rather than let the app need more than it says.

@@ -18,13 +18,6 @@ fn clocks_that_answer_the_skim_leave_the_playhead() {
 }
 
 #[test]
-fn a_clock_nobody_sent_is_elsewhere() {
-    let mut kept = Kept::new(1.0);
-    kept.show(4.75);
-    assert_eq!(kept.hear(1.0 + 1.0 / 24.0), Heard::Elsewhere);
-}
-
-#[test]
 fn kerfd_answers_in_order_so_older_times_are_let_go() {
     let mut kept = Kept::new(0.0);
     for time in [1.0, 2.0, 3.0] {

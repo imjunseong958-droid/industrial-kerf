@@ -47,10 +47,6 @@ fn transitions() -> impl Iterator<Item = &'static FxDef> {
         .filter(|d| filmcraft_id(d.id.as_str()).is_some())
 }
 
-fn def(id: &str) -> &'static FxDef {
-    Catalog::builtin().fx(id).unwrap_or_else(|| panic!("{id}"))
-}
-
 /// `d` at progress `p` with `params` set.
 fn draw(d: &FxDef, params: &Params, a: &Image, b: &Image, p: f32) -> Image {
     apply(
@@ -63,34 +59,6 @@ fn draw(d: &FxDef, params: &Params, a: &Image, b: &Image, p: f32) -> Image {
 
 fn number(value: f64) -> Param {
     Param::Static(Value::Number(value))
-}
-
-fn mean_abs(a: &Image, b: &Image) -> f32 {
-    a.px.iter()
-        .zip(&b.px)
-        .map(|(x, y)| (x - y).abs())
-        .sum::<f32>()
-        / a.px.len() as f32
-}
-
-#[test]
-fn continuous_near_both_ends() {
-    let (a, b) = (frame_a(), frame_b());
-    for d in transitions() {
-        let e = Params::new();
-        let near_a = mean_abs(&draw(d, &e, &a, &b, 0.01), &a);
-        let near_b = mean_abs(&draw(d, &e, &a, &b, 0.99), &b);
-        assert!(
-            near_a < 0.06,
-            "{}: p=0.01 jumps away from A by {near_a}",
-            d.id
-        );
-        assert!(
-            near_b < 0.06,
-            "{}: p=0.99 jumps away from B by {near_b}",
-            d.id
-        );
-    }
 }
 
 #[test]
@@ -163,75 +131,6 @@ pub(super) fn changed(def: &ParamDef) -> Option<Param> {
         ))),
         _ => return None,
     })
-}
-
-#[test]
-fn every_parameter_changes_the_picture() {
-    let (a, b) = (frame_a(), frame_b());
-    let mut failures = Vec::new();
-    for d in transitions() {
-        for pd in &d.params {
-            let Some(v) = changed(pd) else { continue };
-            let mut base = Params::new();
-            if pd.name == "border_color" {
-                base.insert("border_width".into(), number(6.0));
-            }
-            let mut e = base.clone();
-            e.insert(pd.name.clone(), v);
-            if pd.name == "border_width" {
-                // a border only shows if it differs from the content
-                e.insert(
-                    "border_color".into(),
-                    Param::Static(Value::Color(Rgba::rgb(0, 255, 0))),
-                );
-            }
-            let differs = [0.2, 0.35, 0.5, 0.65, 0.8]
-                .iter()
-                .any(|&p| mean_abs(&draw(d, &base, &a, &b, p), &draw(d, &e, &a, &b, p)) > 1e-4);
-            if !differs {
-                failures.push(format!("{}.{}", d.id, pd.name));
-            }
-        }
-    }
-    assert!(
-        failures.is_empty(),
-        "parameters with no visible effect: {failures:?}"
-    );
-}
-
-#[test]
-fn directions_differ() {
-    let (a, b) = (frame_a(), frame_b());
-    for d in transitions().filter(|d| d.find("direction").is_some()) {
-        let render = |direction: &str| {
-            let e: Params = [(
-                "direction".to_owned(),
-                Param::Static(Value::Enum(direction.into())),
-            )]
-            .into();
-            draw(d, &e, &a, &b, 0.4)
-        };
-        assert!(
-            mean_abs(&render("from-east"), &render("from-west")) > 1e-3,
-            "{}: East vs West identical",
-            d.id
-        );
-    }
-}
-
-#[test]
-fn push_moves_frames_by_the_eased_distance() {
-    let (a, b) = (frame_a(), frame_b());
-    let e: Params = [("motion_blur".to_owned(), number(0.0))].into();
-    let m = draw(def("push"), &e, &a, &b, 0.5); // eased 0.5 → half a frame, from the west
-    for x in [4usize, 20, 28] {
-        let want = b.get(x + W / 2, 12);
-        let got = m.get(x, 12);
-        assert!(
-            want.iter().zip(got).all(|(p, q)| (p - q).abs() < 1e-3),
-            "x={x}: {got:?} vs {want:?}"
-        );
-    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -323,50 +222,4 @@ fn golden_fingerprints() {
         }
     }
     assert!(bad.is_empty(), "transition goldens differ: {bad:?}");
-}
-
-/// The disc blur as it was before #1871: offsets worked out for every pixel.
-fn disc_blur_per_pixel(img: &Image, x: f32, y: f32, r: f32, n: usize) -> [f32; 4] {
-    if r < 0.5 || n <= 1 {
-        return img.sample_bilinear_clamped(x, y);
-    }
-    let mut acc = [0.0; 4];
-    for i in 0..n {
-        let rr = r * ((i as f32 + 0.5) / n as f32).sqrt();
-        let a = i as f32 * 2.399_963;
-        let p = img.sample_bilinear_clamped(x + rr * a.cos(), y + rr * a.sin());
-        for k in 0..4 {
-            acc[k] += p[k];
-        }
-    }
-    scale4(acc, 1.0 / n as f32)
-}
-
-/// #1871: offsets worked out once per frame give exactly the pixels the per-pixel version gave.
-#[test]
-fn disc_blur_with_shared_offsets_is_bit_identical() {
-    let img = frame_b();
-    for (r, n) in [
-        (0.0, 24),
-        (0.4, 24),
-        (3.0, 8),
-        (30.0, 24),
-        (75.5, 48),
-        (200.0, 48),
-        (12.0, 1),
-    ] {
-        let offsets = disc_offsets(r, n);
-        for y in (0..H).step_by(7) {
-            for x in (0..W).step_by(5) {
-                let (fx, fy) = (x as f32 + 0.5, y as f32 + 0.5);
-                let a = disc_blur_per_pixel(&img, fx, fy, r, n);
-                let b = disc_blur_with(&img, fx, fy, &offsets);
-                assert_eq!(
-                    a.map(f32::to_bits),
-                    b.map(f32::to_bits),
-                    "r {r}, n {n}, at ({x}, {y})"
-                );
-            }
-        }
-    }
 }

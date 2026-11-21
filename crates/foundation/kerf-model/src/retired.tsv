@@ -169,7 +169,7 @@ utility.growbounds
 utility.hdrcompander	
 utility.hdrcompression	color.lumetri@2
 # Cut when Kerf left looks to a model and stopped doing as an effect what a
-# clip's own properties do (docs/architecture.md).
+# clip's own properties do.
 stylize.brushstrokes	
 stylize.coloremboss	
 stylize.emboss	
@@ -209,8 +209,8 @@ generate.circle	a `gen=shape@1` clip
 generate.ellipse	a `gen=shape@1` clip
 utility.clone	clips side by side, each scaled
 # Cut when what is left was asked whether it is done to a made shot, the same
-# every time, or is how a shot looks (docs/architecture.md, What is looked at
-# again). Looks went with the effects they were made of.
+# every time, or is how a shot looks. Looks went with the effects they were
+# made of.
 light.glint	the prompt and references of the shot's recipe
 light.leaks	the prompt and references of the shot's recipe
 light.rgbsplit	the prompt and references of the shot's recipe

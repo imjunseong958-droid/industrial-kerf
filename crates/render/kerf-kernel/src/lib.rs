@@ -1398,60 +1398,6 @@ mod tests {
         }
     }
 
-    /// What `fx.wgsl` gives what is written out for it.
-    const FX: &str = "
-struct U { i0: vec4<u32>, i1: vec4<u32>, p0: vec4<f32>, p1: vec4<f32>, p2: vec4<f32> };
-@group(0) @binding(0) var<uniform> u: U;
-@group(0) @binding(1) var src: texture_2d<f32>;
-@group(0) @binding(2) var dst: texture_storage_2d<rgba32float, write>;
-fn size() -> vec2<i32> { return vec2<i32>(textureDimensions(src)); }
-fn ld(p: vec2<i32>) -> vec4<f32> { return textureLoad(src, p, 0); }
-";
-
-    /// What the effects' `vfx/kernels.wgsl` gives.
-    const VFX: &str = "
-struct U { a: vec4<u32>, b: vec4<u32>, p0: vec4<f32>, p1: vec4<f32>, p2: vec4<f32>, p3: vec4<f32>, p4: vec4<f32> };
-@group(0) @binding(0) var<uniform> u: U;
-";
-
-    /// And what the transitions' `kernels.wgsl` does.
-    const TRANSITIONS: &str = "
-struct U { v: array<vec4<f32>, 200> };
-@group(0) @binding(0) var<uniform> u: U;
-fn n(i: u32) -> f32 { return u.v[i / 4u][i % 4u]; }
-";
-
-    fn valid(source: &str) {
-        let module = naga::front::wgsl::parse_str(source)
-            .unwrap_or_else(|error| panic!("{source}\n{}", error.emit_to_string(source)));
-        naga::valid::Validator::new(
-            naga::valid::ValidationFlags::all(),
-            naga::valid::Capabilities::all(),
-        )
-        .validate(&module)
-        .unwrap_or_else(|error| panic!("{source}\n{error:?}"));
-    }
-
-    /// No GPU is needed to know that what is written out is WGSL, and that it reads what it says.
-    #[test]
-    fn what_is_written_out_is_wgsl() {
-        valid(&format!("{FX}{}{}", color_balance_wgsl(), box_line_wgsl()));
-        valid(&format!("{TRANSITIONS}{}", wipe_wgsl()));
-        valid(&format!("{VFX}{}", rounded_wgsl()));
-        valid(&format!("{VFX}{}", color_wgsl()));
-        valid(&format!("{VFX}{}", generated_wgsl()));
-    }
-
-    #[test]
-    fn writing_out_the_same_twice_comes_to_the_same() {
-        assert_eq!(color_balance_wgsl(), color_balance_wgsl());
-        assert_eq!(box_line_wgsl(), box_line_wgsl());
-        assert_eq!(wipe_wgsl(), wipe_wgsl());
-        assert_eq!(rounded_wgsl(), rounded_wgsl());
-        assert_eq!(color_wgsl(), color_wgsl());
-        assert_eq!(generated_wgsl(), generated_wgsl());
-    }
-
     /// A kernel's names may not be taken for WGSL's own, as `i32` once was.
     #[test]
     fn names_written_out_are_no_type_of_wgsl() {

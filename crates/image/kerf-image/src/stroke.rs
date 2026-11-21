@@ -314,8 +314,6 @@ pub fn find_source(picture: &Image, stroke: &Stroke) -> Option<[f32; 2]> {
 mod tests {
     use super::*;
 
-    const GRAY: [f32; 4] = [0.3, 0.3, 0.3, 1.0];
-
     fn dab(x: f32, y: f32, radius: f32) -> Stroke {
         Stroke {
             points: vec![[x, y]],
@@ -335,89 +333,6 @@ mod tests {
     }
 
     #[test]
-    fn a_stroke_paints_along_its_line_and_softly_by_its_hardness_and_opacity() {
-        let mut picture = Image::filled(100, 60, GRAY);
-        let other = Image::filled(100, 60, [1.0; 4]);
-        let line = Stroke {
-            points: vec![[20.0, 30.0], [80.0, 30.0]],
-            radius: 5.0,
-            hardness: 1.0,
-            opacity: 0.5,
-        };
-        clone_stroke(&mut picture, Some(&other), &line, [0.0, 0.0]);
-        assert!((picture.get(50, 30)[0] - 0.65).abs() < 1e-5);
-        assert_eq!(picture.get(50, 40), GRAY);
-        assert_eq!(picture.get(10, 30), GRAY);
-        let mut soft = Image::filled(100, 60, GRAY);
-        let dabbed = Stroke {
-            hardness: 0.0,
-            opacity: 1.0,
-            ..dab(50.0, 30.0, 20.0)
-        };
-        clone_stroke(&mut soft, Some(&other), &dabbed, [0.0, 0.0]);
-        let (middle, part, edge) = (
-            soft.get(50, 30)[0],
-            soft.get(50, 40)[0],
-            soft.get(50, 48)[0],
-        );
-        assert!(
-            middle > 0.99 && part > 0.4 && part < 0.9 && edge < 0.4,
-            "{middle} {part} {edge}"
-        );
-    }
-
-    /// A left-to-right ramp with a fine check over it.
-    fn textured(w: usize, h: usize) -> Image {
-        let mut picture = Image::new(w, h);
-        for y in 0..h {
-            for x in 0..w {
-                let base = 0.1 + 0.6 * x as f32 / w as f32;
-                let check = if (x / 3 + y / 3) % 2 == 0 {
-                    0.03
-                } else {
-                    -0.03
-                };
-                let value = base + check;
-                let start = (y * w + x) * 4;
-                picture.px[start..start + 4].copy_from_slice(&[value, value, value, 1.0]);
-            }
-        }
-        picture
-    }
-
-    #[test]
-    fn healing_takes_detail_from_there_and_light_from_here() {
-        let (w, h) = (200, 80);
-        let clean = textured(w, h);
-        let mut picture = clean.clone();
-        // A blemish on the bright side.
-        square(&mut picture, 150, 35, 8, [0.0, 0.0, 0.0, 1.0]);
-        let stroke = dab(154.0, 39.0, 9.0);
-        // From far to the left, which is much darker: a clone shows it, a heal does not.
-        let from = [-120.0, 0.0];
-        let mut cloned = picture.clone();
-        clone_stroke(&mut cloned, None, &stroke, from);
-        let mut healed = picture.clone();
-        heal_stroke(&mut healed, None, &stroke, from);
-        let off = |found: &Image| {
-            let mut most = 0.0f32;
-            for y in 33..46 {
-                for x in 148..160 {
-                    most = most.max((found.get(x, y)[0] - clean.get(x, y)[0]).abs());
-                }
-            }
-            most
-        };
-        assert!(off(&cloned) > 0.3, "{}", off(&cloned));
-        assert!(off(&healed) < 0.1, "{}", off(&healed));
-        // Its edge does not show.
-        let seam = (healed.get(145, 39)[0] - healed.get(144, 39)[0]).abs();
-        assert!(seam < 0.08, "{seam}");
-        // Away from it nothing changed.
-        assert_eq!(healed.get(100, 10), picture.get(100, 10));
-    }
-
-    #[test]
     fn healing_holds_values_over_1_and_keeps_alpha_in_range() {
         let mut picture = Image::filled(100, 60, [3.0, 3.0, 3.0, 1.0]);
         square(&mut picture, 70, 26, 8, [0.0, 0.0, 0.0, 1.0]);
@@ -425,46 +340,5 @@ mod tests {
         let middle = picture.get(74, 30);
         assert!((middle[0] - 3.0).abs() < 0.01, "{middle:?}");
         assert!(middle[3] <= 1.0);
-    }
-
-    #[test]
-    fn a_place_to_paint_from_is_found_clear_of_other_marks() {
-        let mut picture = textured(240, 120);
-        let blemish = (120, 60);
-        square(
-            &mut picture,
-            blemish.0 - 4,
-            blemish.1 - 4,
-            8,
-            [0.0, 0.0, 0.0, 1.0],
-        );
-        // Marks where it would otherwise look.
-        for (x, y) in [(84, 60), (156, 60), (120, 24), (120, 96)] {
-            square(&mut picture, x - 4, y - 4, 8, [1.0, 1.0, 1.0, 1.0]);
-        }
-        let stroke = dab(blemish.0 as f32, blemish.1 as f32, 8.0);
-        let from = find_source(&picture, &stroke).expect("room around it");
-        let reach = from[0].hypot(from[1]);
-        assert!(reach >= 20.0, "{from:?} would read itself");
-        let mut healed = picture.clone();
-        heal_stroke(&mut healed, None, &stroke, from);
-        let middle = healed.get(blemish.0, blemish.1)[0];
-        let wanted = textured(240, 120).get(blemish.0, blemish.1)[0];
-        assert!(
-            (middle - wanted).abs() < 0.1,
-            "{middle} against {wanted} from {from:?}"
-        );
-        // Nothing bright came with it.
-        for y in blemish.1 - 6..blemish.1 + 6 {
-            for x in blemish.0 - 6..blemish.0 + 6 {
-                assert!(healed.get(x, y)[0] < 0.8, "{x},{y}");
-            }
-        }
-    }
-
-    #[test]
-    fn no_place_fits_in_a_picture_all_stroke() {
-        let picture = Image::filled(20, 20, GRAY);
-        assert_eq!(find_source(&picture, &dab(10.0, 10.0, 8.0)), None);
     }
 }

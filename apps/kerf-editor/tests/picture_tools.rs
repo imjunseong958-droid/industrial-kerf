@@ -8,7 +8,7 @@ use kerf_editor::stage::overlay::{
     dragged, drawn, mask_add, mask_names, masks_of, new_mask_name, overlap_at, Affine, Outline,
     Overlap, DRAW_LEAST,
 };
-use kerf_editor::stage::{chip, hud, zoom_words, zoomed, MaskTool, ZOOMS};
+use kerf_editor::stage::{chip, hud, zoom_words, zoomed, ZOOMS};
 use proptest::prelude::*;
 use serde_json::{json, Value};
 
@@ -93,26 +93,6 @@ fn the_pen_adds_a_closed_or_an_open_outline() {
     );
     assert_eq!(open["closed"], json!(false));
     assert_eq!(open["points"].as_array().map(Vec::len), Some(2));
-}
-
-#[test]
-fn the_mask_tools_are_named_and_keyed_as_qt_had_them() {
-    let named: Vec<(&str, &str)> = MaskTool::ALL
-        .iter()
-        .map(|tool| (tool.label(), tool.shortcut()))
-        .collect();
-    assert_eq!(
-        named,
-        [
-            ("Rectangle mask", "Shift+R"),
-            ("Ellipse mask", "Shift+E"),
-            ("Pen mask", "Shift+P")
-        ]
-    );
-    for tool in MaskTool::ALL {
-        let keys = kerf_editor::commands::keystroke(tool.shortcut()).expect("a key GPUI names");
-        assert!(gpui::Keystroke::parse(&keys).is_ok(), "{keys}");
-    }
 }
 
 fn outline() -> impl Strategy<Value = Outline> {

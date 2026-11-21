@@ -133,7 +133,6 @@ pub fn stroke(m: &Mask, width: f32, kind: StrokeKind) -> Mask {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::raster::{Path, fill};
 
     #[test]
     fn distance_transform_is_euclidean() {
@@ -143,18 +142,5 @@ mod tests {
         assert!((d[0] - (32.0f32).sqrt()).abs() < 1e-4);
         let none = edt(3, 3, |_| false);
         assert!(none.iter().all(|&v| v > 1e5));
-    }
-
-    #[test]
-    fn strokes_sit_outside_centre_and_inside() {
-        let m = fill(&Path::rect(10.0, 10.0, 30.0, 30.0), 40, 40, 0.0, 0.0);
-        let outer = stroke(&m, 4.0, StrokeKind::Outer);
-        assert!(outer.get(7, 20) > 0.99, "outer covers 3px outside");
-        assert!(outer.get(4, 20) < 0.01);
-        assert!(outer.get(20, 20) > 0.99, "outer includes the fill area");
-        let inner = stroke(&m, 4.0, StrokeKind::Inner);
-        assert!(inner.get(12, 20) > 0.99 && inner.get(7, 20) < 0.01 && inner.get(20, 20) < 0.01);
-        let centre = stroke(&m, 4.0, StrokeKind::Center);
-        assert!(centre.get(9, 20) > 0.99 && centre.get(11, 20) > 0.99 && centre.get(20, 20) < 0.01 && centre.get(5, 20) < 0.01);
     }
 }

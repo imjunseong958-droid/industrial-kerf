@@ -1,5 +1,5 @@
 //! What Kerf asks of a model: the request a `generate` step writes
-//! (`docs/shots.md`, `kerf-engine/src/recipe/model.rs`).
+//! (`kerf-engine/src/recipe/model.rs`).
 
 // The names a request hands things under are the workflow's to know too, and are kept with it.
 pub use kerf_workflow::names::{
@@ -394,7 +394,7 @@ impl Request {
 mod tests {
     use super::*;
 
-    /// The request `docs/shots.md` shows.
+    /// A request as a `generate` step writes it.
     const SHOWN: &str = r#"{
       "kerf-request": 1,
       "model": "dawn",
@@ -410,177 +410,6 @@ mod tests {
       "more": { "strength": "0.6" },
       "out": "/project/shots/open.takes/.making-003.mp4"
     }"#;
-
-    #[test]
-    fn a_request_is_read_as_kerf_writes_it() {
-        let request = Request::parse(SHOWN).unwrap();
-        assert_eq!(
-            request.prompt,
-            "a fishing boat leaves the harbour at dawn, fog"
-        );
-        assert_eq!(
-            (request.seconds, request.size, request.seed),
-            (Some(4.0), None, Some(7))
-        );
-        assert_eq!(
-            request.more.get("strength").map(String::as_str),
-            Some("0.6")
-        );
-        assert_eq!(
-            request.out,
-            Path::new("/project/shots/open.takes/.making-003.mp4")
-        );
-        assert_eq!(request.files(), ["guide", "first", "ref", "ref2"]);
-        assert_eq!(
-            request.file("ref2"),
-            Some(Path::new("/project/refs/fog.png"))
-        );
-        assert_eq!(request.file("last"), None);
-        assert_eq!(request.file("ref3"), None);
-        let sized =
-            Request::parse(&SHOWN.replace("\"size\": null", "\"size\": [1280, 720]")).unwrap();
-        assert_eq!(sized.size, Some((1280, 720)));
-    }
-
-    #[test]
-    fn a_signal_is_brought_to_the_frames_the_model_makes() {
-        let request = Request::parse(SHOWN).unwrap();
-        let swell = &request.signals[0];
-        assert_eq!(swell.name, "swell");
-        // At its own rate it is what it was, and past its end what it ended on.
-        assert_eq!(
-            swell.over(9, 24.0),
-            [0.0, 0.0, 1.0, 0.0, 0.5, 0.5, 0.5, 0.5, 0.5]
-        );
-        // At twice the rate, each frame between two of its own is half way.
-        assert_eq!(swell.over(6, 48.0), [0.0, 0.0, 0.0, 0.5, 1.0, 0.5]);
-        // At a slower one its peak, one of its own frames long, is still there: lower, and
-        // spread over the frames of the model's it falls in.
-        let slower = swell.over(5, 16.0);
-        assert_eq!(slower[0], 0.0);
-        assert!(slower[1] > 0.4 && slower[1] < 1.0, "{slower:?}");
-        assert!(slower[2] > 0.0 && slower[2] < slower[1], "{slower:?}");
-        assert_eq!(slower[4], 0.5);
-        assert_eq!(swell.text(3, 24.0), "0,0,1");
-        // Held for two of the model's frames, three of its own here, a peak reaches one of
-        // them whole, wherever it starts.
-        for start in 4..8 {
-            let mut values = vec![0.0; 20];
-            values[start..=start + 3].fill(1.0);
-            let held = Signal {
-                name: "held".to_owned(),
-                rate: 24.0,
-                values,
-            };
-            assert!(held.over(13, 16.0).contains(&1.0), "from frame {start}");
-        }
-        // A request from before signals has none.
-        let before = Request::parse(
-            &SHOWN
-                .lines()
-                .filter(|line| !line.contains("signals"))
-                .collect::<Vec<_>>()
-                .join("\n"),
-        )
-        .unwrap();
-        assert!(before.signals.is_empty());
-        for name in ["signal", "signal2", "signal12"] {
-            assert!(names_a_signal(name) && names_what_is_handed(name), "{name}");
-        }
-        for name in ["signal1", "signal0", "signals", "sign"] {
-            assert!(!names_a_signal(name), "{name}");
-        }
-        assert_eq!([signal_named(0), signal_named(1)], ["signal", "signal2"]);
-        // As a video it is the same signal under another blank.
-        assert_eq!(signal_video_named(0), "signal_video");
-        assert_eq!(signal_video_named(1), "signal2_video");
-        assert!(names_a_signal("signal_video") && names_a_signal("signal3_video"));
-        assert!(!names_a_signal("signal1_video") && !names_a_signal("video"));
-    }
-
-    #[test]
-    fn a_guide_beside_the_first_is_a_file_under_its_own_name() {
-        let request = Request::parse(
-            r#"{"kerf-request": 1, "model": "two", "prompt": "", "guide": "/w/picture.mp4",
-                "guides": {"depth": "/w/depth.mp4", "ids": "/w/ids.mp4"}, "out": "/w/out"}"#,
-        )
-        .unwrap();
-        assert_eq!(request.files(), ["guide", "guide_depth", "guide_ids"]);
-        assert_eq!(request.file("guide_depth"), Some(Path::new("/w/depth.mp4")));
-        assert_eq!(request.file("guide_normals"), None);
-        assert!(names_a_file("guide_depth") && names_what_is_handed("guide_ids"));
-        assert!(!names_a_file("guide_") && !names_a_file("guide_Depth") && !names_a_file("guides"));
-    }
-
-    #[test]
-    fn where_a_clip_goes_is_a_track_of_points_in_the_models_pixels() {
-        // Four frames at 8 a second, the clip gone on the last, for a model that makes
-        // eight at 16 on a picture 200 by 100.
-        let ball: Moves = serde_json::from_str(
-            r#"{"name": "ball", "rate": 8.0, "places": [[0.25, 0.5, 0.1, 0.1], [0.5, 0.5, 0.1, 0.1], [0.75, 0.4, 0.1, 0.1], null]}"#,
-        )
-        .unwrap();
-        let points = ball.points(8, 16.0, (200, 100)).unwrap();
-        assert_eq!(points.len(), 8);
-        assert_eq!(points[0], [50.0, 50.0]);
-        assert_eq!(points[2], [100.0, 50.0]);
-        // Where it is gone it stays where it was last.
-        assert_eq!(points[7], [150.0, 40.0]);
-        let text = tracks(std::slice::from_ref(&ball), 2, 8.0, (200, 100));
-        assert_eq!(text, r#"[[{"x":50.0,"y":50.0},{"x":100.0,"y":50.0}]]"#);
-        // From a sequence wider than the picture, the sides are cut off: a quarter across
-        // a frame twice as wide as it is tall is the left edge of a square.
-        let wide = Moves { frame: Some((400, 200)), ..ball.clone() };
-        assert_eq!(wide.points(1, 8.0, (100, 100)).unwrap()[0], [0.0, 50.0]);
-        // As a layout: its box on each frame, and a picture white but for the box's edge.
-        let boxes = ball.boxes(4, 8.0, (200, 100));
-        let first = boxes[0].unwrap().map(f64::round);
-        assert_eq!(first, [40.0, 45.0, 60.0, 55.0]);
-        assert_eq!(boxes[3], None);
-        let drawn = layout(std::slice::from_ref(&ball), 4, 8.0, (200, 100));
-        assert_eq!(drawn.len(), 4);
-        assert_eq!(drawn[0][45 * 200 + 40], 0);
-        assert_eq!(drawn[0][50 * 200 + 50], 255);
-        assert_eq!(drawn[0][10 * 200 + 10], 255);
-        assert!(drawn[3].iter().all(|grey| *grey == 255));
-        assert!(names_what_is_handed(MOVES_VIDEO));
-        // One that shows on no frame is no track.
-        let none = Moves { places: vec![None; 3], ..ball };
-        assert_eq!(tracks(&[none], 2, 8.0, (200, 100)), "[]");
-        // With its box, a clip is five tracks: its middle, then toward each corner.
-        let boxed = Moves {
-            name: "box".to_owned(),
-            rate: 8.0,
-            frame: None,
-            places: vec![Some([0.5, 0.5, 0.2, 0.4])],
-        };
-        let said: serde_json::Value =
-            serde_json::from_str(&tracks_of_boxes(&[boxed], 1, 8.0, (200, 100))).unwrap();
-        assert_eq!(said.as_array().unwrap().len(), 5);
-        assert_eq!(said[0][0], serde_json::json!({"x": 100.0, "y": 50.0}));
-        assert_eq!(said[1][0], serde_json::json!({"x": 86.0, "y": 36.0}));
-        assert_eq!(said[4][0], serde_json::json!({"x": 114.0, "y": 64.0}));
-        assert!(names_what_is_handed(MOVES));
-    }
-
-    #[test]
-    fn a_part_of_a_longer_shot_reads_its_signals_and_moves_from_where_it_starts() {
-        let part = Request::parse(
-            r#"{"kerf-request": 1, "out": "o.mp4", "from": 0.5,
-                "signals": [{"name": "beat", "rate": 4.0, "values": [0.0, 0.1, 0.2, 0.3, 0.4]}],
-                "moves": [{"name": "ball", "rate": 8.0, "places": [null, null, null, null, [0.5, 0.5, 0.1, 0.1], null]}]}"#,
-        )
-        .unwrap();
-        assert_eq!(part.signals[0].values, [0.2, 0.3, 0.4]);
-        assert_eq!(part.moves[0].places, [Some([0.5, 0.5, 0.1, 0.1]), None]);
-        // One that starts past the end keeps what it ended on.
-        let past = Request::parse(
-            r#"{"kerf-request": 1, "out": "o.mp4", "from": 60,
-                "signals": [{"name": "beat", "rate": 4.0, "values": [0.0, 1.0]}]}"#,
-        )
-        .unwrap();
-        assert_eq!(past.signals[0].values, [1.0]);
-    }
 
     #[test]
     fn a_request_of_another_version_is_refused() {

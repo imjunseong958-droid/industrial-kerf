@@ -1,5 +1,5 @@
 //! The rule that keeps Kerf's areas apart, read from where a crate lives:
-//! `crates/<folder>/<crate>`. See `docs/architecture.md`.
+//! `crates/<folder>/<crate>`.
 //!
 //! A crate may depend on crates in its own folder and in any lower layer.
 //! Domains share a layer and may not depend on each other, so one can be

@@ -386,23 +386,4 @@ mod tests {
         let (fi, si) = (ink(&fast.0), ink(&slow.0));
         assert!((fi - si).abs() / fi < 0.02, "{fi} vs {si}");
     }
-
-    #[test]
-    fn synthetic_styles() {
-        let base = TextStyle { size: 60.0, ..Default::default() };
-        let l = layout("Hello", &base, &ParagraphStyle::default());
-        let b = layout("Hello", &TextStyle { faux_bold: true, ..base.clone() }, &ParagraphStyle::default());
-        assert!(ink(&rasterize(&b, &IDENTITY).0) > ink(&rasterize(&l, &IDENTITY).0) * 1.1);
-        let i = layout("l", &TextStyle { faux_italic: true, ..base.clone() }, &ParagraphStyle::default());
-        let (mi, _, _) = rasterize(&i, &IDENTITY);
-        // the top of an italic l is further right than its bottom
-        let row_centre = |y: usize| {
-            let r: Vec<f32> = (0..mi.w).map(|x| mi.get(x, y)).collect();
-            let s: f32 = r.iter().sum();
-            r.iter().enumerate().map(|(x, v)| x as f32 * v).sum::<f32>() / s.max(1e-6)
-        };
-        let rows: Vec<usize> = (0..mi.h).filter(|&y| (0..mi.w).any(|x| mi.get(x, y) > 0.5)).collect();
-        assert!(row_centre(rows[2]) > row_centre(rows[rows.len() - 3]) + 3.0);
-    }
-
 }

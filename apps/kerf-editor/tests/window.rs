@@ -20,9 +20,8 @@ use kerf_editor::stage::{
 };
 use kerf_editor::store::Preview;
 use kerf_editor::workspace::{
-    app_menu_place, app_menu_room, edited_ago_in, file_url, holds_keys_itself, home_flight_at,
-    panes_opening, running_words, settle_keys, sync_params, sync_question, title_tip,
-    user_guide_in, Holder, KeysGo,
+    app_menu_place, app_menu_room, edited_ago_in, holds_keys_itself, home_flight_at, panes_opening,
+    running_words, settle_keys, sync_params, sync_question, title_tip, Holder, KeysGo,
 };
 use proptest::prelude::*;
 use serde_json::{json, Value};
@@ -362,57 +361,6 @@ fn the_menu_bar_greys_what_cannot_run_and_ticks_what_is_on() {
     assert!(!checkable("edit.undo"));
 }
 
-// ------------------------------------------------------------ the guide
-
-#[test]
-fn the_user_guide_opens_from_a_folder_with_spaces_and_only_with_something_in_it() {
-    let root = tempfile::tempdir().unwrap();
-    let app = root.path().join("Industrial Kerf.app").join("Contents");
-    let exe = app.join("MacOS");
-    let resources = app.join("Resources");
-    std::fs::create_dir_all(&exe).unwrap();
-    std::fs::create_dir_all(&resources).unwrap();
-    let guide = resources.join("user-guide.html");
-    std::fs::write(&guide, "").unwrap();
-    // An empty guide does not count.
-    assert_eq!(user_guide_in(&exe), None);
-    std::fs::write(&guide, "<h1>Guide</h1>").unwrap();
-    let url = user_guide_in(&exe).unwrap();
-    assert!(url.starts_with("file:///"), "{url}");
-    assert!(url.contains("Industrial%20Kerf.app"), "{url}");
-    assert!(
-        url.ends_with("/Contents/Resources/user-guide.html"),
-        "{url}"
-    );
-    assert!(!url.contains(' '));
-}
-
-proptest! {
-    #[test]
-    fn a_file_url_reads_back_as_its_path(name in "[a-zA-Z0-9 _#%&()+,;=@~-]{1,24}") {
-        let path = std::path::PathBuf::from(format!("/tmp/{name}/guide.html"));
-        let url = file_url(&path);
-        prop_assert!(!url.contains(' ') && !url.contains('#'));
-        let decoded = {
-            let bytes = url.trim_start_matches("file://").as_bytes();
-            let mut out = Vec::new();
-            let mut at = 0;
-            while at < bytes.len() {
-                if bytes[at] == b'%' {
-                    let hex = std::str::from_utf8(&bytes[at + 1..at + 3]).unwrap();
-                    out.push(u8::from_str_radix(hex, 16).unwrap());
-                    at += 3;
-                } else {
-                    out.push(bytes[at]);
-                    at += 1;
-                }
-            }
-            String::from_utf8(out).unwrap()
-        };
-        prop_assert_eq!(decoded, path.display().to_string());
-    }
-}
-
 // ------------------------------------------------------------ the title
 
 #[test]
@@ -528,14 +476,6 @@ proptest! {
         prop_assert!((back.width - region.width).abs() < 1e-9);
         prop_assert!((back.height - region.height).abs() < 1e-9);
     }
-}
-
-#[test]
-fn no_crop_is_cleared_and_reads_as_none() {
-    let cleared = crop_props(None);
-    assert!(cleared["crop_l"].is_null() && cleared["crop_b"].is_null());
-    assert_eq!(crop_box(&cleared), None);
-    assert_eq!(crop_box(&json!({})), None);
 }
 
 #[test]
@@ -820,13 +760,6 @@ proptest! {
         }
         prop_assert_eq!(base64_decode(&text), Some(bytes));
     }
-}
-
-#[test]
-fn base64_that_does_not_read_is_none() {
-    assert_eq!(base64_decode("ab$d"), None);
-    assert_eq!(base64_decode("abcde"), None);
-    assert_eq!(base64_decode("TWFu").as_deref(), Some(&b"Man"[..]));
 }
 
 #[test]

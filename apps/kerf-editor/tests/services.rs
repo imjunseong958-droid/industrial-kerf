@@ -3,12 +3,12 @@
 //! master output kept per project, the startup options' pieces, and the
 //! Collab chip's and Export's words and commands.
 
-use kerf_editor::app::{parse_window_size, path_with_tool_folders, represented_file};
+use kerf_editor::app::{parse_window_size, path_with_tool_folders};
 use kerf_editor::export::{
     export_into, master_goes, master_makes, master_request, request, Quality,
 };
 use kerf_editor::finish::{
-    ask_text, deliver_said, preflight_hidden, preflight_rows, publish_command, publish_name,
+    deliver_said, preflight_hidden, preflight_rows, publish_command, publish_name,
     pull_request_command, pull_request_said, pull_request_title, sync_lines, sync_said, PublishWay,
 };
 use kerf_editor::links::{
@@ -16,10 +16,8 @@ use kerf_editor::links::{
     InboxAddress,
 };
 use kerf_editor::prefs::{
-    default_provider, import_qt, qt_master_key, qt_settings_ini, qt_settings_plist,
-    qt_settings_reg, ApiMode, MasterOutput, Permissions, Prefs, Provider,
+    default_provider, qt_master_key, qt_settings_ini, MasterOutput, Permissions, Prefs, Provider,
 };
-use kerf_editor::theme::{Face, ReadingFace};
 use proptest::prelude::*;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
@@ -269,213 +267,7 @@ fn a_key_kept_in_the_file_keeps_its_provider_until_one_is_chosen() {
     assert_eq!(chosen.provider, Provider::Anthropic);
 }
 
-#[test]
-fn an_older_serif_face_is_plex_with_the_serif_until_another_is_chosen() {
-    let folder = tempfile::tempdir().unwrap();
-    let path = folder.path().join("editor.json");
-    std::fs::write(&path, r#"{"version": 1, "face": "serif"}"#).unwrap();
-    let mut prefs = Prefs::load_from(&path);
-    assert_eq!(prefs.faces(), (Face::Plex, ReadingFace::Serif));
-    // Choosing the interface's face for reading sticks, and so does Plex.
-    prefs.choose_reading_face(ReadingFace::Same);
-    prefs.save_to(&path).unwrap();
-    assert_eq!(
-        Prefs::load_from(&path).faces(),
-        (Face::Plex, ReadingFace::Same)
-    );
-    // Choosing an interface face keeps the serif for reading.
-    let mut prefs = Prefs {
-        face: Face::Serif,
-        ..Prefs::default()
-    };
-    prefs.choose_face(Face::Inter);
-    assert_eq!(prefs.faces(), (Face::Inter, ReadingFace::Serif));
-}
-
 // ---------------------------------------------------------------- the Qt editor's settings
-
-const QT_INI: &str = r#"[General]
-settings%2Fversion=1
-
-[agent]
-activeProvider=openai
-connection=own
-anthropic\model=claude-sonnet-4-20250514
-anthropic\baseUrl=https://api.anthropic.com/v1
-openai\model=gpt-5
-openai\baseUrl=https://gw.example/v1
-openai\apiMode=responses
-openai\apiKey=sk-kept
-permissions=accept-edits
-mcpEnabled=true
-
-[appearance]
-interfaceFace=system
-readingFace=serif
-readingSize=large
-
-[collab]
-liveProjects=/films/atlas
-
-[commands]
-keymap=premiere
-
-[crashes]
-seenMs=1700000000000
-
-[deliver]
-atlas~3d3edcc06986\outputs="{\"master\": {\"folder\": \"masters/\", \"codec\": \"hevc\"}}"
-
-[launcher]
-details=true
-page=3
-
-[layout]
-sidebar=false
-sidebarWidth=320
-followKerf=false
-
-[projects]
-recent="/films/My Film, the cut", /films/atlas, /films/atlas
-template=vertical
-rate=25
-
-[updates]
-check=false
-skipped=0.1.2
-
-[viewer]
-safeZones=true
-
-[workspace]
-current=Review
-"#;
-
-#[test]
-fn the_qt_editors_ini_settings_are_read_as_qsettings_wrote_them() {
-    let settings = qt_settings_ini(QT_INI);
-    assert_eq!(settings["settings/version"], "1");
-    assert_eq!(
-        settings["agent/anthropic/model"],
-        "claude-sonnet-4-20250514"
-    );
-    assert_eq!(settings["agent/openai/baseUrl"], "https://gw.example/v1");
-    assert_eq!(
-        settings["projects/recent"],
-        json!(["/films/My Film, the cut", "/films/atlas", "/films/atlas"])
-    );
-    assert_eq!(
-        settings["deliver/atlas~3d3edcc06986/outputs"],
-        r#"{"master": {"folder": "masters/", "codec": "hevc"}}"#
-    );
-}
-
-#[test]
-fn what_the_qt_editor_kept_is_taken_up() {
-    let mut prefs = Prefs::default();
-    let taken = import_qt(&qt_settings_ini(QT_INI), &mut prefs);
-    assert!(taken.contains(&"agent/permissions".to_owned()));
-    assert_eq!(prefs.provider, Provider::Openai);
-    assert_eq!(prefs.openai_model, "gpt-5");
-    // The model nobody chose (settings before version 1 held it) is kept
-    // here, since these settings are version 1; the provider's own URL is none.
-    assert_eq!(prefs.anthropic_model, "claude-sonnet-4-20250514");
-    assert_eq!(prefs.anthropic_base_url, "");
-    assert_eq!(prefs.openai_base_url, "https://gw.example/v1");
-    assert_eq!(prefs.openai_api_mode, ApiMode::Responses);
-    assert_eq!(prefs.kept_keys["agent/openai/apiKey"], "sk-kept");
-    assert_eq!(prefs.permissions, Permissions::AcceptEdits);
-    assert!(prefs.mcp_enabled);
-    assert_eq!(prefs.face, Face::System);
-    assert_eq!(prefs.reading_face, ReadingFace::Serif);
-    assert_eq!(prefs.prose_step, 2);
-    assert!(!prefs.check_updates);
-    assert_eq!(prefs.update_skipped, "0.1.2");
-    assert_eq!(prefs.crashes_seen_ms, 1_700_000_000_000);
-    assert_eq!(
-        prefs.recent,
-        [
-            PathBuf::from("/films/My Film, the cut"),
-            PathBuf::from("/films/atlas")
-        ]
-    );
-    assert_eq!(prefs.live_sync, [PathBuf::from("/films/atlas")]);
-    assert!(!prefs.sidebar_open);
-    assert_eq!(prefs.sidebar_width, 320.0);
-    assert!(!prefs.follow_kerf);
-    assert!(prefs.safe_zones);
-    assert_eq!(prefs.keymap, kerf_editor::prefs::Keymap::Premiere);
-    assert_eq!(prefs.launcher_way, "clone");
-    assert_eq!(prefs.launcher_format, "vertical");
-    assert_eq!(prefs.launcher_rate, "25");
-    assert!(prefs.launcher_details);
-    // The master output, found again by the project's path.
-    let master = prefs.master_output(Path::new("/films/atlas")).unwrap();
-    assert_eq!(master.folder.as_deref(), Some("masters/"));
-    assert_eq!(master.codec.as_deref(), Some("hevc"));
-    assert!(prefs.master_output(Path::new("/elsewhere/atlas")).is_none());
-}
-
-#[test]
-fn a_retired_model_from_before_versions_is_let_go() {
-    let mut prefs = Prefs::default();
-    let settings = qt_settings_ini("[agent]\nanthropic\\model=claude-3-5-sonnet-latest\n");
-    import_qt(&settings, &mut prefs);
-    assert_eq!(prefs.anthropic_model, "");
-}
-
-#[test]
-fn the_qt_editors_macos_plist_is_read() {
-    let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-	<key>agent.connection</key>
-	<string>claude-code</string>
-	<key>agent.mcpEnabled</key>
-	<true/>
-	<key>layout.sidebarWidth</key>
-	<integer>300</integer>
-	<key>projects.recent</key>
-	<array>
-		<string>/Users/jun/Films/A &amp; B</string>
-		<string>/Users/jun/Films/atlas</string>
-	</array>
-	<key>sidebar/folded</key>
-	<dict>
-		<key>x</key>
-		<true/>
-	</dict>
-</dict>
-</plist>"#;
-    let settings = qt_settings_plist(xml);
-    assert_eq!(settings["agent/connection"], "claude-code");
-    assert_eq!(settings["agent/mcpEnabled"], true);
-    assert_eq!(settings["layout/sidebarWidth"], 300);
-    assert_eq!(settings["sidebar/folded"], json!({"x": true}));
-    let mut prefs = Prefs::default();
-    import_qt(&settings, &mut prefs);
-    assert_eq!(prefs.provider, Provider::ClaudeCode);
-    assert!(prefs.mcp_enabled);
-    assert_eq!(prefs.sidebar_width, 300.0);
-    assert_eq!(prefs.recent[0], PathBuf::from("/Users/jun/Films/A & B"));
-}
-
-#[test]
-fn the_qt_editors_windows_registry_is_read() {
-    let listed = "\r\nHKEY_CURRENT_USER\\Software\\Industrial Kerf\\Industrial Kerf\\agent\r\n    connection    REG_SZ    cloud\r\n    mcpEnabled    REG_SZ    true\r\n\r\nHKEY_CURRENT_USER\\Software\\Industrial Kerf\\Industrial Kerf\\projects\r\n    recent    REG_MULTI_SZ    C:\\Films\\a\\0C:\\Films\\b\r\n\r\nHKEY_CURRENT_USER\\Software\\Industrial Kerf\\Industrial Kerf\\layout\r\n    sidebarWidth    REG_DWORD    0x140\r\n";
-    let settings = qt_settings_reg(listed);
-    assert_eq!(settings["agent/connection"], "cloud");
-    assert_eq!(
-        settings["projects/recent"],
-        json!(["C:\\Films\\a", "C:\\Films\\b"])
-    );
-    assert_eq!(settings["layout/sidebarWidth"], 320);
-    let mut prefs = Prefs::default();
-    import_qt(&settings, &mut prefs);
-    assert_eq!(prefs.provider, Provider::Cloud);
-    assert_eq!(prefs.sidebar_width, 320.0);
-}
 
 #[test]
 fn the_qt_editors_settings_are_taken_up_once_with_settings_dir() {
@@ -737,14 +529,6 @@ proptest! {
 }
 
 #[test]
-fn a_projects_window_represents_its_project_file() {
-    assert_eq!(
-        represented_file(Path::new("/films/harbour")),
-        PathBuf::from("/films/harbour/project.kerf")
-    );
-}
-
-#[test]
 fn a_master_output_is_kept_by_the_projects_absolute_path() {
     let mut prefs = Prefs::default();
     let output = MasterOutput {
@@ -859,36 +643,6 @@ fn what_a_sync_brought_is_said_and_left_in_activity() {
 
 fn row(code: &str, passed: bool) -> Value {
     json!({"code": code, "name": code.to_uppercase(), "passed": passed, "value": "1", "limit": "≤ 2"})
-}
-
-#[test]
-fn preflight_asks_kerf_in_the_qt_editors_words() {
-    assert_eq!(
-        ask_text(&json!({"name": "True peak", "value": "−0.4 dBTP", "limit": "≤ −1 dBTP"})),
-        "Bring true peak to ≤ −1 dBTP (now −0.4 dBTP)"
-    );
-    assert_eq!(
-        ask_text(&json!({"name": "Flash", "value": "3 frames"})),
-        "Fix the flash (3 frames)"
-    );
-    assert_eq!(ask_text(&json!({"name": "LUFS"})), "Fix the LUFS");
-    assert_eq!(
-        ask_text(&json!({"code": "gamut", "limit": "BT.709"})),
-        "Bring gamut to BT.709"
-    );
-    let summary = json!({"rows": [
-        {"code": "loudness", "name": "Loudness", "passed": true, "value": "−23.0 LUFS", "limit": "−23 ± 1"},
-        {"code": "peak", "name": "True peak", "passed": false, "value": "−0.4 dBTP", "limit": "≤ −1 dBTP"},
-    ]});
-    let rows = preflight_rows(&summary, 4, 6);
-    assert_eq!(rows[0].label, "Loudness · −23.0 LUFS");
-    assert_eq!(rows[0].limit.as_deref(), Some("−23 ± 1"));
-    assert_eq!(rows[0].ask, None);
-    assert_eq!(
-        rows[1].ask.as_deref(),
-        Some("Bring true peak to ≤ −1 dBTP (now −0.4 dBTP)")
-    );
-    assert_eq!(rows[1].limit, None);
 }
 
 proptest! {

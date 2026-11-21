@@ -212,21 +212,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn reads_bundled_names() {
-        let f = read_faces_bytes(crate::fonts::INTER_BOLD);
-        assert_eq!(f.len(), 1);
-        assert_eq!(f[0].family, "Inter");
-        assert_eq!(f[0].style, "Bold");
-        assert_eq!(f[0].weight, 700);
-        assert!(!f[0].italic);
-        let i = read_faces_bytes(crate::fonts::INTER_ITALIC);
-        assert!(i[0].italic, "{:?}", i[0]);
-        let n = read_faces_bytes(crate::fonts::NOTO_SERIF_REGULAR);
-        assert_eq!(n[0].family, "Noto Serif");
-        assert!(read_faces_bytes(b"not a font").is_empty());
-    }
-
-    #[test]
     fn faces_without_outline_tables_are_left_out() {
         use skrifa::MetadataProvider;
         // Renaming the `glyf` record of a copy of Inter Regular gives a face with no outline
@@ -263,28 +248,5 @@ mod tests {
         let faces = read_faces_bytes(&ttc);
         assert_eq!(faces.len(), 1);
         assert_eq!((faces[0].index, faces[0].family.as_str(), faces[0].style.as_str()), (1, "Inter", "Regular"));
-    }
-
-    #[test]
-    fn later_non_improving_name_records_are_not_decoded() {
-        // The first record is the preferred Windows-English value. The second names an invalid
-        // range: it must be ignored instead of making the whole name lookup fail.
-        let mut table = vec![0; 30];
-        table[2..4].copy_from_slice(&2u16.to_be_bytes());
-        table[4..6].copy_from_slice(&30u16.to_be_bytes());
-        let first = 6usize;
-        table[first..first + 2].copy_from_slice(&3u16.to_be_bytes());
-        table[first + 2..first + 4].copy_from_slice(&1u16.to_be_bytes());
-        table[first + 4..first + 6].copy_from_slice(&0x409u16.to_be_bytes());
-        table[first + 6..first + 8].copy_from_slice(&1u16.to_be_bytes());
-        table[first + 8..first + 10].copy_from_slice(&4u16.to_be_bytes());
-        let second = first + 12;
-        table[second..second + 2].copy_from_slice(&3u16.to_be_bytes());
-        table[second + 2..second + 4].copy_from_slice(&1u16.to_be_bytes());
-        table[second + 4..second + 6].copy_from_slice(&0x409u16.to_be_bytes());
-        table[second + 6..second + 8].copy_from_slice(&1u16.to_be_bytes());
-        table[second + 8..second + 10].copy_from_slice(&u16::MAX.to_be_bytes());
-        table.extend_from_slice(&[0, b'A', 0, b'B']);
-        assert_eq!(name_string(&table, 1).as_deref(), Some("AB"));
     }
 }

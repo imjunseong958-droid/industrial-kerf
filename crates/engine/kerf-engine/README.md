@@ -11,9 +11,6 @@ cargo build --profile maxperf -p kerf-engine   # fat LTO, slowest link, fastest 
 ```
 
 Release builds use thin LTO, `codegen-units = 1`, `panic = abort`, and mimalloc.
-The timeline compiler and overlay primitives live in the dependency-light
-`kerf-core` crate. `kerf-engine` re-exports that API while keeping ffmpeg and
-media dependencies in the media engine.
 
 Default resource limits:
 

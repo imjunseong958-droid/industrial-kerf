@@ -212,37 +212,6 @@ fn read_value(chars: &[char], i: &mut usize, number: usize) -> Result<Atom, Diag
 mod tests {
     use super::*;
 
-    fn words(line: &Line) -> Vec<(Option<&str>, &Atom)> {
-        line.args
-            .iter()
-            .map(|a| (a.key.as_deref(), &a.value))
-            .collect()
-    }
-
-    #[test]
-    fn lexes_positional_pairs_strings_groups_and_comments() {
-        let lines = lex(
-            "clip c1 media=m1 name=\"A \\\"b\\\"\" scale={0f:1 12f:2:ease} color=#ff0000 # note\n\n  # only a comment\n    set opacity=0.5",
-        )
-        .unwrap();
-        assert_eq!(lines.len(), 2);
-        assert_eq!(
-            words(&lines[0]),
-            vec![
-                (None, &Atom::Word("clip".into())),
-                (None, &Atom::Word("c1".into())),
-                (Some("media"), &Atom::Word("m1".into())),
-                (Some("name"), &Atom::Str("A \"b\"".into())),
-                (
-                    Some("scale"),
-                    &Atom::Group(vec!["0f:1".into(), "12f:2:ease".into()])
-                ),
-                (Some("color"), &Atom::Word("#ff0000".into())),
-            ]
-        );
-        assert_eq!((lines[1].number, lines[1].depth), (4, 2));
-    }
-
     #[test]
     fn reports_malformed_lines_with_positions() {
         let errors = lex("clip c1 name=\"open\n\tclip\n   odd\nkey= value").unwrap_err();

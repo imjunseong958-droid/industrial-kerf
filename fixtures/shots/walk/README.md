@@ -1,6 +1,6 @@
 # A walk in layers
 
-The shot `docs/shots-measured.md` (12) measures a matte with: a man walking
+A shot to make a matte of: a man walking
 toward the camera along a dirt path, 81 frames of 832x480 at 16 a second.
 The footage is not in the repository. It is from Netflix's *Chimera* (2014),
 Creative Commons Attribution 4.0 International (`licenses/README.md`), cut
@@ -13,8 +13,7 @@ mkdir -p footage
 ffmpeg -ss 11 -i chimera.mp4 -vf "fps=16,scale=854:480:flags=area,crop=832:480,format=yuv420p" -frames:v 81 -an -c:v libx264 -crf 14 footage/walk.mp4
 ```
 
-With four models set up as `kerf-comfy`'s workflows (`docs/shots.md`, A
-thing in footage, by its name), `matte` as `matte`, `shown` as
+With four models set up as `kerf-comfy`'s workflows, `matte` as `matte`, `shown` as
 `matte-shown`, `into` as `shot-into`, and `plate` as `plate`:
 
 ```bash

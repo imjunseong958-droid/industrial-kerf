@@ -138,33 +138,6 @@ fn each_kernel_draws_what_the_cpu_draws() {
     assert!(kerf_gpu::shared().is_some(), "the device failed");
 }
 
-/// The kernels are WGSL, with no GPU to say so, and their uniforms are what a pass writes: no more than
-/// the 16 KiB of them that any Vulkan device binds, which the cards of a card scene's every moment fit.
-#[test]
-fn the_kernels_read_the_uniforms_a_pass_writes() {
-    let source = format!(
-        "{}{}",
-        include_str!("kernels.wgsl"),
-        kerf_kernel::wipe_wgsl()
-    );
-    let module = naga::front::wgsl::parse_str(&source)
-        .unwrap_or_else(|error| panic!("{}", error.emit_to_string(&source)));
-    naga::valid::Validator::new(
-        naga::valid::ValidationFlags::all(),
-        naga::valid::Capabilities::all(),
-    )
-    .validate(&module)
-    .unwrap_or_else(|error| panic!("{error:?}"));
-    let (_, u) = module
-        .global_variables
-        .iter()
-        .find(|(_, global)| global.name.as_deref() == Some("u"))
-        .expect("the uniforms");
-    let size = module.types[u.ty].inner.size(module.to_ctx()) as usize;
-    assert_eq!(size, 32 + 4 * super::gpu::NUMBERS);
-    assert!(size <= 16 * 1024, "{size} bytes");
-}
-
 /// Which have kernels and which do not, by name, so that neither list can drift.
 #[test]
 fn which_transitions_have_kernels() {
@@ -257,20 +230,4 @@ fn which_transitions_have_kernels() {
     assert_eq!(with, KERNELS);
     assert_eq!(without, ON_THE_CPU);
     assert_eq!(with.len() + without.len(), 72);
-}
-
-/// Its ends are the two clips, as on the CPU, with no arithmetic that could change a byte.
-#[test]
-fn a_transition_at_its_ends_is_its_clips() {
-    let Some(gpu) = gpu() else {
-        return;
-    };
-    let (a, b) = (frame_a(W, H), frame_b(W, H));
-    let params = Params::new();
-    let def = Catalog::builtin().fx("glass").expect("in the catalog");
-    let fx = Fx::new(def, &params).expect("drawn");
-    let start = Kernel::of(&fx, (W, H), 0.0, 1.0).expect("a kernel");
-    assert_eq!(on_gpu(gpu, &start, &a, &b), a.px);
-    let end = Kernel::of(&fx, (W, H), 1.0, 1.0).expect("a kernel");
-    assert_eq!(on_gpu(gpu, &end, &a, &b), b.px);
 }

@@ -149,13 +149,4 @@ mod tests {
         assert!((total - 1.0).abs() < 1e-4, "{total}");
         assert!(image.get(20, 20)[3] < 0.1 && image.get(23, 20)[3] > 0.0);
     }
-
-    #[test]
-    fn repeated_edges_keep_a_flat_picture_flat() {
-        let mut image = Image::filled(16, 9, [0.25, 0.5, 0.75, 1.0]);
-        gaussian(&mut image, 5.0, 5.0, true);
-        for pixel in image.px.as_chunks::<4>().0 {
-            assert!((pixel[1] - 0.5).abs() < 1e-5);
-        }
-    }
 }

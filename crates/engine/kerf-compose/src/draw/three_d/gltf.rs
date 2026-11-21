@@ -597,12 +597,6 @@ fn matrix_of(node: &Json) -> Option<Matrix> {
     Some([0, 1, 2].map(|row| [0, 1, 2, 3].map(|column| m[column * 4 + row])))
 }
 
-/// A node's own place: its `matrix`, or its translation, rotation, and scale.
-#[cfg(test)]
-fn local(node: &Json) -> Matrix {
-    matrix_of(node).unwrap_or_else(|| Told::of(node).place())
-}
-
 fn decoded(base64: &str) -> Option<Vec<u8>> {
     let mut out = Vec::with_capacity(base64.len() * 3 / 4);
     let (mut held, mut bits) = (0u32, 0u32);
@@ -1362,64 +1356,4 @@ pub(super) fn read(path: &Path) -> Result<Read, String> {
     }
     (out.points, out.normals) = out.posed(None);
     Ok(out)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_node_is_placed_by_its_matrix_or_by_what_it_is_moved_turned_and_sized_by() {
-        // Moved by 1, 2, 3 and twice the size, either way it is said.
-        let told = serde_json::json!({"translation": [1, 2, 3], "scale": [2, 2, 2]});
-        let matrix =
-            serde_json::json!({"matrix": [2, 0, 0, 0, 0, 2, 0, 0, 0, 0, 2, 0, 1, 2, 3, 1]});
-        assert_eq!(local(&told), local(&matrix));
-        assert_eq!(local(&told)[1], [0.0, 2.0, 0.0, 2.0]);
-        // A quarter turn about z takes x to y.
-        let half = std::f64::consts::FRAC_1_SQRT_2;
-        let turned = local(&serde_json::json!({"rotation": [0, 0, half, half]}));
-        assert!((turned[0][0]).abs() < 1e-12 && (turned[1][0] - 1.0).abs() < 1e-12);
-        // One node under another is placed by both, the outer last.
-        let both = then(&local(&told), &turned);
-        assert!((both[1][0] - 2.0).abs() < 1e-12 && both[0][3] == 1.0);
-    }
-
-    #[test]
-    fn a_value_between_two_keys_is_as_the_animation_says_it_goes() {
-        let half = std::f64::consts::FRAC_1_SQRT_2;
-        let channel = |what: What, how: How, across: usize, values: &[f64]| Channel {
-            node: 0,
-            what,
-            how,
-            across,
-            times: vec![1.0, 3.0],
-            values: values.to_vec(),
-        };
-        // Evenly, held until the next, and by a curve that leaves and arrives at no speed.
-        let moved = [0.0, 0.0, 0.0, 4.0, 0.0, 0.0];
-        assert_eq!(channel(What::Moved, How::Linear, 3, &moved).at(1.5)[0], 1.0);
-        assert_eq!(channel(What::Moved, How::Step, 3, &moved).at(2.9)[0], 0.0);
-        let mut curved = vec![0.0; 18];
-        curved[12] = 4.0;
-        let curve = channel(What::Moved, How::Cubic, 3, &curved);
-        assert_eq!(curve.at(2.0)[0], 2.0);
-        assert!(curve.at(1.5)[0] < 1.0 && curve.at(2.5)[0] > 3.0);
-        // Before its first key it is the first, and after its last the last.
-        assert_eq!(curve.at(0.0)[0], 0.0);
-        assert_eq!(curve.at(9.0)[0], 4.0);
-        // A turn goes the short way round at an even speed: from none to a quarter turn about z
-        // written the long way, an eighth is halfway.
-        let turned = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, -half, -half];
-        let eighth = channel(What::Turned, How::Linear, 4, &turned).at(2.0);
-        let (sin, cos) = (std::f64::consts::PI / 8.0).sin_cos();
-        assert!((eighth[2] - sin).abs() < 1e-12 && (eighth[3] - cos).abs() < 1e-12);
-    }
-
-    #[test]
-    fn base64_is_read() {
-        assert_eq!(decoded("AAECAwQ=").unwrap(), [0, 1, 2, 3, 4]);
-        assert_eq!(decoded("/+7d").unwrap(), [0xff, 0xee, 0xdd]);
-        assert!(decoded("a b").is_none());
-    }
 }

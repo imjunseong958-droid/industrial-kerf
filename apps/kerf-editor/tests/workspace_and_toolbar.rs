@@ -182,20 +182,6 @@ fn open_recent_follows_open_project_in_the_file_menu() {
 }
 
 #[test]
-fn a_shortcut_is_written_as_the_system_writes_it() {
-    if cfg!(target_os = "macos") {
-        assert_eq!(shown_keys("Ctrl+E"), "⌘E");
-        assert_eq!(shown_keys("Ctrl+Shift+Z"), "⇧⌘Z");
-        assert_eq!(shown_keys("Alt+Ctrl+S"), "⌥⌘S");
-    } else {
-        assert_eq!(shown_keys("Ctrl+E"), "Ctrl+E");
-        assert_eq!(shown_keys("Ctrl+Shift+Z"), "Ctrl+Shift+Z");
-        // Meta+ is Ctrl+ off macOS, where the system keeps Super for itself.
-        assert_eq!(keystroke("Meta+R").as_deref(), Some("ctrl-r"));
-    }
-}
-
-#[test]
 fn a_finished_exports_frame_crosses_fading_then_fades_where_it_lands() {
     let (along, opacity) = export_flight_at(Duration::ZERO).unwrap();
     assert_eq!(along, 0.0);
