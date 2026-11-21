@@ -3437,7 +3437,7 @@ dependencies = [
 
 [[package]]
 name = "kerf-agent"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "base64 0.23.1",
  "kerf-skills",
@@ -3448,7 +3448,7 @@ dependencies = [
 
 [[package]]
 name = "kerf-bridge"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "base64 0.23.1",
  "kerf-agent",
@@ -3474,7 +3474,7 @@ dependencies = [
 
 [[package]]
 name = "kerf-cloud"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "serde",
  "serde_json",
@@ -3483,7 +3483,7 @@ dependencies = [
 
 [[package]]
 name = "kerf-collab"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "kerf-lang",
  "kerf-model",
@@ -3494,14 +3494,14 @@ dependencies = [
 
 [[package]]
 name = "kerf-color"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "kerf-commands"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "kerf-cloud",
  "kerf-runtime",
@@ -3511,7 +3511,7 @@ dependencies = [
 
 [[package]]
 name = "kerf-compose"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "ffmpeg-next",
  "kerf-color",
@@ -3531,7 +3531,7 @@ dependencies = [
 
 [[package]]
 name = "kerf-core"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "kerf-model",
  "serde",
@@ -3540,7 +3540,7 @@ dependencies = [
 
 [[package]]
 name = "kerf-draw"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "kerf-color",
  "kerf-geom",
@@ -3551,7 +3551,7 @@ dependencies = [
 
 [[package]]
 name = "kerf-editor"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "embed-resource",
  "env_logger",
@@ -3577,7 +3577,7 @@ dependencies = [
 
 [[package]]
 name = "kerf-engine"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "clap",
@@ -3603,7 +3603,7 @@ dependencies = [
 
 [[package]]
 name = "kerf-fx"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "kerf-color",
  "kerf-draw",
@@ -3618,14 +3618,14 @@ dependencies = [
 
 [[package]]
 name = "kerf-geom"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "kerf-gpu"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "bytemuck",
  "kerf-color",
@@ -3636,7 +3636,7 @@ dependencies = [
 
 [[package]]
 name = "kerf-image"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "kerf-draw",
  "kerf-model",
@@ -3646,7 +3646,7 @@ dependencies = [
 
 [[package]]
 name = "kerf-interchange"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "kerf-model",
  "serde",
@@ -3655,18 +3655,18 @@ dependencies = [
 
 [[package]]
 name = "kerf-kernel"
-version = "0.1.4"
+version = "0.1.5"
 
 [[package]]
 name = "kerf-lang"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "kerf-model",
 ]
 
 [[package]]
 name = "kerf-mcp"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "base64 0.23.1",
  "kerf-agent",
@@ -3689,14 +3689,14 @@ dependencies = [
 
 [[package]]
 name = "kerf-model"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "kerf-color",
 ]
 
 [[package]]
 name = "kerf-motion"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "kerf-draw",
  "kerf-model",
@@ -3707,7 +3707,7 @@ dependencies = [
 
 [[package]]
 name = "kerf-playback"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "cpal",
  "ffmpeg-next",
@@ -3722,7 +3722,7 @@ dependencies = [
 
 [[package]]
 name = "kerf-raster"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "kerf-color",
  "kerf-geom",
@@ -3731,7 +3731,7 @@ dependencies = [
 
 [[package]]
 name = "kerf-raster-fx"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "kerf-color",
  "kerf-raster",
@@ -3740,7 +3740,7 @@ dependencies = [
 
 [[package]]
 name = "kerf-runtime"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "fs2",
  "kerf-collab",
@@ -3756,7 +3756,7 @@ dependencies = [
 
 [[package]]
 name = "kerf-scopes"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "kerf-color",
  "serde",
@@ -3764,7 +3764,7 @@ dependencies = [
 
 [[package]]
 name = "kerf-shots"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "kerf-engine",
  "kerf-model",
@@ -3775,11 +3775,11 @@ dependencies = [
 
 [[package]]
 name = "kerf-skills"
-version = "0.1.4"
+version = "0.1.5"
 
 [[package]]
 name = "kerf-text"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "harfrust",
  "png 0.18.1",
@@ -3791,7 +3791,7 @@ dependencies = [
 
 [[package]]
 name = "kerf-track"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "kerf-raster",
  "rayon",
@@ -3799,7 +3799,7 @@ dependencies = [
 
 [[package]]
 name = "kerf-workflow"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "serde",
  "serde_json",

@@ -52,7 +52,7 @@ exclude = ["apps/kerf-editor"]
 resolver = "2"
 
 [workspace.package]
-version = "0.1.4"
+version = "0.1.5"
 edition = "2021"
 license = "MIT"
 
