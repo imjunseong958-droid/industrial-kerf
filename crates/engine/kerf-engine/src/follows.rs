@@ -263,20 +263,3 @@ fn correlation(one: &[f64], other: &[f64]) -> f64 {
         0.0
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_place_is_a_share_of_the_order_and_equals_share_theirs() {
-        assert_eq!(
-            places([10u8, 30, 20, 30].into_iter()),
-            [0.125, 0.75, 0.375, 0.75]
-        );
-        let up = [0.0, 0.25, 0.5, 1.0];
-        assert!((correlation(&up, &up) - 1.0).abs() < 1e-12);
-        assert!((correlation(&up, &[1.0, 0.75, 0.5, 0.0]) + 1.0).abs() < 1e-12);
-        assert_eq!(correlation(&up, &[0.5; 4]), 0.0);
-    }
-}

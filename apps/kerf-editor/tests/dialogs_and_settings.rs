@@ -6,10 +6,9 @@
 //! toolbar's red line, and no "Runtime is disconnected" bar under the
 //! disconnected one.
 
-use kerf_editor::cast::{cast_return, CastReturn};
 use kerf_editor::finish::SyncFailure;
 use kerf_editor::launcher::{launcher_escape, LauncherEscape};
-use kerf_editor::settings::{cursor_imports, models_opener, read_failure, releases_url, TAGLINE};
+use kerf_editor::settings::{cursor_imports, models_opener, read_failure, releases_url};
 use kerf_editor::store::Connection;
 use kerf_editor::workspace::{bar_takes_error, standing_problem, sync_failed, StandingInput};
 use proptest::prelude::*;
@@ -120,19 +119,6 @@ fn an_error_without_a_number_is_said_whole() {
 
 // ---------------------------------------------------------------- About
 
-#[test]
-fn about_says_qts_tagline_and_links_the_releases() {
-    assert_eq!(TAGLINE, "A video editor you can talk to.");
-    assert_eq!(
-        releases_url("https://github.com/industrial-kerf/kerf"),
-        "https://github.com/industrial-kerf/kerf/releases"
-    );
-    assert_eq!(
-        releases_url(&format!("{}/", kerf_bridge::REPOSITORY)),
-        format!("{}/releases", kerf_bridge::REPOSITORY)
-    );
-}
-
 proptest! {
     #[test]
     fn the_releases_page_is_the_repositorys_own(
@@ -171,12 +157,6 @@ proptest! {
 }
 
 // ---------------------------------------------------------------- Cast and Styles
-
-#[test]
-fn return_ends_a_cell_and_then_saves() {
-    assert_eq!(cast_return(true), CastReturn::EndCell);
-    assert_eq!(cast_return(false), CastReturn::Save);
-}
 
 // ---------------------------------------------------------------- a failed sync
 

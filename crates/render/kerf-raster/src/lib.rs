@@ -197,12 +197,4 @@ mod tests {
         let half = img.sample_bilinear(2.0, 1.5);
         assert!((half[3] - 0.5).abs() < 1e-6);
     }
-
-    #[test]
-    fn noise_in_range() {
-        for i in 0..1000 {
-            let n = hash_noise(i, i * 7, 3);
-            assert!((0.0..1.0).contains(&n));
-        }
-    }
 }

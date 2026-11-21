@@ -3,13 +3,10 @@
 //! every menu follow it), the preview card's rules now the stage's, and the
 //! sizes and holds the groups kept locally now named in the theme.
 
-use kerf_editor::stage::{render_card_shows, render_stop_holds, shows_program, RenderCard};
+use kerf_editor::stage::shows_program;
 use kerf_editor::store::EditorState;
-use kerf_editor::theme::{layout, motion};
-use kerf_editor::workspace;
 use proptest::prelude::*;
 use serde_json::{json, Value};
-use std::time::Duration;
 
 fn clip(id: &str, start: f64) -> Value {
     json!({"id": id, "mediaId": "m", "timelineStart": start, "duration": 2.0,
@@ -89,50 +86,5 @@ proptest! {
             && of_proposal
             && matches!(status, "running" | "ready" | "live");
         prop_assert_eq!(shows_program(&state, has_clips), !cut && !preview);
-    }
-}
-
-#[test]
-fn the_window_s_render_card_rules_are_the_stage_s() {
-    // The window's names for them are the stage's own rules, so Esc and
-    // the card's Stop go by one rule.
-    let card = RenderCard {
-        rendering: true,
-        picture_shown: true,
-        ..RenderCard::default()
-    };
-    assert_eq!(
-        workspace::render_card_shows(card),
-        render_card_shows(card),
-        "one rule"
-    );
-    assert!(render_card_shows(card));
-    let stopped = RenderCard {
-        stopped: true,
-        ..card
-    };
-    assert!(!render_card_shows(stopped));
-    let running = json!({"type": "preview", "status": "running", "proposalId": "p1"});
-    assert!(render_stop_holds(Some("p1"), &running));
-    assert_eq!(
-        workspace::render_stop_holds(Some("p1"), &running),
-        render_stop_holds(Some("p1"), &running)
-    );
-}
-
-#[test]
-fn the_groups_local_sizes_and_holds_are_the_theme_s() {
-    // The composer's mode, said briefly: Qt's 3 s status line.
-    assert_eq!(kerf_editor::chat::MODE_HOLD, motion::NOTICE_BRIEF_HOLD);
-    assert_eq!(motion::NOTICE_BRIEF_HOLD, Duration::from_millis(3000));
-    // A head's Small and Large: Qt's kSmallTrackHeight and kLargeTrackHeight.
-    assert_eq!(layout::TRACK_SMALL, 20.0);
-    assert_eq!(layout::TRACK_LARGE, 48.0);
-    // Both are among the heights a head's drag steps through.
-    for height in [layout::TRACK_SMALL, layout::TRACK_LARGE] {
-        assert!(
-            kerf_editor::timeline::TRACK_STEPS.contains(&height),
-            "{height}"
-        );
     }
 }

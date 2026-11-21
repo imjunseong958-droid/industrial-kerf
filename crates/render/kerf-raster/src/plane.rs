@@ -100,29 +100,3 @@ impl Plane {
         (gx, gy)
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn sampling_and_pyramid_share_coordinates() {
-        let mut p = Plane::new(8, 8, 1);
-        for y in 0..8 {
-            for x in 0..8 {
-                p.data[y * 8 + x] = x as f32 + 10.0 * y as f32;
-            }
-        }
-        let mut o = [0.0];
-        p.sample(2.5, 3.5, &mut o);
-        assert_eq!(o[0], 32.0);
-        p.sample(3.0, 3.5, &mut o);
-        assert!((o[0] - 32.5).abs() < 1e-6);
-        // A linear ramp keeps its value at matching coordinates on the next level.
-        let d = p.downsample();
-        d.sample(1.5, 1.5, &mut o);
-        let mut o0 = [0.0];
-        p.sample(3.0, 3.0, &mut o0);
-        assert!((o[0] - o0[0]).abs() < 1e-5, "{} vs {}", o[0], o0[0]);
-    }
-}

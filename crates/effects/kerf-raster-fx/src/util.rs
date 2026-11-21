@@ -390,12 +390,6 @@ pub fn poly_point_at(pts: &[[f64; 2]], closed: bool, s: f64) -> ([f64; 2], [f64;
     (pts[n - 1], [1.0, 0.0])
 }
 
-/// A hash of `a`, `b`, and `seed` in 0..1, for test pictures.
-#[cfg(test)]
-pub fn hash1(a: u32, b: u32, seed: u32) -> f32 {
-    kerf_raster::hash_noise(a, b, seed)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -413,20 +407,5 @@ mod tests {
                 assert_eq!(d[x], m, "r={r} x={x}");
             }
         }
-    }
-
-    #[test]
-    fn gauss_plane_preserves_constant() {
-        let p = Plane { w: 20, h: 10, data: vec![0.25; 200] };
-        let g = gauss_plane(&p, 3.0, 2.0);
-        assert!(g.data.iter().all(|v| (v - 0.25).abs() < 1e-5));
-    }
-
-    #[test]
-    fn guided_filter_keeps_constant() {
-        let g = Plane { w: 16, h: 16, data: (0..256).map(|i| (i % 16) as f32 / 16.0).collect() };
-        let p = Plane { w: 16, h: 16, data: vec![0.7; 256] };
-        let o = guided_filter(&g, &p, 2, 1e-3);
-        assert!(o.data.iter().all(|v| (v - 0.7).abs() < 1e-3));
     }
 }

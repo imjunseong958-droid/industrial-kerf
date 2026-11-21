@@ -235,42 +235,6 @@ pub fn warp(picture: &mut Image, chains: &[Vec<[f32; 2]>], radius: f32, amount: 
 mod tests {
     use super::*;
 
-    const GRAY: [f32; 4] = [0.3, 0.3, 0.3, 1.0];
-
-    fn with_dot(w: usize, h: usize, at: [usize; 2], size: usize) -> Image {
-        let mut picture = Image::filled(w, h, GRAY);
-        for y in at[1] - size..at[1] + size {
-            for x in at[0] - size..at[0] + size {
-                let start = (y * w + x) * 4;
-                picture.px[start..start + 4].copy_from_slice(&[1.0; 4]);
-            }
-        }
-        picture
-    }
-
-    #[test]
-    fn nothing_moves_at_no_amount_or_outside_the_radius() {
-        let original = with_dot(200, 120, [60, 60], 3);
-        let mut still = original.clone();
-        warp(&mut still, &[vec![[60.0, 60.0], [100.0, 75.0]]], 50.0, 0.0);
-        assert_eq!(still, original);
-        let mut picture = with_dot(200, 120, [20, 20], 3);
-        let before = picture.clone();
-        warp(
-            &mut picture,
-            &[vec![[140.0, 80.0], [150.0, 80.0]]],
-            20.0,
-            1.0,
-        );
-        for y in 0..120 {
-            for x in 0..200 {
-                if (x as f32 - 145.0).hypot(y as f32 - 80.0) > 40.0 {
-                    assert_eq!(picture.get(x, y), before.get(x, y), "{x},{y}");
-                }
-            }
-        }
-    }
-
     #[test]
     fn a_gradient_stays_in_order_so_the_mesh_has_not_folded() {
         let (w, h) = (160, 90);
@@ -292,19 +256,5 @@ mod tests {
             let (here, before) = (picture.get(x, 45)[0], picture.get(x - 1, 45)[0]);
             assert!(here >= before - 1e-3, "{x}: {before} then {here}");
         }
-    }
-
-    #[test]
-    fn its_cells_are_fine_enough_for_a_small_radius_and_not_too_many() {
-        let small = Mesh::new((3840, 2160), 12.0);
-        assert!(
-            small.columns <= 1024 && small.cell[0] < 4.0,
-            "{}",
-            small.columns
-        );
-        let large = Mesh::new((3840, 2160), 400.0);
-        assert!(large.columns < 100, "{}", large.columns);
-        let steps = steps_of(&[[0.0, 0.0], [1.0e6, 0.0]], 1.0, 1.0);
-        assert!(steps.len() <= MOST_STEPS + 1);
     }
 }

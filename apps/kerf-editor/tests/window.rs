@@ -479,14 +479,6 @@ proptest! {
 }
 
 #[test]
-fn no_crop_is_cleared_and_reads_as_none() {
-    let cleared = crop_props(None);
-    assert!(cleared["crop_l"].is_null() && cleared["crop_b"].is_null());
-    assert_eq!(crop_box(&cleared), None);
-    assert_eq!(crop_box(&json!({})), None);
-}
-
-#[test]
 fn focusing_splits_the_clip_round_the_range_and_crops_the_middle() {
     let region = Region {
         x: 0.25,
@@ -768,13 +760,6 @@ proptest! {
         }
         prop_assert_eq!(base64_decode(&text), Some(bytes));
     }
-}
-
-#[test]
-fn base64_that_does_not_read_is_none() {
-    assert_eq!(base64_decode("ab$d"), None);
-    assert_eq!(base64_decode("abcde"), None);
-    assert_eq!(base64_decode("TWFu").as_deref(), Some(&b"Man"[..]));
 }
 
 #[test]

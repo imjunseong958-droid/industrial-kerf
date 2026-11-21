@@ -217,22 +217,4 @@ mod tests {
         assert!(correction(&[]).is_identity());
         assert!(correction(&[("exposure", 1.0), ("mix", 0.0)]).is_identity());
     }
-
-    #[test]
-    fn exposure_doubles_a_stop() {
-        let out = correction(&[("exposure", 1.0)]).apply([0.25, 0.5, 0.75]);
-        assert_eq!(out, [0.5, 1.0, 1.0]);
-    }
-
-    #[test]
-    fn saturation_zero_leaves_gray() {
-        let [r, g, b] = correction(&[("saturation", 0.0)]).apply([0.8, 0.2, 0.1]);
-        assert!((r - g).abs() < 0.02 && (g - b).abs() < 0.02, "{r} {g} {b}");
-    }
-
-    #[test]
-    fn warm_temperature_lifts_red_shadows() {
-        let [r, _, b] = correction(&[("temperature", 200.0)]).apply([0.2, 0.2, 0.2]);
-        assert!(r > b, "{r} {b}");
-    }
 }

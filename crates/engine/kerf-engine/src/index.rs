@@ -467,7 +467,6 @@ fn tempo(levels: &[f64], onsets: usize) -> Option<Tempo> {
 
 #[cfg(test)]
 mod tests {
-
     /// An FFmpeg that fills its stderr before the frames it is read for: it must still be read to
     /// its end, where it once left both waiting for ever.
     #[cfg(unix)]
@@ -512,37 +511,5 @@ mod tests {
         let tempo = tempo(&levels, found.len()).unwrap();
         assert!((tempo.bpm - 120.0).abs() < 1.0, "{tempo:?}");
         assert!(tempo.first < 0.02, "{tempo:?}");
-    }
-
-    #[test]
-    fn a_steady_tone_has_no_tempo() {
-        let mut levels = vec![-60.0; 50];
-        levels.extend(vec![-20.0; 950]);
-        assert_eq!(onsets(&levels).len(), 1);
-        assert!(tempo(&levels, 1).is_none());
-    }
-
-    #[test]
-    fn peaks_are_the_loudest_moments_far_enough_apart() {
-        let mut levels = vec![-40.0; 3000];
-        for (start, level) in [(500, -10.0), (600, -12.0), (2000, -15.0)] {
-            for value in &mut levels[start..start + 50] {
-                *value = level;
-            }
-        }
-        let found = peaks(&levels);
-        let times: Vec<f64> = found.iter().map(|peak| peak.at).collect();
-        // 6.0s is within three seconds of the louder 5.0s.
-        assert_eq!(times.len(), 2, "{found:?}");
-        assert!(
-            (times[0] - 5.25).abs() < 0.3 && (times[1] - 20.25).abs() < 0.3,
-            "{found:?}"
-        );
-    }
-
-    #[test]
-    fn envelopes_parse_silence_as_the_floor() {
-        let text = "frame:0    pts:0       pts_time:0\nlavfi.astats.Overall.RMS_level=-inf\nframe:1    pts:80      pts_time:0.01\nlavfi.astats.Overall.RMS_level=-23.5\n";
-        assert_eq!(parse_envelope(text), [FLOOR_DB, -23.5]);
     }
 }

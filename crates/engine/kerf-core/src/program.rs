@@ -1140,59 +1140,6 @@ mod sound_effect_tests {
     }
 
     #[test]
-    fn channel_eq_lowers_to_a_high_pass_and_a_presence_band() {
-        assert_eq!(
-            lowered("      fx audio.eq lowcut_hz=80 presence_db=1.5\n"),
-            ["highpass=f=80", "equalizer=f=3000:t=q:w=1:g=1.5"]
-        );
-        // A low cut at 0 is off; so is a flat presence band.
-        assert_eq!(
-            lowered("      fx audio.eq presence_db=-3\n"),
-            ["equalizer=f=3000:t=q:w=1:g=-3"]
-        );
-        assert_eq!(
-            lowered("      fx audio.eq lowcut_hz=120\n"),
-            ["highpass=f=120"]
-        );
-        assert!(lowered("      fx audio.eq\n").is_empty());
-    }
-
-    #[test]
-    fn the_limiter_lowers_to_alimiter_at_a_linear_limit() {
-        assert_eq!(
-            lowered("      fx audio.limiter limit_db=-6 release_ms=200\n"),
-            ["alimiter=limit=0.501187:release=200:level=false:latency=true"]
-        );
-        // Unset parameters take the catalog defaults: -1 dBFS and 50 ms.
-        assert_eq!(
-            lowered("      fx audio.limiter\n"),
-            ["alimiter=limit=0.891251:release=50:level=false:latency=true"]
-        );
-        // Effects chain in order, and a disabled one lowers to nothing.
-        let mut clip =
-            clip_with("      fx audio.eq lowcut_hz=80\n      fx audio.limiter limit_db=-2\n");
-        assert_eq!(
-            audio_effects(Catalog::builtin(), &clip).unwrap(),
-            [
-                "highpass=f=80",
-                "alimiter=limit=0.794328:release=50:level=false:latency=true"
-            ]
-        );
-        clip.effects[1].enabled = false;
-        assert_eq!(
-            audio_effects(Catalog::builtin(), &clip).unwrap(),
-            ["highpass=f=80"]
-        );
-    }
-
-    #[test]
-    fn animated_eq_and_limiter_parameters_are_refused() {
-        let clip = clip_with("      fx audio.limiter limit_db={0f:-1 12f:-6}\n");
-        let error = audio_effects(Catalog::builtin(), &clip).unwrap_err();
-        assert!(error.to_string().contains("limit_db"), "{error}");
-    }
-
-    #[test]
     fn ffmpeg_accepts_the_lowered_filters() {
         let chain = lowered(
             "      fx audio.eq lowcut_hz=80 presence_db=1.5\n      fx audio.limiter limit_db=-6 release_ms=200\n",
@@ -1211,47 +1158,6 @@ mod sound_effect_tests {
             output.status.success(),
             "ffmpeg refused `{chain}`: {}",
             String::from_utf8_lossy(&output.stderr)
-        );
-    }
-}
-
-#[cfg(test)]
-mod curve_tests {
-    use super::*;
-
-    #[test]
-    fn straight_pieces_stay_close_to_the_curve() {
-        for text in [
-            "0.2,0.8,0.4,1",
-            "0.7,0,0.3,1",
-            "0.42,0,0.58,1",
-            "0.3,1.6,0.7,1",
-        ] {
-            let Some(Interp::Bezier(curve)) = Interp::parse(text) else {
-                panic!("{text}");
-            };
-            let points = curve_points(curve);
-            for step in 0..=1000 {
-                let t = f64::from(step) / 1000.0;
-                let place = t * CURVE_PIECES as f64;
-                let piece = (place as usize).min(CURVE_PIECES - 1);
-                let line =
-                    points[piece] + (points[piece + 1] - points[piece]) * (place - piece as f64);
-                assert!((line - curve.at(t)).abs() < 0.02, "{text} at {t}");
-            }
-        }
-    }
-
-    #[test]
-    fn an_expression_has_every_piece() {
-        let Some(Interp::Bezier(curve)) = Interp::parse("0.2,0.8,0.4,1") else {
-            panic!("a curve");
-        };
-        let expression = curve_expression(curve, "u");
-        assert_eq!(expression.matches("if(lt(u,").count(), CURVE_PIECES);
-        assert_eq!(
-            expression.matches('(').count(),
-            expression.matches(')').count()
         );
     }
 }

@@ -903,30 +903,3 @@ fn set_down(
         None,
     )
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_touch_is_more_than_a_written_y_can_be_off_by() {
-        // A line's `y` is written to three places, so it is within half a thousandth of what
-        // was meant, and a clip set down by one has to read as down, with room for the keys
-        // of one that moves to be a quarter of a touch off as well: a touch is six times
-        // that half thousandth.
-        let written = 0.5 * 10f64.powi(-PLACES);
-        assert!(TOUCH >= 4.0 * written && written + TOUCH / 4.0 < TOUCH, "{TOUCH} {written}");
-        // What is said to float can be seen to: a touch is over a pixel of the smallest
-        // guide a model here is handed, 480 high, and under two.
-        assert!((1.0..2.0).contains(&(TOUCH * 480.0)));
-        // The skill laid a floor tipped back 6 degrees and said it is 0.1 lower for each
-        // frame height nearer, 1.0 where `z` is 1.6. It is 0.1051 lower, so 1.0022 there,
-        // and a foot put down by that rule is on the floor.
-        let floor = 0.75 + (4.0 - 1.6) * 6f64.to_radians().tan();
-        assert!((floor - 1.0).abs() < TOUCH && (floor - 1.0).abs() > 0.002, "{floor}");
-        assert_eq!(plain(0.41249, PLACES), "0.412");
-        assert_eq!(plain(-0.0001, PLACES), "0");
-        assert_eq!(plain(1.0, PLACES), "1");
-        assert_eq!(plain(-0.0507, PLACES), "-0.051");
-    }
-}

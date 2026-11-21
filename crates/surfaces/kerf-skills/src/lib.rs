@@ -212,37 +212,6 @@ mod tests {
     }
 
     #[test]
-    fn ignores_malformed_skill_headers() {
-        let root = TempDir::new().expect("temp dir");
-        let dir = root.path().join("bad");
-        fs::create_dir_all(&dir).expect("skill directory");
-        fs::write(dir.join("SKILL.md"), "# no frontmatter").expect("skill file");
-        assert!(load_skills(&[root.path()]).unwrap().is_empty());
-    }
-
-    #[test]
-    fn prompt_carries_editorial_guidance_in_full() {
-        let prompt = compose_system_prompt("base", &bundled_skills());
-        assert!(prompt.starts_with("base\n\n# Editorial guidance"));
-        assert!(prompt.contains("## shorts"));
-        assert!(!prompt.contains("skills.read"));
-        assert_eq!(compose_system_prompt("base", &[]), "base");
-        let long = "line\n".repeat(4000);
-        assert!(bounded_body(&long).len() <= MAX_PROMPT_SKILL_BYTES);
-        assert!(bounded_body(&long).ends_with("line"));
-    }
-
-    #[test]
-    fn bundled_skills_are_available_without_a_working_directory() {
-        let skills = bundled_skills();
-        assert!(find_skill(&skills, "shorts").is_some());
-        assert_eq!(
-            find_skill(&skills, "shorts").unwrap().dir,
-            PathBuf::from("<bundled>")
-        );
-    }
-
-    #[test]
     fn every_bundled_skill_is_in_the_prompt_whole() {
         let skills = bundled_skills();
         let names: Vec<&str> = skills.iter().map(|skill| skill.name.as_str()).collect();

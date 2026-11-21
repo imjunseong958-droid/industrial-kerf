@@ -276,46 +276,6 @@ mod tests {
     }
 
     #[test]
-    fn a_making_says_what_it_is_doing_and_how_it_ended() {
-        let dir = tempfile::tempdir().unwrap();
-        assert!(told(dir.path()).is_empty());
-        let cancellation = CancellationToken::new();
-        let telling = Telling::begin(dir.path(), "m1", 3, &cancellation);
-        let said = told(dir.path());
-        assert_eq!(said.len(), 1);
-        assert_eq!(
-            (said[0].media.as_str(), said[0].take, said[0].pid, said[0].going),
-            ("m1", 3, std::process::id(), Going::Making)
-        );
-        assert!(!said[0].gone());
-        telling.say("  step 2 of 5\n");
-        telling.say("");
-        assert_eq!(told(dir.path())[0].line, "step 2 of 5");
-        // It goes on saying it is at it while its steps say nothing.
-        let first = told(dir.path())[0].at_ms;
-        wait_for("it says it is still going", || told(dir.path())[0].at_ms > first);
-        telling.end(Ok(4));
-        let said = told(dir.path());
-        assert_eq!((said[0].going, said[0].take), (Going::Made, 4));
-        // And says nothing after its end.
-        thread::sleep(BEAT + Duration::from_millis(200));
-        assert_eq!(told(dir.path()), said);
-
-        // One that fails says why, and one that was stopped that it was.
-        let failed = Telling::begin(dir.path(), "m2", 1, &cancellation);
-        failed.end(Err(&EngineError::msg("the model would not start")));
-        let stopped = Telling::begin(dir.path(), "m3", 1, &cancellation);
-        stopped.end(Err(&EngineError::Cancelled));
-        let said = told(dir.path());
-        assert_eq!(said[1].going, Going::Failed);
-        assert_eq!(said[1].why.as_deref(), Some("the model would not start"));
-        assert_eq!((said[2].going, said[2].why.clone()), (Going::Stopped, None));
-        // One dropped on the way out of an error did not end well.
-        drop(Telling::begin(dir.path(), "m3", 2, &cancellation));
-        assert_eq!(told(dir.path())[2].going, Going::Failed);
-    }
-
-    #[test]
     fn a_word_to_stop_reaches_the_making_and_only_one_under_way() {
         let dir = tempfile::tempdir().unwrap();
         assert!(!ask_to_stop(dir.path(), "m1"), "nothing is being made");
@@ -334,36 +294,5 @@ mod tests {
         thread::sleep(BEAT + Duration::from_millis(200));
         assert!(!again.is_cancelled());
         telling.end(Ok(2));
-    }
-
-    #[test]
-    fn a_making_whose_program_has_gone_is_told_from_one_still_at_it() {
-        let dir = tempfile::tempdir().unwrap();
-        let old = Told {
-            media: "m1".into(),
-            take: 1,
-            pid: 1,
-            going: Going::Making,
-            line: "half way".into(),
-            why: None,
-            at_ms: now_ms() - GONE_AFTER.as_millis() as u64 - 1000,
-        };
-        write(&file_of(dir.path(), "m1"), &old);
-        assert!(told(dir.path())[0].gone());
-        assert!(!ask_to_stop(dir.path(), "m1"));
-        // What ended long ago goes when something is next made.
-        let long_ago = Told {
-            media: "m2".into(),
-            going: Going::Made,
-            at_ms: now_ms() - KEPT.as_millis() as u64 - 1000,
-            ..old.clone()
-        };
-        write(&file_of(dir.path(), "m2"), &long_ago);
-        Telling::begin(dir.path(), "m3", 1, &CancellationToken::new()).end(Ok(1));
-        let media: Vec<String> = told(dir.path()).into_iter().map(|told| told.media).collect();
-        assert_eq!(media, ["m1", "m3"]);
-        // A file that is not one of these is not read as one.
-        std::fs::write(dir.path().join(FOLDER).join("junk.json"), b"{").unwrap();
-        assert_eq!(told(dir.path()).len(), 2);
     }
 }

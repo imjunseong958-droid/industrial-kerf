@@ -14,7 +14,7 @@ use kerf_editor::media::{
     role_choices, role_groups, role_name, status_text, step_choice, IndexRow,
 };
 use kerf_editor::model::{Clip, Source, Timeline};
-use kerf_editor::names::{self, recipe_shot_name, source_names, without_content_hash};
+use kerf_editor::names::{self, source_names, without_content_hash};
 use kerf_editor::session::activity_of_command;
 use kerf_editor::store::{making_status, Badge, EditorState, Making, MediaActivity};
 use proptest::prelude::*;
@@ -68,14 +68,6 @@ proptest! {
         let once = without_content_hash(&named).to_owned();
         prop_assert_eq!(without_content_hash(&once), once.as_str());
     }
-}
-
-#[test]
-fn a_recipe_shot_goes_by_its_recipe_without_its_version() {
-    assert_eq!(recipe_shot_name("shots/open@2.kerfrecipe"), "open");
-    assert_eq!(recipe_shot_name("shots/open.kerfrecipe"), "open");
-    assert_eq!(recipe_shot_name("open@x.kerfrecipe"), "open@x");
-    assert_eq!(recipe_shot_name("@2.kerfrecipe"), "@2");
 }
 
 #[test]

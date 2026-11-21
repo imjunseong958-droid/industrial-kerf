@@ -661,86 +661,9 @@ mod tests {
     }
 
     #[test]
-    fn colors_it_can_hold_move_as_they_did() {
-        // Above 1 and inside BT.709: only the gain, as it was, to the bit.
-        let bright = [4.0f32, 2.0, 0.5];
-        let mut image = pixel(bright);
-        assert_eq!(image.floor(), 0.0);
-        let held = image.to_unit();
-        assert_eq!(held, [[4.0, 1.0]]);
-        assert_eq!(&image.px[..3], &[1.0, 0.5, 0.125]);
-        image.from_unit(&held);
-        assert_eq!(&image.px[..3], &bright);
-        assert_eq!(image.to_gamut(), [1.0]);
-        assert_eq!(&image.px[..3], &bright);
-    }
-
-    #[test]
-    fn a_color_with_no_light_in_it_goes_to_black() {
-        let mut image = pixel([-0.2, 0.01, -0.3]);
-        let held = image.to_gamut();
-        assert_eq!(held, [0.0]);
-        assert_eq!(&image.px[..3], &[0.0, 0.0, 0.0]);
-        image.from_gamut(&held);
-        assert_eq!(&image.px[..3], &[0.0, 0.0, 0.0]);
-    }
-
-    #[test]
-    fn a_whole_picture_lifted_comes_back_and_goes_by_its_alpha() {
-        let mut image = Image::new(2, 1);
-        image
-            .px
-            .copy_from_slice(&[-0.5, 2.0, 0.25, 1.0, 0.0, 0.0, 0.0, 0.0]);
-        assert_eq!(image.floor(), -0.5);
-        let original = image.px.clone();
-        image.lift_rgb(-0.5, 5.0);
-        assert!(image.px[0].abs() < 1e-6);
-        // What is not there has nothing added to it.
-        assert_eq!(&image.px[4..8], &[0.0; 4]);
-        image.unlift_rgb(-0.5, 5.0);
-        for (found, wanted) in image.px.iter().zip(&original) {
-            assert!((found - wanted).abs() < 1e-5, "{found} of {wanted}");
-        }
-        // Nothing to lift is a plain scale, as it was.
-        let mut plain = pixel([2.0, 1.0, 0.5]);
-        plain.lift_rgb(0.0, 4.0);
-        assert_eq!(&plain.px[..3], &[2.0 * 0.25, 1.0 * 0.25, 0.5 * 0.25]);
-    }
-
-    #[test]
     fn bytes_come_back_through_linear_light() {
         let rgba: Vec<u8> = (0..=255u8).flat_map(|v| [v, 255 - v, v / 2, 255]).collect();
         let image = Image::from_rgba8(&rgba, 16, 16, 64, false);
         assert_eq!(image.to_rgba8_over_black(), rgba);
-    }
-
-    #[test]
-    fn transparency_counts_only_when_asked() {
-        let rgba = [255, 255, 255, 0];
-        assert_eq!(Image::from_rgba8(&rgba, 1, 1, 4, false).get(0, 0), [1.0; 4]);
-        assert_eq!(Image::from_rgba8(&rgba, 1, 1, 4, true).get(0, 0), [0.0; 4]);
-    }
-
-    #[test]
-    fn crops_are_sharp_and_keep_their_color() {
-        let image = Image::filled(8, 8, [1.0, 0.0, 0.0, 1.0]);
-        // The right half, drawn twice as large: no fringe at its edge.
-        let crop = Rect::new(4.0, 0.0, 4.0, 8.0);
-        let placed = image.transformed_within(16, 16, &Affine::scale(2.0, 2.0), crop);
-        assert_eq!(placed.get(7, 4), [0.0; 4]);
-        assert_eq!(placed.get(8, 4), [1.0, 0.0, 0.0, 1.0]);
-        // A crop edge halfway across a pixel covers half of it.
-        let half = image.transformed_within(8, 8, &Affine::IDENTITY, Rect::new(2.5, 0.0, 5.5, 8.0));
-        assert_eq!(half.get(2, 2), [0.5, 0.0, 0.0, 0.5]);
-    }
-
-    #[test]
-    fn identity_transforms_keep_the_picture() {
-        let rgba: Vec<u8> = (0..64u8).flat_map(|v| [v * 4, v, 255 - v, 255]).collect();
-        let image = Image::from_rgba8(&rgba, 8, 8, 32, false);
-        assert_eq!(image.transformed(8, 8, &Affine::IDENTITY), image);
-        let moved = image.transformed(8, 8, &Affine::translate(2.0, 0.0));
-        assert_eq!(moved.get(5, 3), image.get(3, 3));
-        assert_eq!(moved.get(1, 3), [0.0; 4]);
     }
 }

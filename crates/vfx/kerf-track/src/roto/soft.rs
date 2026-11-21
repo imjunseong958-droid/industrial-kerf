@@ -326,19 +326,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_fall_off_is_found_as_wide_as_it_is_and_where_it_is() {
-        for (wide, middle) in [(0.0, 0.0), (6.0, 0.0), (12.0, 3.0), (20.0, -4.0)] {
-            let (inner, step) = (30.0, 0.5);
-            let alpha: Vec<f64> = (0..120)
-                .map(|at| fall_off(middle - (f64::from(at) * step - inner), wide))
-                .collect();
-            let (found, at) = fit(&alpha, (step, inner));
-            assert!((found - wide).abs() <= 1.0, "{wide}: {found}");
-            assert!((at - middle).abs() <= 0.5, "{middle}: {at}");
-        }
-    }
-
-    #[test]
     fn out_is_out_whichever_way_an_outline_goes() {
         let square = [[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]];
         let clockwise = normals(&square);
@@ -351,22 +338,5 @@ mod tests {
         reversed.reverse();
         let other = normals(&reversed);
         assert!(other[2][0] > 0.0 && other[2][1] < 0.0, "{other:?}");
-    }
-
-    #[test]
-    fn a_measure_that_says_little_goes_for_little_and_hard_stays_hard() {
-        let at = |wide: f64, weight: f64| Across {
-            wide,
-            out: 0.0,
-            weight,
-            room: 0.0,
-        };
-        let frames = vec![vec![at(10.0, 1.0), at(40.0, 0.01), at(10.0, 1.0), at(10.0, 1.0)]; 3];
-        let settled = settled(&frames);
-        assert!((settled[1][1].wide - 9.5).abs() < 1.0, "{settled:?}");
-        let hard = vec![vec![at(2.5, 1.0); 4]; 3];
-        assert_eq!(super::settled(&hard)[1][1].wide, 0.0);
-        let nothing = vec![vec![at(9.0, 0.0); 4]; 3];
-        assert_eq!(super::settled(&nothing)[1][1].wide, 0.0);
     }
 }

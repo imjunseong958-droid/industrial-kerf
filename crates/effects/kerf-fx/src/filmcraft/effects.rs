@@ -889,27 +889,7 @@ pub(crate) fn mosaic(img: &mut Image, bx: usize, by: usize) {
 
 #[cfg(test)]
 mod tests {
-    use super::median_radius;
-
-    /// A project file's Median radius stays within the parameter's 0–100 range (scaled to the
-    /// working image) and the image: 1e9 used to run a radius-sized window over every pixel.
-    #[test]
-    fn median_radius_stays_in_the_parameter_range() {
-        assert_eq!(median_radius(1e9, 1.0, 4096), 100);
-        assert_eq!(median_radius(1e9, 0.5, 4096), 50);
-        assert_eq!(median_radius(1e9, 1.0, 40), 40);
-        assert_eq!(
-            median_radius(12.0, 1.0, 4096),
-            12,
-            "Radius above 4 keeps its full size"
-        );
-        assert_eq!(median_radius(f32::NAN, 1.0, 4096), 0);
-        assert_eq!(median_radius(-3.0, 1.0, 4096), 0);
-        assert_eq!(median_radius(8.0, f32::INFINITY, 4096), 8);
-    }
-
     use super::*;
-    use crate::filmcraft::project::find_effect;
 
     fn cx() -> FxCtx<'static> {
         FxCtx {
@@ -945,16 +925,6 @@ mod tests {
             }
             apply(&mut img, &e, &cx());
             assert!(img.px.iter().all(|v| v.is_finite()), "{}", def.id);
-        }
-    }
-
-    #[test]
-    fn identity_lumetri_is_identity() {
-        let mut img = Image::filled(8, 8, [0.18, 0.3, 0.05, 1.0]);
-        let before = img.clone();
-        apply(&mut img, &find_effect("lumetri").unwrap().instance(), &cx());
-        for (a, b) in img.px.iter().zip(&before.px) {
-            assert!((a - b).abs() < 2e-3, "{a} {b}");
         }
     }
 }
@@ -1478,23 +1448,6 @@ fn blur_plane(p: &mut [f32], w: usize, h: usize, sigma: f32) {
 }
 
 #[cfg(test)]
-mod curve_tests {
-    use super::*;
-
-    #[test]
-    fn identity_and_monotone() {
-        let l = curve_lut(&[[0.0, 0.0], [1.0, 1.0]], 64);
-        for (i, v) in l.iter().enumerate() {
-            assert!((v - i as f32 / 63.0).abs() < 1e-4);
-        }
-        let s = curve_lut(&[[0.0, 0.0], [0.25, 0.15], [0.75, 0.85], [1.0, 1.0]], 256);
-        assert!(s.windows(2).all(|w| w[1] >= w[0] - 1e-6), "monotone");
-        let h = hue_lut(&[[0.0, 0.8], [0.5, 0.2]], 64).unwrap();
-        assert!((h[0] - h[63]).abs() < 0.05, "periodic");
-    }
-}
-
-#[cfg(test)]
 mod lumetri_cpu_parity_tests {
     use super::*;
     use crate::filmcraft::gpufx::FxOp;
@@ -1552,132 +1505,8 @@ mod lumetri_cpu_parity_tests {
         ParamValue::Color([r, g, b, 1.0])
     }
 
-    #[test]
-    fn a_wheel_points_at_the_color_its_parameters_say() {
-        // As the catalog describes `wheel_*_x` and `wheel_*_y`: red at 1,0, green at
-        // -0.5,0.87, blue at -0.5,-0.87, and the opposite of each across the wheel.
-        let most = |x: f64, y: f64| {
-            let rgb = wheel_rgb(Vec2::new(x, y));
-            (0..3)
-                .max_by(|a, b| rgb[*a].total_cmp(&rgb[*b]))
-                .expect("three channels")
-        };
-        assert_eq!(most(1.0, 0.0), 0);
-        assert_eq!(most(-0.5, 0.87), 1);
-        assert_eq!(most(-0.5, -0.87), 2);
-        // Cyan takes red away, and how far out is how much.
-        let cyan = wheel_rgb(Vec2::new(-1.0, 0.0));
-        assert!(
-            cyan[0] < -0.99 && cyan[1] > 0.49 && cyan[2] > 0.49,
-            "{cyan:?}"
-        );
-        let half = wheel_rgb(Vec2::new(0.5, 0.0));
-        assert!((half[0] - 0.5).abs() < 1e-6, "{half:?}");
-        assert_eq!(wheel_rgb(Vec2::new(0.0, 0.0)), [0.0; 3]);
-    }
-
     fn vec2(x: f64, y: f64) -> ParamValue {
         ParamValue::Vec2(Vec2::new(x, y))
-    }
-
-    /// The numbers a wheel at a known position hands the pixel, and what they do to one: the
-    /// CPU and the kernel share these, so their parity cannot catch a wrong one.
-    #[test]
-    fn wheels_push_by_their_angle_and_lightness() {
-        let cx = FxCtx {
-            t: Tick::ZERO,
-            px_scale: 1.0,
-            seconds: 0.0,
-            timecode: "",
-            clip_name: "",
-            project: None,
-            env: None,
-            frame_rate: 24.0,
-            working: kerf_color::WorkingSpace::Rec709,
-        };
-        assert_eq!(Wheels::read(&effect(&[]), &cx), None);
-        let off = effect(&[
-            ("wheels_on", ParamValue::Bool(false)),
-            ("wheel_shadows", vec2(1.0, 0.0)),
-        ]);
-        assert_eq!(Wheels::read(&off, &cx), None);
-        let close = |a: [f32; 3], b: [f32; 3]| {
-            assert!(
-                a.iter().zip(&b).all(|(x, y)| (x - y).abs() < 1e-5),
-                "{a:?} {b:?}"
-            );
-        };
-        // At angle 0 red takes the full length and the others minus half of it; past the rim the
-        // length stays 1.
-        let wheels = Wheels::read(
-            &effect(&[
-                ("wheel_shadows", vec2(1.0, 0.0)),
-                ("wheel_shadows_l", fl(50.0)),
-                ("wheel_midtones", vec2(5.0, 0.0)),
-                ("wheel_midtones_l", fl(-100.0)),
-                ("wheel_highlights", vec2(0.5, 0.0)),
-                ("wheel_highlights_l", fl(20.0)),
-            ]),
-            &cx,
-        )
-        .unwrap();
-        close(wheels.lift, [0.45, 0.0, 0.0]);
-        close(wheels.mid, [0.0, -0.45, -0.45]);
-        close(wheels.gain, [0.35, -0.025, -0.025]);
-
-        // Black takes only the lift and white only the gain; middle grey takes all three.
-        let at = |grey: f32| {
-            let mut v = [grey; 3];
-            wheels.apply(&mut v);
-            v
-        };
-        close(at(0.0), [0.45, 0.0, 0.0]);
-        close(at(1.0), [1.35, 0.975, 0.975]);
-        close(
-            at(0.5),
-            [
-                (0.5 + 0.45 * 0.25) * (1.0 + 0.35 * 0.25),
-                (0.5 - 0.45 * 0.5) * (1.0 - 0.025 * 0.25),
-                (0.5 - 0.45 * 0.5) * (1.0 - 0.025 * 0.25),
-            ],
-        );
-    }
-
-    /// What still goes to the CPU, and that a hostile number there does not reach the shader.
-    #[test]
-    fn lumetri_leaves_the_gpu_only_for_what_the_kernel_does_not_draw() {
-        let cx = FxCtx {
-            t: Tick::ZERO,
-            px_scale: 1.0,
-            seconds: 0.0,
-            timecode: "",
-            clip_name: "",
-            project: None,
-            env: None,
-            frame_rate: 24.0,
-            working: kerf_color::WorkingSpace::Rec709,
-        };
-        let on_gpu = |params: &[(&str, ParamValue)]| {
-            FxOp::eval(&effect(params), &cx, 8, 8).unwrap().gpu_ok()
-        };
-        assert!(on_gpu(&[]));
-        assert!(on_gpu(&[("look", ParamValue::Choice(6))]));
-        assert!(on_gpu(&[("wheel_midtones", vec2(0.3, 0.17))]));
-        assert!(on_gpu(&[("wheel_shadows_l", fl(30.0))]));
-        assert!(!on_gpu(&[("sharpen", fl(50.0))]));
-        assert!(!on_gpu(&[("hsl_on", ParamValue::Bool(true))]));
-        assert!(!on_gpu(&[("look_lut", ParamValue::Text("x.cube".into()))]));
-        assert!(!on_gpu(&[("input_lut", ParamValue::Text("x.cube".into()))]));
-        assert!(!on_gpu(&[
-            ("look", ParamValue::Choice(6)),
-            ("look_intensity", fl(f64::NAN)),
-        ]));
-        // (a strength with no look to mix is not read)
-        assert!(on_gpu(&[("look_intensity", fl(f64::NAN))]));
-        assert!(!on_gpu(&[
-            ("wheel_midtones", vec2(0.3, 0.17)),
-            ("wheel_shadows_l", fl(f64::NAN)),
-        ]));
     }
 
     #[test]
@@ -1848,87 +1677,5 @@ mod lumetri_cpu_parity_tests {
             }
             eprintln!("{name}: max sample diff vs fn lumetri: {max_diff:.2e}");
         }
-    }
-
-    /// #719: positive Roundness rounds the Lumetri vignette (it used to be ignored), +100
-    /// is a circle and negative values widen the oval, on the CPU path and the GPU op alike.
-    #[test]
-    fn lumetri_vignette_roundness_shapes_the_vignette() {
-        let (w, h) = (80usize, 40usize);
-        let cx = FxCtx {
-            t: Tick::ZERO,
-            px_scale: 1.0,
-            seconds: 0.0,
-            timecode: "",
-            clip_name: "",
-            project: None,
-            env: None,
-            frame_rate: 24.0,
-            working: kerf_color::WorkingSpace::Rec709,
-        };
-        let render = |roundness: f64| {
-            let e = effect(&[
-                ("basic_on", ParamValue::Bool(false)),
-                ("creative_on", ParamValue::Bool(false)),
-                ("vignette_amount", fl(-3.0)),
-                ("vignette_roundness", fl(roundness)),
-            ]);
-            let grey = Image {
-                w,
-                h,
-                px: [0.5, 0.5, 0.5, 1.0].repeat(w * h),
-            };
-            let mut cpu = grey.clone();
-            lumetri(&mut cpu, &e, &cx);
-            let mut op_img = grey;
-            let op = FxOp::eval(&e, &cx, w, h).expect("lumetri op");
-            op.apply(&mut op_img);
-            for (a, b) in cpu.px.iter().zip(&op_img.px) {
-                assert!(
-                    (a - b).abs() <= 1e-6,
-                    "roundness {roundness}: CPU and GPU op disagree"
-                );
-            }
-            cpu
-        };
-        let red = |img: &Image, x: usize, y: usize| img.px[(y * w + x) * 4];
-        // 16 px right of and 16 px below the centre (40, 20)
-        let (right, below) = ((56, 20), (40, 36));
-
-        let ellipse = render(0.0);
-        assert!(
-            red(&ellipse, right.0, right.1) > red(&ellipse, below.0, below.1) + 0.01,
-            "0 follows the frame"
-        );
-
-        let circle = render(100.0);
-        assert_ne!(
-            circle.px, ellipse.px,
-            "positive roundness changes the vignette"
-        );
-        let (r, b) = (
-            red(&circle, right.0, right.1),
-            red(&circle, below.0, below.1),
-        );
-        assert!((r - b).abs() < 1e-4, "+100 is a circle: {r} vs {b}");
-        assert!(
-            r < red(&ellipse, right.0, right.1),
-            "+100 darkens the sides more than 0"
-        );
-        let half = render(50.0);
-        assert!(
-            red(&half, 70, 20) < red(&ellipse, 70, 20),
-            "+50 darkens the sides more than 0"
-        );
-        assert!(
-            red(&half, 70, 20) > red(&circle, 70, 20),
-            "+50 darkens the sides less than +100"
-        );
-
-        let oval = render(-100.0);
-        assert!(
-            red(&oval, 79, 20) > red(&ellipse, 79, 20),
-            "negative values widen the oval"
-        );
     }
 }

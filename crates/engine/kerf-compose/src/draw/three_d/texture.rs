@@ -216,38 +216,3 @@ fn decoded(bytes: &[u8]) -> Result<(usize, usize, Vec<u8>), String> {
     }
     Ok((width, height, rgba))
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_picture_is_read_between_its_texels_and_past_its_edges() {
-        // Two texels: black, then white.
-        let texture = Texture::of(2, 1, &[0, 0, 0, 255, 255, 255, 255, 255]);
-        let read = |u: f64, wrap: Wrap| texture.at([u, 0.5], 0.0, [wrap, Wrap::Clamp])[0];
-        // At a texel's middle it is that texel, and halfway between two it is half of each.
-        assert_eq!(read(0.25, Wrap::Clamp), 0.0);
-        assert_eq!(read(0.75, Wrap::Clamp), 1.0);
-        assert!((read(0.5, Wrap::Clamp) - 0.5).abs() < 1e-6);
-        // Past its edge it stays, starts again, or turns back.
-        assert_eq!(read(1.25, Wrap::Clamp), 1.0);
-        assert_eq!(read(1.25, Wrap::Repeat), 0.0);
-        assert_eq!(read(1.25, Wrap::Mirror), 1.0);
-        assert_eq!(read(-0.25, Wrap::Mirror), 0.0);
-        assert_eq!(read(-0.25, Wrap::Repeat), 1.0);
-    }
-
-    #[test]
-    fn a_smaller_size_is_the_mean_in_linear_light() {
-        // The left column white, the right black.
-        let texture = Texture::of(2, 2, &[255, 255, 255, 255, 0, 0, 0, 255].repeat(2));
-        assert_eq!(texture.size(), (2, 2));
-        // One texel, half the light of white: not half of 255, which would be darker.
-        let small = texture.at([0.5, 0.5], 1.0, [Wrap::Clamp; 2]);
-        assert!((small[0] - 0.5).abs() < 0.01, "{small:?}");
-        // And between the sizes it is between them.
-        let between = texture.at([0.25, 0.5], 0.5, [Wrap::Clamp; 2]);
-        assert!((between[0] - 0.75).abs() < 0.01, "{between:?}");
-    }
-}

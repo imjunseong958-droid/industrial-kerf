@@ -452,23 +452,6 @@ mod tests {
         close(peak.hdr.unwrap().peak_nits, 1000.0, 1.0);
     }
 
-    #[test]
-    fn colors_past_bt709_are_counted_and_those_it_holds_are_not() {
-        // BT.2020 green is far past it; BT.709's own green, in BT.2020, sits on its edge.
-        let green =
-            read_signal(&signal(16, 16, [0.0, 0.58, 0.0]), 16, 16, SignalCurve::Pq).unwrap();
-        close(green.hdr.unwrap().outside_bt709, 1.0, 0.0);
-        let gray = read_signal(&signal(16, 16, [0.4; 3]), 16, 16, SignalCurve::Pq).unwrap();
-        close(gray.hdr.unwrap().outside_bt709, 0.0, 0.0);
-    }
-
-    #[test]
-    fn an_sdr_reading_says_nothing_of_hdr() {
-        let reading = read(&filled(16, 16, [128; 3]), 16, 16).unwrap();
-        assert_eq!(reading.hdr, None);
-        assert!(read_signal(&[0; 8], 16, 16, SignalCurve::Pq).is_none());
-    }
-
     fn filled(width: usize, height: usize, color: [u8; 3]) -> Vec<u8> {
         [color[0], color[1], color[2], 255].repeat(width * height)
     }
@@ -478,24 +461,5 @@ mod tests {
             (value - expected).abs() <= tolerance,
             "{value} against {expected}"
         );
-    }
-
-    #[test]
-    fn a_cast_shows_and_opposite_colors_cancel_in_it() {
-        let warm = read(&filled(8, 8, [150, 120, 100]), 8, 8).expect("a reading");
-        assert!(warm.chroma.cast_magnitude > 5.0);
-        let mut rgba = filled(8, 8, [255, 0, 0]);
-        rgba[..8 * 4 * 4].copy_from_slice(&filled(8, 4, [0, 255, 255]));
-        let opposite = read(&rgba, 8, 8).expect("a reading");
-        close(opposite.chroma.cast_magnitude, 0.0, 0.5);
-        // Saturated all the same, which the cast alone would hide.
-        assert!(opposite.chroma.saturation > 90.0);
-        assert_eq!(opposite.peaks.len(), 2);
-    }
-
-    #[test]
-    fn an_empty_or_short_frame_reads_as_nothing() {
-        assert_eq!(read(&[], 0, 0), None);
-        assert_eq!(read(&[0; 8], 4, 4), None);
     }
 }

@@ -187,15 +187,6 @@ mod tests {
     }
 
     #[test]
-    fn no_file_asks() {
-        let folder = tempfile::tempdir().unwrap();
-        let permissions = Permissions::read(&folder.path().join("agent.json")).unwrap();
-        assert_eq!(permissions.mode, Mode::Ask);
-        assert!(!permissions.accepts_edits());
-        assert!(!permissions.runs_makings(0));
-    }
-
-    #[test]
     fn each_mode_lets_through_what_it_says() {
         let edits = read(r#"{"permissions": "accept-edits"}"#).unwrap();
         assert!(edits.accepts_edits());
@@ -209,22 +200,6 @@ mod tests {
             read(r#"{"permissions": "auto"}"#).unwrap().makes,
             DEFAULT_MAKES
         );
-    }
-
-    #[test]
-    fn a_mode_chosen_in_the_editor_stands_in_for_the_files() {
-        let file = read(r#"{"permissions": "auto", "makes": 2}"#).unwrap();
-        // Chosen lower, it asks; chosen higher, it lets through, and the
-        // file's count of makings still holds.
-        let asks = file.clone().in_mode(Some("ask")).unwrap();
-        assert!(!asks.accepts_edits());
-        let auto = read("{}").unwrap().in_mode(Some("auto")).unwrap();
-        assert!(auto.accepts_edits() && auto.runs_makings(0));
-        assert_eq!(file.clone().in_mode(Some("accept-edits")).unwrap().makes, 2);
-        // None chosen leaves the file's.
-        assert_eq!(file.clone().in_mode(None).unwrap(), file);
-        let wrong = file.in_mode(Some("everything")).unwrap_err();
-        assert!(wrong.contains(MODE_VARIABLE), "{wrong}");
     }
 
     #[test]

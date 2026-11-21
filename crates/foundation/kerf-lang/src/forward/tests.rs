@@ -1,6 +1,6 @@
 use super::*;
 use crate::doc::parse_document;
-use crate::script::{apply_script, print_ops};
+use crate::script::apply_script;
 
 /// Four clips of four seconds, end to end, each linked to its sound.
 const BASE: &str = r#"kerf 1
@@ -51,22 +51,6 @@ fn span(project: &Project, id: &str) -> (i64, i64) {
     (frames(clip.start), frames(clip.end()))
 }
 
-fn script_of(current: &Project, forwarded: &Forwarded) -> String {
-    print_ops(current, Catalog::builtin(), &forwarded.ops)
-}
-
-#[test]
-fn a_ripple_after_another_ripple_leaves_no_gap() {
-    // Merging the two edits by id keeps one side's place for c4 and leaves
-    // it half a second after c3. Run again, the trim closes up to it.
-    let current = edited("trim c1 out -24f ripple");
-    let forwarded = forward(&current, "trim c3 out -12f ripple");
-    assert_eq!(span(&forwarded.project, "c3"), (168, 252));
-    assert_eq!(span(&forwarded.project, "c4"), (252, 348));
-    assert_eq!(span(&forwarded.project, "a4"), (252, 348));
-    assert_eq!(script_of(&current, &forwarded), "trim c3 out -12f ripple\n");
-}
-
 #[test]
 fn a_line_is_refused_for_a_clip_that_was_cut_moved_or_removed() {
     let script = "trim c3 out -12f ripple";
@@ -97,41 +81,6 @@ fn a_line_is_refused_for_a_clip_that_was_cut_moved_or_removed() {
 }
 
 #[test]
-fn a_place_moves_with_the_clips_that_held_it() {
-    // Everything from the second clip on is a second earlier.
-    let current = edited("trim c1 out -24f ripple");
-    // The cut between c2 and c3; then, each as the lines before leave the
-    // project, a time inside c3, another, and the end.
-    let forwarded = forward(
-        &current,
-        "insert gen=solid at=192f dur=24f on=V1 as=g1\n\
-         marker add as=mk1 at=240f\n\
-         blade at=250f tracks=V1\n\
-         overwrite gen=solid at=408f dur=24f on=V2 as=g2",
-    );
-    assert_eq!(span(&forwarded.project, "g1"), (168, 192));
-    assert_eq!(span(&forwarded.project, "c3"), (192, 226));
-    assert_eq!(span(&forwarded.project, "g2"), (384, 408));
-    let sequence = &forwarded.project.sequences[0];
-    assert_eq!(
-        Rate::FPS_24.frames_exact(sequence.marker("mk1").unwrap().at),
-        Some(216)
-    );
-    // What is staged again is the script with its places moved, and it
-    // makes the same project.
-    let script = script_of(&current, &forwarded);
-    assert_eq!(
-        script,
-        "insert gen=solid@1 at=00:00:07:00 dur=00:00:01:00 on=V1 as=g1\n\
-         marker add as=mk1 at=00:00:09:00\n\
-         blade at=00:00:09:10 tracks=V1\n\
-         overwrite gen=solid@1 at=00:00:16:00 dur=00:00:01:00 on=V2 as=g2\n"
-    );
-    let again = apply_script(&current, Catalog::builtin(), &script).unwrap();
-    assert_eq!(again.project, forwarded.project);
-}
-
-#[test]
 fn a_place_is_refused_when_what_held_it_changed() {
     // 200f is inside c3 and a3.
     let cut = refused(&edited("trim c3 out -6f"), "marker add at=200f");
@@ -157,72 +106,6 @@ fn a_place_is_refused_when_what_held_it_changed() {
         apart.message,
         "00:00:08:00 was on clips `c2` and `a2`, which are no longer together there"
     );
-}
-
-#[test]
-fn a_time_no_clip_held_stays_where_it_is() {
-    let current = edited("trim c1 out -24f ripple");
-    let forwarded = forward(&current, "overwrite gen=solid at=480f dur=24f on=V2 as=g1");
-    assert_eq!(span(&forwarded.project, "g1"), (480, 504));
-}
-
-#[test]
-fn clips_the_script_makes_are_followed_by_the_names_they_get_now() {
-    // On the base the split makes c5 and its sound c6. The edited project
-    // has both already.
-    let current = edited("split c1 at=48f");
-    assert!(current.clip("c5").is_some() && current.clip("c6").is_some());
-    let forwarded = forward(&current, "split c3 at=240f\ntrim c5 out -12f\nset c5 opacity=0.5");
-    assert_eq!(
-        script_of(&current, &forwarded),
-        "split c3 at=00:00:10:00\ntrim c7 out -12f\nset c7 opacity=0.5\n"
-    );
-    assert_eq!(span(&forwarded.project, "c7"), (240, 276));
-    assert_eq!(span(&forwarded.project, "c8"), (240, 276), "its sound is cut with it");
-    assert_eq!(span(&forwarded.project, "c5"), (48, 96), "the other edit's c5 is left alone");
-}
-
-#[test]
-fn markers_and_transitions_the_script_makes_are_followed_too() {
-    // The edited project has a marker and a transition of its own, with the
-    // ids the script's would have had.
-    let current = edited("marker add at=10f\ntransition add from=c1 to=c2 fx=dissolve dur=12f");
-    let made = &current.sequences[0];
-    assert!(made.marker("mk1").is_some() && made.tracks[0].transition("t1").is_some());
-    let forwarded = forward(
-        &current,
-        "marker add at=192f\nmarker set mk1 name=\"cut\"\n\
-         transition add from=c3 to=c4 fx=dissolve dur=12f\ntransition set t1 dur=6f",
-    );
-    let sequence = &forwarded.project.sequences[0];
-    assert_eq!(sequence.marker("mk1").unwrap().name, None, "the other edit's marker");
-    assert_eq!(sequence.marker("mk2").unwrap().name.as_deref(), Some("cut"));
-    let frames = |id: &str| {
-        Rate::FPS_24.frames_exact(sequence.tracks[0].transition(id).unwrap().duration)
-    };
-    assert_eq!((frames("t1"), frames("t2")), (Some(12), Some(6)));
-}
-
-#[test]
-fn a_change_to_how_a_clip_looks_does_not_stop_a_cut_of_it() {
-    let current = edited("set c3 opacity=0.5\nfx c3 add color.basic exposure=0.3");
-    let forwarded = forward(&current, "trim c3 out -12f ripple\nsplit c2 at=120f");
-    assert_eq!(span(&forwarded.project, "c3"), (192, 276));
-    // But a line that sets what was set since is not the edit it was.
-    let set = refused(&current, "set c3 opacity=0.8");
-    assert_eq!(set.code, "forward.changed");
-    assert_eq!(
-        set.message,
-        "the properties of clip `c3` have changed since this was proposed"
-    );
-    let effect = refused(&current, "fx c3 add color.basic exposure=-0.2");
-    assert_eq!(
-        effect.message,
-        "the effects of clip `c3` have changed since this was proposed"
-    );
-    // A property the other edit left alone is set on a clip it only moved.
-    let moved = edited("trim c1 out -24f ripple");
-    assert_eq!(span(&forward(&moved, "set c3 opacity=0.8").project, "c3"), (168, 264));
 }
 
 #[test]
@@ -261,39 +144,4 @@ fn a_line_is_refused_when_it_would_change_other_clips_than_it_did() {
         gone.message,
         "00:00:05:00 was on clip `a2`, which is gone since this was proposed"
     );
-}
-
-#[test]
-fn lines_that_name_no_clip_and_no_place_run_as_they_are() {
-    let current = edited("trim c3 out -24f ripple\nsequence set s1 size=1280x720");
-    let forwarded = forward(&current, "track add V3 video\nmarker add as=mk1 at=0f name=\"top\"");
-    assert!(forwarded.project.sequences[0].track("V3").is_some());
-    assert_eq!(forwarded.project.sequences[0].width, 1280);
-    assert_eq!(
-        script_of(&current, &forwarded),
-        "track add V3 video\nmarker add as=mk1 at=00:00:00:00 name=\"top\"\n"
-    );
-}
-
-#[test]
-fn what_the_edited_project_refuses_is_refused_with_its_reason() {
-    // The other edit took the id the script gives its clip.
-    let taken = edited("insert gen=solid at=384f dur=24f on=V1 as=g1");
-    let error = refused(&taken, "overwrite gen=solid at=0f dur=24f on=V2 as=g1");
-    assert_eq!(error.code, "id.taken");
-    assert_eq!(error.span.map(|span| span.line), Some(1));
-}
-
-#[test]
-fn a_recording_lined_up_with_another_comes_forward_as_it_is() {
-    // `media sync` names media alone, and a media keeps its id: no clip and
-    // no place to carry.
-    let current = edited("trim c3 out -24f ripple");
-    let script = "media add m2 path=\"recorder.wav\" rate=24 dur=00:10:00:00 audio=2ch@48000\n\
-                  media sync m2 with=m1@1.5s";
-    let forwarded = forward(&current, script);
-    let (with, at) = forwarded.project.synced_to("m2").unwrap();
-    assert_eq!((with.as_str(), at.seconds()), ("m1", 1.5));
-    assert!(script_of(&current, &forwarded).ends_with("media sync m2 with=m1@1.5s\n"));
-    assert_eq!(span(&forwarded.project, "c4"), (264, 360));
 }

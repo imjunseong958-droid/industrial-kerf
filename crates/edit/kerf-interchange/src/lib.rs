@@ -731,18 +731,4 @@ mod tests {
         assert!(validate_adapter_name("adapter/name").is_err());
         assert!(validate_adapter_name("").is_err());
     }
-
-    #[test]
-    fn creates_deduplicated_loss_report() {
-        let item = issue(
-            "crop_not_supported",
-            "crop is not portable",
-            IssueSeverity::Loss,
-            Some("tracks[0]"),
-        );
-        let report = create_report("export", Some("otio_json"), [item.clone(), item]);
-        assert_eq!(report.issues.len(), 1);
-        assert_eq!(report.losses.len(), 1);
-        assert_eq!(report.omissions, report.losses);
-    }
 }

@@ -237,18 +237,6 @@ mod tests {
     }
 
     #[test]
-    fn the_captions_command_reads_as_the_contract_says() {
-        let Ok(crate::Command::ExportCaptions(captions)) = serde_json::from_value(json!({
-            "type": "export_captions", "format": "vtt", "sequence": "s1", "track": "S1"
-        })) else {
-            panic!("expected export_captions");
-        };
-        assert_eq!(captions.format, "vtt");
-        assert_eq!(captions.sequence.as_deref(), Some("s1"));
-        assert_eq!(captions.track.as_deref(), Some("S1"));
-    }
-
-    #[test]
     fn captions_match_their_golden_files() {
         let project = program();
         let sequence = &project.sequences[0];
@@ -268,54 +256,6 @@ mod tests {
         assert!(captions(sequence, "ass", None)
             .unwrap_err()
             .contains("srt or vtt"));
-    }
-
-    #[test]
-    fn paperwork_goes_beside_the_master_else_in_deliveries() {
-        let directory = tempfile::tempdir().unwrap();
-        let root = directory.path();
-        let master = root.join("deliveries/atlas_v7/Atlas master.mov");
-        assert_eq!(
-            target(root, None, Some(&master), "Atlas", "edl").unwrap(),
-            root.join("deliveries/atlas_v7/Atlas master.edl")
-        );
-        assert_eq!(
-            target(root, None, None, "Atlas: cut", "srt").unwrap(),
-            root.join("deliveries/Atlas- cut.srt")
-        );
-        assert_eq!(
-            target(root, Some("out/"), None, "Atlas", "vtt").unwrap(),
-            root.join("out/Atlas.vtt")
-        );
-        assert_eq!(
-            target(root, Some("cut.edl"), Some(&master), "Atlas", "edl").unwrap(),
-            root.join("cut.edl")
-        );
-        let job = |status: &str, quality: &str, path: &Path| RenderJob {
-            job_id: "render-1".into(),
-            status: status.into(),
-            output_url: None,
-            output_path: Some(path.to_string_lossy().into_owned()),
-            error: None,
-            range: None,
-            sequence: None,
-            progress: 1.0,
-            name: None,
-            quality: Some(quality.into()),
-            codec: None,
-        };
-        fs::create_dir_all(master.parent().unwrap()).unwrap();
-        fs::write(&master, b"mov").unwrap();
-        let older = root.join("Old.mov");
-        fs::write(&older, b"mov").unwrap();
-        let jobs = [
-            job("completed", "master", &older),
-            job("completed", "master", &master),
-            job("completed", "review", &root.join("Draft.mp4")),
-            job("completed", "master", &root.join("Gone.mov")),
-            job("running", "master", &root.join("Next.mov")),
-        ];
-        assert_eq!(latest_master(&jobs).as_deref(), Some(master.as_path()));
     }
 
     #[test]

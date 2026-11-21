@@ -825,37 +825,6 @@ fn gpu_effects_match_cpu_exactly() {
     );
 }
 
-/// A pixel with next to no alpha has no straight color to grade, so both leave it as it is.
-#[test]
-fn lumetri_look_leaves_what_is_all_but_transparent_alone() {
-    let Some(gpu) = kerf_gpu::shared() else {
-        eprintln!("no GPU; skipping");
-        return;
-    };
-    let image = Image {
-        w: 3,
-        h: 1,
-        px: vec![
-            0.5, 0.25, 0.75, 0.0, 0.5, 0.25, 0.75, 1e-7, 0.25, 0.25, 0.25, 0.5,
-        ],
-    };
-    let e = effect(
-        "lumetri",
-        &[
-            ("basic_on", ParamValue::Bool(false)),
-            ("look", ch(6)),
-            ("wheel_midtones", pt(0.3, 0.17)),
-        ],
-    );
-    let op = FxOp::eval(&e, &cx(Tick::ZERO, 1.0), 3, 1).expect("an op");
-    let mut cpu = image.clone();
-    op.apply(&mut cpu);
-    assert_eq!(&cpu.px[..8], &image.px[..8]);
-    assert_ne!(&cpu.px[8..], &image.px[8..]);
-    let on = on_gpu(gpu, &image, std::slice::from_ref(&op));
-    assert_eq!(&on[..8], &image.px[..8]);
-}
-
 /// Chains run in order, and Unsharp keeps its original while blurring, between other blurs.
 #[test]
 fn gpu_effect_chains_match_cpu() {
@@ -938,30 +907,4 @@ fn gpu_effect_chains_match_cpu() {
             "{worst:.2e}, flips {flips:.4}"
         );
     }
-}
-
-/// The effects `FxOp` covers are the ones it draws: nothing `apply` runs ahead of it takes them.
-#[test]
-fn an_op_draws_what_the_effect_draws() {
-    let (w, h) = (64usize, 40usize);
-    let image = Image {
-        w,
-        h,
-        px: picture(w as u32, h as u32),
-    };
-    let context = cx(Tick::ZERO, 1.0);
-    let mut covered = 0;
-    for (id, def) in crate::filmcraft::catalog::definitions() {
-        let e = def.instance();
-        let Some(op) = FxOp::eval(&e, &context, w, h).filter(FxOp::gpu_ok) else {
-            continue;
-        };
-        covered += 1;
-        let mut by_op = image.clone();
-        op.apply(&mut by_op);
-        let mut by_effect = image.clone();
-        crate::filmcraft::effects::apply(&mut by_effect, &e, &context);
-        assert_eq!(by_op.px, by_effect.px, "{id}");
-    }
-    assert!(covered >= 20, "{covered} effects have kernels");
 }

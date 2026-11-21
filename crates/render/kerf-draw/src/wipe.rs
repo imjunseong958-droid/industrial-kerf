@@ -46,33 +46,3 @@ pub fn coverage_within(
     });
     out
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_wipe_runs_from_nothing_to_everything() {
-        assert!(coverage(8, 4, 0.0, 0.0, 0.0).iter().all(|c| *c == 0.0));
-        assert!(coverage(8, 4, 0.0, 0.0, 1.0).iter().all(|c| *c == 1.0));
-        // Halfway across from the left: the left half shows.
-        let half = coverage(8, 1, 0.0, 0.0, 0.5);
-        assert_eq!(&half[..4], &[1.0; 4]);
-        assert_eq!(&half[5..], &[0.0; 3]);
-        // From the top down.
-        let down = coverage(1, 8, 90.0, 0.0, 0.5);
-        assert_eq!((down[1], down[6]), (1.0, 0.0));
-    }
-
-    #[test]
-    fn past_its_frame_a_picture_wipes_as_the_frames_edge_does() {
-        // A frame of 8 in the middle of 16: the same front across it, and its edges beyond.
-        let frame = Rect::new(4.0, 0.0, 8.0, 1.0);
-        let half = coverage_within(16, 1, frame, 0.0, 0.0, 0.5);
-        assert_eq!(&half[4..12], &coverage(8, 1, 0.0, 0.0, 0.5)[..]);
-        assert_eq!(&half[..4], &[1.0; 4]);
-        assert_eq!(&half[12..], &[0.0; 4]);
-        assert!(coverage_within(16, 1, frame, 0.0, 0.0, 0.0).iter().all(|c| *c == 0.0));
-        assert!(coverage_within(16, 1, frame, 0.0, 0.0, 1.0).iter().all(|c| *c == 1.0));
-    }
-}

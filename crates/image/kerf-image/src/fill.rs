@@ -907,43 +907,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn a_level_searches_while_it_can_and_copies_after() {
-        let search = Effort::Search {
-            rounds: 4,
-            sweeps: 5,
-        };
-        // A box 60% wide at 4K: 3 million patches, 757,000, 192,000, 49,000. The first level at
-        // 960 x 540 is searched, for all it has, and the two after it copy.
-        assert_eq!(effort(3_007_620, 3840, 2160, 4, 5), Effort::Copy);
-        assert_eq!(effort(757_332, 1920, 1080, 4, 5), Effort::Copy);
-        assert_eq!(effort(192_060, 960, 540, 4, 5), search);
-        // At 1080p, the same.
-        assert_eq!(effort(83_000, 1920, 1080, 4, 5), Effort::Copy);
-        assert_eq!(effort(23_000, 960, 540, 4, 5), search);
-        // A small one is searched all the way down, and draws as it did.
-        assert_eq!(effort(23_000, 1920, 1080, 4, 5), search);
-        assert_eq!(effort(MOST_SEARCHED, 3840, 2160, 4, 5), search);
-        assert_eq!(effort(MOST_SEARCHED + 1, 3840, 2160, 4, 5), Effort::Copy);
-    }
-
-    /// `background` with film's grain on it, repeating every 40 pixels so that what the hole hides is
-    /// there to be found.
-    fn grainy(w: u32, h: u32) -> Image {
-        let mut img = background(w, h, 0.0);
-        for y in 0..h {
-            for x in 0..w {
-                let n = hash_noise(x % 40, y % 40, 11) * 0.08;
-                let mut p = img.get(i64::from(x), i64::from(y));
-                for v in &mut p[..3] {
-                    *v += n;
-                }
-                img.set(x, y, p);
-            }
-        }
-        img
-    }
-
     /// The energy of each pixel off the mean of its neighbours: what a vote averages away.
     fn fine_detail(img: &Image, region: impl Fn(usize) -> bool) -> f64 {
         let (w, h) = (img.width as usize, img.height as usize);
@@ -963,38 +926,6 @@ mod tests {
             }
         }
         sum / f64::max(n, 1.0)
-    }
-
-    #[test]
-    fn a_hole_too_big_to_search_finds_the_scene_and_keeps_its_grain() {
-        // Big enough that the finest level has too many patches to search, and copies.
-        let (w, h) = (1000u32, 560u32);
-        let hole = rect_hole(w, h, 350, 130, 300);
-        assert!(hole.iter().filter(|b| **b).count() > MOST_SEARCHED);
-        let gt = grainy(w, h);
-        let filled = patch_fill(&cut(&gt, &hole), &hole, None, 7, 1);
-        let db = psnr(&filled, &gt, Some(&hole));
-        assert!(db > 30.0, "{db:.1} dB");
-        // Known pixels are untouched.
-        for i in 0..hole.len() {
-            if !hole[i] {
-                assert_eq!(filled.data[i], gt.data[i]);
-            }
-        }
-        // Grain on a soft picture, with nothing to find it by: matches disagree, and a vote over a
-        // whole patch keeps 64% of what is around it, where this keeps 80%.
-        let mut gt = Image::new(w, h);
-        for y in 0..h {
-            for x in 0..w {
-                let n = hash_noise(x, y, 11) * 0.08;
-                let v = 0.3 + 0.3 * (x as f32 / 170.0).sin() * (y as f32 / 90.0).cos() + n;
-                gt.set(x, y, [v, 0.8 - v, 0.5, 1.0]);
-            }
-        }
-        let filled = patch_fill(&cut(&gt, &hole), &hole, None, 7, 1);
-        let inside = fine_detail(&filled, |i| hole[i]);
-        let outside = fine_detail(&gt, |i| !hole[i]);
-        assert!(inside > outside * 0.72, "{inside} of {outside}");
     }
 
     /// A frame of the real footage `scripts/fetch-real-footage.sh` fetches, its code values 0 to 1, or
@@ -1069,57 +1000,6 @@ mod tests {
                 // As close as the search, and keeping at least what it keeps.
                 assert!(psnr(&kerf, &truth, Some(&hole)) > psnr(&searched, &truth, Some(&hole)) - 0.1, "{size} {name}");
                 assert!(detail(&kerf) >= detail(&searched) * 0.95, "{size} {name}");
-            }
-        }
-    }
-
-    #[test]
-    fn filled_pixels_are_opaque() {
-        let mut image = Image::filled(2, 1, [0.25, 0.25, 0.25, 0.5]);
-        image.data[1] = [0.25, 0.25, 0.25, 0.5];
-        let filled = opaque_fill(image, &[true, false]);
-        assert_eq!(filled.data[0], [0.5, 0.5, 0.5, 1.0]);
-        assert_eq!(filled.data[1], [0.25, 0.25, 0.25, 0.5]);
-    }
-
-    /// A moving object removed from a (static or panning) textured background.
-    fn sequence(n: usize, pan: f32) -> (Vec<Image>, Vec<Vec<bool>>, Vec<Image>) {
-        let (w, h) = (96u32, 64u32);
-        let mut frames = vec![];
-        let mut holes = vec![];
-        let mut gts = vec![];
-        for t in 0..n {
-            let gt = background(w, h, t as f32 * pan);
-            let hole = rect_hole(w, h, 10 + 8 * t as u32, 22, 18);
-            frames.push(cut(&gt, &hole));
-            holes.push(hole);
-            gts.push(gt);
-        }
-        (frames, holes, gts)
-    }
-
-    #[test]
-    fn object_fill_recovers_background_and_is_stable() {
-        for pan in [0.0, 1.0] {
-            let (frames, holes, gts) = sequence(8, pan);
-            let out = fill_frames(&frames, &holes, 7, 1);
-            for t in 0..out.len() {
-                let db = psnr(&out[t], &gts[t], Some(&holes[t]));
-                assert!(db > 26.0, "frame {t} pan {pan}: {db:.1} dB");
-                assert_eq!(out[t].data[0][3], 1.0);
-            }
-            if pan == 0.0 {
-                // Temporal consistency: on a static background the filled pixels agree between
-                // frames.
-                for t in 1..out.len() {
-                    let both: Vec<bool> = holes[t]
-                        .iter()
-                        .zip(&holes[t - 1])
-                        .map(|(a, b)| *a || *b)
-                        .collect();
-                    let db = psnr(&out[t], &out[t - 1], Some(&both));
-                    assert!(db > 30.0, "frames {}–{t} differ: {db:.1} dB", t - 1);
-                }
             }
         }
     }

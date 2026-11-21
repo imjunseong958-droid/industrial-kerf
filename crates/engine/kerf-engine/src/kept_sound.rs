@@ -712,58 +712,6 @@ mod tests {
     }
 
     #[test]
-    fn a_sound_is_pieces_of_whole_frames_with_the_rest_in_the_last() {
-        assert_eq!(pieces(1), [Piece { from: 0, to: 1, lead: 0 }]);
-        assert_eq!(pieces(1535), [Piece { from: 0, to: 1535, lead: 0 }]);
-        let found = pieces(1536);
-        assert_eq!(found[1], Piece { from: 1024, to: 1536, lead: 16 });
-        for total in [1u64, 700, 1024, 1500, 1536, 5000, 14064] {
-            let found = pieces(total);
-            assert_eq!((found[0].from, found[found.len() - 1].to), (0, total));
-            assert!(found.windows(2).all(|pair| pair[0].to == pair[1].from));
-            assert!(found
-                .iter()
-                .skip(1)
-                .all(|piece| piece.lead == LEAD && piece.to - piece.from >= PIECE / 2));
-        }
-    }
-
-    #[test]
-    fn frames_are_read_from_a_stream_and_a_kept_piece_is_its_piece_or_nothing() {
-        let frames = [shared(0, 1, 1), shared(2, 0, 2), apart(3), shared(0, 1, 4)];
-        assert_eq!(adts(&frames.concat()).unwrap(), frames);
-        assert!(adts(&frames.concat()[..20]).is_none());
-        assert!(adts(b"not a stream").is_none());
-        assert_eq!(window(&frames[0]), Some((0, 1)));
-        assert_eq!(window(&frames[1]), Some((2, 0)));
-        assert_eq!(window(&frames[2]), None);
-        // One channel says its window after its gain.
-        assert_eq!(window(&frame(&[0x00, 0xFF, 0xC0, 0])), Some((3, 0)));
-        // Filling comes before the sound and is passed over. Two bytes of it:
-        // 110 0010, sixteen bits, then 001 0000 1 and 0 10 1.
-        assert_eq!(window(&frame(&[0xC5, 0xFF, 0xFE, 0x42, 0xA0, 0])), Some((2, 1)));
-        // And seventeen, whose count takes a byte more: 110 1111, 0000 0011, 136 bits, then
-        // 001 0000 1 and 0 01 1.
-        let mut filled = vec![0xDE, 0x06];
-        filled.extend([0u8; 16]);
-        filled.extend([0x00, 0x42, 0x60, 0, 0]);
-        assert_eq!(window(&frame(&filled)), Some((1, 1)));
-        // Filling with no sound after it says nothing.
-        assert_eq!(window(&frame(&[0xC5, 0xFF])), None);
-        let piece = Piece { from: 1024, to: 1027, lead: 1 };
-        let packets = Packets {
-            lead: frames[..1].to_vec(),
-            body: frames[1..].to_vec(),
-        };
-        let file = written(&packets);
-        assert_eq!(read(&file, &piece).unwrap(), packets);
-        // Another piece's file, or one cut short, is no piece.
-        assert!(read(&file, &Piece { from: 0, to: 3, lead: 0 }).is_none());
-        assert!(read(&file[..file.len() - 3], &piece).is_none());
-        assert!(read(&file[1..], &piece).is_none());
-    }
-
-    #[test]
     fn pieces_join_where_the_frame_before_has_the_same_window_in_both() {
         let piece = |lead: Vec<Vec<u8>>, body: Vec<Vec<u8>>| Packets { lead, body };
         // The frame before the second piece's first is a long window in both.

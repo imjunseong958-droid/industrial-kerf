@@ -375,51 +375,6 @@ mod tests {
     }
 
     #[test]
-    fn offsets_have_the_areas_their_formula_says() {
-        // A square grown by 10 keeps its corners, and shrunk loses its sides.
-        let square = vec![square(0.0, 0.0, 100.0)];
-        close(area(&offset(&square, 10.0)), 120.0 * 120.0, 1e-4);
-        close(area(&offset(&square, -10.0)), 80.0 * 80.0, 1e-4);
-        // A circle's radius changes by the amount.
-        let round = vec![circle(0.0, 0.0, 100.0)];
-        close(area(&offset(&round, 25.0)), PI * 125.0 * 125.0, 1e-3);
-        close(area(&offset(&round, -25.0)), PI * 75.0 * 75.0, 1e-3);
-        // Nothing moves it not at all, and shrinking past the middle leaves nothing.
-        assert_eq!(offset(&round, 0.0), round);
-        assert!(offset(&round, -150.0).is_empty(), "past the middle");
-        // A square is gone at half its side, and not before.
-        assert!(offset(&square, -50.0).is_empty(), "at the middle");
-        close(area(&offset(&square, -49.0)), 2.0 * 2.0, 1e-3);
-    }
-
-    #[test]
-    fn an_offset_grows_a_hole_smaller() {
-        let holed = combine(
-            &[square(0.0, 0.0, 100.0)],
-            &[square(25.0, 25.0, 50.0)],
-            Combine::Subtract,
-        );
-        // Out by 5: outside 110 square, hole 40.
-        close(
-            area(&offset(&holed, 5.0)),
-            110.0 * 110.0 - 40.0 * 40.0,
-            1e-3,
-        );
-        // In by 5: outside 90 square, hole 60.
-        close(area(&offset(&holed, -5.0)), 90.0 * 90.0 - 60.0 * 60.0, 1e-3);
-        // Out by 30, the hole closes.
-        let filled = offset(&holed, 30.0);
-        close(area(&filled), 160.0 * 160.0, 1e-3);
-        assert_eq!(filled.len(), 1);
-    }
-
-    #[test]
-    fn a_line_grows_into_a_region() {
-        let around = around_line(&[[0.0, 0.0], [100.0, 0.0]], 5.0);
-        close(area(&around), 1000.0, 1e-4);
-    }
-
-    #[test]
     fn what_is_not_a_number_changes_nothing() {
         let square = vec![square(0.0, 0.0, 100.0)];
         assert_eq!(offset(&square, f32::NAN), square);

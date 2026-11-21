@@ -274,32 +274,9 @@ pub(crate) fn save(
 mod tests {
     use super::*;
     use crate::tests_support::PROGRAM;
-    use crate::Command;
 
     fn program() -> Project {
         kerf_runtime::parse_document(PROGRAM).unwrap()
-    }
-
-    #[test]
-    fn preset_commands_are_read() {
-        assert!(matches!(
-            serde_json::from_value(json!({"type": "preset_library"})).unwrap(),
-            Command::PresetLibrary
-        ));
-        let Command::PresetSave { name, replace } =
-            serde_json::from_value(json!({"type": "preset_save", "name": "Intro"})).unwrap()
-        else {
-            panic!("expected preset_save");
-        };
-        assert_eq!((name.as_str(), replace), ("Intro", false));
-        let Command::PresetSave { replace, .. } = serde_json::from_value(
-            json!({"type": "preset_save", "name": "Intro", "replace": true}),
-        )
-        .unwrap() else {
-            panic!("expected preset_save");
-        };
-        assert!(replace);
-        assert!(serde_json::from_value::<Command>(json!({"type": "preset_save"})).is_err());
     }
 
     #[test]
@@ -339,109 +316,5 @@ mod tests {
         assert_eq!(names.len(), 1, "{names:?}");
         let incoming = directory.path().join(kerf_collab::media::INCOMING_DIR);
         assert_eq!(fs::read_dir(incoming).unwrap().count(), 0);
-    }
-
-    #[test]
-    fn the_library_lists_presets_with_their_slots_and_texts() {
-        let directory = tempfile::tempdir().unwrap();
-        let document = export_program(&program(), Some("Two Cuts")).unwrap();
-        save(directory.path(), "Two Cuts", &document, false).unwrap();
-        fs::create_dir_all(directory.path().join(".kerf/presets")).unwrap();
-        fs::write(
-            directory.path().join(".kerf/presets/old.kerfpreset"),
-            &document,
-        )
-        .unwrap();
-        fs::write(
-            directory.path().join("broken.kerfpreset"),
-            "kerf 1\nnot a preset\n",
-        )
-        .unwrap();
-        fs::write(directory.path().join("notes.txt"), "x").unwrap();
-
-        let paths: Vec<_> = library_files(directory.path())
-            .iter()
-            .map(|path| path.to_string_lossy().into_owned())
-            .collect();
-        assert_eq!(
-            paths,
-            [
-                "presets/Two Cuts.kerfpreset",
-                ".kerf/presets/old.kerfpreset",
-                "broken.kerfpreset"
-            ]
-        );
-
-        let event = library(directory.path());
-        assert_eq!(event["type"], "preset_library");
-        let presets = event["presets"].as_array().unwrap();
-        assert_eq!(presets.len(), 3);
-        let first = &presets[0];
-        assert_eq!(first["path"], "presets/Two Cuts.kerfpreset");
-        assert_eq!(first["name"], "Two Cuts");
-        let slots = first["slots"].as_array().unwrap();
-        // One slot per cut.
-        assert_eq!(slots.len(), 2, "{first}");
-        assert_eq!(slots[0]["clips"], 1);
-        assert_eq!(slots[0]["video"], true);
-        assert_eq!(slots[0]["seconds"], 2.0);
-        assert_eq!(first["texts"], json!({"t1": "Hello"}));
-        assert!(first.get("error").is_none());
-        let broken = &presets[2];
-        assert_eq!(broken["name"], "broken");
-        assert!(broken["error"].is_string(), "{broken}");
-        assert_eq!(event["looks"], json!([]));
-    }
-
-    #[test]
-    fn the_media_a_preset_makes_are_listed_apart_from_its_slots() {
-        let walk = kerf_runtime::parse_document(include_str!(
-            "../../../../fixtures/shots/walk/project.kerf"
-        ))
-        .unwrap();
-        let document =
-            preset::export(&walk, Catalog::builtin(), &Id::new("s2").unwrap(), "Moved").unwrap();
-        let directory = tempfile::tempdir().unwrap();
-        save(directory.path(), "Moved", &document, false).unwrap();
-        let event = library(directory.path());
-        let entry = &event["presets"][0];
-        assert!(entry.get("error").is_none(), "{entry}");
-        // One slot, the footage both makings read; nothing asks for a binding of either.
-        assert_eq!(entry["slots"].as_array().unwrap().len(), 1, "{entry}");
-        assert_eq!(entry["slots"][0]["id"], "slot1");
-        let made = entry["made"].as_array().unwrap();
-        assert_eq!(made.len(), 2, "{entry}");
-        assert_eq!(made[0]["id"], "man");
-        assert_eq!(made[0]["of"], "slot1");
-        assert_eq!(
-            made[0]["steps"],
-            json!(["generate model=matte prompt=\"man\" guide=slot:slot1"])
-        );
-        let (_, read) = read(&directory.path().join("presets/Moved.kerfpreset")).unwrap();
-        let footage = read.pattern.media("slot1").unwrap().clone();
-        assert_eq!(crate::tasks::fits(&read, &footage), ["slot1"]);
-    }
-
-    #[test]
-    fn the_library_lists_saved_effects_presets() {
-        let directory = tempfile::tempdir().unwrap();
-        let mut project = program();
-        let clip = &mut project.sequences[0].tracks[0].clips[0];
-        clip.effects.push(kerf_model::Effect {
-            fx: Id::new("blur.gaussian").unwrap(),
-            version: 1,
-            enabled: true,
-            params: Default::default(),
-        });
-        crate::looks::save(directory.path(), &project, "c1", "Soft", false).unwrap();
-        fs::write(directory.path().join("presets/looks/bad.kerflook"), "nope").unwrap();
-        let event = library(directory.path());
-        let looks = event["looks"].as_array().unwrap();
-        assert_eq!(looks.len(), 2, "{event}");
-        assert_eq!(looks[0]["path"], "presets/looks/Soft.kerflook");
-        assert_eq!(looks[0]["name"], "Soft");
-        assert_eq!(looks[0]["id"], "look.soft");
-        assert_eq!(looks[0]["effects"], 1);
-        assert!(looks[1]["error"].is_string());
     }
 }

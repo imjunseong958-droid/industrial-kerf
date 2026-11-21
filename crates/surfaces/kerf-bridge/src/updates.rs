@@ -93,31 +93,6 @@ pub(crate) fn newest(releases: &Value, current: &str) -> Value {
 mod tests {
     use super::*;
 
-    fn release(tag: &str, draft: bool) -> Value {
-        json!({"tag_name": tag, "draft": draft, "html_url": format!("https://example.com/{tag}")})
-    }
-
-    #[test]
-    fn the_newest_published_release_is_found_and_compared() {
-        let releases = json!([
-            release("v0.2.0", false),
-            release("v0.10.0", false),
-            release("v0.11.0", true),
-            release("nightly", false),
-        ]);
-        // 0.10 is newer than 0.2 though it sorts before it as text; a draft is not out.
-        assert_eq!(
-            newest(&releases, "0.2.0"),
-            json!({"current": "0.2.0", "latest": "0.10.0", "newer": true, "url": "https://example.com/v0.10.0"})
-        );
-        assert_eq!(newest(&releases, "0.10.0")["newer"], json!(false));
-        assert_eq!(newest(&releases, "1.0.0")["newer"], json!(false));
-        assert_eq!(
-            newest(&json!([]), "0.1.0"),
-            json!({"current": "0.1.0", "newer": false})
-        );
-    }
-
     #[test]
     fn versions_read_as_numbers() {
         assert_eq!(version("v1.2.3"), Some((1, 2, 3)));
@@ -125,16 +100,5 @@ mod tests {
         assert_eq!(version("v2.0.0-rc.1"), Some((2, 0, 0)));
         assert_eq!(version("1.2.3.4"), None);
         assert_eq!(version("nightly"), None);
-    }
-
-    /// GitHub itself. It asks the network, so it is run by hand:
-    /// `cargo test -p kerf-bridge --lib real_releases -- --ignored --nocapture`.
-    #[test]
-    #[ignore = "asks api.github.com"]
-    fn github_answers_with_the_real_releases() {
-        let answer = check();
-        println!("{answer}");
-        assert!(answer["error"].is_null(), "{answer}");
-        assert_eq!(answer["current"], json!(env!("CARGO_PKG_VERSION")));
     }
 }

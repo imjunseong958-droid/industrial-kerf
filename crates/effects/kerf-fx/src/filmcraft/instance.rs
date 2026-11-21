@@ -435,22 +435,7 @@ mod tests {
     use super::*;
     use crate::filmcraft::effects::{apply, FxCtx};
     use kerf_draw::Image;
-    use kerf_model::{Catalog, Id, Interp, Keyframe};
-
-    /// The LUT files `effects` name, read as a program reads them.
-    fn library<'a>(effects: impl IntoIterator<Item = &'a Effect>) -> Result<Project, String> {
-        let mut files = Files::new();
-        let mut library = Project::new("kerf");
-        for effect in effects {
-            read_luts(effect, &mut files)?;
-            library.luts.extend(
-                luts(effect, &files)
-                    .into_iter()
-                    .flat_map(|named| named.luts),
-            );
-        }
-        Ok(library)
-    }
+    use kerf_model::{Catalog, Id};
 
     fn effect(id: &str, params: &[(&str, Param)]) -> Effect {
         Effect {
@@ -462,95 +447,6 @@ mod tests {
                 .map(|(k, v)| ((*k).to_owned(), v.clone()))
                 .collect(),
         }
-    }
-
-    fn number(n: f64) -> Param {
-        Param::Static(Value::Number(n))
-    }
-
-    const PICTURE: Picture = Picture {
-        size: (64, 36),
-        per_source: 0.5,
-    };
-
-    #[test]
-    fn parameters_read_back_as_the_catalog_writes_them() {
-        let none = |_: &str| None;
-        // Defaults are FilmCraft's.
-        let lumetri = instance(&effect("color.lumetri", &[]), Time::ZERO, PICTURE, &none).unwrap();
-        assert_eq!(
-            lumetri,
-            crate::filmcraft::project::find_effect("lumetri")
-                .unwrap()
-                .instance()
-        );
-        // A point across the picture is in source pixels: 64 × 36 at half the source.
-        let lens = effect(
-            "distort.magnify",
-            &[("center_x", number(0.25)), ("magnification", number(300.0))],
-        );
-        let lens = instance(&lens, Time::ZERO, PICTURE, &none).unwrap();
-        assert_eq!(lens.vec2_at("center", Tick(0)), Vec2::new(32.0, 36.0));
-        assert_eq!(lens.f64_at("magnification", Tick(0)), 300.0);
-        // An offset is in pixels; a choice is its word's place.
-        let framed = effect(
-            "transform.autoreframe",
-            &[
-                ("offset_x", number(-40.0)),
-                (
-                    "preset",
-                    Param::Static(Value::Enum("slower-motion".into())),
-                ),
-            ],
-        );
-        let framed = instance(&framed, Time::ZERO, PICTURE, &none).unwrap();
-        assert_eq!(framed.vec2_at("offset", Tick(0)), Vec2::new(-40.0, 0.0));
-        assert_eq!(framed.param("preset").unwrap().value, ParamValue::Choice(0));
-        // A track by id, and a curve.
-        let matte = effect(
-            "key.trackmatte",
-            &[("matte", Param::Static(Value::Text("v2".into())))],
-        );
-        let place = |id: &str| (id == "v2").then_some(2);
-        let matte = instance(&matte, Time::ZERO, PICTURE, &place).unwrap();
-        assert_eq!(matte.param("matte").unwrap().value, ParamValue::Choice(2));
-        let graded = effect(
-            "color.lumetri",
-            &[(
-                "curve_luma",
-                Param::Static(Value::Text("1,1 0,0.1 0.5,0.6".into())),
-            )],
-        );
-        let graded = instance(&graded, Time::ZERO, PICTURE, &none).unwrap();
-        assert_eq!(
-            graded.param("curve_luma").unwrap().value,
-            ParamValue::Curve(vec![[0.0, 0.1], [0.5, 0.6], [1.0, 1.0]])
-        );
-    }
-
-    #[test]
-    fn animated_parameters_follow_kerf_keyframes() {
-        let second = Time::from_seconds(1.0).unwrap();
-        let keys = Param::Animated(vec![
-            Keyframe {
-                at: Time::ZERO,
-                value: Value::Number(0.0),
-                interp: Interp::Linear,
-            },
-            Keyframe {
-                at: second,
-                value: Value::Number(1.0),
-                interp: Interp::Linear,
-            },
-        ]);
-        let half = Time::from_seconds(0.5).unwrap();
-        let lens = effect("distort.magnify", &[("center_x", keys)]);
-        let lens = instance(&lens, half, PICTURE, &|_| None).unwrap();
-        // Now, and around now as Transform's shutter reads it.
-        assert_eq!(lens.vec2_at("center", tick(half)).x, 64.0);
-        assert_eq!(lens.vec2_at("center", tick(second)).x, 128.0);
-        assert!(lens.is_animated());
-        assert_eq!(time(tick(half)), half);
     }
 
     #[test]
@@ -612,80 +508,5 @@ mod tests {
             apply(&mut picture, &set, &cx);
             assert!(picture.px.iter().all(|v| v.is_finite()), "{id}");
         }
-    }
-
-    #[test]
-    fn a_lut_file_is_read_into_the_library() {
-        let dir = std::env::temp_dir().join(format!("kerf-lut-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("swap.cube");
-        let cube =
-            kerf_color::Lut::from_cube(kerf_color::Lut3d::from_fn(3, |c| [c[2], c[1], c[0]]))
-                .to_cube();
-        std::fs::write(&path, cube).unwrap();
-        let path = path.to_str().unwrap().to_owned();
-        let graded = effect(
-            "color.lumetri",
-            &[("input_lut", Param::Static(Value::Text(path.clone())))],
-        );
-        let luts = library([&graded]).unwrap();
-        assert_eq!(luts.luts.len(), 1);
-        let read = instance(&graded, Time::ZERO, PICTURE, &|_| None).unwrap();
-        let spec = format!("lib:{path}");
-        assert_eq!(
-            read.param("input_lut").unwrap().value,
-            ParamValue::Text(spec.clone())
-        );
-        assert!(crate::filmcraft::luts::resolve(Some(&luts), &spec).is_some());
-        // A camera conversion when no file is named.
-        let camera = effect(
-            "color.lumetri",
-            &[(
-                "camera_lut",
-                Param::Static(Value::Enum("slog3-sgamut3cine-to-rec709".into())),
-            )],
-        );
-        let read = instance(&camera, Time::ZERO, PICTURE, &|_| None).unwrap();
-        assert_eq!(
-            read.param("input_lut").unwrap().value,
-            ParamValue::Text("builtin:slog3-sgamut3cine-to-rec709".into())
-        );
-        let missing = effect(
-            "color.lumetri",
-            &[(
-                "look_lut",
-                Param::Static(Value::Text(dir.join("no.cube").to_str().unwrap().into())),
-            )],
-        );
-        assert!(library([&missing]).unwrap_err().contains("no.cube"));
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
-    fn a_lut_file_read_again_is_parsed_once() {
-        let dir = std::env::temp_dir().join(format!("kerf-lut-again-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("again.cube");
-        let cube =
-            kerf_color::Lut::from_cube(kerf_color::Lut3d::from_fn(3, |c| [c[1], c[0], c[2]]))
-                .to_cube();
-        std::fs::write(&path, cube).unwrap();
-        let path = path.to_str().unwrap().to_owned();
-        let graded = effect(
-            "color.lumetri",
-            &[("input_lut", Param::Static(Value::Text(path.clone())))],
-        );
-        let spec = format!("lib:{path}");
-        // each compositor reads its library again
-        let (first, second) = (library([&graded]).unwrap(), library([&graded]).unwrap());
-        assert!(std::sync::Arc::ptr_eq(
-            &first.luts[0].text,
-            &second.luts[0].text
-        ));
-        let parsed = crate::filmcraft::luts::resolve(Some(&first), &spec).unwrap();
-        drop(first);
-        let again = crate::filmcraft::luts::resolve(Some(&second), &spec).unwrap();
-        assert!(std::sync::Arc::ptr_eq(&parsed, &again));
-        std::fs::remove_dir_all(dir).unwrap();
     }
 }

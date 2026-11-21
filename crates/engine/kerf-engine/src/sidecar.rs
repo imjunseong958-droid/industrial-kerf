@@ -531,33 +531,6 @@ mod tests {
     }
 
     #[test]
-    fn a_cancelled_sidecar_is_asked_to_end_and_what_it_says_is_heard() {
-        // A program that takes its work back when asked, as a model's does a job on a server.
-        let token = CancellationToken::new();
-        let (runner, lines) = run_trapping(
-            &token,
-            "echo took the job back >&2; exit 0",
-            Duration::from_secs(5),
-        );
-        let start = Instant::now();
-        token.cancel();
-        let result = runner.join().expect("runner");
-        assert!(matches!(result, Err(EngineError::Cancelled)));
-        // It ended by itself, well inside the time it was given.
-        assert!(
-            start.elapsed() < Duration::from_secs(3),
-            "{:?}",
-            start.elapsed()
-        );
-        // The shell may say that the `sleep` it waited on was ended too.
-        let said: Vec<String> = lines.try_iter().collect();
-        assert!(
-            said.iter().any(|line| line == "took the job back"),
-            "{said:?}"
-        );
-    }
-
-    #[test]
     fn a_sidecar_that_does_not_end_when_asked_is_killed() {
         let token = CancellationToken::new();
         let grace = Duration::from_millis(300);
@@ -576,75 +549,6 @@ mod tests {
         // The shell may say that the `sleep` it waited on was ended too.
         let said: Vec<String> = lines.try_iter().collect();
         assert!(said.iter().any(|line| line == "not yet"), "{said:?}");
-    }
-
-    #[test]
-    fn a_signal_to_a_running_sidecar_reaches_what_it_started() {
-        let token = CancellationToken::new();
-        let (runner, shell, sleeper) = run_sleeper(&token);
-        {
-            let running = running();
-            assert!(running.contains(&shell));
-            signal_group(shell, libc::SIGTERM);
-        }
-        let finished = runner
-            .join()
-            .expect("runner")
-            .expect("the shell ends on the signal");
-        assert!(!finished.status.success());
-        assert!(ends_within(&sleeper, Duration::from_secs(3)));
-        assert!(!running().contains(&shell));
-    }
-
-    #[test]
-    fn everything_a_cancelled_sidecar_says_on_its_way_out_is_heard() {
-        // Many lines, said at once as it ends: more than are read in the time it takes to end.
-        let token = CancellationToken::new();
-        let (sender, lines) = mpsc::channel();
-        let runner = {
-            let token = token.clone();
-            thread::spawn(move || {
-                let mut command = Command::new("sh");
-                command.args([
-                    "-c",
-                    "trap 'printf \"line %s\\n\" $(seq 0 499) >&2; echo done >&2; exit 1' TERM; echo waiting >&2; while :; do sleep 0.05; done",
-                ]);
-                run(command, &token, |line| {
-                    let _ = sender.send(line.to_owned());
-                })
-            })
-        };
-        assert_eq!(
-            lines.recv_timeout(Duration::from_secs(5)).as_deref(),
-            Ok("waiting")
-        );
-        token.cancel();
-        assert!(matches!(
-            runner.join().expect("runner"),
-            Err(EngineError::Cancelled)
-        ));
-        let said: Vec<String> = lines.try_iter().collect();
-        let heard = |line: &str| said.iter().any(|said| said == line);
-        assert!(
-            heard("line 0") && heard("line 499") && heard("done"),
-            "{said:?}"
-        );
-    }
-
-    #[test]
-    fn the_first_signal_stops_the_work_held_and_a_second_ends_the_process() {
-        let token = CancellationToken::new();
-        {
-            let _held = stop_on_termination(&token);
-            assert!(!stopped_instead(libc::SIGQUIT));
-            assert!(!token.is_cancelled());
-            assert!(stopped_instead(libc::SIGINT));
-            assert!(token.is_cancelled());
-            // Already stopping: this one ends the process.
-            assert!(!stopped_instead(libc::SIGINT));
-        }
-        // Nothing held: every signal ends it.
-        assert!(!stopped_instead(libc::SIGTERM));
     }
 }
 

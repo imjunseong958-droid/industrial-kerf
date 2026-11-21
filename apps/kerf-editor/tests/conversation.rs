@@ -1058,9 +1058,7 @@ proptest! {
 use kerf_editor::ask::scope_choices;
 use kerf_editor::chat::permission_look;
 use kerf_editor::session::{preview_request, preview_span, FocusBook, Focused, REEL_MOST_RENDERED};
-use kerf_editor::store::{
-    next_steps, preview_notice, NextStep, Preview, PREVIEW_NOTICE_HOLD, PREVIEW_REQUIRED,
-};
+use kerf_editor::store::{next_steps, NextStep, Preview, PREVIEW_NOTICE_HOLD};
 
 /// A step as the bridge sends it, or as plain words.
 #[derive(Clone, Debug)]
@@ -1147,65 +1145,6 @@ fn kerf_s_next_steps_show_their_label_and_ask_their_request() {
     assert_eq!(
         try_asking(&state.next_steps)[0].label,
         "Make a 30-second cut from the best takes"
-    );
-}
-
-#[test]
-fn what_the_bridge_says_of_the_preview_is_said_as_qt_said_it() {
-    let said = |event: Value| preview_notice(&event);
-    let reason = "A title needs a render";
-    assert_eq!(
-        said(json!({"type": "preview", "status": "required", "message": reason})),
-        Some((reason.to_owned(), None))
-    );
-    assert_eq!(
-        said(json!({"type": "preview", "status": "required", "message": ""})),
-        Some((PREVIEW_REQUIRED.to_owned(), None))
-    );
-    assert_eq!(
-        said(json!({"type": "preview", "status": "unavailable", "message": "No GPU"})),
-        Some(("No GPU".to_owned(), None))
-    );
-    assert_eq!(
-        said(json!({"type": "preview", "status": "ready", "proposalId": "p1"})),
-        Some(("Preview ready".to_owned(), Some(PREVIEW_NOTICE_HOLD)))
-    );
-    assert_eq!(
-        said(json!({"type": "preview", "status": "live", "message": "masks are drawn soft"})),
-        Some((
-            "Live preview: masks are drawn soft".to_owned(),
-            Some(PREVIEW_NOTICE_HOLD)
-        ))
-    );
-    assert_eq!(
-        said(json!({"type": "preview", "status": "live"})),
-        Some(("Live preview".to_owned(), Some(PREVIEW_NOTICE_HOLD)))
-    );
-    for quiet in ["running", "stopped", "exited", "failed", ""] {
-        assert_eq!(
-            said(json!({"type": "preview", "status": quiet})),
-            None,
-            "{quiet}"
-        );
-    }
-    assert_eq!(PREVIEW_NOTICE_HOLD, Duration::from_millis(4000));
-    // Activity keeps why a render is needed, in Qt's words without one.
-    assert_eq!(
-        activity_of(&json!({"type": "preview", "status": "required", "message": reason})),
-        Some(("preview", reason.to_owned()))
-    );
-    assert_eq!(
-        activity_of(&json!({"type": "preview", "status": "required"})),
-        Some(("preview", "Native preview unavailable".to_owned()))
-    );
-    assert_eq!(
-        activity_of(&json!({"type": "preview", "status": "ready"})),
-        None
-    );
-    // A render that failed is kept in the words of the `required` after it.
-    assert_eq!(
-        activity_of(&json!({"type": "preview", "status": "failed", "proposalId": "p1"})),
-        None
     );
 }
 

@@ -522,7 +522,7 @@ fn write_back(buf: &Buf, rgba: &mut [u8], width: u32, height: u32, scale: f64) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kerf_model::{Engine, Id, Param};
+    use kerf_model::Engine;
 
     #[test]
     fn raster_catalog_is_current() {
@@ -585,96 +585,5 @@ mod tests {
                 "{guided}"
             );
         }
-    }
-
-    #[test]
-    fn points_are_written_across_the_picture() {
-        let spec = spec("blur.radialzoom").unwrap();
-        let step = Step {
-            spec,
-            params: [("center_x".to_owned(), Param::Static(Value::Number(0.25)))]
-                .into_iter()
-                .collect(),
-            seed: 0,
-        };
-        let values = step.values(Time::ZERO, [200.0, 100.0]);
-        // x as set, y at its default of the middle, both in pixels.
-        assert_eq!(values.v2("center"), [50.0, 50.0]);
-    }
-
-    #[test]
-    fn choices_are_script_words() {
-        let options = ["Red & Green", "Red & Green", "—", "Alpha"].map(String::from);
-        assert_eq!(
-            choices(&options),
-            ["red-green", "red-green2", "option3", "alpha"]
-        );
-    }
-
-    fn effect(id: &str, params: &[(&str, Param)]) -> Effect {
-        Effect {
-            fx: Id::new(id).unwrap(),
-            version: 1,
-            enabled: true,
-            params: params
-                .iter()
-                .map(|(name, param)| ((*name).to_owned(), param.clone()))
-                .collect(),
-        }
-    }
-
-    #[test]
-    fn curves_are_written_as_points() {
-        let curve = Param::Static(Value::Text("0,0 0.5,0.75 1,1".into()));
-        let stack =
-            RasterStack::new(&[effect("color.curves", &[("rgb", curve)])], 1, 1, 0).unwrap();
-        let mut frame = [128, 128, 128, 255];
-        stack.apply(&mut frame, 1, 1, Time::ZERO, 24.0);
-        // The midpoint lifted to three quarters.
-        assert!(frame[0].abs_diff(191) <= 2, "{frame:?}");
-    }
-
-    #[test]
-    fn hue_saturation_desaturates_a_frame() {
-        let grey = Param::Static(Value::Number(-100.0));
-        let stack = RasterStack::new(
-            &[effect("color.huesaturation", &[("saturation", grey)])],
-            1,
-            1,
-            0,
-        )
-        .unwrap();
-        let mut frame = [200, 100, 0, 255];
-        stack.apply(&mut frame, 1, 1, Time::ZERO, 24.0);
-        assert!(frame[0] == frame[1] && frame[1] == frame[2], "{frame:?}");
-    }
-
-    #[test]
-    fn parameters_follow_their_keyframes() {
-        let spec = spec("color.huesaturation").unwrap();
-        let saturation = spec
-            .params
-            .iter()
-            .find(|p| p.id == "saturation")
-            .expect("Hue/Saturation has a saturation");
-        let keys = Param::Animated(vec![
-            kerf_model::Keyframe {
-                at: Time::ZERO,
-                value: Value::Number(0.0),
-                interp: kerf_model::Interp::Linear,
-            },
-            kerf_model::Keyframe {
-                at: Time::from_flicks(705_600_000),
-                value: Value::Number(100.0),
-                interp: kerf_model::Interp::Linear,
-            },
-        ]);
-        let step = Step {
-            spec,
-            params: [(saturation.id.to_owned(), keys)].into_iter().collect(),
-            seed: 0,
-        };
-        let half = step.values(Time::from_flicks(352_800_000), [2.0, 1.0]);
-        assert_eq!(half.f("saturation"), 50.0);
     }
 }

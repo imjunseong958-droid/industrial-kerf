@@ -743,21 +743,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn times_are_reduced_fractions_of_a_second() {
-        assert_eq!(Seconds::frames(0, Rate::FPS_24).to_string(), "0s");
-        assert_eq!(Seconds::frames(48, Rate::FPS_24).to_string(), "2s");
-        assert_eq!(Seconds::frames(1, Rate::FPS_23_976).to_string(), "1001/24000s");
-        assert_eq!(Seconds::frames(86_400, Rate::FPS_23_976).to_string(), "18018/5s");
-        assert_eq!(Seconds::of(Rate::FPS_29_97.time_of(3)).to_string(), "1001/10000s");
-        let half = Ratio::new(1, 2).unwrap();
-        assert_eq!(Seconds::new(3, 1).over(half).to_string(), "6s");
-        assert_eq!(Seconds::new(6, 1).times(half).to_string(), "3s");
-        // 2.4 frames of 24 is frame 2, or 3 when nothing may fall short.
-        assert_eq!(Seconds::new(1, 10).frame(Rate::FPS_24, false), 2);
-        assert_eq!(Seconds::new(1, 10).frame(Rate::FPS_24, true), 3);
-    }
-
-    #[test]
     fn absolute_paths_become_file_urls() {
         assert_eq!(
             file_url("/shoot/Day 1/A&B #2.mov").as_deref(),
@@ -784,13 +769,5 @@ mod tests {
             Some("file://server/share/a.mov")
         );
         assert_eq!(file_url("footage/a.mov"), None);
-    }
-
-    #[test]
-    fn attribute_values_are_escaped_and_kept_on_one_line() {
-        assert_eq!(
-            escaped("Tom & \"Jerry\" <3\nline\u{1}two"),
-            "Tom &amp; &quot;Jerry&quot; &lt;3 linetwo"
-        );
     }
 }

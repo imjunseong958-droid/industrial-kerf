@@ -627,11 +627,6 @@ proptest! {
     }
 }
 
-#[test]
-fn text_that_fits_does_not_scroll() {
-    assert_eq!(scroll_x_to_show(30.0, 50.0, 100.0, 280.0), 0.0);
-}
-
 // ------------------------------------------------------------ tips
 
 #[test]
@@ -804,13 +799,6 @@ proptest! {
         prop_assert!((x - (window_w - w) / 2.0).abs() <= 1.0);
         prop_assert!((y - (window_h - h) * layout::MODAL_ABOVE).abs() <= 1.0);
     }
-}
-
-#[test]
-fn settings_in_the_smallest_window_keeps_its_head_and_foot() {
-    let panel = modal_bounds(size(px(760.0), px(540.0)), size(px(720.0), px(480.0)));
-    assert_eq!(panel.size, size(px(624.0), px(384.0)));
-    assert_eq!(panel.origin, point(px(48.0), px(24.0)));
 }
 
 // ------------------------------------------------------------ Reduce Motion

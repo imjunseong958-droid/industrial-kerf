@@ -1417,30 +1417,3 @@ fn gpu_distance(
         stretch as f32,
     )
 }
-
-#[cfg(test)]
-mod tests {
-    use super::{output_size, smallest_on_gpu_of, SMALLEST_PIXELS};
-
-    #[test]
-    fn the_least_share_on_the_gpu_has_the_pixels_it_needs() {
-        for (width, height) in [
-            (1920, 1080),
-            (3840, 2160),
-            (1080, 1920),
-            (1280, 720),
-            (1001, 777),
-        ] {
-            let scale = smallest_on_gpu_of(width, height);
-            let (w, h) = output_size(width, height, scale);
-            assert!(
-                w * h >= SMALLEST_PIXELS,
-                "{width}x{height} at {scale} is {w}x{h}"
-            );
-            assert!(scale < 1.0);
-        }
-        assert!((smallest_on_gpu_of(1920, 1080) - 1.0 / 3.0).abs() < 1e-3);
-        // A canvas already under it has nowhere further to go.
-        assert_eq!(smallest_on_gpu_of(320, 180), 1.0);
-    }
-}

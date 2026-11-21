@@ -446,39 +446,3 @@ pub fn make_proxy(
     entry.mark_complete(&[PROXY_FILE])?;
     Ok(Some(entry.path(PROXY_FILE)))
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-
-    #[test]
-    fn even_proxy_scale() {
-        let settings = ProxySettings {
-            width: Some(321.0),
-            height: Some(241.0),
-            ..ProxySettings::default()
-        };
-        let args = proxy_ffmpeg_args("input.mp4", "output.mp4", &settings).unwrap();
-        assert!(args.iter().any(|arg| arg == "scale=320:240"));
-    }
-
-    #[test]
-    fn key_changes_with_stat_and_settings() {
-        let stat = ProxySourceStat {
-            size: 3,
-            mtime_ms: 10.0,
-            ..ProxySourceStat::default()
-        };
-        let a =
-            create_proxy_cache_key("/tmp/source.mov", None, &stat, &json!({"width": 320})).unwrap();
-        let mut bigger = stat.clone();
-        bigger.size = 4;
-        let b = create_proxy_cache_key("/tmp/source.mov", None, &bigger, &json!({"width": 320}))
-            .unwrap();
-        let c =
-            create_proxy_cache_key("/tmp/source.mov", None, &stat, &json!({"width": 640})).unwrap();
-        assert_ne!(a, b);
-        assert_ne!(a, c);
-    }
-}

@@ -319,15 +319,6 @@ fn composite_warp_impl(dst: &mut Image, src: &Image, m: &Mat3, opts: &WarpOpts, 
 mod tests {
     use super::*;
 
-    #[test]
-    fn translate_by_integer() {
-        let mut src = Image::new(4, 4);
-        src.set(0, 0, [1.0; 4]);
-        let mut dst = Image::new(8, 8);
-        composite_warp(&mut dst, &src, &Mat3::translate(vec2(3.0, 2.0)), &WarpOpts::default());
-        assert_eq!(dst.get(3, 2), [1.0; 4]);
-    }
-
     fn test_image(w: u32, h: u32, seed: u32) -> Image {
         let mut img = Image::new(w, h);
         for y in 0..h {

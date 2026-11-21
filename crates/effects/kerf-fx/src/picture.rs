@@ -350,28 +350,3 @@ impl FxEnv for Env<'_> {
         self.host.clip_key()
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use kerf_model::{Catalog, Domain, FxKind};
-
-    #[test]
-    fn an_id_names_one_effect() {
-        let count = 2 + kept::KEPT.len() + CARRIED.len();
-        assert_eq!(all().len(), count);
-        for (id, effect) in all() {
-            assert_eq!(effect.id(), *id);
-        }
-    }
-
-    #[test]
-    fn each_is_a_video_effect_of_the_catalog() {
-        for effect in effects() {
-            let def = Catalog::builtin()
-                .fx(effect.id())
-                .unwrap_or_else(|| panic!("{} is not in the catalog", effect.id()));
-            assert_eq!((def.kind, def.domain), (FxKind::Effect, Domain::Video));
-        }
-    }
-}

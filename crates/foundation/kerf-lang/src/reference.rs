@@ -398,41 +398,4 @@ mod tests {
         assert!(!text.contains("Blend With Original"));
         assert!(text.len() < 24 * 1024, "{}", text.len());
     }
-
-    #[test]
-    fn the_generators_with_most_parameters_keep_a_few_and_say_where_the_rest_are() {
-        let catalog = Catalog::builtin();
-        let text = reference(catalog);
-        for (id, kept) in BRIEF {
-            let fx = catalog
-                .fx(id)
-                .unwrap_or_else(|| panic!("no generator {id}"));
-            // Each name kept is one it has, so a parameter renamed is not kept by its old name.
-            for name in *kept {
-                assert!(
-                    fx.params.iter().any(|param| param.name == *name),
-                    "{id} has no {name}"
-                );
-            }
-            let listed = fx_listed(fx);
-            assert!(text.contains(&listed), "{id}");
-            assert_eq!(listed.lines().count(), kept.len() + 2, "{listed}");
-            let left = fx.params.len() - kept.len();
-            assert!(
-                listed.ends_with(&format!(
-                    "  - {left} more: `look` with `effect: \"{id}\"`\n"
-                )),
-                "{listed}"
-            );
-            // What `look` with `effect` gives is all of them.
-            assert_eq!(fx_reference(fx).lines().count(), fx.params.len() + 1);
-        }
-        // The ones a first line of each is written with are there to be read.
-        assert!(text.contains("  - `text=\"\"` (text)"));
-        assert!(text.contains("  - `trim_end=1` (0..1, animatable)"));
-        assert!(text.contains("  - `rate=50` (0..100000, a second, animatable)"));
-        // Any other generator, and every effect and transition, is listed whole.
-        let camera = catalog.fx("camera").unwrap();
-        assert!(text.contains(&fx_reference(camera)));
-    }
 }

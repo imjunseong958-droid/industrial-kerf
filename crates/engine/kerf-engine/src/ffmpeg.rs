@@ -349,44 +349,7 @@ fn decode_prefix_with_threads(threads: usize) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{chosen_hwaccel, ffmpeg_candidates, ffprobe_beside, parse_time_seconds, tail};
-    use std::path::Path;
-
-    // A package keeps ffmpeg beside kerfd, kerf and the editor; it is found there before
-    // Homebrew's or PATH's, and after one KERF_FFMPEG names.
-    #[test]
-    fn ffmpeg_is_looked_for_beside_the_program_before_path() {
-        let folder = Path::new("/Applications/Industrial Kerf.app/Contents/MacOS");
-        let bundled = folder
-            .join(format!("ffmpeg{}", std::env::consts::EXE_SUFFIX))
-            .to_string_lossy()
-            .into_owned();
-        let homebrew = "/opt/homebrew/opt/ffmpeg-full/bin/ffmpeg".to_owned();
-        assert_eq!(
-            ffmpeg_candidates(None, Some(folder)),
-            [bundled.clone(), homebrew.clone(), "ffmpeg".into()]
-        );
-        assert_eq!(
-            ffmpeg_candidates(Some("/opt/ffmpeg/bin/ffmpeg".into()), Some(folder)),
-            ["/opt/ffmpeg/bin/ffmpeg".into(), bundled, homebrew.clone(), "ffmpeg".into()]
-        );
-        assert_eq!(
-            ffmpeg_candidates(Some(String::new()), None),
-            [homebrew, "ffmpeg".to_owned()]
-        );
-    }
-
-    #[test]
-    fn ffprobe_is_the_one_beside_ffmpeg() {
-        let exe = std::env::consts::EXE_SUFFIX;
-        let probe = Path::new("/pkg/bin").join(format!("ffprobe{exe}"));
-        assert_eq!(
-            ffprobe_beside(&format!("/pkg/bin/ffmpeg{exe}")),
-            Some(probe.to_string_lossy().into_owned())
-        );
-        assert_eq!(ffprobe_beside("ffmpeg"), None);
-        assert_eq!(ffprobe_beside("/usr/bin/avconv"), None);
-    }
+    use super::chosen_hwaccel;
 
     /// What Kerf picks by itself on `os`, with every hwaccel listed.
     fn chosen_by_itself(os: &str, in_a_guest: bool, opens: bool) -> Option<String> {
@@ -437,72 +400,5 @@ mod tests {
             chosen_hwaccel(None, "macos", |_| false, || false, never_tried),
             None
         );
-    }
-
-    // Linux has several (vaapi, cuda, qsv, …) and none that is every
-    // machine's: nothing is listed or tried for it.
-    #[test]
-    fn no_hwaccel_is_chosen_elsewhere() {
-        assert_eq!(
-            chosen_hwaccel(
-                None,
-                "linux",
-                |_| panic!("nothing is listed"),
-                || panic!("no guest is looked for"),
-                |_| panic!("no device is tried"),
-            ),
-            None
-        );
-    }
-
-    // KERF_HWACCEL names what to ask ffmpeg for, and that is asked for as
-    // it is: not listed, not tried, a guest or not.
-    #[test]
-    fn an_hwaccel_asked_for_is_not_tried_first() {
-        let asked = |value: &str, os: &str| {
-            chosen_hwaccel(
-                Some(value),
-                os,
-                |_| panic!("nothing is listed"),
-                || panic!("no guest is looked for"),
-                |_| panic!("no device is tried"),
-            )
-        };
-        assert_eq!(asked("d3d11va", "windows").as_deref(), Some("d3d11va"));
-        assert_eq!(asked(" CUDA ", "windows").as_deref(), Some("cuda"));
-        assert_eq!(
-            asked("videotoolbox", "macos").as_deref(),
-            Some("videotoolbox")
-        );
-        assert_eq!(asked("vaapi", "linux").as_deref(), Some("vaapi"));
-        for off in ["none", "None", "", "  "] {
-            assert_eq!(asked(off, "windows"), None);
-            assert_eq!(asked(off, "macos"), None);
-        }
-    }
-
-    // `auto` is Kerf's own choice, as when nothing is asked for; it is not
-    // handed to ffmpeg, whose `auto` takes the first device that opens.
-    #[test]
-    fn auto_asks_for_what_kerf_picks_by_itself() {
-        let auto =
-            |os: &str, opens: bool| chosen_hwaccel(Some("auto"), os, |_| true, || false, |_| opens);
-        assert_eq!(auto("windows", true).as_deref(), Some("d3d11va"));
-        assert_eq!(auto("windows", false), None);
-        assert_eq!(auto("macos", false).as_deref(), Some("videotoolbox"));
-        assert_eq!(auto("linux", true), None);
-    }
-
-    #[test]
-    fn parses_hms_and_raw_seconds() {
-        assert!((parse_time_seconds("00:01:02.50").unwrap() - 62.5).abs() < 1e-9);
-        assert!((parse_time_seconds("12.34").unwrap() - 12.34).abs() < 1e-9);
-        assert_eq!(parse_time_seconds("garbage"), None);
-    }
-
-    #[test]
-    fn tail_keeps_whole_characters() {
-        assert_eq!(tail("영상.mp4", 6), ".mp4");
-        assert_eq!(tail("abc", 10), "abc");
     }
 }

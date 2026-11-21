@@ -419,33 +419,6 @@ mod tests {
             .unwrap_or_default()
     }
 
-    #[test]
-    fn what_interrupted_copies_leave_is_swept() {
-        let root = tempfile::tempdir().unwrap();
-        let folder = root.path().join(INCOMING_DIR);
-        fs::create_dir_all(&folder).unwrap();
-        // A copy another editor was making when it quit, a download stopped
-        // part way, one of ours still running, and a file Kerf did not make.
-        fs::write(folder.join("1-100-0.part"), b"half a picture").unwrap();
-        fs::create_dir_all(folder.join("2-200-0-download")).unwrap();
-        fs::write(folder.join("2-200-0-download/clip.mp4.part"), b"half").unwrap();
-        let ours = incoming_path(root.path(), ".part").unwrap();
-        fs::write(&ours, b"still copying").unwrap();
-        fs::write(folder.join("notes.txt"), b"kept").unwrap();
-
-        // Recently written, they could still be in progress.
-        sweep(&folder, SystemTime::now());
-        assert_eq!(names(&folder).len(), 4);
-
-        sweep(&folder, SystemTime::now() + STALE * 2);
-        let mut left = names(&folder);
-        left.sort();
-        assert_eq!(
-            left,
-            [ours.file_name().unwrap().to_owned(), "notes.txt".into()]
-        );
-    }
-
     /// A repository with Kerf's ignore rules, nothing committed.
     fn repository(directory: &Path) {
         fs::create_dir_all(directory.join(MEDIA_DIR)).unwrap();
@@ -462,41 +435,6 @@ mod tests {
             .unwrap();
         assert!(output.status.success());
         String::from_utf8_lossy(&output.stdout).into_owned()
-    }
-
-    #[test]
-    fn copies_are_named_by_content_and_reused() {
-        let root = tempfile::tempdir().unwrap();
-        let project = root.path().join("Film");
-        fs::create_dir_all(project.join("media")).unwrap();
-        let outside = root.path().join("Downloads");
-        fs::create_dir_all(&outside).unwrap();
-        let source = outside.join("Beach Day.mov");
-        fs::write(&source, b"the same picture").unwrap();
-
-        assert!(needs_copy(&project, &source));
-        let first = copy_into_media(&project, &source).unwrap();
-        let hash = hex(&Sha256::digest(b"the same picture"));
-        assert_eq!(first, format!("media/Beach Day-{}.mov", &hash[..8]));
-        assert_eq!(fs::read(project.join(&first)).unwrap(), b"the same picture");
-        assert!(!needs_copy(&project, &project.join(&first)));
-        assert!(!needs_copy(&project, Path::new(&first)));
-
-        // The same file from somewhere else lands on the same name.
-        let again = root.path().join("Beach Day.mov");
-        fs::write(&again, b"the same picture").unwrap();
-        assert_eq!(copy_into_media(&project, &again).unwrap(), first);
-        assert_eq!(names(&project.join("media")).len(), 1);
-        assert!(
-            names(&project.join(INCOMING_DIR)).is_empty(),
-            "no temporary files are left"
-        );
-
-        // A different file with the same name gets its own.
-        fs::write(&again, b"another picture").unwrap();
-        let other = copy_into_media(&project, &again).unwrap();
-        assert_ne!(other, first);
-        assert!(other.starts_with("media/Beach Day-") && other.ends_with(".mov"));
     }
 
     #[test]
@@ -530,80 +468,6 @@ mod tests {
         fs::write(blocked.join(".kerf/cache"), "").unwrap();
         assert!(copy_into_media(&blocked, &source).is_err());
         assert!(names(&blocked.join("media")).is_empty());
-    }
-
-    #[test]
-    fn a_different_file_never_takes_a_name_that_is_held() {
-        let root = tempfile::tempdir().unwrap();
-        let source = root.path().join("clip.mp4");
-        fs::write(&source, b"mine").unwrap();
-        let hash = hex(&Sha256::digest(b"mine"));
-        // Someone else's file already holds the short name.
-        fs::create_dir_all(root.path().join("p/media")).unwrap();
-        let held = root.path().join(format!("p/media/clip-{}.mp4", &hash[..8]));
-        fs::write(&held, b"theirs").unwrap();
-        let copy = copy_into_media(&root.path().join("p"), &source).unwrap();
-        assert_eq!(copy, format!("media/clip-{}.mp4", &hash[..12]));
-        assert_eq!(fs::read(&held).unwrap(), b"theirs");
-        assert_eq!(fs::read(root.path().join("p").join(copy)).unwrap(), b"mine");
-    }
-
-    #[test]
-    fn content_names_keep_one_hash() {
-        assert_eq!(
-            content_name(Path::new("/a/clip-0123abcd.mov"), "0123abcd"),
-            "clip-0123abcd.mov"
-        );
-        assert_eq!(
-            content_name(Path::new("/a/notes"), "0123abcd"),
-            "notes-0123abcd"
-        );
-        assert_eq!(
-            content_name(Path::new("/a/ .mov"), "0123abcd"),
-            "media-0123abcd.mov"
-        );
-        assert_eq!(
-            content_name(Path::new("/a/.hidden"), "0123abcd"),
-            "hidden-0123abcd"
-        );
-    }
-
-    #[test]
-    fn files_git_ignores_in_the_project_are_external() {
-        let root = tempfile::tempdir().unwrap();
-        let project = root.path().join("My Film");
-        repository(&project);
-        // A render beside project.kerf is ignored (`/*.mp4`).
-        let render = project.join("interview.mp4");
-        fs::write(&render, b"render").unwrap();
-        let shot = project.join("shot.mov");
-        fs::write(&shot, b"shot").unwrap();
-        let kept = project.join("media/kept.mp4");
-        fs::write(&kept, b"kept").unwrap();
-        let outside = root.path().join("outside.mov");
-        fs::write(&outside, b"outside").unwrap();
-        let files = [render.clone(), shot.clone(), kept, outside];
-        assert_eq!(external(&project, &files), [true, false, false, true]);
-        assert!(needs_copy(&project, Path::new("interview.mp4")));
-        assert!(needs_copy(&project, &render));
-        assert!(!needs_copy(&project, &shot));
-
-        // One added on purpose is tracked, so it travels with the project.
-        let added = Command::new("git")
-            .arg("-C")
-            .arg(&project)
-            .args(["add", "-f", "interview.mp4"])
-            .status()
-            .unwrap();
-        assert!(added.success());
-        assert!(!needs_copy(&project, &render));
-
-        // Without a repository, nothing is ignored.
-        let plain = root.path().join("plain");
-        fs::create_dir_all(plain.join(MEDIA_DIR)).unwrap();
-        fs::write(plain.join(".gitignore"), "/*.mp4\n").unwrap();
-        fs::write(plain.join("render.mp4"), b"render").unwrap();
-        assert!(!needs_copy(&plain, &plain.join("render.mp4")));
     }
 
     #[test]

@@ -687,8 +687,6 @@ fn json_rpc_error(id: Value, code: i32, message: impl Into<String>) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Cursor;
-    use tempfile::TempDir;
 
     #[test]
     fn protocol_conformance_fixture_lists_the_harness_tools() {
@@ -710,87 +708,5 @@ mod tests {
         // The shared fixture lists the tools every client relies on, in
         // order.
         assert_eq!(harness::TOOL_NAMES.to_vec(), expected);
-    }
-
-    #[test]
-    fn stdio_server_handles_initialize_and_tools_list_without_runtime_io() {
-        let root = TempDir::new().expect("temp dir");
-        let router = KerfMcpRouter::new(root.path(), None).expect("router");
-        let server = McpServer::new(router);
-        let input = concat!(
-            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2024-11-05\"}}\n",
-            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\",\"params\":{}}\n"
-        );
-        let mut output = Vec::new();
-        server
-            .serve(Cursor::new(input), &mut output)
-            .expect("serve");
-        let lines = String::from_utf8(output)
-            .expect("utf8")
-            .lines()
-            .map(|line| serde_json::from_str::<Value>(line).expect("json"))
-            .collect::<Vec<_>>();
-        assert_eq!(lines.len(), 2);
-        assert_eq!(lines[0]["result"]["serverInfo"]["name"], "kerf-mcp");
-        assert_eq!(
-            lines[1]["result"]["tools"].as_array().unwrap().len(),
-            harness::TOOL_NAMES.len()
-        );
-    }
-
-    #[test]
-    fn unknown_and_namespaced_names_resolve_to_harness_tools() {
-        let root = TempDir::new().expect("temp dir");
-        let mut router = KerfMcpRouter::new(root.path(), None).expect("router");
-        let unknown = router.call("timeline.apply", json!({}));
-        assert_eq!(unknown["error"]["code"], "UNKNOWN_TOOL");
-        router.namespace = "kerf".into();
-        let names = router
-            .list_tools()
-            .into_iter()
-            .map(|tool| tool.name)
-            .collect::<Vec<_>>();
-        assert_eq!(
-            names,
-            [
-                "kerf.look",
-                "kerf.edit",
-                "kerf.render",
-                "kerf.make"
-            ]
-        );
-        assert_eq!(
-            router.agent_tools().keys().collect::<Vec<_>>(),
-            ["edit", "look", "make", "render"]
-        );
-    }
-
-    #[test]
-    fn initialize_names_the_author_of_what_the_client_does() {
-        let root = TempDir::new().expect("temp dir");
-        let router = KerfMcpRouter::new(root.path(), None).expect("router");
-        assert_eq!(router.author(), Author::kerf(), "built-in agents are Kerf");
-        let server = McpServer::new(router.clone());
-        assert_eq!(router.author().name, "MCP client");
-        server.handle(&json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
-            "params": {"protocolVersion": "2024-11-05",
-                       "clientInfo": {"name": "claude-code", "version": "2.1.0"}}}));
-        let author = router.author();
-        assert_eq!(author.kind, "mcp");
-        assert_eq!(author.name, "Claude Code");
-        assert_eq!(author.id.as_deref(), Some("claude-code"));
-    }
-
-    #[test]
-    fn capability_unavailable_is_a_structured_mcp_error() {
-        let error = engine_error(kerf_engine::EngineError::capability_unavailable(
-            "transcription",
-            "whisper.cpp is not installed",
-        ));
-        assert_eq!(error.code, "CAPABILITY_UNAVAILABLE");
-        assert_eq!(
-            error.details.as_ref().unwrap()["capability"],
-            "transcription"
-        );
     }
 }

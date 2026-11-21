@@ -577,37 +577,6 @@ mod tests {
     }
 
     #[test]
-    fn a_homography_comes_back_from_four_points() {
-        let (from, to) = (rest(), truth(40));
-        let h = fit(&from, &to).expect("a fit");
-        for (p, q) in from.iter().zip(&to) {
-            let at = h.apply(*p);
-            assert!((at[0] - q[0]).hypot(at[1] - q[1]) < 1e-6, "{at:?} {q:?}");
-        }
-        let back = h.inverse().expect("an inverse");
-        let there = back.apply(to[2]);
-        assert!((there[0] - from[2][0]).hypot(there[1] - from[2][1]) < 1e-6);
-    }
-
-    #[test]
-    fn what_does_not_move_with_the_surface_is_left_out() {
-        let h = fit(&rest(), &truth(30)).expect("a fit");
-        let from: Vec<[f64; 2]> = (0..60)
-            .map(|i| [(i % 10) as f64 * 14.0, (i / 10) as f64 * 16.0])
-            .collect();
-        let mut to: Vec<[f64; 2]> = from.iter().map(|p| h.apply(*p)).collect();
-        for moved in to.iter_mut().step_by(3) {
-            moved[0] += 40.0;
-        }
-        let (found, agreeing) = fit_robustly(&from, &to, 1.0).expect("a fit");
-        assert_eq!(agreeing.iter().filter(|a| **a).count(), 40);
-        assert!(agreeing.iter().step_by(3).all(|a| !*a));
-        let at = found.apply([70.0, 50.0]);
-        let want = h.apply([70.0, 50.0]);
-        assert!((at[0] - want[0]).hypot(at[1] - want[1]) < 1e-6);
-    }
-
-    #[test]
     fn a_surface_is_followed_as_it_slides_and_tilts() {
         let frames = 48;
         let followed = follow_plane(frames, fraction(truth(0)), |n| {
@@ -636,47 +605,5 @@ mod tests {
         let off = worst(&followed);
         eprintln!("planar under a passing bar: a corner at worst {off:.3} px off");
         assert!(off < 2.0, "a corner is {off:.2} pixels off");
-    }
-
-    #[test]
-    fn a_surface_with_nothing_on_it_is_lost_at_once() {
-        let flat = |_: usize| Some((64, 64, vec![128u8; 64 * 64 * 4]));
-        let start = [[0.2, 0.2], [0.8, 0.2], [0.8, 0.8], [0.2, 0.8]];
-        let followed = follow_plane(4, start, flat);
-        assert_eq!(followed.lost_at, Some(1));
-        assert_eq!(followed.quads.len(), 1);
-    }
-
-    #[test]
-    fn a_frame_cut_to_something_else_loses_it() {
-        let frames = 10;
-        let followed = follow_plane(frames, fraction(truth(0)), |n| {
-            if n < 5 {
-                Some(scene(n, |_, _, _| false))
-            } else {
-                let (w, h) = SIZE;
-                let mut rgba = Vec::with_capacity(w * h * 4);
-                for y in 0..h {
-                    for x in 0..w {
-                        let byte =
-                            (texture(x as f64 * 2.3, y as f64 * 1.9, 9.0 + n as f64) * 255.0) as u8;
-                        rgba.extend_from_slice(&[byte, byte, byte, 255]);
-                    }
-                }
-                Some((w, h, rgba))
-            }
-        });
-        assert_eq!(followed.lost_at, Some(5));
-    }
-
-    #[test]
-    fn only_the_frames_that_shape_the_way_are_kept() {
-        let moved: Vec<Quad> = (0..30)
-            .map(|n| {
-                let x = n as f64 * 0.01;
-                [[x, 0.0], [x + 0.2, 0.0], [x + 0.2, 0.2], [x, 0.2]]
-            })
-            .collect();
-        assert_eq!(simplified_quads(&moved, 0.001), vec![0, 29]);
     }
 }

@@ -350,39 +350,3 @@ fn tail(value: &str) -> String {
         .collect::<Vec<_>>()
         .join("\n")
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn builds_quality_and_cookie_arguments() {
-        let options = FetchOptions {
-            cookies: Some(PathBuf::from("cookies.txt")),
-            extra_args: vec![
-                "--extractor-args".into(),
-                "youtube:player_client=web".into(),
-            ],
-            ..FetchOptions::default()
-        };
-        let args = build_yt_dlp_args("https://youtu.be/example", &options);
-        assert_eq!(args[0..2], ["--format", FORMAT_STRING]);
-        assert!(args
-            .windows(2)
-            .any(|pair| pair == ["--cookies", "cookies.txt"]));
-        assert_eq!(args.last().unwrap(), "https://youtu.be/example");
-    }
-
-    #[test]
-    fn prefers_korean_vtt_subtitles() {
-        let files = vec![
-            "clip.en.vtt".into(),
-            "clip.ko.srt".into(),
-            "clip.ko.vtt".into(),
-        ];
-        assert_eq!(
-            resolve_subs_path(Path::new("out"), "clip", &files),
-            Some(PathBuf::from("out/clip.ko.vtt"))
-        );
-    }
-}

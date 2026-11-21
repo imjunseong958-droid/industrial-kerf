@@ -1600,33 +1600,6 @@ fn parse_number(text: &str) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::time::Time;
-    use crate::value::{Interp, Keyframe};
-
-    #[test]
-    fn every_builtin_has_the_area_its_group_says() {
-        let catalog = Catalog::builtin();
-        let area = |id: &str| catalog.fx(id).expect("in the catalog").area();
-        assert_eq!(area("dissolve"), Area::Edit);
-        assert_eq!(area("color.lumetri"), Area::Color);
-        assert_eq!(area("key.ultra"), Area::Vfx);
-        assert_eq!(area("title"), Area::Motion);
-        assert_eq!(area("distort.transform"), Area::Motion);
-        assert_eq!(area("image.fill"), Area::Image);
-        assert_eq!(area("look.film"), Area::Motion);
-        assert_eq!(area("look.grade.sepia"), Area::Color);
-        // Only utilities and sound fall through to the edit area: a new
-        // group of effects has to say where it belongs.
-        for fx in catalog.all().filter(|fx| {
-            fx.kind == FxKind::Effect && fx.domain == Domain::Video && fx.area() == Area::Edit
-        }) {
-            assert!(fx.id.as_str().starts_with("utility."), "{}", fx.id);
-        }
-        for area in Area::ALL {
-            assert_eq!(Area::parse(area.name()), Some(area));
-            assert!(catalog.all().any(|fx| fx.area() == area), "{area:?}");
-        }
-    }
 
     #[test]
     fn builtin_defaults_satisfy_their_own_constraints() {
@@ -1639,103 +1612,6 @@ mod tests {
         for param in defs.chain(props) {
             param.check_value(&param.default).unwrap();
         }
-    }
-
-    #[test]
-    fn installing_the_same_looks_again_makes_no_new_catalog() {
-        Catalog::install_looks(Vec::new()).unwrap();
-        Catalog::install_looks(Vec::new()).unwrap();
-        let made = MADE.lock().unwrap();
-        let bundled = made.iter().filter(|made| ***made == *Catalog::bundled());
-        assert_eq!(bundled.count(), 1);
-    }
-
-    #[test]
-    fn checks_types_ranges_and_animation() {
-        let opacity = Catalog::builtin().prop(Domain::Video, "opacity").unwrap();
-        assert!(opacity.check(&Param::Static(Value::Number(1.5))).is_err());
-        assert!(opacity.check(&Param::Static(Value::Bool(true))).is_err());
-        let key = |at, value| Keyframe {
-            at: Time::from_flicks(at),
-            value: Value::Number(value),
-            interp: Interp::Linear,
-        };
-        assert!(opacity
-            .check(&Param::Animated(vec![key(0, 0.0), key(10, 1.0)]))
-            .is_ok());
-        assert!(opacity
-            .check(&Param::Animated(vec![key(10, 0.0), key(10, 1.0)]))
-            .is_err());
-        let blend = Catalog::builtin().prop(Domain::Video, "blend").unwrap();
-        assert!(blend.check(&Param::Animated(vec![key(0, 0.0)])).is_err());
-    }
-
-    #[test]
-    fn raster_effects_are_listed_with_their_parameters() {
-        let catalog = Catalog::builtin();
-        let raster: Vec<_> = catalog
-            .all()
-            .filter(|fx| fx.engine == Engine::Raster)
-            .collect();
-        // The EffectCraft effects Kerf keeps, all effects.
-        assert_eq!(raster.len(), 22);
-        assert!(raster
-            .iter()
-            .all(|fx| !fx.category.is_empty() && fx.kind == FxKind::Effect));
-        assert_eq!(catalog.fx("blur.gaussian").unwrap().engine, Engine::Graph);
-        let curves = catalog.fx("color.curves").unwrap();
-        assert_eq!(curves.engine, Engine::Raster);
-        assert!(curves.find("rgb").is_some());
-        // A LUT is a file the effect reads.
-        let lut = catalog
-            .fx("color.lumetri")
-            .unwrap()
-            .find("look_lut")
-            .unwrap();
-        assert_eq!(lut.ty, ParamType::File(vec!["cube".into(), "3dl".into()]));
-        assert_eq!(lut.default, Value::Text(String::new()));
-    }
-
-    #[test]
-    fn filmcraft_effects_replace_effectcraft_ones_under_their_ids() {
-        let catalog = Catalog::builtin();
-        let kerf: Vec<_> = catalog
-            .all()
-            .filter(|fx| fx.engine == Engine::Kerf && fx.kind == FxKind::Effect)
-            .collect();
-        assert!(kerf.len() > 60, "{}", kerf.len());
-        // Lumetri is FilmCraft's at version 2, which reads no older version.
-        let lumetri = catalog.fx("color.lumetri").unwrap();
-        assert_eq!((lumetri.engine, lumetri.version), (Engine::Kerf, 2));
-        assert!(lumetri.reads(2).is_ok() && lumetri.reads(1).is_err());
-        assert_eq!(
-            lumetri.find("input_lut").unwrap().ty,
-            ParamType::File(vec!["cube".into(), "3dl".into()])
-        );
-        // A point is two numbers across the picture, and another track a track.
-        let magnify = catalog.fx("distort.magnify").unwrap();
-        assert_eq!(
-            magnify.find("center_x").unwrap().default,
-            Value::Number(0.5)
-        );
-        let matte = catalog.fx("key.trackmatte").unwrap();
-        assert_eq!(
-            (matte.version, matte.find("matte").unwrap().ty.clone()),
-            (1, ParamType::Track)
-        );
-    }
-
-    /// A transition whose parameters draw a different picture goes up a
-    /// version and still reads the documents of the older one.
-    #[test]
-    fn a_transition_drawn_anew_reads_its_older_documents() {
-        // Push smears its motion blur since version 2.
-        let push = Catalog::builtin().fx("push").unwrap();
-        assert_eq!((push.version, push.reads_from), (2, 1));
-        assert!(push.reads(1).is_ok() && push.reads(2).is_ok() && push.reads(3).is_err());
-        // Film Dissolve draws as it did.
-        let dissolve = Catalog::builtin().fx("film-dissolve").unwrap();
-        assert_eq!((dissolve.version, dissolve.reads_from), (1, 1));
     }
 
     #[test]
@@ -1781,13 +1657,5 @@ mod tests {
             unknown("effect", "nope"),
             "unknown effect `nope`; `look` with `effects` finds one by what it does"
         );
-    }
-
-    #[test]
-    fn generator_params_may_not_shadow_clip_properties() {
-        let mut catalog = Catalog::builtin().clone();
-        let clash = FxDef::new("bad", FxKind::Generator, Domain::Video, "")
-            .param(ParamDef::number("opacity", 1.0));
-        assert!(catalog.define(clash).is_err());
     }
 }

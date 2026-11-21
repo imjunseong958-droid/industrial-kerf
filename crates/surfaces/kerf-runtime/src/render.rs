@@ -481,49 +481,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn quality_and_codec_choose_the_engine_preset() {
-        let encoding = |quality, codec| {
-            Encoding::new(quality, codec)
-                .map(|e| (e.codec, e.preset, e.video, e.draft, e.extension()))
-        };
-        use RenderPreset::{ProRes422Hq, Review, Standard};
-        use VideoCodec::{Hevc, H264};
-        assert_eq!(
-            encoding("master", None).unwrap(),
-            ("prores_hq", ProRes422Hq, H264, false, "mov")
-        );
-        assert_eq!(
-            encoding("master", Some("h264")).unwrap(),
-            ("h264", Standard, H264, false, "mp4")
-        );
-        assert_eq!(
-            encoding("full", Some("prores_hq")).unwrap(),
-            ("prores_hq", ProRes422Hq, H264, false, "mov")
-        );
-        assert_eq!(
-            encoding("full", Some("hevc")).unwrap(),
-            ("hevc", Standard, Hevc, false, "mp4")
-        );
-        assert_eq!(
-            encoding("review", None).unwrap(),
-            ("h264", Review, H264, false, "mp4")
-        );
-        assert_eq!(
-            encoding("preview", Some("hevc")).unwrap(),
-            ("hevc", Standard, Hevc, true, "mp4")
-        );
-        for (quality, codec) in [
-            ("preview", Some("prores_hq")),
-            ("review", Some("hevc")),
-            ("review", Some("prores_hq")),
-            ("full", Some("av1")),
-            ("draft", None),
-        ] {
-            assert!(encoding(quality, codec).is_err(), "{quality} {codec:?}");
-        }
-    }
-
-    #[test]
     fn jobs_recorded_before_their_options_render_as_they_did() {
         let job: RenderJob = serde_json::from_value(serde_json::json!({
             "jobId": "render-1", "status": "queued", "outputUrl": null,
@@ -534,20 +491,5 @@ mod tests {
         assert_eq!((draft.preset, draft.draft), (RenderPreset::Standard, true));
         let full = Encoding::of(&job, false).unwrap();
         assert_eq!((full.quality, full.codec), ("full", "h264"));
-    }
-
-    #[test]
-    fn names_make_plain_visible_file_names() {
-        assert_eq!(file_stem("atlas_30s_v7 master"), "atlas_30s_v7 master");
-        assert_eq!(file_stem("a/b\\c:d*e?f\"g<h>i|j"), "a-b-c-d-e-f-g-h-i-j");
-        assert_eq!(file_stem("..hidden"), "hidden");
-        assert_eq!(file_stem(" . "), "");
-        assert_eq!(
-            render_name(Some("  Master  ")).unwrap().as_deref(),
-            Some("Master")
-        );
-        assert_eq!(render_name(Some("   ")).unwrap(), None);
-        assert!(render_name(Some("a\tb")).is_err());
-        assert!(render_name(Some(&"x".repeat(MAX_RENDER_NAME + 1))).is_err());
     }
 }

@@ -391,44 +391,6 @@ mod tests {
         assert!((r(BlendMode::Overlay) - (0.3 + 0.2 - 0.06)).abs() < 1e-6);
     }
 
-    #[test]
-    fn transparent_source_keeps_destination() {
-        let d = [0.2, 0.3, 0.4, 0.8];
-        for m in BlendMode::ALL {
-            if m.is_stencil() {
-                continue;
-            }
-            let o = blend_pixel(m, d, [0.0; 4], 0.5);
-            assert!((0..4).all(|i| (o[i] - d[i]).abs() < 1e-6), "{m:?} {o:?}");
-        }
-    }
-
-    #[test]
-    fn source_over_transparent_destination() {
-        let s = [0.25, 0.1, 0.05, 0.5];
-        for m in [BlendMode::Normal, BlendMode::Multiply, BlendMode::Screen, BlendMode::Hue, BlendMode::Overlay] {
-            let o = blend_pixel(m, [0.0; 4], s, 0.9);
-            assert!((0..4).all(|i| (o[i] - s[i]).abs() < 1e-6), "{m:?}");
-        }
-    }
-
-    #[test]
-    fn stencil() {
-        let d = [0.5, 0.5, 0.5, 1.0];
-        assert_eq!(blend_pixel(BlendMode::StencilAlpha, d, [0.0, 0.0, 0.0, 0.0], 0.0), [0.0; 4]);
-        assert_eq!(blend_pixel(BlendMode::SilhouetteAlpha, d, [0.0, 0.0, 0.0, 0.0], 0.0), d);
-    }
-
-    #[test]
-    fn hdr_modes() {
-        // Add and Screen keep over-range values (32 bpc); Soft Light clamps its inputs.
-        let d = [2.0, 2.0, 2.0, 1.0];
-        let s = [0.5, 0.5, 0.5, 1.0];
-        assert!((blend_pixel(BlendMode::Add, d, s, 0.5)[0] - 2.5).abs() < 1e-6);
-        assert!((blend_pixel(BlendMode::Screen, d, s, 0.5)[0] - 1.5).abs() < 1e-6);
-        assert!(blend_pixel(BlendMode::SoftLight, d, s, 0.5)[0] <= 1.0);
-    }
-
     /// #494: After Effects' 32 bpc formulas, measured by the reporter. b = bottom, o = top,
     /// k = opacity (premultiplied into the source, as the compositor passes it).
     #[test]

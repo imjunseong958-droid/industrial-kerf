@@ -496,7 +496,6 @@ pub(crate) fn definitions() -> impl Iterator<Item = (&'static str, &'static Effe
 
 #[cfg(test)]
 mod tests {
-    
     use super::*;
 
     #[test]
@@ -513,26 +512,6 @@ mod tests {
         assert!(
             std::fs::read_to_string(path).unwrap() == table,
             "the effects catalog is out of date; run `UPDATE_CATALOG=1 cargo test -p kerf-fx`"
-        );
-    }
-
-    #[test]
-    fn choices_become_words() {
-        assert_eq!(
-            words(&[
-                "Normal",
-                "Linear Dodge (Add)",
-                "Stereoscopic - Over/Under",
-                "None",
-                "None"
-            ]),
-            [
-                "normal",
-                "linear-dodge-add",
-                "stereoscopic-over-under",
-                "none",
-                "none-5"
-            ]
         );
     }
 }

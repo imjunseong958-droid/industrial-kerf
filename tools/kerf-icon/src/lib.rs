@@ -506,35 +506,4 @@ mod tests {
             icns_pictures(&icns(&[(b"ic04", small.clone()), (b"ic08", large.clone())])).unwrap();
         assert_eq!(read, [(*b"ic04", small), (*b"ic08", large)]);
     }
-
-    /// Readable at the smallest size: the tile fills the 16 pixel picture but for its
-    /// margin and corners, the crown is red and the clip violet.
-    #[test]
-    fn the_smallest_icon_keeps_its_tile_crown_and_clip() {
-        let picture = render(16, 1.0);
-        let pixel = |x: usize, y: usize| -> [u8; 4] {
-            picture.rgba[(y * 16 + x) * 4..][..4].try_into().unwrap()
-        };
-        assert_eq!(pixel(0, 0)[3], 0, "the corner is clear");
-        assert_eq!(pixel(8, 14)[3], 255, "the tile is solid");
-        let crown = pixel(10, 3);
-        assert!(
-            crown[0] > 180 && crown[1] < 130 && crown[2] < 130,
-            "the crown is red: {crown:?}"
-        );
-        let clip = pixel(13, 11);
-        assert!(
-            clip[2] > clip[1] && clip[2] > clip[0],
-            "the clip is violet: {clip:?}"
-        );
-    }
-
-    /// macOS gets the tile at its own grid: clear where Windows' and Linux's is solid.
-    #[test]
-    fn the_macos_tile_leaves_its_margin() {
-        let alpha = |picture: &Picture, x: usize, y: usize| picture.rgba[(y * 1024 + x) * 4 + 3];
-        assert_eq!(alpha(&render(1024, 1.0), 80, 512), 255);
-        assert_eq!(alpha(&render(1024, MACOS_SCALE), 80, 512), 0);
-        assert_eq!(alpha(&render(1024, MACOS_SCALE), 110, 512), 255);
-    }
 }

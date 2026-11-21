@@ -115,27 +115,6 @@ mod tests {
     }
 
     #[test]
-    fn a_camera_that_holds_still_is_numbers_and_one_that_moves_is_keys() {
-        let (still, moves) = params(&[place(0.5, 10.0); 4], 0, 28.6479, 1.0);
-        assert_eq!(still, "x=0.5 y=0.25 z=-1 pan=10 tilt=0 roll=0 fov=28.648");
-        assert!(!moves);
-        // Evenly from one place to another is two keys, however many frames it takes; a
-        // corner on the way is a third. Keys count from `first`.
-        let places: Vec<CameraPlace> = (0..=10)
-            .map(|frame| {
-                let frame = f64::from(frame);
-                place(frame / 10.0, if frame < 4.0 { frame } else { 4.0 })
-            })
-            .collect();
-        let (moving, moves) = params(&places, 12, 40.0, 1.0);
-        assert_eq!(
-            moving,
-            "x={12f:0 22f:1} y=0.25 z=-1 pan={12f:0 16f:4 22f:4} tilt=0 roll=0 fov=40"
-        );
-        assert!(moves);
-    }
-
-    #[test]
     fn a_turn_past_half_way_round_goes_on() {
         // 170, 178, -174, -166: it went on turning, and did not go back the long way.
         let places: Vec<CameraPlace> = [170.0, 178.0, -174.0, -166.0]

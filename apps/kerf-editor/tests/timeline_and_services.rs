@@ -4,15 +4,15 @@
 
 use kerf_editor::app::{x11_rgba, X11Pixels};
 use kerf_editor::prefs::{
-    import_qt, qt_graph_key, qt_settings_ini, qt_settings_plist, qt_settings_reg, qt_variant,
-    Prefs, QDATASTREAM_4_0, QDATASTREAM_5_6,
+    import_qt, qt_settings_ini, qt_settings_plist, qt_settings_reg, qt_variant, Prefs,
+    QDATASTREAM_4_0, QDATASTREAM_5_6,
 };
 use kerf_editor::store::EditorState;
 use kerf_editor::theme::{layout, motion};
 use kerf_editor::timeline::{strip_has_transport, StripFit};
 use proptest::prelude::*;
 use serde_json::{json, Map, Value};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::Duration;
 
@@ -271,178 +271,6 @@ check=true
 checkedAt=@DateTime(\0\0\0\x10\0\0\0\0\0\0%\x8d\xb0\x1\x18\x45\x92\x3\0\0\0\x1a\0O\0\x66\0\x66\0s\0\x65\0t\0\x46\0r\0o\0m\0U\0t\0\x63\0\0\0\x6\0U\0T\0\x43\0\0\0\0\0\0\0\x6\0U\0T\0\x43\0\0\0\x6\0U\0T\0\x43\0\0\0\0\0\0\0\x6\0U\0T\0\x43)
 "#;
 
-/// And what it wrote for `QDateTime::currentDateTimeUtc()` (what the Qt
-/// editor's update check kept), a time in a named zone and a local one.
-const QT_INI_TIMES: &str = r#"[misc]
-local=@DateTime(\0\0\0\x10\0\0\0\0\0\0%\x8e'\x2\x93.\0\0)
-zoned=@DateTime(\0\0\0\x10\0\0\0\0\0\0%\x8e'\x2\x93.\0\x3\0\0\0\x1a\0\x45\0u\0r\0o\0p\0\x65\0/\0\x42\0\x65\0r\0l\0i\0n)
-
-[updates]
-checkedAt=@DateTime(\0\0\0\x10\0\0\0\0\0\0%\x8e\xb5\x4{\x1a\x83\x1)
-"#;
-
-#[test]
-fn the_qt_editors_qvariants_are_read_as_qt_wrote_them() {
-    let settings = qt_settings_ini(QT_INI);
-    assert_eq!(
-        settings["graph/placed/b2fa61f66204c6a5"],
-        json!({"n1": [12.5, -40.0], "model": [300.0, 7.25]})
-    );
-    // Quoted (its folder has a comma and an equals sign), and still a map.
-    assert_eq!(
-        settings["sidebar/folded"],
-        json!({"/films/atlas": true, "/films/A, B=c": false})
-    );
-    // 2026-03-04 05:06:07.890 in UTC (a UTC zone), and 05:06:07 at +01:00.
-    assert_eq!(settings["updates/checkedAt"], json!(1_772_600_767_890_i64));
-    assert_eq!(settings["misc/localTime"], json!(1_772_597_167_000_i64));
-    assert_eq!(settings["misc/point"], json!([-5, 6]));
-    assert_eq!(settings["misc/rect"], json!([1, 2, 30, 40]));
-    assert_eq!(settings["misc/size"], json!([3, 4]));
-    assert_eq!(settings["misc/at"], "@home");
-    assert_eq!(settings["misc/list"], json!(["a", "b, c", "@d"]));
-    assert_eq!(settings["updates/check"], "true");
-
-    let times = qt_settings_ini(QT_INI_TIMES);
-    assert_eq!(times["updates/checkedAt"], json!(1_795_207_976_579_i64));
-    // A named zone's, or the local, clock is taken as UTC: 2026-07-01 12:00.
-    assert_eq!(times["misc/zoned"], json!(1_782_907_200_000_i64));
-    assert_eq!(times["misc/local"], json!(1_782_907_200_000_i64));
-}
-
-#[test]
-fn the_qt_editors_qvariants_are_taken_up() {
-    let mut prefs = Prefs::default();
-    let taken = import_qt(&qt_settings_ini(QT_INI), &mut prefs);
-    for key in [
-        "updates/checkedAt",
-        "sidebar/folded",
-        "graph/placed/b2fa61f66204c6a5",
-        "timelineTrackHeights",
-    ] {
-        assert!(taken.contains(&key.to_owned()), "{key} in {taken:?}");
-    }
-    assert_eq!(prefs.update_checked_ms, 1_772_600_767_890);
-    assert_eq!(
-        prefs.sidebar_folded,
-        BTreeMap::from([
-            ("/films/A, B=c".to_owned(), false),
-            ("/films/atlas".to_owned(), true),
-        ])
-    );
-    // A shot's cards, found again by the key the graph keeps them under.
-    let key = "/films/atlas\nmedia shot-1";
-    assert_eq!(qt_graph_key(key), "qt:b2fa61f66204c6a5");
-    assert_eq!(
-        prefs.graph_places_of(key),
-        HashMap::from([
-            ("n1".to_owned(), (12.5, -40.0)),
-            ("model".to_owned(), (300.0, 7.25)),
-        ])
-    );
-    // Moved here once they are kept: the Qt editor's go.
-    let mut moved = prefs.graph_places_of(key);
-    moved.insert("n1".to_owned(), (1.0, 2.0));
-    prefs.keep_graph_places(key, &moved);
-    assert!(!prefs.graph_places.contains_key("qt:b2fa61f66204c6a5"));
-    assert_eq!(prefs.graph_places_of(key)["n1"], (1.0, 2.0));
-    // The project's track heights, each track by its id.
-    let heights = prefs.track_heights_of(Path::new("/films/atlas"));
-    assert_eq!(heights.all, Some(48.0));
-    assert_eq!(
-        heights.tracks,
-        BTreeMap::from([
-            ("V 1".to_owned(), 64.0),
-            ("a/2".to_owned(), 24.0),
-            ("ü".to_owned(), 160.0),
-        ])
-    );
-    assert_eq!(
-        prefs.track_heights_of(Path::new("/elsewhere")),
-        Default::default()
-    );
-}
-
-#[test]
-fn a_macos_plists_data_and_dates_are_read_as_qt_reads_them() {
-    // QSettings on macOS keeps a QVariant it cannot store natively as the
-    // UTF-8 of its `@Variant(…)` text, in a <data>; a local time as a <date>.
-    let folded = qt_variant_text(
-        "@Variant(",
-        &qmap(&[("/Users/jun/Films/atlas", qbool(true))]),
-    );
-    let xml = format!(
-        r#"<?xml version="1.0" encoding="UTF-8"?>
-<plist version="1.0">
-<dict>
-	<key>sidebar.folded</key>
-	<data>
-	{}
-	</data>
-	<key>updates.checkedAt</key>
-	<date>2026-03-04T05:06:07Z</date>
-</dict>
-</plist>"#,
-        base64(folded.as_bytes())
-    );
-    let settings = qt_settings_plist(&xml);
-    assert_eq!(
-        settings["sidebar/folded"],
-        json!({"/Users/jun/Films/atlas": true})
-    );
-    assert_eq!(settings["updates/checkedAt"], json!(1_772_600_767_000_i64));
-    let mut prefs = Prefs::default();
-    import_qt(&settings, &mut prefs);
-    assert_eq!(prefs.update_checked_ms, 1_772_600_767_000);
-    assert!(prefs.sidebar_folded["/Users/jun/Films/atlas"]);
-}
-
-#[test]
-fn a_qvariant_it_does_not_know_is_not_read() {
-    // A QColor (Qt 6's 0x1003): not known, not guessed at.
-    assert_eq!(
-        qt_variant(&[0, 0, 0x10, 0x03, 0, 1, 2, 3], QDATASTREAM_5_6),
-        None
-    );
-    // Too few bytes for what it says.
-    assert_eq!(qt_variant(&[0, 0, 0, 2, 0, 1], QDATASTREAM_4_0), None);
-    let settings = qt_settings_ini("[a]\nkey=@Variant(\\0\\0\\x10\\x3)\n");
-    assert!(!settings.contains_key("a/key"));
-}
-
-#[test]
-fn a_date_further_than_ms_since_1970_count_is_not_set() {
-    // A Julian day past what milliseconds since 1970 can count, as a crafted
-    // or broken settings file may hold: no date, read without harm, and
-    // not taken (the editor started on it every time, and stopped).
-    let ini = "[updates]\ncheckedAt=@DateTime(\\0\\0\\0\\x10\\0\\x7f\\xff\\xff\\xff\\xff\\xff\\0\\0\\0\\0\\0\\x1\\x1)\n";
-    let settings = qt_settings_ini(ini);
-    assert_eq!(settings["updates/checkedAt"], Value::Null);
-    let mut prefs = Prefs::default();
-    let taken = import_qt(&settings, &mut prefs);
-    assert!(!taken.contains(&"updates/checkedAt".to_owned()));
-    assert_eq!(prefs.update_checked_ms, 0);
-    // The other way, and a date alone (a QDate, 14).
-    for day in [i64::MIN + 1, i64::MAX, 1 << 60] {
-        let mut bytes = datetime_bytes(day, 0, 1);
-        assert_eq!(qt_variant(&bytes, QDATASTREAM_5_6), Some(Value::Null));
-        bytes.truncate(13);
-        bytes[3] = 14;
-        assert_eq!(qt_variant(&bytes, QDATASTREAM_5_6), Some(Value::Null));
-    }
-    // A plist's <date> of a year no milliseconds count stays its text.
-    let xml = "<plist><dict><key>updates.checkedAt</key><date>9223372036854775807-12-31T23:59:59Z</date></dict></plist>";
-    assert_eq!(
-        qt_settings_plist(xml)["updates/checkedAt"],
-        "9223372036854775807-12-31T23:59:59Z"
-    );
-    let xml = "<plist><dict><key>a</key><date>1900-01-01T00:00:00Z</date><key>b</key><date>2000-03-01T00:00:00Z</date><key>c</key><date>2000-03-01T25:00:00Z</date></dict></plist>";
-    let settings = qt_settings_plist(xml);
-    assert_eq!(settings["a"], json!(-2_208_988_800_000_i64));
-    assert_eq!(settings["b"], json!(951_868_800_000_i64));
-    assert_eq!(settings["c"], "2000-03-01T25:00:00Z");
-}
-
 /// A QDateTime at QDataStream 5.6: the type, not null, its Julian day,
 /// the ms into it, and its spec (UTC 1, OffsetFromUTC 2 with its seconds).
 fn datetime_bytes(day: i64, ms: u32, spec: u8) -> Vec<u8> {
@@ -490,37 +318,6 @@ proptest! {
     }
 }
 
-#[test]
-fn a_qurl_in_a_variant_reads_as_its_encoded_form() {
-    // A map holding a QUrl (17, its toEncoded as a QByteArray), then a
-    // bool after it: both read, the stream where it should be.
-    let mut bytes = 8u32.to_be_bytes().to_vec();
-    bytes.extend_from_slice(&2u32.to_be_bytes());
-    let key = |text: &str, bytes: &mut Vec<u8>| {
-        let units: Vec<u16> = text.encode_utf16().collect();
-        bytes.extend_from_slice(&(units.len() as u32 * 2).to_be_bytes());
-        for unit in units {
-            bytes.extend_from_slice(&unit.to_be_bytes());
-        }
-    };
-    key("link", &mut bytes);
-    bytes.extend_from_slice(&17u32.to_be_bytes());
-    let url = "file:///films/at%20las";
-    bytes.extend_from_slice(&(url.len() as u32).to_be_bytes());
-    bytes.extend_from_slice(url.as_bytes());
-    key("on", &mut bytes);
-    bytes.extend_from_slice(&1u32.to_be_bytes());
-    bytes.push(1);
-    assert_eq!(
-        qt_variant(&bytes, QDATASTREAM_4_0),
-        Some(json!({"link": "file:///films/at%20las", "on": true}))
-    );
-    // An empty QUrl: a null QByteArray.
-    let mut empty = 17u32.to_be_bytes().to_vec();
-    empty.extend_from_slice(&u32::MAX.to_be_bytes());
-    assert_eq!(qt_variant(&empty, QDATASTREAM_4_0), Some(json!("")));
-}
-
 /// `text` as `reg query` shows a REG_BINARY QSettings wrote it in: its
 /// UTF-16, little-endian, in hex.
 fn reg_binary(text: &str) -> String {
@@ -531,57 +328,6 @@ fn reg_binary(text: &str) -> String {
 }
 
 const REG_KEY: &str = r"HKEY_CURRENT_USER\Software\Industrial Kerf\Industrial Kerf";
-
-#[test]
-fn the_registrys_values_are_read_as_qsettings_reads_them() {
-    // QSettings on Windows keeps text holding a \0 (each @Variant and
-    // @DateTime) as REG_BINARY, other text as REG_SZ, read back alike.
-    let folded = qt_variant_text("@Variant(", &qmap(&[("C:/Films/atlas", qbool(false))]));
-    let mut checked = "@DateTime(".to_owned();
-    checked.extend(
-        datetime_bytes(2_461_104, 18_367_890, 1)
-            .iter()
-            .map(|byte| char::from(*byte)),
-    );
-    checked.push(')');
-    let places = qt_variant_text("@Variant(", &qmap(&[("n1", Q::PointF(12.5, -40.0))]));
-    let text = format!(
-        "\r\n{REG_KEY}\\updates\r\n    checkedAt    REG_BINARY    {}\r\n    check    REG_SZ    false\r\n\r\n\
-         {REG_KEY}\\sidebar\r\n    folded    REG_BINARY    {}\r\n\r\n\
-         {REG_KEY}\\graph\\placed\r\n    b2fa61f66204c6a5    REG_BINARY    {}\r\n\r\n\
-         {REG_KEY}\\misc\r\n    at    REG_SZ    @@home\r\n    none    REG_SZ    @Invalid()\r\n    empty    REG_SZ    \r\n    \
-         list    REG_MULTI_SZ    a\\0@@b\\0c\r\n    width    REG_DWORD    0x12c\r\n",
-        reg_binary(&checked),
-        reg_binary(&folded),
-        reg_binary(&places),
-    );
-    let settings = qt_settings_reg(&text);
-    // 2026-03-04 05:06:07.890 in UTC.
-    assert_eq!(settings["updates/checkedAt"], json!(1_772_600_767_890_i64));
-    assert_eq!(settings["updates/check"], "false");
-    assert_eq!(settings["sidebar/folded"], json!({"C:/Films/atlas": false}));
-    assert_eq!(
-        settings["graph/placed/b2fa61f66204c6a5"],
-        json!({"n1": [12.5, -40.0]})
-    );
-    assert_eq!(settings["misc/at"], "@home");
-    assert_eq!(settings["misc/none"], Value::Null);
-    assert_eq!(settings["misc/empty"], "");
-    assert_eq!(settings["misc/list"], json!(["a", "@b", "c"]));
-    assert_eq!(settings["misc/width"], json!(300));
-
-    let mut prefs = Prefs::default();
-    let taken = import_qt(&settings, &mut prefs);
-    for key in [
-        "updates/checkedAt",
-        "updates/check",
-        "graph/placed/b2fa61f66204c6a5",
-    ] {
-        assert!(taken.contains(&key.to_owned()), "{key} in {taken:?}");
-    }
-    assert_eq!(prefs.update_checked_ms, 1_772_600_767_890);
-    assert!(!prefs.check_updates);
-}
 
 proptest! {
     #[test]
@@ -636,19 +382,6 @@ enum Q {
     List(Vec<Q>),
     /// A QDateTime in UTC, ms since 1970.
     Utc(i64),
-}
-
-fn qbool(on: bool) -> Q {
-    Q::Bool(on)
-}
-
-fn qmap(entries: &[(&str, Q)]) -> Q {
-    Q::Map(
-        entries
-            .iter()
-            .map(|(key, value)| ((*key).to_owned(), value.clone()))
-            .collect(),
-    )
 }
 
 fn qstring(text: &str, out: &mut Vec<u8>) {

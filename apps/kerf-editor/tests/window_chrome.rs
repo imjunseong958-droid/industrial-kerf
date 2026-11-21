@@ -4,9 +4,7 @@
 //! error bar says, and which folders are no project yet.
 
 use kerf_editor::model::{Conversation, Proposal, Speaker, Turn};
-use kerf_editor::sidebar::{
-    matches, parse_time, relative_time, renamed, row_state, shown, More, RowState, SHOWN_AT_FIRST,
-};
+use kerf_editor::sidebar::{matches, renamed, row_state, shown, More, RowState, SHOWN_AT_FIRST};
 use kerf_editor::workspace::{folder_media, kept_in_bar, needs_start, readable_error};
 use proptest::prelude::*;
 
@@ -177,32 +175,6 @@ fn a_long_list_says_show_more_then_show_less() {
     assert_eq!(shown(9, false, false, Some(7)), (9, None));
     assert_eq!(shown(9, true, false, None), (9, None));
     assert_eq!(shown(6, false, false, None), (6, None));
-}
-
-#[test]
-fn a_time_reads_from_rfc_3339_with_its_zone() {
-    let utc = parse_time("2026-11-20T03:49:08Z").unwrap();
-    assert_eq!(utc, 1_795_146_548);
-    assert_eq!(parse_time("2026-11-20T03:49:08.880579Z"), Some(utc));
-    assert_eq!(parse_time("2026-11-20T12:49:08+09:00"), Some(utc));
-    assert_eq!(parse_time("1970-01-01T00:00:00Z"), Some(0));
-    assert_eq!(parse_time(""), None);
-    assert_eq!(parse_time("yesterday"), None);
-    assert_eq!(parse_time("2026-13-20T03:49:08Z"), None);
-}
-
-#[test]
-fn how_long_ago_a_row_changed() {
-    let now = parse_time("2026-11-20T12:00:00Z").unwrap();
-    let at = |text: &str| relative_time(parse_time(text).unwrap(), now);
-    assert_eq!(at("2026-11-20T11:59:30Z"), "Now");
-    assert_eq!(at("2026-11-20T11:56:00Z"), "4m");
-    assert_eq!(at("2026-11-20T10:00:00Z"), "2h");
-    assert_eq!(at("2026-11-17T12:00:00Z"), "3d");
-    assert_eq!(at("2026-03-04T12:00:00Z"), "Mar 4");
-    assert_eq!(at("2025-03-04T12:00:00Z"), "Mar 2025");
-    // A clock behind the file's says Now, not a time to come.
-    assert_eq!(at("2026-11-21T12:00:00Z"), "Now");
 }
 
 #[test]

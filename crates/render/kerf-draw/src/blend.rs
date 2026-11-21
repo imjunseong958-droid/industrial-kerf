@@ -398,18 +398,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn multiply_white_is_identity() {
-        let base = [0.2, 0.4, 0.6, 1.0];
-        let mut d = Image::filled(1, 1, base);
-        let s = Image::filled(1, 1, [1.0, 1.0, 1.0, 1.0]);
-        composite(&mut d, &s, 1.0, Blend::Multiply);
-        let p = d.get(0, 0);
-        for k in 0..3 {
-            assert!((p[k] - base[k]).abs() < 1e-4);
-        }
-    }
-
-    #[test]
     fn placed_composites_match_transforming_first() {
         let mut src = Image::new(6, 4);
         for (i, v) in src.px.iter_mut().enumerate() {

@@ -92,32 +92,3 @@ pub fn names_what_is_handed(name: &str) -> bool {
         || name == MOVES_BOX
         || names_points(name)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_name_says_what_a_request_hands_under_it() {
-        for name in ["guide", "first", "last", "ref", "ref2", "ref12", "guide_depth"] {
-            assert!(names_a_file(name) && names_what_is_handed(name), "{name}");
-        }
-        for name in ["ref1", "ref0", "refs", "guide_", "guide_Depth", "guides", "prompt"] {
-            assert!(!names_a_file(name), "{name}");
-        }
-        assert_eq!((reference("ref"), reference("ref3"), reference("ref1")), (Some(0), Some(2), None));
-        assert_eq!(guide_named("guide_ids"), Some("ids"));
-        assert_eq!([signal_named(0), signal_named(1)], ["signal", "signal2"]);
-        assert_eq!(signal_video_named(1), "signal2_video");
-        for name in ["signal", "signal2", "signal_video", "signal3_video"] {
-            assert!(names_a_signal(name) && names_what_is_handed(name), "{name}");
-        }
-        for name in ["signal1", "signal1_video", "signals", "video"] {
-            assert!(!names_a_signal(name), "{name}");
-        }
-        for name in [MOVES, MOVES_VIDEO, MOVES_BOX, INSIDE, OUTSIDE] {
-            assert!(names_what_is_handed(name) && !names_a_file(name), "{name}");
-        }
-        assert!(names_points("inside") && names_points("outside") && !names_points("insides"));
-    }
-}

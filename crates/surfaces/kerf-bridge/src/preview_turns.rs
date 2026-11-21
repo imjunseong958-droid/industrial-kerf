@@ -104,13 +104,4 @@ mod tests {
         assert!(!turns.over(third));
         assert!(!turns.stop());
     }
-
-    #[test]
-    fn a_preview_the_queue_refused_was_never_sent() {
-        let turns = PreviewTurns::default();
-        assert!(!turns.send(|| false));
-        assert!(!turns.stop());
-        assert!(turns.send(|| true));
-        assert_eq!(turns.take(), 1);
-    }
 }

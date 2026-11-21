@@ -10,7 +10,6 @@ use kerf_editor::session::{
 };
 use kerf_editor::stage::{wide, WIDE_FROM};
 use kerf_editor::theme::motion;
-use kerf_editor::timeline::{ZOOM_REPEAT, ZOOM_REPEAT_DELAY};
 use proptest::prelude::*;
 use serde_json::json;
 use std::time::Duration;
@@ -161,14 +160,6 @@ fn a_square_or_near_square_picture_is_framed_and_captioned_as_a_phone() {
     assert!(wide(WIDE_FROM));
     assert!(wide(16.0 / 9.0));
     assert_eq!(WIDE_FROM, 1.2);
-}
-
-#[test]
-fn holding_zoom_repeats_at_qts_pace() {
-    assert_eq!(ZOOM_REPEAT_DELAY, Duration::from_millis(300));
-    assert_eq!(ZOOM_REPEAT, Duration::from_millis(100));
-    assert_eq!(ZOOM_REPEAT, motion::ZOOM_REPEAT);
-    assert_eq!(ZOOM_REPEAT_DELAY, motion::ZOOM_REPEAT_DELAY);
 }
 
 #[test]

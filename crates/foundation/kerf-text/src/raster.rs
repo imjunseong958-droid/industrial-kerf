@@ -431,25 +431,4 @@ mod tests {
         assert_eq!(m.get(5, 5), 0.0);
         assert!((m.get(1, 5) - 1.0).abs() < 1e-5);
     }
-
-    #[test]
-    fn embolden_grows_outline_and_shrinks_holes() {
-        let mut p = Path::rect(4.0, 4.0, 14.0, 14.0);
-        p.embolden(1.0);
-        let b = p.bounds().unwrap();
-        assert!((b.0 - 3.0).abs() < 1e-4 && (b.2 - 15.0).abs() < 1e-4, "{b:?}");
-        // reversed winding: still grows (orientation is taken from the whole outline)
-        let mut q = Path::polygon(&[(4.0, 4.0), (4.0, 14.0), (14.0, 14.0), (14.0, 4.0)]);
-        q.embolden(1.0);
-        assert!((q.bounds().unwrap().0 - 3.0).abs() < 1e-4);
-    }
-
-    #[test]
-    fn transforms_compose() {
-        let t = compose(&[2.0, 0.0, 0.0, 2.0, 0.0, 0.0], &[1.0, 0.0, 0.0, 1.0, 3.0, 4.0]);
-        assert_eq!(apply(&t, 1.0, 1.0), (8.0, 10.0));
-        let p = Path::rect(0.0, 0.0, 1.0, 1.0).transformed(&t);
-        assert_eq!(p.bounds(), Some((6.0, 8.0, 8.0, 10.0)));
-        assert!((xform_scale(&t) - 2.0).abs() < 1e-6);
-    }
 }

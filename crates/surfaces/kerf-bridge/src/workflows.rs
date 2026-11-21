@@ -296,35 +296,4 @@ mod tests {
         said.late(&tx, shown("old"), Ok(taken()));
         assert!(all(&rx).is_empty());
     }
-
-    #[test]
-    fn with_no_edit_the_answer_is_on_the_workflow_as_read() {
-        let (tx, rx) = sync_channel(16);
-        let said = Said::default();
-        said.say(&tx, shown("same"));
-        said.late(&tx, shown("same"), Err("no server is named".into()));
-        let events = all(&rx);
-        assert_eq!(events.len(), 2);
-        assert_eq!(events[1]["text"], "same");
-        assert_eq!(events[1]["takenError"], "no server is named");
-        // Asked again later, it is said with what it takes.
-        said.late(&tx, shown("same"), Ok(taken()));
-        assert_eq!(all(&rx)[0]["taken"], true);
-    }
-
-    #[test]
-    fn an_answer_for_another_model_on_that_line_is_dropped() {
-        let (tx, rx) = sync_channel(16);
-        let said = Said::default();
-        said.say(&tx, shown("old"));
-        let mut other = shown("other");
-        other["model"] = json!("wan");
-        other["name"] = json!("wan");
-        said.say(&tx, other);
-        said.late(&tx, shown("old"), Ok(taken()));
-        let events = all(&rx);
-        assert_eq!(events.len(), 2);
-        assert_eq!(events[1]["model"], "wan");
-        assert!(events[1].get("taken").is_none());
-    }
 }

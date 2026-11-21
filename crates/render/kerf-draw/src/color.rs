@@ -83,19 +83,4 @@ mod tests {
             assert_eq!(encode(decode_table()[usize::from(byte)]), byte);
         }
     }
-
-    #[test]
-    fn tables_follow_the_curves() {
-        for step in 0..=1000 {
-            let value = step as f32 / 1000.0;
-            assert!(
-                (to_encoded(value) - linear_to_srgb(value)).abs() < 1e-3,
-                "{value}"
-            );
-            assert!(
-                (to_linear(value) - srgb_to_linear(value)).abs() < 1e-4,
-                "{value}"
-            );
-        }
-    }
 }

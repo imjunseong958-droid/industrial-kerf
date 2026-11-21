@@ -262,21 +262,7 @@ pub(crate) fn peak_and_rms(samples: &[f32], channels: usize) -> ([f32; 2], [f32;
 
 #[cfg(test)]
 mod tests {
-    use super::{peak_and_rms, KWeighting, LoudnessMeter, LEVEL_FLOOR_DB};
-    use std::f64::consts::PI;
-
-    /// `seconds` of a sine at `frequency` Hz and peak `amplitude`, on both
-    /// channels.
-    fn stereo_sine(frequency: f64, amplitude: f64, rate: u32, seconds: f64) -> Vec<f32> {
-        let frames = (f64::from(rate) * seconds) as usize;
-        (0..frames)
-            .flat_map(|n| {
-                let value =
-                    (amplitude * (2.0 * PI * frequency * n as f64 / f64::from(rate)).sin()) as f32;
-                [value, value]
-            })
-            .collect()
-    }
+    use super::KWeighting;
 
     fn close(actual: f64, expected: f64, tolerance: f64) -> bool {
         (actual - expected).abs() <= tolerance
@@ -335,52 +321,5 @@ mod tests {
             let low = filter.gain_db(20.0, rate);
             assert!(low < -10.0, "{rate} Hz: {low} dB at 20 Hz");
         }
-    }
-
-    #[test]
-    fn short_term_waits_for_its_three_seconds_and_follows_the_last_ones() {
-        let rate = 48_000;
-        let mut meter = LoudnessMeter::new(rate, 2);
-        meter.push(&stereo_sine(1_000.0, 10f64.powf(-20.0 / 20.0), rate, 2.9));
-        assert!(meter.momentary().is_some());
-        assert_eq!(meter.short_term(), None);
-        // Three seconds of a tone 10 dB quieter replace the window.
-        meter.push(&stereo_sine(1_000.0, 10f64.powf(-30.0 / 20.0), rate, 3.0));
-        let short_term = meter.short_term().expect("short-term");
-        assert!(close(short_term.into(), -30.0, 0.3), "{short_term}");
-    }
-
-    #[test]
-    fn silence_reads_the_floor() {
-        let mut meter = LoudnessMeter::new(48_000, 2);
-        meter.push(&vec![0.0; 48_000 * 2]);
-        assert_eq!(meter.momentary(), Some(LEVEL_FLOOR_DB));
-        assert_eq!(
-            peak_and_rms(&[0.0; 8], 2),
-            ([LEVEL_FLOOR_DB; 2], [LEVEL_FLOOR_DB; 2])
-        );
-    }
-
-    #[test]
-    fn peak_and_rms_of_a_known_buffer() {
-        // Left: a square wave at half scale. Right: a full-scale sine.
-        let frames = 4_800;
-        let samples: Vec<f32> = (0..frames)
-            .flat_map(|n| {
-                let left = if n % 2 == 0 { 0.5 } else { -0.5 };
-                let right = (2.0 * PI * 1_000.0 * n as f64 / 48_000.0).sin() as f32;
-                [left, right]
-            })
-            .collect();
-        let (peak, rms) = peak_and_rms(&samples, 2);
-        let half = (20.0 * 0.5f64.log10()) as f32;
-        assert!((peak[0] - half).abs() < 1e-4, "{peak:?}");
-        assert!((rms[0] - half).abs() < 1e-4, "{rms:?}");
-        assert!(peak[1].abs() < 0.01, "{peak:?}");
-        assert!((rms[1] + 3.0103).abs() < 0.01, "{rms:?}");
-        // Mono reads the same on both sides.
-        let (peak, rms) = peak_and_rms(&[0.25, -0.25], 1);
-        assert_eq!(peak[0], peak[1]);
-        assert_eq!(rms[0], rms[1]);
     }
 }

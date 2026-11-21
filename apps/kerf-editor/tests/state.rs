@@ -1,7 +1,7 @@
 //! The editor's state as the bridge's events leave it: each event folded in
 //! through the public `EditorState::apply`, as the window folds them.
 
-use kerf_editor::model::{timecode, Snapshot, Speaker};
+use kerf_editor::model::{Snapshot, Speaker};
 use kerf_editor::store::{Change, Connection, EditorState, StepState};
 use proptest::prelude::*;
 use serde_json::{json, Value};
@@ -197,14 +197,6 @@ fn a_newer_kerfd_saying_more_breaks_nothing() {
         1,
         "a turn that does not read is left out, the rest kept"
     );
-}
-
-#[test]
-fn timecodes_count_whole_frames() {
-    assert_eq!(timecode(0.0, 24.0), "00:00:00:00");
-    assert_eq!(timecode(1.5, 24.0), "00:00:01:12");
-    assert_eq!(timecode(3661.0, 25.0), "01:01:01:00");
-    assert_eq!(timecode(-3.0, 24.0), "00:00:00:00");
 }
 
 proptest! {

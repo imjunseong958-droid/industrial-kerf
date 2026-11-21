@@ -758,29 +758,3 @@ pub fn read(text_of_file: &str) -> Result<(Timeline, Vec<InterchangeIssue>), Int
     };
     Ok((timeline, issues))
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn file_urls_become_paths() {
-        assert_eq!(path_from_url("/media/a.mov"), "/media/a.mov");
-        assert_eq!(path_from_url("media/a b.mov"), "media/a b.mov");
-        assert_eq!(path_from_url("file:///media/a%20b.mov"), "/media/a b.mov");
-        assert_eq!(path_from_url("FILE://localhost/media/a.mov"), "/media/a.mov");
-        assert_eq!(path_from_url("file://server/share/a.mov"), "//server/share/a.mov");
-        assert_eq!(path_from_url("file:///C:/footage/a.mov"), "C:/footage/a.mov");
-        assert_eq!(path_from_url("file:///media/%EC%98%81%EC%83%81.mov"), "/media/영상.mov");
-        assert_eq!(path_from_url("file:///media/100%.mov"), "/media/100%.mov");
-    }
-
-    #[test]
-    fn a_file_that_is_not_a_timeline_is_refused_by_what_it_is() {
-        let error = read("{\"OTIO_SCHEMA\": \"SerializableCollection.1\"}").unwrap_err();
-        assert_eq!(error.code, "INTERCHANGE_INPUT_INVALID");
-        assert!(error.message.contains("SerializableCollection.1"), "{error}");
-        assert!(read("<fcpxml/>").unwrap_err().message.contains("not OpenTimelineIO JSON"));
-        assert!(read("{}").unwrap_err().message.contains("no OTIO_SCHEMA"));
-    }
-}

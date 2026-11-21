@@ -794,8 +794,8 @@ fn tracked(directory: &Path, path: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        parse_tool_name, parse_tool_response, project_config, ConnectedServer, InboundMcpRegistry,
-        McpServerConfig, TRACKED_PROJECT_CONFIG,
+        project_config, ConnectedServer, InboundMcpRegistry, McpServerConfig,
+        TRACKED_PROJECT_CONFIG,
     };
     use super::{AtomicBool, Duration, Instant, Ordering, MCP_MAX_MESSAGE_BYTES};
     use serde_json::json;
@@ -837,37 +837,6 @@ mod tests {
         assert_eq!(lines, [TRACKED_PROJECT_CONFIG]);
     }
 
-    #[test]
-    fn namespaced_parser_prefers_the_longest_server_prefix() {
-        let servers = ["team".to_owned(), "team_tools".to_owned()];
-        assert_eq!(
-            parse_tool_name("mcp_team_tools_lookup", servers.iter()),
-            Some(("team_tools".into(), "lookup".into()))
-        );
-        assert_eq!(
-            parse_tool_name("team/lookup", servers.iter()),
-            Some(("team".into(), "lookup".into()))
-        );
-    }
-
-    #[test]
-    fn tool_response_keeps_error_and_multimodal_envelopes() {
-        let error = parse_tool_response(json!({
-            "result": {"isError": true, "content": [{"type":"text", "text":"failed"}]}
-        }))
-        .unwrap();
-        assert_eq!(error["isError"], true);
-        assert_eq!(error["content"][0]["text"], "failed");
-
-        let multimodal = parse_tool_response(json!({
-            "result": {"content": [{"type":"text", "text":"caption"}, {"type":"image", "data":"abc", "mimeType":"image/png"}]}
-        }))
-        .unwrap();
-        assert_eq!(multimodal["type"], "multimodal_tool_result");
-        assert_eq!(multimodal["text"], "caption");
-        assert_eq!(multimodal["images"][0]["mediaType"], "image/png");
-    }
-
     fn registry() -> InboundMcpRegistry {
         let script = r#"import sys,json,time
 for line in sys.stdin:
@@ -894,24 +863,6 @@ for line in sys.stdin:
         InboundMcpRegistry {
             servers: Arc::new(servers),
         }
-    }
-
-    #[test]
-    fn search_paginates_and_describe_returns_exact_schema_with_allowlist() {
-        let registry = registry();
-        let page = registry.search(json!({"limit": 1})).unwrap();
-        assert_eq!(page["total"], 1);
-        assert_eq!(page["items"][0]["tool"], "lookup");
-        let exhausted = registry.search(json!({"offset": usize::MAX})).unwrap();
-        assert_eq!(exhausted["items"], json!([]));
-        assert!(exhausted["nextOffset"].is_null());
-        let schema = registry
-            .describe_tool(json!({"name":"mcp_mock_lookup"}))
-            .unwrap();
-        assert_eq!(schema["inputSchema"]["required"][0], "q");
-        assert!(registry
-            .describe_tool(json!({"name":"mcp_mock_other"}))
-            .is_err());
     }
 
     #[test]

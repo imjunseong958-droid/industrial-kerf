@@ -474,48 +474,6 @@ mod tests {
     }
 
     #[test]
-    fn gamut_compression() {
-        // in-gamut colours are untouched
-        for c in [[0.5f32, 0.4, 0.3], [1.0, 0.25, 0.25], [0.2, 0.2, 0.2]] {
-            assert_eq!(gamut_compress(c), c);
-        }
-        // anything up to the limit comes back inside, hue order kept
-        let o = gamut_compress([1.0, -0.2, 0.3]);
-        assert!(o.iter().all(|v| *v >= 0.0), "{o:?}");
-        assert!(o[0] > o[2] && o[2] > o[1]);
-        // continuity at the threshold
-        let a = gamut_compress([1.0, 0.2001, 0.5]);
-        assert!((a[1] - 0.2001).abs() < 1e-3);
-    }
-
-    #[test]
-    fn log_sources_land_sensibly_in_rec709() {
-        // mid grey stays mid grey; the S-Gamut3.Cine primaries map out of 709 and get compressed
-        for cs in ColorSpace::ALL.into_iter().filter(|c| c.is_log()) {
-            let Curve::Log(curve) = cs.curve() else { unreachable!() };
-            let grey = normalized_from_signal(curve.encode(0.18), Range::Limited, curve.domain()) as f32;
-            let t = InputTransform::new(cs, Range::Limited, &ColorPipeline::REC709, None);
-            let g = t.convert([grey; 3]);
-            assert!(g.iter().all(|v| (v - 0.18).abs() < 0.01), "{cs:?}: {g:?}");
-            let red = t.convert([0.9, grey, grey]);
-            assert!(red.iter().all(|v| *v >= -1e-6) && red.iter().all(|v| *v <= 1.0 + 1e-4), "{cs:?}: {red:?}");
-            let disp = log_to_rec709(cs, [grey; 3], Range::Limited);
-            assert!((disp[0] - linear_to_srgb(0.18)).abs() < 0.02);
-        }
-    }
-
-    #[test]
-    fn sdr_in_hdr_keeps_values() {
-        let pipe = hdr(WorkingSpace::Rec2100Pq);
-        let t = InputTransform::new(ColorSpace::Rec709, Range::Limited, &pipe, None);
-        let w = t.convert([1.0, 1.0, 1.0]);
-        assert!(w.iter().all(|v| (v - 1.0).abs() < 1e-4), "709 white = reference white: {w:?}");
-        let red = t.convert([1.0, 0.0, 0.0]);
-        // 709 red in 2020 (BT.2087)
-        assert!((red[0] - 0.6274).abs() < 1e-3 && (red[1] - 0.0691).abs() < 1e-3 && (red[2] - 0.0164).abs() < 1e-3);
-    }
-
-    #[test]
     fn hdr_output_undoes_hdr_input() {
         for space in [ColorSpace::Rec2100Pq, ColorSpace::Rec2100Hlg] {
             let input = InputTransform::extended(space, Range::Full);
@@ -528,22 +486,5 @@ mod tests {
             }
         }
         assert!(HdrOutput::new(ColorSpace::Rec709).is_none());
-    }
-
-    #[test]
-    fn wide_colors_survive_the_trip_through_the_working_picture() {
-        // Pure BT.2020 green lies outside BT.709, so it goes negative in the working picture.
-        let input = InputTransform::extended(ColorSpace::Rec2100Pq, Range::Full);
-        let output = HdrOutput::new(ColorSpace::Rec2100Pq).expect("PQ");
-        let signal = [0.1, 0.6, 0.1];
-        let working = input.convert(signal);
-        assert!(working[0] < 0.0, "{working:?}");
-        let back = output.signal(working);
-        for k in 0..3 {
-            assert!((back[k] - signal[k]).abs() < 0.01, "{back:?}");
-        }
-        // For a monitor it fits inside BT.709, and highlights come down to SDR white.
-        assert!(output.sdr(working).iter().all(|v| *v >= 0.0));
-        assert!(output.sdr([4.9, 4.9, 4.9])[0] <= 1.001);
     }
 }

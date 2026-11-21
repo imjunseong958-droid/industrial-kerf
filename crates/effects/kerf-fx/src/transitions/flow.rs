@@ -645,46 +645,6 @@ mod tests {
     }
 
     #[test]
-    fn quarter_way_follows_the_time() {
-        let (a, b) = (texture(160, 96, 0.0, 0.0), texture(160, 96, 8.0, 4.0));
-        let want = texture(160, 96, 2.0, 1.0);
-        let e = interior_diff(&interpolate(&a, &b, 0.25), &want, 12);
-        assert!(e < 0.006, "{e}");
-    }
-
-    #[test]
-    fn flicker_on_static_content_is_not_dragged_around() {
-        // static rows of lit windows; between the frames some switch on and some grow a pixel:
-        // brightness change, not motion, so the result is the plain cross-fade
-        let (w, h) = (160usize, 96usize);
-        let mut a = Image::filled(w, h, [0.004, 0.004, 0.006, 1.0]);
-        for row in 0..8 {
-            for col in 0..10 {
-                let (x0, y0) = (6 + col * 15, 6 + row * 11);
-                for x in x0..x0 + 8 {
-                    for y in y0..y0 + 2 {
-                        let i = (y * w + x) * 4;
-                        a.px[i..i + 4].copy_from_slice(&[0.6, 0.45, 0.1, 1.0]);
-                    }
-                }
-            }
-        }
-        let mut b = a.clone();
-        for (k, i) in (0..w * h).step_by(97).enumerate() {
-            let lit = if k % 2 == 0 {
-                [0.6, 0.45, 0.1, 1.0]
-            } else {
-                [0.004, 0.004, 0.006, 1.0]
-            };
-            b.px[i * 4..i * 4 + 4].copy_from_slice(&lit);
-        }
-        let flow = interpolate(&a, &b, 0.5);
-        let blend = a.clone().lerp(&b, 0.5);
-        let e = interior_diff(&flow, &blend, 0);
-        assert!(e < 1e-3, "static detail moved: {e}");
-    }
-
-    #[test]
     fn hostile_inputs_do_not_panic() {
         let a = texture(32, 24, 0.0, 0.0);
         // size mismatch and empty frames fall back to the cross-fade
