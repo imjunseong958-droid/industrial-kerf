@@ -1,0 +1,5 @@
+# One style for the repository and the editor (apps/kerf-editor): rustfmt's
+# defaults. The style edition is set here, not taken from each crate's
+# edition, so the crates on edition 2024 format as the others do and a later
+# edition change reformats nothing.
+style_edition = "2021"
