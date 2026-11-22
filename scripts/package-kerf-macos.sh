@@ -75,7 +75,7 @@ while [ "${#copies[@]}" -gt 0 ]; do
     origins=("${origins[@]:1}")
     own="$(otool -D "$copy" 2>/dev/null | tail -n +2)"
     while IFS= read -r ref; do
-        name="$(basename "$ref")"
+        library="$(basename "$ref")"
         source=""
         case "$ref" in
             /System/*|/usr/lib/*) continue ;;
@@ -89,14 +89,14 @@ while [ "${#copies[@]}" -gt 0 ]; do
             *) continue ;;
         esac
         [ -n "$source" ] && [ -e "$source" ] || { echo "$(basename "$copy") loads $ref, which is nowhere" >&2; exit 1; }
-        if [ ! -e "$frameworks/$name" ]; then
-            cp -fL "$source" "$frameworks/$name"
-            chmod 755 "$frameworks/$name"
-            install_name_tool -id "@rpath/$name" "$frameworks/$name"
-            copies+=("$frameworks/$name")
+        if [ ! -e "$frameworks/$library" ]; then
+            cp -fL "$source" "$frameworks/$library"
+            chmod 755 "$frameworks/$library"
+            install_name_tool -id "@rpath/$library" "$frameworks/$library"
+            copies+=("$frameworks/$library")
             origins+=("$source")
         fi
-        [ "$ref" = "@rpath/$name" ] || install_name_tool -change "$ref" "@rpath/$name" "$copy"
+        [ "$ref" = "@rpath/$library" ] || install_name_tool -change "$ref" "@rpath/$library" "$copy"
     done < <(otool -L "$copy" | tail -n +2 | awk '{print $1}' | grep -vxF "${own:-//}")
 done
 for executable in kerf-editor "${tools[@]}" ffmpeg ffprobe; do
