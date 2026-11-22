@@ -6,7 +6,7 @@
 //! lost, doubled, or a sample late shows. The sequence runs at 29.97 frames
 //! a second, where a frame is not a whole number of samples.
 
-use kerf_engine::ffmpeg::resolve_ffmpeg_bin;
+use kerf_engine::process::ffmpeg::resolve_ffmpeg_bin;
 use kerf_engine::render::render_sound;
 use kerf_engine::CancellationToken;
 use kerf_lang::parse_document;

@@ -32,7 +32,7 @@
 //! ([`ways`]). None of them is built: each puts cuts inside words, taking a
 //! closure or a hiss for where two words part, or finds next to no dips.
 
-use kerf_engine::derivatives::DerivativeCache;
+use kerf_engine::media::derivatives::DerivativeCache;
 use kerf_engine::{cached_media_sound, media_index, CancellationToken};
 use kerf_lang::{apply_script_with, parse_document, Breaks, Facts, Heard, Sound, Speech, Word};
 use kerf_model::{Catalog, Media};
@@ -305,7 +305,8 @@ fn pauses_before(path: &Path) -> Option<Vec<(f64, f64)>> {
         ])
         .output()
         .ok()?;
-    let pauses = kerf_engine::probe::parse_silencedetect(&String::from_utf8_lossy(&output.stderr));
+    let pauses =
+        kerf_engine::media::probe::parse_silencedetect(&String::from_utf8_lossy(&output.stderr));
     Some(
         pauses
             .into_iter()

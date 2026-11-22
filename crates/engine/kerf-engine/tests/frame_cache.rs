@@ -1,7 +1,7 @@
 //! Rendering again after a small edit: only what changed is drawn, and the file comes out the same.
 //! The only test of this file, since it sets where frames are kept for the whole process.
 
-use kerf_engine::ffmpeg::resolve_ffmpeg_bin;
+use kerf_engine::process::ffmpeg::resolve_ffmpeg_bin;
 use kerf_engine::render::{render_program, RenderOptions};
 use kerf_lang::{apply_script, parse_document};
 use kerf_model::{Catalog, Project};

@@ -1,7 +1,7 @@
 //! A take's depth held to its guide, clip by clip.
 
 use kerf_compose::{ComposeOptions, Compositor, Pass};
-use kerf_engine::follows::{Followed, Following};
+use kerf_engine::analysis::follows::{Followed, Following};
 use kerf_lang::parse_document;
 use kerf_model::{Catalog, Project, Rate};
 
@@ -54,7 +54,7 @@ fn held(guide: &Project, take: &Project) -> Followed {
     following.done()
 }
 
-fn clip<'a>(followed: &'a Followed, id: &str) -> &'a kerf_engine::follows::ClipFollowed {
+fn clip<'a>(followed: &'a Followed, id: &str) -> &'a kerf_engine::analysis::follows::ClipFollowed {
     followed
         .clips
         .iter()

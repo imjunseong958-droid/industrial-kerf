@@ -1,15 +1,15 @@
 //! This crate's effects as the compositor runs them, each a
 //! [`PictureEffect`]: the color correction and the Gaussian blur every Kerf
 //! has had, the EffectCraft effects Kerf keeps ([`crate::kept`]), and the
-//! video effects carried from FilmCraft ([`crate::filmcraft`]). The
+//! video effects carried from FilmCraft ([`crate::video`]). The
 //! compositor finds them by id beside the other crates' effects, and need
 //! not know which of these one is.
 
-use crate::filmcraft::catalog::CARRIED;
-use crate::filmcraft::instance::{self, Picture};
-use crate::filmcraft::project::EffectInstance;
-use crate::filmcraft::vfx::{self, FxEnv};
 use crate::kept;
+use crate::video::catalog::CARRIED;
+use crate::video::instance::{self, Picture};
+use crate::video::project::EffectInstance;
+use crate::video::vfx::{self, FxEnv};
 use kerf_draw::correct::Correction;
 use kerf_draw::effect::{EffectHost, EffectRun, Files, PictureEffect};
 use kerf_draw::{blur, Affine, Image};
@@ -150,7 +150,7 @@ impl KernelEffect for Gaussian {
         let (across, down) = blur::gaussian_radii(run.size.0, run.size.1, sigma, sigma);
         let radii = |radii: Vec<usize>| radii.into_iter().map(|r| r as u32).collect();
         Some(OnGpu::Effect(instance::GpuEffect::Op(
-            crate::filmcraft::gpufx::FxOp::Gaussian {
+            crate::video::gpufx::FxOp::Gaussian {
                 rx: radii(across),
                 ry: radii(down),
                 repeat: true,

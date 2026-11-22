@@ -3,7 +3,7 @@
 //! it carries join the project's.
 
 use crate::{KerfMcpRouter, McpError};
-use kerf_engine::derivatives::DerivativeCache;
+use kerf_engine::media::derivatives::DerivativeCache;
 use kerf_lang::preset::{self, Preset};
 use kerf_lang::Clock;
 use kerf_model::look::Look;

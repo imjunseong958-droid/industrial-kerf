@@ -75,8 +75,8 @@ pub fn radial_zoom_kernel(
     at: Time,
     size: (usize, usize),
     per_source: f64,
-) -> Option<crate::filmcraft::vfx::gpu::Kernel> {
-    use crate::filmcraft::vfx::gpu::Kernel;
+) -> Option<crate::video::vfx::gpu::Kernel> {
+    use crate::video::vfx::gpu::Kernel;
     let spec = spec("blur.radialzoom")?;
     let per_source = per_source.max(1e-6);
     let layer_size = [size.0 as f64 / per_source, size.1 as f64 / per_source];
@@ -111,8 +111,8 @@ pub fn optics_kernel(
     at: Time,
     size: (usize, usize),
     per_source: f64,
-) -> Option<crate::filmcraft::vfx::gpu::Kernel> {
-    use crate::filmcraft::vfx::gpu::Kernel;
+) -> Option<crate::video::vfx::gpu::Kernel> {
+    use crate::video::vfx::gpu::Kernel;
     use std::f64::consts::FRAC_PI_2;
     let spec = spec("distort.opticscompensation")?;
     let per_source = per_source.max(1e-6);
@@ -175,8 +175,8 @@ pub fn choker_kernel(
     at: Time,
     size: (usize, usize),
     per_source: f64,
-) -> Option<crate::filmcraft::vfx::gpu::Kernel> {
-    use crate::filmcraft::vfx::gpu::Kernel;
+) -> Option<crate::video::vfx::gpu::Kernel> {
+    use crate::video::vfx::gpu::Kernel;
     let spec = spec("matte.simplechoker")?;
     let per_source = per_source.max(1e-6);
     let layer_size = [size.0 as f64 / per_source, size.1 as f64 / per_source];
@@ -213,8 +213,8 @@ pub fn key_cleaner_kernel(
     at: Time,
     size: (usize, usize),
     per_source: f64,
-) -> Option<crate::filmcraft::vfx::gpu::Kernel> {
-    use crate::filmcraft::vfx::gpu::Kernel;
+) -> Option<crate::video::vfx::gpu::Kernel> {
+    use crate::video::vfx::gpu::Kernel;
     let spec = spec("key.keycleaner")?;
     let per_source = per_source.max(1e-6);
     let layer_size = [size.0 as f64 / per_source, size.1 as f64 / per_source];
@@ -259,8 +259,8 @@ pub fn grain_kernel(
     size: (usize, usize),
     per_source: f64,
     seed: u32,
-) -> Option<crate::filmcraft::vfx::gpu::Kernel> {
-    use crate::filmcraft::vfx::gpu::{grain_gains, Grain, Kernel};
+) -> Option<crate::video::vfx::gpu::Kernel> {
+    use crate::video::vfx::gpu::{grain_gains, Grain, Kernel};
     let spec = spec("noise.addgrain")?;
     let per_source = per_source.max(1e-6);
     let layer_size = [size.0 as f64 / per_source, size.1 as f64 / per_source];
@@ -317,8 +317,8 @@ pub fn color_kernel(
     at: Time,
     size: (usize, usize),
     per_source: f64,
-) -> Option<crate::filmcraft::vfx::gpu::Kernel> {
-    use crate::filmcraft::vfx::gpu::{curves_table, KeptColor, Kernel};
+) -> Option<crate::video::vfx::gpu::Kernel> {
+    use crate::video::vfx::gpu::{curves_table, KeptColor, Kernel};
     let id = effect.fx.as_str();
     let spec = spec(id)?;
     let per_source = per_source.max(1e-6);
@@ -725,7 +725,7 @@ mod tests {
         };
         assert!(matches!(
             optics_kernel(&effect, Time::ZERO, (w, h), 1.0),
-            Some(crate::filmcraft::vfx::gpu::Kernel::Nothing)
+            Some(crate::video::vfx::gpu::Kernel::Nothing)
         ));
         effect.params.insert("fieldOfView".into(), number(60.0));
         effect
@@ -814,7 +814,7 @@ mod tests {
         // Nothing asked is nothing done, and a matte spread is the CPU's.
         assert!(matches!(
             choker_kernel(&choker(vec![]), Time::ZERO, (w, h), 1.0),
-            Some(crate::filmcraft::vfx::gpu::Kernel::Nothing)
+            Some(crate::video::vfx::gpu::Kernel::Nothing)
         ));
         assert!(choker_kernel(
             &choker(vec![("chokeMatte", number(-2.0))]),
@@ -1327,7 +1327,7 @@ mod tests {
     /// there and back, they come to the very values the effects come to, with no GPU to say so.
     #[test]
     fn color_kernels_from_one_source_are_the_effects_to_the_bit() {
-        use crate::filmcraft::vfx::gpu::{KeptColor, Kernel};
+        use crate::video::vfx::gpu::{KeptColor, Kernel};
         let image = colors(96, 54);
         let number = Value::Number;
         // A hard edge too, which a kernel on a GPU may put a pixel either side of.

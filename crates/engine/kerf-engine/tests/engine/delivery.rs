@@ -1,9 +1,9 @@
 //! Delivery measurements on generated media: programme R128 loudness, the
 //! picture QC pass, and the ProRes 422 HQ master probed back.
 
-use kerf_engine::ffmpeg::resolve_ffmpeg_bin;
-use kerf_engine::loudness::measure_program;
-use kerf_engine::qc::picture_qc;
+use kerf_engine::analysis::loudness::measure_program;
+use kerf_engine::analysis::qc::picture_qc;
+use kerf_engine::process::ffmpeg::resolve_ffmpeg_bin;
 use kerf_engine::render::{encoder_available, render_program, RenderOptions, RenderPreset};
 use kerf_engine::{media_info, CancellationToken};
 use kerf_lang::parse_document;
@@ -77,7 +77,7 @@ fn a_minus_23_lufs_tone_measures_minus_23() {
          \x20   clip a media=t src=0f at=0f dur=6s\n"
     ));
     let mut progress = Vec::new();
-    let loudness = kerf_engine::loudness::measure_program_with_progress(
+    let loudness = kerf_engine::analysis::loudness::measure_program_with_progress(
         &project,
         None,
         dir.path(),
@@ -181,7 +181,7 @@ fn strobing_is_flashing_and_a_black_segment_is_found() {
 /// what a pass that measures every frame finds.
 #[test]
 fn a_later_pass_measures_only_what_changed_and_finds_the_same() {
-    use kerf_engine::qc::picture_qc_with_progress;
+    use kerf_engine::analysis::qc::picture_qc_with_progress;
     if !ffmpeg_present() {
         return;
     }
@@ -302,7 +302,7 @@ fn a_sound_measurement_is_kept_until_the_programme_or_its_files_change() {
     };
     let hear = |project: &Project| {
         let mut progress = Vec::new();
-        let loudness = kerf_engine::loudness::measure_program_with_progress(
+        let loudness = kerf_engine::analysis::loudness::measure_program_with_progress(
             project,
             None,
             dir.path(),
@@ -414,7 +414,7 @@ fn a_prores_master_probes_back_as_prores_hq_with_24_bit_pcm() {
     assert_eq!(info.audio_bit_depth, Some(24));
     assert_eq!(info.audio_channels, Some(2));
     assert_eq!(info.audio_sample_rate, Some(48_000));
-    let tag = Command::new(kerf_engine::ffmpeg::resolve_ffprobe_bin())
+    let tag = Command::new(kerf_engine::process::ffmpeg::resolve_ffprobe_bin())
         .args(["-v", "error", "-select_streams", "v:0"])
         .args([
             "-show_entries",
@@ -501,7 +501,7 @@ fn an_hdr_sequence_masters_as_hdr_and_comes_back_as_it() {
 
 /// What ffprobe finds of a video's first frame and stream, as `key=value` lines.
 fn probed(path: &Path) -> String {
-    let output = Command::new(kerf_engine::ffmpeg::resolve_ffprobe_bin())
+    let output = Command::new(kerf_engine::process::ffmpeg::resolve_ffprobe_bin())
         .args(["-v", "error", "-select_streams", "v:0"])
         .args(["-read_intervals", "%+#1", "-show_frames"])
         .args([

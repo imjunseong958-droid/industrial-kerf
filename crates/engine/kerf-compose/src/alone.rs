@@ -56,7 +56,7 @@ pub fn effects_on_picture(
     let working = WorkingSpace::Rec709;
     let timecode = format_timecode(alone.at, alone.rate, false);
     for (index, effect) in enabled().enumerate() {
-        if kerf_fx::filmcraft::instance::leaves_alone(effect, alone.at, working) {
+        if kerf_fx::video::instance::leaves_alone(effect, alone.at, working) {
             continue;
         }
         let Some(code) = domains::effect(effect.fx.as_str()) else {

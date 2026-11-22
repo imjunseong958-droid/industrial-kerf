@@ -1,7 +1,7 @@
 //! Where a take has a clip's subject, beside where its guide has it.
 
 use kerf_compose::{ComposeOptions, Compositor};
-use kerf_engine::placed::{Placed, Placing};
+use kerf_engine::analysis::placed::{Placed, Placing};
 use kerf_lang::parse_document;
 use kerf_model::{Catalog, Project, Rate};
 

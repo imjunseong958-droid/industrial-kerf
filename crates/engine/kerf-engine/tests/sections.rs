@@ -2,9 +2,9 @@
 //! times as one encoded whole, and after an edit only the stretches it touched encoded again.
 //! The only test of this file, since it sets where stretches are kept for the whole process.
 
-use kerf_engine::ffmpeg::{resolve_ffmpeg_bin, resolve_ffprobe_bin};
+use kerf_engine::process::ffmpeg::{resolve_ffmpeg_bin, resolve_ffprobe_bin};
+use kerf_engine::render::sections::section_stats;
 use kerf_engine::render::{render_program, RenderOptions, RenderPreset};
-use kerf_engine::sections::section_stats;
 use kerf_lang::{apply_script, parse_document};
 use kerf_model::{Catalog, Project};
 use std::path::Path;

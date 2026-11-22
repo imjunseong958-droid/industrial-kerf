@@ -1,6 +1,6 @@
 //! What shows of each clip on a frame, read without an eye.
 
-use kerf_engine::shows::{showing, Shown, MOST_CLIPS};
+use kerf_engine::analysis::shows::{showing, Shown, MOST_CLIPS};
 use kerf_lang::parse_document;
 use kerf_model::{Catalog, Project, Rate};
 

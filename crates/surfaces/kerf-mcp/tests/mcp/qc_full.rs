@@ -140,11 +140,11 @@ fn an_hdr_sequence_says_its_picture_rows_read_the_sdr_copy() {
     project.sequences[0].color = kerf_model::ColorSpace::Rec2100Pq;
     let report = check_full(&project, directory.path(), &CancellationToken::new()).unwrap();
     assert_eq!(
-        row(&report, kerf_engine::qc::CODE_OUT_OF_RANGE).name,
+        row(&report, kerf_engine::analysis::qc::CODE_OUT_OF_RANGE).name,
         "Gamut, SDR copy"
     );
     assert_eq!(
-        row(&report, kerf_engine::qc::CODE_LUMA_LEVELS).name,
+        row(&report, kerf_engine::analysis::qc::CODE_LUMA_LEVELS).name,
         "Luma, SDR copy"
     );
 }

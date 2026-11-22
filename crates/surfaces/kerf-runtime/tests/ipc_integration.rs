@@ -325,7 +325,7 @@ sequence s1 name=\"Round Trip\" rate=24 size=1920x1080 audio=48000 start=00:00:0
 
 /// `seconds` of 64x36 picture at 24 fps with a tone.
 fn media_file(path: &Path, seconds: u32) {
-    let output = Command::new(kerf_engine::ffmpeg::resolve_ffmpeg_bin())
+    let output = Command::new(kerf_engine::process::ffmpeg::resolve_ffmpeg_bin())
         .args(["-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i"])
         .arg(format!("color=c=gray:s=64x36:r=24:d={seconds}"))
         .args(["-f", "lavfi", "-i"])
@@ -402,7 +402,7 @@ fn media_is_replaced_through_the_client_relative_to_the_project() {
 /// What ffprobe finds in `path`: each stream's codec, profile, and sample
 /// format.
 fn streams(path: &Path) -> Vec<serde_json::Value> {
-    let output = Command::new(kerf_engine::ffmpeg::resolve_ffprobe_bin())
+    let output = Command::new(kerf_engine::process::ffmpeg::resolve_ffprobe_bin())
         .args([
             "-v",
             "error",

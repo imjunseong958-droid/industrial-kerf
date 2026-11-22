@@ -12,7 +12,7 @@ fn main() {
         // Git merges project.kerf through this: `kerfd merge-driver %O %A %B %P`.
         std::process::exit(kerf_collab::run_merge_driver(&args[2..]));
     }
-    kerf_engine::sidecar::forward_termination_signals();
+    kerf_engine::process::sidecar::forward_termination_signals();
     let directory = args
         .windows(2)
         .find(|pair| pair[0] == "--dir")

@@ -573,7 +573,7 @@ pub(crate) fn contrast_of(
         if !going_on((drawn as f64 / room as f64).min(1.0)) {
             return None;
         }
-        kerf_engine::still::draw_frame(shown, Some(id), at, scale)
+        kerf_engine::render::still::draw_frame(shown, Some(id), at, scale)
             .ok()
             .map(|frame| (frame.width, frame.height, frame.rgba))
     };

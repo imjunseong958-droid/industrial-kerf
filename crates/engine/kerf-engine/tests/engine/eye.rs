@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 
 use kerf_compose::{ComposeOptions, Compositor};
-use kerf_engine::eye::{eye, file_picture, Cut, Eye, Going, Read, Seen, HELD};
+use kerf_engine::analysis::eye::{eye, file_picture, Cut, Eye, Going, Read, Seen, HELD};
 use kerf_lang::parse_document;
 use kerf_model::{Catalog, Media, Project, Rate};
 
@@ -825,7 +825,7 @@ fn a_take_with_its_subject_elsewhere_than_its_guide_reads_apart_from_it() {
 fn a_take_that_is_not_there_or_cannot_be_read_is_told_from_one_that_is() {
     let scene = Scene::default();
     let project = scene.project();
-    let read = |takes: &mut kerf_engine::eye::Takes| {
+    let read = |takes: &mut kerf_engine::analysis::eye::Takes| {
         eye(&project, None, None, &BTreeMap::new(), takes)
             .unwrap()
             .cuts[0]
@@ -856,7 +856,7 @@ fn a_frame_of_a_take_is_read_from_its_file_by_its_number() {
     // on each frame: which frame a picture is of is where its box is.
     let folder = tempfile::tempdir().unwrap();
     let file = folder.path().join("take.mp4");
-    let made = std::process::Command::new(kerf_engine::ffmpeg::resolve_ffmpeg_bin())
+    let made = std::process::Command::new(kerf_engine::process::ffmpeg::resolve_ffmpeg_bin())
         .args([
             "-hide_banner",
             "-loglevel",
@@ -892,7 +892,7 @@ fn a_frame_of_a_take_is_read_from_its_file_by_its_number() {
     let take = media(&file);
     // Where the box is on a frame, counted by decoding the file from its start.
     let counted = |frame: i64| -> i64 {
-        let read = std::process::Command::new(kerf_engine::ffmpeg::resolve_ffmpeg_bin())
+        let read = std::process::Command::new(kerf_engine::process::ffmpeg::resolve_ffmpeg_bin())
             .args(["-hide_banner", "-loglevel", "error", "-i"])
             .arg(&file)
             .args(["-vf", &format!("select=eq(n\\,{frame}),format=gray")])

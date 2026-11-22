@@ -101,7 +101,7 @@ fn the_editor_runs_the_ffmpeg_kerfd_runs() {
     // The engine's own, found once: the very same text.
     assert!(std::ptr::eq(
         found,
-        kerf_engine::ffmpeg::resolve_ffmpeg_bin()
+        kerf_engine::process::ffmpeg::resolve_ffmpeg_bin()
     ));
     // What is found runs; else it is plain `ffmpeg`, to say so as it fails.
     let runs = std::process::Command::new(found)

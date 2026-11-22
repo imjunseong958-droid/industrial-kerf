@@ -1,6 +1,6 @@
 //! Renders `kerf-model` projects through FFmpeg and inspects the output.
 
-use kerf_engine::ffmpeg::resolve_ffmpeg_bin;
+use kerf_engine::process::ffmpeg::resolve_ffmpeg_bin;
 use kerf_engine::render::{render_program, RenderOptions};
 use kerf_lang::parse_document;
 use kerf_model::{Catalog, Project, Rate};

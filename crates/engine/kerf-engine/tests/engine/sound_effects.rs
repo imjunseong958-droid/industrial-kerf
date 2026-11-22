@@ -1,6 +1,6 @@
 //! Sound effects and buses, heard: what each does to the sound a render mixes.
 
-use kerf_engine::ffmpeg::resolve_ffmpeg_bin;
+use kerf_engine::process::ffmpeg::resolve_ffmpeg_bin;
 use kerf_engine::program::{compile_program, ProgramOptions};
 use kerf_lang::parse_document;
 use kerf_model::Catalog;

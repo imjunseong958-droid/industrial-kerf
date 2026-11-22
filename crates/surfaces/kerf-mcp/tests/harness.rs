@@ -917,7 +917,7 @@ fn imported_media_is_indexed_and_proxied_in_the_background() {
         .runtime()
         .import_media_request("ui", "import-wide", &wide.to_string_lossy(), revision)
         .unwrap();
-    let cache = kerf_engine::derivatives::DerivativeCache::new(directory.path());
+    let cache = kerf_engine::media::derivatives::DerivativeCache::new(directory.path());
     let deadline = Instant::now() + Duration::from_secs(60);
     let proxy = loop {
         if let Some(proxy) = kerf_engine::cached_proxy(&wide, &cache) {
@@ -2780,7 +2780,7 @@ fn filmed(
 
 /// The middle of what is pure magenta in a frame of the sequence.
 fn marker_at(project: &kerf_model::Project, at: i64) -> Option<[f64; 2]> {
-    let frame = kerf_engine::still::draw_frame(
+    let frame = kerf_engine::render::still::draw_frame(
         project,
         Some("s1"),
         kerf_model::Rate::FPS_30.time_of(at),

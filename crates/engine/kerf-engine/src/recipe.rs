@@ -63,8 +63,8 @@ pub mod text;
 pub mod told;
 
 use crate::error::{EngineError, Result};
+use crate::process::sidecar::{self, CancellationToken};
 use crate::render::{render_program_with_cancellation, RenderOptions};
-use crate::sidecar::{self, CancellationToken};
 use kerf_compose::Pass;
 use kerf_model::Media;
 use model::{Models, Source};
@@ -1277,7 +1277,8 @@ pub(crate) fn in_motion(file: &Path) -> bool {
 
 /// The command that writes the last frame of `file`, or its first, to `still`.
 fn still_command(file: &Path, still: &Path, last: bool) -> Command {
-    let mut command = crate::ffmpeg::hidden_command(crate::ffmpeg::resolve_ffmpeg_bin());
+    let mut command =
+        crate::process::ffmpeg::hidden_command(crate::process::ffmpeg::resolve_ffmpeg_bin());
     command.args(["-hide_banner", "-loglevel", "error", "-y"]);
     if last {
         // The last second of it, each frame written over the one before: what is left is the last.
@@ -1317,7 +1318,8 @@ fn join_command(
     lap: u32,
     lossless: Option<&crate::render::PassCodec>,
 ) -> Command {
-    let mut command = crate::ffmpeg::hidden_command(crate::ffmpeg::resolve_ffmpeg_bin());
+    let mut command =
+        crate::process::ffmpeg::hidden_command(crate::process::ffmpeg::resolve_ffmpeg_bin());
     command.args(["-hide_banner", "-loglevel", "error", "-y"]);
     for part in parts {
         command.arg("-i").arg(part);

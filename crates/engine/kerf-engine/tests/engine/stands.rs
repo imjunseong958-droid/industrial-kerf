@@ -1,7 +1,7 @@
 //! What each clip in depth stands on, measured with nothing drawn: for each thing said, a
 //! scene that has to be said and one that must not be.
 
-use kerf_engine::stands::{standing, How, Run, Standing, Stood, TOUCH};
+use kerf_engine::analysis::stands::{standing, How, Run, Standing, Stood, TOUCH};
 use kerf_lang::{apply_script, parse_document};
 use kerf_model::{Catalog, Project, Rate};
 use std::path::{Path, PathBuf};

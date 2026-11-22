@@ -5,7 +5,7 @@
 //! each shot (`kerf_track::shot`), and how loud the sound is by R128, and says in as many words what it
 //! leaves out, so an agent does not take silence for a finding.
 
-use kerf_engine::derivatives::DerivativeCache;
+use kerf_engine::media::derivatives::DerivativeCache;
 use kerf_engine::{CancellationToken, MediaIndex};
 use kerf_model::Media;
 use kerf_track::shot::{motion_over, step_between, Motion, Small, Step};

@@ -1,7 +1,7 @@
 //! The grades: what each does to a picture, that an amount of 0 leaves it alone, and how they stack.
 
 use kerf_compose::{Accel, ComposeOptions, Compositor, Frame};
-use kerf_fx::filmcraft::instance::leaves_alone;
+use kerf_fx::video::instance::leaves_alone;
 use kerf_lang::parse_document;
 use kerf_model::{Catalog, Rate};
 

@@ -1,7 +1,7 @@
 //! A `render` step draws a guide at a model's size and rate: the
 //! file made is inspected.
 
-use kerf_engine::ffmpeg::resolve_ffmpeg_bin;
+use kerf_engine::process::ffmpeg::resolve_ffmpeg_bin;
 use kerf_engine::recipe::model::Models;
 use kerf_engine::recipe::{make, plan};
 use kerf_engine::CancellationToken;

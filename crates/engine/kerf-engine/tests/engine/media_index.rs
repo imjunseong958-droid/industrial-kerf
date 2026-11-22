@@ -1,6 +1,6 @@
 //! The media index and proxies against real footage.
 
-use kerf_engine::derivatives::DerivativeCache;
+use kerf_engine::media::derivatives::DerivativeCache;
 use kerf_engine::{
     cached_media_sound, cached_proxy, info, make_proxy, media_index, CancellationToken, PROXY_WIDTH,
 };

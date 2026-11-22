@@ -289,7 +289,7 @@ enum PresetAction {
 
 fn main() {
     kerf_runtime::crash::install("kerf");
-    kerf_engine::sidecar::forward_termination_signals();
+    kerf_engine::process::sidecar::forward_termination_signals();
     if let Err(error) = run() {
         eprintln!("kerf: {error:#}");
         std::process::exit(1);
@@ -515,7 +515,7 @@ fn finish_renders(router: &KerfMcpRouter) {
     if making > 0 {
         eprintln!("waiting for {making} making(s) to finish; Ctrl-C to stop");
         let stop = kerf_engine::CancellationToken::new();
-        let _held = kerf_engine::sidecar::stop_on_termination(&stop);
+        let _held = kerf_engine::process::sidecar::stop_on_termination(&stop);
         while router.running_makings() > 0 && !stop.is_cancelled() {
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
@@ -876,7 +876,7 @@ fn run_make(directory: &Path, kerfd: Option<&Path>, id: &str, yes: bool, rolls: 
     // program takes back what it asked a server for and says so, and nothing of the take is
     // left. A second Ctrl-C ends it at once.
     let cancellation = kerf_engine::CancellationToken::new();
-    let stop = kerf_engine::sidecar::stop_on_termination(&cancellation);
+    let stop = kerf_engine::process::sidecar::stop_on_termination(&cancellation);
     let mut made = Vec::new();
     let mut ended = None;
     for roll in 0..rolls {

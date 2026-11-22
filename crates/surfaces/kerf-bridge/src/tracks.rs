@@ -92,7 +92,8 @@ pub(crate) fn picture(
                 std::process::id(),
                 of.word()
             ));
-            kerf_engine::still::write_png(&frame, &path).map_err(|error| error.to_string())?;
+            kerf_engine::render::still::write_png(&frame, &path)
+                .map_err(|error| error.to_string())?;
             Ok(Event::ShotPicture {
                 clip: clip.clone(),
                 of,

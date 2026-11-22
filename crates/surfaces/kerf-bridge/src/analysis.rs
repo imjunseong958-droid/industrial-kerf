@@ -2,7 +2,7 @@
 //! Deliver trays, the bin and the Source rows:
 //!
 //! - `loudness {sequence?}`: the programme measured to EBU R128
-//!   (`kerf_engine::loudness::measure_program`) on a thread of its own,
+//!   (`kerf_engine::analysis::loudness::measure_program`) on a thread of its own,
 //!   `running` with its progress, then `ready` or `failed`. A measurement is
 //!   kept for the document revision it was made of, so asking again before
 //!   the next edit answers at once; a request while one runs is taken as
@@ -26,7 +26,7 @@ use crate::event::{
 };
 use crate::wake::Outbox;
 use crate::{emit, Shared};
-use kerf_engine::derivatives::DerivativeCache;
+use kerf_engine::media::derivatives::DerivativeCache;
 use kerf_engine::{CancellationToken, EngineError, MediaIndex};
 use kerf_model::Project;
 use kerf_runtime::RuntimeClient;
@@ -270,7 +270,7 @@ fn measure(shared: &Shared, tx: &Outbox, sequence: Option<&str>) -> Event {
     };
     emit(tx, running(0.0));
     let mut sent = 0;
-    let measured = kerf_engine::loudness::measure_program_with_progress(
+    let measured = kerf_engine::analysis::loudness::measure_program_with_progress(
         &project,
         sequence,
         &shared.directory,
@@ -306,8 +306,8 @@ pub(crate) fn ready(
 ) -> Event {
     Event::Loudness(LoudnessEvent::Ready(LoudnessReady {
         loudness: loudness.clone(),
-        target: kerf_engine::loudness::TARGET_LUFS,
-        limit: kerf_engine::loudness::TRUE_PEAK_LIMIT_DBTP,
+        target: kerf_engine::analysis::loudness::TARGET_LUFS,
+        limit: kerf_engine::analysis::loudness::TRUE_PEAK_LIMIT_DBTP,
         revision,
         short_term_max_at: loudness.short_term_max_at(),
         momentary_max_at: loudness.momentary_max_at(),

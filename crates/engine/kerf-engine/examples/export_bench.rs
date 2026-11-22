@@ -101,7 +101,7 @@ fn main() {
     let stats = default_frame_folder()
         .map(|folder| frame_cache_stats(&folder))
         .unwrap_or_default();
-    let sections = kerf_engine::sections::section_stats();
+    let sections = kerf_engine::render::sections::section_stats();
     println!(
         "{{\"mode\":\"{mode}\",\"frames\":{frames},\"seconds\":{seconds:.2},\"fps\":{:.1},\
          \"read\":{},\"drawn\":{},\"written\":{},\"dropped\":{},\"evicted\":{},\

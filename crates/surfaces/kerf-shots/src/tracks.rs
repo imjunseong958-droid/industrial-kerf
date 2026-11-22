@@ -8,7 +8,7 @@
 //! An agent follows the same with `look` (`track`) and runs the line it is
 //! given with `edit`. Both write the keys the one way, here.
 
-use kerf_engine::still::Frame;
+use kerf_engine::render::still::Frame;
 use kerf_model::{ClipAt, Project};
 use kerf_track::{Followed, FollowedObject, Hints};
 
@@ -167,7 +167,7 @@ impl Read {
 /// The frames of clip `clip` as its sequence shows them for `what`. The project is one whose
 /// media say where their files are (`kerf_runtime::resolve_media_paths`), here and below.
 struct Seen {
-    drawer: kerf_engine::still::Compositor,
+    drawer: kerf_engine::render::still::Compositor,
     at: ClipAt,
     /// The clip's first frame on its sequence, how many frames it runs for, and what its
     /// sequence is drawn at.
@@ -209,7 +209,7 @@ impl Seen {
                 "`{clip}` runs for {count} frames, and at most {MOST_FRAMES} are followed at a time: cut it where the shot ends"
             ));
         }
-        let drawer = kerf_engine::still::drawer(&seen, Some(sequence.id.as_str()))
+        let drawer = kerf_engine::render::still::drawer(&seen, Some(sequence.id.as_str()))
             .map_err(|error| error.to_string())?;
         Ok(Self {
             drawer,

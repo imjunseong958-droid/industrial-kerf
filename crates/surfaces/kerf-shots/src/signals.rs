@@ -6,7 +6,7 @@
 //! An agent reads them with `look` (`signal`) and a person asks for them in
 //! the signal's card of a shot's graph, from the one reading here.
 
-use kerf_engine::derivatives::DerivativeCache;
+use kerf_engine::media::derivatives::DerivativeCache;
 use kerf_model::{Content, Project, Rate, Time};
 use std::path::Path;
 

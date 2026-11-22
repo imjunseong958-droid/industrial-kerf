@@ -21,7 +21,7 @@ fn runs(program: &str) -> bool {
         .is_ok_and(|status| status.success())
 }
 
-/// FFmpeg and ffprobe, as Kerf finds them (`kerf-engine/src/ffmpeg.rs`).
+/// FFmpeg and ffprobe, as Kerf finds them (`kerf-engine/src/process/ffmpeg.rs`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Tools {
     ffmpeg: String,

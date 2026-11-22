@@ -89,7 +89,7 @@ pub fn resolve_media_paths(project: &mut Project, directory: &std::path::Path) {
 /// must already be resolved. For drafts: a proxy is smaller, frame for
 /// frame.
 pub fn use_proxies(project: &mut Project, directory: &std::path::Path) {
-    let cache = kerf_engine::derivatives::DerivativeCache::new(directory);
+    let cache = kerf_engine::media::derivatives::DerivativeCache::new(directory);
     for media in &mut project.media {
         if let Some(proxy) = kerf_engine::cached_proxy(std::path::Path::new(&media.path), &cache) {
             media.path = proxy.to_string_lossy().into_owned();
@@ -116,7 +116,7 @@ impl Facts for CachedFacts {
     /// they cover. Nothing is transcribed.
     fn speech(&self, media: &Media) -> Speech {
         let path = self.directory.join(&media.path);
-        let cache = kerf_engine::derivatives::DerivativeCache::new(&self.directory);
+        let cache = kerf_engine::media::derivatives::DerivativeCache::new(&self.directory);
         let transcripts =
             kerf_engine::cached_transcripts(&path.to_string_lossy(), &cache).unwrap_or_default();
         Speech {
@@ -141,7 +141,7 @@ impl Facts for CachedFacts {
     /// words. Nothing is transcribed.
     fn unheard(&self, media: &Media) -> Vec<(f64, f64)> {
         let path = self.directory.join(&media.path);
-        let cache = kerf_engine::derivatives::DerivativeCache::new(&self.directory);
+        let cache = kerf_engine::media::derivatives::DerivativeCache::new(&self.directory);
         kerf_engine::unheard_speech(&path.to_string_lossy(), &cache)
             .into_iter()
             .map(|stretch| (stretch.start, stretch.end))
@@ -153,7 +153,7 @@ impl Facts for CachedFacts {
     /// said in one breath part for. Nothing is indexed here.
     fn breaks(&self, media: &Media) -> Option<Breaks> {
         let path = self.directory.join(&media.path);
-        let cache = kerf_engine::derivatives::DerivativeCache::new(&self.directory);
+        let cache = kerf_engine::media::derivatives::DerivativeCache::new(&self.directory);
         let index = kerf_engine::cached_media_index(&path, &cache)?;
         let sound = kerf_engine::cached_media_sound(&path, &cache);
         Some(Breaks {
@@ -166,7 +166,7 @@ impl Facts for CachedFacts {
     /// How loud the media's sound is, as its index measured it.
     fn sound(&self, media: &Media) -> Option<Sound> {
         let path = self.directory.join(&media.path);
-        let cache = kerf_engine::derivatives::DerivativeCache::new(&self.directory);
+        let cache = kerf_engine::media::derivatives::DerivativeCache::new(&self.directory);
         kerf_engine::cached_media_sound(&path, &cache)
     }
 }
@@ -272,7 +272,7 @@ fn prepare_queued_media() {
         // A panic in one file's work must not stop the queue, or what
         // waits behind it would keep kerfd running forever.
         let indexed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let cache = kerf_engine::derivatives::DerivativeCache::new(&job.directory);
+            let cache = kerf_engine::media::derivatives::DerivativeCache::new(&job.directory);
             if job.indexed {
                 let _ = kerf_engine::make_proxy(&job.path, &cache, &job.cancellation);
             } else {
@@ -1289,22 +1289,9 @@ pub(crate) fn lower_ops(project: &Project, ops: &[EditOp]) -> Result<Vec<Op>, Ru
     Ok(lowered)
 }
 
+/// Lower one typed operation, read against `project`. Most lower to one
+/// kernel operation; `set-track` and `add-track` may lower to two.
 fn lower(project: &Project, op: &EditOp) -> Result<Vec<Op>, RuntimeError> {
-    let rate_of = |clip: &str| {
-        project
-            .locate(clip)
-            .map(|at| project.sequences[at.sequence].rate)
-    };
-    let clip_rate = |clip: &str| rate_of(clip).ok_or_else(|| invalid(format!("no clip `{clip}`")));
-    let sequence = |id: &Option<String>| match id {
-        Some(id) => project
-            .sequence(id)
-            .ok_or_else(|| invalid(format!("no sequence `{id}`"))),
-        None => project
-            .sequences
-            .first()
-            .ok_or_else(|| invalid("the project has no sequence")),
-    };
     Ok(vec![match op {
         EditOp::Trim {
             clip,
@@ -1317,21 +1304,21 @@ fn lower(project: &Project, op: &EditOp) -> Result<Vec<Op>, RuntimeError> {
                 TrimSide::In => Edge::In,
                 TrimSide::Out => Edge::Out,
             },
-            delta: clip_rate(clip)?.time_of(*frames),
+            delta: clip_rate(project, clip)?.time_of(*frames),
             ripple: *ripple,
         },
         EditOp::Roll { clip, frames } => Op::Roll {
             clip: edit_id(clip)?,
-            delta: clip_rate(clip)?.time_of(*frames),
+            delta: clip_rate(project, clip)?.time_of(*frames),
             alone: false,
         },
         EditOp::Slip { clip, frames } => Op::Slip {
             clip: edit_id(clip)?,
-            delta: clip_rate(clip)?.time_of(*frames),
+            delta: clip_rate(project, clip)?.time_of(*frames),
         },
         EditOp::Slide { clip, frames } => Op::Slide {
             clip: edit_id(clip)?,
-            delta: clip_rate(clip)?.time_of(*frames),
+            delta: clip_rate(project, clip)?.time_of(*frames),
         },
         EditOp::Move {
             clip,
@@ -1340,92 +1327,26 @@ fn lower(project: &Project, op: &EditOp) -> Result<Vec<Op>, RuntimeError> {
         } => Op::Move {
             clip: edit_id(clip)?,
             track: track.as_deref().map(edit_id).transpose()?,
-            delta: clip_rate(clip)?.time_of(*frames),
+            delta: clip_rate(project, clip)?.time_of(*frames),
         },
         EditOp::Split { clip, at, tail } => Op::Split {
             clip: edit_id(clip)?,
-            at: clip_rate(clip)?.time_of(*at),
+            at: clip_rate(project, clip)?.time_of(*at),
             tail: tail.as_deref().map(edit_id).transpose()?,
         },
         EditOp::Blade {
             at,
             tracks,
             sequence: id,
-        } => {
-            let sequence = sequence(id)?;
-            Op::Blade {
-                sequence: sequence.id.clone(),
-                at: sequence.rate.time_of(*at),
-                tracks: tracks.as_deref().map(edit_ids).transpose()?,
-            }
-        }
+        } => lower_blade(sequence_or_first(project, id)?, *at, tracks)?,
         EditOp::Delete { clips } => Op::Delete {
             clips: edit_ids(clips)?,
         },
         EditOp::RippleDelete { clips } => Op::RippleDelete {
             clips: edit_ids(clips)?,
         },
-        EditOp::Extract { clips } => {
-            let mut range: Option<(usize, Time, Time)> = None;
-            for clip in clips {
-                let at = project
-                    .locate(clip)
-                    .ok_or_else(|| invalid(format!("no clip `{clip}`")))?;
-                let found = project.clip_at(at);
-                let (start, end) = (found.start, found.end());
-                range = Some(match range {
-                    None => (at.sequence, start, end),
-                    Some((sequence, _, _)) if sequence != at.sequence => {
-                        return Err(invalid("extract takes clips of one sequence"));
-                    }
-                    Some((sequence, from, to)) => (sequence, from.min(start), to.max(end)),
-                });
-            }
-            let (sequence, from, to) = range.ok_or_else(|| invalid("extract needs a clip"))?;
-            Op::Extract {
-                sequence: project.sequences[sequence].id.clone(),
-                from,
-                to,
-                tracks: None,
-            }
-        }
-        EditOp::Set { clip, props, name } => {
-            let at = project
-                .locate(clip)
-                .ok_or_else(|| invalid(format!("no clip `{clip}`")))?;
-            let target = project.clip_at(at);
-            let rate = project.sequences[at.sequence].rate;
-            let domain = project.sequences[at.sequence].tracks[at.track]
-                .kind
-                .domain();
-            let mut changes = Vec::new();
-            for (name, value) in props {
-                let prop = domain.and_then(|domain| catalog().prop(domain, name));
-                let def = prop
-                    .or_else(|| match &target.content {
-                        Content::Generator { fx, .. } => {
-                            catalog().fx(fx.as_str()).and_then(|def| def.find(name))
-                        }
-                        _ => None,
-                    })
-                    .ok_or_else(|| invalid(format!("clip `{clip}` has no property `{name}`")))?;
-                let param = param_value(name, def, value, Some(rate))?;
-                if prop.is_some() && domain == Some(Domain::Audio) {
-                    sound_keyframes(None, name, param.as_ref())?;
-                }
-                changes.push(ClipChange::Param(name.clone(), param));
-            }
-            if let Some(name) = name {
-                let name = name.trim();
-                changes.push(ClipChange::Name(
-                    (!name.is_empty()).then(|| name.to_owned()),
-                ));
-            }
-            Op::Set {
-                clip: edit_id(clip)?,
-                changes,
-            }
-        }
+        EditOp::Extract { clips } => lower_extract(project, clips)?,
+        EditOp::Set { clip, props, name } => lower_set(project, clip, props, name)?,
         EditOp::Speed { clip, speed } => Op::Speed {
             clip: edit_id(clip)?,
             speed: Ratio::parse(speed)
@@ -1437,45 +1358,13 @@ fn lower(project: &Project, op: &EditOp) -> Result<Vec<Op>, RuntimeError> {
             fx,
             params,
             index,
-        } => {
-            let def = catalog()
-                .fx(fx)
-                .ok_or_else(|| invalid(format!("no effect `{fx}`")))?;
-            let params = fx_params(def, params, rate_of(clip))?
-                .into_iter()
-                .filter_map(|(name, param)| param.map(|param| (name, param)))
-                .collect();
-            Op::FxAdd {
-                clip: edit_id(clip)?,
-                effect: Effect {
-                    fx: def.id.clone(),
-                    version: def.version,
-                    enabled: true,
-                    params,
-                },
-                index: *index,
-            }
-        }
+        } => lower_fx_add(project, clip, fx, params, *index)?,
         EditOp::FxSet {
             clip,
             index,
             enabled,
             params,
-        } => {
-            let effect = project
-                .clip(clip)
-                .and_then(|found| found.effects.get(*index))
-                .ok_or_else(|| invalid(format!("clip `{clip}` has no effect {index}")))?;
-            let def = catalog()
-                .fx(effect.fx.as_str())
-                .ok_or_else(|| invalid(format!("no effect `{}`", effect.fx)))?;
-            Op::FxSet {
-                clip: edit_id(clip)?,
-                index: *index,
-                enabled: *enabled,
-                params: fx_params(def, params, rate_of(clip))?,
-            }
-        }
+        } => lower_fx_set(project, clip, *index, *enabled, params)?,
         EditOp::FxRemove { clip, index } => Op::FxRemove {
             clip: edit_id(clip)?,
             index: *index,
@@ -1499,16 +1388,7 @@ fn lower(project: &Project, op: &EditOp) -> Result<Vec<Op>, RuntimeError> {
                 .ok_or_else(|| invalid("a mask needs rect, ellipse, or points"))?;
             Op::MaskAdd {
                 clip: edit_id(clip)?,
-                mask: Mask {
-                    name,
-                    shape,
-                    mode: mask_mode(mode)?.unwrap_or_default(),
-                    inverted: inverted.unwrap_or(false),
-                    params: mask_params(params, rate_of(clip))?
-                        .into_iter()
-                        .filter_map(|(name, param)| param.map(|param| (name, param)))
-                        .collect(),
-                },
+                mask: new_mask(project, clip, name, shape, mode, *inverted, params)?,
                 index: *index,
             }
         }
@@ -1527,7 +1407,7 @@ fn lower(project: &Project, op: &EditOp) -> Result<Vec<Op>, RuntimeError> {
                 .map(|shape| kept_soft(project, clip, name, outline, shape)),
             mode: mask_mode(mode)?,
             inverted: *inverted,
-            params: mask_params(params, rate_of(clip))?,
+            params: mask_params(params, rate_of(project, clip))?,
         },
         EditOp::MaskRemove { clip, name } => Op::MaskRemove {
             clip: edit_id(clip)?,
@@ -1555,64 +1435,13 @@ fn lower(project: &Project, op: &EditOp) -> Result<Vec<Op>, RuntimeError> {
             sequence: id,
             mode,
         } => {
-            let sequence = sequence(id)?;
+            let sequence = sequence_or_first(project, id)?;
             if ids.len() > tracks.len() {
                 return Err(invalid("give at most one id per track"));
             }
-            let content = match (media, generator) {
-                (Some(media), None) => {
-                    let found = project
-                        .media(media)
-                        .ok_or_else(|| invalid(format!("no media `{media}`")))?;
-                    Content::Media {
-                        media: found.id.clone(),
-                        source_in: found.rate.time_of(*source_in),
-                        speed: Ratio::ONE.into(),
-                    }
-                }
-                (None, Some(generator)) => {
-                    if *source_in != 0 {
-                        return Err(invalid("a generator has no source in point"));
-                    }
-                    generator.content(sequence.rate)?
-                }
-                (Some(_), Some(_)) => {
-                    return Err(invalid("place media or a generator, not both"));
-                }
-                (None, None) => return Err(invalid("give the media or the generator to place")),
-            };
-            let overwrite = match mode.as_deref().map(str::trim) {
-                None => matches!(op, EditOp::Overwrite { .. }),
-                Some("insert") => false,
-                Some("overwrite") => true,
-                Some(other) => {
-                    return Err(invalid(format!(
-                        "`{other}` is not an edit mode; use insert or overwrite"
-                    )))
-                }
-            };
-            let mut targets = Vec::new();
-            for (index, track) in tracks.iter().enumerate() {
-                let mut clip = NewClip::new(content.clone());
-                clip.id = ids.get(index).map(|id| edit_id(id)).transpose()?;
-                targets.push((edit_id(track)?, clip));
-            }
-            let (at, duration) = (sequence.rate.time_of(*at), sequence.rate.time_of(*frames));
-            if !overwrite {
-                Op::Insert {
-                    sequence: sequence.id.clone(),
-                    at,
-                    duration,
-                    targets,
-                }
-            } else {
-                Op::Overwrite {
-                    sequence: sequence.id.clone(),
-                    at,
-                    duration,
-                    targets,
-                }
-            }
+            let content = placed_content(project, sequence.rate, media, generator, *source_in)?;
+            let overwrite = overwrites(op, mode)?;
+            lower_placement(sequence, overwrite, content, tracks, ids, *at, *frames)?
         }
         EditOp::AddMarker {
             at,
@@ -1622,24 +1451,15 @@ fn lower(project: &Project, op: &EditOp) -> Result<Vec<Op>, RuntimeError> {
             color,
             note,
             sequence: sequence_id,
-        } => {
-            let sequence = sequence(sequence_id)?;
-            Op::AddMarker {
-                sequence: sequence.id.clone(),
-                id: id.as_deref().map(edit_id).transpose()?,
-                at: sequence.rate.time_of(*at),
-                duration: sequence.rate.time_of(*frames),
-                name: name.clone(),
-                color: color
-                    .as_deref()
-                    .map(|color| {
-                        MarkerColor::parse(color)
-                            .ok_or_else(|| invalid(format!("`{color}` is not a marker color")))
-                    })
-                    .transpose()?,
-                note: note.clone(),
-            }
-        }
+        } => lower_add_marker(
+            sequence_or_first(project, sequence_id)?,
+            *at,
+            *frames,
+            id,
+            name,
+            color,
+            note,
+        )?,
         EditOp::SetMarker {
             marker,
             at,
@@ -1647,37 +1467,7 @@ fn lower(project: &Project, op: &EditOp) -> Result<Vec<Op>, RuntimeError> {
             name,
             note,
             color,
-        } => {
-            let sequence = project
-                .sequences
-                .iter()
-                .find(|sequence| sequence.marker(marker).is_some())
-                .ok_or_else(|| invalid(format!("no marker `{marker}`")))?;
-            // Blank text clears; absent text leaves what is there.
-            let text = |text: &Option<String>| {
-                text.as_ref()
-                    .map(|text| (!text.trim().is_empty()).then(|| text.clone()))
-            };
-            let color = match color.as_deref().map(str::trim) {
-                None => None,
-                Some("") => Some(None),
-                Some(color) => {
-                    Some(Some(MarkerColor::parse(color).ok_or_else(|| {
-                        invalid(format!("`{color}` is not a marker color"))
-                    })?))
-                }
-            };
-            Op::SetMarker {
-                id: edit_id(marker)?,
-                change: MarkerChange {
-                    at: at.map(|at| sequence.rate.time_of(at)),
-                    duration: frames.map(|frames| sequence.rate.time_of(frames)),
-                    name: text(name),
-                    color,
-                    note: text(note),
-                },
-            }
-        }
+        } => lower_set_marker(project, marker, *at, *frames, name, note, color)?,
         EditOp::RemoveMarker { id } => Op::RemoveMarker { id: edit_id(id)? },
         EditOp::Link { clips } => Op::Link {
             clips: edit_ids(clips)?,
@@ -1695,71 +1485,22 @@ fn lower(project: &Project, op: &EditOp) -> Result<Vec<Op>, RuntimeError> {
             role,
             sync_locked,
         } => {
-            let (sequence, track) = (sequence(id)?.id.clone(), edit_id(track)?);
-            let switches = TrackChange {
-                bus: None,
-                name: None,
-                enabled: *enabled,
-                locked: *locked,
-                muted: *muted,
-            };
-            let roles = TrackRoleChange {
-                role: role
-                    .as_deref()
-                    .map(|role| track_role(role).map_err(invalid))
-                    .transpose()?,
-                sync_locked: *sync_locked,
-            };
-            let mut ops = Vec::new();
-            // An op that names nothing to change still names the track,
-            // which must exist, as `set-track` always has.
-            if switches != TrackChange::default() || roles == TrackRoleChange::default() {
-                ops.push(Op::SetTrack {
-                    sequence: sequence.clone(),
-                    track: track.clone(),
-                    change: switches,
-                });
-            }
-            if roles != TrackRoleChange::default() {
-                ops.push(Op::SetTrackRole {
-                    sequence,
-                    track,
-                    change: roles,
-                });
-            }
-            return Ok(ops);
+            return lower_set_track(
+                sequence_or_first(project, id)?,
+                track,
+                *enabled,
+                *locked,
+                *muted,
+                role,
+                *sync_locked,
+            )
         }
         EditOp::AddTrack {
             kind,
             id,
             name,
             sequence: sequence_id,
-        } => {
-            let sequence = sequence(sequence_id)?;
-            let kind = TrackKind::parse(kind)
-                .ok_or_else(|| invalid(format!("`{kind}` is not a track kind")))?;
-            let id = match id {
-                Some(id) => edit_id(id)?,
-                None => new_track_id(sequence, kind),
-            };
-            let mut ops = vec![Op::AddTrack {
-                sequence: sequence.id.clone(),
-                id: id.clone(),
-                kind,
-                index: None,
-            }];
-            if let Some(name) = name {
-                ops.push(Op::SetTrack {
-                    sequence: sequence.id.clone(),
-                    track: id,
-                    change: TrackChange {
-                        name: Some(Some(name.clone())),
-                        ..TrackChange::default()
-                    },
-                });
-            }
-            return Ok(ops);
-        }
+        } => return lower_add_track(sequence_or_first(project, sequence_id)?, kind, id, name),
         EditOp::SetSequence {
             width,
             height,
@@ -1767,50 +1508,484 @@ fn lower(project: &Project, op: &EditOp) -> Result<Vec<Op>, RuntimeError> {
             rate,
             start,
             sequence: id,
-        } => {
-            let target = sequence(id)?;
-            let size = match (width, height) {
-                (Some(width), Some(height)) => Some((*width, *height)),
-                (None, None) => None,
-                _ => return Err(invalid("give the width and the height together")),
-            };
-            let rate = rate
-                .as_ref()
-                .map(RateSpec::rate)
-                .transpose()?
-                .filter(|rate| *rate != target.rate);
-            let empty = target.tracks.iter().all(|track| track.clips.is_empty())
-                && target.markers.is_empty();
-            if rate.is_some() && !empty {
-                return Err(invalid(RATE_NEEDS_EMPTY));
+        } => lower_set_sequence(
+            sequence_or_first(project, id)?,
+            *width,
+            *height,
+            name,
+            rate,
+            start,
+        )?,
+    }])
+}
+
+/// The rate of the sequence that holds `clip`, when there is that clip.
+fn rate_of(project: &Project, clip: &str) -> Option<Rate> {
+    project
+        .locate(clip)
+        .map(|at| project.sequences[at.sequence].rate)
+}
+
+/// The rate of the sequence that holds `clip`, which must be there.
+fn clip_rate(project: &Project, clip: &str) -> Result<Rate, RuntimeError> {
+    rate_of(project, clip).ok_or_else(|| invalid(format!("no clip `{clip}`")))
+}
+
+/// The sequence `id` names, or the project's first.
+fn sequence_or_first<'a>(
+    project: &'a Project,
+    id: &Option<String>,
+) -> Result<&'a Sequence, RuntimeError> {
+    match id {
+        Some(id) => project
+            .sequence(id)
+            .ok_or_else(|| invalid(format!("no sequence `{id}`"))),
+        None => project
+            .sequences
+            .first()
+            .ok_or_else(|| invalid("the project has no sequence")),
+    }
+}
+
+/// Lower `EditOp::Blade` on `sequence`, the one it names or the first.
+fn lower_blade(
+    sequence: &Sequence,
+    at: i64,
+    tracks: &Option<Vec<String>>,
+) -> Result<Op, RuntimeError> {
+    Ok(Op::Blade {
+        sequence: sequence.id.clone(),
+        at: sequence.rate.time_of(at),
+        tracks: tracks.as_deref().map(edit_ids).transpose()?,
+    })
+}
+
+/// Lower `EditOp::Extract`: the span `clips` cover, from the earliest start
+/// among them to the latest end. They must be in one sequence.
+fn lower_extract(project: &Project, clips: &[String]) -> Result<Op, RuntimeError> {
+    let mut range: Option<(usize, Time, Time)> = None;
+    for clip in clips {
+        let at = project
+            .locate(clip)
+            .ok_or_else(|| invalid(format!("no clip `{clip}`")))?;
+        let found = project.clip_at(at);
+        let (start, end) = (found.start, found.end());
+        range = Some(match range {
+            None => (at.sequence, start, end),
+            Some((sequence, _, _)) if sequence != at.sequence => {
+                return Err(invalid("extract takes clips of one sequence"));
             }
-            let name = name
-                .as_deref()
-                .map(|name| match name.trim() {
-                    "" => Err(invalid("a sequence needs a name")),
-                    name => Ok(name.to_owned()),
-                })
-                .transpose()?;
-            let start = start
-                .as_deref()
-                .map(|text| {
-                    kerf_model::time::parse_timecode(text.trim(), rate.unwrap_or(target.rate))
-                        .map_err(|error| invalid(format!("start timecode: {error}")))
-                })
-                .transpose()?;
-            Op::SetSequence {
-                sequence: target.id.clone(),
-                change: SequenceChange {
-                    name,
-                    rate,
-                    size,
-                    sample_rate: None,
-                    color: None,
-                    start,
-                },
+            Some((sequence, from, to)) => (sequence, from.min(start), to.max(end)),
+        });
+    }
+    let (sequence, from, to) = range.ok_or_else(|| invalid("extract needs a clip"))?;
+    Ok(Op::Extract {
+        sequence: project.sequences[sequence].id.clone(),
+        from,
+        to,
+        tracks: None,
+    })
+}
+
+/// Lower `EditOp::Set`: each of `props` is a property of the clip's track
+/// kind or a parameter of its generator.
+fn lower_set(
+    project: &Project,
+    clip: &str,
+    props: &BTreeMap<String, Json>,
+    name: &Option<String>,
+) -> Result<Op, RuntimeError> {
+    let at = project
+        .locate(clip)
+        .ok_or_else(|| invalid(format!("no clip `{clip}`")))?;
+    let target = project.clip_at(at);
+    let rate = project.sequences[at.sequence].rate;
+    let domain = project.sequences[at.sequence].tracks[at.track]
+        .kind
+        .domain();
+    let mut changes = Vec::new();
+    for (name, value) in props {
+        let prop = domain.and_then(|domain| catalog().prop(domain, name));
+        let def = prop
+            .or_else(|| match &target.content {
+                Content::Generator { fx, .. } => {
+                    catalog().fx(fx.as_str()).and_then(|def| def.find(name))
+                }
+                _ => None,
+            })
+            .ok_or_else(|| invalid(format!("clip `{clip}` has no property `{name}`")))?;
+        let param = param_value(name, def, value, Some(rate))?;
+        if prop.is_some() && domain == Some(Domain::Audio) {
+            sound_keyframes(None, name, param.as_ref())?;
+        }
+        changes.push(ClipChange::Param(name.clone(), param));
+    }
+    if let Some(name) = name {
+        let name = name.trim();
+        changes.push(ClipChange::Name(
+            (!name.is_empty()).then(|| name.to_owned()),
+        ));
+    }
+    Ok(Op::Set {
+        clip: edit_id(clip)?,
+        changes,
+    })
+}
+
+/// Lower `EditOp::FxAdd` of the effect `fx`.
+fn lower_fx_add(
+    project: &Project,
+    clip: &str,
+    fx: &str,
+    params: &BTreeMap<String, Json>,
+    index: Option<usize>,
+) -> Result<Op, RuntimeError> {
+    let def = catalog()
+        .fx(fx)
+        .ok_or_else(|| invalid(format!("no effect `{fx}`")))?;
+    let params = fx_params(def, params, rate_of(project, clip))?
+        .into_iter()
+        .filter_map(|(name, param)| param.map(|param| (name, param)))
+        .collect();
+    Ok(Op::FxAdd {
+        clip: edit_id(clip)?,
+        effect: Effect {
+            fx: def.id.clone(),
+            version: def.version,
+            enabled: true,
+            params,
+        },
+        index,
+    })
+}
+
+/// Lower `EditOp::FxSet` on the effect at `index` of `clip`.
+fn lower_fx_set(
+    project: &Project,
+    clip: &str,
+    index: usize,
+    enabled: Option<bool>,
+    params: &BTreeMap<String, Json>,
+) -> Result<Op, RuntimeError> {
+    let effect = project
+        .clip(clip)
+        .and_then(|found| found.effects.get(index))
+        .ok_or_else(|| invalid(format!("clip `{clip}` has no effect {index}")))?;
+    let def = catalog()
+        .fx(effect.fx.as_str())
+        .ok_or_else(|| invalid(format!("no effect `{}`", effect.fx)))?;
+    Ok(Op::FxSet {
+        clip: edit_id(clip)?,
+        index,
+        enabled,
+        params: fx_params(def, params, rate_of(project, clip))?,
+    })
+}
+
+/// The mask `EditOp::MaskAdd` adds to `clip`, named `name` with `shape`:
+/// the mode, inversion, and properties it gives, else their defaults.
+fn new_mask(
+    project: &Project,
+    clip: &str,
+    name: Id,
+    shape: MaskShape,
+    mode: &Option<String>,
+    inverted: Option<bool>,
+    params: &BTreeMap<String, Json>,
+) -> Result<Mask, RuntimeError> {
+    Ok(Mask {
+        name,
+        shape,
+        mode: mask_mode(mode)?.unwrap_or_default(),
+        inverted: inverted.unwrap_or(false),
+        params: mask_params(params, rate_of(project, clip))?
+            .into_iter()
+            .filter_map(|(name, param)| param.map(|param| (name, param)))
+            .collect(),
+    })
+}
+
+/// What an insert or overwrite places in each clip it makes: `media` from
+/// frame `source_in` of it, or `generator`, its keyframes counting frames
+/// of `rate`, the sequence's.
+fn placed_content(
+    project: &Project,
+    rate: Rate,
+    media: &Option<String>,
+    generator: &Option<GeneratorSpec>,
+    source_in: i64,
+) -> Result<Content, RuntimeError> {
+    Ok(match (media, generator) {
+        (Some(media), None) => {
+            let found = project
+                .media(media)
+                .ok_or_else(|| invalid(format!("no media `{media}`")))?;
+            Content::Media {
+                media: found.id.clone(),
+                source_in: found.rate.time_of(source_in),
+                speed: Ratio::ONE.into(),
             }
         }
-    }])
+        (None, Some(generator)) => {
+            if source_in != 0 {
+                return Err(invalid("a generator has no source in point"));
+            }
+            generator.content(rate)?
+        }
+        (Some(_), Some(_)) => {
+            return Err(invalid("place media or a generator, not both"));
+        }
+        (None, None) => return Err(invalid("give the media or the generator to place")),
+    })
+}
+
+/// Whether `op`, an insert or overwrite, overwrites: as `mode` says, else
+/// as `op` is named.
+fn overwrites(op: &EditOp, mode: &Option<String>) -> Result<bool, RuntimeError> {
+    Ok(match mode.as_deref().map(str::trim) {
+        None => matches!(op, EditOp::Overwrite { .. }),
+        Some("insert") => false,
+        Some("overwrite") => true,
+        Some(other) => {
+            return Err(invalid(format!(
+                "`{other}` is not an edit mode; use insert or overwrite"
+            )))
+        }
+    })
+}
+
+/// Lower an insert, or an overwrite when `overwrite`, of `content` on
+/// `tracks` of `sequence`: one clip a track, with the id `ids` gives it,
+/// `frames` long from frame `at`.
+fn lower_placement(
+    sequence: &Sequence,
+    overwrite: bool,
+    content: Content,
+    tracks: &[String],
+    ids: &[String],
+    at: i64,
+    frames: i64,
+) -> Result<Op, RuntimeError> {
+    let mut targets = Vec::new();
+    for (index, track) in tracks.iter().enumerate() {
+        let mut clip = NewClip::new(content.clone());
+        clip.id = ids.get(index).map(|id| edit_id(id)).transpose()?;
+        targets.push((edit_id(track)?, clip));
+    }
+    let (at, duration) = (sequence.rate.time_of(at), sequence.rate.time_of(frames));
+    Ok(if !overwrite {
+        Op::Insert {
+            sequence: sequence.id.clone(),
+            at,
+            duration,
+            targets,
+        }
+    } else {
+        Op::Overwrite {
+            sequence: sequence.id.clone(),
+            at,
+            duration,
+            targets,
+        }
+    })
+}
+
+/// Lower `EditOp::AddMarker` on `sequence`, the one it names or the first.
+fn lower_add_marker(
+    sequence: &Sequence,
+    at: i64,
+    frames: i64,
+    id: &Option<String>,
+    name: &Option<String>,
+    color: &Option<String>,
+    note: &Option<String>,
+) -> Result<Op, RuntimeError> {
+    Ok(Op::AddMarker {
+        sequence: sequence.id.clone(),
+        id: id.as_deref().map(edit_id).transpose()?,
+        at: sequence.rate.time_of(at),
+        duration: sequence.rate.time_of(frames),
+        name: name.clone(),
+        color: color
+            .as_deref()
+            .map(|color| {
+                MarkerColor::parse(color)
+                    .ok_or_else(|| invalid(format!("`{color}` is not a marker color")))
+            })
+            .transpose()?,
+        note: note.clone(),
+    })
+}
+
+/// Lower `EditOp::SetMarker` on `marker`, in the sequence that holds it.
+fn lower_set_marker(
+    project: &Project,
+    marker: &str,
+    at: Option<i64>,
+    frames: Option<i64>,
+    name: &Option<String>,
+    note: &Option<String>,
+    color: &Option<String>,
+) -> Result<Op, RuntimeError> {
+    let sequence = project
+        .sequences
+        .iter()
+        .find(|sequence| sequence.marker(marker).is_some())
+        .ok_or_else(|| invalid(format!("no marker `{marker}`")))?;
+    // Blank text clears; absent text leaves what is there.
+    let text = |text: &Option<String>| {
+        text.as_ref()
+            .map(|text| (!text.trim().is_empty()).then(|| text.clone()))
+    };
+    let color = match color.as_deref().map(str::trim) {
+        None => None,
+        Some("") => Some(None),
+        Some(color) => {
+            Some(Some(MarkerColor::parse(color).ok_or_else(|| {
+                invalid(format!("`{color}` is not a marker color"))
+            })?))
+        }
+    };
+    Ok(Op::SetMarker {
+        id: edit_id(marker)?,
+        change: MarkerChange {
+            at: at.map(|at| sequence.rate.time_of(at)),
+            duration: frames.map(|frames| sequence.rate.time_of(frames)),
+            name: text(name),
+            color,
+            note: text(note),
+        },
+    })
+}
+
+/// Lower `EditOp::SetTrack` on `track` of `sequence`: its switches, and its
+/// role and sync lock, are kernel operations of their own.
+fn lower_set_track(
+    sequence: &Sequence,
+    track: &str,
+    enabled: Option<bool>,
+    locked: Option<bool>,
+    muted: Option<bool>,
+    role: &Option<String>,
+    sync_locked: Option<bool>,
+) -> Result<Vec<Op>, RuntimeError> {
+    let (sequence, track) = (sequence.id.clone(), edit_id(track)?);
+    let switches = TrackChange {
+        bus: None,
+        name: None,
+        enabled,
+        locked,
+        muted,
+    };
+    let roles = TrackRoleChange {
+        role: role
+            .as_deref()
+            .map(|role| track_role(role).map_err(invalid))
+            .transpose()?,
+        sync_locked,
+    };
+    let mut ops = Vec::new();
+    // An op that names nothing to change still names the track,
+    // which must exist, as `set-track` always has.
+    if switches != TrackChange::default() || roles == TrackRoleChange::default() {
+        ops.push(Op::SetTrack {
+            sequence: sequence.clone(),
+            track: track.clone(),
+            change: switches,
+        });
+    }
+    if roles != TrackRoleChange::default() {
+        ops.push(Op::SetTrackRole {
+            sequence,
+            track,
+            change: roles,
+        });
+    }
+    Ok(ops)
+}
+
+/// Lower `EditOp::AddTrack` to `sequence`, and the name it gives the track.
+fn lower_add_track(
+    sequence: &Sequence,
+    kind: &str,
+    id: &Option<String>,
+    name: &Option<String>,
+) -> Result<Vec<Op>, RuntimeError> {
+    let kind =
+        TrackKind::parse(kind).ok_or_else(|| invalid(format!("`{kind}` is not a track kind")))?;
+    let id = match id {
+        Some(id) => edit_id(id)?,
+        None => new_track_id(sequence, kind),
+    };
+    let mut ops = vec![Op::AddTrack {
+        sequence: sequence.id.clone(),
+        id: id.clone(),
+        kind,
+        index: None,
+    }];
+    if let Some(name) = name {
+        ops.push(Op::SetTrack {
+            sequence: sequence.id.clone(),
+            track: id,
+            change: TrackChange {
+                name: Some(Some(name.clone())),
+                ..TrackChange::default()
+            },
+        });
+    }
+    Ok(ops)
+}
+
+/// Lower `EditOp::SetSequence` on `target`. Its frame rate changes only
+/// while it is empty.
+fn lower_set_sequence(
+    target: &Sequence,
+    width: Option<u32>,
+    height: Option<u32>,
+    name: &Option<String>,
+    rate: &Option<RateSpec>,
+    start: &Option<String>,
+) -> Result<Op, RuntimeError> {
+    let size = match (width, height) {
+        (Some(width), Some(height)) => Some((width, height)),
+        (None, None) => None,
+        _ => return Err(invalid("give the width and the height together")),
+    };
+    let rate = rate
+        .as_ref()
+        .map(RateSpec::rate)
+        .transpose()?
+        .filter(|rate| *rate != target.rate);
+    let empty =
+        target.tracks.iter().all(|track| track.clips.is_empty()) && target.markers.is_empty();
+    if rate.is_some() && !empty {
+        return Err(invalid(RATE_NEEDS_EMPTY));
+    }
+    let name = name
+        .as_deref()
+        .map(|name| match name.trim() {
+            "" => Err(invalid("a sequence needs a name")),
+            name => Ok(name.to_owned()),
+        })
+        .transpose()?;
+    let start = start
+        .as_deref()
+        .map(|text| {
+            kerf_model::time::parse_timecode(text.trim(), rate.unwrap_or(target.rate))
+                .map_err(|error| invalid(format!("start timecode: {error}")))
+        })
+        .transpose()?;
+    Ok(Op::SetSequence {
+        sequence: target.id.clone(),
+        change: SequenceChange {
+            name,
+            rate,
+            size,
+            sample_rate: None,
+            color: None,
+            start,
+        },
+    })
 }
 
 /// An effect's parameters from JSON: a static value or keyframes each (see

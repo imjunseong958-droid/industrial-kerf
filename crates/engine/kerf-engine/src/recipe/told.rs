@@ -15,7 +15,7 @@
 //! cannot write its file is made all the same.
 
 use crate::error::EngineError;
-use crate::sidecar::CancellationToken;
+use crate::process::sidecar::CancellationToken;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};

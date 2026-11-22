@@ -387,16 +387,18 @@ fn decode(project: &Project, clip: &Clip, at: f64, width: u32) -> Result<Option<
         as u32)
         .max(2)
         & !1;
-    let output = kerf_engine::ffmpeg::hidden_command(kerf_engine::ffmpeg::resolve_ffmpeg_bin())
-        .args(["-hide_banner", "-loglevel", "error", "-ss"])
-        .arg(kerf_engine::program::secs(source))
-        .arg("-i")
-        .arg(&media.path)
-        .args(["-frames:v", "1", "-vf"])
-        .arg(format!("scale={width}:{height},format=rgba"))
-        .args(["-f", "rawvideo", "-"])
-        .output()
-        .map_err(|err| err.to_string())?;
+    let output = kerf_engine::process::ffmpeg::hidden_command(
+        kerf_engine::process::ffmpeg::resolve_ffmpeg_bin(),
+    )
+    .args(["-hide_banner", "-loglevel", "error", "-ss"])
+    .arg(kerf_engine::program::secs(source))
+    .arg("-i")
+    .arg(&media.path)
+    .args(["-frames:v", "1", "-vf"])
+    .arg(format!("scale={width}:{height},format=rgba"))
+    .args(["-f", "rawvideo", "-"])
+    .output()
+    .map_err(|err| err.to_string())?;
     let size = width as usize * height as usize * 4;
     if !output.status.success() || output.stdout.len() < size {
         return Err(format!("no picture of `{}` at that time", clip.id));

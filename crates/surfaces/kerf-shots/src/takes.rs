@@ -2,7 +2,7 @@
 //!
 //! A line that says where a clip goes (`moves=<clip>`) says what the shot's
 //! subject is and where it should be on each frame. A take is read against
-//! that with no model ([`kerf_engine::placed`]): the subject is looked for
+//! that with no model ([`kerf_engine::analysis::placed`]): the subject is looked for
 //! in the take's own picture where the guide's sequence has the clip, and
 //! followed, and `overlap` says how much of where it is and where it was
 //! asked for is the same, from 0 to 1.
@@ -68,7 +68,13 @@ pub fn read(project: &Project, directory: &Path, id: &str, take: &Take, guide: &
         .clips
         .iter()
         .map(|clip| {
-            match kerf_engine::placed::placed(project, Some(&guide.sequence), clip, &file, rate) {
+            match kerf_engine::analysis::placed::placed(
+                project,
+                Some(&guide.sequence),
+                clip,
+                &file,
+                rate,
+            ) {
                 Ok(placed) => {
                     sum += placed.overlap;
                     json!({

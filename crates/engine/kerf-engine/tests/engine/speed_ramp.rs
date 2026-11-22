@@ -1,6 +1,6 @@
 //! A speed ramp through a whole render: the picture on its frames and the sound in time with them.
 
-use kerf_engine::ffmpeg::resolve_ffmpeg_bin;
+use kerf_engine::process::ffmpeg::resolve_ffmpeg_bin;
 use kerf_engine::render::{render_program, RenderOptions};
 use kerf_lang::parse_document;
 use kerf_model::{Catalog, Project, Time};

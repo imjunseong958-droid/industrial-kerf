@@ -2,7 +2,7 @@
 //! how that offset goes over the recording, and, where no one offset places it, what does not
 //! fit.
 
-use kerf_engine::sync::{Alignment, Holds};
+use kerf_engine::analysis::sync::{Alignment, Holds};
 use serde_json::{json, Value};
 
 /// A recording as `look` with `sync` answers of it.
@@ -166,7 +166,7 @@ fn tenths(seconds: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kerf_engine::sync::{Course, Jump, Stretch};
+    use kerf_engine::analysis::sync::{Course, Jump, Stretch};
 
     /// A recording read a minute at a time, each stretch with the offset given for it.
     fn read(offsets: &[Option<f64>], drift: f64, jumps: Vec<Jump>) -> Alignment {

@@ -1,7 +1,7 @@
 //! Kerf's effects and transitions.
 //!
 //! [`transitions`] are the transitions carried from FilmCraft, which Kerf's
-//! own renderer draws from both clips across a cut, and [`filmcraft`] the
+//! own renderer draws from both clips across a cut, and [`video`] the
 //! video effects carried from FilmCraft, which it runs on a clip's picture.
 //! The rest of this crate is the EffectCraft effects Kerf keeps ([`kept`]),
 //! which FilmCraft has nothing like.
@@ -22,11 +22,11 @@ use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::sync::OnceLock;
 
-pub mod filmcraft;
 mod guide;
 pub mod kept;
 pub mod picture;
 pub mod transitions;
+pub mod video;
 
 pub use kerf_draw::mask::cuts;
 
