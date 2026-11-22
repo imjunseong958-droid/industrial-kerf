@@ -195,7 +195,7 @@ impl ShotGraph {
     /// from a sound of its sequence.
     pub(super) fn signal_column(&self, node: &GraphNode, cx: &mut Context<Self>) -> gpui::Div {
         let holds = &node.holds;
-        let mut column = div().flex().flex_col().gap(px(8.0));
+        let mut column = div().flex().flex_col().gap(px(theme::space::S8));
         if node.is_missing() {
             return column.child(note(node.detail.clone(), theme::neg()));
         }

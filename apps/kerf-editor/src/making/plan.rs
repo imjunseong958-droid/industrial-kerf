@@ -144,7 +144,7 @@ pub(super) fn steps_block_in(steps: &[String], choose: &Choose) -> gpui::Div {
     div()
         .flex()
         .flex_col()
-        .gap(px(2.0))
+        .gap(px(theme::space::S2))
         .p(px(10.0))
         .rounded(px(radius::CONTROL))
         .bg(theme::well())
@@ -153,7 +153,7 @@ pub(super) fn steps_block_in(steps: &[String], choose: &Choose) -> gpui::Div {
         .children(steps.iter().enumerate().map(|(index, step)| {
             div()
                 .flex()
-                .gap(px(8.0))
+                .gap(px(theme::space::S8))
                 .child(
                     ui::label(format!("{}", index + 1), text::MONO_SMALL, theme::ink3())
                         .flex_none(),
@@ -184,7 +184,7 @@ pub(super) fn notes_block_in(
         div()
             .flex()
             .flex_col()
-            .gap(px(4.0))
+            .gap(px(theme::space::S4))
             .child(ui::label(
                 heading.to_owned(),
                 text::META_STRONG,
@@ -193,7 +193,7 @@ pub(super) fn notes_block_in(
             .children(notes.iter().enumerate().map(|(index, note)| {
                 div()
                     .flex()
-                    .gap(px(6.0))
+                    .gap(px(theme::space::S6))
                     .child(ui::label("•", text::CONTROL, theme::warn()).flex_none())
                     .child(
                         words_piece(choose, index, note.clone(), text::CONTROL, theme::warn())
@@ -418,7 +418,7 @@ impl MakePlan {
                 .on_click(cx.listener(|this, _, _, cx| this.dismiss(cx)))
                 .into_any_element()
         };
-        let mut body = div().flex().flex_col().gap(px(12.0));
+        let mut body = div().flex().flex_col().gap(px(theme::space::S12));
         if let Some(carried) = &self.carried {
             body = body.child(ui::label(carried.clone(), text::CONTROL, theme::pos()));
         }
@@ -587,8 +587,8 @@ impl Render for MakePlan {
                     .flex_none()
                     .flex()
                     .items_center()
-                    .gap(px(8.0))
-                    .px(px(16.0))
+                    .gap(px(theme::space::S8))
+                    .px(px(theme::space::S16))
                     .border_b_1()
                     .border_color(theme::line())
                     .child(Icon::Sparkle.view(16.0, theme::activity::gpu()))
@@ -611,7 +611,7 @@ impl Render for MakePlan {
                     .min_h_0()
                     .overflow_y_scroll()
                     .px(px(20.0))
-                    .py(px(16.0))
+                    .py(px(theme::space::S16))
                     .child(body),
             )
             .child(
@@ -619,9 +619,9 @@ impl Render for MakePlan {
                     .flex_none()
                     .flex()
                     .justify_end()
-                    .gap(px(8.0))
-                    .px(px(16.0))
-                    .py(px(12.0))
+                    .gap(px(theme::space::S8))
+                    .px(px(theme::space::S16))
+                    .py(px(theme::space::S12))
                     .border_t_1()
                     .border_color(theme::line())
                     .children(buttons),

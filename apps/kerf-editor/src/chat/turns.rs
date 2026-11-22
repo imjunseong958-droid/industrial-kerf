@@ -278,7 +278,7 @@ impl ChatView {
         let headline = div()
             .flex()
             .items_center()
-            .gap(px(6.0))
+            .gap(px(theme::space::S6))
             .child(Icon::Clock.view(12.0, theme::ink3()))
             .child(ui::label(
                 worked_headline(turn.seconds, turn.steps.len()),
@@ -302,7 +302,7 @@ impl ChatView {
                 div()
                     .flex()
                     .flex_col()
-                    .gap(px(4.0))
+                    .gap(px(theme::space::S4))
                     .pl(px(10.0))
                     .border_l_1()
                     .border_color(theme::line2())
@@ -310,7 +310,7 @@ impl ChatView {
                         div()
                             .flex()
                             .items_center()
-                            .gap(px(6.0))
+                            .gap(px(theme::space::S6))
                             .child(Icon::Check.view(12.0, theme::ink3()))
                             .child(ui::line(step.clone(), text::CONTROL, theme::ink2()))
                     }))

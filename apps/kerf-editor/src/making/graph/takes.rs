@@ -72,7 +72,7 @@ impl ShotGraph {
         cx: &mut Context<Self>,
     ) -> gpui::Div {
         let holds = &node.holds;
-        let mut column = div().flex().flex_col().gap(px(6.0));
+        let mut column = div().flex().flex_col().gap(px(theme::space::S6));
         if let Some(wants) = holds["wants"].as_str() {
             column = column.child(note(format!("Wants making: {wants}."), theme::warn()));
         }
@@ -148,14 +148,14 @@ impl ShotGraph {
             .id(ElementId::Name(format!("take-{number_of}").into()))
             .flex()
             .items_center()
-            .gap(px(8.0))
+            .gap(px(theme::space::S8))
             .min_h(px(if picture.is_some() {
                 TAKE_PICTURE.1 + 8.0
             } else {
                 28.0
             }))
             .px(px(if picture.is_some() { 4.0 } else { 8.0 }))
-            .py(px(2.0))
+            .py(px(theme::space::S2))
             .rounded(px(radius::CONTROL))
             .border_1()
             .border_color(if chosen {
@@ -277,7 +277,7 @@ impl ShotGraph {
         } else {
             "Hold to guide again"
         };
-        div().flex().pt(px(4.0)).child(
+        div().flex().pt(px(theme::space::S4)).child(
             ui::button("graph-hold", hold_words)
                 .disabled(reading || !connected)
                 .tooltip("Read where each take has the shot's subject beside where its guide asked for it. No model is run")

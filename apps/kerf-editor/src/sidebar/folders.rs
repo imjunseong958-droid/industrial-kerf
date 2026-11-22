@@ -56,13 +56,13 @@ impl SidebarView {
             ),
             ITEM,
         )
-        .mx(px(8.0))
-        .mt(px(4.0))
+        .mx(px(theme::space::S8))
+        .mt(px(theme::space::S4))
         .px(px(10.0))
         .h(px(theme::height::H28))
         .flex()
         .items_center()
-        .gap(px(6.0))
+        .gap(px(theme::space::S6))
         .rounded(px(theme::radius::CONTROL))
         .cursor_pointer()
         .when(open, |heading| heading.bg(theme::raised()))
@@ -160,11 +160,11 @@ impl SidebarView {
         .relative()
         .flex()
         .items_center()
-        .gap(px(6.0))
+        .gap(px(theme::space::S6))
         .h(px(theme::height::H28))
-        .pl(px(6.0))
+        .pl(px(theme::space::S6))
         .pr(px(10.0))
-        .mx(px(8.0))
+        .mx(px(theme::space::S8))
         .rounded(px(theme::radius::CONTROL))
         .cursor_pointer()
         .hover(|row| row.bg(theme::raised()))
@@ -191,7 +191,7 @@ impl SidebarView {
             .relative()
             .flex()
             .flex_col()
-            .gap(px(2.0))
+            .gap(px(theme::space::S2))
             .child(row)
             .children(conversations)
             .when(menu_open, |wrapper| {
@@ -390,9 +390,9 @@ impl SidebarView {
         let show_all = self.others_shown_all.contains(folder);
         let (count, more) = shown(conversations.len(), false, show_all, None);
         self.follow_ages(conversations.iter().take(count), now, cx);
-        let mut list = div().flex().flex_col().gap(px(2.0));
+        let mut list = div().flex().flex_col().gap(px(theme::space::S2));
         if conversations.is_empty() {
-            list = list.child(div().pl(px(42.0)).py(px(4.0)).child(ui::label(
+            list = list.child(div().pl(px(42.0)).py(px(theme::space::S4)).child(ui::label(
                 "No conversations yet",
                 text::SIDE_NOTE,
                 theme::ink3(),
@@ -443,7 +443,7 @@ impl SidebarView {
         .h(px(theme::height::H28))
         .pl(px(34.0))
         .pr(px(10.0))
-        .mx(px(8.0))
+        .mx(px(theme::space::S8))
         .rounded(px(theme::radius::CONTROL))
         .cursor_pointer()
         .hover(|row| row.bg(theme::raised()))
@@ -479,7 +479,7 @@ impl SidebarView {
         .items_center()
         .h(px(theme::height::H28))
         .pl(px(34.0))
-        .mx(px(8.0))
+        .mx(px(theme::space::S8))
         .rounded(px(theme::radius::CONTROL))
         .cursor_pointer()
         .hover(|row| row.bg(theme::raised()))

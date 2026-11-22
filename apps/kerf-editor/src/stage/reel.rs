@@ -247,10 +247,10 @@ impl StageView {
         let tag = |words: &'static str, ground: Rgba| {
             theme::type_style(div(), text::META)
                 .h(px(22.0))
-                .px(px(8.0))
+                .px(px(theme::space::S8))
                 .flex()
                 .items_center()
-                .rounded(px(6.0))
+                .rounded(px(theme::radius::CONTROL))
                 .bg(ground)
                 .text_color(over_picture::tag_ink())
                 .child(words)

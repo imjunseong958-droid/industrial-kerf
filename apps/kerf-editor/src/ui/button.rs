@@ -171,7 +171,7 @@ impl RenderOnce for Button {
             .flex_none()
             .items_center()
             .justify_center()
-            .gap(px(6.0))
+            .gap(px(theme::space::S6))
             .h(px(tall))
             .px(px(if self.small { 8.0 } else { 12.0 }))
             .rounded(px(radius::CONTROL))

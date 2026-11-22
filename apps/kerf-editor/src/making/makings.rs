@@ -447,7 +447,7 @@ impl Makings {
                 div()
                     .flex()
                     .items_center()
-                    .gap(px(8.0))
+                    .gap(px(theme::space::S8))
                     .child(Icon::Sparkle.view(
                         16.0,
                         if asked {
@@ -563,12 +563,12 @@ impl Makings {
         let card_key = &shown.key;
         let plan_open = shown.plan_open;
         let toggle_key = card_key.clone();
-        let mut footer = div().flex().items_center().gap(px(8.0)).child(
+        let mut footer = div().flex().items_center().gap(px(theme::space::S8)).child(
             div()
                 .id(ElementId::Name(format!("plan-toggle-{card_key}").into()))
                 .flex()
                 .items_center()
-                .gap(px(4.0))
+                .gap(px(theme::space::S4))
                 .cursor_pointer()
                 .child(
                     if plan_open {
@@ -811,6 +811,10 @@ impl Render for Makings {
             }
         }
         let cards = self.cards(asks, cx);
-        div().flex().flex_col().gap(px(12.0)).children(cards)
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(theme::space::S12))
+            .children(cards)
     }
 }

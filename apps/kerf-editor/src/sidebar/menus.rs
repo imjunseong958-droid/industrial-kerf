@@ -27,7 +27,7 @@ use std::path::PathBuf;
 /// What opens from a press: a panel of items a step up from what it opens over.
 pub fn menu_panel() -> Div {
     div()
-        .p(px(4.0))
+        .p(px(theme::space::S4))
         .rounded(px(theme::radius::CARD))
         .bg(theme::popup())
         .border_1()
@@ -64,7 +64,7 @@ pub fn menu_item(
         .id(id)
         .flex()
         .items_center()
-        .gap(px(8.0))
+        .gap(px(theme::space::S8))
         .h(px(30.0))
         .px(px(10.0))
         .rounded(px(theme::radius::CONTROL))
@@ -82,7 +82,11 @@ pub fn menu_item(
 
 /// A line between a menu's groups.
 pub fn menu_separator() -> Div {
-    div().my(px(4.0)).mx(px(6.0)).h(px(1.0)).bg(theme::line())
+    div()
+        .my(px(theme::space::S4))
+        .mx(px(theme::space::S6))
+        .h(px(1.0))
+        .bg(theme::line())
 }
 
 /// A press that toggles what it opens, taken before anything under the
@@ -471,11 +475,13 @@ impl SidebarView {
             .on_action(cx.listener(|this, _: &MenuClose, window, cx| this.menu_escape(window, cx)))
             .on_mouse_down_out(cx.listener(|this, _, _, cx| this.menu_pressed_out(cx)));
         if let Some(header) = header {
-            panel = panel.child(div().px(px(10.0)).pt(px(4.0)).pb(px(6.0)).child(ui::line(
-                header,
-                text::META,
-                theme::ink3(),
-            )));
+            panel = panel.child(
+                div()
+                    .px(px(10.0))
+                    .pt(px(theme::space::S4))
+                    .pb(px(theme::space::S6))
+                    .child(ui::line(header, text::META, theme::ink3())),
+            );
         }
         for (index, entry) in entries.into_iter().enumerate() {
             if entry.separated {

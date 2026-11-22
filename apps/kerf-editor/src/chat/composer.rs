@@ -156,7 +156,7 @@ impl ChatView {
         div()
             .flex()
             .flex_col()
-            .gap(px(8.0))
+            .gap(px(theme::space::S8))
             .when((!next.is_empty() || offer_qc) && !facts.busy, |column| {
                 column.child(suggestions(next, offer_qc, cx))
             })
@@ -256,8 +256,8 @@ impl ChatView {
             }))
             .flex()
             .flex_col()
-            .gap(px(8.0))
-            .p(px(12.0))
+            .gap(px(theme::space::S8))
+            .p(px(theme::space::S12))
             .rounded(px(theme::radius::CARD + 4.0))
             .bg(theme::raised())
             .border_1()
@@ -305,7 +305,7 @@ impl ChatView {
         div()
             .flex()
             .items_center()
-            .gap(px(6.0))
+            .gap(px(theme::space::S6))
             .child(self.menu_chip(
                 Menu::Folder,
                 "folder-chip",
@@ -366,9 +366,9 @@ impl ChatView {
                 .flex()
                 .min_w_0()
                 .items_center()
-                .gap(px(4.0))
+                .gap(px(theme::space::S4))
                 .h(px(20.0))
-                .pl(px(8.0))
+                .pl(px(theme::space::S8))
                 .rounded(px(10.0))
                 .bg(theme::raised())
                 .text_color(ink)
@@ -387,7 +387,7 @@ impl ChatView {
                         .child(ui::cut_line(words)),
                 )
                 .id(id)
-                .pr(px(4.0))
+                .pr(px(theme::space::S4))
                 .cursor_pointer()
                 .hover(move |chip| {
                     let chip = chip.bg(theme::hover2());
@@ -517,7 +517,7 @@ impl ChatView {
             .flex()
             .justify_center()
             .px(px(24.0))
-            .pb(px(16.0))
+            .pb(px(theme::space::S16))
             .child(
                 div()
                     .relative()
@@ -558,7 +558,7 @@ fn suggestions(next: Vec<(String, String)>, offer_qc: bool, cx: &Context<ChatVie
     div()
         .flex()
         .flex_wrap()
-        .gap(px(6.0))
+        .gap(px(theme::space::S6))
         // A press here leaves the keys in the box: Run QC,
         // offered only while the box has them, stays under
         // the pointer to be let go on, and the row does not
@@ -595,8 +595,8 @@ fn queued_row(queued: &str, cx: &Context<ChatView>) -> impl IntoElement {
     div()
         .flex()
         .items_center()
-        .gap(px(8.0))
-        .pl(px(4.0))
+        .gap(px(theme::space::S8))
+        .pl(px(theme::space::S4))
         .child(Icon::Clock.view(12.0, theme::ink3()))
         .child(
             ui::line(format!("Next: {line}"), text::META, theme::ink2())
@@ -674,9 +674,9 @@ fn stamp_chip(timecode: String, cx: &Context<ChatView>) -> AnyElement {
         .flex()
         .flex_none()
         .items_center()
-        .gap(px(4.0))
+        .gap(px(theme::space::S4))
         .h(px(20.0))
-        .px(px(6.0))
+        .px(px(theme::space::S6))
         .rounded(px(theme::radius::CONTROL))
         .text_color(theme::ink3())
         .cursor_pointer()

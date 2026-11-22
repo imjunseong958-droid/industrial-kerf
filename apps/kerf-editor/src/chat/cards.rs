@@ -217,7 +217,7 @@ impl ChatView {
             .min_w_0()
             .flex()
             .items_center()
-            .gap(px(6.0))
+            .gap(px(theme::space::S6))
             .child(Icon::Film.view(12.0, theme::ink3()))
             .child(
                 ui::line(script_summary(script, number), text::CONTROL, theme::ink2())
@@ -317,7 +317,7 @@ impl ChatView {
             .min_w_0()
             .flex()
             .items_center()
-            .gap(px(6.0))
+            .gap(px(theme::space::S6))
             .child(icon.view(12.0, color))
             .child(
                 ui::line(
@@ -467,7 +467,7 @@ impl ChatView {
                         .id(ElementId::Name(format!("changes-toggle-{id}").into()))
                         .flex()
                         .items_center()
-                        .gap(px(4.0))
+                        .gap(px(theme::space::S4))
                         .cursor_pointer()
                         .child(ui::label(
                             if count == 1 {
@@ -528,7 +528,7 @@ impl ChatView {
         div()
             .flex()
             .flex_wrap()
-            .gap(px(8.0))
+            .gap(px(theme::space::S8))
             .when(!stale, |row| {
                 let mut button =
                     ui::button(ElementId::Name(format!("accept-{id}").into()), "Accept")
@@ -658,10 +658,10 @@ impl ChatView {
                 .id(ElementId::Name(format!("versions-{id}").into()))
                 .flex()
                 .items_center()
-                .gap(px(2.0))
+                .gap(px(theme::space::S2))
                 .h(px(20.0))
-                .pl(px(6.0))
-                .pr(px(2.0))
+                .pl(px(theme::space::S6))
+                .pr(px(theme::space::S2))
                 .rounded(px(theme::radius::SMALL))
                 .text_color(if open { theme::ink() } else { theme::ink3() })
                 .cursor_pointer()
@@ -777,8 +777,12 @@ fn card_title(facts: &CardFacts, cx: &Context<ChatView>) -> gpui::Div {
     div()
         .flex()
         .items_start()
-        .gap(px(8.0))
-        .child(div().pt(px(2.0)).child(Icon::Film.view(16.0, theme::pos())))
+        .gap(px(theme::space::S8))
+        .child(
+            div()
+                .pt(px(theme::space::S2))
+                .child(Icon::Film.view(16.0, theme::pos())),
+        )
         .child(
             // Pressed, the title opens or closes the card's changes.
             ui::label(
@@ -860,7 +864,7 @@ fn diff(lines: &[String], id: &str, shared: &selectable::Shared) -> impl IntoEle
         .id(ElementId::Name(format!("diff-{id}").into()))
         .max_h(px(260.0))
         .overflow_y_scroll()
-        .p(px(8.0))
+        .p(px(theme::space::S8))
         .rounded(px(theme::radius::CONTROL))
         .bg(theme::well())
         .children(lines.iter().take(400).enumerate().map(|(index, line)| {

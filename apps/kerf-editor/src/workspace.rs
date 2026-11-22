@@ -510,8 +510,8 @@ impl Workspace {
                                 .bottom_0()
                                 .left(px(regions.conversation_width - regions.reach))
                                 .w(px(regions.panel_width + regions.reach))
-                                .pr(px(8.0))
-                                .pb(px(8.0))
+                                .pr(px(theme::space::S8))
+                                .pb(px(theme::space::S8))
                                 // Reaching over the conversation, the
                                 // words under it take no press.
                                 .occlude()

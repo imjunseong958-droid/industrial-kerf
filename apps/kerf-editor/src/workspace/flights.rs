@@ -732,7 +732,7 @@ pub(super) fn flown(drawn: Drawn) -> AnyElement {
                             .flex()
                             .items_center()
                             .rounded(px(theme::radius::SMALL))
-                            .bg(gpui::rgba(0x00000099))
+                            .bg(theme::flight_name_plate())
                             .child(ui::line(name, text::META, gpui::white().into())),
                     )
                 },

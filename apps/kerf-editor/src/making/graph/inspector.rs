@@ -30,7 +30,11 @@ impl ShotGraph {
     /// The column at the right: the chosen node and its settings, the shot,
     /// or the model's workflow.
     pub(super) fn inspector(&self, cx: &mut Context<Self>) -> AnyElement {
-        let mut column = div().flex().flex_col().gap(px(8.0)).p(px(14.0));
+        let mut column = div()
+            .flex()
+            .flex_col()
+            .gap(px(theme::space::S8))
+            .p(px(14.0));
         let session = self.session.read(cx);
         let making = self.making(session).is_some();
         let connected = session.state.connection == crate::store::Connection::Connected;
@@ -63,7 +67,7 @@ impl ShotGraph {
                     div()
                         .flex()
                         .items_center()
-                        .gap(px(8.0))
+                        .gap(px(theme::space::S8))
                         .when(!node.is_part(), |head| {
                             head.child(kind_icon(&node.kind).view(16.0, color))
                         })
@@ -77,7 +81,7 @@ impl ShotGraph {
                 column = column.child(self.node_column(&graph, &node, making, connected, cx));
                 if let Some(line) = node.line.filter(|_| !node.is_part()) {
                     column = column.child(
-                        div().flex().pt(px(8.0)).child(
+                        div().flex().pt(px(theme::space::S8)).child(
                             ui::button("graph-remove-step", "Delete step")
                                 .ghost()
                                 .icon(Icon::Trash)
@@ -134,7 +138,7 @@ impl ShotGraph {
         let mut column = div()
             .flex()
             .flex_col()
-            .gap(px(8.0))
+            .gap(px(theme::space::S8))
             .child(ui::label(recipe.name.clone(), text::TITLE, theme::ink()))
             .child(ui::label(
                 if recipe.document {
@@ -198,7 +202,7 @@ impl ShotGraph {
     ) -> gpui::Div {
         let holds = &node.holds;
         let missing = holds["there"] == Value::Bool(false);
-        let mut column = div().flex().flex_col().gap(px(8.0));
+        let mut column = div().flex().flex_col().gap(px(theme::space::S8));
         match node.kind.as_str() {
             "part" => return column.child(self.part_column(graph, node, cx)),
             "model" => return column.child(self.model_column(graph, node, cx)),
@@ -335,7 +339,7 @@ impl ShotGraph {
 
     fn model_column(&self, graph: &Recipe, node: &GraphNode, cx: &mut Context<Self>) -> gpui::Div {
         let holds = &node.holds;
-        let mut column = div().flex().flex_col().gap(px(8.0));
+        let mut column = div().flex().flex_col().gap(px(theme::space::S8));
         if let Some(about) = holds["about"].as_str().filter(|about| !about.is_empty()) {
             column = column.child(note(about.to_owned(), theme::ink2()));
         }
@@ -470,7 +474,7 @@ impl ShotGraph {
         div()
             .flex()
             .items_center()
-            .gap(px(8.0))
+            .gap(px(theme::space::S8))
             .child(
                 ui::line("Draws", text::CONTROL, theme::ink2())
                     .w(px(FIELD_LABEL))
@@ -482,7 +486,7 @@ impl ShotGraph {
     /// What reads into a node, a row each; a model's can be let go of.
     fn reads(&self, recipe: &Recipe, node: &GraphNode, cx: &mut Context<Self>) -> gpui::Div {
         let into = recipe.reads_into(&node.id);
-        let mut reads = div().flex().flex_col().gap(px(4.0));
+        let mut reads = div().flex().flex_col().gap(px(theme::space::S4));
         if into.is_empty() {
             return reads;
         }
@@ -497,7 +501,7 @@ impl ShotGraph {
                 div()
                     .flex()
                     .items_center()
-                    .gap(px(8.0))
+                    .gap(px(theme::space::S8))
                     .h(px(24.0))
                     .child(ui::dot(gives_color(&edge.gives), 6.0))
                     .child(
@@ -541,7 +545,7 @@ impl ShotGraph {
 
 /// A heading over a part of the column.
 pub(super) fn section(words: &str) -> gpui::Div {
-    div().pt(px(6.0)).child(ui::label(
+    div().pt(px(theme::space::S6)).child(ui::label(
         words.to_owned(),
         text::META_STRONG,
         theme::ink3(),

@@ -15,7 +15,7 @@ impl ChatView {
     /// lists, headings and code, with bold, code and timecode links inline.
     /// Its words can be chosen with the pointer as one run, `key`'s.
     pub(super) fn prose(&self, words: &str, key: &str, ink: Rgba, cx: &App) -> gpui::Div {
-        let mut column = div().flex().flex_col().gap(px(8.0));
+        let mut column = div().flex().flex_col().gap(px(theme::space::S8));
         let mut code: Option<Vec<String>> = None;
         let mut paragraph: Vec<String> = Vec::new();
         // The pieces so far, and whether the last was a list's item.
@@ -53,7 +53,7 @@ impl ChatView {
                 column = column.child(
                     div()
                         .flex()
-                        .gap(px(8.0))
+                        .gap(px(theme::space::S8))
                         .child(theme::reading(div()).text_color(theme::ink3()).child("•"))
                         .child(
                             div()
