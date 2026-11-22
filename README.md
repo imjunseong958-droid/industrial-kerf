@@ -13,21 +13,14 @@ configured in Kerf.
 
 `kerfd` is the only owner of project state, revisions, history, idempotency
 receipts, proposals, and render jobs. The native editor, terminal agent, and
-MCP server are adapters over the same project-scoped IPC boundary.
+MCP server all reach a project through it, over the same project-scoped IPC
+boundary, so no two of them can hold different versions of a project.
 
 The canonical project is the `project.kerf` text document. Edits are edit scripts or typed
 operations; agent proposals carry their script and the diff of the document
 they would produce. Because the project is text, people share it through Git
 and GitHub: a sync commits, merges, and pushes, and `project.kerf` merges by
 the ids of what it holds.
-
-```text
-GPUI editor (Rust) ──────────────────┐
-Rust agent and CLI ──────────────────┼─> kerfd ─> kerf-model ─> project.kerf
-Rust MCP server ─────────────────────┘     │
-                                           └─> .kerf document ─> render compiler,
-                                                                playback, previews
-```
 
 Clients start `kerfd` on demand, one per project. The editor, the MCP server,
 the terminal agent, and a running render hold it open; once they are all
@@ -41,18 +34,13 @@ A crate's folder under `crates/` says what it may depend on, and the areas may
 not depend on each other, so each can be rewritten alone; `tools/kerf-layers`
 fails the tests otherwise.
 
-Renders, playback, and previews read the model. A render job and a proposal
-preview carry the `.kerf` document with media paths resolved against the
-project. The compositor draws the picture, and the sound of the sequence is
-lowered to one FFmpeg graph with exact times: sound comes from audio tracks,
-crossfades play across their cuts using the clips' handles, and sound effects
-lower from their catalog definitions. A feature the picture or the sound
-cannot take is reported with the clip it is on. Native playback plays the same
-sequence as cuts, running a media clip's raster effects live on each
-picture (except keys and mattes, whose transparency needs the tracks
-below, and time effects, which read the clip's other frames), and asks for
-a rendered preview whenever it would show something different. Editor snapshots carry the document and a timeline
-view of it; the editor sends its edits back as typed operations.
+Renders, previews, and playback all draw from the same document, with media
+paths resolved against the project, and sound crossfades play across their cuts
+on the clips' handles. A feature the picture or the sound cannot take is
+reported with the clip it is on. Live playback runs a media clip's raster
+effects on each picture, except keys and mattes, whose transparency needs the
+tracks below, and time effects, which read the clip's other frames, and it asks
+for a rendered preview whenever it would show something different.
 
 A shot a renderer or a video model makes comes in as media with the steps
 that make it written under it in the document; each making is a take, and
@@ -60,19 +48,18 @@ the document says which one the media is. Kerf
 ships no model: one is a program a person names in `~/.kerf/models.json`, and
 `tools/kerf-comfy` is such a program for a model on a ComfyUI server.
 
-Kerf draws with its own renderer (`kerf-draw`, drawn by `kerf-compose`): it
-draws Kerf's model directly in linear light, with drawing carried from
-[FilmCraft](https://github.com/storytold/filmcraft) (MIT/Apache), for
-renders, previews, and live playback. A frame is drawn on the GPU (`kerf-gpu`, on wgpu) when every part of it
+Kerf draws with its own renderer, in linear light, with drawing carried from
+[FilmCraft](https://github.com/storytold/filmcraft) (MIT/Apache), for renders,
+previews, and live playback. A frame is drawn on the GPU when every part of it
 has a kernel there, and otherwise on the CPU, which stays the reference;
 `KERF_GPU=0` keeps everything on the CPU. A video editor's
 transitions (pushes, whips, zooms, flashes, light leaks, glitches, irises)
 and effects (Lumetri, blurs, keys and track mattes, lens and tracking fixes,
-burn-ins, 360° video) are FilmCraft's, carried into `kerf-fx`, less those that
+burn-ins, 360° video) are FilmCraft's, less those that
 make a look a model makes better or do what a clip's own keyframes and depth
 already do. Kerf also keeps
 22 effects from [EffectCraft](https://github.com/storytold/effectcraft)
-(MIT/Apache, in `kerf-raster-fx`) that FilmCraft has nothing like: restoration, key and matte clean-up, curves and finer color, a few
+(MIT/Apache) that FilmCraft has nothing like: restoration, key and matte clean-up, curves and finer color, a few
 blurs and distortions, and the audio visualizers. An effect's parameters are
 written in the catalog's terms (a point as an `_x` and a `_y` across the
 picture, a file as a path, another track by id, a mask by name), and an id
@@ -84,18 +71,16 @@ behind a few parameters, bundled with Kerf or kept in a project's
 Media can carry transparency too (`alpha=true`, found from the
 pixel format on import), which compositing keeps, and depth and color (`bits=10
 color=rec2100-hlg`, found from its tags on import, or written by hand for log footage), which
-drawing honors, with HDR and log tone mapped for an SDR picture. `kerf-fx` generates the
-catalog tables; after changing the effects, run
+drawing honors, with HDR and log tone mapped for an SDR picture. The effect
+catalog's tables are generated; after changing the effects, run
 `UPDATE_CATALOG=1 cargo test -p kerf-fx`.
 
-Editor actions are commands in one registry (`kerf-commands`): each has an id,
-a label, its menu, shortcuts in the Kerf, Premiere Pro, and Final Cut Pro
-keymaps, and an enabled state that says why it is unavailable. The editor
-builds its menus, shortcuts, and toolbar from it, and engine commands
-resolve to the typed operations or runtime requests that carry them out.
+Every editor action is declared once, in `kerf-commands`, with its shortcuts in
+the Kerf, Premiere Pro, and Final Cut Pro keymaps and the reason it may be
+unavailable, so the menus, the shortcuts, and the toolbar cannot disagree.
 
 FFmpeg, ffprobe, and yt-dlp remain controlled native sidecars. Editing
-playbooks are data in `skills/*/SKILL.md` and are loaded by `kerf-skills`.
+playbooks are data in `skills/*/SKILL.md`.
 
 ## Build and run
 
