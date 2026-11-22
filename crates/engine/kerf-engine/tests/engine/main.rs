@@ -1,9 +1,10 @@
-//! kerf-engine's integration tests, one test binary, each former test file a module. frame_cache, kept_sound and sections stay binaries of their own: they set KERF_FRAME_CACHE or KERF_SECTION_CACHE for the whole process, and kept_sound reads the process-wide section counters.
+//! kerf-engine's integration tests, one test binary, each former test file a module. kept_sound and sections stay binaries of their own: they count renders through the process-wide section counters (`section_stats`), which tests running beside them would move.
 
 mod delivery;
 mod eye;
 mod follows;
 mod footage_color;
+mod frame_cache;
 mod guide;
 mod media_index;
 mod placed;

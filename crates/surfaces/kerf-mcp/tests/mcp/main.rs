@@ -1,4 +1,4 @@
-//! kerf-mcp's integration tests, one test binary, each former test file a module. carry, document_steps, harness, preset_steps, shot_graph and workflow_server stay binaries of their own: each sets environment variables (KERF_MODELS, KERF_COMFY and others) for the whole process, which tests running beside them would read.
+//! kerf-mcp's integration tests, one test binary, each former test file a module. carry, document_steps, harness, preset_steps, shot_graph and workflow_server stay binaries of their own: each sets process-wide settings (the models file, the variables model programs get) that tests running beside them would read.
 
 mod cut_edges;
 mod preset_looks;

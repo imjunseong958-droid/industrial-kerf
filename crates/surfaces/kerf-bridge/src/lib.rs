@@ -65,7 +65,7 @@
 //! The status is `{status: "running", message?}`, `{status: "done", path?, remote?,
 //! warnings?, ...}` or `{status: "failed", error}`.
 
-// No unsafe code in the library; the crate's empty `[lints]` table is for a Windows test.
+// No unsafe code in the library; the workspace's `deny` would let an item allow it, this does not.
 #![forbid(unsafe_code)]
 
 mod agent;
