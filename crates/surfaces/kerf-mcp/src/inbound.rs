@@ -496,6 +496,8 @@ impl McpProcess {
             // not reused yet.
             unsafe { libc::killpg(group, libc::SIGKILL) };
         }
+        // The group's kill may have ended it already, so this kill can fail harmlessly; the
+        // wait reaps it either way, and a server that cannot be reaped is past stopping.
         let _ = self.child.kill();
         let _ = self.child.wait();
     }

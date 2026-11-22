@@ -164,7 +164,9 @@ impl Mixer {
         let mut index = 0;
         while index < self.voices.len() {
             let target = self.sounds[self.voices[index].sound].bus.unwrap_or(master);
-            let into = mixes.get_mut(target).expect("a bus of the program");
+            let into = mixes.get_mut(target).expect(
+                "kerf-core places a sound's bus in the buses all its program's sounds share",
+            );
             if !self.voices[index].add(into, self.cursor) {
                 index += 1;
                 continue;
@@ -399,7 +401,11 @@ impl Source {
         if self.eof {
             self.flushed = true;
             if let Some(mut source) = self.graph.get("in") {
-                let _ = source.source().flush();
+                if let Err(error) = source.source().flush() {
+                    log::warn!(
+                        "the filters were not told the sound ended, so they may hold back its last: {error}"
+                    );
+                }
             }
             return Ok(());
         }
@@ -426,7 +432,11 @@ impl Source {
             Some(_) => Ok(()),
             None => {
                 self.eof = true;
-                let _ = self.decoder.send_eof();
+                if let Err(error) = self.decoder.send_eof() {
+                    log::warn!(
+                        "the decoder was not told its input ended, so it may hold back its last sound: {error}"
+                    );
+                }
                 self.drain()
             }
         }

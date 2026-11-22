@@ -149,7 +149,7 @@ pub fn initial_project(name: &str, template: Template, rate: Rate) -> Project {
     let (width, height) = template.size();
     let mut project = Project::new(name);
     project.sequences.push(Sequence {
-        id: Id::new("s1").expect("valid id"),
+        id: Id::new("s1").expect("`s1` is a letter and a digit, which an id may be"),
         name: name.to_owned(),
         rate,
         drop_frame: false,

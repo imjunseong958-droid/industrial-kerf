@@ -41,6 +41,7 @@ pub fn write_document(path: &Path, document: &str) -> std::io::Result<()> {
         })
         .and_then(|_| std::fs::rename(&temporary, path));
     if written.is_err() {
+        // There may be none; the write's own error is what is told.
         let _ = std::fs::remove_file(&temporary);
     }
     written

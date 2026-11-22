@@ -332,7 +332,12 @@ fn exited_preview(shared: &Shared, tx: &Outbox) {
 pub(crate) fn cancel_preview(shared: &Shared) {
     if let Ok(running) = shared.preview_cancel.lock() {
         if let Some(marker) = &*running {
-            let _ = std::fs::write(marker, b"");
+            if let Err(error) = std::fs::write(marker, b"") {
+                log::warn!(
+                    "the preview render goes on: {} was not written: {error}",
+                    marker.display()
+                );
+            }
         }
     }
 }

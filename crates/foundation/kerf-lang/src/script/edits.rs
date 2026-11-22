@@ -276,9 +276,9 @@ impl Script<'_> {
         if clip.speed().is_reverse() {
             return Err(format!("clip `{}` plays in reverse; use to=", clip.id));
         }
-        let played = clip
-            .played_at(source.position(text)?)
-            .expect("a clip with a source clock has a source range");
+        let played = clip.played_at(source.position(text)?).expect(
+            "source_clock is Some only for media and nested-sequence clips, which play a source",
+        );
         Ok(rate.round(played))
     }
 
@@ -359,7 +359,12 @@ impl Script<'_> {
                     )),
                 };
             let at = self.project.locate(clip.as_str());
-            (at.expect("the clip was found").sequence, range.0, range.1)
+            (
+                at.expect("Script::clip found it above, and nothing since changed the project")
+                    .sequence,
+                range.0,
+                range.1,
+            )
         } else {
             for key in ["snap", "said", "pause", "leave"] {
                 if let Some(arg) = fields.take(key) {
@@ -446,7 +451,7 @@ impl Script<'_> {
                 let s = self
                     .project
                     .locate(clip.as_str())
-                    .expect("a clip is on a sequence")
+                    .expect("Script::clip found it above, and nothing since changed the project")
                     .sequence;
                 self.snap_roll(s, found, delta, alone, snap)
                     .map_err(|m| line.error(1, m))?

@@ -105,7 +105,11 @@ pub fn amount(text: &str, rate: Rate) -> Result<Time, String> {
         if frames.unsigned_abs() > 1 << 40 {
             return Err(invalid());
         }
-        rate.time_of(frames)
+        // Fewer frames than that can still be more flicks than a time holds.
+        match frames.checked_mul(rate.frame_duration().flicks()) {
+            Some(flicks) => Time::from_flicks(flicks),
+            None => return Err(format!("`{text}` is outside the supported range")),
+        }
     } else if let Some(seconds) = text.strip_suffix('s') {
         let seconds: f64 = seconds.parse().map_err(|_| invalid())?;
         rate.round(Time::from_seconds(seconds).ok_or_else(invalid)?)

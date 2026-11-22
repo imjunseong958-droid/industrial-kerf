@@ -209,7 +209,7 @@ pub(crate) fn probed_media(path: &Path, info: &ProbeInfo) -> Result<Media, Strin
         return Err(unreadable("is text, not media"));
     }
     Ok(Media {
-        id: Id::new("file").expect("valid id"),
+        id: Id::new("file").expect("\"file\" is a valid id"),
         path: path.to_string_lossy().into_owned(),
         rate,
         drop_frame: false,

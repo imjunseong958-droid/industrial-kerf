@@ -24,6 +24,7 @@ kerf-lang = { path = "../../foundation/kerf-lang" }
 kerf-model = { path = "../../foundation/kerf-model" }
 kerf-track = { path = "../../vfx/kerf-track" }
 hex.workspace = true
+log.workspace = true
 mimalloc = { version = "0.1", default-features = false }
 rayon.workspace = true
 regex = "1"

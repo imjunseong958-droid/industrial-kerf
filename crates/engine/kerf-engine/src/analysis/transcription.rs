@@ -419,7 +419,7 @@ where
             EngineError::msg("the transcripts made do not cover the range asked for")
         })?;
         // Nothing was made for this very range: leave no empty entry behind
-        // for each range asked for.
+        // for each range asked for. One that is not empty stays, as it should.
         let _ = fs::remove_dir(&entry.directory);
         return Ok(result_from_cache(
             &entry, transcript, &config, false, cached,

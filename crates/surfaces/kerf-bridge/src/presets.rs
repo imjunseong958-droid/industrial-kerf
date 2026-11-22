@@ -272,6 +272,7 @@ pub(crate) fn save(
             kerf_collab::media::incoming_path(directory, ".kerfpreset").map_err(failed)?;
         let written = fs::write(&temporary, document).and_then(|_| fs::rename(&temporary, &path));
         if let Err(error) = written {
+            // The write's error is the one to report; this only tidies the temporary file.
             let _ = fs::remove_file(&temporary);
             return Err(failed(error));
         }
@@ -290,6 +291,7 @@ pub(crate) fn save(
         .write_all(document.as_bytes())
         .and_then(|_| output.sync_all())
     {
+        // The write's error is the one to report; this only tidies the half-written file.
         let _ = fs::remove_file(&path);
         return Err(failed(error));
     }

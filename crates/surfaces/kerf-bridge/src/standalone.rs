@@ -87,6 +87,7 @@ pub fn crash_install() {
 /// Report `message` now as what ends the editor, before it aborts; the abort then adds no
 /// second report. Nothing is written before [`crash_install`].
 pub fn crash_fatal(message: &str) {
+    // Where the report went is for `crash_reports` to list.
     let _ = kerf_runtime::crash::fatal(message);
 }
 

@@ -623,7 +623,7 @@ pub fn face(id: FaceId) -> Arc<Face> {
         .get(id)
         .or_else(|| d.faces.first())
         .cloned()
-        .expect("bundled fonts present")
+        .expect("`db` is made with the bundled faces in it, and faces are only ever added")
 }
 
 /// All faces (bundled first).

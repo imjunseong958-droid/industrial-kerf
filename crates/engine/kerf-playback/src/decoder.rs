@@ -480,7 +480,11 @@ impl VideoDecoder {
                 Some(_) => return Ok(()),
                 None => {
                     self.eof = true;
-                    let _ = self.decoder.send_eof();
+                    if let Err(error) = self.decoder.send_eof() {
+                        log::warn!(
+                            "the decoder was not told its input ended, so it may hold back its last frames: {error}"
+                        );
+                    }
                     self.drain_decoder()?;
                     return Ok(());
                 }
@@ -490,7 +494,11 @@ impl VideoDecoder {
             self.flushed = true;
             if let Some(filter) = self.filter.as_mut() {
                 if let Some(mut src) = filter.get("in") {
-                    let _ = src.source().flush();
+                    if let Err(error) = src.source().flush() {
+                        log::warn!(
+                            "the filters were not told the frames ended, so they may hold back their last: {error}"
+                        );
+                    }
                 }
             }
         }

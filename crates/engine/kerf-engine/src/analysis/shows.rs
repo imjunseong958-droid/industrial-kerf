@@ -120,7 +120,7 @@ fn with_clear(project: &Project, id: &str, which: impl Fn(&kerf_model::Clip) -> 
         .sequences
         .iter_mut()
         .find(|sequence| sequence.id == id)
-        .expect("the sequence is there");
+        .expect("`showing` takes `id` from a sequence of this project");
     for clip in own
         .tracks
         .iter_mut()
@@ -408,7 +408,7 @@ pub fn showing(project: &Project, sequence: Option<&str>, at: Time) -> Result<Sh
         frame = frame.or(whole);
         alone.extend(clips);
     }
-    let frame = frame.expect("the first drawer drew it");
+    let frame = frame.expect("`drawers` is at least 1, and the first draws the frame");
     // In the clips' order, whichever drawer drew each.
     alone.sort_by_key(|(index, _)| *index);
     let alone = alone

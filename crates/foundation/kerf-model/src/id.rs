@@ -131,9 +131,13 @@ impl IdGen {
         let counter = self.next.entry(prefix.to_owned()).or_insert(1);
         loop {
             let candidate = format!("{prefix}{counter}");
-            *counter += 1;
+            // An id such as `c18446744073709551615` in a document leaves no number above it;
+            // counting on from 0 still finds one no id has.
+            *counter = counter.wrapping_add(1);
             if !self.used.contains(&candidate) {
-                let id = Id::new(candidate).expect("generated ids use a valid prefix");
+                let id = Id::new(candidate).expect(
+                    "every prefix is a short literal id, and digits after one keep it valid",
+                );
                 self.used.insert(id.as_str().to_owned());
                 return id;
             }

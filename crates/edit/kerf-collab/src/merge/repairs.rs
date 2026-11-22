@@ -303,7 +303,7 @@ pub(super) fn separate_overlaps(
                     match kept.last() {
                         Some(last) if last.end() > clip.start => {
                             if rank(last) < rank(&clip) {
-                                let last = kept.pop().expect("a clip before");
+                                let last = kept.pop().expect("`kept.last()` just matched a clip");
                                 moving.push((last, clip.id.clone()));
                                 next = Some(clip);
                             } else {

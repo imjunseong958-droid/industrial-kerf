@@ -166,7 +166,13 @@ impl Queue {
         self.wake.notify_all();
         if let Some(id) = running {
             // The render watches for this marker; nobody is left to see it.
-            let _ = std::fs::write(kerf_runtime::render_cancel_path(directory, &id), b"");
+            let marker = kerf_runtime::render_cancel_path(directory, &id);
+            if let Err(error) = std::fs::write(&marker, b"") {
+                log::warn!(
+                    "render {id} goes on after the bridge closed: {}: {error}",
+                    marker.display()
+                );
+            }
         }
     }
 
@@ -356,7 +362,13 @@ pub(crate) fn worker(shared: Arc<Shared>, tx: Outbox) {
                 let left: Vec<Queued> = state.waiting.drain(..).collect();
                 drop(state);
                 for queued in left {
-                    let _ = queued.renders.cancel(&queued.job.job_id);
+                    if let Err(error) = queued.renders.cancel(&queued.job.job_id) {
+                        log::warn!(
+                            "render {} stays queued with kerfd, with nobody to render it: {}",
+                            queued.job.job_id,
+                            error.message
+                        );
+                    }
                 }
                 return;
             }
@@ -369,7 +381,9 @@ pub(crate) fn worker(shared: Arc<Shared>, tx: Outbox) {
         if let Some(queued) = next {
             render(&shared, &queued, &tx);
             shared.renders.lock().running = None;
-            let _ = publish(&shared, queued.renders.as_ref(), &tx);
+            if let Err(error) = publish(&shared, queued.renders.as_ref(), &tx) {
+                log::warn!("the render queue was not shown again: {}", error.message);
+            }
         }
     }
 }
@@ -386,7 +400,9 @@ fn render(shared: &Shared, queued: &Queued, tx: &Outbox) {
             0.0,
         ))),
     );
-    let _ = publish(shared, queued.renders.as_ref(), tx);
+    if let Err(error) = publish(shared, queued.renders.as_ref(), tx) {
+        log::warn!("the render queue was not shown again: {}", error.message);
+    }
     // Half-percent steps: enough for a bar, and never a flood.
     let mut step = 0_i64;
     let result = queued

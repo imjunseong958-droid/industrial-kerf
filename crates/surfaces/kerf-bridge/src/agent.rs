@@ -151,6 +151,7 @@ pub(crate) fn agent_worker(
             );
             shared.agent_busy.store(false, Ordering::SeqCst);
             emit(&tx, Event::AgentBusy { busy: false });
+            // The runtime worker is gone only as the bridge closes, with nothing to refresh.
             let _ = commands.send(Command::Refresh);
             continue;
         }
@@ -284,6 +285,7 @@ pub(crate) fn agent_worker(
         }
         shared.agent_busy.store(false, Ordering::SeqCst);
         emit(&tx, Event::AgentBusy { busy: false });
+        // The runtime worker is gone only as the bridge closes, with nothing to refresh.
         let _ = commands.send(Command::Refresh);
     }
 }
@@ -365,6 +367,8 @@ impl TurnEvents<'_> {
                 }
                 // The proposal shows on the timeline as it grows.
                 if staged_proposal(&summary) {
+                    // A full queue refreshes anyway: the runtime worker republishes a changed
+                    // state on its own soon.
                     let _ = self.commands.try_send(Command::Refresh);
                 }
                 let targets = self.running.remove(&id).unwrap_or_default();

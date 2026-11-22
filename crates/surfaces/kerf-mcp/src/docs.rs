@@ -185,6 +185,7 @@ What the person is asked, and what an agent does next, is said in the conversati
     );
     output.push_str("## Tools\n\n");
     for tool in tools {
+        // Writing to a String never fails, here and below.
         let _ = writeln!(output, "### `{}`\n", markdown_inline(&tool.name));
         let _ = writeln!(output, "{}\n", markdown_text(&tool.description));
         let annotations = serde_json::to_string(&tool.annotations)?;
@@ -219,6 +220,7 @@ fn skills_markdown(metadata: &Value, skills: &[Skill]) -> String {
         output.push_str("No skills are installed.\n");
     } else {
         for skill in skills {
+            // Writing to a String never fails.
             let _ = writeln!(
                 output,
                 "- `{}`: {}",
@@ -234,6 +236,7 @@ fn project_summary_markdown(metadata: &Value, project: &Project) -> String {
     let mut output = markdown_header();
     output.push_str("# Kerf project summary\n\n");
     write_metadata_markdown(&mut output, metadata);
+    // Writing to a String never fails, here and below.
     let _ = writeln!(output, "- Project: **{}**", markdown_text(&project.name));
     let _ = writeln!(output, "- Media: `{}`", project.media.len());
     let _ = writeln!(output, "- Sequences: `{}`", project.sequences.len());
@@ -298,6 +301,7 @@ fn write_metadata_markdown(output: &mut String, metadata: &Value) {
             .map(display_json_value)
             .unwrap_or_default()
     };
+    // Writing to a String never fails.
     let _ = writeln!(output, "- App version: `{}`", value("generatorVersion"));
     let _ = writeln!(output, "- MCP protocol: `{}`", value("mcpProtocolVersion"));
     let _ = writeln!(
@@ -346,6 +350,7 @@ fn write_generated(path: &Path, content: &str) -> Result<(), DocsError> {
     let temporary = path.with_file_name(format!(".{file_name}.{}.tmp", std::process::id()));
     fs::write(&temporary, content)?;
     if let Err(error) = fs::rename(&temporary, path) {
+        // The rename's error is the one to report; a temporary file left over is harmless.
         let _ = fs::remove_file(&temporary);
         return Err(DocsError::Io(error));
     }

@@ -331,7 +331,12 @@ fn runtime_folder() -> Option<PathBuf> {
         .uid();
     let made = std::env::temp_dir().join(format!("industrial-kerf-runtime-{uid}"));
     if !made.exists() {
-        let _ = std::fs::DirBuilder::new().mode(0o700).create(&made);
+        if let Err(error) = std::fs::DirBuilder::new().mode(0o700).create(&made) {
+            log::warn!(
+                "{}: the runtime folder could not be made: {error}",
+                made.display()
+            );
+        }
     }
     [PathBuf::from(format!("/run/user/{uid}")), made]
         .into_iter()
@@ -432,6 +437,7 @@ trait Timeouts {
 #[cfg(unix)]
 impl Timeouts for std::os::unix::net::UnixStream {
     fn timeouts(&mut self, timeout: Duration) {
+        // Refused only for a zero timeout, which no caller gives.
         let _ = self.set_read_timeout(Some(timeout));
         let _ = self.set_write_timeout(Some(timeout));
     }
@@ -439,6 +445,7 @@ impl Timeouts for std::os::unix::net::UnixStream {
 
 impl Timeouts for std::net::TcpStream {
     fn timeouts(&mut self, timeout: Duration) {
+        // Refused only for a zero timeout, which no caller gives.
         let _ = self.set_read_timeout(Some(timeout));
         let _ = self.set_write_timeout(Some(timeout));
     }
@@ -461,6 +468,7 @@ impl Drop for Inbox {
     fn drop(&mut self) {
         match &self.address {
             InboxAddress::Socket(path) | InboxAddress::Port(path) => {
+                // One left behind is taken over by the next editor to listen.
                 let _ = std::fs::remove_file(path);
             }
         }
@@ -483,9 +491,18 @@ pub fn listen(
             if std::os::unix::net::UnixStream::connect(path).is_ok() {
                 return None;
             }
+            // What an editor that crashed left, if anything: one that stays
+            // has the bind below fail.
             let _ = std::fs::remove_file(path);
             let listener = std::os::unix::net::UnixListener::bind(path).ok()?;
-            let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+            if let Err(error) =
+                std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+            {
+                log::warn!(
+                    "{}: the link inbox could not be kept private: {error}",
+                    path.display()
+                );
+            }
             std::thread::Builder::new()
                 .name("link-inbox".into())
                 .spawn(move || {
@@ -516,13 +533,21 @@ pub fn listen(
             let port = listener.local_addr().ok()?.port();
             let token = crate::prefs::random_id();
             if let Some(folder) = path.parent() {
+                // One that could not be made fails the write below.
                 let _ = std::fs::create_dir_all(folder);
             }
             std::fs::write(path, format!("{port} {token}\n")).ok()?;
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
-                let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+                if let Err(error) =
+                    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+                {
+                    log::warn!(
+                        "{}: the link inbox could not be kept private: {error}",
+                        path.display()
+                    );
+                }
             }
             std::thread::Builder::new()
                 .name("link-inbox".into())
@@ -576,6 +601,8 @@ fn receive<S: Read + Write + Timeouts>(mut stream: S, token: Option<&str>) -> Op
             break links;
         }
     };
+    // The editor that handed them over may have stopped waiting; they are
+    // followed all the same.
     let _ = stream.write_all(INBOX_TAKEN);
     let _ = stream.flush();
     Some(links)

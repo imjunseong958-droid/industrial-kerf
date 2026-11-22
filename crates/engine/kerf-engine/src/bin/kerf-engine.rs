@@ -679,7 +679,7 @@ fn draw_frame(args: &FrameArgs) -> Result<Value> {
         frame = Some(compositor.frame(rate.time_of(index), args.scale));
         times.push(started.elapsed().as_secs_f64() * 1000.0);
     }
-    let frame = frame.expect("at least one frame is drawn");
+    let frame = frame.expect("the loop draws `args.frames.max(1)` frames, so at least one");
     kerf_engine::render::still::write_png(&frame, &args.out)?;
     let ms = |value: f64| (value * 10.0).round() / 10.0;
     // The first frame opens and seeks the media; the rest read on.

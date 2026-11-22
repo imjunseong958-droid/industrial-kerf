@@ -5,7 +5,10 @@
 use super::edits::Direction;
 use super::proposals::{bound_bases, made_on};
 use super::renders::bound_jobs;
-use super::{bound_history, bound_receipts, digest, DurableState, Runtime, CHECKPOINT_INTERVAL};
+use super::{
+    bound_history, bound_receipts, digest, truncate_after_checkpoint, DurableState, Runtime,
+    CHECKPOINT_INTERVAL,
+};
 use crate::kernel::{self, Edit};
 use crate::store::{
     inspect_projection, load_checkpoint, load_journal, preserve_previous_state, projection_digest,
@@ -195,7 +198,7 @@ impl Runtime {
             // to truncate the journal. Compact again on startup so a healthy
             // project does not accumulate stale records indefinitely.
             if runtime.persist_checkpoint().is_ok() {
-                let _ = truncate_journal(&runtime.journal_path);
+                truncate_after_checkpoint(&runtime.journal_path);
                 runtime.journal_records_since_checkpoint = 0;
             }
         }

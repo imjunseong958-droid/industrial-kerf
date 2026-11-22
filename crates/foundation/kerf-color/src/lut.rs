@@ -365,6 +365,7 @@ impl Lut {
     }
 
     pub fn to_cube(&self) -> String {
+        // Each `writeln!` here writes to a String, which cannot fail.
         let mut s = String::new();
         if !self.title.is_empty() {
             let _ = writeln!(s, "TITLE \"{}\"", self.title.replace('"', "'"));
@@ -585,6 +586,7 @@ impl Lut {
 }
 
 fn write_domain(s: &mut String, lo: [f32; 3], hi: [f32; 3]) {
+    // Writing to a String cannot fail.
     if lo != [0.0; 3] || hi != [1.0; 3] {
         let _ = writeln!(s, "DOMAIN_MIN {} {} {}", lo[0], lo[1], lo[2]);
         let _ = writeln!(s, "DOMAIN_MAX {} {} {}", hi[0], hi[1], hi[2]);

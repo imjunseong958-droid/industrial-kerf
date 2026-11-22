@@ -102,7 +102,7 @@ pub fn step(
                 more => format!("{stem}{more}.{extension}"),
             })
             .find(|name| !made.contains(name))
-            .expect("a number no file has")
+            .expect("a recipe makes finitely many files, so a number past them all is free")
     };
     // Before the step that writes the shot's file.
     let before_last = lines.len().checked_sub(2).map_or(0, |index| lines[index]);

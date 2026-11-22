@@ -105,7 +105,10 @@ impl Sessions {
             agent,
             used: clock,
         });
-        let open = self.open.last_mut().expect("just pushed");
+        let open = self
+            .open
+            .last_mut()
+            .expect("an Open was pushed on the line before");
         Ok((&mut open.agent, opened))
     }
 
@@ -137,7 +140,12 @@ impl Sessions {
     pub(crate) fn forget(&mut self, conversation: &str) {
         self.open.retain(|open| open.conversation != conversation);
         if let Some(path) = self.transcript(conversation) {
-            let _ = std::fs::remove_file(path);
+            // None kept is as forgotten. One that stays is restored next time, and fails again.
+            if let Err(error) = std::fs::remove_file(&path) {
+                if error.kind() != std::io::ErrorKind::NotFound {
+                    log::warn!("{} was not forgotten: {error}", path.display());
+                }
+            }
         }
     }
 
@@ -159,7 +167,13 @@ impl Sessions {
             Agent::Native(session, _) => {
                 if session.message_count() > 0 {
                     if let Some(path) = self.transcript(&open.conversation) {
-                        let _ = session.keep(&path);
+                        if let Err(error) = session.keep(&path) {
+                            log::warn!(
+                                "conversation {} goes on afresh next time: its transcript was \
+                                 not kept: {error}",
+                                open.conversation
+                            );
+                        }
                     }
                 }
                 None
@@ -177,6 +191,7 @@ pub(crate) fn transcripts(project: &Path) -> PathBuf {
 /// Remove what was kept of `conversation`'s session, with the conversation.
 pub(crate) fn remove(project: &Path, conversation: &str) {
     if conversations::valid_id(conversation) {
+        // A conversation with Claude Code keeps no transcript, and one left over is never read.
         let _ = std::fs::remove_file(transcripts(project).join(format!("{conversation}.json")));
     }
 }

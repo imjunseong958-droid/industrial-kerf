@@ -164,7 +164,9 @@ pub fn caption_script(
         let starts_new = match groups.last() {
             None => true,
             Some(group) => {
-                let last = group.last().expect("groups are never empty");
+                let last = group
+                    .last()
+                    .expect("each group starts with a word and only grows");
                 group.len() >= max_words.max(1)
                     || word.start - last.end > PAUSE_SECONDS
                     || ends_a_sentence(&last.text)
@@ -173,7 +175,10 @@ pub fn caption_script(
         if starts_new {
             groups.push(vec![word]);
         } else {
-            groups.last_mut().expect("just pushed").push(word);
+            groups
+                .last_mut()
+                .expect("starts_new is false only when there is a group")
+                .push(word);
         }
     }
     let rate = sequence.rate;
@@ -202,7 +207,12 @@ pub fn caption_script(
         .into_iter()
         .map(|(start, group)| Made {
             start,
-            spoken: place(group.last().expect("groups are never empty").end),
+            spoken: place(
+                group
+                    .last()
+                    .expect("each group starts with a word and only grows")
+                    .end,
+            ),
             lines: vec![group],
         })
         .collect();

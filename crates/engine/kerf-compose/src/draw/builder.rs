@@ -49,14 +49,24 @@ impl<'a> Builder<'a> {
                 TrackKind::Audio => sounds.push(self.sound(track)),
                 TrackKind::Video if track.enabled => tracks.push(self.track(sequence, track)?),
                 // Effects read hidden tracks too; one that cannot be drawn
-                // reads as empty.
-                TrackKind::Video => tracks.push(self.track(sequence, track).unwrap_or(TrackPlan {
-                    id: track.id.clone(),
-                    shows: false,
-                    shown: Vec::new(),
-                    dips: Vec::new(),
-                    pairs: Vec::new(),
-                })),
+                // reads as empty, unless a sequence it holds could not be
+                // planned, which leaves that sequence no plan to draw by.
+                TrackKind::Video => {
+                    let planned = self.sequences.len();
+                    match self.track(sequence, track) {
+                        Ok(plan) => tracks.push(plan),
+                        Err(error) if self.sequences[planned..].iter().any(Option::is_none) => {
+                            return Err(error)
+                        }
+                        Err(_) => tracks.push(TrackPlan {
+                            id: track.id.clone(),
+                            shows: false,
+                            shown: Vec::new(),
+                            dips: Vec::new(),
+                            pairs: Vec::new(),
+                        }),
+                    }
+                }
                 TrackKind::Subtitle if track.enabled => push_captions(track, &mut captions),
                 _ => {}
             }
@@ -533,10 +543,16 @@ impl<'a> Builder<'a> {
 
     /// A title's text and look, which do not animate.
     fn title(&self, clip: &Clip, params: &kerf_model::Params) -> Result<TitlePlan> {
-        let def = self.catalog.fx("title").expect("the catalog defines title");
+        let def = self.catalog.fx("title").expect(
+            "Kerf draws with the bundled catalog, looks perhaps added, which defines `title`",
+        );
         let get = |name: &str| -> Result<Value> {
             match params.get(name) {
-                None => Ok(def.find(name).expect("title parameter").default.clone()),
+                None => Ok(def
+                    .find(name)
+                    .expect("the bundled `title` defines every parameter read here")
+                    .default
+                    .clone()),
                 Some(Param::Static(value)) => Ok(value.clone()),
                 Some(Param::Animated(_) | Param::Expr(_)) => {
                     Err(unsupported(&clip.id, format!("animated title `{name}`")))
@@ -707,7 +723,12 @@ fn largest_shown(
 fn title_reveal(def: &FxDef, params: &kerf_model::Params) -> Option<Box<Reveals>> {
     let raw = |name: &str| {
         params.get(name).cloned().unwrap_or_else(|| {
-            Param::Static(def.find(name).expect("title parameter").default.clone())
+            Param::Static(
+                def.find(name)
+                    .expect("the bundled `title` defines every parameter read here")
+                    .default
+                    .clone(),
+            )
         })
     };
     // Left at rest, it draws as plain text does.

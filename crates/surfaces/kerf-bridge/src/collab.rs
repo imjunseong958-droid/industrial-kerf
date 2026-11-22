@@ -421,7 +421,11 @@ impl Collab {
 
     fn ensure_driver(&self) {
         if let Some(driver) = &self.driver {
-            let _ = git::ensure_merge_driver(&self.directory, driver);
+            if let Err(error) = git::ensure_merge_driver(&self.directory, driver) {
+                log::warn!(
+                    "the merge driver was not set up, so Git merges project.kerf as text: {error}"
+                );
+            }
         }
     }
 
@@ -506,6 +510,7 @@ impl Collab {
     /// the media status.
     fn refresh(&mut self, state: Option<&StateSnapshot>, downloaded: bool) {
         if downloaded {
+            // The runtime worker is gone only as the bridge closes, with nothing to reload.
             let _ = self.runtime.send(Command::Reload);
         } else if state.is_some() {
             // The runtime worker republishes a changed state on its own

@@ -234,6 +234,7 @@ impl DiskFrames {
             Some(frame) => {
                 self.hits.fetch_add(1, Ordering::Relaxed);
                 if let Ok(file) = std::fs::File::options().write(true).open(&path) {
+                    // Only the order of eviction goes by it: untouched, it goes a little sooner.
                     let _ = file.set_modified(SystemTime::now());
                 }
                 Some(frame)
@@ -241,6 +242,7 @@ impl DiskFrames {
             None => {
                 self.damaged.fetch_add(1, Ordering::Relaxed);
                 self.misses.fetch_add(1, Ordering::Relaxed);
+                // Left there, it is a miss each time it is asked for, and the frame is drawn.
                 let _ = std::fs::remove_file(&path);
                 None
             }
@@ -278,9 +280,12 @@ impl DiskFrames {
 }
 
 fn start_writer(index: usize, work: impl FnOnce() + Send + 'static) {
-    let _ = std::thread::Builder::new()
+    if let Err(error) = std::thread::Builder::new()
         .name(format!("kerf-frames-{index}"))
-        .spawn(work);
+        .spawn(work)
+    {
+        log::warn!("frame cache writer {index} did not start: {error}");
+    }
 }
 
 struct Writer {
@@ -317,6 +322,7 @@ impl Writer {
                 .max()
                 .unwrap_or(SystemTime::UNIX_EPOCH);
             if newest.elapsed().is_ok_and(|age| age > STALE) {
+                // Another Kerf may be tidying too; what is left goes when one next starts.
                 let _ = std::fs::remove_dir_all(entry.path());
             }
         }

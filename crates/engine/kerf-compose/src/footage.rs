@@ -844,7 +844,10 @@ impl Decoder {
                 Some(_) => {}
                 None => {
                     self.eof = true;
-                    let _ = self.decoder.send_eof();
+                    // Untold, a decoder keeps the frames it holds, and the footage ends early.
+                    if let Err(error) = self.decoder.send_eof() {
+                        log::warn!("{}: the decoder was not told the end: {error}", self.path);
+                    }
                 }
             }
         }

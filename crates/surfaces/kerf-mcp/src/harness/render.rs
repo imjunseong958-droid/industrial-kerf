@@ -34,7 +34,7 @@ impl KerfMcpRouter {
         let worker_output = output.clone();
         self.spawn_render(job.job_id.clone(), move || {
             let mut last_progress = -1.0_f64;
-            let _ = kerf_runtime::run_render_job(
+            let rendered = kerf_runtime::run_render_job(
                 &runtime,
                 &worker_job,
                 &document,
@@ -45,6 +45,8 @@ impl KerfMcpRouter {
                         return;
                     }
                     last_progress = progress;
+                    // A progress kerfd did not take is made up for by the next one, and how
+                    // the job ended is recorded by run_render_job.
                     let _ = runtime.update_job_with_progress(
                         &worker_job.job_id,
                         "running",
@@ -54,6 +56,17 @@ impl KerfMcpRouter {
                     );
                 },
             );
+            // kerfd has the job's end, which the agent asks it for; a render that failed, or
+            // whose end kerfd could not be told, is said here too. A cancel is not a failure.
+            if let Err(error) = rendered {
+                if error.code != "CANCELLED" {
+                    log::warn!(
+                        "render {} failed, or kerfd was not told how it ended: {}",
+                        worker_job.job_id,
+                        error.message
+                    );
+                }
+            }
         });
         Ok((job, output))
     }

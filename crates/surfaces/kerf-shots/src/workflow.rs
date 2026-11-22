@@ -248,7 +248,7 @@ fn copy_name(folder: &Path, shot: &str, model: &str, taken: &[PathBuf]) -> Strin
             let file = folder.join(name);
             !file.exists() && !taken.contains(&file)
         })
-        .expect("a number no file has")
+        .expect("a folder holds finitely many files, so a number past them all is free")
 }
 
 /// Write `text` to `file` whole: beside it first, then moved into place.

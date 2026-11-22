@@ -1017,7 +1017,7 @@ fn composited_render(
     let from = range.map_or(Time::ZERO, |(from, _)| from);
     let rate = match opts.rate {
         Some(rate) => rate,
-        None if opts.draft => Rate::new(15, 1).expect("15 fps is a rate"),
+        None if opts.draft => Rate::new(15, 1).expect("15 fps is a whole number of flicks a frame"),
         None => own_rate,
     };
     let scale = match opts.size {
@@ -1290,7 +1290,9 @@ fn encode_frames(
     let mut stderr = child.stderr.take().expect("stderr is piped");
     let reader = thread::spawn(move || {
         let mut text = String::new();
-        let _ = stderr.read_to_string(&mut text);
+        if let Err(error) = stderr.read_to_string(&mut text) {
+            log::warn!("what FFmpeg said while it encoded could not be read: {error}");
+        }
         text
     });
     let first = frames.start;
@@ -1324,6 +1326,7 @@ fn encode_frames(
     );
     drop(stdin);
     if result.is_err() {
+        // It may have ended already; the wait below reaps it either way.
         let _ = child.kill();
     }
     let status = child.wait()?;
@@ -1445,6 +1448,7 @@ fn render_in_sections(
                         let mixed =
                             sidecar::run(command, cancellation, |_| {}).and_then(finished_well);
                         if mixed.is_err() {
+                            // There may be none to take away; nothing reads one that stays.
                             let _ = std::fs::remove_file(&file);
                         }
                         mixed.map(|()| crate::render::kept_sound::Made {
@@ -1540,7 +1544,10 @@ fn render_in_sections(
         finished_well(sidecar::run(command, cancellation, |_| {})?)?;
         files.extend(sound.map(|sound| (sound, 0)));
         // A join that lost or doubled a frame is no render: the picture is encoded whole.
-        let output = sections.join.last().expect("a join ends with its file");
+        let output = sections
+            .join
+            .last()
+            .expect("the section arguments push the render's file last onto `join`");
         match picture_frames(output) {
             Some(frames) if frames == total => Ok(()),
             found => Err(EngineError::msg(format!(
@@ -1557,6 +1564,7 @@ fn render_in_sections(
         );
     }
     for file in scratch {
+        // Scratch that is not there, or stays, changes nothing the render made.
         let _ = std::fs::remove_file(file);
     }
     let joined: Vec<PathBuf> = files.into_iter().map(|(file, _)| file).collect();
@@ -1822,6 +1830,7 @@ pub fn stderr_progress_callback() -> impl FnMut(f64) {
             return;
         }
         last = rounded;
+        // Progress is only told: a closed stderr must not stop the render.
         let _ = writeln!(std::io::stderr(), r#"{{"progress":{rounded}}}"#);
     }
 }

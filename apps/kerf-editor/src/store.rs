@@ -944,7 +944,9 @@ impl EditorState {
                                 job_id: job.clone(),
                                 ..RenderJob::default()
                             });
-                            self.renders.last_mut().expect("just pushed")
+                            self.renders
+                                .last_mut()
+                                .expect("`renders` holds the job pushed just above")
                         }
                     };
                     entry.status = status.to_owned();

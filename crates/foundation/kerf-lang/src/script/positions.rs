@@ -121,7 +121,7 @@ impl<'a> Positions<'a> {
         }
         let played = clip
             .played_at(at)
-            .expect("a clip with a source range plays it");
+            .expect("source_range was Some above, and played_at is Some exactly when it is");
         Ok(self.clock.rate.round(played))
     }
 }

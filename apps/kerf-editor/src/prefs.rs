@@ -558,7 +558,9 @@ impl Prefs {
     }
 
     pub fn save(&self) {
-        let _ = self.save_checked();
+        if let Err(error) = self.save_checked() {
+            log::warn!("the settings could not be saved: {error}");
+        }
     }
 
     /// Saves, saying why it could not.

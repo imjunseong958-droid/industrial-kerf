@@ -172,6 +172,8 @@ pub(crate) fn runtime_actor(
     ready_sender: mpsc::SyncSender<Result<(), RuntimeError>>,
 ) {
     let mut runtime = match Runtime::open(&directory) {
+        // `RuntimeHandle::open` waits for this; it is gone only when the
+        // thread that opened it ended, and nobody is left to tell.
         Ok(runtime) => {
             let _ = ready_sender.send(Ok(()));
             runtime
@@ -183,7 +185,33 @@ pub(crate) fn runtime_actor(
     };
     for message in receiver {
         let result = runtime.execute(message.request);
+        // A caller that stopped waiting needs no answer: what it asked for
+        // is done all the same.
         let _ = message.reply.send(result);
+    }
+}
+
+/// Empty the journal after a checkpoint took in its records. One left
+/// unemptied only holds records the checkpoint has, which a start skips.
+fn truncate_after_checkpoint(journal: &Path) {
+    if let Err(error) = truncate_journal(journal) {
+        log::warn!(
+            "{}: the journal was not emptied after a checkpoint: {}",
+            journal.display(),
+            error.message
+        );
+    }
+}
+
+/// Install the looks beside the project again when they changed since they
+/// were last installed. One that does not read leaves the catalog as it
+/// was, and edits that use it say so.
+fn refresh_looks(directory: &Path) {
+    if let Err(error) = kerf_model::look::refresh_project_looks(directory) {
+        log::warn!(
+            "{}: the project's looks were not installed again: {error}",
+            directory.display()
+        );
     }
 }
 
@@ -356,7 +384,7 @@ impl Runtime {
             // optimization; a temporary checkpoint failure leaves the
             // records available for recovery on the next startup.
             if self.persist_checkpoint().is_ok() {
-                let _ = truncate_journal(&self.journal_path);
+                truncate_after_checkpoint(&self.journal_path);
                 self.journal_records_since_checkpoint = 0;
             }
         }
@@ -426,10 +454,9 @@ impl Runtime {
     fn execute(&mut self, request: RuntimeRequest) -> Result<RuntimeResponse, RuntimeError> {
         self.refresh_projection_status();
         // Looks another process added, as an applied preset's, join the
-        // catalog edits are checked with; one that does not read leaves the
-        // catalog as it was, and edits that use it say so.
+        // catalog edits are checked with.
         if let Some(directory) = self.project_path.parent() {
-            let _ = kerf_model::look::refresh_project_looks(directory);
+            refresh_looks(directory);
         }
         match request {
             RuntimeRequest::GetState => Ok(RuntimeResponse::State(self.snapshot())),

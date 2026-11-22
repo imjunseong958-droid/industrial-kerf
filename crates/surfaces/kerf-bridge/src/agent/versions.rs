@@ -147,6 +147,8 @@ fn run_version(
                         if let Some(id) = &summary.proposal {
                             proposal = Some(id.clone());
                         }
+                        // A full queue refreshes anyway: the runtime worker republishes a
+                        // changed state on its own soon.
                         let _ = commands.try_send(Command::Refresh);
                     }
                 }

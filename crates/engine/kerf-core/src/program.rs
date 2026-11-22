@@ -602,7 +602,7 @@ impl<'a> Graph<'a> {
                     return Ok(None);
                 }
                 let (start, end) = Self::source_window(clip, portion.decode, portion.hi)
-                    .expect("media clips have a source");
+                    .expect("media clips have a source window; generators and captions do not");
                 let index = self.input(&media.path, start, end - start);
                 read = Some(end - start);
                 format!("{index}:a")
@@ -612,7 +612,7 @@ impl<'a> Graph<'a> {
             } => {
                 let nested = self.nested(clip, nested)?;
                 let (start, end) = Self::source_window(clip, portion.decode, portion.hi)
-                    .expect("nested clips have a source");
+                    .expect("sequence clips have a source window; generators and captions do not");
                 self.nesting.push(nested.id.clone());
                 let label = self.mix(nested, start, end, clip.angle.as_ref())?;
                 self.nesting.pop();
@@ -721,7 +721,7 @@ pub fn sound_filters(
     let mut filters = Vec::new();
     if let Content::Media { .. } = clip.content {
         let (start, end) = Graph::source_window(clip, portion.decode, portion.hi)
-            .expect("media clips have a source");
+            .expect("media clips have a source window; generators and captions do not");
         filters.push(decoded_filters(end - start));
     }
     let speed = clip.speed();

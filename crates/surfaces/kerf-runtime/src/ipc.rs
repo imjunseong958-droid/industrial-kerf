@@ -194,9 +194,12 @@ fn user_runtime_directory() -> PathBuf {
             .map(|current| current.join(&directory))
             .unwrap_or(directory)
     };
+    // Binding the socket makes the folder again, and says why it cannot.
     let _ = fs::create_dir_all(&directory);
     #[cfg(unix)]
     {
+        // Private where it can be; where not, the socket's own mode and the
+        // peer check still keep other users out.
         let _ = fs::set_permissions(&directory, fs::Permissions::from_mode(0o700));
     }
     directory
@@ -840,6 +843,8 @@ impl RuntimeClient {
                         // than the child waits for it; start one more once.
                         if !respawned {
                             respawned = true;
+                            // The last start's stderr; one left in the temp
+                            // folder harms nothing.
                             let _ = fs::remove_file(&said);
                             (child, said) = match self.spawn_daemon(binary) {
                                 Ok(next) => next,
@@ -865,7 +870,8 @@ impl RuntimeClient {
         // Gone from the folder while kerfd may still hold it open, which is fine.
         let _ = fs::remove_file(&said);
         // kerfd exits once it is idle, while this process may live on; reap
-        // it then so it does not linger as a zombie.
+        // it then so it does not linger as a zombie. With no thread to wait
+        // for it, it is reaped when this process ends.
         let _ = thread::Builder::new()
             .name("kerfd-reaper".into())
             .spawn(move || child.wait());
@@ -912,6 +918,7 @@ impl RuntimeClient {
                 }
                 result => {
                     let child = result.map_err(|error| {
+                        // Empty, as nothing started to write to it.
                         let _ = fs::remove_file(&said);
                         RuntimeError::new(
                             "RUNTIME_UNAVAILABLE",
@@ -1072,6 +1079,7 @@ impl Drop for RuntimeLease {
     fn drop(&mut self) {
         self.state.stop.store(true, Ordering::Release);
         if let Some(thread) = self.thread.take() {
+            // One that panicked has stopped holding the lease all the same.
             let _ = thread.join();
         }
     }
@@ -1546,6 +1554,8 @@ pub fn run_ipc_with(directory: &Path, options: IpcOptions) -> Result<(), Runtime
         let activity = Arc::new(Activity::new());
         loop {
             if !directory.is_dir() || !owns_socket() {
+                // A socket left behind refuses connections, and the next
+                // kerfd binds over it.
                 if owns_socket() {
                     let _ = fs::remove_file(path);
                 }
@@ -1555,6 +1565,7 @@ pub fn run_ipc_with(directory: &Path, options: IpcOptions) -> Result<(), Runtime
                 Some(wait) => wait,
                 // Idle long enough, unless a client is already waiting.
                 None if !wait_for_connection(&listener, Duration::ZERO)? => {
+                    // As above: a socket left behind is bound over.
                     if owns_socket() {
                         let _ = fs::remove_file(path);
                     }
@@ -1912,6 +1923,7 @@ fn serve_pending(listener: &UnixListener, handle: &RuntimeHandle, activity: &Arc
         }
     }
     for worker in workers {
+        // One that panicked has ended, which is all this waits for.
         let _ = worker.join();
     }
 }
@@ -1924,6 +1936,7 @@ fn serve_unix_connection(
     closing: bool,
 ) {
     if let Err(error) = verify_unix_peer(&stream) {
+        // Told why, if it still listens; it is not served either way.
         let _ = write_ipc_response(&mut stream, "", Err(error));
         return;
     }
@@ -1934,12 +1947,18 @@ fn serve_unix_connection(
     } else {
         SERVER_REQUEST_TIMEOUT
     };
-    let _ = stream.set_read_timeout(Some(read_timeout));
-    let _ = stream.set_write_timeout(Some(SERVER_REQUEST_TIMEOUT));
+    if let Err(error) = stream.set_read_timeout(Some(read_timeout)) {
+        log::warn!("a client's request is read with no time limit: {error}");
+    }
+    if let Err(error) = stream.set_write_timeout(Some(SERVER_REQUEST_TIMEOUT)) {
+        log::warn!("a client's answer is written with no time limit: {error}");
+    }
     if serve_request(&mut stream, &handle, closing) {
         connection.hold();
         // A lease has no deadline: it ends when its client goes.
-        let _ = stream.set_read_timeout(None);
+        if let Err(error) = stream.set_read_timeout(None) {
+            log::warn!("a lease may end before its client goes: {error}");
+        }
         read_until_closed(&mut stream);
     }
 }
@@ -1965,6 +1984,8 @@ fn serve_pipe_connection(
     handle: RuntimeHandle,
     mut connection: Connection,
 ) {
+    // A pipe stream only keeps its time limits, so setting them here and
+    // below cannot fail.
     let _ = stream.set_read_timeout(Some(SERVER_REQUEST_TIMEOUT));
     let _ = stream.set_write_timeout(Some(SERVER_REQUEST_TIMEOUT));
     if serve_request(&mut stream, &handle, false) {
@@ -1986,6 +2007,7 @@ fn serve_request<S: Read + Write>(stream: &mut S, handle: &RuntimeHandle, closin
     let line = match read_bounded_line(stream) {
         Ok(line) => line,
         Err(error) => {
+            // Told why, if it still listens.
             let _ = write_ipc_response(stream, "", Err(error));
             return false;
         }
@@ -1997,6 +2019,8 @@ fn serve_request<S: Read + Write>(stream: &mut S, handle: &RuntimeHandle, closin
     if should_drop_test_response(&line) {
         return false;
     }
+    // A client that stopped waiting gets no answer; what it asked for is
+    // done all the same.
     let _ = write_ipc_response(stream, &id, result);
     false
 }

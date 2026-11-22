@@ -1007,7 +1007,7 @@ pub fn color_balance_wgsl() -> String {
     });
     format!(
         "fn color_balance_px(q: vec4<f32>) -> vec4<f32> {{\n{body}{}}}\n",
-        returned(result.expect("written"))
+        returned(result.expect("`written` runs its body once, and the body sets it"))
     )
 }
 
@@ -1036,7 +1036,7 @@ pub fn wipe_wgsl() -> String {
     });
     let wipe_px = format!(
         "fn wipe_px(a: vec4<f32>, b: vec4<f32>, d: f32) -> vec4<f32> {{\n{body}{}}}\n",
-        returned(result.expect("written"))
+        returned(result.expect("`written` runs its body once, and the body sets it"))
     );
     let mut result = None;
     let body = written(|| {
@@ -1045,7 +1045,7 @@ pub fn wipe_wgsl() -> String {
     });
     format!(
         "{wipe_px}fn iris_round(x: f32, y: f32, cx: f32, cy: f32) -> f32 {{\n{body}    return {};\n}}\n",
-        result.expect("written").name()
+        result.expect("`written` runs its body once, and the body sets it").name()
     )
 }
 
@@ -1058,7 +1058,7 @@ fn at_a_pixel(name: &str, body: impl FnOnce([Traced; 4], Traced, Traced) -> [Tra
     });
     format!(
         "fn {name}(q: vec4<f32>, x: f32, y: f32) -> vec4<f32> {{\n{lines}{}}}\n",
-        returned(result.expect("written"))
+        returned(result.expect("`written` runs its body once, and the body sets it"))
     )
 }
 
@@ -1068,7 +1068,7 @@ fn of_a_pixel(name: &str, body: impl FnOnce([Traced; 4]) -> [Traced; 4]) -> Stri
     let lines = written(|| result = Some(body(parts("q"))));
     format!(
         "fn {name}(q: vec4<f32>) -> vec4<f32> {{\n{lines}{}}}\n",
-        returned(result.expect("written"))
+        returned(result.expect("`written` runs its body once, and the body sets it"))
     )
 }
 

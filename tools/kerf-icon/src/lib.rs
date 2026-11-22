@@ -116,9 +116,11 @@ impl Picture {
 
 /// The icon at `side` pixels, its tile scaled by `scale` about the centre.
 pub fn render(side: u32, scale: f32) -> Picture {
-    let tree =
-        usvg::Tree::from_data(SVG, &usvg::Options::default()).expect("the icon's SVG parses");
-    let mut pixmap = Pixmap::new(side, side).expect("a side above zero");
+    let tree = usvg::Tree::from_data(SVG, &usvg::Options::default()).expect(
+        "the icon's SVG is built in, and `the_icon_files_are_what_the_svg_makes` renders it",
+    );
+    let mut pixmap = Pixmap::new(side, side)
+        .expect("every side asked for is one of PNG_SIDES, ICO_SIDES or ICNS_ENTRIES, none zero");
     let unit = side as f32 / CANVAS;
     let inset = CANVAS * (1.0 - scale) / 2.0;
     let transform = Transform::from_scale(scale, scale)
@@ -130,7 +132,8 @@ pub fn render(side: u32, scale: f32) -> Picture {
 
 /// A picture as a PNG file.
 pub fn png(picture: &Picture) -> Vec<u8> {
-    let mut pixmap = Pixmap::new(picture.side, picture.side).expect("a side above zero");
+    let mut pixmap = Pixmap::new(picture.side, picture.side)
+        .expect("`files` hands this only pictures `render` drew, whose sides are above zero");
     for (pixel, rgba) in pixmap
         .pixels_mut()
         .iter_mut()
@@ -139,7 +142,9 @@ pub fn png(picture: &Picture) -> Vec<u8> {
         *pixel =
             resvg::tiny_skia::ColorU8::from_rgba(rgba[0], rgba[1], rgba[2], rgba[3]).premultiply();
     }
-    pixmap.encode_png().expect("a PNG encodes")
+    pixmap
+        .encode_png()
+        .expect("a pixmap of a valid size encodes, and the PNG is written to memory")
 }
 
 /// One entry of an `.ico` as a bitmap: a 40-byte header, the pixels as BGRA from the

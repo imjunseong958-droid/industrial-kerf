@@ -31,6 +31,7 @@ kerf-shots = { path = "../../surfaces/kerf-shots" }
 kerf-track = { path = "../../vfx/kerf-track" }
 kerf-text = { path = "../../foundation/kerf-text" }
 libc.workspace = true
+log.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 

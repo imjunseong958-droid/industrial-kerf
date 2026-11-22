@@ -182,7 +182,9 @@ impl Runtime {
             Direction::Undo => (self.state.past.clone(), self.state.future.clone()),
             Direction::Redo => (self.state.future.clone(), self.state.past.clone()),
         };
-        let entry = from.pop().expect("history step has an entry");
+        let entry = from
+            .pop()
+            .expect("history_step and replay check that the stack is not empty");
         let project = kernel::restore(&entry.project, &self.state.project);
         to.push(HistoryEntry {
             script: entry.script,

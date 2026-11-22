@@ -304,6 +304,7 @@ fn main() {
                 None => cx
                     .spawn(async move |cx| {
                         cx.background_executor().timer(after).await;
+                        // Refused only once the editor has ended already.
                         let _ = cx.update(|cx| cx.quit());
                     })
                     .detach(),

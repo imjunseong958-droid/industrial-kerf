@@ -257,11 +257,18 @@ impl KerfMcpRouter {
                 if self.runtime.cancel_render(&worker.job_id).is_err() {
                     let path =
                         kerf_runtime::render_cancel_path(self.runtime.directory(), &worker.job_id);
-                    let _ = fs::write(path, b"cancelled\n");
+                    if let Err(error) = fs::write(&path, b"cancelled\n") {
+                        log::warn!(
+                            "render {} runs on to its end: {} was not written: {error}",
+                            worker.job_id,
+                            path.display()
+                        );
+                    }
                 }
             }
         }
         for worker in workers {
+            // A render thread that panicked has said so already; it is only waited for here.
             let _ = worker.thread.join();
         }
     }
@@ -372,7 +379,10 @@ impl KerfMcpRouter {
         let (description, input_schema, annotations) = if base_name == "make" {
             making::metadata()
         } else {
-            harness::metadata(base_name).expect("every harness tool has metadata")
+            harness::metadata(base_name).expect(
+                "callers pass only harness::TOOL_NAMES, and harness::tools::metadata has an arm \
+                 for each of them but make, which is answered above",
+            )
         };
         ToolDefinition {
             name,

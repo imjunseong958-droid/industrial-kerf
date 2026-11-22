@@ -16,6 +16,7 @@ kerf-lang = { path = "../../foundation/kerf-lang" }
 kerf-model = { path = "../../foundation/kerf-model" }
 fs2 = "0.4"
 libc.workspace = true
+log.workspace = true
 serde = { workspace = true, features = ["derive", "rc"] }
 serde_json = { workspace = true, features = ["float_roundtrip"] }
 sha2.workspace = true

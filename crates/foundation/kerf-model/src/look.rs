@@ -308,7 +308,9 @@ pub fn read(text: &str, source: &str) -> Result<Look, LookError> {
     for (n, text) in lines {
         let args = split(text).map_err(|(column, message)| fail(n, column, message))?;
         let mut args = args.into_iter().peekable();
-        let first = args.next().expect("a line has a word");
+        let first = args
+            .next()
+            .expect("blank lines were dropped above, and `split` makes every word an argument");
         let (side, word) = match first.value.as_str() {
             "a" | "b" if first.key.is_none() && on == On::Transition => {
                 let side = if first.value == "a" { Side::A } else { Side::B };
@@ -1855,7 +1857,7 @@ pub fn expand(project: &Project, catalog: &Catalog) -> Result<Project, String> {
                 // Both clips show across the cut, the incoming one over the
                 // outgoing, as the look's lines draw them.
                 let t = &mut track.transitions[index];
-                t.fx = Id::new(STACK).expect("a valid id");
+                t.fx = Id::new(STACK).expect("`stack` is a valid id");
                 t.version = 1;
                 t.params.clear();
             }

@@ -1639,6 +1639,7 @@ dependencies = [
  "kerf-runtime",
  "kerf-shots",
  "keyring",
+ "log",
  "proptest",
  "serde",
  "serde_json",
@@ -1671,6 +1672,7 @@ dependencies = [
 name = "kerf-cloud"
 version = "0.1.5"
 dependencies = [
+ "log",
  "serde",
  "serde_json",
  "ureq",
@@ -1682,6 +1684,7 @@ version = "0.1.5"
 dependencies = [
  "kerf-lang",
  "kerf-model",
+ "log",
  "serde",
  "serde_json",
  "sha2",
@@ -1737,6 +1740,7 @@ dependencies = [
  "kerf-motion",
  "kerf-raster",
  "kerf-text",
+ "log",
  "lz4_flex",
  "rayon",
  "serde_json",
@@ -1780,6 +1784,7 @@ dependencies = [
  "kerf-model",
  "kerf-track",
  "libc",
+ "log",
  "mimalloc",
  "rayon",
  "regex",
@@ -1872,6 +1877,7 @@ name = "kerf-lang"
 version = "0.1.5"
 dependencies = [
  "kerf-model",
+ "proptest",
 ]
 
 [[package]]
@@ -1898,6 +1904,7 @@ dependencies = [
  "kerf-text",
  "kerf-track",
  "libc",
+ "log",
  "serde",
  "serde_json",
  "sha2",
@@ -1933,6 +1940,7 @@ dependencies = [
  "kerf-fx",
  "kerf-lang",
  "kerf-model",
+ "log",
  "serde_json",
  "tempfile",
  "thiserror 2.0.20",
@@ -1967,6 +1975,7 @@ dependencies = [
  "kerf-lang",
  "kerf-model",
  "libc",
+ "log",
  "serde",
  "serde_json",
  "sha2",

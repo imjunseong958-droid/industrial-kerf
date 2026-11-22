@@ -117,6 +117,7 @@ fn write(file: &Path, told: &Told) {
     };
     let partial = file.with_extension(format!("{}.partial", std::process::id()));
     if std::fs::write(&partial, text).is_err() || std::fs::rename(&partial, file).is_err() {
+        // There may be no partial to take away; nothing reads one that stays.
         let _ = std::fs::remove_file(&partial);
     }
 }
@@ -141,7 +142,9 @@ impl Telling {
     ) -> Self {
         let file = file_of(directory, media);
         let stop = stop_of(directory, media);
-        // A word to stop an earlier making is not one to stop this.
+        // A word to stop an earlier making is not one to stop this. Most often there is
+        // none, and one that stays cannot stop this either: the beat stops a making only
+        // when it takes the word away.
         let _ = std::fs::remove_file(&stop);
         forget_old(directory);
         let told = Arc::new(Mutex::new(Told {
@@ -229,6 +232,7 @@ impl Telling {
         write(&self.file, &told);
         drop(told);
         if let Some(beat) = self.beat.take() {
+            // The end is written above, whether or not the beat panicked.
             let _ = beat.join();
         }
     }
@@ -252,6 +256,7 @@ fn forget_old(directory: &Path) {
     for told in told(directory) {
         let old = now_ms().saturating_sub(told.at_ms) > KEPT.as_millis() as u64;
         if old && (told.going != Going::Making || told.gone()) {
+            // Best effort: another making may have taken it away first.
             let _ = std::fs::remove_file(file_of(directory, &told.media));
         }
     }

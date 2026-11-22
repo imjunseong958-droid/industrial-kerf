@@ -128,6 +128,7 @@ impl Reader {
             return;
         }
         if let Ok(first) = self.first.lock() {
+            // Read or not, the motion goes on once this has waited.
             let _ = self
                 .first_read
                 .wait_timeout_while(first, motion::SYSTEM_FIRST_WAIT, |done| !*done);

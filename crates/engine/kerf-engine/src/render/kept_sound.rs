@@ -99,6 +99,7 @@ impl Scratch {
 impl Drop for Scratch {
     fn drop(&mut self) {
         for file in &self.0 {
+            // A scratch file may never have been written; one that stays only takes room.
             let _ = std::fs::remove_file(file);
         }
     }
@@ -209,6 +210,7 @@ fn clips(mix: &Mix, kept: &Kept, cancellation: &CancellationToken) -> Result<Vec
         let made = ffmpeg(&args, cancellation)
             .and_then(|()| Ok(kept.keep(&making, &names[*at], "f32")?));
         if made.is_err() {
+            // There may be none to take away; nothing reads one that stays.
             let _ = std::fs::remove_file(&making);
         }
         made
@@ -600,6 +602,7 @@ impl Encoder<'_> {
         args.extend(strings(["-f", "adts"]));
         args.push(making.to_string_lossy().into_owned());
         let encoded = ffmpeg(&args, self.cancellation).and_then(|()| Ok(std::fs::read(&making)?));
+        // Read above, or never written: one that stays only takes room.
         let _ = std::fs::remove_file(&making);
         let mut frames = adts(&encoded?)
             .ok_or_else(|| EngineError::msg("the encoder's sound is not frames of AAC"))?;

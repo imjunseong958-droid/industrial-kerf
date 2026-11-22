@@ -767,7 +767,10 @@ fn run_ffmpeg_lines<T>(
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|error| EngineError::msg(format!("ffmpeg could not start: {error}")))?;
-    let stderr = child.stderr.take().expect("stderr is piped");
+    let stderr = child
+        .stderr
+        .take()
+        .expect("the command was spawned with stderr piped, and nothing took it since");
     let reader = thread::spawn(move || {
         BufReader::new(stderr)
             .lines()
@@ -776,6 +779,8 @@ fn run_ffmpeg_lines<T>(
     });
     let status = loop {
         if cancel.is_cancelled() {
+            // Cancelled: FFmpeg may have ended by itself already, and what it wrote is not
+            // wanted, so none of these can fail in a way that matters.
             let _ = child.kill();
             let _ = child.wait();
             let _ = reader.join();

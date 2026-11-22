@@ -185,6 +185,7 @@ impl KerfMcpRouter {
             .write_all(document.as_bytes())
             .and_then(|_| output.sync_all())
         {
+            // The write's error is the one to report; this only tidies the half-written file.
             let _ = fs::remove_file(&path);
             return Err(io_error(error));
         }
@@ -343,6 +344,7 @@ fn write_looks(directory: &Path, looks: &[Look]) -> Result<(), McpError> {
             .write_all(look.text.as_bytes())
             .and_then(|_| output.sync_all())
         {
+            // The write's error is the one to report; this only tidies the half-written file.
             let _ = fs::remove_file(&path);
             return Err(io_error(error));
         }

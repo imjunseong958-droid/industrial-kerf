@@ -85,7 +85,8 @@ impl Time {
     }
 
     pub const fn in_range(self) -> bool {
-        self.0.abs() <= MAX_TIME.0
+        // The least `i64`, which a text can give in flicks, has no `abs`.
+        self.0.unsigned_abs() <= MAX_TIME.0 as u64
     }
 }
 

@@ -49,7 +49,8 @@ impl Store {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).map_err(CloudError::io)?;
         }
-        let text = serde_json::to_string_pretty(self).expect("store serializes");
+        let text = serde_json::to_string_pretty(self)
+            .expect("a store is two optional strings, which always make JSON");
         // Write beside, then rename, so a crash never leaves half a token.
         let temporary = path.with_extension("json.tmp");
         fs::write(&temporary, text).map_err(CloudError::io)?;
@@ -83,7 +84,13 @@ fn home(home: Option<OsString>, user_profile: Option<OsString>) -> Option<PathBu
 #[cfg(unix)]
 fn restrict(path: &Path) {
     use std::os::unix::fs::PermissionsExt;
-    let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o600));
+    // The session is saved all the same, readable by more than its owner.
+    if let Err(error) = fs::set_permissions(path, fs::Permissions::from_mode(0o600)) {
+        log::warn!(
+            "{}: the session token is not kept to its owner: {error}",
+            path.display()
+        );
+    }
 }
 
 #[cfg(not(unix))]

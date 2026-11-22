@@ -5135,12 +5135,14 @@ fn paint_readout(
         theme::line2(),
         BorderStyle::Solid,
     ));
-    let _ = line.paint(
+    if let Err(error) = line.paint(
         pen.at(left + 8.0, top + (20.0 - text::MONO_SMALL.line) / 2.0),
         px(text::MONO_SMALL.line),
         window,
         cx,
-    );
+    ) {
+        log::warn!("a dragged edge's timecode did not draw: {error}");
+    }
 }
 
 /// What a change reel draws round `clip` on `row` (at `y`), as `look`
@@ -5588,29 +5590,41 @@ fn paint_name(
             x += 10.0;
         }
         if let Some(shadow) = &shadow {
-            let _ = shadow.paint(
+            if let Err(error) = shadow.paint(
                 pen.at(x + 1.0, label_y + 1.0),
                 px(text::META.line),
                 window,
                 cx,
-            );
+            ) {
+                log::warn!("a clip name's shadow did not draw: {error}");
+            }
         }
-        let _ = name.paint(pen.at(x, label_y), px(text::META.line), window, cx);
+        if let Err(error) = name.paint(pen.at(x, label_y), px(text::META.line), window, cx) {
+            log::warn!("a clip's name did not draw: {error}");
+        }
         x += f32::from(name.width) + 6.0;
         if let Some(secondary) = &secondary {
-            let _ = secondary.paint(pen.at(x, label_y), px(text::META.line), window, cx);
+            if let Err(error) = secondary.paint(pen.at(x, label_y), px(text::META.line), window, cx)
+            {
+                log::warn!("what follows a clip's name did not draw: {error}");
+            }
             x += f32::from(secondary.width) + 6.0;
         }
         if let Some(fx) = &fx {
-            let _ = fx.paint(pen.at(x, label_y), px(text::MONO_SMALL.line), window, cx);
+            if let Err(error) = fx.paint(pen.at(x, label_y), px(text::MONO_SMALL.line), window, cx)
+            {
+                log::warn!("a clip's fx mark did not draw: {error}");
+            }
         }
         if let Some(length) = &length {
-            let _ = length.paint(
+            if let Err(error) = length.paint(
                 pen.at(label_x, label_y + 15.0),
                 px(text::MONO_SMALL.line),
                 window,
                 cx,
-            );
+            ) {
+                log::warn!("a clip's length did not draw: {error}");
+            }
         }
     });
 }
@@ -5667,12 +5681,14 @@ fn paint_activity(
             gpui::transparent_black(),
             BorderStyle::Solid,
         ));
-        let _ = line.paint(
+        if let Err(error) = line.paint(
             pen.at(left + 4.0, pill_top + (16.0 - style.line) / 2.0),
             px(style.line),
             window,
             cx,
-        );
+        ) {
+            log::warn!("a clip's activity did not draw: {error}");
+        }
     });
 }
 
@@ -6012,7 +6028,11 @@ fn paint_ruler(
             if labelled {
                 let words: SharedString = ruler_label(time, lanes.fps, major).into();
                 let line = shape(window, words, text::MONO_SMALL, &fonts.mono, theme::ink3());
-                let _ = line.paint(pen.at(x + 4.0, 2.0), px(text::MONO_SMALL.line), window, cx);
+                if let Err(error) =
+                    line.paint(pen.at(x + 4.0, 2.0), px(text::MONO_SMALL.line), window, cx)
+                {
+                    log::warn!("a ruler label did not draw: {error}");
+                }
             }
         }
         for mark in &lanes.markers {
@@ -6127,12 +6147,14 @@ fn paint_kerf(
         gpui::transparent_black(),
         BorderStyle::Solid,
     ));
-    let _ = name.paint(
+    if let Err(error) = name.paint(
         pen.at(x + 6.0, layout::RULER),
         px(text::META.line),
         window,
         cx,
-    );
+    ) {
+        log::warn!("Kerf's cursor's name did not draw: {error}");
+    }
 }
 
 /// The playhead: a line down the ruler and the lanes, with its head on the ruler.

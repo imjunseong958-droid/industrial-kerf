@@ -28,7 +28,9 @@ impl Editor<'_> {
                 _ => self.ids.next("c"),
             };
             let track = &mut self.project.sequences[s].tracks[*t];
-            let c = track.clip_index(id.as_str()).expect("member exists");
+            let c = track
+                .clip_index(id.as_str())
+                .expect("each member was read from its track, and splitting a clip keeps its id");
             let offset = at - track.clips[c].start;
             let mut tail = track.clips[c].split_off(offset, tail_id.clone());
             keep_looks(&mut tail, offset, rate, catalog);
@@ -153,7 +155,9 @@ impl Editor<'_> {
                 .collect();
             for id in overlapping {
                 let track = &mut self.project.sequences[s].tracks[t];
-                let c = track.clip_index(id.as_str()).expect("exists");
+                let c = track
+                    .clip_index(id.as_str())
+                    .expect("each was read from this track, and only its own turn removes it");
                 let clip = &mut track.clips[c];
                 if clip.start >= from && clip.end() <= to {
                     track.clips.remove(c);
@@ -269,7 +273,9 @@ impl Editor<'_> {
                 _ => merged.push((from, to)),
             }
         }
-        let ids: HashSet<Id> = selection
+        // The clips not yet removed. The ranges go latest first, so closing one leaves the
+        // earlier ones where they were.
+        let mut ids: HashSet<Id> = selection
             .iter()
             .map(|at| self.clip(*at).id.clone())
             .collect();
@@ -290,6 +296,7 @@ impl Editor<'_> {
                     .clips
                     .remove(at.clip);
             }
+            ids.retain(|id| !here.contains(id));
         }
         Ok(())
     }

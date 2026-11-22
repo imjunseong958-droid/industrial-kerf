@@ -29,13 +29,15 @@ impl Script<'_> {
         let media = self
             .media_of(clip)
             .ok_or_else(|| format!("clip `{}` plays no media to snap to", clip.id))?;
-        let source = clip.source_at(edge).expect("a media clip plays a source");
+        let source = clip
+            .source_at(edge)
+            .expect("media_of found media for it, so it plays a source");
         let speed = clip.speed();
         let offset = edge - clip.start;
         let reach = speed.played(offset + within) - speed.played(offset);
         let played = |seconds: f64| {
             clip.played_at(media_time(seconds))
-                .expect("a media clip plays a source")
+                .expect("media_of found media for it, so it plays a source")
         };
         let (found, speech) = self.snaps(media, source, snap, reach)?;
         let (at, place) = found
@@ -46,7 +48,7 @@ impl Script<'_> {
                     // An index's times are rounded to microseconds.
                     Snap::Cut => rate.round(
                         clip.played_at(media.rate.round(media_time(place.at)))
-                            .expect("a media clip plays a source"),
+                            .expect("media_of found media for it, so it plays a source"),
                     ),
                     Snap::Pause => {
                         // A clip in reverse plays the end of a pause first.
@@ -61,7 +63,7 @@ impl Script<'_> {
             &self.project.sequences[self
                 .project
                 .locate(clip.id.as_str())
-                .expect("a clip is on a sequence")
+                .expect("callers pass a clip Script::clip found in this project")
                 .sequence],
         );
         self.say_snapped(what, &clock, (edge, at), media, (snap, place), &speech);
@@ -344,12 +346,12 @@ impl Script<'_> {
             .iter()
             .map(|(_, outgoing, _)| (outgoing.start + frame, *outgoing))
             .max_by_key(|(low, _)| *low)
-            .expect("a roll has a pair");
+            .expect("no pairs returned early above");
         let (high, last) = pairs
             .iter()
             .map(|(_, _, incoming)| (incoming.end() - frame, *incoming))
             .min_by_key(|(high, _)| *high)
-            .expect("a roll has a pair");
+            .expect("no pairs returned early above");
         let span = Span {
             at,
             low: (low, keeps(first)),
@@ -418,7 +420,9 @@ impl Script<'_> {
         };
         let mut bladed: Vec<Bladed<'_>> = Vec::new();
         for (clip, media) in goes_by {
-            let source = clip.source_at(at).expect("a media clip plays a source");
+            let source = clip
+                .source_at(at)
+                .expect("goes_by keeps only clips that play media");
             let speed = clip.speed();
             // Clips that play one media together, as a picture and its
             // sound do, are one to go by.
@@ -462,7 +466,7 @@ impl Script<'_> {
                         // An index's times are rounded to microseconds.
                         let cut = one.media.rate.round(media_time(place.at));
                         let to = one.clip.played_at(cut);
-                        let to = rate.round(to.expect("a media clip plays a source"));
+                        let to = rate.round(to.expect("goes_by keeps only clips that play media"));
                         (to, one, place)
                     })
                 });
@@ -497,7 +501,7 @@ impl Bladed<'_> {
     fn played(&self, seconds: f64) -> Time {
         self.clip
             .played_at(media_time(seconds))
-            .expect("a media clip plays a source")
+            .expect("goes_by keeps only clips that play media")
     }
 
     /// Where the clip plays a stretch of its media, the earlier end first:
@@ -676,7 +680,8 @@ fn quiet_together(
         let mut into = format!("into {}", places.join(", and "));
         if places.len() > 1 {
             let together = (quiet.1 - quiet.0).seconds();
-            write!(into, ", quiet together for {together:.2}s").unwrap();
+            write!(into, ", quiet together for {together:.2}s")
+                .expect("writing to a String cannot fail");
         }
         return Ok((*to, into));
     }

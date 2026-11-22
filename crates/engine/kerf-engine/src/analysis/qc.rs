@@ -315,6 +315,7 @@ fn measure(
     }
     drop(stdin);
     if drawn.is_err() {
+        // It may have ended already; the wait below reaps it either way.
         let _ = child.kill();
     }
     let status = child.wait()?;

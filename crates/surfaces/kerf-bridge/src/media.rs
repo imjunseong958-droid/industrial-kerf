@@ -45,6 +45,8 @@ pub(crate) fn copy_then(
         drop(copying);
         match copied {
             Ok(copy) => {
+                // The runtime worker is gone only as the bridge closes; the copy then stays in
+                // media/, not imported.
                 let _ = commands.send(then(copy));
             }
             Err(error) => crate::error(
@@ -184,6 +186,8 @@ pub(crate) fn make(
                     take: made.take,
                 },
             );
+            // The runtime worker is gone only as the bridge closes; the take's file is kept
+            // either way.
             let _ = commands.send(Command::MediaReplace {
                 media: id.clone(),
                 path: made.stored,

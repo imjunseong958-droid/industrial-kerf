@@ -1899,14 +1899,16 @@ impl Element for TextElement {
             }
             let mut top = bounds.origin.y - scroll;
             for line in &prepaint.lines {
-                let _ = line.paint(
+                if let Err(error) = line.paint(
                     point(bounds.origin.x - scroll_x, top),
                     line_height,
                     TextAlign::Left,
                     None,
                     window,
                     cx,
-                );
+                ) {
+                    log::warn!("a text field's line did not draw: {error}");
+                }
                 top += line.size(line_height).height;
             }
             if focus_handle.is_focused(window) {

@@ -226,7 +226,8 @@ impl Parser<'_> {
                     if crate::making::starts(word) {
                         crate::making::read(line, 0, &made).map(|step| {
                             made.push(step.makes().to_owned());
-                            self.project.media[media.expect("checked")].steps.push(step);
+                            let open = media.expect("the match guard checked a media is open");
+                            self.project.media[open].steps.push(step);
                         })
                     } else {
                         Err(line.error(
@@ -1133,7 +1134,7 @@ pub(crate) fn mask_shape_text(shape: &MaskShape, rate: Rate) -> String {
 pub(crate) fn mask_text(mask: &Mask, catalog: &Catalog, rate: Rate) -> String {
     let mut out = mask_shape_text(&mask.shape, rate);
     if mask.mode != MaskMode::Add {
-        write!(out, " mode={}", mask.mode.name()).unwrap();
+        write!(out, " mode={}", mask.mode.name()).expect("writing to a String cannot fail");
     }
     if mask.inverted {
         out.push_str(" inverted=true");
@@ -1157,11 +1158,11 @@ pub(crate) fn parse_marker_color(text: &str) -> Result<MarkerColor, String> {
 
 pub fn print_document(project: &Project, catalog: &Catalog, options: PrintOptions) -> String {
     let mut out = String::new();
-    writeln!(out, "kerf {VERSION}").unwrap();
-    write!(out, "project name={}", quote(&project.name)).unwrap();
+    writeln!(out, "kerf {VERSION}").expect("writing to a String cannot fail");
+    write!(out, "project name={}", quote(&project.name)).expect("writing to a String cannot fail");
     if !project.retired.is_empty() {
         let retired: Vec<&str> = project.retired.iter().map(Id::as_str).collect();
-        write!(out, " retired={}", retired.join(",")).unwrap();
+        write!(out, " retired={}", retired.join(",")).expect("writing to a String cannot fail");
     }
     out.push('\n');
     if !project.media.is_empty() {
@@ -1170,7 +1171,8 @@ pub fn print_document(project: &Project, catalog: &Catalog, options: PrintOption
             out.push_str(&media_line(media));
             out.push('\n');
             for step in &media.steps {
-                writeln!(out, "  {}", crate::making::print_step(step)).unwrap();
+                writeln!(out, "  {}", crate::making::print_step(step))
+                    .expect("writing to a String cannot fail");
             }
         }
     }
@@ -1190,32 +1192,36 @@ pub(crate) fn media_line(media: &Media) -> String {
         media.rate
     );
     if media.start != Time::ZERO || media.drop_frame {
-        write!(line, " tc={}", clock.print_position(Time::ZERO)).unwrap();
+        write!(line, " tc={}", clock.print_position(Time::ZERO))
+            .expect("writing to a String cannot fail");
     }
-    write!(line, " dur={}", clock.print_duration(media.duration)).unwrap();
+    write!(line, " dur={}", clock.print_duration(media.duration))
+        .expect("writing to a String cannot fail");
     if let Some(video) = media.video {
-        write!(line, " video={}x{}", video.width, video.height).unwrap();
+        write!(line, " video={}x{}", video.width, video.height)
+            .expect("writing to a String cannot fail");
         if video.alpha {
             line.push_str(" alpha=true");
         }
         if video.bits != 8 {
-            write!(line, " bits={}", video.bits).unwrap();
+            write!(line, " bits={}", video.bits).expect("writing to a String cannot fail");
         }
         if video.color != kerf_model::ColorSpace::default() {
-            write!(line, " color={}", video.color.id()).unwrap();
+            write!(line, " color={}", video.color.id()).expect("writing to a String cannot fail");
         }
     }
     if let Some(audio) = media.audio {
-        write!(line, " audio={}ch@{}", audio.channels, audio.sample_rate).unwrap();
+        write!(line, " audio={}ch@{}", audio.channels, audio.sample_rate)
+            .expect("writing to a String cannot fail");
     }
     if let Some(reel) = &media.reel {
-        write!(line, " reel={}", quote(reel)).unwrap();
+        write!(line, " reel={}", quote(reel)).expect("writing to a String cannot fail");
     }
     if let Some(recipe) = &media.recipe {
-        write!(line, " recipe={}", quote(recipe)).unwrap();
+        write!(line, " recipe={}", quote(recipe)).expect("writing to a String cannot fail");
     }
     if let Some(sync) = &media.sync {
-        write!(line, " sync={}", print_synced(sync)).unwrap();
+        write!(line, " sync={}", print_synced(sync)).expect("writing to a String cannot fail");
     }
     line
 }
@@ -1254,16 +1260,16 @@ fn print_sequence(
             "  # duration {}",
             clock.print_duration(sequence.duration())
         )
-        .unwrap();
+        .expect("writing to a String cannot fail");
     }
     out.push('\n');
     for bus in &sequence.buses {
-        write!(out, "  bus {}", bus.id).unwrap();
+        write!(out, "  bus {}", bus.id).expect("writing to a String cannot fail");
         if let Some(name) = &bus.name {
-            write!(out, " name={}", quote(name)).unwrap();
+            write!(out, " name={}", quote(name)).expect("writing to a String cannot fail");
         }
         if let Some(to) = &bus.to {
-            write!(out, " to={to}").unwrap();
+            write!(out, " to={to}").expect("writing to a String cannot fail");
         }
         out.push_str(&params_text(
             &bus.params,
@@ -1272,7 +1278,8 @@ fn print_sequence(
         ));
         out.push('\n');
         for effect in &bus.effects {
-            write!(out, "    fx {}", print_fx_ref(&effect.fx, effect.version)).unwrap();
+            write!(out, "    fx {}", print_fx_ref(&effect.fx, effect.version))
+                .expect("writing to a String cannot fail");
             if !effect.enabled {
                 out.push_str(" enabled=false");
             }
@@ -1287,9 +1294,10 @@ fn print_sequence(
         }
     }
     for track in &sequence.tracks {
-        write!(out, "  track {} {}", track.id, track.kind.name()).unwrap();
+        write!(out, "  track {} {}", track.id, track.kind.name())
+            .expect("writing to a String cannot fail");
         if let Some(name) = &track.name {
-            write!(out, " name={}", quote(name)).unwrap();
+            write!(out, " name={}", quote(name)).expect("writing to a String cannot fail");
         }
         for (flag, value, default) in [
             ("enabled", track.enabled, true),
@@ -1297,17 +1305,17 @@ fn print_sequence(
             ("muted", track.muted, false),
         ] {
             if value != default {
-                write!(out, " {flag}={value}").unwrap();
+                write!(out, " {flag}={value}").expect("writing to a String cannot fail");
             }
         }
         if let Some(role) = &track.role {
-            write!(out, " role={}", word_or_quote(role)).unwrap();
+            write!(out, " role={}", word_or_quote(role)).expect("writing to a String cannot fail");
         }
         if !track.sync_locked {
             out.push_str(" sync=off");
         }
         if let Some(bus) = &track.bus {
-            write!(out, " bus={bus}").unwrap();
+            write!(out, " bus={bus}").expect("writing to a String cannot fail");
         }
         out.push('\n');
         let domain = track.kind.domain();
@@ -1326,9 +1334,10 @@ fn print_sequence(
                 print_fx_ref(&transition.fx, transition.version),
                 clock.print_duration(transition.duration)
             )
-            .unwrap();
+            .expect("writing to a String cannot fail");
             if transition.align != Align::Center {
-                write!(out, " align={}", transition.align.name()).unwrap();
+                write!(out, " align={}", transition.align.name())
+                    .expect("writing to a String cannot fail");
             }
             let defs = catalog
                 .fx(transition.fx.as_str())
@@ -1345,18 +1354,19 @@ fn print_sequence(
             marker.id,
             clock.print_position(marker.at)
         )
-        .unwrap();
+        .expect("writing to a String cannot fail");
         if marker.duration != Time::ZERO {
-            write!(out, " dur={}", clock.print_duration(marker.duration)).unwrap();
+            write!(out, " dur={}", clock.print_duration(marker.duration))
+                .expect("writing to a String cannot fail");
         }
         if let Some(name) = &marker.name {
-            write!(out, " name={}", quote(name)).unwrap();
+            write!(out, " name={}", quote(name)).expect("writing to a String cannot fail");
         }
         if let Some(color) = marker.color {
-            write!(out, " color={}", color.name()).unwrap();
+            write!(out, " color={}", color.name()).expect("writing to a String cannot fail");
         }
         if let Some(note) = &marker.note {
-            write!(out, " note={}", quote(note)).unwrap();
+            write!(out, " note={}", quote(note)).expect("writing to a String cannot fail");
         }
         out.push('\n');
     }
@@ -1419,27 +1429,28 @@ fn print_clip(
         clock.print_position(clip.start),
         clock.print_duration(clip.duration)
     )
-    .unwrap();
+    .expect("writing to a String cannot fail");
     if !clip.speed().is_one() {
-        write!(out, " speed={}", print_speed(clip.speed(), clock.rate)).unwrap();
+        write!(out, " speed={}", print_speed(clip.speed(), clock.rate))
+            .expect("writing to a String cannot fail");
     }
     if clip.retime != kerf_model::Retime::default() {
-        write!(out, " retime={}", clip.retime.id()).unwrap();
+        write!(out, " retime={}", clip.retime.id()).expect("writing to a String cannot fail");
     }
     if let Some(angle) = &clip.angle {
-        write!(out, " angle={angle}").unwrap();
+        write!(out, " angle={angle}").expect("writing to a String cannot fail");
     }
     if let Some(name) = &clip.name {
-        write!(out, " name={}", quote(name)).unwrap();
+        write!(out, " name={}", quote(name)).expect("writing to a String cannot fail");
     }
     if !clip.enabled {
         out.push_str(" enabled=false");
     }
     if let Some(link) = &clip.link {
-        write!(out, " link={link}").unwrap();
+        write!(out, " link={link}").expect("writing to a String cannot fail");
     }
     if let Some(parent) = &clip.parent {
-        write!(out, " parent={parent}").unwrap();
+        write!(out, " parent={parent}").expect("writing to a String cannot fail");
     }
     if options.annotate {
         write!(
@@ -1448,11 +1459,12 @@ fn print_clip(
             clock.print_position(clip.end()),
             clip.duration
         )
-        .unwrap();
+        .expect("writing to a String cannot fail");
         if let (Some((_, source_out)), Some(source)) =
             (clip.source_range(), source_clock(project, &clip.content))
         {
-            write!(out, ", src out {}", source.print_position(source_out)).unwrap();
+            write!(out, ", src out {}", source.print_position(source_out))
+                .expect("writing to a String cannot fail");
         }
     }
     out.push('\n');
@@ -1468,7 +1480,7 @@ fn print_clip(
         set.push_str(&params_text(params, defs, clock.rate));
     }
     if !set.is_empty() {
-        writeln!(out, "      set{set}").unwrap();
+        writeln!(out, "      set{set}").expect("writing to a String cannot fail");
     }
     for mask in &clip.masks {
         writeln!(
@@ -1477,10 +1489,11 @@ fn print_clip(
             mask.name,
             mask_text(mask, catalog, clock.rate)
         )
-        .unwrap();
+        .expect("writing to a String cannot fail");
     }
     for effect in &clip.effects {
-        write!(out, "      fx {}", print_fx_ref(&effect.fx, effect.version)).unwrap();
+        write!(out, "      fx {}", print_fx_ref(&effect.fx, effect.version))
+            .expect("writing to a String cannot fail");
         if !effect.enabled {
             out.push_str(" enabled=false");
         }
@@ -1516,13 +1529,15 @@ pub(crate) fn params_text(params: &Params, defs: &[ParamDef], rate: Rate) -> Str
             .any(|def| def.name == *name && def.ty == ParamType::Time);
         match param {
             Param::Static(Value::Text(id)) if reference && Id::new(id.as_str()).is_ok() => {
-                write!(out, " {name}={id}").unwrap();
+                write!(out, " {name}={id}").expect("writing to a String cannot fail");
             }
             Param::Static(Value::Number(seconds)) if time => {
                 let at = Time::from_seconds(*seconds).unwrap_or(Time::ZERO);
-                write!(out, " {name}={}", crate::text::print_offset(at, rate)).unwrap();
+                write!(out, " {name}={}", crate::text::print_offset(at, rate))
+                    .expect("writing to a String cannot fail");
             }
-            _ => write!(out, " {name}={}", print_param(param, rate)).unwrap(),
+            _ => write!(out, " {name}={}", print_param(param, rate))
+                .expect("writing to a String cannot fail"),
         }
     }
     out

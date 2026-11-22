@@ -137,9 +137,14 @@ impl Editor<'_> {
         for (t, outgoing, incoming) in &pairs {
             self.unlocked(s, *t)?;
             let track = &self.project.sequences[s].tracks[*t];
+            // `pairs` was read from this track, which nothing has changed since.
             let (a, b) = (
-                track.clip(outgoing.as_str()).expect("exists"),
-                track.clip(incoming.as_str()).expect("exists"),
+                track
+                    .clip(outgoing.as_str())
+                    .expect("the outgoing clip was read from it"),
+                track
+                    .clip(incoming.as_str())
+                    .expect("the incoming clip was read from it"),
             );
             if !(a.duration + delta).is_positive() || !(b.duration - delta).is_positive() {
                 return Err(fail(

@@ -82,6 +82,7 @@ pub trait LlmProvider: Send + Sync {
         on_text: &mut dyn FnMut(&str),
         stop: &dyn Fn() -> bool,
     ) -> Result<Vec<ProviderChunk>, ProviderError> {
+        // The reply is read whole before any of it is told, so there is no rest to stop.
         let _ = stop;
         let chunks = self.stream(request)?;
         for chunk in &chunks {

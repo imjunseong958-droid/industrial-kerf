@@ -243,6 +243,7 @@ pub(crate) fn edit(
     .and_then(|named| {
         crate::recipes::apply(client, &named.script).inspect_err(|_| {
             if let Some(copy) = &named.copy {
+                // Only tidying: no step names the copy, as the edit that would have was refused.
                 let _ = std::fs::remove_file(copy);
             }
         })?;

@@ -309,9 +309,9 @@ pub fn catalog_table() -> String {
             category(id),
             def.name
         )
-        .unwrap();
+        .expect("writing to a String cannot fail");
         if *version != 1 {
-            write!(out, "\t{version}").unwrap();
+            write!(out, "\t{version}").expect("writing to a String cannot fail");
         }
         out.push('\n');
         let mut names: Vec<String> = Vec::new();
@@ -325,7 +325,7 @@ pub fn catalog_table() -> String {
                 let name = line
                     .split('\t')
                     .nth(2)
-                    .expect("a parameter line names it")
+                    .expect("`lines` writes each line with its name in the third field")
                     .to_owned();
                 assert!(
                     !FIELDS.contains(&name.as_str()),

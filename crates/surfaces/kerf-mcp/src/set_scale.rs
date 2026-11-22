@@ -68,7 +68,7 @@ impl Seen<'_> {
             .iter()
             .find(|track| track.clips.iter().any(|clip| clip.id.as_str() == self.clip))?;
         let track = |id: &str, clip: Clip| Track {
-            id: Id::new(id).expect("a track's name"),
+            id: Id::new(id).expect("called only with \"V1\" and \"V2\", which are valid ids"),
             clips: vec![clip],
             transitions: Vec::new(),
             ..model.clone()
@@ -76,9 +76,9 @@ impl Seen<'_> {
         let mut tracks = vec![track("V1", mesh.clone())];
         if let Some((place, fov)) = place {
             let mut camera = Clip::new(
-                Id::new("fitcamera").expect("a clip's name"),
+                Id::new("fitcamera").expect("\"fitcamera\" is a valid id"),
                 Content::Generator {
-                    fx: Id::new("camera").expect("a generator's name"),
+                    fx: Id::new("camera").expect("\"camera\" is a valid id"),
                     version: 1,
                     params: Default::default(),
                 },

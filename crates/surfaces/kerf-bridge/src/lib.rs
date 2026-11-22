@@ -238,6 +238,7 @@ struct AgentRequest {
 }
 
 fn emit(tx: &Outbox, event: Event) {
+    // Nobody takes events any more only once the editor has closed the bridge.
     let _ = tx.send(event);
 }
 
@@ -323,7 +324,9 @@ fn cloud_status(tx: &Outbox, command: Option<Command>) {
         (Some(url), Some(token)) => match kerf_cloud::fetch_account(&url, token) {
             Ok(account) => (kerf_cloud::Access::of(&account), Some(account)),
             Err(kerf_cloud::CloudError::Unauthorized) => {
-                let _ = cloud_session::keep_token(&path, &keychain, None);
+                if let Err(error) = cloud_session::keep_token(&path, &keychain, None) {
+                    log::warn!("the token Kerf Cloud refused was not forgotten: {error}");
+                }
                 message = Some(kerf_cloud::CloudError::Unauthorized.to_string());
                 (CloudAccess::SignedOut, None)
             }

@@ -181,6 +181,7 @@ pub(crate) fn write_atomic(directory: &Path, path: &Path, text: &str) -> Result<
         })
         .and_then(|_| fs::rename(&temporary, path));
     if let Err(error) = written {
+        // The write's error is the one to report; this only tidies the temporary file.
         let _ = fs::remove_file(&temporary);
         return Err(format!("cannot write {}: {error}", path.display()));
     }

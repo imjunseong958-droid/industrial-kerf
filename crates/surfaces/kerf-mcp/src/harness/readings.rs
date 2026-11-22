@@ -40,7 +40,8 @@ impl KerfMcpRouter {
             },
         )
         .map_err(|error| McpError::new("RENDER_FAILED", error.to_string()))?;
-        // The middle of three, the first having had a decoder to open.
+        // The middle of three, the first having had a decoder to open. Only how long a
+        // frame takes is wanted, not the frame.
         let median_ms = |at: Time, scale: f64| {
             let _ = compositor.frame(at, scale);
             let mut times: Vec<f64> = (0..3)
@@ -424,9 +425,13 @@ impl KerfMcpRouter {
             indexed.push(&cut.media.id);
             let path = resolve_project_source_path(&self.dir, &cut.media.path);
             if kerf_engine::cached_media_index(&path, &cache).is_none() {
-                // One that cannot be read is said by the report, as not measured.
-                let _ =
-                    kerf_engine::media_index(&path, &cache, &kerf_engine::CancellationToken::new());
+                // One that cannot be read is said by the report, as not measured, and why
+                // it could not be is logged.
+                if let Err(error) =
+                    kerf_engine::media_index(&path, &cache, &kerf_engine::CancellationToken::new())
+                {
+                    log::warn!("{} was not indexed for its cuts: {error}", path.display());
+                }
             }
         }
         let mut report = crate::cuts::report(
@@ -490,7 +495,11 @@ impl KerfMcpRouter {
             sound
         };
         // A measurement is made for each revision asked about.
-        let _ = DerivativeCache::new(&self.dir).keep_newest(&entry, KEPT_PROGRAM_LOUDNESS);
+        if let Err(error) =
+            DerivativeCache::new(&self.dir).keep_newest(&entry, KEPT_PROGRAM_LOUDNESS)
+        {
+            log::warn!("older loudness measurements were not cleared from the cache: {error}");
+        }
         // Two places, as a meter reads; silence has no level.
         let level = |value: f64| {
             if value.is_finite() && value > -120.0 {

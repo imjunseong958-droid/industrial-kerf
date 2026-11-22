@@ -247,6 +247,7 @@ fn write(directory: &Path, relative: &str, text: &str, replace: bool) -> Result<
         .write_all(text.as_bytes())
         .and_then(|_| output.sync_all())
     {
+        // The write's error is the one to report; this only tidies the half-written file.
         let _ = fs::remove_file(&path);
         return Err(failed(error));
     }
@@ -378,8 +379,16 @@ pub(crate) fn keep(
     let path: PathBuf = folder.join(format!("{id}@{}.{EXTENSION}", look.version));
     write_new(&path, &look.text)?;
     if let Err(error) = look::refresh_project_looks(directory) {
-        let _ = fs::remove_file(&path);
-        let _ = look::refresh_project_looks(directory);
+        // Kept, the look would fail every refresh after this one.
+        if let Err(removing) = fs::remove_file(&path) {
+            log::warn!(
+                "{} does not install, and was not removed: {removing}",
+                path.display()
+            );
+        }
+        if let Err(again) = look::refresh_project_looks(directory) {
+            log::warn!("the project's looks did not install again: {again}");
+        }
         return Err(error);
     }
     Ok((id, look.version))
@@ -396,6 +405,7 @@ fn write_new(path: &Path, text: &str) -> Result<(), String> {
         .write_all(text.as_bytes())
         .and_then(|_| output.sync_all())
     {
+        // The write's error is the one to report; this only tidies the half-written file.
         let _ = fs::remove_file(path);
         return Err(failed(error));
     }

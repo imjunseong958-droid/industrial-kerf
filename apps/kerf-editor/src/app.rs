@@ -227,6 +227,8 @@ pub fn screenshot_then_quit(file: PathBuf, after: Duration, cx: &mut App) {
     let began = Rc::new(Cell::new(false));
     if let Some(window) = window {
         let began = began.clone();
+        // A window that cannot be reached now counts as one that has drawn
+        // nothing: it is woken below.
         let _ = window.update(cx, move |_, window, _| {
             window.on_next_frame(move |_, _| began.set(true));
         });
@@ -268,6 +270,7 @@ pub fn screenshot_then_quit(file: PathBuf, after: Duration, cx: &mut App) {
             Ok(()) => log::info!("--screenshot: wrote {}", file.display()),
             Err(message) => eprintln!("--screenshot {}: {message}", file.display()),
         }
+        // Refused only once the editor has ended already.
         let _ = cx.update(|cx| cx.quit());
     })
     .detach();
@@ -391,6 +394,7 @@ fn capture_target(window: gpui::AnyWindowHandle, cx: &mut App) -> Result<Capture
 
 /// Reads `target` back and writes it to `file` as a PNG.
 fn capture(target: CaptureTarget, file: &Path) -> Result<(), String> {
+    // Unread where nothing can be captured (Windows): `CaptureTarget` has no kinds there.
     let _ = file;
     match target {
         #[cfg(any(target_os = "linux", target_os = "freebsd"))]
@@ -1097,7 +1101,12 @@ pub fn launch_notices(cx: &mut App) {
         if let Ok(Some((answer, folder))) = cx.update(crash_notice) {
             if matches!(answer.await, Ok(1)) {
                 let _ = cx.update(|cx| {
-                    let _ = std::fs::create_dir_all(&folder);
+                    if let Err(error) = std::fs::create_dir_all(&folder) {
+                        log::warn!(
+                            "{}: the crash folder could not be made: {error}",
+                            folder.display()
+                        );
+                    }
                     cx.reveal_path(&folder);
                 });
             }

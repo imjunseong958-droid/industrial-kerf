@@ -735,6 +735,7 @@ fn confirmed(question: &str) -> bool {
         return false;
     }
     print!("{question} [y/N] ");
+    // Should the question not show, the answer is still read.
     let _ = std::io::stdout().flush();
     let mut answer = String::new();
     stdin.lock().read_line(&mut answer).is_ok()
@@ -906,7 +907,8 @@ fn run_make(directory: &Path, kerfd: Option<&Path>, id: &str, yes: bool, rolls: 
     }
     drop(stop);
     let Some(last) = made.last() else {
-        let error = ended.expect("no take is an error");
+        let error =
+            ended.expect("clap takes --rolls from 1, so only a take that failed leaves none");
         if error.to_string() == "stopped" {
             bail!("stopped: no take was made, and {id} is as it was");
         }
@@ -1707,6 +1709,7 @@ fn media_file(
                 kerf_collab::media::copy_into_media(directory, &fetched.path)
                     .with_context(|| format!("copy {} into media/", fetched.path.display()))
             });
+        // What stays in the incoming folder is swept as stale later.
         let _ = fs::remove_dir_all(&folder);
         return Ok(directory.join(copied?));
     }
@@ -1743,6 +1746,7 @@ fn run_prompt(session: &mut AgentSession, prompt: &str) -> Result<String> {
     let result = session.run_with_events(prompt, |event| match event {
         AgentEvent::TextDelta(delta) => {
             print!("{delta}");
+            // Left in the buffer, it shows with the next line.
             let _ = io::stdout().flush();
             text.push_str(&delta);
         }
@@ -1792,6 +1796,7 @@ fn run_repl(session: &mut AgentSession, directory: &Path) -> Result<()> {
                 println!("saved conversation.json");
             }
             prompt => {
+                // Its answer was printed as it streamed in.
                 let _ = run_prompt(session, prompt)?;
                 println!();
             }

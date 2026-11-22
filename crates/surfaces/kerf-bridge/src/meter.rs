@@ -79,6 +79,7 @@ impl Meter {
                 self.live = false;
                 self.sent = None;
                 self.read = None;
+                // Nobody takes events any more only once the editor has closed the bridge.
                 let _ = tx.send(silent());
             }
             return;

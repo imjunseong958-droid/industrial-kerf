@@ -690,7 +690,7 @@ impl<'a> Reader<'a> {
         let drawn = guide
             .picture
             .as_ref()
-            .expect("it was made above")
+            .expect("the guide's picture is drawn and stored just above when it is missing")
             .frame(spot.when, guide.scale);
         if (drawn.width, drawn.height) != (spot.ids.width, spot.ids.height) {
             return Err(format!(

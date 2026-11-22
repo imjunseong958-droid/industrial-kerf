@@ -3241,24 +3241,28 @@ impl Render for StageView {
                                 bounds: placement.picture,
                             }),
                             |window| {
-                                let _ = window.paint_image(
+                                if let Err(error) = window.paint_image(
                                     contain(drawn, width, height),
                                     Corners::default(),
                                     image,
                                     0,
                                     false,
-                                );
+                                ) {
+                                    log::warn!("the viewer's picture did not draw: {error}");
+                                }
                             },
                         );
                     } else {
                         let card = contain(placement.picture, width, height);
-                        let _ = window.paint_image(
+                        if let Err(error) = window.paint_image(
                             card,
                             Corners::all(placement.picture_radius),
                             image,
                             0,
                             false,
-                        );
+                        ) {
+                            log::warn!("the viewer's picture did not draw: {error}");
+                        }
                         // What was showing as the side changed, wiping away
                         // to the right as what shows now comes in.
                         if let Some((from, t)) = &wipe {
@@ -3268,13 +3272,15 @@ impl Render for StageView {
                             window.with_content_mask(
                                 Some(ContentMask { bounds: kept }),
                                 |window| {
-                                    let _ = window.paint_image(
+                                    if let Err(error) = window.paint_image(
                                         card,
                                         Corners::all(placement.picture_radius),
                                         from.clone(),
                                         0,
                                         false,
-                                    );
+                                    ) {
+                                        log::warn!("the picture wiped away did not draw: {error}");
+                                    }
                                 },
                             );
                             window.paint_quad(fill(
@@ -3795,7 +3801,9 @@ fn paint_compare(
     let before = Bounds::from_corners(card.origin, point(edge, card.bottom()));
     let placed = crate::artwork::fitted(card, crate::artwork::image_size(&still), false);
     window.with_content_mask(Some(ContentMask { bounds: before }), |window| {
-        let _ = window.paint_image(placed, Corners::all(radius), still, 0, false);
+        if let Err(error) = window.paint_image(placed, Corners::all(radius), still, 0, false) {
+            log::warn!("the change reel's Before still did not draw: {error}");
+        }
     });
     let glow = px(COMPARE_GLOW);
     let clear = theme::with_alpha(over_picture::line(), 0.0);
@@ -4141,7 +4149,9 @@ fn paint_tag(
         gpui::transparent_black(),
         BorderStyle::Solid,
     ));
-    let _ = line.paint(point(px(x + 5.0), px(y)), px(down), window, cx);
+    if let Err(error) = line.paint(point(px(x + 5.0), px(y)), px(down), window, cx) {
+        log::warn!("a mask's name did not draw: {error}");
+    }
 }
 
 /// A handle: the accent with a white edge, or white with the accent's when

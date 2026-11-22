@@ -928,7 +928,12 @@ impl SettingsView {
                 ui::button("settings-models-open", open_words).on_click(move |_, _, cx| {
                     let (_, opened) = models_opener(&shown, shown.is_file());
                     if !shown.is_file() {
-                        let _ = std::fs::create_dir_all(&opened);
+                        if let Err(error) = std::fs::create_dir_all(&opened) {
+                            log::warn!(
+                                "{}: the folder could not be made: {error}",
+                                opened.display()
+                            );
+                        }
                     }
                     cx.open_with_system(&opened);
                 }),
@@ -1638,7 +1643,12 @@ impl SettingsView {
                             .disabled(shown_folder.is_none())
                             .on_click(move |_, _, cx| {
                                 if let Some(folder) = &shown_folder {
-                                    let _ = std::fs::create_dir_all(folder);
+                                    if let Err(error) = std::fs::create_dir_all(folder) {
+                                        log::warn!(
+                                            "{}: the crash folder could not be made: {error}",
+                                            folder.display()
+                                        );
+                                    }
                                     cx.reveal_path(folder);
                                 }
                             })

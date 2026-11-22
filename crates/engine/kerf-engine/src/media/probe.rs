@@ -19,12 +19,14 @@ use crate::process::ffmpeg::{
 use crate::process::resources::extract_job_count;
 
 static SILENCE_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"silence_(start|end):\s*(-?\d+(?:\.\d+)?)").expect("silence regex")
+    Regex::new(r"silence_(start|end):\s*(-?\d+(?:\.\d+)?)").expect("a fixed pattern that compiles")
 });
-static PTS_TIME_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"pts_time:(-?\d+(?:\.\d+)?)").expect("pts regex"));
-static SCENE_SCORE_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"lavfi\.scene_score=(-?\d+(?:\.\d+)?)").expect("score regex"));
+static PTS_TIME_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"pts_time:(-?\d+(?:\.\d+)?)").expect("a fixed pattern that compiles")
+});
+static SCENE_SCORE_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"lavfi\.scene_score=(-?\d+(?:\.\d+)?)").expect("a fixed pattern that compiles")
+});
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ProbeInfo {
@@ -1261,6 +1263,8 @@ fn drain_waveform_stderr_tail(mut stderr: impl Read) -> std::io::Result<Vec<u8>>
     }
 }
 
+/// End a decoder given up on. Best effort, on a way out with an error of its own: the
+/// decoder may have ended already.
 fn reap_waveform_child(child: &mut Child) {
     let _ = child.kill();
     let _ = child.wait();
@@ -1271,6 +1275,7 @@ fn reap_waveform_child_with_stderr(
     stderr_reader: std::thread::JoinHandle<std::io::Result<Vec<u8>>>,
 ) {
     reap_waveform_child(child);
+    // Its stderr is not told: the error being returned is what went wrong.
     let _ = stderr_reader.join();
 }
 

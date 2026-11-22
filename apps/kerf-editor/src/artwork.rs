@@ -638,7 +638,9 @@ pub fn paint_fitted(
 ) {
     let placed = fitted(bounds, image_size(&image), cover);
     window.with_content_mask(Some(ContentMask { bounds }), |window| {
-        let _ = window.paint_image(placed, Corners::all(radius), image, 0, false);
+        if let Err(error) = window.paint_image(placed, Corners::all(radius), image, 0, false) {
+            log::warn!("a picture did not draw: {error}");
+        }
     });
 }
 
@@ -1309,6 +1311,7 @@ fn run(shared: &Shared, args: &[String], limit: Duration, mut sink: impl FnMut(&
         return false;
     };
     let Some(mut out) = child.stdout.take() else {
+        // Stopped and reaped, if it has not ended already: it is not read.
         let _ = child.kill();
         let _ = child.wait();
         return false;
@@ -1326,6 +1329,8 @@ fn run(shared: &Shared, args: &[String], limit: Duration, mut sink: impl FnMut(&
                 Err(mpsc::RecvTimeoutError::Timeout) => {
                     waited += tick;
                     if waited >= limit || stopping.load(Ordering::Relaxed) {
+                        // One that has just ended needs no stopping; the wait
+                        // below says how it ended either way.
                         let _ = watched
                             .lock()
                             .unwrap_or_else(PoisonError::into_inner)
@@ -1345,6 +1350,8 @@ fn run(shared: &Shared, args: &[String], limit: Duration, mut sink: impl FnMut(&
             Err(_) => break,
         }
     }
+    // The watchdog may have returned already, having stopped it; it only
+    // kills, which does not panic.
     let _ = done.send(());
     let _ = watchdog.join();
     let status = child.lock().unwrap_or_else(PoisonError::into_inner).wait();

@@ -216,6 +216,7 @@ pub fn media_index(
             index.onsets = onsets(&levels);
             index.tempo = tempo(&levels, index.onsets.len());
         }
+        // FFmpeg's scratch, read above: one left only takes room in the entry.
         let _ = fs::remove_file(&scenes);
         let _ = fs::remove_file(&envelope);
     }
@@ -351,7 +352,7 @@ fn peaks(levels: &[f64]) -> Vec<Peak> {
     let half = hops(PEAK_SMOOTHING_SECONDS) / 2;
     let mut prefix = vec![0.0];
     for value in &power {
-        prefix.push(prefix.last().unwrap() + value);
+        prefix.push(prefix.last().expect("it starts with 0.0 and only grows") + value);
     }
     let smooth: Vec<f64> = (0..power.len())
         .map(|i| {

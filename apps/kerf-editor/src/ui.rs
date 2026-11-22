@@ -468,12 +468,14 @@ impl gpui::Element for CutLine {
             gpui::TextAlign::Center => room / 2.0,
             gpui::TextAlign::Right => room,
         };
-        let _ = shaped.paint(
+        if let Err(error) = shaped.paint(
             point(bounds.origin.x + left, bounds.origin.y),
             *line_height,
             window,
             cx,
-        );
+        ) {
+            log::warn!("a line of text did not draw: {error}");
+        }
     }
 }
 

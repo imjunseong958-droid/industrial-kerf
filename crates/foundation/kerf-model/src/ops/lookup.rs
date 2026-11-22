@@ -49,9 +49,11 @@ impl Editor<'_> {
             .ok_or_else(|| fail("ref.missing", self.project.no_clip(clip.as_str())))
     }
 
-    /// Locate a clip known to exist.
+    /// Locate a clip known to exist: one the operation read from the project and has not removed.
     pub(super) fn find(&self, clip: &Id) -> ClipAt {
-        self.project.locate(clip.as_str()).expect("clip exists")
+        self.project
+            .locate(clip.as_str())
+            .expect("an operation finds only clips it read from the project and has not removed")
     }
 
     pub(super) fn clip(&self, at: ClipAt) -> &Clip {

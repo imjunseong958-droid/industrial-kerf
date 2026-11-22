@@ -75,6 +75,7 @@ fn write(file: &Path, prefix: &str, bytes: &[u8]) {
     }
     let partial = file.with_extension(format!("{}.partial", std::process::id()));
     if fs::write(&partial, bytes).is_err() || fs::rename(&partial, file).is_err() {
+        // There may be no partial to take away; nothing reads one that stays.
         let _ = fs::remove_file(&partial);
         return;
     }
@@ -88,6 +89,7 @@ fn write(file: &Path, prefix: &str, bytes: &[u8]) {
                 .extension()
                 .is_none_or(|extension| extension != "partial");
         if stale {
+            // Another Kerf may have taken it away first; one left only takes room.
             let _ = fs::remove_file(path);
         }
     }
@@ -123,9 +125,13 @@ impl KeptFrames {
         if let Some((records, [])) = records {
             for record in records {
                 let number = |at: usize| {
-                    f64::from_le_bytes(record[at..at + 8].try_into().expect("eight bytes"))
+                    f64::from_le_bytes(
+                        record[at..at + 8]
+                            .try_into()
+                            .expect("`at..at + 8` is eight bytes"),
+                    )
                 };
-                let key = u64::from_le_bytes(record[..8].try_into().expect("eight bytes"));
+                let key = u64::from_le_bytes(record[..8].try_into().expect("`..8` is eight bytes"));
                 let measure = Measure {
                     ymin: number(8),
                     ymax: number(16),

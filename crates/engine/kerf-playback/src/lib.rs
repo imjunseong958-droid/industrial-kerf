@@ -514,6 +514,7 @@ impl PlaybackSession {
 
 impl Drop for PlaybackSession {
     fn drop(&mut self) {
+        // It fails only for a worker that is gone already, which has nothing left to stop.
         let _ = self.handle.shutdown();
     }
 }
@@ -1244,7 +1245,9 @@ impl Worker {
             let later = self.drawn_ready.split_off(&(index + 1));
             let (frame, _) = std::mem::replace(&mut self.drawn_ready, later)
                 .remove(&index)
-                .expect("the frame due is ready");
+                .expect(
+                    "`index` is a key of `drawn_ready`, and `split_off` takes only those after it",
+                );
             if self.drawn_shown.is_none_or(|shown| index > shown) {
                 // The frames between the last one shown and this were not
                 // drawn in time.

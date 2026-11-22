@@ -250,7 +250,10 @@ impl Tools {
                     self.ffmpeg
                 )
             })?;
-        let mut stdin = child.stdin.take().expect("stdin is piped");
+        let mut stdin = child
+            .stdin
+            .take()
+            .expect("the command above pipes stdin, and nothing took the pipe before this");
         for frame in frames {
             // FFmpeg ending early is said by its status, below.
             if stdin.write_all(frame).is_err() {

@@ -469,6 +469,7 @@ fn shape_item(
     );
     let out = shaper.shape(buf, harfrust::ShapeOptions::new().features(&feats));
     let k = size / f.units_per_em();
+    // What is shaped comes from `chars`, which hold their offsets into `text`.
     let _ = text;
     out.glyph_infos()
         .iter()

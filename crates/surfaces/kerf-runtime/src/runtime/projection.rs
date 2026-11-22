@@ -2,7 +2,10 @@
 //! it, checking it against the state, repairing it, importing an edit made
 //! outside Kerf, and the git operations that change it.
 
-use super::{digest, validate_request_identity, JournalEvent, Runtime};
+use super::{
+    digest, refresh_looks, truncate_after_checkpoint, validate_request_identity, JournalEvent,
+    Runtime,
+};
 use crate::kernel;
 use crate::store::{
     inspect_projection, projection_digest, truncate_journal, write_bytes_atomic, Change,
@@ -152,7 +155,7 @@ impl Runtime {
                             kerf_collab::git::undo_switch(&directory, &previous)
                         }
                     };
-                    let _ = kerf_model::look::refresh_project_looks(&directory);
+                    refresh_looks(&directory);
                     if undone.is_ok() {
                         self.refresh_projection_status();
                     }
@@ -198,7 +201,7 @@ impl Runtime {
         // use looks a branch switch has since taken away.
         if self.projection_status == ProjectionStatus::Current && self.persist_checkpoint().is_ok()
         {
-            let _ = truncate_journal(&self.journal_path);
+            truncate_after_checkpoint(&self.journal_path);
             self.journal_records_since_checkpoint = 0;
         }
         Ok(RuntimeResponse::Collab {
@@ -209,7 +212,7 @@ impl Runtime {
 
     /// `project.kerf` as it is on disk, read with the looks now beside it.
     fn read_projection(&self, directory: &Path) -> Result<Project, RuntimeError> {
-        let _ = kerf_model::look::refresh_project_looks(directory);
+        refresh_looks(directory);
         let text = fs::read_to_string(&self.project_path).map_err(io_error)?;
         kernel::parse(&text)
     }

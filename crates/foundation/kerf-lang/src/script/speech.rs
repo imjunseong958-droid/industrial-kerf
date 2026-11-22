@@ -122,7 +122,9 @@ impl Script<'_> {
                 clip.id
             ));
         }
-        let (source_in, source_out) = clip.source_range().expect("a media clip plays a source");
+        let (source_in, source_out) = clip
+            .source_range()
+            .expect("media_of found media for it, so it plays a source");
         let (source_in, source_out) = (source_in.seconds(), source_out.seconds());
         let speech = self.heard(media);
         let media_clock = Clock::of_media(media);
@@ -224,7 +226,7 @@ impl Script<'_> {
                 ),
             )
         };
-        let before = before.expect("a cut starts in a quiet");
+        let before = before.expect("both branches above find the quiet before");
         // Words sound between the quiet before them and the quiet after.
         if !cut.pause && after.is_some_and(|after| after.quiet.0 < before.quiet.1) {
             return Err(format!(
@@ -236,7 +238,7 @@ impl Script<'_> {
         let (air_after, air_before) = airs(cut.leave);
         let played = |seconds: f64| {
             clip.played_at(media_time(seconds))
-                .expect("a media clip plays a source")
+                .expect("media_of found media for it, so it plays a source")
         };
         // A frame of the sequence in a quiet, nearest a moment of the media.
         let frame = |ideal: f64, place: &Place| {
@@ -322,7 +324,10 @@ impl Script<'_> {
         within: Time,
     ) -> Result<Place, String> {
         let at = media_time(seconds);
-        let offset = clip.played_at(at).expect("a media clip plays a source") - clip.start;
+        let offset = clip
+            .played_at(at)
+            .expect("said passes only a clip media_of found media for")
+            - clip.start;
         let speed = clip.speed();
         let reach = speed.played(offset + within) - speed.played(offset);
         let (found, _) = self.snaps(media, at, Snap::Pause, reach)?;

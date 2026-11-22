@@ -643,10 +643,10 @@ pub fn from_timeline(
                                     id: claim(id, "t"),
                                     from: from.id.clone(),
                                     to: clip.id.clone(),
-                                    fx: Id::new(fx).expect("catalog id"),
+                                    fx: Id::new(fx).expect("both are valid ids"),
                                     version: Catalog::builtin()
                                         .fx(fx)
-                                        .expect("a built-in transition")
+                                        .expect("the bundled catalog defines both")
                                         .version,
                                     duration: rate.time_of(before + after),
                                     align: match (before, after) {

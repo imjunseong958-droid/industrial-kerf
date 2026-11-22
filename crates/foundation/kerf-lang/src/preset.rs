@@ -198,7 +198,9 @@ fn travelling(project: &Project, root: &Id) -> Result<Travelling, String> {
                 match &clip.content {
                     Content::Sequence { sequence, .. } => sequences.push(sequence.clone()),
                     Content::Media { media, .. } => {
-                        let source = project.media(media.as_str()).expect("validated media");
+                        let source = project
+                            .media(media.as_str())
+                            .expect("export's valid() checked every media clip's media");
                         if let Some(recipe) = &source.recipe {
                             return Err(format!(
                                 "the steps of media `{media}` are in the recipe file `{recipe}`, which a preset does not carry: carry them into the document first (`kerf carry {media}`, or an agent's `edit` with `carry`)"
@@ -219,7 +221,9 @@ fn travelling(project: &Project, root: &Id) -> Result<Travelling, String> {
         if travel.made.contains(&id) {
             continue;
         }
-        let media = project.media(id.as_str()).expect("validated media");
+        let media = project
+            .media(id.as_str())
+            .expect("travelling puts in `made` only media it found in the project");
         travel.made.push(id.clone());
         for step in &media.steps {
             for (named, name) in step.names() {
@@ -273,7 +277,7 @@ pub fn export(
         pattern.sequences.push(
             project
                 .sequence(id.as_str())
-                .expect("visited sequence")
+                .expect("travelling keeps only sequences it found in the project")
                 .clone(),
         );
     }
@@ -299,7 +303,9 @@ pub fn export(
     // Footage a making reads is one slot: the making is of that one file.
     let mut footage_slots = BTreeMap::<Id, Id>::new();
     for footage in travel.footage.values() {
-        let source = project.media(footage.as_str()).expect("validated media");
+        let source = project
+            .media(footage.as_str())
+            .expect("travelling keeps as footage only media it found in the project");
         let mut slot = new_slot(source, slot_ids.next("slot"));
         // A model reads its picture.
         slot.video = source.video;
@@ -311,7 +317,9 @@ pub fn export(
         .made
         .iter()
         .map(|id| {
-            let media = project.media(id.as_str()).expect("validated media");
+            let media = project
+                .media(id.as_str())
+                .expect("travelling puts in `made` only media it found in the project");
             (
                 media.path.clone(),
                 format!("{MADE}{id}{}", extension(&media.path)),
@@ -322,7 +330,10 @@ pub fn export(
         .made
         .iter()
         .map(|id| {
-            let mut media = project.media(id.as_str()).expect("validated media").clone();
+            let mut media = project
+                .media(id.as_str())
+                .expect("travelling puts in `made` only media it found in the project")
+                .clone();
             media.path.clone_from(&made_paths[&media.path]);
             media.start = Time::ZERO;
             media.reel = None;
@@ -367,7 +378,9 @@ pub fn export(
                         None => continue,
                     }
                 } else {
-                    let source = project.media(media.as_str()).expect("validated media");
+                    let source = project
+                        .media(media.as_str())
+                        .expect("export's valid() checked every media clip's media");
                     let key = match footage_slots.contains_key(media) {
                         true => (media.clone(), media.clone()),
                         false => (
@@ -918,7 +931,7 @@ pub fn instantiate_with_ids(
             let binding = &bindings[slot.as_str()];
             let bound = project
                 .media(binding.media.as_str())
-                .expect("checked binding");
+                .expect("parse checked the step names a slot, and the slots loop its binding");
             placed.rate = bound.rate;
             placed.drop_frame = bound.drop_frame;
             placed.duration = bound.duration;
@@ -1045,7 +1058,7 @@ pub fn instantiate_with_ids(
     for original in sequence_order {
         let sequence = pattern
             .sequence(ids[&original].as_str())
-            .expect("remapped sequence");
+            .expect("each sequence of the pattern was given its new id above");
         if original == root {
             ops.push(Op::SetSequence {
                 sequence: target.clone(),

@@ -476,7 +476,10 @@ impl KerfMcpRouter {
             entry.mark_complete(&["sound.wav"]).map_err(engine_error)?;
         }
         // A program's sound is mixed for each revision listened to.
-        let _ = DerivativeCache::new(&self.dir).keep_newest(&entry, KEPT_PROGRAM_SOUNDS);
+        if let Err(error) = DerivativeCache::new(&self.dir).keep_newest(&entry, KEPT_PROGRAM_SOUNDS)
+        {
+            log::warn!("older program sounds were not cleared from the cache: {error}");
+        }
         let range = kerf_engine::TimeRange::new(0.0, (to - from).seconds())
             .map_err(|error| McpError::new("INVALID_ARGUMENTS", error.to_string()))?;
         let result = kerf_engine::transcribe_cached(
@@ -680,17 +683,29 @@ impl KerfMcpRouter {
                 )
                 .map_err(engine_error)?;
                 fs::rename(&grabbed[0].path, entry.path(&names[index])).map_err(io_error)?;
+                // The frame is out; what is left in the cache entry is only clutter.
                 let _ = fs::remove_dir_all(directory);
                 let _ = fs::remove_file(clip);
                 Ok(())
             };
             let render = &render;
             thread::scope(|scope| {
-                (0..times.len())
+                let handles: Vec<_> = (0..times.len())
                     .map(|index| scope.spawn(move || render(index)))
-                    .collect::<Vec<_>>()
-                    .into_iter()
-                    .try_for_each(|handle| handle.join().expect("frame render panicked"))
+                    .collect();
+                // Every one is joined, so that a render that panicked is told as an error
+                // rather than panicking the scope at its end; the first error is the one told.
+                let mut rendered = Ok(());
+                for handle in handles {
+                    let frame = handle.join().unwrap_or_else(|_| {
+                        Err(McpError::new(
+                            "RENDER_FAILED",
+                            "a frame's render stopped with a panic",
+                        ))
+                    });
+                    rendered = rendered.and(frame);
+                }
+                rendered
             })?;
             if let Some(columns) = columns {
                 let paths: Vec<String> = names
@@ -715,7 +730,10 @@ impl KerfMcpRouter {
             entry.mark_complete(&required).map_err(engine_error)?;
         }
         // Every edit's preview captures two revisions.
-        let _ = DerivativeCache::new(&self.dir).keep_newest(&entry, KEPT_PROGRAM_FRAMES);
+        if let Err(error) = DerivativeCache::new(&self.dir).keep_newest(&entry, KEPT_PROGRAM_FRAMES)
+        {
+            log::warn!("older program frames were not cleared from the cache: {error}");
+        }
         Ok(Capture {
             frames: names
                 .iter()
@@ -743,6 +761,7 @@ fn sheet_font() -> PathBuf {
             // Beside it first, so that no reader finds half a font.
             let partial = path.with_extension(format!("{}.part", std::process::id()));
             if fs::write(&partial, font).is_ok() && fs::rename(&partial, &path).is_err() {
+                // Only tidying: the next start writes the font again.
                 let _ = fs::remove_file(&partial);
             }
         }

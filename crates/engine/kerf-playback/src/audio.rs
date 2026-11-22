@@ -193,6 +193,8 @@ impl AudioRuntime {
     }
 
     fn send(&self, command: AudioCommand) {
+        // The worker is gone only once shut down, or panicked, which the panic says:
+        // there is nothing left to act on the command.
         let _ = self.commands.send(command);
     }
 }

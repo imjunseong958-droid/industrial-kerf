@@ -1807,6 +1807,7 @@ impl<'a> Frame<'a> {
         let slice = buffer.slice(..);
         let (sender, receiver) = std::sync::mpsc::channel();
         slice.map_async(wgpu::MapMode::Read, move |result| {
+            // The receiver is gone only once the wait below has given up on the buffer.
             let _ = sender.send(result);
         });
         self.gpu

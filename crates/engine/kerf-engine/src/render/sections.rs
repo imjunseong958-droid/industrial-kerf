@@ -285,6 +285,7 @@ impl Kept {
     pub(crate) fn find(&self, name: &str, extension: &str) -> Option<PathBuf> {
         let path = self.path(name, extension);
         let file = std::fs::File::options().append(true).open(&path).ok()?;
+        // Unmarked, it is only put out sooner by [`Self::tidy`].
         let _ = file.set_modified(SystemTime::now());
         Some(path)
     }
@@ -306,7 +307,10 @@ impl Kept {
         extension: &str,
     ) -> std::io::Result<PathBuf> {
         let path = self.path(name, extension);
-        std::fs::create_dir_all(path.parent().expect("a kept file is in a folder"))?;
+        std::fs::create_dir_all(
+            path.parent()
+                .expect("`path` joins a file name onto a folder of the stretches"),
+        )?;
         std::fs::rename(made, &path)?;
         Ok(path)
     }
@@ -329,6 +333,7 @@ impl Kept {
         };
         for other in listed(&self.root) {
             if other != self.folder && other.is_dir() && old(&other) {
+                // Tidying is best effort: what stays is tried again by the next render.
                 let _ = std::fs::remove_dir_all(&other);
             }
         }
@@ -338,6 +343,7 @@ impl Kept {
             for file in listed(&folder) {
                 if making {
                     if old(&file) {
+                        // Tidying is best effort: what stays is tried again by the next render.
                         let _ = std::fs::remove_file(&file);
                     }
                 } else if let Ok(data) = std::fs::metadata(&file) {

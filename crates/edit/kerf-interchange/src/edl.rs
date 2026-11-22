@@ -180,13 +180,13 @@ pub fn to_edl(
         .chars()
         .map(|c| if c.is_control() { ' ' } else { c })
         .collect();
-    writeln!(out, "TITLE: {}", title.trim()).unwrap();
+    writeln!(out, "TITLE: {}", title.trim()).expect("writing to a String cannot fail");
     writeln!(
         out,
         "FCM: {}",
         if drop { "DROP FRAME" } else { "NON-DROP FRAME" }
     )
-    .unwrap();
+    .expect("writing to a String cannot fail");
     // Each locator goes under the first event playing at its time, else
     // under the last event before it, else after the header.
     let mut placed: Vec<Vec<&Locator>> = vec![Vec::new(); events.len()];
@@ -218,13 +218,13 @@ pub fn to_edl(
         out.push('\n');
         let number = number + 1;
         for line in &event.lines {
-            writeln!(out, "{number:03}  {line}").unwrap();
+            writeln!(out, "{number:03}  {line}").expect("writing to a String cannot fail");
         }
         for line in &event.motion {
-            writeln!(out, "{line}").unwrap();
+            writeln!(out, "{line}").expect("writing to a String cannot fail");
         }
         for comment in &event.comments {
-            writeln!(out, "{comment}").unwrap();
+            writeln!(out, "{comment}").expect("writing to a String cannot fail");
         }
         for locator in locators {
             writer.locator(&mut out, locator);
@@ -433,7 +433,7 @@ impl Writer<'_> {
             self.record(locator.at),
             comment(&locator.text)
         );
-        writeln!(out, "{}", line.trim_end()).unwrap();
+        writeln!(out, "{}", line.trim_end()).expect("writing to a String cannot fail");
     }
 }
 

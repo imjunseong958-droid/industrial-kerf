@@ -654,7 +654,9 @@ pub fn stage(dir: &Path) -> Result<bool> {
     exclude_runtime_files(dir)?;
     git_run(dir, &["add", "-A", "--", "."], "GIT_ADD_FAILED")?;
     if let Err(error) = unstage_local_settings(dir).and_then(|()| refuse_large_files(dir)) {
-        let _ = git_run(dir, &["reset", "-q", "--", "."], "GIT_FAILED");
+        if let Err(reset) = git_run(dir, &["reset", "-q", "--", "."], "GIT_FAILED") {
+            log::warn!("{}: what was staged stays staged: {reset}", dir.display());
+        }
         return Err(error);
     }
     Ok(!git_ok(dir, &["diff", "--cached", "--quiet"]))
@@ -928,6 +930,8 @@ pub fn integrate(dir: &Path, driver: &Path, message: &str) -> Result<Integration
     }
     let out = output(command, "git merge")?;
     let reports = read_reports(&report);
+    // There is none when the driver did not run; one that stays is in the
+    // temp folder, under a name no later merge takes.
     let _ = fs::remove_file(&report);
     if !out.status.success() {
         let unresolved = git_text(dir, &["diff", "--name-only", "--diff-filter=U"])
@@ -935,7 +939,12 @@ pub fn integrate(dir: &Path, driver: &Path, message: &str) -> Result<Integration
             .lines()
             .map(str::to_owned)
             .collect::<Vec<_>>();
-        let _ = git_run(dir, &["merge", "--abort"], "GIT_FAILED");
+        if let Err(error) = git_run(dir, &["merge", "--abort"], "GIT_FAILED") {
+            log::warn!(
+                "{}: the failed merge was not aborted: {error}",
+                dir.display()
+            );
+        }
         // The driver says why it could not merge project.kerf; keep that.
         let detail = if unresolved.is_empty() {
             failure(&out)
@@ -1330,16 +1339,29 @@ pub fn clone(url: &str, location: &Path) -> Result<PathBuf> {
     if has_head(&target) {
         if let Err(error) = refuse_local_settings(&target, "HEAD", url) {
             // The folder was empty or absent before the clone.
-            let _ = fs::remove_dir_all(&target);
+            if let Err(removed) = fs::remove_dir_all(&target) {
+                log::warn!("{}: the refused clone stays: {removed}", target.display());
+            }
             if existed {
+                // Put back as it was; failing that, it is gone, and it was
+                // empty.
                 let _ = fs::create_dir(&target);
             }
             return Err(error);
         }
     }
     if git_ok(&target, &["lfs", "version"]) {
-        let _ = git_run(&target, &["lfs", "install", "--local"], "GIT_LFS_FAILED");
-        let _ = network_run(&target, &["lfs", "pull"], "GIT_LFS_FAILED");
+        // The project opens without its media too; what it lacks shows as
+        // Git LFS pointers.
+        if let Err(error) = git_run(&target, &["lfs", "install", "--local"], "GIT_LFS_FAILED") {
+            log::warn!("{}: Git LFS was not set up: {error}", target.display());
+        }
+        if let Err(error) = network_run(&target, &["lfs", "pull"], "GIT_LFS_FAILED") {
+            log::warn!(
+                "{}: its media was not downloaded: {error}",
+                target.display()
+            );
+        }
     }
     Ok(target)
 }

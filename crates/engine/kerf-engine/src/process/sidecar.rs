@@ -172,6 +172,7 @@ fn run_within(
             drain(&mut tail);
             thread::sleep(POLL_INTERVAL);
         }
+        // It only forwards lines: what it sent is drained below, whether or not it panicked.
         let _ = reader.join();
         drain(&mut tail);
     }
@@ -312,6 +313,8 @@ fn kill(child: &mut Child) {
             jobs.remove(index).1.terminate();
         }
     }
+    // Best effort: the sidecar may have ended already, and what a caller is told is how
+    // the run went, not how it was put out.
     #[cfg(not(unix))]
     let _ = child.kill();
     let _ = child.wait();
@@ -351,7 +354,13 @@ pub fn forward_termination_signals() {
                             for &leader in running().iter() {
                                 signal_group(leader, signal);
                             }
-                            let _ = signal_hook::low_level::emulate_default_handler(signal);
+                            if let Err(error) =
+                                signal_hook::low_level::emulate_default_handler(signal)
+                            {
+                                log::warn!(
+                                    "signal {signal} was passed on to the sidecars, and did not end this process: {error}"
+                                );
+                            }
                         }
                     })
             });

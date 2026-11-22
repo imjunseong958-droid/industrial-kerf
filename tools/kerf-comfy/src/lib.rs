@@ -290,7 +290,14 @@ pub fn make(
             unread.push(format!("`{name}`"));
             continue;
         }
-        let given = request.file(&name).expect("the request names it");
+        // `files` names each of the request's `guides` as `guide_` and its key, and a key
+        // `guide_named` does not read back (a capital, a `_`) gives no file under that name.
+        let Some(given) = request.file(&name) else {
+            return Err(format!(
+                "the request hands a guide as `{name}`, and a guide's name after `guide_` is \
+                 lowercase letters and digits"
+            ));
+        };
         // Every guide is brought to the size, rate, and frames asked for, each to a file
         // of its own.
         let fitted = match request::guide_named(&name) {

@@ -298,13 +298,20 @@ impl Player {
                 .with_composited(composited),
         ) {
             Ok(session) => {
-                let _ = session.handle().set_volume(self.volume);
+                // The new session goes on as the last one was; where it cannot, it plays as it
+                // opened, and why is logged.
+                let carried = |what: &str, result: Result<(), kerf_playback::PlaybackError>| {
+                    if let Err(error) = result {
+                        log::warn!("the reopened playback did not take its {what}: {error}");
+                    }
+                };
+                carried("volume", session.handle().set_volume(self.volume));
                 if self.native && !self.solo.is_empty() {
-                    let _ = session.handle().set_solo(self.solo.clone());
+                    carried("solo", session.handle().set_solo(self.solo.clone()));
                 }
-                let _ = session.handle().seek(self.position);
+                carried("position", session.handle().seek(self.position));
                 if self.playing {
-                    let _ = session.handle().play();
+                    carried("playing", session.handle().play());
                 }
                 Some(session)
             }
@@ -348,6 +355,7 @@ impl Player {
                     PlaybackEvent::Clock(clock) => {
                         self.stats.clock(clock.dropped);
                         self.position = clock.position;
+                        // Replaceable: the next clock comes soon.
                         let _ = tx.try_send(Event::Clock {
                             position: clock.position,
                             duration: clock.duration,
@@ -391,6 +399,7 @@ fn show_frame(frame: PlaybackFrame, tx: &Outbox, shared: &Shared) {
         .map(|cue| cue.text.as_str())
         .collect::<Vec<_>>()
         .join("\n");
+    // Replaceable: every frame says its captions again.
     let _ = tx.try_send(Event::Caption { text: caption });
     if let Ok(mut slot) = shared.frame.lock() {
         *slot = Some(frame);

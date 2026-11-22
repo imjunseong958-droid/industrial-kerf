@@ -341,7 +341,13 @@ impl KerfMcpRouter {
         for workflow in workflows {
             if let Err(why) = kerf_shots::workflow::write(&workflow.copy.file, &workflow.copy.text)
             {
-                let _ = self.runtime.reject_proposal(proposal_id);
+                if let Err(error) = self.runtime.reject_proposal(proposal_id) {
+                    log::warn!(
+                        "proposal {proposal_id} is still pending though its workflow copy was \
+                         not written: {}",
+                        error.message
+                    );
+                }
                 return Err(McpError::new("INVALID_RECIPE", why));
             }
         }

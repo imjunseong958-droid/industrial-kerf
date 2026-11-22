@@ -273,10 +273,19 @@ fn prepare_queued_media() {
         // waits behind it would keep kerfd running forever.
         let indexed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let cache = kerf_engine::media::derivatives::DerivativeCache::new(&job.directory);
-            if job.indexed {
-                let _ = kerf_engine::make_proxy(&job.path, &cache, &job.cancellation);
+            let (made, what) = if job.indexed {
+                let made = kerf_engine::make_proxy(&job.path, &cache, &job.cancellation);
+                (made.map(drop), "proxy")
             } else {
-                let _ = kerf_engine::media_index(&job.path, &cache, &job.cancellation);
+                let made = kerf_engine::media_index(&job.path, &cache, &job.cancellation);
+                (made.map(drop), "media index")
+            };
+            // The queue goes on either way; a stopped project's work says
+            // only that it was stopped.
+            if let Err(error) = made {
+                if !job.cancellation.is_cancelled() {
+                    log::warn!("{}: its {what} was not made: {error}", job.path.display());
+                }
             }
         }))
         .is_ok()
@@ -431,7 +440,7 @@ pub(crate) fn empty_project() -> Project {
     let mut project = Project::new("Untitled project");
     project.sequences.push(Sequence {
         buses: Vec::new(),
-        id: Id::new("s1").expect("valid id"),
+        id: Id::new("s1").expect("`s1` is a letter and a digit, which an id may be"),
         name: project.name.clone(),
         rate: Rate::FPS_30,
         drop_frame: false,
@@ -795,7 +804,7 @@ fn new_track_id(sequence: &Sequence, kind: TrackKind) -> Id {
         .map(|n| format!("{prefix}{n}"))
         .find(|name| sequence.track(name).is_none())
         .and_then(|name| Id::new(name).ok())
-        .expect("a free track id")
+        .expect("a sequence has finitely many tracks, and a letter and digits make an id")
 }
 
 // ---- typed operations ----------------------------------------------------------
@@ -1259,7 +1268,7 @@ fn new_mask_name(project: &Project, clip: &str) -> Result<Id, RuntimeError> {
     let name = (1..)
         .map(|n| format!("k{n}"))
         .find(|name| target.mask(name).is_none())
-        .expect("a free mask name");
+        .expect("a clip has finitely many masks, so some `k<n>` is free");
     edit_id(&name)
 }
 

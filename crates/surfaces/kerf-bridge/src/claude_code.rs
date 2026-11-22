@@ -144,6 +144,7 @@ impl ClaudeCodeSession {
             .ok_or("Claude Code has no error output")?;
         let errors = thread::spawn(move || {
             let mut text = String::new();
+            // What it said before a read failed is all there is to say.
             let _ = stderr.read_to_string(&mut text);
             text
         });
@@ -157,6 +158,7 @@ impl ClaudeCodeSession {
                 while !finished.load(Ordering::SeqCst) {
                     if aborted.load(Ordering::SeqCst) {
                         if let Ok(mut child) = child.lock() {
+                            // It may have ended by itself already.
                             let _ = child.kill();
                         }
                         return;
@@ -177,6 +179,7 @@ impl ClaudeCodeSession {
             stream.read(&message, &mut emit);
         }
         finished.store(true, Ordering::SeqCst);
+        // The watcher only waits and kills; there is nothing it could fail with.
         let _ = watcher.join();
         let status = child
             .lock()

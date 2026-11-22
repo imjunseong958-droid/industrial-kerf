@@ -74,6 +74,7 @@ fn craft_fonts(dir: &std::path::Path) -> Result<String, String> {
             .split(',')
             .map(|s| format!("{:?}", s.trim()))
             .collect();
+        // Writing to a String cannot fail.
         let _ = writeln!(
             out,
             "    CraftFont {{ family: {family:?}, style: {style:?}, scripts: &[{}], bytes: include_bytes!({:?}) }},",

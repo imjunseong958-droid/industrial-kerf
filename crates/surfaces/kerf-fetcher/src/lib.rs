@@ -271,8 +271,14 @@ fn run_process(
             binary: binary.to_path_buf(),
             detail: error.to_string(),
         })?;
-    let stdout = child.stdout.take().expect("stdout was piped");
-    let stderr = child.stderr.take().expect("stderr was piped");
+    let stdout = child
+        .stdout
+        .take()
+        .expect("the command above pipes stdout, and this is the one take of it");
+    let stderr = child
+        .stderr
+        .take()
+        .expect("the command above pipes stderr, and this is the one take of it");
     let stdout_thread = thread::spawn(move || read_all(stdout));
     let stderr_thread = thread::spawn(move || read_all(stderr));
     let deadline = timeout.map(|duration| Instant::now() + duration);

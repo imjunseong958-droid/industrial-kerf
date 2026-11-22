@@ -3027,6 +3027,7 @@ pub fn output_within(
     }
     let mut child = command.spawn().ok()?;
     let Some(mut out) = child.stdout.take() else {
+        // Stopped and reaped, if it has not ended already: it is not read.
         let _ = child.kill();
         let _ = child.wait();
         return None;
@@ -3039,12 +3040,16 @@ pub fn output_within(
         std::thread::spawn(move || {
             if finished.recv_timeout(limit) == Err(mpsc::RecvTimeoutError::Timeout) {
                 stopped.store(true, Ordering::Relaxed);
+                // One that has just ended needs no stopping.
                 let _ = child.lock().unwrap_or_else(PoisonError::into_inner).kill();
             }
         })
     };
     let mut written = Vec::new();
     let read = out.read_to_end(&mut written);
+    // The watchdog may have returned already, having stopped it; it only
+    // kills, which does not panic. The wait only reaps: what it wrote is
+    // the answer, however it ended.
     let _ = done.send(());
     let _ = watchdog.join();
     let _ = child.lock().unwrap_or_else(PoisonError::into_inner).wait();
@@ -6581,6 +6586,7 @@ impl ShotGraph {
                                 clip: clip.clone(),
                                 of: of.clone(),
                             };
+                            // A send refused is said by the session itself.
                             let _ = this.update(cx, |graph, cx| {
                                 graph.session.update(cx, |session, _| session.send(command))
                             });
@@ -6771,8 +6777,11 @@ impl ShotGraph {
                         let [left, top, w, h] = fitted_in(room, size);
                         let placed =
                             Bounds::new(point(px(left), px(top)), gpui::size(px(w), px(h)));
-                        let _ =
-                            window.paint_image(placed, gpui::Corners::default(), image, 0, false);
+                        if let Err(error) =
+                            window.paint_image(placed, gpui::Corners::default(), image, 0, false)
+                        {
+                            log::warn!("the frame to point on did not draw: {error}");
+                        }
                         if following {
                             window.paint_quad(fill(placed, gpui::rgba(0x00000060)));
                         }
@@ -7708,6 +7717,7 @@ impl Render for ShotGraph {
             }
         }
         for image in std::mem::take(&mut self.dropped) {
+            // gpui 0.2.2 answers Ok always: one not in the atlas is no matter.
             let _ = window.drop_image(image);
         }
         self.follow_typing(window, cx);

@@ -144,6 +144,7 @@ impl CacheEntry {
             let stale = serde_json::from_value::<SourceIdentity>(manifest.identity)
                 .is_ok_and(|other| other.path == identity.path && other != identity);
             if stale && directory != self.directory {
+                // Pruning is best effort: an entry left is only room, and is tried again.
                 let _ = fs::remove_dir_all(directory);
             }
         }
@@ -255,6 +256,7 @@ impl DerivativeCache {
         }
         others.sort_by_key(|entry| std::cmp::Reverse(entry.0));
         for (_, directory) in others.drain(keep..) {
+            // Pruning is best effort: an entry left is only room, and is tried again.
             let _ = fs::remove_dir_all(directory);
         }
         self.remove_orphans();
@@ -280,6 +282,7 @@ impl DerivativeCache {
                     source.starts_with(&root) && !source.exists()
                 });
             if orphaned {
+                // Pruning is best effort: an entry left is only room, and is tried again.
                 let _ = fs::remove_dir_all(directory);
             }
         }
@@ -363,7 +366,8 @@ pub fn cache_key_for_values(kind: &str, identity: &Value, options: &Value) -> St
         "identity": normalize_json(identity),
         "options": normalize_json(options),
     });
-    let bytes = serde_json::to_vec(&payload).expect("JSON values are serializable");
+    let bytes =
+        serde_json::to_vec(&payload).expect("a JSON value, whose keys are strings, serializes");
     let digest = Sha256::digest(bytes);
     hex::encode(digest)
 }

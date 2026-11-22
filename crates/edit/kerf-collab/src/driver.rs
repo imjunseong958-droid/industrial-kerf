@@ -41,9 +41,18 @@ pub fn run_merge_driver(args: &[String]) -> i32 {
             if let Some(target) = std::env::var_os(MERGE_REPORT_ENV) {
                 let report = DriverReport { path, ..report };
                 if let Ok(line) = serde_json::to_string(&report) {
-                    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(target)
-                    {
-                        let _ = writeln!(file, "{line}");
+                    // The merge stands without it; the report only tells
+                    // kerfd what it kept, so it is said here instead.
+                    let written = OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(target)
+                        .and_then(|mut file| writeln!(file, "{line}"));
+                    if let Err(error) = written {
+                        eprintln!(
+                            "kerf: {}: what the merge kept was not reported: {error}",
+                            report.path
+                        );
                     }
                 }
             }

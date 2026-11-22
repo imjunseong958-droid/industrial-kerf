@@ -265,7 +265,8 @@ fn add_media_line(media: &Media) -> String {
     // A media that comes with its steps is its line and a line for each of them.
     let mut text = media_line(media).replacen("media ", "media add ", 1);
     for step in &media.steps {
-        write!(text, "\nstep {} add {}", media.id, print_step(step)).unwrap();
+        write!(text, "\nstep {} add {}", media.id, print_step(step))
+            .expect("writing to a String cannot fail");
     }
     text
 }
@@ -274,19 +275,19 @@ fn add_media_line(media: &Media) -> String {
 fn set_sequence_line(project: &Project, sequence: &Id, change: &SequenceChange) -> String {
     let mut text = format!("sequence set {sequence}");
     if let Some(name) = &change.name {
-        write!(text, " name={}", quote(name)).unwrap();
+        write!(text, " name={}", quote(name)).expect("writing to a String cannot fail");
     }
     if let Some(rate) = change.rate {
-        write!(text, " rate={rate}").unwrap();
+        write!(text, " rate={rate}").expect("writing to a String cannot fail");
     }
     if let Some((width, height)) = change.size {
-        write!(text, " size={width}x{height}").unwrap();
+        write!(text, " size={width}x{height}").expect("writing to a String cannot fail");
     }
     if let Some(sample_rate) = change.sample_rate {
-        write!(text, " audio={sample_rate}").unwrap();
+        write!(text, " audio={sample_rate}").expect("writing to a String cannot fail");
     }
     if let Some(color) = change.color {
-        write!(text, " color={}", color.id()).unwrap();
+        write!(text, " color={}", color.id()).expect("writing to a String cannot fail");
     }
     if let Some((start, drop_frame)) = change.start {
         let rate = change
@@ -298,7 +299,8 @@ fn set_sequence_line(project: &Project, sequence: &Id, change: &SequenceChange) 
             origin: Time::ZERO,
             drop_frame,
         };
-        write!(text, " start={}", clock.print_position(start)).unwrap();
+        write!(text, " start={}", clock.print_position(start))
+            .expect("writing to a String cannot fail");
     }
     text
 }
@@ -317,7 +319,7 @@ fn add_track_line(
         .map(|s| s.tracks.as_slice())
         .unwrap_or_default();
     if let Some(anchor) = index.and_then(|i| tracks.get(i)) {
-        write!(text, " before={}", anchor.id).unwrap();
+        write!(text, " before={}", anchor.id).expect("writing to a String cannot fail");
     }
     text
 }
@@ -327,10 +329,10 @@ fn add_bus_line(project: &Project, catalog: &Catalog, sequence: &Id, bus: &Bus) 
     let rate = sequence_clock(project, sequence).unwrap_or(FALLBACK).rate;
     let mut text = format!("bus add {}", bus.id);
     if let Some(name) = &bus.name {
-        write!(text, " name={}", quote(name)).unwrap();
+        write!(text, " name={}", quote(name)).expect("writing to a String cannot fail");
     }
     if let Some(to) = &bus.to {
-        write!(text, " to={to}").unwrap();
+        write!(text, " to={to}").expect("writing to a String cannot fail");
     }
     text.push_str(&params_text(
         &bus.params,
@@ -345,10 +347,11 @@ fn set_bus_line(project: &Project, sequence: &Id, bus: &Id, change: &BusChange) 
     let rate = sequence_clock(project, sequence).unwrap_or(FALLBACK).rate;
     let mut text = format!("bus set {bus}");
     if let Some(name) = &change.name {
-        write!(text, " name={}", quote(name.as_deref().unwrap_or_default())).unwrap();
+        write!(text, " name={}", quote(name.as_deref().unwrap_or_default()))
+            .expect("writing to a String cannot fail");
     }
     match &change.to {
-        Some(Some(to)) => write!(text, " to={to}").unwrap(),
+        Some(Some(to)) => write!(text, " to={to}").expect("writing to a String cannot fail"),
         Some(None) => text.push_str(" to=\"\""),
         None => {}
     }
@@ -359,11 +362,12 @@ fn set_bus_line(project: &Project, sequence: &Id, bus: &Id, change: &BusChange) 
         .map(|(name, _)| name.as_str())
         .collect();
     if !resets.is_empty() {
-        write!(text, " reset={}", resets.join(",")).unwrap();
+        write!(text, " reset={}", resets.join(",")).expect("writing to a String cannot fail");
     }
     for (name, value) in &change.params {
         if let Some(value) = value {
-            write!(text, " {name}={}", crate::text::print_param(value, rate)).unwrap();
+            write!(text, " {name}={}", crate::text::print_param(value, rate))
+                .expect("writing to a String cannot fail");
         }
     }
     text
@@ -385,7 +389,7 @@ fn bus_fx_line(
                 print_fx_ref(&effect.fx, effect.version)
             );
             if let Some(index) = index {
-                write!(text, " at={}", index + 1).unwrap();
+                write!(text, " at={}", index + 1).expect("writing to a String cannot fail");
             }
             if !effect.enabled {
                 text.push_str(" enabled=false");
@@ -402,7 +406,7 @@ fn bus_fx_line(
         } => {
             let mut text = format!("bus fx {bus} set {}", index + 1);
             if let Some(enabled) = enabled {
-                write!(text, " enabled={enabled}").unwrap();
+                write!(text, " enabled={enabled}").expect("writing to a String cannot fail");
             }
             let resets: Vec<&str> = params
                 .iter()
@@ -410,11 +414,13 @@ fn bus_fx_line(
                 .map(|(name, _)| name.as_str())
                 .collect();
             if !resets.is_empty() {
-                write!(text, " reset={}", resets.join(",")).unwrap();
+                write!(text, " reset={}", resets.join(","))
+                    .expect("writing to a String cannot fail");
             }
             for (name, value) in params {
                 if let Some(value) = value {
-                    write!(text, " {name}={}", crate::text::print_param(value, rate)).unwrap();
+                    write!(text, " {name}={}", crate::text::print_param(value, rate))
+                        .expect("writing to a String cannot fail");
                 }
             }
             text
@@ -429,12 +435,13 @@ fn bus_fx_line(
 fn set_track_line(track: &Id, change: &TrackChange) -> String {
     let mut text = format!("track set {track}");
     match &change.bus {
-        Some(Some(bus)) => write!(text, " bus={bus}").unwrap(),
+        Some(Some(bus)) => write!(text, " bus={bus}").expect("writing to a String cannot fail"),
         Some(None) => text.push_str(" bus=\"\""),
         None => {}
     }
     if let Some(name) = &change.name {
-        write!(text, " name={}", quote(name.as_deref().unwrap_or_default())).unwrap();
+        write!(text, " name={}", quote(name.as_deref().unwrap_or_default()))
+            .expect("writing to a String cannot fail");
     }
     for (flag, value) in [
         ("enabled", change.enabled),
@@ -442,7 +449,7 @@ fn set_track_line(track: &Id, change: &TrackChange) -> String {
         ("muted", change.muted),
     ] {
         if let Some(value) = value {
-            write!(text, " {flag}={value}").unwrap();
+            write!(text, " {flag}={value}").expect("writing to a String cannot fail");
         }
     }
     text
@@ -453,12 +460,14 @@ fn set_track_role_line(track: &Id, change: &TrackRoleChange) -> String {
     let mut text = format!("track set {track}");
     if let Some(role) = &change.role {
         match role {
-            Some(role) => write!(text, " role={}", word_or_quote(role)).unwrap(),
+            Some(role) => write!(text, " role={}", word_or_quote(role))
+                .expect("writing to a String cannot fail"),
             None => text.push_str(" role=\"\""),
         }
     }
     if let Some(sync) = change.sync_locked {
-        write!(text, " sync={}", if sync { "on" } else { "off" }).unwrap();
+        write!(text, " sync={}", if sync { "on" } else { "off" })
+            .expect("writing to a String cannot fail");
     }
     text
 }
@@ -487,17 +496,18 @@ fn place_line(
     );
     if let Content::Media { speed, .. } | Content::Sequence { speed, .. } = &first.content {
         if !speed.is_one() {
-            write!(text, " speed={}", print_speed(speed, clock.rate)).unwrap();
+            write!(text, " speed={}", print_speed(speed, clock.rate))
+                .expect("writing to a String cannot fail");
         }
     }
     let tracks: Vec<Id> = targets.iter().map(|(t, _)| t.clone()).collect();
-    write!(text, " on={}", id_list(&tracks)).unwrap();
+    write!(text, " on={}", id_list(&tracks)).expect("writing to a String cannot fail");
     let names: Vec<Id> = targets.iter().map_while(|(_, c)| c.id.clone()).collect();
     if !names.is_empty() {
-        write!(text, " as={}", id_list(&names)).unwrap();
+        write!(text, " as={}", id_list(&names)).expect("writing to a String cannot fail");
     }
     if let Some(name) = &first.name {
-        write!(text, " name={}", quote(name)).unwrap();
+        write!(text, " name={}", quote(name)).expect("writing to a String cannot fail");
     }
     if let Content::Generator { fx, params, .. } = &first.content {
         let defs = catalog
@@ -532,7 +542,7 @@ fn take_out_line(
         clock.print_position(*to)
     );
     if let Some(tracks) = tracks {
-        write!(text, " tracks={}", id_list(tracks)).unwrap();
+        write!(text, " tracks={}", id_list(tracks)).expect("writing to a String cannot fail");
     }
     text
 }
@@ -550,7 +560,7 @@ fn split_line(project: &Project, clip: &Id, at: &Time, tail: &Option<Id>) -> Str
     let clock = clip_clock(project, clip).unwrap_or(FALLBACK);
     let mut text = format!("split {clip} at={}", clock.print_position(*at));
     if let Some(tail) = tail {
-        write!(text, " as={tail}").unwrap();
+        write!(text, " as={tail}").expect("writing to a String cannot fail");
     }
     text
 }
@@ -560,7 +570,7 @@ fn blade_line(project: &Project, sequence: &Id, at: &Time, tracks: &Option<Vec<I
     let clock = sequence_clock(project, sequence).unwrap_or(FALLBACK);
     let mut text = format!("blade at={}", clock.print_position(*at));
     if let Some(tracks) = tracks {
-        write!(text, " tracks={}", id_list(tracks)).unwrap();
+        write!(text, " tracks={}", id_list(tracks)).expect("writing to a String cannot fail");
     }
     text
 }
@@ -570,10 +580,10 @@ fn move_line(project: &Project, clip: &Id, track: &Option<Id>, delta: &Time) -> 
     let clock = clip_clock(project, clip).unwrap_or(FALLBACK);
     let mut text = format!("move {clip}");
     if let Some(track) = track {
-        write!(text, " on={track}").unwrap();
+        write!(text, " on={track}").expect("writing to a String cannot fail");
     }
     if *delta != Time::ZERO || track.is_none() {
-        write!(text, " by={}", clock.print_delta(*delta)).unwrap();
+        write!(text, " by={}", clock.print_delta(*delta)).expect("writing to a String cannot fail");
     }
     text
 }
@@ -586,9 +596,12 @@ fn set_line(project: &Project, clip: &Id, changes: &[ClipChange]) -> String {
     for change in changes {
         match change {
             ClipChange::Name(name) => {
-                write!(text, " name={}", quote(name.as_deref().unwrap_or_default())).unwrap()
+                write!(text, " name={}", quote(name.as_deref().unwrap_or_default()))
+                    .expect("writing to a String cannot fail")
             }
-            ClipChange::Enabled(enabled) => write!(text, " enabled={enabled}").unwrap(),
+            ClipChange::Enabled(enabled) => {
+                write!(text, " enabled={enabled}").expect("writing to a String cannot fail")
+            }
             ClipChange::Parent(parent) => write!(
                 text,
                 " parent={}",
@@ -596,11 +609,16 @@ fn set_line(project: &Project, clip: &Id, changes: &[ClipChange]) -> String {
                     .as_ref()
                     .map_or_else(|| quote(""), |parent| parent.to_string())
             )
-            .unwrap(),
-            ClipChange::Retime(retime) => write!(text, " retime={}", retime.id()).unwrap(),
-            ClipChange::Angle(Some(angle)) => write!(text, " angle={angle}").unwrap(),
+            .expect("writing to a String cannot fail"),
+            ClipChange::Retime(retime) => {
+                write!(text, " retime={}", retime.id()).expect("writing to a String cannot fail")
+            }
+            ClipChange::Angle(Some(angle)) => {
+                write!(text, " angle={angle}").expect("writing to a String cannot fail")
+            }
             ClipChange::Angle(None) => text.push_str(" angle=\"\""),
-            ClipChange::Caption(caption) => write!(text, " caption={}", quote(caption)).unwrap(),
+            ClipChange::Caption(caption) => write!(text, " caption={}", quote(caption))
+                .expect("writing to a String cannot fail"),
             ClipChange::Param(name, value) => params.push((name.clone(), value.clone())),
         }
     }
@@ -619,7 +637,7 @@ fn fx_add_line(
     let clock = clip_clock(project, clip).unwrap_or(FALLBACK);
     let mut text = format!("fx {clip} add {}", print_fx_ref(&effect.fx, effect.version));
     if let Some(index) = index {
-        write!(text, " at={}", index + 1).unwrap();
+        write!(text, " at={}", index + 1).expect("writing to a String cannot fail");
     }
     if !effect.enabled {
         text.push_str(" enabled=false");
@@ -643,7 +661,7 @@ fn fx_set_line(
     let clock = clip_clock(project, clip).unwrap_or(FALLBACK);
     let mut text = format!("fx {clip} set {}", index + 1);
     if let Some(enabled) = enabled {
-        write!(text, " enabled={enabled}").unwrap();
+        write!(text, " enabled={enabled}").expect("writing to a String cannot fail");
     }
     text.push_str(&changes_text(params, clock.rate));
     text
@@ -661,7 +679,7 @@ fn mask_add_line(
     let mut text = format!("mask {clip} add {}", mask.name);
     text.push_str(&mask_text(mask, catalog, clock.rate));
     if let Some(index) = index {
-        write!(text, " at={}", index + 1).unwrap();
+        write!(text, " at={}", index + 1).expect("writing to a String cannot fail");
     }
     text
 }
@@ -682,10 +700,10 @@ fn mask_set_line(
         text.push_str(&mask_shape_text(shape, clock.rate));
     }
     if let Some(mode) = mode {
-        write!(text, " mode={}", mode.name()).unwrap();
+        write!(text, " mode={}", mode.name()).expect("writing to a String cannot fail");
     }
     if let Some(inverted) = inverted {
-        write!(text, " inverted={inverted}").unwrap();
+        write!(text, " inverted={inverted}").expect("writing to a String cannot fail");
     }
     text.push_str(&changes_text(params, clock.rate));
     text
@@ -704,7 +722,7 @@ fn add_transition_line(
     let clock = clip_clock(project, from).unwrap_or(FALLBACK);
     let mut text = String::from("transition add");
     if let Some(id) = id {
-        write!(text, " as={id}").unwrap();
+        write!(text, " as={id}").expect("writing to a String cannot fail");
     }
     write!(
         text,
@@ -712,9 +730,9 @@ fn add_transition_line(
         print_fx_ref(fx, *version),
         clock.print_duration(*duration)
     )
-    .unwrap();
+    .expect("writing to a String cannot fail");
     if *align != kerf_model::Align::Center {
-        write!(text, " align={}", align.name()).unwrap();
+        write!(text, " align={}", align.name()).expect("writing to a String cannot fail");
     }
     let defs = catalog
         .fx(fx.as_str())
@@ -739,10 +757,11 @@ fn set_transition_line(
         .map_or(FALLBACK, Clock::of_sequence);
     let mut text = format!("transition set {id}");
     if let Some(duration) = duration {
-        write!(text, " dur={}", clock.print_duration(*duration)).unwrap();
+        write!(text, " dur={}", clock.print_duration(*duration))
+            .expect("writing to a String cannot fail");
     }
     if let Some(align) = align {
-        write!(text, " align={}", align.name()).unwrap();
+        write!(text, " align={}", align.name()).expect("writing to a String cannot fail");
     }
     text.push_str(&changes_text(params, clock.rate));
     text
@@ -761,20 +780,21 @@ fn add_marker_line(
     let clock = sequence_clock(project, sequence).unwrap_or(FALLBACK);
     let mut text = String::from("marker add");
     if let Some(id) = id {
-        write!(text, " as={id}").unwrap();
+        write!(text, " as={id}").expect("writing to a String cannot fail");
     }
-    write!(text, " at={}", clock.print_position(*at)).unwrap();
+    write!(text, " at={}", clock.print_position(*at)).expect("writing to a String cannot fail");
     if *duration != Time::ZERO {
-        write!(text, " dur={}", clock.print_duration(*duration)).unwrap();
+        write!(text, " dur={}", clock.print_duration(*duration))
+            .expect("writing to a String cannot fail");
     }
     if let Some(name) = name {
-        write!(text, " name={}", quote(name)).unwrap();
+        write!(text, " name={}", quote(name)).expect("writing to a String cannot fail");
     }
     if let Some(color) = color {
-        write!(text, " color={}", color.name()).unwrap();
+        write!(text, " color={}", color.name()).expect("writing to a String cannot fail");
     }
     if let Some(note) = note {
-        write!(text, " note={}", quote(note)).unwrap();
+        write!(text, " note={}", quote(note)).expect("writing to a String cannot fail");
     }
     text
 }
@@ -788,19 +808,23 @@ fn set_marker_line(project: &Project, id: &Id, change: &MarkerChange) -> String 
         .map_or(FALLBACK, Clock::of_sequence);
     let mut text = format!("marker set {id}");
     if let Some(at) = change.at {
-        write!(text, " at={}", clock.print_position(at)).unwrap();
+        write!(text, " at={}", clock.print_position(at)).expect("writing to a String cannot fail");
     }
     if let Some(duration) = change.duration {
-        write!(text, " dur={}", clock.print_duration(duration)).unwrap();
+        write!(text, " dur={}", clock.print_duration(duration))
+            .expect("writing to a String cannot fail");
     }
     if let Some(name) = &change.name {
-        write!(text, " name={}", quote(name.as_deref().unwrap_or_default())).unwrap();
+        write!(text, " name={}", quote(name.as_deref().unwrap_or_default()))
+            .expect("writing to a String cannot fail");
     }
     if let Some(color) = change.color {
-        write!(text, " color={}", color.map_or("none", |c| c.name())).unwrap();
+        write!(text, " color={}", color.map_or("none", |c| c.name()))
+            .expect("writing to a String cannot fail");
     }
     if let Some(note) = &change.note {
-        write!(text, " note={}", quote(note.as_deref().unwrap_or_default())).unwrap();
+        write!(text, " note={}", quote(note.as_deref().unwrap_or_default()))
+            .expect("writing to a String cannot fail");
     }
     text
 }
@@ -809,7 +833,7 @@ fn set_marker_line(project: &Project, id: &Id, change: &MarkerChange) -> String 
 fn link_line(clips: &[Id], group: &Option<Id>) -> String {
     let mut text = format!("link {}", id_words(clips));
     if let Some(group) = group {
-        write!(text, " as={group}").unwrap();
+        write!(text, " as={group}").expect("writing to a String cannot fail");
     }
     text
 }
@@ -857,7 +881,7 @@ fn changes_text(changes: &[(String, Option<Param>)], rate: Rate) -> String {
         .collect();
     let mut text = String::new();
     if !reset.is_empty() {
-        write!(text, " reset={}", reset.join(",")).unwrap();
+        write!(text, " reset={}", reset.join(",")).expect("writing to a String cannot fail");
     }
     text.push_str(&params_text(&set, &[], rate));
     text

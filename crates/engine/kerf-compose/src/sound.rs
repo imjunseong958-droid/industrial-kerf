@@ -199,7 +199,10 @@ fn decode(path: &str) -> Result<Vec<f32>, String> {
             feed(&mut decoder, &mut graph, &mut samples)?;
         }
     }
-    let _ = decoder.send_eof();
+    // Untold, a decoder keeps the samples it holds, and the sound ends early.
+    if let Err(error) = decoder.send_eof() {
+        log::warn!("{path}: the decoder was not told the end: {error}");
+    }
     feed(&mut decoder, &mut graph, &mut samples)?;
     graph
         .get("in")

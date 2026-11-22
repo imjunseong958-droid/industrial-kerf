@@ -668,6 +668,30 @@ fn a_file_that_is_no_mesh_is_said_when_the_sequence_is_planned() {
     assert!(from_file(folder.path(), "broken.glb", "", Pass::Picture).is_err());
 }
 
+#[test]
+fn a_hidden_track_nesting_a_sequence_with_no_mesh_says_so_too() {
+    let folder = tempfile::tempdir().expect("a folder");
+    let mut project = parse_document(
+        "kerf 1\nproject name=\"t\"\nsequence s1 rate=24 size=320x180 audio=48000\n  \
+         track V1 video\n    clip c gen=solid@1 at=0f dur=24f\n  \
+         track V2 video enabled=false\n    clip n seq=s2 src=0f at=0f dur=24f\n\
+         sequence s2 rate=24 size=320x180 audio=48000\n  \
+         track V1 video\n    clip thing gen=mesh@1 at=0f dur=24f\n      set file=\"nowhere.glb\"\n",
+        Catalog::builtin(),
+    )
+    .unwrap_or_else(|errors| panic!("{errors:?}"))
+    .project;
+    project.resolve_paths(Catalog::builtin(), folder.path());
+    let error = Compositor::new(&project, Catalog::builtin(), &ComposeOptions::default())
+        .err()
+        .expect("a mesh that cannot be read")
+        .to_string();
+    assert!(
+        error.contains("clip `thing`") && error.contains("cannot be read"),
+        "{error}"
+    );
+}
+
 /// A glTF file as it is written: its bytes, and the views and accessors onto them.
 #[derive(Default)]
 struct Writing {

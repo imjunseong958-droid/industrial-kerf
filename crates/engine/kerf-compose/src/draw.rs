@@ -134,7 +134,9 @@ impl Drawing {
         let sequences: Vec<SequencePlan> = builder
             .sequences
             .into_iter()
-            .map(|plan| plan.expect("every sequence planned"))
+            .map(|plan| {
+                plan.expect("a sequence that could not be planned fails the build, hidden or not")
+            })
             .collect();
         let ids = told_ids(&sequences);
         let matte = matte_color(options.matte.as_deref(), &ids)?;

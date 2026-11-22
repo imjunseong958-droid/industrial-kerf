@@ -936,13 +936,15 @@ impl FocusRegion {
                                     crate::artwork::image_size(frame),
                                     false,
                                 );
-                                let _ = window.paint_image(
+                                if let Err(error) = window.paint_image(
                                     placed,
                                     gpui::Corners::default(),
                                     frame.clone(),
                                     0,
                                     false,
-                                );
+                                ) {
+                                    log::warn!("Focus Region's frame did not draw: {error}");
+                                }
                                 placed
                             }
                             None => bounds,

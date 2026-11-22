@@ -73,6 +73,7 @@ impl RuntimeLock {
 
 impl Drop for RuntimeLock {
     fn drop(&mut self) {
+        // Closing the file, just after, lets go of the lock as well.
         let _ = self._file.unlock();
     }
 }
@@ -477,7 +478,10 @@ pub(crate) fn load_journal(
                 // this torn tail and keep all earlier records.
                 file.set_len(start as u64).map_err(io_error)?;
                 file.sync_all().map_err(io_error)?;
-                let _ = error;
+                log::warn!(
+                    "{}: a record cut short at byte {start} was dropped: {error}",
+                    path.display()
+                );
                 break;
             }
             Err(error) => {
@@ -567,7 +571,8 @@ pub(crate) fn load_checkpoint(directory: &Path) -> Result<Loaded, RuntimeError> 
         match read_checkpoint(&checkpoint_path) {
             Ok(value) => {
                 // A completed checkpoint supersedes an abandoned write left
-                // by a crash.  The temp path is explicit and safe to remove.
+                // by a crash.  The temp path is explicit and safe to remove,
+                // and one that stays loses to the checkpoint again.
                 if temporary_path.is_file() {
                     let _ = fs::remove_file(temporary_path);
                 }
@@ -656,6 +661,7 @@ pub(crate) fn write_bytes_atomic(path: &Path, bytes: &[u8]) -> Result<(), Runtim
         Ok(())
     })();
     if result.is_err() {
+        // The next write truncates one that stays.
         let _ = fs::remove_file(&temporary_path);
     }
     result

@@ -109,6 +109,7 @@ fn proposals_status(state: &StateSnapshot) -> Option<String> {
         } else {
             format!(" Earlier versions: {}.", earlier.join(", "))
         };
+        // Writing to a String never fails.
         let _ = write!(
             text,
             "Proposal {} (v{}, by {}, from revision {}) is waiting for the user's \

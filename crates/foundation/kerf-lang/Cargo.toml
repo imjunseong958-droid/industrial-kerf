@@ -10,3 +10,6 @@ kerf-model = { path = "../../foundation/kerf-model" }
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+proptest.workspace = true

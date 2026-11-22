@@ -661,7 +661,9 @@ pub fn plan_rolled(
     let directory = &rooted(directory)?;
     let Read { text, recipe } = read(project, directory, id)?;
     let recipe = recipe.rolled(roll);
-    let media = project.media(id).expect("read found it");
+    let media = project
+        .media(id)
+        .expect("`read` refuses an id that is no media of the project");
     for sequence in recipe.sequences() {
         if project.sequence(sequence).is_none() {
             return Err(EngineError::msg(format!(
@@ -763,7 +765,9 @@ pub fn plan_rolled(
             }
             Step::Generate(ask) => {
                 let request = request_file(&working, &recipe.steps, index);
-                let command = models.command(&ask.model).expect("checked above");
+                let command = models
+                    .command(&ask.model)
+                    .expect("every model the steps ask for was looked up above");
                 format!(
                     "{} asks model `{}` for {}",
                     shown(
@@ -1028,8 +1032,15 @@ pub fn make(
     let working = place.working(take);
     let making = place.making(take);
     std::fs::create_dir_all(&working)?;
-    // What an earlier run left must not pass for this one's.
-    let _ = std::fs::remove_file(&making);
+    // What an earlier run left must not pass for this one's. Most often there is none.
+    if let Err(error) = std::fs::remove_file(&making) {
+        if error.kind() != std::io::ErrorKind::NotFound {
+            log::warn!(
+                "what an earlier making left in {} could not be taken away: {error}",
+                making.display()
+            );
+        }
+    }
     let making_it = Making {
         project,
         directory,
@@ -1053,6 +1064,8 @@ pub fn make(
                 ))),
             });
         if let Err(error) = ran {
+            // Best effort: what is told is why the run failed, and a failed run is no take
+            // whatever it left.
             let _ = std::fs::remove_file(&making);
             let _ = std::fs::remove_dir_all(&working);
             return Err(error);
@@ -1061,11 +1074,17 @@ pub fn make(
         takes::record(&place, take, from, plan.roll)?;
         // What it was made from, to go back to: not what the take stands on, so one that
         // cannot be kept is still a take.
-        let _ = takes::keep(&place, take, &plan.text, plan.roll, &|named| {
+        let kept = takes::keep(&place, take, &plan.text, plan.roll, &|named| {
             within(Path::new(""), named, "file")
                 .ok()
                 .and_then(|inside| std::fs::read_to_string(directory.join(inside)).ok())
         });
+        if let Err(error) = kept {
+            log::warn!(
+                "take {take} of `{}` is made, and what it was made from could not be kept with it: {error}",
+                plan.media
+            );
+        }
         Ok(Made {
             take,
             stored: place.stored(take),

@@ -23,6 +23,7 @@ impl Wake {
 
     /// Wakes whoever waits, or the next to wait. Never blocks.
     pub fn ring(&self) {
+        // Full, it has rung already, and that ring is heard as this one.
         let _ = self.bell.try_send(());
     }
 

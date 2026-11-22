@@ -681,6 +681,7 @@ impl Session {
         self.settle_pointer();
         // Artwork made since: drawn now; what it let go of leaves the atlas.
         for image in self.artwork.take_dropped() {
+            // gpui 0.2.2 answers Ok always: one not in the atlas is no matter.
             let _ = window.drop_image(image);
         }
         if self.artwork.take_changed() {

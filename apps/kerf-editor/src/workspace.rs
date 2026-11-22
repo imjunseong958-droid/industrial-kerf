@@ -2328,7 +2328,12 @@ impl Workspace {
             "help.crashReports" => match kerf_bridge::crash_reports()["folder"].as_str() {
                 Some(folder) => {
                     let folder = PathBuf::from(folder);
-                    let _ = std::fs::create_dir_all(&folder);
+                    if let Err(error) = std::fs::create_dir_all(&folder) {
+                        log::warn!(
+                            "{}: the crash folder could not be made: {error}",
+                            folder.display()
+                        );
+                    }
                     cx.reveal_path(&folder);
                 }
                 None => session.update(cx, |session, _| {

@@ -50,7 +50,8 @@ fn publish_snapshot(
         .and_then(Value::as_str)
         != Some(state.document.as_str());
     if project_changed {
-        // The document may use looks another process added to the project.
+        // The document may use looks another process added to the project. One that does not
+        // read leaves the catalog as it was, and kerfd reports it.
         let _ = kerf_model::look::refresh_project_looks(&shared.directory);
         match kerf_runtime::parse_document(&state.document) {
             Ok(mut project) => {
@@ -269,6 +270,8 @@ impl Worker {
     /// kerfd is gone (`message` says how): playback pauses, the editor is told, and commands
     /// wait for a reconnect.
     fn disconnect(&mut self, message: &str) {
+        // Never waits on the media worker: it is gone only as the bridge closes, and a pause
+        // lost to its full queue leaves playback going until the person stops it.
         let _ = self.media.try_send(Command::Pause);
         connection_event(&self.tx, ConnectionStatus::Disconnected, Some(message));
         self.client = None;
@@ -277,6 +280,7 @@ impl Worker {
     /// `reconnect`: reach kerfd again, pausing playback first while it was reached.
     fn reconnect(&mut self) {
         if self.client.is_some() {
+            // As in `disconnect`: never waits on the media worker.
             let _ = self.media.try_send(Command::Pause);
         }
         self.client = connect_runtime(
@@ -465,7 +469,10 @@ impl Worker {
                 start,
                 duration,
             } => {
-                let turn = preview_turn.expect("taken with the command");
+                let turn = preview_turn.expect(
+                    "`command` takes a turn for every Command::Preview, and `side` hands the \
+                     command on unchanged",
+                );
                 preview::start(
                     turn,
                     proposal_id,

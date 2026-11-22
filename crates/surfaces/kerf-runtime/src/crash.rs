@@ -169,6 +169,7 @@ fn write_report(folder: &Path, component: &str, info: &PanicHookInfo<'_>) -> std
 /// Keep the newest [`KEPT`] reports.
 fn prune(folder: &Path) {
     for old in reports(folder).iter().skip(KEPT) {
+        // One that stays is only kept until the next report tries again.
         let _ = fs::remove_file(&old.path);
     }
 }
