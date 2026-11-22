@@ -1768,7 +1768,7 @@ impl Editor<'_> {
                 _ => merged.push((from, to)),
             }
         }
-        let ids: HashSet<Id> = selection
+        let mut ids: HashSet<Id> = selection
             .iter()
             .map(|at| self.clip(*at).id.clone())
             .collect();
@@ -1782,6 +1782,9 @@ impl Editor<'_> {
                 })
                 .cloned()
                 .collect();
+            // This range removes them, so the earlier ranges must not look
+            // them up again.
+            ids.retain(|id| !here.contains(id));
             self.close_time(s, &edited, from, to, &here)?;
             for id in &here {
                 let at = self.find(id);

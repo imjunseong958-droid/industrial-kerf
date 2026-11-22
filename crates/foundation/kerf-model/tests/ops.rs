@@ -369,6 +369,41 @@ fn ripple_delete_refuses_to_desync_and_succeeds_when_the_bed_is_locked() {
     assert_eq!(layout(&project, "A2"), vec![row("music", 0, 192)]);
 }
 
+#[test]
+fn ripple_delete_closes_each_of_several_separate_ranges() {
+    // V1: c1 [0,24) c2 [48,72) c3 [96,144) c4 [168,192) · A1: a1–a4 linked
+    // to them · A2: music [0,192)
+    let mut scene = scene();
+    for (t, prefix) in [(0, "c"), (1, "a")] {
+        scene.sequences[0].tracks[t].clips = vec![
+            media_clip(&format!("{prefix}1"), "m1", 0, 0, 24, Some("L1")),
+            media_clip(&format!("{prefix}2"), "m1", 240, 48, 24, Some("L2")),
+            media_clip(&format!("{prefix}3"), "m1", 480, 96, 48, Some("L3")),
+            media_clip(&format!("{prefix}4"), "m1", 720, 168, 24, Some("L4")),
+        ];
+    }
+    assert_eq!(validate(&scene, Catalog::builtin()), vec![]);
+    let project = run(
+        &scene,
+        vec![
+            lock("A2"),
+            Op::RippleDelete {
+                clips: vec![id("c1"), id("c3")],
+            },
+        ],
+    );
+    // c2 closes up by c1's 24 frames, c4 by those and c3's 48.
+    assert_eq!(
+        layout(&project, "V1"),
+        vec![row("c2", 24, 48), row("c4", 96, 120)]
+    );
+    assert_eq!(
+        layout(&project, "A1"),
+        vec![row("a2", 24, 48), row("a4", 96, 120)]
+    );
+    assert_eq!(layout(&project, "A2"), vec![row("music", 0, 192)]);
+}
+
 fn sync(track: &str, on: bool) -> Op {
     Op::SetTrackRole {
         sequence: id("s1"),
