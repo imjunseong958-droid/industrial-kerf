@@ -3,7 +3,7 @@
 
 use kerf_editor::prefs::{Permissions, Prefs};
 
-// ---------------------------------------------------------------- the Qt editor's settings
+// ----------------------------------------------- the settings of the editor before 0.1.5 (Qt)
 
 #[test]
 fn the_qt_editors_settings_are_taken_up_once_with_settings_dir() {

@@ -100,8 +100,7 @@ const MOST_FRAME: f32 = 48.0;
 /// What one press of − or + zooms by.
 const ZOOM_STEP: f32 = 1.5;
 /// − or + held down zooms again after this, and then every
-/// [`ZOOM_REPEAT`], until it is let go or the pointer leaves it (Qt's
-/// QToolButton autoRepeat).
+/// [`ZOOM_REPEAT`], until it is let go or the pointer leaves it.
 pub use crate::theme::motion::{ZOOM_REPEAT, ZOOM_REPEAT_DELAY};
 /// Points between a lane's edge and its clips.
 const CLIP_INSET: f32 = 2.0;
@@ -214,8 +213,8 @@ impl Tool {
         matches!(self, Tool::Selection | Tool::Slip | Tool::Slide)
     }
 
-    /// The pointer over a clip, on one of its edges or not (Qt's
-    /// `setToolCursor`).
+    /// The pointer over a clip, on one of its edges or not: it shows what
+    /// the tool would do there.
     pub fn cursor(self, edge: bool) -> CursorStyle {
         if self == Tool::Razor {
             CursorStyle::Crosshair
@@ -316,7 +315,7 @@ impl TrackHeights {
 
 /// A track's height when nothing else is set: one roomy height for every
 /// kind ([`layout::TRACK_LANE`]), none larger than another for what it
-/// is, as the Qt editor's window drew them (Medium and Reset go back to it).
+/// is (Medium and Reset go back to it).
 pub fn default_height(_kind: TrackKind) -> f32 {
     layout::TRACK_LANE
 }
@@ -342,11 +341,10 @@ pub fn stepped_height(height: f32, steps: i32) -> f32 {
 
 // ------------------------------------------------------- watching changes
 
-/// The clips a change reel watches (Qt's watchChanges, as it gave them to
-/// setFocusClips): every clip proposal `id` (or the version of it `id`
-/// names, as the reel plays it) adds, takes out or changes against the
-/// program, as its card lists them. None when the snapshot has no timeline
-/// of it.
+/// The clips a change reel watches: every clip proposal `id` (or the
+/// version of it `id` names, as the reel plays it) adds, takes out or
+/// changes against the program, as its card lists them. None when the
+/// snapshot has no timeline of it.
 pub fn watched_clips(snapshot: &model::Snapshot, id: &str) -> HashSet<String> {
     let proposed = snapshot
         .proposals
@@ -382,10 +380,11 @@ pub struct WatchLook {
     pub dim: f32,
 }
 
-/// A clip `amount` of the way into a change reel (0 at rest, 1 watching),
-/// as Qt's timeline drew it: one the reel `watched` rises `CLIP_LIFT` off
-/// its lane over a soft glow, ringed in the accent's ink (a sound clip
-/// stays on its lane, ringed); every other clip falls back under a cover.
+/// A clip `amount` of the way into a change reel (0 at rest, 1 watching):
+/// one the reel `watched` rises `CLIP_LIFT` off its lane over a soft glow,
+/// ringed in the accent's ink (a sound clip stays on its lane, ringed);
+/// every other clip falls back under a cover, so what the proposal changes
+/// stands out from what it leaves alone.
 pub fn watch_look(amount: f32, watched: bool, audio: bool) -> WatchLook {
     let amount = amount.clamp(0.0, 1.0);
     match (watched, audio) {
@@ -465,7 +464,7 @@ impl ClipWatch {
         self.key = Some((proposal.to_owned(), revision));
         let clips = find();
         if *self.clips != clips {
-            // Other clips rise from their lanes anew, as Qt's setFocusClips.
+            // Other clips rise from their lanes anew.
             self.clips = Rc::new(clips);
             self.amount.set(0.0);
         }
@@ -496,8 +495,8 @@ impl ClipWatch {
 }
 
 /// Where a sound clip's rubber band stands for `db` in a clip `tall`
-/// points high from `top` (Qt's `gainY`): −60 dB at its foot, +12 at its
-/// head, 2 points in from either.
+/// points high from `top`: −60 dB at its foot, +12 at its head, 2 points
+/// in from either.
 pub fn gain_y(db: f64, top: f32, tall: f32) -> f32 {
     let fraction =
         ((db.clamp(GAIN_FLOOR, GAIN_CEILING) - GAIN_FLOOR) / (GAIN_CEILING - GAIN_FLOOR)) as f32;
@@ -897,7 +896,7 @@ fn edge_colour(kind: TrackKind, clip: &Clip) -> Rgba {
     }
 }
 
-/// What a lane draws over its clips: Qt's waveform and room-tone greys
+/// What a lane draws over its clips: the waveform and room-tone greys
 /// (`theme::waveform`), the rubber band and its keys and the bar a name
 /// stands on (`theme::lane`).
 mod lane_ink {
@@ -2440,8 +2439,8 @@ impl TimelineView {
         // The skim ends here, so the picture goes back to the playhead's frame.
         self.end_skim(cx);
         self.tip = None;
-        // kerfd connecting or gone: the lanes take nothing (Qt's timeline
-        // was disabled then).
+        // kerfd connecting or gone: the lanes take nothing, since an edit
+        // made then would never reach kerfd.
         if self.offline(cx) {
             self.gesture = None;
             return;
@@ -2639,7 +2638,7 @@ impl TimelineView {
 
     /// Whether kerfd is connecting or gone: the lanes and the heads take
     /// no presses, drags or switches then, and show none of what a press
-    /// would take, as Qt's timeline was disabled (`setEnabled(false)`).
+    /// would take, since nothing done then would reach kerfd.
     pub fn offline(&self, cx: &App) -> bool {
         !self.session.read(cx).connected()
     }
@@ -3320,7 +3319,7 @@ impl TimelineView {
         item
     }
 
-    /// A clip's menu (Qt's): Ask Kerf…, the edits on it, Focus Region…,
+    /// A clip's menu: Ask Kerf…, the edits on it, Focus Region…,
     /// Start Motion Path where it can take one, and for a shot made from
     /// steps Open Graph, or Carry Steps into the Document… while its
     /// steps are still in a recipe file.
@@ -3405,8 +3404,8 @@ impl TimelineView {
         self.open_menu(items, at, 232.0, false, window, cx);
     }
 
-    /// A head's menu (Qt's): Sync lock, its height, every track's, Fit
-    /// tracks to panel and Reset track heights.
+    /// A head's menu: Sync lock, its height, every track's, Fit tracks to
+    /// panel and Reset track heights.
     fn head_menu(
         &mut self,
         row: usize,
@@ -3605,8 +3604,8 @@ pub fn extend(selection: &mut Vec<String>, id: &str, toggle: bool) {
 
 /// Whether the timeline's strip carries the transport: while the window
 /// shows no picture (View ▸ Picture off, `Session::picture_open` false),
-/// as Qt's strip carried it while its viewer was hidden. Until the window
-/// says (None) the stage has it.
+/// so the transport stays at hand with the picture hidden. Until the
+/// window says (None) the stage has it.
 pub fn strip_has_transport(picture_open: Option<bool>) -> bool {
     picture_open == Some(false)
 }
@@ -3617,7 +3616,7 @@ pub fn strip_has_transport(picture_open: Option<bool>) -> bool {
 /// Go to end (Home and End still reach them) and the transport's wide gap,
 /// then of the cut's length and the space before the tools. What still
 /// does not fit is cut off at the tools' end: Snap, − and +, and Fit stay
-/// whole, as in Qt's strip, which held its window wide enough for them.
+/// whole, so each can still be pressed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct StripFit {
     pub slider: bool,
@@ -3779,7 +3778,8 @@ impl TimelineView {
                 .on_click(move |_, window, cx| {
                     window.dispatch_action(Box::new(RunCommand { id: id.into() }), cx);
                 });
-                // Play in ink at rest, as Qt's was.
+                // Play in ink at rest, so it stands out from the rest of
+                // the transport.
                 if play {
                     button = button.color(theme::ink());
                 }
@@ -3797,7 +3797,8 @@ impl TimelineView {
             .flex_none()
             .items_center()
             .gap(px(layout::STRIP_TRANSPORT_SPACING))
-            // To the timecode, Qt's gap, the strip's own gap counted in.
+            // To the timecode, the transport's wide gap, the strip's own
+            // gap counted in.
             .when(ends, |transport| {
                 transport.pr(px(layout::STRIP_TRANSPORT_GAP - STRIP_GAP))
             })
@@ -3920,7 +3921,6 @@ impl TimelineView {
             .items_center()
             .gap(px(STRIP_GAP))
             .child(width_canvas(widths.right.clone()))
-            // Its name and key in a kit tip, as Qt's strip said them.
             .child(ui::tipped(
                 "timeline-snap-tip",
                 ui::Tip::new("Snap").maybe_key(snap_key),
@@ -3990,7 +3990,7 @@ impl TimelineView {
     /// The strip's − or +: one step of zoom by `factor` a click (on its
     /// release), and held down, a step after [`ZOOM_REPEAT_DELAY`] and
     /// every [`ZOOM_REPEAT`] after it until it is let go or the pointer
-    /// leaves it, as Qt's autoRepeat buttons did.
+    /// leaves it.
     fn zoom_button(
         &self,
         id: &'static str,
@@ -5148,7 +5148,7 @@ fn paint_readout(
 /// What a change reel draws round `clip` on `row` (at `y`), as `look`
 /// says: under it (`over` false), the glow it rises over; over it, the
 /// cover on a clip it does not watch, or the accent's ring round one it
-/// does, where it has risen to (Qt's timeline, while watching changes).
+/// does, where it has risen to.
 // Painting takes the window, where the canvas is and each measure it draws with.
 #[allow(clippy::too_many_arguments)]
 fn paint_watched(
@@ -5192,7 +5192,7 @@ fn paint_watched(
         ));
     }
     if look.ring > 0.0 {
-        // Just outside it, as Qt's 2-point line round it was.
+        // Just outside it, so the ring covers none of the clip.
         window.paint_quad(quad(
             pen.rect(left - 2.0, top - 2.0, across + 4.0, tall + 4.0),
             px(radius::SMALL + 2.0),
@@ -5415,9 +5415,9 @@ fn paint_clip(
             });
         }
     }
-    // Its outline: ink chosen (as Qt drew it, read over frames); dashed while it waits its turn
-    // (amber) or has no file (a hole); amber being made; sage when an open
-    // proposal changes it; brighter under the pointer.
+    // Its outline: ink chosen (it reads over the frames); dashed while it
+    // waits its turn (amber) or has no file (a hole); amber being made; sage
+    // when an open proposal changes it; brighter under the pointer.
     let dashed = activity.is_some_and(Activity::dashed);
     let (outline, outline_width, style) = if selected {
         (theme::ink(), 1.5, BorderStyle::Solid)
@@ -5746,8 +5746,8 @@ fn paint_signal(values: &[f64], (x, y, w, h): (f32, f32, f32, f32), pen: Pen, wi
     }
 }
 
-/// The points a signal's curve passes through across a box (Qt's
-/// `signalcurve::curve`): one value is a level across the whole of it.
+/// The points a signal's curve passes through across a box: one value is
+/// a level across the whole of it.
 pub fn signal_points(values: &[f64], (x, y, w, h): (f32, f32, f32, f32)) -> Vec<(f32, f32)> {
     if values.is_empty() || w <= 0.0 || h <= 0.0 {
         return Vec::new();

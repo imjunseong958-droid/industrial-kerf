@@ -561,7 +561,8 @@ fn a_drag_draws_a_rectangle_or_an_ellipse_corner_to_corner() {
 
 #[test]
 fn a_click_or_a_line_draws_nothing() {
-    // Under four points both across and down: a click, as Qt had it.
+    // Under four points both across and down: a click, so a hand that
+    // shakes as it clicks draws no mask.
     let step = (DRAW_LEAST - 0.5) / 960.0;
     assert_eq!(
         drawn(false, (0.5, 0.5), (0.5 + step, 0.5 + step), half()),
@@ -967,7 +968,8 @@ fn scene(camera: Value, rig: Value, props: Value, size: Pt, fit: bool, canvas: P
 /// canvas it lands, or none.
 type TableRow = (Value, Value, Value, Pt, bool, Pt, Pt, Option<Pt>);
 
-/// The Qt editor's table, which the compositor is held to.
+/// The table the compositor is held to as well, so the editor's overlays
+/// land on what they are drawn over.
 fn table() -> Vec<TableRow> {
     let wide = (1920.0, 1080.0);
     let path = "0,0 0.2,0.3 0.5,-0.1";
@@ -1614,9 +1616,8 @@ fn a_picture_out_of_sight_takes_no_mask_and_a_path_out_of_sight_is_none() {
     let placed = |props: Value| placement(&facing(props), "c1", 0.0);
     let two = path("0,0 0.5,0");
     // Behind the camera: its path's map still folds nothing, so the clip is
-    // placed, but neither its masks nor any of its path can be seen, and a
-    // click on the picture plays (Qt's editsMasks, and setMotionPath
-    // dropping a path all on or behind the camera).
+    // placed, but neither its masks nor any of its path can be seen, so a
+    // click on the picture plays rather than take hold of what is not seen.
     let behind = placed(json!({"three_d": true, "z": -2.0, "path": "0,0 0.5,0"}))
         .expect("placed by its path's map");
     assert!(behind.path.shows());
@@ -1792,7 +1793,7 @@ fn a_proposal_waiting_over_a_program_leaves_the_picture_the_program_s() {
     // Nothing waits: the program shows.
     assert!(shows_program(&state(true, false), true));
     // A proposal waits over a program with clips: kerfd still plays the
-    // document, so its clips can be drawn on, as Qt's viewer drew on them.
+    // document, so its clips can still be drawn on.
     assert!(shows_program(&state(true, true), true));
     // A first cut proposed on an empty program stands in for it.
     assert!(!shows_program(&state(false, true), false));
@@ -2230,7 +2231,7 @@ fn a_preview_to_render_says_why() {
         required(Some("Blur needs a render")).reason().as_deref(),
         Some("Blur needs a render")
     );
-    // With no reason given, Qt's words.
+    // With no reason given, it still says a render is needed.
     assert_eq!(
         required(None).reason().as_deref(),
         Some("Rendered preview required")

@@ -2443,8 +2443,8 @@ impl InspectorView {
                 .into_any_element();
         }
         // More options, or longer ones: a button that opens the kit's menu
-        // of them (Qt's QMenu: the arrows, a letter to its row, Return or
-        // Space to choose, Esc closes only it). A Tab stop of its own, ringed
+        // of them (the arrows, a letter to its row, Return or Space to
+        // choose, Esc closes only it). A Tab stop of its own, ringed
         // while it has the keys; Return or Space opens the menu, the chosen
         // row lit. A press leaves the keys where they were, and a press on it
         // again puts its menu away.
@@ -3226,7 +3226,7 @@ impl FormatBank {
     /// Square, Portrait): its segment pressed, or the registry's
     /// `sequence.setFormat.169`/`.916` (⌥1, ⌥2), which the workspace runs.
     /// Nothing while kerfd is connecting or gone: the bank shows disabled
-    /// then, as Qt's was (`setEnabled(false)`).
+    /// then, since a format chosen then would never reach kerfd.
     pub fn choose(&mut self, index: usize, cx: &mut Context<Self>) {
         let Some((_, _, width, height)) = FORMATS.get(index).copied() else {
             return;
@@ -3312,7 +3312,7 @@ impl Render for FormatBank {
                         })
                         .when(selected, |segment| {
                             // Disabled, the chosen fill is a step off the
-                            // track (Qt's raised, lighter).
+                            // track, so which format it is still shows.
                             segment.bg(if enabled {
                                 theme::on()
                             } else {

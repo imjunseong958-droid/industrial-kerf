@@ -401,7 +401,7 @@ impl Finishing {
 // ------------------------------------------------------------------ preflight
 
 /// Fills the conversation's composer with `words`, to be changed before it
-/// is sent (Qt's askPrefill): a failed check's Ask Kerf, in Export's
+/// is sent: a failed check's Ask Kerf, in Export's
 /// Preflight and in Finish's QC. The window's root is to hand it to the
 /// conversation; until something on the way to the keys takes it
 /// ([`can_ask`]), neither offers Ask Kerf.
@@ -2321,7 +2321,7 @@ impl PublishWay {
         }
     }
 
-    /// What choosing it does, in the Qt editor's words.
+    /// What choosing it does.
     pub fn says(self) -> &'static str {
         match self {
             PublishWay::GitHub => "Create a GitHub repository",
@@ -2519,8 +2519,8 @@ pub fn sync_said(report: &Value, asked: bool) -> Option<String> {
     }
 }
 
-/// A sync's failure as the window keeps it (Qt's `m_syncFailure`): why the
-/// last sync failed, until one succeeds (the chip's dot and tip, its menu,
+/// A sync's failure as the window keeps it: why the last sync failed,
+/// until one succeeds (the chip's dot and tip, its menu,
 /// View ▸ Sync), and whether it stands, no sync having started since (the
 /// window's error bar and the toolbar's red line). What it last said is
 /// remembered too: Live Sync says a failure that repeats only once; one a
@@ -2613,7 +2613,8 @@ pub struct Collab {
     previous_focus: Option<FocusHandle>,
     /// Whether the question open was asked from a row of the menu, in its
     /// place: Esc and Cancel go back to the menu. One asked from the
-    /// window's menus or the palette (Qt's dialogs) just closes.
+    /// window's menus or the palette has no menu to go back to, and just
+    /// closes.
     asked_over_menu: bool,
     /// When the work under way began, for the spinner.
     busy_since: Instant,
@@ -2734,7 +2735,7 @@ impl Collab {
     }
 
     /// Why the last sync failed, while no sync has started since: the
-    /// toolbar's red line says it (Qt's standingProblem).
+    /// toolbar's red line says it.
     pub fn standing_failure(&self) -> Option<&str> {
         self.failure.standing()
     }
@@ -2747,9 +2748,9 @@ impl Collab {
     }
 
     /// Whether one of its questions (Commit…, New Branch…, Pull Request…,
-    /// Publish to GitHub…) shows, its keys in it or not: Qt asked these in
-    /// modal dialogs, so the window's Esc leaves them be and their own
-    /// Close has it (`Workspace`'s Esc intercept).
+    /// Publish to GitHub…) shows, its keys in it or not: it counts as a
+    /// dialog, so Esc closes it, by its own Close, and not what stands
+    /// behind it (`Workspace`'s Esc intercept).
     pub fn asking(&self, cx: &App) -> bool {
         matches!(self.menu, Menu::Prompt(_))
             && self.status.is_some()
@@ -2792,14 +2793,14 @@ impl Collab {
                             }
                         });
                     }
-                    // A sync is said as the Qt editor said it; what else a
-                    // person asked for (a commit, a branch) as it went.
+                    // A sync is said by what it brought and sent; what else
+                    // a person asked for (a commit, a branch) as it went.
                     let said = match self.asked.take().as_deref() {
                         Some("collab_sync") => sync_said(report, true),
                         Some(_) => Some(summary(report)),
                         None => sync_said(report, false),
                     };
-                    // Held as Qt held it (main_window.cpp's 8 s).
+                    // Held longer than most notices, there being more to read.
                     if let Some(said) = said {
                         self.notify(&said, false, Some(scene::NOTICE_LONG_HOLD), cx);
                     }
@@ -2810,7 +2811,7 @@ impl Collab {
                     let message = message.clone();
                     // Live sync says a failure once; a person asking hears it
                     // again. It is said in the window's error bar, which
-                    // stays until it is dismissed (Qt's showError).
+                    // stays until it is dismissed.
                     let asked = self.asked.take().is_some();
                     let said = self.failure.failed(&message, asked);
                     if said {
@@ -2834,7 +2835,7 @@ impl Collab {
                 self.asked = None;
                 let url = url.trim().to_owned();
                 let created = *created;
-                // Held as Qt held it (main_window.cpp's 8 s).
+                // Held longer than most notices, for its link to be read.
                 self.notify(
                     &pull_request_said(&url, created),
                     false,
@@ -2990,8 +2991,8 @@ impl Collab {
         let status = self.status.clone().unwrap_or_default();
         let start = match prompt {
             Prompt::Publish => {
-                // The folder's name, as the Qt editor took it; one with no
-                // letter GitHub takes (a Hangul name) gives the project's title.
+                // The folder's name; one with no letter GitHub takes (a
+                // Hangul name) gives the project's title.
                 let session = self.session.read(cx);
                 let folder = session
                     .project
@@ -3431,8 +3432,8 @@ impl Collab {
                     }),
             );
             items.push(row("Commit…", reason("collab.commit")).on_choose(asks(Prompt::Commit)));
-            // Switch Branch opens on the other branches, as Qt's did; with
-            // none it says so, and holds back only for what holds back a sync.
+            // Switch Branch opens on the other branches; with none it says
+            // so, and holds back only for what holds back a sync.
             let others = other_branches(status.git.branch.as_deref(), &status.git.branches);
             let switch = if others.is_empty() {
                 reason("collab.sync")
@@ -3695,7 +3696,7 @@ fn area(input: &Entity<TextInput>, window: &Window, cx: &App) -> gpui::Div {
         .child(input.clone())
 }
 
-/// What Switch Branch's submenu says with no branch but this one, as Qt's.
+/// What Switch Branch's submenu says with no branch but this one.
 pub const NO_OTHER_BRANCHES: &str = "No Other Branches";
 
 /// The branches to switch to from `current`: the others, each once, in

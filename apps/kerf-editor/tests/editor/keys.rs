@@ -456,7 +456,7 @@ fn in_code_tab_indents_and_ctrl_tab_leaves() {
         // view's.
         assert!(!tab_is_taken(&keymap, &stack(&code), true));
         assert!(!tab_is_taken(&keymap, &stack(&code), false));
-        // Any other field leaves on Tab, as the composer did in Qt.
+        // Any other field has no tab to type, so it leaves on Tab.
         assert!(first_is(&keymap, &FIELD, "tab", &ui::FocusNext));
         assert!(first_is(&keymap, &FIELD, "shift-tab", &ui::FocusPrevious));
     }
@@ -1032,7 +1032,7 @@ fn esc_stops_a_render_only_while_its_card_shows() {
 fn esc_in_the_chips_question_is_the_questions() {
     // Publish ▸ This computer, the keys on the question (not its field),
     // the band open and a render's card showing: the question's own Close
-    // has Esc, as Qt's modal dialog had it.
+    // has Esc, for the question is in front of them.
     let question = EscapeAt {
         in_dialog: true,
         rendering: true,

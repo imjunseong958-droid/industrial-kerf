@@ -470,8 +470,8 @@ fn progress(time: Time, start: Time, end: Time) -> f64 {
 mod tests {
     use super::*;
 
-    /// The table the editor's overlay of a parent's motion is to be held to; the Qt
-    /// editor's `parentsMoveAsTheCompositorMovesThem` was.
+    /// The table the editor's overlay of a parent's motion is to be held to, so what it draws
+    /// over the picture moves as the picture does.
     #[test]
     fn a_parents_motion_is_where_the_table_says() {
         type Row = (
@@ -569,13 +569,13 @@ mod tests {
         }
     }
 
-    /// The table the editor's overlays are to be held to; the Qt editor's
-    /// `clipsInDepthLandAsTheCompositorDrawsThem` was. Each row is a camera, a parent, a clip, its
-    /// picture's size and whether it is fitted, and the canvas; then a point of the picture, in
-    /// fractions of it, and where on the canvas it lands, or that no pixel shows it. A row with a path
-    /// names the clip's anchor, which the path says the place of. The parent is a null, so its `z`,
-    /// `rotate_x`, and `rotate_y` are the clip's with its own: the last rows, the first two of them
-    /// landing where a clip with those numbers itself does, further up.
+    /// The table the editor's overlays are to be held to, so they land on what they are drawn
+    /// over. Each row is a camera, a parent, a clip, its picture's size and whether it is fitted,
+    /// and the canvas; then a point of the picture, in fractions of it, and where on the canvas it
+    /// lands, or that no pixel shows it. A row with a path names the clip's anchor, which the path
+    /// says the place of. The parent is a null, so its `z`, `rotate_x`, and `rotate_y` are the
+    /// clip's with its own: the last rows, the first two of them landing where a clip with those
+    /// numbers itself does, further up.
     #[test]
     fn a_clip_in_depth_lands_where_the_table_says() {
         type Row = (

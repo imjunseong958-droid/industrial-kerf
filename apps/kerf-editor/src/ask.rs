@@ -16,10 +16,10 @@
 //! at the playhead. The request is stamped at the start of what it is
 //! about ([`Session::ask_about`]). It fades in over `FADE`, as a menu does.
 //!
-//! Scope is the kit's menu ([`ui::Menu`], Qt's QMenu): Up and Down, a
-//! letter to its row, Return or Space to choose; Esc closes only the menu,
-//! and what was typed stays. Its button is a Tab stop (Tab goes round the
-//! field, Scope and Ask only) that opens it with Return or Space.
+//! Scope is the kit's menu ([`ui::Menu`]): Up and Down, a letter to its
+//! row, Return or Space to choose; Esc closes only the menu, and what was
+//! typed stays. Its button is a Tab stop (Tab goes round the field, Scope
+//! and Ask only) that opens it with Return or Space.
 
 use crate::icons::Icon;
 use crate::input::{InputEvent, TextInput};
@@ -71,8 +71,8 @@ pub fn scope_words(scope: AskScope, clip: Option<&str>) -> String {
     }
 }
 
-/// The Scope menu's rows, as Qt's had them: "This clip · <name>" while a
-/// clip is chosen, then "Whole sequence".
+/// The Scope menu's rows: "This clip · <name>" while a clip is chosen,
+/// then "Whole sequence".
 pub fn scope_choices(clip: Option<&str>) -> Vec<(AskScope, String)> {
     let mut choices = Vec::new();
     if let Some(clip) = clip {
@@ -408,7 +408,7 @@ impl Render for AskView {
                     ),
             )
             .children(menu)
-            // It rises into place as it fades in, as Qt's popovers did.
+            // It rises into place as it fades in, as the kit's menus do.
             .with_animation(
                 "ask-popover-open",
                 crate::motion::animation(scene::FADE),

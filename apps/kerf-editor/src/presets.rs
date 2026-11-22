@@ -42,7 +42,7 @@ pub fn is_preset_file(path: &Path) -> bool {
 }
 
 /// Where Export Editing Preset writes, from the path the save dialog gave:
-/// `.kerfpreset` added to a name with none; refused, in Qt's words, for a
+/// `.kerfpreset` added to a name with none; refused, saying why, for a
 /// name with another.
 pub fn export_path(path: &Path) -> Result<PathBuf, String> {
     match path.extension().and_then(|extension| extension.to_str()) {
@@ -1343,9 +1343,9 @@ impl Render for ApplyPreset {
             .track_focus(&self.focus)
             .on_action(cx.listener(|_, _: &CloseDialog, _, cx| cx.emit(DismissEvent)))
             .on_action(cx.listener(|this, _: &AcceptDialog, _, cx| this.accept(cx)))
-            // A press on the dim around it does nothing (Qt's was modal):
-            // the media chosen for its slots stay until Esc or its own
-            // buttons close it.
+            // A press on the dim around it does nothing, so the media
+            // chosen for its slots stay until Esc or its own buttons
+            // close it.
             .w(px(APPLY_WIDTH))
             .p(px(20.0))
             .flex()

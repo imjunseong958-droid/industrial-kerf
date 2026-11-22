@@ -60,7 +60,7 @@ pub enum SidebarEvent {
         from_keys: bool,
     },
     /// A conversation was chosen, or New conversation: the window gives
-    /// the composer the keys, as Qt's did.
+    /// the composer the keys, so what is typed next is the request.
     Chosen,
     /// Another folder's conversation `id` (None: a new one) was chosen: the
     /// window has it opened in `folder`'s window once `OpenRecent`,
@@ -509,10 +509,10 @@ fn folder_name(folder: &Path) -> String {
         .unwrap_or_else(|| folder.display().to_string())
 }
 
-/// The menu of the open folder's name, as Qt's: New Conversation in it,
-/// the folders (the open one ticked, each with its path as tip), Open
-/// Folder… and New Project…, then the open folder in the file manager and
-/// its path to copy.
+/// The menu of the open folder's name: New Conversation in it, the
+/// folders (the open one ticked, each with its path as tip), Open Folder…
+/// and New Project…, then the open folder in the file manager and its
+/// path to copy.
 pub fn folder_entries(recent: &[PathBuf], open: Option<&Path>) -> Vec<MenuEntry> {
     let folders = recent_folders(recent, open);
     let mut entries: Vec<MenuEntry> = open
@@ -553,9 +553,9 @@ pub fn folder_entries(recent: &[PathBuf], open: Option<&Path>) -> Vec<MenuEntry>
     entries
 }
 
-/// Another folder's menu, as Qt's: a new conversation in it (its project
-/// opened in place of this one), open it, show it, copy its path, or take
-/// it off the sidebar, its files left alone.
+/// Another folder's menu: a new conversation in it (its project opened in
+/// place of this one), open it, show it, copy its path, or take it off the
+/// sidebar, its files left alone.
 pub fn other_folder_entries(folder: &Path) -> Vec<MenuEntry> {
     vec![
         MenuEntry::new(
@@ -954,11 +954,10 @@ fn mask_row(input: &AppMenuInput, tool: crate::stage::MaskTool) -> AppRow {
     }
 }
 
-/// The app's menu, as Qt's account menu had it: Settings…, Account…; Media
-/// and Import…; View ▸ (the panes, Follow Kerf, the mask
-/// tools, Safe Zones, Viewer Zoom ▸, Keyboard ▸, Sync ▸); where there is no
-/// menu bar, the registry's menus (File ▸ … Help ▸); Sign Out while signed
-/// in to Kerf.
+/// The app's menu: Settings…, Account…; Media and Import…; View ▸ (the
+/// panes, Follow Kerf, the mask tools, Safe Zones, Viewer Zoom ▸,
+/// Keyboard ▸, Sync ▸); where there is no menu bar, the registry's menus
+/// (File ▸ … Help ▸); Sign Out while signed in to Kerf.
 pub fn app_rows(input: &AppMenuInput) -> Vec<AppRow> {
     let mut rows = vec![
         command_row(input, "app.preferences", Some("Settings…")).icon(Icon::Gear),
@@ -1025,8 +1024,8 @@ fn view_rows(input: &AppMenuInput) -> Vec<AppRow> {
     rows
 }
 
-/// What a sync's standing says over its rows, as Qt's: the revision, then
-/// how far it is from its upstream ("Revision 22 · 1 commit to pull").
+/// What a sync's standing says over its rows: the revision, then how far
+/// it is from its upstream ("Revision 22 · 1 commit to pull").
 pub fn sync_summary(collab: Option<&Value>, revision: u64) -> String {
     let revision = format!("Revision {revision}");
     let Some(status) = collab.filter(|status| status["repository"].as_bool() == Some(true)) else {
@@ -1069,7 +1068,7 @@ pub fn with_sync_failure(collab: Option<&Value>, failure: Option<&str>) -> Optio
     Some(status)
 }
 
-/// What the Sync submenu warns of under its summary, as Qt's: "A merge is
+/// What the Sync submenu warns of under its summary: "A merge is
 /// unfinished; finish it with git" while one is, else "Sync failed: <why>"
 /// after a sync that failed; none when nothing went wrong.
 pub fn sync_problem(collab: Option<&Value>) -> Option<String> {
@@ -1091,8 +1090,8 @@ fn sync_rows(input: &AppMenuInput) -> Vec<AppRow> {
     let status = input
         .collab
         .filter(|status| status["repository"].as_bool() == Some(true));
-    // What went wrong, when something did (Qt's buildSyncMenu): an
-    // unfinished merge, else why the last sync failed.
+    // What went wrong, when something did: an unfinished merge, else why
+    // the last sync failed.
     if let Some(problem) = sync_problem(input.collab) {
         rows.push(AppRow {
             icon: Some(Icon::Dot),
@@ -1152,8 +1151,8 @@ fn registry_rows(input: &AppMenuInput, menu: &str) -> Vec<AppRow> {
     let mut group = None;
     for command in input.commands.iter().filter(|command| command.menu == menu) {
         let mut row = command_row(input, &command.id, None);
-        // Switch Branch needs a branch: it opens on the others, as Qt's
-        // did, greyed with why while there are none to go to.
+        // Switch Branch needs a branch: it opens on the others, greyed
+        // with why while there are none to go to.
         if command.id == "collab.switchBranch" {
             row = AppRow {
                 rows: other_branches(input),
@@ -1179,8 +1178,8 @@ fn registry_rows(input: &AppMenuInput, menu: &str) -> Vec<AppRow> {
 }
 
 /// Collaborate ▸ Switch Branch: the project's branches other than the one
-/// it is on, each switching to it (Qt's buildBranchMenu); "No Other
-/// Branches" when there are none.
+/// it is on, each switching to it; "No Other Branches" when there are
+/// none.
 fn other_branches(input: &AppMenuInput) -> Vec<AppRow> {
     let current = input
         .collab
@@ -1326,8 +1325,8 @@ pub const ITEM: &str = "SidebarItem";
 /// A conversation's row, where F2 renames it and Delete or Backspace
 /// deletes it (after asking).
 pub const ROW: &str = "SidebarRow";
-/// One of its menus, open: the arrows move in it (Tab and Shift-Tab too,
-/// as in Qt's menus), Enter or Space chooses, Esc closes it.
+/// One of its menus, open: the arrows move in it (Tab and Shift-Tab too),
+/// Enter or Space chooses, Esc closes it.
 pub const MENU: &str = "SidebarMenu";
 /// What a conversation's row answers in: [`ITEM`] and [`ROW`] at once.
 pub const ROW_KEYS: &str = "SidebarItem SidebarRow";
@@ -1385,8 +1384,8 @@ pub fn is_second_press(last_click: Option<Instant>, now: Instant, click_count: u
         || last_click.is_some_and(|at| now.saturating_duration_since(at) < scene::DOUBLE_CLICK)
 }
 
-/// How many times the light over a working title is drawn in a pass
-/// (Qt's titleShimmerSteps: 30 a second, the title alone).
+/// How many times the light over a working title is drawn in a pass:
+/// 30 a second, smooth to the eye without the sidebar drawn every frame.
 pub use crate::theme::motion::TITLE_SHIMMER_STEPS;
 
 /// `phase` (0..1 of a pass) held to the step it is in.
@@ -1436,8 +1435,8 @@ pub struct SidebarView {
     menu_focus: FocusHandle,
     menu_return: Option<FocusHandle>,
     /// Where a right-click opened the menu open, in the window: it opens
-    /// at the pointer there, as Qt's did. None: anchored under its row
-    /// (its ⋯ button, the keys).
+    /// at the pointer there, as a context menu does. None: anchored under
+    /// its row (its ⋯ button, the keys).
     menu_at: Option<Point<Pixels>>,
     /// Keys to give back once the menu that had them is gone.
     refocus: Option<FocusHandle>,
@@ -2777,8 +2776,8 @@ impl SidebarView {
     /// are read away from the window (a folder can keep many long
     /// conversations), and show once they are, unless it was folded again.
     ///
-    /// The fold is kept as it was left, for the next launch, as Qt's
-    /// sidebar kept it (`sidebar/folded`): for the folders still listed only.
+    /// The fold is kept as it was left, so the next launch shows the
+    /// sidebar the same way: for the folders still listed only.
     fn fold(&mut self, folder: &Path, fold: Option<bool>, cx: &mut Context<Self>) {
         let folded = !self.unfolded.contains_key(folder);
         let now_folded = fold.unwrap_or(!folded);
@@ -2817,8 +2816,9 @@ impl SidebarView {
         .detach();
     }
 
-    /// The other folders left unfolded by hand (here, or in the Qt editor
-    /// before it), unfolded again as the sidebar is built.
+    /// The other folders left unfolded by hand (here, or in the editor
+    /// before 0.1.5 (Qt), whose folds carry over so they open as they were
+    /// left), unfolded again as the sidebar is built.
     fn unfold_as_left(&mut self, cx: &mut Context<Self>) {
         let session = self.session.read(cx);
         let current = session.project.clone();
@@ -3164,9 +3164,9 @@ impl Render for SidebarView {
                     .flex()
                     .items_center()
                     // On macOS outside full screen the window buttons sit
-                    // here, over the sidebar (Qt's toolbar_wiring), so
-                    // Hide sidebar starts past them, and the row's empty
-                    // stretch moves and zooms the window.
+                    // here, over the sidebar, so Hide sidebar starts
+                    // past them, and the row's empty stretch moves and
+                    // zooms the window.
                     .pl(px(crate::chrome::title_bar_lead(window)))
                     .pr(px(8.0))
                     .gap(px(4.0))

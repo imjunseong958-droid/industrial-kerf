@@ -68,7 +68,7 @@ pub struct Making {
     pub since: Instant,
 }
 
-/// What a making's words say while it runs, as Qt's status bar said them:
+/// What a making's words say while it runs:
 /// "Making take 2 of m4 from its steps…" before any step has spoken, then
 /// "Making m4: <what the step last said>". `name` is the media's name.
 pub fn making_status(name: &str, making: &Making) -> String {
@@ -270,7 +270,7 @@ pub struct Notice {
     pub error: bool,
     pub at: Instant,
     /// How long it stays, when it keeps a time of its own (a sync's
-    /// summary, its pull request's line and a cast saved, Qt's 8 s:
+    /// summary, its pull request's line and a cast saved:
     /// `theme::motion::NOTICE_LONG_HOLD`); None stays the window's
     /// (`NOTICE_HOLD`, an error `NOTICE_ERROR_HOLD`).
     pub hold: Option<Duration>,
@@ -294,12 +294,10 @@ pub struct Preview {
     pub proposal: Option<String>,
 }
 
-/// What a preview needing a render says when the bridge gives no reason
-/// (Qt's words).
+/// What a preview needing a render says when the bridge gives no reason.
 pub const PREVIEW_REQUIRED: &str = "Rendered preview required";
 
-/// How long "Preview ready" and "Live preview: …" stay, as Qt's status bar
-/// held them (4 s).
+/// How long "Preview ready" and "Live preview: …" stay.
 pub use crate::theme::motion::NOTICE_SHORT_HOLD as PREVIEW_NOTICE_HOLD;
 
 impl Preview {
@@ -323,13 +321,12 @@ impl Preview {
     }
 }
 
-/// What a `preview` event says, as Qt's status bar said it, and for how
-/// long (None: the window's `NOTICE_HOLD`, Qt's 6 s): why a rendered
-/// preview is needed ([`Preview::reason`]), "Preview ready", or "Live
-/// preview: <what it cannot match yet>" ([`PREVIEW_NOTICE_HOLD`]). A render
-/// running, one stopped or left, and one that failed (an error notice of
-/// its own, which the reason the bridge gives next takes the place of)
-/// say nothing here.
+/// What a `preview` event says, and for how long (None: the window's
+/// `NOTICE_HOLD`): why a rendered preview is needed ([`Preview::reason`]),
+/// "Preview ready", or "Live preview: <what it cannot match yet>"
+/// ([`PREVIEW_NOTICE_HOLD`]). A render running, one stopped or left, and
+/// one that failed (an error notice of its own, which the reason the
+/// bridge gives next takes the place of) say nothing here.
 pub fn preview_notice(preview: &event::Preview) -> Option<(String, Option<Duration>)> {
     let message = preview
         .message
@@ -368,8 +365,8 @@ impl NextStep {
     }
 
     /// One of `agent_next`'s steps, `{label, request}` (plain words read as
-    /// both, as Qt read either): a step with no label is none; one with no
-    /// request asks its label.
+    /// both): a step with no label is none; one with no request asks its
+    /// label.
     pub fn offered(step: &event::NextStep) -> Option<Self> {
         let (label, request) = (step.label.as_str(), step.request.as_str());
         let label = label.trim();
@@ -482,9 +479,9 @@ pub struct EditorState {
     pub cast: Option<event::Cast>,
     /// Whether the picture waits on a rendered preview: from the moment
     /// one is needed (`required`, `unavailable`) or runs (`running`) until
-    /// it plays again (`ready`, `live`), as Qt's `m_previewRequired` had
-    /// it; a render that ends unshown (`stopped`, `exited`, `failed`)
-    /// leaves the picture as it stood before ([`EditorState::picture_status`]).
+    /// it plays again (`ready`, `live`); a render that ends unshown
+    /// (`stopped`, `exited`, `failed`) leaves the picture as it stood before
+    /// ([`EditorState::picture_status`]).
     /// Play is unavailable while it does; a pause never is.
     pub preview_required: bool,
     /// What the picture kerfd plays last said of itself: `required`,
@@ -497,17 +494,16 @@ pub struct EditorState {
     /// draws it at once (the session's pump; none without a project).
     pub wake: Option<kerf_bridge::Wake>,
     /// The notice each kind of line last left ([`StatusLine`]): the next of
-    /// its kind takes its place, as a line of Qt's status bar took the
-    /// last one's.
+    /// its kind takes its place.
     said_in_place: BTreeMap<StatusLine, u64>,
     /// Activity lines that only the state knows an event leaves (a preset
     /// written), until the session takes them ([`EditorState::take_logged`]).
     logged: Vec<(&'static str, String)>,
 }
 
-/// A kind of notice that, as Qt said it on its one status line, takes the
-/// place of the last of its kind: what the preview says, and the mode the
-/// composer was set to.
+/// A kind of notice that takes the place of the last of its kind, so what
+/// shows is what holds now, not what held before it: what the preview
+/// says, and the mode the composer was set to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum StatusLine {
     Preview,
@@ -830,9 +826,8 @@ impl EditorState {
                 self.dropped = *dropped;
                 Change::Clock
             }
-            // With kerfd gone, nothing plays and no caption shows (Qt's
-            // `m_playing = m_connected && playing`, its caption cleared):
-            // what is left of its playback says nothing more.
+            // With kerfd gone, nothing plays and no caption shows: what is
+            // left of its playback says nothing more.
             Event::Playback { playing } => {
                 let gone = matches!(self.connection, Connection::Failed(_));
                 self.playing = !gone && *playing;
@@ -865,7 +860,7 @@ impl EditorState {
                     proposal: preview.proposal_id.clone(),
                 };
                 // Play waits from the moment a render is needed or runs
-                // until the picture plays again (Qt's `m_previewRequired`).
+                // until the picture plays again.
                 // A render that ends without showing leaves the picture as
                 // it was, and Play with it: a stop answers only `stopped`,
                 // an exit with nothing shown only `exited`, and the
@@ -896,7 +891,7 @@ impl EditorState {
                 } else if let Some((said, hold)) = preview_notice(preview) {
                     // Why a render is needed, said just as one failed, is
                     // the failure said in the bridge's words: still an
-                    // error, for Qt's 6 s.
+                    // error.
                     let failure =
                         matches!(self.preview.status.as_str(), "required" | "unavailable")
                             && self.preview_line().is_some_and(|line| line.error);
@@ -1043,7 +1038,6 @@ impl EditorState {
                     .collect();
                 self.cast = Some(cast.clone());
                 if cast.saved {
-                    // Held as Qt held it (main_window.cpp's 8 s).
                     let said = cast_saved(event);
                     self.notify_held(&said, false, Some(crate::theme::motion::NOTICE_LONG_HOLD));
                     Change::Notice
@@ -1210,10 +1204,9 @@ impl EditorState {
         live.unwrap_or_else(|| "New conversation".to_owned())
     }
 
-    /// Says `said` in place of what the last of its kind (`line`) said, as
-    /// a line of Qt's status bar took the last one's place: what a
-    /// `preview` event says ([`preview_notice`]), the mode the composer was
-    /// set to. The same words again stay where they are, held afresh.
+    /// Says `said` in place of what the last of its kind (`line`) said: what
+    /// a `preview` event says ([`preview_notice`]), the mode the composer
+    /// was set to. The same words again stay where they are, held afresh.
     pub fn say_in_place(
         &mut self,
         line: StatusLine,
@@ -1259,10 +1252,10 @@ impl EditorState {
     }
 
     /// Whether a preview can be rendered now (Render Preview): only while
-    /// the picture needs one (`required`) or plays live (`live`), as Qt's
-    /// `previewRenderable` had it; not before the bridge has said, nor while
-    /// one renders, nor once it is ready. A render that ended unshown
-    /// (`stopped`, `exited`, `failed`) goes by what the picture last said.
+    /// the picture needs one (`required`) or plays live (`live`); not before
+    /// the bridge has said, nor while one renders, nor once it is ready. A
+    /// render that ended unshown (`stopped`, `exited`, `failed`) goes by
+    /// what the picture last said.
     pub fn preview_renderable(&self) -> bool {
         let status = match self.preview.status.as_str() {
             "stopped" | "exited" | "failed" => self.picture_status.as_str(),
@@ -1273,7 +1266,7 @@ impl EditorState {
 
     /// Whether Play can run: kerfd is connected, the picture waits on no
     /// rendered preview ([`EditorState::preview_required`]), and there is
-    /// something to play (Qt's `togglePlayback`).
+    /// something to play.
     pub fn playable(&self) -> bool {
         self.connection == Connection::Connected
             && !self.preview_required
@@ -1282,8 +1275,7 @@ impl EditorState {
 
     /// What Play / Pause sends now: `pause` whenever something plays (kerfd
     /// plays on through a render started meanwhile), else `play` while Play
-    /// can run ([`EditorState::playable`]); None while it cannot, as Qt's
-    /// `togglePlayback` returned.
+    /// can run ([`EditorState::playable`]); None while it cannot.
     pub fn playback_toggle(&self) -> Option<&'static str> {
         if self.playing {
             Some("pause")
@@ -1309,8 +1301,8 @@ impl EditorState {
     }
 
     /// The Activity lines events left that only the state knows of (a
-    /// preset exported or saved, by its path, as Qt kept them), oldest
-    /// first; taken, they are gone.
+    /// preset exported or saved, by its path), oldest first; taken, they
+    /// are gone.
     pub fn take_logged(&mut self) -> Vec<(&'static str, String)> {
         std::mem::take(&mut self.logged)
     }
@@ -1320,9 +1312,9 @@ impl EditorState {
     }
 
     /// Says `text` as [`EditorState::notify`] does, for `hold` when it
-    /// keeps a time of its own (None: the window's). Qt's sync summary, its
-    /// pull request's line and a cast saved stayed 8 s
-    /// (`theme::motion::NOTICE_LONG_HOLD`).
+    /// keeps a time of its own (None: the window's): a sync's summary, its
+    /// pull request's line and a cast saved keep
+    /// `theme::motion::NOTICE_LONG_HOLD`.
     pub fn notify_held(&mut self, text: &str, error: bool, hold: Option<Duration>) {
         // The same words again, at once, say nothing new.
         if self

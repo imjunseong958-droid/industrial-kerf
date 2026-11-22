@@ -56,8 +56,7 @@ impl Arguments {
 
     /// A run that says nothing on its own at launch (no crash notice, no
     /// question to GitHub) and neither hands links over nor takes them: a
-    /// smoke run, or one that renders a preview, as the Qt editor's
-    /// `!smoke && !renderPreview` had it.
+    /// smoke run, or one that renders a preview.
     fn quiet(&self) -> bool {
         self.smoke() || self.render_preview
     }
@@ -168,7 +167,8 @@ fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
     kerf_bridge::crash_install();
     motion::init_from_env();
-    // Before anything reads them: the Qt editor's settings, the first time.
+    // Before anything reads them, the first time: the settings the editor
+    // before 0.1.5 (Qt) kept, so an update loses none of them.
     if !settings_given || arguments.settings_dir.is_some() {
         let taken = prefs::import_qt_once(arguments.settings_dir.as_deref());
         if !taken.is_empty() {
@@ -296,8 +296,6 @@ fn main() {
         .detach();
         cx.activate(true);
         if smoke {
-            // A capture with no time of its own quits as the Qt editor's did,
-            // its window grabbed as it does.
             let after = quit_after.unwrap_or(Duration::from_millis(500));
             match screenshot {
                 Some(file) => app::screenshot_then_quit(file, after, cx),

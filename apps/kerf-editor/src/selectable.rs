@@ -1,5 +1,5 @@
-//! Words that can be chosen with the pointer, as Qt's labels let a request
-//! and an answer be: a drag chooses from where it went down to where the
+//! Words that can be chosen with the pointer, so a request or an answer
+//! can be copied: a drag chooses from where it went down to where the
 //! pointer is, a double-click a word, a triple-click a line, and a press
 //! with Shift stretches what is chosen to it. What is chosen is washed in
 //! the accent; ⌘C (Ctrl+C) copies it ([`Selections::copied`], which the

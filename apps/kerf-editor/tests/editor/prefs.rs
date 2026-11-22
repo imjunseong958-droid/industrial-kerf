@@ -500,10 +500,11 @@ fn a_shots_cards_and_its_workflows_are_kept_apart() {
     assert_eq!(read.graph_places_of(&harbour)["model"], (-8.0, 2.0));
 }
 
-// ---------------------------------------------------------------- the Qt editor's QVariants
+// ------------------------------------- what the editor before 0.1.5 (Qt) kept as QVariants
 
-/// What Qt 6.12's QSettings wrote (PyQt6, `QSettings(…, IniFormat)`): the
-/// keys the Qt editor kept as QVariants, and the plain `@` forms.
+/// What Qt 6.12's QSettings wrote for the editor before 0.1.5 (PyQt6,
+/// `QSettings(…, IniFormat)`), which this editor takes up once: the keys
+/// that editor kept as QVariants, and the plain `@` forms.
 const QT_INI: &str = r#"[graph]
 placed\b2fa61f66204c6a5=@Variant(\0\0\0\b\0\0\0\x2\0\0\0\n\0m\0o\0\x64\0\x65\0l\0\0\0\x1a@r\xc0\0\0\0\0\0@\x1d\0\0\0\0\0\0\0\0\0\x4\0n\0\x31\0\0\0\x1a@)\0\0\0\0\0\0\xc0\x44\0\0\0\0\0\0)
 
@@ -552,7 +553,8 @@ proptest! {
         if let Some(offset) = offset {
             bytes.extend_from_slice(&offset.to_be_bytes());
         }
-        // Qt's: a time past the day's end is its midnight; a null day none.
+        // As Qt reads it back, so the time is the one the editor before 0.1.5
+        // saw: a time past the day's end is its midnight; a null day none.
         let time = if ms < 86_400_000 { i128::from(ms) } else { 0 };
         let at = (i128::from(day) - 2_440_588) * 86_400_000 + time
             - i128::from(offset.unwrap_or(0)) * 1000;
@@ -621,7 +623,8 @@ fn a_folder_folded_by_hand_is_kept_by_its_folder() {
     assert_eq!(read.folder_folded(Path::new("/films/atlas")), Some(false));
     assert_eq!(read.folder_folded(Path::new("/films/sea")), Some(true));
     std::fs::remove_dir_all(&folder).unwrap();
-    // The Qt editor's folds, taken up, are found the same way.
+    // The folds of the editor before 0.1.5 (Qt), taken up, are found the
+    // same way, so its folders open as they were.
     let mut prefs = Prefs::default();
     import_qt(&qt_settings_ini(QT_INI), &mut prefs);
     assert_eq!(prefs.folder_folded(Path::new("/films/atlas")), Some(true));

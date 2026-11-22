@@ -54,7 +54,7 @@ gpui::actions!(kerf, [ClearRecent, RecentMissing, NoRecent]);
 // branch but this one; greyed the same way.
 gpui::actions!(kerf, [Unavailable, NoOtherBranches]);
 
-// The macOS application menu's own rows, as Qt's Cocoa menu had them:
+// The macOS application menu's own rows, as every Mac app has them:
 // HideApp hides Industrial Kerf (⌘H), HideOtherApps the other applications
 // (⌥⌘H), ShowAllApps shows them again ([`keymap::answer_app_menu`]).
 gpui::actions!(kerf, [HideApp, HideOtherApps, ShowAllApps]);

@@ -15,7 +15,8 @@
 //! file is as it was. A file that does not read is said here too, with
 //! nothing to change or save, so that Save never writes over what it holds.
 //! Return is Save, the default button, once no field is typed in; in a
-//! field it ends the cell, as Qt's table did ([`cast_return`]).
+//! field it ends the cell, so a row is not saved half typed
+//! ([`cast_return`]).
 
 use crate::launcher::field;
 use crate::session::{BridgeEvent, Session};
@@ -50,7 +51,7 @@ const UNREADABLE: &str =
     "cast.kerfcast does not read, so it cannot be changed here. Mend it, then open Cast and Styles… again.";
 
 /// Esc closes the dialog before the window's own Esc has it; Return,
-/// with no field typed in, is Save, the dialog's default button (Qt's).
+/// with no field typed in, is Save, the dialog's default button.
 fn bind_keys(cx: &mut App) {
     if !crate::settings::escape_bound(cx, &CloseCast) {
         cx.bind_keys([
@@ -61,8 +62,8 @@ fn bind_keys(cx: &mut App) {
 }
 
 /// What Return does in Cast and Styles, a field typed in (`in_field`) or
-/// not: Qt's table took the first Return as the end of the cell being
-/// typed in, and only one with no cell being typed in pressed Save.
+/// not: the first Return ends the cell being typed in, and only one with
+/// no cell being typed in presses Save.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CastReturn {
     /// The cell is done: the keys go back to the dialog, the row chosen.
@@ -221,10 +222,9 @@ pub enum Heard {
     Failed { message: String, stage: Stage },
 }
 
-/// What Cast and Styles…, standing at `stage`, does with `event`. Qt's
-/// dialog opened only on a `cast` event; here it is open while kerfd
-/// reads, and a read that fails leaves it [`Stage::Unreadable`] rather
-/// than empty and ready to save over the file.
+/// What Cast and Styles…, standing at `stage`, does with `event`. It is
+/// open while kerfd reads, and a read that fails leaves it
+/// [`Stage::Unreadable`] rather than empty and ready to save over the file.
 pub fn heard(stage: Stage, event: &Event) -> Heard {
     match event {
         Event::Cast(cast) => {

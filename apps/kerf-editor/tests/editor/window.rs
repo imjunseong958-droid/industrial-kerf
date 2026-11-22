@@ -381,7 +381,7 @@ fn a_vertical_picture_leaves_the_timeline_less_than_a_wide_one() {
     let (height, width) = (952.0, 864.0);
     let wide = timeline_split(height, 0.0, width, 16.0 / 9.0);
     let vertical = timeline_split(height, 0.0, width, 9.0 / 16.0);
-    // Under a wide picture Qt's 56%, the transport counted in.
+    // Under a wide picture 56% of the height, the transport counted in.
     let qt_wide = height * layout::TIMELINE_WIDE_SHARE;
     assert!((wide + layout::TRANSPORT - qt_wide).abs() < 0.5, "{wide}");
     let qt_vertical = height * layout::TIMELINE_UPRIGHT_SHARE;
@@ -692,7 +692,7 @@ fn view_sync_says_why_the_last_sync_failed_until_one_succeeds() {
     assert_eq!(sync_problem(Some(&synced)), None);
     // No standing heard yet: nothing to say it under.
     assert_eq!(with_sync_failure(None, Some("no")), None);
-    // An unfinished merge is said first, as Qt's.
+    // An unfinished merge is said first: no sync goes until it is finished.
     let mut conflicted = failed.clone();
     conflicted["conflicted"] = json!(true);
     assert_eq!(
@@ -1554,7 +1554,8 @@ fn a_first_window_fills_a_screen_too_small_for_it() {
         assert!(inside(back, shown));
         assert!((x - (width - w) / 2.0).abs() < 1e-3 && (y - (height - h) / 2.0).abs() < 1e-3);
     }
-    // Too short only: still filled, as wide as Qt's where that fits.
+    // Too short only: still filled, put back as wide as a first window where
+    // that fits.
     let WindowBounds::Maximized(back) =
         window_place(None, None, Some(screen(0.0, 0.0, 1920.0, 1000.0)))
     else {
@@ -1585,7 +1586,7 @@ fn a_size_asked_is_kept_and_starts_on_the_screen() {
 
 proptest! {
     /// Following no window, the window (or where it is put back to) is
-    /// on the screen; windowed only at Qt's size with the room kept, else
+    /// on the screen; windowed only at `layout::WINDOW` with the room kept, else
     /// filling the screen.
     #[test]
     fn a_first_window_is_on_the_screen(

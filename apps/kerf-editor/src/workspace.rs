@@ -317,7 +317,8 @@ impl Workspace {
             }),
             // A failed sync is said in the error bar until it is dismissed
             // or a later sync starts or succeeds; the toolbar's line says
-            // it meanwhile, and after a Dismiss until then (Qt's).
+            // it meanwhile, and after a Dismiss until then, so a sync that
+            // failed is not forgotten once its bar is put away.
             cx.subscribe(
                 &collab,
                 |this, _, event: &crate::finish::CollabEvent, cx| this.collab_event(event, cx),
@@ -488,8 +489,8 @@ impl Workspace {
         let focus_handle = cx.focus_handle();
         // A press on what takes no keys (the conversation's empty room, a
         // chip, a label) gives them to the window's own box: they settle
-        // again, on the timeline while it shows, as Qt's widgets that took
-        // no focus left them there.
+        // again, on the timeline while it shows, so its keys still work
+        // after the press.
         subscriptions.push(cx.on_focus(&focus_handle, window, |this, _, cx| this.settle_soon(cx)));
         window.focus(&focus_handle);
         Self {
@@ -562,13 +563,13 @@ impl Workspace {
             && self.session.read(cx).state.connection == Connection::Connected
     }
 
-    /// Settles the keys where they belong (Qt's settleFocus): on the
-    /// timeline while the panel shows it, since its keys (Space, Home and
-    /// End, the arrows, S, Delete, M, the tools) work only from it; never
-    /// away from a field being typed in, a menu, or what is open over the
-    /// window. A region folded away gives back the keys it held. Called as
-    /// the window first comes to the front, as what is over it or the Media
-    /// band closes, when Esc leaves a field, and when nothing holds them.
+    /// Settles the keys where they belong: on the timeline while the panel
+    /// shows it, since its keys (Space, Home and End, the arrows, S, Delete, M,
+    /// the tools) work only from it; never away from a field being typed in, a
+    /// menu, or what is open over the window. A region folded away gives back
+    /// the keys it held. Called as the window first comes to the front, as what
+    /// is over it or the Media band closes, when Esc leaves a field, and when
+    /// nothing holds them.
     pub fn settle_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.modal.is_some() {
             return;
@@ -672,7 +673,7 @@ impl Workspace {
     /// Why no mask tool can be taken out now, as the picture says it; None
     /// while one is out, or the chosen clip is a picture clip the picture
     /// places where it can be seen, on the program shown
-    /// ([`StageView::can_draw`], Qt's invertible placement).
+    /// ([`StageView::can_draw`]).
     fn mask_reason(&self, cx: &App) -> Option<&'static str> {
         let stage = self.stage.read(cx);
         if stage.mask_tool().is_some() {
@@ -852,9 +853,9 @@ impl Workspace {
                     return;
                 }
                 // Changing a conversation failed (renaming, archiving,
-                // deleting, opening it): the notice says so, for Qt's 6 s,
-                // and the conversations are listed again, so what was shown
-                // at once goes back to what is kept (main_window_chat.cpp).
+                // deleting, opening it): the notice says so, for
+                // `scene::NOTICE_HOLD`, and the conversations are listed
+                // again, so what was shown at once goes back to what is kept.
                 if command == "conversation" {
                     self.session.update(cx, |session, cx| {
                         let said = session
@@ -1003,11 +1004,11 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Going home: Kerf rendered the whole cut itself in the turn that
-    /// ended, so the picture shrinks into the project's row in the sidebar
-    /// and the panel goes, the conversation taking the room back, as Qt's
-    /// goHome. Not under Reduce Motion (nothing moves; the panel stays), nor
-    /// with no picture showing or the sidebar away (no row to go into).
+    /// Going home: Kerf rendered the whole cut itself in the turn that ended,
+    /// so the picture shrinks into the project's row in the sidebar and the
+    /// panel goes, the conversation taking the room back. Not under Reduce
+    /// Motion (nothing moves; the panel stays), nor with no picture showing or
+    /// the sidebar away (no row to go into).
     fn go_home(&mut self, cx: &mut Context<Self>) {
         if motion::reduced()
             || !self.sidebar_open
@@ -1045,7 +1046,7 @@ impl Workspace {
         self.flights.push(flight);
         // The panel goes as the picture does, and stays gone: the snapshot
         // the turn's end brings (and any after it) does not open it again,
-        // as Qt's panes followed what came only once. Asked for, it comes.
+        // so it does not come back the moment it went. Asked for, it comes.
         self.panel_open = false;
         self.panel_by_hand = true;
         self.panel_shown.go(0.0, scene::STAGE);
@@ -1660,8 +1661,8 @@ impl Workspace {
         cx.notify();
     }
 
-    /// The panel's button: both the picture and the timeline come in (Qt's
-    /// setPanelOpen), or the panel goes with whatever it showed.
+    /// The panel's button: both the picture and the timeline come in, or
+    /// the panel goes with whatever it showed.
     pub fn set_panel(&mut self, open: bool, cx: &mut Context<Self>) {
         if open {
             self.open_panel(true, true, scene::PANEL, cx);
@@ -1682,8 +1683,8 @@ impl Workspace {
     }
 
     /// Opens the panel over `duration` with what is asked for in it: with
-    /// the panel closed only that comes in, and has the whole panel (Qt's
-    /// revealPanel); open already, it joins what shows.
+    /// the panel closed only that comes in, and has the whole panel; open
+    /// already, it joins what shows.
     fn open_panel(
         &mut self,
         picture: bool,
@@ -1976,7 +1977,7 @@ impl Workspace {
     }
 
     /// Opens `project` in a window of its own with this window's kerfd,
-    /// and closes this one: another project takes its place, as in Qt.
+    /// and closes this one: another project takes its place.
     /// This window's own project stays open.
     fn replace_with(
         &mut self,
@@ -2042,7 +2043,7 @@ impl Workspace {
                         let _ = handle.update(cx, |_, window, _| window.remove_window());
                     }
                     // Given up: this window comes back and the launcher's
-                    // goes, as Qt's modal launcher's reject did. With this
+                    // goes, leaving the person where they were. With this
                     // window closed meanwhile, the launcher stays, the only
                     // window left.
                     crate::launcher::LauncherEvent::Cancel => {
@@ -2102,7 +2103,8 @@ impl Workspace {
     }
 
     /// Edit ▸ Focus Region…: its dialog over the window for the chosen
-    /// picture clip; while a proposal waits, Qt's word that it comes first.
+    /// picture clip; while a proposal waits, a word that it is to be
+    /// reviewed first.
     fn focus_region(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.modal_gives_way() {
             return;
@@ -2242,7 +2244,7 @@ impl Workspace {
                 .chat
                 .update(cx, |chat, cx| chat.focus_composer(window, cx)),
             // Ask Kerf…: its popover over the chosen clip, else over the
-            // timeline at the playhead (Qt's askAboutSelection).
+            // timeline at the playhead.
             "ai.ask" => {
                 let anchor = self.ask_anchor(window, cx);
                 self.chat
@@ -2253,8 +2255,8 @@ impl Workspace {
             // The launcher, in a window of its own; what it opens takes this one's place.
             "file.newProject" => self.new_project(window, cx),
             // The quality chosen in Export's menu, full size or a preview,
-            // where kerfd puts it (Qt's File ▸ Export…); the toolbar's
-            // Export renders it into deliveries/ (`ExportChosen`).
+            // where kerfd puts it; the toolbar's Export renders it into
+            // deliveries/ (`ExportChosen`).
             "file.export" => session.update(cx, |session, _| session.export_file()),
             "export.master" => session.update(cx, |session, _| {
                 session.deliver(Quality::Master.wire());
@@ -2411,11 +2413,10 @@ impl Workspace {
             }
             // Edit ▸ Focus Region…: its dialog over the window.
             "clip.focusRegion" => self.focus_region(window, cx),
-            // What the sync needs words for asks for them first, as Qt did,
-            // in the branch chip's menu (Publish's ways, a pull request's
-            // description); Switch Branch opens it on the branches. Until
-            // the project's Git status is known, a line of words is asked
-            // for over the window.
+            // What the sync needs words for asks for them first, in the branch
+            // chip's menu (Publish's ways, a pull request's description);
+            // Switch Branch opens it on the branches. Until the project's Git
+            // status is known, a line of words is asked for over the window.
             "collab.commit"
             | "collab.newBranch"
             | "collab.pullRequest"
@@ -2529,8 +2530,8 @@ impl Workspace {
                 || self.sidebar.read(cx).menu_open()
                 || self.chat.read(cx).menu_open(),
             in_field: has(crate::input::CONTEXT),
-            // The chip's questions were Qt's modal dialogs: their own Close
-            // has Esc, keys in them or not.
+            // The chip's questions count as dialogs: their own Close has
+            // Esc, keys in them or not.
             in_dialog: self.modal.is_some()
                 || self.export.is_some()
                 || ui::panel_of(stack).is_some()
@@ -2544,8 +2545,8 @@ impl Workspace {
     }
 
     /// Stops the preview rendering as the render card's Stop does: its card
-    /// goes at once, done with until that render ends, as Qt's
-    /// `AgentHud::stop` hid it ([`StageView::stop_render`]).
+    /// goes at once, done with until that render ends
+    /// ([`StageView::stop_render`]).
     fn stop_render(&mut self, cx: &mut Context<Self>) {
         self.stage.update(cx, |stage, cx| stage.stop_render(cx));
     }
@@ -2694,7 +2695,7 @@ impl Workspace {
         let project = session.project_name();
         // The title is the open conversation's name, the project after it;
         // with none open, "New conversation" (or the first line of the
-        // request under way), as Qt's.
+        // request under way).
         let conversation = session.conversation.as_ref().and_then(|id| {
             session
                 .state
@@ -3607,9 +3608,9 @@ impl Render for Workspace {
         let viewport = window.viewport_size();
         let (window_width, window_height) = (f32::from(viewport.width), f32::from(viewport.height));
         let sidebar_width = self.sidebar_width(self.session.read(cx));
-        // In a window too narrow for it, the sidebar gives way (Qt's
-        // sidebarWindowLeast), and the toolbar has its menu. Given way, it
-        // is put away: its titles' light rests.
+        // In a window too narrow for it, the sidebar gives way, and the
+        // toolbar has its menu. Given way, it is put away: its titles'
+        // light rests.
         let gives_way = window_width < layout::SIDEBAR_WINDOW_LEAST;
         if gives_way != self.sidebar_gives_way {
             let shown = self.sidebar_open && !gives_way;
@@ -3733,8 +3734,8 @@ impl Render for Workspace {
                     this.reveal_picture(cx)
                 }),
             )
-            // ⇧R ⇧E ⇧P wherever the window has the keys, as Qt's View menu
-            // had them: a mask tool on the chosen picture clip.
+            // ⇧R ⇧E ⇧P wherever the window has the keys: a mask tool on the
+            // chosen picture clip.
             .on_action(
                 cx.listener(|this, _: &crate::stage::RectangleMask, window, cx| {
                     this.toggle_mask_tool(crate::stage::MaskTool::Rectangle, window, cx)
@@ -3797,7 +3798,8 @@ impl Render for Workspace {
                 }),
             )
             // Ask Kerf on a failed check (Finish's QC, Export's Preflight):
-            // its words wait in the composer, as Qt's askPrefill.
+            // its words wait in the composer, to be changed before they
+            // are sent.
             .on_action(
                 cx.listener(|this, action: &crate::finish::AskKerf, window, cx| {
                     let words = action.words.to_string();
@@ -3858,7 +3860,7 @@ impl Render for Workspace {
             // A press on what takes no keys (the conversation's empty room, a
             // chip, a label) leaves them with the window's own box: they
             // settle again once the press is dealt with, on the timeline
-            // while it shows, as Qt's widgets that took no focus left them.
+            // while it shows, so its keys still work after the press.
             .on_any_mouse_down(cx.listener(|_, _: &MouseDownEvent, window, cx| {
                 cx.defer_in(window, |this, window, cx| this.settle_focus(window, cx))
             }))
@@ -4091,8 +4093,8 @@ impl Render for Workspace {
 
 /// A flight as it is drawn this frame: a frame going home covers its box,
 /// rounded as the picture is; a clip's poster covers its box with a ring of
-/// Kerf's ink round it and its name at its foot, as Qt's; the picture
-/// growing or going back is shown whole on black, as the stage shows it.
+/// Kerf's ink round it and its name at its foot; the picture growing or going
+/// back is shown whole on black, as the stage shows it.
 fn flown(drawn: Drawn) -> AnyElement {
     let Drawn {
         bounds,
@@ -4188,11 +4190,10 @@ fn now_seconds() -> i64 {
         .unwrap_or(0)
 }
 
-/// How long ago `then` was at `now` (seconds since 1970), as Qt's
-/// editedAgo said it: "just now", "4 min ago", "2 h ago" the same day,
-/// "yesterday", "3 days ago", then the date ("4 Mar 2026"). Days, and the
-/// date, are the person's own: on the calendar of the system's time zone,
-/// as Qt's toLocalTime had them ([`edited_ago_in`]).
+/// How long ago `then` was at `now` (seconds since 1970): "just now",
+/// "4 min ago", "2 h ago" the same day, "yesterday", "3 days ago", then the
+/// date ("4 Mar 2026"). Days, and the date, are the person's own: on the
+/// calendar of the system's time zone ([`edited_ago_in`]).
 pub fn edited_ago(then: i64, now: i64) -> String {
     edited_ago_in(then, now, &jiff::tz::TimeZone::system())
 }
@@ -4281,9 +4282,9 @@ fn civil(days: i64) -> (i64, i64, i64) {
     (year_of_era + era * 400 + i64::from(month <= 2), month, day)
 }
 
-/// The toolbar title's tooltip, as Qt's: when the project was edited and
-/// at which revision ("Edited 2 min ago · rev 22", "rev 22" with no time),
-/// after the project and its sequence (`window_title`) when the title is a
+/// The toolbar title's tooltip: when the project was edited and at which
+/// revision ("Edited 2 min ago · rev 22", "rev 22" with no time), after the
+/// project and its sequence (`window_title`) when the title is a
 /// conversation's.
 pub fn title_tip(
     window_title: &str,
@@ -4303,10 +4304,10 @@ pub fn title_tip(
     }
 }
 
-/// What the toolbar says renders, as Qt's: the newest export in the queue,
-/// a running one before a queued one ("Draft export · 42%", "Master export
-/// · 0%" while it waits, or the job's name), else the preview rendering
-/// ("Rendering preview · 42%"). None when nothing does.
+/// What the toolbar says renders: the newest export in the queue, a running one
+/// before a queued one ("Draft export · 42%", "Master export · 0%" while it
+/// waits, or the job's name), else the preview rendering ("Rendering preview ·
+/// 42%"). None when nothing does.
 pub fn running_words(
     jobs: &[crate::model::RenderJob],
     preview: &crate::store::Preview,
@@ -4380,11 +4381,10 @@ pub enum KeysGo {
     Stay,
 }
 
-/// Where the keys go as the window settles them, as Qt's settleFocus had
-/// them: to the timeline while it is in view (`timeline_in_view`), unless
-/// someone is typing, choosing in a menu, or in a panel over the window;
-/// with no timeline in view they stay where they are, and the timeline
-/// folded away gives them back to the window.
+/// Where the keys go as the window settles them: to the timeline while it is in
+/// view (`timeline_in_view`), unless someone is typing, choosing in a menu, or
+/// in a panel over the window; with no timeline in view they stay where they
+/// are, and the timeline folded away gives them back to the window.
 pub fn settle_keys(timeline_in_view: bool, holder: Holder) -> KeysGo {
     match holder {
         Holder::Busy => KeysGo::Stay,
@@ -4431,8 +4431,8 @@ pub struct EscapeAt {
     /// The picture has the keys (a mask tool out, a mask chosen).
     pub on_picture: bool,
     /// The preview render's card shows over the picture
-    /// ([`render_card_shows`]): Qt's filter took Esc only while the card
-    /// was active and visible.
+    /// ([`render_card_shows`]): Esc stops a render only while its card is
+    /// in sight, never one the person cannot see.
     pub rendering: bool,
     /// The Media band is open.
     pub band_open: bool,
@@ -4453,11 +4453,10 @@ pub enum EscapeGoes {
     PutBandAway,
 }
 
-/// What Esc does first, as Qt's filters took it: an open menu goes first;
-/// then a preview rendering stops (not from a field, a menu or a dialog:
-/// agent_hud.cpp); then the Media band closes (not from a field, the
-/// picture or a dialog: stage_shell.cpp); else it goes on to whatever has
-/// the keys.
+/// What Esc does first: an open menu goes first; then a preview rendering
+/// stops (not from a field, a menu or a dialog, whose own Esc comes
+/// first); then the Media band closes (not from a field, the picture or a
+/// dialog); else it goes on to whatever has the keys.
 pub fn escape_goes(at: EscapeAt) -> EscapeGoes {
     if at.menu_has_keys {
         return EscapeGoes::On;
@@ -4478,7 +4477,7 @@ pub fn escape_goes(at: EscapeAt) -> EscapeGoes {
 }
 
 /// What the window says when changing a conversation (renaming,
-/// archiving, deleting or opening it) failed, as Qt's status said it.
+/// archiving, deleting or opening it) failed.
 pub fn conversation_error(message: &str) -> String {
     format!("Couldn't change the conversation · {message}")
 }
@@ -4495,7 +4494,7 @@ pub fn bar_takes_error(raw: &str, connection: &Connection) -> bool {
     raw != DISCONNECTED || matches!(connection, Connection::Connected)
 }
 
-/// A failed sync as its bar and the toolbar's line say it (Qt's words).
+/// A failed sync as its bar and the toolbar's line say it.
 pub fn sync_failed(why: &str) -> String {
     format!("Sync failed: {}", readable_error(why))
 }
@@ -4512,11 +4511,11 @@ pub struct StandingInput<'a> {
     pub sync_failure: Option<&'a str>,
 }
 
-/// What stands in the way, as the toolbar's line says it in red, in Qt's
-/// order (toolbar_wiring.cpp's standingProblem): kerfd gone ("Offline") or
-/// coming ("Connecting…"); the error bar's first line; an unfinished
-/// merge; a failed sync, after its bar is dismissed, until a later sync
-/// starts or succeeds. None with no project, or nothing in the way.
+/// What stands in the way, as the toolbar's line says it in red, the first of:
+/// kerfd gone ("Offline") or coming ("Connecting…"); the error bar's first
+/// line; an unfinished merge; a failed sync, after its bar is dismissed, until
+/// a later sync starts or succeeds. None with no project, or nothing in the
+/// way.
 pub fn standing_problem(input: &StandingInput) -> Option<String> {
     if !input.has_project {
         return None;
@@ -4624,7 +4623,7 @@ pub fn toolbar_places(leading: bool, room: f32) -> ToolbarPlaces {
 /// A toolbar button and the gap after it.
 const TOOLBAR_STEP: f32 = theme::height::H28 + 4.0;
 /// How far the stage grows over the conversation while changes are
-/// watched (Qt's reelReach).
+/// watched.
 use crate::theme::motion::REEL_REACH;
 /// Activity's width, and its column of kinds.
 const ACTIVITY_WIDTH: f32 = 380.0;
@@ -4836,7 +4835,8 @@ pub fn open_folder_with(project: PathBuf, starts: bool, kerfd: Option<PathBuf>, 
 
 /// [`open_folder_with`], in `place`: the bounds of the window it takes
 /// the place of (`window.window_bounds()`), so it opens where that one
-/// was, at its size, maximized if it was, as Qt's openEditor did.
+/// was, at its size, maximized if it was, and the window the person
+/// placed does not move.
 pub fn open_folder_in(
     project: PathBuf,
     starts: bool,
@@ -5053,7 +5053,7 @@ fn travel_then_fade(elapsed: Duration, travel: Duration, land: Duration) -> Opti
 /// picture began to grow: the stage once its stand-in has landed, over
 /// [`scene::FLIGHT_LAND`]; the timeline after it, from
 /// [`TIMELINE_LEAD`] before the picture has grown, over
-/// [`scene::SETTLE`], as Qt's veil lifted.
+/// [`scene::SETTLE`].
 pub fn grow_shows(elapsed: Duration) -> (f32, f32) {
     let after = |start: Duration, over: Duration| {
         let t = (elapsed.as_secs_f32() - start.as_secs_f32()) / over.as_secs_f32();
@@ -5173,17 +5173,16 @@ pub fn picture_in(slot: Bounds<Pixels>, aspect: f32) -> Bounds<Pixels> {
     )
 }
 
-/// How tall the timeline is under the picture in a panel `height` tall,
-/// with the Media band `band` tall between them and the stage `width` wide,
-/// split as Qt split it by the picture's shape (`aspect`, width over
-/// height): under a wide picture [`layout::TIMELINE_WIDE_SHARE`] of the
-/// height, at least [`layout::TIMELINE_WIDE_LEAST`], and what the picture
-/// cannot use at that width; under a vertical or square one
-/// [`layout::TIMELINE_UPRIGHT_SHARE`], at least
-/// [`layout::TIMELINE_UPRIGHT_LEAST`]. The band takes the timeline's top
-/// until that would leave it under [`layout::MEDIA_BAND_TIMELINE_LEAST`];
-/// then the picture gives way. The transport, which Qt's timeline carried,
-/// is under the picture here, and counts as the timeline's.
+/// How tall the timeline is under the picture in a panel `height` tall, with
+/// the Media band `band` tall between them and the stage `width` wide, split by
+/// the picture's shape (`aspect`, width over height): under a wide picture
+/// [`layout::TIMELINE_WIDE_SHARE`] of the height, at least
+/// [`layout::TIMELINE_WIDE_LEAST`], and what the picture cannot use at that
+/// width; under a vertical or square one [`layout::TIMELINE_UPRIGHT_SHARE`], at
+/// least [`layout::TIMELINE_UPRIGHT_LEAST`]. The band takes the timeline's top
+/// until that would leave it under [`layout::MEDIA_BAND_TIMELINE_LEAST`]; then
+/// the picture gives way. The transport, under the picture, counts as the
+/// timeline's.
 pub fn timeline_split(height: f32, band: f32, width: f32, aspect: f32) -> f32 {
     let height = height.max(0.0);
     let band = band.clamp(0.0, height);
@@ -5196,7 +5195,7 @@ pub fn timeline_split(height: f32, band: f32, width: f32, aspect: f32) -> f32 {
             layout::TIMELINE_UPRIGHT_LEAST,
         )
     };
-    // Qt's slot: the picture with its air, under it the timeline and its transport.
+    // The picture's slot, with its air; under it the timeline and its transport.
     let mut slot = height - (height * share).max(least).min(height);
     if wide {
         let air = (STAGE_MARGIN + STAGE_BEZEL) * 2.0;
@@ -5235,8 +5234,8 @@ pub fn panel_heights(
 const STAGE_MARGIN: f32 = 24.0;
 const STAGE_BEZEL: f32 = 8.0;
 
-/// Where a flight lands on `row` (the project's row in the sidebar), as
-/// Qt landed it: a small frame at the row's start, inside its height.
+/// Where a flight lands on `row` (the project's row in the sidebar): a
+/// small frame at the row's start, inside its height.
 pub fn landing_in(row: Bounds<Pixels>) -> Bounds<Pixels> {
     let (left, top) = scene::LANDING_INSET;
     let height = (f32::from(row.size.height) - top * 2.0).max(1.0);
@@ -5402,10 +5401,9 @@ pub struct WordsAsked {
     pub action: String,
 }
 
-/// What sync command `id` asks for, in Qt's words: Commit's message, New
-/// Branch's name, a pull request's title (from `branch`, as Qt suggested
-/// it), the GitHub repository's name (from the project's `folder`). None
-/// for a command that needs no words.
+/// What sync command `id` asks for: Commit's message, New Branch's name, a pull
+/// request's title (suggested from `branch`), the GitHub repository's name
+/// (from the project's `folder`). None for a command that needs no words.
 pub fn sync_question(id: &str, branch: &str, folder: &str) -> Option<WordsAsked> {
     let asked =
         |title: &str, detail: String, placeholder: &str, text: String, action: &str| WordsAsked {
@@ -5489,10 +5487,9 @@ pub fn sync_params(id: &str, words: &str) -> serde_json::Value {
 /// What an [`AskWords`] does, once, with the field's words when it is run.
 type AcceptHandler = Box<dyn FnOnce(&str, &mut App)>;
 
-/// Asks over the window for a line of words a command needs, as Qt's
-/// input dialogs did: its title, what it is for, the field, Cancel and the
-/// button that runs it (not while the field is empty). Esc or a press on
-/// the dim cancels; Return runs it.
+/// Asks over the window for a line of words a command needs: its title, what it
+/// is for, the field, Cancel and the button that runs it (not while the field
+/// is empty). Esc or a press on the dim cancels; Return runs it.
 pub struct AskWords {
     focus_handle: FocusHandle,
     asked: WordsAsked,

@@ -22,9 +22,9 @@
 //! The composer's chips name the folder, the model (Claude Code's chosen
 //! there) and what Kerf does without asking, that one with its mode's icon
 //! and tone ([`permission_look`]). Where nothing can be asked (no
-//! folder, kerfd gone, no key or no Kerf account) its placeholder says so in
-//! Qt's words, a hover says why, and Send is off. A request written while
-//! Kerf works keeps the playhead time it was written at.
+//! folder, kerfd gone, no key or no Kerf account) its placeholder says so,
+//! a hover says why, and Send is off. A request written while Kerf works
+//! keeps the playhead time it was written at.
 
 use crate::changes::{clip_changes, reel_plan, reel_total, signed_frames, ClipChange};
 use crate::commands::{RevealPicture, RunCommand};
@@ -267,10 +267,9 @@ pub fn join_queued(waiting: Option<&str>, text: &str) -> String {
 }
 
 /// What waits for Kerf to finish: the requests written while it works,
-/// joined as one, and the playhead time the latest of them was written at
-/// (Qt's queue took the time again with each request); while all that
-/// waits is one Ask again, also what that request went about the first
-/// time ([`Queued::push_again`]).
+/// joined as one, and the playhead time the latest of them was written at;
+/// while all that waits is one Ask again, also what that request went about
+/// the first time ([`Queued::push_again`]).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Queued(Option<Waiting>);
 
@@ -427,7 +426,7 @@ pub fn settled_words(accepted: bool, revision: Option<u64>, ago: Option<Duration
 
 /// The line over proposals that no turn of this conversation staged: who
 /// proposed the one over MCP when an agent did (the runtime's author kind
-/// `mcp`, Qt's `Author::isAgent`), else how many there are.
+/// `mcp`), else how many there are.
 pub fn strays_note(strays: &[Proposal]) -> String {
     if let [only] = strays {
         let agent = only.author.kind == "mcp";
@@ -456,9 +455,9 @@ pub fn recent_conversations<'a>(
     recent
 }
 
-/// What a new conversation offers to ask, as Qt's welcome did: Kerf's next
-/// steps (each shows its label and fills the composer with its request),
-/// else the first requests Qt offered; at most four.
+/// What a new conversation offers to ask: Kerf's next steps (each shows
+/// its label and fills the composer with its request), else three requests
+/// to start from; at most four.
 pub fn try_asking(next_steps: &[NextStep]) -> Vec<NextStep> {
     let offered: Vec<NextStep> = next_steps
         .iter()
@@ -527,18 +526,18 @@ pub fn card_turns(
 }
 
 /// What the request bubble's timecode chip says on a rest: where pressing
-/// it goes ("Go to 00:00:17:08"), as Qt's TimecodeChip said it.
+/// it goes ("Go to 00:00:17:08").
 pub fn stamp_tip(timecode: &str) -> String {
     format!("Go to {timecode}")
 }
 
 /// The proposal card's Preview, Script and version button say what they
-/// do on a rest, as Qt's card's did.
+/// do on a rest.
 pub const PREVIEW_TIP: &str = "Preview the proposal on the program";
 pub const SCRIPT_TIP: &str = "Show the script";
 pub const VERSIONS_TIP: &str = "Proposal versions";
 
-/// How long a mode chosen stays said: Qt's status line held it 3 s.
+/// How long a mode chosen stays said: 3 s, long enough to read its line.
 pub use crate::theme::motion::NOTICE_BRIEF_HOLD as MODE_HOLD;
 
 /// Says the mode `permissions` and what it means ("Auto · Edits apply, and
@@ -563,11 +562,11 @@ pub fn permission_words(permissions: Permissions) -> (&'static str, &'static str
     }
 }
 
-/// How the permission chip looks, as Qt's did (`modeIcon`, `modeTone`): a
-/// lock while each edit waits, a check while edits apply, Kerf's own mark
-/// under Auto; drawn in the accent's ink for Accept edits and the GPU's
-/// colour for Auto, so the modes where Kerf does more on its own stand
-/// out. None draws it as the other chips are drawn.
+/// How the permission chip looks: a lock while each edit waits, a check
+/// while edits apply, Kerf's own mark under Auto; drawn in the accent's ink
+/// for Accept edits and the GPU's colour for Auto, so the modes where Kerf
+/// does more on its own stand out. None draws it as the other chips are
+/// drawn.
 pub fn permission_look(permissions: Permissions) -> (Icon, Option<Rgba>) {
     match permissions {
         Permissions::Ask => (Icon::Lock, None),
@@ -592,11 +591,11 @@ pub struct Refusal {
     pub reason: String,
 }
 
-/// Why nothing can be asked now, in Qt's words: no folder open, kerfd not
-/// connected, or (while Kerf is not working) a connection that cannot take
-/// requests, `ask_reason` being the registry's reason for `ai.ask` ("Add
-/// your API key in Settings → Chat", the Kerf account's). None when a
-/// request can go.
+/// Why nothing can be asked now: no folder open, kerfd not connected, or
+/// (while Kerf is not working) a connection that cannot take requests,
+/// `ask_reason` being the registry's reason for `ai.ask` ("Add your API
+/// key in Settings → Chat", the Kerf account's). None when a request can
+/// go.
 pub fn refusal(
     has_project: bool,
     disconnected: bool,
@@ -791,7 +790,7 @@ impl ProposalBook {
     }
 }
 
-/// Whether an effect is a colour one, by its id: Qt's rule.
+/// Whether an effect is a colour one, by its id.
 fn is_colour_effect(fx: &str) -> bool {
     let id = fx.to_lowercase();
     id.starts_with("color.")
@@ -826,7 +825,7 @@ fn param_value(value: &Value) -> Option<String> {
     match value {
         Value::Number(number) => {
             let number = number.as_f64()?;
-            // Four significant figures, as Qt's 'g' wrote them.
+            // Four significant figures, short enough to read on a card.
             let magnitude = number.abs();
             let decimals = if magnitude == 0.0 {
                 0
@@ -1086,9 +1085,9 @@ pub fn signed_seconds(seconds: f64) -> String {
     format!("{}{text} s", if seconds < 0.0 { "−" } else { "+" })
 }
 
-/// A script line as a change a reader follows (Qt's describeScriptLine):
-/// what it does, to which clip by its name, and how much or where ("Trim
-/// fisher-close", "end −1.5 s"). A line not known here reads as itself.
+/// A script line as a change a reader follows: what it does, to which
+/// clip by its name, and how much or where ("Trim fisher-close", "end
+/// −1.5 s"). A line not known here reads as itself.
 /// `program` names the clips and media; `proposed` names what it adds.
 pub fn describe_script_line(
     line: &str,
@@ -1425,7 +1424,7 @@ impl ChatView {
 
     /// The menu of the conversation's words at `at`, from a right-click on
     /// run `run`: Copy what is chosen (greyed with nothing chosen) and
-    /// Select All of the run, as Qt's selectable labels had.
+    /// Select All of the run.
     fn open_words_menu(
         &mut self,
         run: SharedString,
@@ -1733,7 +1732,7 @@ impl ChatView {
 
     /// What Kerf does without asking, chosen here (the chip's menu or
     /// Shift-Tab): kept, and said with what it means in place of the mode
-    /// said last, for [`MODE_HOLD`], as Qt said it on its one status line.
+    /// said last, for [`MODE_HOLD`].
     fn set_permissions(&mut self, permissions: Permissions, cx: &mut Context<Self>) {
         self.session.update(cx, |session, cx| {
             session.prefs.permissions = permissions;
@@ -1850,8 +1849,8 @@ impl ChatView {
         }
         self.refusal = refusal(
             session.has_project(),
-            // Connecting counts as not connected, as Qt's composer was
-            // disabled until kerfd was ready.
+            // Connecting counts as not connected: a request has nowhere
+            // to go until kerfd is ready.
             session.state.connection != Connection::Connected,
             busy,
             self.ask_reason.as_deref(),
@@ -2263,7 +2262,6 @@ impl ChatView {
             .gap(px(theme::space::S4))
             .when_some(timecode.filter(|at| at.is_finite()), |column, at| {
                 let timecode = model::timecode(at, fps);
-                // Its tip says where pressing it goes, as Qt's TimecodeChip's did.
                 let tip = ui::Tip::new(stamp_tip(&timecode));
                 column.child(ui::tip_on(
                     theme::type_style(div(), text::MONO_SMALL)
@@ -3625,15 +3623,16 @@ impl ChatView {
         let open = self.menu.as_ref() == Some(&menu);
         let toggle = menu.clone();
         // A chip with a tone of its own (the permission mode's) keeps it,
-        // open or not, its icon too, as Qt's ComposerChip painted it.
+        // open or not, its icon too, so a mode where Kerf does more on its
+        // own always stands out.
         let ink = match tone {
             Some(tone) => tone,
             None if open => theme::ink(),
             None => theme::ink3(),
         };
         // Where the row is short of room the model's words are cut
-        // ("OpenAI · fake-mo…"), as Qt elided its chips'; the folder's are
-        // cut only past `FOLDER_CHIP_MOST`, and the mode is said whole.
+        // ("OpenAI · fake-mo…"); the folder's are cut only past
+        // `FOLDER_CHIP_MOST`, and the mode is said whole.
         let shrink = if menu == Menu::Model { 1.0 } else { 0.0 };
         let chip =
             theme::type_style(div(), text::META)
@@ -4028,10 +4027,10 @@ impl ChatView {
                         .flex()
                         .flex_wrap()
                         .gap(px(6.0))
-                        // A press here leaves the keys in the box, as Qt's
-                        // list of suggestions did: Run QC, offered only while
-                        // the box has them, stays under the pointer to be let
-                        // go on, and the row does not shift as it goes.
+                        // A press here leaves the keys in the box: Run QC,
+                        // offered only while the box has them, stays under
+                        // the pointer to be let go on, and the row does not
+                        // shift as it goes.
                         .on_any_mouse_down(|_, window, _| window.prevent_default())
                         .children(
                             next.into_iter()
@@ -4234,7 +4233,7 @@ fn welcome_row(
 }
 
 /// The conversation while what a proposal changed is watched: it falls
-/// back, the picture looked at (Qt's `chatBehind`).
+/// back, so the picture holds the eye.
 pub use crate::theme::motion::CHAT_BEHIND;
 
 /// The change reel's strip, to float over the picture while it plays:
@@ -4460,8 +4459,8 @@ fn fade_in(body: impl IntoElement, id: String) -> impl IntoElement {
 }
 
 /// A proposal's changed lines, its additions sage and removals brick;
-/// they can be chosen and copied as the conversation's words can (Qt's
-/// script was selectable), one line after another.
+/// they can be chosen and copied as the conversation's words can, one line
+/// after another.
 fn diff(lines: &[String], id: &str, shared: &selectable::Shared) -> impl IntoElement {
     let run: SharedString = format!("diff-{id}").into();
     div()
@@ -4498,8 +4497,7 @@ fn diff(lines: &[String], id: &str, shared: &selectable::Shared) -> impl IntoEle
 
 // ---------------------------------------------------------------- a cut's picture
 
-/// A cut card's timings (Qt's cardTurn, cardCrossfade, cardRing, cardDone)
-/// and sizes, kept in the theme.
+/// A cut card's timings and sizes, kept in the theme.
 pub use crate::theme::layout::{
     CARD_PICTURE_RING, CARD_PICTURE_TALLEST, CARD_PICTURE_WIDEST, CARD_PLAY_MARK, FOOTAGE_TILE,
 };
@@ -4613,7 +4611,7 @@ pub fn finishing(since: Duration) -> Finish {
 
 /// How a finished cut's picture is drawn `since` it was done: as
 /// [`finishing`] has it, or under Reduce Motion (`reduced`) simply as it
-/// stands at the end, at once, with no frames to wait for (Qt's `still`).
+/// stands at the end, at once, with no frames to wait for.
 pub fn finish_drawn(since: Duration, reduced: bool) -> Finish {
     finishing(if reduced { CARD_DONE } else { since })
 }
@@ -5211,7 +5209,7 @@ impl ChatView {
     }
 
     /// Where what comes from the conversation with no tile of its own
-    /// leaves from: a poster's room over the composer's middle, as Qt's.
+    /// leaves from: a poster's room over the composer's middle.
     pub fn over_composer(&self) -> Option<gpui::Bounds<gpui::Pixels>> {
         self.composer_at.get().map(over_composer)
     }
@@ -5228,7 +5226,7 @@ impl ChatView {
 
 /// Whether `bounds` lies whole inside the conversation's visible part
 /// `view` (a point either way spared): only then does a picture go into it
-/// or come out of it, as Qt's.
+/// or come out of it, so none flies to or from a place out of sight.
 pub fn in_sight(bounds: gpui::Bounds<gpui::Pixels>, view: gpui::Bounds<gpui::Pixels>) -> bool {
     let spare = px(1.0);
     bounds.left() >= view.left() - spare
@@ -5240,7 +5238,7 @@ pub fn in_sight(bounds: gpui::Bounds<gpui::Pixels>, view: gpui::Bounds<gpui::Pix
 /// Where what comes from the conversation with no tile of its own leaves
 /// from, over a composer laid out at `composer`: a poster's room,
 /// `OVER_COMPOSER` big, centred over it and `OVER_COMPOSER_RISE` above its
-/// top, as Qt's flightStart.
+/// top.
 pub fn over_composer(composer: gpui::Bounds<gpui::Pixels>) -> gpui::Bounds<gpui::Pixels> {
     let (width, height) = OVER_COMPOSER;
     gpui::Bounds::new(

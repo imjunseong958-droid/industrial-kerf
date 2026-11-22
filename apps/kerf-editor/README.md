@@ -67,8 +67,9 @@ beside itself, in the installed app on macOS, or in `target/debug` and `target/r
   than edge to edge.
 - `--render-preview` renders the project's preview once it is open, saying nothing else
   at launch.
-- `--screenshot <file>` is accepted, as the Qt editor's was, and writes nothing: take the
-  picture from outside (below).
+- `--screenshot <file>` writes a PNG of the first window as the run quits (after
+  `--quit-after-ms`, else half a second) on X11 and macOS; on Wayland and Windows it says
+  it cannot, and the picture is taken from outside (below).
 - `--graph <media>` opens that shot's graph once the project has it, with
   `--graph-node <id>` chosen in it.
 - `--serve-mcp --dir <project>` opens no window: it serves Kerf's tools over MCP on stdin
@@ -77,11 +78,12 @@ beside itself, in the installed app on macOS, or in `target/debug` and `target/r
 
 Off macOS, an editor started for `kerf://` links alone hands them to the editor already
 open, through a link inbox (a socket in the runtime folder, else a port named in the
-settings folder), and ends. The first time it runs, the editor takes up the Qt editor's
-settings (its provider, models, faces, keymap, recent projects and each project's master
-output), once.
+settings folder), and ends. The first time it runs, the editor takes up the settings the
+editor before 0.1.5 (Qt) kept (its provider, models, faces, keymap, recent projects and
+each project's master output), once, so an update loses none of them.
 
-The editor cannot read back its own window, so a picture of it is taken from outside.
+Where `--screenshot` cannot (Wayland, Windows), or to catch the window mid-run, a picture
+of it is taken from outside.
 On Linux with no display, on a virtual X server, which needs the Composite extension or
 the Vulkan frames come out black, with ImageMagick's `import` and `xdotool`:
 

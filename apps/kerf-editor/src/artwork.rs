@@ -1,7 +1,7 @@
 //! What each media looks and sounds like, for views to paint: a poster (a
 //! representative frame), a filmstrip (frames along the source, at a small
 //! height) and its sound's peaks (the lowest and highest sample and the RMS
-//! of every 5 ms, with coarser levels), as Qt's `MediaArtwork` made them.
+//! of every 5 ms, with coarser levels).
 //!
 //! FFmpeg makes them on worker threads, never on the window's: posters
 //! first so the Media band fills fast, then peaks, then filmstrips, which

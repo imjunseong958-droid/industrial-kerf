@@ -130,7 +130,7 @@ pub fn warn() -> Rgba {
 /// The colours a marker on the ruler can be: the nine names a document
 /// gives its markers, each its own colour, every one reading at 3:1 or
 /// more on the ruler and the lanes ([`contrast`]). A marker with no colour,
-/// or one of no name here, is green, as Qt drew it.
+/// or one of no name here, is green.
 pub mod marker {
     use gpui::{rgb, Rgba};
 
@@ -233,7 +233,7 @@ pub mod activity {
     }
 }
 
-/// A sound's waveform, as Qt drew it: its peaks light, its loudness (RMS)
+/// A sound's waveform: its peaks light, its loudness (RMS)
 /// stronger; darker on a room-tone track.
 pub mod waveform {
     use gpui::{rgba, Rgba};
@@ -251,7 +251,7 @@ pub mod waveform {
     }
 }
 
-/// What the timeline's lanes draw over their clips (Qt's overlay tokens).
+/// What the timeline's lanes draw over their clips.
 pub mod lane {
     use gpui::{rgb, rgba, Rgba};
     /// A sound clip's level, drawn across it.
@@ -267,8 +267,7 @@ pub mod lane {
         rgba(0x0000008c)
     }
     /// While a change reel plays: the soft glow under a clip it watches
-    /// (its ring is the accent's ink), and what covers every other clip
-    /// (Qt's rgba(51, 102, 230, 70) and rgba(12, 12, 12, 170)).
+    /// (its ring is the accent's ink), and what covers every other clip.
     pub fn watch_glow() -> Rgba {
         rgba(0x3366e646)
     }
@@ -382,7 +381,7 @@ impl Face {
         Face::System,
     ];
 
-    /// The interface's faces, as Qt's Interface font offered them.
+    /// The faces Settings' Interface font offers.
     pub const INTERFACE: [Face; 4] = [Face::Plex, Face::Inter, Face::Pretendard, Face::System];
 
     pub fn label(self) -> &'static str {
@@ -574,11 +573,10 @@ pub mod motion {
     pub const FLIGHT_LAND: Duration = ms(240);
     /// Between tiles flying one after another.
     pub const FLIGHT_STAGGER: Duration = ms(160);
-    /// How long before the picture has grown the timeline starts to come
-    /// in (Qt's timelineLead).
+    /// How long before the picture has grown the timeline starts to come in.
     pub const TIMELINE_LEAD: Duration = ms(150);
-    /// How long what stood in for the picture takes to fade once the
-    /// picture has grown (Qt's standInRelease).
+    /// How long what stood in for the picture takes to fade once the picture
+    /// has grown.
     pub const STAND_IN_RELEASE: Duration = ms(260);
     /// The most the picture's stand-in holds where it landed while its
     /// picture is coming.
@@ -605,29 +603,27 @@ pub mod motion {
     /// long what comes in is given to be in place: the longest a scene
     /// takes to come in (`STAGE`), with room.
     pub const CAPTURE_SETTLE: Duration = ms(1200);
-    /// How long a notice stays at the conversation's foot (Qt's 6 s).
+    /// How long a notice stays at the conversation's foot.
     pub const NOTICE_HOLD: Duration = ms(6000);
     /// And one saying what went wrong, which takes longer to read (a
     /// failed push's ssh and git lines, an import's refusal).
     pub const NOTICE_ERROR_HOLD: Duration = ms(12000);
     /// What a sync brought and sent ("Synced: 2 commits in, pushed"), a
-    /// pull request's line, and a cast saved, as Qt held them (8 s).
+    /// pull request's line, and a cast saved.
     pub const NOTICE_LONG_HOLD: Duration = ms(8000);
-    /// "Preview ready" and "Live preview: …", as Qt's status bar held them (4 s).
+    /// "Preview ready" and "Live preview: …".
     pub const NOTICE_SHORT_HOLD: Duration = ms(4000);
-    /// A mode chosen in the composer, said briefly in its place: Qt's
-    /// status line held it 3 s.
+    /// A mode chosen in the composer, said briefly in its place.
     pub const NOTICE_BRIEF_HOLD: Duration = ms(3000);
     /// How long the pointer rests, skimming the picture or the lanes or
-    /// dragging the playhead, before the frame under it is asked for
-    /// exactly (Qt's 50 ms `m_exactSeekTimer`).
+    /// dragging the playhead, before the frame under it is asked for exactly.
     pub const SCRUB_SETTLE: Duration = ms(50);
-    /// The timeline's − or + held down zooms again after this, then every
-    /// `ZOOM_REPEAT` (Qt's QToolButton autoRepeat: 300 ms, 100 ms).
+    /// The timeline's − or + held down zooms again after this (so a press
+    /// alone zooms once), then every `ZOOM_REPEAT`.
     pub const ZOOM_REPEAT_DELAY: Duration = ms(300);
     pub const ZOOM_REPEAT: Duration = ms(100);
 
-    /// Where a flight lands in a row, as Qt landed it: in from the row's
+    /// Where a flight lands in a row: in from the row's
     /// left and top (and as far up from its bottom), and how wide.
     pub const LANDING_INSET: (f32, f32) = (8.0, 4.0);
     pub const LANDING_WIDTH: f32 = 44.0;
@@ -657,21 +653,21 @@ pub mod motion {
     /// show at once, with no fade.
     pub const TIP_QUICK: Duration = ms(300);
     /// The system's Reduce motion setting is read again when a motion
-    /// starts and the last read is older than this, as Qt read it.
+    /// starts and the last read is older than this.
     pub const SYSTEM_POLL: Duration = ms(1000);
     /// The most the first motion waits for the first read of it, made as
     /// the editor starts.
     pub const SYSTEM_FIRST_WAIT: Duration = ms(300);
 
-    /// The light once round a cut's card while Kerf makes it (Qt's
-    /// cardTurn), and its tail, a share of the way round.
+    /// The light once round a cut's card while Kerf makes it, and its
+    /// tail, a share of the way round.
     pub const CARD_TURN: Duration = ms(2200);
     pub const CARD_TAIL: f32 = 0.3;
-    /// A cut card's picture becoming the newest clip placed (cardCrossfade).
+    /// A cut card's picture becoming the newest clip placed.
     pub const CARD_CROSSFADE: Duration = ms(600);
-    /// Done: the ring going out and the picture lightening (cardRing).
+    /// Done: the ring going out and the picture lightening.
     pub const CARD_RING: Duration = ms(900);
-    /// Done: how long a finished cut's card says so (cardDone).
+    /// Done: how long a finished cut's card says so.
     pub const CARD_DONE: Duration = ms(2400);
     /// Done: when its length and play mark come and how long they take;
     /// how long Done takes to go, at its end.
@@ -683,24 +679,23 @@ pub mod motion {
     pub const CHIP_HOP: Duration = ms(1100);
     pub const CHIP_HOP_STAGGER: f32 = 0.14;
     pub const CHIP_HOP_RISE: f32 = 3.0;
-    /// Kerf's edits to a first cut being quiet before it renders (cutSettle).
+    /// Kerf's edits to a first cut being quiet before it renders.
     pub const CUT_SETTLE: Duration = ms(500);
     /// The change reel's Before side: the seek landing on the program just
     /// reopened before it plays; how long it waits to hear the program
     /// reopened.
     pub const REEL_SEEK_LANDS: Duration = ms(300);
     pub const REEL_PROGRAM_WAIT: Duration = ms(1500);
-    /// How long Copy says Copied (Qt's 1.5 s).
+    /// How long Copy says Copied.
     pub const COPIED_HOLD: Duration = ms(1500);
     /// The drafting dots' beat: each in turn, before Kerf has said anything.
     pub const DRAFT_BEAT: Duration = ms(320);
-    /// The conversation while what a proposal changed is watched (chatBehind).
+    /// The conversation while what a proposal changed is watched.
     pub const CHAT_BEHIND: f32 = 0.28;
     /// How far a footage tile rises as it pops in.
     pub const FOOTAGE_RISE: f32 = 12.0;
     /// The Before|After line's sweep there and back while a change reel
-    /// shows After, and where it turns, as shares of the picture's width
-    /// (Qt's compareSweep, compareFrom, compareTo).
+    /// shows After, and where it turns, as shares of the picture's width.
     pub const COMPARE_SWEEP: Duration = ms(6800);
     pub const COMPARE_FROM: f32 = 0.28;
     pub const COMPARE_TO: f32 = 0.78;
@@ -708,8 +703,7 @@ pub mod motion {
     pub const COMPARE_GLOW: f32 = 8.0;
     /// Points the stage reaches over the conversation while a change reel plays.
     pub const REEL_REACH: f32 = 120.0;
-    /// Points a clip a change reel watches rises off its lane, over `STAGE`
-    /// (Qt's clipLift).
+    /// Points a clip a change reel watches rises off its lane, over `STAGE`.
     pub const CLIP_LIFT: f32 = 8.0;
     /// How many times a pass of the light over a working conversation's
     /// title is drawn: it moves in steps, not every frame.
@@ -723,8 +717,7 @@ pub mod motion {
 
 pub mod layout {
     pub const TOOLBAR: f32 = 40.0;
-    /// The size a window opens at when no other window gives it one, as
-    /// the Qt editor's MainWindow resized itself (1500 × 940).
+    /// The size a window opens at when no other window gives it one.
     pub const WINDOW: (f32, f32) = (1500.0, 940.0);
     /// The least a window shrinks to.
     pub const WINDOW_LEAST: (f32, f32) = (720.0, 480.0);
@@ -734,10 +727,9 @@ pub mod layout {
     /// the screen; on a smaller one it fills the screen.
     pub const SCREEN_KEPT: (f32, f32) = (48.0, 120.0);
     /// On macOS, where the toolbar is the title bar: the window buttons'
-    /// first left edge (their middle 16 in, as Qt's kWindowButtonsLeft), and
-    /// where the toolbar's first control starts after them (Qt's
-    /// kFirstControlAfterWindowButtons). The buttons stand on the middle of
-    /// the toolbar's height.
+    /// first left edge (their middle 16 in), and where the toolbar's first
+    /// control starts after them. The buttons stand on the middle of the
+    /// toolbar's height.
     pub const WINDOW_BUTTONS_LEFT: f32 = 9.0;
     pub const WINDOW_BUTTONS_ROOM: f32 = 76.0;
     /// The window buttons' height, to stand them on the toolbar's middle.
@@ -757,19 +749,16 @@ pub mod layout {
     pub const TRACK_HEADER: f32 = 120.0;
     pub const RULER: f32 = 24.0;
     /// A track's height when none is set: one roomy height for every
-    /// track, picture, sound and subtitles alike, as the Qt editor's window
-    /// drew them (its setRoomyLanes, kRoomyTrackHeight).
+    /// track, picture, sound and subtitles alike.
     pub const TRACK_LANE: f32 = 40.0;
-    /// A track head menu's Small and Large heights, Qt's kSmallTrackHeight
-    /// and kLargeTrackHeight (kTrackHeightPresets); Medium is each track's
+    /// A track head menu's Small and Large heights; Medium is each track's
     /// own height.
     pub const TRACK_SMALL: f32 = 20.0;
     pub const TRACK_LARGE: f32 = 48.0;
     pub const TRANSPORT: f32 = 40.0;
     /// With the picture pane closed, the transport in the timeline's strip:
-    /// from its last button to the timecode (Qt's kTransportGap), and from
-    /// the strip's edge to its first (Qt's kStripEdge, the first button's
-    /// middle 16 in).
+    /// from its last button to the timecode, and from the strip's edge to
+    /// its first (the first button's middle 16 in).
     pub const STRIP_TRANSPORT_GAP: f32 = 28.0;
     pub const STRIP_EDGE: f32 = 4.0;
     /// Between the strip transport's buttons.
@@ -796,11 +785,10 @@ pub mod layout {
     /// composer has been laid out, up from the window's foot.
     pub const NOTICE_GAP: f32 = 8.0;
     pub const NOTICE_FOOT: f32 = 120.0;
-    /// Width over height from which a picture is wide (Qt's isWide).
+    /// Width over height from which a picture is wide.
     pub const WIDE: f32 = 1.2;
     /// The timeline's share of the panel's height under a wide picture,
-    /// and its least there (Qt's timelineWideShare and timelineWideLeast;
-    /// the transport, which Qt's timeline carried, counted in).
+    /// and its least there (the transport, under the picture, counted in).
     pub const TIMELINE_WIDE_SHARE: f32 = 0.5625;
     pub const TIMELINE_WIDE_LEAST: f32 = 260.0;
     /// And under a vertical or square one.
@@ -859,8 +847,7 @@ pub mod layout {
     /// A footage tile under a request.
     pub const FOOTAGE_TILE: (f32, f32) = (112.0, 63.0);
     /// The room over the composer a flight leaves from when it has no tile
-    /// to leave from, and how far above the composer's top it starts (Qt's
-    /// flightStart).
+    /// to leave from, and how far above the composer's top it starts.
     pub const OVER_COMPOSER: (f32, f32) = (128.0, 72.0);
     pub const OVER_COMPOSER_RISE: f32 = 84.0;
     /// A clip in flight to the timeline: how wide its ring is, and how tall
@@ -999,7 +986,7 @@ pub fn font(family: &'static str, weight: FontWeight, mono: bool) -> gpui::Font 
 }
 
 /// The OpenType features every face is set with: `tnum` (tabular
-/// figures), and in mono `zero` off (the plain zero), as Qt set them.
+/// figures), and in mono `zero` off (the plain zero).
 pub fn font_features(mono: bool) -> gpui::FontFeatures {
     static TEXT: std::sync::OnceLock<gpui::FontFeatures> = std::sync::OnceLock::new();
     static MONO: std::sync::OnceLock<gpui::FontFeatures> = std::sync::OnceLock::new();

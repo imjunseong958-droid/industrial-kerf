@@ -474,7 +474,7 @@ fn badges_in_a_row_read_as_a_run() {
             .map(|badge| (*badge).to_owned())
             .collect::<Vec<_>>()
     };
-    // Qt's badgeRuns: a run's last badge is said in full, "V1–V3".
+    // A run's last badge is said in full, "V1–V3".
     assert_eq!(badge_runs(&badges(&["V1", "V2", "V3", "A1"])), "V1–V3 A1");
     assert_eq!(
         badge_runs(&badges(&["V1", "V2", "A1", "A2", "A3", "A5"])),
@@ -1417,9 +1417,9 @@ proptest! {
     }
 }
 
-/// What File ▸ Export… asks the registry for: the chosen quality as Qt's
-/// File ▸ Export… named it, rendered where kerfd puts it, not the
-/// toolbar's delivery into deliveries/.
+/// What File ▸ Export… asks the registry for: the chosen quality as
+/// `file.export` names it, rendered where kerfd puts it, not the toolbar's
+/// delivery into deliveries/.
 fn file_export(quality: Quality) -> serde_json::Value {
     kerf_bridge::commands_run(&json!({
         "command": "file.export",

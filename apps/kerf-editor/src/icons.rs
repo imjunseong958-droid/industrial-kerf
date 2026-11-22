@@ -57,7 +57,7 @@ pub enum Icon {
     /// Closer and further: a shot's graph's zoom.
     ZoomIn,
     ZoomOut,
-    /// Kerf's own mark (Qt's g-kerf): the Auto mode's chip.
+    /// Kerf's own mark: the Auto mode's chip.
     Kerf,
 }
 

@@ -317,7 +317,8 @@ pub fn inbox_here(id: &str) -> Option<InboxAddress> {
 
 /// The person's own runtime folder: `XDG_RUNTIME_DIR`, else `/run/user/<uid>`,
 /// else one made for them in the temporary folder; each only when it is
-/// theirs and no one else's (as Qt's runtime location is). None otherwise.
+/// theirs and no one else's, so no one else can hand their editor links
+/// through its inbox. None otherwise.
 #[cfg(unix)]
 fn runtime_folder() -> Option<PathBuf> {
     use std::os::unix::fs::{DirBuilderExt, MetadataExt};

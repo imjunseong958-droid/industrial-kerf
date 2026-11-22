@@ -2,7 +2,7 @@
 //! renders the quality chosen in one press (the master, or a draft, an
 //! H.264 review copy into the project's deliveries/); File ▸
 //! Export… renders that quality where kerfd puts it, at full size or as a
-//! preview, as Qt's did. The chevron opens the menu under it: the two
+//! preview. The chevron opens the menu under it: the two
 //! qualities to choose between and Render preview; Preflight, the last QC
 //! pass's checks, each failed one with Ask Kerf while the window takes it
 //! ([`crate::finish::can_ask`]); Render master and the

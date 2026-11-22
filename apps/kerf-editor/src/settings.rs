@@ -799,7 +799,8 @@ impl SettingsView {
                     prefs.permissions,
                     Self::chooser(cx, Self::set_permissions),
                 )
-                // Each mode's tip says what it lets Kerf do (Qt's).
+                // Each mode's tip says what it lets Kerf do, before it is
+                // chosen.
                 .tips(&Permissions::ALL.map(permission_hint))
                 .into_any_element(),
             ),
@@ -924,7 +925,7 @@ impl SettingsView {
             .gap(px(theme::space::S8))
             .child(
                 // The file itself, in the app that opens it, to be edited;
-                // not there yet, its folder (made), to put it in (Qt's).
+                // not there yet, its folder (made), to put it in.
                 ui::button("settings-models-open", open_words).on_click(move |_, _, cx| {
                     let (_, opened) = models_opener(&shown, shown.is_file());
                     if !shown.is_file() {
@@ -1122,7 +1123,8 @@ impl SettingsView {
                             })),
                     )
                     // Cursor's, the project's and the person's, always
-                    // offered; each one's tip is its file (Qt's).
+                    // offered; each one's tip is its file, so it is plain
+                    // which file loads.
                     .children(imports.into_iter().enumerate().map(|(at, (words, path))| {
                         ui::button(("settings-mcp-cursor", at), words)
                             .tooltip(home_relative(&path))
@@ -1535,8 +1537,8 @@ impl SettingsView {
                         .hover(|style| style.underline())
                         .on_click(move |_, _, cx| cx.open_url(&link)),
                     )
-                    // What changed in each release (Qt's about box), the
-                    // page itself in its tip.
+                    // What changed in each release, the page itself in
+                    // its tip.
                     .child(ui::tip_on(
                         ui::line(
                             "Releases and what changed in each",
@@ -2255,7 +2257,7 @@ fn write_project_servers(project: &Path, text: &str) -> Result<(), String> {
 /// Settings ▸ Models' button for the models file at `file`: its words and
 /// what it opens in the system's app for it. The file itself while it is
 /// there ("Open Models File"); else its folder, which the press makes
-/// ("Open Its Folder"), to put the file in (Qt's main_window_settings.cpp).
+/// ("Open Its Folder"), to put the file in.
 pub fn models_opener(file: &Path, exists: bool) -> (&'static str, PathBuf) {
     match file.parent().filter(|_| !exists) {
         Some(folder) => ("Open Its Folder", folder.to_path_buf()),
@@ -2265,8 +2267,8 @@ pub fn models_opener(file: &Path, exists: bool) -> (&'static str, PathBuf) {
 
 /// Cursor's MCP servers files that Settings ▸ MCP imports from, each
 /// with its button's words: the project's `.cursor/mcp.json`, then the
-/// person's `~/.cursor/mcp.json`. Both are offered whether there or not
-/// (Qt's); one that is not says so as it is loaded ([`read_failure`]).
+/// person's `~/.cursor/mcp.json`. Both are offered whether there or not;
+/// one that is not says so as it is loaded ([`read_failure`]).
 pub fn cursor_imports(project: &Path, home: Option<&Path>) -> Vec<(&'static str, PathBuf)> {
     let mut imports = vec![(
         "Load from Project's Cursor",
@@ -2281,8 +2283,8 @@ pub fn cursor_imports(project: &Path, home: Option<&Path>) -> Vec<(&'static str,
     imports
 }
 
-/// "Could not read <path>: <why>", Qt's words for a servers file that did
-/// not open, `why` as the system says it without its number.
+/// "Could not read <path>: <why>", for a servers file that did not open,
+/// `why` as the system says it without its number.
 pub fn read_failure(shown: &str, error: &std::io::Error) -> String {
     let said = error.to_string();
     let why = match said.rfind(" (os error ") {
@@ -2292,7 +2294,7 @@ pub fn read_failure(shown: &str, error: &std::io::Error) -> String {
     format!("Could not read {shown}: {why}")
 }
 
-/// About's line under Kerf's name (Qt's about box).
+/// About's line under Kerf's name.
 pub const TAGLINE: &str = "A video editor you can talk to.";
 
 /// Where Kerf's releases are listed, and what changed in each: the

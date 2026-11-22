@@ -30,22 +30,22 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-/// The options a project's window opens with, titled `title`: at the
-/// Qt editor's 1500 × 940 in the middle of the screen, as its MainWindow
-/// resized itself (`layout::WINDOW`), or filling a screen too small for
-/// that; or, for the first window of a run given `--window-size`
+/// The options a project's window opens with, titled `title`: at
+/// `layout::WINDOW` in the middle of the screen, or filling a screen too
+/// small for that; or, for the first window of a run given `--window-size`
 /// ([`set_window_size`]), that size there. The size asked is the first
-/// window's alone, as the Qt editor resized only the window it opened at
-/// launch. A window that takes another's place opens where that one was
-/// instead ([`options_at`]). See [`window_place`].
+/// window's alone: a window opened later in the run opens as it would
+/// without it. A window that takes another's place opens where that one
+/// was instead ([`options_at`]). See [`window_place`].
 pub fn options(title: &str, cx: &mut App) -> WindowOptions {
     options_at(title, None, cx)
 }
 
 /// [`options`], in `place` when the window takes the place of another
 /// (the window it follows, as `window.window_bounds()` gave it): where
-/// that one was, at its size, maximized or full screen if it was, as the
-/// Qt editor's openEditor gave the next window the last one's geometry.
+/// that one was, at its size, maximized or full screen if it was, so
+/// opening another project does not move the window from where the person
+/// had it.
 pub fn options_at(title: &str, place: Option<WindowBounds>, cx: &mut App) -> WindowOptions {
     opening(titlebar(title), place, cx)
 }
@@ -94,7 +94,7 @@ fn opening(titlebar: TitlebarOptions, place: Option<WindowBounds>, cx: &mut App)
 ///   (`layout::SCREEN_KEPT`: its title bar, the menu bar, the Dock or a
 ///   taskbar). On a smaller screen it fills the screen (maximized), and
 ///   put back it is the most of `layout::WINDOW` that fits there, in its
-///   middle (the Qt editor centred its window only where it fitted).
+///   middle, none of it off the screen.
 ///
 /// With no screen known, windowed at the screen's origin.
 pub fn window_place(
@@ -134,9 +134,9 @@ pub fn window_place(
 }
 
 /// A window's title bar, titled `title`. On macOS the toolbar is the title
-/// bar, as in the Qt editor (its KERF_EDITOR_OWN_TITLE_BAR): the window
-/// runs up under a transparent title bar with no title, and the window
-/// buttons stand on the toolbar's line at its leading end
+/// bar, so the window spends no line on a bar that holds only its title:
+/// the window runs up under a transparent title bar with no title, and the
+/// window buttons stand on the toolbar's line at its leading end
 /// ([`window_buttons_at`]). Elsewhere the system's title bar stays.
 pub fn titlebar(title: &str) -> TitlebarOptions {
     TitlebarOptions {
@@ -213,14 +213,13 @@ pub fn path_with_tool_folders(path: &str, home: &Path) -> String {
 
 /// `--screenshot <file>`: once `after` has passed (`--quit-after-ms`, else
 /// half a second), and the first window has drawn a frame since, writes a
-/// PNG of that window to `file` and quits, as the Qt editor grabbed its
-/// window as the run quit. On X11 the window is read back from the X
-/// server; on macOS `screencapture` takes it; elsewhere (Wayland, Windows)
-/// it says on stderr that it cannot, and quits. A window that has drawn
-/// nothing by then (an X server with no window manager, where GPUI waits
-/// for an event to draw) is woken (again each `CAPTURE_REWAKE` while no
-/// frame comes), and given `CAPTURE_SETTLE` for what comes in to be in
-/// place.
+/// PNG of that window to `file` and quits. On X11 the window is read back
+/// from the X server; on macOS `screencapture` takes it; elsewhere
+/// (Wayland, Windows) it says on stderr that it cannot, and quits. A window
+/// that has drawn nothing by then (an X server with no window manager,
+/// where GPUI waits for an event to draw) is woken (again each
+/// `CAPTURE_REWAKE` while no frame comes), and given `CAPTURE_SETTLE` for
+/// what comes in to be in place.
 pub fn screenshot_then_quit(file: PathBuf, after: Duration, cx: &mut App) {
     let window = cx.windows().first().copied();
     // Whether the first window has begun a frame since it opened.
@@ -745,8 +744,8 @@ pub fn open(project: Option<PathBuf>, kerfd: Option<PathBuf>, cx: &mut App) {
 /// [`open`], in the place of a window `place` gives (its bounds, as
 /// `window.window_bounds()` gave them): another project opened from a
 /// window opens where that window was, at its size, maximized if it was,
-/// as the Qt editor's openEditor did. A project open already is raised
-/// where it is.
+/// so the window stays where the person had it. A project open already is
+/// raised where it is.
 pub fn open_in_place(
     project: PathBuf,
     kerfd: Option<PathBuf>,
@@ -851,15 +850,15 @@ fn open_at(
     }
 }
 
-/// The file a project's window represents: its project.kerf, as the Qt
-/// editor's setWindowFilePath had it.
+/// The file a project's window represents: its project.kerf, the file
+/// that makes its folder a project.
 pub fn represented_file(project: &Path) -> PathBuf {
     project.join("project.kerf")
 }
 
 /// On macOS, has `window` represent `project`'s [`represented_file`], so
 /// its title bar carries the file's proxy icon and the Window menu the
-/// file, as the Qt editor's did; elsewhere nothing. A project's window
+/// file; elsewhere nothing. A project's window
 /// calls it as it opens: a window keeps its project.
 pub fn represent_project(window: &Window, project: &Path) {
     #[cfg(target_os = "macos")]

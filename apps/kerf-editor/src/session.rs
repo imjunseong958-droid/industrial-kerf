@@ -22,10 +22,10 @@ use std::task::Poll;
 use std::time::Instant;
 
 /// How long Kerf's edits to a first cut are quiet before the cut renders
-/// by itself (Qt's `cutSettle`); on a change reel's Before side, how long
-/// the seek has to land on the program just reopened before it plays, and
-/// how long the reel waits to hear that playback has reopened the program
-/// before it takes up the segment anyway.
+/// by itself; on a change reel's Before side, how long the seek has to
+/// land on the program just reopened before it plays, and how long the
+/// reel waits to hear that playback has reopened the program before it
+/// takes up the segment anyway.
 pub use crate::theme::motion::{CUT_SETTLE, REEL_PROGRAM_WAIT, REEL_SEEK_LANDS};
 
 /// What Reconnect says when the bridge would not take it.
@@ -60,8 +60,7 @@ pub struct Picture {
     pub height: u32,
     pub time: f64,
     /// The last frame of the playback before, standing in since playback
-    /// was opened again until the new one's first frame comes (Qt's
-    /// `m_hasShownFrame` false with a frame still up).
+    /// was opened again until the new one's first frame comes.
     pub standing_in: bool,
 }
 
@@ -69,7 +68,7 @@ pub struct Picture {
 /// is opened again (`viewer_reset`) on a program whose canvas is `canvas`
 /// and lasts `duration` seconds: only when it has the canvas's shape (it
 /// would not be stretched) and there is something to play, so a first
-/// frame will come to take its place (Qt's `sameShape` and duration).
+/// frame will come to take its place.
 pub fn stands_in(shown: (u32, u32), canvas: (u32, u32), duration: f64) -> bool {
     let shape = |(width, height): (u32, u32)| {
         (width > 0 && height > 0).then(|| f64::from(width) / f64::from(height))
@@ -118,9 +117,8 @@ pub struct Session {
     mark_out: Option<f64>,
     looping: bool,
     /// Loop Playback has sent playback back to the loop's start since the
-    /// playhead last played short of its end (Qt's `m_wrapped`), so the
-    /// clocks still on their way from before that seek do not send it back
-    /// again.
+    /// playhead last played short of its end, so the clocks still on their
+    /// way from before that seek do not send it back again.
     wrapped: bool,
     /// Where the pointer last sent the picture while it moves, and when
     /// that frame is asked for exactly ([`PointerSeek`]).
@@ -186,9 +184,9 @@ pub enum ReelSide {
     Before,
 }
 
-/// Watching what a proposal changes (Qt's ChangeReel): its segments played
-/// one after another, from the proposal's preview (After) or the program
-/// (Before), each waiting for its picture first.
+/// Watching what a proposal changes: its segments played one after
+/// another, from the proposal's preview (After) or the program (Before),
+/// each waiting for its picture first.
 #[derive(Clone, Debug, Default)]
 pub struct Reel {
     pub proposal: String,
@@ -253,12 +251,12 @@ impl Reel {
 /// The most a preview renders at once, in seconds.
 pub const REEL_MOST_RENDERED: f64 = 120.0;
 
-/// A first cut rendering by itself (Qt's `m_cutPreview` and
-/// `m_previewedCut`): the proposal last asked to render, when Kerf's edits
-/// will have been quiet long enough, and whether a render is under way
-/// (one at a time; the newest after). [`Session`] drives it from the
-/// bridge's events; each step takes the first cut shown (`cut`, its
-/// proposal's id; None once the program has a cut) and the time.
+/// A first cut rendering by itself: the proposal last asked to render,
+/// when Kerf's edits will have been quiet long enough, and whether a
+/// render is under way (one at a time; the newest after). [`Session`]
+/// drives it from the bridge's events; each step takes the first cut
+/// shown (`cut`, its proposal's id; None once the program has a cut) and
+/// the time.
 #[derive(Clone, Debug, Default)]
 pub struct CutRender {
     previewed: Option<String>,
@@ -317,8 +315,7 @@ impl CutRender {
 
     /// A change reel ended over the first cut shown: the picture was the
     /// reel's, and the program (with no cut) came back under it, so the
-    /// cut renders again once [`CUT_SETTLE`] has passed (Qt clears
-    /// `m_previewedCut` and starts `m_cutPreview` as the reel ends).
+    /// cut renders again once [`CUT_SETTLE`] has passed.
     pub fn reel_ended(&mut self, cut: Option<&str>, now: Instant) {
         if cut.is_none() {
             return;
@@ -607,7 +604,7 @@ impl Session {
                 }
                 Change::Preview => {
                     // A picture that needs a render shows none until it is
-                    // rendered, as Qt cleared its viewer.
+                    // rendered, so an older frame is not taken for it.
                     if let Event::Preview(preview) = &*event {
                         if matches!(
                             preview.status,
@@ -637,7 +634,7 @@ impl Session {
                     }
                 }
                 // Gone, or only connecting: nothing plays, and the picture
-                // and its caption go, as Qt's viewer was cleared.
+                // and its caption go.
                 Change::Connection => self.lose_picture(window, cx),
                 Change::Playback => self.follow_playing(was_playing),
                 Change::ViewerReset => self.viewer_reset(window, cx),
@@ -772,9 +769,10 @@ impl Session {
     }
 
     /// Playback was opened again (an edit, a reconnect, a preview left):
-    /// the frame shown stands in until the new playback's first comes, as
-    /// Qt's did, unless the new canvas has another shape (it would be
-    /// stretched) or there is nothing to play (no first frame will come).
+    /// the frame shown stands in until the new playback's first comes, so
+    /// the picture does not go blank meanwhile, unless the new canvas has
+    /// another shape (it would be stretched) or there is nothing to play (no
+    /// first frame will come).
     /// The caption goes either way.
     fn viewer_reset(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let canvas = self.timeline().canvas();
@@ -796,8 +794,7 @@ impl Session {
     }
 
     /// kerfd is gone, or only connecting: nothing plays, and the picture
-    /// and its caption go, with the pointer's seeks, as Qt's
-    /// `setConnection` stopped playback and cleared its viewer.
+    /// and its caption go, with the pointer's seeks.
     fn lose_picture(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.state.playing = false;
         self.pointer = None;
@@ -890,9 +887,9 @@ impl Session {
     /// full), which the window says rather than dropping an edit unseen.
     ///
     /// While kerfd is connecting or gone, what waits on it (edits, renders,
-    /// playback and seeks) is not sent, as Qt's `sendSimple` sent nothing
-    /// then ([`sent_unconnected`]): the window says it is disconnected
-    /// once, and an edit refused for it would only say so again. False then.
+    /// playback and seeks) is not sent ([`sent_unconnected`]): the window
+    /// says it is disconnected once, and an edit refused for it would only
+    /// say so again. False then.
     pub fn send(&mut self, command: Command) -> bool {
         if !self.may_send(command.kind()) {
             return false;
@@ -944,7 +941,7 @@ impl Session {
 
     /// Whether kerfd is connected: until it is, and once it is gone, the
     /// timeline and the format bank take no edits and nothing that waits
-    /// on it is sent (Qt's `m_connected`).
+    /// on it is sent.
     pub fn connected(&self) -> bool {
         self.state.connection == crate::store::Connection::Connected
     }
@@ -998,7 +995,7 @@ impl Session {
     /// ahead of the one shown, [`scrubs_from`]), then exact once it rests
     /// ([`SCRUB_SETTLE`]); let go (`scrub` false after a drag), until the
     /// frame there comes none farther from it shows. Nothing moves while
-    /// kerfd is not connected (Qt's `queueSeek`).
+    /// kerfd is not connected.
     pub fn seek(&mut self, seconds: f64, scrub: bool) {
         if !self.connected() {
             return;
@@ -1026,8 +1023,7 @@ impl Session {
     /// The pointer skims the picture or the lanes to `seconds`, the
     /// playhead staying where it is: kerfd shows the program there, roughly
     /// while the pointer moves and exactly once it rests
-    /// ([`SCRUB_SETTLE`]), as Qt's `queueHoverSeek` and
-    /// `settlePointerSeek` did. Nothing while kerfd is not connected.
+    /// ([`SCRUB_SETTLE`]). Nothing while kerfd is not connected.
     pub fn skim(&mut self, seconds: f64) {
         if !self.connected() || !seconds.is_finite() {
             return;
@@ -1080,9 +1076,8 @@ impl Session {
 
     /// Pauses what plays, always (kerfd plays on through a render started
     /// meanwhile); else plays, only while Play can run
-    /// ([`EditorState::playable`]), as Qt's `togglePlayback` returned, so a
-    /// click on the picture does not start it while a render is needed or
-    /// runs. True when it was sent.
+    /// ([`EditorState::playable`]), so a click on the picture does not
+    /// start it while a render is needed or runs. True when it was sent.
     pub fn toggle_playback(&mut self) -> bool {
         match self.state.playback_toggle() {
             Some("pause") => self.send(Command::Pause),
@@ -1696,8 +1691,7 @@ impl Session {
     /// Playback started or stopped (`was_playing`, before). Started, the
     /// picture is playback's, not the pointer's. Stopped at the loop's end
     /// with Loop Playback on (kerfd stops by itself at the program's end):
-    /// back to the loop's start, and playing again, as Qt's
-    /// `followPlaying` did ([`LoopSpan::stopped`]).
+    /// back to the loop's start, and playing again ([`LoopSpan::stopped`]).
     fn follow_playing(&mut self, was_playing: bool) {
         if self.state.playing {
             self.pointer = None;
@@ -1720,7 +1714,8 @@ impl Session {
     }
 
     /// Archives conversation `id` (or brings it back). The one open stays
-    /// open, as Qt's did: its menu then offers Unarchive.
+    /// open rather than going from under the reader: its menu then offers
+    /// Unarchive.
     pub fn archive_conversation(&mut self, id: &str, archived: bool) {
         self.send(Command::Conversations(ConversationsRequest::Archive {
             id: id.to_owned(),
@@ -1797,7 +1792,7 @@ impl Session {
     /// stopped) about what it was asked about the first time from this
     /// window: the Ask popover's clip or scope, or the sequence frame the
     /// composer sent, with the same words in the work row and the same
-    /// stamp ([`FocusBook`], Qt's `m_lastFocus` and `m_lastFocusLabel`).
+    /// stamp ([`FocusBook`]).
     /// Words this window did not send go about the sequence at the
     /// playhead, as the composer's do.
     pub fn ask_again(&mut self, text: &str) -> bool {
@@ -2156,10 +2151,10 @@ impl Session {
     }
 }
 
-/// Where Loop Playback plays (Qt's `loopStart` and `loopEnd`): from the in
-/// mark, else the start, to the out mark held to the program's length (an
-/// out mark past a program that got shorter ends at its end), else the
-/// program's end. `length` is the program's seconds, `fps` its rate.
+/// Where Loop Playback plays: from the in mark, else the start, to the out
+/// mark held to the program's length (an out mark past a program that got
+/// shorter ends at its end), else the program's end. `length` is the
+/// program's seconds, `fps` its rate.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct LoopSpan {
     pub start: f64,
@@ -2197,9 +2192,9 @@ impl LoopSpan {
 
     /// A clock at `position` while playing: the time to go back to now,
     /// if any. Past an out mark short of the program's end (by half a
-    /// frame, Qt's `followPlayhead`) it goes back; within a frame of the
-    /// program's end it goes back before kerfd stops there (the stop itself
-    /// is [`LoopSpan::stopped`]). `wrapped` says it has gone back since the
+    /// frame) it goes back; within a frame of the program's end it goes
+    /// back before kerfd stops there (the stop itself is
+    /// [`LoopSpan::stopped`]). `wrapped` says it has gone back since the
     /// playhead last played short of the end, so the clocks still on their
     /// way from before that seek do not send it back again; one short of
     /// the end clears it.
@@ -2232,22 +2227,22 @@ impl LoopSpan {
 
     /// Playback stopped with the playhead at `position`: the time to go
     /// back to and play again from, when it stopped within the larger of
-    /// two frames and [`LOOP_SLACK`] of the loop's end, as Qt's
-    /// `followPlaying` had it. kerfd stops by itself at the program's end,
-    /// its last clock before it up to 50 ms short.
+    /// two frames and [`LOOP_SLACK`] of the loop's end: kerfd stops by
+    /// itself at the program's end, its last clock before it up to 50 ms
+    /// short.
     pub fn stopped(&self, position: f64) -> Option<f64> {
         let slack = (2.0 * self.frame()).max(LOOP_SLACK);
         (self.loops() && position >= self.end - slack).then_some(self.start)
     }
 }
 
-/// The least a stop may fall short of the loop's end and still loop
-/// (Qt's 0.1 s), in seconds.
+/// The least a stop may fall short of the loop's end and still loop, in
+/// seconds.
 pub const LOOP_SLACK: f64 = 0.1;
 
 /// How far ahead of the frame shown, in seconds, the pointer's seek still
 /// decodes on to the frame exactly rather than showing the nearest picture
-/// at once (Qt's 0.40 s in `scrubFromShownFrame`).
+/// at once.
 pub const SCRUB_AHEAD: f64 = 0.4;
 
 /// Where the pointer sent the picture while it moves (skimming the picture
@@ -2256,7 +2251,7 @@ pub const SCRUB_AHEAD: f64 = 0.4;
 /// seek has gone (or the seek was exact). Until the frame there comes, a
 /// frame farther from it than the one shown is not shown
 /// ([`nearer_frame`]), so a late rough picture does not jump back over a
-/// nearer one (Qt's `m_pointerOwnsPlayhead`).
+/// nearer one.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PointerSeek {
     pub target: f64,
@@ -2266,8 +2261,8 @@ pub struct PointerSeek {
 /// Whether the pointer's seek to `target` is rough (`scrub`), the frame
 /// shown being at `shown` (None before any), the sequence at `fps`: when
 /// it lies more than a frame behind the frame shown or more than
-/// [`SCRUB_AHEAD`] ahead of it, as Qt's `scrubFromShownFrame` had it. Just
-/// ahead, decoding on to it exactly costs little.
+/// [`SCRUB_AHEAD`] ahead of it. Just ahead, decoding on to it exactly
+/// costs little.
 pub fn scrubs_from(shown: Option<f64>, target: f64, fps: f64) -> bool {
     let Some(shown) = shown else {
         return true;
@@ -2278,8 +2273,7 @@ pub fn scrubs_from(shown: Option<f64>, target: f64, fps: f64) -> bool {
 
 /// Whether a frame at `frame` may take the place of the one shown at
 /// `shown` (None: nothing shown) while the pointer has sent the picture to
-/// `target`: when it is no farther from it, within half a frame at `fps`
-/// (Qt's `nearerScrubFrame`).
+/// `target`: when it is no farther from it, within half a frame at `fps`.
 pub fn nearer_frame(shown: Option<f64>, frame: f64, target: f64, fps: f64) -> bool {
     let Some(shown) = shown else {
         return true;
@@ -2294,8 +2288,7 @@ pub fn nearer_frame(shown: Option<f64>, frame: f64, target: f64, fps: f64) -> bo
 /// checks, a making stopped, a preview stopped or left, the volume and the
 /// tracks heard alone), Reconnect and Stop, and a request to Kerf (the
 /// composer says whether it can ask). Edits, renders and the rest of what
-/// kerfd answers, and playback and seeks, wait for it: Qt's `sendSimple`
-/// sent nothing but Reconnect and Stop.
+/// kerfd answers, and playback and seeks, wait for it.
 pub fn sent_unconnected(kind: &str) -> bool {
     kind.starts_with("collab_")
         || kind.starts_with("cloud_")
@@ -2375,8 +2368,8 @@ pub fn ask_label(
 }
 
 /// What a request went about: its `focus` as sent, the words the work row
-/// said until Kerf said what it was doing (Qt's `m_lastFocusLabel`), and
-/// the playhead time it was stamped with.
+/// said until Kerf said what it was doing, and the playhead time it was
+/// stamped with.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Focused {
     pub focus: Value,
@@ -2385,9 +2378,9 @@ pub struct Focused {
 }
 
 /// What each request sent from a window was about, by its words, the
-/// newest kept last (Qt kept the last request's, `m_lastFocus`): Ask again
-/// under a turn that failed or was stopped asks about what that turn's
-/// request was about. The newest [`FocusBook::KEPT`] are kept.
+/// newest kept last: Ask again under a turn that failed or was stopped
+/// asks about what that turn's request was about. The newest
+/// [`FocusBook::KEPT`] are kept.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct FocusBook {
     sent: VecDeque<(String, Focused)>,
@@ -2433,11 +2426,10 @@ impl FocusBook {
     }
 }
 
-/// The stretch of the program a proposal's preview renders, as Qt's
-/// `ChatWiring::preview` asked for it: from the earliest clip or
-/// transition `proposed` changes against `program` to the latest
-/// (`ProposalModel`'s range), as (start, duration) in seconds, the
-/// duration held to one frame at least and [`REEL_MOST_RENDERED`] at most.
+/// The stretch of the program a proposal's preview renders: from the
+/// earliest clip or transition `proposed` changes against `program` to the
+/// latest, as (start, duration) in seconds, the duration held to one frame
+/// at least and [`REEL_MOST_RENDERED`] at most.
 /// It never runs past `proposed`'s latest clip end: kerfd renders a
 /// proposal no further than its own length, and one that takes out, trims
 /// or pulls in the last clips ends sooner than the program, though what it
@@ -2546,7 +2538,7 @@ fn timeline_end(timeline: &Timeline) -> f64 {
 /// What the command registry is told of the media chosen in the bin
 /// (kerf-commands' `SourceRange`): the whole of it, from its first frame,
 /// in frames at `rate`; a still, which has no length of its own, for
-/// [`crate::model::STILL_SECONDS`], as Qt's `commandContext` had it.
+/// [`crate::model::STILL_SECONDS`], as long as a source edit places it.
 pub fn source_range(source: &crate::model::Source, rate: f64) -> Value {
     let frames = (source.placed_seconds() * rate).round() as i64;
     json!({"media": source.id, "inFrame": 0, "durationFrames": frames})
@@ -2609,9 +2601,8 @@ impl ActivityLog {
 /// (the file it made, or how it ended), an analysis made in the
 /// background, why the picture needs a rendered preview (the bridge's
 /// reason, a render that failed among them, else "Native preview
-/// unavailable", as Qt kept it), and what Kerf did: each tool call that
-/// ended, each status line, any other note (at most 120 characters of
-/// each).
+/// unavailable"), and what Kerf did: each tool call that ended, each
+/// status line, any other note (at most 120 characters of each).
 pub fn activity_of(event: &Event) -> Option<(&'static str, String)> {
     match event {
         Event::Agent(update) => {
@@ -2671,7 +2662,7 @@ pub fn activity_of(event: &Event) -> Option<(&'static str, String)> {
             .filter(|message| !message.trim().is_empty())
             .map(|message| ("analysis", message.to_owned())),
         // A render that failed says why next (`required`, with the
-        // bridge's reason), which is the line kept, as Qt kept it.
+        // bridge's reason), which is the line kept.
         Event::Preview(preview)
             if matches!(
                 preview.status,

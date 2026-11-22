@@ -149,7 +149,7 @@ fn the_nine_marker_colours_are_their_own_and_read_on_the_ruler() {
             );
         }
     }
-    // No colour, or one not of the nine, is green, as Qt drew it.
+    // No colour, or one not of the nine, is green: the marker still shows.
     assert_eq!(theme::marker::named(None), theme::marker::green());
     assert_eq!(theme::marker::named(Some("teal")), theme::marker::green());
     assert_eq!(theme::marker::named(Some(" Cyan ")), theme::marker::cyan());

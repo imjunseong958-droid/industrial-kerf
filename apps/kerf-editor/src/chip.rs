@@ -1,5 +1,5 @@
 //! What the chip over the picture says of what is being made: pure, so
-//! that it can be held to what Qt's said.
+//! that tests can hold it to its words.
 
 /// How a making's line says it stands (`asked`, `waiting … 2 ahead`,
 /// `running 12s`, `rendering 40%`, `made 31s`).
@@ -111,8 +111,7 @@ fn stands(line: &str, seconds: u64) -> String {
     }
 }
 
-/// What the chip says of the makings while they run, followed in words
-/// as Qt's toolbar status followed them.
+/// What the chip says of the makings while they run, followed in words.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Following {
     /// What the one shown last said, as `store::making_status` puts it

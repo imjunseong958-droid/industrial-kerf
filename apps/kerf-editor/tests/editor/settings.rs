@@ -88,7 +88,7 @@ fn a_cursor_file_that_does_not_read_says_where_and_why() {
         said.starts_with("Could not read ~/.cursor/mcp.json: "),
         "{said}"
     );
-    // The system's words, without its number (as Qt's errorString).
+    // The system's words, without its number, which tells the person nothing.
     assert!(!said.contains("os error"), "{said}");
     assert!(said.len() > "Could not read ~/.cursor/mcp.json: ".len());
     // A folder where the file should be does not read either.

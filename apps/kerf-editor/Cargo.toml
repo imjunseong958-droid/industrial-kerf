@@ -48,17 +48,19 @@ unicode-segmentation = "1"
 # (xn--) or as NFD text, still finds its folder.
 idna = "1"
 unicode-normalization = "0.1"
-# The Qt editor kept a project's master output under a SHA-1 of its path.
+# The editor before 0.1.5 (Qt) kept a project's master output under a
+# SHA-1 of its path, and a graph's card places under a SHA-1 of the
+# graph's key: made the same way, they are found again.
 sha1_smol = "1"
 env_logger = "0.11"
 log = "0.4"
-# "Edited … ago" counts days on the person's own calendar, as Qt's
-# toLocalTime did: the system's time zone (its zoneinfo on Unix; on
-# Windows the zone's rules come bundled).
+# "Edited … ago" counts days on the person's own calendar: the system's
+# time zone (its zoneinfo on Unix; on Windows the zone's rules come
+# bundled).
 jiff = { version = "0.2", default-features = false, features = ["std", "tz-system", "tzdb-zoneinfo", "tzdb-bundle-platform"] }
 
 # On macOS a project's window represents its project.kerf (the title bar's
-# proxy icon), as the Qt editor's setWindowFilePath had it, and a drag on
+# proxy icon), as a document's window does there, and a drag on
 # the toolbar (the title bar there) moves the window: AppKit through its
 # safe bindings, at the versions gpui already brings, and the window's view
 # through raw-window-handle.

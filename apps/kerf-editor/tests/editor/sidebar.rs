@@ -280,7 +280,7 @@ fn a_folders_menu_starts_a_new_conversation_in_it() {
     assert!(!folder_entries(&[], None)
         .iter()
         .any(|entry| matches!(entry.entry, Entry::NewConversation(_))));
-    // Another folder's menu, as Qt's.
+    // Another folder's menu.
     let words: Vec<String> = other_folder_entries(&other)
         .into_iter()
         .map(|entry| entry.words)

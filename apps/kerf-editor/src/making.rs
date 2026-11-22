@@ -217,8 +217,8 @@ fn clock(since: std::time::Instant) -> String {
 }
 
 /// Where a make card's words can be chosen and copied, as the
-/// conversation's can (Qt's plan was selectable): the conversation's
-/// selections, and the run the words are pieces of. None: plain labels.
+/// conversation's can: the conversation's selections, and the run the
+/// words are pieces of. None: plain labels.
 type Choose<'a> = Option<(&'a selectable::Shared, SharedString)>;
 
 /// `words` in `style` and `color`, piece `piece` of `choose`'s run where
@@ -1000,7 +1000,7 @@ impl Makings {
     }
 
     /// The conversation's selections: its cards' plans can be chosen and
-    /// copied with its words (Copy, ⌘C), as Qt's plan text could.
+    /// copied with its words (Copy, ⌘C).
     pub fn share_selections(&mut self, shared: selectable::Shared) {
         self.selections = Some(shared);
     }
@@ -1980,9 +1980,8 @@ const PAD: f32 = 12.0;
 const PORT_REACH: f32 = 9.0;
 /// A press that moves less than this is a click.
 const DRAG_FROM: f32 = 3.0;
-/// The panel at most (Qt's `graphPanelWidth` and `graphPanelHeight`),
-/// less where the window is smaller; its head; the column that says what
-/// the chosen node holds.
+/// The panel at most, less where the window is smaller; its head; the
+/// column that says what the chosen node holds.
 const GRAPH_MOST: (f32, f32) = (1480.0, 900.0);
 const HEAD: f32 = 48.0;
 const INSPECTOR: f32 = 300.0;
@@ -2011,8 +2010,8 @@ pub const ZOOM_MOST: f32 = 2.0;
 /// are not drawn under it either.
 pub const ZOOM_READ: f32 = 0.7;
 
-/// The graph panel's size in a window `viewport` big, as Qt's ModalScrim
-/// sized it: [`GRAPH_MOST`], less where the window is smaller, with the
+/// The graph panel's size in a window `viewport` big: [`GRAPH_MOST`],
+/// less where the window is smaller, with the
 /// modal's margin all round (`ui::modal_bounds`), so the whole panel, its
 /// foot among it, shows in the box the window gives it however small the
 /// window. Its inspector column scrolls what does not fit.
@@ -3138,7 +3137,7 @@ fn bind_graph_keys(cx: &mut App) {
 enum Drag {
     None,
     /// The canvas, panned from where it was; `middle`: by the middle
-    /// button, from anywhere, cards too (Qt's graph view).
+    /// button, from anywhere, cards too.
     Canvas {
         from: Point<Pixels>,
         offset: (f32, f32),
@@ -4183,7 +4182,7 @@ impl ShotGraph {
     }
 
     /// The middle button pressed anywhere on the canvas, over a card too:
-    /// a drag pans it, as Qt's graph view did; let go, nothing is chosen.
+    /// a drag pans it; let go, nothing is chosen.
     fn press_middle(
         &mut self,
         event: &MouseDownEvent,

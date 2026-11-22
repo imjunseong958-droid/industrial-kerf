@@ -14,8 +14,8 @@ use serde_json::Value;
 use std::path::{Path, PathBuf};
 
 /// The application menu (macOS): About Kerf; Settings…; Services ▸; Hide
-/// Industrial Kerf, Hide Others and Show All; Quit, as Qt's Cocoa menu
-/// built it around About, Preferences and Quit.
+/// Industrial Kerf, Hide Others and Show All; Quit: the items and order a
+/// Mac application's own menu has, so they are where people look for them.
 pub fn app_menu() -> gpui::Menu {
     gpui::Menu {
         name: "Industrial Kerf".into(),
@@ -74,8 +74,8 @@ pub fn mask_tool_action(tool: crate::stage::MaskTool) -> Box<dyn gpui::Action> {
     }
 }
 
-/// Collaborate ▸ Switch Branch as a submenu, as Qt's buildBranchMenu made
-/// it: each other branch, switching to it; "No Other Branches" (greyed)
+/// Collaborate ▸ Switch Branch as a submenu: each other
+/// branch, switching to it; "No Other Branches" (greyed)
 /// when there is none. Held back, each branch is greyed.
 pub fn branch_menu(branches: &MenuBranches) -> gpui::Menu {
     let mut items: Vec<gpui::MenuItem> = branches
@@ -106,8 +106,8 @@ pub fn branch_menu(branches: &MenuBranches) -> gpui::Menu {
     }
 }
 
-/// Edit ▸ Keyboard Shortcuts in the menu bar, as Qt's had it: one row
-/// for each keymap, by the name Settings gives it, the one in use (`keymap`,
+/// Edit ▸ Keyboard Shortcuts in the menu bar: one row for each
+/// keymap, by the name Settings gives it, the one in use (`keymap`,
 /// as the registry names it) ticked ("✓ ", since a menu bar's rows here
 /// carry no tick of their own). Choosing one saves it, as Settings does
 /// (`sidebar::ChooseKeymap`, which the window carries out), and the menus
@@ -362,13 +362,13 @@ pub fn menus_with_branches(
                 items.push(gpui::MenuItem::submenu(recent_menu(recent, current)));
             }
         }
-        // The keymaps to choose from, at Edit's foot, as Qt's menu bar had them.
+        // The keymaps to choose from, at Edit's foot.
         if menu == "Edit" && !items.is_empty() {
             items.push(gpui::MenuItem::separator());
             items.push(gpui::MenuItem::submenu(keymap_menu(keymap)));
         }
-        // The picture's mask tools, which the registry does not carry, where
-        // Qt's View menu had them (their keys, ⇧R ⇧E ⇧P, the stage binds):
+        // The picture's mask tools, which the registry does not carry, in the
+        // View menu (their keys, ⇧R ⇧E ⇧P, the stage binds):
         // the one out ticked, all greyed until a picture clip the picture
         // can place is chosen ([`mask_tool_id`]).
         if menu == "View" && !items.is_empty() {

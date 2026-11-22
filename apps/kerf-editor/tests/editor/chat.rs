@@ -111,8 +111,8 @@ fn a_second_request_written_while_kerf_works_goes_with_its_own_playhead_time() {
     queued.push("  ", 9.0);
     queued.push("and add a title here", 5.0);
     assert_eq!(queued.text(), Some("trim this\n\nand add a title here"));
-    // As Qt's queue: the joined request goes at 5, where the latest was
-    // written, not at 2.
+    // The joined request goes at 5, where the latest was written and the
+    // picture last looked at, not at 2.
     assert_eq!(
         queued.take(),
         Some(("trim this\n\nand add a title here".to_owned(), 5.0))
@@ -343,7 +343,7 @@ fn a_finished_turn_says_how_long_it_worked_and_its_steps() {
     );
     assert_eq!(worked_headline(Some(41.0), 1), "Worked for 41s · 1 step");
     assert_eq!(worked_headline(Some(3.0), 0), "Worked for 3s");
-    // Never less than a second, as Qt's workLength said it.
+    // Never less than a second: no turn reads as taking no time.
     assert_eq!(worked_headline(None, 0), "Worked for 1s");
 }
 

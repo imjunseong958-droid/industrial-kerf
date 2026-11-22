@@ -1,4 +1,4 @@
-//! Edit ▸ Focus Region… (`clip.focusRegion`), as Qt's: over a frame of the
+//! Edit ▸ Focus Region… (`clip.focusRegion`): over a frame of the
 //! chosen picture clip a box is dragged round what to enlarge, a time range
 //! is chosen within the clip, and a moving subject can be followed. Chosen,
 //! the clip is split where the range starts and ends and the part between
@@ -43,7 +43,7 @@ gpui::actions!(focus_region, [CloseFocus, ApplyFocus]);
 /// Tab goes round it only ([`ui::PANEL`]).
 const CONTEXT: &str = "FocusRegion";
 
-/// What a refusal says, in Qt's words.
+/// What a refusal says.
 pub const PENDING: &str = "Review the pending suggestion before changing the crop.";
 pub const NO_FRAME: &str = "Could not read a source frame from this clip.";
 pub const INVALID: &str = "Select a box and a valid time range within the clip.";
@@ -148,9 +148,9 @@ pub fn crop_box(props: &Value) -> Option<Region> {
 }
 
 /// The edit that focuses clip `clip` (its frames `clip_frames`, first and
-/// past its last) on `region` over the frames `range`, as Qt wrote it: the
-/// clip split where the range starts (a new part, `<clip>-focus-<suffix>`)
-/// unless it starts with the clip, that part cropped to the box; each step
+/// past its last) on `region` over the frames `range`: the clip split
+/// where the range starts (a new part, `<clip>-focus-<suffix>`) unless it
+/// starts with the clip, that part cropped to the box; each step
 /// of a followed subject (`tracked`, its frame and box, the first being the
 /// start) split off in turn (`<clip>-track-<n>-<suffix>`) with its own box;
 /// and the clip split where the range ends unless it ends with the clip,
@@ -228,12 +228,12 @@ pub struct Tracked {
 
 /// Follows the subject in `seed` through `frames` (grey, `width` ×
 /// `height` each, back to back, the first at `start` of the program and
-/// [`TRACK_RATE`] a second after it), as Qt's trackRegion: in each frame
-/// the box nearest where it was last that looks most like it did at the
-/// start. A step is kept where it moved more than a pixel. The subject is
-/// lost where nothing looks enough like it ([`LOST_ABOVE`]). None when it
-/// cannot be followed: fewer than two frames, a box too small, or one with
-/// too little in it to find.
+/// [`TRACK_RATE`] a second after it): in each frame the box nearest where
+/// it was last that looks most like it did at the start. A step is kept
+/// where it moved more than a pixel. The subject is lost where nothing
+/// looks enough like it ([`LOST_ABOVE`]). None when it cannot be followed:
+/// fewer than two frames, a box too small, or one with too little in it to
+/// find.
 pub fn track_region(
     frames: &[u8],
     (width, height): (usize, usize),
@@ -357,8 +357,8 @@ pub struct Target {
 
 /// The frame of `clip` at program second `at` that a box is drawn on: its
 /// media's file and the second in it. [`NO_FRAME`] for a clip with no
-/// media to read (a title, a solid) or whose file is not there, as Qt
-/// refused before opening its dialog.
+/// media to read (a title, a solid) or whose file is not there, refused
+/// before the dialog opens, which would have no frame to draw the box on.
 pub fn readable_frame(
     file: Option<PathBuf>,
     clip: &Clip,
@@ -374,8 +374,8 @@ pub fn readable_frame(
 
 /// The clip Focus Region would work on in `session` now: the chosen clip,
 /// on a picture track, longer than a frame, with a frame of its media to
-/// draw the box on. Qt's refusals: while a proposal waits ([`PENDING`]),
-/// with no such clip ([`INVALID`]), with no frame to read ([`NO_FRAME`]).
+/// draw the box on. Refused while a proposal waits ([`PENDING`]), with no
+/// such clip ([`INVALID`]), with no frame to read ([`NO_FRAME`]).
 pub fn target(session: &Session) -> Result<Target, &'static str> {
     if session.state.snapshot.pending().is_some() {
         return Err(PENDING);
@@ -885,9 +885,8 @@ impl FocusRegion {
     }
 
     /// Follow a moving subject: it is followed from the frame the box is
-    /// drawn on, so Start is that frame's and cannot be typed (Qt's
-    /// start->setEnabled(!enabled)); off, Start can be typed again, from
-    /// there.
+    /// drawn on, so Start is that frame's and cannot be typed; off, Start
+    /// can be typed again, from there.
     fn set_follow(&mut self, follow: bool, window: &mut Window, cx: &mut Context<Self>) {
         self.follow = follow;
         if follow {
@@ -1064,9 +1063,9 @@ impl Render for FocusRegion {
             .track_focus(&self.focus)
             .on_action(cx.listener(|_, _: &CloseFocus, _, cx| cx.emit(DismissEvent)))
             .on_action(cx.listener(|this, _: &ApplyFocus, window, cx| this.apply(window, cx)))
-            // A press on the dim around it does nothing (Qt's was modal):
-            // the box drawn and the range typed stay until Esc or its own
-            // buttons close it.
+            // A press on the dim around it does nothing, so a stray click
+            // does not lose the box drawn and the range typed: they stay
+            // until Esc or its own buttons close it.
             .w(px(DIALOG_WIDE))
             .p(px(20.0))
             .flex()

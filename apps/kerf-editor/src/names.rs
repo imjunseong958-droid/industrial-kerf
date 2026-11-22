@@ -1,6 +1,6 @@
 //! What a media is called where a person reads it: the Media band's tiles,
 //! the clips of the timeline that have no name of their own, a proposal's
-//! change rows, a making's words. Pure, as Qt's `sourceNames` was.
+//! change rows, a making's words. Pure.
 //!
 //! An import is copied into `media/` as `<stem>-<8 hex of its SHA-256>.<ext>`,
 //! so "Beach Day-1a2b3c4d.mov" reads "Beach Day". The extension comes back

@@ -27,9 +27,9 @@ pub trait TimelineShow {
 
     /// Names the media ([`crate::names::source_names`]) and gives each clip
     /// of media with a file its media's name to go by when it has none of
-    /// its own (Qt's `withClipNames`): [`ClipShow::label`] then says it on the
-    /// timeline, in a proposal's change rows and wherever else a clip is
-    /// named. The clip's own `name` is left as the view has it.
+    /// its own: [`ClipShow::label`] then says it on the timeline, in a
+    /// proposal's change rows and wherever else a clip is named. The clip's
+    /// own `name` is left as the view has it.
     fn name_clips(&mut self);
 
     /// The readable name of media `id` ([`crate::names::source_names`]);
@@ -48,9 +48,9 @@ pub trait TimelineShow {
     /// Width over height of the picture; 16:9 when the sequence says none.
     fn aspect(&self) -> f32;
 
-    /// The picture the program plays into, in pixels, as Qt's
-    /// `resolvedCanvasSize` read it: the sequence's own size; with none,
-    /// the largest of its media's pictures; with none of those, 1920 × 1080.
+    /// The picture the program plays into, in pixels: the sequence's own
+    /// size; with none, the largest of its media's pictures; with none of
+    /// those, 1920 × 1080.
     fn canvas(&self) -> (u32, u32);
 }
 
@@ -153,7 +153,7 @@ impl TimelineShow for Timeline {
 }
 
 /// How long a source edit places media that has no length of its own (a
-/// still), in seconds, as Qt's `commandContext` placed it.
+/// still), in seconds.
 pub const STILL_SECONDS: f64 = 5.0;
 
 /// How the editor names a track.
@@ -162,7 +162,7 @@ pub trait TrackShow {
     fn label(&self) -> &str;
 
     /// A track of room tone: its role holds "room", or its name says
-    /// "room tone". Its waveforms are drawn darker (Qt's `isRoomTone`).
+    /// "room tone". Its waveforms are drawn darker.
     fn is_room_tone(&self) -> bool;
 }
 
@@ -200,10 +200,9 @@ pub trait ClipShow {
     /// from its first frame), else one key at its start holding its level.
     fn gain_keys(&self, fps: f64) -> (Vec<GainKey>, bool);
 
-    /// What its name bar says after its name (Qt's `clipSecondary`): for
-    /// a generated picture, its text when that is not its name, its blend
-    /// when not normal and its opacity under 100%; for any other clip its
-    /// speed when not 100%.
+    /// What its name bar says after its name: for a generated picture, its
+    /// text when that is not its name, its blend when not normal and its
+    /// opacity under 100%; for any other clip its speed when not 100%.
     fn secondary(&self) -> String;
 }
 
@@ -611,9 +610,8 @@ impl ClipChange {
     }
 }
 
-/// The clips `proposed` adds, takes out or changes against `current`
-/// (Qt's `ProposalModel::diffTimelines`), in the proposal's track order
-/// with the clips it takes out after.
+/// The clips `proposed` adds, takes out or changes against `current`, in
+/// the proposal's track order with the clips it takes out after.
 pub fn proposal_changes(current: &Timeline, proposed: &Timeline) -> Vec<ClipChange> {
     let mut changes = Vec::new();
     for track in &proposed.tracks {
@@ -736,7 +734,7 @@ impl ProposalBand {
     }
 }
 
-/// A time Kerf names, in seconds of the program (Qt's `reel::parseTime`):
+/// A time Kerf names, in seconds of the program:
 /// a number of seconds, "4.5s" or "4.5", "12f" in frames at `fps`, or a
 /// timecode "HH:MM:SS:FF" (or "MM:SS:FF") less the sequence's `start`.
 /// None for anything else, or a time before the program.
@@ -784,11 +782,10 @@ pub fn focus_time(text: &str, fps: f64, start: f64) -> Option<f64> {
     (seconds.is_finite() && seconds >= 0.0).then_some(seconds)
 }
 
-/// Keys for a number drawn by hand, a value 0..1 at each frame (Qt's
-/// `signalcurve::keys`): the first frame, the last, and between them only
-/// the frames where the line from the last key kept would pass a frame
-/// between by more than `within`. Each `{at: frame, value, interp: linear}`,
-/// values to three places.
+/// Keys for a number drawn by hand, a value 0..1 at each frame: the first
+/// frame, the last, and between them only the frames where the line from
+/// the last key kept would pass a frame between by more than `within`.
+/// Each `{at: frame, value, interp: linear}`, values to three places.
 pub fn signal_keys(drawn: &BTreeMap<i64, f64>, within: f64) -> Vec<Value> {
     let frames: Vec<i64> = drawn.keys().copied().collect();
     let Some(&first) = frames.first() else {
@@ -823,10 +820,10 @@ pub fn signal_keys(drawn: &BTreeMap<i64, f64>, within: f64) -> Vec<Value> {
 }
 
 /// Where a source's picture and sound land when it is put in (Insert,
-/// Overwrite; Qt's `sourceTargets`): of each kind the source has, one
-/// track, never a locked one. When the person has chosen targets it is the
-/// first of that kind they targeted, and a kind with none targeted is left
-/// out; else it is the first unlocked track of that kind.
+/// Overwrite): of each kind the source has, one track, never a locked one.
+/// When the person has chosen targets it is the first of that kind they
+/// targeted, and a kind with none targeted is left out; else it is the
+/// first unlocked track of that kind.
 pub fn source_targets(
     timeline: &Timeline,
     source: &Source,

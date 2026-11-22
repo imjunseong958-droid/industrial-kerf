@@ -1,6 +1,6 @@
 //! The kit every region is built from: buttons, icon buttons, a switch, a
 //! segmented control, a menu, tips, chips and labels, set in the editor's
-//! tokens, as Qt's ui/components gave every view.
+//! tokens.
 //!
 //! What takes a press takes the keys too: Tab reaches it (Shift-Tab goes
 //! back), a ring of the accent shows just inside its edge while it has
@@ -64,9 +64,10 @@ pub const CONTROL: &str = "KitControl";
 pub const SEGMENTED: &str = "KitSegmented";
 /// What a segmented control answers in: [`CONTROL`] and [`SEGMENTED`].
 pub const CONTROL_SEGMENTED: &str = "KitControl KitSegmented";
-/// An open [`Menu`]'s: the arrows move in it (Tab and Shift-Tab too, as in
-/// Qt's menus), Right opens a row's submenu and Left closes it, Enter or
-/// Space chooses, Esc closes it and nothing else.
+/// An open [`Menu`]'s: the arrows move in it (Tab and Shift-Tab too, so
+/// the keys stay in a menu while it is open), Right opens a row's submenu
+/// and Left closes it, Enter or Space chooses, Esc closes it and nothing
+/// else.
 pub const MENU: &str = "KitMenu";
 
 /// The kit's keys. `keymap::bind` binds them with the field's, first
@@ -686,7 +687,7 @@ pub fn tip_height(rows: usize) -> f32 {
 }
 
 /// Where a tip `tip` big goes for a control at `control` in a window
-/// `window` big, as Qt placed it: centred on the control, `TIP_EDGE` in
+/// `window` big: centred on the control, `TIP_EDGE` in
 /// from the window's sides at least, `TIP_GAP` under it, or over it when
 /// the control is low in the window.
 pub fn tip_origin(
@@ -909,7 +910,8 @@ fn hovered(
     let Some(tip) = tip else {
         return element;
     };
-    // A press puts the tip away, as Qt's did.
+    // A press puts the tip away, so it does not stand over what the press
+    // opens.
     let press_state = state.clone();
     element = element.on_mouse_down(MouseButton::Left, move |_, _, cx| {
         press_state.update(cx, |control, cx| {
@@ -2785,7 +2787,7 @@ pub fn menu_separator() -> Div {
 
 /// A press that toggles what it opens (a menu), taken as the button goes
 /// down. Any menu open has seen it first, as a press outside, and gone (a
-/// press outside a popup closes it first, as in Qt; one that keeps the
+/// press outside a popup closes it first; one that keeps the
 /// press for itself, a question asked over the window, leaves the trigger
 /// none). Then the trigger takes it, before what it sits in (a tile, the
 /// toolbar) has it. Its own menu closes on the press too, but whoever

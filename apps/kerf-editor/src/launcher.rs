@@ -10,8 +10,8 @@
 //! control, Up and Down choose among the recent projects, Return does what
 //! the page is for (Create, Clone, or opening the project chosen), Esc
 //! puts the form away. Opened from an editor (New Project…), it can be
-//! given up as Qt's modal launcher could: its Cancel, or Esc with no form
-//! open, closes it and the editor comes back.
+//! given up: its Cancel, or Esc with no form open, closes it and the
+//! editor comes back.
 
 use crate::commands::{RunCommand, WORKSPACE};
 use crate::icons::Icon;
@@ -46,7 +46,7 @@ pub enum LauncherEvent {
     },
     /// Given up (its Cancel, or Esc with no form open), when it was opened
     /// from an editor ([`LauncherView::over_editor`]): its window goes and
-    /// the editor's comes back, as Qt's modal launcher's reject did.
+    /// the editor's comes back.
     Cancel,
 }
 
@@ -294,7 +294,7 @@ impl Plan {
 }
 
 /// Why a new project named `name` cannot be made in `location`, pushed to
-/// `remote` (empty for none), in Qt's words; None when it can.
+/// `remote` (empty for none); None when it can.
 pub fn details_problem(name: &str, location: &Path, remote: &str) -> Option<String> {
     let folder = folder_name(name);
     if folder.is_empty() {
@@ -321,8 +321,8 @@ pub fn details_problem(name: &str, location: &Path, remote: &str) -> Option<Stri
     None
 }
 
-/// Why the repository at `url` cannot be cloned into `location`, in Qt's
-/// words; None when it can.
+/// Why the repository at `url` cannot be cloned into `location`; None
+/// when it can.
 pub fn clone_problem(url: &str, location: &Path) -> Option<String> {
     let url = url.trim();
     if url.is_empty() {
@@ -498,8 +498,7 @@ impl PresetPage {
             })
     }
 
-    /// Why Create cannot make it yet, in Qt's words; None when the preset
-    /// side is ready.
+    /// Why Create cannot make it yet; None when the preset side is ready.
     fn problem(&self, cx: &App) -> Option<String> {
         let Some(preset) = &self.preset else {
             return Some(if self.path.is_some() {
@@ -766,8 +765,8 @@ impl LauncherView {
         self
     }
 
-    /// Opened from an editor (New Project…), as Qt's modal launcher was:
-    /// it has Cancel, and Esc with no form open gives it up too
+    /// Opened from an editor (New Project…): it has Cancel, and Esc with
+    /// no form open gives it up too
     /// ([`LauncherEvent::Cancel`]). The launcher the editor starts with
     /// has neither.
     pub fn over_editor(mut self) -> Self {
@@ -1125,8 +1124,8 @@ impl LauncherView {
         expanded(self.location.read(cx).text().trim())
     }
 
-    /// Why Return cannot do what the page is for, in Qt's words, as it is
-    /// typed; None when it can.
+    /// Why Return cannot do what the page is for, as it is typed; None
+    /// when it can.
     fn form_problem(&self, cx: &App) -> Option<String> {
         let details = || {
             details_problem(
@@ -2748,8 +2747,8 @@ impl Render for LauncherView {
                                         this.show_settings(Page::Chat, window, cx)
                                     })),
                             ))
-                            // From an editor it can be given up, as Qt's
-                            // modal launcher could.
+                            // From an editor it can be given up, and the
+                            // project open there comes back.
                             .when(self.over_editor, |head| {
                                 head.child(self.ring(
                                     Stop::Cancel,

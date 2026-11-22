@@ -39,8 +39,8 @@ static TITLE_PRESSED: AtomicBool = AtomicBool::new(false);
 /// `stretch`, an empty stretch of the toolbar or the sidebar's top (the
 /// title bar on macOS): there, a press then a drag on it moves the window
 /// and a double-click does what the system has a title bar's do (zoom, as
-/// a rule), as the Qt editor's toolbar did. Elsewhere, where the system's
-/// title bar does that, it is left as it is.
+/// a rule). Elsewhere, where the system's title bar does that, it is left
+/// as it is.
 pub fn title_bar_stretch(stretch: gpui::Div) -> gpui::Div {
     if !cfg!(target_os = "macos") {
         return stretch;
@@ -69,9 +69,8 @@ pub fn title_bar_stretch(stretch: gpui::Div) -> gpui::Div {
 
 /// On macOS, hands a press on the title bar's empty stretch over to the
 /// window server, which moves the window as the pointer drags (AppKit's
-/// performWindowDragWithEvent with the event being handled, as Qt's
-/// startSystemMove did); gpui 0.2.2's own `start_window_move` does nothing
-/// there. Elsewhere nothing: the system's title bar moves the window.
+/// performWindowDragWithEvent with the event being handled); gpui 0.2.2's
+/// own `start_window_move` does nothing there. Elsewhere nothing: the system's title bar moves the window.
 pub fn drag_window(window: &Window) {
     #[cfg(target_os = "macos")]
     macos::drag(window);

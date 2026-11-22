@@ -2,7 +2,7 @@
 
 /// A registry shortcut ("Ctrl+Shift+E") as the system writes it: on macOS
 /// in its signs ("⇧⌘E"), elsewhere as written, but with Meta+ written
-/// Ctrl+, as [`keystroke`] binds it there (Qt's menus said so too). Each
+/// Ctrl+, as [`keystroke`] binds it there. Each
 /// chord of a sequence in turn, a comma between.
 pub fn shown_keys(shortcut: &str) -> String {
     if !cfg!(target_os = "macos") {

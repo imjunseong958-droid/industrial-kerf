@@ -59,8 +59,8 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Instant;
 
-/// A tile's thumb, as Qt drew it, and the gap between tiles; the search
-/// row under the strip; Roles' column; a row of the list, and of the Index.
+/// A tile's thumb and the gap between tiles; the search row under the
+/// strip; Roles' column; a row of the list, and of the Index.
 pub use crate::theme::layout::MEDIA_THUMB as THUMB;
 use crate::theme::layout::{
     MEDIA_INDEX_ROW as INDEX_ROW, MEDIA_LIST_ROW as LIST_ROW, MEDIA_ROLES_WIDTH as ROLES_WIDTH,
@@ -585,8 +585,8 @@ struct OpenMenu {
     menu: Entity<ui::Menu>,
 }
 
-/// Make Several ▸ (Qt's): two, three or four takes of the same shot to
-/// choose among, each with every seed of its steps one on from the last.
+/// Make Several ▸: two, three or four takes of the same shot to choose
+/// among, each with every seed of its steps one on from the last.
 fn several(media: &str, connected: bool) -> ui::MenuItem {
     let rows = [2u32, 3, 4]
         .into_iter()
@@ -798,8 +798,9 @@ impl MediaBand {
                 files: true,
                 directories: false,
                 multiple: false,
-                // Qt asked "Replace m2" with a filter of media files and in
-                // the media's own folder; GPUI's chooser takes neither.
+                // It asks "Replace m2". GPUI's chooser takes no filter and no
+                // folder to start in, so it neither narrows to media files nor
+                // opens in the media's own folder.
                 prompt: Some(format!("Replace {media}").into()),
             },
         );
@@ -821,8 +822,8 @@ impl MediaBand {
                     }
                     crate::presets::Picked::Nothing => None,
                 };
-                // Any file, as Qt's "All files (*)": kerfd reads it and
-                // refuses, in its own words, one that is no media.
+                // Any file: kerfd reads it and refuses, in its own words, one
+                // that is no media.
                 if let Some(path) = path {
                     session.send(Command::MediaReplace {
                         media: media.clone(),
@@ -2364,7 +2365,7 @@ const ROLES_CONTEXT: &str = "RolesDialog";
 
 impl RolesView {
     pub fn new(session: Entity<Session>, _window: &mut Window, cx: &mut Context<Self>) -> Self {
-        // Return is Apply, the dialog's default button (Qt's).
+        // Return is Apply, the dialog's default button.
         if !crate::settings::escape_bound(cx, &CloseRoles) {
             cx.bind_keys([
                 gpui::KeyBinding::new("escape", CloseRoles, Some(ROLES_CONTEXT)),
@@ -2404,8 +2405,8 @@ impl RolesView {
             })
             .collect::<Vec<RoleRow>>();
         // A field keeps its own Esc and Return: they are said here, where
-        // Esc closes the dialog and Return is Apply (Qt's editable boxes
-        // left Return to the dialog's default button).
+        // Esc closes the dialog and Return is Apply, so a role typed in a
+        // field is applied without reaching for the button.
         let subscriptions = rows
             .iter()
             .map(|row| {

@@ -692,7 +692,7 @@ fn as_value(shape: &Shape) -> Value {
     }
 }
 
-/// What Qt read of a step: the words as label and request, or the object's
+/// What a step reads as: the words as label and request, or the object's
 /// label and request (its label when it has none); none without a label.
 fn as_qt_read(shape: &Shape) -> Option<NextStep> {
     let (label, request) = match shape {
@@ -1324,7 +1324,7 @@ fn the_pointers_seek_is_rough_unless_just_ahead_of_the_frame_shown() {
     // Far ahead or behind: rough at once.
     assert!(scrubs_from(Some(3.0), 3.0 + SCRUB_AHEAD + 0.1, 24.0));
     assert!(scrubs_from(Some(3.0), 2.5, 24.0));
-    // The settle is Qt's 50 ms, kept in the theme.
+    // The settle, 50 ms, is kept in the theme.
     assert_eq!(SCRUB_SETTLE, motion::SCRUB_SETTLE);
     assert_eq!(SCRUB_SETTLE, Duration::from_millis(50));
 }
@@ -2283,7 +2283,8 @@ proptest! {
 
 #[test]
 fn a_notice_with_a_hold_of_its_own_stays_for_it() {
-    // Qt held the sync's summary and its pull request's line 8 s.
+    // The sync's summary and its pull request's line stay 8 s, longer than a
+    // plain notice: there is more in them to read.
     assert_eq!(motion::NOTICE_LONG_HOLD, Duration::from_secs(8));
     assert!(motion::NOTICE_LONG_HOLD > motion::NOTICE_HOLD);
     let mut state = EditorState::default();

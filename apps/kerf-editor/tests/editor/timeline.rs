@@ -341,8 +341,8 @@ fn targeting_a_second_track_of_a_kind_moves_the_source_there() {
     // V2's chip again: no picture goes in.
     let targets = toggle_target(&program, &targets, "V2");
     assert_eq!(source_targets(&program, media, Some(&targets)), ["A1"]);
-    // Chosen any way at all (as Qt's setTargetTracks takes them), only the
-    // first targeted unlocked track of each kind takes the source.
+    // Chosen any way at all, only the first targeted unlocked track of each
+    // kind takes the source.
     let chosen: Vec<String> = ["V3", "V2", "V1", "A2", "A1"].map(String::from).to_vec();
     assert_eq!(source_targets(&program, media, Some(&chosen)), ["V1", "A1"]);
 }

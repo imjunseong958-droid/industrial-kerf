@@ -114,7 +114,7 @@ pub enum MaskTool {
 impl MaskTool {
     pub const ALL: [MaskTool; 3] = [MaskTool::Rectangle, MaskTool::Ellipse, MaskTool::Pen];
 
-    /// Its name, as Qt's View menu had it.
+    /// Its name, as its button's tip and the app's menu say it.
     pub fn label(self) -> &'static str {
         match self {
             MaskTool::Rectangle => "Rectangle mask",
@@ -172,10 +172,10 @@ pub fn mask_tool_id(tool: MaskTool) -> &'static str {
 }
 
 /// Binds the picture's keys. ⇧R ⇧E ⇧P take out (or put down) a mask tool
-/// wherever the window has the keys, as Qt's View menu did (typing in a
-/// field types them); Delete and Backspace, Esc and Return act on what the
-/// picture has chosen or is drawing, ahead of the window's own keys, only
-/// while it has something to act on.
+/// wherever the window has the keys, so one is to hand from any pane
+/// (typing in a field types them); Delete and Backspace, Esc and Return act
+/// on what the picture has chosen or is drawing, ahead of the window's own
+/// keys, only while it has something to act on.
 ///
 /// `keymap::bind` calls it after the registry's keys, since binding a
 /// keymap clears these; the stage binds them again whenever it draws and
@@ -408,12 +408,12 @@ struct Placement {
 /// Whether a picture of `aspect` (width over height) is wide: framed as a
 /// laptop, its caption one line. Below it (vertical, square and near
 /// square) it is framed as a phone and its caption wraps over balanced
-/// lines, as Qt's `stage::isWide` drew both.
+/// lines.
 pub fn wide(aspect: f32) -> bool {
     aspect >= WIDE_FROM
 }
 
-/// Where a picture's aspect starts to be wide (Qt's 1.2).
+/// Where a picture's aspect starts to be wide.
 pub const WIDE_FROM: f32 = 1.2;
 
 fn place(area: Bounds<Pixels>, aspect: f32) -> Placement {
@@ -570,8 +570,8 @@ impl Shown {
     }
 
     /// Whether its masks take the picture's clicks: it has some, and its
-    /// picture can be seen (Qt's `editsMasks`). Turned edge on or behind
-    /// the camera, a click on the picture plays as it would with none.
+    /// picture can be seen. Turned edge on or behind the camera, a click on
+    /// the picture plays as it would with none.
     fn edits_masks(&self) -> bool {
         !self.masks.is_empty() && self.placement.masks_seen()
     }
@@ -1084,9 +1084,9 @@ pub fn base64_decode(text: &str) -> Option<Vec<u8>> {
 }
 
 /// The Before|After line's sweep, there and back, and how far across the
-/// picture it goes (Qt's compareSweep, compareFrom, compareTo); the glow
-/// either side of it, the tags at the picture's foot, and the change
-/// reel's strip over the picture's top, at most so wide.
+/// picture it goes; the glow either side of it, the tags at the picture's
+/// foot, and the change reel's strip over the picture's top, at most so
+/// wide.
 use crate::theme::layout::{COMPARE_TAG_IN, REEL_STRIP_IN, REEL_STRIP_MOST};
 use crate::theme::motion::{COMPARE_FROM, COMPARE_GLOW, COMPARE_SWEEP, COMPARE_TO};
 /// How far into a segment its Before still is taken, and how wide.
@@ -1095,8 +1095,7 @@ const COMPARE_WIDE: u32 = 960;
 
 /// Whether a bridge event releases the poster standing in for a cut Kerf
 /// builds: a `preview` of `first_cut` (the cut shown on the empty program)
-/// that has stopped running, so its render is what the picture shows (Qt
-/// let go of the stand-in as that preview ended, `releaseStaying`).
+/// that has stopped running, so its render is what the picture shows.
 pub fn releases_cover(event: &Event, first_cut: Option<&str>) -> bool {
     let Event::Preview(preview) = event else {
         return false;
@@ -1125,7 +1124,8 @@ pub fn transport_reasons(context: &Value) -> HashMap<&'static str, String> {
 /// a first cut proposed on an empty program stands in for it, nor while a
 /// proposal's preview renders or shows. A proposal waiting over a program
 /// with clips leaves the picture the program's, as kerfd plays the
-/// document, and Qt's viewer drew on it all the same (`updateViewerMasks`).
+/// document, and its masks and path can be drawn on while the proposal
+/// waits.
 pub fn shows_program(state: &crate::store::EditorState, program_has_clips: bool) -> bool {
     let cut_stands_in = state.snapshot.proposal_timeline.is_some() && !program_has_clips;
     let preview_shows = state.preview.proposal.is_some()
@@ -1133,16 +1133,15 @@ pub fn shows_program(state: &crate::store::EditorState, program_has_clips: bool)
     !cut_stands_in && !preview_shows
 }
 
-/// Whether the chip says Kerf is cutting rather than looking (Qt's
-/// `work.cutting`): Kerf works (`busy`) on a cut it proposes for an empty
-/// program (no clips of its own, a proposed timeline there).
+/// Whether the chip says Kerf is cutting rather than looking: Kerf works
+/// (`busy`) on a cut it proposes for an empty program (no clips of its own,
+/// a proposed timeline there).
 pub fn kerf_cutting(busy: bool, program_has_clips: bool, proposal_timeline: bool) -> bool {
     busy && !program_has_clips && proposal_timeline
 }
 
 /// How clear the working chip's dot is `phase` (0..1) of the way through
-/// a pulse (`WORK_PULSE`), as Qt drew it: full at either end, down to 35%
-/// half way.
+/// a pulse (`WORK_PULSE`): full at either end, down to 35% half way.
 pub fn pulse_level(phase: f32) -> f32 {
     let phase = if phase.is_finite() {
         phase.clamp(0.0, 1.0)
@@ -1171,7 +1170,7 @@ pub const TRANSPORT: [(&str, &str, Icon); 5] = [
 const TRANSPORT_MORE: [&str; 2] = ["playback.loop", "viewer.zoom"];
 
 /// What a transport control's tip says: its name while it can be pressed;
-/// greyed, its name and why not (Qt's tipWithReason).
+/// greyed, its name and why not.
 pub fn transport_tip(name: &str, reason: Option<&str>) -> String {
     match reason.filter(|reason| !reason.is_empty()) {
         Some(reason) => format!("{name} · {reason}"),
@@ -1180,9 +1179,9 @@ pub fn transport_tip(name: &str, reason: Option<&str>) -> String {
 }
 
 /// The version of the proposal the preview plays (`id`, the preview's
-/// proposal) among the snapshot's `proposals`, as Qt's PreviewChip found
-/// it: the version's own number when `id` is one of a proposal's versions,
-/// else that proposal's. None when no proposal is `id`, or it has no number.
+/// proposal) among the snapshot's `proposals`: the version's own number
+/// when `id` is one of a proposal's versions, else that proposal's. None
+/// when no proposal is `id`, or it has no number.
 pub fn previewed_version(proposals: &[model::Proposal], id: &str) -> Option<u32> {
     let mut version = 0;
     for proposal in proposals {
@@ -1200,9 +1199,8 @@ pub fn previewed_version(proposals: &[model::Proposal], id: &str) -> Option<u32>
     (version > 0).then_some(version)
 }
 
-/// What the chip over the picture says while a proposal's preview plays,
-/// as Qt's did: "Previewing proposal v2", or "Previewing proposal" with no
-/// version known.
+/// What the chip over the picture says while a proposal's preview plays:
+/// "Previewing proposal v2", or "Previewing proposal" with no version known.
 pub fn preview_chip_words(version: Option<u32>) -> String {
     match version {
         Some(version) => format!("Previewing proposal v{version}"),
@@ -1400,7 +1398,7 @@ impl StageView {
             return (Some(Hue::Computer), said);
         }
         // A change reel's previews and a first cut's are the reel's and the
-        // cut card's to say (Qt's quietenCutPreview); an export still is.
+        // cut card's to say, not the chip's too; an export still is.
         let quiet = state.preview.rendering() && (session.reel().is_some() || session.cutting());
         if let Some(rendering) = state.rendering().filter(|_| !quiet) {
             return (Some(Hue::Computer), Some(Said::words(rendering)));
@@ -1588,7 +1586,7 @@ impl StageView {
     /// Its path only while some of it can be seen: a path in depth no one
     /// map shows is sampled where the clip's anchor goes, its points where a
     /// drag has them; one all on or behind the camera is no path to show
-    /// or edit (Qt's `setMotionPath`), unless one of its points is in hand.
+    /// or edit, unless one of its points is in hand.
     fn overlays(&self, session: &Session) -> Option<Shown> {
         let state = &session.state;
         if !shows_program(state, session.timeline().has_clips()) {
@@ -1682,10 +1680,9 @@ impl StageView {
 
     /// Whether there is a picture clip chosen that a mask tool can draw on:
     /// one the picture places where it can be seen, not turned edge on or
-    /// behind the camera (Qt's `updateViewerMasks`: an invertible
-    /// placement), on the program shown rather than a proposal. The mask
-    /// tools are greyed in the menus while it is false and none is out
-    /// ([`StageView::mask_tool`]).
+    /// behind the camera (an invertible placement), on the program shown
+    /// rather than a proposal. The mask tools are greyed in the menus while
+    /// it is false and none is out ([`StageView::mask_tool`]).
     pub fn can_draw(&self, cx: &App) -> bool {
         self.overlays(self.session.read(cx))
             .is_some_and(|shown| shown.placement.masks_seen())
@@ -1987,9 +1984,8 @@ impl StageView {
         }
         // A press that plays or pauses, or one on the black bars, leaves the
         // keys where they were (the timeline's Space goes on playing and
-        // pausing), as Qt's viewer took focus only for what it edits: the
-        // picture's own focus is given above, when a tool or what is chosen
-        // on it needs its keys.
+        // pausing): the picture takes the keys only for what it edits, given
+        // above when a tool or what is chosen on it needs them.
         window.prevent_default();
         if !picture.contains(&event.position) {
             return;
@@ -2676,7 +2672,7 @@ impl StageView {
 
     /// Stops the preview rendering (the card's Stop, or Esc while the card
     /// shows): its card goes at once and stays away until that run ends
-    /// ([`render_stop_holds`]), as Qt's `AgentHud::stop` hid it.
+    /// ([`render_stop_holds`]).
     pub fn stop_render(&mut self, cx: &mut Context<Self>) {
         let proposal = self
             .session
@@ -2781,7 +2777,7 @@ impl StageView {
             .is_some_and(|shown| shown.placement.picture.shows());
         let preview = session.state.preview.clone();
         // The chip keeps quiet while a change reel plays (its strip says
-        // what plays) or Kerf is cutting the first cut, as Qt's did.
+        // what plays) or Kerf is cutting the first cut (its card says so).
         let chip_quiet = session.reel().is_some() || session.cutting();
         // Which version of its proposal plays, as the chip says it.
         let previewing = preview
@@ -3529,8 +3525,9 @@ impl Render for StageView {
                 );
             }
             // The caption and the check's box are over the frame as drawn,
-            // and kept inside the picture as Qt kept them: zoomed in, the
-            // frame is bigger than the picture, and they go with its edges.
+            // and kept inside the picture, so they stay in sight zoomed in:
+            // the frame is then bigger than the picture, and they go with its
+            // edges.
             let card = picture;
             let frame_at = zoomed(card, frame_size, self.zoom, window.scale_factor());
             // In the picture's own points, as the layer kept to it places them.
@@ -4247,7 +4244,7 @@ pub struct RenderCard {
     /// ended ([`render_stop_holds`]).
     pub stopped: bool,
     /// Kerf builds its cut: the picture is its live preview, and the card
-    /// keeps out of the way (Qt quietened the HUD).
+    /// keeps out of the way.
     pub kerf_building: bool,
     /// A change reel plays (it renders what it plays) or Kerf cuts its
     /// first cut: its own strip says so.
@@ -4257,9 +4254,8 @@ pub struct RenderCard {
 }
 
 /// Whether the preview render's card shows over the picture
-/// ([`StageView::preview_card`]): Esc stops the render only then, as Qt's
-/// filter took it only while the HUD was active and visible
-/// (agent_hud.cpp).
+/// ([`StageView::preview_card`]): Esc stops the render only then, never
+/// one no card shows; otherwise Esc does what else it would.
 pub fn render_card_shows(card: RenderCard) -> bool {
     card.rendering && !card.stopped && !card.kerf_building && !card.reel && card.picture_shown
 }
@@ -4279,14 +4275,14 @@ pub fn render_stop_holds(stopped: Option<&str>, event: &Event) -> bool {
         && preview.proposal_id.as_deref().unwrap_or_default() == stopped
 }
 
-/// What the preview render's card over the picture says: pure, so that it
-/// can be held to what Qt's said.
+/// What the preview render's card over the picture says: pure, so that its
+/// words can be checked without a window.
 pub mod hud {
     use crate::changes::ClipChange;
     use crate::model;
 
-    /// Stop's tip and its key, as Qt's had them: Esc stops the render
-    /// while the card shows, ahead of what else Esc would do.
+    /// Stop's tip and its key: Esc stops the render while the card shows,
+    /// ahead of what else Esc would do.
     pub const STOP_TIP: &str = "Stop preview render";
     pub const STOP_KEY: &str = "Esc";
 
@@ -4835,15 +4831,14 @@ pub mod overlay {
     impl Placement {
         /// Whether its masks can be drawn, chosen and dragged on the
         /// picture: its picture can be seen, not turned edge on or behind
-        /// the camera (Qt's `editsMasks`: an invertible placement).
+        /// the camera (an invertible placement).
         pub fn masks_seen(&self) -> bool {
             self.picture.shows()
         }
 
         /// Whether its motion path `points` can be seen through its map:
-        /// the map shows, and some of its curve is in front of the camera
-        /// (Qt's `setMotionPath` drops one all on or behind it). A path no
-        /// one map shows is seen by [`sampled`] instead.
+        /// the map shows, and some of its curve is in front of the camera.
+        /// A path no one map shows is seen by [`sampled`] instead.
         pub fn path_seen(&self, points: &[Pt]) -> bool {
             let (width, height) = self.canvas;
             self.path.shows()

@@ -2,7 +2,7 @@
 //! once and motion follows it, so a stopped animation leaves nothing wrong.
 //! Under Reduce Motion everything is simply there: the editor's own switch,
 //! the system's, or `KERF_REDUCE_MOTION` over both. The system's is read
-//! as Qt read it: as the editor starts, then again as a motion starts (a
+//! as the editor starts, then again as a motion starts (a
 //! [`Tween`] set going) when the last read is more than `SYSTEM_POLL` old,
 //! so an editor where nothing moves reads nothing, however often it draws.
 //!
@@ -341,7 +341,8 @@ impl Tween {
         if (to - self.to).abs() < f32::EPSILON && !self.running_at(now) {
             return;
         }
-        // As Qt's animations did on each start.
+        // So the system's Reduce motion, switched while the editor runs,
+        // holds from the next motion on.
         ask_system();
         self.from = self.value_at(now);
         self.to = to;

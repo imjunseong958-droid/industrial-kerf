@@ -10,8 +10,8 @@
 //! It keeps its own typing to take back: ⌘Z / Ctrl+Z undoes it, ⌘⇧Z /
 //! Ctrl+Shift+Z and Ctrl+Y redo it, and while a field has the keys they
 //! never reach the project's Undo. Tab and Shift-Tab leave it for the next
-//! or the one before, as everything in the kit does; in code, as in Qt's
-//! text boxes, Tab indents (Shift-Tab takes it back) and Ctrl+Tab and
+//! or the one before, as everything in the kit does; in code, which is
+//! written indented, Tab indents (Shift-Tab takes it back) and Ctrl+Tab and
 //! Ctrl+Shift+Tab leave it.
 
 use crate::theme::{self, TypeStyle};
@@ -69,8 +69,7 @@ actions!(
     ]
 );
 
-/// A row of a field's edit menu (Qt's QLineEdit and QTextEdit menu), in
-/// its order.
+/// A row of a field's edit menu, in its order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EditRow {
     Undo,
@@ -96,7 +95,7 @@ impl EditRow {
     }
 
     /// Its key as the registry writes one (shown in the system's signs by
-    /// `shortcuts::shown_keys`); Delete shows none, as Qt's did not.
+    /// `shortcuts::shown_keys`); Delete shows none: it is named for its key.
     pub fn keys(self) -> Option<&'static str> {
         match self {
             EditRow::Undo => Some("Ctrl+Z"),
@@ -237,7 +236,7 @@ pub fn key_bindings_for(mac: bool) -> Vec<KeyBinding> {
     bindings.extend([
         // In code, Enter is a new line, and this is what sends it.
         KeyBinding::new("secondary-enter", SubmitCode, Some(CODE)),
-        // In code Tab is typed, as Qt's settings typed it in their JSON;
+        // In code Tab types the indent Settings writes its JSON with;
         // Ctrl+Tab is the way out.
         KeyBinding::new("tab", Indent, Some(CODE)),
         KeyBinding::new("shift-tab", Outdent, Some(CODE)),
@@ -1011,7 +1010,7 @@ impl TextInput {
     }
 
     /// On Linux, what the pointer chose is the primary selection, which a
-    /// middle-click pastes elsewhere (as Qt's text boxes did); never a
+    /// middle-click pastes elsewhere, here or in another app; never a
     /// secret's.
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     fn share_primary(&self, cx: &mut Context<Self>) {
@@ -1027,7 +1026,7 @@ impl TextInput {
     fn share_primary(&self, _: &mut Context<Self>) {}
 
     /// A middle-click on Linux pastes the primary selection where it
-    /// went down, as Qt's text boxes did.
+    /// went down.
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     fn on_middle_down(
         &mut self,
@@ -1056,7 +1055,7 @@ impl TextInput {
 
     /// A right-click: the field takes the keys, a press outside what is
     /// chosen puts the cursor there (inside it keeps it), and its edit
-    /// menu opens at the pointer ([`edit_rows`]), as Qt's text boxes had.
+    /// menu opens at the pointer ([`edit_rows`]).
     fn on_right_down(
         &mut self,
         event: &MouseDownEvent,
