@@ -369,6 +369,35 @@ fn ripple_delete_refuses_to_desync_and_succeeds_when_the_bed_is_locked() {
     assert_eq!(layout(&project, "A2"), vec![row("music", 0, 192)]);
 }
 
+#[test]
+fn ripple_delete_closes_each_of_several_ranges_that_do_not_touch() {
+    // V1: c1 [0,24) · c2 [48,72) · c3 [96,120), sound on A1 the same way.
+    let mut scene = scene();
+    scene.sequences[0].tracks[0].clips = vec![
+        media_clip("c1", "m1", 0, 0, 24, Some("L1")),
+        media_clip("c2", "m1", 240, 48, 24, Some("L2")),
+        media_clip("c3", "m1", 480, 96, 24, Some("L3")),
+    ];
+    scene.sequences[0].tracks[1].clips = vec![
+        media_clip("a1", "m1", 0, 0, 24, Some("L1")),
+        media_clip("a2", "m1", 240, 48, 24, Some("L2")),
+        media_clip("a3", "m1", 480, 96, 24, Some("L3")),
+    ];
+    assert_eq!(validate(&scene, Catalog::builtin()), vec![]);
+    let project = run(
+        &scene,
+        vec![
+            lock("A2"),
+            Op::RippleDelete {
+                clips: vec![id("c1"), id("c2")],
+            },
+        ],
+    );
+    assert_eq!(layout(&project, "V1"), vec![row("c3", 48, 72)]);
+    assert_eq!(layout(&project, "A1"), vec![row("a3", 48, 72)]);
+    assert_eq!(layout(&project, "A2"), vec![row("music", 0, 192)]);
+}
+
 fn sync(track: &str, on: bool) -> Op {
     Op::SetTrackRole {
         sequence: id("s1"),

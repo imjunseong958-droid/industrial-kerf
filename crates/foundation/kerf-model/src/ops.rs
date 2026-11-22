@@ -1768,7 +1768,9 @@ impl Editor<'_> {
                 _ => merged.push((from, to)),
             }
         }
-        let ids: HashSet<Id> = selection
+        // The ids not yet removed: each range takes its own out once it is
+        // closed, so the ranges before it never look for them.
+        let mut ids: HashSet<Id> = selection
             .iter()
             .map(|at| self.clip(*at).id.clone())
             .collect();
@@ -1784,6 +1786,7 @@ impl Editor<'_> {
                 .collect();
             self.close_time(s, &edited, from, to, &here)?;
             for id in &here {
+                ids.remove(id);
                 let at = self.find(id);
                 self.project.sequences[s].tracks[at.track]
                     .clips
