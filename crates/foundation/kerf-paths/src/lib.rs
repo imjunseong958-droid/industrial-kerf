@@ -1,8 +1,9 @@
 //! Where a person's own Kerf files are kept: their home folder, and `~/.kerf` in it.
 //!
-//! Every crate asks here rather than reading `HOME` itself. Windows sets no `HOME`, so a
-//! place that reads it alone finds none of the person's files there, and each place that
-//! read it for itself had to be taught so on its own.
+//! What looks for one of the person's own files asks here rather than reading `HOME`
+//! itself. Windows sets no `HOME`, so a place that reads it alone finds none of them there,
+//! and each place that read it for itself had to be taught so on its own. (A cache or a log
+//! folder is found by its system's own rule, which names `HOME` only off Windows.)
 
 use std::ffi::OsString;
 use std::path::PathBuf;

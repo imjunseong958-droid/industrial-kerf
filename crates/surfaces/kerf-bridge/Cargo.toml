@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
-description = "Nonblocking editor bridge: JSON commands in, JSON events out, over kerfd and Rust workers"
+description = "Nonblocking editor bridge: commands in, events out, over kerfd and Rust workers"
 
 [dependencies]
 # API keys in the OS's own store: macOS Keychain, Windows Credential Manager,

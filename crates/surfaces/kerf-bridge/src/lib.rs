@@ -19,7 +19,7 @@
 //! what answers a command, and when one is refused. On the wire each is one JSON object
 //! whose `type` names it, such as `{"type": "seek", "position": 2.5}`; [`commands_run`]
 //! gives commands in that form. An event of a type this build does not know reads as
-//! [`Event::Unknown`], so a newer bridge never breaks an older window.
+//! [`Event::Unknown`].
 //!
 //! [`Bridge::send`] returns `false` when a command is refused: it cannot be taken as it is
 //! (a seek before 0, an agent turn while one runs), or its bounded queue is full. Show an

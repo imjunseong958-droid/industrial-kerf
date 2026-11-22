@@ -10,7 +10,8 @@ name: Verify release
 #
 # package.yml runs it on the release it has just published. By hand (Actions >
 # Verify release > Run workflow) it checks the tag given, or the newest release; a
-# pull request that changes it checks the newest release.
+# pull request that changes it checks the newest release. The checks look for
+# kerf-editor, so the tag has to be v0.1.5 or later.
 on:
   workflow_dispatch:
     inputs:
