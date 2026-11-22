@@ -131,6 +131,8 @@ x11rb.workspace = true
 embed-resource.workspace = true
 
 [dev-dependencies]
+# The Inspector's tests draw it in a test window, and move focus there.
+gpui = { workspace = true, features = ["test-support"] }
 idna.workspace = true
 proptest.workspace = true
 tempfile.workspace = true

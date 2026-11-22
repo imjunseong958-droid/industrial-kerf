@@ -33,7 +33,7 @@ use editor_ui::input::{InputEvent, TextInput};
 use editor_ui::theme::{self, radius, space, text};
 use editor_ui::ui;
 use effects::Adding;
-use fields::TextField;
+use fields::{TextField, TypedIn};
 use gpui::{
     div, prelude::*, px, AnyElement, Bounds, Context, Entity, FocusHandle, Focusable, MouseButton,
     Pixels, ScrollHandle, Subscription, Window,
@@ -61,6 +61,8 @@ pub struct InspectorView {
     drag: Option<Drag>,
     pending: Option<Pending>,
     texts: HashMap<Field, TextField>,
+    /// The field of words that had the keys as the inspector last drew.
+    typed_in: Option<TypedIn>,
     /// Where each slider's rail was drawn, left and width.
     rails: Rc<RefCell<HashMap<Field, (f32, f32)>>>,
     /// Groups opened or closed by hand.
@@ -110,7 +112,10 @@ impl InspectorView {
                     InputEvent::Changed => {}
                 },
             ),
-            cx.on_blur(&name_focus, window, |this, _, cx| this.commit_name(cx)),
+            cx.on_blur(&name_focus, window, |this, _, cx| {
+                this.left(&TypedIn::Name);
+                this.commit_name(cx);
+            }),
             cx.subscribe_in(
                 &number,
                 window,
@@ -138,6 +143,7 @@ impl InspectorView {
             drag: None,
             pending: None,
             texts: HashMap::new(),
+            typed_in: None,
             rails: Rc::default(),
             groups: HashMap::new(),
             folded: HashSet::new(),
@@ -264,6 +270,7 @@ impl Render for InspectorView {
         // cards, its scroll, a list open, what is typed) stays while it is
         // put away, whatever is chosen meanwhile, until it shows another
         // clip; and a field left as it goes keeps what was typed for it.
+        self.commit_left(window, cx);
         let first = self.session.read(cx).selection.first().cloned();
         if first != self.clip {
             self.choose(first, window, cx);

@@ -34,7 +34,46 @@ pub(super) struct TextField {
     _subscriptions: [Subscription; 2],
 }
 
+/// A field of words that has the keys: the clip's name, or a text or colour field.
+#[derive(PartialEq)]
+pub(super) enum TypedIn {
+    Name,
+    Text(Field),
+}
+
 impl InspectorView {
+    /// A field left since the inspector last drew (by Tab, or by a press
+    /// elsewhere, such as on another clip): what was typed in it goes to its
+    /// clip first. GPUI says a field was left only once the frame after is
+    /// drawn, and that drawing puts what the snapshot says back in every
+    /// field without the keys, and starts the fields again for a clip chosen.
+    pub(super) fn commit_left(&mut self, window: &Window, cx: &mut Context<Self>) {
+        match self.typed_in.take() {
+            Some(TypedIn::Name) if !self.name.focus_handle(cx).is_focused(window) => {
+                self.commit_name(cx);
+            }
+            Some(TypedIn::Text(field))
+                if !self
+                    .texts
+                    .get(&field)
+                    .is_some_and(|entry| entry.input.focus_handle(cx).is_focused(window)) =>
+            {
+                self.commit_text(&field, cx);
+            }
+            _ => {}
+        }
+    }
+
+    /// The field was left and what was typed in it sent: a later drawing has
+    /// nothing of it to send. While the inspector is put away it is not drawn,
+    /// and the field keeps what it was sent with; sent again then, it would
+    /// undo an Undo made meanwhile.
+    pub(super) fn left(&mut self, field: &TypedIn) {
+        if self.typed_in.as_ref() == Some(field) {
+            self.typed_in = None;
+        }
+    }
+
     /// Fields not being typed in show what the snapshot says.
     pub(super) fn sync_fields(
         &mut self,
@@ -43,6 +82,7 @@ impl InspectorView {
         cx: &mut Context<Self>,
     ) {
         let name_focused = self.name.focus_handle(cx).is_focused(window);
+        self.typed_in = name_focused.then_some(TypedIn::Name);
         if !name_focused && self.name.read(cx).text() != clip.name {
             let name = clip.name.clone();
             self.name.update(cx, |input, cx| input.set_text(name, cx));
@@ -69,6 +109,9 @@ impl InspectorView {
                 entry
                     .input
                     .update(cx, |input, cx| input.set_text(current, cx));
+            }
+            if focused {
+                self.typed_in = Some(TypedIn::Text(field.clone()));
             }
             wanted.insert(field);
         }
@@ -109,7 +152,8 @@ impl InspectorView {
         let focus = input.focus_handle(cx);
         let key = field.clone();
         let blur = cx.on_blur(&focus, window, move |this, _, cx| {
-            this.commit_text(&key, cx)
+            this.left(&TypedIn::Text(key.clone()));
+            this.commit_text(&key, cx);
         });
         self.texts.insert(
             field,
