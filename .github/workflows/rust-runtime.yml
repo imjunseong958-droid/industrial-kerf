@@ -124,7 +124,7 @@ jobs:
       - name: Test what the catalog sends to the CPU
         env:
           KERF_GPU: software
-        run: cargo test --workspace --test compose -- catalog_cost:: --nocapture
+        run: "cargo test --workspace --test compose -- catalog_cost:: --nocapture"
 
   # The rest of the gate README.md's Verification names. Clippy checks
   # rather than builds, so it shares nothing with the tests' build and
