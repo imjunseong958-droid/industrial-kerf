@@ -9,7 +9,7 @@ use std::collections::BTreeSet;
 use std::fs::{self, File};
 use std::io::{self, Read, Write};
 use std::path::{Component, Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -80,7 +80,7 @@ fn ignored(directory: &Path, paths: &[&str]) -> BTreeSet<String> {
     if paths.is_empty() || !directory.join(".git").exists() {
         return BTreeSet::new();
     }
-    let child = Command::new("git")
+    let child = crate::git::program("git")
         .arg("-C")
         .arg(directory)
         .args(["check-ignore", "-z", "--stdin"])
@@ -419,6 +419,7 @@ fn hex(bytes: &[u8]) -> String {
 mod tests {
     use super::*;
     use crate::{git, scaffold};
+    use std::process::Command;
 
     fn names(folder: &Path) -> Vec<std::ffi::OsString> {
         fs::read_dir(folder)

@@ -6,15 +6,18 @@
 //! names, and it is the only one asked: what `~/.kerf/comfy.json` or
 //! `COMFY_URL` names on the machine this runs on is not read.
 //!
-//! In a file of its own: it names a models file of its own in `KERF_MODELS`
-//! and a server of its own in `KERF_COMFY`, which the other tests' process
-//! must not see, and what a server said is kept for as long as a process runs.
+//! In a file of its own: it reads a models file of its own for the whole
+//! process ([`Models::use_file`]) and gives the programs they run a server of
+//! its own in `KERF_COMFY` ([`model::set_program_env`]), which the other
+//! tests' process must not see, and what a server said is kept for as long
+//! as a process runs.
 //!
 //! It starts `target/debug/kerf-comfy` as the others start `target/debug/kerfd`:
 //! a run of the whole workspace builds both, and a run of this package alone
 //! comes after `cargo build -p kerf-runtime --bin kerfd` and
 //! `cargo build -p kerf-comfy`.
 
+use kerf_engine::recipe::model::{self, Models};
 use kerf_mcp::KerfMcpRouter;
 use serde_json::{json, Value};
 use std::io::{Read, Write};
@@ -114,15 +117,15 @@ fn a_blank_is_the_steps_to_fill_whatever_the_server_lists_for_its_input() {
         json!({"video": {"run": [program, "--workflow", "shot", "{request}"]}}).to_string(),
     )
     .unwrap();
-    std::env::set_var("KERF_MODELS", &models);
+    Models::use_file(&models);
     // The server, named as a person names theirs: in a file, which here is this test's own.
     // Nothing a shell names is read in its place.
     let (url, asked) = comfy();
     let named = dir.join("comfy.json");
     std::fs::write(&named, json!({"url": url}).to_string()).unwrap();
-    std::env::set_var("KERF_COMFY", &named);
+    model::set_program_env("KERF_COMFY", &named);
     for names_one in ["COMFY_URL", "COMFY_API_KEY", "COMFY_API_HEADER"] {
-        std::env::remove_var(names_one);
+        model::remove_program_env(names_one);
     }
     let router = KerfMcpRouter::new(dir, Some(&built.join("kerfd"))).unwrap();
     router.set_permissions(Some(kerf_mcp::permissions::Permissions::default()));

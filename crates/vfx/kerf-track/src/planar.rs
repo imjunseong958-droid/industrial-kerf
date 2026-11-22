@@ -446,19 +446,19 @@ pub fn follow_plane(
         let mut keep = agreeing.iter();
         survivors.retain(|_| *keep.next().unwrap_or(&false));
         // New points for those gone, each said to have started where the surface puts it.
-        if survivors.len() * 2 < wanted {
-            if let (Some(plane), Some(back)) = (next.levels.first(), homography.inverse()) {
-                for at in corners_inside(plane, &quad, WANTED) {
-                    let clear = survivors
-                        .iter()
-                        .all(|kept| (kept.at[0] - at[0]).hypot(kept.at[1] - at[1]) > 3.0);
-                    if clear {
-                        survivors.push(Feature {
-                            origin: back.apply(at),
-                            at,
-                            moved: [0.0, 0.0],
-                        });
-                    }
+        if survivors.len() * 2 < wanted
+            && let (Some(plane), Some(back)) = (next.levels.first(), homography.inverse())
+        {
+            for at in corners_inside(plane, &quad, WANTED) {
+                let clear = survivors
+                    .iter()
+                    .all(|kept| (kept.at[0] - at[0]).hypot(kept.at[1] - at[1]) > 3.0);
+                if clear {
+                    survivors.push(Feature {
+                        origin: back.apply(at),
+                        at,
+                        moved: [0.0, 0.0],
+                    });
                 }
             }
         }

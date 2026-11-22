@@ -577,10 +577,10 @@ fn real_footage_roto_under_a_shutter() {
                 .rev()
                 .find(|&x| coverage(frame, y * w + x) >= level)
         };
-        if let (Some(a), Some(b), Some(c)) = (crossing(0.9), crossing(0.5), crossing(0.1)) {
-            if front + 40 < w {
-                edges.push((b as f64, (c - a) as f64 / 0.8));
-            }
+        if let (Some(a), Some(b), Some(c)) = (crossing(0.9), crossing(0.5), crossing(0.1))
+            && front + 40 < w
+        {
+            edges.push((b as f64, (c - a) as f64 / 0.8));
         }
     }
     let speeds: Vec<f64> = edges

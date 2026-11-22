@@ -25,7 +25,7 @@ const GRIP: f32 = 3.0;
 pub(super) const ADD_ROW: f32 = 28.0;
 
 impl TimelineView {
-    pub(super) fn heads(&self, cx: &Context<Self>) -> impl IntoElement {
+    pub(super) fn heads(&self, cx: &Context<Self>) -> impl IntoElement + use<> {
         let lanes = self.lanes.clone();
         let scroll_y = self.view.scroll_y;
         let rate = lanes.fps;
@@ -83,7 +83,7 @@ impl TimelineView {
 
     /// Under the last track, `top` points down the heads: a row whose +
     /// opens the add-track menu.
-    fn add_row(&self, top: f32, cx: &Context<Self>) -> impl IntoElement {
+    fn add_row(&self, top: f32, cx: &Context<Self>) -> impl IntoElement + use<> {
         let add_hover = self.add_hover;
         div()
             .id("timeline-add-row")
@@ -148,7 +148,7 @@ impl TimelineView {
         read_only: bool,
         targets: &[String],
         cx: &Context<Self>,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + use<> {
         let label_ink = if row.quiet() {
             theme::ink3()
         } else {
@@ -210,7 +210,7 @@ impl TimelineView {
         control: f32,
         read_only: bool,
         cx: &Context<Self>,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + use<> {
         let (track, locked) = (row.id.clone(), row.locked);
         ui::icon_button(
             ElementId::Name(format!("track-lock-{}", row.id).into()),
@@ -230,7 +230,7 @@ impl TimelineView {
         control: f32,
         read_only: bool,
         cx: &Context<Self>,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + use<> {
         if row.audio() {
             let (track, muted) = (row.id.clone(), row.muted);
             ui::icon_button(
@@ -262,7 +262,12 @@ impl TimelineView {
 
     /// Solo, for sound: what playback hears alone, for this session;
     /// nothing to hear while kerfd is not connected.
-    fn head_solo(&self, row: &Row, control: f32, cx: &Context<Self>) -> Option<impl IntoElement> {
+    fn head_solo(
+        &self,
+        row: &Row,
+        control: f32,
+        cx: &Context<Self>,
+    ) -> Option<impl IntoElement + use<>> {
         let offline = self.offline(cx);
         row.audio().then(|| {
             let track = row.id.clone();
@@ -307,7 +312,7 @@ impl TimelineView {
         targets: &[String],
         label_ink: Rgba,
         cx: &Context<Self>,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + use<> {
         let targetable = row.kind != TrackKind::Subtitle && !read_only;
         let targeted = targetable && targets.contains(&row.id);
         let colour = kind_colour(row.kind);
@@ -359,7 +364,7 @@ impl TimelineView {
 
     /// The line under a head: dragged, it resizes the track (Option: every
     /// track of its kind).
-    fn head_grip(&self, row: &Row, cx: &Context<Self>) -> impl IntoElement {
+    fn head_grip(&self, row: &Row, cx: &Context<Self>) -> impl IntoElement + use<> {
         let (track, kind, height) = (row.id.clone(), row.kind, row.height);
         let words = format!(
             "Drag to resize {}. Option-drag resizes every {} track; Option-scroll over the heads resizes every track.",

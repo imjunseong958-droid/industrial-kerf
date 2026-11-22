@@ -634,10 +634,10 @@ impl Worker {
                 Duration::from_millis(100)
             };
             let command = self.next_command(timeout);
-            if let Some(command) = command {
-                if !self.handle_command(command) {
-                    break;
-                }
+            if let Some(command) = command
+                && !self.handle_command(command)
+            {
+                break;
             }
             if self.pending_events.is_empty() {
                 if self.state == PlaybackState::Playing {
@@ -676,11 +676,11 @@ impl Worker {
                     })
             }
         }?;
-        if let WorkerCommand::Open { request_id, .. } = &command {
-            if let Some(request) = self.take_seek_request_before(*request_id) {
-                self.deferred_command = Some(command);
-                return Some(WorkerCommand::Seek(request));
-            }
+        if let WorkerCommand::Open { request_id, .. } = &command
+            && let Some(request) = self.take_seek_request_before(*request_id)
+        {
+            self.deferred_command = Some(command);
+            return Some(WorkerCommand::Seek(request));
         }
         Some(command)
     }
@@ -1089,22 +1089,21 @@ impl Worker {
         let source = self.timeline.sources()[source_index].clone();
         let serve = self.serve_epoch;
         let epoch = Arc::clone(&self.epoch);
-        if let Some(mut decoder) = self.decoder.take() {
-            if decoder.same_source(&source.path)
-                && decoder
-                    .retarget(
-                        &self.timeline,
-                        &clip,
-                        &source,
-                        timeline_time,
-                        release_early,
-                        serve,
-                    )
-                    .is_ok()
-            {
-                self.decoder = Some(decoder);
-                return Ok(());
-            }
+        if let Some(mut decoder) = self.decoder.take()
+            && decoder.same_source(&source.path)
+            && decoder
+                .retarget(
+                    &self.timeline,
+                    &clip,
+                    &source,
+                    timeline_time,
+                    release_early,
+                    serve,
+                )
+                .is_ok()
+        {
+            self.decoder = Some(decoder);
+            return Ok(());
         }
         self.decoder = Some(VideoDecoder::open(
             &self.timeline,

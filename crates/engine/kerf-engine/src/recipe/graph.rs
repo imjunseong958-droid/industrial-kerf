@@ -423,10 +423,10 @@ impl Building<'_> {
                     );
                     // The path it is led along, where it has one: its points, as its
                     // line writes them.
-                    if let Some(Param::Static(Value::Text(path))) = found.props.get("path") {
-                        if !path.trim().is_empty() {
-                            holds.insert("path".to_owned(), json!(path));
-                        }
+                    if let Some(Param::Static(Value::Text(path))) = found.props.get("path")
+                        && !path.trim().is_empty()
+                    {
+                        holds.insert("path".to_owned(), json!(path));
                     }
                     format!("where it goes in {}", sequence.id)
                 }

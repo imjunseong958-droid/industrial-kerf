@@ -1,10 +1,11 @@
 //! A render whose picture is encoded a stretch at a time and joined: the same frames at the same
 //! times as one encoded whole, and after an edit only the stretches it touched encoded again.
-//! The only test of this file, since it sets where stretches are kept for the whole process.
+//! The only test of this file, since renders are counted for the whole process
+//! (`section_stats`).
 
 use kerf_engine::process::ffmpeg::{resolve_ffmpeg_bin, resolve_ffprobe_bin};
 use kerf_engine::render::sections::section_stats;
-use kerf_engine::render::{render_program, RenderOptions, RenderPreset};
+use kerf_engine::render::{render_program, CacheFolder, RenderOptions, RenderPreset};
 use kerf_lang::{apply_script, parse_document};
 use kerf_model::{Catalog, Project};
 use std::path::Path;
@@ -13,7 +14,9 @@ use std::process::Command;
 const SIZE: usize = 320 * 180 * 3 / 2;
 const FRAMES: usize = 384;
 
-fn render(project: &Project, out: &Path) {
+/// `project` rendered to `out`, keeping its stretches where `sections` says. Frames are not
+/// kept, so that what is not encoded again is seen not to be drawn again.
+fn render(project: &Project, out: &Path, sections: CacheFolder) {
     render_program::<fn(f64)>(
         project,
         None,
@@ -21,6 +24,8 @@ fn render(project: &Project, out: &Path) {
         &RenderOptions {
             output: out.to_string_lossy().into_owned(),
             force_software: true,
+            frame_cache: CacheFolder::Off,
+            section_cache: sections,
             ..RenderOptions::default()
         },
         None,
@@ -85,8 +90,6 @@ fn apart(a: &[u8], b: &[u8]) -> f64 {
 #[test]
 fn a_render_in_stretches_is_the_render_and_an_edit_encodes_only_what_it_touched() {
     let dir = tempfile::tempdir().expect("a folder");
-    // Frames are not kept, so that what is not encoded again is seen not to be drawn again.
-    std::env::set_var("KERF_FRAME_CACHE", "off");
     let source = dir.path().join("source.mp4");
     let made = Command::new(resolve_ffmpeg_bin())
         .args(["-hide_banner", "-loglevel", "error", "-y"])
@@ -134,15 +137,14 @@ fn a_render_in_stretches_is_the_render_and_an_edit_encodes_only_what_it_touched(
     let file = |name: &str| dir.path().join(name);
 
     // Encoded whole, as it was before stretches: what the rest is held to.
-    std::env::set_var("KERF_SECTION_CACHE", "off");
-    render(&project, &file("whole.mp4"));
+    render(&project, &file("whole.mp4"), CacheFolder::Off);
     assert_eq!(section_stats(), Default::default());
     let whole = frames(&file("whole.mp4"));
     assert_eq!(whole.len(), FRAMES);
 
     // In stretches, with none kept yet: every frame is drawn and encoded, in a few stretches.
-    std::env::set_var("KERF_SECTION_CACHE", dir.path().join("sections"));
-    render(&project, &file("first.mp4"));
+    let kept_in = CacheFolder::At(dir.path().join("sections"));
+    render(&project, &file("first.mp4"), kept_in.clone());
     let first_stats = section_stats();
     assert_eq!(
         (
@@ -189,7 +191,7 @@ fn a_render_in_stretches_is_the_render_and_an_edit_encodes_only_what_it_touched(
     );
 
     // Again, unchanged: nothing is drawn or encoded, and the file holds the same frames.
-    render(&project, &file("second.mp4"));
+    render(&project, &file("second.mp4"), kept_in.clone());
     let second_stats = section_stats();
     assert_eq!(
         second_stats.encoded, first_stats.encoded,
@@ -214,7 +216,7 @@ fn a_render_in_stretches_is_the_render_and_an_edit_encodes_only_what_it_touched(
     let edited = apply_script(&project, Catalog::builtin(), "set c3 opacity=0.5")
         .expect("edits")
         .project;
-    render(&edited, &file("third.mp4"));
+    render(&edited, &file("third.mp4"), kept_in.clone());
     let third_stats = section_stats();
     let (kept, encoded) = (
         third_stats.kept_frames - second_stats.kept_frames,
@@ -249,7 +251,7 @@ fn a_render_in_stretches_is_the_render_and_an_edit_encodes_only_what_it_touched(
     let cut = apply_script(&project, Catalog::builtin(), "ripple-delete c1")
         .expect("edits")
         .project;
-    render(&cut, &file("fourth.mp4"));
+    render(&cut, &file("fourth.mp4"), kept_in.clone());
     let fourth_stats = section_stats();
     assert_eq!(
         (fourth_stats.kept_frames - third_stats.kept_frames)
@@ -331,6 +333,8 @@ fn a_render_in_stretches_is_the_render_and_an_edit_encodes_only_what_it_touched(
             &RenderOptions {
                 output: file(name).to_string_lossy().into_owned(),
                 force_software: true,
+                frame_cache: CacheFolder::Off,
+                section_cache: kept_in.clone(),
                 ..options
             },
             None,

@@ -185,10 +185,10 @@ pub fn measure_program_with_progress(
     command.args(&args);
     let mut parser = Parser::default();
     let finished = sidecar::run(command, cancellation, |line| {
-        if let Some(at) = parser.line(line) {
-            if duration > 0.0 {
-                on_progress((at / duration).clamp(0.0, 1.0));
-            }
+        if let Some(at) = parser.line(line)
+            && duration > 0.0
+        {
+            on_progress((at / duration).clamp(0.0, 1.0));
         }
     })?;
     if !finished.status.success() {

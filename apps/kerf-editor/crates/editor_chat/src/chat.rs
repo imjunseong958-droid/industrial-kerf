@@ -501,10 +501,11 @@ impl ChatView {
                 |turn, t| turn.opacity(t),
             ));
         }
-        if busy && showing_this {
-            if let Some(working) = self.working(window, cx) {
-                list = list.child(working);
-            }
+        if busy
+            && showing_this
+            && let Some(working) = self.working(window, cx)
+        {
+            list = list.child(working);
         }
         if !loose.is_empty() {
             // While a turn runs, what it stages has no turn yet to sit under.
@@ -545,7 +546,7 @@ impl ChatView {
     }
 
     /// The list, scrolling in the conversation's column.
-    fn scroller(&self, list: gpui::Div) -> impl IntoElement {
+    fn scroller(&self, list: gpui::Div) -> impl IntoElement + use<> {
         div()
             .id("conversation")
             .flex_1()

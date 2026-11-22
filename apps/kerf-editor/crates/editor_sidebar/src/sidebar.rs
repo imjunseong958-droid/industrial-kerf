@@ -353,7 +353,7 @@ impl SidebarView {
     }
 
     /// The sidebar's head, as tall as the toolbar beside it: Hide sidebar.
-    fn head(window: &Window, cx: &Context<Self>) -> impl IntoElement {
+    fn head(window: &Window, cx: &Context<Self>) -> impl IntoElement + use<> {
         div()
             .h(px(layout::TOOLBAR))
             .flex_none()
@@ -385,10 +385,10 @@ impl Render for SidebarView {
         // A menu that had the keys has gone: they go back where they were,
         // once what closed it has run its course (a press elsewhere giving
         // them to what it pressed, the app's menu opening in its place).
-        if let Some(back) = self.refocus.take() {
-            if self.menu_focus.is_focused(window) {
-                cx.defer_in(window, move |_, window, _| window.focus(&back));
-            }
+        if let Some(back) = self.refocus.take()
+            && self.menu_focus.is_focused(window)
+        {
+            cx.defer_in(window, move |_, window, _| window.focus(&back));
         }
         // A menu gone by a key still down holds the keys, unseen, until it
         // comes up; Enter and Space press nothing meanwhile.

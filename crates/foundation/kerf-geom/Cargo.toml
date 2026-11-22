@@ -2,7 +2,7 @@
 name = "kerf-geom"
 description = "Kerf's 2D geometry: vectors, rectangles, affine transforms, and projective matrices (from FilmCraft and EffectCraft)"
 version.workspace = true
-edition = "2024"
+edition.workspace = true
 license = "MIT OR Apache-2.0"
 rust-version = "1.95"
 

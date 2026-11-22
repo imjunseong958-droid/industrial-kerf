@@ -766,11 +766,11 @@ fn openai_chat_stream_chunks(events: &[Value]) -> Vec<ProviderChunk> {
             continue;
         };
         let delta = choice.get("delta").cloned().unwrap_or_else(|| json!({}));
-        if let Some(value) = delta.get("content").and_then(Value::as_str) {
-            if !value.is_empty() {
-                text.push_str(value);
-                chunks.push(ProviderChunk::TextDelta { text: value.into() });
-            }
+        if let Some(value) = delta.get("content").and_then(Value::as_str)
+            && !value.is_empty()
+        {
+            text.push_str(value);
+            chunks.push(ProviderChunk::TextDelta { text: value.into() });
         }
         if let Some(calls) = delta.get("tool_calls").and_then(Value::as_array) {
             for call in calls {
@@ -943,36 +943,36 @@ fn openai_responses_stream_chunks(events: &[Value]) -> Vec<ProviderChunk> {
     for event in events {
         match event.get("type").and_then(Value::as_str) {
             Some("response.output_text.delta") => {
-                if let Some(delta) = event.get("delta").and_then(Value::as_str) {
-                    if !delta.is_empty() {
-                        text.push_str(delta);
-                        chunks.push(ProviderChunk::TextDelta { text: delta.into() });
-                    }
+                if let Some(delta) = event.get("delta").and_then(Value::as_str)
+                    && !delta.is_empty()
+                {
+                    text.push_str(delta);
+                    chunks.push(ProviderChunk::TextDelta { text: delta.into() });
                 }
             }
             Some("response.output_item.added") | Some("response.output_item.done") => {
-                if let Some(item) = event.get("item") {
-                    if item.get("type").and_then(Value::as_str) == Some("function_call") {
-                        let id = item
-                            .get("call_id")
-                            .or_else(|| item.get("id"))
-                            .and_then(Value::as_str)
-                            .unwrap_or("call_tool")
-                            .to_owned();
-                        let entry = calls.entry(id).or_default();
-                        entry.0 = item
-                            .get("id")
-                            .and_then(Value::as_str)
-                            .unwrap_or_default()
-                            .to_owned();
-                        entry.1 = item
-                            .get("name")
-                            .and_then(Value::as_str)
-                            .unwrap_or_default()
-                            .to_owned();
-                        if let Some(arguments) = item.get("arguments").and_then(Value::as_str) {
-                            entry.2 = arguments.to_owned();
-                        }
+                if let Some(item) = event.get("item")
+                    && item.get("type").and_then(Value::as_str) == Some("function_call")
+                {
+                    let id = item
+                        .get("call_id")
+                        .or_else(|| item.get("id"))
+                        .and_then(Value::as_str)
+                        .unwrap_or("call_tool")
+                        .to_owned();
+                    let entry = calls.entry(id).or_default();
+                    entry.0 = item
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_owned();
+                    entry.1 = item
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_owned();
+                    if let Some(arguments) = item.get("arguments").and_then(Value::as_str) {
+                        entry.2 = arguments.to_owned();
                     }
                 }
             }
@@ -1025,14 +1025,14 @@ fn openai_responses_stream_chunks(events: &[Value]) -> Vec<ProviderChunk> {
             }
             content
         });
-    if text.is_empty() {
-        if let Some(value) = content.iter().find_map(|block| {
+    if text.is_empty()
+        && let Some(value) = content.iter().find_map(|block| {
             (block.get("type").and_then(Value::as_str) == Some("text"))
                 .then(|| block.get("text").and_then(Value::as_str))
                 .flatten()
-        }) {
-            chunks.push(ProviderChunk::TextDelta { text: value.into() });
-        }
+        })
+    {
+        chunks.push(ProviderChunk::TextDelta { text: value.into() });
     }
     chunks.push(ProviderChunk::MessageEnd {
         stop_reason: if content.iter().any(is_tool_use) {
@@ -1217,10 +1217,10 @@ pub fn to_openai_responses_input(messages: &[Value]) -> Vec<Value> {
 
 fn assistant_to_blocks(message: &Value) -> Vec<Value> {
     let mut blocks = Vec::new();
-    if let Some(text) = message.get("content").and_then(Value::as_str) {
-        if !text.is_empty() {
-            blocks.push(json!({"type": "text", "text": text}));
-        }
+    if let Some(text) = message.get("content").and_then(Value::as_str)
+        && !text.is_empty()
+    {
+        blocks.push(json!({"type": "text", "text": text}));
     }
     if let Some(tool_calls) = message.get("tool_calls").and_then(Value::as_array) {
         for call in tool_calls {
@@ -1253,10 +1253,10 @@ fn response_output_to_blocks(response: &Value) -> Vec<Value> {
             Some("message") => {
                 if let Some(content) = item.get("content").and_then(Value::as_array) {
                     for part in content {
-                        if part.get("type").and_then(Value::as_str) == Some("output_text") {
-                            if let Some(text) = part.get("text").and_then(Value::as_str) {
-                                blocks.push(json!({"type": "text", "text": text}));
-                            }
+                        if part.get("type").and_then(Value::as_str) == Some("output_text")
+                            && let Some(text) = part.get("text").and_then(Value::as_str)
+                        {
+                            blocks.push(json!({"type": "text", "text": text}));
                         }
                     }
                 }
@@ -1282,12 +1282,11 @@ fn response_output_to_blocks(response: &Value) -> Vec<Value> {
             _ => {}
         }
     }
-    if blocks.is_empty() {
-        if let Some(text) = response.get("output_text").and_then(Value::as_str) {
-            if !text.is_empty() {
-                blocks.push(json!({"type": "text", "text": text}));
-            }
-        }
+    if blocks.is_empty()
+        && let Some(text) = response.get("output_text").and_then(Value::as_str)
+        && !text.is_empty()
+    {
+        blocks.push(json!({"type": "text", "text": text}));
     }
     blocks
 }

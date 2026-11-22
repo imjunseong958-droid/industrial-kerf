@@ -18,10 +18,11 @@
 # and its profiles and lints are the repository's own, repeated here.
 [workspace]
 members = ["crates/*"]
+resolver = "2"
 
 [workspace.package]
 version = "0.1.5"
-edition = "2021"
+edition = "2024"
 license = "MIT"
 
 # Every dependency of the editor's crates, declared once: a crate takes it

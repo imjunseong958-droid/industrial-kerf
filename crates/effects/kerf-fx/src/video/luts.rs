@@ -128,10 +128,10 @@ pub(crate) fn shared_text(text: String) -> Arc<str> {
         .unwrap_or_else(|e| e.into_inner());
     // a dead text's Weak still holds its allocation, so let go of those first
     texts.retain(|_, t| t.strong_count() > 0);
-    if let Some(alive) = texts.get(&digest).and_then(Weak::upgrade) {
-        if *alive == *text {
-            return alive;
-        }
+    if let Some(alive) = texts.get(&digest).and_then(Weak::upgrade)
+        && *alive == *text
+    {
+        return alive;
     }
     let text: Arc<str> = text.into();
     texts.insert(digest, Arc::downgrade(&text));

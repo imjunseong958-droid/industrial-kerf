@@ -216,7 +216,7 @@ pub(super) fn track_reads<'a>(
     catalog: &'a Catalog,
     fx: &Id,
     params: &'a Params,
-) -> impl Iterator<Item = Id> + 'a {
+) -> impl Iterator<Item = Id> + 'a + use<'a> {
     named(params_of(catalog, fx), params, |ty| {
         matches!(ty, ParamType::Track | ParamType::Sound)
     })

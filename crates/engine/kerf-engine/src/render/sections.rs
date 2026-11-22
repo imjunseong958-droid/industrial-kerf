@@ -14,6 +14,7 @@
 //! the timeline. So a cut near the start of a program moves the stretches
 //! after it and leaves them the same stretches.
 
+use super::CacheFolder;
 use sha2::{Digest, Sha256};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
@@ -251,15 +252,15 @@ pub(crate) struct Kept {
 static MAKING: AtomicU64 = AtomicU64::new(0);
 
 impl Kept {
-    /// The user's folder, unless it is turned off or cannot be made.
-    pub(crate) fn open() -> Option<Self> {
+    /// The folder `cache` says, unless it is none or cannot be made.
+    pub(crate) fn open(cache: &CacheFolder) -> Option<Self> {
         let gigabytes = std::env::var("KERF_SECTION_CACHE_GB")
             .ok()
             .and_then(|value| value.parse::<f64>().ok())
             .filter(|gigabytes| *gigabytes > 0.0)
             .unwrap_or(DEFAULT_GIGABYTES as f64);
         Self::at(
-            &default_folder()?,
+            &cache.folder(default_folder)?,
             kerf_compose::DRAW_STAMP,
             (gigabytes * (1u64 << 30) as f64) as u64,
         )

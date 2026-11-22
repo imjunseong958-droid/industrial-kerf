@@ -202,7 +202,8 @@ pub fn path_with_tool_folders(path: &str, home: &Path) -> String {
         "/usr/local/bin",
         local.as_str(),
     ] {
-        if !folders.iter().any(|known| known == folder) {
+        // A folder whose name has a colon cannot be written in a PATH.
+        if !folder.contains(':') && !folders.iter().any(|known| known == folder) {
             folders.push(folder.to_owned());
         }
     }
@@ -304,13 +305,13 @@ async fn frame_drawn(
     let since = Instant::now();
     let mut woken_at: Option<Instant> = None;
     while !drawn.get() && since.elapsed() < theme::motion::CAPTURE_FRAME_WAIT {
-        if let Some(target) = wake.clone() {
-            if woken_at.is_none_or(|at| at.elapsed() >= theme::motion::CAPTURE_REWAKE) {
-                woken_at = Some(Instant::now());
-                cx.background_executor()
-                    .spawn(async move { self::wake(&target) })
-                    .await;
-            }
+        if let Some(target) = wake.clone()
+            && woken_at.is_none_or(|at| at.elapsed() >= theme::motion::CAPTURE_REWAKE)
+        {
+            woken_at = Some(Instant::now());
+            cx.background_executor()
+                .spawn(async move { self::wake(&target) })
+                .await;
         }
         cx.background_executor().timer(theme::motion::POLL).await;
     }
@@ -1097,18 +1098,18 @@ fn front_window(cx: &App) -> Option<gpui::AnyWindowHandle> {
 /// question to GitHub 20 h ago or more, a newer release not skipped.
 pub fn launch_notices(cx: &mut App) {
     cx.spawn(async move |cx| {
-        if let Ok(Some((answer, folder))) = cx.update(crash_notice) {
-            if matches!(answer.await, Ok(1)) {
-                let _ = cx.update(|cx| {
-                    if let Err(error) = std::fs::create_dir_all(&folder) {
-                        log::warn!(
-                            "{}: the crash folder could not be made: {error}",
-                            folder.display()
-                        );
-                    }
-                    cx.reveal_path(&folder);
-                });
-            }
+        if let Ok(Some((answer, folder))) = cx.update(crash_notice)
+            && matches!(answer.await, Ok(1))
+        {
+            let _ = cx.update(|cx| {
+                if let Err(error) = std::fs::create_dir_all(&folder) {
+                    log::warn!(
+                        "{}: the crash folder could not be made: {error}",
+                        folder.display()
+                    );
+                }
+                cx.reveal_path(&folder);
+            });
         }
         let due = cx
             .update(|_| {
@@ -1155,7 +1156,7 @@ pub fn launch_notices(cx: &mut App) {
 fn crash_notice(
     cx: &mut App,
 ) -> Option<(
-    impl std::future::Future<Output = Result<usize, impl Sized>>,
+    impl std::future::Future<Output = Result<usize, impl Sized + use<>>> + use<>,
     PathBuf,
 )> {
     let listed = kerf_bridge::crash_reports();
@@ -1193,7 +1194,7 @@ fn offer_update(
     answer: &Value,
     cx: &mut App,
 ) -> Option<(
-    impl std::future::Future<Output = Result<usize, impl Sized>>,
+    impl std::future::Future<Output = Result<usize, impl Sized + use<>>> + use<>,
     String,
     String,
 )> {

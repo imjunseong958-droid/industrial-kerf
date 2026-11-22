@@ -75,7 +75,11 @@ impl PictureEffect for Warp {
 
 /// What turns a point of the document, in fractions of the picture, into its pixels, moved with the
 /// picture by the effect's `move_x` and `move_y`.
-fn placing(picture: &Image, effect: &Effect, run: &EffectRun) -> impl Fn([f64; 2]) -> [f32; 2] {
+fn placing(
+    picture: &Image,
+    effect: &Effect,
+    run: &EffectRun,
+) -> impl Fn([f64; 2]) -> [f32; 2] + use<> {
     let (w, h) = (picture.w as f64, picture.h as f64);
     let moved = [run.number(effect, "move_x"), run.number(effect, "move_y")];
     move |point| {
@@ -151,10 +155,10 @@ impl PictureEffect for Fill {
         let patch = run.number(effect, "patch").round() as usize;
         let key = fill_key(picture, &hole, &run_method(effect, run), patch, run.seed);
         let pixels = kept_or(key, || {
-            if method.as_deref() == Some("video") {
-                if let Some(pixels) = fill_run(picture, effect, run, patch, &hole) {
-                    return pixels;
-                }
+            if method.as_deref() == Some("video")
+                && let Some(pixels) = fill_run(picture, effect, run, patch, &hole)
+            {
+                return pixels;
             }
             let source = encoded(picture);
             let filled = match method.as_deref() {

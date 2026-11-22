@@ -683,6 +683,9 @@ fn replace_file(temporary_path: &Path, destination: &Path) -> Result<(), Runtime
 #[cfg(windows)]
 fn replace_file(temporary_path: &Path, destination: &Path) -> Result<(), RuntimeError> {
     use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
+    };
 
     let source: Vec<u16> = temporary_path
         .as_os_str()
@@ -710,18 +713,6 @@ fn replace_file(temporary_path: &Path, destination: &Path) -> Result<(), Runtime
         return Err(io_error(std::io::Error::last_os_error()));
     }
     Ok(())
-}
-
-#[cfg(windows)]
-const MOVEFILE_REPLACE_EXISTING: u32 = 0x1;
-
-#[cfg(windows)]
-const MOVEFILE_WRITE_THROUGH: u32 = 0x8;
-
-#[cfg(windows)]
-#[link(name = "kernel32")]
-extern "system" {
-    fn MoveFileExW(existing_file_name: *const u16, new_file_name: *const u16, flags: u32) -> i32;
 }
 
 fn sync_parent_dir(directory: &Path) {

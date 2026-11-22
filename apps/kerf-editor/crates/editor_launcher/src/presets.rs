@@ -456,7 +456,7 @@ fn picked(paths: Vec<PathBuf>) -> Picked {
 pub fn choose_paths(
     cx: &App,
     options: PathPromptOptions,
-) -> impl std::future::Future<Output = Picked> + 'static {
+) -> impl std::future::Future<Output = Picked> + 'static + use<> {
     let asked = cx.prompt_for_paths(options);
     async move {
         match asked.await {
@@ -473,7 +473,7 @@ pub(crate) fn choose_new_path(
     cx: &App,
     folder: &Path,
     name: &str,
-) -> impl std::future::Future<Output = Picked> + 'static {
+) -> impl std::future::Future<Output = Picked> + 'static + use<> {
     let asked = cx.prompt_for_new_path(folder, Some(name));
     async move {
         match asked.await {

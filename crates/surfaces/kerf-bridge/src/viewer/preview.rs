@@ -150,10 +150,8 @@ fn spawn_render(
                 }
                 _ => false,
             };
-            if !shown {
-                if let Ok((output, _)) = &result {
-                    discard_preview(&shared, PathBuf::from(output));
-                }
+            if !shown && let Ok((output, _)) = &result {
+                discard_preview(&shared, PathBuf::from(output));
             }
             stopped
         };
@@ -227,12 +225,10 @@ fn export(
             let _ = tx.try_send(Event::Preview(running.clone()));
         },
     );
-    if preview {
-        if let Ok(mut running) = shared.preview_cancel.lock() {
-            *running = None;
-            // A cancel that came as the render finished outlives the job.
-            let _ = std::fs::remove_file(&cancel);
-        }
+    if preview && let Ok(mut running) = shared.preview_cancel.lock() {
+        *running = None;
+        // A cancel that came as the render finished outlives the job.
+        let _ = std::fs::remove_file(&cancel);
     }
     match result {
         Ok(()) => {
@@ -330,15 +326,14 @@ fn exited_preview(shared: &Shared, tx: &Outbox) {
 
 /// Stop the preview render running, if there is one.
 pub(crate) fn cancel_preview(shared: &Shared) {
-    if let Ok(running) = shared.preview_cancel.lock() {
-        if let Some(marker) = &*running {
-            if let Err(error) = std::fs::write(marker, b"") {
-                log::warn!(
-                    "the preview render goes on: {} was not written: {error}",
-                    marker.display()
-                );
-            }
-        }
+    if let Ok(running) = shared.preview_cancel.lock()
+        && let Some(marker) = &*running
+        && let Err(error) = std::fs::write(marker, b"")
+    {
+        log::warn!(
+            "the preview render goes on: {} was not written: {error}",
+            marker.display()
+        );
     }
 }
 
@@ -381,10 +376,10 @@ pub(crate) fn discard_previews(shared: &Shared) {
 /// worker to try again while it is still open. Only previews come here;
 /// exports are the person's.
 pub(crate) fn discard_preview(shared: &Shared, file: PathBuf) {
-    if !remove_preview(&file) {
-        if let Ok(mut stale) = shared.stale_previews.lock() {
-            stale.push(file);
-        }
+    if !remove_preview(&file)
+        && let Ok(mut stale) = shared.stale_previews.lock()
+    {
+        stale.push(file);
     }
 }
 

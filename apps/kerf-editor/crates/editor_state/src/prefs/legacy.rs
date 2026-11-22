@@ -97,15 +97,14 @@ pub fn import_qt_once(settings_dir: Option<&Path>) -> Vec<String> {
     if !settings.contains_key("agent/connection")
         && prefs.provider == Provider::Cloud
         && Provider::from_named_environment().is_none()
+        && let Some(own) = keychain_provider()
     {
-        if let Some(own) = keychain_provider() {
-            let protocol = settings
-                .get("agent/activeProvider")
-                .and_then(Value::as_str)
-                .and_then(Provider::named)
-                .filter(|named| matches!(named, Provider::Anthropic | Provider::Openai));
-            prefs.provider = protocol.unwrap_or(own);
-        }
+        let protocol = settings
+            .get("agent/activeProvider")
+            .and_then(Value::as_str)
+            .and_then(Provider::named)
+            .filter(|named| matches!(named, Provider::Anthropic | Provider::Openai));
+        prefs.provider = protocol.unwrap_or(own);
     }
     let keys: Vec<(String, String)> = std::mem::take(&mut prefs.kept_keys).into_iter().collect();
     for (name, key) in keys {
@@ -344,11 +343,11 @@ pub fn import_qt(settings: &QtSettings, prefs: &mut Prefs) -> Vec<String> {
         prefs.safe_zones = shown;
         took("viewer/safeZones");
     }
-    if let Some(keymap) = text("commands/keymap") {
-        if let Some(chosen) = Keymap::ALL.into_iter().find(|known| known.wire() == keymap) {
-            prefs.keymap = chosen;
-            took("commands/keymap");
-        }
+    if let Some(keymap) = text("commands/keymap")
+        && let Some(chosen) = Keymap::ALL.into_iter().find(|known| known.wire() == keymap)
+    {
+        prefs.keymap = chosen;
+        took("commands/keymap");
     }
     // The launcher's pages: New Project, Recent, From Preset, Clone.
     if let Some(page) = number("launcher/page") {

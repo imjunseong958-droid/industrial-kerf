@@ -514,10 +514,10 @@ fn path_from_url(target: &str) -> String {
     }
     let mut path = String::from_utf8_lossy(&bytes).into_owned();
     // `/C:/footage/a.mov` is `C:/footage/a.mov`.
-    if let [b'/', drive, b':', ..] = path.as_bytes() {
-        if drive.is_ascii_alphabetic() {
-            path.remove(0);
-        }
+    if let [b'/', drive, b':', ..] = path.as_bytes()
+        && drive.is_ascii_alphabetic()
+    {
+        path.remove(0);
     }
     if !host.is_empty() && !host.eq_ignore_ascii_case("localhost") {
         path = format!("//{host}{path}");

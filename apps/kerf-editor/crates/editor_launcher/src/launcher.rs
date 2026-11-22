@@ -558,7 +558,7 @@ impl LauncherView {
         folder: PathBuf,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> Option<impl std::future::Future<Output = Result<usize, impl Sized>>> {
+    ) -> Option<impl std::future::Future<Output = Result<usize, impl Sized + use<>>> + use<>> {
         if !editor_state::folders::needs_start(&folder) {
             return None;
         }
@@ -573,7 +573,7 @@ impl LauncherView {
 
     /// The launcher's head: Kerf's mark, Settings…, and Cancel when an editor
     /// is behind it.
-    fn head(&self, window: &Window, cx: &Context<Self>) -> impl IntoElement {
+    fn head(&self, window: &Window, cx: &Context<Self>) -> impl IntoElement + use<> {
         div()
             .flex()
             .items_start()

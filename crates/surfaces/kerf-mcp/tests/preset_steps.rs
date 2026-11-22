@@ -7,10 +7,11 @@
 //! and plate are made of the footage the slot is bound to, and a shot from a
 //! guide, whose scene comes with the preset.
 //!
-//! In a file of its own: it names a models file of its own in `KERF_MODELS`,
-//! which the other tests' process must not see.
+//! In a file of its own: it reads a models file of its own for the whole
+//! process ([`Models::use_file`]), which the other tests' process must not see.
 #![cfg(unix)]
 
+use kerf_engine::recipe::model::Models;
 use kerf_mcp::permissions::{Mode, Permissions};
 use kerf_mcp::KerfMcpRouter;
 use kerf_model::{Catalog, Content, Project, Time};
@@ -183,7 +184,7 @@ fn a_preset_carries_how_its_media_are_made_and_they_are_made_where_it_is_applied
         ),
     )
     .unwrap();
-    std::env::set_var("KERF_MODELS", &models);
+    Models::use_file(&models);
 
     // ---- Saved where the pattern was made: each a preset of its own.
     let author = router(&source);

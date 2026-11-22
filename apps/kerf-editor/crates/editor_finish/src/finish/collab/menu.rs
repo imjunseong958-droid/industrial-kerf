@@ -119,7 +119,7 @@ impl Collab {
     }
 
     /// The menu's head: where the project stands, and what went wrong.
-    fn head(&self, status: &CollabStatus, cx: &App) -> impl IntoElement {
+    fn head(&self, status: &CollabStatus, cx: &App) -> impl IntoElement + use<> {
         let revision = self.session.read(cx).revision();
         let (title, standing) = if status.git.repository {
             let mut parts = vec![format!("Revision {revision}")];
@@ -220,7 +220,7 @@ impl Collab {
     /// Why each of the menu's commands cannot run now, as the registry says
     /// it for the whole window (a project.kerf changed on disk holds back
     /// Sync and the branches); while a sync runs, that.
-    pub(super) fn reasons(&self, cx: &App) -> impl Fn(&str) -> Result<(), SharedString> {
+    pub(super) fn reasons(&self, cx: &App) -> impl Fn(&str) -> Result<(), SharedString> + use<> {
         let states = kerf_bridge::commands_states(&self.session.read(cx).command_context());
         let busy = self.busy();
         move |id: &str| {

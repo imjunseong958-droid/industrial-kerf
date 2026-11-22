@@ -49,7 +49,7 @@ impl Workspace {
         leading: bool,
         window: &Window,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + use<> {
         let session = self.session.read(cx);
         let follow = session.prefs.follow_kerf;
         // What renders, queued exports too ("Draft export · 42%").
@@ -224,7 +224,7 @@ impl Workspace {
         open: bool,
         window: &Window,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + use<> {
         let ink = if able { theme::ink() } else { theme::dis() };
         let main = toolbar_stop(
             div().id("export-main"),

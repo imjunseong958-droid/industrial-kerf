@@ -249,12 +249,12 @@ impl Workflow {
                     ));
                 }
             }
-            if let Some(stand) = &without.reads {
-                if stand == id || !workflow.graph.contains_key(stand) {
-                    return Err(format!(
+            if let Some(stand) = &without.reads
+                && (stand == id || !workflow.graph.contains_key(stand))
+            {
+                return Err(format!(
                         "`without` has node {stand} stand in for node {id}: it is another node of `workflow`"
                     ));
-                }
             }
         }
         Ok(workflow)

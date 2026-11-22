@@ -718,12 +718,12 @@ pub fn check(steps: &[Step]) -> Result<(), String> {
                 ));
             }
         }
-        if let Step::Join { parts, to, .. } = step {
-            if parts.contains(to) {
-                return Err(format!(
-                    "step {number} writes `{{{to}}}`, which is one of the parts it joins"
-                ));
-            }
+        if let Step::Join { parts, to, .. } = step
+            && parts.contains(to)
+        {
+            return Err(format!(
+                "step {number} writes `{{{to}}}`, which is one of the parts it joins"
+            ));
         }
         made.push(step.makes());
     }

@@ -46,7 +46,7 @@ fn without_a_crash_dialog() {
         use windows_sys::Win32::System::Diagnostics::Debug::{
             SetErrorMode, SEM_FAILCRITICALERRORS, SEM_NOGPFAULTERRORBOX,
         };
-        extern "C" {
+        unsafe extern "C" {
             fn _set_abort_behavior(flags: u32, mask: u32) -> u32;
         }
         // SAFETY: both only set how this process reports its own end.

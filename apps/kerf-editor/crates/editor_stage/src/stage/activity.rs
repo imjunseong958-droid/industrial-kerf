@@ -210,7 +210,7 @@ impl StageView {
         card_says: bool,
         window: &mut Window,
         cx: &App,
-    ) -> Option<impl IntoElement> {
+    ) -> Option<impl IntoElement + use<>> {
         let picture = placed.picture;
         let left = picture.origin.x;
         let top = picture.origin.y;

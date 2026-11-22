@@ -129,7 +129,7 @@ impl LauncherView {
 
     /// Under the form: what a running task is doing, else why the last
     /// thing asked could not be done.
-    pub(super) fn status(&self) -> Option<impl IntoElement> {
+    pub(super) fn status(&self) -> Option<impl IntoElement + use<>> {
         if let Some(busy) = &self.busy {
             let dot = ui::dot(theme::activity::gpu(), 6.0);
             return Some(

@@ -441,10 +441,10 @@ fn read(world: &World) -> Read {
                 continue;
             }
             let edges = edges.get_or_insert_with(|| body.of.edges());
-            if let Some((deep, share)) = through(body, edges, other) {
-                if let Some(stand) = stands[index].as_mut() {
-                    stand.through.push((other.of.clip.clone(), deep, share));
-                }
+            if let Some((deep, share)) = through(body, edges, other)
+                && let Some(stand) = stands[index].as_mut()
+            {
+                stand.through.push((other.of.clip.clone(), deep, share));
             }
         }
     }

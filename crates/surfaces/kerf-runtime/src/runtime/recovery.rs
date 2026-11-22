@@ -309,10 +309,10 @@ impl Runtime {
                 }
             }
         }
-        if let Some((revision, project)) = left {
-            if made_on(&self.state.proposals, revision) {
-                self.state.bases.entry(revision).or_insert(project);
-            }
+        if let Some((revision, project)) = left
+            && made_on(&self.state.proposals, revision)
+        {
+            self.state.bases.entry(revision).or_insert(project);
         }
         bound_bases(&mut self.state.bases, &self.state.proposals);
         if let Some(time) = record.time.take() {

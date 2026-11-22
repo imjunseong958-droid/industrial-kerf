@@ -113,10 +113,8 @@ impl CommandPalette {
             recent_commands(&session.prefs.recent, session.project.as_deref())
         };
         for (command, missing) in recent {
-            if missing {
-                if let Some(states) = states.as_object_mut() {
-                    states.insert(command.id.clone(), Value::from(RECENT_GONE));
-                }
+            if missing && let Some(states) = states.as_object_mut() {
+                states.insert(command.id.clone(), Value::from(RECENT_GONE));
             }
             commands.push(command);
         }

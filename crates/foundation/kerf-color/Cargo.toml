@@ -2,7 +2,7 @@
 name = "kerf-color"
 description = "Kerf's color science: transfer functions, log curves, gamuts, input transforms, LUTs, and blend modes (from FilmCraft and EffectCraft)"
 version.workspace = true
-edition = "2024"
+edition.workspace = true
 license = "MIT OR Apache-2.0"
 rust-version = "1.95"
 

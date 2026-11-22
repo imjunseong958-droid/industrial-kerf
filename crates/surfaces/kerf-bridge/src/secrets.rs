@@ -3,16 +3,27 @@
 //! settings or a file (`cloud_session.rs`).
 //!
 //! `KERF_SECRETS=off` turns the store off, so a test never reads or writes a developer's real
-//! keychain; the editor then keeps keys in its settings, and the token in its file, as it does
-//! wherever the store cannot be reached.
+//! keychain, and so does [`turn_off`] (the editor's `--settings-dir`); the editor then keeps keys
+//! in its settings, and the token in its file, as it does wherever the store cannot be reached.
 
 use serde_json::{json, Value};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// The service every key is kept under.
 const SERVICE: &str = "Industrial Kerf";
 
+/// The store is off for this process: [`turn_off`] said so.
+static OFF: AtomicBool = AtomicBool::new(false);
+
+/// Turn the store off for this process from here on, as `KERF_SECRETS=off` does, leaving its
+/// environment as it is.
+pub(crate) fn turn_off() {
+    OFF.store(true, Ordering::SeqCst);
+}
+
 fn off() -> bool {
-    std::env::var_os("KERF_SECRETS").is_some_and(|value| value == "off" || value == "0")
+    OFF.load(Ordering::SeqCst)
+        || std::env::var_os("KERF_SECRETS").is_some_and(|value| value == "off" || value == "0")
 }
 
 fn entry(name: &str, enabled: bool) -> Result<keyring::Entry, String> {
@@ -59,7 +70,7 @@ pub(crate) trait Keychain {
     fn delete(&self, name: &str) -> Result<(), String>;
 }
 
-/// The operating system's keychain, unless `KERF_SECRETS=off`.
+/// The operating system's keychain, unless `KERF_SECRETS=off` or [`turn_off`].
 pub(crate) struct SystemKeychain {
     enabled: bool,
 }

@@ -91,9 +91,6 @@ fn arguments(raw: &[String]) -> Result<Arguments, String> {
             "--settings-dir" => {
                 let folder = value("a folder")?;
                 let folder = std::path::absolute(&folder).unwrap_or_else(|_| folder.into());
-                // Before anything reads them: the settings there, and no keychain.
-                std::env::set_var("KERF_EDITOR_PREFS", folder.join("editor.json"));
-                std::env::set_var("KERF_SECRETS", "off");
                 settings_dir = Some(folder);
             }
             "--quit-after-ms" => {
@@ -142,17 +139,46 @@ fn arguments(raw: &[String]) -> Result<Arguments, String> {
     })
 }
 
+/// Start this editor again in this process, with the same arguments and `path` as its PATH.
+/// Returns only when it cannot.
+#[cfg(unix)]
+fn start_again_with_path(path: &str) -> std::io::Error {
+    use std::os::unix::process::CommandExt;
+    let program = match std::env::current_exe() {
+        Ok(program) => program,
+        Err(error) => return error,
+    };
+    let mut arguments = std::env::args_os();
+    let mut command = std::process::Command::new(program);
+    if let Some(name) = arguments.next() {
+        command.arg0(name);
+    }
+    command.args(arguments).env("PATH", path).exec()
+}
+
+#[cfg(not(unix))]
+fn start_again_with_path(_path: &str) -> std::io::Error {
+    std::io::ErrorKind::Unsupported.into()
+}
+
 fn main() {
     let raw: Vec<String> = std::env::args().skip(1).collect();
     if let Some(code) = kerf_bridge::serve_mcp(&raw) {
         std::process::exit(code);
     }
     // Before any thread starts, and for every tool the editor and kerfd
-    // run: Finder and the Dock give an app no shell PATH.
-    if cfg!(target_os = "macos") {
-        if let Some(home) = prefs::home() {
-            let path = std::env::var("PATH").unwrap_or_default();
-            std::env::set_var("PATH", app::path_with_tool_folders(&path, &home));
+    // run: Finder and the Dock give an app no shell PATH. The editor starts
+    // again on one with the folders tools are installed in, so that all it
+    // runs, and all it looks for on PATH, finds them. It starts again only
+    // when the second start would not change PATH again, so it does once.
+    if cfg!(target_os = "macos")
+        && let Some(home) = prefs::home()
+    {
+        let path = std::env::var("PATH").unwrap_or_default();
+        let with_tools = app::path_with_tool_folders(&path, &home);
+        if with_tools != path && app::path_with_tool_folders(&with_tools, &home) == with_tools {
+            let error = start_again_with_path(&with_tools);
+            eprintln!("kerf-editor: cannot start again with the tool folders on PATH: {error}");
         }
     }
     // Settings someone else put in place (a test's) are theirs alone.
@@ -164,6 +190,10 @@ fn main() {
             std::process::exit(2);
         }
     };
+    // Before anything reads them: the settings there, and no keychain.
+    if let Some(folder) = &arguments.settings_dir {
+        prefs::keep_settings_in(folder);
+    }
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
     kerf_bridge::crash_install();
     motion::init_from_env();
@@ -193,13 +223,12 @@ fn main() {
     } else {
         None
     };
-    if let Some(address) = &inbox {
-        if !arguments.links.is_empty()
-            && !arguments.named_project
-            && links::hand_off(address, &arguments.links, Duration::from_secs(2))
-        {
-            return;
-        }
+    if let Some(address) = &inbox
+        && !arguments.links.is_empty()
+        && !arguments.named_project
+        && links::hand_off(address, &arguments.links, Duration::from_secs(2))
+    {
+        return;
     }
 
     // The first link opens its project, unless a project is named: then

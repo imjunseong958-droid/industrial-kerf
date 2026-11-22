@@ -29,7 +29,7 @@ impl Workspace {
         from_account: bool,
         regions: &Regions,
         window: &Window,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + use<> {
         let above_account = from_account && !regions.leading;
         let left = if above_account {
             regions.main_left - regions.sidebar_width + 8.0

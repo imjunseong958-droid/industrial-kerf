@@ -663,7 +663,7 @@ fn preset_request(action: &PresetAction) -> Result<(&'static str, Value)> {
 
 fn run_new(new: &NewArgs) -> Result<()> {
     // A terminal can answer git's prompts (an ssh passphrase, say).
-    env::set_var(git::INTERACTIVE_ENV, "1");
+    git::set_env(git::INTERACTIVE_ENV, "1");
     let created = create_project(new)?;
     println!("created {}", created.path.display());
     if let Some(remote) = &created.remote {
@@ -683,7 +683,7 @@ fn create_project(new: &NewArgs) -> Result<Created> {
 /// editor's Sync Now does: staging and the network run here, and kerfd,
 /// which owns `project.kerf`, commits and merges.
 fn run_sync(directory: &Path, kerfd: Option<&Path>, message: Option<&str>) -> Result<()> {
-    env::set_var(git::INTERACTIVE_ENV, "1");
+    git::set_env(git::INTERACTIVE_ENV, "1");
     if !git::is_repository(directory) {
         if let Some(top) = git::enclosing_repository(directory) {
             bail!(
@@ -1399,8 +1399,7 @@ fn sync_report(
 }
 
 fn run_gui(args: &Args, directory: Option<&Path>) -> Result<()> {
-    let llm = resolve_llm(args)?;
-    configure_gui_agent(&llm);
+    let agent = gui_agent_env(&resolve_llm(args)?);
 
     if let (Some(media), Some(directory)) = (args.media.as_deref(), directory) {
         let path = import_media(
@@ -1419,6 +1418,7 @@ fn run_gui(args: &Args, directory: Option<&Path>) -> Result<()> {
         .or_else(discover_kerfd)
         .unwrap_or_else(|| PathBuf::from(binary_name("kerfd")));
     let status = editor_command(&editor, directory, &kerfd)
+        .envs(agent)
         .status()
         .with_context(|| format!("could not launch {}", editor.display()))?;
     if !status.success() {
@@ -1448,26 +1448,31 @@ fn editor_command(editor: &Path, project: Option<&Path>, kerfd: &Path) -> std::p
     command
 }
 
-fn configure_gui_agent(llm: &LlmConfig) {
-    env::set_var("KERF_PROVIDER", llm.provider.name());
-
+/// What the editor's own agent reads from its environment, as `llm` has it:
+/// the editor is started with these set.
+fn gui_agent_env(llm: &LlmConfig) -> Vec<(&'static str, String)> {
+    let mut env = vec![("KERF_PROVIDER", llm.provider.name().to_owned())];
     if let Some(api_key) = llm.api_key.as_deref() {
         let key_name = match llm.provider {
             ProviderName::Anthropic => "ANTHROPIC_API_KEY",
             ProviderName::Openai => "OPENAI_API_KEY",
         };
-        env::set_var(key_name, api_key);
+        env.push((key_name, api_key.to_owned()));
     }
     if let Some(model) = llm.model.as_deref() {
-        env::set_var("KERF_MODEL", model);
+        env.push(("KERF_MODEL", model.to_owned()));
     }
     if let Some(base_url) = llm.base_url.as_deref() {
-        env::set_var("OPENAI_BASE_URL", base_url);
+        env.push(("OPENAI_BASE_URL", base_url.to_owned()));
     }
-    env::set_var("OPENAI_API_MODE", llm.api_mode.name());
+    env.push(("OPENAI_API_MODE", llm.api_mode.name().to_owned()));
     if let Some(reasoning_effort) = llm.reasoning_effort {
-        env::set_var("OPENAI_REASONING_EFFORT", reasoning_effort.name());
+        env.push((
+            "OPENAI_REASONING_EFFORT",
+            reasoning_effort.name().to_owned(),
+        ));
     }
+    env
 }
 
 #[derive(Debug)]
@@ -1835,7 +1840,7 @@ fn operation_key(kind: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{create_project, in_step, run_sync, Args, Command};
+    use super::{create_project, git, in_step, run_sync, Args, Command};
     use clap::Parser;
 
     use serde_json::json;
@@ -1895,12 +1900,12 @@ mod tests {
         ONCE.call_once(|| {
             let empty = std::env::temp_dir().join("kerf-cli-empty-gitconfig");
             fs::write(&empty, "").unwrap();
-            std::env::set_var("GIT_CONFIG_GLOBAL", &empty);
-            std::env::set_var("GIT_CONFIG_NOSYSTEM", "1");
-            std::env::set_var("GIT_AUTHOR_NAME", "Test");
-            std::env::set_var("GIT_AUTHOR_EMAIL", "test@example.com");
-            std::env::set_var("GIT_COMMITTER_NAME", "Test");
-            std::env::set_var("GIT_COMMITTER_EMAIL", "test@example.com");
+            git::set_env("GIT_CONFIG_GLOBAL", &empty);
+            git::set_env("GIT_CONFIG_NOSYSTEM", "1");
+            git::set_env("GIT_AUTHOR_NAME", "Test");
+            git::set_env("GIT_AUTHOR_EMAIL", "test@example.com");
+            git::set_env("GIT_COMMITTER_NAME", "Test");
+            git::set_env("GIT_COMMITTER_EMAIL", "test@example.com");
         });
     }
 

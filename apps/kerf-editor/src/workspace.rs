@@ -452,7 +452,7 @@ impl Workspace {
     }
 
     /// The sidebar, sliding in from the window's edge.
-    fn sidebar_slot(&self, regions: &Regions) -> impl IntoElement {
+    fn sidebar_slot(&self, regions: &Regions) -> impl IntoElement + use<> {
         div()
             .absolute()
             .top_0()
@@ -476,7 +476,7 @@ impl Workspace {
         shows: (f32, f32),
         window: &Window,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + use<> {
         div()
             .absolute()
             .top_0()

@@ -420,12 +420,12 @@ impl Collab {
     }
 
     fn ensure_driver(&self) {
-        if let Some(driver) = &self.driver {
-            if let Err(error) = git::ensure_merge_driver(&self.directory, driver) {
-                log::warn!(
-                    "the merge driver was not set up, so Git merges project.kerf as text: {error}"
-                );
-            }
+        if let Some(driver) = &self.driver
+            && let Err(error) = git::ensure_merge_driver(&self.directory, driver)
+        {
+            log::warn!(
+                "the merge driver was not set up, so Git merges project.kerf as text: {error}"
+            );
         }
     }
 

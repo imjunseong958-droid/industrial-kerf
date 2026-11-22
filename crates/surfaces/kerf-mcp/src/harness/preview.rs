@@ -304,17 +304,15 @@ fn preview_times(side: &Project, other: &Project, sequence: &str) -> Vec<Time> {
             }
         }
         for transition in &track.transitions {
-            if previous.transition(transition.id.as_str()) != Some(transition) {
-                if let Some(clip) = track.clip(transition.from.as_str()) {
-                    // The two frames at its cut are both its middle: three
-                    // through it show what it does.
-                    let (before, _) = transition.split_at_cut(rate);
-                    let first = rate.frames_floor(clip.end() - before);
-                    let frames = rate.frames_floor(transition.duration).max(1);
-                    middles.extend(
-                        [1, 2, 3].map(|quarter| rate.time_of(first + frames * quarter / 4)),
-                    );
-                }
+            if previous.transition(transition.id.as_str()) != Some(transition)
+                && let Some(clip) = track.clip(transition.from.as_str())
+            {
+                // The two frames at its cut are both its middle: three
+                // through it show what it does.
+                let (before, _) = transition.split_at_cut(rate);
+                let first = rate.frames_floor(clip.end() - before);
+                let frames = rate.frames_floor(transition.duration).max(1);
+                middles.extend([1, 2, 3].map(|quarter| rate.time_of(first + frames * quarter / 4)));
             }
         }
     }

@@ -263,7 +263,7 @@ impl FinishView {
         row: &Row,
         can_ask: bool,
         cx: &Context<Self>,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + use<> {
         let color = row.color();
         let mark = if row.passed {
             Icon::Check.view(14.0, color).into_any_element()

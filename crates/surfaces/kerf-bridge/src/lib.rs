@@ -115,8 +115,8 @@ pub use queue::ExportRequest;
 pub use recipes::Edit as RecipeEdit;
 pub use standalone::{
     about, clip_properties, commands_catalog, commands_run, commands_states, crash_fatal,
-    crash_install, crash_reports, ffmpeg_bin, fx_catalog, fx_catalog_all, preset_inspect,
-    project_inspect, secret, serve_mcp, update_check, REPOSITORY,
+    crash_install, crash_reports, ffmpeg_bin, fx_catalog, fx_catalog_all, keychain_off,
+    preset_inspect, project_inspect, secret, serve_mcp, update_check, REPOSITORY,
 };
 pub use tasks::Task;
 pub use tracks::{Follow as ShotFollow, Of as ShotOf};
@@ -466,14 +466,15 @@ impl Bridge {
                 }
                 // The worker holds this only to take the seek out, and a seek
                 // refused for that moment would be lost.
-                if let Ok(mut slot) = self.shared.seek.lock() {
-                    *slot = Some(PendingSeek {
-                        position,
-                        exact: !scrub,
-                    });
-                    true
-                } else {
-                    false
+                match self.shared.seek.lock() {
+                    Ok(mut slot) => {
+                        *slot = Some(PendingSeek {
+                            position,
+                            exact: !scrub,
+                        });
+                        true
+                    }
+                    _ => false,
                 }
             }
             Command::Play | Command::Pause | Command::Volume { .. } | Command::Solo { .. } => {
@@ -485,13 +486,14 @@ impl Bridge {
                         abort.store(true, Ordering::SeqCst);
                     }
                 }
-                if let Ok(abort) = self.shared.abort.try_lock() {
-                    if let Some(abort) = &*abort {
-                        abort.store(true, Ordering::SeqCst);
+                match self.shared.abort.try_lock() {
+                    Ok(abort) => {
+                        if let Some(abort) = &*abort {
+                            abort.store(true, Ordering::SeqCst);
+                        }
+                        true
                     }
-                    true
-                } else {
-                    false
+                    _ => false,
                 }
             }
             Command::EffectPreviews(request) => {
@@ -711,10 +713,10 @@ impl Drop for Bridge {
         media::cancel_makings(&self.shared);
         self.shared.renders.close(&self.shared.directory);
         self.shared.analysis.close();
-        if let Ok(abort) = self.shared.abort.lock() {
-            if let Some(abort) = &*abort {
-                abort.store(true, Ordering::SeqCst);
-            }
+        if let Ok(abort) = self.shared.abort.lock()
+            && let Some(abort) = &*abort
+        {
+            abort.store(true, Ordering::SeqCst);
         };
         if let Ok(aborts) = self.shared.version_aborts.lock() {
             for abort in aborts.iter() {

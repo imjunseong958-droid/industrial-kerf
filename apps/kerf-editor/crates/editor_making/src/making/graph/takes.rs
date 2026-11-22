@@ -113,7 +113,7 @@ impl ShotGraph {
         making: bool,
         connected: bool,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + use<> {
         let number_of = number(&take["number"]);
         let chosen = take["chosen"].as_bool().unwrap_or(false);
         let path = take["path"].as_str().unwrap_or_default().to_owned();

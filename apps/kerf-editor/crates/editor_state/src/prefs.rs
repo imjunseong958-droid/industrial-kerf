@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Mutex, PoisonError};
 
 mod legacy;
 
@@ -424,10 +424,10 @@ impl Known {
     /// What the file is taken to hold for `name`, so a save leaves it be
     /// unless it changes.
     fn set_field(&self, name: &str, value: Value) {
-        if let Ok(mut known) = self.0.lock() {
-            if let Some(known) = known.as_mut() {
-                known.insert(name.to_owned(), value);
-            }
+        if let Ok(mut known) = self.0.lock()
+            && let Some(known) = known.as_mut()
+        {
+            known.insert(name.to_owned(), value);
         }
     }
 }
@@ -453,10 +453,24 @@ impl std::fmt::Debug for Known {
 /// How many recent projects are kept.
 const RECENT_MOST: usize = 12;
 
+/// The settings file [`keep_settings_in`] named for this process.
+static FILE: Mutex<Option<PathBuf>> = Mutex::new(None);
+
+/// Keep the settings in `folder` (its `editor.json`) from here on, and keys out of the
+/// system's keychain, leaving this process's environment as it is: `--settings-dir` does,
+/// before anything reads them.
+pub fn keep_settings_in(folder: &Path) {
+    *FILE.lock().unwrap_or_else(PoisonError::into_inner) = Some(folder.join("editor.json"));
+    kerf_bridge::keychain_off();
+}
+
 impl Prefs {
-    /// `~/.kerf/editor.json`; `KERF_EDITOR_PREFS` moves it (tests and
-    /// `--settings-dir` do).
+    /// `~/.kerf/editor.json`; [`keep_settings_in`] (`--settings-dir`) or
+    /// `KERF_EDITOR_PREFS` (tests) moves it.
     pub fn path() -> Option<PathBuf> {
+        if let Some(path) = FILE.lock().unwrap_or_else(PoisonError::into_inner).clone() {
+            return Some(path);
+        }
         if let Some(path) = std::env::var_os("KERF_EDITOR_PREFS").filter(|path| !path.is_empty()) {
             return Some(path.into());
         }
@@ -475,13 +489,12 @@ impl Prefs {
         if !chosen
             && prefs.provider == Provider::Cloud
             && Provider::from_named_environment().is_none()
+            && let Some(own) = keychain_provider()
         {
-            if let Some(own) = keychain_provider() {
-                prefs.provider = own;
-                prefs
-                    .known
-                    .set_field("provider", serde_json::to_value(own).unwrap_or_default());
-            }
+            prefs.provider = own;
+            prefs
+                .known
+                .set_field("provider", serde_json::to_value(own).unwrap_or_default());
         }
         prefs
     }
@@ -516,10 +529,10 @@ impl Prefs {
                 continue;
             }
             let before = taken.insert(name.clone(), value.clone());
-            if serde_json::from_value::<Self>(Value::Object(taken.clone())).is_err() {
-                if let Some(before) = before {
-                    taken.insert(name.clone(), before);
-                }
+            if serde_json::from_value::<Self>(Value::Object(taken.clone())).is_err()
+                && let Some(before) = before
+            {
+                taken.insert(name.clone(), before);
             }
         }
         let mut prefs: Self = serde_json::from_value(Value::Object(taken)).unwrap_or_default();

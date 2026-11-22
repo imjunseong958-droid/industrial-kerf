@@ -101,11 +101,12 @@ impl StageView {
         for (clip, _) in &placed {
             self.cut_seen.insert(clip.clone());
         }
-        if state.work.busy() && !first_sight {
-            if let Some((_, source)) = placed.last() {
-                self.cut_newest = Some(source.clone());
-                cx.notify();
-            }
+        if state.work.busy()
+            && !first_sight
+            && let Some((_, source)) = placed.last()
+        {
+            self.cut_newest = Some(source.clone());
+            cx.notify();
         }
     }
 

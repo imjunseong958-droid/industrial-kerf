@@ -632,10 +632,10 @@ impl EditorState {
             Event::Error(error) => {
                 let command = error.command.as_deref().unwrap_or_default();
                 // A making that failed is over: its stripes and its Stop go.
-                if command == "media_make" {
-                    if let Some(media) = &error.media {
-                        self.makings.remove(media);
-                    }
+                if command == "media_make"
+                    && let Some(media) = &error.media
+                {
+                    self.makings.remove(media);
                 }
                 // The Index page says why its media could not be indexed.
                 if command == "media_index" {
@@ -650,11 +650,11 @@ impl EditorState {
                 }
                 let message = error.message.as_str();
                 // Saving over a preset of that name is asked about, not refused.
-                if self.saving_preset.is_some() {
-                    if let Some(path) = crate::preset_file::existing_preset(message) {
-                        self.preset_exists = Some(path.to_owned());
-                        return Change::Other;
-                    }
+                if self.saving_preset.is_some()
+                    && let Some(path) = crate::preset_file::existing_preset(message)
+                {
+                    self.preset_exists = Some(path.to_owned());
+                    return Change::Other;
                 }
                 self.notify(message, true);
                 Change::Notice
@@ -662,10 +662,10 @@ impl EditorState {
             Event::Conversations { items } => {
                 self.conversations = items.clone();
                 // The chosen one deleted (here or in another window): a new one.
-                if let Some(chosen) = self.chosen.clone() {
-                    if !self.conversations.iter().any(|known| known.id == chosen) {
-                        self.choose(None);
-                    }
+                if let Some(chosen) = self.chosen.clone()
+                    && !self.conversations.iter().any(|known| known.id == chosen)
+                {
+                    self.choose(None);
                 }
                 Change::Conversations
             }
@@ -1160,12 +1160,11 @@ impl EditorState {
     }
 
     fn end_turn(&mut self) {
-        if let Some(conversation) = self.work.conversation.take() {
-            if self.chosen.as_deref() != Some(conversation.as_str())
-                && !self.settled.contains(&conversation)
-            {
-                self.settled.push(conversation);
-            }
+        if let Some(conversation) = self.work.conversation.take()
+            && self.chosen.as_deref() != Some(conversation.as_str())
+            && !self.settled.contains(&conversation)
+        {
+            self.settled.push(conversation);
         }
         self.work.started = None;
         self.work.request = None;

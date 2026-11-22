@@ -202,13 +202,13 @@ impl Drawing {
                     continue;
                 }
                 let size = output_size(plan.width, plan.height, scale);
-                if let Some(pair) = track.pair_at(index, at) {
-                    if transition_kernel(pair, at, size, scale).is_none() {
-                        why.push(format!(
-                            "a transition at clip `{}` has no kernel",
-                            shown.plan.clip.id
-                        ));
-                    }
+                if let Some(pair) = track.pair_at(index, at)
+                    && transition_kernel(pair, at, size, scale).is_none()
+                {
+                    why.push(format!(
+                        "a transition at clip `{}` has no kernel",
+                        shown.plan.clip.id
+                    ));
                 }
                 self.why_clip_on_cpu(gpu, plan, shown, at, scale, &mut why);
             }

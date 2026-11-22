@@ -582,10 +582,10 @@ impl KerfMcpRouter {
                 ));
             }
             let mut reading = json!({"at": text, "scopes": read(project, sequence, time)?});
-            if let Some((project, sequence)) = before {
-                if time < sequence.duration() {
-                    reading["before"] = json!(read(project, sequence, time)?);
-                }
+            if let Some((project, sequence)) = before
+                && time < sequence.duration()
+            {
+                reading["before"] = json!(read(project, sequence, time)?);
             }
             readings.push(reading);
         }

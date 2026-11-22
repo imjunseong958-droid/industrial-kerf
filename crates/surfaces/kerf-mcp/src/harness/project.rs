@@ -251,14 +251,13 @@ impl KerfMcpRouter {
                     }
                     // The whole line, since a take need not be as long as the one before it.
                     // Which file the media is changes; its steps stay under it.
-                    if !take.chosen {
-                        if let Ok(fields) = self.media_fields(&take.stored) {
+                    if !take.chosen
+                        && let Ok(fields) = self.media_fields(&take.stored) {
                             entry["use"] = json!(match recipe {
                                 Some(recipe) => format!("media replace {} {fields} recipe={recipe:?}", media.id),
                                 None => format!("media replace {} {fields}", media.id),
                             });
                         }
-                    }
                     // The steps a take was made from, where they are not the ones the
                     // document has now: each seed as that take had it.
                     if take.kept && recipe.is_none() {

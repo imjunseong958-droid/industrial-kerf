@@ -188,11 +188,11 @@ impl Workspace {
                         this.settle_focus(window, cx);
                     }
                     this.session.update(cx, |session, cx| {
-                        if let Some(open) = session.conversation.clone() {
-                            if session.state.settled.contains(&open) {
-                                session.state.looked_at(&open);
-                                cx.notify();
-                            }
+                        if let Some(open) = session.conversation.clone()
+                            && session.state.settled.contains(&open)
+                        {
+                            session.state.looked_at(&open);
+                            cx.notify();
                         }
                     });
                 }
@@ -330,15 +330,15 @@ impl Workspace {
                     self.go_home(cx);
                 }
                 let ended = self.working_in.take();
-                if !window.is_window_active() {
-                    if let Some(ended) = ended {
-                        self.session.update(cx, |session, cx| {
-                            if !session.state.settled.contains(&ended) {
-                                session.state.settled.push(ended);
-                                cx.notify();
-                            }
-                        });
-                    }
+                if !window.is_window_active()
+                    && let Some(ended) = ended
+                {
+                    self.session.update(cx, |session, cx| {
+                        if !session.state.settled.contains(&ended) {
+                            session.state.settled.push(ended);
+                            cx.notify();
+                        }
+                    });
                 }
             }
             _ => {}

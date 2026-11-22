@@ -326,8 +326,8 @@ const ASKING: std::time::Duration = std::time::Duration::from_secs(20);
 
 /// Run `program --workflow <named> --inputs` and read what it prints.
 fn asked_inputs(program: &str, named: &str) -> Result<Value, String> {
-    use std::process::{Command, Stdio};
-    let mut child = Command::new(program)
+    use std::process::Stdio;
+    let mut child = kerf_engine::recipe::model::program(program)
         .args([FLAG, named, "--inputs"])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -430,29 +430,29 @@ fn check(read: &Read, sets: &[Set], taken: &Value) -> Result<(), String> {
             }
             continue;
         }
-        if let Some(choices) = takes["choices"].as_array() {
-            if !choices.contains(set.value) {
-                let listed: Vec<String> = choices
-                    .iter()
-                    .take(12)
-                    .map(|choice| match choice {
-                        Value::String(text) => text.clone(),
-                        other => other.to_string(),
-                    })
-                    .collect();
-                return Err(format!(
-                    "`{}` of node {} takes one of {}{}, not {}",
-                    set.input,
-                    set.node,
-                    listed.join(", "),
-                    if choices.len() > listed.len() {
-                        format!(", and {} more", choices.len() - listed.len())
-                    } else {
-                        String::new()
-                    },
-                    set.value
-                ));
-            }
+        if let Some(choices) = takes["choices"].as_array()
+            && !choices.contains(set.value)
+        {
+            let listed: Vec<String> = choices
+                .iter()
+                .take(12)
+                .map(|choice| match choice {
+                    Value::String(text) => text.clone(),
+                    other => other.to_string(),
+                })
+                .collect();
+            return Err(format!(
+                "`{}` of node {} takes one of {}{}, not {}",
+                set.input,
+                set.node,
+                listed.join(", "),
+                if choices.len() > listed.len() {
+                    format!(", and {} more", choices.len() - listed.len())
+                } else {
+                    String::new()
+                },
+                set.value
+            ));
         }
         if let Some(value) = set.value.as_f64() {
             let (least, most) = (takes["min"].as_f64(), takes["max"].as_f64());

@@ -246,19 +246,20 @@ fn measure(shared: &Shared, tx: &Outbox, sequence: Option<&str>) -> Event {
             Ok(found) => found,
             Err(error) => return failed(&error.message, None),
         };
-    if let Some((kept, on, event)) = &lock(&shared.analysis.loudness).kept {
-        if *kept == revision && on.as_deref() == sequence {
-            return event.clone();
-        }
+    if let Some((kept, on, event)) = &lock(&shared.analysis.loudness).kept
+        && *kept == revision
+        && on.as_deref() == sequence
+    {
+        return event.clone();
     }
     let mut project = match kerf_runtime::parse_document(&document) {
         Ok(project) => project,
         Err(error) => return failed(&error.message, Some(revision)),
     };
-    if let Some(id) = sequence {
-        if !project.sequences.iter().any(|candidate| candidate.id == id) {
-            return failed(&format!("no sequence `{id}`"), Some(revision));
-        }
+    if let Some(id) = sequence
+        && !project.sequences.iter().any(|candidate| candidate.id == id)
+    {
+        return failed(&format!("no sequence `{id}`"), Some(revision));
     }
     kerf_runtime::resolve_media_paths(&mut project, &shared.directory);
     let running = |progress: f64| {
@@ -353,11 +354,11 @@ pub(crate) fn media_info(shared: Arc<Shared>, tx: Outbox, media: Option<String>)
             .iter()
             .filter(|found| media.as_deref().is_none_or(|id| found.id == id))
             .collect();
-        if chosen.is_empty() {
-            if let Some(id) = &media {
-                refuse(&format!("no media `{id}`"));
-                return;
-            }
+        if chosen.is_empty()
+            && let Some(id) = &media
+        {
+            refuse(&format!("no media `{id}`"));
+            return;
         }
         let mut infos = BTreeMap::new();
         let mut errors = BTreeMap::new();

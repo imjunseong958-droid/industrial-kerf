@@ -215,13 +215,13 @@ pub fn make(
             read.frames
         ));
     }
-    if let Some(seconds) = request.seconds.filter(|_| read.is_none()) {
-        if (seconds * fps).round() > f64::from(frames) {
-            say(&format!(
+    if let Some(seconds) = request.seconds.filter(|_| read.is_none())
+        && (seconds * fps).round() > f64::from(frames)
+    {
+        say(&format!(
                 "{seconds} s was asked; this model makes at most {frames} frames at {fps} a second, {:.2} s",
                 f64::from(frames) / fps
             ));
-        }
     }
     // A file of a guide has the guide's frames and no more.
     let hold = if read.is_some() {

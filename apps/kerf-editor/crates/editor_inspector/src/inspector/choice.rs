@@ -435,7 +435,7 @@ impl InspectorView {
         param: &Param,
         chosen: &str,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + use<> {
         let segments = param.options.iter().enumerate().map(|(index, option)| {
             let selected = option == chosen;
             let (clip_id, key, value) = (clip.id.clone(), field.clone(), option.clone());
@@ -537,13 +537,12 @@ impl InspectorView {
                     if let Some(focus) = &shown {
                         ui::note_shown(focus, bounds, window);
                     }
-                    if let Some((opened, scroll, this)) = kept {
-                        if !choice_menu_shown(opened, &scroll, Some(bounds)) {
-                            window.defer(cx, move |window, cx| {
-                                let _ =
-                                    this.update(cx, |this, cx| this.keep_choice_menu(window, cx));
-                            });
-                        }
+                    if let Some((opened, scroll, this)) = kept
+                        && !choice_menu_shown(opened, &scroll, Some(bounds))
+                    {
+                        window.defer(cx, move |window, cx| {
+                            let _ = this.update(cx, |this, cx| this.keep_choice_menu(window, cx));
+                        });
                     }
                 },
                 |_, _, _, _| {},

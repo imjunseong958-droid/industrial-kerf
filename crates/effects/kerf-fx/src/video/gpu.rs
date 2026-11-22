@@ -482,10 +482,10 @@ pub fn run(frame: &mut Frame<'static>, picture: Picture, ops: &[FxOp]) -> Option
         {
             frame.release(previous);
         }
-        if step.combine {
-            if let Some(kept) = original.take() {
-                frame.release(kept);
-            }
+        if step.combine
+            && let Some(kept) = original.take()
+        {
+            frame.release(kept);
         }
     }
     Some(current)

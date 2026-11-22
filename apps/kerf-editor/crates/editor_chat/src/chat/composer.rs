@@ -510,7 +510,7 @@ impl ChatView {
 
     /// The composer at the foot of the conversation's column, and where it
     /// was laid out, for what comes from over it.
-    pub(super) fn composer_foot(&self, composer: AnyElement) -> impl IntoElement {
+    pub(super) fn composer_foot(&self, composer: AnyElement) -> impl IntoElement + use<> {
         div()
             .flex_none()
             .w_full()
@@ -590,7 +590,7 @@ fn suggestions(next: Vec<(String, String)>, offer_qc: bool, cx: &Context<ChatVie
 
 /// What waits for Kerf to finish (`queued`), over the box: "Next: …" and
 /// Cancel.
-fn queued_row(queued: &str, cx: &Context<ChatView>) -> impl IntoElement {
+fn queued_row(queued: &str, cx: &Context<ChatView>) -> impl IntoElement + use<> {
     let line = queued.split_whitespace().collect::<Vec<_>>().join(" ");
     div()
         .flex()

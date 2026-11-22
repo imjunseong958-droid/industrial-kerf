@@ -183,7 +183,11 @@ impl SidebarView {
     }
 
     /// New conversation, and Search under it.
-    pub(super) fn top_rows(&self, new_chosen: bool, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(super) fn top_rows(
+        &self,
+        new_chosen: bool,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
         div()
             .px(px(theme::space::S8))
             .pb(px(theme::space::S8))
@@ -214,7 +218,7 @@ impl SidebarView {
             .child(self.search_row(cx))
     }
 
-    fn search_row(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn search_row(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let shell = div()
             .flex()
             .items_center()
@@ -244,7 +248,7 @@ impl SidebarView {
     /// are none or none match, the other folders while nothing is searched,
     /// and the archived ones folded at the end. It is drawn again as the age
     /// in a tip turns over.
-    pub(super) fn conversations(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(super) fn conversations(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let session = self.session.read(cx);
         let chosen = session.conversation.clone();
         let conversations = session.state.conversations.clone();
@@ -342,7 +346,7 @@ impl SidebarView {
 
     /// The row after a long list's first few: pressed, the rest show, or
     /// go again.
-    fn show_more(more: More, cx: &Context<Self>) -> impl IntoElement {
+    fn show_more(more: More, cx: &Context<Self>) -> impl IntoElement + use<> {
         Self::keyed(div().id("show-more"), ITEM)
             .flex()
             .items_center()
@@ -361,7 +365,7 @@ impl SidebarView {
 
     /// "Archived · N" at the list's end: pressed, the archived ones unfold,
     /// or fold.
-    fn archived_toggle(&self, count: usize, cx: &Context<Self>) -> impl IntoElement {
+    fn archived_toggle(&self, count: usize, cx: &Context<Self>) -> impl IntoElement + use<> {
         Self::keyed(div().id("archived"), ITEM)
             .mt(px(10.0))
             .mx(px(theme::space::S8))

@@ -859,6 +859,15 @@ fn macos_path_gains_homebrews_and_local_tools_once() {
         "/usr/local/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/Users/jun/.local/bin"
     );
     assert_eq!(path_with_tool_folders(&full, home), full, "nothing twice");
+    // A home whose name has a colon cannot be written in a PATH: the others
+    // still come, and once, so the editor starts again only once.
+    let colon = Path::new("/Users/a:b");
+    let with = path_with_tool_folders("/usr/bin", colon);
+    assert_eq!(
+        with,
+        "/usr/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin"
+    );
+    assert_eq!(path_with_tool_folders(&with, colon), with);
 }
 
 #[test]

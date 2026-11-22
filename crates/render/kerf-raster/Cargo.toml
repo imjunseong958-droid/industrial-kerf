@@ -2,7 +2,7 @@
 name = "kerf-raster"
 description = "f32 premultiplied RGBA images for the raster effects (from EffectCraft): sampling, projective warps, blurs, compositing (rayon-parallel)"
 version.workspace = true
-edition = "2024"
+edition.workspace = true
 license = "MIT OR Apache-2.0"
 rust-version = "1.95"
 

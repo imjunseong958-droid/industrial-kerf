@@ -253,7 +253,7 @@ impl StageView {
         &self,
         painting: Painting,
         cx: &Context<Self>,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + use<> {
         let area_cell = self.area.clone();
         let picture_cell = self.picture.clone();
         let canvas_cell = self.canvas.clone();

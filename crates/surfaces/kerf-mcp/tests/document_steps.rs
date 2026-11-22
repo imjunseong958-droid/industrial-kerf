@@ -7,11 +7,13 @@
 //! one model's matte is read by the next, and a shot from a guide, which Kerf
 //! draws from a sequence and hands to a model.
 //!
-//! In a file of its own: it names a models file of its own in `KERF_MODELS`,
-//! and no ComfyUI server in `KERF_COMFY`, which the other tests' process must
-//! not see.
+//! In a file of its own: it reads a models file of its own for the whole
+//! process ([`Models::use_file`]), and gives the programs they run no ComfyUI
+//! server in `KERF_COMFY` ([`model::set_program_env`]), which the other tests'
+//! process must not see.
 #![cfg(unix)]
 
+use kerf_engine::recipe::model::{self, Models};
 use kerf_mcp::permissions::{Mode, Permissions};
 use kerf_mcp::KerfMcpRouter;
 use serde_json::{json, Value};
@@ -129,12 +131,12 @@ fn an_agent_writes_a_makings_steps_in_the_document_and_makes_it() {
         ),
     )
     .unwrap();
-    std::env::set_var("KERF_MODELS", &models);
+    Models::use_file(&models);
     // No server a person has named is asked what the workflow's nodes take: the file named
     // here is not there, and nothing else names one.
-    std::env::set_var("KERF_COMFY", dir.join("no-such-comfy.json"));
+    model::set_program_env("KERF_COMFY", dir.join("no-such-comfy.json"));
     for names_one in ["COMFY_URL", "COMFY_API_KEY", "COMFY_API_HEADER"] {
-        std::env::remove_var(names_one);
+        model::remove_program_env(names_one);
     }
     let kerfd = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../target/debug/kerfd");
     let router = KerfMcpRouter::new(dir, Some(&kerfd)).unwrap();

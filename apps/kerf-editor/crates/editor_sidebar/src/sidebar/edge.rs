@@ -101,7 +101,7 @@ impl SidebarView {
     /// pressed, it puts it away; pressed twice, the width goes back.
     /// Nothing shows until the pointer is over it; then a line, in the
     /// accent while it is dragged.
-    pub(super) fn edge(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(super) fn edge(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let pressed = self.edge_press.is_some();
         let dragging = self.edge_press.as_ref().is_some_and(|press| press.moved);
         let line = div()

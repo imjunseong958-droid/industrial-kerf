@@ -10,7 +10,6 @@ use std::collections::BTreeSet;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::Path;
-use std::process::Command;
 
 /// Merge the files named by `args` (base, ours, theirs, and optionally the
 /// path in the repository) and return the exit status for git: 0 when
@@ -91,7 +90,7 @@ fn incoming_looks(folder: &Path) -> Vec<Look> {
     let folder = folder.to_string_lossy();
     let folder = folder.trim_start_matches("./");
     let git = |args: &[&str]| {
-        Command::new("git")
+        crate::git::program("git")
             .args(args)
             .output()
             .ok()

@@ -905,7 +905,7 @@ impl FocusRegion {
     }
 
     /// The frame with the box over it, drawn by dragging.
-    fn picker(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn picker(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let frame = self.shown_frame(cx);
         let aspect = frame
             .as_ref()

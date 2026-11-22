@@ -8,6 +8,7 @@ use crate::{
 };
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
+use std::ffi::OsString;
 use std::fs;
 use std::io::{BufRead, Read, Write};
 use std::path::{Path, PathBuf};
@@ -230,6 +231,9 @@ struct RuntimeClientInner {
     directory: PathBuf,
     endpoint: EndpointAddress,
     binary: Option<PathBuf>,
+    /// Variables a daemon this client starts is given over this process's
+    /// environment.
+    daemon_env: Vec<(OsString, OsString)>,
     request_timeout: Duration,
     startup_timeout: Duration,
 }
@@ -274,6 +278,7 @@ impl RuntimeClient {
                 directory,
                 endpoint,
                 binary: binary.map(Path::to_path_buf),
+                daemon_env: Vec::new(),
                 request_timeout: CLIENT_REQUEST_TIMEOUT,
                 startup_timeout: CLIENT_STARTUP_TIMEOUT,
             }),
@@ -286,6 +291,25 @@ impl RuntimeClient {
     pub fn with_request_timeout(self, timeout: Duration) -> Self {
         let mut inner = Arc::unwrap_or_clone(self.inner);
         inner.request_timeout = timeout;
+        Self {
+            inner: Arc::new(inner),
+        }
+    }
+
+    /// This client, starting a daemon with `vars` set in its environment over
+    /// this process's: what a host hands kerfd, and the git it runs, without
+    /// changing its own environment. A daemon already listening keeps the
+    /// environment it was started with.
+    pub fn with_daemon_env<K, V>(self, vars: impl IntoIterator<Item = (K, V)>) -> Self
+    where
+        K: Into<OsString>,
+        V: Into<OsString>,
+    {
+        let mut inner = Arc::unwrap_or_clone(self.inner);
+        inner.daemon_env.extend(
+            vars.into_iter()
+                .map(|(name, value)| (name.into(), value.into())),
+        );
         Self {
             inner: Arc::new(inner),
         }
@@ -895,6 +919,12 @@ impl RuntimeClient {
         command
             .arg("--dir")
             .arg(&self.inner.directory)
+            .envs(
+                self.inner
+                    .daemon_env
+                    .iter()
+                    .map(|(name, value)| (name, value)),
+            )
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(stderr);

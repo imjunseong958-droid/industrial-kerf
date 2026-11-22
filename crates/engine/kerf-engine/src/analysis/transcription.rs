@@ -1577,22 +1577,21 @@ fn parse_whisper_value(value: &Value, range: TimeRange) -> Result<Transcript> {
             .partial_cmp(&right.start)
             .unwrap_or(std::cmp::Ordering::Equal)
     });
-    if cues.is_empty() {
-        if let Some(text) = value.get("text").and_then(Value::as_str).map(str::trim) {
-            if !text.is_empty() {
-                cues.push(TranscriptCue {
-                    start: range.start,
-                    end: range.end,
-                    text: text.into(),
-                    words: vec![TranscriptWord {
-                        start: range.start,
-                        end: range.end,
-                        text: text.into(),
-                        confidence: None,
-                    }],
-                });
-            }
-        }
+    if cues.is_empty()
+        && let Some(text) = value.get("text").and_then(Value::as_str).map(str::trim)
+        && !text.is_empty()
+    {
+        cues.push(TranscriptCue {
+            start: range.start,
+            end: range.end,
+            text: text.into(),
+            words: vec![TranscriptWord {
+                start: range.start,
+                end: range.end,
+                text: text.into(),
+                confidence: None,
+            }],
+        });
     }
     let text = cues
         .iter()
@@ -1752,10 +1751,8 @@ fn parse_token_words(
             .map(|at| (at / 100.0 + range.start).clamp(range.start, range.end));
         let starts_new = current.is_some()
             && (raw_text.starts_with(char::is_whitespace) || raw_text.starts_with('▁'));
-        if starts_new {
-            if let Some(reading) = current.take() {
-                finish(reading, &mut words);
-            }
+        if starts_new && let Some(reading) = current.take() {
+            finish(reading, &mut words);
         }
         let text = raw_text.trim().trim_start_matches('▁');
         if text.is_empty() {

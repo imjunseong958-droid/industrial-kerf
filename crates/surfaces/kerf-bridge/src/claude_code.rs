@@ -297,14 +297,14 @@ impl Stream {
                     .into_iter()
                     .flatten()
                     .find(|server| server["name"] == SERVER);
-                if let Some(server) = kerf {
-                    if server["status"] != "connected" {
-                        self.failure = Some(
-                            "Claude Code could not start Kerf's tools (kerf-mcp). Check that \
+                if let Some(server) = kerf
+                    && server["status"] != "connected"
+                {
+                    self.failure = Some(
+                        "Claude Code could not start Kerf's tools (kerf-mcp). Check that \
                              kerf-mcp and kerfd are built."
-                                .to_owned(),
-                        );
-                    }
+                            .to_owned(),
+                    );
                 }
             }
             Some("stream_event") => {

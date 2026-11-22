@@ -24,7 +24,11 @@ impl Workspace {
     /// becomes while it is renamed there), pressed for its menu and its tip
     /// saying when the project was edited; after it, what stands in the way,
     /// in red, else the project.
-    pub(super) fn title_row(&self, window: &Window, cx: &Context<Self>) -> impl IntoElement {
+    pub(super) fn title_row(
+        &self,
+        window: &Window,
+        cx: &Context<Self>,
+    ) -> impl IntoElement + use<> {
         let session = self.session.read(cx);
         let project = session.project_name();
         // The title is the open conversation's name, the project after it;
@@ -403,7 +407,7 @@ impl Workspace {
 
     /// Activity, under the title: the newest of what the window and Kerf
     /// did, a line each. A press outside or Esc puts it away.
-    pub(super) fn activity_view(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(super) fn activity_view(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let lines: Vec<(String, String)> = self
             .session
             .read(cx)

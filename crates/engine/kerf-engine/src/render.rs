@@ -257,6 +257,34 @@ pub struct RenderOptions {
     pub pass: kerf_compose::Pass,
     /// A clip of the sequence to draw alone, white on black, in place of the picture.
     pub matte: Option<String>,
+    /// Where the frames drawn are kept, and read back from when they are drawn again.
+    pub frame_cache: CacheFolder,
+    /// Where the stretches encoded are kept, and joined again where nothing in them changed.
+    pub section_cache: CacheFolder,
+}
+
+/// Where a render keeps what it can use again.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum CacheFolder {
+    /// The user's cache folder, or the one the environment names or turns off
+    /// (`KERF_FRAME_CACHE` for frames, `KERF_SECTION_CACHE` for stretches).
+    #[default]
+    Default,
+    /// None: nothing is kept, and nothing read back.
+    Off,
+    /// This folder.
+    At(PathBuf),
+}
+
+impl CacheFolder {
+    /// The folder, with `default` the one [`CacheFolder::Default`] is.
+    pub fn folder(&self, default: impl FnOnce() -> Option<PathBuf>) -> Option<PathBuf> {
+        match self {
+            Self::Default => default(),
+            Self::Off => None,
+            Self::At(folder) => Some(folder.clone()),
+        }
+    }
 }
 
 /// The display a picture was graded on: SMPTE ST 2086, which an HDR10 file carries.
@@ -377,6 +405,8 @@ impl Default for RenderOptions {
             sound: true,
             pass: kerf_compose::Pass::Picture,
             matte: None,
+            frame_cache: CacheFolder::Default,
+            section_cache: CacheFolder::Default,
         }
     }
 }
@@ -1206,7 +1236,7 @@ where
             sequence: sequence.map(str::to_owned),
             captions: true,
             // Rendering again after a small edit draws only what it changed.
-            frame_folder: kerf_compose::default_frame_folder(),
+            frame_folder: opts.frame_cache.folder(kerf_compose::default_frame_folder),
             pass: opts.pass,
             matte: opts.matte.clone(),
             // A file of the pass is read a pixel at a time, each taken for one clip's.
@@ -1229,7 +1259,11 @@ where
     };
     let render = composited_render(project, sequence, range, opts, compositor.size())?;
     let total = render.times.len();
-    if let Some((sections, kept)) = render.sections.as_ref().zip(Kept::open()) {
+    if let Some((sections, kept)) = render
+        .sections
+        .as_ref()
+        .zip(Kept::open(&opts.section_cache))
+    {
         let mut progress = |frames: usize| {
             if let Some(callback) = on_progress.as_mut() {
                 callback(frames as f64 / total as f64);

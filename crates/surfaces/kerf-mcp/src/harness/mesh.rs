@@ -474,13 +474,13 @@ impl MeshClip<'_> {
                 input.clip
             ));
         }
-        if let Some(fit) = result.get("fit").cloned() {
-            if fit["sure"].as_f64().is_some_and(|sure| sure < 1.1) {
-                notes.push(format!(
+        if let Some(fit) = result.get("fit").cloned()
+            && fit["sure"].as_f64().is_some_and(|sure| sure < 1.1)
+        {
+            notes.push(format!(
                     "a size half or twice {} fits the footage nearly as well (`sure` {}): the camera does not travel far enough through the set to say, or the set is not of frame {origin} of `{from}`.",
                     fit["scale"], fit["sure"]
                 ));
-            }
         }
         if !notes.is_empty() {
             result["note"] = json!(notes.join(" "));

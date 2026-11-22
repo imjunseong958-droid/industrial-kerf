@@ -58,14 +58,14 @@ impl KerfMcpRouter {
             );
             // kerfd has the job's end, which the agent asks it for; a render that failed, or
             // whose end kerfd could not be told, is said here too. A cancel is not a failure.
-            if let Err(error) = rendered {
-                if error.code != "CANCELLED" {
-                    log::warn!(
-                        "render {} failed, or kerfd was not told how it ended: {}",
-                        worker_job.job_id,
-                        error.message
-                    );
-                }
+            if let Err(error) = rendered
+                && error.code != "CANCELLED"
+            {
+                log::warn!(
+                    "render {} failed, or kerfd was not told how it ended: {}",
+                    worker_job.job_id,
+                    error.message
+                );
             }
         });
         Ok((job, output))

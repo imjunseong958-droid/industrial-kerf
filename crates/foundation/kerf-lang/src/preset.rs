@@ -434,10 +434,9 @@ pub fn export(
             if let Content::Media {
                 media, source_in, ..
             } = &mut clip.content
+                && let Some(offset) = offsets.get(media)
             {
-                if let Some(offset) = offsets.get(media) {
-                    *source_in -= *offset;
-                }
+                *source_in -= *offset;
             }
         }
     }
@@ -985,12 +984,11 @@ pub fn instantiate_with_ids(
                     };
                     for (name, param) in &mut effect.params {
                         let time = def.find(name).is_some_and(|d| d.ty == ParamType::Time);
-                        if let (true, Param::Static(Value::Text(marker))) = (time, param) {
-                            if let Some(id) =
+                        if let (true, Param::Static(Value::Text(marker))) = (time, param)
+                            && let Some(id) =
                                 Id::new(marker.as_str()).ok().and_then(|id| ids.get(&id))
-                            {
-                                *marker = id.to_string();
-                            }
+                        {
+                            *marker = id.to_string();
                         }
                     }
                 }

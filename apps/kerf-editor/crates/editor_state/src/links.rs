@@ -140,14 +140,15 @@ fn as_host(slug: &str) -> String {
         return slug.trim_end_matches('-').to_owned();
     }
     while !slug.is_empty() {
-        if let Ok(ascii) = idna::domain_to_ascii(&slug) {
-            if !ascii.is_empty() && ascii.len() <= LABEL_MOST {
-                let (back, read) = idna::domain_to_unicode(&ascii);
-                if read.is_ok() && !back.is_empty() {
-                    slug = back;
-                }
-                break;
+        if let Ok(ascii) = idna::domain_to_ascii(&slug)
+            && !ascii.is_empty()
+            && ascii.len() <= LABEL_MOST
+        {
+            let (back, read) = idna::domain_to_unicode(&ascii);
+            if read.is_ok() && !back.is_empty() {
+                slug = back;
             }
+            break;
         }
         slug.pop();
         while slug.ends_with('-') {
@@ -331,13 +332,13 @@ fn runtime_folder() -> Option<PathBuf> {
         .or_else(|| std::fs::metadata(crate::prefs::home()?).ok())?
         .uid();
     let made = std::env::temp_dir().join(format!("industrial-kerf-runtime-{uid}"));
-    if !made.exists() {
-        if let Err(error) = std::fs::DirBuilder::new().mode(0o700).create(&made) {
-            log::warn!(
-                "{}: the runtime folder could not be made: {error}",
-                made.display()
-            );
-        }
+    if !made.exists()
+        && let Err(error) = std::fs::DirBuilder::new().mode(0o700).create(&made)
+    {
+        log::warn!(
+            "{}: the runtime folder could not be made: {error}",
+            made.display()
+        );
     }
     [PathBuf::from(format!("/run/user/{uid}")), made]
         .into_iter()

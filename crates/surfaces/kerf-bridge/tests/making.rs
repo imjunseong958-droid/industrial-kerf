@@ -7,6 +7,7 @@
 #![cfg(unix)]
 
 use kerf_bridge::Bridge;
+use kerf_engine::recipe::model::Models;
 use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -69,7 +70,7 @@ struct Project(PathBuf);
 impl Project {
     fn new(tag: &str, steps: &[&str]) -> Self {
         // No models a person has set up are read: only these tests' own.
-        std::env::set_var("KERF_MODELS", models());
+        Models::use_file(models());
         let stamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()

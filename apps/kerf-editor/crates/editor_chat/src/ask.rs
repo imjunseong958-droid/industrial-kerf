@@ -246,7 +246,7 @@ impl AskView {
         cx.notify();
     }
 
-    fn scope_row(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn scope_row(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let words = scope_words(self.scope, self.clip.as_deref());
         let choosable = self.clip.is_some();
         let open = self.scope_menu.is_some();
@@ -321,7 +321,7 @@ impl AskView {
     /// The Scope menu, laid over the card under its button: inside the
     /// card, so a press on it is no press elsewhere, and over the field.
     /// The kit's menu fades in over `FADE`, rising `MENU_RISE`.
-    fn scope_menu(&self) -> Option<impl IntoElement> {
+    fn scope_menu(&self) -> Option<impl IntoElement + use<>> {
         let menu = self.scope_menu.clone()?;
         Some(
             div()

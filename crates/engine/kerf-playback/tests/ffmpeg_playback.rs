@@ -212,10 +212,9 @@ fn seeking_back_after_a_skim_shows_the_playheads_frame() {
         while Instant::now() < deadline {
             if let Some(PlaybackEvent::Frame(frame)) =
                 session.next_event_timeout(Duration::from_millis(100))
+                && (frame.timeline_time - target).abs() < 0.15
             {
-                if (frame.timeline_time - target).abs() < 0.15 {
-                    return;
-                }
+                return;
             }
         }
         panic!("no frame near {target} after {what}");
@@ -410,10 +409,9 @@ fn next_frame(
     while Instant::now() < deadline {
         if let Some(PlaybackEvent::Frame(frame)) =
             session.next_event_timeout(Duration::from_millis(100))
+            && wanted(frame.timeline_time)
         {
-            if wanted(frame.timeline_time) {
-                return frame;
-            }
+            return frame;
         }
     }
     panic!("no frame arrived");

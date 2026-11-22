@@ -218,7 +218,7 @@ impl TimelineView {
         skim: Option<f64>,
         window: &Window,
         cx: &Context<Self>,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + use<> {
         let frame = self.frame(skim, window, cx);
         let hover_cursor = self.hover_cursor();
         let cell = self.bounds.clone();
@@ -370,21 +370,21 @@ fn paint_lanes(
             theme::accent_ink(),
         ));
     }
-    if let Some((edge, delta, row)) = frame.readout {
-        if let Some(row) = lanes.rows.get(row) {
-            paint_readout(
-                view,
-                edge,
-                delta,
-                view.row_y(row),
-                lanes.fps,
-                pen,
-                width,
-                fonts,
-                window,
-                cx,
-            );
-        }
+    if let Some((edge, delta, row)) = frame.readout
+        && let Some(row) = lanes.rows.get(row)
+    {
+        paint_readout(
+            view,
+            edge,
+            delta,
+            view.row_y(row),
+            lanes.fps,
+            pen,
+            width,
+            fonts,
+            window,
+            cx,
+        );
     }
 }
 

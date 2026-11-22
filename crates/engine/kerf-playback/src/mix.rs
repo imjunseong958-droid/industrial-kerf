@@ -174,10 +174,10 @@ impl Mixer {
             // A backward clip plays on in its next part.
             let voice = self.voices.swap_remove(index);
             let sound = &self.sounds[voice.sound];
-            if voice.until < sound.end {
-                if let Some(next) = Voice::open(sound, voice.sound, voice.until) {
-                    self.voices.push(next);
-                }
+            if voice.until < sound.end
+                && let Some(next) = Voice::open(sound, voice.sound, voice.until)
+            {
+                self.voices.push(next);
             }
         }
         for (place, bus) in self.buses.iter_mut().enumerate() {
@@ -400,12 +400,12 @@ impl Source {
     fn pump(&mut self) -> Result<(), PlaybackError> {
         if self.eof {
             self.flushed = true;
-            if let Some(mut source) = self.graph.get("in") {
-                if let Err(error) = source.source().flush() {
-                    log::warn!(
+            if let Some(mut source) = self.graph.get("in")
+                && let Err(error) = source.source().flush()
+            {
+                log::warn!(
                         "the filters were not told the sound ended, so they may hold back its last: {error}"
                     );
-                }
             }
             return Ok(());
         }

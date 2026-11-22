@@ -103,7 +103,11 @@ impl StageView {
 
     /// The transport, under the picture. Its mask tools are greyed while
     /// the clip `shown` over the picture cannot be seen to draw on.
-    pub(super) fn transport(&self, shown: Option<&Shown>, cx: &Context<Self>) -> impl IntoElement {
+    pub(super) fn transport(
+        &self,
+        shown: Option<&Shown>,
+        cx: &Context<Self>,
+    ) -> impl IntoElement + use<> {
         let keys = self.keys.1.clone();
         let reasons = self
             .transport_asked
@@ -260,7 +264,7 @@ impl StageView {
     }
 
     /// The zoom's menu, over the transport's zoom.
-    fn zoom_menu(&self) -> Option<impl IntoElement> {
+    fn zoom_menu(&self) -> Option<impl IntoElement + use<>> {
         let (menu, _) = self.zoom_menu.as_ref()?;
         Some(
             div()

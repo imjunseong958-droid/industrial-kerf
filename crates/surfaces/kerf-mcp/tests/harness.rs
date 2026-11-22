@@ -3313,7 +3313,7 @@ fn what_would_refuse_a_making_is_said_before_anyone_is_asked_to_make_it() {
         return;
     }
     // No models a person has set up are read.
-    std::env::set_var("KERF_MODELS", "/no-such-kerf-models.json");
+    kerf_engine::recipe::model::Models::use_file("/no-such-kerf-models.json");
     let Some((directory, router)) = router() else {
         return;
     };

@@ -162,7 +162,7 @@ impl InspectorView {
         enabled: bool,
         folded: bool,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + use<> {
         let this = cx.entity().downgrade();
         let clip_id = clip.id.clone();
         let toggle = move |on: bool, _: &mut Window, cx: &mut gpui::App| {

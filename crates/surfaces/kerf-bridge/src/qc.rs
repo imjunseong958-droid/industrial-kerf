@@ -52,10 +52,10 @@ pub(crate) fn spawn(shared: Arc<Shared>, tx: Outbox, sequence: Option<String>) {
 
 /// Stop the check running, if any; it ends `failed`.
 pub(crate) fn cancel(shared: &Shared) {
-    if let Ok(running) = shared.check_cancel.lock() {
-        if let Some(cancel) = &*running {
-            cancel.cancel();
-        }
+    if let Ok(running) = shared.check_cancel.lock()
+        && let Some(cancel) = &*running
+    {
+        cancel.cancel();
     }
 }
 
@@ -86,10 +86,10 @@ fn run(
 ) -> Result<Event, RuntimeError> {
     let (_, document) = client.get_document(false)?;
     let mut project = kerf_runtime::parse_document(&document)?;
-    if let Some(id) = sequence {
-        if !project.sequences.iter().any(|candidate| candidate.id == id) {
-            return Ok(failed(sequence, &format!("no sequence `{id}`")));
-        }
+    if let Some(id) = sequence
+        && !project.sequences.iter().any(|candidate| candidate.id == id)
+    {
+        return Ok(failed(sequence, &format!("no sequence `{id}`")));
     }
     kerf_runtime::resolve_media_paths(&mut project, &shared.directory);
     // Progress goes out in whole percents, so a long check sends at most

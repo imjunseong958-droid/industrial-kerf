@@ -15,7 +15,6 @@ use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::Once;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// Send `command` as the editor writes it, in JSON. One that does not read as a command is
@@ -41,22 +40,45 @@ fn kerfd() -> PathBuf {
     path
 }
 
-/// Keep the person's git configuration and Kerf account out of the tests.
-fn hermetic() {
-    static ONCE: Once = Once::new();
-    ONCE.call_once(|| {
-        let home = std::env::temp_dir().join("kerf-bridge-sharing-home");
-        fs::create_dir_all(&home).unwrap();
-        let empty = home.join("gitconfig");
-        fs::write(&empty, "").unwrap();
-        std::env::set_var("HOME", &home);
-        std::env::set_var("GIT_CONFIG_GLOBAL", &empty);
-        std::env::set_var("GIT_CONFIG_NOSYSTEM", "1");
-        std::env::set_var("GIT_AUTHOR_NAME", "Test");
-        std::env::set_var("GIT_AUTHOR_EMAIL", "test@example.com");
-        std::env::set_var("GIT_COMMITTER_NAME", "Test");
-        std::env::set_var("GIT_COMMITTER_EMAIL", "test@example.com");
-    });
+/// Set in the process [`hermetic`] starts a test in.
+const HERMETIC: &str = "KERF_BRIDGE_SHARING_HERMETIC";
+
+/// Keep the person's git configuration and Kerf account out of the tests: `test` runs again
+/// in a process of its own, this binary started for it alone, with a home and a git
+/// configuration of the tests' own in its environment. The bridge reads the home in many
+/// places (the Kerf account, the models, the caches) and the kerfd and git it starts read
+/// both, so the environment it starts with is what reaches them all. True in that process,
+/// where the test goes on; false in this one, once the test has passed there.
+fn hermetic(test: &str) -> bool {
+    if std::env::var_os(HERMETIC).is_some() {
+        return true;
+    }
+    let home = std::env::temp_dir().join("kerf-bridge-sharing-home");
+    fs::create_dir_all(&home).unwrap();
+    let empty = home.join("gitconfig");
+    fs::write(&empty, "").unwrap();
+    let out = Command::new(std::env::current_exe().unwrap())
+        .args([test, "--exact"])
+        .env(HERMETIC, "1")
+        .env("HOME", &home)
+        .env("GIT_CONFIG_GLOBAL", &empty)
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_AUTHOR_NAME", "Test")
+        .env("GIT_AUTHOR_EMAIL", "test@example.com")
+        .env("GIT_COMMITTER_NAME", "Test")
+        .env("GIT_COMMITTER_EMAIL", "test@example.com")
+        .output()
+        .unwrap();
+    let said = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        out.status.success() && said.contains("test result: ok. 1 passed"),
+        "{test}, in a process of its own:\n{said}"
+    );
+    false
 }
 
 /// A short folder: each daemon's socket lives in its project folder.
@@ -229,7 +251,9 @@ fn edit(directory: &Path, key: &str, script: &str) {
 
 #[test]
 fn two_editors_share_a_project_by_hand_and_live() {
-    hermetic();
+    if !hermetic("two_editors_share_a_project_by_hand_and_live") {
+        return;
+    }
     let root = Root::new("sync");
     let remote = root.0.join("remote.git");
     fs::create_dir_all(&remote).unwrap();
@@ -397,7 +421,9 @@ fn the_launcher_starts_a_shared_project_from_a_preset() {
         eprintln!("skipping: ffmpeg is not installed");
         return;
     }
-    hermetic();
+    if !hermetic("the_launcher_starts_a_shared_project_from_a_preset") {
+        return;
+    }
     let root = Root::new("preset");
     let shot = root.0.join("footage/shot.mp4");
     footage(&shot);

@@ -1438,12 +1438,12 @@ pub fn simplified_corners(followed: &FollowedObject, tolerance: f64) -> Vec<usiz
     keep[far] = true;
     let mut spans = vec![(0, far), (far, count)];
     while let Some((low, high)) = spans.pop() {
-        if let Some((off, at)) = worst(low, high) {
-            if off > tolerance {
-                keep[at] = true;
-                spans.push((low, at));
-                spans.push((at, high));
-            }
+        if let Some((off, at)) = worst(low, high)
+            && off > tolerance
+        {
+            keep[at] = true;
+            spans.push((low, at));
+            spans.push((at, high));
         }
     }
     // The two it started from were only somewhere to start: each goes if the outline holds without it.

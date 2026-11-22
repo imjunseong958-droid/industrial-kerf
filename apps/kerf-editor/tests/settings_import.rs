@@ -1,5 +1,6 @@
-//! Its own test binary: the test sets KERF_EDITOR_PREFS and KERF_SECRETS for the whole
-//! process, which the editor's other tests would read.
+//! Its own test binary: the test keeps the settings in a folder of its own for the whole
+//! process (`keep_settings_in`, as `--settings-dir` does), which the editor's other tests
+//! would read.
 
 use kerf_editor::prefs::{Permissions, Prefs};
 
@@ -16,8 +17,7 @@ fn the_qt_editors_settings_are_taken_up_once_with_settings_dir() {
     )
     .unwrap();
     let path = folder.path().join("editor.json");
-    std::env::set_var("KERF_EDITOR_PREFS", &path);
-    std::env::set_var("KERF_SECRETS", "off");
+    kerf_editor::prefs::keep_settings_in(folder.path());
     let taken = kerf_editor::prefs::import_qt_once(Some(folder.path()));
     assert_eq!(taken, ["agent/permissions", "layout/sidebarWidth"]);
     let prefs = Prefs::load_from(&path);

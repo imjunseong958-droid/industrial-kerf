@@ -130,10 +130,9 @@ fn key_frames(seen: &Seen) -> Vec<usize> {
     if let Some(end) = (0..seen.frames)
         .rev()
         .find(|k| seen.by_frame[*k].len() >= FEWEST_SEEN)
+        && keys.last().is_some_and(|last| *last < end)
     {
-        if keys.last().is_some_and(|last| *last < end) {
-            keys.push(end);
-        }
+        keys.push(end);
     }
     keys
 }
@@ -875,10 +874,10 @@ fn where_depth_shows(seen: &Seen, keys: &[usize], lens: Lens<'_>) -> usize {
     for (index, a) in keys.iter().enumerate() {
         let b = keys[(index + START_REACH - 1).min(keys.len() - 1)];
         let left = (b > *a).then(|| left_between(seen, *a, b, lens)).flatten();
-        if let Some(left) = left {
-            if left > most.0 {
-                most = (left, index);
-            }
+        if let Some(left) = left
+            && left > most.0
+        {
+            most = (left, index);
         }
     }
     most.1

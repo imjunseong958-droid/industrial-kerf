@@ -150,33 +150,33 @@ impl TimelineView {
             return;
         }
         // A sound clip's rubber band: its keys and its line take the press.
-        if self.tool == Tool::Selection {
-            if let Some(key) = self.band_at(row, index, x, y) {
-                let (mut keys, mut keyed) = clip.clip.gain_keys(lanes.fps);
-                let mut key = key;
-                if modifiers.alt && key.is_none() {
-                    // Option-click on the line adds a key there, at the level it reads.
-                    let offset = ((x - x0) / self.view.pps.max(f32::EPSILON)) as f64;
-                    let frame = (offset.clamp(0.0, clip.duration) * lanes.fps).round() as i64;
-                    let level = gain_at(y, top, tall);
-                    key = Some(add_gain_key(&mut keys, keyed, frame, lanes.fps, level));
-                    keyed = true;
-                }
-                let from: Vec<f64> = keys.iter().map(|key| key.value).collect();
-                self.gesture = Some(Gesture::Band(BandDrag {
-                    clip: id,
-                    keyed,
-                    key: if keyed { key } else { None },
-                    press_y: f32::from(event.position.y),
-                    top,
-                    tall,
-                    values: from.clone(),
-                    from,
-                    moved: modifiers.alt,
-                    keys,
-                }));
-                return;
+        if self.tool == Tool::Selection
+            && let Some(key) = self.band_at(row, index, x, y)
+        {
+            let (mut keys, mut keyed) = clip.clip.gain_keys(lanes.fps);
+            let mut key = key;
+            if modifiers.alt && key.is_none() {
+                // Option-click on the line adds a key there, at the level it reads.
+                let offset = ((x - x0) / self.view.pps.max(f32::EPSILON)) as f64;
+                let frame = (offset.clamp(0.0, clip.duration) * lanes.fps).round() as i64;
+                let level = gain_at(y, top, tall);
+                key = Some(add_gain_key(&mut keys, keyed, frame, lanes.fps, level));
+                keyed = true;
             }
+            let from: Vec<f64> = keys.iter().map(|key| key.value).collect();
+            self.gesture = Some(Gesture::Band(BandDrag {
+                clip: id,
+                keyed,
+                key: if keyed { key } else { None },
+                press_y: f32::from(event.position.y),
+                top,
+                tall,
+                values: from.clone(),
+                from,
+                moved: modifiers.alt,
+                keys,
+            }));
+            return;
         }
         let can = if zone == Zone::Body {
             self.tool.drags_bodies()

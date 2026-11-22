@@ -188,7 +188,7 @@ impl FinishView {
 
     // ---------------------------------------------------------- drawing
 
-    fn head(&self, cx: &Context<Self>) -> impl IntoElement {
+    fn head(&self, cx: &Context<Self>) -> impl IntoElement + use<> {
         let project = self.session.read(cx).project_name();
         div()
             .h(px(HEAD))
@@ -264,7 +264,7 @@ impl FinishView {
         }
     }
 
-    fn nav(&self, cx: &Context<Self>) -> impl IntoElement {
+    fn nav(&self, cx: &Context<Self>) -> impl IntoElement + use<> {
         div()
             .w(px(NAV))
             .h_full()
@@ -314,7 +314,7 @@ impl FinishView {
 
     /// The section chosen; QC offers a failed check's Ask Kerf where the
     /// window takes it (`can_ask`).
-    fn page(&self, can_ask: bool, cx: &Context<Self>) -> impl IntoElement {
+    fn page(&self, can_ask: bool, cx: &Context<Self>) -> impl IntoElement + use<> {
         let section = self.section;
         let content = match section {
             Section::Qc => self.qc(can_ask, cx),

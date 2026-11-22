@@ -31,10 +31,10 @@ pub fn reduced() -> bool {
         2 => Some(true),
         _ => None,
     };
-    if env.is_none() {
-        if let Some(reader) = READER.get() {
-            reader.wait_first();
-        }
+    if env.is_none()
+        && let Some(reader) = READER.get()
+    {
+        reader.wait_first();
     }
     resolve(
         env,
