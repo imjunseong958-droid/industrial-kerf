@@ -1811,6 +1811,158 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 
 [[package]]
+name = "editor_chat"
+version = "0.1.5"
+dependencies = [
+ "editor_making",
+ "editor_session",
+ "editor_sidebar",
+ "editor_state",
+ "editor_ui",
+ "gpui",
+ "kerf-bridge",
+ "serde_json",
+]
+
+[[package]]
+name = "editor_finish"
+version = "0.1.5"
+dependencies = [
+ "editor_launcher",
+ "editor_session",
+ "editor_state",
+ "editor_ui",
+ "gpui",
+ "kerf-bridge",
+ "serde_json",
+]
+
+[[package]]
+name = "editor_inspector"
+version = "0.1.5"
+dependencies = [
+ "editor_session",
+ "editor_state",
+ "editor_ui",
+ "gpui",
+ "kerf-bridge",
+ "proptest",
+ "serde_json",
+]
+
+[[package]]
+name = "editor_launcher"
+version = "0.1.5"
+dependencies = [
+ "editor_session",
+ "editor_state",
+ "editor_ui",
+ "gpui",
+ "kerf-bridge",
+ "log",
+ "serde_json",
+]
+
+[[package]]
+name = "editor_making"
+version = "0.1.5"
+dependencies = [
+ "editor_launcher",
+ "editor_session",
+ "editor_stage",
+ "editor_state",
+ "editor_ui",
+ "gpui",
+ "kerf-bridge",
+ "log",
+ "serde_json",
+]
+
+[[package]]
+name = "editor_session"
+version = "0.1.5"
+dependencies = [
+ "editor_state",
+ "editor_ui",
+ "gpui",
+ "image",
+ "kerf-bridge",
+ "log",
+ "serde_json",
+]
+
+[[package]]
+name = "editor_sidebar"
+version = "0.1.5"
+dependencies = [
+ "editor_finish",
+ "editor_launcher",
+ "editor_session",
+ "editor_stage",
+ "editor_state",
+ "editor_ui",
+ "gpui",
+ "kerf-bridge",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "editor_stage"
+version = "0.1.5"
+dependencies = [
+ "editor_session",
+ "editor_state",
+ "editor_ui",
+ "gpui",
+ "kerf-bridge",
+ "log",
+ "serde_json",
+]
+
+[[package]]
+name = "editor_state"
+version = "0.1.5"
+dependencies = [
+ "idna",
+ "kerf-bridge",
+ "log",
+ "serde",
+ "serde_json",
+ "sha1_smol",
+ "unicode-normalization",
+]
+
+[[package]]
+name = "editor_timeline"
+version = "0.1.5"
+dependencies = [
+ "editor_making",
+ "editor_session",
+ "editor_stage",
+ "editor_state",
+ "editor_ui",
+ "gpui",
+ "kerf-bridge",
+ "log",
+ "serde_json",
+]
+
+[[package]]
+name = "editor_ui"
+version = "0.1.5"
+dependencies = [
+ "editor_state",
+ "gpui",
+ "log",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-foundation",
+ "raw-window-handle",
+ "unicode-segmentation",
+]
+
+[[package]]
 name = "either"
 version = "1.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3605,6 +3757,17 @@ dependencies = [
 name = "kerf-editor"
 version = "0.1.5"
 dependencies = [
+ "editor_chat",
+ "editor_finish",
+ "editor_inspector",
+ "editor_launcher",
+ "editor_making",
+ "editor_session",
+ "editor_sidebar",
+ "editor_stage",
+ "editor_state",
+ "editor_timeline",
+ "editor_ui",
  "embed-resource",
  "env_logger",
  "gpui",
@@ -3613,17 +3776,10 @@ dependencies = [
  "jiff",
  "kerf-bridge",
  "log",
- "objc2",
- "objc2-app-kit",
- "objc2-foundation",
  "proptest",
- "raw-window-handle",
- "serde",
  "serde_json",
- "sha1_smol",
  "tempfile",
- "unicode-normalization",
- "unicode-segmentation",
+ "toml 1.2.1+spec-1.1.0",
  "x11rb",
 ]
 

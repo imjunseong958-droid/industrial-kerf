@@ -6,9 +6,9 @@
 
 use super::asked::CONFIRM;
 use super::Workspace;
-use crate::sidebar;
-use crate::store::Connection;
-use crate::ui;
+use editor_sidebar::sidebar;
+use editor_state::store::Connection;
+use editor_ui::ui;
 use gpui::{App, Context, Focusable, Subscription, Window};
 
 impl Workspace {
@@ -106,7 +106,7 @@ impl Workspace {
     pub(super) fn bound_to_escape(&self, id: &str) -> bool {
         self.keys.1.get(id).is_some_and(|keys| {
             keys.iter()
-                .any(|key| crate::shortcuts::keystroke(key).as_deref() == Some("escape"))
+                .any(|key| editor_state::shortcuts::keystroke(key).as_deref() == Some("escape"))
         })
     }
 
@@ -116,7 +116,7 @@ impl Workspace {
         if self.keys.0 == keymap {
             return;
         }
-        let keys = crate::commands::catalog(keymap)
+        let keys = editor_session::commands::catalog(keymap)
             .into_iter()
             .map(|command| (command.id, command.keys))
             .collect();
@@ -129,7 +129,7 @@ impl Workspace {
             .1
             .get(id)
             .and_then(|keys| keys.first())
-            .map(|key| crate::shortcuts::shown_keys(key))
+            .map(|key| editor_state::shortcuts::shown_keys(key))
     }
 
     /// Esc in the window (outside a field, the timeline, and whatever is
@@ -149,7 +149,7 @@ impl Workspace {
     /// Whether the preview render's card shows over the picture: the stage
     /// draws it ([`StageView::render_card_shown`]) and the picture is in.
     ///
-    /// [`StageView::render_card_shown`]: crate::stage::StageView::render_card_shown
+    /// [`StageView::render_card_shown`]: editor_stage::stage::StageView::render_card_shown
     fn render_card_shows(&self, cx: &App) -> bool {
         self.panel_open
             && self.picture_shown.target() > 0.5
@@ -167,16 +167,16 @@ impl Workspace {
                 || self.activity_open
                 || self.sidebar.read(cx).menu_open()
                 || self.chat.read(cx).menu_open(),
-            in_field: has(crate::input::CONTEXT),
+            in_field: has(editor_ui::input::CONTEXT),
             // The chip's questions count as dialogs: their own Close has
             // Esc, keys in them or not.
             in_dialog: self.modal.is_some()
                 || self.export.is_some()
                 || ui::panel_of(stack).is_some()
-                || has(crate::palette::CONTEXT)
+                || has(editor_session::palette::CONTEXT)
                 || has(CONFIRM)
                 || self.collab.read(cx).asking(cx),
-            on_picture: has(crate::stage::CONTEXT),
+            on_picture: has(editor_stage::stage::CONTEXT),
             rendering: self.render_card_shows(cx),
             band_open: self.media_open,
         }
@@ -186,7 +186,7 @@ impl Workspace {
     /// goes at once, done with until that render ends
     /// ([`StageView::stop_render`]).
     ///
-    /// [`StageView::stop_render`]: crate::stage::StageView::stop_render
+    /// [`StageView::stop_render`]: editor_stage::stage::StageView::stop_render
     fn stop_render(&mut self, cx: &mut Context<Self>) {
         self.stage.update(cx, |stage, cx| stage.stop_render(cx));
     }
@@ -236,10 +236,10 @@ pub fn settle_keys(timeline_in_view: bool, holder: Holder) -> KeysGo {
 /// panel open over the window.
 pub fn holds_keys_itself(stack: &[gpui::KeyContext]) -> bool {
     let busy = [
-        crate::input::CONTEXT,
-        crate::ui::MENU,
+        editor_ui::input::CONTEXT,
+        editor_ui::ui::MENU,
         sidebar::MENU,
-        crate::palette::CONTEXT,
+        editor_session::palette::CONTEXT,
         CONFIRM,
     ];
     ui::panel_of(stack).is_some()

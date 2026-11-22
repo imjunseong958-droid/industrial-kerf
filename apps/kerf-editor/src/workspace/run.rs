@@ -6,11 +6,11 @@
 //! why, or ticked.
 
 use super::Workspace;
-use crate::commands::{ClearRecent, OpenRecent, RunCommand};
-use crate::delivery::Quality;
-use crate::settings::Page;
-use crate::sidebar;
-use crate::theme::motion as scene;
+use editor_launcher::settings::Page;
+use editor_session::commands::{ClearRecent, OpenRecent, RunCommand};
+use editor_sidebar::sidebar;
+use editor_state::delivery::Quality;
+use editor_ui::theme::motion as scene;
 use gpui::{
     point, prelude::*, px, size, App, Bounds, Context, Div, KeyDownEvent, MouseDownEvent, Pixels,
     Window,
@@ -36,33 +36,37 @@ impl Workspace {
     fn command_actions(root: Div, cx: &Context<Self>) -> Div {
         root.on_action(cx.listener(Self::run_command))
             .on_action(
-                cx.listener(|this, _: &crate::export::ExportChosen, _, cx| this.export_chosen(cx)),
+                cx.listener(|this, _: &editor_finish::export::ExportChosen, _, cx| {
+                    this.export_chosen(cx)
+                }),
             )
             .on_action(
-                cx.listener(|this, _: &crate::commands::Escape, window, cx| {
+                cx.listener(|this, _: &editor_session::commands::Escape, window, cx| {
                     this.escape(window, cx)
                 }),
             )
             .on_action(
-                cx.listener(|this, _: &crate::commands::RevealPicture, _, cx| {
+                cx.listener(|this, _: &editor_session::commands::RevealPicture, _, cx| {
                     this.reveal_picture(cx)
                 }),
             )
             // ⇧R ⇧E ⇧P wherever the window has the keys: a mask tool on the
             // chosen picture clip.
             .on_action(
-                cx.listener(|this, _: &crate::stage::RectangleMask, window, cx| {
-                    this.toggle_mask_tool(crate::stage::MaskTool::Rectangle, window, cx)
+                cx.listener(|this, _: &editor_stage::stage::RectangleMask, window, cx| {
+                    this.toggle_mask_tool(editor_stage::stage::MaskTool::Rectangle, window, cx)
                 }),
             )
             .on_action(
-                cx.listener(|this, _: &crate::stage::EllipseMask, window, cx| {
-                    this.toggle_mask_tool(crate::stage::MaskTool::Ellipse, window, cx)
+                cx.listener(|this, _: &editor_stage::stage::EllipseMask, window, cx| {
+                    this.toggle_mask_tool(editor_stage::stage::MaskTool::Ellipse, window, cx)
                 }),
             )
-            .on_action(cx.listener(|this, _: &crate::stage::PenMask, window, cx| {
-                this.toggle_mask_tool(crate::stage::MaskTool::Pen, window, cx)
-            }))
+            .on_action(
+                cx.listener(|this, _: &editor_stage::stage::PenMask, window, cx| {
+                    this.toggle_mask_tool(editor_stage::stage::MaskTool::Pen, window, cx)
+                }),
+            )
     }
 
     /// What the app's menu chooses (Sign Out, a keymap, a branch, the
@@ -87,11 +91,13 @@ impl Workspace {
                     cx.notify();
                 });
             }))
-            .on_action(cx.listener(|this, action: &crate::stage::SetZoom, _, cx| {
-                this.reveal_picture(cx);
-                let zoom = action.percent as f32 / 100.0;
-                this.stage.update(cx, |stage, cx| stage.set_zoom(zoom, cx));
-            }))
+            .on_action(
+                cx.listener(|this, action: &editor_stage::stage::SetZoom, _, cx| {
+                    this.reveal_picture(cx);
+                    let zoom = action.percent as f32 / 100.0;
+                    this.stage.update(cx, |stage, cx| stage.set_zoom(zoom, cx));
+                }),
+            )
             .on_action(cx.listener(|this, action: &OpenRecent, window, cx| {
                 this.open_chosen(PathBuf::from(action.path.as_ref()), window, cx)
             }))
@@ -101,7 +107,7 @@ impl Workspace {
                     session.save_prefs();
                 });
                 let project = this.session.read(cx).project.clone();
-                crate::commands::refresh_menus(project.as_deref(), cx);
+                editor_session::commands::refresh_menus(project.as_deref(), cx);
             }))
     }
 
@@ -109,56 +115,64 @@ impl Workspace {
     /// failed check's Ask Kerf, Cast and Styles…, Edit roles…, a shot's
     /// graph, Make, Finish.
     fn over_window_actions(root: Div, cx: &Context<Self>) -> Div {
-        root.on_action(
-            cx.listener(|this, _: &crate::palette::OpenPalette, window, cx| {
+        root.on_action(cx.listener(
+            |this, _: &editor_session::palette::OpenPalette, window, cx| {
                 if this.modal.is_none() {
                     // What the palette says of a proposal is of the pinned one.
                     this.pin_proposal(cx);
                     let checked = this.checked_commands(cx);
                     let palette = cx.new(|cx| {
-                        crate::palette::CommandPalette::new(this.session.clone(), window, cx)
-                            .with_checked(checked)
+                        editor_session::palette::CommandPalette::new(
+                            this.session.clone(),
+                            window,
+                            cx,
+                        )
+                        .with_checked(checked)
                     });
                     this.open_modal(palette, window, cx);
                 }
-            }),
-        )
+            },
+        ))
         // Ask Kerf on a failed check (Finish's QC, Export's Preflight):
         // its words wait in the composer, to be changed before they
         // are sent.
-        .on_action(
-            cx.listener(|this, action: &crate::finish::AskKerf, window, cx| {
+        .on_action(cx.listener(
+            |this, action: &editor_finish::finish::AskKerf, window, cx| {
                 let words = action.words.to_string();
                 this.chat
                     .update(cx, |chat, cx| chat.fill(words, window, cx));
-            }),
-        )
+            },
+        ))
         // Cast and Styles…, and Edit roles…, over the window.
-        .on_action(cx.listener(|this, _: &crate::cast::OpenCast, window, cx| {
-            if this.modal_gives_way() {
-                let view =
-                    cx.new(|cx| crate::cast::CastView::new(this.session.clone(), window, cx));
-                this.open_modal(view, window, cx);
-            }
-        }))
         .on_action(
-            cx.listener(|this, _: &crate::media::EditRoles, window, cx| {
+            cx.listener(|this, _: &editor_launcher::cast::OpenCast, window, cx| {
                 if this.modal_gives_way() {
-                    let view =
-                        cx.new(|cx| crate::media::RolesView::new(this.session.clone(), window, cx));
+                    let view = cx.new(|cx| {
+                        editor_launcher::cast::CastView::new(this.session.clone(), window, cx)
+                    });
                     this.open_modal(view, window, cx);
                 }
             }),
         )
         .on_action(
-            cx.listener(|this, action: &crate::making::OpenShotGraph, window, cx| {
-                this.open_shot_graph(action.media.clone(), window, cx)
+            cx.listener(|this, _: &editor_making::media::EditRoles, window, cx| {
+                if this.modal_gives_way() {
+                    let view = cx.new(|cx| {
+                        editor_making::media::RolesView::new(this.session.clone(), window, cx)
+                    });
+                    this.open_modal(view, window, cx);
+                }
             }),
         )
-        .on_action(
-            cx.listener(|this, action: &crate::making::MakeMedia, window, cx| {
+        .on_action(cx.listener(
+            |this, action: &editor_making::making::OpenShotGraph, window, cx| {
+                this.open_shot_graph(action.media.clone(), window, cx)
+            },
+        ))
+        .on_action(cx.listener(
+            |this, action: &editor_making::making::MakeMedia, window, cx| {
                 let plan = cx.new(|cx| {
-                    crate::making::MakePlan::new(
+                    editor_making::making::MakePlan::new(
                         this.session.clone(),
                         action.media.clone(),
                         action.rolls,
@@ -167,12 +181,12 @@ impl Workspace {
                     )
                 });
                 this.open_modal(plan, window, cx);
-            }),
-        )
-        .on_action(
-            cx.listener(|this, action: &crate::finish::OpenFinish, window, cx| {
+            },
+        ))
+        .on_action(cx.listener(
+            |this, action: &editor_finish::finish::OpenFinish, window, cx| {
                 let finish = cx.new(|cx| {
-                    crate::finish::FinishView::new(
+                    editor_finish::finish::FinishView::new(
                         this.session.clone(),
                         action.run_check,
                         window,
@@ -180,8 +194,8 @@ impl Workspace {
                     )
                 });
                 this.open_modal(finish, window, cx);
-            }),
-        )
+            },
+        ))
     }
 
     /// A press on what takes no keys, F2, and files dropped on the window.
@@ -246,12 +260,12 @@ impl Workspace {
         .into_iter()
         .filter(|(_, on)| *on)
         .map(|(id, _)| id)
-        // The mask tool out, by its own id ([`crate::stage::mask_tool_id`]).
+        // The mask tool out, by its own id ([`editor_stage::stage::mask_tool_id`]).
         .chain(
             self.stage
                 .read(cx)
                 .mask_tool()
-                .map(crate::stage::mask_tool_id),
+                .map(editor_stage::stage::mask_tool_id),
         )
         .map(str::to_owned)
         .collect()
@@ -259,7 +273,7 @@ impl Workspace {
 
     /// How the registry's commands stand here, for the menu bar (greyed,
     /// ticked). Only macOS draws one.
-    pub(super) fn menu_states(&self, cx: &App) -> crate::commands::MenuStates {
+    pub(super) fn menu_states(&self, cx: &App) -> editor_session::commands::MenuStates {
         let states = self.command_states(cx);
         let unavailable = states
             .as_object()
@@ -271,7 +285,7 @@ impl Workspace {
                     .collect()
             })
             .unwrap_or_default();
-        crate::commands::MenuStates {
+        editor_session::commands::MenuStates {
             unavailable,
             checked: self.checked_commands(cx),
         }
@@ -280,15 +294,15 @@ impl Workspace {
     /// Why each of the registry's commands cannot run now (null: it can),
     /// as every menu that lists them greys them: Ask Kerf… with Kerf's
     /// access too (no key, signed out), and the picture's mask tools by
-    /// their own ids ([`crate::stage::mask_tool_id`]).
+    /// their own ids ([`editor_stage::stage::mask_tool_id`]).
     pub(super) fn command_states(&self, cx: &App) -> serde_json::Value {
         let mut states = self
             .session
             .read(cx)
-            .command_states(crate::session::cloud(cx));
+            .command_states(editor_session::session::cloud(cx));
         let reason = self.mask_reason(cx);
-        for tool in crate::stage::MaskTool::ALL {
-            states[crate::stage::mask_tool_id(tool)] =
+        for tool in editor_stage::stage::MaskTool::ALL {
+            states[editor_stage::stage::mask_tool_id(tool)] =
                 reason.map_or(serde_json::Value::Null, serde_json::Value::from);
         }
         states
@@ -299,13 +313,13 @@ impl Workspace {
     /// places where it can be seen, on the program shown
     /// ([`StageView::can_draw`]).
     ///
-    /// [`StageView::can_draw`]: crate::stage::StageView::can_draw
+    /// [`StageView::can_draw`]: editor_stage::stage::StageView::can_draw
     fn mask_reason(&self, cx: &App) -> Option<&'static str> {
         let stage = self.stage.read(cx);
         if stage.mask_tool().is_some() {
             return None;
         }
-        (!stage.can_draw(cx)).then_some(crate::commands::NO_MASK_CLIP)
+        (!stage.can_draw(cx)).then_some(editor_session::commands::NO_MASK_CLIP)
     }
 
     /// Where the Ask popover stands: over the chosen clip while the
@@ -344,12 +358,12 @@ impl Workspace {
         self.pin_proposal(cx);
         let session = self.session.read(cx);
         let states = if id == "ai.ask" {
-            let cloud = crate::session::cloud(cx).cloned();
+            let cloud = editor_session::session::cloud(cx).cloned();
             session.command_states(cloud.as_ref())
         } else {
             kerf_bridge::commands_states(&session.command_context())
         };
-        crate::palette::unavailable(&states, id).map(str::to_owned)
+        editor_session::palette::unavailable(&states, id).map(str::to_owned)
     }
 
     /// Carries out a command by its id: what the window does itself, else
@@ -445,9 +459,10 @@ impl Workspace {
                     )
                 }),
             },
-            "qc.run" => {
-                window.dispatch_action(Box::new(crate::finish::OpenFinish { run_check: true }), cx)
-            }
+            "qc.run" => window.dispatch_action(
+                Box::new(editor_finish::finish::OpenFinish { run_check: true }),
+                cx,
+            ),
             // Edit ▸ Focus Region…: its dialog over the window.
             "clip.focusRegion" => self.focus_region(window, cx),
             // Editing presets: Import asks for the file, then its dialog
@@ -455,13 +470,18 @@ impl Workspace {
             // being updated now); Export asks where; Save asks the name.
             "file.applyPreset" => {
                 let workspace = cx.entity().downgrade();
-                crate::presets::import_preset(session, window, cx, move |view, window, cx| {
-                    let _ = workspace.update(cx, |this, cx| this.open_modal(view, window, cx));
-                });
+                editor_launcher::presets::import_preset(
+                    session,
+                    window,
+                    cx,
+                    move |view, window, cx| {
+                        let _ = workspace.update(cx, |this, cx| this.open_modal(view, window, cx));
+                    },
+                );
             }
-            "file.exportPreset" => crate::presets::export_preset(session, window, cx),
+            "file.exportPreset" => editor_launcher::presets::export_preset(session, window, cx),
             "preset.save" => {
-                let view = crate::presets::save_preset(session, window, cx);
+                let view = editor_launcher::presets::save_preset(session, window, cx);
                 self.open_modal(view, window, cx);
             }
             _ => return false,
@@ -554,8 +574,8 @@ impl Workspace {
             }
             // The timeline's own, from the menus and the palette (its keys
             // reach it first while it has them).
-            tool if crate::timeline::Tool::from_command(tool).is_some() => {
-                if let Some(tool) = crate::timeline::Tool::from_command(tool) {
+            tool if editor_timeline::timeline::Tool::from_command(tool).is_some() => {
+                if let Some(tool) = editor_timeline::timeline::Tool::from_command(tool) {
                     self.timeline
                         .update(cx, |timeline, cx| timeline.set_tool(tool, cx));
                 }

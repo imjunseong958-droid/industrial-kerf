@@ -17,13 +17,13 @@
 //!
 //! [`Workspace::open_modal`]: crate::workspace::Workspace::open_modal
 
-use crate::artwork::ffmpeg_bin;
-use crate::input::{InputEvent, TextInput};
-use crate::model::{self, Clip, ClipShow, TrackKind};
-use crate::session::{BridgeEvent, Session};
-use crate::store::Change;
-use crate::theme::{self, over_picture, text};
-use crate::ui;
+use editor_session::artwork::ffmpeg_bin;
+use editor_session::session::{BridgeEvent, Session};
+use editor_state::model::{self, Clip, ClipShow, TrackKind};
+use editor_state::store::Change;
+use editor_ui::input::{InputEvent, TextInput};
+use editor_ui::theme::{self, over_picture, text};
+use editor_ui::ui;
 use gpui::{
     canvas, div, point, prelude::*, px, App, Bounds, Context, DismissEvent, Entity, EventEmitter,
     FocusHandle, Focusable, KeyBinding, MouseButton, MouseDownEvent, MouseMoveEvent, Pixels,
@@ -463,8 +463,10 @@ fn decode_frame(file: &Path, seconds: f64) -> Option<Arc<RenderImage>> {
     .map(str::to_owned)
     .to_vec();
     let out = run_ffmpeg(&args)?;
-    let picture = crate::artwork::parse_pam_stream(&out).into_iter().next()?;
-    crate::artwork::render_image(&picture)
+    let picture = editor_session::artwork::parse_pam_stream(&out)
+        .into_iter()
+        .next()?;
+    editor_session::artwork::render_image(&picture)
 }
 
 /// The grey frames a subject is followed in: `clip`'s media from program
@@ -544,7 +546,7 @@ impl Focusable for FocusRegion {
 /// Binds Esc and Return in the dialog, unless they are (binding a keymap
 /// clears them).
 fn bind_keys(cx: &mut App) {
-    if !crate::settings::escape_bound(cx, &CloseFocus) {
+    if !editor_launcher::settings::escape_bound(cx, &CloseFocus) {
         cx.bind_keys([
             KeyBinding::new("escape", CloseFocus, Some(CONTEXT)),
             KeyBinding::new("enter", ApplyFocus, Some(CONTEXT)),
@@ -907,7 +909,7 @@ impl FocusRegion {
         let frame = self.shown_frame(cx);
         let aspect = frame
             .as_ref()
-            .map(|frame| crate::artwork::image_size(frame))
+            .map(|frame| editor_session::artwork::image_size(frame))
             .filter(|(width, height)| *width > 0 && *height > 0)
             .map_or(16.0 / 9.0, |(width, height)| width as f32 / height as f32);
         let tall = (PICKER_WIDE / aspect).clamp(160.0, 360.0);
@@ -930,9 +932,9 @@ impl FocusRegion {
                     move |bounds, _, window, _| {
                         let placed = match &frame {
                             Some(frame) => {
-                                let placed = crate::artwork::fitted(
+                                let placed = editor_session::artwork::fitted(
                                     bounds,
-                                    crate::artwork::image_size(frame),
+                                    editor_session::artwork::image_size(frame),
                                     false,
                                 );
                                 if let Err(error) = window.paint_image(
@@ -961,7 +963,7 @@ impl FocusRegion {
                                 Bounds::from_corners(point(x0, y0), point(x1, y1)),
                                 theme::with_alpha(over_picture::line(), 0.14),
                             ));
-                            crate::stage::stroke_over(
+                            editor_stage::stage::stroke_over(
                                 window,
                                 &[point(x0, y0), point(x1, y0), point(x1, y1), point(x0, y1)],
                                 true,

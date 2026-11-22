@@ -1,0 +1,23 @@
+[package]
+name = "editor_making"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "The editor's makings, a shot's graph, and the Media band"
+
+[lib]
+path = "src/editor_making.rs"
+
+[dependencies]
+editor_state.workspace = true
+editor_ui.workspace = true
+editor_session.workspace = true
+editor_launcher.workspace = true
+editor_stage.workspace = true
+kerf-bridge.workspace = true
+gpui.workspace = true
+log.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

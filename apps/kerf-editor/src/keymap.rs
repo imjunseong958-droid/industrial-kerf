@@ -3,12 +3,12 @@
 //! Both name the views whose actions they reach; the views reach them
 //! through [`Assembly`].
 
-use crate::commands::{
+use editor_session::commands::{
     catalog, recent_rows, Assembly, ClearRecent, Command, Escape, HideApp, HideOtherApps,
     MenuBranches, MenuStates, NoOtherBranches, NoRecent, OpenRecent, RecentMissing, RunCommand,
     ShowAllApps, Unavailable, TIMELINE, WORKSPACE,
 };
-use crate::stage::mask_tool_id;
+use editor_stage::stage::mask_tool_id;
 use gpui::{App, KeyBinding, NoAction, SharedString};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -66,11 +66,11 @@ pub fn answer_app_menu(cx: &mut App) {
 }
 
 /// What takes out mask tool `tool` (or puts it down) from a menu.
-pub fn mask_tool_action(tool: crate::stage::MaskTool) -> Box<dyn gpui::Action> {
+pub fn mask_tool_action(tool: editor_stage::stage::MaskTool) -> Box<dyn gpui::Action> {
     match tool {
-        crate::stage::MaskTool::Rectangle => Box::new(crate::stage::RectangleMask),
-        crate::stage::MaskTool::Ellipse => Box::new(crate::stage::EllipseMask),
-        crate::stage::MaskTool::Pen => Box::new(crate::stage::PenMask),
+        editor_stage::stage::MaskTool::Rectangle => Box::new(editor_stage::stage::RectangleMask),
+        editor_stage::stage::MaskTool::Ellipse => Box::new(editor_stage::stage::EllipseMask),
+        editor_stage::stage::MaskTool::Pen => Box::new(editor_stage::stage::PenMask),
     }
 }
 
@@ -87,7 +87,7 @@ pub fn branch_menu(branches: &MenuBranches) -> gpui::Menu {
             } else {
                 gpui::MenuItem::action(
                     branch.clone(),
-                    crate::sidebar::SwitchBranch {
+                    editor_sidebar::sidebar::SwitchBranch {
                         name: branch.clone().into(),
                     },
                 )
@@ -96,7 +96,7 @@ pub fn branch_menu(branches: &MenuBranches) -> gpui::Menu {
         .collect();
     if items.is_empty() {
         items.push(gpui::MenuItem::action(
-            crate::finish::NO_OTHER_BRANCHES,
+            editor_finish::finish::NO_OTHER_BRANCHES,
             NoOtherBranches,
         ));
     }
@@ -113,7 +113,7 @@ pub fn branch_menu(branches: &MenuBranches) -> gpui::Menu {
 /// (`sidebar::ChooseKeymap`, which the window carries out), and the menus
 /// are set again with it.
 pub fn keymap_menu(keymap: &str) -> gpui::Menu {
-    let items = crate::prefs::Keymap::ALL
+    let items = editor_state::prefs::Keymap::ALL
         .into_iter()
         .map(|choice| {
             let name = if choice.wire() == keymap {
@@ -121,7 +121,10 @@ pub fn keymap_menu(keymap: &str) -> gpui::Menu {
             } else {
                 choice.label().to_owned()
             };
-            gpui::MenuItem::action(name, crate::sidebar::ChooseKeymap { keymap: choice })
+            gpui::MenuItem::action(
+                name,
+                editor_sidebar::sidebar::ChooseKeymap { keymap: choice },
+            )
         })
         .collect();
     gpui::Menu {
@@ -201,15 +204,15 @@ pub fn bind(keymap: &str, cx: &mut App) {
     }
     answer_app_menu(cx);
     cx.clear_key_bindings();
-    cx.bind_keys(crate::input::key_bindings());
-    cx.bind_keys(crate::chat::key_bindings());
-    cx.bind_keys(crate::ui::key_bindings());
-    crate::ui::follow_tab(WORKSPACE, cx);
+    cx.bind_keys(editor_ui::input::key_bindings());
+    cx.bind_keys(editor_chat::chat::key_bindings());
+    cx.bind_keys(editor_ui::ui::key_bindings());
+    editor_ui::ui::follow_tab(WORKSPACE, cx);
     let mut bindings = Vec::new();
     for command in catalog(keymap) {
         let id: SharedString = command.id.clone().into();
         for shortcut in &command.keys {
-            let Some(keystroke) = crate::shortcuts::keystroke(shortcut) else {
+            let Some(keystroke) = editor_state::shortcuts::keystroke(shortcut) else {
                 continue;
             };
             if keystroke
@@ -232,7 +235,7 @@ pub fn bind(keymap: &str, cx: &mut App) {
                 bindings.push(KeyBinding::new(
                     &keystroke,
                     NoAction,
-                    Some(crate::input::CONTEXT),
+                    Some(editor_ui::input::CONTEXT),
                 ));
             }
         }
@@ -250,7 +253,7 @@ pub fn bind(keymap: &str, cx: &mut App) {
     ));
     bindings.push(KeyBinding::new(
         "secondary-shift-p",
-        crate::palette::OpenPalette,
+        editor_session::palette::OpenPalette,
         Some(WORKSPACE),
     ));
     bindings.push(KeyBinding::new("escape", Escape, Some(WORKSPACE)));
@@ -258,28 +261,28 @@ pub fn bind(keymap: &str, cx: &mut App) {
     bindings.extend(app_menu_bindings());
     bindings.push(KeyBinding::new(
         "up",
-        crate::palette::Previous,
-        Some(crate::palette::CONTEXT),
+        editor_session::palette::Previous,
+        Some(editor_session::palette::CONTEXT),
     ));
     bindings.push(KeyBinding::new(
         "down",
-        crate::palette::Next,
-        Some(crate::palette::CONTEXT),
+        editor_session::palette::Next,
+        Some(editor_session::palette::CONTEXT),
     ));
     cx.bind_keys(bindings);
     // What the views bind of their own, which binding a keymap cleared: the
     // picture's mask tools and its Delete, Esc and Return; the sidebar's
     // Tab, menus and rows.
-    crate::stage::bind_keys(cx);
-    crate::sidebar::bind_keys(cx);
+    editor_stage::stage::bind_keys(cx);
+    editor_sidebar::sidebar::bind_keys(cx);
     // Esc puts away what is open over the window before the window's own Esc
     // (Reject Proposal) has it: their contexts are the deeper ones.
-    crate::settings::bind_close(cx);
-    crate::export::bind_close(cx);
+    editor_launcher::settings::bind_close(cx);
+    editor_finish::export::bind_close(cx);
     // A shot's graph's Esc and its canvas's keys, should a keymap be bound
     // while one is open.
-    crate::making::bind_keys(cx);
-    let recent = crate::prefs::Prefs::load().recent;
+    editor_making::making::bind_keys(cx);
+    let recent = editor_state::prefs::Prefs::load().recent;
     cx.set_menus(menus_with(keymap, &recent, None));
 }
 
@@ -373,7 +376,7 @@ pub fn menus_with_branches(
         // can place is chosen ([`mask_tool_id`]).
         if menu == "View" && !items.is_empty() {
             items.push(gpui::MenuItem::separator());
-            for tool in crate::stage::MaskTool::ALL {
+            for tool in editor_stage::stage::MaskTool::ALL {
                 let id = mask_tool_id(tool);
                 let name = if states.checked.contains(id) {
                     format!("✓ {}", tool.label())

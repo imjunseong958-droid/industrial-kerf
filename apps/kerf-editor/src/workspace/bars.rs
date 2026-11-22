@@ -6,11 +6,11 @@
 //! its first line in the bar ([`first_line`]).
 
 use super::Workspace;
-use crate::motion;
-use crate::session::Session;
-use crate::store::Connection;
-use crate::theme::{self, layout, motion as scene, text};
-use crate::ui;
+use editor_session::session::Session;
+use editor_state::store::Connection;
+use editor_ui::motion;
+use editor_ui::theme::{self, layout, motion as scene, text};
+use editor_ui::ui;
 use gpui::{
     div, prelude::*, px, AnimationExt, AnyElement, App, Context, Rgba, SharedString, Window,
 };

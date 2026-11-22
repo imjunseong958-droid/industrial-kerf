@@ -5,14 +5,14 @@
 
 use super::toolbar::toolbar_stop;
 use super::Workspace;
-use crate::icons::Icon;
-use crate::model::SummaryShow;
-use crate::motion;
-use crate::settings::Page;
-use crate::sidebar;
-use crate::store::Connection;
-use crate::theme::{self, layout, motion as scene, text};
-use crate::ui;
+use editor_launcher::settings::Page;
+use editor_sidebar::sidebar;
+use editor_state::model::SummaryShow;
+use editor_state::store::Connection;
+use editor_ui::icons::Icon;
+use editor_ui::motion;
+use editor_ui::theme::{self, layout, motion as scene, text};
+use editor_ui::ui;
 use gpui::{
     div, prelude::*, px, AnimationExt, AnyElement, ClickEvent, Context, DismissEvent, Div,
     MouseDownEvent, Rgba, Window,
@@ -115,7 +115,7 @@ impl Workspace {
         // Pressed, what can be done with the conversation;
         // pressed twice, its name becomes a field.
         let title = toolbar_stop(
-            sidebar::trigger(
+            ui::capture_trigger(
                 "toolbar-title",
                 cx.listener(|this, event: &MouseDownEvent, window, cx| {
                     this.close_app_menu(window, cx);
@@ -306,8 +306,8 @@ impl Workspace {
         } else {
             configured.clone()
         };
-        let choices = crate::chat::model_choices(provider, &configured);
-        let choosable = choices.len() > 1 && provider == crate::prefs::Provider::ClaudeCode;
+        let choices = editor_chat::chat::model_choices(provider, &configured);
+        let choosable = choices.len() > 1 && provider == editor_state::prefs::Provider::ClaudeCode;
         // A request carries the playhead's time while the picture is open.
         let stamp_offered = self.panel_open;
         let stamped = session.prefs.send_playhead;
@@ -350,7 +350,7 @@ impl Workspace {
                 .icon(Icon::Sparkle)
                 .separated()
                 // The model in use, where a menu writes a key.
-                .key(crate::chat::model_label(&model))
+                .key(editor_state::prefs::model_label(&model))
                 .on_choose({
                     let this = this.clone();
                     move |window, cx| {
@@ -365,7 +365,7 @@ impl Workspace {
                 .into_iter()
                 .map(|choice| {
                     let session = self.session.clone();
-                    ui::MenuItem::new(crate::chat::model_label(&choice))
+                    ui::MenuItem::new(editor_state::prefs::model_label(&choice))
                         .checked(choice == model)
                         .on_choose(move |_, cx| {
                             session.update(cx, |session, cx| {
@@ -408,7 +408,7 @@ impl Workspace {
             .session
             .read(cx)
             .activity
-            .latest(crate::session::ACTIVITY_SHOWN)
+            .latest(editor_session::session::ACTIVITY_SHOWN)
             .map(|(kind, text)| (kind.to_uppercase(), text.to_owned()))
             .collect();
         sidebar::menu_panel()

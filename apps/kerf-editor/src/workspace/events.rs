@@ -10,14 +10,14 @@ use super::bars::{
 use super::flights::placed_since;
 use super::projects::{folder_media, open_conversation_in, window_title};
 use super::Workspace;
-use crate::chat::{ChatEvent, ChatView};
-use crate::input::{InputEvent, TextInput};
-use crate::session::{BridgeEvent, Session};
-use crate::sidebar::{self, SidebarEvent, SidebarView};
-use crate::stage::StageView;
-use crate::store::Change;
-use crate::theme::motion as scene;
-use crate::timeline::TimelineView;
+use editor_chat::chat::{ChatEvent, ChatView};
+use editor_session::session::{BridgeEvent, Session};
+use editor_sidebar::sidebar::{self, SidebarEvent, SidebarView};
+use editor_stage::stage::StageView;
+use editor_state::store::Change;
+use editor_timeline::timeline::TimelineView;
+use editor_ui::input::{InputEvent, TextInput};
+use editor_ui::theme::motion as scene;
 use gpui::{App, Context, Entity, FocusHandle, Subscription, Window};
 use kerf_bridge::event::{AgentState, AgentUpdate, ConnectionStatus, Export, ExportStatus};
 use kerf_bridge::{Command, ConversationsRequest, Event};
@@ -30,7 +30,7 @@ impl Workspace {
     pub(super) fn follow_session(
         session: &Entity<Session>,
         stage: &Entity<StageView>,
-        collab: &Entity<crate::finish::Collab>,
+        collab: &Entity<editor_finish::finish::Collab>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Vec<Subscription> {
@@ -59,9 +59,12 @@ impl Workspace {
             // or a later sync starts or succeeds; the toolbar's line says
             // it meanwhile, and after a Dismiss until then, so a sync that
             // failed is not forgotten once its bar is put away.
-            cx.subscribe(collab, |this, _, event: &crate::finish::CollabEvent, cx| {
-                this.collab_event(event, cx)
-            }),
+            cx.subscribe(
+                collab,
+                |this, _, event: &editor_finish::finish::CollabEvent, cx| {
+                    this.collab_event(event, cx)
+                },
+            ),
         ]
     }
 
@@ -113,17 +116,17 @@ impl Workspace {
             // its tracks' heights.
             cx.subscribe(
                 timeline,
-                |this, _, event: &crate::timeline::TimelineEvent, cx| match event {
-                    crate::timeline::TimelineEvent::Skim(time) => {
+                |this, _, event: &editor_timeline::timeline::TimelineEvent, cx| match event {
+                    editor_timeline::timeline::TimelineEvent::Skim(time) => {
                         let time = *time;
                         this.stage.update(cx, |stage, cx| stage.skim_at(time, cx));
                     }
-                    crate::timeline::TimelineEvent::Targets(targets) => {
+                    editor_timeline::timeline::TimelineEvent::Targets(targets) => {
                         let targets = targets.clone();
                         this.session
                             .update(cx, |session, _| session.source_targets = targets);
                     }
-                    crate::timeline::TimelineEvent::Heights(heights) => {
+                    editor_timeline::timeline::TimelineEvent::Heights(heights) => {
                         let heights = heights.clone();
                         this.session.update(cx, |session, _| {
                             if let Some(project) = session.project.clone() {
@@ -179,7 +182,7 @@ impl Workspace {
             cx.observe_window_activation(window, |this, window, cx| {
                 if window.is_window_active() {
                     let project = this.session.read(cx).project.clone();
-                    crate::commands::refresh_menus(project.as_deref(), cx);
+                    editor_session::commands::refresh_menus(project.as_deref(), cx);
                     if !this.focus_settled {
                         this.focus_settled = true;
                         this.settle_focus(window, cx);
@@ -370,14 +373,16 @@ impl Workspace {
                 let raw = error.message.clone();
                 // Saving over a preset of that name: the Save dialog asks
                 // about it itself (the store kept the question).
-                if crate::preset_file::existing_preset(&raw).is_some()
+                if editor_state::preset_file::existing_preset(&raw).is_some()
                     && self.session.read(cx).state.preset_exists.is_some()
                 {
                     return;
                 }
                 // A file imported for a preset's slot, refused: said under
                 // its slot in the dialog, not again here.
-                if self.preset_importing(cx) && crate::presets::import_refusal(event).is_some() {
+                if self.preset_importing(cx)
+                    && editor_launcher::presets::import_refusal(event).is_some()
+                {
                     self.session.update(cx, |session, cx| {
                         session
                             .state
@@ -489,15 +494,19 @@ impl Workspace {
     fn preset_importing(&self, cx: &App) -> bool {
         self.modal
             .as_ref()
-            .and_then(|(view, _)| view.clone().downcast::<crate::presets::ApplyPreset>().ok())
+            .and_then(|(view, _)| {
+                view.clone()
+                    .downcast::<editor_launcher::presets::ApplyPreset>()
+                    .ok()
+            })
             .is_some_and(|dialog| dialog.read(cx).importing())
     }
 
     /// The Git chip's news: a failed sync goes into the error bar, which a
     /// later sync, started or done, takes away.
-    fn collab_event(&mut self, event: &crate::finish::CollabEvent, cx: &mut Context<Self>) {
+    fn collab_event(&mut self, event: &editor_finish::finish::CollabEvent, cx: &mut Context<Self>) {
         match event {
-            crate::finish::CollabEvent::SyncFailed { why, said: true } => {
+            editor_finish::finish::CollabEvent::SyncFailed { why, said: true } => {
                 self.errors += 1;
                 self.error = Some(ErrorBar {
                     raw: why.clone(),
@@ -507,8 +516,8 @@ impl Workspace {
                     key: self.errors,
                 });
             }
-            crate::finish::CollabEvent::SyncFailed { said: false, .. } => {}
-            crate::finish::CollabEvent::SyncCleared => {
+            editor_finish::finish::CollabEvent::SyncFailed { said: false, .. } => {}
+            editor_finish::finish::CollabEvent::SyncCleared => {
                 if self.error.as_ref().is_some_and(|error| error.from_sync) {
                     self.error = None;
                 }

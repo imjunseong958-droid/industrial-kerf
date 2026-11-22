@@ -1,0 +1,24 @@
+[package]
+name = "editor_launcher"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "The editor's project launcher, presets, settings and cast"
+
+[lib]
+path = "src/editor_launcher.rs"
+# No unit tests of its own: no test binary to build (tests/editor/layers.rs
+# fails once it has one).
+test = false
+
+[dependencies]
+editor_state.workspace = true
+editor_ui.workspace = true
+editor_session.workspace = true
+kerf-bridge.workspace = true
+gpui.workspace = true
+log.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

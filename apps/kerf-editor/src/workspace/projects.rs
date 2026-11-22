@@ -5,7 +5,7 @@
 
 use super::asked::Confirm;
 use super::Workspace;
-use crate::session::Session;
+use editor_session::session::Session;
 use gpui::{prelude::*, App, Context, PathPromptOptions, Window, WindowBounds};
 use std::path::{Path, PathBuf};
 
@@ -13,7 +13,7 @@ impl Workspace {
     /// File ▸ Import Media…: the files chosen come into the project's media.
     /// No chooser to ask (no portal), or a name kerfd cannot be sent, says so.
     pub(super) fn import(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let chosen = crate::presets::choose_paths(
+        let chosen = editor_launcher::presets::choose_paths(
             cx,
             PathPromptOptions {
                 files: true,
@@ -40,7 +40,7 @@ impl Workspace {
     /// Opens a folder in place of this project. One that is not a project
     /// yet is asked about first; this project is open already.
     pub(super) fn open_project(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let chosen = crate::presets::choose_paths(
+        let chosen = editor_launcher::presets::choose_paths(
             cx,
             PathPromptOptions {
                 files: false,
@@ -64,7 +64,7 @@ impl Workspace {
             };
             if current
                 .as_deref()
-                .is_some_and(|current| crate::folders::same_folder(current, &project))
+                .is_some_and(|current| editor_state::folders::same_folder(current, &project))
             {
                 return;
             }
@@ -81,7 +81,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if crate::folders::needs_start(&project) {
+        if editor_state::folders::needs_start(&project) {
             self.ask_to_start(project, window, cx);
         } else {
             self.replace_with(project, false, window, cx);
@@ -102,7 +102,7 @@ impl Workspace {
         if session
             .project
             .as_deref()
-            .is_some_and(|current| crate::folders::same_folder(current, &project))
+            .is_some_and(|current| editor_state::folders::same_folder(current, &project))
         {
             window.activate_window();
             return;
@@ -120,29 +120,29 @@ impl Workspace {
         let kerfd = session.kerfd().map(Path::to_path_buf);
         let current = session.project.clone();
         let replaced = window.window_handle();
-        let prefs = crate::prefs::Prefs::load();
+        let prefs = editor_state::prefs::Prefs::load();
         // Over this window, where it is; what it opens takes this window's place.
         let options = crate::app::launcher_options(Some(window.window_bounds()), cx);
         let opened = cx.open_window(options, move |launcher_window, cx| {
             // What it makes from a preset brings its media in with this kerfd too.
             let launcher = cx.new(|cx| {
-                crate::launcher::LauncherView::new(prefs, launcher_window, cx)
+                editor_launcher::launcher::LauncherView::new(prefs, launcher_window, cx)
                     .with_kerfd(kerfd.clone())
                     .over_editor()
             });
             let handle = launcher_window.window_handle();
             cx.subscribe(
                 &launcher,
-                move |_, event: &crate::launcher::LauncherEvent, cx| match event {
-                    crate::launcher::LauncherEvent::Open {
+                move |_, event: &editor_launcher::launcher::LauncherEvent, cx| match event {
+                    editor_launcher::launcher::LauncherEvent::Open {
                         project,
                         starts,
                         warnings,
                     } => {
                         crate::app::warn_when_open(project, warnings.clone(), cx);
-                        let here = current
-                            .as_deref()
-                            .is_some_and(|current| crate::folders::same_folder(current, project));
+                        let here = current.as_deref().is_some_and(|current| {
+                            editor_state::folders::same_folder(current, project)
+                        });
                         if !here {
                             let place = replaced
                                 .update(cx, |_, window, _| window.window_bounds())
@@ -158,7 +158,7 @@ impl Workspace {
                     // goes, leaving the person where they were. With this
                     // window closed meanwhile, the launcher stays, the only
                     // window left.
-                    crate::launcher::LauncherEvent::Cancel => {
+                    editor_launcher::launcher::LauncherEvent::Cancel => {
                         if replaced
                             .update(cx, |_, window, _| window.activate_window())
                             .is_ok()
@@ -207,8 +207,11 @@ impl Workspace {
 /// The paths a file chooser gave; None, with a notice in `session`'s window
 /// saying why where there is something to say (no chooser could open, a
 /// name kerfd cannot be sent), when there are none to use.
-fn chosen_paths(answer: crate::presets::Picked, session: &mut Session) -> Option<Vec<PathBuf>> {
-    use crate::presets::Picked;
+fn chosen_paths(
+    answer: editor_launcher::presets::Picked,
+    session: &mut Session,
+) -> Option<Vec<PathBuf>> {
+    use editor_launcher::presets::Picked;
     match answer {
         Picked::Paths(paths) => Some(paths),
         Picked::Failed(error) => {
@@ -251,7 +254,7 @@ pub fn folder_media(folder: &Path) -> Vec<PathBuf> {
 
 /// The window's title: the project, and its sequence when that is named
 /// otherwise ("Atlas · 30 s spot v7").
-pub fn window_title(project: &str, timeline: &crate::model::Timeline) -> String {
+pub fn window_title(project: &str, timeline: &editor_state::model::Timeline) -> String {
     let sequence = timeline
         .sequence
         .as_deref()
@@ -306,7 +309,7 @@ pub fn open_folder_in(
             let here = session
                 .project
                 .as_deref()
-                .is_some_and(|open| crate::folders::same_folder(open, &project));
+                .is_some_and(|open| editor_state::folders::same_folder(open, &project));
             if fresh && here && workspace.start_media.is_none() {
                 workspace.start_media = Some(project.clone());
             }
@@ -330,7 +333,7 @@ pub fn open_conversation_in(folder: PathBuf, id: Option<String>, cx: &mut App) {
                     let here = session
                         .project
                         .as_deref()
-                        .is_some_and(|open| crate::folders::same_folder(open, &folder));
+                        .is_some_and(|open| editor_state::folders::same_folder(open, &folder));
                     if here {
                         session.open_conversation(id.clone());
                         cx.notify();

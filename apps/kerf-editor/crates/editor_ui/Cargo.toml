@@ -1,0 +1,27 @@
+[package]
+name = "editor_ui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "The editor's design tokens and the kit its regions are built from"
+
+[lib]
+path = "src/editor_ui.rs"
+# No unit tests of its own: no test binary to build (tests/editor/layers.rs
+# fails once it has one).
+test = false
+
+[dependencies]
+editor_state.workspace = true
+gpui.workspace = true
+log.workspace = true
+unicode-segmentation.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2.workspace = true
+objc2-foundation = { workspace = true, features = ["std", "NSArray", "NSString"] }
+objc2-app-kit = { workspace = true, features = ["std", "NSApplication", "NSEvent", "NSResponder", "NSView", "NSWindow"] }
+raw-window-handle.workspace = true
+
+[lints]
+workspace = true

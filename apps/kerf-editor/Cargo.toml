@@ -9,39 +9,41 @@
 #
 #   cargo build --manifest-path apps/kerf-editor/Cargo.toml
 #
+# Its parts are crates of this workspace (`crates/`), so that a change
+# rebuilds its own crate and those above it, not the whole editor; this
+# package puts the window together from them. A plain `cargo test` or
+# `cargo clippy` here covers this package alone: `--workspace` covers them all.
+#
 # Its version is the repository's (`tests/editor/version.rs` holds them together),
 # and its profiles and lints are the repository's own, repeated here.
 [workspace]
+members = ["crates/*"]
 
-[workspace.lints.rust]
-unsafe_code = "deny"
-
-[workspace.lints.clippy]
-dbg_macro = "warn"
-todo = "warn"
-
-[package]
-name = "kerf-editor"
+[workspace.package]
 version = "0.1.5"
 edition = "2021"
 license = "MIT"
-description = "Industrial Kerf's native editor, drawn with GPUI"
 
-[lib]
-name = "kerf_editor"
-path = "src/lib.rs"
-
-[[bin]]
-name = "kerf-editor"
-path = "src/main.rs"
-
-[dependencies]
+# Every dependency of the editor's crates, declared once: a crate takes it
+# with `x.workspace = true` and names its own features.
+[workspace.dependencies]
+editor_chat = { path = "crates/editor_chat" }
+editor_finish = { path = "crates/editor_finish" }
+editor_inspector = { path = "crates/editor_inspector" }
+editor_launcher = { path = "crates/editor_launcher" }
+editor_making = { path = "crates/editor_making" }
+editor_session = { path = "crates/editor_session" }
+editor_sidebar = { path = "crates/editor_sidebar" }
+editor_stage = { path = "crates/editor_stage" }
+editor_state = { path = "crates/editor_state" }
+editor_timeline = { path = "crates/editor_timeline" }
+editor_ui = { path = "crates/editor_ui" }
 kerf-bridge = { path = "../../crates/surfaces/kerf-bridge" }
 gpui = "0.2.2"
 # The version gpui draws pictures with: its RenderImage holds these frames
 # (and `--screenshot` writes its PNG with it).
-image = { version = "0.25", default-features = false, features = ["png"] }
-serde = { version = "1", features = ["derive", "rc"] }
+image = { version = "0.25", default-features = false }
+serde = "1"
 serde_json = "1"
 unicode-segmentation = "1"
 # kerf:// links: a project named outside ASCII, as a browser's punycode
@@ -57,32 +59,83 @@ log = "0.4"
 # "Edited … ago" counts days on the person's own calendar: the system's
 # time zone (its zoneinfo on Unix; on Windows the zone's rules come
 # bundled).
-jiff = { version = "0.2", default-features = false, features = ["std", "tz-system", "tzdb-zoneinfo", "tzdb-bundle-platform"] }
-
+jiff = { version = "0.2", default-features = false }
 # On macOS a project's window represents its project.kerf (the title bar's
 # proxy icon), as a document's window does there, and a drag on
 # the toolbar (the title bar there) moves the window: AppKit through its
 # safe bindings, at the versions gpui already brings, and the window's view
 # through raw-window-handle.
-[target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
-objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSString"] }
-objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSEvent", "NSResponder", "NSView", "NSWindow"] }
+objc2-foundation = { version = "0.3", default-features = false }
+objc2-app-kit = { version = "0.3", default-features = false }
 raw-window-handle = "0.6"
-
 # `--screenshot` reads the window back from the X server (a GPUI window
 # on X11 gives no raw handle of its own), with the x11rb gpui already brings.
-[target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies]
 x11rb = "0.13"
+embed-resource = "3"
+proptest = "1"
+tempfile = "3"
+# tests/editor/layers.rs reads the crates' manifests as Cargo does.
+toml = "1"
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+
+[workspace.lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+
+[package]
+name = "kerf-editor"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Industrial Kerf's native editor, drawn with GPUI"
+
+[lib]
+name = "kerf_editor"
+path = "src/kerf_editor.rs"
+# No unit tests of its own: no test binary to build (tests/editor/layers.rs
+# fails once it has one).
+test = false
+
+[[bin]]
+name = "kerf-editor"
+path = "src/main.rs"
+
+[dependencies]
+editor_chat.workspace = true
+editor_finish.workspace = true
+editor_inspector.workspace = true
+editor_launcher.workspace = true
+editor_making.workspace = true
+editor_session.workspace = true
+editor_sidebar.workspace = true
+editor_stage.workspace = true
+editor_state.workspace = true
+editor_timeline.workspace = true
+editor_ui.workspace = true
+kerf-bridge.workspace = true
+gpui.workspace = true
+image = { workspace = true, features = ["png"] }
+serde_json.workspace = true
+env_logger.workspace = true
+log.workspace = true
+jiff = { workspace = true, features = ["std", "tz-system", "tzdb-zoneinfo", "tzdb-bundle-platform"] }
+
+[target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies]
+x11rb.workspace = true
 
 [build-dependencies]
-embed-resource = "3"
+embed-resource.workspace = true
 
 [dev-dependencies]
 # The Inspector's tests draw it in a test window, and move focus there.
-gpui = { version = "0.2.2", features = ["test-support"] }
-proptest = "1"
-tempfile = "3"
+gpui = { workspace = true, features = ["test-support"] }
+idna.workspace = true
+proptest.workspace = true
+tempfile.workspace = true
+toml.workspace = true
 
 [lints]
 workspace = true

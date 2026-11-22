@@ -20,11 +20,15 @@ The editor is a Cargo workspace of its own, not a member of the repository's: GP
 on serde_json's `preserve_order`, and in one workspace that feature would reach every
 program built beside the editor, kerfd among them, whose journal is checksummed over JSON
 it writes again. So it is built, tested and linted with `--manifest-path apps/kerf-editor/Cargo.toml`
-(`cargo test --manifest-path apps/kerf-editor/Cargo.toml`, `cargo clippy --manifest-path apps/kerf-editor/Cargo.toml --all-targets`), into the
+(`cargo test --manifest-path apps/kerf-editor/Cargo.toml --workspace`, `cargo clippy --manifest-path apps/kerf-editor/Cargo.toml --workspace --all-targets`), into the
 repository's `target` (`.cargo/config.toml`), and its version is the repository's
-(`tests/editor/version.rs`). It links FFmpeg through the bridge, found as
-kerfd finds it (`FFMPEG_DIR`, or `pkg-config`). Build it with `--release` to judge
-playback: the live preview draws its frames in the bridge.
+(`tests/editor/version.rs`). Its parts are crates of that workspace, so that a change
+rebuilds its own crate and those above it rather than the whole editor, and the program is
+the package at its root: without `--workspace` a test or a lint covers that package alone.
+`tests/editor/layers.rs` keeps the crates, and the modules in them, to their layers. It
+links FFmpeg through the bridge, found as kerfd finds it (`FFMPEG_DIR`, or `pkg-config`).
+Build it with `--release` to judge playback: the live preview draws its frames in the
+bridge.
 
 What GPUI needs to build:
 
@@ -52,7 +56,7 @@ target/debug/kerf-editor [project-dir] [kerfd-binary]
 The project and kerfd may come from `KERF_PROJECT_DIR` and `KERFD_BIN` instead. Without
 a project the editor opens the one last worked on, or with none to go back to, its
 project launcher. A `kerf://<project>/rev<N>@HH:MM:SS:FF` link in place of the project
-opens the recent project it names at that moment (`src/links.rs`); macOS hands links to
+opens the recent project it names at that moment (`crates/editor_state/src/links.rs`); macOS hands links to
 the running editor. `kerf` opens it the same way, finding it
 beside itself, in the installed app on macOS, or in `target/debug` and `target/release`
 (`KERF_EDITOR_BIN` names another), and passes it kerfd through `KERFD_BIN`.
@@ -99,8 +103,8 @@ With no window manager, GPUI draws its first frame on the first input event, so 
 pointer is moved over the window before the picture is taken.
 
 `KERF_REDUCE_MOTION=1` turns motion off, as Settings ▸ Appearance does
-([MOTION_UI.md](MOTION_UI.md)), and `RUST_LOG=kerf_editor=debug` logs every event the
-bridge sends.
+([MOTION_UI.md](MOTION_UI.md)), and `RUST_LOG=editor_session::session=debug` logs every event
+the bridge sends.
 
 If Vulkan finds no driver there, point it at lavapipe:
 `VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json`. On macOS, `screencapture -l`
