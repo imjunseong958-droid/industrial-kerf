@@ -1086,9 +1086,9 @@ fn type_over(cx: &mut VisualTestContext, text: &str) {
     cx.simulate_input(text);
 }
 
-/// What is typed in a field is sent when the field is left by Tab or by a press elsewhere, not
-/// only by Return: the window draws the Inspector again as the keys move, before it hears the
-/// field was left, and that drawing must not put back what the clip had.
+/// What is typed in a field is sent when the field is left by Tab or by a press elsewhere (another
+/// clip among them), not only by Return: the window draws the Inspector again as the keys move,
+/// before it hears the field was left, and that drawing must not put back what the clip had.
 #[gpui::test]
 fn leaving_an_inspector_field_by_tab_or_a_press_elsewhere_sends_what_was_typed(
     cx: &mut TestAppContext,
@@ -1137,10 +1137,10 @@ fn leaving_an_inspector_field_by_tab_or_a_press_elsewhere_sends_what_was_typed(
     });
     // Tab went on to the title's text, left by a press elsewhere.
     type_over(cx, "Sunrise");
-    let elsewhere = cx
+    let press = cx
         .update(|window, _| window.bounds().size)
         .map(|side| side * 0.75);
-    cx.simulate_click(point(elsewhere.width, elsewhere.height), Modifiers::none());
+    cx.simulate_click(point(press.width, press.height), Modifiers::none());
     run_until(cx, &session, "the text typed", |session| {
         prop_of(session, "title", "text") == Some(json!("Sunrise"))
     });
@@ -1153,6 +1153,29 @@ fn leaving_an_inspector_field_by_tab_or_a_press_elsewhere_sends_what_was_typed(
     run_until(cx, &session, "the colour typed", |session| {
         prop_of(session, "solid", "color") == Some(json!("#00ff00"))
     });
+    // The solid's name, left by a press on another clip, which takes the keys and chooses that
+    // clip at once, as the timeline does: the name goes to the clip it was typed for.
+    let elsewhere = window.read_with(cx, |window, _| window.elsewhere.clone());
+    cx.update(|window, _| {
+        window.focus(&elsewhere);
+        window.focus_next();
+    });
+    type_over(cx, "Red");
+    cx.update(|window, cx| {
+        window.focus(&elsewhere);
+        session.update(cx, |session, cx| {
+            session.selection = vec!["title".to_owned()];
+            cx.notify();
+        });
+    });
+    run_until(
+        cx,
+        &session,
+        "the name typed before another clip",
+        |session| {
+            timeline_clip(session, "solid").and_then(|clip| clip.name.as_deref()) == Some("Red")
+        },
+    );
 }
 
 // ---------------------------------------------------------------- the master output

@@ -34,7 +34,35 @@ pub(super) struct TextField {
     _subscriptions: [Subscription; 2],
 }
 
+/// A field of words that has the keys: the clip's name, or a text or colour field.
+pub(super) enum Held {
+    Name,
+    Text(Field),
+}
+
 impl InspectorView {
+    /// A field left since the inspector last drew (by Tab, or by a press
+    /// elsewhere, such as on another clip): what was typed in it goes to its
+    /// clip first. GPUI says a field was left only once the frame after is
+    /// drawn, and that drawing puts what the snapshot says back in every
+    /// field without the keys, and starts the fields again for a clip chosen.
+    pub(super) fn commit_left(&mut self, window: &Window, cx: &mut Context<Self>) {
+        match self.held.take() {
+            Some(Held::Name) if !self.name.focus_handle(cx).is_focused(window) => {
+                self.commit_name(cx);
+            }
+            Some(Held::Text(field))
+                if !self
+                    .texts
+                    .get(&field)
+                    .is_some_and(|entry| entry.input.focus_handle(cx).is_focused(window)) =>
+            {
+                self.commit_text(&field, cx);
+            }
+            _ => {}
+        }
+    }
+
     /// Fields not being typed in show what the snapshot says.
     pub(super) fn sync_fields(
         &mut self,
@@ -43,6 +71,7 @@ impl InspectorView {
         cx: &mut Context<Self>,
     ) {
         let name_focused = self.name.focus_handle(cx).is_focused(window);
+        self.held = name_focused.then_some(Held::Name);
         if !name_focused && self.name.read(cx).text() != clip.name {
             let name = clip.name.clone();
             self.name.update(cx, |input, cx| input.set_text(name, cx));
@@ -69,6 +98,9 @@ impl InspectorView {
                 entry
                     .input
                     .update(cx, |input, cx| input.set_text(current, cx));
+            }
+            if focused {
+                self.held = Some(Held::Text(field.clone()));
             }
             wanted.insert(field);
         }
